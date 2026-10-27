@@ -2,11 +2,17 @@
 // that `setNull` when their order goes. Shared by the unit and PGlite suites of `engine/write`.
 import type { EngineManifest } from '../src/engine/manifest.ts';
 import type { Pred } from '@norbital-ai/store';
-import type { Authority, CollectionAuthority, EngineActor } from '../src/engine/contracts.ts';
+import type {
+	Authority,
+	ModelAuthority,
+	DeleteArm,
+	EngineActor,
+	WriteArm
+} from '../src/engine/contracts.ts';
 
 export const NOW = '2026-09-25T10:00:00.000Z';
 export const TODAY = '2026-09-25';
-const lineCols = { columns: ['label', 'amount'] };
+const lineCols = ['label', 'amount'];
 export const manifest: EngineManifest = {
 	workspace: { tz: 'UTC', locale: 'en' },
 	models: {
@@ -38,30 +44,26 @@ export const manifest: EngineManifest = {
 		'lines.order': { to: 'orders', inverse: 'lines', owned: true },
 		'tags.order': { to: 'orders', inverse: 'tags', optional: true, onDelete: 'setNull' }
 	},
-	collections: {
+	exposures: {
 		orders: {
-			read: { fields: 'all' },
-			create: {
-				input: { columns: ['title', 'note', 'status'], with: { lines: { create: lineCols } } }
+			read: {
+				orders: { fields: 'all' },
+				'orders.lines': { fields: 'all' },
+				'orders.tags': { fields: 'all' }
 			},
+			create: { columns: { orders: ['title', 'note', 'status'], 'orders.lines': lineCols } },
 			update: {
-				input: {
-					columns: ['title', 'note', 'status'],
-					with: {
-						lines: { create: lineCols, update: lineCols, delete: {} },
-						tags: { link: {}, unlink: {} }
-					}
-				}
+				columns: { orders: ['title', 'note', 'status'], 'orders.lines': lineCols, 'orders.tags': [] }
 			},
 			delete: {}
 		},
 		lines: {
-			read: { fields: 'all' },
-			create: { input: { columns: ['label', 'amount', 'order'] } },
-			update: { input: lineCols },
+			read: { lines: { fields: 'all' } },
+			create: { columns: { lines: ['label', 'amount', 'order'] } },
+			update: { columns: { lines: lineCols } },
 			delete: {}
 		},
-		tags: { read: { fields: 'all' }, create: { input: { columns: ['name'] } } }
+		tags: { read: { tags: { fields: 'all' } }, create: { columns: { tags: ['name'] } } }
 	},
 	integrations: {},
 	policies: {},
@@ -89,28 +91,46 @@ export const member: EngineActor = {
 	admin: false,
 	party: null
 };
+/** A read (or history) arm of policy `p`. */
 const arm = (where: Pred = TRUE, fields: readonly string[] | 'all' = 'all') => ({
 	policy: 'p',
 	where,
 	fields
 });
-export const grants = (over: Partial<CollectionAuthority> = {}): CollectionAuthority => ({
-	read: [arm()],
-	history: [],
-	create: [arm()],
-	update: [arm()],
-	delete: [arm()],
-	queries: [],
-	moves: { status: 'all' },
-	masks: {},
-	...over
-});
-export const authority = (collections: Authority['collections'], admin = false): Authority => ({
+/** A create or update arm of policy `p`: the columns it admits per write path, and whether `p` declares its `check`. */
+export const writeArm = (
+	columns: WriteArm['columns'],
+	check = false,
+	policy = 'p'
+): WriteArm => ({ policy, columns, check });
+/** A delete arm of policy `p`. */
+export const deleteArm = (check = false, policy = 'p'): DeleteArm => ({ policy, check });
+/**
+ * `model`'s access points under policy `p` (decision 3): its root read in full, and create, update and delete admitting
+ * every column the model declares per write path, with no `check` (an arm without one allows).
+ */
+export const grants = (
+	model: string,
+	over: Partial<ModelAuthority> = {}
+): ModelAuthority => {
+	const spec = manifest.exposures[model];
+	return {
+		read: { [model]: [arm()] },
+		history: [],
+		create: spec?.create === undefined ? [] : [writeArm(spec.create.columns)],
+		update: spec?.update === undefined ? [] : [writeArm(spec.update.columns)],
+		delete: spec?.delete === undefined ? [] : [deleteArm()],
+		moves: { status: 'all' },
+		masks: {},
+		...over
+	};
+};
+export const authority = (models: Authority['models'], admin = false): Authority => ({
 	key: 'k',
 	actor: admin ? { ...member, admin: true } : member,
 	admin,
 	policies: ['p'],
-	collections,
+	models,
 	automations: [],
 	capabilities: { apps: [], tools: [], mcp: [], skills: [] },
 	limits: [],

@@ -25,13 +25,16 @@ const manifest: EngineManifest = {
 		}
 	},
 	relationships: {},
-	collections: {
-		documents: { read: { fields: 'all' }, update: { input: { columns: ['title'] } } }
+	exposures: {
+		documents: {
+			read: { documents: { fields: 'all' } },
+			update: { columns: { documents: ['title'] } }
+		}
 	},
 	policies: {
 		requester: {
 			description: 'Requests changes',
-			grants: { documents: { read: true, update: { approval: true } } }
+			grants: { documents: { read: true, update: { check: true } } }
 		},
 		reviewer: {
 			description: 'Reviews and edits changes',
@@ -41,7 +44,7 @@ const manifest: EngineManifest = {
 	teams: { requesters: ['requester'], reviewers: ['reviewer'] }
 };
 const guest = program(`export default { policy: { requester: { grants: { documents: {
-	update: { approval: (write, flow) => flow.step('Review', { teams: ['reviewers'] }) }
+	update: { check: function* (changes, ctx) { return ctx.approve((flow) => flow.step('Review', { teams: ['reviewers'] })); } }
 } } } } };`);
 const member = (id: string, team: string): Extract<EngineActor, { kind: 'member' }> => ({
 	kind: 'member',
@@ -107,9 +110,9 @@ it.live('rejection conflicts when an observed no-op rollback row changes before 
 				const key = randomUUID(),
 					now = t.clock.now();
 				return writes.act({
-					collection: 'documents',
+					model: 'documents',
 					verb: 'update',
-					input: { target: recordId, set: { title } },
+					input: [{ target: recordId, set: { title } }],
 					observed: { [recordId]: revision },
 					authority: as,
 					key,

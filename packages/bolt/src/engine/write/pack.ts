@@ -1,4 +1,4 @@
-// Seed packs as hosts read them (rule 70, §7.2): `pack.json` plus `rows/<collection>.jsonl`, written by `bolt build`
+// Seed packs as hosts read them (rule 70, §7.2): `pack.json` plus `rows/<model>.jsonl`, written by `bolt build`
 // (compiler/artifact/seed.ts). Loading one is a restore into a database with no workspace rows. Here, not in the
 // compiler, so any host (bolt start or an adapter) loads packs through `@norbital-ai/bolt/engine` without the build toolchain.
 import { EMBED } from '../integrations/embed.ts';
@@ -27,7 +27,7 @@ export type PackJson = {
 	hash: string;
 	start: readonly string[];
 	rows: {
-		readonly [collection: string]: number;
+		readonly [model: string]: number;
 	};
 	assets: readonly SeedAsset[];
 };
@@ -35,12 +35,12 @@ export type Pack = {
 	dir: string;
 	meta: PackJson;
 	rows: {
-		readonly [collection: string]: readonly {
+		readonly [model: string]: readonly {
 			readonly [field: string]: Json;
 		}[];
 	};
 };
-/** The system collections a pack may seed, in load order: members, then integration instances (a personal one names its member). */
+/** The system models a pack may seed, in load order: members, then integration instances (a personal one names its member). */
 export const IDENTITY = ['sys_user', 'sys_integration'] as const;
 const IDENTITY_COLUMNS: {
 	readonly [t: string]: readonly string[];
@@ -62,7 +62,7 @@ export function decodeIdentity(m: EngineManifest, rows: Pack['rows']): Pack['row
 		(c) => m.models[c] === undefined && !(IDENTITY as readonly string[]).includes(c)
 	);
 	if (unknown !== undefined)
-		throw BoltError.make('seedDecode', 'decode', `seed: unknown collection '${unknown}'`);
+		throw BoltError.make('seedDecode', 'decode', `seed: unknown model '${unknown}'`);
 	for (const [i, row] of (rows['sys_user'] ?? []).entries()) {
 		const team = row['team'];
 		if (
@@ -126,32 +126,32 @@ function* linesOf(bytes: Uint8Array) {
 		if (at > start) yield bytes.subarray(start, at);
 	if (start < bytes.length) yield bytes.subarray(start);
 }
-/** A pack as a loader takes it: its `pack.json` and each collection's rows from row `from`, streamed when restored. */
+/** A pack as a loader takes it: its `pack.json` and each model's rows from row `from`, streamed when restored. */
 export type PackSource = {
 	readonly dir: string;
 	readonly meta: PackJson;
-	readonly rows: (collection: string, from: number) => Stream.Stream<RowData, BoltError>;
+	readonly rows: (model: string, from: number) => Stream.Stream<RowData, BoltError>;
 };
 export const sourceOf = (pack: Pack): PackSource => ({
 	dir: pack.dir,
 	meta: pack.meta,
-	rows: (collection, from) => Stream.fromIterable((pack.rows[collection] ?? []).slice(from))
+	rows: (model, from) => Stream.fromIterable((pack.rows[model] ?? []).slice(from))
 });
-/** A pack whose rows stay on disk until each collection is restored, a line at a time (a cell holds 128 MiB). */
+/** A pack whose rows stay on disk until each model is restored, a line at a time (a cell holds 128 MiB). */
 export const readPackSource = Effect.fn('Bolt.readPackSource')(function* (dir: string) {
 	const fs = yield* FileSystem.FileSystem;
 	// posix, relative to a release in a cell or absolute in-process
 	const meta = yield* decodeJson(PackSchema, yield* fs.readFileString(`${dir}/pack.json`));
-	// the collection being restored, read once for all of its steps; the rows a step skips are cut, never decoded
-	let held: { collection: string; bytes: Uint8Array } | undefined;
-	const bytesOf = (collection: string) =>
-		held?.collection === collection
+	// the model being restored, read once for all of its steps; the rows a step skips are cut, never decoded
+	let held: { model: string; bytes: Uint8Array } | undefined;
+	const bytesOf = (model: string) =>
+		held?.model === model
 			? Effect.succeed(held.bytes)
-			: fs.readFile(`${dir}/rows/${collection}.jsonl`).pipe(
+			: fs.readFile(`${dir}/rows/${model}.jsonl`).pipe(
 					Effect.mapError((cause) => BoltError.make('seedDecode', 'decode', cause.message, cause)),
 					Effect.tap((bytes) =>
 						Effect.sync(() => {
-							held = { collection, bytes };
+							held = { model, bytes };
 						})
 					)
 				);
@@ -159,10 +159,10 @@ export const readPackSource = Effect.fn('Bolt.readPackSource')(function* (dir: s
 	return {
 		dir,
 		meta,
-		rows: (collection: string, from: number) =>
-			Object.hasOwn(meta.rows, collection)
+		rows: (model: string, from: number) =>
+			Object.hasOwn(meta.rows, model)
 				? Stream.unwrap(
-						Effect.map(bytesOf(collection), (bytes) =>
+						Effect.map(bytesOf(model), (bytes) =>
 							Stream.fromIterable(linesOf(bytes)).pipe(
 								Stream.drop(from),
 								Stream.mapEffect((line) => decodeJson(RowSchema, text.decode(line)))
@@ -172,7 +172,7 @@ export const readPackSource = Effect.fn('Bolt.readPackSource')(function* (dir: s
 				: Stream.empty
 	} satisfies PackSource;
 });
-/** Every collection's rows in memory, for in-process hosts and test kits. */
+/** Every model's rows in memory, for in-process hosts and test kits. */
 export const readPack = Effect.fn('Bolt.readPack')(function* (dir: string) {
 	const source = yield* readPackSource(dir);
 	const entries = yield* Effect.forEach(
@@ -189,7 +189,7 @@ export const readPack = Effect.fn('Bolt.readPack')(function* (dir: string) {
 export type PackStep = 'more' | 'loaded' | 'hadRows';
 /**
  * Rule 70: loads a pack only into a database with no workspace rows, in bounded steps (compute model §3: one unit of
- * work each): identity first, then the restore of every collection in relationship order (`restorer`'s steps).
+ * work each): identity first, then the restore of every model in relationship order (`restorer`'s steps).
  */
 export const packLoader = Effect.fn('Bolt.packLoader')(function* (
 	db: TenantDb,
@@ -199,12 +199,12 @@ export const packLoader = Effect.fn('Bolt.packLoader')(function* (
 ) {
 	const identities: ReadonlySet<string> = new Set(IDENTITY);
 	const cat = catalogOf(m);
-	const collections = Object.keys(pack.meta.rows);
-	const tenant = collections.filter((c) => !identities.has(c));
+	const names = Object.keys(pack.meta.rows);
+	const tenant = names.filter((c) => !identities.has(c));
 	const identityStep = Effect.gen(function* () {
-		// every collection is named (an unknown one is refused); only the members and instances are read here
+		// every model is named (an unknown one is refused); only the members and instances are read here
 		const identityRows = Object.fromEntries(
-			yield* Effect.forEach(collections, (c) =>
+			yield* Effect.forEach(names, (c) =>
 				(identities.has(c) ? Stream.runCollect(pack.rows(c, 0)) : Effect.succeed([])).pipe(
 					Effect.map((rows) => [c, Array.from(rows)] as const)
 				)
@@ -239,7 +239,7 @@ export const packLoader = Effect.fn('Bolt.packLoader')(function* (
 			.join(' union all ');
 		const body = `begin if exists (${probeSql}) then raise exception using errcode = 'BP001', message = 'the seed database is no longer empty'; end if; end`;
 		const statements: Sql[] = [{ text: `do '${body.replaceAll("'", "''")}'`, params: [] }];
-		// Collection and decoding finished before the batch: no stream, file or guest work holds its locks.
+		// Model and decoding finished before the batch: no stream, file or guest work holds its locks.
 		for (const table of IDENTITY)
 			for (const rows of Map.groupBy(identity[table] ?? [], (row) =>
 				IDENTITY_COLUMNS[table]!.filter((column) => row[column] !== undefined).join()
@@ -263,8 +263,8 @@ export const packLoader = Effect.fn('Bolt.packLoader')(function* (
 				)
 			);
 	});
-	const restore = yield* restorer(m, db, { collections: tenant, rows: pack.rows }, now);
-	// a pack writes past the acts that queue `bolt.embed`: seeded rows of a semantic collection would never get a vector
+	const restore = yield* restorer(m, db, { models: tenant, rows: pack.rows }, now);
+	// a pack writes past the acts that queue `bolt.embed`: seeded rows of a semantic model would never get a vector
 	const embed = Effect.suspend(() => {
 		if (!tenant.some((c) => m.models[c]?.search?.semantic !== undefined)) return Effect.void;
 		const chain = new Chain();

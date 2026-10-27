@@ -2,7 +2,7 @@ import { createServer } from 'node:http';
 import { expect, it } from '@effect/vitest';
 import * as NodeHttpServer from '@effect/platform-node/NodeHttpServer';
 import { ConfigProvider, Effect, Option } from 'effect';
-import { HttpServerRequest, HttpServerResponse } from 'effect/unstable/http';
+import { HttpServerRequest, HttpServerResponse } from 'effect/http';
 import { devConverter } from '../src/cli/dev.ts';
 
 const configured = (settings: Readonly<Record<string, string>>) =>
@@ -58,7 +58,7 @@ it.live('binds the native converter using the configured endpoint and credential
 				});
 			})
 		);
-		if (server.address._tag !== 'TcpAddress')
+		if (server.address._tag === 'UnixPathAddress')
 			return yield* Effect.die('The converter fixture has no TCP address.');
 		const endpoint = `http://127.0.0.1:${server.address.port}/`;
 		const converter = yield* configured({

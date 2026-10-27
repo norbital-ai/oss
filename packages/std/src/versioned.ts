@@ -1,7 +1,7 @@
 // std/versioned (§3.7, §6.3 "Versioned lineage", PH GAP-4): pure helpers over the rows of the lineage recipe
 // (`period`, `sealed_at`, `voided_at`, `void_reason`, sealed-only `noOverlap`). A sealed version never changes except
 // for a shortened period (its successor was sealed) or one void with a reason; a correction is a new draft built by
-// `cloneNext` and sealed over the old version. The seal's write is held by the collection's `update` grant (§3.8).
+// `cloneNext` and sealed over the old version. The seal's write is held by the model's `update` grant (§3.8).
 import { addDays, PlainDate, type DatePeriod, type Instant } from './date.ts';
 import { Decimal } from './decimal.ts';
 

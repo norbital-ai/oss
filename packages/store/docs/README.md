@@ -45,11 +45,17 @@ const rows = yield * execute(statement.sql);
 const page = yield * statement.decode(rows);
 ```
 
+This is the standalone store's own read form over a whole schema. Bolt never sends it: its one read is a read
+request (`query({ person: { … }, 'person.company': { fields: ['name'] } })`), which Bolt lowers to this IR with the
+catalog's declared read layers. A scoped read (a `Scope`) nests only declared layers, each scoped and masked by its
+root's arms for that path (`Scope.rows(path)`, `Scope.mask(path, field)`); a `where` may still cross any relation into a
+model the reader reads, through that model's own access point.
+
 `statement.shape` is a stable hash of SQL text for the host's prepared cache. Parameters remain separate.
 The result type follows the literal projection, with the primary key included. One nested read emits one statement;
 relations use bounded correlated subqueries. Ordinary refs, inverses, self refs, join tables and polymorphic refs use
 the same query language. A polymorphic ref stores one nullable foreign-key column per target. Its `with` arm can name
-each target's own `select` and `with`, and the result discriminates them by `collection`.
+each target's own `select` and `with`, and the result discriminates them by `model`.
 
 `store.read` accepts `firstPer: ['group_column']` to select one matching row per group. Group columns lead
 the result order; `orderBy` chooses the row within each group, with primary keys breaking ties. PostgreSQL
@@ -198,4 +204,4 @@ The focused acceptance coverage is kept with its owner:
 | Preserved rows on safe widening and operational risks                  | `tests/planning.test.ts`                                                       |
 | Edited SQL/source mismatch and live drift refusal                      | Bolt `tests/migrations.integration.test.ts`                                    |
 | Immutable squash receipts, partial histories and repeated squashes     | `tests/migration-history.test.ts`, Bolt `tests/migrations.integration.test.ts` |
-| Native PostgreSQL parameter parity for JSON, arrays and relations      | Deployed Neon acceptance (not a local suite)                                  |
+| Native PostgreSQL parameter parity for JSON, arrays and relations      | Deployed Neon acceptance (not a local suite)                                   |

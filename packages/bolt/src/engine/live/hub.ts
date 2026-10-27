@@ -13,7 +13,6 @@ import {
 	Effect,
 	Equal,
 	Exit,
-	FiberMap,
 	Layer,
 	Option,
 	Predicate,
@@ -34,7 +33,7 @@ import { LIMITS } from '../contracts.ts';
 import { BoltError, storeSync } from '../../protocol/errors.ts';
 import { catalogOf } from '../access/pred.ts';
 import { syncsOf } from '../sync/index.ts';
-import { ReadDeps, readTargets, selectTargets, sortTargets } from '../query/engine.ts';
+import { readTargets, selectTargets, sortTargets } from '../query/engine.ts';
 import { approvable } from '../approvals/lock.ts';
 import {
 	conversationRow,
@@ -44,7 +43,7 @@ import {
 	transcriptRow,
 	Message
 } from '../agent/schema.ts';
-import { collectionOf, defaultFields, type FieldInfo } from '@norbital-ai/store';
+import { exposureOf, defaultFields, type FieldInfo } from '@norbital-ai/store';
 import { evaluate, type EvalEnv } from '../query/eval.ts';
 
 const MiB = 1024 * 1024;
@@ -52,8 +51,7 @@ const MiB = 1024 * 1024;
 export const LIVE = {
 	subscriptionBytes: 2 * MiB,
 	perConnection: 500,
-	cellBytes: 128 * MiB,
-	onDebounceMs: 5_000
+	cellBytes: 128 * MiB
 } as const;
 
 /** The inbox's page (L-BOLT-354). */
@@ -74,7 +72,6 @@ type View = LiveView & {
 	value: Json | undefined;
 	arrivalsAfter: number | undefined;
 	conservative?: true;
-	dependencies: ReadonlySet<string>;
 };
 type Conn = {
 	id: string;
@@ -83,7 +80,6 @@ type Conn = {
 	end(): void;
 	views: Map<string, View>;
 	scope: Scope.Closeable;
-	fibers: FiberMap.FiberMap<string, void, never>;
 };
 
 type Row = { readonly [field: string]: Json };
@@ -230,11 +226,11 @@ export const LiveHubLive = Layer.effect(
 
 		/** Cursor pages and prospective reads have no live registration. Index searches re-answer on model writes. */
 		function check(view: LiveView): void {
-			if (view.batch !== undefined) {
-				for (const read of view.batch.reads) check({ read });
+			const r = view.read;
+			if (r.kind === 'request') {
+				for (const root of r.roots) if ('read' in root) check({ read: root.read });
 				return;
 			}
-			const r = view.read;
 			if (
 				r.kind === 'after' ||
 				(r.kind === 'read' && r.page._tag === 'Limit' && r.page.after !== undefined)
@@ -248,16 +244,16 @@ export const LiveHubLive = Layer.effect(
 
 		/** The RETURNING image with each exclusive arc also under its field name as a `RecordRef`, as the evaluator and the wire read it. */
 		const images = new WeakMap<RowData, RowData>();
-		function image(collection: string, row: RowData): RowData {
+		function image(model: string, row: RowData): RowData {
 			const hit = images.get(row);
 			if (hit !== undefined) return hit;
 			let out: { [k: string]: Json } | null = null;
-			for (const f of cat.models.get(collection)?.fields.values() ?? []) {
+			for (const f of cat.models.get(model)?.fields.values() ?? []) {
 				if (f.arms === undefined || f.arms.some((a) => row[`${f.column}__${a}`] === undefined))
 					continue;
 				const arm = f.arms.find((a) => row[`${f.column}__${a}`] !== null);
 				(out ??= { ...row })[f.name] =
-					arm === undefined ? null : jb({ collection: arm, id: row[`${f.column}__${arm}`]! });
+					arm === undefined ? null : jb({ model: arm, id: row[`${f.column}__${arm}`]! });
 			}
 			images.set(row, out ?? row);
 			return out ?? row;
@@ -265,16 +261,16 @@ export const LiveHubLive = Layer.effect(
 		/** Whether a row image is one of the view's rows for this caller: a read arm admits it and the view's `where` holds. */
 		function member(
 			a: Authority,
-			r: { collection: string; where?: Pred | undefined },
+			r: { model: string; where?: Pred | undefined },
 			row: RowData,
 			b: Bindings
 		): boolean {
-			const arms = a.admin ? null : (a.collections[r.collection]?.read ?? []);
+			const arms = a.admin ? null : (a.models[r.model]?.read[r.model] ?? []);
 			const env: EvalEnv = { cat, bindings: b, authority: a, scoped: true };
 			return (
 				(arms === null ||
-					arms.some((x) => evaluate({ ...env, scoped: false }, r.collection, x.where, row))) &&
-				(r.where === undefined || evaluate(env, r.collection, r.where, row))
+					arms.some((x) => evaluate({ ...env, scoped: false }, r.model, x.where, row))) &&
+				(r.where === undefined || evaluate(env, r.model, r.where, row))
 			);
 		}
 
@@ -286,22 +282,23 @@ export const LiveHubLive = Layer.effect(
 			b: Bindings
 		): 'skip' | 'hit' | 'unknown' {
 			const r = view.read;
-			if (view.batch !== undefined) return view.dependencies.has(c.collection) ? 'unknown' : 'skip';
+			// a read request's rows hold their layers: a change in any model it read re-reads it (`request` below)
+			if (r.kind === 'request') return 'unknown';
 			// a commit to a related sort key's target (a renamed account) may reorder rows it does not carry: re-read
-			if (r.kind === 'read' && sortTargets(cat, r.collection, r.order).has(c.collection))
+			if (r.kind === 'read' && sortTargets(cat, r.model, r.order).has(c.model))
 				return 'unknown';
-			if (c.collection !== r.collection)
+			if (c.model !== r.model)
 				return (r.kind === 'read' || r.kind === 'get') &&
-					selectTargets(cat, r.select).has(c.collection)
+					selectTargets(cat, r.select).has(c.model)
 					? 'unknown'
 					: 'skip';
 			if (r.kind === 'get' || r.kind === 'history') return c.id === r.id ? 'hit' : 'skip';
-			const arms = a.admin ? null : (a.collections[c.collection]?.read ?? []);
+			const arms = a.admin ? null : (a.models[c.model]?.read[c.model] ?? []);
 			if (r.kind !== 'read' && r.kind !== 'aggregate' && r.kind !== 'similar') return 'unknown';
 			if ((r.where !== undefined && !decidable(r.where)) || arms?.some((x) => !decidable(x.where)))
 				return 'unknown';
 			const hit = (row: RowData | null) =>
-				row !== null && member(a, r, image(c.collection, row), b);
+				row !== null && member(a, r, image(c.model, row), b);
 			return Result.getOrElse(
 				Result.try(() => (hit(c.old) || hit(c.new) ? ('hit' as const) : ('skip' as const))),
 				() => 'unknown' as const
@@ -312,7 +309,7 @@ export const LiveHubLive = Layer.effect(
 		 * `undefined` when the image cannot give it exactly (a relation arm, an arc arm field, a numeric number, a column it lacks). */
 		function project(
 			a: Authority,
-			collection: string,
+			model: string,
 			select: SelectIR,
 			row: RowData,
 			one: boolean,
@@ -320,11 +317,11 @@ export const LiveHubLive = Layer.effect(
 		): Row | undefined {
 			if (
 				Object.keys(select.relations).length > 0 ||
-				[...syncsOf(manifest).values()].some((sync) => sync.model === collection && sync.write) ||
-				approvable(manifest, cat).has(collection)
+				[...syncsOf(manifest).values()].some((sync) => sync.model === model && sync.write) ||
+				approvable(manifest, cat).has(model)
 			)
 				return undefined; // `$sync` and `$approval` are read, never in an image
-			const c = storeSync(collectionOf(cat, collection));
+			const c = storeSync(exposureOf(cat, model));
 			const out: { [k: string]: Json } = { id: row['id']! };
 			for (const name of select.fields ?? defaultFields(c, one)) {
 				if (name === 'id') continue;
@@ -332,10 +329,10 @@ export const LiveHubLive = Layer.effect(
 				if (f === undefined || name.includes('.')) return undefined;
 				const value = f.arms === undefined ? wireOf(f, row[f.column]) : row[name];
 				if (value === undefined) return undefined;
-				const mask = a.admin ? undefined : a.collections[collection]?.masks[name];
+				const mask = a.admin ? undefined : a.models[model]?.masks[model]?.[name];
 				out[name] =
 					mask === undefined ||
-					evaluate({ cat, bindings: b, authority: a, scoped: false }, collection, mask, row)
+					evaluate({ cat, bindings: b, authority: a, scoped: false }, model, mask, row)
 						? value
 						: { $masked: true };
 			}
@@ -347,11 +344,11 @@ export const LiveHubLive = Layer.effect(
 			if ((r.kind !== 'read' && r.kind !== 'get') || (r.kind === 'read' && r.search !== undefined))
 				return 'full';
 			if (c.new === null) return { c, row: null };
-			const row = image(c.collection, c.new);
+			const row = image(c.model, c.new);
 			const projected = Result.try(() =>
-				!member(a, r.kind === 'get' ? { collection: r.collection } : r, row, b)
+				!member(a, r.kind === 'get' ? { model: r.model } : r, row, b)
 					? null
-					: project(a, r.collection, r.select, row, r.kind === 'get', b)
+					: project(a, r.model, r.select, row, r.kind === 'get', b)
 			);
 			if (Result.isFailure(projected)) return 'full';
 			if (projected.success !== undefined) return { c, row: projected.success };
@@ -362,11 +359,11 @@ export const LiveHubLive = Layer.effect(
 						c,
 						get: {
 							kind: 'get',
-							collection: r.collection,
+							model: r.model,
 							id: c.id,
 							select: {
 								fields:
-									r.select.fields ?? defaultFields(storeSync(collectionOf(cat, r.collection))),
+									r.select.fields ?? defaultFields(storeSync(exposureOf(cat, r.model))),
 								relations: r.select.relations
 							}
 						}
@@ -377,7 +374,7 @@ export const LiveHubLive = Layer.effect(
 		 * it cannot be exact: a key the rows do not carry, or two different text values, whose order is the database collation's. */
 		function place(r: ReadIR, rows: readonly Row[], row: Row): number | null {
 			if (r.kind !== 'read') return null;
-			const fields = storeSync(collectionOf(cat, r.collection)).model.fields;
+			const fields = storeSync(exposureOf(cat, r.model)).model.fields;
 			const keys = [...(r.order ?? []), { field: 'id', dir: 'asc' as const }];
 			const before = (x: Row, y: Row): boolean | null => {
 				for (const k of keys) {
@@ -403,7 +400,7 @@ export const LiveHubLive = Layer.effect(
 		/** Whether the change leaves the row's order keys as they were, so it stays where it is. */
 		function kept(r: ReadIR, a: Authority, c: Captured, old: Row, row: Row): boolean {
 			if (r.kind !== 'read') return false;
-			const fields = storeSync(collectionOf(cat, r.collection)).model.fields;
+			const fields = storeSync(exposureOf(cat, r.model)).model.fields;
 			return (r.order ?? []).every(({ field }) => {
 				// a related key (`account.name`) holds while its relation does; a commit to the target re-reads (`decide`)
 				const head = field.split('.')[0]!,
@@ -411,7 +408,7 @@ export const LiveHubLive = Layer.effect(
 				return (
 					c.old !== null &&
 					c.new !== null &&
-					(a.admin || a.collections[r.collection]?.masks[head] === undefined) &&
+					(a.admin || a.models[r.model]?.masks[r.model]?.[head] === undefined) &&
 					same(c.old[col], c.new[col] ?? null)
 				);
 			});
@@ -449,14 +446,20 @@ export const LiveHubLive = Layer.effect(
 			get: base,
 			history: base,
 			aggregate: base,
-			query: {
+			// ponytail: any commit to a model the request read (its roots, layers, hops and the caller's arms) re-reads the
+			// whole request; patch per root when request views grow large
+			request: {
 				...base,
-				decide: (a, view, captured) => (view.dependencies.has(captured.collection) ? 'hit' : 'skip')
+				decide: (a, view, captured) =>
+					readTargets(cat, view.read, a).has(captured.model) ? 'unknown' : 'skip',
+				resolve: () => 'full'
 			},
 			similar: {
 				...base,
 				decide: (a, view, captured) =>
-					captured.collection === view.read.collection ? 'unknown' : 'skip'
+					view.read.kind === 'similar' && captured.model === view.read.model
+						? 'unknown'
+						: 'skip'
 			},
 			after: { ...base, decide: () => 'unknown' },
 			transcript: {
@@ -464,21 +467,21 @@ export const LiveHubLive = Layer.effect(
 				decide: (a, view, captured) =>
 					// the answer carries its conversation's status (a stop may change no message): its row re-reads
 					view.read.kind === 'transcript' &&
-					captured.collection === 'sys_conversation' &&
+					captured.model === 'sys_conversation' &&
 					(captured.new ?? captured.old)?.['id'] === view.read.conversation
 						? Predicate.isObject(view.value) &&
 							view.value['status'] === (captured.new ?? captured.old)?.['status']
 							? 'skip'
 							: 'hit'
 						: view.read.kind === 'transcript' &&
-							  captured.collection === view.read.collection &&
+							  captured.model === view.read.model &&
 							  (captured.new ?? captured.old)?.['conversation'] === view.read.conversation &&
 							  (view.read.from === undefined ||
 									Number((captured.new ?? captured.old)?.['seq']) >= view.read.from)
 							? 'hit'
 							: 'skip',
 				resolve: (a, view, captured) => {
-					if (captured.new === null || captured.collection === 'sys_conversation')
+					if (captured.new === null || captured.model === 'sys_conversation')
 						return { c: captured, row: null };
 					const message = Schema.decodeUnknownOption(Message)(captured.new);
 					if (view.read.kind !== 'transcript' || Option.isNone(message)) return 'full';
@@ -494,9 +497,9 @@ export const LiveHubLive = Layer.effect(
 				...base,
 				decide: (a, view, captured) =>
 					view.read.kind === 'inbox' &&
-					((captured.collection === view.read.collection &&
+					((captured.model === view.read.model &&
 						(captured.new ?? captured.old)?.['member'] === view.read.member) ||
-						(view.read.requests === true && captured.collection === 'sys_user'))
+						(view.read.requests === true && captured.model === 'sys_user'))
 						? 'hit'
 						: 'skip',
 				resolve: (a, view, captured) => ({
@@ -511,7 +514,7 @@ export const LiveHubLive = Layer.effect(
 				...base,
 				decide: (a, view, captured) =>
 					view.read.kind === 'conversations' &&
-					captured.collection === view.read.collection &&
+					captured.model === view.read.model &&
 					listed(captured.new ?? captured.old, view.read.member, publicEnvoys(), a.admin)
 						? 'hit'
 						: 'skip',
@@ -535,7 +538,7 @@ export const LiveHubLive = Layer.effect(
 		): PatchOp[] | 'full' {
 			const r = view.read;
 			// a transcript's conversation changed status: set it beside the rows, no re-read
-			if (r.kind === 'transcript' && c.collection === 'sys_conversation') {
+			if (r.kind === 'transcript' && c.model === 'sys_conversation') {
 				const status = c.new?.['status'];
 				if (!Predicate.isObject(work.value) || status === undefined) return 'full';
 				work.value = { ...work.value, status };
@@ -671,54 +674,26 @@ export const LiveHubLive = Layer.effect(
 		});
 		const answer = Effect.fn('Live.answer')(function* (conn: Conn, views: readonly View[]) {
 			const b = yield* bindings;
-			const ordinary = views.filter(
-				(view) => view.batch === undefined && view.read.kind !== 'query'
-			);
 			const values = yield* readAll(
 				conn,
-				ordinary.map((view) => view.read),
+				views.map((view) => view.read),
 				b
 			);
-			for (const [i, view] of ordinary.entries()) {
+			for (const [i, view] of views.entries()) {
 				if (!conn.views.has(view.id)) continue;
 				const result = values[i];
 				if (result === undefined) continue;
 				if ('ok' in result) yield* put(conn, view, result.ok);
 				else failed(conn, view, result.err);
 			}
-			for (const view of views.filter(
-				(view) => view.batch !== undefined || view.read.kind === 'query'
-			)) {
-				const batch = view.batch?.reads ?? [view.read];
-				const dependencies = new Set(
-					batch.flatMap((read) => [...readTargets(cat, read, conn.authority)])
-				);
-				const results = yield* readAll(conn, batch, b).pipe(
-					Effect.provideService(ReadDeps, dependencies)
-				);
-				if (!conn.views.has(view.id)) continue;
-				const error = results.find((result) => 'err' in result);
-				if (error !== undefined && 'err' in error) failed(conn, view, error.err);
-				else {
-					view.dependencies = dependencies;
-					const values = results.map((result) => ('ok' in result ? result.ok : null));
-					const value =
-						view.batch === undefined
-							? values[0]
-							: Object.fromEntries(
-									view.batch.keys.map((key, index) => [key, values[index] ?? null])
-								);
-					if (value !== undefined) yield* put(conn, view, value);
-				}
-			}
 		});
-		const drop = Effect.fn('Live.dropView')(function* (conn: Conn, id: string) {
-			const view = conn.views.get(id);
-			if (view === undefined) return;
-			retained -= view.bytes;
-			conn.views.delete(id);
-			yield* FiberMap.remove(conn.fibers, `debounce:${id}`);
-		});
+		const drop = (conn: Conn, id: string) =>
+			Effect.sync(() => {
+				const view = conn.views.get(id);
+				if (view === undefined) return;
+				retained -= view.bytes;
+				conn.views.delete(id);
+			});
 		const disconnect = Effect.fn('Live.disconnect')(function* (id: string) {
 			const conn = conns.get(id);
 			if (conn === undefined) return;
@@ -752,12 +727,11 @@ export const LiveHubLive = Layer.effect(
 							const read = view.read;
 							const changed =
 								read.kind === 'get' || read.kind === 'read'
-									? metadata.get(read.collection)
+									? metadata.get(read.model)
 									: undefined;
 							let unsure =
-								((read.kind === 'query' || view.batch !== undefined) &&
-									[...metadata.keys()].some((model) => view.dependencies.has(model))) ||
-								(read.kind === 'inbox' && metadata.has(read.collection)) ||
+								(read.kind === 'request' && read.roots.some((r) => metadata.has(r.root))) ||
+								(read.kind === 'inbox' && metadata.has(read.model)) ||
 								(read.kind === 'inbox' &&
 									read.requests === true &&
 									metadata.has('approval_request')) ||
@@ -781,19 +755,6 @@ export const LiveHubLive = Layer.effect(
 							}
 							if (!unsure && hits.length === 0) continue;
 							hit++;
-							if (view.read.kind === 'query' || view.batch !== undefined) {
-								// a collection query re-runs debounced, shared by nothing else on this connection
-								yield* FiberMap.run(
-									conn.fibers,
-									`debounce:${view.id}`,
-									Effect.sleep(LIVE.onDebounceMs).pipe(
-										Effect.andThen(answer(conn, [view])),
-										Effect.asVoid
-									),
-									{ onlyIfMissing: true }
-								);
-								continue;
-							}
 							// Inbox counts cover rows beyond the displayed page, including old:null read captures.
 							const rows =
 								unsure || view.value === undefined || view.read.kind === 'inbox'
@@ -820,7 +781,7 @@ export const LiveHubLive = Layer.effect(
 										read.kind === 'inbox' && after !== undefined
 											? batch.flatMap(({ captured: c, version }) =>
 													version > after &&
-													c.collection === read.collection &&
+													c.model === read.model &&
 													c.op === 'create' &&
 													c.new?.['member'] === read.member
 														? [noticeRow(c.new)]
@@ -910,14 +871,12 @@ export const LiveHubLive = Layer.effect(
 					Effect.gen(function* () {
 						const frames = yield* Queue.unbounded<Frame, Cause.Done>();
 						const scope = yield* Scope.fork(generation);
-						const fibers = yield* FiberMap.make<string, void, never>().pipe(Scope.provide(scope));
 						const id = `c${++n}`;
 						const conn: Conn = {
 							id,
 							authority,
 							views: new Map(),
 							scope,
-							fibers,
 							send: (frame) => {
 								Queue.offerUnsafe(frames, frame);
 							},
@@ -957,8 +916,7 @@ export const LiveHubLive = Layer.effect(
 					id,
 					bytes: 0,
 					value: undefined,
-					arrivalsAfter: undefined,
-					dependencies: new Set()
+					arrivalsAfter: undefined
 				};
 				conn.views.set(id, state);
 				yield* answer(conn, [state]);
@@ -977,16 +935,16 @@ export const LiveHubLive = Layer.effect(
 				queue();
 				return v;
 			},
-			/** Re-read affected views after native metadata commits, without domain captures or hooks. Omit records to invalidate the collection. */
-			syncChanged(collection: string, records?: readonly string[]): number {
+			/** Re-read affected views after native metadata commits, without domain captures or hooks. Omit records to invalidate the model. */
+			syncChanged(model: string, records?: readonly string[]): number {
 				if (records?.length === 0) return v;
 				v++;
-				const previous = syncChanges.get(collection);
-				if (records === undefined || previous === null) syncChanges.set(collection, null);
+				const previous = syncChanges.get(model);
+				if (records === undefined || previous === null) syncChanges.set(model, null);
 				else {
 					const ids = previous ?? new Set<string>();
 					for (const record of records) ids.add(record);
-					syncChanges.set(collection, ids);
+					syncChanges.set(model, ids);
 				}
 				queue();
 				return v;

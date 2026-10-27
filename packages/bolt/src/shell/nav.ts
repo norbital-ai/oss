@@ -4,7 +4,7 @@ import type { Authority, EngineActor } from '../engine/contracts.ts';
 import type { EngineManifest } from '../engine/manifest.ts';
 import { canOpenKiosk } from '../decl/runtime/kiosk.ts';
 import { BOLT } from '../protocol/wire.ts';
-import type { AutomationExposure, CollectionExposure } from '@norbital-ai/ui';
+import type { AutomationExposure, ModelExposure } from '@norbital-ai/ui';
 import { Schema } from 'effect';
 import { FieldsSchema } from '../protocol/public-page.ts';
 
@@ -140,8 +140,8 @@ export type ShellBoot = {
 	push: string | null;
 	/** A visitor page's app and, when it declares one, the Turnstile site key. */
 	visitor: { app: string; siteKey?: string } | null;
-	/** What ui's generated forms and record views read per collection (its `CollectionExposure`), as this caller may use it. */
-	catalog: { readonly [collection: string]: CollectionExposure };
+	/** What ui's generated forms and record views read per model (its `ModelExposure`), as this caller may use it. */
+	catalog: { readonly [model: string]: ModelExposure };
 	/** Inputs of the automations this caller may start; the host still validates every start. */
 	automations: Readonly<Record<string, AutomationExposure>>;
 	/** The agent surface is on but the host binds no AI provider (P19): the panel says so instead of failing each turn. */
@@ -218,16 +218,16 @@ export function framePolicy(m: ShellManifest, path: string): string {
 export const holdsPublic = (auth: Authority, app: string): boolean =>
 	auth.actor.kind === 'member' && !auth.admin && auth.capabilities.apps.includes(app);
 
-/** `bolt.href(app, page?, record?)`: `/app/<app>[/<page>][?record=<collection>/<id>]`. */
+/** `bolt.href(app, page?, record?)`: `/app/<app>[/<page>][?record=<model>/<id>]`. */
 export function href(
 	app: string,
 	page?: string,
-	record?: { collection: string; id: string }
+	record?: { model: string; id: string }
 ): string {
 	const path = `${APP_PREFIX}${app}${page === undefined ? '' : `/${page}`}`;
 	return record === undefined
 		? path
-		: `${path}?record=${encodeURIComponent(record.collection)}/${encodeURIComponent(record.id)}`;
+		: `${path}?record=${encodeURIComponent(record.model)}/${encodeURIComponent(record.id)}`;
 }
 /** `bolt.kioskHref(kiosk, page?)`: `/kiosk/<kiosk>[/<page>]`. Kiosks take no record stack. */
 export function kioskHref(kiosk: string, page?: string): string {
@@ -326,10 +326,13 @@ export function nav(m: ShellManifest, auth: Authority): NavNode[] {
 		}
 		const a = appOf(m, name);
 		if (a === undefined || !canOpen(m, auth, name)) return null;
+		const first = Object.keys(a.pages)[0];
+		const leaf = name.split('/').at(-1);
 		const pages = Object.entries<AppSpec['pages'][string]>(a.pages).map(([p, s]): NavPage => ({
 			name: p,
 			...s,
-			href: href(name, p)
+			// an app folder and its one page may share a name: the folder path is already the canonical address
+			href: p === first && p === leaf ? href(name) : href(name, p)
 		}));
 		return {
 			kind: 'app',
@@ -394,11 +397,10 @@ export function surfaces(
 }
 
 export type Route =
-	| { kind: 'page'; app: string; page: string; record?: { collection: string; id: string } }
+	| { kind: 'page'; app: string; page: string; record?: { model: string; id: string } }
 	| { kind: 'kiosk'; kiosk: string; page: string }
 	| { kind: 'home' }
 	| { kind: 'inbox' }
-	| { kind: 'connections' }
 	| { kind: 'settings'; tab: SettingsTab }
 	| { kind: 'studio'; tab?: StudioTab }
 	| { kind: 'signIn'; next?: string }
@@ -431,12 +433,11 @@ const named = <T extends string>(tabs: readonly T[], value: string | undefined):
 
 /**
  * A preview environment drops the meta tools: Studio and who-has-access management (Settings → People) open the apps
- * launcher, and so do Connections and Settings → Integrations, whose integration endpoints only the live workspace serves.
+ * launcher, and so does Settings → Integrations, whose integration endpoints only the live workspace serves.
  */
 export function previewRoute(r: Route, preview: boolean): Route {
 	return preview &&
 		(r.kind === 'studio' ||
-			r.kind === 'connections' ||
 			(r.kind === 'settings' && (r.tab === 'people' || r.tab === 'integrations')))
 		? { kind: 'home' }
 		: r;
@@ -460,8 +461,6 @@ export function route(m: ShellManifest, url: URL): Route {
 			return { kind: 'home' };
 		case 'inbox':
 			return seg.length === 1 ? { kind: 'inbox' } : { kind: 'notFound' };
-		case 'connections':
-			return seg.length === 1 ? { kind: 'connections' } : { kind: 'notFound' };
 		case 'settings':
 			return { kind: 'settings', tab: named(SETTINGS_TABS, seg[1]) ?? 'people' };
 		case 'studio': {
@@ -497,15 +496,15 @@ export function route(m: ShellManifest, url: URL): Route {
 	return { kind: 'notFound' };
 }
 
-/** The record a `?record=<collection>/<id>` link opens over any shell route (the top of `recordsOf`'s stack). */
-function recordOf(url: URL): { collection: string; id: string } | null {
+/** The record a `?record=<model>/<id>` link opens over any shell route (the top of `recordsOf`'s stack). */
+function recordOf(url: URL): { model: string; id: string } | null {
 	return recordsOf(url).at(-1) ?? null;
 }
 /** The record-sheet stack (rule 10): each `?record=` in order, the last on top; a malformed entry is skipped. */
-export function recordsOf(url: URL): { collection: string; id: string }[] {
+export function recordsOf(url: URL): { model: string; id: string }[] {
 	return url.searchParams.getAll('record').flatMap((v) => {
 		const r = /^([a-z][a-z0-9_]*)\/(.+)$/.exec(v);
-		return r === null ? [] : [{ collection: r[1]!, id: r[2]! }];
+		return r === null ? [] : [{ model: r[1]!, id: r[2]! }];
 	});
 }
 /** The URL with the record stack cut back to its first `depth` sheets (closing one closes those above it). */
@@ -513,7 +512,7 @@ export function withRecords(url: URL, depth: number): URL {
 	const next = new URL(url),
 		kept = recordsOf(url).slice(0, depth);
 	next.searchParams.delete('record');
-	for (const r of kept) next.searchParams.append('record', `${r.collection}/${r.id}`);
+	for (const r of kept) next.searchParams.append('record', `${r.model}/${r.id}`);
 	return next;
 }
 

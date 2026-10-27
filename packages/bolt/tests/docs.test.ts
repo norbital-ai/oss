@@ -122,7 +122,7 @@ const unexpectedSync = (): never => {
 const manifest: AgentEngine['manifest'] = {
 	workspace: { tz: 'UTC', locale: 'en' },
 	models: {},
-	collections: {},
+	exposures: {},
 	relationships: {},
 	integrations: {},
 	connections: {},
@@ -159,7 +159,6 @@ const engine: AgentEngine = {
 		retained: unexpected()
 	},
 	calls: {
-		query: unexpected,
 		acts: unexpected,
 		start: unexpected
 	},
@@ -186,7 +185,7 @@ const docsTool = (external = false) =>
 				},
 				admin: false,
 				policies: [],
-				collections: {},
+				models: {},
 				automations: [],
 				capabilities: { apps: [], tools: [], mcp: [], skills: [] },
 				limits: [],
@@ -199,6 +198,7 @@ const docsTool = (external = false) =>
 				owner: 'ann',
 				envoy: null,
 				integration: null,
+				thread: null,
 				parent: null,
 				status: 'idle',
 				model: 'default',
@@ -239,7 +239,10 @@ const docsTool = (external = false) =>
 				report: unexpected
 			}
 		};
-		return catalogue(context).find((tool) => tool.name === 'docs');
+		const offered = yield* catalogue(context);
+		return offered.tools.some((tool) => tool.name === 'docs')
+			? { run: (input: unknown, id: string) => offered.run('docs', input, id) }
+			: undefined;
 	});
 
 it.effect(

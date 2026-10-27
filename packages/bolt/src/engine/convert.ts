@@ -1,5 +1,5 @@
 import { Effect, Schedule, Schema, Stream } from 'effect';
-import { Sse } from 'effect/unstable/encoding';
+import { Sse } from 'effect/encoding';
 import { FacilityFailure } from '../decl/errors.ts';
 import { CONVERT_TARGETS } from './contracts.ts';
 import { Convert } from './ports.ts';

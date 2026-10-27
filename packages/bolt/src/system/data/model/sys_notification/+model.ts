@@ -23,5 +23,5 @@ export default model('sys_notification', {
 		primary: 'text',
 		indexes: [{ on: ['member', 'at'], where: { member: { isNull: false } } }]
 	},
-	read: { fields: 'all' }
+	read: 'all'
 });

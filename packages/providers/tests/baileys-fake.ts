@@ -17,6 +17,10 @@ export type Sock = {
 	config: WaConfig;
 	sent: { jid: string; content: unknown }[];
 	receipts: string[];
+	/** Presence the link sent (`available`, `composing`, `paused`), the read receipts and the chats whose typing it watches. */
+	presence: [string, string | undefined][];
+	read: unknown[];
+	subscribed: string[];
 	ended: boolean;
 	media: (message: unknown, download: boolean) => Promise<WaMedia | null>;
 	/** The patched receipt path: the gate, then the receipt; a refusal ends the socket unreceipted (428). */
@@ -94,6 +98,9 @@ export const fake = (log: string[] = [], options: BaileysOptions = {}) => {
 			config,
 			sent: [],
 			receipts: [],
+			presence: [],
+			read: [],
+			subscribed: [],
 			ended: false,
 			media: async () => null,
 			socket: {
@@ -117,6 +124,15 @@ export const fake = (log: string[] = [], options: BaileysOptions = {}) => {
 						key: { id: `OUT${s.sent.length}` },
 						message: { conversation: `sent ${s.sent.length}` }
 					};
+				},
+				sendPresenceUpdate: async (type, jid) => {
+					s.presence.push([type, jid]);
+				},
+				readMessages: async (keys) => {
+					s.read.push(...keys);
+				},
+				presenceSubscribe: async (jid) => {
+					s.subscribed.push(jid);
 				},
 				requestPairingCode: async () => 'ABCD-1234',
 				logout: async () => {},

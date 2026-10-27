@@ -4,7 +4,7 @@ import {
 	HttpClientRequest,
 	HttpClientResponse,
 	type Headers
-} from 'effect/unstable/http';
+} from 'effect/http';
 import type { Json } from '@norbital-ai/bolt/engine';
 import { answerFailure, ProviderRefused, ProviderUnavailable } from './errors.ts';
 

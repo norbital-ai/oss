@@ -25,8 +25,8 @@ A dense, filterable log: one line per event, oldest first, following the tail an
 	import { tick } from 'svelte';
 	import { watch } from 'runed';
 	import { cn } from '../primitives/utils.js';
-	import ToolbarSearch from '../collection/toolbar/ToolbarSearch.svelte';
-	import ToolbarFilter from '../collection/toolbar/ToolbarFilter.svelte';
+	import ToolbarSearch from '../model/toolbar/ToolbarSearch.svelte';
+	import ToolbarFilter from '../model/toolbar/ToolbarFilter.svelte';
 	import { offsets, windowOf } from '../primitives/virtual/virtual.js';
 	import {
 		LOG_LEVELS,

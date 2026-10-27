@@ -3,7 +3,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, it, layer } from '@effect/vitest';
 import { Effect, FileSystem, Redacted, Result, Schema } from 'effect';
-import { FetchHttpClient } from 'effect/unstable/http';
+import { FetchHttpClient } from 'effect/http';
 import {
 	assertSha512Integrity,
 	packedArchiveFilename,

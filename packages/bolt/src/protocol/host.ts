@@ -1,6 +1,6 @@
 import { Context, Effect, Fiber, FiberSet, Layer, Option, Record, Ref } from 'effect';
-import type * as HttpServerRequest from 'effect/unstable/http/HttpServerRequest';
-import * as HttpServerResponse from 'effect/unstable/http/HttpServerResponse';
+import type * as HttpServerRequest from 'effect/http/HttpServerRequest';
+import * as HttpServerResponse from 'effect/http/HttpServerResponse';
 import { Outbound, Runs } from '../engine/services.ts';
 import { NOT_IN_PREVIEW, ShellConfig, ShellHandler } from '../shell/host.ts';
 import { BoltError } from './errors.ts';

@@ -1,6 +1,6 @@
 import { Clock, Effect, Option, Schema } from 'effect';
-import * as HttpServerRequest from 'effect/unstable/http/HttpServerRequest';
-import * as HttpServerResponse from 'effect/unstable/http/HttpServerResponse';
+import * as HttpServerRequest from 'effect/http/HttpServerRequest';
+import * as HttpServerResponse from 'effect/http/HttpServerResponse';
 import { LIMITS } from '../engine/contracts.ts';
 import { BoltError } from './errors.ts';
 import { chargesFor } from '../engine/access/rate.ts';
@@ -50,8 +50,8 @@ export const filesRoutes = (request: HttpServerRequest.HttpServerRequest) =>
 			catch: () => invalid('The file path does not decode.')
 		});
 		if (request.method === 'PUT') {
-			const [collection = '', field] = rest.split('.');
-			if (field === undefined) return yield* Effect.fail(invalid('upload to <collection>.<field>'));
+			const [model = '', field] = rest.split('.');
+			if (field === undefined) return yield* Effect.fail(invalid('upload to <model>.<field>'));
 			const charges = chargesFor(
 					auth,
 					['upload'],
@@ -78,7 +78,7 @@ export const filesRoutes = (request: HttpServerRequest.HttpServerRequest) =>
 						});
 			const outcome = yield* upload({
 				id: header(request, HEADERS.key) ?? '',
-				collection,
+				model,
 				field,
 				name,
 				mime: header(request, 'content-type') ?? 'application/octet-stream',

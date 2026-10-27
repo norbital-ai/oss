@@ -2,7 +2,7 @@
 // literal, typed from the generated names (its input from the triggers or the declared input, its output, its ctx).
 import type { Actor } from '../access/actor.ts';
 import { attached, type AgentUse, type Body } from '../body.ts';
-import type { Act, BodyReturn, Eff, QueryCtx } from '../ctx.ts';
+import type { Act, BodyReturn, CallerQuery, Clock, Eff } from '../ctx.ts';
 import type { Transaction } from '../transaction.ts';
 import type {
 	Checked,
@@ -17,7 +17,7 @@ import type {
 } from '../fields.ts';
 import type {
 	AutomationName,
-	CollectionName,
+	ModelName,
 	PolicyName,
 	ReadField,
 	ReadableName,
@@ -127,7 +127,7 @@ type AutomationFor<N, S> = {
 				? 'error: runAs trigger needs an automation without on'
 				: 'trigger');
 	delegations?: readonly {
-		verb: `${CollectionName}.${'create' | 'update' | 'delete'}`;
+		verb: `${ModelName}.${'create' | 'update' | 'delete'}`;
 		policy: PolicyName;
 	}[];
 	retry?: { attempts: Attempts; backoff?: Duration };
@@ -138,18 +138,18 @@ type AutomationFor<N, S> = {
 
 // ── the run's input and ctx ──
 type Target<T> = T extends { created: infer C } | { updated: infer C } | { deleted: infer C }
-	? C & CollectionName
+	? C & ModelName
 	: never;
-type Deleted<T> = T extends { deleted: infer C } ? C & CollectionName : never;
+type Deleted<T> = T extends { deleted: infer C } ? C & ModelName : never;
 /** One row-event trigger's input: which model fired, correlated with the ids it fired for. */
 type RowArm<T> = T extends { created: infer C } | { updated: infer C } | { deleted: infer C }
-	? { readonly collection: C & CollectionName; readonly ids: readonly Id<C & CollectionName>[] }
+	? { readonly model: C & ModelName; readonly ids: readonly Id<C & ModelName>[] }
 	: never;
 type EventInput<T> = [Target<T>] extends [never]
 	? {}
 	: Exclude<T, { created: unknown } | { updated: unknown } | { deleted: unknown }> extends never
-		? RowArm<T> // all triggers are row events: one arm per collection (a declared union)
-		: Partial<{ readonly collection: Target<T>; readonly ids: readonly Id<Target<T>>[] }>;
+		? RowArm<T> // all triggers are row events: one arm per model (a declared union)
+		: Partial<{ readonly model: Target<T>; readonly ids: readonly Id<Target<T>>[] }>;
 /** A `deleted` run also receives the pre-images, masked to its `runAs` read grant (rule 50). */
 type Removed<T> = [Deleted<T>] extends [never]
 	? {}
@@ -162,7 +162,8 @@ export type RunInput<S> = Simplify<
 export type RunOutput<S> = S extends { output: infer O } ? ValueOf<O> : void;
 
 /** `run`'s ctx (§3.4): reads (`ctx.query`), writes and schedules as its `runAs` policies; the only place for I/O. */
-export type AutomationCtx<S = AutomationSpec> = Omit<QueryCtx, 'actor' | 'refuse'> & {
+export type AutomationCtx<S = AutomationSpec> = Omit<Clock, 'actor'> &
+	CallerQuery & { invocationId: string } & {
 	actor: S extends { runAs: 'trigger' } ? Actor : Extract<Actor, { kind: 'system' }>;
 	/** 1 on the first attempt. */
 	attempt: number;

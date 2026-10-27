@@ -1,8 +1,8 @@
 <!--
 	The workspace sidebar,  the workspace switcher with the finder and the collapse toggle; the model's
 	sections as icon-tile rows (Norbius wears its strip); and the account footer — its label, the environment badge, the
-	sync dot, the bell and the Settings/System/Kiosks menu, then the account card whose menu holds the member's connections,
-	language, appearance, team preview and sign-out. Collapsed (`expanded` false) it is a 3rem icon rail with tooltips.
+	sync dot, the bell and the Settings/System/Kiosks menu, then the account card whose menu holds language, appearance,
+	team preview and sign-out. Collapsed (`expanded` false) it is a 3rem icon rail with tooltips.
 -->
 <script lang="ts">
 	import { fork } from '@norbital-ai/ui/effect';
@@ -50,7 +50,6 @@
 		onToggle,
 		onNavigate,
 		onSignOut,
-		onConnections,
 		bell,
 		notice,
 		api,
@@ -79,8 +78,6 @@
 		onToggle?: () => void;
 		onNavigate: (href: string) => void;
 		onSignOut: () => Effect.Effect<void>;
-		/** The member may connect their own accounts: the menu offers their Connections page. */
-		onConnections?: () => void;
 		/** The notification bell (it reads the live inbox the shell owns). */
 		bell?: Snippet<[boolean]>;
 		/** The host's notice (a billing reminder): a footer line here, so it never takes the page's height. */
@@ -642,20 +639,6 @@
 					</p>{/if}
 			</div>
 			<div class="-mx-1 my-1 h-px bg-border"></div>
-			{#if onConnections !== undefined}
-				<Button
-					type="button"
-					variant="ghost"
-					class="h-9 w-full justify-start px-2 text-xs font-normal"
-					data-testid="account-connections"
-					onclick={() => {
-						menuOpen = false;
-						onConnections();
-					}}
-				>
-					<Icon name="lucide:plug" class="size-3.5" /><span>{t('Connections')}</span>
-				</Button>
-			{/if}
 			{#if onLocale !== undefined}
 				<Button
 					type="button"
@@ -670,7 +653,7 @@
 				</Button>
 			{/if}
 			{#if onTheme !== undefined}
-				<Inline gap="sm" class="h-9 px-2">
+				<Inline gap="sm" class="h-9 w-full px-2 text-xs font-normal">
 					<Icon name={THEME_ICON[theme]} class="size-3.5" /><span class="flex-1"
 						>{t('Appearance')}</span
 					>
@@ -678,7 +661,7 @@
 						gap="none"
 						role="radiogroup"
 						aria-label={t('Appearance')}
-						class="rounded-md bg-muted p-0.5"
+						class="ml-auto shrink-0 rounded-md bg-muted p-0.5"
 						data-testid="workspace-theme-toggle"
 					>
 						{#each THEMES as x (x)}

@@ -42,12 +42,12 @@ A toolbar search trigger and popover with a bound text value or a custom indexed
 		{#snippet child({ props })}
 			<Button
 				{...props}
-				size="icon"
+				size="icon-sm"
 				variant="ghost"
 				class={searching ? 'bg-accent' : ''}
 				hint={label}
 				aria-label={label}
-				data-search-toggle><Glyph name="search" /></Button
+				data-search-toggle><Glyph name="search" class="size-3.5" /></Button
 			>
 		{/snippet}
 	</Popover.Trigger>

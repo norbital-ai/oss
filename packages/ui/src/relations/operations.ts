@@ -1,6 +1,6 @@
 import { Equal } from 'effect';
 import { encodeWire } from '@norbital-ai/std/wire';
-import type { Row, Values } from '../collection/types.js';
+import type { Row, Values } from '../model/types.js';
 export type RowsOps = {
 	create?: Values[];
 	update?: { target: string; set: Values }[];

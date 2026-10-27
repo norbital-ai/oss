@@ -119,20 +119,20 @@ export type EvalEnv = {
 	/** The caller: operands resolve against it; with `scoped`, related rows are filtered by its scope and fields masked. */
 	authority?: Authority | null;
 	scoped?: boolean;
-	/** The rows of `target` related to `row` through `rel` of `collection` (a one-relation gives 0 or 1). */
-	related?: (collection: string, rel: string, target: string, row: RowData) => readonly RowData[];
+	/** The rows of `target` related to `row` through `rel` of `model` (a one-relation gives 0 or 1). */
+	related?: (model: string, rel: string, target: string, row: RowData) => readonly RowData[];
 };
 
 function field(env: EvalEnv, c: string, row: RowData, name: string): Json {
 	const dot = name.indexOf('.');
 	let v: Json;
 	if (dot > 0) {
-		const ref = row[name.slice(0, dot)] as { collection?: string; id?: string } | null | undefined;
-		v = ref?.collection === name.slice(dot + 1) ? (ref.id ?? null) : null;
+		const ref = row[name.slice(0, dot)] as { model?: string; id?: string } | null | undefined;
+		v = ref?.model === name.slice(dot + 1) ? (ref.id ?? null) : null;
 	} else v = row[name] ?? null;
 	const mask =
 		env.scoped && env.authority && !env.authority.admin
-			? env.authority.collections[c]?.masks[name]
+			? env.authority.models[c]?.masks[c]?.[name]
 			: undefined;
 	return mask === undefined || evaluate({ ...env, scoped: false }, c, mask, row) ? v : null;
 }
@@ -144,7 +144,7 @@ function info(env: EvalEnv, c: string, name: string): FieldInfo {
 function visible(env: EvalEnv, c: string, row: RowData): boolean {
 	const a = env.authority;
 	if (!env.scoped || a == null || a.admin) return true;
-	return (a.collections[c]?.read ?? []).some((arm) =>
+	return (a.models[c]?.read[c] ?? []).some((arm) =>
 		evaluate({ ...env, scoped: false }, c, arm.where, row)
 	);
 }
@@ -188,7 +188,7 @@ function range(f: FieldInfo, v: Json | undefined): Range | null {
 	return { lo: Date.parse(p.start!), hi: p.end == null ? null : Date.parse(p.end) };
 }
 const below = (x: number | string, hi: number | string | null) => hi === null || x < hi;
-/** Whether `row` of `collection` satisfies `p`. */
+/** Whether `row` of `model` satisfies `p`. */
 export function evaluate(env: EvalEnv, c: string, p: Pred, row: RowData): boolean {
 	switch (p.t) {
 		case 'const':
@@ -324,7 +324,7 @@ export function evaluate(env: EvalEnv, c: string, p: Pred, row: RowData): boolea
 				env.scoped &&
 				env.authority &&
 				!env.authority.admin &&
-				env.authority.collections[p.target]?.masks[p.of] !== undefined
+				env.authority.models[p.target]?.masks[p.target]?.[p.of] !== undefined
 			)
 				throw BoltError.make(
 					'forbidden',

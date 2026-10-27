@@ -2,6 +2,8 @@
 // idle time: every token received (answer or reasoning) restarts it, so a model streaming its reasoning is never cut. A
 // stream silent for the wall is closed and its partial output kept as a cut step the next request continues; a request
 // that yields nothing within it is `timeout` (OD-13). `model` is a class or a catalog id; any other is `unavailable`.
+// The agent's turn loop and an inference reach it as an Effect `LanguageModel` (P7, `generate`): one `generateText` with
+// tool-call resolution disabled is one `modelCall`, its tools a `Toolkit`, the AI port's ABI unchanged beneath it.
 import {
 	Cause,
 	Clock,
@@ -16,6 +18,7 @@ import {
 	type Scope
 } from 'effect';
 import * as EffectArray from 'effect/Array';
+import { AiError, LanguageModel, Prompt, Response, Tool, Toolkit } from 'effect/ai';
 import { FacilityFailure, Unavailable } from '../../decl/errors.ts';
 import type { Ai, AiEvent } from '../ports.ts';
 import { Port, type PortFailure } from '../port.ts';
@@ -218,6 +221,242 @@ export const modelCall = Effect.fn('Ai.modelCall')(function* (
 			})
 		);
 	return response;
+});
+
+/** `confirm`: an in-app call the person must approve first; it executes later under key `(turn, callId)`. */
+/** `bounded`: the tool already bounded its result with the caller's selection (rule 62), so the loop does not clip it again. */
+export const ToolAnswer = Schema.Union([
+	Schema.Struct({ result: Schema.Json, bounded: Schema.optionalKey(Schema.Literal(true)) }),
+	Schema.Struct({ confirm: Schema.Literal(true) })
+]);
+export type ToolAnswer = typeof ToolAnswer.Type;
+/** A catalogue tool, erased to its answer: a `Tool.make` over a service-free input Schema, or a `Tool.dynamic`. */
+export type AnyTool = Tool.Tool<
+	string,
+	{
+		readonly parameters: Schema.Top & {
+			readonly DecodingServices: never;
+			readonly EncodingServices: never;
+		};
+		readonly success: typeof ToolAnswer;
+		readonly failure: typeof Schema.Never;
+		readonly failureMode: 'error';
+	}
+>;
+/** A tool's input as the closed JSON Schema the model is shown: Effect's document of its Schema, refusing unknown keys. */
+const closed: LanguageModel.CodecTransformer = (schema) => {
+	const document = Schema.toJsonSchemaDocument(schema, { onExcessProperty: 'error' });
+	return {
+		codec: schema,
+		jsonSchema:
+			Object.keys(document.definitions).length === 0
+				? document.schema
+				: { ...document.schema, $defs: document.definitions }
+	};
+};
+/** The JSON Schema a tool's input is offered as: a dynamic tool's raw schema, else its closed Schema document. */
+export const toolSchema = (tool: Tool.Any): Json =>
+	Schema.decodeUnknownSync(Schema.Json)(Tool.getJsonSchema(tool, { transformer: closed }));
+
+/** The AI port's own content of a message or a reply part rides this provider option, so the ABI sees it unchanged. */
+const BOLT = 'bolt';
+/** A transcript message as a prompt message: its words as parts, its ABI content as the `bolt` option. */
+const promptMessage = (m: AiMessage): Prompt.Message => {
+	const options = { [BOLT]: m.content };
+	if (m.role !== 'tool')
+		return Prompt.makeMessage(m.role, {
+			content: [Prompt.makePart('text', { text: textOf(m.content) })],
+			options
+		});
+	const step = Predicate.isObject(m.content) ? m.content : {};
+	return Prompt.makeMessage('tool', {
+		content: [
+			Prompt.makePart('tool-result', {
+				id: typeof step['id'] === 'string' ? step['id'] : '',
+				name: typeof step['name'] === 'string' ? step['name'] : '',
+				isFailure: false,
+				result: step['result'] ?? null,
+				providerExecuted: false
+			})
+		],
+		options
+	});
+};
+/** A prompt back as the port's messages: each message's own content, else its words. */
+const portMessages = (prompt: Prompt.Prompt): AiMessage[] =>
+	prompt.content.flatMap((m): AiMessage[] =>
+		m.role === 'system'
+			? []
+			: [
+					{
+						role: m.role,
+						content:
+							m.options[BOLT] ??
+							m.content.flatMap((part) => (part.type === 'text' ? [part.text] : [])).join('')
+					}
+				]
+	);
+/** What a reply's finish carries beyond the standard parts: a cut and its continuation, the cost and the call id. */
+const Finish = Schema.Struct({
+	cut: Schema.Boolean,
+	continuation: Schema.optionalKey(Schema.String),
+	cost: Schema.optionalKey(Schema.Number),
+	call: Schema.optionalKey(Schema.String)
+});
+/** A port reply as response parts. */
+const replyParts = (r: AiResponse): Response.PartEncoded[] => [
+	...(r.reasoning === undefined ? [] : [{ type: 'reasoning' as const, text: r.reasoning }]),
+	{ type: 'text', text: textOf(r.content), metadata: { [BOLT]: r.content } },
+	...r.toolCalls.map((c): Response.PartEncoded => ({
+		type: 'tool-call',
+		id: c.id,
+		name: c.name,
+		params: c.input,
+		...(c.invalid === undefined ? {} : { metadata: { [BOLT]: c.invalid } })
+	})),
+	{
+		type: 'finish',
+		reason: r.finish === 'tool' ? 'tool-calls' : r.finish === 'cut' ? 'pause' : 'stop',
+		usage: { inputTokens: { total: r.usage.input }, outputTokens: { total: r.usage.output } },
+		metadata: {
+			[BOLT]: Schema.encodeSync(Finish)({
+				cut: r.finish === 'cut',
+				...(r.continuation === undefined ? {} : { continuation: r.continuation }),
+				...(r.usage.cost === undefined ? {} : { cost: r.usage.cost }),
+				...(r.usage.call === undefined ? {} : { call: r.usage.call })
+			})
+		}
+	}
+];
+/** A generated response back as the port's reply. */
+const portReply = (
+	response: LanguageModel.GenerateTextResponse<Record<string, AnyTool>, 'deferred'>
+): AiResponse => {
+	let content: Json = '',
+		finish: typeof Finish.Type = { cut: false };
+	for (const part of response.content)
+		if (part.type === 'text') content = part.metadata[BOLT] ?? part.text;
+		else if (part.type === 'finish')
+			finish = Option.getOrElse(
+				Schema.decodeUnknownOption(Finish)(part.metadata[BOLT]),
+				() => finish
+			);
+	const toolCalls = response.toolCalls.map((c) => {
+		const invalid = c.metadata[BOLT];
+		return {
+			id: c.id,
+			name: c.name,
+			input: Option.getOrElse(Schema.decodeUnknownOption(Schema.Json)(c.params), () => ({})),
+			...(typeof invalid === 'string' ? { invalid } : {})
+		};
+	});
+	const reasoning = response.reasoningText;
+	return {
+		content,
+		toolCalls,
+		finish: finish.cut ? 'cut' : toolCalls.length > 0 ? 'tool' : 'stop',
+		...(finish.continuation === undefined ? {} : { continuation: finish.continuation }),
+		...(reasoning === undefined ? {} : { reasoning }),
+		usage: {
+			input: response.usage.inputTokens.total ?? 0,
+			output: response.usage.outputTokens.total ?? 0,
+			...(finish.cost === undefined ? {} : { cost: finish.cost }),
+			...(finish.call === undefined ? {} : { call: finish.call })
+		}
+	};
+};
+/**
+ * One model step (P7): `generateText` over the AI port as an Effect `LanguageModel`, with tool-call resolution disabled
+ * and validation deferred, so the caller's own loop (idle wall, cut, retry, confirm cards, repeat guard) runs the calls.
+ * The toolkit's tools reach the port as their closed JSON Schemas; the step's failure is the port's own (`modelCall`).
+ */
+export const generate = Effect.fn('Ai.generate')(function* (
+	ai: Ai['Service'] | undefined,
+	request: Omit<AiRequest, 'tools'>,
+	toolkit: Toolkit.WithHandler<Record<string, AnyTool>>,
+	options: Parameters<typeof modelCall>[2] = {}
+): Effect.fn.Return<AiResponse, FacilityFailure | Unavailable> {
+	let failure: FacilityFailure | Unavailable | undefined;
+	const model = yield* LanguageModel.make({
+		generateText: (provider) =>
+			Effect.gen(function* () {
+				const tools = provider.tools.map((tool) => ({
+					name: tool.name,
+					description: Tool.getDescription(tool) ?? '',
+					input: toolSchema(tool)
+				}));
+				const reply = yield* modelCall(
+					ai,
+					{
+						...request,
+						messages: portMessages(provider.prompt),
+						...(tools.length === 0 ? {} : { tools })
+					},
+					options
+				);
+				return replyParts(reply);
+			}).pipe(
+				Effect.mapError((error) => {
+					failure = error;
+					return AiError.make({
+						module: 'Bolt',
+						method: 'sys_2.infer',
+						reason: new AiError.UnknownError({ description: error.message })
+					});
+				})
+			),
+		streamText: () =>
+			Stream.fail(
+				AiError.make({
+					module: 'Bolt',
+					method: 'sys_2.infer',
+					reason: new AiError.UnknownError({ description: 'the agent generates each step whole' })
+				})
+			)
+	});
+	const response = yield* model
+		.generateText({
+			prompt: Prompt.fromMessages([
+				...(request.system === undefined
+					? []
+					: [Prompt.makeMessage('system', { content: request.system })]),
+				...request.messages.map(promptMessage)
+			]),
+			toolkit,
+			disableToolCallResolution: true,
+			toolCallValidation: 'deferred'
+		})
+		.pipe(
+			Effect.mapError(
+				(error) => failure ?? new FacilityFailure({ kind: 'upstream', message: error.message })
+			)
+		);
+	return portReply(response);
+});
+/**
+ * Tools the model is offered by their raw JSON Schemas whose calls the caller answers itself (an inference's draft and
+ * lent tools): resolution is disabled, so no handler ever runs.
+ */
+export const declaredToolkit = Effect.fn('Ai.declaredToolkit')(function* (
+	tools: readonly { readonly name: string; readonly description: string; readonly input: Json }[]
+) {
+	const declared: AnyTool[] = tools.map((t) =>
+		Tool.dynamic(t.name, {
+			description: t.description,
+			parameters: Predicate.isObject(t.input) ? t.input : {},
+			success: ToolAnswer
+		})
+	);
+	const kit = Toolkit.make(...declared);
+	return yield* kit.pipe(
+		Effect.provideContext(
+			yield* kit.toHandlers(
+				Object.fromEntries(
+					declared.map((t) => [t.name, () => Effect.die(`${t.name} is answered by its caller`)])
+				)
+			)
+		)
+	);
 });
 
 export const textOf = (content: Json): string => {
@@ -796,6 +1035,11 @@ export function inferFacility(
 			...tools.map(({ name, description, input }) => ({ name, description, input })),
 			...finishing
 		];
+		// both tool sets as toolkits: every tool, or only the draft's once `steps` is spent
+		const kits = {
+			all: yield* declaredToolkit(offered),
+			finishing: yield* declaredToolkit(finishing)
+		};
 		/** The draft checked against `output` and the rules: every offending field named (rule 23), as keyed pointers. */
 		const decoded = (raw: Json): CrossAnswer => {
 			let problems: string[];
@@ -878,18 +1122,17 @@ export function inferFacility(
 						`the tool budget (${a.steps ?? 0} steps) was spent without a valid answer${why !== undefined && !why.ok && why.error.kind === 'invalid' ? `: ${why.error.message}` : ''}`
 					);
 				}
-				const tooling = spent ? finishing : offered;
 				yield* record(messages);
-				const r = yield* modelCall(
+				const r = yield* generate(
 					ai,
 					{
 						model: a.model ?? 'default',
 						...(a.system === undefined ? {} : { system: a.system }),
 						messages: [...messages],
-						...(tooling.length === 0 ? {} : { tools: tooling }),
 						...(files.length === 0 ? {} : { files }),
 						...(continuation === undefined ? {} : { continuation })
 					},
+					spent ? kits.finishing : kits.all,
 					{
 						...(options.wallMs === undefined ? {} : { wallMs: options.wallMs }),
 						onDelta: beat,

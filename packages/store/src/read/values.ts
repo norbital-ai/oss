@@ -33,7 +33,7 @@ export function databaseValue(v: Json, f?: Pick<FieldInfo, 'kind' | 'periodOf'>)
 }
 
 /**
- * One field's stored columns (`databaseValue`d): a polymorphic relation's `{ collection, id }` spreads over its arm
+ * One field's stored columns (`databaseValue`d): a polymorphic relation's `{ model, id }` spreads over its arm
  * columns `<fk>__<arm>`, the named arm holding the id and every other arm null (the CHECK allows at most one).
  */
 export function cells(
@@ -45,7 +45,7 @@ export function cells(
 	const ref = isObject(v) ? v : null;
 	return f.arms.map((arm) => [
 		`${f.column}__${arm}`,
-		ref?.collection === arm ? (ref.id ?? null) : null
+		ref?.model === arm ? (ref.id ?? null) : null
 	]);
 }
 

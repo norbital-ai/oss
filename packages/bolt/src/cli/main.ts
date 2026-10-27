@@ -1,18 +1,17 @@
 #!/usr/bin/env -S node --no-node-snapshot
 /// <reference types="node" />
 import { Effect, Console, Option, Schema } from 'effect';
-import { Argument, Command, Flag } from 'effect/unstable/cli';
+import { Argument, Command, Flag } from 'effect/cli';
 import * as NodeRuntime from '@effect/platform-node/NodeRuntime';
 import * as NodeServices from '@effect/platform-node/NodeServices';
 import { realpathSync, statSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { sync, type CheckDiagnostic } from '../compiler/check/index.ts';
+import type { CheckDiagnostic } from '../protocol/diagnostic.ts';
 import { dev } from './dev.ts';
 import { templatesCommand } from './templates.ts';
 import { AuthorErrors, buildWorkspace, ToolFailure, type Log } from './build.ts';
-import { diagnose } from './check.ts';
 import { testWorkspace } from './test.ts';
 
 const print = (errors: readonly CheckDiagnostic[]) =>
@@ -21,10 +20,10 @@ const print = (errors: readonly CheckDiagnostic[]) =>
 			`${error.code} ${error.message}${error.help === undefined ? '' : `\n${error.help}`}`
 		)
 	).pipe(Effect.andThen(Console.error(`${errors.length} errors`)));
-const dir = Argument.string('dir').pipe(Argument.withDefault('.'));
-const bank = Flag.string('bank').pipe(Flag.optional);
+const dir = Argument.String('dir').pipe(Argument.withDefault('.'));
+const bank = Flag.String('bank').pipe(Flag.optional);
 const log: Log = (line) => console.log(line);
-const json = Flag.boolean('json').pipe(
+const json = Flag.Boolean('json').pipe(
 	Flag.withDescription('a job: the errors also as one JSON line on stderr'),
 	Flag.withDefault(false)
 );
@@ -38,6 +37,10 @@ const reported = (json: boolean) => (error: AuthorErrors) =>
 		: Effect.fail(error);
 const checkCommand = Command.make('check', { dir, json }, ({ dir, json }) =>
 	Effect.gen(function* () {
+		const { diagnose } = yield* Effect.tryPromise({
+			try: () => import('./check.ts'),
+			catch: (cause) => new ToolFailure({ message: 'The workspace checker could not load.', cause })
+		});
 		const result = yield* diagnose(resolve(dir));
 		if (result.errors.length > 0)
 			return yield* Effect.fail(
@@ -49,6 +52,11 @@ const checkCommand = Command.make('check', { dir, json }, ({ dir, json }) =>
 /** `bolt sync`: the declarations evaluated, `.norbital/names.ts` written; `bolt dev` and `bolt check` run it first. */
 const syncCommand = Command.make('sync', { dir, json }, ({ dir, json }) =>
 	Effect.gen(function* () {
+		const { sync } = yield* Effect.tryPromise({
+			try: () => import('../compiler/check/index.ts'),
+			catch: (cause) =>
+				new ToolFailure({ message: 'The workspace compiler could not load.', cause })
+		});
 		const result = yield* sync(resolve(dir));
 		if (result.errors.length > 0)
 			return yield* Effect.fail(
@@ -63,7 +71,7 @@ const buildCommand = Command.make(
 		dir,
 		bank,
 		json,
-		squash: Flag.string('squash').pipe(
+		squash: Flag.String('squash').pipe(
 			Flag.optional,
 			Flag.withDescription(
 				'verify a fresh-database schema prefix baseline, retaining original archives and any procedural/data suffix'
@@ -82,10 +90,10 @@ const devCommand = Command.make(
 	{
 		dir,
 		bank,
-		port: Flag.integer('port').pipe(Flag.withDefault(5180)),
-		seed: Flag.string('seed').pipe(Flag.withDefault('base')),
-		founder: Flag.string('founder').pipe(Flag.optional),
-		db: Flag.string('db').pipe(Flag.optional)
+		port: Flag.Int('port').pipe(Flag.withDefault(5180)),
+		seed: Flag.String('seed').pipe(Flag.withDefault('base')),
+		founder: Flag.String('founder').pipe(Flag.optional),
+		db: Flag.String('db').pipe(Flag.optional)
 	},
 	(options) =>
 		Effect.scoped(
@@ -101,7 +109,7 @@ const devCommand = Command.make(
 );
 const testCommand = Command.make(
 	'test',
-	{ dir, args: Argument.variadic(Argument.string('args')) },
+	{ dir, args: Argument.variadic(Argument.String('args')) },
 	({ dir, args }) =>
 		Effect.gen(function* () {
 			// the first positional is the workspace directory, never a test file: a file there would become a build root
@@ -130,12 +138,12 @@ const ServerModule = Schema.declare<Pick<typeof import('@norbital-ai/bolt-server
 const startCommand = Command.make(
 	'start',
 	{
-		port: Flag.integer('port').pipe(Flag.optional),
-		args: Argument.variadic(Argument.string('args')),
-		seed: Flag.string('seed').pipe(Flag.optional),
-		founder: Flag.string('founder').pipe(Flag.optional),
-		trustProxy: Flag.string('trust-proxy').pipe(Flag.optional),
-		dev: Flag.boolean('dev').pipe(Flag.withDefault(false))
+		port: Flag.Int('port').pipe(Flag.optional),
+		args: Argument.variadic(Argument.String('args')),
+		seed: Flag.String('seed').pipe(Flag.optional),
+		founder: Flag.String('founder').pipe(Flag.optional),
+		trustProxy: Flag.String('trust-proxy').pipe(Flag.optional),
+		dev: Flag.Boolean('dev').pipe(Flag.withDefault(false))
 	},
 	(options) =>
 		Effect.gen(function* () {

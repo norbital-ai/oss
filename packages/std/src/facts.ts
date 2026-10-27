@@ -1,6 +1,6 @@
 // std/facts (§3.7): runtime-declared fields. An administrator declares the keys a record may carry (a jurisdiction's
 // statutory facts, an intake form's questions) as rows; the record stores the values in one `json` field, and the
-// collection's transform validates them with `validateFacts`. `facts` checks the declarations themselves.
+// model's transform validates them with `validateFacts`. `facts` checks the declarations themselves.
 
 /** One declared key, as stored (a `json` row or a seed file). */
 export type FactSpec = {

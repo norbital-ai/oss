@@ -1,9 +1,7 @@
 // Fresh nested declarations keep their metadata and their generated callback contexts together.
 import { expectTypeOf } from '@effect/vitest';
-import { Decimal } from '@norbital-ai/std/decimal';
 import { automation, model } from '../../src/index.ts';
-import type { Id, PlainDate, Row, Vector } from '../../src/index.ts';
-import type { QueryCtx } from '../../src/decl/ctx.ts';
+import type { CreateRow, Id, Vector, WriteCtx } from '../../src/index.ts';
 import type { AutomationCtx } from '../../src/index.ts';
 import type { AutomationSpecOf } from '../../src/decl/runtime/names.ts';
 import type { StoredRow } from '../../src/decl/names.ts';
@@ -12,16 +10,12 @@ import './registry.ts';
 
 model('orders', {
 	...orders.spec,
-	queries: {
-		open_total: {
-			description: 'Sum of open orders',
-			input: { since: { kind: 'date' } },
-			output: { kind: 'money' },
-			run: function* (input, ctx) {
-				expectTypeOf(input).toEqualTypeOf<{ readonly since: PlainDate }>();
-				expectTypeOf(ctx).toEqualTypeOf<QueryCtx>();
-				return Decimal.of(0);
-			}
+	create: {
+		columns: { orders: ['customer', 'note', 'due'], 'orders.lines': ['item', 'qty', 'price'] },
+		transform: function* (rows, ctx) {
+			expectTypeOf(rows).toEqualTypeOf<readonly CreateRow<'orders'>[]>();
+			expectTypeOf(ctx).toEqualTypeOf<WriteCtx<'orders'>>();
+			return rows;
 		}
 	},
 	search: {
@@ -43,7 +37,7 @@ model('orders', {
 				},
 				rerank: (input, row) => {
 					expectTypeOf(input).toEqualTypeOf<{ readonly lab: Vector }>();
-					expectTypeOf(row).toEqualTypeOf<Row<'orders'>>();
+					expectTypeOf(row).toEqualTypeOf<StoredRow<'orders'>>();
 					return 0;
 				}
 			}

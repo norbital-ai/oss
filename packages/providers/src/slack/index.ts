@@ -1,6 +1,6 @@
 import { createHmac } from 'node:crypto';
 import { Clock, Effect, Option, Predicate, Schema } from 'effect';
-import { HttpClient, HttpClientRequest } from 'effect/unstable/http';
+import { HttpClient, HttpClientRequest } from 'effect/http';
 import type { DriverOpen, Json, OutboundAttachment } from '@norbital-ai/bolt/engine';
 import type { ProviderDef } from '../abi.ts';
 import { answerFailure, ProviderUnavailable } from '../errors.ts';

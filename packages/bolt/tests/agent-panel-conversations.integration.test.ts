@@ -40,7 +40,7 @@ const manifest = Result.getOrThrow(
 		workspace: { tz: 'UTC', locale: 'en', agent: { triage: false } },
 		models: {},
 		relationships: {},
-		collections: {},
+		exposures: {},
 		policies: {},
 		agent: { internal: 'Staff brief.', skills: {} },
 		integrations: {},
@@ -1101,6 +1101,99 @@ describe('the agent panel restored', () => {
 			)
 	);
 
+	it.live(
+		'every message that came in is shown: chatter folds into one collapsed aside, and the reply names what it answers',
+		() =>
+			Effect.scoped(
+				Effect.gen(function* () {
+					const group = Result.getOrThrow(
+						decodeManifest({
+							...envoyManifest,
+							envoys: {
+								field_ops: {
+									...envoyManifest.envoys['field_ops'],
+									triage: false,
+									groupMessages: 'mention_or_reply'
+								}
+							}
+						})
+					);
+					const s = yield* setup(() => Effect.succeed(reply('Done.')), group);
+					const handle = '6590000001@s.whatsapp.net',
+						thread = '1203@g.us';
+					for (const [id, text, invocation] of [
+						['a1', 'lunch?', 'direct'],
+						['a2', 'who is buying', 'direct'],
+						['a3', 'the usual place', 'direct'],
+						['a4', '@Norbius file the pump photo', 'mention']
+					] as const)
+						yield* s.t.receive('whatsapp', {
+							id,
+							thread,
+							group: true,
+							sentAt: s.t.clock.now(),
+							from: { handle, name: 'Kim' },
+							text,
+							invocation,
+							attachments: []
+						});
+					yield* s.t.settled();
+					s.t.clock.advance('2s'); // the sender's pause: the held mention is admitted
+					yield* s.t.runDue();
+					yield* s.t.settled();
+					yield* s.t.db.write({
+						text: `UPDATE sys_user SET admin = true, revision = revision + 1 WHERE id = 'ann'`,
+						params: []
+					});
+					try {
+						sessionStorage.clear();
+					} catch {
+						/* none */
+					}
+					const target = document.createElement('div');
+					document.body.append(target);
+					const v = mount(Agent, {
+						target,
+						props: {
+							api: s.api,
+							bolt: s.bolt,
+							t: (k: string) => k,
+							request: { conversation: conversationId('whatsapp', thread) },
+							onClose: () => {},
+							admin: true
+						}
+					});
+					try {
+						yield* until(() => target.querySelector('[data-replying-to]') !== null);
+						const block = target.querySelector('[data-role="ignored"]')!;
+						expect(target.querySelectorAll('[data-role="ignored"]')).toHaveLength(1);
+						// collapsed: the count and the last message, the rest behind the toggle
+						expect(block.querySelector('details')?.open).toBe(false);
+						expect(block.querySelector('[data-aside-count]')?.textContent).toBe(
+							'3 messages not for the assistant'
+						);
+						expect(block.querySelector('[data-aside-last]')?.textContent).toBe(
+							'Kim: the usual place'
+						);
+						expect([...block.querySelectorAll('[data-text]')].map((x) => x.textContent)).toEqual([
+							'lunch?',
+							'who is buying',
+							'the usual place'
+						]);
+						expect(target.querySelector('[data-replying-to]')?.textContent?.trim()).toBe(
+							'Replying to: Kim: @Norbius file the pump photo'
+						);
+					} finally {
+						yield* Effect.tryPromise({
+							try: () => unmount(v),
+							catch: (error) => new KitInvalid({ message: String(error) })
+						});
+						target.remove();
+					}
+				})
+			)
+	);
+
 	it.live('a member who is not an administrator sees no decision marks', () =>
 		Effect.scoped(
 			Effect.gen(function* () {
@@ -1147,5 +1240,73 @@ describe('the agent panel restored', () => {
 				}
 			})
 		)
+	);
+
+	it.live(
+		'reopens the last opened conversation from local storage; a deleted one is forgotten for a new session',
+		() =>
+			Effect.scoped(
+				Effect.gen(function* () {
+					const s = yield* setup(() => Effect.succeed(reply('Kept.')));
+					const id = yield* s.agent.start({ owner: 'ann', title: 'Kept' });
+					yield* s.agent.post({ conversation: id, as: { member: 'ann' }, text: 'hello' });
+					yield* s.agent.drain(id);
+					const key = 'bolt.agent.conversation:test:ann';
+					localStorage.clear();
+					localStorage.setItem(key, id);
+					const opened: (string | null)[] = [];
+					const panel = <A>(check: (target: HTMLElement) => Effect.Effect<A>) =>
+						Effect.gen(function* () {
+							const target = document.createElement('div');
+							document.body.append(target);
+							const v = mount(Agent, {
+								target,
+								props: {
+									api: s.api,
+									bolt: s.bolt,
+									t: (k: string) => k,
+									request: {},
+									onClose: () => {},
+									onConversation: (c: string | null) => void opened.push(c),
+									storageKey: key
+								}
+							});
+							try {
+								return yield* check(target);
+							} finally {
+								yield* Effect.tryPromise({
+									try: () => unmount(v),
+									catch: (error) => new KitInvalid({ message: String(error) })
+								});
+								target.remove();
+							}
+						});
+					// a new tab (no `?agent=`) opens the stored conversation
+					yield* panel((target) =>
+						until(() =>
+							(target.querySelector('[data-role="user"] [data-text]')?.textContent ?? '').includes(
+								'hello'
+							)
+						)
+					);
+					expect(opened[0]).toBe(id);
+					expect(localStorage.getItem(key)).toBe(id);
+					// deleted meanwhile: the read answers notFound, the key is cleared and the panel shows a new session
+					yield* s.t.db.write({
+						text: 'DELETE FROM sys_message WHERE conversation = $1',
+						params: [id]
+					});
+					yield* s.t.db.write({ text: 'DELETE FROM sys_conversation WHERE id = $1', params: [id] });
+					opened.length = 0;
+					yield* panel((target) =>
+						Effect.gen(function* () {
+							yield* until(() => opened.at(-1) === null);
+							expect(localStorage.getItem(key)).toBeNull();
+							expect(target.querySelector('[data-role]')).toBeNull();
+							expect(target.querySelector('textarea')).not.toBeNull();
+						})
+					);
+				})
+			)
 	);
 });

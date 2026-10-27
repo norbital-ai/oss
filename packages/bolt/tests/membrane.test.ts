@@ -154,7 +154,7 @@ describe('the membrane', () => {
 	);
 
 	live(
-		'keeps a mirrored body whose read waits on the other side through a collection',
+		'keeps a mirrored body whose read waits on the other side through a model',
 		async () => {
 			const { toKernel } = pair();
 			let chunk: ((value: string) => void) | undefined;

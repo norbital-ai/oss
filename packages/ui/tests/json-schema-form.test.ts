@@ -58,6 +58,27 @@ it.live(
 			);
 		})
 );
+it.live('a create editor fills defaults, while an edit offers the default beside the control', () =>
+	browser(async () => {
+		const schema = {
+			type: 'object',
+			properties: { flag: { type: 'boolean', default: false } }
+		};
+		const created = await show({ schema, initial: {}, create: true });
+		assert.deepEqual(created.changes.at(-1), { flag: false });
+		assert.equal(created.target.querySelector('[aria-label="Use default"]'), null);
+
+		const edited = await show({ schema, initial: {} });
+		const widget = required(
+			edited.target.querySelector<HTMLButtonElement>('[aria-label="Use default"]')
+		);
+		assert.equal(widget.closest('[data-schema-field]')?.getAttribute('data-schema-field'), 'input.flag');
+		widget.click();
+		await settle();
+		assert.deepEqual(edited.changes.at(-1), { flag: false });
+	})
+);
+
 const pick = async (trigger: HTMLElement, value: string) => {
 	trigger.click();
 	flushSync();
@@ -65,6 +86,46 @@ const pick = async (trigger: HTMLElement, value: string) => {
 	element<HTMLButtonElement>(document, `[role=option][data-value="${value}"] button`).click();
 	flushSync();
 };
+it.live('a complex list cell stays one line and opens its editor in a bounded popover', () =>
+	browser(async () => {
+		const { target } = await show({
+			schema: {
+				type: 'object',
+				properties: {
+					rows: {
+						type: 'array',
+						items: {
+							type: 'object',
+							properties: {
+								id: { type: 'string' },
+								status: {
+									type: 'object',
+									properties: {
+										kind: { type: 'string' },
+										since: { type: 'string' }
+									}
+								}
+							}
+						}
+					}
+				}
+			},
+			initial: {
+				rows: [{ id: 'a', status: { kind: 'REGISTERED', since: '2018-09-04' } }]
+			}
+		});
+		assert.equal(target.querySelector('[data-schema-field$=".status.kind"]'), null);
+		const expand = required(target.querySelector<HTMLElement>('[data-structured-expand]'));
+		assert.ok(textOf(expand).includes('Kind: REGISTERED'));
+		expand.click();
+		await settle();
+		const editor = required(document.querySelector('[data-structured-editor]'));
+		const values = [...editor.querySelectorAll('input')].map((input) => input.value);
+		assert.ok(values.includes('REGISTERED'));
+		assert.ok(values.includes('2018-09-04'));
+	})
+);
+
 it.live('numeric and boolean enum options retain JSON types', () =>
 	browser(async () => {
 		const cases: { type: 'integer' | 'boolean'; values: (number | boolean)[] }[] = [

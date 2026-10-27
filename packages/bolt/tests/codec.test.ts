@@ -35,7 +35,7 @@ describe('codec: guest reads hand real values, not wire tags', () => {
 				const source = `class Decimal { static of(s) { const d = new Decimal(); d.text = s; return d; } toJSON() { return this.text; } }
 globalThis[Symbol.for('norbital.std.Decimal')] = Decimal;
 export default { automation: { a: { body: function* (input, ctx) {
-	const row = yield* ctx.query('t', { id: 'x' });
+	const row = (yield* ctx.query({ t: { where: { id: { eq: 'x' } } } })).t.rows[0];
 	return { amount: row.amount instanceof Decimal, text: String(row.amount.text), day: row.day, at: row.at, span: row.span, json: row.json, input: input.due };
 } } } };`;
 				const row = {
@@ -46,7 +46,8 @@ export default { automation: { a: { body: function* (input, ctx) {
 					json: { $d: 'x', other: 1 }
 				};
 				const bridge: Bridge = {
-					cross: (calls) => Effect.succeed(calls.map(() => ({ ok: true, value: row })))
+					cross: (calls) =>
+						Effect.succeed(calls.map(() => ({ ok: true, value: { t: { rows: [row], next: null } } })))
 				};
 				const guest = yield* program(source);
 				const o = yield* Guest.pipe(
@@ -54,10 +55,18 @@ export default { automation: { a: { body: function* (input, ctx) {
 					Effect.provide(
 						guestLayer(guest, {
 							lowerRead: () => ({
-								kind: 'get',
-								collection: 't',
-								id: 'x',
-								select: { fields: null, relations: {} }
+								kind: 'request',
+								roots: [
+									{
+										root: 't',
+										read: {
+											kind: 'get',
+											model: 't',
+											id: 'x',
+											select: { fields: null, relations: {} }
+										}
+									}
+								]
 							}),
 							console: () => {}
 						})
@@ -94,7 +103,7 @@ describe('codec: $bolt reads hand pages real values', () => {
 				],
 				next: null
 			};
-			const fetch: typeof globalThis.fetch = async () => Response.json({ answers: [answer] });
+			const fetch: typeof globalThis.fetch = async () => Response.json({ answers: [{ t: answer }] });
 			const bolt = yield* createBolt({
 				base: 'https://workspace.test',
 				actor: null,
@@ -102,14 +111,14 @@ describe('codec: $bolt reads hand pages real values', () => {
 				fetch,
 				openStream: () => ({ onmessage: null, onerror: null, close() {} })
 			});
-			const page = yield* bolt.query<{
-				rows: {
+			const { t: page } = yield* bolt.query<{
+				t: { rows: {
 					amount: Decimal;
 					day: string;
 					span: { start: string };
 					lines: { price: Decimal }[];
-				}[];
-			}>('t', { limit: 1 });
+				}[] };
+			}>({ t: { limit: 1 } });
 			const row = page.rows[0];
 			if (row === undefined) throw new Error('The fixture page returned no row');
 			expect(row.amount).toBeInstanceOf(Decimal);

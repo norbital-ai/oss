@@ -113,7 +113,7 @@ const manifest = Result.getOrThrow(
 		},
 		models: { jobs: { description: 'A job', label: 'title', fields: { title: { kind: 'text' } } } },
 		relationships: {},
-		collections: { jobs: { read: { fields: 'all' } } },
+		exposures: { jobs: { read: { jobs: { fields: 'all' } } } },
 		integrations: {},
 		policies: { desk: { description: 'Desk', grants: { jobs: { read: true } } } },
 		teams: {},
@@ -169,10 +169,10 @@ describe('skills and the workspace tools (acceptance 1, 3, 8)', () => {
 					for (const detail of ['Buyers', 'name', 'rating', 'order_count', 'create'])
 						expect(customers).toContain(detail);
 					expect(names(ai.requests[0])).toEqual(
-						expect.arrayContaining(['query', 'act', 'skill', 'workspace_search'])
+						expect.arrayContaining(['read', 'act', 'skill', 'workspace_search'])
 					);
 					expect(
-						ai.requests[0]!.tools?.find((tool) => tool.name === 'query')?.description
+						ai.requests[0]!.tools?.find((tool) => tool.name === 'read')?.description
 					).toContain('customers');
 					expect(results(ai.requests[1]!)[0]).toBe('## Steps\n\nRead it.\n');
 					expect(results(ai.requests[2]!)[1]).toEqual({

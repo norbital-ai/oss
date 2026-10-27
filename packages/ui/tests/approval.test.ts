@@ -7,7 +7,7 @@ import { afterEach, it } from '@effect/vitest';
 import { Effect } from 'effect';
 import type { ApprovalView, Outcome, RowApproval } from '../src/client/contract.ts';
 import type { KindsHost } from '../src/kinds/context.ts';
-import type { Values } from '../src/collection/types.ts';
+import type { Values } from '../src/model/types.ts';
 import { element } from './elements.ts';
 import { browser, required, textOf, viewFixture } from './view-fixture.ts';
 
@@ -48,7 +48,7 @@ const steps = [
 ];
 const request: ApprovalView = {
 	id: 'r1',
-	collection: 'jobs',
+	model: 'jobs',
 	record: 'j1',
 	action: 'update',
 	at: '2026-10-13T12:00:00Z',
@@ -60,7 +60,7 @@ const request: ApprovalView = {
 	userNames: {},
 	requestor: by('Bob'),
 	log: [entry('request', 'Bob', '2026-10-13T12:00:00Z')],
-	records: [{ collection: 'jobs', id: 'j1', op: 'update' }],
+	records: [{ model: 'jobs', id: 'j1', op: 'update' }],
 	moves: [],
 	mine: false,
 	participant: true
@@ -160,9 +160,9 @@ it.live(
 						entry('reject', 'Sam', '2026-10-16T12:00:00Z', {
 							to: 'Rejected',
 							reason: 'Too costly',
-							rolledBack: [{ collection: 'jobs', id: 'j1', action: 'restored' }],
+							rolledBack: [{ model: 'jobs', id: 'j1', action: 'restored' }],
 							skipped: [
-								{ collection: 'jobs', id: 'j1', field: 'customer', reason: 'deletedTarget' }
+								{ model: 'jobs', id: 'j1', field: 'customer', reason: 'deletedTarget' }
 							]
 						})
 					]

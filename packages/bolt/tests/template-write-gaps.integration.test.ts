@@ -1,4 +1,4 @@
-// Gaps the template migration found in the write area, one reproduction each: collection
+// Gaps the template migration found in the write area, one reproduction each: model
 // notifications after an ordinary commit (rule 47), writing an exclusive arc (polymorphic ref), json `shape` on write, a
 // model check's authored message, `accept: ['*/*']` at upload, a queued automation's generated write, `revision`
 // as a model field, and an FK to `sys_user` read back through its relation.
@@ -79,30 +79,32 @@ const manifest = Result.getOrThrow(
 			'projects.owner': { to: 'sys_user', optional: true, default: { actor: 'id' } },
 			'classifications.case': { to: 'cases', inverse: 'classifications' }
 		},
-		collections: {
+		exposures: {
 			projects: {
-				read: { fields: 'all', relations: 'all' },
-				create: { input: { columns: ['title', 'profile', 'stock', 'doc', 'owner'] } },
-				update: { input: { columns: ['title', 'profile', 'stock', 'owner'] } },
+				read: {
+					projects: { fields: 'all' },
+					'projects.owner': { fields: ['name'] },
+					'projects.activities': { fields: 'all' }
+				},
+				create: { columns: { projects: ['title', 'profile', 'stock', 'doc', 'owner'] } },
+				update: { columns: { projects: ['title', 'profile', 'stock', 'owner'] } },
 				notify: true
 			},
-			quotes: { read: { fields: 'all' }, create: { input: { columns: ['title'] } } },
+			quotes: { read: { quotes: { fields: 'all' } }, create: { columns: { quotes: ['title'] } } },
 			activities: {
-				read: { fields: 'all', relations: 'all' },
-				create: { input: { columns: ['subject', 'regarding'] } },
-				update: { input: { columns: ['regarding'] } }
+				read: { activities: { fields: 'all' } },
+				create: { columns: { activities: ['subject', 'regarding'] } },
+				update: { columns: { activities: ['regarding'] } }
 			},
 			cases: {
-				read: { fields: 'all' },
-				create: {
-					input: {
-						columns: ['title'],
-						with: { classifications: { create: { columns: ['note'] } } }
-					}
-				},
+				read: { cases: { fields: 'all' } },
+				create: { columns: { cases: ['title'], 'cases.classifications': ['note'] } },
 				notify: true
 			},
-			classifications: { read: { fields: 'all' }, create: { input: { columns: ['note', 'case'] } } }
+			classifications: {
+				read: { classifications: { fields: 'all' } },
+				create: { columns: { classifications: ['note', 'case'] } }
+			}
 		},
 		policies: {
 			ops: {
@@ -111,7 +113,11 @@ const manifest = Result.getOrThrow(
 				grants: {
 					cases: { read: true, create: true },
 					classifications: { read: true, create: true },
-					projects: { read: { owner: { eq: { actor: 'id' } } }, create: true, update: 'read' }
+					projects: {
+						read: { projects: { where: { owner: { eq: { actor: 'id' } } } } },
+						create: true,
+						update: { check: true }
+					}
 				}
 			}
 		},
@@ -126,14 +132,14 @@ const manifest = Result.getOrThrow(
 	})
 );
 const guest = program(`export default {
-	collection: {
+	model: {
 		projects: { bodies: { notify: function*(event) {
 			if(event.kind!=='write')return [];
 			if(event.action==='create')return [{to:[{team:'t-rd'}],title:event.records.length===1?'New project':event.records.length+' new projects'}];
 			if(event.action!=='update')return [];
 			return event.records.map((record)=>{
 				const owner=typeof record.owner==='string'?record.owner:record.owner?.id;
-				return {to:[...(owner?[{user:owner}]:[]),...(event.actor.kind==='member'?[{user:event.actor.id}]:[])],title:'Project changed',link:{collection:'projects',id:record.id}};
+				return {to:[...(owner?[{user:owner}]:[]),...(event.actor.kind==='member'?[{user:event.actor.id}]:[])],title:'Project changed',link:{model:'projects',id:record.id}};
 			});
 		} } },
 		cases: { bodies: { notify: function*(event) {
@@ -141,12 +147,18 @@ const guest = program(`export default {
 		} } }
 	},
 	automation: { file: { body: function* (input, ctx) {
-		const created=yield* ctx.act('cases.create',{title:input.title,classifications:{create:[{note:'auto'}]}});
+		const created=yield* ctx.act('cases.create',[{title:input.title,classifications:[{note:'auto'}]}]);
 		if(created.kind!=='committed')throw Error('Expected direct permission');
-		const record=created.records.find((record)=>record.collection==='cases');
+		const record=created.records.find((record)=>record.model==='cases');
 		if(!record)throw Error('Missing created case');
 		return record.id;
-	} } }
+	} } },
+	// what the former \`update: 'read'\` said: a member changes the projects they own
+	policy: { ops: { grants: { projects: { update: { check: function* (changes, ctx) {
+		return changes.every(({ before }) => (typeof before.owner === 'string' ? before.owner : before.owner?.id) === ctx.actor.id)
+			? ctx.allow()
+			: ctx.deny('Only your own projects change.');
+	} } } } } }
 };`);
 
 const ok = (o: Outcome) => {
@@ -172,6 +184,21 @@ const setup = () =>
 		});
 		const rows = (sql: string) =>
 			t.db.rows(Schema.Record(Schema.String, Schema.Json), { text: sql, params: [] });
+		/** One root's page through `/q`: the read request `{ [model]: layer, ...layers }`, answered per root. */
+		const read = (
+			model: string,
+			layer: Json,
+			layers: { readonly [path: string]: Json },
+			authority: Authority
+		) =>
+			qReply(route, authority, {
+				reads: [{ m: 'query', a: [{ [model]: layer, ...layers }] }]
+			}).pipe(
+				Effect.flatMap((reply) =>
+					Schema.decodeUnknownEffect(Schema.Record(Schema.String, Page))(reply.answers[0])
+				),
+				Effect.map((answer) => answer[model] ?? { rows: [] })
+			);
 		const caller = (authority: Authority) => ({
 			act: (callable: string, input: Json) =>
 				actReply(route, authority, { callable, input, issuedAt: t.clock.now() }).pipe(
@@ -182,16 +209,12 @@ const setup = () =>
 							: Effect.succeed(reply.outcome);
 					})
 				),
-			get: (collection: string, id: string, query: { readonly [key: string]: Json } = {}) =>
-				qReply(route, authority, {
-					reads: [{ m: 'query', a: [collection, { ...query, id }] }]
-				}).pipe(
-					Effect.flatMap((reply) => Schema.decodeUnknownEffect(Schema.Json)(reply.answers[0]))
+			get: (model: string, id: string, layers: { readonly [path: string]: Json } = {}) =>
+				read(model, { where: { id: { eq: id } } }, layers, authority).pipe(
+					Effect.map((page) => page.rows[0] ?? null)
 				),
-			read: (collection: string, query: Json) =>
-				qReply(route, authority, { reads: [{ m: 'query', a: [collection, query] }] }).pipe(
-					Effect.flatMap((reply) => Schema.decodeUnknownEffect(Page)(reply.answers[0]))
-				),
+			read: (model: string, layer: Json, layers: { readonly [path: string]: Json } = {}) =>
+				read(model, layer, layers, authority),
 			upload: t.as(authority).upload
 		});
 		return { t, rows, route, caller, A: caller(t.as(t.admin).authority) };
@@ -219,7 +242,7 @@ describe('write gaps found by the template migration', () => {
 							link: null
 						}
 					]);
-					const id = recordId(yield* A.act('projects.create', { title: 'c' }));
+					const id = recordId(yield* A.act('projects.create', [{ title: 'c' }]));
 					yield* t.runDue();
 					expect(
 						(yield* rows(`SELECT title, link FROM sys_notification ORDER BY at, title`)).map(
@@ -228,7 +251,7 @@ describe('write gaps found by the template migration', () => {
 					).toContain('New project');
 					if (t.admin.actor.kind !== 'member') throw new Error('admin actor is not a member');
 					const actor = t.admin.actor.id;
-					ok(yield* A.act('projects.update', { target: id, set: { title: 'c2', owner: U } }));
+					ok(yield* A.act('projects.update', [{ target: id, set: { title: 'c2', owner: U } }]));
 					yield* t.runDue();
 					expect(
 						yield* rows(
@@ -237,7 +260,7 @@ describe('write gaps found by the template migration', () => {
 					).toEqual([
 						{
 							recipient: { channel: 'inbox', recipients: [{ user: U }, { user: actor }] },
-							link: { collection: 'projects', id }
+							link: { model: 'projects', id }
 						}
 					]);
 				})
@@ -268,10 +291,12 @@ describe('write gaps found by the template migration', () => {
 			Effect.gen(function* () {
 				const { t, rows, A } = yield* setup();
 				const created = ok(
-					yield* A.act('cases.create', {
-						title: 'x',
-						classifications: { create: [{ note: 'auto' }] }
-					})
+					yield* A.act('cases.create', [
+						{
+							title: 'x',
+							classifications: [{ note: 'auto' }]
+						}
+					])
 				);
 				expect(created.records).toHaveLength(2);
 				expect(
@@ -292,10 +317,12 @@ describe('write gaps found by the template migration', () => {
 				const { rows, A } = yield* setup();
 				expect(
 					yield* Effect.flip(
-						A.act('cases.create', {
-							title: 'refused',
-							classifications: { create: [{ note: null }] }
-						})
+						A.act('cases.create', [
+							{
+								title: 'refused',
+								classifications: [{ note: null }]
+							}
+						])
 					)
 				).toMatchObject({ code: 'required' });
 				expect(yield* rows('SELECT id FROM cases')).toEqual([]);
@@ -310,37 +337,45 @@ describe('write gaps found by the template migration', () => {
 		Effect.scoped(
 			Effect.gen(function* () {
 				const { A } = yield* setup();
-				const q = recordId(yield* A.act('quotes.create', { title: 'q' }));
-				const p = recordId(yield* A.act('projects.create', { title: 'p' }));
+				const q = recordId(yield* A.act('quotes.create', [{ title: 'q' }]));
+				const p = recordId(yield* A.act('projects.create', [{ title: 'p' }]));
 				const a = recordId(
-					yield* A.act('activities.create', {
-						subject: 's',
-						regarding: { collection: 'quotes', id: q }
-					})
+					yield* A.act('activities.create', [
+						{
+							subject: 's',
+							regarding: { model: 'quotes', id: q }
+						}
+					])
 				);
 				expect(yield* A.get('activities', a)).toMatchObject({
-					regarding: { collection: 'quotes', id: q }
+					regarding: { model: 'quotes', id: q }
 				});
 				ok(
-					yield* A.act('activities.update', {
-						target: a,
-						set: { regarding: { collection: 'projects', id: p } }
-					})
+					yield* A.act('activities.update', [
+						{
+							target: a,
+							set: { regarding: { model: 'projects', id: p } }
+						}
+					])
 				);
 				expect(yield* A.get('activities', a)).toMatchObject({
-					regarding: { collection: 'projects', id: p }
+					regarding: { model: 'projects', id: p }
 				});
 				expect(
 					yield* Effect.flip(
-						A.act('activities.create', { subject: 's', regarding: { collection: 'cases', id: q } })
+						A.act('activities.create', [
+							{ subject: 's', regarding: { model: 'cases', id: q } }
+						])
 					)
 				).toMatchObject({ _tag: 'ActRefused', code: 'invalidInput', field: 'regarding' });
 				expect(
 					yield* Effect.flip(
-						A.act('activities.create', {
-							subject: 's',
-							regarding: { collection: 'projects', id: q }
-						})
+						A.act('activities.create', [
+							{
+								subject: 's',
+								regarding: { model: 'projects', id: q }
+							}
+						])
 					)
 				).toMatchObject({ _tag: 'ActRefused', code: 'notFound', field: 'regarding' });
 			})
@@ -351,13 +386,13 @@ describe('write gaps found by the template migration', () => {
 		Effect.scoped(
 			Effect.gen(function* () {
 				const { A } = yield* setup();
-				ok(yield* A.act('projects.create', { title: 'p', profile: { grade: 'a', weight: 2 } }));
+				ok(yield* A.act('projects.create', [{ title: 'p', profile: { grade: 'a', weight: 2 } }]));
 				expect(
-					yield* Effect.flip(A.act('projects.create', { title: 'p2', profile: { grade: 'z' } }))
+					yield* Effect.flip(A.act('projects.create', [{ title: 'p2', profile: { grade: 'z' } }]))
 				).toMatchObject({ _tag: 'ActRefused', code: 'invalidInput', field: 'profile' });
 				expect(
 					yield* Effect.flip(
-						A.act('projects.create', { title: 'p3', profile: { grade: 'a', extra: 1 } })
+						A.act('projects.create', [{ title: 'p3', profile: { grade: 'a', extra: 1 } }])
 					)
 				).toMatchObject({ _tag: 'ActRefused', code: 'invalidInput', field: 'profile' });
 			})
@@ -369,14 +404,14 @@ describe('write gaps found by the template migration', () => {
 			Effect.gen(function* () {
 				const { A } = yield* setup();
 				expect(
-					yield* Effect.flip(A.act('projects.create', { title: 'p', stock: -1 }))
+					yield* Effect.flip(A.act('projects.create', [{ title: 'p', stock: -1 }]))
 				).toMatchObject({
 					_tag: 'ActRefused',
 					code: 'check',
 					message: 'Stock cannot go below zero.'
 				});
 				expect(
-					yield* Effect.flip(A.act('projects.create', { title: 'p', stock: 1001 }))
+					yield* Effect.flip(A.act('projects.create', [{ title: 'p', stock: 1001 }]))
 				).toMatchObject({
 					_tag: 'ActRefused',
 					code: 'check',
@@ -436,23 +471,19 @@ describe('write gaps found by the template migration', () => {
 			Effect.gen(function* () {
 				const { t, A, caller } = yield* setup();
 				const M = caller(yield* t.signIn('a@x.test'));
-				const id = recordId(yield* M.act('projects.create', { title: 'mine' }));
+				const id = recordId(yield* M.act('projects.create', [{ title: 'mine' }]));
 				expect(
-					yield* A.get('projects', id, {
-						select: { title: true, owner: { select: { name: true } } }
-					})
+					yield* A.get('projects', id, { 'projects.owner': { fields: ['name'] } })
 				).toMatchObject({ title: 'mine', owner: { name: 'Ana' } });
 				expect(
-					yield* M.get('projects', id, {
-						select: { title: true, owner: { select: { name: true } } }
-					})
+					yield* M.get('projects', id, { 'projects.owner': { fields: ['name'] } })
 				).toMatchObject({ title: 'mine', owner: { name: 'Ana' } });
 				expect(
-					(yield* M.read('projects', {
-						select: { title: true, owner: { select: { name: true } } },
-						where: { owner: { eq: U } },
-						all: true
-					})).rows
+					(yield* M.read(
+						'projects',
+						{ where: { owner: { eq: U } } },
+						{ 'projects.owner': { fields: ['name'] } }
+					)).rows
 				).toEqual([
 					expect.objectContaining({
 						title: 'mine',
@@ -460,11 +491,7 @@ describe('write gaps found by the template migration', () => {
 					})
 				]);
 				expect(
-					(yield* A.read('sys_user', {
-						select: { name: true },
-						where: { id: { eq: U } },
-						all: true
-					})).rows
+					(yield* A.read('sys_user', { where: { id: { eq: U } }, fields: ['name'] })).rows
 				).toEqual([{ id: U, name: 'Ana' }]);
 			})
 		)

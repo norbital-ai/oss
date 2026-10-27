@@ -1,7 +1,7 @@
 // The few helpers every provider shares: reading untrusted JSON, comparing secrets in constant time, outbound attachments.
 import { timingSafeEqual } from 'node:crypto';
 import { Effect, Option, Predicate, Schema } from 'effect';
-import { FetchHttpClient, type HttpClient } from 'effect/unstable/http';
+import { FetchHttpClient, type HttpClient } from 'effect/http';
 import type { DriverOpen, Json, OutboundAttachment } from '@norbital-ai/bolt/engine';
 import { Fenced } from '@norbital-ai/bolt/engine';
 import { PairingInvalid, ProviderRefused, ProviderUnavailable } from './errors.ts';

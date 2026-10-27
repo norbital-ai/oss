@@ -3,8 +3,8 @@ import { isRow, objectsOf } from '../read/results.js';
 import { isMasked } from '../cell/value.js';
 import type { ViewBolt } from '../client/contract.js';
 import { humanize, msg } from '../text/messages.js';
-/** A related collection's records, selected through the viewer's ordinary scoped read query. */
-export type RecordHistorySource = { of: string; query: Json; fields?: readonly string[] };
+/** A related model's records whose history joins the record's: those `where` selects, read through the viewer's scope. */
+export type RecordHistorySource = { of: string; where?: Json; fields?: readonly string[] };
 /** One record's history plus optional related-record history; no separate event store. */
 export type RecordHistoryConfig = {
 	fields?: readonly string[];

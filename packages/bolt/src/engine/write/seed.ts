@@ -3,7 +3,7 @@ import { inputSchema } from '@norbital-ai/std/kind';
 import { encodeWire } from '@norbital-ai/std/wire';
 import { Schema } from 'effect';
 // Seed mode (rule 70, X-13): a restore. Stored values go in as given (kept ids of any uuid version, non-initial states,
-// `seq` values, sealed rows) in relationship order, one statement per collection per ≤ 4 MiB chunk, each chunk a step
+// `seq` values, sealed rows) in relationship order, one statement per model per ≤ 4 MiB chunk, each chunk a step
 // of its own (`restorer`); the database's constraints apply; roll-ups are derived and compared with any given value (`SeedDrift`); each `seq`
 // counter is raised to the highest seeded value. No transform, trigger, run, outbox row, approval route or rate limit.
 import type { Json } from '../../decl/values.ts';
@@ -19,9 +19,9 @@ import { historyPiece, rollups, seqParts, seqScope } from './commit.ts';
 import { cells, ownPredSql, databaseValue } from '@norbital-ai/store';
 import { decided, Chain } from './sql.ts';
 import { captureFinish, captureStart } from './capture.ts';
-/** Rows per collection, as a seed pack's `seed/<collection>.json` holds them. */
+/** Rows per model, as a seed pack's `seed/<model>.json` holds them. */
 export type SeedPack = {
-	readonly [collection: string]: readonly RowData[];
+	readonly [model: string]: readonly RowData[];
 };
 /** One pack statement's rows: a chunk must stay inside a single call's database wall (20 s), not its byte cap alone. */
 const CHUNK = 1024 * 1024;
@@ -32,7 +32,7 @@ export function decodeSeed(m: EngineManifest, pack: SeedPack): void {
 		rows.forEach((row, i) => decodeSeedRow(m, cat, c, row, i));
 	for (const c of Object.keys(pack)) decodeSeedRow(m, cat, c, undefined, 0);
 }
-/** One row (or, without one, its collection): every key a stored field, FK or system column; computed values are the database's (GENERATED). */
+/** One row (or, without one, its model): every key a stored field, FK or system column; computed values are the database's (GENERATED). */
 function decodeSeedRow(
 	m: EngineManifest,
 	cat: ReturnType<typeof catalogOf>,
@@ -42,7 +42,7 @@ function decodeSeedRow(
 ): void {
 	const model = cat.models.get(c);
 	if (model === undefined || m.models[c] === undefined)
-		throw BoltError.make('seedDecode', 'decode', `seed: unknown collection '${c}'`);
+		throw BoltError.make('seedDecode', 'decode', `seed: unknown model '${c}'`);
 	if (row === undefined) return;
 	if (typeof row['id'] !== 'string')
 		throw BoltError.make('seedDecode', 'decode', `seed ${c}[${i}]: every row carries its id`);
@@ -59,28 +59,28 @@ function decodeSeedRow(
 			);
 	}
 }
-/** A seed's collections, each streamed only when it is restored, from row `from` on: no collection is ever in memory whole. */
+/** A seed's models, each streamed only when it is restored, from row `from` on: no model is ever in memory whole. */
 export type RestoreSource = {
-	readonly collections: readonly string[];
-	readonly rows: (collection: string, from: number) => Stream.Stream<RowData, BoltError>;
+	readonly models: readonly string[];
+	readonly rows: (model: string, from: number) => Stream.Stream<RowData, BoltError>;
 };
 export const restoreSource = (pack: SeedPack): RestoreSource => ({
-	collections: Object.keys(pack),
-	rows: (collection, from) => Stream.fromIterable((pack[collection] ?? []).slice(from))
+	models: Object.keys(pack),
+	rows: (model, from) => Stream.fromIterable((pack[model] ?? []).slice(from))
 });
 const decodeFailure = (error: unknown) =>
 	error instanceof BoltError ? error : BoltError.make('seedDecode', 'decode', String(error));
 const Inserted = Schema.Struct({ n: Schema.Int });
 const Drift = Schema.fromJsonString(
 	Schema.Struct({
-		collection: Schema.String,
+		model: Schema.String,
 		field: Schema.String,
 		id: Schema.String,
 		value: Schema.NullOr(Schema.String)
 	})
 );
 /**
- * A restore in bounded steps, each one unit of work (compute model §3, "Limits and liveness"): one collection, or one
+ * A restore in bounded steps, each one unit of work (compute model §3, "Limits and liveness"): one model, or one
  * ≤ 4 MiB chunk of a large one, per step in relationship order; then one last step derives the roll-ups (compared with
  * every given value the steps kept) and raises the `seq` counters. Each step is its own transaction, so a failed restore
  * keeps the steps before it: a host restores into a branch it drops on failure. `step` answers `true` while steps remain.
@@ -94,27 +94,27 @@ export const restorer = Effect.fn('Bolt.restorer')(function* (
 	const cat = catalogOf(m);
 	const { order, constraints } = yield* Effect.try({
 		try: () => {
-			for (const c of source.collections) decodeSeedRow(m, cat, c, undefined, 0);
+			for (const c of source.models) decodeSeedRow(m, cat, c, undefined, 0);
 			return {
-				order: topological(m, source.collections),
+				order: topological(m, source.models),
 				constraints: constraintIndex(m)
 			};
 		},
 		catch: decodeFailure
 	});
 	/** The row the seed gave for a decoded value: its list or object fields as the wire holds them. */
-	const normalized = (collection: string, row: RowData) =>
+	const normalized = (model: string, row: RowData) =>
 		Effect.gen(function* () {
 			const values: Record<string, Json> = { ...row };
 			for (const [field, value] of Object.entries(row)) {
-				const kind = m.models[collection]?.fields[field];
+				const kind = m.models[model]?.fields[field];
 				if (value === null || (kind?.kind !== 'list' && kind?.kind !== 'object')) continue;
 				const decoded = yield* Schema.decodeUnknownEffect(inputSchema(kind))(value).pipe(
 					Effect.mapError((error) =>
 						BoltError.make(
 							'seedDecode',
 							'decode',
-							`seed ${collection}.${field}: ${error.message}`,
+							`seed ${model}.${field}: ${error.message}`,
 							error
 						)
 					)
@@ -124,7 +124,7 @@ export const restorer = Effect.fn('Bolt.restorer')(function* (
 			return values;
 		});
 	let inserted = 0;
-	/** Given roll-up values, kept across steps to compare with what the last step derives: by collection and field. */
+	/** Given roll-up values, kept across steps to compare with what the last step derives: by model and field. */
 	const given = new Map<string, { id: Json; value: Json; at: number }[]>();
 	const counters = new Map<
 		string,
@@ -252,7 +252,7 @@ export const restorer = Effect.fn('Bolt.restorer')(function* (
 				if (values.length === 0) continue;
 				// A mismatch must abort all derivations and counters in this batch before it commits.
 				statements.push({
-					text: `SELECT bolt_assert(false, 'SeedDrift', jsonb_build_object('collection', $2::text, 'field', $3::text, 'id', p.id::text, 'value', p.${q(r.field)}::text)::text)
+					text: `SELECT bolt_assert(false, 'SeedDrift', jsonb_build_object('model', $2::text, 'field', $3::text, 'id', p.id::text, 'value', p.${q(r.field)}::text)::text)
 					FROM ${q(c)} p JOIN jsonb_populate_recordset(${nullRowSql(c, cat.models.get(c)?.fields.keys() ?? [])}, $1::jsonb) g ON g.id = p.id
 					WHERE p.${q(r.field)} IS DISTINCT FROM g.${q(r.field)} LIMIT 1`,
 					params: [
@@ -274,7 +274,7 @@ export const restorer = Effect.fn('Bolt.restorer')(function* (
 			});
 		return [...statements, captureFinish(token, false)];
 	};
-	/** The next step: collection `next` of `order` from row `from`; at `order.length` the last step; past it, none. */
+	/** The next step: model `next` of `order` from row `from`; at `order.length` the last step; past it, none. */
 	let next = 0,
 		from = 0;
 	const step = Effect.suspend(() =>
@@ -320,13 +320,13 @@ export const restorer = Effect.fn('Bolt.restorer')(function* (
 						Effect.mapError((error) => BoltError.make('badAnswer', 'derive', error.message, error))
 					);
 					const row = given
-						.get(`${detail.collection}\0${detail.field}`)
+						.get(`${detail.model}\0${detail.field}`)
 						?.find((value) => value.id === detail.id);
 					return yield* Effect.fail(
 						BoltError.make(
 							'SeedDrift',
 							'derive',
-							`seed ${detail.collection}[${row?.at ?? -1}].${detail.field}: given ${JSON.stringify(row?.value)}, derived ${String(detail.value)}`
+							`seed ${detail.model}[${row?.at ?? -1}].${detail.field}: given ${JSON.stringify(row?.value)}, derived ${String(detail.value)}`
 						)
 					);
 				}
@@ -396,8 +396,8 @@ function seqValue(
 		date: { yyyy, mm: at('mm') ?? '' }
 	};
 }
-/** Relationship order: a collection after every other collection its required refs name (self-refs go in one statement). */
-function topological(m: EngineManifest, collections: readonly string[]): string[] {
+/** Relationship order: a model after every other model its required refs name (self-refs go in one statement). */
+function topological(m: EngineManifest, models: readonly string[]): string[] {
 	const out: string[] = [];
 	const visit = (c: string, path: Set<string>) => {
 		if (out.includes(c) || path.has(c)) return;
@@ -406,10 +406,10 @@ function topological(m: EngineManifest, collections: readonly string[]): string[
 			const [from] = key.split('.');
 			if (from !== c) continue;
 			for (const t of typeof rel.to === 'string' ? [rel.to] : rel.to)
-				if (t !== c && collections.includes(t)) visit(t, path);
+				if (t !== c && models.includes(t)) visit(t, path);
 		}
 		out.push(c);
 	};
-	for (const c of collections) visit(c, new Set());
+	for (const c of models) visit(c, new Set());
 	return out;
 }

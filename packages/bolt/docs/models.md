@@ -21,22 +21,26 @@ export default model('orders', {
 		notes: { kind: 'text', optional: true },
 		placed_at: { kind: 'instant', optional: true }
 	},
-	read: 'all',
+	read: {
+		orders: { fields: ['number', 'customer', 'status', 'notes', 'placed_at'] },
+		'orders.customer': { fields: ['name', 'code'] },
+		'orders.lines': { fields: ['product', 'quantity', 'net'] },
+		'orders.lines.product': { fields: ['code', 'name'] }
+	},
 	create: {
-		columns: ['customer', 'notes'],
+		columns: { orders: ['customer', 'notes'], 'orders.lines': ['product', 'quantity', 'net'] },
 		transform: function* (rows, ctx) {
-			const { rows: customers } = yield* ctx.db.query('customers', {
-				where: { id: { in: rows.map((r) => r.customer) } },
-				all: true
+			const { customers } = yield* ctx.db.query({
+				customers: { where: { id: { in: rows.map((r) => r.customer) } }, fields: ['blocked'] }
 			});
-			const blocked = new Set(customers.filter((c) => c.blocked).map((c) => c.id));
-			if (rows.some((r) => blocked.has(r.customer)))
-				return yield* ctx.refuse('This customer is blocked.', { field: 'customer' });
+			const blocked = new Set(customers.rows.filter((c) => c.blocked).map((c) => c.id));
+			const at = rows.findIndex((r) => blocked.has(r.customer));
+			if (at >= 0) return yield* ctx.refuse('This customer is blocked.', { field: 'customer', row: at });
 			return rows;
 		}
 	},
 	update: {
-		columns: ['status', 'notes'],
+		columns: { orders: ['status', 'notes'], 'orders.lines': ['product', 'quantity', 'net'] },
 		transform: function* (changes, ctx) {
 			return changes.map(({ before, set }) =>
 				set.status === 'placed' && before.status === 'draft' ? { ...set, placed_at: ctx.now } : set
@@ -44,28 +48,33 @@ export default model('orders', {
 		}
 	},
 	// a matching row is read-only: update and delete are refused on every path, and the record page shows a lock
-	locked: { status: { eq: 'placed' } },
-	queries: {
-		placed_count: {
-			description: 'Count placed orders visible to the caller.',
-			input: {},
-			output: { kind: 'int' },
-			run: function* (_, ctx) {
-				return (yield* ctx.query('orders', {
-					where: { status: { eq: 'placed' } },
-					select: { id: true },
-					all: true
-				})).rows.length;
-			}
-		}
-	}
+	locked: { status: { eq: 'placed' } }
 });
 ```
 
-The example assumes a `customers` model with a `blocked` field. `input` types each body's input;
-`output` types its return. A named query is useful for computed answers or composition; simple
-filtering uses the same `query` API directly. Model writes are the standard guarded `create`,
-`update`, `delete` and, on a model with a key, `upsert` verbs.
+The example assumes `customers` (with `code`, `blocked`), `order_lines` (`order` owned, inverse
+`lines`) and `products`. Model writes are the standard guarded `create`, `update`, `delete` and, on
+a model with a key, `upsert` verbs. A model declares no named queries: callers read the layers
+they need and transform them with a pure `src/lib` helper on their own side.
+
+## Layer maps
+
+`read`, `create` and `update` are layer maps: a flat object keyed by path in the read or write
+tree. `'orders'` is the root layer, `'orders.customer'` and `'orders.lines'` the layers under it,
+`'orders.lines.product'` one deeper; at most five levels. Each segment is a relation of the layer
+above (a ref, an inverse many-relation or an owned child), and each layer's parent is declared too
+(`bolt check`: `model/layer`). `read: 'all'` is `{ <model>: { fields: 'all' } }`.
+
+- `read` declares what a read may return. Without `read` a model is no read root; it can still
+  store data and be a layer of another model's `read`.
+- `create.columns` / `update.columns` declare the writable columns per layer. A write layer is a
+  many-relation (the child rows); it never lists the key that ties a child to its parent.
+  `create.filled` names columns the transform fills when the writer omits them.
+- A write payload stays a tree. A create row is `{ customer, notes, lines: [{ product, quantity, net }] }`
+  (a non-owned child may also be an existing row's id, which links it). An update `set` names the
+  root columns and, per child layer, `{ create?, update?: [{ target, set }], delete?, link?, unlink? }`.
+- `.norbital/names.ts` generates the path unions (`ReadPath<'orders'>`, `WritePath<'orders', 'create'>`)
+  and the model behind each path, so every layer value types against the right model.
 
 ## Locks and state moves
 
@@ -99,10 +108,11 @@ export default automation('orders_duplicate', {
 	input: { order: { kind: 'id', of: 'orders' } },
 	runAs: 'trigger',
 	run: function* ({ order: id }, ctx) {
-		const order = yield* ctx.query('orders', { id });
-		if (order === null)
+		const { orders } = yield* ctx.query({ orders: { where: { id: { eq: id } }, limit: 1 } });
+		const order = orders.rows[0];
+		if (order === undefined)
 			return yield* Effect.fail(new Refusal({ message: 'This order is unavailable.' }));
-		yield* ctx.act('orders.create', { customer: order.customer, notes: order.notes });
+		yield* ctx.act('orders.create', [{ customer: order.customer, notes: order.notes }]);
 	}
 });
 ```
@@ -110,8 +120,8 @@ export default automation('orders_duplicate', {
 The starter's policy needs `automations: ['orders_duplicate']` plus the order read and create
 grants the run uses. A page starts it with `bolt.start('orders_duplicate', { order: id })` and
 shows its run status. Several independent writes belong in one `ctx.act.many(...)` call when
-they must commit atomically; dependent parent/child creates use the parent's nested `with`
-input. For dependent reads and writes, `ctx.transaction(function* (tx) { ... })` uses one
+they must commit atomically; dependent parent/child creates nest the child rows in the parent's
+write layers. For dependent reads and writes, `ctx.transaction(function* (tx) { ... })` uses one
 native session with read-your-writes and a fixed five-second deadline; it needs no manual
 observations. Its model reads and guarded CRUD retain the run's authority. Inner write answers
 are provisional; the outer answer alone is committed or held. This requires PostgreSQL 17+
@@ -125,9 +135,14 @@ A ref carries `to`, optional `inverse`, `optional`, `owned`, `onDelete`, `where`
 `onDelete` is `restrict` by default, `cascade`, or `setNull` for an optional ref; owned refs cascade.
 The authoring API has no `onUpdate` option. Foreign-key actions run in the database, including
 cascades; callbacks should not reproduce them with delete loops.
-Owned children use `with` on the parent's create/update exposure. Every nested child runs its own
+Owned children are write layers of the parent's create/update. Every nested child runs its own
 write callback after the parent, batched by child model. Do not derive a child's stored values
 again in the parent.
+Authority is per access point: `read`, `create`, `update` and `delete` of a model are access points,
+guarded by that model's policy only, every layer under them included. A child written through its
+parent's layers, or a related row read as a layer, is judged by the root model's grant alone; the
+child model's own policy is never consulted on that path. Its `transform`/`check` still run as
+business validation. Reading or writing the child model directly is its own access point.
 
 ## Every write path
 
@@ -137,7 +152,8 @@ referential actions. Policies enforce caller authority; JavaScript callbacks ret
 validation that cannot be expressed by these native rules. A raw SQL connection is privileged
 and does not acquire application policy checks merely by reaching the same table.
 
-`create.transform(rows, ctx)` returns the rows to insert. `update.transform(changes, ctx)` receives
+Every generated write's input is an array of rows (`[{ … }]`, `[{ target, set }]`, `[{ target }]`);
+there is no single-row form. `create.transform(rows, ctx)` returns the rows to insert. `update.transform(changes, ctx)` receives
 `{ before, set }` for each change and returns its sets. `delete.check(rows, ctx)` may refuse and
 returns no replacement rows. Shared logic is an ordinary helper called by both verbs.
 
@@ -149,13 +165,15 @@ read with workspace authority through `ctx.db.query`, and have no direct writes 
 ## Bulk budget
 
 One callback handles a batch, never one row at a time. The engine prefetches update `before` rows,
-delete rows and upsert matches. A callback may read twice; each read may be a keyed batch of any
-needed models. Prefetch before mapping, and never yield a read inside the row loop.
+delete rows and upsert matches. A callback may read up to ten times, one dependent wave per read;
+each read is one read request naming every root it needs. Prefetch before mapping, and never yield a read inside the row loop. Each
+policy `check` that admits the batch is one more guest call per verb per model, with the same
+read budget.
 
 | Per N rows     | Cost                                       |
 | -------------- | ------------------------------------------ |
 | Guest calls    | ceil(N / 1000), per verb per touched model |
-| Reads          | at most 2 per callback                     |
+| Reads          | at most 10 per callback                    |
 | SQL statements | O(N / 1000), set-based writes              |
 | Transactions   | 1                                          |
 

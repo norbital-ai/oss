@@ -41,7 +41,7 @@ import { lockPieces } from '../approvals/lock.ts';
 import { captureFinish, captureStart, netRows } from './capture.ts';
 
 /** One row change as the statement writes it: upserts are already resolved, updates carry the stored revision. */
-export type Write = { collection: string; id: string; erased?: boolean } &
+export type Write = { model: string; id: string; erased?: boolean } &
 	/** `revision`: a deleted row re-created by an approval rollback at its next revision; its values are stored columns, no `seq` is drawn. */
 	(
 		| { op: 'create'; values: RowData; revision?: number }
@@ -103,11 +103,11 @@ export type Commit = {
 	 */
 	erase?:
 		| { mode: 'remove' }
-		| { mode: 'anonymise'; collection: string; ids: readonly string[]; purge: readonly string[] };
+		| { mode: 'anonymise'; model: string; ids: readonly string[]; purge: readonly string[] };
 	/** Recorded actions may contain several independent erasures alongside ordinary writes. */
 	erasures?: readonly NonNullable<Commit['erase']>[];
 	/** Per-record restores: each record's direct revision is recorded `restored` from `revision`. */
-	restored?: readonly { collection: string; id: string; revision: number }[];
+	restored?: readonly { model: string; id: string; revision: number }[];
 };
 type Piece = { name: string; table: string };
 
@@ -189,7 +189,7 @@ function seqMeta(m: EngineManifest, writes: readonly Write[], today: string) {
 	}[] = [];
 	for (const w of writes) {
 		if (w.op !== 'create' || w.revision !== undefined) continue;
-		for (const [field, k] of Object.entries(m.models[w.collection]?.fields ?? {})) {
+		for (const [field, k] of Object.entries(m.models[w.model]?.fields ?? {})) {
 			if (k.kind !== 'seq') continue;
 			const { pre, width, post } = seqParts(k.pattern, {
 				yyyy: today.slice(0, 4),
@@ -200,7 +200,7 @@ function seqMeta(m: EngineManifest, writes: readonly Write[], today: string) {
 				post,
 				(k.per ?? []).map((p) => w.values[p] ?? null)
 			);
-			const key = JSON.stringify([w.collection, field, scope]);
+			const key = JSON.stringify([w.model, field, scope]);
 			const index = counts.get(key) ?? 0;
 			counts.set(key, index + 1);
 			plan.push({ w, field, key, index, pre, width, post, text: k.pattern !== undefined });
@@ -223,7 +223,7 @@ export function compileCommit(m: EngineManifest, cat: Catalog, x: Commit): reado
 	const erasures = x.erasures ?? (x.erase === undefined ? [] : [x.erase]);
 	const erasedTargets = x.writes
 		.filter((write) => write.erased ?? x.erase !== undefined)
-		.map((write) => `${write.collection}/${write.id}`);
+		.map((write) => `${write.model}/${write.id}`);
 	const erasedKeys = erasedTargets.length === 0 ? undefined : c.p(erasedTargets);
 	const erased = (table: string, id: string) =>
 		erasedKeys === undefined
@@ -292,16 +292,16 @@ export function compileCommit(m: EngineManifest, cat: Catalog, x: Commit): reado
 			c.assert(
 				`(SELECT count(*) FROM ${name}) = ${count.rows}`,
 				'conflict',
-				JSON.stringify({ collection: table, ids: count.ids })
+				JSON.stringify({ model: table, ids: count.ids })
 			);
 		return name;
 	};
-	const byTable = Map.groupBy(x.writes, (w) => w.collection);
+	const byTable = Map.groupBy(x.writes, (w) => w.model);
 
 	// Referential actions belong to the foreign keys. Their actual row changes enter the native capture buffer.
 	const deleteOrder: string[] = [];
 	const deleteTables = new Set(
-		x.writes.filter((write) => write.op === 'delete').map((write) => write.collection)
+		x.writes.filter((write) => write.op === 'delete').map((write) => write.model)
 	);
 	const visitDelete = (table: string, seen: Set<string>) => {
 		if (deleteOrder.includes(table) || seen.has(table)) return;
@@ -556,7 +556,7 @@ export function compileCommit(m: EngineManifest, cat: Catalog, x: Commit): reado
 	c.cte('effectp', 'SELECT * FROM allp WHERE NOT erased');
 	if (x.transactionStage !== true) queueTriggered(m, c, x.now, actorRef(x.actor), 'effectp'); // event runs exclude erased rows (rule 50)
 	if (x.transactionStage !== true && x.approvalDecision === undefined && x.rollback !== true) {
-		const notified = Object.entries(m.collections).filter(
+		const notified = Object.entries(m.exposures).filter(
 			([model, spec]) => spec.notify === true && byTable.has(model)
 		);
 		if (notified.length > 0)
@@ -564,7 +564,7 @@ export function compileCommit(m: EngineManifest, cat: Catalog, x: Commit): reado
 				select: notified
 					.map(
 						([model]) =>
-							`SELECT 'bolt.notify'::text AS automation, jsonb_build_object('collection', ${c.p(model)}::text,
+							`SELECT 'bolt.notify'::text AS automation, jsonb_build_object('model', ${c.p(model)}::text,
 			'event', jsonb_build_object('kind', 'write', 'action', e.op, 'records', jsonb_agg(coalesce(e.n, e.o) ORDER BY e.id),
 			'previous', jsonb_agg(e.o ORDER BY e.id), 'actor', ${c.p(x.actor)}::jsonb)) AS input,
 			${c.p(x.now)}::timestamptz AS due_at, 'schedule'::text AS cause, 0 AS depth
@@ -602,9 +602,9 @@ export function compileCommit(m: EngineManifest, cat: Catalog, x: Commit): reado
 		noticeInsert(c, 'notices', x.notices, x.now, GATED, m.teams, m.workspace.signup?.policies);
 	x.pieces?.(c); // hook:syncs
 
-	// in the act's own order (the input's; `records[0]` is what was written), anything else after by collection and id
-	const at = c.p(Object.fromEntries(x.writes.map((w, i) => [`${w.collection}/${w.id}`, i])));
-	const records = `(SELECT coalesce(jsonb_agg(jsonb_build_object('collection', c, 'id', id, 'revision', revision) ORDER BY (${at}::jsonb ->> (c || '/' || id))::int NULLS LAST, c, id), '[]'::jsonb) FROM allp WHERE cause IN ('direct', 'erased'))`;
+	// in the act's own order (the input's; `records[0]` is what was written), anything else after by model and id
+	const at = c.p(Object.fromEntries(x.writes.map((w, i) => [`${w.model}/${w.id}`, i])));
+	const records = `(SELECT coalesce(jsonb_agg(jsonb_build_object('model', c, 'id', id, 'revision', revision) ORDER BY (${at}::jsonb ->> (c || '/' || id))::int NULLS LAST, c, id), '[]'::jsonb) FROM allp WHERE cause IN ('direct', 'erased'))`;
 	const commitOutcome = () =>
 		`jsonb_build_object('kind', 'committed', 'output', ${c.p(JSON.stringify(x.output))}::jsonb, 'records', ${records})`;
 	const outcome =
@@ -618,7 +618,7 @@ export function compileCommit(m: EngineManifest, cat: Catalog, x: Commit): reado
 	const tables = affectedTables(m, cat, x.writes);
 	c.cte(
 		'native_result',
-		`SELECT ${result}, (SELECT coalesce(jsonb_agg(jsonb_build_object('collection', c, 'id', id, 'op', op, 'revision', revision,
+		`SELECT ${result}, (SELECT coalesce(jsonb_agg(jsonb_build_object('model', c, 'id', id, 'op', op, 'revision', revision,
 		'old', ${numericText(cat, tables, 'o')}, 'new', ${numericText(cat, tables, 'n')}, 'cause', cause)), '[]'::jsonb) FROM allp) || ${noticeCaptures(c)} AS captured, ${nextDue(c)} AS next_due,
 		(SELECT coalesce(jsonb_agg(id), '[]'::jsonb) FROM allp WHERE c = 'sys_integration'
 		AND (o IS NULL OR n IS NULL OR (o->'configuration', o->'active', o->'integration', o->'envoy', o->'import_start')
@@ -635,7 +635,7 @@ export function compileCommit(m: EngineManifest, cat: Catalog, x: Commit): reado
 				token,
 				now: x.now,
 				actor: actorRef(x.actor),
-				direct: x.writes.map((write) => `${write.collection}/${write.id}`),
+				direct: x.writes.map((write) => `${write.model}/${write.id}`),
 				erased: erasedTargets,
 				mode: (x.restored?.length ?? 0) > 0 ? 'restore' : 'write',
 				...(x.approvalDecision === undefined ? {} : { request: x.approvalDecision.request }),
@@ -643,7 +643,7 @@ export function compileCommit(m: EngineManifest, cat: Catalog, x: Commit): reado
 					? {}
 					: {
 							restored: Object.fromEntries(
-								x.restored.map((row) => [`${row.collection}/${row.id}`, row.revision])
+								x.restored.map((row) => [`${row.model}/${row.id}`, row.revision])
 							)
 						})
 			},
@@ -651,7 +651,7 @@ export function compileCommit(m: EngineManifest, cat: Catalog, x: Commit): reado
 			Object.fromEntries(
 				erasures.flatMap((spec) =>
 					spec.mode === 'anonymise'
-						? spec.ids.map((id) => [`${spec.collection}/${id}`, spec.purge] as const)
+						? spec.ids.map((id) => [`${spec.model}/${id}`, spec.purge] as const)
 						: []
 				)
 			)
@@ -668,9 +668,9 @@ export function affectedTables(
 	cat: Catalog,
 	writes: readonly Write[]
 ): string[] {
-	const affected = new Set(writes.map((write) => write.collection));
+	const affected = new Set(writes.map((write) => write.model));
 	const deleted = new Set(
-		writes.filter((write) => write.op === 'delete').map((write) => write.collection)
+		writes.filter((write) => write.op === 'delete').map((write) => write.model)
 	);
 	for (let changed = true; changed;) {
 		changed = false;
@@ -750,7 +750,7 @@ function erasePieces(c: Chain, erasures: readonly NonNullable<Commit['erase']>[]
 		SELECT 1 FROM allp x WHERE x.erased AND (x.op = 'delete' OR x.cause = 'erased') AND (
 			(a.collection = x.c AND a.record = x.id)
 			OR a.records @> jsonb_build_array(jsonb_build_object('collection', x.c, 'id', x.id))))`,
-			`${GATED} AND EXISTS (SELECT 1 FROM allp x WHERE x.erased AND x.op = 'delete' AND n.link ->> 'collection' = x.c AND n.link ->> 'id' = x.id)`
+			`${GATED} AND EXISTS (SELECT 1 FROM allp x WHERE x.erased AND x.op = 'delete' AND n.link ->> 'model' = x.c AND n.link ->> 'id' = x.id)`
 		)
 	))
 		c.cte(name, sql);
@@ -772,13 +772,13 @@ function erasePieces(c: Chain, erasures: readonly NonNullable<Commit['erase']>[]
 	for (const [index, e] of erasures.entries()) {
 		if (e.mode === 'remove') continue;
 		const fields = `ARRAY(SELECT jsonb_array_elements_text(${c.p(e.purge)}::jsonb))`;
-		const at = `h.collection = ${c.p(e.collection)} AND h.record::text IN (SELECT jsonb_array_elements_text(${c.p(e.ids)}::jsonb)) AND h.changes ?| ${fields}
+		const at = `h.collection = ${c.p(e.model)} AND h.record::text IN (SELECT jsonb_array_elements_text(${c.p(e.ids)}::jsonb)) AND h.changes ?| ${fields}
 		AND h.revision < (SELECT min(x.revision) FROM allp x WHERE x.c=h.collection AND x.id=h.record::text)`;
 		c.cte(
 			`defer_anonymised${index}`,
 			`INSERT INTO bolt_audit_erase(operation,collection,record,revision,mode,purge,keep_marker)
 			SELECT ${operation},x.c,x.id::uuid,x.revision,'anonymise',${fields},true FROM allp x
-			WHERE x.c=${c.p(e.collection)} AND x.id IN (SELECT jsonb_array_elements_text(${c.p(e.ids)}::jsonb))
+			WHERE x.c=${c.p(e.model)} AND x.id IN (SELECT jsonb_array_elements_text(${c.p(e.ids)}::jsonb))
 			AND x.id ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
 			AND ${operation} IS NOT NULL AND ${GATED} ON CONFLICT DO NOTHING RETURNING record`
 		);
@@ -803,7 +803,7 @@ export function historyPiece(
 	const marks =
 		restored.length === 0
 			? null
-			: c.p(Object.fromEntries(restored.map((r) => [`${r.collection}/${r.id}`, r.revision])));
+			: c.p(Object.fromEntries(restored.map((r) => [`${r.model}/${r.id}`, r.revision])));
 	const mark =
 		marks === null ? 'false' : `(x.cause = 'direct' AND ${marks}::jsonb ? (x.c || '/' || x.id))`;
 	const from = marks === null ? 'NULL::int' : `(${marks}::jsonb ->> (x.c || '/' || x.id))::int`;
@@ -823,7 +823,7 @@ export const CommitAnswer = Schema.Struct({
 	outcome: Schema.NullOr(WriteOutcome),
 	captured: Schema.Array(
 		Schema.Struct({
-			collection: Schema.String,
+			model: Schema.String,
 			id: Schema.String,
 			op: Schema.Literals(['create', 'update', 'delete']),
 			revision: Schema.Number,
@@ -911,7 +911,7 @@ export function transactionEffects(
 		'transaction_effects',
 		`SELECT x.* FROM jsonb_to_recordset(${c.p(
 			captured.map((row) => ({
-				c: row.collection,
+				c: row.model,
 				id: row.id,
 				revision: row.revision,
 				op: row.op,
@@ -923,8 +923,8 @@ export function transactionEffects(
 		)}::jsonb) AS x(c text,id text,revision int,op text,cause text,erased boolean,o jsonb,n jsonb) WHERE ${GATED}`
 	);
 	queueTriggered(m, c, now, actorRef(actor), source);
-	const written = new Set(captured.map((row) => row.collection));
-	const notified = Object.entries(m.collections).filter(
+	const written = new Set(captured.map((row) => row.model));
+	const notified = Object.entries(m.exposures).filter(
 		([model, spec]) => spec.notify === true && written.has(model)
 	);
 	if (notified.length > 0)
@@ -933,7 +933,7 @@ export function transactionEffects(
 				.map(
 					([
 						model
-					]) => `SELECT 'bolt.notify'::text AS automation, jsonb_build_object('collection', ${c.p(model)}::text,
+					]) => `SELECT 'bolt.notify'::text AS automation, jsonb_build_object('model', ${c.p(model)}::text,
 		'event', jsonb_build_object('kind', 'write', 'action', e.op, 'records', jsonb_agg(coalesce(e.n,e.o) ORDER BY e.id),
 		'previous', jsonb_agg(e.o ORDER BY e.id), 'actor', ${c.p(actor)}::jsonb)) AS input,
 		${c.p(now)}::timestamptz AS due_at, 'schedule'::text AS cause, 0 AS depth FROM ${source} e

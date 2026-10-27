@@ -29,7 +29,6 @@
 	import Form from '../src/form/form.svelte';
 	import { provideBolt } from '../src/client/context.js';
 	import { provideRepresentations } from '../src/record/context.js';
-	import { type Page } from '../src/collection/types.js';
 	import RecordShell from '../src/record/RecordShell.svelte';
 
 	let fixture: PackagingHarnessProps = $props();
@@ -44,7 +43,7 @@
 		get customFields() {
 			return fixture.customFields;
 		},
-		query: (c, o) => fixture.bolt.query<Page>(c, o)
+		query: (request) => fixture.bolt.query(request)
 	});
 	// svelte-ignore state_referenced_locally
 	provideRepresentations(fixture.representations ?? {});

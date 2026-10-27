@@ -85,7 +85,7 @@ export function lockPieces(
 	c.assertWith(
 		"NOT EXISTS (SELECT 1 FROM ap_hit WHERE route ? '__boltReadGuards')",
 		'conflict',
-		"(SELECT jsonb_build_object('collection', 'approval_request', 'ids', jsonb_agg(id::text))::text FROM ap_hit WHERE route ? '__boltReadGuards')"
+		"(SELECT jsonb_build_object('model', 'approval_request', 'ids', jsonb_agg(id::text))::text FROM ap_hit WHERE route ? '__boltReadGuards')"
 	);
 	const names = c.p(
 		Object.fromEntries(Object.entries(teams(m)).map(([handle, t]) => [handle, t.name ?? handle]))
@@ -151,7 +151,7 @@ const Holder = Schema.Struct({
 	state: Schema.Literals(['Pending', 'ChangesRequested']),
 	/** The actor asked for it: their save on it in ChangesRequested resubmits it (approvals.ts `resubmit`). */
 	requester: Schema.Boolean,
-	collection: Schema.String,
+	model: Schema.String,
 	record: Schema.String,
 	action: Schema.Literals(['create', 'update', 'delete'])
 });
@@ -169,7 +169,7 @@ export const holders = Effect.fn('Approvals.holders')(function* (
 	const { team, id } = own(actor);
 	return yield* db.rows(Holder, {
 		text: `SELECT a.id::text AS id, ${eligible('$2', '$3', '$4')} AS eligible, a.route ? '__boltReadGuards' AS "readGuarded", a.state, a.requestor = $4 AS requester,
-		a.collection, a.record, a.action FROM bolt_approvals a
+		a.collection AS model, a.record, a.action FROM bolt_approvals a
 	WHERE a.state IN ('Pending', 'ChangesRequested')
 		AND EXISTS (SELECT 1 FROM jsonb_array_elements(a.records) r JOIN jsonb_to_recordset($1::jsonb) AS t(c text, id text)
 			ON t.c = r ->> 'collection' AND t.id = r ->> 'id')`,
@@ -230,12 +230,10 @@ export const heldFields = Effect.fn('Approvals.heldFields')(function* (
 });
 
 const approvables = new WeakMap<EngineManifest, ReadonlySet<string>>();
-/** A grant with a write arm that admits subject to an approval flow (the manifest's `approval: true` marker). */
+/** A grant with a write `check`: its verdict may hold the write for an approval flow (`ctx.approve`). */
 export const routesApproval = (g: GrantData) =>
-	[g.create, g.update, g.delete].some(
-		(arm) => typeof arm === 'object' && 'approval' in arm && arm.approval === true
-	);
-/** The collections a request can hold: those a grant routes to approval, and every collection nested under them. */
+	[g.create, g.update, g.delete].some((arm) => typeof arm === 'object' && arm.check === true);
+/** The models a request can hold: those a grant routes to approval, and every model nested under them. */
 export const approvable = (m: EngineManifest, cat: Catalog): ReadonlySet<string> => {
 	let set = approvables.get(m);
 	if (set !== undefined) return set;
@@ -279,10 +277,10 @@ export const rowApproval = (raw: unknown): RowApproval | undefined =>
 	});
 
 /**
- * The collections open requests hold, read once when the reads area starts: with today's routed collections they are
- * every collection a request can hold (a new request opens only where a current grant routes).
+ * The models open requests hold, read once when the reads area starts: with today's routed models they are
+ * every model a request can hold (a new request opens only where a current grant routes).
  */
-export const heldCollections = (db: Pick<TenantDbShape, 'rows'>) =>
+export const heldModels = (db: Pick<TenantDbShape, 'rows'>) =>
 	db
 		.rows(Schema.Struct({ c: Schema.String }), {
 			text: `SELECT DISTINCT r ->> 'collection' AS c FROM bolt_approvals a CROSS JOIN LATERAL jsonb_array_elements(a.records) r

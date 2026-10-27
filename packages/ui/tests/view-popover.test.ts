@@ -16,7 +16,7 @@ import './dom.ts';
 import assert from 'node:assert/strict';
 import { setImmediate } from 'node:timers/promises';
 import type { ViewBolt, Json } from '../src/client/contract.ts';
-import type { Row, Values } from '../src/collection/types.ts';
+import type { Row, Values } from '../src/model/types.ts';
 import type { Value } from '@norbital-ai/std/kind';
 import type { KindsHost } from '../src/kinds/context.ts';
 import type { Offer, RawArg, Node, Op, SortKey } from '../src/filter/filter.ts';
@@ -37,7 +37,7 @@ import {
 	toWhere
 } from '../src/filter/filter.ts';
 import { likePattern } from '../src/kinds/kind.ts';
-import { listSelect, MANY_SHOWN, unref } from '../src/relations/select.ts';
+import { listRequest, MANY_SHOWN, unref } from '../src/relations/select.ts';
 const { flushSync, mount, tick, unmount } = await import('svelte');
 const { default: Harness } = await import('./view-harness.svelte');
 
@@ -322,7 +322,7 @@ it.effect('sort: nulls last ascending and first descending', () =>
 );
 
 it.effect(
-	'sort: related keys — one hop through unmasked one-relations into read collections; keys nest, and round-trip through the URL',
+	'sort: related keys — one hop through unmasked one-relations into read models; keys nest, and round-trip through the URL',
 	() =>
 		Effect.sync(() => {
 			const s = sortable(catalog.jobs, true, catalog);
@@ -590,10 +590,10 @@ it.live('filter metadata loads on opening the popover and is reused on reopening
 		const calls: string[] = [];
 		const s = yield* browser(() =>
 			scripted({
-				options: (collection) =>
+				options: (model) =>
 					fixtureEffect(() => {
-						calls.push(collection);
-						return { fields: offers(collection) };
+						calls.push(model);
+						return { fields: offers(model) };
 					})
 			})
 		);
@@ -626,10 +626,10 @@ it.live('reopening the filter popover retries a failed metadata request', () =>
 		let calls = 0;
 		const s = yield* browser(() =>
 			scripted({
-				options: (collection) =>
+				options: (model) =>
 					fixtureEffect(() => {
 						if (++calls === 1) throw new Error('Temporary metadata failure');
-						return { fields: offers(collection) };
+						return { fields: offers(model) };
 					})
 			})
 		);
@@ -656,14 +656,14 @@ it.live('reopening the filter popover retries a failed metadata request', () =>
 	})
 );
 
-it.live('a late filter catalogue cannot replace the active collection catalogue', () =>
+it.live('a late filter catalogue cannot replace the active model catalogue', () =>
 	Effect.gen(function* () {
 		const pending = new Map<string, PromiseWithResolvers<{ fields: readonly Offer[] }>>();
 		const s = yield* browser(() =>
 			scripted({
-				options: (collection) => {
+				options: (model) => {
 					const request = Promise.withResolvers<{ fields: readonly Offer[] }>();
-					pending.set(collection, request);
+					pending.set(model, request);
 					return browser(() => request.promise);
 				}
 			})
@@ -716,14 +716,14 @@ it.live('a late filter catalogue cannot replace the active collection catalogue'
 it.live('an open local filter catalogue follows the active table fields', () =>
 	Effect.gen(function* () {
 		const inputs: {
-			collection: string;
+			model: string;
 			fields: Parameters<NonNullable<ViewBolt['options']>>[1];
 		}[] = [];
 		const s = yield* browser(() =>
 			scripted({
-				options: (collection, fields) =>
+				options: (model, fields) =>
 					fixtureEffect(() => {
-						inputs.push({ collection, fields });
+						inputs.push({ model, fields });
 						return {
 							fields: (fields ?? []).map((field): Offer => ({
 								label: field.label,
@@ -1027,16 +1027,16 @@ it.live('a local array offers its fields to System 1 and keeps manual controls c
 	Effect.gen(function* () {
 		let input:
 			| {
-					collection: string;
+					model: string;
 					text: string;
 					fields: Parameters<NonNullable<ViewBolt['describe']>>[2];
 			  }
 			| undefined;
 		const s = yield* browser(() =>
 			scripted({
-				describe: (collection, text, fields) =>
+				describe: (model, text, fields) =>
 					fixtureEffect(() => {
-						input = { collection, text, fields };
+						input = { model, text, fields };
 						return { where: { number: { gt: 20 } }, orderBy: { name: 'asc' } };
 					})
 			})
@@ -1068,7 +1068,7 @@ it.live('a local array offers its fields to System 1 and keeps manual controls c
 		form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
 		yield* browser(() => settle());
 		assert.ok(input);
-		assert.equal(input.collection, '$local');
+		assert.equal(input.model, '$local');
 		assert.deepEqual(
 			(input.fields ?? []).map((f) => f.name),
 			['number', 'name']
@@ -1307,7 +1307,8 @@ const relCatalog: NonNullable<KindsHost['catalog']> = {
 		label: ['title'],
 		fields: { title: { kind: 'text' }, done: { kind: 'bool' } },
 		relations: { account: { targets: ['accounts'] } },
-		many: ['lines']
+		many: ['lines'],
+		layers: ['account', 'lines']
 	},
 	accounts: { label: ['name'], fields: { name: { kind: 'text' } } },
 	job_lines: {
@@ -1331,14 +1332,13 @@ const relRows = [
 ];
 
 it.effect(
-	'listSelect/unref: a one- and a many-relation read their labels in the one statement; the row keeps ids and $refs',
+	'listRequest/unref: a one- and a many-relation read their labels in the one statement; the row keeps ids and $refs',
 	() =>
 		Effect.sync(() => {
-			assert.deepEqual(listSelect(relCatalog, 'jobs', ['title', 'account', 'lines']), {
-				title: true,
-				done: true,
-				account: { select: { name: true } },
-				lines: { select: { name: true }, limit: MANY_SHOWN + 1 }
+			assert.deepEqual(listRequest(relCatalog, 'jobs', {}, ['title', 'account', 'lines']), {
+				jobs: { fields: ['title', 'done', 'account'] },
+				'jobs.account': { fields: ['name'] },
+				'jobs.lines': { fields: ['name'], limit: MANY_SHOWN + 1 }
 			});
 			const r = required(unref(relCatalog, 'jobs', ['account', 'lines'], relRows)[0]);
 			const refs = jsonRecord(r.$refs),
@@ -1400,8 +1400,8 @@ it.live('Table: relation cells read labels together and open the related record'
 			)
 		);
 		assert.equal(s.reads.filter((r) => r.c !== 'jobs').length, 0, 'no read per related record');
-		assert.deepEqual(required(s.last().select).lines, {
-			select: { name: true },
+		assert.deepEqual(required(s.last().layers).lines, {
+			fields: ['name'],
 			limit: MANY_SHOWN + 1
 		});
 		const row = element<HTMLElement>(document, '[data-table-wide] tbody tr:not([aria-hidden])');
@@ -1858,7 +1858,7 @@ async function changingBoard(
 		};
 	};
 	const s = await scripted({
-		read: (_collection, options) => {
+		read: (_model, options) => {
 			readCalls.push(options);
 			return page(options);
 		},
@@ -1869,7 +1869,7 @@ async function changingBoard(
 				readers.delete(emit);
 			};
 		},
-		aggregate: (_collection, options) => {
+		aggregate: (_model, options) => {
 			aggregates.push(options);
 			const answer: CountAnswer = {
 				rows: ['scheduled', 'done'].map((status) => ({
@@ -1916,7 +1916,7 @@ function mountCountingBoard(s: Awaited<ReturnType<typeof changingBoard>>) {
 		target,
 		app,
 		count: (status: string) =>
-			target.querySelector(`[data-lane='"${status}"'] header > span:last-child`)?.textContent
+			target.querySelector(`[data-lane='"${status}"'] [data-lane-count]`)?.textContent
 	};
 }
 it.live(
@@ -2145,7 +2145,7 @@ async function changingTable(aggregate?: AggregateScript<TableCountAnswer>) {
 		next: null
 	});
 	const s = await scripted({
-		read: (_collection, options) => page(options),
+		read: (_model, options) => page(options),
 		changes: (read, emit) => {
 			if (read.m !== 'query') return () => {};
 			readers.add(emit);
@@ -2153,7 +2153,7 @@ async function changingTable(aggregate?: AggregateScript<TableCountAnswer>) {
 				readers.delete(emit);
 			};
 		},
-		aggregate: (_collection, options) => {
+		aggregate: (_model, options) => {
 			aggregates.push(options);
 			const answer = [{ count: rows.filter((row) => matchesScope(row, options.where)).length }];
 			return aggregate?.(options, answer) ?? answer;

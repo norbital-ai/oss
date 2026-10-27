@@ -25,6 +25,7 @@
 	import type { ShellApi } from '../api-types.ts';
 	import DetailSheet from '../DetailSheet.svelte';
 	import SystemPage from '../SystemPage.svelte';
+	import auditBanner from '../assets/banners/audit.jpg';
 	import { displayWireValue } from '../wire-value.ts';
 
 	let {
@@ -228,7 +229,7 @@
 		'bolt_embedding'
 	]);
 	const Change = Schema.Struct({
-		collection: Schema.String,
+		model: Schema.String,
 		op: Schema.String,
 		old: Schema.NullOr(Schema.Record(Schema.String, Schema.Json)),
 		new: Schema.NullOr(Schema.Record(Schema.String, Schema.Json))
@@ -245,7 +246,7 @@
 	type Given = typeof Given.Type;
 	/** Stored images stay typed so empty, null, missing and false values remain distinct in the shared diff. */
 	const changed = (change: Change, given: Given | undefined) => {
-		const declared = kinds.catalog?.[change.collection]?.fields;
+		const declared = kinds.catalog?.[change.model]?.fields;
 		const keep = (field: string) =>
 			!SYSTEM.has(field) &&
 			!declared?.[field]?.hidden &&
@@ -269,7 +270,7 @@
 		);
 		const verb = VERBS[change.op] ?? word(change.op).replace(/^./, (c) => c.toUpperCase());
 		return {
-			heading: t(`${verb} {what}`).replace('{what}', word(change.collection)),
+			heading: t(`${verb} {what}`).replace('{what}', word(change.model)),
 			before,
 			after,
 			kind: { kind: 'object' as const, fields }
@@ -447,6 +448,8 @@
 <SystemPage
 	name="settings-audit"
 	title={t('Audit trail')}
+	icon="lucide:scroll-text"
+	banner={auditBanner}
 	description={t(
 		'Workspace activity, decisions, and outcomes. Open an event to inspect its full payload.'
 	)}

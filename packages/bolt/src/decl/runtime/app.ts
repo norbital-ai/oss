@@ -2,7 +2,7 @@
 // An app or group literal is typed against its own folder's children, so, like `model`, it takes its name (the folder
 // path); the build checks the name against the folder.
 import type { Checked, Exact } from '../fields.ts';
-import type { AppName, CollectionName, EnvoyName, IntegrationName, PolicyName } from '../names.ts';
+import type { AppName, ModelName, EnvoyName, IntegrationName, PolicyName } from '../names.ts';
 import type { CurrencyCode, IanaZone, IconName, Msg, NonEmpty } from '../values.ts';
 import type { AiModelClass, ChildName, GroupName, PageName } from './names.ts';
 import type { ConvertTarget } from './facilities.ts';
@@ -51,7 +51,7 @@ type WorkspaceBase = {
 };
 /**
  * Self sign-up: a newcomer proves an address (`via`: a code by email, by SMS to a mobile number, or either) and becomes
- * an external member holding `policies`. `party` names the record that is them — the row of `collection` whose
+ * an external member holding `policies`. `party` names the record that is them — the row of `model` whose
  * `match[email | phone]` field holds the proven address — so a guest already on file (a customer who booked without an
  * account) is promoted to a registered member bound to their own rows (`{ actor: 'party' }`). An administrator can close
  * sign-up in Settings without a release.
@@ -59,12 +59,12 @@ type WorkspaceBase = {
 type Signup = {
 	via: NonEmpty<'email' | 'phone'>;
 	policies: NonEmpty<string>;
-	party?: { collection: string; match: { email?: string; phone?: string } };
+	party?: { model: string; match: { email?: string; phone?: string } };
 };
 type SignupFor = {
 	via: NonEmpty<'email' | 'phone'>;
 	policies: NonEmpty<PolicyName>;
-	party?: { collection: CollectionName; match: { email?: string; phone?: string } };
+	party?: { model: ModelName; match: { email?: string; phone?: string } };
 };
 type WorkspaceFor<S> = {
 	tz: IanaZone;

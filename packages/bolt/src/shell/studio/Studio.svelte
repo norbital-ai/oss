@@ -20,6 +20,7 @@
 	import { attach, fork, observeOnce } from '@norbital-ai/ui/effect';
 	import { Cause, Effect, Queue, Schema, Stream } from 'effect';
 	import { watch } from 'runed';
+	import { MediaQuery } from 'svelte/reactivity';
 	import {
 		Button,
 		confirmAction,
@@ -32,7 +33,7 @@
 		type ConfirmOptions,
 		type WorkspaceOperation
 	} from '@norbital-ai/ui';
-	import { Inline, INSET_X_CLASS, Scroll, Stack } from '@norbital-ai/ui/layout';
+	import { Inline, AppHeader, INSET_X_CLASS, Scroll, Stack } from '@norbital-ai/ui/layout';
 	import type { Snippet } from 'svelte';
 	import DiagnosisPane from './DiagnosisPane.svelte';
 	import AuditRules from './AuditRules.svelte';
@@ -42,6 +43,7 @@
 	import SourceTree from './SourceTree.svelte';
 	import WorkbenchToolbar from './WorkbenchToolbar.svelte';
 	import PreviewFrame from '../preview/PreviewFrame.svelte';
+	import studioBanner from '../assets/banners/studio.jpg';
 	import {
 		foldLog,
 		foldPhase,
@@ -80,6 +82,7 @@
 		onTab?: (tab: StudioTab) => void;
 		admin?: boolean;
 	} = $props();
+	const narrow = new MediaQuery('max-width: 47.999rem');
 
 	let view = $state<StudioView | null>(null);
 	const changeSets = $derived(view?.changeSets ?? []);
@@ -747,14 +750,27 @@
 			{@const p = view.previewOf}
 			<Stack gap="none" fill class="min-h-0">
 				{#if view.preview === null || p?.stale === true}
-					{@const waiting = building || p?.stale === true}
+					{@const waiting = building}
+					{@const failed =
+						!waiting &&
+						view?.builds?.some((build) => build.commit === view?.commit && build.status === 'failed')}
 					<Stack gap="sm" align="center" justify="center" fill class="text-muted-foreground">
 						<Icon
-							name={waiting ? 'lucide:loader-2' : 'lucide:scan-eye'}
+							name={waiting
+								? 'lucide:loader-2'
+								: failed
+									? 'lucide:triangle-alert'
+									: 'lucide:scan-eye'}
 							class="size-8 opacity-30 {waiting ? 'animate-spin' : ''}"
 						/>
-						<p class="text-xs" role={waiting ? 'status' : undefined}>
-							{building ? running : p?.stale ? t('Building the newest edits…') : t('No preview yet.')}
+						<p class="text-xs" role={waiting ? 'status' : failed ? 'alert' : undefined}>
+							{waiting
+								? running
+								: failed
+									? t('Preview build failed. Try again.')
+									: p?.stale
+										? t('Preview is out of date.')
+										: t('No preview yet.')}
 						</p>
 						{#if !waiting && view.change !== undefined}
 							<Button size="sm" disabled={locked} onclick={() => fork(buildPreview())}
@@ -764,55 +780,56 @@
 					</Stack>
 				{:else}
 					<div class="relative flex min-h-0 flex-1 flex-col">
-					<PreviewFrame
-						src={view.preview}
-						version={p?.artifact}
-						title={t('Workbench preview')}
-						label={mine === undefined ? t('Live') : `!${mine.id} ${mine.title}`}
-						status={building ? running : undefined}
-						{t}
-					>
-						{#snippet details()}
-							{#if p !== undefined}
-								<div class="space-y-2 text-xs leading-relaxed">
-									<p class="font-medium text-foreground">{t('Preview of this change')}</p>
-									<p>{t('It runs on its own copy of live data and closes after two idle hours.')}</p>
-								</div>
-							{/if}
-						{/snippet}
-						{#snippet menu(close: () => void)}
-							<Button
-								size="sm"
-								variant="ghost"
-								class="justify-start"
-								disabled={locked}
-								onclick={() => (close(), fork(buildPreview()))}
-							>
-								<Icon name="lucide:refresh-cw" class="size-3.5" />{t('Rebuild preview')}
-							</Button>
-						{/snippet}
-					</PreviewFrame>
-					{#if view.previewControl?.holder === 'norbius'}
-						<div
-							class="bg-background/70 absolute inset-0 z-10 flex items-center justify-center backdrop-blur-[1px]"
+						<PreviewFrame
+							src={view.preview}
+							version={p?.artifact}
+							title={t('Workbench preview')}
+							label={mine === undefined ? t('Live') : `!${mine.id} ${mine.title}`}
+							status={building ? running : undefined}
+							{t}
 						>
-							<div
-								class="border-border bg-card flex max-w-sm flex-col items-center gap-2 rounded-lg border p-4 text-center shadow-lg"
-							>
-								<Icon name="lucide:bot" class="size-5" />
-								<p class="text-sm font-medium">{t('Norbius is using this preview')}</p>
-								<p class="text-muted-foreground text-xs">
-									{t('Take control to use it yourself; Norbius is told you did.')}
-								</p>
+							{#snippet details()}
+								{#if p !== undefined}
+									<div class="space-y-2 text-xs leading-relaxed">
+										<p class="font-medium text-foreground">{t('Preview of this change')}</p>
+										<p>
+											{t('It runs on its own copy of live data and closes after two idle hours.')}
+										</p>
+									</div>
+								{/if}
+							{/snippet}
+							{#snippet menu(close: () => void)}
 								<Button
 									size="sm"
-									onclick={() =>
-										mine !== undefined ? fork(takeControl(mine.id)) : undefined}
-									>{t('Take control')}</Button
+									variant="ghost"
+									class="justify-start"
+									disabled={locked}
+									onclick={() => (close(), fork(buildPreview()))}
 								>
+									<Icon name="lucide:refresh-cw" class="size-3.5" />{t('Rebuild preview')}
+								</Button>
+							{/snippet}
+						</PreviewFrame>
+						{#if view.previewControl?.holder === 'norbius'}
+							<div
+								class="bg-background/70 absolute inset-0 z-10 flex items-center justify-center backdrop-blur-[1px]"
+							>
+								<div
+									class="border-border bg-card flex max-w-sm flex-col items-center gap-2 rounded-lg border p-4 text-center shadow-lg"
+								>
+									<Icon name="lucide:bot" class="size-5" />
+									<p class="text-sm font-medium">{t('Norbius is using this preview')}</p>
+									<p class="text-muted-foreground text-xs">
+										{t('Take control to use it yourself; Norbius is told you did.')}
+									</p>
+									<Button
+										size="sm"
+										onclick={() => (mine !== undefined ? fork(takeControl(mine.id)) : undefined)}
+										>{t('Take control')}</Button
+									>
+								</div>
 							</div>
-						</div>
-					{/if}
+						{/if}
 					</div>
 				{/if}
 			</Stack>
@@ -934,53 +951,50 @@
 {/snippet}
 
 <Stack gap="none" grow class="min-h-0 bg-background">
-	<Stack as="header" gap="none" shrink={false} class="px-4 pt-3 sm:px-6 sm:pt-6">
-		<div class="flex min-w-0 flex-wrap items-start justify-between gap-3">
-			<Stack gap="xs" class="min-w-0">
-				<h1 class="text-heading">{t('Workspace Studio')}</h1>
-				<p class="hidden max-w-2xl text-meta sm:block">
-					{t('Edit in a change, preview the exact result on a copy of live’s data, then merge.')}
-				</p>
-			</Stack>
-			{#if banner !== null}
-				<Inline
-					role="status"
-					gap="sm"
-					class="min-w-0 max-w-full shrink-0 rounded-md px-3 py-2 text-xs sm:max-w-[32rem] {outcome ===
-					'failed'
-						? 'bg-destructive/10 text-destructive'
-						: outcome === 'done'
-							? 'bg-success/10 text-foreground'
-							: 'bg-info/10 text-foreground'}"
-				>
-					{#if outcome === 'running' || outcome === 'asking'}<Spinner class="size-3.5 shrink-0" />
-					{:else}<Icon
-							name={outcome === 'failed' ? 'lucide:circle-alert' : 'lucide:circle-check'}
-							class="size-3.5 shrink-0"
-						/>{/if}
-					<span class="min-w-0 truncate" title={banner}>{banner}</span>
-					{#if outcome !== 'running' && outcome !== 'asking'}
-						<Inline gap="xs" class="shrink-0">
-							{#if outcome === 'done' && cutover?.undo !== undefined}
-								{@const undo = cutover.undo}
-								<Button
-									size="sm"
-									variant="outline"
-									onclick={() => {
-										cutover = null;
-										fork(rollback(undo));
-									}}><Icon name="lucide:undo-2" class="size-3.5" />{t('Undo')}</Button
-								>
-							{/if}
-							<Button size="sm" variant="ghost" onclick={() => (cutover = null)}
-								>{t('Dismiss')}</Button
-							>
-						</Inline>
+	<AppHeader
+		src={studioBanner}
+		icon="lucide:code-xml"
+		title={t('Workspace Studio')}
+		description={t(
+			'Edit in a change, preview the exact result on a copy of live’s data, then merge.'
+		)}
+		compact={narrow.current}
+	/>
+	{#if banner !== null}
+		<Inline
+			role="status"
+			gap="sm"
+			class="mx-4 mt-3 min-w-0 max-w-full shrink-0 rounded-md px-3 py-2 text-xs sm:mx-6 sm:max-w-[32rem] {outcome ===
+			'failed'
+				? 'bg-destructive/10 text-destructive'
+				: outcome === 'done'
+					? 'bg-success/10 text-foreground'
+					: 'bg-info/10 text-foreground'}"
+		>
+			{#if outcome === 'running' || outcome === 'asking'}<Spinner class="size-3.5 shrink-0" />
+			{:else}<Icon
+					name={outcome === 'failed' ? 'lucide:circle-alert' : 'lucide:circle-check'}
+					class="size-3.5 shrink-0"
+				/>{/if}
+			<span class="min-w-0 truncate" title={banner}>{banner}</span>
+			{#if outcome !== 'running' && outcome !== 'asking'}
+				<Inline gap="xs" class="shrink-0">
+					{#if outcome === 'done' && cutover?.undo !== undefined}
+						{@const undo = cutover.undo}
+						<Button
+							size="sm"
+							variant="outline"
+							onclick={() => {
+								cutover = null;
+								fork(rollback(undo));
+							}}><Icon name="lucide:undo-2" class="size-3.5" />{t('Undo')}</Button
+						>
 					{/if}
+					<Button size="sm" variant="ghost" onclick={() => (cutover = null)}>{t('Dismiss')}</Button>
 				</Inline>
 			{/if}
-		</div>
-	</Stack>
+		</Inline>
+	{/if}
 	{#if view !== null}
 		{#if error !== null && root !== 'workbench' && outcome !== 'failed'}
 			<p
@@ -1023,16 +1037,16 @@
 	{/if}
 	<Tabs
 		value={root}
-			onValueChange={(v) => go(v === 'changes' || v === 'live' || v === 'rules' ? v : 'workbench')}
-			trailing={browse}
-			class="mt-4 min-h-0 flex-1 gap-3 [&>div:first-child]:px-4 sm:[&>div:first-child]:px-6"
-			tabs={[
-				{ name: 'workbench', title: t('Workbench'), body: workbenchTab, keepAlive: true as const },
-				{ name: 'changes', title: t('Changes'), body: changesTab },
-				{ name: 'live', title: t('Live'), body: liveTab },
-				...(admin ? [{ name: 'rules', title: t('Audit rules'), body: rulesTab }] : [])
-			]}
-		/>
+		onValueChange={(v) => go(v === 'changes' || v === 'live' || v === 'rules' ? v : 'workbench')}
+		trailing={browse}
+		class="mt-4 min-h-0 flex-1 gap-3 [&>div:first-child]:px-4 sm:[&>div:first-child]:px-6"
+		tabs={[
+			{ name: 'workbench', title: t('Workbench'), body: workbenchTab, keepAlive: true as const },
+			{ name: 'changes', title: t('Changes'), body: changesTab },
+			{ name: 'live', title: t('Live'), body: liveTab },
+			...(admin ? [{ name: 'rules', title: t('Audit rules'), body: rulesTab }] : [])
+		]}
+	/>
 </Stack>
 
 {#if view !== null}

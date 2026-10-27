@@ -1,29 +1,12 @@
 import { formatValue as show } from '../kinds/kind.js';
-import type { CollectionExposure } from '../kinds/context.js';
+import type { ModelExposure } from '../kinds/context.js';
 import type { Json } from '@norbital-ai/std/wire';
-import type { Row, Values } from '../collection/types.js';
+import type { Row, Values } from '../model/types.js';
 import { isRow } from '../read/results.js';
-/** `select` as a read's select object (final-ui 29b: the cell fields and the axes, never the whole row). */
-export const selectOf = (fields: readonly string[]): Json =>
-	Object.fromEntries([...new Set(fields)].map((f) => [f, true]));
+import { READ_LIMIT, type Layer, type Request } from '../read/request.js';
 const HEAVY = new Set(['json', 'custom', 'file']);
-/** A list read leaves out json, custom and file fields (X-33): naming one reads the exposed fields, the relations and every named field. */
-export function heavySelect(
-	exposure: CollectionExposure | undefined,
-	named: readonly string[]
-): Json | undefined {
-	const fields = exposure?.fields ?? {};
-	const heavy = (f: string) => HEAVY.has(fields[f]?.kind ?? '');
-	return named.some(heavy)
-		? selectOf([
-				...Object.keys(fields).filter((f) => !f.includes('.') && !heavy(f)),
-				...Object.keys(exposure?.relations ?? {}),
-				...named
-			])
-		: undefined;
-}
-type Catalog = { readonly [collection: string]: CollectionExposure } | undefined;
-/** A many-relation's child: the collection whose one-relation names `rel` as its inverse onto `of`. */
+type Catalog = { readonly [model: string]: ModelExposure } | undefined;
+/** A many-relation's child: the model whose one-relation names `rel` as its inverse onto `of`. */
 function manyTarget(cat: Catalog, of: string, rel: string): string | undefined {
 	if (!(cat?.[of]?.many ?? []).includes(rel)) return undefined;
 	return Object.keys(cat ?? {}).find((c) =>
@@ -50,49 +33,54 @@ export function refLabel(cat: Catalog, of: string, rel: string): readonly string
 /** A many-relation cell's labels read with the row: the first `MANY_SHOWN`, one more to know there are more. */
 export const MANY_SHOWN = 20;
 /**
- * A list read's select: `heavySelect`, and each relation in `refs` has its target's label read in the same statement
- * (no read per row, rule 12): a one-relation as a nested row, a named many-relation as its first `MANY_SHOWN + 1` rows,
- * or every row when `all` (an export).
+ * A list read of `of` as one read request: the root's `root` options and its fields (the light ones and the FKs,
+ * plus any json, custom or file field `named`, X-33), and each relation
+ * in `refs` its root declares as a read layer read with its target's label in the same statement (no read per row,
+ * rule 12): a one-relation as a nested row, a named many-relation as its first `MANY_SHOWN + 1` rows, or every row when
+ * `all` (an export).
  */
-export function listSelect(
+export function listRequest(
 	cat: Catalog,
 	of: string,
+	root: Layer,
 	named: readonly string[],
 	refs = named,
 	all = false
-): Json | undefined {
+): Request {
+	const declared = cat?.[of]?.layers ?? [];
 	const many = (f: string) => manyTarget(cat, of, f) !== undefined;
-	const arms = Object.fromEntries([
+	const layers: { [path: string]: Layer } = Object.fromEntries([
 		...refs.flatMap((fk) => {
 			const l = refLabel(cat, of, fk);
-			return l.length > 0 && !many(fk) ? [[fk, { select: selectOf(l) }]] : [];
+			return l.length > 0 && !many(fk) && declared.includes(fk)
+				? [[`${of}.${fk}`, { fields: l }]]
+				: [];
 		}),
-		...named.filter(many).map((m) => [
-			m,
-			{
-				select: selectOf(refLabel(cat, of, m)),
-				...(all ? { all: true } : { limit: MANY_SHOWN + 1 })
-			}
-		])
+		...named
+			.filter((f) => many(f) && declared.includes(f))
+			.map((m) => [
+				`${of}.${m}`,
+				{ fields: refLabel(cat, of, m), limit: all ? READ_LIMIT : MANY_SHOWN + 1 }
+			])
 	]);
 	const own = named.filter((f) => !many(f));
-	if (Object.keys(arms).length === 0) return heavySelect(cat?.[of], own);
 	const x = cat?.[of];
-	if (x === undefined) return undefined;
-	return {
-		...Object.fromEntries(
-			[
-				...Object.keys(x.fields).filter(
-					(field) => !field.includes('.') && !HEAVY.has(x.fields[field]?.kind ?? '')
-				),
-				...Object.keys(x.relations ?? {}),
-				...own
-			].map((field) => [field, true])
-		),
-		...arms
-	};
+	// a list names its fields: the light ones and the FKs, plus any heavy one a column names (X-33)
+	const fields =
+		x === undefined
+			? undefined
+			: [
+					...new Set([
+						...Object.keys(x.fields).filter(
+							(field) => !field.includes('.') && !HEAVY.has(x.fields[field]?.kind ?? '')
+						),
+						...Object.keys(x.relations ?? {}),
+						...own
+					])
+				];
+	return { [of]: { ...root, ...(fields === undefined ? {} : { fields }) }, ...layers };
 }
-/** A relation cell's link: the target collection and its label text; a many-relation also lists each record (`more`: past `MANY_SHOWN`). */
+/** A relation cell's link: the target model and its label text; a many-relation also lists each record (`more`: past `MANY_SHOWN`). */
 export type Ref = {
 	of: string;
 	text: string;
@@ -157,6 +145,8 @@ export function unref(
 				};
 				continue;
 			}
+			// a relation its root reads as no layer keeps its FK id, unlabelled
+			if (typeof t === 'string') continue;
 			if (!isRow(t) || typeof t['id'] !== 'string') {
 				out[rel] = null;
 				continue;

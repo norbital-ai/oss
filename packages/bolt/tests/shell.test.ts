@@ -10,7 +10,7 @@ import { Files, Images } from '../src/engine/ports.ts';
 import { imagesPort } from '../src/node/images.ts';
 import { manifest as baseManifest } from './engine-fixture.ts';
 import { canOpenKiosk } from '../src/decl/runtime/kiosk.ts';
-import type { Authority, EngineActor } from '../src/engine/contracts.ts';
+import type { Authority, ModelAuthority, EngineActor } from '../src/engine/contracts.ts';
 import { exposure } from '../src/engine/access/exposure.ts';
 import {
 	canOpen,
@@ -134,7 +134,7 @@ const member = (
 	key: 'k',
 	admin,
 	policies: [],
-	collections: {},
+	models: {},
 	automations: [],
 	limits: [],
 	teamTree: [],
@@ -210,6 +210,18 @@ describe('app visibility (§3.9, capabilities.apps)', () => {
 });
 
 describe('exposure (the boot catalog ui reads)', () => {
+	const TRUE = { t: 'const', value: true } as const;
+	/** One policy `p`'s access points on a model: none unless named (decision 3: reads and write columns per path). */
+	const access = (over: Partial<ModelAuthority> = {}): ModelAuthority => ({
+		read: {},
+		history: [],
+		create: [],
+		update: [],
+		delete: [],
+		moves: {},
+		masks: {},
+		...over
+	});
 	const em = Result.getOrThrow(
 		decodeManifest({
 			...baseManifest,
@@ -223,50 +235,41 @@ describe('exposure (the boot catalog ui reads)', () => {
 				sites: { description: 'Work sites', label: 'name', fields: { name: { kind: 'text' } } }
 			},
 			relationships: { 'jobs.site': { to: 'sites', optional: true } },
-			collections: {
+			exposures: {
 				jobs: {
-					read: { fields: ['title', 'pay'], relations: ['site'] },
-					update: { input: { columns: ['title'] } }
+					read: { jobs: { fields: ['title', 'pay', 'site'] }, 'jobs.site': { fields: 'all' } },
+					update: { columns: { jobs: ['title'] } }
 				}
 			},
 			integrations: {}
 		} satisfies EngineManifest)
 	);
-	it('exposes candidate inputs for source approval routes without granting ordinary writes', () => {
+	it("exposes the columns a write arm admits, with or without its policy's check (the verdict comes at write time)", () => {
 		const source: EngineManifest = {
 			...em,
-			collections: {
+			exposures: {
 				jobs: {
-					read: { fields: ['title', 'pay'] },
-					create: { input: { columns: ['title', 'pay'] } },
-					update: { input: { columns: ['title', 'pay'] } }
+					read: { jobs: { fields: ['title', 'pay'] } },
+					create: { columns: { jobs: ['title', 'pay'] } },
+					update: { columns: { jobs: ['title', 'pay'] } }
 				}
 			}
 		};
 		const auth: Authority = {
 			...member([]),
-			collections: {
-				jobs: {
-					read: [{ policy: 'p', where: { t: 'const', value: true }, fields: 'all' }],
-					history: [],
-					create: [
-						{ policy: 'p', where: { t: 'const', value: true }, fields: ['title'], approval: true }
-					],
-					update: [
-						{ policy: 'p', where: { t: 'const', value: true }, fields: ['title'], approval: true }
-					],
-					delete: [],
-					queries: [],
-					moves: {},
-					masks: {}
-				}
+			models: {
+				jobs: access({
+					read: { jobs: [{ policy: 'p', where: TRUE, fields: 'all' }] },
+					create: [{ policy: 'p', columns: { jobs: ['title'] }, check: true }],
+					update: [{ policy: 'p', columns: { jobs: ['title'] }, check: false }]
+				})
 			}
 		};
 		expect(exposure(source, auth)['jobs']).toMatchObject({
-			create: { columns: ['title'], proposalOnly: true },
+			create: { columns: ['title'] },
 			update: { columns: ['title'] }
 		});
-		expect(auth.collections['jobs']?.update.filter((arm) => arm.approval !== true)).toEqual([]);
+		expect(exposure(source, auth)['jobs']?.create).not.toHaveProperty('proposalOnly');
 	});
 	it('exposes native integration instance forms by their grants without exposing the host fence', () => {
 		const admin = exposure(em, { ...member([]), admin: true })['sys_integration'];
@@ -279,19 +282,11 @@ describe('exposure (the boot catalog ui reads)', () => {
 		expect(exposure(em, member([]))['sys_integration']).toBeUndefined();
 		const auth: Authority = {
 			...member([]),
-			collections: {
-				sys_integration: {
-					read: [
-						{ policy: 'p', where: { t: 'const', value: true }, fields: ['name', 'configuration'] }
-					],
-					history: [],
-					create: [],
-					update: [{ policy: 'p', where: { t: 'const', value: true }, fields: ['configuration'] }],
-					delete: [],
-					queries: [],
-					moves: {},
-					masks: {}
-				}
+			models: {
+				sys_integration: access({
+					read: { sys_integration: [{ policy: 'p', where: TRUE, fields: ['name', 'configuration'] }] },
+					update: [{ policy: 'p', columns: { sys_integration: ['configuration'] }, check: false }]
+				})
 			}
 		};
 		const restricted = exposure(em, auth)['sys_integration'];
@@ -300,7 +295,7 @@ describe('exposure (the boot catalog ui reads)', () => {
 		expect(restricted?.relations).toBeUndefined();
 		expect(restricted?.fields).not.toHaveProperty('epoch');
 	});
-	it('an upsert-only nested input exposes inverse identity without inventing create or update operations', () => {
+	it('a declared write layer exposes its child identity (model, parent FK, owned) beside the read layer', () => {
 		const source: EngineManifest = {
 			...em,
 			models: {
@@ -308,28 +303,26 @@ describe('exposure (the boot catalog ui reads)', () => {
 				lines: { label: 'amount', description: 'Order lines.', fields: { amount: { kind: 'int' } } }
 			},
 			relationships: { 'lines.job': { to: 'jobs', inverse: 'lines', owned: true } },
-			collections: {
+			exposures: {
 				jobs: {
-					read: { fields: 'all', relations: 'all' },
-					update: {
-						input: { columns: ['title'], with: { lines: { upsert: { columns: ['amount'] } } } }
-					}
+					read: { jobs: { fields: 'all' }, 'jobs.lines': { fields: 'all' } },
+					update: { columns: { jobs: ['title'], 'jobs.lines': ['amount'] } }
 				},
 				lines: {
-					read: { fields: 'all' },
-					create: { input: { columns: ['amount', 'job'] } },
-					update: { input: { columns: ['amount'] } }
+					read: { lines: { fields: 'all' } },
+					create: { columns: { lines: ['amount', 'job'] } },
+					update: { columns: { lines: ['amount'] } }
 				}
 			}
 		};
 		const catalog = exposure(source, { ...member([]), admin: true });
 		expect(catalog['jobs']?.update?.with?.['lines']).toEqual({
-			collection: 'lines',
+			model: 'lines',
 			parent: 'job',
 			owned: true
 		});
 		expect(catalog['jobs']?.children?.['lines']).toEqual({
-			collection: 'lines',
+			model: 'lines',
 			parent: 'job',
 			owned: true
 		});
@@ -340,7 +333,9 @@ describe('exposure (the boot catalog ui reads)', () => {
 			relationships: {
 				'jobs.site': { to: 'sites', optional: true, where: { title: { eq: 'Yard' } } }
 			},
-			collections: { jobs: { read: { fields: ['title'], relations: ['site'] } } }
+			exposures: {
+				jobs: { read: { jobs: { fields: ['title', 'site'] }, 'jobs.site': { fields: 'all' } } }
+			}
 		};
 		expect(exposure(narrowed, { ...member([]), admin: true })['jobs']?.relations).toEqual({
 			site: { targets: ['sites'], optional: true, where: { title: { eq: 'Yard' } } }
@@ -350,10 +345,10 @@ describe('exposure (the boot catalog ui reads)', () => {
 		const source: EngineManifest = {
 			...em,
 			relationships: { 'jobs.site': { to: 'sites', optional: true, owned: true } },
-			collections: {
+			exposures: {
 				jobs: {
-					read: { fields: ['title', 'pay'], relations: ['site'] },
-					update: { input: { columns: ['title', 'site'] } },
+					read: { jobs: { fields: ['title', 'pay', 'site'] }, 'jobs.site': { fields: 'all' } },
+					update: { columns: { jobs: ['title', 'site'] } },
 					syncs: { jobs: { with: 'operations', read: true } }
 				}
 			},
@@ -376,17 +371,8 @@ describe('exposure (the boot catalog ui reads)', () => {
 		expect(exposure(source, member([]))['jobs']).toBeUndefined();
 		const auth: Authority = {
 			...member([]),
-			collections: {
-				jobs: {
-					read: [{ policy: 'p', where: { t: 'const', value: true }, fields: 'all' }],
-					history: [],
-					create: [],
-					update: [],
-					delete: [],
-					queries: [],
-					moves: {},
-					masks: {}
-				}
+			models: {
+				jobs: access({ read: { jobs: [{ policy: 'p', where: TRUE, fields: 'all' }] } })
 			}
 		};
 		expect(exposure(source, auth)['jobs']?.syncs).toBeUndefined();
@@ -397,17 +383,12 @@ describe('exposure (the boot catalog ui reads)', () => {
 	it('sends relations, guarded write inputs and fields masked on some rows; never an unexposed field', () => {
 		const auth: Authority = {
 			...member([]),
-			collections: {
-				jobs: {
-					read: [{ policy: 'p', where: { t: 'const', value: true }, fields: 'all' }],
-					history: [],
-					create: [],
-					update: [{ policy: 'p', where: { t: 'const', value: true }, fields: ['title'] }],
-					delete: [],
-					queries: [],
-					moves: {},
-					masks: { pay: { t: 'const', value: false } }
-				}
+			models: {
+				jobs: access({
+					read: { jobs: [{ policy: 'p', where: TRUE, fields: 'all' }] },
+					update: [{ policy: 'p', columns: { jobs: ['title'] }, check: false }],
+					masks: { jobs: { pay: { t: 'const', value: false } } }
+				})
 			}
 		};
 		expect(exposure(em, auth)).toEqual({
@@ -438,7 +419,7 @@ describe('exposure (the boot catalog ui reads)', () => {
 						}
 					}
 				},
-				collections: { jobs: { ...em.collections['jobs'], read: { fields: 'all' } } }
+				exposures: { jobs: { ...em.exposures['jobs'], read: { jobs: { fields: 'all' } } } }
 			})
 		);
 		expect(exposure(withComputed, { ...member([]), admin: true })['jobs']).toMatchObject({
@@ -476,7 +457,7 @@ describe('exposure (the boot catalog ui reads)', () => {
 					}
 				},
 				relationships: { ...em.relationships, 'lines.order': { to: 'orders', inverse: 'lines' } },
-				collections: { orders: { read: { fields: 'all' } } }
+				exposures: { orders: { read: { orders: { fields: 'all' } } } }
 			})
 		);
 		expect(exposure(orders, { ...member([]), admin: true })['orders']!.fields).toEqual({
@@ -518,7 +499,10 @@ describe('exposure (the boot catalog ui reads)', () => {
 					'lines.order': { to: 'orders', inverse: 'lines' },
 					'lines.bill': { to: 'bills', inverse: 'bill_lines' }
 				},
-				collections: { orders: { read: { fields: 'all' } }, bills: { read: { fields: 'all' } } }
+				exposures: {
+					orders: { read: { orders: { fields: 'all' } } },
+					bills: { read: { bills: { fields: 'all' } } }
+				}
 			})
 		);
 		const x = exposure(orders, { ...member([]), admin: true });
@@ -539,24 +523,15 @@ describe('exposure (the boot catalog ui reads)', () => {
 			decodeManifest({
 				...baseManifest,
 				...em,
-				collections: {
-					jobs: { ...em.collections['jobs'], create: { input: { columns: ['title', 'notes'] } } }
+				exposures: {
+					jobs: { ...em.exposures['jobs'], create: { columns: { jobs: ['title', 'notes'] } } }
 				}
 			})
 		);
 		const auth: Authority = {
 			...member([]),
-			collections: {
-				jobs: {
-					read: [],
-					history: [],
-					create: [{ policy: 'p', where: { t: 'const', value: true }, fields: ['title'] }],
-					update: [],
-					delete: [],
-					queries: [],
-					moves: {},
-					masks: {}
-				}
+			models: {
+				jobs: access({ create: [{ policy: 'p', columns: { jobs: ['title'] }, check: false }] })
 			}
 		};
 		expect(exposure(withCreate, auth)['jobs']).toMatchObject({
@@ -570,10 +545,10 @@ describe('exposure (the boot catalog ui reads)', () => {
 			decodeManifest({
 				...baseManifest,
 				...withCreate,
-				collections: {
+				exposures: {
 					jobs: {
-						...withCreate.collections['jobs']!,
-						create: { input: { columns: ['title', 'notes'], filled: ['title', 'notes'] } }
+						...withCreate.exposures['jobs']!,
+						create: { columns: { jobs: ['title', 'notes'] }, filled: { jobs: ['title', 'notes'] } }
 					}
 				}
 			})
@@ -587,22 +562,13 @@ describe('exposure (the boot catalog ui reads)', () => {
 			filled: ['title', 'notes']
 		});
 	});
-	it('exposes the system collections the caller reads, so a picker at sys_user labels its rows', () => {
+	it('exposes the system models the caller reads, so a picker at sys_user labels its rows', () => {
 		const auth: Authority = {
 			...member([]),
-			collections: {
-				sys_user: {
-					read: [
-						{ policy: '$directory', where: { t: 'const', value: true }, fields: ['id', 'name'] }
-					],
-					history: [],
-					create: [],
-					update: [],
-					delete: [],
-					queries: [],
-					moves: {},
-					masks: {}
-				}
+			models: {
+				sys_user: access({
+					read: { sys_user: [{ policy: '$directory', where: TRUE, fields: ['id', 'name'] }] }
+				})
 			}
 		};
 		expect(exposure(em, auth)['sys_user']).toEqual({
@@ -628,6 +594,30 @@ describe('nav tree', () => {
 		});
 		expect(hr).toMatchObject({ kind: 'group', href: '/app/hr/people/list' });
 	});
+
+	it('an app folder and its page of the same name share one canonical path', () => {
+		const nested: EngineManifest = {
+			...m,
+			apps: {
+				...m.apps,
+				'hr/entities': {
+					title: 'Entities',
+					description: 'd',
+					icon: 'i',
+					pages: { entities: { title: 'Entities' } }
+				}
+			}
+		};
+		const [, hr] = nav(nested, member(['sales', 'hr']));
+		const entities =
+			hr?.kind === 'group' ? hr.children.find((child) => child.name === 'hr/entities') : undefined;
+		expect(entities?.href).toBe('/app/hr/entities');
+		expect(route(nested, new URL('/app/hr/entities', 'https://w.example'))).toEqual({
+			kind: 'page',
+			app: 'hr/entities',
+			page: 'entities'
+		});
+	});
 });
 
 describe('preview environments drop the meta tools', () => {
@@ -641,9 +631,9 @@ describe('preview environments drop the meta tools', () => {
 			studio: false
 		});
 	});
-	it('Studio, People and Connections open the apps launcher; apps, approvals and other Settings stay', () => {
+	it('Studio, People and Integrations open the apps launcher; apps, approvals and other Settings stay', () => {
 		expect(
-			['/studio', '/studio/mrs', '/settings', '/settings/people', '/connections'].map(at)
+			['/studio', '/studio/mrs', '/settings', '/settings/people', '/settings/integrations'].map(at)
 		).toEqual(Array.from({ length: 5 }, () => ({ kind: 'home' })));
 		expect(at('/app/sales/quotes')).toEqual({ kind: 'page', app: 'sales', page: 'quotes' });
 		expect([at('/inbox'), at('/settings/automations'), at('/settings/secrets')]).toEqual([
@@ -687,11 +677,11 @@ describe('routes and hrefs', () => {
 	it('resolves the longest app prefix, the default page and a record', () => {
 		expect(at('/app/hr/kiosk/clock')).toEqual({ kind: 'page', app: 'hr/kiosk', page: 'clock' });
 		expect(at('/app/sales')).toEqual({ kind: 'page', app: 'sales', page: 'deals' });
-		expect(at(href('sales', 'quotes', { collection: 'quotes', id: 'q/1' }))).toEqual({
+		expect(at(href('sales', 'quotes', { model: 'quotes', id: 'q/1' }))).toEqual({
 			kind: 'page',
 			app: 'sales',
 			page: 'quotes',
-			record: { collection: 'quotes', id: 'q/1' }
+			record: { model: 'quotes', id: 'q/1' }
 		});
 		expect(at('/app/sales/nope')).toEqual({ kind: 'notFound' });
 		expect(at('/app/hr')).toEqual({ kind: 'notFound' });
@@ -797,41 +787,41 @@ describe('visitor fetch (§5.10, GAPS r5 11)', () => {
 				catch: (cause) => new Error(String(cause))
 			})
 	);
-	it('a visitor subscribes model pages and records of granted queries only; members subscribe anything', () => {
+	it('a visitor subscribes pages, records and read requests of the roots it reads only; members subscribe anything', () => {
 		const admits = BoltRoutes['POST /__bolt/live'].admits;
 		if (admits === undefined) throw new Error('The live route has no admission rule.');
 		const visitor: Authority = {
 			...member([]),
 			actor: { kind: 'visitor', app: 'lobby', visitor: 'v' },
-			collections: {
+			models: {
 				openings: {
-					read: [{ policy: 'visitor', where: { t: 'const', value: true }, fields: 'all' }],
+					read: { openings: [{ policy: 'visitor', where: { t: 'const', value: true }, fields: 'all' }] },
 					history: [],
 					create: [],
 					update: [],
 					delete: [],
-					queries: [],
 					moves: {},
 					masks: {}
 				}
 			}
 		};
-		expect(admits(visitor, { m: 'query', a: ['openings', {}] })).toBe(true);
+		// a read request crosses as `query(request)`: every root must be one the visitor reads
+		expect(admits(visitor, { m: 'query', a: [{ openings: {} }] })).toBe(true);
 		expect(
-			BoltRoutes['POST /__bolt/live'].admits(visitor, { m: 'query', a: ['openings', { id: 'id' }] })
+			admits(visitor, { m: 'query', a: [{ openings: { where: { id: { eq: 'id' } } } }] })
 		).toBe(true);
-		expect(BoltRoutes['POST /__bolt/live'].admits(visitor, { m: 'query', a: ['orders', {}] })).toBe(
-			false
-		);
+		expect(admits(visitor, { m: 'query', a: [{ orders: {} }] })).toBe(false);
+		// the single-model form is gone: a model name and its arguments are no request
+		expect(admits(visitor, { m: 'query', a: ['openings', {}] })).toBe(false);
 		expect(
 			BoltRoutes['POST /__bolt/live'].admits(visitor, { m: 'aggregate', a: ['openings', {}] })
 		).toBe(false);
 		expect(
-			BoltRoutes['POST /__bolt/live'].admits(visitor, { m: 'query', a: ['openings.q', {}] })
+			BoltRoutes['POST /__bolt/live'].admits(visitor, { m: 'query', a: [{ openings: {}, orders: {} }] })
 		).toBe(false);
 		expect(BoltRoutes['POST /__bolt/live'].admits(visitor, undefined)).toBe(false);
 		expect(
-			BoltRoutes['POST /__bolt/live'].admits(member([]), { m: 'query', a: ['openings.q', {}] })
+			BoltRoutes['POST /__bolt/live'].admits(member([]), { m: 'query', a: [{ orders: {} }] })
 		).toBe(true);
 	});
 });
@@ -1239,12 +1229,14 @@ describe('Studio port boundary', () => {
 });
 
 describe('read_attachment over the files port', () => {
-	it.live('answers text for text files and bytes for images; refuses a binary read as text', () =>
+	it.live('reads images and PDFs by MIME even with a wrong mode; refuses unsupported bytes', () =>
 		Effect.gen(function* () {
 			const stored: Record<string, { key: string; mime: string }> = {
 				f1: { key: 'k1', mime: 'text/csv' },
 				f2: { key: 'k2', mime: 'image/png' },
-				f3: { key: 'k3', mime: 'application/pdf' }
+				f3: { key: 'k3', mime: 'application/pdf' },
+				f4: { key: 'k4', mime: 'application/octet-stream' },
+				f5: { key: 'k5', mime: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }
 			};
 			const db = TenantDb.typed({
 				read: (queries) =>
@@ -1262,7 +1254,14 @@ describe('read_attachment over the files port', () => {
 				transaction: () => Effect.die('unused transaction')
 			});
 			const files = Files.of({
-				get: (key) => Effect.succeed(new TextEncoder().encode(`bytes of ${key}`)),
+				get: (key) =>
+					Effect.succeed(
+						key === 'k5'
+							? new Uint8Array(
+									readFileSync(new URL('./fixtures/files/items.xlsx', import.meta.url))
+								)
+							: new TextEncoder().encode(`bytes of ${key}`)
+					),
 				put: () => Effect.die('unused put'),
 				url: () => Effect.die('unused url'),
 				remove: () => Effect.die('unused remove'),
@@ -1274,9 +1273,26 @@ describe('read_attachment over the files port', () => {
 				mime: 'text/csv',
 				text: 'bytes of k1'
 			});
-			expect(yield* a.read({ id: 'f2' }, 'image')).toMatchObject({ mime: 'image/png' });
-			expect(yield* a.read({ id: 'f3' }, 'document')).toMatchObject({ mime: 'application/pdf' });
-			const binary = yield* Effect.flip(a.read({ id: 'f3' }, 'text'));
+			for (const as of ['text', 'image', 'document', 'sheet'] as const) {
+				expect(yield* a.read({ id: 'f2' }, as)).toEqual({
+					mime: 'image/png',
+					bytes: new TextEncoder().encode('bytes of k2')
+				});
+				expect(yield* a.read({ id: 'f3' }, as)).toEqual({
+					mime: 'application/pdf',
+					bytes: new TextEncoder().encode('bytes of k3')
+				});
+			}
+			expect(yield* a.read({ id: 'f5', name: 'items.xlsx' }, 'text')).toMatchObject({
+				sheets: ['Stock'],
+				sheet: 'Stock',
+				cells: [
+					['name', 'qty', 'ok'],
+					['Bolt, M8', 4, true],
+					['Nut', 2.5, false]
+				]
+			});
+			const binary = yield* Effect.flip(a.read({ id: 'f4' }, 'text'));
 			expect(binary.message).toMatch(/cannot be read/);
 			const missing = yield* Effect.flip(a.read({ id: 'nope' }, 'text'));
 			expect(missing.message).toMatch(/not stored/);

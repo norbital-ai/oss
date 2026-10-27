@@ -1,6 +1,7 @@
 // Agent roles under `src/agent/` (§3.3.6, §3.9, rules 57–63b): envoys, MCP servers and the skill frontmatter.
-// An envoy is a role; it is deployed by setting `sys_integration.envoy` on a workspace conversation instance (a
-// `+workspace.ts` connection's `envoy` is that default). The literal carries no authority beyond its `policies`.
+// A tenant-created envoy is a `sys_envoy` row; a source envoy here is a declared default. Either is deployed by setting
+// `sys_integration.envoy` on a workspace conversation instance (a `+workspace.ts` connection's `envoy` is that default).
+// The role carries no authority beyond its `policies`.
 import type { Checked, Exact } from '../fields.ts';
 import type { PolicyName } from '../names.ts';
 import type { NonEmpty } from '../values.ts';

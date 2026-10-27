@@ -11,7 +11,7 @@ import {
 	openExternal
 } from '../src/shell/device-session.ts';
 
-const row = (id: string, read = false, link: { collection: string; id: string } | null = null) => ({
+const row = (id: string, read = false, link: { model: string; id: string } | null = null) => ({
 	id,
 	title: `T ${id}`,
 	body: null,
@@ -29,7 +29,7 @@ describe('the device environment', () => {
 				inboxNotices({
 					rows: [
 						row('d'),
-						row('c', false, { collection: 'jobs', id: '1' }),
+						row('c', false, { model: 'jobs', id: '1' }),
 						row('b', true),
 						row('a')
 					]
@@ -90,7 +90,7 @@ describe('the device environment', () => {
 			}).pipe(Scope.provide(scope));
 			yield* Queue.offer(answers, { rows: [row('a')] });
 			yield* Queue.offer(answers, {
-				rows: [row('b', false, { collection: 'jobs', id: '1' }), row('a')]
+				rows: [row('b', false, { model: 'jobs', id: '1' }), row('a')]
 			});
 			yield* Effect.sleep('20 millis');
 			expect(shown).toEqual([{ id: 'b', title: 'T b', body: null, path: '/inbox?record=jobs/1' }]);

@@ -48,7 +48,7 @@ const BrowserPage = Schema.Struct({
 });
 const Captures = Schema.Array(
 	Schema.Struct({
-		collection: Schema.String,
+		model: Schema.String,
 		id: Schema.String,
 		op: Schema.Literals(['create', 'update', 'delete']),
 		revision: Schema.Number,
@@ -132,9 +132,10 @@ const cell = (
 				const seen: (readonly Readonly<Record<string, unknown>>[])[] = [],
 					answered = yield* Queue.unbounded<typeof BrowserPage.Type>();
 				let current: typeof BrowserPage.Type | undefined;
-				yield* bolt.observe<unknown>(bolt.query('orders', { all: true })).pipe(
-					Stream.runForEach((page) =>
+				yield* bolt.observe<unknown>(bolt.query({ orders: {} })).pipe(
+					Stream.runForEach((answer) =>
 						Effect.gen(function* () {
+							const page = Predicate.hasProperty(answer, 'orders') ? answer.orders : undefined;
 							if (!Schema.is(BrowserPage)(page)) throw new Error('Invalid live order page');
 							current = page;
 							seen.push(page.rows);
@@ -199,7 +200,7 @@ const cell = (
 		const write = (authority: Authority, verb: 'create' | 'update' | 'delete', input: Json) =>
 			Effect.gen(function* () {
 				const result = yield* writes.act({
-					collection: 'orders',
+					model: 'orders',
 					verb,
 					input,
 					mode: { _tag: 'Direct' },
@@ -254,7 +255,7 @@ describe('live + protocol + $bolt on PGlite', () => {
 				const { bolt, orders } = yield* cell();
 				const view = yield* orders();
 				expect(
-					kind(yield* bolt.act('orders.create', { title: 'desk', region: 'north', customer: ACME }))
+					kind(yield* bolt.act('orders.create', [{ title: 'desk', region: 'north', customer: ACME }]))
 				).toBe('committed');
 				expect(view.rows().map((r) => r['title'])).toEqual(['desk']);
 				expect(present(view.rows()[0])['id']).not.toMatch(/^pending:/);
@@ -271,7 +272,7 @@ describe('live + protocol + $bolt on PGlite', () => {
 					const { bolt, orders } = yield* cell(PgliteDb.layer(), callbacks);
 					const view = yield* orders();
 					const o = yield* bolt
-						.act('orders.create', { title: 'shady', region: 'north', customer: SHADY })
+						.act('orders.create', [{ title: 'shady', region: 'north', customer: SHADY }])
 						.pipe(Effect.flip);
 					expect(o).toMatchObject({
 						_tag: 'ActRefused',
@@ -287,30 +288,17 @@ describe('live + protocol + $bolt on PGlite', () => {
 	it.live('a 202 puts the held row on the live read at once, carrying its `$approval`', () =>
 		Effect.scoped(
 			Effect.gen(function* () {
-				const { create, ...grant } = manifest.policies.rep.grants.orders;
-				void create;
-				const proposed = {
-					...manifest,
-					policies: {
-						...manifest.policies,
-						rep: {
-							...manifest.policies.rep,
-							grants: {
-								...manifest.policies.rep.grants,
-								orders: { ...grant, create: { approval: true as const } }
-							}
-						}
-					}
-				};
+				// rep's create `check` approves: the batch is held for Finance
+				const check = 'create: { check: function* (rows, ctx) {';
 				const source = guest.source.replace(
-					'export default {',
-					`export default { policy: { rep: { grants: { orders: { create: { approval: (_write, flow) => flow.step('Finance', { teams: ['finance'] }) } } } } },`
+					check,
+					`${check} return ctx.approve((flow) => flow.step('Finance', { teams: ['finance'] }));`
 				);
-				const { t, bolt, orders } = yield* cell(PgliteDb.layer(), proposed, source);
+				const { t, bolt, orders } = yield* cell(PgliteDb.layer(), manifest, source);
 				const view = yield* orders();
 				expect(
-					yield* bolt.act('orders.create', { title: 'held', region: 'north', customer: ACME })
-				).toMatchObject({ kind: 'pendingApproval', records: [{ collection: 'orders' }] });
+					yield* bolt.act('orders.create', [{ title: 'held', region: 'north', customer: ACME }])
+				).toMatchObject({ kind: 'pendingApproval', records: [{ model: 'orders' }] });
 				expect(view.rows()).toMatchObject([
 					{
 						title: 'held',
@@ -337,14 +325,14 @@ describe('live + protocol + $bolt on PGlite', () => {
 				Effect.gen(function* () {
 					const { bolt, rep, orders, other } = yield* cell();
 					const view = yield* orders();
-					yield* bolt.act('orders.create', { title: 'desk', region: 'north', customer: ACME });
+					yield* bolt.act('orders.create', [{ title: 'desk', region: 'north', customer: ACME }]);
 					const id = String(present(view.rows()[0])['id']);
 					// another cell's writer moves the row: this cell's live lane never sees it
 					const moved = yield* (yield* other()).act({
-						collection: 'orders',
+						model: 'orders',
 						verb: 'update',
 						mode: { _tag: 'Direct' },
-						input: { target: id, set: { title: 'moved' } },
+						input: [{ target: id, set: { title: 'moved' } }],
 						key: randomUUID(),
 						issuedAt: NOW,
 						authority: rep,
@@ -354,7 +342,7 @@ describe('live + protocol + $bolt on PGlite', () => {
 					expect(kind(moved.outcome)).toBe('committed');
 					expect(
 						yield* bolt
-							.act('orders.update', { target: id, set: { title: 'mine' } })
+							.act('orders.update', [{ target: id, set: { title: 'mine' } }])
 							.pipe(Effect.flip)
 					).toMatchObject({ _tag: 'ActConflict' });
 					expect(present(view.rows()[0])['title']).toBe('desk');
@@ -366,14 +354,17 @@ describe('live + protocol + $bolt on PGlite', () => {
 		Effect.scoped(
 			Effect.gen(function* () {
 				const { bolt } = yield* cell();
-				yield* bolt.act('orders.create', { title: 'desk', region: 'north', customer: ACME });
-				const page = yield* bolt.query<typeof BrowserPage.Type>('orders', { all: true });
-				expect(
-					yield* bolt.query('orders', { id: String(present(page.rows[0])['id']) })
-				).toMatchObject({
-					title: 'desk'
+				yield* bolt.act('orders.create', [{ title: 'desk', region: 'north', customer: ACME }]);
+				const { orders: page } = yield* bolt.query<{ orders: typeof BrowserPage.Type }>({
+					orders: {}
 				});
-				expect(yield* bolt.query('nope', { all: true }).pipe(Effect.flip)).toMatchObject({
+				const id = String(present(page.rows[0])['id']);
+				expect(
+					yield* bolt.query<{ orders: typeof BrowserPage.Type }>({
+						orders: { where: { id: { eq: id } } }
+					})
+				).toMatchObject({ orders: { rows: [{ title: 'desk' }] } });
+				expect(yield* bolt.query({ nope: {} }).pipe(Effect.flip)).toMatchObject({
 					code: expect.any(String)
 				});
 			})
@@ -390,7 +381,7 @@ describe('live deltas on PGlite (rule 65)', () => {
 				const { rep, live, queries, count, watcher, register, settled, other } = yield* cell();
 				const w = yield* watcher(rep);
 				yield* register(w, 'simple', {
-					read: lowerRead(manifest, 'query', [
+					read: lowerRead(manifest, 'read', [
 						'orders',
 						{ select: { title: true, status: true }, all: true }
 					])
@@ -398,10 +389,10 @@ describe('live deltas on PGlite (rule 65)', () => {
 				// another cell's writer commits; its RETURNING set is then routed through this hub alone
 				const another = yield* other();
 				const r = yield* another.act({
-					collection: 'orders',
+					model: 'orders',
 					verb: 'create',
 					mode: { _tag: 'Direct' },
-					input: { title: 'desk', region: 'north', customer: ACME },
+					input: [{ title: 'desk', region: 'north', customer: ACME }],
 					key: randomUUID(),
 					issuedAt: NOW,
 					authority: rep,
@@ -416,7 +407,7 @@ describe('live deltas on PGlite (rule 65)', () => {
 				expect(w.held.get('simple')).toEqual(
 					(yield* queries.run(
 						[
-							lowerRead(manifest, 'query', [
+							lowerRead(manifest, 'read', [
 								'orders',
 								{ select: { title: true, status: true }, all: true }
 							])
@@ -442,7 +433,7 @@ describe('live deltas on PGlite (rule 65)', () => {
 						params: [me]
 					});
 					const w = yield* watcher(rep);
-					const inbox: ReadIR = { kind: 'inbox', collection: 'sys_notification', member: me };
+					const inbox: ReadIR = { kind: 'inbox', model: 'sys_notification', member: me };
 					yield* register(w, 'inbox', { read: inbox });
 					const fresh = () =>
 						queries
@@ -513,7 +504,7 @@ describe('live deltas on PGlite (rule 65)', () => {
 						params: [NOW]
 					});
 					const w = yield* watcher(rep),
-						inbox: ReadIR = { kind: 'inbox', collection: 'sys_notification', member: me };
+						inbox: ReadIR = { kind: 'inbox', model: 'sys_notification', member: me };
 					yield* register(w, 'inbox', { read: inbox });
 					expect(w.held.get('inbox')).toMatchObject({ unread: 250 });
 					expect(Schema.decodeUnknownSync(Rows)(w.held.get('inbox')).rows.length).toBe(200);
@@ -538,27 +529,25 @@ describe('live deltas on PGlite (rule 65)', () => {
 				Effect.gen(function* () {
 					const { rep, live, queries, count, watcher, register, settled, other } = yield* cell();
 					const w = yield* watcher(rep);
-					const totals = lowerRead(manifest, 'query', [
+					const totals = lowerRead(manifest, 'read', [
 						'orders',
 						{ select: { title: true, total: true }, all: true }
 					]);
 					yield* register(w, 'totals', { read: totals });
 					const another = yield* other();
 					const r = yield* another.act({
-						collection: 'orders',
+						model: 'orders',
 						verb: 'create',
 						mode: { _tag: 'Direct' },
-						input: {
+						input: [{
 							title: 'desk',
 							region: 'north',
 							customer: ACME,
-							lines: {
-								create: [
-									{ label: 'a', amount: '1.20' },
-									{ label: 'b', amount: '2.00' }
-								]
-							}
-						},
+							lines: [
+								{ label: 'a', amount: '1.20' },
+								{ label: 'b', amount: '2.00' }
+							]
+						}],
 						key: randomUUID(),
 						issuedAt: NOW,
 						authority: rep,
@@ -568,7 +557,7 @@ describe('live deltas on PGlite (rule 65)', () => {
 					// both rows keep their scale; capture order between them is not part of the contract
 					expect(
 						r.captured
-							.filter((x) => x.collection === 'lines')
+							.filter((x) => x.model === 'lines')
 							.map((x) => x.new?.['amount'])
 							.sort()
 					).toEqual(['1.20', '2.00']);
@@ -581,6 +570,52 @@ describe('live deltas on PGlite (rule 65)', () => {
 					).toEqual([{ $dec: '3.20' }]);
 					expect(w.held.get('totals')).toEqual(
 						(yield* queries.run([totals], { as: 'caller', authority: rep }, b()))[0]
+					);
+				})
+			)
+	);
+
+	it.live(
+		"a change to a layer row refreshes the read request whose root holds it, under the root's policy alone",
+		() =>
+			Effect.scoped(
+				Effect.gen(function* () {
+					const { rep, live, queries, watcher, register, settled, other } = yield* cell();
+					const w = yield* watcher(rep);
+					const tree = lowerRead(manifest, 'query', [
+						{ orders: { fields: ['title'] }, 'orders.lines': { fields: ['label', 'amount'] } }
+					]);
+					const another = yield* other();
+					const write = (model: string, verb: 'create' | 'update', input: readonly Json[]) =>
+						another.act({
+							model,
+							verb,
+							mode: { _tag: 'Direct' },
+							input,
+							key: randomUUID(),
+							issuedAt: NOW,
+							authority: rep,
+							bindings: b(),
+							invocationId: randomUUID()
+						});
+					const made = yield* write('orders', 'create', [
+						{ title: 'desk', region: 'north', customer: ACME, lines: [{ label: 'a', amount: '1.00' }] }
+					]);
+					live.publish(made.captured);
+					yield* settled;
+					yield* register(w, 'tree', { read: tree });
+					const line = present(made.captured.find((x) => x.model === 'lines'));
+					// the line changes through its own access point; the view's root is the order that holds it
+					const changed = yield* write('lines', 'update', [
+						{ target: line.id, set: { amount: '2.50' } }
+					]);
+					live.publish(changed.captured);
+					yield* settled;
+					expect(w.held.get('tree')).toMatchObject({
+						orders: { rows: [{ title: 'desk', lines: [{ label: 'a', amount: { $dec: '2.50' } }] }] }
+					});
+					expect(w.held.get('tree')).toEqual(
+						(yield* queries.run([tree], { as: 'caller', authority: rep }, b()))[0]
 					);
 				})
 			)
@@ -625,25 +660,25 @@ describe('live deltas on PGlite (rule 65)', () => {
 						]);
 				});
 			const a = present(
-				(yield* write(both, 'create', { title: 'desk', region: 'north', customer: ACME }))[0]
+				(yield* write(both, 'create', [{ title: 'desk', region: 'north', customer: ACME }]))[0]
 			);
 			const c = present(
-				(yield* write(both, 'create', {
+				(yield* write(both, 'create', [{
 					title: 'chair',
 					region: 'north',
 					note: 'mine',
 					customer: ACME
-				}))[0]
+				}]))[0]
 			);
-			yield* write(both, 'create', { title: 'lamp', region: 'north', customer: ACME });
+			yield* write(both, 'create', [{ title: 'lamp', region: 'north', customer: ACME }]);
 			yield* check();
-			yield* write(both, 'update', { target: a, set: { title: 'bench' } });
+			yield* write(both, 'update', [{ target: a, set: { title: 'bench' } }]);
 			yield* check();
-			yield* write(both, 'update', { target: c, set: { status: 'submitted' } });
+			yield* write(both, 'update', [{ target: c, set: { status: 'submitted' } }]);
 			yield* check();
-			yield* write(both, 'update', { target: c, set: { note: 'edited' } });
+			yield* write(both, 'update', [{ target: c, set: { note: 'edited' } }]);
 			yield* check();
-			yield* write(both, 'delete', { target: a });
+			yield* write(both, 'delete', [{ target: a }]);
 			yield* check();
 			// then a seeded random walk: every commit, whatever it does, leaves every view equal to a fresh read
 			let seed = 7;
@@ -671,7 +706,7 @@ describe('live deltas on PGlite (rule 65)', () => {
 							? 'delete'
 							: 'create';
 				yield* writes.act({
-					collection: 'orders',
+					model: 'orders',
 					verb,
 					input,
 					mode: { _tag: 'Direct' },
@@ -704,7 +739,7 @@ describe('live deltas on PGlite (rule 65)', () => {
 				});
 				const w = yield* watcher(rep);
 				yield* register(w, 't', {
-					read: { kind: 'transcript', collection: 'sys_message', conversation: id, thread: false }
+					read: { kind: 'transcript', model: 'sys_message', conversation: id, thread: false }
 				});
 				expect(w.held.get('t')).toEqual({ status: 'idle', rows: [] });
 				count.reset();
@@ -765,7 +800,7 @@ describe('live deltas on PGlite (rule 65)', () => {
 					yield* register(w, 'w', {
 						read: {
 							kind: 'transcript',
-							collection: 'sys_message',
+							model: 'sys_message',
 							conversation: id,
 							thread: false,
 							from: seqA + 1

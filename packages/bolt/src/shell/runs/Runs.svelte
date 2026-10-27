@@ -6,12 +6,13 @@
 <script lang="ts">
 	import { fork, observe } from '@norbital-ai/ui/effect';
 	import { Array as EffectArray, Effect, Predicate, Schedule, Stream } from 'effect';
-	import { Button, Combobox, Show, Table, useKinds } from '@norbital-ai/ui';
+	import { Button, Combobox, EmptyState, Show, Table, useKinds } from '@norbital-ai/ui';
 	import type { RunView } from '../../engine/runs/index.ts';
 	import type { Act } from '../Acts.svelte';
 	import Acts from '../Acts.svelte';
 	import DetailSheet from '../DetailSheet.svelte';
 	import SystemPage from '../SystemPage.svelte';
+	import automationsBanner from '../assets/banners/automations.jpg';
 	import type { ShellBolt } from '../runtime.ts';
 	import type { ShellApi } from '../api-types.ts';
 
@@ -117,6 +118,8 @@
 <SystemPage
 	name="settings-automations"
 	title={t('Automations')}
+	icon="lucide:play"
+	banner={automationsBanner}
 	description={t(
 		'Every automation run, newest first. Run one now, stop a queued or running run, or retry a failed one.'
 	)}
@@ -160,7 +163,14 @@
 				{ field: 'id', label: t('Actions'), hide: 'narrow', cell: actions }
 			]}
 		>
-			{#snippet empty()}<p class="text-sm text-muted-foreground">{t('No runs yet.')}</p>{/snippet}
+			{#snippet empty()}
+				<EmptyState
+					variant="inset"
+					icon="play"
+					title={t('No runs yet.')}
+					hint={t('Automation runs appear here.')}
+				/>
+			{/snippet}
 		</Table>
 	{/if}
 </SystemPage>

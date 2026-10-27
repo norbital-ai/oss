@@ -4,15 +4,14 @@
 import type { Effect } from 'effect';
 import type { Cursor } from '@norbital-ai/store';
 import type { Actor } from './access/actor.ts';
-import type { ApprovalStep } from './access/policy.ts';
-import type { OutputOf } from './body.ts';
+import type { ApprovalStep, Flow, Verdict } from './access/policy.ts';
 import type { ActConflict, ActRefused, ActUnknown, ReadFailed, Refusal } from './errors.ts';
-import type { DateLiteral, InputOf, Simplify } from './fields.ts';
+import type { Checked, DateLiteral, Exact, InputOf, Simplify } from './fields.ts';
 import type {
 	AutomationName,
 	CallerValue,
-	CollectionName,
-	CollectionSpecOf,
+	ModelName,
+	ExposureSpecOf,
 	ColumnValue,
 	Columns,
 	HasSemantic,
@@ -20,25 +19,34 @@ import type {
 	IndexInput,
 	IndexName,
 	Is,
+	LayerColumn,
+	LayerField,
+	LayerFilled,
+	LayerValue,
 	ManyRels,
 	NamesPart,
 	OmittableOnInsert,
 	OneRels,
 	OneTarget,
 	OwnedFk,
+	OwnedInverse,
+	PathModel,
+	Prefixes,
 	ReadField,
+	ReadPath,
 	ReadableName,
-	ReadRelation,
 	RelTarget,
+	RootOf,
 	Row,
 	RowState,
 	StoredRow,
-	WorkspaceReadRow,
-	WorkspaceReadField,
-	WritableField
+	SubLayer,
+	WritableField,
+	WritePath
 } from './names.ts';
 import type { StartInput } from './runtime/facilities.ts';
-import type { ModelWhere, OrderBy, Where } from './where.ts'; // hook:query (OrderBy)
+import type { LayerWhere, ModelWhere, OrderBy, Where } from './where.ts'; // hook:query (OrderBy)
+import type { DynamicRead } from '../protocol/read-request.ts';
 import type {
 	DatePeriod,
 	Decimal,
@@ -70,40 +78,8 @@ export type Paged =
 	{ limit: number; after?: Cursor; all?: never } | { all: true; limit?: never; after?: never };
 /** One page of a read: its `rows`, and the `next` cursor, `null` on the last page. */
 export type Page<T> = { readonly rows: readonly T[]; readonly next: Cursor | null };
-/** A manifest-checked dynamic read keeps the native identity; its selected values require domain decoding. */
-export type DeclaredRow<C extends string> = {
-	readonly id: Id<C>;
-} & Readonly<Record<string, unknown>>;
-/** Evaluated predicates and scalar field names, checked by the host against the actual model and reader. */
-export type DeclaredQuery = {
-	readonly mode: 'declared';
-	readonly where?: Json | undefined;
-	readonly select?: readonly string[] | undefined;
-	readonly all: true;
-};
-type RelSelect<C, R> = R extends keyof OneRels<C>
-	? { select: Select<OneTarget<C, R>> }
-	: { select: Select<RelTarget<C, R>>; where?: Where<RelTarget<C, R>> } & Paged;
-// Single mapped types with declared variance: TS otherwise measures a generic alias's variance over the whole
-// names index, which cost seconds per workspace (G1 scale fixture).
-/** A `select` literal: exposed fields as `true`, exposed relations as nested selects (an FK may be either). */
-export type Select<in out C> = {
-	readonly [P in ReadField<C> | ReadRelation<C>]?: P extends ReadRelation<C>
-		? RelSelect<C, P> | (P extends ReadField<C> ? true : never)
-		: true;
-};
-type SelectOf<X> = X extends { select: infer S } ? S : {};
-/** The row a `select` returns: `id`, the selected fields, and the selected relations. */
-type Picked<in out C, in out S> = {
-	readonly [P in 'id' | (keyof S & (ReadField<C> | ReadRelation<C>))]: P extends 'id'
-		? Id<C & string>
-		: S[P & keyof S] extends true
-			? CallerValue<C, P>
-			: P extends keyof OneRels<C>
-				? | Picked<OneTarget<C, P>, SelectOf<S[P & keyof S]>>
-					| (OneRels<C>[P] extends { optional: true } ? null : never)
-				: readonly Picked<RelTarget<C, P>, SelectOf<S[P & keyof S]>>[];
-};
+/** The relations a view nests: the root's declared one-level read layers (`'<C>.<rel>'`). */
+type SelectRel<C> = SubLayer<ReadPath<C>, C & string>;
 /** A model's natural key as values; exists only where the model declares `key` (§3.3.9). */
 export type KeyValues<C> =
 	NamesPart<'models'> extends { [P in C & string]: { key: readonly (infer K)[] } }
@@ -117,27 +93,9 @@ export type Revision<C> = {
 	readonly cause: 'direct' | 'cascade' | 'derived' | 'seed' | 'erased';
 	readonly changed: Partial<Row<C>>;
 };
-/**
- * A selected row with its read state. Invariant in `S`, as `Picked` is: a structural mapped type makes a wider
- * select a subtype of a narrower one, so `[...a.rows, ...b.rows]` subtype-reduces to the narrower row and
- * `'field' in row` narrows the field to `unknown`.
- */
-type PickedRow<in out C, in out S> = {
-	[K in keyof (Picked<C, S> & RowState)]: (Picked<C, S> & RowState)[K];
-};
-/** A record's row (`query(m, { id })`): the caller row, or the selected fields and relations. */
-export type ReadResult<C, S> = [keyof S] extends [never] ? Row<C> : PickedRow<C, S>;
-/** A page's row without a `select`: the caller row less its heavy fields, which only a `select` or an `id` read returns. */
+/** A view's list row: the caller row less its heavy fields. */
 export type ListRow<C> = Omit<Row<C>, HeavyField<C>>;
-/** A page's row: the list row, or the selected fields and relations. */
-export type ListResult<C, S> = [keyof S] extends [never] ? ListRow<C> : PickedRow<C, S>;
 
-type QueriesOfC<C> = CollectionSpecOf<C> extends { queries: infer Q } ? Q : {};
-/** The names of `C`'s declared queries. */
-export type QueryName<C> = keyof QueriesOfC<C> & string;
-/** Query `Q` of `C` as the collections part declares it (`input`, `output`). */
-export type QuerySpecOf<C, Q> = QueriesOfC<C>[Q & keyof QueriesOfC<C>];
-export type In<X> = X extends { input: infer I } ? InputOf<I> : undefined;
 /**
  * A search over one of `C`'s `search.indexes`, keyed by the index with its probe input (`{ colour: { lab, … } }`), or over
  * `search.semantic`: nearest by meaning to a text, or to a record's own embedding (the record itself left out).
@@ -147,61 +105,6 @@ export type IndexSearch<C> =
 	| (HasSemantic<C> extends true
 			? { readonly semantic: string | { readonly record: Id<C & string> } }
 			: never);
-/** A search hit: the row with its distance from the probe, nearest first. */
-export type Hit<R> = R & { readonly $distance: number };
-
-/**
- * One member of a keyed query (`query({ key: member })`): rows `from` a model (its `where`, `select`, `orderBy` and page,
- * as `query(model, …)` takes them), or with an `id` that record. A field's `{ in: { member, field } }` takes the values of
- * `field` across the rows an EARLIER member of the same query answered, inside the same statement: a dependent read (an
- * entity, then the versions its `settings_code` names) is still one crossing.
- */
-export type QueryMember<C extends string> =
-	| ({
-			readonly from: Is<C, ReadableName>;
-			readonly where?: Where<C> | MemberWhere<C>;
-			readonly select?: Select<C>;
-			readonly orderBy?: OrderBy<C>;
-	  } & Paged)
-	| { readonly from: Is<C, ReadableName>; readonly id: Id<C>; readonly select?: Select<C> };
-/** An earlier keyed member's values of one of its fields: `{ in: { member: 'entity', field: 'settings_code' } }`. */
-export type MemberIn =
-	| { readonly in: { readonly member: string; readonly field: string } }
-	| { readonly nin: { readonly member: string; readonly field: string } };
-// Distributive, so the generic `MemberWhere<M[K]['from']>` a keyed query is inferred against resolves its constraint
-// once (as `MemberWhere<string>`) instead of re-expanding every collection's fields per key (F28: ~200k types per
-// hr-payroll keyed read). On `unknown`, not `string`: an optional member's `from` is `unknown`.
-/** A keyed member's `where` that names an earlier member's values (each other clause as `Where` takes it). */
-export type MemberWhere<C> = C extends unknown
-	? { readonly [P in ReadField<C>]?: MemberIn | NonNullable<Where<C>[P & keyof Where<C>]> }
-	: never;
-/** A keyed query's members by key. */
-export type QuerySet = { readonly [key: string]: { readonly from: string } };
-type MemberAnswer<M> = M extends { from: infer C extends string; id: unknown }
-	? ReadResult<C, SelectOf<M>> | null
-	: M extends { from: infer C extends string }
-		? Page<ListResult<C, SelectOf<M>>>
-		: never;
-/** A keyed query's answer: each member's page (or record, for an `id` member) under its key. */
-export type QuerySetAnswer<M> = { readonly [K in keyof M]: MemberAnswer<M[K]> };
-/** A workspace keyed query's member (`ctx.db.query({ key: member })`): stored rows, or with an `id` that row. */
-export type StoredMember<C extends string> =
-	| ({
-			readonly from: Is<C, ReadableName>;
-			readonly where?: ModelWhere<C> | MemberWhere<C>;
-			readonly select?: WorkspaceSelect<C>;
-	  } & Paged)
-	| { readonly from: Is<C, ReadableName>; readonly id: Id<C> };
-type WorkspaceSelect<C> = { readonly [P in WorkspaceReadField<C>]?: true };
-type WorkspaceSelection<C, S, R = WorkspaceReadRow<C>> = Pick<R, (keyof S | 'id') & keyof R>;
-type WorkspaceRow<C, S> = [keyof S] extends [never] ? StoredRow<C> : WorkspaceSelection<C, S>;
-/** The unmasked stored result of one workspace keyed member, with its exact selected fields. */
-export type StoredAnswer<M> = M extends { from: infer C extends string; id: unknown }
-	? StoredRow<C> | null
-	: M extends { from: infer C extends string }
-		? Page<WorkspaceRow<C, SelectOf<M>>>
-		: never;
-
 // ── aggregates ──
 type Unit = 'day' | 'week' | 'month' | 'quarter' | 'year';
 /** What `aggregate` buckets by: a readable field, or a date or instant field truncated to a calendar unit. */
@@ -249,69 +152,153 @@ export type HistoryOptions = {
 	at?: { instant: Instant } | { revision: number } | { before: RequestId };
 };
 
+// ── read requests (decisions 1, 4, 7, 8): one layer map for pages, `ctx.query`, policies and the agent ──
+// Each key without a dot is a root (a model with `read`); `'<root>.<rel>…'` is one of that root's declared read layers.
+// A model is a root once per request. Naming a deep path implies its parents. Every list (a root page or a nested
+// many-layer) defaults to `limit` 10,000 (the host cap) and the root's default order; only a root pages (`after`, `next`).
+// JSON only: the same value crosses the page wire, `ctx.query` and the agent tool (`protocol/read-request.ts`).
+type Dir = 'asc' | 'desc';
+/** A deeper layer's order: its exposed fields, ascending, or `{ field: dir }`; up to four keys, then `id`. */
+export type LayerOrderBy<F extends string> =
+	F | { readonly [K in F]?: Dir } | readonly (F | { readonly [K in F]?: Dir })[];
+/** What a layer `aggregate` measures over the layer's rows (per parent row on a nested layer), bucketed `by` fields. */
+export type LayerAggregate<F extends string> = {
+	count?: true;
+	sum?: readonly F[];
+	avg?: readonly F[];
+	min?: readonly F[];
+	max?: readonly F[];
+	by?: F | readonly F[];
+};
+/** A root layer of `C`: its filter, fields, order and page, a text or index search, an aggregate, and `asOf`. */
+export type RootRequest<C> = {
+	where?: Where<C>;
+	fields?: readonly ReadField<C>[];
+	orderBy?: OrderBy<C>;
+	/** 1 to 10,000 (the default). */
+	limit?: number;
+	after?: Cursor;
+	search?: string | IndexSearch<C>;
+	aggregate?: Omit<Measures<C>, 'where'> & { by?: Bucket<C> | readonly Bucket<C>[] };
+	/** An ISO instant: the root and its layers as they stood then (folded from history). */
+	asOf?: string;
+};
+/** A deeper layer `P` of `C`: `where` filters that layer's rows (a list) or nulls it (a ref), never removing the root. */
+export type LayerRequest<C, P> = {
+	where?: LayerWhere<C, P>;
+	fields?: readonly LayerField<C, P>[];
+	orderBy?: LayerOrderBy<LayerField<C, P> & string>;
+	/** 1 to 10,000 (the default) rows per parent row. */
+	limit?: number;
+	search?: string;
+	aggregate?: LayerAggregate<LayerField<C, P> & string>;
+};
+/** The general shape a read request literal is inferred against (the constraint, not the check); JSON only, so a function is never a `where`. */
+export type ReadRequestBase = {
+	readonly [path: string]: {
+		readonly where?: { readonly [key: string]: unknown };
+		readonly fields?: readonly string[];
+		readonly orderBy?: unknown;
+		readonly limit?: number;
+		readonly after?: Cursor;
+		readonly search?: unknown;
+		readonly aggregate?: object;
+		readonly asOf?: string;
+	};
+};
+/** Each key of request `R` checked: a root of a model with `read`, or a read layer that root declares. */
+export type RequestSpec<R> = {
+	[K in keyof R]: K extends `${infer C}.${string}`
+		? C extends ReadableName
+			? K extends ReadPath<C>
+				? LayerRequest<C, K>
+				: `error: '${K & string}' is not a read layer ${C} declares`
+			: `error: '${C}' is no read root: a root is a model with read`
+		: K extends ReadableName
+			? RootRequest<K>
+			: `error: '${K & string}' is no read root: a root is a model with read`;
+};
+/** A read request literal, checked exactly: an unknown key, path, field or option fails to type-check. */
+export type ReadRequest<R> = R & NoInfer<Checked<ReadRequestBase, R, Exact<R, RequestSpec<R>>>>;
+type At<R, P> = P extends keyof R ? R[P] : {};
+type Named<R> = Prefixes<keyof R & string>;
+type LayerPick<C, P, R> =
+	At<R, P> extends { fields: readonly (infer F)[] } ? F & string : LayerField<C, P>;
+type LayerAggRow<F extends string> = {
+	readonly key?: { readonly [K in F]?: unknown };
+	readonly count?: number;
+	readonly sum?: { readonly [K in F]?: Decimal | null };
+	readonly avg?: { readonly [K in F]?: Decimal | null };
+	readonly min?: { readonly [K in F]?: unknown };
+	readonly max?: { readonly [K in F]?: unknown };
+};
+type SubAnswer<C, Q extends string, R, Mask, T, S> = S extends keyof OneRels<T>
+	? LayerRow<C, Q, R, Mask> | null
+	: At<R, Q> extends { aggregate: infer A }
+		? A extends { by: unknown }
+			? readonly LayerAggRow<LayerField<C, Q> & string>[]
+			: LayerAggRow<LayerField<C, Q> & string>
+		: readonly LayerRow<C, Q, R, Mask>[];
+/**
+ * One row of layer `P`: `id`, its picked fields (all it exposes without `fields`), and each named sub-layer under its
+ * relation name in place of the FK (a ref: the row or `null`; a many-relation: its rows). `Mask` masks by the root's
+ * policies (a caller's read); a workspace read is unmasked.
+ */
+export type LayerRow<
+	C,
+	P extends string,
+	R,
+	Mask = true,
+	T = PathModel<C, P>,
+	S extends string = SubLayer<Named<R>, P>
+> = Simplify<
+	{ readonly id: Id<T & string> } & {
+		readonly [
+			F in Exclude<LayerPick<C, P, R>, S | 'id'> & (keyof Columns<T> | keyof OneRels<T>)
+		]: Mask extends true ? LayerValue<C, P, F> : ColumnValue<T, F>;
+	} & { readonly [Q in S]: SubAnswer<C, `${P}.${Q}`, R, Mask, T, Q> }
+>;
+type RootRow<C extends string, R, Mask> = LayerRow<C, C, R, Mask> &
+	(Mask extends true ? RowState : {});
+/** A root's answer: its aggregate, its index or semantic search's nearest rows (each with `$distance`), or its page. */
+type RootAnswer<C extends string, R, Mask> =
+	At<R, C> extends { aggregate: infer A }
+		? A extends { by: infer B }
+			? Page<AggRow<C, BucketField<B>>>
+			: AggRow<C>
+		: At<R, C> extends { search: object }
+			? Page<RootRow<C, R, Mask> & { readonly $distance: number }>
+			: Page<RootRow<C, R, Mask>>;
+/** A runtime-built read request's answer (`dynamicRead`): per root, a page of rows as JSON. */
+export type DynamicAnswer = {
+	readonly [root: string]: Page<{ readonly id: string; readonly [field: string]: Json }>;
+};
+/** A read request's answer: per root, a page of layer rows (or its aggregate), typed from the named layers. */
+export type ReadAnswer<R, Mask = true> = {
+	readonly [C in RootOf<keyof R & string>]: RootAnswer<C, R, Mask>;
+};
+
 /**
  * The one read API as the caller (queries, automations under `runAs`, page loaders): exposed fields only, masked
- * where grants mask. Pages call the same `query` on `bolt` (`PageBolt`). Only the model name (and `select`) infers:
- * `NoInfer` keeps TS from inferring back through `Where` and `ActInput`, which walked their conditional branches on every call.
+ * where grants mask. Pages call the same `query` on `bolt` (`PageBolt`); every read is one read request (a layer map).
  */
 export interface CallerQuery<E = never> {
-	/** Dynamic declarations use the same native caller policies, exposure and masked values as literal reads. */
-	query<C extends string>(
-		model: Is<C, ReadableName>,
-		args: DeclaredQuery
-	): Eff<Page<DeclaredRow<C>>, ReadFailed>;
-	/** A record as of `revision` (L-BOLT-181), folded from its history; `null` once pruned past its create. */
-	query<C extends string>(
-		model: Is<C, ReadableName>,
-		args: { id: NoInfer<Id<C>>; revision: number }
-	): Eff<StoredRow<C> | null, E>;
-	/** One record by id as the caller reads it, with an optional `select`; `null` when absent or not readable. */
-	query<C extends string, const S extends Select<C> = {}>(
-		model: Is<C, ReadableName>,
-		args: { id: NoInfer<Id<C>>; select?: S }
-	): Eff<ReadResult<C, S> | null, E>;
 	/**
-	 * A search over a custom index (`{ search: { colour: input } }`) or `search.semantic`: a page of the nearest rows, each
-	 * with its `$distance`, under the caller's grants; `where` narrows inside the index scan.
-	 */
-	query<C extends string, const S extends Select<C> = {}>(
-		model: Is<C, ReadableName>,
-		args: { search: NoInfer<IndexSearch<C>>; where?: NoInfer<Where<C>>; select?: S; limit: number }
-	): Eff<Page<Hit<ListResult<C, S>>>, E>;
-	/**
-	 * A page of rows the caller may read: `where`, `select`, `orderBy`, a text `search` over `search.text`, and `limit`
-	 * (or `all: true`).
+	 * A read request: a layer map of roots (models with `read`) and their declared layers, in one crossing and ONE
+	 * statement, under the caller's authority: each root's policy alone filters and masks it and its layers.
 	 * @example
-	 * const open = yield* ctx.query('orders', { where: { customer: { eq: input.customer } }, limit: 50 });
-	 */
-	query<C extends string, const S extends Select<C> = {}>(
-		model: Is<C, ReadableName>,
-		args: {
-			where?: NoInfer<Where<C>>;
-			select?: S;
-			orderBy?: NoInfer<OrderBy<C>>;
-			search?: string;
-		} & Paged
-	): Eff<Page<ListResult<C, S>>, E>; // hook:query (orderBy)
-	/** Runs a declared query (`'<model>.<query>'`) with its typed input. */
-	query<const N extends string>(
-		name: Is<N, QueryCallable>,
-		input: NoInfer<QueryInput<N>>
-	): Eff<QueryOutput<N>, E>;
-	/**
-	 * A keyed set of reads in one crossing and ONE statement: each member reads `from` a model (or, with `id`, one record)
-	 * under the caller's grants, answered under its key. Every member states its page (rule 9); the row and byte caps hold
-	 * per member and name the member that breaks them.
-	 * @example
-	 * const { contracts, entity, versions } = yield* ctx.query({
-	 *   contracts: { from: 'contract', where: { company_id: { eq: id } }, all: true },
-	 *   entity: { from: 'entity', id },
-	 *   versions: { from: 'settings', where: { code: { in: { member: 'entity', field: 'settings_code' } } }, all: true }
+	 * const { orders, commercial_settings } = yield* ctx.query({
+	 *   orders: { where: { status: { eq: 'issued' } }, fields: ['number', 'total'], limit: 100 },
+	 *   'orders.lines': { where: { quantity: { gt: 0 } } },
+	 *   commercial_settings: { limit: 1 }
 	 * });
 	 */
-	query<const M extends QuerySet>(
-		set: M & { readonly [K in keyof M]: QueryMember<M[K]['from']> }
-	): Eff<QuerySetAnswer<M>, E>;
+	query<const R extends ReadRequestBase>(request: ReadRequest<R>): Eff<ReadAnswer<R>, E>;
+	/**
+	 * The same layer map built at runtime (a rule engine's reads), made by `dynamicRead` from `@norbital-ai/bolt/protocol`:
+	 * checked host-side against the declarations exactly as the literal form is, answered untyped.
+	 */
+	query(request: DynamicRead): Eff<DynamicAnswer, ReadFailed | E>;
 	/** Without `by`, one row over the whole scope. */
 	aggregate<C extends string>(
 		model: Is<C, ReadableName>,
@@ -334,45 +321,10 @@ export interface CallerQuery<E = never> {
  * answered with unmasked stored rows under no grant.
  */
 export interface WorkspaceQuery {
-	/** Dynamic declarations read actual stored values; selected names and operands are manifest-checked. */
-	query<C extends string>(
-		model: Is<C, ReadableName>,
-		args: DeclaredQuery
-	): Eff<Page<DeclaredRow<C>>, ReadFailed>;
-	/** One stored record by id, or as of `revision`; `null` when absent. */
-	query<C extends string>(
-		model: Is<C, ReadableName>,
-		args: { id: NoInfer<Id<C>>; revision?: number }
-	): Eff<StoredRow<C> | null>;
-	/** A search over a custom index or `search.semantic`: the nearest stored rows, each with its `$distance`. */
-	query<C extends string, const S extends WorkspaceSelect<C> = {}>(
-		model: Is<C, ReadableName>,
-		args: {
-			search: NoInfer<IndexSearch<C>>;
-			where?: NoInfer<ModelWhere<C>>;
-			select?: S;
-			limit: number;
-		}
-	): Eff<Page<Hit<WorkspaceRow<C, S>>>>;
-	/** `select` names stored fields or existing native sequence labels (rule 72); `id` always comes. Defaults remain stored rows without sequences, roll-ups or computed fields. */
-	query<C extends string, const S extends WorkspaceSelect<C> = {}>(
-		model: Is<C, ReadableName>,
-		args: {
-			where?: NoInfer<ModelWhere<C>>;
-			select?: S;
-			orderBy?: NoInfer<OrderBy<C>>;
-			search?: string;
-		} & Paged
-	): Eff<Page<WorkspaceRow<C, S>>>;
-	/** Runs a declared query (`'<model>.<query>'`) as the workspace. */
-	query<const N extends string>(
-		name: Is<N, QueryCallable>,
-		input: NoInfer<QueryInput<N>>
-	): Eff<QueryOutput<N>>;
-	/** A keyed set of stored reads in one crossing and one statement (as the caller's keyed `query`, unmasked). */
-	query<const M extends QuerySet>(
-		set: M & { readonly [K in keyof M]: StoredMember<M[K]['from']> }
-	): Eff<{ readonly [K in keyof M]: StoredAnswer<M[K]> }>;
+	/** A read request (as the caller's), answered as the workspace: unmasked, unscoped, the same declared layers. */
+	query<const R extends ReadRequestBase>(request: ReadRequest<R>): Eff<ReadAnswer<R, false>>;
+	/** The same layer map built at runtime, checked host-side; answered untyped. */
+	query(request: DynamicRead): Eff<DynamicAnswer, ReadFailed>;
 	/** Without `by`, one row over the whole model. */
 	aggregate<C extends string>(
 		model: Is<C, ReadableName>,
@@ -393,21 +345,7 @@ export interface Clock {
 	todayIn(zone: IanaZone): PlainDate;
 }
 
-// ── writes ──
-type Cols<Sel> = Sel extends { columns: readonly (infer P extends string)[] } ? P : never;
-type RelValues<T, A> = {
-	readonly [V in keyof A]?: V extends 'create'
-		? readonly InsertValues<T, A[V]>[]
-		: V extends 'upsert'
-			? readonly (InsertValues<T, A[V]> | ({ id: Id<T & string> } & PatchValues<T, A[V]>))[]
-			: V extends 'update'
-				? readonly { target: Id<T & string>; set: PatchValues<T, A[V]> }[]
-				: readonly Id<T & string>[];
-};
-type WithValues<M, Sel> = Sel extends { with: infer W }
-	? { readonly [R in keyof W]?: RelValues<RelTarget<M, R>, W[R]> }
-	: {};
-type Filled<Sel> = Sel extends { filled: readonly (infer P extends string)[] } ? P : never;
+// ── writes: trees typed from the model's write layers (decision 6: every write is a batch of them) ──
 /** A written value: the row's own value, or the plain literal decode accepts for it (ISO date or instant text, decimal
  * text or an integer), at a period's ends too. */
 export type Loose<V> = V extends Decimal
@@ -421,23 +359,74 @@ export type Loose<V> = V extends Decimal
 				: V extends InstantPeriod
 					? { readonly start: Loose<Instant>; readonly end: Loose<Instant> | null }
 					: V;
-type OptionalCols<M, Sel> = {
-	[P in Cols<Sel>]: P extends Filled<Sel> ? P : OmittableOnInsert<M, P> extends true ? P : never;
-}[Cols<Sel>];
-type InsertValues<M, Sel, Optional = OptionalCols<M, Sel>> = Simplify<
-	{ readonly [P in Exclude<Cols<Sel>, Optional>]: Loose<ColumnValue<M, P>> } & {
-		readonly [P in Cols<Sel> & Optional]?: Loose<ColumnValue<M, P>>;
-	} & WithValues<M, Sel>
->;
-type PatchValues<M, Sel> = Simplify<
-	{ readonly [P in Cols<Sel>]?: Loose<ColumnValue<M, P>> } & WithValues<M, Sel>
->;
-export type InputSel<C, Op> =
-	CollectionSpecOf<C> extends { [P in Op & string]: { input: infer Sel } } ? Sel : never;
-/** A create input of `C`: its `create` allowlist, required fields required. */
-export type Insert<C> = InsertValues<C, InputSel<C, 'create'>>;
-/** An update `set` of `C`: its `update` allowlist, every field optional. */
-export type Patch<C> = PatchValues<C, InputSel<C, 'update'>>;
+type OptionalOf<T, Cols extends string> = {
+	[F in Cols]: OmittableOnInsert<T, F> extends true ? F : never;
+}[Cols];
+type ChildId<T, S> = Id<ManyRels<T>[S & keyof ManyRels<T>] & string>;
+/** Required columns required, omittable or `filled` ones optional. */
+type Values<T, Cols extends string, Opt> = {
+	readonly [F in Exclude<Cols, Opt>]: Loose<ColumnValue<T, F>>;
+} & {
+	readonly [F in Cols & Opt]?: Loose<ColumnValue<T, F>>;
+};
+type CreateLayer<
+	C,
+	P extends string,
+	T = PathModel<C, P>,
+	Cols extends string = LayerColumn<C, 'create', P>
+> = Values<T, Cols, OptionalOf<T, Cols> | LayerFilled<C, P>> & {
+	readonly [S in SubLayer<WritePath<C, 'create'>, P>]?: readonly (
+		| CreateLayer<C, `${P}.${S}`>
+		// an existing row of a non-owned child relation is linked by its id
+		| (S extends OwnedInverse<T> ? never : ChildId<T, S>)
+	)[];
+};
+/**
+ * One created row of `M` as a writer sends it and the policy's `check` judges it: the root's `create.columns` (required ones
+ * required, `filled` ones optional) and each declared child layer as a list of child rows (or, for a non-owned relation,
+ * ids of existing rows to link).
+ */
+export type CreateTree<M> = CreateLayer<M, M & string>;
+type ChildCreate<
+	C,
+	Q extends string,
+	T = PathModel<C, Q>,
+	Cols extends string = LayerColumn<C, 'update', Q>
+> = Values<T, Cols, OptionalOf<T, Cols>> & {
+	readonly [S in SubLayer<WritePath<C, 'update'>, Q>]?: readonly ChildCreate<C, `${Q}.${S}`>[];
+};
+type ChildChanges<C, Q extends string, T, S, Child extends string = PathModel<C, Q> & string> = {
+	readonly create?: readonly ChildCreate<C, Q>[];
+	readonly update?: readonly { readonly target: Id<Child>; readonly set: UpdateLayer<C, Q> }[];
+	readonly delete?: readonly Id<Child>[];
+} & (S extends OwnedInverse<T>
+	? {}
+	: { readonly link?: readonly Id<Child>[]; readonly unlink?: readonly Id<Child>[] });
+type UpdateLayer<C, P extends string, T = PathModel<C, P>> = {
+	readonly [F in LayerColumn<C, 'update', P>]?: Loose<ColumnValue<T, F>>;
+} & {
+	readonly [S in SubLayer<WritePath<C, 'update'>, P>]?: ChildChanges<C, `${P}.${S}`, T, S>;
+};
+/**
+ * The `set` of one updated row of `M`: the root's `update.columns`, all optional, and per declared child layer the child
+ * rows it creates, updates (`{ target, set }`) and deletes (and, for a non-owned relation, links or unlinks), each with
+ * that layer's update columns.
+ */
+export type UpdateTree<M> = UpdateLayer<M, M & string>;
+type StoredLayer<
+	C,
+	V extends 'create' | 'update',
+	P extends string,
+	T = PathModel<C, P>
+> = StoredRow<T> & {
+	readonly [S in SubLayer<WritePath<C, V>, P>]: readonly StoredLayer<C, V, `${P}.${S}`>[];
+};
+/** The stored row of `M` with each child layer its `V` declares, as the update `check` sees it (`before`). */
+export type StoredTree<M, V extends 'create' | 'update'> = StoredLayer<M, V, M & string>;
+/** A create input of `C`: its create tree. */
+export type Insert<C> = CreateTree<C>;
+/** An update `set` of `C`: its update tree. */
+export type Patch<C> = UpdateTree<C>;
 
 export type Keyed<C> =
 	NamesPart<'models'> extends {
@@ -446,7 +435,7 @@ export type Keyed<C> =
 		? true
 		: false;
 // an upsert names its record by id (rule 28), so it needs both arms; an import matches the natural key (rule 30)
-type Verbs<C, S = CollectionSpecOf<C>> =
+type Verbs<C, S = ExposureSpecOf<C>> =
 	| (S extends { create: unknown }
 			? | 'create'
 				| (Keyed<C> extends true ? 'import' : never)
@@ -456,23 +445,23 @@ type Verbs<C, S = CollectionSpecOf<C>> =
 	| (S extends { delete: unknown } ? 'delete' : never);
 /** Every callable: a model's generated write verb (X-1, X-24). */
 export type Callable = {
-	[C in CollectionName]: `${C}.${Verbs<C>}`;
-}[CollectionName];
-type Targets<C> = Id<C & string> | readonly Id<C & string>[];
+	[C in ModelName]: `${C}.${Verbs<C>}`;
+}[ModelName];
 /**
- * The input a generated write takes (`'<c>.create'`, `'<c>.update'`, …): an insert, `{ target, set }`, or `{ target }`.
+ * The input a generated write takes (`'<c>.create'`, `'<c>.update'`, …): always an array of rows (inserts, `{ target, set }`
+ * or `{ target }`), so the model's write callback sees the whole batch.
  */
 export type ActInput<N> = N extends `${infer C}.${infer V}`
 	? V extends 'create'
-		? Insert<C> | readonly Insert<C>[]
+		? readonly Insert<C>[]
 		: V extends 'upsert'
-			? Insert<C> | ({ id: Id<C> } & Patch<C>) | readonly (Insert<C> | ({ id: Id<C> } & Patch<C>))[]
+			? readonly (Insert<C> | ({ id: Id<C> } & Patch<C>))[]
 			: V extends 'import'
 				? readonly Insert<C>[]
 				: V extends 'update'
-					? { target: Targets<C>; set: Patch<C> } | readonly { target: Id<C>; set: Patch<C> }[]
+					? readonly { target: Id<C>; set: Patch<C> }[]
 					: V extends 'delete'
-						? { target: Targets<C> }
+						? readonly { target: Id<C> }[]
 						: never
 	: never;
 /** A generated upsert preserves input order; an import reports every row's resolution. */
@@ -504,9 +493,9 @@ type OptionsOf<N> = N extends `${string}.upsert`
 
 // ── outcomes (rule 32, §3.3.9) ──
 type Written = readonly {
-	[C in CollectionName]: { readonly collection: C; readonly id: Id<C>; readonly revision: number };
-}[CollectionName][];
-/** Nested and erased rows retain their actual collection, whose discriminator determines the id's brand. */
+	[C in ModelName]: { readonly model: C; readonly id: Id<C>; readonly revision: number };
+}[ModelName][];
+/** Nested and erased rows retain their actual model, whose discriminator determines the id's brand. */
 type WrittenOf<_N> = Written;
 /**
  * The engine's own refusal codes (rule 32), beside an authored `refused`: grants, constraints, budgets, rate limits and stale requests.
@@ -560,6 +549,8 @@ export type Refused = {
 	code: 'refused' | PlatformRefusal;
 	message: string;
 	field?: string;
+	/** The write path `field` belongs to (a policy `deny`'s `at.path`); the root when absent. */
+	path?: string;
 	row?: number;
 	rows?: readonly number[];
 	/** A.2 L-BOLT-043: the write callback that refused (`'<model>.create'`, `'<model>.update'`, `'<model>.delete'`). */
@@ -569,7 +560,7 @@ export type Refused = {
 /** The write lost a race: another write changed the named fields of these records since they were read. */
 export type Conflict = {
 	kind: 'conflict';
-	records: readonly { collection: CollectionName; id: string; fields: readonly string[] }[];
+	records: readonly { model: ModelName; id: string; fields: readonly string[] }[];
 };
 /** The outcome could not be confirmed (a lost connection); `invocation` is the id to look the write up by. */
 export type Unknown = { kind: 'unknown'; invocation: string };
@@ -590,7 +581,7 @@ export type Outcome<O, N = string> =
  * and fails with `ActRefused`, `ActConflict` or `ActUnknown`; `Effect.catchTag` recovers the one a body handles. It is
  * never `running`: the body already runs as server work, so its act waits for its own answer and never hands off.
  * @example
- * const { records } = yield* ctx.act('orders.create', { customer, lines: { create: [{ sku, qty: 1 }] } });
+ * const { records } = yield* ctx.act('orders.create', [{ customer, lines: { create: [{ sku, qty: 1 }] } }]);
  */
 type ManyCallable = Extract<Callable, `${string}.${'create' | 'update' | 'upsert' | 'delete'}`>;
 /** The literal shape inferred for a batch before each callable validates its own input. */
@@ -623,7 +614,7 @@ export interface Act {
 		...options: NoInfer<OptionsOf<N>>
 	): Eff<Committed<ActOutput<N>, N> | PendingApproval<N>, ActRefused | ActConflict | ActUnknown>;
 	/**
-	 * Generated verbs (`create`, `update`, `upsert`, `delete`) over several collections as ONE act: planned together (their
+	 * Generated verbs (`create`, `update`, `upsert`, `delete`) over several models as ONE act: planned together (their
 	 * reads one round trip per step), committed as one statement; the first that does not commit fails it. The acts are
 	 * independent: none names a row another creates. Answers each act's output, in order.
 	 * @example
@@ -663,41 +654,77 @@ export interface Act {
 /** Server-rendered page loaders receive caller-scoped reads and a clock, with no write or facility authority. */
 export interface PageReadContext extends Readonly<Clock>, CallerQuery<ReadFailed> {}
 
-/**
- * What a query's `run` sees: the actor and clock, the caller's `query`, `aggregate` and `history`, and `refuse`. A declared
- * query has no clock of its own to stay live by: one that depends on time takes it as input (`{ asOf }`).
- */
-export interface QueryCtx extends Clock, CallerQuery {
-	invocationId: string;
-	/** Ends the body with an authored refusal (rule 32), `return yield* ctx.refuse(…)`; `field` names an input field. */
-	refuse(message: string, at?: { field?: string }): Eff<never, Refusal>;
+// ── policy checks (decision 3): one `check` per write verb, the root's policy only ──
+/** Where a `deny` points: the batch row, the write path (the root when omitted) and a column of that path. */
+export type DenyAt<M, V> = V extends 'create' | 'update'
+	? | { readonly row?: number; readonly path?: M & string; readonly field?: LayerColumn<M, V, M> }
+		| {
+				[P in Exclude<WritePath<M, V>, M>]: {
+					readonly row?: number;
+					readonly path: P;
+					readonly field?: LayerColumn<M, V, P>;
+				};
+		  }[Exclude<WritePath<M, V>, M>]
+	: { readonly row?: number };
+/** A policy check's reads: read requests as the workspace (unmasked), at most ten per call, as a write callback's. */
+export interface PolicyReads {
+	query<const R extends ReadRequestBase>(request: ReadRequest<R>): Eff<ReadAnswer<R, false>>;
 }
+/**
+ * What a policy's write `check` sees: who writes (`actor`, `policies`), the clock, `db.query` (read requests as the
+ * workspace, at most ten per call, whatever the batch size) and the three verdicts. It writes nothing and does no I/O;
+ * it returns `allow()`, `deny(message, at?)` or `approve(flow => …)` (the approval `Flow` builder), nothing else.
+ */
+export interface PolicyCtx<
+	in out M,
+	in out V extends 'create' | 'update' | 'delete'
+> extends Clock {
+	readonly invocationId: string;
+	readonly policies: readonly string[];
+	readonly db: PolicyReads;
+	/** The write executes directly. */
+	allow(): Verdict;
+	/** The whole batch is refused (rule 32) with `message`; `at` names the row, the write path and a column of it. */
+	deny(message: string, at?: DenyAt<M, V>): Verdict;
+	/** The batch is held for the approval flow `build` returns (steps, `if`/`else`, `supersededBy`). */
+	approve(build: (flow: Flow) => Flow): Verdict;
+}
+/** A create `check`: the batch of create trees. */
+export type CreateCheck<M> = (
+	rows: readonly CreateTree<M>[],
+	ctx: PolicyCtx<M, 'create'>
+) => BodyReturn<Verdict>;
+/** An update `check`: per row the stored tree (`before`) and its `set`. */
+export type UpdateCheck<M> = (
+	changes: readonly { readonly before: StoredTree<M, 'update'>; readonly set: UpdateTree<M> }[],
+	ctx: PolicyCtx<M, 'update'>
+) => BodyReturn<Verdict>;
+/** A delete `check`: the stored rows the batch removes. */
+export type DeleteCheck<M> = (
+	rows: readonly StoredRow<M>[],
+	ctx: PolicyCtx<M, 'delete'>
+) => BodyReturn<Verdict>;
 
 // ── write callbacks: `create.transform`, `update.transform`, `delete.check` ──
 // A returned payload is not a fresh literal, so excess keys pass unseen: derived and system columns are named `never`.
 type Underived<M, Writable = WritableField<M>> = {
 	readonly [P in Exclude<keyof Columns<M>, Writable>]?: never;
 };
-/** Writable fields the verb's allowlist leaves out: a callback derives them (`placed_at`, a total). */
-type Unlisted<M, Sel, Fixed = never> = {
-	readonly [P in Exclude<WritableField<M>, Cols<Sel> | Fixed>]?: Loose<ColumnValue<M, P>>;
+/** Writable fields the verb's root layer leaves out: a callback derives them (`placed_at`, a total). */
+type Unlisted<M, Cols, Fixed = never> = {
+	readonly [P in Exclude<WritableField<M>, Cols | Fixed>]?: Loose<ColumnValue<M, P>>;
 };
 /**
- * One row `create.transform` receives and returns: the `create.columns` the writer sent (required ones required), any other
- * writable field it derives, and the nested `with` relation actions its create allows (children as that `with` entry
- * lists their columns). Derived and system columns are `never`.
+ * One row `create.transform` receives and returns: its create tree (the root columns the writer sent, required ones
+ * required, and the declared child layers), any other writable field it derives. Derived and system columns are `never`.
  */
-export type CreateRow<M> = CreateRowOf<M>;
-type CreateRowOf<M, Sel = InputSel<M, 'create'>> = InsertValues<M, Sel> &
-	Unlisted<M, Sel> &
-	Underived<M>;
+export type CreateRow<M> = CreateTree<M> & Unlisted<M, LayerColumn<M, 'create', M>> & Underived<M>;
 /**
- * One `set` `update.transform` receives and returns: the `update.columns` the writer changed and any other writable field
- * it derives, all optional (never an owned child's parent key, rule 41), and the update's nested `with` relation actions.
+ * One `set` `update.transform` receives and returns: its update tree (the root columns the writer changed and the child
+ * layers' changes) and any other writable field it derives, all optional (never an owned child's parent key, rule 41).
  */
-export type UpdateSet<M> = UpdateSetOf<M>;
-type UpdateSetOf<M, Sel = InputSel<M, 'update'>> = PatchValues<M, Sel> &
-	Unlisted<M, Sel, OwnedFk<M>> &
+export type UpdateSet<M> = UpdateTree<M> &
+	Unlisted<M, LayerColumn<M, 'update', M>, OwnedFk<M>> &
 	Underived<M>;
 /** The workspace reads of a write callback, and the act's own rows (`after`). */
 interface WriteReads extends WorkspaceQuery {
@@ -768,31 +795,23 @@ export interface NotifyCtx extends Clock {
 }
 
 // ── the names the page client (`page/page-bolt.ts`) shares with the `ctx` above ──
-/** Every query callable (`'<m>.<q>'`). */
-export type QueryCallable = { [C in CollectionName]: `${C}.${QueryName<C>}` }[CollectionName];
-type QueryOf<N> = N extends `${infer C}.${infer Q}` ? QuerySpecOf<C, Q> : never;
-/** A `query` callable's input (`'<m>.<q>'`). */
-export type QueryInput<N> = In<QueryOf<N>>;
-/** A `query` callable's output (`'<m>.<q>'`): the query's declared `output` value. */
-export type QueryOutput<N> = OutputOf<QueryOf<N>>;
 /** A key of `src/i18n/+messages.ts`. */
 export type MessageKey = keyof NamesPart<'messages'> & string;
 /** The names ui's views are typed by (`@norbital-ai/ui`'s `Workspace`); none until the workspace exposes a model. */
-export type ViewNames = [keyof NamesPart<'collections'>] extends [never]
+export type ViewNames = [keyof NamesPart<'exposures'>] extends [never]
 	? never
 	: {
-			collections: {
-				[C in CollectionName]: {
+			models: {
+				[C in ModelName]: {
 					row: ListRow<C>;
 					record: Row<C>;
 					insert: Insert<C>;
 					where: Where<C>;
 					orderBy: OrderBy<C>;
-					/** Many-relations a view may show as a column (a table's multi-link cell). */
-					many: ReadRelation<C> & keyof ManyRels<C> & string;
+					/** Many-relation layers a view may show as a column (a table's multi-link cell). */
+					many: SelectRel<C> & keyof ManyRels<C> & string;
 				};
 			};
-			queries: { [N in QueryCallable]: { input: QueryInput<N>; output: QueryOutput<N> } };
 			actions: { [N in Callable]: ActInput<N> };
 			automations: { [A in AutomationName]: StartInput<A> };
 		};

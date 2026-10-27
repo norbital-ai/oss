@@ -1,6 +1,6 @@
 import { Context, Effect, Option, Schema, Stream } from 'effect';
-import * as HttpServerRequest from 'effect/unstable/http/HttpServerRequest';
-import * as HttpServerResponse from 'effect/unstable/http/HttpServerResponse';
+import * as HttpServerRequest from 'effect/http/HttpServerRequest';
+import * as HttpServerResponse from 'effect/http/HttpServerResponse';
 import { BoltError } from './errors.ts';
 import { HOOKS, OAUTH_CALLBACK, type LinkManager } from '../engine/integrations/links.ts';
 import { Runs } from '../engine/services.ts';

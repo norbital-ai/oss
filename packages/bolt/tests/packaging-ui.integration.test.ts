@@ -47,7 +47,7 @@ const manifest = Result.getOrThrow(
 			}
 		},
 		relationships: {},
-		collections: { jobs: { read: { fields: 'all' } } },
+		exposures: { jobs: { read: { jobs: { fields: 'all' } } } },
 		integrations: {},
 		policies: {},
 		apps: {},
@@ -108,7 +108,7 @@ describe('/runs', () => {
 					key: id,
 					admin: false,
 					policies: [],
-					collections: {},
+					models: {},
 					automations,
 					limits: [],
 					teamTree: [],
@@ -234,13 +234,16 @@ describe('testWorkspace seed', () => {
 					authority: Authority
 				) =>
 					qReply(route, authority, {
-						reads: [{ m: 'query', a: ['customers', { limit: 10 }] }]
+						reads: [{ m: 'query', a: [{ customers: { limit: 10 } }] }]
 					}).pipe(
 						Effect.flatMap((reply) =>
 							Schema.decodeUnknownEffect(
-								Schema.Struct({ rows: Schema.Array(Schema.Struct({ name: Schema.String })) })
+								Schema.Struct({
+									customers: Schema.Struct({ rows: Schema.Array(Schema.Struct({ name: Schema.String })) })
+								})
 							)(reply.answers[0])
-						)
+						),
+						Effect.map((answer) => answer.customers)
 					);
 				expect((yield* read(br, bt.as(bt.admin).authority)).rows.map((row) => row.name)).toEqual([
 					'Public'

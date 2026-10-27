@@ -1,7 +1,7 @@
 # Workspace contract
 
-A model is one entity: stored fields, relations, read and write exposure, validation, queries,
-search, notifications and syncs. Each declaration has one owning file. Every callback
+A model is one entity: stored fields, relations, read and write layers, validation, search,
+notifications and syncs. Each declaration has one owning file. Every callback
 sits inside that declaration on the thing that invokes it.
 
 ```text
@@ -25,9 +25,9 @@ src/
 
 | Declaration               | Owning file                               | Callbacks                                                                                                        |
 | ------------------------- | ----------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
-| `model(name, spec)`       | `data/model/<name>/+model.ts`             | `create.transform`, `update.transform`, `delete.check`, `queries.*.run`, `search.indexes.*`, `notify`, `syncs.*` |
+| `model(name, spec)`       | `data/model/<name>/+model.ts`             | `create.transform`, `update.transform`, `delete.check`, `search.indexes.*`, `notify`, `syncs.*`                  |
 | `customField(name, spec)` | `data/custom_field/<name>/+definition.ts` | `validate`                                                                                                       |
-| `policy(spec)`            | `access_control/policy/+<name>.policy.ts` | `approval` on each write grant                                                                                   |
+| `policy(spec)`            | `access_control/policy/+<name>.policy.ts` | `check` on each `create`, `update` and `delete` grant                                                            |
 | `team(spec)`              | `access_control/team/+team.ts`            | none                                                                                                             |
 | `integration(name, spec)` | `integration/<name>/+integration.ts`      | `test`                                                                                                           |
 | `automation(name, spec)`  | `automation/+<name>.automation.ts`        | `run`                                                                                                            |
@@ -36,7 +36,9 @@ Names come from paths. Declarations with bodies repeat that name as their first 
 `bolt check` refuses a mismatch. Models always use named folders so their representation can
 live beside them. Relations are `kind: 'ref'` fields on the model holding the foreign key.
 Apps, groups, kiosks, envoys, MCP servers and message catalogues keep their own file roles.
-Ordinary helpers live in `lib/` or beside their owning component.
+Ordinary helpers live in `lib/` or beside their owning component. A computed answer that was once a
+declared query is a read request (a root and its layers) plus a pure `lib/` helper, called by the
+page and, over `ctx.query`, by server code.
 
 `bolt sync` evaluates declarations and writes their data shapes as literal type text into
 `.norbital/names.ts`; bodies are omitted. It does not type a declaration through an import of

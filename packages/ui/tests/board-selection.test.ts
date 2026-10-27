@@ -6,9 +6,9 @@ import { vi } from 'vitest';
 import type { Value } from '@norbital-ai/std/kind';
 import type { KindsHost } from '../src/kinds/context.ts';
 import type { BoardProps } from '../src/board/Board.svelte';
-import type { Row } from '../src/collection/types.ts';
+import type { Row } from '../src/model/types.ts';
 import type { ViewBolt } from '../src/client/contract.ts';
-import type { ToolbarItem } from '../src/collection/ViewToolbar.svelte';
+import type { ToolbarItem } from '../src/model/ViewToolbar.svelte';
 import { fromWhere, matches } from '../src/filter/filter.ts';
 import { element } from './elements.ts';
 
@@ -31,6 +31,7 @@ vi.mock('../src/primitives/dialog/confirm.ts', async () => {
 });
 import {
 	browser,
+	everyRow,
 	required,
 	textOf,
 	viewFixture,
@@ -77,12 +78,12 @@ afterEach(async () => {
 
 function filtered(input: readonly Row[], options: ReadOptions) {
 	const nodes = fromWhere(catalog, 'jobs', options.where ?? {});
-	assert.ok(nodes, 'the scripted read receives a valid collection scope');
+	assert.ok(nodes, 'the scripted read receives a valid model scope');
 	return input.filter((row) => nodes.every((node) => matches(row, node)));
 }
 function page(input: readonly Row[], options: ReadOptions) {
 	const matching = filtered(input, options);
-	if (options.all) return { rows: matching.map((row) => ({ id: row.id })), next: null };
+	if (everyRow(options)) return { rows: matching.map((row) => ({ id: row.id })), next: null };
 	const limit = options.limit ?? 25;
 	return { rows: matching.slice(0, limit), next: matching.length > limit ? 'next' : null };
 }
@@ -111,13 +112,13 @@ async function show({
 	const acts: { callable: string; input: Parameters<ViewScript['act']>[1] }[] = [];
 	const fixture = await viewFixture({
 		...script,
-		read: (collection, options) => {
-			assert.equal(collection, 'jobs');
+		read: (model, options) => {
+			assert.equal(model, 'jobs');
 			reads.push(options);
-			return script.read?.(collection, options) ?? page(input, options);
+			return script.read?.(model, options) ?? page(input, options);
 		},
-		aggregate: (collection, options) => {
-			if (script.aggregate !== undefined) return script.aggregate(collection, options);
+		aggregate: (model, options) => {
+			if (script.aggregate !== undefined) return script.aggregate(model, options);
 			const matching = filtered(input, options);
 			return ['todo', 'done'].map((status) => ({
 				key: { status },
@@ -212,7 +213,11 @@ it.live(
 							icon: 'lucide:check',
 							name: 'Mark reviewed',
 							requiresSelection: true,
-							run: (ids) => bolt.act('jobs.update', { target: ids, set: { reviewed: true } })
+							run: (ids) =>
+								bolt.act(
+									'jobs.update',
+									ids.map((target) => ({ target, set: { reviewed: true } }))
+								)
 						}
 					]
 				})
@@ -228,7 +233,10 @@ it.live(
 			yield* browser(() => openMenu(target));
 			yield* browser(() => press('item:Mark reviewed'));
 			assert.deepEqual(acts, [
-				{ callable: 'jobs.update', input: { target: ['a', 'c', 'b'], set: { reviewed: true } } }
+				{
+					callable: 'jobs.update',
+					input: ['a', 'c', 'b'].map((target) => ({ target, set: { reviewed: true } }))
+				}
 			]);
 			assert.equal(target.querySelector('[data-selected-count]'), null);
 			assert.equal(select(target, 'a').getAttribute('aria-checked'), 'false');
@@ -284,8 +292,8 @@ it.live(
 			yield* browser(() => press('delete'));
 			yield* browser(() => answer(true));
 			assert.deepEqual(acts, [
-				{ callable: 'jobs.delete', input: { target: ['c'] } },
-				{ callable: 'jobs.delete', input: { target: ['c'] } }
+				{ callable: 'jobs.delete', input: [{ target: 'c' }] },
+				{ callable: 'jobs.delete', input: [{ target: 'c' }] }
 			]);
 			assert.deepEqual(confirmations, [
 				'Delete 1 records?',
@@ -328,8 +336,8 @@ it.live('select loaded and all matching preserve author and viewer scope across 
 		assert.match(textOf(matching), /Select all 3 matching/);
 		matching.click();
 		yield* browser(settle);
-		const all = required(reads.findLast((options) => options.all));
-		assert.deepEqual(all.select, { id: true });
+		const all = required(reads.findLast(everyRow));
+		assert.deepEqual(all.fields, []);
 		assert.deepEqual(all.where, {
 			and: [{ group: { eq: 'mine' } }, { title: { like: '%In%scope%' } }]
 		});
@@ -355,7 +363,7 @@ it.live('all matching stays within the authored lanes instead of selecting hidde
 		yield* browser(settle);
 		element<HTMLButtonElement>(target, '[data-select-matching]').click();
 		yield* browser(settle);
-		assert.deepEqual(required(reads.findLast((options) => options.all)).where, {
+		assert.deepEqual(required(reads.findLast(everyRow)).where, {
 			or: [{ status: { eq: 'todo' } }]
 		});
 		assert.equal(textOf(element(target, '[data-selected-count]')), '2 selected');
@@ -373,8 +381,8 @@ for (const change of ['scope', 'clear'] as const)
 					where: { group: { eq: 'mine' } },
 					toolbar: { select: true },
 					script: {
-						read: (_collection, options) => {
-							if (options.all) {
+						read: (_model, options) => {
+							if (everyRow(options)) {
 								requested.resolve();
 								return answer.promise;
 							}

@@ -1,7 +1,7 @@
 // The production read-policy matrix (L-BOLT-229, ported from `access-structured-policy-matrix.integration.test.ts`) as
 // a table on the new engine: each row's grant `Where` compiles through the query area (`toPred` → `whereSql`, the SQL
 // every caller read conjoins, rule 13) and runs against allow/deny rows on PGlite. The rows over agent tables
-// (conversation, plan, message, turn, usage, notification) are not here: those system collections are the agents
+// (conversation, plan, message, turn, usage, notification) are not here: those system models are the agents
 // area's. `jsonPath` has no counterpart (rule 16: no `Where` reads json); the correction flag is a stored enum.
 import { describe, expect, it } from '@effect/vitest';
 import { Context, Effect, Layer, Result, Schema } from 'effect';
@@ -9,7 +9,7 @@ import { catalogOf, toPred } from '../src/engine/access/pred.ts';
 import type {
 	Authority,
 	Bindings,
-	CollectionAuthority,
+	ModelAuthority,
 	EngineActor
 } from '../src/engine/contracts.ts';
 import { PgliteDb } from '../src/node/db/pglite.ts';
@@ -66,8 +66,8 @@ const manifest = Result.getOrThrow(
 			'loans.employment': { to: 'employments', inverse: 'loans' },
 			'component_entries.employment': { to: 'employments', inverse: 'entries' }
 		},
-		collections: Object.fromEntries(
-			Object.keys(models).map((c) => [c, { read: { fields: 'all' } }])
+		exposures: Object.fromEntries(
+			Object.keys(models).map((c) => [c, { read: { [c]: { fields: 'all' } } }])
 		),
 		integrations: {},
 		policies: {},
@@ -245,16 +245,15 @@ const u = (n: string) => {
 	return id;
 };
 const b: Bindings = { now: '2026-09-25T10:00:00.000Z', today: '2026-09-25', tz: 'UTC', params: {} };
-const ALL: CollectionAuthority = {
-	read: [{ policy: 'p', where: { t: 'const', value: true }, fields: 'all' }],
+const all = (model: string): ModelAuthority => ({
+	read: { [model]: [{ policy: 'p', where: { t: 'const', value: true }, fields: 'all' }] },
 	history: [],
 	create: [],
 	update: [],
 	delete: [],
-	queries: [],
 	moves: {},
 	masks: {}
-};
+});
 const who = (
 	over: Partial<Extract<EngineActor, { kind: 'member' }>> = {},
 	admin = false
@@ -274,7 +273,7 @@ const who = (
 		party: null,
 		...over
 	},
-	collections: Object.fromEntries(Object.keys(models).map((c) => [c, ALL])),
+	models: Object.fromEntries(Object.keys(models).map((c) => [c, all(c)])),
 	automations: [],
 	capabilities: { apps: [], tools: [], mcp: [], skills: [] },
 	limits: [],

@@ -1,7 +1,7 @@
 // Typed input decoding and reference discovery share std/kind's one codec.
 import { inputSchema, type Fields, type Kind, type Value, type Where } from '@norbital-ai/std/kind';
 import { Array as EffectArray, Effect, Predicate, Result, Schema, SchemaIssue } from 'effect';
-import { collectionOf, defaultFields } from '@norbital-ai/store';
+import { exposureOf, defaultFields } from '@norbital-ai/store';
 import type { Json } from '../../decl/values.ts';
 import { encodeWire, type Wired } from '@norbital-ai/std/wire';
 import { BUILTIN_FIELDS } from '../../decl/builtin-fields.ts';
@@ -13,7 +13,7 @@ export type InputSpec = Fields;
 export type Decoded = {
 	value: Value | undefined;
 	problems: { path: string; message: string }[];
-	refs: { collection: string; id: string; field: string; where?: Where }[];
+	refs: { model: string; id: string; field: string; where?: Where }[];
 	custom?: readonly { name: string; value: Json; path: string }[];
 };
 const format = SchemaIssue.makeFormatterStandardSchemaV1({
@@ -181,7 +181,7 @@ export function decodeInput(
 			case 'id':
 				if (typeof value === 'string')
 					refs.push({
-						collection: kind.of,
+						model: kind.of,
 						id: value,
 						field: at,
 						...(kind.where === undefined ? {} : { where: kind.where })
@@ -296,7 +296,7 @@ export function outputSchema(
 		case 'row': {
 			const catalog = catalogOf(manifest);
 			const model = manifest.models[output.of];
-			const info = storeSync(collectionOf(catalog, output.of));
+			const info = storeSync(exposureOf(catalog, output.of));
 			const identity = (name: string) =>
 				catalog.models.get(name)?.fields.get('id')?.pg === 'uuid'
 					? inputSchema({ kind: 'id', of: name })
@@ -317,7 +317,7 @@ export function outputSchema(
 							? identity(relation.to)
 							: Schema.Union(
 									relation.to.map((target) =>
-										Schema.Struct({ collection: Schema.Literal(target), id: identity(target) })
+										Schema.Struct({ model: Schema.Literal(target), id: identity(target) })
 									)
 								);
 					if (relation.optional) member = Schema.NullOr(member);

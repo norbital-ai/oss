@@ -74,7 +74,7 @@ it.live(
 );
 
 it.live(
-	'collection fallback opens the same native table and keeps hidden fields out of its preview',
+	'model fallback opens the same native table and keeps hidden fields out of its preview',
 	() =>
 		browser(async () => {
 			const { target } = await show({
@@ -111,7 +111,7 @@ it.live(
 		})
 );
 
-it.live('a collection custom datatype keeps its authored renderer ahead of the fallback', () =>
+it.live('a model custom datatype keeps its authored renderer ahead of the fallback', () =>
 	browser(async () => {
 		const { target } = await show({
 			cell: true,
@@ -124,7 +124,7 @@ it.live('a collection custom datatype keeps its authored renderer ahead of the f
 	})
 );
 
-it.live('collection summaries respect hidden fields through nested JSON and custom shapes', () =>
+it.live('model summaries respect hidden fields through nested JSON and custom shapes', () =>
 	browser(async () => {
 		const hidden = {
 			kind: 'object',

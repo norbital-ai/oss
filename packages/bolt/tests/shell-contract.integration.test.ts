@@ -15,7 +15,7 @@ const manifest = Result.getOrThrow(
 		workspace: { tz: 'UTC', locale: 'en' },
 		models: { docs: { description: 'A doc', label: 'title', fields: { title: { kind: 'text' } } } },
 		relationships: {},
-		collections: { docs: { read: { fields: 'all' } } },
+		exposures: { docs: { read: { docs: { fields: 'all' } } } },
 		policies: {},
 		automations: {},
 		integrations: {},

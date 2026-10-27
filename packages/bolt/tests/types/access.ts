@@ -3,14 +3,13 @@
 import { policy } from '../../src/index.ts';
 import type {
 	Actor,
-	ApprovalWrite,
+	CreateCheck,
 	Edge,
-	Flow,
 	Grant,
 	Id,
 	LimitKey,
-	Row,
 	TeamName,
+	UpdateCheck,
 	WriteField
 } from '../../src/index.ts';
 import './registry.ts';
@@ -19,23 +18,14 @@ type Eq<A, B> = (<T>() => T extends A ? 1 : 2) extends <T>() => T extends B ? 1 
 const is = <T extends true>(): T => true as T;
 
 is<Eq<Edge<'orders', 'status'>, 'draft->submitted' | 'submitted->ordered' | 'submitted->draft'>>();
-is<Eq<WriteField<'orders', 'create'>, 'customer' | 'note' | 'due' | 'lines'>>();
-is<Eq<WriteField<'orders', 'update'>, 'status' | 'note' | 'due' | 'placed_at' | 'lines'>>();
-is<Eq<Extract<LimitKey, `orders.${string}`>, 'orders.open_total'>>();
-is<Eq<'create' extends keyof Exclude<Grant<'notices'>, { via: unknown }> ? 1 : 0, 1>>(); // writable unless a sync owns it at run time
+// a write grant's root columns are the model's declared root columns; a layer is its own path, never a column
+is<Eq<WriteField<'orders', 'create'>, 'customer' | 'note' | 'due'>>();
+is<Eq<WriteField<'orders', 'update'>, 'status' | 'note' | 'due' | 'placed_at'>>();
+is<Eq<WriteField<'orders', 'create', 'orders.lines'>, 'item' | 'qty' | 'price'>>();
+// no declared queries: no `'<model>.<query>'` limit keys
+is<Eq<Extract<LimitKey, `orders.${string}`>, never>>();
+is<Eq<'read' extends keyof Grant<'notices'> ? 1 : 0, 1>>();
 is<Eq<TeamName, 'finance' | 'sales'>>();
-// the write an approval judges, typed from the model: `previous` only on an update
-is<Eq<ApprovalWrite<'orders', 'update'>['previous'], Row<'orders'>>>();
-is<Eq<ApprovalWrite<'orders', 'create'>['previous'], null>>();
-is<
-	Eq<Extract<ApprovalWrite<'orders'>['changed'][number], 'lines' | 'unknown_relation'>, 'lines'>
->();
-is<
-	Eq<
-		ApprovalWrite<'orders'>['requester'],
-		{ readonly id: Id<'sys_user'>; readonly team: TeamName | null } | null
-	>
->();
 
 // ── valid: today's template behaviour as literals ──
 const ownOrders = { owner: { eq: { actor: 'id' } } } as const;
@@ -43,54 +33,65 @@ export const salesRep = policy({
 	description: 'Sell to our customers',
 	grants: {
 		orders: {
-			read: ownOrders,
+			read: { orders: { where: ownOrders }, 'orders.customer': { fields: ['name'] } },
 			history: true,
 			create: {
-				where: { customer: { is: { tier: { eq: 'gold' } } } },
-				fields: ['customer', 'note', 'lines'],
-				// steps in order; `if` adds one only when it holds; finance may decide in any step's place
-				approval: (write, flow) =>
-					flow
-						.step('Sales review', { teams: ['sales'] })
-						.if(write.record.note !== null, (f) =>
-							f.step('Finance sign-off', { teams: ['finance'] })
-						)
-						.supersededBy(['finance'])
+				columns: { orders: ['customer', 'note'], 'orders.lines': ['item', 'qty'] },
+				// one read over the batch replaces the old relation-hop `where`; steps in order, `if` adds one only when it
+				// holds, finance may decide in any step's place
+				check: function* (rows, ctx) {
+					const { customers } = yield* ctx.db.query({
+						customers: { where: { id: { in: rows.map((r) => r.customer) } }, fields: ['tier'] }
+					});
+					if (customers.rows.some((c) => c.tier !== 'gold'))
+						return ctx.deny('Gold customers only.', { field: 'customer' });
+					return ctx.approve((flow) =>
+						flow
+							.step('Sales review', { teams: ['sales'] })
+							.if(
+								rows.some((r) => r.note !== undefined && r.note !== null),
+								(f) => f.step('Finance sign-off', { teams: ['finance'] })
+							)
+							.supersededBy(['finance'])
+					);
+				}
 			},
 			update: {
-				where: 'read',
-				previous: { status: { in: ['draft', 'submitted'] } },
-				fields: ['status', 'note'],
-				// the owner approves their own order's status change; a wording fix needs no approval
-				approval: (write, flow) => {
-					if (!write.changed.includes('status')) return flow.allow();
-					const owner = write.record.owner;
-					return owner === null
-						? flow.step('Finance', { teams: ['finance'] })
-						: flow.step('Owner', { users: [owner] }).step('Finance', { teams: ['finance'] });
+				columns: { orders: ['status', 'note'] },
+				// the pre-image check `previous` was; the owner approves their own order's status change
+				check: function* (changes, ctx) {
+					if (changes.some((c) => c.before.status === 'ordered'))
+						return ctx.deny('An ordered order stays.', { field: 'status' });
+					if (changes.every((c) => c.set.status === undefined)) return ctx.allow();
+					const owner = changes[0]?.before.owner ?? null;
+					return ctx.approve((flow) =>
+						owner === null
+							? flow.step('Finance', { teams: ['finance'] })
+							: flow.step('Owner', { users: [owner] }).step('Finance', { teams: ['finance'] })
+					);
 				}
 			},
 			delete: {
-				where: { status: { eq: 'draft' } },
-				approval: (write, flow) =>
-					write.requester?.team === 'finance'
-						? flow.allow()
-						: flow.step('Finance', { teams: ['finance'] })
+				check: function* (rows, ctx) {
+					if (rows.some((r) => r.status !== 'draft')) return ctx.deny('Only drafts are deleted.', { row: 0 });
+					return ctx.actor.kind === 'member' && ctx.actor.teams.includes('finance')
+						? ctx.allow()
+						: ctx.approve((flow) => flow.step('Finance', { teams: ['finance'] }));
+				}
 			},
-			queries: ['open_total'],
 			moves: { status: ['draft->submitted', 'submitted->draft'] }
 		},
-		order_lines: { via: 'order' },
 		customers: {
-			read: { where: { orders: { some: ownOrders } }, fields: ['name', 'tier'] },
-			update: 'read',
-			queries: ['gold']
+			read: { customers: { where: { orders: { some: ownOrders } }, fields: ['name', 'tier'] } },
+			update: true
 		},
 		notices: { read: true },
 		sites: {
 			read: {
-				where: { customer: { in: { actor: { scopes: 'sales_rep' } } } },
-				fields: ['name', 'open']
+				sites: {
+					where: { customer: { in: { actor: { scopes: 'sales_rep' } } } },
+					fields: ['name', 'open']
+				}
 			}
 		},
 		sys_user: { read: { team: { in: { actor: 'teamTree' } } }, fields: ['name', 'email'] }
@@ -105,7 +106,6 @@ export const salesRep = policy({
 			{ rate: '600/min', per: 'ip' }
 		],
 		convert: '10/min',
-		'customers.gold': { rate: '1/15min', per: 'actor' },
 		'envoys.receive': [
 			{ rate: '8/min', per: 'sender' },
 			{ rate: '300/min', per: 'subject' }
@@ -117,69 +117,74 @@ export const salesRep = policy({
 export const applicant = policy({
 	description: 'Anyone may apply',
 	grants: {
-		customers: { read: { where: { tier: { eq: 'gold' } }, fields: ['name'] } },
-		orders: { create: { customer: { is: { tier: { eq: 'gold' } } } } }
+		customers: { read: { customers: { where: { tier: { eq: 'gold' } }, fields: ['name'] } } },
+		orders: { create: { columns: { orders: ['customer'] } } }
 	},
 	limits: { register: { rate: '10/h', per: 'ip' } }
 });
-// A kiosk-style pre-image scope (`previous` + `where`), and `moves: 'all'`.
+// A kiosk-style pre-image scope (once `previous` + `where`) is the update check over `before` and `set`; `moves: 'all'`.
 export const clerk = policy({
 	description: 'Place orders',
 	grants: {
 		orders: {
 			update: {
-				previous: { placed_at: { isNull: true } },
-				where: { placed_at: { isNull: false } }
+				check: function* (changes, ctx) {
+					return changes.every((c) => c.before.placed_at === null && c.set.placed_at != null)
+						? ctx.allow()
+						: ctx.deny('Place an unplaced order.', { field: 'placed_at' });
+				}
 			},
 			moves: 'all'
 		}
 	}
 });
-// the approval callback is part of the literal policy() returns
-is<
-	Eq<
-		typeof salesRep.grants.orders.update.approval,
-		(write: ApprovalWrite<'orders', 'update'>, flow: Flow) => Flow
-	>
->();
+// the check callbacks are part of the literal policy() returns, typed from the model's declaration
+export const createCheck: CreateCheck<'orders'> = salesRep.grants.orders.create.check;
+export const updateCheck: UpdateCheck<'orders'> = salesRep.grants.orders.update.check;
 
 // ── grants ──
-// @ts-expect-error A1 an unknown collection
+// @ts-expect-error A1 an unknown model
 // prettier-ignore
 policy({ description: 'x', grants: { oders: { read: true } } });
-// @ts-expect-error A1 teams are source declarations, never a grantable collection
+// @ts-expect-error A1 teams are source declarations, never a grantable model
 // prettier-ignore
 policy({ description: 'x', grants: { sys_team: { read: true } } });
-// @ts-expect-error A2 a read field the collection does not expose (sites reads six fields)
+// @ts-expect-error A2 a read field the layer does not expose (sites reads six fields)
 // prettier-ignore
-policy({ description: 'x', grants: { sites: { read: { fields: ['zone'] } } } });
-// @ts-expect-error A3 a scope naming an unknown field
+policy({ description: 'x', grants: { sites: { read: { sites: { fields: ['zone'] } } } } });
+// @ts-expect-error A3 a layer scope naming an unknown field
 // prettier-ignore
-policy({ description: 'x', grants: { orders: { read: { nope: { eq: 1 } } } } });
-// @ts-expect-error A4 a create field outside the create allowlist
+policy({ description: 'x', grants: { orders: { read: { orders: { where: { nope: { eq: 1 } } } } } } });
+// @ts-expect-error A3b a bare `Where` read shorthand is an identity grant's only
 // prettier-ignore
-policy({ description: 'x', grants: { orders: { create: { fields: ['status'] } } } });
-// @ts-expect-error A5 `'read'` in a grant that has no `read`
+policy({ description: 'x', grants: { orders: { read: { owner: { eq: { actor: 'id' } } } } } });
+// @ts-expect-error A4 a create column outside the declared create columns
 // prettier-ignore
-policy({ description: 'x', grants: { orders: { update: 'read' } } });
-// @ts-expect-error A6 `previous` on a create grant (update only)
+policy({ description: 'x', grants: { orders: { create: { columns: { orders: ['status'] } } } } });
+// @ts-expect-error A5 the `'read'` write shorthand is gone
 // prettier-ignore
-policy({ description: 'x', grants: { orders: { create: { previous: true } } } });
-// @ts-expect-error A7 `via` is exclusive
+policy({ description: 'x', grants: { orders: { read: true, update: 'read' } } });
+// @ts-expect-error A6 `previous` is gone: the update check judges `before`
 // prettier-ignore
-policy({ description: 'x', grants: { order_lines: { via: 'order', read: true } } });
-// @ts-expect-error A8 `via` must name a one-relation (lines is a many-relation of orders)
+policy({ description: 'x', grants: { orders: { update: { previous: { status: { eq: 'draft' } } } } } });
+// @ts-expect-error A6b a write `where` is gone: the check reads what it needs
 // prettier-ignore
-policy({ description: 'x', grants: { orders: { via: 'lines' } } });
+policy({ description: 'x', grants: { orders: { create: { where: { note: { isNull: true } } } } } });
+// @ts-expect-error A7 `via` is gone: a child is a layer of its root (decision 3)
+// prettier-ignore
+policy({ description: 'x', grants: { order_lines: { via: 'order' } } });
+// @ts-expect-error A8 a write layer is a declared write path (orders.customer is a read layer only)
+// prettier-ignore
+policy({ description: 'x', grants: { orders: { create: { columns: { 'orders.customer': ['name'] } } } } });
 // @ts-expect-error A9 a move along an undeclared edge
 // prettier-ignore
 policy({ description: 'x', grants: { orders: { moves: { status: ['draft->ordered'] } } } });
 // @ts-expect-error A10 moves on a field that is not a state
 // prettier-ignore
 policy({ description: 'x', grants: { orders: { moves: { note: ['a->b'] } } } });
-// @ts-expect-error A11 a query of another collection
+// @ts-expect-error A11 policy `queries` are gone with declared queries
 // prettier-ignore
-policy({ description: 'x', grants: { orders: { queries: ['gold'] } } });
+policy({ description: 'x', grants: { orders: { queries: ['open_total'] } } });
 // @ts-expect-error A12 an automation the workspace does not declare
 // prettier-ignore
 policy({ description: 'x', grants: {}, automations: ['orders_ship'] });
@@ -188,10 +193,13 @@ policy({ description: 'x', grants: {}, automations: ['orders_ship'] });
 policy({ description: 'x', grants: { orders: { erase: true } } });
 // @ts-expect-error A14 a create grant on a model that declares no create
 // prettier-ignore
-policy({ description: 'x', grants: { products: { read: true, create: { fields: ['name'] } } } });
+policy({ description: 'x', grants: { products: { read: true, create: true } } });
+// @ts-expect-error A15 a sync-owned model without a declared create takes no create grant
+// prettier-ignore
+policy({ description: 'x', grants: { notices: { read: true, create: true } } });
 // @ts-expect-error A16 identity-field-write: sys_user grants read only
 // prettier-ignore
-policy({ description: 'x', grants: { sys_user: { read: true, update: { fields: ['name'] } } } });
+policy({ description: 'x', grants: { sys_user: { read: true, update: true } } });
 // @ts-expect-error A17 `'read'` is not a delete scope
 // prettier-ignore
 policy({ description: 'x', grants: { orders: { read: true, delete: 'read' } } });
@@ -199,17 +207,20 @@ policy({ description: 'x', grants: { orders: { read: true, delete: 'read' } } })
 // prettier-ignore
 policy({ description: 'x', grants: { orders: { mutate: true } } });
 
-// ── approval flows on the write grant (spec §8) ──
+// ── verdicts and approval flows of a write check (spec §8) ──
 policy({
 	description: 'x',
 	grants: {
 		orders: {
 			update: {
 				// a step decided by named members, then `else` when the condition fails
-				approval: (write, flow) =>
-					flow
-						.if(write.previous.status === 'draft', (f) => f.step('Sales', { teams: ['sales'] }))
-						.else((f) => f.deny('Only a draft changes under approval.'))
+				check: function* (changes, ctx) {
+					return ctx.approve((flow) =>
+						flow
+							.if(changes[0]?.before.status === 'draft', (f) => f.step('Sales', { teams: ['sales'] }))
+							.else((f) => f.deny('Only a draft changes under approval.'))
+					);
+				}
 			}
 		}
 	}
@@ -218,35 +229,44 @@ policy({
 	description: 'x',
 	grants: {
 		orders: {
-			// @ts-expect-error AP1 approval on a read grant
-			read: { approval: (_w: unknown, flow: Flow) => flow.allow() }
+			// @ts-expect-error AP1 a check on a read grant
+			read: { check: function* (_: unknown, ctx: { allow(): unknown }) { return ctx.allow(); } }
 		}
 	}
 });
 // @ts-expect-error AP2 a step naming an undeclared team
 // prettier-ignore
-policy({ description: 'x', grants: { orders: { update: { approval: (_, flow) => flow.step('x', { teams: ['legal'] }) } } } });
-// @ts-expect-error AP3 the callback returns the flow, nothing else
+policy({ description: 'x', grants: { orders: { update: { check: function* (_, ctx) { return ctx.approve((flow) => flow.step('x', { teams: ['legal'] })); } } } } });
+// @ts-expect-error AP3 a check returns a verdict, nothing else
 // prettier-ignore
-policy({ description: 'x', grants: { orders: { update: { approval: () => true } } } });
-// @ts-expect-error AP4 a create has no previous row
+policy({ description: 'x', grants: { orders: { update: { check: function* () { return true; } } } } });
+// @ts-expect-error AP3b a plain object is no verdict
 // prettier-ignore
-policy({ description: 'x', grants: { orders: { create: { approval: (write, flow) => (write.previous.note === null ? flow.allow() : flow.deny('x')) } } } });
-// @ts-expect-error AP5 `changed` names the model's fields
+policy({ description: 'x', grants: { orders: { update: { check: function* () { return { kind: 'allow' }; } } } } });
+// @ts-expect-error AP4 a create row has no `before`
 // prettier-ignore
-policy({ description: 'x', grants: { orders: { update: { approval: (write, flow) => (write.changed.includes('nte') ? flow.allow() : flow.deny('x')) } } } });
+policy({ description: 'x', grants: { orders: { create: { check: function* (rows, ctx) { return rows[0]?.before === null ? ctx.allow() : ctx.deny('x'); } } } } });
+// @ts-expect-error AP5 `set` names the declared update columns
+// prettier-ignore
+policy({ description: 'x', grants: { orders: { update: { check: function* (changes, ctx) { return changes[0]?.set.nte === undefined ? ctx.allow() : ctx.deny('x'); } } } } });
 // @ts-expect-error AP6 a superseder is a declared team
 // prettier-ignore
-policy({ description: 'x', grants: { orders: { update: { approval: (_, flow) => flow.step('x', { teams: ['sales'] }).supersededBy(['board']) } } } });
+policy({ description: 'x', grants: { orders: { update: { check: function* (_, ctx) { return ctx.approve((flow) => flow.step('x', { teams: ['sales'] }).supersededBy(['board'])); } } } } });
 // @ts-expect-error AP7 `else` follows `if` only
 // prettier-ignore
-policy({ description: 'x', grants: { orders: { update: { approval: (_, flow) => flow.step('x', { teams: ['sales'] }).else((f) => f) } } } });
+policy({ description: 'x', grants: { orders: { update: { check: function* (_, ctx) { return ctx.approve((flow) => flow.step('x', { teams: ['sales'] }).else((f) => f)); } } } } });
 // @ts-expect-error AP8 a user approver is a member id, not a handle
 // prettier-ignore
-policy({ description: 'x', grants: { orders: { update: { approval: (_, flow) => flow.step('x', { users: ['bob'] }) } } } });
-// @ts-expect-error AP11 a record field the model lacks
+policy({ description: 'x', grants: { orders: { update: { check: function* (_, ctx) { return ctx.approve((flow) => flow.step('x', { users: ['bob'] })); } } } } });
+// @ts-expect-error AP11 a row field the model lacks
 // prettier-ignore
-policy({ description: 'x', grants: { orders: { create: { approval: (write, flow) => (write.record.amount === null ? flow.allow() : flow.deny('x')) } } } });
+policy({ description: 'x', grants: { orders: { create: { check: function* (rows, ctx) { return rows[0]?.amount === null ? ctx.allow() : ctx.deny('x'); } } } } });
+// @ts-expect-error AP12 `deny`'s path is a declared write path
+// prettier-ignore
+policy({ description: 'x', grants: { orders: { create: { check: function* (_, ctx) { return ctx.deny('x', { path: 'orders.customer' }); } } } } });
+// @ts-expect-error AP13 a check's ctx holds no `act`
+// prettier-ignore
+policy({ description: 'x', grants: { orders: { delete: { check: function* (_, ctx) { yield* ctx.act('orders.delete', []); return ctx.allow(); } } } } });
 
 // ── the policy, capabilities and limits ──
 // @ts-expect-error A29 a policy without a description
@@ -272,9 +292,9 @@ policy({ description: 'x', grants: {}, capabilities: { mcp: ['sap'] } });
 // @ts-expect-error A35 an unknown limit key
 // prettier-ignore
 policy({ description: 'x', grants: {}, limits: { unknown_limit: '600/min' } });
-// @ts-expect-error A36 an undeclared query limit key
+// @ts-expect-error A36 a `'<model>.<query>'` limit key is gone with declared queries
 // prettier-ignore
-policy({ description: 'x', grants: {}, limits: { 'orders.unknown_query': '1/min' } });
+policy({ description: 'x', grants: {}, limits: { 'orders.open_total': '1/min' } });
 // @ts-expect-error A37 a rate outside the grammar
 // prettier-ignore
 policy({ description: 'x', grants: {}, limits: { act: '600/week' } });

@@ -114,7 +114,7 @@ type InviteInput = {
 	team?: string;
 	external?: boolean;
 	party?: {
-		collection: string;
+		model: string;
 		id: string;
 	};
 };

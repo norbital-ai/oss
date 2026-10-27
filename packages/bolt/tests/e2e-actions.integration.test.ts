@@ -20,14 +20,14 @@ const manifest = {
 		notes: { description: 'A note', label: 'text', fields: { text: { kind: 'text' } } }
 	},
 	relationships: { 'notes.order': { to: 'orders', inverse: 'notes' } },
-	collections: {
+	exposures: {
 		orders: {
-			read: { fields: 'all' },
+			read: { orders: { fields: 'all' } },
 			create: {
-				input: { columns: ['title'], with: { notes: { create: { columns: ['text'] } } } }
+				columns: { orders: ['title'], 'orders.notes': ['text'] }
 			}
 		},
-		notes: { read: { fields: 'all' }, create: { input: { columns: ['text', 'order'] } } }
+		notes: { read: { notes: { fields: 'all' } }, create: { columns: { notes: ['text', 'order'] } } }
 	},
 	policies: {
 		rep: {
@@ -57,22 +57,22 @@ const manifest = {
 	agent: { skills: {} }
 } satisfies EngineManifest;
 const guest = program(`export default { automation: { orders_place: { body: function* (input, ctx) {
-	const made = yield* ctx.act('orders.create', {
-		title: input.title, notes: { create: [{ text: 'placed ' + input.title }] },
-	});
-	return made.records.find((row) => row.collection === 'orders').id;
+	const made = yield* ctx.act('orders.create', [{
+		title: input.title, notes: [{ text: 'placed ' + input.title }],
+	}]);
+	return made.records.find((row) => row.model === 'orders').id;
 } } } };`);
 const json = (response: Response) =>
 	Effect.tryPromise({
 		try: () => response.json(),
 		catch: (error) => new KitInvalid({ message: String(error) })
 	});
-const count = (db: TenantDb['Service'], collection: string) =>
-	db.value(Schema.Number, { text: `SELECT count(*)::int AS n FROM ${collection}`, params: [] });
+const count = (db: TenantDb['Service'], model: string) =>
+	db.value(Schema.Number, { text: `SELECT count(*)::int AS n FROM ${model}`, params: [] });
 
 describe('a generated nested create over /__bolt/act', () => {
 	it.live(
-		'writes two collections in one native batch; the same key replays without adding rows',
+		'writes two models in one native batch; the same key replays without adding rows',
 		() =>
 			Effect.scoped(
 				Effect.gen(function* () {
@@ -91,7 +91,7 @@ describe('a generated nested create over /__bolt/act', () => {
 								headers: { 'Idempotency-Key': 'k1' },
 								body: JSON.stringify({
 									callable: 'orders.create',
-									input: { title: 'desk', notes: { create: [{ text: 'placed desk' }] } },
+									input: [{ title: 'desk', notes: [{ text: 'placed desk' }] }],
 									issuedAt: t.clock.now()
 								})
 							})
@@ -156,7 +156,7 @@ describe('a generated nested create over /__bolt/act', () => {
 	);
 });
 
-describe('a keyed query (`ctx.query({ … })`)', () => {
+describe('a read request (`bolt.query({ … })`)', () => {
 	const keyed = {
 		...manifest,
 		models: {
@@ -167,36 +167,31 @@ describe('a keyed query (`ctx.query({ … })`)', () => {
 				fields: { title: { kind: 'text' }, status: { kind: 'text' } }
 			}
 		},
-		collections: {
-			...manifest.collections,
+		exposures: {
+			...manifest.exposures,
 			orders: {
-				...manifest.collections.orders,
-				queries: { board: { description: 'Board', input: {}, output: { kind: 'json' } } }
+				...manifest.exposures.orders,
+				read: { orders: { fields: 'all' }, 'orders.notes': { fields: 'all' } }
 			}
 		},
 		policies: {
 			rep: {
 				description: 'Rep',
 				grants: {
-					orders: { read: { where: { status: { eq: 'open' } } }, create: true, queries: ['board'] },
+					orders: { read: { orders: { where: { status: { eq: 'open' } } } }, create: true },
 					notes: { read: true, create: true }
 				}
 			}
 		}
 	} satisfies EngineManifest;
-	const board = program(`export default { collection: { orders: { bodies: { queries: {
-		board: function* (_, ctx) {
-			const { orders, notes, first } = yield* ctx.query({
-				orders: { from: 'orders', all: true, select: { title: true } },
-				notes: { from: 'notes', where: { text: { eq: 'b' } }, all: true },
-				first: { from: 'orders', id: '00000000-0000-4000-8000-000000000001' },
-			});
-			return { orders: orders.rows.map((r) => r.title).sort(), notes: notes.rows.length, first: first === null ? null : first.title };
-		},
-	} } } } };`);
+	const request = {
+		orders: { fields: ['title'], orderBy: [{ title: 'asc' }] },
+		'orders.notes': { fields: ['text'] },
+		notes: { where: { text: { eq: 'b' } } }
+	};
 
 	it.live(
-		"reads every member in one round trip and one statement, each under the caller's read policy",
+		"reads every root and layer in one round trip and one statement, each root under the caller's read policy",
 		() =>
 			Effect.scoped(
 				Effect.gen(function* () {
@@ -216,7 +211,7 @@ describe('a keyed query (`ctx.query({ … })`)', () => {
 						})
 					).pipe(Layer.provide(PgliteDb.layer()));
 					const context = yield* Layer.build(
-						TestWorkspace.layer({ manifest: keyed, guest: yield* board, db })
+						TestWorkspace.layer({ manifest: keyed, db })
 					);
 					const t = Context.get(context, TestWorkspace),
 						route = yield* routeFixture(context);
@@ -235,16 +230,23 @@ describe('a keyed query (`ctx.query({ … })`)', () => {
 						params: []
 					});
 					const rep = t.as(t.member(['rep']));
-					yield* qReply(route, rep.authority, {
-						reads: [{ m: 'query', a: ['orders.board', {}] }]
-					});
+					yield* qReply(route, rep.authority, { reads: [{ m: 'query', a: [request] }] });
 					t.count.reset();
 					const s0 = statements;
 					expect(
-						(yield* qReply(route, rep.authority, {
-							reads: [{ m: 'query', a: ['orders.board', {}] }]
-						})).answers[0]
-					).toEqual({ orders: ['open a', 'open b'], notes: 1, first: null });
+						(yield* qReply(route, rep.authority, { reads: [{ m: 'query', a: [request] }] }))
+							.answers[0]
+					).toMatchObject({
+						// the closed order is outside the root's scope; its layer follows the root
+						orders: {
+							rows: [
+								{ title: 'open a', notes: [{ text: 'b' }] },
+								{ title: 'open b', notes: [] }
+							],
+							next: null
+						},
+						notes: { rows: [{ text: 'b' }], next: null }
+					});
 					expect([t.count.reads, statements - s0]).toEqual([1, 1]);
 				})
 			)
@@ -284,15 +286,15 @@ describe('several verbs as one act (`calls.acts`, `ctx.act.many`)', () => {
 						},
 						acts: [
 							{
-								collection: 'notes',
+								model: 'notes',
 								verb: 'create',
 								input: [
 									{ text: 'a', order },
 									{ text: 'b', order }
 								]
 							},
-							{ collection: 'orders', verb: 'create', input: { title: 'chair' } },
-							{ collection: 'notes', verb: 'create', input: { text: 'c', order } }
+							{ model: 'orders', verb: 'create', input: [{ title: 'chair' }] },
+							{ model: 'notes', verb: 'create', input: [{ text: 'c', order }] }
 						]
 					};
 					const r = yield* calls.acts(request);

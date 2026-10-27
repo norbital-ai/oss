@@ -1,5 +1,5 @@
 // A small workspace for the query engine's tests: accounts ← orders ← lines, an arc on notes, a masked field.
-import type { Authority, Bindings, CollectionAuthority } from '../src/engine/contracts.ts';
+import type { Authority, Bindings, ModelAuthority } from '../src/engine/contracts.ts';
 import type { EngineManifest } from '../src/engine/manifest.ts';
 import { searchFunctions } from '@norbital-ai/store';
 import type { Pred } from '@norbital-ai/store';
@@ -62,11 +62,23 @@ export const manifest: EngineManifest = {
 		'lines.order': { to: 'orders', inverse: 'lines', owned: true },
 		'notes.about': { to: ['accounts', 'orders'], inverse: 'notes' }
 	},
-	collections: {
-		accounts: { read: { fields: 'all' } },
-		orders: { read: { fields: 'all' } },
-		lines: { read: { fields: 'all' } },
-		notes: { read: { fields: ['body', 'about'], relations: ['about'] } }
+	exposures: {
+		accounts: {
+			read: {
+				accounts: { fields: 'all' },
+				'accounts.orders': { fields: 'all' },
+				'accounts.orders.lines': { fields: 'all' }
+			}
+		},
+		orders: {
+			read: {
+				orders: { fields: 'all' },
+				'orders.account': { fields: 'all' },
+				'orders.lines': { fields: 'all' }
+			}
+		},
+		lines: { read: { lines: { fields: 'all' }, 'lines.order': { fields: 'all' } } },
+		notes: { read: { notes: { fields: ['body', 'about'] } } }
 	},
 	integrations: {},
 	policies: {},
@@ -115,17 +127,29 @@ const eq = (field: string, value: string): Pred => ({
 	op: 'eq',
 	arg: { _tag: 'Lit', value }
 });
-const arm = (where: Pred, masks: CollectionAuthority['masks'] = {}): CollectionAuthority => ({
-	read: [{ policy: 'rep', where, fields: 'all' }],
+const TRUE: Pred = { t: 'const', value: true };
+/** Read-only access points of policy `rep`: one arm per read path (its `where`), and per path the masked fields. */
+const arm = (
+	read: { readonly [path: string]: Pred },
+	masks: ModelAuthority['masks'] = {}
+): ModelAuthority => ({
+	read: Object.fromEntries(
+		Object.entries(read).map(([path, where]) => [path, [{ policy: 'rep', where, fields: 'all' }]])
+	),
 	history: [],
 	create: [],
 	update: [],
 	delete: [],
-	queries: [],
 	moves: {},
 	masks
 });
-/** A rep: sees northern accounts and their orders; an order's `total` only while it is open; never an account's `secret`. */
+const north = eq('region', 'north'),
+	secret = { secret: { t: 'const', value: false } } as const,
+	total = { total: eq('status', 'open') };
+/**
+ * A rep: sees northern accounts and their orders; an order's `total` only while it is open; never an account's `secret`.
+ * Each root's own arms scope its layers (decision 3): `orders.account` repeats the northern scope and the `secret` mask.
+ */
 export const rep: Authority = {
 	key: 'rep',
 	admin: false,
@@ -141,14 +165,21 @@ export const rep: Authority = {
 		admin: false,
 		party: null
 	},
-	collections: {
-		accounts: arm(eq('region', 'north'), { secret: { t: 'const', value: false } }),
-		orders: arm(
-			{ t: 'one', rel: 'account', target: 'accounts', pred: eq('region', 'north') },
-			{ total: eq('status', 'open') }
+	models: {
+		accounts: arm(
+			{ accounts: north, 'accounts.orders': TRUE, 'accounts.orders.lines': TRUE },
+			{ accounts: secret, 'accounts.orders': total }
 		),
-		lines: arm({ t: 'const', value: true }),
-		notes: arm({ t: 'const', value: true })
+		orders: arm(
+			{
+				orders: { t: 'one', rel: 'account', target: 'accounts', pred: north },
+				'orders.account': north,
+				'orders.lines': TRUE
+			},
+			{ orders: total, 'orders.account': secret }
+		),
+		lines: arm({ lines: TRUE, 'lines.order': TRUE }),
+		notes: arm({ notes: TRUE })
 	},
 	automations: [],
 	capabilities: { apps: [], tools: [], mcp: [], skills: [] },

@@ -5,7 +5,7 @@ import { describe, expect, it } from '@effect/vitest';
 import * as NodeCrypto from '@effect/platform-node/NodeCrypto';
 import { Crypto, Effect, Fiber, Layer, PlatformError, Stream } from 'effect';
 import { TestClock } from 'effect/testing';
-import { HttpClient, HttpClientResponse } from 'effect/unstable/http';
+import { HttpClient, HttpClientResponse } from 'effect/http';
 import { ProviderUnavailable } from '../src/errors.ts';
 import { aiModalityRefusals, openAiEmbeddings } from '../src/openrouter/embeddings.ts';
 import { openRouterChat } from '../src/openrouter/chat.ts';
@@ -197,14 +197,15 @@ describe('openAiEmbeddings', () => {
 			const crypto = yield* Crypto.Crypto.pipe(Effect.provide(NodeCrypto.layer));
 			const unavailable: Crypto.Crypto = {
 				...crypto,
-				randomUUIDv4: Effect.fail(
-					PlatformError.systemError({
-						_tag: 'Unknown',
-						module: 'Crypto',
-						method: 'randomUUIDv4',
-						description: 'secure random source unavailable'
-					})
-				)
+				randomUUIDv4: () =>
+					Effect.fail(
+						PlatformError.systemError({
+							_tag: 'Unknown',
+							module: 'Crypto',
+							method: 'randomUUIDv4',
+							description: 'secure random source unavailable'
+						})
+					)
 			};
 			let id: string | undefined;
 			const http = fake(() =>

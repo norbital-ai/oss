@@ -9,8 +9,8 @@ import {
 	Schema,
 	Stream
 } from 'effect';
-import { Argument, Command, Flag } from 'effect/unstable/cli';
-import { ChildProcess } from 'effect/unstable/process';
+import { Argument, Command, Flag } from 'effect/cli';
+import { ChildProcess } from 'effect/process';
 import { stripVTControlCharacters } from 'node:util';
 import { availableParallelism } from 'node:os';
 import { TemplateManifest } from '../protocol/schema.ts';
@@ -53,12 +53,12 @@ const json = <A>(schema: Schema.Decoder<A>, file: string) =>
 		Effect.mapError((error) => new TemplateError({ message: `${file}: ${error.message}` }))
 	);
 const environment = Config.all({
-	PATH: Config.string('PATH'),
-	HOME: Config.option(Config.string('HOME')),
-	TMPDIR: Config.option(Config.string('TMPDIR')),
-	CI: Config.option(Config.string('CI')),
-	SSH_AUTH_SOCK: Config.option(Config.string('SSH_AUTH_SOCK')),
-	GIT_SSH_COMMAND: Config.option(Config.string('GIT_SSH_COMMAND'))
+	PATH: Config.String('PATH'),
+	HOME: Config.option(Config.String('HOME')),
+	TMPDIR: Config.option(Config.String('TMPDIR')),
+	CI: Config.option(Config.String('CI')),
+	SSH_AUTH_SOCK: Config.option(Config.String('SSH_AUTH_SOCK')),
+	GIT_SSH_COMMAND: Config.option(Config.String('GIT_SSH_COMMAND'))
 }).pipe(
 	Effect.map((config) => ({
 		PATH: config.PATH,
@@ -98,10 +98,10 @@ export const run = Effect.fn('bolt.templatesProcess')(function* (
 	);
 });
 export const registryConfiguration = Effect.gen(function* () {
-	const registry = (yield* Config.string('NORBITAL_PACKAGE_REGISTRY').pipe(
+	const registry = (yield* Config.String('NORBITAL_PACKAGE_REGISTRY').pipe(
 		Config.withDefault('https://npm.pkg.github.com')
 	)).trim();
-	const token = yield* Config.option(Config.redacted('NODE_AUTH_TOKEN'));
+	const token = yield* Config.option(Config.Redacted('NODE_AUTH_TOKEN'));
 	const lines = [`@norbital-ai:registry=${registry}`];
 	if (Option.isSome(token) && Redacted.value(token.value).trim() !== '')
 		lines.push(`//${new URL(registry).host}/:_authToken=${Redacted.value(token.value).trim()}`);
@@ -592,8 +592,8 @@ export const verifyTemplates = Effect.fn('bolt.templatesVerify')(function* (
 		Effect.gen(function* () {
 			const fs = yield* FileSystem.FileSystem;
 			const path = yield* Path.Path;
-			const keep = yield* Config.string('KEEP_TEMPLATE_PROJECTIONS').pipe(Config.withDefault('0'));
-			const since = yield* Config.string('NORBITAL_TEMPLATES_SINCE').pipe(
+			const keep = yield* Config.String('KEEP_TEMPLATE_PROJECTIONS').pipe(Config.withDefault('0'));
+			const since = yield* Config.String('NORBITAL_TEMPLATES_SINCE').pipe(
 				Config.withDefault('origin/main')
 			);
 			const dir =
@@ -739,8 +739,8 @@ export const publishTemplates = Effect.fn('bolt.templatesPublish')(function* (op
 		yield* Console.log(`Wrote ${outputPath}.`);
 	}
 });
-const optional = (name: string) => Flag.string(name).pipe(Flag.optional);
-const boolean = (name: string) => Flag.boolean(name).pipe(Flag.withDefault(false));
+const optional = (name: string) => Flag.String(name).pipe(Flag.optional);
+const boolean = (name: string) => Flag.Boolean(name).pipe(Flag.withDefault(false));
 const checkCommand = Command.make('check', { filter: optional('filter') }, ({ filter }) =>
 	checkTemplates(process.cwd(), Option.getOrUndefined(filter))
 );
@@ -761,7 +761,7 @@ const testCommand = Command.make(
 				'comma-separated template directories or handles; every template when absent'
 			)
 		),
-		args: Argument.variadic(Argument.string('args'))
+		args: Argument.variadic(Argument.String('args'))
 	},
 	({ only, args }) =>
 		testTemplates(
@@ -783,7 +783,7 @@ const verifyCommand = Command.make('verify', { filter: optional('filter') }, ({ 
 const publishCommand = Command.make(
 	'publish',
 	{
-		sourceRevision: Flag.string('source-revision').pipe(Flag.withDefault('HEAD')),
+		sourceRevision: Flag.String('source-revision').pipe(Flag.withDefault('HEAD')),
 		repository: optional('repository'),
 		output: optional('output'),
 		push: optional('push'),

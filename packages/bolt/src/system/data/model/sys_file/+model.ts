@@ -20,17 +20,19 @@ export default model('sys_file', {
 	},
 	table: { primary: 'text' },
 	read: {
-		fields: [
-			'name',
-			'mime',
-			'size',
-			'sha256',
-			'field',
-			'revision',
-			'created_at',
-			'created_by',
-			'updated_at',
-			'updated_by'
-		]
+		sys_file: {
+			fields: [
+				'name',
+				'mime',
+				'size',
+				'sha256',
+				'field',
+				'revision',
+				'created_at',
+				'created_by',
+				'updated_at',
+				'updated_by'
+			]
+		}
 	}
 });

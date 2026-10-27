@@ -1,5 +1,5 @@
 import { Effect, Stream } from 'effect';
-import { ChildProcess } from 'effect/unstable/process';
+import { ChildProcess } from 'effect/process';
 import { ProcessEnvironment } from '../runtime.ts';
 import { PublicationFailed } from './error.ts';
 export const capture = Effect.fn('Publication.capture')(

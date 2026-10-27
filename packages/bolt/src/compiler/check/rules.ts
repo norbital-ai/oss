@@ -1,13 +1,14 @@
 // The build checks tsc cannot carry (§3.3.9 "Where each literal is checked", rules 6, 14, 33a, 38, 38d, 50, 52): numeric
 // ranges, `seq` patterns, labels naming an id, calendar days declared as instants, state names and reachability, search
-// index widths, cron strings, event inputs, rates, IP limits, visitor grants and refs, masked search fields, write grants
-// over child rows, syncs (their connection, parsers, cadence and instance), embedding
+// index widths, cron strings, event inputs, rates, IP limits, visitor grants and refs, masked search fields, layer maps
+// (a model's read and write layers, a policy's grant layers), syncs (their connection, parsers, cadence and instance), embedding
 // origins; and, over the model sources, a write callback reading inside a loop and a notice sent through a connection that
 // carries no conversation. Each finding names the declaring file.
 import { Array, Predicate, Result } from 'effect';
 import ts from 'typescript';
 import { LIMITS } from '../../engine/contracts.ts';
-import type { EngineManifest, GrantArm } from '../../engine/manifest.ts';
+import type { EngineManifest, GrantData } from '../../engine/manifest.ts';
+import { layerModels } from '../../decl/model.ts';
 import { scopeObject } from '../../engine/access/authority.ts';
 import { parseRate } from '../../engine/access/rate.ts';
 import { sizeBytes } from '../../engine/callables/upload.ts';
@@ -57,29 +58,16 @@ export function cronValid(s: string): boolean {
 	);
 }
 
-/** The first many-relation a `Where` on `c` crosses, through `and`/`or`/`not`, one-relation `is` and polymorphic arms. */
-function manyIn(m: EngineManifest, c: string, w: unknown): string | undefined {
-	if (!Predicate.isObject(w)) return undefined;
-	for (const [k, v] of Object.entries(w)) {
-		const relation = m.relationships[`${c}.${k}`];
-		const hit =
-			k === 'and' || k === 'or'
-				? list(v)
-						.map((x) => manyIn(m, c, x))
-						.find((x) => x !== undefined)
-				: k === 'not'
-					? manyIn(m, c, v)
-					: Object.values(m.relationships).some((r) => r.inverse === k && list(r.to).includes(c))
-						? k
-						: relation === undefined || !Predicate.isObject(v)
-							? undefined
-							: list(relation.to)
-									.map((t) => manyIn(m, t, 'is' in v ? v.is : v[t]))
-									.find((x) => x !== undefined);
-		if (hit !== undefined) return hit;
-	}
-	return undefined;
-}
+/** The fields a read grant's root layer admits (an identity grant's beside its `read`); `undefined`: every field. */
+const readFields = (c: string, g: GrantData): readonly string[] | undefined => {
+	if (g.fields !== undefined) return g.fields;
+	const root = Predicate.isObject(g.read) ? g.read[c] : undefined;
+	return Predicate.isObject(root) && strings(root.fields) ? root.fields : undefined;
+};
+/** The columns a create or update grant names on layer `path`; `undefined`: every declared one. */
+const grantColumns = (g: GrantData['create'], path: string): readonly string[] | undefined =>
+	typeof g === 'object' ? g.columns?.[path] : undefined;
+const SYSTEM_COLUMNS = ['id', 'revision', 'created_at', 'created_by', 'updated_at', 'updated_by'];
 
 type RuleContext = {
 	m: EngineManifest;
@@ -94,14 +82,14 @@ function workspaceRules({ m, bodies, at }: RuleContext): void {
 		if (m.policies[p] === undefined)
 			at('workspace/signup', 'workspace', 'workspace', `signup: there is no policy '${p}'`);
 	if (signup?.party !== undefined) {
-		const { collection, match } = signup.party;
-		const fields = m.models[collection]?.fields;
+		const { model, match } = signup.party;
+		const fields = m.models[model]?.fields;
 		if (fields === undefined)
 			at(
 				'workspace/signup',
 				'workspace',
 				'workspace',
-				`signup: party collection '${collection}' has no model`
+				`signup: party model '${model}' has no model`
 			);
 		else
 			for (const f of [match.email, match.phone])
@@ -110,7 +98,7 @@ function workspaceRules({ m, bodies, at }: RuleContext): void {
 						'workspace/signup',
 						'workspace',
 						'workspace',
-						`signup: party match '${collection}.${f}' is not a text field`
+						`signup: party match '${model}.${f}' is not a text field`
 					);
 		if (match.email === undefined && match.phone === undefined)
 			at(
@@ -122,10 +110,36 @@ function workspaceRules({ m, bodies, at }: RuleContext): void {
 	}
 }
 
+/** Whether an inline value's shape holds a polymorphic ref at any depth. */
+const nestedArc = (k: unknown): boolean => {
+	if (typeof k !== 'object' || k === null) return false;
+	if (Array.isArray(k)) return k.some(nestedArc);
+	const o: { readonly [key: string]: unknown } = { ...k };
+	if (o['kind'] === 'ref') return Array.isArray(o['to']);
+	const values = (v: unknown): readonly unknown[] =>
+		typeof v === 'object' && v !== null ? Object.values(v) : [];
+	return (
+		nestedArc(o['shape']) ||
+		nestedArc(o['of']) ||
+		nestedArc(o['rest']) ||
+		values(o['fields']).some(nestedArc) ||
+		values(o['arms']).some((arm) => values(arm).some(nestedArc))
+	);
+};
+
 function modelRules({ m, bodies, at }: RuleContext): void {
 	for (const [model, spec] of Object.entries(m.models)) {
 		for (const [f, k] of Object.entries(spec.fields)) {
 			const range = (message: string) => at('model/range', 'model', model, `${f}: ${message}`);
+			// an arc's `{ model, id }` is stored as `{ collection, id }` only in its own columns: inside an inline value
+			// the stored JSON and the API would disagree, so the declaration is refused
+			if (nestedArc(k))
+				at(
+					'model/inline-ref',
+					'model',
+					model,
+					`${f}: a ref to several models (to: [...]) cannot sit inside a json, list, object, record or union value; declare it as its own field`
+				);
 			if (
 				k.kind === 'vector' &&
 				!(Number.isInteger(k.dim) && Number(k.dim) >= 1 && Number(k.dim) <= 2000)
@@ -257,18 +271,121 @@ function modelRules({ m, bodies, at }: RuleContext): void {
 	}
 }
 
+/**
+ * Layer maps (decision 1): each model's read and write paths resolve segment by segment (`layerModels`); a layer names
+ * fields its model has, a write layer only writable columns and never the FK that ties its rows to the layer above
+ * (the engine sets it); `filled` stays within `create.columns`. A policy's read and write layers are paths and fields
+ * its model declares, and it grants a write verb only beside the model's own.
+ */
+function layerRules({ m, at }: RuleContext): void {
+	const relationships = { ...SYSTEM.relationships, ...m.relationships };
+	const modelOf = (name: string) => m.models[name] ?? SYSTEM.models[name];
+	const fieldsOf = (model: string): readonly string[] => {
+		const spec = modelOf(model);
+		return [
+			...Object.keys(spec?.fields ?? {}),
+			...Object.keys(spec?.computed ?? {}),
+			...Object.keys(relationships)
+				.filter((k) => k.startsWith(`${model}.`))
+				.map((k) => k.slice(model.length + 1)),
+			...SYSTEM_COLUMNS
+		];
+	};
+	const writable = (model: string): readonly string[] => {
+		const spec = modelOf(model);
+		return [
+			...Object.entries(spec?.fields ?? {})
+				.filter(([, k]) => k.kind !== 'seq' && k.kind !== 'sum' && k.kind !== 'count')
+				.map(([f]) => f),
+			...Object.keys(relationships)
+				.filter((k) => k.startsWith(`${model}.`))
+				.map((k) => k.slice(model.length + 1))
+		];
+	};
+	/** The FK on a child layer's model that runs back to the layer above. */
+	const backFk = (above: string, rel: string): string | undefined => {
+		const key = Object.keys(relationships).find((k) => {
+			const r = relationships[k]!;
+			return r.inverse === rel && (typeof r.to === 'string' ? r.to === above : r.to.includes(above));
+		});
+		return key?.slice(key.indexOf('.') + 1);
+	};
+	const resolved: { [model: string]: { readonly [path: string]: string } } = {};
+	for (const [model, c] of Object.entries(m.exposures)) {
+		const { models, errors } = layerModels(model, c, relationships);
+		resolved[model] = models;
+		for (const e of errors) at('model/layer', 'model', model, e);
+		const unknown = (where: string, path: string, names: readonly string[], known: readonly string[]) => {
+			for (const f of names)
+				if (!known.includes(f))
+					at('model/layer', 'model', model, `${where}: '${f}' is no ${where === 'read' ? 'field' : 'writable column'} of ${path} (${models[path]})`);
+		};
+		for (const [path, layer] of Object.entries(c.read))
+			if (models[path] !== undefined && layer.fields !== 'all')
+				unknown('read', path, layer.fields, fieldsOf(models[path]));
+		for (const [verb, map] of [
+			['create', c.create?.columns],
+			['update', c.update?.columns]
+		] as const)
+			for (const [path, cols] of Object.entries(map ?? {})) {
+				const target = models[path];
+				if (target === undefined) continue;
+				unknown(verb, path, cols, writable(target));
+				const dot = path.lastIndexOf('.');
+				const fk = dot < 0 ? undefined : backFk(models[path.slice(0, dot)] ?? '', path.slice(dot + 1));
+				if (fk !== undefined && cols.includes(fk))
+					at('model/layer', 'model', model, `${verb}: ${path} lists '${fk}', the key the engine sets from its parent row`);
+			}
+		for (const [path, cols] of Object.entries(c.create?.filled ?? {}))
+			for (const f of cols)
+				if (!(c.create?.columns[path] ?? []).includes(f))
+					at('model/layer', 'model', model, `create.filled: '${f}' is not among create.columns of ${path}`);
+	}
+	for (const [p, spec] of Object.entries(m.policies))
+		for (const [c, g] of Object.entries(spec.grants)) {
+			const declared = m.exposures[c] ?? SYSTEM.exposures[c];
+			if (declared === undefined) continue;
+			const bad = (message: string) => at('access/layer', 'policy', p, `${c}: ${message}`);
+			if (Predicate.isObject(g.read) && g.fields === undefined)
+				for (const [path, layer] of Object.entries(g.read)) {
+					const exposed = declared.read[path];
+					if (exposed === undefined) {
+						bad(`read names '${path}', which ${c} does not declare as a read layer`);
+						continue;
+					}
+					const fields = Predicate.isObject(layer) && strings(layer.fields) ? layer.fields : [];
+					const known = exposed.fields === 'all' ? fieldsOf(resolved[c]?.[path] ?? c) : [...exposed.fields, ...SYSTEM_COLUMNS];
+					for (const f of fields) if (!known.includes(f)) bad(`read ${path} admits '${f}', which that layer does not expose`);
+				}
+			for (const verb of ['create', 'update', 'delete'] as const) {
+				if (g[verb] === undefined) continue;
+				if (declared[verb] === undefined) {
+					bad(`a ${verb} grant, but ${c} declares no ${verb}`);
+					continue;
+				}
+				if (verb === 'delete') continue;
+				for (const path of Object.keys(typeof g[verb] === 'object' ? (g[verb].columns ?? {}) : {})) {
+					const own = declared[verb]?.columns[path];
+					if (own === undefined) bad(`${verb} names '${path}', which ${c}'s ${verb} does not declare`);
+					else for (const col of grantColumns(g[verb], path) ?? [])
+						if (!own.includes(col)) bad(`${verb} ${path} admits '${col}', which ${c}'s ${verb} does not declare there`);
+				}
+			}
+		}
+}
+
 function automationRules({ m, bodies, at }: RuleContext): void {
 	for (const [name, a] of Object.entries(m.automations)) {
 		const delegated = new Set<string>();
 		for (const declaration of a.delegations ?? []) {
 			const dot = declaration.verb.lastIndexOf('.'),
-				collection = declaration.verb.slice(0, dot),
+				model = declaration.verb.slice(0, dot),
 				verb = declaration.verb.slice(dot + 1);
-			const grant = m.policies[declaration.policy]?.grants[collection];
+			const grant = m.policies[declaration.policy]?.grants[model];
 			const key = declaration.verb + '\0' + declaration.policy;
 			if (
 				!isOp(verb) ||
-				m.collections[collection] === undefined ||
+				m.exposures[model] === undefined ||
 				grant === undefined ||
 				grant[verb] === undefined ||
 				delegated.has(key)
@@ -321,7 +438,7 @@ function automationRules({ m, bodies, at }: RuleContext): void {
 				Array.isArray<typeof a.runAs>(a.runAs) &&
 				!a.runAs.some((p) => {
 					const g = m.policies[p]?.grants[c];
-					return g !== undefined && (g.read !== undefined || g.via !== undefined);
+					return g !== undefined && g.read !== undefined;
 				})
 			)
 				at(
@@ -350,19 +467,7 @@ function policyRules({ m, bodies, at }: RuleContext): void {
 	}
 	for (const [p, spec] of Object.entries(m.policies)) {
 		for (const [c, g] of Object.entries(spec.grants)) {
-			// a write is judged on the rows it names, in the act: its grant cannot scope through child rows (`write/act.ts` refuses it)
-			for (const op of OPS) {
-				const s = scopeObject(m, c, g[op]),
-					rel = manyIn(m, c, s === undefined ? g[op] : s.where) ?? manyIn(m, c, s?.previous);
-				if (rel !== undefined)
-					at(
-						'access/write-many',
-						'policy',
-						p,
-						`${c}.${op}: a write grant cannot scope through the many-relation '${rel}'; refuse it in the model's ${op === 'delete' ? 'delete.check' : `${op}.transform`}`
-					);
-			}
-			const fields = scopeObject(m, c, g.read)?.fields,
+			const fields = readFields(c, g),
 				search = m.models[c]?.search?.text ?? [];
 			const hidden = fields === undefined ? undefined : search.find((f) => !fields.includes(f));
 			if (hidden !== undefined)
@@ -441,8 +546,13 @@ function kioskRules({ m, bodies, at }: RuleContext): void {
 		// A kiosk's authority is fixed and always on: its policies admit no open-ended grant. Every read,
 		// history, create and update lists its fields, and nothing deletes. Broad grants are
 		// unrepresentable here by construction.
-		const explicit = (c: string, g: GrantArm | undefined): boolean =>
-			(scopeObject(m, c, g)?.fields?.length ?? 0) > 0;
+		const explicit = (c: string, g: GrantData, op: 'read' | 'history' | 'create' | 'update'): boolean =>
+			((op === 'read'
+				? readFields(c, g)
+				: op === 'history'
+					? scopeObject(m, c, g.history)?.fields
+					: grantColumns(g[op], c)
+			)?.length ?? 0) > 0;
 		for (const p of policies) {
 			const held = m.policies[p];
 			if (held === undefined) continue;
@@ -451,7 +561,7 @@ function kioskRules({ m, bodies, at }: RuleContext): void {
 			for (const [c, g] of Object.entries(held.grants)) {
 				if (c.startsWith('sys_')) continue;
 				for (const op of ['read', 'history', 'create', 'update'] as const)
-					if (g[op] !== undefined && !explicit(c, g[op]))
+					if (g[op] !== undefined && !explicit(c, g, op))
 						narrow(`${c}.${op} lists its fields explicitly; a kiosk takes no open grant`);
 				if (g.delete !== undefined) narrow(`${c}: a kiosk never deletes`);
 			}
@@ -501,7 +611,7 @@ const pinnedTo = (where: unknown): unknown =>
 		: undefined;
 
 function syncRules({ m, at }: RuleContext): void {
-	for (const [model, c] of Object.entries(m.collections))
+	for (const [model, c] of Object.entries(m.exposures))
 		for (const [name, sync] of Object.entries(c.syncs ?? {})) {
 			const bad = (code: string, message: string) =>
 				at(`sync/${code}`, 'model', model, `syncs.${name}: ${message}`);
@@ -589,6 +699,7 @@ function embedRules({ m, at }: RuleContext): void {
 const RULES = [
 	workspaceRules,
 	modelRules,
+	layerRules,
 	automationRules,
 	policyRules,
 	visitorRules,
@@ -618,7 +729,7 @@ function visitorShape(
 		title: string;
 		forbidden: string;
 		creates: string;
-		missing: (collection: string, column: string, target: string) => string;
+		missing: (model: string, column: string, target: string) => string;
 	}
 ): void {
 	const creates = new Set(
@@ -648,16 +759,16 @@ function visitorShape(
 				if (k !== 'read' && k !== 'create')
 					bad(`${c}: a ${options.title} may only read or create, never ${k}`);
 			if (g.read !== undefined) {
-				const fields = scopeObject(m, c, g.read)?.fields;
+				const fields = readFields(c, g);
 				const label = list(m.models[c]?.label);
 				if (fields === undefined) bad(`${c}: a ${options.title} read grant lists its fields`);
 				else if (label.some((l) => !fields.includes(l)))
 					bad(`${c}: the read fields include the label (${label.join(', ')})`);
 				if (creates.has(c))
-					bad(`${c}: a ${options.title} never reads a collection ${options.creates} creates`);
+					bad(`${c}: a ${options.title} never reads a model ${options.creates} creates`);
 			}
 			if (g.create !== undefined)
-				for (const col of m.collections[c]?.create?.input.columns ?? []) {
+				for (const col of m.exposures[c]?.create?.columns[c] ?? []) {
 					const rel = m.relationships[`${c}.${col}`];
 					if (rel === undefined || rel.default !== undefined) continue;
 					for (const to of list(rel.to))

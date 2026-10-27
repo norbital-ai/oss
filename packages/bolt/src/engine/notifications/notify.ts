@@ -53,11 +53,11 @@ export const NotifyWire = Schema.Union([
 	})
 ]);
 export type NotifyWire = typeof NotifyWire.Type;
-const NotifyInput = Schema.Struct({ collection: Schema.String, event: NotifyWire });
+const NotifyInput = Schema.Struct({ model: Schema.String, event: NotifyWire });
 
-/** H1: the queued run that hands `event` to `collection`'s `notify` after the causing statement commits. */
+/** H1: the queued run that hands `event` to `model`'s `notify` after the causing statement commits. */
 export const notifyRun = (
-	input: { collection: string; event: NotifyWire },
+	input: { model: string; event: NotifyWire },
 	now: string
 ): QueuedRun => ({ automation: NOTIFY, input, dueAt: now, cause: 'schedule', depth: 0 });
 
@@ -83,7 +83,7 @@ const Notice = Schema.Struct({
 	to: Schema.Array(Recipient),
 	via: Schema.optionalKey(Schema.Array(Schema.String)),
 	attachments: Schema.optionalKey(Schema.Array(Schema.Union([FileLink, Document]))),
-	link: Schema.optionalKey(Schema.Struct({ collection: Schema.String, id: Schema.String })),
+	link: Schema.optionalKey(Schema.Struct({ model: Schema.String, id: Schema.String })),
 	once: Schema.optionalKey(Schema.String)
 });
 type Notice = typeof Notice.Type;
@@ -97,7 +97,7 @@ export type NoticeInsert = {
 	via: readonly string[];
 	title: string;
 	body: string | null;
-	link: { collection: string; id: string } | null;
+	link: { model: string; id: string } | null;
 	/** The dedupe key: the author's `once`, else the notice's own id, so a retried run inserts nothing twice. */
 	once: string;
 	attachments: readonly Attachment[];
@@ -107,7 +107,7 @@ export type NoticeContext = {
 	/** The notices' id prefix, stable per event or call (`<prefix>:<index>`). */
 	readonly id: string;
 	/** Where a notice without `link` points. */
-	readonly link?: { readonly collection: string; readonly id: string } | undefined;
+	readonly link?: { readonly model: string; readonly id: string } | undefined;
 	/** An approval event's requester and current approvers; elsewhere `'requester'` and `'approvers'` reach nobody. */
 	readonly approval?:
 		{ readonly requester: string | null; readonly approvers: typeof Approvers.Type } | undefined;
@@ -253,24 +253,24 @@ export const runNotify = Effect.gen(function* () {
 		context = yield* Effect.context<Effect.Services<ReturnType<typeof convertDocument>>>();
 	const run: RunHandler = (input, current) =>
 		Effect.gen(function* () {
-			const { collection, event } = yield* Schema.decodeUnknownEffect(NotifyInput)(input).pipe(
+			const { model, event } = yield* Schema.decodeUnknownEffect(NotifyInput)(input).pipe(
 				Effect.mapError((error) =>
 					BoltError.make(
 						'invalidInput',
 						'decode',
-						'a bolt.notify run carries { collection, event }',
+						'a bolt.notify run carries { model, event }',
 						error
 					)
 				)
 			);
 			// a release that dropped the model's `notify` since the event was queued
-			if (m.collections[collection]?.notify !== true) return { notices: 0 };
+			if (m.exposures[model]?.notify !== true) return { notices: 0 };
 			const now = iso(yield* Clock.currentTimeMillis);
 			const invocation: Invocation = {
 				id: current.id,
 				run: current.id,
 				kind: 'notify',
-				target: collection,
+				target: model,
 				input: event,
 				ctx: {
 					actor: { kind: 'system', run: current.id, by: { platform: NOTIFY } },
@@ -292,7 +292,7 @@ export const runNotify = Effect.gen(function* () {
 				id: event.kind === 'approval' ? `${event.request}:${current.id}` : current.id,
 				link:
 					typeof record === 'string' && (event.kind === 'approval' || event.records.length === 1)
-						? { collection, id: record }
+						? { model, id: record }
 						: undefined,
 				approval:
 					event.kind === 'approval'

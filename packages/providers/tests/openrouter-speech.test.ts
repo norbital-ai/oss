@@ -5,7 +5,7 @@ import { describe, expect, it } from '@effect/vitest';
 import { Effect, Fiber, Layer, Schema } from 'effect';
 import { TestClock } from 'effect/testing';
 import * as NodeServices from '@effect/platform-node/NodeServices';
-import { FetchHttpClient } from 'effect/unstable/http';
+import { FetchHttpClient } from 'effect/http';
 import { SpeechFailure } from '../src/errors.ts';
 import {
 	byteRange,

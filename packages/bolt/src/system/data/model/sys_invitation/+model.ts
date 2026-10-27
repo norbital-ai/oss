@@ -22,5 +22,5 @@ export default model('sys_invitation', {
 	},
 	check: { addressed: { or: [{ email: { isNull: false } }, { phone: { isNull: false } }] } },
 	table: { primary: 'text', indexes: [{ on: [{ lower: 'email' }] }, { on: ['phone'] }] },
-	read: { fields: 'all' }
+	read: 'all'
 });

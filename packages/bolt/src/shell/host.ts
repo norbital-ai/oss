@@ -15,14 +15,21 @@ import {
 	Schema,
 	Stream
 } from 'effect';
-import * as HttpClient from 'effect/unstable/http/HttpClient';
-import * as HttpClientRequest from 'effect/unstable/http/HttpClientRequest';
-import * as HttpClientResponse from 'effect/unstable/http/HttpClientResponse';
-import * as HttpServerRequest from 'effect/unstable/http/HttpServerRequest';
-import * as HttpServerResponse from 'effect/unstable/http/HttpServerResponse';
-import * as Headers from 'effect/unstable/http/Headers';
+import * as HttpClient from 'effect/http/HttpClient';
+import * as HttpClientRequest from 'effect/http/HttpClientRequest';
+import * as HttpClientResponse from 'effect/http/HttpClientResponse';
+import * as HttpServerRequest from 'effect/http/HttpServerRequest';
+import * as HttpServerResponse from 'effect/http/HttpServerResponse';
+import * as Headers from 'effect/http/Headers';
 import { Unavailable } from '../decl/errors.ts';
-import { Activation, Manifest, Identity, Runs, type Authenticated } from '../engine/services.ts';
+import {
+	Activation,
+	Guest,
+	Manifest,
+	Identity,
+	Runs,
+	type Authenticated
+} from '../engine/services.ts';
 import { Syncs } from '../engine/sync/index.ts';
 import { mayUpdate } from '../engine/write/act.ts';
 import { localOf } from '@norbital-ai/std/zone';
@@ -365,6 +372,7 @@ const makeShell = Effect.gen(function* () {
 		m = yield* Manifest,
 		identity = yield* Identity,
 		db = yield* TenantDb,
+		guest = yield* Guest,
 		runs = yield* Runs,
 		syncs = yield* Syncs,
 		secrets = yield* Secrets,
@@ -382,11 +390,13 @@ const makeShell = Effect.gen(function* () {
 	const names = cookieNames(secure);
 	const credentialNames: ReadonlySet<string> = new Set(Object.values(names));
 	const crypto = yield* Crypto.Crypto;
-	const uuid = crypto.randomUUIDv4.pipe(
-		Effect.mapError((error) =>
-			BoltError.make('unavailable', 'facility', 'Secure random UUID generation failed.', error)
-		)
-	);
+	const uuid = crypto
+		.randomUUIDv4()
+		.pipe(
+			Effect.mapError((error) =>
+				BoltError.make('unavailable', 'facility', 'Secure random UUID generation failed.', error)
+			)
+		);
 	const cookie = (name: string, value: string, maxAge: number | null) =>
 		`${name}=${encodeURIComponent(value)}; Path=${basePath(c.publicUrl) || '/'}; HttpOnly; ${cookieSite(secure)}${maxAge === null ? '' : `; Max-Age=${maxAge}`}`;
 	const publicApp = (name: string | null): string | null =>
@@ -724,6 +734,9 @@ const makeShell = Effect.gen(function* () {
 			x.preview === null && workspacePort !== undefined
 				? yield* hostCall(() => workspacePort(auth))
 				: [];
+		const [runtimeEnvoys] = yield* h.db.read([
+			{ text: 'SELECT id, name FROM sys_envoy WHERE active ORDER BY name, id', params: [] }
+		]);
 		const b: ShellBoot = {
 			...bootFor(m, ws, auth, c.studio !== undefined),
 			name: Option.getOrNull(user)?.name ?? null,
@@ -734,7 +747,14 @@ const makeShell = Effect.gen(function* () {
 			...(c.ai === false ? { aiUnconfigured: true as const } : {}),
 			...(notice === null ? {} : { notice }),
 			...(workspaces.length === 0 ? {} : { workspaces }),
-			envoys: Object.fromEntries(Object.entries(m.envoys).map(([key, envoy]) => [key, envoy.name]))
+			envoys: Object.fromEntries([
+				...Object.entries(m.envoys).map(([key, envoy]) => [key, envoy.name] as const),
+				...(runtimeEnvoys?.rows ?? []).flatMap((row) =>
+					typeof row['id'] === 'string' && typeof row['name'] === 'string'
+						? [[row['id'], row['name']] as const]
+						: []
+				)
+			])
 		};
 		// the session slides in the database (a day at most between refreshes); every boot carries it to the cookie too, so a
 		// member who keeps coming back is never signed out by a cookie that kept its first seven days
@@ -932,12 +952,19 @@ const makeShell = Effect.gen(function* () {
 		instance: string
 	) {
 		const at = yield* h.now;
-		const allowed = yield* mayUpdate({ manifest: m, db }, 'sys_integration', instance, auth, {
-			now: at.toISOString(),
-			today: localOf(at.getTime(), m.workspace.tz).date,
-			tz: m.workspace.tz,
-			params: {}
-		});
+		// the instance's update checks judge a host verb on it (rule 35)
+		const allowed = yield* mayUpdate(
+			{ manifest: m, db, guest },
+			'sys_integration',
+			instance,
+			auth,
+			{
+				now: at.toISOString(),
+				today: localOf(at.getTime(), m.workspace.tz).date,
+				tz: m.workspace.tz,
+				params: {}
+			}
+		);
 		if (allowed !== true)
 			return yield* Effect.fail(
 				BoltError.make(

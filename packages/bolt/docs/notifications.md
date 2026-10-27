@@ -13,7 +13,7 @@ notify: function* (event, ctx) {
     to: [{ team: 'project_reviewers' }],
     via: ['whatsapp'],
     attachments: record.brief === null ? [] : [record.brief],
-    link: { collection: 'projects', id: record.id }
+    link: { model: 'projects', id: record.id }
   }));
 }
 ```

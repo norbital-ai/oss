@@ -5,7 +5,7 @@ import { Validator } from '@cfworker/json-schema';
 describe('runtime JSON Schema compatibility', () => {
 	it.effect('retains conditional JSON Schema constraints supported by system-technic', () =>
 		Effect.sync(() => {
-			// Authored system-technic definitions accept active conditionals and dependentSchemas; rc.112 rejects them.
+			// Authored system-technic definitions accept active conditionals and dependentSchemas; Effect's JSON Schema import rejects them.
 			const schema: import('@cfworker/json-schema').Schema = {
 				type: 'object',
 				properties: { kind: { type: 'string' }, value: { type: 'number' } },
@@ -21,7 +21,7 @@ describe('runtime JSON Schema compatibility', () => {
 					schema: { ...schema },
 					definitions: {}
 				})
-			).toThrow('Unsupported JSON Schema keyword');
+			).toThrow('Cannot import JSON Schema keyword "if"');
 		})
 	);
 });

@@ -24,7 +24,7 @@ Shows any stored or input value by its kind; readonly form values stay copyable.
 	import { Decimal } from '@norbital-ai/std/decimal';
 	import { Schema } from 'effect';
 	import { inputSchema } from '@norbital-ai/std/kind';
-	import { useEnumText } from '../collection/context.js';
+	import { useEnumText } from '../model/context.js';
 	import Badge from '../primitives/badge/badge.svelte';
 	import CopyText from '../primitives/copy-text/copy-text.svelte';
 	import ReadonlyMarkdown from '../editors/readonly-markdown.svelte';
@@ -103,7 +103,7 @@ Shows any stored or input value by its kind; readonly form values stay copyable.
 {:else if readonly && (relation !== undefined || kind.kind === 'id')}
 	{@const arc = arcOf(v)}
 	<Picker
-		of={arc?.collection ?? relation?.targets[0] ?? (kind.kind === 'id' ? kind.of : '')}
+		of={arc?.model ?? relation?.targets[0] ?? (kind.kind === 'id' ? kind.of : '')}
 		value={arc?.id ?? String(v)}
 		onChange={() => {}}
 		{id}
@@ -140,6 +140,7 @@ Shows any stored or input value by its kind; readonly form values stay copyable.
 			icon={v ? 'lucide:check' : 'lucide:x'}
 			class={cn('size-4', v ? 'text-success' : 'text-muted-foreground', className)}
 			aria-label={v ? t('yes') : t('no')}
+			aria-hidden={false}
 		/>{/if}
 {:else if field?.entry.renderer}
 	{@const Renderer = field.entry.renderer}

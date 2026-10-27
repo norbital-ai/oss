@@ -36,7 +36,7 @@ it.effect('describe exists only with AI and returns the committed where/orderBy'
 		});
 		expect(sent[0]).toMatchObject({
 			callable: 'filter.describe',
-			input: { collection: 'jobs', text: 'open jobs, newest first' }
+			input: { model: 'jobs', text: 'open jobs, newest first' }
 		});
 		reply = {
 			outcome: {
@@ -95,6 +95,6 @@ it.effect('options returns the catalogue the builder renders', () =>
 				}
 			]
 		});
-		expect(sent[0]).toMatchObject({ callable: 'filter.options', input: { collection: 'jobs' } });
+		expect(sent[0]).toMatchObject({ callable: 'filter.options', input: { model: 'jobs' } });
 	})
 );

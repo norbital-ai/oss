@@ -18,9 +18,9 @@ const manifest: EngineManifest = {
 		}
 	},
 	relationships: {},
-	collections: {
+	exposures: {
 		documents: {
-			read: { fields: 'all' },
+			read: { documents: { fields: 'all' } },
 			syncs: { sheet: { with: 'file', parser: ['csv'], write: true } }
 		}
 	}

@@ -14,8 +14,8 @@ const manifest = Result.getOrThrow(
 			customers: { description: 'A customer', label: 'name', fields: { name: { kind: 'text' } } }
 		},
 		relationships: {},
-		collections: {
-			customers: { read: { fields: 'all' }, create: { input: { columns: ['name'] } } }
+		exposures: {
+			customers: { read: { customers: { fields: 'all' } }, create: { columns: { customers: ['name'] } } }
 		},
 		policies: { reader: { description: 'Reads customers', grants: { customers: { read: true } } } },
 		automations: {},
@@ -35,11 +35,11 @@ it.effect('dispatches generated verbs through the host catalogue and records typ
 	Effect.gen(function* () {
 		const t = yield* TestWorkspace;
 		expect(VERBS).toContain('erase');
-		const created = yield* t.as(t.admin).act('customers.create', { name: 'Acme' });
+		const created = yield* t.as(t.admin).act('customers.create', [{ name: 'Acme' }]);
 		expect(created.kind).toBe('committed');
 		if (created.kind !== 'committed') throw new Error('the create did not commit');
-		const record = created.records.find((record) => record.collection === 'customers');
-		if (record === undefined || record.collection !== 'customers')
+		const record = created.records.find((record) => record.model === 'customers');
+		if (record === undefined || record.model !== 'customers')
 			throw new Error('the create returned no customer');
 		const id = record.id;
 		expect(
@@ -53,7 +53,7 @@ it.effect('dispatches generated verbs through the host catalogue and records typ
 				?.rows
 		).toEqual([{ n: 0 }]);
 		const failure = yield* Effect.flip(
-			t.as(t.member(['reader'])).act('customers.create', { name: 'Beta' })
+			t.as(t.member(['reader'])).act('customers.create', [{ name: 'Beta' }])
 		);
 		expect(failure).toBeInstanceOf(ActRefused);
 		expect(failure).toMatchObject({ _tag: 'ActRefused', code: 'forbidden' });

@@ -1,10 +1,10 @@
-import { Context, Effect, Fiber, FileSystem, Layer, Option, Path } from 'effect';
+import { ByteSize, Context, Effect, Fiber, FileSystem, Layer, Option, Path } from 'effect';
 import {
 	FetchHttpClient,
 	HttpServerRequest,
 	HttpServerResponse,
 	HttpIncomingMessage
-} from 'effect/unstable/http';
+} from 'effect/http';
 import * as NodeHttpServer from '@effect/platform-node/NodeHttpServer';
 import { createServer } from 'node:http';
 import pg from 'pg';
@@ -78,8 +78,7 @@ export const ServerLive = (config: Config, options: StartOptions = {}) =>
 					const activation = yield* activate(config, prepared, options),
 						host = Context.get(activation.context, BoltHost),
 						pages = Context.get(activation.context, PublicPages);
-					const io =
-						yield* Effect.context<import('effect/unstable/http/HttpPlatform').HttpPlatform>();
+					const io = yield* Effect.context<import('effect/http/HttpPlatform').HttpPlatform>();
 					const files = yield* Effect.context<FileSystem.FileSystem | Path.Path>();
 					const handle = Effect.gen(function* () {
 						const incoming = yield* HttpServerRequest.HttpServerRequest;
@@ -153,7 +152,7 @@ export const ServerLive = (config: Config, options: StartOptions = {}) =>
 							handle.pipe(
 								Effect.provideService(
 									HttpIncomingMessage.MaxBodySize,
-									FileSystem.Size(
+									ByteSize.bytes(
 										new URL(request.url, config.publicUrl).pathname.startsWith('/__bolt/files/')
 											? LIMITS.storedFileBytes
 											: LIMITS.argsBytes + 1024 * 1024
@@ -170,7 +169,7 @@ export const ServerLive = (config: Config, options: StartOptions = {}) =>
 						})
 					);
 					const url =
-						http.address._tag === 'TcpAddress'
+						http.address._tag !== 'UnixPathAddress'
 							? `http://${config.host.includes(':') ? `[${config.host}]` : config.host}:${http.address.port}`
 							: config.publicUrl;
 					return {

@@ -32,16 +32,16 @@ const manifest: EngineManifest = {
 		}
 	},
 	relationships: { 'line.point': { to: 'point', inverse: 'lines' } },
-	collections: {
+	exposures: {
 		point: {
-			read: { fields: 'all' },
-			create: { input: { columns: ['code'] } },
-			update: { input: { columns: ['code'] } }
+			read: { point: { fields: 'all' } },
+			create: { columns: { point: ['code'] } },
+			update: { columns: { point: ['code'] } }
 		},
 		line: {
-			read: { fields: 'all' },
-			create: { input: { columns: ['code', 'amount', 'point'] } },
-			update: { input: { columns: ['code', 'amount'] } },
+			read: { line: { fields: 'all' } },
+			create: { columns: { line: ['code', 'amount', 'point'] } },
+			update: { columns: { line: ['code', 'amount'] } },
 			delete: {}
 		}
 	}
@@ -61,7 +61,7 @@ it.effect('writes models named after Postgres types using their actual relation 
 		);
 		let serial = 0;
 		const run = (
-			collection: string,
+			model: string,
 			verb: ActRequest['verb'],
 			input: Json,
 			onConflict?: 'update' | 'keep'
@@ -69,7 +69,7 @@ it.effect('writes models named after Postgres types using their actual relation 
 			act(
 				{ manifest, db },
 				{
-					collection,
+					model,
 					verb,
 					input,
 					onConflict,
@@ -86,16 +86,16 @@ it.effect('writes models named after Postgres types using their actual relation 
 					return result;
 				})
 			);
-		yield* run('point', 'create', { code: 'Q' });
-		yield* run('point', 'update', { target: PARENT, set: { code: 'P2' } });
-		yield* run('line', 'create', { code: 'NEW', amount: 3, point: PARENT });
-		yield* run('line', 'update', { target: CHILD, set: { amount: 4 } });
-		yield* run('line', 'upsert', { code: 'L', amount: 5, point: PARENT }, 'update');
+		yield* run('point', 'create', [{ code: 'Q' }]);
+		yield* run('point', 'update', [{ target: PARENT, set: { code: 'P2' } }]);
+		yield* run('line', 'create', [{ code: 'NEW', amount: 3, point: PARENT }]);
+		yield* run('line', 'update', [{ target: CHILD, set: { amount: 4 } }]);
+		yield* run('line', 'upsert', [{ code: 'L', amount: 5, point: PARENT }], 'update');
 		yield* run('line', 'import', {
 			rows: [{ code: 'IMPORTED', amount: 1, point: { code: 'P2' } }],
 			onConflict: 'update'
 		});
-		yield* run('line', 'delete', { target: CHILD });
+		yield* run('line', 'delete', [{ target: CHILD }]);
 		expect(
 			yield* db.rows(Schema.Struct({ total: Schema.String }), {
 				text: 'SELECT total::text AS total FROM point WHERE id = $1',

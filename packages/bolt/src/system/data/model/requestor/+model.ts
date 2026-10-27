@@ -9,5 +9,5 @@ export default model('requestor', {
 		approval_request_id: { kind: 'ref', to: 'approval_request' }
 	},
 	table: { primary: 'text' },
-	read: { fields: 'all' }
+	read: 'all'
 });

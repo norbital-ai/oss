@@ -12,7 +12,7 @@ import {
 	Stream,
 	SubscriptionRef
 } from 'effect';
-import type { HttpClient } from 'effect/unstable/http';
+import type { HttpClient } from 'effect/http';
 import type { FileRef, Json } from '../decl/values.ts';
 import { Instant, PlainDate } from '@norbital-ai/std/date';
 import { reactiveClock, reactiveQuery } from '@norbital-ai/ui/effect';
@@ -77,7 +77,7 @@ export type BoltConfig = {
 };
 type Row = { readonly [field: string]: Json };
 const jsonArray = (value: Json | undefined): value is readonly Json[] => Array.isArray(value);
-type Paint = { collection: string; apply(value: Json, read: WireRead): Json };
+type Paint = { model: string; apply(page: Json): Json };
 type ViewState = { value: Json | undefined; error: ReadFailed | undefined; sequence: number };
 type ViewConsumer = {
 	readonly fiberId: number;
@@ -197,33 +197,29 @@ export function patched(value: Json | undefined, ops: readonly PatchOp[]): Json 
 	return rows.length > 1 ? undefined : (rows[0] ?? null);
 }
 
-/** The paint of one generated write over the live reads of its collection (rule 67); queries do not paint. */
-function paintOf(collection: string, verb: string, input: Json, key: string): Paint {
-	const rows = (v: Json, read: WireRead, each: (rows: readonly Row[]) => readonly Row[]): Json => {
-		if (read.m !== 'query') return v;
+/** The roots a read request names (`query({ … })`), whose pages a write's paint reaches. */
+const rootsOf = (read: WireRead): readonly string[] => {
+	const request = read.m === 'query' ? read.a[0] : undefined;
+	return isRow(request) ? Object.keys(request).filter((path) => !path.includes('.')) : [];
+};
+/** The paint of one generated write over each live read request's page of its model (rule 67). */
+function paintOf(model: string, verb: string, input: Json, key: string): Paint {
+	const rows = (v: Json, each: (rows: readonly Row[]) => readonly Row[]): Json => {
 		const values = isRow(v) ? v['rows'] : undefined;
-		if (isRow(v) && jsonArray(values))
-			return values.every(isRow) ? { ...v, rows: each(values) } : v;
-		return isRow(read.a[1]) && read.a[1]['id'] !== undefined && isRow(v)
-			? (each([v])[0] ?? null)
-			: v;
+		return isRow(v) && jsonArray(values) && values.every(isRow) ? { ...v, rows: each(values) } : v;
 	};
 	if (verb === 'create') {
 		const created = list(input).map((x, i): Row => ({
 			id: `pending:${key}:${i}`,
 			...(isRow(x) ? x : {})
 		}));
-		return {
-			collection,
-			apply: (v, read) =>
-				isRow(v) && jsonArray(v['rows']) ? rows(v, read, (rs) => [...created, ...rs]) : v
-		};
+		return { model, apply: (v) => rows(v, (rs) => [...created, ...rs]) };
 	}
 	if (verb === 'delete') {
 		const gone = new Set(list((isRow(input) ? input['target'] : null) as Json).map(String));
 		return {
-			collection,
-			apply: (v, m) => rows(v, m, (rs) => rs.filter((r) => !gone.has(String(r['id']))))
+			model,
+			apply: (v) => rows(v, (rs) => rs.filter((r) => !gone.has(String(r['id']))))
 		};
 	}
 	const sets = new Map<string, Row>();
@@ -238,9 +234,9 @@ function paintOf(collection: string, verb: string, input: Json, key: string): Pa
 			for (const id of list(x['target'] as Json)) sets.set(String(id), set);
 		}
 	return {
-		collection,
-		apply: (v, m) =>
-			rows(v, m, (rs) =>
+		model,
+		apply: (v) =>
+			rows(v, (rs) =>
 				rs.map((r) => (sets.has(String(r['id'])) ? { ...r, ...sets.get(String(r['id'])) } : r))
 			)
 	};
@@ -266,7 +262,13 @@ export const createBolt = (config: BoltConfig) =>
 			decoder: Catalog | undefined;
 		let noticeVersion = -1;
 		const noticeIds = new Set<string>();
-		const track = (value: Json | undefined) => {
+		const track = (value: Json | undefined): void => {
+			// a read request's answer is a page per root
+			if (isRow(value) && value['rows'] === undefined && value['id'] === undefined) {
+				for (const page of Object.values(value))
+					if (isRow(page) && jsonArray(page['rows'])) track(page);
+				return;
+			}
 			for (const row of jsonArray(value)
 				? value
 				: isRow(value) && jsonArray(value['rows'])
@@ -279,7 +281,8 @@ export const createBolt = (config: BoltConfig) =>
 			let value = view.server;
 			if (value !== undefined)
 				for (const paint of paints)
-					if (paint.collection === view.read.a[0]) value = paint.apply(value, view.read);
+					if (isRow(value) && rootsOf(view.read).includes(paint.model))
+						value = { ...value, [paint.model]: paint.apply(value[paint.model] ?? null) };
 			return value;
 		};
 		const notify = (view: View, error?: ReadFailed) =>
@@ -298,10 +301,10 @@ export const createBolt = (config: BoltConfig) =>
 					),
 				{ concurrency: 'unbounded', discard: true }
 			);
-		const repaint = (collection: string, initiatingFiber: number) =>
+		const repaint = (model: string, initiatingFiber: number) =>
 			Effect.gen(function* () {
 				const changed = yield* Effect.forEach(
-					[...views.values()].filter((view) => view.read.a[0] === collection),
+					[...views.values()].filter((view) => rootsOf(view.read).includes(model)),
 					(view) => notify(view).pipe(Effect.map((sequence) => ({ view, sequence })))
 				);
 				yield* Effect.forEach(
@@ -512,12 +515,7 @@ export const createBolt = (config: BoltConfig) =>
 		const q = <T>(method: WireRead['m'], args: readonly Wired[]): Query<T> => {
 			const read: WireRead = { m: method, a: args.map(encodeWire) };
 			const once = answer(read).pipe(
-				Effect.tap((value) =>
-					Effect.sync(() => {
-						if (!(method === 'query' && isRow(args[1]) && args[1]['revision'] !== undefined))
-							track(value);
-					})
-				),
+				Effect.tap((value) => Effect.sync(() => track(value))),
 				Effect.map((value) => value as T)
 			);
 			return Object.assign(reactiveQuery(once, observe<T>({ read })), { read });
@@ -657,7 +655,7 @@ export const createBolt = (config: BoltConfig) =>
 				const initiatingFiber = yield* Effect.fiberId;
 				const wireInput = encodeWire(input);
 				const dot = callable.lastIndexOf('.'),
-					collection = callable.slice(0, dot),
+					model = callable.slice(0, dot),
 					verb = callable.slice(dot + 1);
 				const key = options.key ?? uuid();
 				let observed = options.observed === undefined ? undefined : { ...options.observed };
@@ -667,10 +665,10 @@ export const createBolt = (config: BoltConfig) =>
 							const revision = revisions.get(String(id));
 							if (revision !== undefined) (observed ??= {})[String(id)] = revision;
 						}
-				const paint = PAINTED.has(verb) ? paintOf(collection, verb, wireInput, key) : null;
+				const paint = PAINTED.has(verb) ? paintOf(model, verb, wireInput, key) : null;
 				if (paint !== null) paints.add(paint);
 				const request = Effect.gen(function* () {
-					if (paint !== null) yield* repaint(collection, initiatingFiber);
+					if (paint !== null) yield* repaint(model, initiatingFiber);
 					return yield* send(callable, input, key, observed, initiatingFiber).pipe(
 						Effect.flatMap(settled)
 					);
@@ -680,7 +678,7 @@ export const createBolt = (config: BoltConfig) =>
 						Effect.gen(function* () {
 							if (paint !== null) {
 								paints.delete(paint);
-								yield* repaint(collection, initiatingFiber);
+								yield* repaint(model, initiatingFiber);
 							}
 						})
 					)
@@ -719,12 +717,12 @@ export const createBolt = (config: BoltConfig) =>
 				})
 			);
 		return {
-			aggregate: <T = Row[]>(collection: string, options: Wired) =>
-				q<T>('aggregate', [collection, options]),
-			history: <T = Json>(collection: string, id: string, options: { at?: Json } = {}) =>
-				q<T>('history', [collection, id, ...(options.at === undefined ? [] : [options.at])]),
-			query: <T = Json>(name: string | Readonly<Record<string, Wired>>, input?: Wired) =>
-				q<T>('query', typeof name === 'string' ? [name, input ?? {}] : [name]),
+			aggregate: <T = Row[]>(model: string, options: Wired) =>
+				q<T>('aggregate', [model, options]),
+			history: <T = Json>(model: string, id: string, options: { at?: Json } = {}) =>
+				q<T>('history', [model, id, ...(options.at === undefined ? [] : [options.at])]),
+			/** One read request: `query({ <root>: { … }, '<root>.<layer>': { … } })`, answered as a page per root. */
+			query: <T = Json>(request: Readonly<Record<string, Wired>>) => q<T>('query', [request]),
 			/** Internal stream edge for shell surfaces. Pages read Query properties directly. */
 			observe,
 			clock: (unit?: 'minute' | 'hour' | 'day') =>
@@ -745,15 +743,15 @@ export const createBolt = (config: BoltConfig) =>
 					() => (config.now === undefined ? new Date() : new Date(config.now()))
 				),
 			act,
-			recordCapabilities: (collection: string, id: string, parent?: RecordParentContext) =>
+			recordCapabilities: (model: string, id: string, parent?: RecordParentContext) =>
 				getValue(
 					`${PATHS.recordCapabilities}?${new URLSearchParams({
-						collection,
+						model,
 						id,
 						...(parent === undefined
 							? {}
 							: {
-									parentCollection: parent.collection,
+									parentModel: parent.model,
 									parentId: parent.id,
 									relation: parent.relation,
 									parentRevision: String(parent.revision)
@@ -763,17 +761,17 @@ export const createBolt = (config: BoltConfig) =>
 					null,
 					'Record permissions could not be loaded.'
 				).pipe(Effect.map((answer) => answer?.value ?? null)),
-			decode(collection: string, view: { where?: Json; orderBy?: Json }) {
+			decode(model: string, view: { where?: Json; orderBy?: Json }) {
 				if (config.catalog === undefined)
 					throw new Error('This client has no catalog to decode against.');
 				return storeSync(
-					decodeView((decoder ??= browserCatalog(config.catalog)), collection, view)
+					decodeView((decoder ??= browserCatalog(config.catalog)), model, view)
 				);
 			},
 			...(config.describe === true
 				? {
 						describe: (
-							collection: string,
+							model: string,
 							text: string,
 							fields?: readonly {
 								name: string;
@@ -783,7 +781,7 @@ export const createBolt = (config: BoltConfig) =>
 							}[]
 						) =>
 							act('filter.describe', {
-								collection,
+								model,
 								text,
 								...(fields === undefined ? {} : { fields })
 							}).pipe(
@@ -810,7 +808,7 @@ export const createBolt = (config: BoltConfig) =>
 					}
 				: {}),
 			options: (
-				collection: string,
+				model: string,
 				fields?: readonly {
 					name: string;
 					label: string;
@@ -818,7 +816,7 @@ export const createBolt = (config: BoltConfig) =>
 					optional?: boolean;
 				}[]
 			) =>
-				act('filter.options', { collection, ...(fields === undefined ? {} : { fields }) }).pipe(
+				act('filter.options', { model, ...(fields === undefined ? {} : { fields }) }).pipe(
 					Effect.flatMap((outcome) =>
 						outcome.kind === 'committed'
 							? decode(FilterOptionsAnswer, outcome.output)
@@ -917,8 +915,8 @@ export const createBolt = (config: BoltConfig) =>
 				),
 			// a per-record restore (rule 17), never point-in-time recovery or a source rollback
 			restore: {
-				preview: (collection: string, record: string, revision: number) =>
-					act('history.preview', { collection, record, revision }).pipe(
+				preview: (model: string, record: string, revision: number) =>
+					act('history.preview', { model, record, revision }).pipe(
 						Effect.flatMap((outcome) =>
 							outcome.kind === 'committed'
 								? decode(RestorePreviewSchema, encodeWire(outcome.output))
@@ -941,8 +939,8 @@ export const createBolt = (config: BoltConfig) =>
 							}))
 						}))
 					),
-				run: (collection: string, record: string, revision: number, live: number) =>
-					act('history.restore', { collection, record, revision }, { observed: { [record]: live } })
+				run: (model: string, record: string, revision: number, live: number) =>
+					act('history.restore', { model, record, revision }, { observed: { [record]: live } })
 			},
 			approvals: {
 				decide: (
@@ -961,14 +959,14 @@ export const createBolt = (config: BoltConfig) =>
 					),
 				list: (
 					filter: {
-						collection?: string;
+						model?: string;
 						records?: readonly string[];
 						ids?: readonly string[];
 						all?: boolean;
 					} = {}
 				) => {
 					const params = new URLSearchParams();
-					if (filter.collection !== undefined) params.set('collection', filter.collection);
+					if (filter.model !== undefined) params.set('model', filter.model);
 					for (const record of filter.records ?? []) params.append('record', record);
 					for (const request of filter.ids ?? []) params.append('request', request);
 					if (filter.all === true) params.set('all', '1');

@@ -1,4 +1,4 @@
-// The wire's Schemas (§5.7, A.4): every body and live frame of `/__bolt/*`, the callables that are not a collection's,
+// The wire's Schemas (§5.7, A.4): every body and live frame of `/__bolt/*`, the callables that are not a model's,
 // an integration instance's status, the session and host-operation bodies, and `norbital.template.json`. A body is
 // decoded once where it enters (the host's request, the client's answer); every wire type is its Schema's own.
 import { Effect, Option, Schema, SchemaTransformation } from 'effect';
@@ -47,7 +47,8 @@ const READ_METHODS = [
 	'conversations'
 ] as const;
 /**
- * One read as the guest names it (`ctx.query('c', q)` → `{ m: 'query', a: ['c', q] }`); `lowerRead` decodes `a`.
+ * One read as the guest names it (`ctx.query('c', q)` → `{ m: 'query', a: ['c', q] }`; a read request
+ * `ctx.query({ … })` → `{ m: 'query', a: [request] }`); `lowerRead` decodes `a`.
  * `transcript` (`a: [conversation]`) and `conversations` (`a: []`, the member's own) are the agent panel's, live only:
  * `/live` checks the caller may read them, `/q` refuses them.
  */
@@ -61,8 +62,8 @@ export type QBody = typeof QBody.Type;
 export const QReply = Schema.Struct({ answers: Schema.Array(Schema.Json) });
 export type QReply = typeof QReply.Type;
 /**
- * `/act`: every write, action, `start` and approval decision; the key rides `Idempotency-Key` (rule 31). A collection's
- * callable is `<collection>.<name>`; the others are `OwnCall`'s.
+ * `/act`: every write, action, `start` and approval decision; the key rides `Idempotency-Key` (rule 31). A model's
+ * callable is `<model>.<name>`; the others are `OwnCall`'s.
  */
 export const ActBody = Schema.Struct({
 	callable: Schema.String,
@@ -103,7 +104,7 @@ const REFUSAL_CODES = [
 	'tooLarge'
 ] as const;
 const Written = Schema.Array(
-	Schema.Struct({ collection: Schema.String, id: Schema.String, revision: Schema.Number })
+	Schema.Struct({ model: Schema.String, id: Schema.String, revision: Schema.Number })
 );
 /** A write's outcome (rule 32), told apart by `kind`: what the engine stores and replays for an idempotency key. */
 export const WriteOutcome = Schema.Union([
@@ -118,9 +119,11 @@ export const WriteOutcome = Schema.Union([
 		code: Schema.Literals(REFUSAL_CODES),
 		message: Schema.String,
 		field: Schema.optionalKey(Schema.String),
+		/** The write path a refused field belongs to (`'orders.lines'`); absent on the root. */
+		path: Schema.optionalKey(Schema.String),
 		row: Schema.optionalKey(Schema.Number),
 		rows: Schema.optionalKey(Schema.Array(Schema.Number)),
-		/** The tenant code that refused — `'<collection>.transform'` or `'<collection>.<action>'`. */
+		/** The tenant code that refused — `'<model>.transform'` or `'<model>.<action>'`. */
 		rule: Schema.optionalKey(Schema.String),
 		data: Schema.optionalKey(Schema.Struct({ requestId: Schema.String }))
 	}),
@@ -128,7 +131,7 @@ export const WriteOutcome = Schema.Union([
 		kind: Schema.Literal('conflict'),
 		records: Schema.Array(
 			Schema.Struct({
-				collection: Schema.String,
+				model: Schema.String,
 				id: Schema.String,
 				fields: Schema.Array(Schema.String)
 			})
@@ -218,7 +221,7 @@ export const NoticeRow = Schema.Struct({
 	id: Schema.String,
 	title: Schema.String,
 	body: Schema.NullOr(Schema.String),
-	link: Schema.NullOr(Schema.Struct({ collection: Schema.String, id: Schema.String })),
+	link: Schema.NullOr(Schema.Struct({ model: Schema.String, id: Schema.String })),
 	at: Schema.String,
 	read: Schema.Boolean
 });
@@ -277,6 +280,8 @@ export const AgentRow = Schema.Struct({
 	),
 	/** When it was written. */
 	at: Schema.optionalKey(Schema.String),
+	/** The turn that took this input or wrote this reply: a reply names the inputs it answers by it. */
+	turn: Schema.optionalKey(Schema.String),
 	tag: Schema.NullOr(Schema.String),
 	call: Schema.optionalKey(Schema.Struct({ name: Schema.String, input: Schema.Json })),
 	receipts: Schema.optionalKey(
@@ -284,7 +289,7 @@ export const AgentRow = Schema.Struct({
 			Schema.Struct({
 				outcome: Schema.Literals(['committed', 'pendingApproval']),
 				callable: Schema.String,
-				records: Schema.Array(Schema.Struct({ collection: Schema.String, id: Schema.String })),
+				records: Schema.Array(Schema.Struct({ model: Schema.String, id: Schema.String })),
 				requestId: Schema.optionalKey(Schema.String)
 			})
 		)
@@ -388,7 +393,7 @@ export const AgentConversation = Schema.Struct({
 });
 export type AgentConversation = typeof AgentConversation.Type;
 
-// ── the callables that are not a collection's: run starts (rule 51), approval decisions (rule 46), filters (rule 16a), the agent panel (§5.9) ──
+// ── the callables that are not a model's: run starts (rule 51), approval decisions (rule 46), filters (rule 16a), the agent panel (§5.9) ──
 const LocalFilterField = Schema.Struct({
 	name: Schema.String,
 	label: Schema.String,
@@ -424,12 +429,12 @@ const ConvertDocument = Schema.Struct({
 	})
 });
 const Describe = Schema.Struct({
-	collection: Schema.String,
+	model: Schema.String,
 	text: Schema.String,
 	fields: Schema.optionalKey(Schema.Array(LocalFilterField))
 });
 const Options = Schema.Struct({
-	collection: Schema.String,
+	model: Schema.String,
 	fields: Schema.optionalKey(Schema.Array(LocalFilterField))
 });
 const PostFields = Schema.Struct({
@@ -455,7 +460,7 @@ const Revise = Schema.Struct({ ...Message, text: Schema.String.check(Schema.isPa
 const Reorder = Schema.Struct({ ...Conversation, messages: Schema.Array(Schema.String) });
 const FileAbout = Schema.Struct({
 	...Message,
-	about: Schema.NullOr(Schema.Struct({ collection: Schema.String, id: Schema.String })).pipe(
+	about: Schema.NullOr(Schema.Struct({ model: Schema.String, id: Schema.String })).pipe(
 		Schema.withDecodingDefaultKey(Effect.succeed(null))
 	)
 });
@@ -466,7 +471,7 @@ const MarkNotices = Schema.Union([
 const Confirm = Schema.Struct({ ...Message, approve: Schema.Boolean });
 /** A per-record restore's target: one live record and the past revision whose own fields it takes back. */
 const RestoreTarget = Schema.Struct({
-	collection: Schema.String,
+	model: Schema.String,
 	record: Schema.String,
 	revision: Schema.Number
 });
@@ -521,13 +526,13 @@ const CHECKS: { readonly [C in RefusableCall]: readonly [Check, ...Check[]] } = 
 	],
 	'filter.describe': [
 		[
-			Schema.Struct({ collection: Schema.String, text: Schema.String }),
-			'filter.describe takes { collection, text }'
+			Schema.Struct({ model: Schema.String, text: Schema.String }),
+			'filter.describe takes { model, text }'
 		],
 		[Describe, 'filter.describe fields are invalid']
 	],
 	'filter.options': [
-		[Schema.Struct({ collection: Schema.String }), 'filter.options takes { collection }'],
+		[Schema.Struct({ model: Schema.String }), 'filter.options takes { model }'],
 		[Options, 'filter.options fields are invalid']
 	],
 	'sys_message.post': [
@@ -555,15 +560,15 @@ const CHECKS: { readonly [C in RefusableCall]: readonly [Check, ...Check[]] } = 
 	'sys_message.executePlan': [conversationFirst],
 	'sys_message.discardPlan': [conversationFirst],
 	'sys_message.file': [
-		[FileAbout, 'sys_message.file takes { message, about: { collection, id } | null }']
+		[FileAbout, 'sys_message.file takes { message, about: { model, id } | null }']
 	],
 	'sys_message.markRead': [conversationFirst],
 	'sys_notification.markRead': [
 		[MarkNotices, 'sys_notification.markRead takes { ids } or { all: true }']
 	],
 	'sys_message.confirm': [[Confirm, 'sys_message.confirm takes { message, approve }']],
-	'history.preview': [[RestoreTarget, 'history.preview takes { collection, record, revision }']],
-	'history.restore': [[RestoreTarget, 'history.restore takes { collection, record, revision }']]
+	'history.preview': [[RestoreTarget, 'history.preview takes { model, record, revision }']],
+	'history.restore': [[RestoreTarget, 'history.restore takes { model, record, revision }']]
 };
 /**
  * The refusal (`invalid`, `decode`) of an own callable's input that does not decode, as its sender has always read it:
@@ -847,7 +852,7 @@ export const TemplateManifest = Schema.Struct({
 			layout: Schema.optionalKey(Schema.String),
 			stages: Schema.optionalKey(Schema.Array(Schema.Array(Schema.String))),
 			producers: Schema.optionalKey(
-				Schema.Array(Schema.Struct({ collection: Schema.String, kind: Schema.String }))
+				Schema.Array(Schema.Struct({ model: Schema.String, kind: Schema.String }))
 			)
 		})
 	)

@@ -1,4 +1,5 @@
-import { Encoding, Result, Schema } from 'effect';
+import { Result, Schema } from 'effect';
+import * as Base64Url from 'effect/encoding/Base64Url';
 
 declare const cursor: unique symbol;
 /** An opaque page cursor: pass a page's `next` back as `after` to read on. */
@@ -8,8 +9,8 @@ export type Cursor = string & { readonly [cursor]: true };
 export const CursorPayload = Schema.String.check(
 	Schema.makeFilter(
 		(value: string) => {
-			const decoded = Encoding.decodeBase64UrlString(value);
-			return Result.isSuccess(decoded) && Encoding.encodeBase64Url(decoded.success) === value;
+			const decoded = Base64Url.decodeString(value);
+			return Result.isSuccess(decoded) && Base64Url.encode(decoded.success) === value;
 		},
 		{ message: 'expected a canonical UTF-8 base64url cursor' }
 	)

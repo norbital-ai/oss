@@ -29,11 +29,13 @@ import {
 	admin,
 	arm,
 	authority,
+	deleteArm,
 	grants,
 	manifest as base,
 	member,
 	NOW,
-	TODAY
+	TODAY,
+	writeArm
 } from './write-fixture.ts';
 
 const m: EngineManifest = {
@@ -110,7 +112,7 @@ const fixture = Effect.gen(function* () {
 		act(
 			{ manifest: m, db },
 			{
-				collection: 'sys_integration',
+				model: 'sys_integration',
 				mode: { _tag: 'Direct' },
 				key: `key-${n}`,
 				issuedAt: NOW,
@@ -211,7 +213,7 @@ describe('sys_integration: ordinary acts and the engine transform', () => {
 				expect(
 					yield* run({
 						verb: 'update',
-						input: { target: id, set: { configuration: { region: 'my', lag: 5 }, active: false } }
+						input: [{ target: id, set: { configuration: { region: 'my', lag: 5 }, active: false } }]
 					})
 				).toMatchObject({ kind: 'committed' });
 				expect(
@@ -234,7 +236,7 @@ describe('sys_integration: ordinary acts and the engine transform', () => {
 			Effect.gen(function* () {
 				const { read, run } = yield* SystemFixture;
 				expect(
-					yield* run({ verb: 'create', input: { integration: 'nope', name: 'x' } })
+					yield* run({ verb: 'create', input: [{ integration: 'nope', name: 'x' }] })
 				).toMatchObject({
 					kind: 'refused',
 					code: 'refused',
@@ -244,7 +246,7 @@ describe('sys_integration: ordinary acts and the engine transform', () => {
 				expect(
 					yield* run({
 						verb: 'create',
-						input: { integration: 'erp', name: 'x', configuration: { lag: 'soon' } }
+						input: [{ integration: 'erp', name: 'x', configuration: { lag: 'soon' } }]
 					})
 				).toMatchObject({
 					kind: 'refused',
@@ -254,7 +256,7 @@ describe('sys_integration: ordinary acts and the engine transform', () => {
 				expect(
 					yield* run({
 						verb: 'create',
-						input: { integration: 'erp', name: 'x', owner: ada, configuration: { region: 'sg' } }
+						input: [{ integration: 'erp', name: 'x', owner: ada, configuration: { region: 'sg' } }]
 					})
 				).toMatchObject({ kind: 'refused', field: 'owner' });
 				expect(
@@ -279,24 +281,24 @@ describe('sys_integration: ordinary acts and the engine transform', () => {
 					owner: ada
 				});
 				expect(
-					yield* run({ verb: 'update', input: { target: erp, set: { envoy: 'desk' } } })
+					yield* run({ verb: 'update', input: [{ target: erp, set: { envoy: 'desk' } }] })
 				).toMatchObject({
 					kind: 'refused',
 					field: 'envoy',
 					message: expect.stringMatching(/conversation/)
 				});
 				expect(
-					yield* run({ verb: 'update', input: { target: personal, set: { envoy: 'desk' } } })
+					yield* run({ verb: 'update', input: [{ target: personal, set: { envoy: 'desk' } }] })
 				).toMatchObject({
 					kind: 'refused',
 					field: 'envoy',
 					message: expect.stringMatching(/personal/)
 				});
 				expect(
-					yield* run({ verb: 'update', input: { target: 'desk', set: { envoy: 'nope' } } })
+					yield* run({ verb: 'update', input: [{ target: 'desk', set: { envoy: 'nope' } }] })
 				).toMatchObject({ kind: 'refused', field: 'envoy' });
 				expect(
-					yield* run({ verb: 'update', input: { target: 'desk', set: { envoy: 'desk' } } })
+					yield* run({ verb: 'update', input: [{ target: 'desk', set: { envoy: 'desk' } }] })
 				).toMatchObject({ kind: 'committed' });
 				expect(
 					yield* read(
@@ -318,16 +320,16 @@ describe('sys_integration: ordinary acts and the engine transform', () => {
 					owner: ada
 				});
 				expect(
-					yield* run({ verb: 'update', input: { target: personal, set: { integration: 'email' } } })
+					yield* run({ verb: 'update', input: [{ target: personal, set: { integration: 'email' } }] })
 				).toMatchObject({ kind: 'refused', code: 'invalidInput' });
 				expect(
-					yield* run({ verb: 'update', input: { target: personal, set: { owner: 'u2' } } })
+					yield* run({ verb: 'update', input: [{ target: personal, set: { owner: 'u2' } }] })
 				).toMatchObject({ kind: 'refused', code: 'invalidInput' });
-				expect(yield* run({ verb: 'delete', input: { target: 'mail' } })).toMatchObject({
+				expect(yield* run({ verb: 'delete', input: [{ target: 'mail' }] })).toMatchObject({
 					kind: 'refused',
 					field: 'id'
 				});
-				expect(yield* run({ verb: 'delete', input: { target: personal } })).toMatchObject({
+				expect(yield* run({ verb: 'delete', input: [{ target: personal }] })).toMatchObject({
 					kind: 'committed'
 				});
 				expect(
@@ -344,7 +346,7 @@ describe('sys_integration: ordinary acts and the engine transform', () => {
 					m,
 					{ actor: admin.actor, policies: [], admin: true },
 					'admin'
-				).collections;
+				).models;
 				expect([
 					a['sys_integration']?.create.length,
 					a['sys_integration']?.update.length,
@@ -355,54 +357,55 @@ describe('sys_integration: ordinary acts and the engine transform', () => {
 	);
 
 	it.effect(
-		'a member manages exactly the instances its grants reach: here, the personal ones it owns',
+		'a member reads the instances its read arm reaches and writes only the columns its arms admit',
 		() =>
 			Effect.gen(function* () {
 				const { db, run, created } = yield* SystemFixture;
 				const own = toPred(m, 'sys_integration', { owner: { eq: { actor: 'id' } } });
 				// the kernel directory's staff read (an owner is a readable member), and the instances it owns
 				const caller = authority({
-					sys_user: grants({ create: [], update: [], delete: [] }),
-					sys_integration: grants({
-						read: [arm(own)],
-						create: [arm(own)],
-						update: [arm(own, ['name', 'active'])],
-						delete: [arm(own)]
+					sys_user: grants('sys_user', { create: [], update: [], delete: [] }),
+					sys_integration: grants('sys_integration', {
+						read: { sys_integration: [arm(own)] },
+						create: [writeArm({ sys_integration: ['integration', 'name', 'owner'] })],
+						update: [writeArm({ sys_integration: ['name', 'active'] })],
+						delete: [deleteArm()]
 					})
 				});
 				const mine = yield* created({ integration: 'email', name: 'Ada mail', owner: ada });
 				expect(
 					yield* run({
 						verb: 'create',
-						input: { integration: 'whatsapp', name: 'My phone', owner: ada },
+						input: [{ integration: 'whatsapp', name: 'My phone', owner: ada }],
+						authority: caller
+					})
+				).toMatchObject({ kind: 'committed' });
+				// a column outside the arm's `columns` is refused before any check
+				expect(
+					yield* run({
+						verb: 'create',
+						input: [{ integration: 'email', name: 'Bob mail', owner: ada, configuration: {} }],
+						authority: caller
+					})
+				).toMatchObject({ kind: 'refused', code: 'forbidden', field: 'configuration' });
+				expect(
+					yield* run({
+						verb: 'update',
+						input: [{ target: mine, set: { configuration: {} } }],
+						authority: caller
+					})
+				).toMatchObject({ kind: 'refused', code: 'forbidden', field: 'configuration' });
+				expect(
+					yield* run({
+						verb: 'update',
+						input: [{ target: mine, set: { name: 'Work mail' } }],
 						authority: caller
 					})
 				).toMatchObject({ kind: 'committed' });
 				expect(
 					yield* run({
-						verb: 'create',
-						input: { integration: 'email', name: 'Bob mail', owner: 'u2' },
-						authority: caller
-					})
-				).toMatchObject({ kind: 'refused', code: 'forbidden' });
-				expect(
-					yield* run({
-						verb: 'create',
-						input: { integration: 'email', name: 'Shared' },
-						authority: caller
-					})
-				).toMatchObject({ kind: 'refused', code: 'forbidden' });
-				expect(
-					yield* run({
 						verb: 'update',
-						input: { target: mine, set: { name: 'Work mail' } },
-						authority: caller
-					})
-				).toMatchObject({ kind: 'committed' });
-				expect(
-					yield* run({
-						verb: 'update',
-						input: { target: 'mail', set: { name: 'Mine now' } },
+						input: [{ target: 'mail', set: { name: 'Mine now' } }],
 						authority: caller
 					})
 				).toMatchObject({ kind: 'refused', code: 'notFound' });
@@ -489,7 +492,7 @@ describe("seed packs: run-time instances beside the plan's named ones", () => {
 			}).pipe(Effect.provide(SystemFixtureLive), Effect.scoped)
 	);
 	it.effect(
-		'a pack loads in steps: identity, each collection, the last step; then the answer stays',
+		'a pack loads in steps: identity, each model, the last step; then the answer stays',
 		() =>
 			Effect.gen(function* () {
 				const { db } = yield* SystemFixture;
@@ -572,7 +575,7 @@ describe('one configuration shape, however an instance is made', () => {
 				expect(
 					yield* run({
 						verb: 'update',
-						input: { target: 'ledger', set: { configuration: { region: 'my', lag: 5 } } }
+						input: [{ target: 'ledger', set: { configuration: { region: 'my', lag: 5 } } }]
 					})
 				).toMatchObject({ kind: 'committed' });
 				yield* applyPlan(

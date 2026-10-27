@@ -1,5 +1,5 @@
 import { Clock, Crypto, Effect, Schema } from 'effect';
-import { HttpClient, HttpClientRequest, HttpClientResponse } from 'effect/unstable/http';
+import { HttpClient, HttpClientRequest, HttpClientResponse } from 'effect/http';
 import { createHash, createHmac, randomUUID } from 'node:crypto';
 import {
 	Ai,

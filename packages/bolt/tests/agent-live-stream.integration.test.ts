@@ -21,7 +21,7 @@ const manifest = Result.getOrThrow(
 		workspace: { tz: 'UTC', locale: 'en', agent: { triage: false } },
 		models: {},
 		relationships: {},
-		collections: {},
+		exposures: {},
 		policies: {},
 		agent: { internal: 'Staff brief.', skills: {} },
 		integrations: {},

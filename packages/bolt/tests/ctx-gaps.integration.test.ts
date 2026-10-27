@@ -1,4 +1,4 @@
-// Query refusals, upsert conflict options and scalar-union inputs retain the authored behavior.
+// A dotted read name refused, upsert conflict options and scalar-union inputs retain the authored behavior.
 import { describe, expect, it } from '@effect/vitest';
 import { Context, Effect, Layer, Option, Result, Schema } from 'effect';
 import { actFailure } from '../src/decl/errors.ts';
@@ -19,12 +19,11 @@ const manifest = Result.getOrThrow(
 			}
 		},
 		relationships: {},
-		collections: {
+		exposures: {
 			rates: {
-				read: { fields: 'all' },
-				create: { input: { columns: ['code', 'value'] } },
-				update: { input: { columns: ['value'] } },
-				queries: { check: { description: 'Refuses', input: {}, output: { kind: 'int' } } }
+				read: { rates: { fields: 'all' } },
+				create: { columns: { rates: ['code', 'value'] } },
+				update: { columns: { rates: ['value'] } }
 			}
 		},
 		integrations: {},
@@ -33,7 +32,7 @@ const manifest = Result.getOrThrow(
 				description: 'Rep',
 				automations: ['put'],
 				grants: {
-					rates: { read: true, create: true, update: true, queries: ['check'] }
+					rates: { read: true, create: true, update: true }
 				}
 			}
 		},
@@ -61,13 +60,10 @@ const manifest = Result.getOrThrow(
 	})
 );
 const guest = program(`export default {
- collection: { rates: { bodies: {
-	queries: { check: function* (input, ctx) { return yield* ctx.refuse('not today'); } }
- } } },
  automation: { put: { body: function* (input, ctx) {
-		const saved=yield* ctx.act('rates.upsert', input.id ? { id: input.id, value: String(input.v) } : { code: input.code, value: String(input.v) }, { onConflict: 'update' });
+		const saved=yield* ctx.act('rates.upsert', [input.id ? { id: input.id, value: String(input.v) } : { code: input.code, value: String(input.v) }], { onConflict: 'update' });
 		if(saved.kind!=='committed'||!saved.records[0])throw Error('Expected a committed rate');
-		const rate=yield* ctx.query('rates',{id:saved.records[0].id});
+		const rate=(yield* ctx.query({rates:{where:{id:{eq:saved.records[0].id}}}})).rates.rows[0];
 		if(!rate||rate.value!==String(input.v))throw Error('The committed rate was not readable');
 		return typeof input.v;
 	} } }
@@ -96,26 +92,30 @@ const fixture = Effect.gen(function* () {
 			params: [id]
 		});
 	const read = () =>
-		qReply(route, rep, { reads: [{ m: 'query', a: ['rates', { all: true }] }] }).pipe(
+		qReply(route, rep, { reads: [{ m: 'query', a: [{ rates: {} }] }] }).pipe(
 			Effect.flatMap((reply) =>
 				Schema.decodeUnknownEffect(
 					Schema.Struct({
-						rows: Schema.Array(
-							Schema.Struct({ id: Schema.String, code: Schema.String, value: Schema.String })
-						)
+						rates: Schema.Struct({
+							rows: Schema.Array(
+								Schema.Struct({ id: Schema.String, code: Schema.String, value: Schema.String })
+							)
+						})
 					})
 				)(reply.answers[0])
-			)
+			),
+			Effect.map((answer) => answer.rates)
 		);
 	return { t, route, rep, startPut, run, read };
 });
 describe('ctx gaps', () => {
-	it.live('a query refuses with ctx.refuse', () =>
+	it.live('a dotted name is no read: declared queries are gone, a page reads layers instead', () =>
 		Effect.gen(function* () {
 			const { route, rep } = yield* fixture;
-			expect(
-				yield* Effect.flip(qReply(route, rep, { reads: [{ m: 'query', a: ['rates.check', {}] }] }))
-			).toMatchObject({ code: 'refused', message: 'not today' });
+			const failure = yield* Effect.flip(
+				qReply(route, rep, { reads: [{ m: 'query', a: ['rates.check', {}] }] })
+			);
+			expect(failure).not.toMatchObject({ code: 'refused' });
 		})
 	);
 	it.live('a queued automation upserts through ctx.act with onConflict', () =>

@@ -37,11 +37,11 @@ const manifest = Result.getOrThrow(
 			}
 		},
 		relationships: {},
-		collections: {
+		exposures: {
 			tasks: {
-				read: { fields: 'all' },
-				create: { input: { columns: ['title'] } },
-				update: { input: { columns: ['title'] } }
+				read: { tasks: { fields: 'all' } },
+				create: { columns: { tasks: ['title'] } },
+				update: { columns: { tasks: ['title'] } }
 			}
 		},
 		policies: {
@@ -87,7 +87,7 @@ const fixture = Effect.gen(function* () {
 		admin = t.as(t.admin).authority;
 	const created = (yield* actReply(route, admin, {
 		callable: 'tasks.create',
-		input: { title: 'Original' },
+		input: [{ title: 'Original' }],
 		issuedAt: t.clock.now()
 	})).outcome;
 	if (created.kind !== 'committed' || created.records[0] === undefined)
@@ -153,7 +153,7 @@ it.live(
 				const { bolt, id, text, hold, open } = yield* fixture;
 				yield* hold;
 				const outcome = yield* Effect.forkScoped(
-					bolt.act('tasks.update', { target: id, set: { title: 'Renamed' } })
+					bolt.act('tasks.update', [{ target: id, set: { title: 'Renamed' } }])
 				);
 				yield* until(() => text('table').includes('Renamed') && text('record').includes('Renamed'));
 				expect(text('table')).not.toContain('Original');
@@ -173,10 +173,10 @@ it.live('a refused update un-paints both views back to the stored row', () =>
 			yield* hold;
 			const outcome = yield* Effect.forkScoped(
 				Effect.flip(
-					bolt.act('tasks.update', {
+					bolt.act('tasks.update', [{
 						target: id,
 						set: { title: 'Sneaky', note: 'not in the allowlist' }
-					})
+					}])
 				)
 			);
 			yield* until(() => text('table').includes('Sneaky') && text('record').includes('Sneaky'));
@@ -212,12 +212,14 @@ it.live(
 				yield* until(() => !text('table').includes('Brand new'));
 				yield* until(() => target.querySelector('[data-test="form"] [role="alert"]') !== null);
 				const reply = yield* qReply(route, admin, {
-					reads: [{ m: 'query', a: ['tasks', { all: true }] }]
+					reads: [{ m: 'query', a: [{ tasks: {} }] }]
 				});
-				const rows = yield* Schema.decodeUnknownEffect(
-					Schema.Struct({ rows: Schema.Array(Schema.Struct({ title: Schema.String })) })
+				const { tasks } = yield* Schema.decodeUnknownEffect(
+					Schema.Struct({
+						tasks: Schema.Struct({ rows: Schema.Array(Schema.Struct({ title: Schema.String })) })
+					})
 				)(reply.answers[0]);
-				expect(rows.rows.map((row) => row.title)).toEqual(['Original']);
+				expect(tasks.rows.map((row) => row.title)).toEqual(['Original']);
 			})
 		)
 );

@@ -23,45 +23,41 @@ declare const order: Id<'orders'>, customer: Id<'customers'>, since: PlainDate;
 
 /** One object type with each member's fields, as the read's own row type is. */
 type Flat<T> = { [K in keyof T]: T[K] };
-// ── reads ──
-bolt.query('orders', { where: { status: { eq: 'draft' } }, orderBy: { due: 'asc' }, limit: 10 });
+// ── reads: one read request (a layer map) per read ──
+bolt.query({ orders: { where: { status: { eq: 'draft' } }, orderBy: { due: 'asc' }, limit: 10 } });
 // @ts-expect-error P1 an unknown field in where
-bolt.query('orders', { where: { nope: { eq: 'draft' } }, limit: 10 });
+bolt.query({ orders: { where: { nope: { eq: 'draft' } }, limit: 10 } });
 // @ts-expect-error P2 an unknown sort key
-bolt.query('orders', { orderBy: { nope: 'asc' }, limit: 10 });
-// @ts-expect-error P3 an unknown collection
-bolt.query('orderz', { limit: 10 });
-// @ts-expect-error P4 every read states a limit (rule 9)
-bolt.query('orders', {});
-bolt.query('orders', { select: { note: true }, limit: 1 }).pipe(
-	Effect.map((page) => {
-		is<
-			Eq<
-				(typeof page.rows)[number],
-				Flat<{ readonly id: Id<'orders'>; readonly note: string | null } & RowState>
-			>
-		>();
-		// @ts-expect-error P5 a field the select did not ask for
-		void page.rows[0]?.due;
+bolt.query({ orders: { orderBy: { nope: 'asc' }, limit: 10 } });
+// @ts-expect-error P3 an unknown root
+bolt.query({ orderz: { limit: 10 } });
+// @ts-expect-error P4 the single-model `query(model, args)` form is gone
+bolt.query('orders', { limit: 10 });
+bolt.query({ orders: { fields: ['note'], limit: 1 } }).pipe(
+	Effect.map(({ orders }) => {
+		type Picked = (typeof orders.rows)[number];
+		is<Eq<keyof Picked, 'id' | 'note' | keyof RowState>>();
+		is<Eq<Picked['id'], Id<'orders'>>>();
+		is<Eq<Picked['note'], string | null>>();
+		// @ts-expect-error P5 a field the request did not pick
+		void orders.rows[0]?.due;
 	})
 );
-// two selects of one collection, unioned: `in` narrows each row to the select that has the field (a custom and a list)
-Effect.all([
-	bolt.query('sites', { select: { name: true, rating: true, checklist: true }, limit: 10 }),
-	bolt.query('sites', { select: { name: true }, limit: 10 })
-]).pipe(
-	Effect.map(([traced, untraced]) => {
-		for (const row of [...traced.rows, ...untraced.rows]) {
-			// a policy's grant masks both fields (`| Masked`), as a template's contractor grant does
-			const rating = 'rating' in row ? row.rating : null;
-			is<
-				Eq<typeof rating, { readonly score: number; readonly note?: string | null } | null | Masked>
-			>();
-			const checklist = 'checklist' in row ? row.checklist : null;
+// one root, all its exposed fields: a policy's grant masks the fields it leaves out (`| Masked`), as a template's
+// contractor grant does
+bolt.query({ sites: { limit: 10 } }).pipe(
+	Effect.map(({ sites }) => {
+		for (const row of sites.rows) {
 			is<
 				Eq<
-					typeof checklist,
-					readonly { readonly item: string; readonly done: boolean }[] | Masked | null
+					typeof row.rating,
+					{ readonly score: number; readonly note?: string | null } | null | Masked
+				>
+			>();
+			is<
+				Eq<
+					typeof row.checklist,
+					readonly { readonly item: string; readonly done: boolean }[] | Masked
 				>
 			>();
 			is<Eq<typeof row.$approval, RowApproval | undefined>>();
@@ -69,30 +65,42 @@ Effect.all([
 		}
 	})
 );
-bolt.query('orders', { id: order }).pipe(
-	Effect.map((row) => {
-		if (row !== null) is<Eq<typeof row.total, Decimal>>();
+bolt.query({ orders: { where: { id: { eq: order } }, limit: 1 } }).pipe(
+	Effect.map(({ orders }) => {
+		const row = orders.rows[0];
+		if (row !== undefined) is<Eq<typeof row.total, Decimal>>();
 	})
 );
+// a read request: roots and their declared layers, answered per root in one read
 bolt
-	.query('orders.open_total', { since })
-	.pipe(Effect.map((total) => is<Eq<typeof total, Decimal>>()));
-// @ts-expect-error P6 a query's input
-bolt.query('orders.open_total', { since: 5 });
-// @ts-expect-error P7 an unknown query
-bolt.query('orders.nope', {});
-const live = bolt.query('customers', { all: true });
+	.query({ orders: { where: { due: { gte: since } }, fields: ['total'] }, 'orders.lines': { fields: ['qty'] } })
+	.pipe(
+		Effect.map((answer) => {
+			const row = answer.orders.rows[0];
+			if (row !== undefined) {
+				is<Eq<typeof row.total, Decimal>>();
+				is<Eq<(typeof row.lines)[number]['qty'], Decimal>>();
+			}
+		})
+	);
+// @ts-expect-error P6 an operand of the wrong kind
+bolt.query({ orders: { where: { due: { gte: 5 } } } });
+// @ts-expect-error P7 an unknown root
+bolt.query({ nope: {} });
+// @ts-expect-error P8 declared queries are gone
+bolt.query('orders.open_total', { since });
+const live = bolt.query({ customers: {} });
 void live.current;
 void live.loading;
 void live.error;
 
-const promised: PromiseLike<unknown> = bolt.query('orders', { limit: 1 });
+const promised: PromiseLike<unknown> = bolt.query({ orders: { limit: 1 } });
 void promised;
-bolt.query('orders', { limit: 1 }).then(() => {});
+bolt.query({ orders: { limit: 1 } }).then(() => {});
 
 // ── acts ──
 bolt
-	.act('orders.update', { target: order, set: { note: 'x' } })
+	.act('orders.update', [{ target: order, set: { note: 'x' } }])
 	.pipe(
 		Effect.map((outcome) =>
 			is<
@@ -103,11 +111,11 @@ bolt
 			>()
 		)
 	);
-bolt.act('orders.create', { customer, note: 'x' }).pipe(
+bolt.act('orders.create', [{ customer, note: 'x' }]).pipe(
 	Effect.map((o) => {
 		if (o.kind === 'committed')
 			for (const record of o.records) {
-				if (record.collection === 'orders') is<Eq<typeof record.id, Id<'orders'>>>();
+				if (record.model === 'orders') is<Eq<typeof record.id, Id<'orders'>>>();
 			}
 	})
 );
@@ -115,10 +123,13 @@ bolt.act('orders.create', { customer, note: 'x' }).pipe(
 bolt.start('orders_renote', { ids: [order], note: 5 });
 // @ts-expect-error P9 an unknown callable
 bolt.act('orders.nope', {});
-bolt.act('orders.update', { target: order, set: { note: 'x' } });
+bolt.act('orders.update', [{ target: order, set: { note: 'x' } }]);
 // @ts-expect-error P10 a field the update allowlist leaves out
-bolt.act('orders.update', { target: order, set: { number: 'x' } });
+bolt.act('orders.update', [{ target: order, set: { number: 'x' } }]);
 bolt.start('nightly', {});
+// a file sync's export input, one or a batch (`format` is part of the export arm)
+bolt.start('orders.sync.sheet', { mode: 'export', format: 'json' });
+bolt.start('orders.sync.sheet', [{ mode: 'export', format: 'csv' }]);
 bolt.start('orders_renote', { ids: [order], note: 'x' }).pipe(
 	Effect.map((outcome) => {
 		is<
@@ -143,12 +154,12 @@ bolt.start('orders_renote', { ids: [order], note: 'x' }).pipe(
 // @ts-expect-error P11 an unknown message key
 bolt.t('hello');
 
-// ── ui views: `of`, `columns`, `values`, `record` per collection ──
+// ── ui views: `of`, `columns`, `values`, `record` per model ──
 // type-only: the components' call signature is the one svelte-check checks a page's props against
 const table: typeof Table = Table,
 	form: typeof Form = Form;
 table(null, { of: 'orders', columns: ['number', 'status', { field: 'due', label: 'Due' }] });
-// @ts-expect-error U1 an unknown collection
+// @ts-expect-error U1 an unknown model
 table(null, { of: 'orderz', columns: ['number'] });
 // @ts-expect-error U2 an unknown column
 table(null, { of: 'orders', columns: ['number', 'nope'] });
@@ -158,7 +169,7 @@ table(null, { of: [{ id: 'a', n: 1 }], columns: ['n'] });
 // @ts-expect-error U4 a local array's column
 table(null, { of: [{ id: 'a', n: 1 }], columns: ['m'] });
 form(null, { of: 'orders', mode: 'create', values: { note: 'x' } });
-// @ts-expect-error U5 a create value outside the collection's input
+// @ts-expect-error U5 a create value outside the model's input
 form(null, { of: 'orders', mode: 'create', values: { number: 'x' } });
 // @ts-expect-error U6 a create value of the wrong type
 form(null, { of: 'orders', mode: 'create', values: { note: 5 } });

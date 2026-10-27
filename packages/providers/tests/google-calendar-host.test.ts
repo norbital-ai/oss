@@ -31,9 +31,9 @@ const manifest = layered(
 				where: { integration: { eq: 'google_calendar' } }
 			}
 		},
-		collections: {
+		exposures: {
 			calendar_entries: {
-				read: { fields: 'all' },
+				read: { calendar_entries: { fields: 'all' } },
 				syncs: {
 					events: { with: 'google_calendar', partitions: 'calendars', read: true },
 					write_only: { with: 'google_calendar', write: true },
@@ -149,17 +149,18 @@ describe('the Google Calendar link on a host', { timeout: 15_000 }, () => {
 							{ name: 'calendar_entries.sync.events', partitions: 'calendars' }
 						]);
 						expect(watched(f)).toEqual(['visits@example.com']);
-						const stored = yield* t.storedQuery('sys_integration', {
-							all: true,
-							select: { id: true }
+						const { sys_integration } = yield* t.storedQuery({
+							sys_integration: { fields: ['id'] }
 						});
-						const calendar = stored.rows.find((row) => row.id === 'cal1');
+						const calendar = sys_integration.rows.find((row) => row.id === 'cal1');
 						if (calendar === undefined)
 							throw new Error('The seeded calendar integration is missing.');
-						const act = yield* t.as(t.admin).act('sys_integration.update', {
-							target: calendar.id,
-							set: { configuration: { calendars: ['team@example.com'] } }
-						});
+						const act = yield* t.as(t.admin).act('sys_integration.update', [
+							{
+								target: calendar.id,
+								set: { configuration: { calendars: ['team@example.com'] } }
+							}
+						]);
 						expect(act.kind).toBe('committed');
 						yield* until(() => watched(f).length === 2 && stopped(f).length === 1);
 						expect(watched(f)).toEqual(['visits@example.com', 'team@example.com']);

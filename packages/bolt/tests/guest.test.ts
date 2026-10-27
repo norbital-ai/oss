@@ -57,13 +57,19 @@ const invocation = (
 		...budget
 	}
 });
-const IdQuery = Schema.is(Schema.Struct({ id: Schema.String }));
+/** A read request's first root and, when it filters `id: { eq }`, that id (the stub lowers it as one record). */
+const IdRequest = Schema.Record(
+	Schema.String,
+	Schema.Struct({
+		where: Schema.optionalKey(Schema.Struct({ id: Schema.Struct({ eq: Schema.String }) }))
+	})
+);
 const lowerRead: GuestOptions['lowerRead'] = (member, args) => {
-	const query = args[1];
+	const [root = member, layer] = Object.entries(Schema.decodeUnknownSync(IdRequest)(args[0]))[0] ?? [];
 	return {
 		kind: 'get',
-		collection: String(args[0]),
-		id: IdQuery(query) ? query.id : String(query ?? member),
+		model: root,
+		id: layer?.where?.id.eq ?? member,
 		select: { fields: null, relations: {} }
 	};
 };
@@ -184,7 +190,7 @@ describe('next guest runner', () => {
 			Effect.gen(function* () {
 				const page =
 					yield* program(`export default { page: { "portal/read": { body: function* (_, ctx) {
-				const answer = yield* ctx.query('orders', { limit: 1 });
+				const answer = yield* ctx.query({ orders: { limit: 1 } });
 				return { answer, actor: ctx.actor, today: ctx.today, keys: Object.keys(ctx).sort() };
 			} } } };`);
 				const context = yield* Layer.build(
@@ -254,8 +260,8 @@ describe('next guest runner', () => {
 		Effect.gen(function* () {
 			const page =
 				yield* program(`export default { page: { "portal/read": { body: function* (_, ctx) {
-				yield* ctx.query('orders', { limit: 1 });
-				return yield* ctx.query('orders', { limit: 1 });
+				yield* ctx.query({ orders: { limit: 1 } });
+				return yield* ctx.query({ orders: { limit: 1 } });
 			} } } };`);
 			const context = yield* Layer.build(
 				guestLayer({ source: 'export default {};' }, { lowerRead })
@@ -286,53 +292,54 @@ describe('next guest runner', () => {
 	it.live('finds each kind of body in the default export', () =>
 		Effect.gen(function* () {
 			const source = `export default {
-			collection: { orders: { bodies: {
-				queries: { open: function* () { return ['collection','orders','bodies','queries','open']; } },
-				create: function* () { return ['collection','orders','bodies','create']; },
-				update: function* () { return ['collection','orders','bodies','update']; },
-				delete: function* () { return ['collection','orders','bodies','delete']; },
-				notify: function* () { return ['collection','orders','bodies','notify']; },
+			model: { orders: { bodies: {
+				create: function* () { return ['model','orders','bodies','create']; },
+				update: function* () { return ['model','orders','bodies','update']; },
+				delete: function* () { return ['model','orders','bodies','delete']; },
+				notify: function* () { return ['model','orders','bodies','notify']; },
 				indexes: { hue: { vector: () => [1,2,3], probe: () => ({ vector: [1,2,3] }), rerank: (_, row) => row.score } },
 				syncs: { crm: {
-					read: function* () { return ['collection','orders','bodies','syncs','crm','read']; },
-					write: function* () { return ['collection','orders','bodies','syncs','crm','write']; },
-					parse: { 'application/json': function* () { return ['collection','orders','bodies','syncs','crm','parse','application/json']; } }
+					read: function* () { return ['model','orders','bodies','syncs','crm','read']; },
+					write: function* () { return ['model','orders','bodies','syncs','crm','write']; },
+					parse: { 'application/json': function* () { return ['model','orders','bodies','syncs','crm','parse','application/json']; } }
 				} }
 			} } },
 			custom_field: { iban: { check: (input) => 'custom_field.iban.check:' + input } },
-			policy: { review: { grants: { orders: { create: { approval: (_, flow) => flow.step('Review', { teams: ['finance'] }) } } } } }
+			policy: { review: { grants: { orders: { create: { check: function* (_, ctx) { return ctx.approve((flow) => flow.step('Review', { teams: ['finance'] })); } } } } } }
 		};`;
 			for (const [kind, target, input, expected] of [
-				['query', 'orders.open', null, ['collection', 'orders', 'bodies', 'queries', 'open']],
-				['create', 'orders', [], ['collection', 'orders', 'bodies', 'create']],
-				['update', 'orders', [], ['collection', 'orders', 'bodies', 'update']],
-				['delete', 'orders', [], ['collection', 'orders', 'bodies', 'delete']],
-				['notify', 'orders', {}, ['collection', 'orders', 'bodies', 'notify']],
+				['create', 'orders', [], ['model', 'orders', 'bodies', 'create']],
+				['update', 'orders', [], ['model', 'orders', 'bodies', 'update']],
+				['delete', 'orders', [], ['model', 'orders', 'bodies', 'delete']],
+				['notify', 'orders', {}, ['model', 'orders', 'bodies', 'notify']],
 				['vector', 'orders.hue', [{}], [[1, 2, 3]]],
 				['probe', 'orders.hue', {}, { vector: [1, 2, 3] }],
 				['rerank', 'orders.hue', [{}, [{ score: 3 }, { score: 1 }]], [3, 1]],
-				['syncRead', 'orders.crm', {}, ['collection', 'orders', 'bodies', 'syncs', 'crm', 'read']],
+				['syncRead', 'orders.crm', {}, ['model', 'orders', 'bodies', 'syncs', 'crm', 'read']],
 				[
 					'syncWrite',
 					'orders.crm',
 					{},
-					['collection', 'orders', 'bodies', 'syncs', 'crm', 'write']
+					['model', 'orders', 'bodies', 'syncs', 'crm', 'write']
 				],
 				[
 					'parse',
 					'orders.crm.application/json',
 					{},
-					['collection', 'orders', 'bodies', 'syncs', 'crm', 'parse', 'application/json']
+					['model', 'orders', 'bodies', 'syncs', 'crm', 'parse', 'application/json']
 				],
 				['validation', 'iban', ['probe'], ['custom_field.iban.check:probe']],
 				[
-					'approval',
+					'policy',
 					'review.orders.create',
-					{},
+					[],
 					{
-						kind: 'steps',
-						steps: [{ name: 'Review', teams: ['finance'], users: [] }],
-						superseded_by: []
+						kind: 'approve',
+						flow: {
+							kind: 'steps',
+							steps: [{ name: 'Review', teams: ['finance'], users: [] }],
+							superseded_by: []
+						}
 					}
 				]
 			] as const)
@@ -340,9 +347,31 @@ describe('next guest runner', () => {
 		})
 	);
 
+	it.live(
+		"a policy check sees the PolicyCtx alone (clock, actor, policies, one reader, three verdicts) and answers its verdict's data",
+		() =>
+			Effect.gen(function* () {
+				const source = `export default { policy: { rep: { grants: { orders: {
+					create: { check: function* (rows, ctx) {
+						return rows.length === 0 ? ctx.allow() : ctx.deny('Keys: ' + Object.keys(ctx).sort().join(',') + '; db: ' + Object.keys(ctx.db).sort().join(','), { row: 0, path: 'orders.lines', field: 'qty' });
+					} }
+				} } } } };`;
+				const target = 'rep.orders.create';
+				expect(ok(yield* runIn(source, invocation([], {}, 'policy', target)))).toEqual({
+					kind: 'allow'
+				});
+				expect(ok(yield* runIn(source, invocation([{}], {}, 'policy', target)))).toEqual({
+					kind: 'deny',
+					message:
+						'Keys: actor,allow,approve,db,deny,invocationId,now,policies,today,todayIn,tz; db: query',
+					at: { row: 0, path: 'orders.lines', field: 'qty' }
+				});
+			})
+	);
+
 	it.live('only a marked file export writer receives bytes and image facilities', () =>
 		Effect.gen(function* () {
-			const source = `export default { collection: { documents: { bodies: { syncs: { sheet: {
+			const source = `export default { model: { documents: { bodies: { syncs: { sheet: {
 				read: function* (_, ctx) { return { files: typeof ctx.files }; },
 				write: function* (_, ctx) {
 					if (ctx.files === undefined) return { files: 'undefined' };
@@ -376,9 +405,9 @@ describe('next guest runner', () => {
 
 	it.live('write callbacks receive workspace reads and stop before a third read crosses', () =>
 		Effect.gen(function* () {
-			const source = `export default { collection: { orders: { bodies: {
+			const source = `export default { model: { orders: { bodies: {
 				create: function* (rows, ctx) {
-					for (let i = 0; i < 3; i++) yield* ctx.db.query('orders', { id: 'x' });
+					for (let i = 0; i < 3; i++) yield* ctx.db.query({ orders: { where: { id: { eq: 'x' } } } });
 					return rows;
 				},
 				update: function* (changes, ctx) {
@@ -438,7 +467,7 @@ describe('next guest runner', () => {
 				ok(
 					yield* runIn(
 						automation(
-							'function* (_, ctx) { return yield* ctx.act("jobs.update", { target: "job", set: { title: "new" } }, { observed: { job: 3 } }); }'
+							'function* (_, ctx) { return yield* ctx.act("jobs.update", [{ target: "job", set: { title: "new" } }], { observed: { job: 3 } }); }'
 						),
 						invocation(),
 						bridge
@@ -448,8 +477,8 @@ describe('next guest runner', () => {
 					[
 						{
 							_tag: 'act',
-							callable: { _tag: 'Verb', collection: 'jobs', verb: 'update' },
-							input: { target: 'job', set: { title: 'new' } },
+							callable: { _tag: 'Verb', model: 'jobs', verb: 'update' },
+							input: [{ target: 'job', set: { title: 'new' } }],
 							options: { observed: { job: 3 } }
 						}
 					]
@@ -457,7 +486,7 @@ describe('next guest runner', () => {
 				for (const observed of [{ job: -1 }, { job: 1.5 }, { job: '3' }, { job: null }]) {
 					const rejected = yield* runIn(
 						automation(
-							`function* (_, ctx) { return yield* ctx.act('jobs.update', {}, { observed: ${JSON.stringify(observed)} }); }`
+							`function* (_, ctx) { return yield* ctx.act('jobs.update', [{}], { observed: ${JSON.stringify(observed)} }); }`
 						)
 					);
 					expect(failure(rejected)).toMatchObject({ code: 'invalidInput' });
@@ -484,8 +513,8 @@ describe('next guest runner', () => {
 			}));
 			const o = yield* runIn(
 				automation(`function* (_, ctx) {
-			const [a, b, c] = yield* Effect.all([ctx.query('t', { id: 'x' }), ctx.query('t', { id: 'y' }), ctx.query('t', { id: 'z' })], { concurrency: 'unbounded' });
-			const d = yield* ctx.query('t', { id: 'w' });
+			const [a, b, c] = yield* Effect.all([ctx.query({ t: { where: { id: { eq: 'x' } } } }), ctx.query({ t: { where: { id: { eq: 'y' } } } }), ctx.query({ t: { where: { id: { eq: 'z' } } } })], { concurrency: 'unbounded' });
+			const d = yield* ctx.query({ t: { where: { id: { eq: 'w' } } } });
 			return [a, b, c, d];
 		}`),
 				invocation(),
@@ -505,7 +534,7 @@ describe('next guest runner', () => {
 			ok(
 				yield* runIn(
 					automation(`function* (_, ctx) {
-			yield* Effect.all([ctx.act('t.create', { a: 1 }, { key: 'k' }), ctx.schedule('b', {}, { key: 'q' }), ctx.notify({ to: [{ team: 'x' }], title: 'hi' }),
+			yield* Effect.all([ctx.act('t.create', [{ a: 1 }], { key: 'k' }), ctx.schedule('b', {}, { key: 'q' }), ctx.notify({ to: [{ team: 'x' }], title: 'hi' }),
 				ctx.send('mail', { to: 'a' }), ctx.request('crm', { method: 'POST', path: '/x', output: { kind: 'json' } }), ctx.web.read('https://a.test')], { concurrency: 'unbounded' });
 		}`),
 					invocation(),
@@ -525,8 +554,8 @@ describe('next guest runner', () => {
 				[
 					{
 						_tag: 'act',
-						callable: { _tag: 'Verb', collection: 't', verb: 'create' },
-						input: { a: 1 },
+						callable: { _tag: 'Verb', model: 't', verb: 'create' },
+						input: [{ a: 1 }],
 						options: { key: 'k' }
 					},
 					{ _tag: 'schedule', automation: 'b', input: {}, key: 'q' },
@@ -556,7 +585,7 @@ describe('next guest runner', () => {
 						if (call._tag === 'act') {
 							if (
 								call.callable._tag === 'Verb' &&
-								call.callable.collection === 'b' &&
+								call.callable.model === 'b' &&
 								call.callable.verb === 'update'
 							)
 								yield* Deferred.succeed(grouped, undefined);
@@ -570,7 +599,7 @@ describe('next guest runner', () => {
 			const slow = ctx.web.read('https://slow.test');
 			const fast = Effect.gen(function* () {
 				yield* ctx.web.read('https://fast.test');
-				const [row] = yield* Effect.all([ctx.query('t', { id: 'x' }), ctx.act('a.create', {}), ctx.act('b.update', { target: '0199a000-0000-7000-8000-000000000001', set: {} })], { concurrency: 'unbounded' });
+				const [row] = yield* Effect.all([ctx.query({ t: { where: { id: { eq: 'x' } } } }), ctx.act('a.create', [{}]), ctx.act('b.update', [{ target: '0199a000-0000-7000-8000-000000000001', set: {} }])], { concurrency: 'unbounded' });
 				return row;
 			});
 			return yield* Effect.all([slow, fast], { concurrency: 'unbounded' });
@@ -583,9 +612,9 @@ describe('next guest runner', () => {
 					expect(slowFinished).toBe(false);
 					expect(crossings.map((batch) => batch.length)).toEqual([1, 1, 3]);
 					expect(crossings[2]).toMatchObject([
-						{ _tag: 'read', read: { collection: 't', id: 'x' } },
-						{ _tag: 'act', callable: { _tag: 'Verb', collection: 'a', verb: 'create' } },
-						{ _tag: 'act', callable: { _tag: 'Verb', collection: 'b', verb: 'update' } }
+						{ _tag: 'read', read: { model: 't', id: 'x' } },
+						{ _tag: 'act', callable: { _tag: 'Verb', model: 'a', verb: 'create' } },
+						{ _tag: 'act', callable: { _tag: 'Verb', model: 'b', verb: 'update' } }
 					]);
 					yield* Deferred.succeed(slow, undefined);
 					expect(ok(yield* Fiber.join(running))).toEqual(['https://slow.test', 'read']);
@@ -629,7 +658,7 @@ describe('next guest runner', () => {
 			const { bridge } = recorder(() => poisoned);
 			const o = yield* runIn(
 				automation(
-					'function* (_, ctx) { return yield* Effect.catchCause(Effect.as(ctx.query("t", { id: "x" }), "resolved"), (cause) => Effect.succeed(Cause.squash(cause).code)); }'
+					'function* (_, ctx) { return yield* Effect.catchCause(Effect.as(ctx.query({ t: { where: { id: { eq: "x" } } } }), "resolved"), (cause) => Effect.succeed(Cause.squash(cause).code)); }'
 				),
 				invocation(),
 				bridge
@@ -669,7 +698,7 @@ describe('next guest runner', () => {
 			);
 		})
 	);
-	it.live('recovers ActRefused and retains a query refusal with its field', () =>
+	it.live('recovers ActRefused and retains a write callback refusal with its field', () =>
 		Effect.gen(function* () {
 			const refused = { kind: 'refused', code: 'refused', message: 'no' };
 			const { bridge } = recorder(() => ({ ok: true, value: refused }));
@@ -677,16 +706,16 @@ describe('next guest runner', () => {
 				ok(
 					yield* runIn(
 						automation(
-							'function* (_, ctx) { return [yield* Effect.catchTag(ctx.act("t.create", {}), "ActRefused", (e) => Effect.succeed(e.message)), yield* Effect.catchTag(Effect.as(ctx.act("t.create", {}), "committed"), "ActRefused", () => Effect.succeed("refused"))]; }'
+							'function* (_, ctx) { return [yield* Effect.catchTag(ctx.act("t.create", [{}]), "ActRefused", (e) => Effect.succeed(e.message)), yield* Effect.catchTag(Effect.as(ctx.act("t.create", [{}]), "committed"), "ActRefused", () => Effect.succeed("refused"))]; }'
 						),
 						invocation(),
 						bridge
 					)
 				)
 			).toEqual(['no', 'refused']);
-			const refusingQuery =
-				'export default { collection: { t: { bodies: { queries: { go: function* (_, ctx) { return yield* ctx.refuse("too late", { field: "day" }); } } } } } };';
-			expect(yield* runIn(refusingQuery, invocation(null, {}, 'query', 't.go'))).toMatchObject({
+			const refusingTransform =
+				'export default { model: { t: { bodies: { create: function* (_, ctx) { return yield* ctx.refuse("too late", { field: "day" }); } } } } };';
+			expect(yield* runIn(refusingTransform, invocation([], {}, 'create', 't'))).toMatchObject({
 				kind: 'refused',
 				message: 'too late',
 				field: 'day'
@@ -700,13 +729,13 @@ describe('next guest runner', () => {
 			Effect.gen(function* () {
 				const conflict = {
 					kind: 'conflict',
-					records: [{ collection: 't', id: 'row', fields: [] }]
+					records: [{ model: 't', id: 'row', fields: [] }]
 				};
 				const { bridge } = recorder(() => ({ ok: true, value: conflict }));
 				// the native family rides the failed run: the readable conflict message plus the rows that moved
 				expect(
 					yield* runIn(
-						automation('function* (_, ctx) { return yield* ctx.act("t.update", {}); }'),
+						automation('function* (_, ctx) { return yield* ctx.act("t.update", [{}]); }'),
 						invocation(),
 						bridge
 					)
@@ -720,7 +749,7 @@ describe('next guest runner', () => {
 					ok(
 						yield* runIn(
 							automation(
-								'function* (_, ctx) { return yield* Effect.catchTag(Effect.as(ctx.act("t.update", {}), "committed"), "ActConflict", () => Effect.succeed("conflict")); }'
+								'function* (_, ctx) { return yield* Effect.catchTag(Effect.as(ctx.act("t.update", [{}]), "committed"), "ActConflict", () => Effect.succeed("conflict")); }'
 							),
 							invocation(),
 							bridge
@@ -762,7 +791,7 @@ describe('next guest runner', () => {
 		Effect.gen(function* () {
 			const o = yield* runIn(
 				automation(
-					'function* (_, ctx) { yield* ctx.query("t", { id: "x" }); yield* Effect.never; }'
+					'function* (_, ctx) { yield* ctx.query({ t: { where: { id: { eq: "x" } } } }); yield* Effect.never; }'
 				)
 			);
 			expect(failure(o)).toMatchObject({
@@ -778,7 +807,7 @@ describe('next guest runner', () => {
 		Effect.gen(function* () {
 			const o = yield* runIn(
 				automation(
-					'function* (_, ctx) {\n  yield* Effect.all([ctx.query("t", { id: "a" }), ctx.query("t", { id: "b" })], { concurrency: "unbounded" });\n  yield* Effect.all([ctx.query("t", { id: "c" }), ctx.query("t", { id: "d" })], { concurrency: "unbounded" });\n}'
+					'function* (_, ctx) {\n  yield* Effect.all([ctx.query({ t: { where: { id: { eq: "a" } } } }), ctx.query({ t: { where: { id: { eq: "b" } } } })], { concurrency: "unbounded" });\n  yield* Effect.all([ctx.query({ t: { where: { id: { eq: "c" } } } }), ctx.query({ t: { where: { id: { eq: "d" } } } })], { concurrency: "unbounded" });\n}'
 				),
 				invocation(null, { crossings: 3 })
 			);
@@ -794,7 +823,7 @@ describe('next guest runner', () => {
 			const { bridge } = recorder(() => ({ ok: true, value: 1, journal: true }));
 			const o = yield* runIn(
 				automation(
-					'function* (_, ctx) {\n  for (let i = 0; i < 50; i++)\n    yield* ctx.query("t", { id: "x" });\n  return 1;\n}'
+					'function* (_, ctx) {\n  for (let i = 0; i < 50; i++)\n    yield* ctx.query({ t: { where: { id: { eq: "x" } } } });\n  return 1;\n}'
 				),
 				invocation(null, { crossings: 40 }),
 				bridge
@@ -815,7 +844,7 @@ describe('next guest runner', () => {
 		Effect.gen(function* () {
 			const o = yield* runIn(
 				automation(
-					'function* (_, ctx) {\n  for (let i = 0; i < 50; i++)\n    yield* ctx.query("t", { id: "x" });\n}'
+					'function* (_, ctx) {\n  for (let i = 0; i < 50; i++)\n    yield* ctx.query({ t: { where: { id: { eq: "x" } } } });\n}'
 				),
 				invocation(null, { crossings: 40 })
 			);
@@ -831,7 +860,7 @@ describe('next guest runner', () => {
 			const { bridge } = recorder(() => ({ ok: true, value: 'x'.repeat(600) }));
 			const o = yield* runIn(
 				automation(
-					'function* (_, ctx) { yield* ctx.query("t", { id: "a" }); yield* ctx.query("t", { id: "b" }); }'
+					'function* (_, ctx) { yield* ctx.query({ t: { where: { id: { eq: "a" } } } }); yield* ctx.query({ t: { where: { id: { eq: "b" } } } }); }'
 				),
 				invocation(null, { readBytes: 1_000 }),
 				bridge
@@ -840,37 +869,40 @@ describe('next guest runner', () => {
 		})
 	);
 
-	it.live('refuses a crossing answer over 4 MiB (rule 9)', () =>
+	it.live('refuses a crossing answer over the crossing limit (rule 9)', () =>
 		Effect.gen(function* () {
+			const size = LIMITS.crossingBytes + 200_000;
+			const mb = (bytes: number) => (bytes / 1024 / 1024).toFixed(1);
 			const { bridge } = recorder(() => ({
 				ok: true,
-				value: 'x'.repeat(LIMITS.crossingBytes + 200_000)
+				value: 'x'.repeat(size)
 			}));
 			expect(
 				failure(
 					yield* runIn(
-						automation('function* (_, ctx) { return yield* ctx.query("t", { id: "a" }); }'),
+						automation('function* (_, ctx) { return yield* ctx.query({ t: { where: { id: { eq: "a" } } } }); }'),
 						invocation(),
 						bridge
 					)
 				)
 			).toEqual({
 				code: 'tooLarge',
-				message:
-					"Could not read 't': too much data returned at once (4.2 MB total, over the 4 MB limit). Largest response: 4.2 MB. At guest.mjs:2; page it with `limit` and the returned cursor, or `select` fewer fields."
+				message: `Could not read 't': too much data returned at once (${mb(size)} MB total, over the ${LIMITS.crossingBytes / 1024 / 1024} MB limit). Largest response: ${mb(size)} MB. At guest.mjs:2; page it with \`limit\` and the returned cursor, or \`select\` fewer fields.`
 			});
 		})
 	);
 
-	it.live('reports the total when concurrent read answers together exceed 4 MiB (rule 9)', () =>
+	it.live('reports the total when concurrent read answers together exceed the crossing limit (rule 9)', () =>
 		Effect.gen(function* () {
+			const each = 5 * 1024 * 1024;
+			const total = each * 2;
 			const { crossings, bridge } = recorder(() => ({
 				ok: true,
-				value: 'x'.repeat(3 * 1024 * 1024)
+				value: 'x'.repeat(each)
 			}));
 			const outcome = yield* runIn(
 				automation(
-					'function* (_, ctx) { return yield* Effect.all([ctx.query("t", { id: "a" }), ctx.query("t", { id: "b" })], { concurrency: "unbounded" }); }'
+					'function* (_, ctx) { return yield* Effect.all([ctx.query({ t: { where: { id: { eq: "a" } } } }), ctx.query({ t: { where: { id: { eq: "b" } } } })], { concurrency: "unbounded" }); }'
 				),
 				invocation(),
 				bridge
@@ -878,8 +910,7 @@ describe('next guest runner', () => {
 			expect(crossings.map((calls) => calls.length)).toEqual([2]);
 			expect(failure(outcome)).toEqual({
 				code: 'tooLarge',
-				message:
-					"Could not read 't': too much data returned at once (6.0 MB total, over the 4 MB limit). Largest response: 3.0 MB. At guest.mjs:2; page it with `limit` and the returned cursor, or `select` fewer fields."
+				message: `Could not read 't': too much data returned at once (${(total / 1024 / 1024).toFixed(1)} MB total, over the ${LIMITS.crossingBytes / 1024 / 1024} MB limit). Largest response: ${(each / 1024 / 1024).toFixed(1)} MB. At guest.mjs:2; page it with \`limit\` and the returned cursor, or \`select\` fewer fields.`
 			});
 		})
 	);
@@ -891,7 +922,7 @@ describe('next guest runner', () => {
 			let metered = 0n;
 			const o = yield* runIn(
 				automation(
-					'function* (_, ctx) { for (let i = 0; i < 3; i++) { spin(150); yield* ctx.query("t", { id: "x" }); } return "done"; }',
+					'function* (_, ctx) { for (let i = 0; i < 3; i++) { spin(150); yield* ctx.query({ t: { where: { id: { eq: "x" } } } }); } return "done"; }',
 					spin
 				),
 				invocation(),
@@ -913,7 +944,7 @@ describe('next guest runner', () => {
 			);
 			const o = yield* runIn(
 				automation(
-					'function* (_, ctx) { for (let i = 0; i < 3; i++) yield* ctx.query("t", { id: "x" }); return "done"; }'
+					'function* (_, ctx) { for (let i = 0; i < 3; i++) yield* ctx.query({ t: { where: { id: { eq: "x" } } } }); return "done"; }'
 				),
 				invocation(),
 				bridge,
@@ -927,95 +958,37 @@ describe('next guest runner', () => {
 	);
 
 	it.live(
-		'answers a keyed read by key as one crossing and one statement, its members crossing together (rule 12)',
+		'a read request crosses once as one read: every root and layer in one call, lowered from the request itself (rule 12)',
 		() =>
 			Effect.gen(function* () {
-				const { crossings, bridge } = recorder((c) => ({
-					ok: true,
-					value:
-						c._tag === 'read' && c.read.kind === 'get'
-							? `${c.read.collection}:${c.read.id}:${c.read.member}`
-							: null
-				}));
-				const o = yield* runIn(
-					automation(
-						`function* (_, ctx) { return yield* ctx.query({ a: { from: 't', id: 'x' }, b: { from: 'u', id: 'y' }, c: { from: 'v', id: 'z' } }); }`
-					),
-					invocation(null, { crossings: 1 }),
-					bridge
-				);
-				expect(ok(o)).toEqual({ a: 't:x:a', b: 'u:y:b', c: 'v:z:c' });
-				expect(crossings.map((c) => c.length)).toEqual([3]);
-			})
-	);
-
-	it.live(
-		"scopes a keyed member's reference to an earlier member of the same read, and refuses any other",
-		() =>
-			Effect.gen(function* () {
-				const stub: GuestOptions['lowerRead'] = (_m, args) => {
-					const spec = Schema.decodeUnknownSync(
-						Schema.Struct({ ref: Schema.optionalKey(Schema.String) })
-					)(args[1]);
+				const lowered: Json[] = [];
+				const stub: GuestOptions['lowerRead'] = (member, args) => {
+					lowered.push([member, ...args]);
 					return {
-						kind: 'read',
-						collection: String(args[0]),
-						select: { fields: null, relations: {} },
-						page: { _tag: 'All' },
-						...(spec.ref === undefined
-							? {}
-							: {
-									where: {
-										t: 'and',
-										of: [
-											{
-												t: 'in',
-												field: 'x',
-												negated: false,
-												args: { _tag: 'Member', member: spec.ref, field: 'id' }
-											}
-										]
-									}
-								})
+						kind: 'get',
+						model: 't',
+						id: 'x',
+						select: { fields: null, relations: {} }
 					};
 				};
-				const { crossings, bridge } = recorder();
-				const out = yield* runIn(
+				const answer = { t: { rows: [{ id: 'x' }], next: null }, u: { rows: [], next: null } };
+				const { crossings, bridge } = recorder(() => ({ ok: true, value: answer }));
+				const request = {
+					t: { where: { id: { eq: 'x' } }, fields: ['id'] },
+					't.lines': { limit: 5 },
+					u: { limit: 1 }
+				};
+				const o = yield* runIn(
 					automation(
-						`function* (_, ctx) { return yield* Effect.catchCause(ctx.query({ a: { from: 't' }, b: { from: 'u', ref: 'a' }, c: { from: 'v', ref: 'c' } }), (cause) => Effect.succeed(Cause.squash(cause).message)); }`
+						`function* (_, ctx) { return yield* ctx.query(${JSON.stringify(request)}); }`
 					),
-					invocation(),
+					invocation(null, { crossings: 1 }),
 					bridge,
 					{ lowerRead: stub }
 				);
-				const reads = crossings.flatMap((batch) =>
-					batch.flatMap((call) =>
-						call._tag === 'read' && call.read.kind === 'read' ? [call.read] : []
-					)
-				);
-				const scope = reads[0]?.cte?.split(':')[0];
-				if (scope === undefined) throw new Error('the keyed read has no CTE scope');
-				expect(
-					reads.map((read) => [read.member, read.cte, JSON.stringify(read.where ?? null)])
-				).toEqual([
-					['a', `${scope}:a`, 'null'],
-					[
-						'b',
-						`${scope}:b`,
-						JSON.stringify({
-							t: 'and',
-							of: [
-								{
-									t: 'in',
-									field: 'x',
-									negated: false,
-									args: { _tag: 'Member', member: `${scope}:a`, field: 'id' }
-								}
-							]
-						})
-					]
-				]);
-				expect(ok(out)).toBe("member 'c': 'c' is no earlier member of this read");
+				expect(ok(o)).toEqual(answer);
+				expect(crossings.map((c) => c.length)).toEqual([1]);
+				expect(lowered).toEqual([['query', request]]);
 			})
 	);
 	it.live('lowers act.many to one acts call: one crossing, one statement', () =>
@@ -1028,7 +1001,7 @@ describe('next guest runner', () => {
 								kind: 'committed',
 								output: c.acts.map((a) =>
 									a.callable._tag === 'Verb'
-										? `${a.callable.collection}.${a.callable.verb}`
+										? `${a.callable.model}.${a.callable.verb}`
 										: 'unexpected'
 								),
 								records: []
@@ -1048,8 +1021,8 @@ describe('next guest runner', () => {
 					{
 						_tag: 'acts',
 						acts: [
-							{ callable: { _tag: 'Verb', collection: 'a', verb: 'create' }, input: { x: 1 } },
-							{ callable: { _tag: 'Verb', collection: 'b', verb: 'update' }, input: [] }
+							{ callable: { _tag: 'Verb', model: 'a', verb: 'create' }, input: { x: 1 } },
+							{ callable: { _tag: 'Verb', model: 'b', verb: 'update' }, input: [] }
 						]
 					}
 				]
@@ -1058,64 +1031,34 @@ describe('next guest runner', () => {
 	);
 
 	it.live(
-		'fails a keyed read with the member that failed, and names the widest member past 4 MiB (rule 9)',
+		'a read request whose answer passes the crossing limit fails tooLarge, and a host refusal reaches the body (rule 9)',
 		() =>
 			Effect.gen(function* () {
-				const { bridge } = recorder((c) =>
-					c._tag === 'read' && c.read.collection === 'u'
-						? {
-								ok: false,
-								error: {
-									kind: 'bolt',
-									code: 'tooLarge',
-									message:
-										"member 'b': the read of u matches more than 50000 rows; page it (rule 9)"
-								}
-							}
-						: { ok: true, value: 1 }
-				);
+				const { bridge } = recorder(() => ({
+					ok: false,
+					error: { kind: 'bolt', code: 'invalid', message: "'u.nope' is not a read layer u declares" }
+				}));
 				expect(
 					ok(
 						yield* runIn(
 							automation(
-								`function* (_, ctx) { return yield* Effect.catchCause(ctx.query({ a: { from: 't', id: 'x' }, b: { from: 'u', id: 'y' } }), (cause) => { const e = Cause.squash(cause); return Effect.succeed(e.code + ' ' + e.message); }); }`
+								`function* (_, ctx) { return yield* Effect.catchCause(ctx.query({ t: {}, 'u.nope': {} }), (cause) => { const e = Cause.squash(cause); return Effect.succeed(e.code + ' ' + e.message); }); }`
 							),
 							invocation(),
 							bridge
 						)
 					)
-				).toBe("tooLarge member 'b': the read of u matches more than 50000 rows; page it (rule 9)");
-				expect(
-					ok(
-						yield* runIn(
-							automation(
-								`function* (_, ctx) { return yield* Effect.catchCause(ctx.query({ a: { id: 'x' } }), (cause) => Effect.succeed(Cause.squash(cause).message)); }`
-							)
-						)
-					)
-				).toMatch(/^member 'a': a keyed read member names its model in from/);
-				const big = recorder((c) => ({
-					ok: true,
-					value:
-						c._tag === 'read' && c.read.collection === 'u'
-							? 'x'.repeat(2_221_685)
-							: 'x'.repeat(2_149_660)
-				}));
+				).toBe("invalid 'u.nope' is not a read layer u declares");
+				const big = recorder(() => ({ ok: true, value: 'x'.repeat(LIMITS.crossingBytes + 1) }));
 				expect(
 					failure(
 						yield* runIn(
-							automation(
-								`function* (_, ctx) { return yield* ctx.query({ a: { from: 't', id: 'x' }, roster: { from: 'u', id: 'y' } }); }`
-							),
+							automation(`function* (_, ctx) { return yield* ctx.query({ t: {}, u: {} }); }`),
 							invocation(),
 							big.bridge
 						)
 					)
-				).toEqual({
-					code: 'tooLarge',
-					message:
-						"Could not read 'roster': too much data returned at once (4.2 MB total, over the 4 MB limit). Largest response: 4.2 MB; 'roster': 2.1 MB. At guest.mjs:2; page it with `limit` and the returned cursor, or `select` fewer fields."
-				});
+				).toMatchObject({ code: 'tooLarge' });
 			})
 	);
 
@@ -1215,7 +1158,7 @@ describe('next guest runner', () => {
 				);
 				const o = yield* runIn(
 					automation(
-						'function* (_, ctx) { const a = yield* ctx.query("t", { id: "a" }); const r = yield* ctx.ai.sys_2.infer({ prompt: "q" }); return [a, r]; }'
+						'function* (_, ctx) { const a = yield* ctx.query({ t: { where: { id: { eq: "a" } } } }); const r = yield* ctx.ai.sys_2.infer({ prompt: "q" }); return [a, r]; }'
 					),
 					invocation(null, { crossings: LIMITS.crossings.automation }),
 					bridge,
@@ -1466,7 +1409,7 @@ describe('next guest globals (rule 6)', () => {
 	it.live('ignores tenant snapshot properties and evaluates source in a fresh isolated heap', () =>
 		Effect.gen(function* () {
 			const source = automation(
-				`function* (_, ctx) { return [++globalThis.count, crypto.randomUUID(), yield* ctx.query('t', { id: 'x' })]; }`,
+				`function* (_, ctx) { return [++globalThis.count, crypto.randomUUID(), yield* ctx.query({ t: { where: { id: { eq: 'x' } } } })]; }`,
 				'globalThis.count = 0;'
 			);
 			const built = yield* sourceProgram(source);

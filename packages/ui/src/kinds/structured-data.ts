@@ -271,6 +271,69 @@ export function structuredSchema(schema: JsonSchema, root: JsonSchema, value?: V
 	return plan(schema, value, 0, new Set());
 }
 
+/**
+ * The value a new form starts from: the schema's defaults filled into the absent (or null) places of `value`.
+ * Returns `undefined` when every present value already satisfies the schema, so an editor only writes a real change.
+ */
+export function dataDefaults(
+	schema: JsonSchema,
+	value: Value | undefined,
+	root: JsonSchema = schema
+): Value | undefined {
+	let changed = false;
+	const fill = (input: JsonSchema, held: Value | undefined): Value | undefined => {
+		const resolved = structuredSchema(input, root, held);
+		if (typeof resolved === 'boolean') return held;
+		if (held === undefined || held === null) {
+			if (resolved.default !== undefined) {
+				changed = true;
+				return resolved.default;
+			}
+			if (resolved.properties !== undefined) {
+				const next = Object.fromEntries(
+					Object.entries(resolved.properties).flatMap(([key, child]) => {
+						const filled = fill(child, undefined);
+						return filled === undefined ? [] : [[key, filled]];
+					})
+				);
+				if (Object.keys(next).length > 0) {
+					changed = true;
+					return next;
+				}
+			}
+			return held;
+		}
+		if (Arr.isArray<Value>(held)) {
+			if (resolved.items === undefined) return held;
+			let changedItems = false;
+			const next = held.map((item) => {
+				const filled = fill(resolved.items!, item);
+				if (filled === undefined) return item;
+				changedItems = true;
+				return filled;
+			});
+			if (changedItems) changed = true;
+			return changedItems ? next : held;
+		}
+		const entries = dataEntries(held);
+		if (entries === undefined || resolved.properties === undefined) return held;
+		let changedFields = false;
+		const next = { ...entries };
+		for (const [key, child] of Object.entries(resolved.properties)) {
+			const current = entries[key];
+			const filled = fill(child, current);
+			if (filled !== undefined && filled !== current) {
+				next[key] = filled;
+				changedFields = true;
+			}
+		}
+		if (changedFields) changed = true;
+		return changedFields ? next : held;
+	};
+	const next = fill(schema, value);
+	return changed ? next : undefined;
+}
+
 /** The schema's structural description; callers retain the original Kind for native leaf rendering. */
 export function kindJsonSchema(kind: Kind): JsonSchema {
 	const common = { title: kind.label, description: kind.help };

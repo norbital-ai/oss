@@ -24,8 +24,8 @@ sort popover over the page's own rows, the actions menu and the page's scope con
 		children: Snippet<[readonly R[]]>;
 		/** No rows: the kit's `EmptyState` by default, this snippet instead, or `false` to draw the view empty (a calendar). */
 		empty?: Snippet | false;
-		/** The collection the view draws (a roster grid of `roster_entry`): its file syncs' import, template and export join the actions menu, scoped by `toolbar.context`. */
-		collection?: string;
+		/** The model the view draws (a roster grid of `roster_entry`): its file syncs' import, template and export join the actions menu, scoped by `toolbar.context`. */
+		model?: string;
 	};
 </script>
 
@@ -47,7 +47,7 @@ sort popover over the page's own rows, the actions menu and the page's scope con
 		toolbar = {},
 		children,
 		empty,
-		collection = ''
+		model = ''
 	}: CustomViewProps<R> = $props();
 	const bolt = useBolt();
 	const LOCAL = '$local';
@@ -59,7 +59,7 @@ sort popover over the page's own rows, the actions menu and the page's scope con
 	const catalog = $derived({ [LOCAL]: localExposure(rows, names, labelOf) });
 	const view = viewState(bolt, {
 		key: () => key,
-		collection: () => LOCAL,
+		model: () => LOCAL,
 		catalog: () => catalog,
 		initialFilter: () => undefined
 	});
@@ -82,7 +82,7 @@ sort popover over the page's own rows, the actions menu and the page's scope con
 {#snippet bar()}
 	<ViewToolbar
 		config={toolbar}
-		{collection}
+		{model}
 		{view}
 		{catalog}
 		source={LOCAL}

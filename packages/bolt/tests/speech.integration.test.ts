@@ -23,8 +23,8 @@ const manifest = Result.getOrThrow(
 			}
 		},
 		relationships: {},
-		collections: {
-			calls: { read: { fields: 'all' }, create: { input: { columns: ['title', 'audio'] } } }
+		exposures: {
+			calls: { read: { calls: { fields: 'all' } }, create: { columns: { calls: ['title', 'audio'] } } }
 		},
 		integrations: {},
 		teams: {},
@@ -112,7 +112,7 @@ const run = (
 		const file: Json = { id: up.output.id, name: up.output.name, mime: up.output.mime };
 		yield* actReply(route, admin.authority, {
 			callable: 'calls.create',
-			input: { title: 'Call', audio: file },
+			input: [{ title: 'Call', audio: file }],
 			issuedAt: t.clock.now()
 		});
 		yield* actReply(route, t.as(t.member(['ops'])).authority, {

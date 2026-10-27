@@ -11,8 +11,10 @@
 	import {
 		Button,
 		Dialog,
+		EmptyState,
 		Picker,
 		Table,
+		TableSkeleton,
 		Textarea,
 		format,
 		label,
@@ -24,6 +26,7 @@
 	import type { Act } from '../Acts.svelte';
 	import Acts from '../Acts.svelte';
 	import SystemPage from '../SystemPage.svelte';
+	import approvalsBanner from '../assets/banners/approvals.jpg';
 
 	/** `onCount`: the requests the viewer may decide, as it changes: the sidebar's badge. */
 	let {
@@ -105,7 +108,7 @@
 			variant: move.decision === 'approve' ? 'default' : 'outline'
 		}));
 
-	// the collection's catalog label and the action as a verb (`create` → `Create`); `collection` stays the key openRecord needs
+	// the model's catalog label and the action as a verb (`create` → `Create`); `model` stays the key openRecord needs
 	const verb = (a: string) => {
 		const s = t(a);
 		return s !== a ? s : a.replace(/_/g, ' ').replace(/^\w/, (x) => x.toUpperCase());
@@ -113,7 +116,7 @@
 	const requestRows = $derived(
 		(requests ?? []).map((r) => ({
 			...r,
-			of: label(bolt, r.collection),
+			of: label(bolt, r.model),
 			verb: verb(r.action),
 			progress:
 				r.status === 'ChangesRequested'
@@ -146,27 +149,34 @@
 	>{/snippet}
 <!-- which record: its own label (a trial's title, a submission's name) through the reviewer's read grant, never an id -->
 {#snippet record_({ row }: { row: InboxRequest; value: unknown })}
-	{#if row.action === 'create'}<span>{t('New')} {singular(bolt, row.collection)}</span>
+	{#if row.action === 'create'}<span>{t('New')} {singular(bolt, row.model)}</span>
 	{:else}<span class="[&_[data-readonly]]:text-xs"
-			><Picker of={row.collection} value={row.record} onChange={() => {}} readonly /></span
+			><Picker of={row.model} value={row.record} onChange={() => {}} readonly /></span
 		>{/if}
 {/snippet}
 {#snippet decide_({ row }: { row: InboxRequest; value: unknown })}<Acts
 		acts={decisions(row)}
 	/>{/snippet}
 
-<SystemPage name="inbox" title={t('Inbox')} error={message ?? inbox.error?.message ?? null}>
+<SystemPage
+	name="inbox"
+	title={t('Approvals')}
+	icon="lucide:shield-check"
+	banner={approvalsBanner}
+	description={t('Requests awaiting your decision and requests you made.')}
+	error={message ?? inbox.error?.message ?? null}
+>
 	{#if requests === null}
-		<p class="text-sm text-muted-foreground">{t('Loading…')}</p>
+		<TableSkeleton />
 	{:else}
 		<Table
 			of={requestRows}
 			key="approvals"
-			toolbar={{ title: t('Approvals'), export: true }}
-			onOpen={(r) => openRecord(r.collection, r.record)}
+			toolbar={{ title: t('All approvals'), export: true }}
+			onOpen={(r) => openRecord(r.model, r.record)}
 			columns={[
 				{ field: 'record', label: t('Record'), cell: record_ },
-				{ field: 'of', label: t('Collection') },
+				{ field: 'of', label: t('Model') },
 				{ field: 'verb', label: t('Action') },
 				{ field: 'progress', label: t('Status') },
 				{ field: 'by', label: t('Requested by') },
@@ -174,9 +184,14 @@
 				{ field: 'id', label: t('Actions'), hide: 'narrow', cell: decide_ }
 			]}
 		>
-			{#snippet empty()}<p class="text-sm text-muted-foreground">
-					{t('Nothing waits on you.')}
-				</p>{/snippet}
+			{#snippet empty()}
+				<EmptyState
+					variant="inset"
+					icon="shield"
+					title={t('No approvals yet')}
+					hint={t('Requests you make and requests awaiting your decision appear here.')}
+				/>
+			{/snippet}
 		</Table>
 	{/if}
 </SystemPage>

@@ -23,7 +23,7 @@ const manifest = Result.getOrThrow(
 			quotes: { description: 'A quote', label: 'title', fields: { title: { kind: 'text' } } }
 		},
 		relationships: {},
-		collections: { quotes: { read: { fields: 'all' } } },
+		exposures: { quotes: { read: { quotes: { fields: 'all' } } } },
 		policies: {},
 		agent: { internal: 'Staff brief.', skills: {} },
 		integrations: {},

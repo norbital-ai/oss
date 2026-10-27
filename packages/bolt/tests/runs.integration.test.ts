@@ -82,7 +82,7 @@ import {
 	RateLimits,
 	SessionAuthority
 } from '../src/protocol/http.ts';
-import { HttpServerRequest, HttpServerResponse } from 'effect/unstable/http';
+import { HttpServerRequest, HttpServerResponse } from 'effect/http';
 import type { Verb } from '../src/engine/write/act.ts';
 const base: EngineManifest = {
 	workspace: {
@@ -101,11 +101,11 @@ const base: EngineManifest = {
 		}
 	},
 	relationships: {},
-	collections: {
+	exposures: {
 		quotes: {
-			read: { fields: 'all' },
-			create: { input: { columns: ['title', 'status'] } },
-			update: { input: { columns: ['title', 'status'] } },
+			read: { quotes: { fields: 'all' } },
+			create: { columns: { quotes: ['title', 'status'] } },
+			update: { columns: { quotes: ['title', 'status'] } },
 			delete: {}
 		}
 	},
@@ -307,7 +307,7 @@ type World = {
 	clock: {
 		ms: number;
 	};
-	act(collection: string, verb: Verb, input: Json): Effect.Effect<WriteOutcome, EngineError>;
+	act(model: string, verb: Verb, input: Json): Effect.Effect<WriteOutcome, EngineError>;
 	until(ms: number): Effect.Effect<void, EngineError>;
 	sql(text: string, params?: Json[]): Effect.Effect<Rows['rows'], EngineError>;
 };
@@ -451,10 +451,10 @@ const world = Effect.fn('TestRuns.world')(function* (
 		calls,
 		wakes,
 		clock,
-		act: (collection: string, verb: Verb, input: Json) =>
+		act: (model: string, verb: Verb, input: Json) =>
 			Effect.gen(function* () {
 				return (yield* e.act({
-					collection,
+					model,
 					verb,
 					input,
 					mode: { _tag: 'Direct' },
@@ -587,10 +587,10 @@ describe('a preview environment, where the host binds no links', () => {
 					relationships: {
 						'products.source': { to: 'sys_integration', where: { integration: { eq: 'erp' } } }
 					},
-					collections: {
-						...base.collections,
+					exposures: {
+						...base.exposures,
 						products: {
-							read: { fields: 'all' },
+							read: { products: { fields: 'all' } },
 							syncs: { erp: { with: 'erp', read: true, every: '15min' } }
 						}
 					},
@@ -615,14 +615,14 @@ describe('a preview environment, where the host binds no links', () => {
 					tidy: () => Effect.gen(function* () {}),
 					sent: () => Effect.gen(function* () {})
 				});
-				const quote = yield* w.act('quotes', 'create', { title: 'q' });
+				const quote = yield* w.act('quotes', 'create', [{ title: 'q' }]);
 				if (quote.kind !== 'committed' || quote.records[0] === undefined)
 					throw new Error('Missing quote');
 				expect(
-					yield* w.act('quotes', 'update', {
+					yield* w.act('quotes', 'update', [{
 						target: quote.records[0].id,
 						set: { status: 'sent' }
-					})
+					}])
 				).toMatchObject({ kind: 'committed' });
 				expect(yield* w.r.crons).toEqual([{ id: 'tidy', cron: '*/15 * * * *', zone: 'UTC' }]);
 				yield* w.until(T0 + 15 * 60000);
@@ -653,7 +653,7 @@ describe('event triggers (rules 49, 50)', () => {
 				// 60 quotes created 09:01:00–09:04:56 share the bucket 3 days after 09:05
 				for (let i = 0; i < 60; i++) {
 					yield* setNow(w, T0 + 60000 + i * 4000);
-					expect(yield* w.act('quotes', 'create', { title: `q${i}` })).toMatchObject({
+					expect(yield* w.act('quotes', 'create', [{ title: `q${i}` }])).toMatchObject({
 						kind: 'committed'
 					});
 				}
@@ -683,24 +683,24 @@ describe('event triggers (rules 49, 50)', () => {
 					remind: () => Effect.gen(function* () {})
 				});
 				yield* setNow(w, T0 + 17000);
-				const created = yield* w.act('quotes', 'create', { title: 'a' });
+				const created = yield* w.act('quotes', 'create', [{ title: 'a' }]);
 				expect(created.kind).toBe('committed');
 				if (created.kind !== 'committed' || created.records[0] === undefined)
 					throw new Error('Missing quote');
 				const id = created.records[0].id;
-				yield* w.act('quotes', 'update', { target: id, set: { title: 'b' } }); // status unchanged: no run
+				yield* w.act('quotes', 'update', [{ target: id, set: { title: 'b' } }]); // status unchanged: no run
 				expect(
 					yield* w.sql(`SELECT count(*)::int AS n FROM sys_run WHERE automation = 'sent'`)
 				).toEqual([{ n: 0 }]);
 				yield* setNow(w, T0 + 23000);
-				yield* w.act('quotes', 'update', { target: id, set: { status: 'sent' } });
-				yield* w.act('quotes', 'delete', { target: id });
+				yield* w.act('quotes', 'update', [{ target: id, set: { status: 'sent' } }]);
+				yield* w.act('quotes', 'delete', [{ target: id }]);
 				yield* w.until(T0 + 60000);
 				expect(w.wakes).toEqual([T0 + 23000]);
 				const byName = Object.fromEntries(w.calls.map((c) => [c.target, c.input]));
-				expect(byName['sent']).toEqual({ collection: 'quotes', ids: [id] });
+				expect(byName['sent']).toEqual({ model: 'quotes', ids: [id] });
 				expect(byName['gone']).toMatchObject({
-					collection: 'quotes',
+					model: 'quotes',
 					ids: [id],
 					rows: [{ id, title: 'b', status: 'sent' }]
 				});
@@ -715,7 +715,7 @@ describe('event triggers (rules 49, 50)', () => {
 					policies: {
 						limited: {
 							description: 'Read quote titles and start a manual review',
-							grants: { quotes: { read: { fields: ['title'] } } },
+							grants: { quotes: { read: { quotes: { fields: ['title'] } } } },
 							automations: ['review']
 						}
 					},
@@ -723,7 +723,7 @@ describe('event triggers (rules 49, 50)', () => {
 						review: {
 							description: 'Review authored rows',
 							input: {
-								collection: { kind: 'text' },
+								model: { kind: 'text' },
 								rows: {
 									kind: 'list',
 									of: {
@@ -766,7 +766,7 @@ describe('event triggers (rules 49, 50)', () => {
 					admin: false
 				};
 				const manual: Json = {
-					collection: 'quotes',
+					model: 'quotes',
 					rows: [
 						{ id: 'supplied-row', title: 'Authored title', status: 'sent', note: 'Authored data' }
 					]
@@ -792,19 +792,19 @@ describe('event triggers (rules 49, 50)', () => {
 					{ state: 'succeeded' }
 				]);
 
-				const created = yield* w.act('quotes', 'create', {
+				const created = yield* w.act('quotes', 'create', [{
 					title: 'Readable title',
 					status: 'sent'
-				});
+				}]);
 				if (created.kind !== 'committed' || created.records[0] === undefined)
 					throw new Error('Missing quote');
 				const quote = created.records[0];
-				expect(yield* w.act('quotes', 'delete', { target: quote.id })).toMatchObject({
+				expect(yield* w.act('quotes', 'delete', [{ target: quote.id }])).toMatchObject({
 					kind: 'committed'
 				});
 				yield* w.until(T0);
 				expect(w.calls.find((call) => call.target === 'gone')?.input).toEqual({
-					collection: 'quotes',
+					model: 'quotes',
 					ids: [quote.id],
 					rows: [{ id: quote.id, revision: quote.revision, title: 'Readable title' }]
 				});
@@ -826,7 +826,7 @@ describe('re-queues, attempts and the journal (rules 51, 54, 55, 70)', () => {
 						Effect.gen(function* () {
 							return yield* ctx.act(
 								'quotes.update',
-								{ target, set: { title: 'stale result' } },
+								[{ target, set: { title: 'stale result' } }],
 								{ observed: { [target]: revision } }
 							);
 						})
@@ -838,13 +838,13 @@ describe('re-queues, attempts and the journal (rules 51, 54, 55, 70)', () => {
 					kind: Schema.Literal('committed'),
 					records: Schema.Array(Schema.Struct({ id: Schema.String, revision: Schema.Number }))
 				})
-			)(yield* w.act('quotes', 'create', { title: 'original' }));
+			)(yield* w.act('quotes', 'create', [{ title: 'original' }]));
 			const row = created.records[0];
 			if (!row)
 				return yield* Effect.fail(BoltError.make('guestError', 'guest', 'Missing created quote'));
 			target = row.id;
 			revision = row.revision;
-			yield* w.act('quotes', 'update', { target, set: { title: 'newer edit' } });
+			yield* w.act('quotes', 'update', [{ target, set: { title: 'newer edit' } }]);
 			yield* w.until(T0);
 			expect(yield* w.sql('SELECT title FROM quotes WHERE id = $1', [target])).toEqual([
 				{ title: 'newer edit' }
@@ -894,7 +894,7 @@ describe('re-queues, attempts and the journal (rules 51, 54, 55, 70)', () => {
 				{
 					flaky: (_, ctx) =>
 						Effect.gen(function* () {
-							yield* ctx.act('quotes.create', { title: 'once' });
+							yield* ctx.act('quotes.create', [{ title: 'once' }]);
 							if (!ctx.attempt.endsWith(':3'))
 								return yield* Effect.fail(BoltError.make('upstream', 'guest', '502'));
 							return 'done';
@@ -1161,10 +1161,10 @@ describe('webhooks and visibility (rules 56, 56a)', () => {
 				};
 				if (member.actor.kind !== 'member') throw new Error('Expected a member actor');
 				const created = (yield* w.e.act({
-					collection: 'quotes',
+					model: 'quotes',
 					mode: { _tag: 'Direct' },
 					verb: 'create',
-					input: { title: 'x', status: 'draft' },
+					input: [{ title: 'x', status: 'draft' }],
 					key: randomUUID(),
 					issuedAt: iso(T0),
 					authority: yield* w.e.authority(member),
@@ -1176,10 +1176,10 @@ describe('webhooks and visibility (rules 56, 56a)', () => {
 					throw new Error('Missing created quote');
 				const id = created.records[0].id;
 				yield* w.e.act({
-					collection: 'quotes',
+					model: 'quotes',
 					mode: { _tag: 'Direct' },
 					verb: 'update',
-					input: { target: id, set: { status: 'sent' } },
+					input: [{ target: id, set: { status: 'sent' } }],
 					key: randomUUID(),
 					issuedAt: iso(T0),
 					authority: yield* w.e.authority(member),
@@ -1421,16 +1421,16 @@ describe('lanes: a long automation never holds an agent.triage decision (rules 4
 						})
 				});
 				const rows = [
-					{ id: 'a', cause: 'created', collection: 'quotes', size: 6000, due: T0 - 5000 },
-					{ id: 'b', cause: 'created', collection: 'quotes', size: 4000, due: T0 - 4000 },
-					{ id: 'c', cause: 'created', collection: 'quotes', size: 1, due: T0 - 2000 },
-					{ id: 'd', cause: 'created', collection: 'other', size: 1, due: T0 - 1000 },
-					{ id: 'e', cause: 'updated', collection: 'quotes', size: 1, due: T0 }
+					{ id: 'a', cause: 'created', model: 'quotes', size: 6000, due: T0 - 5000 },
+					{ id: 'b', cause: 'created', model: 'quotes', size: 4000, due: T0 - 4000 },
+					{ id: 'c', cause: 'created', model: 'quotes', size: 1, due: T0 - 2000 },
+					{ id: 'd', cause: 'created', model: 'other', size: 1, due: T0 - 1000 },
+					{ id: 'e', cause: 'updated', model: 'quotes', size: 1, due: T0 }
 				].map((row) => ({
 					...row,
 					due: iso(row.due),
 					input: {
-						collection: row.collection,
+						model: row.model,
 						ids: Array.from({ length: row.size }, (_, i) => `${row.id}${i}`)
 					}
 				}));
@@ -1461,7 +1461,7 @@ describe('lanes: a long automation never holds an agent.triage decision (rules 4
 				)
 					throw new Error('Missing event fixture');
 				expect(inputs).toEqual([
-					{ collection: 'quotes', ids: [...first.input.ids, ...second.input.ids] },
+					{ model: 'quotes', ids: [...first.input.ids, ...second.input.ids] },
 					third.input,
 					fourth.input,
 					fifth.input
@@ -1600,7 +1600,7 @@ describe('lanes: a long automation never holds an agent.triage decision (rules 4
 					params: [iso(T0)]
 				});
 				yield* w.db.write({
-					text: `INSERT INTO sys_run (id, automation, input, due_at, cause, depth) SELECT 'pending-' || g, CASE WHEN g <= 30 THEN 'classify' ELSE 'flaky' END, CASE WHEN g <= 30 THEN jsonb_build_object('collection', 'quotes', 'ids', jsonb_build_array(g::text)) ELSE '{}'::jsonb END, CASE WHEN g <= 30 THEN $1::timestamptz ELSE $2::timestamptz END, CASE WHEN g <= 30 THEN 'created' ELSE 'schedule' END, 0 FROM generate_series(1, 60) g`,
+					text: `INSERT INTO sys_run (id, automation, input, due_at, cause, depth) SELECT 'pending-' || g, CASE WHEN g <= 30 THEN 'classify' ELSE 'flaky' END, CASE WHEN g <= 30 THEN jsonb_build_object('model', 'quotes', 'ids', jsonb_build_array(g::text)) ELSE '{}'::jsonb END, CASE WHEN g <= 30 THEN $1::timestamptz ELSE $2::timestamptz END, CASE WHEN g <= 30 THEN 'created' ELSE 'schedule' END, 0 FROM generate_series(1, 60) g`,
 					params: [iso(T0 - 2000), iso(T0 - 1000)]
 				});
 				const ticking = yield* Effect.forkChild(w.r.tick);

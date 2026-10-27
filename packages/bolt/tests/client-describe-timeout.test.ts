@@ -71,7 +71,7 @@ it.effect('the describe deadline never aborts a mutating act', () =>
 			describe: true
 		});
 		const act = yield* bolt
-			.act('jobs.update', { id: 'job1', status: 'done' })
+			.act('jobs.update', [{ id: 'job1', status: 'done' }])
 			.pipe(Effect.forkScoped);
 		yield* TestClock.adjust('15 seconds');
 		expect(act.pollUnsafe() === undefined).toBe(true);

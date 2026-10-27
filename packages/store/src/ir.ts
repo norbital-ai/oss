@@ -131,7 +131,7 @@ export type Pred =
 	  }
 	| { readonly t: 'json'; readonly field: string; readonly contains: Json }
 	| { readonly t: 'json'; readonly field: string; readonly isEmpty: boolean }
-	/** `$search`: the collection's `search.text` document holds every word of `text`. */
+	/** `$search`: the model's `search.text` document holds every word of `text`. */
 	| { readonly t: 'search'; readonly text: string }
 	/** `$similar`: the rows nearest `to` on `search.semantic`, at most `top`; `vector` is the probe the read embeds first. */
 	| {
@@ -156,14 +156,15 @@ export type Order = readonly {
 	readonly dir: 'asc' | 'desc';
 	readonly near?: Point | undefined;
 }[];
-/** `null` fields = the list's default projection. */
+/** `null` fields = the list's default projection (`whole`: every exposed field, heavy ones included, as a record's). */
 export type SelectIR = {
 	readonly fields: readonly string[] | null;
+	readonly whole?: true | undefined;
 	readonly relations: { readonly [rel: string]: RelSelectIR };
 };
 export type RelSelectIR = {
 	readonly target: string;
-	/** A polymorphic relation's every target, read as one row of whichever it holds (`collection` names it). */
+	/** A polymorphic relation's every target, read as one row of whichever it holds (`model` names it). */
 	readonly targets?: readonly string[] | undefined;
 	/** A polymorphic arm may project each target's own columns and nested relations. */
 	readonly targetSelects?: { readonly [target: string]: SelectIR } | undefined;
@@ -172,6 +173,17 @@ export type RelSelectIR = {
 	readonly where?: Pred | undefined;
 	readonly order?: Order | undefined;
 	readonly page?: PageIR | undefined;
+	/** A many-relation's rows measured per parent row instead of listed: one row, or with `by` its buckets (`page`). */
+	readonly aggregate?: Measures | undefined;
+};
+/** What an aggregate measures: its buckets, a count, and per-field sums, averages, minimums and maximums. */
+export type Measures = {
+	readonly by: readonly Bucket[];
+	readonly count?: true | undefined;
+	readonly sum?: readonly string[] | undefined;
+	readonly avg?: readonly string[] | undefined;
+	readonly min?: readonly string[] | undefined;
+	readonly max?: readonly string[] | undefined;
 };
 export type Bucket = {
 	readonly field: string;
@@ -181,7 +193,7 @@ export type Bucket = {
 /** A list read; `member` and `cte` name a keyed read's member and its rows in the composed statement. */
 export type ListRead = {
 	readonly kind: 'read';
-	readonly collection: string;
+	readonly model: string;
 	readonly where?: Pred | undefined;
 	readonly select: SelectIR;
 	readonly order?: Order | undefined;
@@ -197,27 +209,21 @@ export type ReadIR =
 	| ListRead
 	| {
 			readonly kind: 'get';
-			readonly collection: string;
+			readonly model: string;
 			readonly id: string;
 			readonly select: SelectIR;
 			readonly member?: string | undefined;
 			readonly cte?: string | undefined;
 	  }
-	| {
+	| (Measures & {
 			readonly kind: 'aggregate';
-			readonly collection: string;
+			readonly model: string;
 			readonly where?: Pred | undefined;
-			readonly by: readonly Bucket[];
-			readonly count?: true | undefined;
-			readonly sum?: readonly string[] | undefined;
-			readonly avg?: readonly string[] | undefined;
-			readonly min?: readonly string[] | undefined;
-			readonly max?: readonly string[] | undefined;
 			readonly page?: PageIR | undefined;
-	  }
+	  })
 	| {
 			readonly kind: 'similar';
-			readonly collection: string;
+			readonly model: string;
 			/** A `search.indexes` entry, or `SEMANTIC` for `search.semantic`. */
 			readonly index: string;
 			readonly input: Json;

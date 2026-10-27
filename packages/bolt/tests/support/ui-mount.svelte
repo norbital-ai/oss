@@ -1,6 +1,6 @@
 <script lang="ts">
 	// The ui next views over a real `$bolt` (hook:ui-shell's two provides, as the shell does them): a Table, a create
-	// Form and a RecordShell of one collection on one page.
+	// Form and a RecordShell of one model on one page.
 	import {
 		provideKinds,
 		provideBolt,

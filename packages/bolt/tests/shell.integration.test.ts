@@ -36,28 +36,28 @@ const manifest = Result.getOrThrow(
 			}
 		},
 		relationships: { 'applications.opening': { to: 'openings', inverse: 'applications' } },
-		collections: {
-			openings: { read: { fields: 'all' } },
-			applications: { read: { fields: 'all' }, create: { input: { columns: ['opening', 'name'] } } }
+		exposures: {
+			openings: { read: { openings: { fields: 'all' } } },
+			applications: {
+				read: { applications: { fields: 'all' } },
+				create: { columns: { applications: ['opening', 'name'] } }
+			}
 		},
 		integrations: {},
 		policies: {
 			applicant: {
 				description: 'Apply',
 				grants: {
-					openings: { read: { where: { status: { eq: 'open' } }, fields: ['title'] } },
-					applications: { create: { opening: { is: { status: { eq: 'open' } } } } }
+					openings: { read: { openings: { where: { status: { eq: 'open' } }, fields: ['title'] } } },
+					applications: { create: { check: true } }
 				}
 			},
 			lobby: {
 				description: 'Lobby kiosk',
 				grants: {
-					openings: { read: { where: { status: { eq: 'open' } }, fields: ['title'] } },
+					openings: { read: { openings: { where: { status: { eq: 'open' } }, fields: ['title'] } } },
 					applications: {
-						create: {
-							where: { opening: { is: { status: { eq: 'open' } } } },
-							fields: ['opening', 'name']
-						}
+						create: { columns: { applications: ['opening', 'name'] }, check: true }
 					}
 				}
 			},
@@ -70,7 +70,7 @@ const manifest = Result.getOrThrow(
 				description: 'Propose an application',
 				grants: {
 					openings: { read: true },
-					applications: { create: { approval: true } }
+					applications: { create: { check: true } }
 				}
 			}
 		},
@@ -351,11 +351,24 @@ const workspace = Layer.effectContext(
 		const context = yield* Layer.build(
 			TestWorkspace.layer({
 				manifest,
-				guest: yield* program(`export default { policy: { proposer: { grants: { applications: {
-					create: { approval: (write, flow) => write.record.name === 'Sales proposal'
-						? flow.step('Sales review', {teams:['Sales']})
-						: flow.step('Finance review', {teams:['Finance']}) }
-				} } } } };`),
+				// applicant and lobby apply to open roles only (one read over the batch); a proposer's application waits for review
+				guest: yield* program(`function* toOpen(rows, ctx) {
+					const { openings } = yield* ctx.db.query({ openings: { where: { id: { in: rows.map((r) => r.opening) } }, fields: ['status'] } });
+					const open = new Set(openings.rows.filter((o) => o.status === 'open').map((o) => o.id));
+					const row = rows.findIndex((r) => !open.has(r.opening));
+					return row >= 0 ? ctx.deny('That role is closed.', { row, field: 'opening' }) : ctx.allow();
+				}
+				export default { policy: {
+					applicant: { grants: { applications: { create: { check: toOpen } } } },
+					lobby: { grants: { applications: { create: { check: toOpen } } } },
+					proposer: { grants: { applications: {
+						create: { check: function* (rows, ctx) {
+							return ctx.approve((flow) => rows.some((r) => r.name === 'Sales proposal')
+								? flow.step('Sales review', {teams:['Sales']})
+								: flow.step('Finance review', {teams:['Finance']}));
+						} }
+					} } }
+				} };`),
 				seed: { openings: [{ id: OPEN, title: 'Engineer', status: 'open' }] },
 				host: {
 					publicUrl: ORIGIN,
@@ -453,7 +466,7 @@ layer(workspace)('shell routes', (it) => {
 							'/__bolt/act',
 							{
 								callable: 'applications.create',
-								input: { opening: OPEN, name: 'Ada' },
+								input: [{ opening: OPEN, name: 'Ada' }],
 								issuedAt: t.clock.now()
 							},
 							{ 'Idempotency-Key': crypto.randomUUID(), 'Bolt-Contract': contract }
@@ -573,12 +586,12 @@ layer(workspace)('shell routes', (it) => {
 						route = yield* routeFixture(yield* Effect.context<TestWorkspace | WorkspaceServices>());
 					const salesProposal = (yield* actReply(route, t.as(proposer).authority, {
 						callable: 'applications.create',
-						input: { opening: OPEN, name: 'Sales proposal' },
+						input: [{ opening: OPEN, name: 'Sales proposal' }],
 						issuedAt: t.clock.now()
 					})).outcome;
 					const financeProposal = (yield* actReply(route, t.as(proposer).authority, {
 						callable: 'applications.create',
-						input: { opening: OPEN, name: 'Finance proposal' },
+						input: [{ opening: OPEN, name: 'Finance proposal' }],
 						issuedAt: t.clock.now()
 					})).outcome;
 					if (
@@ -1088,19 +1101,31 @@ layer(workspace)('shell routes', (it) => {
 					expect(b.catalog['openings']?.fields).toEqual({ title: { kind: 'text' } }); // the grant's fields narrow the exposure
 					expect(b.catalog['applications']?.create).toEqual({ columns: ['opening', 'name'] });
 					expect(b.nav.map((n) => n.name)).toEqual(['careers']);
-					const q = yield* call(
+					// the root's grant scopes the rows and narrows the fields
+					const request = yield* call(
 						j,
 						'POST',
 						'/__bolt/q',
-						{ reads: [{ m: 'query', a: ['openings', { all: true }] }] },
+						{ reads: [{ m: 'query', a: [{ openings: { fields: ['title'] } }] }] },
 						V
 					);
-					expect(q.status).toBe(200);
+					expect(request.status).toBe(200);
 					expect(
 						(yield* Schema.decodeUnknownEffect(
-							Schema.Struct({ rows: Schema.Array(Schema.Struct({ title: Schema.String })) })
-						)(q.body?.answers?.[0])).rows.map((r) => r.title)
+							Schema.Struct({
+								openings: Schema.Struct({ rows: Schema.Array(Schema.Struct({ title: Schema.String })) })
+							})
+						)(request.body?.answers?.[0])).openings.rows.map((r) => r.title)
 					).toEqual(['Engineer']);
+					expect(
+						(yield* call(
+							j,
+							'POST',
+							'/__bolt/q',
+							{ reads: [{ m: 'query', a: [{ openings: {}, applications: {} }] }] },
+							V
+						)).status
+					).toBe(403);
 					expect(
 						(yield* call(
 							j,
@@ -1115,7 +1140,7 @@ layer(workspace)('shell routes', (it) => {
 							j,
 							'POST',
 							'/__bolt/q',
-							{ reads: [{ m: 'query', a: ['applications', { all: true }] }] },
+							{ reads: [{ m: 'query', a: [{ applications: {} }] }] },
 							V
 						)).status
 					).toBe(403);
@@ -1132,7 +1157,7 @@ layer(workspace)('shell routes', (it) => {
 						admin,
 						'POST',
 						'/__bolt/q',
-						{ reads: [{ m: 'query', a: ['applications', { all: true }] }] },
+						{ reads: [{ m: 'query', a: [{ applications: {} }] }] },
 						V
 					)).status
 				).toBe(403);
@@ -1153,7 +1178,7 @@ layer(workspace)('shell routes', (it) => {
 							'/__bolt/act',
 							{
 								callable: 'applications.create',
-								input: { opening: OPEN, name: 'Ada' },
+								input: [{ opening: OPEN, name: 'Ada' }],
 								issuedAt: t.clock.now()
 							},
 							{
@@ -1174,7 +1199,7 @@ layer(workspace)('shell routes', (it) => {
 							'/__bolt/act',
 							{
 								callable: 'openings.update',
-								input: { target: OPEN, set: {} },
+								input: [{ target: OPEN, set: {} }],
 								issuedAt: t.clock.now()
 							},
 							{ ...V, 'Idempotency-Key': crypto.randomUUID(), 'Bolt-Challenge': 'dev-pass' }
@@ -1186,12 +1211,12 @@ layer(workspace)('shell routes', (it) => {
 
 	describe('kiosks (standalone surfaces running as their assigned policies)', () => {
 		const K = (kiosk: string) => ({ 'Bolt-Kiosk': kiosk });
-		const read = (j: Jar, collection: string, headers: Record<string, string> = {}) =>
+		const read = (j: Jar, model: string, headers: Record<string, string> = {}) =>
 			call(
 				j,
 				'POST',
 				'/__bolt/q',
-				{ reads: [{ m: 'query', a: [collection, { all: true }] }] },
+				{ reads: [{ m: 'query', a: [{ [model]: {} }] }] },
 				headers
 			);
 		const act = (j: Jar, callable: string, input: unknown, headers: Record<string, string> = {}) =>
@@ -1248,10 +1273,14 @@ layer(workspace)('shell routes', (it) => {
 						read(jj, 'openings', headers).pipe(
 							Effect.flatMap((reply) =>
 								Schema.decodeUnknownEffect(
-									Schema.Struct({ rows: Schema.Array(Schema.Record(Schema.String, Schema.Json)) })
+									Schema.Struct({
+										openings: Schema.Struct({
+											rows: Schema.Array(Schema.Record(Schema.String, Schema.Json))
+										})
+									})
 								)(reply.body?.answers?.[0])
 							),
-							Effect.map((page) => page.rows)
+							Effect.map((answer) => answer.openings.rows)
 						);
 					expect((yield* read(jar(), 'openings')).status).toBe(401);
 					expect((yield* read(j, 'openings', K('nope'))).status).toBe(403);
@@ -1263,10 +1292,10 @@ layer(workspace)('shell routes', (it) => {
 					);
 					// the kiosk creates through its own grant, and nothing beyond it
 					expect(
-						(yield* act(j, 'applications.create', { opening: OPEN, name: 'Kay' }, K('lobby')))
+						(yield* act(j, 'applications.create', [{ opening: OPEN, name: 'Kay' }], K('lobby')))
 							.body?.['outcome']
 					).toMatchObject({ kind: 'committed' });
-					expect((yield* act(j, 'openings.create', { title: 'Nope' }, K('lobby'))).status).toBe(
+					expect((yield* act(j, 'openings.create', [{ title: 'Nope' }], K('lobby'))).status).toBe(
 						403
 					);
 					// a member's broader grants are replaced inside, not joined — and no admin bypass applies

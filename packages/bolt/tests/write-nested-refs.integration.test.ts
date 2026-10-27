@@ -9,10 +9,10 @@ import { toPred } from '../src/engine/access/pred.ts';
 import { PgliteDb, Pristine } from '../src/node/db/pglite.ts';
 import { applyPlan, plan } from '../src/engine/schema/plan.ts';
 import { act } from '../src/engine/write/act.ts';
-import { admin, arm, authority, grants, manifest, NOW, TODAY } from './write-fixture.ts';
+import { admin, arm, authority, grants, manifest, NOW, TODAY, writeArm } from './write-fixture.ts';
 const orderModel = manifest.models.orders,
-	orderCollection = manifest.collections.orders;
-if (orderModel === undefined || orderCollection === undefined)
+	orderExposure = manifest.exposures.orders;
+if (orderModel === undefined || orderExposure === undefined)
 	throw new Error('The write fixture must contain orders.');
 const m: EngineManifest = {
 	...manifest,
@@ -44,12 +44,12 @@ const m: EngineManifest = {
 			}
 		}
 	},
-	collections: {
-		...manifest.collections,
+	exposures: {
+		...manifest.exposures,
 		orders: {
-			...orderCollection,
-			create: { input: { columns: ['title', 'preferences', 'metadata'] } },
-			update: { input: { columns: ['preferences', 'metadata'] } }
+			...orderExposure,
+			create: { columns: { orders: ['title', 'preferences', 'metadata'] } },
+			update: { columns: { orders: ['preferences', 'metadata'] } }
 		}
 	},
 	customFields: {
@@ -62,14 +62,17 @@ const m: EngineManifest = {
 let pg: PGlite, db: TenantDb;
 let n = 0;
 const visible = authority({
-	orders: grants(),
-	tags: grants({ read: [arm(toPred(m, 'tags', { name: { eq: 'visible' } }))] })
+	orders: grants('orders', {
+		create: [writeArm({ orders: ['title', 'preferences', 'metadata'] })],
+		update: [writeArm({ orders: ['preferences', 'metadata'] })]
+	}),
+	tags: grants('tags', { read: { tags: [arm(toPred(m, 'tags', { name: { eq: 'visible' } }))] } })
 });
 const run = (input: Json, verb: 'create' | 'update' = 'create', caller = visible) =>
 	act(
 		{ manifest: m, db },
 		{
-			collection: 'orders',
+			model: 'orders',
 			verb,
 			input,
 			mode: { _tag: 'Direct' },
@@ -88,7 +91,7 @@ const setup = Effect.fnUntraced(function* () {
 	const tags = yield* act(
 		{ manifest: m, db },
 		{
-			collection: 'tags',
+			model: 'tags',
 			verb: 'create',
 			mode: { _tag: 'Direct' },
 			input: [{ name: 'visible' }, { name: 'hidden' }],
@@ -157,7 +160,7 @@ it.live('retains the existing value when an update supplies an unreadable refere
 		const created = yield* run({ title: 'accepted', preferences: [allowed] });
 		if (created.outcome.kind !== 'committed')
 			return yield* Effect.fail(new Error(JSON.stringify(created.outcome)));
-		const row = created.outcome.records.find((record) => record.collection === 'orders');
+		const row = created.outcome.records.find((record) => record.model === 'orders');
 		if (row === undefined) return yield* Effect.fail(new Error('The booking must be committed.'));
 		expect(
 			(yield* run({ target: row.id, set: { preferences: [hidden] } }, 'update')).outcome

@@ -47,22 +47,25 @@ describe('reads', () => {
 	it.effect('a read carries its wire form and revives its answer when run', () =>
 		Effect.gen(function* () {
 			const { bolt, sent } = yield* client(() =>
-				Response.json({ answers: [{ rows: [{ id: 'a', amount: { $dec: '1.50' } }], next: null }] })
+				Response.json({
+					answers: [{ jobs: { rows: [{ id: 'a', amount: { $dec: '1.50' } }], next: null } }]
+				})
 			);
-			const read = bolt.query<{ rows: { amount: Decimal }[] }>('jobs', { limit: 1 });
-			expect(read.read).toEqual({ m: 'query', a: ['jobs', { limit: 1 }] });
+			type Jobs = { jobs: { rows: { amount: Decimal }[] } };
+			const read = bolt.query<Jobs>({ jobs: { limit: 1 } });
+			expect(read.read).toEqual({ m: 'query', a: [{ jobs: { limit: 1 } }] });
 			expect('then' in read).toBe(true);
 			expect(sent).toHaveLength(0);
 			const answer = yield* read;
-			expect(answer.rows[0]?.amount).toBeInstanceOf(Decimal);
-			expect(answer.rows[0]?.amount.plus('1').toString()).toBe('2.50');
+			expect(answer.jobs.rows[0]?.amount).toBeInstanceOf(Decimal);
+			expect(answer.jobs.rows[0]?.amount.plus('1').toString()).toBe('2.50');
 			expect(sent).toHaveLength(1);
 			yield* Effect.acquireRelease(
 				Effect.sync(() => mountEdge(ManagedRuntime.make(Layer.empty))),
 				(dispose) => Effect.promise(dispose)
 			);
 			const awaited = yield* Effect.promise(async () => await read);
-			expect(awaited.rows[0]?.amount).toBeInstanceOf(Decimal);
+			expect(awaited.jobs.rows[0]?.amount).toBeInstanceOf(Decimal);
 			expect(sent).toHaveLength(2);
 		})
 	);
@@ -71,7 +74,7 @@ describe('reads', () => {
 			const { bolt } = yield* client(() =>
 				Response.json({ error: { code: 'forbidden', message: 'No access' } }, { status: 403 })
 			);
-			const failure = yield* Effect.flip(bolt.query('jobs', { limit: 1 }));
+			const failure = yield* Effect.flip(bolt.query({ jobs: { limit: 1 } }));
 			expect(failure).toBeInstanceOf(ReadFailed);
 			expect(failure).toMatchObject({ code: 'forbidden', message: 'No access' });
 			const offline = yield* createBolt({
@@ -82,7 +85,7 @@ describe('reads', () => {
 					throw new TypeError('offline');
 				}
 			});
-			expect(yield* Effect.flip(offline.query('jobs', { id: 'j1' }))).toBeInstanceOf(
+			expect(yield* Effect.flip(offline.query({ jobs: { where: { id: { eq: 'j1' } } } }))).toBeInstanceOf(
 				TransportFailed
 			);
 		})
@@ -92,7 +95,8 @@ describe('reads', () => {
 			let source: EventSourceLike | undefined;
 			const opened = yield* Deferred.make<void>();
 			const registered = yield* Deferred.make<void>();
-			const answered = yield* Queue.unbounded<{ rows: { amount: Decimal }[] }>();
+			type Jobs = { jobs: { rows: { amount: Decimal }[] } };
+			const answered = yield* Queue.unbounded<Jobs>();
 			const bolt = yield* createBolt({
 				actor: null,
 				locale: 'en',
@@ -117,8 +121,8 @@ describe('reads', () => {
 					return source;
 				}
 			});
-			const view = bolt.observe<{ rows: { amount: Decimal }[] }>(bolt.query('jobs', { all: true }));
-			const seen: { rows: { amount: Decimal }[] }[] = [];
+			const view = bolt.observe<Jobs>(bolt.query({ jobs: {} }));
+			const seen: Jobs[] = [];
 			const fiber = yield* Stream.runForEach(view, (answer) =>
 				Effect.sync(() => {
 					seen.push(answer);
@@ -134,10 +138,10 @@ describe('reads', () => {
 				t: 'answer',
 				view: 'v1',
 				v: 1,
-				value: { rows: [{ id: 'a', amount: { $dec: '2' } }], next: null }
+				value: { jobs: { rows: [{ id: 'a', amount: { $dec: '2' } }], next: null } }
 			});
 			yield* Queue.take(answered);
-			expect(seen[0]?.rows[0]?.amount).toBeInstanceOf(Decimal);
+			expect(seen[0]?.jobs.rows[0]?.amount).toBeInstanceOf(Decimal);
 			push({ t: 'error', view: 'v1', code: 'tooLarge', message: 'too big' });
 			const exit = yield* Fiber.await(fiber);
 			expect(Exit.isFailure(exit) && Cause.squash(exit.cause)).toEqual(
@@ -221,7 +225,7 @@ describe('document conversion', () => {
 					},
 					records: []
 				},
-				{ kind: 'conflict', records: [{ collection: 'jobs', id: 'j1', fields: ['title'] }] },
+				{ kind: 'conflict', records: [{ model: 'jobs', id: 'j1', fields: ['title'] }] },
 				{ kind: 'unknown', invocation: 'k1' }
 			]) {
 				const { bolt } = yield* client(outcome(answer));
@@ -241,7 +245,7 @@ describe('acts, starts, uploads and the session', () => {
 			const { bolt, sent } = yield* client(
 				outcome({ kind: 'refused', code: 'refused', message: 'Closed', field: 'status' })
 			);
-			const act = bolt.act('jobs.update', { target: 'j1', set: { status: 'x' } });
+			const act = bolt.act('jobs.update', [{ target: 'j1', set: { status: 'x' } }]);
 			expect(sent).toHaveLength(0);
 			const field = yield* act.pipe(
 				Effect.map(() => null),
@@ -256,11 +260,11 @@ describe('acts, starts, uploads and the session', () => {
 			const conflict = (yield* client(
 				outcome({
 					kind: 'conflict',
-					records: [{ collection: 'jobs', id: 'j1', fields: ['title'] }]
+					records: [{ model: 'jobs', id: 'j1', fields: ['title'] }]
 				})
 			)).bolt;
 			expect(
-				yield* Effect.flip(conflict.act('jobs.update', { target: 'j1', set: {} }))
+				yield* Effect.flip(conflict.act('jobs.update', [{ target: 'j1', set: {} }]))
 			).toBeInstanceOf(ActConflict);
 			const offline = yield* createBolt({
 				actor: null,
@@ -271,7 +275,7 @@ describe('acts, starts, uploads and the session', () => {
 					throw new TypeError('offline');
 				}
 			});
-			expect(yield* Effect.flip(offline.act('jobs.create', {}))).toEqual(
+			expect(yield* Effect.flip(offline.act('jobs.create', [{}]))).toEqual(
 				new ActUnknown({ invocation: 'k9' })
 			);
 			const done = (yield* client(
@@ -283,7 +287,7 @@ describe('acts, starts, uploads and the session', () => {
 			const refused = (yield* client(
 				outcome({ kind: 'refused', code: 'forbidden', message: 'No.' })
 			)).bolt;
-			expect(yield* Effect.flip(refused.act('jobs.create', {}))).toBeInstanceOf(ActRefused);
+			expect(yield* Effect.flip(refused.act('jobs.create', [{}]))).toBeInstanceOf(ActRefused);
 		})
 	);
 	it.effect('start names its run at once and sends one request when run', () =>
@@ -307,7 +311,7 @@ describe('acts, starts, uploads and the session', () => {
 		Effect.gen(function* () {
 			const approval: ApprovalView = {
 				id: 'r1',
-				collection: 'jobs',
+				model: 'jobs',
 				record: 'j1',
 				action: 'create',
 				at: '2026-10-13T00:00:00Z',
@@ -332,7 +336,7 @@ describe('acts, starts, uploads and the session', () => {
 						skipped: undefined
 					}
 				],
-				records: [{ collection: 'jobs', id: 'j1', op: 'create' }],
+				records: [{ model: 'jobs', id: 'j1', op: 'create' }],
 				moves: [{ decision: 'approve', reason: 'optional' }],
 				mine: true,
 				participant: true
@@ -346,7 +350,7 @@ describe('acts, starts, uploads and the session', () => {
 			const { bolt } = yield* client((url) =>
 				url.startsWith(PATHS.approval) ? Response.json({ value: [approval] }) : Response.json(file)
 			);
-			const [view] = yield* bolt.approvals.list({ collection: 'jobs' });
+			const [view] = yield* bolt.approvals.list({ model: 'jobs' });
 			expect(view?.log[0]?.reason).toBe('Review the new job.');
 			expect(view?.moves).toEqual([{ decision: 'approve', reason: 'optional' }]);
 			expect(yield* bolt.upload(new Blob(['x']), 'jobs.file')).toEqual(file);

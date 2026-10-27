@@ -12,6 +12,7 @@
 		Combobox,
 		confirmAction,
 		Dialog,
+		EmptyState,
 		format,
 		Input,
 		PhoneInput,
@@ -32,6 +33,12 @@
 	import Integrations from '../integration/Integrations.svelte';
 	import Runs from '../runs/Runs.svelte';
 	import SystemPage from '../SystemPage.svelte';
+	import peopleBanner from '../assets/banners/people.jpg';
+	import organizationBanner from '../assets/banners/organization.jpg';
+	import auditBanner from '../assets/banners/audit.jpg';
+	import automationsBanner from '../assets/banners/automations.jpg';
+	import integrationsBanner from '../assets/banners/integrations.jpg';
+	import secretsBanner from '../assets/banners/secrets.jpg';
 
 	let {
 		api,
@@ -64,6 +71,30 @@
 		integrations: 'Integrations',
 		secrets: 'Secrets'
 	};
+	const ICONS: { readonly [k in SettingsTab]: string } = {
+		people: 'lucide:users',
+		organization: 'lucide:building-2',
+		audit: 'lucide:scroll-text',
+		automations: 'lucide:play',
+		integrations: 'lucide:plug',
+		secrets: 'lucide:key-round'
+	};
+	const DESCRIPTIONS: { readonly [k in SettingsTab]: string } = {
+		people: 'Members, invitations and who can do what.',
+		organization: 'Workspace identity, branding and assistant limits.',
+		audit: 'Every write, refusal and sign-in, newest first.',
+		automations: 'Queued and completed background runs.',
+		integrations: 'Envoys, API keys and MCP servers for this workspace.',
+		secrets: 'Write-only values the workspace source reads by name.'
+	};
+	const BANNERS: { readonly [k in SettingsTab]: string } = {
+		people: peopleBanner,
+		organization: organizationBanner,
+		audit: auditBanner,
+		automations: automationsBanner,
+		integrations: integrationsBanner,
+		secrets: secretsBanner
+	};
 	let invalidate: (() => void) | undefined;
 	const settings = observe(() => {
 		const owner = api,
@@ -88,10 +119,7 @@
 			requested,
 			source
 				.observe(
-					source.query('sys_integration', {
-						select: { id: true, revision: true },
-						all: true
-					})
+					source.query({ sys_integration: { fields: ['revision'] } })
 				)
 				.pipe(Stream.map(() => undefined))
 		).pipe(Stream.switchMap(() => Stream.fromEffect(owner.settings())));
@@ -523,7 +551,14 @@
 {#if tab === 'automations'}
 	<Runs {api} {bolt} {t} {startable} {run} {onRun} />
 {:else}
-	<SystemPage name={`settings-${tab}`} title={t(TITLES[tab])} {error}>
+	<SystemPage
+		name={`settings-${tab}`}
+		title={t(TITLES[tab])}
+		icon={ICONS[tab]}
+		banner={BANNERS[tab]}
+		description={t(DESCRIPTIONS[tab])}
+		{error}
+	>
 		{#if s === null}
 			<p class="text-sm text-muted-foreground">{t('Loading…')}</p>
 		{:else if tab === 'people'}
@@ -730,52 +765,82 @@
 				)}
 			{/if}
 		{:else if tab === 'integrations'}
-			<Integrations
-				{api}
-				{bolt}
-				{t}
-				settings={s}
-				locale={chosenLocale(workspace.locale)}
-				{integrationSetups}
-				reload={load}
+			{#snippet envoysTab()}
+				<Integrations
+					{api}
+					{bolt}
+					{t}
+					settings={s}
+					locale={chosenLocale(workspace.locale)}
+					{integrationSetups}
+					reload={load}
+				/>
+			{/snippet}
+			{#snippet keysTab()}
+				<Table
+					of={keys}
+					key="keys"
+					onOpen={show('key')}
+					toolbar={{
+						title: t('API keys'),
+						description: t('Keys for programmatic access. A new key is shown once.'),
+						new: () => (creating = 'key')
+					}}
+					columns={[
+						{ field: 'name', label: t('Name') },
+						{ field: 'prefix', label: t('Key'), cell: mono },
+						{ field: 'team', label: t('Team') },
+						{ field: 'created_at', label: t('Created'), cell: at },
+						{ field: 'last_used_at', label: t('Last used'), cell: at },
+						{ field: 'revoked', label: t('revoked') },
+						{ field: 'id', label: t('Actions'), hide: 'narrow', cell: keyCell }
+					]}
+				>
+					{#snippet empty()}
+						<EmptyState
+							variant="inset"
+							icon="link"
+							title={t('No API keys yet.')}
+							hint={t('Issue a key so a source team can call this workspace.')}
+						/>
+					{/snippet}
+				</Table>
+			{/snippet}
+			{#snippet mcpTab()}
+				<Table
+					of={remotes}
+					key="mcp-servers"
+					onOpen={show('remote')}
+					toolbar={{
+						title: t('MCP servers'),
+						description: t('MCP servers this workspace connects to.'),
+						new: false,
+						export: false
+					}}
+					columns={[
+						{ field: 'name', label: t('Name') },
+						{ field: 'url', label: t('URL') }
+					]}
+				>
+					{#snippet empty()}
+						<EmptyState
+							variant="inset"
+							icon="links"
+							title={t('No MCP servers')}
+							hint={t('The workspace declares no MCP servers.')}
+						/>
+					{/snippet}
+				</Table>
+			{/snippet}
+			<Tabs
+				level={2}
+				orientation="horizontal"
+				tabs={[
+					{ name: 'envoys', title: t('Envoys'), icon: 'lucide:bot', body: envoysTab },
+					{ name: 'keys', title: t('API keys'), icon: 'lucide:key-round', body: keysTab },
+					{ name: 'mcp', title: t('MCP servers'), icon: 'lucide:server', body: mcpTab }
+				]}
 			/>
-			<Table
-				of={keys}
-				key="keys"
-				onOpen={show('key')}
-				toolbar={{
-					title: t('API keys'),
-					description: t('Keys for programmatic access. A new key is shown once.'),
-					new: () => (creating = 'key')
-				}}
-				columns={[
-					{ field: 'name', label: t('Name') },
-					{ field: 'prefix', label: t('Key'), cell: mono },
-					{ field: 'team', label: t('Team') },
-					{ field: 'created_at', label: t('Created'), cell: at },
-					{ field: 'last_used_at', label: t('Last used'), cell: at },
-					{ field: 'revoked', label: t('revoked') },
-					{ field: 'id', label: t('Actions'), hide: 'narrow', cell: keyCell }
-				]}
-			>
-				{#snippet empty()}<p class="text-sm text-muted-foreground">
-						{t('No API keys yet.')}
-					</p>{/snippet}
-			</Table>
-			<Table
-				of={remotes}
-				key="mcp-servers"
-				onOpen={show('remote')}
-				toolbar={{ title: t('MCP servers'), new: false, export: false }}
-				columns={[
-					{ field: 'name', label: t('Name') },
-					{ field: 'url', label: t('URL') }
-				]}
-			>
-				{#snippet empty()}<p class="text-sm text-muted-foreground">
-						{t('The workspace declares no MCP servers.')}
-					</p>{/snippet}
-			</Table>
 		{:else if tab === 'secrets'}
 			<Table
 				of={secrets}
@@ -784,7 +849,10 @@
 					open = { kind: 'secret', id: x.id };
 					secretValue = '';
 				}}
-				toolbar={{ description: t('Values are write-only: open a secret to set it.') }}
+				toolbar={{
+					title: t('Secrets'),
+					description: t('Values are write-only: open a secret to set it.')
+				}}
 				columns={[
 					{ field: 'label', label: t('Name') },
 					{ field: 'name', label: t('Variable'), cell: mono },
@@ -792,9 +860,14 @@
 					{ field: 'id', label: t('Actions'), hide: 'narrow', cell: secretCell }
 				]}
 			>
-				{#snippet empty()}<p class="text-sm text-muted-foreground">
-						{t('The workspace declares no secrets.')}
-					</p>{/snippet}
+				{#snippet empty()}
+					<EmptyState
+						variant="inset"
+						icon="lock"
+						title={t('No secrets')}
+						hint={t('The workspace declares no secrets.')}
+					/>
+				{/snippet}
 			</Table>
 		{/if}
 	</SystemPage>

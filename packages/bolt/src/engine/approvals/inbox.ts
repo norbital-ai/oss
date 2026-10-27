@@ -13,7 +13,7 @@ import { decisionsFor, type ApprovalDecision, type ApprovalState } from './machi
  */
 export type InboxRequest = {
 	id: string;
-	collection: string;
+	model: string;
 	record: string;
 	action: string;
 	status: Extract<ApprovalState, 'Pending' | 'ChangesRequested'>;
@@ -28,9 +28,9 @@ export type InboxRequest = {
 	moves: readonly { decision: ApprovalDecision; reason: 'required' | 'optional' }[];
 };
 
-// Eligibility filters the bounded candidate set; these are private rows, never a caller's collection read.
+// Eligibility filters the bounded candidate set; these are private rows, never a caller's model read.
 export const openRequests: Sql = {
-	text: `SELECT a.id::text AS id, a.state, a.collection, a.record, a.action, a.requestor, a.step, a.route, a.at::text AS at,
+	text: `SELECT a.id::text AS id, a.state, a.collection AS model, a.record, a.action, a.requestor, a.step, a.route, a.at::text AS at,
 	coalesce(u.name, u.email, a.requestor) AS by FROM bolt_approvals a LEFT JOIN sys_user u ON a.requestor = 'member:' || u.id
 	WHERE a.state IN ('Pending', 'ChangesRequested') ORDER BY a.at DESC LIMIT 2000`,
 	params: []
@@ -38,7 +38,7 @@ export const openRequests: Sql = {
 const Open = Schema.Struct({
 	id: Schema.String,
 	state: Schema.Literals(['Pending', 'ChangesRequested']),
-	collection: Schema.String,
+	model: Schema.String,
 	record: Schema.String,
 	action: Schema.String,
 	requestor: Schema.String,
@@ -62,7 +62,7 @@ export function inboxRequests(rows: readonly RowData[], auth: Authority): InboxR
 		if (moves.length === 0 && !mine) continue;
 		requests.push({
 			id: row.id,
-			collection: row.collection,
+			model: row.model,
 			record: row.record,
 			action: row.action,
 			status: row.state,

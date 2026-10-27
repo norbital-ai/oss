@@ -29,6 +29,7 @@
 		Sheet,
 		Spinner,
 		TAB_LEVEL,
+		TableSkeleton,
 		Toaster,
 		cn,
 		openRecord,
@@ -53,6 +54,7 @@
 	} from './nav.ts';
 	import { chosenLocale, frameworkText, setLocale, uiTextFor } from './i18n.ts';
 	import type { SyncStatus } from '../page/bolt.ts';
+	import type { FinderAnswer } from './finder/model.ts';
 	import { activeApp, media, navigationModel, NORBIUS } from './model.ts';
 	import { applyTheme, storedTheme, storeTheme, type Theme } from './theme.ts';
 	import {
@@ -70,7 +72,6 @@
 	import Invite from './auth/Invite.svelte';
 	import AgentPanel from './agent/Agent.svelte';
 	import Inbox from './inbox/Inbox.svelte';
-	import Connections from './integration/Connections.svelte';
 	import Settings from './settings/Settings.svelte';
 	import Audit from './audit/Audit.svelte';
 	import Studio from './studio/Studio.svelte';
@@ -98,7 +99,7 @@
 			if (data?.type !== 'norbital:preview-release') return;
 			let conversation: string | null = null;
 			try {
-				conversation = sessionStorage.getItem('bolt.agent.conversation');
+				if (agentMemory !== undefined) conversation = localStorage.getItem(agentMemory);
 			} catch {
 				conversation = null;
 			}
@@ -110,7 +111,10 @@
 						`I took control of the Studio preview${typeof data.id === 'string' ? ` !${data.id}` : ''}. You no longer control it; call workspace_view to take it back when I ask.`,
 						true
 					)
-					.pipe(Effect.asVoid)
+					.pipe(
+						Effect.asVoid,
+						Effect.catch((error) => Effect.logWarning(error))
+					)
 			);
 		};
 		window.addEventListener('message', onMessage);
@@ -150,6 +154,12 @@
 	// a signed-out caller's boot is refused, but names the workspace the access pages show
 	let guest = $state<ShellBoot['workspace'] | null>(null);
 	const workspace = $derived(boot?.workspace ?? guest);
+	/** Norbius's last opened conversation, kept per workspace and member so a shared browser never crosses accounts. */
+	const agentMemory = $derived(
+		boot?.actor?.kind === 'member'
+			? `bolt.agent.conversation:${boot.workspace.handle ?? boot.workspace.name}:${boot.actor.id}`
+			: undefined
+	);
 	let bolt = $state.raw<ShellBolt | null>(null);
 	let failure = $state<{ code: string; message: string; status: number } | null>(null);
 	let agentRequest = $state<AgentRequest | null>(null);
@@ -206,8 +216,8 @@
 		get currency() {
 			return config.manifest.workspace.currency;
 		},
-		query: (collection, options) => moduleBolt.query(collection, options),
-		// a generated form's file field: bytes to `<collection>.<field>`, links to the stored file
+		query: (request) => moduleBolt.query(request),
+		// a generated form's file field: bytes to `<model>.<field>`, links to the stored file
 		upload: (file, target) =>
 			moduleBolt
 				.upload(file, target)
@@ -227,7 +237,7 @@
 	// ui's views on a page (`Table`, `Board`, …) read `$bolt` from context; pages render only after the boot sets it
 	provideBolt(moduleBolt);
 
-	// a preview environment drops the meta tools: Norbius and Studio (`surfaces`), People, Connections and preview-as
+	// a preview environment drops the meta tools: Norbius and Studio (`surfaces`), People, Integrations and preview-as
 	const previewEnv = $derived(boot?.workspace.live !== undefined);
 	const current = $derived(previewRoute(route(config.manifest, url), previewEnv));
 	// the record-sheet stack (rule 10): every `?record=`, the last on top
@@ -599,13 +609,6 @@
 		yield* Effect.result(api.preview({ team }));
 		location.reload();
 	});
-	/** A staff member the workspace lets make integration instances: the account menu offers their own connections. */
-	const connectable = $derived(
-		boot?.actor?.kind === 'member' &&
-			!boot.actor.external &&
-			!previewEnv &&
-			boot.catalog['sys_integration']?.create !== undefined
-	);
 	// the 48rem breakpoint base.css restates: below it the sidebar is a drawer
 	const narrow = new MediaQuery('max-width: 47.999rem');
 	const go = (href: string) => {
@@ -683,22 +686,38 @@
 				</p></Center
 			>
 		{:else if Page === undefined}
-			<Center><p>{t('Loading…')}</p></Center>
+			<div
+				class="min-h-0 flex-1 overflow-y-auto p-4 sm:p-6"
+				role="status"
+				aria-busy="true"
+				aria-label={t('Loading…')}
+			>
+				<TableSkeleton />
+			</div>
 		{:else}
 			<span hidden {@attach initialPageMounted}></span>
 			<!-- hook:view-ui — a page sits inset from the sidebar; a page's own AppShell inset finds this owner and stays flush -->
-			{#if requires.length === 0}
-				<Bound size="full" inset><Page /></Bound>
-			{:else}
-				<DeviceWall {requires} {access} native={device.geolocation?.source === 'native'} {t}>
+			<svelte:boundary>
+				{#if requires.length === 0}
 					<Bound size="full" inset><Page /></Bound>
-				</DeviceWall>
-			{/if}
+				{:else}
+					<DeviceWall {requires} {access} native={device.geolocation?.source === 'native'} {t}>
+						<Bound size="full" inset><Page /></Bound>
+					</DeviceWall>
+				{/if}
+				{#snippet failed(error)}
+					<span hidden {@attach initialPageMounted}></span>
+					<Center
+						><p role="alert">
+							{t('The page could not be rendered.')}
+							{error instanceof Error ? error.message : String(error)}
+						</p></Center
+					>
+				{/snippet}
+			</svelte:boundary>
 		{/if}
 	{:else if current.kind === 'inbox' && boot?.surfaces.inbox && bolt}
 		<Inbox {bolt} {t} onCount={(n) => (waiting = n)} />
-	{:else if current.kind === 'connections' && connectable && boot?.actor?.kind === 'member' && bolt}
-		<Connections {api} {bolt} me={boot.actor.id} {t} {locale} />
 	{:else if current.kind === 'settings' && current.tab === 'audit' && boot?.surfaces.settings && boot.admin && bolt}
 		<Audit {api} {t} locale={bolt.locale} admin={boot.admin} />
 	{:else if current.kind === 'settings' && current.tab !== 'audit' && boot?.surfaces.settings && bolt}
@@ -725,8 +744,8 @@
 		<Center><p>{t('Not found or no access')}</p></Center>
 	{/if}
 	{#if bolt !== null}
-		{#each records as r, i (`${i}:${r.collection}/${r.id}`)}
-			<RecordSheet collection={r.collection} id={r.id} onClose={() => closeRecord(i)} />
+		{#each records as r, i (`${i}:${r.model}/${r.id}`)}
+			<RecordSheet model={r.model} id={r.id} onClose={() => closeRecord(i)} />
 		{/each}
 	{/if}
 {/snippet}
@@ -840,14 +859,6 @@
 				}}
 				onNavigate={go}
 				onSignOut={signOut}
-				{...connectable
-					? {
-							onConnections: () => {
-								navOpen = false;
-								navigate('/connections');
-							}
-						}
-					: {}}
 				notice={boot?.notice}
 				{...narrow.current ? {} : { onToggle: () => (expanded.current = !expanded.current) }}
 			>
@@ -976,7 +987,7 @@
 				bind:open={finding}
 				nav={boot.nav}
 				catalog={boot.catalog}
-				read={(c, o) => bolt!.query(c, o)}
+				read={(request) => bolt!.query<FinderAnswer>(request)}
 				{t}
 				onNavigate={navigate}
 				onOpenRecord={(c, id) => openRecord(c, id)}
@@ -1006,6 +1017,7 @@
 						envoys={boot.envoys ?? {}}
 						onClose={() => agent.close()}
 						onConversation={agentConversation}
+						storageKey={agentMemory}
 					/>
 				{/if}
 			</Sheet>

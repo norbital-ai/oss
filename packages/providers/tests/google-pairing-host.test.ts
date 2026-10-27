@@ -10,7 +10,7 @@ const manifest = Schema.decodeUnknownSync(EngineManifestSchema)({
 	workspace: { tz: 'UTC', locale: 'en' },
 	models: {},
 	relationships: {},
-	collections: {},
+	exposures: {},
 	pipelines: {},
 	integrations: {
 		gmail: {

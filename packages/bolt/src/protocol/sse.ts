@@ -1,8 +1,8 @@
 // The one SSE writer (B.2): the live stream, an integration instance's status stream and the shell's Studio events are
 // each a `Stream` of values answered as `text/event-stream`.
 import { Stream } from 'effect';
-import * as Sse from 'effect/unstable/encoding/Sse';
-import * as HttpServerResponse from 'effect/unstable/http/HttpServerResponse';
+import * as Sse from 'effect/encoding/Sse';
+import * as HttpServerResponse from 'effect/http/HttpServerResponse';
 
 /** A comment line: a proxy closes a connection that stays silent too long. */
 const PING = ': ping\n\n';

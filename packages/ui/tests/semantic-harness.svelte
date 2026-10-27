@@ -4,7 +4,7 @@
 	import { onDestroy } from 'svelte';
 	import { mountEdge } from '../src/effect/index.js';
 	onDestroy(mountEdge(ManagedRuntime.make(Layer.empty)));
-	import { provideKinds, type CollectionExposure } from '../src/kinds/context.js';
+	import { provideKinds, type ModelExposure } from '../src/kinds/context.js';
 	import { provideBolt } from '../src/client/context.js';
 	import { type ViewBolt } from '../src/client/contract.js';
 	import RecordShell from '../src/record/RecordShell.svelte';
@@ -18,7 +18,7 @@
 		onForm
 	}: {
 		bolt: ViewBolt;
-		catalog: Record<string, CollectionExposure>;
+		catalog: Record<string, ModelExposure>;
 		part: 'record' | 'create';
 		onForm(form: FormState): void;
 	} = $props();

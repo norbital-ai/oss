@@ -197,7 +197,7 @@
 			? undefined
 			: (boundary ?? importStartDraft(status?.importStart, primary, id === null))}
 	{@const paused = instance !== null && instance.id === id && instance.active === false}
-	<li class="flex flex-col gap-3 rounded-lg border bg-card px-4 py-3" data-connector={driver}>
+	<li class="flex min-w-0 flex-col gap-3 rounded-lg border bg-card px-4 py-3" data-connector={driver}>
 		<div class="flex items-center justify-between gap-3">
 			<div class="flex min-w-0 items-center gap-3">
 				<span class="grid size-9 shrink-0 place-items-center rounded-md border bg-background">

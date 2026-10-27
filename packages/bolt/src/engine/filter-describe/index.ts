@@ -1,12 +1,12 @@
 // AI filtering (rule 16a, P33, P34, P37): the view popover's "Describe what to show…" becomes a typed `Where` and an
 // `OrderBy` key through ONE `sys_1` call. System 1 never writes a filter: it chooses among conditions the engine built.
 //
-//   1. Fields: the collection's exposure narrowed to what the caller reads unmasked — own fields, one-relations and
+//   1. Fields: the model's exposure narrowed to what the caller reads unmasked — own fields, one-relations and
 //      many-relations (any / all / none, count, child totals) up to `FILTER_MAX_HOPS`, the search index (`$search`) and
 //      the embedding (`$similar`). Plain data (`FilterStep` paths): `filter.options` hands the same catalogue to the builder.
 //   2. Values: the description's own literals (dates, numbers, quoted strings, words, topic phrases), relative spans,
 //      enum and state names, me / my team / my party, and ONE batched read as the caller: the records a relation's words
-//      name (through the search index where declared), the phrases the collection's own records hold, and named days —
+//      name (through the search index where declared), the phrases the model's own records hold, and named days —
 //      a record the caller reads whose name the description holds and which has a date ("after National Day").
 //   3. Conditions: per field, every (operator, value) its kind admits, each built and decoded as any read literal is
 //      (`ir.where`). A condition that does not decode — a text operator on a number, a number against text, one day for
@@ -39,7 +39,7 @@ import {
 } from '../decisions/index.ts';
 import { catalogOf } from '../access/pred.ts';
 import { midnight, startOfDate } from '../query/eval.ts';
-import { exposedField, exposedRelation, type Catalog, type FieldInfo } from '@norbital-ai/store';
+import { exposedField, type Catalog, type FieldInfo } from '@norbital-ai/store';
 import * as ir from '../../protocol/reads.ts';
 import { order, where as decodeWhere } from '@norbital-ai/store';
 /** The stated conditions a description may produce. */
@@ -54,7 +54,7 @@ const FILTER_MAX_HOPS = 2;
 const CANDIDATES = 5,
 	WORDS = 8,
 	MAX_TOPICS = 4;
-/** Collections searched for a named day, at most. ponytail: the first that hold a date; rank them if a workspace has more. */
+/** Models searched for a named day, at most. ponytail: the first that hold a date; rank them if a workspace has more. */
 const MAX_DATED = 8;
 const NO = 'no condition',
 	NO_ORDER = 'no particular order';
@@ -76,7 +76,7 @@ const DAY_KINDS = new Set(['date', 'instant']);
 /** The child aggregates a many-relation offers. */
 type FilterAgg = 'sum' | 'avg' | 'min' | 'max';
 /**
- * One step of a condition's nesting from the collection root. `instantiate` folds the steps over the operator object
+ * One step of a condition's nesting from the model root. `instantiate` folds the steps over the operator object
  * from the innermost out: a field, a one-relation's record (`is`), an exclusive arc's arm, a many-relation's quantifier,
  * its count, or a child aggregate.
  */
@@ -504,7 +504,7 @@ const FRAME = new Set([
 	'dec'
 ]);
 /** The runs of the description's own words a search or a meaning could be about ("water leaks" in "jobs about water leaks
- * after 3rd October"): framing words, numbers and the collection's and fields' names split them; quoted strings as given. */
+ * after 3rd October"): framing words, numbers and the model's and fields' names split them; quoted strings as given. */
 function topics(text: string, names: readonly string[]): string[] {
 	const named = new Set(
 		names.flatMap((n) => tokens(n)).flatMap((t) => [t, t.replace(/s$/, ''), `${t}s`])
@@ -830,19 +830,20 @@ const same = (a: readonly FilterStep[], b: readonly FilterStep[]) =>
 export function makeFilterDescribe(cfg: FilterDescribeConfig) {
 	const m = cfg.manifest,
 		cat = catalogOf(m);
-	/** Whether the caller reads collection `c` and its field `f` unmasked (rule 14): the narrowing of every option. */
-	const reads = (a: Authority, c: string) => a.admin || (a.collections[c]?.read.length ?? 0) > 0;
+	/** Whether the caller reads model `c` and its field `f` unmasked (rule 14): the narrowing of every option. */
+	const reads = (a: Authority, c: string) =>
+		a.admin || (a.models[c]?.read[c]?.length ?? 0) > 0;
 	const unmasked = (a: Authority, c: string, f: string) =>
-		a.admin || a.collections[c]?.masks[f] === undefined;
+		a.admin || a.models[c]?.masks[c]?.[f] === undefined;
 	const spec = (c: string, f: string) => m.models[c]?.fields[f];
 	const nameOf = (c: string, f: string) => spec(c, f)?.label ?? human(f);
-	/** A collection's searched text fields: where a phrase the person typed can be found. */
+	/** A model's searched text fields: where a phrase the person typed can be found. */
 	const texts = (c: string) =>
-		(cat.collections.get(c)?.model.search ?? []).filter(
-			(f) => cat.collections.get(c)?.model.fields.get(f)?.kind === 'text'
+		(cat.exposures.get(c)?.model.search ?? []).filter(
+			(f) => cat.exposures.get(c)?.model.fields.get(f)?.kind === 'text'
 		);
-	/** 1. Every field the caller may describe on `collection`, with the description's literal values. Reads nothing. */
-	function fieldsOf(collection: string, text: string, a: Authority, b: Bindings): Field[] {
+	/** 1. Every field the caller may describe on `model`, with the description's literal values. Reads nothing. */
+	function fieldsOf(model: string, text: string, a: Authority, b: Bindings): Field[] {
 		const lit = literals(text, m.workspace.locale, b.today),
 			ws = words(text),
 			out: Field[] = [];
@@ -865,7 +866,7 @@ export function makeFilterDescribe(cfg: FilterDescribeConfig) {
 			hops: number,
 			back?: string
 		) => {
-			const tc = cat.collections.get(target);
+			const tc = cat.exposures.get(target);
 			if (tc === undefined || !reads(a, target)) return;
 			for (const f of tc.model.fields.values()) {
 				const s = spec(target, f.name);
@@ -905,7 +906,8 @@ export function makeFilterDescribe(cfg: FilterDescribeConfig) {
 					});
 					continue;
 				}
-				if (hops === 0 || !exposedRelation(tc, f.name) || back === `${target}.${f.name}`) continue;
+				// a filter may hop any relation into a model the caller reads (the walk below checks it)
+				if (hops === 0 || back === `${target}.${f.name}`) continue;
 				// the record itself by its key, then its fields one hop on (one arm per target of an exclusive arc)
 				for (const arm of rel.targets.length > 1 ? rel.targets : [undefined]) {
 					const at = arm ?? rel.targets[0]!;
@@ -931,7 +933,7 @@ export function makeFilterDescribe(cfg: FilterDescribeConfig) {
 						],
 						values: [
 							...(at === 'sys_user' ? [{ label: 'me', arg: { actor: 'id' } }] : []),
-							...(a.actor.kind === 'member' && a.actor.party?.collection === at
+							...(a.actor.kind === 'member' && a.actor.party?.model === at
 								? [{ label: 'my party', arg: { actor: 'party' } }]
 								: [])
 						] as FilterValue[]
@@ -952,13 +954,12 @@ export function makeFilterDescribe(cfg: FilterDescribeConfig) {
 			}
 			// many-relations, at the root and one relation hop on ("Customer › Invoices (any) › Status"): has any / none (and, at
 			// the root, all) of the related records, how many, and child totals. A related record's own relations are not walked:
-			// the catalogue the builder receives grows with every hop (hr-payroll: 0.4 MB → 3 MB a collection at full depth).
+			// the catalogue the builder receives grows with every hop (hr-payroll: 0.4 MB → 3 MB a model at full depth).
 			if (hops > 0 && steps.every((x) => x.k === 'is'))
 				for (const [r, rel] of tc.model.many) {
-					const child = cat.collections.get(rel.child);
+					const child = cat.exposures.get(rel.child);
 					if (
 						child === undefined ||
-						!exposedRelation(tc, r) ||
 						!reads(a, rel.child) ||
 						rel.column.includes('__') ||
 						back === `${rel.child}.${rel.column}`
@@ -1039,7 +1040,7 @@ export function makeFilterDescribe(cfg: FilterDescribeConfig) {
 					values: about()
 				});
 		};
-		walk(collection, [], '', '', FILTER_MAX_HOPS);
+		walk(model, [], '', '', FILTER_MAX_HOPS);
 		return out;
 	}
 	/** Adds a value a read found; it replaces the description's own word of the same label (found beats echoed). */
@@ -1049,13 +1050,13 @@ export function makeFilterDescribe(cfg: FilterDescribeConfig) {
 		else if (ECHOES.has(f.values[at]!.arg)) f.values[at] = { label, arg };
 	};
 	const lookup = Effect.fn('Agents.lookup')(function* (
-		collection: string,
+		model: string,
 		text: string,
 		fields: readonly Field[],
 		a: Authority,
 		b: Bindings
 	) {
-		const c = cat.collections.get(collection)!,
+		const c = cat.exposures.get(model)!,
 			ts = terms(text),
 			orders: Order[] = [];
 		const radius = metresOf(text),
@@ -1075,7 +1076,7 @@ export function makeFilterDescribe(cfg: FilterDescribeConfig) {
 			const s = f.path[0];
 			if (f.kind !== 'record' || f.path.length !== 1 || s?.k !== 'field') continue;
 			const target = c.model.one.get(s.name)!.targets[0]!,
-				x = cat.collections.get(target)!;
+				x = cat.exposures.get(target)!;
 			const tl = [m.models[target]?.label ?? 'name'].flat()[0]!;
 			if (x.model.fields.get(tl)?.kind !== 'text' || !reads(a, target) || !unmasked(a, target, tl))
 				continue;
@@ -1180,7 +1181,7 @@ export function makeFilterDescribe(cfg: FilterDescribeConfig) {
 						then
 					});
 		}
-		// b) the phrases the collection's own searched text holds, read whole through the index (typos included)
+		// b) the phrases the model's own searched text holds, read whole through the index (typos included)
 		const own = fields.filter(
 			(f) =>
 				f.path.length === 1 &&
@@ -1194,11 +1195,11 @@ export function makeFilterDescribe(cfg: FilterDescribeConfig) {
 				)
 		);
 		if (own.length > 0) {
-			const runs = topics(text, [collection, human(collection), ...fields.map((f) => f.label)]),
+			const runs = topics(text, [model, human(model), ...fields.map((f) => f.label)]),
 				search = at([{ k: 'field', name: '$search' }]);
 			if (ts.length > 0)
 				reads_.push({
-					q: ir.read(cat, collection, {
+					q: ir.read(cat, model, {
 						search: ts.join(' '),
 						select: Object.fromEntries(
 							own.map((f) => [
@@ -1267,7 +1268,7 @@ export function makeFilterDescribe(cfg: FilterDescribeConfig) {
 		}[] = [];
 		if (dated.length > 0 && ts.length > 0 && DAY_WORDS.test(text)) {
 			let n = 0;
-			for (const [name, x] of cat.collections) {
+			for (const [name, x] of cat.exposures) {
 				if (n >= MAX_DATED || name.startsWith('sys_') || !reads(a, name)) continue;
 				const readable = (f: string, kind: string) =>
 					x.model.fields.get(f)?.kind === kind &&
@@ -1352,9 +1353,9 @@ export function makeFilterDescribe(cfg: FilterDescribeConfig) {
 	});
 	/**
 	 * 3. A field's whole conditions: every (operator, value) its kind admits, each built and decoded as a read literal
-	 * (`collection`; `$local` has no catalogue, its kinds are its own three). A pair that does not decode is not offered.
+	 * (`model`; `$local` has no catalogue, its kinds are its own three). A pair that does not decode is not offered.
 	 */
-	function condsOf(f: Field, collection: string | undefined, text: string): Cond[] {
+	function condsOf(f: Field, model: string | undefined, text: string): Cond[] {
 		const out: Cond[] = [];
 		const lits = f.values.filter((v) => 'lit' in v.arg);
 		// a list operator's candidates: what the description names (its words, a declared value it says) or a read found
@@ -1380,8 +1381,8 @@ export function makeFilterDescribe(cfg: FilterDescribeConfig) {
 			const where = condition(f.path, op, arg);
 			if (where === undefined || out.some((x) => x.label === label)) return;
 			if (
-				collection !== undefined &&
-				Result.isFailure(Result.try(() => storeSync(decodeWhere(cat, collection, where))))
+				model !== undefined &&
+				Result.isFailure(Result.try(() => storeSync(decodeWhere(cat, model, where))))
 			)
 				return;
 			out.push({
@@ -1481,12 +1482,12 @@ export function makeFilterDescribe(cfg: FilterDescribeConfig) {
 	 * read found for it, one of its declared values the text says (a state, a choice, `this week`). A word copied from the
 	 * description is no evidence; a number names no field but makes every numeric one a candidate.
 	 */
-	function rank(fields: readonly Field[], text: string, collection: string): Field[] {
-		// the collection's own name ("jobs") names every field equally, so none
+	function rank(fields: readonly Field[], text: string, model: string): Field[] {
+		// the model's own name ("jobs") names every field equally, so none
 		const said = text.toLowerCase(),
 			ws = words(text).filter(
 				(w) =>
-					!tokens(human(collection)).some(
+					!tokens(human(model)).some(
 						(x) => w.startsWith(x.replace(/s$/, '')) || x.startsWith(w)
 					)
 			);
@@ -1512,7 +1513,7 @@ export function makeFilterDescribe(cfg: FilterDescribeConfig) {
 						(v) =>
 							ECHOES.has(v.arg) && !ws.includes(v.label) && said.includes(v.label.toLowerCase())
 					);
-				// the collection's own search index and meaning stand just behind any named field: no label names them
+				// the model's own search index and meaning stand just behind any named field: no label names them
 				const index =
 					f.path.length === 1 &&
 					(f.kind === 'search' || f.kind === 'semantic') &&
@@ -1568,7 +1569,7 @@ export function makeFilterDescribe(cfg: FilterDescribeConfig) {
 		];
 	}
 	/** The catalogue as plain data for the builder. Values ride the one row that reads them, "is within"'s spans: repeated
-	 * on every operator they made a wide collection's catalogue megabytes. */
+	 * on every operator they made a wide model's catalogue megabytes. */
 	const catalogue = (fields: readonly Field[]): FilterCatalogue =>
 		fields.flatMap((f) =>
 			f.ops.map((o) => ({
@@ -1598,10 +1599,10 @@ export function makeFilterDescribe(cfg: FilterDescribeConfig) {
 			)!,
 			sort: f.name
 		}));
-	/** The collection a caller may describe or see options on; a `$local` view carries its own fields. */
+	/** The model a caller may describe or see options on; a `$local` view carries its own fields. */
 	const subject = (
 		o: {
-			collection: string;
+			model: string;
 			authority: Authority;
 			localFields?: readonly LocalFilterField[];
 		},
@@ -1615,8 +1616,8 @@ export function makeFilterDescribe(cfg: FilterDescribeConfig) {
 			message: string;
 		};
 	} => {
-		const local = o.collection === '$local';
-		if (!local && (!cat.collections.has(o.collection) || !reads(o.authority, o.collection)))
+		const local = o.model === '$local';
+		if (!local && (!cat.exposures.has(o.model) || !reads(o.authority, o.model)))
 			return { fail: { ok: false, code: 'notFound', message: 'Not found or no access.' } };
 		if (
 			local &&
@@ -1670,7 +1671,7 @@ export function makeFilterDescribe(cfg: FilterDescribeConfig) {
 	/** A choice's criteria: each option names itself. */
 	const own = (keys: readonly string[]) => Object.fromEntries(keys.map((k) => [k, k]));
 	const describe = Effect.fn('Agents.describe')(function* (o: {
-		collection: string;
+		model: string;
 		text: string;
 		authority: Authority;
 		bindings: Bindings;
@@ -1682,18 +1683,18 @@ export function makeFilterDescribe(cfg: FilterDescribeConfig) {
 		const started = yield* Clock.currentTimeMillis;
 		const subjectOf = subject(o, o.text, o.bindings.today);
 		if (subjectOf.fail !== undefined) return subjectOf.fail;
-		const local = o.collection === '$local';
-		const fields = subjectOf.fields ?? fieldsOf(o.collection, o.text, o.authority, o.bindings);
-		const nears = local ? [] : yield* lookup(o.collection, o.text, fields, o.authority, o.bindings);
+		const local = o.model === '$local';
+		const fields = subjectOf.fields ?? fieldsOf(o.model, o.text, o.authority, o.bindings);
+		const nears = local ? [] : yield* lookup(o.model, o.text, fields, o.authority, o.bindings);
 		const max = cfg.ai.maxChoices ?? Infinity;
 		// the fields the description most plausibly names that have a condition to offer, each with all of them
 		const asked: {
 			f: Field;
 			conds: Cond[];
 		}[] = [];
-		for (const f of rank(fields, o.text, o.collection)) {
+		for (const f of rank(fields, o.text, o.model)) {
 			if (asked.length >= FILTER_MAX_FIELDS) break;
-			const conds = condsOf(f, local ? undefined : o.collection, o.text).slice(0, max - 1);
+			const conds = condsOf(f, local ? undefined : o.model, o.text).slice(0, max - 1);
 			if (conds.length > 0) asked.push({ f, conds });
 		}
 		const orders = [...nears, ...fields.filter((f) => f.sort !== undefined).flatMap(orderOf)].slice(
@@ -1749,7 +1750,7 @@ export function makeFilterDescribe(cfg: FilterDescribeConfig) {
 		};
 		const state = {
 			description: o.text,
-			collection: human(o.collection),
+			model: human(o.model),
 			fields: asked.map(({ f }) => ({ label: f.label, kind: f.kind })),
 			today: o.bindings.today,
 			timezone: o.bindings.tz,
@@ -1888,7 +1889,7 @@ export function makeFilterDescribe(cfg: FilterDescribeConfig) {
 			// rule 11a: the same strict decode as any read literal, held to the caller's exposure
 			const checked = Result.try({
 				try: () =>
-					decodeDescribed(cat, o.authority, o.collection, {
+					decodeDescribed(cat, o.authority, o.model, {
 						...(where === undefined ? {} : { where }),
 						...(orderBy === undefined ? {} : { orderBy })
 					}),
@@ -1906,7 +1907,7 @@ export function makeFilterDescribe(cfg: FilterDescribeConfig) {
 		};
 	});
 	const opts = Effect.fn('Agents.opts')(function* (o: {
-		collection: string;
+		model: string;
 		authority: Authority;
 		bindings: Bindings;
 		localFields?: readonly LocalFilterField[];
@@ -1915,7 +1916,7 @@ export function makeFilterDescribe(cfg: FilterDescribeConfig) {
 		if (subjectOf.fail !== undefined) return subjectOf.fail;
 		return {
 			ok: true,
-			fields: catalogue(subjectOf.fields ?? fieldsOf(o.collection, '', o.authority, o.bindings))
+			fields: catalogue(subjectOf.fields ?? fieldsOf(o.model, '', o.authority, o.bindings))
 		};
 	});
 	return { describe, options: opts };
@@ -1932,34 +1933,37 @@ export const filterDescribe = Effect.gen(function* () {
 const refuse = (message: string) => BoltError.make('invalid', 'decode', message);
 /**
  * The strict decode of a described filter and sort (rule 11a, rule 16a): `ir.where`/`ir.order`'s grammar, and every
- * field, relation and sort key within what the caller reads unmasked — the collections it reads, their exposed fields
+ * field, relation and sort key within what the caller reads unmasked — the models it reads, their exposed fields
  * and relations, one-relation keys it reads unmasked. Anything else is `invalid`; nothing is dropped silently.
  */
 export function decodeDescribed(
 	cat: Catalog,
 	a: Authority,
-	collection: string,
+	model: string,
 	q: {
 		where?: Json;
 		orderBy?: Json;
 	}
 ): void {
 	const info = (c: string) => {
-		const x = cat.collections.get(c);
-		if (x === undefined || (!a.admin && (a.collections[c]?.read.length ?? 0) === 0))
+		const x = cat.exposures.get(c);
+		if (x === undefined || (!a.admin && (a.models[c]?.read[c]?.length ?? 0) === 0))
 			throw refuse(`'${c}' is not read by this caller`);
 		return x;
 	};
 	const field = (c: string, f: string) => {
 		const base = f.split('.')[0]!;
-		if (!exposedField(info(c), base) || (!a.admin && a.collections[c]?.masks[base] !== undefined))
+		if (
+			!exposedField(info(c), base) ||
+			(!a.admin && a.models[c]?.masks[c]?.[base] !== undefined)
+		)
 			throw refuse(`'${c}.${f}' is not a field this caller reads`);
 	};
 	const rel = (c: string, r: string) => {
 		const x = info(c);
 		if (
-			!exposedRelation(x, r) ||
-			(x.model.one.has(r) && !a.admin && a.collections[c]?.masks[r] !== undefined)
+			(!x.model.one.has(r) && !x.model.many.has(r)) ||
+			(x.model.one.has(r) && !a.admin && a.models[c]?.masks[c]?.[r] !== undefined)
 		)
 			throw refuse(`'${c}.${r}' is not a relation this caller reads`);
 	};
@@ -1967,7 +1971,7 @@ export function decodeDescribed(
 		switch (p.t) {
 			case 'const':
 				return;
-			// the search document and the embedding cover the collection's searched fields, not one field the caller reads
+			// the search document and the embedding cover the model's searched fields, not one field the caller reads
 			case 'search':
 			case 'similar':
 				info(c);
@@ -1994,16 +1998,16 @@ export function decodeDescribed(
 				return field(c, p.field);
 		}
 	};
-	info(collection);
-	if (q.where !== undefined) walk(storeSync(decodeWhere(cat, collection, q.where)), collection);
+	info(model);
+	if (q.where !== undefined) walk(storeSync(decodeWhere(cat, model, q.where)), model);
 	// a related key (`assignee.name`): each hop a relation the caller reads, then the target's field
 	if (q.orderBy !== undefined)
-		for (const k of storeSync(order(q.orderBy, cat, collection))) {
+		for (const k of storeSync(order(q.orderBy, cat, model))) {
 			const steps = k.field.split('.');
-			let c = collection;
+			let c = model;
 			for (const s of steps.slice(0, -1)) {
 				rel(c, s);
-				c = cat.collections.get(c)!.model.one.get(s)!.targets[0]!;
+				c = cat.exposures.get(c)!.model.one.get(s)!.targets[0]!;
 			}
 			field(c, steps.at(-1)!);
 		}

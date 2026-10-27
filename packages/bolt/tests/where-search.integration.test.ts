@@ -33,9 +33,9 @@ const manifest = Result.getOrThrow(
 			}
 		},
 		relationships: { 'jobs.site': { to: 'sites', inverse: 'jobs' } },
-		collections: {
-			sites: { read: { fields: 'all' }, create: { input: { columns: ['name', 'address'] } } },
-			jobs: { read: { fields: 'all' }, create: { input: { columns: ['title', 'notes', 'site'] } } }
+		exposures: {
+			sites: { read: { sites: { fields: 'all' } }, create: { columns: { sites: ['name', 'address'] } } },
+			jobs: { read: { jobs: { fields: 'all' } }, create: { columns: { jobs: ['title', 'notes', 'site'] } } }
 		},
 		// `notes` is masked to the dispatcher: its one jobs arm lists the fields it reads
 		policies: {
@@ -43,7 +43,7 @@ const manifest = Result.getOrThrow(
 				description: 'Dispatch',
 				grants: {
 					sites: { read: true },
-					jobs: { read: { fields: ['id', 'title', 'site', 'created_at', 'updated_at'] } }
+					jobs: { read: { jobs: { fields: ['id', 'title', 'site', 'created_at', 'updated_at'] } } }
 				}
 			}
 		},
@@ -96,10 +96,10 @@ const workspace = () =>
 				Effect.map((reply) => reply.outcome)
 			);
 		const pine = created(
-			yield* act('sites.create', { name: '1F Pine Grove', address: '3 Ridgewood Close' })
+			yield* act('sites.create', [{ name: '1F Pine Grove', address: '3 Ridgewood Close' }])
 		);
 		const vale = created(
-			yield* act('sites.create', { name: 'Sunset Vale', address: '12 Jalan Bukit' })
+			yield* act('sites.create', [{ name: 'Sunset Vale', address: '12 Jalan Bukit' }])
 		);
 		for (const [title, site, notes] of [
 			['burst pipe', pine, 'Kitchen sink'],
@@ -107,15 +107,15 @@ const workspace = () =>
 			['paint wall', pine, null],
 			['door hinge', vale, 'secret code 1234']
 		] as const)
-			yield* act('jobs.create', { title, site, ...(notes === null ? {} : { notes }) });
+			yield* act('jobs.create', [{ title, site, ...(notes === null ? {} : { notes }) }]);
 		const embedRows = yield* embedRun.pipe(Effect.provide(context));
 		yield* embedRows({}, { id: crypto.randomUUID(), starter: null }).pipe(Effect.provide(context));
 		const titles = (where: Json, who = a) =>
 			Effect.gen(function* () {
 				const reply = yield* qReply(route, who, {
-					reads: [{ m: 'query', a: ['jobs', { all: true, where, select: { title: true } }] }]
+					reads: [{ m: 'query', a: [{ jobs: { where, fields: ['title'] } }] }]
 				});
-				return (yield* Schema.decodeUnknownEffect(Page)(reply.answers[0])).rows
+				return (yield* Schema.decodeUnknownEffect(Schema.Struct({ jobs: Page }))(reply.answers[0])).jobs.rows
 					.map((row) => row.title)
 					.sort();
 			});
@@ -176,7 +176,7 @@ describe('$search and $similar (rule 16)', () => {
 	);
 
 	it.live(
-		'refuses a collection without the index and a caller who does not read every covered field unmasked',
+		'refuses a model without the index and a caller who does not read every covered field unmasked',
 		() =>
 			Effect.scoped(
 				Effect.gen(function* () {

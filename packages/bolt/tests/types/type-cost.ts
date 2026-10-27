@@ -4,11 +4,10 @@ import type {
 	CallerQuery,
 	Cursor,
 	Id,
-	QueryMember,
-	QuerySet,
-	QuerySetAnswer,
-	StoredAnswer,
-	StoredMember,
+	PlainDate,
+	ReadAnswer,
+	ReadRequest,
+	ReadRequestBase,
 	Where,
 	WorkspaceQuery
 } from '../../src/index.ts';
@@ -24,97 +23,48 @@ type Answer<X> = X extends Eff<infer A, unknown> ? A : never;
 
 declare const caller: CallerQuery<ReadFailed>;
 declare const db: WorkspaceQuery;
-/** A template's reader over both native reads (hr-payroll's `Read`): a member is both members at once. */
-declare const both: <const M extends QuerySet>(
-	set: M & {
-		readonly [K in keyof M]: StoredMember<M[K]['from']> & QueryMember<M[K]['from']>;
-	}
-) => Eff<{ readonly [K in keyof M]: StoredAnswer<M[K]> } | QuerySetAnswer<M>>;
+/** A template's reader over both native reads (hr-payroll's `Read`): one read request, either answer. */
+declare const both: <const R extends ReadRequestBase>(
+	request: ReadRequest<R>
+) => Eff<ReadAnswer<R> | ReadAnswer<R, false>>;
 declare const customer: Id<'customers'>;
 declare const after: Cursor;
 
-// ── keyed reads answer each member's own rows ──
-const keyed = caller.query({
-	orders: {
-		from: 'orders',
-		where: { status: { eq: 'draft' } },
-		select: { number: true, due: true, customer: { select: { name: true } } },
-		all: true
-	},
-	buyers: {
-		from: 'customers',
-		where: { id: { in: { member: 'orders', field: 'customer' } } },
-		limit: 5,
-		after
-	},
-	one: { from: 'customers', id: customer, select: { tier: true } }
+// ── a read request answers each root's own rows; a named ref layer replaces its FK ──
+const layered = caller.query({
+	orders: { where: { status: { eq: 'draft' } }, fields: ['number', 'due', 'customer'] },
+	'orders.customer': { fields: ['name'] },
+	customers: { where: { id: { eq: customer } }, limit: 5, after }
 });
-const plain = caller.query('orders', {
-	where: { status: { eq: 'draft' } },
-	select: { number: true, due: true, customer: { select: { name: true } } },
-	all: true
-});
-const plainBuyers = caller.query('customers', { limit: 5 });
-const plainOne = caller.query('customers', { id: customer, select: { tier: true } });
-is<Eq<Answer<typeof keyed>['orders'], Answer<typeof plain>>>(true);
-is<Eq<Answer<typeof keyed>['buyers'], Answer<typeof plainBuyers>>>(true);
-is<Eq<Answer<typeof keyed>['one'], Answer<typeof plainOne>>>(true);
-is<Eq<Answer<typeof plain>['rows'][number]['number'], string>>(true);
-is<Eq<Answer<typeof plain>['rows'][number]['customer']['name'], string>>(true);
+type LayeredOrder = Answer<typeof layered>['orders']['rows'][number];
+is<Eq<LayeredOrder['number'], string>>(true);
+is<Eq<LayeredOrder['due'], PlainDate | null>>(true);
+is<Eq<NonNullable<LayeredOrder['customer']>['name'], string>>(true);
+is<Eq<NonNullable<LayeredOrder['customer']>['id'], Id<'customers'>>>(true);
+is<Eq<Answer<typeof layered>['customers']['next'], Cursor | null>>(true);
+// @ts-expect-error K0 the single-model `query(model, args)` form is gone
+caller.query('orders', { all: true });
 
-const stored = db.query({
-	orders: {
-		from: 'orders',
-		where: { status: { eq: 'draft' } },
-		select: { note: true },
-		all: true
-	},
-	one: { from: 'customers', id: customer }
-});
-const storedPlain = db.query('orders', {
-	where: { status: { eq: 'draft' } },
-	select: { note: true },
-	all: true
-});
-const storedOne = db.query('customers', { id: customer });
-is<Eq<Answer<typeof stored>['orders'], Answer<typeof storedPlain>>>(true);
-is<Eq<Answer<typeof stored>['one'], Answer<typeof storedOne>>>(true);
+const stored = db.query({ orders: { where: { status: { eq: 'draft' } }, fields: ['note'] } });
+is<Eq<Answer<typeof stored>['orders']['rows'][number]['note'], string | null>>(true);
 
-const joint = both({
-	orders: {
-		from: 'orders',
-		where: { status: { eq: 'draft' } },
-		select: { note: true },
-		all: true
-	},
-	buyers: {
-		from: 'customers',
-		where: { id: { in: { member: 'orders', field: 'customer' } } },
-		select: { name: true },
-		limit: 1
-	}
-});
-is<
-	Eq<
-		Answer<typeof joint>['orders']['rows'][number]['note'],
-		Answer<typeof storedPlain>['rows'][number]['note']
-	>
->(true);
-// an optional member (a conditional spread) is read like any other
+const joint = both({ orders: { where: { status: { eq: 'draft' } }, fields: ['note'] } });
+is<Eq<'note' extends keyof Answer<typeof joint>['orders']['rows'][number] ? 1 : 0, 1>>(true);
+// an optional root (a conditional spread) is read like any other
 declare const maybe: boolean;
 const optional = caller.query({
-	orders: { from: 'orders', all: true },
-	...(maybe ? {} : { named: { from: 'customers', where: { name: { eq: 'x' } }, all: true } })
+	orders: { limit: 10 },
+	...(maybe ? {} : { customers: { where: { name: { eq: 'x' } } } })
 });
-void [keyed, stored, joint, optional];
+void [layered, stored, joint, optional];
 
 // ── a predicate over a generic name (a template helper's `C extends ReadableName`) ──
 declare const readWhere: <C extends ReadableName>(
-	collection: C,
+	model: C,
 	where: ModelWhere<C> & Where<C>
 ) => C;
 readWhere('orders', { status: { eq: 'draft' }, customer: { is: { tier: { eq: 'gold' } } } });
-// @ts-expect-error W1 a field of another collection
+// @ts-expect-error W1 a field of another model
 readWhere('orders', { name: { eq: 'x' } });
 // @ts-expect-error W2 an operand of the wrong kind
 readWhere('orders', { due: { eq: 5 } });
@@ -125,39 +75,41 @@ is<Eq<Where<'orders' | 'customers'>, Where<'orders'> | Where<'customers'>>>(true
 is<Eq<ModelWhere<'orders' | 'customers'>, ModelWhere<'orders'> | ModelWhere<'customers'>>>(true);
 is<Eq<Where<never>, never>>(true);
 
-// ── the mistakes a keyed member is refused for, through each reader ──
-// ponytail: a keyed member's unknown `where` or `select` key is not refused today (no excess check through `M & …`);
-// tighten in the declarations, then plant it here.
-// @ts-expect-error K1 every member states its page (rule 9)
-caller.query({ o: { from: 'orders' } });
-// @ts-expect-error K2 an unknown collection
-caller.query({ o: { from: 'nope', all: true } });
+// ── the mistakes a read request is refused for, through each reader ──
+// @ts-expect-error K2 an unknown root
+caller.query({ nope: {} });
 // @ts-expect-error K4 an operand of the wrong kind
-caller.query({ o: { from: 'orders', where: { due: { eq: 5 } }, all: true } });
-// @ts-expect-error K6 a limit and everything at once
-caller.query({ o: { from: 'orders', limit: 1, all: true } });
+caller.query({ orders: { where: { due: { eq: 5 } } } });
+// @ts-expect-error K6 `all` is gone: a list defaults to 10,000
+caller.query({ orders: { all: true } });
 // @ts-expect-error K7 an absent optional is absent, not `undefined` (exactOptionalPropertyTypes)
-caller.query({ o: { from: 'orders', limit: 1, after: undefined } });
-declare const answer: Answer<typeof keyed>;
-// @ts-expect-error K9 a member's answer has only its selected fields
+caller.query({ orders: { limit: 1, after: undefined } });
+// @ts-expect-error K8 a layer the root does not declare
+caller.query({ orders: {}, 'orders.owner': {} });
+// @ts-expect-error K10 `after` belongs to a root
+caller.query({ orders: {}, 'orders.lines': { after } });
+// @ts-expect-error K11 the keyed `{ alias: { from } }` form is gone
+caller.query({ o: { from: 'orders' } });
+declare const answer: Answer<typeof layered>;
+// @ts-expect-error K9 a root's answer has only its picked fields
 void answer.orders.rows[0]?.tier;
-// @ts-expect-error K1 workspace
-db.query({ o: { from: 'orders' } });
 // @ts-expect-error K2 workspace
-db.query({ o: { from: 'nope', all: true } });
+db.query({ nope: {} });
 // @ts-expect-error K4 workspace
-db.query({ o: { from: 'orders', where: { due: { eq: 5 } }, all: true } });
+db.query({ orders: { where: { due: { eq: 5 } } } });
 // @ts-expect-error K6 workspace
-db.query({ o: { from: 'orders', limit: 1, all: true } });
+db.query({ orders: { all: true } });
 // @ts-expect-error K7 workspace
-db.query({ o: { from: 'orders', limit: 1, after: undefined } });
-// @ts-expect-error K1 joint
-both({ o: { from: 'orders' } });
+db.query({ orders: { limit: 1, after: undefined } });
+// @ts-expect-error K8 workspace
+db.query({ orders: {}, 'orders.owner': {} });
 // @ts-expect-error K2 joint
-both({ o: { from: 'nope', all: true } });
+both({ nope: {} });
 // @ts-expect-error K4 joint
-both({ o: { from: 'orders', where: { due: { eq: 5 } }, all: true } });
+both({ orders: { where: { due: { eq: 5 } } } });
 // @ts-expect-error K6 joint
-both({ o: { from: 'orders', limit: 1, all: true } });
+both({ orders: { all: true } });
 // @ts-expect-error K7 joint
-both({ o: { from: 'orders', limit: 1, after: undefined } });
+both({ orders: { limit: 1, after: undefined } });
+// @ts-expect-error K8 joint
+both({ orders: {}, 'orders.owner': {} });

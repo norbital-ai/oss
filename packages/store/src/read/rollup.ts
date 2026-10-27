@@ -1,6 +1,6 @@
 /** Combine writers at an instant, then summarize buckets or carry each source's last gauge. */
 import { Effect } from 'effect';
-import { collectionOf, q, type Catalog } from '../catalog.ts';
+import { exposureOf, q, type Catalog } from '../catalog.ts';
 import { StoreError } from '../errors.ts';
 import type { Pred } from '../ir.ts';
 import { STORE_LIMITS } from '../limits.ts';
@@ -20,7 +20,7 @@ export type RollupIR = {
 };
 
 export const compileRollup = Effect.fn('Store.rollup')(function* (cat: Catalog, query: RollupIR) {
-	const c = yield* collectionOf(cat, query.table),
+	const c = yield* exposureOf(cat, query.table),
 		b = new Build(cat),
 		a = b.alias();
 	const invalid = (message: string) => Effect.fail(StoreError.of('invalid', 'decode', message));

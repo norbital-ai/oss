@@ -10,12 +10,10 @@ import { builtinModules } from 'node:module';
 import { readFile } from 'node:fs/promises';
 import { dirname, extname, join, relative, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { gunzipSync } from 'node:zlib';
-import { Effect, FileSystem, Option, Path, Result, Schema } from 'effect';
+import { Effect, FileSystem, Option, Result, Schema } from 'effect';
 import ivm from 'isolated-vm';
 import { build, type Rolldown } from 'vite';
 import { minify, type MinifyOptions } from 'terser';
-import type { RowData } from '../../engine/contracts.ts';
 import { decodeManifest, projectManifest, type EngineManifest } from '../../engine/manifest.ts';
 import { PRELUDE } from '../../engine/guest/prelude.ts';
 import type { GuestProgram } from '../../engine/guest/runner.ts';
@@ -25,7 +23,7 @@ import { decodeSeed, type SeedPack } from '../../engine/write/seed.ts';
 import { discover, type Discovered } from '../discover.ts';
 import { load, manifestErrors } from '../load.ts';
 import { namesIndex, writeNames, writeTypeSetup } from '../names.ts';
-import { checkRules, sourceRules } from './rules.ts';
+import { seedPack } from '../seed.ts';
 import { prepareMigrations } from '../migrations.ts';
 import type { CheckDiagnostic } from '../../protocol/diagnostic.ts';
 export type { CheckDiagnostic } from '../../protocol/diagnostic.ts';
@@ -142,10 +140,12 @@ export const sync = Effect.fn('bolt.sync')(function* (
 	return { stages, errors };
 });
 
-/** Checks the workspace at `root`; `bolt` is the module specifier the names index augments. */
-export const check = Effect.fn('bolt.check')(function* (
+type CompilerOptions = { bolt?: string; migrations?: 'generate' | 'verify'; squash?: string };
+/** Shared declaration compilation; the diagnostic pass belongs to `bolt check`. */
+const workspace = Effect.fn('bolt.workspace')(function* (
 	dir: string,
-	options: { bolt?: string; migrations?: 'generate' | 'verify'; squash?: string } = {}
+	options: CompilerOptions,
+	diagnostics: boolean
 ) {
 	const fs = yield* FileSystem.FileSystem;
 	const root = yield* fs.realPath(dir); // importers arrive resolved; relative paths need the same spelling
@@ -171,24 +171,26 @@ export const check = Effect.fn('bolt.check')(function* (
 	out.manifest = m;
 	out.transforms = [...bodies.transforms];
 
-	stage('seed');
-	const pack = yield* seedPack(root, errors);
-	// Identity rows are decoded by the identity area's seed path.
-	const tenant = Object.fromEntries(Object.entries(pack).filter(([c]) => !c.startsWith('sys_')));
-	const decodedSeed = Result.try({
-		try: () => decodeSeed(m, tenant),
-		catch: (cause) => new EvalError({ cause })
-	});
-	if (Result.isFailure(decodedSeed))
-		errors.push({
-			code: 'seed/decode',
-			path: 'seed',
-			message:
-				decodedSeed.failure.cause instanceof Error
-					? decodedSeed.failure.cause.message
-					: String(decodedSeed.failure.cause)
+	if (diagnostics) {
+		stage('seed');
+		const pack = yield* seedPack(root, errors);
+		// Identity rows are decoded by the identity area's seed path.
+		const tenant = Object.fromEntries(Object.entries(pack).filter(([c]) => !c.startsWith('sys_')));
+		const decodedSeed = Result.try({
+			try: () => decodeSeed(m, tenant),
+			catch: (cause) => new EvalError({ cause })
 		});
-	else out.seed = tenant;
+		if (Result.isFailure(decodedSeed))
+			errors.push({
+				code: 'seed/decode',
+				path: 'seed',
+				message:
+					decodedSeed.failure.cause instanceof Error
+						? decodedSeed.failure.cause.message
+						: String(decodedSeed.failure.cause)
+			});
+		else out.seed = tenant;
+	}
 
 	stage('schema');
 	const planned = yield* Effect.result(plan(null, m));
@@ -219,15 +221,21 @@ export const check = Effect.fn('bolt.check')(function* (
 		}
 	}
 
-	stage('rules');
-	const where = (role: string, name: string) =>
-		files.find((f) => f.role === role && f.name === name)?.path ?? `src (${role} ${name})`;
-	errors.push(...checkRules(m, bodies, where));
-	const models = files.filter((f) => f.role === 'model');
-	const sources = yield* Effect.forEach(models, (f) =>
-		fs.readFileString(join(root, f.path)).pipe(Effect.map((text) => ({ path: f.path, text })))
-	);
-	errors.push(...sourceRules(m, sources));
+	if (diagnostics) {
+		stage('rules');
+		const { checkRules, sourceRules } = yield* Effect.tryPromise({
+			try: () => import('./rules.ts'),
+			catch: (cause) => new EvalError({ cause })
+		});
+		const where = (role: string, name: string) =>
+			files.find((f) => f.role === role && f.name === name)?.path ?? `src (${role} ${name})`;
+		errors.push(...checkRules(m, bodies, where));
+		const models = files.filter((f) => f.role === 'model');
+		const sources = yield* Effect.forEach(models, (f) =>
+			fs.readFileString(join(root, f.path)).pipe(Effect.map((text) => ({ path: f.path, text })))
+		);
+		errors.push(...sourceRules(m, sources));
+	}
 	if (errors.length === 0) {
 		const runtime = yield* bundle(root, code, errors, true, bodies.models);
 		if (runtime !== undefined) out.guest = runtime;
@@ -235,16 +243,21 @@ export const check = Effect.fn('bolt.check')(function* (
 	return out;
 });
 
+/** Checks the workspace at `root`; `bolt` is the module specifier the names index augments. */
+export const check = (dir: string, options: CompilerOptions = {}) => workspace(dir, options, true);
+/** Compiles the artifact inputs and migrations without running the authoring diagnostics. */
+export const compile = (dir: string, options: CompilerOptions = {}) =>
+	workspace(dir, options, false);
+
 /**
- * A policy's guest part: each write grant's `approval` callback (`policy.<p>.grants.<model>.<op>.approval`), pure and
- * called with its write and a fresh flow, then reduced to the stored snapshot without a ctx.
+ * A policy's guest part: each write grant's `check` (`policy.<p>.grants.<model>.<op>.check`), a ctx-bearing generator
+ * called with its batch and a `PolicyCtx` (invocation kind `policy`), answering the data of the `Verdict` it returns.
  */
-const APPROVALS = `import { approvalFlow as __approvalFlow, snapshotOf as __approvalSnapshot } from ${JSON.stringify(join(dirname(BOLT), 'decl', 'access', `policy${extname(BOLT)}`))};
-const __approval = (approve) => Object.defineProperty((write) => __approvalSnapshot(approve(write, __approvalFlow())), 'name', { value: approve.name });
-const __approvals = (p) => ({ grants: Object.fromEntries(Object.entries(p?.grants ?? {}).map(([model, g]) => [model, Object.fromEntries(['create', 'update', 'delete'].flatMap((op) => typeof g?.[op]?.approval === 'function' ? [[op, { approval: __approval(g[op].approval) }]] : []))])) });`;
+const CHECKS = `import { attached as __attached } from ${JSON.stringify(join(dirname(BOLT), 'decl', `body${extname(BOLT)}`))};
+const __checks = (p) => ({ grants: Object.fromEntries(Object.entries(p?.grants ?? {}).map(([model, g]) => [model, Object.fromEntries(['create', 'update', 'delete'].flatMap((op) => typeof g?.[op]?.check === 'function' ? [[op, { check: __attached(g[op].check, 1) }]] : []))])) });`;
 /**
  * The callback paths selected by the runner (the Guest ABI), retaining every role module's original initialization order:
- * a model's bodies under `collection.<model>.bodies`, a policy's approval callbacks, an automation's `body`, a custom
+ * a model's bodies under `model.<model>.bodies`, a policy's write checks, an automation's `body`, a custom
  * field's `check`, an integration's `bodies.test` and a page server's loader.
  */
 function runtimeEntry(
@@ -260,11 +273,11 @@ function runtimeEntry(
 			value: string | undefined;
 		switch (file.role) {
 			case 'model':
-				group = 'collection';
+				group = 'model';
 				if (callbackModels.has(file.name)) value = `{ bodies: ${binding}.bodies }`;
 				break;
 			case 'policy':
-				value = `__approvals(${binding})`;
+				value = `__checks(${binding})`;
 				break;
 			case 'automation':
 				value = `{ body: ${binding}.body }`;
@@ -289,7 +302,7 @@ function runtimeEntry(
 	});
 	return [
 		...imports,
-		...(groups.has('policy') ? [APPROVALS] : []),
+		...(groups.has('policy') ? [CHECKS] : []),
 		`export default { ${[...groups].map(([group, entries]) => `${group}: { ${entries.join(', ')} }`).join(', ')} };`
 	].join('\n');
 }
@@ -495,7 +508,7 @@ const FREEZE = `{ const T = ${FROZEN}, D = Date;
 	globalThis.Date = class extends D { constructor(...a) { if (a.length === 0) super(T); else super(...a); } static now() { return T; } };
 	let s = 0x2545f491; Math.random = () => { s = s + 0x6d2b79f5 | 0; let t = Math.imul(s ^ s >>> 15, 1 | s); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }`;
 // Declarations are data (functions drop out of JSON). A model's bodies become `true` markers in its literal (`splitModel`
-// reads them) and a policy's approval callbacks `approval: true`; which write callbacks and automation bodies exist is
+// reads them) and a policy's write checks `check: true`; which write callbacks and automation bodies exist is
 // read beside them. A ctx-bearing body must be a generator.
 const SERIALIZE = `(() => { const d = globalThis.__ns.default, bodies = { transforms: [], automations: [], models: [] };
 	const generator = (body) => {
@@ -509,7 +522,8 @@ const SERIALIZE = `(() => { const d = globalThis.__ns.default, bodies = { transf
 		if (Object.hasOwn(m?.spec ?? {}, 'actions')) throw new Error('model ' + JSON.stringify(n) + ' cannot declare named actions');
 		const b = m?.bodies ?? {};
 		if (hasBody(b)) bodies.models.push(n);
-		for (const body of [b.create, b.update, b.delete, b.notify, ...Object.values(b.queries ?? {})]) generator(body);
+		if (Object.hasOwn(m?.spec ?? {}, 'queries')) throw new Error('model ' + JSON.stringify(n) + ' cannot declare queries: read layers, then transform them in src/lib');
+		for (const body of [b.create, b.update, b.delete, b.notify]) generator(body);
 		for (const s of Object.values(b.syncs ?? {})) { generator(s?.read); generator(s?.write); for (const p of Object.values(s?.parse ?? {})) generator(p); }
 		for (const verb of ['create', 'update', 'delete']) if (typeof b[verb] === 'function') bodies.transforms.push(n + '.' + verb);
 		mark(m?.spec);
@@ -518,7 +532,7 @@ const SERIALIZE = `(() => { const d = globalThis.__ns.default, bodies = { transf
 	for (const [n, a] of Object.entries(d.automation ?? {})) { generator(a?.body); if (typeof a?.body === 'function') bodies.automations.push(n); }
 	for (const i of Object.values(d.integration_definition ?? {})) { generator(i?.bodies?.test); if (typeof i?.spec?.test === 'function') i.spec.test = true; }
 	for (const f of Object.values(d.custom_field ?? {})) if (typeof f?.check === 'function' && f.spec) f.spec.check = true; // the write path calls the guest's validate
-	for (const p of Object.values(d.policy ?? {})) for (const g of Object.values(p?.grants ?? {})) for (const op of ['create', 'update', 'delete']) if (typeof g?.[op]?.approval === 'function') g[op].approval = true;
+	for (const p of Object.values(d.policy ?? {})) for (const g of Object.values(p?.grants ?? {})) for (const op of ['create', 'update', 'delete']) if (typeof g?.[op]?.check === 'function') { generator(g[op].check); g[op].check = true; }
 	for (const role of ['page_server', 'kiosk_page_server']) for (const [name, definition] of Object.entries(d[role] ?? {})) {
 		generator(definition?.load);
 		d[role][name] = globalThis.__ns.__pageServerMetadata(definition, globalThis.__ns.__pageDataCodecs[role]?.[name]);
@@ -642,46 +656,4 @@ const evaluateTwice = Effect.fn('bolt.evaluateTwice')(function* (
 			message: `module evaluation took over ${EVAL_CPU_MS} ms of CPU (rule 6)`
 		});
 	return a.json;
-});
-
-/** `seed/**\/<collection>.json[.gz]`, one pack (discover already refused unknown collections). */
-export const seedPack = Effect.fn('bolt.seedPack')(function* (
-	root: string,
-	errors: CheckDiagnostic[]
-) {
-	const fs = yield* FileSystem.FileSystem;
-	const pathService = yield* Path.Path;
-	const dir = pathService.join(root, 'seed'),
-		pack: { [c: string]: RowData[] } = {};
-	if (!(yield* fs.exists(dir))) return pack;
-	for (const entry of yield* fs.readDirectory(dir, { recursive: true })) {
-		const absolute = pathService.join(dir, entry);
-		const path = pathService.relative(root, absolute).split(pathService.sep).join('/');
-		const hit = /^seed\/(?:.+\/)?([^/]+)\.json(\.gz)?$/.exec(path);
-		if (
-			(yield* fs.stat(absolute)).type !== 'File' ||
-			hit === null ||
-			path === 'seed/assets.json' ||
-			path.startsWith('seed/assets/')
-		)
-			continue;
-		const collection = hit[1];
-		if (collection === undefined) continue;
-		const bytes = yield* fs.readFile(absolute);
-		const rows = yield* Effect.try({
-			try: () => new TextDecoder().decode(hit[2] ? gunzipSync(bytes) : bytes),
-			catch: (cause) => new EvalError({ cause })
-		}).pipe(
-			Effect.flatMap(
-				Schema.decodeUnknownEffect(
-					Schema.fromJsonString(Schema.Array(Schema.Record(Schema.String, Schema.Json)))
-				)
-			),
-			Effect.result
-		);
-		if (Result.isFailure(rows))
-			errors.push({ code: 'seed/decode', path, message: `${path}: ${rows.failure.message}` });
-		else (pack[collection] ??= []).push(...rows.success);
-	}
-	return pack;
 });

@@ -22,7 +22,7 @@ const manifest = Schema.decodeUnknownSync(EngineManifestSchema)({
 	workspace: { tz: 'UTC', locale: 'en' },
 	models: {},
 	relationships: {},
-	collections: {},
+	exposures: {},
 	pipelines: {},
 	integrations: {},
 	connections: { wa: { integration: 'whatsapp' } },
@@ -115,6 +115,40 @@ describe('the WhatsApp Web link on a host', { timeout: 15_000 }, () => {
 				yield* host.close;
 			})
 		)
+	);
+	it.live(
+		'typing reads the waiting messages and goes online once; off sends paused; a DM sender is watched for typing',
+		() =>
+			engineHost({ manifest }, ({ links }) =>
+				Effect.gen(function* () {
+					const f = fake(),
+						host = yield* links([f.provider]);
+					yield* host.pair('wa', {});
+					yield* f.socket(0);
+					const s = f.opened[0]!;
+					yield* sdk(() => s.paired());
+					s.ready();
+					yield* sdk(() => s.deliver(raw('T1', 'are you there')));
+					const jid = '659@s.whatsapp.net';
+					expect(s.subscribed).toEqual([jid]);
+					yield* host.port.typing('wa', jid, true);
+					expect(s.read).toEqual([{ remoteJid: jid, id: 'T1' }]);
+					expect(s.presence).toEqual([
+						['available', undefined],
+						['composing', jid]
+					]);
+					yield* host.port.typing('wa', jid, false);
+					yield* host.port.typing('wa', jid, true); // nothing new to read, already online
+					expect(s.read).toHaveLength(1);
+					expect(s.presence.slice(2)).toEqual([
+						['paused', jid],
+						['composing', jid]
+					]);
+					yield* sdk(() => s.deliver(raw('T2', 'hello again')));
+					expect(s.subscribed).toEqual([jid]); // watched once per socket
+					yield* host.close;
+				})
+			)
 	);
 	it.live(
 		'a second host opening the instance fences the first: its next key write stops it for good',

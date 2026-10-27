@@ -5,7 +5,7 @@ import { browser } from './view-fixture.ts';
 import { mount, flushSync, tick, unmount } from 'svelte';
 import Harness from './embedded-table-harness.svelte';
 
-it.live('embedded controlled rows reuse the collection grid without a shell or runtime', () =>
+it.live('embedded controlled rows reuse the model grid without a shell or runtime', () =>
 	browser(async () => {
 		const target = document.body.appendChild(document.createElement('div'));
 		const changes: { id: string; name: string; paid: boolean }[][] = [];

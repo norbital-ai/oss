@@ -8,7 +8,7 @@ import { Context, Effect, Layer, Result } from 'effect';
 import { decodeManifest } from '../src/engine/manifest.ts';
 import { mint, sha256 } from '../src/engine/identity/session.ts';
 import { authorityOf, HostIdentity } from '../src/shell/host.ts';
-import * as HttpServerRequest from 'effect/unstable/http/HttpServerRequest';
+import * as HttpServerRequest from 'effect/http/HttpServerRequest';
 import { COOKIES, SHELL } from '../src/shell/nav.ts';
 import { RateLimits } from '../src/protocol/http.ts';
 import { TestWorkspace } from '../src/test/index.ts';
@@ -19,7 +19,7 @@ const manifest = Result.getOrThrow(
 		workspace: { tz: 'UTC', locale: 'en', apps: [], agent: { triage: false } },
 		models: {},
 		relationships: {},
-		collections: {},
+		exposures: {},
 		policies: {},
 		apps: {},
 		agent: { skills: {} },
@@ -114,10 +114,10 @@ describe('the session cookie', () => {
 									}
 								}
 							},
-							collections: {
+							exposures: {
 								photos: {
-									read: { fields: 'all' },
-									create: { input: { columns: ['title', 'visible', 'image'] } }
+									read: { photos: { fields: 'all' } },
+									create: { columns: { photos: ['title', 'visible', 'image'] } }
 								}
 							},
 							policies: {

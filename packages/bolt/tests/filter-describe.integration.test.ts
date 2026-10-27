@@ -50,11 +50,11 @@ const manifest = {
 		}
 	},
 	relationships: { 'jobs.assignee': { to: 'members', inverse: 'assigned_jobs' } },
-	collections: {
-		members: { read: { fields: 'all' }, create: { input: { columns: ['name'] } } },
+	exposures: {
+		members: { read: { members: { fields: 'all' } }, create: { columns: { members: ['name'] } } },
 		jobs: {
-			read: { fields: 'all' },
-			create: { input: { columns: ['title', 'scheduled_on', 'status', 'assignee'] } }
+			read: { jobs: { fields: 'all' } },
+			create: { columns: { jobs: ['title', 'scheduled_on', 'status', 'assignee'] } }
 		}
 	},
 	integrations: {},
@@ -65,8 +65,7 @@ const manifest = {
 			grants: {
 				members: { read: true },
 				jobs: {
-					read: {
-						fields: [
+					read: { jobs: { fields: [
 							'id',
 							'title',
 							'scheduled_on',
@@ -75,8 +74,7 @@ const manifest = {
 							'assignee',
 							'created_at',
 							'updated_at'
-						]
-					}
+						] } }
 				}
 			}
 		}
@@ -211,12 +209,12 @@ const open = (port?: System1, m: EngineManifest = manifest) =>
 		const t = Context.get(context, TestWorkspace),
 			filters = yield* filterDescribe.pipe(Effect.provide(context)),
 			route = yield* routeFixture(context);
-		const bob = yield* create(t, route, 'members.create', { name: 'Bob Tan' });
-		yield* create(t, route, 'members.create', { name: 'Alice Ng' });
+		const bob = yield* create(t, route, 'members.create', [{ name: 'Bob Tan' }]);
+		yield* create(t, route, 'members.create', [{ name: 'Alice Ng' }]);
 		const caller = t.as(t.member(['dispatch'])).authority;
 		const describeAs = (text: string) =>
 			filters.describe({
-				collection: 'jobs',
+				model: 'jobs',
 				text,
 				authority: caller,
 				bindings: {
@@ -238,16 +236,16 @@ const titles = (route: FixtureRoute, caller: Authority, where?: object, orderBy?
 			{
 				m: 'query',
 				a: [
-					'jobs',
 					{
-						all: true,
-						...(where !== undefined && Object.keys(where).length > 0
-							? { where: Schema.decodeUnknownSync(Schema.Json)(where) }
-							: {}),
-						...(orderBy === undefined
-							? {}
-							: { orderBy: Schema.decodeUnknownSync(Schema.Json)(orderBy) }),
-						select: { title: true }
+						jobs: {
+							...(where !== undefined && Object.keys(where).length > 0
+								? { where: Schema.decodeUnknownSync(Schema.JsonObject)(where) }
+								: {}),
+							...(orderBy === undefined
+								? {}
+								: { orderBy: Schema.decodeUnknownSync(Schema.Json)(orderBy) }),
+							fields: ['title']
+						}
 					}
 				]
 			}
@@ -255,10 +253,12 @@ const titles = (route: FixtureRoute, caller: Authority, where?: object, orderBy?
 	}).pipe(
 		Effect.flatMap((reply) =>
 			Schema.decodeUnknownEffect(
-				Schema.Struct({ rows: Schema.Array(Schema.Struct({ title: Schema.String })) })
+				Schema.Struct({
+					jobs: Schema.Struct({ rows: Schema.Array(Schema.Struct({ title: Schema.String })) })
+				})
 			)(reply.answers[0])
 		),
-		Effect.map((page) => page.rows.map((row) => row.title))
+		Effect.map((answer) => answer.jobs.rows.map((row) => row.title))
 	);
 
 describe('filter.describe (rule 16a)', () => {
@@ -346,7 +346,7 @@ describe('filter.describe (rule 16a)', () => {
 	);
 
 	it.live(
-		'a wide collection is asked about the fields the description names, still in one call',
+		'a wide model is asked about the fields the description names, still in one call',
 		() =>
 			Effect.scoped(
 				Effect.gen(function* () {
@@ -396,7 +396,7 @@ describe('filter.describe (rule 16a)', () => {
 						})
 					);
 					yield* (yield* filterDescribe.pipe(Effect.provide(context2))).describe({
-						collection: 'jobs',
+						model: 'jobs',
 						text: "Bob's jobs this week",
 						authority: Context.get(context2, TestWorkspace).as(
 							Context.get(context2, TestWorkspace).admin
@@ -470,11 +470,11 @@ describe('filter.describe (rule 16a)', () => {
 								inverse: 'suspicious_activity_logs'
 							}
 						},
-						collections: {
-							...manifest.collections,
+						exposures: {
+							...manifest.exposures,
 							suspicious_activity_logs: {
-								read: { fields: 'all' },
-								create: { input: { columns: ['summary', 'severity', 'raised_on', 'member'] } }
+								read: { suspicious_activity_logs: { fields: 'all' } },
+								create: { columns: { suspicious_activity_logs: ['summary', 'severity', 'raised_on', 'member'] } }
 							}
 						}
 					} satisfies EngineManifest;
@@ -486,7 +486,7 @@ describe('filter.describe (rule 16a)', () => {
 						})
 					);
 					const r = yield* (yield* filterDescribe.pipe(Effect.provide(context2))).describe({
-						collection: 'members',
+						model: 'members',
 						text: 'those with 1 suspicion log',
 						authority: Context.get(context2, TestWorkspace).as(
 							Context.get(context2, TestWorkspace).admin
@@ -533,7 +533,7 @@ describe('filter.describe (rule 16a)', () => {
 						})
 					);
 					yield* (yield* filterDescribe.pipe(Effect.provide(context3))).describe({
-						collection: 'members',
+						model: 'members',
 						text: 'seniors with 1 suspicion log',
 						authority: Context.get(context3, TestWorkspace).as(
 							Context.get(context3, TestWorkspace).admin
@@ -605,7 +605,7 @@ describe('filter.describe (rule 16a)', () => {
 					const t = Context.get(wideContext, TestWorkspace),
 						filters = yield* filterDescribe.pipe(Effect.provide(wideContext));
 					const r = yield* filters.describe({
-						collection: 'jobs',
+						model: 'jobs',
 						text: 'code c7',
 						authority: t.as(t.admin).authority,
 						bindings: {
@@ -628,7 +628,7 @@ describe('filter.describe (rule 16a)', () => {
 					).toBe(true);
 					expect(present(seen[0]).state).toMatchObject({
 						description: 'code c7',
-						collection: 'Jobs',
+						model: 'Jobs',
 						timezone: 'Asia/Singapore'
 					});
 				})
@@ -641,7 +641,7 @@ describe('filter.describe (rule 16a)', () => {
 				const { t, filters, caller, describeAs } = yield* open();
 				expect(filters).toBeDefined();
 				const opts = yield* filters.options({
-					collection: 'jobs',
+					model: 'jobs',
 					authority: caller,
 					bindings: {
 						now: t.clock.now(),
@@ -672,30 +672,30 @@ describe('filter.describe (rule 16a)', () => {
 					)
 				);
 				const alice = (yield* Schema.decodeUnknownEffect(
-					Schema.Struct({ rows: Schema.Array(Schema.Struct({ id: Schema.String })) })
+					Schema.Struct({
+						members: Schema.Struct({ rows: Schema.Array(Schema.Struct({ id: Schema.String })) })
+					})
 				)(
 					(yield* qReply(route, t.as(t.admin).authority, {
-						reads: [
-							{ m: 'query', a: ['members', { where: { name: { eq: 'Alice Ng' } }, all: true }] }
-						]
+						reads: [{ m: 'query', a: [{ members: { where: { name: { eq: 'Alice Ng' } } } }] }]
 					})).answers[0]
-				)).rows[0]?.id;
+				)).members.rows[0]?.id;
 				if (alice === undefined) throw new Error('Missing Alice');
-				yield* create(t, route, 'jobs.create', {
+				yield* create(t, route, 'jobs.create', [{
 					scheduled_on: '2026-09-28',
 					title: 'pump room',
 					assignee: alice
-				});
-				yield* create(t, route, 'jobs.create', {
+				}]);
+				yield* create(t, route, 'jobs.create', [{
 					scheduled_on: '2026-09-28',
 					title: 'install',
 					assignee: bob
-				});
-				yield* create(t, route, 'jobs.create', {
+				}]);
+				yield* create(t, route, 'jobs.create', [{
 					scheduled_on: '2026-09-28',
 					title: 'other',
 					assignee: alice
-				});
+				}]);
 				const r = yield* describeAs("pump jobs or Bob's jobs");
 				expect(r).toMatchObject({
 					ok: true,
@@ -723,25 +723,25 @@ describe('filter.describe (rule 16a)', () => {
 					system1(byField({ 'Assignee › Name': { op: 'contains', value: 'bob' } }))
 				);
 				const alice = (yield* Schema.decodeUnknownEffect(
-					Schema.Struct({ rows: Schema.Array(Schema.Struct({ id: Schema.String })) })
+					Schema.Struct({
+						members: Schema.Struct({ rows: Schema.Array(Schema.Struct({ id: Schema.String })) })
+					})
 				)(
 					(yield* qReply(route, t.as(t.admin).authority, {
-						reads: [
-							{ m: 'query', a: ['members', { where: { name: { eq: 'Alice Ng' } }, all: true }] }
-						]
+						reads: [{ m: 'query', a: [{ members: { where: { name: { eq: 'Alice Ng' } } } }] }]
 					})).answers[0]
-				)).rows[0]?.id;
+				)).members.rows[0]?.id;
 				if (alice === undefined) throw new Error('Missing Alice');
-				yield* create(t, route, 'jobs.create', {
+				yield* create(t, route, 'jobs.create', [{
 					scheduled_on: '2026-09-28',
 					title: 'bob job',
 					assignee: bob
-				});
-				yield* create(t, route, 'jobs.create', {
+				}]);
+				yield* create(t, route, 'jobs.create', [{
 					scheduled_on: '2026-09-28',
 					title: 'alice job',
 					assignee: alice
-				});
+				}]);
 				const r = yield* describeAs('jobs whose assignee name contains bob');
 				expect(r).toEqual({ ok: true, where: { assignee: { is: { name: { like: '%bob%' } } } } });
 				expect(
@@ -764,25 +764,25 @@ describe('filter.describe (rule 16a)', () => {
 					system1(byField({}, { sort: 'Assignee › Name, A to Z' }))
 				);
 				const alice = (yield* Schema.decodeUnknownEffect(
-					Schema.Struct({ rows: Schema.Array(Schema.Struct({ id: Schema.String })) })
+					Schema.Struct({
+						members: Schema.Struct({ rows: Schema.Array(Schema.Struct({ id: Schema.String })) })
+					})
 				)(
 					(yield* qReply(route, t.as(t.admin).authority, {
-						reads: [
-							{ m: 'query', a: ['members', { where: { name: { eq: 'Alice Ng' } }, all: true }] }
-						]
+						reads: [{ m: 'query', a: [{ members: { where: { name: { eq: 'Alice Ng' } } } }] }]
 					})).answers[0]
-				)).rows[0]?.id;
+				)).members.rows[0]?.id;
 				if (alice === undefined) throw new Error('Missing Alice');
-				yield* create(t, route, 'jobs.create', {
+				yield* create(t, route, 'jobs.create', [{
 					scheduled_on: '2026-09-28',
 					title: 'zzz job',
 					assignee: bob
-				});
-				yield* create(t, route, 'jobs.create', {
+				}]);
+				yield* create(t, route, 'jobs.create', [{
 					scheduled_on: '2026-09-28',
 					title: 'aaa job',
 					assignee: alice
-				});
+				}]);
 				const r = yield* describeAs('sorted by assignee name');
 				expect(r).toEqual({ ok: true, orderBy: { assignee: { name: 'asc' } } });
 				expect(
@@ -851,9 +851,9 @@ describe('dates and relations a description names (live Jev misreadings, 2026-10
 			const workspace = Context.get(context, TestWorkspace),
 				route = yield* routeFixture(context),
 				filters = yield* filterDescribe.pipe(Effect.provide(context));
-			const bob = yield* create(workspace, route, 'members.create', { name: 'Bob Tan' });
+			const bob = yield* create(workspace, route, 'members.create', [{ name: 'Bob Tan' }]);
 			const r = yield* filters.describe({
-				collection: 'jobs',
+				model: 'jobs',
 				text,
 				authority: workspace.as(workspace.admin).authority,
 				bindings: at
@@ -985,16 +985,16 @@ describe("named days, lists, ranges and a related record's own related records (
 			'jobs.customer': { to: 'customers', inverse: 'jobs', optional: true },
 			'invoices.customer': { to: 'customers', inverse: 'invoices' }
 		},
-		collections: {
-			customers: { read: { fields: 'all' }, create: { input: { columns: ['name'] } } },
+		exposures: {
+			customers: { read: { customers: { fields: 'all' } }, create: { columns: { customers: ['name'] } } },
 			invoices: {
-				read: { fields: 'all' },
-				create: { input: { columns: ['number', 'status', 'customer'] } }
+				read: { invoices: { fields: 'all' } },
+				create: { columns: { invoices: ['number', 'status', 'customer'] } }
 			},
-			holidays: { read: { fields: 'all' }, create: { input: { columns: ['name', 'date'] } } },
+			holidays: { read: { holidays: { fields: 'all' } }, create: { columns: { holidays: ['name', 'date'] } } },
 			jobs: {
-				read: { fields: 'all' },
-				create: { input: { columns: ['title', 'scheduled_on', 'hours', 'status', 'customer'] } }
+				read: { jobs: { fields: 'all' } },
+				create: { columns: { jobs: ['title', 'scheduled_on', 'hours', 'status', 'customer'] } }
 			}
 		},
 		integrations: {},
@@ -1018,8 +1018,8 @@ describe("named days, lists, ranges and a related record's own related records (
 				route = yield* routeFixture(context),
 				authority = workspace.as(workspace.admin).authority,
 				filters = yield* filterDescribe.pipe(Effect.provide(context));
-			const id = (collection: string, row: Record<string, Json>) =>
-				create(workspace, route, `${collection}.create`, row);
+			const id = (model: string, row: Record<string, Json>) =>
+				create(workspace, route, `${model}.create`, [row]);
 			const acme = yield* id('customers', { name: 'Acme' }),
 				globex = yield* id('customers', { name: 'Globex' });
 			yield* id('invoices', { number: 'INV-1', status: 'unpaid', customer: acme });
@@ -1042,34 +1042,37 @@ describe("named days, lists, ranges and a related record's own related records (
 					status,
 					...(customer === null ? {} : { customer })
 				});
-			return (collection: string, text: string) =>
+			return (model: string, text: string) =>
 				Effect.gen(function* () {
-					const r = yield* filters.describe({ collection, text, authority, bindings: at });
-					const label = collection === 'jobs' ? 'title' : 'name';
+					const r = yield* filters.describe({ model, text, authority, bindings: at });
+					const label = model === 'jobs' ? 'title' : 'name';
 					let rows: (Json | undefined)[] = [];
 					if (r.ok) {
-						const page = yield* Schema.decodeUnknownEffect(
-							Schema.Struct({ rows: Schema.Array(Schema.Record(Schema.String, Schema.Json)) })
+						const answer = yield* Schema.decodeUnknownEffect(
+							Schema.Record(
+								Schema.String,
+								Schema.Struct({ rows: Schema.Array(Schema.Record(Schema.String, Schema.Json)) })
+							)
 						)(
 							(yield* qReply(route, authority, {
 								reads: [
 									{
 										m: 'query',
 										a: [
-											collection,
 											{
-												all: true,
-												...('where' in r && r.where !== undefined
-													? { where: Schema.decodeUnknownSync(Schema.Json)(r.where) }
-													: {}),
-												select: { [label]: true }
+												[model]: {
+													...('where' in r && r.where !== undefined
+														? { where: Schema.decodeUnknownSync(Schema.JsonObject)(r.where) }
+														: {}),
+													fields: [label]
+												}
 											}
 										]
 									}
 								]
 							})).answers[0]
 						);
-						rows = page.rows.map((row) => row[label]).sort();
+						rows = (answer[model]?.rows ?? []).map((row) => row[label]).sort();
 					}
 					const request = provider.requests.at(-1);
 					if (request === undefined) throw new Error('Missing filter request');

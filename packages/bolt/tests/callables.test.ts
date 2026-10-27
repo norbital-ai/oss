@@ -36,7 +36,7 @@ describe('decodeInput', () => {
 				who: ID,
 				shape: { type: 'box', side: 2 }
 			})
-		).toEqual({ problems: [], refs: [{ collection: 'customers', id: ID, field: 'who' }] });
+		).toEqual({ problems: [], refs: [{ model: 'customers', id: ID, field: 'who' }] });
 		expect(
 			decodeInput(spec, {
 				title: 'long',
@@ -81,16 +81,16 @@ describe('decodeInput', () => {
 		).toEqual({
 			problems: [{ path: 'union', message: 'is required' }],
 			refs: [
-				{ collection: 'customers', id: ID, field: 'list.1' },
-				{ collection: 'customers', id: ID, field: 'record.present' },
-				{ collection: 'customers', id: ID, field: 'taggedList.1.who' }
+				{ model: 'customers', id: ID, field: 'list.1' },
+				{ model: 'customers', id: ID, field: 'record.present' },
+				{ model: 'customers', id: ID, field: 'taggedList.1.who' }
 			]
 		});
 		expect(
 			decodeInput({ list: { kind: 'list', of: spec.union } }, { list: [null, 1, ID] })
 		).toEqual({
 			problems: [],
-			refs: [{ collection: 'customers', id: ID, field: 'list.2' }]
+			refs: [{ model: 'customers', id: ID, field: 'list.2' }]
 		});
 		expect(
 			decodeInput(

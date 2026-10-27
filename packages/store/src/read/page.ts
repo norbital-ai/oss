@@ -39,7 +39,7 @@ export const armsFit = (ir: ReadIR, rows: readonly Wire[]): Effect.Effect<void, 
 								.map((target) =>
 									over(
 										r.targetSelects?.[target] ?? r.select,
-										list.filter((item) => item['collection'] === target)
+										list.filter((item) => item['model'] === target)
 									)
 								)
 								.find((name) => name !== undefined);
@@ -66,7 +66,7 @@ export const answer = Effect.fnUntraced(function* (
 	// the database stopped at the read's byte budget (`budgeted`): the marker is no row
 	const over = answered.at(-1)?.[OVER] === true;
 	const js = over ? answered.slice(0, -1) : answered;
-	const of = ` of ${ir.collection}`;
+	const of = ` of ${ir.model}`;
 	yield* armsFit(ir, js);
 	if (c.kind === 'one' || c.kind === 'agg') {
 		const one: Json = js[0] ?? null;

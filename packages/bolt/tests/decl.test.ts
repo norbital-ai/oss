@@ -47,7 +47,6 @@ describe('declarations', () => {
 		expect(original(declared.bodies.create)).toBe(spec.create.transform);
 		expect(original(declared.bodies.update)).toBe(spec.update.transform);
 		expect(original(declared.bodies.delete)).toBe(spec.delete.check);
-		expect(original(declared.bodies.queries['open_total'])).toBe(spec.queries.open_total.run);
 		expect(original(declared.bodies.notify)).toBe(spec.notify);
 	});
 
@@ -58,18 +57,19 @@ describe('declarations', () => {
 			to: 'customers',
 			inverse: 'orders'
 		});
-		expect(parts.collection?.create?.transform).toBe(true);
-		expect(parts.collection?.update?.transform).toBe(true);
-		expect(parts.collection?.delete).toEqual({ check: true });
-		expect(parts.collection?.notify).toBe(true);
-		expect(parts.collection?.queries?.['open_total']).not.toHaveProperty('run');
-		expect(parts.collection?.read).toEqual({ fields: 'all', relations: 'all' });
+		expect(parts.exposure?.create?.transform).toBe(true);
+		expect(parts.exposure?.update?.transform).toBe(true);
+		expect(parts.exposure?.delete).toEqual({ check: true });
+		expect(parts.exposure?.notify).toBe(true);
+		expect(parts.exposure).not.toHaveProperty('queries');
+		// the read layer map keys by path, the root first
+		expect(Object.keys(parts.exposure?.read ?? {})[0]).toBe('orders');
 		const privateModel = splitModel('private', {
 			description: 'Private rows',
 			label: 'name',
 			fields: { name: { kind: 'text' } }
 		});
-		expect(privateModel.collection).toBeUndefined();
+		expect(privateModel.exposure).toBeUndefined();
 	});
 
 	it('keeps a custom field validator inside its named literal', () => {

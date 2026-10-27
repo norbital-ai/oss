@@ -122,7 +122,6 @@ const TENANT_BODIES: ReadonlyMap<string, readonly (readonly string[])[]> = new M
 			['create', 'transform'],
 			['update', 'transform'],
 			['delete', 'check'],
-			['queries', '*', 'run'],
 			['actions', '*', 'run'],
 			['notify'],
 			['syncs', '*', 'read'],

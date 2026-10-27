@@ -1,6 +1,6 @@
 // A view's source: a native read (`bolt.query`, `bolt.aggregate`, a declared query) or a local array.
 import type { Query } from '../client/contract.js';
-import type { Values } from '../collection/types.js';
+import type { Values } from '../model/types.js';
 import { queryState, type ReadState } from './state.js';
 
 export type ViewSource = Query<unknown> | readonly Values[];

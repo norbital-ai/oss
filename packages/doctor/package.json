@@ -1,6 +1,6 @@
 {
 	"name": "@norbital-ai/doctor",
-	"version": "0.0.4",
+	"version": "0.0.6",
 	"description": "The audit: four workspace packs (boundaries, layout, svelte, reactive) under an organization's rule set, plus the realm packs, over TypeScript and Svelte.",
 	"type": "module",
 	"license": "AGPL-3.0-only",
@@ -50,7 +50,7 @@
 		"@effect/vitest": "catalog:",
 		"@types/node": "^26.2.0",
 		"typescript": "catalog:",
-		"vitest": "4.1.11",
+		"vitest": "5.0.5",
 		"@effect/platform-node": "catalog:"
 	}
 }

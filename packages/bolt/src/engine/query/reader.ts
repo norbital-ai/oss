@@ -1,6 +1,6 @@
-// Who reads, as the store's read compiler takes it (A4): a caller's Authority as the store's `Scope` — its read arms
-// conjoined at every level (rule 13), its masks on every touch of a field (rule 14), and the open approval request a
-// root row of a holdable collection carries (rule 46b) — and the invocation's bindings as the operand resolver. A
+// Who reads, as the store's read compiler takes it (A4): a caller's Authority as the store's `Scope` — its read arms per
+// path conjoined at every level (rule 13), its masks per path on every touch of a field (rule 14), and the open approval request a
+// root row of a holdable model carries (rule 46b) — and the invocation's bindings as the operand resolver. A
 // workspace read (the transform, rule 15) has no scope. Statements a batch may fold into one are marked here.
 import { Effect } from 'effect';
 import { localOf } from '@norbital-ai/std/zone';
@@ -26,13 +26,18 @@ export function bindingsAt(at: number | string, tz: string): Bindings {
 	};
 }
 
+const rootOf = (path: string) => path.split('.', 1)[0]!;
 const lit = (s: string) => `'${s.replaceAll("'", "''")}'`;
-/** A caller's scope: none for an admin's rows and fields; and the request holding a root row of a held collection. */
+/** A caller's scope: none for an admin's rows and fields; and the request holding a root row of a held model. */
 export function scopeOf(authority: Authority, approvals: ReadonlySet<string> = new Set()): Scope {
 	return {
-		rows: (c) =>
-			authority.admin ? undefined : (authority.collections[c]?.read ?? []).map((arm) => arm.where),
-		mask: (c, field) => (authority.admin ? undefined : authority.collections[c]?.masks[field]),
+		// a layer path is scoped by its root's arms for that path (decision 3), never its own model's grants
+		rows: (path) =>
+			authority.admin
+				? undefined
+				: (authority.models[rootOf(path)]?.read[path] ?? []).map((arm) => arm.where),
+		mask: (path, field) =>
+			authority.admin ? undefined : authority.models[rootOf(path)]?.masks[path]?.[field],
 		root: (c, a) =>
 			approvals.has(c)
 				? [

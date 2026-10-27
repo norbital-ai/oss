@@ -1,16 +1,16 @@
-// Rule 35 through `act` on PGlite (its pre- and post-image judges): each arm's scope over the stored and the written row,
-// `previous` on the stored row alone, every supplied field admitted by a scoped arm, and a direct grant committing past a
-// policy's approval callback.
+// Rule 35 through `act` on PGlite: every supplied column admitted by an arm's `columns` before any guest code, then one
+// policy `check` per admitting arm over the batch of `{ before, set }` (what `previous` and the write `where` judged), a
+// denying check refusing the write, and a direct arm committing past a policy whose check would hold it.
 import { describe, expect, it } from '@effect/vitest';
-import { Context, Effect, Layer, Result } from 'effect';
+import { Context, Effect, Layer, Result, Schema } from 'effect';
 import type { Json } from '../src/decl/values.ts';
 import { compileAuthority } from '../src/engine/access/authority.ts';
-import type { Authority } from '../src/engine/contracts.ts';
+import type { Authority, GuestOutcome, Invocation } from '../src/engine/contracts.ts';
 import { PgliteDb } from '../src/node/db/pglite.ts';
 import { TenantDb } from '../src/engine/db/tenant-db.ts';
 import { decodeManifest } from '../src/engine/manifest.ts';
 import { applyPlan, plan } from '../src/engine/schema/plan.ts';
-import { act } from '../src/engine/write/act.ts';
+import { act, type WriteEngine } from '../src/engine/write/act.ts';
 import { admin, member, NOW, TODAY } from './write-fixture.ts';
 
 const m = Result.getOrThrow(
@@ -36,17 +36,17 @@ const m = Result.getOrThrow(
 			}
 		},
 		relationships: {},
-		collections: {
+		exposures: {
 			orders: {
-				read: { fields: 'all' },
-				create: { input: { columns: ['region', 'amount', 'note'] } },
-				update: { input: { columns: ['region', 'amount', 'note'] } },
+				read: { orders: { fields: 'all' } },
+				create: { columns: { orders: ['region', 'amount', 'note'] } },
+				update: { columns: { orders: ['region', 'amount', 'note'] } },
 				delete: {}
 			},
 			employees: {
-				read: { fields: 'all' },
-				create: { input: { columns: ['face'] } },
-				update: { input: { columns: ['face', 'checked_at'] } }
+				read: { employees: { fields: 'all' } },
+				create: { columns: { employees: ['face'] } },
+				update: { columns: { employees: ['face', 'checked_at'] } }
 			}
 		},
 		policies: {
@@ -54,8 +54,8 @@ const m = Result.getOrThrow(
 				description: '',
 				grants: {
 					orders: {
-						read: { where: { region: { eq: 'north' } } },
-						update: { where: 'read', fields: ['note'] }
+						read: { orders: { where: { region: { eq: 'north' } } } },
+						update: { columns: { orders: ['note'] } }
 					}
 				}
 			},
@@ -63,38 +63,25 @@ const m = Result.getOrThrow(
 				description: '',
 				grants: {
 					orders: {
-						read: { where: { region: { eq: 'north' } } },
-						update: { where: 'read', fields: ['note'], approval: true }
+						read: { orders: { where: { region: { eq: 'north' } } } },
+						update: { columns: { orders: ['note'] }, check: true }
 					}
 				}
 			},
 			mover: {
 				description: '',
-				grants: { orders: { read: true, update: { where: { region: { eq: 'north' } } } } }
+				grants: { orders: { read: true, update: { check: true } } }
 			},
 			kiosk: {
 				description: '',
 				grants: {
-					employees: {
-						read: true,
-						update: {
-							previous: { face: { in: ['NONE', 'APPROVED'] } },
-							where: { face: { eq: 'APPROVED' } },
-							fields: ['face']
-						}
-					}
+					employees: { read: true, update: { columns: { employees: ['face'] }, check: true } }
 				}
 			},
 			stamp: {
 				description: '',
 				grants: {
-					employees: {
-						read: true,
-						update: {
-							previous: { checked_at: { isNull: true } },
-							where: { checked_at: { isNull: false } }
-						}
-					}
+					employees: { read: true, update: { check: true } }
 				}
 			}
 		},
@@ -112,20 +99,76 @@ const m = Result.getOrThrow(
 
 const as = (policies: string[]): Authority =>
 	compileAuthority(m, { actor: member, admin: false, policies }, policies.join());
+const Changes = Schema.Array(
+	Schema.Struct({
+		before: Schema.Record(Schema.String, Schema.Json),
+		set: Schema.Record(Schema.String, Schema.Json)
+	})
+);
+/** Each policy's update `check`, as its authored `function*` would answer: the stored row, then the written one. */
+const verdicts: { readonly [target: string]: (c: { before: Json; after: Json }[]) => Json } = {
+	'routed.orders.update': () => ({
+		kind: 'approve',
+		flow: {
+			kind: 'steps',
+			steps: [{ name: 'Finance', teams: ['Finance'], users: [] }],
+			superseded_by: []
+		}
+	}),
+	'mover.orders.update': (changes) =>
+		changes.every(
+			({ before, after }) =>
+				field(before, 'region') === 'north' && field(after, 'region') === 'north'
+		)
+			? { kind: 'allow' }
+			: { kind: 'deny', message: 'Northern orders stay northern.', at: { field: 'region' } },
+	'kiosk.employees.update': (changes) =>
+		changes.every(
+			({ before, after }) =>
+				(field(before, 'face') === 'NONE' || field(before, 'face') === 'APPROVED') &&
+				field(after, 'face') === 'APPROVED'
+		)
+			? { kind: 'allow' }
+			: { kind: 'deny', message: 'A kiosk approves a face once.', at: { field: 'face' } },
+	'stamp.employees.update': (changes) =>
+		changes.every(
+			({ before, after }) =>
+				field(before, 'checked_at') === null && field(after, 'checked_at') !== null
+		)
+			? { kind: 'allow' }
+			: { kind: 'deny', message: 'A review stamps once.', at: { field: 'checked_at' } }
+};
+const Row = Schema.Record(Schema.String, Schema.Json);
+const field = (row: Json, name: string): Json => (Schema.is(Row)(row) ? (row[name] ?? null) : null);
+const checks: WriteEngine['guest'] = {
+	invokeProgram: () =>
+		Effect.die(new Error('This fixture does not execute supplied guest programs.')),
+	invoke: (inv: Invocation) =>
+		Effect.sync((): GuestOutcome => {
+			const verdict = verdicts[inv.target];
+			if (inv.kind !== 'policy' || verdict === undefined)
+				throw new Error(`Unexpected guest call ${inv.kind} ${inv.target}`);
+			const changes = Schema.decodeUnknownSync(Changes)(inv.input).map(({ before, set }) => ({
+				before,
+				after: { ...before, ...set }
+			}));
+			return { kind: 'ok', output: verdict(changes) };
+		})
+};
 const fixture = Effect.gen(function* () {
 	const db = yield* TenantDb;
 	yield* applyPlan(db, yield* plan(null, m), { accept: true });
 	let n = 0;
 	const run = (
-		collection: string,
+		model: string,
 		verb: 'create' | 'update' | 'delete',
 		input: Json,
 		authority: Authority = admin
 	) =>
 		act(
-			{ manifest: m, db },
+			{ manifest: m, db, guest: checks },
 			{
-				collection,
+				model,
 				verb,
 				input,
 				mode: { _tag: 'Direct' },
@@ -136,15 +179,15 @@ const fixture = Effect.gen(function* () {
 				invocationId: `inv-${n++}`
 			}
 		).pipe(Effect.map((answer) => answer.outcome));
-	const create = Effect.fnUntraced(function* (collection: string, values: Json) {
-		const o = yield* run(collection, 'create', values);
+	const create = Effect.fnUntraced(function* (model: string, values: Json) {
+		const o = yield* run(model, 'create', [values]);
 		if (o.kind !== 'committed') throw new Error(JSON.stringify(o));
-		const record = o.records.find((r) => r.collection === collection);
-		if (record === undefined) throw new Error(`No created ${collection} record`);
+		const record = o.records.find((r) => r.model === model);
+		if (record === undefined) throw new Error(`No created ${model} record`);
 		return record.id;
 	});
-	const update = (collection: string, target: string, set: Json, authority: Authority) =>
-		run(collection, 'update', { target, set }, authority);
+	const update = (model: string, target: string, set: Json, authority: Authority) =>
+		run(model, 'update', [{ target, set }], authority);
 	return { run, create, update };
 });
 class JudgeFixture extends Context.Service<JudgeFixture, Effect.Success<typeof fixture>>()(
@@ -152,9 +195,9 @@ class JudgeFixture extends Context.Service<JudgeFixture, Effect.Success<typeof f
 ) {}
 const JudgeFixtureLive = Layer.effect(JudgeFixture, fixture).pipe(Layer.provide(PgliteDb.layer()));
 
-describe('engine/write: the caller judged on the stored and the written row (rule 35)', () => {
+describe('engine/write: columns, then one check over the stored and the written row (rule 35)', () => {
 	it.effect(
-		'an update is scoped on both images, and each supplied field needs an admitting arm',
+		"each supplied column needs an admitting arm; an update's check judges both images",
 		() =>
 			Effect.gen(function* () {
 				const { run, create, update } = yield* JudgeFixture;
@@ -165,9 +208,12 @@ describe('engine/write: the caller judged on the stored and the written row (rul
 				expect(yield* update('orders', north, { note: 'x' }, rep)).toMatchObject({
 					kind: 'committed'
 				});
-				// the direct arm wins even when the approval arm's policy comes first; no guest callback is needed
+				// the direct arm (no check: it allows) wins even when the approving policy comes first
 				expect(yield* update('orders', north, { note: 'z' }, as(['routed', 'rep']))).toMatchObject({
 					kind: 'committed'
+				});
+				expect(yield* update('orders', north, { note: 'w' }, as(['routed']))).toMatchObject({
+					kind: 'pendingApproval'
 				});
 				expect(yield* update('orders', north, { amount: '5' }, rep)).toMatchObject({
 					kind: 'refused',
@@ -178,23 +224,23 @@ describe('engine/write: the caller judged on the stored and the written row (rul
 					kind: 'refused',
 					code: 'notFound'
 				});
-				// the stored row outside the arm, and the written row leaving it
-				expect(yield* update('orders', south, { note: 'y' }, mover)).toMatchObject({
+				// the check sees the stored row outside the north, and the written row leaving it
+				const denied = {
 					kind: 'refused',
-					code: 'forbidden'
-				});
-				expect(yield* update('orders', north, { region: 'south' }, mover)).toMatchObject({
-					kind: 'refused',
-					code: 'forbidden'
-				});
-				expect(yield* run('orders', 'delete', { target: south })).toMatchObject({
+					code: 'refused',
+					rule: 'mover.orders.update',
+					field: 'region'
+				};
+				expect(yield* update('orders', south, { note: 'y' }, mover)).toMatchObject(denied);
+				expect(yield* update('orders', north, { region: 'south' }, mover)).toMatchObject(denied);
+				expect(yield* run('orders', 'delete', [{ target: south }])).toMatchObject({
 					kind: 'committed'
 				}); // an administrator: every scope
 			}).pipe(Effect.provide(JudgeFixtureLive))
 	);
 
 	it.effect(
-		'`previous` scopes the stored row and `where` the written row only (kiosk enrolment, review stamp)',
+		'a check judges the stored row and the written row in one call (kiosk enrolment, review stamp)',
 		() =>
 			Effect.gen(function* () {
 				const { create, update } = yield* JudgeFixture;
@@ -209,21 +255,16 @@ describe('engine/write: the caller judged on the stored and the written row (rul
 					);
 				});
 				expect(yield* face('NONE', 'APPROVED')).toMatchObject({ kind: 'committed' });
-				expect(yield* face('APPROVED', 'NONE')).toMatchObject({
-					kind: 'refused',
-					code: 'forbidden'
-				});
-				expect(yield* face('PENDING', 'APPROVED')).toMatchObject({
-					kind: 'refused',
-					code: 'forbidden'
-				});
+				const once = { kind: 'refused', code: 'refused', rule: 'kiosk.employees.update' };
+				expect(yield* face('APPROVED', 'NONE')).toMatchObject(once);
+				expect(yield* face('PENDING', 'APPROVED')).toMatchObject(once);
 				const stamped = yield* create('employees', { face: 'NONE' });
 				expect(
 					yield* update('employees', stamped, { checked_at: '2026-09-25T01:00:00.000Z' }, stamp)
 				).toMatchObject({ kind: 'committed' });
 				expect(
 					yield* update('employees', stamped, { checked_at: '2026-09-25T02:00:00.000Z' }, stamp)
-				).toMatchObject({ kind: 'refused', code: 'forbidden' });
+				).toMatchObject({ kind: 'refused', code: 'refused', rule: 'stamp.employees.update' });
 			}).pipe(Effect.provide(JudgeFixtureLive))
 	);
 });

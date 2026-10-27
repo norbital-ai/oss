@@ -1,5 +1,6 @@
 import { describe, expect, it } from '@effect/vitest';
-import { Encoding, Schema } from 'effect';
+import { Schema } from 'effect';
+import { Base64Url } from 'effect/encoding';
 import { CursorValue, encodeCursor, type Cursor } from '@norbital-ai/store';
 
 describe('page cursor codec', () => {
@@ -31,11 +32,11 @@ describe('page cursor codec', () => {
 			'!',
 			`${wire}=`,
 			`${wire}\n`,
-			Encoding.encodeBase64Url('{'),
-			Encoding.encodeBase64Url(
+			Base64Url.encode('{'),
+			Base64Url.encode(
 				new Uint8Array([123, 34, 104, 34, 58, 34, 255, 34, 44, 34, 107, 34, 58, 91, 93, 125])
 			),
-			...malformed.map((value) => Encoding.encodeBase64Url(JSON.stringify(value)))
+			...malformed.map((value) => Base64Url.encode(JSON.stringify(value)))
 		])
 			expect(() => Schema.decodeUnknownSync(CursorValue)(value)).toThrow();
 	});

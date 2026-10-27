@@ -1,10 +1,10 @@
 // The built-in `browser_*` tools: Bolt's own, over the host's browsing facility (`Browser`). A host that supplies none
 // still offers them; each call answers that the browser facility is missing.
-import { Effect, Schema } from 'effect';
+import { Effect, Schema, type SchemaAST } from 'effect';
 import type { Json } from '../../decl/values.ts';
 import { Browser } from '../ports.ts';
 import type { AgentHostConfig } from './index.ts';
-import type { HostTool, HostToolContext } from './tools.ts';
+import { CLOSED, type HostTool, type HostToolContext } from './tools.ts';
 
 /** An automation run's browser profile: this prefix and the run id. The host discards it when the run's session ends. */
 export const BROWSER_RUN_PROFILE = '\u0001run:';
@@ -25,7 +25,7 @@ const Step = Schema.Union([
 	Schema.Struct({ hover: Schema.String }),
 	Schema.Struct({ scroll: Schema.Struct({ ref: OptionalString, y: OptionalNumber }) }),
 	Schema.Struct({ wait: Schema.Struct({ text: OptionalString, ms: OptionalNumber }) })
-]).annotate({ parseOptions: { onExcessProperty: 'error' } });
+]);
 const Navigate = Schema.Struct({
 	url: OptionalString,
 	go: Schema.optionalKey(Schema.Literals(['back', 'forward', 'reload'])),
@@ -46,6 +46,7 @@ const tool = <A, I>(
 		name: string;
 		description: string;
 		input: Schema.Codec<A, I>;
+		parseOptions?: SchemaAST.ParseOptions;
 		readOnly?: boolean;
 		call: (
 			input: A,
@@ -56,7 +57,9 @@ const tool = <A, I>(
 ): HostTool => ({
 	name: options.name,
 	description: options.description,
-	input: Schema.decodeUnknownSync(Schema.Json)(Schema.toJsonSchemaDocument(options.input).schema),
+	input: Schema.decodeUnknownSync(Schema.Json)(
+		Schema.toJsonSchemaDocument(options.input, { onExcessProperty: 'error' }).schema
+	),
 	...(options.readOnly === undefined ? {} : { readOnly: options.readOnly }),
 	call: (input, context, signal) =>
 		Effect.runPromise(
@@ -64,7 +67,10 @@ const tool = <A, I>(
 				const profile = profileOf(context);
 				if (profile === undefined)
 					return { error: 'only a person or an automation run can browse' };
-				const decoded = yield* Schema.decodeUnknownEffect(options.input)(input);
+				const decoded = yield* Schema.decodeUnknownEffect(
+					options.input,
+					options.parseOptions
+				)(input);
 				return yield* options.call(decoded, profile, context);
 			}).pipe(Effect.catch((failure) => Effect.succeed({ error: failure.message }))),
 			{ signal }
@@ -99,6 +105,7 @@ export const browserTools = (browser: Browser['Service']): readonly HostTool[] =
 		input: Schema.Struct({
 			steps: Schema.Array(Step).check(Schema.isMinLength(1), Schema.isMaxLength(20))
 		}),
+		parseOptions: CLOSED,
 		call: ({ steps }, profile) => browser.act(profile, steps)
 	}),
 	tool({

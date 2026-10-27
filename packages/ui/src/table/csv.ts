@@ -1,7 +1,7 @@
 import { formatValue as show, currencyOf, minorDigits, shownKind } from '../kinds/kind.js';
 import type { Kind } from '../kinds/kind.js';
 import { Decimal } from '@norbital-ai/std/decimal';
-import type { Values } from '../collection/types.js';
+import type { Values } from '../model/types.js';
 import { isMasked, valueAt } from '../cell/value.js';
 import { refOf } from '../relations/select.js';
 const INSTANT = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z$/;

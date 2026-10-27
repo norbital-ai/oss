@@ -21,16 +21,9 @@ const manifest: EngineManifest = {
 		}
 	},
 	relationships: {},
-	collections: {
+	exposures: {
 		documents: {
-			read: { fields: 'all' },
-			queries: {
-				preview: {
-					description: 'Preview',
-					input: { id: { kind: 'id', of: 'documents' } },
-					output: { kind: 'text' }
-				}
-			},
+			read: { documents: { fields: 'all' } },
 			syncs: {
 				sheet: {
 					with: 'file',
@@ -46,14 +39,14 @@ const manifest: EngineManifest = {
 		sales: {
 			description: 'Own documents',
 			grants: {
-				documents: { read: { where: { owner: { eq: { actor: 'id' } } } }, queries: ['preview'] }
+				documents: { read: { documents: { where: { owner: { eq: { actor: 'id' } } } } } }
 			}
 		}
 	},
 	teams: { sales: ['sales'] }
 };
 it.live(
-	'file exports preserve caller row scopes, including a named query fed by arbitrary context',
+	'file exports preserve caller row scopes, including a read request fed by arbitrary context',
 	() =>
 		Effect.scoped(
 			Effect.gen(function* () {
@@ -62,20 +55,16 @@ it.live(
 						manifest,
 						guest: yield* program(
 							`export default {
-	collection: {
+	model: {
 		documents: {
 			bodies: {
-				queries: {
-					preview: function*(input, ctx) {
-						const row = yield* ctx.query('documents', { id: input.id });
-						return row?.secret ?? 'missing';
-					}
-				},
 				syncs: {
 					sheet: {
 						write: function*({ context }, ctx) {
-							const secret = yield* ctx.db.query('documents.preview', { id: context.document });
-							return [{ secret }];
+							const { documents } = yield* ctx.db.query({
+								documents: { where: { id: { eq: context.document } }, fields: ['secret'] }
+							});
+							return [{ secret: documents.rows[0]?.secret ?? 'missing' }];
 						}
 					}
 				}

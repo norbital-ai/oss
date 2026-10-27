@@ -142,7 +142,7 @@ may decide now, a two-step form: pick Approve, Reject or Request changes, then g
 	const decisions = (v: ApprovalView) =>
 		DECISIONS.flatMap((d) => v.moves.filter((m) => m.decision === d));
 	const changedText = (v: ApprovalView, e: Entry) =>
-		(e.changed ?? []).map((f) => label(bolt, v.collection, f)).join(', ');
+		(e.changed ?? []).map((f) => label(bolt, v.model, f)).join(', ');
 
 	// the node whose popover is open: hover, keyboard focus or a tap opens it, Escape or leaving it closes it
 	let shown = $state<string | null>(null);
@@ -201,7 +201,7 @@ may decide now, a two-step form: pick Approve, Reject or Request changes, then g
 				{msg(bolt, 'approval.rolledBack', 'Rolled back')}: {e.rolledBack
 					.map(
 						(r) =>
-							`${label(bolt, r.collection)} ${msg(bolt, `approval.action.${r.action}`, r.action)}`
+							`${label(bolt, r.model)} ${msg(bolt, `approval.action.${r.action}`, r.action)}`
 					)
 					.join(', ')}
 			</p>
@@ -209,7 +209,7 @@ may decide now, a two-step form: pick Approve, Reject or Request changes, then g
 		{#if e.skipped !== undefined && e.skipped.length > 0}
 			<p class="text-caption text-warning-foreground dark:text-warning" data-skipped>
 				{msg(bolt, 'approval.skipped', 'Not restored')}: {e.skipped
-					.map((s) => `${label(bolt, s.collection, s.field)} (${skipText(bolt, s.reason)})`)
+					.map((s) => `${label(bolt, s.model, s.field)} (${skipText(bolt, s.reason)})`)
 					.join(', ')}
 			</p>
 		{/if}

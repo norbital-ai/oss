@@ -26,6 +26,11 @@ import { respondSystem1 } from '../src/test/effect.ts';
 import { clockProbe } from './support/clock-probe.ts';
 
 const size = (value: unknown) => new TextEncoder().encode(JSON.stringify(value)).length;
+const promptSchema = (content: unknown) => {
+	const prompt = Schema.decodeUnknownSync(Schema.String)(content);
+	const fence = /```json\r?\n([\s\S]*?)\r?\n```/.exec(prompt);
+	return Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Json))(fence?.[1]);
+};
 const row = (
 	seq: number,
 	over: Partial<Exclude<MessageRow, { role: 'tool' }>> = {}
@@ -195,7 +200,7 @@ describe('the context projection (rule 60)', () => {
 });
 
 describe('the workspace outline', () => {
-	it("names each collection's write contract and nested relation writes, so a write needs no type lookup", () => {
+	it("names each model's write contract and nested relation writes, so a write needs no type lookup", () => {
 		const m: EngineManifest = {
 			models: {
 				sites: {
@@ -210,27 +215,17 @@ describe('the workspace outline', () => {
 					unique: [{ fields: ['title'] }]
 				}
 			},
-			collections: {
+			exposures: {
 				sites: {
-					read: { fields: 'all' },
-					create: {
-						input: {
-							columns: ['name', 'code'],
-							with: { tasks: { create: { columns: ['title', 'site_id'] }, link: {} } }
-						}
-					},
-					update: {
-						input: {
-							columns: ['name', 'code'],
-							with: { tasks: { create: { columns: ['title', 'site_id'] }, link: {} } }
-						}
-					},
+					read: { sites: { fields: 'all' } },
+					create: { columns: { sites: ['name', 'code'], 'sites.tasks': ['title'] } },
+					update: { columns: { sites: ['name', 'code'], 'sites.tasks': ['title'] } },
 					delete: {}
 				},
 				jobs: {
-					read: { fields: 'all' },
-					create: { input: { columns: ['title'] } },
-					update: { input: { columns: ['title', 'done'] } },
+					read: { jobs: { fields: 'all' } },
+					create: { columns: { jobs: ['title'] } },
+					update: { columns: { jobs: ['title', 'done'] } },
 					syncs: {
 						sheet: { with: 'file', parser: ['json'] },
 						erp: { with: 'erp', every: '1h', read: true }
@@ -257,9 +252,11 @@ describe('the workspace outline', () => {
 			agent: { skills: {} }
 		};
 		const lines = outline(m, null).split('\n');
-		expect(lines.find((l) => l.startsWith('- sites'))).toContain(
-			'create(name, code?, tasks{create(title, site_id?), link}), update(as create), upsert, delete'
-		);
+		// a write layer is named by its relation with the columns its path declares (the FK to the parent is implied)
+		const sites = lines.find((l) => l.startsWith('- sites'));
+		expect(sites).toContain('create(name, code?');
+		expect(sites).toMatch(/tasks\{[^}]*title/);
+		expect(sites).not.toContain('site_id');
 		expect(lines.find((l) => l.startsWith('- jobs'))).toContain(
 			'create(title), update(title, done), upsert, sync sheet(file), sync erp(erp)'
 		);
@@ -511,8 +508,12 @@ describe('the AI port under the 20 s idle wall (rule 63)', () => {
 				expect(requests[0]!.tools!.map((t) => t.name)).toEqual(DRAFT_TOOLS);
 				expect(requests[0]!.output).toBeUndefined();
 				// the shape to build is in the prompt, as JSON Schema
-				expect(requests[0]!.messages[0]!.content).toContain('"required":["n"]');
-				expect(requests[0]!.messages[0]!.content).toContain('"n":{"type":"integer"}');
+				expect(promptSchema(requests[0]?.messages[0]?.content)).toEqual({
+					type: 'object',
+					additionalProperties: false,
+					properties: { n: { type: 'integer' }, note: { type: 'string' } },
+					required: ['n']
+				});
 				// each op is checked as it applies: the refused value never reaches the draft
 				expect(requests[1]!.messages.at(-1)).toMatchObject({
 					role: 'tool',
@@ -639,11 +640,7 @@ describe('the AI port under the 20 s idle wall (rule 63)', () => {
 					ok: true,
 					value: answer
 				});
-				const prompt = Schema.decodeUnknownSync(Schema.String)(requests[0]?.messages[0]?.content);
-				const advertised = Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Json))(
-					prompt.slice(prompt.lastIndexOf('\n') + 1)
-				);
-				expect(advertised).toEqual({
+				expect(promptSchema(requests[0]?.messages[0]?.content)).toEqual({
 					type: 'object',
 					properties: { intent: { type: 'string' }, summary: { type: 'string' } },
 					required: ['intent', 'summary'],
@@ -676,7 +673,9 @@ describe('the AI port under the 20 s idle wall (rule 63)', () => {
 					value: { intent: answer.intent, summary: answer.summary }
 				});
 				expect(closed.requests).toHaveLength(2);
-				expect(closed.requests[0]?.messages[0]?.content).toContain('"additionalProperties":false');
+				expect(promptSchema(closed.requests[0]?.messages[0]?.content)).toMatchObject({
+					additionalProperties: false
+				});
 				expect(closed.requests[1]?.messages.at(-1)?.content).toContain(
 					'/metadata: is not an input'
 				);
@@ -828,7 +827,7 @@ describe('the AI port under the 20 s idle wall (rule 63)', () => {
 					})
 			};
 			const { p, requests } = port([
-				tool('read', { collection: 'purchase_orders' }, 'r1'),
+				tool('read', { model: 'purchase_orders' }, 'r1'),
 				tool('read_answer', { path: '/note' }, 'r2'),
 				tool('submit', {})
 			]);
@@ -838,7 +837,7 @@ describe('the AI port under the 20 s idle wall (rule 63)', () => {
 					[records]
 				)
 			).toEqual({ ok: true, value: { n: 2, note: 'keep' } });
-			expect(seen).toEqual([{ collection: 'purchase_orders' }]);
+			expect(seen).toEqual([{ model: 'purchase_orders' }]);
 			expect(requests[0]!.tools!.map((t) => t.name)).toEqual([
 				'read',
 				'edit',

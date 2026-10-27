@@ -1,11 +1,11 @@
 packages:
   - packages/*
 catalog:
-  # One Effect release line for the realm; the unstable modules it ships are pinned with it.
-  '@effect/platform-node': 4.0.0-rc.112
-  '@effect/platform-node-shared': 4.0.0-rc.112
-  '@effect/vitest': 4.0.0-rc.112
-  effect: 4.0.0-rc.112
+  # One Effect release line for the realm; every module it ships, including the unstable ones, is pinned with it.
+  '@effect/platform-node': 4.0.6
+  '@effect/platform-node-shared': 4.0.6
+  '@effect/vitest': 4.0.6
+  effect: 4.0.6
   '@iconify/svelte': ^5.2.2
   runed: ^0.37.1
   svelte: ^5.57.1
@@ -42,7 +42,7 @@ patchedDependencies:
   '@whiskeysockets/baileys@7.0.0-rc14': patches/@whiskeysockets__baileys@7.0.0-rc14.patch
 
 overrides:
-  # platform-node asks for `^4.0.0-rc.112`, which a stable 4.x satisfies; hold it on the rc line.
+  # platform-node asks for `^4.0.6`, which any later 4.x satisfies; hold it on the catalog pin.
   '@effect/platform-node-shared': 'catalog:'
   kysely: ^0.29.4
   # TS 7 breaks svelte2tsx / @sveltejs/package. Pin workspace to latest 6.x.

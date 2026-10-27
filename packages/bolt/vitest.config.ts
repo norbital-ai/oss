@@ -47,7 +47,8 @@ function liveFixture(): Plugin {
 }
 
 // Suites split by filename: `*.integration.test.ts` needs PGlite (`BOLT_TEST_SUITE=integration`);
-// browser files follow https://vitest.dev/guide/browser/; every other `*.test.ts` is unit.
+// browser files follow https://vitest.dev/guide/browser/; every other `*.test.ts` is unit. Each project is
+// self-contained (`extends: false`): none inherits the root's plugins or test options.
 const integrationSuite = process.env.BOLT_TEST_SUITE === 'integration';
 const positiveInteger = (name: string, fallback: number): number => {
 	const value = Number(process.env[name] ?? fallback);
@@ -80,6 +81,7 @@ export default defineConfig({
 		projects: integrationSuite
 			? [
 					{
+						extends: false,
 						plugins: [svelte()],
 						resolve: { conditions: ['svelte', 'browser'] },
 						test: {
@@ -95,6 +97,7 @@ export default defineConfig({
 				]
 			: [
 					{
+						extends: false,
 						plugins: [svelte()],
 						resolve: { conditions: ['svelte', 'browser'] },
 						test: {
@@ -115,6 +118,7 @@ export default defineConfig({
 						}
 					},
 					{
+						extends: false,
 						plugins: [liveFixture(), svelte(), tailwindcss()],
 						optimizeDeps: { include: ['@norbital-ai/ui > leaflet'] },
 						test: {

@@ -79,6 +79,7 @@ const UI_TEXT = {
 	field: 'Field',
 	kind: 'Kind',
 	optional: 'Optional',
+	useDefault: 'Use default',
 	fields: 'Fields',
 	today: 'Today',
 	previous: 'Previous',

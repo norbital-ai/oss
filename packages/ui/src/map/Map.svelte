@@ -1,12 +1,12 @@
 <script lang="ts" module>
 	import type {
-		CollectionKey,
+		ModelKey,
 		FieldOf,
 		RecordFieldOf,
 		RowOf,
 		WhereOf
-	} from '../collection/types.js';
-	import type { Toolbar } from '../collection/ViewToolbar.svelte';
+	} from '../model/types.js';
+	import type { Toolbar } from '../model/ViewToolbar.svelte';
 	/** Extra marks drawn over the rows: a labelled point, and optionally a dashed line to it from `from`. */
 	export type MapOverlay = {
 		lat: number;
@@ -15,7 +15,7 @@
 		from?: { lat: number; lng: number };
 	};
 	/** Rows of `of` with a `point` field `at`, on the host's keyless basemap; a click opens the record. */
-	export type MapProps<C = CollectionKey> = {
+	export type MapProps<C = ModelKey> = {
 		of: C;
 		at: FieldOf<C>;
 		where?: WhereOf<C>;
@@ -32,7 +32,7 @@
 	};
 </script>
 
-<script lang="ts" generics="C extends CollectionKey">
+<script lang="ts" generics="C extends ModelKey">
 	import { Effect } from 'effect';
 	import { attach } from '../effect/index.js';
 	import { formatValue as show } from '../kinds/kind.js';
@@ -41,14 +41,15 @@
 	import { DEFAULT_BASEMAP, useKinds } from '../kinds/context.js';
 	import { openRecord } from '../record/navigation.js';
 	import { useBolt } from '../client/context.js';
-	import { and, compact } from '../filter/scope.js';
+	import { and } from '../filter/scope.js';
 	import { isRow, nextOf, rowsOf } from '../read/results.js';
 	import { label as labelOf, msg } from '../text/messages.js';
-	import { listSelect, refOf, unref } from '../relations/select.js';
+	import { listRequest, refOf, unref } from '../relations/select.js';
+	import { pageOf, requestJson } from '../read/request.js';
 	import ReadGate from '../read/ReadGate.svelte';
-	import { queryState } from '../read/state.js';
+	import { mapped, queryState } from '../read/state.js';
 	import { viewState } from '../filter/view-state.svelte.js';
-	import ViewToolbar from '../collection/ViewToolbar.svelte';
+	import ViewToolbar from '../model/ViewToolbar.svelte';
 
 	let {
 		of,
@@ -67,7 +68,7 @@
 	const catalog = $derived(host.catalog ?? {});
 	const view = viewState(bolt, {
 		key: () => key ?? of,
-		collection: () => of,
+		model: () => of,
 		catalog: () => catalog,
 		initialFilter: () => undefined
 	});
@@ -80,14 +81,22 @@
 	});
 	const page = $derived(
 		queryState(
-			bolt.query(
-				of,
-				compact({
-					where: and(where, view.where, { [at]: { isNull: false } }) ?? null,
-					search: search || undefined,
-					select: listSelect(host.catalog, of, label === undefined ? [] : [label]),
-					limit
-				})
+			mapped(
+				bolt.query(
+					requestJson(
+						listRequest(
+							host.catalog,
+							of,
+							{
+								where: and(where, view.where, { [at]: { isNull: false } }),
+								search: search || undefined,
+								limit
+							},
+							label === undefined ? [] : [label]
+						)
+					)
+				),
+				(answer) => pageOf(answer, of)
 			)
 		)
 	);
@@ -211,7 +220,7 @@
 
 <ViewToolbar
 	config={toolbar}
-	collection={of}
+	model={of}
 	{view}
 	{catalog}
 	author={where}

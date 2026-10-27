@@ -89,6 +89,7 @@ export const bootCell = async (source: string, options: CellOptions): Promise<Ce
 	const isolate = new ivm.Isolate({ memoryLimit: options.memoryMiB });
 	let billed = 0n,
 		current: Unit | undefined,
+		checkpoint = 0,
 		last: Unit = { id: BOOT },
 		heap = 0,
 		heapAt = 0,
@@ -154,6 +155,7 @@ export const bootCell = async (source: string, options: CellOptions): Promise<Ce
 		const release = await options.slot(unit.id);
 		const began = performance.now();
 		current = last = unit;
+		checkpoint = began;
 		try {
 			const answer = await work(Math.max(1, Math.floor(options.entryTimeoutMs(unit.id))));
 			if (Date.now() - heapAt > 1000) {
@@ -166,7 +168,7 @@ export const bootCell = async (source: string, options: CellOptions): Promise<Ce
 			throw fatal(error, unit);
 		} finally {
 			current = undefined;
-			meter(unit, began);
+			meter(unit, checkpoint);
 			release();
 			// what the cell answered during the entry reaches its caller now, its CPU already read
 			for (const [from, message] of answers.splice(0))
@@ -302,7 +304,13 @@ export const bootCell = async (source: string, options: CellOptions): Promise<Ce
 			cpuNanos: () => (isolate.isDisposed ? billed : isolate.cpuTime),
 			retired,
 			step: (unit) => {
-				if (current !== undefined) current.id = unit;
+				const owned = units.getStore() ?? current;
+				if (owned === undefined || owned.id === unit) return;
+				if (owned === current) {
+					meter(owned, checkpoint);
+					checkpoint = performance.now();
+				}
+				owned.id = unit;
 			},
 			dispose: () => die(failure('interrupted', 'The workspace engine was stopped.'))
 		};

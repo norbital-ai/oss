@@ -113,10 +113,10 @@ type ExportInput = Extract<typeof RunInput.Type, { mode: 'template' | 'export' }
 export function fileSyncAdmits(auth: Authority, model: string, input: Json): boolean {
 	if (auth.actor.kind !== 'member') return false;
 	if (auth.admin) return true;
-	const g = auth.collections[model];
+	const g = auth.models[model];
 	return Predicate.isObject(input) && input['mode'] === 'import'
 		? (g?.create.length ?? 0) + (g?.update.length ?? 0) > 0
-		: (g?.read.length ?? 0) > 0;
+		: (g?.read[model]?.length ?? 0) > 0;
 }
 
 const TEXT: InputKind = { kind: 'text' };
@@ -136,9 +136,12 @@ function columnsOf(
 				.filter(([, k]) => k.optional !== true && k.default === undefined)
 				.map(([f]) => f)
 		};
-	const c = m.collections[s.model],
+	const c = m.exposures[s.model],
 		fields = m.models[s.model]?.fields ?? {};
-	const names = new Set([...(c?.create?.input.columns ?? []), ...(c?.update?.input.columns ?? [])]);
+	const names = new Set([
+		...(c?.create?.columns[s.model] ?? []),
+		...(c?.update?.columns[s.model] ?? [])
+	]);
 	const columns = Object.fromEntries(
 		[...names].flatMap((f): [string, InputKind][] => {
 			const k = fields[f];
@@ -247,7 +250,7 @@ const facilityError = (error: PortFailure) =>
 			);
 
 /**
- * One sync body in the guest (`collection.<model>.bodies.syncs.<sync>.read|write|parse.<type>`), one fresh isolate: its
+ * One sync body in the guest (`model.<model>.bodies.syncs.<sync>.read|write|parse.<type>`), one fresh isolate: its
  * `ctx.db` reads under the member's authority. Parsers read uploaded bytes/text; export writers read bytes and images.
  */
 const body = Effect.fn('FileSyncs.body')(function* (
@@ -465,7 +468,7 @@ const importFile = Effect.fn('FileSyncs.import')(function* (
 	const verbOf = (model: string, list: readonly Obj[], where?: Json) =>
 		modelKey(m, model).length > 0
 			? {
-					collection: model,
+					model: model,
 					verb: 'import' as const,
 					input: {
 						rows: list,
@@ -473,7 +476,7 @@ const importFile = Effect.fn('FileSyncs.import')(function* (
 						...(where === undefined ? {} : { prune: where })
 					}
 				}
-			: { collection: model, verb: 'create' as const, input: list };
+			: { model: model, verb: 'create' as const, input: list };
 	const acts = [
 		...(rows.length === 0 && prune.length === 0
 			? []
@@ -682,7 +685,7 @@ export const fileSyncHandlers: Effect.Effect<
 	const services = yield* Effect.context<FileSyncServices>(),
 		m = yield* Manifest;
 	return Object.fromEntries(
-		Object.entries(m.collections).flatMap(([model, c]) =>
+		Object.entries(m.exposures).flatMap(([model, c]) =>
 			Object.entries(c.syncs ?? {}).flatMap(([sync, entry]): [string, RunHandler][] =>
 				entry.with === 'file'
 					? [

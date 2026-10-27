@@ -1,5 +1,5 @@
 /// <reference types="node" />
-// The built-in layer (`src/system/**`, owner rule 2026-09-26): bolt's own models, relationships and collections are
+// The built-in layer (`src/system/**`, owner rule 2026-09-26): bolt's own models, relationships and models are
 // declared as a workspace's are, discovered and loaded by the same compiler, merged into every workspace's schema plan,
 // catalogue and names, and reserved against a workspace. The expectations below cover the native schema contract.
 import { dirname, join } from 'node:path';
@@ -29,7 +29,7 @@ const EMPTY: EngineManifest = {
 	workspace: { tz: 'UTC', locale: 'en' },
 	models: {},
 	relationships: {},
-	collections: {},
+	exposures: {},
 	integrations: {},
 	policies: {},
 	teams: {},
@@ -240,6 +240,31 @@ const EXPECTED: { [table: string]: Shape } = {
 			'(isfinite(created_at))',
 			'(isfinite(lease_until))',
 			'(isfinite(updated_at))'
+		]
+	},
+	sys_envoy: {
+		key: 'id uuid primary key',
+		columns: {
+			name: 'text not null',
+			audience: 'text not null default private',
+			task: 'text not null default ',
+			policies: "text[] not null default '{}'::text[]",
+			group_messages: 'text not null default mention_or_reply',
+			delegation: 'text not null default disabled',
+			triage: 'boolean not null default false',
+			dm: 'text not null default union',
+			active: 'boolean not null default true',
+			created_at: 'timestamptz not null default now()',
+			revision: 'int not null default 1'
+		},
+		indexes: ['using gin (policies)'],
+		checks: [
+			"(audience in ('private', 'public'))",
+			"(delegation in ('enabled', 'disabled'))",
+			"(dm in ('union', 'envoy'))",
+			"(group_messages in ('disabled', 'mention_or_reply', 'all'))",
+			'(isfinite(created_at))',
+			"(not jsonb_path_exists(to_jsonb(policies), 'strict $[*] ? (@.type() != string)'))"
 		]
 	},
 	sys_file: {
@@ -643,9 +668,9 @@ describe('the built-in layer is compiled as a workspace is', () => {
 						JSON.stringify({
 							models: Object.fromEntries(parts.map(([name, part]) => [name, part.model])),
 							relationships: Object.assign({}, ...parts.map(([, part]) => part.relationships)),
-							collections: Object.fromEntries(
+							exposures: Object.fromEntries(
 								parts.flatMap(([name, part]) =>
-									part.collection === undefined ? [] : [[name, part.collection]]
+									part.model === undefined ? [] : [[name, part.model]]
 								)
 							),
 							integrations: Object.fromEntries(
@@ -668,11 +693,11 @@ describe('the built-in layer is compiled as a workspace is', () => {
 			}).pipe(Effect.provide(Platform))
 	);
 
-	it('every system collection has its model, and private auth, config and sync models are no collection', () => {
-		for (const c of Object.keys(SYSTEM.collections)) expect(SYSTEM.models[c]).toBeDefined();
+	it('every system model has its model, and private auth, config and sync models are no model', () => {
+		for (const c of Object.keys(SYSTEM.exposures)) expect(SYSTEM.models[c]).toBeDefined();
 		expect(
 			Object.keys(SYSTEM.models)
-				.filter((m) => !Object.hasOwn(SYSTEM.collections, m))
+				.filter((m) => !Object.hasOwn(SYSTEM.exposures, m))
 				.sort()
 		).toEqual([
 			'sys_challenge',
@@ -748,10 +773,10 @@ describe('the schema plan renders the built-in native contract', () => {
 	});
 });
 
-describe('the catalogue reads the system collections from their declarations', () => {
+describe('the catalogue reads the system models from their declarations', () => {
 	const cat = catalog(EMPTY);
-	it('exposes every system collection with its declared fields and relationships', () => {
-		expect([...cat.collections.keys()].sort()).toEqual(Object.keys(SYSTEM.collections).sort());
+	it('exposes every system model with its declared fields and relationships', () => {
+		expect([...cat.exposures.keys()].sort()).toEqual(Object.keys(SYSTEM.exposures).sort());
 		const user = cat.models.get('sys_user')!;
 		expect(user.fields.get('email')).toMatchObject({ email: true, pg: 'text' });
 		expect(user.fields.get('id')).toMatchObject({ pg: 'text' });
@@ -759,7 +784,7 @@ describe('the catalogue reads the system collections from their declarations', (
 		expect(user.one.has('team')).toBe(false);
 		expect(user.fields.get('team')).toMatchObject({ kind: 'text', team: true, pg: 'text' });
 		expect(cat.models.get('approval_request')!.fields.get('id')).toMatchObject({ pg: 'uuid' });
-		expect(cat.collections.get('sys_api_key')!.fields).toEqual(
+		expect(cat.exposures.get('sys_api_key')!.fields).toEqual(
 			new Set([
 				'name',
 				'prefix',
@@ -791,7 +816,7 @@ describe('a workspace cannot reach into the built-in layer', () => {
 			})
 		).pipe(Effect.provide(Platform));
 	it.effect(
-		"refuses a model or collection named as the layer's (sys_*, bolt_*, approval_request, requestor): discover/reserved-name",
+		"refuses a model or model named as the layer's (sys_*, bolt_*, approval_request, requestor): discover/reserved-name",
 		() =>
 			Effect.gen(function* () {
 				expect(

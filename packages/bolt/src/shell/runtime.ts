@@ -16,7 +16,7 @@ import {
 import { encodeWire, type Wired } from '@norbital-ai/std/wire';
 import type { Json } from '../decl/values.ts';
 import type { InputKind, ValueOf } from '../decl/fields.ts';
-import type { CollectionName, CustomFieldName, CustomShape, Row as RowOf } from '../decl/names.ts';
+import type { ModelName, CustomFieldName, CustomShape, Row as RowOf } from '../decl/names.ts';
 import { createBolt, type BoltConfig } from '../page/bolt.ts';
 import { fileRef } from '../page/file-ref.ts';
 import { toast } from '@norbital-ai/ui';
@@ -376,7 +376,7 @@ export function shellApi(
 			// hook:agent-ui — §5.9's remaining generated actions
 			setAgent: (conversation: string, agent: string) =>
 				act('sys_conversation.setAgent', { conversation, agent }),
-			file: (message: string, about: { collection: string; id: string } | null) =>
+			file: (message: string, about: { model: string; id: string } | null) =>
 				act('sys_message.file', { message, about }),
 			stop: (conversation: string) => act('sys_conversation.stop', { conversation }),
 			setModel: (conversation: string, model: string) =>
@@ -462,7 +462,7 @@ export function visitorFetch(
 /** `conversation`: the one to open (`null` a new one; absent: the one this tab last had), as `?agent=` names it. */
 export type AgentRequest = {
 	prompt?: string;
-	about?: { collection: string; id: string };
+	about?: { model: string; id: string };
 	conversation?: string | null;
 };
 /** The agent panel's open state; the shell renders the panel, the agent area its conversation. */
@@ -487,11 +487,11 @@ export function agentPanel() {
 }
 
 type Row = { readonly [field: string]: Json };
-type RowFor<C> = C extends CollectionName ? RowOf<C> : Row;
-/** X-20: what `+representation.svelte` receives, `{ view: RecordView<'<collection>'> }` (ui's views pass the same shape). */
+type RowFor<C> = C extends ModelName ? RowOf<C> : Row;
+/** X-20: what `+representation.svelte` receives, `{ view: RecordView<'<model>'> }` (ui's views pass the same shape). */
 export type RecordView<C extends string = string> =
-	| { collection: C; mode: 'update'; record: RowFor<C> }
-	| { collection: C; mode: 'create'; values: Partial<RowFor<C>> };
+	| { model: C; mode: 'update'; record: RowFor<C> }
+	| { model: C; mode: 'create'; values: Partial<RowFor<C>> };
 type CustomValue<F> = F extends CustomFieldName
 	? ValueOf<CustomShape<F>>
 	: import('@norbital-ai/std/kind').Value;

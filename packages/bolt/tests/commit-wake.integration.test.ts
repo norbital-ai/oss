@@ -76,13 +76,13 @@ it.effect('a mixed commit purges only erased history and triggers only ordinary 
 			...common,
 			writes: [
 				{
-					collection: 'orders',
+					model: 'orders',
 					id: first,
 					op: 'create',
 					values: { title: 'erase', note: 'personal' }
 				},
 				{
-					collection: 'orders',
+					model: 'orders',
 					id: second,
 					op: 'create',
 					values: { title: 'ordinary', note: 'retained' }
@@ -95,7 +95,7 @@ it.effect('a mixed commit purges only erased history and triggers only ordinary 
 			digest: 'mixed',
 			writes: [
 				{
-					collection: 'orders',
+					model: 'orders',
 					id: first,
 					op: 'update',
 					revision: 1,
@@ -103,7 +103,7 @@ it.effect('a mixed commit purges only erased history and triggers only ordinary 
 					erased: true
 				},
 				{
-					collection: 'orders',
+					model: 'orders',
 					id: second,
 					op: 'update',
 					revision: 1,
@@ -111,14 +111,14 @@ it.effect('a mixed commit purges only erased history and triggers only ordinary 
 					erased: false
 				}
 			],
-			erasures: [{ mode: 'anonymise', collection: 'orders', ids: [first], purge: ['note'] }]
+			erasures: [{ mode: 'anonymise', model: 'orders', ids: [first], purge: ['note'] }]
 		});
 		expect(answer?.captured.map((row) => ({ id: row.id, cause: row.cause }))).toEqual([
 			{ id: first, cause: 'erased' },
 			{ id: second, cause: 'direct' }
 		]);
 		const runs = yield* db.read([{ text: 'SELECT input FROM sys_run ORDER BY id', params: [] }]);
-		expect(runs[0]?.rows).toEqual([{ input: { collection: 'orders', ids: [second] } }]);
+		expect(runs[0]?.rows).toEqual([{ input: { model: 'orders', ids: [second] } }]);
 		const history = yield* db.read([
 			{
 				text: 'SELECT record::text AS id, changes FROM bolt_history WHERE revision = 1 ORDER BY record',

@@ -322,7 +322,7 @@ describe('native tagged failures', () => {
 	it.effect('typed failures retain their class and fields across an Effect boundary', () =>
 		Effect.gen(function* () {
 			const tags = [
-				new Conflict({ records: [{ collection: 'orders', id: 'o1', fields: ['qty'] }] }),
+				new Conflict({ records: [{ model: 'orders', id: 'o1', fields: ['qty'] }] }),
 				new Fenced({ instance: 'i1', message: 'another link took i1' }),
 				new Interrupted(),
 				new SerializationReplay(),

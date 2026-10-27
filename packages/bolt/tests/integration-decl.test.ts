@@ -47,7 +47,7 @@ export default model('lines', { description: 'Ledger lines', label: 'code', key:
 				description: 'The notices mailbox',
 				driver: 'email'
 			});
-			expect(manifest.collections['lines']?.syncs?.['ledger']).toEqual({
+			expect(manifest.exposures['lines']?.syncs?.['ledger']).toEqual({
 				with: 'books',
 				every: '1h',
 				read: true,

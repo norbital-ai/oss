@@ -39,7 +39,7 @@ export const PATHS = {
 	agent: `${BOLT}/agent`,
 	/**
 	 * `GET ?id=` the approval view of one request, for a participant or an authorized reader of its referenced record; without `id`,
-	 * the views the caller may see, filtered by `collection`, `record` and `request` (each repeated) and `all` (closed
+	 * the views the caller may see, filtered by `model`, `record` and `request` (each repeated) and `all` (closed
 	 * ones too).
 	 */
 	approval: `${BOLT}/approval`,
@@ -47,11 +47,11 @@ export const PATHS = {
 } as const;
 /** The workspace path a notice opens: its linked record over the inbox, or the inbox. */
 export const noticePath = (
-	link: { readonly collection: string; readonly id: string } | null
+	link: { readonly model: string; readonly id: string } | null
 ): string =>
 	link === null
 		? '/inbox'
-		: `/inbox?record=${encodeURIComponent(link.collection)}/${encodeURIComponent(link.id)}`;
+		: `/inbox?record=${encodeURIComponent(link.model)}/${encodeURIComponent(link.id)}`;
 /** The service worker web push needs (§5.7), served by the shell host with `Service-Worker-Allowed: /`. */
 export const SW = `${BOLT}/sw.js`;
 export const HEADERS = {

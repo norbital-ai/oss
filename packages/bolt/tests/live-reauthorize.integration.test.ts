@@ -3,7 +3,7 @@
 // of refusing; another member is still refused.
 import { expect, it } from '@effect/vitest';
 import { Context, Effect, Layer, Queue, Schema, Stream } from 'effect';
-import { Sse } from 'effect/unstable/encoding';
+import { Sse } from 'effect/encoding';
 import type { Authority } from '../src/engine/contracts.ts';
 import type { EngineManifest } from '../src/engine/manifest.ts';
 import { Authorities } from '../src/engine/identity/actor.ts';
@@ -15,7 +15,7 @@ const manifest = {
 	workspace: { tz: 'UTC', locale: 'en', agent: { triage: false } },
 	models: {},
 	relationships: {},
-	collections: {},
+	exposures: {},
 	policies: {},
 	agent: { internal: 'Staff brief.', skills: {} },
 	integrations: {},
@@ -94,7 +94,7 @@ it.live(
 				who = {
 					...ann,
 					key: `${ann.key}:bound`,
-					actor: { ...ann.actor, party: { collection: 'customers', id: 'c1' } }
+					actor: { ...ann.actor, party: { model: 'customers', id: 'c1' } }
 				};
 				expect((yield* register('b')).status).toBe(200);
 				yield* until(() => answers('a') === 2 && answers('b') === 1);

@@ -13,7 +13,7 @@ import {
 	type ManagedRuntime,
 	type Scope
 } from 'effect';
-import * as AsyncResult from 'effect/unstable/reactivity/AsyncResult';
+import * as AsyncResult from 'effect/reactivity/AsyncResult';
 import { watch } from 'runed';
 import { untrack } from 'svelte';
 import type { Attachment } from 'svelte/attachments';

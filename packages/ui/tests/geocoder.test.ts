@@ -3,7 +3,7 @@
 import assert from 'node:assert/strict';
 import { it } from '@effect/vitest';
 import { Effect } from 'effect';
-import { FetchHttpClient } from 'effect/unstable/http';
+import { FetchHttpClient } from 'effect/http';
 import { photonGeocoder, regionOf } from '../src/kinds/context.ts';
 
 const feature = (country: string, street: string, city: string) => ({

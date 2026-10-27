@@ -138,7 +138,7 @@ export const openAiEmbeddings = <E>(config: EmbeddingsConfig<E>) => {
 			const meter = config.meter;
 			if (meter !== undefined && Number.isFinite(cost) && cost > 0)
 				yield* Effect.gen(function* () {
-					const id = answer.id ?? `embed:${yield* (yield* Crypto.Crypto).randomUUIDv4}`;
+					const id = answer.id ?? `embed:${yield* (yield* Crypto.Crypto).randomUUIDv4()}`;
 					yield* meter(cost, id);
 				}).pipe(Effect.tapCause(Effect.logWarning), Effect.ignore);
 		}

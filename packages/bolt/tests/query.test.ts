@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { Encoding } from 'effect';
+import { Base64Url } from 'effect/encoding';
 import { catalog } from '../src/protocol/catalog.ts';
 import { evaluate, likeRegex } from '../src/engine/query/eval.ts';
 import {
@@ -56,8 +56,8 @@ describe('next query: decode', () => {
 		];
 		for (const cursor of [
 			'!',
-			Encoding.encodeBase64Url('{'),
-			...malformed.map((value) => Encoding.encodeBase64Url(JSON.stringify(value)))
+			Base64Url.encode('{'),
+			...malformed.map((value) => Base64Url.encode(JSON.stringify(value)))
 		])
 			expect(() => after(cursor)).toThrowError(expect.objectContaining({ code: 'badCursor' }));
 	});
@@ -132,7 +132,7 @@ describe('next query: decode', () => {
 	});
 
 	it('rule 13: a caller without a read grant is forbidden; a field outside exposure does not exist (rule 10)', () => {
-		const none = { ...rep, collections: {} };
+		const none = { ...rep, exposures: {} };
 		expect(
 			code(() =>
 				storeSync(
@@ -162,7 +162,7 @@ describe('next query: decode', () => {
 						cat,
 						{
 							kind: 'read',
-							collection: 'notes',
+							model: 'notes',
 							select: { fields: ['id'], relations: {} },
 							page: { _tag: 'Limit', limit: 1 },
 							where: { t: 'null', field: 'revision', is: false }
@@ -172,7 +172,7 @@ describe('next query: decode', () => {
 				)
 			)
 		).toBe('ok');
-		const orders = cat.collections.get('orders')!;
+		const orders = cat.exposures.get('orders')!;
 		expect(orders.model.fields.get('total')?.pg).toBe('numeric');
 	});
 

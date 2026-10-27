@@ -49,7 +49,7 @@ Each word names one thing:
 | ----------- | -------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------- |
 | Environment | An operating environment: local, staging or production, and a tenant environment inside one.                         | The operator CLI that resets and operates environments; never a workspace setting. |
 | Secrets     | Encrypted values stored in the tenant database, read by server code.                                                 | `src/+secrets.ts` with `secrets({ NAME: { label } })`.                             |
-| Server code | Transforms, queries, automations, syncs, integrations and page loaders.                                              | The `ctx` each receives; declarations from `@norbital-ai/bolt`.                    |
+| Server code | Transforms, policy checks, automations, syncs, integrations and page loaders.                                              | The `ctx` each receives; declarations from `@norbital-ai/bolt`.                    |
 | Page SDK    | What browser-side page code calls.                                                                                   | `@norbital-ai/bolt/page`, imported in pages as `$bolt`.                            |
 | Device      | What the shell running the page provides: location, notifications, push, background notices, opening external links. | `bolt.device` in pages; a shell installs `window.boltDevice`.                      |
 | Shell       | The container a workspace runs in, which implements Device.                                                          | The web shell built into Bolt; native apps from `@norbital-ai/app-shell`.          |
@@ -74,7 +74,7 @@ Each word names one thing:
 
 ## Authoring and pages
 
-Import declarations from `@norbital-ai/bolt`. Transforms, queries, automation runs and
+Import declarations from `@norbital-ai/bolt`. Transforms, policy checks, automation runs and
 effectful sync bodies use `function*` and `yield* ctx.…`. Pure validators,
 search callbacks and row mapping remain plain functions. Guest helpers
 use `Effect.fnUntraced` or `Effect.fnUntracedEager`; Bolt owns the invocation runtime.
@@ -100,9 +100,9 @@ it (`coverage.all(c, c.status != 'pending')`). `jsonDiff(before, after, output?)
 pure comparison, for verifying changed rows and composing a change summary.
 
 With `runAs` policies, `tools` may name `'read'` beside host tools: the model reads workspace
-records as those policies (grants, field masks and row scopes as for `ctx.query`), one bounded
-engine read per call (default 50 rows, at most 200; up to 8 batched), across as many turns as
-`steps` allows. A `runAs: 'trigger'` run cannot offer it. The draft's reader is then named
+records as those policies (grants, field masks and row scopes as for `ctx.query`), one read
+request per call: a layer map whose keys are the caller's roots and their declared layers (unknown
+keys refused; a root reads 50 rows unless it sets `limit`), across as many turns as `steps` allows. A `runAs: 'trigger'` run cannot offer it. The draft's reader is then named
 `read_answer`.
 
 ```ts
@@ -121,7 +121,8 @@ Read open purchase_orders and goods_receipts for this supplier; match quantities
 	});
 ```
 
-Pages import the typed `bolt` from `$bolt`. `bolt.query(name, args)` returns a `Query<T>`:
+Pages import the typed `bolt` from `$bolt`. `bolt.query(request)` takes a read request (a layer
+map) and returns a `Query<T>`:
 reactive reads of `.current`, `.loading` or `.error` subscribe; awaiting it in an event handler reads
 once; `yield*` composes it as an Effect. Identical reads share a subscription, released after its
 last reactive reader leaves. `aggregate` and `history` use the same live/once contract. Capture
@@ -150,7 +151,7 @@ previews and the People team picker all read the manifest. `{ actor: 'teams' | '
 ## Record history and restore
 
 Every committed write appends to `bolt_history`: one revision per record, with who, when, its
-cause and the fields it changed. `bolt.history(c, id)` lists them; `bolt.query(c, { id, revision })` folds the record as of one. Pruning keeps the newest 256 revisions per record and
+cause and the fields it changed. `bolt.history(c, id)` lists them; `bolt.history(c, id, { at: { revision } })` lists from one, and a root's `asOf` reads the record as it stood at an instant. Pruning keeps the newest 256 revisions per record and
 folds the rest into a full-row anchor, so every kept revision still rebuilds.
 
 Three restores, never the same thing:
@@ -162,7 +163,7 @@ Three restores, never the same thing:
 | Source rollback        | The workspace code, to a deployment commit. Data is untouched.                             | Studio's deployment history.                     |
 
 Per-record restore is two own callables, `history.preview` and `history.restore`, each taking
-`{ collection, record, revision }` (`bolt.restore.preview` / `bolt.restore.run` in pages). The
+`{ model, record, revision }` (`bolt.restore.preview` / `bolt.restore.run` in pages). The
 preview lists each field that would change (current and restored value) and each one left alone,
 with its reason: a link whose target was deleted, read-only (integration-owned or the owned
 parent's key), no grant, a locked state move, masked, or a definition that changed. Only the
@@ -225,24 +226,37 @@ copies. Unresolved recovery fences remain during an audit-store outage.
 
 ## Approvals
 
-A write grant's pure `approval(write, flow)` callback returns a flow. `write` contains
-`op`, `record`, `previous`, `changed` and `requester`, typed from the model. A direct grant from
-another held policy executes directly; without any matching grant the write is refused.
+A policy grants per model, as layer maps typed from the model's own declaration. A `read` grant
+is `true` or `{ '<model>': { where?, fields? }, '<model>.<rel>': { where?, fields? }, … }`: the root's
+`where` scopes the roots (it may hop relations), a deeper layer's `where` filters that layer's rows
+(or nulls a ref) and never removes the root, `fields` masks within the layer. A `create` or `update`
+grant is `true` or `{ columns?: { '<model>': [...], '<model>.<rel>': [...] }, check? }`; `delete` is
+`true` or `{ check? }`. `columns` is checked before any guest code; `check` judges the whole batch,
+nested layers included, and returns a verdict: `ctx.allow()`, `ctx.deny(message, { row?, path?, field? })`
+or `ctx.approve((flow) => …)`. Among the holder's policies any `allow` executes; otherwise the first
+`approve` in the team's policy order holds the batch for its flow; otherwise the first `deny` refuses it
+(`code: 'refused'`, `rule: '<policy>.<model>.<op>'`, with its `row`, `path` and `field`). A grant
+guards its root's whole tree: a layer is never judged by its own model's policy.
 
 ```ts
 create: {
-  fields: ['job', 'title', 'amount'],
-  approval: (write, flow) => flow
-    .step('Controller review', { teams: ['controllers'] })
-    .if(write.record.amount !== null && write.record.amount.gte(5000),
-      (f) => f.step('Commercial sign-off', { teams: ['commercial'] }))
-    .supersededBy(['controllers'])
+  columns: { variations: ['job', 'title', 'amount'] },
+  check: function* (rows, ctx) {
+    const big = rows.some((r) => Number(r.amount) >= 5000);
+    return ctx.approve((flow) => flow
+      .step('Controller review', { teams: ['controllers'] })
+      .if(big, (f) => f.step('Commercial sign-off', { teams: ['commercial'] }))
+      .supersededBy(['controllers']));
+  }
 }
 ```
 
+A check reads with `ctx.db.query(readRequest)` as the workspace, at most 10 crossings per call, and does
+no I/O or writes. Its arguments are the create trees, `{ before, set }` per update (`before` the
+stored tree of the layers the update declares) or the stored rows a delete removes.
+
 `step(name, { teams?, users? })` appends one step; any listed approver may decide it.
-`if`, `else`, `allow()` and `deny(message)` express conditional routing. Callbacks have no reads
-or I/O. The flow is snapshotted when the request opens and evaluated again on resubmit; changed
+`if`, `else`, `allow()` and `deny(message)` express conditional routing. The flow is snapshotted when the request opens and evaluated again on resubmit; changed
 steps restart at the first step. A new release does not rewrite an open request's saved flow.
 
 A routed write commits provisionally with history and a checkpoint of every held record.
@@ -343,7 +357,7 @@ hosts test their own behavior independently of template suites.
 
 ## CLI and publication
 
-The CLI is declared with `effect/unstable/cli` in `src/cli/main.ts`. `bolt sync`, `check`, `build`, `test`,
+The CLI is declared with `effect/cli` in `src/cli/main.ts`. `bolt sync`, `check`, `build`, `test`,
 `dev` and `start` operate on one workspace. From a template repository root, `bolt templates`
 provides `check`, `lock`, `verify` and `publish`; publication creates immutable projection refs
 and checks fast-forward ancestry. Repository scripts may delegate to those commands.

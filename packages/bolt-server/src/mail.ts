@@ -34,7 +34,7 @@ export const messaging = Effect.fn('server.messaging')(function* (
 ) {
 	const configured =
 		config.transactional === null ? {} : yield* transactional(config.transactional);
-	const context = yield* Effect.context<import('effect/unstable/http/HttpClient').HttpClient>();
+	const context = yield* Effect.context<import('effect/http/HttpClient').HttpClient>();
 	const email = configured.email,
 		sms = configured.sms,
 		configuredPhone = configured.phone;

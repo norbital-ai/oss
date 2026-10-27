@@ -6,7 +6,7 @@
 	import Table from '../src/table/Table.svelte';
 	import { provideBolt } from '../src/client/context.js';
 	import { type ViewBolt } from '../src/client/contract.js';
-	import { type Row } from '../src/collection/types.js';
+	import { type Row } from '../src/model/types.js';
 	import { provideKinds } from '../src/kinds/context.js';
 	type LocalRow = Row & { name: string; amount: number };
 	let {

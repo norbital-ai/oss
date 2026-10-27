@@ -1,9 +1,9 @@
 <script lang="ts" module>
-	import type { CollectionKey, FieldOf, WhereOf } from '../collection/types.js';
+	import type { ModelKey, FieldOf, WhereOf } from '../model/types.js';
 	import type { PivotValue } from './grid.js';
-	import type { Toolbar } from '../collection/ViewToolbar.svelte';
-	/** The props of `Pivot`, typed by the collection `of`. */
-	export type PivotProps<C = CollectionKey> = {
+	import type { Toolbar } from '../model/ViewToolbar.svelte';
+	/** The props of `Pivot`, typed by the model `of`. */
+	export type PivotProps<C = ModelKey> = {
 		of: C;
 		rows: FieldOf<C>;
 		cols?: FieldOf<C>;
@@ -15,7 +15,7 @@
 	};
 </script>
 
-<script lang="ts" generics="C extends CollectionKey">
+<script lang="ts" generics="C extends ModelKey">
 	// One live aggregate by `[rows, cols]` rendered as a grid with totals.
 	import { useBolt } from '../client/context.js';
 	import { and, compact } from '../filter/scope.js';
@@ -26,7 +26,7 @@
 	import { queryState } from '../read/state.js';
 	import { useKinds } from '../kinds/context.js';
 	import { viewState } from '../filter/view-state.svelte.js';
-	import ViewToolbar from '../collection/ViewToolbar.svelte';
+	import ViewToolbar from '../model/ViewToolbar.svelte';
 
 	let { of, rows, cols, value, where, toolbar = {}, key }: PivotProps<C> = $props();
 	const bolt = useBolt();
@@ -34,7 +34,7 @@
 	const catalog = $derived(kinds.catalog ?? {});
 	const view = viewState(bolt, {
 		key: () => key ?? of,
-		collection: () => of,
+		model: () => of,
 		catalog: () => catalog,
 		initialFilter: () => undefined
 	});
@@ -52,7 +52,7 @@
 	const fmt = (n: number) => new Intl.NumberFormat(bolt.locale).format(n);
 </script>
 
-<ViewToolbar config={toolbar} collection={of} {view} {catalog} author={where} />
+<ViewToolbar config={toolbar} model={of} {view} {catalog} author={where} />
 <ReadGate state={queryState(agg)} what={label(bolt, of)}>
 	{#snippet children(v)}
 		{@const g = pivotGrid(objectsOf(v), rows, cols, value)}

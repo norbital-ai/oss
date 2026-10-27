@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { Effect, Option, Schema } from 'effect';
-import { Argument, Command, Flag } from 'effect/unstable/cli';
-import { FetchHttpClient } from 'effect/unstable/http';
+import { Argument, Command, Flag } from 'effect/cli';
+import { FetchHttpClient } from 'effect/http';
 import * as NodeRuntime from '@effect/platform-node/NodeRuntime';
 import * as NodeServices from '@effect/platform-node/NodeServices';
 import { resolve } from 'node:path';
@@ -11,7 +11,7 @@ import { init } from './init.ts';
 import { AppShellFailure } from './process.ts';
 import { build, deploy, PLATFORMS, run } from './release.ts';
 
-const dir = Argument.string('dir').pipe(Argument.withDefault('.'));
+const dir = Argument.String('dir').pipe(Argument.withDefault('.'));
 const Platforms = Schema.Array(Schema.Literals(['ios', 'android']));
 /** `--platform ios,android`, each named once. */
 const platforms = (value: string) =>
@@ -24,19 +24,19 @@ const platforms = (value: string) =>
 				})
 		)
 	);
-const platformList = Flag.string('platform').pipe(Flag.withDefault('ios,android'));
+const platformList = Flag.String('platform').pipe(Flag.withDefault('ios,android'));
 
 const appShell = Command.make('norbital-app').pipe(
 	Command.withSubcommands([
-		Command.make('init', { dir: Argument.string('dir') }, ({ dir }) => init(resolve(dir))),
+		Command.make('init', { dir: Argument.String('dir') }, ({ dir }) => init(resolve(dir))),
 		Command.make('generate', { dir }, ({ dir }) => generate(resolve(dir)).pipe(Effect.asVoid)),
 		Command.make('doctor', { dir }, ({ dir }) => doctor(resolve(dir))),
 		Command.make(
 			'run',
 			{
 				dir,
-				platform: Flag.choice('platform', ['ios', 'android']),
-				target: Flag.string('target').pipe(Flag.optional)
+				platform: Flag.Literals('platform', ['ios', 'android']),
+				target: Flag.String('target').pipe(Flag.optional)
 			},
 			({ dir, platform, target }) => run(resolve(dir), platform, Option.getOrUndefined(target))
 		),

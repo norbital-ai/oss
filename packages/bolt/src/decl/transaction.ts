@@ -5,20 +5,13 @@ import type {
 	Callable,
 	Committed,
 	Eff,
-	ListResult,
-	Page,
-	Paged,
 	PendingApproval,
-	QueryMember,
-	QuerySet,
-	QuerySetAnswer,
-	ReadResult,
-	Select
+	ReadAnswer,
+	ReadRequest,
+	ReadRequestBase
 } from './ctx.ts';
 import type { ActConflict, ActRefused, ActUnknown } from './errors.ts';
-import type { Is, OneRels, OneTarget, ReadableName, RelTarget } from './names.ts';
-import type { Id } from './values.ts';
-import type { OrderBy, Where } from './where.ts';
+import type { Is } from './names.ts';
 
 /** Internal instruction identity; transaction callbacks cannot yield ordinary Effects. */
 export const txInstruction = Symbol('@norbital-ai/bolt/transaction');
@@ -36,15 +29,6 @@ export interface TxStep<out A> {
 }
 
 type TxCallable = Extract<Callable, `${string}.${'create' | 'update' | 'upsert' | 'delete'}`>;
-type TxCurrent = { readonly revision?: never; readonly search?: never; readonly mode?: never };
-type TxRelationSelect<C, K, V> = V extends { select: infer S }
-	? V & {
-			readonly select: TxSelect<K extends keyof OneRels<C> ? OneTarget<C, K> : RelTarget<C, K>, S>;
-		}
-	: V;
-type TxSelect<C, S> = S & {
-	readonly [K in keyof S]: K extends keyof Select<C> ? TxRelationSelect<C, K, S[K]> : never;
-};
 type TxOptions<N> = N extends `${string}.upsert`
 	? [
 			options: {
@@ -70,29 +54,10 @@ export interface TxAct {
 
 /** Caller-scoped model reads and guarded writes on the same native session, including its earlier writes. */
 export interface TxCtx {
-	/** One current record, or null when absent or outside the caller's read scope. */
-	query<C extends string, const S extends Select<C> = {}>(
-		model: Is<C, ReadableName>,
-		args: { id: NoInfer<Id<C>>; select?: TxSelect<C, S> } & TxCurrent
-	): TxStep<ReadResult<C, S> | null>;
-	/** A current page with an explicit limit or all, retaining the caller's field masks and relation scopes. */
-	query<C extends string, const S extends Select<C> = {}>(
-		model: Is<C, ReadableName>,
-		args: {
-			where?: NoInfer<Where<C>>;
-			select?: TxSelect<C, S>;
-			orderBy?: NoInfer<OrderBy<C>>;
-		} & Paged &
-			TxCurrent
-	): TxStep<Page<ListResult<C, S>>>;
-	/** Several native model reads, keyed by their authored names. */
-	query<const M extends QuerySet>(
-		set: M & {
-			readonly [K in keyof M]: QueryMember<M[K]['from']> &
-				TxCurrent &
-				(M[K] extends { select: infer S } ? { select: TxSelect<M[K]['from'], S> } : unknown);
-		}
-	): TxStep<QuerySetAnswer<M>>;
+	/** A read request (roots and their declared layers) on the same session, under the caller's authority; no `asOf`. */
+	query<const R extends ReadRequestBase>(
+		request: ReadRequest<R> & { readonly [K in keyof R]: { readonly asOf?: never } }
+	): TxStep<ReadAnswer<R>>;
 	readonly act: TxAct;
 }
 

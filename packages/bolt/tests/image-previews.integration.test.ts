@@ -15,7 +15,7 @@ const manifest = {
 	workspace: { tz: 'UTC', locale: 'en' },
 	models: {},
 	relationships: {},
-	collections: {},
+	exposures: {},
 	policies: {},
 	integrations: {},
 	teams: {},

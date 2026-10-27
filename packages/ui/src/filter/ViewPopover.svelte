@@ -4,11 +4,11 @@
 	// The view popover of `Table` and `Board` (rule 16b, P34): one filter-and-sort toolbar icon. The main control is
 	// "Describe what to show…" (when the host can describe, rule 16a); the author's scope read-only, relations by their
 	// label; explicit conditions and sort (≤ 4 keys) stay in a collapsed accordion when a describer is available.
-	import type { CollectionExposure } from '../kinds/context.js';
+	import type { ModelExposure } from '../kinds/context.js';
 	import Icon from '@iconify/svelte';
 	import { CONTROL } from '../kinds/classes.js';
 	import Combobox from '../primitives/combobox/combobox.svelte';
-	import ToolbarFilter from '../collection/toolbar/ToolbarFilter.svelte';
+	import ToolbarFilter from '../model/toolbar/ToolbarFilter.svelte';
 	import { cn } from '../primitives/utils.js';
 	import type { Json } from '../client/contract.js';
 	import { useBolt } from '../client/context.js';
@@ -33,13 +33,13 @@
 	let {
 		view,
 		catalog,
-		collection,
+		model,
 		author,
 		sortable
 	}: {
 		view: ViewState;
-		catalog: { readonly [c: string]: CollectionExposure };
-		collection: string;
+		catalog: { readonly [c: string]: ModelExposure };
+		model: string;
 		/** The author's `where`: shown, never removable. */
 		author?: Json;
 		sortable: readonly string[];
@@ -67,10 +67,10 @@
 		view.offers.find((o) => o.op === op && pathOf(o.path).endsWith(path))?.opLabel ?? op;
 	const authorText = $derived.by(() => {
 		if (author === undefined || author === null) return null;
-		const rows = fromWhere(catalog, collection, author);
+		const rows = fromWhere(catalog, model, author);
 		return rows === null
 			? JSON.stringify(author)
-			: rows.map((n) => nodeText(catalog, collection, n, humanize, named, opWords)).join(' and ');
+			: rows.map((n) => nodeText(catalog, model, n, humanize, named, opWords)).join(' and ');
 	});
 	const setRow = (i: number, n: FilterRow) =>
 		view.setRows(view.rows.map((x, j) => (j === i ? n : x)));
@@ -201,7 +201,7 @@
 					<FilterNode
 						node={n}
 						{catalog}
-						{collection}
+						{model}
 						offers={view.offers}
 						top
 						onChange={(x) => setRow(i, x)}
@@ -236,7 +236,7 @@
 							{#if k.near !== undefined}
 								<!-- nearest first from a described place: shown, not re-pointed here -->
 								<span class="text-sm" data-sort-near
-									>{sortText(catalog, collection, k, humanize)}</span
+									>{sortText(catalog, model, k, humanize)}</span
 								>
 							{:else}
 								<Combobox
@@ -250,7 +250,7 @@
 										.filter((f) => f === k.field || !view.order.some((o) => o.field === f))
 										.map((f) => ({
 											value: f,
-											label: pathLabel(catalog, collection, f, humanize)
+											label: pathLabel(catalog, model, f, humanize)
 										}))}
 								/>
 								<Combobox

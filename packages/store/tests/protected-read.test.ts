@@ -76,7 +76,7 @@ describe('read contract', () => {
 			expect(stored).toMatchObject({ kind: 'similar', index: 'stored' });
 			const scope: Scope = {
 				rows: () => undefined,
-				mask: (_collection, field) =>
+				mask: (_model, field) =>
 					field === 'vector' ? { t: 'const', value: false } : undefined
 			};
 			const storedSql = yield* compile(

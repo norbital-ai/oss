@@ -5,8 +5,8 @@ A grid of `rows` records by `cols` values (dates or a relation) whose cells hold
 <script lang="ts" module>
 	import type { Snippet } from 'svelte';
 	import type { Json } from '../client/contract.js';
-	import type { Row } from '../collection/types.js';
-	import type { Toolbar } from '../collection/ViewToolbar.svelte';
+	import type { Row } from '../model/types.js';
+	import type { Toolbar } from '../model/ViewToolbar.svelte';
 
 	/** A background overlay per column (holidays, closures), optionally per row (M3). */
 	export type MatrixMark = { of: string; at: string; row?: string; label: string };
@@ -14,11 +14,11 @@ A grid of `rows` records by `cols` values (dates or a relation) whose cells hold
 	export type MatrixCell = { row: string; col: Json };
 	/** The props of `Matrix`. */
 	export type MatrixProps = {
-		/** The row collection, paged 50 at a time by its `rowLabel` (final-ui 29b). */
+		/** The row model, paged 50 at a time by its `rowLabel` (final-ui 29b). */
 		rows: string;
 		rowLabel: string;
 		rowWhere?: Json;
-		/** The item collection; `row` is its relation to `rows`, `col` its date or relation field. */
+		/** The item model; `row` is its relation to `rows`, `col` its date or relation field. */
 		of: string;
 		row: string;
 		col: string;
@@ -53,17 +53,17 @@ A grid of `rows` records by `cols` values (dates or a relation) whose cells hold
 	import { openRecord } from '../record/navigation.js';
 	import { useBolt } from '../client/context.js';
 	import { actOutcome, outcomeText } from '../actions/outcome.js';
-	import { and, compact } from '../filter/scope.js';
+	import { and } from '../filter/scope.js';
 	import { cellKey, MATRIX_PAGE, matrixCells } from './cells.js';
 	import { isRow, nextOf, rowsOf } from '../read/results.js';
 	import { label, msg } from '../text/messages.js';
-	import { selectOf } from '../relations/select.js';
+	import { pageOf, READ_LIMIT, requestJson } from '../read/request.js';
 	import { valueAt } from '../cell/value.js';
 	import ReadGate from '../read/ReadGate.svelte';
-	import { queryState } from '../read/state.js';
+	import { mapped, queryState } from '../read/state.js';
 	import RecordShell from '../record/RecordShell.svelte';
 	import Value from '../cell/Value.svelte';
-	import ViewToolbar from '../collection/ViewToolbar.svelte';
+	import ViewToolbar from '../model/ViewToolbar.svelte';
 	import { useKinds } from '../kinds/context.js';
 
 	let {
@@ -104,15 +104,19 @@ A grid of `rows` records by `cols` values (dates or a relation) whose cells hold
 	let back = $state<(string | null)[]>([]);
 	const rowPage = $derived(
 		queryState(
-			bolt.query(
-				rows,
-				compact({
-					where: rowWhere,
-					orderBy: { [rowLabel]: 'asc' },
-					select: selectOf([rowLabel]),
-					limit: MATRIX_PAGE,
-					after: after ?? undefined
-				})
+			mapped(
+				bolt.query(
+					requestJson({
+						[rows]: {
+							where: rowWhere,
+							orderBy: { [rowLabel]: 'asc' },
+							fields: [rowLabel],
+							limit: MATRIX_PAGE,
+							after: after ?? undefined
+						}
+					})
+				),
+				(answer) => pageOf(answer, rows)
 			)
 		)
 	);
@@ -130,22 +134,36 @@ A grid of `rows` records by `cols` values (dates or a relation) whose cells hold
 		queryState(
 			ids.length === 0
 				? null
-				: bolt.query(of, {
-						where: and(where, { [row]: { in: ids } }, { [col]: { in: colValues } }) ?? null,
-						select: selectOf([...select, row, col]),
-						all: true
-					})
+				: mapped(
+						bolt.query(
+							requestJson({
+								[of]: {
+									where: and(where, { [row]: { in: ids } }, { [col]: { in: colValues } }),
+									fields: [...new Set([...select, row, col])],
+									limit: READ_LIMIT
+								}
+							})
+						),
+						(answer) => pageOf(answer, of)
+					)
 		)
 	);
 	const markRead = $derived(
 		queryState(
 			marks === undefined
 				? null
-				: bolt.query(marks.of, {
-						where: { [marks.at]: { in: colValues } },
-						select: selectOf([marks.at, marks.label, ...(marks.row ? [marks.row] : [])]),
-						all: true
-					})
+				: mapped(
+						bolt.query(
+							requestJson({
+								[marks.of]: {
+									where: { [marks.at]: { in: colValues } },
+									fields: [...new Set([marks.at, marks.label, ...(marks.row ? [marks.row] : [])])],
+									limit: READ_LIMIT
+								}
+							})
+						),
+						(answer) => pageOf(answer, marks.of)
+					)
 		)
 	);
 	const cells = $derived(
@@ -181,7 +199,7 @@ A grid of `rows` records by `cols` values (dates or a relation) whose cells hold
 		const id = e.dataTransfer?.getData('text/x-bolt-id');
 		if (!move || !id) return;
 		fork(
-			actOutcome(bolt.act(`${of}.update`, { target: id, set: { [row]: rid, [col]: c } })).pipe(
+			actOutcome(bolt.act(`${of}.update`, [{ target: id, set: { [row]: rid, [col]: c } }])).pipe(
 				Effect.tap((outcome) =>
 					Effect.sync(() => {
 						notice = outcome.kind === 'committed' ? null : outcomeText(bolt, outcome);
@@ -197,7 +215,7 @@ A grid of `rows` records by `cols` values (dates or a relation) whose cells hold
 	data-view="matrix"
 >
 	{#if toolbar !== undefined && toolbar !== false}
-		<ViewToolbar config={toolbar} collection={of} catalog={kinds.catalog ?? {}} />
+		<ViewToolbar config={toolbar} model={of} catalog={kinds.catalog ?? {}} />
 	{/if}
 	{#if notice}<p role="alert" class="text-destructive text-sm">{notice}</p>{/if}
 	{#if selection.length > 0}

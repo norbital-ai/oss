@@ -14,7 +14,7 @@ import {
 	Result,
 	Schema
 } from 'effect';
-import { HttpClient } from 'effect/unstable/http';
+import { HttpClient } from 'effect/http';
 import * as NodeFileSystem from '@effect/platform-node/NodeFileSystem';
 import * as NodePath from '@effect/platform-node/NodePath';
 import {
@@ -206,7 +206,7 @@ export const activate = Effect.fn('server.activate')(function* (
 			)
 		);
 	const audit = yield* localAudit(auditDir);
-	const epochId = yield* crypto.randomUUIDv4.pipe(
+	const epochId = yield* crypto.randomUUIDv4().pipe(
 		Effect.mapError((error) =>
 			BoltError.make('unavailable', 'facility', 'Secure random UUID generation failed.', error)
 		)
@@ -245,7 +245,7 @@ export const activate = Effect.fn('server.activate')(function* (
 	const codec = Context.get(secretContext, Secrets);
 	const secrets = Object.fromEntries(
 		(yield* Effect.forEach(declaredSecrets(manifest), (name) =>
-			EffectConfig.option(EffectConfig.string(name)).pipe(
+			EffectConfig.option(EffectConfig.String(name)).pipe(
 				Effect.provideService(ConfigProvider.ConfigProvider, codec.config),
 				Effect.map((value) => (Option.isSome(value) ? [[name, value.value] as const] : []))
 			)

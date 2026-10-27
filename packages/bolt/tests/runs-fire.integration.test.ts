@@ -23,10 +23,10 @@ const manifest = {
 	relationships: {
 		'products.source': { to: 'sys_integration', where: { integration: { eq: 'erp' } } }
 	},
-	collections: {
-		quotes: { read: { fields: 'all' }, create: { input: { columns: ['title'] } } },
+	exposures: {
+		quotes: { read: { quotes: { fields: 'all' } }, create: { columns: { quotes: ['title'] } } },
 		products: {
-			read: { fields: 'all' },
+			read: { products: { fields: 'all' } },
 			syncs: { erp: { with: 'erp', read: true, every: '30min' } }
 		}
 	},
@@ -58,14 +58,14 @@ const manifest = {
 } satisfies EngineManifest;
 const guestSource = `export default {
 	automation: {
-		tidy: { body: function* (input, ctx) { yield* ctx.act('quotes.create', { title: 'tick' }); } },
+		tidy: { body: function* (input, ctx) { yield* ctx.act('quotes.create', [{ title: 'tick' }]); } },
 		peek: { body: function* (input, ctx) {
-			const n = (yield* ctx.query('quotes', { all: true })).rows.length;
+			const n = (yield* ctx.query({ quotes: {} })).quotes.rows.length;
 			if (n > 1) throw new Error('too many quotes');
 			return n;
 		} }
 	},
-	collection: { products: { bodies: { syncs: { erp: { read: function* ({cursor}, ctx) {
+	model: { products: { bodies: { syncs: { erp: { read: function* ({cursor}, ctx) {
 		return (yield* ctx.request({ op: 'values', values: {cursor} })).rows[0].page; } } } } } }
 };`;
 const SLOT = '2026-09-25T10:15:00.000Z',

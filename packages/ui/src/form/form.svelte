@@ -2,31 +2,32 @@
 	import type { Snippet } from 'svelte';
 	import type { Value } from '../kinds/kind.js';
 	import type { Outcome, Row } from './draft.js';
+	import { byId, firstOf } from '../read/request.js';
 	import type {
 		AutomationInputOf,
 		AutomationKey,
-		CollectionKey,
+		ModelKey,
 		IdOf,
 		InsertOf,
 		RecordFieldOf,
 		RecordOf
-	} from '../collection/types.js';
+	} from '../model/types.js';
 	import type { FormState } from './form-state.svelte.js';
 	import type { RecordSection } from './section.svelte';
 
 	/**
-	 * `Form of="<c>" mode="create" | "update"` edits a collection's allowlisted fields; `Form of={{ automation: '<a>' }}`
+	 * `Form of="<c>" mode="create" | "update"` edits a model's allowlisted fields; `Form of={{ automation: '<a>' }}`
 	 * renders an automation's input and queues a run. Generated from authorized metadata: without
 	 * `children` every allowlisted field renders in order; with `children` the page lays out its own `Field`s.
 	 */
-	/** What a form edits: a collection's row, or a declared automation's input. */
+	/** What a form edits: a model's row, or a declared automation's input. */
 	export type FormSource =
-		CollectionKey | { [A in AutomationKey]: { automation: A } }[AutomationKey];
+		ModelKey | { [A in AutomationKey]: { automation: A } }[AutomationKey];
 	/** The props of `Form`: what it edits (`of`), create or update, the row id, and the layout of its fields. */
 	export type FormProps<S = FormSource> = {
 		of: S;
 		mode?: 'view' | 'edit' | 'create' | 'update';
-		/** The row a collection update edits. */
+		/** The row a model update edits. */
 		id?: S extends string ? IdOf<S> : never;
 		/** The stored row, when the page already reads it; else the enclosing `RecordShell`'s shown row (the scrubbed revision while one is picked) when it is this record, else the form reads it once. */
 		record?: (S extends string ? RecordOf<S> : never) | null;
@@ -64,7 +65,7 @@
 	import Alert from '../primitives/alert/alert.svelte';
 	import { uiText } from '../primitives/utils.js';
 	import { useKinds } from '../kinds/context.js';
-	import { provideCollection } from '../collection/context.js';
+	import { provideModel } from '../model/context.js';
 	import { useBolt } from '../client/context.js';
 	import { useRecordView } from '../record/context.js';
 	import { formSpec } from './draft.js';
@@ -89,13 +90,13 @@
 	const bolt = useBolt();
 	const host = useKinds();
 	const t = uiText();
-	const collection = $derived(typeof of === 'string' ? of : '');
-	const exposure = $derived(host.catalog?.[collection]);
+	const model = $derived(typeof of === 'string' ? of : '');
+	const exposure = $derived(host.catalog?.[model]);
 	const automation = $derived(
 		typeof of === 'string' ? undefined : host.automations?.[of.automation]
 	);
-	// its fields' labels and enum words read this collection's catalog keys
-	provideCollection(() => collection);
+	// its fields' labels and enum words read this model's catalog keys
+	provideModel(() => model);
 	const resolved = $derived(
 		mode === 'create'
 			? 'create'
@@ -130,7 +131,7 @@
 		return v !== undefined &&
 			v !== null &&
 			v.mode !== 'create' &&
-			v.collection === collection &&
+			v.model === model &&
 			id !== undefined &&
 			v.record['id'] === id
 			? v.record
@@ -145,9 +146,10 @@
 					? Effect.succeed(shown)
 					: id === undefined
 						? Effect.succeed(undefined)
-						: bolt
-								.query<Row | null>(collection, { id })
-								.pipe(Effect.catch(() => Effect.succeed(null)))
+						: bolt.query(byId(model, id)).pipe(
+								Effect.map((answer): Row | null => firstOf(answer, model)),
+								Effect.catch(() => Effect.succeed(null))
+							)
 	);
 	const parents = $derived.by(() => {
 		if (typeof of !== 'string' || resolved !== 'create' || exposure === undefined) return [];
@@ -174,7 +176,8 @@
 		Effect.forEach(
 			parents,
 			(parent) =>
-				bolt.query<Row | null>(parent.of, { id: parent.id }).pipe(
+				bolt.query(byId(parent.of, parent.id, parent.fields)).pipe(
+					Effect.map((answer) => firstOf(answer, parent.of)),
 					Effect.map((record) =>
 						Object.fromEntries(
 							parent.fields.map((field): [string, Value] => [field, record?.[field] ?? null])

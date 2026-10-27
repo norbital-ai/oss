@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from '@effect/vitest';
 import { Result, Schema } from 'effect';
-import { FastCheck as fc } from 'effect/testing';
+import * as fc from 'fast-check';
 import { Decimal } from '../src/decimal.ts';
 import { IdValue, KIND, inputSchema, type FieldKind, type Kind } from '../src/kind.ts';
 
@@ -144,7 +144,7 @@ const CASES: { readonly [K in FieldKind]: readonly (readonly [Kind, fc.Arbitrary
 		[{ kind: 'ref', to: 'orders' }, fc.string()],
 		[
 			{ kind: 'ref', to: ['orders', 'quotes'] },
-			fc.record({ collection: fc.constantFrom('orders', 'quotes'), id: fc.string() })
+			fc.record({ model: fc.constantFrom('orders', 'quotes'), id: fc.string() })
 		]
 	],
 	list: [

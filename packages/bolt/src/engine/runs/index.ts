@@ -29,7 +29,7 @@ import { Port, type PortFailure } from '../port.ts';
 import { AgentHost } from '../agent/index.ts';
 import { inferArgsOf, inferFacility, type InferTool } from '../agent/ai.ts';
 import { EmbedInputs, ImageOptions, Reference } from '../facilities.ts';
-import { readTool } from '../agent/tools.ts';
+import { readInferTool } from '../agent/tools.ts';
 import { SaidContent, StepContent } from '../agent/schema.ts';
 import {
 	LIMITS,
@@ -104,7 +104,7 @@ const Member = Schema.Struct({
 	teams: Schema.Array(Schema.String),
 	teamPath: Schema.Array(Schema.String),
 	admin: Schema.Boolean,
-	party: Schema.NullOr(Schema.Struct({ collection: Schema.String, id: Schema.String }))
+	party: Schema.NullOr(Schema.Struct({ model: Schema.String, id: Schema.String }))
 });
 const Actor = Schema.Union([
 	Member,
@@ -150,12 +150,12 @@ const RowSchema = Schema.Struct({
 	starter: Schema.NullOr(HolderSchema)
 });
 /**
- * An event run's input (`queueTriggered`): one collection's changed ids, and a delete's old images. A run's input by its
+ * An event run's input (`queueTriggered`): one model's changed ids, and a delete's old images. A run's input by its
  * cause: an event's is this, decoded once as the run is claimed (`Row.event`); any other's is the start's own JSON.
  */
 const EventInput = Schema.StructWithRest(
 	Schema.Struct({
-		collection: Schema.String,
+		model: Schema.String,
 		ids: Schema.Array(Schema.Json),
 		rows: Schema.optionalKey(Schema.Array(Schema.Json))
 	}),
@@ -177,6 +177,7 @@ export const RunViewRow = Schema.Struct({
 			code: Schema.String,
 			message: Schema.optionalKey(Schema.String),
 			field: Schema.optionalKey(Schema.String),
+			path: Schema.optionalKey(Schema.String),
 			row: Schema.optionalKey(Schema.Number),
 			rows: Schema.optionalKey(Schema.Array(Schema.Number)),
 			rule: Schema.optionalKey(Schema.String),
@@ -184,7 +185,7 @@ export const RunViewRow = Schema.Struct({
 			records: Schema.optionalKey(
 				Schema.Array(
 					Schema.Struct({
-						collection: Schema.String,
+						model: Schema.String,
 						id: Schema.String,
 						fields: Schema.Array(Schema.String)
 					})
@@ -256,14 +257,6 @@ export function runView(authority: Authority, row: RunViewRow): RunView | null {
 		? { ...base, error: row.error === null ? null : { code: row.error.code } }
 		: null;
 }
-/** An infer tool's input as the JSON Schema the model is given, derived from its Schema. */
-const jsonSchemaOf = (input: Schema.Top, tool: string) => {
-	const document = Schema.toJsonSchemaDocument(input);
-	return Schema.decodeUnknownEffect(Schema.Json)({
-		...document.schema,
-		$defs: document.definitions
-	}).pipe(Effect.mapError(Port.failure(tool)));
-};
 const EVENTS = new Set(['created', 'updated', 'deleted']);
 const EFFECTS = new Set([
 	'act',
@@ -481,11 +474,13 @@ export const RunsLive = Layer.effect(
 				? runJournal.clear(run).pipe(Effect.tapCause(Effect.logWarning), Effect.ignore)
 				: Effect.void;
 		const crypto = yield* Crypto.Crypto;
-		const uuid = crypto.randomUUIDv4.pipe(
-			Effect.mapError((error) =>
-				BoltError.make('unavailable', 'facility', 'Secure random UUID generation failed.', error)
-			)
-		);
+		const uuid = crypto
+			.randomUUIDv4()
+			.pipe(
+				Effect.mapError((error) =>
+					BoltError.make('unavailable', 'facility', 'Secure random UUID generation failed.', error)
+				)
+			);
 		const crons = [...triggersOf(m).crons, ...(drivers.available ? syncTriggers(m) : [])];
 		const tenant = yield* ConfigProvider.ConfigProvider;
 		const stopping = new Set<string>();
@@ -556,7 +551,7 @@ export const RunsLive = Layer.effect(
 					);
 					c.cte(
 						'pending',
-						`SELECT r.* FROM sys_run r, head h WHERE ${eligible} AND r.automation = h.automation AND (r.id = h.id OR (h.cause IN ('created', 'updated', 'deleted') AND r.cause = h.cause AND (r.input->>'collection') IS NOT DISTINCT FROM (h.input->>'collection'))) ORDER BY r.due_at, r.id LIMIT 1000`
+						`SELECT r.* FROM sys_run r, head h WHERE ${eligible} AND r.automation = h.automation AND (r.id = h.id OR (h.cause IN ('created', 'updated', 'deleted') AND r.cause = h.cause AND (r.input->>'model') IS NOT DISTINCT FROM (h.input->>'model'))) ORDER BY r.due_at, r.id LIMIT 1000`
 					);
 				}
 				// The batch must be computed once, rather than rescanned for every queued candidate.
@@ -589,7 +584,7 @@ export const RunsLive = Layer.effect(
 			for (const group of Map.groupBy(
 				rows,
 				(row) =>
-					`${row.automation}\u0000${row.event === undefined ? row.id : `${row.cause}\u0000${row.event.collection}`}`
+					`${row.automation}\u0000${row.event === undefined ? row.id : `${row.cause}\u0000${row.event.model}`}`
 			).values()) {
 				let batch: Row[] = [],
 					count = 0;
@@ -866,7 +861,7 @@ export const RunsLive = Layer.effect(
 								outcome: Schema.Json,
 								notices: Schema.Array(
 									Schema.Struct({
-										collection: Schema.String,
+										model: Schema.String,
 										id: Schema.String,
 										op: Schema.Literals(['create', 'update', 'delete']),
 										revision: Schema.Number,
@@ -951,31 +946,13 @@ export const RunsLive = Layer.effect(
 						// `read`: workspace records as the run's `runAs` policies, through the agent's own read tool (rule 58)
 						const reader =
 							names.includes('read') && m.automations[run.automation]?.runAs !== 'trigger'
-								? readTool({
-										engine: { manifest: m, read: reads.run, calls },
+								? readInferTool({
+										engine: { manifest: m, read: reads.run },
 										authority,
-										bindings: b,
-										turn: run.id,
-										queries: false,
-										inApp: false
+										bindings: b
 									})
 								: undefined;
-						const records: InferTool[] = [];
-						if (reader !== undefined) {
-							records.push({
-								name: reader.name,
-								description: reader.description,
-								input: yield* jsonSchemaOf(reader.input, 'tool read'),
-								call: (input) =>
-									Effect.gen(function* () {
-										const callId = yield* crypto.randomUUIDv4.pipe(
-											Effect.mapError(Port.failure('tool read'))
-										);
-										const answer = yield* reader.run(input, callId);
-										return 'result' in answer ? answer.result : { error: 'confirmation needed' };
-									})
-							});
-						}
+						const records: InferTool[] = reader === undefined ? [] : [reader];
 						const missing = names.find((name) =>
 							name === 'read'
 								? reader === undefined
@@ -1004,9 +981,9 @@ export const RunsLive = Layer.effect(
 								input: tool.input,
 								call: (input) =>
 									Effect.gen(function* () {
-										const callId = yield* crypto.randomUUIDv4.pipe(
-											Effect.mapError(Port.failure(`tool ${tool.name}`))
-										);
+										const callId = yield* crypto
+											.randomUUIDv4()
+											.pipe(Effect.mapError(Port.failure(`tool ${tool.name}`)));
 										return yield* Port.attempt(`tool ${tool.name}`, (signal) =>
 											tool.call(
 												input,
@@ -1259,7 +1236,7 @@ export const RunsLive = Layer.effect(
 							case 'act': {
 								const name =
 									call.callable._tag === 'Verb'
-										? `${call.callable.collection}.${call.callable.verb}`
+										? `${call.callable.model}.${call.callable.verb}`
 										: '';
 								const { key } = keyOf(
 									'act',
@@ -1270,11 +1247,11 @@ export const RunsLive = Layer.effect(
 								);
 								const k = call.options?.once === undefined ? key : `once:${call.options.once}`;
 								if (call.callable._tag !== 'Verb')
-									return fail('invalidInput', 'ctx.act takes a generated collection verb');
+									return fail('invalidInput', 'ctx.act takes a generated model verb');
 								const observedRead = priorReads.snapshot();
 								const guards = observedRead.guards;
 								const result = yield* writes.act({
-									collection: call.callable.collection,
+									model: call.callable.model,
 									verb: call.callable.verb,
 									input: call.input,
 									mode: { _tag: 'Direct' },
@@ -1306,7 +1283,7 @@ export const RunsLive = Layer.effect(
 											'An act batch takes create, update, upsert or delete.'
 										);
 									acts.push({
-										collection: act.callable.collection,
+										model: act.callable.model,
 										verb: act.callable.verb,
 										input: act.input,
 										...(act.observed === undefined ? {} : { observed: act.observed }),
@@ -1729,8 +1706,8 @@ export const RunsLive = Layer.effect(
 							!holder.admin
 						) {
 							const authority = yield* identity.authority(holder),
-								collection = head.event.collection;
-							const arms = authority.collections[collection]?.read ?? [],
+								model = head.event.model;
+							const arms = authority.models[model]?.read[model] ?? [],
 								all = arms.some((arm) => arm.fields === 'all'),
 								keep = new Set([
 									'id',
@@ -2000,7 +1977,7 @@ export const RunsLive = Layer.effect(
 			Effect.gen(function* () {
 				const trigger = triggersOf(m).webhooks.find((candidate) => candidate.path === path);
 				if (trigger === undefined) return { status: 404 };
-				const configured = yield* Config.option(Config.redacted(trigger.secret))
+				const configured = yield* Config.option(Config.Redacted(trigger.secret))
 					.parse(tenant)
 					.pipe(
 						Effect.mapError((error) =>

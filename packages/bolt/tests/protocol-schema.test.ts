@@ -57,14 +57,14 @@ type Same<A, B> = [A] extends [B] ? ([B] extends [A] ? true : false) : false;
 
 describe('the wire Schemas', () => {
 	it('round-trips every body and frame', () => {
-		const read = { m: 'query', a: ['orders', { where: { status: 'open' } }] };
+		const read = { m: 'query', a: [{ orders: { where: { status: { eq: 'open' } } } }] };
 		trip(WireRead, read);
 		for (const m of ['read', 'get', 'similar']) refuses(WireRead, { m, a: ['orders', {}] });
 		trip(QBody, { reads: [read, { m: 'transcript', a: ['c1', { tail: 20 }] }] });
 		trip(QReply, { answers: [[{ id: 'o1' }], null] });
 		trip(ActBody, {
 			callable: 'orders.create',
-			input: { total: { $dec: '1.20' } },
+			input: [{ total: { $dec: '1.20' } }],
 			issuedAt: '2026-10-14T00:00:00.000Z',
 			observed: { o1: 3 },
 			onConflict: 'keep'
@@ -73,7 +73,7 @@ describe('the wire Schemas', () => {
 			{
 				kind: 'committed',
 				output: { id: 'o1' },
-				records: [{ collection: 'orders', id: 'o1', revision: 1 }]
+				records: [{ model: 'orders', id: 'o1', revision: 1 }]
 			},
 			{ kind: 'pendingApproval', requestId: 'r1', records: [] },
 			{
@@ -86,7 +86,7 @@ describe('the wire Schemas', () => {
 				rule: 'orders.transform',
 				data: { requestId: 'r1' }
 			},
-			{ kind: 'conflict', records: [{ collection: 'orders', id: 'o1', fields: ['total'] }] },
+			{ kind: 'conflict', records: [{ model: 'orders', id: 'o1', fields: ['total'] }] },
 			{ kind: 'unknown', invocation: 'i1' }
 		])
 			trip(ActReply, { outcome, v: 7 });
@@ -172,7 +172,7 @@ describe('the wire Schemas', () => {
 	it('refuses what is not the protocol', () => {
 		refuses(WireRead, { m: 'drop', a: [] });
 		refuses(QBody, { reads: 'all' });
-		refuses(ActBody, { callable: 'orders.create', input: {} });
+		refuses(ActBody, { callable: 'orders.create', input: [{}] });
 		refuses(ActReply, { outcome: { kind: 'refused', code: 'nope', message: 'x' }, v: 1 });
 		refuses(Frame, { t: 'hello', conn: 'c' });
 		refuses(SessionRequest, { path: 'code', body: { address: 'a', via: 'pigeon' } });
@@ -295,11 +295,11 @@ describe('the own callables', () => {
 		expect(ownRefusal('sys_message.revise', { message: 'm', text: ' ' })).toBe(
 			'sys_message.revise takes { message, text }'
 		);
-		expect(ownRefusal('filter.describe', { collection: 'orders' })).toBe(
-			'filter.describe takes { collection, text }'
+		expect(ownRefusal('filter.describe', { model: 'orders' })).toBe(
+			'filter.describe takes { model, text }'
 		);
 		expect(
-			ownRefusal('filter.describe', { collection: 'orders', text: 'open', fields: [{ name: 'x' }] })
+			ownRefusal('filter.describe', { model: 'orders', text: 'open', fields: [{ name: 'x' }] })
 		).toBe('filter.describe fields are invalid');
 		expect(ownRefusal('sys_message.dequeue', null)).toBe('this call takes { message }');
 	});
@@ -349,7 +349,7 @@ describe('norbital.template.json', () => {
 			bankTree: 'construction',
 			layout: 'snapshots',
 			stages: [['team'], ['user']],
-			producers: [{ collection: 'photo_evidence', kind: 'photos' }]
+			producers: [{ model: 'photo_evidence', kind: 'photos' }]
 		}
 	};
 	it('decodes the catalogue entry the gate checks', () => {
@@ -370,7 +370,7 @@ const workspace: EngineManifest = {
 	workspace: { tz: 'Asia/Singapore', locale: 'en' },
 	models: {},
 	relationships: {},
-	collections: {},
+	exposures: {},
 	integrations: {},
 	policies: {},
 	teams: {},

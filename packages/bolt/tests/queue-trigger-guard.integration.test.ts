@@ -7,9 +7,9 @@ import { Chain } from '../src/engine/write/sql.ts';
 import { manifest as base, NOW } from './write-fixture.ts';
 import type { EngineManifest } from '../src/engine/manifest.ts';
 
-// A named integration slot (`field_ops_whatsapp`) is keyed by text: a filtered trigger on another collection must not
-// cast its image into that collection's row type (uuid id), or every status write of the slot fails.
-it.effect("a filtered trigger never casts another collection's row image", () =>
+// A named integration slot (`field_ops_whatsapp`) is keyed by text: a filtered trigger on another model must not
+// cast its image into that model's row type (uuid id), or every status write of the slot fails.
+it.effect("a filtered trigger never casts another model's row image", () =>
 	Effect.gen(function* () {
 		const manifest: EngineManifest = {
 			...base,

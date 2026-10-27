@@ -34,7 +34,10 @@ const m: EngineManifest = {
 		}
 	},
 	relationships: { 'lines.payslip': { to: 'payslips', inverse: 'lines', owned: true } },
-	collections: { payslips: { read: { fields: 'all' } }, lines: { read: { fields: 'all' } } },
+	exposures: {
+		payslips: { read: { payslips: { fields: 'all' } } },
+		lines: { read: { lines: { fields: 'all' } } }
+	},
 	integrations: {},
 	policies: {},
 	teams: {},

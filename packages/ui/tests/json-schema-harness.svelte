@@ -21,6 +21,7 @@
 		rawJson = false,
 		view = false,
 		cell = false,
+		create = false,
 		changed
 	}: {
 		schema?: JsonSchema;
@@ -33,6 +34,7 @@
 		readonly?: boolean;
 		editor?: boolean;
 		rawJson?: boolean;
+		create?: boolean;
 		changed(next: Value): void;
 	} = $props();
 	// Each test mount owns the initial host and draft, which subsequent edits replace locally.
@@ -75,4 +77,5 @@
 		name="input"
 		{readonly}
 		{errors}
+		{create}
 	/>{/if}

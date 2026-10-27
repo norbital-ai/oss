@@ -2,7 +2,7 @@
 // an http-shaped op on one calendar's events through this standing link, answered `{ status, body }` for the definition's
 // outbound run to read (a 412 its conflict). A sign-in sealed before it could write keeps importing and says to reconnect.
 import { Clock, Effect, Option, Schema, Predicate, Semaphore } from 'effect';
-import { HttpClient, HttpClientRequest, HttpClientResponse } from 'effect/unstable/http';
+import { HttpClient, HttpClientRequest, HttpClientResponse } from 'effect/http';
 import { Instant, PlainDate } from '@norbital-ai/std/date';
 import type { CalendarEvent } from '@norbital-ai/bolt';
 import {

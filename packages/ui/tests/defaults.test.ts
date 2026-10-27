@@ -10,11 +10,11 @@ const relations = await import('../src/relations/select.ts');
 const csv = await import('../src/table/csv.ts');
 const d = await import('../src/form/draft.ts');
 import type { ViewBolt } from '../src/client/contract.ts';
-import type { Row, Page, Values } from '../src/collection/types.ts';
+import type { Row, Page, Values } from '../src/model/types.ts';
 import type { Fields, Value } from '@norbital-ai/std/kind';
 import type { KindsHost } from '../src/kinds/context.ts';
 import type { DefaultsPart } from './defaults-harness.svelte';
-import { viewFixture, type ReadOptions } from './view-fixture.ts';
+import { everyRow, viewFixture, type ReadOptions } from './view-fixture.ts';
 import { element } from './elements.ts';
 import * as ui from '../src/index.ts';
 const { flushSync, mount, tick, unmount } = await import('svelte');
@@ -30,8 +30,8 @@ test('enumText: the catalog word, else the value in words; acronyms stay', () =>
 	assert.equal(k.enumText('SG_64'), 'SG 64');
 	assert.equal(k.enumText('sent_to_HR'), 'Sent to HR');
 	const t = catalogT({ 'models.jobs.fields.status.on_hold': 'Paused' });
-	assert.equal(k.enumText('on_hold', { t, collection: 'jobs', field: 'status' }), 'Paused');
-	assert.equal(k.enumText('on_hold', { t, collection: 'jobs', field: 'kind' }), 'On hold');
+	assert.equal(k.enumText('on_hold', { t, model: 'jobs', field: 'status' }), 'Paused');
+	assert.equal(k.enumText('on_hold', { t, model: 'jobs', field: 'kind' }), 'On hold');
 	// format() speaks the same words, for one and many values and for states
 	assert.equal(
 		k.format({ kind: 'enum', values: ['a_b', 'c'], many: true }, ['a_b', 'c']),
@@ -40,7 +40,7 @@ test('enumText: the catalog word, else the value in words; acronyms stay', () =>
 	assert.equal(
 		k.format({ kind: 'state', initial: 'draft', states: { on_hold: {} } }, 'on_hold', {
 			t,
-			collection: 'jobs',
+			model: 'jobs',
 			field: 'status'
 		}),
 		'Paused'
@@ -216,8 +216,8 @@ test('a final state has no moves: the state field is locked', () => {
 async function fake(
 	rows: readonly Row[],
 	extra: {
-		read?(collection: string, options: ReadOptions): Page | Promise<Page>;
-		get?(collection: string, id: string): Row | null | Response | Promise<Row | null | Response>;
+		read?(model: string, options: ReadOptions): Page | Promise<Page>;
+		get?(model: string, id: string): Row | null | Response | Promise<Row | null | Response>;
 		aggregate?(): readonly Values[];
 		start?(automation: string, input: Value): void;
 		t?: ViewBolt['t'];
@@ -227,14 +227,12 @@ async function fake(
 	const reads: { c: string; o: ReadOptions }[] = [];
 	const client = await viewFixture({
 		...extra,
-		read: (collection, options) => {
-			reads.push({ c: collection, o: options });
-			return extra.read?.(collection, options) ?? { rows, next: null };
+		read: (model, options) => {
+			reads.push({ c: model, o: options });
+			return extra.read?.(model, options) ?? { rows, next: null };
 		},
-		get: (collection, id) =>
-			extra.get === undefined
-				? (rows.find((row) => row.id === id) ?? null)
-				: extra.get(collection, id),
+		get: (model, id) =>
+			extra.get === undefined ? (rows.find((row) => row.id === id) ?? null) : extra.get(model, id),
 		aggregate: () => extra.aggregate?.() ?? [{ count: rows.length }],
 		history: () => ({ rows: [], next: null })
 	});
@@ -400,7 +398,8 @@ test('record sheet: titled by the record, the singular model above; a subtitle o
 	const account = element(document, '[data-field=account_id]');
 	assert.match(account.textContent ?? '', /Account/);
 	assert.doesNotMatch(account.textContent ?? '', /a9/);
-	assert.match(account.textContent ?? '', /—/);
+	// the fake reads no account a9: an unreadable target says so, never its id
+	assert.match(account.textContent ?? '', /Not found or no access/);
 	assert.equal(
 		document.querySelector('[data-record-info]'),
 		null,
@@ -463,8 +462,8 @@ test("select-all: the card list selects its page, then every matching row, besid
 		aggregate: () => [{ count: 30 }],
 		read: (_c, o) => {
 			reads.push(o);
-			const rows = o.all ? all.map((r) => ({ id: r.id })) : all.slice(0, 25);
-			return { rows, next: o.all ? null : 'c1' };
+			const rows = everyRow(o) ? all.map((r) => ({ id: r.id })) : all.slice(0, 25);
+			return { rows, next: everyRow(o) ? null : 'c1' };
 		}
 	});
 	const t = await show(
@@ -496,7 +495,7 @@ test("select-all: the card list selects its page, then every matching row, besid
 	assert.equal(element(t, '[data-selected-count]').textContent, '30 selected');
 	const last = reads.at(-1);
 	assert.ok(last);
-	assert.deepEqual(last.select, { id: true });
+	assert.deepEqual(last.fields, []);
 	assert.equal(t.querySelector('[data-select-matching]'), null);
 	element(t, '[data-select-clear]').click();
 	await settle();
@@ -507,7 +506,7 @@ test("select-all: the card list selects its page, then every matching row, besid
 	);
 });
 
-test("CustomView with `collection`: the menu offers that collection's file sync, and the search stays on the view's own rows", async () => {
+test("CustomView with `model`: the menu offers that model's file sync, and the search stays on the view's own rows", async () => {
 	const started: { automation: string; input: Value }[] = [];
 	const { bolt } = await fake([], {
 		start: (automation, input) => {
@@ -527,7 +526,7 @@ test("CustomView with `collection`: the menu offers that collection's file sync,
 		key: 'roster',
 		toolbar: { title: 'Roster', context: { site: 's1' } }
 	};
-	const t = await show({ part: 'custom', props: { ...props, collection: 'jobs' } }, bolt, cat);
+	const t = await show({ part: 'custom', props: { ...props, model: 'jobs' } }, bolt, cat);
 	element(t, '[data-view-actions]').click();
 	await settle();
 	const row = document.querySelector('[data-view-menu] [data-menu-item="export:sheet:xlsx"]');
@@ -552,7 +551,7 @@ test("CustomView with `collection`: the menu offers that collection's file sync,
 	assert.equal(
 		plain.querySelector('[data-view-actions]'),
 		null,
-		'without `collection` the view offers no file sync'
+		'without `model` the view offers no file sync'
 	);
 });
 

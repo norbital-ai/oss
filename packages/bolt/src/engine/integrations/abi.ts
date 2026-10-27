@@ -45,7 +45,7 @@ export type LinkCalls = {
 		message: Json,
 		attachments?: readonly OutboundFile[]
 	) => Effect.Effect<typeof SendReceipt.Type, PortFailure | SendRefused | Fenced>;
-	readonly typing: (to: string) => Effect.Effect<void, PortFailure>;
+	readonly typing: (to: string, on: boolean) => Effect.Effect<void, PortFailure>;
 	readonly request: (op: Json) => Effect.Effect<Json, PortFailure | Fenced>;
 	readonly read: (
 		feed: string,
@@ -156,7 +156,7 @@ export function linkCalls(link: Link, run: UrlRunner, instance: string): LinkCal
 		typing:
 			typing === undefined
 				? () => absent('typing')
-				: (to) => Port.attempt('link', (signal) => typing(to, signal)),
+				: (to, on) => Port.attempt('link', (signal) => typing(to, signal, on)),
 		request:
 			request === undefined
 				? () => absent('request')

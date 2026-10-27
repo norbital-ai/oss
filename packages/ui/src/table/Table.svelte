@@ -12,49 +12,39 @@
 	interface Layout extends Schema.Schema.Type<typeof Layout> {}
 	const decodeLayout = Schema.decodeUnknownResult(Schema.fromJsonString(Layout));
 	import type {
-		CollectionKey,
+		ModelKey,
 		ManyOf,
 		Page,
 		OrderByOf,
-		QueryInputOf,
-		QueryKey,
-		QueryOutputOf,
 		RecordOf,
 		Row,
 		RowOf,
 		Values,
 		WhereOf
-	} from '../collection/types.js';
+	} from '../model/types.js';
 	import type { Json, Query } from '../client/contract.js';
 	import type { OrderBy, Where } from '../filter/filter.js';
-	import type { Toolbar, ToolbarItem } from '../collection/ViewToolbar.svelte';
+	import type { Toolbar, ToolbarItem } from '../model/ViewToolbar.svelte';
 	import type { Kind } from '../kinds/kind.js';
 
 	type TableData<R extends Values> = Page<R> | readonly R[];
-	/** A table's source: a collection name, a named collection query (paged by the table), a native `bolt.query`, or a local row array. */
+	/** A table's source: a model name, a native `bolt.query` read request of one root, or a local row array. */
 	export type TableSource<R extends Values = Values> =
-		| CollectionKey
-		| {
-				[N in QueryKey]: { query: N; input?: QueryInputOf<N> };
-		  }[QueryKey]
-		| Query<TableData<R>>
-		| readonly R[];
+		ModelKey | Query<{ readonly [root: string]: TableData<R> }> | readonly R[];
 	type PageRow<T> = T extends { readonly rows: readonly (infer R extends Values)[] }
 		? R
 		: T extends readonly (infer R extends Values)[]
 			? R
 			: Values;
-	/** The row a source yields: the collection's caller row, the query's or read's rows, or the array's element. */
+	/** The row a source yields: the model's caller row, the read's rows, or the array's element. */
 	export type RowIn<S> = S extends string
 		? RowOf<S> & Values
-		: S extends { query: infer N }
-			? PageRow<QueryOutputOf<N>>
-			: S extends Query<infer T>
-				? PageRow<T>
-				: S extends readonly (infer R extends Values)[]
-					? R
-					: Values;
-	/** The fields a column may name: a collection's whole record (a heavy field is then read) and its many-relations (the
+		: S extends Query<infer T>
+			? PageRow<T[keyof T]>
+			: S extends readonly (infer R extends Values)[]
+				? R
+				: Values;
+	/** The fields a column may name: a model's whole record (a heavy field is then read) and its many-relations (the
 	 * related records, each `{ id, …label }`), else the row's. */
 	export type ColumnsIn<S> = S extends string
 		? RecordOf<S> & { readonly [M in ManyOf<S>]: readonly Row[] }
@@ -121,13 +111,10 @@
 	};
 	const localSource = <R extends Values>(value: TableSource<R>): value is readonly R[] =>
 		Array.isArray(value);
-	const querySource = <R extends Values>(value: TableSource<R>): value is Query<TableData<R>> =>
-		Effect.isEffect(value);
 	const tableInput = <R extends Values>(value: TableSource<R>) => {
-		if (typeof value === 'string') return { _tag: 'collection' as const, name: value };
+		if (typeof value === 'string') return { _tag: 'model' as const, name: value };
 		if (localSource(value)) return { _tag: 'local' as const, rows: value };
-		if (querySource(value)) return { _tag: 'read' as const, read: value };
-		return { _tag: 'query' as const, name: value.query, input: value.input ?? {} };
+		return { _tag: 'read' as const, read: value };
 	};
 	const tableRows = <R extends Values>(value: TableData<R>): readonly R[] => {
 		const array = (value: TableData<R>): value is readonly R[] => Array.isArray(value);
@@ -152,7 +139,7 @@
 	import { likeWhere } from '../kinds/kind.js';
 	import { KINDS } from '../kinds/registry.js';
 	import { openRecord } from '../record/navigation.js';
-	import { provideCollection } from '../collection/context.js';
+	import { provideModel } from '../model/context.js';
 	import { useOptionalBolt } from '../client/context.js';
 	import type { ViewBolt } from '../client/contract.js';
 	import EmptyState from '../primitives/empty-state/EmptyState.svelte';
@@ -162,10 +149,11 @@
 	import { localExposure, matches, orderOf, sortable, sortRows } from '../filter/filter.js';
 	import { and, compact } from '../filter/scope.js';
 	import { COUNT_EVERY_MS, pageRead } from '../read/paging.js';
-	import { countOf, isRow, nextOf, rowsOf } from '../read/results.js';
+	import { countOf, nextOf, rowsOf } from '../read/results.js';
 	import { like, valueAt } from '../cell/value.js';
 	import { humanize, label, lowerLead, msg } from '../text/messages.js';
-	import { listSelect, refOf, unref } from '../relations/select.js';
+	import { listRequest, refOf, unref } from '../relations/select.js';
+	import { pageOf, READ_LIMIT, requestJson, rootsOf } from '../read/request.js';
 	import {
 		rangeText,
 		readTableState,
@@ -173,11 +161,12 @@
 		writeTableState,
 		type TableState
 	} from './model.js';
-	import { queryState, type Reading, type ReadState } from '../read/state.js';
+	import { mapped, queryState, type Reading, type ReadState } from '../read/state.js';
 	import { viewState } from '../filter/view-state.svelte.js';
-	import ViewToolbar, { selectionEnabled } from '../collection/ViewToolbar.svelte';
+	import ViewToolbar, { selectionEnabled } from '../model/ViewToolbar.svelte';
 	import ReadGate from '../read/ReadGate.svelte';
 	import Value from '../cell/Value.svelte';
+	import Overflow from '../cell/Overflow.svelte';
 	import ApprovalAccent from '../approval/ApprovalAccent.svelte';
 	import { approvalOf, approvalText } from '../approval/row.js';
 
@@ -216,43 +205,39 @@
 	type ReadRow = RowIn<S> & Partial<ColumnsIn<S>>;
 	const tableSource = $derived(tableInput<ReadRow>(of));
 	const kind = $derived(tableSource._tag === 'read' ? 'q' : tableSource._tag);
-	const name = $derived(
-		tableSource._tag === 'collection' || tableSource._tag === 'query' ? tableSource.name : ''
-	);
-	const collection = $derived(
-		tableSource._tag === 'collection'
+	const name = $derived(tableSource._tag === 'model' ? tableSource.name : '');
+	const model = $derived(
+		tableSource._tag === 'model'
 			? tableSource.name
-			: tableSource._tag === 'query'
-				? tableSource.name.slice(0, tableSource.name.lastIndexOf('.'))
-				: tableSource._tag === 'read' && typeof tableSource.read.read.a[0] === 'string'
-					? tableSource.read.read.a[0]
-					: ''
+			: tableSource._tag === 'read'
+				? (rootsOf(tableSource.read.read)[0] ?? '')
+				: ''
 	);
 
-	const urlKey = $derived(key ?? (name || collection || 'rows'));
+	const urlKey = $derived(key ?? (name || model || 'rows'));
 	const fields = $derived(columns.map((c) => (typeof c === 'string' ? c : c.field)));
 	type Column = Col<RowIn<S>, ColumnsIn<S>>;
 	const colOf = <F extends keyof ColumnsIn<S> & string>(
 		c: F | ColumnDefinition<RowIn<S>, ColumnsIn<S>, F>
 	): ColumnDefinition<RowIn<S>, ColumnsIn<S>, F> => (typeof c === 'string' ? { field: c } : c);
 	// a relation column (a FK or a many-relation) without an authored `cell` shows its targets' labels, read with the page
-	// in the same statement (kind `collection` only)
+	// in the same statement (kind `model` only)
 	const refs = $derived(
-		kind === 'collection'
+		kind === 'model'
 			? columns.filter((c) => colOf(c).cell === undefined).map((c) => colOf(c).field)
 			: []
 	);
 	const tb = $derived(toolbar === false ? {} : toolbar);
-	// search where the collection declares search fields (rule 16), else `like` over its label's text fields, or over a
+	// search where the model declares search fields (rule 16), else `like` over its label's text fields, or over a
 	// local array's columns, or through `search.semantic` or a search index (the toolbar's `/<name>`)
-	const exposed = $derived(kinds.catalog?.[collection]);
+	const exposed = $derived(kinds.catalog?.[model]);
 	const indexed = $derived((exposed?.search?.length ?? 0) > 0);
 	const byLabel = (q: string) =>
 		indexed ? undefined : likeWhere(exposed, exposed?.label ?? [], q);
 	const canSearch = $derived(
 		!controlled &&
 			(kind === 'local' ||
-				(kind === 'collection' &&
+				(kind === 'model' &&
 					(indexed ||
 						byLabel('x') !== undefined ||
 						exposed?.semantic === true ||
@@ -262,7 +247,7 @@
 		const column = columns.find((c) => colOf(c).field === f);
 		return (
 			(column === undefined ? undefined : colOf(column).kind) ??
-			kinds.catalog?.[collection]?.fields[f]
+			kinds.catalog?.[model]?.fields[f]
 		);
 	};
 	const columnKinds = $derived.by(() => {
@@ -284,15 +269,15 @@
 	};
 	const colLabel = (c: Column) => colOf(c).label ?? fieldLabel(colOf(c).field);
 	const fieldLabel = (f: string) =>
-		collection === ''
+		model === ''
 			? (kindOf(f)?.label ?? humanize(f))
-			: label(text, collection, f, kindOf(f)?.label);
-	// the cells' enum and state words read this collection's catalog keys
-	provideCollection(() => collection);
-	const canFilter = $derived(!controlled && (kind === 'collection' || kind === 'local'));
+			: label(text, model, f, kindOf(f)?.label);
+	// the cells' enum and state words read this model's catalog keys
+	provideModel(() => model);
+	const canFilter = $derived(!controlled && (kind === 'model' || kind === 'local'));
 	// the view popover's catalog: the caller's exposure, or a local array's columns (kinds from its values)
 	const LOCAL = '$local';
-	const source = $derived(kind === 'local' ? LOCAL : collection);
+	const source = $derived(kind === 'local' ? LOCAL : model);
 	const catalog = $derived(
 		kind === 'local'
 			? {
@@ -302,18 +287,18 @@
 						(f) => fieldLabel(f)
 					)
 				}
-			: kinds.catalog?.[collection] !== undefined
+			: kinds.catalog?.[model] !== undefined
 				? kinds.catalog
-				: { ...kinds.catalog, [collection]: localExposure([], fields, (f) => fieldLabel(f)) }
+				: { ...kinds.catalog, [model]: localExposure([], fields, (f) => fieldLabel(f)) }
 	);
 	const sorts = $derived(
-		!controlled && (kind === 'collection' || kind === 'local')
+		!controlled && (kind === 'model' || kind === 'local')
 			? sortable(catalog[source], kind !== 'local', catalog)
 			: []
 	);
 	const vs = viewState(client, {
 		key: () => urlKey,
-		collection: () => source,
+		model: () => source,
 		catalog: () => catalog,
 		initialFilter: () => initialFilter,
 		enabled: () => !controlled
@@ -333,8 +318,8 @@
 	const contexts = getAllContexts(); // a New's sheet mounts outside the page; the page's create scope rides along
 	const canNew = $derived(
 		tb.new !== false &&
-			kind === 'collection' &&
-			(typeof tb.new === 'function' || kinds.catalog?.[collection]?.create !== undefined)
+			kind === 'model' &&
+			(typeof tb.new === 'function' || kinds.catalog?.[model]?.create !== undefined)
 	);
 
 	// ── the viewer's columns : order, widths, hidden and pinned columns, and the page size, kept per table in
@@ -419,39 +404,43 @@
 	);
 	const page = $derived.by((): Reading<TableData<ReadRow>> | null => {
 		const after = st.after ?? undefined;
-		const select = listSelect(kinds.catalog, name, fields, refs);
-		if (kind === 'collection' && probe !== null)
-			return host().query<Page<ReadRow>>(
-				name,
-				compact({ search: { [probe.index]: probe.input }, where: scope, select, limit: size })
+		if (kind === 'model' && probe !== null)
+			return mapped(
+				host().query(
+					requestJson(
+						listRequest(
+							kinds.catalog,
+							name,
+							{ search: { [probe.index]: probe.input }, where: scope, limit: size },
+							fields,
+							refs
+						)
+					)
+				),
+				(answer) => pageOf(answer, name) as Page<ReadRow>
 			);
 		// hook:agent-ui — a later page stays live (its index is the pages behind it; a cursor restored from the URL has none)
-		if (kind === 'collection')
-			return pageRead(
+		if (kind === 'model')
+			return pageRead<Page<ReadRow>>(
+				name,
 				(limit, at) =>
-					host().query<Page<ReadRow>>(
-						name,
-						compact({ ...searched, orderBy: order, select, limit, after: at })
+					host().query(
+						requestJson(
+							listRequest(
+								kinds.catalog,
+								name,
+								{ ...searched, orderBy: order, limit, after: at },
+								fields,
+								refs
+							)
+						)
 					),
 				size,
 				back.length > 0 ? back.length : null,
 				after
 			);
-		if (tableSource._tag === 'query') {
-			const input = tableSource.input;
-			const declared = exposed?.queries?.[name.slice(name.lastIndexOf('.') + 1)]?.input;
-			return host().query<TableData<ReadRow>>(
-				name,
-				isRow(input)
-					? compact({
-							...input,
-							...(declared === undefined || declared.limit !== undefined ? { limit: size } : {}),
-							...(declared === undefined || declared.after !== undefined ? { after } : {})
-						})
-					: input
-			);
-		}
-		if (tableSource._tag === 'read') return tableSource.read;
+		if (tableSource._tag === 'read')
+			return mapped(tableSource.read, (answer) => answer[model] ?? []);
 		return null;
 	});
 	const pageState = $derived(queryState(page));
@@ -499,7 +488,7 @@
 			shownRows.map<[ReadRow, Values]>((row) => [
 				row,
 				typeof row['id'] === 'string'
-					? (unref(kinds.catalog, collection, refs, rowsOf([row]), client?.locale)[0] ?? row)
+					? (unref(kinds.catalog, model, refs, rowsOf([row]), client?.locale)[0] ?? row)
 					: row
 			])
 		)
@@ -515,8 +504,8 @@
 	let countInvalid = $state(false);
 	let countRevision = 0;
 	const countRead = watch(() => {
-		if (kind !== 'collection' || st.q !== '' || probe !== null) return null;
-		const collection = name,
+		if (kind !== 'model' || st.q !== '' || probe !== null) return null;
+		const model = name,
 			where = scope;
 		let cached: unknown,
 			first = true;
@@ -524,7 +513,7 @@
 			if (!first && !countInvalid) return Effect.succeed(cached);
 			const revision = countRevision;
 			return host()
-				.aggregate(collection, compact({ count: true, where }))
+				.aggregate(model, compact({ count: true, where }))
 				.pipe(
 					Effect.tap((answer) =>
 						Effect.sync(() => {
@@ -563,7 +552,7 @@
 		for (const id of onPage(rows)) on ? selected.add(id) : selected.delete(id);
 	};
 	const matching = $derived(
-		kind === 'local' ? local.length : kind === 'collection' && probe === null ? count : null
+		kind === 'local' ? local.length : kind === 'model' && probe === null ? count : null
 	);
 	let selecting = $state(false);
 	function selectMatching() {
@@ -571,11 +560,13 @@
 		selecting = true;
 		fork(
 			host()
-				.query<Page<RowIn<S>>>(name, compact({ ...searched, select: { id: true }, all: true }))
+				.query<{ readonly [root: string]: Page<RowIn<S>> }>(
+					requestJson({ [name]: { ...searched, fields: [], limit: READ_LIMIT } })
+				)
 				.pipe(
 					Effect.tap((answer) =>
 						Effect.sync(() => {
-							for (const row of tableRows(answer).filter(recordRow)) selected.add(row.id);
+							for (const row of (answer[name]?.rows ?? []).filter(recordRow)) selected.add(row.id);
 						})
 					),
 					Effect.catch((error) =>
@@ -615,21 +606,26 @@
 	}
 	// the toolbar's CSV: every row of the current scope, search and sort, over the view's columns
 	const exporter = $derived(
-		kind === 'collection'
+		kind === 'model'
 			? {
 					fields,
 					labels: columns.map(colLabel),
 					kinds: columnKinds,
 					read: () =>
-						host().query(
-							name,
-							compact({
-								...searched,
-								orderBy: order,
-								select: listSelect(kinds.catalog, name, fields, refs, true),
-								all: true
-							})
-						)
+						host()
+							.query(
+								requestJson(
+									listRequest(
+										kinds.catalog,
+										name,
+										{ ...searched, orderBy: order, limit: READ_LIMIT },
+										fields,
+										refs,
+										true
+									)
+								)
+							)
+							.pipe(Effect.map((answer) => pageOf(answer, name)))
 				}
 			: kind === 'local' && tb.export === true
 				? {
@@ -641,7 +637,7 @@
 				: undefined
 	);
 	// the footer : the range, the page size, "page X of Y" and previous/next over the cursor
-	const paged = $derived(kind === 'collection' || kind === 'query');
+	const paged = $derived(kind === 'model');
 	const range = $derived(
 		view.kind !== 'ready'
 			? null
@@ -732,11 +728,11 @@
 	// the row actions stay at the right edge while wide rows scroll sideways (else a many-column table hides them past it)
 	const ACTS_EDGE = 'sticky right-0 shadow-[inset_1px_0_0_0_var(--color-border)]';
 
-	const opens = $derived(kind === 'collection' || onOpen !== undefined);
+	const opens = $derived(kind === 'model' || onOpen !== undefined);
 	const open = (row: ReadRow) =>
 		onOpen
 			? onOpen(row)
-			: kind === 'collection' && typeof row['id'] === 'string' && openRecord(collection, row['id']);
+			: kind === 'model' && typeof row['id'] === 'string' && openRecord(model, row['id']);
 	/** A click on a row opens it, as the phone's card does; a link, a control, a sheet or selected text keeps its own. */
 	// only a control inside the row counts: the sheet the table sits in is a dialog too, and keeps nothing
 	const rowClick = (e: MouseEvent, row: ReadRow) => {
@@ -754,6 +750,16 @@
 	/** A cell's full text, its tooltip when the single line truncates. */
 	const fullText = (row: ReadRow, f: string) =>
 		refOf(presentRow(row), f)?.text ?? show(valueAt(presentRow(row), f), client?.locale);
+	/** Plain cell text: its overflow can open a popover without swallowing a link or a control. */
+	const plainText = (row: ReadRow, f: string) => {
+		const displayed = presentRow(row),
+			declared = kindOf(f);
+		return (
+			typeof valueAt(displayed, f) === 'string' &&
+			refOf(displayed, f) === undefined &&
+			(declared === undefined || (declared.kind === 'text' && declared.format === undefined))
+		);
+	};
 	const presentRow = (row: ReadRow): Values => presented.get(row) ?? row;
 	const columnValue = <F extends keyof ColumnsIn<S> & string>(row: ReadRow, field: F) => row[field];
 
@@ -807,7 +813,17 @@
 			row,
 			value: columnValue(row, col.field),
 			field: col.field
-		})}{:else}<Value
+		})}{:else if plainText(row, col.field)}<Overflow text={fullText(row, col.field)}
+			><Value
+				value={valueAt(displayed, col.field)}
+				kind={kindOf(col.field)}
+				row={displayed}
+				ref={undefined}
+				name={col.field}
+				dense
+				link={!title}
+			/></Overflow
+		>{:else}<Value
 			value={valueAt(displayed, col.field)}
 			kind={kindOf(col.field)}
 			row={displayed}
@@ -991,7 +1007,7 @@
 >
 	{#if !embedded}<ViewToolbar
 			config={toolbar}
-			{collection}
+			{model}
 			view={canFilter ? vs : undefined}
 			{catalog}
 			{source}
@@ -1005,7 +1021,7 @@
 			onAdd={kind === 'local' && onChange && add
 				? () => onChange([...(tableSource._tag === 'local' ? tableSource.rows : []), add()])
 				: undefined}
-			onProbe={kind === 'collection'
+			onProbe={kind === 'model'
 				? (p) => {
 						probe = p;
 						restart({});
@@ -1016,11 +1032,14 @@
 
 	{#snippet content(rows: readonly ReadRow[])}
 		{#if rows.length === 0}
-			{#if empty}{@render empty()}
+			{#if empty}
+				<div class={embedded ? 'min-w-0' : 'bg-card min-w-0 rounded-md border'} data-table-card>
+					{@render empty()}
+				</div>
 			{:else}
 				<!-- an empty view says what is missing and offers the way forward, inside the table's own card -->
 				{@const what =
-					collection === '' ? msg(text, 'table.rows', 'rows') : lowerLead(label(text, collection))}
+					model === '' ? msg(text, 'table.rows', 'rows') : lowerLead(label(text, model))}
 				<div class={embedded ? 'min-w-0' : 'bg-card min-w-0 rounded-md border'} data-table-card>
 					{#if filtered}
 						<EmptyState
@@ -1053,7 +1072,7 @@
 									onclick={() =>
 										typeof tb.new === 'function'
 											? tb.new()
-											: openRecord(collection, 'new', contexts)}
+											: openRecord(model, 'new', contexts)}
 									><Glyph name="plus" />{msg(text, 'table.new', 'New')}</Button
 								>{/if}
 						</EmptyState>
@@ -1285,12 +1304,10 @@
 													onchange={(e) => edit(row, col.field, e.currentTarget.value)}
 												/>
 											{:else}
-												<!-- one line: a long value truncates, its full text is the tooltip -->
+												<!-- one line: every row keeps its height, a long value truncates, its full text is the tooltip -->
 												<div
 													class={[
-														embedded
-															? 'min-w-0 whitespace-normal'
-															: 'truncate [&_[data-enum-list]]:flex-nowrap',
+														'truncate [&_[data-enum-list]]:flex-nowrap',
 														!embedded && w === undefined && 'max-w-80',
 														ci === 0 && opens && 'pr-7'
 													]}
@@ -1434,7 +1451,7 @@
 	{:else}
 		<ReadGate
 			state={view}
-			what={collection === '' ? msg(text, 'table.rows', 'these rows') : label(text, collection)}
+			what={model === '' ? msg(text, 'table.rows', 'these rows') : label(text, model)}
 		>
 			{#snippet children(rows)}{@render content(rows)}{/snippet}
 		</ReadGate>

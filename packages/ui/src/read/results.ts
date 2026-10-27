@@ -1,5 +1,5 @@
 import type { Json } from '@norbital-ai/std/wire';
-import type { Row, Values } from '../collection/types.js';
+import type { Row, Values } from '../model/types.js';
 /** The signed-in member's id, or null for any other actor. */
 export const actorId = (actor: Json): string | null =>
 	isRow(actor) && typeof actor['id'] === 'string' ? actor['id'] : null;

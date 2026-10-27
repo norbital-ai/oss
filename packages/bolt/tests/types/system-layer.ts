@@ -1,20 +1,21 @@
-// Type corpus for the built-in layer (`src/system/**`): workspace code names the system collections as it names its
-// own, typed by their declarations; the engine's private models (sessions, challenges, config) are no collection.
+// Type corpus for the built-in layer (`src/system/**`): workspace code names the system models as it names its
+// own, typed by their declarations; the engine's private models (sessions, challenges, config) are no model.
 import type { Insert, Patch } from '../../src/decl/ctx.ts';
-import type { CollectionName, ColumnValue, ReadField, SystemName } from '../../src/decl/names.ts';
+import type { ModelName, ColumnValue, ReadField, SystemName } from '../../src/decl/names.ts';
 import type { Id, Json } from '../../src/decl/values.ts';
 import type { Where } from '../../src/decl/where.ts';
 import './registry.ts';
 
 type Eq<A, B> = (<T>() => T extends A ? 1 : 2) extends <T>() => T extends B ? 1 : 2 ? true : false;
 const is = <T extends true>(): T => true as T;
+type Flat<T> = { [K in keyof T]: T[K] };
 
 is<Eq<ColumnValue<'sys_user', 'kind'>, 'staff' | 'external'>>();
 is<Eq<ColumnValue<'sys_user', 'email'>, string | null>>();
 is<Eq<ColumnValue<'sys_user', 'team'>, string | null>>();
 is<Eq<ColumnValue<'approval_request', 'id'>, Id<'approval_request'>>>();
 is<Eq<'sys_run' extends SystemName ? true : false, true>>();
-is<Eq<'sys_session' extends CollectionName ? true : false, false>>();
+is<Eq<'sys_session' extends ModelName ? true : false, false>>();
 const staff: Where<'sys_user'> = { kind: { eq: 'staff' }, active: { eq: true } };
 // @ts-expect-error S1 a stored user's kind is staff or external, unlike an actor's member kind
 const member: Where<'sys_user'> = { kind: { eq: 'member' } };
@@ -31,7 +32,7 @@ void notTeam;
 // fence is no column of it
 is<
 	Eq<
-		Insert<'sys_integration'>,
+		Flat<Insert<'sys_integration'>>,
 		{
 			readonly integration: string;
 			readonly name: string;
@@ -44,7 +45,7 @@ is<
 is<Eq<ColumnValue<'sys_message', 'integration'>, Id<'sys_integration'> | null>>();
 is<
 	Eq<
-		Patch<'sys_integration'>,
+		Flat<Patch<'sys_integration'>>,
 		{
 			readonly name?: string;
 			readonly envoy?: string | null;

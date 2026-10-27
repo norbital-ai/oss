@@ -1,32 +1,26 @@
-// A historical get never moves the live revision ledger used by a subsequent update (rule 25).
+// A read request's rows feed the live revision ledger an update observes; an editor keeps its draft's revision (rule 25).
 import { Effect, Schema } from 'effect';
 import { expect, it } from '@effect/vitest';
 import { createBolt } from '../src/page/bolt.ts';
 import { ActBody, QBody } from '../src/protocol/schema.ts';
 
 const Call = Schema.Union([QBody, ActBody]);
-const Revision = Schema.Struct({ revision: Schema.optionalKey(Schema.Number) });
 const present = <A>(value: A | undefined): A => {
 	if (value === undefined) throw new Error('Missing recorded request');
 	return value;
 };
 
-it.effect('a revision get sends { revision } and leaves the ledger at the live revision', () =>
+it.effect('a read request records the live revision; an update sends it as observed', () =>
 	Effect.gen(function* () {
 		const sent: { url: string; body: typeof Call.Type }[] = [];
 		const fetch: typeof globalThis.fetch = async (url, init) => {
 			const request = new Request(url, init);
 			const body = Schema.decodeUnknownSync(Call)(await request.json());
 			sent.push({ url: request.url, body });
-			if ('reads' in body) {
-				const read = present(body.reads[0]);
-				const revision = Schema.decodeUnknownSync(Revision)(read.a[1] ?? {}).revision;
+			if ('reads' in body)
 				return Response.json({
-					answers: [
-						{ id: 'j1', revision: revision ?? 3, title: revision === undefined ? 'live' : 'past' }
-					]
+					answers: [{ jobs: { rows: [{ id: 'j1', revision: 3, title: 'live' }], next: null } }]
 				});
-			}
 			return Response.json({
 				outcome: { kind: 'refused', code: 'invalidInput', message: 'no' },
 				v: 0
@@ -38,21 +32,16 @@ it.effect('a revision get sends { revision } and leaves the ledger at the live r
 			locale: 'en',
 			fetch
 		});
-		expect(yield* bolt.query('jobs', { id: 'j1' })).toMatchObject({ revision: 3, title: 'live' });
-		expect(yield* bolt.query('jobs', { id: 'j1', revision: 1 })).toMatchObject({
-			revision: 1,
-			title: 'past'
-		});
-		expect(Schema.decodeUnknownSync(QBody)(present(sent[1]).body).reads[0]).toEqual({
-			m: 'query',
-			a: ['jobs', { id: 'j1', revision: 1 }]
+		const request = { jobs: { where: { id: { eq: 'j1' } } } };
+		expect(yield* bolt.query(request)).toMatchObject({
+			jobs: { rows: [{ revision: 3, title: 'live' }] }
 		});
 		expect(Schema.decodeUnknownSync(QBody)(present(sent[0]).body).reads[0]).toEqual({
 			m: 'query',
-			a: ['jobs', { id: 'j1' }]
+			a: [request]
 		});
-		yield* Effect.flip(bolt.act('jobs.update', { target: 'j1', set: { title: 'x' } }));
-		expect(Schema.decodeUnknownSync(ActBody)(present(sent[2]).body).observed).toEqual({ j1: 3 });
+		yield* Effect.flip(bolt.act('jobs.update', [{ target: 'j1', set: { title: 'x' } }]));
+		expect(Schema.decodeUnknownSync(ActBody)(present(sent[1]).body).observed).toEqual({ j1: 3 });
 	})
 );
 
@@ -67,11 +56,11 @@ it.effect(
 				sent.push(body);
 				return Response.json(
 					'reads' in body
-						? { answers: [{ id: 'j1', revision, title: 'live' }] }
+						? { answers: [{ jobs: { rows: [{ id: 'j1', revision, title: 'live' }], next: null } }] }
 						: {
 								outcome: {
 									kind: 'conflict',
-									records: [{ collection: 'jobs', id: 'j1', fields: ['title'] }]
+									records: [{ model: 'jobs', id: 'j1', fields: ['title'] }]
 								},
 								v: 0
 							}
@@ -83,11 +72,12 @@ it.effect(
 				locale: 'en',
 				fetch
 			});
-			yield* bolt.query('jobs', { id: 'j1' });
+			const request = { jobs: { where: { id: { eq: 'j1' } } } };
+			yield* bolt.query(request);
 			revision = 4;
-			yield* bolt.query('jobs', { id: 'j1' });
+			yield* bolt.query(request);
 			const outcome = yield* Effect.flip(
-				bolt.act('jobs.update', { target: 'j1', set: { title: 'draft' } }, { observed: { j1: 3 } })
+				bolt.act('jobs.update', [{ target: 'j1', set: { title: 'draft' } }], { observed: { j1: 3 } })
 			);
 			expect(sent[2]).toMatchObject({ observed: { j1: 3 } });
 			expect(outcome._tag).toBe('ActConflict');

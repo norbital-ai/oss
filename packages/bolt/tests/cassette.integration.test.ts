@@ -25,7 +25,7 @@ const manifest = Result.getOrThrow(
 		},
 		models: {},
 		relationships: {},
-		collections: {},
+		exposures: {},
 		policies: {},
 		agent: { internal: 'Staff brief.', skills: {} },
 		integrations: {},
@@ -185,7 +185,7 @@ describe('cassette latency (L-BOLT-434)', () => {
 						)
 					);
 					yield* live.register(yield* Deferred.await(connected), 'transcript', {
-						read: { kind: 'transcript', collection: 'sys_message', conversation: c, thread: false }
+						read: { kind: 'transcript', model: 'sys_message', conversation: c, thread: false }
 					});
 					yield* live.settled;
 					const toProvider: number[] = [],

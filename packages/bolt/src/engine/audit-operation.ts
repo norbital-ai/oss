@@ -100,7 +100,7 @@ export const prepareAudit = Effect.fn('Audit.prepare')(function* (intent: AuditI
 	} satisfies AuditMutation;
 });
 const History = Schema.Struct({
-	collection: Schema.String,
+	model: Schema.String,
 	id: Schema.String,
 	revision: Schema.Number,
 	at: Schema.String,
@@ -145,14 +145,14 @@ export const settleAudit = Effect.fn('Audit.settle')(function* (
 		coalesce(r.expires_at,(SELECT expires_at FROM bolt_audit_retention WHERE one))<=clock_timestamp() AS due
 		FROM bolt_audit_receipt r LEFT JOIN bolt_idem i ON i.key=r.outcome_key
 		LEFT JOIN bolt_idem_outcome o ON o.key=i.key WHERE r.operation=$1),
-		history AS (SELECT h.collection,h.record::text AS id,h.revision,h.at::text AS at,h.actor,h.op,h.cause,
+		history AS (SELECT h.collection AS model,h.record::text AS id,h.revision,h.at::text AS at,h.actor,h.op,h.cause,
 		CASE WHEN h.op='create' THEN NULL ELSE (SELECT coalesce(jsonb_object_agg(e.key,e.value),'{}'::jsonb) - ARRAY['revision','updated_at','updated_by'] FROM
 		(SELECT DISTINCT ON(x.key) x.key,x.value FROM bolt_history p CROSS JOIN LATERAL jsonb_each(p.changes) x WHERE p.collection=h.collection AND p.record=h.record AND p.revision<h.revision ORDER BY x.key,p.revision DESC) e)
 		|| coalesce((SELECT p.meta FROM bolt_history p WHERE p.collection=h.collection AND p.record=h.record AND p.revision<h.revision ORDER BY p.revision DESC LIMIT 1),'{}'::jsonb) END AS old,
 		CASE WHEN h.op='delete' THEN NULL ELSE (SELECT coalesce(jsonb_object_agg(e.key,e.value),'{}'::jsonb) - ARRAY['revision','updated_at','updated_by'] FROM
 		(SELECT DISTINCT ON(x.key) x.key,x.value FROM bolt_history p CROSS JOIN LATERAL jsonb_each(p.changes) x WHERE p.collection=h.collection AND p.record=h.record AND p.revision<=h.revision ORDER BY x.key,p.revision DESC) e) || h.meta END AS new
 		FROM bolt_history h WHERE h.operation=$1 AND NOT (SELECT acknowledged OR expired FROM receipt))
-		SELECT receipt.*,coalesce((SELECT jsonb_agg(to_jsonb(h) ORDER BY h.collection,h.id,h.revision) FROM history h),'[]'::jsonb) AS records FROM receipt`,
+		SELECT receipt.*,coalesce((SELECT jsonb_agg(to_jsonb(h) ORDER BY h.model,h.id,h.revision) FROM history h),'[]'::jsonb) AS records FROM receipt`,
 		params: [event.operationId]
 	});
 	if (receipt._tag === 'None') return false;
@@ -182,10 +182,10 @@ export const settleAudit = Effect.fn('Audit.settle')(function* (
 	};
 	const rows: AuditEvent[] = written.map((row) => ({
 		...event,
-		id: `${event.operationId}:row:${row.collection}:${row.id}:${row.revision}`,
-		action: `${row.collection}.${row.op}`,
+		id: `${event.operationId}:row:${row.model}:${row.id}:${row.revision}`,
+		action: `${row.model}.${row.op}`,
 		status,
-		subject: { model: row.collection, id: row.id, revision: row.revision },
+		subject: { model: row.model, id: row.id, revision: row.revision },
 		payload: encodeWire({ request: event.payload, change: row })
 	}));
 	yield* (yield* Audit).append([...rows, terminal]);

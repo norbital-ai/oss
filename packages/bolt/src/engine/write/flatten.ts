@@ -1,5 +1,5 @@
 // Decode and flatten (rules 21–23a): an act's input (or a callback's payload) becomes a flat list of `Change`s, one per
-// row, relation actions made explicit. Decode checks the collection's input allowlist at every nesting level and reports
+// row, relation actions made explicit. Decode checks the model's input allowlist at every nesting level and reports
 // every offender at once; nothing is ever deleted by omission (rule 22).
 import { Array as EffectArray, Predicate, Result, Schema } from 'effect';
 import { inputSchema } from '@norbital-ai/std/kind';
@@ -7,6 +7,7 @@ import { encodeWire } from '@norbital-ai/std/wire';
 import type { Json } from '../../decl/values.ts';
 import type { Change, EngineActor, InputPath, RowData } from '../contracts.ts';
 import type { EngineManifest } from '../manifest.ts';
+import type { LayerColumns } from '../../decl/model.ts';
 import { LIMITS } from '../contracts.ts';
 import type { Catalog, FieldInfo, ModelInfo } from '@norbital-ai/store';
 import { offsetMs } from '../runs/time.ts';
@@ -20,6 +21,56 @@ export type Sel =
 			readonly columns: readonly string[];
 			readonly with?: { readonly [rel: string]: { readonly [action: string]: unknown } };
 	  };
+const NONE: Sel = { columns: [] };
+/**
+ * A model's write declaration (`create.columns` / `update.columns`, keyed by layer path) as the decode allowlist: the
+ * path's columns and, per child layer, its relation actions. A create's children are created (a non-owned one linked by
+ * id); an update's are created, updated and deleted (a non-owned one linked and unlinked), each row with its path's columns.
+ */
+export const layerSel = (
+	m: EngineManifest,
+	cat: Catalog,
+	columns: LayerColumns,
+	verb: 'create' | 'update',
+	path: string,
+	model: string = path
+): Sel => ({
+	columns: columns[path] ?? [],
+	with: Object.fromEntries(
+		Object.keys(columns).flatMap((p) => {
+			const rel = p.startsWith(`${path}.`) ? p.slice(path.length + 1) : '';
+			const many = rel === '' || rel.includes('.') ? undefined : cat.models.get(model)?.many.get(rel);
+			if (many === undefined) return [];
+			const sub = layerSel(m, cat, columns, verb, p, many.child);
+			const free = m.relationships[`${many.child}.${many.column}`]?.owned
+				? {}
+				: verb === 'create'
+					? { link: NONE }
+					: { link: NONE, unlink: NONE };
+			return [
+				[
+					rel,
+					verb === 'create'
+						? { create: sub, ...free }
+						: { create: sub, update: sub, delete: NONE, ...free }
+				]
+			];
+		})
+	)
+});
+/** A change's write path: its root and each relation it was reached through (`'orders.lines'`). */
+export const layerPath = (root: string, path: InputPath): string =>
+	[
+		root,
+		...path.flatMap((part, at) => {
+			const next = path[at + 1];
+			return typeof part === 'string' &&
+				typeof next === 'string' &&
+				(ACTIONS as readonly string[]).includes(next)
+				? [part]
+				: [];
+		})
+	].join('.');
 /** One flattened row change plus what the pipeline judges it by. */
 export type Item = {
 	change: Change;
@@ -28,13 +79,16 @@ export type Item = {
 	/** Refs the input supplied (rule 36), `field → target`. */
 	refs: { field: string; to: string; id: string }[];
 	/** Set on a relation action: the parent row and the relation it came through. */
-	parent?: { collection: string; id: string; rel: string; fk: string };
+	parent?: { model: string; id: string; rel: string; fk: string };
 	/** `link`/`unlink`/nested `update`/`delete` name an existing child that must belong to (or be free for) the parent. */
 	belongs?: 'parent' | 'free';
 };
 type Problem = { path: InputPath; message: string };
 
 type Obj = { readonly [k: string]: Json };
+/** A relation's value: its explicit actions, or (a create tree) the list of children, an id among them a link. */
+type Rel = Obj | readonly Json[];
+const isList = (v: Json | undefined): v is readonly Json[] => Array.isArray(v);
 const ACTIONS = ['create', 'update', 'upsert', 'link', 'unlink', 'delete'] as const;
 
 export class Flattener {
@@ -69,14 +123,14 @@ export class Flattener {
 		sel: Sel,
 		value: Json | undefined,
 		path: InputPath
-	): { values: Record<string, Json>; rels: [string, Obj][]; supplied: string[] } | null {
+	): { values: Record<string, Json>; rels: [string, Rel][]; supplied: string[] } | null {
 		if (!Predicate.isObject(value)) {
 			this.bad(path, 'expected an object');
 			return null;
 		}
 		const info = this.model(model);
 		const values: Record<string, Json> = {},
-			rels: [string, Obj][] = [],
+			rels: [string, Rel][] = [],
 			supplied: string[] = [];
 		for (const [k, v] of Object.entries(value)) {
 			const at = [...path, k];
@@ -84,11 +138,10 @@ export class Flattener {
 			if (rel !== undefined) {
 				if (sel !== 'any' && sel.with?.[k] === undefined)
 					this.bad(at, `'${k}' is not accepted here`);
-				else if (!Predicate.isObject(v)) this.bad(at, 'expected relation actions');
-				else {
+				else if (Predicate.isObject(v) || isList(v)) {
 					rels.push([k, v]);
 					supplied.push(k);
-				}
+				} else this.bad(at, 'expected relation actions');
 				continue;
 			}
 			const f = info.fields.get(k);
@@ -148,7 +201,7 @@ export class Flattener {
 				if (shape === undefined || v === null) return [];
 				return decodeInput({ [k]: shape }, { [k]: v }).refs.map((ref) => ({
 					field: ref.field,
-					to: ref.collection,
+					to: ref.model,
 					id: ref.id
 				}));
 			}
@@ -157,7 +210,7 @@ export class Flattener {
 			return typeof v === 'string'
 				? [{ field: k, to: one.targets[0]!, id: v }]
 				: ref !== undefined
-					? [{ field: k, to: String(ref['collection']), id: String(ref['id']) }]
+					? [{ field: k, to: String(ref['model']), id: String(ref['id']) }]
 					: [];
 		});
 	}
@@ -192,9 +245,9 @@ export class Flattener {
 			(upsert === undefined && named !== undefined ? named : minted);
 		const change: Change =
 			upsert === undefined
-				? { collection: model, id, path, op: 'create', values: d.values }
+				? { model: model, id, path, op: 'create', values: d.values }
 				: {
-						collection: model,
+						model: model,
 						id,
 						path,
 						op: 'upsert',
@@ -227,7 +280,7 @@ export class Flattener {
 		const d = this.columns(model, sel, set, [...path, 'set']);
 		if (d === null) return;
 		this.items.push({
-			change: { collection: model, id, path, op: 'update', set: d.values, revision },
+			change: { model: model, id, path, op: 'update', set: d.values, revision },
 			supplied: d.supplied,
 			refs: this.refsOf(model, d.values),
 			...(parent === undefined ? {} : { parent, belongs: 'parent' as const })
@@ -247,7 +300,7 @@ export class Flattener {
 			return;
 		}
 		this.items.push({
-			change: { collection: model, id, path, op: 'delete', revision },
+			change: { model: model, id, path, op: 'delete', revision },
 			supplied: [],
 			refs: [],
 			...(parent === undefined ? {} : { parent, belongs: 'parent' as const })
@@ -296,15 +349,30 @@ export class Flattener {
 		model: string,
 		sel: Sel,
 		id: string,
-		rels: [string, Obj][],
+		rels: [string, Rel][],
 		path: InputPath
 	): void {
 		for (const [name, actions] of rels) {
 			const rel = this.model(model).many.get(name)!;
 			const spec = this.m.relationships[`${rel.child}.${rel.column}`];
-			const parent = { collection: model, id, rel: name, fk: rel.column };
+			const parent = { model: model, id, rel: name, fk: rel.column };
 			const allowed = sel === 'any' ? undefined : sel.with?.[name];
-			for (const [action, list] of Object.entries(actions)) {
+			// a create tree's list keeps each child's index: an object creates, an id links
+			const groups = new Map<string, (readonly [Json, InputPath])[] | null>();
+			if (isList(actions))
+				actions.forEach((v, i) => {
+					const action = typeof v === 'string' ? 'link' : 'create';
+					const list = groups.get(action) ?? [];
+					list.push([v, [...path, name, action, i]]);
+					groups.set(action, list);
+				});
+			else
+				for (const [action, list] of Object.entries(actions))
+					groups.set(
+						action,
+						isList(list) ? list.map((v, i) => [v, [...path, name, action, i]] as const) : null
+					);
+			for (const [action, list] of groups) {
 				const at = [...path, name, action];
 				if (
 					!(ACTIONS as readonly string[]).includes(action) ||
@@ -313,14 +381,13 @@ export class Flattener {
 					this.bad(at, `'${action}' is not accepted here`);
 					continue;
 				}
-				if (!EffectArray.isArray<typeof list>(list)) {
+				if (list === null) {
 					this.bad(at, 'expected a list');
 					continue;
 				}
 				if (!this.depth(at)) continue;
 				const sub: Sel = allowed === undefined ? 'any' : (allowed[action] as Sel);
-				list.forEach((v: Json, i: number) => {
-					const p = [...at, i];
+				list.forEach(([v, p]) => {
 					if (action === 'create') this.create(rel.child, sub, v, p, parent);
 					else if (action === 'upsert') this.upsert(rel.child, sub, v, p, parent);
 					else if (action === 'update')
@@ -334,7 +401,7 @@ export class Flattener {
 					else
 						this.items.push({
 							change: {
-								collection: rel.child,
+								model: rel.child,
 								id: v,
 								path: p,
 								op: 'update',
@@ -417,10 +484,10 @@ export function decodeValue(
 			return Predicate.isObject(v) &&
 				Object.keys(v).length === 2 &&
 				typeof v['id'] === 'string' &&
-				typeof v['collection'] === 'string' &&
-				(f.arms ?? []).includes(v['collection'])
+				typeof v['model'] === 'string' &&
+				(f.arms ?? []).includes(v['model'])
 				? null
-				: `expected { collection, id } with collection one of ${(f.arms ?? []).join(', ')}`;
+				: `expected { model, id } with model one of ${(f.arms ?? []).join(', ')}`;
 		// X-11: a date period `{ from, to | null }` (inclusive), an instant period `{ start, end | null }`; empty or inverted refused
 		case 'period': {
 			const date = f.periodOf === 'date',
@@ -512,7 +579,7 @@ export function withDefaults(
 		else if (
 			r.default.actor === 'party' &&
 			actor.party !== null &&
-			rel.targets.includes(actor.party.collection)
+			rel.targets.includes(actor.party.model)
 		)
 			values[fk] = actor.party.id;
 	}

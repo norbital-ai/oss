@@ -54,12 +54,34 @@ export type WaSocket = {
 			| { image: Buffer; mimetype: string }
 			| { document: Buffer; mimetype: string; fileName: string }
 	): Promise<{ key?: { id?: string | null }; message?: unknown } | undefined>;
-	sendPresenceUpdate?(type: 'composing' | 'paused', jid: string): Promise<void>;
+	sendPresenceUpdate?(type: 'available' | 'composing' | 'paused', jid?: string): Promise<void>;
+	/** Read receipts (blue ticks) for received messages. */
+	readMessages?(keys: readonly MessageKey[]): Promise<void>;
+	/** Asks WhatsApp for this chat's `presence.update` events (the sender typing). */
+	presenceSubscribe?(jid: string): Promise<void>;
 	requestPairingCode(phone: string): Promise<string>;
 	groupMetadata?(jid: string): Promise<GroupMetadata>;
 	logout(): Promise<void>;
 	end(error: Error | undefined): void | Promise<void>;
 };
+/** A received message's key, as `readMessages` takes it. */
+type MessageKey = { remoteJid: string; id: string; participant?: string };
+const RawKey = Schema.Struct({
+	key: Schema.Struct({
+		remoteJid: Schema.String,
+		id: Schema.String,
+		fromMe: Schema.optionalKey(Schema.NullOr(Schema.Boolean)),
+		participant: Schema.optionalKey(Schema.NullOr(Schema.String))
+	})
+});
+/** `presence.update`: a chat and each participant's last known presence. */
+const Presence = Schema.Struct({
+	id: Schema.String,
+	presences: Schema.Record(
+		Schema.String,
+		Schema.Struct({ lastKnownPresence: Schema.optionalKey(Schema.String) })
+	)
+});
 /** The instance's keys as Baileys' `auth` reads them: Json values (its Buffers encoded), written through. */
 export type WaStore = {
 	/** The paired creds, or `null` for a new pairing. */
@@ -442,6 +464,11 @@ const link = Effect.fn('WhatsApp.open')(function* (ctx: DriverOpen, options: Bai
 		attempt = 0,
 		openedAt = 0,
 		restartingAfterPairing = false;
+	// ponytail: in memory per link, the last 20 keys per chat; a reconnect forgets them (their ticks wait for the next message)
+	const unread = new Map<string, MessageKey[]>();
+	/** Sockets that announced `available` (WhatsApp shows typing only from an online account) and the DMs whose typing they watch. */
+	const online = new WeakSet<WaSocket>(),
+		watched = new WeakMap<WaSocket, Set<string>>();
 	const status = (value: LinkStatus) => hostCall('report WhatsApp status', () => ctx.status(value));
 	const transition = (next: Supervisor) =>
 		Effect.suspend(() =>
@@ -597,6 +624,30 @@ const link = Effect.fn('WhatsApp.open')(function* (ctx: DriverOpen, options: Bai
 				});
 			if (ids.length > 0) yield* emitting({ kind: 'messages', messages: ids });
 		});
+	/** A live received message: its key waits for the read receipt `typing` sends, and a DM's typing is watched. */
+	const heard = (socket: WaSocket, raw: unknown, message: Json) =>
+		Effect.gen(function* () {
+			const key = Option.getOrUndefined(Schema.decodeUnknownOption(RawKey)(raw))?.key;
+			const thread = Predicate.isObject(message) ? str(message['thread']) : null;
+			if (key === undefined || key.fromMe === true || thread === null) return;
+			const keys = unread.get(thread) ?? [];
+			keys.push({
+				remoteJid: key.remoteJid,
+				id: key.id,
+				...(typeof key.participant === 'string' ? { participant: key.participant } : {})
+			});
+			unread.set(thread, keys.slice(-20));
+			const seen = watched.get(socket) ?? new Set<string>();
+			watched.set(socket, seen);
+			if (key.remoteJid.endsWith('@g.us') || seen.has(key.remoteJid)) return;
+			seen.add(key.remoteJid);
+			const subscribe = socket.presenceSubscribe;
+			if (subscribe !== undefined)
+				yield* hostCall('watch WhatsApp typing', () => subscribe.call(socket, key.remoteJid)).pipe(
+					Effect.tapCause(Effect.logWarning),
+					Effect.ignore
+				);
+		});
 	const wire = (got: Opened, raw: unknown, live: boolean) =>
 		Effect.gen(function* () {
 			const found = whatsappMessage(raw, got.socket.user?.id, {
@@ -680,6 +731,7 @@ const link = Effect.fn('WhatsApp.open')(function* (ctx: DriverOpen, options: Bai
 				for (const raw of raws) {
 					const found = yield* wire(got, raw, !backfill);
 					if (found === null) continue;
+					if (!backfill) yield* heard(got.socket, raw, found.message);
 					if (found.bins === undefined) {
 						messages.push(found.message);
 						if (messages.length === 100) {
@@ -783,12 +835,14 @@ const link = Effect.fn('WhatsApp.open')(function* (ctx: DriverOpen, options: Bai
 										new LinkClosed({ message: 'the WhatsApp link is closing' })
 									);
 								const found = yield* wire(got, raw, true);
-								if (found !== null)
+								if (found !== null) {
 									yield* emitting({
 										kind: 'messages',
 										messages: [found.message],
 										...(found.bins === undefined ? {} : { bins: found.bins })
 									});
+									yield* heard(got.socket, raw, found.message);
+								}
 							})
 						),
 					getMessage: (key) => sdk(Cache.get(sent, key.id ?? '')),
@@ -869,7 +923,8 @@ const link = Effect.fn('WhatsApp.open')(function* (ctx: DriverOpen, options: Bai
 							'messages.update',
 							'messages.delete',
 							'chats.delete',
-							'message-receipt.update'
+							'message-receipt.update',
+							'presence.update'
 						])
 							got.socket.ev.on(type, (value: unknown) => {
 								if (current !== got || closing) return;
@@ -976,6 +1031,19 @@ const link = Effect.fn('WhatsApp.open')(function* (ctx: DriverOpen, options: Bai
 									Effect.tapCause(Effect.logWarning),
 									Effect.ignore
 								);
+							} else if (type === 'presence.update') {
+								// the sender is typing: the engine holds their burst a little longer
+								const decoded = Schema.decodeUnknownOption(Presence)(value);
+								if (Option.isSome(decoded)) {
+									const typing = Object.values(decoded.value.presences).some(
+										(p) =>
+											p.lastKnownPresence === 'composing' || p.lastKnownPresence === 'recording'
+									);
+									const thread = yield* threadOf(got.socket, decoded.value.id);
+									yield* hostCall('report WhatsApp typing', () =>
+										ctx.emit({ kind: 'presence', thread, typing })
+									).pipe(Effect.tapCause(Effect.logWarning), Effect.ignore);
+								}
 							} else if (type === 'creds.update') {
 								if (synced(store.creds)) yield* Deferred.succeed(syncedGate, undefined);
 							} else if (type === 'messages.update' || type === 'message-receipt.update') {
@@ -1141,17 +1209,26 @@ const link = Effect.fn('WhatsApp.open')(function* (ctx: DriverOpen, options: Bai
 					);
 				return { providerId: id };
 			}),
-		typing: (to: string) =>
-			Effect.suspend(() => {
-				const socket = current?.socket;
-				return socket !== undefined &&
-					socket.sendPresenceUpdate !== undefined &&
-					phase._tag === 'Connected'
-					? hostCall(
-							'WhatsApp typing',
-							() => socket.sendPresenceUpdate?.('composing', jidOf(to)) ?? Promise.resolve()
-						)
-					: Effect.void;
+		// typing on reads the chat's waiting messages (blue ticks) and, once per socket, goes online first
+		typing: (to: string, on: boolean) =>
+			Effect.gen(function* () {
+				const socket = current?.socket,
+					presence = socket?.sendPresenceUpdate;
+				if (socket === undefined || presence === undefined || phase._tag !== 'Connected') return;
+				if (on) {
+					const keys = unread.get(to),
+						read = socket.readMessages;
+					unread.delete(to);
+					if (keys !== undefined && read !== undefined)
+						yield* hostCall('read WhatsApp messages', () => read.call(socket, keys));
+					if (!online.has(socket)) {
+						online.add(socket);
+						yield* hostCall('WhatsApp online', () => presence.call(socket, 'available'));
+					}
+				}
+				yield* hostCall('WhatsApp typing', () =>
+					presence.call(socket, on ? 'composing' : 'paused', jidOf(to))
+				);
 			})
 	};
 });

@@ -55,9 +55,9 @@
 	const shared = scope?.current;
 	const matching = untrack(
 		() =>
-			shared?.spec.target.of === 'collection' &&
-			spec.target.of === 'collection' &&
-			shared.spec.target.collection === spec.target.collection &&
+			shared?.spec.target.of === 'model' &&
+			spec.target.of === 'model' &&
+			shared.spec.target.model === spec.target.model &&
 			shared.spec.target.id === spec.target.id &&
 			scope?.historical !== true
 	);
@@ -96,12 +96,12 @@
 		matching ||
 		asked === true ||
 		scope?.historical ||
-		spec.target.of !== 'collection' ||
+		spec.target.of !== 'model' ||
 		spec.target.mode !== 'update' ||
 		spec.target.id === undefined ||
 		bolt.recordCapabilities === undefined
 			? null
-			: bolt.recordCapabilities(spec.target.collection, spec.target.id)
+			: bolt.recordCapabilities(spec.target.model, spec.target.id)
 	);
 	watch(
 		() => [capabilities.current, capabilities.error, capabilities.loading] as const,
@@ -121,8 +121,8 @@
 			if (value === undefined) return;
 			if (
 				value !== null &&
-				spec.target.of === 'collection' &&
-				(value.collection !== spec.target.collection ||
+				spec.target.of === 'model' &&
+				(value.model !== spec.target.model ||
 					value.id !== spec.target.id ||
 					value.revision !== record?.['revision'])
 			) {
@@ -139,7 +139,7 @@
 			() => !controls.readonly && (form.dirty || form.pending)
 		) ?? (() => {})
 	);
-	const update = $derived(spec.target.of === 'collection' && spec.target.mode === 'update');
+	const update = $derived(spec.target.of === 'model' && spec.target.mode === 'update');
 	// Matching record forms share the header's Save; independent forms and creates own their submit.
 	const ownSubmit = $derived(!matching || !update);
 	const visible = $derived(

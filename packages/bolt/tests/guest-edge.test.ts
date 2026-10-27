@@ -39,14 +39,14 @@ import { Refusal } from ${ERRORS};
 const gen = function* (input, ctx) {
 	switch (input.case) {
 		case 'refuse': return yield* Effect.fail(new Refusal({ message: 'no', field: 'x' }));
-		case 'act': return yield* ctx.act('t.create', {});
+		case 'act': return yield* ctx.act('t.create', [{}]);
 		case 'boom': throw new Error('boom');
-		case 'read': return yield* ctx.query('t', { id: 'x' });
-		case 'caught': return yield* ctx.act('t.create', {}).pipe(Effect.catchTag('ActRefused', (refused) => Effect.succeed(refused.code)));
-		case 'all': return yield* Effect.all([ctx.query('t', { id: 'x' }), ctx.query('t', { id: 'y' }), ctx.query('t', { id: 'z' })], { concurrency: 'unbounded' });
-		case 'sequential': return yield* Effect.all([ctx.query('t', { id: 'x' }), ctx.query('t', { id: 'y' }), ctx.query('t', { id: 'z' })]);
-		case 'sibling': return yield* Effect.all([ctx.query('t', { id: 'x' }), Effect.die(new Error('sibling'))], { concurrency: 'unbounded' });
-		case 'unyielded': { ctx.act('t.create', {}); return 1; }
+		case 'read': return yield* ctx.query({ t: { where: { id: { eq: 'x' } } } });
+		case 'caught': return yield* ctx.act('t.create', [{}]).pipe(Effect.catchTag('ActRefused', (refused) => Effect.succeed(refused.code)));
+		case 'all': return yield* Effect.all([ctx.query({ t: { where: { id: { eq: 'x' } } } }), ctx.query({ t: { where: { id: { eq: 'y' } } } }), ctx.query({ t: { where: { id: { eq: 'z' } } } })], { concurrency: 'unbounded' });
+		case 'sequential': return yield* Effect.all([ctx.query({ t: { where: { id: { eq: 'x' } } } }), ctx.query({ t: { where: { id: { eq: 'y' } } } }), ctx.query({ t: { where: { id: { eq: 'z' } } } })]);
+		case 'sibling': return yield* Effect.all([ctx.query({ t: { where: { id: { eq: 'x' } } } }), Effect.die(new Error('sibling'))], { concurrency: 'unbounded' });
+		case 'unyielded': { ctx.act('t.create', [{}]); return 1; }
 		case 'timers': {
 			const real = globalThis.setTimeout;
 			let timers = 0;
@@ -59,9 +59,9 @@ const gen = function* (input, ctx) {
 const reference = function* (input, ctx) {
 	switch (input.case) {
 		case 'refuse': return yield* Effect.fail(new Refusal({ message: 'no', field: 'x' }));
-		case 'act': return yield* ctx.act('t.create', {});
+		case 'act': return yield* ctx.act('t.create', [{}]);
 		case 'boom': throw new Error('boom');
-		case 'read': return yield* ctx.query('t', { id: 'x' });
+		case 'read': return yield* ctx.query({ t: { where: { id: { eq: 'x' } } } });
 	}
 };
 `;
@@ -140,12 +140,20 @@ const invocation = (kind: InvocationKind, target: string, input: Json): Invocati
 		readBytes: LIMITS.readBytes
 	}
 });
-const lowerRead: GuestOptions['lowerRead'] = (_member, args) => ({
-	kind: 'get',
-	collection: String(args[0]),
-	id: Schema.decodeUnknownSync(Schema.Struct({ id: Schema.String }))(args[1]).id,
-	select: { fields: null, relations: {} }
-});
+/** The stub lowers a read request `{ <model>: { where: { id: { eq } } } }` as one record. */
+const IdRequest = Schema.Record(
+	Schema.String,
+	Schema.Struct({ where: Schema.Struct({ id: Schema.Struct({ eq: Schema.String }) }) })
+);
+const lowerRead: GuestOptions['lowerRead'] = (_member, args) => {
+	const [root = '', layer] = Object.entries(Schema.decodeUnknownSync(IdRequest)(args[0]))[0] ?? [];
+	return {
+		kind: 'get',
+		model: root,
+		id: layer?.where.id.eq ?? '',
+		select: { fields: null, relations: {} }
+	};
+};
 /** A bridge answering each call with `answer`, recording every crossing. */
 const recorder = (answer: (call: CrossCall) => CrossAnswer = () => ({ ok: true, value: 1 })) => {
 	const crossings: (readonly CrossCall[])[] = [];
@@ -216,12 +224,12 @@ describe('typed failures settle as an async body settles', () => {
 		{
 			name: 'a conflicted act',
 			input: { case: 'act' },
-			answer: acts({ kind: 'conflict', records: [{ collection: 't', id: '1', fields: ['a'] }] }),
+			answer: acts({ kind: 'conflict', records: [{ model: 't', id: '1', fields: ['a'] }] }),
 			expected: {
 				kind: 'refused',
 				code: 'conflict',
 				message: 'another write changed these records since they were read',
-				records: [{ collection: 't', id: '1', fields: ['a'] }]
+				records: [{ model: 't', id: '1', fields: ['a'] }]
 			}
 		},
 		{

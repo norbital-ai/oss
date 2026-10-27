@@ -59,7 +59,7 @@ const fixture = () => {
 				...row(`${id}-step`, 2, ''),
 				role: 'tool',
 				at,
-				tool: { name: 'read', failed: false, args: '{"collection":"documents"}', ms: 200 }
+				tool: { name: 'read', failed: false, args: '{"documents":{}}', ms: 200 }
 			});
 		else
 			rows.push({

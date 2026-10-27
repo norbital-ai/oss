@@ -29,7 +29,7 @@ const manifest = (triage: boolean) =>
 			workspace: { tz: 'UTC', locale: 'en', agent: triage ? {} : { triage: false } },
 			models: {},
 			relationships: {},
-			collections: {},
+			exposures: {},
 			policies: {},
 			agent: { internal: 'Staff brief.', skills: {} },
 			integrations: {},
@@ -169,7 +169,7 @@ const setup = (triage: boolean) =>
 		const put = (authority: Authority, name: string, mime: string, bytes: Uint8Array) =>
 			upload({
 				id: randomUUID(),
-				collection: 'sys_conversation',
+				model: 'sys_conversation',
 				field: 'inputs',
 				name,
 				mime,
@@ -223,6 +223,10 @@ describe('in-app attachments', () => {
 						bytes: PNG.length
 					}
 				]);
+				// the message names it by the id read_file takes
+				expect(String(requests[0]!.messages[0]!.content)).toContain(
+					`file reference ${JSON.stringify({ id: Schema.decodeUnknownSync(Schema.Struct({ id: Schema.String }))(file).id, name: 'pump.png', mime: 'image/png' })}`
+				);
 				expect([...requests[1]!.files![0]!.bytes]).toEqual([...PNG]);
 				expect(requests[1]!.files![0]!.mime).toBe('image/png');
 				// the posted file is one of the conversation's inputs
@@ -311,8 +315,11 @@ describe('read_file', () => {
 				}
 			},
 			relationships: {},
-			collections: {
-				photos: { read: { fields: 'all' }, create: { input: { columns: ['title', 'file'] } } }
+			exposures: {
+				photos: {
+					read: { photos: { fields: 'all' } },
+					create: { columns: { photos: ['title', 'file'] } }
+				}
 			},
 			policies: { inspector: { description: 'Inspectors', grants: { photos: { read: true } } } },
 			teams: { Inspectors: ['inspector'] },
@@ -377,10 +384,12 @@ describe('read_file', () => {
 					const route = yield* routeFixture(context);
 					yield* actReply(route, admin.authority, {
 						callable: 'photos.create',
-						input: {
-							title: 'Site sheet',
-							file: { id: up.output.id, name: up.output.name, mime: up.output.mime }
-						},
+						input: [
+							{
+								title: 'Site sheet',
+								file: { id: up.output.id, name: up.output.name, mime: up.output.mime }
+							}
+						],
 						issuedAt: t.clock.now()
 					});
 					yield* t.db.write({
@@ -406,5 +415,70 @@ describe('read_file', () => {
 					expect(JSON.stringify(refused.messages)).toContain('No file you can read has this id.');
 				})
 			)
+	);
+	it.live('reads an uploaded conversation input by its file id', () =>
+		Effect.scoped(
+			Effect.gen(function* () {
+				const requests: AiRequest[] = [];
+				let fileId = '';
+				const ports = Layer.succeed(Ai, {
+					ask: () => Effect.die(new Error('no triage')),
+					maxChoices: undefined,
+					models: ['default'],
+					catalog: Port.unavailable('ai.catalog'),
+					embed: () => Port.unavailable('ai.embed'),
+					infer: (r) =>
+						Stream.fromEffect(
+							Effect.sync(() => {
+								requests.push(r);
+								const response: AiResponse =
+									requests.length % 2 === 1
+										? {
+												content: '',
+												toolCalls: [
+													{ id: 'f1', name: 'read_file', input: { id: fileId, as: 'image' } }
+												],
+												finish: 'tool',
+												usage: { input: 1, output: 1 }
+											}
+										: {
+												content: 'Read.',
+												toolCalls: [],
+												finish: 'stop',
+												usage: { input: 1, output: 1 }
+											};
+								return { _tag: 'Response' as const, response };
+							})
+						)
+				});
+				const context = yield* Layer.build(TestWorkspace.layer({ manifest: filed, ports }));
+				const t = Context.get(context, TestWorkspace);
+				yield* t.db.write({
+					text: `INSERT INTO sys_user (id, email, name) VALUES ('ann', 'ann@x.test', 'Ann')`,
+					params: []
+				});
+				const authorities = new Authorities(t.manifest, 'test');
+				const ann = yield* authorities.member(t.db, 'ann');
+				if (ann === null) throw new Error('no member');
+				const ref = yield* upload({
+					id: randomUUID(),
+					model: 'sys_conversation',
+					field: 'inputs',
+					name: 'input.png',
+					mime: 'image/png',
+					bytes: PNG,
+					authority: ann,
+					now: t.clock.now()
+				}).pipe(Effect.provide(context));
+				fileId = Schema.decodeUnknownSync(Schema.Struct({ id: Schema.String }))(fileOf(ref)).id;
+				const c = yield* conversation(act(t, 'ann', 'sys_conversation.start', {}));
+				yield* act(t, 'ann', 'sys_message.post', {
+					conversation: c,
+					text: 'read the input'
+				});
+				yield* t.settled();
+				expect(requests.at(-1)?.files?.[0]?.bytes).toEqual(PNG);
+			})
+		)
 	);
 });

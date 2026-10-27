@@ -1,22 +1,23 @@
 // The shell finder (L-BOLT-497, 512): apps and pages the viewer may open, matched by title, and records of every
-// collection the viewer may search (the model's `search.text`), each labelled by its declared `label` fields. A record
-// search is one `read` with `search` per collection; an answer to an older query is dropped when a newer one was asked.
+// model the viewer may search (the model's `search.text`), each labelled by its declared `label` fields. A record
+// search is one `read` with `search` per model; an answer to an older query is dropped when a newer one was asked.
 import { Effect, Fiber, FiberHandle } from 'effect';
 import type { Json } from '../../decl/values.ts';
 import type { ReadFailed, TransportFailed } from '../../decl/errors.ts';
-import type { CollectionExposure } from '@norbital-ai/ui';
+import type { ModelExposure } from '@norbital-ai/ui';
 import type { NavNode } from '../nav.ts';
 
 export type FinderHit =
 	| { kind: 'page'; key: string; label: string; context: string | null; href: string }
-	| { kind: 'record'; key: string; label: string; context: string; collection: string; id: string };
+	| { kind: 'record'; key: string; label: string; context: string; model: string; id: string };
 type Row = { readonly [field: string]: Json };
-export type FinderRead = (
-	collection: string,
-	options: Json
-) => Effect.Effect<{ rows: readonly Row[] }, ReadFailed | TransportFailed>;
+export type FinderAnswer = { readonly [root: string]: { readonly rows: readonly Row[] } };
+/** One read request (`{ <model>: { search, limit } }`), answered per root. */
+export type FinderRead = (request: {
+	readonly [root: string]: { readonly [key: string]: Json };
+}) => Effect.Effect<FinderAnswer, ReadFailed | TransportFailed>;
 
-const RECORDS_PER_COLLECTION = 5;
+const RECORDS_PER_MODEL = 5;
 const has = (text: string, query: string) =>
 	text.toLowerCase().includes(query.trim().toLowerCase());
 
@@ -53,11 +54,11 @@ export const labelOf = (row: Row, label: readonly string[]) =>
 		.join(' · ') || String(row['id'] ?? '');
 
 /**
- * Record search over every searchable collection in `catalog`. `search(query)` resolves with the hits, or `null` when a
- * newer query was asked meanwhile (its answer is stale and must not paint). A collection whose read fails is left out.
+ * Record search over every searchable model in `catalog`. `search(query)` resolves with the hits, or `null` when a
+ * newer query was asked meanwhile (its answer is stale and must not paint). A model whose read fails is left out.
  */
 export const recordFinder = (
-	catalog: { readonly [collection: string]: CollectionExposure },
+	catalog: { readonly [model: string]: ModelExposure },
 	read: FinderRead,
 	t: (key: string) => string
 ) =>
@@ -66,21 +67,21 @@ export const recordFinder = (
 		const searchable = Object.entries(catalog).filter(
 			([, exposure]) => (exposure.search?.length ?? 0) > 0
 		);
-		const title = (collection: string) => {
-			const key = `models.${collection}.label`,
+		const title = (model: string) => {
+			const key = `models.${model}.label`,
 				text = t(key);
-			return text !== key ? text : collection.replace(/_/g, ' ');
+			return text !== key ? text : model.replace(/_/g, ' ');
 		};
 		return {
-			collections: searchable.map(([collection]) => collection),
+			models: searchable.map(([model]) => model),
 			search: (query: string): Effect.Effect<FinderHit[] | null> =>
 				Effect.gen(function* () {
 					const slash = /^\/(\S+)\s+(\S.*)$/.exec(query.trim());
 					const scope =
 						slash === null
 							? searchable
-							: searchable.filter(([collection, exposure]) =>
-									slash[1] === 'semantic' ? exposure.semantic === true : collection === slash[1]
+							: searchable.filter(([model, exposure]) =>
+									slash[1] === 'semantic' ? exposure.semantic === true : model === slash[1]
 								);
 					const text = slash === null || slash[1] === 'semantic' ? query.trim() : (slash[2] ?? '');
 					const search =
@@ -88,18 +89,18 @@ export const recordFinder = (
 							? Effect.succeed<FinderHit[]>([])
 							: Effect.forEach(
 									scope,
-									([collection, exposure]) =>
-										read(collection, { search: text, limit: RECORDS_PER_COLLECTION }).pipe(
-											Effect.map((page) =>
-												page.rows.flatMap((row): FinderHit[] =>
+									([model, exposure]) =>
+										read({ [model]: { search: text, limit: RECORDS_PER_MODEL } }).pipe(
+											Effect.map((answer) =>
+												(answer[model]?.rows ?? []).flatMap((row): FinderHit[] =>
 													typeof row['id'] === 'string'
 														? [
 																{
 																	kind: 'record',
-																	key: `${collection}/${row['id']}`,
+																	key: `${model}/${row['id']}`,
 																	label: labelOf(row, exposure.label),
-																	context: title(collection),
-																	collection,
+																	context: title(model),
+																	model,
 																	id: row['id']
 																}
 															]

@@ -2,7 +2,7 @@ import { Effect } from 'effect';
 import { expect, it } from '@effect/vitest';
 import { createBolt } from '../src/page/bolt.ts';
 const capabilities = {
-	collection: 'jobs',
+	model: 'jobs',
 	id: 'j1',
 	revision: 3,
 	fields: {
@@ -34,17 +34,17 @@ it.effect('loads and validates the native current-row capability projection', ()
 		});
 		expect(yield* bolt.recordCapabilities('jobs', 'j1')).toEqual(capabilities);
 		expect(request).toEqual({
-			url: '/__bolt/record-capabilities?collection=jobs&id=j1',
+			url: '/__bolt/record-capabilities?model=jobs&id=j1',
 			credentials: 'same-origin'
 		});
 		yield* bolt.recordCapabilities('jobs', 'j1', {
-			collection: 'orders',
+			model: 'orders',
 			id: 'o1',
 			relation: 'lines',
 			revision: 4
 		});
 		expect(request).toEqual({
-			url: '/__bolt/record-capabilities?collection=jobs&id=j1&parentCollection=orders&parentId=o1&relation=lines&parentRevision=4',
+			url: '/__bolt/record-capabilities?model=jobs&id=j1&parentModel=orders&parentId=o1&relation=lines&parentRevision=4',
 			credentials: 'same-origin'
 		});
 	})

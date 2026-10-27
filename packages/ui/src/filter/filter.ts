@@ -7,7 +7,7 @@ import { likePattern } from '../kinds/kind.js';
 import { sortable as kindSortable } from '../kinds/registry.js';
 // The view popover's typed model (rule 16b, P34): filter rows that mirror `Where` (§3.3.9) and can only lower to a
 // decodable one, sort keys that are an `OrderBy`, and their URL form. Pure: no DOM, no relative value imports.
-import type { CollectionExposure } from '../kinds/context.js';
+import type { ModelExposure } from '../kinds/context.js';
 import type { Json, Kind } from '../kinds/kind.js';
 
 /** A `Where` literal (§3.3.9). ui has no bolt dependency, so it is structural here; `$bolt` narrows it to `Where<C>`. */
@@ -18,7 +18,7 @@ export type SortKey = { field: string; dir: 'asc' | 'desc'; near?: { lat: number
 type SortObject = { readonly [field: string]: 'asc' | 'desc' | SortObject };
 /** An `OrderBy` literal: a field, a key object, or up to 4 of them. */
 export type OrderBy = string | SortObject | readonly (string | SortObject)[];
-type Catalog = { readonly [collection: string]: CollectionExposure };
+type Catalog = { readonly [model: string]: ModelExposure };
 
 export type Cmp = 'eq' | 'ne' | 'lt' | 'lte' | 'gt' | 'gte';
 export type Op =
@@ -68,7 +68,7 @@ const OpSchema = Schema.Literals([
 const CmpSchema = Schema.Literals(['eq', 'ne', 'lt', 'lte', 'gt', 'gte']);
 const AggSchema = Schema.Literals(['count', 'sum', 'min', 'max', 'avg']);
 const UnitSchema = Schema.Literals(['week', 'month', 'quarter', 'year']);
-/** A collection's search index (`$search`: every word) and embedding (`$similar`: nearest in meaning) as condition keys. */
+/** A model's search index (`$search`: every word) and embedding (`$similar`: nearest in meaning) as condition keys. */
 export const INDEX: { readonly [key: string]: { op: 'search' | 'similar'; label: string } } = {
 	$search: { op: 'search', label: 'Search' },
 	$similar: { op: 'similar', label: 'Topic' }
@@ -105,7 +105,7 @@ export function taggedArg(arg: RawArg): Arg {
 export type Quant = 'some' | 'none' | 'every' | 'count' | 'sum' | 'min' | 'max' | 'avg';
 
 // ── the engine's condition catalogue (rule 16b): the builder renders exactly these, never a second operator table ──
-/** One step of an offered condition's nesting from the collection root (bolt's `FilterStep`, structurally). */
+/** One step of an offered condition's nesting from the model root (bolt's `FilterStep`, structurally). */
 export type FilterStep =
 	| { k: 'field'; name: string }
 	| { k: 'is'; rel: string }
@@ -210,14 +210,14 @@ export type Node =
 			n?: number | null;
 	  };
 
-/** A many-relation's child collection: the one whose relation to its owner declares it as `inverse`; `rel` may be
+/** A many-relation's child model: the one whose relation to its owner declares it as `inverse`; `rel` may be
  * reached through one-relations (`customer.invoices`). */
-export function childOf(cat: Catalog, collection: string, rel: string): string | undefined {
+export function childOf(cat: Catalog, model: string, rel: string): string | undefined {
 	const steps = rel.split('.'),
 		name = steps.pop() ?? '';
 	const owner = steps.reduce<string | undefined>(
 		(c, s) => (c === undefined ? undefined : cat[c]?.relations?.[s]?.targets[0]),
-		collection
+		model
 	);
 	if (owner === undefined || !(cat[owner]?.many ?? []).includes(name)) return undefined;
 	return Object.keys(cat).find((c) =>
@@ -244,7 +244,7 @@ export type Resolved =
 	| { leaf: 'rel'; targets: readonly string[]; nullable: boolean; label: string };
 const RESERVED = new Set(['and', 'or', 'not']);
 /** Fields a viewer may filter on: readable, not hidden, not masked (rule 16a narrowing). */
-export const filterable = (x: CollectionExposure, f: string) =>
+export const filterable = (x: ModelExposure, f: string) =>
 	!RESERVED.has(f) &&
 	x.fields[f] !== undefined &&
 	!x.fields[f]?.hidden &&
@@ -254,9 +254,9 @@ const SYS: { readonly [f: string]: Kind } = {
 	updated_at: { kind: 'instant' }
 };
 
-export function resolve(cat: Catalog, collection: string, path: string): Resolved | null {
+export function resolve(cat: Catalog, model: string, path: string): Resolved | null {
 	const steps = path.split('.');
-	let c = collection;
+	let c = model;
 	for (let i = 0; i < steps.length; i++) {
 		const x = cat[c];
 		if (x === undefined) return null;
@@ -498,19 +498,19 @@ function leafOps(
 	}
 }
 /**
- * A viewer node as a `Where` over `collection`; incomplete rows lower to nothing. With `clock`, a relative value is the
+ * A viewer node as a `Where` over `model`; incomplete rows lower to nothing. With `clock`, a relative value is the
  * literal it stands for now (what a read sends); without, it stays relative (the URL).
  */
 export function toWhere(
 	cat: Catalog,
-	collection: string,
+	model: string,
 	n: Node,
 	clock?: FilterClock
 ): Where | null {
 	if (!complete(n)) return null;
 	if (n.t === 'group') {
 		const parts = n.of
-			.map((x) => toWhere(cat, collection, x, clock))
+			.map((x) => toWhere(cat, model, x, clock))
 			.filter((x): x is Where => x !== null);
 		if (parts.length === 0) return null;
 		const body: Where =
@@ -521,7 +521,7 @@ export function toWhere(
 		const steps = n.rel.split('.'),
 			name = steps.pop() ?? '';
 		if (n.q === 'some' || n.q === 'none' || n.q === 'every') {
-			const child = childOf(cat, collection, n.rel) ?? '';
+			const child = childOf(cat, model, n.rel) ?? '';
 			const inner = n.of
 				.map((x) => toWhere(cat, child, x, clock))
 				.filter((x): x is Where => x !== null);
@@ -543,7 +543,7 @@ export function toWhere(
 			[name]: { [n.q]: n.q === 'count' ? cmp : { of: n.field ?? '', ...cmp } }
 		});
 	}
-	const r = resolve(cat, collection, n.path);
+	const r = resolve(cat, model, n.path);
 	if (r === null) return null;
 	const steps = n.path.split('.');
 	const [name = '', arm] = (steps.pop() ?? '').split(':');
@@ -567,12 +567,12 @@ function wrap(steps: readonly string[], inner: Where): Where {
 /** The viewer's rows as one `Where` (each top-level row a conjunct, so a URL clause drops alone). */
 export function rowsWhere(
 	cat: Catalog,
-	collection: string,
+	model: string,
 	rows: readonly Node[],
 	clock?: FilterClock
 ): Where | null {
 	const parts = rows
-		.map((r) => toWhere(cat, collection, r, clock))
+		.map((r) => toWhere(cat, model, r, clock))
 		.filter((x): x is Where => x !== null);
 	return parts.length === 0 ? null : parts.length === 1 ? (parts[0] ?? {}) : { and: parts };
 }
@@ -635,8 +635,8 @@ function argOf(r: Resolved, op: Op, v: Json): Arg | null {
 	const decoded = Schema.decodeUnknownResult(inputSchema(k))(v);
 	return decoded._tag === 'Success' ? { _tag: 'lit', lit: decoded.success } : null;
 }
-function fieldNodes(cat: Catalog, collection: string, path: string, ops: Json): Node[] | null {
-	const r = resolve(cat, collection, path);
+function fieldNodes(cat: Catalog, model: string, path: string, ops: Json): Node[] | null {
+	const r = resolve(cat, model, path);
 	if (r === null || !Predicate.isObject(ops) || keysOf(ops).length === 0) return null;
 	const out: Node[] = [];
 	let rest: { [k: string]: Json } = { ...ops };
@@ -826,7 +826,7 @@ export const clauses = (w: Json): Json[] =>
 /** `Sortable<C>`: readable, unmasked, ordered fields and `created_at`/`updated_at` (§3.3.9); with the catalog, also each
  * unmasked one-relation's target fields the viewer reads (`account.name`, shown "Account › Name"), one hop. */
 export function sortable(
-	x: CollectionExposure | undefined,
+	x: ModelExposure | undefined,
 	system = true,
 	cat?: Catalog
 ): string[] {
@@ -919,13 +919,13 @@ export const orderOf = (keys: readonly SortKey[]): Json =>
 /** A sort key in words: "Site › Location nearest to 1.3291, 103.7690", or the field's own label. */
 export const sortText = (
 	cat: Catalog,
-	collection: string,
+	model: string,
 	k: SortKey,
 	human: (s: string) => string
 ) =>
 	k.near === undefined
-		? pathLabel(cat, collection, k.field, human)
-		: `${pathLabel(cat, collection, k.field, human)} nearest to ${pointText(k.near)}`;
+		? pathLabel(cat, model, k.field, human)
+		: `${pathLabel(cat, model, k.field, human)} nearest to ${pointText(k.near)}`;
 
 // ── URL state (`?<key>.where=`, `?<key>.order=`, rule 16b) ──
 type ViewUrl = { where: Json | undefined; order: string | undefined; badJson: boolean };
@@ -1042,7 +1042,7 @@ export function localExposure(
 	rows: readonly { readonly [f: string]: Value }[],
 	fields: readonly string[],
 	labels: (f: string) => string
-): CollectionExposure {
+): ModelExposure {
 	const kindOf = (f: string): Kind => {
 		const v = rows.map((r) => r[f] ?? null).find((x) => x !== null);
 		if (v instanceof Decimal)
@@ -1066,10 +1066,10 @@ export type LocalFilterField = {
 	optional?: boolean;
 };
 export function localFilterFields(
-	collection: string,
-	x: CollectionExposure | undefined
+	model: string,
+	x: ModelExposure | undefined
 ): readonly LocalFilterField[] | undefined {
-	if (!collection.startsWith('$') || x === undefined) return undefined;
+	if (!model.startsWith('$') || x === undefined) return undefined;
 	return Object.entries(x.fields).flatMap(([name, field]) =>
 		field.kind === 'text' || field.kind === 'number' || field.kind === 'bool'
 			? [{ name, label: field.label ?? name, kind: field.kind, optional: field.optional === true }]
@@ -1091,12 +1091,12 @@ export const QUANT_LABEL: { readonly [q in Quant]: string } = {
 /** "Account › Owner › Name": each step's declared label, else its humanized name. */
 export function pathLabel(
 	cat: Catalog,
-	collection: string,
+	model: string,
 	path: string,
 	human: (s: string) => string
 ): string {
 	const out: string[] = [];
-	let c = collection;
+	let c = model;
 	for (const step of path.split('.')) {
 		const [name = '', arm] = step.split(':');
 		const x = cat[c],
@@ -1144,7 +1144,7 @@ const boundText = (value: Json): string => {
  * its id); `opLabel` names the operator (the catalogue's words, when the caller has them, else the machine operator). */
 export function nodeText(
 	cat: Catalog,
-	collection: string,
+	model: string,
 	n: Node,
 	human: (s: string) => string,
 	ref?: (target: string, id: string) => string,
@@ -1152,13 +1152,13 @@ export function nodeText(
 ): string {
 	if (n.t === 'group') {
 		const inner = n.of
-			.map((x) => nodeText(cat, collection, x, human, ref, opLabel))
+			.map((x) => nodeText(cat, model, x, human, ref, opLabel))
 			.join(n.join === 'and' ? ' and ' : ' or ');
 		return n.not ? `not (${inner})` : n.of.length > 1 ? `(${inner})` : inner;
 	}
-	const head = pathLabel(cat, collection, n.t === 'many' ? n.rel : n.path, human);
+	const head = pathLabel(cat, model, n.t === 'many' ? n.rel : n.path, human);
 	if (n.t === 'many') {
-		const child = childOf(cat, collection, n.rel) ?? '';
+		const child = childOf(cat, model, n.rel) ?? '';
 		return ['some', 'none', 'every'].includes(n.q)
 			? `${head} ${QUANT_LABEL[n.q]}${n.of.length ? `: ${n.of.map((x) => nodeText(cat, child, x, human, ref, opLabel)).join(' and ')}` : ''}`
 			: `${head} ${QUANT_LABEL[n.q]}${n.field ? ` ${pathLabel(cat, child, n.field, human)}` : ''} ${opLabel(n.op ?? 'eq', n.rel)} ${n.n}`;
@@ -1168,7 +1168,7 @@ export function nodeText(
 		if (!isPoint(p ?? null) || typeof m !== 'number') return head;
 		return `${head} within ${radiusText(m)} of ${pointText(p)}`;
 	}
-	const r = resolve(cat, collection, n.path),
+	const r = resolve(cat, model, n.path),
 		a = n.arg;
 	const named = (v: Value) =>
 		r?.leaf === 'rel' && ref !== undefined && typeof v === 'string'

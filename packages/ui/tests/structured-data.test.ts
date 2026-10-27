@@ -4,6 +4,7 @@ import { it } from '@effect/vitest';
 import { Decimal } from '@norbital-ai/std/decimal';
 import {
 	dataChanged,
+	dataDefaults,
 	dataEntries,
 	dataEqual,
 	inferJsonSchema,
@@ -11,6 +12,34 @@ import {
 	pairDataRows,
 	structuredSchema
 } from '../src/kinds/structured-data.ts';
+
+it('a new form fills schema defaults only into absent or null places', () => {
+	const schema = {
+		type: 'object',
+		properties: {
+			name: { type: 'string' },
+			controls: { type: 'boolean', default: false },
+			tax: { type: 'boolean', default: false },
+			nested: { type: 'object', properties: { code: { type: 'string', default: 'X' } } }
+		}
+	};
+	assert.deepEqual(dataDefaults(schema, { name: 'A', nested: {}, extra: 1 }), {
+		name: 'A',
+		controls: false,
+		tax: false,
+		nested: { code: 'X' },
+		extra: 1
+	});
+	assert.equal(
+		dataDefaults(schema, { name: 'A', controls: true, tax: false, nested: { code: 'X' } }),
+		undefined
+	);
+	const list = {
+		type: 'array',
+		items: { type: 'object', properties: { code: { type: 'string', default: 'D' } } }
+	};
+	assert.deepEqual(dataDefaults(list, [{}, { code: 'A' }]), [{ code: 'D' }, { code: 'A' }]);
+});
 
 it('inference merges every record and nested list without inventing constraints', () => {
 	assert.deepEqual(

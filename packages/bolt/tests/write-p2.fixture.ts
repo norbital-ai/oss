@@ -11,8 +11,8 @@ import type { Fingerprint } from '../src/engine/write/sql.ts';
 import { fingerprinting } from '../src/engine/write/sql.ts';
 import { manifest as base } from './write-fixture.ts';
 
-const orders = base.collections.orders;
-if (orders === undefined) throw new Error('the base write fixture has no orders collection');
+const orders = base.exposures.orders;
+if (orders === undefined) throw new Error('the base write fixture has no orders model');
 export const manifest = Result.getOrThrow(
 	decodeManifest({
 		...base,
@@ -47,38 +47,32 @@ export const manifest = Result.getOrThrow(
 			...base.relationships,
 			'receipts.order': { to: 'orders', inverse: 'receipts' }
 		},
-		collections: {
-			...base.collections,
+		exposures: {
+			...base.exposures,
 			orders: {
 				...orders,
 				update: {
-					input: {
-						columns: ['title', 'note', 'status'],
-						with: {
-							lines: {
-								create: { columns: ['label', 'amount'] },
-								update: { columns: ['label', 'amount'] },
-								delete: {}
-							},
-							tags: { link: {}, unlink: {}, upsert: { columns: ['name'] } }
-						}
+					columns: {
+						orders: ['title', 'note', 'status'],
+						'orders.lines': ['label', 'amount'],
+						'orders.tags': ['name']
 					}
 				}
 			},
 			tags: {
-				read: { fields: 'all' },
-				create: { input: { columns: ['name'] } },
+				read: { tags: { fields: 'all' } },
+				create: { columns: { tags: ['name'] } },
 				delete: {}
 			},
 			receipts: {
-				read: { fields: 'all' },
-				create: { input: { columns: ['memo', 'order'] } },
-				update: { input: { columns: ['memo', 'order'] } }
+				read: { receipts: { fields: 'all' } },
+				create: { columns: { receipts: ['memo', 'order'] } },
+				update: { columns: { receipts: ['memo', 'order'] } }
 			},
 			people: {
-				read: { fields: 'all' },
-				create: { input: { columns: ['code', 'name', 'email'] } },
-				update: { input: { columns: ['name', 'email', 'status'] } },
+				read: { people: { fields: 'all' } },
+				create: { columns: { people: ['code', 'name', 'email'] } },
+				update: { columns: { people: ['name', 'email', 'status'] } },
 				delete: {}
 			}
 		}
@@ -116,7 +110,13 @@ export function bridgeOn(db: TenantDbShape, m: EngineManifest = manifest) {
 			cross: (calls) =>
 				Effect.gen(function* () {
 					const batch = calls.flatMap((call) => (call._tag === 'read' ? [call.read] : []));
-					for (const read of batch) tables.add(read.collection);
+					for (const read of batch)
+						for (const name of read.kind === 'request'
+							? read.roots.map((r) => r.root)
+							: 'model' in read
+								? [read.model]
+								: [])
+							tables.add(name);
 					return (yield* reads.run(batch, { as: 'workspace' }, bindings)).map((value) => ({
 						ok: true as const,
 						value

@@ -9,5 +9,5 @@ export default model('customers', {
 		order_count: { kind: 'count', of: 'orders' }
 	},
 	read: 'all',
-	create: { columns: ['name', 'rating'] }
+	create: { columns: { customers: ['name', 'rating'] } }
 });

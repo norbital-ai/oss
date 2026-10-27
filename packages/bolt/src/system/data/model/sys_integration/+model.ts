@@ -34,20 +34,26 @@ export default model('sys_integration', {
 	],
 	table: { primary: 'text' },
 	read: {
-		fields: [
-			'integration',
-			'name',
-			'owner',
-			'named',
-			'envoy',
-			'active',
-			'configuration',
-			'import_start',
-			'status',
-			'revision'
-		]
+		sys_integration: {
+			fields: [
+				'integration',
+				'name',
+				'owner',
+				'named',
+				'envoy',
+				'active',
+				'configuration',
+				'import_start',
+				'status',
+				'revision'
+			]
+		}
 	},
-	create: { columns: ['integration', 'name', 'owner', 'envoy', 'configuration'] },
-	update: { columns: ['name', 'envoy', 'active', 'configuration', 'import_start'] },
+	create: {
+		columns: { sys_integration: ['integration', 'name', 'owner', 'envoy', 'configuration'] }
+	},
+	update: {
+		columns: { sys_integration: ['name', 'envoy', 'active', 'configuration', 'import_start'] }
+	},
 	delete: {}
 });

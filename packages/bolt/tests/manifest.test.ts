@@ -24,7 +24,7 @@ const base: EngineManifest = {
 	workspace: { tz: 'UTC', locale: 'en' },
 	models: {},
 	relationships: {},
-	collections: {},
+	exposures: {},
 	integrations: {},
 	policies: {},
 	teams: {},
@@ -58,13 +58,17 @@ describe('decodeManifest', () => {
 				...base,
 				policies: { p: { description: '', grants: { orders: { actions: ['submit'] } } } }
 			},
-			// approval sits on the write arm it governs, never beside the grants
+			// approval comes from a write arm's check verdict: no approval key beside the grants, none on an arm
 			{
 				...base,
 				policies: {
 					p: { description: '', grants: { orders: { approval: { update: { steps: [['f']] } } } } }
 				}
 			},
+			{ ...base, policies: { p: { description: '', grants: { orders: { update: { approval: true } } } } } },
+			// write `where`/`previous` and `via` are gone: a check judges the batch, a layer is its root's
+			{ ...base, policies: { p: { description: '', grants: { orders: { update: { where: 'read' } } } } } },
+			{ ...base, policies: { p: { description: '', grants: { lines: { via: 'order' } } } } },
 			{ ...base, pipelines: {} },
 			null
 		]) {
@@ -81,7 +85,7 @@ describe('decodeManifest', () => {
 				models: {
 					orders: { description: 'Orders', label: 'number', fields: { number: { kind: 'text' } } }
 				},
-				collections: { orders: { read: { fields: 'all', relations: 'all' } } },
+				exposures: { orders: { read: { orders: { fields: 'all' } } } },
 				automations: {
 					orders_submit: {
 						description: 'Submit an order through its native update.',
@@ -96,10 +100,10 @@ describe('decodeManifest', () => {
 			runAs: 'trigger',
 			input: { target: { kind: 'id', of: 'orders' } }
 		});
-		expect(m.collections.orders).toEqual({ read: { fields: 'all', relations: 'all' } });
+		expect(m.exposures.orders).toEqual({ read: { orders: { fields: 'all' } } });
 	});
 
-	it('decodes each grant once: scopes, the approval marker on a write arm and moves arrive typed', () => {
+	it('decodes each grant once: read layers, the columns and check marker of a write arm and moves arrive typed', () => {
 		const m = Result.getOrThrow(
 			decodeManifest({
 				...base,
@@ -108,22 +112,30 @@ describe('decodeManifest', () => {
 						description: '',
 						grants: {
 							orders: {
-								read: { where: { region: { eq: 'north' } }, fields: ['region'] },
-								update: { where: 'read', approval: true },
-								delete: { approval: true },
+								read: {
+									orders: { where: { region: { eq: 'north' } }, fields: ['region'] },
+									'orders.lines': { where: { qty: { gt: 0 } } }
+								},
+								create: { columns: { orders: ['region'], 'orders.lines': ['qty'] } },
+								update: { check: true },
+								delete: { check: true },
 								moves: { status: ['draft->sent'] }
 							},
-							lines: { via: 'order' }
+							lines: { read: true }
 						}
 					}
 				}
 			})
 		);
 		const grant = m.policies.rep?.grants.orders;
-		expect(grant?.read).toEqual({ where: { region: { eq: 'north' } }, fields: ['region'] });
-		expect(grant?.update).toEqual({ where: 'read', approval: true });
-		expect(grant?.delete).toEqual({ approval: true });
-		expect(m.policies.rep?.grants.lines?.via).toBe('order');
+		expect(grant?.read).toEqual({
+			orders: { where: { region: { eq: 'north' } }, fields: ['region'] },
+			'orders.lines': { where: { qty: { gt: 0 } } }
+		});
+		expect(grant?.create).toEqual({ columns: { orders: ['region'], 'orders.lines': ['qty'] } });
+		expect(grant?.update).toEqual({ check: true });
+		expect(grant?.delete).toEqual({ check: true });
+		expect(m.policies.rep?.grants.lines?.read).toBe(true);
 	});
 
 	it.live(
@@ -191,8 +203,8 @@ describe('projectManifest', () => {
 										customer: { kind: 'ref', to: 'customers', inverse: 'orders' }
 									},
 									read: 'all',
-									create: { columns: ['number', 'customer'], transform: true },
-									update: { columns: ['number'], transform: () => [] },
+									create: { columns: { orders: ['number', 'customer'] }, transform: true },
+									update: { columns: { orders: ['number'] }, transform: () => [] },
 									delete: {}
 								},
 								bodies: {}
@@ -210,17 +222,17 @@ describe('projectManifest', () => {
 		expect(m.models.orders?.fields).toEqual({ number: { kind: 'text' } });
 		expect(m.models.orders?.was).toBe('prior_orders');
 		expect(m.relationships).toEqual({ 'orders.customer': { to: 'customers', inverse: 'orders' } });
-		expect(m.collections.orders).toEqual({
-			read: { fields: 'all', relations: 'all' },
-			create: { input: { columns: ['number', 'customer'] }, transform: true },
-			update: { input: { columns: ['number'] }, transform: true },
+		expect(m.exposures.orders).toEqual({
+			read: { orders: { fields: 'all' } },
+			create: { columns: { orders: ['number', 'customer'] }, transform: true },
+			update: { columns: { orders: ['number'] }, transform: true },
 			delete: {}
 		});
-		expect(m.collections).not.toHaveProperty('customers');
+		expect(m.exposures).not.toHaveProperty('customers');
 		expect(m.models).toHaveProperty('customers');
 	});
 
-	it("marks bodies the engine must know of and keeps no function: a write arm's approval, a custom field's validate, an integration's test", () => {
+	it("marks bodies the engine must know of and keeps no function: a write arm's check, a custom field's validate, an integration's test", () => {
 		const m = Result.getOrThrow(
 			decodeManifest(
 				projectManifest(
@@ -229,7 +241,11 @@ describe('projectManifest', () => {
 							rep: {
 								description: '',
 								grants: {
-									orders: { update: { where: 'read', approval: () => ({}) }, read: true }
+									orders: {
+										update: { columns: { orders: ['number'] }, check: function* () {} },
+										delete: { check: function* () {} },
+										read: true
+									}
 								}
 							}
 						},
@@ -255,7 +271,11 @@ describe('projectManifest', () => {
 				)
 			)
 		);
-		expect(m.policies.rep?.grants.orders?.update).toEqual({ where: 'read', approval: true });
+		expect(m.policies.rep?.grants.orders?.update).toEqual({
+			columns: { orders: ['number'] },
+			check: true
+		});
+		expect(m.policies.rep?.grants.orders?.delete).toEqual({ check: true });
 		expect(m.customFields.sku).toEqual({
 			description: 'A SKU.',
 			shape: { kind: 'text' },

@@ -142,7 +142,7 @@ describe('one wire literal per kind', () => {
 			}
 		},
 		relationships: {},
-		collections: { clock: { read: { fields: 'all' } } }
+		exposures: { clock: { read: { clock: { fields: 'all' } } } }
 	});
 	it('keeps exact decimal text and scale through the canonical tag and shorthand', () => {
 		const value = { $dec: '9007199254740993.123456789000' };
@@ -366,9 +366,9 @@ describe('P34: the widened language', () => {
 		expect(ok).toMatch(/jsonb_build_array\(\(SELECT \w+\."name"/); // the cursor carries the related value
 		expect(code(() => sql({ account: { secret: 'asc' } }))).toBe('invalidInput');
 		expect(code(() => sql({ account: { secret: 'asc' } }, { as: 'workspace' }))).toBe('ok');
-		const { accounts, ...readable } = rep.collections;
+		const { accounts, ...readable } = rep.models;
 		void accounts;
-		const unread = { ...rep, collections: readable };
+		const unread = { ...rep, exposures: readable };
 		expect(code(() => sql({ account: { name: 'asc' } }, { as: 'caller', authority: unread }))).toBe(
 			'invalidInput'
 		);

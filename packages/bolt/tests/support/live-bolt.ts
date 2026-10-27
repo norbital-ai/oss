@@ -1,6 +1,6 @@
 // `$bolt` over a test fetch: its live stream is the handler's own SSE body, scoped like the client.
 import { Cause, Effect, Fiber, FiberSet, type Scope, Stream } from 'effect';
-import { Sse } from 'effect/unstable/encoding';
+import { Sse } from 'effect/encoding';
 import { createBolt, type Bolt } from '../../src/page/bolt.ts';
 import type { EventSourceLike } from '../../src/page/stream.ts';
 import { ProtocolFailed } from '../../src/decl/errors.ts';

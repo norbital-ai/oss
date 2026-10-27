@@ -6,13 +6,12 @@ import type {
 	Committed,
 	FileRef,
 	Id,
+	Masked,
 	PendingApproval,
 	TxApplied,
 	TxCtx,
-	TxInstruction,
-	TxStep
+	TxInstruction
 } from '../../src/index.ts';
-import type { ReadResult } from '../../src/decl/ctx.ts';
 import type { ActConflict, ActRefused, ActUnknown } from '../../src/decl/errors.ts';
 import * as rt from './fixture/runtime.ts';
 import './registry.ts';
@@ -27,63 +26,63 @@ automation('orders_submit', {
 	...rt.orders_submit.spec,
 	run: function* ({ target }, ctx) {
 		const simple = ctx.transaction(function* (tx) {
-			const row = yield* tx.query('orders', { id: target, select: { id: true } });
-			return row?.id ?? null;
+			const { orders } = yield* tx.query({ orders: { where: { id: { eq: target } }, fields: ['id'], limit: 1 } });
+			return orders.rows[0]?.id ?? null;
 		});
 		is<Eq<Effect.Success<typeof simple>, Committed<Id<'orders'> | null> | PendingApproval>>();
 		const transaction = ctx.transaction(function* (tx) {
 			is<Eq<typeof tx, TxCtx>>();
-			const read = tx.query('orders', { id: target, select: { note: true } });
-			is<Eq<typeof read, TxStep<ReadResult<'orders', { readonly note: true }> | null>>>();
-			const order = yield* read;
-			if (order !== null) {
+			const read = tx.query({ orders: { where: { id: { eq: target } }, fields: ['note'], limit: 1 } });
+			const order = (yield* read).orders.rows[0];
+			if (order !== undefined) {
 				is<Eq<typeof order.id, Id<'orders'>>>();
-				// @ts-expect-error a selected row does not expose an unselected field
+				is<Eq<typeof order.note, string | null>>();
+				// @ts-expect-error a picked row does not expose an unpicked field
 				void order.customer;
 			}
-			const page = yield* tx.query('orders', { select: { note: true }, limit: 2 });
-			const masked = yield* tx.query('customers', { id: customer, select: { email: true } });
-			is<Eq<typeof masked, ReadResult<'customers', { readonly email: true }> | null>>();
-			const related = yield* tx.query('orders', {
-				id: target,
-				select: {
-					customer: { select: { name: true } },
-					lines: { select: { qty: true, order: { select: { note: true } } }, all: true }
-				}
+			const page = yield* tx.query({ orders: { fields: ['note'], limit: 2 } });
+			// the caller's masks hold in the session: sales_rep reads customers' name and tier only
+			const masked = yield* tx.query({
+				customers: { where: { id: { eq: customer } }, fields: ['email'], limit: 1 }
 			});
-			if (related !== null) {
-				is<Eq<typeof related.customer.id, Id<'customers'>>>();
-				is<Eq<typeof related.customer.name, string>>();
-				const line = related.lines[0];
+			is<Eq<(typeof masked.customers.rows)[number]['email'], string | null | Masked>>();
+			// a ref layer replaces its FK with the row or null; a many-layer lists its rows
+			const related = yield* tx.query({
+				orders: { where: { id: { eq: target } }, fields: ['customer'], limit: 1 },
+				'orders.customer': { fields: ['name'] },
+				'orders.lines': { fields: ['qty'] }
+			});
+			const rel = related.orders.rows[0];
+			if (rel !== undefined) {
+				if (rel.customer !== null) {
+					is<Eq<typeof rel.customer.id, Id<'customers'>>>();
+					is<Eq<typeof rel.customer.name, string>>();
+				}
+				const line = rel.lines[0];
 				if (line !== undefined) {
 					is<Eq<typeof line.id, Id<'order_lines'>>>();
 					is<Eq<typeof line.qty, Decimal>>();
-					is<Eq<typeof line.order.id, Id<'orders'>>>();
-					is<Eq<typeof line.order.note, string | null>>();
-					// @ts-expect-error a nested selected row retains its field selection
+					// @ts-expect-error a layer row retains its field pick
 					void line.price;
 				}
 			}
-			const relatedPage = yield* tx.query('orders', {
-				select: { lines: { select: { qty: true }, all: true } },
-				limit: 2
+			// a read request: two roots and a declared layer in one statement on the same session
+			const layered = yield* tx.query({
+				orders: { where: { id: { eq: target } }, fields: ['note', 'customer'] },
+				'orders.customer': { fields: ['name'] },
+				customers: { fields: ['name'], limit: 10 }
 			});
-			const relatedLine = relatedPage.rows[0]?.lines[0];
-			if (relatedLine !== undefined) {
-				is<Eq<typeof relatedLine.id, Id<'order_lines'>>>();
-				is<Eq<typeof relatedLine.qty, Decimal>>();
+			const first = layered.orders.rows[0];
+			if (first !== undefined) {
+				is<Eq<typeof first.id, Id<'orders'>>>();
+				is<Eq<typeof first.note, string | null>>();
+				if (first.customer !== null) {
+					is<Eq<typeof first.customer.id, Id<'customers'>>>();
+					is<Eq<typeof first.customer.name, string>>();
+				}
 			}
-			const keyed = yield* tx.query({
-				order: { from: 'orders', id: target, select: { note: true } },
-				customers: { from: 'customers', select: { name: true }, all: true },
-				related: { from: 'orders', id: target, select: { customer: { select: { name: true } } } }
-			});
-			is<Eq<typeof keyed.order, ReadResult<'orders', { readonly note: true }> | null>>();
-			if (keyed.related !== null) {
-				is<Eq<typeof keyed.related.customer.id, Id<'customers'>>>();
-				is<Eq<typeof keyed.related.customer.name, string>>();
-			}
-			const staged = yield* tx.act('orders.update', { target, set: { note: 'in session' } });
+			is<Eq<(typeof layered.customers.rows)[number]['name'], string>>();
+			const staged = yield* tx.act('orders.update', [{ target, set: { note: 'in session' } }]);
 			is<Eq<typeof staged, TxApplied<'orders.update'>>>();
 			is<Eq<typeof staged.output, null>>();
 			// @ts-expect-error an inner write has no committed or held kind
@@ -93,13 +92,13 @@ automation('orders_submit', {
 			// @ts-expect-error an inner write does not claim an approval request
 			void (staged satisfies PendingApproval);
 			for (const record of staged.records) {
-				if (record.collection === 'orders') is<Eq<typeof record.id, Id<'orders'>>>();
+				if (record.model === 'orders') is<Eq<typeof record.id, Id<'orders'>>>();
 			}
-			yield* tx.act('orders.create', { customer, note: 'created in session' });
-			yield* tx.act('orders.upsert', { id: target, note: 'kept' }, { onConflict: 'keep' });
-			yield* tx.act('orders.delete', { target });
-			const after = yield* tx.query('orders', { id: target });
-			return { after, masked, rows: page.rows, amount: Decimal.of(1), file };
+			yield* tx.act('orders.create', [{ customer, note: 'created in session' }]);
+			yield* tx.act('orders.upsert', [{ id: target, note: 'kept' }], { onConflict: 'keep' });
+			yield* tx.act('orders.delete', [{ target }]);
+			const after = yield* tx.query({ orders: { where: { id: { eq: target } }, limit: 1 } });
+			return { after: after.orders.rows[0] ?? null, masked, rows: page.orders.rows, amount: Decimal.of(1), file };
 		});
 		is<Eq<Effect.Error<typeof transaction>, ActRefused | ActConflict | ActUnknown>>();
 		const result = yield* transaction;
@@ -116,70 +115,47 @@ automation('orders_submit', {
 		}
 
 		yield* ctx.transaction(function* (tx) {
-			// @ts-expect-error a transaction model id keeps its collection brand
-			yield* tx.query('orders', { id: customer });
-			// @ts-expect-error a raw string is not a model id
-			yield* tx.query('orders', { id: 'order' });
-			// @ts-expect-error selects retain the model's actual fields
-			yield* tx.query('orders', { id: target, select: { missing: true } });
-			// @ts-expect-error a valid selected field cannot conceal an unknown field
-			yield* tx.query('orders', { id: target, select: { note: true, missing: true } });
-			// @ts-expect-error a many-relation select cannot conceal an unknown nested field
+			// @ts-expect-error a transaction model id keeps its model brand
+			yield* tx.query({ orders: { where: { id: { eq: customer } }, limit: 1 } });
+			// @ts-expect-error the single-model `query(model, args)` form is gone
+			yield* tx.query('orders', { id: target });
+			// @ts-expect-error a request's fields are the model's
+			yield* tx.query({ orders: { fields: ['missing'] } });
+			// @ts-expect-error a valid field cannot conceal an unknown one
+			yield* tx.query({ orders: { fields: ['note', 'missing'] } });
+			// @ts-expect-error a layer's fields are the ones that layer exposes
 			// prettier-ignore
-			yield* tx.query('orders', { id: target, select: { lines: { select: { qty: true, missing: true }, all: true } } });
-			// @ts-expect-error a one-relation select keeps the target model's exact fields
+			yield* tx.query({ orders: { fields: ['note'] }, 'orders.lines': { fields: ['qty', 'missing'] } });
+			// @ts-expect-error a ref layer keeps its target model's exact fields
 			// prettier-ignore
-			yield* tx.query('orders', { id: target, select: { customer: { select: { name: true, missing: true } } } });
-			// @ts-expect-error exact selections continue through a second relation boundary
-			// prettier-ignore
-			yield* tx.query('orders', { id: target, select: { lines: { select: { qty: true, order: { select: { note: true, missing: true } } }, all: true } } });
-			// @ts-expect-error a paged root retains the same nested selection boundary
-			// prettier-ignore
-			yield* tx.query('orders', { limit: 2, select: { lines: { select: { qty: true, missing: true }, all: true } } });
-			// @ts-expect-error keyed members retain the same nested selection boundary
-			// prettier-ignore
-			yield* tx.query({ order: { from: 'orders', id: target, select: { lines: { select: { qty: true, missing: true }, all: true } } } });
-			// @ts-expect-error every list states a limit or all
-			yield* tx.query('orders', { where: { id: { eq: target } } });
-			// @ts-expect-error a transaction reads current records, not historical revisions
-			yield* tx.query('orders', { id: target, revision: 1 });
-			// @ts-expect-error declared guest queries are outside the native model-only transaction surface
+			yield* tx.query({ orders: {}, 'orders.customer': { fields: ['name', 'missing'] } });
+			// @ts-expect-error a layer the root does not declare
+			yield* tx.query({ orders: {}, 'orders.owner': {} });
+			// @ts-expect-error a read request in a transaction reads current records: no asOf
+			yield* tx.query({ orders: { asOf: '2026-01-01T00:00:00.000Z' } });
+			// @ts-expect-error declared queries are gone: a `'<model>.<query>'` read does not exist
 			yield* tx.query('orders.open_total', {});
-			// @ts-expect-error indexed search is outside the native transaction surface
-			yield* tx.query('orders', { search: { by_colour: { lab: [1, 2, 3] } }, limit: 2 });
-			const historical = { id: target, revision: 1 };
-			// @ts-expect-error predeclared args cannot bypass the current-record boundary
-			yield* tx.query('orders', historical);
-			const searched = { search: { by_colour: { lab: [1, 2, 3] } }, limit: 2 };
-			// @ts-expect-error predeclared search args cannot become ordinary current reads
-			yield* tx.query('orders', searched);
-			const declared: { mode: 'declared'; all: true } = { mode: 'declared', all: true };
-			// @ts-expect-error dynamically declared reads are outside the transaction model surface
-			yield* tx.query('orders', declared);
-			// @ts-expect-error keyed members retain the same current-record boundary
-			yield* tx.query({ historical: { from: 'orders', ...historical } });
-			// @ts-expect-error keyed members reject unknown select keys beside valid ones
-			// prettier-ignore
-			yield* tx.query({ order: { from: 'orders', id: target, select: { note: true, missing: true } } });
+			// @ts-expect-error the keyed `{ alias: { from } }` form is gone: keys are roots
+			yield* tx.query({ order: { from: 'orders', limit: 1 } });
 			// @ts-expect-error native create keeps its writable input allowlist
-			yield* tx.act('orders.create', { customer, total: 1 });
+			yield* tx.act('orders.create', [{ customer, total: 1 }]);
 			// @ts-expect-error native update retains branded target ids
-			yield* tx.act('orders.update', { target: customer, set: { note: 'x' } });
+			yield* tx.act('orders.update', [{ target: customer, set: { note: 'x' } }]);
 			// @ts-expect-error native update keeps its writable input allowlist
-			yield* tx.act('orders.update', { target, set: { number: 'SO-1' } });
+			yield* tx.act('orders.update', [{ target, set: { number: 'SO-1' } }]);
 			// @ts-expect-error upsert still requires an explicit conflict policy
-			yield* tx.act('orders.upsert', { id: target, note: 'x' });
+			yield* tx.act('orders.upsert', [{ id: target, note: 'x' }]);
 			// @ts-expect-error ordinary writes cannot carry manual observations
-			yield* tx.act('orders.update', { target, set: { note: 'x' } }, { observed: { [target]: 1 } });
+			yield* tx.act('orders.update', [{ target, set: { note: 'x' } }], { observed: { [target]: 1 } });
 			// @ts-expect-error session observations cannot be overridden on upsert
 			// prettier-ignore
-			yield* tx.act('orders.upsert', { id: target, note: 'x' }, { onConflict: 'update', observed: { [target]: 1 } });
+			yield* tx.act('orders.upsert', [{ id: target, note: 'x' }], { onConflict: 'update', observed: { [target]: 1 } });
 			const manual: { onConflict: 'update'; observed: Readonly<Record<string, number>> } = {
 				onConflict: 'update',
 				observed: { [target]: 1 }
 			};
 			// @ts-expect-error a predeclared options variable cannot bypass the session observation boundary
-			yield* tx.act('orders.upsert', { id: target, note: 'x' }, manual);
+			yield* tx.act('orders.upsert', [{ id: target, note: 'x' }], manual);
 			// @ts-expect-error imports are not transaction CRUD
 			yield* tx.act('orders.import', []);
 			// @ts-expect-error erasure is not transaction CRUD
@@ -200,7 +176,7 @@ automation('orders_submit', {
 
 		// @ts-expect-error captured outer writes are Effects, not transaction instructions
 		// prettier-ignore
-		yield* ctx.transaction(function* () { yield* ctx.act('orders.update', { target, set: { note: 'x' } }); });
+		yield* ctx.transaction(function* () { yield* ctx.act('orders.update', [{ target, set: { note: 'x' } }]); });
 		// @ts-expect-error captured outer request facilities cannot run while a transaction is open
 		// prettier-ignore
 		yield* ctx.transaction(function* () { yield* ctx.request('erp', { method: 'GET', path: 'x', output: { kind: 'json' } }); });

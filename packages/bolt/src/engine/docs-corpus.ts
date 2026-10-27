@@ -51,7 +51,7 @@ const docFile = (namespace: string) => `${namespace.replaceAll('/', '.')}.json`;
 /**
  * The API reference corpus: `index()`, `namespace(ns)`, `symbol(ns, name)` and `search(text)`.
  * @example
- * docs.symbol('bolt', 'collection')?.signature
+ * docs.symbol('bolt', 'model')?.signature
  */
 export const corpus = (load: <T>(file: string) => T) => {
 	const docs = {

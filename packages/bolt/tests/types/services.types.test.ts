@@ -150,7 +150,7 @@ is<Eq<ActMode['_tag'], 'Direct' | 'Sync' | 'Record'>>();
 is<
 	Eq<
 		keyof ActRequest,
-		| 'collection'
+		| 'model'
 		| 'verb'
 		| 'input'
 		| 'mode'
@@ -185,11 +185,12 @@ is<Eq<'action' extends keyof CallablesShape ? true : false, false>>();
 is<
 	Eq<
 		Extract<Callable, { _tag: 'Verb' }>,
-		{ readonly _tag: 'Verb'; readonly collection: string; readonly verb: Verb }
+		{ readonly _tag: 'Verb'; readonly model: string; readonly verb: Verb }
 	>
 >();
 is<Eq<Answer<CallablesShape['acts']>, Effect.Effect<CallResult, EngineError>>>();
-is<Eq<Answer<CallablesShape['query']>, Effect.Effect<Json, EngineError>>>();
+// declared queries are gone: callables only write and start
+is<Eq<'query' extends keyof CallablesShape ? true : false, false>>();
 is<
 	Eq<
 		ParseCallable,

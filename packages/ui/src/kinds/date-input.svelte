@@ -18,6 +18,8 @@ Edits a date, instant, time of day or month as typed segments with a calendar or
 		 */
 		precision?: Precision;
 		id?: string;
+		/** `sm` matches a compact toolbar or tab strip; default is the form control height. */
+		size?: 'sm' | 'default';
 		/** Shows the value as copyable text; an enclosing readonly form sets it. */
 		readonly?: boolean;
 		disabled?: boolean;
@@ -95,6 +97,7 @@ Edits a date, instant, time of day or month as typed segments with a calendar or
 		of = 'date',
 		precision,
 		id,
+		size = 'default',
 		readonly,
 		disabled: ownDisabled,
 		invalid = false,
@@ -201,7 +204,7 @@ Edits a date, instant, time of day or month as typed segments with a calendar or
 		<TimeField.Input
 			{id}
 			onfocusout={flush}
-			class={cn(SEGMENTS, 'w-auto')}
+			class={cn(SEGMENTS, size === 'sm' && 'h-8 text-xs', 'w-auto')}
 			aria-invalid={invalid ? 'true' : undefined}
 			data-date-input="time"
 			data-precision={precision}
@@ -249,7 +252,7 @@ Edits a date, instant, time of day or month as typed segments with a calendar or
 			bind:ref={fieldAnchor}
 			{id}
 			onfocusout={flush}
-			class={cn(SEGMENTS, 'pr-1')}
+			class={cn(SEGMENTS, size === 'sm' && 'h-8 text-xs', 'pr-1')}
 			aria-invalid={invalid ? 'true' : undefined}
 			data-date-input={of}
 			data-precision={precision}

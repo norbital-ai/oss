@@ -127,7 +127,8 @@ describe('the model-change divider (L-BOLT-547)', () => {
 
 describe('tool steps', () => {
 	it('gives each tool its own icon and words, code its language, and an unknown or MCP tool a fallback', () => {
-		expect(stepView('read', { collection: 'leave_entry' })).toEqual({
+		// a read names its roots: the layer map's keys without a dot
+		expect(stepView('read', { leave_entry: {}, 'leave_entry.employee': {} })).toEqual({
 			icon: 'lucide:database',
 			verb: 'Read',
 			target: 'leave entry'

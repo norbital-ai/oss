@@ -76,12 +76,13 @@ const State = Schema.Literals([
 	'Superseded'
 ]);
 
+// stored `records` entries keep their `collection` key (the audit trigger reads it); the engine speaks `model`
 const Entry = Schema.Struct({
-	collection: Schema.String,
+	model: Schema.String,
 	id: Schema.String,
 	op: Schema.Literals(['create', 'update', 'delete']),
 	before: Schema.NullOr(Schema.Number)
-});
+}).pipe(Schema.encodeKeys({ model: 'collection' }));
 const LogEntry = Schema.Struct({
 	move: Schema.Literals([
 		'request',
@@ -97,12 +98,12 @@ const LogEntry = Schema.Struct({
 	to: State,
 	step: Schema.Number,
 	reason: Schema.NullOr(Schema.String),
-	/** A resubmission's changed fields: the root record's by name, any other held row's as `<collection>.<field>`. */
+	/** A resubmission's changed fields: the root record's by name, any other held row's as `<model>.<field>`. */
 	changed: Schema.optionalKey(Schema.Array(Schema.String)),
 	rolledBack: Schema.optionalKey(
 		Schema.Array(
 			Schema.Struct({
-				collection: Schema.String,
+				model: Schema.String,
 				id: Schema.String,
 				action: Schema.Literals(['restored', 'removed', 'recreated'])
 			})
@@ -111,7 +112,7 @@ const LogEntry = Schema.Struct({
 	skipped: Schema.optionalKey(
 		Schema.Array(
 			Schema.Struct({
-				collection: Schema.String,
+				model: Schema.String,
 				id: Schema.String,
 				field: Schema.String,
 				reason: Schema.String
@@ -127,7 +128,7 @@ const StoredRow = Schema.Struct({
 	requestor: Schema.String,
 	requestor_user: Schema.NullOr(Schema.String),
 	route: StoredSnapshot,
-	collection: Schema.String,
+	model: Schema.String,
 	record: Schema.String,
 	action: Schema.Literals(['create', 'update', 'delete']),
 	records: Schema.Array(Entry),
@@ -137,7 +138,7 @@ const StoredRow = Schema.Struct({
 type Stored = Request & {
 	route: StoredSnapshot;
 	id: string;
-	collection: string;
+	model: string;
 	record: string;
 	action: 'create' | 'update' | 'delete';
 	user: string | null;
@@ -154,7 +155,7 @@ type Who = { ref: string; name: string | null };
 /** The approval view (§3.8, spec §7): the request, its named steps, every interaction, the held records and the viewer's decisions. */
 export type ApprovalView = {
 	id: string;
-	collection: string;
+	model: string;
 	record: string;
 	action: 'create' | 'update' | 'delete';
 	at: string;
@@ -181,7 +182,7 @@ export type ApprovalView = {
 		skipped: LogEntry['skipped'];
 	}[];
 	/** The records the provisional change holds (the checkpoint): root first. */
-	records: readonly { collection: string; id: string; op: 'create' | 'update' | 'delete' }[];
+	records: readonly { model: string; id: string; op: 'create' | 'update' | 'delete' }[];
 	/** The decisions the viewer may take now — the state machine's own answer, so buttons match the engine. */
 	moves: readonly { decision: ApprovalDecision; reason: 'required' | 'optional' }[];
 	mine: boolean;
@@ -202,7 +203,7 @@ type ApprovalsOptions = {
 	/** Re-reads the request's views and the `$approval` of the records it holds. */
 	changed?(
 		requestId: string,
-		records: readonly { collection: string; id: string }[]
+		records: readonly { model: string; id: string }[]
 	): Effect.Effect<void>;
 };
 
@@ -214,7 +215,7 @@ const refused = (code: Refusal['code'], message: string, field?: string): Refusa
 });
 const conflict = (id: string): Decision => ({
 	kind: 'conflict',
-	records: [{ collection: 'approval_request', id, fields: ['status'] }]
+	records: [{ model: 'approval_request', id, fields: ['status'] }]
 });
 /** The `approval_request` columns a state of `route` shows: its steps' names, the current step's approvers, the superseders. */
 const face = (route: StepsSnapshot, next: Step) => {
@@ -233,8 +234,8 @@ const own = (actor: EngineActor) => (actor.kind === 'member' ? actor.id : null);
 function makeApprovals(m: EngineManifest, db: TenantDbShape, options: ApprovalsOptions) {
 	const cat = catalogOf(m);
 	const sourceAuthorities = new Authorities(m, 'approval');
-	const table = (collection: string) => cat.collections.get(collection)?.model.name ?? collection;
-	const notifies = (collection: string) => m.collections[collection]?.notify === true;
+	const table = (model: string) => cat.exposures.get(model)?.model.name ?? model;
+	const notifies = (model: string) => m.exposures[model]?.notify === true;
 	const toStored = (r: typeof StoredRow.Type): Stored => ({
 		id: r.id,
 		state: r.state,
@@ -242,26 +243,26 @@ function makeApprovals(m: EngineManifest, db: TenantDbShape, options: ApprovalsO
 		requestor: r.requestor,
 		user: r.requestor_user,
 		route: r.route,
-		collection: r.collection,
+		model: r.model,
 		record: r.record,
 		action: r.action,
 		records: r.records,
 		log: r.log,
 		at: new Date(r.at_text).toISOString()
 	});
-	const select = `SELECT id::text AS id, state, step, requestor, requestor_user, route, collection, record, action, records, log,
+	const select = `SELECT id::text AS id, state, step, requestor, requestor_user, route, collection AS model, record, action, records, log,
 		to_json(at)#>>'{}' AS at_text FROM bolt_approvals`;
 	const load = Effect.fn('Approvals.load')(function* (id: string) {
 		const rows = yield* db.rows(StoredRow, { text: `${select} WHERE id::text = $1`, params: [id] });
 		return rows[0] === undefined ? null : toStored(rows[0]);
 	});
-	/** The root collection's held rows as they are now (a removed one as its id): the notify event's records. */
+	/** The root model's held rows as they are now (a removed one as its id): the notify event's records. */
 	const current = Effect.fn('Approvals.current')(function* (a: Stored) {
-		const ids = a.records.filter((r) => r.collection === a.collection).map((r) => r.id);
-		if (cat.collections.get(a.collection) === undefined || ids.length === 0)
+		const ids = a.records.filter((r) => r.model === a.model).map((r) => r.id);
+		if (cat.exposures.get(a.model) === undefined || ids.length === 0)
 			return [{ id: a.record }];
 		const rows = yield* db.rows(Schema.Struct({ j: Schema.Record(Schema.String, Schema.Json) }), {
-			text: `SELECT to_jsonb(t) AS j FROM ${q(table(a.collection))} t WHERE t.id::text IN (SELECT jsonb_array_elements_text($1::jsonb))`,
+			text: `SELECT to_jsonb(t) AS j FROM ${q(table(a.model))} t WHERE t.id::text IN (SELECT jsonb_array_elements_text($1::jsonb))`,
 			params: [JSON.stringify(ids)]
 		});
 		const found = new Map(rows.map((r) => [String(r.j['id']), r.j]));
@@ -269,14 +270,14 @@ function makeApprovals(m: EngineManifest, db: TenantDbShape, options: ApprovalsO
 	});
 	/** H1: the `bolt.notify` run of one move, when the request's model declares `notify`. */
 	const notified = (
-		a: Pick<Stored, 'id' | 'collection' | 'user'>,
+		a: Pick<Stored, 'id' | 'model' | 'user'>,
 		route: StepsSnapshot,
 		move: ApprovalMove | 'request',
 		next: Step,
 		records: readonly Json[],
 		now: string
 	): QueuedRun[] => {
-		if (!notifies(a.collection)) return [];
+		if (!notifies(a.model)) return [];
 		const step = route.steps[next.step];
 		const event: NotifyWire = {
 			kind: 'approval',
@@ -289,24 +290,24 @@ function makeApprovals(m: EngineManifest, db: TenantDbShape, options: ApprovalsO
 			requester: a.user,
 			approvers: { teams: step?.teams ?? [], users: step?.users ?? [] }
 		};
-		return [notifyRun({ collection: a.collection, event }, now)];
+		return [notifyRun({ model: a.model, event }, now)];
 	};
 	/**
 	 * Once the change stands (approved, superseded): the held records' current images — this statement's own writes
 	 * first — reach the sync outbox they skipped while held (H3); a deleted held record sends its checkpoint image as a delete.
 	 */
 	const standing = (c: Chain, a: Pick<Stored, 'records'>, actor: EngineActor, now: string) => {
-		const held = a.records.filter((record) => cat.collections.has(record.collection));
+		const held = a.records.filter((record) => cat.exposures.has(record.model));
 		if (held.length === 0) return;
-		const written = new Set(held.map((record) => record.collection));
+		const written = new Set(held.map((record) => record.model));
 		const source = c.cte(
 			'ap_out',
 			[...written]
-				.map((collection) => {
+				.map((model) => {
 					const records = held
-						.filter((record) => record.collection === collection)
+						.filter((record) => record.model === model)
 						.map(({ id, before }) => ({ id, before }));
-					const col = c.p(collection);
+					const col = c.p(model);
 					return `SELECT ${col}::text AS c, r.id, coalesce(t.revision,
 				(SELECT max(h.revision) FROM bolt_history h WHERE h.collection = ${col} AND h.record::text = r.id), r.before + 1) AS revision,
 				CASE WHEN t.id IS NULL THEN 'delete' WHEN r.before IS NULL THEN 'create' ELSE 'update' END::text AS op,
@@ -316,14 +317,14 @@ function makeApprovals(m: EngineManifest, db: TenantDbShape, options: ApprovalsO
 				 WHERE h.collection = ${col} AND h.record::text = r.id AND h.revision <= r.before ORDER BY e.key,h.revision DESC) p) END AS o,
 				CASE WHEN t.id IS NULL THEN NULL::jsonb ELSE to_jsonb(t) END AS n
 			FROM jsonb_to_recordset(${c.p(records)}::jsonb) AS r(id text, before int)
-			LEFT JOIN ${q(table(collection))} t ON t.id::text = r.id
+			LEFT JOIN ${q(table(model))} t ON t.id::text = r.id
 			WHERE (t.id IS NOT NULL OR r.before IS NOT NULL)
 			AND NOT EXISTS (SELECT 1 FROM allp p WHERE p.c = ${col} AND p.id = r.id)`;
 				})
 				.concat(
 					`SELECT p.c,p.id,p.revision,p.op,p.cause,p.erased,p.o,p.n FROM allp p
 			WHERE p.cause IN ('direct','cascade') AND NOT p.erased
-			AND ${c.p(held.map(({ collection, id }) => ({ collection, id })))}::jsonb @> jsonb_build_array(jsonb_build_object('collection',p.c,'id',p.id))`
+			AND ${c.p(held.map(({ model, id }) => ({ collection: model, id })))}::jsonb @> jsonb_build_array(jsonb_build_object('collection',p.c,'id',p.id))`
 				)
 				.join(' UNION ALL ')
 		);
@@ -345,7 +346,7 @@ function makeApprovals(m: EngineManifest, db: TenantDbShape, options: ApprovalsO
 			const b = act.bindings,
 				auth = act.authority;
 			// retry-stable (L-BOLT-201): minted from the invocation and its key
-			const requestId = minter(`approval:${act.seed}:${act.collection}:${act.record}`, b.now)();
+			const requestId = minter(`approval:${act.seed}:${act.model}:${act.record}`, b.now)();
 			const requestor = actorRef(auth.actor),
 				user = own(auth.actor);
 			const entry: LogEntry = {
@@ -359,7 +360,7 @@ function makeApprovals(m: EngineManifest, db: TenantDbShape, options: ApprovalsO
 			};
 			const shown = face(route, { state: 'Pending', step: 0 });
 			const runs = notified(
-				{ id: requestId, collection: act.collection, user },
+				{ id: requestId, model: act.model, user },
 				route,
 				'request',
 				{ state: 'Pending', step: 0 },
@@ -370,14 +371,14 @@ function makeApprovals(m: EngineManifest, db: TenantDbShape, options: ApprovalsO
 				requestId,
 				route,
 				pieces: (c: Chain, held: string | null) => {
-					const col = c.p(act.collection),
+					const col = c.p(act.model),
 						rec = c.p(act.record);
 					c.cte(
 						'ap_state',
 						`INSERT INTO bolt_approvals (id, state, step, collection, record, action, requestor, requestor_user, route, records, log, at)
 	SELECT ${c.p(requestId)}::uuid, 'Pending', 0, ${col}, ${rec}, ${c.p(act.action)}, ${c.p(requestor)}, ${c.p(user)}, ${c.p(route)}::jsonb,
 		(SELECT coalesce(jsonb_agg(e), '[]'::jsonb) FROM (
-			SELECT jsonb_build_object('collection', ${col}::text, 'id', ${rec}::text, 'op', 'update', 'before', (SELECT revision FROM ${q(table(act.collection))} WHERE id::text = ${rec}))
+			SELECT jsonb_build_object('collection', ${col}::text, 'id', ${rec}::text, 'op', 'update', 'before', (SELECT revision FROM ${q(table(act.model))} WHERE id::text = ${rec}))
 				AS e WHERE NOT EXISTS (SELECT 1 FROM allp WHERE c = ${col} AND id = ${rec} AND cause IN ('direct', 'cascade'))
 			UNION ALL SELECT ${checkpoint('x')} FROM (SELECT DISTINCT ON (c, id) * FROM allp WHERE cause IN ('direct', 'cascade') AND NOT erased) x) s),
 		jsonb_build_array(${c.p(entry)}::jsonb), ${c.p(b.now)}::timestamptz
@@ -441,9 +442,9 @@ function makeApprovals(m: EngineManifest, db: TenantDbShape, options: ApprovalsO
 				changed: [
 					...new Set(
 						act.changed.flatMap((row) =>
-							row.collection === a.collection && row.id === a.record
+							row.model === a.model && row.id === a.record
 								? row.fields
-								: row.fields.map((f) => `${row.collection}.${f}`)
+								: row.fields.map((f) => `${row.model}.${f}`)
 						)
 					)
 				]
@@ -470,7 +471,7 @@ function makeApprovals(m: EngineManifest, db: TenantDbShape, options: ApprovalsO
 					c.assert(
 						'(SELECT count(*) FROM ap_resubmit) = 1',
 						'conflict',
-						JSON.stringify({ collection: 'approval_request', ids: [a.id] })
+						JSON.stringify({ model: 'approval_request', ids: [a.id] })
 					);
 					c.cte(
 						'ap_resubmit_face',
@@ -552,7 +553,7 @@ function makeApprovals(m: EngineManifest, db: TenantDbShape, options: ApprovalsO
 						observations: []
 					};
 		if (
-			plan.skipped.some((record) => record.field === '*' && record.reason !== 'collectionRemoved')
+			plan.skipped.some((record) => record.field === '*' && record.reason !== 'modelRemoved')
 		)
 			return refused(
 				'invalidInput',
@@ -573,7 +574,7 @@ function makeApprovals(m: EngineManifest, db: TenantDbShape, options: ApprovalsO
 			a.route,
 			move,
 			next,
-			notifies(a.collection) ? yield* current(a) : [],
+			notifies(a.model) ? yield* current(a) : [],
 			now
 		);
 		const refreshKey = `approval:${a.id}:${a.log.length}`;
@@ -597,13 +598,13 @@ function makeApprovals(m: EngineManifest, db: TenantDbShape, options: ApprovalsO
 			...(readGuards === undefined ? {} : { fingerprints: readGuards.fingerprints }),
 			before: (c) => {
 				for (const observation of plan.observations) {
-					const selected = `SELECT revision FROM ${q(table(observation.collection))} WHERE id::text = ${c.p(observation.id)}`;
+					const selected = `SELECT revision FROM ${q(table(observation.model))} WHERE id::text = ${c.p(observation.id)}`;
 					c.assert(
 						observation.revision === null
 							? `NOT EXISTS (${selected})`
 							: `coalesce((${selected}) = ${c.p(observation.revision)}, false)`,
 						'conflict',
-						JSON.stringify({ collection: observation.collection, ids: [observation.id] })
+						JSON.stringify({ model: observation.model, ids: [observation.id] })
 					);
 				}
 				// the request as loaded, locked: a concurrent move on it waits, then finds it moved
@@ -615,7 +616,7 @@ function makeApprovals(m: EngineManifest, db: TenantDbShape, options: ApprovalsO
 				c.assert(
 					'(SELECT count(*) FROM ap_authorize) = 1',
 					'conflict',
-					JSON.stringify({ collection: 'approval_request', ids: [a.id] })
+					JSON.stringify({ model: 'approval_request', ids: [a.id] })
 				);
 			},
 			pieces: (c) => {
@@ -634,14 +635,14 @@ function makeApprovals(m: EngineManifest, db: TenantDbShape, options: ApprovalsO
 				c.assert(
 					'(SELECT count(*) FROM up) = 1',
 					'conflict',
-					JSON.stringify({ collection: 'approval_request', ids: [a.id] })
+					JSON.stringify({ model: 'approval_request', ids: [a.id] })
 				);
 			}
 		});
 		const lockedTables = [
 			...new Set([
 				...(readGuards?.tables ?? []),
-				...plan.observations.map((observation) => observation.collection),
+				...plan.observations.map((observation) => observation.model),
 				...affectedTables(m, cat, plan.writes),
 				'bolt_approvals',
 				'approval_request'
@@ -696,7 +697,7 @@ function makeApprovals(m: EngineManifest, db: TenantDbShape, options: ApprovalsO
 			ORDER BY at DESC, seq DESC LIMIT 200`,
 			params: [
 				filter.ids === undefined ? null : JSON.stringify(filter.ids),
-				filter.collection ?? null,
+				filter.model ?? null,
 				filter.records === undefined ? null : JSON.stringify(filter.records),
 				filter.all === true
 			]
@@ -705,8 +706,8 @@ function makeApprovals(m: EngineManifest, db: TenantDbShape, options: ApprovalsO
 		const seen: Stored[] = [];
 		for (const row of rows) {
 			const a = toStored(row);
-			// ponytail: a non-participant's read check is one read per request; batch by collection when lists grow
-			if (participant(a, auth) || a.requestor === me || (yield* readable(a.collection, a.record)))
+			// ponytail: a non-participant's read check is one read per request; batch by model when lists grow
+			if (participant(a, auth) || a.requestor === me || (yield* readable(a.model, a.record)))
 				seen.push(a);
 		}
 		const member = 'member:';
@@ -735,7 +736,7 @@ function makeApprovals(m: EngineManifest, db: TenantDbShape, options: ApprovalsO
 		const teamCatalogue = teams(m);
 		return seen.map((a): ApprovalView => ({
 			id: a.id,
-			collection: a.collection,
+			model: a.model,
 			record: a.record,
 			action: a.action,
 			at: a.at,
@@ -767,7 +768,7 @@ function makeApprovals(m: EngineManifest, db: TenantDbShape, options: ApprovalsO
 				rolledBack: d.rolledBack,
 				skipped: d.skipped
 			})),
-			records: a.records.map(({ collection, id, op }) => ({ collection, id, op })),
+			records: a.records.map(({ model, id, op }) => ({ model, id, op })),
 			moves: decisionsFor(a.state, rolesOf(a, auth)),
 			mine: a.requestor === me,
 			participant: participant(a, auth)
@@ -812,9 +813,9 @@ export const ApprovalsLive = Layer.effect(
 			changed: (requestId, records) =>
 				Effect.sync(() => {
 					live.syncChanged('approval_request', [requestId]);
-					for (const [collection, rows] of Map.groupBy(records, (r) => r.collection))
+					for (const [model, rows] of Map.groupBy(records, (r) => r.model))
 						live.syncChanged(
-							collection,
+							model,
 							rows.map((r) => r.id)
 						);
 				})

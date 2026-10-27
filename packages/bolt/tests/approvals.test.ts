@@ -55,7 +55,7 @@ describe('approval flows', () => {
 		const row = {
 			id: 'request',
 			state: 'Pending',
-			collection: 'orders',
+			model: 'orders',
 			record: 'order',
 			action: 'update',
 			requestor: 'member:requester',

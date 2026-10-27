@@ -9,6 +9,7 @@ import type { TenantDbShape as TenantDb } from '../db/tenant-db.ts';
 import { BoltError } from '../../protocol/errors.ts';
 import { Clock, Effect, Schema } from 'effect';
 import { identityHistory, IMAGES, partyRow, signupOf, IdentityStatement } from './session.ts';
+import { envoySpec } from '../envoys/spec.ts';
 const UserSchema = Schema.Struct({
 	id: Schema.String,
 	email: Schema.NullOr(Schema.String),
@@ -17,7 +18,7 @@ const UserSchema = Schema.Struct({
 	active: Schema.Boolean,
 	admin: Schema.Boolean,
 	team: Schema.NullOr(Schema.String),
-	party: Schema.NullOr(Schema.Struct({ collection: Schema.String, id: Schema.String })),
+	party: Schema.NullOr(Schema.Struct({ model: Schema.String, id: Schema.String })),
 	signup: Schema.Boolean,
 	revision: Schema.Number
 });
@@ -66,7 +67,7 @@ export class Authorities {
 				if (address === null) return u;
 				const [rows] = yield* db.read([partyRow(signup, address)]);
 				if (rows!.rows.length !== 1) return u;
-				const party = { collection: signup.party.collection, id: String(rows!.rows[0]!['id']) };
+				const party = { model: signup.party.model, id: String(rows!.rows[0]!['id']) };
 				const s = new IdentityStatement();
 				const out = yield* db.write({
 					params: s.params,
@@ -208,7 +209,7 @@ SELECT (SELECT (n->>'revision')::int FROM bound) AS revision`
 	) {
 		return Effect.gen(
 			function* (this: Authorities) {
-				const spec = Object.hasOwn(this.m.envoys, o.envoy) ? this.m.envoys[o.envoy] : undefined;
+				const spec = yield* envoySpec(this.m, db, o.envoy);
 				if (spec === undefined)
 					return yield* Effect.fail(
 						BoltError.make('unknownEnvoy', 'admission', `no envoy '${o.envoy}'`)

@@ -43,6 +43,8 @@ export const Conversation = Schema.Struct({
 	owner: Schema.NullOr(Schema.String),
 	envoy: Schema.NullOr(Schema.String),
 	integration: Schema.NullOr(Schema.String),
+	/** The chat thread on that instance (a WhatsApp jid, a mail thread): where typing is shown. */
+	thread: Schema.NullOr(Schema.String),
 	parent: Schema.NullOr(Schema.String),
 	status: Schema.Literals(['idle', 'running', 'stopped']),
 	model: Schema.String,
@@ -80,7 +82,7 @@ export type ToolCall = Types.Mutable<typeof ToolCallSchema.Type>;
 export type Receipt = {
 	outcome: 'committed' | 'pendingApproval';
 	callable: string;
-	records: readonly { collection: string; id: string }[];
+	records: readonly { model: string; id: string }[];
 	requestId?: string;
 };
 const AsSchema = Schema.Union([
@@ -105,7 +107,7 @@ const ToolCallSchema = Schema.Struct({
 const ReceiptSchema = Schema.Struct({
 	outcome: Schema.Literals(['committed', 'pendingApproval']),
 	callable: Schema.String,
-	records: Schema.Array(Schema.Struct({ collection: Schema.String, id: Schema.String })),
+	records: Schema.Array(Schema.Struct({ model: Schema.String, id: Schema.String })),
 	requestId: Schema.optionalKey(Schema.String)
 });
 const MetaSchema = Schema.Union([
@@ -218,6 +220,7 @@ const MessageFields = {
 	sender_name: Schema.optionalKey(Schema.NullOr(Schema.String)),
 	files: Schema.optionalKey(Schema.Array(FileRef)),
 	delivered_turn: Schema.optionalKey(Schema.NullOr(Schema.String)),
+	direction: Schema.optionalKey(Schema.NullOr(Schema.String)),
 	provider_id: Schema.optionalKey(Schema.NullOr(Schema.String)),
 	reply_to: Schema.optionalKey(Schema.NullOr(Schema.String)),
 	sent_at: Schema.optionalKey(Schema.NullOr(Schema.String)),
@@ -253,7 +256,7 @@ export const rowsOf = (rows: readonly { readonly [c: string]: Json }[]) =>
 /** Rule 65 for the transcript: the rows a statement wrote (its `RETURNING ${MSG}`) as the live lane's commit record. */
 export const messageCommit = (rows: readonly MessageRow[], deleted = false): Captured[] =>
 	rows.map((r) => ({
-		collection: 'sys_message',
+		model: 'sys_message',
 		id: r.id,
 		op: deleted ? 'delete' : 'update',
 		revision: 0,
@@ -264,7 +267,7 @@ export const messageCommit = (rows: readonly MessageRow[], deleted = false): Cap
 /** The same for `sys_conversation` (`RETURNING to_jsonb(c) AS r`): the panel's conversation list and each one's status, plan and goals. */
 export const conversationCommit = (rows: readonly RowData[]): Captured[] =>
 	rows.map((r) => ({
-		collection: 'sys_conversation',
+		model: 'sys_conversation',
 		id: String(r['id']),
 		op: 'update',
 		revision: 0,
@@ -361,7 +364,7 @@ const ranOf = Schema.decodeUnknownOption(
 );
 /**
  * What the panel reads of a step's result: its `error`, the `files` it stored or collected, the run a `wait` `settled`
- * (whose answer may be a file), a sub-agent's `conversation`, an `act`'s writes (`results`, else the one), a
+ * (whose answer may be a file), a sub-agent's `conversation`, an `act`'s write (`results` only in transcripts from the retired write list), a
  * `preview` URL and a held `approval`. A result of any other shape shows none of them.
  */
 const Outcome = Schema.Struct({
@@ -387,6 +390,9 @@ export const isStaff = (a: Authority) =>
  */
 export function transcriptRow(r: MessageRow, staff: boolean, thread: boolean): AgentRow | null {
 	if ((!thread && ambient(r) && r.as === null) || r.state === 'cancelled') return null;
+	// every message that came in is shown: one admission left unanswered (chatter, an unknown sender, over a limit) is an aside
+	const aside = r.role === null && r.direction === 'inbound';
+	if (aside && !thread) return null;
 	const meta = r.meta,
 		step = r.role === 'tool' ? r.content : null,
 		said = r.role !== 'tool' && typeof r.content === 'object' ? r.content : null,
@@ -425,10 +431,11 @@ export function transcriptRow(r: MessageRow, staff: boolean, thread: boolean): A
 	return {
 		id: r.id,
 		seq: Number(r.seq),
-		role: r.role,
+		role: aside ? 'user' : r.role,
 		text: r.text,
 		state: r.state,
-		tag: meta?.tag ?? (ambient(r) ? 'ambient' : null),
+		tag: meta?.tag ?? (ambient(r) || aside ? 'ambient' : null),
+		...(r.turn === null ? {} : { turn: r.turn }),
 		author: authorOf(r),
 		...(r.created_at === undefined ? {} : { at: r.created_at }),
 		...(r.about === undefined || r.about === null ? {} : { about: r.about }),

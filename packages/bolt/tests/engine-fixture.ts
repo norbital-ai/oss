@@ -1,9 +1,10 @@
 // The integration workspace: customers ← orders (a seq, a state with a per-state `edit`, a roll-up) → owned lines; a
-// callbacks on orders that read the customer and refuse a blocked one; two policies, `rep` (own rows, north only on
-// write) and `auditor` (every row, `note` narrowed away, so a caller holding both sees `note` masked on others' rows).
+// callbacks on orders that read the customer and refuse a blocked one; two policies, `rep` (own rows; its write `check`s
+// keep orders in the north) and `auditor` (every row, `note` narrowed away, so a caller holding both sees `note` masked
+// on others' rows). Lines are a layer of orders (read and written through it) and their own access point.
 import type { EngineManifest } from '../src/engine/manifest.ts';
 
-const lineCols = { columns: ['label', 'amount'] };
+const lineCols = ['label', 'amount'];
 export const manifest = {
 	workspace: { tz: 'UTC', locale: 'en' },
 	models: {
@@ -47,25 +48,32 @@ export const manifest = {
 		'orders.customer': { to: 'customers', inverse: 'orders' },
 		'lines.order': { to: 'orders', inverse: 'lines', owned: true }
 	},
-	collections: {
-		customers: { read: { fields: 'all' }, create: { input: { columns: ['name', 'blocked'] } } },
+	exposures: {
+		customers: {
+			read: { customers: { fields: 'all' } },
+			create: { columns: { customers: ['name', 'blocked'] } }
+		},
 		orders: {
-			read: { fields: 'all' },
+			read: {
+				orders: { fields: 'all' },
+				'orders.customer': { fields: 'all' },
+				'orders.lines': { fields: 'all' }
+			},
 			create: {
-				input: {
-					columns: ['title', 'region', 'note', 'stage', 'customer'],
-					with: { lines: { create: lineCols } }
+				columns: {
+					orders: ['title', 'region', 'note', 'stage', 'customer'],
+					'orders.lines': lineCols
 				}
 			},
 			update: {
-				input: {
-					columns: ['title', 'region', 'note', 'status', 'archived', 'stage'],
-					with: { lines: { create: lineCols, update: lineCols, delete: {} } }
+				columns: {
+					orders: ['title', 'region', 'note', 'status', 'archived', 'stage'],
+					'orders.lines': lineCols
 				}
 			},
 			delete: {}
 		},
-		lines: { read: { fields: 'all' }, update: { input: lineCols } }
+		lines: { read: { lines: { fields: 'all' } }, update: { columns: { lines: lineCols } } }
 	},
 	integrations: {},
 	policies: {
@@ -74,20 +82,25 @@ export const manifest = {
 			grants: {
 				customers: { read: true },
 				orders: {
-					read: { where: { created_by: { eq: { actor: 'id' } } } },
-					create: { where: { region: { eq: 'north' } } },
-					update: { where: { region: { eq: 'north' } } },
-					delete: 'read',
+					read: { orders: { where: { created_by: { eq: { actor: 'id' } } } } },
+					create: { check: true },
+					update: { check: true },
+					delete: { check: true },
 					moves: { status: ['draft->submitted'] }
 				},
-				lines: { via: 'order' }
+				lines: {
+					read: { lines: { where: { order: { created_by: { eq: { actor: 'id' } } } } } },
+					update: { check: true }
+				}
 			}
 		},
 		auditor: {
 			description: 'Reads every order',
 			grants: {
 				customers: { read: true },
-				orders: { read: { fields: ['title', 'region', 'number', 'status', 'total', 'customer'] } }
+				orders: {
+					read: { orders: { fields: ['title', 'region', 'number', 'status', 'total', 'customer'] } }
+				}
 			}
 		}
 	},
@@ -104,25 +117,29 @@ export const manifest = {
 /** Explicit opt-in for fixtures that bind the guest's create and update callbacks. */
 export const callbacks = {
 	...manifest,
-	collections: {
-		...manifest.collections,
+	exposures: {
+		...manifest.exposures,
 		orders: {
-			...manifest.collections.orders,
-			create: { ...manifest.collections.orders.create, transform: true },
-			update: { ...manifest.collections.orders.update, transform: true }
+			...manifest.exposures.orders,
+			create: { ...manifest.exposures.orders.create, transform: true },
+			update: { ...manifest.exposures.orders.update, transform: true }
 		}
 	}
 } satisfies EngineManifest;
 
-/** `guest.mjs`: each callback batches customer references into one query; `spin` burns CPU past the wall. */
+/**
+ * `guest.mjs`: each callback batches customer references into one query; `spin` burns CPU past the wall. `rep`'s checks
+ * deny a write that leaves the north (`rule: 'rep.orders.<op>'`), a delete of another member's order, and a line change
+ * on an order outside the north (one read over the batch).
+ */
 export const guest = {
 	source: `function* checkCustomers(rows, ctx) {
 	const ids = [...new Set(rows.flatMap((row) => row.customer == null ? [] : [row.customer]))];
-	const customers = ids.length === 0 ? [] : (yield* ctx.db.query('customers', { where: { id: { in: ids } }, all: true })).rows;
+	const customers = ids.length === 0 ? [] : (yield* ctx.db.query({ customers: { where: { id: { in: ids } } } })).customers.rows;
 	for (const customer of customers) if (customer.blocked) yield* ctx.refuse(customer.name + ' is blocked', { field: 'customer' });
 }
 const trim = (rows) => rows.map((row) => row.title === undefined ? row : { ...row, title: row.title.trim() });
-export default { collection: { orders: { bodies: {
+export default { model: { orders: { bodies: {
 	create: function* (rows, ctx) {
 		if (rows.some((row) => row.title === 'spin')) for (;;) {}
 		yield* checkCustomers(rows, ctx);
@@ -133,7 +150,29 @@ export default { collection: { orders: { bodies: {
 		yield* checkCustomers(changes.map(({ before, set }) => ({ ...before, ...set })), ctx);
 		return trim(changes.map(({ set }) => set));
 	}
-} } } };`
+} } },
+policy: { rep: { grants: {
+	orders: {
+		create: { check: function* (rows, ctx) {
+			const row = rows.findIndex((r) => r.region !== 'north');
+			return row >= 0 ? ctx.deny('Reps sell in the north.', { row, field: 'region' }) : ctx.allow();
+		} },
+		update: { check: function* (changes, ctx) {
+			const row = changes.findIndex(({ before, set }) => before.region !== 'north' || (set.region ?? before.region) !== 'north');
+			return row >= 0 ? ctx.deny('Reps sell in the north.', { row, field: 'region' }) : ctx.allow();
+		} },
+		delete: { check: function* (rows, ctx) {
+			return rows.every((r) => r.created_by === ctx.actor.id) ? ctx.allow() : ctx.deny('Reps delete their own orders.');
+		} }
+	},
+	lines: {
+		update: { check: function* (changes, ctx) {
+			const { orders } = yield* ctx.db.query({ orders: { where: { id: { in: changes.map((c) => c.before.order) } }, fields: ['region'] } });
+			return orders.rows.every((o) => o.region === 'north') ? ctx.allow() : ctx.deny('Reps change lines of northern orders.');
+		} }
+	}
+} } }
+};`
 };
 
 export const ACME = '0199a000-0000-4000-8000-0000000000c1';

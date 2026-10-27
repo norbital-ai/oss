@@ -36,12 +36,15 @@ const manifest: EngineManifest = {
 		}
 	},
 	relationships: { 'ledger.account': { to: 'accounts', inverse: 'ledger' } },
-	collections: {
-		accounts: { read: { fields: 'all' }, update: { input: { columns: ['balance'] } } },
+	exposures: {
+		accounts: {
+			read: { accounts: { fields: 'all' } },
+			update: { columns: { accounts: ['balance'] } }
+		},
 		ledger: {
-			read: { fields: 'all' },
+			read: { ledger: { fields: 'all' } },
 			create: {
-				input: { columns: ['account', 'label', 'amount', 'balance_before', 'balance_after'] }
+				columns: { ledger: ['account', 'label', 'amount', 'balance_before', 'balance_after'] }
 			}
 		}
 	},
@@ -68,16 +71,16 @@ const manifest: EngineManifest = {
 };
 const guest = program(`import { Effect } from 'effect';
 const operations = (input,balance) => [
- {callable:'accounts.update',input:{target:input.account,set:{balance:balance-input.amount}}},
- {callable:'ledger.create',input:{
+ {callable:'accounts.update',input:[{target:input.account,set:{balance:balance-input.amount}}]},
+ {callable:'ledger.create',input:[{
   account:input.account,label:input.label,amount:input.amount,
   balance_before:balance,balance_after:balance-input.amount
- }}
+ }]}
 ];
 function* debit(input,ctx){
- const page=yield* ctx.query('accounts',{
-  where:{id:{eq:input.account}},select:{balance:true},all:true
- });
+ const {accounts:page}=yield* ctx.query({accounts:{
+  where:{id:{eq:input.account}},fields:['balance']
+ }});
  const account=page.rows[0];
  if(account===undefined)throw new Error('The debit account is missing');
  return yield* ctx.act.many(operations(input,account.balance)).pipe(
@@ -91,18 +94,18 @@ export default {automation:{
  debitA:{body:debit},
  debitB:{body:debit},
  fanout:{body:function*(input,ctx){
-  const page=yield* ctx.query('accounts',{all:true,select:{balance:true}});
-  return yield* Effect.all(page.rows.map(account=>ctx.act('accounts.update',{
+  const {accounts:page}=yield* ctx.query({accounts:{fields:['balance']}});
+  return yield* Effect.all(page.rows.map(account=>ctx.act('accounts.update',[{
    target:account.id,set:{balance:account.balance-input.amount}
-  }).pipe(Effect.map(outcome=>outcome.kind))),{concurrency:'unbounded'});
+  }]).pipe(Effect.map(outcome=>outcome.kind))),{concurrency:'unbounded'});
  }},
  reread:{body:function*(input,ctx){
-  const query={mode:'declared',where:{id:{eq:input.account}},select:['balance'],all:true};
-  const first=yield* ctx.query('accounts',query);
-  const account=first.rows[0];
+  const query={accounts:{where:{id:{eq:input.account}},fields:['balance']}};
+  const first=yield* ctx.query(query);
+  const account=first.accounts.rows[0];
   if(account===undefined)throw new Error('The reread account is missing');
   let secondReturned=false;
-  const readCode=yield* ctx.query('accounts',query).pipe(
+  const readCode=yield* ctx.query(query).pipe(
    Effect.map(()=>{secondReturned=true;return 'returned';}),
    Effect.catchTag('ReadFailed',error=>Effect.succeed(error.code))
   );

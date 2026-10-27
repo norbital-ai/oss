@@ -1,5 +1,5 @@
 // Field kinds and input kinds: one literal language for stored fields and every typed input (§3.3.2).
-import type { CollectionName, CustomFieldName, CustomShape, NamesPart, Row } from './names.ts';
+import type { ModelName, CustomFieldName, CustomShape, NamesPart, Row } from './names.ts';
 import type { ModelWhere } from './where.ts';
 import type {
 	DatePrecision,
@@ -356,7 +356,7 @@ type InputOptions<T, Stored> = T extends { kind: 'object'; fields: infer F }
 				: T extends { kind: 'json'; shape: infer S }
 					? { kind: 'json'; shape: ValidInput<S, Stored> } & Common<Json>
 					: T extends { kind: 'id'; of: infer C }
-						? { kind: 'id'; of: CollectionName } & (Stored extends true
+						? { kind: 'id'; of: ModelName } & (Stored extends true
 								? {}
 								: { where?: IdWhere<C> }) &
 								Common<never>
@@ -372,7 +372,7 @@ type InputOptions<T, Stored> = T extends { kind: 'object'; fields: infer F }
 export type ValidInputs<F, Stored = false> = { [P in keyof F]: ValidInput<F[P], Stored> };
 /** Output validation follows nested values and resolves a row's model name from the generated catalogue. */
 export type ValidOutput<T> = T extends { kind: 'row' }
-	? { kind: 'row'; of: CollectionName } & Common<never>
+	? { kind: 'row'; of: ModelName } & Common<never>
 	: T extends { kind: 'list' | 'record'; of: infer O }
 		? Omit<T, 'of'> & { of: ValidOutput<O> }
 		: T extends { kind: 'object'; fields: infer F }

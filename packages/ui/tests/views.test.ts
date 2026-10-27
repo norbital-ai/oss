@@ -14,14 +14,13 @@ import { rangeText, searchRows, readTableState, writeTableState } from '../src/t
 import { readState, failed } from '../src/read/state.ts';
 import { rowsOps } from '../src/relations/operations.ts';
 import { series } from '../src/chart/series.ts';
-import type { Page } from '../src/collection/types.ts';
 import type { Query } from '../src/client/contract.ts';
 import { reactive } from './kit-state.svelte.js';
-import { heavySelect, listSelect, unref, refOf } from '../src/relations/select.ts';
+import { listRequest, unref, refOf } from '../src/relations/select.ts';
 import { Deferred, Effect, Queue } from 'effect';
 import { Decimal } from '@norbital-ai/std/decimal';
 import { formatValue as show } from '../src/kinds/kind.ts';
-import { viewFixture } from './view-fixture.ts';
+import { jsonRecord, viewFixture } from './view-fixture.ts';
 import type { KindsHost } from '../src/kinds/context.ts';
 import type { Json } from '@norbital-ai/std/wire';
 import type { Clip } from '../src/capture/capture.ts';
@@ -82,7 +81,7 @@ it.live('a later page stays live through Query state; a restored cursor reads on
 		const lived: Json[] = [];
 		const { bolt } = yield* browser(() =>
 			viewFixture({
-				read: (_collection, options) =>
+				read: (_model, options) =>
 					options.after === undefined
 						? {
 								rows: Array.from({ length: options.limit ?? 0 }, (_, i) => ({ id: String(i) })),
@@ -90,9 +89,7 @@ it.live('a later page stays live through Query state; a restored cursor reads on
 							}
 						: { rows: [{ id: 'once' }], next: null },
 				changes: (read) => {
-					const options = read.a[1];
-					assert.ok(options !== undefined);
-					lived.push(options);
+					lived.push(jsonRecord(read.a[0]).c ?? null);
 					return () => {};
 				}
 			})
@@ -107,12 +104,14 @@ it.live('a later page stays live through Query state; a restored cursor reads on
 			}
 		};
 		const state = reactive<{
-			read(limit: number, after?: string): Query<Page>;
+			of: string;
+			read(limit: number, after?: string): Query<unknown>;
 			index: number | null;
 			after: string | null;
 		}>({
+			of: 'c',
 			read: (limit: number, after?: string) =>
-				bolt.query<Page>('c', after === undefined ? { limit } : { limit, after }),
+				bolt.query({ c: after === undefined ? { limit } : { limit, after } }),
 			index: 0,
 			after: null
 		});
@@ -220,7 +219,7 @@ it.effect('Rows ignores reordered object keys while preserving decimal and array
 	})
 );
 
-it.effect('a heavy column widens the list read to the default row plus it', () =>
+it.effect('a list read names its light fields and FKs, plus any heavy column', () =>
 	Effect.sync(() => {
 		const ex: NonNullable<KindsHost['catalog']>[string] = {
 			label: ['name'],
@@ -232,13 +231,12 @@ it.effect('a heavy column widens the list read to the default row plus it', () =
 			},
 			relations: { owner: { targets: ['people'] } }
 		};
-		assert.equal(heavySelect(ex, ['name']), undefined);
-		assert.equal(heavySelect(undefined, ['doc']), undefined);
-		assert.deepEqual(heavySelect(ex, ['created_at', 'doc']), {
-			name: true,
-			owner: true,
-			created_at: true,
-			doc: true
+		assert.deepEqual(listRequest({ docs: ex }, 'docs', {}, ['name']), {
+			docs: { fields: ['name', 'owner'] }
+		});
+		assert.deepEqual(listRequest(undefined, 'docs', {}, ['doc']), { docs: {} });
+		assert.deepEqual(listRequest({ docs: ex }, 'docs', {}, ['created_at', 'doc']), {
+			docs: { fields: ['name', 'owner', 'created_at', 'doc'] }
 		});
 	})
 );
@@ -249,20 +247,31 @@ it.effect('a FK column reads its target label in the page read and shows it besi
 			orders: {
 				label: ['no'],
 				fields: { no: { kind: 'text' }, customer: { kind: 'text' }, spec: { kind: 'json' } },
-				relations: { customer: { targets: ['customers'] }, arc: { targets: ['a', 'b'] } }
+				relations: { customer: { targets: ['customers'] }, arc: { targets: ['a', 'b'] } },
+				layers: ['customer']
 			},
 			customers: {
 				label: ['name', 'code', 'secret'],
 				fields: { name: { kind: 'text' }, code: { kind: 'text' } }
 			}
 		};
-		assert.equal(listSelect(cat, 'orders', ['no', 'arc']), undefined); // an arc keeps the plain read
-		assert.deepEqual(listSelect(cat, 'orders', ['no', 'customer']), {
-			no: true,
-			customer: { select: { name: true, code: true } },
-			arc: true
+		const fields = ['no', 'customer', 'arc'];
+		// an arc keeps the plain read
+		assert.deepEqual(listRequest(cat, 'orders', {}, ['no', 'arc']), { orders: { fields } });
+		assert.deepEqual(listRequest(cat, 'orders', {}, ['no', 'customer']), {
+			orders: { fields },
+			'orders.customer': { fields: ['name', 'code'] }
 		});
-		assert.deepEqual(listSelect(cat, 'orders', ['customer'], []), undefined); // an authored cell keeps the id
+		// an authored cell keeps the id
+		assert.deepEqual(listRequest(cat, 'orders', {}, ['customer'], []), { orders: { fields } });
+		// a relation its root does not declare as a layer keeps the id
+		const undeclared = { ...cat, orders: { ...required(cat.orders), layers: [] } };
+		assert.deepEqual(listRequest(undeclared, 'orders', {}, ['customer']), { orders: { fields } });
+		assert.equal(
+			required(unref(undeclared, 'orders', ['customer'], [{ id: 'o3', customer: 'c3' }])[0])
+				.customer,
+			'c3'
+		);
 		const projected = unref(
 			cat,
 			'orders',
@@ -287,7 +296,7 @@ it.effect('Matrix buckets items per row and column; a relation column reads its 
 			[
 				{ id: 'i1', employee: 'e1', day: '2026-09-01' },
 				{ id: 'i2', employee: 'e1', day: '2026-09-01' },
-				{ id: 'i3', employee: { collection: 'employees', id: 'e2' }, day: '2026-09-02' }
+				{ id: 'i3', employee: { model: 'employees', id: 'e2' }, day: '2026-09-02' }
 			],
 			'employee',
 			'day'

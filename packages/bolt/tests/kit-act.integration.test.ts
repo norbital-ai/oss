@@ -1,6 +1,6 @@
 import { actReply, routeFixture } from './support/route-fixture.ts';
 import { Context, Effect, Layer } from 'effect';
-// The test kit's `As.act` routes a collection callable as `/__bolt/act` does (`dispatchAct`): `<c>.erase` is the engine's
+// The test kit's `As.act` routes a model callable as `/__bolt/act` does (`dispatchAct`): `<c>.erase` is the engine's
 // generated erase (rule 38e), never a lookup of an action named `erase`.
 import { describe, expect, it } from '@effect/vitest';
 import type { ActOutcome as Outcome } from '../src/engine/contracts.ts';
@@ -16,7 +16,9 @@ const manifest = {
 	workspace: { tz: 'UTC', locale: 'en' },
 	models: { docs: { description: 'A doc', label: 'title', fields: { title: { kind: 'text' } } } },
 	relationships: {},
-	collections: { docs: { read: { fields: 'all' }, create: { input: { columns: ['title'] } } } },
+	exposures: {
+		docs: { read: { docs: { fields: 'all' } }, create: { columns: { docs: ['title'] } } }
+	},
 	policies: { p: { description: 'P', grants: { docs: { read: true, create: true } } } },
 	automations: {},
 	integrations: {},
@@ -46,7 +48,7 @@ describe('t.as(x).act routes a generated verb as /__bolt/act does', () => {
 					const id = created(
 						(yield* actReply(route, t.as(t.admin).authority, {
 							callable: 'docs.create',
-							input: { title: 'desk' },
+							input: [{ title: 'desk' }],
 							issuedAt: t.clock.now()
 						})).outcome
 					);

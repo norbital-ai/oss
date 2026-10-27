@@ -38,5 +38,5 @@ export default model('sys_conversation', {
 		updated_at: { kind: 'instant', default: { now: '' } }
 	},
 	table: { primary: 'text' },
-	read: { fields: 'all' }
+	read: 'all'
 });

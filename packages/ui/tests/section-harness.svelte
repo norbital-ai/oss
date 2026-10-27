@@ -10,7 +10,6 @@
 	import Section from '../src/form/section.svelte';
 	import { provideBolt } from '../src/client/context.js';
 	import { type ViewBolt } from '../src/client/contract.js';
-	import { type Page } from '../src/collection/types.js';
 
 	let { bolt, catalog }: { bolt: ViewBolt; catalog: NonNullable<KindsHost['catalog']> } = $props();
 	// svelte-ignore state_referenced_locally
@@ -19,7 +18,7 @@
 		get catalog() {
 			return catalog;
 		},
-		query: (c, o) => bolt.query<Page>(c, o),
+		query: (request) => bolt.query(request),
 		locale: 'en',
 		zone: 'UTC',
 		currency: 'SGD'

@@ -10,7 +10,7 @@ import {
 	editableRelations,
 	selectionEnabled,
 	type Toolbar
-} from '../src/collection/ViewToolbar.svelte';
+} from '../src/model/ViewToolbar.svelte';
 import { browser, required, viewFixture, type ViewScript } from './view-fixture.ts';
 import { element } from './elements.ts';
 
@@ -156,10 +156,10 @@ it.live(
 			assert.deepEqual(calls, [
 				{
 					callable: 'jobs.update',
-					input: {
-						target: ['job-a', 'job-b'],
+					input: ['job-a', 'job-b'].map((target) => ({
+						target,
 						set: { enabled: false, count: 0, amount: { $dec: '9007199254740993.125' }, note: null }
-					}
+					}))
 				}
 			]);
 			yield* Deferred.succeed(gate, { kind: 'committed', output: null, records: [] });
@@ -256,13 +256,13 @@ const orders: NonNullable<KindsHost['catalog']> = {
 			columns: ['name', 'status', 'about'],
 			with: {
 				lines: {
-					collection: 'lines',
+					model: 'lines',
 					parent: 'order',
 					create: { columns: ['sku'] },
 					link: true,
 					unlink: true
 				},
-				notes: { collection: 'notes', parent: 'order' }
+				notes: { model: 'notes', parent: 'order' }
 			}
 		}
 	},
@@ -352,7 +352,10 @@ it.live(
 			assert.deepEqual(calls, [
 				{
 					callable: 'orders.update',
-					input: { target: ['job-a', 'job-b'], set: { lines: { create: [{ sku: 'X-1' }] } } }
+					input: ['job-a', 'job-b'].map((target) => ({
+						target,
+						set: { lines: { create: [{ sku: 'X-1' }] } }
+					}))
 				}
 			]);
 		})

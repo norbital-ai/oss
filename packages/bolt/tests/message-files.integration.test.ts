@@ -15,7 +15,7 @@ const manifest = Result.getOrThrow(
 		workspace: { tz: 'UTC', locale: 'en' },
 		models: {},
 		relationships: {},
-		collections: {},
+		exposures: {},
 		integrations: {},
 		policies: {},
 		teams: {},

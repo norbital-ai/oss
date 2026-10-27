@@ -3,6 +3,7 @@
 // a host without that capability provides (no optional ports). Walls are the caller's (`Port.call`). The tenant
 // database is `TenantDb` (`db/tenant-db.ts`).
 import {
+	ByteSize,
 	Context,
 	Effect,
 	FiberSet,
@@ -379,7 +380,7 @@ export type PushMessage = {
 	};
 	readonly title: string;
 	readonly body: string | null;
-	readonly link: { readonly collection: string; readonly id: string } | null;
+	readonly link: { readonly model: string; readonly id: string } | null;
 	readonly path: string;
 };
 export type TransportMessage = MailMessage | SmsMessage | PushMessage;
@@ -485,7 +486,11 @@ export class Drivers extends Context.Service<
 			{ providerId: string; presumeAfterMs?: number },
 			PortFailure | SendRefused | Fenced
 		>;
-		readonly typing: (instance: string, to: string) => Effect.Effect<void, PortFailure>;
+		readonly typing: (
+			instance: string,
+			to: string,
+			on: boolean
+		) => Effect.Effect<void, PortFailure>;
 		readonly request: (instance: string, op: Json) => Effect.Effect<Json, PortFailure | Fenced>;
 		readonly read: (
 			instance: string,
@@ -549,7 +554,8 @@ export class Drivers extends Context.Service<
 					typing:
 						typing === undefined
 							? () => Port.unavailable('link')
-							: (instance, to) => Port.attempt('link', (signal) => typing(instance, to, signal)),
+							: (instance, to, on) =>
+									Port.attempt('link', (signal) => typing(instance, to, signal, on)),
 					request:
 						request === undefined
 							? () => Port.unavailable('link')
@@ -703,6 +709,34 @@ export class ArtifactFiles extends Context.Service<
 					files.stat(clean(at)).pipe(Effect.mapError(failed('stat', at)));
 				const readFile = (at: string) =>
 					files.read(clean(at)).pipe(Effect.mapError(failed('readFile', at)));
+				const fileInfo = (at: string) =>
+					Effect.flatMap(stat(at), (info) =>
+						info === null
+							? Effect.fail(
+									PlatformError.systemError({
+										_tag: 'NotFound',
+										module: 'FileSystem',
+										method: 'stat',
+										pathOrDescriptor: at
+									})
+								)
+							: Effect.succeed({
+									type: info.kind === 'file' ? 'File' : 'Directory',
+									mtime: Option.none(),
+									atime: Option.none(),
+									birthtime: Option.none(),
+									dev: 0n,
+									ino: Option.none(),
+									mode: 0o444,
+									nlink: Option.none(),
+									uid: Option.none(),
+									gid: Option.none(),
+									rdev: Option.none(),
+									size: ByteSize.bytes(info.size),
+									blksize: Option.none(),
+									blocks: Option.none()
+								} satisfies FileSystem.File.Info)
+					);
 				return FileSystem.makeNoop({
 					readFile,
 					readFileString: (at, encoding) =>
@@ -720,34 +754,9 @@ export class ArtifactFiles extends Context.Service<
 						),
 					exists: (at) => Effect.map(stat(at), (info) => info !== null),
 					realPath: (at) => Effect.succeed(clean(at)),
-					stat: (at) =>
-						Effect.flatMap(stat(at), (info) =>
-							info === null
-								? Effect.fail(
-										PlatformError.systemError({
-											_tag: 'NotFound',
-											module: 'FileSystem',
-											method: 'stat',
-											pathOrDescriptor: at
-										})
-									)
-								: Effect.succeed({
-										type: info.kind === 'file' ? 'File' : 'Directory',
-										mtime: Option.none(),
-										atime: Option.none(),
-										birthtime: Option.none(),
-										dev: 0,
-										ino: Option.none(),
-										mode: 0o444,
-										nlink: Option.none(),
-										uid: Option.none(),
-										gid: Option.none(),
-										rdev: Option.none(),
-										size: FileSystem.Size(info.size),
-										blksize: Option.none(),
-										blocks: Option.none()
-									} satisfies FileSystem.File.Info)
-						),
+					stat: fileInfo,
+					// the store holds no links: a path's own info is its target's
+					lstat: fileInfo,
 					// `list` is recursive; one level is its distinct first segments
 					readDirectory: (at, options) =>
 						files.list(clean(at)).pipe(

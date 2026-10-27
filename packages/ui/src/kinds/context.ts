@@ -1,20 +1,15 @@
 // What the kit's renderers and editors learn from the shell, once per page (hook:ui-shell sets `provideKinds` beside
-// `provideBolt`): the collections' exposure, the workspace's custom fields, and the optional facilities the host has.
+// `provideBolt`): the models' exposure, the workspace's custom fields, and the optional facilities the host has.
 // Every optional member absent is a working page: files show names, points search with the keyless geocoder.
 import { Effect, Result, Schema } from 'effect';
-import {
-	FetchHttpClient,
-	HttpClient,
-	HttpClientResponse,
-	type HttpClientError
-} from 'effect/unstable/http';
+import { FetchHttpClient, HttpClient, HttpClientResponse, type HttpClientError } from 'effect/http';
 import { getContext, setContext, type Component } from 'svelte';
 import type { ActFailure, ReadError } from '../client/contract.js';
 import type { FileRef, Fields, Json, Kind, Point, Value } from './kind.js';
-import type { FileUrlOptions, Where, OutputKind } from '@norbital-ai/std/kind';
+import type { FileUrlOptions, Where } from '@norbital-ai/std/kind';
 
 export type ChildInput = {
-	collection: string;
+	model: string;
 	parent: string;
 	owned?: true;
 	create?: { columns: readonly string[]; filled?: readonly string[]; proposalOnly?: true };
@@ -25,7 +20,7 @@ export type ChildInput = {
 };
 
 /** One model as a form, a picker and a view toolbar need it (generated from its `+model.ts` and the caller's grants). */
-export type CollectionExposure = {
+export type ModelExposure = {
 	/** The model's `label` fields: a record's title and the picker's search fallback. */
 	label: readonly string[];
 	/** Search fields when the model declares `search.text`; else the picker searches `label`'s text fields. */
@@ -34,10 +29,6 @@ export type CollectionExposure = {
 	semantic?: true;
 	/** The model's own search indexes (`search.indexes`), by their typed `input`: the toolbar offers each as `/<index>`. */
 	indexes?: { readonly [index: string]: { input: Fields; description: string } };
-	/** The collection's named queries the caller holds, by their typed `input` and `output`: the toolbar offers each as `/<query>`. */
-	queries?: {
-		readonly [query: string]: { input: Fields; output: OutputKind; description: string };
-	};
 	/** Model fields the caller may read (hidden ones included; `hidden` renders nothing). */
 	fields: Fields;
 	/** One-relations as FK columns: `holder` → `employees`. A polymorphic ref lists every target. */
@@ -51,10 +42,12 @@ export type CollectionExposure = {
 			where?: Where;
 		};
 	};
-	/** Many-relations (inverses) the collection exposes; each child is the collection whose relation names it as `inverse`. */
+	/** The root's declared one-level read layers (`'<model>.<rel>'`'s `rel`): the relations a list read may nest. */
+	layers?: readonly string[];
+	/** Many-relations (inverses) the model exposes; each child is the model whose relation names it as `inverse`. */
 	many?: readonly string[];
 	/** Read-side inverse identities; each child is read independently through its own policy. */
-	children?: Readonly<Record<string, Pick<ChildInput, 'collection' | 'parent' | 'owned'>>>;
+	children?: Readonly<Record<string, Pick<ChildInput, 'model' | 'parent' | 'owned'>>>;
 	/** Fields masked to this caller (rule 14): shown locked, never offered to filter or sort. */
 	masked?: readonly string[];
 	create?: {
@@ -68,7 +61,7 @@ export type CollectionExposure = {
 	readonlyFields?: { readonly [field: string]: 'syncOwned' | 'ownedParent' };
 	/** The model's own-field lock: a matching record is read-only and its record page offers a lock instead of Edit. */
 	locked?: Where;
-	/** The view toolbar's info text: the collection's declared description, else its model's. */
+	/** The view toolbar's info text: the model's declared description, else its model's. */
 	description?: string;
 	/** The caller holds a delete arm. */
 	delete?: true;
@@ -134,7 +127,7 @@ export type Geocoder = {
  * What the kind editors take from the host: the catalog, custom fields, uploads and file URLs, the geocoder and basemap, the picker's read, locale, zone and default currency.
  */
 export type KindsHost = {
-	catalog?: { readonly [collection: string]: CollectionExposure } | undefined;
+	catalog?: { readonly [model: string]: ModelExposure } | undefined;
 	automations?: { readonly [automation: string]: AutomationExposure } | undefined;
 	customFields?: { readonly [name: string]: CustomFieldEntry } | undefined;
 	/** `bolt.upload`; without it a file field is read-only. */
@@ -150,14 +143,13 @@ export type KindsHost = {
 	geocoder?: Geocoder;
 	/** A keyless tile template; the host may override the OpenStreetMap default. */
 	basemap?: { url: string; attribution: string };
-	/** The read a picker pages through: `bolt.query` of a model. Without it an `id` is typed. */
-	query?(
-		collection: string,
-		options: Json
-	): Effect.Effect<
+	/** The read a picker pages through: `bolt.query` of one read request, a page per root. Without it an `id` is typed. */
+	query?(request: { readonly [path: string]: Json }): Effect.Effect<
 		{
-			rows: readonly ({ readonly id: string } & { readonly [f: string]: Value })[];
-			next: string | null;
+			readonly [root: string]: {
+				rows: readonly ({ readonly id: string } & { readonly [f: string]: Value })[];
+				next: string | null;
+			};
 		},
 		ReadError
 	>;

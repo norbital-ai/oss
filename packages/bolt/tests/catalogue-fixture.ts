@@ -19,11 +19,11 @@ export const manifest = Result.getOrThrow(
 			}
 		},
 		relationships: {},
-		collections: {
+		exposures: {
 			products: {
-				read: { fields: 'all' },
-				create: { input: { columns: ['external_code', 'name', 'price'] } },
-				update: { input: { columns: ['name', 'price'] } },
+				read: { products: { fields: 'all' } },
+				create: { columns: { products: ['external_code', 'name', 'price'] } },
+				update: { columns: { products: ['name', 'price'] } },
 				syncs: {
 					erp: {
 						with: 'file',
@@ -70,12 +70,12 @@ export const manifest = Result.getOrThrow(
 /** `guest.mjs` for ERP items, skipping product codes already on file. */
 export const guestSource = `
 export default {
-	collection: { products: { bodies: { syncs: { erp: {
+	model: { products: { bodies: { syncs: { erp: {
 		read: function* ({ records }, ctx) {
 			if (records.length === 0) return { rows: [] };
 			const items = records.map((item) => ({ ...item, external_code: item.external_code.trim(), name: item.name.trim() }));
-			const page = yield* ctx.db.query('products', { all: true, where: { external_code: { in: items.map((item) => item.external_code) } } });
-			const known = new Set(page.rows.map((row) => row.external_code));
+			const page = yield* ctx.db.query({ products: { where: { external_code: { in: items.map((item) => item.external_code) } } } });
+			const known = new Set(page.products.rows.map((row) => row.external_code));
 			return { rows: items.flatMap((item) => known.has(item.external_code) ? [] : [{ external_code: item.external_code, name: item.name, price: item.unit_price ?? null }]) };
 		}
 	} } } } },

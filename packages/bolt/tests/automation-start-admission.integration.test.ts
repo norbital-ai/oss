@@ -21,12 +21,12 @@ const manifest: EngineManifest = {
 		}
 	},
 	relationships: {},
-	collections: { documents: { read: { fields: 'all' } } },
+	exposures: { documents: { read: { documents: { fields: 'all' } } } },
 	policies: {
 		starter: {
 			description: 'Start with a readable document',
 			automations: ['inspect'],
-			grants: { documents: { read: { visible: { eq: true } } } }
+			grants: { documents: { read: { documents: { where: { visible: { eq: true } } } } } }
 		}
 	},
 	teams: {},
@@ -39,7 +39,8 @@ const manifest: EngineManifest = {
 	}
 };
 const guest = program(`export default { automation: { inspect: { body: function* (input, ctx) {
-	return (yield* ctx.query('documents', { id: input.document })).title;
+	const { documents } = yield* ctx.query({ documents: { where: { id: { eq: input.document } } } });
+	return documents.rows[0]?.title;
 } } } };`);
 const fixture = Effect.gen(function* () {
 	const context = yield* Layer.build(

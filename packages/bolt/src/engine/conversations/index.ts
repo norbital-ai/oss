@@ -37,6 +37,7 @@ import { prepareNoticeFiles } from '../notifications/notify.ts';
 import { inboxPiece } from '../sync/hint.ts';
 import { canonical } from '@norbital-ai/store';
 import { Chain } from '../write/sql.ts';
+import { heldLonger } from '../agent/triage.ts';
 import { InboundMessage, normalizeInbound, type Inbound } from './inbound.ts';
 import { ImportStart } from '../../protocol/schema.ts';
 import { permitsImport } from '../integrations/import-start.ts';
@@ -81,7 +82,7 @@ const TOMBSTONE = `text = CASE WHEN sys_message.role IS NULL THEN '' ELSE sys_me
 	email = CASE WHEN sys_message.role IS NULL THEN NULL ELSE sys_message.email END`;
 export function conversations(cfg: ConversationsConfig) {
 	const { manifest: m, db } = cfg.engine;
-	const uuid = cfg.crypto.randomUUIDv4.pipe(
+	const uuid = cfg.crypto.randomUUIDv4().pipe(
 		Effect.mapError((error) =>
 			BoltError.make('unavailable', 'facility', 'Secure random UUID generation failed.', error)
 		)
@@ -511,6 +512,23 @@ export function conversations(cfg: ConversationsConfig) {
 			}
 		);
 	});
+	/** The sender is still typing: the thread's held burst is decided later, within its cap (`heldLonger`). */
+	const stillTyping = Effect.fn('Conversations.stillTyping')(function* (
+		instance: string,
+		thread: string
+	) {
+		const chain = new Chain();
+		heldLonger(
+			chain,
+			`(SELECT id FROM sys_conversation WHERE integration = ${chain.p(instance)} AND thread = ${chain.p(thread)})`,
+			chain.p(yield* clock)
+		);
+		const [held] = yield* db.returning(
+			Schema.Struct({ due: Schema.NullOr(Schema.String) }),
+			chain.sql(`(SELECT min(due_at)::text FROM held) AS due`)
+		);
+		if (held !== undefined && held.due !== null) yield* cfg.announce?.(held.due) ?? Effect.void;
+	});
 	const receive = Effect.fn('Agents.receive')(function* (
 		instance: string,
 		event: Exclude<
@@ -524,6 +542,10 @@ export function conversations(cfg: ConversationsConfig) {
 		if (event.kind === 'delivery') {
 			if (isReported(event.report.kind))
 				yield* cfg.outbound.delivered(instance, event.providerId, event.report);
+			return;
+		}
+		if (event.kind === 'presence') {
+			if (event.typing) yield* stillTyping(instance, event.thread);
 			return;
 		}
 		const inst = yield* instanceOf(instance);

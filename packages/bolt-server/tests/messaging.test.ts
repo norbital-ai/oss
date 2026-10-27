@@ -3,7 +3,7 @@
 // local host without them printing to its log.
 import { describe, expect, it } from '@effect/vitest';
 import { ConfigProvider, Effect, Layer, Schema } from 'effect';
-import { FetchHttpClient } from 'effect/unstable/http';
+import { FetchHttpClient } from 'effect/http';
 import { BoltError, DbError, type Sql } from '@norbital-ai/bolt/engine';
 import { BoltConfig } from '../src/config.ts';
 import { messaging } from '../src/mail.ts';
@@ -133,7 +133,7 @@ describe('APNs notices', () => {
 		title: 'New notice',
 		body: 'Shift tomorrow',
 		path: '/inbox?record=jobs/1',
-		link: { collection: 'jobs', id: '1' }
+		link: { model: 'jobs', id: '1' }
 	} satisfies Parameters<ReturnType<typeof apns>['send']>[0];
 	const recorder = (status: number, body = '') => {
 		const calls: { origin: string; headers: { readonly [name: string]: string }; body: string }[] =

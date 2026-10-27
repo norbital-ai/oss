@@ -38,7 +38,7 @@ describe('canonical guest error families', () => {
 			Option.getOrThrow(
 				Act.actFailure({
 					kind: 'conflict',
-					records: [{ collection: 'jobs', id: 'j1', fields: ['owner'] }]
+					records: [{ model: 'jobs', id: 'j1', fields: ['owner'] }]
 				})
 			)
 		).toBeInstanceOf(Errors.ActConflict);
@@ -47,7 +47,7 @@ describe('canonical guest error families', () => {
 		);
 		for (const invalid of [
 			{ kind: 'refused', code: 7, message: 'taken' },
-			{ kind: 'conflict', records: [{ collection: 'jobs', id: 'j1', fields: [7] }] },
+			{ kind: 'conflict', records: [{ model: 'jobs', id: 'j1', fields: [7] }] },
 			{ kind: 'unknown', invocation: 7 },
 			{ kind: 'committed' },
 			null
@@ -190,7 +190,7 @@ describe('canonical guest error families', () => {
 					})
 				);
 				expect(native).toEqual({ kind: 'refused', ...details });
-				const records = [{ collection: 'jobs', id: 'job-1', fields: ['owner'] }];
+				const records = [{ model: 'jobs', id: 'job-1', fields: ['owner'] }];
 				const conflict = yield* Effect.flip(
 					Effect.tryPromise({
 						try: () =>

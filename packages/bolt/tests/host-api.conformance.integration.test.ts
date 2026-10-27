@@ -20,7 +20,7 @@ import {
 	Scope
 } from 'effect';
 import * as NodeServices from '@effect/platform-node/NodeServices';
-import { HttpServerRequest, HttpServerResponse } from 'effect/unstable/http';
+import { HttpServerRequest, HttpServerResponse } from 'effect/http';
 import {
 	artifactHash,
 	CONTRACT,
@@ -522,10 +522,10 @@ describe('HOST_API conformance (D10a)', () => {
 				};
 
 				// q
-				const read = { m: 'query', a: ['customers', { all: true }] };
+				const read = { m: 'query', a: [{ customers: {} }] };
 				expect((await same('/__bolt/q', { reads: [read] })).status).toBe(200);
 				// act: a create under the booted contract commits; a retired one is refused releaseChanged (L-BOLT-171)
-				const create = { callable: 'customers.create', input: { name: 'Acme' }, issuedAt };
+				const create = { callable: 'customers.create', input: [{ name: 'Acme' }], issuedAt };
 				expect(
 					(
 						await same('/__bolt/act', create, {
@@ -584,7 +584,7 @@ describe('HOST_API conformance (D10a)', () => {
 				await both((s) => s.close());
 				const order = {
 					callable: 'orders.create',
-					input: { title: 'desk', region: 'north' },
+					input: [{ title: 'desk', region: 'north' }],
 					issuedAt
 				};
 				expect(
@@ -618,8 +618,8 @@ describe('HOST_API conformance (D10a)', () => {
 					cronDir,
 					cronManifest,
 					`export default { automation: {
-	stamp: { body: function* (input, ctx) { yield* ctx.act('customers.create', { name: 'stamp' }); } },
-	peek: { body: function* (input, ctx) { return (yield* ctx.query('customers', { all: true })).rows.length; } }
+	stamp: { body: function* (input, ctx) { yield* ctx.act('customers.create', [{ name: 'stamp' }]); } },
+	peek: { body: function* (input, ctx) { return (yield* ctx.query({ customers: {} })).customers.rows.length; } }
 } };`
 				);
 				const sides = [

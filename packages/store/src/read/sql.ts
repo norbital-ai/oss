@@ -8,13 +8,23 @@ import { STORE_LIMITS } from '../limits.ts';
 import { StoreError } from '../errors.ts';
 import { CursorPayload } from '../cursor.ts';
 import type { Json } from '../values.ts';
-import type { Arg, Operand, Order, PageIR, Pred, ReadIR, RelSelectIR, SelectIR } from '../ir.ts';
-import type { Catalog, CollectionInfo, FieldInfo } from '../catalog.ts';
+import type {
+	Arg,
+	Measures,
+	Operand,
+	Order,
+	PageIR,
+	Pred,
+	ReadIR,
+	RelSelectIR,
+	SelectIR
+} from '../ir.ts';
+import type { Catalog, ExposureInfo, FieldInfo } from '../catalog.ts';
 import {
 	EMBEDDING_COLUMN,
 	SEARCH_COLUMN,
 	SEMANTIC,
-	collectionOf,
+	exposureOf,
 	defaultFields,
 	exposedField,
 	exposedRelation,
@@ -46,16 +56,19 @@ export const budgeted = (rows: string, bytes: number) =>
 	`SELECT CASE WHEN w."$b" > ${bytes} THEN '{"${OVER}": true}'::jsonb ELSE w.j END AS j FROM (SELECT v.j, v.n, sum(v.n) OVER (ROWS UNBOUNDED PRECEDING) AS "$b" FROM (SELECT u.j, octet_length(u.j::text) AS n FROM (${rows}) u) v) w WHERE w."$b" - w.n <= ${bytes}`;
 
 /**
- * Who reads, as the compiler needs it: present, names are held to each collection's read exposure, a read without a
- * `select` takes the collection's default projection, and these hooks scope it. Absent, every stored row and field.
+ * Who reads, as the compiler needs it: present, names are held to each model's read exposure, a read without a
+ * `select` takes the model's default projection, and these hooks scope it. Absent, every stored row and field.
  */
 export type Scope = {
-	/** The row filter of `collection`, its arms OR-ed: `undefined` reads every row, `[]` none. */
-	readonly rows: (collection: string) => readonly Pred[] | undefined;
-	/** A field read only where its mask holds (elsewhere `{ "$masked": true }`, and never filtered or sorted by). */
-	readonly mask: (collection: string, field: string) => Pred | undefined;
+	/**
+	 * The row filter of one read level by its path (a root `'orders'`, a layer `'orders.lines'`), its arms OR-ed:
+	 * `undefined` reads every row, `[]` none. A layer is scoped by its root's arms for that path.
+	 */
+	readonly rows: (path: string) => readonly Pred[] | undefined;
+	/** A field of the level at `path` read only where its mask holds (elsewhere `{ "$masked": true }`, never filtered or sorted by). */
+	readonly mask: (path: string, field: string) => Pred | undefined;
 	/** More columns of a root row, each `<sql> AS <name>`, over the row at `alias`. */
-	readonly root?: (collection: string, alias: string) => readonly string[];
+	readonly root?: (model: string, alias: string) => readonly string[];
 };
 /** How one statement compiles: who reads, how operands resolve, which tables it reads, and its byte budget. */
 export type CompileOptions = {
@@ -120,24 +133,27 @@ export class Build {
 			: Effect.succeed({ text, params: this.params });
 	}
 }
-/** How a level compiles: `scoped` conjoins scope and masks; `exposed` holds names to the collection's read exposure. */
+/** How a level compiles: `scoped` conjoins scope and masks; `exposed` holds names to the model's read exposure. */
 export type Level = { scoped: boolean; exposed: boolean };
 export const RAW: Level = { scoped: false, exposed: false };
 
-const fieldOf = (c: CollectionInfo, name: string, lv: Level): Fx<FieldInfo> => {
+const fieldOf = (c: ExposureInfo, name: string, lv: Level): Fx<FieldInfo> => {
 	const f = c.model.fields.get(name);
-	return f === undefined || (lv.exposed && !exposedField(c, name))
-		? invalid(`'${c.name}' has no readable field '${name}'`)
-		: Effect.succeed(f);
+	if (f !== undefined && !(lv.exposed && !exposedField(c, name))) return Effect.succeed(f);
+	// name what the layer does expose, so a caller (often a model) can correct the read in one step
+	const readable = [...c.model.fields.keys()].filter((k) => !lv.exposed || exposedField(c, k));
+	return invalid(
+		`'${c.path}' has no readable field '${name}'; it exposes: ${readable.join(', ')}`
+	);
 };
-const maskOf = (b: Build, c: CollectionInfo, name: string, lv: Level): Pred | undefined =>
-	lv.scoped ? b.scope?.mask(c.name, name) : undefined;
+const maskOf = (b: Build, c: ExposureInfo, name: string, lv: Level): Pred | undefined =>
+	lv.scoped ? b.scope?.mask(c.path, name) : undefined;
 /** A row's key column at alias `a` (a single-column key: an FK points at it). */
-const keyAt = (c: CollectionInfo, a: string) => `${a}.${q(c.model.key[0] ?? 'id')}`;
+const keyAt = (c: ExposureInfo, a: string) => `${a}.${q(c.model.key[0] ?? 'id')}`;
 /** A field as a query touches it: the column, or under a mask the column only where an admitting arm holds. */
 const col = Effect.fnUntraced(function* (
 	b: Build,
-	c: CollectionInfo,
+	c: ExposureInfo,
 	a: string,
 	name: string,
 	lv: Level
@@ -150,8 +166,8 @@ const col = Effect.fnUntraced(function* (
 		: `(CASE WHEN ${yield* pred(b, c, a, mask, RAW)} THEN ${raw} END)`;
 });
 /** The reader's row filter on `c` at alias `a`, or null when unscoped; a reader with no arm sees nothing. */
-const scope = Effect.fnUntraced(function* (b: Build, c: CollectionInfo, a: string, lv: Level) {
-	const arms = lv.scoped ? b.scope?.rows(c.name) : undefined;
+const scope = Effect.fnUntraced(function* (b: Build, c: ExposureInfo, a: string, lv: Level) {
+	const arms = lv.scoped ? b.scope?.rows(c.path) : undefined;
 	if (arms === undefined) return null;
 	if (arms.length === 0) return 'false';
 	return `(${(yield* Effect.forEach(arms, (arm) => pred(b, c, a, arm, RAW))).join(' OR ')})`;
@@ -169,7 +185,7 @@ const value = (b: Build, f: FieldInfo, v: Json): Fx<string> => {
 };
 const rhs = Effect.fnUntraced(function* (
 	b: Build,
-	c: CollectionInfo,
+	c: ExposureInfo,
 	a: string,
 	f: FieldInfo,
 	arg: Arg,
@@ -179,25 +195,43 @@ const rhs = Effect.fnUntraced(function* (
 	if (arg._tag === 'Field') return yield* col(b, c, a, arg.field, lv);
 	return yield* value(b, f, yield* b.operand(arg));
 });
-type Link = { t: CollectionInfo; link: (a: string, x: string) => Fx<string> };
-const relation = Effect.fnUntraced(function* (
+type Link = { t: ExposureInfo; link: (a: string, x: string) => Fx<string> };
+/**
+ * The level a hop from `c` through `rel` into `target` reads: the layer `c`'s root declares at that path (its exposure,
+ * the root's arms and masks for that path); else, for a filter or sort hop (`select` false) or a plain schema, the
+ * target model's own root access point. An unscoped reader may reach a model no model exposes.
+ */
+const level = (
 	b: Build,
-	c: CollectionInfo,
+	c: ExposureInfo,
 	rel: string,
 	target: string,
-	lv: Level
-) {
-	if (lv.exposed && !exposedRelation(c, rel))
-		return yield* invalid(`'${c.name}' exposes no relation '${rel}'`);
-	// a scoped reader crosses only into collections; an unscoped one may reach a model no collection exposes
-	const exposedTarget = b.cat.collections.get(target);
+	lv: Level,
+	select: boolean
+): Fx<ExposureInfo> => {
+	const layer = b.cat.layers.get(`${c.path}.${rel}`);
+	if (layer !== undefined && layer.name === target) return Effect.succeed(layer);
+	if (
+		lv.exposed &&
+		(select ? !exposedRelation(c, rel) : !c.model.one.has(rel) && !c.model.many.has(rel))
+	)
+		return invalid(`'${c.path}' declares no read layer '${rel}'`);
+	const root = b.cat.exposures.get(target);
+	if (root !== undefined) return Effect.succeed(root);
 	const model = b.cat.models.get(target);
-	const t: CollectionInfo =
-		lv.exposed || exposedTarget !== undefined
-			? (exposedTarget ?? (yield* collectionOf(b.cat, target)))
-			: model === undefined
-				? yield* collectionOf(b.cat, target)
-				: { name: target, model, fields: 'all', relations: 'all' };
+	return lv.exposed || model === undefined
+		? exposureOf(b.cat, target)
+		: Effect.succeed({ name: target, path: target, model, fields: 'all', relations: 'all' });
+};
+const relation = Effect.fnUntraced(function* (
+	b: Build,
+	c: ExposureInfo,
+	rel: string,
+	target: string,
+	lv: Level,
+	select = false
+) {
+	const t = yield* level(b, c, rel, target, lv, select);
 	const one = c.model.one.get(rel);
 	const many = c.model.many.get(rel);
 	if (one !== undefined) {
@@ -226,7 +260,7 @@ const relation = Effect.fnUntraced(function* (
 /** The search document and the embedding hold every field they cover: a reader matches them only reading each unmasked. */
 const whole = (
 	b: Build,
-	c: CollectionInfo,
+	c: ExposureInfo,
 	fields: readonly string[],
 	lv: Level,
 	what: string
@@ -242,7 +276,7 @@ const whole = (
 };
 const maskAt = (
 	b: Build,
-	c: CollectionInfo,
+	c: ExposureInfo,
 	a: string,
 	name: string,
 	lv: Level
@@ -264,9 +298,9 @@ const isRecord = (v: Json): v is { readonly [key: string]: Json } =>
 const periodOf = (v: Json): PeriodValue | null =>
 	isRecord(v) ? { from: v['from'], to: v['to'], start: v['start'], end: v['end'] } : null;
 
-/** `Pred` → a boolean SQL expression over alias `a` of collection `c`. */
-export const pred: (b: Build, c: CollectionInfo, a: string, p: Pred, lv: Level) => Fx<string> =
-	Effect.fnUntraced(function* (b: Build, c: CollectionInfo, a: string, p: Pred, lv: Level) {
+/** `Pred` → a boolean SQL expression over alias `a` of model `c`. */
+export const pred: (b: Build, c: ExposureInfo, a: string, p: Pred, lv: Level) => Fx<string> =
+	Effect.fnUntraced(function* (b: Build, c: ExposureInfo, a: string, p: Pred, lv: Level) {
 		switch (p.t) {
 			case 'const':
 				return p.value ? 'true' : 'false';
@@ -487,10 +521,10 @@ const iso = (x: string) => `to_char(${x} AT TIME ZONE 'UTC', ${ISO})`;
 const dec = (x: string) =>
 	`(CASE WHEN ${x} IS NOT NULL THEN jsonb_build_object('$dec', ${x}::text) END)`;
 /** A column in wire form as jsonb (std/wire): `$dec` decimals; dates and instants as ISO text; periods as
- * `{ from, to }` / `{ start, end }` of those; a polymorphic relation as `{ collection, id }`. */
+ * `{ from, to }` / `{ start, end }` of those; a polymorphic relation as `{ model, id }`. */
 export function wire(f: FieldInfo, x: string, a: string): string {
 	if (f.arms !== undefined)
-		return `(CASE ${f.arms.map((arm) => `WHEN ${a}.${q(`${f.column}__${arm}`)} IS NOT NULL THEN jsonb_build_object('collection', ${lit(arm)}, 'id', ${a}.${q(`${f.column}__${arm}`)})`).join(' ')} END)`;
+		return `(CASE ${f.arms.map((arm) => `WHEN ${a}.${q(`${f.column}__${arm}`)} IS NOT NULL THEN jsonb_build_object('model', ${lit(arm)}, 'id', ${a}.${q(`${f.column}__${arm}`)})`).join(' ')} END)`;
 	if (f.pg === 'numeric') return dec(x);
 	if (f.pg === 'timestamptz') return `to_jsonb(${iso(x)})`;
 	if (f.pg === 'date' || f.pg === 'time') return `to_jsonb(${x}::text)`;
@@ -506,7 +540,7 @@ export function wire(f: FieldInfo, x: string, a: string): string {
 const MASKED = `'{"$masked":true}'::jsonb`;
 const item = Effect.fnUntraced(function* (
 	b: Build,
-	c: CollectionInfo,
+	c: ExposureInfo,
 	a: string,
 	name: string,
 	lv: Level
@@ -519,14 +553,14 @@ const item = Effect.fnUntraced(function* (
 /** The select list of one level: the key, the fields, and each selected relation as a correlated subquery. */
 export const items: (
 	b: Build,
-	c: CollectionInfo,
+	c: ExposureInfo,
 	a: string,
 	s: SelectIR,
 	lv: Level,
 	one?: boolean
 ) => Fx<string[]> = Effect.fnUntraced(function* (
 	b: Build,
-	c: CollectionInfo,
+	c: ExposureInfo,
 	a: string,
 	s: SelectIR,
 	lv: Level,
@@ -534,7 +568,8 @@ export const items: (
 ) {
 	const key = c.model.key;
 	const fields =
-		s.fields ?? (b.scope !== undefined ? defaultFields(c, one) : storedFields(c.model));
+		s.fields ??
+		(b.scope !== undefined ? defaultFields(c, one || s.whole === true) : storedFields(c.model));
 	const out = [
 		...key.map((k) => `${a}.${q(k)} AS ${q(k)}`),
 		...(yield* Effect.forEach(
@@ -549,7 +584,7 @@ export const items: (
 /** The root level's select list, and the scope's own root columns over the same row. */
 const root = Effect.fnUntraced(function* (
 	b: Build,
-	c: CollectionInfo,
+	c: ExposureInfo,
 	a: string,
 	s: SelectIR,
 	lv: Level,
@@ -559,27 +594,42 @@ const root = Effect.fnUntraced(function* (
 });
 const arm = Effect.fnUntraced(function* (
 	b: Build,
-	c: CollectionInfo,
+	c: ExposureInfo,
 	a: string,
 	rel: string,
 	r: RelSelectIR,
 	lv: Level
 ) {
 	if (!r.many && r.targets !== undefined) {
-		// whichever target the row holds (at most one arm column is set), its row tagged with its `collection`
+		// whichever target the row holds (at most one arm column is set), its row tagged with its `model`
 		const arms = yield* Effect.forEach(r.targets, (target) =>
 			Effect.gen(function* () {
-				const x = yield* relation(b, c, rel, target, lv);
+				const x = yield* relation(b, c, rel, target, lv, true);
 				const t = b.alias();
-				return `(SELECT to_jsonb(r) || jsonb_build_object('collection', ${lit(target)}) FROM (SELECT ${(yield* items(b, x.t, t, r.targetSelects?.[target] ?? r.select, lv)).join(', ')} FROM ${b.from(x.t.model.name)} ${t} WHERE ${conj(yield* x.link(a, t), yield* scope(b, x.t, t, lv))}) r)`;
+				return `(SELECT to_jsonb(r) || jsonb_build_object('model', ${lit(target)}) FROM (SELECT ${(yield* items(b, x.t, t, r.targetSelects?.[target] ?? r.select, lv)).join(', ')} FROM ${b.from(x.t.model.name)} ${t} WHERE ${conj(yield* x.link(a, t), yield* scope(b, x.t, t, lv))}) r)`;
 			})
 		);
 		return `COALESCE(${arms.join(', ')})`;
 	}
-	const x = yield* relation(b, c, rel, r.target, lv);
+	const x = yield* relation(b, c, rel, r.target, lv, true);
 	const t = b.alias();
+	// a ref layer's `where` nulls the row where it fails, as its scope does
 	if (!r.many)
-		return `(SELECT to_jsonb(r) FROM (SELECT ${(yield* items(b, x.t, t, r.select, lv)).join(', ')} FROM ${b.from(x.t.model.name)} ${t} WHERE ${conj(yield* x.link(a, t), yield* scope(b, x.t, t, lv))}) r)`;
+		return `(SELECT to_jsonb(r) FROM (SELECT ${(yield* items(b, x.t, t, r.select, lv)).join(', ')} FROM ${b.from(x.t.model.name)} ${t} WHERE ${conj(yield* x.link(a, t), yield* scope(b, x.t, t, lv), r.where === undefined ? null : yield* pred(b, x.t, t, r.where, lv))}) r)`;
+	if (r.aggregate !== undefined) {
+		const where = conj(
+			yield* x.link(a, t),
+			yield* scope(b, x.t, t, lv),
+			r.where === undefined ? null : yield* pred(b, x.t, t, r.where, lv)
+		);
+		const m = yield* measures(b, x.t, t, r.aggregate, lv);
+		const from = `FROM ${b.from(x.t.model.name)} ${t} WHERE ${where}`;
+		if (m.groups.length === 0)
+			return `(SELECT to_jsonb(r) FROM (SELECT ${m.cols.join(', ')} ${from}) r)`;
+		const g = m.groups.map((k) => k.expr).join(', ');
+		const take = r.page?._tag === 'Limit' ? r.page.limit : STORE_LIMITS.page.relationArm;
+		return `(SELECT COALESCE(jsonb_agg(to_jsonb(r) - '$n' ORDER BY r."$n"), '[]'::jsonb) FROM (SELECT ${m.cols.join(', ')}, row_number() OVER (ORDER BY ${g}) AS "$n" ${from} GROUP BY ${g} ORDER BY ${g} LIMIT ${take}) r)`;
+	}
 	const p = r.page;
 	if (p === undefined)
 		return yield* invalid('a many-relation arm states { limit } or { all: true } (rule 9)');
@@ -622,7 +672,7 @@ const UNORDERED = new Set([
 /** The sort keys, then the primary key's columns: a total order, so a keyset cursor is exact. */
 const orderBy = Effect.fnUntraced(function* (
 	b: Build,
-	c: CollectionInfo,
+	c: ExposureInfo,
 	a: string,
 	o: Order,
 	lv: Level,
@@ -664,9 +714,9 @@ const orderBy = Effect.fnUntraced(function* (
 	}));
 	return [...first, ...keys, ...tail];
 });
-/** A related sort key (`account.name`): each hop an exposed one-relation the reader reads unmasked, into a collection
+/** A related sort key (`account.name`): each hop an exposed one-relation the reader reads unmasked, into a model
  * it reads, and the field exposed and unmasked; else `invalidInput`. An ordering never leaks a mask. */
-const readable = Effect.fnUntraced(function* (b: Build, c: CollectionInfo, p: string, lv: Level) {
+const readable = Effect.fnUntraced(function* (b: Build, c: ExposureInfo, p: string, lv: Level) {
 	const bad = (why: string) =>
 		Effect.fail(StoreError.of('invalidInput', 'decode', `orderBy '${p}': ${why}`));
 	const steps = p.split('.');
@@ -678,14 +728,14 @@ const readable = Effect.fnUntraced(function* (b: Build, c: CollectionInfo, p: st
 			rel === undefined ||
 			target === undefined ||
 			rel.targets.length > 1 ||
-			!exposedRelation(x, s) ||
 			maskOf(b, x, s, lv) !== undefined
 		)
-			return yield* bad(`'${x.name}.${s}' is not a relation this caller reads`);
-		const t = b.cat.collections.get(target);
-		if (t === undefined) return yield* bad(`'${target}' is not a collection`);
-		if (lv.scoped && b.scope?.rows(t.name)?.length === 0)
-			return yield* bad(`'${t.name}' is not read by this caller`);
+			return yield* bad(`'${x.path}.${s}' is not a relation this caller reads`);
+		const t = yield* level(b, x, s, target, lv, false).pipe(
+			Effect.catch(() => bad(`'${target}' is not a model`))
+		);
+		if (lv.scoped && b.scope?.rows(t.path)?.length === 0)
+			return yield* bad(`'${t.path}' is not read by this caller`);
 		x = t;
 	}
 	const last = steps.at(-1) ?? p;
@@ -746,14 +796,14 @@ export type Compiled = {
 };
 const start = Effect.fnUntraced(function* (
 	cat: Catalog,
-	collection: string,
+	model: string,
 	options: CompileOptions
 ) {
-	const c = yield* collectionOf(cat, collection);
+	const c = yield* exposureOf(cat, model);
 	const scoped = options.scope !== undefined;
 	const lv: Level = { scoped, exposed: scoped };
-	if (options.scope?.rows(collection)?.length === 0)
-		return yield* forbidden(`no held policy grants reading '${collection}' (rule 33)`);
+	if (options.scope?.rows(model)?.length === 0)
+		return yield* forbidden(`no held policy grants reading '${model}' (rule 33)`);
 	return { c, b: new Build(cat, options), lv };
 });
 const pageLimit = (p: PageIR): number | 'all' => (p._tag === 'All' ? 'all' : p.limit);
@@ -773,7 +823,7 @@ export const compile = Effect.fn('Store.compile')(function* (
 	options: CompileOptions = {},
 	probe?: Probe
 ) {
-	const { c, b, lv } = yield* start(cat, ir.collection, options);
+	const { c, b, lv } = yield* start(cat, ir.model, options);
 	const a = b.alias();
 	const table = `${b.from(c.model.name)} ${a}`;
 	const one = (text: string): Fx<Compiled> =>
@@ -956,17 +1006,17 @@ export const compile = Effect.fn('Store.compile')(function* (
 });
 
 /**
- * Concurrent `get`s of one collection and select as one statement: the ids unnested with their ordinal and each row
+ * Concurrent `get`s of one model and select as one statement: the ids unnested with their ordinal and each row
  * as a lateral subquery — one row per id, in order, `j` null when not found.
  */
 export const compileGets = Effect.fn('Store.compileGets')(function* (
 	cat: Catalog,
-	collection: string,
+	model: string,
 	ids: readonly string[],
 	select: SelectIR,
 	options: CompileOptions = {}
 ) {
-	const { c, b, lv } = yield* start(cat, collection, options);
+	const { c, b, lv } = yield* start(cat, model, options);
 	const a = b.alias();
 	const id = c.model.fields.get('id');
 	if (id === undefined)
@@ -984,13 +1034,13 @@ const NUM = new Set(['int', 'decimal', 'money', 'sum', 'count', 'number', 'durat
 /** A field reached by a one-relation path (`'account.region'`), each hop scoped; a masked field is `forbidden`. */
 const path: (
 	b: Build,
-	c: CollectionInfo,
+	c: ExposureInfo,
 	a: string,
 	p: string,
 	lv: Level
 ) => Fx<{ expr: string; f: FieldInfo }> = Effect.fnUntraced(function* (
 	b: Build,
-	c: CollectionInfo,
+	c: ExposureInfo,
 	a: string,
 	p: string,
 	lv: Level
@@ -1014,11 +1064,12 @@ const path: (
 		f: inner.f
 	};
 });
-const aggregate = Effect.fnUntraced(function* (
+/** An aggregate's select list over the rows at alias `a`, and its bucket keys (`GROUP BY`). */
+const measures = Effect.fnUntraced(function* (
 	b: Build,
-	c: CollectionInfo,
+	c: ExposureInfo,
 	a: string,
-	ir: Extract<ReadIR, { kind: 'aggregate' }>,
+	ir: Measures,
 	lv: Level
 ) {
 	const cols: string[] = [];
@@ -1062,6 +1113,16 @@ const aggregate = Effect.fnUntraced(function* (
 		cols.push(`jsonb_build_object(${pairs.join(', ')}) AS ${q(fn)}`);
 	}
 	if (cols.length === 0) return yield* invalid('an aggregate asks for something');
+	return { cols, groups };
+});
+const aggregate = Effect.fnUntraced(function* (
+	b: Build,
+	c: ExposureInfo,
+	a: string,
+	ir: Extract<ReadIR, { kind: 'aggregate' }>,
+	lv: Level
+) {
+	const { cols, groups } = yield* measures(b, c, a, ir, lv);
 	const where = conj(
 		yield* scope(b, c, a, lv),
 		ir.where === undefined ? null : yield* pred(b, c, a, ir.where, lv)
@@ -1096,11 +1157,11 @@ const aggregate = Effect.fnUntraced(function* (
 /** The ids a predicate admits, compiled raw (no scope, no exposure): a grant arm or a mask, with its holder's operands. */
 export const grantSql = Effect.fn('Store.grantSql')(function* (
 	cat: Catalog,
-	collection: string,
+	model: string,
 	p: Pred,
 	options: Omit<CompileOptions, 'scope'> = {}
 ) {
-	const c = yield* collectionOf(cat, collection),
+	const c = yield* exposureOf(cat, model),
 		b = new Build(cat, options),
 		a = b.alias();
 	return yield* b.sql(
@@ -1110,11 +1171,11 @@ export const grantSql = Effect.fn('Store.grantSql')(function* (
 /** For the live router and tests: a predicate under the reader's scope, as the WHERE of `SELECT id FROM <c>`. */
 export const whereSql = Effect.fn('Store.whereSql')(function* (
 	cat: Catalog,
-	collection: string,
+	model: string,
 	p: Pred,
 	options: CompileOptions = {}
 ) {
-	const { c, b, lv } = yield* start(cat, collection, options);
+	const { c, b, lv } = yield* start(cat, model, options);
 	const a = b.alias();
 	return yield* b.sql(
 		`SELECT ${a}."id" AS id FROM ${b.from(c.model.name)} ${a} WHERE ${conj(yield* scope(b, c, a, lv), yield* pred(b, c, a, p, lv))} ORDER BY ${a}."id"`

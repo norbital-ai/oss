@@ -1,7 +1,7 @@
 /// <reference types="node" />
 // Seed packs (rule 70, X-13, X-15, §7.2): the public `base` pack from `seed/**`, and a `sample` pack read from a bank
-// tree by the template's `seed/seed.ts` (or, without one, every `<collection>.json` of the tree). A pack is a sibling of
-// the artifact with its own hash: `pack.json`, `rows/<collection>.jsonl`, `assets/**`. Loading one is a restore.
+// tree by the template's `seed/seed.ts` (or, without one, every `<model>.json` of the tree). A pack is a sibling of
+// the artifact with its own hash: `pack.json`, `rows/<model>.jsonl`, `assets/**`. Loading one is a restore.
 import { createHash } from 'node:crypto';
 import { Effect, FileSystem, Predicate, Result, Schema } from 'effect';
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
@@ -21,9 +21,9 @@ import {
 import type { CheckDiagnostic } from '../check/index.ts';
 import { assetPath } from '../../engine/artifact/read.ts';
 
-/** Rows per collection, the identity rows (`sys_user`, run-time `sys_integration` instances) included. */
+/** Rows per model, the identity rows (`sys_user`, run-time `sys_integration` instances) included. */
 export type SeedRows = {
-	readonly [collection: string]: readonly { readonly [field: string]: Json }[];
+	readonly [model: string]: readonly { readonly [field: string]: Json }[];
 };
 /** One bank tree, read-only. Paths are relative to the tree. */
 export type BankReader = {
@@ -91,7 +91,7 @@ function bankReader(root: string, tree: string): BankReader {
 }
 
 /**
- * Without a `seed.ts`: every top-level `<name>.json` of the tree is that collection's rows, and the bank's identity
+ * Without a `seed.ts`: every top-level `<name>.json` of the tree is that model's rows, and the bank's identity
  * rows become `sys_user` as §7.2 maps them (`status: 'admin'` → admin, `team_id` → team).
  */
 function defaultRows(bank: BankReader): SeedRows {
@@ -332,7 +332,7 @@ const writePack = Effect.fn('bolt.writePack')(function* (
 			errors.push({
 				code: 'seed/decode',
 				path,
-				message: `${path}: only ${IDENTITY.join(', ')} are seeded among system collections, not '${c}'`
+				message: `${path}: only ${IDENTITY.join(', ')} are seeded among system exposures, not '${c}'`
 			});
 	for (const p of assetRefs(m, rows))
 		if (!assets.some((a) => a.path === p))

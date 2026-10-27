@@ -71,5 +71,5 @@ export default model('sys_message', {
 			{ on: ['seq'], where: { status: { in: ['queued', 'sending'] } } }
 		]
 	},
-	read: { fields: 'all' }
+	read: 'all'
 });

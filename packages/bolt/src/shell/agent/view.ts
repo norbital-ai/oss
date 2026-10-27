@@ -180,7 +180,7 @@ const words = (s: string) => s.replace(/_/g, ' ').replace(/^./, (c) => c.toUpper
 /** A file's language by its extension: TypeScript, Svelte and JavaScript highlight as JavaScript. */
 const languageOf = (path: string): 'javascript' | 'json' | 'plaintext' =>
 	/\.(m?[jt]sx?|svelte)$/.test(path) ? 'javascript' : /\.json$/.test(path) ? 'json' : 'plaintext';
-/** `collection.verb` as a person says it: `invoice.update` → "Update invoice", `automation.close` → "Run close". */
+/** `model.verb` as a person says it: `invoice.update` → "Update invoice", `automation.close` → "Run close". */
 export const callableWords = (callable: string) => {
 	const [scope = '', act = ''] = callable.split('.');
 	return scope === 'automation'
@@ -192,18 +192,19 @@ export const callableWords = (callable: string) => {
 /** A draft path in words: `/snapshot/rule_set/EPF_MONTHLY` → `rule_set/EPF_MONTHLY`. */
 const draftPath = (path: string) => path.replace(/^\/snapshot\//, '').replace(/^\//, '');
 const VIEWS: { readonly [tool: string]: (a: Args) => StepView } = {
-	// an inference's draft read names a path (`{ path, fields }`); the agent's record read names collections
+	// an inference's draft read names a path (`{ path, fields }`); the agent's record read is a layer map, keyed by its models
 	read: (a) =>
 		typeof a['path'] === 'string'
 			? { icon: 'lucide:file-search', verb: 'Read the draft', target: draftPath(a['path']) }
 			: {
 					icon: 'lucide:database',
-					verb: a['aggregate'] === undefined ? 'Read' : 'Counted',
-					target: Arr.isArray(a['reads'])
-						? a['reads']
-								.map((r: unknown) => str(obj(r)['collection']).replace(/_/g, ' '))
-								.join(', ')
-						: str(a['collection']).replace(/_/g, ' ') || str(a['query'])
+					verb: Object.values(a).some((layer) => obj(layer)['aggregate'] !== undefined)
+						? 'Counted'
+						: 'Read',
+					target: Object.keys(a)
+						.filter((key) => !key.includes('.'))
+						.map((key) => key.replace(/_/g, ' '))
+						.join(', ')
 				},
 	// an inference's answer, built on its draft
 	find: (a) => ({ icon: 'lucide:text-search', verb: 'Searched the draft', target: str(a['text']) }),
@@ -224,9 +225,7 @@ const VIEWS: { readonly [tool: string]: (a: Args) => StepView } = {
 	// a write reads as what it did: "Update holiday", "Run the roster entry pipeline"
 	act: (a) => ({
 		icon: 'lucide:square-pen',
-		verb: Arr.isArray(a['actions'])
-			? a['actions'].map((x: unknown) => callableWords(str(obj(x)['callable']))).join(', ')
-			: callableWords(str(a['callable'])),
+		verb: callableWords(str(a['callable'])),
 		target: ''
 	}),
 	update_plan: () => ({ icon: 'lucide:notebook-pen', verb: 'Wrote the plan', target: '' }),

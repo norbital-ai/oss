@@ -21,7 +21,7 @@ import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it, layer } from '@effect/vitest';
 import * as NodeServices from '@effect/platform-node/NodeServices';
 import { Effect, Layer, Option, Schema } from 'effect';
-import { HttpServerRequest, HttpServerResponse } from 'effect/unstable/http';
+import { HttpServerRequest, HttpServerResponse } from 'effect/http';
 import { readPack, readPackSource } from '../src/engine/write/pack.ts';
 import type { TemplateManifest } from '../src/protocol/schema.ts';
 import { readArtifact, skillFiles, treeHash, workspaceFiles } from '../src/engine/artifact/read.ts';
@@ -443,7 +443,9 @@ layer(development, { timeout: 60_000, excludeTestServices: true })('bolt dev hos
 	});
 	const names = Schema.Struct({
 		answers: Schema.Array(
-			Schema.Struct({ rows: Schema.Array(Schema.Struct({ name: Schema.String })) })
+			Schema.Struct({
+				customers: Schema.Struct({ rows: Schema.Array(Schema.Struct({ name: Schema.String })) })
+			})
 		)
 	});
 
@@ -460,15 +462,15 @@ layer(development, { timeout: 60_000, excludeTestServices: true })('bolt dev hos
 				).toBe(200);
 				const q = yield* Schema.decodeUnknownEffect(names)(
 					yield* json(
-						yield* call('/__bolt/q', { reads: [{ m: 'query', a: ['customers', { all: true }] }] })
+						yield* call('/__bolt/q', { reads: [{ m: 'query', a: [{ customers: {} }] }] })
 					)
 				);
-				expect(q.answers[0]?.rows.map((row) => row.name)).toEqual(['Bank Co']);
+				expect(q.answers[0]?.customers.rows.map((row) => row.name)).toEqual(['Bank Co']);
 				const act = yield* call(
 					'/__bolt/act',
 					{
 						callable: 'customers.create',
-						input: { name: 'New' },
+						input: [{ name: 'New' }],
 						issuedAt: new Date().toISOString()
 					},
 					{ 'Idempotency-Key': randomUUID() }
@@ -544,17 +546,19 @@ layer(development, { timeout: 60_000, excludeTestServices: true })('bolt dev hos
 					Schema.Struct({
 						answers: Schema.Array(
 							Schema.Struct({
-								rows: Schema.Array(Schema.Struct({ name: Schema.String, city: Schema.Null }))
+								customers: Schema.Struct({
+									rows: Schema.Array(Schema.Struct({ name: Schema.String, city: Schema.Null }))
+								})
 							})
 						)
 					})
 				)(
 					yield* json(
-						yield* call('/__bolt/q', { reads: [{ m: 'query', a: ['customers', { all: true }] }] })
+						yield* call('/__bolt/q', { reads: [{ m: 'query', a: [{ customers: {} }] }] })
 					)
 				);
-				expect(q.answers[0]?.rows).toHaveLength(2);
-				expect(q.answers[0]?.rows[0]).toHaveProperty('city', null);
+				expect(q.answers[0]?.customers.rows).toHaveLength(2);
+				expect(q.answers[0]?.customers.rows[0]).toHaveProperty('city', null);
 			}),
 		60_000
 	);

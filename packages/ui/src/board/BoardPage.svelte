@@ -1,5 +1,5 @@
-<script lang="ts" generics="C extends CollectionKey">
-	import type { CollectionKey, Page, Row, RowOf } from '../collection/types.js';
+<script lang="ts" generics="C extends ModelKey">
+	import type { ModelKey, Page, Row, RowOf } from '../model/types.js';
 	import type { Json } from '../client/contract.js';
 	import { watch as watchSource } from 'runed';
 	import { untrack } from 'svelte';
@@ -9,9 +9,9 @@
 	import { openRecord } from '../record/navigation.js';
 	import { useBolt } from '../client/context.js';
 	import type { BoardProps } from './Board.svelte';
-	import { compact } from '../filter/scope.js';
 	import { label, msg } from '../text/messages.js';
-	import { listSelect, refOf, unref } from '../relations/select.js';
+	import { listRequest, refOf, unref } from '../relations/select.js';
+	import { requestJson } from '../read/request.js';
 	import { nextOf, rowsOf } from '../read/results.js';
 	import { pageRead } from '../read/paging.js';
 	import Glyph from '../primitives/icon/Glyph.svelte';
@@ -35,7 +35,9 @@
 		selected,
 		onSelect,
 		onRows,
-		onChange
+		onChange,
+		grid = false,
+		onOpen
 	}: Pick<BoardProps<C>, 'of' | 'card'> & {
 		lane: string;
 		where: Json | undefined;
@@ -50,28 +52,39 @@
 		onSelect?: (id: RowOf<C>['id'], selected: boolean) => void;
 		onRows?: (page: symbol, ids: readonly RowOf<C>['id'][]) => () => void;
 		onChange?: () => void;
+		/** The expanded lane: cards are items of the parent's grid, unwindowed (pages bound them) and not draggable. */
+		grid?: boolean;
+		/** Opening a card; default the record sheet. */
+		onOpen?: (id: string) => void;
 	} = $props();
 	const bolt = useBolt();
+	const open = (id: string) => (onOpen ? onOpen(id) : openRecord(of, id));
 	const approvalTip = (row: unknown) => {
 		const held = approvalOf(row);
 		return held === null ? undefined : approvalText(bolt, held);
 	};
 	const kinds = useKinds();
 	const fields = $derived(typeof card === 'function' ? [] : card);
-	const select = $derived(listSelect(kinds.catalog, of, fields));
 	const query = $derived(
-		JSON.stringify({ of, where, orderBy, search, select, pageSize, index, after })
+		JSON.stringify({ of, where, orderBy, search, fields, pageSize, index, after })
 	);
 	// hook:agent-ui — later pages stay live
 	const page = $derived.by(() => {
 		// Count metadata can rebuild an equivalent lane filter; keep its existing query and pages.
 		void query;
 		return untrack(() =>
-			pageRead(
+			pageRead<Page<RowOf<C> & Row>>(
+				of,
 				(limit, at) =>
-					bolt.query<Page<RowOf<C> & Row>>(
-						of,
-						compact({ where, orderBy, search, select, limit, after: at })
+					bolt.query(
+						requestJson(
+							listRequest(
+								kinds.catalog,
+								of,
+								{ where, orderBy, search: search || undefined, limit, after: at },
+								fields
+							)
+						)
 					),
 				pageSize,
 				index,
@@ -132,7 +145,10 @@
 		{#if index === 0 && cards.length === 0}
 			<!-- an empty lane is still a drop target: the placeholder keeps a card's height so one can land here -->
 			<div
-				class="border-border bg-background/50 flex min-h-28 flex-col items-center justify-center gap-1 rounded-sm border border-dashed p-4 text-center"
+				class={[
+					'border-border bg-background/50 flex min-h-28 flex-col items-center justify-center gap-1 rounded-sm border border-dashed p-4 text-center',
+					grid && 'col-span-full'
+				]}
 				data-lane-empty
 			>
 				<Glyph name="inbox" class="text-muted-foreground size-5" />
@@ -141,19 +157,20 @@
 			</div>
 		{/if}
 		<!-- the cards' spacing is their margin (measured with them); the page gives the last one back to the lane's gap -->
-		<div class={['flex flex-col', cards.length > 0 && '-mb-2']}>
-			<div aria-hidden="true" style="height:{lane.before}px" {@attach lane.anchor}></div>
-			{#each lane.slice(cards) as row (row['id'])}
+		<div class={grid ? 'contents' : ['flex flex-col', cards.length > 0 && '-mb-2']}>
+			{#if !grid}<div aria-hidden="true" style="height:{lane.before}px" {@attach lane.anchor}></div>{/if}
+			{#each grid ? cards : lane.slice(cards) as row (row['id'])}
 				{@const displayed = unref(kinds.catalog, of, fields, rowsOf([row]), bolt.locale)[0] ?? row}
 				<!-- not a <button>: a card snippet's own buttons and links must receive their clicks; the card opens on the rest -->
 				<!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_noninteractive_element_interactions -->
 				<div
 					role="listitem"
 					tabindex="0"
-					draggable="true"
+					draggable={grid ? undefined : 'true'}
 					{@attach lane.measure(row.id)}
 					class={[
-						'group bg-card shadow-card hover:border-input data-[dragging]:opacity-40 relative mb-2 flex w-full cursor-pointer flex-col gap-1 overflow-clip rounded-sm border p-2.5 text-left text-sm transition-colors focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none',
+						'group bg-card shadow-card hover:border-input data-[dragging]:opacity-40 relative flex w-full cursor-pointer flex-col gap-1 overflow-clip rounded-sm border text-left text-sm transition-colors focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none',
+						grid ? 'min-h-24 p-3' : 'mb-2 p-2.5',
 						selectable && 'pl-12',
 						selected?.has(row.id) && 'border-primary bg-accent/40'
 					]}
@@ -174,14 +191,16 @@
 						e.dataTransfer?.setData('text/x-bolt-id', row.id);
 					}}
 					onclick={(e) => {
+						// only a control inside the card counts: the sheet or the expanded lane it sits in is a dialog too
+						const own = (e.target as Element).closest(
+							'a, button, input, select, textarea, label, summary, [contenteditable], [role=button], [role=checkbox], [role=dialog]'
+						);
 						if (
-							!(e.target as Element).closest(
-								'a, button, input, select, textarea, label, summary, [contenteditable], [role=button], [role=checkbox], [role=dialog]'
-							) &&
+							(own === null || !e.currentTarget.contains(own)) &&
 							!window.getSelection()?.toString() &&
 							typeof row['id'] === 'string'
 						)
-							openRecord(of, row['id']);
+							open(row['id']);
 					}}
 					onkeydown={(e) => {
 						if (
@@ -190,16 +209,18 @@
 							typeof row['id'] === 'string'
 						) {
 							e.preventDefault();
-							openRecord(of, row['id']);
+							open(row['id']);
 						}
 					}}
 				>
 					<ApprovalAccent {row} />
-					<!-- the drag handle : the whole card drags; the grip says so where a pointer hovers -->
-					<span
-						class="border-border bg-background/95 text-muted-foreground pointer-events-none absolute top-1.5 right-1.5 grid size-6 cursor-grab place-items-center rounded-sm border opacity-0 shadow-xs transition-opacity group-hover:opacity-100 group-focus-within:opacity-100 motion-reduce:transition-none"
-						aria-hidden="true"><Glyph name="grip" class="size-3.5" /></span
-					>
+					{#if !grid}
+						<!-- the drag handle : the whole card drags; the grip says so where a pointer hovers -->
+						<span
+							class="border-border bg-background/95 text-muted-foreground pointer-events-none absolute top-1.5 right-1.5 grid size-6 cursor-grab place-items-center rounded-sm border opacity-0 shadow-xs transition-opacity group-hover:opacity-100 group-focus-within:opacity-100 motion-reduce:transition-none"
+							aria-hidden="true"><Glyph name="grip" class="size-3.5" /></span
+						>
+					{/if}
 					{#if selectable}
 						<label class="absolute top-0.5 left-0.5 grid size-10 place-items-center max-sm:size-11">
 							<Checkbox
@@ -227,7 +248,7 @@
 					{/if}
 				</div>
 			{/each}
-			{#if lane.after > 0}<div aria-hidden="true" style="height:{lane.after}px"></div>{/if}
+			{#if !grid && lane.after > 0}<div aria-hidden="true" style="height:{lane.after}px"></div>{/if}
 		</div>
 	{/snippet}
 </ReadGate>

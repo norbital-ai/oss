@@ -17,7 +17,7 @@ import { acceptOf, parserFor, parsersOf } from '../files/parse.ts';
 
 type Upload = {
 	id: string;
-	collection: string;
+	model: string;
 	field: string;
 	name: string;
 	mime: string;
@@ -48,18 +48,18 @@ const accepts = (patterns: readonly string[], mime: string) =>
 
 /** Rule 38d (a): a visitor uploads only to `file` fields its `create` grant writes; a member to any field its create or update grant admits. */
 function admits(m: EngineManifest, auth: Authority, c: string, field: string): boolean {
-	const spec = m.collections[c];
+	const spec = m.exposures[c];
 	const inputs = [
-		...(spec?.create?.input.columns ?? []),
-		...(auth.actor.kind === 'visitor' ? [] : (spec?.update?.input.columns ?? []))
+		...(spec?.create?.columns[c] ?? []),
+		...(auth.actor.kind === 'visitor' ? [] : (spec?.update?.columns[c] ?? []))
 	];
 	if (!inputs.includes(field)) return false;
 	if (auth.admin) return true;
 	const arms = [
-		...(auth.collections[c]?.create ?? []),
-		...(auth.actor.kind === 'visitor' ? [] : (auth.collections[c]?.update ?? []))
+		...(auth.models[c]?.create ?? []),
+		...(auth.actor.kind === 'visitor' ? [] : (auth.models[c]?.update ?? []))
 	];
-	return arms.some((a) => a.fields === 'all' || a.fields.includes(field));
+	return arms.some((a) => a.columns[c]?.includes(field) ?? false);
 }
 
 export const upload = Effect.fn('Callables.upload')(function* (u: Upload) {
@@ -67,27 +67,27 @@ export const upload = Effect.fn('Callables.upload')(function* (u: Upload) {
 	const db = yield* TenantDb;
 	const files = yield* Files;
 	// hook:attachments — the agent panel's own field: any member stores a conversation input; `sys_message.post` checks the message's 8 files / 20 MiB
-	const panel = u.collection === 'sys_conversation' && u.field === 'inputs';
+	const panel = u.model === 'sys_conversation' && u.field === 'inputs';
 	// a file sync's upload (`<m>.$import.<sync>`, read back by its `<m>.sync.<sync>` run): a member who may create or update
 	// in `m`, sending a file one of the sync's parsers reads (by extension or media type); any other is refused unread
 	const sync = u.field.startsWith('$import.')
-		? manifest.collections[u.collection]?.syncs?.[u.field.slice('$import.'.length)]
+		? manifest.exposures[u.model]?.syncs?.[u.field.slice('$import.'.length)]
 		: undefined;
 	const parsers = sync?.with === 'file' ? parsersOf(sync) : null;
 	const kind =
 		panel || parsers !== null
 			? { kind: 'file' as const, accept: [], max: '20MiB' }
-			: manifest.models[u.collection]?.fields[u.field];
+			: manifest.models[u.model]?.fields[u.field];
 	const allowed = panel
 		? u.authority.actor.kind === 'member'
 		: parsers !== null
 			? u.authority.actor.kind === 'member' &&
 				(u.authority.admin ||
-					(u.authority.collections[u.collection]?.create.length ?? 0) > 0 ||
-					(u.authority.collections[u.collection]?.update.length ?? 0) > 0)
-			: admits(manifest, u.authority, u.collection, u.field);
+					(u.authority.models[u.model]?.create.length ?? 0) > 0 ||
+					(u.authority.models[u.model]?.update.length ?? 0) > 0)
+			: admits(manifest, u.authority, u.model, u.field);
 	if (kind?.kind !== 'file' || !allowed)
-		return refuse('forbidden', `You may not upload to ${u.collection}.${u.field}.`);
+		return refuse('forbidden', `You may not upload to ${u.model}.${u.field}.`);
 	if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(u.id))
 		return refuse('invalidInput', 'An upload id is a client-minted uuid.');
 	if (
@@ -113,7 +113,7 @@ export const upload = Effect.fn('Callables.upload')(function* (u: Upload) {
 	c.cte(
 		'idem',
 		`INSERT INTO sys_file (id, name, mime, size, key, sha256, field, created_at, created_by)
-	VALUES (${c.p(u.id)}, ${c.p(u.name)}, ${c.p(u.mime)}, ${c.p(u.bytes.byteLength)}, ${c.p(blob.key)}, ${c.p(sha256)}, ${c.p(`${u.collection}.${u.field}`)},
+	VALUES (${c.p(u.id)}, ${c.p(u.name)}, ${c.p(u.mime)}, ${c.p(u.bytes.byteLength)}, ${c.p(blob.key)}, ${c.p(sha256)}, ${c.p(`${u.model}.${u.field}`)},
 		${c.p(u.now)}::timestamptz, ${c.p(u.authority.actor.kind === 'member' ? u.authority.actor.id : null)})
 	ON CONFLICT (id) DO NOTHING RETURNING id, name, mime, size, sha256`
 	);
@@ -129,7 +129,7 @@ export const upload = Effect.fn('Callables.upload')(function* (u: Upload) {
 	const answer = yield* db
 		.returning(
 			Schema.Struct({ ref: Schema.NullOr(Ref) }),
-			c.sql(`coalesce((SELECT to_jsonb(idem) FROM idem), (SELECT CASE WHEN f.field = ${c.p(`${u.collection}.${u.field}`)} AND f.sha256 = ${c.p(sha256)}
+			c.sql(`coalesce((SELECT to_jsonb(idem) FROM idem), (SELECT CASE WHEN f.field = ${c.p(`${u.model}.${u.field}`)} AND f.sha256 = ${c.p(sha256)}
 		THEN jsonb_build_object('id', f.id, 'name', f.name, 'mime', f.mime, 'size', f.size, 'sha256', f.sha256) END FROM sys_file f WHERE f.id = ${first})) AS ref`)
 		)
 		.pipe(

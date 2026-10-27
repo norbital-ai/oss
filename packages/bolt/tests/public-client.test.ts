@@ -130,20 +130,13 @@ it.effect('hydrates native decimal values through the same codec used to encode 
 	})
 );
 
-it.effect('retains declared query and search-index metadata in public hydration', () =>
+it.effect('retains search-index metadata in public hydration', () =>
 	Effect.gen(function* () {
 		const catalog = {
 			orders: {
 				label: ['title'],
 				fields: { title: { kind: 'text' as const } },
-				indexes: { hue: { description: 'Hue', input: { r: { kind: 'number' as const } } } },
-				queries: {
-					titled: {
-						description: 'Titles',
-						input: { prefix: { kind: 'text' as const } },
-						output: { kind: 'json' as const }
-					}
-				}
+				indexes: { hue: { description: 'Hue', input: { r: { kind: 'number' as const } } } }
 			}
 		};
 		const decoded = yield* decodePublicHydration(

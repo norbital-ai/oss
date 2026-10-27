@@ -28,7 +28,7 @@ const manifest = Result.getOrThrow(
 			}
 		},
 		relationships: {},
-		collections: {
+		exposures: {
 			docs: { read: { fields: 'all' }, create: { input: { columns: ['title', 'file'] } } }
 		},
 		integrations: {},
@@ -105,7 +105,7 @@ const make = (
 			ref = { id: up.output.id, name: up.output.name, mime: up.output.mime };
 			yield* actReply(route, admin.authority, {
 				callable: 'docs.create',
-				input: { title: 'Letterhead', file: ref },
+				input: [{ title: 'Letterhead', file: ref }],
 				issuedAt: t.clock.now()
 			});
 		}
@@ -330,8 +330,8 @@ describe('documentConverter (Norbital Convert)', () => {
 
 const live = await Effect.runPromise(
 	Config.all({
-		url: Config.string('BOLT_TEST_CONVERT_URL').pipe(Config.option),
-		key: Config.string('BOLT_TEST_CONVERT_KEY').pipe(Config.option)
+		url: Config.String('BOLT_TEST_CONVERT_URL').pipe(Config.option),
+		key: Config.String('BOLT_TEST_CONVERT_KEY').pipe(Config.option)
 	}).pipe(
 		Effect.map(({ url, key }) => ({
 			url: Option.getOrUndefined(url),

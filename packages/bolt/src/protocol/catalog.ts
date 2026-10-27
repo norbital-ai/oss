@@ -1,10 +1,10 @@
-// Bolt's catalog: a workspace's models, relationships and collections with the built-in layer's (`src/system`) beside
+// Bolt's catalog: a workspace's models, relationships and models with the built-in layer's (`src/system`) beside
 // them, as the store's tables (`tableOf`); and the browser's (the shell boot's `catalog`), which `bolt.decode` checks
 // against.
 import {
 	catalogOf as storeCatalogOf,
 	type Catalog,
-	type CatalogCollection,
+	type CatalogExposure,
 	type CatalogTable,
 	type FieldSpec,
 	type KindSpec,
@@ -20,15 +20,7 @@ import { SYSTEM } from '../system/index.ts';
  * its `key` as the natural key; a system model (`table`) is keyed as its `table.primary` says, and audits nothing.
  */
 export function tableOf(model: ModelSpec): TableSpec {
-	const {
-		description: _d,
-		icon: _i,
-		label: _l,
-		table,
-		key,
-		locked: _lock,
-		...storage
-	} = model;
+	const { description: _d, icon: _i, label: _l, table, key, locked: _lock, ...storage } = model;
 	// application-only metadata is not schema: enum transitions and the record lock never generate DDL
 	const fields = Object.fromEntries(
 		Object.entries(storage.fields).map(([name, kind]) => {
@@ -38,8 +30,7 @@ export function tableOf(model: ModelSpec): TableSpec {
 		})
 	);
 	const natural = key === undefined ? {} : { natural: key };
-	if (table === undefined)
-		return { ...storage, fields, ...natural, audit: true, nativeRules: 2 };
+	if (table === undefined) return { ...storage, fields, ...natural, audit: true, nativeRules: 2 };
 	const p = table.primary;
 	return {
 		...storage,
@@ -77,15 +68,15 @@ export function tablesOf(
 	);
 }
 
-/** The query model of a workspace and the built-in layer, whose models and collections are declared alike. */
+/** The query model of a workspace and the built-in layer, whose models and models are declared alike. */
 export function catalog(m: EngineManifest): Catalog {
 	return storeCatalogOf(
 		{ tables: tablesOf(m.models, m.relationships) },
-		{ ...SYSTEM.collections, ...m.collections }
+		{ ...SYSTEM.exposures, ...m.exposures }
 	);
 }
 
-/** What the browser knows of the caller's collections (the shell boot's `catalog`): readable fields as declared, the
+/** What the browser knows of the caller's models (the shell boot's `catalog`): readable fields as declared, the
  * one-relations it may use (with their inverse names) and the many-relations it exposes. `bolt.decode` checks against it. */
 export type BrowserCatalog = {
 	readonly [c: string]: {
@@ -100,7 +91,7 @@ export type BrowserCatalog = {
 export function browserCatalog(b: BrowserCatalog): Catalog {
 	const exposed = Object.entries(b);
 	const system = tablesOf({}, {});
-	// the built-in layer's relationships hold whatever the browser knows a system collection as
+	// the built-in layer's relationships hold whatever the browser knows a system model as
 	const systemRefs = (c: string) =>
 		Object.fromEntries(Object.entries(system[c]?.fields ?? {}).filter(([, k]) => k.kind === 'ref'));
 	return storeCatalogOf(
@@ -139,16 +130,11 @@ export function browserCatalog(b: BrowserCatalog): Catalog {
 			}
 		},
 		{
-			...SYSTEM.collections,
+			...SYSTEM.exposures,
 			...Object.fromEntries(
-				exposed.map(([c, x]): [string, CatalogCollection] => [
+				exposed.map(([c, x]): [string, CatalogExposure] => [
 					c,
-					{
-						read: {
-							fields: 'all',
-							relations: [...Object.keys(x.relations ?? {}), ...(x.many ?? [])]
-						}
-					}
+					{ read: { [c]: { fields: 'all' } } }
 				])
 			)
 		}

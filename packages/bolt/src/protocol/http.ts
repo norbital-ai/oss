@@ -12,11 +12,10 @@ import {
 	Schema,
 	Stream
 } from 'effect';
-import * as HttpServerRequest from 'effect/unstable/http/HttpServerRequest';
-import * as HttpServerResponse from 'effect/unstable/http/HttpServerResponse';
+import * as HttpServerRequest from 'effect/http/HttpServerRequest';
+import * as HttpServerResponse from 'effect/http/HttpServerResponse';
 import type { Json } from '../decl/values.ts';
-import type { QuerySpec } from '../decl/model.ts';
-import type { Authority, Bindings, Outcome, RowData } from '../engine/contracts.ts';
+import type { Authority, Bindings, Invocation, Outcome, RowData } from '../engine/contracts.ts';
 import type { EngineManifest } from '../engine/manifest.ts';
 import {
 	Conflict,
@@ -36,9 +35,8 @@ import { mcpServers } from '../engine/agent/mcp.ts';
 import { agentSettings, allowedModel, spent } from '../engine/agent/settings.ts';
 import { convertDocument } from '../engine/facilities.ts';
 import { lowerRead } from '../engine/query/engine.ts';
-import { lowerKeyedMember } from '../engine/query/keyed.ts';
 import { fingerprint, schemaSlice } from '../engine/schema/plan.ts';
-import { recordCapabilities } from '../engine/write/act.ts';
+import { recordCapabilities, transformBridge } from '../engine/write/act.ts';
 import { restorePreview, restoreRecord } from '../engine/write/restore.ts';
 import { subscribe } from '../engine/runs/push.ts';
 import { actorRef } from '../engine/write/commit.ts';
@@ -53,6 +51,7 @@ import {
 	Approvals,
 	Live,
 	Agents,
+	Guest,
 	type AgentCallables
 } from '../engine/services.ts';
 import type { ReadIR } from './reads.ts';
@@ -289,13 +288,13 @@ export const requestActRate = Effect.fn('protocol.requestActRate')(function* (
 /** Public page loaders and wire reads obey the same visitor surface restrictions. */
 export const readAdmitted = (
 	authority: Authority,
-	read: { readonly kind: string; readonly collection?: string | undefined } | undefined
+	read: { readonly kind: string; readonly model?: string | undefined } | undefined
 ): boolean =>
 	authority.actor.kind !== 'visitor' ||
 	(read !== undefined &&
 		(read.kind === 'read' || read.kind === 'get') &&
-		typeof read.collection === 'string' &&
-		admitVisitor(authority, { read: read.collection }) === null);
+		typeof read.model === 'string' &&
+		admitVisitor(authority, { read: read.model }) === null);
 const readAdmissions = new WeakMap<
 	HttpServerRequest.HttpServerRequest,
 	Effect.Effect<ReturnType<RateWindows['charge']>, never, RateLimits>
@@ -334,12 +333,11 @@ export const wireReadAdmitted = (authority: Authority, read: WireRead | undefine
 			args['search'] !== undefined &&
 			typeof args['search'] !== 'string'
 		) &&
-		readAdmitted(authority, { kind: 'read', collection: model });
+		readAdmitted(authority, { kind: 'read', model: model });
 	const [name, args] = read.a;
+	// a read request: each path's root granted, no index search
 	return Schema.is(JsonObject)(name)
-		? Object.values(name).every(
-				(member) => Schema.is(JsonObject)(member) && admits(member['from'], member)
-			)
+		? Object.entries(name).every(([path, layer]) => admits(path.split('.', 1)[0], layer))
 		: admits(name, args);
 };
 const liveViewAdmitted = wireReadAdmitted;
@@ -483,25 +481,18 @@ export const dispatchAct = Effect.fn('protocol.dispatchAct')(function* (
 			live.syncChanged('sys_notification');
 			outcome = committed(null);
 		} else if (decoded.callable === 'history.preview') {
-			const previewed = yield* restorePreview(
-				{ manifest: m, db: yield* TenantDb },
-				decoded.input,
-				authority,
-				b
-			);
+			const previewed = yield* restorePreview(yield* probe, decoded.input, authority, b);
 			outcome = previewed.ok ? committed(previewed.preview) : previewed.outcome;
 		} else if (decoded.callable === 'history.restore') {
 			const writes = yield* Writes;
-			const restored = yield* restoreRecord(
-				{ manifest: m, db: yield* TenantDb },
-				writes.act,
-				decoded.input,
-				{
-					...call,
-					...(admitted === undefined ? {} : { rate: [...(call.rate ?? []), ...admitted.charges] }),
-					authority,
-					bindings: b,
-					invocationId: yield* (yield* Crypto.Crypto).randomUUIDv4.pipe(
+			const restored = yield* restoreRecord(yield* probe, writes.act, decoded.input, {
+				...call,
+				...(admitted === undefined ? {} : { rate: [...(call.rate ?? []), ...admitted.charges] }),
+				authority,
+				bindings: b,
+				invocationId: yield* (yield* Crypto.Crypto)
+					.randomUUIDv4()
+					.pipe(
 						Effect.mapError((error) =>
 							BoltError.make(
 								'unavailable',
@@ -511,8 +502,7 @@ export const dispatchAct = Effect.fn('protocol.dispatchAct')(function* (
 							)
 						)
 					)
-				}
-			);
+			});
 			return { outcome: restored.outcome, v: restored.v ?? (yield* live.v) };
 		} else {
 			const filters = yield* filterDescribe;
@@ -535,7 +525,7 @@ export const dispatchAct = Effect.fn('protocol.dispatchAct')(function* (
 						v: yield* live.v
 					};
 				const result = yield* filters.describe({
-					collection: decoded.input.collection,
+					model: decoded.input.model,
 					text: decoded.input.text,
 					authority,
 					bindings: b,
@@ -553,7 +543,7 @@ export const dispatchAct = Effect.fn('protocol.dispatchAct')(function* (
 						};
 			} else if (decoded.callable === 'filter.options') {
 				const result = yield* filters.options({
-					collection: decoded.input.collection,
+					model: decoded.input.model,
 					authority,
 					bindings: b,
 					...(decoded.input.fields === undefined ? {} : { localFields: decoded.input.fields })
@@ -577,16 +567,18 @@ export const dispatchAct = Effect.fn('protocol.dispatchAct')(function* (
 		...(admitted === undefined ? {} : { rate: [...(call.rate ?? []), ...admitted.charges] }),
 		authority,
 		bindings: b,
-		invocationId: yield* (yield* Crypto.Crypto).randomUUIDv4.pipe(
-			Effect.mapError((error) =>
-				BoltError.make('unavailable', 'facility', 'Secure random UUID generation failed.', error)
+		invocationId: yield* (yield* Crypto.Crypto)
+			.randomUUIDv4()
+			.pipe(
+				Effect.mapError((error) =>
+					BoltError.make('unavailable', 'facility', 'Secure random UUID generation failed.', error)
+				)
 			)
-		)
 	};
 	if (callable._tag === 'Verb')
 		return yield* (yield* Writes).act({
 			...context,
-			collection: callable.collection,
+			model: callable.model,
 			verb: callable.verb,
 			mode: { _tag: 'Direct' }
 		});
@@ -595,6 +587,19 @@ export const dispatchAct = Effect.fn('protocol.dispatchAct')(function* (
 	);
 });
 
+/** What a record's checks run with outside an act: the write's guest and its workspace-read bridge. */
+const probe = Effect.gen(function* () {
+	const manifest = yield* Manifest,
+		db = yield* TenantDb,
+		guest = yield* Guest;
+	return {
+		manifest,
+		db,
+		guest,
+		bridge: (invocation: Invocation, over: typeof db = db) =>
+			transformBridge(manifest, over, invocation)
+	};
+});
 const lower = Effect.fn('protocol.lowerRead')(function* (
 	authority: Authority,
 	read: WireRead
@@ -614,7 +619,7 @@ const lower = Effect.fn('protocol.lowerRead')(function* (
 				: Option.none();
 		return {
 			kind: 'transcript',
-			collection: 'sys_message',
+			model: 'sys_message',
 			conversation: id,
 			thread: conversation.integration !== null,
 			...(conversation.run == null ? {} : { automation: true }),
@@ -627,11 +632,11 @@ const lower = Effect.fn('protocol.lowerRead')(function* (
 				BoltError.make('forbidden', 'admission', 'Not available to this member.')
 			);
 		if (read.m === 'conversations')
-			return { kind: 'conversations', collection: 'sys_conversation', member: authority.actor.id };
+			return { kind: 'conversations', model: 'sys_conversation', member: authority.actor.id };
 		const options = read.a[0];
 		return {
 			kind: 'inbox',
-			collection: 'sys_notification',
+			model: 'sys_notification',
 			member: authority.actor.id,
 			...(Schema.is(JsonObject)(options) && options['requests'] === true ? { requests: true } : {})
 		};
@@ -640,42 +645,6 @@ const lower = Effect.fn('protocol.lowerRead')(function* (
 		try: () => lowerRead(m, read.m, read.a),
 		catch: (e) => (e instanceof BoltError ? e : invalid(String(e)))
 	});
-});
-
-type LoweredQRead = {
-	readonly keys: readonly string[] | null;
-	readonly reads: readonly ReadIR[];
-};
-const lowerQRead = Effect.fn('protocol.lowerQRead')(function* (
-	authority: Authority,
-	read: WireRead,
-	scope: number
-): Effect.fn.Return<LoweredQRead, EngineError, Manifest | TenantDb> {
-	const set = read.a[0];
-	if (read.m !== 'query' || !Schema.is(JsonObject)(set))
-		return { keys: null, reads: [yield* lower(authority, read)] };
-	if (read.a.length !== 1)
-		return yield* Effect.fail(invalid('a keyed read takes one set argument'));
-	const m = yield* Manifest;
-	const earlier = new Set<string>();
-	const members = yield* Effect.forEach(Object.entries(set), ([key, spec]) =>
-		Effect.try({
-			try: () => {
-				const ir = lowerKeyedMember(
-					'query',
-					key,
-					spec,
-					(method, args) => lowerRead(m, method, args),
-					`q:${scope}`,
-					earlier
-				);
-				earlier.add(key);
-				return ir;
-			},
-			catch: (error) => (error instanceof BoltError ? error : invalid(String(error)))
-		})
-	);
-	return { keys: Object.keys(set), reads: members };
 });
 
 /** One notice of `GET /__bolt/notices`; its `at` is the event id a reconnect names in `Last-Event-ID`. */
@@ -699,10 +668,7 @@ export const BoltRoutes = {
 			const body = yield* requestBody(request, QBody);
 			if (body.reads.some((r) => ['transcript', 'inbox', 'conversations'].includes(r.m)))
 				return yield* Effect.fail(invalid('This read is live-only.'));
-			const groups = yield* Effect.forEach(body.reads, (read, index) =>
-				lowerQRead(authority, read, index)
-			);
-			const batch = groups.flatMap((group) => group.reads);
+			const batch = yield* Effect.forEach(body.reads, (read) => lower(authority, read));
 			const values = yield* (yield* Reads).run(batch, { as: 'caller', authority }, yield* bindings);
 			if (values.length !== batch.length)
 				return yield* Effect.fail(
@@ -712,30 +678,7 @@ export const BoltRoutes = {
 						`The reader returned ${values.length} answers for ${batch.length} reads.`
 					)
 				);
-			const answers: Json[] = [];
-			let offset = 0;
-			for (const group of groups) {
-				if (group.keys === null) {
-					const value = values[offset++];
-					if (value === undefined)
-						return yield* Effect.fail(
-							BoltError.make('badAnswer', 'deliver', 'The reader omitted a read answer.')
-						);
-					answers.push(value);
-				} else {
-					const keyed: (readonly [string, Json])[] = [];
-					for (const key of group.keys) {
-						const value = values[offset++];
-						if (value === undefined)
-							return yield* Effect.fail(
-								BoltError.make('badAnswer', 'deliver', `The reader omitted member '${key}' answer.`)
-							);
-						keyed.push([key, value]);
-					}
-					answers.push(Object.fromEntries(keyed));
-				}
-			}
-			return HttpServerResponse.jsonUnsafe({ answers });
+			return HttpServerResponse.jsonUnsafe({ answers: values });
 		})
 	},
 	[`POST ${PATHS.act}` as const]: {
@@ -859,18 +802,8 @@ export const BoltRoutes = {
 							return yield* Effect.fail(
 								BoltError.make('forbidden', 'admission', 'Visitors may not do this.')
 							);
-						const lowered = yield* lowerQRead(authority, view.read, 0);
-						const read: ReadIR = lowered.reads[0] ?? {
-							kind: 'query',
-							collection: '',
-							query: '',
-							input: null
-						};
 						yield* live.register(body.conn, view.view, {
-							read,
-							...(lowered.keys === null
-								? {}
-								: { batch: { keys: lowered.keys, reads: lowered.reads } })
+							read: yield* lower(authority, view.read)
 						});
 						return Option.none<{ view: string; code: string; message: string }>();
 					}).pipe(
@@ -1000,8 +933,8 @@ export const BoltRoutes = {
 				reads = yield* Reads,
 				b = yield* bindings,
 				m = yield* Manifest;
-			const readable = (collection: string, id: string) =>
-				reads.run([lowerRead(m, 'get', [collection, id])], { as: 'caller', authority }, b).pipe(
+			const readable = (model: string, id: string) =>
+				reads.run([lowerRead(m, 'get', [model, id])], { as: 'caller', authority }, b).pipe(
 					Effect.map(([row]) => row !== null && row !== undefined),
 					Effect.catchTag('BoltError', () => Effect.succeed(false))
 				);
@@ -1012,7 +945,7 @@ export const BoltRoutes = {
 				return HttpServerResponse.jsonUnsafe({
 					value: yield* approvals.list(
 						{
-							...(p.get('collection') === null ? {} : { collection: p.get('collection') ?? '' }),
+							...(p.get('model') === null ? {} : { model: p.get('model') ?? '' }),
 							records: many('record'),
 							ids: many('request'),
 							all: p.get('all') === '1'
@@ -1034,10 +967,10 @@ export const BoltRoutes = {
 			authority: Authority
 		) {
 			const p = requestUrl(request).searchParams,
-				collection = p.get('collection'),
+				model = p.get('model'),
 				id = p.get('id');
-			if (!collection || !id) return yield* Effect.fail(invalid('collection and id are required'));
-			const pc = p.get('parentCollection'),
+			if (!model || !id) return yield* Effect.fail(invalid('model and id are required'));
+			const pc = p.get('parentModel'),
 				pi = p.get('parentId'),
 				relation = p.get('relation'),
 				revision = p.get('parentRevision');
@@ -1050,21 +983,20 @@ export const BoltRoutes = {
 						  revision !== null &&
 						  Number.isSafeInteger(Number(revision)) &&
 						  Number(revision) > 0
-						? { collection: pc, id: pi, relation, revision: Number(revision) }
+						? { model: pc, id: pi, relation, revision: Number(revision) }
 						: null;
 			if (parent === null)
 				return yield* Effect.fail(
 					invalid(
-						'a nested capability read requires its parent collection, id, relation and revision'
+						'a nested capability read requires its parent model, id, relation and revision'
 					)
 				);
 			const m = yield* Manifest,
-				db = yield* TenantDb,
 				reads = yield* Reads,
 				b = yield* bindings;
 			const value = yield* recordCapabilities(
-				{ manifest: m, db },
-				collection,
+				yield* probe,
+				model,
 				id,
 				authority,
 				b,
@@ -1153,22 +1085,18 @@ export const boltRoutes = (request: HttpServerRequest.HttpServerRequest) =>
 	);
 
 function openapi(m: EngineManifest, authority: Authority, version: string): Json {
-	const may = (collection: string, verb: 'read' | 'create' | 'update' | 'delete') =>
-		authority.admin || (authority.collections[collection]?.[verb].length ?? 0) > 0;
-	const namedQueries = (collection: string) => {
-		const specs: Readonly<Record<string, QuerySpec>> = m.collections[collection]?.queries ?? {};
-		return Object.keys(specs)
-			.filter(
-				(name) => authority.admin || authority.collections[collection]?.queries.includes(name)
-			)
-			.map((name) => `${collection}.${name}`);
-	};
-	const collections = Object.keys(m.collections);
+	const may = (model: string, verb: 'read' | 'create' | 'update' | 'delete') =>
+		authority.admin ||
+		((verb === 'read'
+			? authority.models[model]?.read[model]
+			: authority.models[model]?.[verb]
+		)?.length ?? 0) > 0;
+	const exposed = Object.keys(m.exposures);
 	const callables = [
-		...collections.flatMap((collection) =>
+		...exposed.flatMap((model) =>
 			(['create', 'update', 'delete'] as const)
-				.filter((verb) => m.collections[collection]?.[verb] !== undefined && may(collection, verb))
-				.map((verb) => `${collection}.${verb}`)
+				.filter((verb) => m.exposures[model]?.[verb] !== undefined && may(model, verb))
+				.map((verb) => `${model}.${verb}`)
 		),
 		...((authority.admin ? Object.keys(m.automations) : authority.automations).length > 0
 			? ['start']
@@ -1205,10 +1133,7 @@ function openapi(m: EngineManifest, authority: Authority, version: string): Json
 											type: 'array',
 											prefixItems: [
 												{
-													enum: [
-														...collections.filter((collection) => may(collection, 'read')),
-														...collections.flatMap((collection) => namedQueries(collection))
-													]
+													enum: exposed.filter((model) => may(model, 'read'))
 												}
 											]
 										}
@@ -1233,7 +1158,10 @@ function openapi(m: EngineManifest, authority: Authority, version: string): Json
 							required: ['callable', 'input', 'issuedAt'],
 							properties: {
 								callable: { const: callable },
-								input: { type: 'object' },
+								input:
+									callable === 'start'
+										? { type: 'object' }
+										: { type: 'array', items: { type: 'object' } },
 								issuedAt: { type: 'string', format: 'date-time' }
 							}
 						}))

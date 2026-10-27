@@ -5,13 +5,13 @@ import { Effect } from 'effect';
 import type { Json } from '../values.ts';
 import type { Order, Pred, SelectIR } from '../ir.ts';
 import { StoreError } from '../errors.ts';
-import { collectionOf, q, type Catalog, type CollectionInfo, type FieldInfo } from '../catalog.ts';
+import { exposureOf, q, type Catalog, type ExposureInfo, type FieldInfo } from '../catalog.ts';
 import { Build, items, pred, RAW, type Sql } from '../read/sql.ts';
 import { cells } from '../read/values.ts';
 import { nullRowSql } from './row.ts';
 
 type Fx<A> = Effect.Effect<A, StoreError>;
-/** A row's values in wire form, by field (a polymorphic ref as `{ collection, id }`, a decimal as `{ $dec }`). */
+/** A row's values in wire form, by field (a polymorphic ref as `{ model, id }`, a decimal as `{ $dec }`). */
 export type WireRow = { readonly [field: string]: Json };
 /**
  * An atomic change of an inline value, sent as the field's value: `$patch` merges an object at its paths (absent
@@ -109,7 +109,7 @@ const isObject = (v: Json): v is { readonly [key: string]: Json } =>
 	v !== null && typeof v === 'object' && !Array.isArray(v);
 
 /** A field a write may set: stored, not computed or derived; a table's key and audit columns are the store's. */
-const writable = (c: CollectionInfo, name: string): Fx<FieldInfo> => {
+const writable = (c: ExposureInfo, name: string): Fx<FieldInfo> => {
 	const f = c.model.fields.get(name);
 	return f === undefined || f.computed === true || f.derived === true || name.includes('.')
 		? invalid(`'${c.name}' has no writable field '${name}'`)
@@ -119,7 +119,7 @@ const writable = (c: CollectionInfo, name: string): Fx<FieldInfo> => {
 			: Effect.succeed(f);
 };
 /** One row's columns: each field's cells (a polymorphic ref spreads over its arm columns). */
-const columnsOf = (c: CollectionInfo, row: WireRow): Fx<[string, Json][]> =>
+const columnsOf = (c: ExposureInfo, row: WireRow): Fx<[string, Json][]> =>
 	Effect.map(
 		Effect.forEach(Object.entries(row), ([name, v]) =>
 			name === 'id' && c.model.fields.get('id') !== undefined
@@ -128,9 +128,9 @@ const columnsOf = (c: CollectionInfo, row: WireRow): Fx<[string, Json][]> =>
 		),
 		(xs) => xs.flat()
 	);
-const audited = (c: CollectionInfo) => c.model.audit === true;
+const audited = (c: ExposureInfo) => c.model.audit === true;
 /** Clock assignment is separate from literal row data and cannot target keys, computed or managed audit fields. */
-const clockFields = (c: CollectionInfo, names: readonly string[]): Fx<readonly FieldInfo[]> =>
+const clockFields = (c: ExposureInfo, names: readonly string[]): Fx<readonly FieldInfo[]> =>
 	Effect.forEach([...new Set(names)], (name) => {
 		const f = c.model.fields.get(name);
 		return f === undefined ||
@@ -146,7 +146,7 @@ const clockFields = (c: CollectionInfo, names: readonly string[]): Fx<readonly F
 			: Effect.succeed(f);
 	});
 
-const nullRow = (c: CollectionInfo): string =>
+const nullRow = (c: ExposureInfo): string =>
 	nullRowSql(
 		c.model.name,
 		Array.from(c.model.fields.values(), (field) => field.column)
@@ -162,7 +162,7 @@ const incomingValue = (f: FieldInfo | undefined, column: string) => {
 /** Rows of one column set, as `jsonb_populate_recordset` reads them; the key `id` is minted where absent. */
 const insertPiece = (
 	b: Build,
-	c: CollectionInfo,
+	c: ExposureInfo,
 	cols: readonly string[],
 	rows: readonly { readonly [column: string]: Json }[],
 	options: WriteOptions
@@ -190,7 +190,7 @@ const insertPiece = (
 /** The written rows' projection: the read's own select list over the returned rows, as one json array. */
 const projected = Effect.fnUntraced(function* (
 	b: Build,
-	c: CollectionInfo,
+	c: ExposureInfo,
 	source: string,
 	select: SelectIR
 ) {
@@ -241,7 +241,7 @@ export const compileWrite = Effect.fn('Store.compileWrite')(function* (
 	w: WriteIR,
 	options: WriteOptions = {}
 ) {
-	const c = yield* collectionOf(cat, w.table);
+	const c = yield* exposureOf(cat, w.table);
 	const b = new Build(cat);
 	const T = b.from(c.model.name);
 	const key = c.model.key;
@@ -489,7 +489,7 @@ export const compileWrite = Effect.fn('Store.compileWrite')(function* (
 		Effect.gen(function* () {
 			let result = yield* pred(b, c, alias, w.where, RAW);
 			if (w.kind === 'delete' && w.absent !== undefined) {
-				const target = yield* collectionOf(cat, w.absent.table),
+				const target = yield* exposureOf(cat, w.absent.table),
 					other = b.alias();
 				const links = yield* Effect.forEach(Object.entries(w.absent.on), ([left, right]) => {
 					const l = c.model.fields.get(left),

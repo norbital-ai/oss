@@ -98,11 +98,11 @@ export const platformConfig = Effect.fn('bolt.platformConfig')(function* (
 	cache: string
 ) {
 	const fs = yield* FileSystem.FileSystem;
-	// every effect module is an entry: a module a workspace bundles itself (an `effect/unstable/*` page import) reaches
-	// effect's core through the layer, never through a second copy of it
+	// every core effect module is an entry: a module a workspace bundles itself (an `effect/http` or other
+	// subdirectory page import) reaches effect's core through the layer, never through a second copy of it
 	const effect = dirname(createRequire(import.meta.url).resolve('effect'));
 	const modules = (yield* fs.readDirectory(effect, { recursive: true }))
-		.filter((file) => file.endsWith('.js') && !/^(?:unstable|testing)\//.test(file))
+		.filter((file) => file.endsWith('.js') && !/^(?!internal\/)[^/]+\//.test(file))
 		.sort()
 		.map((file) => join(effect, file));
 	const entries: Plugin = {

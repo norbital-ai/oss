@@ -43,7 +43,7 @@ WHERE id::text = ${id}${replace} RETURNING id`
 	c.assert(
 		`(SELECT count(*) FROM read_guard_baseline) = 1 OR EXISTS (SELECT 1 FROM bolt_approvals WHERE id::text = ${id} AND route ? '__boltReadGuards')`,
 		'conflict',
-		JSON.stringify({ collection: 'approval_request', ids: [requestId] })
+		JSON.stringify({ model: 'approval_request', ids: [requestId] })
 	);
 	return c.sql('(SELECT count(*) FROM read_guard_baseline)::int AS updated');
 }

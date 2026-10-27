@@ -1,6 +1,6 @@
 // Mounting the workspace shell in the browser (§5.10). The build hands it the app and group literals (routes are
 // resolved client-side), one lazy chunk per page (`'<app>/<page>'`), and the components other areas own: the agent's
-// conversation, each collection's representation, each integration definition's setup and each custom field's renderer.
+// conversation, each model's representation, each integration definition's setup and each custom field's renderer.
 import { mount, unmount, type Component } from 'svelte';
 import type { CustomFieldEntry, RepresentationLoader } from '@norbital-ai/ui';
 import type { BoltConfig } from '../page/bolt.ts';
@@ -93,8 +93,8 @@ export type ShellMountConfig = {
 	sessions?: { readonly [app: string]: Component };
 	messages?: { readonly [key: string]: string };
 	agent?: Component<{ bolt: ShellBolt; request: AgentRequest; onClose: () => void }>;
-	/** Each collection's `+representation.svelte`, loaded on first use; every `RecordShell` (sheet or page) reads it. */
-	representations?: { readonly [collection: string]: RepresentationLoader };
+	/** Each model's `+representation.svelte`, loaded on first use; every `RecordShell` (sheet or page) reads it. */
+	representations?: { readonly [model: string]: RepresentationLoader };
 	/** Named integration setup components, loaded when their authorized instance is opened. */
 	integrationSetups?: { readonly [integration: string]: IntegrationSetupEntry };
 	/** The workspace's custom fields: their shape, and the `+renderer.svelte` that shows and edits them. */

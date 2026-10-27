@@ -1,5 +1,5 @@
 import { Effect, Schema, SchemaTransformation } from 'effect';
-import { HttpServerRequest } from 'effect/unstable/http';
+import { HttpServerRequest } from 'effect/http';
 import { describe, expect, it } from '@effect/vitest';
 import { BoltRoutes, requestBody } from '../src/protocol/http.ts';
 import { ORDER } from '../src/protocol/host.ts';

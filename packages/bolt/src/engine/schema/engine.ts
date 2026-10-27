@@ -88,7 +88,7 @@ const REGISTRY = (): readonly Private[] => [
 		name: 'bolt_history',
 		source: true,
 		rank: 'table',
-		why: "every collection's row history (rule 17), keyed by collection and record: a log over all models, not one; a per-record restore is a `restored` revision naming its source in `restored_from`",
+		why: "every model's row history (rule 17), keyed by model and record: a log over all models, not one; a per-record restore is a `restored` revision naming its source in `restored_from`",
 		sql: [
 			`create table if not exists bolt_history (collection text not null, record uuid not null, revision int not null, at timestamptz not null default now(), actor text, op text not null check (op in ('create', 'update', 'delete')), cause text not null check (cause in ('direct', 'cascade', 'derived', 'seed', 'erased', 'restored')), changes jsonb not null default '{}', restored_from int check ((cause = 'restored') = (restored_from is not null)), request uuid, operation text)`,
 			'alter table bolt_history add column if not exists operation text',

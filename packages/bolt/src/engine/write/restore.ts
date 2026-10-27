@@ -15,7 +15,7 @@ import { decodeValue } from './flatten.ts';
 import type { RestorePreview, RestoreSkip } from '../../protocol/record-contracts.ts';
 import { k, readRows, recordCapabilities, stateField, type WriteEngine } from './act.ts';
 
-export type RestoreTarget = { collection: string; record: string; revision: number };
+export type RestoreTarget = { model: string; record: string; revision: number };
 type Previewed =
 	| { ok: true; preview: RestorePreview }
 	| { ok: false; outcome: Extract<Outcome, { kind: 'refused' }> };
@@ -41,7 +41,7 @@ const Probe = Schema.Struct({ kept: Row, differs: Schema.Array(Schema.String) })
  * internal rollback may count targets its same plan will recreate as present.
  */
 export const restorePreview = Effect.fn('Bolt.restorePreview')(function* (
-	e: Pick<WriteEngine, 'manifest' | 'db'>,
+	e: Pick<WriteEngine, 'manifest' | 'db' | 'guest' | 'bridge'>,
 	target: RestoreTarget,
 	authority: Authority | null,
 	bindings: Bindings,
@@ -49,10 +49,10 @@ export const restorePreview = Effect.fn('Bolt.restorePreview')(function* (
 ): Effect.fn.Return<Previewed, EngineError> {
 	const m = e.manifest,
 		cat = catalogOf(m),
-		{ collection, record: id, revision } = target,
-		c = cat.collections.get(collection);
+		{ model, record: id, revision } = target,
+		c = cat.exposures.get(model);
 	const gone = refused('notFound', 'Not found or no access.');
-	if (c === undefined || m.models[collection] === undefined || !UUID.test(id)) return gone;
+	if (c === undefined || m.models[model] === undefined || !UUID.test(id)) return gone;
 	const caller =
 		authority === null ? ({ as: 'workspace' } as const) : ({ as: 'caller', authority } as const);
 	const getOf = (col: string, i: string) =>
@@ -71,15 +71,15 @@ export const restorePreview = Effect.fn('Bolt.restorePreview')(function* (
 			Effect.flatMap((ir) => reads.run([ir], caller, bindings)),
 			Effect.map(asRow)
 		);
-	const getIR = yield* getOf(collection, id);
-	const live = yield* readable(collection, id);
+	const getIR = yield* getOf(model, id);
+	const live = yield* readable(model, id);
 	if (live === null) return gone;
 	const caps =
 		authority === null
 			? null
 			: yield* recordCapabilities(
-					{ manifest: m, db: e.db },
-					collection,
+					{ ...e, manifest: m },
+					model,
 					id,
 					authority,
 					bindings,
@@ -97,14 +97,14 @@ export const restorePreview = Effect.fn('Bolt.restorePreview')(function* (
 		};
 	const liveRevision =
 		caps?.revision ??
-		Number((yield* readRows(e.db, cat, [[collection, id]])).get(k(collection, id))?.['revision']);
+		Number((yield* readRows(e.db, cat, [[model, id]])).get(k(model, id))?.['revision']);
 	if (!Number.isSafeInteger(revision) || revision < 1 || revision >= liveRevision)
 		return refused('invalidInput', `Revision ${revision} is not a past revision of this record.`);
 	const history = (reader: { as: 'workspace' } | typeof caller) =>
 		readHistory(
 			e.db,
 			m,
-			{ kind: 'history', collection, id, at: { _tag: 'Revision', revision }, full: true },
+			{ kind: 'history', model, id, at: { _tag: 'Revision', revision }, full: true },
 			reader,
 			bindings
 		);
@@ -117,7 +117,7 @@ export const restorePreview = Effect.fn('Bolt.restorePreview')(function* (
 			`Revision ${revision} cannot be rebuilt from this record's history.`
 		);
 	const past = Object.fromEntries(Object.entries(raw).map(([f, v]) => [f, stored(v)]));
-	const model = c.model.name;
+	const table = c.model.name;
 	// the stored values that still cast to their column (a jsonb column takes any value), and those that differ from live
 	const probe = yield* e.db.one(Probe, {
 		text: `WITH e AS (SELECT e.k, e.v FROM jsonb_each($1::jsonb) e(k, v)
@@ -127,8 +127,8 @@ export const restorePreview = Effect.fn('Bolt.restorePreview')(function* (
 kept AS (SELECT coalesce(jsonb_object_agg(k, v), '{}'::jsonb) AS j FROM e)
 SELECT kept.j AS kept, (SELECT coalesce(jsonb_agg(d.key), '[]'::jsonb) FROM jsonb_each(to_jsonb(jsonb_populate_record(t, kept.j))) d
 	WHERE to_jsonb(t) -> d.key IS DISTINCT FROM d.value) AS differs
-FROM kept, ${q(model)} t WHERE t.id::text = $3`,
-		params: [JSON.stringify(past), q(model), id]
+FROM kept, ${q(table)} t WHERE t.id::text = $3`,
+		params: [JSON.stringify(past), q(table), id]
 	});
 	if (Option.isNone(probe)) return gone;
 	const { kept, differs } = probe.value;
@@ -139,7 +139,7 @@ FROM kept, ${q(model)} t WHERE t.id::text = $3`,
 			e.db.read(
 				statements.map((s) => {
 					const params = [...s.params, JSON.stringify(kept), id];
-					const cte = `${q(PAST)} AS (SELECT (jsonb_populate_record(t, $${params.length - 1}::jsonb)).* FROM ${q(model)} t WHERE t.id::text = $${params.length}::text)`;
+					const cte = `${q(PAST)} AS (SELECT (jsonb_populate_record(t, $${params.length - 1}::jsonb)).* FROM ${q(table)} t WHERE t.id::text = $${params.length}::text)`;
 					const text = s.text.trimStart();
 					return {
 						text: `WITH ${cte}${text.startsWith('WITH ') ? `, ${text.slice(5)}` : ` ${text}`}`,
@@ -152,7 +152,7 @@ FROM kept, ${q(model)} t WHERE t.id::text = $3`,
 		yield* readEngine({
 			manifest: m,
 			db: prospective,
-			querySources: { sources: new Map([[model, PAST]]) }
+			querySources: { sources: new Map([[table, PAST]]) }
 		}).run([getIR], caller, bindings)
 	);
 	if (then === null) return refused('notFound', `Revision ${revision} is not readable to you.`);
@@ -167,7 +167,7 @@ FROM kept, ${q(model)} t WHERE t.id::text = $3`,
 				current: null,
 				restored: masked(seen[key]) ? { $masked: true } : value
 			});
-	const state = stateField(m, collection);
+	const state = stateField(m, model);
 	for (const [name, f] of c.model.fields) {
 		if (SYSTEM.has(name) || f.computed || f.derived || name.includes('.')) continue;
 		const cols = f.arms === undefined ? [f.column] : f.arms.map((arm) => `${f.column}__${arm}`);
@@ -191,7 +191,7 @@ FROM kept, ${q(model)} t WHERE t.id::text = $3`,
 			skip('masked');
 			continue;
 		}
-		if (decodeValue(f, restored, m.models[collection]?.fields[name]) !== null) {
+		if (decodeValue(f, restored, m.models[model]?.fields[name]) !== null) {
 			skip('definitionChanged');
 			continue;
 		}
@@ -238,9 +238,9 @@ FROM kept, ${q(model)} t WHERE t.id::text = $3`,
 				typeof restored === 'string'
 					? [c.model.one.get(name)!.targets[0]!, restored]
 					: Predicate.isObject(restored) &&
-						  typeof restored['collection'] === 'string' &&
+						  typeof restored['model'] === 'string' &&
 						  typeof restored['id'] === 'string'
-						? [restored['collection'], restored['id']]
+						? [restored['model'], restored['id']]
 						: null;
 			if (
 				ref === null ||
@@ -255,13 +255,13 @@ FROM kept, ${q(model)} t WHERE t.id::text = $3`,
 	}
 	return {
 		ok: true,
-		preview: { collection, record: id, revision, live: liveRevision, changes, skipped }
+		preview: { model, record: id, revision, live: liveRevision, changes, skipped }
 	};
 });
 
 /** Restores the record's own fields as one ordinary update against the observed live revision (rule 25). */
 export const restoreRecord = Effect.fn('Bolt.restoreRecord')(function* (
-	e: Pick<WriteEngine, 'manifest' | 'db'>,
+	e: Pick<WriteEngine, 'manifest' | 'db' | 'guest' | 'bridge'>,
 	write: (request: ActRequest) => Effect.Effect<ActResult, EngineError>,
 	target: RestoreTarget,
 	request: Pick<
@@ -282,13 +282,15 @@ export const restoreRecord = Effect.fn('Bolt.restoreRecord')(function* (
 		};
 	return yield* write({
 		...request,
-		collection: target.collection,
+		model: target.model,
 		verb: 'update',
 		mode: { _tag: 'Direct' },
-		input: {
-			target: target.record,
-			set: Object.fromEntries(preview.changes.map((change) => [change.field, change.restored]))
-		},
+		input: [
+			{
+				target: target.record,
+				set: Object.fromEntries(preview.changes.map((change) => [change.field, change.restored]))
+			}
+		],
 		observed: request.observed ?? { [target.record]: preview.live },
 		restored: { id: target.record, revision: target.revision }
 	});

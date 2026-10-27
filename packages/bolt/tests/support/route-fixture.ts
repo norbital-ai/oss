@@ -1,7 +1,7 @@
 // Inline fixture manifests exercise the real routes without pretending to augment the generated Names index.
 import { Context, Effect, Layer, Option, Schema } from 'effect';
 import * as NodeCrypto from '@effect/platform-node/NodeCrypto';
-import { HttpServerRequest, HttpServerResponse } from 'effect/unstable/http';
+import { HttpServerRequest, HttpServerResponse } from 'effect/http';
 import { Live } from '../../src/engine/services.ts';
 import type { Authority } from '../../src/engine/contracts.ts';
 import { ActRefused, ReadFailed } from '../../src/decl/errors.ts';

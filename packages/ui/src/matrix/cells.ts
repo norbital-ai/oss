@@ -1,4 +1,4 @@
-import type { Row } from '../collection/types.js';
+import type { Row } from '../model/types.js';
 import { isRow } from '../read/results.js';
 import { valueAt } from '../cell/value.js';
 export const cellKey = (

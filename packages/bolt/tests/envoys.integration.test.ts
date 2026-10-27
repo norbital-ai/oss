@@ -17,6 +17,7 @@ import type { Json } from '../src/decl/values.ts';
 import type { AiResponse, AiRequest } from '../src/engine/contracts.ts';
 import type { EngineManifest } from '../src/engine/manifest.ts';
 import { NOTICES } from '../src/engine/envoys/index.ts';
+import { FIXED } from '../src/engine/agent/index.ts';
 import { applySettings } from '../src/shell/settings/data.ts';
 import { TestWorkspace, type Kit, respondSystem1 } from '../src/test/index.ts'; // hook:decisions
 
@@ -35,11 +36,11 @@ const manifest = {
 		}
 	},
 	relationships: {},
-	collections: {
+	exposures: {
 		jobs: {
-			read: { fields: 'all' },
-			create: { input: { columns: ['title', 'status'] } },
-			update: { input: { columns: ['status'] } }
+			read: { jobs: { fields: 'all' } },
+			create: { columns: { jobs: ['title', 'status'] } },
+			update: { columns: { jobs: ['status'] } }
 		}
 	},
 	integrations: {},
@@ -98,7 +99,9 @@ const manifest = {
  */
 function scriptedAi(sent: (instance: string) => string[]) {
 	const requests: AiRequest[] = [],
-		sentBeforeEnd: string[][] = [];
+		sentBeforeEnd: string[][] = [],
+		/** Steps still to answer before the provider breaks outright (a defect, not a typed failure); 0 never breaks. */
+		breaks = { after: 0 };
 	let n = 0;
 	const text = (c: Json) =>
 		typeof c === 'string' ? c : String(Predicate.isObject(c) ? (c['text'] ?? '') : '');
@@ -112,6 +115,7 @@ function scriptedAi(sent: (instance: string) => string[]) {
 			Stream.fromEffect(
 				Effect.sync<AiResponse>(() => {
 					requests.push(request);
+					if (breaks.after > 0 && --breaks.after === 0) throw new Error('the provider broke');
 					const usage = { input: 10, output: 5 };
 					const last = present(
 						request.messages.findLast(
@@ -123,6 +127,18 @@ function scriptedAi(sent: (instance: string) => string[]) {
 						sentBeforeEnd.push(sent('field_wa'));
 						return { content: 'Done.', toolCalls: [], finish: 'stop', usage };
 					}
+					// "refer to the above": open every file not addressed to it that the transcript lists, by its id
+					if (text(last.content).includes('refer to the above'))
+						return {
+							content: '',
+							toolCalls: [
+								...JSON.stringify(request.messages).matchAll(
+									/id:(\S+) from [^\]]* \(not addressed to you\)/g
+								)
+							].map((x) => ({ id: `c${++n}`, name: 'read_file', input: { id: present(x[1]) } })),
+							finish: 'tool',
+							usage
+						};
 					// the command is its own line of the message, after the envelope's header (never a word inside the header)
 					const close = /^(?:\[[^\]\n]*\] )?close (\S+)$/m.exec(text(last.content));
 					if (close !== null)
@@ -134,7 +150,7 @@ function scriptedAi(sent: (instance: string) => string[]) {
 									name: 'act',
 									input: {
 										callable: 'jobs.update',
-										input: { target: present(close[1]), set: { status: 'done' } }
+										input: [{ target: present(close[1]), set: { status: 'done' } }]
 									}
 								}
 							],
@@ -145,7 +161,7 @@ function scriptedAi(sent: (instance: string) => string[]) {
 				})
 			).pipe(Stream.map((response) => ({ _tag: 'Response' as const, response })))
 	});
-	return { requests, sentBeforeEnd, layer };
+	return { requests, sentBeforeEnd, breaks, layer };
 }
 
 const ADA = 'u-ada',
@@ -181,7 +197,7 @@ const setup = Effect.gen(function* () {
 		Effect.gen(function* () {
 			const o = (yield* actReply(route, t.as(t.admin).authority, {
 				callable: 'jobs.create',
-				input: { title: 'Kismis', status: 'open' },
+				input: [{ title: 'Kismis', status: 'open' }],
 				issuedAt: t.clock.now()
 			})).outcome;
 			if (o.kind !== 'committed') throw new Error(o.kind);
@@ -189,29 +205,41 @@ const setup = Effect.gen(function* () {
 		});
 	const status = (id: string) =>
 		qReply(route, t.as(t.admin).authority, {
-			reads: [{ m: 'query', a: ['jobs', { id: id }] }]
+			reads: [{ m: 'query', a: [{ jobs: { where: { id: { eq: id } }, fields: ['status'] } }] }]
 		}).pipe(
 			Effect.flatMap((reply) =>
-				Schema.decodeUnknownEffect(Schema.Struct({ status: Schema.String }))(reply.answers[0])
+				Schema.decodeUnknownEffect(
+					Schema.Struct({
+						jobs: Schema.Struct({ rows: Schema.Tuple([Schema.Struct({ status: Schema.String })]) })
+					})
+				)(reply.answers[0])
 			),
-			Effect.map((row) => row.status)
+			Effect.map((answer) => answer.jobs.rows[0].status)
 		);
 	let seq = 0;
+	/** A chat message is held for the sender's pause even with triage off: the pause passes, and the held burst is admitted. */
+	const paused = () =>
+		Effect.gen(function* () {
+			t.clock.advance('2s');
+			yield* t.runDue();
+		});
 	const say = (
 		instance: 'field_wa' | 'sales_tg',
 		from: string,
 		text: string,
 		over: { [k: string]: Json } = {}
 	) =>
-		t.receive(instance, {
-			id: `m${++seq}`,
-			thread: from,
-			sentAt: t.clock.now(),
-			from: { handle: from, name: null },
-			text,
-			attachments: [],
-			...over
-		});
+		t
+			.receive(instance, {
+				id: `m${++seq}`,
+				thread: from,
+				sentAt: t.clock.now(),
+				from: { handle: from, name: null },
+				text,
+				attachments: [],
+				...over
+			})
+			.pipe(Effect.andThen(paused()));
 	const rows = (text: string) =>
 		t.db
 			.read([
@@ -233,7 +261,7 @@ const setup = Effect.gen(function* () {
 			(s) => Schema.decodeUnknownSync(Schema.Struct({ text: Schema.String }))(s.message).text
 		);
 
-	return { t, context, ai, job, status, say, rows, sent, texts };
+	return { t, context, ai, job, status, say, paused, rows, sent, texts };
 });
 
 describe('direct messages (rule 57)', () => {
@@ -268,10 +296,18 @@ describe('direct messages (rule 57)', () => {
 		() =>
 			Effect.scoped(
 				Effect.gen(function* () {
-					const { job, status, say, rows } = yield* setup;
+					const { t, job, status, say, rows } = yield* setup;
 					const id = yield* job();
 					yield* say('field_wa', '6598765432@s.whatsapp.net', `close ${id}`);
 					expect(yield* status(id)).toBe('done');
+					// held for the pause with nothing to decide: the chat shows typing from arrival through the turn, and the
+					// reply clears it, so no `paused` follows
+					expect(t.fakes.links.typed).toContainEqual({
+						instance: 'field_wa',
+						to: '6598765432@s.whatsapp.net',
+						on: true
+					});
+					expect(t.fakes.links.typed.some((x) => !x.on)).toBe(false);
 					expect(present((yield* rows(`close ${id}`))[0])['as']).toEqual({
 						envoy: {
 							name: 'field_ops',
@@ -508,6 +544,38 @@ describe('groups (rule 60)', () => {
 	);
 
 	it.live(
+		'a message that arrives while the turn runs steers it: queued at once, never held for a decision',
+		() =>
+			Effect.scoped(
+				Effect.gen(function* () {
+					const { t, say, rows } = yield* setup;
+					yield* say('field_wa', '6591234567@s.whatsapp.net', '@bot status', {
+						...group,
+						invocation: 'mention'
+					});
+					yield* t.db.write({
+						text: `UPDATE sys_conversation SET status = 'running' WHERE kind = 'group'`,
+						params: []
+					});
+					// the same chatter that is ambient on an idle group joins a running turn: the next step carries it
+					yield* say('field_wa', '6598765432@s.whatsapp.net', 'and mine?', {
+						...group,
+						invocation: 'ambient'
+					});
+					expect(present((yield* rows('and mine?'))[0])).toMatchObject({
+						addressed: true,
+						role: 'user',
+						state: 'queued'
+					});
+					// nobody was told to stay quiet, so no unaddressed note was written
+					expect(t.fakes.logs.filter((r) => r.event === 'conversation.unaddressed')).toHaveLength(
+						0
+					);
+				})
+			)
+	);
+
+	it.live(
 		'a group mention nobody took records what the provider named, so an unanswered mention is diagnosable',
 		() =>
 			Effect.scoped(
@@ -564,6 +632,178 @@ describe('groups (rule 60)', () => {
 					expect(seen).toContain(`close ${id}`);
 					expect(seen).toContain('Done.');
 					expect(seen).toContain('linked member u-ada');
+				})
+			)
+	);
+
+	it.live(
+		"a group turn that breaks tells its sender and goes idle; the next turn sees the earlier messages, their photos and the sender's own unaddressed video",
+		() =>
+			Effect.scoped(
+				Effect.gen(function* () {
+					const { t, ai, job, paused, sent, texts } = yield* setup;
+					const id = yield* job();
+					let n = 0;
+					const post = (
+						from: string,
+						text: string,
+						invocation: string,
+						file?: { name: string; mime: string }
+					) =>
+						t
+							.receive(
+								'field_wa',
+								{
+									id: `p${++n}`,
+									...group,
+									sentAt: t.clock.now(),
+									from: { handle: from, name: null },
+									text,
+									invocation,
+									attachments: file === undefined ? [] : [{ ...file, bytes: 3, bin: 0 }]
+								},
+								file === undefined ? {} : { bins: [new Uint8Array([1, 2, 3])] }
+							)
+							.pipe(Effect.andThen(paused()));
+					const ada = '6591234567@s.whatsapp.net',
+						jpeg = (name: string) => ({ name, mime: 'image/jpeg' });
+					const stuck = () =>
+						t.db
+							.read([
+								{
+									text: `SELECT c.status, (SELECT count(*)::int FROM sys_message m WHERE m.conversation = c.id AND m.state IN ('streaming', 'running')) AS unfinished
+									FROM sys_conversation c WHERE c.kind = 'group'`,
+									params: []
+								}
+							])
+							.pipe(Effect.map(([r]) => r?.rows[0]));
+					// the refused update is the first step; the provider breaks on the next
+					ai.breaks.after = 2;
+					yield* post(
+						ada,
+						`@Norbius update the system this is for 4 ubi view\nclose ${id}`,
+						'mention',
+						jpeg('unit4.jpg')
+					);
+					expect(yield* stuck()).toEqual({ status: 'idle', unfinished: 0 });
+					expect(texts('field_wa').at(-1)).toBe(FIXED.broke);
+					expect(present(sent('field_wa').at(-1)).message).toMatchObject({ to: '1203@g.us' });
+					yield* post(ada, '@Norbius this is for 5 ubi view', 'mention', jpeg('unit5.jpg'));
+					yield* post(ada, '', 'ambient', { name: 'site.mp4', mime: 'video/mp4' });
+					yield* post('6598765432@s.whatsapp.net', 'lunch?', 'ambient');
+					yield* post(ada, '@Norbius ack when done', 'mention');
+					const last = present(ai.requests.at(-1)).messages,
+						seen = JSON.stringify(last);
+					for (const said of ['4 ubi view', '5 ubi view', 'ack when done'])
+						expect(seen).toContain(said);
+					for (const file of ['unit4.jpg', 'unit5.jpg', 'site.mp4'])
+						expect(seen).toMatch(
+							new RegExp(
+								`attachment seq \\d+ file 0: ${file.replace('.', '\\.')}[^\\]]*\\] file reference`
+							)
+						);
+					// another person's chatter stays out: a line where it stood counts it and says how to read it
+					expect(seen).not.toContain('lunch?');
+					expect(seen).toMatch(
+						/\[1 message not addressed to you; read_messages \{ before: \d+ \} to view\]/
+					);
+				})
+			)
+	);
+
+	it.live(
+		'filtered asides are one append-only line with a file line per file; "refer to the above images" opens them with read_file, a video answers in text, and the next turn keeps the prefix byte-identical',
+		() =>
+			Effect.scoped(
+				Effect.gen(function* () {
+					const { t, ai, paused, texts } = yield* setup;
+					let n = 0;
+					const post = (text: string, invocation: string, file?: { name: string; mime: string }) =>
+						t
+							.receive(
+								'field_wa',
+								{
+									id: `q${++n}`,
+									...group,
+									sentAt: t.clock.now(),
+									from: { handle: '6598765432@s.whatsapp.net', name: 'Cal' },
+									text,
+									invocation,
+									attachments: file === undefined ? [] : [{ ...file, bytes: 3, bin: 0 }]
+								},
+								file === undefined ? {} : { bins: [new Uint8Array([1, 2, 3])] }
+							)
+							.pipe(Effect.andThen(paused()));
+					// another member's photos and clip, filtered as asides before anyone addresses the envoy
+					yield* t
+						.receive('field_wa', {
+							id: 'q0',
+							...group,
+							sentAt: t.clock.now(),
+							from: { handle: '6591234567@s.whatsapp.net', name: 'Ada' },
+							text: 'site visit today',
+							invocation: 'ambient',
+							attachments: []
+						})
+						.pipe(Effect.andThen(paused()));
+					yield* post('', 'ambient', { name: 'crack-1.jpg', mime: 'image/jpeg' });
+					yield* post('', 'ambient', { name: 'crack-2.jpg', mime: 'image/jpeg' });
+					yield* post('walkthrough', 'ambient', { name: 'walk.mp4', mime: 'video/mp4' });
+					expect(ai.requests).toHaveLength(0);
+					yield* t
+						.receive('field_wa', {
+							id: 'q9',
+							...group,
+							sentAt: t.clock.now(),
+							from: { handle: '6591234567@s.whatsapp.net', name: 'Ada' },
+							text: '@Norbius refer to the above images, what is wrong?',
+							invocation: 'mention',
+							attachments: []
+						})
+						.pipe(Effect.andThen(paused()));
+					const first = present(ai.requests[0]),
+						seen = JSON.stringify(first.messages);
+					// the asides are one line where they stood (no text of theirs), and each file they carried has its own line and id
+					expect(seen).not.toContain('walkthrough');
+					expect(seen).toMatch(
+						/\[3 messages not addressed to you; read_messages \{ before: \d+ \} to view\]/
+					);
+					for (const file of [
+						'crack-1.jpg image/jpeg',
+						'crack-2.jpg image/jpeg',
+						'walk.mp4 video/mp4'
+					])
+						expect(seen).toMatch(
+							new RegExp(
+								`\\[file: ${file.replace('.', '\\.')} id:\\S+ from Cal \\(not addressed to you\\)\\]`
+							)
+						);
+					expect(first.system).toContain('read back to it before you answer');
+					// the step after the reads carries both photos; the clip answers in words
+					const second = present(ai.requests[1]);
+					expect(second.files?.map((f) => f.mime)).toEqual(['image/jpeg', 'image/jpeg']);
+					const results = JSON.stringify(second.messages.filter((m) => m.role === 'tool'));
+					expect(results).toContain('the file is attached to your next step');
+					expect(results).toContain(
+						'video attachment — cannot view; ask the sender to describe it or send a photo'
+					);
+					expect(texts('field_wa').at(-1)).toBe('Done.');
+					// the next turn's transcript begins with the same bytes: the lines are append-only, never recomputed
+					yield* t
+						.receive('field_wa', {
+							id: 'q10',
+							...group,
+							sentAt: t.clock.now(),
+							from: { handle: '6591234567@s.whatsapp.net', name: 'Ada' },
+							text: '@Norbius thanks',
+							invocation: 'mention',
+							attachments: []
+						})
+						.pipe(Effect.andThen(paused()));
+					const prefix = first.messages.slice(0, -1),
+						next = present(ai.requests.at(-1)).messages;
+					expect(next.length).toBeGreaterThan(first.messages.length);
+					expect(JSON.stringify(next.slice(0, prefix.length))).toBe(JSON.stringify(prefix));
 				})
 			)
 	);
@@ -634,5 +874,57 @@ describe('admission limits and the human in the loop', () => {
 			),
 		// 101 sequential admissions: the per-test default cannot hold this volume beside other integration workers.
 		60_000
+	);
+});
+
+describe('tenant-created envoys', () => {
+	it.live('a created envoy links a channel and answers through it', () =>
+		Effect.scoped(
+			Effect.gen(function* () {
+				const { t, ai, rows, paused } = yield* setup;
+				const created = yield* t.as(t.admin).act('sys_envoy.create', [
+					{
+						name: 'Runtime desk',
+						audience: 'private',
+						policies: ['desk'],
+						task: 'Answer the runtime line.',
+						group_messages: 'mention_or_reply',
+						delegation: 'disabled',
+						dm: 'union'
+					}
+				]);
+				if (created.kind !== 'committed') throw new Error(created.kind);
+				const envoy = present(created.records[0]).id;
+				const line = yield* t.as(t.admin).act('sys_integration.create', [
+					{
+						integration: 'whatsapp',
+						name: 'Runtime line',
+						envoy
+					}
+				]);
+				expect(line.kind).toBe('committed');
+				const instance = present(
+					(yield* t.db.read([
+						{ text: 'SELECT id FROM sys_integration WHERE name = $1', params: ['Runtime line'] }
+					]))[0]
+				).rows[0]?.['id'];
+				expect(typeof instance).toBe('string');
+				yield* t.receive(String(instance), {
+					id: 'runtime-m1',
+					thread: '6591234567:14@s.whatsapp.net',
+					sentAt: t.clock.now(),
+					from: { handle: '6591234567:14@s.whatsapp.net', name: null },
+					text: 'hello runtime',
+					attachments: []
+				});
+				yield* paused();
+				expect(ai.requests).toHaveLength(1);
+				// the tenant row's task and name reach the turn, not only admission
+				expect(ai.requests[0]?.system).toContain('Answer the runtime line.');
+				expect((yield* rows('hello runtime'))[0]).toMatchObject({
+					as: { envoy: { name: envoy, member: ADA, dm: true } }
+				});
+			})
+		)
 	);
 });

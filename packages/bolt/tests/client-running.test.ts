@@ -14,7 +14,7 @@ it.effect('a running reply is the act answer, carrying its run id', () =>
 			locale: 'en',
 			fetch
 		});
-		expect(yield* bolt.act('jobs.create', { title: 'slow' })).toEqual({
+		expect(yield* bolt.act('jobs.create', [{ title: 'slow' }])).toEqual({
 			kind: 'running',
 			run: 'r1'
 		});

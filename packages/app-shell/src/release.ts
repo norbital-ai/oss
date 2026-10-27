@@ -8,7 +8,7 @@ export type Platform = 'ios' | 'android';
 export const PLATFORMS: ReadonlyArray<Platform> = ['ios', 'android'];
 
 export const env = (name: string) =>
-	Config.option(Config.string(name)).pipe(Effect.map(Option.getOrUndefined));
+	Config.option(Config.String(name)).pipe(Effect.map(Option.getOrUndefined));
 
 /** A store build serves its host (and its workspace, when pinned) over HTTPS; the development exception is for `run` only. */
 const refuseCleartext = (config: AppConfig) => {

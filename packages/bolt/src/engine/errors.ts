@@ -38,7 +38,7 @@ const isDbProps = (
 export class Conflict extends Schema.TaggedError<Conflict>()('Conflict', {
 	records: Schema.Array(
 		Schema.Struct({
-			collection: Schema.String,
+			model: Schema.String,
 			id: Schema.String,
 			fields: Schema.Array(Schema.String)
 		})

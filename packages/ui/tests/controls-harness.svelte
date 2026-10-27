@@ -3,7 +3,7 @@
 	import Field from '../src/form/field.svelte';
 	import Fieldset from '../src/form/fieldset.svelte';
 	import Form from '../src/form/form.svelte';
-	import type { Row } from '../src/collection/types.js';
+	import type { Row } from '../src/model/types.js';
 	import Input from '../src/primitives/input/input.svelte';
 
 	let {

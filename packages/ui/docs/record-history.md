@@ -4,7 +4,8 @@ Every stored `RecordShell` provides one History popover containing the primary r
 scrubber and its chronological change timeline. Picking a primary revision shows that record read-only;
 End returns to its current revision. Related-record changes remain individually identified in the timeline.
 
-Use `history` to include related collections through ordinary scoped read queries:
+Use `history` to include related models: each source names its model and the `where` that selects its records
+(read through the viewer's ordinary scoped read request, up to 10,000 records):
 
 ```svelte
 <RecordShell
@@ -12,8 +13,8 @@ Use `history` to include related collections through ordinary scoped read querie
 	id={projectId}
 	history={{
 		sources: [
-			{ of: 'trials', query: { where: { project_id: { eq: projectId } }, all: true } },
-			{ of: 'submissions', query: { where: { project_id: { eq: projectId } }, all: true } }
+			{ of: 'trials', where: { project_id: { eq: projectId } } },
+			{ of: 'submissions', where: { project_id: { eq: projectId } } }
 		]
 	}}
 />

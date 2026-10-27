@@ -19,7 +19,7 @@ import {
 import { randomBytes, randomUUID } from 'node:crypto';
 import { flushSync, type Component } from 'svelte';
 import { afterEach, describe, expect, it, vi } from '@effect/vitest';
-import { HttpServerRequest, HttpServerResponse } from 'effect/unstable/http';
+import { HttpServerRequest, HttpServerResponse } from 'effect/http';
 import type { EventSourceLike } from '../src/page/stream.ts';
 import { decodeManifest } from '../src/engine/manifest.ts';
 import { credentials } from '../src/engine/integrations/credentials.ts';
@@ -62,8 +62,8 @@ const manifest = Result.getOrThrow(
 			}
 		},
 		relationships: {},
-		collections: {
-			docs: { read: { fields: 'all' }, create: { input: { columns: ['title', 'scan'] } } }
+		exposures: {
+			docs: { read: { docs: { fields: 'all' } }, create: { columns: { docs: ['title', 'scan'] } } }
 		},
 		policies: {
 			clerk: {
@@ -350,7 +350,7 @@ describe('the shell renders a page (§5.10)', () => {
 	);
 
 	it.live(
-		'a generated form uploads a file to <collection>.<field>, and its submit waits for the upload',
+		'a generated form uploads a file to <model>.<field>, and its submit waits for the upload',
 		() =>
 			Effect.scoped(
 				Effect.gen(function* () {
@@ -448,7 +448,7 @@ describe("the record sheet keeps the opening page's create scope", () => {
 	);
 
 	it.live(
-		"the page's own AppShell carries its scope when no view of the collection is on screen",
+		"the page's own AppShell carries its scope when no view of the model is on screen",
 		() =>
 			Effect.scoped(
 				Effect.gen(function* () {
@@ -544,9 +544,9 @@ describe('a record sheet closes through its ?record= entry', () => {
 	);
 });
 
-describe("system collections render in ui's Table (Settings, Automations, Inbox)", () => {
+describe("system models render in ui's Table (Settings, Automations, Inbox)", () => {
 	const approvalGuest = program(`export default { policy: { clerk: { grants: { docs: {
-		create: { approval: (_, flow) => flow.step('Review', {teams:['reviewers']}) }
+		create: { check: function* (_, ctx) { return ctx.approve((flow) => flow.step('Review', {teams:['reviewers']})); } }
 	} } } } };`);
 	const button = (root: ParentNode, text: string) =>
 		[...root.querySelectorAll<HTMLButtonElement>('button')].find(
@@ -569,7 +569,7 @@ describe("system collections render in ui's Table (Settings, Automations, Inbox)
 							clerk: {
 								description: 'Clerk',
 								capabilities: { apps: ['desk'] },
-								grants: { docs: { read: true, create: { approval: true } } }
+								grants: { docs: { read: true, create: { check: true } } }
 							}
 						}
 					})
@@ -584,11 +584,11 @@ describe("system collections render in ui's Table (Settings, Automations, Inbox)
 				const caller = yield* new Authorities(source, 'inbox-ui').member(t.db, member.id);
 				if (caller === null) throw new Error('Missing proposal requestor.');
 				const { target } = yield* open(context, '/inbox', {}, undefined, undefined, true);
-				yield* until(() => target.textContent?.includes('Nothing waits on you.') === true);
+				yield* until(() => target.textContent?.includes('No approvals yet') === true);
 				const route = yield* routeFixture(context);
 				const outcome = (yield* actReply(route, caller, {
 					callable: 'docs.create',
-					input: { title: 'A prospective document' },
+					input: [{ title: 'A prospective document' }],
 					issuedAt: t.clock.now()
 				})).outcome;
 				if (outcome.kind !== 'pendingApproval') throw new Error('Expected a proposal.');
@@ -606,7 +606,7 @@ describe("system collections render in ui's Table (Settings, Automations, Inbox)
 						now: t.clock.now()
 					})
 				).toMatchObject({ kind: 'decided' });
-				yield* until(() => target.textContent?.includes('Nothing waits on you.') === true);
+				yield* until(() => target.textContent?.includes('No approvals yet') === true);
 				expect(button(target, 'Approve')).toBeUndefined();
 				expect((yield* t.db.read([{ text: 'SELECT id FROM docs', params: [] }]))[0]?.rows).toEqual(
 					[]
@@ -632,7 +632,7 @@ describe("system collections render in ui's Table (Settings, Automations, Inbox)
 									description: 'Clerk',
 									capabilities: { apps: ['desk'] },
 									grants: {
-										docs: { read: true, create: { approval: true } }
+										docs: { read: true, create: { check: true } }
 									}
 								}
 							}
@@ -656,7 +656,7 @@ describe("system collections render in ui's Table (Settings, Automations, Inbox)
 					const route = yield* routeFixture(context);
 					const outcome = (yield* actReply(route, caller, {
 						callable: 'docs.create',
-						input: { title: 'A prospective document' },
+						input: [{ title: 'A prospective document' }],
 						issuedAt: t.clock.now()
 					})).outcome;
 					if (outcome.kind !== 'pendingApproval') throw new Error('Expected a proposal.');
@@ -823,6 +823,12 @@ describe("system collections render in ui's Table (Settings, Automations, Inbox)
 				});
 				const t = Context.get(context, TestWorkspace);
 				const { target } = yield* open(context, '/settings/integrations', {});
+				const tab = (name: string) =>
+					[...target.querySelectorAll<HTMLElement>('[role=tab]')].find(
+						(x) => x.textContent?.trim() === name
+					);
+				yield* until(() => tab('API keys') !== undefined);
+				press(present(tab('API keys')));
 				const keys = () =>
 					[...target.querySelectorAll<HTMLElement>('[data-view=table]')].find((table) =>
 						table.textContent?.includes('API keys')
@@ -866,88 +872,6 @@ describe("system collections render in ui's Table (Settings, Automations, Inbox)
 					]))[0]
 				).rows;
 				expect(key).toMatchObject({ name: 'CI', team: 'api', revoked_at: null });
-			})
-		)
-	);
-
-	it.live('Settings creates an integration instance through its native collection form', () =>
-		Effect.scoped(
-			Effect.gen(function* () {
-				vi.stubGlobal(
-					'EventSource',
-					class {
-						onmessage = null;
-						onerror = null;
-						close() {}
-					}
-				);
-				const context = yield* workspace({
-					manifest: {
-						...manifest,
-						integrations: {
-							erp: {
-								description: 'ERP endpoint',
-								driver: 'http',
-								http: { baseUrl: 'https://erp.example' }
-							}
-						}
-					}
-				});
-				const t = Context.get(context, TestWorkspace);
-				const { target } = yield* open(context, '/settings/integrations', {});
-				yield* until(() => target.querySelector('[data-integration-connections]') !== null);
-				const connections = present(
-					target.querySelector<HTMLElement>('[data-integration-connections]')
-				);
-				expect(connections.querySelector('[data-view=table]')).toBeNull();
-				const create = button(connections, 'New connection');
-				if (create === undefined) throw new Error('Missing instance creation action');
-				create.click();
-				yield* until(
-					() =>
-						document.body.querySelector(
-							'[role=dialog] [role=combobox][aria-label="Integration definition"]'
-						) !== null
-				);
-				const definition = document.body.querySelector<HTMLElement>(
-					'[role=dialog] [role=combobox][aria-label="Integration definition"]'
-				);
-				if (definition === null) throw new Error('Missing definition selector');
-				press(definition);
-				yield* until(
-					() => document.body.querySelector('[role=option][data-value=erp] button') !== null
-				);
-				const choice = document.body.querySelector<HTMLButtonElement>(
-					'[role=option][data-value=erp] button'
-				);
-				if (choice === null) throw new Error('Missing source definition');
-				press(choice);
-				const dialog = document.body.querySelector('[role=dialog]');
-				const name = dialog?.querySelector('[data-field=name] input');
-				if (!(name instanceof HTMLInputElement)) throw new Error('Missing native name field');
-				name.value = 'ERP account';
-				name.dispatchEvent(new Event('input', { bubbles: true }));
-				const form = dialog?.querySelector<HTMLFormElement>('form');
-				if (form === null || form === undefined) throw new Error('Missing native creation form');
-				form.requestSubmit();
-				yield* until(() =>
-					Effect.gen(function* () {
-						return (
-							(yield* t.db.read([
-								{ text: 'SELECT name FROM sys_integration WHERE integration = $1', params: ['erp'] }
-							]))[0]?.rows.length === 1
-						);
-					})
-				);
-				const [result] = yield* t.db.read([
-					{
-						text: 'SELECT name, integration, configuration, named, owner FROM sys_integration WHERE integration = $1',
-						params: ['erp']
-					}
-				]);
-				expect(result?.rows).toEqual([
-					{ name: 'ERP account', integration: 'erp', configuration: {}, named: false, owner: null }
-				]);
 			})
 		)
 	);
@@ -1034,33 +958,24 @@ describe("system collections render in ui's Table (Settings, Automations, Inbox)
 					text: `INSERT INTO sys_user (id, email, name, kind) VALUES ('u2', 'bo@x.test', 'Bo', 'staff')`,
 					params: []
 				});
-				const erp = yield* t.as(t.admin).act('sys_integration.create', {
+				const erp = yield* t.as(t.admin).act('sys_integration.create', [{
 					integration: 'erp',
 					name: 'Ledger',
 					configuration: { region: 'sg' }
+				}]);
+				const { sys_user } = yield* t.storedQuery({
+					sys_user: { where: { email: { eq: 'bo@x.test' } } }
 				});
-				const user = yield* t.storedQuery('sys_user', {
-					where: { email: { eq: 'bo@x.test' } },
-					all: true
-				});
-				const owner = present(user.rows[0]).id;
-				const phone = yield* t.as(t.admin).act('sys_integration.create', {
+				const owner = present(sys_user.rows[0]).id;
+				const phone = yield* t.as(t.admin).act('sys_integration.create', [{
 					integration: 'whatsapp',
 					name: 'Bo’s phone',
 					owner
-				});
+				}]);
 				if (erp.kind !== 'committed' || phone.kind !== 'committed')
 					throw new Error('instances were not created');
-				return { t, context, manager, erp: present(erp.records[0]).id };
+				return { t, context, manager };
 			});
-		const instances = (target: HTMLElement) =>
-			target.querySelector<HTMLElement>('[data-integration-connections] [data-view=table]') ??
-			undefined;
-		// happy-dom lays out no rows of the virtual wide table, so the row is its card
-		const row = (target: HTMLElement, name: string) =>
-			[...(instances(target)?.querySelectorAll<HTMLElement>('[data-row-card]') ?? [])].find((x) =>
-				x.textContent?.includes(name)
-			);
 		const sheet = () => [...document.body.querySelectorAll<HTMLElement>('[role=dialog]')].at(-1);
 		const fields = () => sheet()?.querySelector('[data-field=name]')?.closest('form') ?? undefined;
 		const tab = (name: string) =>
@@ -1076,116 +991,6 @@ describe("system collections render in ui's Table (Settings, Automations, Inbox)
 					}
 				])
 				.pipe(Effect.map((results) => present(results[0]).rows[0]));
-
-		it.live(
-			'lists each connection once and manages a named agent channel through the same sheet',
-			() =>
-				Effect.scoped(
-					Effect.gen(function* () {
-						const { t, context, manager } = yield* boot();
-						const { target } = yield* open(
-							context,
-							'/settings/integrations',
-							{},
-							undefined,
-							undefined,
-							true,
-							false,
-							manager
-						);
-						yield* until(
-							() =>
-								row(target, 'Bo’s phone') !== undefined &&
-								row(target, 'desk') !== undefined &&
-								row(target, 'Ledger') !== undefined
-						);
-						expect(present(row(target, 'Bo’s phone')).textContent).toContain('Bo'); // used by: the member whose own account it is
-						expect(present(row(target, 'desk')).textContent).toContain('Not paired');
-						expect(present(row(target, 'Ledger')).textContent).toContain('erp'); // each instance names its definition
-						present(row(target, 'desk')).click();
-						// a named connection is the source's: no Delete
-						yield* until(
-							() =>
-								sheet()?.querySelector('[data-setup-form]') !== null &&
-								sheet()?.querySelector('[data-setup-form]') !== undefined
-						);
-						expect(button(present(sheet()), 'Delete')).toBeUndefined();
-						expect(present(sheet()).textContent).toContain('Fake WhatsApp');
-						const key = present(
-							present(sheet()).querySelector<HTMLInputElement>('[data-setup-form] input[name=key]')
-						);
-						expect(key.type).toBe('password');
-						key.value = 'k1';
-						key.dispatchEvent(new Event('input', { bubbles: true }));
-						present(
-							present(sheet()).querySelector<HTMLFormElement>('[data-setup-form]')
-						).requestSubmit();
-						yield* until(
-							() =>
-								sheet()?.querySelector('[data-connection-state]')?.textContent === 'Connected as k1'
-						);
-						expect(yield* instance(t, 'desk')).toMatchObject({
-							status: { state: 'connected', account: 'k1' }
-						});
-						expect(button(present(sheet()), 'Test connection')).toBeUndefined(); // the provider offers no test message
-						press(present(tab('Configuration')));
-						yield* until(
-							() =>
-								sheet()?.querySelector('[role=combobox][aria-label=Envoy]') !== null &&
-								sheet()?.querySelector('[role=combobox][aria-label=Envoy]') !== undefined
-						);
-						press(
-							present(
-								present(sheet()).querySelector<HTMLElement>('[role=combobox][aria-label=Envoy]')
-							)
-						);
-						yield* until(
-							() => document.body.querySelector('[role=option][data-value=service] button') !== null
-						);
-						press(
-							present(
-								document.body.querySelector<HTMLButtonElement>(
-									'[role=option][data-value=service] button'
-								)
-							)
-						);
-						present(fields()).requestSubmit();
-						yield* until(() =>
-							Effect.gen(function* () {
-								return (yield* instance(t, 'desk'))?.['envoy'] === 'service';
-							})
-						);
-						yield* until(() => row(target, 'desk') === undefined);
-						const channels = present(target.querySelector<HTMLElement>('[data-envoys]'));
-						expect(channels.textContent).toContain('Agent channels');
-						expect(channels.textContent).toContain('Service desk');
-						expect(instances(target)?.textContent).toContain('Other connections');
-						expect(channels.querySelectorAll('[data-connector=whatsapp]')).toHaveLength(1);
-						const backup = yield* t.as(t.admin).act('sys_integration.create', {
-							integration: 'whatsapp',
-							name: 'Backup line',
-							envoy: 'service'
-						});
-						if (backup.kind !== 'committed') throw new Error('Backup channel was not created.');
-						yield* until(() => channels.querySelectorAll('[data-envoy-channel]').length === 2);
-						expect(channels.textContent).toContain('Backup line');
-						expect(channels.querySelectorAll('[data-connector=whatsapp]')).toHaveLength(2);
-						expect(row(target, 'Backup line')).toBeUndefined();
-						press(present(present(sheet()).querySelector<HTMLElement>('[data-sheet-close]')));
-						yield* until(() => sheet() === undefined);
-						press(
-							present(
-								channels.querySelector<HTMLElement>('[data-envoy-channel=desk] [data-settings]')
-							)
-						);
-						yield* until(() => tab('Configuration') !== undefined && tab('Messages') !== undefined);
-						expect(present(sheet()).textContent).toContain('desk');
-						expect(button(present(sheet()), 'Delete')).toBeUndefined();
-						// the channel's card owns its connection: the sheet does not draw a second one
-						expect(tab('Connection')).toBeUndefined();
-					})
-				)
-		);
 
 		it.live(
 			"an agent channel's Disconnect asks in-app, logs the provider out, drops the credentials and shows Not paired",
@@ -1212,11 +1017,16 @@ describe("system collections render in ui's Table (Settings, Automations, Inbox)
 							false,
 							manager
 						);
+						const row = () =>
+							target.querySelector<HTMLElement>('[data-envoy-channel=service]') ?? undefined;
 						const card = () =>
-							target.querySelector<HTMLElement>('[data-envoy-channel=desk] [data-connector]') ??
-							undefined;
+							[...document.body.querySelectorAll<HTMLElement>('[role=dialog]')]
+								.at(-1)
+								?.querySelector<HTMLElement>('[data-connector]') ?? undefined;
 						const state = () =>
 							card()?.querySelector('[data-connector-state]')?.textContent?.trim();
+						yield* until(() => row() !== undefined);
+						press(present(row()?.closest('tr') ?? undefined));
 						yield* until(() => state() === 'Connected as k1');
 						expect(card()?.textContent?.match(/k1/g)).toHaveLength(1); // the account once
 						press(present(card()?.querySelector<HTMLElement>('[data-disconnect]')));
@@ -1238,85 +1048,6 @@ describe("system collections render in ui's Table (Settings, Automations, Inbox)
 				)
 		);
 
-		it.live(
-			"saves an instance's configuration by its definition's fields, pauses it, and deletes one made here",
-			() =>
-				Effect.scoped(
-					Effect.gen(function* () {
-						const { t, context, manager, erp } = yield* boot();
-						const { target } = yield* open(
-							context,
-							'/settings/integrations',
-							{},
-							undefined,
-							undefined,
-							true,
-							false,
-							manager
-						);
-						yield* until(() => row(target, 'Ledger') !== undefined);
-						present(row(target, 'Ledger')).click();
-						yield* until(() => tab('Configuration') !== undefined);
-						expect(tab('Messages')).toBeUndefined(); // an http instance carries no conversation
-						press(present(tab('Configuration')));
-						yield* until(
-							() =>
-								sheet()?.querySelector('[data-field=configuration]') !== null &&
-								sheet()?.querySelector('[data-field=configuration]') !== undefined
-						);
-						const field = present(
-							present(sheet()).querySelector<HTMLElement>('[data-field=configuration]')
-						);
-						expect(field.textContent).toContain('Region');
-						expect(field.textContent).toContain('The ledger region code'); // a field's help, as every form shows it
-						expect(present(sheet()).querySelector('[role=combobox][aria-label=Envoy]')).toBeNull(); // no envoy answers an http instance
-						const region = present(field.querySelector<HTMLInputElement>('input[id$=-region]'));
-						expect(region.value).toBe('sg');
-						// the stored configuration, its default filled when the instance was made: nothing shown that is not stored
-						expect(present(field.querySelector<HTMLInputElement>('input[id$=-lag]')).value).toBe(
-							'15'
-						);
-						region.value = 'my';
-						region.dispatchEvent(new Event('input', { bubbles: true }));
-						const active = present(
-							present(sheet()).querySelector<HTMLElement>(
-								'[data-field=active] [role=checkbox], [data-field=active] input[type=checkbox]'
-							)
-						);
-						press(active);
-						present(fields()).requestSubmit();
-
-						yield* until(() =>
-							Effect.gen(function* () {
-								return (yield* instance(t, erp))?.['active'] === false;
-							})
-						);
-						expect(yield* instance(t, erp)).toMatchObject({
-							active: false,
-							configuration: { region: 'my', lag: 15 }
-						});
-						yield* until(
-							() => row(target, 'Ledger')?.textContent?.includes('Paused') === true,
-							200
-						);
-						press(present(button(present(sheet()), 'Delete')));
-						yield* until(() => document.body.querySelector('[data-confirm-accept]') !== null);
-						press(present(document.body.querySelector<HTMLElement>('[data-confirm-accept]')));
-						yield* until(() =>
-							Effect.gen(function* () {
-								return (
-									present(
-										(yield* t.db.read([
-											{ text: 'SELECT id FROM sys_integration WHERE id = $1', params: [erp] }
-										]))[0]
-									).rows.length === 0
-								);
-							})
-						);
-						yield* until(() => row(target, 'Ledger') === undefined);
-					})
-				)
-		);
 	});
 
 	it.live(
@@ -1351,7 +1082,7 @@ describe("system collections render in ui's Table (Settings, Automations, Inbox)
 			)
 	);
 
-	it.live('Settings → People invites a batch from the system collection table', () =>
+	it.live('Settings → People invites a batch from the system model table', () =>
 		Effect.scoped(
 			Effect.gen(function* () {
 				const context = yield* workspace({ manifest });

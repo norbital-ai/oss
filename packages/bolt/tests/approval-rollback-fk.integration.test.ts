@@ -18,23 +18,23 @@ const manifest: EngineManifest = {
 	relationships: {
 		'documents.folder': { to: 'folders', optional: true, onDelete: 'setNull' }
 	},
-	collections: {
+	exposures: {
 		folders: {
-			read: { fields: 'all' },
-			create: { input: { columns: ['name'] } },
+			read: { folders: { fields: 'all' } },
+			create: { columns: { folders: ['name'] } },
 			delete: {}
 		},
 		documents: {
-			read: { fields: 'all' },
-			create: { input: { columns: ['name', 'folder'] } },
-			update: { input: { columns: ['name', 'folder'] } }
+			read: { documents: { fields: 'all' } },
+			create: { columns: { documents: ['name', 'folder'] } },
+			update: { columns: { documents: ['name', 'folder'] } }
 		}
 	},
 	policies: {
 		requester: {
 			description: 'Requests folder deletion',
 			grants: {
-				folders: { read: true, history: true, delete: { approval: true } },
+				folders: { read: true, history: true, delete: { check: true } },
 				documents: { read: true, history: true }
 			}
 		},
@@ -54,7 +54,7 @@ const manifest: EngineManifest = {
 	agent: { skills: {} }
 };
 const source = `export default { policy: { requester: { grants: { folders: {
-	delete: { approval: (write, flow) => flow.step('Review deletion', {teams:['reviewers']}) }
+	delete: { check: function* (rows, ctx) { return ctx.approve((flow) => flow.step('Review deletion', {teams:['reviewers']})); } }
 } } } } };`;
 const Folder = Schema.Struct({ id: Schema.String, name: Schema.String, revision: Schema.Number });
 const Document = Schema.Struct({
@@ -63,12 +63,13 @@ const Document = Schema.Struct({
 	folder: Schema.NullOr(Schema.String),
 	revision: Schema.Number
 });
+// a stored checkpoint entry keeps its `collection` key (the audit trigger reads it)
 const Checkpoint = Schema.Struct({
-	collection: Schema.String,
+	model: Schema.String,
 	id: Schema.String,
 	op: Schema.Literals(['create', 'update', 'delete']),
 	before: Schema.NullOr(Schema.Number)
-});
+}).pipe(Schema.encodeKeys({ model: 'collection' }));
 
 const fixture = Effect.gen(function* () {
 	const context = yield* Layer.build(
@@ -95,14 +96,14 @@ const fixture = Effect.gen(function* () {
 		params: {}
 	};
 	const act = (
-		collection: 'folders' | 'documents',
+		model: 'folders' | 'documents',
 		verb: 'create' | 'delete',
 		input: Json,
 		authority = admin
 	) => {
 		const key = randomUUID();
 		return writes.act({
-			collection,
+			model,
 			verb,
 			input,
 			authority,
@@ -113,10 +114,10 @@ const fixture = Effect.gen(function* () {
 			bindings
 		});
 	};
-	const create = Effect.fnUntraced(function* (collection: 'folders' | 'documents', input: Json) {
-		const { outcome } = yield* act(collection, 'create', input);
+	const create = Effect.fnUntraced(function* (model: 'folders' | 'documents', input: Json) {
+		const { outcome } = yield* act(model, 'create', [input]);
 		if (outcome.kind !== 'committed') throw new Error(JSON.stringify(outcome));
-		const record = outcome.records.find((row) => row.collection === collection);
+		const record = outcome.records.find((row) => row.model === model);
 		if (record === undefined) throw new Error('Created record required');
 		return record.id;
 	});
@@ -154,7 +155,7 @@ describe('approval rollback restores references to recreated rows', () => {
 		Effect.scoped(
 			Effect.gen(function* () {
 				const f = yield* fixture;
-				const { outcome } = yield* f.act('folders', 'delete', { target: f.folder }, f.requester);
+				const { outcome } = yield* f.act('folders', 'delete', [{ target: f.folder }], f.requester);
 				if (outcome.kind !== 'pendingApproval') throw new Error(JSON.stringify(outcome));
 				expect(Option.isNone(yield* f.folderRow())).toBe(true);
 				expect(yield* f.documentRow()).toMatchObject({ folder: null, revision: 2 });
@@ -164,8 +165,8 @@ describe('approval rollback restores references to recreated rows', () => {
 				});
 				expect(checkpoints).toEqual(
 					expect.arrayContaining([
-						{ collection: 'folders', id: f.folder, op: 'delete', before: 1 },
-						{ collection: 'documents', id: f.document, op: 'update', before: 1 }
+						{ model: 'folders', id: f.folder, op: 'delete', before: 1 },
+						{ model: 'documents', id: f.document, op: 'update', before: 1 }
 					])
 				);
 				expect(
@@ -189,15 +190,15 @@ describe('approval rollback restores references to recreated rows', () => {
 					revision: 3
 				});
 				const histories = yield* f.t.db.rows(
-					Schema.Struct({ collection: Schema.String, restored_from: Schema.Number }),
+					Schema.Struct({ model: Schema.String, restored_from: Schema.Number }),
 					{
-						text: "SELECT collection,restored_from FROM bolt_history WHERE request=$1 AND cause='restored' ORDER BY collection",
+						text: "SELECT collection AS model,restored_from FROM bolt_history WHERE request=$1 AND cause='restored' ORDER BY collection",
 						params: [outcome.requestId]
 					}
 				);
 				expect(histories).toEqual([
-					{ collection: 'documents', restored_from: 1 },
-					{ collection: 'folders', restored_from: 1 }
+					{ model: 'documents', restored_from: 1 },
+					{ model: 'folders', restored_from: 1 }
 				]);
 			})
 		)
@@ -207,12 +208,12 @@ describe('approval rollback restores references to recreated rows', () => {
 		Effect.scoped(
 			Effect.gen(function* () {
 				const f = yield* fixture;
-				expect((yield* f.act('folders', 'delete', { target: f.folder })).outcome.kind).toBe(
+				expect((yield* f.act('folders', 'delete', [{ target: f.folder }])).outcome.kind).toBe(
 					'committed'
 				);
 				const previewed = yield* restorePreview(
 					{ manifest, db: f.t.db },
-					{ collection: 'documents', record: f.document, revision: 1 },
+					{ model: 'documents', record: f.document, revision: 1 },
 					f.admin,
 					f.bindings
 				);
@@ -231,7 +232,7 @@ describe('approval rollback restores references to recreated rows', () => {
 		Effect.scoped(
 			Effect.gen(function* () {
 				const f = yield* fixture;
-				expect((yield* f.act('folders', 'delete', { target: f.folder })).outcome.kind).toBe(
+				expect((yield* f.act('folders', 'delete', [{ target: f.folder }])).outcome.kind).toBe(
 					'committed'
 				);
 				yield* f.t.db.write({
@@ -242,16 +243,16 @@ describe('approval rollback restores references to recreated rows', () => {
 					manifest,
 					f.t.db,
 					[
-						{ collection: 'folders', id: f.folder, op: 'delete', before: 1 },
-						{ collection: 'documents', id: f.document, op: 'update', before: 1 }
+						{ model: 'folders', id: f.folder, op: 'delete', before: 1 },
+						{ model: 'documents', id: f.document, op: 'update', before: 1 }
 					],
 					f.bindings
 				);
 				expect(plan.writes).toEqual([]);
 				expect(plan.skipped).toEqual(
 					expect.arrayContaining([
-						{ collection: 'folders', id: f.folder, field: '*', reason: 'noHistory' },
-						{ collection: 'documents', id: f.document, field: 'folder', reason: 'deletedTarget' }
+						{ model: 'folders', id: f.folder, field: '*', reason: 'noHistory' },
+						{ model: 'documents', id: f.document, field: 'folder', reason: 'deletedTarget' }
 					])
 				);
 				expect(Option.isNone(yield* f.folderRow())).toBe(true);

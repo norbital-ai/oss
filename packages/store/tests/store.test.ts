@@ -185,8 +185,8 @@ describe('Store over a schema value', () => {
 				yield* exec(yield* db.create('order_tag', { order: required(o).id, tag: required(t).id }));
 				yield* exec(
 					yield* db.create('note', [
-						{ body: 'on customer', about: { collection: 'customer', id: required(c).id } },
-						{ body: 'on order', about: { collection: 'order', id: required(o).id } }
+						{ body: 'on customer', about: { model: 'customer', id: required(c).id } },
+						{ body: 'on order', about: { model: 'order', id: required(o).id } }
 					])
 				);
 				const [boss] = yield* exec(yield* db.create('employee', { name: 'Boss' }));
@@ -221,7 +221,7 @@ describe('Store over a schema value', () => {
 						all: true
 					})
 				);
-				expect(notes.rows.map((n) => n.about?.collection)).toEqual(['customer', 'order']);
+				expect(notes.rows.map((n) => n.about?.model)).toEqual(['customer', 'order']);
 
 				const team = yield* exec(
 					yield* db.read('employee', {

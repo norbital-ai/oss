@@ -136,7 +136,7 @@ export type ActMode =
 			readonly pending: ReadonlyMap<string, RowData>;
 	  };
 export type ActRequest = {
-	readonly collection: string;
+	readonly model: string;
 	readonly verb: Verb;
 	readonly input: Json;
 	readonly mode: ActMode;
@@ -174,9 +174,9 @@ export class Writes extends Context.Service<Writes, WritesShape>()('bolt/Writes'
 // ── callables (E6) ──
 /** A callable name decoded once (`parseCallable`, M3): a generated verb, an automation or a sync (`'<m>.sync.<s>'`). */
 export type Callable =
-	| { readonly _tag: 'Verb'; readonly collection: string; readonly verb: Verb }
+	| { readonly _tag: 'Verb'; readonly model: string; readonly verb: Verb }
 	| { readonly _tag: 'Automation'; readonly automation: string }
-	| { readonly _tag: 'Sync'; readonly collection: string; readonly sync: string };
+	| { readonly _tag: 'Sync'; readonly model: string; readonly sync: string };
 /** Rule 33a: `Server` is `ctx.act`/`ctx.query` from server code; everything else (`/act`, `/q`, `$bolt`, HTTP, agent) is `Client`. */
 export type Entry = 'Client' | 'Server';
 export type CallerContext = {
@@ -188,16 +188,11 @@ export type CallerContext = {
 	/** Native automation read intent, outside the guest ABI. */
 	readonly readGuards?: ReadGuards | undefined;
 };
-export type QueryRequest = CallerContext & {
-	readonly collection: string;
-	readonly query: string;
-	readonly input: Json;
-};
-/** Generated verbs over several collections committed as one act. */
+/** Generated verbs over several models committed as one act. */
 export type ActsRequest = CallerContext & {
 	readonly name: string;
 	readonly acts: readonly {
-		readonly collection: string;
+		readonly model: string;
 		readonly verb: Verb;
 		readonly input: Json;
 		readonly observed?: Readonly<Record<string, number>> | undefined;
@@ -223,7 +218,6 @@ export type CallResult = {
 	readonly error?: BoltError | undefined;
 };
 export type CallablesShape = {
-	readonly query: (request: QueryRequest) => Effect.Effect<Json, EngineError>;
 	readonly acts: (request: ActsRequest) => Effect.Effect<CallResult, EngineError>;
 	readonly start: (request: StartRequest) => Effect.Effect<Outcome, EngineError>;
 };
@@ -232,12 +226,12 @@ export class Callables extends Context.Service<Callables, CallablesShape>()('bol
 // ── approvals (E6) ──
 export type ApprovalFilter = {
 	readonly ids?: readonly string[] | undefined;
-	readonly collection?: string | undefined;
+	readonly model?: string | undefined;
 	readonly records?: readonly string[] | undefined;
 	readonly all?: boolean | undefined;
 };
 /** Whether the caller may read the referenced record (the approval view's reader). */
-export type Readable = (collection: string, id: string) => Effect.Effect<boolean, EngineError>;
+export type Readable = (model: string, id: string) => Effect.Effect<boolean, EngineError>;
 export type ApprovalsShape = {
 	/**
 	 * One decision on a request (`bolt.approvals.decide`): `approve`, `reject` or `requestChanges` (a reason required for
@@ -291,14 +285,12 @@ export class Identity extends Context.Service<Identity, IdentityShape>()('bolt/I
 /** One registered view: its read (re-answered when a commit touches what it read). */
 export type LiveView = {
 	readonly read: ReadIR;
-	/** A keyed query is read together and its keys are retained across live answers. */
-	readonly batch?: { readonly keys: readonly string[]; readonly reads: readonly ReadIR[] };
 };
 export type LiveShape = {
 	/** Rule 66: routes one commit's RETURNING set through the commit lane; synchronous (`Queue.offerUnsafe`); answers the lane `v`. */
 	readonly publish: (captured: readonly Captured[]) => number;
 	/** Re-reads views after native metadata commits (no domain captures); synchronous like `publish`. */
-	readonly syncChanged: (collection: string, records?: readonly string[] | undefined) => number;
+	readonly syncChanged: (model: string, records?: readonly string[] | undefined) => number;
 	/** The lane sequence of the last commit. */
 	readonly v: Effect.Effect<number>;
 	/** One connection's frames; its first is `hello` (the connection id). Ending the stream (its scope) disconnects. */
@@ -489,7 +481,7 @@ export type AgentsShape = {
 	readonly discardPlan: (id: string) => Effect.Effect<void, EngineError>;
 	readonly file: (
 		messageId: string,
-		about: { readonly collection: string; readonly id: string } | null
+		about: { readonly model: string; readonly id: string } | null
 	) => Effect.Effect<void, EngineError>;
 	readonly markRead: (id: string, member: string) => Effect.Effect<void, EngineError>;
 	readonly confirm: (
@@ -522,7 +514,8 @@ export type LinksShape = {
 	readonly changed: (instance: string) => Effect.Effect<void>;
 	readonly typing: (
 		instance: string,
-		to: string
+		to: string,
+		on: boolean
 	) => Effect.Effect<void, FacilityFailure | Unavailable>;
 	/** A link's durable status onto the instance row, when it changed (§3). */
 	readonly status: (
@@ -759,7 +752,7 @@ export type MessageStore = {
 		message: string,
 		mark:
 			| { readonly readBy: string }
-			| { readonly about: { readonly collection: string; readonly id: string } | null }
+			| { readonly about: { readonly model: string; readonly id: string } | null }
 	) => string;
 };
 /** E6, `callables/index.ts` `parseCallable` and `VERBS` (M3). */
@@ -779,10 +772,10 @@ export type Admits = (
 ) => boolean;
 export type WritableColumns = (
 	authority: Authority,
-	collection: string,
+	model: string,
 	verb: 'create' | 'update'
 ) => ReadonlySet<string> | 'all';
-export type VisitorMayRead = (authority: Authority, collection: string) => boolean;
+export type VisitorMayRead = (authority: Authority, model: string) => boolean;
 export type OperandValue = (operand: Actor, authority: Authority) => Json;
 /** Who may open an app or kiosk: a signed-in audience, no authentication (`none`), or a public app's policies. */
 export type Audience =

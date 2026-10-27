@@ -17,30 +17,30 @@ export const humanize = (name: string) =>
 		.trim()
 		.replace(/^\w/, (c) => c.toUpperCase());
 /**
- * A collection's or field's label: the catalog key, else the field's `declared` label, else the humanized name (final-ui
+ * A model's or field's label: the catalog key, else the field's `declared` label, else the humanized name (final-ui
  * rule 32); a FK names its target (`project_id` → `Project`).
  */
 export function label(
 	bolt: Pick<ViewBolt, 't'>,
-	collection: string,
+	model: string,
 	field?: string,
 	declared?: string
 ): string {
 	const key =
-		field === undefined ? `models.${collection}.label` : `models.${collection}.fields.${field}`;
+		field === undefined ? `models.${model}.label` : `models.${model}.fields.${field}`;
 	const s = bolt.t(key);
-	return s !== key ? s : (declared ?? humanize((field ?? collection).replace(/_id$/, '')));
+	return s !== key ? s : (declared ?? humanize((field ?? model).replace(/_id$/, '')));
 }
 /** A label inside a sentence: its first letter lowered unless it leads an acronym (`Jobs` → `jobs`, `SOW documents` stays). */
 export const lowerLead = (s: string) =>
 	/^\p{Lu}\p{Ll}/u.test(s) ? s.charAt(0).toLowerCase() + s.slice(1) : s;
-/** One record of a collection: the catalog's `models.<c>.singular`, else its label made singular (`Categories` → `Category`). */
-export function singular(bolt: Pick<ViewBolt, 't'>, collection: string): string {
-	const key = `models.${collection}.singular`,
+/** One record of a model: the catalog's `models.<c>.singular`, else its label made singular (`Categories` → `Category`). */
+export function singular(bolt: Pick<ViewBolt, 't'>, model: string): string {
+	const key = `models.${model}.singular`,
 		s = bolt.t(key);
 	return s !== key
 		? s
-		: label(bolt, collection)
+		: label(bolt, model)
 				.replace(/ies$/, 'y')
 				.replace(/(ss|x|ch|sh)es$/, '$1')
 				.replace(/([^su])s$/, '$1');

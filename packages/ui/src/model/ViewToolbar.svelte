@@ -4,7 +4,7 @@
 	import type { Json } from '../client/contract.js';
 	import type { Row, Values } from './types.js';
 	import type { Fields, Value } from '../kinds/kind.js';
-	import type { CollectionExposure, ParserExposure } from '../kinds/context.js';
+	import type { ModelExposure, ParserExposure } from '../kinds/context.js';
 	import { formSpec } from '../form/draft.js';
 	import { presentation } from '../kinds/registry.js';
 	import { edgesFrom } from '../kinds/kind.js';
@@ -12,7 +12,7 @@
 	 * The fields "Edit selected" offers: the caller's update columns, each edited by its kind's editor. A state is edited
 	 * as the states some edge moves into (the host judges each row's move); other derived kinds are never written.
 	 */
-	export const editableFields = (exposure: CollectionExposure | undefined) =>
+	export const editableFields = (exposure: ModelExposure | undefined) =>
 		(formSpec('', exposure, 'update')?.fields ?? []).flatMap((field) => {
 			const kind = field.kind;
 			if (field.readonly || kind.hidden || exposure?.masked?.includes(field.name)) return [];
@@ -32,7 +32,7 @@
 					];
 		});
 	/** The many-relations "Edit selected" offers, one level deep: those the caller's update contract (`update.with`) admits. */
-	export const editableRelations = (exposure: CollectionExposure | undefined) =>
+	export const editableRelations = (exposure: ModelExposure | undefined) =>
 		Object.entries(exposure?.update?.with ?? {}).flatMap(([name, child]) =>
 			exposure?.masked?.includes(name) ||
 			(child.create === undefined && !child.link && !child.unlink && !child.delete)
@@ -60,17 +60,17 @@
 		disabled?: (selected: IdIn<R>[]) => string | null;
 	};
 	/**
-	 * A view's whole chrome, one shape on `Table`, `Board`, `Map` and `Pivot`. Every key defaults from the collection's
+	 * A view's whole chrome, one shape on `Table`, `Board`, `Map` and `Pivot`. Every key defaults from the model's
 	 * declaration and the viewer's grants; `toolbar={false}` renders none.
 	 */
 	export type Toolbar<R = Row> =
 		| false
 		| {
-				/** Default: the collection's label. */
+				/** Default: the model's label. */
 				title?: string | false;
-				/** Behind the info icon. Default: the collection's declared description, else its model's. */
+				/** Behind the info icon. Default: the model's declared description, else its model's. */
 				description?: string | false;
-				/** Default on where the collection declares search fields. */
+				/** Default on where the model declares search fields. */
 				search?: boolean;
 				/** The filter-and-sort popover (rule 16b). Default on. */
 				filter?: boolean;
@@ -78,7 +78,7 @@
 				actions?: readonly ToolbarItem<R>[] | false;
 				/** "Export CSV" of the rows in view. Default on; replaced by "Export" when the model's file sync exports. */
 				export?: boolean;
-				/** "Delete selected records" when the collection declares delete and the viewer may delete (turns selection on). Default on. */
+				/** "Delete selected records" when the model declares delete and the viewer may delete (turns selection on). Default on. */
 				delete?: boolean;
 				/** Record checkboxes (`Table` and `Board`). Default: on for permitted bulk edits, deletes or selection actions. */
 				select?: boolean;
@@ -97,7 +97,7 @@
 	/** Selection follows the same actionable catalogue and explicit opt-outs in every record view. */
 	export function selectionEnabled<R>(
 		config: Toolbar<R> | undefined,
-		exposure: CollectionExposure | undefined
+		exposure: ModelExposure | undefined
 	): boolean {
 		if (config === false || config?.actions === false || config?.select === false) return false;
 		return (
@@ -171,10 +171,10 @@
 
 	let {
 		config = {},
-		collection,
+		model,
 		view,
 		catalog,
-		source = collection,
+		source = model,
 		author,
 		sortable = [],
 		q = $bindable(''),
@@ -186,11 +186,11 @@
 		onProbe
 	}: {
 		config?: Toolbar<R> | undefined;
-		/** The collection the defaults come from; `''` for a source without one. */
-		collection: string;
+		/** The model the defaults come from; `''` for a source without one. */
+		model: string;
 		view?: ViewState;
-		catalog: { readonly [c: string]: CollectionExposure };
-		/** The view popover's collection (a local array's `$local`). */
+		catalog: { readonly [c: string]: ModelExposure };
+		/** The view popover's model (a local array's `$local`). */
 		source?: string;
 		author?: Json;
 		sortable?: readonly string[];
@@ -209,9 +209,9 @@
 	const bolt = useBolt();
 	const kinds = useKinds();
 	const cfg = $derived(config === false ? null : (config ?? {}));
-	const x = $derived(catalog[collection] ?? kinds.catalog?.[collection]);
+	const x = $derived(catalog[model] ?? kinds.catalog?.[model]);
 	const title = $derived(
-		cfg?.title === false ? '' : (cfg?.title ?? (collection === '' ? '' : label(bolt, collection)))
+		cfg?.title === false ? '' : (cfg?.title ?? (model === '' ? '' : label(bolt, model)))
 	);
 	const about = $derived(
 		cfg?.description === false ? '' : (cfg?.description ?? x?.description ?? '')
@@ -221,14 +221,14 @@
 	// the box as its text, searched on Enter; a search index swaps the box for its input's editors (custom datatypes in
 	// their own renderers) and hands the view its probe. Backspace on an empty box (or the chip's ×) is back to the text search.
 	const t = uiText();
-	// the collection's declared search fields, else its label's text fields (the Table searches those by `like`)
+	// the model's declared search fields, else its label's text fields (the Table searches those by `like`)
 	const lexicalFields = $derived(
 		(x?.search?.length ?? 0) > 0
 			? (x?.search ?? [])
 			: (x?.label ?? []).filter((f) => likeWhere(x, [f], 'x') !== undefined)
 	);
-	// a local array (a custom view's rows) searches its own columns, even when it names the collection its menu acts on
-	const local = $derived(collection === '' || source !== collection);
+	// a local array (a custom view's rows) searches its own columns, even when it names the model its menu acts on
+	const local = $derived(model === '' || source !== model);
 	const lexical = $derived(local || lexicalFields.length > 0);
 	const indexes = $derived(
 		offered && !local
@@ -239,15 +239,15 @@
 				})
 			: []
 	);
-	// the search icon exists only over something searchable: the collection's search fields or a declared index
+	// the search icon exists only over something searchable: the model's search fields or a declared index
 	const canSearch = $derived(offered && (lexical || indexes.length > 0));
-	// a collection's declared search fields; a local array searches the columns it shows (the roster's people)
+	// a model's declared search fields; a local array searches the columns it shows (the roster's people)
 	const fieldsSearched = $derived(
 		local
 			? Object.keys(catalog[source]?.fields ?? {}).map((f) =>
 					pathLabel(catalog, source, f, humanize)
 				)
-			: lexicalFields.map((s) => pathLabel(catalog, collection, s, humanize))
+			: lexicalFields.map((s) => pathLabel(catalog, model, s, humanize))
 	);
 	let index = $state<string | null>(null);
 	let text = $state(untrack(() => q));
@@ -304,18 +304,18 @@
 		cfg?.new !== false &&
 			(onAdd !== undefined ||
 				typeof cfg?.new === 'function' ||
-				(collection !== '' && x?.create !== undefined))
+				(model !== '' && x?.create !== undefined))
 	);
 	// the page's contexts ride into the shell's sheet, which mounts outside the page (its create scope)
 	const contexts = getAllContexts();
 	// svelte-ignore state_referenced_locally
-	onDestroy(collection === '' ? () => {} : offerContexts(collection, contexts));
+	onDestroy(model === '' ? () => {} : offerContexts(model, contexts));
 	const create = () =>
 		onAdd
 			? onAdd()
 			: typeof cfg?.new === 'function'
 				? cfg.new()
-				: openRecord(collection, 'new', contexts);
+				: openRecord(model, 'new', contexts);
 	const searchHint = $derived.by(() => {
 		const f = fieldsSearched.slice(0, 3);
 		return f.length === 0
@@ -464,7 +464,7 @@
 				}),
 				why: null,
 				button: msg(bolt, 'view.syncButton', 'Sync'),
-				act: () => bolt.start(`${collection}.sync.${r.name}`, {})
+				act: () => bolt.start(`${model}.sync.${r.name}`, {})
 			})),
 			...files.flatMap((f): Entry[] => [
 				...(f.import
@@ -489,7 +489,7 @@
 								why: null,
 								button: msg(bolt, 'view.download', 'Download'),
 								act: () =>
-									bolt.start(`${collection}.sync.${f.name}`, { mode: 'template', ...scoped() })
+									bolt.start(`${model}.sync.${f.name}`, { mode: 'template', ...scoped() })
 							} satisfies Entry
 						]
 					: []),
@@ -509,7 +509,7 @@
 					button: msg(bolt, 'view.download', 'Download'),
 					act: () => {
 						const where = shown();
-						return bolt.start(`${collection}.sync.${f.name}`, {
+						return bolt.start(`${model}.sync.${f.name}`, {
 							mode: 'export',
 							to,
 							...scoped(),
@@ -547,14 +547,14 @@
 							why: picked.length === 0 ? selectFirst : null,
 							button: msg(bolt, 'view.editButton', 'Edit'),
 							act: () => {
-								if (form === `${collection}.update`) form = null;
+								if (form === `${model}.update`) form = null;
 								else {
 									editValues = {};
 									editLinks = {};
-									form = `${collection}.update`;
+									form = `${model}.update`;
 								}
 							},
-							form: { callable: `${collection}.update` }
+							form: { callable: `${model}.update` }
 						} satisfies Entry
 					]
 				: []),
@@ -595,7 +595,7 @@
 	let pickers = $state<{ [sync: string]: HTMLInputElement | undefined }>({});
 	let form = $state<string | null>(null);
 	watch(
-		() => JSON.stringify([collection, picked]),
+		() => JSON.stringify([model, picked]),
 		() => {
 			form = null;
 			editValues = {};
@@ -741,7 +741,7 @@
 	const importRun = live(() =>
 		imported === null || bolt.runs === undefined
 			? null
-			: bolt.runs(`${collection}.sync.${imported.sync}`, {
+			: bolt.runs(`${model}.sync.${imported.sync}`, {
 					where: { id: { eq: imported.id } },
 					limit: 1
 				})
@@ -821,7 +821,7 @@
 	/** What the page shows: the author's scope and the viewer's filter. */
 	const shown = () => and(author, view?.where);
 	function startImport(sync: string, file: string, accept: boolean) {
-		const h = bolt.start(`${collection}.sync.${sync}`, {
+		const h = bolt.start(`${model}.sync.${sync}`, {
 			mode: 'import',
 			file,
 			...(accept ? { accept } : {}),
@@ -841,7 +841,7 @@
 		if (file === undefined || upload === undefined) return;
 		imported = null;
 		perform(importKey(sync), () =>
-			upload(file, `${collection}.sync.${sync}`).pipe(
+			upload(file, `${model}.sync.${sync}`).pipe(
 				Effect.flatMap((ref) => startImport(sync, ref.id, false)),
 				Effect.ensuring(
 					Effect.sync(() => {
@@ -877,7 +877,7 @@
 								() =>
 									// ponytail: one act per record, in order; batch when bulk deletes outgrow it
 									Effect.forEach(target, (id) =>
-										actOutcome(bolt.act(`${collection}.delete`, { target: [id] }))
+										actOutcome(bolt.act(`${model}.delete`, [{ target: id }]))
 									).pipe(
 										// some went: the view refreshes (and drops the selection) though the outcome is a refusal
 										Effect.tap((outcomes) =>
@@ -926,18 +926,23 @@
 		const target = [...picked],
 			set = editSet;
 		perform('update', () =>
-			bolt.act(`${collection}.update`, { target, set }).pipe(
-				Effect.tap((outcome) =>
-					Effect.sync(() => {
-						if (ok(outcome)) {
-							form = null;
-							editValues = {};
-							editLinks = {};
-							menuOpen = false;
-						}
-					})
+			bolt
+				.act(
+					`${model}.update`,
+					target.map((id) => ({ target: id, set }))
 				)
-			)
+				.pipe(
+					Effect.tap((outcome) =>
+						Effect.sync(() => {
+							if (ok(outcome)) {
+								form = null;
+								editValues = {};
+								editLinks = {};
+								menuOpen = false;
+							}
+						})
+					)
+				)
 		);
 	}
 	// a download the browser builds (§3.6): the rows in view, the view's columns; enums in their words, dates as ISO text,
@@ -947,7 +952,7 @@
 			if (exporter === undefined) return;
 			const rows = unref(
 				kinds.catalog,
-				collection,
+				model,
 				exporter.fields,
 				objectsOf(yield* exporter.read()),
 				bolt.locale,
@@ -955,9 +960,9 @@
 			);
 			const cell = (s: string) => (/[",\r\n]/.test(s) ? `"${s.replaceAll('"', '""')}"` : s);
 			const kindOf = (f: string) =>
-				exporter.kinds?.[f] ?? (kinds.catalog?.[collection] ?? catalog[source])?.fields[f];
+				exporter.kinds?.[f] ?? (kinds.catalog?.[model] ?? catalog[source])?.fields[f];
 			const words = (f: string) => (v: string) =>
-				enumText(v, { t: (k) => bolt.t(k), collection, field: f });
+				enumText(v, { t: (k) => bolt.t(k), model, field: f });
 			const text =
 				CSV_BOM +
 				[
@@ -968,7 +973,7 @@
 				]
 					.map((line) => line.map(cell).join(','))
 					.join('\r\n');
-			downloadTextFiles([{ name: `${collection || 'rows'}.csv`, content: text }]);
+			downloadTextFiles([{ name: `${model || 'rows'}.csv`, content: text }]);
 		});
 	}
 	const named = recordLabels(bolt, () => kinds.catalog ?? catalog);
@@ -1057,7 +1062,7 @@
 				{#each findings as f, i (i)}
 					{@const at = [
 						f.at === 0 ? '' : msg(bolt, 'view.row', 'Row {row}', { row: f.at }),
-						f.field === null ? '' : pathLabel(catalog, collection, f.field, humanize)
+						f.field === null ? '' : pathLabel(catalog, model, f.field, humanize)
 					]
 						.filter((x) => x !== '')
 						.join(' · ')}
@@ -1106,7 +1111,7 @@
 					<Popover.Trigger
 						class="text-muted-foreground hover:bg-accent hover:text-foreground grid size-9 max-sm:size-11 shrink-0 place-items-center rounded-sm"
 						aria-label={msg(bolt, 'view.about', 'About {what}', {
-							what: title || label(bolt, collection)
+							what: title || label(bolt, model)
 						})}
 						title={about}
 						data-view-about><Glyph name="info" /></Popover.Trigger
@@ -1124,7 +1129,7 @@
 				</div>{/if}
 			{#if canSearch}
 				<!-- the search is an icon: its popover opens with the box focused, and says what it searches and which
-				     `/` commands the collection offers -->
+				     `/` commands the model offers -->
 				<ToolbarSearch
 					bind:open={searchOpen}
 					active={searching}
@@ -1270,7 +1275,7 @@
 			{#if canFilter && view !== undefined}<ViewPopover
 					{view}
 					{catalog}
-					collection={source}
+					model={source}
 					{author}
 					{sortable}
 				/>{/if}
@@ -1280,7 +1285,7 @@
 						{#snippet child({ props })}
 							<Button
 								{...props}
-								size="icon"
+								size="icon-sm"
 								variant="ghost"
 								hint={msg(bolt, 'view.actions', 'Actions')}
 								aria-label={msg(bolt, 'view.actions', 'Actions')}
@@ -1289,6 +1294,7 @@
 							>
 								{#if pending}<Spinner label={msg(bolt, 'view.running', 'Running')} />{:else}<Glyph
 										name="zap"
+										class="size-3.5"
 									/>{/if}
 							</Button>
 						{/snippet}
@@ -1344,13 +1350,13 @@
 															id={`${editorId}-${field.name}-label`}
 														>
 															{field.kind.label ??
-																pathLabel(catalog, collection, field.name, humanize)}
+																pathLabel(catalog, model, field.name, humanize)}
 														</label>
 													</div>
 													{#if chosen}
 														<label class="sr-only" for={`${editorId}-${field.name}`}
 															>{field.kind.label ??
-																pathLabel(catalog, collection, field.name, humanize)}</label
+																pathLabel(catalog, model, field.name, humanize)}</label
 														>
 														<Editor
 															kind={field.kind}
@@ -1402,7 +1408,7 @@
 															class="flex min-h-11 flex-1 items-center @xl:min-h-8"
 															for={`${editorId}-${name}-choose`}
 														>
-															{pathLabel(catalog, collection, name, humanize)}
+															{pathLabel(catalog, model, name, humanize)}
 														</label>
 													</div>
 													{#if chosen}

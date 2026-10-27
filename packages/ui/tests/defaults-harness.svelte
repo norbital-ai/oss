@@ -2,10 +2,10 @@
 	import type { ComponentProps } from 'svelte';
 	import type { KindsHost } from '../src/kinds/context.js';
 	import type { ViewBolt } from '../src/client/contract.js';
-	import type { Values } from '../src/collection/types.js';
+	import type { Values } from '../src/model/types.js';
 	import NativeTable, { type TableSource } from '../src/table/Table.svelte';
 	const Table = NativeTable<TableSource>;
-	import type { CustomViewProps } from '../src/collection/CustomView.svelte';
+	import type { CustomViewProps } from '../src/model/CustomView.svelte';
 	export type DefaultsPart =
 		| { part: 'table'; props: ComponentProps<typeof Table> }
 		| { part: 'record'; props: ComponentProps<typeof RecordShell> }
@@ -30,8 +30,7 @@
 	import ReadonlyMarkdown from '../src/editors/readonly-markdown.svelte';
 	import Sheet from '../src/primitives/sheet/sheet.svelte';
 	import { provideBolt } from '../src/client/context.js';
-	import { type Page } from '../src/collection/types.js';
-	import CustomView from '../src/collection/CustomView.svelte';
+	import CustomView from '../src/model/CustomView.svelte';
 	import RecordShell from '../src/record/RecordShell.svelte';
 
 	let fixture: DefaultsHarnessProps = $props();
@@ -42,7 +41,7 @@
 		get catalog() {
 			return fixture.catalog;
 		},
-		query: (c, o) => fixture.bolt.query<Page>(c, o),
+		query: (request) => fixture.bolt.query(request),
 		locale: 'en',
 		zone: 'UTC',
 		currency: 'SGD'

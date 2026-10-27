@@ -21,12 +21,12 @@ const manifest = Result.getOrThrow(
 			logs: { description: 'A log line', label: 'line', fields: { line: { kind: 'text' } } }
 		},
 		relationships: {},
-		collections: {
+		exposures: {
 			quotes: {
-				read: { fields: 'all' },
-				create: { input: { columns: ['title'] } }
+				read: { quotes: { fields: 'all' } },
+				create: { columns: { quotes: ['title'] } }
 			},
-			logs: { read: { fields: 'all' }, create: { input: { columns: ['line'] } } }
+			logs: { read: { logs: { fields: 'all' } }, create: { columns: { logs: ['line'] } } }
 		},
 		policies: {
 			rep: {
@@ -71,9 +71,9 @@ const manifest = Result.getOrThrow(
 const guest = {
 	source: `export default {
 	automation: {
-	quotes_mark: { body: function* (input, ctx) { return (yield* ctx.act('quotes.create', { title: input.title })).records[0].id; } },
+	quotes_mark: { body: function* (input, ctx) { return (yield* ctx.act('quotes.create', [{ title: input.title }])).records[0].id; } },
 	log: { body: function* (input, ctx) {
-		for (const id of input.ids) yield* ctx.act('logs.create', { line: 'quote ' + id });
+		for (const id of input.ids) yield* ctx.act('logs.create', [{ line: 'quote ' + id }]);
 		yield* ctx.notify({ to: [{ policy: 'rep' }], title: 'Logged' });
 	} } },
 };`
@@ -318,7 +318,7 @@ describe('web push of inbox notices (§5.7)', () => {
 					})).status
 				).toBe(204);
 				// an automation's notice (a guest `ctx.notify` inside its run's statement) is pushed by the next wake
-				yield* act(ann, 'quotes.create', { title: 'Desk' });
+				yield* act(ann, 'quotes.create', [{ title: 'Desk' }]);
 				yield* t.runDue();
 				yield* t.runDue();
 				const pushed = t.fakes.sent.filter((message) => message._tag === 'Push');
@@ -381,7 +381,7 @@ describe('native push and the notice stream', () => {
 						{ text: 'SELECT kind, endpoint, keys FROM bolt_push_subscriptions', params: [] }
 					)
 				).toEqual([{ kind: 'apns', endpoint: token, keys }]);
-				yield* act(ann, 'quotes.create', { title: 'Desk' });
+				yield* act(ann, 'quotes.create', [{ title: 'Desk' }]);
 				yield* t.runDue();
 				yield* t.runDue();
 				expect(t.fakes.sent.filter((message) => message._tag === 'Push')).toEqual([
@@ -424,7 +424,7 @@ describe('native push and the notice stream', () => {
 				expect(missed.data).toEqual({ id: 'mid', title: 'Missed', body: null, path: '/inbox' });
 				expect(Date.parse(missed.id ?? '')).toBe(Date.parse('2020-01-02T00:00:00Z'));
 				// an automation's notice reaches the open stream as it commits
-				yield* act(ann, 'quotes.create', { title: 'Desk' });
+				yield* act(ann, 'quotes.create', [{ title: 'Desk' }]);
 				yield* t.runDue();
 				expect((yield* next).data).toMatchObject({ title: 'Logged', body: null, path: '/inbox' });
 			})
@@ -438,7 +438,7 @@ describe('the journal crash test (rule 55, t.crash)', () => {
 			Effect.gen(function* () {
 				const { t, act, user } = yield* setup();
 				const ann = yield* user('ann');
-				yield* act(ann, 'quotes.create', { title: 'Desk' });
+				yield* act(ann, 'quotes.create', [{ title: 'Desk' }]);
 				const [run] = required(
 					(yield* t.db.read([
 						{ text: `SELECT id FROM sys_run WHERE automation = 'log'`, params: [] }

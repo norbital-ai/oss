@@ -13,16 +13,9 @@ export default model('orders', {
 			states: { draft: { to: ['placed'] }, placed: { edit: 'none' } }
 		}
 	},
-	read: 'all',
-	create: { columns: ['customer', 'amount'] },
-	queries: {
-		count_placed: {
-			description: 'Placed orders',
-			input: {},
-			output: { kind: 'int' },
-			run: function* () {
-				return 0;
-			}
-		}
-	}
+	read: {
+		orders: { fields: 'all' },
+		'orders.customer': { fields: ['name', 'rating'] }
+	},
+	create: { columns: { orders: ['customer', 'amount'] } }
 });

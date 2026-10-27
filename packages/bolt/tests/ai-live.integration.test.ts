@@ -7,9 +7,9 @@ it.live(
 	'a live provider streams a short answer with its usage',
 	(context) =>
 		Effect.gen(function* () {
-			const endpoint = yield* Config.option(Config.string('BOLT_AI_SYS_2_ENDPOINT'));
-			const credential = yield* Config.option(Config.redacted('BOLT_AI_SYS_2_CREDENTIAL'));
-			const model = yield* Config.option(Config.string('BOLT_AI_LIVE_MODEL'));
+			const endpoint = yield* Config.option(Config.String('BOLT_AI_SYS_2_ENDPOINT'));
+			const credential = yield* Config.option(Config.Redacted('BOLT_AI_SYS_2_CREDENTIAL'));
+			const model = yield* Config.option(Config.String('BOLT_AI_LIVE_MODEL'));
 			if (
 				Option.isNone(endpoint) ||
 				Option.isNone(credential) ||

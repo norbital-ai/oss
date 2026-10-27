@@ -10,8 +10,8 @@ import './registry.ts';
 declare const act: Act;
 declare const id: Id<'orders'>;
 const dynamic: Parameters<Act['checked']>[0] = [
-	{ callable: 'orders.create', input: { fieldsValidatedAtRuntime: true } },
-	{ callable: 'orders.delete', input: { target: id } }
+	{ callable: 'orders.create', input: [{ fieldsValidatedAtRuntime: true }] },
+	{ callable: 'orders.delete', input: [{ target: id }] }
 ];
 const checked = act.checked(dynamic);
 expectTypeOf<Effect.Success<typeof checked>>().toEqualTypeOf<
@@ -23,12 +23,12 @@ declare const result: Effect.Success<typeof checked>;
 void result.output;
 if (result.kind === 'committed') expectTypeOf(result.output).toEqualTypeOf<readonly Json[]>();
 
-const correlated = act.many([{ callable: 'orders.delete', input: { target: id } }]);
+const correlated = act.many([{ callable: 'orders.delete', input: [{ target: id }] }]);
 expectTypeOf<Effect.Success<typeof correlated>>().toEqualTypeOf<
 	Committed<readonly [null]> | PendingApproval
 >();
 // @ts-expect-error the original correlated API still rejects a malformed delete
-act.many([{ callable: 'orders.delete', input: {} }]);
+act.many([{ callable: 'orders.delete', input: [{}] }]);
 // @ts-expect-error dynamic batches admit only generated create/update/upsert/delete
 act.checked([{ callable: 'orders.renote', input: {} }]);
 // @ts-expect-error imports are outside the batch contract
@@ -42,39 +42,39 @@ act.checked([{ callable: 'orders.delete', input: new Date() }]);
 act.many([
 	{
 		callable: 'orders.upsert',
-		input: { id, note: 'retained' },
+		input: [{ id, note: 'retained' }],
 		onConflict: 'keep',
 		observed: { [id]: 1 }
 	},
 	{
 		callable: 'orders.update',
-		input: { target: id, set: { note: 'checked' } },
+		input: [{ target: id, set: { note: 'checked' } }],
 		observed: { [id]: 1 }
 	}
 ]);
 act.checked([
 	{
 		callable: 'orders.upsert',
-		input: { id, note: 'retained' },
+		input: [{ id, note: 'retained' }],
 		onConflict: 'update',
 		observed: { [id]: 1 }
 	}
 ]);
 // @ts-expect-error correlated upserts require an explicit native conflict policy
 // prettier-ignore
-act.many([{ callable: 'orders.upsert', input: { id, note: 'missing policy' } }]);
+act.many([{ callable: 'orders.upsert', input: [{ id, note: 'missing policy' }] }]);
 // @ts-expect-error dynamically checked upserts also require an explicit conflict policy
 // prettier-ignore
-act.checked([{ callable: 'orders.upsert', input: { id, note: 'missing policy' } }]);
+act.checked([{ callable: 'orders.upsert', input: [{ id, note: 'missing policy' }] }]);
 // @ts-expect-error correlated observations keep numeric revisions
 // prettier-ignore
-act.many([{ callable: 'orders.update', input: { target: id, set: { note: 'x' } }, observed: { [id]: '1' } }]);
+act.many([{ callable: 'orders.update', input: [{ target: id, set: { note: 'x' } }], observed: { [id]: '1' } }]);
 // @ts-expect-error dynamically checked observations keep numeric revisions
 // prettier-ignore
-act.checked([{ callable: 'orders.delete', input: { target: id }, observed: { [id]: '1' } }]);
+act.checked([{ callable: 'orders.delete', input: [{ target: id }], observed: { [id]: '1' } }]);
 // @ts-expect-error conflict policies apply only to upserts, never deletes
 // prettier-ignore
-act.many([{ callable: 'orders.delete', input: { target: id }, onConflict: 'keep' }]);
+act.many([{ callable: 'orders.delete', input: [{ target: id }], onConflict: 'keep' }]);
 // @ts-expect-error dynamic native creates cannot carry an upsert conflict policy
 // prettier-ignore
-act.checked([{ callable: 'orders.create', input: {}, onConflict: 'update' }]);
+act.checked([{ callable: 'orders.create', input: [{}], onConflict: 'update' }]);

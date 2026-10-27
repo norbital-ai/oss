@@ -191,7 +191,8 @@ describe('Discord', () => {
 			expect(yield* h.link.send!({ to: '55', text: 'on it' }, undefined)).toEqual({
 				providerId: 'm-out'
 			});
-			yield* h.link.typing!('55');
+			yield* h.link.typing!('55', true);
+			yield* h.link.typing!('55', false); // nothing to stop: it lapses by itself
 			expect(f.calls.map((c) => [c.method, c.url, c.headers['authorization'], c.body])).toEqual([
 				[
 					'POST',

@@ -1,5 +1,5 @@
 <!--
-	The record sheet the shell opens for `?record=<collection>/<id|new>`: ui's `RecordShell` over `$bolt`. The shell
+	The record sheet the shell opens for `?record=<model>/<id|new>`: ui's `RecordShell` over `$bolt`. The shell
 	provides the representation registry (lazy, one chunk each) above it and above every page; the opener's contexts
 	(`openRecord`'s third argument) are set above it, so a create keeps the scope of the page that opened it.
 -->
@@ -16,22 +16,22 @@
 	import Carry from './Carry.svelte';
 	import { currentBolt } from './runtime.ts';
 
-	let { collection, id, onClose }: { collection: string; id: string; onClose: () => void } =
+	let { model, id, onClose }: { model: string; id: string; onClose: () => void } =
 		$props();
 	// the opener's contexts; else the page's (a reload or a link), which may mount after this sheet: it remounts once then
 	// svelte-ignore state_referenced_locally
-	const carried = carriedContexts(collection, id);
+	const carried = carriedContexts(model, id);
 	// svelte-ignore state_referenced_locally
-	let page = $state(carried === undefined ? pageContexts(collection) : undefined);
+	let page = $state(carried === undefined ? pageContexts(model) : undefined);
 	onDestroy(
 		onPageContexts(() => {
-			if (carried === undefined && page === undefined) page = pageContexts(collection);
+			if (carried === undefined && page === undefined) page = pageContexts(model);
 		})
 	);
 	const bolt = currentBolt();
-	// hook:agent-ui — the sheet's accessible title is one record of the collection (ui's `singular`: `models.<c>.singular`,
+	// hook:agent-ui — the sheet's accessible title is one record of the model (ui's `singular`: `models.<c>.singular`,
 	// else its label made singular); the visible heading is `RecordShell`'s, the record's own label
-	const title = $derived(singular(bolt, collection));
+	const title = $derived(singular(bolt, model));
 </script>
 
 <!-- the opener's contexts (a page's create scope) sit above the sheet, which then resets its own; the shell mounts one
@@ -45,8 +45,8 @@
 				if (!open) onClose();
 			}}
 		>
-			{#if id === 'new'}<RecordShell of={collection} mode="create" />{:else}<RecordShell
-					of={collection}
+			{#if id === 'new'}<RecordShell of={model} mode="create" />{:else}<RecordShell
+					of={model}
 					{id}
 				/>{/if}
 		</Sheet>

@@ -52,7 +52,7 @@ export const credentials = Effect.fn('Credentials.make')(function* (
 	codec: SecretsCodec
 ): Effect.fn.Return<Credentials, never, Crypto.Crypto> {
 	const crypto = yield* Crypto.Crypto;
-	const uuid = crypto.randomUUIDv4.pipe(
+	const uuid = crypto.randomUUIDv4().pipe(
 		Effect.mapError((error) =>
 			BoltError.make('unavailable', 'facility', 'Secure random UUID generation failed.', error)
 		)

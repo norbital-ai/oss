@@ -8,9 +8,9 @@ export declare const brand: unique symbol;
 
 /** A row id, branded by its table so an id of one table never passes for another's. */
 export type Id<T extends string> = string & { readonly [brand]: T };
-/** A typed reference to one row: its table (`collection`) and id; a polymorphic ref's value. */
+/** A typed reference to one row: its table (`model`) and id; a polymorphic ref's value. */
 export type RecordRef<T extends string = string> = {
-	[K in T]: { readonly collection: K; readonly id: Id<K> };
+	[K in T]: { readonly model: K; readonly id: Id<K> };
 }[T];
 /** A `time` field's value: a validated time-of-day string. */
 export type PlainTime = string & { readonly [brand]: 'PlainTime' };

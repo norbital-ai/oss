@@ -5,8 +5,9 @@
 	rows of the conversation's live transcript, patched in over the page's one live stream; the conversation list, each
 	one's status, plan and goals are a live read too. Nothing polls and there is no second stream. Enter sends, Shift+Enter is a
 	new line, Cmd/Ctrl+Enter sends now. With triage (rule 60a, P41) each triaged row carries its state: "waiting for
-	more…" while pending (with respond-now), "responding" once admitted and its turn runs; messages not for the agent fold into one
-	quiet "Not for the assistant" block. Files are attached with the paperclip, by paste
+	more…" while pending (with respond-now), "responding" once admitted and its turn runs; every message that came in is
+	shown, and consecutive ones not for the agent fold into one quiet block, collapsed to its count and last message; on a
+	channel thread each reply names the messages it answers ("Replying to"). Files are attached with the paperclip, by paste
 	or by drop (at most 8 files, 20 MiB); each uploads to `/__bolt/files/sys_conversation.inputs` when the message is sent.
 	The selector switches between the member's own conversations and the envoy conversation threads they may read, segmented by
 	source (newest first); delegated sub-agents live in the session rail (their tasks, live steps and answers),
@@ -93,7 +94,8 @@
 		unconfigured = false,
 		admin = false,
 		envoys = {},
-		onConversation
+		onConversation,
+		storageKey
 	}: {
 		api: ShellApi;
 		bolt: Pick<ShellBolt, 'observe' | 'fileUrl'>;
@@ -108,16 +110,17 @@
 		/** The open conversation changed (`null`: a new one), for the shell's `?agent=`. */ onConversation?: (
 			id: string | null
 		) => void;
+		/** The `localStorage` key of the last opened conversation, one per workspace and member; none: nothing is remembered. */ storageKey?: string | undefined;
 	} = $props();
 
-	const KEY = 'bolt.agent.conversation';
-	const remembered = Result.getOrElse(
-		Result.try({
-			try: () => sessionStorage.getItem(KEY),
-			catch: (cause) => ({ _tag: 'ConversationStorageFailed' as const, cause })
-		}),
-		() => null
-	);
+	// svelte-ignore state_referenced_locally
+	const remembered =
+		storageKey === undefined
+			? null
+			: Result.getOrElse(
+					Result.try(() => localStorage.getItem(storageKey)),
+					() => null
+				);
 	// svelte-ignore state_referenced_locally
 	let conversation = $state<string | null>(
 		request.conversation === undefined ? remembered : request.conversation
@@ -389,6 +392,11 @@
 			onConversation?.(id);
 			thread = false;
 			automation = false;
+			// the last opened one outlives the tab; a new session (or one no longer found) forgets it
+			if (storageKey !== undefined)
+				Result.try(() =>
+					id === null ? localStorage.removeItem(storageKey) : localStorage.setItem(storageKey, id)
+				);
 		}
 	);
 	watch(
@@ -452,7 +460,7 @@
 		const about =
 			request.about === undefined
 				? ''
-				: `(${t('About')} ${request.about.collection}/${request.about.id}) `;
+				: `(${t('About')} ${request.about.model}/${request.about.id}) `;
 		const files = attached,
 			sentMode = mode === 'compact' ? 'compact' : planning ? 'plan' : undefined;
 		// on screen before any round trip: the conversation's creation and the post follow behind it
@@ -504,10 +512,6 @@
 						return yield* Effect.sync(() => failed(t('The request failed.')));
 					id = decoded.success.id;
 					const startedId = id;
-					yield* Effect.try({
-						try: () => sessionStorage.setItem(KEY, startedId),
-						catch: (cause) => ({ _tag: 'ConversationStorageFailed' as const, cause })
-					}).pipe(Effect.ignore);
 					yield* Effect.sync(() => {
 						conversation = startedId;
 						picked = null;
@@ -614,21 +618,11 @@
 		pinned = true;
 		log = [];
 		expanded.clear();
-		Result.getOrElse(
-			Result.try(() => sessionStorage.removeItem(KEY)),
-			() => undefined
-		);
 	}
 	function select(id: string): void {
 		if (id === conversation) return;
 		fresh();
 		conversation = id;
-		dispatch(
-			Effect.try({
-				try: () => sessionStorage.setItem(KEY, id),
-				catch: (cause) => ({ _tag: 'ConversationStorageFailed' as const, cause })
-			}).pipe(Effect.ignore)
-		);
 	}
 	const when = (at: string) =>
 		new Date(at).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
@@ -1041,6 +1035,9 @@
 			const x = decided.get(row.id),
 				block = out.at(-1);
 			if (x === undefined || closes.get(x.event.id) !== row.id) return out;
+			// the row is the record: an ambient row was not answered, so a `respond` decision naming it is stale (a
+			// re-run after a restart) and must not leave a phantom "reply pending" for ever
+			if (row.tag === 'ambient' && x.d.action !== 'ignore') return out;
 			// a member's own conversation answers every message: only a channel thread shows its triage marks
 			if (!thread && x.d.action === 'respond') return out;
 			if (block !== undefined && 'ignored' in block && x.d.action !== 'respond') block.decision = x;
@@ -1060,6 +1057,22 @@
 					: `decision:${it.decision.event.id}`;
 	};
 	const turns = virtualList({ count: () => items.length, key: itemKey, estimate: 56 });
+	/** On a channel thread, each reply's inputs: the messages its turn took since its previous reply. */
+	const replying = $derived.by(() => {
+		const by = new Map<string, AgentRow[]>();
+		if (!thread) return by;
+		const open = new Map<string, AgentRow[]>();
+		for (const r of rows) {
+			if (r.turn === undefined) continue;
+			if (r.role === 'user' && r.tag !== 'ambient') open.set(r.turn, [...(open.get(r.turn) ?? []), r]);
+			else if (r.role === 'assistant' && !!r.text && (open.get(r.turn)?.length ?? 0) > 0) {
+				by.set(r.id, open.get(r.turn)!);
+				open.delete(r.turn);
+			}
+		}
+		return by;
+	});
+	const said = (r: AgentRow) => `${r.author ? `${r.author}: ` : ''}${r.text ?? ''}`;
 	/** A step still being written: a running call, or reasoning whose reply is still streaming. */
 	const active = (s: AgentRow) => s.tool?.running === true || s.state === 'streaming';
 	/** The group's wall time: its first step's start to its last step's end (a call's `ms`), whole seconds. */
@@ -1180,7 +1193,7 @@
 		watcher.observe(el, { childList: true, subtree: true });
 		return () => watcher.disconnect();
 	}
-	// `/` commands (only as the draft's first character) and `@` mentions: a collection, then one of its records
+	// `/` commands (only as the draft's first character) and `@` mentions: a model, then one of its records
 	const commands = $derived<readonly CommandItem[]>([
 		{
 			id: 'plan',
@@ -1253,7 +1266,7 @@
 							id: c,
 							label: c.replace(/_/g, ' '),
 							icon: 'lucide:database',
-							group: t('Collections'),
+							group: t('Models'),
 							insert: `@${c}/`,
 							keep: true as const
 						}))
@@ -1262,10 +1275,10 @@
 				target = kinds.catalog?.[c];
 			if (target === undefined || kinds.query === undefined) return Effect.succeed([]);
 			return kinds
-				.query(c, pickerRead(target, target.label, { limit: 8 }, q.slice(slash + 1)))
+				.query({ [c]: pickerRead(target, target.label, { limit: 8 }, q.slice(slash + 1)) })
 				.pipe(
-					Effect.map((page) =>
-						page.rows.map((r) => {
+					Effect.map((answer) =>
+						(answer[c]?.rows ?? []).map((r) => {
 							const label =
 								target.label
 									.map((f) => r[f])
@@ -1312,7 +1325,7 @@
 			: 'text-destructive'}"
 		onclick={() => (open ? expanded.delete(event.id) : expanded.add(event.id))}
 	>
-		<Icon name="lucide:scale" class="size-3.5" /><span>{t(d.action ?? 'decided')}</span>
+		<Icon name="lucide:scale" class="size-3.5" /><span>{t('Decision')}</span>
 	</button>
 {/snippet}
 {#snippet matrix({ event, d }: Decided)}
@@ -1932,20 +1945,32 @@
 									</li>
 								{:else if 'ignored' in item}
 									{@const dec = item.decision}
-									<!-- messages not for the agent: one quiet block, each sender and text, and the decision that left them -->
+									{@const n = item.ignored.length}
+									<!-- messages not for the agent: one quiet block, collapsed to its count and last message, opening to each sender and text -->
 									<li
 										{@attach turns.measure(itemKey(at))}
 										data-role="ignored"
 										data-decision={dec?.event.id}
 										data-action={dec?.d.action}
-										class="ml-auto w-fit max-w-[85%] rounded-xl border border-dashed border-border/80 px-3 py-2 text-xs text-muted-foreground"
+										class="ml-auto flex w-fit max-w-[85%] items-start gap-1.5 rounded-xl border border-dashed border-border/80 px-3 py-2 text-xs text-muted-foreground"
 									>
-										<div class="flex items-center gap-1.5">
-											<Icon name="lucide:message-circle-off" class="size-3.5 shrink-0" /><span
-												class="font-medium">{t('Not for the assistant')}</span
+										<details class="group/aside min-w-0" data-aside>
+											<summary
+												class="flex cursor-pointer list-none items-center gap-1.5 [&::-webkit-details-marker]:hidden"
 											>
-											{#if dec !== undefined}{@render decisionToggle(dec, 'ml-auto')}{/if}
-										</div>
+												<Icon name="lucide:message-circle-off" class="size-3.5 shrink-0" /><span
+													class="shrink-0 font-medium"
+													data-aside-count
+													>{n} {t(
+														n === 1 ? 'message not for the assistant' : 'messages not for the assistant'
+													)}</span
+												><span class="truncate opacity-70 group-open/aside:hidden" data-aside-last
+													>{said(item.ignored.at(-1)!)}</span
+												><Icon
+													name="lucide:chevron-right"
+													class="size-3 shrink-0 transition-transform group-open/aside:rotate-90"
+												/>
+											</summary>
 										<ul class="mt-1 space-y-1">
 											{#each item.ignored as r (r.id)}
 												<li
@@ -1959,6 +1984,8 @@
 											{/each}
 										</ul>
 										{#if dec !== undefined && expanded.has(dec.event.id)}{@render matrix(dec)}{/if}
+										</details>
+										{#if dec !== undefined}{@render decisionToggle(dec, 'ml-auto shrink-0')}{/if}
 									</li>
 								{:else if 'decision' in item}
 									{@const { event } = item.decision}
@@ -2083,6 +2110,12 @@
 													/><span>{t('Switched to')} {modelLabel(model)}</span><span
 														class="h-px flex-1 bg-border"
 													></span>
+												</p>{/if}
+											{#if replying.has(row.id)}<p
+													class="mb-1 truncate text-xs text-muted-foreground"
+													data-replying-to
+												>
+													{t('Replying to')}: {replying.get(row.id)!.map(said).join(' · ')}
 												</p>{/if}
 											<div {@attach copyable} class="agent-reply">
 												<ReadonlyMarkdown

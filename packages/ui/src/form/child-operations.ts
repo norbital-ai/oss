@@ -1,5 +1,5 @@
 import type { Value } from '@norbital-ai/std/kind';
-import type { Values } from '../collection/types.js';
+import type { Values } from '../model/types.js';
 
 /** Explicit native commands only: an absent or unloaded row never means delete. */
 export type ChildOperation = (

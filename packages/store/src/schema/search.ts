@@ -1,6 +1,7 @@
 // The multilingual search tokenizer (rules 16, L-BOLT-121/122), ported as is: installed as SQL functions by the schema
 // plan, so the stored document (a generated column) and the typed query are folded and tokenized by one implementation.
-import { Encoding, Result } from 'effect';
+import { Result } from 'effect';
+import * as Base64 from 'effect/encoding/Base64';
 import { inflateSync } from 'fflate';
 import { ROMANIZATION_DEFLATED } from './romanization.ts';
 
@@ -15,7 +16,7 @@ const SEPARATOR = String.raw`\x01-\x2f\x3a-\x40\x5b-\x60\x7b-\xbf\xd7\xf7 -⯿
  * An unmapped glyph (ASCII, digits) reads as itself.
  */
 const romanizeFunction = (): string => {
-	const bytes = inflateSync(Result.getOrThrow(Encoding.decodeBase64(ROMANIZATION_DEFLATED)));
+	const bytes = inflateSync(Result.getOrThrow(Base64.decode(ROMANIZATION_DEFLATED)));
 	const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
 	const end = 6 + view.getUint32(0, true);
 	const first = view.getUint16(4, true);

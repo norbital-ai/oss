@@ -20,7 +20,7 @@ const left = '0199a000-0000-7000-8000-000000000011',
 	right = '0199a000-0000-7000-8000-000000000012';
 const grant: GrantData = {
 	read: true,
-	update: { fields: ['note'], approval: true }
+	update: { columns: { orders: ['note'] }, check: true }
 };
 const manifest: EngineManifest = {
 	workspace: { tz: 'UTC', locale: 'en' },
@@ -32,10 +32,10 @@ const manifest: EngineManifest = {
 		}
 	},
 	relationships: {},
-	collections: {
+	exposures: {
 		orders: {
-			read: { fields: 'all' },
-			update: { input: { columns: ['note'] } },
+			read: { orders: { fields: 'all' } },
+			update: { columns: { orders: ['note'] } },
 			notify: true
 		}
 	},
@@ -60,14 +60,14 @@ const manifest: EngineManifest = {
 	agent: { skills: {} }
 };
 const guest = program(`export default {
- collection: { orders: { bodies: { notify: function*(event) {
+ model: { orders: { bodies: { notify: function*(event) {
   if(event.kind!=='write')return [];
   if(event.action!=='update'||event.records.length!==2)throw Error('Expected the complete committed batch');
   return [{to:[{user:'${salesId}'}],title:'Bundle committed'}];
  } } } },
  automation: { followup: { body: function*(){return null;} } },
  policy: { seller: { grants: { orders: { update: {
-  approval: (_write,flow)=>flow.step('Finance',{teams:['Finance']})
+  check: function*(_changes,ctx){ return ctx.approve((flow)=>flow.step('Finance',{teams:['Finance']})); }
  } } } } }
 };`);
 let pg: PGlite, db: TenantDb, e: Engine, sales: Authority, finance: Authority;
@@ -87,8 +87,8 @@ const submit = Effect.fn('Test.submitAtomicBatch')(function* () {
 	const result = yield* Context.get(e, Callables).acts({
 		name: 'orders.batch',
 		acts: [
-			{ collection: 'orders', verb: 'update', input: { target: left, set: { note: 'first' } } },
-			{ collection: 'orders', verb: 'update', input: { target: right, set: { note: 'second' } } }
+			{ model: 'orders', verb: 'update', input: [{ target: left, set: { note: 'first' } }] },
+			{ model: 'orders', verb: 'update', input: [{ target: right, set: { note: 'second' } }] }
 		],
 		authority: sales,
 		bindings,
@@ -210,7 +210,7 @@ it.effect('the requester cannot change the records its pending batch holds', () 
 		const again = yield* Context.get(e, Callables).acts({
 			name: 'orders.batch',
 			acts: [
-				{ collection: 'orders', verb: 'update', input: { target: left, set: { note: 'again' } } }
+				{ model: 'orders', verb: 'update', input: [{ target: left, set: { note: 'again' } }] }
 			],
 			authority: sales,
 			bindings,
@@ -234,8 +234,8 @@ it.effect('a batch of generated verbs opens one request over both writes', () =>
 		const result = yield* Context.get(e, Callables).acts({
 			name: 'orders.batch',
 			acts: [
-				{ collection: 'orders', verb: 'update', input: { target: left, set: { note: 'one' } } },
-				{ collection: 'orders', verb: 'update', input: { target: right, set: { note: 'two' } } }
+				{ model: 'orders', verb: 'update', input: [{ target: left, set: { note: 'one' } }] },
+				{ model: 'orders', verb: 'update', input: [{ target: right, set: { note: 'two' } }] }
 			],
 			authority: sales,
 			bindings,
@@ -265,14 +265,14 @@ it.effect('a refused item leaves every batch write, approval and queued effect a
 			name: 'orders.batch',
 			acts: [
 				{
-					collection: 'orders',
+					model: 'orders',
 					verb: 'update',
-					input: { target: left, set: { note: 'must roll back' } }
+					input: [{ target: left, set: { note: 'must roll back' } }]
 				},
 				{
-					collection: 'orders',
+					model: 'orders',
 					verb: 'update',
-					input: { target: '0199a000-0000-7000-8000-000000000099', set: { note: 'missing' } }
+					input: [{ target: '0199a000-0000-7000-8000-000000000099', set: { note: 'missing' } }]
 				}
 			],
 			authority: sales,

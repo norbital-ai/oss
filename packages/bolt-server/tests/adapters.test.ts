@@ -17,7 +17,7 @@ import {
 	Stream
 } from 'effect';
 import { TestClock } from 'effect/testing';
-import { FetchHttpClient } from 'effect/unstable/http';
+import { FetchHttpClient } from 'effect/http';
 import {
 	DeadlinePort,
 	inProcessDeadlines,
@@ -163,7 +163,7 @@ describe('sealed secrets (§5.11.4)', () => {
 					user = yield* row('secret:user-1:google');
 				expect(yield* s.open('workspace', 'ERP_TOKEN', workspace)).toEqual(Option.some('tok'));
 				expect(
-					yield* Config.string('ERP_TOKEN').pipe(Effect.provide(ConfigProvider.layer(s.config)))
+					yield* Config.String('ERP_TOKEN').pipe(Effect.provide(ConfigProvider.layer(s.config)))
 				).toBe('tok');
 				expect(yield* Effect.flip(s.set('workspace', 'OTHER', 'x'))).toMatchObject({
 					message: expect.stringMatching(/declared/)

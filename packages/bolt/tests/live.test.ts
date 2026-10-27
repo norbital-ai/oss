@@ -15,7 +15,6 @@ import {
 	Stream
 } from 'effect';
 import { TestClock } from 'effect/testing';
-import { ReadDeps } from '../src/engine/query/engine.ts';
 import { Live, Manifest, Reads, type ReadsShape } from '../src/engine/services.ts';
 import { get, read, type ReadIR } from '../src/protocol/reads.ts';
 import { BoltError } from '../src/protocol/errors.ts';
@@ -66,12 +65,12 @@ const order = (over: { [k: string]: Json } = {}) => ({
 const cap = (
 	old: { [k: string]: Json } | null,
 	next: { [k: string]: Json } | null,
-	collection = 'orders'
+	model = 'orders'
 ): Captured => {
 	const row = next ?? old;
 	if (row === null) throw new Error('A capture needs its pre- or post-image');
 	return {
-		collection,
+		model,
 		id: String(row['id']),
 		op: old === null ? 'create' : next === null ? 'delete' : 'update',
 		revision: 1,
@@ -116,11 +115,7 @@ const setup = Effect.fn('Test.liveSetup')(function* (answer: (read: ReadIR) => J
 	const asked: ReadIR[] = [];
 	let n = 0;
 	const hub = yield* makeHub((batch) =>
-		Effect.gen(function* () {
-			const dependencies = yield* ReadDeps;
-			for (const read of batch) if (read.kind === 'query') dependencies?.add(read.collection);
-			return batch.map((read) => (asked.push(read), answer(read) ?? ++n));
-		})
+		Effect.sync(() => batch.map((read) => (asked.push(read), answer(read) ?? ++n)))
 	);
 	const frames: Frame[] = [];
 	let ended = false;
@@ -223,7 +218,7 @@ describe('engine/live: routing on pre- and post-images (rule 65)', () => {
 					cap(null, { id, member, title: id, at: NOW, read_at: null }, 'sys_notification');
 				hub.publish([notice('queued-before-boot')]);
 				yield* hub.register(conn, 'inbox', {
-					read: { kind: 'inbox', collection: 'sys_notification', member: 'u1' }
+					read: { kind: 'inbox', model: 'sys_notification', member: 'u1' }
 				});
 				yield* hub.settled;
 				yield* TestClock.adjust(0);
@@ -523,7 +518,7 @@ describe('engine/live: deltas from the RETURNING image (rule 65)', () => {
 			expect(x.asked).toEqual([
 				{
 					kind: 'get',
-					collection: 'orders',
+					model: 'orders',
 					id: O(1),
 					select: { fields: ['title'], relations: { customer: expect.anything() } }
 				}
@@ -668,7 +663,7 @@ describe('engine/live: a view sorted by a related field (rule 65)', () => {
 			expect(x.asked).toEqual([
 				expect.objectContaining({
 					kind: 'read',
-					collection: 'orders',
+					model: 'orders',
 					order: [{ field: 'customer.name', dir: 'asc' }]
 				})
 			]);
@@ -698,11 +693,11 @@ describe('engine/live: a view sorted by a related field (rule 65)', () => {
 			Effect.gen(function* () {
 				const moved = yield* after([cap(row(2), row(2, { customer: 'c2' }))], two);
 				expect(moved.asked).toEqual([
-					expect.objectContaining({ kind: 'read', collection: 'orders' })
+					expect.objectContaining({ kind: 'read', model: 'orders' })
 				]);
 				const inserted = yield* after([cap(null, row(3))], two);
 				expect(inserted.asked).toEqual([
-					expect.objectContaining({ kind: 'read', collection: 'orders' })
+					expect.objectContaining({ kind: 'read', model: 'orders' })
 				]);
 				expect(inserted.sweep.conservative).toBe(1);
 			})
@@ -711,7 +706,7 @@ describe('engine/live: a view sorted by a related field (rule 65)', () => {
 
 describe('engine/live: registration (rule 64) and budgets (rule 65)', () => {
 	it.effect(
-		'literal time and declared queries need no live options; cursor pages remain refused',
+		'literal time and read requests need no live options; cursor pages remain refused',
 		() =>
 			Effect.gen(function* () {
 				const { hub, connect, disconnect } = yield* setup();
@@ -721,11 +716,9 @@ describe('engine/live: registration (rule 64) and budgets (rule 65)', () => {
 					all: true
 				});
 				yield* hub.register(c, 'a', { read: timed });
-				yield* hub.register(c, 'q', {
-					read: { kind: 'query', collection: 'orders', query: 'open', input: null }
-				});
+				yield* hub.register(c, 'q', { read: { kind: 'request', roots: [{ root: 'orders', read: timed }] } });
 				const cursor = read(cat, 'orders', { limit: 5 });
-				if (cursor.kind !== 'read') throw new Error('The fixture requires a collection read');
+				if (cursor.kind !== 'read') throw new Error('The fixture requires a model read');
 				expect(
 					yield* Effect.flip(
 						hub.register(c, 'p', {
@@ -826,6 +819,8 @@ const Page = Schema.Struct({
 	rows: Schema.Array(Schema.Record(Schema.String, Schema.Json)),
 	next: Schema.NullOr(Schema.String)
 });
+/** A page client's read request answer: one root's page. */
+type Orders = { orders: typeof Page.Type };
 const observe = Effect.fn('Test.observeClient')(function* <A, E>(stream: Stream.Stream<A, E>) {
 	const answers = yield* Queue.unbounded<A>();
 	let current: A | undefined;
@@ -947,7 +942,7 @@ describe('$bolt client without a server', () => {
 					const request = new Request(input, init);
 					if (new URL(request.url).pathname.endsWith('/live')) return Response.json({ errors: [] });
 					const body = Schema.decodeUnknownSync(ActBody)(await request.json());
-					expect(body).toMatchObject({ callable: 'orders.create', input: { title: 'from live' } });
+					expect(body).toMatchObject({ callable: 'orders.create', input: [{ title: 'from live' }] });
 					const frame: Frame = {
 						t: 'patch',
 						view: 'v1',
@@ -961,22 +956,22 @@ describe('$bolt client without a server', () => {
 						outcome: {
 							kind: 'committed',
 							output: null,
-							records: [{ collection: 'orders', id: written.id, revision: 1 }]
+							records: [{ model: 'orders', id: written.id, revision: 1 }]
 						},
 						v: 1
 					});
 				};
 				const transportClient = yield* client({ fetch, uuid: () => 'live-act' });
-				let other: typeof Page.Type | undefined;
-				const final = (value: typeof Page.Type) =>
-					value.rows.length === 1 && value.rows[0]?.['id'] === written.id;
+				let other: Orders | undefined;
+				const final = (value: Orders) =>
+					value.orders.rows.length === 1 && value.orders.rows[0]?.['id'] === written.id;
 				yield* transportClient.bolt
-					.observe<typeof Page.Type>(transportClient.bolt.query('orders', { all: true }))
+					.observe<Orders>(transportClient.bolt.query({ orders: {} }))
 					.pipe(
 						Stream.runForEach((value) =>
 							Effect.gen(function* () {
 								other = value;
-								if (value.rows.length === 0) yield* Deferred.succeed(ready, undefined);
+								if (value.orders.rows.length === 0) yield* Deferred.succeed(ready, undefined);
 								if (final(value)) {
 									yield* Deferred.succeed(finalShown, undefined);
 									yield* Deferred.await(allowAcknowledgement);
@@ -991,25 +986,25 @@ describe('$bolt client without a server', () => {
 					t: 'answer',
 					view: 'v1',
 					v: 0,
-					value: { rows: [], next: null }
+					value: { orders: { rows: [], next: null } }
 				});
 				yield* Deferred.await(ready);
 				let invoked = false;
 				yield* transportClient.bolt
-					.observe<typeof Page.Type>(transportClient.bolt.query('orders', { all: true }))
+					.observe<Orders>(transportClient.bolt.query({ orders: {} }))
 					.pipe(
 						Stream.runForEach((value) =>
 							Effect.gen(function* () {
 								if (!invoked) {
 									invoked = true;
-									const result = yield* transportClient.bolt.act('orders.create', {
+									const result = yield* transportClient.bolt.act('orders.create', [{
 										title: 'from live'
-									});
+									}]);
 									expect(result).toMatchObject({
 										kind: 'committed',
-										records: [{ collection: 'orders', id: written.id, revision: 1 }]
+										records: [{ model: 'orders', id: written.id, revision: 1 }]
 									});
-									expect(present(other).rows).toEqual([written]);
+									expect(present(other).orders.rows).toEqual([written]);
 									yield* Deferred.succeed(completed, undefined);
 								}
 								if (final(value)) yield* Deferred.succeed(selfObserved, undefined);
@@ -1022,7 +1017,7 @@ describe('$bolt client without a server', () => {
 				yield* Deferred.succeed(allowAcknowledgement, undefined);
 				yield* Deferred.await(completed);
 				yield* Deferred.await(selfObserved);
-				expect(present(other).rows).toEqual([written]);
+				expect(present(other).orders.rows).toEqual([written]);
 			})
 	);
 	it.effect(
@@ -1188,7 +1183,7 @@ describe('$bolt client without a server', () => {
 					return run(
 						Effect.gen(function* () {
 							yield* Deferred.await(painted);
-							during = view.current().rows.length;
+							during = view.current().orders.rows.length;
 							yield* Queue.offer(fetched, undefined);
 							return yield* Deferred.await(response);
 						}),
@@ -1197,14 +1192,14 @@ describe('$bolt client without a server', () => {
 				};
 				const c = yield* client({ fetch, uuid: () => 'k1' });
 				const view = yield* observe(
-					c.bolt.observe<typeof Page.Type>(c.bolt.query('orders', { all: true }))
+					c.bolt.observe<Orders>(c.bolt.query({ orders: {} }))
 				);
 				yield* c.opened;
 				yield* c.push({ t: 'hello', conn: 'c1', v: 0 });
-				yield* c.push({ t: 'answer', view: 'v1', v: 0, value: { rows: [order()], next: null } });
+				yield* c.push({ t: 'answer', view: 'v1', v: 0, value: { orders: { rows: [order()], next: null } } });
 				yield* view.next;
 				const write = yield* c.bolt
-					.act('orders.create', { title: 'x' })
+					.act('orders.create', [{ title: 'x' }])
 					.pipe(Effect.flip, Effect.forkScoped);
 				yield* view.next;
 				yield* Deferred.succeed(painted, undefined);
@@ -1218,14 +1213,14 @@ describe('$bolt client without a server', () => {
 				);
 				expect(yield* Fiber.join(write)).toMatchObject({ _tag: 'ActRefused', code: 'forbidden' });
 				yield* view.next;
-				expect([during, view.current().rows.length]).toEqual([2, 1]);
+				expect([during, view.current().orders.rows.length]).toEqual([2, 1]);
 				offline = true;
-				expect(yield* Effect.flip(c.bolt.act('orders.create', { title: 'x' }))).toMatchObject({
+				expect(yield* Effect.flip(c.bolt.act('orders.create', [{ title: 'x' }]))).toMatchObject({
 					_tag: 'ActUnknown',
 					invocation: 'k1'
 				});
 				yield* c.settle;
-				expect(view.current().rows).toHaveLength(1);
+				expect(view.current().orders.rows).toHaveLength(1);
 				expect(c.bolt.t('hello {name}', { name: 'Ada' })).toBe('hello Ada');
 				yield* view.stop;
 			})
@@ -1236,13 +1231,13 @@ describe('$bolt client without a server', () => {
 			Effect.gen(function* () {
 				const c = yield* client();
 				const view = yield* observe(
-					c.bolt.observe<typeof Page.Type>(c.bolt.query('orders', { all: true }))
+					c.bolt.observe<Orders>(c.bolt.query({ orders: {} }))
 				);
-				const titles = () => view.current().rows.map((row) => row['title']);
+				const titles = () => view.current().orders.rows.map((row) => row['title']);
 				yield* c.opened;
 				yield* c.push({ t: 'hello', conn: 'c1', v: 0 });
 				yield* c.registration;
-				yield* c.push({ t: 'answer', view: 'v1', v: 1, value: { rows: [order()], next: null } });
+				yield* c.push({ t: 'answer', view: 'v1', v: 1, value: { orders: { rows: [order()], next: null } } });
 				yield* view.next;
 				yield* c.push({
 					t: 'patch',
@@ -1271,7 +1266,7 @@ describe('$bolt client without a server', () => {
 					{
 						conn: 'c1',
 						drop: [],
-						add: [{ view: 'v1', read: { m: 'query', a: ['orders', { all: true }] } }]
+						add: [{ view: 'v1', read: { m: 'query', a: [{ orders: {} }] } }]
 					}
 				]);
 				yield* view.stop;
@@ -1284,13 +1279,13 @@ describe('$bolt client without a server', () => {
 				Effect.gen(function* () {
 					const c = yield* client();
 					const view = yield* observe(
-						c.bolt.observe<typeof Page.Type>(c.bolt.query('orders', { all: true }))
+						c.bolt.observe<Orders>(c.bolt.query({ orders: {} }))
 					);
 					yield* c.opened;
 					expect(c.status.current()).toBe('connecting');
 					yield* c.push({ t: 'hello', conn: 'c1', v: 0 });
 					yield* c.registration;
-					yield* c.push({ t: 'answer', view: 'v1', v: 0, value: { rows: [order()], next: null } });
+					yield* c.push({ t: 'answer', view: 'v1', v: 0, value: { orders: { rows: [order()], next: null } } });
 					yield* view.next;
 					expect(c.status.current()).toBe('live');
 					expect(c.statuses.at(-1)).toBe('live');
@@ -1315,12 +1310,12 @@ describe('$bolt client without a server', () => {
 						t: 'answer',
 						view: 'v1',
 						v: 4,
-						value: { rows: [order({ id: 'o2' })], next: null }
+						value: { orders: { rows: [order({ id: 'o2' })], next: null } }
 					});
 					yield* view.next;
 					expect(c.registered.map((body) => body.conn)).toEqual(['c1', 'c2']);
 					expect(present(c.registered[1]).add?.map((item) => item.view)).toEqual(['v1']);
-					expect(present(view.current().rows[0])['id']).toBe('o2');
+					expect(present(view.current().orders.rows[0])['id']).toBe('o2');
 					expect(c.statuses.at(-1)).toBe('live');
 					yield* c.close;
 					yield* c.settle;
@@ -1348,7 +1343,7 @@ describe('$bolt client without a server', () => {
 				const test = Effect.gen(function* () {
 					const c = yield* client({ signals });
 					const view = yield* observe(
-						c.bolt.observe<unknown>(c.bolt.query('orders', { all: true }))
+						c.bolt.observe<unknown>(c.bolt.query({ orders: {} }))
 					);
 					yield* c.opened;
 					let conns = 0;
@@ -1433,7 +1428,7 @@ describe('$bolt client without a server', () => {
 					};
 					const c = yield* client({ signals });
 					const view = yield* observe(
-						c.bolt.observe<unknown>(c.bolt.query('orders', { all: true }))
+						c.bolt.observe<unknown>(c.bolt.query({ orders: {} }))
 					);
 					yield* c.opened;
 					yield* c.drop;
@@ -1452,13 +1447,13 @@ describe('$bolt client without a server', () => {
 		Effect.gen(function* () {
 			const signals = { hidden: false, addEventListener: () => {} };
 			const c = yield* client({ signals });
-			const first = yield* observe(c.bolt.observe<unknown>(c.bolt.query('orders', { all: true })));
+			const first = yield* observe(c.bolt.observe<unknown>(c.bolt.query({ orders: {} })));
 			yield* c.opened;
 			expect(c.sources).toHaveLength(1);
 			yield* TestClock.adjust(300000);
 			expect(c.sources).toHaveLength(1);
 			const next = yield* observe(
-				c.bolt.observe<unknown>(c.bolt.query('orders', { where: { region: 'north' } }))
+				c.bolt.observe<unknown>(c.bolt.query({ orders: { where: { region: { eq: 'north' } } } }))
 			);
 			yield* c.settle;
 			expect(c.sources).toHaveLength(1);
@@ -1490,7 +1485,7 @@ describe('$bolt client without a server', () => {
 							for (const run of [...listeners]) run();
 						}).pipe(Effect.andThen(c.settle));
 					const view = yield* observe(
-						c.bolt.observe<unknown>(c.bolt.query('orders', { all: true }))
+						c.bolt.observe<unknown>(c.bolt.query({ orders: {} }))
 					);
 					yield* c.opened;
 					yield* c.push({ t: 'hello', conn: 'c1', v: 0 });
@@ -1530,12 +1525,12 @@ describe('$bolt client without a server', () => {
 						Queue.offerUnsafe(requested, undefined);
 					});
 				const c = yield* client({ fetch });
-				const view = yield* observe(c.bolt.observe<unknown>(c.bolt.query('orders', { all: true })));
+				const view = yield* observe(c.bolt.observe<unknown>(c.bolt.query({ orders: {} })));
 				yield* c.opened;
 				yield* c.push({ t: 'hello', conn: 'c1', v: 0 });
 				yield* Queue.take(requested);
 				const another = yield* observe(
-					c.bolt.observe<unknown>(c.bolt.query('orders', { where: { region: 'north' } }))
+					c.bolt.observe<unknown>(c.bolt.query({ orders: { where: { region: { eq: 'north' } } } }))
 				);
 				yield* Queue.take(requested);
 				const gone = () =>
@@ -1547,7 +1542,7 @@ describe('$bolt client without a server', () => {
 				expect(view.fiber.pollUnsafe()).toBeUndefined();
 				yield* c.push({ t: 'hello', conn: 'c1', v: 1 });
 				yield* Queue.take(requested);
-				yield* c.push({ t: 'answer', view: 'v1', v: 1, value: { rows: [order()], next: null } });
+				yield* c.push({ t: 'answer', view: 'v1', v: 1, value: { orders: { rows: [order()], next: null } } });
 				yield* view.next;
 				present(pending[1])(gone());
 				present(pending[2])(Response.json({ errors: [] }));
@@ -1578,91 +1573,43 @@ describe('$bolt client without a server', () => {
 	);
 });
 
-it.effect('a keyed group re-answers when a later member model changes and retains its keys', () =>
-	Effect.gen(function* () {
-		let version = 0;
-		const { hub, connect, asked, frames } = yield* setup((read) =>
-			page(
-				read.collection === 'orders'
-					? { id: 'orders-row', title: `version ${version}` }
-					: { id: 'customers-row', name: `version ${version}` }
-			)
-		);
-		const id = yield* connect();
-		const reads = [read(cat, 'orders', { all: true }), read(cat, 'customers', { all: true })];
-		const first = present(reads[0]);
-		yield* hub.register(id, 'group', {
-			read: first,
-			batch: { keys: ['orders', 'customers'], reads }
-		});
-		asked.length = 0;
-		frames.length = 0;
-		version = 1;
-		hub.publish([cap(null, { id: 'c1', name: 'changed' }, 'customers')]);
-		yield* hub.settled;
-		yield* TestClock.adjust(LIVE.onDebounceMs);
-		expect(asked).toEqual(reads);
-		expect(frames.findLast((frame) => frame.t === 'answer')).toMatchObject({
-			view: 'group',
-			value: {
-				orders: page({ id: 'orders-row', title: 'version 1' }),
-				customers: page({ id: 'customers-row', name: 'version 1' })
-			}
-		});
-	})
-);
-
-it.effect('a declared query replaces its recorded dependencies after each answer', () =>
-	Effect.gen(function* () {
-		let target = 'customers',
-			calls = 0;
-		const hub = yield* makeHub((batch) =>
-			Effect.gen(function* () {
-				(yield* ReadDeps)?.add(target);
-				calls++;
-				return batch.map(() => calls);
-			})
-		);
-		const frames: Frame[] = [];
-		const id = (yield* connection(hub, admin, frames)).id;
-		yield* hub.register(id, 'query', {
-			read: { kind: 'query', collection: 'orders', query: 'open', input: null }
-		});
-		expect(calls).toBe(1);
-		hub.publish([cap(null, order())]);
-		yield* hub.settled;
-		yield* TestClock.adjust(LIVE.onDebounceMs);
-		expect(calls).toBe(1);
-		target = 'orders';
-		hub.publish([cap(null, { id: 'c1', name: 'changed' }, 'customers')]);
-		yield* hub.settled;
-		yield* TestClock.adjust(LIVE.onDebounceMs);
-		expect(calls).toBe(2);
-		hub.publish([cap(null, { id: 'c2', name: 'no longer read' }, 'customers')]);
-		yield* hub.settled;
-		yield* TestClock.adjust(LIVE.onDebounceMs);
-		expect(calls).toBe(2);
-		hub.publish([cap(null, order({ id: 'o2' }))]);
-		yield* hub.settled;
-		yield* TestClock.adjust(LIVE.onDebounceMs);
-		expect(calls).toBe(3);
-	})
-);
-
-it.effect('a query refresh waits for its debounce window under the test clock', () =>
-	Effect.gen(function* () {
-		const { hub, connect, asked } = yield* setup(() => null);
-		const id = yield* connect();
-		yield* hub.register(id, 'query', {
-			read: { kind: 'query', collection: 'orders', query: 'open', input: null }
-		});
-		asked.length = 0;
-		hub.publish([cap(null, order())]);
-		yield* hub.settled;
-		yield* TestClock.adjust(0);
-		yield* TestClock.adjust(LIVE.onDebounceMs - 1);
-		expect(asked).toHaveLength(0);
-		yield* TestClock.adjust(1);
-		expect(asked).toHaveLength(1);
-	})
+it.effect(
+	'a read request re-answers whole when a model it read changes, keyed by root, and skips a model it never read',
+	() =>
+		Effect.gen(function* () {
+			let version = 0;
+			const roots = {
+				orders: read(cat, 'orders', { all: true }),
+				customers: read(cat, 'customers', { all: true })
+			};
+			const request: ReadIR = {
+				kind: 'request',
+				roots: Object.entries(roots).map(([root, r]) => ({ root, read: r }))
+			};
+			const { hub, connect, asked, frames } = yield* setup(() => ({
+				orders: page({ id: 'orders-row', title: `version ${version}` }),
+				customers: page({ id: 'customers-row', name: `version ${version}` })
+			}));
+			const id = yield* connect();
+			yield* hub.register(id, 'group', { read: request });
+			asked.length = 0;
+			frames.length = 0;
+			// lines are neither a root nor a layer of this request
+			hub.publish([cap(null, { id: 'l1', label: 'a', amount: '1', order: 'o1' }, 'lines')]);
+			yield* hub.settled;
+			yield* TestClock.adjust(0);
+			expect(asked).toEqual([]);
+			version = 1;
+			hub.publish([cap(null, { id: 'c1', name: 'changed' }, 'customers')]);
+			yield* hub.settled;
+			yield* TestClock.adjust(0);
+			expect(asked).toEqual([request]);
+			expect(frames.findLast((frame) => frame.t === 'answer')).toMatchObject({
+				view: 'group',
+				value: {
+					orders: page({ id: 'orders-row', title: 'version 1' }),
+					customers: page({ id: 'customers-row', name: 'version 1' })
+				}
+			});
+		})
 );

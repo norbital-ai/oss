@@ -26,7 +26,7 @@ import {
 	type WriteEngine
 } from '../src/engine/write/act.ts';
 import { restorePreview, restoreRecord, type RestoreTarget } from '../src/engine/write/restore.ts';
-import { admin, arm, authority, grants, NOW, TODAY } from './write-fixture.ts';
+import { admin, arm, authority, deleteArm, grants, NOW, TODAY, writeArm } from './write-fixture.ts';
 import { manifest } from './write-p2.fixture.ts';
 
 const count = { reads: 0, writes: 0, statements: 0 };
@@ -67,7 +67,7 @@ const fixture = Effect.gen(function* () {
 		act(
 			{ manifest, db, ...engine },
 			{
-				collection: 'orders',
+				model: 'orders',
 				mode: { _tag: 'Direct' },
 				key: `key-${n}`,
 				issuedAt: NOW,
@@ -98,14 +98,14 @@ const ok = (o: Outcome) => {
 };
 const idOf = (o: Outcome, c = 'orders') =>
 	required(
-		ok(o).records.find((r) => r.collection === c),
+		ok(o).records.find((r) => r.model === c),
 		`created ${c}`
 	).id;
 const order = Effect.fnUntraced(function* (
 	title = 'desk',
 	lines: { label: string; amount: string }[] = []
 ) {
-	return idOf((yield* run({ verb: 'create', input: { title, lines: { create: lines } } })).outcome);
+	return idOf((yield* run({ verb: 'create', input: [{ title, lines }] })).outcome);
 });
 const person = Effect.fnUntraced(function* (
 	code: string,
@@ -113,7 +113,7 @@ const person = Effect.fnUntraced(function* (
 	email: string | null = null
 ) {
 	return idOf(
-		(yield* run({ collection: 'people', verb: 'create', input: { code, name, email } })).outcome,
+		(yield* run({ model: 'people', verb: 'create', input: [{ code, name, email }] })).outcome,
 		'people'
 	);
 });
@@ -140,13 +140,10 @@ const ImportReport = Schema.Struct({
 });
 const FALSE: Pred = { t: 'const', value: false };
 const REQUEST = '0199a000-0000-7000-8000-0000000000aa';
-/** A write admitted by its approval callback. The fake hook still cannot mutate domain data. */
+const columns = (op: 'create' | 'update') => manifest.exposures['orders']?.[op]?.columns ?? {};
+/** A write its policy `check` approves. The fake hook still cannot mutate domain data. */
 const routed = (op: 'create' | 'update') =>
-	authority({
-		orders: grants({
-			[op]: [{ ...arm(), approval: true }]
-		})
-	});
+	authority({ orders: grants('orders', { [op]: [writeArm(columns(op), true)] }) });
 const snapshot: StepsSnapshot = {
 	kind: 'steps',
 	steps: [{ name: 'Finance', teams: ['finance'], users: [] }],
@@ -155,7 +152,7 @@ const snapshot: StepsSnapshot = {
 const holding: Partial<WriteEngine> = {
 	guest: {
 		invokeProgram: () => Effect.die('The approval fixture does not execute programs'),
-		invoke: () => Effect.succeed({ kind: 'ok', output: snapshot })
+		invoke: () => Effect.succeed({ kind: 'ok', output: { kind: 'approve', flow: snapshot } })
 	},
 	approval: {
 		route: () =>
@@ -169,17 +166,17 @@ const holding: Partial<WriteEngine> = {
 };
 function callback(
 	body: (inv: Invocation) => GuestOutcome,
-	collection = 'orders',
+	model = 'orders',
 	calls: Invocation[] = []
 ): Partial<WriteEngine> {
-	const exposed = manifest.collections[collection];
-	if (exposed === undefined) throw new Error(`The callback fixture has no ${collection} contract`);
+	const exposed = manifest.exposures[model];
+	if (exposed === undefined) throw new Error(`The callback fixture has no ${model} contract`);
 	return {
 		manifest: {
 			...manifest,
-			collections: {
-				...manifest.collections,
-				[collection]: {
+			exposures: {
+				...manifest.exposures,
+				[model]: {
 					...exposed,
 					...(exposed.create === undefined
 						? {}
@@ -208,27 +205,27 @@ describe('engine-owned callback identities', () => {
 			const result = yield* run(
 				{
 					verb: 'create',
-					input: { title: 'native', lines: { create: [{ label: 'contract', amount: '1' }] } }
+					input: [{ title: 'native', lines: [{ label: 'contract', amount: '1' }] }]
 				},
 				{
 					...parents,
 					manifest: {
 						...manifest,
-						collections: {
-							...manifest.collections,
-							orders: required(parents.manifest?.collections.orders, 'parent callback contract'),
-							lines: required(children.manifest?.collections.lines, 'child callback contract')
+						exposures: {
+							...manifest.exposures,
+							orders: required(parents.manifest?.exposures.orders, 'parent callback contract'),
+							lines: required(children.manifest?.exposures.lines, 'child callback contract')
 						}
 					}
 				}
 			);
 			const records = ok(result.outcome).records;
 			const parent = required(
-				records.find((row) => row.collection === 'orders'),
+				records.find((row) => row.model === 'orders'),
 				'created parent'
 			);
 			const child = required(
-				records.find((row) => row.collection === 'lines'),
+				records.find((row) => row.model === 'lines'),
 				'created child'
 			);
 			expect(
@@ -237,7 +234,7 @@ describe('engine-owned callback identities', () => {
 				{
 					kind: 'create',
 					target: 'orders',
-					input: [{ title: 'native', lines: { create: [{ label: 'contract', amount: '1' }] } }]
+					input: [{ title: 'native', lines: [{ label: 'contract', amount: '1' }] }]
 				},
 				{
 					kind: 'create',
@@ -268,12 +265,10 @@ describe('engine-owned callback identities', () => {
 							index < 2
 								? {
 										...row,
-										lines: {
-											create: [
-												{ label: `${row['title']}-a`, amount: '1' },
-												{ label: `${row['title']}-b`, amount: '2' }
-											]
-										}
+										lines: [
+											{ label: `${row['title']}-a`, amount: '1' },
+											{ label: `${row['title']}-b`, amount: '2' }
+										]
 									}
 								: row
 						)
@@ -304,7 +299,7 @@ describe('engine-owned callback identities', () => {
 				expect(new Set(ids).size).toBe(7);
 				expect(
 					records
-						.filter((row) => row.collection === 'orders')
+						.filter((row) => row.model === 'orders')
 						.map((row) => row.id)
 						.sort()
 				).toEqual(orders.map((row) => row.id).sort());
@@ -331,17 +326,17 @@ describe('engine/write: erase (rule 38e, §5.13)', () => {
 					{ label: 'a', amount: '1' },
 					{ label: 'b', amount: '2' }
 				]);
-				ok((yield* run({ verb: 'update', input: { target: id, set: { note: 'n' } } })).outcome);
+				ok((yield* run({ verb: 'update', input: [{ target: id, set: { note: 'n' } }] })).outcome);
 				yield* (yield* P2Fixture).db.write({
 					text: `insert into sys_notification (id, recipient, title, link, at) values ('n1', '{}', 'Hi', $1, now())`,
-					params: [JSON.stringify({ collection: 'orders', id })]
+					params: [JSON.stringify({ model: 'orders', id })]
 				});
 				count.writes = 0;
 				const { outcome, captured } = yield* run({ verb: 'erase', input: { target: id } });
-				expect(ok(outcome).records).toEqual([{ collection: 'orders', id, revision: 3 }]);
+				expect(ok(outcome).records).toEqual([{ model: 'orders', id, revision: 3 }]);
 				// hook:identity — the removed rows reach live views only; no event trigger fires and no run is queued (38e(d))
 				// owned children are deleted before the root they point at; order among them is not the contract
-				expect(captured.map((x) => [x.collection, x.op]).sort()).toEqual([
+				expect(captured.map((x) => [x.model, x.op]).sort()).toEqual([
 					['lines', 'delete'],
 					['lines', 'delete'],
 					['orders', 'delete']
@@ -357,14 +352,14 @@ describe('engine/write: erase (rule 38e, §5.13)', () => {
 				expect(
 					yield* rows(
 						Schema.Struct({
-							collection: Schema.String,
+							model: Schema.String,
 							op: Schema.String,
 							cause: Schema.String,
 							changes: Changes
 						}),
 						`select collection, op, cause, changes from bolt_history order by collection`
 					)
-				).toEqual([{ collection: 'orders', op: 'delete', cause: 'erased', changes: {} }]);
+				).toEqual([{ model: 'orders', op: 'delete', cause: 'erased', changes: {} }]);
 			}).pipe(Effect.provide(P2FixtureLive))
 	);
 
@@ -375,14 +370,14 @@ describe('engine/write: erase (rule 38e, §5.13)', () => {
 				const id = yield* person('p1', 'Ada', 'ada@example.com');
 				ok(
 					(yield* run({
-						collection: 'people',
+						model: 'people',
 						verb: 'update',
-						input: { target: id, set: { name: 'Ada L' } }
+						input: [{ target: id, set: { name: 'Ada L' } }]
 					})).outcome
 				);
 				ok(
 					(yield* run({
-						collection: 'people',
+						model: 'people',
 						verb: 'erase',
 						input: { target: id, set: { name: 'Erased' } }
 					})).outcome
@@ -428,20 +423,20 @@ describe('engine/write: erase (rule 38e, §5.13)', () => {
 				const id = yield* person('p1', 'Ada', 'ada@example.com');
 				ok(
 					(yield* run({
-						collection: 'people',
+						model: 'people',
 						verb: 'update',
-						input: { target: id, set: { status: 'archived' } }
+						input: [{ target: id, set: { status: 'archived' } }]
 					})).outcome
 				);
 				expect(
 					(yield* run({
-						collection: 'people',
+						model: 'people',
 						verb: 'update',
-						input: { target: id, set: { email: null } }
+						input: [{ target: id, set: { email: null } }]
 					})).outcome
 				).toMatchObject({ code: 'locked' });
 				expect(
-					(yield* run({ collection: 'people', verb: 'erase', input: { target: id } })).outcome
+					(yield* run({ model: 'people', verb: 'erase', input: { target: id } })).outcome
 				).toMatchObject({ code: 'locked' });
 				expect(
 					yield* Effect.flip(
@@ -458,7 +453,7 @@ describe('engine/write: erase (rule 38e, §5.13)', () => {
 				).toMatchObject({ sqlstate: '23514' });
 				ok(
 					(yield* run({
-						collection: 'people',
+						model: 'people',
 						verb: 'erase',
 						input: { target: id, set: { email: null } }
 					})).outcome
@@ -479,17 +474,17 @@ describe('engine/write: erase (rule 38e, §5.13)', () => {
 				(yield* run({
 					verb: 'erase',
 					input: { target: id },
-					authority: authority({ orders: grants() })
+					authority: authority({ orders: grants('orders') })
 				})).outcome
 			).toMatchObject({ code: 'forbidden' });
 			ok(
-				(yield* run({ collection: 'receipts', verb: 'create', input: { memo: 'r', order: id } }))
+				(yield* run({ model: 'receipts', verb: 'create', input: [{ memo: 'r', order: id }] }))
 					.outcome
 			);
 			expect((yield* run({ verb: 'erase', input: { target: id } })).outcome).toMatchObject({
 				code: 'restricted'
 			});
-			expect((yield* run({ verb: 'delete', input: { target: id } })).outcome).toMatchObject({
+			expect((yield* run({ verb: 'delete', input: [{ target: id }] })).outcome).toMatchObject({
 				code: 'restricted'
 			});
 		}).pipe(Effect.provide(P2FixtureLive))
@@ -518,7 +513,7 @@ describe('engine/query: history (rule 17)', () => {
 			manifest,
 			{
 				kind: 'history',
-				collection: 'orders',
+				model: 'orders',
 				id,
 				...(selector === undefined ? {} : { at: selector })
 			},
@@ -533,8 +528,8 @@ describe('engine/query: history (rule 17)', () => {
 		() =>
 			Effect.gen(function* () {
 				const id = yield* order('desk');
-				ok((yield* run({ verb: 'update', input: { target: id, set: { note: 'a' } } })).outcome);
-				ok((yield* run({ verb: 'update', input: { target: id, set: { note: 'b' } } })).outcome);
+				ok((yield* run({ verb: 'update', input: [{ target: id, set: { note: 'a' } }] })).outcome);
+				ok((yield* run({ verb: 'update', input: [{ target: id, set: { note: 'b' } }] })).outcome);
 				const all = yield* history(id, admin);
 				expect(all.map((r) => [r.revision, r.changed['note']])).toEqual([
 					[1, null],
@@ -546,23 +541,25 @@ describe('engine/query: history (rule 17)', () => {
 					id: admin.actor.kind === 'member' ? admin.actor.id : ''
 				});
 				expect(yield* history(id, admin, { revision: 2 })).toHaveLength(2);
-				const masked = authority({ orders: grants({ history: [arm()], masks: { note: FALSE } }) });
+				const masked = authority({
+					orders: grants('orders', { history: [arm()], masks: { orders: { note: FALSE } } })
+				});
 				expect((yield* history(id, masked)).map((r) => r.changed['note'])).toEqual([
 					{ $masked: true },
 					{ $masked: true },
 					{ $masked: true }
 				]);
-				expect(yield* history(id, authority({ orders: grants() }))).toEqual([]);
+				expect(yield* history(id, authority({ orders: grants('orders') }))).toEqual([]);
 				// a grant that depends on the caller resolves its `{ actor }` operand against the reader, not the workspace
 				const own = authority({
-					orders: grants({
+					orders: grants('orders', {
 						history: [arm({ t: 'cmp', field: 'note', op: 'eq', arg: { _tag: 'Actor', of: 'id' } })]
 					})
 				});
 				expect(yield* history(id, own)).toEqual([]);
-				ok((yield* run({ verb: 'delete', input: { target: id } })).outcome);
+				ok((yield* run({ verb: 'delete', input: [{ target: id }] })).outcome);
 				expect(
-					yield* history(id, authority({ orders: grants({ history: [arm()] }) }))
+					yield* history(id, authority({ orders: grants('orders', { history: [arm()] }) }))
 				).toHaveLength(4); // read: true sees a deleted row's
 			}).pipe(Effect.provide(P2FixtureLive))
 	);
@@ -572,8 +569,8 @@ describe('engine/query: history (rule 17)', () => {
 		() =>
 			Effect.gen(function* () {
 				const id = yield* order('desk');
-				ok((yield* run({ verb: 'update', input: { target: id, set: { note: 'a' } } })).outcome);
-				ok((yield* run({ verb: 'update', input: { target: id, set: { note: 'b' } } })).outcome);
+				ok((yield* run({ verb: 'update', input: [{ target: id, set: { note: 'a' } }] })).outcome);
+				ok((yield* run({ verb: 'update', input: [{ target: id, set: { note: 'b' } }] })).outcome);
 				const { db } = yield* P2Fixture;
 				const FoldedOrder = Schema.Struct({
 					id: Schema.String,
@@ -594,7 +591,7 @@ describe('engine/query: history (rule 17)', () => {
 						manifest,
 						{
 							kind: 'history',
-							collection: 'orders',
+							model: 'orders',
 							id,
 							at: { _tag: 'Revision', revision },
 							full: true
@@ -607,9 +604,14 @@ describe('engine/query: history (rule 17)', () => {
 				expect(yield* at(2)).toMatchObject({ id, revision: 2, title: 'desk', note: 'a' });
 				expect(yield* at(3)).toMatchObject({ revision: 3, title: 'desk', note: 'b' });
 				expect(
-					yield* at(2, authority({ orders: grants({ history: [arm()], masks: { note: FALSE } }) }))
+					yield* at(
+						2,
+						authority({
+							orders: grants('orders', { history: [arm()], masks: { orders: { note: FALSE } } })
+						})
+					)
 				).toMatchObject({ note: { $masked: true } });
-				expect(yield* at(2, authority({ orders: grants() }))).toBeNull();
+				expect(yield* at(2, authority({ orders: grants('orders') }))).toBeNull();
 				yield* pruneHistory((yield* P2Fixture).db, 1);
 				expect(yield* at(3)).toMatchObject({ revision: 3, title: 'desk', note: 'b' }); // the anchor folds the cut
 				expect(yield* at(2)).toBeNull(); // pruned: nothing to fold from
@@ -627,28 +629,28 @@ describe('engine/query: history (rule 17)', () => {
 		Effect.gen(function* () {
 			const a = yield* order('a');
 			for (const note of ['1', '2', '3'])
-				ok((yield* run({ verb: 'update', input: { target: a, set: { note } } })).outcome);
+				ok((yield* run({ verb: 'update', input: [{ target: a, set: { note } }] })).outcome);
 			const second = yield* order('second');
-			ok((yield* run({ verb: 'update', input: { target: second, set: { note: 'x' } } })).outcome);
+			ok((yield* run({ verb: 'update', input: [{ target: second, set: { note: 'x' } }] })).outcome);
 			const p = yield* person('p1', 'Ada');
 			ok(
 				(yield* run({
-					collection: 'people',
+					model: 'people',
 					verb: 'erase',
 					input: { target: p, set: { name: 'E' } }
 				})).outcome
 			);
 			ok(
 				(yield* run({
-					collection: 'people',
+					model: 'people',
 					verb: 'update',
-					input: { target: p, set: { email: 'e@x' } }
+					input: [{ target: p, set: { email: 'e@x' } }]
 				})).outcome
 			);
 			expect(yield* pruneHistory((yield* P2Fixture).db, 1)).toBe(5); // a: 1–3 go; second and people lose their creates
 			const kept = yield* rows(
 				Schema.Struct({
-					collection: Schema.String,
+					model: Schema.String,
 					r: Schema.String,
 					revision: Schema.Number,
 					cause: Schema.String
@@ -664,14 +666,18 @@ describe('engine/query: history (rule 17)', () => {
 
 describe('engine/write: per-record restore (rule 17)', () => {
 	let n = 0;
-	const at = (record: string, revision: number, collection = 'orders'): RestoreTarget => ({
-		collection,
+	const at = (record: string, revision: number, model = 'orders'): RestoreTarget => ({
+		model,
 		record,
 		revision
 	});
-	const preview = Effect.fnUntraced(function* (target: RestoreTarget, who: Authority = admin) {
+	const preview = Effect.fnUntraced(function* (
+		target: RestoreTarget,
+		who: Authority = admin,
+		engine: Partial<WriteEngine> = {}
+	) {
 		const { db } = yield* P2Fixture;
-		const previewed = yield* restorePreview({ manifest, db }, target, who, bindings);
+		const previewed = yield* restorePreview({ manifest, db, ...engine }, target, who, bindings);
 		if (!previewed.ok) throw new Error(JSON.stringify(previewed.outcome));
 		return previewed.preview;
 	});
@@ -696,13 +702,13 @@ describe('engine/write: per-record restore (rule 17)', () => {
 			}
 		)).outcome;
 	});
-	const history = Effect.fnUntraced(function* (id: string, collection = 'orders') {
+	const history = Effect.fnUntraced(function* (id: string, model = 'orders') {
 		const { db } = yield* P2Fixture;
 		return yield* Schema.decodeUnknownEffect(Schema.Array(HistoryRevision))(
 			yield* readHistory(
 				db,
 				manifest,
-				{ kind: 'history', collection, id },
+				{ kind: 'history', model, id },
 				{ as: 'caller', authority: admin },
 				bindings
 			)
@@ -717,8 +723,8 @@ describe('engine/write: per-record restore (rule 17)', () => {
 		() =>
 			Effect.gen(function* () {
 				const id = yield* order('desk');
-				ok((yield* run({ verb: 'update', input: { target: id, set: { note: 'a' } } })).outcome);
-				ok((yield* run({ verb: 'update', input: { target: id, set: { note: 'b' } } })).outcome);
+				ok((yield* run({ verb: 'update', input: [{ target: id, set: { note: 'a' } }] })).outcome);
+				ok((yield* run({ verb: 'update', input: [{ target: id, set: { note: 'b' } }] })).outcome);
 				const p = yield* preview(at(id, 2));
 				expect(p).toMatchObject({ revision: 2, live: 3, skipped: [] });
 				expect(p.changes).toEqual([
@@ -750,18 +756,20 @@ describe('engine/write: per-record restore (rule 17)', () => {
 				ok(
 					(yield* run({
 						verb: 'update',
-						input: {
-							target: id,
-							set: { title: 'desk 2', lines: { create: [{ label: 'y', amount: '200' }] } }
-						}
+						input: [
+							{
+								target: id,
+								set: { title: 'desk 2', lines: { create: [{ label: 'y', amount: '200' }] } }
+							}
+						]
 					})).outcome
 				);
 				const tag = idOf(
-					(yield* run({ collection: 'tags', verb: 'create', input: { name: 't' } })).outcome,
+					(yield* run({ model: 'tags', verb: 'create', input: [{ name: 't' }] })).outcome,
 					'tags'
 				);
 				ok(
-					(yield* run({ verb: 'update', input: { target: id, set: { tags: { link: [tag] } } } }))
+					(yield* run({ verb: 'update', input: [{ target: id, set: { tags: { link: [tag] } } }] }))
 						.outcome
 				);
 				const p = yield* preview(at(id, 1));
@@ -792,15 +800,18 @@ describe('engine/write: per-record restore (rule 17)', () => {
 					b = yield* order('b'),
 					c = yield* order('c');
 				const r = idOf(
-					(yield* run({ collection: 'receipts', verb: 'create', input: { memo: 'm1', order: a } }))
-						.outcome,
+					(yield* run({
+						model: 'receipts',
+						verb: 'create',
+						input: [{ memo: 'm1', order: a }]
+					})).outcome,
 					'receipts'
 				);
 				const update = (set: Json) =>
-					run({ collection: 'receipts', verb: 'update', input: { target: r, set } });
+					run({ model: 'receipts', verb: 'update', input: [{ target: r, set }] });
 				ok((yield* update({ memo: 'm2', order: b })).outcome);
 				ok((yield* update({ order: c })).outcome);
-				ok((yield* run({ verb: 'delete', input: { target: a } })).outcome);
+				ok((yield* run({ verb: 'delete', input: [{ target: a }] })).outcome);
 				const back = yield* preview(at(r, 2, 'receipts'));
 				expect(back.changes).toEqual([
 					{ field: 'order', current: c, restored: b, approval: false }
@@ -824,9 +835,9 @@ describe('engine/write: per-record restore (rule 17)', () => {
 	it.effect('a stale observed revision is a conflict', () =>
 		Effect.gen(function* () {
 			const id = yield* order('desk');
-			ok((yield* run({ verb: 'update', input: { target: id, set: { note: 'a' } } })).outcome);
+			ok((yield* run({ verb: 'update', input: [{ target: id, set: { note: 'a' } }] })).outcome);
 			const p = yield* preview(at(id, 1));
-			ok((yield* run({ verb: 'update', input: { target: id, set: { note: 'b' } } })).outcome);
+			ok((yield* run({ verb: 'update', input: [{ target: id, set: { note: 'b' } }] })).outcome);
 			expect(yield* restore(at(id, 1), { observed: { [id]: p.live } })).toMatchObject({
 				kind: 'conflict'
 			});
@@ -837,11 +848,11 @@ describe('engine/write: per-record restore (rule 17)', () => {
 		Effect.gen(function* () {
 			const id = yield* order('desk');
 			ok(
-				(yield* run({ verb: 'update', input: { target: id, set: { title: 'x', note: 'a' } } }))
+				(yield* run({ verb: 'update', input: [{ target: id, set: { title: 'x', note: 'a' } }] }))
 					.outcome
 			);
 			const titleOnly = authority({
-				orders: grants({ history: [arm()], update: [arm(undefined, ['title'])] })
+				orders: grants('orders', { history: [arm()], update: [writeArm({ orders: ['title'] })] })
 			});
 			const p = yield* preview(at(id, 1), titleOnly);
 			expect(fields(p)).toEqual(['title']);
@@ -856,17 +867,15 @@ describe('engine/write: per-record restore (rule 17)', () => {
 		}).pipe(Effect.provide(P2FixtureLive))
 	);
 
-	it.effect('an approval-routed restore commits provisionally under its request', () =>
+	it.effect('a restore its update check approves commits provisionally under its request', () =>
 		Effect.gen(function* () {
 			const id = yield* order('desk');
-			ok((yield* run({ verb: 'update', input: { target: id, set: { note: 'a' } } })).outcome);
+			ok((yield* run({ verb: 'update', input: [{ target: id, set: { note: 'a' } }] })).outcome);
 			const reviewed = authority({
-				orders: grants({
-					history: [arm()],
-					update: [{ ...arm(), approval: true }]
-				})
+				orders: grants('orders', { history: [arm()], update: [writeArm(columns('update'), true)] })
 			});
-			const p = yield* preview(at(id, 1), reviewed);
+			// the preview's edit-ability is the update check's dry run: it approves, so the field is a proposal
+			const p = yield* preview(at(id, 1), reviewed, holding);
 			expect(p.changes).toEqual([{ field: 'note', current: 'a', restored: null, approval: true }]);
 			expect(yield* restore(at(id, 1), { authority: reviewed }, holding)).toMatchObject({
 				kind: 'pendingApproval',
@@ -889,7 +898,7 @@ describe('engine/write: per-record restore (rule 17)', () => {
 		Effect.gen(function* () {
 			const id = yield* order('desk');
 			for (const note of ['1', '2', '3'])
-				ok((yield* run({ verb: 'update', input: { target: id, set: { note } } })).outcome);
+				ok((yield* run({ verb: 'update', input: [{ target: id, set: { note } }] })).outcome);
 			expect(yield* pruneHistory((yield* P2Fixture).db, 2)).toBe(2);
 			const p = yield* preview(at(id, 3));
 			expect(p.changes).toEqual([{ field: 'note', current: '3', restored: '2', approval: false }]);
@@ -912,7 +921,7 @@ describe('engine/write: per-record restore (rule 17)', () => {
 
 describe('engine/write: import (rule 30)', () => {
 	const imp = (input: Json, over: Partial<ActRequest> = {}) =>
-		run({ collection: 'people', verb: 'import', input, ...over });
+		run({ model: 'people', verb: 'import', input, ...over });
 	const report = (o: Outcome) => {
 		if (o.kind !== 'committed') throw new Error(JSON.stringify(o));
 		return Schema.decodeUnknownSync(ImportReport)(o.output).rows.map(
@@ -921,7 +930,7 @@ describe('engine/write: import (rule 30)', () => {
 	};
 
 	it.effect(
-		'one act upserts every row and reports each; refuse and skip; onConflict is required on a keyed collection',
+		'one act upserts every row and reports each; refuse and skip; onConflict is required on a keyed model',
 		() =>
 			Effect.gen(function* () {
 				count.writes = 0;
@@ -1022,7 +1031,7 @@ describe('engine/write: import (rule 30)', () => {
 			const id = yield* order('desk');
 			ok(
 				(yield* run({
-					collection: 'receipts',
+					model: 'receipts',
 					verb: 'import',
 					input: { rows: [{ memo: 'r', order: { title: 'desk' } }] }
 				})).outcome
@@ -1030,7 +1039,7 @@ describe('engine/write: import (rule 30)', () => {
 			expect(yield* one(Owner, `select "order"::text o from receipts`)).toEqual({ o: id });
 			expect(
 				(yield* run({
-					collection: 'receipts',
+					model: 'receipts',
 					verb: 'import',
 					input: { rows: [{ memo: 'r', order: { title: 'nope' } }] }
 				})).outcome
@@ -1040,7 +1049,7 @@ describe('engine/write: import (rule 30)', () => {
 });
 
 describe('engine/query: same-shape reads merge (rule 12)', () => {
-	it.effect('gets of one collection and select are one statement, answered in order', () =>
+	it.effect('gets of one model and select are one statement, answered in order', () =>
 		Effect.gen(function* () {
 			const a = yield* order('a'),
 				b = yield* order('b');
@@ -1048,7 +1057,7 @@ describe('engine/query: same-shape reads merge (rule 12)', () => {
 			const reads = readEngine({ db: (yield* P2Fixture).db, manifest });
 			const get = (id: string, c = 'orders'): ReadIR => ({
 				kind: 'get',
-				collection: c,
+				model: c,
 				id,
 				select: { fields: c === 'orders' ? ['title'] : null, relations: {} }
 			});
@@ -1067,133 +1076,64 @@ describe('engine/query: same-shape reads merge (rule 12)', () => {
 
 describe('engine/write: relation actions and cascades (rules 28, 41)', () => {
 	it.effect(
-		'a relation-action upsert states its conflict rule: keep leaves the existing row, update takes it over',
-		() =>
-			Effect.gen(function* () {
-				const a = yield* order('a'),
-					b = yield* order('b');
-				ok(
-					(yield* run({
-						verb: 'update',
-						input: { target: a, set: { tags: { upsert: [{ name: 't' }] } } }
-					})).outcome
-				);
-				const tag = String((yield* one(Id, `select id::text from tags where name = 't'`))['id']);
-				const tagOrder = () =>
-					one(Owner, `select "order"::text o from tags where name = 't'`).pipe(
-						Effect.map((row) => row.o)
-					);
-				ok(
-					(yield* run({
-						verb: 'update',
-						input: {
-							target: b,
-							set: { tags: { upsert: [{ values: { id: tag }, onConflictDoUpdate: false }] } }
-						}
-					})).outcome
-				);
-				expect(yield* tagOrder()).toBe(a);
-				ok(
-					(yield* run({
-						verb: 'update',
-						input: {
-							target: b,
-							set: { tags: { upsert: [{ values: { id: tag }, onConflictDoUpdate: true }] } }
-						}
-					})).outcome
-				);
-				expect(yield* tagOrder()).toBe(b);
-				expect(
-					(yield* run({
-						verb: 'update',
-						input: {
-							target: b,
-							set: { tags: { upsert: [{ values: { id: tag }, onConflictDoUpdate: 'x' }] } }
-						}
-					})).outcome
-				).toMatchObject({ code: 'invalidInput' });
-			}).pipe(Effect.provide(P2FixtureLive))
-	);
-
-	it.effect('judges a nested id upsert as an update of the stored child', () =>
-		Effect.gen(function* () {
-			const a = yield* order('a'),
-				b = yield* order('b');
-			ok(
-				(yield* run({
-					verb: 'update',
-					input: { target: a, set: { tags: { upsert: [{ name: 't' }] } } }
-				})).outcome
-			);
-			const tag = String((yield* one(Id, `select id::text from tags where name = 't'`))['id']);
-			const caller = authority({
-				orders: grants(),
-				tags: grants({ create: [arm(undefined, [])], update: [arm()] })
-			});
-			ok(
-				(yield* run({
-					verb: 'update',
-					input: { target: b, set: { tags: { upsert: [{ id: tag, name: 't' }] } } },
-					authority: caller
-				})).outcome
-			);
-			expect(
-				(yield* one(Id, `select "order"::text as id from tags where id = '${tag}'`))['id']
-			).toBe(b);
-		}).pipe(Effect.provide(P2FixtureLive))
-	);
-
-	it.effect(
 		'a nested change to an owned child of a frozen parent is locked; an administrator still deletes the frozen parent with its children',
 		() =>
 			Effect.gen(function* () {
 				const id = yield* order('desk', [{ label: 'a', amount: '1' }]);
 				const [line] = yield* rows(Id, `select id::text from lines`);
 				ok(
-					(yield* run({ verb: 'update', input: { target: id, set: { status: 'submitted' } } }))
+					(yield* run({ verb: 'update', input: [{ target: id, set: { status: 'submitted' } }] }))
 						.outcome
 				);
 				expect(
 					(yield* run({
 						verb: 'update',
-						input: {
-							target: id,
-							set: {
-								lines: { update: [{ target: required(line, 'line').id, set: { amount: '2' } }] }
+						input: [
+							{
+								target: id,
+								set: {
+									lines: { update: [{ target: required(line, 'line').id, set: { amount: '2' } }] }
+								}
 							}
-						}
+						]
 					})).outcome
 				).toMatchObject({ code: 'locked' });
 				expect(
 					(yield* run({
 						verb: 'update',
-						input: { target: id, set: { lines: { create: [{ label: 'b', amount: '1' }] } } }
+						input: [{ target: id, set: { lines: { create: [{ label: 'b', amount: '1' }] } } }]
 					})).outcome
 				).toMatchObject({ code: 'locked' });
-				ok((yield* run({ verb: 'delete', input: { target: id } })).outcome);
+				ok((yield* run({ verb: 'delete', input: [{ target: id }] })).outcome);
 				expect(yield* one(Count, `select count(*)::int n from lines`)).toEqual({ n: 0 });
 			}).pipe(Effect.provide(P2FixtureLive))
 	);
 
-	it.effect("a nested delete of a child outside the caller's read scope is notFound", () =>
-		Effect.gen(function* () {
-			const id = yield* order('desk', [{ label: 'hidden', amount: '1' }]);
-			const [line] = yield* rows(Id, `select id::text from lines`);
-			const caller = authority({
-				orders: grants(),
-				lines: grants({
-					read: [arm({ t: 'cmp', field: 'label', op: 'ne', arg: { _tag: 'Lit', value: 'hidden' } })]
-				})
-			});
-			expect(
-				(yield* run({
-					verb: 'update',
-					input: { target: id, set: { lines: { delete: [required(line, 'line').id] } } },
-					authority: caller
-				})).outcome
-			).toMatchObject({ code: 'notFound' });
-			expect(yield* one(Count, `select count(*)::int n from lines`)).toEqual({ n: 1 });
-		}).pipe(Effect.provide(P2FixtureLive))
+	it.effect(
+		"a nested delete is judged by the root's grant only: the child model's own read scope is never consulted",
+		() =>
+			Effect.gen(function* () {
+				const id = yield* order('desk', [{ label: 'hidden', amount: '1' }]);
+				const [line] = yield* rows(Id, `select id::text from lines`);
+				const caller = authority({
+					orders: grants('orders', { update: [writeArm(columns('update'))] }),
+					lines: grants('lines', {
+						read: {
+							lines: [
+								arm({ t: 'cmp', field: 'label', op: 'ne', arg: { _tag: 'Lit', value: 'hidden' } })
+							]
+						}
+					})
+				});
+				ok(
+					(yield* run({
+						verb: 'update',
+						input: [{ target: id, set: { lines: { delete: [required(line, 'line').id] } } }],
+						authority: caller
+					})).outcome
+				);
+				expect(yield* one(Count, `select count(*)::int n from lines`)).toEqual({ n: 0 });
+			}).pipe(Effect.provide(P2FixtureLive))
 	);
 
 	it.effect(
@@ -1207,13 +1147,13 @@ describe('engine/write: relation actions and cascades (rules 28, 41)', () => {
 					calls
 				);
 				const tag = idOf(
-					(yield* run({ collection: 'tags', verb: 'create', input: { name: 't' } })).outcome,
+					(yield* run({ model: 'tags', verb: 'create', input: [{ name: 't' }] })).outcome,
 					'tags'
 				);
-				const member = authority({ tags: grants() });
+				const member = authority({ tags: grants('tags', { delete: [deleteArm()] }) });
 				expect(
 					(yield* run(
-						{ collection: 'tags', verb: 'delete', input: { target: tag }, authority: member },
+						{ model: 'tags', verb: 'delete', input: [{ target: tag }], authority: member },
 						guard
 					)).outcome
 				).toEqual({
@@ -1226,7 +1166,7 @@ describe('engine/write: relation actions and cascades (rules 28, 41)', () => {
 				expect(calls.map((call) => call.input)).toMatchObject([[{ id: tag, name: 't' }]]);
 				// an administrator's delete faces the same guard: a business rule (a settled row) is not an authority question
 				expect(
-					(yield* run({ collection: 'tags', verb: 'delete', input: { target: tag } }, guard))
+					(yield* run({ model: 'tags', verb: 'delete', input: [{ target: tag }] }, guard))
 						.outcome
 				).toMatchObject({ kind: 'refused', message: 'the tag is in use' });
 				expect(calls).toHaveLength(2);
@@ -1255,16 +1195,18 @@ describe('engine/write: telemetry (§5.12)', () => {
 				);
 				const log = () => Context.get(context, Telemetry).open({ invocation: 'i' });
 				count.writes = 0;
-				ok((yield* run({ verb: 'create', input: { title: 'a' } }, { log: yield* log() })).outcome);
+				ok(
+					(yield* run({ verb: 'create', input: [{ title: 'a' }] }, { log: yield* log() })).outcome
+				);
 				expect(count.writes).toBe(1);
 				expect(
-					(yield* run({ verb: 'create', input: { title: 1 } }, { log: yield* log() })).outcome
+					(yield* run({ verb: 'create', input: [{ title: 1 }] }, { log: yield* log() })).outcome
 				).toMatchObject({ code: 'invalidInput' });
 				expect(count.writes).toBe(1);
 				const refusing = callback(() => ({ kind: 'refused', message: 'no' }));
 				expect(
 					(yield* run(
-						{ verb: 'create', input: { title: 'b' } },
+						{ verb: 'create', input: [{ title: 'b' }] },
 						{ ...refusing, log: yield* log() }
 					)).outcome
 				).toMatchObject({ code: 'refused' });
@@ -1307,7 +1249,7 @@ describe('engine/write: pipeline order (rule 19)', () => {
 			writes: 0,
 			act: () =>
 				run(
-					{ verb: 'create', input: { title: 1 } },
+					{ verb: 'create', input: [{ title: 1 }] },
 					{ ...refusing(calls), admit: () => ({ retryAfter: 1 }) }
 				).pipe(Effect.map((answer) => answer.outcome))
 		}),
@@ -1318,7 +1260,7 @@ describe('engine/write: pipeline order (rule 19)', () => {
 			writes: 0,
 			act: () =>
 				run(
-					{ verb: 'create', input: { title: 1 }, issuedAt: '2026-09-20T00:00:00.000Z' },
+					{ verb: 'create', input: [{ title: 1 }], issuedAt: '2026-09-20T00:00:00.000Z' },
 					refusing(calls)
 				).pipe(Effect.map((answer) => answer.outcome))
 		}),
@@ -1329,7 +1271,7 @@ describe('engine/write: pipeline order (rule 19)', () => {
 			writes: 0,
 			act: () =>
 				run(
-					{ verb: 'create', input: { title: 1 }, authority: authority({}) },
+					{ verb: 'create', input: [{ title: 1 }], authority: authority({}) },
 					refusing(calls)
 				).pipe(Effect.map((answer) => answer.outcome))
 		}),
@@ -1343,8 +1285,8 @@ describe('engine/write: pipeline order (rule 19)', () => {
 					return (yield* run(
 						{
 							verb: 'update',
-							input: { target: yield* targetOrder(), set: { note: 'x' } },
-							authority: authority({ orders: grants({ update: [] }) })
+							input: [{ target: yield* targetOrder(), set: { note: 'x' } }],
+							authority: authority({ orders: grants('orders', { update: [] }) })
 						},
 						{ ...refusing(calls), ...holding }
 					)).outcome;
@@ -1360,28 +1302,13 @@ describe('engine/write: pipeline order (rule 19)', () => {
 					const id = yield* order('o');
 					count.writes = 0;
 					return (yield* run(
-						{ verb: 'update', input: { target: id, set: { note: 'x' } }, observed: { [id]: 7 } },
+						{ verb: 'update', input: [{ target: id, set: { note: 'x' } }], observed: { [id]: 7 } },
 						refusing(calls)
 					)).outcome;
 				})
 		}),
 		(calls) => ({
-			name: 'guest code before the post-image scope',
-			expect: 'refused',
-			guest: true,
-			writes: 1,
-			act: () =>
-				run(
-					{
-						verb: 'create',
-						input: { title: 'x' },
-						authority: authority({ orders: grants({ create: [arm(FALSE)] }) })
-					},
-					refusing(calls)
-				).pipe(Effect.map((answer) => answer.outcome))
-		}),
-		() => ({
-			name: 'the post-image scope before the approval route',
+			name: 'the columns before any guest code',
 			expect: 'forbidden',
 			guest: false,
 			writes: 0,
@@ -1389,25 +1316,37 @@ describe('engine/write: pipeline order (rule 19)', () => {
 				run(
 					{
 						verb: 'create',
-						input: { title: 'x' },
+						input: [{ title: 'x' }],
 						authority: authority({
-							orders: grants({
-								create: [
-									arm(FALSE),
-									{
-										...arm({
-											t: 'cmp',
-											field: 'title',
-											op: 'eq',
-											arg: { _tag: 'Lit', value: 'other' }
-										}),
-										approval: true
-									}
-								]
-							})
+							orders: grants('orders', { create: [writeArm({ orders: ['note'] }, true)] })
+						})
+					},
+					refusing(calls)
+				).pipe(Effect.map((answer) => answer.outcome))
+		}),
+		(calls) => ({
+			name: 'a denying check before the approval route',
+			expect: 'refused',
+			guest: true,
+			writes: 1,
+			act: () =>
+				run(
+					{
+						verb: 'create',
+						input: [{ title: 'x' }],
+						authority: authority({
+							orders: grants('orders', { create: [writeArm(columns('create'), true)] })
 						})
 					},
 					{
+						guest: {
+							invokeProgram: () => Effect.die('The pipeline fixture does not execute programs'),
+							invoke: (inv) =>
+								Effect.sync((): GuestOutcome => {
+									calls.push(inv);
+									return { kind: 'ok', output: { kind: 'deny', message: 'no' } };
+								})
+						},
 						approval: {
 							route: () =>
 								Effect.sync(() => {
@@ -1424,7 +1363,7 @@ describe('engine/write: pipeline order (rule 19)', () => {
 			guest: false,
 			writes: 1,
 			act: () =>
-				run({ verb: 'create', input: { title: 'x' }, authority: routed('create') }, holding).pipe(
+				run({ verb: 'create', input: [{ title: 'x' }], authority: routed('create') }, holding).pipe(
 					Effect.map((answer) => answer.outcome)
 				)
 		})
@@ -1455,13 +1394,15 @@ describe('engine/write: guest failures (rules 42, 72a)', () => {
 						error: BoltError.make(code, 'guest', `${code}!`)
 					}));
 				expect(
-					(yield* run({ verb: 'create', input: { title: 'a' } }, failing('guestError'))).outcome
+					(yield* run({ verb: 'create', input: [{ title: 'a' }] }, failing('guestError'))).outcome
 				).toEqual({ kind: 'refused', code: 'internal', message: 'guestError!' });
 				expect(
-					(yield* run({ verb: 'create', input: { title: 'a' } }, failing('cpuBudget'))).outcome
+					(yield* run({ verb: 'create', input: [{ title: 'a' }] }, failing('cpuBudget'))).outcome
 				).toEqual({ kind: 'refused', code: 'cpuBudget', message: 'cpuBudget!' });
 				expect(
-					yield* Effect.flip(run({ verb: 'create', input: { title: 'a' } }, failing('missingBody')))
+					yield* Effect.flip(
+						run({ verb: 'create', input: [{ title: 'a' }] }, failing('missingBody'))
+					)
 				).toMatchObject({ code: 'missingBody' });
 			}).pipe(Effect.provide(P2FixtureLive))
 	);
@@ -1500,15 +1441,17 @@ describe('engine/write: roll-ups against a re-select oracle (rule 21)', () => {
 						ok(
 							(yield* run({
 								verb: 'update',
-								input: { target: o, set: { lines: { create: [{ label: 'x', amount: amount() }] } } }
+								input: [
+									{ target: o, set: { lines: { create: [{ label: 'x', amount: amount() }] } } }
+								]
 							})).outcome
 						);
 					else if (kind === 2 && l !== null)
 						ok(
 							(yield* run({
-								collection: 'lines',
+								model: 'lines',
 								verb: 'update',
-								input: { target: l, set: { amount: amount() } }
+								input: [{ target: l, set: { amount: amount() } }]
 							})).outcome
 						);
 					else if (kind === 3 && l !== null) {
@@ -1516,19 +1459,19 @@ describe('engine/write: roll-ups against a re-select oracle (rule 21)', () => {
 						ok(
 							(yield* run({
 								verb: 'update',
-								input: { target: lineOrder, set: { note: `s${step}`, lines: { delete: [l] } } }
+								input: [{ target: lineOrder, set: { note: `s${step}`, lines: { delete: [l] } } }]
 							})).outcome
 						);
 					} else if (kind === 4)
 						ok(
 							(yield* run({
-								collection: 'lines',
+								model: 'lines',
 								verb: 'create',
-								input: { label: 'd', amount: amount(), order: o }
+								input: [{ label: 'd', amount: amount(), order: o }]
 							})).outcome
 						);
 					else if (kind === 5 && rand(3) === 0)
-						ok((yield* run({ verb: 'delete', input: { target: o } })).outcome);
+						ok((yield* run({ verb: 'delete', input: [{ target: o }] })).outcome);
 					const drift = yield* rows(
 						Id,
 						`select o.id from orders o where o.total <> coalesce((select sum(amount) from lines l where l."order" = o.id), 0)

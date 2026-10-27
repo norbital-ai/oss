@@ -249,7 +249,7 @@ export const discover = Effect.fn('bolt.discover')(function* (
 
 	// Seeds: seed/**/<model>.json[.gz]; seed/assets.json, seed/assets/** and seed/seed.ts are not models. A workspace seeds
 	// its own models and the exposed system models.
-	const models = new Set([...of('model').map((f) => f.name), ...Object.keys(SYSTEM.collections)]);
+	const models = new Set([...of('model').map((f) => f.name), ...Object.keys(SYSTEM.exposures)]);
 	if (!system)
 		for (const path of yield* walk(join(root, 'seed'))) {
 			const m = /^seed\/(?:.+\/)?([^/]+)\.json(?:\.gz)?$/.exec(path);

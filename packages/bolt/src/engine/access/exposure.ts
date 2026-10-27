@@ -1,106 +1,87 @@
-// The caller's authorized collection catalogue for generated forms and record views.
+// The caller's authorized model catalogue for generated forms and record views.
 import { Schema } from 'effect';
-import type { CollectionExposure, Fields } from '@norbital-ai/ui';
-import type { Authority, WriteArm } from '../contracts.ts';
+import type { ModelExposure, Fields } from '@norbital-ai/ui';
+import type { Authority } from '../contracts.ts';
 import type { EngineManifest } from '../manifest.ts';
 import { relations as manifestRelations } from '../manifest.ts';
-import { admits, syncOwned, writableColumns } from './authority.ts';
-import { nullableOfExpr } from '../../decl/model.ts';
-import { FieldsSchema, OutputKindSchema } from '../../protocol/public-page.ts';
+import { nullableOfExpr, type LayerColumns } from '../../decl/model.ts';
+import { FieldsSchema } from '../../protocol/public-page.ts';
 import { SYSTEM } from '../../system/index.ts';
 
 /** A relationship's static `where` is JSON by construction; decoded once for the browser's picker. */
 const pickerWhere = Schema.decodeUnknownSync(Schema.Record(Schema.String, Schema.Json));
 
-type ChildInput = NonNullable<NonNullable<CollectionExposure['update']>['with']>[string];
-type Selection = NonNullable<EngineManifest['collections'][string]['update']>['input'];
-/** The fields a read-only remote sync writes for `collection` (everything but its local `update.columns`). */
-function syncFields(m: EngineManifest, collection: string): readonly string[] {
-	const owner = syncOwned(m, collection);
-	if (owner === undefined) return [];
-	const fields = [
-		...Object.keys(m.models[collection]?.fields ?? {}),
-		...Object.keys(m.relationships)
-			.filter((key) => key.startsWith(`${collection}.`))
-			.map((key) => key.slice(collection.length + 1))
-	];
-	return fields.filter((field) => !owner.local.includes(field));
-}
-/** Arms that admit `field` (an approval arm admits subject to its flow). */
-const approves = (arms: readonly WriteArm[] | undefined, field: string) =>
-	(arms ?? []).some(
-		(arm) => arm.approval === true && (arm.fields === 'all' || arm.fields.includes(field))
+type ChildInput = NonNullable<NonNullable<ModelExposure['update']>['with']>[string];
+/** The fields a read-only remote sync writes for `model` (everything but its local `update.columns`). */
+function syncFields(m: EngineManifest, model: string): readonly string[] {
+	const spec = m.exposures[model];
+	const owned = Object.values(spec?.syncs ?? {}).some(
+		(s) => s.with !== 'file' && s.read === true && s.write !== true
 	);
-/** Whether every arm of `verb` the caller holds carries `approval` (a write there always asks first). */
-const approvalOnly = (arms: readonly WriteArm[] | undefined) =>
-	(arms ?? []).length > 0 && (arms ?? []).every((arm) => arm.approval === true);
+	if (!owned) return [];
+	const local = spec?.update?.columns[model] ?? [];
+	const fields = [
+		...Object.keys(m.models[model]?.fields ?? {}),
+		...Object.keys(m.relationships)
+			.filter((key) => key.startsWith(`${model}.`))
+			.map((key) => key.slice(model.length + 1))
+	];
+	return fields.filter((field) => !local.includes(field));
+}
+/**
+ * The columns `path` admits for this caller: the model's declaration there, narrowed to the union of the caller's arms
+ * of the verb (an administrator holds every declared column); `undefined` when no held arm names the path.
+ */
+function admitted(
+	a: Authority,
+	root: string,
+	declared: LayerColumns,
+	verb: 'create' | 'update',
+	path: string
+): readonly string[] | undefined {
+	const columns = declared[path];
+	if (columns === undefined) return undefined;
+	if (a.admin) return columns;
+	const arms = (a.models[root]?.[verb] ?? []).filter((arm) => Object.hasOwn(arm.columns, path));
+	return arms.length === 0
+		? undefined
+		: columns.filter((field) => arms.some((arm) => arm.columns[path]?.includes(field)));
+}
+/** The child layers one level under `path` as the record forms write them, through the root's access point only. */
 function childInputs(
 	m: EngineManifest,
 	a: Authority,
-	parent: string,
-	input: Selection,
-	parentVerb: 'create' | 'update'
+	root: string,
+	declared: LayerColumns,
+	path: string,
+	model: string,
+	verb: 'create' | 'update',
+	filled?: LayerColumns
 ): Readonly<Record<string, ChildInput>> {
 	const out: Record<string, ChildInput> = {};
-	for (const [inverse, actions] of Object.entries(input.with ?? {})) {
-		const relation = manifestRelations(m).inverse.get(`${parent}.${inverse}`);
-		if (relation === undefined) continue;
-		const { spec: relationSpec, from: collection, fk } = relation;
-		const authority = a.collections[collection];
-		const remote = syncFields(m, collection);
-		const parentArms = a.collections[parent]?.[parentVerb] ?? [];
-		const parentDirect =
-			a.admin || parentArms.some((arm) => arm.approval !== true && admits([arm], inverse));
-		const parentProposal = approves(parentArms, inverse);
-		const via = (verb: 'create' | 'update' | 'delete') =>
-			(authority?.[verb].length ?? 0) === 0 && (parentDirect || parentProposal);
-		const grants = (verb: 'create' | 'update' | 'delete') =>
-			a.admin || via(verb) || (authority?.[verb].length ?? 0) > 0;
-		const fields = (verb: 'create' | 'update', selection: Selection | {}): readonly string[] =>
-			!('columns' in selection)
-				? []
-				: selection.columns.filter(
-						(field) =>
-							!remote.includes(field) &&
-							!(verb === 'update' && relationSpec.owned && field === fk) &&
-							(a.admin || via(verb) || admits(authority?.[verb] ?? [], field))
-					);
-		const create = actions['create'],
-			update = actions['update'];
+	for (const at of Object.keys(declared)) {
+		const inverse = at.startsWith(`${path}.`) ? at.slice(path.length + 1) : '';
+		if (inverse === '' || inverse.includes('.')) continue;
+		const relation = manifestRelations(m).inverse.get(`${model}.${inverse}`);
+		const columns = admitted(a, root, declared, verb, at);
+		if (relation === undefined || columns === undefined) continue;
+		const { spec: relationSpec, from: child, fk } = relation;
+		const remote = syncFields(m, child);
+		const own = columns.filter((field) => !remote.includes(field) && field !== fk);
+		const free = !relationSpec.owned && !remote.includes(fk);
 		out[inverse] = {
-			collection,
+			model: child,
 			parent: fk,
 			...(relationSpec.owned ? { owned: true as const } : {}),
-			...(create !== undefined && grants('create')
-				? {
-						create: {
-							columns: fields('create', create),
-							...(!a.admin && (via('create') ? !parentDirect : approvalOnly(authority?.create))
-								? { proposalOnly: true as const }
-								: {}),
-							...('filled' in create && create.filled !== undefined
-								? { filled: create.filled }
-								: {})
-						}
-					}
-				: {}),
-			...(update !== undefined && grants('update')
-				? { update: { columns: fields('update', update) } }
-				: {}),
-			...(actions['delete'] !== undefined && grants('delete') ? { delete: true as const } : {}),
-			...(!relationSpec.owned &&
-			!remote.includes(fk) &&
-			actions['link'] !== undefined &&
-			grants('update')
-				? { link: true as const }
-				: {}),
-			...(!relationSpec.owned &&
-			!remote.includes(fk) &&
-			relationSpec.optional &&
-			actions['unlink'] !== undefined &&
-			grants('update')
-				? { unlink: true as const }
-				: {})
+			create: {
+				columns: own,
+				...(filled?.[at] === undefined
+					? {}
+					: { filled: filled[at].filter((field) => own.includes(field)) })
+			},
+			...(verb === 'update' ? { update: { columns: own }, delete: true as const } : {}),
+			...(free ? { link: true as const } : {}),
+			...(free && verb === 'update' && relationSpec.optional ? { unlink: true as const } : {})
 		};
 	}
 	return out;
@@ -109,8 +90,7 @@ function childInputs(
 /** Model field kinds as the ui catalog (stored FieldKind is Kind structurally). */
 const fieldsOf = (entries: readonly (readonly [string, unknown])[]): Fields =>
 	Schema.decodeUnknownSync(FieldsSchema)(Object.fromEntries(entries));
-const outputOf = Schema.decodeUnknownSync(OutputKindSchema);
-/** The system collections the browser resolves as targets: the directory (pickers, `actor` operands) and stored files. */
+/** The system models the browser resolves as targets: the directory (pickers, `actor` operands) and stored files. */
 const TARGETS = ['sys_user', 'sys_file', 'sys_invitation'] as const;
 /**
  * The caller's syncs on `c` for the view toolbar: a file sync's upload accept list (its parsers' extensions; default
@@ -122,11 +102,11 @@ function syncsOf(
 	a: Authority,
 	c: string,
 	reads: boolean
-): Pick<CollectionExposure, 'syncs'> {
-	const ca = a.collections[c];
-	type Entry = NonNullable<CollectionExposure['syncs']>[string];
+): Pick<ModelExposure, 'syncs'> {
+	const ca = a.models[c];
+	type Entry = NonNullable<ModelExposure['syncs']>[string];
 	const held = Object.fromEntries(
-		Object.entries(m.collections[c]?.syncs ?? {}).flatMap(([name, s]): [string, Entry][] => {
+		Object.entries(m.exposures[c]?.syncs ?? {}).flatMap(([name, s]): [string, Entry][] => {
 			if (s.with === 'file') {
 				const parsers = s.parser ?? ['xlsx', 'csv'];
 				const formats =
@@ -184,62 +164,53 @@ function sumOf(
 	};
 }
 /**
- * The caller's collections for ui: the model's label and search fields, the fields and one-relations the collection and
+ * The caller's models for ui: the model's label and search fields, the fields and one-relations the model and
  * the caller's read arms expose (rule 14), the create/update columns the caller holds, and which of the
  * exposed fields are masked on some rows for this caller.
  */
 export function exposure(
 	m: EngineManifest,
 	a: Authority
-): { readonly [collection: string]: CollectionExposure } {
+): { readonly [model: string]: ModelExposure } {
 	const instanceModel = SYSTEM.models['sys_integration'],
-		instanceCollection = SYSTEM.collections['sys_integration'];
-	if (instanceModel === undefined || instanceCollection === undefined)
+		instanceExposure = SYSTEM.exposures['sys_integration'];
+	if (instanceModel === undefined || instanceExposure === undefined)
 		throw new Error('The native integration instance catalogue is missing.');
 	const owner = SYSTEM.relationships['sys_integration.owner'];
 	m = {
 		...m,
 		models: { ...m.models, sys_integration: instanceModel },
-		collections: { ...m.collections, sys_integration: instanceCollection },
+		exposures: { ...m.exposures, sys_integration: instanceExposure },
 		relationships: {
 			...m.relationships,
 			...(owner === undefined ? {} : { 'sys_integration.owner': owner })
 		}
 	};
-	const out: { [c: string]: CollectionExposure } = {};
-	for (const [c, spec] of Object.entries(m.collections)) {
-		const ca = a.collections[c],
+	const out: { [c: string]: ModelExposure } = {};
+	for (const [c, spec] of Object.entries(m.exposures)) {
+		const ca = a.models[c],
 			model = m.models[c];
-		const reads = a.admin || (ca?.read.length ?? 0) > 0;
+		const arms = ca?.read[c] ?? [];
+		const reads = a.admin || arms.length > 0;
 		const writes = (['create', 'update'] as const).filter(
 			(v) => spec[v] !== undefined && (a.admin || (ca?.[v].length ?? 0) > 0)
 		);
-		const queries = Object.entries(spec.queries ?? {}).filter(
-			([n]) => a.admin || (ca?.queries.includes(n) ?? false)
-		);
 		if (model === undefined || (!reads && writes.length === 0)) continue;
-		const arms = ca?.read ?? [];
-		const armed = (field: string) => a.admin || admits(arms, field);
+		// the root layer's declared fields, narrowed by the caller's root read arms (rule 14)
+		const declared = spec.read[c]?.fields ?? [];
+		const armed = (field: string) =>
+			a.admin || arms.some((arm) => arm.fields === 'all' || arm.fields.includes(field));
 		const readable = (f: string) =>
-			reads && (spec.read.fields === 'all' || spec.read.fields.includes(f)) && armed(f);
-		const relExposed = (fk: string) => {
-			const r = spec.read.relations ?? (spec.read.fields === 'all' ? 'all' : []);
-			return r === 'all' || r.includes(fk);
-		};
+			reads && (declared === 'all' || declared.includes(f)) && armed(f);
 		// the columns this caller's own create/update arms admit (rule 14): a column no held arm names is filled by the host
 		const remote = syncFields(m, c);
 		const owned = (manifestRelations(m).from.get(c) ?? [])
 			.filter((relation) => relation.spec.owned)
 			.map((relation) => relation.fk);
-		const columns = (verb: 'create' | 'update') => {
-			const admitted = writableColumns(a, c, verb);
-			return (spec[verb]?.input.columns ?? []).filter(
-				(field) =>
-					!remote.includes(field) &&
-					(verb !== 'update' || !owned.includes(field)) &&
-					(admitted === 'all' || admitted.has(field))
+		const columns = (verb: 'create' | 'update') =>
+			(admitted(a, c, spec[verb]?.columns ?? {}, verb, c) ?? []).filter(
+				(field) => !remote.includes(field) && (verb !== 'update' || !owned.includes(field))
 			);
-		};
 		// a create-only caller (a visitor's application form) still sees the fields it writes
 		const written = new Set(writes.flatMap(columns));
 		// a computed field reads like a stored one (a model `label` may name one), its kind the expression's
@@ -259,7 +230,7 @@ export function exposure(
 		].filter(([f]) => readable(f) || written.has(f));
 		const relations = Object.entries(m.relationships).flatMap(([key, r]) => {
 			const [from, fk] = key.split('.') as [string, string];
-			return from === c && ((reads && relExposed(fk) && armed(fk)) || written.has(fk))
+			return from === c && (readable(fk) || written.has(fk))
 				? [
 						[
 							fk,
@@ -274,13 +245,14 @@ export function exposure(
 					]
 				: []; // hook:query (inverse)
 		});
-		const many = !reads
+		// the root's read layers one level down (a ref or a many-relation); the many-relations among them
+		const layers = !reads
 			? []
-			: Object.values(m.relationships).flatMap((r) =>
-					r.inverse !== undefined && [r.to].flat().includes(c) && relExposed(r.inverse)
-						? [r.inverse]
-						: []
-				); // hook:query
+			: Object.keys(spec.read).flatMap((path) => {
+					const rel = path.startsWith(`${c}.`) ? path.slice(c.length + 1) : '';
+					return rel === '' || rel.includes('.') ? [] : [rel];
+				});
+		const many = layers.filter((rel) => manifestRelations(m).inverse.has(`${c}.${rel}`)); // hook:query
 		const children = Object.fromEntries(
 			Object.entries(m.relationships).flatMap(([key, relation]) =>
 				relation.inverse !== undefined &&
@@ -290,7 +262,7 @@ export function exposure(
 							[
 								relation.inverse,
 								{
-									collection: key.slice(0, key.lastIndexOf('.')),
+									model: key.slice(0, key.lastIndexOf('.')),
 									parent: key.slice(key.lastIndexOf('.') + 1),
 									...(relation.owned ? { owned: true as const } : {})
 								}
@@ -307,7 +279,7 @@ export function exposure(
 		]);
 		const masked = a.admin
 			? []
-			: Object.keys(ca?.masks ?? {}).filter((f) => fields.some(([x]) => x === f));
+			: Object.keys(ca?.masks[c] ?? {}).filter((f) => fields.some(([x]) => x === f));
 		out[c] = {
 			label: [model.label].flat(),
 			...(model.search === undefined ? {} : { search: model.search.text }),
@@ -324,40 +296,24 @@ export function exposure(
 					}
 				: {}),
 			...(relations.length === 0 ? {} : { relations: Object.fromEntries(relations) }),
+			...(layers.length === 0 ? {} : { layers }),
 			...(many.length === 0 ? {} : { many, children }), // hook:query (many)
 			...Object.fromEntries(
 				writes.map((v) => {
-					const input = spec[v]?.input;
-					const children = input === undefined ? {} : childInputs(m, a, c, input, v);
+					const filled = v === 'create' ? spec.create?.filled : undefined;
+					const children = childInputs(m, a, c, spec[v]?.columns ?? {}, c, c, v, filled);
 					return [
 						v,
 						{
 							columns: columns(v),
 							...(Object.keys(children).length === 0 ? {} : { with: children }),
-							...(v === 'create' && !a.admin && approvalOnly(ca?.create)
-								? { proposalOnly: true as const }
-								: {}),
-							...(v === 'create' && spec.create?.input.filled !== undefined
-								? { filled: spec.create.input.filled.filter((f) => columns(v).includes(f)) }
-								: {})
+							...(filled?.[c] === undefined
+								? {}
+								: { filled: filled[c].filter((f) => columns(v).includes(f)) })
 						}
 					];
 				})
 			),
-			...(queries.length === 0
-				? {}
-				: {
-						queries: Object.fromEntries(
-							queries.map(([n, x]) => [
-								n,
-								{
-									input: fieldsOf(Object.entries(x.input)),
-									output: outputOf(x.output),
-									description: x.description
-								}
-							])
-						)
-					}),
 			...(masked.length === 0 ? {} : { masked }),
 			...(Object.keys(readonlyFields).length === 0 ? {} : { readonlyFields }),
 			...(model.locked === undefined ? {} : { locked: model.locked }),
@@ -371,9 +327,9 @@ export function exposure(
 	// the system targets a relation, an `id` input or a file field points at: their declared fields as the caller's grants or
 	// the kernel directory let it read them
 	for (const c of TARGETS) {
-		const arms = a.collections[c]?.read ?? [],
+		const arms = a.models[c]?.read[c] ?? [],
 			model = SYSTEM.models[c]!,
-			read = SYSTEM.collections[c]!.read.fields;
+			read = SYSTEM.exposures[c]!.read[c]?.fields ?? [];
 		if (!a.admin && arms.length === 0) continue;
 		const readable = Object.entries(model.fields).filter(
 			([f]) =>

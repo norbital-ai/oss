@@ -16,7 +16,7 @@
 		locale: pageBoot.workspace.locale,
 		zone: pageBoot.workspace.tz,
 		currency: pageBoot.workspace.currency,
-		query: (collection, options) => bolt.query(collection, options),
+		query: (request) => bolt.query(request),
 		upload: (file, field) => bolt.upload(file, field),
 		fileUrl: (ref, options) => bolt.fileUrl(ref, options)
 	});

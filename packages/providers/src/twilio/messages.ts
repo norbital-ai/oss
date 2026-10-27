@@ -1,7 +1,7 @@
 // Twilio Messages discovers a sender once; failures are never retained by its cache.
 import { Cache, Effect, Exit, Schema } from 'effect';
 import type { Json } from '@norbital-ai/bolt/engine';
-import { HttpClientRequest, type HttpClient } from 'effect/unstable/http';
+import { HttpClientRequest, type HttpClient } from 'effect/http';
 import { ProviderUnavailable, type ProviderRefused } from '../errors.ts';
 import { decodeMessage, providerJson, Text, type TransportDef } from '../transport.ts';
 

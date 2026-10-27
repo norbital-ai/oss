@@ -58,7 +58,7 @@ is<Eq<ColumnValue<'orders' | 'notice_notes', 'note'>, string | null>>();
 is<Eq<Row<'orders'>['status'], 'draft' | 'submitted' | 'ordered'>>();
 is<Eq<Row<'orders'>['number'], string>>(); // seq with a pattern
 is<Eq<Row<'orders'>['total'], Decimal>>(); // sum roll-up
-is<Eq<Row<'orders'>['due_soon'], PlainDate | null>>(); // optional date propagates through computed SQL
+is<Eq<Row<'orders'>['due_soon'], PlainDate | null | Masked>>(); // optional date propagates through computed SQL; masked: sales_rep's root layer omits it
 is<Eq<ColumnValue<'customers', 'name_upper'>, string>>();
 is<Eq<ColumnValue<'customers', 'email_lower'>, string | null>>();
 is<Eq<ColumnValue<'customers', 'email_label'>, string>>();
@@ -98,21 +98,15 @@ is<
 is<Eq<'total' extends keyof StoredRow<'orders'> ? 1 : 0, 0>>(); // transforms never see derived values (rule 10)
 // an input takes a row's value or the plain literal decode accepts (ISO text, decimal text or an integer)
 type Dec = Decimal | number | `${number}`;
+// a create tree: the root's declared columns and, per declared write layer, an array of that layer's rows
+type Flat<T> = { [K in keyof T]: T[K] };
+is<Eq<keyof Insert<'orders'>, 'customer' | 'note' | 'due' | 'lines'>>();
+is<Eq<Insert<'orders'>['customer'], Id<'customers'>>>();
+is<Eq<Insert<'orders'>['due'], PlainDate | DateLiteral | null | undefined>>();
 is<
 	Eq<
-		Insert<'orders'>,
-		{
-			readonly customer: Id<'customers'>;
-			readonly note?: string | null;
-			readonly due?: PlainDate | DateLiteral | null;
-			readonly lines?: {
-				readonly create?: readonly {
-					readonly item: string;
-					readonly qty: Dec;
-					readonly price: Dec;
-				}[];
-			};
-		}
+		Flat<NonNullable<Insert<'orders'>['lines']>[number]>,
+		{ readonly item: string; readonly qty: Dec; readonly price: Dec }
 	>
 >();
 is<Eq<keyof Patch<'orders'>, 'status' | 'note' | 'due' | 'placed_at' | 'lines'>>();
@@ -161,9 +155,9 @@ const e1: Where<'orders'> = { status: { eq: 'shipped' } };
 const e2: Where<'orders'> = { note: { startsWith: 'x' } };
 // @ts-expect-error W3 `is` and id operators are exclusive arms... and `like` is text only
 const e3: Where<'orders'> = { due: { like: '2026%' } };
-// @ts-expect-error W4 a field the collection does not expose (sites reads only four fields)
+// @ts-expect-error W4 a field the model does not expose (sites reads only four fields)
 const e4: Where<'sites'> = { zone: { eq: 'Asia/Singapore' } };
-// @ts-expect-error W5 a relation the collection does not expose (sites: relations [])
+// a `where` may hop any relation into a model with `read` (filter only): the old `relations: []` allowlist is gone
 const e5: Where<'sites'> = { customer: { is: { tier: { eq: 'gold' } } } };
 // @ts-expect-error W6 clock operands are not values in a read predicate
 const e6: Where<'orders'> = { due: { lt: { now: '-1h' } } };
@@ -446,63 +440,19 @@ model('products', {
 	}
 });
 // @ts-expect-error C6 a misspelt create column
-model('orders', { ...m.orders.spec, create: { columns: ['nte'] } });
+model('orders', { ...m.orders.spec, create: { columns: { orders: ['nte'] } } });
 // @ts-expect-error C7 a derived field in an allowlist
-model('orders', { ...m.orders.spec, update: { columns: ['total'] } });
-model('orders', {
-	...m.orders.spec,
-	// @ts-expect-error C8 a relation action on something that is not a many-relation
-	update: { columns: [], with: { customer: { link: {} } } }
-});
-model('orders', {
-	...m.orders.spec,
-	// @ts-expect-error C9 an unknown relation action
-	update: { columns: [], with: { lines: { replace: {} } } }
-});
+model('orders', { ...m.orders.spec, update: { columns: { orders: ['total'] } } });
+// @ts-expect-error C8 a flat column list: write columns are a layer map
+model('orders', { ...m.orders.spec, update: { columns: ['note'] } });
+// @ts-expect-error C9 `with` relation-action allowlists are gone: a write layer is a `columns` path
+model('orders', { ...m.orders.spec, update: { columns: { orders: [] }, with: { lines: {} } } });
 // @ts-expect-error C10 an unexposable read field
-model('orders', { ...m.orders.spec, read: { fields: ['nope'] } });
-model('orders', {
-	...m.orders.spec,
-	queries: {
-		// @ts-expect-error C11 a query named after a generated verb
-		update: {
-			description: 'x',
-			input: {},
-			output: { kind: 'int' },
-			run: function* () {
-				return 0;
-			}
-		}
-	}
-});
-model('orders', {
-	...m.orders.spec,
-	queries: {
-		q: {
-			description: 'x',
-			// @ts-expect-error C12 a query input of unknown kind
-			input: { a: { kind: 'txt' } },
-			output: { kind: 'int' },
-			run: function* () {
-				return 0;
-			}
-		}
-	}
-});
-model('orders', {
-	...m.orders.spec,
-	queries: {
-		q: {
-			description: 'x',
-			// @ts-expect-error C13 an id input filtered by a field its target lacks
-			input: { a: { kind: 'id', of: 'customers', where: { nope: { eq: 1 } } } },
-			output: { kind: 'int' },
-			run: function* () {
-				return 0;
-			}
-		}
-	}
-});
+model('orders', { ...m.orders.spec, read: { orders: { fields: ['nope'] } } });
+// @ts-expect-error C10b a read without its path key (`relations` is gone)
+model('orders', { ...m.orders.spec, read: { fields: ['note'], relations: ['lines'] } });
+// @ts-expect-error C11 declared queries are gone: read the layers, transform in a src/lib helper
+model('orders', { ...m.orders.spec, queries: {} });
 model('orders', {
 	...m.orders.spec,
 	search: {
@@ -547,29 +497,6 @@ model('orders', {
 				return yield* ctx.refuse('An ordered order stays.');
 		}
 	},
-	queries: {
-		...m.orders.spec.queries,
-		open_total: {
-			...m.orders.spec.queries.open_total,
-			run: function* ({ since }, ctx) {
-				const open = yield* ctx.query('orders', {
-					where: { status: { ne: 'ordered' }, due: { gte: since } },
-					select: { total: true, customer: { select: { name: true } } },
-					all: true
-				});
-				const first = open.rows[0];
-				if (first !== undefined) {
-					const n: string = first.customer.name;
-					void n;
-					// Caller metadata belongs to the selected root, never its selected relation.
-					is<Eq<typeof first.$approval, RowApproval | undefined>>();
-					is<Eq<typeof first.$sync, Row<'orders'>['$sync']>>();
-					is<Eq<'$approval' extends keyof typeof first.customer ? 1 : 0, 0>>();
-				}
-				return open.rows.reduce<Decimal | undefined>((_, r) => r.total, undefined) ?? Decimal.of(0);
-			}
-		}
-	},
 	search: {
 		...m.orders.spec.search,
 		indexes: {
@@ -583,10 +510,26 @@ model('orders', {
 automation('orders_submit', {
 	...rt.orders_submit.spec,
 	run: function* ({ target }, ctx) {
-		yield* ctx.act('orders.update', {
+		yield* ctx.act('orders.update', [{
 			target: target,
 			set: { status: 'submitted' }
+		}]);
+		// a named ref layer (orders.customer) replaces its FK with the row or null
+		const open = yield* ctx.query({
+			orders: { where: { status: { ne: 'ordered' } }, fields: ['total', 'customer'] },
+			'orders.customer': { fields: ['name'] }
 		});
+		const first = open.orders.rows[0];
+		if (first !== undefined && first.customer !== null) {
+			const n: string = first.customer.name;
+			void n;
+			// Caller metadata belongs to the root row, never its layer rows.
+			is<Eq<typeof first.$approval, RowApproval | undefined>>();
+			is<Eq<typeof first.$sync, Row<'orders'>['$sync']>>();
+			is<Eq<'$approval' extends keyof typeof first.customer ? 1 : 0, 0>>();
+		}
+		// @ts-expect-error B9 the single-model `query(model, args)` form is gone: every read is a read request
+		yield* ctx.query('orders', { all: true });
 	}
 });
 automation('orders_renote', {
@@ -598,38 +541,17 @@ automation('orders_renote', {
 		);
 		const id = ids[0];
 		const order =
-			id === undefined ? null : yield* ctx.query('orders', { id, select: { customer: true } });
-		if (order !== null)
-			yield* ctx.act('orders.create', {
+			id === undefined
+				? undefined
+				: (yield* ctx.query({ orders: { where: { id: { eq: id } }, fields: ['customer'], limit: 1 } }))
+						.orders.rows[0];
+		if (order !== undefined)
+			yield* ctx.act('orders.create', [{
 				customer: order.customer,
-				lines: { create: [{ item: 'x', qty: Decimal.of(1), price: Decimal.of(2) }] }
-			});
-		const gold = yield* ctx.query('customers.gold', {});
-		return gold.length;
-	}
-});
-model('orders', {
-	...m.orders.spec,
-	queries: {
-		open_total: {
-			...m.orders.spec.queries.open_total,
-			// @ts-expect-error B1 a query body returning the wrong output
-			run: function* () {
-				return 3;
-			}
-		}
-	}
-});
-model('orders', {
-	...m.orders.spec,
-	queries: {
-		open_total: {
-			...m.orders.spec.queries.open_total,
-			run: function* (input) {
-				// @ts-expect-error B3 a misspelt input field
-				return input.sinse;
-			}
-		}
+				lines: [{ item: 'x', qty: Decimal.of(1), price: Decimal.of(2) }]
+			}]);
+		const { customers } = yield* ctx.query({ customers: { where: { tier: { eq: 'gold' } } } });
+		return customers.rows.length;
 	}
 });
 automation('orders_submit', {
@@ -642,20 +564,20 @@ automation('orders_submit', {
 automation('orders_submit', {
 	...rt.orders_submit.spec,
 	run: function* ({ target }, ctx) {
-		const order = yield* ctx.query('orders', { id: target });
+		const order = (yield* ctx.query({ orders: { where: { id: { eq: target } }, limit: 1 } })).orders.rows[0] ?? null;
 		if (order === null) return;
-		yield* ctx.act('orders.update', {
+		yield* ctx.act('orders.update', [{
 			target: target,
 			// @ts-expect-error B5 a field outside the update allowlist
 			set: { customer: order.customer }
-		});
+		}]);
 	}
 });
 automation('orders_renote', {
 	...rt.orders_renote.spec,
 	run: function* (_, ctx) {
 		// @ts-expect-error B6 a create missing a required field
-		yield* ctx.act('orders.create', { note: 'x' });
+		yield* ctx.act('orders.create', [{ note: 'x' }]);
 		return 1;
 	}
 });
@@ -665,7 +587,7 @@ automation('orders_renote', {
 		const id = ids[0];
 		if (id !== undefined) {
 			// @ts-expect-error B7 an upsert requires an explicit conflict policy
-			yield* ctx.act('orders.upsert', { id, note: 'x' });
+			yield* ctx.act('orders.upsert', [{ id, note: 'x' }]);
 		}
 		return 1;
 	}
@@ -675,19 +597,6 @@ automation('orders_renote', {
 	run: function* (_, ctx) {
 		// @ts-expect-error B8 an automation has no implicit record target
 		return ctx.target.id.length;
-	}
-});
-model('orders', {
-	...m.orders.spec,
-	queries: {
-		open_total: {
-			...m.orders.spec.queries.open_total,
-			run: function* (_, ctx) {
-				// @ts-expect-error B9 a read without a limit
-				yield* ctx.query('orders', {});
-				return Decimal.of(0);
-			}
-		}
 	}
 });
 model('orders', {
@@ -702,7 +611,7 @@ automation('orders_renote', {
 	...rt.orders_renote.spec,
 	run: function* (_, ctx) {
 		// @ts-expect-error B11 a model without a create exposure has no create callable
-		yield* ctx.act('notices.create', {});
+		yield* ctx.act('notices.create', [{}]);
 		return 1;
 	}
 });
@@ -713,21 +622,18 @@ model('orders', {
 	create: {
 		...m.orders.spec.create,
 		transform: function* (inputs, ctx) {
-			const labels = yield* ctx.db.query('orders', { select: { number: true }, all: true });
-			const number: string = labels.rows[0]!.number;
+			const labels = yield* ctx.db.query({ orders: { fields: ['number'] } });
+			const number: string = labels.orders.rows[0]!.number;
 			void number;
-			const keyed = yield* ctx.db.query({
-				labels: { from: 'orders', select: { number: true }, all: true }
-			});
-			const keyedNumber: string = keyed.labels.rows[0]!.number;
-			void keyedNumber;
-			const ordinary = yield* ctx.db.query('orders', { all: true });
-			// @ts-expect-error sequence labels stay absent from default stored rows
-			ordinary.rows[0]!.number;
-			// @ts-expect-error an explicit workspace projection does not expose roll-ups
-			yield* ctx.db.query('orders', { select: { total: true }, all: true });
-			// @ts-expect-error an explicit workspace projection does not expose computed fields
-			yield* ctx.db.query('orders', { select: { due_soon: true }, all: true });
+			// a workspace read request reads the root layer's declared fields, unmasked: the sequence label, roll-ups and
+			// computed fields included (`read: 'all'` declares them)
+			const ordinary = yield* ctx.db.query({ orders: {} });
+			const label: string = ordinary.orders.rows[0]!.number;
+			const total: Decimal = ordinary.orders.rows[0]!.total;
+			const soon: PlainDate | null = ordinary.orders.rows[0]!.due_soon;
+			void [label, total, soon];
+			// @ts-expect-error a field the root layer does not declare
+			yield* ctx.db.query({ orders: { fields: ['nope'] } });
 			return inputs;
 		}
 	}

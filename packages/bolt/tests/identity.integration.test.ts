@@ -41,7 +41,7 @@ const m: EngineManifest = {
 	workspace: { tz: 'UTC', locale: 'en' },
 	models: {},
 	relationships: {},
-	collections: {},
+	exposures: {},
 	integrations: {},
 	policies: { sales: { description: '', grants: {} }, finance: { description: '', grants: {} } },
 	teams: { Sales: ['sales'], Company: ['finance'], Finance: ['finance'] },
@@ -497,13 +497,13 @@ layer(IdentityFixtureLive)((it) => {
 						invited
 					);
 					expect(history[0]).toMatchObject({
-						collection: 'sys_user',
+						model: 'sys_user',
 						op: 'create',
 						actor: `member:${invited}`,
 						changes: expect.objectContaining({ email: 'rep@acme.example' })
 					});
 					expect(history).toContainEqual({
-						collection: 'sys_user',
+						model: 'sys_user',
 						op: 'update',
 						actor: `member:${founder}`,
 						changes: { admin: true }

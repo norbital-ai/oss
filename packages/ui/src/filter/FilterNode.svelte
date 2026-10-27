@@ -4,7 +4,7 @@
 	// Every control is one height (the kit's CONTROL); a row carries no label beside a control that already names itself.
 	// The field, operator, label, value and quantifier choices all come from the engine's catalogue (`filter.options`),
 	// so the builder can author exactly what a description may be asked for.
-	import type { CollectionExposure } from '../kinds/context.js';
+	import type { ModelExposure } from '../kinds/context.js';
 	import { CONTROL } from '../kinds/classes.js';
 	import Editor from '../kinds/editor.svelte';
 	import Combobox from '../primitives/combobox/combobox.svelte';
@@ -42,7 +42,7 @@
 	let {
 		node,
 		catalog,
-		collection,
+		model,
 		offers,
 		prefix = [],
 		top = false,
@@ -50,13 +50,13 @@
 		onRemove
 	}: {
 		node: Node;
-		catalog: { readonly [c: string]: CollectionExposure };
-		collection: string;
+		catalog: { readonly [c: string]: ModelExposure };
+		model: string;
 		/** The engine's catalogue for the view. */
 		offers: readonly Offer[];
 		/** The many-relation steps this row sits under, so catalogue paths match. */
 		prefix?: readonly FilterStep[];
-		/** The view's own collection outside any related group: many-relations are offered. */
+		/** The view's own model outside any related group: many-relations are offered. */
 		top?: boolean;
 		onChange(next: Node): void;
 		onRemove(): void;
@@ -178,7 +178,7 @@
 			<FilterNode
 				node={child}
 				{catalog}
-				collection={at}
+				model={at}
 				{offers}
 				prefix={atPrefix}
 				top={isTop}
@@ -254,11 +254,11 @@
 			/>
 			{@render remove()}
 		</div>
-		{@render nested(g, collection, top, prefix)}
+		{@render nested(g, model, top, prefix)}
 	</div>
 {:else if node.t === 'many'}
 	{@const m = node}
-	{@const child = childOf(catalog, collection, m.rel) ?? ''}
+	{@const child = childOf(catalog, model, m.rel) ?? ''}
 	{@const agg = m.q !== 'some' && m.q !== 'none' && m.q !== 'every'}
 	{@const mo = manyOffers(offers, prefix, m.rel)}
 	{@const quantOptions = QUANTS.filter((q) =>
@@ -277,7 +277,7 @@
 		<div class="flex flex-wrap items-center gap-1.5">
 			<FieldPicker
 				{catalog}
-				{collection}
+				{model}
 				{offers}
 				{prefix}
 				value={m.rel}
@@ -341,12 +341,12 @@
 			])}{/if}
 	</div>
 {:else}
-	{@const r = node.path === '' ? null : resolve(catalog, collection, node.path)}
+	{@const r = node.path === '' ? null : resolve(catalog, model, node.path)}
 	{@const at = offersFor(offers, prefix, node.path)}
 	<div class="flex flex-wrap items-center gap-1.5" data-cond={node.path}>
 		<FieldPicker
 			{catalog}
-			{collection}
+			{model}
 			{offers}
 			{prefix}
 			value={node.path}

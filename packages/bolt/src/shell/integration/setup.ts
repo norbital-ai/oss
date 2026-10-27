@@ -81,7 +81,7 @@ export const instanceMade = (
 ): Effect.Effect<string, ActRefused> => {
 	const row =
 		outcome.kind === 'committed'
-			? outcome.records.find((r) => r.collection === 'sys_integration')
+			? outcome.records.find((r) => r.model === 'sys_integration')
 			: undefined;
 	return row === undefined
 		? Effect.fail(

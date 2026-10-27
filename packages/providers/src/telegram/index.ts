@@ -1,7 +1,7 @@
 // Telegram bot pairing and delivery through the instance's guarded HttpClient.
 import { createHash } from 'node:crypto';
 import { Effect, Option, Predicate, Schema } from 'effect';
-import { HttpClient, HttpClientRequest, HttpClientResponse } from 'effect/unstable/http';
+import { HttpClient, HttpClientRequest, HttpClientResponse } from 'effect/http';
 import type { DriverOpen, Json, OutboundAttachment } from '@norbital-ai/bolt/engine';
 import type { ProviderDef } from '../abi.ts';
 import { answerFailure, ProviderUnavailable } from '../errors.ts';
@@ -198,8 +198,10 @@ export function telegram(): ProviderDef {
 					}
 					return { providerId: `${chat}:${sent.message_id}` };
 				}),
-				typing: (to: string) =>
+				// a chat action lapses by itself (5 s): there is nothing to send to stop it
+				typing: (to: string, on: boolean) =>
 					Effect.gen(function* () {
+						if (!on) return;
 						const [chat = '', , thread] = to.split(':');
 						yield* call(Schema.Boolean, yield* need(), 'sendChatAction', {
 							chat_id: chat,

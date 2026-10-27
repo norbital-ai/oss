@@ -4,11 +4,11 @@ import { afterEach, it } from '@effect/vitest';
 import { Effect } from 'effect';
 import { vi } from 'vitest';
 import type { KindsHost } from '../src/kinds/context.ts';
-import type { ToolbarItem } from '../src/collection/ViewToolbar.svelte';
+import type { ToolbarItem } from '../src/model/ViewToolbar.svelte';
 import { browser, required, textOf, viewFixture, type ViewScript } from './view-fixture.ts';
 import { element } from './elements.ts';
 
-// The ⚡ menu's standard rows come from the collection's exposure alone; a page's own rows come from `toolbar.actions`.
+// The ⚡ menu's standard rows come from the model's exposure alone; a page's own rows come from `toolbar.actions`.
 // The in-app confirmation is a queue the test answers (see board-selection.test.ts).
 const dialog = vi.hoisted(() => ({
 	pending: [] as { title: string; body: string | undefined; answer: (ok: boolean) => void }[]
@@ -210,7 +210,7 @@ it.live('bulk delete confirms, deletes each record, and reports a partial refusa
 			show({
 				catalog: declared,
 				act: (_callable, input) =>
-					JSON.stringify(input) === JSON.stringify({ target: ['job-b'] })
+					JSON.stringify(input) === JSON.stringify([{ target: 'job-b' }])
 						? { kind: 'refused', code: 'forbidden', message: 'Job B is invoiced' }
 						: { kind: 'committed', output: null, records: [] }
 			})
@@ -225,8 +225,8 @@ it.live('bulk delete confirms, deletes each record, and reports a partial refusa
 		asked.answer(true);
 		yield* browser(settle);
 		assert.deepEqual(acts, [
-			{ callable: 'jobs.delete', input: { target: ['job-a'] } },
-			{ callable: 'jobs.delete', input: { target: ['job-b'] } }
+			{ callable: 'jobs.delete', input: [{ target: 'job-a' }] },
+			{ callable: 'jobs.delete', input: [{ target: 'job-b' }] }
 		]);
 		assert.deepEqual(
 			toasts.map((t) => [t.tone, t.text]),

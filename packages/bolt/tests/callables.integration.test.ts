@@ -43,18 +43,14 @@ const manifest = Result.getOrThrow(
 			'orders.customer': { to: 'customers', inverse: 'orders' },
 			'notes.order': { to: 'orders', inverse: 'notes' }
 		},
-		collections: {
-			customers: { read: { fields: 'all' } },
+		exposures: {
+			customers: { read: { customers: { fields: 'all' } } },
 			orders: {
-				read: { fields: 'all' },
-				create: { input: { columns: ['title', 'region', 'customer'] }, transform: true },
-				update: { input: { columns: ['title', 'status'] } },
-				queries: {
-					mine: { description: 'My orders', input: {}, output: { kind: 'int' } },
-					secret: { description: 'Internal', input: {}, output: { kind: 'int' }, internal: true }
-				}
+				read: { orders: { fields: 'all' } },
+				create: { columns: { orders: ['title', 'region', 'customer'] }, transform: true },
+				update: { columns: { orders: ['title', 'status'] } }
 			},
-			notes: { read: { fields: 'all' }, create: { input: { columns: ['text', 'order'] } } }
+			notes: { read: { notes: { fields: 'all' } }, create: { columns: { notes: ['text', 'order'] } } }
 		},
 		integrations: {},
 		policies: {
@@ -64,11 +60,10 @@ const manifest = Result.getOrThrow(
 				grants: {
 					customers: { read: true },
 					orders: {
-						read: { created_by: { eq: { actor: 'id' } } },
+						read: { orders: { where: { created_by: { eq: { actor: 'id' } } } } },
 						create: true,
-						update: 'read',
-						moves: { status: ['draft->submitted'] },
-						queries: ['mine', 'secret']
+						update: true,
+						moves: { status: ['draft->submitted'] }
 					},
 					notes: { read: true, create: true }
 				}
@@ -119,34 +114,31 @@ const manifest = Result.getOrThrow(
 const guest = program(`import { Effect } from 'effect';
 import { ActRefused } from '@norbital-ai/bolt/errors';
 export default {
- collection: { orders: { bodies: {
+ model: { orders: { bodies: {
   create: function* (inputs, ctx) {
    for (const [row, input] of inputs.entries())
     if (input.title === 'no') return yield* ctx.refuse('not that one', { field: 'title', row });
    return inputs;
-  },
-  queries: {
-   mine: function* (input, ctx) { return (yield* ctx.query('orders', { all: true })).rows.length; },
-   secret: function* () { return 42; }
   }
  } } },
  automation: {
   place: { body: function* (input, ctx) {
    if (input.title === 'no') return yield* Effect.fail(new ActRefused({code:'refused', message:'not that one', field:'title', rule:'place'}));
-   const o = yield* ctx.act('orders.create', { title: input.title, region: 'north', customer: input.customer });
+   const o = yield* ctx.act('orders.create', [{ title: input.title, region: 'north', customer: input.customer }]);
    const id = o.records[0].id;
-   yield* ctx.act('notes.create', { text: 'placed ' + input.title, order: id });
+   yield* ctx.act('notes.create', [{ text: 'placed ' + input.title, order: id }]);
    const run = yield* ctx.schedule('followup', { order: id }, { at: { now: '+1h' } });
    yield* ctx.notify({ to: [{ policy: 'rep' }], title: 'Placed' });
-   return id + ':' + run.automation + ':' + (yield* ctx.query('orders.secret', {}));
+   const { orders } = yield* ctx.query({ orders: { fields: ['title'] } });
+   return id + ':' + run.automation + ':' + orders.rows.length;
   } },
   submit: { body: function* (input, ctx) {
-   const target = yield* ctx.query('orders', { id: input.order });
-   yield* ctx.act('orders.update', { target: input.order, set: { status: 'submitted' } });
+   const target = (yield* ctx.query({ orders: { where: { id: { eq: input.order } } } })).orders.rows[0];
+   yield* ctx.act('orders.update', [{ target: input.order, set: { status: 'submitted' } }]);
    return target.title;
   } },
   revise: { body: function* (input, ctx) {
-   yield* ctx.act('orders.update', {target:input.order, set:{title:'extracted'}}, {observed:{[input.order]:input.revision}});
+   yield* ctx.act('orders.update', [{target:input.order, set:{title:'extracted'}}], {observed:{[input.order]:input.revision}});
    return 'extracted';
   } },
   boom: { body: function* () { throw new Error('a bug'); } },
@@ -209,21 +201,31 @@ const act = (
 	);
 const answer = (f: Fixture, authority: Authority, a: readonly Json[]) =>
 	qReply(f.route, authority, { reads: [{ m: 'query', a }] }).pipe(Effect.map((r) => r.answers[0]));
-const read = (f: Fixture, authority: Authority, collection: string, q: Json) =>
-	answer(f, authority, [collection, q]).pipe(
-		Effect.flatMap(
-			Schema.decodeUnknownEffect(
-				Schema.Struct({
-					rows: Schema.Array(Schema.Record(Schema.String, Schema.Json)),
-					next: Schema.NullOr(Schema.String)
-				})
-			)
-		)
+const Pages = Schema.Record(
+	Schema.String,
+	Schema.Struct({
+		rows: Schema.Array(Schema.Record(Schema.String, Schema.Json)),
+		next: Schema.optionalKey(Schema.NullOr(Schema.String))
+	})
+);
+/** A read request's answer per root, its decode a fixture defect (a refused read stays a failure). */
+const pages = (f: Fixture, authority: Authority, request: Json) =>
+	answer(f, authority, [request]).pipe(
+		Effect.flatMap((value) => Schema.decodeUnknownEffect(Pages)(value).pipe(Effect.orDie))
 	);
-const get = (f: Fixture, authority: Authority, collection: string, id: string) =>
-	answer(f, authority, [collection, { id }]);
-const query = (f: Fixture, authority: Authority, name: string, input: Json = {}) =>
-	answer(f, authority, [name, input]);
+/** Every row of one model the caller reads: a read request naming it alone. */
+const read = (f: Fixture, authority: Authority, model: string) =>
+	pages(f, authority, { [model]: {} }).pipe(
+		Effect.map((answer) => answer[model] ?? { rows: [], next: null })
+	);
+/** One record the caller reads, or `null`. */
+const get = (f: Fixture, authority: Authority, model: string, id: string) =>
+	pages(f, authority, { [model]: { where: { id: { eq: id } } } }).pipe(
+		Effect.map((answer) => answer[model]?.rows[0] ?? null)
+	);
+/** A read request's rows of one root, as the page's `bolt.query({ … })` reads them. */
+const rootRows = (f: Fixture, authority: Authority, request: Json, root: string) =>
+	pages(f, authority, request).pipe(Effect.map((answer) => answer[root]?.rows ?? []));
 const start = (
 	f: Fixture,
 	authority: Authority,
@@ -281,18 +283,18 @@ describe('generated batches and queued business workflows', () => {
 					const f = yield* fixture();
 					const admin = f.t.as(f.t.admin);
 					const created = ok(
-						yield* act(f, admin.authority, 'orders.create', {
+						yield* act(f, admin.authority, 'orders.create', [{
 							title: 'original',
 							region: 'north',
 							customer: ACME
-						})
+						}])
 					).records[0];
 					if (created === undefined) throw new Error('Missing created order');
 					const updated = ok(
-						yield* act(f, admin.authority, 'orders.update', {
+						yield* act(f, admin.authority, 'orders.update', [{
 							target: created.id,
 							set: { title: 'newer edit' }
-						})
+						}])
 					).records[0];
 					if (updated === undefined) throw new Error('Missing updated order');
 					const stale = uuidv7(Date.parse(f.t.clock.now()));
@@ -317,7 +319,7 @@ describe('generated batches and queued business workflows', () => {
 								f,
 								admin.authority,
 								'orders.update',
-								{ target: created.id, set: { title: 'stale outer' } },
+								[{ target: created.id, set: { title: 'stale outer' } }],
 								{ observed: { [created.id]: created.revision } }
 							)
 						)
@@ -326,9 +328,9 @@ describe('generated batches and queued business workflows', () => {
 						yield* Effect.flip(
 							batch(f, admin.authority, [
 								{
-									collection: 'orders',
+									model: 'orders',
 									verb: 'update',
-									input: { target: created.id, set: { title: 'stale batch' } },
+									input: [{ target: created.id, set: { title: 'stale batch' } }],
 									observed: { [created.id]: created.revision }
 								}
 							])
@@ -341,9 +343,9 @@ describe('generated batches and queued business workflows', () => {
 					expect(
 						yield* batch(f, admin.authority, [
 							{
-								collection: 'orders',
+								model: 'orders',
 								verb: 'update',
-								input: { target: created.id, set: { title: 'extracted' } },
+								input: [{ target: created.id, set: { title: 'extracted' } }],
 								observed: { [created.id]: updated.revision }
 							}
 						])
@@ -374,16 +376,16 @@ describe('generated batches and queued business workflows', () => {
 					expect((yield* run(f, id)).state).toBe('queued');
 					expect(yield* rows(f, 'SELECT id FROM orders')).toEqual([]);
 					yield* t.runDue();
-					const order = (yield* read(f, rep.authority, 'orders', { all: true })).rows[0];
+					const order = (yield* read(f, rep.authority, 'orders')).rows[0];
 					if (order === undefined || typeof order['id'] !== 'string')
 						throw new Error('Missing workflow order');
 					expect(yield* run(f, id)).toMatchObject({
 						state: 'succeeded',
-						output: order['id'] + ':followup:42',
+						output: order['id'] + ':followup:1',
 						error: null
 					});
 					expect(
-						(yield* read(f, rep.authority, 'notes', { all: true })).rows.map((n) => n['text'])
+						(yield* read(f, rep.authority, 'notes')).rows.map((n) => n['text'])
 					).toEqual(['placed desk']);
 					const [scheduled] = yield* rows(
 						f,
@@ -406,39 +408,39 @@ describe('generated batches and queued business workflows', () => {
 				})
 			)
 	);
-	it.live('independent generated verbs across collections commit in one native batch', () =>
+	it.live('independent generated verbs across models commit in one native batch', () =>
 		Effect.scoped(
 			Effect.gen(function* () {
 				const f = yield* fixture(),
 					t = f.t,
 					rep = t.as(t.member(['rep']));
 				const parent = ok(
-					yield* act(f, rep.authority, 'orders.create', {
+					yield* act(f, rep.authority, 'orders.create', [{
 						title: 'parent',
 						region: 'north',
 						customer: ACME
-					})
+					}])
 				).records[0];
 				if (parent === undefined) throw new Error('Missing parent');
 				const commits = vi.spyOn(t.db, 'transaction');
 				const placed = ok(
 					yield* batch(f, rep.authority, [
 						{
-							collection: 'orders',
+							model: 'orders',
 							verb: 'create',
-							input: { title: 'desk', region: 'north', customer: ACME }
+							input: [{ title: 'desk', region: 'north', customer: ACME }]
 						},
 						{
-							collection: 'notes',
+							model: 'notes',
 							verb: 'create',
-							input: { text: 'placed desk', order: parent.id }
+							input: [{ text: 'placed desk', order: parent.id }]
 						}
 					])
 				);
 				expect(commits).toHaveBeenCalledTimes(1);
-				expect(placed.records.map((r) => r.collection).sort()).toEqual(['notes', 'orders']);
+				expect(placed.records.map((r) => r.model).sort()).toEqual(['notes', 'orders']);
 				expect(
-					(yield* read(f, rep.authority, 'notes', { all: true })).rows.map((n) => n['text'])
+					(yield* read(f, rep.authority, 'notes')).rows.map((n) => n['text'])
 				).toEqual(['placed desk']);
 			})
 		)
@@ -453,14 +455,14 @@ describe('generated batches and queued business workflows', () => {
 						rep = t.as(t.member(['rep']));
 					const operations: Batch = [
 						{
-							collection: 'orders',
+							model: 'orders',
 							verb: 'create',
-							input: { title: 'accepted first', region: 'north', customer: ACME }
+							input: [{ title: 'accepted first', region: 'north', customer: ACME }]
 						},
 						{
-							collection: 'orders',
+							model: 'orders',
 							verb: 'create',
-							input: { title: 'no', region: 'north', customer: ACME }
+							input: [{ title: 'no', region: 'north', customer: ACME }]
 						}
 					];
 					const commits = vi.spyOn(t.db, 'transaction');
@@ -520,9 +522,9 @@ describe('generated batches and queued business workflows', () => {
 					armed = true;
 					const operations: Batch = [
 						{
-							collection: 'orders',
+							model: 'orders',
 							verb: 'create',
-							input: { title: 'bounded callable', region: 'north', customer: ACME }
+							input: [{ title: 'bounded callable', region: 'north', customer: ACME }]
 						}
 					];
 					const first = yield* Effect.flip(batch(f, rep.authority, operations, 'bounded-callable'));
@@ -547,7 +549,7 @@ describe('generated batches and queued business workflows', () => {
 				Effect.gen(function* () {
 					const f = yield* fixture(),
 						rep = f.t.as(f.t.member(['rep']));
-					const input = { title: 'desk', region: 'north', customer: ACME };
+					const input = [{ title: 'desk', region: 'north', customer: ACME }];
 					const first = yield* act(f, rep.authority, 'orders.create', input, { key: 'same' });
 					expect(yield* act(f, rep.authority, 'orders.create', input, { key: 'same' })).toEqual(
 						first
@@ -555,7 +557,7 @@ describe('generated batches and queued business workflows', () => {
 					expect(yield* rows(f, 'SELECT count(*)::int AS n FROM orders')).toEqual([{ n: 1 }]);
 					expect(
 						yield* Effect.flip(
-							act(f, rep.authority, 'orders.create', { ...input, title: 'other' }, { key: 'same' })
+							act(f, rep.authority, 'orders.create', [{ ...input, title: 'other' }], { key: 'same' })
 						)
 					).toMatchObject({ _tag: 'ActRefused', code: 'keyReuse' });
 				})
@@ -582,19 +584,15 @@ describe('generated batches and queued business workflows', () => {
 			})
 		)
 	);
-	it.live('automation admission and internal queries require their policy grants', () =>
+	it.live('automation admission requires its policy grant', () =>
 		Effect.scoped(
 			Effect.gen(function* () {
-				const f = yield* fixture(),
-					rep = f.t.as(f.t.member(['rep']));
+				const f = yield* fixture();
 				expect(
 					yield* Effect.flip(
 						start(f, f.t.as(f.t.member([])).authority, 'place', { title: 'x', customer: ACME })
 					)
 				).toMatchObject({ _tag: 'ActRefused', code: 'forbidden' });
-				expect(yield* Effect.flip(query(f, rep.authority, 'orders.secret'))).toMatchObject({
-					code: 'forbidden'
-				});
 			})
 		)
 	);
@@ -628,11 +626,11 @@ describe('generated batches and queued business workflows', () => {
 					const f = yield* fixture(),
 						rep = f.t.as(f.t.member(['rep']));
 					const order = ok(
-						yield* act(f, rep.authority, 'orders.create', {
+						yield* act(f, rep.authority, 'orders.create', [{
 							title: 'chair',
 							region: 'north',
 							customer: ACME
-						})
+						}])
 					).records[0];
 					if (order === undefined) throw new Error('Missing created order');
 					const id = uuidv7(Date.parse(f.t.clock.now()));
@@ -677,8 +675,8 @@ describe('generated batches and queued business workflows', () => {
 	);
 });
 
-describe('collection queries (rule 31: a /q read)', () => {
-	it.live('reads as the caller, writes nothing, and is reachable only by policy', () =>
+describe('read requests (rule 31: a /q read)', () => {
+	it.live("reads as the caller under each root's policy, writes nothing, and refuses an unknown option", () =>
 		Effect.scoped(
 			Effect.gen(function* () {
 				const f = yield* fixture(),
@@ -686,22 +684,24 @@ describe('collection queries (rule 31: a /q read)', () => {
 				const a = t.as(t.member(['rep'])),
 					b = t.as(t.member(['rep']));
 				ok(
-					yield* act(f, a.authority, 'orders.create', {
+					yield* act(f, a.authority, 'orders.create', [{
 						title: 'x',
 						region: 'north',
 						customer: ACME
-					})
+					}])
 				);
 				t.count.reset();
-				expect(yield* query(f, a.authority, 'orders.mine')).toBe(1);
-				expect(yield* query(f, b.authority, 'orders.mine')).toBe(0);
+				const mine = { orders: { fields: ['title'] } };
+				expect(yield* rootRows(f, a.authority, mine, 'orders')).toHaveLength(1);
+				expect(yield* rootRows(f, b.authority, mine, 'orders')).toHaveLength(0);
+				// the clerk's policy reads every order
+				expect(
+					yield* rootRows(f, t.as(t.member(['clerk'])).authority, mine, 'orders')
+				).toHaveLength(1);
 				expect(t.count.writes).toBe(0);
 				expect(
-					yield* Effect.flip(query(f, t.as(t.member(['clerk'])).authority, 'orders.mine'))
-				).toMatchObject({ code: 'forbidden' });
-				expect(
-					yield* Effect.flip(query(f, a.authority, 'orders.mine', { extra: 1 }))
-				).toMatchObject({ code: 'invalidInput' });
+					yield* Effect.flip(rootRows(f, a.authority, { orders: { extra: 1 } }, 'orders'))
+				).toMatchObject({ message: expect.stringContaining('extra') });
 			})
 		)
 	);
@@ -717,18 +717,18 @@ describe('start (rules 31, 33, 51)', () => {
 						t = f.t;
 					const rep = t.as(t.member(['rep']));
 					const order = ok(
-						yield* act(f, rep.authority, 'orders.create', {
+						yield* act(f, rep.authority, 'orders.create', [{
 							title: 'x',
 							region: 'north',
 							customer: ACME
-						})
+						}])
 					).records[0]!.id;
 					const order2 = ok(
-						yield* act(f, rep.authority, 'orders.create', {
+						yield* act(f, rep.authority, 'orders.create', [{
 							title: 'y',
 							region: 'north',
 							customer: ACME
-						})
+						}])
 					).records[0];
 					if (order2 === undefined) throw new Error('Missing second order');
 					const id = uuidv7(Date.parse(t.clock.now()));
@@ -851,14 +851,11 @@ const careers = Result.getOrThrow(
 			}
 		},
 		relationships: { 'applications.opening': { to: 'openings', inverse: 'applications' } },
-		collections: {
-			openings: {
-				read: { fields: 'all' },
-				queries: { count: { description: 'Count', input: {}, output: { kind: 'int' } } }
-			},
+		exposures: {
+			openings: { read: { openings: { fields: 'all' } } },
 			applications: {
-				read: { fields: 'all' },
-				create: { input: { columns: ['opening', 'name', 'email', 'cv'] } }
+				read: { applications: { fields: 'all' } },
+				create: { columns: { applications: ['opening', 'name', 'email', 'cv'] } }
 			}
 		},
 		integrations: {},
@@ -868,12 +865,14 @@ const careers = Result.getOrThrow(
 				grants: {
 					openings: {
 						read: {
-							where: { status: { eq: 'open' } },
-							fields: ['title', 'location', 'description']
-						},
-						queries: ['count']
+							openings: {
+								where: { status: { eq: 'open' } },
+								fields: ['title', 'location', 'description']
+							}
+						}
 					},
-					applications: { create: { opening: { is: { status: { eq: 'open' } } } } }
+					// a closed opening is no ref this visitor reads, so no write `where` is needed
+					applications: { create: true }
 				},
 				limits: { register: { rate: '10/h', per: 'ip' } }
 			}
@@ -926,7 +925,7 @@ describe('visitors (rule 38d)', () => {
 						}),
 						v = f.t;
 					const me = v.visitor('careers');
-					const open = (yield* read(f, me.authority, 'openings', { all: true })).rows;
+					const open = (yield* read(f, me.authority, 'openings')).rows;
 					expect(open).toHaveLength(1);
 					expect(open[0]).toMatchObject({
 						id: OPEN,
@@ -936,39 +935,36 @@ describe('visitors (rule 38d)', () => {
 						status: { $masked: true }
 					});
 					ok(
-						yield* act(f, me.authority, 'applications.create', {
+						yield* act(f, me.authority, 'applications.create', [{
 							opening: OPEN,
 							name: 'Ada',
 							email: 'ada@example.com'
-						})
+						}])
 					);
 					expect(
 						yield* Effect.flip(
-							act(f, me.authority, 'applications.create', {
+							act(f, me.authority, 'applications.create', [{
 								opening: CLOSED,
 								name: 'Ada',
 								email: 'ada@example.com'
-							})
+							}])
 						)
 					).toMatchObject({ _tag: 'ActRefused', code: 'notFound', field: 'opening' });
 					expect(
 						yield* Effect.flip(
-							act(f, me.authority, 'applications.create', {
+							act(f, me.authority, 'applications.create', [{
 								opening: '0199a000-0000-4000-8000-00000000dead',
 								name: 'A',
 								email: 'a@x.io'
-							})
+							}])
 						)
 					).toMatchObject({ code: 'notFound', field: 'opening' });
 					expect(
-						yield* Effect.flip(read(f, me.authority, 'applications', { all: true }))
+						yield* Effect.flip(read(f, me.authority, 'applications'))
 					).toMatchObject({ code: 'forbidden' });
-					expect(yield* Effect.flip(query(f, me.authority, 'openings.count'))).toMatchObject({
-						code: 'forbidden'
-					});
 					expect(
 						yield* Effect.flip(
-							act(f, me.authority, 'applications.update', { target: OPEN, set: {} })
+							act(f, me.authority, 'applications.update', [{ target: OPEN, set: {} }])
 						)
 					).toMatchObject({ _tag: 'ActRefused', code: 'forbidden' });
 				})
@@ -1003,7 +999,7 @@ describe('visitors (rule 38d)', () => {
 						}),
 						v = f.t;
 					const attempt = (ip: string, input: Json) =>
-						act(f, v.visitor('careers', { ip }).authority, 'applications.create', input, {
+						act(f, v.visitor('careers', { ip }).authority, 'applications.create', [input], {
 							address: ip
 						});
 					for (let i = 0; i < 10; i++) {
@@ -1083,7 +1079,7 @@ describe('visitors (rule 38d)', () => {
 
 describe('the kit compiles a workspace directory (root)', () => {
 	it.live(
-		'bolt check → engine → a transform act and a collection query through the built guest',
+		'bolt check → engine → a transform act and a read request through the built guest',
 		() =>
 			Effect.scoped(
 				Effect.gen(function* () {
@@ -1112,17 +1108,13 @@ describe('the kit compiles a workspace directory (root)', () => {
 						'src/data/model/orders/+model.ts': `import { model } from '@norbital-ai/bolt';
 export default model('orders', {
 	description: 'Orders', label: 'title', fields: { title: { kind: 'text' } },
-	read: { fields: 'all' },
+	read: 'all',
 	create: {
-		columns: ['title'],
+		columns: { orders: ['title'] },
 		transform: function* (rows) { return rows.map((r) => ({ ...r, title: r.title.trim() })); },
 	},
-	queries: { count: {
-		description: 'Count', input: {}, output: { kind: 'int' },
-		run: function* (input, ctx) { return (yield* ctx.query('orders', { all: true })).rows.length; },
-	} },
 });`,
-						'src/access_control/policy/+rep.policy.ts': `export default { description: 'Rep', grants: { orders: { read: true, create: true, queries: ['count'] } } };`
+						'src/access_control/policy/+rep.policy.ts': `export default { description: 'Rep', grants: { orders: { read: true, create: true } } };`
 					};
 					for (const [p, text] of Object.entries(files)) {
 						mkdirSync(dirname(join(root, p)), { recursive: true });
@@ -1134,10 +1126,10 @@ export default model('orders', {
 					});
 					const k = fk.t;
 					const rep = k.as(k.member(['rep']));
-					const id = ok(yield* act(fk, rep.authority, 'orders.create', { title: '  desk ' }))
+					const id = ok(yield* act(fk, rep.authority, 'orders.create', [{ title: '  desk ' }]))
 						.records[0]!.id;
 					expect(yield* get(fk, rep.authority, 'orders', id)).toMatchObject({ title: 'desk' });
-					expect(yield* query(fk, rep.authority, 'orders.count')).toBe(2);
+					expect(yield* rootRows(fk, rep.authority, { orders: {} }, 'orders')).toHaveLength(2);
 				})
 			)
 	);
@@ -1178,7 +1170,7 @@ export default customField('code', {
 export default model('orders', {
 	description: 'Orders', label: 'title', fields: { title: { kind: 'text' },
 		code: { kind: 'custom', of: 'code', optional: true }, codes: { kind: 'custom', of: 'code', many: true, optional: true } },
-	read: 'all', create: { columns: ['title', 'code', 'codes'] }, update: { columns: ['code'] },
+	read: 'all', create: { columns: { orders: ['title', 'code', 'codes'] } }, update: { columns: { orders: ['code'] } },
 });`,
 						'src/access_control/policy/+rep.policy.ts': `export default { description: 'Rep', grants: { orders: { read: true, create: true, update: true } } };`
 					};
@@ -1190,14 +1182,14 @@ export default model('orders', {
 					const k = fk.t;
 					const rep = k.as(k.member(['rep']));
 					const id = ok(
-						yield* act(fk, rep.authority, 'orders.create', {
+						yield* act(fk, rep.authority, 'orders.create', [{
 							title: 'a',
 							code: 'ABC',
 							codes: ['X', 'Y']
-						})
+						}])
 					).records[0]!.id;
 					expect(
-						yield* Effect.flip(act(fk, rep.authority, 'orders.create', { title: 'b', code: 'abc' }))
+						yield* Effect.flip(act(fk, rep.authority, 'orders.create', [{ title: 'b', code: 'abc' }]))
 					).toMatchObject({
 						_tag: 'ActRefused',
 						code: 'invalidInput',
@@ -1206,12 +1198,12 @@ export default model('orders', {
 					});
 					expect(
 						yield* Effect.flip(
-							act(fk, rep.authority, 'orders.create', { title: 'c', codes: ['X', 'y'] })
+							act(fk, rep.authority, 'orders.create', [{ title: 'c', codes: ['X', 'y'] }])
 						)
 					).toMatchObject({ _tag: 'ActRefused', field: 'codes' });
 					expect(
 						yield* Effect.flip(
-							act(fk, rep.authority, 'orders.update', { target: id, set: { code: 'lower' } })
+							act(fk, rep.authority, 'orders.update', [{ target: id, set: { code: 'lower' } }])
 						)
 					).toMatchObject({
 						_tag: 'ActRefused',
@@ -1220,7 +1212,7 @@ export default model('orders', {
 					});
 					expect(
 						yield* Effect.flip(
-							act(fk, k.as(k.admin).authority, 'orders.create', { title: 'd', code: 'x1' })
+							act(fk, k.as(k.admin).authority, 'orders.create', [{ title: 'd', code: 'x1' }])
 						)
 					).toMatchObject({ _tag: 'ActRefused', field: 'code' });
 					expect(yield* get(fk, rep.authority, 'orders', id)).toMatchObject({ code: 'ABC' });
@@ -1235,11 +1227,15 @@ it.live('binds today to the workspace day when UTC is in the previous month', ()
 			const fk = yield* fixture({
 				manifest: { ...manifest, workspace: { ...manifest.workspace, tz: 'Asia/Singapore' } },
 				now: '2026-09-30T16:30:00Z',
-				guest: yield* program(`export default { collection: { orders: { bodies: { queries: {
-			mine: function* (input, ctx) { return Number(ctx.today.replaceAll('-', '')); }
-		} } } } };`)
+				guest: yield* program(`export default { model: { orders: { bodies: {
+			create: function* (rows, ctx) { return rows.map((row) => ({ ...row, title: ctx.today })); }
+		} } } };`)
 			});
-			expect(yield* query(fk, fk.t.as(fk.t.admin).authority, 'orders.mine')).toBe(20261001);
+			const admin = fk.t.as(fk.t.admin).authority;
+			const id = ok(
+				yield* act(fk, admin, 'orders.create', [{ title: 'x', region: 'north', customer: ACME }])
+			).records[0]!.id;
+			expect(yield* get(fk, admin, 'orders', id)).toMatchObject({ title: '2026-10-01' });
 		})
 	)
 );

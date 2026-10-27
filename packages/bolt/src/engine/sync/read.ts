@@ -240,11 +240,11 @@ export function makeRead(e: SyncEngine) {
 			c.assert(
 				'(SELECT count(*) FROM sync_cursor) = 1',
 				'conflict',
-				JSON.stringify({ collection: 'sys_sync', ids: [s.name] })
+				JSON.stringify({ model: 'sys_sync', ids: [s.name] })
 			);
 		};
 		const o = (yield* e.act({
-			collection: s.model,
+			model: s.model,
 			verb: 'upsert',
 			onConflict: 'update',
 			input: upserts,

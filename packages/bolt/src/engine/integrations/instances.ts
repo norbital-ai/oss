@@ -1,6 +1,6 @@
 // Integration instances (FINAL §3): the definitions an instance names, its row as the engine acts for it, the native
 // `sys_integration` transform, an instance's live request (`ctx.request`, paced by the definition's `rate` and a `429`'s
-// `Retry-After`) and the body runner sync bodies and the `test` body share. The transform reads the manifest's definitions and envoys, which no guest transform sees: the collection's
+// `Retry-After`) and the body runner sync bodies and the `test` body share. The transform reads the manifest's definitions and envoys, which no guest transform sees: the model's
 // allowlists fix `integration` and `owner` at create; this keeps the rest true of the definition — a known definition,
 // an owner only where its driver syncs personal accounts, an envoy only on a workspace instance of a conversation
 // definition, a configuration that decodes (defaults filled), and a named instance (`+workspace.ts`'s) never deleted here.
@@ -98,12 +98,13 @@ export function decodeConfiguration(
 export function instanceTransform(
 	m: EngineManifest,
 	items: readonly Item[],
-	stored: (id: string) => RowData | undefined
+	stored: (id: string) => RowData | undefined,
+	runtimeEnvoys: ReadonlySet<string> = new Set()
 ): readonly Item[] | Refused {
 	const out: Item[] = [];
 	for (const it of items) {
 		const c = it.change;
-		if (c.collection !== 'sys_integration') {
+		if (c.model !== 'sys_integration') {
 			out.push(it);
 			continue;
 		}
@@ -142,8 +143,11 @@ export function instanceTransform(
 		}
 		const envoy = values['envoy'] ?? null;
 		if (envoy !== null) {
-			if (typeof envoy !== 'string' || !Object.hasOwn(m.envoys, envoy))
-				return refuse(c.path, 'envoy', `No envoy '${String(envoy)}' is declared.`);
+			if (
+				typeof envoy !== 'string' ||
+				(!Object.hasOwn(m.envoys, envoy) && !runtimeEnvoys.has(envoy))
+			)
+				return refuse(c.path, 'envoy', `No envoy '${String(envoy)}' exists.`);
 			if (!conversational(def))
 				return refuse(
 					c.path,
@@ -225,7 +229,7 @@ export const writeStatus = (instance: string, patch: { readonly [key: string]: J
 			Schema.Struct({
 				captured: Schema.Array(
 					Schema.Struct({
-						collection: Schema.String,
+						model: Schema.String,
 						id: Schema.String,
 						op: Schema.Literals(['create', 'update', 'delete']),
 						revision: Schema.Number,
@@ -237,7 +241,7 @@ export const writeStatus = (instance: string, patch: { readonly [key: string]: J
 				next_due: Schema.NullOr(Schema.String)
 			}),
 			c.sql(
-				`(SELECT coalesce(jsonb_agg(jsonb_build_object('collection', c, 'id', id, 'op', op, 'revision', revision, 'old', o, 'new', n, 'cause', cause)), '[]'::jsonb) FROM status) AS captured, (${nextDue(c)})::text AS next_due`
+				`(SELECT coalesce(jsonb_agg(jsonb_build_object('model', c, 'id', id, 'op', op, 'revision', revision, 'old', o, 'new', n, 'cause', cause)), '[]'::jsonb) FROM status) AS captured, (${nextDue(c)})::text AS next_due`
 			)
 		);
 		const answer = rows[0];

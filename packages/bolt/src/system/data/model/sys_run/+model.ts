@@ -28,5 +28,5 @@ export default model('sys_run', {
 		starter: { kind: 'json', optional: true }
 	},
 	table: { primary: 'text', indexes: [{ on: ['due_at'], where: { state: { eq: 'queued' } } }] },
-	read: { fields: 'all' }
+	read: 'all'
 });

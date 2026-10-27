@@ -4,7 +4,7 @@ import { Effect, Fiber, FiberSet } from 'effect';
 import { getContext, setContext } from 'svelte';
 import { encodeWire } from '@norbital-ai/std/wire';
 import type { Value } from '../kinds/kind.js';
-import type { IdOf } from '../collection/types.js';
+import type { IdOf } from '../model/types.js';
 import type { RecordCapabilities, RecordRestriction } from '../record/types.js';
 import type { RunHandle, ViewBolt } from '../client/contract.js';
 import {
@@ -22,7 +22,7 @@ import {
 import { childOperations, type ChildOperation } from './child-operations.js';
 import { resubmits } from '../approval/row.js';
 
-/** Narrows string ids to a collection's id type (e.g. for `where: { id: { in: … } }`). */
+/** Narrows string ids to a model's id type (e.g. for `where: { id: { in: … } }`). */
 export function idsOf<C extends string>(ids: readonly string[]): readonly IdOf<C>[] {
 	return ids as readonly IdOf<C>[];
 }
@@ -134,7 +134,7 @@ export class FormState {
 	view(): void {
 		this.reset();
 		this.mode = 'view';
-		if (this.spec.target.of === 'collection' && this.spec.target.mode === 'update')
+		if (this.spec.target.of === 'model' && this.spec.target.mode === 'update')
 			this.refresh(this.#around);
 	}
 	expectCapabilities(): void {
@@ -300,11 +300,11 @@ export class FormState {
 	accept(outcome: Outcome, sent: Row = this.values): void {
 		const target = this.spec.target;
 		if (
-			target.of === 'collection' &&
+			target.of === 'model' &&
 			(outcome.kind === 'committed' || outcome.kind === 'pendingApproval')
 		) {
 			const own = outcome.records.find(
-				(record) => record.collection === target.collection && record.id === target.id
+				(record) => record.model === target.model && record.id === target.id
 			);
 			if (own !== undefined) {
 				this.#revision = own.revision;
@@ -364,7 +364,7 @@ export class FormState {
 				value !== null && value !== undefined && typeof value === 'object' && !Array.isArray(value);
 			const input = !hasChildren
 				? scalar
-				: target.of === 'collection' && target.mode === 'create'
+				: target.of === 'model' && target.mode === 'create'
 					? { ...(object(scalar) ? scalar : {}), ...nested.set }
 					: {
 							target: target.id ?? null,
@@ -378,7 +378,7 @@ export class FormState {
 			const sent = { ...this.values };
 			const observed = {
 				...nested.observed,
-				...(target.of === 'collection' &&
+				...(target.of === 'model' &&
 				target.mode === 'update' &&
 				target.id !== undefined &&
 				this.#revision !== undefined
@@ -386,7 +386,7 @@ export class FormState {
 					: {})
 			};
 			const result = yield* Effect.result(
-				this.#act(this.spec.callable, input, {
+				this.#act(this.spec.callable, [input], {
 					key: this.#key,
 					...(Object.keys(observed).length === 0 ? {} : { observed })
 				})

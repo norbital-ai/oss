@@ -15,7 +15,7 @@ export { frameworkText } from '../shell/i18n.ts';
 /** The shell client typed by the workspace's names: the same rows, inputs and outcomes as `ctx` (§3.5). */
 export const bolt: Omit<ShellBolt, keyof PageBolt> & PageBolt = shell as ShellBolt & PageBolt;
 
-// ui's views are typed by the same names (§3.6): `of`, `columns`, `values`, `record` and ids per collection.
+// ui's views are typed by the same names (§3.6): `of`, `columns`, `values`, `record` and ids per model.
 declare module '@norbital-ai/ui' {
 	interface Workspace {
 		names: ViewNames;

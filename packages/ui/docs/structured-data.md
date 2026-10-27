@@ -54,7 +54,7 @@ Without an explicit mode, an `onChange` callback selects editing; otherwise the 
 | `arrayKeys?`                                    | Explicit list identities by JSON Pointer. A string names one key; a string tuple names a composite key.                             |
 | `changesOnly?: boolean`                         | Restricts diff mode to changed fields and rows.                                                                                     |
 
-Objects use compact label/value rows, with nested objects and lists under aligned disclosure headings. Record lists use columns for their fields; other lists use a value column. The embedded collection table retains column resizing, reordering, and layout persistence. Row removal appears on hover or focus, with an accessible touch affordance, rather than adding a Remove column. Boolean values use checkboxes.
+Objects use compact label/value rows, with nested objects and lists under aligned disclosure headings. Record lists use columns for their fields; other lists use a value column. The embedded model table retains column resizing, reordering, and layout persistence. Row removal appears on hover or focus, with an accessible touch affordance, rather than adding a Remove column. Boolean values use checkboxes.
 
 Schema mode shows primitive types beside fields, with structural rows grouping objects and arrays. Supplying `onChange` edits the schema's property rows through the same component. `jsonSchemaRows` and `jsonSchemaFromRows` preserve schema keywords that those rows do not edit.
 
@@ -80,7 +80,7 @@ Explicit keys must be present and unique in both versions. With valid identities
 
 When no schema or native shape is supplied, `inferJsonSchema` describes the observed data. Every list item contributes to the inferred shape; mixed values remain mixed. Inference does not invent required fields, defaults, enums, or formats. Unknown properties survive edits. Native hidden fields and masked values stay hidden.
 
-Generic JSON and custom-datatype fallbacks use this renderer too. Dense collection cells show a compact summary and open the same structured view. An authored custom renderer, relation link, or file control keeps its existing behavior.
+Generic JSON and custom-datatype fallbacks use this renderer too. Dense model cells show a compact summary and open the same structured view. An authored custom renderer, relation link, or file control keeps its existing behavior.
 
 Source text remains an explicit editor use case. `Editor rawJson` selects the raw JSON editor and retains invalid text drafts until parsing succeeds; it is an escape hatch for JSON authoring, not a second data renderer.
 

@@ -4,9 +4,9 @@ A related-record grid with explicit child operations, original revisions and par
 -->
 <script lang="ts" module>
 	import type { Json } from '../client/contract.js';
-	import type { Page, Row, Values } from '../collection/types.js';
+	import type { Page, Row, Values } from '../model/types.js';
 	import type { Col } from '../table/Table.svelte';
-	/** The parent collection and inverse relation, with an explicit save scope and optional display columns/filter. */
+	/** The parent model and inverse relation, with an explicit save scope and optional display columns/filter. */
 	export type ChildGridProps = {
 		of: string;
 		relation: string;
@@ -39,8 +39,8 @@ A related-record grid with explicit child operations, original revisions and par
 	import { and } from '../filter/scope.js';
 	import { isRow, rowsOf } from '../read/results.js';
 	import { msg } from '../text/messages.js';
-	import { selectOf } from './select.js';
-	import { queryState } from '../read/state.js';
+	import { byId, firstOf, pageOf, requestJson } from '../read/request.js';
+	import { mapped, queryState } from '../read/state.js';
 	import ReadGate from '../read/ReadGate.svelte';
 	import Table from '../table/Table.svelte';
 	import ChildCell from './ChildCell.svelte';
@@ -51,8 +51,8 @@ A related-record grid with explicit child operations, original revisions and par
 		owner = scope?.current;
 	const contract = $derived(owner?.spec.children?.[relation]);
 	const identity = $derived(contract ?? kinds.catalog?.[of]?.children?.[relation]);
-	const collection = $derived(identity?.collection ?? '');
-	const exposure = $derived(kinds.catalog?.[collection]);
+	const model = $derived(identity?.model ?? '');
+	const exposure = $derived(kinds.catalog?.[model]);
 	const strategy = $derived(
 		{
 			parent: {
@@ -105,12 +105,19 @@ A related-record grid with explicit child operations, original revisions and par
 	const reads = $derived(
 		id === undefined || identity === undefined
 			? null
-			: bolt.query<Page>(collection, {
-					where: and(where, { [identity.parent]: id }) ?? null,
-					select: selectOf([...fields, identity.parent, 'revision']),
-					limit: 25,
-					...(after === null ? {} : { after })
-				})
+			: mapped(
+					bolt.query(
+						requestJson({
+							[model]: {
+								where: and(where, { [identity.parent]: id }),
+								fields: [...new Set([...fields, identity.parent, 'revision'])],
+								limit: 25,
+								after: after ?? undefined
+							}
+						})
+					),
+					(answer) => pageOf(answer, model)
+				)
 	);
 	const loaded = $derived(queryState(reads));
 	const rows = $derived(loaded.kind === 'ready' ? rowsOf(loaded.value) : []);
@@ -145,7 +152,7 @@ A related-record grid with explicit child operations, original revisions and par
 			drafts.set(id, {
 				form,
 				row: { ...form.row, id },
-				created: form.spec.target.of === 'collection' && form.spec.target.mode === 'create',
+				created: form.spec.target.of === 'model' && form.spec.target.mode === 'create',
 				request: 0,
 				...(removed?.action === 'delete' || removed?.action === 'unlink'
 					? { removed: removed.action }
@@ -188,7 +195,7 @@ A related-record grid with explicit child operations, original revisions and par
 								? {}
 								: { [target]: selected })
 					};
-		const spec = formSpec(collection, catalog, target, created ? undefined : row.id);
+		const spec = formSpec(model, catalog, target, created ? undefined : row.id);
 		if (spec === null) return null;
 		const inherited =
 			created && owner !== null && owner !== undefined
@@ -244,25 +251,25 @@ A related-record grid with explicit child operations, original revisions and par
 	}
 	const parentContext = () =>
 		save === 'parent' &&
-		owner?.spec.target.of === 'collection' &&
+		owner?.spec.target.of === 'model' &&
 		owner.spec.target.mode === 'update' &&
 		owner.spec.target.id !== undefined &&
 		owner.revision !== undefined
-			? { collection: of, id: owner.spec.target.id, relation, revision: owner.revision }
+			? { model: of, id: owner.spec.target.id, relation, revision: owner.revision }
 			: undefined;
 	function permissions(entry: Draft, row: Row): void {
 		if (bolt.recordCapabilities === undefined) return;
 		const request = ++entry.request;
 		entry.form.expectCapabilities();
 		fork(
-			bolt.recordCapabilities(collection, row.id, parentContext()).pipe(
+			bolt.recordCapabilities(model, row.id, parentContext()).pipe(
 				Effect.tap((value) =>
 					Effect.sync(() => {
 						if (request !== entry.request) return;
 						if (
 							value !== null &&
 							(value.id !== row.id ||
-								value.collection !== collection ||
+								value.model !== model ||
 								value.revision !== row['revision'])
 						) {
 							notice = text.conflict;
@@ -447,8 +454,10 @@ A related-record grid with explicit child operations, original revisions and par
 		fork(
 			actOutcome(
 				bolt.act(
-					`${collection}.${action === 'delete' ? 'delete' : 'update'}`,
-					action === 'delete' ? { target: key } : { target: key, set: { [identity.parent]: null } },
+					`${model}.${action === 'delete' ? 'delete' : 'update'}`,
+					action === 'delete'
+						? [{ target: key }]
+						: [{ target: key, set: { [identity.parent]: null } }],
 					{ observed: { [key]: entry.form.revision } }
 				)
 			).pipe(
@@ -485,7 +494,7 @@ A related-record grid with explicit child operations, original revisions and par
 		linkBusy = true;
 		fork(
 			Effect.gen(function* () {
-				const row = yield* bolt.query<Row | null>(collection, { id: selected });
+				const row = firstOf(yield* bolt.query(byId(model, selected)), model);
 				if (!active) return;
 				if (row === null || typeof row['revision'] !== 'number') {
 					notice = msg(bolt, 'record.notFound', 'Not found or no access');
@@ -494,13 +503,13 @@ A related-record grid with explicit child operations, original revisions and par
 				const capabilities =
 					bolt.recordCapabilities === undefined
 						? undefined
-						: yield* bolt.recordCapabilities(collection, selected, parentContext());
+						: yield* bolt.recordCapabilities(model, selected, parentContext());
 				if (!active) return;
 				if (
 					capabilities !== undefined &&
 					capabilities !== null &&
 					(capabilities.id !== selected ||
-						capabilities.collection !== collection ||
+						capabilities.model !== model ||
 						capabilities.revision !== row['revision'])
 				) {
 					notice = text.conflict;
@@ -545,8 +554,8 @@ A related-record grid with explicit child operations, original revisions and par
 					if (id === undefined) return;
 					const outcome = yield* actOutcome(
 						bolt.act(
-							`${collection}.update`,
-							{ target: selected, set: { [identity.parent]: id } },
+							`${model}.update`,
+							[{ target: selected, set: { [identity.parent]: id } }],
 							{ observed: { [selected]: row['revision'] } }
 						)
 					);
@@ -604,7 +613,7 @@ A related-record grid with explicit child operations, original revisions and par
 			{#if !entry.created}<Button
 					size="sm"
 					variant="ghost"
-					onclick={() => openRecord(collection, key)}>{msg(bolt, 'child.open', 'Open')}</Button
+					onclick={() => openRecord(model, key)}>{msg(bolt, 'child.open', 'Open')}</Button
 				>{/if}
 			{#if editing}
 				{#if save === 'independent' && (entry.created || entry.form.dirty)}<Button
@@ -647,7 +656,7 @@ A related-record grid with explicit child operations, original revisions and par
 			{ field: '__operations', label: msg(bolt, 'child.actions', 'Actions'), cell: operations }
 		]}
 		onOpen={(row) => {
-			if (!row.id.startsWith('draft:')) openRecord(collection, row.id);
+			if (!row.id.startsWith('draft:')) openRecord(model, row.id);
 		}}
 	/>
 {/snippet}
@@ -705,7 +714,7 @@ A related-record grid with explicit child operations, original revisions and par
 			{msg(bolt, 'child.unavailable', 'This relationship is not exposed.')}
 		</p>
 	{:else}
-		{#if id !== undefined}<ReadGate state={loaded} what={collection}>{@render table()}</ReadGate
+		{#if id !== undefined}<ReadGate state={loaded} what={model}>{@render table()}</ReadGate
 			>{:else}{@render table()}{/if}
 		{#if loaded.kind === 'ready' && isRow(loaded.value) && typeof loaded.value['next'] === 'string'}<Button
 				size="sm"
@@ -723,7 +732,7 @@ A related-record grid with explicit child operations, original revisions and par
 				class="flex items-center gap-2"
 			>
 				<Picker
-					of={collection}
+					of={model}
 					value={typeof link === 'string' ? link : null}
 					disabled={linkBusy || owner?.pending === true}
 					onChange={(value) => {

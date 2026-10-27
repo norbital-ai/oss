@@ -18,7 +18,7 @@ const is = <T extends true>(..._proof: T extends true ? [] : never): void => {};
 is<
 	Eq<
 		RunInput<typeof rt.follow_up.spec>,
-		{ readonly collection: 'orders'; readonly ids: readonly Id<'orders'>[] }
+		{ readonly model: 'orders'; readonly ids: readonly Id<'orders'>[] }
 	>
 >(); // event triggers only
 is<Eq<RunInput<typeof rt.render.spec>, { readonly order: Id<'orders'> }>>(); // declared input
@@ -33,17 +33,17 @@ const mixed = automation('follow_up', {
 	on: [{ cron: '@daily' }, { deleted: 'orders' }],
 	run: function* ({ ids = [] }, ctx) {
 		is<Eq<typeof ctx.actor.kind, 'system'>>();
-		yield* ctx.act('orders.update', { target: ids, set: { note: 'swept' } });
+		yield* ctx.act('orders.update', ids.map((id) => ({ target: id, set: { note: 'swept' } })));
 		const id = ids[0];
 		if (id !== undefined) {
 			yield* ctx.act(
 				'orders.update',
-				{ target: id, set: { note: 'observed' } },
+				[{ target: id, set: { note: 'observed' } }],
 				{ observed: { [id]: 1 } }
 			);
 			yield* ctx.act(
 				'orders.update',
-				{ target: id, set: { note: 'invalid' } },
+				[{ target: id, set: { note: 'invalid' } }],
 				// @ts-expect-error an observed revision is numeric
 				{ observed: { [id]: '1' } }
 			);
@@ -131,7 +131,7 @@ automation('nightly', {
 	...rt.nightly.spec,
 	description: 'x',
 	runAs: ['sales_rep'],
-	// @ts-expect-error A3 a trigger on an unknown collection
+	// @ts-expect-error A3 a trigger on an unknown model
 	on: { created: 'ordres' }
 });
 automation('nightly', {
@@ -332,13 +332,13 @@ model('notice_notes', {
 			context: { notice: { kind: 'id', of: 'notices' } },
 			read: function* ({ records, context }, ctx) {
 				is<Eq<typeof context.notice, Id<'notices'>>>();
-				const notices = yield* ctx.db.query('notices', {
+				const notices = yield* ctx.db.query({ notices: {
 					where: { id: { eq: context.notice } },
 					limit: 1
-				});
+				} });
 				return {
 					rows:
-						notices.rows.length === 0
+						notices.notices.rows.length === 0
 							? []
 							: records.map((r) => ({ notice: context.notice, note: r.note })),
 					scope: { by: ['notice'] },
@@ -502,7 +502,7 @@ group('ops', { label: 'Operations', icon: 'lucide:folder', defaultChild: 'sales'
 // @ts-expect-error GR1 defaultChild must be a child folder
 group('ops', { label: 'x', icon: 'x', defaultChild: 'finance' });
 
-// ── automation bodies can schedule, notify and request; queries retain the I/O boundary (§3.4) ──
+// ── automation bodies can schedule, notify and request (§3.4); write callbacks and policy checks stay without I/O (g1) ──
 
 automation('order_lines_chase', {
 	...rt.order_lines_chase.spec,
@@ -513,17 +513,3 @@ automation('order_lines_chase', {
 	}
 });
 
-model('orders', {
-	...m.orders.spec,
-	queries: {
-		...m.orders.spec.queries,
-		open_total: {
-			...m.orders.spec.queries.open_total,
-			run: function* (_, ctx) {
-				// @ts-expect-error B15 queries have no I/O facilities (rule 63)
-				yield* ctx.request('erp', { method: 'GET', path: 'x', output: { kind: 'json' } });
-				return Decimal.of(0);
-			}
-		}
-	}
-});

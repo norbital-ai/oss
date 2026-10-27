@@ -6,11 +6,15 @@ import { Context, Effect, Layer, Predicate, Result, Schema, Stream } from 'effec
 import { Ai, Metering } from '../src/engine/ports.ts';
 import { Port } from '../src/engine/port.ts';
 import { FacilityFailure } from '../src/decl/errors.ts';
-import { Agents } from '../src/engine/services.ts';
+import { Agents, Conversations } from '../src/engine/services.ts';
 import { decodeManifest, type EngineManifest } from '../src/engine/manifest.ts';
 import { actReply, qReply, routeFixture, type FixtureRoute } from './support/route-fixture.ts';
 import type { Json } from '../src/decl/values.ts';
-import { TRIAGE_DEBOUNCE, TRIAGE_MAX_WAITS, TriageService } from '../src/engine/agent/triage.ts';
+import {
+	TRIAGE_DEBOUNCE,
+	TRIAGE_DEBOUNCE_MAX,
+	TriageService
+} from '../src/engine/agent/triage.ts';
 import type { DecisionResult, System1Request } from '../src/engine/decisions/index.ts';
 import { TestWorkspace, type Kit, type WorkspaceServices } from '../src/test/index.ts';
 
@@ -25,11 +29,11 @@ const manifest = Result.getOrThrow(
 			}
 		},
 		relationships: {},
-		collections: {
+		exposures: {
 			jobs: {
-				read: { fields: 'all' },
-				create: { input: { columns: ['title', 'status'] } },
-				update: { input: { columns: ['status'] } }
+				read: { jobs: { fields: 'all' } },
+				create: { columns: { jobs: ['title', 'status'] } },
+				update: { columns: { jobs: ['status'] } }
 			}
 		},
 		integrations: {},
@@ -137,16 +141,23 @@ const ai: Pick<Ai['Service'], 'models' | 'infer'> & { requests: string[][]; raw:
 							{
 								id: `c${ai.requests.length}`,
 								name: 'act',
-								input: { callable: 'jobs.update', input: { target: open, set: { status: 'done' } } }
+								input: { callable: 'jobs.update', input: [{ target: open, set: { status: 'done' } }] }
 							}
 						],
 						finish: 'tool',
 						usage
 					}
 				});
+			// "needs a contractor" is answered with a question back to its sender
+			const asks = ai.requests.at(-1)?.some((s) => s.includes('needs a contractor')) === true;
 			return Stream.succeed({
 				_tag: 'Response',
-				response: { content: 'Done.', toolCalls: [], finish: 'stop', usage }
+				response: {
+					content: asks ? 'Want me to assign a contractor to them?' : 'Done.',
+					toolCalls: [],
+					finish: 'stop',
+					usage
+				}
 			});
 		})
 };
@@ -161,6 +172,7 @@ type Seen = {
 	assistant: string;
 	pending: readonly string[];
 	asked: readonly string[];
+	exchange?: { talkingWith: string; assistantLastMessage: string };
 };
 const seen = (r: System1Request): Seen => {
 	const st = Schema.decodeUnknownSync(
@@ -168,7 +180,9 @@ const seen = (r: System1Request): Seen => {
 			directive: Schema.String,
 			conversation: Schema.String,
 			assistant: Schema.String,
-			pending: Schema.Array(Schema.Struct({ text: Schema.String }))
+			pending: Schema.Array(Schema.Struct({ text: Schema.String })),
+			talkingWith: Schema.optionalKey(Schema.String),
+			assistantLastMessage: Schema.optionalKey(Schema.String)
 		})
 	)(r.state);
 	return {
@@ -176,7 +190,15 @@ const seen = (r: System1Request): Seen => {
 		directive: st.directive,
 		assistant: st.assistant,
 		pending: st.pending.map((p) => p.text),
-		asked: Object.keys(r.questions).filter((id) => id !== 'wait')
+		asked: Object.keys(r.questions).filter((id) => id !== 'wait'),
+		...(st.talkingWith === undefined || st.assistantLastMessage === undefined
+			? {}
+			: {
+					exchange: {
+						talkingWith: st.talkingWith,
+						assistantLastMessage: st.assistantLastMessage
+					}
+				})
 	};
 };
 /**
@@ -322,7 +344,7 @@ const job = () =>
 	Effect.gen(function* () {
 		const o = (yield* actReply(route, t.as(t.admin).authority, {
 			callable: 'jobs.create',
-			input: { title: 'Kismis', status: 'open' },
+			input: [{ title: 'Kismis', status: 'open' }],
 			issuedAt: t.clock.now()
 		})).outcome;
 		if (o.kind !== 'committed' || o.records[0] === undefined) throw new Error(o.kind);
@@ -335,11 +357,17 @@ const debounce = () =>
 		yield* t.runDue();
 	});
 const statusOf = (id: string) =>
-	qReply(route, t.as(t.admin).authority, { reads: [{ m: 'query', a: ['jobs', { id: id }] }] }).pipe(
+	qReply(route, t.as(t.admin).authority, {
+		reads: [{ m: 'query', a: [{ jobs: { where: { id: { eq: id } }, fields: ['status'] } }] }]
+	}).pipe(
 		Effect.flatMap((reply) =>
-			Schema.decodeUnknownEffect(Schema.Struct({ status: Schema.String }))(reply.answers[0])
+			Schema.decodeUnknownEffect(
+				Schema.Struct({
+					jobs: Schema.Struct({ rows: Schema.Tuple([Schema.Struct({ status: Schema.String })]) })
+				})
+			)(reply.answers[0])
 		),
-		Effect.map((job) => job.status)
+		Effect.map((answer) => answer.jobs.rows[0].status)
 	);
 
 /** Across every case: no decider `pending` holds a row an earlier decision admitted or ignored, and no pending row is delivered or ambient. */
@@ -431,30 +459,28 @@ describe('envoy triage (G12 (10))', () => {
 	);
 
 	it.live(
-		'a DM in three parts within 20 s is one turn after the decider waits; each elapsed wait re-asks with the pending set as it is',
+		'a DM in three parts is one turn: a burst is decided once the sender pauses for 2 s',
 		() =>
 			Effect.scoped(
 				Effect.gen(function* () {
 					yield* open();
-					port.script = ['wait', 'wait', 'wait', 'respond'];
+					port.script = ['respond'];
 					yield* say(DM, 'the Kismis job');
-					yield* debounce();
-					expect(port.inputs.map((i) => i.pending.length)).toEqual([1]);
-					t.clock.advance('10s');
-					yield* t.runDue(); // the wait elapsed: asked again, nothing new
-					expect(port.inputs.map((i) => i.pending.length)).toEqual([1, 1]);
-					// each part lands inside the 2 s wait (its admission is a run of the same wake as anything due by then)
 					t.clock.advance('1s');
 					yield* say(DM, 'is finished');
-					yield* debounce(); // a new part re-triages once the sender pauses
 					t.clock.advance('1s');
 					yield* say(DM, 'mark it done please');
-					yield* debounce();
-					expect(port.inputs.map((i) => i.pending.length)).toEqual([1, 1, 2, 3]);
+					// the pause follows the last part (+2 s), well inside the first part's cap (+6 s)
+					expect(
+						Date.parse(String((yield* queued())[0]?.['due'])) - Date.parse(t.clock.now())
+					).toBe(TRIAGE_DEBOUNCE);
+					t.clock.advance('2s');
+					yield* t.runDue();
+					expect(port.inputs.map((i) => i.pending.length)).toEqual([3]);
 					expect(port.inputs[0]).toMatchObject({
 						kind: 'envoy DM',
 						assistant: 'Norbius',
-						asked: ['m0'],
+						asked: ['m0', 'm1', 'm2'],
 						directive: 'Keep jobs up to date.'
 					});
 					expect(ai.requests).toHaveLength(1);
@@ -470,7 +496,7 @@ describe('envoy triage (G12 (10))', () => {
 					expect(yield* queued()).toHaveLength(0); // an idle conversation queues no decision
 					yield* neverTwice();
 					const events = yield* decisions();
-					expect(events).toHaveLength(4);
+					expect(events).toHaveLength(1);
 					expect(
 						events.every(
 							(e) =>
@@ -478,7 +504,7 @@ describe('envoy triage (G12 (10))', () => {
 									.costUsd === 0.0002
 						)
 					).toBe(true);
-					expect(metered).toHaveLength(4);
+					expect(metered).toHaveLength(1);
 					expect(metered[0]).toMatchObject({ meter: 'ai', quantity: 0.0002 });
 				})
 			)
@@ -502,7 +528,7 @@ describe('envoy triage (G12 (10))', () => {
 	);
 
 	it.live(
-		'a wait is at most 2 s, with the chat showing typing; after 12 consecutive waits the rows are admitted with no 13th call; a new row resets the count',
+		'a wait adds at most 2 s, with the chat showing typing from arrival; one wait is the whole allowance, so the rows are admitted with no second call',
 		() =>
 			Effect.scoped(
 				Effect.gen(function* () {
@@ -513,30 +539,19 @@ describe('envoy triage (G12 (10))', () => {
 					expect(
 						Date.parse(String((yield* queued())[0]?.['due'])) - Date.parse(t.clock.now())
 					).toBe(2_000);
-					// the person sees the assistant is on it rather than silence
-					expect(t.fakes.links.typed).toEqual([{ instance: 'field_wa', to: DM }]);
-					for (let i = 1; i < 5; i++) {
-						t.clock.advance('10s');
-						yield* t.runDue();
-					}
-					expect((yield* queued())[0]?.['input']).toMatchObject({ waits: 5 });
-					yield* say(DM, 'part two');
-					expect((yield* queued())[0]?.['input']).toMatchObject({ waits: 0 });
-					t.clock.advance(`${TRIAGE_DEBOUNCE / 1000}s`);
-					for (let i = 0; i <= TRIAGE_MAX_WAITS; i++) {
-						yield* t.runDue();
-						t.clock.advance('10s');
-					}
-					expect(port.inputs).toHaveLength(5 + TRIAGE_MAX_WAITS);
-					expect(ai.requests).toHaveLength(1);
-					expect((yield* row('part two'))['delivered_turn']).not.toBeNull();
+					// the person sees the assistant is on it rather than silence, from the moment the row is held
+					expect(t.fakes.links.typed).toContainEqual({ instance: 'field_wa', to: DM, on: true });
+					t.clock.advance('2s');
+					yield* t.runDue(); // waits: 1 is the allowance: admitted with no further call
+					expect(port.inputs).toHaveLength(1);
+					expect((yield* row('part one'))['delivered_turn']).not.toBeNull();
 					yield* neverTwice();
 				})
 			)
 	);
 
 	it.live(
-		'group chatter the decider ignores makes no turn and stays readable; a mention admits the pending rows at once with no decision call',
+		'group chatter the decider ignores makes no turn, shows no typing and stops it; a mention admits the pending rows after the pause with no decision call',
 		() =>
 			Effect.scoped(
 				Effect.gen(function* () {
@@ -551,17 +566,24 @@ describe('envoy triage (G12 (10))', () => {
 						delivered_turn: null
 					});
 					expect(ai.requests).toHaveLength(0);
+					// chatter never showed the envoy typing; the ignore stops any it did show
+					expect(t.fakes.links.typed.filter((x) => x.on)).toEqual([]);
+					expect(t.fakes.links.typed.at(-1)).toMatchObject({ to: GROUP.thread, on: false });
 
 					const calls = port.inputs.length;
 					yield* say(DM, 'the van is late', GROUP);
 					yield* say(DM, '@bot note that', { ...GROUP, invocation: 'mention' });
+					// held for the sender's pause, and the chat shows typing for the mention
+					expect(ai.requests).toHaveLength(0);
+					expect(t.fakes.links.typed.at(-1)).toMatchObject({ to: GROUP.thread, on: true });
+					yield* debounce();
 					expect(port.inputs).toHaveLength(calls);
 					expect(ai.requests).toHaveLength(1);
 					expect(ai.requests[0]).not.toContain('lunch?'); // ignored: never new input
 					expect((yield* row('the van is late'))['delivered_turn']).toBe(
 						(yield* row('@bot note that'))['delivered_turn']
 					);
-					yield* debounce(); // the decision the chatter queued was flushed
+					yield* debounce(); // the decision was flushed with the admission
 					expect(port.inputs).toHaveLength(calls);
 					yield* neverTwice();
 				})
@@ -598,6 +620,7 @@ describe('envoy triage (G12 (10))', () => {
 						invocation: 'mention',
 						replyTo: 'photo1'
 					});
+					yield* debounce();
 					const turn = ai.raw[0]?.join('\n');
 					expect(turn).toContain('[replying to Dion');
 					expect(turn).toContain('Put this in to kismi');
@@ -721,16 +744,180 @@ describe('envoy triage (G12 (10))', () => {
 			)
 	);
 
-	it.live('with no AI facility every message behaves as without triage', () =>
+	it.live(
+		'with no AI facility a DM is still held for the pause, then admitted with no decision; group chatter stays ambient',
+		() =>
+			Effect.scoped(
+				Effect.gen(function* () {
+					yield* open();
+					yield* open({ triage: false });
+					yield* say(DM, 'hello');
+					yield* say(DM, 'are you there');
+					expect((yield* row('hello'))['state']).toBe('pending');
+					expect(t.fakes.links.typed).toContainEqual({ instance: 'field_wa', to: DM, on: true });
+					yield* debounce();
+					expect(port.inputs).toHaveLength(0);
+					expect(ai.requests).toEqual([['hello', 'are you there']]);
+					yield* say(DM, 'chatter', GROUP);
+					expect(yield* row('chatter')).toMatchObject({ state: null, delivered_turn: null });
+					expect(yield* queued()).toHaveLength(0);
+				})
+			)
+	);
+
+	it.live(
+		'a sender who keeps typing is held at most 6 s after the first message; their typing pushes the decision out',
+		() =>
+			Effect.scoped(
+				Effect.gen(function* () {
+					yield* open();
+					port.script = ['respond'];
+					const first = Date.parse(t.clock.now());
+					// what the Baileys provider emits on the sender's `presence.update`
+					const typingNow = () =>
+						inWorkspace(
+							Effect.flatMap(Conversations, (c) =>
+								c.receive('field_wa', { kind: 'presence', thread: DM, typing: true })
+							)
+						);
+					const due = () =>
+						queued().pipe(Effect.map((rows) => Date.parse(String(rows[0]?.['due'])) - first));
+					yield* say(DM, 'one');
+					// the provider reports the sender typing: the pause restarts from now
+					t.clock.advance('1s');
+					yield* typingNow();
+					expect(yield* due()).toBe(1_000 + TRIAGE_DEBOUNCE);
+					for (const at of [1.5, 3, 4.5]) {
+						t.clock.advance('1.5s');
+						yield* say(DM, `more ${at}`);
+					}
+					// the last part says +2 s, the cap says +6 s from the first
+					expect(yield* due()).toBe(TRIAGE_DEBOUNCE_MAX);
+					t.clock.advance('1s');
+					yield* typingNow();
+					expect(yield* due()).toBe(TRIAGE_DEBOUNCE_MAX);
+					t.clock.advance('0.5s');
+					yield* t.runDue();
+					expect(port.inputs.map((i) => i.pending.length)).toEqual([4]);
+				})
+			)
+	);
+
+	it.live(
+		'group chatter while a turn runs is not steered into it: it waits for the decider, which may ignore it',
+		() =>
+			Effect.scoped(
+				Effect.gen(function* () {
+					yield* open();
+					port.script = ['ignore'];
+					yield* say('6598765432@s.whatsapp.net', 'morning', GROUP);
+					yield* debounce();
+					yield* t.db.write({
+						text: `UPDATE sys_conversation SET status = 'running' WHERE thread = $1`,
+						params: [GROUP.thread]
+					});
+					yield* say('6598765432@s.whatsapp.net', 'lunch?', GROUP);
+					// before: steered straight into the running turn (`queued`); now held for the decider like any chatter
+					expect((yield* row('lunch?'))['state']).toBe('pending');
+					yield* debounce();
+					expect(yield* row('lunch?')).toMatchObject({ addressed: false, delivered_turn: null });
+				})
+			)
+	);
+
+	it.live(
+		"a tenant-created envoy's task and name reach the decider (its `sys_envoy` row, not a source default)",
+		() =>
+			Effect.scoped(
+				Effect.gen(function* () {
+					yield* open();
+					yield* t.db.write({
+						text: `INSERT INTO sys_envoy (id, name, audience, task, policies, group_messages, delegation, triage, dm, active)
+						VALUES ('tenant_desk', 'Penny', 'private', 'File site photos.', '["desk"]'::jsonb, 'mention_or_reply', 'disabled', true, 'union', true)`,
+						params: []
+					});
+					yield* t.db.write({
+						text: `UPDATE sys_integration SET envoy = 'tenant_desk' WHERE id = 'field_wa'`,
+						params: []
+					});
+					yield* say(DM, 'here is the pump');
+					yield* debounce();
+					expect(port.inputs[0]).toMatchObject({
+						assistant: 'Penny',
+						directive: 'File site photos.'
+					});
+					expect((yield* row('here is the pump'))['delivered_turn']).not.toBeNull();
+				})
+			)
+	);
+
+	/** Seen in a WhatsApp group: the envoy asks Dion a question, and Dion answers in the group without mentioning it. */
+	const exchange = () =>
+		Effect.gen(function* () {
+			yield* open();
+			port.script = ['ignore'];
+			yield* say(DM, '@bot the Kismis job needs a contractor', { ...GROUP, invocation: 'mention' });
+			yield* debounce();
+			const [asked] = yield* q(
+				`SELECT text, sent_at FROM sys_message WHERE role = 'assistant' ORDER BY seq DESC LIMIT 1`
+			);
+			expect(asked?.['text']).toBe('Want me to assign a contractor to them?');
+			expect(asked?.['sent_at']).not.toBeNull();
+			expect(port.inputs).toHaveLength(0);
+		});
+	const CAL_WA = '6598765432@s.whatsapp.net';
+
+	it.live(
+		"the person the envoy just asked answers unnamed in the group: their follow-up continues the exchange, no decider",
+		() =>
+			Effect.scoped(
+				Effect.gen(function* () {
+					yield* exchange();
+					t.clock.advance('1min');
+					yield* say(DM, 'Ya put bob under them', GROUP);
+					yield* debounce();
+					expect(port.inputs).toHaveLength(0);
+					expect((yield* row('Ya put bob under them'))['delivered_turn']).not.toBeNull();
+					expect(ai.requests.at(-1)).toContain('Ya put bob under them');
+				})
+			)
+	);
+
+	it.live(
+		"another member's chatter in the window still goes to the decider, which is told whom the envoy is talking with",
+		() =>
+			Effect.scoped(
+				Effect.gen(function* () {
+					yield* exchange();
+					t.clock.advance('1min');
+					yield* say(CAL_WA, 'lunch?', GROUP);
+					yield* debounce();
+					expect(port.inputs.flatMap((i) => i.pending)).toEqual(['lunch?']);
+					expect(yield* row('lunch?')).toMatchObject({ addressed: false, delivered_turn: null });
+					// Cal spoke since: Dion's next unnamed line is the decider's call too, with the exchange in its state
+					yield* say(DM, 'Ya put bob under them', GROUP);
+					yield* debounce();
+					expect(port.inputs.at(-1)?.pending).toEqual(['Ya put bob under them']);
+					expect(port.inputs.at(-1)?.exchange).toEqual({
+						talkingWith: DM,
+						assistantLastMessage: 'Want me to assign a contractor to them?'
+					});
+				})
+			)
+	);
+
+	it.live('after the window the follow-up goes to the decider', () =>
 		Effect.scoped(
 			Effect.gen(function* () {
-				yield* open();
-				yield* open({ triage: false });
-				yield* say(DM, 'hello');
-				expect((yield* row('hello'))['delivered_turn']).not.toBeNull();
-				yield* say(DM, 'chatter', GROUP);
-				expect(yield* row('chatter')).toMatchObject({ state: null, delivered_turn: null });
-				expect(yield* queued()).toHaveLength(0);
+				yield* exchange();
+				t.clock.advance('31min'); // a question holds the exchange 30 min
+				yield* say(DM, 'Ya put bob under them', GROUP);
+				yield* debounce();
+				expect(port.inputs.flatMap((i) => i.pending)).toEqual(['Ya put bob under them']);
+				expect(yield* row('Ya put bob under them')).toMatchObject({
+					addressed: false,
+					delivered_turn: null
+				});
 			})
 		)
 	);

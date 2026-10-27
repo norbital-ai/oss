@@ -30,13 +30,13 @@ import {
 } from './address.ts';
 /**
  * Self sign-up (the workspace's `signup`): who may join without an invitation, by which proof, holding which policies, and
- * the record that is them — the row of `party.collection` whose `party.match[kind]` field holds the proven address.
+ * the record that is them — the row of `party.model` whose `party.match[kind]` field holds the proven address.
  */
 export type Signup = {
 	via: readonly ('email' | 'phone')[];
 	policies: readonly string[];
 	party?: {
-		collection: string;
+		model: string;
 		match: {
 			readonly email?: string;
 			readonly phone?: string;
@@ -153,7 +153,7 @@ export class IdentityStatement extends Chain {
 export const sha256 = (s: string) => toHex(sha256Bytes(s));
 const randomToken = () => toBase64url(crypto.getRandomValues(new Uint8Array(32)));
 export const newId = (crypto: Crypto.Crypto) =>
-	crypto.randomUUIDv4.pipe(
+	crypto.randomUUIDv4().pipe(
 		Effect.mapError(() => refuse('unavailable', 'Secure random UUID generation failed.'))
 	);
 const HOUR = 3600000,
@@ -524,9 +524,9 @@ export const partyRow = (signup: Signup | undefined, a: Address) => {
 	const field = signup?.party?.match[a.kind];
 	if (signup?.party === undefined || field === undefined)
 		return { text: 'SELECT NULL::text AS id WHERE false', params: [] };
-	const column = `"${signup.party.collection}"."${field}"`;
+	const column = `"${signup.party.model}"."${field}"`;
 	return {
-		text: `SELECT id::text AS id FROM "${signup.party.collection}" WHERE ${a.kind === 'email' ? `lower(${column}) = $1` : `regexp_replace(${column}, '\\D', '', 'g') = $1`} LIMIT 2`,
+		text: `SELECT id::text AS id FROM "${signup.party.model}" WHERE ${a.kind === 'email' ? `lower(${column}) = $1` : `regexp_replace(${column}, '\\D', '', 'g') = $1`} LIMIT 2`,
 		params: [memberValue(a)]
 	};
 };
@@ -623,7 +623,7 @@ SELECT 1`
 	// exactly one record is the person; two holding the same address name nobody
 	const party =
 		parties!.rows.length === 1
-			? { collection: h.signup!.party!.collection, id: String(parties!.rows[0]!.id) }
+			? { model: h.signup!.party!.model, id: String(parties!.rows[0]!.id) }
 			: null;
 	if (user !== undefined && !user.active)
 		return yield* Effect.fail(refuse('notMember', 'This member is deactivated.'));

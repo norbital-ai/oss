@@ -51,13 +51,16 @@ const manifest = {
 		}
 	},
 	relationships: {},
-	collections: {
+	exposures: {
 		tickets: {
-			read: { fields: 'all' },
-			create: { input: { columns: ['subject', 'photo', 'ref_id'] } },
-			update: { input: { columns: ['queue', 'urgent', 'level', 'note'] } }
+			read: { tickets: { fields: 'all' } },
+			create: { columns: { tickets: ['subject', 'photo', 'ref_id'] } },
+			update: { columns: { tickets: ['queue', 'urgent', 'level', 'note'] } }
 		},
-		secret_docs: { read: { fields: 'all' }, create: { input: { columns: ['title', 'doc'] } } }
+		secret_docs: {
+			read: { secret_docs: { fields: 'all' } },
+			create: { columns: { secret_docs: ['title', 'doc'] } }
+		}
 	},
 	policies: {
 		desk: { description: 'Desk', grants: { tickets: { read: true, create: true, update: true } } }
@@ -81,13 +84,13 @@ const questions = {
 	urgency: { type: 'score', instructions: 'How urgent?', criteria: ['low', 'medium', 'high'] } };
 export default { automation: { route: { body: function* (input, ctx) {
 	for (const id of input.ids) {
-		const t = yield* ctx.query('tickets', { id, select: { subject: true, photo: true, ref_id: true } });
+		const t = (yield* ctx.query({ tickets: { where: { id: { eq: id } }, fields: ['subject', 'photo', 'ref_id'] } })).tickets.rows[0];
 		const photo = t.ref_id ? { id: t.ref_id, name: 'x.png', mime: 'image/png' } : t.photo;
 		const r = yield* Effect.result(ctx.ai.sys_1.decide({ state: { subject: t.subject, ...(photo ? { photo } : {}) }, questions }));
-		if (Result.isFailure(r)) { yield* ctx.act('tickets.update', { target: id, set: { note: r.failure._tag === 'Unavailable' ? 'unavailable' : r.failure.kind } }); continue; }
+		if (Result.isFailure(r)) { yield* ctx.act('tickets.update', [{ target: id, set: { note: r.failure._tag === 'Unavailable' ? 'unavailable' : r.failure.kind } }]); continue; }
 		const result = r.success;
-		yield* ctx.act('tickets.update', { target: id, set: { queue: result.answers.queue.choice, urgent: result.answers.blocked.noul > 0.5,
-			level: result.answers.urgency.level, note: 'cost ' + result.costUsd } });
+		yield* ctx.act('tickets.update', [{ target: id, set: { queue: result.answers.queue.choice, urgent: result.answers.blocked.noul > 0.5,
+			level: result.answers.urgency.level, note: 'cost ' + result.costUsd } }]);
 	}
 } } } };`);
 
@@ -162,7 +165,7 @@ const desk = (t: Kit) => t.as(t.member(['desk'])).authority;
 const ticket = (t: Kit, route: FixtureRoute, set: Record<string, Json>) =>
 	actReply(route, desk(t), {
 		callable: 'tickets.create',
-		input: { subject: 'Charged twice', ...set },
+		input: [{ subject: 'Charged twice', ...set }],
 		issuedAt: t.clock.now()
 	}).pipe(
 		Effect.map((reply) => {
@@ -171,9 +174,13 @@ const ticket = (t: Kit, route: FixtureRoute, set: Record<string, Json>) =>
 			return row.id;
 		})
 	);
+const Tickets = Schema.Struct({ tickets: Schema.Struct({ rows: Schema.Array(Schema.Json) }) });
 const get = (t: Kit, route: FixtureRoute, id: string) =>
-	qReply(route, desk(t), { reads: [{ m: 'query', a: ['tickets', { id: id }] }] }).pipe(
-		Effect.map((reply) => reply.answers[0])
+	qReply(route, desk(t), {
+		reads: [{ m: 'query', a: [{ tickets: { where: { id: { eq: id } } } }] }]
+	}).pipe(
+		Effect.flatMap((reply) => Schema.decodeUnknownEffect(Tickets)(reply.answers[0])),
+		Effect.map((answer) => answer.tickets.rows[0] ?? null)
 	);
 const events = (t: Kit) =>
 	Effect.sync(() =>
@@ -300,7 +307,7 @@ describe('ctx.ai.sys_1.decide (P36, P37)', () => {
 					ok(
 						(yield* actReply(route, t.as(t.admin).authority, {
 							callable: 'secret_docs.create',
-							input: { title: 'Payroll', doc },
+							input: [{ title: 'Payroll', doc }],
 							issuedAt: t.clock.now()
 						})).outcome
 					);

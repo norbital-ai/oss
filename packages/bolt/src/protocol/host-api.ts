@@ -29,8 +29,8 @@ import {
 	type FileSystem,
 	type Path
 } from 'effect';
-import * as HttpServerRequest from 'effect/unstable/http/HttpServerRequest';
-import * as HttpServerResponse from 'effect/unstable/http/HttpServerResponse';
+import * as HttpServerRequest from 'effect/http/HttpServerRequest';
+import * as HttpServerResponse from 'effect/http/HttpServerResponse';
 import type { Json } from '../decl/values.ts';
 import type { Holder } from '../engine/access/authority.ts';
 import { Authorities } from '../engine/identity/actor.ts';
@@ -911,7 +911,7 @@ const links = async (host: LinkHost, options: Signal): Promise<WorkspaceLinks> =
 			const sealed = yield* credentials(db, secretService);
 			const secrets = Object.fromEntries(
 				(yield* Effect.forEach(declaredSecrets(artifact.manifest), (name) =>
-					Config.option(Config.string(name)).pipe(
+					Config.option(Config.String(name)).pipe(
 						Effect.provideService(ConfigProvider.ConfigProvider, secretService.config),
 						Effect.map((value) => (Option.isSome(value) ? [[name, value.value] as const] : []))
 					)
@@ -1039,9 +1039,9 @@ const links = async (host: LinkHost, options: Signal): Promise<WorkspaceLinks> =
 						{ signal }
 					)
 					.then(Result.getOrThrow),
-			typing: (instance, to, signal) =>
+			typing: (instance, to, signal, on) =>
 				runtime
-					.runPromise(Effect.result(manager.port.typing(instance, to)), { signal })
+					.runPromise(Effect.result(manager.port.typing(instance, to, on)), { signal })
 					.then(Result.getOrThrow),
 			request: (instance, operation, signal) =>
 				requestRun(Effect.result(manager.port.request(instance, operation)), { signal }).then(

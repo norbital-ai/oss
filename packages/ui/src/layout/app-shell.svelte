@@ -43,7 +43,7 @@ Every `+<page>.page.svelte` renders inside one.
 	import Bound from './bound.svelte';
 	import Cover from './cover.svelte';
 	import { getAppIdentitySlot } from './app-identity.svelte.js';
-	// the page's contexts (its create scope), for a record sheet opened over it by the URL: any collection's (`pageContexts`)
+	// the page's contexts (its create scope), for a record sheet opened over it by the URL: any model's (`pageContexts`)
 	onDestroy(offerContexts('*', getAllContexts()));
 
 	let {

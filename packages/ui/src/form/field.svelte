@@ -25,8 +25,8 @@ Readonly, it is a label over the value as copyable text (or a `view` snippet): n
 	export type FieldProps = {
 		name: string;
 		label?: string | undefined;
+		/** The field's description: an info button beside the label, never text under the control. */
 		help?: string;
-		helpPosition?: 'below' | 'label';
 		editor?: Snippet<[FieldEditor]>;
 		/** Renders the value when the field is readonly, in place of the kind's display (a value shaped by another record's schema, say). */
 		view?: Snippet<[Pick<FieldEditor, 'value' | 'kind' | 'name' | 'id'>]>;
@@ -44,17 +44,17 @@ Readonly, it is a label over the value as copyable text (or a `view` snippet): n
 <script lang="ts">
 	import { cn, provideControls, provideFieldControl, uiText } from '../primitives/utils.js';
 	import Editor from '../kinds/editor.svelte';
+	import DescriptionHint from './description-hint.svelte';
 	import Show from '../kinds/show.svelte';
 	import { useForm } from './form-state.svelte.js';
 	import { claimSectionField } from './section.svelte';
 	import { useBolt } from '../client/context.js';
-	import { useFieldLabel } from '../collection/context.js';
+	import { useFieldLabel } from '../model/context.js';
 
 	let {
 		name,
 		label,
 		help,
-		helpPosition = 'below',
 		editor,
 		view,
 		address,
@@ -71,6 +71,7 @@ Readonly, it is a label over the value as copyable text (or a `view` snippet): n
 	const fieldLabel = useFieldLabel();
 	const labelClass = $derived(dense ? 'sr-only' : 'text-xs font-medium text-muted-foreground');
 	const field = $derived(form?.spec.fields.find((f) => f.name === name));
+	const description = $derived(help ?? field?.kind.help);
 	// derived from the field's kind as this write mode exposes it (a relation's `optional`, a host-filled create column):
 	// a box always holds a value
 	const mandatory = $derived(
@@ -115,14 +116,12 @@ Readonly, it is a label over the value as copyable text (or a `view` snippet): n
 		role="group"
 		aria-labelledby={`${id}-${name}-label`}
 	>
-		<span id={`${id}-${name}-label`} class={labelClass}
-			>{label ??
-				fieldLabel(
-					name,
-					field.kind.label
-				)}{#if helpPosition === 'label' && (help ?? field.kind.help)}
-				<span class="text-meta font-normal">{help ?? field.kind.help}</span>{/if}</span
-		>
+		<div class="flex min-w-0 items-center gap-1">
+			<span id={`${id}-${name}-label`} class={cn(labelClass, 'min-w-0')}
+				>{label ?? fieldLabel(name, field.kind.label)}</span
+			>
+			{#if description && !dense}<DescriptionHint text={description} />{/if}
+		</div>
 		{#if view}
 			{@render view({ value: form.get(name), kind: field.kind, name, id: `${id}-${name}` })}
 		{:else}
@@ -144,9 +143,6 @@ Readonly, it is a label over the value as copyable text (or a `view` snippet): n
 					{t(reason)}
 				</p>{/each}
 		{/if}
-		{#if helpPosition === 'below' && (help ?? field.kind.help)}<p class="text-meta">
-				{help ?? field.kind.help}
-			</p>{/if}
 	</div>
 {:else}
 	{@const disabled = controls.disabled}
@@ -162,12 +158,13 @@ Readonly, it is a label over the value as copyable text (or a `view` snippet): n
 			else control?.removeAttribute('aria-required');
 		}}
 	>
-		<label id={`${id}-${name}-label`} for={`${id}-${name}`} class={labelClass}>
-			{label ?? fieldLabel(name, field.kind.label)}
-			{#if mandatory}<span class="text-destructive" aria-label={t('required')}>*</span>{/if}
-			{#if helpPosition === 'label' && (help ?? field.kind.help)}
-				<span class="text-meta font-normal">{help ?? field.kind.help}</span>{/if}
-		</label>
+		<div class="flex min-w-0 items-center gap-1">
+			<label id={`${id}-${name}-label`} for={`${id}-${name}`} class={cn(labelClass, 'min-w-0')}>
+				{label ?? fieldLabel(name, field.kind.label)}
+				{#if mandatory}<span class="text-destructive" aria-label={t('required')}>*</span>{/if}
+			</label>
+			{#if description && !dense}<DescriptionHint text={description} />{/if}
+		</div>
 		{#if editor}
 			{@render editor({
 				value: form.get(name),
@@ -194,9 +191,6 @@ Readonly, it is a label over the value as copyable text (or a `view` snippet): n
 				onAddress={address === undefined ? undefined : (a) => form.set(address, a)}
 			/>
 		{/if}
-		{#if helpPosition === 'below' && (help ?? field.kind.help)}<p class="text-meta">
-				{help ?? field.kind.help}
-			</p>{/if}
 		{#if error}<p class="text-xs text-destructive" role="alert">{error}</p>{/if}
 	</div>
 {/if}

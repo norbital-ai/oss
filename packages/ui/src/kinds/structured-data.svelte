@@ -1,13 +1,13 @@
 <!--
 @component
-One compact schema, value, editor and inline comparison. Record lists use the collection Table itself;
+One compact schema, value, editor and inline comparison. Record lists use the model Table itself;
 leaf values retain the workspace's native kinds, custom renderers and inherited controls.
 -->
 <script lang="ts" module>
 	import type { Value, Kind } from './kind.js';
 	import type { JsonSchema } from './json-schema.js';
 	import type { ArrayKeys } from './structured-data.js';
-	import type { Values } from '../collection/types.js';
+	import type { Values } from '../model/types.js';
 	import { Schema } from 'effect';
 	import { inputSchema } from '@norbital-ai/std/kind';
 	/** A schema or native kind with current data, editing controls, or a prior value for comparison. */
@@ -29,6 +29,8 @@ leaf values retain the workspace's native kinds, custom renderers and inherited 
 		/** Explicit row identities, indexed by JSON Pointer. Unkeyed lists compare by position. */
 		arrayKeys?: ArrayKeys;
 		changesOnly?: boolean;
+		/** A new record: schema defaults fill as the editor opens; an edit offers them by control instead. */
+		create?: boolean;
 		/** Internal recursion context. */
 		root?: JsonSchema;
 		path?: string;
@@ -126,9 +128,11 @@ leaf values retain the workspace's native kinds, custom renderers and inherited 
 	import Combobox from '../primitives/combobox/combobox.svelte';
 	import Button from '../primitives/button/button.svelte';
 	import Table, { type Col } from '../table/Table.svelte';
+	import Overflow from '../cell/Overflow.svelte';
+	import * as Popover from '../primitives/popover/index.js';
 	import { fieldEntry } from './builtin/index.js';
 	import { useKinds } from './context.js';
-	import { armValue, inferKind, initial, isMasked } from './kind.js';
+	import { armValue, formatValue, inferKind, initial, isMasked } from './kind.js';
 	import { FIELD_TYPES, jsonSchemaFromRows, jsonSchemaRows } from './json-schema-rows.js';
 	import { provideControls, uiText } from '../primitives/utils.js';
 	import { humanize } from '../text/messages.js';
@@ -141,6 +145,7 @@ leaf values retain the workspace's native kinds, custom renderers and inherited 
 	} from './json-schema.js';
 	import {
 		dataChanged,
+		dataDefaults,
 		dataEntries,
 		dataEqual,
 		inferJsonSchema,
@@ -148,6 +153,7 @@ leaf values retain the workspace's native kinds, custom renderers and inherited 
 		pairDataRows,
 		structuredSchema
 	} from './structured-data.js';
+	import { useForm } from '../form/form-state.svelte.js';
 
 	let {
 		schema,
@@ -165,12 +171,15 @@ leaf values retain the workspace's native kinds, custom renderers and inherited 
 		beforeRow,
 		arrayKeys,
 		changesOnly = false,
+		create,
 		root,
 		path = '',
 		depth = 0,
 		heading
 	}: StructuredDataProps = $props();
 	const uid = $props.id();
+	const form = useForm();
+	const newRecord = $derived(create ?? form?.mode === 'create');
 	const controlId = $derived(id ?? uid);
 	const controls = provideControls(() => ({ readonly, disabled }));
 	const host = useKinds();
@@ -199,11 +208,35 @@ leaf values retain the workspace's native kinds, custom renderers and inherited 
 	const resolved = $derived(structuredSchema(rawSchema, document, held));
 	const spec = $derived(node(resolved));
 	const locked = $derived(!editing || spec.readOnly === true);
+	let seeded = false;
+	$effect(() => {
+		if (currentMode !== 'edit' || seeded || !newRecord || depth !== 0 || onChange === undefined)
+			return;
+		seeded = true;
+		if (isMasked(value)) return;
+		const next = dataDefaults(rawSchema, value, document);
+		if (next !== undefined) onChange(next);
+	});
 	const plan = $derived(kind ?? jsonSchemaKind(resolved));
 	const native = $derived(plan.kind === 'custom' ? fieldEntry(plan, host) : undefined);
 	const childName = (key: string | number) => (name === '' ? String(key) : `${name}.${key}`);
 	const title = (key: string, child: JsonSchema, childKind?: Kind) =>
 		unitTitle(childKind?.label ?? node(child).title ?? humanize(key), child);
+	/** One line for a complex cell; its fields open in the bounded editor popover. */
+	const summaryOf = (held: Value | undefined): string => {
+		if (held === undefined || held === null) return '—';
+		if (isMasked(held)) return '•••';
+		if (Array.isArray(held)) return `${held.length} ${held.length === 1 ? 'item' : 'items'}`;
+		const entries = dataEntries(held);
+		if (entries === undefined) return formatValue(held, host.locale);
+		const fields = Object.entries(entries);
+		return (
+			fields
+				.slice(0, 2)
+				.map(([key, item]) => `${humanize(key)}: ${formatValue(item, host.locale)}`)
+				.join(' · ') + (fields.length > 2 ? ' …' : '')
+		);
+	};
 	function structure(
 		s: JsonSchema,
 		k: Kind | undefined,
@@ -619,6 +652,40 @@ leaf values retain the workspace's native kinds, custom renderers and inherited 
 	>
 {/snippet}
 
+{#snippet dataSelf(
+	entry: DataRow,
+	field: string,
+	next: Value | undefined,
+	previous: Value | undefined,
+	nativeKind: Kind | undefined,
+	child: JsonSchema,
+	index: number,
+	row: Values,
+	beforeRow: Values | undefined
+)}
+	<Self
+		schema={child}
+		kind={nativeKind}
+		value={next}
+		before={previous}
+		mode={currentMode}
+		onChange={locked ? undefined : (next) => listChange(entry.at, field, next)}
+		name={childName(recordList ? `${index}.${field}` : index)}
+		id={`${controlId}-${entry.at}-${field}`}
+		disabled={controls.disabled}
+		readonly={locked}
+		{errors}
+		{row}
+		{beforeRow}
+		{arrayKeys}
+		{changesOnly}
+		create={newRecord}
+		root={document}
+		path={recordList ? pointer(pointer(path, index), field) : pointer(path, index)}
+		depth={depth + 1}
+	/>
+{/snippet}
+
 {#snippet dataCell({
 	row: entry,
 	field
@@ -646,30 +713,58 @@ leaf values retain the workspace's native kinds, custom renderers and inherited 
 					? kindJsonSchema(nativeKind)
 					: inferJsonSchema(next === undefined ? previous : next)))
 			: schemaAt(index)}
+		{@const held = dataEntries(pair.value) ?? row}
+		{@const heldBefore = dataEntries(pair.before) ?? beforeRow}
+		{@const complex = recordList && (dataEntries(next) !== undefined || Array.isArray(next))}
 		<div class="relative w-full min-w-0">
-			<label class="sr-only" for={`${controlId}-${entry.at}-${field}`}
-				>{recordList ? title(field, child, nativeKind) : 'Item'} {index + 1}</label
-			>
-			<Self
-				schema={child}
-				kind={nativeKind}
-				value={next}
-				before={previous}
-				mode={currentMode}
-				onChange={locked ? undefined : (next) => listChange(entry.at, field, next)}
-				name={childName(recordList ? `${index}.${field}` : index)}
-				id={`${controlId}-${entry.at}-${field}`}
-				disabled={controls.disabled}
-				readonly={locked}
-				{errors}
-				row={dataEntries(pair.value) ?? row}
-				beforeRow={dataEntries(pair.before) ?? beforeRow}
-				{arrayKeys}
-				{changesOnly}
-				root={document}
-				path={recordList ? pointer(pointer(path, index), field) : pointer(path, index)}
-				depth={depth + 1}
-			/>
+			{#if !complex}<label class="sr-only" for={`${controlId}-${entry.at}-${field}`}
+					>{recordList ? title(field, child, nativeKind) : 'Item'} {index + 1}</label
+				>{/if}
+			{#if complex}
+				<Popover.Root>
+					<Popover.Trigger
+						class="text-muted-foreground hover:text-foreground flex max-w-full min-w-0 items-center gap-1 text-left"
+						aria-label={`${t('expand')} ${recordList ? title(field, child, nativeKind) : field}`}
+						data-structured-expand
+					>
+						<span class="truncate">{summaryOf(next)}</span>
+						<Icon icon="lucide:maximize-2" class="size-3 shrink-0" />
+					</Popover.Trigger>
+					<Popover.Content
+						align="start"
+						class="max-h-[min(32rem,80vh)] w-[min(44rem,calc(100vw-2rem))] overflow-auto p-3"
+						data-structured-editor
+					>
+						{@render dataSelf(
+							entry,
+							field,
+							next,
+							previous,
+							nativeKind,
+							child,
+							index,
+							held,
+							heldBefore
+						)}
+					</Popover.Content>
+				</Popover.Root>
+			{:else if currentMode === 'view' && typeof next === 'string' && (nativeKind === undefined || (nativeKind.kind === 'text' && nativeKind.format === undefined))}
+				<Overflow text={next}>
+					{@render dataSelf(
+						entry,
+						field,
+						next,
+						previous,
+						nativeKind,
+						child,
+						index,
+						held,
+						heldBefore
+					)}
+				</Overflow>
+			{:else}
+				{@render dataSelf(entry, field, next, previous, nativeKind, child, index, held, heldBefore)}
+			{/if}
 		</div>
 	{/if}
 {/snippet}
@@ -734,6 +829,7 @@ leaf values retain the workspace's native kinds, custom renderers and inherited 
 				beforeRow={previousObject}
 				{arrayKeys}
 				{changesOnly}
+				create={newRecord}
 				root={document}
 				path={pointer(path, field.key)}
 				depth={depth + 1}
@@ -768,6 +864,7 @@ leaf values retain the workspace's native kinds, custom renderers and inherited 
 						beforeRow={previousObject}
 						{arrayKeys}
 						{changesOnly}
+						create={newRecord}
 						root={document}
 						path={pointer(path, field.key)}
 						depth={depth + 1}
@@ -918,6 +1015,7 @@ leaf values retain the workspace's native kinds, custom renderers and inherited 
 				mode="view"
 				{name}
 				row={context}
+				create={newRecord}
 				root={document}
 				depth={depth + 1}
 			/>{/if}
@@ -932,7 +1030,12 @@ leaf values retain the workspace's native kinds, custom renderers and inherited 
 		/>{/if}
 {/snippet}
 
-<div class="structured-data" class:structured-root={depth === 0} data-structured-data={currentMode}>
+<div
+	class="structured-data"
+	class:structured-root={depth === 0}
+	class:structured-leaf={layout === undefined && currentMode !== 'schema'}
+	data-structured-data={currentMode}
+>
 	{#if currentMode === 'schema' && onChange && !controls.readonly}
 		<Self
 			schema={authorSchema}
@@ -969,7 +1072,11 @@ leaf values retain the workspace's native kinds, custom renderers and inherited 
 				)}>{t('add')}</Button
 		>
 	{:else if layout}
-		{#if heading}<details class="structured-section" open>
+		{#if heading}<details
+				class="structured-section structured-nested"
+				class:structured-deep={depth > 1}
+				open
+			>
 				<summary
 					><Icon icon="lucide:chevron-right" class="size-4 shrink-0" /><span>{heading}</span
 					>{#if layout === 'array'}<span class="ml-auto text-xs font-normal text-muted-foreground"
@@ -1045,12 +1152,19 @@ leaf values retain the workspace's native kinds, custom renderers and inherited 
 			disabled={controls.disabled}
 			onclick={() => onChange?.(null)}>Clear value</Button
 		>{/if}
-	{#if !locked && spec.default !== undefined && (value === undefined || value === null)}<Button
+	{#if !locked && !newRecord && layout === undefined && spec.default !== undefined && (value === undefined || value === null)}
+		<Button
 			variant="ghost"
-			size="sm"
+			size="icon-sm"
+			class="structured-default text-muted-foreground hover:text-foreground shrink-0"
+			hint={t('useDefault')}
+			aria-label={t('useDefault')}
 			disabled={controls.disabled}
-			onclick={() => onChange?.(spec.default!)}>Use default</Button
-		>{/if}
+			onclick={() => onChange?.(spec.default!)}
+		>
+			<Icon icon="lucide:rotate-ccw" class="size-3.5" />
+		</Button>
+	{/if}
 	{#if errors?.get(name)}<p class="text-sm text-destructive" role="alert">
 			{errors.get(name)}
 		</p>{/if}
@@ -1062,6 +1176,22 @@ leaf values retain the workspace's native kinds, custom renderers and inherited 
 		font-size: var(--text-sm);
 		line-height: var(--text-sm--line-height, 1.5);
 	}
+	.structured-leaf {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: center;
+		gap: 8px;
+	}
+	.structured-leaf > :global(:first-child) {
+		flex: 1 1 auto;
+		min-width: 0;
+	}
+	.structured-leaf > :global(.structured-default) {
+		margin-left: auto;
+	}
+	.structured-leaf > :global(p[role='alert']) {
+		flex-basis: 100%;
+	}
 	.structured-root {
 		overflow: hidden;
 		border: 1px solid var(--color-border);
@@ -1071,8 +1201,8 @@ leaf values retain the workspace's native kinds, custom renderers and inherited 
 		display: grid;
 		grid-template-columns: minmax(8rem, 32%) minmax(0, 1fr);
 		align-items: center;
-		gap: 12px;
-		padding: 7px 12px;
+		gap: 10px;
+		padding: 6px 12px;
 		border-bottom: 1px solid var(--color-border);
 	}
 	.structured-field:last-child {
@@ -1089,7 +1219,7 @@ leaf values retain the workspace's native kinds, custom renderers and inherited 
 		display: flex;
 		align-items: center;
 		gap: 8px;
-		padding: 7px 12px;
+		padding: 6px 10px;
 		cursor: pointer;
 		background: var(--color-muted);
 		border-bottom: 1px solid var(--color-border);
@@ -1102,8 +1232,29 @@ leaf values retain the workspace's native kinds, custom renderers and inherited 
 	.structured-section[open] > summary :global(svg) {
 		transform: rotate(90deg);
 	}
-	.structured-section-body {
-		padding-left: 24px;
+	/* A nested object or list is its own small card, inset on both sides: its border no longer runs into the parent's. */
+	.structured-nested {
+		margin: 6px 8px;
+		overflow: hidden;
+		border: 1px solid var(--color-border);
+		border-radius: var(--radius-sm);
+		background: var(--color-card);
+	}
+	.structured-nested > summary {
+		padding-inline: 8px;
+		background: color-mix(in oklab, var(--color-muted) 60%, var(--color-card));
+	}
+	/* Past the first inset, another card only squeezes the rows: keep one guide line and flat fields. */
+	.structured-nested.structured-deep {
+		margin: 4px 0 4px 8px;
+		overflow: visible;
+		border-width: 0 0 0 1px;
+		border-radius: 0;
+		background: transparent;
+	}
+	.structured-nested.structured-deep > summary {
+		padding-inline: 6px;
+		background: transparent;
 	}
 	.structured-data :global(input:not([type='checkbox'])),
 	.structured-data :global(textarea),

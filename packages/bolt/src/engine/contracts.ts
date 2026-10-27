@@ -58,13 +58,14 @@ export const LIMITS = {
 	},
 	/** Read crossings per invocation: `write` for one write-callback call (`create.transform`, `update.transform`,
 	 * `delete.check`: read for the whole batch, never per row), `sync` for every other synchronous body. */
-	crossings: { sync: 40, write: 2, automation: 10_000 },
+	crossings: { sync: 40, write: 10, automation: 10_000 },
 	/** Rows per write-callback invocation: a batch of N rows is ⌈N/1000⌉ calls per verb per model, one 2 s budget each. */
 	writeChunk: 1_000,
 	readBytes: 32 * MiB,
 	/** Coalesced native reads retained between an automation's successful read and its next act. */
 	readGuards: { count: 256, bytes: 4 * MiB },
-	crossingBytes: 4 * MiB,
+	/** One crossing's answer. 8 MiB fits a large jurisdiction's payroll admission while staying far below a cell's heap. */
+	crossingBytes: 8 * MiB,
 	argsBytes: 4 * MiB,
 	changeSetBytes: 16 * MiB,
 	changesPerAct: 10_000,
@@ -106,7 +107,7 @@ export type RowData = { readonly [field: string]: Json };
 /** Where a change came from in the caller's input, for `refused { field, row }` (rule 32). */
 export type InputPath = readonly (string | number)[];
 /** One write per row (rule 21); relation actions are already flattened (`link`/`unlink` are FK updates). */
-export type Change = { collection: string; id: string; path: InputPath } & (
+export type Change = { model: string; id: string; path: InputPath } & (
 	| { op: 'create'; values: RowData }
 	| { op: 'upsert'; values: RowData; on: readonly string[]; onConflict: 'update' | 'keep' }
 	/** `revision` is the one the caller observed (rule 25); `null` writes blind. */
@@ -127,7 +128,7 @@ export type QueuedRun = {
 export type NoticeRow = Omit<import('./notifications/notify.ts').NoticeInsert, 'id'>;
 /** One committed row change from `RETURNING old.*, new.*`: the input of triggers (rule 50) and live routing (A9). */
 export type Captured = {
-	collection: string;
+	model: string;
 	id: string;
 	op: 'create' | 'update' | 'delete';
 	revision: number;
@@ -137,14 +138,14 @@ export type Captured = {
 };
 
 // ── outcomes (rule 32): the author types of decl/ctx with names erased; a write's own `Outcome` is never `running` ──
-export type Written = readonly { collection: string; id: string; revision: number }[];
+export type Written = readonly { model: string; id: string; revision: number }[];
 export type Outcome =
 	| { kind: 'committed'; output: Json; records: Written }
 	| { kind: 'pendingApproval'; requestId: string; records: Written }
 	| Refused
 	| {
 			kind: 'conflict';
-			records: readonly { collection: string; id: string; fields: readonly string[] }[];
+			records: readonly { model: string; id: string; fields: readonly string[] }[];
 	  }
 	| Unknown;
 /** Past the person-wait the write continues in the background as run `run`; its row reports the outcome (`Running`). */
@@ -163,7 +164,7 @@ export type MemberActor = {
 	teams: readonly string[];
 	teamPath: readonly string[];
 	admin: boolean;
-	party: { collection: string; id: string } | null;
+	party: { model: string; id: string } | null;
 };
 export type EngineActor =
 	| MemberActor
@@ -187,23 +188,39 @@ export type EngineActor =
 			run: string;
 			by: { automation: string } | { platform: string } | { sync: string; instance: string };
 	  };
-/** One grant arm; arms of every held policy union (rule 35). `fields: 'all'` = no field narrowing. */
+/** One read arm of one layer; arms of every held policy union (rule 35). `fields: 'all'` = no field narrowing. */
 export type Arm = { policy: string; where: Pred; fields: readonly string[] | 'all' };
 /**
- * A write arm; `approval`: the arm admits subject to its policy's approval callback (spec §8). Among the admitting arms
- * one without `approval` executes directly; else the first with `approval`, in policy order, runs its callback.
+ * A create or update arm: the columns it admits per write path (checked before any guest code) and whether its policy
+ * declares a `check` (`policy.<p>.grants.<model>.<op>.check`, invocation kind `policy`); without one the arm allows. The
+ * verdicts of every admitting arm combine: any `allow` executes; else the first `approve` in the team's policy order
+ * holds the batch for its flow; else the first `deny` refuses it.
  */
-export type WriteArm = Arm & { previous?: Pred; approval?: true };
-export type CollectionAuthority = {
-	read: readonly Arm[];
+export type WriteArm = {
+	policy: string;
+	columns: { readonly [path: string]: readonly string[] };
+	check: boolean;
+};
+/** A delete arm: its policy, and whether it declares a `check`. */
+export type DeleteArm = { policy: string; check: boolean };
+/**
+ * A model's access points as one actor holds them (decision 3): only this model's policies guard its reads and writes,
+ * every layer under them included; a layer's own model's policies are never consulted on that path.
+ */
+export type ModelAuthority = {
+	/**
+	 * Per read path (`'<model>'`, `'<model>.<rel>'`, …): one arm per policy granting the root's `read`. The root arm's
+	 * `where` scopes the roots; a deeper arm's scopes that layer's rows (a ref layer: nulls it). A path a grant does not
+	 * name is `{ where: true, fields: 'all' }`.
+	 */
+	read: { readonly [path: string]: readonly Arm[] };
 	history: readonly Arm[];
 	create: readonly WriteArm[];
 	update: readonly WriteArm[];
-	delete: readonly WriteArm[];
-	queries: readonly string[];
+	delete: readonly DeleteArm[];
 	moves: { readonly [stateField: string]: 'all' | readonly string[] };
-	/** Field → the predicate of the arms that admit it (rule 14); absent = unmasked for this caller. */
-	masks: { readonly [field: string]: Pred };
+	/** Per read path: field → the predicate of the arms that admit it (rule 14); absent = unmasked for this caller. */
+	masks: { readonly [path: string]: { readonly [field: string]: Pred } };
 };
 export type LimitRule = { key: string; rate: Rate; per: 'actor' | 'ip' | 'sender' | 'subject' };
 /** Compiled once per `key` = (actor, affiliation revision, source release) (rule 37). */
@@ -221,7 +238,7 @@ export type Authority = {
 	 * agent's, acting for this authority's own member in `conversation`. A host holds live-changing work from it.
 	 */
 	agent?: { readonly conversation: string };
-	collections: { readonly [collection: string]: CollectionAuthority };
+	models: { readonly [model: string]: ModelAuthority };
 	automations: readonly string[];
 	capabilities: {
 		apps: readonly string[];
@@ -241,7 +258,6 @@ export type InvocationKind =
 	| 'create'
 	| 'update'
 	| 'delete'
-	| 'query'
 	| 'notify'
 	| 'vector'
 	| 'probe'
@@ -249,7 +265,7 @@ export type InvocationKind =
 	| 'syncRead'
 	| 'syncWrite'
 	| 'parse'
-	| 'approval'
+	| 'policy'
 	| 'automation'
 	| 'integration'
 	| 'page'
@@ -257,9 +273,9 @@ export type InvocationKind =
 	| 'tool';
 /**
  * One fresh-isolate run of one body. `target` names it: `'<model>'` (write callbacks `create`/`update`/`delete`,
- * `notify`), `'<model>.<query>'`, `'<model>.<index>'` (`vector`, `probe`, `rerank`), `'<model>.<sync>'`
- * (`syncRead`, `syncWrite`), `'<model>.<sync>.<media type>'` (`parse`), `'<policy>.<model>.<op>'` (`approval`), `'<a>'`
- * (automation), or `'<app>/<page>'` (page).
+ * `notify`), `'<model>.<index>'` (`vector`, `probe`, `rerank`), `'<model>.<sync>'` (`syncRead`, `syncWrite`),
+ * `'<model>.<sync>.<media type>'` (`parse`), `'<policy>.<model>.<op>'` (`policy`: a write grant's `check`, answering a
+ * `VerdictData`), `'<a>'` (automation), or `'<app>/<page>'` (page).
  */
 export type Invocation = {
 	id: string;
@@ -309,7 +325,7 @@ export type GuestOutcome =
 			rule?: string;
 			data?: { readonly requestId: string };
 			records?: readonly {
-				readonly collection: string;
+				readonly model: string;
 				readonly id: string;
 				readonly fields: readonly string[];
 			}[];
@@ -533,6 +549,8 @@ export type DriverEvent =
 	| { kind: 'messages'; messages: readonly Json[]; history?: true; bins?: readonly Uint8Array[] }
 	| { kind: 'delivery'; providerId: string; report: DeliveryReport }
 	| { kind: 'clear'; thread: string; before: string }
+	/** The sender is typing (`typing: true`) in `thread`: a held burst waits for the rest, up to its cap. */
+	| { kind: 'presence'; thread: string; typing: boolean }
 	| { kind: 'invalidate'; sync: string; partition: string };
 /**
  * One of `message.attachments` (stored FileRefs, in order) as bolt hands it to `send`: the bytes read through the host's files
@@ -646,7 +664,7 @@ export interface LinksPort {
 		signal: AbortSignal,
 		attachments?: readonly OutboundAttachment[]
 	): Promise<{ providerId: string; presumeAfterMs?: number }>;
-	typing?(instance: string, to: string, signal: AbortSignal): Promise<void>;
+	typing?(instance: string, to: string, signal: AbortSignal, on: boolean): Promise<void>;
 	request?(instance: string, op: Json, signal: AbortSignal): Promise<Json>;
 	read?(
 		instance: string,

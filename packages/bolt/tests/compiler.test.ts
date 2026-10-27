@@ -267,7 +267,7 @@ describe('next compiler: load', () => {
 					driver: 'sqlserver'
 				});
 				expect(manifest.relationships['entries.source']).toMatchObject({ to: 'sys_integration' });
-				expect(manifest.collections['entries']?.syncs?.['ledger']).toEqual({
+				expect(manifest.exposures['entries']?.syncs?.['ledger']).toEqual({
 					with: 'books',
 					every: '1h',
 					read: true
@@ -317,7 +317,11 @@ describe('next compiler: load', () => {
 			expect(errors).toEqual([]);
 			expect(manifestErrors(manifest)).toEqual([]);
 			expect(Object.keys(manifest.model).sort()).toEqual(['customers', 'notices', 'orders']);
-			expect(manifest.model.orders).toHaveProperty('bodies.queries.count_placed');
+			expect(manifest.model.orders).toHaveProperty(['spec', 'read', 'orders.customer', 'fields'], [
+				'name',
+				'rating'
+			]);
+			expect(manifest.model.orders).not.toHaveProperty('bodies.queries');
 			expect(manifest.custom_field.rating).toHaveProperty('check', expect.any(Function));
 			expect(manifest.integration_definition.mail).toMatchObject({
 				name: 'mail',
@@ -371,7 +375,7 @@ describe('next compiler: names index', () => {
 				expect(readFileSync(join(root, '.norbital/names.ts'), 'utf8')).toBe(text);
 				expect(text).toContain('models: {');
 				expect(text).toContain('"description": "Buyers";');
-				expect(text).toContain('"count_placed": {');
+				expect(text).toContain('"orders.customer": "customers";');
 				expect(text).toContain('"syncs": {');
 				expect(text).not.toContain('typeof import');
 				expect(text).toContain('"sales": "board" | "list";');
@@ -403,7 +407,7 @@ describe('next compiler: seed packs', () => {
 		workspace: { tz: 'UTC', locale: 'en' },
 		models: {},
 		relationships: {},
-		collections: {},
+		exposures: {},
 		policies: {},
 		integrations: {},
 		connections: {},

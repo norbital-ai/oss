@@ -3,13 +3,19 @@ import { describe, expect, it } from 'vitest';
 import type { EngineManifest } from '../src/engine/manifest.ts';
 import { catalogOf } from '../src/engine/access/pred.ts';
 import { compileCommit } from '../src/engine/write/commit.ts';
-import { changed, Flattener, withDefaults } from '../src/engine/write/flatten.ts';
+import { changed, Flattener, layerSel, withDefaults } from '../src/engine/write/flatten.ts';
 import { minter } from '../src/engine/write/sql.ts';
 import { manifest, member, NOW, TODAY } from './write-fixture.ts';
 import * as q from './query.fixture.ts';
 
 const cat = catalogOf(manifest);
-const create = manifest.collections.orders!.create!.input as { columns: readonly string[] };
+const create = layerSel(
+	manifest,
+	cat,
+	manifest.exposures.orders!.create!.columns,
+	'create',
+	'orders'
+);
 
 describe('engine/write decode and flatten', () => {
 	it('decode names every offender at once, derived fields included (rule 23)', () => {
@@ -110,7 +116,7 @@ describe('engine/write decode and flatten', () => {
 			3,
 			[]
 		);
-		expect(f.items.map((i) => [i.change.collection, i.change.op, i.change.id])).toEqual([
+		expect(f.items.map((i) => [i.change.model, i.change.op, i.change.id])).toEqual([
 			['orders', 'update', 'o1'],
 			['lines', 'create', 'new'],
 			['lines', 'delete', 'l2'],
@@ -171,14 +177,14 @@ describe('engine/write statement', () => {
 			output: null,
 			rate: [{ rule: 'act', bucket: 'a', limit: 5, windowStart: NOW }],
 			writes: [
-				{ collection: 'orders', id: 'o', op: 'create', values: { title: 't', status: 'draft' } },
+				{ model: 'orders', id: 'o', op: 'create', values: { title: 't', status: 'draft' } },
 				{
-					collection: 'lines',
+					model: 'lines',
 					id: 'l',
 					op: 'create',
 					values: { label: 'a', amount: '1', order: 'o' }
 				},
-				{ collection: 'tags', id: 't', op: 'delete', revision: 1 }
+				{ model: 'tags', id: 't', op: 'delete', revision: 1 }
 			],
 			runs: [{ id: 'r', automation: 'a', input: null, dueAt: NOW, cause: 'x', depth: 0 }],
 			notices: []

@@ -24,23 +24,36 @@ const manifest: EngineManifest = {
 		'watchers.first': { to: ['roots', 'archives'], optional: true, onDelete: 'setNull' },
 		'watchers.second': { to: ['roots', 'archives'], optional: true, onDelete: 'setNull' }
 	},
-	collections: {
-		roots: { read: { fields: 'all' }, create: { input: { columns: ['name'] } }, delete: {} },
-		archives: { read: { fields: 'all' }, create: { input: { columns: ['name'] } } },
-		branches: { read: { fields: 'all' }, create: { input: { columns: ['name', 'root'] } } },
-		leaves: { read: { fields: 'all' }, create: { input: { columns: ['name', 'branch'] } } },
+	exposures: {
+		roots: {
+			read: { roots: { fields: 'all' } },
+			create: { columns: { roots: ['name'] } },
+			delete: {}
+		},
+		archives: {
+			read: { archives: { fields: 'all' } },
+			create: { columns: { archives: ['name'] } }
+		},
+		branches: {
+			read: { branches: { fields: 'all' } },
+			create: { columns: { branches: ['name', 'root'] } }
+		},
+		leaves: {
+			read: { leaves: { fields: 'all' } },
+			create: { columns: { leaves: ['name', 'branch'] } }
+		},
 		watchers: {
-			read: { fields: 'all' },
-			create: { input: { columns: ['name', 'first', 'second'] } },
-			update: { input: { columns: ['name'] } }
+			read: { watchers: { fields: 'all' } },
+			create: { columns: { watchers: ['name', 'first', 'second'] } },
+			update: { columns: { watchers: ['name'] } }
 		}
 	},
 	policies: {
 		requester: {
 			description: 'Requests changes',
 			grants: {
-				roots: { read: true, history: true, delete: { approval: true } },
-				watchers: { read: true, history: true, update: { approval: true } }
+				roots: { read: true, history: true, delete: { check: true } },
+				watchers: { read: true, history: true, update: { check: true } }
 			}
 		},
 		reviewer: {
@@ -51,8 +64,8 @@ const manifest: EngineManifest = {
 	teams: { requesters: ['requester'], reviewers: ['reviewer'] }
 };
 const guest = program(`export default { policy: { requester: { grants: {
-	roots: { delete: { approval: (write, flow) => flow.step('Review deletion', {teams:['reviewers']}) } },
-	watchers: { update: { approval: (write, flow) => flow.step('Review watcher', {teams:['reviewers']}) } }
+	roots: { delete: { check: function* (rows, ctx) { return ctx.approve((flow) => flow.step('Review deletion', {teams:['reviewers']})); } } },
+	watchers: { update: { check: function* (changes, ctx) { return ctx.approve((flow) => flow.step('Review watcher', {teams:['reviewers']})); } } }
 } } } };`);
 const Watcher = Schema.Struct({
 	id: Schema.String,
@@ -64,7 +77,7 @@ const Watcher = Schema.Struct({
 	revision: Schema.Number
 });
 const History = Schema.Struct({
-	collection: Schema.String,
+	model: Schema.String,
 	record: Schema.String,
 	revision: Schema.Number,
 	op: Schema.String,
@@ -72,13 +85,14 @@ const History = Schema.Struct({
 	changes: Schema.Record(Schema.String, Schema.Json),
 	request: Schema.NullOr(Schema.String)
 });
+// a stored checkpoint entry keeps its `collection` key (the audit trigger reads it)
 const Checkpoint = Schema.Struct({
-	collection: Schema.String,
+	model: Schema.String,
 	id: Schema.String,
 	op: Schema.String,
 	before: Schema.NullOr(Schema.Number)
-});
-type Collection = 'roots' | 'archives' | 'branches' | 'leaves' | 'watchers';
+}).pipe(Schema.encodeKeys({ model: 'collection' }));
+type Model = 'roots' | 'archives' | 'branches' | 'leaves' | 'watchers';
 
 const fixture = Effect.gen(function* () {
 	const context = yield* Layer.build(TestWorkspace.layer({ manifest, guest: yield* guest }));
@@ -93,7 +107,7 @@ const fixture = Effect.gen(function* () {
 			t.member(['reviewer'], { teams: ['reviewers'], teamPath: ['reviewers'] })
 		).authority;
 	const act = (
-		collection: Collection,
+		model: Model,
 		verb: 'create' | 'update' | 'delete',
 		input: Json,
 		authority = admin,
@@ -102,7 +116,7 @@ const fixture = Effect.gen(function* () {
 	) => {
 		const now = t.clock.now();
 		return writes.act({
-			collection,
+			model,
 			verb,
 			input,
 			authority,
@@ -114,10 +128,10 @@ const fixture = Effect.gen(function* () {
 			bindings: { now, today: now.slice(0, 10), tz: 'UTC', params: {} }
 		});
 	};
-	const create = Effect.fnUntraced(function* (collection: Collection, input: Json) {
-		const { outcome } = yield* act(collection, 'create', input);
+	const create = Effect.fnUntraced(function* (model: Model, input: Json) {
+		const { outcome } = yield* act(model, 'create', [input]);
 		assert.ok(outcome.kind === 'committed');
-		const row = outcome.records.find((record) => record.collection === collection);
+		const row = outcome.records.find((record) => record.model === model);
 		assert.ok(row);
 		return row.id;
 	});
@@ -127,8 +141,8 @@ const fixture = Effect.gen(function* () {
 		leaf = yield* create('leaves', { name: 'Leaf', branch }),
 		watcher = yield* create('watchers', {
 			name: 'Watcher',
-			first: { collection: 'roots', id: root },
-			second: { collection: 'roots', id: root }
+			first: { model: 'roots', id: root },
+			second: { model: 'roots', id: root }
 		});
 	const watcherRows = () =>
 		t.db.rows(Watcher, {
@@ -137,7 +151,7 @@ const fixture = Effect.gen(function* () {
 		});
 	const history = () =>
 		t.db.rows(History, {
-			text: 'SELECT collection,record::text,revision,op,cause,changes,request::text FROM bolt_history ORDER BY collection,record,revision',
+			text: 'SELECT collection AS model,record::text,revision,op,cause,changes,request::text FROM bolt_history ORDER BY collection,record,revision',
 			params: []
 		});
 	const tables = [
@@ -151,8 +165,8 @@ const fixture = Effect.gen(function* () {
 		'approval_request'
 	];
 	const snapshot = () =>
-		t.db.rows(Schema.Struct({ collection: Schema.String, image: Schema.Json }), {
-			text: `SELECT * FROM (${tables.map((table) => `SELECT '${table}'::text AS collection,to_jsonb(t) AS image FROM ${table} t`).join(' UNION ALL ')}) captured ORDER BY collection,image::text`,
+		t.db.rows(Schema.Struct({ model: Schema.String, image: Schema.Json }), {
+			text: `SELECT * FROM (${tables.map((table) => `SELECT '${table}'::text AS model,to_jsonb(t) AS image FROM ${table} t`).join(' UNION ALL ')}) captured ORDER BY model,image::text`,
 			params: []
 		});
 	const counts = () =>
@@ -252,19 +266,19 @@ describe('database-owned referential actions', () => {
 						history
 							.filter((row) => row.op === 'delete')
 							.map((row) => ({
-								collection: row.collection,
+								model: row.model,
 								record: row.record,
 								revision: row.revision,
 								cause: row.cause
 							})),
 						[
-							{ collection: 'branches', record: f.branch, revision: 2, cause: 'cascade' },
-							{ collection: 'leaves', record: f.leaf, revision: 2, cause: 'cascade' },
-							{ collection: 'roots', record: f.root, revision: 2, cause: 'direct' }
+							{ model: 'branches', record: f.branch, revision: 2, cause: 'cascade' },
+							{ model: 'leaves', record: f.leaf, revision: 2, cause: 'cascade' },
+							{ model: 'roots', record: f.root, revision: 2, cause: 'direct' }
 						]
 					);
 					const updates = history.filter(
-						(row) => row.collection === 'watchers' && row.op === 'update'
+						(row) => row.model === 'watchers' && row.op === 'update'
 					);
 					assert.deepEqual(
 						updates.map((row) => ({
@@ -295,7 +309,7 @@ describe('database-owned referential actions', () => {
 					const held = yield* f.act(
 						'watchers',
 						'update',
-						{ target: f.watcher, set: { name: 'Held watcher' } },
+						[{ target: f.watcher, set: { name: 'Held watcher' } }],
 						f.requester
 					);
 					assert.ok(held.outcome.kind === 'pendingApproval');
@@ -318,7 +332,7 @@ describe('database-owned referential actions', () => {
 				Effect.gen(function* () {
 					const f = yield* fixture;
 					const key = randomUUID(),
-						input = { target: f.root };
+						input = [{ target: f.root }];
 					const first = yield* f.act('roots', 'delete', input, f.requester, key);
 					assert.ok(first.outcome.kind === 'pendingApproval');
 					const requestId = first.outcome.requestId;
@@ -330,18 +344,18 @@ describe('database-owned referential actions', () => {
 						params: [requestId]
 					});
 					assert.deepEqual(
-						[...checkpoints].sort((a, b) => a.collection.localeCompare(b.collection)),
+						[...checkpoints].sort((a, b) => a.model.localeCompare(b.model)),
 						[
-							{ collection: 'branches', id: f.branch, op: 'delete', before: 1 },
-							{ collection: 'leaves', id: f.leaf, op: 'delete', before: 1 },
-							{ collection: 'roots', id: f.root, op: 'delete', before: 1 },
-							{ collection: 'watchers', id: f.watcher, op: 'update', before: 1 }
+							{ model: 'branches', id: f.branch, op: 'delete', before: 1 },
+							{ model: 'leaves', id: f.leaf, op: 'delete', before: 1 },
+							{ model: 'roots', id: f.root, op: 'delete', before: 1 },
+							{ model: 'watchers', id: f.watcher, op: 'update', before: 1 }
 						]
 					);
 					const history = yield* f.history();
 					assert.deepEqual(
 						history
-							.filter((row) => row.collection === 'watchers' && row.op === 'update')
+							.filter((row) => row.model === 'watchers' && row.op === 'update')
 							.map((row) => ({
 								revision: row.revision,
 								request: row.request
@@ -384,7 +398,7 @@ describe('database-owned referential actions', () => {
 						(row) => row.request === requestId && row.cause === 'restored'
 					);
 					assert.deepEqual(
-						restored.map((row) => row.collection),
+						restored.map((row) => row.model),
 						['branches', 'leaves', 'roots', 'watchers']
 					);
 				})

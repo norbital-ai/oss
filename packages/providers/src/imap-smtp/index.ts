@@ -1,7 +1,7 @@
 // Mailbox pairing, cursor ownership and delivery; SMTP and the scoped IMAP watch live in their own modules.
 import { createHmac } from 'node:crypto';
 import { Clock, Effect, FiberHandle, Option, Schedule, Predicate, Schema } from 'effect';
-import { HttpClient, HttpClientRequest, HttpClientResponse } from 'effect/unstable/http';
+import { HttpClient, HttpClientRequest, HttpClientResponse } from 'effect/http';
 import {
 	OAUTH_CALLBACK,
 	type DriverOpen,

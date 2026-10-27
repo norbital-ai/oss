@@ -3,7 +3,7 @@
 // aggregates) and nothing else, and `decodeDescribed` refuses any field, relation or sort key outside it.
 import { describe, expect, it } from '@effect/vitest';
 import * as NodeCrypto from '@effect/platform-node/NodeCrypto';
-import type { Arm, Authority, CollectionAuthority } from '../src/engine/contracts.ts';
+import type { Arm, Authority, ModelAuthority } from '../src/engine/contracts.ts';
 import { Effect, Layer, Schema } from 'effect';
 import { Ai, Metering } from '../src/engine/ports.ts';
 import { TenantDb } from '../src/engine/db/tenant-db.ts';
@@ -58,13 +58,13 @@ const manifest = {
 		'members.manager': { to: 'members', optional: true },
 		'job_lines.job': { to: 'jobs', inverse: 'lines' }
 	},
-	collections: {
-		members: { read: { fields: 'all' } },
-		job_lines: { read: { fields: 'all' } },
-		// `internal_code` and the `audit` relation are not exposed; `audits` is no collection at all
+	exposures: {
+		members: { read: { members: { fields: 'all' } } },
+		job_lines: { read: { job_lines: { fields: 'all' } } },
+		// `internal_code` is not exposed; `audits` is no model at all (a `where` may hop any relation into a model with
+		// `read`; no layer is declared here, so each hop reads the target model's own access point)
 		jobs: {
-			read: {
-				fields: [
+			read: { jobs: { fields: [
 					'title',
 					'hours',
 					'notes',
@@ -74,9 +74,7 @@ const manifest = {
 					'status',
 					'tags',
 					'assignee'
-				],
-				relations: ['assignee', 'lines']
-			}
+				] } }
 		}
 	},
 	integrations: {},
@@ -98,28 +96,27 @@ const cat = catalog(manifest);
 
 const TRUE: Pred = { t: 'const', value: true };
 const arm: Arm = { policy: 'dispatch', where: TRUE, fields: 'all' };
-const grant = (masks: { [f: string]: Pred } = {}): CollectionAuthority => ({
-	read: [arm],
+const grant = (model: string, masks: { [f: string]: Pred } = {}): ModelAuthority => ({
+	read: { [model]: [arm] },
 	history: [],
 	create: [],
 	update: [],
 	delete: [],
-	queries: [],
 	moves: {},
-	masks
+	masks: { [model]: masks }
 });
 /** A dispatcher: reads jobs (notes masked), members (rate masked) and job lines. */
 const caller = (
-	collections: { [c: string]: CollectionAuthority } = {
-		jobs: grant({ notes: { t: 'const', value: false } }),
-		members: grant({ rate: { t: 'const', value: false } }),
-		job_lines: grant()
+	models: { [c: string]: ModelAuthority } = {
+		jobs: grant('jobs', { notes: { t: 'const', value: false } }),
+		members: grant('members', { rate: { t: 'const', value: false } }),
+		job_lines: grant('job_lines')
 	}
 ): Authority => ({
 	key: 'k',
 	admin: false,
 	policies: ['dispatch'],
-	collections,
+	models,
 	automations: [],
 	limits: [],
 	teamTree: [],
@@ -165,8 +162,8 @@ describe("decodeDescribed: the caller's exposed query shape, exactly", () => {
 		).not.toThrow();
 	});
 
-	it('refuses a relation into a collection the caller does not read', () => {
-		const noMembers = caller({ jobs: grant(), job_lines: grant() });
+	it('refuses a relation into a model the caller does not read', () => {
+		const noMembers = caller({ jobs: grant('jobs'), job_lines: grant('job_lines') });
 		expect(decode({ assignee: { is: { name: { eq: 'Bob' } } } }, undefined, noMembers)).toThrow(
 			/'members' is not read/
 		);
@@ -183,7 +180,7 @@ describe("decodeDescribed: the caller's exposed query shape, exactly", () => {
 		expect(decode({}, { assignee: { rate: 'asc' } })).toThrow(/members\.rate/); // masked on the target: no ordering by it either
 		expect(decode({}, { audit: { note: 'asc' } })).toThrow(/not a relation this caller reads/); // unexposed relation
 		expect(
-			decode({}, { assignee: { name: 'asc' } }, caller({ jobs: grant(), job_lines: grant() }))
+			decode({}, { assignee: { name: 'asc' } }, caller({ jobs: grant('jobs'), job_lines: grant('job_lines') }))
 		).toThrow(/'members' is not read/);
 		expect(decode({}, { assignee: { bogus: 'asc' } })).toThrow(/not sortable/); // the grammar's own refusal
 		expect(decode({}, { 'assignee.name': 'asc' })).toThrow(/one \{ field/); // one grammar: nested keys, not a dotted string
@@ -191,14 +188,14 @@ describe("decodeDescribed: the caller's exposed query shape, exactly", () => {
 			decode(
 				{},
 				{ assignee: 'asc' },
-				caller({ jobs: grant({ assignee: { t: 'const', value: false } }), members: grant() })
+				caller({ jobs: grant('jobs', { assignee: { t: 'const', value: false } }), members: grant('members') })
 			)
 		).toThrow(/not a field this caller reads/);
 		expect(
 			decode(
 				{},
 				{ assignee: { name: 'asc' } },
-				caller({ jobs: grant({ assignee: { t: 'const', value: false } }), members: grant() })
+				caller({ jobs: grant('jobs', { assignee: { t: 'const', value: false } }), members: grant('members') })
 			)
 		).toThrow(/not a relation this caller reads/);
 		expect(decode({}, { notes: 'asc' })).toThrow(/not a field this caller reads/);
@@ -346,7 +343,10 @@ describe('filter.describe offers System 1 the exposure and maps its choices onto
 					nativeDescriber(port, searchable, (batch) =>
 						Effect.succeed(
 							batch.map((q) => ({
-								rows: q.collection === 'members' ? [{ id: 'm1', name: 'Bob Tan' }] : []
+								rows:
+									'model' in q && q.model === 'members'
+										? [{ id: 'm1', name: 'Bob Tan' }]
+										: []
 							}))
 						)
 					);
@@ -364,7 +364,7 @@ describe('filter.describe offers System 1 the exposure and maps its choices onto
 						byField({ Assignee: { op, value: reading }, Title: { op: 'contains', value: 'bob' } })
 					);
 					expect(
-						yield* found(port).describe({ collection: 'jobs', text, authority: caller(), bindings })
+						yield* found(port).describe({ model: 'jobs', text, authority: caller(), bindings })
 					).toEqual({ ok: true, where });
 				}
 			})
@@ -375,7 +375,7 @@ describe('filter.describe offers System 1 the exposure and maps its choices onto
 		() =>
 			Effect.gen(function* () {
 				const r = yield* describer(system1(byField({}))).describe({
-					collection: 'jobs',
+					model: 'jobs',
 					text: 'dsajdasomda',
 					authority: caller(),
 					bindings
@@ -397,7 +397,7 @@ describe('filter.describe offers System 1 the exposure and maps its choices onto
 				);
 				expect(
 					yield* describer(system1(plan)).describe({
-						collection: 'jobs',
+						model: 'jobs',
 						text: 'title contains pump',
 						authority: caller(),
 						bindings
@@ -409,7 +409,7 @@ describe('filter.describe offers System 1 the exposure and maps its choices onto
 				);
 				expect(
 					yield* describer(system1(two)).describe({
-						collection: 'jobs',
+						model: 'jobs',
 						text: 'neither pump titles nor done',
 						authority: caller(),
 						bindings
@@ -424,7 +424,7 @@ describe('filter.describe offers System 1 the exposure and maps its choices onto
 			Effect.gen(function* () {
 				const port = system1(byField({ Title: { op: 'contains', value: 'pump' } }));
 				const r = yield* describer(port).describe({
-					collection: 'jobs',
+					model: 'jobs',
 					text: 'spot title contains pump',
 					authority: caller(),
 					bindings
@@ -440,7 +440,7 @@ describe('filter.describe offers System 1 the exposure and maps its choices onto
 			})
 	);
 
-	it.effect('describes a local roster from its supplied fields without a collection read', () =>
+	it.effect('describes a local roster from its supplied fields without a model read', () =>
 		Effect.gen(function* () {
 			const port = system1(
 				byField({ Number: { op: 'more than', value: '20' } }, { sort: 'Name, A to Z' })
@@ -450,7 +450,7 @@ describe('filter.describe offers System 1 the exposure and maps its choices onto
 				{ name: 'name', label: 'Name', kind: 'text' as const }
 			];
 			const r = yield* describer(port).describe({
-				collection: '$local',
+				model: '$local',
 				text: 'people numbered above 20, by name',
 				localFields: fields,
 				authority: caller({}),
@@ -467,11 +467,11 @@ describe('filter.describe offers System 1 the exposure and maps its choices onto
 				// no job_lines grant, so nothing many-relation is offered and every readable field fits the bound
 				const port = system1(byField({}));
 				yield* describer(port).describe({
-					collection: 'jobs',
+					model: 'jobs',
 					text: 'jobs with more than 2 pumps',
 					authority: caller({
-						jobs: grant({ notes: { t: 'const', value: false } }),
-						members: grant({ rate: { t: 'const', value: false } })
+						jobs: grant('jobs', { notes: { t: 'const', value: false } }),
+						members: grant('members', { rate: { t: 'const', value: false } })
 					}),
 					bindings
 				});
@@ -505,11 +505,11 @@ describe('filter.describe offers System 1 the exposure and maps its choices onto
 			})
 	);
 
-	it.effect('a wide collection is bounded, and what the caller cannot read is never offered', () =>
+	it.effect('a wide model is bounded, and what the caller cannot read is never offered', () =>
 		Effect.gen(function* () {
 			const port = system1(byField({}));
 			yield* describer(port).describe({
-				collection: 'jobs',
+				model: 'jobs',
 				text: 'jobs with more than 2 pumps',
 				authority: caller(),
 				bindings
@@ -536,7 +536,7 @@ describe('filter.describe offers System 1 the exposure and maps its choices onto
 				)
 			);
 			const r = yield* describer(port).describe({
-				collection: 'jobs',
+				model: 'jobs',
 				text: 'jobs with more than 2 of any line, latest first',
 				authority: caller(),
 				bindings
@@ -555,7 +555,7 @@ describe('filter.describe offers System 1 the exposure and maps its choices onto
 				byField({ Title: { op: 'contains', value: 'pump' } }, { sort: 'Assignee › Name, A to Z' })
 			);
 			const r = yield* describer(port).describe({
-				collection: 'jobs',
+				model: 'jobs',
 				text: 'pump jobs by assignee name',
 				authority: caller(),
 				bindings
@@ -572,7 +572,7 @@ describe('filter.describe offers System 1 the exposure and maps its choices onto
 		Effect.gen(function* () {
 			const port = system1(byField({}));
 			yield* describer(port).describe({
-				collection: 'jobs',
+				model: 'jobs',
 				text: 'pump jobs, sorted by title descending',
 				authority: caller(),
 				bindings
@@ -591,7 +591,7 @@ describe('filter.describe offers System 1 the exposure and maps its choices onto
 				const today = system1(byField({ Window: { op: 'in force on', value: 'today' } }));
 				expect(
 					yield* describer(today).describe({
-						collection: 'jobs',
+						model: 'jobs',
 						text: 'jobs in force today',
 						authority: caller(),
 						bindings
@@ -600,7 +600,7 @@ describe('filter.describe offers System 1 the exposure and maps its choices onto
 				const year = system1(byField({ Window: { op: 'overlaps', value: 'this year' } }));
 				expect(
 					yield* describer(year).describe({
-						collection: 'jobs',
+						model: 'jobs',
 						text: 'jobs running at any time this year',
 						authority: caller(),
 						bindings
@@ -618,7 +618,7 @@ describe('filter.describe offers System 1 the exposure and maps its choices onto
 		Effect.gen(function* () {
 			const port = system1(byField({ 'Lines › total amount': { op: 'at least', value: '500' } }));
 			const r = yield* describer(port).describe({
-				collection: 'jobs',
+				model: 'jobs',
 				text: 'jobs whose lines total at least 500',
 				authority: caller(),
 				bindings
@@ -632,7 +632,7 @@ describe('filter.describe offers System 1 the exposure and maps its choices onto
 		() =>
 			Effect.gen(function* () {
 				const r = yield* describer(system1(byField({}))).options({
-					collection: 'jobs',
+					model: 'jobs',
 					authority: caller(),
 					bindings
 				});
@@ -672,7 +672,7 @@ describe('filter.describe offers System 1 the exposure and maps its choices onto
 				byField({ 'Assignee › Manager › Name': { op: 'contains', value: 'pump' } })
 			);
 			const r = yield* describer(port).describe({
-				collection: 'jobs',
+				model: 'jobs',
 				text: 'manager name contains pump',
 				authority: caller(),
 				bindings
@@ -692,7 +692,7 @@ describe('filter.describe offers System 1 the exposure and maps its choices onto
 				{ combine: 'any of them hold' }
 			);
 			const r = yield* describer(system1(plan)).describe({
-				collection: 'jobs',
+				model: 'jobs',
 				text: 'pump jobs or done jobs',
 				authority: caller(),
 				bindings
@@ -717,7 +717,7 @@ describe('filter.describe offers System 1 the exposure and maps its choices onto
 				{ combine: 'any of them hold' }
 			);
 			const r = yield* describer(system1(plan)).describe({
-				collection: 'jobs',
+				model: 'jobs',
 				text: 'pump titles that are done',
 				authority: caller(),
 				bindings
@@ -749,12 +749,13 @@ describe('described choices preserve scalar kinds', () => {
 						}
 					}
 				},
-				collections: {
-					...manifest.collections,
+				exposures: {
+					...manifest.exposures,
 					jobs: {
 						read: {
-							...manifest.collections.jobs.read,
-							fields: [...manifest.collections.jobs.read.fields, 'urgent', 'priority', 'visits']
+							jobs: {
+								fields: [...manifest.exposures.jobs.read.jobs.fields, 'urgent', 'priority', 'visits']
+							}
 						}
 					}
 				}
@@ -767,7 +768,7 @@ describe('described choices preserve scalar kinds', () => {
 				})
 			);
 			const result = yield* nativeDescriber(port, kinds).describe({
-				collection: 'jobs',
+				model: 'jobs',
 				authority: caller(),
 				bindings,
 				text: 'urgent high priority jobs with 3 visits'
@@ -821,7 +822,7 @@ describe('described selection must fit the exposed grammar', () => {
 					)
 				);
 				const r = yield* describer(port).describe({
-					collection: '$local',
+					model: '$local',
 					text: 'show latest version only for each kind, not merely the global version 5',
 					localFields: fields,
 					authority: caller({}),
@@ -838,12 +839,12 @@ describe('described selection must fit the exposed grammar', () => {
 				});
 			})
 	);
-	it.effect('a sort-only description on a collection has an OrderBy and no Where', () =>
+	it.effect('a sort-only description on a model has an OrderBy and no Where', () =>
 		Effect.gen(function* () {
 			const port = system1(byField({}, { sort: 'Scheduled on, latest first' }));
 			expect(
 				yield* describer(port).describe({
-					collection: 'jobs',
+					model: 'jobs',
 					text: 'latest first',
 					authority: caller(),
 					bindings
@@ -865,7 +866,7 @@ describe('described selection must fit the exposed grammar', () => {
 			);
 			expect(
 				yield* describer(port).describe({
-					collection: '$local',
+					model: '$local',
 					text: 'sort versions newest first',
 					localFields: fields,
 					authority: caller({}),
@@ -882,7 +883,7 @@ describe('described selection must fit the exposed grammar', () => {
 					byField({ 'Is current': { op: 'is', value: 'yes' } }, { 'selection.unsupported': false })
 				);
 				const r = yield* describer(port).describe({
-					collection: '$local',
+					model: '$local',
 					text: 'latest versions only: current is true',
 					localFields: [{ name: 'is_current', label: 'Is current', kind: 'bool' }],
 					authority: caller({}),

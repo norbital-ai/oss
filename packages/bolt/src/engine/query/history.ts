@@ -8,7 +8,7 @@ import type { EngineManifest } from '../manifest.ts';
 import type { TenantDbShape as TenantDb } from '../db/tenant-db.ts';
 import { catalogOf } from '../access/pred.ts';
 import { readScope } from '../access/authority.ts';
-import { collectionOf, exposedField, q } from '@norbital-ai/store';
+import { exposureOf, exposedField, q } from '@norbital-ai/store';
 import { grantSql } from '@norbital-ai/store';
 import { resolverOf } from './reader.ts';
 import { fromStore } from '../../protocol/errors.ts';
@@ -29,11 +29,11 @@ export const readHistory = Effect.fn('Bolt.readHistory')(function* (
 	bindings: Bindings
 ) {
 	const cat = catalogOf(m),
-		c = yield* collectionOf(cat, read.collection).pipe(Effect.mapError(fromStore)),
+		c = yield* exposureOf(cat, read.model).pipe(Effect.mapError(fromStore)),
 		id = read.id;
 	if (!UUID.test(id)) return read.full === true ? null : [];
 	const at = read.at;
-	const params: Json[] = [read.collection, id];
+	const params: Json[] = [read.model, id];
 	const cut =
 		at === undefined
 			? ''
@@ -61,22 +61,22 @@ export const readHistory = Effect.fn('Bolt.readHistory')(function* (
 	];
 	const auth = reader.as === 'caller' && !reader.authority.admin ? reader.authority : null;
 	const self: Pred = { t: 'cmp', field: 'id', op: 'eq', arg: { _tag: 'Lit', value: id } };
-	const masks = Object.entries(auth?.collections[read.collection]?.masks ?? {});
-	const scope = auth === null ? undefined : readScope(auth, read.collection, 'history');
+	const masks = Object.entries(auth?.models[read.model]?.masks[read.model] ?? {});
+	const scope = auth === null ? undefined : readScope(auth, read.model, 'history');
 	if (auth !== null) {
 		// grant predicates, so compiled raw; an `{ actor }` operand in them resolves against the caller
 		statements.push(
 			{ text: `SELECT 1 FROM ${q(c.model.name)} WHERE id = $1::uuid`, params: [id] },
 			yield* grantSql(
 				cat,
-				read.collection,
+				read.model,
 				{ t: 'and', of: [scope ?? { t: 'const', value: false }, self] },
 				{ resolve: resolverOf(bindings, auth), tz: bindings.tz }
 			).pipe(Effect.mapError(fromStore)),
 			...(yield* Effect.forEach(masks, ([, p]) =>
 				grantSql(
 					cat,
-					read.collection,
+					read.model,
 					{ t: 'and', of: [p, self] },
 					{
 						resolve: resolverOf(bindings, auth),
@@ -93,7 +93,9 @@ export const readHistory = Effect.fn('Bolt.readHistory')(function* (
 		// a live row needs the history scope; a deleted one, an unconditional read grant (rule 17)
 		const visible = exists
 			? res[2]!.rows.length > 0
-			: (auth.collections[read.collection]?.read ?? []).some((a) => isTrue(a.where));
+			: (auth.models[read.model]?.read[read.model] ?? []).some((a) =>
+					isTrue(a.where)
+				);
 		if (!visible) return read.full === true ? null : [];
 		hidden = new Set(
 			masks.filter((_, i) => !exists || res[3 + i]!.rows.length === 0).map(([f]) => f)

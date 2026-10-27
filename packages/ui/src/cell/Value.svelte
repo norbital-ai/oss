@@ -11,7 +11,7 @@
 	import { fill, humanize } from '../text/messages.js';
 	import type { Kind } from '../kinds/kind.js';
 	import * as Popover from '../primitives/popover/index.js';
-	import type { Values } from '../collection/types.js';
+	import type { Values } from '../model/types.js';
 	import { openRecord } from '../record/navigation.js';
 	import { useOptionalBolt } from '../client/context.js';
 	import Glyph from '../primitives/icon/Glyph.svelte';

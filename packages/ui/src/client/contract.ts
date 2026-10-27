@@ -2,7 +2,7 @@
 import type { Effect, Stream } from 'effect';
 import type { Json } from '@norbital-ai/std/wire';
 import type { Value, FileRef, FileUrlOptions } from '@norbital-ai/std/kind';
-import type { Page, Values } from '../collection/types.js';
+import type { Page, Values } from '../model/types.js';
 import type { RecordCapabilities, RecordParentContext, RestorePreview } from '../record/types.js';
 import type { Offer } from '../filter/filter.js';
 export type { Json } from '@norbital-ai/std/wire';
@@ -36,17 +36,17 @@ export type Outcome =
 	| {
 			kind: 'committed';
 			output: Value;
-			records: readonly { collection: string; id: string; revision: number }[];
+			records: readonly { model: string; id: string; revision: number }[];
 	  }
 	| {
 			kind: 'pendingApproval';
 			requestId: string;
-			records: readonly { collection: string; id: string; revision: number }[];
+			records: readonly { model: string; id: string; revision: number }[];
 	  }
 	| { kind: 'refused'; code: string; message: string; field?: string; row?: number }
 	| {
 			kind: 'conflict';
-			records: readonly { collection: string; id: string; fields: readonly string[] }[];
+			records: readonly { model: string; id: string; fields: readonly string[] }[];
 	  }
 	| { kind: 'unknown'; invocation: string }
 	/** Past the person-wait the write continues in the background as run `run`; its row reports the outcome (`runs`). */
@@ -64,7 +64,7 @@ export type ActFailure = Error &
 		  }
 		| {
 				readonly _tag: 'ActConflict';
-				readonly records: readonly { collection: string; id: string; fields: readonly string[] }[];
+				readonly records: readonly { model: string; id: string; fields: readonly string[] }[];
 				readonly message: string;
 		  }
 		| { readonly _tag: 'ActUnknown'; readonly invocation: string; readonly message: string }
@@ -104,7 +104,7 @@ type ApprovalWho = { ref: string; name: string | null };
 /** One approval request as its participants and authorized record readers see it; the host decides every move. */
 export type ApprovalView = {
 	id: string;
-	collection: string;
+	model: string;
 	record: string;
 	action: string;
 	at: string;
@@ -130,13 +130,13 @@ export type ApprovalView = {
 		/** A resubmission's changed fields. */
 		changed?: readonly string[] | undefined;
 		rolledBack?:
-			| readonly { collection: string; id: string; action: 'restored' | 'removed' | 'recreated' }[]
+			| readonly { model: string; id: string; action: 'restored' | 'removed' | 'recreated' }[]
 			| undefined;
 		skipped?:
-			readonly { collection: string; id: string; field: string; reason: string }[] | undefined;
+			readonly { model: string; id: string; field: string; reason: string }[] | undefined;
 	}[];
 	/** The records the provisional change holds: committed already, rolled back on rejection. */
-	records: readonly { collection: string; id: string; op: 'create' | 'update' | 'delete' }[];
+	records: readonly { model: string; id: string; op: 'create' | 'update' | 'delete' }[];
 	/** The decisions this viewer may take now, straight from the host's transition table. */
 	moves: readonly { decision: ApprovalDecision; reason: 'required' | 'optional' }[];
 	mine: boolean;
@@ -153,15 +153,16 @@ export type RowApproval = {
 /**
  * The client a view reads and acts through (the page's `$bolt`, as bolt's `PageBolt`), as `provideBolt` hands it to the
  * views. Reads are `query`, `aggregate` and `history`, each a `Query<T>` of the answer the caller types (a view types
- * `Page<RowOf<C>>` by the collection it names).
+ * `Page<RowOf<C>>` by the model it names).
  */
 export type ViewBolt = {
 	/**
-	 * A model's rows (`{ where?, select?, orderBy?, search?, limit | all, after? }`), one record (`{ id, select? }`, or
-	 * `{ id, revision }` as of that revision), the nearest rows of a search index (`{ search: { <index>: input }, where?,
-	 * select?, limit }`), or a declared query (`'<model>.<query>'` and its input).
+	 * One read request (`query({ <root>: { where?, fields?, orderBy?, limit?, after?, search? }, '<root>.<layer>': { … } })`),
+	 * answered as a page per root; a declared layer nests under its relation in each row.
 	 */
-	query<T = Page>(target: string, args: Value): Query<T>;
+	query<T = { readonly [root: string]: Page }>(request: {
+		readonly [path: string]: Json;
+	}): Query<T>;
 	/** Without `by`, one row over the scope; with `by`, a page of buckets. */
 	aggregate<T = readonly Values[]>(model: string, args: Value): Query<T>;
 	/** A record's revisions, newest first, or from `at` (`{ instant } | { revision } | { before }`). */
@@ -169,7 +170,7 @@ export type ViewBolt = {
 	/** With a unit, reactive (it changes at each minute, hour or day in the workspace zone); without, the page's open. */
 	clock(unit?: 'minute' | 'hour' | 'day'): Clock;
 	recordCapabilities?(
-		collection: string,
+		model: string,
 		id: string,
 		parent?: RecordParentContext
 	): Effect.Effect<RecordCapabilities | null, Error>;
@@ -184,12 +185,12 @@ export type ViewBolt = {
 	 */
 	restore?: {
 		preview(
-			collection: string,
+			model: string,
 			record: string,
 			revision: number
 		): Effect.Effect<RestorePreview, Error>;
 		run(
-			collection: string,
+			model: string,
 			record: string,
 			revision: number,
 			live: number
@@ -201,13 +202,13 @@ export type ViewBolt = {
 	fileUrl(ref: Pick<FileRef, 'id'>, options?: FileUrlOptions): string;
 	/** §3.5 rule 11a in the browser: each top-level condition and sort key kept or dropped alone. Absent → the view's own check. */
 	decode?(
-		collection: string,
+		model: string,
 		q: { where?: Json; orderBy?: Json }
 	): { where: Json; orderBy?: Json; dropped: readonly { path: string; message: string }[] };
 	/** Rule 16a `filter.describe`: present only when the host binds `decisions` or `ai` (P19); rejects when no filter could be built. */
 	describe?:
 		| ((
-				collection: string,
+				model: string,
 				text: string,
 				fields?: readonly {
 					name: string;
@@ -219,7 +220,7 @@ export type ViewBolt = {
 		| undefined;
 	/** Rule 16b `filter.options`: the same condition catalogue a description is offered, so the builder renders exactly what it may author. */
 	options?(
-		collection: string,
+		model: string,
 		fields?: readonly {
 			name: string;
 			label: string;
@@ -235,9 +236,9 @@ export type ViewBolt = {
 		): Effect.Effect<ActSuccess, ActFailure>;
 		/** The approval view: the request, its steps and timeline, and what the viewer may do; `null` when not visible. */
 		get(requestId: string): Effect.Effect<ApprovalView | null, Error>;
-		/** The approval views the caller may see, open ones unless `all`, by `collection`, `records` or request `ids`. */
+		/** The approval views the caller may see, open ones unless `all`, by `model`, `records` or request `ids`. */
 		list(filter?: {
-			collection?: string;
+			model?: string;
 			records?: readonly string[];
 			ids?: readonly string[];
 			all?: boolean;

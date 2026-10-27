@@ -98,7 +98,7 @@ export const auditShape = (
 		if (port === undefined || port.mode === 'disabled') return disabled;
 		const service: AuditShape = {
 			mode: port.mode,
-			uuid: crypto.randomUUIDv4.pipe(
+			uuid: crypto.randomUUIDv4().pipe(
 				Effect.mapError((error) =>
 					BoltError.make(
 						'unavailable',

@@ -5,7 +5,7 @@ import './dom.ts';
 import assert from 'node:assert/strict';
 import { it, afterEach } from '@effect/vitest';
 import { vi } from 'vitest';
-import { viewFixture, browser } from './view-fixture.ts';
+import { viewFixture, browser, type ReadOptions } from './view-fixture.ts';
 import type { TableProps, TableSource } from '../src/table/Table.svelte';
 import type { Value } from '@norbital-ai/std/kind';
 import type { KindsHost } from '../src/kinds/context.ts';
@@ -202,73 +202,49 @@ for (const [label, rows] of [
 		})
 	);
 
-for (const [label, input, expected] of [
-	['unpaged named query', { warehouse: { kind: 'text' } }, { warehouse: 'main' }],
-	[
-		'paged named query',
-		{
-			warehouse: { kind: 'text' },
-			limit: { kind: 'int', optional: true },
-			after: { kind: 'text', optional: true }
-		},
-		{ warehouse: 'main', limit: 25 }
-	]
-] as const)
-	it.live(`${label} receives only pagination inputs it declares`, () =>
-		Effect.gen(function* () {
-			const calls: Value[] = [];
-			const { bolt } = yield* browser(() =>
-				viewFixture({
-					query: (name, args) => {
-						calls.push({ name, args });
-						return [{ name: 'Resin A' }];
-					}
-				})
-			);
-			const target = document.body.appendChild(document.createElement('div'));
-			const app = mount(Harness, {
-				target,
-				props: {
-					bolt,
-					catalog: {
-						stock: {
-							label: ['name'],
-							fields: { name: { kind: 'text' } },
-							queries: {
-								availability: {
-									input,
-									description: 'Stock availability',
-									output: {
-										kind: 'list',
-										of: { kind: 'object', fields: { name: { kind: 'text' } } }
-									}
-								}
-							}
-						}
-					},
-					part: 'table',
-					props: {
-						of: { query: 'stock.availability', input: { warehouse: 'main' } },
-						columns: ['name'],
-						toolbar: { new: false }
-					}
+it.live('a read request source shows its root and reads exactly the request it was given', () =>
+	Effect.gen(function* () {
+		const calls: { model: string; options: ReadOptions }[] = [];
+		const { bolt } = yield* browser(() =>
+			viewFixture({
+				read: (model, options) => {
+					calls.push({ model, options });
+					return { rows: [{ id: 's1', name: 'Resin A' }], next: null };
 				}
-			});
-			mounted.push(async () => {
-				await unmount(app);
-				target.remove();
-			});
-			yield* browser(() =>
-				vi.waitFor(async () => {
-					flushSync();
-					await tick();
-					assert.equal(textOf(target).includes('Resin A'), true);
-				})
-			);
-			assert.deepEqual(calls, [{ name: 'stock.availability', args: expected }]);
-			assert.equal(textOf(target).includes('Resin A'), true);
-		})
-	);
+			})
+		);
+		const target = document.body.appendChild(document.createElement('div'));
+		const app = mount(Harness, {
+			target,
+			props: {
+				bolt,
+				catalog: { stock: { label: ['name'], fields: { name: { kind: 'text' } } } },
+				part: 'table',
+				props: {
+					of: bolt.query({ stock: { where: { warehouse: { eq: 'main' } } } }),
+					columns: ['name'],
+					toolbar: { new: false }
+				}
+			}
+		});
+		mounted.push(async () => {
+			await unmount(app);
+			target.remove();
+		});
+		yield* browser(() =>
+			vi.waitFor(async () => {
+				flushSync();
+				await tick();
+				assert.equal(textOf(target).includes('Resin A'), true);
+			})
+		);
+		// no page options are added to an authored read
+		assert.deepEqual(required(calls[0]), {
+			model: 'stock',
+			options: { where: { warehouse: { eq: 'main' } } }
+		});
+	})
+);
 
 it.live('phone cards reveal extra report values without opening the row', () =>
 	Effect.gen(function* () {

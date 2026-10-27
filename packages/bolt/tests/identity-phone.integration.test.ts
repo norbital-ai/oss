@@ -36,12 +36,12 @@ const m: EngineManifest = {
 		signup: {
 			via: ['phone'],
 			policies: ['customer'],
-			party: { collection: 'customers', match: { phone: 'phone' } }
+			party: { model: 'customers', match: { phone: 'phone' } }
 		}
 	},
 	models: {},
 	relationships: {},
-	collections: {},
+	exposures: {},
 	integrations: {},
 	policies: { customer: { description: '', grants: {} }, staff: { description: '', grants: {} } },
 	teams: { Staff: ['staff'] },
@@ -64,7 +64,7 @@ const ip = '5.5.5.5';
 const fixture = Effect.gen(function* () {
 	const db = yield* TenantDb;
 	yield* applyPlan(db, yield* plan(null, m), { accept: true });
-	// The record a newcomer is: a customer on file by number, as a template's customers collection would be.
+	// The record a newcomer is: a customer on file by number, as a template's customers model would be.
 	yield* db.write({ text: 'CREATE TABLE customers (id text PRIMARY KEY, phone text)', params: [] });
 	yield* db.write({
 		text: `INSERT INTO customers VALUES ('c-ada', '+65 8123 4567'), ('c-twin1', '+6590000000'), ('c-twin2', '+65 9000 0000')`,
@@ -164,7 +164,7 @@ layer(PhoneFixtureLive)((it) => {
 							phone: '+6581234567',
 							email: null,
 							kind: 'external',
-							party: { collection: 'customers', id: 'c-ada' },
+							party: { model: 'customers', id: 'c-ada' },
 							admin: false
 						}
 					]);
@@ -205,7 +205,7 @@ layer(PhoneFixtureLive)((it) => {
 					yield* sendCode(h, '+6591112222', ip);
 					expect(yield* verifyCode(h, '+6591112222', lastCode(), ip)).toMatchObject({ user: bob });
 					expect(yield* one('SELECT party FROM sys_user WHERE id = $1', bob)).toEqual([
-						{ party: { collection: 'customers', id: 'c-bob' } }
+						{ party: { model: 'customers', id: 'c-bob' } }
 					]);
 					yield* sendCode(h, '+6590000000', ip);
 					const twin = yield* verifyCode(h, '+6590000000', lastCode(), ip);
@@ -230,10 +230,10 @@ layer(PhoneFixtureLive)((it) => {
 						params: []
 					}); // the booking files them
 					expect((yield* declared.member(db, cid))?.actor).toMatchObject({
-						party: { collection: 'customers', id: 'c-cy' }
+						party: { model: 'customers', id: 'c-cy' }
 					});
 					expect(yield* one('SELECT party FROM sys_user WHERE id = $1', cid)).toEqual([
-						{ party: { collection: 'customers', id: 'c-cy' } }
+						{ party: { model: 'customers', id: 'c-cy' } }
 					]);
 				})
 		);

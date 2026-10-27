@@ -1,6 +1,6 @@
 import { createHmac } from 'node:crypto';
 import { Clock, Effect, Option, Schema } from 'effect';
-import { HttpClient, HttpClientRequest } from 'effect/unstable/http';
+import { HttpClient, HttpClientRequest } from 'effect/http';
 import type {
 	DeliveryReport,
 	DriverOpen,

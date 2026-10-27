@@ -1,23 +1,33 @@
-// Bolt's reads beside the store's (`@norbital-ai/store`: read, get, aggregate, similar): history, a collection query,
-// the transform's `after`, and the shell's agent and inbox reads; a declared (dynamic) read and a revision `get`; and
-// the one decoder of a read call off the wire (D15).
+// Bolt's reads beside the store's (`@norbital-ai/store`: read, get, aggregate, similar): history, a read request (one
+// layer map over several roots), the transform's `after`, and the shell's agent and inbox reads; a declared (dynamic)
+// read and a revision `get`; and the one decoder of a read call off the wire (D15).
 import { Predicate, Result, Schema } from 'effect';
 import {
 	aggregate,
-	collectionOf,
-	exposedField,
+	exposureOf,
 	get as storeGet,
 	read as storeRead,
 	semantic,
 	similar,
+	order,
+	page,
 	where,
 	type Catalog,
 	type ListRead,
 	type Pred,
-	type ReadIR as StoreReadIR
+	type ReadIR as StoreReadIR,
+	type RelSelectIR,
+	type SelectIR
 } from '@norbital-ai/store';
 import { BoltError, storeSync } from './errors.ts';
 import type { Json } from '../decl/values.ts';
+import type { ExposureSpec } from '../decl/model.ts';
+import {
+	decodeReadRequest,
+	planReadRequest,
+	READ_LIMIT,
+	type LayerRequestJson
+} from './read-request.ts';
 
 type Obj = { readonly [k: string]: unknown };
 const invalid = (message: string) => BoltError.make('invalid', 'decode', message);
@@ -32,29 +42,24 @@ export type ReadIR =
 	| StoreReadIR
 	| {
 			readonly kind: 'history';
-			readonly collection: string;
+			readonly model: string;
 			readonly id: string;
 			readonly at?: HistoryAt | undefined;
 			readonly full?: true | undefined;
 	  }
-	/** A collection query: a guest invocation reading as its caller. */
-	| {
-			readonly kind: 'query';
-			readonly collection: string;
-			readonly query: string;
-			readonly input: Json;
-	  }
+	/** A read request: each root's read, answered together in one crossing, the answer keyed by root. */
+	| { readonly kind: 'request'; readonly roots: readonly RequestRoot[] }
 	/** The transform's `db.after`: stored rows overlaid with this batch. */
 	| {
 			readonly kind: 'after';
-			readonly collection: string;
+			readonly model: string;
 			readonly where: Pred;
 			readonly query?: ListRead | undefined;
 	  }
 	/** The agent panel's messages of one conversation in `seq` order. */
 	| {
 			readonly kind: 'transcript';
-			readonly collection: 'sys_message';
+			readonly model: 'sys_message';
 			readonly conversation: string;
 			readonly thread: boolean;
 			/** An automation run's inference transcript: read-only. */
@@ -64,84 +69,253 @@ export type ReadIR =
 	/** The shell inbox: own notices, with an optional caller-filtered open request list. */
 	| {
 			readonly kind: 'inbox';
-			readonly collection: 'sys_notification';
+			readonly model: 'sys_notification';
 			readonly member: string;
 			readonly requests?: true | undefined;
 	  }
 	/** The agent panel's conversation list: one member's own conversations, most recently active first. */
 	| {
 			readonly kind: 'conversations';
-			readonly collection: 'sys_conversation';
+			readonly model: 'sys_conversation';
 			readonly member: string;
 	  };
 
-const DeclaredQuery = Schema.Struct({
-	mode: Schema.Literal('declared'),
-	where: Schema.optionalKey(Schema.UndefinedOr(Schema.Json)),
-	select: Schema.optionalKey(Schema.UndefinedOr(Schema.Array(Schema.String))),
-	all: Schema.Literal(true)
-});
-/** One checked dynamic shape for native guest reads, /q, and the test kit's native answer decoder. */
-export function declaredQuery(
-	cat: Catalog,
-	collection: string,
-	input: unknown,
-	readAs: 'caller' | 'workspace'
-): Obj {
-	const decoded = Schema.decodeUnknownResult(DeclaredQuery, { onExcessProperty: 'error' })(input);
-	if (Result.isFailure(decoded)) throw invalid(decoded.failure.message);
-	const query = decoded.success;
-	const info = storeSync(collectionOf(cat, collection));
-	if (collection === 'sys_run') throw invalid(`'${collection}' is not readable`);
-	for (const name of query.select ?? []) {
-		const field = info.model.fields.get(name);
-		// The catalog lowers a native sequence to derived int/text; other derived fields are roll-ups.
-		const selectable =
-			readAs === 'caller'
-				? exposedField(info, name)
-				: field !== undefined &&
-					!field.computed &&
-					(!field.derived || field.kind === 'int' || field.kind === 'text');
-		if (field === undefined || name.includes('.') || !selectable)
-			throw invalid(`cannot select '${name}' of '${collection}'`);
-	}
-	return {
-		...(query.where === undefined ? {} : { where: query.where }),
-		...(query.select === undefined
-			? {}
-			: {
-					select: Object.fromEntries(
-						['id', ...query.select].map((name): readonly [string, true] => [name, true])
-					)
-				}),
-		all: true
-	};
-}
+/**
+ * One root of a read request: its read (a page, an aggregate or a search), or with `asOf` the history fold of each
+ * record its `where` pins, as a page of the `fields` asked for.
+ */
+export type RequestRoot =
+	| { readonly root: string; readonly read: ReadIR }
+	| {
+			readonly root: string;
+			readonly asOf: readonly Extract<ReadIR, { kind: 'history' }>[];
+			readonly fields?: readonly string[] | undefined;
+	  };
 
-/** `read(collection, { where?, select?, orderBy?, search? } & Paged)`, or a declared read's checked shape. */
-export function read(
-	cat: Catalog,
-	collection: string,
-	q: Obj,
-	readAs: 'caller' | 'workspace' = 'caller'
-): ReadIR {
-	return storeSync(
-		storeRead(
-			cat,
-			collection,
-			q.mode === 'declared' ? declaredQuery(cat, collection, q, readAs) : q
-		)
+/** Each root's declared paths as `planReadRequest` checks them, from the catalog (the built-in layer's included). */
+const declared = new WeakMap<Catalog, { readonly [root: string]: ExposureSpec }>();
+const declarationsOf = (cat: Catalog) => {
+	let out = declared.get(cat);
+	if (out === undefined) {
+		const paths: { [root: string]: { [path: string]: { fields: 'all' } } } = {};
+		for (const root of cat.exposures.keys()) paths[root] = { [root]: { fields: 'all' } };
+		for (const path of cat.layers.keys()) {
+			const at = paths[path.split('.', 1)[0]!];
+			if (at !== undefined) at[path] = { fields: 'all' };
+		}
+		out = Object.fromEntries(Object.entries(paths).map(([root, read]) => [root, { read }]));
+		declared.set(cat, out);
+	}
+	return out;
+};
+/** The ids a root `where` pins (`{ id: { eq } }` or `{ id: { in } }`): what an `asOf` read folds. */
+function pinned(w: Json | undefined): readonly string[] | undefined {
+	if (!Predicate.isObject(w) || Object.keys(w).length !== 1 || !Predicate.isObject(w['id']))
+		return undefined;
+	const { eq, in: list } = w['id'];
+	if (typeof eq === 'string') return [eq];
+	return Array.isArray(list) && list.every((x) => typeof x === 'string') ? list : undefined;
+}
+type RequestJson = { readonly [path: string]: LayerRequestJson };
+/**
+ * A read request scoped in three tiers, per path: the policy's (or author's) scope, a prefilter, then the caller's.
+ * `where`s AND, `fields` intersect, `limit` is the smallest; any other option the later tier states wins, so no tier
+ * widens one before it. ui's author scope composes the same way (`@norbital-ai/ui` `compose`).
+ */
+export function compose(
+	policy: RequestJson,
+	prefilter: RequestJson,
+	user: RequestJson
+): RequestJson {
+	const paths = new Set([...Object.keys(policy), ...Object.keys(prefilter), ...Object.keys(user)]);
+	return Object.fromEntries(
+		[...paths].map((path): [string, LayerRequestJson] => {
+			const tiers = [policy[path], prefilter[path], user[path]].flatMap((t) =>
+				t === undefined ? [] : [t]
+			);
+			const wheres = tiers.flatMap((t) => (t.where === undefined ? [] : [t.where]));
+			const fields = tiers.flatMap((t) => (t.fields === undefined ? [] : [t.fields]));
+			const limits = tiers.flatMap((t) => (t.limit === undefined ? [] : [t.limit]));
+			const merged = tiers.reduce((a: LayerRequestJson, t) => ({ ...a, ...t }), {});
+			const { where: _w, fields: _f, limit: _l, ...rest } = merged;
+			return [
+				path,
+				{
+					...rest,
+					...(wheres.length === 0
+						? {}
+						: { where: wheres.length === 1 ? wheres[0]! : { and: wheres } }),
+					...(fields.length === 0
+						? {}
+						: { fields: fields.reduce((a, b) => a.filter((f) => b.includes(f))) }),
+					...(limits.length === 0 ? {} : { limit: Math.min(...limits) })
+				}
+			];
+		})
 	);
 }
-/** `get(collection, id, { select?, revision? })`; L-BOLT-181: a revision get is the history fold, not a table read. */
-export function get(cat: Catalog, collection: string, id: string, q: Obj = {}): ReadIR {
-	if (q.revision === undefined) return storeSync(storeGet(cat, collection, id, q));
-	storeSync(collectionOf(cat, collection));
+/**
+ * A read request (`query({ ... })`) as one IR: decoded exactly, its paths checked against the declarations, each root
+ * lowered with its named layers nested (a ref layer replaces its FK with the row or `null`, a many-layer lists or
+ * measures its rows per parent row). Every list defaults to `READ_LIMIT`; authority is the reader's scope, per path.
+ */
+export function request(cat: Catalog, json: Json | undefined): ReadIR {
+	const decoded = decodeReadRequest(json);
+	if (Result.isFailure(decoded)) throw invalid(decoded.failure);
+	const plan = planReadRequest(decoded.success, declarationsOf(cat));
+	if (Result.isFailure(plan)) throw invalid(plan.failure);
+	const roots = Object.entries(plan.success).map(([root, layers]): RequestRoot => {
+		const top = layers[root]!;
+		const below = Object.keys(layers).filter((path) => path !== root);
+		const only = (what: string) => {
+			if (below.length > 0)
+				throw invalid(`'${root}': ${what} names no layers (${below.join(', ')})`);
+		};
+		const sub = (path: string, model: string): SelectIR => {
+			const fields = layers[path]?.fields;
+			const info = cat.models.get(model);
+			const relations: { [rel: string]: RelSelectIR } = {};
+			for (const child of below.filter((p) => p.slice(0, p.lastIndexOf('.')) === path)) {
+				const rel = child.slice(child.lastIndexOf('.') + 1),
+					layer = layers[child]!;
+				const one = info?.one.get(rel),
+					many = info?.many.get(rel);
+				const target = one?.targets[0] ?? many?.child;
+				if (target === undefined) throw invalid(`'${child}' is no relation of ${model}`);
+				const filter = layerWhere(target, layer);
+				if (one !== undefined) {
+					if (layer.aggregate !== undefined)
+						throw invalid(`'${child}' is a ref layer: it takes no aggregate`);
+					relations[rel] = {
+						target,
+						many: false,
+						select: sub(child, target),
+						...(filter === undefined ? {} : { where: filter })
+					};
+					continue;
+				}
+				const limit = layer.limit ?? READ_LIMIT;
+				const measured =
+					layer.aggregate === undefined
+						? undefined
+						: storeSync(
+								aggregate(cat, target, {
+									...layer.aggregate,
+									...(layer.aggregate.by === undefined ? {} : { limit })
+								})
+							);
+				relations[rel] = {
+					target,
+					many: true,
+					select: sub(child, target),
+					page: storeSync(page({ limit })),
+					...(filter === undefined ? {} : { where: filter }),
+					...(layer.orderBy === undefined
+						? {}
+						: { order: storeSync(order(layer.orderBy, cat, target)) }),
+					...(measured?.kind === 'aggregate'
+						? {
+								aggregate: {
+									by: measured.by,
+									...(measured.count === undefined ? {} : { count: measured.count }),
+									...(measured.sum === undefined ? {} : { sum: measured.sum }),
+									...(measured.avg === undefined ? {} : { avg: measured.avg }),
+									...(measured.min === undefined ? {} : { min: measured.min }),
+									...(measured.max === undefined ? {} : { max: measured.max })
+								}
+							}
+						: {})
+				};
+			}
+			// `{}` reads every field the layer exposes (decision 8)
+			return fields === undefined
+				? { fields: null, whole: true, relations }
+				: { fields: ['id', ...fields], relations };
+		};
+		const layerWhere = (model: string, layer: LayerRequestJson): Pred | undefined => {
+			const w = layer.where === undefined ? undefined : storeSync(where(cat, model, layer.where));
+			const text: Pred | undefined =
+				typeof layer.search === 'string' && layer.search !== ''
+					? { t: 'search', text: layer.search }
+					: undefined;
+			return w === undefined ? text : text === undefined ? w : { t: 'and', of: [w, text] };
+		};
+		if (top.asOf !== undefined) {
+			only('an asOf read');
+			const ids = pinned(top.where);
+			if (ids === undefined)
+				throw invalid(
+					`'${root}': asOf folds the records its where pins: { id: { eq } } or { id: { in } }`
+				);
+			// ponytail: an asOf read folds pinned ids, root fields only; fold a whole page when a view needs it
+			return {
+				root,
+				asOf: ids.map((id) => ({
+					kind: 'history',
+					model: root,
+					id,
+					at: { _tag: 'Instant', instant: top.asOf! },
+					full: true
+				})),
+				...(top.fields === undefined ? {} : { fields: top.fields })
+			};
+		}
+		if (top.aggregate !== undefined) {
+			only('an aggregate root');
+			const { by } = top.aggregate;
+			return {
+				root,
+				read: storeSync(
+					aggregate(cat, root, {
+						...top.aggregate,
+						...(top.where === undefined ? {} : { where: top.where }),
+						...(by === undefined ? {} : { limit: top.limit ?? READ_LIMIT }),
+						...(by === undefined || top.after === undefined ? {} : { after: top.after })
+					})
+				)
+			};
+		}
+		const select = sub(root, root);
+		const limit = top.limit ?? READ_LIMIT;
+		if (Predicate.isObject(top.search)) {
+			const entries = Object.entries(top.search);
+			const [index, input] = entries[0] ?? [];
+			if (entries.length !== 1 || index === undefined || input === undefined)
+				throw invalid(`'${root}': search names one index: { <index>: input }`);
+			const options = { ...(top.where === undefined ? {} : { where: top.where }), limit };
+			const ir =
+				index === 'semantic'
+					? storeSync(semantic(cat, root, { ...options, to: input }))
+					: storeSync(similar(cat, root, index, input, options));
+			return { root, read: { ...ir, select } };
+		}
+		const listed: ListRead = {
+			kind: 'read',
+			model: root,
+			select,
+			page: storeSync(page({ limit, ...(top.after === undefined ? {} : { after: top.after }) })),
+			...(top.where === undefined ? {} : { where: storeSync(where(cat, root, top.where)) }),
+			...(top.orderBy === undefined ? {} : { order: storeSync(order(top.orderBy, cat, root)) }),
+			...(typeof top.search === 'string' && top.search !== '' ? { search: top.search } : {})
+		};
+		return { root, read: listed };
+	});
+	return { kind: 'request', roots };
+}
+
+/** `read(model, { where?, select?, orderBy?, search? } & Paged)`: the engine's own page read (never off the wire). */
+export function read(cat: Catalog, model: string, q: Obj): ReadIR {
+	return storeSync(storeRead(cat, model, q));
+}
+/** `get(model, id, { select?, revision? })`; L-BOLT-181: a revision get is the history fold, not a table read. */
+export function get(cat: Catalog, model: string, id: string, q: Obj = {}): ReadIR {
+	if (q.revision === undefined) return storeSync(storeGet(cat, model, id, q));
+	storeSync(exposureOf(cat, model));
 	// ponytail: `select` does not narrow a revision get
 	if (!Number.isInteger(q.revision)) throw invalid('revision is an integer');
 	return {
 		kind: 'history',
-		collection,
+		model,
 		id,
 		at: { _tag: 'Revision', revision: q.revision as number },
 		full: true
@@ -176,47 +350,41 @@ export function decodeRead(
 	args: readonly Json[]
 ): Result.Result<ReadIR, DecodeError> {
 	return decode(() => {
-		const collection = String(args[0]),
+		const model = String(args[0]),
 			[, a, b, d] = args;
 		const object = (value: Json | undefined): Obj => (Predicate.isObject(value) ? value : {});
 		switch (member.replace(/^db\./, '')) {
 			case 'read':
-				if (
-					Predicate.isObject(a) &&
-					a.mode === 'declared' &&
-					(args.length !== 2 || typeof args[0] !== 'string')
-				)
-					throw invalid('a declared read takes a collection name and one query');
-				return read(cat, collection, object(a), member.startsWith('db.') ? 'workspace' : 'caller');
+				return read(cat, model, object(a));
 			case 'get':
-				return get(cat, collection, String(a), object(b));
+				return get(cat, model, String(a), object(b));
 			case 'aggregate':
-				return storeSync(aggregate(cat, collection, object(a)));
+				return storeSync(aggregate(cat, model, object(a)));
 			case 'similar':
 				return storeSync(
 					a !== null && typeof a === 'object'
-						? semantic(cat, collection, object(a))
-						: similar(cat, collection, String(a), b ?? null, object(d))
+						? semantic(cat, model, object(a))
+						: similar(cat, model, String(a), b ?? null, object(d))
 				);
 			case 'after': {
 				const query =
-					b === undefined ? undefined : read(cat, collection, { ...object(b), where: a });
+					b === undefined ? undefined : read(cat, model, { ...object(b), where: a });
 				return {
 					kind: 'after',
-					collection,
-					where: storeSync(where(cat, collection, a)),
+					model,
+					where: storeSync(where(cat, model, a)),
 					...(query?.kind === 'read' ? { query } : {})
 				};
 			}
 			case 'history':
 				return {
 					kind: 'history',
-					collection,
+					model,
 					id: String(a),
 					...(b == null ? {} : { at: historyAt(b) })
 				};
-			case 'query':
-				return { kind: 'query', collection, query: String(a), input: b ?? null };
+			case 'request':
+				return request(cat, args[0]);
 			default:
 				throw invalid(`'${member}' is not a read`);
 		}

@@ -1,15 +1,15 @@
 <script lang="ts" module>
 	import type { Json, Value } from './kind.js';
-	import type { CollectionKey, FieldOf, IdOf, OrderByOf, WhereOf } from '../collection/types.js';
+	import type { ModelKey, FieldOf, IdOf, OrderByOf, WhereOf } from '../model/types.js';
 	import type { ReadError } from '../client/contract.js';
 
 	/**
-	 * Edits a relation or an `id` input (§3.6): searches the target collection through the caller's own read grant, so
+	 * Edits a relation or an `id` input (§3.6): searches the target model through the caller's own read grant, so
 	 * it lists only rows (and fields) the viewer may read. `label` defaults to the target model's `label`; a target
 	 * without `search` is searched over its label's text and patterned `seq` fields. Each keystroke is a server search,
 	 * so `limit` is the page shown, never the rows searched; rows sort by `orderBy`, else by the label.
 	 */
-	export type PickerProps<C = CollectionKey> = {
+	export type PickerProps<C = ModelKey> = {
 		of: C;
 		/** The chosen id; any text is shown as not found, never trusted. */
 		value: string | null;
@@ -26,7 +26,7 @@
 	};
 </script>
 
-<script lang="ts" generics="const C extends CollectionKey">
+<script lang="ts" generics="const C extends ModelKey">
 	import Combobox from '../primitives/combobox/combobox.svelte';
 	import CopyText from '../primitives/copy-text/copy-text.svelte';
 	import Input from '../primitives/input/input.svelte';
@@ -37,6 +37,7 @@
 	import { observeOnce as queryState } from '../effect/index.js';
 	import { idsOf } from '../form/form-state.svelte.js';
 	import { currencyOf, format, pickerRead } from './kind.js';
+	import { byId } from '../read/request.js';
 
 	let {
 		of,
@@ -69,7 +70,6 @@
 						currency: kind.kind === 'money' ? currencyOf(kind, row, host.currency) : undefined
 					});
 		}) ?? t('none');
-	const select = $derived(Object.fromEntries([['id', true], ...labels.map((f) => [f, true])]));
 
 	let query = $state('');
 	const options = queryState<Hit[], ReadError>(() => {
@@ -77,19 +77,23 @@
 		if (read === undefined) return null;
 		const q = query;
 		return Effect.sleep(q === '' ? 0 : 250).pipe(
-			Effect.flatMap(() => read(of, pickerRead(target, labels, { where, orderBy, limit }, q))),
-			Effect.map((page) => page.rows.map((row) => ({ id: row.id, text: textOf(row) })))
+			Effect.flatMap(() =>
+				read({ [of]: pickerRead(target, labels, { where, orderBy, limit }, q) })
+			),
+			Effect.map((answer) =>
+				(answer[of]?.rows ?? []).map((row) => ({ id: row.id, text: textOf(row) }))
+			)
 		);
 	});
 	const selected = queryState<Hit | null, ReadError>(() => {
 		const read = host.query,
 			id = value;
 		if (read === undefined || id === null) return null;
-		return read(of, { select, limit: 1, where: { id: { eq: id } } }).pipe(
-			Effect.map((page): Hit => ({
-				id,
-				text: page.rows[0] === undefined ? t('notFound') : textOf(page.rows[0])
-			}))
+		return read(byId(of, id, labels)).pipe(
+			Effect.map((answer): Hit => {
+				const row = answer[of]?.rows[0];
+				return { id, text: row === undefined ? t('notFound') : textOf(row) };
+			})
 		);
 	});
 	const hits = $derived(options.current ?? []);

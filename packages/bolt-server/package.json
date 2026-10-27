@@ -1,6 +1,6 @@
 {
 	"name": "@norbital-ai/bolt-server",
-	"version": "0.0.4",
+	"version": "0.0.6",
 	"description": "`bolt start` and the self-host adapters of Bolt's host ports.",
 	"type": "module",
 	"sideEffects": false,
@@ -42,7 +42,7 @@
 		"@types/pg": "^8.23.1",
 		"@types/web-push": "^3.6.4",
 		"typescript": "catalog:",
-		"vitest": "4.1.11"
+		"vitest": "5.0.5"
 	},
 	"repository": {
 		"type": "git",

@@ -23,7 +23,7 @@ const manifest = Result.getOrThrow(
 			quotes: { description: 'A quote', label: 'title', fields: { title: { kind: 'text' } } }
 		},
 		relationships: {},
-		collections: { quotes: { read: { fields: 'all' } } },
+		exposures: { quotes: { read: { quotes: { fields: 'all' } } } },
 		policies: {},
 		agent: { internal: 'Staff brief.', skills: {} },
 		integrations: {},
@@ -56,8 +56,8 @@ it.live(
 			Effect.gen(function* () {
 				const script: AiResponse[] = [
 					use('history', { query: 'quote' }),
-					use('read', { collection: 'quotes', where: { month: 'x' } }),
-					use('read', { collection: 'quotes', where: { year: 'x' } }),
+					use('read', { quotes: { where: { month: 'x' } } }),
+					use('read', { quotes: { where: { year: 'x' } } }),
 					{
 						content: 'No month field on quotes.',
 						toolCalls: [],

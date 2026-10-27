@@ -22,7 +22,7 @@ import {
 } from '../src/engine/write/act.ts';
 import { executeCommit, type Commit } from '../src/engine/write/commit.ts';
 import { restorer, restoreSource, seed } from '../src/engine/write/seed.ts';
-import { admin, arm, authority, grants, manifest, NOW, TODAY } from './write-fixture.ts';
+import { admin, arm, authority, grants, manifest, NOW, TODAY, writeArm } from './write-fixture.ts';
 
 let pg: PGlite, db: TenantDb;
 const count = { reads: 0, writes: 0 };
@@ -82,11 +82,30 @@ const outsideBatch = <A, E, R>(source: Stream.Stream<A, E, R>) =>
 	);
 
 type Over = Partial<ActRequest> & Pick<ActRequest, 'verb' | 'input'>;
+/**
+ * A write engine whose guest answers each policy `check` (`kind: 'policy'`, `'<policy>.<model>.<op>'`) with the verdict
+ * data `verdict` gives, recording every invocation; it runs no other body.
+ */
+const checking = (
+	verdict: (inv: Invocation) => Json,
+	calls: Invocation[] = []
+): Partial<WriteEngine> => ({
+	guest: {
+		invokeProgram: () =>
+			Effect.die(new Error('This fixture does not execute supplied guest programs.')),
+		invoke: (inv) =>
+			Effect.sync((): GuestOutcome => {
+				calls.push(inv);
+				return { kind: 'ok', output: inv.kind === 'policy' ? verdict(inv) : null };
+			})
+	}
+});
+const orderColumns = manifest.exposures['orders']?.update?.columns ?? {};
 const run = (over: Over, engine: Partial<WriteEngine> = {}) =>
 	act(
 		{ manifest, db, ...engine },
 		{
-			collection: 'orders',
+			model: 'orders',
 			mode: { _tag: 'Direct' },
 			key: `key-${n}`,
 			issuedAt: NOW,
@@ -109,10 +128,8 @@ const order = Effect.fn('Test.order')(function* (
 	title = 'desk',
 	lines: { label: string; amount: string }[] = []
 ) {
-	const o = committed(
-		(yield* run({ verb: 'create', input: { title, lines: { create: lines } } })).outcome
-	);
-	return o.records.find((r) => r.collection === 'orders')!.id;
+	const o = committed((yield* run({ verb: 'create', input: [{ title, lines }] })).outcome);
+	return o.records.find((r) => r.model === 'orders')!.id;
 });
 
 it.effect(
@@ -123,32 +140,31 @@ it.effect(
 			const hidden = yield* order('hidden', [{ label: 'Private', amount: '1' }]);
 			const source = {
 				...manifest,
-				collections: {
-					...manifest.collections,
+				exposures: {
+					...manifest.exposures,
 					tags: {
-						...manifest.collections['tags'],
-						read: { fields: 'all' as const },
-						create: { input: { columns: ['name', 'order'] } }
+						read: { tags: { fields: 'all' as const } },
+						create: { columns: { tags: ['name', 'order'] } }
 					}
 				}
 			};
 			const scoped = toPred(source, 'orders', { lines: { some: { amount: { gte: 100 } } } });
 			const caller = authority({
-				orders: grants({
-					read: [arm(scoped)],
+				orders: grants('orders', {
+					read: { orders: [arm(scoped)] },
 					create: [],
-					update: [arm(undefined, ['note'])],
+					update: [writeArm({ orders: ['note'] })],
 					delete: []
 				}),
-				tags: grants()
+				tags: grants('tags', { create: [writeArm({ tags: ['name', 'order'] })] })
 			});
 			count.reads = 0;
 			expect(
 				(yield* run(
 					{
-						collection: 'tags',
+						model: 'tags',
 						verb: 'create',
-						input: { name: 'Allowed reference', order: visible },
+						input: [{ name: 'Allowed reference', order: visible }],
 						authority: caller
 					},
 					{ manifest: source }
@@ -158,9 +174,9 @@ it.effect(
 			expect(
 				(yield* run(
 					{
-						collection: 'tags',
+						model: 'tags',
 						verb: 'create',
-						input: { name: 'Denied reference', order: hidden },
+						input: [{ name: 'Denied reference', order: hidden }],
 						authority: caller
 					},
 					{ manifest: source }
@@ -169,27 +185,27 @@ it.effect(
 			expect(
 				(yield* run({
 					verb: 'update',
-					input: { target: visible, set: { note: 'Readable' } },
+					input: [{ target: visible, set: { note: 'Readable' } }],
 					authority: caller
 				})).outcome.kind
 			).toBe('committed');
 			expect(
 				(yield* run({
 					verb: 'update',
-					input: { target: hidden, set: { note: 'Hidden' } },
+					input: [{ target: hidden, set: { note: 'Hidden' } }],
 					authority: caller
 				})).outcome
 			).toMatchObject({ kind: 'refused', code: 'notFound' });
 			const denied = authority({
-				orders: caller.collections['orders'] ?? grants(),
-				tags: grants({ create: [] })
+				orders: caller.models['orders'] ?? grants('orders'),
+				tags: grants('tags', { create: [] })
 			});
 			expect(
 				(yield* run(
 					{
-						collection: 'tags',
+						model: 'tags',
 						verb: 'create',
-						input: { name: 'No grant', order: visible },
+						input: [{ name: 'No grant', order: visible }],
 						authority: denied
 					},
 					{ manifest: source }
@@ -206,15 +222,15 @@ describe('engine/write: one statement per act (rule 20)', () => {
 			Effect.gen(function* () {
 				const { outcome, captured } = yield* run({
 					verb: 'create',
-					input: {
-						title: 'desk',
-						lines: {
-							create: [
+					input: [
+						{
+							title: 'desk',
+							lines: [
 								{ label: 'a', amount: '40' },
 								{ label: 'b', amount: '110.50' }
 							]
 						}
-					}
+					]
 				});
 				expect(count).toEqual({ reads: 0, writes: 1 });
 				expect(committed(outcome).records).toHaveLength(3);
@@ -237,13 +253,13 @@ describe('engine/write: one statement per act (rule 20)', () => {
 			Effect.gen(function* () {
 				const first = yield* run({
 					verb: 'create',
-					input: { title: 'desk' },
+					input: [{ title: 'desk' }],
 					key: 'same',
 					invocationId: 'a'
 				});
 				const again = yield* run({
 					verb: 'create',
-					input: { title: 'desk' },
+					input: [{ title: 'desk' }],
 					key: 'same',
 					invocationId: 'b'
 				});
@@ -253,13 +269,13 @@ describe('engine/write: one statement per act (rule 20)', () => {
 				expect(yield* one(`select value from bolt_seq`)).toEqual({ value: 1 });
 				const marked = yield* run({
 					verb: 'create',
-					input: { title: 'desk' },
+					input: [{ title: 'desk' }],
 					key: 'same',
 					retry: true
 				});
 				expect(JSON.stringify(marked.outcome)).toBe(JSON.stringify(first.outcome));
 				expect(
-					(yield* run({ verb: 'create', input: { title: 'chair' }, key: 'same' })).outcome
+					(yield* run({ verb: 'create', input: [{ title: 'chair' }], key: 'same' })).outcome
 				).toMatchObject({ kind: 'refused', code: 'keyReuse' });
 			}).pipe(Effect.provide(fixture))
 	);
@@ -270,12 +286,12 @@ describe('engine/write: one statement per act (rule 20)', () => {
 			Effect.gen(function* () {
 				yield* order('desk');
 				count.writes = 0;
-				const refused = yield* run({ verb: 'create', input: { title: 'desk' }, key: 'dup' });
+				const refused = yield* run({ verb: 'create', input: [{ title: 'desk' }], key: 'dup' });
 				expect(refused.outcome).toMatchObject({ kind: 'refused', code: 'unique' });
 				expect(count.writes).toBe(2);
 				const replay = yield* run({
 					verb: 'create',
-					input: { title: 'desk' },
+					input: [{ title: 'desk' }],
 					key: 'dup',
 					retry: true
 				});
@@ -287,13 +303,13 @@ describe('engine/write: one statement per act (rule 20)', () => {
 		Effect.gen(function* () {
 			count.writes = 0;
 			expect(
-				(yield* run({ verb: 'create', input: { title: 'x', total: '9' } })).outcome
+				(yield* run({ verb: 'create', input: [{ title: 'x', total: '9' }] })).outcome
 			).toMatchObject({ kind: 'refused', code: 'invalidInput', field: 'total' });
 			expect(
 				(yield* run({
-					collection: 'lines',
+					model: 'lines',
 					verb: 'create',
-					input: { label: 'a', amount: '1', order: '0199a000-0000-7000-8000-0000000000ff' }
+					input: [{ label: 'a', amount: '1', order: '0199a000-0000-7000-8000-0000000000ff' }]
 				})).outcome
 			).toMatchObject({ kind: 'refused', code: 'notFound', field: 'order' });
 			expect(count.writes).toBe(0);
@@ -305,9 +321,9 @@ describe('engine/write: one statement per act (rule 20)', () => {
 		() =>
 			Effect.gen(function* () {
 				const rate = [{ rule: 'act', bucket: 'a', limit: 1, windowStart: NOW }];
-				committed((yield* run({ verb: 'create', input: { title: 'a' }, rate })).outcome);
+				committed((yield* run({ verb: 'create', input: [{ title: 'a' }], rate })).outcome);
 				expect(
-					(yield* run({ verb: 'create', input: { title: 'b' }, rate, key: 'r2' })).outcome
+					(yield* run({ verb: 'create', input: [{ title: 'b' }], rate, key: 'r2' })).outcome
 				).toMatchObject({ kind: 'refused', code: 'rateLimited' });
 				expect(
 					yield* rows(
@@ -329,21 +345,23 @@ describe('engine/write: rows (rules 21, 22, 25, 29, 43)', () => {
 				]);
 				const [a] = yield* rows(`select id::text from lines order by label`);
 				committed(
-					(yield* run({ verb: 'update', input: { target: id, set: { note: 'n', lines: {} } } }))
+					(yield* run({ verb: 'update', input: [{ target: id, set: { note: 'n', lines: {} } }] }))
 						.outcome
 				);
 				expect(yield* one(`select count(*)::int n from lines`)).toEqual({ n: 2 });
 				const { captured } = yield* run({
 					verb: 'update',
-					input: {
-						target: id,
-						set: {
-							note: 'm',
-							lines: { update: [{ target: String(a!['id']), set: { amount: '140' } }] }
+					input: [
+						{
+							target: id,
+							set: {
+								note: 'm',
+								lines: { update: [{ target: String(a!['id']), set: { amount: '140' } }] }
+							}
 						}
-					}
+					]
 				});
-				expect(captured.filter((c) => c.collection === 'orders').map((c) => c.cause)).toEqual([
+				expect(captured.filter((c) => c.model === 'orders').map((c) => c.cause)).toEqual([
 					'direct'
 				]);
 				expect(yield* one(`select total::text, big_lines, revision from orders`)).toEqual({
@@ -353,9 +371,9 @@ describe('engine/write: rows (rules 21, 22, 25, 29, 43)', () => {
 				});
 				committed(
 					(yield* run({
-						collection: 'lines',
+						model: 'lines',
 						verb: 'update',
-						input: { target: String(a!['id']), set: { amount: '1' } }
+						input: [{ target: String(a!['id']), set: { amount: '1' } }]
 					})).outcome
 				);
 				expect(yield* one(`select total::text, big_lines, revision from orders`)).toEqual({
@@ -381,19 +399,19 @@ describe('engine/write: rows (rules 21, 22, 25, 29, 43)', () => {
 				committed(
 					(yield* run({
 						verb: 'update',
-						input: { target: id, set: { lines: { delete: [String(a!['id'])] } } }
+						input: [{ target: id, set: { lines: { delete: [String(a!['id'])] } } }]
 					})).outcome
 				);
 				expect(yield* one(`select total::text from orders`)).toEqual({ total: '60' });
 				const tag = committed(
-					(yield* run({ collection: 'tags', verb: 'create', input: { name: 't' } })).outcome
+					(yield* run({ model: 'tags', verb: 'create', input: [{ name: 't' }] })).outcome
 				).records[0]!.id;
 				committed(
-					(yield* run({ verb: 'update', input: { target: id, set: { tags: { link: [tag] } } } }))
+					(yield* run({ verb: 'update', input: [{ target: id, set: { tags: { link: [tag] } } }] }))
 						.outcome
 				);
-				const { captured } = yield* run({ verb: 'delete', input: { target: id } });
-				expect(captured.map((c) => `${c.collection}:${c.op}:${c.cause}`).sort()).toEqual([
+				const { captured } = yield* run({ verb: 'delete', input: [{ target: id }] });
+				expect(captured.map((c) => `${c.model}:${c.op}:${c.cause}`).sort()).toEqual([
 					'lines:delete:cascade',
 					'orders:delete:direct',
 					'tags:update:cascade'
@@ -408,7 +426,7 @@ describe('engine/write: rows (rules 21, 22, 25, 29, 43)', () => {
 		Effect.gen(function* () {
 			const id = yield* order('desk');
 			const o = committed(
-				(yield* run({ verb: 'update', input: { target: id, set: { title: 'desk' } } })).outcome
+				(yield* run({ verb: 'update', input: [{ target: id, set: { title: 'desk' } }] })).outcome
 			);
 			expect(o.records).toEqual([]);
 			expect(yield* one(`select revision from orders`)).toEqual({ revision: 1 });
@@ -421,17 +439,17 @@ describe('engine/write: rows (rules 21, 22, 25, 29, 43)', () => {
 			committed(
 				(yield* run({
 					verb: 'update',
-					input: { target: id, set: { note: 'a' } },
+					input: [{ target: id, set: { note: 'a' } }],
 					observed: { [id]: 1 }
 				})).outcome
 			);
 			expect(
 				(yield* run({
 					verb: 'update',
-					input: { target: id, set: { note: 'b' } },
+					input: [{ target: id, set: { note: 'b' } }],
 					observed: { [id]: 1 }
 				})).outcome
-			).toEqual({ kind: 'conflict', records: [{ collection: 'orders', id, fields: [] }] });
+			).toEqual({ kind: 'conflict', records: [{ model: 'orders', id, fields: [] }] });
 		}).pipe(Effect.provide(fixture))
 	);
 
@@ -447,9 +465,9 @@ describe('engine/write: rows (rules 21, 22, 25, 29, 43)', () => {
 				const observed = { [id]: child['revision'] };
 				committed(
 					(yield* run({
-						collection: 'lines',
+						model: 'lines',
 						verb: 'update',
-						input: { target: id, set: { amount: '2' } }
+						input: [{ target: id, set: { amount: '2' } }]
 					})).outcome
 				);
 				count.writes = 0;
@@ -459,12 +477,12 @@ describe('engine/write: rows (rules 21, 22, 25, 29, 43)', () => {
 						: { delete: [id] };
 				const result = yield* run({
 					verb: 'update',
-					input: { target: parent, set: { note: 'must not commit', lines: operations } },
+					input: [{ target: parent, set: { note: 'must not commit', lines: operations } }],
 					observed
 				});
 				expect(result.outcome).toEqual({
 					kind: 'conflict',
-					records: [{ collection: 'lines', id, fields: [] }]
+					records: [{ model: 'lines', id, fields: [] }]
 				});
 				expect(count.writes).toBe(0);
 				expect(yield* one('select amount::text, revision from lines')).toEqual({
@@ -481,16 +499,16 @@ describe('engine/write: rows (rules 21, 22, 25, 29, 43)', () => {
 			Effect.gen(function* () {
 				const parent = yield* order('desk');
 				const created = committed(
-					(yield* run({ collection: 'tags', verb: 'create', input: { name: 'Original tag' } }))
+					(yield* run({ model: 'tags', verb: 'create', input: [{ name: 'Original tag' }] }))
 						.outcome
 				);
-				const tag = created.records.find((record) => record.collection === 'tags');
+				const tag = created.records.find((record) => record.model === 'tags');
 				if (tag === undefined) throw new Error('fixture tag was not created');
 				if (operation === 'unlink')
 					committed(
 						(yield* run({
 							verb: 'update',
-							input: { target: parent, set: { tags: { link: [tag.id] } } }
+							input: [{ target: parent, set: { tags: { link: [tag.id] } } }]
 						})).outcome
 					);
 				const before = yield* one('select revision from tags');
@@ -507,15 +525,17 @@ describe('engine/write: rows (rules 21, 22, 25, 29, 43)', () => {
 				count.writes = 0;
 				const result = yield* run({
 					verb: 'update',
-					input: {
-						target: parent,
-						set: { note: 'must not commit', tags: { [operation]: [tag.id] } }
-					},
+					input: [
+						{
+							target: parent,
+							set: { note: 'must not commit', tags: { [operation]: [tag.id] } }
+						}
+					],
 					observed: { [tag.id]: before['revision'] }
 				});
 				expect(result.outcome).toEqual({
 					kind: 'conflict',
-					records: [{ collection: 'tags', id: tag.id, fields: [] }]
+					records: [{ model: 'tags', id: tag.id, fields: [] }]
 				});
 				expect(count.writes).toBe(0);
 				expect(yield* one('select name, "order"::text as parent from tags')).toEqual({
@@ -530,21 +550,24 @@ describe('engine/write: rows (rules 21, 22, 25, 29, 43)', () => {
 		Effect.gen(function* () {
 			const id = yield* order('desk');
 			const kept = committed(
-				(yield* run({ verb: 'upsert', input: { id, note: 'x' }, onConflict: 'keep' })).outcome
+				(yield* run({ verb: 'upsert', input: [{ id, note: 'x' }], onConflict: 'keep' })).outcome
 			);
 			expect(kept).toMatchObject({ output: [id], records: [] });
 			const updated = committed(
-				(yield* run({ verb: 'upsert', input: { id, note: 'x' }, onConflict: 'update' })).outcome
+				(yield* run({ verb: 'upsert', input: [{ id, note: 'x' }], onConflict: 'update' })).outcome
 			);
 			expect(updated).toMatchObject({ output: [id], records: [{ id, revision: 2 }] });
-			const made = (yield* run({ verb: 'upsert', input: { title: 'chair' }, onConflict: 'update' }))
-				.outcome;
+			const made = (yield* run({
+				verb: 'upsert',
+				input: [{ title: 'chair' }],
+				onConflict: 'update'
+			})).outcome;
 			if (made.kind !== 'committed') throw new Error(JSON.stringify(made));
 			expect(made.output).toEqual([made.records[0]!.id]);
 			expect(
 				(yield* run({
 					verb: 'upsert',
-					input: { id: '0199a000-0000-7000-8000-0000000000aa', note: 'x' },
+					input: [{ id: '0199a000-0000-7000-8000-0000000000aa', note: 'x' }],
 					onConflict: 'update'
 				})).outcome
 			).toMatchObject({ code: 'notFound', field: 'id' });
@@ -552,19 +575,20 @@ describe('engine/write: rows (rules 21, 22, 25, 29, 43)', () => {
 				(yield* run({ verb: 'upsert', input: null, onConflict: 'update' })).outcome
 			).toMatchObject({ code: 'invalidInput' });
 			expect(
-				(yield* run({ verb: 'upsert', input: { id: 4, note: 'x' }, onConflict: 'update' })).outcome
+				(yield* run({ verb: 'upsert', input: [{ id: 4, note: 'x' }], onConflict: 'update' }))
+					.outcome
 			).toMatchObject({ code: 'invalidInput', field: 'id' });
 		}).pipe(Effect.provide(fixture))
 	);
 
-	it.effect('upserts a collection without a natural key', () =>
+	it.effect('upserts a model without a natural key', () =>
 		Effect.gen(function* () {
 			const parent = yield* order('desk');
 			const made = committed(
 				(yield* run({
-					collection: 'lines',
+					model: 'lines',
 					verb: 'upsert',
-					input: { order: parent, label: 'part', amount: '1' },
+					input: [{ order: parent, label: 'part', amount: '1' }],
 					onConflict: 'update'
 				})).outcome
 			);
@@ -572,9 +596,9 @@ describe('engine/write: rows (rules 21, 22, 25, 29, 43)', () => {
 			expect(made).toMatchObject({ output: [id] });
 			const changed = committed(
 				(yield* run({
-					collection: 'lines',
+					model: 'lines',
 					verb: 'upsert',
-					input: { id, amount: '2' },
+					input: [{ id, amount: '2' }],
 					onConflict: 'update'
 				})).outcome
 			);
@@ -587,15 +611,15 @@ describe('engine/write: model rules (rules 34, 40, 41)', () => {
 	it.effect('a state moves only along `to`, and a create lands in initial', () =>
 		Effect.gen(function* () {
 			expect(
-				(yield* run({ verb: 'create', input: { title: 'x', status: 'submitted' } })).outcome
+				(yield* run({ verb: 'create', input: [{ title: 'x', status: 'submitted' }] })).outcome
 			).toMatchObject({ code: 'invalidInput', field: 'status' });
 			const id = yield* order('desk');
 			committed(
-				(yield* run({ verb: 'update', input: { target: id, set: { status: 'submitted' } } }))
+				(yield* run({ verb: 'update', input: [{ target: id, set: { status: 'submitted' } }] }))
 					.outcome
 			);
 			committed(
-				(yield* run({ verb: 'update', input: { target: id, set: { status: 'draft' } } })).outcome
+				(yield* run({ verb: 'update', input: [{ target: id, set: { status: 'draft' } }] })).outcome
 			);
 		}).pipe(Effect.provide(fixture))
 	);
@@ -604,38 +628,38 @@ describe('engine/write: model rules (rules 34, 40, 41)', () => {
 		Effect.gen(function* () {
 			const id = yield* order('desk', [{ label: 'a', amount: '1' }]);
 			committed(
-				(yield* run({ verb: 'update', input: { target: id, set: { status: 'submitted' } } }))
+				(yield* run({ verb: 'update', input: [{ target: id, set: { status: 'submitted' } }] }))
 					.outcome
 			);
 			expect(
-				(yield* run({ verb: 'update', input: { target: id, set: { title: 'y' } } })).outcome
+				(yield* run({ verb: 'update', input: [{ target: id, set: { title: 'y' } }] })).outcome
 			).toMatchObject({ code: 'locked', field: 'title' });
 			committed(
-				(yield* run({ verb: 'update', input: { target: id, set: { note: 'allowed' } } })).outcome
+				(yield* run({ verb: 'update', input: [{ target: id, set: { note: 'allowed' } }] })).outcome
 			);
 			// the owned child re-tests its parent's state under FOR SHARE inside the statement: a recorded refusal
 			const [line] = yield* rows(`select id::text from lines`);
 			count.writes = 0;
 			expect(
 				(yield* run({
-					collection: 'lines',
+					model: 'lines',
 					verb: 'update',
-					input: { target: String(line!['id']), set: { amount: '2' } }
+					input: [{ target: String(line!['id']), set: { amount: '2' } }]
 				})).outcome
 			).toMatchObject({ code: 'locked' });
 			expect(count.writes).toBe(2);
-			committed((yield* run({ verb: 'delete', input: { target: id } })).outcome);
+			committed((yield* run({ verb: 'delete', input: [{ target: id }] })).outcome);
 		}).pipe(Effect.provide(fixture))
 	);
 
 	it.effect('a caller moves a state only along edges its grant lists (moves)', () =>
 		Effect.gen(function* () {
 			const id = yield* order('desk');
-			const caller = authority({ orders: grants({ moves: {} }) });
+			const caller = authority({ orders: grants('orders', { moves: {} }) });
 			expect(
 				(yield* run({
 					verb: 'update',
-					input: { target: id, set: { status: 'submitted' } },
+					input: [{ target: id, set: { status: 'submitted' } }],
 					authority: caller
 				})).outcome
 			).toMatchObject({ code: 'forbidden', field: 'status' });
@@ -645,7 +669,7 @@ describe('engine/write: model rules (rules 34, 40, 41)', () => {
 
 describe('engine/write: the caller (rules 13, 19, 35)', () => {
 	it.effect(
-		'out of read scope is notFound, out of write scope is forbidden, a field outside `fields` is named',
+		'out of read scope is notFound; a column outside `columns` is forbidden before any check; a denying check refuses',
 		() =>
 			Effect.gen(function* () {
 				const id = yield* order('secret');
@@ -658,48 +682,91 @@ describe('engine/write: the caller (rules 13, 19, 35)', () => {
 				expect(
 					(yield* run({
 						verb: 'update',
-						input: { target: id, set: { note: 'x' } },
-						authority: authority({ orders: grants({ read: [arm(notMine)] }) })
+						input: [{ target: id, set: { note: 'x' } }],
+						authority: authority({ orders: grants('orders', { read: { orders: [arm(notMine)] } }) })
 					})).outcome
 				).toMatchObject({ code: 'notFound' });
+				const calls: Invocation[] = [];
+				const deny = checking(() => ({ kind: 'deny', message: 'Not this order.' }), calls);
 				expect(
-					(yield* run({
-						verb: 'update',
-						input: { target: id, set: { note: 'x' } },
-						authority: authority({ orders: grants({ update: [arm(notMine)] }) })
-					})).outcome
-				).toMatchObject({ code: 'forbidden' });
-				expect(
-					(yield* run({
-						verb: 'update',
-						input: { target: id, set: { note: 'x' } },
-						authority: authority({ orders: grants({ update: [arm(undefined, ['title'])] }) })
-					})).outcome
+					(yield* run(
+						{
+							verb: 'update',
+							input: [{ target: id, set: { note: 'x' } }],
+							authority: authority({
+								orders: grants('orders', { update: [writeArm({ orders: ['title'] }, true)] })
+							})
+						},
+						deny
+					)).outcome
 				).toMatchObject({ code: 'forbidden', field: 'note' });
+				expect(calls).toEqual([]);
+				expect(
+					(yield* run(
+						{
+							verb: 'update',
+							input: [{ target: id, set: { note: 'x' } }],
+							authority: authority({
+								orders: grants('orders', { update: [writeArm(orderColumns, true)] })
+							})
+						},
+						deny
+					)).outcome
+				).toMatchObject({
+					kind: 'refused',
+					code: 'refused',
+					message: 'Not this order.',
+					rule: 'p.orders.update'
+				});
+				expect(calls.map(({ kind, target }) => [kind, target])).toEqual([
+					['policy', 'p.orders.update']
+				]);
+				expect(yield* one(`select note from orders where id = '${id}'`)).toEqual({ note: null });
 			}).pipe(Effect.provide(fixture))
 	);
 
-	it.effect('a create is scoped on its post-image, after its callback (rule 35)', () =>
+	it.effect('a create check judges the whole batch, nested layers included, in one call', () =>
 		Effect.gen(function* () {
-			const onlyUpper = {
-				t: 'cmp',
-				field: 'title',
-				op: 'eq',
-				arg: { _tag: 'Lit', value: 'DESK' }
-			} as const;
-			const caller = authority({ orders: grants({ create: [arm(onlyUpper)] }) });
+			const calls: Invocation[] = [];
+			const upperOnly = checking((inv) => {
+				const rows = Schema.decodeUnknownSync(
+					Schema.Array(Schema.Struct({ title: Schema.String }))
+				)(inv.input);
+				const row = rows.findIndex((r) => r.title !== r.title.toUpperCase());
+				return row < 0
+					? { kind: 'allow' }
+					: { kind: 'deny', message: 'Titles are upper case.', at: { row, field: 'title' } };
+			}, calls);
+			const caller = authority({
+				orders: grants('orders', {
+					create: [writeArm(manifest.exposures['orders']?.create?.columns ?? {}, true)]
+				})
+			});
+			const batch = [
+				{ title: 'DESK', lines: [{ label: 'a', amount: '1' }] },
+				{ title: 'chair', lines: [{ label: 'b', amount: '2' }] }
+			];
 			expect(
-				(yield* run({ verb: 'create', input: { title: 'desk' }, authority: caller })).outcome
-			).toMatchObject({ code: 'forbidden' });
-			const upper = callbackEngine((inv) => ({
-				kind: 'ok',
-				output: Schema.decodeUnknownSync(Schema.Array(Schema.Struct({ title: Schema.String })))(
-					inv.input
-				).map((x) => ({ ...x, title: x.title.toUpperCase() }))
-			}));
+				(yield* run({ verb: 'create', input: batch, authority: caller }, upperOnly)).outcome
+			).toMatchObject({ kind: 'refused', code: 'refused', row: 1, field: 'title' });
+			expect(yield* rows(`select title from orders`)).toEqual([]);
+			expect(calls).toHaveLength(1);
+			expect(calls[0]).toMatchObject({ kind: 'policy', target: 'p.orders.create', input: batch });
 			committed(
-				(yield* run({ verb: 'create', input: { title: 'desk' }, authority: caller }, upper)).outcome
+				(yield* run(
+					{
+						verb: 'create',
+						input: [batch[0]!, { ...batch[1]!, title: 'CHAIR' }],
+						authority: caller
+					},
+					upperOnly
+				)).outcome
 			);
+			expect(calls).toHaveLength(2);
+			expect(yield* rows(`select label from lines order by label`)).toEqual([
+				{ label: 'a' },
+				{ label: 'b' }
+			]);
 		}).pipe(Effect.provide(fixture))
 	);
 });
@@ -722,14 +789,14 @@ function callbackEngine(
 	body: (inv: Invocation) => GuestOutcome,
 	calls: Invocation[] = []
 ): Partial<WriteEngine> {
-	const orders = manifest.collections['orders'];
+	const orders = manifest.exposures['orders'];
 	if (orders?.create === undefined || orders.update === undefined)
 		throw new Error('The callback fixture needs create and update contracts');
 	return {
 		manifest: {
 			...manifest,
-			collections: {
-				...manifest.collections,
+			exposures: {
+				...manifest.exposures,
 				orders: {
 					...orders,
 					create: { ...orders.create, transform: true },
@@ -755,7 +822,7 @@ describe('engine/write: per-verb callbacks (rules 19, 27)', () => {
 				(yield* run(
 					{
 						verb: 'upsert',
-						input: { id, note: 'measured', lines: { create: [{ label: 'tile', amount: '2' }] } },
+						input: [{ id, note: 'measured', lines: { create: [{ label: 'tile', amount: '2' }] } }],
 						onConflict: 'update'
 					},
 					engine
@@ -814,7 +881,7 @@ describe('engine/write: per-verb callbacks (rules 19, 27)', () => {
 				() => ({ kind: 'refused', message: 'no desks', field: 'title' }),
 				calls
 			);
-			const first = yield* run({ verb: 'create', input: { title: 'desk' }, key: 'g' }, engine);
+			const first = yield* run({ verb: 'create', input: [{ title: 'desk' }], key: 'g' }, engine);
 			expect(first.outcome).toEqual({
 				kind: 'refused',
 				code: 'refused',
@@ -823,7 +890,7 @@ describe('engine/write: per-verb callbacks (rules 19, 27)', () => {
 				rule: 'orders.create'
 			});
 			const replay = yield* run(
-				{ verb: 'create', input: { title: 'desk' }, key: 'g', retry: true },
+				{ verb: 'create', input: [{ title: 'desk' }], key: 'g', retry: true },
 				engine
 			);
 			expect(replay.outcome).toEqual(first.outcome);
@@ -849,7 +916,7 @@ describe('engine/write: locks and queued pieces (rules 26, 49)', () => {
 					...callbackEngine((inv) => ({ kind: 'ok', output: callbackRows(inv) })),
 					bridge: () => ({ cross: () => Effect.succeed([]), tables: () => ['tags'] })
 				};
-				committed((yield* run({ verb: 'create', input: { title: 'a' } }, engine)).outcome);
+				committed((yield* run({ verb: 'create', input: [{ title: 'a' }] }, engine)).outcome);
 				expect(locks).toEqual([{ tables: ['orders', 'tags'], mode: 'SHARE ROW EXCLUSIVE' }]);
 			}).pipe(Effect.provide(fixture))
 	);
@@ -906,64 +973,66 @@ describe('engine/write: locks and queued pieces (rules 26, 49)', () => {
 });
 
 describe('engine/write: approval hook points (rules 44–46, P3)', () => {
-	it.effect('a routed create commits provisionally under the request the hook opens', () =>
-		Effect.gen(function* () {
-			const requestId = '0199a000-0000-7000-8000-0000000000aa';
-			const snapshot: Extract<ApprovalSnapshot, { kind: 'steps' }> = {
-				kind: 'steps',
-				steps: [{ name: 'Finance', teams: ['finance'], users: [] }],
-				superseded_by: []
-			};
-			const routed = authority({
-				orders: grants({
-					create: [{ ...arm(), approval: true }]
-				})
-			});
-			const routes: Parameters<ApprovalHook['route']>[0][] = [];
-			const approval: ApprovalHook = {
-				route: (request) =>
-					Effect.sync(() => {
-						routes.push(request);
-						return { requestId, route: request.snapshot, pieces: () => {} };
-					}),
-				resubmit: () => Effect.die('This create does not resubmit an approval request')
-			};
-			const calls: Invocation[] = [];
-			const engine: Partial<WriteEngine> = {
-				guest: {
-					invokeProgram: () => Effect.die('The approval hook test does not execute programs'),
-					invoke: (invocation) =>
+	it.effect(
+		'a create its check approves commits provisionally under the request the hook opens',
+		() =>
+			Effect.gen(function* () {
+				const requestId = '0199a000-0000-7000-8000-0000000000aa';
+				const snapshot: Extract<ApprovalSnapshot, { kind: 'steps' }> = {
+					kind: 'steps',
+					steps: [{ name: 'Finance', teams: ['finance'], users: [] }],
+					superseded_by: []
+				};
+				const routed = authority({
+					orders: grants('orders', {
+						create: [writeArm(manifest.exposures['orders']?.create?.columns ?? {}, true)]
+					})
+				});
+				const routes: Parameters<ApprovalHook['route']>[0][] = [];
+				const approval: ApprovalHook = {
+					route: (request) =>
 						Effect.sync(() => {
-							calls.push(invocation);
-							return { kind: 'ok', output: snapshot };
-						})
-				},
-				approval
-			};
-			const o = (yield* run(
-				{ verb: 'create', input: { title: 'held' }, authority: routed },
-				engine
-			)).outcome;
-			expect(o).toMatchObject({ kind: 'pendingApproval', requestId });
-			const [created] = yield* rows(`select id::text from orders`);
-			expect(calls.map(({ kind, target }) => [kind, target])).toEqual([
-				['approval', 'p.orders.create']
-			]);
-			expect(routes).toHaveLength(1);
-			expect(routes[0]).toMatchObject({
-				collection: 'orders',
-				record: created?.['id'],
-				action: 'create',
-				snapshot,
-				records: [{ id: created?.['id'], action: 'create', values: { title: 'held' } }]
-			});
-			expect(o).toMatchObject({
-				records: [{ collection: 'orders', id: created?.['id'], revision: 1 }]
-			});
-			expect(yield* rows(`select request::text from bolt_history`)).toEqual([
-				{ request: requestId }
-			]);
-		}).pipe(Effect.provide(fixture))
+							routes.push(request);
+							return { requestId, route: request.snapshot, pieces: () => {} };
+						}),
+					resubmit: () => Effect.die('This create does not resubmit an approval request')
+				};
+				const calls: Invocation[] = [];
+				const engine: Partial<WriteEngine> = {
+					guest: {
+						invokeProgram: () => Effect.die('The approval hook test does not execute programs'),
+						invoke: (invocation) =>
+							Effect.sync(() => {
+								calls.push(invocation);
+								return { kind: 'ok', output: { kind: 'approve', flow: snapshot } };
+							})
+					},
+					approval
+				};
+				const o = (yield* run(
+					{ verb: 'create', input: [{ title: 'held' }], authority: routed },
+					engine
+				)).outcome;
+				expect(o).toMatchObject({ kind: 'pendingApproval', requestId });
+				const [created] = yield* rows(`select id::text from orders`);
+				expect(calls.map(({ kind, target }) => [kind, target])).toEqual([
+					['policy', 'p.orders.create']
+				]);
+				expect(routes).toHaveLength(1);
+				expect(routes[0]).toMatchObject({
+					model: 'orders',
+					record: created?.['id'],
+					action: 'create',
+					snapshot,
+					records: [{ id: created?.['id'], action: 'create', values: { title: 'held' } }]
+				});
+				expect(o).toMatchObject({
+					records: [{ model: 'orders', id: created?.['id'], revision: 1 }]
+				});
+				expect(yield* rows(`select request::text from bolt_history`)).toEqual([
+					{ request: requestId }
+				]);
+			}).pipe(Effect.provide(fixture))
 	);
 });
 
@@ -979,7 +1048,7 @@ describe('engine/write: seed mode (rule 70, X-13)', () => {
 					],
 					lines: [{ id: '0199a000-0000-4000-8000-000000000002', label: 'a', amount: '5', order: o }]
 				};
-				// each collection is read once, as it is restored, in relationship order (a pack is never in memory whole)
+				// each model is read once, as it is restored, in relationship order (a pack is never in memory whole)
 				const reads: string[] = [];
 				const streamed = restoreSource(pack);
 				const batches = native.batches;
@@ -988,7 +1057,7 @@ describe('engine/write: seed mode (rule 70, X-13)', () => {
 						manifest,
 						db,
 						{
-							collections: ['lines', 'orders'],
+							models: ['lines', 'orders'],
 							rows: (c, from) =>
 								outsideBatch(
 									Stream.unwrap(Effect.sync(() => (reads.push(c), streamed.rows(c, from))))
@@ -1026,7 +1095,7 @@ describe('engine/write: seed mode (rule 70, X-13)', () => {
 						)
 					)).message
 				).toMatch(/SeedDrift|total/);
-				committed((yield* run({ verb: 'create', input: { title: 'next' } })).outcome);
+				committed((yield* run({ verb: 'create', input: [{ title: 'next' }] })).outcome);
 				expect(yield* one(`select number from orders where title = 'next'`)).toEqual({
 					number: 'PO-2026-0043'
 				});
@@ -1056,7 +1125,7 @@ describe('engine/write: seed mode (rule 70, X-13)', () => {
 					manifest,
 					db,
 					{
-						collections: ['lines', 'orders'],
+						models: ['lines', 'orders'],
 						rows: (c, from) =>
 							outsideBatch(
 								Stream.unwrap(Effect.sync(() => (reads.push([c, from]), streamed.rows(c, from))))
@@ -1083,7 +1152,7 @@ describe('engine/write: seed mode (rule 70, X-13)', () => {
 				expect(yield* restore.step).toBe(false);
 				// The given total spans all three chunks; the counter came from the first step.
 				expect(yield* one(`select total::text from orders`)).toEqual({ total: '3' });
-				committed((yield* run({ verb: 'create', input: { title: 'next' } })).outcome);
+				committed((yield* run({ verb: 'create', input: [{ title: 'next' }] })).outcome);
 				expect(yield* one(`select number from orders where title = 'next'`)).toEqual({
 					number: 'PO-2026-0008'
 				});
@@ -1091,9 +1160,9 @@ describe('engine/write: seed mode (rule 70, X-13)', () => {
 	);
 });
 
-describe('engine/write: grants walk relation hops to any depth (rules 35, 36)', () => {
+describe('engine/write: references read scopes; mutations answer to their own check (rules 35, 36)', () => {
 	it.effect(
-		'loads only read scopes for a reference, while real mutations still enforce its draft parent',
+		'loads only read scopes for a reference, while real mutations still answer to their check',
 		() =>
 			Effect.gen(function* () {
 				const ext = {
@@ -1106,9 +1175,12 @@ describe('engine/write: grants walk relation hops to any depth (rules 35, 36)', 
 						...manifest.relationships,
 						'notes.line': { to: 'lines', inverse: 'notes' }
 					},
-					collections: {
-						...manifest.collections,
-						notes: { read: { fields: 'all' }, create: { input: { columns: ['body', 'line'] } } }
+					exposures: {
+						...manifest.exposures,
+						notes: {
+							read: { notes: { fields: 'all' } },
+							create: { columns: { notes: ['body', 'line'] } }
+						}
 					}
 				} satisfies EngineManifest;
 				yield* applyPlan(db, yield* plan(schemaSlice(manifest), ext), { accept: true });
@@ -1116,17 +1188,25 @@ describe('engine/write: grants walk relation hops to any depth (rules 35, 36)', 
 				const line = String(
 					(yield* one(`select id::text from lines where "order" = '${parent}'`))['id']
 				);
-				const draft = toPred(ext, 'lines', { order: { is: { status: { eq: 'draft' } } } });
+				// the lines check stands in for a read of the parent's status: it allows while the parent is a draft
+				let draft = true;
+				const lines = checking(() =>
+					draft ? { kind: 'allow' } : { kind: 'deny', message: 'The order is no longer a draft.' }
+				);
 				const caller = authority({
-					lines: grants({ create: [arm(draft)], update: [arm(draft)], delete: [arm(draft)] }),
-					notes: grants()
+					lines: grants('lines', {
+						create: [writeArm({ lines: ['label', 'amount', 'order'] }, true)],
+						update: [writeArm({ lines: ['label', 'amount'] }, true)],
+						delete: [{ policy: 'p', check: true }]
+					}),
+					notes: grants('notes', { create: [writeArm({ notes: ['body', 'line'] })] })
 				});
 				const reference = (body: string) =>
 					run(
 						{
-							collection: 'notes',
+							model: 'notes',
 							verb: 'create',
-							input: { body, line },
+							input: [{ body, line }],
 							authority: caller
 						},
 						{ manifest: ext }
@@ -1138,22 +1218,21 @@ describe('engine/write: grants walk relation hops to any depth (rules 35, 36)', 
 				expect(
 					(yield* run(
 						{
-							collection: 'lines',
+							model: 'lines',
 							verb: 'update',
-							input: { target: line, set: { amount: '2' } },
+							input: [{ target: line, set: { amount: '2' } }],
 							authority: caller
 						},
-						{ manifest: ext }
+						{ manifest: ext, ...lines }
 					)).outcome.kind
 				).toBe('committed');
-				// Two grant/reference batches, then one native holder check for the owned child and its parent.
-				expect(count.reads).toBe(3);
 				committed(
 					(yield* run({
 						verb: 'update',
-						input: { target: parent, set: { status: 'submitted' } }
+						input: [{ target: parent, set: { status: 'submitted' } }]
 					})).outcome
 				);
+				draft = false;
 				count.reads = 0;
 				expect((yield* reference('locked reference')).outcome.kind).toBe('committed');
 				expect(count.reads).toBe(1);
@@ -1162,16 +1241,20 @@ describe('engine/write: grants walk relation hops to any depth (rules 35, 36)', 
 					count.reads = 0;
 					const result = yield* run(
 						{
-							collection: 'lines',
+							model: 'lines',
 							verb,
-							input: verb === 'update' ? { target: line, set: { amount: '3' } } : { target: line },
+							input:
+								verb === 'update' ? [{ target: line, set: { amount: '3' } }] : [{ target: line }],
 							authority: caller
 						},
-						{ manifest: ext }
+						{ manifest: ext, ...lines }
 					);
-					expect(result.outcome).toMatchObject({ kind: 'refused', code: 'forbidden' });
+					expect(result.outcome).toMatchObject({
+						kind: 'refused',
+						code: 'refused',
+						rule: `p.lines.${verb}`
+					});
 					expect(result.captured).toEqual([]);
-					expect(count.reads).toBe(2);
 				}
 				expect(yield* rows('SELECT body FROM notes ORDER BY body')).toEqual([
 					{ body: 'draft reference' },
@@ -1181,7 +1264,7 @@ describe('engine/write: grants walk relation hops to any depth (rules 35, 36)', 
 			}).pipe(Effect.provide(fixture))
 	);
 	it.effect(
-		'a supplied ref is readable through its parent, and a create scope through two hops, in one extra round trip',
+		"a supplied ref is admitted by its target's read scope (a hop through its parent); a create without check allows",
 		() =>
 			Effect.gen(function* () {
 				const ext = {
@@ -1194,9 +1277,12 @@ describe('engine/write: grants walk relation hops to any depth (rules 35, 36)', 
 						...manifest.relationships,
 						'notes.line': { to: 'lines', inverse: 'notes' }
 					},
-					collections: {
-						...manifest.collections,
-						notes: { read: { fields: 'all' }, create: { input: { columns: ['body', 'line'] } } }
+					exposures: {
+						...manifest.exposures,
+						notes: {
+							read: { notes: { fields: 'all' } },
+							create: { columns: { notes: ['body', 'line'] } }
+						}
 					}
 				} satisfies EngineManifest;
 				yield* applyPlan(db, yield* plan(schemaSlice(manifest), ext), { accept: true });
@@ -1207,19 +1293,19 @@ describe('engine/write: grants walk relation hops to any depth (rules 35, 36)', 
 				const desk = { title: { eq: 'desk' } };
 				const caller = (title: object) =>
 					authority({
-						lines: grants({ read: [arm(toPred(ext, 'lines', { order: { is: title } }))] }),
-						notes: grants({
-							create: [arm(toPred(ext, 'notes', { line: { is: { order: { is: title } } } }))]
-						})
+						lines: grants('lines', {
+							read: { lines: [arm(toPred(ext, 'lines', { order: { is: title } }))] }
+						}),
+						notes: grants('notes', { create: [writeArm({ notes: ['body', 'line'] })] })
 					});
 				const note = (who: ReturnType<typeof caller>) =>
 					act(
 						{ manifest: ext, db },
 						{
-							collection: 'notes',
+							model: 'notes',
 							verb: 'create',
 							mode: { _tag: 'Direct' },
-							input: { body: 'hi', line },
+							input: [{ body: 'hi', line }],
 							key: `key-${n}`,
 							issuedAt: NOW,
 							authority: who,
@@ -1227,9 +1313,7 @@ describe('engine/write: grants walk relation hops to any depth (rules 35, 36)', 
 							invocationId: `inv-${n++}`
 						}
 					);
-				count.reads = 0;
 				committed((yield* note(caller(desk))).outcome);
-				expect(count.reads).toBe(2);
 				expect((yield* note(caller({ title: { eq: 'chair' } }))).outcome).toMatchObject({
 					kind: 'refused',
 					code: 'notFound',

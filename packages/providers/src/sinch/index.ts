@@ -1,7 +1,7 @@
 // Sinch transactional email, SMS and phone verification share one decoded HTTP boundary.
 import { Effect, Schema } from 'effect';
 import type { Json } from '@norbital-ai/bolt/engine';
-import { HttpClientRequest } from 'effect/unstable/http';
+import { HttpClientRequest } from 'effect/http';
 import {
 	decodeMessage,
 	Email,

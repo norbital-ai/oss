@@ -1,4 +1,4 @@
-// The agent catalogue over typed native ports: batching, approvals, workspace search and run waits.
+// The agent catalogue over typed native ports: one-write act, approvals, workspace search and run waits.
 import { memberCap } from '../src/engine/agent/settings.ts';
 import { createHash } from 'node:crypto';
 import { getEventListeners } from 'node:events';
@@ -33,6 +33,7 @@ import { REFERENCE } from '../src/engine/agent/run-js.ts';
 import { treeDigest } from '../src/engine/artifact/read.ts';
 import { Approvals, Callables, Live, Reads, Writes } from '../src/engine/services.ts';
 import { TestWorkspace } from '../src/test/effect.ts';
+import { toolSchema } from '../src/engine/agent/ai.ts';
 import { actorRef } from '../src/engine/write/commit.ts';
 
 const member = (
@@ -52,7 +53,7 @@ const member = (
 	},
 	admin: o.admin ?? false,
 	policies: [],
-	collections: {},
+	models: {},
 	automations: [],
 	capabilities: { apps: [], tools: o.tools ?? [], mcp: [], skills: [] },
 	limits: [],
@@ -61,7 +62,9 @@ const member = (
 });
 const manifest: EngineManifest = {
 	workspace: { tz: 'UTC', locale: 'en', agent: { triage: false } },
-	collections: { tasks: { read: { fields: 'all' }, create: { input: { columns: ['title'] } } } },
+	exposures: {
+		tasks: { read: { tasks: { fields: 'all' } }, create: { columns: { tasks: ['title'] } } }
+	},
 	models: { tasks: { description: 'A task', label: 'title', fields: { title: { kind: 'text' } } } },
 	relationships: {},
 	integrations: {},
@@ -69,7 +72,7 @@ const manifest: EngineManifest = {
 	policies: {
 		staff: {
 			description: '',
-			grants: { tasks: { create: { approval: true } } }
+			grants: { tasks: { create: { check: true } } }
 		}
 	},
 	teams: { Leads: [] },
@@ -127,6 +130,7 @@ const ctx = (
 				owner: 'ann',
 				envoy: null,
 				integration: null,
+				thread: null,
 				parent: null,
 				status: 'idle',
 				model: 'default',
@@ -180,14 +184,16 @@ const logRows = (
 	for (const row of rows)
 		log.push({ run: null, conversation: null, turn: null, ...row, id: String(log.length + 1) });
 };
-const tool = (x: ToolContext, name: string) => catalogue(x).find((t) => t.name === name);
-const requiredTool = (x: ToolContext, name: string) => {
-	const t = tool(x, name);
-	if (t === undefined) throw new Error(`missing tool ${name}`);
-	return t;
-};
+/** This step's tool names, one tool of its toolkit (or none), and one call run as the actor (P7: the catalogue is a toolkit). */
+const names = (x: ToolContext) => Effect.map(catalogue(x), (c) => c.tools.map((t) => t.name));
+const tool = (x: ToolContext, name: string) =>
+	Effect.map(catalogue(x), (c) => (Object.hasOwn(c.toolkit.tools, name) ? c.toolkit.tools[name] : undefined));
+const requiredTool = (x: ToolContext, name: string) =>
+	Effect.flatMap(tool(x, name), (t) =>
+		t === undefined ? Effect.die(new Error(`missing tool ${name}`)) : Effect.succeed(t)
+	);
 const result = (x: ToolContext, name: string, input: Json) =>
-	requiredTool(x, name).run(input, 'call');
+	Effect.flatMap(catalogue(x), (c) => c.run(name, input, 'call'));
 const first = <A>(items: readonly A[]): A => {
 	const item = items[0];
 	if (item === undefined) throw new Error('fixture produced no item');
@@ -219,20 +225,22 @@ describe('tool schemas', () => {
 					read: async () => null
 				};
 				const tools = [
-					...catalogue(yield* ctx({ inApp: false })),
-					...catalogue(yield* ctx({ workspace, authority: member() }))
+					...Object.values((yield* catalogue(yield* ctx({ inApp: false }))).toolkit.tools),
+					...Object.values(
+						(yield* catalogue(yield* ctx({ workspace, authority: member() }))).toolkit.tools
+					)
 				];
 				expect(tools.map((t) => t.name)).toEqual(
-					expect.arrayContaining(['query', 'act', 'workspace_search'])
+					expect.arrayContaining(['read', 'act', 'workspace_search'])
 				);
+				// the JSON Schema each tool is offered with, its definitions included
 				for (const t of tools) {
-					const document = Schema.toJsonSchemaDocument(t.input);
-					walk(yield* Schema.decodeUnknownEffect(Schema.Json)(document.schema), t.name);
-					for (const [name, definition] of Object.entries(document.definitions))
-						walk(
-							yield* Schema.decodeUnknownEffect(Schema.Json)(definition),
-							`${t.name}.$defs.${name}`
-						);
+					const schema = toolSchema(t);
+					walk(schema, t.name);
+					const defs = Predicate.isObject(schema) ? schema['$defs'] : undefined;
+					if (Predicate.isObject(defs))
+						for (const [name, definition] of Object.entries(defs))
+							walk(definition, `${t.name}.$defs.${name}`);
 				}
 				expect(untyped).toEqual([]);
 			})
@@ -240,7 +248,36 @@ describe('tool schemas', () => {
 });
 describe('fewer calls for the common paths', () => {
 	it.effect(
-		'query takes several reads in one call, each answered in order and refused on its own',
+		'read takes one layer map: every root in one crossing; an unreadable root refuses the call',
+		() =>
+			Effect.gen(function* () {
+				const reads: Parameters<AgentEngine['read']>[0][number][] = [];
+				const answer = { tasks: { rows: [{ id: '1', title: 'Fix the van' }], next: null } };
+				const x = yield* ctx(
+					{},
+					{
+						read: (irs) =>
+							Effect.sync(() => {
+								reads.push(...irs);
+								return [answer];
+							})
+					}
+				);
+				expect(
+					yield* result(x, 'read', { tasks: { where: { id: { eq: '1' } }, limit: 5 } })
+				).toMatchObject({ result: answer });
+				expect(reads).toHaveLength(1);
+				// the schema names the caller's roots and paths (propertyNames): an unreadable root is no valid key
+				expect(yield* result(x, 'read', { tasks: {}, secrets: {} })).toEqual({
+					result: { error: expect.stringContaining('secrets') }
+				});
+				const read = yield* requiredTool(x, 'read');
+				expect(JSON.stringify(toolSchema(read))).toContain('propertyNames');
+				expect(reads).toHaveLength(1);
+			})
+	);
+	it.effect(
+		'the removed read forms are refused by the schema before any read: { model }, { query, input }, { reads }, an undeclared layer, a sixth level',
 		() =>
 			Effect.gen(function* () {
 				const reads: Parameters<AgentEngine['read']>[0][number][] = [];
@@ -250,57 +287,51 @@ describe('fewer calls for the common paths', () => {
 						read: (irs) =>
 							Effect.sync(() => {
 								reads.push(...irs);
-								return [{ id: '1', title: 'Fix the van' }];
+								return [{ tasks: { rows: [], next: null } }];
 							})
 					}
 				);
-				expect(
-					yield* result(x, 'query', {
-						reads: [
-							{ collection: 'tasks', id: '1', asOf: '2026-09-01T00:00:00Z' },
-							{ collection: 'secrets' }
-						]
-					})
-				).toEqual({
-					result: [
-						{ id: '1', title: 'Fix the van' },
-						{ error: expect.stringContaining("You may not read 'secrets'") }
-					]
-				});
+				for (const input of [
+					{ model: 'tasks' },
+					{ query: 'tasks.open', input: {} },
+					{ reads: [{ model: 'tasks' }] },
+					{ 'tasks.nope': {} },
+					{ tasks: { search: true } },
+					{ tasks: { select: { title: true } } },
+					{ 'tasks.a.b.c.d.e': {} }
+				])
+					expect(yield* result(x, 'read', input)).toEqual({
+						result: { error: expect.stringContaining('Invalid parameters for tool') }
+					});
+				expect(reads).toHaveLength(0);
+				// text goes in search (or a `like` where) of the root it reads
+				yield* result(x, 'read', { tasks: { search: '2807' } });
 				expect(reads).toHaveLength(1);
+				expect(JSON.stringify(reads.at(-1))).toContain('2807');
 			})
 	);
 	it.effect(
-		'act runs several writes in order under their own keys, stops at the first that does not commit, and refuses the batch whole when one is not allowed',
+		'act takes one { callable, input } write: an { actions } list is refused and the error names callable',
 		() =>
 			Effect.gen(function* () {
-				const keys: string[] = [];
+				const writes: { key: string; input: Json }[] = [];
 				const act: AgentEngine['act'] = (r) =>
 					Effect.sync(() => {
-						keys.push(r.key);
-						return {
-							captured: [],
-							v: 0,
-							outcome:
-								keys.length === 2
-									? { kind: 'refused', code: 'invalidInput', message: 'no title' }
-									: { kind: 'committed', output: null, records: [] }
-						};
+						writes.push({ key: r.key, input: r.input });
+						return { captured: [], v: 0, outcome: { kind: 'committed', output: null, records: [] } };
 					});
 				const x = yield* ctx({ inApp: false }, { act }),
-					create = { callable: 'tasks.create', input: { title: 'a' } };
-				const got = yield* Schema.decodeUnknownEffect(
-					Schema.Struct({
-						result: Schema.Struct({ results: Schema.Array(Schema.Json), stopped: Schema.String })
-					})
-				)(yield* result(x, 'act', { actions: [create, create, create] }));
-				expect(keys).toEqual(['agent:t1:call', 'agent:t1:call#1']);
-				expect(got.result.results).toHaveLength(2);
-				expect(got.result.stopped).toMatch(/did not run/);
-				expect(
-					yield* result(x, 'act', { actions: [create, { callable: 'tasks.delete', input: {} }] })
-				).toEqual({ result: { error: "You may not run 'tasks.delete'." } });
-				expect(keys).toHaveLength(2);
+					create = { callable: 'tasks.create', input: [{ title: 'a' }, { title: 'b' }] };
+				const listed = yield* result(x, 'act', { actions: [create] });
+				expect(JSON.stringify(listed)).toContain('Invalid parameters for tool');
+				expect(JSON.stringify(listed)).toContain('callable');
+				expect(JSON.stringify(listed)).not.toContain('anyOf');
+				expect(writes).toEqual([]);
+				const bare = yield* result(x, 'act', { input: [{ title: 'a' }] });
+				expect(JSON.stringify(bare)).toContain('callable');
+				// the rows reach the engine as one act under the call's key
+				yield* result(x, 'act', create);
+				expect(writes).toEqual([{ key: 'agent:t1:call', input: create.input }]);
 			})
 	);
 });
@@ -309,7 +340,7 @@ describe('approval decisions through act', () => {
 		'offered to staff when writes need approval; they decide as themselves, confirming first in the app',
 		() =>
 			Effect.gen(function* () {
-				expect(tool(yield* ctx({ authority: member({ external: true }) }), 'act')).toBeUndefined();
+				expect(yield* tool(yield* ctx({ authority: member({ external: true }) }), 'act')).toBeUndefined();
 				const decided: Parameters<AgentEngine['approvals']['decide']>[0][] = [];
 				const approvals: Partial<AgentEngine['approvals']> = {
 					decide: (d) =>
@@ -421,32 +452,24 @@ describe('workspace_search', () => {
 					}
 				});
 				expect(
-					tool(yield* ctx({ workspace, authority: member({ external: true }) }), 'workspace_search')
+					yield* tool(yield* ctx({ workspace, authority: member({ external: true }) }), 'workspace_search')
 				).toBeUndefined();
 			})
 	);
 });
-describe('query runs queries and act starts automations', () => {
+describe('act starts automations', () => {
 	it.effect(
-		"query calls a collection query; act starts an automation or the collection's named file and remote syncs",
+		"act starts an automation or the model's named file and remote syncs",
 		() =>
 			Effect.gen(function* () {
-				const queried: Parameters<AgentEngine['calls']['query']>[0][] = [],
-					started: Parameters<AgentEngine['calls']['start']>[0][] = [];
+				const started: Parameters<AgentEngine['calls']['start']>[0][] = [];
 				const m: EngineManifest = {
 					...manifest,
 					policies: {},
-					collections: {
+					exposures: {
 						tasks: {
-							read: { fields: 'all' },
-							syncs: { sheet: { with: 'file', parser: ['json'], schema: { a: { kind: 'int' } } } },
-							queries: {
-								open: {
-									description: 'Open tasks',
-									input: {},
-									output: { kind: 'object', fields: { count: { kind: 'int' } } }
-								}
-							}
+							read: { tasks: { fields: 'all' } },
+							syncs: { sheet: { with: 'file', parser: ['json'], schema: { a: { kind: 'int' } } } }
 						}
 					},
 					automations: {
@@ -458,11 +481,6 @@ describe('query runs queries and act starts automations', () => {
 					}
 				};
 				const calls: Partial<AgentEngine['calls']> = {
-					query: (q) =>
-						Effect.sync(() => {
-							queried.push(q);
-							return { count: 2 };
-						}),
 					start: (s) =>
 						Effect.sync(() => {
 							started.push(s);
@@ -476,16 +494,7 @@ describe('query runs queries and act starts automations', () => {
 				};
 				const authority = { ...member({ admin: true }), automations: ['tidy'] };
 				const x = yield* ctx({ authority, inApp: false }, { manifest: m, calls, db });
-				expect(requiredTool(x, 'query').description).toContain('tasks.open (Open tasks)');
-				expect(yield* result(x, 'query', { query: 'tasks.open', input: {} })).toEqual({
-					result: { count: 2 }
-				});
-				expect(queried[0]).toMatchObject({ collection: 'tasks', query: 'open' });
-				expect(
-					yield* result(x, 'query', { collection: 'tasks', query: 'open', input: {} })
-				).toEqual({ result: { count: 2 } });
-				expect(queried[1]).toMatchObject({ collection: 'tasks', query: 'open' });
-				expect(requiredTool(x, 'act').description).toContain('tidy(day?: date)');
+				expect((yield* requiredTool(x, 'act')).description).toContain('tidy(day?: date)');
 				expect(
 					yield* result(x, 'act', { callable: 'automation.tidy', input: { day: '2026-09-01' } })
 				).toMatchObject({ result: { outcome: { output: { kind: 'queued' } } } });
@@ -496,10 +505,10 @@ describe('query runs queries and act starts automations', () => {
 				expect(yield* result(x, 'act', { callable: 'automation.purge' })).toEqual({
 					result: { error: "You may not run 'automation.purge'." }
 				});
-				expect(requiredTool(x, 'act').description).toContain(
-					'A file sync runs as <collection>.sync.<sync>'
+				expect((yield* requiredTool(x, 'act')).description).toContain(
+					'A file sync runs as <model>.sync.<sync>'
 				);
-				expect(requiredTool(x, 'act').description).toContain(
+				expect((yield* requiredTool(x, 'act')).description).toContain(
 					'tasks.sync.sheet(mode: import | export)'
 				);
 				expect(
@@ -565,10 +574,10 @@ describe('query runs queries and act starts automations', () => {
 					{
 						manifest: {
 							...m,
-							collections: {
+							exposures: {
 								tasks: {
-									...m.collections['tasks'],
-									read: { fields: 'all' },
+									...m.exposures['tasks'],
+									read: { tasks: { fields: 'all' } },
 									syncs: { erp: { with: 'erp', read: true, every: '1min' } }
 								}
 							},
@@ -584,10 +593,10 @@ describe('query runs queries and act starts automations', () => {
 						db
 					}
 				);
-				expect(requiredTool(synced, 'act').description).toContain(
-					'A remote sync reads its source now as <collection>.sync.<sync> with {}: tasks.sync.erp'
+				expect((yield* requiredTool(synced, 'act')).description).toContain(
+					'A remote sync reads its source now as <model>.sync.<sync> with {}: tasks.sync.erp'
 				);
-				expect(requiredTool(synced, 'act').description).not.toContain('tasks.sync.erp()');
+				expect((yield* requiredTool(synced, 'act')).description).not.toContain('tasks.sync.erp()');
 				yield* result(synced, 'act', { callable: 'tasks.sync.erp', input: {} });
 				expect(started.at(-1)).toMatchObject({
 					automation: 'tasks.sync.erp',
@@ -771,11 +780,10 @@ describe('download', () => {
 	);
 	it.effect('is offered only to a person in the app', () =>
 		Effect.gen(function* () {
-			const names = (x: ToolContext) => catalogue(x).map((t) => t.name);
-			expect(names(yield* ctx())).toContain('download');
-			expect(names(yield* ctx({ inApp: false }))).not.toContain('download');
+			expect(yield* names(yield* ctx())).toContain('download');
+			expect(yield* names(yield* ctx({ inApp: false }))).not.toContain('download');
 			expect(
-				names(
+				yield* names(
 					yield* ctx({
 						authority: {
 							...member({ admin: true }),
@@ -1216,23 +1224,22 @@ describe('run_js over a repository reference', () => {
 describe('a sub-agent', () => {
 	it.effect('keeps its checklist but has no plan or sub-agents of its own: one level deep', () =>
 		Effect.gen(function* () {
-			const names = (x: ToolContext) => catalogue(x).map((t) => t.name);
 			// update_plan is a plan-mode tool, subagent an agent-mode one; goals is in both
-			expect(names(yield* ctx({ mode: 'plan' }))).toEqual(
+			expect(yield* names(yield* ctx({ mode: 'plan' }))).toEqual(
 				expect.arrayContaining(['update_plan', 'goals'])
 			);
-			expect(names(yield* ctx({ delegation: true, agents: ['workspace'] }))).toEqual(
+			expect(yield* names(yield* ctx({ delegation: true, agents: ['workspace'] }))).toEqual(
 				expect.arrayContaining(['goals', 'subagent'])
 			);
 			const child = [
-				...names(yield* ctx({ mode: 'plan', child: true })),
-				...names(yield* ctx({ child: true }))
+				...(yield* names(yield* ctx({ mode: 'plan', child: true }))),
+				...(yield* names(yield* ctx({ child: true })))
 			];
 			for (const n of ['update_plan', 'subagent']) expect(child).not.toContain(n);
 			expect(child).toEqual(
-				expect.arrayContaining(['query', 'act', 'wait', 'goals', 'ask_parent'])
+				expect.arrayContaining(['read', 'act', 'wait', 'goals', 'ask_parent'])
 			);
-			expect(names(yield* ctx({ delegation: true, agents: ['workspace'] }))).not.toContain(
+			expect(yield* names(yield* ctx({ delegation: true, agents: ['workspace'] }))).not.toContain(
 				'ask_parent'
 			);
 		})
@@ -1472,7 +1479,7 @@ describe('runs and logs', () => {
 				expect(
 					(yield* events({ run: 'r2', cursor: page.next ?? '' })).lines.map((l) => l.event)
 				).toEqual(['console']);
-				expect(tool(yield* ctx({ authority: member() }), 'logs')).toBeUndefined();
+				expect(yield* tool(yield* ctx({ authority: member() }), 'logs')).toBeUndefined();
 			})
 	);
 });
@@ -1492,10 +1499,9 @@ describe('host web search', () => {
 	const hostTools = [host('web_search'), host('browser_navigate')];
 	it.effect('a workspace MCP tool named web_search hides only the host web_search', () =>
 		Effect.gen(function* () {
-			const names = (x: ToolContext) => catalogue(x).map((t) => t.name);
-			const plain = names(yield* ctx({ hostTools }));
+			const plain = yield* names(yield* ctx({ hostTools }));
 			expect(plain).toEqual(expect.arrayContaining(['web_search', 'browser_navigate']));
-			const own = names(
+			const own = yield* names(
 				yield* ctx({
 					hostTools,
 					mcpTools: [

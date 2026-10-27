@@ -1,6 +1,6 @@
 import { describe, expect, it } from '@effect/vitest';
 import { Effect } from 'effect';
-import { HttpServerRequest } from 'effect/unstable/http';
+import { HttpServerRequest } from 'effect/http';
 import { needsGuest } from '../src/protocol/http.ts';
 
 const request = (input: Request) => HttpServerRequest.fromWeb(input);
@@ -39,8 +39,10 @@ describe('needsGuest (rule 71, L-COL-107)', () => {
 				yield* needsGuest(
 					post('/__bolt/q', {
 						reads: [
-							{ m: 'query', a: ['t', {}] },
-							{ m: 'query', a: ['t', { id: 'x' }] }
+							// a read request is JSON: no guest code reads it
+							{ m: 'query', a: [{ t: {} }] },
+							{ m: 'query', a: [{ t: { where: { id: { eq: 'x' } } } }] },
+							{ m: 'query', a: [{ t: { where: { title: { eq: 'x' } } }, 't.lines': {} }] }
 						]
 					})
 				)
@@ -72,17 +74,18 @@ describe('needsGuest (rule 71, L-COL-107)', () => {
 		})
 	);
 
-	it.effect('admits acts, guest queries, similarity and anything unreadable', () =>
+	it.effect('admits acts, index searches, similarity and anything unreadable', () =>
 		Effect.gen(function* () {
 			expect(
-				yield* needsGuest(post('/__bolt/act', { callable: 't.create', input: {}, issuedAt: '' }))
+				yield* needsGuest(post('/__bolt/act', { callable: 't.create', input: [{}], issuedAt: '' }))
 			).toBe(true);
 			expect(
 				yield* needsGuest(
 					post('/__bolt/q', {
 						reads: [
-							{ m: 'query', a: ['t', { id: 'x' }] },
-							{ m: 'query', a: ['t.open'] }
+							{ m: 'query', a: [{ t: { where: { id: { eq: 'x' } } } }] },
+							// a read request's index search probes through the guest
+							{ m: 'query', a: [{ t: { search: { like: {} }, limit: 1 } }] }
 						]
 					})
 				)
@@ -90,7 +93,7 @@ describe('needsGuest (rule 71, L-COL-107)', () => {
 			expect(
 				yield* needsGuest(
 					post('/__bolt/q', {
-						reads: [{ m: 'query', a: ['t', { search: { like: {} }, limit: 1 }] }]
+						reads: [{ m: 'query', a: [{ t: { search: { like: {} } } }] }]
 					})
 				)
 			).toBe(true);

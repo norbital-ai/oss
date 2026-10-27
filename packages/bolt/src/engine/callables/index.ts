@@ -1,6 +1,5 @@
-// Collection queries, generated-verb batches, and queued run starts are reachable only by policy.
-// A query invokes guest code with caller-scoped reads. A batch plans guarded generated verbs and commits
-// their writes in one statement under its idempotency key. A start queues runs without executing them.
+// Generated-verb batches and queued run starts are reachable only by policy. A batch plans guarded generated verbs and
+// commits their writes in one statement under its idempotency key. A start queues runs without executing them.
 import { Array as EffectArray, Effect, Layer, Predicate, Result, Schema } from 'effect';
 import { encodeWire } from '@norbital-ai/std/wire';
 import { audited, auditActor } from '../audit-operation.ts';
@@ -62,7 +61,7 @@ import {
 } from '../write/commit.ts';
 import { canonical, sha256Hex } from '@norbital-ai/store';
 import { Chain, decided, KEY_REUSE, storedOutcome } from '../write/sql.ts';
-import { decodeInput, decodeOutput, type Decoded } from './decode.ts';
+import { decodeInput, type Decoded } from './decode.ts';
 
 type Caller = CallerContext & {
 	delegation?: AutomationDelegation | undefined;
@@ -71,7 +70,7 @@ type Sink = (planned: PlannedCommit) => void;
 type ActsRequest = Caller & {
 	name: string;
 	acts: readonly {
-		collection: string;
+		model: string;
 		verb: Verb;
 		input: Json;
 		observed?: Readonly<Record<string, number>> | undefined;
@@ -81,7 +80,6 @@ type ActsRequest = Caller & {
 	issuedAt: string;
 	sink?: Sink | undefined;
 };
-type QueryRequest = Caller & { collection: string; query: string; input: Json };
 type CallablesConfig = {
 	engine: WriteEngine & { read: ReadsShape['run'] };
 	guest: GuestShape;
@@ -97,7 +95,7 @@ type Recorder = {
 	commits: Planned[];
 	issuedAt: string;
 	db: TenantDbShape;
-	/** Rows created by earlier planned verbs, keyed `collection␀id`. */
+	/** Rows created by earlier planned verbs, keyed `model␀id`. */
 	pending: Map<string, RowData>;
 };
 type Performed = { output: Json } | { outcome: Outcome; guest: boolean } | { error: BoltError };
@@ -141,25 +139,6 @@ const starterOf = (a: Authority): Json =>
 		teamTree: a.teamTree,
 		scopes: a.scopes
 	});
-/** A declared query is reachable only through the caller's policy and entry. */
-function reach(
-	m: EngineManifest,
-	auth: Authority,
-	c: string,
-	name: string,
-	from: Entry
-): Refused | null {
-	const spec = m.collections[c]?.queries?.[name];
-	if (spec === undefined)
-		throw BoltError.make('unknownCallable', 'decode', `'${c}.${name}' is not a declared query`);
-	if (auth.actor.kind === 'visitor') return refused('forbidden', 'Visitors may not call this.');
-	if ('internal' in spec && spec.internal === true && from === 'Client')
-		return refused('forbidden', `'${c}.${name}' is callable only from server code.`);
-	return auth.admin || (auth.collections[c]?.queries ?? []).includes(name)
-		? null
-		: refused('forbidden', `You may not call '${c}.${name}'.`);
-}
-
 function scheduledAt(now: string, at?: Json): string {
 	const time = Date.parse(now);
 	const target =
@@ -178,17 +157,17 @@ export function parseCallable(
 	manifest: EngineManifest
 ): Result.Result<Callable, BoltError> {
 	const dot = callable.lastIndexOf('.'),
-		collection = callable.slice(0, dot),
+		model = callable.slice(0, dot),
 		member = callable.slice(dot + 1);
 	const verb = VERBS.find((verb) => verb === member);
-	if (verb !== undefined && manifest.collections[collection] !== undefined)
-		return Result.succeed({ _tag: 'Verb', collection, verb });
+	if (verb !== undefined && manifest.exposures[model] !== undefined)
+		return Result.succeed({ _tag: 'Verb', model, verb });
 	const syncAt = callable.indexOf('.sync.');
 	if (syncAt > 0) {
-		const model = callable.slice(0, syncAt),
+		const owner = callable.slice(0, syncAt),
 			sync = callable.slice(syncAt + 6);
-		if (manifest.collections[model]?.syncs?.[sync] !== undefined)
-			return Result.succeed({ _tag: 'Sync', collection: model, sync });
+		if (manifest.exposures[owner]?.syncs?.[sync] !== undefined)
+			return Result.succeed({ _tag: 'Sync', model: owner, sync });
 	}
 	if (manifest.automations[callable] !== undefined)
 		return Result.succeed({ _tag: 'Automation', automation: callable });
@@ -208,10 +187,10 @@ function makeCallables(config: CallablesConfig): CallablesShape {
 		const parsed = parseCallable(name, m);
 		if (auth.actor.kind === 'visitor') return refused('forbidden', 'Visitors may not start runs.');
 		if (Result.isSuccess(parsed) && parsed.success._tag === 'Sync') {
-			const { collection, sync } = parsed.success,
-				entry = m.collections[collection]?.syncs?.[sync];
+			const { model, sync } = parsed.success,
+				entry = m.exposures[model]?.syncs?.[sync];
 			if (entry?.with === 'file') {
-				if (!fileSyncAdmits(auth, collection, input))
+				if (!fileSyncAdmits(auth, model, input))
 					return refused('forbidden', `You may not run '${name}'.`);
 				const decoded = decodeInput(FILE_SYNC_INPUT, input);
 				return decoded.problems.length > 0
@@ -219,8 +198,8 @@ function makeCallables(config: CallablesConfig): CallablesShape {
 					: null;
 			}
 			if (entry?.read !== true) return refused('forbidden', `'${name}' has no read.`);
-			if (!auth.admin && (auth.collections[collection]?.read.length ?? 0) === 0)
-				return refused('forbidden', `You may not sync '${collection}'.`);
+			if (!auth.admin && (auth.models[model]?.read[model]?.length ?? 0) === 0)
+				return refused('forbidden', `You may not sync '${model}'.`);
 			const decoded = decodeInput(
 				{ instance: { kind: 'text', optional: true }, partition: { kind: 'text', optional: true } },
 				input
@@ -238,7 +217,7 @@ function makeCallables(config: CallablesConfig): CallablesShape {
 
 	/** One generated verb through the act pipeline, its planned commit recorded (`sink`), its creates readable by later acts. */
 	const recordVerb = Effect.fn('Callables.recordVerb')(function* (
-		collection: string,
+		model: string,
 		verb: Verb,
 		input: Json,
 		c: Caller,
@@ -250,12 +229,12 @@ function makeCallables(config: CallablesConfig): CallablesShape {
 		const result = yield* act(
 			{ ...e, db: batch?.db ?? rec.db },
 			{
-				collection,
+				model,
 				verb,
 				input,
 				key: c.invocationId,
 				issuedAt: rec.issuedAt,
-				authority: delegatedVerbAuthority(m, c.authority, c.delegation, `${collection}.${verb}`),
+				authority: delegatedVerbAuthority(m, c.authority, c.delegation, `${model}.${verb}`),
 				observed: c.observed,
 				readGuards: c.readGuards,
 				bindings: c.bindings,
@@ -270,7 +249,7 @@ function makeCallables(config: CallablesConfig): CallablesShape {
 						else batch.into(value);
 						for (const write of value.commit.writes)
 							if (write.op === 'create')
-								rec.pending.set(`${write.collection}\u0000${write.id}`, {
+								rec.pending.set(`${write.model}\u0000${write.id}`, {
 									...write.values,
 									id: write.id,
 									revision: 1,
@@ -286,7 +265,7 @@ function makeCallables(config: CallablesConfig): CallablesShape {
 				kind: 'committed',
 				output: planned.commit.output,
 				records: planned.commit.writes.map((write) => ({
-					collection: write.collection,
+					model: write.model,
 					id: write.id,
 					revision: write.op === 'create' ? 1 : write.revision + 1
 				}))
@@ -294,8 +273,6 @@ function makeCallables(config: CallablesConfig): CallablesShape {
 		return result.outcome;
 	});
 
-	const query = (request: QueryRequest): Effect.Effect<Json, import('../errors.ts').EngineError> =>
-		readQuery({ manifest: m, guest, read: e.read }, request);
 	/**
 	 * Each act records into the one commit; the first (in order) that does not commit is the outcome, recorded (it ran
 	 * guest code). The acts are planned at once over one coalesced reader — one round trip, one statement per step for
@@ -321,12 +298,12 @@ function makeCallables(config: CallablesConfig): CallablesShape {
 					};
 				const db = yield* coalescing(e.db, r.acts.length);
 				const plans: (Recorder['commits'][number] | undefined)[] = r.acts.map(() => undefined);
-				// each act its own invocation: its minted ids are its own (two creates of one collection mint apart)
+				// each act its own invocation: its minted ids are its own (two creates of one model mint apart)
 				const outcomes = yield* Effect.forEach(
 					r.acts,
 					(a, i) =>
 						recordVerb(
-							a.collection,
+							a.model,
 							a.verb,
 							a.input,
 							{ ...r, observed: a.observed, invocationId: `${r.invocationId}/${i}` },
@@ -430,13 +407,13 @@ function makeCallables(config: CallablesConfig): CallablesShape {
 					return yield* record(refused('overflow', 'The batch exceeds its native change budget.'));
 				const seen = new Set<string>();
 				const twice = writes.find(
-					(w) => seen.size === seen.add(`${w.collection}\u0000${w.id}`).size
+					(w) => seen.size === seen.add(`${w.model}\u0000${w.id}`).size
 				);
 				if (twice !== undefined)
 					return yield* record(
 						refused(
 							'invalidInput',
-							`The batch writes ${twice.collection} ${twice.id} twice; one act writes a row once (rule 21).`
+							`The batch writes ${twice.model} ${twice.id} twice; one act writes a row once (rule 21).`
 						)
 					);
 				const approvals = rec.commits.flatMap((x) =>
@@ -461,7 +438,7 @@ function makeCallables(config: CallablesConfig): CallablesShape {
 					...new Set([
 						...rec.commits.flatMap((x) => x.lock?.tables ?? []),
 						...(r.readGuards?.tables ?? []),
-						...(r.readGuards === undefined ? [] : writes.map((write) => write.collection))
+						...(r.readGuards === undefined ? [] : writes.map((write) => write.model))
 					])
 				].sort();
 				const erasures = rec.commits.flatMap(
@@ -494,7 +471,7 @@ function makeCallables(config: CallablesConfig): CallablesShape {
 						kind: 'committed',
 						output: p.output,
 						records: writes.map((write) => ({
-							collection: write.collection,
+							model: write.model,
 							id: write.id,
 							revision: write.op === 'create' ? 1 : write.revision + 1
 						}))
@@ -559,7 +536,7 @@ function makeCallables(config: CallablesConfig): CallablesShape {
 				const found = yield* e
 					.read(
 						refs.map((ref) =>
-							ir.read(cat, ref.collection, {
+							ir.read(cat, ref.model, {
 								where:
 									ref.where === undefined || Object.keys(ref.where).length === 0
 										? { id: { eq: ref.id } }
@@ -580,7 +557,7 @@ function makeCallables(config: CallablesConfig): CallablesShape {
 				if (missing !== undefined)
 					return refused(
 						'notFound',
-						`No readable ${missing.collection} has this id.`,
+						`No readable ${missing.model} has this id.`,
 						missing.field
 					);
 			}
@@ -637,7 +614,6 @@ function makeCallables(config: CallablesConfig): CallablesShape {
 	});
 
 	return {
-		query,
 		acts: (request: ActsRequest) =>
 			audited(
 				e.db,
@@ -676,9 +652,9 @@ export function admitVisitor(auth: Authority, s: Surface): Refused | null {
 	if (auth.actor.kind !== 'visitor') return null;
 	const ok =
 		'read' in s
-			? (auth.collections[s.read]?.read.length ?? 0) > 0
+			? (auth.models[s.read]?.read[s.read]?.length ?? 0) > 0
 			: 'act' in s
-				? s.verb === 'create' && (auth.collections[s.act]?.create.length ?? 0) > 0
+				? s.verb === 'create' && (auth.models[s.act]?.create.length ?? 0) > 0
 				: false;
 	return ok ? null : refused('forbidden', 'Visitors may not do this.');
 }
@@ -724,133 +700,8 @@ export const CallablesLive = Layer.effect(
 			links
 		});
 		return Callables.of({
-			query: callables.query,
 			acts: (request) => callables.acts(request).pipe(Effect.provideService(Audit, audit)),
 			start: (request) => callables.start(request).pipe(Effect.provideService(Audit, audit))
 		});
 	})
 );
-
-/** The query path shared with ReadsLive; explicit read recursion avoids a Reads/Callables layer cycle. */
-export const readQuery = Effect.fn('Callables.readQuery')(function* (
-	config: {
-		readonly manifest: EngineManifest;
-		readonly guest: GuestShape;
-		readonly read: ReadsShape['run'];
-	},
-	request: import('../services.ts').QueryRequest
-): Effect.fn.Return<Json, import('../errors.ts').EngineError> {
-	const m = config.manifest,
-		cat = catalogOf(m);
-	const no = yield* Effect.try({
-		try: () => reach(m, request.authority, request.collection, request.query, request.from),
-		catch: (error) =>
-			error instanceof BoltError ? error : BoltError.make('internal', 'decode', String(error))
-	});
-	if (no !== null) return yield* Effect.fail(BoltError.make(no.code, 'admission', no.message));
-	const spec = m.collections[request.collection]?.queries?.[request.query];
-	if (spec === undefined)
-		return yield* Effect.fail(
-			BoltError.make(
-				'unknownCallable',
-				'decode',
-				`'${request.collection}.${request.query}' is not a declared query`
-			)
-		);
-	const decoded = decodeInput(spec.input, request.input);
-	if (decoded.problems.length > 0)
-		return yield* Effect.fail(BoltError.make('invalidInput', 'decode', problems(decoded)));
-	if (decoded.refs.length > 0) {
-		const refs = yield* config
-			.read(
-				decoded.refs.map((ref) => ir.get(cat, ref.collection, ref.id)),
-				{ as: 'caller', authority: request.authority },
-				request.bindings
-			)
-			.pipe(Effect.catch(() => Effect.succeed(decoded.refs.map(() => null))));
-		const missing = refs.findIndex((row) => row === null),
-			ref = decoded.refs[missing];
-		if (ref !== undefined)
-			return yield* Effect.fail(
-				BoltError.make(
-					'notFound',
-					'admission',
-					`${ref.field}: No readable ${ref.collection} has this id.`
-				)
-			);
-	}
-	let nested = 0;
-	const bridge: Bridge = {
-		cross: Effect.fn('Callables.queryCross')(function* (calls) {
-			const reads = calls.flatMap((call) =>
-				call._tag === 'read' && call.read.kind !== 'query' ? [call.read] : []
-			);
-			const plain = yield* config
-				.read(reads, { as: 'caller', authority: request.authority }, request.bindings)
-				.pipe(
-					Effect.match({
-						onSuccess: (values) => values.map((value): CrossAnswer => ({ ok: true, value })),
-						onFailure: (error) => reads.map(() => failed(error))
-					})
-				);
-			let at = 0;
-			const answers: CrossAnswer[] = [];
-			for (const call of calls) {
-				if (call._tag === 'read' && call.read.kind !== 'query')
-					answers.push(plain[at++] ?? fail('internal', 'a read answer is missing'));
-				else if (call._tag === 'read' && call.read.kind === 'query') {
-					const read = call.read;
-					answers.push(
-						yield* readQuery(config, {
-							...request,
-							collection: read.collection,
-							query: read.query,
-							input: read.input,
-							from: 'Server',
-							invocationId: `${request.invocationId}/${nested++}`
-						}).pipe(
-							Effect.match({
-								onSuccess: (value): CrossAnswer => ({ ok: true, value }),
-								onFailure: failed
-							})
-						)
-					);
-				} else
-					answers.push(
-						fail(
-							'unsupported',
-							`a collection query cannot ${call._tag}; queue an automation (rule 31)`
-						)
-					);
-			}
-			return answers;
-		})
-	};
-	const result = yield* config.guest.invoke(
-		{
-			id: request.invocationId,
-			kind: 'query',
-			target: `${request.collection}.${request.query}`,
-			input: encodeWire(decoded.value),
-			ctx: {
-				actor: request.authority.actor,
-				policies: request.authority.policies,
-				admin: request.authority.admin,
-				now: request.bindings.now,
-				today: request.bindings.today,
-				tz: request.bindings.tz,
-				seed: request.invocationId
-			},
-			budget: {
-				crossings: LIMITS.crossings.sync,
-				readBytes: LIMITS.readBytes
-			}
-		},
-		bridge
-	);
-	return result.kind === 'ok'
-		? yield* decodeOutput(m, spec.output, result.output)
-		: yield* Effect.fail(
-				result.kind === 'failed' ? result.error : BoltError.make('refused', 'guest', result.message)
-			);
-});

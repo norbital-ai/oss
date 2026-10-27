@@ -1,4 +1,4 @@
-import type { Values } from '../collection/types.js';
+import type { Values } from '../model/types.js';
 import { isRow } from './results.js';
 /** An aggregate row flattened: `{ key: { region }, count, sum: { amount } }` → `{ region, count, 'sum.amount' }`, numbers plain. */
 export function flat(row: Values): { [k: string]: import('@norbital-ai/std/kind').Value } {

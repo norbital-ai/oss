@@ -1,7 +1,7 @@
 // Long recordings are normalized on disk; scoped child processes and handles close on interruption.
 import { Effect, FileSystem, Option, Path, Random, Schedule, Schema, Stream } from 'effect';
-import { HttpClient, HttpClientRequest } from 'effect/unstable/http';
-import { ChildProcess, ChildProcessSpawner } from 'effect/unstable/process';
+import { HttpClient, HttpClientRequest } from 'effect/http';
+import { ChildProcess, ChildProcessSpawner } from 'effect/process';
 import type {
 	SpeechFormat,
 	TranscribeOptions,
@@ -413,7 +413,7 @@ export function openRouterSpeech<E>(configuration: OpenRouterSpeechConfig<E>): S
 	const binary = configuration.ffmpeg === false ? null : (configuration.ffmpeg ?? 'ffmpeg');
 	const chunk = configuration.chunkSeconds ?? 300,
 		overlap = configuration.overlapSeconds ?? 15;
-	const schema = Schema.toJsonSchemaDocument(Heard).schema;
+	const schema = Schema.toJsonSchemaDocument(Heard, { onExcessProperty: 'error' }).schema;
 	const post = Effect.fn('Speech.post')(function* (path: string, body: object) {
 		const response = yield* HttpClient.execute(
 			HttpClientRequest.post(`${base}${path}`, {
@@ -578,7 +578,7 @@ export function openRouterSpeech<E>(configuration: OpenRouterSpeechConfig<E>): S
 							for (const window of chunks) {
 								const { from, to } = byteRange(window),
 									buffer = new Uint8Array(to - from);
-								yield* file.seek(from, 'start');
+								yield* file.seek(BigInt(from), 'start');
 								const bytesRead = Number(yield* file.read(buffer));
 								const before = segments
 									.filter((segment) => segment.end > window.start)

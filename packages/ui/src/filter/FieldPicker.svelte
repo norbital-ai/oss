@@ -2,7 +2,7 @@
 	// The view popover's field tree with search (rule 16b): own fields, one-relations (a record condition, or expanded to
 	// the target's fields, two hops) and, at the top, many-relations — exactly the paths the engine's catalogue offers.
 	import { SvelteSet } from 'svelte/reactivity';
-	import type { CollectionExposure } from '../kinds/context.js';
+	import type { ModelExposure } from '../kinds/context.js';
 	import { cn } from '../primitives/utils.js';
 	import { CONTROL } from '../kinds/classes.js';
 	import { useBolt } from '../client/context.js';
@@ -20,15 +20,15 @@
 	type Entry = { path: string; label: string; depth: number; many?: true; open?: boolean };
 	let {
 		catalog,
-		collection,
+		model,
 		offers,
 		prefix = [],
 		value,
 		many = true,
 		onPick
 	}: {
-		catalog: { readonly [c: string]: CollectionExposure };
-		collection: string;
+		catalog: { readonly [c: string]: ModelExposure };
+		model: string;
 		/** The engine's catalogue for the view. */
 		offers: readonly Offer[];
 		/** The many-relation steps this picker sits under, so catalogue paths match. */
@@ -57,7 +57,7 @@
 				continue;
 			const path = prefix + f;
 			if (
-				resolve(catalog, collection, path) !== null &&
+				resolve(catalog, model, path) !== null &&
 				offered.conditions.has(path) &&
 				!out.some((e) => e.path === path)
 			)
@@ -65,7 +65,7 @@
 		}
 		// the search index and the embedding: offered where the engine's catalogue offers them
 		for (const f of Object.keys(INDEX))
-			if (offered.conditions.has(prefix + f) && resolve(catalog, collection, prefix + f) !== null)
+			if (offered.conditions.has(prefix + f) && resolve(catalog, model, prefix + f) !== null)
 				out.push({ path: prefix + f, label: pathLabel(catalog, c, f, humanize), depth });
 		for (const [fk, rel] of Object.entries(x.relations ?? {})) {
 			for (const step of rel.targets.length > 1 ? rel.targets.map((t) => `${fk}:${t}`) : [fk]) {
@@ -100,18 +100,18 @@
 	}
 	const entries = $derived.by(() => {
 		const q = query.trim().toLowerCase();
-		if (q === '') return level(collection, '', 0, false);
+		if (q === '') return level(model, '', 0, false);
 		// a search walks the whole tree and shows each hit with its full path
-		return level(collection, '', 0, true)
+		return level(model, '', 0, true)
 			.map((e) => ({
 				...e,
-				label: pathLabel(catalog, collection, e.path, humanize),
+				label: pathLabel(catalog, model, e.path, humanize),
 				depth: 0,
 				open: undefined
 			}))
 			.filter((e) => e.label.toLowerCase().includes(q));
 	});
-	const shown = $derived(value === '' ? '' : pathLabel(catalog, collection, value, humanize));
+	const shown = $derived(value === '' ? '' : pathLabel(catalog, model, value, humanize));
 	const pick = (e: Entry) => {
 		onPick(e.path, e.many === true);
 		open = false;

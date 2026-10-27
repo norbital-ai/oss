@@ -163,6 +163,6 @@ it.live('edit: the form is sectioned and a collapsed field still saves', () =>
 		save.click();
 		yield* browser(() => settle());
 		assert.equal(sent.length, 1);
-		assert.deepEqual(required(sent[0])[1], { target: 'j1', set: { notes: 'Front gate' } });
+		assert.deepEqual(required(sent[0])[1], [{ target: 'j1', set: { notes: 'Front gate' } }]);
 	})
 );

@@ -6,7 +6,10 @@ type Row = Readonly<Record<string, unknown>>;
 const value = (row: Row, field: string): Json => {
 	const found = field
 		.split('.')
-		.reduce<unknown>((at, key) => (typeof at === 'object' && at !== null ? (at as Row)[key] : undefined), row);
+		.reduce<unknown>(
+			(at, key) => (typeof at === 'object' && at !== null ? (at as Row)[key] : undefined),
+			row
+		);
 	return (found ?? null) as Json;
 };
 const compare = (left: Json, op: string, right: Json): boolean => {
@@ -24,9 +27,13 @@ const compare = (left: Json, op: string, right: Json): boolean => {
 		case 'lte':
 			return Number(left) <= Number(right);
 		case 'in':
-			return Array.isArray(right) && right.some((one) => JSON.stringify(one) === JSON.stringify(left));
+			return (
+				Array.isArray(right) && right.some((one) => JSON.stringify(one) === JSON.stringify(left))
+			);
 		case 'nin':
-			return Array.isArray(right) && right.every((one) => JSON.stringify(one) !== JSON.stringify(left));
+			return (
+				Array.isArray(right) && right.every((one) => JSON.stringify(one) !== JSON.stringify(left))
+			);
 		case 'isNull':
 			return left === null;
 		case 'notNull':

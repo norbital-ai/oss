@@ -7,7 +7,7 @@
 	import { Effect } from 'effect';
 	import { attach } from '@norbital-ai/ui/effect';
 	import { watch } from 'runed';
-	import { Dialog, Input, type CollectionExposure } from '@norbital-ai/ui';
+	import { Dialog, Input, type ModelExposure } from '@norbital-ai/ui';
 	import type { NavNode } from '../nav.ts';
 	import { pageHits, recordFinder, type FinderHit, type FinderRead } from './model.ts';
 
@@ -23,11 +23,11 @@
 	}: {
 		open?: boolean;
 		nav: readonly NavNode[];
-		catalog: { readonly [collection: string]: CollectionExposure };
+		catalog: { readonly [model: string]: ModelExposure };
 		read: FinderRead;
 		t: (key: string) => string;
 		onNavigate: (href: string) => void;
-		onOpenRecord: (collection: string, id: string) => void;
+		onOpenRecord: (model: string, id: string) => void;
 		onAsk: ((prompt: string) => void) | null;
 	} = $props();
 
@@ -56,7 +56,7 @@
 		attach(() =>
 			Effect.gen(function* () {
 				const finder = yield* recordFinder(catalog, read, t);
-				if (query.trim() === '' || finder.collections.length === 0) {
+				if (query.trim() === '' || finder.models.length === 0) {
 					searching = false;
 					return;
 				}
@@ -78,7 +78,7 @@
 		open = false;
 		if (row.kind === 'ask') onAsk?.(row.label);
 		else if (row.kind === 'page') onNavigate(row.href);
-		else onOpenRecord(row.collection, row.id);
+		else onOpenRecord(row.model, row.id);
 		query = '';
 	}
 	function keydown(event: KeyboardEvent): void {

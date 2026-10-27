@@ -4,7 +4,7 @@ import { randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { expect, it, vi } from '@effect/vitest';
 import { Context, Effect, Layer, Option, Schema } from 'effect';
-import { HttpServerRequest } from 'effect/unstable/http';
+import { HttpServerRequest } from 'effect/http';
 import { Agents } from '../src/engine/services.ts';
 import { Files } from '../src/engine/ports.ts';
 import { actReply, json, routeFixture } from './support/route-fixture.ts';
@@ -27,7 +27,7 @@ const manifest = {
 	workspace: { tz: 'UTC', locale: 'en', agent: { triage: false } },
 	models: {},
 	relationships: {},
-	collections: {},
+	exposures: {},
 	policies: {},
 	agent: { internal: 'Staff brief.', external: 'External brief.', skills: {} },
 	integrations: {},
@@ -241,8 +241,8 @@ it.live(
 							}
 						}
 					},
-					collections: {
-						photos: { read: { fields: 'all' }, create: { input: { columns: ['name', 'photo'] } } }
+					exposures: {
+						photos: { read: { photos: { fields: 'all' } }, create: { columns: { photos: ['name', 'photo'] } } }
 					}
 				} satisfies EngineManifest;
 				const context = yield* Layer.build(TestWorkspace.layer({ manifest: filed }));
@@ -283,7 +283,7 @@ it.live(
 				expect((yield* call('root', 'GET', photo.id)).status).toBe(404); // Ann's, in no conversation the administrator reads
 				const o = (yield* actReply(route, t.as(t.admin).authority, {
 					callable: 'photos.create',
-					input: { name: 'pump', photo: { id: photo.id, name: photo.name, mime: photo.mime } },
+					input: [{ name: 'pump', photo: { id: photo.id, name: photo.name, mime: photo.mime } }],
 					issuedAt: t.clock.now()
 				})).outcome;
 				expect(o.kind).toBe('committed');

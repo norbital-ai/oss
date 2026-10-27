@@ -12,6 +12,7 @@ import {
 	Effect,
 	Exit,
 	Fiber,
+	FiberHandle,
 	FiberMap,
 	FiberSet,
 	Layer,
@@ -41,6 +42,7 @@ import { TenantDb, type TenantDbShape } from '../db/tenant-db.ts';
 import {
 	Agents as AgentsTag,
 	Callables,
+	Links,
 	Live,
 	Manifest,
 	Reads,
@@ -62,6 +64,7 @@ import { TurnHandlers } from './turns.ts';
 import { attachmentsFor, fileAttachments } from './attachments.ts';
 import { Chain } from '../write/sql.ts';
 import { enqueue, nextDue } from '../runs/queue.ts';
+import { envoySpec } from '../envoys/spec.ts';
 import {
 	post as postMessage,
 	settle as settleMessage,
@@ -79,7 +82,15 @@ import type { Json } from '../../decl/values.ts';
 import { encodeWire } from '@norbital-ai/std/wire';
 import type { AiRequest, AiResponse, Authority, Bindings } from '../contracts.ts';
 import { Authorities } from '../identity/actor.ts';
-import { isFacilityError, MODEL_FILES, modelCall, overflow, servesModel, textOf } from './ai.ts';
+import {
+	generate,
+	isFacilityError,
+	MODEL_FILES,
+	modelCall,
+	overflow,
+	servesModel,
+	textOf
+} from './ai.ts';
 import {
 	bounded,
 	COMPACT_FORMAT,
@@ -89,7 +100,8 @@ import {
 	outputText,
 	projection,
 	state,
-	system
+	system,
+	modelTranscript
 } from './context.ts';
 import { mcpServers, mcpSessions, type McpHost } from './mcp.ts';
 import { agentSettings, allowedModel, overLimit } from './settings.ts';
@@ -118,11 +130,10 @@ import {
 	catalogue,
 	JOBS,
 	jobs,
-	performAll,
+	perform,
 	turnFacts,
-	writesOf,
 	WriteInput,
-	ReadInput,
+	CLOSED,
 	type AttachmentPort,
 	type HostTool,
 	type ToolContext,
@@ -184,6 +195,11 @@ export type AgentConfig = {
 		readonly HostTool[] | ((a: Authority, conversation: string) => Promise<readonly HostTool[]>);
 	/** Host skills merged into `skill` on in-app staff turns: the platform authoring skill, the person's own skills. */
 	skills?: (a: Authority) => Promise<{ readonly [name: string]: HostSkill }>;
+	/**
+	 * A linked chat shows the assistant typing (`on`) from the turn's first step until its first reply, refreshed every
+	 * TYPING_REFRESH_MS; a turn that ends without one stops it. Absent where nothing is linked (an in-app conversation).
+	 */
+	typing?: (integration: string, thread: string, on: boolean) => Effect.Effect<void>;
 	/** The workspace's skill files (the artifact's `skills/<name>/`, `skillFiles`): a file run reads its tree here. */
 	skillFiles?: (skill: string, path: string) => Promise<Uint8Array>;
 	/** A host call that has not answered by then becomes a background job (default 30 s). */
@@ -220,6 +236,8 @@ export const TURN_RUN = 'agent.turn';
  * one statement), each published live like any other write, so the panel's transcript grows patch by patch.
  */
 export const STREAM_FLUSH_MS = 150;
+/** A chat's typing presence lapses on its own (WhatsApp's after about 10 s): a working turn renews it this often. */
+export const TYPING_REFRESH_MS = 10_000;
 /** After the same call failed this often in a turn (today's recovery guidance). */
 export const RECOVERY =
 	'This call has failed the same way several times. Do not repeat it: change the approach, or tell the person plainly what is blocking.';
@@ -236,6 +254,8 @@ export const NUDGE = {
 export const FIXED = {
 	failed:
 		'I could not finish this request because a service it needs did not answer. Please try again later.',
+	broke:
+		'Sorry, I could not finish that: something went wrong on my side. Please send it again in a moment.',
 	unavailable: 'The assistant is not available to you here.',
 	stale: 'I could not act for this message: its sender no longer has access.',
 	stuck:
@@ -250,7 +270,7 @@ export const FIXED = {
 export const ANSWERED = 'This was already answered.';
 /** `modelCall`'s reason when the host binds no AI port. */
 const NO_AI = 'the host provides no ai';
-const CONV_COLS = 'id, title, owner, envoy, integration, parent, status, model, plan, goals';
+const CONV_COLS = 'id, title, owner, envoy, integration, thread, parent, status, model, plan, goals';
 const q = (text: string, ...params: Json[]) => ({ text, params });
 /** A step's reply as it streams (`drain`'s `streamer`). */
 type Streamer = {
@@ -374,7 +394,7 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 				`UPDATE sys_message m SET state = NULL, meta = CASE WHEN role = 'assistant' THEN coalesce(meta, '{"tag":"cut"}'::jsonb) ELSE meta END,
 				content = CASE WHEN role = 'tool' THEN content || '{"result":{"error":"The turn ended before this call finished."}}'::jsonb ELSE content END
 				WHERE conversation = $1 AND state IN ('streaming', 'running') ${of === undefined ? '' : 'AND turn = $2'}`,
-				of === undefined ? [conversation] : [conversation, of]
+				...(of === undefined ? [conversation] : [conversation, of])
 			)
 		).pipe(
 			Effect.tapCause(Effect.logWarning),
@@ -578,20 +598,12 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 	});
 	/** Static per agent (rule 62): an envoy's by its audience, the in-app agent's by the member kind it serves. */
 	/** A public envoy's or an external member's turn: the external brief, and no outline of the workspace's insides. */
-	const outward = (conv: ConversationRow, a: Authority): boolean => {
+	const outward = Effect.fn('Agents.outward')(function* (conv: ConversationRow, a: Authority) {
 		const envoy = conv.envoy ?? (a.actor.kind === 'envoy' ? a.actor.envoy : null);
 		return envoy !== null
-			? (
-					m.envoys[envoy] as
-						| {
-								audience?: string;
-						  }
-						| undefined
-				)?.audience === 'public'
+			? (yield* envoySpec(m, db, envoy))?.audience === 'public'
 			: a.actor.kind === 'member' && a.actor.external;
-	};
-	const briefFor = (conv: ConversationRow, a: Authority): string | undefined =>
-		outward(conv, a) ? m.agent.external : m.agent.internal;
+	});
 	// the outline is the release's: the manifest and its source list, computed once
 	let outlined: Effect.Effect<string, PortFailure> | undefined;
 	const outlineOf = () =>
@@ -747,7 +759,33 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 			reply: MessageRow | null = null;
 		const inApp = (conv: ConversationRow) => conv.envoy === null;
 		const wall = config.wallMs === undefined ? {} : { wallMs: config.wallMs };
+		// the linked chat shows the assistant typing from the step that answers new input until its reply is written (and
+		// shipped by `onWrite`); a turn that ends while it still shows stops it
+		const composing = yield* FiberHandle.make<void, never>();
+		let typingIn: { integration: string; thread: string } | null = null,
+			heard = true;
+		const typing = (on: boolean) =>
+			typingIn === null || config.typing === undefined
+				? Effect.void
+				: config.typing(typingIn.integration, typingIn.thread, on);
+		const startTyping = (conv: ConversationRow) =>
+			Effect.gen(function* () {
+				if (conv.integration === null || conv.thread === null || typingIn !== null) return;
+				typingIn = { integration: conv.integration, thread: conv.thread };
+				yield* FiberHandle.run(
+					composing,
+					typing(true).pipe(Effect.repeat(Schedule.spaced(TYPING_REFRESH_MS)), Effect.asVoid)
+				);
+			});
+		const stopTyping = (paused: boolean) =>
+			Effect.gen(function* () {
+				if (typingIn === null) return;
+				yield* FiberHandle.clear(composing);
+				if (paused) yield* typing(false);
+				typingIn = null;
+			});
 		const wrote = Effect.fn('Agents.wrote')(function* (row: MessageRow) {
+			if (row.role === 'assistant' && (row.text ?? '') !== '') yield* stopTyping(false);
 			if (options.onWrite !== undefined)
 				yield* options.onWrite(row).pipe(Effect.tapCause(Effect.logWarning), Effect.ignore);
 			return row;
@@ -945,6 +983,7 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 					...(yield* messageStatement(claimChain, claimMessage(claimChain, id, turn)))
 				];
 				if (claimed.length > 0) {
+					heard = true;
 					claimed.sort((a, b) => a.seq - b.seq);
 					const last = claimed.at(-1)!;
 					as = claimed.findLast((r) => r.as !== null)?.as ?? as;
@@ -963,7 +1002,9 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 					as = prior?.as ?? null;
 				}
 				const authority = as === null ? null : yield* resolve(as);
-				const brief = authority === null ? undefined : briefFor(conv, authority);
+				const external = authority !== null && (yield* outward(conv, authority));
+				const brief =
+					authority === null ? undefined : external ? m.agent.external : m.agent.internal;
 				if (authority === null || (inApp(conv) && brief === undefined)) {
 					yield* fail(
 						conv,
@@ -1015,16 +1056,7 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 					mcpTools = yield* mcp.tools(authority);
 					mcpFor = authority.key;
 				}
-				const envoySpec =
-					conv.envoy === null
-						? undefined
-						: (m.envoys[conv.envoy] as
-								| {
-										task?: string;
-										delegation?: string;
-										name?: string;
-								  }
-								| undefined);
+				const envoy = conv.envoy === null ? undefined : yield* envoySpec(m, db, conv.envoy);
 				const staff = authority.actor.kind === 'member' && !authority.actor.external;
 				const hostSide = inApp(conv) && staff;
 				const hostTools =
@@ -1070,7 +1102,7 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 					child: conv.parent !== null,
 					delegation:
 						conv.parent === null &&
-						(conv.envoy === null ? staff : envoySpec?.delegation === 'enabled'),
+						(conv.envoy === null ? staff : envoy?.delegation === 'enabled'),
 					mcp,
 					logs,
 					mcpTools,
@@ -1164,7 +1196,9 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 								a.kind === 'member' ? a.id : a.kind === 'envoy' ? (a.linked?.id ?? null) : null; // a group turn searches no one's own
 						// `dm: 'envoy'`: the member's own is their conversations on this instance alone, never their app or another envoy's
 						const bound =
-							a.kind === 'envoy' && m.envoys[a.envoy]?.dm === 'envoy' ? a.instance : null;
+							a.kind === 'envoy' && (yield* envoySpec(m, db, a.envoy))?.dm === 'envoy'
+								? a.instance
+								: null;
 						const [r] = yield* db.read([
 							q(
 								`SELECT m.conversation, m.seq, m.role, coalesce(m.author, m.sender_name, m.sender) AS author, left(m.text, 500) AS text, m.created_at::text AS at
@@ -1292,57 +1326,41 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 						})
 					}
 				};
-				const tools = catalogue(ctx);
-				const lastReply = rows.findLast((r) => r.role === 'assistant')?.seq ?? 0;
-				const note = state(
-					conv,
-					mode === 'plan' ? 'plan' : 'agent',
-					conv.integration === null
-						? 0
-						: rows.filter(
-								(r) =>
-									isAmbient(r) &&
-									r.seq > lastReply &&
-									(r.read_by ?? null) === null &&
-									(r.deleted_at ?? null) === null
-							).length,
-					turnFacts(e, authority, b, ctx.tz)
-				);
+				const toolset = yield* catalogue(ctx),
+					tools = toolset.tools;
+				// the served sender's own unaddressed messages are in the context; other people's chatter is a line where it stood
+				const served = as !== null && 'envoy' in as ? as.envoy.sender : undefined;
+				const note = state(conv, mode === 'plan' ? 'plan' : 'agent', turnFacts(e, authority, b, ctx.tz));
 				// the note closes the context, before a reply cut at the wall that this step continues (rule 63)
-				const history = messages(projection(rows, conv), rows);
+				const history = modelTranscript(rows, conv, served);
 				if (note !== undefined)
 					history.splice(history.at(-1)?.role === 'assistant' ? -1 : history.length, 0, {
 						role: 'user',
 						content: note
 					});
-				const request: AiRequest = {
+				const request: Omit<AiRequest, 'tools'> = {
 					model: conv.model,
 					system: system({
-						envoy: envoySpec === undefined ? undefined : envoyName(envoySpec.name),
+						envoy: envoy === undefined ? undefined : envoyName(envoy.name),
 						brief,
-						task: envoySpec?.task,
+						task: envoy?.task,
 						skills: m.agent.skills,
-						outline: outward(conv, authority) ? undefined : yield* outlineOf(),
+						outline: external ? undefined : yield* outlineOf(),
 						tools
 					}),
 					messages: history,
-					tools: yield* Effect.forEach(tools, ({ name, description, input }) => {
-						const document = Schema.toJsonSchemaDocument(input);
-						return Schema.decodeUnknownEffect(Schema.Json)({
-							...document.schema,
-							$defs: document.definitions
-						}).pipe(
-							Effect.map((schema) => ({ name, description, input: schema })),
-							Effect.mapError((error) => BoltError.make('corrupt', 'decode', error.message, error))
-						);
-					}),
 					...(files.length === 0 ? {} : { files: files.splice(0, files.length) }),
 					...(cut?.continuation === undefined ? {} : { continuation: cut.continuation })
 				};
 				steps++;
+				// the chat shows the assistant is on it while the model writes: a pending reply is silence the sender would read as being ignored
+				if (heard) {
+					heard = false;
+					yield* startTyping(conv);
+				}
 				const live = yield* streamer(cut);
 				streaming = live;
-				const r = yield* modelCall(config.ai, request, {
+				const r = yield* generate(config.ai, request, toolset.toolkit, {
 					onDelta: live.delta,
 					onReasoning: live.reasoning,
 					...wall
@@ -1558,7 +1576,7 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 													: 'Not run: this exact call already failed several times this turn.'
 											} as Json
 										}
-									: yield* tool.run(call.input, call.id);
+									: yield* toolset.run(call.name, call.input, call.id);
 					previous =
 						tool?.pure !== true ||
 						('result' in answer &&
@@ -1613,7 +1631,7 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 							if (n >= AGENT_LIMITS.sameFailure) result = { ...result, guidance: RECOVERY };
 						}
 						// rule 62: the model sees a bounded result; a clipped one keeps the whole output for `read_output`
-						const shown = answer.bounded === true ? result : bounded(result).value,
+						const shown = 'bounded' in answer && answer.bounded === true ? result : bounded(result).value,
 							clipped = JSON.stringify(shown) !== JSON.stringify(result);
 						// the model does not see its own call ids, so the note names the one read_output takes
 						const more = `clipped: the whole result (${new TextEncoder().encode(outputText(result)).length} bytes). read_output { call: '${call.id}', offset } reads it on`;
@@ -1679,23 +1697,29 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 				}
 			}
 		}).pipe(
-			Effect.catch((err) =>
-				Effect.gen(function* () {
-					const conv = yield* conversation(id).pipe(
-						Effect.tapCause(Effect.logWarning),
-						Effect.catch(() => Effect.succeed(null))
-					);
-					if (conv !== null)
-						yield* fail(
-							conv,
-							FIXED.failed,
-							'internal',
-							err instanceof Error ? err.message : String(err)
-						).pipe(Effect.tapCause(Effect.logWarning), Effect.ignore);
-				})
+			// a turn that breaks (a failure or a defect, never an interruption: rule 48 hands that turn on) answers its sender
+			Effect.catchCause((cause) =>
+				Cause.hasInterruptsOnly(cause)
+					? Effect.interrupt
+					: Effect.gen(function* () {
+							const conv = yield* conversation(id).pipe(
+								Effect.tapCause(Effect.logWarning),
+								Effect.catch(() => Effect.succeed(null))
+							);
+							const err = Cause.squash(cause);
+							if (conv !== null)
+								yield* fail(
+									conv,
+									FIXED.broke,
+									'internal',
+									err instanceof Error ? err.message : String(err)
+								).pipe(Effect.tapCause(Effect.logWarning), Effect.ignore);
+						})
 			),
 			Effect.onExit((exit) =>
 				Effect.gen(function* () {
+					// no reply followed the typing it showed: the chat stops showing it
+					yield* stopTyping(true);
 					// a reply or a call the turn left unfinished (a stop, a crash) is finished as interrupted before the turn reads idle
 					if (streaming !== null) yield* streaming.end();
 					yield* unfinished(id, turn);
@@ -2038,7 +2062,7 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 		file: Effect.fn('Agents.file')(function* (
 			messageId: string,
 			about: {
-				collection: string;
+				model: string;
 				id: string;
 			} | null
 		) {
@@ -2104,32 +2128,20 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 				if (approve) {
 					const authority = yield* resolve(as);
 					if (authority === null) result = { error: FIXED.stale };
-					else if (call.name === 'query') {
-						const input = yield* Schema.decodeUnknownEffect(ReadInput)(call.input).pipe(
+					else if (call.name !== 'act')
+						return yield* Effect.fail(
+							new AgentRefusal({ message: 'only a write awaits confirmation' })
+						);
+					else {
+						const write = yield* Schema.decodeUnknownEffect(
+							WriteInput,
+							CLOSED
+						)(call.input).pipe(
 							Effect.mapError((error) =>
 								BoltError.make('invalidInput', 'decode', error.message, error)
 							)
 						);
-						if (input.query === undefined)
-							return yield* Effect.fail(
-								new AgentRefusal({ message: 'only a collection query awaits confirmation' })
-							);
-						const name =
-								input.query.includes('.') || input.collection === undefined
-									? input.query
-									: `${input.collection}.${input.query}`,
-							dot = name.lastIndexOf('.');
-						result = yield* e.calls.query({
-							authority,
-							bindings: yield* config.bindings,
-							invocationId: `${r.turn}:${call.id}`,
-							from: 'Client',
-							collection: name.slice(0, dot),
-							query: name.slice(dot + 1),
-							input: input.input ?? {}
-						});
-					} else
-						result = yield* performAll(
+						result = yield* perform(
 							{
 								engine: e,
 								authority,
@@ -2137,15 +2149,11 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 								turn: r.turn ?? r.id,
 								receipts
 							},
-							writesOf(
-								yield* Schema.decodeUnknownEffect(WriteInput)(call.input).pipe(
-									Effect.mapError((error) =>
-										BoltError.make('invalidInput', 'decode', error.message, error)
-									)
-								)
-							),
+							write.callable,
+							write.input ?? null,
 							call.id
 						);
+					}
 				}
 				return result;
 			});
@@ -2239,12 +2247,23 @@ export const AgentsLive = Layer.effectContext(
 			wake = yield* Wake,
 			turnHandlers = yield* TurnHandlers,
 			runHandlers = yield* RunHandlers,
+			links = yield* Effect.serviceOption(Links),
 			host = yield* AgentHost;
 		const bindings = Clock.currentTimeMillis.pipe(
 			Effect.map((now) => bindingsAt(now, manifest.workspace.tz))
 		);
+		const typing =
+			host.typing ??
+			(Option.isSome(links)
+				? (integration: string, thread: string, on: boolean) =>
+						links.value.typing(integration, thread, on).pipe(
+							Effect.tapCause(Effect.logWarning),
+							Effect.ignore
+						)
+				: undefined);
 		const api = yield* agents({
 			...host,
+			...(typing === undefined ? {} : { typing }),
 			engine: {
 				manifest,
 				db,

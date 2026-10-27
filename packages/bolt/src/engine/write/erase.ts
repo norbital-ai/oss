@@ -35,12 +35,12 @@ export const erase = Effect.fn('Bolt.erase')(function* (
 		cat = catalogOf(m),
 		auth = r.authority,
 		b = r.bindings,
-		c = r.collection,
+		c = r.model,
 		model = m.models[c];
 	const none = (outcome: Outcome): ActResult => ({ outcome, captured: [], v: 0 });
-	if (model === undefined || m.collections[c] === undefined)
+	if (model === undefined || m.exposures[c] === undefined)
 		return yield* Effect.fail(
-			BoltError.make('unknownCollection', 'decode', `unknown collection '${c}'`)
+			BoltError.make('unknownModel', 'decode', `unknown model '${c}'`)
 		);
 	const late = expired(r);
 	if (late !== null) return none(late);
@@ -103,7 +103,7 @@ export const erase = Effect.fn('Bolt.erase')(function* (
 	let writes: Write[], spec: NonNullable<Commit['erase']>;
 	if (req.mode === 'remove') {
 		writes = stored_.map((row) => ({
-			collection: c,
+			model: c,
 			id: String(row['id']),
 			op: 'delete',
 			revision: Number(row['revision'])
@@ -121,7 +121,7 @@ export const erase = Effect.fn('Bolt.erase')(function* (
 			: {};
 		const write = { ...values, ...nulled, ...embedded };
 		writes = stored_.map((row) => ({
-			collection: c,
+			model: c,
 			id: String(row['id']),
 			op: 'update',
 			set: write,
@@ -129,7 +129,7 @@ export const erase = Effect.fn('Bolt.erase')(function* (
 		}));
 		spec = {
 			mode: 'anonymise',
-			collection: c,
+			model: c,
 			ids,
 			purge: readers(model.computed ?? {}, Object.keys(values))
 		};
@@ -155,7 +155,7 @@ export const erase = Effect.fn('Bolt.erase')(function* (
 			kind: 'committed',
 			output: null,
 			records: writes.map((write) => ({
-				collection: write.collection,
+				model: write.model,
 				id: write.id,
 				revision: write.op === 'create' ? 1 : write.revision + 1
 			}))

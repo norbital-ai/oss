@@ -4,7 +4,7 @@
 import { expectTypeOf } from '@effect/vitest';
 import type { TeamEntries } from '../../src/decl/access/team.ts';
 import type { customField } from '../../src/decl/custom-field.ts';
-import type { CollectionSpec, ModelSpec } from '../../src/decl/model.ts';
+import type { ExposureSpec, ModelSpec } from '../../src/decl/model.ts';
 import type { RelationshipSpec } from '../../src/decl/names.ts';
 import type { EnvoySpec, mcp } from '../../src/decl/runtime/agent.ts';
 import type { AppSpec, GroupSpec, secrets, workspace } from '../../src/decl/runtime/app.ts';
@@ -22,7 +22,7 @@ type Workspace = EngineManifest['workspace'];
 // ── parts the compiler proves: exactly the decl type ──
 expectTypeOf<Part<'models'>>().toEqualTypeOf<ModelSpec>();
 expectTypeOf<Part<'relationships'>>().toEqualTypeOf<RelationshipSpec>();
-expectTypeOf<Part<'collections'>>().toEqualTypeOf<CollectionSpec>();
+expectTypeOf<Part<'exposures'>>().toEqualTypeOf<ExposureSpec>();
 expectTypeOf<Omit<Part<'integrations'>, 'test'>>().toEqualTypeOf<IntegrationSpec>();
 expectTypeOf<Part<'integrations'>['test']>().toEqualTypeOf<true | undefined>();
 expectTypeOf<Part<'automations'>>().toEqualTypeOf<AutomationSpec>();

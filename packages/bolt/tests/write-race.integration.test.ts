@@ -15,12 +15,12 @@ import { aggregate } from '@norbital-ai/store';
 import { act } from '../src/engine/write/act.ts';
 import { admin, NOW, TODAY } from './write-fixture.ts';
 import { bridgeOn, manifest, open } from './write-p2.fixture.ts';
-const orders = manifest.collections['orders'];
+const orders = manifest.exposures['orders'];
 if (orders?.create === undefined) throw new Error('The race fixture has no orders create contract');
 const callbacks: EngineManifest = {
 	...manifest,
-	collections: {
-		...manifest.collections,
+	exposures: {
+		...manifest.exposures,
 		orders: { ...orders, create: { ...orders.create, transform: true } }
 	}
 };
@@ -63,10 +63,10 @@ const race = Effect.fnUntraced(function* (db: TenantDbShape) {
 	const e = { manifest: callbacks, db, guest, bridge: bridgeOn(db, callbacks) };
 	const run = (title: string) =>
 		act(e, {
-			collection: 'orders',
+			model: 'orders',
 			verb: 'create',
 			mode: { _tag: 'Direct' },
-			input: { title },
+			input: [{ title }],
 			key: title,
 			issuedAt: NOW,
 			authority: admin,
@@ -123,10 +123,10 @@ describe('engine/write: callback-read-race (rule 26)', () => {
 			const result = yield* act(
 				{ manifest: callbacks, db: failing, guest, bridge: bridgeOn(db, callbacks) },
 				{
-					collection: 'orders',
+					model: 'orders',
 					verb: 'create',
 					mode: { _tag: 'Direct' },
-					input: { title: 'bounded replay' },
+					input: [{ title: 'bounded replay' }],
 					key: 'bounded',
 					issuedAt: NOW,
 					authority: admin,

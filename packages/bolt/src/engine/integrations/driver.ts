@@ -101,7 +101,8 @@ export type Link = { close(): Promise<void> } & Partial<{
 		signal: AbortSignal,
 		attachments?: readonly OutboundAttachment[]
 	): Promise<{ providerId: string; presumeAfterMs?: number }>;
-	typing(to: string, signal: AbortSignal): Promise<void>;
+	/** The chat shows this account typing to `to` (`on`), or stops showing it. */
+	typing(to: string, signal: AbortSignal, on: boolean): Promise<void>;
 	/** A request driver's op (an http `{ method, path, … }` answering `{ status, body }`, a database request its rows), or a pushing driver's `call` through this link. */
 	request(op: Json, signal: AbortSignal): Promise<Json>;
 	/** A pushing driver's sync page from `cursor` (its `invalidate` event names the sync and partition). */

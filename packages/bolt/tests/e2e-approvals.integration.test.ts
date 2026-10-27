@@ -10,6 +10,7 @@ import type { Authority, ActOutcome as Outcome } from '../src/engine/contracts.t
 import type { EngineManifest } from '../src/engine/manifest.ts';
 import { Authorities } from '../src/engine/identity/actor.ts';
 import { lowerRead } from '../src/engine/query/engine.ts';
+import { dynamicRead } from '../src/protocol/read-request.ts';
 import { ActReply, type Frame } from '../src/protocol/schema.ts';
 import { TestWorkspace } from '../src/test/index.ts';
 import { program } from './support/guest-fixture.ts';
@@ -29,11 +30,11 @@ const manifest: EngineManifest = {
 		}
 	},
 	relationships: {},
-	collections: {
+	exposures: {
 		orders: {
-			read: { fields: 'all' },
-			create: { input: { columns: ['title', 'note'] } },
-			update: { input: { columns: ['title', 'note'] } }
+			read: { orders: { fields: 'all' } },
+			create: { columns: { orders: ['title', 'note'] } },
+			update: { columns: { orders: ['title', 'note'] } }
 		}
 	},
 	policies: {
@@ -42,7 +43,7 @@ const manifest: EngineManifest = {
 			grants: {
 				orders: {
 					read: true,
-					update: { fields: ['title'] }
+					update: { columns: { orders: ['title'] } }
 				}
 			}
 		},
@@ -51,8 +52,8 @@ const manifest: EngineManifest = {
 			grants: {
 				orders: {
 					read: true,
-					create: { approval: true },
-					update: { fields: ['title', 'note'], approval: true }
+					create: { check: true },
+					update: { columns: { orders: ['title', 'note'] }, check: true }
 				}
 			}
 		},
@@ -74,7 +75,10 @@ const setup = Effect.gen(function* () {
 		TestWorkspace.layer({
 			manifest,
 			guest: yield* program(
-				`export default { policy: { sales_approval: { grants: { orders: { create: { approval: (write, flow) => write.record.title === 'refuse' ? flow.deny('This title is refused.') : flow.step('Finance', { teams: ['finance'] }) }, update: { approval: (write, flow) => flow.step('Finance', { teams: ['finance'] }) } } } } } };`
+				`export default { policy: { sales_approval: { grants: { orders: {
+	create: { check: function* (rows, ctx) { const row = rows.findIndex((r) => r.title === 'refuse'); return row >= 0 ? ctx.deny('This title is refused.', { row, field: 'title' }) : ctx.approve((flow) => flow.step('Finance', { teams: ['finance'] })); } },
+	update: { check: function* (changes, ctx) { return ctx.approve((flow) => flow.step('Finance', { teams: ['finance'] })); } }
+} } } } };`
 			)
 		})
 	);
@@ -163,7 +167,7 @@ const setup = Effect.gen(function* () {
 	const committedView = () =>
 		Effect.gen(function* () {
 			const { frames } = yield* connect(sales(), 'v', {
-				read: lowerRead(t.manifest, 'query', ['orders', { all: true, select: { title: true } }])
+				read: lowerRead(t.manifest, 'query', [{ orders: { fields: ['title'] } }])
 			});
 			return () =>
 				settled.pipe(
@@ -186,7 +190,7 @@ const setup = Effect.gen(function* () {
 			const { frames, fiber } = yield* connect(authority, 'inbox', {
 				read: {
 					kind: 'inbox',
-					collection: 'sys_notification',
+					model: 'sys_notification',
 					member: authority.actor.id,
 					requests: true
 				}
@@ -236,7 +240,7 @@ describe('an approval flow in the policy grant', () => {
 			Effect.gen(function* () {
 				const { t, sales, post } = yield* setup;
 				expect(
-					(yield* post(sales, 'orders.create', { title: 'refuse' })).reply.outcome
+					(yield* post(sales, 'orders.create', [{ title: 'refuse' }])).reply.outcome
 				).toMatchObject({ kind: 'refused', code: 'refused', message: 'This title is refused.' });
 				expect(
 					yield* t.db.value(Schema.Number, {
@@ -254,7 +258,7 @@ describe('an approval flow in the policy grant', () => {
 				Effect.gen(function* () {
 					const { t, sales, held, target, decide, post } = yield* setup;
 					const requestId = request(
-						(yield* post(sales, 'orders.create', { title: 'desk' })).reply.outcome
+						(yield* post(sales, 'orders.create', [{ title: 'desk' }])).reply.outcome
 					);
 					const id = yield* target(requestId);
 					expect(yield* held(id)).toEqual({ title: 'desk', note: null });
@@ -262,7 +266,7 @@ describe('an approval flow in the policy grant', () => {
 						(yield* post(
 							() => t.as(t.member(['sales'], { teams: ['ops'], teamPath: ['ops'] })).authority,
 							'orders.update',
-							{ target: id, set: { title: 'x' } }
+							[{ target: id, set: { title: 'x' } }]
 						)).reply.outcome
 					).toMatchObject({ kind: 'refused', code: 'locked', data: { requestId } });
 					expect(yield* decide(requestId, 'approve')).toMatchObject({ kind: 'decided' });
@@ -276,7 +280,7 @@ describe('an approval flow in the policy grant', () => {
 			Effect.gen(function* () {
 				const { sales, finance, target, post, route } = yield* setup;
 				const requestId = request(
-					(yield* post(sales, 'orders.create', { title: 'desk' })).reply.outcome
+					(yield* post(sales, 'orders.create', [{ title: 'desk' }])).reply.outcome
 				);
 				const id = yield* target(requestId);
 				const listed = (query: string) =>
@@ -289,7 +293,7 @@ describe('an approval flow in the policy grant', () => {
 						)(body).value.map((v) => v.id);
 					});
 				expect(yield* listed('')).toEqual([requestId]);
-				expect(yield* listed(`?collection=orders&record=${id}&all=1`)).toEqual([requestId]);
+				expect(yield* listed(`?model=orders&record=${id}&all=1`)).toEqual([requestId]);
 			})
 		)
 	);
@@ -301,17 +305,20 @@ describe('an approval flow in the policy grant', () => {
 				Effect.gen(function* () {
 					const { t, sales, held, decide, post } = yield* setup;
 					const id = created(
-						(yield* post(() => t.as(t.admin).authority, 'orders.create', {
-							title: 'desk',
-							note: 'a'
-						})).reply.outcome
+						(yield* post(() => t.as(t.admin).authority, 'orders.create', [
+							{
+								title: 'desk',
+								note: 'a'
+							}
+						])).reply.outcome
 					);
 					expect(
-						(yield* post(sales, 'orders.update', { target: id, set: { title: 'chair' } })).reply
+						(yield* post(sales, 'orders.update', [{ target: id, set: { title: 'chair' } }])).reply
 							.outcome
 					).toMatchObject({ kind: 'committed' });
 					const requestId = request(
-						(yield* post(sales, 'orders.update', { target: id, set: { note: 'b' } })).reply.outcome
+						(yield* post(sales, 'orders.update', [{ target: id, set: { note: 'b' } }])).reply
+							.outcome
 					);
 					expect(yield* held(id)).toEqual({ title: 'chair', note: 'b' });
 					expect(yield* decide(requestId, 'reject')).toMatchObject({ kind: 'decided' });
@@ -325,7 +332,7 @@ describe('an approval flow in the policy grant', () => {
 			Effect.gen(function* () {
 				const { t, sales, post } = yield* setup;
 				const requestId = request(
-					(yield* post(sales, 'orders.create', { title: 'desk' })).reply.outcome
+					(yield* post(sales, 'orders.create', [{ title: 'desk' }])).reply.outcome
 				);
 				const $approval = {
 					requestId,
@@ -335,14 +342,12 @@ describe('an approval flow in the policy grant', () => {
 					requestedBy: expect.any(String)
 				};
 				const reader = t.as(t.member(['finance']));
-				expect((yield* reader.query('orders', { all: true })).rows).toEqual([
+				expect((yield* reader.query({ orders: {} })).orders.rows).toEqual([
 					expect.objectContaining({ title: 'desk', $approval })
 				]);
-				const picked = (yield* reader.query('orders', {
-					mode: 'declared',
-					select: ['title'],
-					all: true
-				})).rows;
+				// the same layer map built at runtime: checked host-side, answered as JSON rows
+				const dynamic = dynamicRead({ orders: { fields: ['title'] } });
+				const picked = (yield* reader.query(dynamic)).orders?.rows;
 				expect(picked).toEqual([{ id: expect.any(String), title: 'desk', $approval }]);
 			})
 		)
@@ -358,12 +363,13 @@ describe('a per-record restore over /__bolt/act (rule 17)', () => {
 					const { t, held, post } = yield* setup;
 					const admin = () => t.as(t.admin).authority;
 					const id = created(
-						(yield* post(admin, 'orders.create', { title: 'desk', note: 'a' })).reply.outcome
+						(yield* post(admin, 'orders.create', [{ title: 'desk', note: 'a' }])).reply.outcome
 					);
 					ok(
-						(yield* post(admin, 'orders.update', { target: id, set: { note: 'b' } })).reply.outcome
+						(yield* post(admin, 'orders.update', [{ target: id, set: { note: 'b' } }])).reply
+							.outcome
 					);
-					const target = { collection: 'orders', record: id, revision: 1 };
+					const target = { model: 'orders', record: id, revision: 1 };
 					expect((yield* post(admin, 'history.preview', target)).reply.outcome).toMatchObject({
 						kind: 'committed',
 						output: {
@@ -407,7 +413,7 @@ describe('decisions over /__bolt/act reach the live lane (rules 46, 47, 66)', ()
 									[
 										{
 											kind: 'inbox',
-											collection: 'sys_notification',
+											model: 'sys_notification',
 											member: requestor.id,
 											requests: true
 										}
@@ -417,7 +423,7 @@ describe('decisions over /__bolt/act reach the live lane (rules 46, 47, 66)', ()
 								)
 								.pipe(Effect.flip)
 						).toMatchObject({ code: 'forbidden' });
-						const submitted = yield* post(sales, 'orders.create', { title: 'desk' });
+						const submitted = yield* post(sales, 'orders.create', [{ title: 'desk' }]);
 						const requestId = request(submitted.reply.outcome);
 						yield* settled;
 						expect(own.value()).toMatchObject({
@@ -454,7 +460,7 @@ describe('decisions over /__bolt/act reach the live lane (rules 46, 47, 66)', ()
 				const own = yield* inboxView(sales()),
 					reviewer = yield* inboxView(finance());
 				try {
-					const submitted = yield* post(sales, 'orders.create', { title: 'reject' });
+					const submitted = yield* post(sales, 'orders.create', [{ title: 'reject' }]);
 					const requestId = request(submitted.reply.outcome),
 						id = yield* target(requestId);
 					yield* settled;
@@ -482,19 +488,23 @@ describe('decisions over /__bolt/act reach the live lane (rules 46, 47, 66)', ()
 		Effect.scoped(
 			Effect.gen(function* () {
 				const { t, approvals, sales, finance, held, post, settled, inboxView } = yield* setup;
-				const created = (yield* post(() => t.as(t.admin).authority, 'orders.create', {
-					title: 'Erase fixture'
-				})).reply.outcome;
+				const created = (yield* post(() => t.as(t.admin).authority, 'orders.create', [
+					{
+						title: 'Erase fixture'
+					}
+				])).reply.outcome;
 				if (created.kind !== 'committed' || created.records[0] === undefined)
 					throw new Error('Expected a stored order.');
 				const id = created.records[0].id,
 					own = yield* inboxView(sales()),
 					reviewer = yield* inboxView(finance());
 				try {
-					const submitted = yield* post(sales, 'orders.update', {
-						target: id,
-						set: { note: 'Prospective value' }
-					});
+					const submitted = yield* post(sales, 'orders.update', [
+						{
+							target: id,
+							set: { note: 'Prospective value' }
+						}
+					]);
 					const requestId = request(submitted.reply.outcome);
 					yield* settled;
 					expect(reviewer.value()).toMatchObject({ requests: [{ id: requestId }] });
@@ -527,17 +537,17 @@ describe('decisions over /__bolt/act reach the live lane (rules 46, 47, 66)', ()
 				Effect.gen(function* () {
 					const { t, sales, finance, target, post, committedView } = yield* setup;
 					const last = yield* committedView();
-					const held = yield* post(sales, 'orders.create', { title: 'desk' });
+					const held = yield* post(sales, 'orders.create', [{ title: 'desk' }]);
 					expect(held.status).toBe(202);
 					const requestId = request(held.reply.outcome);
 					const id = yield* target(requestId);
 					const ops = () =>
 						t.as(t.member(['sales'], { teams: ['ops'], teamPath: ['ops'] })).authority;
-					const refused = yield* post(ops, 'orders.update', { target: id, set: { title: 'x' } });
+					const refused = yield* post(ops, 'orders.update', [{ target: id, set: { title: 'x' } }]);
 					expect(refused).toMatchObject({
 						reply: { outcome: { kind: 'refused', code: 'locked' } }
 					});
-					expect((yield* last()).value).toMatchObject({ rows: [{ title: 'desk' }] });
+					expect((yield* last()).value).toMatchObject({ orders: { rows: [{ title: 'desk' }] } });
 					const decided = yield* post(finance, 'approvals.decide', {
 						requestId,
 						decision: 'approve'
@@ -547,7 +557,7 @@ describe('decisions over /__bolt/act reach the live lane (rules 46, 47, 66)', ()
 						reply: { outcome: { kind: 'committed', output: { requestId, status: 'Approved' } } }
 					});
 					const frame = yield* last();
-					expect(frame.value).toMatchObject({ rows: [{ title: 'desk' }] });
+					expect(frame.value).toMatchObject({ orders: { rows: [{ title: 'desk' }] } });
 					expect(frame.v).toBe(decided.reply.v);
 				})
 			)
@@ -558,16 +568,18 @@ describe('decisions over /__bolt/act reach the live lane (rules 46, 47, 66)', ()
 			Effect.gen(function* () {
 				const { t, sales, finance, held, post, committedView } = yield* setup;
 				const id = created(
-					(yield* post(() => t.as(t.admin).authority, 'orders.create', {
-						title: 'desk',
-						note: 'a'
-					})).reply.outcome
+					(yield* post(() => t.as(t.admin).authority, 'orders.create', [
+						{
+							title: 'desk',
+							note: 'a'
+						}
+					])).reply.outcome
 				);
 				const last = yield* committedView();
 				const requestId = request(
-					(yield* post(sales, 'orders.update', { target: id, set: { note: 'b' } })).reply.outcome
+					(yield* post(sales, 'orders.update', [{ target: id, set: { note: 'b' } }])).reply.outcome
 				);
-				expect((yield* last()).value).toMatchObject({ rows: [{ title: 'desk' }] });
+				expect((yield* last()).value).toMatchObject({ orders: { rows: [{ title: 'desk' }] } });
 				expect(
 					(yield* post(finance, 'approvals.decide', {
 						requestId,
@@ -575,7 +587,7 @@ describe('decisions over /__bolt/act reach the live lane (rules 46, 47, 66)', ()
 						reason: 'Not accepted.'
 					})).reply.outcome
 				).toMatchObject({ output: { status: 'Rejected' } });
-				expect((yield* last()).value).toMatchObject({ rows: [{ title: 'desk' }] });
+				expect((yield* last()).value).toMatchObject({ orders: { rows: [{ title: 'desk' }] } });
 				expect(
 					(yield* post(finance, 'approvals.decide', { requestId, decision: 'approve' })).reply
 						.outcome
@@ -583,7 +595,7 @@ describe('decisions over /__bolt/act reach the live lane (rules 46, 47, 66)', ()
 				expect(yield* held(id)).toEqual({ title: 'desk', note: 'a' });
 				const rep = sales();
 				const again = request(
-					(yield* post(() => rep, 'orders.update', { target: id, set: { note: 'c' } })).reply
+					(yield* post(() => rep, 'orders.update', [{ target: id, set: { note: 'c' } }])).reply
 						.outcome
 				);
 				expect(
@@ -601,8 +613,8 @@ describe('decisions over /__bolt/act reach the live lane (rules 46, 47, 66)', ()
 					})).reply.outcome
 				).toMatchObject({ output: { status: 'ChangesRequested' } });
 				expect(
-					(yield* post(() => rep, 'orders.update', { target: id, set: { note: 'revised' } })).reply
-						.outcome
+					(yield* post(() => rep, 'orders.update', [{ target: id, set: { note: 'revised' } }]))
+						.reply.outcome
 				).toMatchObject({ kind: 'pendingApproval', requestId: again });
 				expect(
 					(yield* post(finance, 'approvals.decide', { requestId: again, decision: 'approve' }))
@@ -620,7 +632,7 @@ describe('decisions over /__bolt/act reach the live lane (rules 46, 47, 66)', ()
 				Effect.gen(function* () {
 					const { t, sales, decide, post } = yield* setup;
 					const requestId = request(
-						(yield* post(sales, 'orders.create', { title: 'desk' })).reply.outcome
+						(yield* post(sales, 'orders.create', [{ title: 'desk' }])).reply.outcome
 					);
 					expect(yield* decide(requestId, 'approve')).toMatchObject({ kind: 'decided' });
 					expect(yield* decide(requestId, 'approve')).toMatchObject({

@@ -27,22 +27,18 @@ const manifest: EngineManifest = {
 		}
 	},
 	relationships: {},
-	collections: {
-		quota: { read: { fields: 'all' } },
+	exposures: {
+		quota: { read: { quota: { fields: 'all' } } },
 		orders: {
-			read: { fields: 'all' },
-			create: { input: { columns: ['title'] }, transform: true },
-			queries: {
-				price: { description: 'Source price', input: {}, output: { kind: 'int' } },
-				illegal: { description: 'Read only', input: {}, output: { kind: 'text' } }
-			}
+			read: { orders: { fields: 'all' } },
+			create: { columns: { orders: ['title'] }, transform: true }
 		}
 	},
 	policies: {
 		narrow: {
 			description: 'Own labels only',
 			automations: ['inspect'],
-			grants: { quota: { read: { where: { name: { eq: 'quota' } }, fields: ['name'] } } }
+			grants: { quota: { read: { quota: { where: { name: { eq: 'quota' } }, fields: ['name'] } } } }
 		},
 		starteronly: {
 			description: 'Start without a write grant',
@@ -50,16 +46,16 @@ const manifest: EngineManifest = {
 			grants: { orders: { read: true }, quota: { read: true } }
 		},
 		noquery: {
-			description: 'Start without a query grant',
+			description: 'Start without a read grant on the source',
 			automations: ['queryplace'],
-			grants: { orders: { read: true, create: true }, quota: { read: true } }
+			grants: { orders: { read: true, create: true } }
 		},
 		operator: {
 			description: 'Synthetic operator',
-			automations: ['outer', 'place', 'fail', 'queryplace', 'readplace', 'illegalplace'],
+			automations: ['outer', 'place', 'fail', 'queryplace', 'readplace'],
 			grants: {
 				quota: { read: true },
-				orders: { read: true, create: true, queries: ['price', 'illegal'] }
+				orders: { read: true, create: true }
 			}
 		}
 	},
@@ -82,7 +78,7 @@ const manifest: EngineManifest = {
 			runAs: 'trigger'
 		},
 		queryplace: {
-			description: 'Declared query pricing',
+			description: 'Read request pricing',
 			input: { title: { kind: 'text' } },
 			runAs: 'trigger'
 		},
@@ -91,7 +87,6 @@ const manifest: EngineManifest = {
 			input: { title: { kind: 'text' } },
 			runAs: 'trigger'
 		},
-		illegalplace: { description: 'Query mutation control', input: {}, runAs: 'trigger' },
 		fail: {
 			description: 'Atomic generated batch refusal',
 			input: { title: { kind: 'text' } },
@@ -109,45 +104,37 @@ const manifest: EngineManifest = {
 const guest = program(`import { Effect } from 'effect';
 const conflict = (effect) => effect.pipe(Effect.catchTag('ActConflict', error =>
  Effect.succeed({kind:'conflict',records:error.records})));
-const place = (input,ctx) => ctx.act('orders.create',input);
+const place = (input,ctx) => ctx.act('orders.create',[input]);
 const nested = (input,ctx) => place(input,ctx);
 export default {
- collection:{orders:{bodies:{
-  queries:{
-   price:function*(input,ctx){
-    const source=yield* ctx.query('quota',{all:true,select:{cap:true}});
-    if(source.rows[0].cap===0)return yield* ctx.refuse('source changed');
-    return source.rows[0].cap;
-   },
-   illegal:function*(input,ctx){yield* Effect.sync(()=>ctx.act('orders.create',{title:'illegal'}));return 'bad';}
-  },
+ model:{orders:{bodies:{
   create:function*(inputs,ctx){
    if(inputs.some(input=>input.title==='refuse'))return yield* ctx.refuse('late failure');
    if(inputs.every(input=>input.title==='querypriced'))return inputs.map(input=>({...input,derived:'priced'}));
-   const source=yield* ctx.db.query('quota',{all:true,select:{cap:true}});
+   const {quota:source}=yield* ctx.db.query({quota:{fields:['cap']}});
    if(source.rows[0].cap===0)return yield* ctx.refuse('source changed');
    return inputs.map(input=>({...input,derived:input.title==='giant'?'x'.repeat(4194304):String(source.rows[0].cap)}));
   }
  }}},
  automation:{
   inspect:{body:function*(input,ctx){
-   return JSON.stringify((yield* ctx.query('quota',{all:true,select:{name:true,cap:true}})).rows);
+   return JSON.stringify((yield* ctx.query({quota:{fields:['name','cap']}})).quota.rows);
   }},
   outer:{body:function*(input,ctx){return yield* conflict(nested(input,ctx));}},
   place:{body:function*(input,ctx){return yield* conflict(place(input,ctx));}},
   queryplace:{body:function*(input,ctx){
-   yield* ctx.query('orders.price',{});
-   return yield* conflict(ctx.act('orders.create',{title:'querypriced'}));
+   const {quota}=yield* ctx.query({quota:{fields:['cap']}});
+   if(quota.rows[0].cap===0)return 'source changed';
+   return yield* conflict(ctx.act('orders.create',[{title:'querypriced'}]));
   }},
   readplace:{body:function*(input,ctx){
-   const source=yield* ctx.query('quota',{all:true,select:{cap:true}});
+   const source=(yield* ctx.query({quota:{fields:['cap']}})).quota;
    if(source.rows[0].cap===0)return 'source changed';
-   return yield* conflict(ctx.act('orders.create',{title:'querypriced'}));
+   return yield* conflict(ctx.act('orders.create',[{title:'querypriced'}]));
   }},
-  illegalplace:{body:function*(input,ctx){return yield* ctx.query('orders.illegal',{});}},
   fail:{body:function*(input,ctx){return yield* ctx.act.many([
-   {callable:'orders.create',input:{title:input.title}},
-   {callable:'orders.create',input:{title:'refuse'}}
+   {callable:'orders.create',input:[{title:input.title}]},
+   {callable:'orders.create',input:[{title:'refuse'}]}
   ]);}}
  }
 };`);
@@ -164,7 +151,7 @@ const Conflict = Schema.Struct({
 const Committed = Schema.Struct({
 	kind: Schema.Literal('committed'),
 	records: Schema.Array(
-		Schema.Struct({ collection: Schema.String, id: Schema.String, revision: Schema.Number })
+		Schema.Struct({ model: Schema.String, id: Schema.String, revision: Schema.Number })
 	)
 });
 const required = <A>(value: A | undefined): A => {
@@ -273,7 +260,7 @@ it.live(
 			Effect.gen(function* () {
 				const direct = yield* fixture(true);
 				assert.equal(
-					(yield* direct.act('orders.create', { title: 'priced against old source' })).outcome.kind,
+					(yield* direct.act('orders.create', [{ title: 'priced against old source' }])).outcome.kind,
 					'conflict'
 				);
 				assert.equal(direct.moved(), true);
@@ -281,8 +268,8 @@ it.live(
 				assert.equal(yield* direct.count(), 0);
 				const batch = yield* fixture(true);
 				const result = yield* batch.batch([
-					{ collection: 'orders', verb: 'create', input: { title: 'first' } },
-					{ collection: 'orders', verb: 'create', input: { title: 'second' } }
+					{ model: 'orders', verb: 'create', input: [{ title: 'first' }] },
+					{ model: 'orders', verb: 'create', input: [{ title: 'second' }] }
 				]);
 				assert.equal(batch.moved(), true);
 				assert.equal(result.outcome.kind, 'refused');
@@ -331,8 +318,8 @@ it.live('large callback results and later generated-batch refusals leave no part
 			assert.equal(yield* large.count(), 0);
 			const native = yield* fixture();
 			const refused = yield* native.batch([
-				{ collection: 'orders', verb: 'create', input: { title: 'planned first' } },
-				{ collection: 'orders', verb: 'create', input: { title: 'refuse' } }
+				{ model: 'orders', verb: 'create', input: [{ title: 'planned first' }] },
+				{ model: 'orders', verb: 'create', input: [{ title: 'refuse' }] }
 			]);
 			assert.equal(refused.outcome.kind, 'refused');
 			if (refused.outcome.kind !== 'refused') throw new Error(JSON.stringify(refused.outcome));
@@ -355,7 +342,7 @@ it.live('large callback results and later generated-batch refusals leave no part
 );
 
 it.live(
-	'queued helper workflows retain caller write and query grants; queries stay read-only',
+	'queued helper workflows retain caller write and read grants',
 	() =>
 		Effect.scoped(
 			Effect.gen(function* () {
@@ -372,15 +359,6 @@ it.live(
 				);
 				assert.equal(yield* f.count(), 1);
 				const before = yield* f.count();
-				const illegal = yield* f.start('illegalplace', {});
-				assert.equal(illegal.outcome.kind, 'committed');
-				yield* f.t.runDue();
-				const illegalRun = required(yield* f.run(illegal.id));
-				assert.equal(illegalRun.state, 'failed');
-				assert.equal(illegalRun.output, null);
-				assert.equal(illegalRun.error?.code, 'guestError');
-				assert.match(illegalRun.error?.message ?? '', /\.act is not a function/);
-				assert.equal(yield* f.count(), before);
 				const starter = f.t.as(f.t.member(['starteronly']));
 				const deniedWrite = yield* f.start(
 					'outer',
@@ -401,9 +379,9 @@ it.live(
 				);
 				assert.equal(deniedQuery.outcome.kind, 'committed');
 				yield* f.t.runDue();
+				// a root the starter may not read answers no rows: the run fails before it writes
 				const deniedQueryRun = required(yield* f.run(deniedQuery.id));
 				assert.equal(deniedQueryRun.state, 'failed');
-				assert.equal(deniedQueryRun.error?.message, "You may not call 'orders.price'.");
 				assert.equal(yield* f.count(), before);
 				const outsider = f.t.as(f.t.member([]));
 				const deniedStart = yield* f.start('place', { title: 'forbidden' }, outsider.authority);

@@ -12,6 +12,16 @@ export {
 	ImportStartCapability
 } from './schema.ts';
 export { ActReply, QReply, WireError } from './schema.ts';
+export {
+	LayerRequestSchema,
+	READ_LIMIT,
+	ReadRequestSchema,
+	decodeReadRequest,
+	dynamicRead,
+	type DynamicRead,
+	type LayerRequestJson,
+	type ReadRequestJson
+} from './read-request.ts';
 export { MIME, clientPage, type ClientPage } from './static.ts';
 
 /** `POST /__bolt/q`: reads, each `{ m, a }` as the guest names it. */
@@ -26,7 +36,7 @@ export type ActResponse = S.ActReply | S.WireError;
 export type LiveRegister = S.LiveBody;
 /** One SSE frame of `GET /__bolt/live`. */
 export type LiveFrame = S.Frame;
-/** `PUT /__bolt/files/<collection>.<field>`: the client-minted upload id, and the challenge on a visitor upload. */
+/** `PUT /__bolt/files/<model>.<field>`: the client-minted upload id, and the challenge on a visitor upload. */
 export type FileUploadHeaders = { 'Idempotency-Key': string; 'Bolt-Challenge'?: string };
 /** `POST /__bolt/session/{code,verify,signout,invitation}`. */
 export type SessionRequest = S.SessionRequest;

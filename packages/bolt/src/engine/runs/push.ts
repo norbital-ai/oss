@@ -19,7 +19,7 @@ export const subscribe = (user: string, body: PushBody) =>
 				text: `DELETE FROM bolt_push_subscriptions WHERE "user" = $1 AND endpoint = $2`,
 				params: [user, body.endpoint]
 			});
-		const id = yield* (yield* Crypto.Crypto).randomUUIDv4.pipe(
+		const id = yield* (yield* Crypto.Crypto).randomUUIDv4().pipe(
 			Effect.mapError((error) =>
 				BoltError.make('unavailable', 'facility', 'Secure random UUID generation failed.', error)
 			)
@@ -33,7 +33,7 @@ const Input = Schema.Struct({ ids: Schema.Array(Schema.String) });
 const Notice = Schema.Struct({
 	title: Schema.String,
 	body: Schema.NullOr(Schema.String),
-	link: Schema.NullOr(Schema.Struct({ collection: Schema.String, id: Schema.String })),
+	link: Schema.NullOr(Schema.Struct({ model: Schema.String, id: Schema.String })),
 	kind: Schema.Literals(['web', 'apns']),
 	endpoint: Schema.String,
 	keys: Schema.Json

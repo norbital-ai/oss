@@ -1,4 +1,4 @@
-// The unified page query wire: declared queries, index search, record/list projections and text ids; history stays explicit.
+// The unified page query wire: read requests, index search, record/list projections and text ids; history stays explicit.
 import { describe, expect, it } from '@effect/vitest';
 import { Context, Effect, Layer, Result, Schema } from 'effect';
 import type { Json } from '../src/decl/values.ts';
@@ -43,18 +43,11 @@ const manifest = Result.getOrThrow(
 			}
 		},
 		relationships: {},
-		collections: {
+		exposures: {
 			orders: {
-				read: { fields: 'all' },
-				create: { input: { columns: ['title', 'doc', 'color'] } },
-				update: { input: { columns: ['title'] } },
-				queries: {
-					titled: {
-						description: 'Titles',
-						input: { prefix: { kind: 'text' } },
-						output: { kind: 'json' }
-					}
-				}
+				read: { orders: { fields: 'all' } },
+				create: { columns: { orders: ['title', 'doc', 'color'] } },
+				update: { columns: { orders: ['title'] } }
 			}
 		},
 		integrations: {},
@@ -62,7 +55,7 @@ const manifest = Result.getOrThrow(
 			rep: {
 				description: 'Rep',
 				grants: {
-					orders: { read: true, create: true, update: true, history: true, queries: ['titled'] }
+					orders: { read: true, create: true, update: true, history: true }
 				}
 			}
 		},
@@ -87,8 +80,7 @@ const manifest = Result.getOrThrow(
 );
 
 const guest =
-	program(`export default { custom_field: { probe_window: { check: (window) => window.samples.some((value) => value < 0) ? 'Probe samples cannot be negative.' : undefined } }, collection: { orders: { bodies: {
-	queries: { titled: function* (input, ctx) { return (yield* ctx.query('orders', { all: true, orderBy: 'title' })).rows.map((r) => r.title).filter((t) => t.startsWith(input.prefix)); } },
+	program(`export default { custom_field: { probe_window: { check: (window) => window.samples.some((value) => value < 0) ? 'Probe samples cannot be negative.' : undefined } }, model: { orders: { bodies: {
 	indexes: { hue: {
 		probe: (q) => ({ vector: [q.r.toNumber(), 0, 0] }),
 		// the exact score: nearest to 0.5 on the first channel, whatever the probe
@@ -113,13 +105,13 @@ const setup = () =>
 			['beta', 0.9],
 			['bravo', 0.6]
 		] as const) {
-			const o = yield* act('orders.create', { title, doc: { lines: [title] }, color: [r, 0, 0] });
+			const o = yield* act('orders.create', [{ title, doc: { lines: [title] }, color: [r, 0, 0] }]);
 			if (o.kind !== 'committed' || o.records[0] === undefined) throw new Error(JSON.stringify(o));
 			ids.push(o.records[0].id);
 		}
 		const first = ids[0];
 		if (first === undefined) throw new Error('first order missing');
-		yield* act('orders.update', { target: first, set: { title: 'alpha 2' } });
+		yield* act('orders.update', [{ target: first, set: { title: 'alpha 2' } }]);
 		yield* t.db.write({
 			text: `INSERT INTO sys_user (id, email, name, kind) VALUES ('ada', 'ada@x.test', 'Ada', 'staff')`,
 			params: []
@@ -149,76 +141,76 @@ const answers = (body: typeof QReply.Type | typeof WireError.Type) => {
 const Titles = Schema.Array(Schema.Struct({ title: Schema.String }));
 
 describe('/q page reads', () => {
-	it.live('serves a collection query by name as the caller', () =>
+	it.live('serves a read request as the caller; the page derives what a declared query computed', () =>
 		Effect.gen(function* () {
 			const { q } = yield* setup();
-			const r = yield* q([{ m: 'query', a: ['orders.titled', { prefix: 'al' }] }]);
+			const r = yield* q([
+				{ m: 'query', a: [{ orders: { fields: ['title'], orderBy: 'title' } }] }
+			]);
 			expect(r.status).toBe(200);
-			expect(answers(r.body)).toEqual([['alder', 'alpha 2']]);
+			const [answer] = answers(r.body);
+			const { orders } = Schema.decodeUnknownSync(
+				Schema.Struct({ orders: Schema.Struct({ rows: Titles, next: Schema.Null }) })
+			)(answer);
+			// a pure helper on the page's side (a former `orders.titled`)
+			expect(orders.rows.map((o) => o.title).filter((t) => t.startsWith('al'))).toEqual([
+				'alder',
+				'alpha 2'
+			]);
 		})
 	);
 
-	it.live('a query with invalid input is a 400 naming the problem, not a 500', () =>
+	it.live('a read request with an unknown option is a 400 naming it, not a 500', () =>
 		Effect.gen(function* () {
 			const { q } = yield* setup();
-			const r = yield* q([{ m: 'query', a: ['orders.titled', {}] }]);
+			const r = yield* q([{ m: 'query', a: [{ orders: { prefix: 'al' } }] }]);
 			expect(r.status).toBe(400);
-			expect('error' in r.body ? r.body.error : undefined).toMatchObject({
-				code: 'invalidInput',
-				message: expect.stringContaining('prefix')
-			});
+			expect('error' in r.body ? r.body.error.message : undefined).toContain('prefix');
 		})
 	);
 
 	it.live(
-		'serves an indexed query: probe through the index, rerank by the exact score, nearest first',
+		'serves an indexed search: probe through the index, rerank by the exact score, nearest first',
 		() =>
 			Effect.gen(function* () {
 				const { q } = yield* setup();
-				const missing = yield* q([
-					{ m: 'query', a: ['orders', { search: { hue: {} }, limit: 1 }] }
-				]);
+				const search = (hue: Json, fields?: readonly string[]) =>
+					q([
+						{
+							m: 'query',
+							a: [
+								{
+									orders: {
+										search: { hue },
+										limit: 1,
+										...(fields === undefined ? {} : { fields: [...fields] })
+									}
+								}
+							]
+						}
+					]);
+				const missing = yield* search({});
 				expect(missing.status).toBe(400);
 				expect('error' in missing.body ? missing.body.error.message : undefined).toContain('r:');
-				const malformed = yield* q([
-					{
-						m: 'query',
-						a: ['orders', { search: { hue: { r: 0, window: { samples: [] } } }, limit: 1 }]
-					}
-				]);
+				const malformed = yield* search({ r: 0, window: { samples: [] } });
 				expect(malformed.status).toBe(400);
 				expect('error' in malformed.body ? malformed.body.error.message : undefined).toContain(
 					'samples'
 				);
-				const refused = yield* q([
-					{
-						m: 'query',
-						a: ['orders', { search: { hue: { r: 0, window: { samples: [-1] } } }, limit: 1 }]
-					}
-				]);
+				const refused = yield* search({ r: 0, window: { samples: [-1] } });
 				expect(refused.status).toBe(400);
 				expect('error' in refused.body ? refused.body.error.message : undefined).toContain(
 					'Probe samples cannot be negative.'
 				);
-				const r = yield* q([
-					{
-						m: 'query',
-						a: [
-							'orders',
-							{
-								search: { hue: { r: 0, window: { samples: [1] } } },
-								limit: 1,
-								select: { title: true }
-							}
-						]
-					}
-				]);
+				const r = yield* search({ r: 0, window: { samples: [1] } }, ['title']);
 				expect(r.status, JSON.stringify(r.body)).toBe(200);
 				// the index pages 2 candidates nearest r=0 (alpha 2, alder); the rerank keeps the one nearest 0.5
 				expect(
 					(yield* Schema.decodeUnknownEffect(
-						Schema.Struct({ rows: Titles, next: Schema.NullOr(Schema.String) })
-					)(answers(r.body)[0])).rows.map((x) => x.title)
+						Schema.Struct({
+							orders: Schema.Struct({ rows: Titles, next: Schema.NullOr(Schema.String) })
+						})
+					)(answers(r.body)[0])).orders.rows.map((x) => x.title)
 				).toEqual(['alder']);
 			})
 	);
@@ -242,30 +234,42 @@ describe('/q page reads', () => {
 	);
 
 	it.live(
-		'a record query carries json, file and custom fields; a list read leaves them out (X-33)',
+		'named heavy fields carry json; a default list leaves them out (X-33); several requests share one /q',
 		() =>
 			Effect.gen(function* () {
 				const { q, id } = yield* setup();
-				const r = yield* q([
-					{ m: 'query', a: ['orders', { id: id(1) }] },
-					{ m: 'query', a: ['orders', { where: { id: { eq: id(1) } }, limit: 1 }] }
-				]);
+				const one = (n: number, fields?: readonly string[]): WireRead => ({
+					m: 'query',
+					a: [
+						{
+							orders: {
+								where: { id: { eq: id(n) } },
+								...(fields === undefined ? {} : { fields: [...fields] })
+							}
+						}
+					]
+				});
+				const Rows = Schema.Struct({ orders: Schema.Struct({ rows: Schema.Array(Schema.Json) }) });
+				const r = yield* q([one(1, ['title', 'doc']), one(1)]);
 				expect(r.status).toBe(200);
-				expect(answers(r.body)[0]).toMatchObject({ title: 'alder', doc: { lines: ['alder'] } });
+				const [named, plain] = answers(r.body);
+				expect((yield* Schema.decodeUnknownEffect(Rows)(named)).orders.rows[0]).toMatchObject({
+					title: 'alder',
+					doc: { lines: ['alder'] }
+				});
+				expect((yield* Schema.decodeUnknownEffect(Rows)(plain)).orders.rows[0]).not.toHaveProperty(
+					'doc'
+				);
+				// a model is one root per request: two records of one shape are two requests in one crossing
+				const two = yield* q([one(1, ['doc']), one(2, ['doc'])]);
 				expect(
-					(yield* Schema.decodeUnknownEffect(Schema.Struct({ rows: Schema.Array(Schema.Json) }))(
-						answers(r.body)[1]
-					)).rows[0]
-				).not.toHaveProperty('doc');
-				// two record queries of one shape merge into one statement and keep the same projection
-				const two = yield* q([
-					{ m: 'query', a: ['orders', { id: id(1) }] },
-					{ m: 'query', a: ['orders', { id: id(2) }] }
-				]);
-				expect(
-					(yield* Schema.decodeUnknownEffect(Schema.Array(Schema.Struct({ doc: Schema.Json })))(
-						answers(two.body)
-					)).map((x) => x.doc)
+					(yield* Schema.decodeUnknownEffect(
+						Schema.Array(
+							Schema.Struct({
+								orders: Schema.Struct({ rows: Schema.Array(Schema.Struct({ doc: Schema.Json })) })
+							})
+						)
+					)(answers(two.body))).map((x) => x.orders.rows[0]?.doc)
 				).toEqual([{ lines: ['alder'] }, { lines: ['beta'] }]);
 			})
 	);
@@ -274,49 +278,41 @@ describe('/q page reads', () => {
 		Effect.gen(function* () {
 			const { q } = yield* setup();
 			const r = yield* q([
-				{
-					m: 'query',
-					a: ['orders', { search: '0002', limit: 5, select: { title: true, code: true } }]
-				}
+				{ m: 'query', a: [{ orders: { search: '0002', limit: 5, fields: ['title', 'code'] } }] }
 			]);
 			expect(r.status).toBe(200);
 			expect(
 				(yield* Schema.decodeUnknownEffect(
 					Schema.Struct({
-						rows: Schema.Array(Schema.Struct({ title: Schema.String, code: Schema.String }))
+						orders: Schema.Struct({
+							rows: Schema.Array(Schema.Struct({ title: Schema.String, code: Schema.String }))
+						})
 					})
-				)(answers(r.body)[0])).rows.map((x) => [x.code, x.title])
+				)(answers(r.body)[0])).orders.rows.map((x) => [x.code, x.title])
 			).toEqual([['O-0002', 'alder']]);
 		})
 	);
 
-	it.live('reads sys_user by its text id, filtered and by record query', () =>
+	it.live('reads sys_user by its text id, one and several', () =>
 		Effect.gen(function* () {
 			const { t, q } = yield* setup();
 			const admin = t.as(t.admin).authority;
 			const r = yield* q(
 				[
-					{
-						m: 'query',
-						a: ['sys_user', { where: { id: { eq: 'ada' } }, limit: 1, select: { name: true } }]
-					},
-					{ m: 'query', a: ['sys_user', { id: 'ada' }] },
-					{ m: 'query', a: ['sys_user', { where: { id: { in: ['ada', 'nobody'] } }, limit: 5 }] }
+					{ m: 'query', a: [{ sys_user: { where: { id: { eq: 'ada' } }, fields: ['name'] } }] },
+					{ m: 'query', a: [{ sys_user: { where: { id: { in: ['ada', 'nobody'] } }, limit: 5 } }] }
 				],
 				admin
 			);
 			expect(r.status).toBe(200);
-			expect(
-				(yield* Schema.decodeUnknownEffect(
-					Schema.Struct({ rows: Schema.Array(Schema.Struct({ name: Schema.String })) })
-				)(answers(r.body)[0])).rows.map((x) => x.name)
-			).toEqual(['Ada']);
-			expect(answers(r.body)[1]).toMatchObject({ id: 'ada', name: 'Ada' });
-			expect(
-				(yield* Schema.decodeUnknownEffect(Schema.Struct({ rows: Schema.Array(Schema.Json) }))(
-					answers(r.body)[2]
-				)).rows
-			).toHaveLength(1);
+			const Users = Schema.Struct({
+				sys_user: Schema.Struct({ rows: Schema.Array(Schema.Record(Schema.String, Schema.Json)) })
+			});
+			const [one, several] = answers(r.body);
+			expect((yield* Schema.decodeUnknownEffect(Users)(one)).sys_user.rows).toEqual([
+				expect.objectContaining({ id: 'ada', name: 'Ada' })
+			]);
+			expect((yield* Schema.decodeUnknownEffect(Users)(several)).sys_user.rows).toHaveLength(1);
 		})
 	);
 });

@@ -70,14 +70,14 @@ const manifest = Result.getOrThrow(
 				where: { integration: { eq: 'mail_import' } }
 			}
 		},
-		collections: {
+		exposures: {
 			sent_emails: {
-				read: { fields: 'all' },
-				create: { input: { columns: ['to', 'subject', 'body'] } },
+				read: { sent_emails: { fields: 'all' } },
+				create: { columns: { sent_emails: ['to', 'subject', 'body'] } },
 				syncs: { mail: { with: 'customer_notices', read: true, write: true } },
 				update: {
-					input: {
-						columns: [
+					columns: {
+						sent_emails: [
 							'status',
 							'sent_at',
 							'delivered_at',
@@ -89,7 +89,7 @@ const manifest = Result.getOrThrow(
 				}
 			},
 			supplier_mail: {
-				read: { fields: 'all' },
+				read: { supplier_mail: { fields: 'all' } },
 				syncs: { inbox: { with: 'mail_import', read: true } }
 			}
 		},
@@ -120,7 +120,7 @@ const manifest = Result.getOrThrow(
 				grants: {
 					sent_emails: {
 						read: true,
-						create: { approval: true }
+						create: { check: true }
 					}
 				}
 			}
@@ -143,14 +143,14 @@ const manifest = Result.getOrThrow(
 );
 
 const guest = program(`export default {
-	collection: {
+	model: {
 		sent_emails: { bodies: { syncs: { mail: {
 			write: function* ({op,row},ctx) { if(op!=='create'||row.to==='nobody')return null;return {$id:yield* ctx.send({to:[row.to],subject:row.subject,text:row.body,thread:row.id})}; },
 			read: function* ({deliveries}) { return {rows:deliveries.filter((e)=>e.kind!=='message').map((e)=>({$id:e.message,...(e.kind==='sent'?{sent_at:e.at}:e.kind==='delivered'?{delivered_at:e.at}:e.kind==='opened'?{opened_at:e.at}:e.kind==='replied'?{replied_at:e.at}:e.kind==='auto_replied'?{failed_reason:'auto: '+e.reply.subject}:{failed_reason:e.kind==='deferred'?'deferred '+(e.code??''):e.reason})}))}; }
 		} } } },
 		supplier_mail: { bodies: { syncs: { inbox: { read: function* ({deliveries}) {return {rows:deliveries.filter((d)=>d.kind==='message').map(({message:m})=>({$id:m.id,$version:m.version,...(m.deleted?{$deleted:true}:{message_id:m.id,subject:m.subject,files:m.attachments})}))};} } } } }
 	},
-	policy:{clerk:{grants:{sent_emails:{create:{approval:(_write,flow)=>flow.step('Leads',{teams:['Leads']})}}}}},
+	policy:{clerk:{grants:{sent_emails:{create:{check:function*(_rows,ctx){return ctx.approve((flow)=>flow.step('Leads',{teams:['Leads']}));}}}}}},
 	automation: { ping: { body: function* (input,ctx) {return yield* ctx.send('desk_wa',{to:'6591234567@s.whatsapp.net',text:'hello from a run'});} } }
 };`);
 
@@ -259,18 +259,27 @@ const fixture = (options: Extract<TestOptions<Drivers | Files>, { artifact?: nev
 		t.as(t.admin);
 		yield* t.db.read([]);
 		const notice = () =>
-			act(staff(), 'sent_emails.create', {
-				to: 'carol@acme.com',
-				subject: 'PCN 1234',
-				body: 'Your parts change.'
-			}).pipe(Effect.map((o) => ok(o).records[0]!.id));
+			act(staff(), 'sent_emails.create', [
+				{
+					to: 'carol@acme.com',
+					subject: 'PCN 1234',
+					body: 'Your parts change.'
+				}
+			]).pipe(Effect.map((o) => ok(o).records[0]!.id));
 		const row = (id: string) =>
 			qReply(route, t.as(t.admin).authority, {
-				reads: [{ m: 'query', a: ['sent_emails', { id }] }]
+				reads: [{ m: 'query', a: [{ sent_emails: { where: { id: { eq: id } } } }] }]
 			}).pipe(
 				Effect.flatMap((r) =>
-					Schema.decodeUnknownEffect(Schema.Record(Schema.String, Schema.Json))(r.answers[0])
-				)
+					Schema.decodeUnknownEffect(
+						Schema.Struct({
+							sent_emails: Schema.Struct({
+								rows: Schema.Tuple([Schema.Record(Schema.String, Schema.Json)])
+							})
+						})
+					)(r.answers[0])
+				),
+				Effect.map((answer) => answer.sent_emails.rows[0])
 			);
 		const rows = (text: string) =>
 			t.db.read([{ text, params: [] }]).pipe(Effect.map((r) => r[0]?.rows ?? []));
@@ -346,11 +355,13 @@ const fixture = (options: Extract<TestOptions<Drivers | Files>, { artifact?: nev
 			Effect.gen(function* () {
 				const alice = t.member([], { email: 'alice@ws.example' });
 				return ok(
-					yield* act(t.as(t.admin).authority, 'sys_integration.create', {
-						integration: 'whatsapp',
-						name: "Alice's phone",
-						owner: alice.id
-					})
+					yield* act(t.as(t.admin).authority, 'sys_integration.create', [
+						{
+							integration: 'whatsapp',
+							name: "Alice's phone",
+							owner: alice.id
+						}
+					])
 				).records[0]!.id;
 			});
 		const stored = (id: string, name: string, bytes: Uint8Array, size = bytes.byteLength) =>
@@ -607,11 +618,13 @@ describe('a proposed notice awaiting approval (rules 47, 61)', () => {
 						});
 						return yield* t.signIn(email);
 					});
-				const o = yield* f.act(t.as(yield* member('Clerks')).authority, 'sent_emails.create', {
-					to: 'carol@acme.com',
-					subject: 'PCN 1234',
-					body: 'Your parts change.'
-				});
+				const o = yield* f.act(t.as(yield* member('Clerks')).authority, 'sent_emails.create', [
+					{
+						to: 'carol@acme.com',
+						subject: 'PCN 1234',
+						body: 'Your parts change.'
+					}
+				]);
 				if (o.kind !== 'pendingApproval') throw new Error(JSON.stringify(o));
 				expect(
 					yield* f.approvals
@@ -718,7 +731,7 @@ describe('delivery order and epochs', () => {
 				ok(
 					(yield* actReply(forkRoute, f.staff(), {
 						callable: 'sent_emails.create',
-						input: { to: 'carol@acme.com', subject: 'PCN 1234', body: 'Your parts change.' },
+						input: [{ to: 'carol@acme.com', subject: 'PCN 1234', body: 'Your parts change.' }],
 						issuedAt: t.clock.now()
 					})).outcome
 				);
@@ -801,17 +814,19 @@ describe('inbound (§4.3)', () => {
 			Effect.gen(function* () {
 				const f = yield* fixture();
 				ok(
-					yield* f.act(f.t.as(f.t.admin).authority, 'sys_integration.update', {
-						target: 'desk_wa',
-						set: {
-							import_start: {
-								kind: 'since',
-								at: '2026-09-25T10:00:00.000Z',
-								zone: 'UTC',
-								origin: 'date'
+					yield* f.act(f.t.as(f.t.admin).authority, 'sys_integration.update', [
+						{
+							target: 'desk_wa',
+							set: {
+								import_start: {
+									kind: 'since',
+									at: '2026-09-25T10:00:00.000Z',
+									zone: 'UTC',
+									origin: 'date'
+								}
 							}
 						}
-					})
+					])
 				);
 				yield* f.conversations.receive('desk_wa', {
 					kind: 'messages',
@@ -857,17 +872,19 @@ describe('inbound (§4.3)', () => {
 			Effect.gen(function* () {
 				const f = yield* fixture();
 				ok(
-					yield* f.act(f.t.as(f.t.admin).authority, 'sys_integration.update', {
-						target: 'desk_wa',
-						set: {
-							import_start: {
-								kind: 'since',
-								at: '2026-09-25T10:00:00.000Z',
-								zone: 'UTC',
-								origin: 'date'
+					yield* f.act(f.t.as(f.t.admin).authority, 'sys_integration.update', [
+						{
+							target: 'desk_wa',
+							set: {
+								import_start: {
+									kind: 'since',
+									at: '2026-09-25T10:00:00.000Z',
+									zone: 'UTC',
+									origin: 'date'
+								}
 							}
 						}
-					})
+					])
 				);
 				const put = vi.spyOn(f.files, 'put'),
 					bytes = new TextEncoder().encode('%PDF-1.7');
@@ -910,17 +927,19 @@ describe('inbound (§4.3)', () => {
 				});
 				for (const target of ['desk_wa', 'slack_b'])
 					ok(
-						yield* f.act(f.t.as(f.t.admin).authority, 'sys_integration.update', {
-							target,
-							set: {
-								import_start: {
-									kind: 'since',
-									at: '2026-09-25T10:00:00.000Z',
-									zone: 'UTC',
-									origin: 'date'
+						yield* f.act(f.t.as(f.t.admin).authority, 'sys_integration.update', [
+							{
+								target,
+								set: {
+									import_start: {
+										kind: 'since',
+										at: '2026-09-25T10:00:00.000Z',
+										zone: 'UTC',
+										origin: 'date'
+									}
 								}
 							}
-						})
+						])
 					);
 				yield* f.conversations.receive('desk_wa', {
 					kind: 'messages',
@@ -977,10 +996,12 @@ describe('inbound (§4.3)', () => {
 							origin: 'date'
 						} as const;
 					ok(
-						yield* f.act(f.t.as(f.t.admin).authority, 'sys_integration.update', {
-							target: 'desk_wa',
-							set: { import_start: { kind: 'all' } }
-						})
+						yield* f.act(f.t.as(f.t.admin).authority, 'sys_integration.update', [
+							{
+								target: 'desk_wa',
+								set: { import_start: { kind: 'all' } }
+							}
+						])
 					);
 					const put = vi.spyOn(f.files, 'put').mockImplementation((data, metadata) =>
 						Effect.gen(function* () {
@@ -1019,10 +1040,12 @@ describe('inbound (§4.3)', () => {
 						)
 					);
 					// External storage holds no SQL lease: this guarded setting write commits before release.
-					const saved = yield* f.act(f.t.as(f.t.admin).authority, 'sys_integration.update', {
-						target: 'desk_wa',
-						set: { import_start: boundary }
-					});
+					const saved = yield* f.act(f.t.as(f.t.admin).authority, 'sys_integration.update', [
+						{
+							target: 'desk_wa',
+							set: { import_start: boundary }
+						}
+					]);
 					expect(saved, JSON.stringify(saved)).toMatchObject({ kind: 'committed' });
 					expect(
 						yield* f.rows("SELECT import_start FROM sys_integration WHERE id = 'desk_wa'")
@@ -1086,17 +1109,19 @@ describe('inbound (§4.3)', () => {
 						bins: [bytes]
 					});
 					ok(
-						yield* f.act(f.t.as(f.t.admin).authority, 'sys_integration.update', {
-							target: 'supplier_inbox',
-							set: {
-								import_start: {
-									kind: 'since',
-									at: '2026-09-25T10:00:00.000Z',
-									zone: 'UTC',
-									origin: 'date'
+						yield* f.act(f.t.as(f.t.admin).authority, 'sys_integration.update', [
+							{
+								target: 'supplier_inbox',
+								set: {
+									import_start: {
+										kind: 'since',
+										at: '2026-09-25T10:00:00.000Z',
+										zone: 'UTC',
+										origin: 'date'
+									}
 								}
 							}
-						})
+						])
 					);
 					const messageSql = `SELECT id, seq, conversation, text, version, sender, sender_name, sent_at,
 					email, ${filesOf('m')} AS files, edited_at, created_at FROM sys_message m WHERE integration = 'supplier_inbox'`,

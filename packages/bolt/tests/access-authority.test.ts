@@ -50,48 +50,46 @@ const m: EngineManifest = {
 		}
 	},
 	relationships: { 'lines.order': { to: 'orders', inverse: 'lines', owned: true } },
-	collections: {
-		orders: { read: { fields: 'all' } },
-		lines: { read: { fields: 'all' } },
-		employees: { read: { fields: 'all' } }
+	exposures: {
+		orders: {
+			read: { orders: { fields: 'all' }, 'orders.lines': { fields: 'all' } },
+			update: { columns: { orders: ['note', 'status'], 'orders.lines': ['qty'] } }
+		},
+		lines: { read: { lines: { fields: 'all' } } },
+		employees: {
+			read: { employees: { fields: 'all' } },
+			update: { columns: { employees: ['face', 'checked_at'] } }
+		}
 	},
 	integrations: {},
 	policies: {
-		qty: { description: '', grants: { lines: { read: { fields: ['qty'] } } } },
+		qty: { description: '', grants: { lines: { read: { lines: { fields: ['qty'] } } } } },
 		rep: {
 			description: '',
 			limits: { act: '10/min' },
 			grants: {
 				orders: {
-					read: { where: { region: { eq: 'north' } }, fields: ['status', 'region', 'amount'] },
-					update: { where: 'read', fields: ['note', 'status'], approval: true },
+					read: {
+						orders: { where: { region: { eq: 'north' } }, fields: ['status', 'region', 'amount'] },
+						'orders.lines': { where: { qty: { gt: 0 } } }
+					},
+					update: { columns: { orders: ['note', 'status'] }, check: true },
 					moves: { status: ['draft->submitted'] }
-				},
-				lines: { via: 'order' }
+				}
 			}
 		},
 		auditor: { description: '', grants: { orders: { read: true } } },
+		root_only: { description: '', grants: { orders: { read: { orders: {} } } } },
 		kiosk: {
 			description: '',
 			grants: {
-				employees: {
-					update: {
-						previous: { face: { in: ['NONE', 'APPROVED'] } },
-						where: { face: { eq: 'APPROVED' } },
-						fields: ['face']
-					}
-				}
+				employees: { update: { columns: { employees: ['face'] }, check: true } }
 			}
 		},
 		stamp: {
 			description: '',
 			grants: {
-				employees: {
-					update: {
-						previous: { checked_at: { isNull: true } },
-						where: { checked_at: { isNull: false } }
-					}
-				}
+				employees: { update: { check: true } }
 			}
 		},
 		desk: {
@@ -142,25 +140,43 @@ const auth = (policies: string[], over: Partial<Holder> = {}) =>
 	compileAuthority(m, { actor: member(), admin: false, policies, ...over }, 'k');
 
 describe('engine/access: Authority (rules 33–37)', () => {
-	it('held grants union; a field no arm narrows is unmasked, a narrowed one shows where an admitting arm holds (rule 14)', () => {
-		const rep = auth(['rep']).collections.orders!;
-		expect(rep.masks.note).toEqual({ t: 'const', value: false });
-		expect(rep.masks.amount).toBeUndefined();
+	it('held grants union per path; a field no arm narrows is unmasked, a narrowed one shows where an admitting arm holds (rule 14)', () => {
+		const rep = auth(['rep']).models.orders!;
+		expect(rep.masks.orders?.note).toEqual({ t: 'const', value: false });
+		expect(rep.masks.orders?.amount).toBeUndefined();
+		expect(rep.masks['orders.lines']).toEqual({});
 		const both = auth(['rep', 'auditor']);
-		expect(both.collections.orders!.masks).toEqual({});
+		expect(both.models.orders!.masks.orders).toEqual({});
 		expect(readScope(both, 'orders')).toEqual({ t: 'const', value: true });
 		expect(readScope(auth(['kiosk']), 'orders')).toBeUndefined();
 		// a relationship's foreign key is a field: a `fields` list that omits it masks it (the kiosk read the owner's id)
-		expect(auth(['qty']).collections.lines!.masks).toEqual({ order: { t: 'const', value: false } });
+		expect(auth(['qty']).models.lines!.masks.lines).toEqual({
+			order: { t: 'const', value: false }
+		});
 	});
 
-	it("`where: 'read'` is the read grant; approval stays on its write arm; an administrator holds every write arm but identity's", () => {
-		const rep = auth(['rep']).collections.orders!;
-		expect(rep.update[0]!.where).toEqual(rep.read[0]!.where);
-		expect(rep.update[0]!.approval).toBe(true);
+	it("write arms hold their columns and the check flag; a bare check admits every declared column; an administrator holds every write arm but identity's", () => {
+		const rep = auth(['rep']).models.orders!;
+		expect(rep.update).toEqual([
+			{ policy: 'rep', columns: { orders: ['note', 'status'] }, check: true }
+		]);
+		expect(rep.create).toEqual([]);
+		expect(auth(['kiosk']).models.employees!.update).toEqual([
+			{ policy: 'kiosk', columns: { employees: ['face'] }, check: true }
+		]);
+		expect(auth(['stamp']).models.employees!.update).toEqual([
+			{ policy: 'stamp', columns: { employees: ['face', 'checked_at'] }, check: true }
+		]);
 		const admin = auth([], { admin: true, actor: member({ admin: true }) });
-		expect(admin.collections.orders!.create).toHaveLength(1);
-		expect(admin.collections.sys_user!.update).toHaveLength(0); // identity is written by admin verbs only (38c)
+		expect(admin.models.orders!.create).toHaveLength(1);
+		expect(admin.models.orders!.update).toEqual([
+			{
+				policy: '$admin',
+				columns: { orders: ['note', 'status'], 'orders.lines': ['qty'] },
+				check: false
+			}
+		]);
+		expect(admin.models.sys_user!.update).toHaveLength(0); // identity is written by admin verbs only (38c)
 	});
 
 	it('moves: only listed edges; `all` and admins every declared one (rule 34)', () => {
@@ -171,69 +187,49 @@ describe('engine/access: Authority (rules 33–37)', () => {
 		);
 	});
 
-	it('via inherits the parent: reads its read, writes its update, through the one-relation', () => {
-		const lines = auth(['rep']).collections.lines!;
-		expect(lines.read[0]!.where).toEqual({
-			t: 'one',
-			rel: 'order',
-			target: 'orders',
-			pred: { t: 'cmp', field: 'region', op: 'eq', arg: { _tag: 'Lit', value: 'north' } }
-		});
-		expect(lines.create).toHaveLength(1);
-		expect(lines.delete[0]!.where).toMatchObject({ t: 'one', rel: 'order' });
+	it("a layer's arms come from its root's policy alone; the layer's own model gains no access point", () => {
+		const rep = auth(['rep']);
+		const orders = rep.models.orders!;
+		expect(orders.read.orders).toMatchObject([
+			{ policy: 'rep', fields: ['status', 'region', 'amount'] }
+		]);
+		expect(orders.read['orders.lines']).toEqual([
+			{
+				policy: 'rep',
+				where: { t: 'cmp', field: 'qty', op: 'gt', arg: { _tag: 'Lit', value: 0 } },
+				fields: 'all'
+			}
+		]);
+		// reading `lines` directly is a different access point: `rep` grants none
+		expect(rep.models.lines).toBeUndefined();
+		expect(readScope(rep, 'lines')).toBeUndefined();
 	});
 
-	it('a via whose parent is itself via nests through both hops, whatever the declaration order', () => {
-		const chain: EngineManifest = {
-			...m,
-			models: {
-				...m.models,
-				notes: { description: '', label: 'body', fields: { body: { kind: 'text' } } }
-			},
-			relationships: { ...m.relationships, 'notes.line': { to: 'lines' } },
-			policies: {
-				deep: {
-					description: '',
-					grants: {
-						notes: { via: 'line' },
-						lines: { via: 'order' },
-						orders: { read: { where: { region: { eq: 'north' } } } }
-					}
-				}
-			}
-		};
-		const notes = compileAuthority(
-			chain,
-			{ actor: member(), admin: false, policies: ['deep'] },
-			'k'
-		).collections.notes!;
-		expect(notes.read[0]!.where).toEqual({
-			t: 'one',
-			rel: 'line',
-			target: 'lines',
-			pred: {
-				t: 'one',
-				rel: 'order',
-				target: 'orders',
-				pred: { t: 'cmp', field: 'region', op: 'eq', arg: { _tag: 'Lit', value: 'north' } }
-			}
+	it('a declared layer a grant does not name is read in full; `read: true` opens every declared layer', () => {
+		const open = { where: { t: 'const', value: true }, fields: 'all' };
+		expect(auth(['root_only']).models.orders!.read['orders.lines']).toEqual([
+			{ policy: 'root_only', ...open }
+		]);
+		expect(auth(['auditor']).models.orders!.read).toEqual({
+			orders: [{ policy: 'auditor', ...open }],
+			'orders.lines': [{ policy: 'auditor', ...open }]
 		});
 	});
 
 	it('an unknown policy confers nothing', () => {
 		const a = auth(['nope']);
 		expect(a.policies).toEqual([]);
-		expect(Object.keys(a.collections).filter((c) => !c.startsWith('sys_'))).toEqual([]);
+		expect(Object.keys(a.models).filter((c) => !c.startsWith('sys_'))).toEqual([]);
 	});
 
-	it('an approval marker grants only its write verb; an empty callback flow is invalid', () => {
+	it('a check-only grant grants only its write verb, with every declared column; an empty flow is invalid', () => {
 		const empty: EngineManifest = {
 			...m,
 			policies: {
 				...m.policies,
 				open: {
 					description: '',
-					grants: { orders: { read: true, update: { approval: true } } }
+					grants: { orders: { read: true, update: { check: true } } }
 				}
 			}
 		};
@@ -241,15 +237,21 @@ describe('engine/access: Authority (rules 33–37)', () => {
 			empty,
 			{ actor: member(), admin: false, policies: ['open'] },
 			'k'
-		).collections.orders!;
-		expect(granted.update).toMatchObject([{ policy: 'open', approval: true }]);
+		).models.orders!;
+		expect(granted.update).toEqual([
+			{
+				policy: 'open',
+				columns: { orders: ['note', 'status'], 'orders.lines': ['qty'] },
+				check: true
+			}
+		]);
 		expect(granted.create).toEqual([]);
 		expect(granted.delete).toEqual([]);
 		expect(() => snapshotOf(approvalFlow())).toThrow('add a step');
 	});
 
 	it('the kernel directory: staff read staff (id, name); externals themselves and their party (rule 35a)', () => {
-		expect(auth([]).collections.sys_user!.read).toEqual([
+		expect(auth([]).models.sys_user!.read.sys_user).toEqual([
 			{
 				policy: '$directory',
 				where: { t: 'cmp', field: 'kind', op: 'eq', arg: { _tag: 'Lit', value: 'staff' } },
@@ -261,14 +263,14 @@ describe('engine/access: Authority (rules 33–37)', () => {
 			{ actor: member({ external: true }), admin: false, policies: [] },
 			'k'
 		);
-		expect(ext.collections.sys_user!.read[0]!.where).toMatchObject({ t: 'or' });
-		expect(Object.keys(ext.collections)).toEqual(['sys_user']);
+		expect(ext.models.sys_user!.read.sys_user?.[0]?.where).toMatchObject({ t: 'or' });
+		expect(Object.keys(ext.models)).toEqual(['sys_user']);
 		const visitor = compileAuthority(
 			m,
 			{ actor: { kind: 'visitor', app: 'careers', visitor: 'v' }, admin: false, policies: [] },
 			'k'
 		);
-		expect(visitor.collections.sys_user).toBeUndefined();
+		expect(visitor.models.sys_user).toBeUndefined();
 	});
 
 	it('limits: declared buckets replace the default of their key; visitors default per IP (rule 38, 72)', () => {

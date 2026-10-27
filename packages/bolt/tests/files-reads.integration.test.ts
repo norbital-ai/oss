@@ -19,8 +19,8 @@ const manifest = {
 		}
 	},
 	relationships: {},
-	collections: {
-		docs: { read: { fields: 'all' }, create: { input: { columns: ['title', 'file'] } } }
+	exposures: {
+		docs: { read: { docs: { fields: 'all' } }, create: { columns: { docs: ['title', 'file'] } } }
 	},
 	integrations: {},
 	teams: {},
@@ -85,7 +85,7 @@ const read = (name: string, mime: string, how: string) =>
 			);
 			yield* actReply(route, admin, {
 				callable: 'docs.create',
-				input: { title: name, file: up },
+				input: [{ title: name, file: up }],
 				issuedAt: t.clock.now()
 			});
 			yield* actReply(route, t.as(t.member(['ops'])).authority, {

@@ -1,5 +1,5 @@
 import { Console, Duration, Effect, Schema, Stream } from 'effect';
-import { ChildProcess } from 'effect/unstable/process';
+import { ChildProcess } from 'effect/process';
 
 /** A toolchain step, credential or store request that did not complete. */
 export class AppShellFailure extends Schema.TaggedError<AppShellFailure>()('AppShellFailure', {

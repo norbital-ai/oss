@@ -102,12 +102,11 @@ export const nightly = automation('nightly', {
 	on: { cron: '0 2 * * *' },
 	output: { kind: 'int' },
 	run: function* (_, ctx) {
-		const open = yield* ctx.query('orders', {
+		const open = yield* ctx.query({ orders: {
 			where: { status: { eq: 'submitted' } },
-			select: { number: true },
-			all: true
-		});
-		return open.rows.length;
+			fields: ['number']
+		} });
+		return open.orders.rows.length;
 	}
 });
 
@@ -121,17 +120,16 @@ export const follow_up = automation('follow_up', {
 	retry: { attempts: 3, backoff: '1min' },
 	concurrency: { max: 1 },
 	run: function* ({ ids }, ctx) {
-		const orders = yield* ctx.query('orders', {
+		const orders = yield* ctx.query({ orders: {
 			where: { id: { in: ids } },
-			select: { number: true, owner: true },
-			all: true
-		});
-		for (const o of orders.rows)
+			fields: ['number', 'owner']
+		} });
+		for (const o of orders.orders.rows)
 			if (o.owner !== null)
 				yield* ctx.notify({
 					to: [{ user: o.owner }],
 					title: `Order ${o.number} is still open`,
-					link: { collection: 'orders', id: o.id }
+					link: { model: 'orders', id: o.id }
 				});
 		yield* ctx.schedule('nightly', {}, { at: { now: '+1d' }, key: 'chase' });
 	}
@@ -143,9 +141,11 @@ export const render = automation('render', {
 	input: { order: { kind: 'id', of: 'orders' } },
 	output: { kind: 'file', accept: ['application/pdf'], max: '5MiB' },
 	run: function* ({ order }, ctx) {
-		const o = yield* ctx.query('orders', { id: order, select: { number: true } });
+		const { orders } = yield* ctx.query({
+			orders: { where: { id: { eq: order } }, limit: 1, fields: ['number'] }
+		});
 		return yield* ctx.convert.document(
-			{ markdown: `# Order ${o?.number ?? ''}` },
+			{ markdown: `# Order ${orders.rows[0]?.number ?? ''}` },
 			{ to: 'pdf', page: 'A4', name: 'order.pdf', for: 'render' }
 		);
 	}
@@ -176,12 +176,13 @@ export const orders_submit = automation('orders_submit', {
 	input: { target: { kind: 'id', of: 'orders' } },
 	runAs: 'trigger',
 	run: function* ({ target }, ctx) {
-		const order = yield* ctx.query('orders', { id: target });
-		if (order === null)
+		const order = (yield* ctx.query({ orders: { where: { id: { eq: target } }, limit: 1 } })).orders
+			.rows[0];
+		if (order === undefined)
 			return yield* Effect.fail(new Refusal({ message: 'Choose an existing order.' }));
 		yield* ctx.act(
 			'orders.update',
-			{ target: order.id, set: { status: 'submitted' } },
+			[{ target: order.id, set: { status: 'submitted' } }],
 			{ observed: { [order.id]: order.revision } }
 		);
 	}
@@ -193,22 +194,23 @@ export const orders_renote = automation('orders_renote', {
 	output: { kind: 'int' },
 	runAs: 'trigger',
 	run: function* ({ ids, note }, ctx) {
-		const orders = yield* ctx.query('orders', {
+		const orders = yield* ctx.query({ orders: {
 			where: { id: { in: ids } },
-			select: { id: true, revision: true },
-			all: true
-		});
+			fields: ['id', 'revision']
+		} });
 		yield* ctx.act(
 			'orders.update',
 			ids.map((id) => ({ target: id, set: { note } })),
 			{
 				observed: Object.fromEntries(
-					orders.rows.map((order): [string, number] => [order.id, order.revision])
+					orders.orders.rows.map((order): [string, number] => [order.id, order.revision])
 				)
 			}
 		);
-		const gold = yield* ctx.query('customers.gold', {});
-		return gold.length;
+		const { customers } = yield* ctx.query({
+			customers: { where: { tier: { eq: 'gold' } }, fields: ['name'] }
+		});
+		return customers.rows.length;
 	}
 });
 
@@ -245,8 +247,8 @@ export const customers_return_row = automation('customers_return_row', {
 	output: { kind: 'row', of: 'customers' },
 	runAs: 'trigger',
 	run: function* (_, ctx) {
-		const page = yield* ctx.query('customers', { limit: 1 });
-		const customer = page.rows[0];
+		const page = yield* ctx.query({ customers: { limit: 1 } });
+		const customer = page.customers.rows[0];
 		if (customer === undefined)
 			return yield* Effect.fail(new Refusal({ message: 'Choose an existing customer.' }));
 		return customer;

@@ -49,7 +49,7 @@ The editor of one value by its field kind: every kind's input in one component (
 	import { watch } from 'runed';
 	import CodeEditor from '../editors/code-editor.svelte';
 	import MarkdownEditor from '../editors/markdown-editor.svelte';
-	import { useEnumText } from '../collection/context.js';
+	import { useEnumText } from '../model/context.js';
 	import Checkbox from '../primitives/checkbox/checkbox.svelte';
 	import Combobox from '../primitives/combobox/combobox.svelte';
 	import Textarea from '../primitives/textarea/textarea.svelte';
@@ -147,9 +147,9 @@ The editor of one value by its field kind: every kind's input in one component (
 {:else if controls.readonly}
 	<Show {kind} {value} {name} {row} {relation} {address} {id} readonly />
 {:else if relation !== undefined && relation.targets.length > 1}
-	<!-- an arc: its target first, then the record there; the value is `{ collection, id }` -->
+	<!-- an arc: its target first, then the record there; the value is `{ model, id }` -->
 	{@const ref = arcOf(v)}
-	{@const arm = chosenArm ?? ref?.collection ?? relation.targets[0] ?? ''}
+	{@const arm = chosenArm ?? ref?.model ?? relation.targets[0] ?? ''}
 	<div class="grid min-w-0 gap-2 @sm:grid-cols-[minmax(0,12rem)_minmax(0,1fr)]" data-arc>
 		<Combobox
 			options={relation.targets.map((target) => ({ value: target, label: humanize(target) }))}
@@ -164,8 +164,8 @@ The editor of one value by its field kind: every kind's input in one component (
 		/>
 		<Picker
 			of={arm}
-			value={ref?.collection === arm ? ref.id : null}
-			onChange={(next) => onChange(next === null ? null : { collection: arm, id: next })}
+			value={ref?.model === arm ? ref.id : null}
+			onChange={(next) => onChange(next === null ? null : { model: arm, id: next })}
 			{id}
 			{disabled}
 			{invalid}

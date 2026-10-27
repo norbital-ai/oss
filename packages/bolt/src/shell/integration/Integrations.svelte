@@ -1,11 +1,7 @@
 <!--
-	Settings → Integrations: each envoy's channel as one-click connectors (`Envoys`), then the other `sys_integration`
-	rows with their account, state and owner. Each connection appears once. An agent channel's card owns its connection
-	(pair, test, reconnect, disconnect), so its Settings sheet holds only its configuration and messages; a table row's
-	sheet holds the connection too, as its first tab. New makes one of any definition (a member's own account where the driver syncs one). A row opens its
-	sheet: the generic setup over the host's verbs (provider choice, pairing, test, reconnect, disconnect), then the
-	instance's own fields (name, active, the envoy answering a workspace conversation instance, the configuration its
-	definition declares) and, for a conversation, its raw messages. Every write is the model's native form or act.
+	Settings → Integrations is the envoys' page: every source-declared envoy with its channels as one-click connectors.
+	Each connector owns its connection (pair, test, reconnect, disconnect); its Settings sheet holds the instance's
+	configuration and messages. Generic accounts belong to a workspace's own integration app, not this built-in page.
 -->
 <script lang="ts">
 	import { fork, observeOnce } from '@norbital-ai/ui/effect';
@@ -17,22 +13,19 @@
 		Button,
 		Combobox,
 		confirmAction,
-		Dialog,
+		DescriptionHint,
 		Editor,
 		Field,
 		Form,
 		format,
 		formatHandle,
 		StateBadge,
-		Table,
 		Tabs,
 		type FieldEditor
 	} from '@norbital-ai/ui';
 	import type { InputFields } from '../../decl/fields.ts';
-	import { configurationDefaults } from '../../decl/runtime/integration.ts';
-	import type { InstanceState } from '../../protocol/instance-status.ts';
 	import IntegrationSetup from '../../page/IntegrationSetup.svelte';
-	import { driverLabel, statusLabel, type IntegrationSetupEntry } from './setup.ts';
+	import { driverLabel, type IntegrationSetupEntry } from './setup.ts';
 	import type { InstanceMessage } from '../api-types.ts';
 	import type { Settings } from '../settings/data.ts';
 	import type { ShellBolt } from '../runtime.ts';
@@ -76,28 +69,6 @@
 		const u = settings.members.find((x) => x['id'] === id);
 		return str(u?.['name']) || str(u?.['email']) || str(id);
 	};
-	const envoyName = (id: string) => settings.envoys.find((e) => e.id === id)?.name ?? id;
-	/** The state the host last recorded: only durable transitions reach the row; the open sheet follows the live stream. */
-	const stored = (i: Instance): InstanceState => {
-		const s = obj(i.status)['state'];
-		return s === 'connected' || s === 'error' ? s : 'unpaired';
-	};
-	const rows = $derived(
-		settings.instances
-			.filter((i) => !settings.envoys.some((e) => e.id === i.envoy))
-			.map((i) => ({
-				id: i.id,
-				name: i.name,
-				integration: i.integration,
-				account: str(obj(i.status)['account']),
-				state: i.active ? statusLabel({ state: stored(i), stored: false }, t) : t('Paused'),
-				used: i.envoy !== null ? envoyName(i.envoy) : i.owner !== null ? memberName(i.owner) : ''
-			}))
-	);
-	const connectionsTitle = $derived(
-		t(settings.envoys.length > 0 ? 'Other connections' : 'Connections')
-	);
-
 	// ── the open instance: its sheet, and its client (one per instance, so its stream is held while the sheet is open) ──
 	let open = $state<string | null>(null);
 	const current = $derived(settings.instances.find((i) => i.id === open));
@@ -120,7 +91,7 @@
 			}).pipe(
 				Effect.flatMap((confirmed) =>
 					confirmed
-						? bolt.act('sys_integration.delete', { target: i.id }).pipe(
+						? bolt.act('sys_integration.delete', [{ target: i.id }]).pipe(
 								Effect.tap((outcome) =>
 									Effect.sync(() => {
 										if (outcome.kind === 'committed') open = null;
@@ -205,7 +176,6 @@
 		);
 	}
 
-	let creating = $state(false);
 	const labelOf = (name: string, f: InputFields[string]) =>
 		f.label ?? name.replace(/_/g, ' ').replace(/^\w/, (x) => x.toUpperCase());
 </script>
@@ -215,10 +185,13 @@
 	<div class="flex flex-col gap-3" {id}>
 		{#each Object.entries(fields) as [name, f] (name)}
 			<div class="flex flex-col gap-1 text-sm">
-				<label class="text-label" for={`${id}-${name}`}
-					>{t(labelOf(name, f))}{#if f.optional === true}
-						<span class="text-meta">({t('optional')})</span>{/if}</label
-				>
+				<div class="flex min-w-0 items-center gap-1">
+					<label class="text-label" for={`${id}-${name}`}
+						>{t(labelOf(name, f))}{#if f.optional === true}
+							<span class="text-meta">({t('optional')})</span>{/if}</label
+					>
+					{#if f.help}<DescriptionHint text={t(f.help)} />{/if}
+				</div>
 				<Editor
 					id={`${id}-${name}`}
 					{name}
@@ -226,57 +199,20 @@
 					value={obj(value)[name] ?? null}
 					onChange={(v) => onChange({ ...obj(value), [name]: v })}
 				/>
-				{#if f.help}<p class="text-meta">{t(f.help)}</p>{/if}
 			</div>
 		{/each}
 	</div>
 {/snippet}
 
-{#if settings.envoys.length > 0}<Envoys
-		{api}
-		{bolt}
-		{settings}
-		{t}
-		{locale}
-		onManage={(instance) => (open = instance)}
-		{reload}
-	/>{/if}
-
-<section class="flex flex-col gap-2" data-integration-connections>
-	{#if rows.length > 0}
-		<Table
-			of={rows}
-			key="integration-instances"
-			onOpen={(row) => {
-				open = row.id;
-			}}
-			toolbar={{
-				title: connectionsTitle,
-				description: t('External accounts used by this workspace or its members.'),
-				new: () => (creating = true)
-			}}
-			columns={[
-				{ field: 'name', label: t('Name') },
-				{ field: 'integration', label: t('Integration') },
-				{ field: 'account', label: t('Account') },
-				{ field: 'state', label: t('State') },
-				{ field: 'used', label: t('Used by') }
-			]}
-		>
-			{#snippet empty()}<p class="text-sm text-muted-foreground">
-					{t('No connections match your search.')}
-				</p>{/snippet}
-		</Table>
-	{:else}
-		<header class="flex items-center justify-between gap-3">
-			<h2 class="text-sm font-medium">{connectionsTitle}</h2>
-			<Button size="sm" onclick={() => (creating = true)}>{t('New connection')}</Button>
-		</header>
-		<p class="text-meta">
-			{t(settings.envoys.length > 0 ? 'No other connections yet.' : 'No connections yet.')}
-		</p>
-	{/if}
-</section>
+<Envoys
+	{api}
+	{bolt}
+	{settings}
+	{t}
+	{locale}
+	onManage={(instance) => (open = instance)}
+	{reload}
+/>
 
 {#if current !== undefined}
 	{@const i = current}
@@ -589,84 +525,3 @@
 	</DetailSheet>
 {/if}
 
-<Dialog.Root
-	open={creating}
-	onOpenChange={(o) => {
-		if (!o) creating = false;
-	}}
->
-	<Dialog.Content class="max-w-md">
-		<Dialog.Header>
-			<Dialog.Title>{t('Create integration instance')}</Dialog.Title>
-			<Dialog.Description
-				>{t('Pair it with its provider from its sheet once it is created.')}</Dialog.Description
-			>
-		</Dialog.Header>
-		{#if creating}
-			<Form
-				of="sys_integration"
-				mode="create"
-				values={{ configuration: {} }}
-				submit={t('Create integration instance')}
-				onOutcome={(outcome) => {
-					if (outcome.kind !== 'committed') return;
-					creating = false;
-					const created = outcome.records.find((record) => record.collection === 'sys_integration');
-					fork(
-						reload().pipe(
-							Effect.tap(() =>
-								Effect.sync(() => {
-									if (created !== undefined) open = created.id;
-								})
-							)
-						)
-					);
-				}}
-			>
-				{#snippet children(form)}
-					{@const chosen = definition(form.get('integration'))}
-					<!-- another definition takes its own configuration: the last one's values would be refused -->
-					{#snippet definitionEditor({ value, onChange, id }: FieldEditor)}
-						<Combobox
-							{id}
-							size="sm"
-							aria-label={t('Integration definition')}
-							placeholder={t('Choose an integration')}
-							value={typeof value === 'string' ? value : null}
-							options={settings.integrations.map((x) => ({
-								value: x.name,
-								label: `${x.name} · ${driverLabel(x.driver)}`,
-								description: x.description
-							}))}
-							onChange={(name) => {
-								onChange(name);
-								form.set('configuration', configurationDefaults(definition(name)));
-								if (definition(name)?.personal !== true) form.set('owner', null);
-							}}
-						/>
-					{/snippet}
-					{#snippet configurationEditor(e: FieldEditor)}{@render configuration(
-							chosen?.configuration ?? {},
-							e
-						)}{/snippet}
-					<Field name="integration" label={t('Integration')} editor={definitionEditor} />
-					<Field name="name" label={t('Name')} />
-					{#if chosen?.personal === true}
-						<Field
-							name="owner"
-							label={t('Owner')}
-							help={t(
-								'A member’s own account only synchronizes: it never sends and no envoy answers on it.'
-							)}
-						/>
-					{/if}
-					{#if Object.keys(chosen?.configuration ?? {}).length > 0}<Field
-							name="configuration"
-							label={t('Configuration')}
-							editor={configurationEditor}
-						/>{/if}
-				{/snippet}
-			</Form>
-		{/if}
-	</Dialog.Content>
-</Dialog.Root>

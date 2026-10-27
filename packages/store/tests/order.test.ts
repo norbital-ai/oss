@@ -34,13 +34,13 @@ it.effect('separates nested relation sorts from dotted inline paths and root pri
 		]);
 		expect(yield* order('id', catalog, 'order')).toEqual([{ field: 'id', dir: 'asc' }]);
 		expect(yield* order('id', catalog, 'customer')).toEqual([{ field: 'id', dir: 'asc' }]);
-		for (const { collection, invalid } of [
-			{ collection: 'order', invalid: { 'customer.name': 'asc' } },
-			{ collection: 'line', invalid: { order: { 'customer.name': 'asc' } } },
-			{ collection: 'order', invalid: { customer: { id: 'asc' } } },
-			{ collection: 'order', invalid: 'customer.name' }
+		for (const { model, invalid } of [
+			{ model: 'order', invalid: { 'customer.name': 'asc' } },
+			{ model: 'line', invalid: { order: { 'customer.name': 'asc' } } },
+			{ model: 'order', invalid: { customer: { id: 'asc' } } },
+			{ model: 'order', invalid: 'customer.name' }
 		]) {
-			const failure = yield* Effect.flip(order(invalid, catalog, collection));
+			const failure = yield* Effect.flip(order(invalid, catalog, model));
 			expect(failure.code).toBe('invalid');
 		}
 	})

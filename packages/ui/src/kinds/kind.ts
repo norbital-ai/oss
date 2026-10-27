@@ -124,16 +124,16 @@ export function fileProblem(
 export const MAX_FILES = 20;
 
 // ── enum and state values: the catalog's words, else the value in words ──
-/** Where an enum or state value's catalog key is: `models.<collection>.fields.<field>.<value>`, read through `t`. */
-export type EnumScope = { t?: (key: string) => string; collection?: string; field?: string };
+/** Where an enum or state value's catalog key is: `models.<model>.fields.<field>.<value>`, read through `t`. */
+export type EnumScope = { t?: (key: string) => string; model?: string; field?: string };
 /**
  * An enum or state value as words: its catalog key, else humanized (`not_sent` → `Not sent`, `PENDING_REVIEW` →
  * `Pending review`). An upper-case word without a vowel or with a digit stays an acronym (`SG_CPF` → `SG CPF`), as does
  * an upper-case word inside a lower-case value (`sent_to_HR`).
  */
 export function enumText(value: string, o: EnumScope = {}): string {
-	if (o.t !== undefined && o.collection && o.field) {
-		const key = `models.${o.collection}.fields.${o.field}.${value}`,
+	if (o.t !== undefined && o.model && o.field) {
+		const key = `models.${o.model}.fields.${o.field}.${value}`,
 			s = o.t(key);
 		if (s !== key) return s;
 	}
@@ -151,7 +151,7 @@ export function enumText(value: string, o: EnumScope = {}): string {
 }
 
 // ── display ──
-/** How `format` renders a value: the enum's collection and field for catalog labels, the locale, the default currency and the zone. */
+/** How `format` renders a value: the enum's model and field for catalog labels, the locale, the default currency and the zone. */
 export type ShowOptions = EnumScope & { locale?: string; currency?: string; zone?: string };
 /** Instants read as a medium date and a short time, never seconds. */
 const AT = { dateStyle: 'medium', timeStyle: 'short' } as const;
@@ -325,7 +325,7 @@ export function formatValue(value: unknown, locale = 'en'): string {
 		return `${formatValue(value['from'] ?? value['start'], locale)} – ${formatValue(value['to'] ?? value['end'], locale) || '…'}`;
 	if (isPoint(value)) return `${value.lat}, ${value.lng}`;
 	if (isFile(value)) return value.name;
-	if ('collection' in value && typeof value['id'] === 'string') return value['id'];
+	if ('model' in value && typeof value['id'] === 'string') return value['id'];
 	return JSON.stringify(value);
 }
 function decimalText(s: string, locale: string, pad = 0): string {
@@ -560,15 +560,15 @@ export function armValue(kind: Extract<KindOf<'union'>, { by: string }>, tag: st
 	};
 }
 
-/** An arc's value (a polymorphic relation): `{ collection, id }`, as the engine reads and writes it. */
-export const arcOf = (x: Value | undefined): { collection: string; id: string } | null =>
+/** An arc's value (a polymorphic relation): `{ model, id }`, as the engine reads and writes it. */
+export const arcOf = (x: Value | undefined): { model: string; id: string } | null =>
 	typeof x === 'object' &&
 	x !== null &&
 	!Arr.isArray<Value>(x) &&
 	!(x instanceof Decimal) &&
-	typeof x['collection'] === 'string' &&
+	typeof x['model'] === 'string' &&
 	typeof x['id'] === 'string'
-		? { collection: x['collection'], id: x['id'] }
+		? { model: x['model'], id: x['id'] }
 		: null;
 /** State edges out of `from` (the state machine's `to`), for a badge's move menu. */
 export const edgesFrom = (kind: KindOf<'state'>, from: string): readonly string[] =>
@@ -604,7 +604,7 @@ export function tone(state: string): 'neutral' | 'info' | 'success' | 'warning' 
 	return 'info';
 }
 
-/** `like` over the label's text and patterned `seq` fields: the search of a collection that declares no `search.text`; none when nothing is typed or searchable. */
+/** `like` over the label's text and patterned `seq` fields: the search of a model that declares no `search.text`; none when nothing is typed or searchable. */
 export const likePattern = (text: string): string =>
 	`%${text
 		.trim()
@@ -626,7 +626,7 @@ export function likeWhere(
 		: { or: searchable.map((f) => ({ [f]: { like: likePattern(text) } })) };
 }
 /**
- * A picker's page read (§3.6): the target's `search.text` when it declares one, else `like` over the label's text and
+ * A picker's read request root layer (`query({ [of]: pickerRead(…) })`, §3.6): the target's `search.text` when it declares one, else `like` over the label's text and
  * patterned `seq` fields; sorted by `orderBy`, else by the first sortable label field (a typed search ranks instead).
  */
 export function pickerRead(
@@ -647,7 +647,7 @@ export function pickerRead(
 	const orderBy =
 		o.orderBy ?? ((indexed && text !== '') || label === undefined ? undefined : { [label]: 'asc' });
 	return {
-		select: Object.fromEntries([['id', true], ...labels.map((f) => [f, true])]),
+		fields: [...labels],
 		limit: o.limit,
 		...(all.length === 0 ? {} : { where: all.length === 1 ? (all[0] ?? {}) : { and: all } }),
 		...(orderBy === undefined ? {} : { orderBy }),

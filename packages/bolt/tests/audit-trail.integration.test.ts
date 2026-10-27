@@ -16,11 +16,11 @@ const manifest: EngineManifest = {
 	...base,
 	models: { items: { description: 'Item', label: 'title', fields: { title: { kind: 'text' } } } },
 	relationships: {},
-	collections: {
+	exposures: {
 		items: {
-			read: { fields: 'all' },
-			create: { input: { columns: ['title'] } },
-			update: { input: { columns: ['title'] } }
+			read: { items: { fields: 'all' } },
+			create: { columns: { items: ['title'] } },
+			update: { columns: { items: ['title'] } }
 		}
 	}
 };
@@ -41,7 +41,7 @@ const fixture = (port: AuditPort) =>
 			const now = t.clock.now(),
 				key = randomUUID();
 			return writes.act({
-				collection: 'items',
+				model: 'items',
 				verb,
 				input,
 				key,
@@ -65,7 +65,7 @@ it.live('durable preparation fails before a governed mutation can write', () =>
 					throw new Error('audit offline');
 				}
 			});
-			expect(yield* Effect.flip(f.act('create', { title: 'Must not exist' }))).toMatchObject({
+			expect(yield* Effect.flip(f.act('create', [{ title: 'Must not exist' }]))).toMatchObject({
 				code: 'unavailable'
 			});
 			expect(
@@ -81,7 +81,7 @@ it.live('governed writes accept an explicitly buffered host audit facility', () 
 		Effect.gen(function* () {
 			const store = memoryAudit();
 			const f = yield* fixture({ ...store.port, mode: 'buffered' });
-			expect(yield* f.act('create', { title: 'Buffered receipt' })).toMatchObject({
+			expect(yield* f.act('create', [{ title: 'Buffered receipt' }])).toMatchObject({
 				outcome: { kind: 'committed' }
 			});
 			expect([...store.records.values()].some((record) => record.status === 'committed')).toBe(
@@ -115,9 +115,9 @@ it.live(
 						await store.port.append(events, signal);
 					}
 				});
-				const created = yield* f.act('create', { title: 'Synthetic private title' });
+				const created = yield* f.act('create', [{ title: 'Synthetic private title' }]);
 				if (created.outcome.kind !== 'committed') throw new Error('Expected committed fixture');
-				const row = created.outcome.records.find((record) => record.collection === 'items');
+				const row = created.outcome.records.find((record) => record.model === 'items');
 				if (row === undefined) throw new Error('Missing committed item');
 				expect(
 					yield* f.act('erase', { target: row.id, set: { title: 'Sanitised' } })
@@ -137,7 +137,7 @@ it.live(
 					manifest,
 					{
 						kind: 'history',
-						collection: 'items',
+						model: 'items',
 						id: row.id,
 						at: { _tag: 'Revision', revision: 1 },
 						full: true
@@ -152,7 +152,7 @@ it.live(
 						manifest,
 						{
 							kind: 'history',
-							collection: 'items',
+							model: 'items',
 							id: row.id,
 							full: true
 						},
@@ -196,7 +196,7 @@ it.live(
 					})
 				).toBe(false);
 				expect(
-					yield* f.act('update', { target: row.id, set: { title: 'Later title' } })
+					yield* f.act('update', [{ target: row.id, set: { title: 'Later title' } }])
 				).toMatchObject({ outcome: { kind: 'committed' } });
 				expect(change(3)).toEqual({ old: { title: 'Sanitised' }, new: { title: 'Later title' } });
 				// The append is durable, but the process loses its local acknowledgement before physical purge.
@@ -228,7 +228,7 @@ it.live(
 						manifest,
 						{
 							kind: 'history',
-							collection: 'items',
+							model: 'items',
 							id: row.id,
 							full: true
 						},
@@ -260,10 +260,10 @@ it.live(
 				// Expiry is separate from acknowledgement and requires a healthy host, even after the native deadline.
 				blocked = true;
 				recordedAt = '2000-01-01T00:00:00.123456Z';
-				const expiring = yield* f.act('create', { title: 'Private expiry fixture' });
+				const expiring = yield* f.act('create', [{ title: 'Private expiry fixture' }]);
 				if (expiring.outcome.kind !== 'committed')
 					throw new Error('Expected expiring fixture commit');
-				const expiringRow = expiring.outcome.records.find((entry) => entry.collection === 'items');
+				const expiringRow = expiring.outcome.records.find((entry) => entry.model === 'items');
 				if (expiringRow === undefined) throw new Error('Missing expiring fixture');
 				yield* f.act('erase', { target: expiringRow.id });
 				const operations = yield* f.t.db.rows(Schema.Struct({ operation: Schema.String }), {
@@ -358,9 +358,9 @@ it.live('committed writes recover complete external payloads after terminal appe
 				}
 			});
 			const original = 'full payload '.repeat(2000);
-			const created = yield* f.act('create', { title: original });
+			const created = yield* f.act('create', [{ title: original }]);
 			if (created.outcome.kind !== 'committed') throw new Error('Expected committed fixture');
-			const row = created.outcome.records.find((record) => record.collection === 'items');
+			const row = created.outcome.records.find((record) => record.model === 'items');
 			if (row === undefined) throw new Error('Missing committed item');
 			expect([...store.records.values()].every((event) => event.status === 'prepared')).toBe(true);
 			expect(
@@ -386,9 +386,11 @@ it.live('committed writes recover complete external payloads after terminal appe
 			expect(JSON.stringify(full.payload)).toContain(original);
 			yield* recover;
 			expect([...store.records.values()]).toEqual(before);
-			expect(yield* f.act('update', { target: row.id, set: { title: 'Updated' } })).toMatchObject({
-				outcome: { kind: 'committed' }
-			});
+			expect(yield* f.act('update', [{ target: row.id, set: { title: 'Updated' } }])).toMatchObject(
+				{
+					outcome: { kind: 'committed' }
+				}
+			);
 			const updated = [...store.records.values()].find(
 				(event) => event.subject?.id === row.id && event.subject.revision === 2
 			);

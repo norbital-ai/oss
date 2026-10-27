@@ -34,5 +34,5 @@ export default model('approval_request', {
 	},
 	unique: [{ fields: ['collection_name', 'record_id'], where: { status: { eq: 'ONGOING' } } }],
 	table: { primary: 'uuid' },
-	read: { fields: 'all' }
+	read: 'all'
 });

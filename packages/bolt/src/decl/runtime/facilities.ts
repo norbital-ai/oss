@@ -7,8 +7,8 @@ import type { FacilityFailure, Unavailable as UnavailableFailure } from '../erro
 import type { Checked, Exact, InputKind, InputOf, ValidInput, ValueOf } from '../fields.ts';
 import type {
 	AutomationName,
-	CollectionName,
-	CollectionSpecOf,
+	ModelName,
+	ExposureSpecOf,
 	Columns,
 	HostToolName,
 	InstanceId,
@@ -80,7 +80,7 @@ export type RunRow<O = unknown> = {
 		readonly rule?: string;
 		readonly data?: { readonly requestId: RequestId };
 		readonly records?: readonly {
-			readonly collection: string;
+			readonly model: string;
 			readonly id: string;
 			readonly fields: readonly string[];
 		}[];
@@ -90,7 +90,7 @@ export type RunRow<O = unknown> = {
 };
 /** The input a start or a schedule passes: the automation's declared input, else nothing (a sync run takes none). */
 type SyncOf<A> = A extends `${infer M}.sync.${infer S}`
-	? CollectionSpecOf<M> extends { syncs: infer X }
+	? ExposureSpecOf<M> extends { syncs: infer X }
 		? X[S & keyof X]
 		: never
 	: never;
@@ -261,7 +261,7 @@ type FileFieldOf<C> = {
 }[keyof Columns<C> & string];
 /** Where a stored file belongs: a model's file field, or an automation's run (collected with it). */
 type FileOwner =
-	{ [C in CollectionName]: `${C}.${FileFieldOf<C>}` }[CollectionName] | StartableName;
+	{ [C in ModelName]: `${C}.${FileFieldOf<C>}` }[ModelName] | StartableName;
 /** One worksheet: its name and rows of cell values. */
 type Sheet = {
 	readonly name: string;

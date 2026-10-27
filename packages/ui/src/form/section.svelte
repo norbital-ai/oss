@@ -3,7 +3,7 @@
 One titled section of a form or record body: a heading row (title, an optional ⓘ hint, a mark, actions) over its content.
 A titled section collapses from its heading; the body is hidden, never unmounted, so every field in it still saves.
 Closed, the heading shows `summary` so nothing important is out of sight. The viewer's open state is remembered per
-collection and section; a section holding a field with an error opens itself.
+model and section; a section holding a field with an error opens itself.
 -->
 <script lang="ts" module>
 	import { getContext, type Snippet } from 'svelte';
@@ -73,7 +73,7 @@ collection and section; a section holding a field with an error opens itself.
 	import { setContext } from 'svelte';
 	import Tooltip from '../primitives/tooltip/tooltip.svelte';
 	import { cn, useControls } from '../primitives/utils.js';
-	import { useCollectionKey } from '../collection/context.js';
+	import { useModelKey } from '../model/context.js';
 	import { useForm } from './form-state.svelte.js';
 
 	let {
@@ -98,7 +98,7 @@ collection and section; a section holding a field with an error opens itself.
 	const fields = setContext(SECTION, new Set<string>());
 	const canCollapse = $derived(title !== undefined && collapsible);
 	// svelte-ignore state_referenced_locally -- the key is fixed for the section's life
-	const key = `norbital.section:${useCollectionKey() ?? ''}:${name ?? title ?? ''}`;
+	const key = `norbital.section:${useModelKey() ?? ''}:${name ?? title ?? ''}`;
 	function stored(): boolean | null {
 		return Result.getOrElse(
 			Result.try({

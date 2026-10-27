@@ -1,5 +1,5 @@
 import type { FileRef } from '@norbital-ai/std/kind';
-import type { Values } from '../collection/types.js';
+import type { Values } from '../model/types.js';
 import { isRow } from '../read/results.js';
 export const isMasked = (value: unknown) => isRow(value) && value['$masked'] === true;
 export const isFile = (value: unknown): value is FileRef =>

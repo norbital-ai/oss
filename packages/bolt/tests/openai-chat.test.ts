@@ -260,7 +260,7 @@ describe('openAiChat', () => {
 								message: {
 									content: '',
 									tool_calls: [
-										{ id: 't1', function: { name: 'read_collection', arguments: '{"a":1,}' } }
+										{ id: 't1', function: { name: 'read_model', arguments: '{"a":1,}' } }
 									]
 								}
 							}
@@ -270,7 +270,7 @@ describe('openAiChat', () => {
 				);
 				const { response } = yield* collect(openAiChat(config, { fetch: f }));
 				expect(response.toolCalls).toEqual([
-					{ id: 't1', name: 'read_collection', input: {}, invalid: expect.stringMatching(/JSON/) }
+					{ id: 't1', name: 'read_model', input: {}, invalid: expect.stringMatching(/JSON/) }
 				]);
 			})
 	);
@@ -282,7 +282,7 @@ describe('openAiChat', () => {
 					': OPENROUTER PROCESSING',
 					'data: {"id":"gen-1","choices":[{"delta":{"content":"Mar"}}]}',
 					'data: {"id":"gen-1","choices":[{"delta":{"content":"ch"}}]}',
-					'data: {"id":"gen-1","choices":[{"delta":{"tool_calls":[{"index":0,"id":"t1","function":{"name":"read_collection","arguments":"{\\"aggr"}}]}}]}',
+					'data: {"id":"gen-1","choices":[{"delta":{"tool_calls":[{"index":0,"id":"t1","function":{"name":"read_model","arguments":"{\\"aggr"}}]}}]}',
 					'data: {"id":"gen-1","choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"egate\\":{}}"}}]},"finish_reason":"tool_calls"}]}',
 					'data: {"id":"gen-1","choices":[],"usage":{"prompt_tokens":9,"completion_tokens":4,"cost":0.001}}',
 					'data: [DONE]',
@@ -321,7 +321,7 @@ describe('openAiChat', () => {
 				expect(deltas).toEqual(['Mar', 'ch']);
 				expect(response).toEqual({
 					content: 'March',
-					toolCalls: [{ id: 't1', name: 'read_collection', input: { aggregate: {} } }],
+					toolCalls: [{ id: 't1', name: 'read_model', input: { aggregate: {} } }],
 					finish: 'tool',
 					usage: { input: 9, output: 4, cost: 0.001, call: 'gen-1' }
 				});
@@ -421,7 +421,7 @@ describe('openAiChat', () => {
 			})
 	);
 	it.effect(
-		'sends text and an xlsx as text parts, never as file parts providers refuse; an unreadable type is refused before the call',
+		'sends text and an xlsx as text parts, never as file parts providers refuse; an unreadable type is described, not sent, and the call goes on',
 		() =>
 			Effect.gen(function* () {
 				const { f, seen } = capture(() =>
@@ -452,22 +452,24 @@ describe('openAiChat', () => {
 				expect(parts[1]?.text).toBe('attachment-1 (text/plain):\nhello');
 				expect(parts[2]?.text).toBe('attachment-2 (application/json):\n{"a":1}');
 				expect(parts[3]?.text).toMatch(/^attachment-3 sheet 0 ".+" \(CSV\):\n.+,/);
-				expect(
-					yield* collect(infer, {
-						...request,
-						files: [
-							{
-								mime: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-								bytes: new Uint8Array([1])
-							}
-						]
-					}).pipe(Effect.flip)
-				).toMatchObject({
-					message: expect.stringMatching(
-						/attachment-1: a file of type application\/vnd\.openxmlformats-officedocument\.wordprocessingml\.document cannot be sent to the model/
-					)
+				yield* collect(infer, {
+					...request,
+					messages: [{ role: 'user', content: 'read' }],
+					files: [
+						{
+							mime: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+							bytes: new Uint8Array([1])
+						}
+					]
 				});
-				expect(seen).toHaveLength(1);
+				expect(seen[1]?.sent.messages[0]?.content).toEqual([
+					{ type: 'text', text: 'read' },
+					{
+						type: 'text',
+						text: 'attachment-1: a application/vnd.openxmlformats-officedocument.wordprocessingml.document file cannot be shown to you; ask for a photo, a PDF or a text version'
+					}
+				]);
+				expect(seen).toHaveLength(2);
 			})
 	);
 	it.effect(

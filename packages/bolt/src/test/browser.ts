@@ -11,8 +11,8 @@ import {
 	type Scope,
 	Stream
 } from 'effect';
-import { Sse } from 'effect/unstable/encoding';
-import { Cookies } from 'effect/unstable/http';
+import { Sse } from 'effect/encoding';
+import { Cookies } from 'effect/http';
 import type { EventSourceLike } from '../page/stream.ts';
 import { teams as manifestTeams } from '../engine/manifest.ts';
 import type { Holder } from '../engine/access/authority.ts';
@@ -424,7 +424,7 @@ export const sweep = (
 			];
 			// Record drawers belong to the internal shell; a public document has no record drawer to exercise.
 			const recordBase = paths.find((path) => renderMode(manifest, path) === null);
-			for (const collection of 'visitor' in actor
+			for (const model of 'visitor' in actor
 				? []
 				: Object.keys(options.representations ?? {})) {
 				if (who === null || 'visitor' in who || recordBase === undefined) continue;
@@ -434,7 +434,9 @@ export const sweep = (
 					const request = new Request(`${ORIGIN}${PATHS.q}`, {
 						method: 'POST',
 						headers: { 'content-type': 'application/json' },
-						body: JSON.stringify({ reads: [{ m: 'query', a: [collection, { limit: 1 }] }] })
+						body: JSON.stringify({
+							reads: [{ m: 'query', a: [{ [model]: { fields: ['id'], limit: 1 } }] }]
+						})
 					});
 					request.headers.set('cookie', cookie);
 					const response = yield* t.handle(request);
@@ -443,16 +445,17 @@ export const sweep = (
 						catch: (error) => new KitInvalid({ message: String(error) })
 					});
 					const reply = yield* Schema.decodeUnknownEffect(QReply)(body);
-					return yield* Schema.decodeUnknownEffect(
-						Schema.Struct({
-							rows: Schema.Array(Schema.Struct({ id: Schema.String })),
-							next: Schema.NullOr(Schema.String)
-						})
+					const answer = yield* Schema.decodeUnknownEffect(
+						Schema.Record(
+							Schema.String,
+							Schema.Struct({ rows: Schema.Array(Schema.Struct({ id: Schema.String })) })
+						)
 					)(reply.answers[0]);
+					return answer[model] ?? { rows: [] };
 				}).pipe(Effect.catch(() => Effect.succeed({ rows: [] })));
 				const row = rows.rows[0];
 				paths.push(
-					...[`${collection}/new`, ...(row === undefined ? [] : [`${collection}/${row.id}`])].map(
+					...[`${model}/new`, ...(row === undefined ? [] : [`${model}/${row.id}`])].map(
 						(record) => `${recordBase}?record=${record}`
 					)
 				);

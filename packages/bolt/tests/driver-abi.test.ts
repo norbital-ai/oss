@@ -80,7 +80,7 @@ describe('the driver ABI, engine side', () => {
 					cursor: 'c2',
 					more: false
 				});
-				const absent = yield* Effect.flip(calls.typing('+65'));
+				const absent = yield* Effect.flip(calls.typing('+65', true));
 				expect(absent).toBeInstanceOf(Unavailable);
 				expect(absent).toMatchObject({ facility: 'link.typing' });
 				expect(yield* Effect.flip(calls.discover)).toBeInstanceOf(Unavailable);

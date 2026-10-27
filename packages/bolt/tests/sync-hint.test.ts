@@ -1,19 +1,19 @@
 import { describe, expect, it, vi } from '@effect/vitest';
 import { Schema } from 'effect';
-import type { CollectionSpec } from '../src/decl/model.ts';
+import type { ExposureSpec } from '../src/decl/model.ts';
 import { EngineManifestSchema } from '../src/engine/manifest.ts';
 import { inboxPiece, reportRowsPiece } from '../src/engine/sync/hint.ts';
 import { Chain } from '../src/engine/write/sql.ts';
 
 const NOW = '2026-10-24T08:00:00.000Z';
-const manifest = (syncs: CollectionSpec['syncs']) =>
+const manifest = (syncs: ExposureSpec['syncs']) =>
 	Schema.decodeUnknownSync(EngineManifestSchema)({
 		workspace: { tz: 'UTC', locale: 'en' },
 		models: {
 			contacts: { description: 'A contact', label: 'name', fields: { name: { kind: 'text' } } }
 		},
 		relationships: {},
-		collections: { contacts: { read: { fields: 'all' }, syncs } },
+		exposures: { contacts: { read: { contacts: { fields: 'all' } }, syncs } },
 		integrations: {
 			crm: { description: 'CRM', driver: 'http', http: { baseUrl: 'https://crm.test' } },
 			other: { description: 'Other', driver: 'http', http: { baseUrl: 'https://other.test' } }

@@ -7,10 +7,11 @@ when the host reads), Download, and Remove when `onRemove` is given.
 <script lang="ts">
 	import Icon from '@iconify/svelte';
 	import { Effect, Stream } from 'effect';
-	import { FetchHttpClient, HttpClient } from 'effect/unstable/http';
+	import { FetchHttpClient, HttpClient } from 'effect/http';
 	import { observeOnce } from '../effect/index.js';
 	import type { ReadError } from '../client/contract.js';
-	import type { Row } from '../collection/types.js';
+	import type { Row } from '../model/types.js';
+	import { byId } from '../read/request.js';
 	import Button from '../primitives/button/button.svelte';
 	import Image from '../primitives/image/image.svelte';
 	import { formatFileSize, uiText } from '../primitives/utils.js';
@@ -25,18 +26,16 @@ when the host reads), Download, and Remove when `onRemove` is given.
 	const imageUrl = $derived(host.fileUrl?.(file, { preview: 512 }));
 	const text = $derived(/^text\/|^application\/(json|xml|csv)/.test(file.mime));
 	const one = (
-		collection: string,
+		model: string,
 		id: string,
 		fields: readonly string[]
 	): Effect.Effect<Row | undefined, ReadError> => {
 		const read = host.query;
 		return read === undefined
 			? Effect.succeed(undefined)
-			: read(collection, {
-					select: Object.fromEntries(fields.map((field) => [field, true])),
-					limit: 1,
-					where: { id: { eq: id } }
-				}).pipe(Effect.map((page) => page.rows[0]));
+			: read(byId(model, id, fields)).pipe(
+					Effect.map((answer) => answer[model]?.rows[0])
+				);
 	};
 	const meta = observeOnce(() =>
 		host.query === undefined

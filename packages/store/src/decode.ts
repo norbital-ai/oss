@@ -23,7 +23,7 @@ import { STORE_LIMITS } from './limits.ts';
 import { StoreError } from './errors.ts';
 import type { Json } from './values.ts';
 import type { Catalog, FieldInfo, KindSpec, ModelInfo } from './catalog.ts';
-import { SEMANTIC, SYSTEM_COLUMNS, collectionOf, family, fieldInfo } from './catalog.ts';
+import { SEMANTIC, SYSTEM_COLUMNS, exposureOf, family, fieldInfo } from './catalog.ts';
 
 /** A value position's operand as a literal writes it; which ones a position admits depends on the value's kind. */
 export type WireOperand =
@@ -77,7 +77,7 @@ const SEARCH_MAX_TEXT = 500,
 	SIMILAR_TOP = 20,
 	SIMILAR_MAX_TOP = 200;
 
-const model = (cat: Catalog, name: string): Effect.Effect<ModelInfo, StoreError> => {
+const modelInfo = (cat: Catalog, name: string): Effect.Effect<ModelInfo, StoreError> => {
 	const m = cat.models.get(name);
 	return m === undefined ? invalid(`unknown model '${name}'`) : Effect.succeed(m);
 };
@@ -571,7 +571,7 @@ export const where: (
 		return yield* invalid(`${path}: nested deeper than ${WHERE_MAX_DEPTH}`);
 	if (hops > 8) return yield* invalid(`${path}: crosses more than 8 relations`);
 	if (!Predicate.isObject(w)) return yield* invalid(`${path}: a predicate is an object`);
-	const info = yield* model(cat, m);
+	const info = yield* modelInfo(cat, m);
 	const of: Pred[] = [];
 	const sub = (x: unknown, p: string) =>
 		Predicate.isObject(x) && entries(x).length === 0
@@ -638,7 +638,7 @@ export const where: (
 					const name = Predicate.isObject(x) ? x.of : undefined;
 					const g =
 						typeof name === 'string' && !name.includes('.')
-							? (yield* model(cat, rel.child)).fields.get(name)
+							? (yield* modelInfo(cat, rel.child)).fields.get(name)
 							: undefined;
 					const kinds = q === 'min' || q === 'max' ? MIN_MAX : SUMMABLE;
 					if (g === undefined || g.many || !kinds.includes(g.kind))
@@ -725,10 +725,10 @@ const refOps = Effect.fnUntraced(function* (
 /** In the browser (`bolt.decode`): each top-level condition and sort key is kept or dropped alone. */
 export const decodeView = /*#__PURE__*/ Effect.fnUntraced(function* (
 	cat: Catalog,
-	collection: string,
+	model: string,
 	q: { where?: unknown; orderBy?: unknown }
 ) {
-	yield* collectionOf(cat, collection);
+	yield* exposureOf(cat, model);
 	const dropped: { path: string; message: string }[] = [];
 	const keep = Effect.fnUntraced(function* (
 		path: string,
@@ -741,14 +741,14 @@ export const decodeView = /*#__PURE__*/ Effect.fnUntraced(function* (
 	const kept: { [key: string]: Json } = {};
 	if (Predicate.isObject(q.where)) {
 		for (const [k, v] of entries(q.where))
-			if (isJson(v) && (yield* keep(`where.${k}`, where(cat, collection, { [k]: v })))) kept[k] = v;
+			if (isJson(v) && (yield* keep(`where.${k}`, where(cat, model, { [k]: v })))) kept[k] = v;
 	} else if (q.where !== undefined)
 		dropped.push({ path: 'where', message: 'where: a predicate is an object' });
 	const keys =
 		q.orderBy === undefined ? [] : EffectArray.isArray(q.orderBy) ? q.orderBy : [q.orderBy];
 	const sorts: Json[] = [];
 	for (const [i, k] of keys.entries())
-		if (isJson(k) && (yield* keep(`orderBy[${i}]`, order([...sorts, k], cat, collection))))
+		if (isJson(k) && (yield* keep(`orderBy[${i}]`, order([...sorts, k], cat, model))))
 			sorts.push(k);
 	const view: { where: Json; orderBy?: Json; dropped: { path: string; message: string }[] } = {
 		where: kept,
@@ -820,7 +820,7 @@ const sortKey = Effect.fnUntraced(function* (x: unknown, i: number) {
 	}
 });
 /**
- * `OrderBy` literals: at most 4 keys, one field each, no field twice, each sortable on its collection; a related key
+ * `OrderBy` literals: at most 4 keys, one field each, no field twice, each sortable on its model; a related key
  * (`{ account: { name: 'asc' } }`) is the path `account.name` in the IR. Readability of each hop is the compiler's.
  */
 export const order = Effect.fnUntraced(function* (o: unknown, cat?: Catalog, m?: string) {
@@ -843,7 +843,7 @@ export const order = Effect.fnUntraced(function* (o: unknown, cat?: Catalog, m?:
 		seen.add(field);
 		const head = field.split('.')[0] ?? field;
 		const inline =
-			cat === undefined || m === undefined ? undefined : (yield* model(cat, m)).fields.get(head);
+			cat === undefined || m === undefined ? undefined : (yield* modelInfo(cat, m)).fields.get(head);
 		if (dotted && cat !== undefined && m !== undefined && inline?.shape === undefined)
 			return yield* invalid(
 				`orderBy[${i}]: one { field: 'asc' | 'desc' } per key; a related key nests its relations`
@@ -855,13 +855,13 @@ export const order = Effect.fnUntraced(function* (o: unknown, cat?: Catalog, m?:
 				return yield* invalid(`orderBy[${i}]: '${field}' is no scalar path`);
 		} else if (cat !== undefined && m !== undefined) {
 			const steps = field.split('.');
-			let info = yield* model(cat, m);
+			let info = yield* modelInfo(cat, m);
 			for (const s of steps.slice(0, -1)) {
 				const rel = info.one.get(s);
 				const [target] = rel?.targets ?? [];
 				if (rel === undefined || rel.targets.length > 1 || target === undefined)
 					return yield* invalid(`orderBy[${i}]: '${s}' is not a one-relation of '${info.name}'`);
-				info = yield* model(cat, target);
+				info = yield* modelInfo(cat, target);
 			}
 			const last = steps.at(-1) ?? field;
 			const f = last.includes('.') ? undefined : info.fields.get(last);
@@ -901,7 +901,7 @@ export const select: (
 	}
 	if (!Predicate.isObject(s)) return yield* invalid('select is an object');
 	if (depth > 8) return yield* invalid('a select is nested deeper than 8 relations');
-	const info = yield* model(cat, m);
+	const info = yield* modelInfo(cat, m);
 	const fields: string[] = [];
 	const relations: { [rel: string]: RelSelectIR } = {};
 	for (const [key, v] of Object.entries(s)) {
@@ -988,15 +988,15 @@ const selection = (s: unknown, w: unknown): unknown => {
 	return { ...(Predicate.isObject(s) ? s : {}), ...(Predicate.isObject(arms) ? arms : {}) };
 };
 
-/** `read(collection, { where?, select?, with?, orderBy?, search? } & Paged)`. */
+/** `read(model, { where?, select?, with?, orderBy?, search? } & Paged)`. */
 export const read = Effect.fn('Store.decode.read')(function* (
 	cat: Catalog,
-	collection: string,
+	model: string,
 	q: Obj
 ) {
 	const { where: w, select: sel, with: rels, orderBy, search, firstPer, ...paged } = q;
 	const s = selection(sel, rels);
-	yield* collectionOf(cat, collection);
+	yield* exposureOf(cat, model);
 	if (search !== undefined && typeof search !== 'string')
 		return yield* invalid('search is a string');
 	let groups: readonly string[] | undefined;
@@ -1007,17 +1007,17 @@ export const read = Effect.fn('Store.decode.read')(function* (
 			firstPer.some((field) => typeof field !== 'string' || field.includes('.'))
 		)
 			return yield* invalid('firstPer names one or more sortable columns on this table');
-		groups = (yield* order(firstPer, cat, collection)).map(({ field }) => field);
+		groups = (yield* order(firstPer, cat, model)).map(({ field }) => field);
 		if (search !== undefined)
 			return yield* invalid('firstPer cannot be combined with search ranking');
 	}
 	const ir: ReadIR = {
 		kind: 'read',
-		collection,
-		select: yield* select(cat, collection, s),
+		model,
+		select: yield* select(cat, model, s),
 		page: yield* page(paged),
-		...(w === undefined ? {} : { where: yield* where(cat, collection, w) }),
-		...(orderBy === undefined ? {} : { order: yield* order(orderBy, cat, collection) }),
+		...(w === undefined ? {} : { where: yield* where(cat, model, w) }),
+		...(orderBy === undefined ? {} : { order: yield* order(orderBy, cat, model) }),
 		...(search === undefined || search === '' ? {} : { search }),
 		...(groups === undefined ? {} : { firstPer: groups })
 	};
@@ -1025,16 +1025,16 @@ export const read = Effect.fn('Store.decode.read')(function* (
 });
 export const get = Effect.fn('Store.decode.get')(function* (
 	cat: Catalog,
-	collection: string,
+	model: string,
 	id: string,
 	q: Obj = {}
 ) {
-	yield* collectionOf(cat, collection);
+	yield* exposureOf(cat, model);
 	const ir: ReadIR = {
 		kind: 'get',
-		collection,
+		model,
 		id,
-		select: yield* select(cat, collection, selection(q.select, q.with))
+		select: yield* select(cat, model, selection(q.select, q.with))
 	};
 	return ir;
 });
@@ -1047,14 +1047,14 @@ const names = (v: unknown): Effect.Effect<readonly string[] | undefined, StoreEr
 		: EffectArray.isArray(v) && v.every((x) => typeof x === 'string')
 			? Effect.succeed(v)
 			: invalid('sum, avg, min, max take field lists');
-/** `aggregate(collection, { by?, count?, sum?, avg?, min?, max?, where? } & Paged?)`; `by` needs a page. */
+/** `aggregate(model, { by?, count?, sum?, avg?, min?, max?, where? } & Paged?)`; `by` needs a page. */
 export const aggregate = Effect.fn('Store.decode.aggregate')(function* (
 	cat: Catalog,
-	collection: string,
+	model: string,
 	q: Obj
 ) {
 	const { where: w, by, count, sum, avg, min, max, ...paged } = q;
-	yield* collectionOf(cat, collection);
+	yield* exposureOf(cat, model);
 	const buckets = yield* Effect.forEach(
 		by === undefined ? [] : EffectArray.isArray(by) ? by : [by],
 		(b): Effect.Effect<Bucket, StoreError> => {
@@ -1077,27 +1077,27 @@ export const aggregate = Effect.fn('Store.decode.aggregate')(function* (
 	];
 	const ir: ReadIR = {
 		kind: 'aggregate',
-		collection,
+		model,
 		by: buckets,
 		...(count === true ? { count: true } : {}),
 		...(s === undefined ? {} : { sum: s }),
 		...(a === undefined ? {} : { avg: a }),
 		...(lo === undefined ? {} : { min: lo }),
 		...(hi === undefined ? {} : { max: hi }),
-		...(w === undefined ? {} : { where: yield* where(cat, collection, w) }),
+		...(w === undefined ? {} : { where: yield* where(cat, model, w) }),
 		...(buckets.length > 0 ? { page: yield* page(paged) } : {})
 	};
 	return ir;
 });
-/** `similar(collection, { to, where?, select?, limit })` over `search.semantic`: `to` is text or `{ record: { id } }`. */
+/** `similar(model, { to, where?, select?, limit })` over `search.semantic`: `to` is text or `{ record: { id } }`. */
 export const semantic = Effect.fn('Store.decode.semantic')(function* (
 	cat: Catalog,
-	collection: string,
+	model: string,
 	q: Obj
 ) {
-	const c = yield* collectionOf(cat, collection);
+	const c = yield* exposureOf(cat, model);
 	if (c.model.semantic === undefined)
-		return yield* invalid(`'${collection}' declares no search.semantic (rule 16)`);
+		return yield* invalid(`'${model}' declares no search.semantic (rule 16)`);
 	const { to, where: w, select: s, ...paged } = q;
 	const record = Predicate.isObject(to) && Predicate.isObject(to.record) ? to.record : undefined;
 	const id = record?.id;
@@ -1108,36 +1108,36 @@ export const semantic = Effect.fn('Store.decode.semantic')(function* (
 	if (p._tag !== 'Limit' || p.after !== undefined) return yield* invalid('similar takes { limit }');
 	const ir: ReadIR = {
 		kind: 'similar',
-		collection,
+		model,
 		index: SEMANTIC,
 		input: text ?? { record: { id: typeof id === 'string' ? id : '' } },
 		limit: p.limit,
-		...(w === undefined ? {} : { where: yield* where(cat, collection, w) }),
-		...(s === undefined ? {} : { select: yield* select(cat, collection, s) })
+		...(w === undefined ? {} : { where: yield* where(cat, model, w) }),
+		...(s === undefined ? {} : { select: yield* select(cat, model, s) })
 	};
 	return ir;
 });
-/** `similar(collection, '<index>', input, { where?, select?, limit })` over one `search.indexes` entry. */
+/** `similar(model, '<index>', input, { where?, select?, limit })` over one `search.indexes` entry. */
 export const similar = Effect.fn('Store.decode.similar')(function* (
 	cat: Catalog,
-	collection: string,
+	model: string,
 	index: string,
 	input: Json,
 	q: Obj
 ) {
-	const c = yield* collectionOf(cat, collection);
+	const c = yield* exposureOf(cat, model);
 	if (!Object.hasOwn(c.model.indexes, index))
-		return yield* invalid(`'${collection}' declares no search index '${index}'`);
+		return yield* invalid(`'${model}' declares no search index '${index}'`);
 	const p = yield* page(q);
 	if (p._tag !== 'Limit' || p.after !== undefined) return yield* invalid('similar takes { limit }');
 	const ir: ReadIR = {
 		kind: 'similar',
-		collection,
+		model,
 		index,
 		input,
 		limit: p.limit,
-		...(q.where === undefined ? {} : { where: yield* where(cat, collection, q.where) }),
-		...(q.select === undefined ? {} : { select: yield* select(cat, collection, q.select) })
+		...(q.where === undefined ? {} : { where: yield* where(cat, model, q.where) }),
+		...(q.select === undefined ? {} : { select: yield* select(cat, model, q.select) })
 	};
 	return ir;
 });

@@ -2,7 +2,7 @@
 	import Field from '../form/field.svelte';
 	import { provideForm, type FormState } from '../form/form-state.svelte.js';
 	import Spinner from '../primitives/spinner/spinner.svelte';
-	import { provideCollection } from '../collection/context.js';
+	import { provideModel } from '../model/context.js';
 	import { useBolt } from '../client/context.js';
 	import { msg } from '../text/messages.js';
 	let {
@@ -20,8 +20,8 @@
 	} = $props();
 	// svelte-ignore state_referenced_locally -- each mounted cell belongs to one native row controller.
 	provideForm(form);
-	provideCollection(() =>
-		form.spec.target.of === 'collection' ? form.spec.target.collection : ''
+	provideModel(() =>
+		form.spec.target.of === 'model' ? form.spec.target.model : ''
 	);
 	const bolt = useBolt();
 </script>

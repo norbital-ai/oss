@@ -157,7 +157,7 @@ export function makeDeliver(e: SyncEngine) {
 						via: [],
 						title: status === 'dead' ? 'Sync needs attention' : 'Sync refused a change',
 						body: message,
-						link: { collection: r.model, id: r.record },
+						link: { model: r.model, id: r.record },
 						once: `sync:${r.id}`,
 						attachments: []
 					}
@@ -176,7 +176,7 @@ export function makeDeliver(e: SyncEngine) {
 		const plan = yield* rollbackPlan(
 			m,
 			db,
-			[{ collection: r.model, id: r.record, op: r.op, before: r.acked_revision }],
+			[{ model: r.model, id: r.record, op: r.op, before: r.acked_revision }],
 			bindings
 		);
 		const actor: EngineActor = {
@@ -230,7 +230,7 @@ export function makeDeliver(e: SyncEngine) {
 								via: [],
 								title: 'Sync refused a change',
 								body: message,
-								link: { collection: r.model, id: r.record },
+								link: { model: r.model, id: r.record },
 								once: `sync:${r.id}`,
 								attachments: []
 							}

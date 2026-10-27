@@ -98,8 +98,8 @@ describe('typed read projections', () => {
 				);
 				yield* execute(
 					yield* db.create('note', [
-						{ body: 'customer', about: { collection: 'customer', id: customer.id } },
-						{ body: 'order', about: { collection: 'order', id: order.id } },
+						{ body: 'customer', about: { model: 'customer', id: customer.id } },
+						{ body: 'order', about: { model: 'order', id: order.id } },
 						{ body: 'unlinked' }
 					])
 				);
@@ -136,25 +136,25 @@ describe('typed read projections', () => {
 					});
 				const page = yield* once(statement);
 				expect(statements).toBe(1);
-				expect(page.rows.map((note) => note.about?.collection ?? null)).toEqual([
+				expect(page.rows.map((note) => note.about?.model ?? null)).toEqual([
 					'customer',
 					'order',
 					null
 				]);
 				for (const note of page.rows) {
 					const target = note.about;
-					if (target?.collection === 'customer') {
+					if (target?.model === 'customer') {
 						expectTypeOf(target.code).toEqualTypeOf<string>();
 						expectTypeOf<keyof typeof target>().toEqualTypeOf<
-							'id' | 'collection' | 'code' | 'orders'
+							'id' | 'model' | 'code' | 'orders'
 						>();
 						expect(target.code).toBe('ACME');
 						expect(target.orders.map((row) => row.number)).toEqual(['SO-1']);
 						expect(target).not.toHaveProperty('name');
-					} else if (target?.collection === 'order') {
+					} else if (target?.model === 'order') {
 						expectTypeOf(target.number).toEqualTypeOf<string>();
 						expectTypeOf<keyof typeof target>().toEqualTypeOf<
-							'id' | 'collection' | 'number' | 'customer'
+							'id' | 'model' | 'number' | 'customer'
 						>();
 						expect(target.number).toBe('SO-1');
 						expect(target.customer.name).toBe('Acme');
@@ -343,7 +343,7 @@ describe('typed read projections', () => {
 								price: Decimal.of('0.25')
 							},
 							owner: owner.id,
-							about: { collection: 'owner', id: owner.id },
+							about: { model: 'owner', id: owner.id },
 							amounts: [Decimal.of('0.80'), 2]
 						})
 					)
@@ -394,7 +394,7 @@ describe('typed read projections', () => {
 					yield* db.create('document', {
 						payload: document.payload,
 						owner: owner.id,
-						about: { collection: 'tenant', id: tenant.handle }
+						about: { model: 'tenant', id: tenant.handle }
 					})
 				);
 				const references = yield* execute(
@@ -410,7 +410,7 @@ describe('typed read projections', () => {
 						all: true
 					})
 				);
-				expect(references.rows.map((row) => [row.owner.name, row.about?.collection])).toEqual([
+				expect(references.rows.map((row) => [row.owner.name, row.about?.model])).toEqual([
 					['Ann', 'owner'],
 					['Ann', 'tenant']
 				]);

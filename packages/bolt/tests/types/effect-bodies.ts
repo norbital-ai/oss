@@ -2,9 +2,8 @@
 // `@ts-expect-error` line is a planted mistake; a clean tsc proves every valid line compiles.
 import { Effect } from 'effect';
 import { Refusal } from '../../src/decl/errors.ts';
-import { Decimal } from '@norbital-ai/std/decimal';
 import { automation, model } from '../../src/index.ts';
-import type { QueryCtx } from '../../src/index.ts';
+import type { AutomationCtx, WriteCtx } from '../../src/index.ts';
 import type {
 	ActConflict,
 	ActRefused,
@@ -20,99 +19,69 @@ type Eq<A, B> = (<T>() => T extends A ? 1 : 2) extends <T>() => T extends B ? 1 
 const is = <T extends true>(..._proof: T extends true ? [] : never): void => {};
 
 // ── a generator body yields its reads and returns its output ──
-model('orders', {
-	...m.orders.spec,
-	queries: {
-		...m.orders.spec.queries,
-		open_total: {
-			...m.orders.spec.queries.open_total,
-			run: function* ({ since }, ctx) {
-				const open = yield* ctx.query('orders', {
-					where: { due: { gte: since } },
-					select: { total: true },
-					all: true
-				});
-				return open.rows[0]?.total ?? Decimal.of(0);
-			}
-		}
+automation('orders_renote', {
+	...rt.orders_renote.spec,
+	run: function* (_, ctx) {
+		const open = yield* ctx.query({ orders: {
+			where: { status: { ne: 'ordered' } },
+			fields: ['total']
+		} });
+		return open.orders.rows.length;
 	}
 });
-// two reads in one crossing: a concurrent `Effect.all`
-model('orders', {
-	...m.orders.spec,
-	queries: {
-		...m.orders.spec.queries,
-		open_total: {
-			...m.orders.spec.queries.open_total,
-			run: function* (_, ctx) {
-				const customers = yield* ctx.query('customers', { select: { id: true }, all: true });
-				const first = customers.rows[0];
-				const [orders, customer] = yield* Effect.all(
-					[
-						ctx.query('orders', { all: true }),
-						first === undefined ? Effect.succeed(null) : ctx.query('customers', { id: first.id })
-					],
-					{ concurrency: 'unbounded' }
-				);
-				void customer;
-				return orders.rows[0]?.total ?? Decimal.of(0);
-			}
-		}
+// two reads in one crossing: a concurrent `Effect.all`, or one read request of two roots
+automation('orders_renote', {
+	...rt.orders_renote.spec,
+	run: function* (_, ctx) {
+		const customers = yield* ctx.query({ customers: { fields: ['id'] } });
+		const first = customers.customers.rows[0];
+		const [orders, customer] = yield* Effect.all(
+			[
+				ctx.query({ orders: {} }),
+				first === undefined ? Effect.succeed(null) : ctx.query({ customers: { where: { id: { eq: first.id } }, limit: 1 } })
+			],
+			{ concurrency: 'unbounded' }
+		);
+		void customer;
+		const both = yield* ctx.query({ orders: { limit: 1 }, customers: { limit: 1 } });
+		return orders.orders.rows.length + both.orders.rows.length + both.customers.rows.length;
 	}
 });
-model('orders', {
-	...m.orders.spec,
-	queries: {
-		...m.orders.spec.queries,
-		open_total: {
-			...m.orders.spec.queries.open_total,
-			// @ts-expect-error E1 an unyielded effect returned as the output
-			run: function* (_, ctx) {
-				return ctx.query('orders', { all: true });
-			}
-		}
+automation('orders_renote', {
+	...rt.orders_renote.spec,
+	// @ts-expect-error E1 an unyielded effect returned as the output
+	run: function* (_, ctx) {
+		return ctx.query({ orders: { } });
 	}
 });
-model('orders', {
-	...m.orders.spec,
-	queries: {
-		...m.orders.spec.queries,
-		open_total: {
-			...m.orders.spec.queries.open_total,
-			// @ts-expect-error E2 a body failing with an untagged value (every failure is tagged)
-			run: function* () {
-				return yield* Effect.fail('no');
-			}
-		}
+automation('orders_renote', {
+	...rt.orders_renote.spec,
+	// @ts-expect-error E2 a body failing with an untagged value (every failure is tagged)
+	run: function* () {
+		return yield* Effect.fail('no');
 	}
 });
 
 // ── refuse is an Effect failing with Refusal: `return yield*` it ──
 model('orders', {
 	...m.orders.spec,
-	queries: {
-		...m.orders.spec.queries,
-		open_total: {
-			...m.orders.spec.queries.open_total,
-			run: function* ({ since }, ctx) {
-				if (String(since) === '') return yield* ctx.refuse('no date', { field: 'since' });
-				return Decimal.of(0);
-			}
+	create: {
+		...m.orders.spec.create,
+		transform: function* (rows, ctx) {
+			if (rows.length === 0) return yield* ctx.refuse('no rows', { field: 'note' });
+			return rows;
 		}
 	}
 });
-is<Eq<Effect.Error<ReturnType<QueryCtx['refuse']>>, Refusal>>();
+is<Eq<Effect.Error<ReturnType<WriteCtx<'orders'>['refuse']>>, Refusal>>();
 model('orders', {
 	...m.orders.spec,
-	queries: {
-		...m.orders.spec.queries,
-		open_total: {
-			...m.orders.spec.queries.open_total,
-			run: function* (_, ctx) {
-				// @ts-expect-error E3 refuse used as `never`
-				const total: Decimal = ctx.refuse('no total');
-				return total;
-			}
+	create: {
+		...m.orders.spec.create,
+		transform: function* (rows, ctx) {
+			// @ts-expect-error E3 refuse used as `never`
+			const none: readonly never[] = ctx.refuse('no rows');
+			return none.length === 0 ? rows : rows;
 		}
 	}
 });
@@ -121,13 +90,13 @@ model('orders', {
 automation('orders_submit', {
 	...rt.orders_submit.spec,
 	run: function* ({ target: targetId }, ctx) {
-		const target = yield* ctx.query('orders', { id: targetId });
+		const target = (yield* ctx.query({ orders: { where: { id: { eq: targetId } }, limit: 1 } })).orders.rows[0] ?? null;
 		if (target === null)
 			return yield* Effect.fail(new Refusal({ message: 'Choose an existing orders record.' }));
-		const submit = ctx.act('orders.update', {
+		const submit = ctx.act('orders.update', [{
 			target: target.id,
 			set: { status: 'submitted' }
-		});
+		}]);
 		is<Eq<Effect.Error<typeof submit>, ActRefused | ActConflict | ActUnknown>>();
 		const kept = submit.pipe(
 			Effect.catchTag('ActRefused', (refused) => Effect.succeed(refused.code))
@@ -139,10 +108,10 @@ automation('orders_submit', {
 automation('orders_submit', {
 	...rt.orders_submit.spec,
 	run: function* ({ target: targetId }, ctx) {
-		const target = yield* ctx.query('orders', { id: targetId });
+		const target = (yield* ctx.query({ orders: { where: { id: { eq: targetId } }, limit: 1 } })).orders.rows[0] ?? null;
 		if (target === null)
 			return yield* Effect.fail(new Refusal({ message: 'Choose an existing orders record.' }));
-		yield* ctx.act('orders.update', { target: target.id, set: {} }).pipe(
+		yield* ctx.act('orders.update', [{ target: target.id, set: {} }]).pipe(
 			// @ts-expect-error E4 a tag act never fails with
 			Effect.catchTag('Refusal', () => Effect.void)
 		);
@@ -167,21 +136,18 @@ automation('sweep', {
 
 model('orders', {
 	...m.orders.spec,
-	queries: {
-		...m.orders.spec.queries,
-		// @ts-expect-error E5 ctx-bearing bodies must be generators
-		open_total: { ...m.orders.spec.queries.open_total, run: async () => 0 }
-	}
+	// @ts-expect-error E5 ctx-bearing bodies must be generators
+	create: { ...m.orders.spec.create, transform: async () => [] }
 });
-declare const queryCtx: QueryCtx;
+declare const automationCtx: AutomationCtx;
 // @ts-expect-error E6 ctx members have no Promise facet
-const promiseRead: Promise<unknown> = queryCtx.query('orders', { all: true });
+const promiseRead: Promise<unknown> = automationCtx.query({ orders: { } });
 automation('sweep', {
 	description: 'x',
 	runAs: ['sales_rep'],
 	run: function* (_, ctx) {
 		// @ts-expect-error E7 act has no .try twin
-		ctx.act.try('orders.update', { target: 'o1', set: {} });
+		ctx.act.try('orders.update', [{ target: 'o1', set: {} }]);
 		// @ts-expect-error E8 facilities have no .try twin
 		ctx.web.read.try('https://a.test');
 	}

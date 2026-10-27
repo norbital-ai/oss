@@ -3,7 +3,7 @@
 An editable list of child rows inside a parent's form: add, edit and remove rows, reported as the relation operations of the parent's one act.
 -->
 <script lang="ts" module>
-	import type { Row } from '../collection/types.js';
+	import type { Row } from '../model/types.js';
 	import type { RowsOps } from './operations.js';
 	import type { Col } from '../table/Table.svelte';
 	/** The props of `Rows`. */
@@ -22,7 +22,7 @@ An editable list of child rows inside a parent's form: add, edit and remove rows
 
 <script lang="ts">
 	// A child relation edited inside its parent's form and sent in the same act (AM-10) as explicit `create`, `update`
-	// and `delete` entries recorded from the viewer's own actions, never deletes by omission (collection-write-contract).
+	// and `delete` entries recorded from the viewer's own actions, never deletes by omission (model-write-contract).
 	import { rowsOps } from './operations.js';
 	import Table from '../table/Table.svelte';
 

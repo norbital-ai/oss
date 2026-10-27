@@ -181,7 +181,7 @@ const SyncExposureSchema = Schema.Union([
 	}),
 	Schema.Struct({ kind: Schema.Literal('remote'), with: Schema.String })
 ]);
-const childIdentity = { collection: Schema.String, parent: Schema.String, owned: trueKey };
+const childIdentity = { model: Schema.String, parent: Schema.String, owned: trueKey };
 const child = Schema.Struct({
 	...childIdentity,
 	create: Schema.optionalKey(

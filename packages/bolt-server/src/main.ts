@@ -1,6 +1,6 @@
 #!/usr/bin/env -S node --no-node-snapshot
 import { Console, Effect, Layer, Option } from 'effect';
-import { Command, Flag } from 'effect/unstable/cli';
+import { Command, Flag } from 'effect/cli';
 import * as NodeRuntime from '@effect/platform-node/NodeRuntime';
 import * as NodeServices from '@effect/platform-node/NodeServices';
 import { BoltConfig } from './config.ts';
@@ -8,11 +8,11 @@ import { ServerLive } from './server.ts';
 const command = Command.make(
 	'bolt-server',
 	{
-		port: Flag.integer('port').pipe(Flag.optional),
-		dev: Flag.boolean('dev').pipe(Flag.withDefault(false)),
-		trustProxy: Flag.string('trust-proxy').pipe(Flag.optional),
-		founder: Flag.string('founder').pipe(Flag.optional),
-		seed: Flag.string('seed').pipe(Flag.optional)
+		port: Flag.Int('port').pipe(Flag.optional),
+		dev: Flag.Boolean('dev').pipe(Flag.withDefault(false)),
+		trustProxy: Flag.String('trust-proxy').pipe(Flag.optional),
+		founder: Flag.String('founder').pipe(Flag.optional),
+		seed: Flag.String('seed').pipe(Flag.optional)
 	},
 	(flags) =>
 		Effect.gen(function* () {

@@ -74,7 +74,7 @@ export const noticeInsert = (
 export const noticeCaptures = (c: Chain): string =>
 	c.notices.length === 0
 		? `'[]'::jsonb`
-		: `(SELECT coalesce(jsonb_agg(jsonb_build_object('collection', 'sys_notification', 'id', x.id, 'op', 'create', 'revision', 0, 'old', NULL, 'new', x.image,
+		: `(SELECT coalesce(jsonb_agg(jsonb_build_object('model', 'sys_notification', 'id', x.id, 'op', 'create', 'revision', 0, 'old', NULL, 'new', x.image,
 		'cause', 'direct')), '[]'::jsonb) FROM (${c.notices.map((n) => `SELECT r.id, r.image FROM ${n} r WHERE r.member IS NOT NULL`).join(' UNION ALL ')}) x)`;
 
 /**
@@ -240,13 +240,13 @@ export function decided(e: unknown, constraints: ReadonlyMap<string, ConstraintM
 }
 const ConflictDetail = Schema.fromJsonString(
 	Schema.Struct({
-		collection: Schema.String,
+		model: Schema.String,
 		ids: Schema.Array(Schema.String)
 	})
 );
-const conflictRecords = (detail: string): { collection: string; id: string; fields: string[] }[] =>
+const conflictRecords = (detail: string): { model: string; id: string; fields: string[] }[] =>
 	Result.match(Schema.decodeUnknownResult(ConflictDetail)(detail), {
-		onSuccess: ({ collection, ids }) => ids.map((id) => ({ collection, id, fields: [] })),
+		onSuccess: ({ model, ids }) => ids.map((id) => ({ model, id, fields: [] })),
 		onFailure: () => []
 	});
 

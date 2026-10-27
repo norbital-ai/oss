@@ -1,5 +1,5 @@
 import { Effect, Option } from 'effect';
-import type * as HttpServerRequest from 'effect/unstable/http/HttpServerRequest';
+import type * as HttpServerRequest from 'effect/http/HttpServerRequest';
 import type { Authority } from '../../engine/contracts.ts';
 import type { EngineManifest } from '../../engine/manifest.ts';
 import { Identity } from '../../engine/services.ts';

@@ -10,11 +10,11 @@ export declare const brand: unique symbol;
 export type PlainTime = string & { readonly [brand]: 'PlainTime' };
 /** A `duration` field's value: whole seconds. */
 export type Seconds = number & { readonly [brand]: 'Seconds' };
-/** A row id, branded by its collection so an id of one collection never passes for another's. */
+/** A row id, branded by its model so an id of one model never passes for another's. */
 export type Id<C extends string> = string & { readonly [brand]: C };
-/** A typed reference to one record: its collection and id. */
+/** A typed reference to one record: its model and id. */
 export type RecordRef<C extends string = string> = {
-	[K in C]: { readonly collection: K; readonly id: Id<K> };
+	[K in C]: { readonly model: K; readonly id: Id<K> };
 }[C];
 
 /** A `period` of dates: `from` and `to` inclusive; `to: null` is open-ended. */

@@ -1,6 +1,6 @@
 // `ctx.ai.sys_2.infer({ tools: ['read'] })` in an automation: the model reads workspace records as the run's `runAs`
 // policies over several turns (the agent's `query` tool: grants, masks, bounded pages), then edits and submits; a
-// collection outside the policies is refused, a masked field never reaches the model, `steps` still caps the tool turns,
+// model outside the policies is refused, a masked field never reaches the model, `steps` still caps the tool turns,
 // and a `runAs: 'trigger'` run cannot offer `read`.
 import { FacilityFailure } from '../src/decl/errors.ts';
 import { describe, expect, it } from '@effect/vitest';
@@ -45,24 +45,24 @@ const manifest = {
 		}
 	},
 	relationships: {},
-	collections: {
+	exposures: {
 		invoices: {
-			read: { fields: 'all' },
-			create: { input: { columns: ['number', 'supplier', 'amount'] } },
-			update: { input: { columns: ['note'] } }
+			read: { invoices: { fields: 'all' } },
+			create: { columns: { invoices: ['number', 'supplier', 'amount'] } },
+			update: { columns: { invoices: ['note'] } }
 		},
 		purchase_orders: {
-			read: { fields: 'all' },
-			create: { input: { columns: ['number', 'supplier', 'amount', 'margin'] } }
+			read: { purchase_orders: { fields: 'all' } },
+			create: { columns: { purchase_orders: ['number', 'supplier', 'amount', 'margin'] } }
 		},
-		ledgers: { read: { fields: 'all' }, create: { input: { columns: ['title'] } } }
+		ledgers: { read: { ledgers: { fields: 'all' } }, create: { columns: { ledgers: ['title'] } } }
 	},
 	policies: {
 		matcher: {
 			description: 'Matches invoices',
 			grants: {
 				invoices: { read: true, update: true },
-				purchase_orders: { read: { fields: ['number', 'supplier', 'amount'] } }
+				purchase_orders: { read: { purchase_orders: { fields: ['number', 'supplier', 'amount'] } } }
 			}
 		},
 		clerk: {
@@ -94,15 +94,15 @@ const infer = (ctx, inv) => Effect.result(ctx.ai.sys_2.infer({ prompt: 'Match in
 export default { automation: {
 	match: { body: function* (input, ctx) {
 		for (const id of input.ids) {
-			const inv = yield* ctx.query('invoices', { id });
+			const inv = (yield* ctx.query({ invoices: { where: { id: { eq: id } } } })).invoices.rows[0];
 			const r = yield* infer(ctx, inv);
-			yield* ctx.act('invoices.update', { target: id, set: { note: Result.isFailure(r) ? 'failed' : JSON.stringify(r.success) } });
+			yield* ctx.act('invoices.update', [{ target: id, set: { note: Result.isFailure(r) ? 'failed' : JSON.stringify(r.success) } }]);
 		}
 	} },
 	relay: { body: function* (input, ctx) {
-		const inv = yield* ctx.query('invoices', { id: input.id });
+		const inv = (yield* ctx.query({ invoices: { where: { id: { eq: input.id } } } })).invoices.rows[0];
 		const r = yield* infer(ctx, inv);
-		yield* ctx.act('invoices.update', { target: input.id, set: { note: Result.isFailure(r) ? r.failure._tag + ': ' + r.failure.reason : 'answered' } });
+		yield* ctx.act('invoices.update', [{ target: input.id, set: { note: Result.isFailure(r) ? r.failure._tag + ': ' + r.failure.reason : 'answered' } }]);
 	} }
 } };`);
 
@@ -154,12 +154,18 @@ const create = (t: Kit, route: FixtureRoute, callable: string, input: Json) =>
 		})
 	);
 const note = (t: Kit, route: FixtureRoute, id: string) =>
-	qReply(route, clerk(t), { reads: [{ m: 'query', a: ['invoices', { id: id }] }] }).pipe(
+	qReply(route, clerk(t), {
+		reads: [{ m: 'query', a: [{ invoices: { where: { id: { eq: id } }, fields: ['note'] } }] }]
+	}).pipe(
 		Effect.map(
 			(reply) =>
-				Schema.decodeUnknownSync(Schema.Struct({ note: Schema.NullOr(Schema.String) }))(
-					reply.answers[0]
-				).note
+				Schema.decodeUnknownSync(
+					Schema.Struct({
+						invoices: Schema.Struct({
+							rows: Schema.Array(Schema.Struct({ note: Schema.NullOr(Schema.String) }))
+						})
+					})
+				)(reply.answers[0]).invoices.rows[0]?.note
 		)
 	);
 const toolResults = (request: AiRequest) =>
@@ -172,7 +178,7 @@ const toolResults = (request: AiRequest) =>
 
 describe("sys_2.infer tools: ['read']", () => {
 	it.live(
-		'reads over two turns as the runAs policies (refused collection, masked field), then the spent budget leaves the draft tools',
+		'reads over two turns as the runAs policies (refused root, masked field), then the spent budget leaves the draft tools',
 		() =>
 			Effect.scoped(
 				Effect.gen(function* () {
@@ -180,11 +186,11 @@ describe("sys_2.infer tools: ['read']", () => {
 						use([
 							{
 								id: 'r1',
-								name: 'query',
-								input: { collection: 'purchase_orders', where: { supplier: { eq: 'Acme' } } }
+								name: 'read',
+								input: { purchase_orders: { where: { supplier: { eq: 'Acme' } } } }
 							}
 						]),
-						use([{ id: 'r2', name: 'query', input: { collection: 'ledgers' } }]),
+						use([{ id: 'r2', name: 'read', input: { ledgers: {} } }]),
 						use([
 							{
 								id: 'p',
@@ -199,46 +205,51 @@ describe("sys_2.infer tools: ['read']", () => {
 							{ id: 's', name: 'submit', input: {} }
 						])
 					]);
-					yield* create(t, route, 'purchase_orders.create', {
+					yield* create(t, route, 'purchase_orders.create', [{
 						number: 'PO-1',
 						supplier: 'Acme',
 						amount: 120,
 						margin: 40
-					});
-					yield* create(t, route, 'purchase_orders.create', {
+					}]);
+					yield* create(t, route, 'purchase_orders.create', [{
 						number: 'PO-2',
 						supplier: 'Other',
 						amount: 50,
 						margin: 10
-					});
-					yield* create(t, route, 'ledgers.create', { title: 'secret' });
-					const id = yield* create(t, route, 'invoices.create', {
+					}]);
+					yield* create(t, route, 'ledgers.create', [{ title: 'secret' }]);
+					const id = yield* create(t, route, 'invoices.create', [{
 						number: 'INV-9',
 						supplier: 'Acme',
 						amount: 120
-					});
+					}]);
 					yield* t.runDue();
 					expect(yield* note(t, route, id)).toBe(JSON.stringify({ matched: true, po: 'PO-1' }));
 					expect(ai.requests).toHaveLength(3);
 					const offered = ai.requests[0]!.tools!;
+					// the workspace `read` (a read request) first, then the draft tools
 					expect(offered.map((tool) => tool.name)).toEqual([
-						'query',
+						'read',
 						'edit',
 						'submit',
 						'read',
 						'find',
 						'diff'
 					]);
-					expect(offered[0]!.description).toContain('Collections: invoices, purchase_orders.');
+					expect(offered[0]!.description).toContain('Keys you may name: invoices, purchase_orders.');
 					// one bounded page of the matcher's view: the Acme order only, its margin masked away
 					const [page] = toolResults(ai.requests[1]!);
 					const rows = Schema.decodeUnknownSync(
-						Schema.Struct({ rows: Schema.Array(Schema.Record(Schema.String, Schema.Json)) })
-					)(page).rows;
+						Schema.Struct({
+							purchase_orders: Schema.Struct({
+								rows: Schema.Array(Schema.Record(Schema.String, Schema.Json))
+							})
+						})
+					)(page).purchase_orders.rows;
 					expect(rows.map((row) => row['number'])).toEqual(['PO-1']);
 					expect(rows[0]!['margin']).toEqual({ $masked: true });
 					expect(toolResults(ai.requests[2]!)[1]).toEqual({
-						error: expect.stringContaining("You may not read 'ledgers'")
+						error: expect.stringContaining("'ledgers' is not a model or layer you may read")
 					});
 					// steps: 2 spent on the two reads; the final turn offers only the draft tools
 					expect(ai.requests[2]!.tools!.map((tool) => tool.name)).toEqual([
@@ -257,11 +268,11 @@ describe("sys_2.infer tools: ['read']", () => {
 			Effect.gen(function* () {
 				const { t, route, ai } = yield* open([]);
 				// the match run (an empty cassette) only notes a failure
-				const id = yield* create(t, route, 'invoices.create', {
+				const id = yield* create(t, route, 'invoices.create', [{
 					number: 'INV-1',
 					supplier: 'Acme',
 					amount: 1
-				});
+				}]);
 				yield* t.runDue();
 				expect(yield* note(t, route, id)).toBe('failed');
 				const asked = ai.requests.length;

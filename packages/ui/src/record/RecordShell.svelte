@@ -1,6 +1,6 @@
 <script lang="ts" module>
 	import type { Snippet } from 'svelte';
-	import type { CollectionKey, InsertOf, RecordOf, Row } from '../collection/types.js';
+	import type { ModelKey, InsertOf, RecordOf, Row } from '../model/types.js';
 	import type { Outcome } from '../client/contract.js';
 	import type { FormProps } from '../form/form.svelte';
 	import type { RunsForProps } from '../runs/RunsFor.svelte';
@@ -17,8 +17,8 @@
 		icon?: string;
 		keepAlive?: true;
 	};
-	/** The props of `RecordShell`, typed by the collection `of`. */
-	export type RecordShellProps<C extends CollectionKey = CollectionKey> = {
+	/** The props of `RecordShell`, typed by the model `of`. */
+	export type RecordShellProps<C extends ModelKey = ModelKey> = {
 		of: C;
 		/** The stored row; absent with `mode="create"`. */
 		id?: FormProps<C>['id'];
@@ -63,14 +63,14 @@
 	const lastTab = new Map<string, string>();
 </script>
 
-<script lang="ts" generics="C extends CollectionKey">
+<script lang="ts" generics="C extends ModelKey">
 	import { Effect } from 'effect';
 	import { fork, observeOnce } from '../effect/index.js';
 	import { contentMotion } from '../form/content-motion.js';
 	// The record frame (§3.6, X-20): label, state pill, actions, the UI tab, authored tabs and Runs. One tab row: a nested
 	// shell shows its body only, and a tab a page's own strip already shows is not repeated. The record's header carries
 	// the record/approval toggle for native proposals and the history scrubber (rule 17): a past revision shows
-	// read-only in the body. Without a body it renders the collection's `+representation.svelte` or the generated view.
+	// read-only in the body. Without a body it renders the model's `+representation.svelte` or the generated view.
 	import Icon from '@iconify/svelte';
 	import { getContext, onDestroy, setContext, untrack } from 'svelte';
 	import { SHEET_GUARD, type SheetGuard } from '../primitives/sheet/dismiss.js';
@@ -85,7 +85,7 @@
 	import { useKinds } from '../kinds/context.js';
 	import { fieldsText, format } from '../kinds/kind.js';
 	import { openRecord } from './navigation.js';
-	import { provideCollection } from '../collection/context.js';
+	import { provideModel } from '../model/context.js';
 	import { provideRecordView, representations } from './context.js';
 	import { useBolt } from '../client/context.js';
 	import { type RestorePreview } from './types.js';
@@ -105,10 +105,11 @@
 		useRecordController
 	} from '../form/form-state.svelte.js';
 	import { formSpec, locked } from '../form/draft.js';
-	import { queryState } from '../read/state.js';
+	import { mapped, queryState } from '../read/state.js';
 	import { checkpoints, skipText, type Checkpoint } from './history.js';
 	import { label, lowerLead, msg, singular } from '../text/messages.js';
-	import { listSelect, refLabel, refOf, unref, type Refs } from '../relations/select.js';
+	import { listRequest, refLabel, refOf, unref, type Refs } from '../relations/select.js';
+	import { byId, firstOf, requestJson } from '../read/request.js';
 	import { RUNS_GROUP } from '../runs/RunsFor.svelte';
 	import RecordTimeline from './RecordTimeline.svelte';
 	import RunsFor from '../runs/RunsFor.svelte';
@@ -136,12 +137,12 @@
 	const bolt = useBolt();
 	const kinds = useKinds();
 	const formText = uiText();
-	provideCollection(() => of);
+	provideModel(() => of);
 
 	// a representation that renders <RecordShell of={same}> without a body gets the generated view, not itself again;
 	// a shell inside a framed shell (a record within a record's tab) shows its body only: a record view has one tab row
 	const INSIDE = 'ui.views.record';
-	// The native read feeds both the record view and Form's collection-specific record contract.
+	// The native read feeds both the record view and Form's model-specific record contract.
 	type StoredRecord = RecordOf<C> & Row & NonNullable<FormProps<C>['record']>;
 	type Scrub = { readonly past: StoredRecord | null };
 	const parent = getContext<
@@ -156,7 +157,7 @@
 	const inside = parent?.of;
 	const nested = $derived(parent?.framed === true);
 	// the outermost shell of a stored record owns its header chrome: the toggle, the scrubber and the revision shown;
-	// its own representation's shell (same collection) shows that revision too
+	// its own representation's shell (same model) shows that revision too
 	const owner = untrack(
 		() => mode !== 'create' && id !== undefined && inside !== of && parent?.framed !== true
 	);
@@ -199,7 +200,9 @@
 
 	// read in this component, the query is live: it follows the record's revisions until the shell unmounts
 	const record = $derived(
-		mode !== 'create' && id !== undefined ? bolt.query<StoredRecord | null>(of, { id }) : null
+		mode !== 'create' && id !== undefined
+			? mapped(bolt.query(byId(of, id)), (answer) => firstOf<StoredRecord>(answer, of))
+			: null
 	);
 	const loaded = $derived(queryState(record));
 	const live = $derived(loaded.kind === 'ready' ? loaded.value : null);
@@ -208,7 +211,7 @@
 	let past = $state<StoredRecord | null>(null);
 	let asked = 0;
 	const latest = $derived(typeof live?.['revision'] === 'number' ? live['revision'] : 0);
-	function pick(r: number | null) {
+	function pick(r: number | null, at: string | null = null) {
 		const n = ++asked;
 		if (r === null || r >= latest || id === undefined) {
 			viewing = null;
@@ -222,9 +225,13 @@
 				past = null;
 			}
 		};
-		// a pruned create folds to null: there is nothing to show, so the live record stays
+		// the revision is read as of the instant it was written (`at`, from the timeline's loaded history); without one
+		// (history not loaded, a pruned create) or a null answer there is nothing to show, so the live record stays
+		// ponytail: two revisions in one millisecond fold to the later; an asOf revision would pin it exactly
+		if (at === null) return back();
 		fork(
-			bolt.query<StoredRecord | null>(of, { id, revision: r }).pipe(
+			bolt.query({ [of]: { where: { id: { eq: id } }, asOf: at } }).pipe(
+				Effect.map((answer) => firstOf<StoredRecord>(answer, of)),
 				Effect.tap((value) =>
 					Effect.sync(() => {
 						if (n !== asked) return;
@@ -264,7 +271,7 @@
 		if (client === undefined) return;
 		restorePending = true;
 		fork(
-			actOutcome(client.run(p.collection, p.record, p.revision, p.live)).pipe(
+			actOutcome(client.run(p.model, p.record, p.revision, p.live)).pipe(
 				Effect.tap((o) =>
 					Effect.sync(() => {
 						restorePending = false;
@@ -275,7 +282,7 @@
 							msg(bolt, 'record.restored', 'Restored revision {n}', { n: p.revision })
 						);
 						if (o.kind === 'pendingApproval')
-							submitted = { collection: of, record: id, requestId: o.requestId };
+							submitted = { model: of, record: id, requestId: o.requestId };
 						if (o.kind === 'committed' || o.kind === 'pendingApproval') pick(null);
 					})
 				)
@@ -293,11 +300,11 @@
 	const row = $derived(shownPast ?? live);
 	const view = $derived.by<RecordView<C> | null>(() =>
 		mode === 'create'
-			? { collection: of, mode: 'create', values: (values ?? {}) as Partial<InsertOf<C>> }
+			? { model: of, mode: 'create', values: (values ?? {}) as Partial<InsertOf<C>> }
 			: row === null
 				? null
 				: {
-						collection: of,
+						model: of,
 						mode: shownPast !== null ? 'view' : controller?.mode === 'edit' ? 'edit' : 'view',
 						record: row,
 						...(shownPast !== null || controller?.capabilities == null
@@ -306,12 +313,12 @@
 					}
 	);
 	let submitted = $state<{
-		collection: string;
+		model: string;
 		record: string | undefined;
 		requestId: string;
 	} | null>(null);
 	const submittedId = $derived(
-		submitted?.collection === of && submitted.record === id ? submitted.requestId : null
+		submitted?.model === of && submitted.record === id ? submitted.requestId : null
 	);
 	const requests = observeOnce(() => {
 		void latest;
@@ -322,7 +329,7 @@
 		if (mode !== 'create' && loaded.kind !== 'ready') return null;
 		return id === undefined
 			? Effect.succeed([])
-			: bolt.approvals.list({ collection: of, records: [id], all: true });
+			: bolt.approvals.list({ model: of, records: [id], all: true });
 	});
 	const openRequest = $derived(
 		(requests.current ?? []).find(
@@ -336,8 +343,7 @@
 		mode !== 'create' &&
 			live === null &&
 			(requests.current ?? []).some(
-				(request) =>
-					request.action === 'create' && request.collection === of && request.record === id
+				(request) => request.action === 'create' && request.model === of && request.record === id
 			)
 	);
 	/** The header switches between the stored record and its native proposal. */
@@ -405,7 +411,7 @@
 
 	// ── the generated view: a display grid by the catalog's kinds (else the row's own keys); edits and creates are `Form` ──
 	const exposure = $derived(kinds.catalog?.[of]);
-	// a section naming a field the collection does not have is ignored, said once to the author
+	// a section naming a field the model does not have is ignored, said once to the author
 	untrack(() => {
 		const e = exposure;
 		if (e === undefined) return;
@@ -421,8 +427,8 @@
 	const sharedController = $derived.by(() => {
 		const current = inheritedController?.current;
 		return inside === of &&
-			current?.spec.target.of === 'collection' &&
-			current.spec.target.collection === of &&
+			current?.spec.target.of === 'model' &&
+			current.spec.target.model === of &&
 			current.spec.target.id === id
 			? current
 			: null;
@@ -435,7 +441,9 @@
 	// a model's own-field lock is the declaration's, not a per-template callback: the page shows a lock, never Edit
 	const modelLocked = $derived(live !== null && matchesLock(live, exposure?.locked));
 	const lockReason = $derived(
-		modelLocked ? msg(bolt, 'record.locked', 'This record is locked.') : lockText(bolt, approvalOf(row))
+		modelLocked
+			? msg(bolt, 'record.locked', 'This record is locked.')
+			: lockText(bolt, approvalOf(row))
 	);
 
 	let capabilityRequest = 0;
@@ -459,8 +467,8 @@
 		if (spec === null || (mode !== 'create' && live === null)) return;
 		const current = localController;
 		if (
-			current?.spec.target.of !== 'collection' ||
-			current.spec.target.collection !== of ||
+			current?.spec.target.of !== 'model' ||
+			current.spec.target.model !== of ||
 			current.spec.target.id !== id
 		) {
 			localController = new FormState(
@@ -501,7 +509,7 @@
 						if (request !== capabilityRequest || target !== localController) return;
 						if (
 							value !== null &&
-							(value.collection !== of || value.id !== id || value.revision !== revision)
+							(value.model !== of || value.id !== id || value.revision !== revision)
 						) {
 							permissionError = formText('conflict');
 							return;
@@ -530,10 +538,10 @@
 	function done(o: Outcome) {
 		notify(bolt, o);
 		if (o.kind !== 'committed' && o.kind !== 'pendingApproval') return;
-		// the created record is this collection's; an act's other writes (a transform's side rows) come first or last
-		const mine = o.records.find((r) => r.collection === of);
+		// the created record is this model's; an act's other writes (a transform's side rows) come first or last
+		const mine = o.records.find((r) => r.model === of);
 		if (o.kind === 'pendingApproval') {
-			submitted = { collection: of, record: id ?? mine?.id, requestId: o.requestId };
+			submitted = { model: of, record: id ?? mine?.id, requestId: o.requestId };
 			pane = 'approval';
 		}
 		controller?.view();
@@ -542,7 +550,7 @@
 	}
 
 	// the heading: the author's title, else the record's label fields by kind, else (a create, an unlabelled record) the
-	// collection's label; above a record's own heading, the singular model label
+	// model's label; above a record's own heading, the singular model label
 	// a relation in the heading or subtitle reads as its target's label (a table cell's rule): one read of the record with
 	// those targets' labels nested, never its id (blank until it arrives)
 	const labelled = $derived(
@@ -552,10 +560,14 @@
 	);
 	const related = $derived(
 		mode !== 'create' && id !== undefined && labelled.length > 0
-			? bolt.query<Row | null>(of, {
-					id,
-					select: listSelect(kinds.catalog, of, [], labelled) ?? null
-				})
+			? mapped(
+					bolt.query(
+						requestJson(
+							listRequest(kinds.catalog, of, { where: { id: { eq: id } }, limit: 1 }, [], labelled)
+						)
+					),
+					(answer) => firstOf(answer, of)
+				)
 			: null
 	);
 	const refs = $derived.by<Refs>(() => {
@@ -583,7 +595,7 @@
 						zone: kinds.zone,
 						currency: kinds.currency,
 						t: (k) => bolt.t(k),
-						collection: of
+						model: of
 					}
 				);
 	const heading = $derived(title ?? (mode !== 'create' ? shownAs(exposure?.label ?? []) : ''));
@@ -627,37 +639,40 @@
 				class="text-micro text-muted-foreground truncate leading-4">{singular(bolt, of)}</span
 			>{/if}
 		<div class="flex min-w-0 flex-wrap items-center gap-2 sm:flex-nowrap">
-			<div class="mr-auto flex min-w-0 items-center gap-2">
-				<h2 class="min-w-0 truncate text-sm leading-5 font-semibold">
-					{heading ||
-						(mode === 'create'
-							? msg(bolt, 'record.new', 'New {what}', { what: lowerLead(singular(bolt, of)) })
-							: label(bolt, of))}
-				</h2>
-				{#if badge || icon}<Badge variant="outline" title={hint}
-						>{#if icon}<Icon {icon} class="size-3" />{/if}{badge ?? ''}</Badge
-					>{/if}
-				{#if pendingApproval || underApproval}
-					{@const rfc = openRequest?.status === 'ChangesRequested'}
-					{@const full = rfc
-						? msg(bolt, 'approval.requestForChange', 'Request for change')
-						: lockReason}
-					<Tooltip text={full}>
-						{#snippet trigger({ props })}
-							<Badge
-								{...props}
-								variant="outline"
-								class="shrink-0 whitespace-nowrap border-warning/25 bg-warning/10 text-warning-foreground hover:bg-warning/15 dark:text-warning"
-								tabindex={0}
-								role="status"
-								aria-label={full}
-								data-view="approval-badge"
-								>{rfc ? 'RFC' : msg(bolt, 'record.pending', 'Under approval')}</Badge
-							>
-						{/snippet}
-					</Tooltip>
-				{/if}
-				{#if trailing}{@render trailing()}{/if}
+			<div class="mr-auto flex min-w-0 flex-col gap-0.5">
+				<div class="flex min-w-0 items-center gap-2">
+					<h2 class="min-w-0 truncate text-sm leading-5 font-semibold">
+						{heading ||
+							(mode === 'create'
+								? msg(bolt, 'record.new', 'New {what}', { what: lowerLead(singular(bolt, of)) })
+								: label(bolt, of))}
+					</h2>
+					{#if badge || icon}<Badge variant="outline" title={hint}
+							>{#if icon}<Icon {icon} class="size-3" />{/if}{badge ?? ''}</Badge
+						>{/if}
+					{#if pendingApproval || underApproval}
+						{@const rfc = openRequest?.status === 'ChangesRequested'}
+						{@const full = rfc
+							? msg(bolt, 'approval.requestForChange', 'Request for change')
+							: lockReason}
+						<Tooltip text={full}>
+							{#snippet trigger({ props })}
+								<Badge
+									{...props}
+									variant="outline"
+									class="shrink-0 whitespace-nowrap border-warning/25 bg-warning/10 text-warning-foreground hover:bg-warning/15 dark:text-warning"
+									tabindex={0}
+									role="status"
+									aria-label={full}
+									data-view="approval-badge"
+									>{rfc ? 'RFC' : msg(bolt, 'record.pending', 'Under approval')}</Badge
+								>
+							{/snippet}
+						</Tooltip>
+					{/if}
+					{#if trailing}{@render trailing()}{/if}
+				</div>
+				{#if subline}<p class="text-muted-foreground truncate text-sm">{subline}</p>{/if}
 			</div>
 			{#if controller?.mode === 'view' && shownPast === null && exposure?.update !== undefined && modelLocked}
 				<Tooltip text={lockReason}>
@@ -668,24 +683,40 @@
 					{/snippet}
 				</Tooltip>
 			{:else if controller?.mode === 'view' && shownPast === null && exposure?.update !== undefined && controller.canSubmit}
-				<Button size="sm" variant="outline" onclick={() => controller?.edit()}
-					>{msg(bolt, 'record.edit', 'Edit')}</Button
+				<Button
+					size="sm"
+					variant="outline"
+					class="min-w-[4.25rem] justify-center"
+					onclick={() => controller?.edit()}>{msg(bolt, 'record.edit', 'Edit')}</Button
 				>
 			{:else if controller?.mode === 'view' && shownPast === null && exposure?.update !== undefined && underApproval}
-				<Button size="sm" variant="outline" disabled title={lockReason}
-					>{msg(bolt, 'record.edit', 'Edit')}</Button
+				<Button
+					size="sm"
+					variant="outline"
+					class="min-w-[4.25rem] justify-center"
+					disabled
+					title={lockReason}>{msg(bolt, 'record.edit', 'Edit')}</Button
 				>
 			{/if}
 			{#if controller?.mode === 'edit' && shownPast === null}
+				{@const saving = controller.pending
+					? formText('saving')
+					: controller.resubmitting
+						? msg(bolt, 'record.resubmit', 'Resubmit')
+						: controller.requestingApproval
+							? msg(bolt, 'record.requestApproval', 'Request approval')
+							: formText('save')}
 				<div
-					class="inline-flex shrink-0 items-center gap-1"
+					class="inline-flex min-w-[4.25rem] shrink-0 items-center justify-end gap-1"
 					role="group"
 					aria-label={msg(bolt, 'record.editing', 'Editing')}
 				>
 					<Button
-						size="sm"
+						size="icon-sm"
 						variant="ghost"
-						class="px-2.5 text-xs"
+						class="text-muted-foreground hover:text-foreground"
+						hint={msg(bolt, 'record.cancel', 'Cancel')}
+						aria-label={msg(bolt, 'record.cancel', 'Cancel')}
 						disabled={controller.pending}
 						onclick={() => {
 							if (!controller?.dirty) return void controller?.view();
@@ -703,27 +734,30 @@
 									)
 								)
 							);
-						}}>{msg(bolt, 'record.cancel', 'Cancel')}</Button
+						}}
 					>
+						<Icon icon="lucide:x" class="size-4" />
+						<span class="sr-only">{msg(bolt, 'record.cancel', 'Cancel')}</span>
+					</Button>
 					<Button
-						size="sm"
-						class="px-2.5 text-xs"
+						size="icon-sm"
+						class="min-w-8"
 						disabled={!controller.canSave || !controller.dirty}
 						onclick={() => (controller === null ? undefined : fork(controller.submit()))}
 						data-record-save
-						>{controller.pending
-							? formText('saving')
-							: controller.resubmitting
-								? msg(bolt, 'record.resubmit', 'Resubmit')
-								: controller.requestingApproval
-									? msg(bolt, 'record.requestApproval', 'Request approval')
-									: formText('save')}</Button
+						aria-label={saving}
+						hint={saving}
 					>
+						<Icon
+							icon={controller.pending ? 'lucide:loader-circle' : 'lucide:check'}
+							class={['size-4', controller.pending && 'animate-spin']}
+						/>
+						<span class="sr-only">{saving}</span>
+					</Button>
 				</div>
 			{/if}
 			{#if actions}{@render actions()}{/if}
 		</div>
-		{#if subline}<p class="text-muted-foreground truncate text-sm">{subline}</p>{/if}
 	</div>
 {/snippet}
 
@@ -1018,7 +1052,7 @@
 			]}
 			data-view="record"
 			use:contentMotion
-			data-collection={of}
+			data-model={of}
 			data-held={approvalId ?? undefined}
 		>
 			{#if toSheet === undefined}<header>{@render head()}</header>{/if}

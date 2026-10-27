@@ -6,6 +6,7 @@ import type { Value } from '@norbital-ai/std/kind';
 import type { ActBody, Outcome as WireOutcome } from '../../bolt/build/protocol/schema.js';
 import type { RecordCapabilities, RecordParentContext } from '../src/record/types.ts';
 import type { ViewBolt } from '../src/client/contract.ts';
+import { READ_LIMIT } from '../src/read/request.ts';
 import { scriptedBolt, type ReadReply, type Script } from './scripted-bolt.ts';
 
 export const required = <A>(value: A | null | undefined): A => {
@@ -41,36 +42,40 @@ afterEach(async () => {
 	for (const dispose of disposals.splice(0).reverse()) await dispose();
 });
 
+/** One root's layer of a read request (or an aggregate's options), its sub-layers by path below the root (`lines.product`). */
 export const ReadOptions = Schema.Struct({
-	select: Schema.optionalKey(Schema.Record(Schema.String, Schema.Json)),
+	fields: Schema.optionalKey(Schema.Array(Schema.String)),
+	layers: Schema.optionalKey(Schema.Record(Schema.String, Schema.Json)),
 	where: Schema.optionalKey(Schema.Record(Schema.String, Schema.Json)),
 	orderBy: Schema.optionalKey(Schema.Json),
 	by: Schema.optionalKey(Schema.Json),
 	limit: Schema.optionalKey(Schema.Number),
 	after: Schema.optionalKey(Schema.String),
-	search: Schema.optionalKey(Schema.Json),
-	all: Schema.optionalKey(Schema.Boolean)
+	asOf: Schema.optionalKey(Schema.String),
+	search: Schema.optionalKey(Schema.Json)
 });
 export type ReadOptions = typeof ReadOptions.Type;
+/** A read of every matching row (select all, export): the read request's cap. */
+export const everyRow = (options: ReadOptions) => options.limit === READ_LIMIT;
 export type ActOptions = { key: string; observed?: Readonly<Record<string, number>> };
 export type ViewScript = {
-	read(collection: string, options: ReadOptions): ReadReply;
+	read(model: string, options: ReadOptions): ReadReply;
+	/** A read of one record by id (`where: { id: { eq } }`): its row or null, its sub-layers by path below the root. */
 	get(
-		collection: string,
+		model: string,
 		id: string,
-		select?: Readonly<Record<string, Json>>,
-		options?: { revision?: number }
+		layers?: Readonly<Record<string, Json>>,
+		options?: { asOf?: string; fields?: readonly string[] }
 	): ReadReply;
-	aggregate(collection: string, options: ReadOptions): ReadReply;
-	history(collection: string, id: string): ReadReply;
-	query(name: string, input: Json): ReadReply;
+	aggregate(model: string, options: ReadOptions): ReadReply;
+	history(model: string, id: string): ReadReply;
 	act(
 		callable: string,
 		input: ActBody['input'],
 		options: ActOptions
 	): WireOutcome | Effect.Effect<WireOutcome, Error>;
 	capabilities?: (
-		collection: string,
+		model: string,
 		id: string,
 		parent?: RecordParentContext
 	) => RecordCapabilities | null | Response | Promise<RecordCapabilities | null | Response>;
@@ -86,52 +91,64 @@ export type ViewScript = {
 const strings = Schema.decodeUnknownSync(Schema.String);
 const options = Schema.decodeUnknownSync(ReadOptions);
 export const jsonRecord = Schema.decodeUnknownSync(Schema.Record(Schema.String, Schema.Json));
+export const jsonArray = Schema.decodeUnknownSync(Schema.Array(Schema.Json));
 
+/** The record a root's `where` reads by id (`{ id: { eq } }`), if that is all it filters. */
+const idOf = (where: Json | undefined): string | undefined => {
+	const filter = where === undefined ? {} : jsonRecord(where);
+	const id =
+		Object.keys(filter).length === 1 && filter.id !== undefined ? jsonRecord(filter.id) : {};
+	return Object.keys(id).length === 1 && typeof id.eq === 'string' ? id.eq : undefined;
+};
+/** The roots a wire read asks for one record of, by id. */
+export const recordRootsOf = (read: { m: string; a: readonly Json[] }): readonly string[] =>
+	read.m === 'query'
+		? Object.entries(jsonRecord(read.a[0])).flatMap(([root, layer]) =>
+				!root.includes('.') && idOf(jsonRecord(layer).where) !== undefined ? [root] : []
+			)
+		: [];
 export async function viewFixture(extra: Partial<ViewScript> = {}) {
 	const script: ViewScript = {
 		read: () => ({ rows: [], next: null }),
 		get: () => null,
 		aggregate: () => [],
 		history: () => [],
-		query: () => [],
 		act: () => ({ kind: 'committed', output: null, records: [] }),
 		...extra
 	};
-	const query = (target: Json | undefined, args: Json | undefined): ReadReply => {
-		if (typeof target !== 'string') {
-			const members = jsonRecord(target);
-			return (async () => {
-				const answers: Record<string, Value> = {};
-				for (const [key, member] of Object.entries(members)) {
-					const { from, ...input } = jsonRecord(member);
-					const answer = await query(strings(from), input);
-					if (answer instanceof Response) return answer;
-					answers[key] = answer;
-				}
-				return answers;
-			})();
-		}
-		if (target.includes('.')) return script.query(target, args ?? null);
-		const input = jsonRecord(args ?? {});
-		if (typeof input.id === 'string') {
-			const details = Schema.decodeUnknownSync(
-				Schema.Struct({
-					select: Schema.optionalKey(Schema.Record(Schema.String, Schema.Json)),
-					revision: Schema.optionalKey(Schema.Number)
-				})
-			)(input);
-			return script.get(target, input.id, details.select, {
-				...(details.revision === undefined ? {} : { revision: details.revision })
+	// a read request: each root is a `read` (a page) or, by id, a `get` (its row), with its sub-layers beside it
+	const query = async (request: Json | undefined): Promise<Value | Response> => {
+		const paths = jsonRecord(request ?? {});
+		const answer: Record<string, Value> = {};
+		for (const [root, layer] of Object.entries(paths)) {
+			if (root.includes('.')) continue;
+			const below = Object.entries(paths).flatMap(([path, l]) =>
+				path.startsWith(`${root}.`) ? [[path.slice(root.length + 1), l] as const] : []
+			);
+			const layers = below.length === 0 ? undefined : Object.fromEntries(below);
+			const input = options({ ...jsonRecord(layer), ...(layers === undefined ? {} : { layers }) });
+			const id = idOf(input.where);
+			if (id === undefined) {
+				const page = await script.read(root, input);
+				if (page instanceof Response) return page;
+				answer[root] = page;
+				continue;
+			}
+			const row = await script.get(root, id, layers, {
+				...(input.asOf === undefined ? {} : { asOf: input.asOf }),
+				...(input.fields === undefined ? {} : { fields: input.fields })
 			});
+			if (row instanceof Response) return row;
+			answer[root] = { rows: row === null ? [] : [row], next: null };
 		}
-		return script.read(target, options(input));
+		return answer;
 	};
 	const fixture = await scriptedBolt({
 		answer: (read) => {
 			const [target, arg] = read.a;
 			switch (read.m) {
 				case 'query':
-					return query(target, arg);
+					return query(target);
 				case 'aggregate':
 					return script.aggregate(strings(target), options(arg));
 				case 'history':
@@ -146,11 +163,11 @@ export async function viewFixture(extra: Partial<ViewScript> = {}) {
 				...(body.observed === undefined ? {} : { observed: body.observed })
 			}),
 		capabilities: (params: URLSearchParams) => {
-			const collection = strings(params.get('collection')),
+			const model = strings(params.get('model')),
 				id = strings(params.get('id'));
-			const parent = params.has('parentCollection')
+			const parent = params.has('parentModel')
 				? {
-						collection: strings(params.get('parentCollection')),
+						model: strings(params.get('parentModel')),
 						id: strings(params.get('parentId')),
 						relation: strings(params.get('relation')),
 						revision: Schema.decodeUnknownSync(Schema.NumberFromString)(
@@ -158,7 +175,7 @@ export async function viewFixture(extra: Partial<ViewScript> = {}) {
 						)
 					}
 				: undefined;
-			return script.capabilities?.(collection, id, parent) ?? null;
+			return script.capabilities?.(model, id, parent) ?? null;
 		},
 		...(script.approval === undefined
 			? {}

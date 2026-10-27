@@ -220,7 +220,7 @@ The kit's select: a field-like trigger and a searchable option list in a popover
 			title={props.multiple ? selectionText : undefined}
 			aria-invalid={invalid ? 'true' : undefined}
 			class={cn(
-				variant === 'ghost' ? GHOST : cn(CONTROL, size === 'sm' && 'h-8 px-2'),
+				variant === 'ghost' ? GHOST : cn(CONTROL, size === 'sm' && 'h-8 px-2 text-xs'),
 				'flex items-center justify-between gap-2 text-left font-normal',
 				className
 			)}

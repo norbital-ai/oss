@@ -82,7 +82,7 @@ export type Kind = Common &
 		  }
 		| { readonly kind: 'vector'; readonly dim: number; readonly metric: 'l2' | 'cosine' | 'ip' }
 		| { readonly kind: 'custom'; readonly of: string; readonly many?: true }
-		/** A relation: an id of one table, or `{ collection, id }` of one of several (polymorphic). */
+		/** A relation: an id of one table, or `{ model, id }` of one of several (polymorphic). */
 		| {
 				readonly kind: 'ref';
 				readonly to: string | readonly string[];
@@ -358,7 +358,7 @@ export const KIND: { readonly [K in FieldKind]: Entry<K> } = {
 		schema: (k) =>
 			typeof k.to === 'string'
 				? Schema.String
-				: Schema.Struct({ collection: Schema.Literals(k.to), id: Schema.String }),
+				: Schema.Struct({ model: Schema.Literals(k.to), id: Schema.String }),
 		traits: PLAIN
 	},
 	file: {
@@ -378,7 +378,7 @@ export const KIND: { readonly [K in FieldKind]: Entry<K> } = {
 	vector: {
 		schema: (k) =>
 			Schema.Array(numeric(Schema.Finite)).check(
-				Schema.isLengthBetween(k.dim, k.dim, { message: `expected ${k.dim} numbers` })
+				Schema.isBetweenLength(k.dim, k.dim, { message: `expected ${k.dim} numbers` })
 			),
 		traits: OPAQUE
 	},

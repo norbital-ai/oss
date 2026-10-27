@@ -4,6 +4,7 @@ import type { Json } from '../src/decl/values.ts';
 import type { EngineManifest } from '../src/engine/manifest.ts';
 import { SyncHealth } from '../src/engine/sync/health-schema.ts';
 import { TestWorkspace } from '../src/test/index.ts';
+import { program } from './support/guest-fixture.ts';
 import { json } from './support/route-fixture.ts';
 import { manifest as base } from './write-fixture.ts';
 
@@ -22,9 +23,9 @@ const manifest: EngineManifest = {
 		contacts: { description: 'A contact', label: 'name', fields: { name: { kind: 'text' } } }
 	},
 	relationships: {},
-	collections: {
+	exposures: {
 		contacts: {
-			read: { fields: 'all' },
+			read: { contacts: { fields: 'all' } },
 			syncs: { crm: { with: 'crm', read: true, write: true } }
 		}
 	},
@@ -35,16 +36,20 @@ const manifest: EngineManifest = {
 		self: {
 			description: 'Manages their own integration instances',
 			grants: {
-				sys_integration: { read: true, update: { where: { owner: { eq: { actor: 'id' } } } } }
+				sys_integration: { read: true, update: { check: true } }
 			}
 		}
 	},
 	teams: { owners: ['self'] }
 };
+/** `self` may update an instance it owns: the update `check`, dry-run on the instance before health or replay. */
+const guest = program(`export default { policy: { self: { grants: { sys_integration: { update: {
+	check: function* (changes, ctx) { return changes.every(({ before }) => before.owner === ctx.actor.id) ? ctx.allow() : ctx.deny('Only your own instances.'); }
+} } } } } };`);
 
 const setup = Effect.gen(function* () {
 	const context = yield* Layer.build(
-		TestWorkspace.layer({ manifest, now: NOW, host: { publicUrl: ORIGIN } })
+		TestWorkspace.layer({ manifest, guest: yield* guest, now: NOW, host: { publicUrl: ORIGIN } })
 	);
 	const t = Context.get(context, TestWorkspace);
 	const owner = t.member(['self'], { teams: ['owners'] });

@@ -21,13 +21,13 @@ const manifest: EngineManifest = {
 		orders: { description: 'Orders', label: 'title', fields: { title: { kind: 'text' } } }
 	},
 	relationships: {},
-	collections: {
+	exposures: {
 		customers: {
-			read: { fields: 'all' },
-			create: { input: { columns: ['name', 'note'] } },
-			update: { input: { columns: ['name', 'note'] } }
+			read: { customers: { fields: 'all' } },
+			create: { columns: { customers: ['name', 'note'] } },
+			update: { columns: { customers: ['name', 'note'] } }
 		},
-		orders: { read: { fields: 'all' }, create: { input: { columns: ['title'] } } }
+		orders: { read: { orders: { fields: 'all' } }, create: { columns: { orders: ['title'] } } }
 	},
 	policies: {
 		writer: {
@@ -47,7 +47,7 @@ const manifest: EngineManifest = {
 		},
 		requester: {
 			description: 'Requests customer creation',
-			grants: { customers: { read: true, create: { approval: true } } }
+			grants: { customers: { read: true, create: { check: true } } }
 		},
 		reviewer: { description: 'Reviews requests', grants: { customers: { read: true } } }
 	},
@@ -71,7 +71,7 @@ export default {
    rule:'customers.checked',data:{requestId:'0199a000-0000-7000-8000-000000000099'}
   }));}}
  },
- policy:{requester:{grants:{customers:{create:{approval:(_write,flow)=>flow.step('Review',{teams:['Reviewers']})}}}}}
+ policy:{requester:{grants:{customers:{create:{check:function*(_rows,ctx){return ctx.approve((flow)=>flow.step('Review',{teams:['Reviewers']}));}}}}}}
 };`);
 const fixture = Effect.gen(function* () {
 	const context = yield* Layer.build(TestWorkspace.layer({ manifest, guest: yield* guest }));
@@ -80,7 +80,7 @@ const fixture = Effect.gen(function* () {
 	const restricted = t.member(['restricted']);
 	const requester = t.member(['requester'], { teams: ['Requesters'], teamPath: ['Requesters'] });
 	const reviewer = t.member(['reviewer'], { teams: ['Reviewers'], teamPath: ['Reviewers'] });
-	yield* t.as(t.admin).query('customers', { all: true });
+	yield* t.as(t.admin).query({ customers: {} });
 	const calls = Context.get(context, Callables);
 	const bindings = () => ({
 		now: t.clock.now(),
@@ -144,12 +144,12 @@ const fixture = Effect.gen(function* () {
 
 it('batch admission accepts exactly the four generated verbs', () => {
 	for (const verb of ['create', 'update', 'upsert', 'delete'] as const)
-		expect(isBatchCallable({ _tag: 'Verb', collection: 'customers', verb })).toBe(true);
+		expect(isBatchCallable({ _tag: 'Verb', model: 'customers', verb })).toBe(true);
 	for (const verb of ['import', 'erase'] as const)
-		expect(isBatchCallable({ _tag: 'Verb', collection: 'customers', verb })).toBe(false);
+		expect(isBatchCallable({ _tag: 'Verb', model: 'customers', verb })).toBe(false);
 	expect(Result.isSuccess(parseCallable('customers.unknown', manifest))).toBe(false);
 	expect(isBatchCallable({ _tag: 'Automation', automation: 'followup' })).toBe(false);
-	expect(isBatchCallable({ _tag: 'Sync', collection: 'customers', sync: 'sheet' })).toBe(false);
+	expect(isBatchCallable({ _tag: 'Sync', model: 'customers', sync: 'sheet' })).toBe(false);
 });
 
 it.live('native and queued checked batches use validation, authority and one atomic commit', () =>
@@ -157,23 +157,23 @@ it.live('native and queued checked batches use validation, authority and one ato
 		Effect.gen(function* () {
 			const f = yield* fixture;
 			const committed = yield* f.batch([
-				{ collection: 'customers', verb: 'create', input: { name: 'First' } },
-				{ collection: 'orders', verb: 'create', input: { title: 'First order' } }
+				{ model: 'customers', verb: 'create', input: [{ name: 'First' }] },
+				{ model: 'orders', verb: 'create', input: [{ title: 'First order' }] }
 			]);
 			expect(committed.outcome).toMatchObject({ kind: 'committed', output: [null, null] });
 			expect(yield* f.count('customers')).toBe(1);
 			expect(yield* f.count('orders')).toBe(1);
 			const malformed = yield* f.batch([
-				{ collection: 'customers', verb: 'create', input: { name: 'Must roll back' } },
-				{ collection: 'orders', verb: 'create', input: {} }
+				{ model: 'customers', verb: 'create', input: [{ name: 'Must roll back' }] },
+				{ model: 'orders', verb: 'create', input: [{}] }
 			]);
 			expect(malformed.outcome.kind).toBe('refused');
 			expect(yield* f.count('customers')).toBe(1);
 			expect(yield* f.count('orders')).toBe(1);
 			const denied = yield* Effect.flip(
 				f.t.bodyActs(f.restricted).checked([
-					{ callable: 'customers.create', input: { name: 'Also roll back' } },
-					{ callable: 'orders.create', input: { title: 'Forbidden' } }
+					{ callable: 'customers.create', input: [{ name: 'Also roll back' }] },
+					{ callable: 'orders.create', input: [{ title: 'Forbidden' }] }
 				])
 			);
 			expect(denied).toMatchObject({ _tag: 'ActRefused', code: 'forbidden' });
@@ -197,7 +197,7 @@ it.live('native and queued checked batches use validation, authority and one ato
 						{
 							id,
 							input: {
-								operations: [{ callable: 'customers.create', input: { name: 'From a run' } }]
+								operations: [{ callable: 'customers.create', input: [{ name: 'From a run' }] }]
 							}
 						}
 					],
@@ -222,7 +222,7 @@ it.live('checked batch items require their own upsert mode and retain observed r
 		Effect.gen(function* () {
 			const f = yield* fixture;
 			const created = yield* f.batch([
-				{ collection: 'customers', verb: 'create', input: { name: 'First', note: 'Original' } }
+				{ model: 'customers', verb: 'create', input: [{ name: 'First', note: 'Original' }] }
 			]);
 			if (created.outcome.kind !== 'committed')
 				throw new Error('The batch fixture did not commit.');
@@ -233,7 +233,7 @@ it.live('checked batch items require their own upsert mode and retain observed r
 				yield* checked([
 					{
 						callable: 'customers.upsert',
-						input: { name: 'First', note: 'Updated' },
+						input: [{ name: 'First', note: 'Updated' }],
 						onConflict: 'update'
 					}
 				])
@@ -242,14 +242,14 @@ it.live('checked batch items require their own upsert mode and retain observed r
 				yield* checked([
 					{
 						callable: 'customers.upsert',
-						input: { name: 'First', note: 'Ignored' },
+						input: [{ name: 'First', note: 'Ignored' }],
 						onConflict: 'keep'
 					}
 				])
 			).toMatchObject({ kind: 'committed' });
 			for (const operation of [
-				{ callable: 'customers.upsert', input: { name: 'First', note: 'Missing mode' } },
-				{ callable: 'customers.create', input: { name: 'Second' }, onConflict: 'update' }
+				{ callable: 'customers.upsert', input: [{ name: 'First', note: 'Missing mode' }] },
+				{ callable: 'customers.create', input: [{ name: 'Second' }], onConflict: 'update' }
 			]) {
 				expect(yield* f.checkedJson([operation])).toMatchObject({
 					_tag: 'Some',
@@ -261,7 +261,7 @@ it.live('checked batch items require their own upsert mode and retain observed r
 					checked([
 						{
 							callable: 'customers.update',
-							input: { target: record.id, set: { note: 'Stale' } },
+							input: [{ target: record.id, set: { note: 'Stale' } }],
 							observed: { [record.id]: 1 }
 						}
 					])
@@ -325,10 +325,10 @@ it.live(
 				const f = yield* fixture;
 				const literal = yield* f.t
 					.bodyActs(f.requester)
-					.many([{ callable: 'customers.create', input: { name: 'Held literal' } }]);
+					.many([{ callable: 'customers.create', input: [{ name: 'Held literal' }] }]);
 				const checked = yield* f.t
 					.bodyActs(f.requester)
-					.checked([{ callable: 'customers.create', input: { name: 'Held checked' } }]);
+					.checked([{ callable: 'customers.create', input: [{ name: 'Held checked' }] }]);
 				for (const result of [literal, checked]) {
 					expect(result.kind).toBe('pendingApproval');
 					expect('output' in result).toBe(false);

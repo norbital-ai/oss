@@ -1,6 +1,6 @@
 // Browser transport: one HttpClient path, decoding and reviving at the HTTP boundary.
 import { Duration, Effect, Schema, SubscriptionRef } from 'effect';
-import { FetchHttpClient, HttpClient, HttpClientRequest } from 'effect/unstable/http';
+import { FetchHttpClient, HttpClient, HttpClientRequest } from 'effect/http';
 import { ProtocolFailed, TransportFailed } from '../decl/errors.ts';
 import type { Json } from '../decl/values.ts';
 

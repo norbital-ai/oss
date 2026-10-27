@@ -12,7 +12,7 @@ import {
 	Stream
 } from 'effect';
 import * as EffectArray from 'effect/Array';
-import { HttpClient, HttpClientRequest, HttpClientResponse } from 'effect/unstable/http';
+import { HttpClient, HttpClientRequest, HttpClientResponse } from 'effect/http';
 import type { Json } from '../../decl/values.ts';
 import type { DecisionQuestion, DecisionState } from '../../decl/runtime/facilities.ts';
 import { FacilityFailure, Unavailable } from '../../decl/errors.ts';
@@ -318,7 +318,7 @@ export const DecisionsLive = Layer.effect(
 				const result = yield* Effect.result(ask(ai, request));
 				const event = Result.isSuccess(result) ? result.success : wireFailure(result.failure);
 				const now = new Date(yield* Clock.currentTimeMillis).toISOString();
-				const call = yield* crypto.randomUUIDv4.pipe(
+				const call = yield* crypto.randomUUIDv4().pipe(
 					Effect.mapError(
 						(error) => new FacilityFailure({ kind: 'upstream', message: error.message })
 					)
@@ -482,7 +482,7 @@ export function structuredSystem1(infer: OpenAiChat, model: string): System1 {
 				])
 			);
 			const responseSchema = Schema.Struct(fields);
-			const document = Schema.toJsonSchemaDocument(responseSchema);
+			const document = Schema.toJsonSchemaDocument(responseSchema, { onExcessProperty: 'error' });
 			const output = yield* Schema.decodeUnknownEffect(Schema.Json)({
 				...document.schema,
 				$defs: document.definitions
@@ -553,7 +553,7 @@ export const storedFiles = Effect.fn('Decisions.storedFiles')(function* (
 });
 /**
  * Whether `authority` may read a stored file, as `GET /__bolt/files/<id>` checks: an administrator, or a row holding it in
- * its collection's file field that the caller reads with that field unmasked.
+ * its model's file field that the caller reads with that field unmasked.
  * A conversation's file (`sys_conversation.inputs` / `outputs`) is its uploader's, and then the conversation's: its owner, a member who
  * posted in it (in the app or as a linked envoy sender), and staff for an instance's conversation. Filed into a record (an
  * envoy's photo), it is also that record's: whoever reads it there, as for any file field.
@@ -576,17 +576,17 @@ export const readableFile = Effect.fn('Decisions.readableFile')(function* (
 		});
 		if (Option.isSome(notified)) return true;
 	}
-	/** A row of `collection` holding the file in `field` that the caller reads with that field unmasked. ponytail: ≤ 20 holders are tried. */
-	const held = Effect.fn('Decisions.body')(function* (collection: string, field: string) {
-		if (o.authority.collections[collection] === undefined) return false;
+	/** A row of `model` holding the file in `field` that the caller reads with that field unmasked. ponytail: ≤ 20 holders are tried. */
+	const held = Effect.fn('Decisions.body')(function* (model: string, field: string) {
+		if (o.authority.models[model] === undefined) return false;
 		const holders = yield* o.db.rows(Schema.Struct({ id: Schema.String }), {
-			text: `SELECT id::text AS id FROM ${q(collection)} WHERE ${q(field)} @> $1::jsonb OR ${q(field)} @> $2::jsonb LIMIT 20`,
+			text: `SELECT id::text AS id FROM ${q(model)} WHERE ${q(field)} @> $1::jsonb OR ${q(field)} @> $2::jsonb LIMIT 20`,
 			params: [JSON.stringify({ id }), JSON.stringify([{ id }])]
 		});
 		const cat = catalogOf(o.manifest);
 		for (const h of holders) {
 			const [got] = yield* o.read(
-				[ir.get(cat, collection, h.id, { select: { [field]: true } })],
+				[ir.get(cat, model, h.id, { select: { [field]: true } })],
 				{ as: 'caller', authority: o.authority },
 				o.bindings
 			);
@@ -599,8 +599,8 @@ export const readableFile = Effect.fn('Decisions.readableFile')(function* (
 		const a = o.authority.actor;
 		// ponytail: every file field is scanned for a holder; a file-field index if this read gets hot
 		const filed = Effect.fn('Decisions.body')(function* () {
-			for (const [c, model] of Object.entries(o.manifest.models))
-				for (const [f, def] of Object.entries(model.fields))
+			for (const [c, spec] of Object.entries(o.manifest.models))
+				for (const [f, def] of Object.entries(spec.fields))
 					if (def.kind === 'file' && (yield* held(c, f))) return true;
 			return false;
 		});
@@ -652,7 +652,7 @@ export const readableFile = Effect.fn('Decisions.readableFile')(function* (
 			after = row.value.id;
 		}
 	}
-	const [collection, field] = owner.split('.');
+	const [model, field] = owner.split('.');
 	// An import upload or export file belongs to the member who ran its file sync or conversion.
 	if (field === '$import' || field === '$export') {
 		if (o.authority.actor.kind !== 'member') return false;
@@ -663,12 +663,12 @@ export const readableFile = Effect.fn('Decisions.readableFile')(function* (
 		return Option.isSome(r);
 	}
 	if (
-		collection === undefined ||
+		model === undefined ||
 		field === undefined ||
-		o.manifest.models[collection]?.fields[field]?.kind !== 'file'
+		o.manifest.models[model]?.fields[field]?.kind !== 'file'
 	)
 		return false;
-	return yield* held(collection, field);
+	return yield* held(model, field);
 });
 
 const wireFailure = (error: FacilityFailure | Unavailable): FacilityError =>

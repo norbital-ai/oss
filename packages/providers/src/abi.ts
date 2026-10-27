@@ -41,7 +41,8 @@ export type LinkDef = {
 				attachments: readonly OutboundAttachment[] | undefined
 		  ) => Effect.Effect<{ providerId: string; presumeAfterMs?: number }, ProviderFailure>)
 		| undefined;
-	readonly typing?: ((to: string) => Effect.Effect<void, ProviderFailure>) | undefined;
+	readonly typing?:
+		((to: string, on: boolean) => Effect.Effect<void, ProviderFailure>) | undefined;
 	readonly request?: ((op: Json) => Effect.Effect<Json, ProviderFailure>) | undefined;
 	readonly read?:
 		| ((
@@ -81,7 +82,7 @@ function link(def: LinkDef, scope: Scope.Closeable, run: Run): Link {
 	if (test !== undefined) out.test = (input) => call(test(input));
 	if (send !== undefined)
 		out.send = (message, signal, attachments) => call(send(message, attachments), signal);
-	if (typing !== undefined) out.typing = (to, signal) => call(typing(to), signal);
+	if (typing !== undefined) out.typing = (to, signal, on) => call(typing(to, on), signal);
 	if (request !== undefined) out.request = (op, signal) => call(request(op), signal);
 	if (read !== undefined)
 		out.read = (sync, partition, cursor, signal) => call(read(sync, partition, cursor), signal);

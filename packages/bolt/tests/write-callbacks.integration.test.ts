@@ -12,18 +12,18 @@ import { open } from './write-p2.fixture.ts';
 
 const manifest: EngineManifest = {
 	...base,
-	collections: Object.fromEntries(
-		Object.entries(base.collections).map(([name, collection]) => [
+	exposures: Object.fromEntries(
+		Object.entries(base.exposures).map(([name, model]) => [
 			name,
 			{
-				...collection,
-				...(collection.create === undefined
+				...model,
+				...(model.create === undefined
 					? {}
-					: { create: { ...collection.create, transform: true as const } }),
-				...(collection.update === undefined
+					: { create: { ...model.create, transform: true as const } }),
+				...(model.update === undefined
 					? {}
-					: { update: { ...collection.update, transform: true as const } }),
-				...(collection.delete === undefined ? {} : { delete: { check: true as const } })
+					: { update: { ...model.update, transform: true as const } }),
+				...(model.delete === undefined ? {} : { delete: { check: true as const } })
 			}
 		])
 	)
@@ -77,7 +77,7 @@ const setup = Effect.gen(function* () {
 	};
 	const run = (request: Pick<ActRequest, 'verb' | 'input'> & Partial<ActRequest>) =>
 		act(engine, {
-			collection: 'orders',
+			model: 'orders',
 			mode: { _tag: 'Direct' },
 			key: `callback-${serial}`,
 			invocationId: `callback-${serial++}`,
@@ -103,7 +103,7 @@ describe('per-verb write callbacks', () => {
 				const created = ids(
 					yield* run({
 						verb: 'create',
-						input: { title: 'desk', lines: { create: [{ label: 'tile', amount: '2' }] } }
+						input: [{ title: 'desk', lines: [{ label: 'tile', amount: '2' }] }]
 					})
 				);
 				expect(calls.map((call) => [call.target, call.kind])).toEqual([
@@ -111,11 +111,11 @@ describe('per-verb write callbacks', () => {
 					['lines', 'create']
 				]);
 				expect(writes()).toBe(1);
-				const order = created.find((record) => record.collection === 'orders');
+				const order = created.find((record) => record.model === 'orders');
 				if (order === undefined)
 					return yield* Effect.die('The native create omitted its root row.');
 				ids(
-					yield* run({ verb: 'update', input: { target: order.id, set: { title: 'measured' } } })
+					yield* run({ verb: 'update', input: [{ target: order.id, set: { title: 'measured' } }] })
 				);
 				const update = yield* Schema.decodeUnknownEffect(Rows)(calls.at(-1)?.input).pipe(
 					Effect.orDie
@@ -129,7 +129,7 @@ describe('per-verb write callbacks', () => {
 						params: []
 					})
 				).toEqual([{ label: 'TILE' }]);
-				ids(yield* run({ verb: 'delete', input: { target: order.id } }));
+				ids(yield* run({ verb: 'delete', input: [{ target: order.id }] }));
 				expect(calls.at(-1)?.kind).toBe('delete');
 				expect(calls.at(-1)?.input).toMatchObject([{ id: order.id, title: 'measured' }]);
 			}).pipe(Effect.provide(Pristine.layer))
@@ -140,7 +140,7 @@ describe('per-verb write callbacks', () => {
 		() =>
 			Effect.gen(function* () {
 				const { run, calls } = yield* setup;
-				ids(yield* run({ verb: 'create', input: { title: 'desk' } }));
+				ids(yield* run({ verb: 'create', input: [{ title: 'desk' }] }));
 				calls.length = 0;
 				const result = yield* run({
 					verb: 'import',
@@ -184,7 +184,7 @@ describe('per-verb write callbacks', () => {
 					pieces: () => {}
 				}
 			});
-			expect(ids(result)).toContainEqual(expect.objectContaining({ id, collection: 'orders' }));
+			expect(ids(result)).toContainEqual(expect.objectContaining({ id, model: 'orders' }));
 			expect(calls.map((call) => call.kind)).toEqual(['create']);
 		}).pipe(Effect.provide(Pristine.layer))
 	);
@@ -198,7 +198,7 @@ describe('per-verb write callbacks', () => {
 				ids(
 					yield* run({
 						verb: 'create',
-						input: { title: 'recorded' },
+						input: [{ title: 'recorded' }],
 						mode: {
 							_tag: 'Record',
 							pending: new Map(),

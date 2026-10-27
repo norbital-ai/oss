@@ -43,15 +43,13 @@ const manifest: EngineManifest = {
 		}
 	},
 	relationships: { 'breaks.shift': { to: 'shifts', inverse: 'breaks', owned: true } },
-	collections: {
+	exposures: {
 		shifts: {
-			read: { fields: 'all' },
-			create: {
-				input: { columns: cols, with: { breaks: { create: { columns: ['name', 'span'] } } } }
-			},
-			update: { input: { columns: cols } }
+			read: { shifts: { fields: 'all' } },
+			create: { columns: { shifts: cols, 'shifts.breaks': ['name', 'span'] } },
+			update: { columns: { shifts: cols } }
 		},
-		breaks: { read: { fields: 'all' } }
+		breaks: { read: { breaks: { fields: 'all' } } }
 	}
 };
 
@@ -69,7 +67,7 @@ const committed = (o: Outcome) => {
 	return o;
 };
 const idOf = (o: Outcome) => {
-	const record = committed(o).records.find((r) => r.collection === 'shifts');
+	const record = committed(o).records.find((r) => r.model === 'shifts');
 	if (record === undefined) throw new Error('No created shift');
 	return record.id;
 };
@@ -84,7 +82,7 @@ const fixture = Effect.gen(function* () {
 		act(
 			{ manifest, db, ...engine },
 			{
-				collection: 'shifts',
+				model: 'shifts',
 				mode: { _tag: 'Direct' },
 				key: `key-${n}`,
 				issuedAt: NOW,
@@ -115,12 +113,14 @@ describe('codec: periods reach Postgres as ranges on every write path (X-11)', (
 				const o = committed(
 					(yield* run({
 						verb: 'create',
-						input: {
-							name: 'a',
-							span: { from: '2026-01-01', to: '2026-01-31' },
-							slot: { start: '2026-01-01T09:00:00Z', end: null },
-							breaks: { create: [{ name: 'b', span: { from: '2026-01-05', to: null } }] }
-						}
+						input: [
+							{
+								name: 'a',
+								span: { from: '2026-01-01', to: '2026-01-31' },
+								slot: { start: '2026-01-01T09:00:00Z', end: null },
+								breaks: [{ name: 'b', span: { from: '2026-01-05', to: null } }]
+							}
+						]
 					})).outcome
 				);
 				expect(yield* stored()).toEqual([
@@ -136,7 +136,7 @@ describe('codec: periods reach Postgres as ranges on every write path (X-11)', (
 				committed(
 					(yield* run({
 						verb: 'update',
-						input: { target: id, set: { span: { from: '2026-02-01', to: '2026-02-01' } } }
+						input: [{ target: id, set: { span: { from: '2026-02-01', to: '2026-02-01' } } }]
 					})).outcome
 				);
 				const [row] = yield* stored();
@@ -151,7 +151,7 @@ describe('codec: periods reach Postgres as ranges on every write path (X-11)', (
 			expect(
 				(yield* run({
 					verb: 'create',
-					input: { name: 'x', span: { from: '2026-02-01', to: '2026-01-01' } }
+					input: [{ name: 'x', span: { from: '2026-02-01', to: '2026-01-01' } }]
 				})).outcome
 			).toMatchObject({ kind: 'refused', code: 'invalidInput', field: 'span' });
 		}).pipe(Effect.provide(CodecFixtureLive))
@@ -188,7 +188,7 @@ describe('codec: the update callback reads `before` in wire form (§5.8)', () =>
 				const id = idOf(
 					(yield* run({
 						verb: 'create',
-						input: { name: 'a', span: { from: '2026-01-01', to: '2026-01-31' } }
+						input: [{ name: 'a', span: { from: '2026-01-01', to: '2026-01-31' } }]
 					})).outcome
 				);
 				let seen: Json = null;
@@ -214,16 +214,16 @@ describe('codec: the update callback reads `before` in wire form (§5.8)', () =>
 				};
 				committed(
 					(yield* run(
-						{ verb: 'update', input: { target: id, set: { name: 'b' } } },
+						{ verb: 'update', input: [{ target: id, set: { name: 'b' } }] },
 						{
 							guest,
 							manifest: {
 								...manifest,
-								collections: {
-									...manifest.collections,
+								exposures: {
+									...manifest.exposures,
 									shifts: {
-										read: { fields: 'all' },
-										update: { input: { columns: cols }, transform: true }
+										read: { shifts: { fields: 'all' } },
+										update: { columns: { shifts: cols }, transform: true }
 									}
 								}
 							}
@@ -293,9 +293,9 @@ describe('codec: `Where` says a json list is empty', () => {
 	);
 });
 
-describe('codec: the MY-nihon payroll read pattern fits one declared query (rule 72)', () => {
+describe('codec: the MY-nihon payroll read pattern fits one automation body (rule 72)', () => {
 	it.live(
-		'two waves, 7.1 MB of statutory rules paged 4 rows a crossing with `select`: under 40 crossings, 4 MiB each, 32 MiB read',
+		'two waves, 7.1 MB of statutory rules paged 4 rows a crossing with `select`: under 40 crossings, under the crossing cap, 32 MiB read',
 		() =>
 			Effect.scoped(
 				Effect.gen(function* () {
@@ -332,24 +332,24 @@ describe('codec: the MY-nihon payroll read pattern fits one declared query (rule
 							}
 						},
 						relationships: {},
-						collections: {
-							schemes: { read: { fields: 'all' } },
-							people: { read: { fields: 'all' } }
+						exposures: {
+							schemes: { read: { schemes: { fields: 'all' } } },
+							people: { read: { people: { fields: 'all' } } }
 						}
 					};
 					// world.ts: wave 1 (9 reads by company), wave 2 (16 reads by people, plus the lineage's schemes 4 rows a page)
 					const source = `import { Effect } from 'effect';
 import { Decimal } from '@norbital-ai/std/decimal';
-export default { collection: { schemes: { bodies: { queries: { payroll: function* (input, ctx) {
-	const small = (n) => Effect.all(Array.from({ length: n }, () => ctx.query('people', { where: { name: { like: 'p%' } }, all: true })), { concurrency: 'unbounded' });
+export default { automation: { payroll: { body: function* (input, ctx) {
+	const small = (n) => Effect.all(Array.from({ length: n }, () => ctx.query({ people: { where: { name: { like: 'p%' } } } }).pipe(Effect.map((a) => a.people))), { concurrency: 'unbounded' });
 	yield* small(9);
 	const pages = () => Effect.gen(function* () { const rows = []; let after = null;
-		do { const p = yield* ctx.query('schemes', { select: { code: true, rules: true, rate: true }, orderBy: 'code', limit: 4, ...(after === null ? {} : { after }) }); rows.push(...p.rows); after = p.next; } while (after !== null);
+		do { const p = (yield* ctx.query({ schemes: { fields: ['code', 'rules', 'rate'], orderBy: 'code', limit: 4, ...(after === null ? {} : { after }) } })).schemes; rows.push(...p.rows); after = p.next; } while (after !== null);
 		return rows; });
 	const [schemes, people] = yield* Effect.all([pages(), small(16)], { concurrency: 'unbounded' });
 	const bytes = schemes.reduce((n, s) => n + s.rules[0].when.length, 0);
 	return [{ schemes: schemes.length, people: people[0].rows.length, bytes, authority: schemes.some((s) => 'authority' in s), since: typeof people[0].rows[0].since, rate: schemes[0].rate instanceof Decimal, rateText: schemes[0].rate.toString() }];
-} } } } } };`;
+} } } };`;
 					const context = yield* Layer.build(
 						TestWorkspace.layer({ manifest: m, guest: yield* program(source), now: NOW })
 					);
@@ -394,8 +394,8 @@ export default { collection: { schemes: { bodies: { queries: { payroll: function
 					};
 					const inv: Invocation = {
 						id: 'payroll',
-						kind: 'query',
-						target: 'schemes.payroll',
+						kind: 'automation',
+						target: 'payroll',
 						input: {},
 						ctx: {
 							actor: admin.actor,

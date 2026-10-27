@@ -2,6 +2,7 @@ import { required, textOf } from './view-fixture.ts';
 import { element } from './elements.ts';
 import {
 	viewFixture,
+	jsonArray,
 	jsonRecord,
 	type ActOptions,
 	type ReadOptions,
@@ -14,6 +15,7 @@ import type { Json } from '@norbital-ai/std/wire';
 import type { RecordCapabilities, RecordParentContext } from '../src/record/types.ts';
 import type { KindsHost, ChildInput } from '../src/kinds/context.ts';
 import { it } from '@effect/vitest';
+import { rootsOf } from '../src/read/request.ts';
 import { vi } from 'vitest';
 // discarding a dirty grid asks in-app (a real-browser concern, bolt tests/sheet-discard.browser.test.ts); here it agrees
 vi.mock('../src/primitives/dialog/confirm.ts', async () => {
@@ -30,7 +32,7 @@ const settle = async () => {
 	}
 };
 const input = {
-	collection: 'lines',
+	model: 'lines',
 	parent: 'job',
 	owned: true,
 	create: { columns: ['amount'] },
@@ -56,12 +58,12 @@ const catalog = {
 async function fixture() {
 	const acts: { callable: string; input: Json; options: ActOptions }[] = [],
 		reads: { c: string; options: ReadOptions }[] = [];
-	const capabilities = (collection: string, id: string): RecordCapabilities => ({
-		collection,
+	const capabilities = (model: string, id: string): RecordCapabilities => ({
+		model,
 		id,
-		revision: collection === 'jobs' ? 3 : id === 'l1' ? 7 : 8,
+		revision: model === 'jobs' ? 3 : id === 'l1' ? 7 : 8,
 		fields:
-			collection === 'jobs'
+			model === 'jobs'
 				? { title: { writable: true, proposal: false, reasons: [] } }
 				: {
 						amount: { writable: true, proposal: false, reasons: [] },
@@ -88,7 +90,7 @@ async function fixture() {
 					Object.fromEntries(
 						Object.entries(row).filter(
 							([field]) =>
-								field === 'id' || options.select === undefined || options.select[field] === true
+								field === 'id' || options.fields === undefined || options.fields.includes(field)
 						)
 					)
 				],
@@ -102,9 +104,9 @@ async function fixture() {
 				kind: 'committed',
 				output: null,
 				records: [
-					{ collection: 'jobs', id: 'j1', revision: 4 },
-					{ collection: 'lines', id: 'l1', revision: 9 },
-					{ collection: 'lines', id: 'l2', revision: 9 }
+					{ model: 'jobs', id: 'j1', revision: 4 },
+					{ model: 'lines', id: 'l1', revision: 9 },
+					{ model: 'lines', id: 'l2', revision: 9 }
 				]
 			};
 		}
@@ -148,17 +150,19 @@ it.live(
 				yield* browser(() => settle());
 				required(button(element<HTMLElement>(target, 'header'), 'Save')).click();
 				yield* browser(() => settle());
-				assert.deepEqual(required(acts[0]).input, {
-					target: 'j1',
-					set: {
-						lines: {
-							update: [
-								{ target: 'l1', set: { amount: 2 } },
-								{ target: 'l2', set: { amount: 4 } }
-							]
+				assert.deepEqual(required(acts[0]).input, [
+					{
+						target: 'j1',
+						set: {
+							lines: {
+								update: [
+									{ target: 'l1', set: { amount: 2 } },
+									{ target: 'l2', set: { amount: 4 } }
+								]
+							}
 						}
 					}
-				});
+				]);
 				assert.deepEqual(required(acts[0]).options.observed, { l1: 7, l2: 8, j1: 3 });
 				assert.ok(reads.some(({ options }) => options.after === 'page2'));
 			} finally {
@@ -199,7 +203,7 @@ it.live(
 				required(button(target, 'Save')).click();
 				yield* browser(() => settle());
 				assert.equal(required(acts[0]).callable, 'lines.update');
-				assert.deepEqual(required(acts[0]).input, { target: 'l1', set: { amount: 6 } });
+				assert.deepEqual(required(acts[0]).input, [{ target: 'l1', set: { amount: 6 } }]);
 				assert.deepEqual(required(acts[0]).options.observed, { l1: 7 });
 			} finally {
 				yield* browser(() => unmount(app));
@@ -221,11 +225,11 @@ it.live(
 				return act(callable, input, options);
 			};
 			const original = capabilities;
-			script.capabilities = (collection, id, parent) => {
-				const result = original(collection, id);
-				if (collection !== 'lines') return result;
+			script.capabilities = (model, id, parent) => {
+				const result = original(model, id);
+				if (model !== 'lines') return result;
 				contexts.push(parent);
-				return parent?.collection === 'jobs' &&
+				return parent?.model === 'jobs' &&
 					parent.id === 'j1' &&
 					parent.relation === 'lines' &&
 					parent.revision === parentRevision
@@ -267,7 +271,9 @@ it.live(
 				assert.ok(contexts.some((parent) => parent?.revision === 3 && parent.relation === 'lines'));
 				assert.ok(contexts.some((parent) => parent?.revision === 4 && parent.relation === 'lines'));
 				assert.deepEqual(
-					jsonRecord(jsonRecord(jsonRecord(required(acts[0]).input).set).lines).update,
+					jsonRecord(
+						jsonRecord(jsonRecord(required(jsonArray(required(acts[0]).input)[0])).set).lines
+					).update,
 					[{ target: 'l1', set: { amount: 3 } }]
 				);
 				assert.deepEqual(required(acts[0]).options.observed, { l1: 7, j1: 3 });
@@ -303,10 +309,9 @@ it.live('create and delete remain explicit, and unloaded children never become d
 			yield* browser(() => settle());
 			required(button(element<HTMLElement>(target, 'header'), 'Save')).click();
 			yield* browser(() => settle());
-			assert.deepEqual(required(acts[0]).input, {
-				target: 'j1',
-				set: { lines: { delete: ['l1'], create: [{ amount: 9 }] } }
-			});
+			assert.deepEqual(required(acts[0]).input, [
+				{ target: 'j1', set: { lines: { delete: ['l1'], create: [{ amount: 9 }] } } }
+			]);
 			assert.deepEqual(required(acts[0]).options.observed, { l1: 7, j1: 3 });
 		} finally {
 			yield* browser(() => unmount(app));
@@ -369,17 +374,15 @@ it.live('link and unlink send explicit IDs and both original snapshots', () =>
 		const originalRead = script.read,
 			originalGet = script.get,
 			originalCapabilities = capabilities;
-		script.read = (collection, options) =>
-			options.select?.job === true
-				? originalRead(collection, options)
+		script.read = (model, options) =>
+			options.fields?.includes('job') === true
+				? originalRead(model, options)
 				: { rows: [{ id: 'free', revision: 11, amount: 5, job: null }], next: null };
-		script.get = (collection, id) =>
-			collection === 'jobs'
-				? originalGet(collection, id)
-				: { id, revision: 11, amount: 5, job: null };
-		script.capabilities = (collection, id) => {
-			const capability = originalCapabilities(collection, id);
-			return collection === 'jobs'
+		script.get = (model, id) =>
+			model === 'jobs' ? originalGet(model, id) : { id, revision: 11, amount: 5, job: null };
+		script.capabilities = (model, id) => {
+			const capability = originalCapabilities(model, id);
+			return model === 'jobs'
 				? capability
 				: {
 						...capability,
@@ -408,10 +411,9 @@ it.live('link and unlink send explicit IDs and both original snapshots', () =>
 			yield* browser(() => settle());
 			required(button(element<HTMLElement>(target, 'header'), 'Save')).click();
 			yield* browser(() => settle());
-			assert.deepEqual(required(acts[0]).input, {
-				target: 'j1',
-				set: { lines: { link: ['free'], unlink: ['l1'] } }
-			});
+			assert.deepEqual(required(acts[0]).input, [
+				{ target: 'j1', set: { lines: { link: ['free'], unlink: ['l1'] } } }
+			]);
 			assert.deepEqual(required(acts[0]).options.observed, { free: 11, l1: 7, j1: 3 });
 		} finally {
 			yield* browser(() => unmount(app));
@@ -429,17 +431,17 @@ it.live(
 				let childRevision = 7;
 				const changed = new Set<() => void>();
 				script.changes = (read, emit) => {
-					if (read.m === 'query' && read.a[0] === 'lines') changed.add(emit);
+					if (rootsOf(read).includes('lines')) changed.add(emit);
 					return () => {
 						changed.delete(emit);
 					};
 				};
 				const originalGet = script.get,
 					originalCapabilities = capabilities;
-				script.get = (collection, id, select, options) =>
-					options?.revision === undefined
-						? originalGet(collection, id)
-						: { id, revision: options.revision, title: 'Past job' };
+				script.get = (model, id, layers, options) =>
+					options?.asOf === undefined
+						? originalGet(model, id)
+						: { id, revision: 2, title: 'Past job' };
 				script.history = () => [
 					{
 						revision: 2,
@@ -460,15 +462,15 @@ it.live(
 					],
 					next: null
 				});
-				script.capabilities = (collection, id) => {
-					const value = originalCapabilities(collection, id);
-					return collection === 'jobs' ? value : { ...value, revision: childRevision };
+				script.capabilities = (model, id) => {
+					const value = originalCapabilities(model, id);
+					return model === 'jobs' ? value : { ...value, revision: childRevision };
 				};
 				script.act = (callable, input, options) => {
 					acts.push({ callable, input, options });
 					return {
 						kind: 'conflict',
-						records: [{ collection: 'lines', id: 'l1', fields: ['amount'] }]
+						records: [{ model: 'lines', id: 'l1', fields: ['amount'] }]
 					};
 				};
 				const target = document.body.appendChild(document.createElement('div'));
@@ -530,8 +532,8 @@ it.live(
 		Effect.gen(function* () {
 			const { bolt, script, capabilities, acts } = yield* browser(fixture);
 			const originalCapabilities = capabilities;
-			script.capabilities = (collection, id) => ({
-				...originalCapabilities(collection, id),
+			script.capabilities = (model, id) => ({
+				...originalCapabilities(model, id),
 				fields: { amount: { writable: false, proposal: false, reasons: ['ownedParentLocked'] } },
 				update: { allowed: false, proposal: false, reasons: ['ownedParentLocked'] }
 			});
@@ -566,7 +568,7 @@ it.live(
 			}
 		})
 );
-it.live('a full child representation opens with its collection and ID', () =>
+it.live('a full child representation opens with its model and ID', () =>
 	Effect.gen(function* () {
 		const { bolt, script, capabilities } = yield* browser(fixture);
 		const target = document.body.appendChild(document.createElement('div'));
@@ -628,37 +630,35 @@ it.live('independent row drafts guard unloading and Cancel clears the guard', ()
 	})
 );
 
-it.live(
-	'a parent delete-only child contract cannot borrow the child collection update permission',
-	() =>
-		Effect.gen(function* () {
-			const { bolt, script, capabilities } = yield* browser(fixture);
-			const deletion: ChildInput = {
-				collection: 'lines',
-				parent: 'job',
-				owned: true,
-				delete: true
-			};
-			const shown: NonNullable<KindsHost['catalog']> = {
-				...catalog,
-				jobs: { ...catalog.jobs, update: { columns: ['title'], with: { lines: deletion } } }
-			};
-			const target = document.body.appendChild(document.createElement('div'));
-			const app = mount(Harness, {
-				target,
-				props: { bolt, catalog: shown, part: 'record', props: { of: 'jobs', id: 'j1' } }
-			});
-			try {
-				yield* browser(() => settle());
-				required(button(target, 'Edit')).click();
-				yield* browser(() => settle());
-				assert.equal(target.querySelector('[data-child-grid] [data-field=amount] input'), null);
-				assert.ok(button(target, 'Delete row'));
-			} finally {
-				yield* browser(() => unmount(app));
-				target.remove();
-			}
-		})
+it.live('a parent delete-only child contract cannot borrow the child model update permission', () =>
+	Effect.gen(function* () {
+		const { bolt, script, capabilities } = yield* browser(fixture);
+		const deletion: ChildInput = {
+			model: 'lines',
+			parent: 'job',
+			owned: true,
+			delete: true
+		};
+		const shown: NonNullable<KindsHost['catalog']> = {
+			...catalog,
+			jobs: { ...catalog.jobs, update: { columns: ['title'], with: { lines: deletion } } }
+		};
+		const target = document.body.appendChild(document.createElement('div'));
+		const app = mount(Harness, {
+			target,
+			props: { bolt, catalog: shown, part: 'record', props: { of: 'jobs', id: 'j1' } }
+		});
+		try {
+			yield* browser(() => settle());
+			required(button(target, 'Edit')).click();
+			yield* browser(() => settle());
+			assert.equal(target.querySelector('[data-child-grid] [data-field=amount] input'), null);
+			assert.ok(button(target, 'Delete row'));
+		} finally {
+			yield* browser(() => unmount(app));
+			target.remove();
+		}
+	})
 );
 
 it.live(
@@ -666,7 +666,7 @@ it.live(
 	() =>
 		Effect.gen(function* () {
 			const { bolt, script, capabilities } = yield* browser(fixture);
-			const readonly: ChildInput = { collection: 'lines', parent: 'job', owned: true };
+			const readonly: ChildInput = { model: 'lines', parent: 'job', owned: true };
 			const shown: NonNullable<KindsHost['catalog']> = {
 				...catalog,
 				jobs: { ...catalog.jobs, update: { columns: ['title'], with: { lines: readonly } } }

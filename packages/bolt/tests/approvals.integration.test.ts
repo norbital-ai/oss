@@ -25,52 +25,49 @@ const manifest: EngineManifest = {
 		lines: { description: 'Expense lines', label: 'name', fields: { name: { kind: 'text' } } }
 	},
 	relationships: { 'lines.expense': { to: 'expenses', inverse: 'lines', owned: true } },
-	collections: {
+	exposures: {
 		expenses: {
-			read: { fields: 'all' },
+			read: { expenses: { fields: 'all' } },
 			create: {
-				input: {
-					columns: ['name', 'amount', 'manager'],
-					with: { lines: { create: { columns: ['name'] } } }
-				},
+				columns: { expenses: ['name', 'amount', 'manager'], 'expenses.lines': ['name'] },
 				transform: true
 			},
 			update: {
-				input: {
-					columns: ['name', 'amount', 'manager'],
-					with: { lines: { update: { columns: ['name'] } } }
-				},
+				columns: { expenses: ['name', 'amount', 'manager'], 'expenses.lines': ['name'] },
 				transform: true
 			},
 			delete: {},
 			notify: true
 		},
 		lines: {
-			read: { fields: 'all' },
-			create: { input: { columns: ['name', 'expense'] } },
-			update: { input: { columns: ['name'] } },
+			read: { lines: { fields: 'all' } },
+			create: { columns: { lines: ['name', 'expense'] } },
+			update: { columns: { lines: ['name'] } },
 			delete: {}
 		}
 	},
 	policies: {
 		requester: {
 			description: 'Requests',
-			grants: { expenses: { read: true, create: { approval: true }, update: { approval: true } } }
+			grants: { expenses: { read: true, create: { check: true }, update: { check: true } } }
 		},
 		reviewer: { description: 'Reviews', grants: { expenses: { read: true } } }
 	},
 	teams: { requesters: ['requester'], managers: ['reviewer'], finance: ['reviewer'] }
 };
 const source = `import { Decimal } from '@norbital-ai/std/decimal';
-export default { collection: { expenses: { bodies: {
+export default { model: { expenses: { bodies: {
 	create: function* (rows) { return rows.map((row) => ({...row,name:row.name.trim()})); },
 	update: function* (changes) { return changes.map(({before,set}) => ({...set,name:(set.name ?? before.name).trim()})); },
 	notify: function* (event) { return [{title:event.kind+':'+(event.move ?? event.action),to:[{user:'${managerId}'}]}]; }
 } } }, policy: { requester: { grants: { expenses: {
-	create: { approval: (write,flow) => flow.step('Manager',{users:[write.record.manager]}).if(write.record.amount.gte(Decimal.of(100)),(f) => f.step('Finance',{teams:['finance']})) },
-	update: { approval: (write,flow) => {
-		if (!(write.previous.amount instanceof Decimal)) throw new Error('The previous amount must be a Decimal');
-		return write.changed.includes('amount') || write.changed.includes('lines') ? flow.step('Manager',{users:[write.record.manager]}).if(write.record.amount.gte(Decimal.of(100)),(f) => f.step('Finance',{teams:['finance']})) : flow.allow();
+	create: { check: function* (rows, ctx) {
+		return ctx.approve((flow) => flow.step('Manager',{users:[...new Set(rows.map((r) => r.manager))]}).if(rows.some((r) => Decimal.of(String(r.amount)).gte(Decimal.of(100))),(f) => f.step('Finance',{teams:['finance']})));
+	} },
+	update: { check: function* (changes, ctx) {
+		if (!changes.every(({ before }) => before.amount instanceof Decimal)) throw new Error('The stored amount must be a Decimal');
+		const material = changes.filter(({ set }) => set.amount !== undefined || set.lines !== undefined);
+		return material.length === 0 ? ctx.allow() : ctx.approve((flow) => flow.step('Manager',{users:[...new Set(material.map(({ before, set }) => set.manager ?? before.manager))]}).if(material.some(({ before, set }) => Decimal.of(String(set.amount ?? before.amount)).gte(Decimal.of(100))),(f) => f.step('Finance',{teams:['finance']})));
 	} }
 } } } } };`;
 const member = (id: string, team: string): Extract<EngineActor, { kind: 'member' }> => ({
@@ -109,7 +106,7 @@ const fixture = Effect.gen(function* () {
 		const key = randomUUID(),
 			now = t.clock.now();
 		return writes.act({
-			collection: 'expenses',
+			model: 'expenses',
 			verb,
 			input,
 			authority,
@@ -175,11 +172,11 @@ describe('approval snapshots and saves', () => {
 					const f = yield* fixture;
 					const original = (yield* f.act(
 						'create',
-						{ name: 'Travel', amount: 50, manager: managerId },
+						[{ name: 'Travel', amount: 50, manager: managerId }],
 						f.t.as(f.t.admin).authority
 					)).outcome;
 					if (original.kind !== 'committed') throw new Error('Missing committed expense');
-					const record = original.records.find((row) => row.collection === 'expenses');
+					const record = original.records.find((row) => row.model === 'expenses');
 					if (record === undefined) throw new Error('Missing expense');
 					const { id, revision } = record;
 					const checkpoint = () =>
@@ -187,15 +184,15 @@ describe('approval snapshots and saves', () => {
 							text: "SELECT count(*)::int FROM bolt_history WHERE collection='expenses' AND record=$1::uuid AND revision=$2",
 							params: [id, revision]
 						});
-					const proposed = (yield* f.act('update', { target: id, set: { amount: 150 } })).outcome;
+					const proposed = (yield* f.act('update', [{ target: id, set: { amount: 150 } }])).outcome;
 					if (proposed.kind !== 'pendingApproval') throw new Error('Missing approval');
 					for (const amount of [151, 152, 153]) {
 						yield* f.decide(proposed.requestId, 'requestChanges', f.manager, 'Clarify');
 						yield* pruneHistory(f.t.db, 1);
 						expect(yield* checkpoint()).toBe(1);
-						expect((yield* f.act('update', { target: id, set: { amount } })).outcome).toMatchObject(
-							{ kind: 'pendingApproval', requestId: proposed.requestId }
-						);
+						expect(
+							(yield* f.act('update', [{ target: id, set: { amount } }])).outcome
+						).toMatchObject({ kind: 'pendingApproval', requestId: proposed.requestId });
 					}
 					yield* pruneHistory(f.t.db, 1);
 					expect(yield* checkpoint()).toBe(1);
@@ -205,7 +202,7 @@ describe('approval snapshots and saves', () => {
 					expect(Option.getOrThrow(yield* f.row(id)).amount).toBe(50);
 					expect(yield* pruneHistory(f.t.db, 1)).toBeGreaterThan(0);
 					expect(yield* checkpoint()).toBe(0);
-					const again = (yield* f.act('update', { target: id, set: { amount: 160 } })).outcome;
+					const again = (yield* f.act('update', [{ target: id, set: { amount: 160 } }])).outcome;
 					if (again.kind !== 'pendingApproval') throw new Error('Missing second approval');
 					// Reproduce unavailable history without weakening the production pruning path.
 					yield* f.t.db.write({
@@ -226,11 +223,13 @@ describe('approval snapshots and saves', () => {
 			Effect.scoped(
 				Effect.gen(function* () {
 					const f = yield* fixture,
-						result = yield* f.act('create', {
-							name: '  Travel  ',
-							amount: 150,
-							manager: managerId
-						});
+						result = yield* f.act('create', [
+							{
+								name: '  Travel  ',
+								amount: 150,
+								manager: managerId
+							}
+						]);
 					if (result.outcome.kind !== 'pendingApproval')
 						throw new Error(JSON.stringify(result.outcome));
 					const id = result.outcome.records[0]?.id;
@@ -268,7 +267,7 @@ describe('approval snapshots and saves', () => {
 			Effect.scoped(
 				Effect.gen(function* () {
 					const f = yield* fixture,
-						created = yield* f.act('create', { name: 'Travel', amount: 150, manager: managerId });
+						created = yield* f.act('create', [{ name: 'Travel', amount: 150, manager: managerId }]);
 					if (created.outcome.kind !== 'pendingApproval')
 						throw new Error(JSON.stringify(created.outcome));
 					const id = created.outcome.records[0]?.id,
@@ -277,12 +276,12 @@ describe('approval snapshots and saves', () => {
 					yield* f.decide(requestId, 'approve');
 					yield* f.decide(requestId, 'requestChanges', f.finance, 'Clarify');
 					expect(
-						(yield* f.act('update', { target: id, set: { name: '  Clarified  ' } })).outcome
+						(yield* f.act('update', [{ target: id, set: { name: '  Clarified  ' } }])).outcome
 					).toMatchObject({ kind: 'pendingApproval', requestId });
 					expect(Option.getOrThrow(yield* f.row(id)).name).toBe('Clarified');
 					expect(yield* f.request(requestId)).toMatchObject({ state: 'Pending', step: 1 });
 					yield* f.decide(requestId, 'requestChanges', f.finance, 'Reduce');
-					yield* f.act('update', { target: id, set: { amount: 50 } });
+					yield* f.act('update', [{ target: id, set: { amount: 50 } }]);
 					expect(yield* f.request(requestId)).toMatchObject({
 						state: 'Pending',
 						step: 0,
@@ -300,14 +299,14 @@ describe('approval snapshots and saves', () => {
 					const f = yield* fixture;
 					const created = yield* f.act(
 						'create',
-						{ name: 'Travel', amount: 50, manager: managerId },
+						[{ name: 'Travel', amount: 50, manager: managerId }],
 						f.t.as(f.t.admin).authority
 					);
 					if (created.outcome.kind !== 'committed')
 						throw new Error('The original expense did not commit.');
 					const id = created.outcome.records[0]?.id;
 					if (id === undefined) throw new Error('The original expense is absent.');
-					const proposed = (yield* f.act('update', { target: id, set: { amount: 150 } })).outcome;
+					const proposed = (yield* f.act('update', [{ target: id, set: { amount: 150 } }])).outcome;
 					if (proposed.kind !== 'pendingApproval') throw new Error(JSON.stringify(proposed));
 					const requestId = proposed.requestId;
 					yield* f.decide(requestId, 'requestChanges', f.manager, 'Clarify');
@@ -318,11 +317,11 @@ describe('approval snapshots and saves', () => {
 						});
 					const before = yield* revision();
 					expect(
-						(yield* f.act('update', { target: id, set: { amount: 150 } }, f.finance)).outcome
+						(yield* f.act('update', [{ target: id, set: { amount: 150 } }], f.finance)).outcome
 					).toMatchObject({ kind: 'refused', code: 'forbidden' });
 					const unchanged: readonly Json[] = [{ amount: 150 }, {}];
 					for (const set of unchanged) {
-						expect((yield* f.act('update', { target: id, set })).outcome).toMatchObject({
+						expect((yield* f.act('update', [{ target: id, set }])).outcome).toMatchObject({
 							kind: 'pendingApproval',
 							requestId
 						});
@@ -330,20 +329,20 @@ describe('approval snapshots and saves', () => {
 						expect(yield* revision()).toBe(before);
 						yield* f.decide(requestId, 'requestChanges', f.manager, 'Clarify');
 					}
-					yield* f.act('update', { target: id, set: {} });
+					yield* f.act('update', [{ target: id, set: {} }]);
 					yield* f.decide(requestId, 'approve');
 					yield* f.decide(requestId, 'approve', f.finance);
 					expect(
-						(yield* f.act('update', { target: id, set: { amount: 150 } })).outcome
+						(yield* f.act('update', [{ target: id, set: { amount: 150 } }])).outcome
 					).toMatchObject({
 						kind: 'refused',
 						code: 'forbidden'
 					});
-					const again = (yield* f.act('update', { target: id, set: { amount: 200 } })).outcome;
+					const again = (yield* f.act('update', [{ target: id, set: { amount: 200 } }])).outcome;
 					if (again.kind !== 'pendingApproval') throw new Error(JSON.stringify(again));
 					yield* f.decide(again.requestId, 'requestChanges', f.manager, 'Reconsider');
 					expect(
-						(yield* f.act('update', { target: id, set: { amount: 150 } })).outcome
+						(yield* f.act('update', [{ target: id, set: { amount: 150 } }])).outcome
 					).toMatchObject({
 						kind: 'committed'
 					});
@@ -359,26 +358,30 @@ describe('approval snapshots and saves', () => {
 					const f = yield* fixture;
 					const created = (yield* f.act(
 						'create',
-						{
-							name: 'Travel',
-							amount: 50,
-							manager: managerId,
-							lines: { create: [{ name: 'First' }] }
-						},
+						[
+							{
+								name: 'Travel',
+								amount: 50,
+								manager: managerId,
+								lines: [{ name: 'First' }]
+							}
+						],
 						f.t.as(f.t.admin).authority
 					)).outcome;
 					if (created.kind !== 'committed') throw new Error(JSON.stringify(created));
-					const id = created.records.find((row) => row.collection === 'expenses')?.id;
-					const line = created.records.find((row) => row.collection === 'lines')?.id;
+					const id = created.records.find((row) => row.model === 'expenses')?.id;
+					const line = created.records.find((row) => row.model === 'lines')?.id;
 					if (id === undefined || line === undefined) throw new Error('Missing expense or line');
 					const revision = yield* f.t.db.value(Schema.Int, {
 						text: 'SELECT revision FROM expenses WHERE id=$1::uuid',
 						params: [id]
 					});
-					const proposed = (yield* f.act('update', {
-						target: id,
-						set: { lines: { update: [{ target: line, set: { name: 'Second' } }] } }
-					})).outcome;
+					const proposed = (yield* f.act('update', [
+						{
+							target: id,
+							set: { lines: { update: [{ target: line, set: { name: 'Second' } }] } }
+						}
+					])).outcome;
 					if (proposed.kind !== 'pendingApproval') throw new Error(JSON.stringify(proposed));
 					const requestId = proposed.requestId;
 					// Scalar restatements are no-ops; relationship actions stay authored until this request resolves.
@@ -392,7 +395,7 @@ describe('approval snapshots and saves', () => {
 						expect(
 							yield* f.decide(requestId, 'requestChanges', f.manager, 'Clarify the line')
 						).toMatchObject({ kind: 'decided', status: 'ChangesRequested' });
-						expect((yield* f.act('update', { target: id, set })).outcome).toMatchObject({
+						expect((yield* f.act('update', [{ target: id, set }])).outcome).toMatchObject({
 							kind: 'pendingApproval',
 							requestId
 						});
@@ -420,13 +423,13 @@ describe('approval snapshots and saves', () => {
 			Effect.scoped(
 				Effect.gen(function* () {
 					const f = yield* fixture,
-						created = yield* f.act('create', { name: 'Travel', amount: 50, manager: managerId });
+						created = yield* f.act('create', [{ name: 'Travel', amount: 50, manager: managerId }]);
 					if (created.outcome.kind !== 'pendingApproval')
 						throw new Error(JSON.stringify(created.outcome));
 					const id = created.outcome.records[0]?.id;
 					if (id === undefined) throw new Error('Missing expense');
 					expect(
-						(yield* f.act('update', { target: id, set: { name: 'Not allowed' } }, f.requester))
+						(yield* f.act('update', [{ target: id, set: { name: 'Not allowed' } }], f.requester))
 							.outcome.kind
 					).toBe('refused');
 					expect(yield* f.decide(created.outcome.requestId, 'reject', f.manager)).toMatchObject({

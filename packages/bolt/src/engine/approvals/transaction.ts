@@ -17,7 +17,7 @@ import { readGuardBaseline } from './read-guards.ts';
 type TransactionApproval = {
 	readonly route: StepsSnapshot;
 	readonly root: {
-		readonly collection: string;
+		readonly model: string;
 		readonly id: string;
 		readonly op: 'create' | 'update' | 'delete';
 	};
@@ -47,7 +47,7 @@ export const transactionApproval = Effect.fn('Approvals.transaction')(function* 
 ): Effect.fn.Return<{ requestId: string; answer: CommitAnswer }, EngineError> {
 	const images = new Map<string, { first: Captured; last: Captured; direct: boolean }>();
 	for (const captured of input.captured) {
-		const key = `${captured.collection}/${captured.id}`;
+		const key = `${captured.model}/${captured.id}`;
 		const previous = images.get(key);
 		images.set(key, {
 			first: previous?.first ?? captured,
@@ -57,7 +57,7 @@ export const transactionApproval = Effect.fn('Approvals.transaction')(function* 
 		});
 	}
 	const changes = [...images.values()].map(({ first, last, direct }): Checkpoint => ({
-		c: first.collection,
+		c: first.model,
 		id: first.id,
 		// approvalHook's checkpoint subtracts one from update/delete; retain the earliest observation here.
 		revision:
@@ -71,7 +71,7 @@ export const transactionApproval = Effect.fn('Approvals.transaction')(function* 
 		n: last.new
 	}));
 	const routed = yield* approvalHook(manifest, db).route({
-		collection: input.root.collection,
+		model: input.root.model,
 		record: input.root.id,
 		action: input.root.op,
 		authority: input.authority,
@@ -108,14 +108,14 @@ export const transactionApproval = Effect.fn('Approvals.transaction')(function* 
 	chain.cte(
 		'transaction_history',
 		`UPDATE bolt_history h SET request=${chain.p(routed.requestId)}::uuid
-		FROM jsonb_to_recordset(${chain.p(input.captured.map(({ collection, id, revision, old }) => ({ collection, id, revision, after: old !== null && typeof old['revision'] === 'number' ? old['revision'] : 0 })))}::jsonb)
-		AS x(collection text,id text,revision int,after int)
-		WHERE h.collection=x.collection AND h.record::text=x.id AND h.revision>x.after AND h.revision<=x.revision AND ${GATED} RETURNING h.record`
+		FROM jsonb_to_recordset(${chain.p(input.captured.map(({ model, id, revision, old }) => ({ model, id, revision, after: old !== null && typeof old['revision'] === 'number' ? old['revision'] : 0 })))}::jsonb)
+		AS x(model text,id text,revision int,after int)
+		WHERE h.collection=x.model AND h.record::text=x.id AND h.revision>x.after AND h.revision<=x.revision AND ${GATED} RETURNING h.record`
 	);
 	const records = [...images.values()]
 		.filter((image) => image.direct)
 		.map(({ last }) => ({
-			collection: last.collection,
+			model: last.model,
 			id: last.id,
 			revision: last.revision
 		}));

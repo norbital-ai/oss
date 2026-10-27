@@ -20,10 +20,11 @@ import {
 	Schema,
 	Stream
 } from 'effect';
-import { HttpServerRequest, HttpServerResponse } from 'effect/unstable/http';
+import { HttpServerRequest, HttpServerResponse } from 'effect/http';
 import { Drivers } from '../src/engine/ports.ts';
 import { Port } from '../src/engine/port.ts';
 import { actReply, json, routeFixture } from './support/route-fixture.ts';
+import { program } from './support/guest-fixture.ts';
 import { randomBytes } from 'node:crypto';
 import { describe, expect, it } from '@effect/vitest';
 import type { DriverName, IntegrationSpec } from '../src/decl/runtime/integration.ts';
@@ -71,7 +72,7 @@ const manifest = {
 	workspace: { tz: 'UTC', locale: 'en' },
 	models: {},
 	relationships: {},
-	collections: {},
+	exposures: {},
 	integrations: {
 		erp: {
 			description: 'The ERP',
@@ -94,7 +95,7 @@ const manifest = {
 		self: {
 			description: 'Manages their own accounts',
 			grants: {
-				sys_integration: { read: true, update: { where: { owner: { eq: { actor: 'id' } } } } }
+				sys_integration: { read: true, update: { check: true } }
 			}
 		}
 	},
@@ -173,11 +174,21 @@ const fake = (
 });
 
 const key = randomBytes(32);
+/** `self` and `names` change only the accounts they own: one check over the batch, the stored owner against the actor. */
+const OWNED = `function* own(changes, ctx) {
+	const row = changes.findIndex((c) => c.before.owner !== ctx.actor.id);
+	return row >= 0 ? ctx.deny('Only your own accounts change.', { row }) : ctx.allow();
+}
+export default { policy: {
+	self: { grants: { sys_integration: { update: { check: own } } } },
+	names: { grants: { sys_integration: { update: { check: own } } } }
+} };`;
 const open = (m: EngineManifest = manifest, ports?: TestOptions<Drivers>['ports']) =>
 	Effect.gen(function* () {
 		const context = yield* Layer.build(
 			TestWorkspace.layer({
 				manifest: m,
+				guest: yield* program(OWNED),
 				host: { publicUrl: PUBLIC },
 				secretsKey: Redacted.make(key),
 				...(ports === undefined ? {} : { ports })
@@ -359,10 +370,10 @@ describe('instance links', () => {
 						])
 					);
 					ok(
-						yield* act(t.as(t.admin).authority, 'sys_integration.update', {
+						yield* act(t.as(t.admin).authority, 'sys_integration.update', [{
 							target: 'tg',
 							set: { active: false }
-						})
+						}])
 					);
 					opened.length = 0;
 					const resumedWith: DriverOpen[] = [];
@@ -836,11 +847,11 @@ describe('the instance verbs', () => {
 					const alice = t.member(['self'], { email: 'alice@ws.example' });
 					const phone = present(
 						ok(
-							yield* act(t.as(t.admin).authority, 'sys_integration.create', {
+							yield* act(t.as(t.admin).authority, 'sys_integration.create', [{
 								integration: 'whatsapp',
 								name: 'Alice’s phone',
 								owner: alice.id
-							})
+							}])
 						).records[0]
 					).id;
 					expect(present(yield* call(verbs(context, links, null), phone)).status).toBe(401);
@@ -907,11 +918,11 @@ describe('the instance verbs', () => {
 						phones.push(
 							present(
 								ok(
-									yield* act(t.as(t.admin).authority, 'sys_integration.create', {
+									yield* act(t.as(t.admin).authority, 'sys_integration.create', [{
 										integration: 'whatsapp',
 										name: owner,
 										owner
-									})
+									}])
 								).records[0]
 							).id
 						);
@@ -1032,7 +1043,8 @@ describe('a change of the instance row', () => {
 						available: true,
 						send: (instance, message, attachments) =>
 							Effect.suspend(() => current().port.send(instance, message, attachments)),
-						typing: (instance, to) => Effect.suspend(() => current().port.typing(instance, to)),
+						typing: (instance, to, on) =>
+							Effect.suspend(() => current().port.typing(instance, to, on)),
 						request: (instance, operation) =>
 							Effect.suspend(() => current().port.request(instance, operation)),
 						read: (instance, feed, partition, cursor) =>
@@ -1073,10 +1085,10 @@ describe('a change of the instance row', () => {
 					yield* links.pair('cal', {});
 					const epoch = (yield* row('cal'))['epoch'];
 					ok(
-						yield* act(t.as(t.admin).authority, 'sys_integration.update', {
+						yield* act(t.as(t.admin).authority, 'sys_integration.update', [{
 							target: 'cal',
 							set: { configuration: { calendars: ['work'] } }
-						})
+						}])
 					);
 					yield* until(() => opened.length === 2);
 					// the slot opened with its definition's default configuration, as any instance starts
@@ -1091,10 +1103,10 @@ describe('a change of the instance row', () => {
 						provider: 'google'
 					});
 					ok(
-						yield* act(t.as(t.admin).authority, 'sys_integration.update', {
+						yield* act(t.as(t.admin).authority, 'sys_integration.update', [{
 							target: 'cal',
 							set: { name: 'Calendars' }
-						})
+						}])
 					);
 					yield* Effect.sleep('50 millis');
 					expect(opened).toHaveLength(2);
@@ -1124,7 +1136,8 @@ describe('a pause, a resume and a delete', () => {
 						available: true,
 						send: (instance, message, attachments) =>
 							Effect.suspend(() => current().port.send(instance, message, attachments)),
-						typing: (instance, to) => Effect.suspend(() => current().port.typing(instance, to)),
+						typing: (instance, to, on) =>
+							Effect.suspend(() => current().port.typing(instance, to, on)),
 						request: (instance, operation) =>
 							Effect.suspend(() => current().port.request(instance, operation)),
 						read: (instance, feed, partition, cursor) =>
@@ -1168,10 +1181,10 @@ describe('a pause, a resume and a delete', () => {
 					links = yield* host([google]);
 					yield* links.pair('cal', {});
 					ok(
-						yield* act(t.as(t.admin).authority, 'sys_integration.update', {
+						yield* act(t.as(t.admin).authority, 'sys_integration.update', [{
 							target: 'cal',
 							set: { active: false }
-						})
+						}])
 					);
 					yield* until(() => closed.length === 1);
 					expect(yield* sealed('cal')).toEqual({ provider: 'google', token: 't' });
@@ -1184,10 +1197,10 @@ describe('a pause, a resume and a delete', () => {
 					yield* links.resume;
 					expect(opened).toEqual(['cal']);
 					ok(
-						yield* act(t.as(t.admin).authority, 'sys_integration.update', {
+						yield* act(t.as(t.admin).authority, 'sys_integration.update', [{
 							target: 'cal',
 							set: { active: true }
-						})
+						}])
 					);
 					yield* until(() => opened.length === 2);
 					expect(yield* links.state('cal')).toMatchObject({
@@ -1197,14 +1210,14 @@ describe('a pause, a resume and a delete', () => {
 					expect(yield* links.port.read('cal', 'entries', '', null)).toMatchObject({ items: [] });
 					const other = present(
 						ok(
-							yield* act(t.as(t.admin).authority, 'sys_integration.create', {
+							yield* act(t.as(t.admin).authority, 'sys_integration.create', [{
 								integration: 'cal',
 								name: 'Other calendar'
-							})
+							}])
 						).records[0]
 					).id;
 					yield* links.pair(other, {});
-					ok(yield* act(t.as(t.admin).authority, 'sys_integration.delete', { target: other }));
+					ok(yield* act(t.as(t.admin).authority, 'sys_integration.delete', [{ target: other }]));
 					yield* until(() => closed.length === 2);
 					expect(closed).toEqual(['cal', other]);
 					expect(yield* links.state('cal')).toMatchObject({ state: 'connected' });
@@ -1333,11 +1346,11 @@ describe('personal instances', () => {
 					const alice = t.member([], { email: 'alice@ws.example' }),
 						bob = t.member([], { email: 'bob@ws.example' });
 					const mine = (owner: string, name: string) =>
-						act(t.as(t.admin).authority, 'sys_integration.create', {
+						act(t.as(t.admin).authority, 'sys_integration.create', [{
 							integration: 'whatsapp',
 							name,
 							owner
-						}).pipe(Effect.map((outcome) => present(ok(outcome).records[0]).id));
+						}]).pipe(Effect.map((outcome) => present(ok(outcome).records[0]).id));
 					const [alicePhone, bobPhone] = [
 						yield* mine(alice.id, 'Alice'),
 						yield* mine(bob.id, 'Bob')
@@ -1405,10 +1418,10 @@ describe('one per member, and the host’s OAuth client', () => {
 					const alice = t.member([], { email: 'alice@ws.example' }),
 						bob = t.member([], { email: 'bob@ws.example' });
 					const create = (input: { [key: string]: Json }) =>
-						act(t.as(t.admin).authority, 'sys_integration.create', {
+						act(t.as(t.admin).authority, 'sys_integration.create', [{
 							integration: 'whatsapp',
 							...input
-						});
+						}]);
 					ok(yield* create({ name: 'Alice', owner: alice.id }));
 					expect(yield* create({ name: 'Alice again', owner: alice.id })).toMatchObject({
 						kind: 'refused',
@@ -1644,7 +1657,7 @@ describe('source import boundaries', () => {
 								grants: {
 									sys_integration: {
 										read: true,
-										update: { where: { owner: { eq: { actor: 'id' } } }, fields: ['name'] }
+										update: { columns: { sys_integration: ['name'] }, check: true }
 									}
 								}
 							}
@@ -1654,11 +1667,11 @@ describe('source import boundaries', () => {
 						admin = t.as(t.admin).authority;
 					const instance = present(
 						ok(
-							yield* act(admin, 'sys_integration.create', {
+							yield* act(admin, 'sys_integration.create', [{
 								integration: 'whatsapp',
 								name: 'Owned phone',
 								owner: alice.id
-							})
+							}])
 						).records[0]
 					).id;
 					const links = yield* host([
@@ -1675,10 +1688,10 @@ describe('source import boundaries', () => {
 						{ kind: 'native', provider: 'p', values: { cursor: '1' }, selectedAt: '2026-10-21' }
 					])
 						expect(
-							yield* act(admin, 'sys_integration.update', {
+							yield* act(admin, 'sys_integration.update', [{
 								target: instance,
 								set: { import_start: start }
-							})
+							}])
 						).toMatchObject({ kind: 'refused', field: 'import_start' });
 					expect(yield* links.state(instance)).toMatchObject({ importStart: null });
 					yield* links.close;

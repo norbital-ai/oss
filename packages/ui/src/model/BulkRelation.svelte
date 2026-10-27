@@ -16,11 +16,11 @@ record, existing children to link, unlink or delete. Explicit commands only (rul
 	export const SINGLE = ['link', 'unlink', 'delete'] as const;
 	/** A new child's fields: the contract's create columns, kinded by the child's exposure (its parent key is implied). */
 	export const childFields = (catalog: KindsHost['catalog'], child: ChildInput) => {
-		const exposure = catalog?.[child.collection];
+		const exposure = catalog?.[child.model];
 		return child.create === undefined || exposure === undefined
 			? []
 			: (
-					formSpec(child.collection, { ...exposure, create: child.create }, 'create')?.fields ?? []
+					formSpec(child.model, { ...exposure, create: child.create }, 'create')?.fields ?? []
 				).filter((field) => field.name !== child.parent && !field.kind.hidden);
 	};
 </script>
@@ -74,7 +74,7 @@ record, existing children to link, unlink or delete. Explicit commands only (rul
 		<div class="border-border grid min-w-0 gap-2 rounded-md border p-2" data-bulk-relation-new={i}>
 			{#each fields as field (field.name)}
 				<label class="text-sm font-medium" for={`${id}-${i}-${field.name}`}
-					>{field.kind.label ?? label(bolt, child.collection, field.name)}</label
+					>{field.kind.label ?? label(bolt, child.model, field.name)}</label
 				>
 				<Editor
 					kind={field.kind}
@@ -145,7 +145,7 @@ record, existing children to link, unlink or delete. Explicit commands only (rul
 				<label class="text-meta" for={`${id}-${op}`}>{opText(op)}</label>
 				{#each value[op] as chosen (chosen)}
 					<div class="flex min-w-0 items-center gap-2">
-						<Show kind={{ kind: 'id', of: child.collection }} value={chosen} readonly />
+						<Show kind={{ kind: 'id', of: child.model }} value={chosen} readonly />
 						<Button
 							type="button"
 							size="sm"
@@ -158,7 +158,7 @@ record, existing children to link, unlink or delete. Explicit commands only (rul
 					</div>
 				{/each}
 				<Picker
-					of={child.collection}
+					of={child.model}
 					value={null}
 					onChange={(next) => {
 						if (next !== null && !value[op].includes(next))

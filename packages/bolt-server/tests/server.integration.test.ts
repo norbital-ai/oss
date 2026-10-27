@@ -22,7 +22,7 @@ import {
 	Schema,
 	Scope
 } from 'effect';
-import { FetchHttpClient } from 'effect/unstable/http';
+import { FetchHttpClient } from 'effect/http';
 import { TestClock } from 'effect/testing';
 import { buildServerPages } from '../../bolt/src/compiler/artifact/server.ts';
 import { prepareMigrations } from '../../bolt/src/compiler/migrations.ts';
@@ -58,14 +58,11 @@ const manifest = {
 		}
 	},
 	relationships: {},
-	collections: {
+	exposures: {
 		quotes: {
-			read: { fields: 'all' },
-			create: { input: { columns: ['title', 'attachment'] } },
-			update: { input: { columns: ['status', 'attachment'] } },
-			queries: {
-				hold: { description: 'Reads through a guest body', input: {}, output: { kind: 'json' } }
-			}
+			read: { quotes: { fields: 'all' } },
+			create: { columns: { quotes: ['title', 'attachment'] } },
+			update: { columns: { quotes: ['status', 'attachment'] } }
 		}
 	},
 	policies: {
@@ -87,8 +84,8 @@ const manifest = {
 	customFields: {},
 	agent: { skills: {} }
 } satisfies EngineManifest;
-const guest = `export default { collection: { quotes: { bodies: { queries: { hold: function* (_, ctx) { return yield* ctx.query('quotes', { limit: 1 }); } } } } }, automation: { remind: { body: function* (input, ctx) {
-	for (const id of input.ids) yield* ctx.act('quotes.update', { target: id, set: { status: 'sent' } });
+const guest = `export default { automation: { remind: { body: function* (input, ctx) {
+	yield* ctx.act('quotes.update', input.ids.map((id) => ({ target: id, set: { status: 'sent' } })));
 } } } };`;
 const compiledGuest = program(guest);
 const root = join(tmpdir(), 'norbital-scratch', `bolt-server-${randomUUID()}`),
@@ -385,11 +382,11 @@ layer(Layer.effect(TestServer, TestServer.make).pipe(Layer.provideMerge(NodeServ
 				if (hello.t !== 'hello') throw new Error('Expected hello frame');
 				const reg = yield* t.call('POST', '/__bolt/live', {
 					conn: hello.conn,
-					add: [{ view: 'all', read: { m: 'query', a: ['quotes', { all: true }] } }]
+					add: [{ view: 'all', read: { m: 'query', a: [{ quotes: {} }] } }]
 				});
 				expect(yield* json(reg, LiveReply)).toEqual({ errors: [] });
 				yield* stream.next((f) => f.t === 'answer' && f.view === 'all');
-				const r = yield* t.act('quotes.create', { title: 'Q-1' }),
+				const r = yield* t.act('quotes.create', [{ title: 'Q-1' }]),
 					reply = yield* json(r, ActReply);
 				expect(r.status).toBe(200);
 				expect(reply.outcome.kind).toBe('committed');
@@ -397,17 +394,17 @@ layer(Layer.effect(TestServer, TestServer.make).pipe(Layer.provideMerge(NodeServ
 					throw new Error('Expected created record');
 				const id = reply.outcome.records[0].id;
 				const q = yield* t.call('POST', '/__bolt/q', {
-					reads: [{ m: 'query', a: ['quotes', { id }] }]
+					reads: [{ m: 'query', a: [{ quotes: { where: { id: { eq: id } } } }] }]
 				});
 				expect((yield* json(q, QReply)).answers[0]).toMatchObject({
-					title: 'Q-1',
-					status: 'draft'
+					quotes: { rows: [{ title: 'Q-1', status: 'draft' }] }
 				});
 				const has = (status: string) => (f: Frame) => {
 					const matches = (row: unknown) =>
 						Predicate.isObject(row) && row['id'] === id && row['status'] === status;
 					if (f.t === 'answer' && Predicate.isObject(f.value)) {
-						const rows = f.value['rows'];
+						const quotes = f.value['quotes'];
+						const rows = Predicate.isObject(quotes) ? quotes['rows'] : undefined;
 						return Schema.is(Schema.Array(Schema.Json))(rows) && rows.some(matches);
 					}
 					return f.t === 'patch' && f.ops.some((op) => op.op === 'upsert' && matches(op.row));
@@ -445,7 +442,7 @@ layer(Layer.effect(TestServer, TestServer.make).pipe(Layer.provideMerge(NodeServ
 			expect(up.status).toBe(200);
 			expect(ref.name).toBe('note.txt');
 			expect(
-				(yield* json(yield* t.act('quotes.create', { title: 'Q-2', attachment: ref }), ActReply))
+				(yield* json(yield* t.act('quotes.create', [{ title: 'Q-2', attachment: ref }]), ActReply))
 					.outcome.kind
 			).toBe('committed');
 			const down = yield* t.call('GET', `/__bolt/files/${ref.id}`);
@@ -562,7 +559,7 @@ layer(Layer.effect(TestServer, TestServer.make).pipe(Layer.provideMerge(NodeServ
 					'src/app/site/home.page.data.ts':
 						'import { Schema } from "effect"; export default Schema.Struct({ titles: Schema.Array(Schema.String), visitor: Schema.String });',
 					'src/app/site/+home.page.server.ts':
-						'import { pageServer } from "@norbital-ai/bolt"; import Data from "./home.page.data.ts"; export default pageServer({ data: Data, load: function* (_, ctx) { const result = yield* ctx.query("quotes", { limit: 10 }); return { titles: result.rows.map((row) => row.title), visitor: ctx.actor.kind === "visitor" ? ctx.actor.visitor : "member" }; } });',
+						'import { pageServer } from "@norbital-ai/bolt"; import Data from "./home.page.data.ts"; export default pageServer({ data: Data, load: function* (_, ctx) { const { quotes } = yield* ctx.query({ quotes: { limit: 10 } }); return { titles: quotes.rows.map((row) => row.title), visitor: ctx.actor.kind === "visitor" ? ctx.actor.visitor : "member" }; } });',
 					'src/app/site/+home.page.svelte':
 						'<script lang="ts">import { bolt } from "$bolt"; let { data }: { data: { titles: readonly string[]; visitor: string } } = $props();</script><svelte:head><title>Protected public page</title></svelte:head><main><h1>{bolt.t("page.welcome")}</h1>{#each data.titles as title}<p>{title}</p>{/each}<p data-visitor={data.visitor}>{bolt.org.name}</p></main>',
 					'src/i18n/+messages.ts': 'export default { "page.welcome": "Welcome to public SSR" };'
@@ -576,7 +573,7 @@ layer(Layer.effect(TestServer, TestServer.make).pipe(Layer.provideMerge(NodeServ
 						...manifest.policies,
 						visitor: {
 							description: 'Public draft quotes',
-							grants: { quotes: { read: { where: { status: { eq: 'draft' } } } } }
+							grants: { quotes: { read: { quotes: { where: { status: { eq: 'draft' } } } } } }
 						}
 					},
 					apps: {
@@ -692,7 +689,7 @@ layer(Layer.effect(TestServer, TestServer.make).pipe(Layer.provideMerge(NodeServ
 			});
 			yield* Effect.addFinalizer(() => Effect.sync(() => events.mockRestore()));
 			yield* Effect.addFinalizer(() => Deferred.succeed(release, undefined));
-			const query = { reads: [{ m: 'query', a: ['quotes.hold', {}] }] };
+			const query = { reads: [{ m: 'query', a: [{ quotes: { limit: 1 } }] }] };
 			const first = yield* Effect.forkChild(t.call('POST', '/__bolt/q', query));
 			yield* Deferred.await(entered);
 			const second = yield* Effect.forkChild(t.call('POST', '/__bolt/q', query));
@@ -918,11 +915,11 @@ layer(Layer.effect(TestServer, TestServer.make).pipe(Layer.provideMerge(NodeServ
 				const next: EngineManifest = {
 					...manifest,
 					models: { quotes: { ...manifest.models.quotes, fields } },
-					collections: {
+					exposures: {
 						quotes: {
-							read: { fields: 'all' },
-							create: { input: { columns: ['title'] } },
-							update: { input: { columns: ['status'] } }
+							read: { quotes: { fields: 'all' } },
+							create: { columns: { quotes: ['title'] } },
+							update: { columns: { quotes: ['status'] } }
 						}
 					}
 				};
@@ -1009,7 +1006,7 @@ it.effect(
 						}
 					}
 				},
-				`export default { automation: { stamp: { body: function* (input, ctx) { yield* ctx.act('quotes.create', { title: ctx.now + ' ' + ctx.today }); } } } };`
+				`export default { automation: { stamp: { body: function* (input, ctx) { yield* ctx.act('quotes.create', [{ title: ctx.now + ' ' + ctx.today }]); } } } };`
 			);
 			const s = yield* generation(
 				yield* config(env({ BOLT_ARTIFACT: dir, BOLT_PGLITE_DIR: join(root, 'cron') }))

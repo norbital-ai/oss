@@ -73,7 +73,7 @@ export const syncsOf = (m: EngineManifest): ReadonlyMap<string, RemoteSync> => {
 	if (x === undefined) {
 		const rels = relations(m);
 		x = new Map(
-			Object.entries(m.collections).flatMap(([model, c]) =>
+			Object.entries(m.exposures).flatMap(([model, c]) =>
 				Object.entries(c.syncs ?? {}).flatMap(([sync, entry]): [string, RemoteSync][] => {
 					if (entry.with === 'file') return [];
 					const pinned = (rels.from.get(model) ?? []).find((r) => {
@@ -302,7 +302,7 @@ export const SyncsLive = Layer.effect(
 						BoltError.make('notFound', 'decode', `No integration instance '${instance}'.`)
 					);
 				if (manifest.integrations[inst.integration]?.test !== true) return;
-				const id = yield* e.crypto.randomUUIDv4.pipe(
+				const id = yield* e.crypto.randomUUIDv4().pipe(
 					Effect.mapError((error) =>
 						BoltError.make(
 							'unavailable',

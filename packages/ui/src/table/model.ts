@@ -1,7 +1,7 @@
 import { formatValue as show } from '../kinds/kind.js';
 import type { Fields, Kind } from '../kinds/kind.js';
-import type { CollectionExposure } from '../kinds/context.js';
-import type { Values } from '../collection/types.js';
+import type { ModelExposure } from '../kinds/context.js';
+import type { Values } from '../model/types.js';
 import type { ViewBolt } from '../client/contract.js';
 import { fill, humanize, msg } from '../text/messages.js';
 import { valueAt } from '../cell/value.js';
@@ -31,7 +31,7 @@ export function writeTableState(
  */
 export type SearchIndex = { name: string; hint: string; input?: Fields; why: string | null };
 export function searchIndexes(
-	x: CollectionExposure | undefined,
+	x: ModelExposure | undefined,
 	typed: boolean,
 	text: { meaning: string; raw: string; view: string }
 ): SearchIndex[] {

@@ -36,5 +36,5 @@ export default model('sys_user', {
 			{ on: ['phone_key'], unique: true }
 		]
 	},
-	read: { fields: 'all' }
+	read: 'all'
 });

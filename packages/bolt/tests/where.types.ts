@@ -50,7 +50,7 @@ void o1;
 void o2;
 void o3;
 
-// ── related sort keys: through one-relations, at most two hops; the target field is `Sortable` on its collection ──
+// ── related sort keys: through one-relations, at most two hops; the target field is `Sortable` on its model ──
 const r: OrderBy<'orders'>[] = [
 	{ customer: { name: 'asc' } },
 	[{ customer: { order_count: 'desc' } }, { due: 'asc' }],
@@ -63,7 +63,7 @@ void r0;
 const r1: OrderBy<'orders'> = { customer: { tags: 'asc' } };
 // @ts-expect-error R2 one field per related key
 const r2: OrderBy<'orders'> = { customer: { name: 'asc', tier: 'desc' } };
-// @ts-expect-error R3 `sites` exposes no relation to cross
+// a sort may cross any one-relation its root reads (the old `relations: []` allowlist is gone)
 const r3: OrderBy<'sites'> = { customer: { name: 'asc' } };
 // @ts-expect-error R4 a direction is asc or desc
 const r4: OrderBy<'orders'> = { customer: { name: 'up' } };

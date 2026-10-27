@@ -52,7 +52,7 @@ export const KeyRow = Schema.Struct({
 });
 export type KeyRow = typeof KeyRow.Type;
 const AuditRow = Schema.Struct({
-	collection: Schema.String,
+	model: Schema.String,
 	record: Schema.String,
 	revision: Schema.Number,
 	at: Schema.String,
@@ -82,6 +82,18 @@ const InstanceRow = Schema.Struct({
 	status: Schema.Json,
 	configuration: Schema.Json
 });
+const EnvoyRow = Schema.Struct({
+	id: Schema.String,
+	name: Schema.String,
+	audience: Schema.String,
+	task: Schema.String,
+	policies: Schema.Array(Schema.String),
+	group_messages: Schema.String,
+	delegation: Schema.String,
+	triage: Schema.Boolean,
+	dm: Schema.String,
+	active: Schema.Boolean
+});
 const decode = <A>(schema: Schema.Decoder<A>, rows: unknown) =>
 	Schema.decodeUnknownEffect(Schema.Array(schema))(rows).pipe(
 		Effect.mapError((e) => BoltError.make('internal', 'decode', String(e)))
@@ -93,8 +105,20 @@ export type Settings = {
 	keys: readonly KeyRow[];
 	policies: string[];
 	secrets: { name: string; label: string; set: boolean | null }[];
-	/** The envoy roles (`src/agent/envoy/`): what a workspace instance of a conversation definition may deploy. */
-	envoys: { id: string; name: string; audience: 'public' | 'private' }[];
+	/** The envoys: source-declared roles and tenant-created rows, each deployable on conversation instances. */
+	envoys: {
+		id: string;
+		name: string;
+		audience: 'public' | 'private';
+		task: string;
+		policies: readonly string[];
+		groupMessages: 'disabled' | 'mention_or_reply' | 'all';
+		delegation: 'enabled' | 'disabled';
+		triage: boolean;
+		dm: 'union' | 'envoy';
+		active: boolean;
+		created: boolean;
+	}[];
 	/**
 	 * Every integration instance (`sys_integration`): `named` is a connection of `+workspace.ts`, `status` the host's last
 	 * durable transition, `delivery` its last day of outbound deliveries.
@@ -159,7 +183,7 @@ export const settings = Effect.fn('shell.settings')(function* (
 	const now = yield* h.now;
 	const refusal = requireAdmin(auth);
 	if (refusal !== null) return yield* Effect.fail(refusal);
-	const [users, invitations, keys, audit, deliveries, signup, instances] = yield* h.db.read([
+	const [users, invitations, keys, audit, deliveries, signup, instances, envoys] = yield* h.db.read([
 		// administrators first, then staff, then external members; by name, else address (L-BOLT-516)
 		q(`SELECT u.id, u.email, u.phone, u.telegram, u.name, u.kind, u.active, u.admin, u.team, (SELECT max(s.refreshed_at)::text FROM sys_session s WHERE s."user" = u.id) AS last_seen
 			FROM sys_user u ORDER BY u.admin DESC, u.kind = 'external', lower(coalesce(nullif(u.name, ''), u.email, u.phone, '')), u.id`),
@@ -171,7 +195,7 @@ export const settings = Effect.fn('shell.settings')(function* (
 		q(
 			'SELECT id, name, prefix, team, created_by, created_at::text AS created_at, revoked_at::text AS revoked_at, last_used_at::text AS last_used_at FROM sys_api_key ORDER BY name, id'
 		),
-		q(`SELECT collection, record::text AS record, revision, at::text AS at, actor, op, changes FROM bolt_history
+		q(`SELECT collection AS model, record::text AS record, revision, at::text AS at, actor, op, changes FROM bolt_history
 			WHERE collection IN ('sys_user', 'sys_invitation') ORDER BY at DESC, revision DESC LIMIT ${AUDIT_LIMIT}`),
 		q(
 			`SELECT integration, count(*) FILTER (WHERE status IN ('sent', 'deferred', 'delivered', 'read', 'opened', 'replied'))::int AS sent, count(*) FILTER (WHERE status IN ('queued', 'sending') AND attempts = 0)::int AS pending,
@@ -184,6 +208,9 @@ export const settings = Effect.fn('shell.settings')(function* (
 		q(`SELECT value FROM sys_config WHERE key = '${SIGNUP_KEY}'`),
 		q(
 			'SELECT id, name, integration, owner, named, envoy, active, status, configuration FROM sys_integration ORDER BY name, id'
+		),
+		q(
+			'SELECT id, name, audience, task, policies, group_messages, delegation, triage, dm, active FROM sys_envoy ORDER BY name, id'
 		)
 	]);
 	const idle: Delivery = {
@@ -210,6 +237,7 @@ export const settings = Effect.fn('shell.settings')(function* (
 		])
 	);
 	const status = secrets === undefined ? null : yield* secrets.status('workspace');
+	const runtimeEnvoys = yield* decode(EnvoyRow, envoys?.rows ?? []);
 	return {
 		members: yield* decode(Member, users?.rows ?? []),
 		teams: Object.entries(m.teams)
@@ -226,11 +254,37 @@ export const settings = Effect.fn('shell.settings')(function* (
 			label: d.label,
 			set: status === null ? null : status[name] === true
 		})),
-		envoys: Object.entries(m.envoys).map(([id, e]) => ({
-			id,
-			name: e.name,
-			audience: e.audience ?? 'private'
-		})),
+		envoys: [
+			...Object.entries(m.envoys).map(([id, e]) => ({
+				id,
+				name: e.name,
+				audience: e.audience ?? 'private',
+				task: e.task,
+				policies: e.policies,
+				groupMessages: e.groupMessages ?? 'mention_or_reply',
+				delegation: e.delegation ?? 'disabled',
+				triage: e.triage !== false && e.triage !== undefined,
+				dm: e.dm ?? 'union',
+				active: true,
+				created: false
+			})),
+			...runtimeEnvoys.map((e) => ({
+				id: e.id,
+				name: e.name,
+				audience: e.audience === 'public' ? ('public' as const) : ('private' as const),
+				task: e.task,
+				policies: e.policies,
+				groupMessages:
+					e.group_messages === 'disabled' || e.group_messages === 'all'
+						? e.group_messages
+						: ('mention_or_reply' as const),
+				delegation: e.delegation === 'enabled' ? ('enabled' as const) : ('disabled' as const),
+				triage: e.triage,
+				dm: e.dm === 'envoy' ? ('envoy' as const) : ('union' as const),
+				active: e.active,
+				created: true
+			}))
+		],
 		instances: (yield* decode(InstanceRow, instances?.rows ?? [])).map((i) => ({
 			...i,
 			configuration: i.configuration ?? {},
@@ -249,12 +303,12 @@ export const settings = Effect.fn('shell.settings')(function* (
 				personal: 'personal' in DRIVERS[d.driver],
 				sends:
 					conversational(d) ||
-					Object.values(m.collections).some((model) =>
+					Object.values(m.exposures).some((model) =>
 						Object.values(model.syncs ?? {}).some(
 							(sync) => sync.with === name && sync.write === true
 						)
 					),
-				syncs: Object.values(m.collections).some((model) =>
+				syncs: Object.values(m.exposures).some((model) =>
 					Object.values(model.syncs ?? {}).some((sync) => sync.with === name)
 				),
 				configuration: d.configuration ?? {}
@@ -266,7 +320,7 @@ export const settings = Effect.fn('shell.settings')(function* (
 	};
 });
 
-const ref = Schema.Struct({ collection: Schema.NonEmptyString, id: Schema.NonEmptyString });
+const ref = Schema.Struct({ model: Schema.NonEmptyString, id: Schema.NonEmptyString });
 const inviteData = Schema.Struct({
 	email: Schema.optionalKey(Schema.NonEmptyString),
 	phone: Schema.optionalKey(Schema.NonEmptyString),

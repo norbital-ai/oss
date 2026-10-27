@@ -15,6 +15,7 @@ keys pick a revision; `End`/`Escape` return to the current one.
 	import Glyph from '../primitives/icon/Glyph.svelte';
 	import { checkpoints, drawnTicks, tickAt, tickOf, type Checkpoint } from './history.js';
 	import { rowsOf } from '../read/results.js';
+	import { byId, firstOf, pageOf, READ_LIMIT, requestJson } from '../read/request.js';
 	import { label, msg } from '../text/messages.js';
 
 	let {
@@ -35,8 +36,9 @@ keys pick a revision; `End`/`Escape` return to the current one.
 		/** The revisions' details, read on first opening (`onload`); `null` until then. */
 		history: Effect.Effect<readonly Checkpoint[], Error> | null;
 		onload: () => void;
-		/** A revision to show; `null` (or `latest`) returns to the live record. */
-		onpick: (revision: number | null) => void;
+		/** A revision to show and the instant it was written (`null` while history is unloaded); `null` (or `latest`)
+		 * returns to the live record. */
+		onpick: (revision: number | null, at: string | null) => void;
 	} = $props();
 	const bolt = useBolt();
 	const kinds = useKinds();
@@ -59,9 +61,12 @@ keys pick a revision; `End`/`Escape` return to the current one.
 		if (b === undefined) return at;
 		return tickOf(b.width === 0 ? 1 : (x - b.left) / b.width, latest);
 	};
+	// the instant revision `r` was written: its own checkpoint's, else the last before it (a pruned revision)
+	const atOf = (r: number) =>
+		rootHistory.current?.filter((c) => c.revision <= r).at(-1)?.at ?? null;
 	const pick = (r: number) => {
 		hover = r;
-		onpick(r >= latest ? null : r);
+		onpick(r >= latest ? null : r, atOf(r));
 	};
 	function down(e: PointerEvent) {
 		if (e.button !== 0) return;
@@ -115,8 +120,11 @@ keys pick a revision; `End`/`Escape` return to the current one.
 		const known = names.get(actor.id);
 		return known !== undefined
 			? Effect.succeed(known)
-			: bolt.query<{ readonly [field: string]: unknown } | null>('sys_user', { id: actor.id }).pipe(
-					Effect.map((user) => String(user?.['name'] ?? user?.['email'] ?? actor.id)),
+			: bolt.query(byId('sys_user', actor.id)).pipe(
+					Effect.map((answer) => {
+						const user = firstOf(answer, 'sys_user');
+						return String(user?.['name'] ?? user?.['email'] ?? actor.id);
+					}),
 					Effect.catch(() => Effect.succeed(actor.id)),
 					Effect.tap((name) =>
 						Effect.sync(() => {
@@ -126,8 +134,8 @@ keys pick a revision; `End`/`Escape` return to the current one.
 				);
 	}
 
-	function what(c: Checkpoint, collection = of): string {
-		const base = described(c, collection);
+	function what(c: Checkpoint, model = of): string {
+		const base = described(c, model);
 		// an approval's provisional change says where its request stands; a rollback says it was the request's
 		return c.approval === null || c.approval.state === null
 			? base
@@ -141,14 +149,14 @@ keys pick a revision; `End`/`Escape` return to the current one.
 						state: c.approval.state
 					});
 	}
-	function described(c: Checkpoint, collection: string): string {
+	function described(c: Checkpoint, model: string): string {
 		if (c.restoredFrom !== null)
 			return msg(bolt, 'record.restoredFrom', 'Restored from revision {n}', { n: c.restoredFrom });
 		if (c.revision === 1) return msg(bolt, 'record.created', 'Created');
 		if (c.fields.length === 0) return msg(bolt, 'record.noVisibleChanges', 'No visible changes');
 		const named = c.fields
 			.slice(0, 3)
-			.map((f) => label(bolt, collection, f))
+			.map((f) => label(bolt, model, f))
 			.join(', ');
 		return c.fields.length > 3
 			? msg(bolt, 'record.changedMore', '{fields} +{more}', {
@@ -159,13 +167,12 @@ keys pick a revision; `End`/`Escape` return to the current one.
 	}
 	type Event = { key: string; of: string; subject: string; checkpoint: Checkpoint; own: boolean };
 	type LoadedHistory = { list: readonly Event[]; partial: boolean };
-	function visible(c: Checkpoint, collection: string, fields?: readonly string[]): Checkpoint {
+	function visible(c: Checkpoint, model: string, fields?: readonly string[]): Checkpoint {
 		return {
 			...c,
 			fields: c.fields.filter(
 				(f) =>
-					!kinds.catalog?.[collection]?.fields[f]?.hidden &&
-					(fields === undefined || fields.includes(f))
+					!kinds.catalog?.[model]?.fields[f]?.hidden && (fields === undefined || fields.includes(f))
 			)
 		};
 	}
@@ -182,7 +189,14 @@ keys pick a revision; `End`/`Escape` return to the current one.
 				(source) =>
 					Effect.result(
 						Effect.gen(function* () {
-							const records = rowsOf(yield* bolt.query(source.of, source.query));
+							const records = rowsOf(
+								pageOf(
+									yield* bolt.query(
+										requestJson({ [source.of]: { where: source.where, limit: READ_LIMIT } })
+									),
+									source.of
+								)
+							);
 							const groups = yield* Effect.forEach(
 								records,
 								(row) =>
@@ -393,16 +407,15 @@ keys pick a revision; `End`/`Escape` return to the current one.
 					class="mt-3 max-h-80 space-y-3 overflow-y-auto border-l border-border pl-3"
 					data-record-history-events
 				>
-					{#each result.list as event (event.key)}<li
-							class="text-sm"
-							data-history-collection={event.of}
-						>
+					{#each result.list as event (event.key)}<li class="text-sm" data-history-model={event.of}>
 							{#if event.own}<button
 									type="button"
 									class="text-left font-medium hover:underline"
 									onclick={() =>
-										onpick(event.checkpoint.revision >= latest ? null : event.checkpoint.revision)}
-									>{event.subject} · {what(event.checkpoint, event.of)}</button
+										onpick(
+											event.checkpoint.revision >= latest ? null : event.checkpoint.revision,
+											event.checkpoint.at
+										)}>{event.subject} · {what(event.checkpoint, event.of)}</button
 								>
 							{:else}<p class="font-medium">
 									{event.subject} · {what(event.checkpoint, event.of)}

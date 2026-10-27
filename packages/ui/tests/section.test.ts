@@ -6,7 +6,7 @@ import { Effect } from 'effect';
 import './dom.ts';
 import assert from 'node:assert/strict';
 import { it, afterEach } from '@effect/vitest';
-import { viewFixture, jsonRecord, browser, type ViewScript } from './view-fixture.ts';
+import { viewFixture, jsonArray, jsonRecord, browser, type ViewScript } from './view-fixture.ts';
 import type { Json } from '@norbital-ai/std/wire';
 import type { KindsHost } from '../src/kinds/context.ts';
 const { flushSync, mount, tick, unmount } = await import('svelte');
@@ -16,7 +16,7 @@ const catalog = {
 	jobs: {
 		label: ['title'],
 		fields: {
-			title: { kind: 'text' },
+			title: { kind: 'text', help: 'The role’s public name.' },
 			notes: { kind: 'text', optional: true },
 			kind: { kind: 'enum', values: ['a', 'b'], optional: true }
 		},
@@ -94,6 +94,19 @@ it.live(
 		})
 );
 
+it.live('field help is an info button beside the label, never text under the control', () =>
+	Effect.gen(function* () {
+		const { target } = yield* browser(() => show());
+		const field = element<HTMLElement>(target, '[data-field=title]');
+		assert.equal(textOf(field).includes('The role’s public name.'), false);
+		const info = element<HTMLButtonElement>(field, '[data-field-description]');
+		assert.equal(info.getAttribute('title'), 'The role’s public name.');
+		info.click();
+		yield* browser(() => settle());
+		assert.match(textOf(document.querySelector('[data-slot=popover-content]')), /public name/);
+	})
+);
+
 it.live(
 	'defaultOpen={false} starts closed with its summary in the heading; opening hides the summary',
 	() =>
@@ -116,7 +129,7 @@ it.live(
 		})
 );
 
-it.live("the viewer's choice is remembered per collection and section", () =>
+it.live("the viewer's choice is remembered per model and section", () =>
 	Effect.gen(function* () {
 		const first = yield* browser(() => show());
 		header(first.target, 'Notes').click();
@@ -197,7 +210,8 @@ it.live('a form with collapsed sections still saves every field', () =>
 		yield* browser(() => settle());
 		assert.equal(sent.length, 1);
 		assert.equal(required(sent[0])[0], 'jobs.create');
-		assert.equal(jsonRecord(required(sent[0])[1]).title, 'Paint');
-		assert.equal(jsonRecord(required(sent[0])[1]).notes, 'Back door');
+		const [row] = jsonArray(required(sent[0])[1]);
+		assert.equal(jsonRecord(row).title, 'Paint');
+		assert.equal(jsonRecord(row).notes, 'Back door');
 	})
 );

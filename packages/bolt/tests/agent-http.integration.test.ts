@@ -22,7 +22,9 @@ const manifest = Result.getOrThrow(
 			quotes: { description: 'A quote', label: 'title', fields: { title: { kind: 'text' } } }
 		},
 		relationships: {},
-		collections: { quotes: { read: { fields: 'all' }, create: { input: { columns: ['title'] } } } },
+		exposures: {
+			quotes: { read: { quotes: { fields: 'all' } }, create: { columns: { quotes: ['title'] } } }
+		},
 		policies: { rep: { description: 'Rep', grants: { quotes: { read: true } } } },
 		envoys: {
 			field: {

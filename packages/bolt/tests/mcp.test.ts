@@ -187,7 +187,7 @@ const discoveryAuthority: Authority = {
 	},
 	admin: true,
 	policies: [],
-	collections: {},
+	models: {},
 	automations: [],
 	limits: [],
 	teamTree: [],

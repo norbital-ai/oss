@@ -25,7 +25,7 @@ export {
 	useKinds,
 	DEFAULT_BASEMAP,
 	photonGeocoder,
-	type CollectionExposure,
+	type ModelExposure,
 	type AutomationExposure,
 	type CustomFieldEntry,
 	type KindView,

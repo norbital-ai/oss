@@ -37,11 +37,11 @@ const manifest = {
 		}
 	},
 	relationships: {},
-	collections: {
+	exposures: {
 		items: {
-			read: { fields: 'all' },
-			create: { input: { columns } },
-			update: { input: { columns } }
+			read: { items: { fields: 'all' } },
+			create: { columns: { items: columns } },
+			update: { columns: { items: columns } }
 		}
 	},
 	integrations: {},
@@ -58,9 +58,9 @@ const manifest = {
 
 /** An update callback records the stored row beside its set and through one batched workspace query. */
 const guest =
-	program(`export default { collection: { items: { bodies: { update: function* (changes, ctx) {
+	program(`export default { model: { items: { bodies: { update: function* (changes, ctx) {
 	const shape = (r) => r === null ? null : { amount: String(r.amount), day: r.day, at: r.at, span: r.span, slot: r.slot };
-	const page = yield* ctx.db.query('items', { where: { id: { in: changes.map(({ before }) => before.id) } }, all: true });
+	const { items: page } = yield* ctx.db.query({ items: { where: { id: { in: changes.map(({ before }) => before.id) } } } });
 	const rows = new Map(page.rows.map((row) => [row.id, row]));
 	return changes.map(({ before, set }) => ({ ...set, seen: { before: shape(before), query: shape(rows.get(before.id) ?? null) } }));
 } } } } };`);
@@ -93,10 +93,10 @@ const open = Effect.fn('Test.wireCodec')(function* (
 				? {
 						manifest: {
 							...manifest,
-							collections: {
+							exposures: {
 								items: {
-									...manifest.collections.items,
-									update: { ...manifest.collections.items.update, transform: true }
+									...manifest.exposures.items,
+									update: { ...manifest.exposures.items.update, transform: true }
 								}
 							}
 						},
@@ -114,8 +114,15 @@ const open = Effect.fn('Test.wireCodec')(function* (
 			Effect.map((reply) => reply.outcome)
 		);
 	const get = (id: string) =>
-		qReply(route, authority, { reads: [{ m: 'query', a: ['items', { id }] }] }).pipe(
-			Effect.flatMap((reply) => Schema.decodeUnknownEffect(Schema.NullOr(Row))(reply.answers[0]))
+		qReply(route, authority, {
+			reads: [{ m: 'query', a: [{ items: { where: { id: { eq: id } } } }] }]
+		}).pipe(
+			Effect.flatMap((reply) =>
+				Schema.decodeUnknownEffect(Schema.Struct({ items: Schema.Struct({ rows: Schema.Array(Row) }) }))(
+					reply.answers[0]
+				)
+			),
+			Effect.map((answer) => answer.items.rows[0] ?? null)
 		);
 	return { t, context, authority, act, get };
 });
@@ -129,15 +136,15 @@ describe('wire codec: one shape per kind, both ways (D6)', () => {
 	it.live('date both ways: q gives back exactly what act took and the read row goes back in', () =>
 		Effect.gen(function* () {
 			const a = yield* open({}, true);
-			const id = createdId(yield* a.act('items.create', input));
+			const id = createdId(yield* a.act('items.create', [input]));
 			const row = yield* a.get(id);
 			if (row === null) throw new Error('Missing created row');
 			expect(row).toMatchObject(input);
 			committed(
-				yield* a.act('items.update', {
+				yield* a.act('items.update', [{
 					target: id,
 					set: Object.fromEntries(columns.map((f) => [f, row[f] ?? null]))
-				})
+				}])
 			);
 			expect(yield* a.get(id)).toMatchObject(input);
 		})
@@ -145,8 +152,8 @@ describe('wire codec: one shape per kind, both ways (D6)', () => {
 	it.live('the callback reads the same shapes through before and ctx.db.query', () =>
 		Effect.gen(function* () {
 			const a = yield* open({}, true);
-			const id = createdId(yield* a.act('items.create', input));
-			committed(yield* a.act('items.update', { target: id, set: { name: 'b' } }));
+			const id = createdId(yield* a.act('items.create', [input]));
+			committed(yield* a.act('items.update', [{ target: id, set: { name: 'b' } }]));
 			const shape = {
 				amount: '1.50',
 				day: input.day,
@@ -177,9 +184,9 @@ describe('wire codec: one shape per kind, both ways (D6)', () => {
 			const conn = yield* Deferred.await(ready);
 			const select = Object.fromEntries(columns.map((f) => [f, true]));
 			yield* live.register(conn, 'items', {
-				read: lowerRead(manifest, 'query', ['items', { all: true, select }])
+				read: lowerRead(manifest, 'read', ['items', { all: true, select }])
 			});
-			committed(yield* a.act('items.create', input));
+			committed(yield* a.act('items.create', [input]));
 			yield* live.settled;
 			let last = frames.filter((frame) => frame.t === 'patch').at(-1);
 			while (last === undefined) {

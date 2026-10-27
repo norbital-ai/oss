@@ -59,16 +59,19 @@ const manifest: EngineManifest = {
 		}
 	},
 	relationships: {},
-	collections: {
+	exposures: {
 		quotes: {
-			read: { fields: 'all' },
-			create: { input: { columns: ['title', 'region'] } },
-			update: { input: { columns: ['title', 'region'] } },
+			read: { quotes: { fields: 'all' } },
+			create: { columns: { quotes: ['title', 'region'] } },
+			update: { columns: { quotes: ['title', 'region'] } },
 			delete: {}
 		}
 	},
 	policies: {
-		narrow: { description: 'Titles only', grants: { quotes: { read: { fields: ['title'] } } } },
+		narrow: {
+			description: 'Titles only',
+			grants: { quotes: { read: { quotes: { fields: ['title'] } } } }
+		},
 		rep: {
 			description: 'Rep',
 			grants: { quotes: { read: true, create: true, update: true } },
@@ -131,7 +134,7 @@ const manifest: EngineManifest = {
 	customFields: {}
 };
 const guest = program(`export default { automation: { quotes_mark: { body: function* (input, ctx) {
-	return (yield* ctx.act('quotes.create', { title: input.title })).records[0].id;
+	return (yield* ctx.act('quotes.create', [{ title: input.title }])).records[0].id;
 } } } };`);
 
 // Each cassette step is a native provider stream, pulled once by the real Ai service.
@@ -393,10 +396,10 @@ const setup = (
 				);
 				const connection = yield* Deferred.await(hello);
 				yield* live.register(connection, 'messages', {
-					read: { kind: 'transcript', collection: 'sys_message', conversation, thread: false }
+					read: { kind: 'transcript', model: 'sys_message', conversation, thread: false }
 				});
 				yield* live.register(connection, 'conversations', {
-					read: { kind: 'conversations', collection: 'sys_conversation', member }
+					read: { kind: 'conversations', model: 'sys_conversation', member }
 				});
 				const rows = <A>(schema: Schema.Decoder<A>, view: string) =>
 					frames.flatMap((frame) =>
@@ -433,7 +436,7 @@ describe('in-app turns', () => {
 			Effect.scoped(
 				Effect.gen(function* () {
 					const fixture = yield* setup([
-						use('act', { callable: 'quotes.create', input: { title: 'Desk' } }),
+						use('act', { callable: 'quotes.create', input: [{ title: 'Desk' }] }),
 						say('Created the Desk quote.')
 					]);
 					return yield* Effect.gen(function* () {
@@ -503,7 +506,7 @@ describe('in-app turns', () => {
 						yield* agent.post({ conversation: c, as: { member: ann }, text: 'ask hq' });
 						yield* agent.drain(c);
 						expect(toolNames(ai.requests[0])).toEqual(
-							expect.arrayContaining(['query', 'act', 'skill', 'mcp__hq__echo', 'subagent'])
+							expect.arrayContaining(['read', 'act', 'skill', 'mcp__hq__echo', 'subagent'])
 						);
 						expect(toolResults(ai.requests[1]!)[0]).toMatchObject({
 							content: [{ type: 'text', text: 'echo: hi' }]
@@ -785,7 +788,7 @@ describe('envoy conversations', () => {
 									return use('read_messages', {})(req);
 								})
 							),
-						use('query', { collection: 'quotes' }),
+						use('read', { quotes: {} }),
 						say('Both seen.')
 					]);
 					return yield* Effect.gen(function* () {
@@ -823,8 +826,8 @@ describe('envoy conversations', () => {
 						expect(second).toContain(`[Ann · linked member ${ann}] @bot add A1`);
 						expect(second).toContain(`[Ben · linked member ${ben}] @bot and B1`);
 						expect(JSON.stringify(toolResults(ai.requests[1]!).at(-1))).toContain('site 14 photo');
-						expect(JSON.stringify(ai.requests[0]!.messages.at(-1))).toContain(
-							'1 unread chat message'
+						expect(JSON.stringify(ai.requests[0]!.messages)).toContain(
+							'[1 message not addressed to you; read_messages { before: 2 } to view'
 						);
 						expect(reply?.text).toBe('Both seen.');
 					}).pipe(Effect.provide(fixture.context));
@@ -838,7 +841,7 @@ describe('envoy conversations', () => {
 			Effect.scoped(
 				Effect.gen(function* () {
 					const fixture = yield* setup([
-						use('act', { callable: 'quotes.create', input: { title: 'Boss' } }),
+						use('act', { callable: 'quotes.create', input: [{ title: 'Boss' }] }),
 						say('ok'),
 						say('no')
 					]);
@@ -879,7 +882,7 @@ describe('envoy conversations', () => {
 						say('Sorry, I cannot create that quote.')
 					];
 					const child = [
-						use('act', { callable: 'quotes.create', input: { title: 'Sneaky' } }),
+						use('act', { callable: 'quotes.create', input: [{ title: 'Sneaky' }] }),
 						say('I may not create quotes.')
 					];
 					let p = 0,
@@ -1151,7 +1154,7 @@ describe('toolset parity with today (agent-tools-parity.md)', () => {
 		Effect.scoped(
 			Effect.gen(function* () {
 				const fixture = yield* setup([
-					use('act', { callable: 'quotes.create', input: { title: 'Desk' } }),
+					use('act', { callable: 'quotes.create', input: [{ title: 'Desk' }] }),
 					say('Done.')
 				]);
 				return yield* Effect.gen(function* () {
@@ -1205,23 +1208,29 @@ describe('toolset parity with today (agent-tools-parity.md)', () => {
 	);
 
 	it.live(
-		'query keeps named fields whole and pages on from the last row it shows, and honours field masks (parity 1.1, 1.3)',
+		'read keeps named fields whole and pages on from the last row it shows, and honours field masks (parity 1.1, 1.3)',
 		() =>
 			Effect.scoped(
 				Effect.gen(function* () {
 					const long = (i: number) => `${String(i).padStart(2, '0')} ${'x'.repeat(2_000)}`;
-					const q = { collection: 'quotes', select: { title: true }, orderBy: { title: 'asc' } };
+					const q = { fields: ['title'], orderBy: { title: 'asc' } };
 					const onward: Step = (req) =>
-						use('query', {
-							...q,
-							limit: 1,
-							after: toolResult(Schema.Struct({ next: Schema.String }), req, 0).next
+						use('read', {
+							quotes: {
+								...q,
+								limit: 1,
+								after: toolResult(
+									Schema.Struct({ quotes: Schema.Struct({ next: Schema.String }) }),
+									req,
+									0
+								).quotes.next
+							}
 						})(req);
 					const fixture = yield* setup([
-						use('query', { ...q, limit: 30 }),
+						use('read', { quotes: { ...q, limit: 30 } }),
 						onward,
 						say('a'),
-						use('query', { collection: 'quotes', limit: 1 }),
+						use('read', { quotes: { limit: 1 } }),
 						say('b')
 					]);
 					return yield* Effect.gen(function* () {
@@ -1237,22 +1246,28 @@ describe('toolset parity with today (agent-tools-parity.md)', () => {
 						yield* agent.drain(c);
 						const page = toolResult(
 							Schema.Struct({
-								rows: Schema.Array(Schema.Struct({ title: Schema.String })),
-								next: Schema.NullOr(Schema.String),
-								clipped: Schema.String
+								quotes: Schema.Struct({
+									rows: Schema.Array(Schema.Struct({ title: Schema.String })),
+									next: Schema.NullOr(Schema.String),
+									clipped: Schema.String
+								})
 							}),
 							ai.requests[1]!,
 							0
-						);
+						).quotes;
 						expect(page.rows.length).toBeGreaterThan(0);
 						expect(page.rows.length).toBeLessThan(30);
 						expect(page.rows[0]!.title).toBe(long(0));
 						expect(
 							toolResult(
-								Schema.Struct({ rows: Schema.Array(Schema.Struct({ title: Schema.String })) }),
+								Schema.Struct({
+									quotes: Schema.Struct({
+										rows: Schema.Array(Schema.Struct({ title: Schema.String }))
+									})
+								}),
 								ai.requests[2]!,
 								1
-							).rows[0]!.title
+							).quotes.rows[0]!.title
 						).toBe(long(page.rows.length));
 						const nora = yield* user('nora', { team: 'narrow' });
 						const d = yield* agent.start({ owner: nora });
@@ -1260,10 +1275,14 @@ describe('toolset parity with today (agent-tools-parity.md)', () => {
 						yield* agent.drain(d);
 						expect(
 							toolResult(
-								Schema.Struct({ rows: Schema.Array(Schema.Struct({ region: Schema.Unknown })) }),
+								Schema.Struct({
+									quotes: Schema.Struct({
+										rows: Schema.Array(Schema.Struct({ region: Schema.Unknown }))
+									})
+								}),
 								ai.requests[4]!,
 								0
-							).rows[0]!.region
+							).quotes.rows[0]!.region
 						).toEqual({ $masked: true });
 					}).pipe(Effect.provide(fixture.context));
 				})
@@ -1395,7 +1414,7 @@ describe('toolset parity with today (agent-tools-parity.md)', () => {
 						input: { type: 'object' },
 						call: async () => big
 					};
-					const bad = use('query', { collection: 'nope' });
+					const bad = use('read', { nope: {} });
 					const fixture = yield* setup(
 						[
 							say('first'),
@@ -1553,7 +1572,7 @@ describe('toolset parity with today (agent-tools-parity.md)', () => {
 							hostInlineMs: 20,
 							skills: async () => ({
 								authoring: {
-									text: '---\ndescription: Author a workspace\n---\n## Rules\nOne file per collection.',
+									text: '---\ndescription: Author a workspace\n---\n## Rules\nOne file per model.',
 									digest: '',
 									files: ['SKILL.md'],
 									read: async () => new Uint8Array()
@@ -1579,7 +1598,7 @@ describe('toolset parity with today (agent-tools-parity.md)', () => {
 						});
 						yield* post(agent, c, root, 'how do I author?');
 						yield* agent.drain(c);
-						expect(toolResults(ai.requests[6]!).at(-1)).toBe('## Rules\nOne file per collection.');
+						expect(toolResults(ai.requests[6]!).at(-1)).toBe('## Rules\nOne file per model.');
 						const bob = yield* user('bob', { team: 'reader' });
 						const d = yield* agent.start({ owner: bob });
 						yield* post(agent, d, bob, 'hi');
@@ -1628,14 +1647,17 @@ describe('toolset parity with today (agent-tools-parity.md)', () => {
 							toolCalls: Array.from({ length: 9 }, (_, i) => ({
 								id: `r${i}`,
 								name: 'read_attachment',
-								input: { seq, file: i, as: 'image' }
+								input: { seq, file: i }
 							})),
 							finish: 'tool',
 							usage: { input: 1, output: 1 }
 						});
 					const fixture = yield* setup([nine, say('seen')], {
 						attachments: {
-							read: () => Effect.succeed({ mime: 'image/png', bytes: new Uint8Array(4) })
+							read: (_file, as) => {
+								expect(as).toBe('image');
+								return Effect.succeed({ mime: 'image/png', bytes: new Uint8Array(4) });
+							}
 						}
 					});
 					return yield* Effect.gen(function* () {
@@ -1658,6 +1680,10 @@ describe('toolset parity with today (agent-tools-parity.md)', () => {
 							JSON.stringify(`file reference ${JSON.stringify(files[0])}`).slice(1, -1)
 						);
 						expect(ai.requests[1]!.files).toHaveLength(8);
+						expect(ai.requests[1]!.files?.[0]).toEqual({
+							mime: 'image/png',
+							bytes: new Uint8Array(4)
+						});
 						expect(toolResults(ai.requests[1]!).at(-1)).toMatchObject({
 							dropped: expect.stringContaining('1 older')
 						});
@@ -1666,7 +1692,7 @@ describe('toolset parity with today (agent-tools-parity.md)', () => {
 			)
 	);
 
-	it.live('read_attachment sends a PDF to the next model step as a document', () =>
+	it.live('read_attachment sends PDF bytes to the next model step without a format guess', () =>
 		Effect.scoped(
 			Effect.gen(function* () {
 				let seq = 0;
@@ -1675,7 +1701,7 @@ describe('toolset parity with today (agent-tools-parity.md)', () => {
 						() =>
 							answer({
 								content: '',
-								toolCalls: [{ id: 'pdf', name: 'read_attachment', input: { seq, as: 'document' } }],
+								toolCalls: [{ id: 'pdf', name: 'read_attachment', input: { seq } }],
 								finish: 'tool',
 								usage: { input: 1, output: 1 }
 							}),
@@ -1683,8 +1709,13 @@ describe('toolset parity with today (agent-tools-parity.md)', () => {
 					],
 					{
 						attachments: {
-							read: () =>
-								Effect.succeed({ mime: 'application/pdf', bytes: new Uint8Array([37, 80, 68, 70]) })
+							read: (_file, as) => {
+								expect(as).toBe('document');
+								return Effect.succeed({
+									mime: 'application/pdf',
+									bytes: new Uint8Array([37, 80, 68, 70])
+								});
+							}
 						}
 					}
 				);
@@ -1699,7 +1730,9 @@ describe('toolset parity with today (agent-tools-parity.md)', () => {
 						files: [{ id: randomUUID(), name: 'report.pdf', mime: 'application/pdf' }]
 					})).seq;
 					yield* agent.drain(c);
-					expect(ai.requests[1]!.files).toMatchObject([{ mime: 'application/pdf' }]);
+					expect(ai.requests[1]!.files).toEqual([
+						{ mime: 'application/pdf', bytes: new Uint8Array([37, 80, 68, 70]) }
+					]);
 					expect(toolResults(ai.requests[1]!)[0]).toMatchObject({
 						attached: 'the file is attached to your next step'
 					});
@@ -1745,8 +1778,8 @@ describe('toolset parity with today (agent-tools-parity.md)', () => {
 							author: 'Ann'
 						});
 						yield* agent.drain(c);
-						expect(JSON.stringify(ai.requests[0]!.messages.at(-1))).toContain(
-							'2 unread chat messages'
+						expect(JSON.stringify(ai.requests[0]!.messages)).toContain(
+							'[2 messages not addressed to you'
 						);
 						const first = toolResult(
 							Schema.Struct({
@@ -1931,12 +1964,12 @@ describe('durable turns (rule 48)', () => {
 
 describe('counting is one aggregate read (hr: "why did turnover spike in March 2026" took 24 reads)', () => {
 	it.live(
-		'the query tool offers aggregate with count and by (time buckets named), and a grouped aggregate needs no limit from the model',
+		'the read tool offers aggregate with count and by (time buckets named), and a grouped aggregate needs no limit from the model',
 		() =>
 			Effect.scoped(
 				Effect.gen(function* () {
 					const fixture = yield* setup([
-						use('query', { collection: 'quotes', aggregate: { count: true, by: 'region' } }),
+						use('read', { quotes: { aggregate: { count: true, by: 'region' } } }),
 						say('Two north, one south.')
 					]);
 					return yield* Effect.gen(function* () {
@@ -1960,21 +1993,15 @@ describe('counting is one aggregate read (hr: "why did turnover spike in March 2
 							text: 'How many quotes per region?'
 						});
 						yield* agent.drain(c);
-						const query = ai.requests[0]!.tools!.find((x) => x.name === 'query');
-						if (query === undefined) throw new Error('The query tool must be offered.');
-						expect(query.description).toContain('aggregate');
-						expect(query.description).toContain('by: { month:');
-						expect(
-							Schema.decodeUnknownSync(
-								Schema.Struct({
-									properties: Schema.Struct({
-										aggregate: Schema.Struct({
-											properties: Schema.Record(Schema.String, Schema.Json)
-										})
-									})
-								})
-							)(query.input).properties.aggregate.properties
-						).toMatchObject({ count: {}, by: {} });
+						const read = ai.requests[0]!.tools!.find((x) => x.name === 'read');
+						if (read === undefined) throw new Error('The read tool must be offered.');
+						expect(read.description).toContain('aggregate');
+						expect(read.description).toContain('by: { month:');
+						// the layer value's schema (per root key) offers aggregate with count and by
+						const schema = JSON.stringify(read.input);
+						expect(schema).toContain('"aggregate"');
+						expect(schema).toContain('"count"');
+						expect(schema).toContain('"by"');
 						expect(ai.requests[0]!.system).toContain('one aggregate read');
 						const answer = JSON.stringify(toolResults(ai.requests[1]!)[0]);
 						expect(answer).not.toContain('error');
@@ -2003,7 +2030,7 @@ describe('a turn never settles silently (staging: 12 failing reads, then an empt
 		() =>
 			Effect.scoped(
 				Effect.gen(function* () {
-					const bad = use('query', { collection: 'quotes', where: { month: '2026-03' } });
+					const bad = use('read', { quotes: { where: { month: '2026-03' } } });
 					const fixture = yield* setup([
 						...Array.from({ length: 12 }, () => bad),
 						say(''),
@@ -2063,7 +2090,7 @@ describe('a turn never settles silently (staging: 12 failing reads, then an empt
 							toolCalls: [
 								{
 									id: 'g1',
-									name: 'query',
+									name: 'read',
 									input: {},
 									invalid: 'Expected double-quoted property name in JSON at position 12'
 								}
@@ -2094,7 +2121,7 @@ describe('a turn never settles silently (staging: 12 failing reads, then an empt
 		() =>
 			Effect.scoped(
 				Effect.gen(function* () {
-					const fixture = yield* setup([use('query', { collection: 'quotes' }), say(''), say('')]);
+					const fixture = yield* setup([use('read', { quotes: {} }), say(''), say('')]);
 					return yield* Effect.gen(function* () {
 						const { agent, user } = fixture;
 						const root = yield* user('root', { admin: true });

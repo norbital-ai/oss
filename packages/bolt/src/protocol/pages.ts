@@ -10,8 +10,8 @@ import {
 	Path,
 	Schema
 } from 'effect';
-import type * as HttpServerRequest from 'effect/unstable/http/HttpServerRequest';
-import * as HttpServerResponse from 'effect/unstable/http/HttpServerResponse';
+import type * as HttpServerRequest from 'effect/http/HttpServerRequest';
+import * as HttpServerResponse from 'effect/http/HttpServerResponse';
 import type { Artifact } from '../engine/artifact/read.ts';
 import type { CrossAnswer } from '../engine/contracts.ts';
 import { Activation, Guest, GuestLimits, Manifest, Reads } from '../engine/services.ts';
@@ -156,7 +156,7 @@ export const publicPages = (artifact: Artifact) =>
 				});
 				const encodedBoot = yield* Schema.encodeEffect(Schema.toCodecJson(PublicBoot))(boot);
 				const bound = yield* bindings.pipe(Effect.provideService(Manifest, manifest));
-				const id = yield* crypto.randomUUIDv4;
+				const id = yield* crypto.randomUUIDv4();
 				const outcome = yield* guest.invokeProgram(
 					page.program,
 					{

@@ -11,10 +11,11 @@ it.effect(
 		Effect.scoped(
 			Effect.gen(function* () {
 				const guest = {
-					source: `export default { collection: { orders: { bodies: { update: function* (changes, ctx) {
+					source: `export default { model: { orders: { bodies: { update: function* (changes, ctx) {
 		const ids = changes.map(({ before }) => before.id);
-		const labels = yield* ctx.db.query('orders', { where: { id: { in: ids } }, select: { number: true }, all: true });
-		const ordinary = yield* ctx.db.query('orders', { where: { id: { in: ids } }, all: true });
+		// one model is one root per request: the labelled read and the ordinary one are two requests
+		const { orders: labels } = yield* ctx.db.query({ orders: { where: { id: { in: ids } }, fields: ['number'] } });
+		const { orders: ordinary } = yield* ctx.db.query({ orders: { where: { id: { in: ids } } } });
 		if (ordinary.rows.some((row) => Object.hasOwn(row, 'number') || Object.hasOwn(row, 'total'))) yield* ctx.refuse('ordinary rows exposed derived fields');
 		if (labels.rows.some((row) => Object.keys(row).sort().join(',') !== 'id,number')) yield* ctx.refuse('sequence projection read other fields');
 		return changes.map(({ before, set }) => set.status === 'submitted' ? { ...set, note: labels.rows.find((label) => label.id === before.id).number } : set);
@@ -24,11 +25,11 @@ it.effect(
 					TestWorkspace.layer({
 						manifest: {
 							...manifest,
-							collections: {
-								...manifest.collections,
+							exposures: {
+								...manifest.exposures,
 								orders: {
-									...manifest.collections.orders,
-									update: { ...manifest.collections.orders.update, transform: true }
+									...manifest.exposures.orders,
+									update: { ...manifest.exposures.orders.update, transform: true }
 								}
 							}
 						},
@@ -43,11 +44,11 @@ it.effect(
 				for (const number of ['SO-0001', 'SO-0002']) {
 					const created = (yield* actReply(route, as.authority, {
 						callable: 'orders.create',
-						input: {
+						input: [{
 							title: number,
 							region: 'north',
 							customer: ACME
-						},
+						}],
 						issuedAt: t.clock.now()
 					})).outcome;
 					expect(created.kind).toBe('committed');
@@ -57,18 +58,19 @@ it.effect(
 					expect(
 						(yield* actReply(route, as.authority, {
 							callable: 'orders.update',
-							input: { target: id, set: { status: 'submitted' } },
+							input: [{ target: id, set: { status: 'submitted' } }],
 							issuedAt: t.clock.now()
 						})).outcome.kind
 					).toBe('committed');
 					expect(
-						(yield* qReply(route, as.authority, { reads: [{ m: 'query', a: ['orders', { id }] }] }))
-							.answers[0]
-					).toMatchObject({ number, note: number });
+						(yield* qReply(route, as.authority, {
+							reads: [{ m: 'query', a: [{ orders: { where: { id: { eq: id } } } }] }]
+						})).answers[0]
+					).toMatchObject({ orders: { rows: [{ number, note: number }] } });
 					expect(
 						(yield* actReply(route, as.authority, {
 							callable: 'orders.update',
-							input: { target: id, set: { number: 'FORGED' } },
+							input: [{ target: id, set: { number: 'FORGED' } }],
 							issuedAt: t.clock.now()
 						})).outcome.kind
 					).toBe('refused');

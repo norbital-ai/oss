@@ -39,10 +39,10 @@ export function prospectiveBridge(
 					if (call._tag === 'read' && call.read.kind === 'after') {
 						const nativeRead: ListRead = call.read.query ?? {
 							kind: 'read' as const,
-							collection: call.read.collection,
+							model: call.read.model,
 							where: call.read.where,
 							select: {
-								fields: [...cat.collections.get(call.read.collection)!.model.fields.keys()],
+								fields: [...cat.exposures.get(call.read.model)!.model.fields.keys()],
 								relations: {}
 							},
 							page: { _tag: 'All' as const }
@@ -65,7 +65,7 @@ export function prospectiveBridge(
 						}
 						const groups = Map.groupBy(
 							staged,
-							(item) => cat.collections.get(item.change.collection)!.model.name
+							(item) => cat.exposures.get(item.change.model)!.model.name
 						);
 						const sources = new Map(
 							[...groups.keys()].map((model, index) => [model, `__bolt_prepared_${index}`])
@@ -99,7 +99,7 @@ export function prospectiveBridge(
 									);
 								const old =
 									item.change.op === 'update'
-										? pre.get(k(item.change.collection, item.change.id))
+										? pre.get(k(item.change.model, item.change.id))
 										: undefined;
 								if (item.change.op === 'update' && old === undefined)
 									return yield* Effect.fail(

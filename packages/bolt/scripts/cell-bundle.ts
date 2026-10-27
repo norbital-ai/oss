@@ -92,7 +92,8 @@ const guard = (): Plugin => {
 			if (!guest && !SQL_SOURCE.test(id)) return null;
 			const exported: Record<string, unknown> = await import(pathToFileURL(id).href);
 			return [
-				`import { Encoding, Result } from 'effect';`,
+				`import { Result } from 'effect';`,
+				`import * as Base64 from 'effect/encoding/Base64';`,
 				`import { inflateSync } from 'fflate';`,
 				...Object.entries(exported).map(([name, value]) => {
 					let source: string;
@@ -112,7 +113,7 @@ const guard = (): Plugin => {
 					);
 					if (inflateRawSync(Buffer.from(packed, 'base64')).toString('utf8') !== source)
 						throw new Error(`${relative(ROOT, id)}: ${name} did not round-trip through DEFLATE`);
-					return `export const ${name} = new TextDecoder().decode(inflateSync(Result.getOrThrow(Encoding.decodeBase64(${JSON.stringify(packed)}))))${array ? ".split('\\0')" : ''};`;
+					return `export const ${name} = new TextDecoder().decode(inflateSync(Result.getOrThrow(Base64.decode(${JSON.stringify(packed)}))))${array ? ".split('\\0')" : ''};`;
 				})
 			].join('\n');
 		}

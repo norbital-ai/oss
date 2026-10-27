@@ -23,7 +23,7 @@ import { modelKey } from './flatten.ts';
 import { databaseValue } from '@norbital-ai/store';
 export type ImportPlan = {
 	rows: readonly Json[];
-	/** Required on a keyed collection; `refuse` refuses a row already on file. */
+	/** Required on a keyed model; `refuse` refuses a row already on file. */
 	onConflict?: 'update' | 'keep' | 'refuse';
 	/** `skip` only updates rows already on file (enrichment). */
 	onMissing?: 'create' | 'skip';
@@ -45,10 +45,10 @@ const bad = (message: string, field?: string): Outcome => ({
 	message,
 	...(field === undefined ? {} : { field })
 });
-/** Decodes `{ rows, onConflict?, onMissing?, prune?, dryRun? }` (final-collections §2.4). */
+/** Decodes `{ rows, onConflict?, onMissing?, prune?, dryRun? }` (final-models §2.4). */
 export function importPlan(
 	m: EngineManifest,
-	collection: string,
+	model: string,
 	input: Json,
 	key: readonly string[]
 ): ImportPlan | Outcome {
@@ -67,7 +67,7 @@ export function importPlan(
 		key.length === 0 &&
 		(onConflict !== undefined || onMissing !== undefined || prune !== undefined)
 	)
-		return bad(`${collection} has no key: onConflict, onMissing and prune need one`);
+		return bad(`${model} has no key: onConflict, onMissing and prune need one`);
 	if (key.length > 0 && !['update', 'keep', 'refuse'].includes(onConflict as string))
 		return bad('onConflict is required: update, keep or refuse', 'onConflict');
 	if (onMissing !== undefined && onMissing !== 'create' && onMissing !== 'skip')
@@ -75,13 +75,13 @@ export function importPlan(
 	if (dryRun !== undefined && dryRun !== true) return bad('dryRun is true', 'dryRun');
 	let where: Pred | undefined;
 	if (prune !== undefined) {
-		if (m.collections[collection]?.delete === undefined)
+		if (m.exposures[model]?.delete === undefined)
 			return {
 				kind: 'refused',
 				code: 'forbidden',
-				message: `${collection} does not accept delete.`
+				message: `${model} does not accept delete.`
 			};
-		const decoded = Result.try(() => storeSync(decodeWhere(catalogOf(m), collection, prune)));
+		const decoded = Result.try(() => storeSync(decodeWhere(catalogOf(m), model, prune)));
 		if (Result.isFailure(decoded))
 			return bad(
 				decoded.failure instanceof Error ? decoded.failure.message : 'prune is a Where',
@@ -96,7 +96,7 @@ export function importPlan(
 		...(dryRun === true ? { dryRun } : {}),
 		...(where === undefined
 			? {}
-			: { prune: (db, auth, b, items) => pruned(m, collection, key, where, db, auth, b, items) })
+			: { prune: (db, auth, b, items) => pruned(m, model, key, where, db, auth, b, items) })
 	};
 }
 const pruned = Effect.fn('Bolt.pruned')(function* (
@@ -172,7 +172,7 @@ export const importRefs = Effect.fn('Bolt.importRefs')(function* (
 	db: TenantDb,
 	m: EngineManifest,
 	cat: Catalog,
-	collection: string,
+	model: string,
 	rows: readonly Json[]
 ): Effect.fn.Return<readonly Json[] | Outcome, EngineError> {
 	const wants = new Map<
@@ -187,7 +187,7 @@ export const importRefs = Effect.fn('Bolt.importRefs')(function* (
 			}[];
 		}
 	>();
-	for (const [fk, rel] of cat.models.get(collection)!.one) {
+	for (const [fk, rel] of cat.models.get(model)!.one) {
 		if (rel.targets.length !== 1) continue;
 		const target = rel.targets[0]!;
 		const at = rows.flatMap((row, i) => {

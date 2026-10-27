@@ -1,23 +1,23 @@
 <script lang="ts" module>
 	import type { Snippet } from 'svelte';
 	import type {
-		CollectionKey,
+		ModelKey,
 		FieldOf,
 		OrderByOf,
 		Page,
 		RecordFieldOf,
 		RowOf,
 		WhereOf
-	} from '../collection/types.js';
+	} from '../model/types.js';
 	import type { Json } from '../client/contract.js';
-	import type { Toolbar, ToolbarItem } from '../collection/ViewToolbar.svelte';
+	import type { Toolbar, ToolbarItem } from '../model/ViewToolbar.svelte';
 
 	/** A lane: its `by` value (for a relation, the target id), a label, and for a relation its `Where` (default `eq`). */
 	export type Lane =
 		| import('@norbital-ai/std/kind').Value
 		| { value: import('@norbital-ai/std/kind').Value; label: string; where?: Json };
-	/** The props of `Board`, typed by the collection `of`. */
-	export type BoardProps<C = CollectionKey, F = FieldOf<C>, K = RecordFieldOf<C>> = {
+	/** The props of `Board`, typed by the model `of`. */
+	export type BoardProps<C = ModelKey, F = FieldOf<C>, K = RecordFieldOf<C>> = {
 		of: C;
 		/** The lane field: a `state`, an `enum` or a relation. */
 		by: F;
@@ -50,7 +50,7 @@
 	};
 </script>
 
-<script lang="ts" generics="C extends CollectionKey">
+<script lang="ts" generics="C extends ModelKey">
 	import { formatValue as show } from '../kinds/kind.js';
 	import { Effect, Schedule, Stream } from 'effect';
 	import { SvelteMap, SvelteSet } from 'svelte/reactivity';
@@ -65,22 +65,27 @@
 	import { useKinds } from '../kinds/context.js';
 	import { watch } from 'runed';
 	import { tone } from '../kinds/kind.js';
-	import { provideCollection, useEnumText } from '../collection/context.js';
+	import { provideModel, useEnumText } from '../model/context.js';
 	import { useBolt } from '../client/context.js';
 	import { orderOf, sortable } from '../filter/filter.js';
 	import { actOutcome, notify } from '../actions/outcome.js';
-	import { and, compact } from '../filter/scope.js';
+	import { and } from '../filter/scope.js';
 	import { COUNT_EVERY_MS } from '../read/paging.js';
 	import { flat } from '../read/aggregate.js';
-	import { isRow, objectsOf } from '../read/results.js';
+	import { isRow, objectsOf, rowsOf } from '../read/results.js';
 	import { label, lowerLead, msg } from '../text/messages.js';
-	import { listSelect } from '../relations/select.js';
+	import { listRequest } from '../relations/select.js';
+	import { pageOf, READ_LIMIT, requestJson } from '../read/request.js';
 	import { type ReadState } from '../read/state.js';
 	import { viewState } from '../filter/view-state.svelte.js';
-	import ViewToolbar, { selectionEnabled } from '../collection/ViewToolbar.svelte';
+	import ViewToolbar, { selectionEnabled } from '../model/ViewToolbar.svelte';
 	import BoardLane from './BoardLane.svelte';
+	import BoardLaneDialog from './BoardLaneDialog.svelte';
 	import ReadGate from '../read/ReadGate.svelte';
 	import EmptyState from '../primitives/empty-state/EmptyState.svelte';
+	import * as Dialog from '../primitives/dialog/index.js';
+	import Glyph from '../primitives/icon/Glyph.svelte';
+	import { openRecord } from '../record/navigation.js';
 
 	let {
 		of,
@@ -97,7 +102,7 @@
 	}: BoardProps<C> = $props();
 	const bolt = useBolt();
 	const kinds = useKinds();
-	provideCollection(() => of);
+	provideModel(() => of);
 	const words = useEnumText();
 	// a lane of an enum or state value is named in its words
 	const laneText = (v: import('@norbital-ai/std/kind').Value) =>
@@ -108,7 +113,7 @@
 	const selectable = $derived(selectionEnabled(toolbar, catalog[of]));
 	const view = viewState(bolt, {
 		key: () => key ?? of,
-		collection: () => of,
+		model: () => of,
 		catalog: () => catalog,
 		initialFilter: () => initialFilter
 	});
@@ -145,6 +150,9 @@
 	const toggleLoaded = (on: boolean) => {
 		for (const id of loadedIds) toggle(id, on);
 	};
+	const selectCard = (id: RowOf<C>['id'], on: boolean) => {
+		if (recordId(id)) toggle(id, on);
+	};
 	const registerRows = (page: symbol, ids: readonly RowOf<C>['id'][]) => {
 		loaded.set(page, ids.filter(recordId));
 		return () => loaded.delete(page);
@@ -161,23 +169,27 @@
 		fields,
 		labels: fields.map((f) => label(bolt, of, f)),
 		read: () =>
-			bolt.query(
-				of,
-				compact({
-					where: scope,
-					orderBy: order,
-					search: search || undefined,
-					select: listSelect(kinds.catalog, of, fields, fields, true),
-					all: true
-				})
-			)
+			bolt
+				.query(
+					requestJson(
+						listRequest(
+							kinds.catalog,
+							of,
+							{ where: scope, orderBy: order, search: search || undefined, limit: READ_LIMIT },
+							fields,
+							fields,
+							true
+						)
+					)
+				)
+				.pipe(Effect.map((answer) => pageOf(answer, of)))
 	});
 
 	// lane values and counts: one aggregate by `by` (the one-shot count rule 7 applies per lane)
 	let countsInvalid = $state(false);
 	let countsRevision = 0;
 	const countsRead = watchRead(() => {
-		const collection = of,
+		const model = of,
 			field = by,
 			where = scope;
 		let cached: unknown,
@@ -186,7 +198,7 @@
 			if (!first && !countsInvalid) return Effect.succeed(cached);
 			const revision = countsRevision;
 			return bolt
-				.aggregate(collection, {
+				.aggregate(model, {
 					by: [field],
 					count: true,
 					all: true,
@@ -276,13 +288,14 @@
 		selectionNotice = '';
 		fork(
 			bolt
-				.query<Page<Pick<RowOf<C>, 'id'>>>(
-					of,
-					compact({
-						where: and(scope, laneScope),
-						search: search || undefined,
-						select: { id: true },
-						all: true
+				.query(
+					requestJson({
+						[of]: {
+							where: and(scope, laneScope),
+							search: search || undefined,
+							fields: [],
+							limit: READ_LIMIT
+						}
 					})
 				)
 				.pipe(
@@ -290,7 +303,8 @@
 						Effect.sync(() => {
 							if (revision !== selectionRevision || current !== selectionScope || queryText !== q)
 								return;
-							for (const row of answer.rows) if (recordId(row.id)) selected.add(row.id);
+							for (const row of rowsOf(pageOf(answer, of)))
+								if (recordId(row.id)) selected.add(row.id);
 						})
 					),
 					Effect.catch((error) =>
@@ -312,6 +326,22 @@
 		countsRevision++;
 		countsInvalid = true;
 	};
+	// a lane's cards: the board's scope AND the lane's own condition (a relation lane's `where`, else `by` is its value)
+	const laneWhere = (lane: { value: import('@norbital-ai/std/kind').Value; where?: Json }) =>
+		and(
+			scope,
+			lane.where ?? {
+				[by]: lane.value === null ? { isNull: true } : { eq: encodeWire(lane.value) }
+			}
+		);
+	// the lane expanded in the dialog, by its key; the button that opened it takes the focus back
+	let expanded = $state<string | null>(null);
+	let opener: HTMLElement | null = null;
+	const expandedLane = $derived(
+		found.kind === 'ready'
+			? found.value.find((lane) => JSON.stringify(lane.value) === expanded)
+			: undefined
+	);
 
 	watch(
 		() => search,
@@ -355,7 +385,7 @@
 		const id = event.dataTransfer?.getData('text/x-bolt-id');
 		if (!id) return;
 		fork(
-			actOutcome(bolt.act(`${of}.update`, { target: id, set: { [by]: lane } })).pipe(
+			actOutcome(bolt.act(`${of}.update`, [{ target: id, set: { [by]: lane } }])).pipe(
 				Effect.tap((outcome) =>
 					Effect.sync(() => {
 						if (outcome.kind !== 'committed') notify(bolt, outcome);
@@ -396,7 +426,7 @@
 <section class="@container flex h-full min-w-0 flex-1 flex-col gap-2" data-view="board">
 	<ViewToolbar
 		config={toolbar}
-		collection={of}
+		model={of}
 		{view}
 		{catalog}
 		author={where}
@@ -516,9 +546,24 @@
 										>{#if dot}<span class={['size-2 shrink-0 rounded-full', dot]} aria-hidden="true"
 											></span>{/if}<span class="truncate">{lane.label}</span></span
 									>
-									{#if search === ''}<span class="text-muted-foreground text-xs tabular-nums"
-											>{lane.count}</span
-										>{/if}
+									<span class="flex shrink-0 items-center gap-1">
+										{#if search === ''}<span
+												class="text-muted-foreground text-xs tabular-nums"
+												data-lane-count>{lane.count}</span
+											>{/if}
+										<Button
+											size="icon-sm"
+											variant="ghost"
+											class="-my-1.5 -mr-1.5"
+											hint={msg(bolt, 'board.expand', 'Expand {lane}', { lane: lane.label })}
+											aria-label={msg(bolt, 'board.expand', 'Expand {lane}', { lane: lane.label })}
+											onclick={(e) => {
+												opener = e.currentTarget;
+												expanded = laneKey;
+											}}
+											data-lane-expand={laneKey}><Glyph name="expand" class="size-3.5" /></Button
+										>
+									</span>
 								</header>
 								<div
 									class="-mx-1 flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto px-1"
@@ -535,21 +580,13 @@
 										{card}
 										{selectable}
 										{selected}
-										onSelect={(id, on) => {
-											if (recordId(id)) toggle(id, on);
-										}}
+										onSelect={selectCard}
 										onRows={registerRows}
 										lane={lane.label}
 										orderBy={order}
 										search={search || undefined}
 										{pageSize}
-										where={and(
-											scope,
-											lane.where ?? {
-												[by]:
-													lane.value === null ? { isNull: true } : { eq: encodeWire(lane.value) }
-											}
-										)}
+										where={laneWhere(lane)}
 										onChange={() => invalidateCounts()}
 									/>
 								</div>
@@ -560,4 +597,44 @@
 			{/snippet}
 		</ReadGate>
 	{/key}
+	<!-- a lane expanded: its cards as a grid in a modal; Escape and the backdrop close it, and the focus goes back to its button -->
+	<Dialog.Root
+		open={expandedLane !== undefined}
+		onOpenChange={(open) => {
+			if (!open) expanded = null;
+		}}
+	>
+		<Dialog.Content
+			class="flex h-[min(90dvh,56rem)] max-w-[min(72rem,calc(100vw-2rem))] flex-col gap-3 p-4"
+			onCloseAutoFocus={(e) => {
+				e.preventDefault();
+				opener?.focus();
+			}}
+			data-lane-dialog={expanded}
+		>
+			{#if expandedLane !== undefined}
+				<BoardLaneDialog
+					{of}
+					{card}
+					label={expandedLane.label}
+					dot={dotOf(expandedLane.value)}
+					count={expandedLane.count}
+					where={laneWhere(expandedLane)}
+					orderBy={order}
+					{search}
+					{pageSize}
+					viewKey={key ?? of}
+					{selectable}
+					{selected}
+					onSelect={selectCard}
+					onChange={invalidateCounts}
+					onOpen={(id) => {
+						// the record sheet layers under a modal: the dialog closes first, then the card opens as on the board
+						expanded = null;
+						openRecord(of, id);
+					}}
+				/>
+			{/if}
+		</Dialog.Content>
+	</Dialog.Root>
 </section>

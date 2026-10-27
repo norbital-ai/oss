@@ -1,6 +1,6 @@
-// Erasure (rule 38e, §5.13). What identity owns: the build's erasable-field set and the admission of a collection erase
+// Erasure (rule 38e, §5.13). What identity owns: the build's erasable-field set and the admission of a model erase
 // (admin-only, never routed to approval, `locked` rules).
-// The remove/anonymise statement of a tenant collection is the write compiler's generated delete/update without a
+// The remove/anonymise statement of a tenant model is the write compiler's generated delete/update without a
 // transform (38e(d)); it consults `judgeErase` first.
 import { Array as EffectArray, Predicate } from 'effect';
 import type { Json } from '../../decl/values.ts';
@@ -89,15 +89,15 @@ type EraseRequest =
 export function judgeErase(
 	m: EngineManifest,
 	auth: Authority,
-	collection: string,
+	model: string,
 	rows: readonly RowData[],
 	req: EraseRequest
 ): { ok: true } | { ok: false; code: 'forbidden' | 'locked' | 'invalidInput'; message: string } {
 	if (!auth.admin)
 		return { ok: false, code: 'forbidden', message: 'Only an administrator can erase.' };
-	const spec = m.models[collection];
+	const spec = m.models[model];
 	if (spec === undefined)
-		return { ok: false, code: 'invalidInput', message: `No collection '${collection}'.` };
+		return { ok: false, code: 'invalidInput', message: `No model '${model}'.` };
 	const states = Object.entries(spec.fields).flatMap(([f, k]) =>
 		k.kind === 'state' ? [[f, k.states] as const] : []
 	);
@@ -118,7 +118,7 @@ export function judgeErase(
 			code: 'invalidInput',
 			message: `'${stored}' is not a stored authored field.`
 		};
-	const erasable = new Set(erasableFields(m, collection));
+	const erasable = new Set(erasableFields(m, model));
 	for (const r of rows)
 		for (const e of editOf(r)) {
 			if (e === 'all') continue;

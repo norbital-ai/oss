@@ -26,11 +26,11 @@ const manifest = {
 		}
 	},
 	relationships: {},
-	collections: {
+	exposures: {
 		quotes: {
-			read: { fields: 'all' },
-			create: { input: { columns: ['title'] } },
-			update: { input: { columns: ['status'] } }
+			read: { quotes: { fields: 'all' } },
+			create: { columns: { quotes: ['title'] } },
+			update: { columns: { quotes: ['status'] } }
 		}
 	},
 	policies: {
@@ -53,7 +53,7 @@ const manifest = {
 	agent: { skills: {} }
 } satisfies EngineManifest;
 const guestSource = `export default { automation: { remind: { body: function* (input, ctx) {
-	for (const id of input.ids) yield* ctx.act('quotes.update', { target: id, set: { status: 'sent' } });
+	for (const id of input.ids) yield* ctx.act('quotes.update', [{ target: id, set: { status: 'sent' } }]);
 } } } };`;
 
 describe('an automation on created with a delay', () => {
@@ -72,7 +72,7 @@ describe('an automation on created with a delay', () => {
 				const ops = t.as(t.member(['ops']));
 				const created = (yield* actReply(route, ops.authority, {
 					callable: 'quotes.create',
-					input: { title: 'q1' },
+					input: [{ title: 'q1' }],
 					issuedAt: t.clock.now()
 				})).outcome;
 				if (created.kind !== 'committed' || created.records[0] === undefined)
@@ -87,23 +87,23 @@ describe('an automation on created with a delay', () => {
 				yield* t.runDue();
 				expect(
 					yield* Schema.decodeUnknownEffect(
-						Schema.NullOr(Schema.Record(Schema.String, Schema.Json))
+						Schema.Struct({ quotes: Schema.Struct({ rows: Schema.Array(Schema.Record(Schema.String, Schema.Json)) }) })
 					)(
 						(yield* qReply(route, ops.authority, {
-							reads: [{ m: 'query', a: ['quotes', { id: id }] }]
+							reads: [{ m: 'query', a: [{ quotes: { where: { id: { eq: id } } } }] }]
 						})).answers[0]
-					)
+					).pipe(Effect.map((answer) => answer.quotes.rows[0]))
 				).toMatchObject({ status: 'draft' });
 				t.clock.advance('1h');
 				yield* t.runDue();
 				expect(
 					yield* Schema.decodeUnknownEffect(
-						Schema.NullOr(Schema.Record(Schema.String, Schema.Json))
+						Schema.Struct({ quotes: Schema.Struct({ rows: Schema.Array(Schema.Record(Schema.String, Schema.Json)) }) })
 					)(
 						(yield* qReply(route, ops.authority, {
-							reads: [{ m: 'query', a: ['quotes', { id: id }] }]
+							reads: [{ m: 'query', a: [{ quotes: { where: { id: { eq: id } } } }] }]
 						})).answers[0]
-					)
+					).pipe(Effect.map((answer) => answer.quotes.rows[0]))
 				).toMatchObject({ status: 'sent' });
 				const runs = present(
 					(yield* t.db.read([{ text: 'SELECT automation, state FROM sys_run', params: [] }]))[0]

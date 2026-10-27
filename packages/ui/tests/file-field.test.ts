@@ -8,7 +8,7 @@ import './dom.ts';
 import assert from 'node:assert/strict';
 import type { FileRef, Value, Kind } from '@norbital-ai/std/kind';
 import type { KindsHost, KindView } from '../src/kinds/context.ts';
-import type { Row } from '../src/collection/types.ts';
+import type { Row } from '../src/model/types.ts';
 import { jsonRecord } from './view-fixture.ts';
 import { it, afterEach } from '@effect/vitest';
 const { flushSync, mount, tick, unmount } = await import('svelte');
@@ -61,17 +61,21 @@ const host = (over: Partial<KindsHost> = {}): KindsHost => ({
 	upload: (file) =>
 		Effect.succeed({ id: `up-${file.name}`, name: file.name, mime: file.type, size: file.size }),
 	fileUrl: (r) => (r.mime === 'application/pdf' ? PDF_URL : `/files/${r.id}`),
-	query: (c, o) =>
-		Effect.sync(() => {
-			reads.push([c, o]);
-			const id = jsonRecord(jsonRecord(jsonRecord(o).where).id).eq;
-			assert.equal(typeof id, 'string');
-			const row: Row =
-				c === 'sys_file'
-					? { id: Schema.decodeUnknownSync(Schema.String)(id), ...SYS_FILE }
-					: { id: 'u1', name: 'Ana Tan' };
-			return { rows: [row], next: null };
-		}),
+	query: (request) =>
+		Effect.sync(() =>
+			Object.fromEntries(
+				Object.entries(request).map(([c, o]) => {
+					reads.push([c, o]);
+					const id = jsonRecord(jsonRecord(jsonRecord(o).where).id).eq;
+					assert.equal(typeof id, 'string');
+					const row: Row =
+						c === 'sys_file'
+							? { id: Schema.decodeUnknownSync(Schema.String)(id), ...SYS_FILE }
+							: { id: 'u1', name: 'Ana Tan' };
+					return [c, { rows: [row], next: null }];
+				})
+			)
+		),
 	...over
 });
 const mounted: (() => Promise<void>)[] = [];

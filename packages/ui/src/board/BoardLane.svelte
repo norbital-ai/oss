@@ -1,9 +1,9 @@
-<script lang="ts" generics="C extends CollectionKey">
+<script lang="ts" generics="C extends ModelKey">
 	// One lane: a stack of keyset pages, each its own live view. Scrolling near the lane's end opens the next page (server-side
 	// infinite loading); the "Load more" button is the same step for a keyboard or where nothing observes the scroll.
 	import { watch } from 'runed';
 	import { Button } from '../primitives/button/index.js';
-	import type { CollectionKey, RowOf } from '../collection/types.js';
+	import type { ModelKey, RowOf } from '../model/types.js';
 	import type { Json } from '../client/contract.js';
 	import { useBolt } from '../client/context.js';
 	import type { BoardProps } from './Board.svelte';
@@ -22,7 +22,9 @@
 		selected,
 		onSelect,
 		onRows,
-		onChange
+		onChange,
+		grid = false,
+		onOpen
 	}: Pick<BoardProps<C>, 'of' | 'card'> & {
 		lane: string;
 		where: Json | undefined;
@@ -34,6 +36,9 @@
 		onSelect?: (id: RowOf<C>['id'], selected: boolean) => void;
 		onRows?: (page: symbol, ids: readonly RowOf<C>['id'][]) => () => void;
 		onChange?: () => void;
+		/** The expanded lane's grid of cards. */
+		grid?: boolean;
+		onOpen?: (id: string) => void;
 	} = $props();
 	const bolt = useBolt();
 	let pages = $state<(string | null)[]>([null]);
@@ -82,13 +87,21 @@
 		{onSelect}
 		{onRows}
 		{onChange}
+		{grid}
+		{onOpen}
 		index={i}
 		{after}
 		onNext={(n) => (nexts[i] = n)}
 	/>
 {/each}
 {#if more !== null}
-	<Button size="sm" variant="ghost" onclick={load} data-lane-more {@attach nearEnd}
+	<Button
+		size="sm"
+		variant="ghost"
+		class={grid ? 'col-span-full' : undefined}
+		onclick={load}
+		data-lane-more
+		{@attach nearEnd}
 		>{msg(bolt, 'board.more', 'Load more')}</Button
 	>
 {/if}

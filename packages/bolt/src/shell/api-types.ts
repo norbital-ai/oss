@@ -143,7 +143,7 @@ export const SignInMethodsAnswer: Schema.Decoder<SignInMethods> = Schema.Struct(
 export const VerifiedAnswer = Schema.Struct({ user: Schema.String });
 const InboxRequestAnswer: Schema.Decoder<InboxRequest> = Schema.Struct({
 	id: Schema.String,
-	collection: Schema.String,
+	model: Schema.String,
 	record: Schema.String,
 	action: Schema.String,
 	status: Schema.Literals(['Pending', 'ChangesRequested']),
@@ -277,7 +277,7 @@ export type ShellApi = {
 	settingsOp(op: string, input: Json): Call<Json>;
 	/** An integration instance's host verbs (`/__bolt/integrations/<instance>/…`). */
 	integration(instance: string): ReturnType<typeof integrationClient>;
-	/** Every definition with the providers this host offers for it: a member's Connections, the envoys' channels. */
+	/** Every definition with the providers this host offers for it: the envoys' channels. */
 	integrationOffers(): ReturnType<typeof integrationOffers>;
 	/** L-COL-199: the workspace's name and logo (`null`, an `https:` URL or a `data:image/…` URL), an administrator's. */
 	organization(name: string, logo: string | null): Call<void>;
@@ -322,7 +322,7 @@ export type ShellApi = {
 		respondNow(conversation: string): AgentAct;
 		confirm(message: string, approve: boolean): AgentAct;
 		setAgent(conversation: string, agent: string): AgentAct;
-		file(message: string, about: { collection: string; id: string } | null): AgentAct;
+		file(message: string, about: { model: string; id: string } | null): AgentAct;
 		stop(conversation: string): AgentAct;
 		setModel(conversation: string, model: string): AgentAct;
 		revise(message: string, text: string): AgentAct;

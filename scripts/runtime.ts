@@ -1,6 +1,6 @@
 import * as NodeServices from '@effect/platform-node/NodeServices';
 import { ConfigProvider, Context, Layer } from 'effect';
-import { FetchHttpClient } from 'effect/unstable/http';
+import { FetchHttpClient } from 'effect/http';
 export const ProcessEnvironment = Context.Service<Readonly<Record<string, string | undefined>>>(
 	'oss/scripts/ProcessEnvironment'
 );

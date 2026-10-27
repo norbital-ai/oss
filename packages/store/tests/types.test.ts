@@ -122,14 +122,14 @@ it('keeps literal projections and polymorphic result arms exact', () => {
 		all: true
 	});
 	type About = Listed<typeof polymorphic>['about'];
-	expectTypeOf<Extract<About, { collection: 'customer' }>>().toEqualTypeOf<{
+	expectTypeOf<Extract<About, { model: 'customer' }>>().toEqualTypeOf<{
 		readonly id: Id<'customer'>;
-		readonly collection: 'customer';
+		readonly model: 'customer';
 		readonly code: string;
 	}>();
-	expectTypeOf<Extract<About, { collection: 'order' }>>().toEqualTypeOf<{
+	expectTypeOf<Extract<About, { model: 'order' }>>().toEqualTypeOf<{
 		readonly id: Id<'order'>;
-		readonly collection: 'order';
+		readonly model: 'order';
 		readonly number: string;
 	}>();
 	expectTypeOf<Extract<About, null>>().toEqualTypeOf<null>();
@@ -205,15 +205,15 @@ it('uses identity and natural keys in ordinary and polymorphic refs', () => {
 	expectTypeOf<Key<Declarations, 'tenant'>>().toEqualTypeOf<{ readonly handle: string }>();
 	expectTypeOf<Row<Declarations, 'document'>['owner']>().toEqualTypeOf<number>();
 	expectTypeOf<Row<Declarations, 'document'>['about']>().toEqualTypeOf<
-		| { readonly collection: 'owner'; readonly id: number }
-		| { readonly collection: 'tenant'; readonly id: string }
+		| { readonly model: 'owner'; readonly id: number }
+		| { readonly model: 'tenant'; readonly id: string }
 		| null
 	>();
-	expectTypeOf<{ owner: number; about: { collection: 'tenant'; id: string } }>().toMatchTypeOf<
+	expectTypeOf<{ owner: number; about: { model: 'tenant'; id: string } }>().toMatchTypeOf<
 		Insert<Declarations, 'document'>
 	>();
 	expectTypeOf<{ owner: string }>().not.toMatchTypeOf<Insert<Declarations, 'document'>>();
-	expectTypeOf<{ owner: number; about: { collection: 'owner'; id: string } }>().not.toMatchTypeOf<
+	expectTypeOf<{ owner: number; about: { model: 'owner'; id: string } }>().not.toMatchTypeOf<
 		Insert<Declarations, 'document'>
 	>();
 });
@@ -248,24 +248,24 @@ it('derives reference and lookup types from text, uuid, identity and natural int
 	expectTypeOf<Reference['serial']>().toEqualTypeOf<number | null>();
 	expectTypeOf<Reference['integer']>().toEqualTypeOf<number | null>();
 	expectTypeOf<
-		Extract<Reference['about'], { collection: 'text_owner' }>['id']
+		Extract<Reference['about'], { model: 'text_owner' }>['id']
 	>().toEqualTypeOf<string>();
-	expectTypeOf<Extract<Reference['about'], { collection: 'uuid_owner' }>['id']>().toEqualTypeOf<
+	expectTypeOf<Extract<Reference['about'], { model: 'uuid_owner' }>['id']>().toEqualTypeOf<
 		Id<'uuid_owner'>
 	>();
 	expectTypeOf<
-		Extract<Reference['about'], { collection: 'serial_owner' }>['id']
+		Extract<Reference['about'], { model: 'serial_owner' }>['id']
 	>().toEqualTypeOf<number>();
 	expectTypeOf<
-		Extract<Reference['about'], { collection: 'integer_owner' }>['id']
+		Extract<Reference['about'], { model: 'integer_owner' }>['id']
 	>().toEqualTypeOf<number>();
 	expectTypeOf<{
 		text: string;
 		serial: number;
 		integer: number;
-		about: { collection: 'text_owner'; id: string };
+		about: { model: 'text_owner'; id: string };
 	}>().toMatchTypeOf<Insert<Declarations, 'reference'>>();
-	expectTypeOf<{ text: string; about: { collection: 'serial_owner'; id: number } }>().toMatchTypeOf<
+	expectTypeOf<{ text: string; about: { model: 'serial_owner'; id: number } }>().toMatchTypeOf<
 		Patch<Declarations, 'reference'>
 	>();
 	expectTypeOf<{
@@ -279,7 +279,7 @@ it('derives reference and lookup types from text, uuid, identity and natural int
 	>();
 	expectTypeOf<{
 		text: string;
-		about: { collection: 'serial_owner'; id: string };
+		about: { model: 'serial_owner'; id: string };
 	}>().not.toMatchTypeOf<Insert<Declarations, 'reference'>>();
 	const db = store(declarations);
 	const created = db.create('reference', { text: 'plain-key', serial: 1, integer: 7 });

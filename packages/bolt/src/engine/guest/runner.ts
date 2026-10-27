@@ -30,7 +30,6 @@ import { BoltError, type Code } from '../../protocol/errors.ts';
 import type { EngineManifest } from '../manifest.ts';
 import { isBatchCallable, parseCallable } from '../callables/index.ts';
 import { lowerRead as workspaceRead } from '../query/engine.ts';
-import { lowerKeyedMember } from '../query/keyed.ts';
 import type { ReadIR } from '../../protocol/reads.ts';
 import {
 	Activation,
@@ -177,20 +176,6 @@ const lower = (
 				return { _tag: 'transactionAct', callable: name, input: args[1] ?? null, ...options };
 			}
 			case 'transaction.query': {
-				if (args.length === 1 && Predicate.isObject(args[0]) && !Array.isArray(args[0])) {
-					const keyed = yield* lowerKeyed('query', args[0], read, 0);
-					const keys: string[] = [],
-						reads: ReadIR[] = [];
-					for (const [key, call] of keyed.keyed) {
-						if (!('_tag' in call) || call._tag !== 'read')
-							return yield* Effect.fail(
-								BoltError.make('invalidInput', 'guest', 'The keyed transaction query is invalid.')
-							);
-						keys.push(key);
-						reads.push(call.read);
-					}
-					return { _tag: 'transactionRead', reads, keys };
-				}
 				const query = yield* Effect.try({
 					try: () => read('query', args),
 					catch: (error) => BoltError.make('invalidInput', 'guest', messageOf(error))
@@ -279,33 +264,6 @@ const lower = (
 		}
 	});
 
-type Keyed = { readonly keyed: readonly (readonly [string, CrossCall | CrossAnswer])[] };
-const lowerKeyed = (
-	member: string,
-	set: Json,
-	read: NonNullable<GuestOptions['lowerRead']>,
-	scope: number
-) =>
-	Effect.gen(function* () {
-		const records = yield* decode(
-			Schema.Record(Schema.String, Schema.Record(Schema.String, Schema.Json)),
-			set
-		);
-		const earlier = new Set<string>();
-		const keyed: (readonly [string, CrossCall | CrossAnswer])[] = [];
-		for (const [key, spec] of Object.entries(records)) {
-			const lowered = Effect.try({
-				try: (): CrossCall => {
-					const ir = lowerKeyedMember(member, key, spec, read, scope, earlier);
-					earlier.add(key);
-					return { _tag: 'read', read: ir, params: {} };
-				},
-				catch: (error) => BoltError.make('invalidInput', 'guest', messageOf(error))
-			}).pipe(Effect.catch((error) => Effect.succeed(fail('invalidInput', error.message))));
-			keyed.push([key, yield* lowered]);
-		}
-		return { keyed } satisfies Keyed;
-	});
 /**
  * Where a body lives in the guest's default export (the Guest ABI). `integration` and `tool` targets are that path,
  * dotted. A parser's media type keeps its own dots: `'<model>.<sync>.<type>'` splits on the first two.
@@ -319,7 +277,7 @@ const RefusalDetails = Schema.fromJsonString(
 		records: Schema.optionalKey(
 			Schema.Array(
 				Schema.Struct({
-					collection: Schema.String,
+					model: Schema.String,
 					id: Schema.String,
 					fields: Schema.Array(Schema.String)
 				})
@@ -336,21 +294,19 @@ export function bodyPath(kind: InvocationKind, target: string): string[] {
 		case 'update':
 		case 'delete':
 		case 'notify':
-			return ['collection', target, 'bodies', kind];
-		case 'query':
-			return ['collection', model, 'bodies', 'queries', member];
+			return ['model', target, 'bodies', kind];
 		case 'vector':
 		case 'probe':
 		case 'rerank':
-			return ['collection', model, 'bodies', 'indexes', member, kind];
+			return ['model', model, 'bodies', 'indexes', member, kind];
 		case 'syncRead':
-			return ['collection', model, 'bodies', 'syncs', member, 'read'];
+			return ['model', model, 'bodies', 'syncs', member, 'read'];
 		case 'syncWrite':
-			return ['collection', model, 'bodies', 'syncs', member, 'write'];
+			return ['model', model, 'bodies', 'syncs', member, 'write'];
 		case 'parse':
-			return ['collection', model, 'bodies', 'syncs', member, 'parse', rest.join('.')];
-		case 'approval':
-			return ['policy', model, 'grants', member, ...rest, 'approval'];
+			return ['model', model, 'bodies', 'syncs', member, 'parse', rest.join('.')];
+		case 'policy':
+			return ['policy', model, 'grants', member, ...rest, 'check'];
 		case 'automation':
 			return ['automation', target, 'body'];
 		case 'page':
@@ -378,12 +334,11 @@ const stackLocation = (program: GuestProgram) => {
 		return `${file}:${line}`;
 	};
 };
-const isCall = (value: CrossCall | CrossAnswer | Keyed): value is CrossCall => '_tag' in value;
-const isKeyed = (value: CrossCall | CrossAnswer | Keyed): value is Keyed => 'keyed' in value;
+const isCall = (value: CrossCall | CrossAnswer): value is CrossCall => '_tag' in value;
 const isFacility = (call: CrossCall) => Facilities.some((member) => member === call._tag);
 type Landed = {
 	readonly calls: readonly GuestCall[];
-	readonly lowered: readonly (CrossCall | CrossAnswer | Keyed)[];
+	readonly lowered: readonly (CrossCall | CrossAnswer)[];
 	readonly sent: readonly CrossAnswer[];
 };
 type Pass = GuestOutcome | { readonly kind: 'parked' };
@@ -539,6 +494,12 @@ const run = (
 							if (forbidden !== undefined)
 								return failed('forbidden', `page rendering cannot call '${forbidden[0]}'`);
 						}
+						// a policy check reads through `ctx.db.query` only (rule 35)
+						if (invocation.kind === 'policy') {
+							const forbidden = calls.find(([member]) => member !== 'db.query');
+							if (forbidden !== undefined)
+								return failed('forbidden', `a policy check cannot call '${forbidden[0]}'`);
+						}
 						if (crossings + calls.length > invocation.budget.crossings) {
 							const over = calls[Math.max(0, invocation.budget.crossings - crossings)] ?? first;
 							return failed(
@@ -558,15 +519,6 @@ const run = (
 								const args = yield* argsOf(json).pipe(
 									Effect.mapError((error) => BoltError.make('invalidInput', 'guest', error.message))
 								);
-								if (
-									(member === 'query' || member === 'db.query') &&
-									args.length === 1 &&
-									args[0] !== undefined &&
-									args[0] !== null &&
-									typeof args[0] === 'object' &&
-									!Array.isArray(args[0])
-								)
-									return yield* lowerKeyed(member, args[0], read, id);
 								return yield* lower(member, args, bins[i] ?? [], read, manifest);
 							}).pipe(
 								Effect.catch((error) =>
@@ -581,7 +533,7 @@ const run = (
 								)
 							)
 						);
-						const alone = (value: CrossCall | CrossAnswer | Keyed) =>
+						const alone = (value: CrossCall | CrossAnswer) =>
 							isCall(value) && (isFacility(value) || value._tag === 'request');
 						const groups = [
 							...lowered.flatMap((value, i) => (alone(value) ? [[i]] : [])),
@@ -589,13 +541,7 @@ const run = (
 						].filter((group) => group.length > 0);
 						for (const group of groups) {
 							const part = group.flatMap((i) => (lowered[i] === undefined ? [] : [lowered[i]]));
-							const sending = part.flatMap((value) =>
-								isKeyed(value)
-									? value.keyed.flatMap(([, call]) => (isCall(call) ? [call] : []))
-									: isCall(value)
-										? [value]
-										: []
-							);
+							const sending = part.flatMap((value) => (isCall(value) ? [value] : []));
 							const only = part.length === 1 ? part[0] : undefined;
 							// an inference has no wall: its stall window ends it
 							const duration =
@@ -679,19 +625,7 @@ const run = (
 					let next = 0;
 					const answerOf = (value: CrossCall | CrossAnswer): CrossAnswer =>
 						isCall(value) ? (answer.sent[next++] ?? fail('badAnswer', 'no answer')) : value;
-					const answers = answer.lowered.map((value): CrossAnswer => {
-						if (!isKeyed(value)) return answerOf(value);
-						const members = value.keyed.map(([key, call]) => [key, answerOf(call)] as const),
-							bad = members.find(([, member]) => !member.ok);
-						return bad === undefined
-							? {
-									ok: true,
-									value: Object.fromEntries(
-										members.map(([key, member]) => [key, member.ok ? member.value : null])
-									)
-								}
-							: bad[1];
-					});
+					const answers = answer.lowered.map(answerOf);
 					crossings -= answer.sent.filter((value) => value.journal === true).length;
 					let bytes = 0,
 						biggest = 0,
@@ -718,8 +652,7 @@ const run = (
 							biggestAt = i;
 						}
 						const call = answer.lowered[i];
-						if (call !== undefined && (isKeyed(call) || (isCall(call) && call._tag === 'read')))
-							readBytes += size;
+						if (call !== undefined && isCall(call) && call._tag === 'read') readBytes += size;
 						if (
 							!value.ok &&
 							call !== undefined &&
@@ -741,8 +674,10 @@ const run = (
 					if (bytes > limits.crossingBytes) {
 						const big = answer.lowered[biggestAt],
 							large = answers[biggestAt],
+							read = big !== undefined && isCall(big) && big._tag === 'read',
+							// a read request answers per root: name the largest
 							member =
-								big !== undefined && isKeyed(big)
+								read && isCall(big) && big._tag === 'read' && big.read.kind === 'request'
 									? Object.entries(object(large?.ok ? large.value : null))
 											.map(
 												([key, value]) => [key, byteLength(JSON.stringify(value) ?? '')] as const
@@ -750,19 +685,19 @@ const run = (
 											.sort((a, b) => b[1] - a[1])[0]
 									: undefined;
 						const what =
-							big === undefined || (!isCall(big) && !isKeyed(big))
+							big === undefined || !isCall(big)
 								? 'complete the request'
-								: isKeyed(big)
-									? member === undefined
-										? 'read data'
-										: `read '${member[0]}'`
-									: big._tag === 'read'
-										? `read '${big.read.collection}'`
-										: big._tag === 'act'
-											? `run '${big.callable._tag === 'Verb' ? `${big.callable.collection}.${big.callable.verb}` : big.callable._tag === 'Automation' ? big.callable.automation : `${big.callable.collection}.sync.${big.callable.sync}`}'`
+								: big._tag === 'read'
+									? member !== undefined
+										? `read '${member[0]}'`
+										: 'model' in big.read
+											? `read '${big.read.model}'`
+											: 'read data'
+									: big._tag === 'act'
+											? `run '${big.callable._tag === 'Verb' ? `${big.callable.model}.${big.callable.verb}` : big.callable._tag === 'Automation' ? big.callable.automation : `${big.callable.model}.sync.${big.callable.sync}`}'`
 											: `complete ctx.${big._tag}`;
 						const hint =
-							big !== undefined && (isKeyed(big) || (isCall(big) && big._tag === 'read'))
+							read
 								? 'page it with `limit` and the returned cursor, or `select` fewer fields'
 								: 'return less from it';
 						return failed(

@@ -53,14 +53,7 @@ export {
 	type PackSource
 } from './write/pack.ts';
 // ── exports: callables ──
-export {
-	CallablesLive,
-	readQuery,
-	parseCallable,
-	VERBS,
-	admitVisitor,
-	forActor
-} from './callables/index.ts';
+export { CallablesLive, parseCallable, VERBS, admitVisitor, forActor } from './callables/index.ts';
 export { upload, sizeBytes } from './callables/upload.ts';
 export {
 	ApprovalsLive,

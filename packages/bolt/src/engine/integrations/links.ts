@@ -40,7 +40,7 @@ import { Fenced, type EngineError } from '../errors.ts';
 import { BoltError } from '../../protocol/errors.ts';
 import { Drivers } from '../ports.ts';
 import { Port, type PortFailure } from '../port.ts';
-import { Conversations, Links, Live, Manifest, Reads, Wake, Writes } from '../services.ts';
+import { Conversations, Guest, Links, Live, Manifest, Reads, Wake, Writes } from '../services.ts';
 import { mayUpdate } from '../write/act.ts';
 import { canonical } from '@norbital-ai/store';
 import type { Credentials, InstanceRow } from './credentials.ts';
@@ -56,7 +56,7 @@ export const OAUTH_CALLBACK = '/hooks/oauth/callback';
 export const webhookUrl = (publicUrl: string, instance: string): string =>
 	under(publicUrl, `${HOOKS}${encodeURIComponent(instance)}`);
 export type LinkAdmission =
-	TenantDb | Manifest | Conversations | Syncs | Live | Wake | Reads | Writes;
+	TenantDb | Manifest | Conversations | Syncs | Live | Wake | Reads | Writes | Guest;
 export type LinksHost = {
 	readonly providers: readonly Provider[];
 	/** A link's own work on the workspace (an ingest, a status), outside the compute envelope. */
@@ -169,7 +169,7 @@ export const integrationLinks = (
 ): Effect.Effect<LinkManager, never, Scope.Scope | Crypto.Crypto> =>
 	Effect.gen(function* () {
 		const crypto = yield* Crypto.Crypto;
-		const uuid = crypto.randomUUIDv4.pipe(
+		const uuid = crypto.randomUUIDv4().pipe(
 			Effect.mapError((error) =>
 				BoltError.make('unavailable', 'facility', 'Secure random UUID generation failed.', error)
 			)
@@ -472,9 +472,9 @@ export const integrationLinks = (
 							manifest = yield* Manifest;
 						const at = new Date(now).toISOString();
 						return (yield* writes.act({
-							collection: 'sys_integration',
+							model: 'sys_integration',
 							verb: 'update',
-							input: { target: instance, set: { import_start: start } },
+							input: [{ target: instance, set: { import_start: start } }],
 							mode: { _tag: 'Direct' },
 							key,
 							issuedAt: at,
@@ -726,10 +726,10 @@ export const integrationLinks = (
 					Effect.mapError(linkFailure(instance)),
 					Effect.flatMap((held) => held.calls.send(message, attachments))
 				),
-			typing: (instance, to) =>
+			typing: (instance, to, on) =>
 				linked(instance).pipe(
 					Effect.mapError(Port.failure('link')),
-					Effect.flatMap((held) => held.calls.typing(to))
+					Effect.flatMap((held) => held.calls.typing(to, on))
 				),
 			// a request driver opens a link per call; a pushing driver's call (a calendar write) goes through its standing link
 			request: (instance, op) =>
@@ -1109,9 +1109,11 @@ export const integrationLinks = (
 					Effect.gen(function* () {
 						const manifest = yield* Manifest;
 						const db = yield* TenantDb;
+						const guest = yield* Guest;
 						const bindings = bindingsAt(yield* Clock.currentTimeMillis, manifest.workspace.tz);
+						// the instance's update checks judge a host verb on it (rule 35)
 						return yield* mayUpdate(
-							{ manifest, db },
+							{ manifest, db, guest },
 							'sys_integration',
 							instance,
 							authority,

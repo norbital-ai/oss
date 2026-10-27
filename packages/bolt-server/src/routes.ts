@@ -1,5 +1,5 @@
 import { Clock, Effect, Schema } from 'effect';
-import { HttpServerRequest, HttpServerResponse } from 'effect/unstable/http';
+import { HttpServerRequest, HttpServerResponse } from 'effect/http';
 import { verifyOp } from '@norbital-ai/std/host-op';
 import {
 	BoltError,

@@ -1,5 +1,5 @@
 import { Effect, Schema } from 'effect';
-import { HttpClientRequest } from 'effect/unstable/http';
+import { HttpClientRequest } from 'effect/http';
 import { withFetch } from '../src/util.ts';
 import { jsonApi, providerJson } from '../src/transport.ts';
 import { fakeFetch } from './kit.ts';

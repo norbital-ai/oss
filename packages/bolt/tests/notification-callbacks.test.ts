@@ -30,7 +30,7 @@ describe('model notification callbacks', () => {
 			Effect.gen(function* () {
 				const source = yield* program(`
 let calls = 0;
-export default { collection: { orders: { bodies: {
+export default { model: { orders: { bodies: {
  notify: function* (event, ctx) {
   if (++calls !== 1) throw new Error('notification isolate was reused');
   if (ctx.now !== '${NOW}') throw new Error('notification clock was lost');
@@ -72,27 +72,27 @@ export default { collection: { orders: { bodies: {
 						calls.push(batch);
 						return batch.map((): CrossAnswer => ({
 							ok: true,
-							value: { id: 'order', title: 'Workspace desk' }
+							value: { orders: { rows: [{ id: 'order', title: 'Workspace desk' }], next: null } }
 						}));
 					})
 			};
 			const context = yield* Layer.build(
 				guestLayer(
-					yield* program(`export default { collection: { orders: { bodies: {
+					yield* program(`export default { model: { orders: { bodies: {
  notify: function* (_, ctx) {
   if ('query' in ctx || 'act' in ctx || 'request' in ctx || 'after' in ctx.db)
    throw new Error('unexpected notification capability');
-  const row = yield* ctx.db.query('orders', { id: 'order' });
+  const row = (yield* ctx.db.query({ orders: { where: { id: { eq: 'order' } } } })).orders.rows[0];
   return [{ title: row.title, to: [{ user: 'member' }] }];
  }
 } } } };`),
 					{
 						lowerRead: (member, args) => {
 							expect(member).toBe('db.query');
-							expect(args).toEqual(['orders', { id: 'order' }]);
+							expect(args).toEqual([{ orders: { where: { id: { eq: 'order' } } } }]);
 							return {
 								kind: 'get',
-								collection: 'orders',
+								model: 'orders',
 								id: 'order',
 								select: { fields: null, relations: {} }
 							};
@@ -111,7 +111,7 @@ export default { collection: { orders: { bodies: {
 						_tag: 'read',
 						read: {
 							kind: 'get',
-							collection: 'orders',
+							model: 'orders',
 							id: 'order',
 							select: { fields: null, relations: {} }
 						},
@@ -135,7 +135,7 @@ export default { collection: { orders: { bodies: {
 				const context = yield* Layer.build(
 					guestLayer(
 						yield* program(
-							`export default { collection: { orders: { bodies: { notify: function* (_, ctx) { ${body} } } } } };`
+							`export default { model: { orders: { bodies: { notify: function* (_, ctx) { ${body} } } } } };`
 						),
 						{ console: () => {} }
 					)
@@ -150,7 +150,7 @@ export default { collection: { orders: { bodies: {
 
 	it.effect('normalizes notices, dedupes recipients and refuses invalid or oversized batches', () =>
 		Effect.gen(function* () {
-			const ctx = { manifest, id: 'notice', link: { collection: 'orders', id: 'order' } };
+			const ctx = { manifest, id: 'notice', link: { model: 'orders', id: 'order' } };
 			const notice = {
 				title: 'Changed',
 				description: 'Desk',

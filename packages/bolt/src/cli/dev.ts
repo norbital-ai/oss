@@ -25,7 +25,7 @@ import {
 	HttpServer,
 	HttpServerRequest,
 	HttpServerResponse
-} from 'effect/unstable/http';
+} from 'effect/http';
 import * as NodeHttpServer from '@effect/platform-node/NodeHttpServer';
 import { createServer } from 'node:http';
 import { watch } from 'node:fs';
@@ -127,9 +127,9 @@ export class DevHost extends Context.Service<
 
 export const devConverter = Effect.gen(function* () {
 	const config = yield* Config.all({
-		provider: Config.option(Config.string('BOLT_CONVERT_PROVIDER')),
-		endpoint: Config.option(Config.url('BOLT_CONVERT_ENDPOINT')),
-		credential: Config.option(Config.redacted('BOLT_CONVERT_CREDENTIAL'))
+		provider: Config.option(Config.String('BOLT_CONVERT_PROVIDER')),
+		endpoint: Config.option(Config.URL('BOLT_CONVERT_ENDPOINT')),
+		credential: Config.option(Config.Redacted('BOLT_CONVERT_CREDENTIAL'))
 	});
 	if (Option.isNone(config.provider) || config.provider.value === '') {
 		if (Option.isSome(config.endpoint) || Option.isSome(config.credential))
@@ -207,10 +207,10 @@ const makeDevHost = (artifact: Artifact, options: DevHostOptions) =>
 		const serial = yield* Semaphore.make(1),
 			active = yield* ScopedRef.make(() => Option.none<DevGeneration>());
 		const io = yield* Effect.context<
-			FileSystem.FileSystem | Path.Path | import('effect/unstable/http/HttpPlatform').HttpPlatform
+			FileSystem.FileSystem | Path.Path | import('effect/http/HttpPlatform').HttpPlatform
 		>();
 		const runProviderRuntime =
-			yield* FiberSet.makeRuntimePromise<import('effect/unstable/http/HttpClient').HttpClient>();
+			yield* FiberSet.makeRuntimePromise<import('effect/http/HttpClient').HttpClient>();
 		const runProviders = <A, E>(
 			effect: Effect.Effect<A, E>,
 			options?: { readonly signal?: AbortSignal | undefined }
@@ -261,7 +261,7 @@ const makeDevHost = (artifact: Artifact, options: DevHostOptions) =>
 			const ready = yield* Deferred.make<Context.Context<EngineServices | TenantDb>>();
 			const secrets = Object.fromEntries(
 				(yield* Effect.forEach(declaredSecrets(next.manifest), (name) =>
-					Config.option(Config.string(name)).pipe(
+					Config.option(Config.String(name)).pipe(
 						Effect.provideService(ConfigProvider.ConfigProvider, codec.config),
 						Effect.map((value) => (Option.isSome(value) ? [[name, value.value] as const] : []))
 					)

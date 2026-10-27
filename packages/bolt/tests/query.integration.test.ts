@@ -17,7 +17,7 @@ import {
 import { get, read, type ReadIR } from '../src/protocol/reads.ts';
 import { fromStore, storeSync } from '../src/protocol/errors.ts';
 import { readOptions } from '../src/engine/query/reader.ts';
-import { lowerRead, ReadDeps, readEngine } from '../src/engine/query/engine.ts';
+import { lowerRead, readEngine, readTargets } from '../src/engine/query/engine.ts';
 import type { EngineManifest } from '../src/engine/manifest.ts';
 import { transformBridge } from '../src/engine/write/act.ts';
 import { LIMITS } from '../src/engine/contracts.ts';
@@ -99,8 +99,8 @@ const NOTES = Array.from({ length: 20 }, (_, i) => ({
 	id: id(4, i),
 	about:
 		rnd() < 0.5
-			? { collection: 'accounts', id: pick(ACCOUNTS).id }
-			: { collection: 'orders', id: pick(ORDERS).id },
+			? { model: 'accounts', id: pick(ACCOUNTS).id }
+			: { model: 'orders', id: pick(ORDERS).id },
 	body: pick(['call back', 'paid', 'late'])
 }));
 const engine = readEngine({
@@ -179,8 +179,8 @@ const setup = Effect.fnUntraced(function* () {
 			'insert into notes (id, about__accounts, about__orders, body) values ($1, $2, $3, $4)',
 			[
 				n.id,
-				n.about.collection === 'accounts' ? n.about.id : null,
-				n.about.collection === 'orders' ? n.about.id : null,
+				n.about.model === 'accounts' ? n.about.id : null,
+				n.about.model === 'orders' ? n.about.id : null,
 				n.body
 			]
 		);
@@ -285,7 +285,7 @@ describe('next query engine (PGlite)', () => {
 					{
 						_tag: 'read',
 						params: {},
-						read: { ...notes, collection: 'absent' }
+						read: { ...notes, model: 'absent' }
 					},
 					{
 						_tag: 'read',
@@ -297,71 +297,25 @@ describe('next query engine (PGlite)', () => {
 				expect(independent[1]?.ok).toBe(true);
 			}).pipe(Effect.provide(Pristine.layer))
 	);
-	it.live(
-		'declared query dependencies come from nested reads rather than the model owning the query',
+	it.effect(
+		"a read request's targets are its roots, its layers and every model its filters hop into",
 		() =>
-			Effect.gen(function* () {
-				yield* setup();
-				const declared: EngineManifest = {
-					...manifest,
-					collections: {
-						...manifest.collections,
-						accounts: {
-							read: { fields: 'all' },
-							queries: {
-								outer: { description: 'Nested notes', input: {}, output: { kind: 'json' } },
-								inner: { description: 'Notes', input: {}, output: { kind: 'json' } }
-							}
-						}
+			Effect.sync(() => {
+				const request = lowerRead(manifest, 'query', [
+					{
+						orders: { where: { lines: { some: { sku: { eq: 's1' } } } }, fields: ['status'] },
+						'orders.account': { fields: ['name'] },
+						notes: { fields: ['body'] }
 					}
-				};
-				const tracked: ReturnType<typeof readEngine> = readEngine({
-					db,
-					manifest: declared,
-					delegate: {
-						query: (request, reader, clock) =>
-							tracked
-								.run(
-									[
-										request.kind === 'query' && request.query === 'outer'
-											? lowerRead(declared, 'query', ['accounts.inner', {}])
-											: lowerRead(declared, 'query', [
-													'notes',
-													{ all: true, select: { body: true } }
-												])
-									],
-									reader,
-									clock
-								)
-								.pipe(Effect.map(([answer]) => answer ?? null))
-					}
-				});
-				const dependencies = new Set<string>();
-				const [answer] = yield* tracked
-					.run([lowerRead(declared, 'query', ['accounts.outer', {}])], workspace, bindings)
-					.pipe(Effect.provideService(ReadDeps, dependencies));
-				expect(
-					Schema.decodeUnknownSync(Schema.Struct({ rows: Schema.Array(Schema.Json) }))(answer).rows
-				).toHaveLength(NOTES.length);
-				expect([...dependencies]).toEqual(['notes']);
-				yield* tracked
-					.run(
-						[
-							lowerRead(declared, 'query', [
-								'orders',
-								{
-									all: true,
-									select: { status: true },
-									where: { lines: { some: { sku: { eq: 's1' } } } }
-								}
-							])
-						],
-						workspace,
-						bindings
-					)
-					.pipe(Effect.provideService(ReadDeps, dependencies));
-				expect([...dependencies].sort()).toEqual(['lines', 'notes', 'orders']);
-			}).pipe(Effect.provide(Pristine.layer))
+				]);
+				expect(request.kind).toBe('request');
+				expect([...readTargets(cat, request)].sort()).toEqual([
+					'accounts',
+					'lines',
+					'notes',
+					'orders'
+				]);
+			})
 	);
 	it.live(
 		'K3, rule 11a: grammar-generated predicates decode, round-trip, and agree in SQL and JS for the workspace, an admin and a masked caller; a corrupted clause is invalid',
@@ -404,11 +358,11 @@ describe('next query engine (PGlite)', () => {
 						const v = row[rel] as
 							| string
 							| {
-									collection: string;
+									model: string;
 									id: string;
 							  }
 							| null;
-						const to = typeof v === 'string' ? v : v?.collection === target ? v.id : null;
+						const to = typeof v === 'string' ? v : v?.model === target ? v.id : null;
 						return rows[target]!.filter((r) => r.id === to);
 					}
 					const m = cat.models.get(c)!.many.get(rel)!;
@@ -713,7 +667,7 @@ describe('next query engine (PGlite)', () => {
 					const inScope = (r: RowData) =>
 						authority === null ||
 						authority.admin ||
-						authority.collections.orders!.read.some((a) =>
+						(authority.models.orders!.read['orders'] ?? []).some((a) =>
 							evaluate({ ...env, scoped: false }, 'orders', a.where, r)
 						);
 					let telling = 0;
@@ -890,7 +844,7 @@ describe('next query engine (PGlite)', () => {
 				) => (x.id < y.id ? -1 : x.id > y.id ? 1 : 0);
 				const walk = Effect.fnUntraced(function* (
 					reader: Reader,
-					collection: string,
+					model: string,
 					orderBy: Json,
 					limit: number
 				) {
@@ -899,7 +853,7 @@ describe('next query engine (PGlite)', () => {
 					do {
 						const page = (yield* run(
 							reader,
-							read(cat, collection, {
+							read(cat, model, {
 								orderBy,
 								limit,
 								...(after === undefined ? {} : { after })
@@ -975,10 +929,10 @@ describe('next query engine (PGlite)', () => {
 						run(caller, read(cat, 'orders', { orderBy: { account: { secret: 'asc' } }, limit: 5 }))
 					)
 				).toMatchObject({ code: 'invalidInput' });
-				const { accounts: _accounts, ...withoutAccounts } = rep.collections;
+				const { accounts: _accounts, ...withoutAccounts } = rep.models;
 				const noAccounts: Reader = {
 					as: 'caller',
-					authority: { ...rep, collections: withoutAccounts }
+					authority: { ...rep, models: withoutAccounts }
 				};
 				expect(
 					yield* Effect.flip(
@@ -992,11 +946,11 @@ describe('next query engine (PGlite)', () => {
 					as: 'caller',
 					authority: {
 						...rep,
-						collections: {
-							...rep.collections,
+						models: {
+							...rep.models,
 							orders: {
-								...rep.collections.orders!,
-								masks: { account: { t: 'const', value: false } }
+								...rep.models.orders!,
+								masks: { orders: { account: { t: 'const', value: false } } }
 							}
 						}
 					}
@@ -1220,7 +1174,7 @@ describe('next query engine (PGlite)', () => {
 			}).pipe(Effect.provide(Pristine.layer))
 	);
 	it.live(
-		'rule 13: a caller read is scoped at every level; out of scope is absent, or null through a one-relation',
+		"rule 13, decision 3: each level is scoped by its root's arms for that path, never the layer model's own grants; a layer out of scope is null (a ref) or absent (a list), its root stays",
 		() =>
 			Effect.gen(function* () {
 				yield* setup();
@@ -1242,10 +1196,41 @@ describe('next query engine (PGlite)', () => {
 				expect(orders.rows.every((r) => r.account !== null)).toBe(true);
 				expect(orders.rows.length).toBe(ORDERS.filter((o) => north.has(o.account)).length);
 				expect(lines.rows.length).toBe(LINES.length);
-				expect(lines.rows.filter((r) => r.order === null).length).toBe(
+				// lines' policy reads every order through `lines.order`: the orders grant is never consulted
+				expect(lines.rows.every((r) => r.order !== null)).toBe(true);
+				expect(far).toBeNull();
+				// a `where` on the layer narrows that layer only: a line of a southern order keeps its row, its order nulls
+				const northern: Pred = {
+					t: 'one',
+					rel: 'account',
+					target: 'accounts',
+					pred: { t: 'cmp', field: 'region', op: 'eq', arg: { _tag: 'Lit', value: 'north' } }
+				};
+				const narrowed: Reader = {
+					as: 'caller',
+					authority: {
+						...rep,
+						key: 'narrowed',
+						models: {
+							...rep.models,
+							lines: {
+								...rep.models['lines']!,
+								read: {
+									lines: [{ policy: 'rep', where: { t: 'const', value: true }, fields: 'all' }],
+									'lines.order': [{ policy: 'rep', where: northern, fields: 'all' }]
+								}
+							}
+						}
+					}
+				};
+				const [narrow] = (yield* run(
+					narrowed,
+					read(cat, 'lines', { all: true, select: { order: { select: { status: true } } } })
+				)) as [Page];
+				expect(narrow.rows.length).toBe(LINES.length);
+				expect(narrow.rows.filter((r) => r.order === null).length).toBe(
 					LINES.filter((l) => !north.has(ORDERS.find((o) => o.id === l.order)!.account)).length
 				);
-				expect(far).toBeNull();
 			}).pipe(Effect.provide(Pristine.layer))
 	);
 	it.live(
@@ -1311,11 +1296,11 @@ describe('next query engine (PGlite)', () => {
 				authority: {
 					...rep,
 					key: 'blind',
-					collections: {
-						...rep.collections,
+					models: {
+						...rep.models,
 						orders: {
-							...rep.collections['orders']!,
-							masks: { account: { t: 'const', value: false } }
+							...rep.models['orders']!,
+							masks: { orders: { account: { t: 'const', value: false } } }
 						}
 					}
 				}
@@ -1373,7 +1358,7 @@ describe('next query engine (PGlite)', () => {
 				yield* setup();
 				const [answer] = yield* run(
 					caller,
-					lowerRead(manifest, 'query', [
+					lowerRead(manifest, 'read', [
 						'orders',
 						{ search: { hue: {} }, select: { color: true }, limit: 2 }
 					])
@@ -1389,7 +1374,7 @@ describe('next query engine (PGlite)', () => {
 				expect(
 					(yield* run(
 						caller,
-						lowerRead(manifest, 'query', ['orders', { search: { hue: {} }, limit: 0 }])
+						lowerRead(manifest, 'read', ['orders', { search: { hue: {} }, limit: 0 }])
 					))[0]
 				).toEqual({ rows: [], next: null });
 				const north = new Set(ACCOUNTS.filter((a) => a.region === 'north').map((a) => a.id));
@@ -1409,7 +1394,7 @@ describe('next query engine (PGlite)', () => {
 			}).pipe(Effect.provide(Pristine.layer))
 	);
 	it.live(
-		'search: rows matching every word rank first; a collection without searchable fields refuses',
+		'search: rows matching every word rank first; a model without searchable fields refuses',
 		() =>
 			Effect.gen(function* () {
 				yield* setup();

@@ -23,7 +23,7 @@ export { frameworkText } from '../i18n.ts';
 type PublicClient = Bolt & {
 	readonly org: { readonly name: string; readonly logo: string | null };
 	readonly device: DeviceApi;
-	href(app: string, page?: string, record?: { collection: string; id: string }): string;
+	href(app: string, page?: string, record?: { model: string; id: string }): string;
 };
 let current: PublicClient | null = null;
 const client = (): PublicClient => {
@@ -196,11 +196,11 @@ export const hydratePublicPage = <D>(
 				),
 			org: { name: props.boot.workspace.name, logo: props.boot.workspace.logo ?? null },
 			device: resolveDevice(),
-			href: (app: string, page?: string, record?: { collection: string; id: string }) => {
+			href: (app: string, page?: string, record?: { model: string; id: string }) => {
 				const path = `${props.boot.base}/app/${app}${page === undefined ? '' : `/${page}`}`;
 				return record === undefined
 					? path
-					: `${path}?record=${encodeURIComponent(record.collection)}/${encodeURIComponent(record.id)}`;
+					: `${path}?record=${encodeURIComponent(record.model)}/${encodeURIComponent(record.id)}`;
 			}
 		});
 		current = installed;

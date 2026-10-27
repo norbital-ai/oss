@@ -13,13 +13,13 @@ logic and tenant presentation decisions in the workspace that uses them.
 | ------------------- | ---------------------------------------------------------------------------------------- |
 | Design foundation   | Tokens, base styles, typography, colour, editor themes, logos, and favicons.             |
 | Portable primitives | Buttons, cards, dialogs, inputs, layout primitives, navigation, and feedback components. |
-| Views               | Table, Board, Form, RecordShell and the other collection views of RFC §3.6.              |
+| Views               | Table, Board, Form, RecordShell and the other model views of RFC §3.6.              |
 
 ## Boundaries
 
 Entries and the base stylesheet are listed in the [package README](../README.md).
 
-- Keep tenant-specific workflows, data fetching, collection hooks, and one-off visual treatment out of
+- Keep tenant-specific workflows, data fetching, model hooks, and one-off visual treatment out of
   this package.
 
 Source follows component functions: tables, boards, records, relations, approvals, runs, logs,
@@ -75,7 +75,7 @@ The controller retains its field permissions, state locks, drafts and native chi
 
 ## Toolbar actions
 
-The view toolbar's ⚡ menu derives its standard rows from the collection's exposure to the viewer, with no page
+The view toolbar's ⚡ menu derives its standard rows from the model's exposure to the viewer, with no page
 configuration: callables and model syncs (remote reads, file Import, Download template and Export),
 Export CSV, "Update selected records" (declared and permitted update fields) and "Delete selected records" (declared and
 permitted delete). An undeclared or unpermitted row is absent. It watches an import run to its
@@ -105,7 +105,7 @@ Update and delete are disabled with "Select records first" until records are sel
 naming the count and that it cannot be undone, then deletes each record on its own and reports the result:
 "3 deleted" or "3 deleted, 1 kept: <refusal>".
 
-Update selected records offers the collection's permitted update fields, excluding masked, hidden, derived and
+Update selected records offers the model's permitted update fields, excluding masked, hidden, derived and
 readonly fields. Check each field to include it, enter its value, then apply once to the selected IDs.
 Unchecked fields stay untouched; explicit false, zero and null values are retained. The native update
 enforces every record's grants and state restrictions and reports refusals or pending approval in the menu.
@@ -141,8 +141,8 @@ line wrapping anywhere else.
 
 ## Custom views
 
-`CustomView` takes an optional `collection`: the collection its rows stand for (a roster grid of `roster_entry`). With
-it, the ⚡ menu offers that collection's callables and model syncs, scoped by `toolbar.context`, the title defaults to
+`CustomView` takes an optional `model`: the model its rows stand for (a roster grid of `roster_entry`). With
+it, the ⚡ menu offers that model's callables and model syncs, scoped by `toolbar.context`, the title defaults to
 its label, and New opens its create (`toolbar.new: false` hides it). Search, filter and sort stay on the view's own rows
 and columns.
 
@@ -160,7 +160,7 @@ checkbox selects every loaded card across its lanes and pages, including cards o
 also has its own checkbox; its other content still opens the record and supports dragging. Once the loaded records are
 selected, "Select all N matching" adds every matching ID with one id-only read. A searching board offers "Select all"
 without a count. Authored board lanes also constrain that read, so it cannot select records outside the displayed lanes.
-Selection survives paging and clears when its collection, scope, filter, sort or search changes, or a successful action
+Selection survives paging and clears when its model, scope, filter, sort or search changes, or a successful action
 settles. Changing a table's page size also clears it. Clearing or changing a board's selection scope discards an earlier
 select-all response that arrives later.
 

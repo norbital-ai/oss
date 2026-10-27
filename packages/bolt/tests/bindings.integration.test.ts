@@ -4,7 +4,7 @@ import { randomBytes, randomUUID } from 'node:crypto';
 import * as NodeCrypto from '@effect/platform-node/NodeCrypto';
 import { expect, it } from '@effect/vitest';
 import { Context, Effect, Layer, Option, Redacted, Result, Schema } from 'effect';
-import { HttpServerRequest, HttpServerResponse } from 'effect/unstable/http';
+import { HttpServerRequest, HttpServerResponse } from 'effect/http';
 import { decodeManifest } from '../src/engine/manifest.ts';
 import { credentials } from '../src/engine/integrations/credentials.ts';
 import { integrationLinks } from '../src/engine/integrations/links.ts';
@@ -32,13 +32,10 @@ const manifest = Result.getOrThrow(
 			}
 		},
 		relationships: {},
-		collections: {
+		exposures: {
 			notes: {
-				read: { fields: 'all' },
-				create: { input: { columns: ['title', 'due', 'photo'] } },
-				queries: {
-					today: { description: 'The workspace day', input: {}, output: { kind: 'text' } }
-				}
+				read: { notes: { fields: 'all' } },
+				create: { columns: { notes: ['title', 'due', 'photo'] }, transform: true }
 			}
 		},
 		integrations: {},
@@ -46,7 +43,7 @@ const manifest = Result.getOrThrow(
 		policies: {
 			reader: {
 				description: 'Reads due notes',
-				grants: { notes: { read: { where: { due: { lte: TODAY } } } } }
+				grants: { notes: { read: { notes: { where: { due: { lte: TODAY } } } } } }
 			}
 		},
 		teams: { Readers: { name: 'Readers', policies: ['reader'] } },
@@ -60,7 +57,7 @@ const manifest = Result.getOrThrow(
 	})
 );
 const guest = program(
-	`export default { collection: { notes: { bodies: { queries: { today: function* (input, ctx) { return ctx.today; } } } } } };`
+	`export default { model: { notes: { bodies: { create: function* (rows, ctx) { return rows.map((row) => row.title === 'stamp' ? { ...row, title: ctx.today } : row); } } } } };`
 );
 const json = (response: Response) =>
 	Effect.tryPromise({
@@ -110,17 +107,24 @@ it.live(
 						])
 						.pipe(Effect.map((rows) => rows[0]?.rows[0]?.['due']));
 
-				// `/q`: a collection query's body sees the workspace day
+				// a write callback's body sees the workspace day
 				expect(
-					yield* json(yield* post('/__bolt/q', { reads: [{ m: 'query', a: ['notes.today', {}] }] }))
-				).toEqual({ answers: [TODAY] });
+					yield* json(
+						yield* post('/__bolt/act', {
+							callable: 'notes.create',
+							input: [{ title: 'stamp' }],
+							issuedAt: NOW
+						})
+					)
+				).toMatchObject({ outcome: { kind: 'committed' } });
+				expect(yield* due(TODAY)).toBe(TODAY);
 
 				// `/act`: a `{ today }` default lands on the workspace day
 				expect(
 					yield* json(
 						yield* post('/__bolt/act', {
 							callable: 'notes.create',
-							input: { title: 'defaulted' },
+							input: [{ title: 'defaulted' }],
 							issuedAt: NOW
 						})
 					)
@@ -153,11 +157,11 @@ it.live(
 					yield* json(
 						yield* post('/__bolt/act', {
 							callable: 'notes.create',
-							input: {
+							input: [{
 								title: 'held',
 								due: TODAY,
 								photo: { id: photo.id, name: photo.name, mime: photo.mime }
-							},
+							}],
 							issuedAt: NOW
 						})
 					)

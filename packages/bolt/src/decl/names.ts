@@ -4,7 +4,7 @@
 import type { SystemNames } from '../system/index.ts';
 import type { BuiltinFields } from './builtin-fields.ts';
 import type { KeyFor, Simplify, ValueOf } from './fields.ts';
-import type { CollectionSpec, ModelSpec, NullableOfExpr } from './model.ts';
+import type { ExposureSpec, ModelSpec, NullableOfExpr } from './model.ts';
 import type { ApprovalStep } from './access/policy.ts';
 import type { CurrencyCode, Id, RecordRef } from './values.ts';
 
@@ -25,8 +25,10 @@ type NamesShape = {
 	models: { [model: string]: ModelSpec };
 	/** Each ref field, keyed `'<model>.<field>'` (`splitModel(name, literal).relationships`). */
 	relationships: { [key: `${string}.${string}`]: RelationshipSpec };
-	/** Each exposed model's exposure (`splitModel(name, literal).collection`); a model without `read` has none. */
-	collections: { [collection: string]: CollectionSpec };
+	/** Each exposed model's exposure (`splitModel(name, literal).exposure`); a model without `read` has none. */
+	exposures: { [model: string]: ExposureSpec };
+	/** Each exposed model's declared layer paths below its root → the model behind each (`layerModels`). */
+	layers: { [model: string]: { [path: string]: string } };
 	/** Each `src/integration/<name>/+integration.ts`: the workspace's definitions (bolt's own are `SystemNames`). */
 	integrations: { [integration: string]: unknown };
 	/** Each `src/agent/envoy/+<id>.envoy.ts`. */
@@ -71,27 +73,27 @@ export type RelationshipSpec = {
 };
 
 // The built-in layer (`src/system/**`, X-18): its models are declared as a workspace's are and its index holds the same
-// three parts. Its collections are the exposed system models; its private models (sys_session, sys_challenge,
+// three parts. Its models are the exposed system models; its private models (sys_session, sys_challenge,
 // sys_config) declare no `read`, so no author position names them.
 type SystemModels = SystemNames['models'];
-/** A built-in layer model: a system collection's, or one of the engine's private models. */
+/** A built-in layer model: a system model's, or one of the engine's private models. */
 export type SystemModelName = keyof SystemModels & string;
-/** The system collections (X-18). */
-export type SystemName = keyof SystemNames['collections'] & string;
+/** The system models (X-18). */
+export type SystemName = keyof SystemNames['exposures'] & string;
 
 type Models = NamesPart<'models'>;
-type Colls = NamesPart<'collections'>;
+type Exposed = NamesPart<'exposures'>;
 
 /** An authored model (`src/data/model/<m>/+model.ts`). */
-export type ModelName = keyof Models & string;
-/** Anything a ref field or an `Id<>` may name: authored models and system collections. */
-export type TargetName = ModelName | SystemName;
-/** Every surface addresses collections (P9): authored ones, plus the system collections. */
-export type CollectionName = (keyof Colls & string) | SystemName;
+export type AuthoredModelName = keyof Models & string;
+/** Anything a ref field or an `Id<>` may name: authored models and system models. */
+export type TargetName = AuthoredModelName | SystemName;
+/** Every surface addresses models (P9): authored ones, plus the system models. */
+export type ModelName = (keyof Exposed & string) | SystemName;
 /** Ledgers (X-18): an `Id<>` target, never granted, read by server code, written or triggered on. */
 export type Ledger = 'sys_run';
-/** A collection a trigger or a read may name: every collection but the ledgers. */
-export type ReadableName = Exclude<CollectionName, Ledger>;
+/** A model a trigger or a read may name: every model but the ledgers. */
+export type ReadableName = Exclude<ModelName, Ledger>;
 /** Every custom field: the built-ins (`money`, `file`, `point`, `phone`) and the workspace's (`src/data/custom_field/<f>/`), one namespace. */
 type CustomFields = BuiltinFields & NamesPart<'customFields'>;
 /** A custom field name a model may store as `{ kind: 'custom', of }`: a built-in's or the workspace's own. */
@@ -134,7 +136,7 @@ export type CustomShape<F> = F extends keyof CustomFields
 		: never
 	: never;
 
-type ModelOf<M> = M extends ModelName
+type ModelOf<M> = M extends AuthoredModelName
 	? Models[M]
 	: M extends SystemModelName
 		? SystemModels[M]
@@ -160,7 +162,7 @@ type ComputedEntry<C, P extends keyof C, F> = C[P] extends { kind: infer K; expr
 
 /** A name parameter's check. Name parameters are constrained to `string` and checked through `Is<N, Names>`: while a
  * call is inferred, its literal arguments are typed against the uninstantiated `Where<C>`, `Select<C>`, `ActInput<N>`
- * or collection spec, and a constraint over the whole names index made TS expand every collection for each literal
+ * or model spec, and a constraint over the whole names index made TS expand every model for each literal
  * (G1 scale fixture: ~40 ms per nested literal). */
 export type Is<N, Names> = N extends Names ? N : Names;
 
@@ -285,7 +287,7 @@ export type SystemColumns<M> = M extends SystemModelName
 		};
 type ColumnsOf<M> = FieldsOf<M> & ComputedOf<M> & SystemColumns<M>;
 // Cache concrete columns; keep the original intersection semantics for union names.
-type ColumnIndex = { [M in ModelName | SystemModelName]: ColumnsOf<M> };
+type ColumnIndex = { [M in AuthoredModelName | SystemModelName]: ColumnsOf<M> };
 /** Every scalar column of `M` by kind: fields, computed values, system columns (FKs are separate: `OneRels`). */
 export type Columns<M> =
 	IsUnion<M> extends false
@@ -296,7 +298,7 @@ export type Columns<M> =
 export type ColumnName<M> = keyof Columns<M> & string;
 // Cache the shared own-field map; broad, union and never names retain their original intersection.
 type OwnColumnsOf<M> = FieldsOf<M> & ComputedOf<M>;
-type OwnColumnIndex = { [M in ModelName | SystemModelName]: OwnColumnsOf<M> };
+type OwnColumnIndex = { [M in AuthoredModelName | SystemModelName]: OwnColumnsOf<M> };
 type OwnColumns<M> = [M] extends [never]
 	? OwnColumnsOf<M>
 	: unknown extends M
@@ -350,31 +352,80 @@ type WritableFieldOf<M, F = FieldsOf<M>, Keys extends keyof F & string = keyof F
 	string;
 
 // ── exposure (R1): what a model's `read` admits ──
-// a system collection is typed by its declaration too (sys_integration's create and update allowlists)
-type SpecOf<C> = C extends keyof Colls
-	? Colls[C]
+// a system model is typed by its declaration too (sys_integration's create and update allowlists)
+type SpecOf<C> = C extends keyof Exposed
+	? Exposed[C]
 	: C extends SystemName
-		? SystemNames['collections'][C]
-		: { read: { fields: 'all' } };
+		? SystemNames['exposures'][C]
+		: { read: { readonly [path: string]: { fields: 'all' } } };
 type ReadSpec<C> = SpecOf<C> extends { read: infer R } ? R : never;
-/** Fields of `C` any grant can ever see (system columns always). */
+type RootSpec<C> = ReadSpec<C> extends infer R ? (C extends keyof R ? R[C] : never) : never;
+/** Fields of `C`'s root layer any grant can ever see (system columns always). */
 export type ReadField<C> =
-	| (ReadSpec<C> extends { fields: 'all' }
+	| (RootSpec<C> extends { fields: 'all' }
 			? FieldName<C>
-			: ReadSpec<C> extends { fields: readonly (infer F)[] }
+			: RootSpec<C> extends { fields: readonly (infer F)[] }
 				? F & string
 				: never)
 	| keyof SystemColumns<C>;
-/** Relations of `C` a Where, a select or a view may cross. */
-export type ReadRelation<C> =
-	ReadSpec<C> extends { relations: 'all' }
-		? RelNameOf<C>
-		: ReadSpec<C> extends { relations: readonly (infer R)[] }
-			? R & string
-			: ReadSpec<C> extends { fields: 'all' }
-				? RelNameOf<C>
-				: never;
-export type CollectionSpecOf<C> = SpecOf<C>;
+/**
+ * Relations of `C` a `Where` may cross to filter (into a model with `read`, over that model's root fields). A filter
+ * through a declared layer is masked by the root's policy; through any other relation it reads the target's access point.
+ */
+export type ReadRelation<C> = RelNameOf<C>;
+export type ExposureSpecOf<C> = SpecOf<C>;
+
+// ── layer paths (decision 1): generated literal unions, so a path's type is a lookup, never a recursive walk ──
+type Layers = NamesPart<'layers'>;
+/** The read paths `C` declares: `'<C>'` and each `'<C>.<rel>…'` layer of its `read`. */
+export type ReadPath<C> = keyof ReadSpec<C> & string;
+type WriteLayers<C, V> = SpecOf<C> extends { [P in V & string]: { columns: infer L } } ? L : {};
+/** The write paths `C`'s `create` or `update` declares: `'<C>'` and each child layer of its `columns`. */
+export type WritePath<C, V extends 'create' | 'update'> = keyof WriteLayers<C, V> & string;
+/** The root of a path: the model before its first dot. */
+export type RootOf<P> = P extends `${infer C}.${string}` ? C : P;
+/** The model behind path `P` of `C`'s declaration (`'orders.lines'` → `'order_lines'`). */
+export type PathModel<C, P> = P extends C
+	? C
+	: C extends keyof Layers
+		? P extends keyof Layers[C]
+			? Layers[C][P] & TargetName
+			: never
+		: never;
+type LayerSpec<C, P> = ReadSpec<C> extends infer R ? R[P & keyof R] : never;
+/** The fields layer `P` of `C`'s `read` exposes (system columns always): what its `where`, `fields` and output name. */
+export type LayerField<C, P> =
+	| (LayerSpec<C, P> extends { fields: 'all' }
+			? FieldName<PathModel<C, P>>
+			: LayerSpec<C, P> extends { fields: readonly (infer F)[] }
+				? F & string
+				: never)
+	| keyof SystemColumns<PathModel<C, P>>;
+/** The columns layer `P` of `C`'s `create` or `update` admits. */
+export type LayerColumn<C, V extends 'create' | 'update', P> =
+	WriteLayers<C, V> extends infer L
+		? P extends keyof L
+			? L[P] extends readonly (infer F)[]
+				? F & string
+				: never
+			: never
+		: never;
+/** The columns layer `P` of `C`'s `create` fills when the writer omits them (`create.filled`). */
+export type LayerFilled<C, P> = SpecOf<C> extends { create: { filled: infer L } }
+	? P extends keyof L
+		? L[P] extends readonly (infer F)[]
+			? F & string
+			: never
+		: never
+	: never;
+/** The relation names one segment below `P` among `Paths`: `SubLayer<'o' | 'o.lines' | 'o.lines.product', 'o'>` = `'lines'`. */
+export type SubLayer<Paths, P extends string> = Paths extends `${P}.${infer S}`
+	? S extends `${string}.${string}`
+		? never
+		: S
+	: never;
+/** Every prefix of each path: naming a deep path implies its parents. */
+export type Prefixes<P> = P extends `${infer H}.${infer T}` ? H | `${H}.${Prefixes<T>}` : P;
 type SyncsOf<C> = SpecOf<C> extends { syncs: infer S } ? S : {};
 /** The syncs model `C` declares. */
 export type SyncName<C> = keyof SyncsOf<C> & string;
@@ -393,8 +444,8 @@ type ReadSyncName<C, S = SyncsOf<C>> = {
 	string;
 /** A remote sync that reads, as a run a policy's `automations` may start and `bolt.start` runs: `'<model>.sync.<name>'`. */
 export type SyncCallable = {
-	[C in CollectionName]: `${C}.sync.${ReadSyncName<C> | FileSyncName<C>}`;
-}[CollectionName];
+	[C in ModelName]: `${C}.sync.${ReadSyncName<C> | FileSyncName<C>}`;
+}[ModelName];
 
 // ── search indexes (`search.indexes` of the models part) ──
 type IndexesOf<M> = ModelOf<M> extends { search: { indexes: infer X } } ? X : {};
@@ -436,33 +487,52 @@ export type Masked = {
 /** The canonical wire marker for a field omitted by the reading caller's grants. */
 export const isMasked = (value: unknown): value is Masked =>
 	typeof value === 'object' && value !== null && '$masked' in value && value.$masked === true;
-// What one grant's read admits: its `fields`, or 'all'. An identity grant writes `fields` beside `read`.
-type Admits<G> = G extends
-	{ read: { fields: readonly (infer F)[] } } | { read: unknown; fields: readonly (infer F)[] }
-	? F
-	: 'all';
+// What one grant's read admits on each declared path of `C`: a named layer's `fields`, else 'all' (`read: true` and a
+// layer the grant does not name read in full). An identity grant writes `fields` beside `read`.
+type PathAdmits<C extends string, G> = G extends { read: unknown; fields: readonly (infer F)[] }
+	? { path: C; admits: F }
+	: G extends { read: infer R }
+		? {
+				[P in ReadPath<C>]: {
+					path: P;
+					admits: R extends object
+						? P extends keyof R
+							? R[P] extends { fields: readonly (infer F)[] }
+								? F
+								: 'all'
+							: 'all'
+						: 'all';
+				};
+			}[ReadPath<C>]
+		: never;
 type Policies = NamesPart<'policies'>;
-/** Fields of `C` some policy's read grant leaves out: `Value | Masked` to every caller, since any caller may hold it. */
-type Maskable<C> = (C extends Granted ? ReadGrants[C] : never) extends infer X
+/**
+ * Fields of layer `P` of `C` some policy's read grant leaves out: `Value | Masked` to every caller, since any caller may
+ * hold it. Only the root's policy masks a layer (decision 3).
+ */
+export type Maskable<C, P = C> = (P extends Granted ? ReadGrants[P] : never) extends infer X
 	? X extends { admits: infer F }
 		? 'all' extends F
 			? never
-			: Exclude<ReadField<C>, F | keyof SystemColumns<C>>
+			: Exclude<LayerField<C, P>, F | keyof SystemColumns<PathModel<C, P>>>
 		: never
 	: never;
-// Every policy's read grants grouped by collection in one scan, `{ admits }` per grant: scanning every policy for each
-// collection was quadratic in the workspace.
-type ReadGrants = { [X in GrantOf<keyof Policies> as X['c']]: { admits: X['admits'] } };
+// Every policy's read grants grouped by path in one scan, `{ admits }` per grant: scanning every policy for each
+// model was quadratic in the workspace. A path names its root, so paths of different roots never collide.
+type ReadGrants = { [X in GrantOf<keyof Policies> as X['path']]: { admits: X['admits'] } };
 type GrantOf<P> = P extends keyof Policies
 	? Policies[P] extends { grants: infer G }
-		? { [C in keyof G & string]: { c: C; admits: Admits<G[C]> } }[keyof G & string]
+		? { [C in keyof G & string]: PathAdmits<C, G[C]> }[keyof G & string]
 		: never
 	: never;
 type Granted = keyof ReadGrants;
 /** A caller's value of column or FK `P` of `C`. */
 export type CallerValue<C, P> =
 	P extends Maskable<C> ? ColumnValue<C, P> | Masked : ColumnValue<C, P>;
-/** A caller's row of collection `C`: its exposed fields (maskable ones `| Masked`), FK ids and system columns (rule 10). */
+/** A caller's value of column or FK `F` on layer `P` of `C`, masked by the root's policies. */
+export type LayerValue<C, P, F> =
+	F extends Maskable<C, P> ? ColumnValue<PathModel<C, P>, F> | Masked : ColumnValue<PathModel<C, P>, F>;
+/** A caller's row of model `C`: its exposed fields (maskable ones `| Masked`), FK ids and system columns (rule 10). */
 export type Row<C> = RowOf<C> & RowState;
 /** What a caller's read attaches to each root row beside its fields, whatever it selects (§4.2, rule 46b). */
 export type RowState = {

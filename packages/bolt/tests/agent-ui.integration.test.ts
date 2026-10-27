@@ -32,7 +32,9 @@ const manifest = Result.getOrThrow(
 			quotes: { description: 'A quote', label: 'title', fields: { title: { kind: 'text' } } }
 		},
 		relationships: {},
-		collections: { quotes: { read: { fields: 'all' }, create: { input: { columns: ['title'] } } } },
+		exposures: {
+			quotes: { read: { quotes: { fields: 'all' } }, create: { columns: { quotes: ['title'] } } }
+		},
 		policies: { rep: { description: 'Rep', grants: { quotes: { read: true } } } },
 		envoys: {
 			field: {
@@ -271,7 +273,7 @@ describe('the agent UI actions', () => {
 					yield* Effect.flip(
 						act('ann', 'sys_message.file', {
 							message,
-							about: { collection: 'quotes', id: 'missing' }
+							about: { model: 'quotes', id: 'missing' }
 						})
 					)
 				).toMatchObject({ _tag: 'ActRefused', code: 'notFound' });
@@ -289,13 +291,13 @@ describe('the agent UI actions', () => {
 					params: []
 				});
 				expect(
-					yield* act('ann', 'sys_message.file', { message, about: { collection: 'quotes', id: q } })
+					yield* act('ann', 'sys_message.file', { message, about: { model: 'quotes', id: q } })
 				).toMatchObject({ kind: 'committed' });
 				expect(
 					(yield* t.db.read([
 						{ text: `SELECT about FROM sys_message WHERE id = $1`, params: [message] }
 					]))[0]!.rows[0]!['about']
-				).toEqual({ collection: 'quotes', id: q });
+				).toEqual({ model: 'quotes', id: q });
 			})
 		)
 	);

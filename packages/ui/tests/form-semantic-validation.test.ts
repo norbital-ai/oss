@@ -141,6 +141,6 @@ it.live('submit sends nothing while an issue exists; unregister removes the rule
 		assert.deepEqual(form.semanticErrors, []);
 		assert.equal(form.canSave, true);
 		assert.equal((yield* form.submit())?.kind, 'committed');
-		assert.deepEqual(acts, [{ title: 'bad' }]);
+		assert.deepEqual(acts, [[{ title: 'bad' }]]);
 	})
 );

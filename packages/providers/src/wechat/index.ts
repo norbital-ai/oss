@@ -1,6 +1,6 @@
 import { Cache, Effect, Exit, Option, Random, Schema } from 'effect';
 import { createDecipheriv, createHash } from 'node:crypto';
-import { HttpClient, HttpClientRequest, HttpClientResponse } from 'effect/unstable/http';
+import { HttpClient, HttpClientRequest, HttpClientResponse } from 'effect/http';
 import type { DriverOpen, Json, OutboundAttachment } from '@norbital-ai/bolt/engine';
 import type { ProviderDef } from '../abi.ts';
 import { answerFailure, ProviderUnavailable } from '../errors.ts';
@@ -250,7 +250,8 @@ export function wechat(): ProviderDef {
 					}
 					return { providerId: `wx-${yield* Random.nextInt}` };
 				}),
-				typing: (to: string) => custom('typing', { touser: to, command: 'Typing' }),
+				typing: (to: string, on: boolean) =>
+					custom('typing', { touser: to, command: on ? 'Typing' : 'CancelTyping' }),
 				webhook: Effect.fn('WeChat.webhook')(function* (request: Request) {
 					if (cred === null) return new Response(null, { status: 404 });
 					const q = new URL(request.url).searchParams,

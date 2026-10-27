@@ -13,14 +13,6 @@ import { manifest as base } from './write-fixture.ts';
 const NOW = '2026-10-24T08:00:00.000Z';
 const REQUESTER = '0199a000-0000-7000-8000-000000000001';
 const REVIEWER = '0199a000-0000-7000-8000-000000000002';
-const childColumns = { columns: ['name', 'trace'] };
-const children = {
-	create: childColumns,
-	update: childColumns,
-	delete: {},
-	link: {},
-	unlink: {}
-};
 const operation = {
 	op: { kind: 'enum', values: ['create', 'update', 'delete'] },
 	code: { kind: 'text', optional: true },
@@ -47,32 +39,44 @@ const manifest: EngineManifest = {
 		}
 	},
 	relationships: { 'children.parent': { to: 'parents', inverse: 'children', optional: true } },
-	collections: {
+	exposures: {
 		parents: {
-			read: { fields: 'all' },
+			read: { parents: { fields: 'all' } },
 			create: {
-				input: { columns: ['code', 'name', 'trace'], with: { children } },
+				columns: { parents: ['code', 'name', 'trace'], 'parents.children': ['name', 'trace'] },
 				transform: true
 			},
 			update: {
-				input: { columns: ['code', 'name', 'trace'], with: { children } },
+				columns: { parents: ['code', 'name', 'trace'], 'parents.children': ['name', 'trace'] },
 				transform: true
 			},
 			delete: { check: true }
 		},
 		children: {
-			read: { fields: 'all' },
-			create: { input: { columns: ['name', 'trace', 'parent'] }, transform: true },
-			update: { input: { columns: ['name', 'trace', 'parent'] }, transform: true },
+			read: { children: { fields: 'all' } },
+			create: { columns: { children: ['name', 'trace', 'parent'] }, transform: true },
+			update: { columns: { children: ['name', 'trace', 'parent'] }, transform: true },
 			delete: { check: true }
 		}
 	},
 	policies: {
 		requester: {
 			description: 'Requests a parent write',
-			grants: { parents: { read: true, create: { approval: true }, update: { approval: true } } }
+			grants: { parents: { read: true, create: { check: true }, update: { check: true } } }
 		},
-		reviewer: { description: 'Reviews parents', grants: { parents: { read: true } } }
+		reviewer: { description: 'Reviews parents', grants: { parents: { read: true } } },
+		// authority per access point: a child written through the `parents.children` layer is judged by the parent's grant
+		parent_writer: {
+			description: 'Creates parents; its own child grant denies every row but `never`',
+			grants: {
+				parents: { read: true, create: true },
+				children: { read: true, create: { check: true } }
+			}
+		},
+		child_writer: {
+			description: 'Creates children directly but may not create parents',
+			grants: { parents: { read: true }, children: { read: true, create: true } }
+		}
 	},
 	teams: { requesters: ['requester'], reviewers: ['reviewer'] },
 	automations: {
@@ -83,15 +87,16 @@ const source = `function* mutate(input, ctx) {
 	const payload = input.op === 'create' ? { code: input.code, name: input.name }
 		: input.op === 'update' ? { target: input.target, set: { name: input.name } }
 		: { target: input.target };
-	yield* ctx.act('parents.' + input.op, payload);
+	yield* ctx.act('parents.' + input.op, [payload]);
 }
 const create = (rows) => rows.map((row) => ({ ...row, name: row.name.trim(), trace: 'C' }));
 const update = (changes) => changes.map(({ before, set }) => ({ ...set,
 	...(set.name === undefined ? {} : { name: set.name.trim() }), trace: (before.trace ?? '') + 'U' }));
 export default {
-	collection: {
+	model: {
 		parents: { bodies: {
-			create: function* (rows) { return create(rows); },
+			// a batch is one call: each row carries the size of the batch the callback saw
+			create: function* (rows) { return create(rows).map((row) => rows.length > 1 ? { ...row, trace: 'C' + rows.length } : row); },
 			update: function* (changes) { return update(changes); },
 			delete: function* (rows, ctx) { if (rows.length) yield* ctx.refuse('parent delete callback'); }
 		} },
@@ -102,10 +107,15 @@ export default {
 		} }
 	},
 	automation: { mutate: { body: function* (input, ctx) { yield* mutate(input, ctx); } } },
-	policy: { requester: { grants: { parents: {
-		create: { approval: (write, flow) => flow.step('Review', { users: ['${REVIEWER}'] }) },
-		update: { approval: (write, flow) => flow.step('Review', { users: ['${REVIEWER}'] }) }
-	} } } }
+	policy: {
+		requester: { grants: { parents: {
+			create: { check: function* (rows, ctx) { return ctx.approve((flow) => flow.step('Review', { users: ['${REVIEWER}'] })); } },
+			update: { check: function* (changes, ctx) { return ctx.approve((flow) => flow.step('Review', { users: ['${REVIEWER}'] })); } }
+		} } },
+		parent_writer: { grants: { children: { create: {
+			check: function* (rows, ctx) { return rows.every((row) => row.name === 'never') ? ctx.allow() : ctx.deny('Children are never created directly.', { field: 'name' }); }
+		} } } }
+	}
 };`;
 const guest = program(source);
 const Parent = Schema.Struct({
@@ -126,7 +136,7 @@ const committed = (outcome: Outcome) => {
 	return outcome;
 };
 const idOf = (outcome: Outcome, model = 'parents'): string => {
-	const row = committed(outcome).records.find((record) => record.collection === model);
+	const row = committed(outcome).records.find((record) => record.model === model);
 	if (row === undefined) throw new Error(`The write returned no ${model} record`);
 	return row.id;
 };
@@ -225,13 +235,13 @@ describe('write callbacks through real entry paths', () => {
 			Effect.gen(function* () {
 				const f = yield* fixture;
 				const id = idOf(
-					(yield* f.act('parents.create', { code: 'RESTORE', name: 'First' })).outcome
+					(yield* f.act('parents.create', [{ code: 'RESTORE', name: 'First' }])).outcome
 				);
 				committed(
-					(yield* f.act('parents.update', { target: id, set: { name: 'Second' } })).outcome
+					(yield* f.act('parents.update', [{ target: id, set: { name: 'Second' } }])).outcome
 				);
 				committed(
-					(yield* f.act('history.restore', { collection: 'parents', record: id, revision: 1 }))
+					(yield* f.act('history.restore', { model: 'parents', record: id, revision: 1 }))
 						.outcome
 				);
 				expect(yield* f.parent(id)).toMatchObject({ name: 'First', trace: 'CUU', revision: 3 });
@@ -267,11 +277,11 @@ describe('write callbacks through real entry paths', () => {
 				).authority;
 				const created = (yield* f.act(
 					'parents.create',
-					{ code: 'REVIEW', name: '  Draft  ' },
+					[{ code: 'REVIEW', name: '  Draft  ' }],
 					requester
 				)).outcome;
 				if (created.kind !== 'pendingApproval') throw new Error(JSON.stringify(created));
-				const record = created.records.find((record) => record.collection === 'parents');
+				const record = created.records.find((record) => record.model === 'parents');
 				if (record === undefined) throw new Error('The approval create returned no parent');
 				expect(yield* f.parent(record.id)).toMatchObject({ name: 'Draft', trace: 'C' });
 				expect(
@@ -286,7 +296,7 @@ describe('write callbacks through real entry paths', () => {
 				expect(
 					(yield* f.act(
 						'parents.update',
-						{ target: record.id, set: { name: '  Clarified  ' } },
+						[{ target: record.id, set: { name: '  Clarified  ' } }],
 						requester
 					)).outcome
 				).toMatchObject({ kind: 'pendingApproval', requestId: created.requestId });
@@ -310,19 +320,23 @@ describe('write callbacks through real entry paths', () => {
 				Effect.gen(function* () {
 					const f = yield* fixture;
 					const created = committed(
-						(yield* f.act('parents.create', {
-							code: 'NESTED',
-							name: 'Parent',
-							children: { create: [{ name: 'Child' }] }
-						})).outcome
+						(yield* f.act('parents.create', [
+							{
+								code: 'NESTED',
+								name: 'Parent',
+								children: [{ name: 'Child' }]
+							}
+						])).outcome
 					);
 					const id = idOf(created);
 					const childId = idOf(created, 'children');
 					committed(
-						(yield* f.act('parents.update', {
-							target: id,
-							set: { children: { update: [{ target: childId, set: { name: '  Edited  ' } }] } }
-						})).outcome
+						(yield* f.act('parents.update', [
+							{
+								target: id,
+								set: { children: { update: [{ target: childId, set: { name: '  Edited  ' } }] } }
+							}
+						])).outcome
 					);
 					expect(yield* f.child(childId)).toMatchObject({
 						name: 'Edited',
@@ -330,29 +344,35 @@ describe('write callbacks through real entry paths', () => {
 						parent: id
 					});
 					const detached = idOf(
-						(yield* f.act('children.create', { name: 'Detached' })).outcome,
+						(yield* f.act('children.create', [{ name: 'Detached' }])).outcome,
 						'children'
 					);
 					committed(
-						(yield* f.act('parents.update', {
-							target: id,
-							set: { children: { link: [detached] } }
-						})).outcome
+						(yield* f.act('parents.update', [
+							{
+								target: id,
+								set: { children: { link: [detached] } }
+							}
+						])).outcome
 					);
 					expect(yield* f.child(detached)).toMatchObject({ trace: 'CU', parent: id });
 					committed(
-						(yield* f.act('parents.update', {
-							target: id,
-							set: { children: { unlink: [detached] } }
-						})).outcome
+						(yield* f.act('parents.update', [
+							{
+								target: id,
+								set: { children: { unlink: [detached] } }
+							}
+						])).outcome
 					);
 					expect(yield* f.child(detached)).toMatchObject({ trace: 'CUU', parent: null });
 					const before = yield* f.parent(id);
 					expect(
-						(yield* f.act('parents.update', {
-							target: id,
-							set: { name: 'Uncommitted', children: { delete: [childId] } }
-						})).outcome
+						(yield* f.act('parents.update', [
+							{
+								target: id,
+								set: { name: 'Uncommitted', children: { delete: [childId] } }
+							}
+						])).outcome
 					).toMatchObject({ kind: 'refused', message: 'child delete callback' });
 					expect(yield* f.parent(id)).toEqual(before);
 					expect(yield* f.child(childId)).toMatchObject({ name: 'Edited', trace: 'CU' });
@@ -367,32 +387,97 @@ describe('write callbacks through real entry paths', () => {
 				Effect.gen(function* () {
 					const f = yield* fixture;
 					const id = idOf(
-						(yield* f.act('parents.create', { code: 'NATURAL', name: 'Original' })).outcome
+						(yield* f.act('parents.create', [{ code: 'NATURAL', name: 'Original' }])).outcome
 					);
 					committed(
-						(yield* f.act('parents.upsert', { code: 'NATURAL', name: 'By key' }, f.admin, {
+						(yield* f.act('parents.upsert', [{ code: 'NATURAL', name: 'By key' }], f.admin, {
 							onConflict: 'update'
 						})).outcome
 					);
 					expect(yield* f.parent(id)).toMatchObject({ name: 'By key', trace: 'CU' });
 					committed(
-						(yield* f.act('parents.upsert', { id, name: 'By id' }, f.admin, {
+						(yield* f.act('parents.upsert', [{ id, name: 'By id' }], f.admin, {
 							onConflict: 'update'
 						})).outcome
 					);
 					expect(yield* f.parent(id)).toMatchObject({ name: 'By id', trace: 'CUU' });
 					committed(
-						(yield* f.act('parents.upsert', { code: 'NATURAL', name: 'Ignored' }, f.admin, {
+						(yield* f.act('parents.upsert', [{ code: 'NATURAL', name: 'Ignored' }], f.admin, {
 							onConflict: 'keep'
 						})).outcome
 					);
 					expect(yield* f.parent(id)).toMatchObject({ name: 'By id', trace: 'CUU' });
 					const added = idOf(
-						(yield* f.act('parents.upsert', { code: 'NEW', name: 'New' }, f.admin, {
+						(yield* f.act('parents.upsert', [{ code: 'NEW', name: 'New' }], f.admin, {
 							onConflict: 'update'
 						})).outcome
 					);
 					expect(yield* f.parent(added)).toMatchObject({ name: 'New', trace: 'C' });
+				})
+			)
+	);
+
+	it.live('a create of N rows reaches the create callback once, with all N rows', () =>
+		Effect.scoped(
+			Effect.gen(function* () {
+				const f = yield* fixture;
+				const outcome = committed(
+					(yield* f.act('parents.create', [
+						{ code: 'B1', name: 'One' },
+						{ code: 'B2', name: 'Two' },
+						{ code: 'B3', name: 'Three' }
+					])).outcome
+				);
+				const ids = outcome.records.filter((r) => r.model === 'parents').map((r) => r.id);
+				expect(ids).toHaveLength(3);
+				for (const id of ids) expect(yield* f.parent(id)).toMatchObject({ trace: 'C3' });
+			})
+		)
+	);
+
+	it.live('a single-row object is refused: a generated write takes an array of rows', () =>
+		Effect.scoped(
+			Effect.gen(function* () {
+				const f = yield* fixture;
+				expect(
+					(yield* f.act('parents.create', { code: 'SINGLE', name: 'One' })).outcome
+				).toMatchObject({ kind: 'refused', code: 'invalidInput' });
+			})
+		)
+	);
+
+	it.live(
+		"a with child is judged by its root's grant only: the child's own grant neither denies nor admits it",
+		() =>
+			Effect.scoped(
+				Effect.gen(function* () {
+					const f = yield* fixture;
+					const parentWriter = f.t.as(f.t.member(['parent_writer'])).authority;
+					const childWriter = f.t.as(f.t.member(['child_writer'])).authority;
+					const nested = (code: string) => [{ code, name: 'Parent', children: [{ name: 'Kid' }] }];
+					// the child grant's check alone refuses `Kid`; the parent's create grant admits the whole tree and the
+					// child's check never runs on that path
+					expect(
+						(yield* f.act('children.create', [{ name: 'Kid' }], parentWriter)).outcome
+					).toMatchObject({
+						kind: 'refused',
+						code: 'refused',
+						rule: 'parent_writer.children.create',
+						field: 'name'
+					});
+					const created = committed(
+						(yield* f.act('parents.create', nested('ROOT'), parentWriter)).outcome
+					);
+					expect(yield* f.child(idOf(created, 'children'))).toMatchObject({
+						name: 'Kid',
+						trace: 'C',
+						parent: idOf(created)
+					});
+					// a child grant that admits the row does not admit a tree the parent's grant refuses
+					committed((yield* f.act('children.create', [{ name: 'Kid' }], childWriter)).outcome);
+					expect(
+						(yield* f.act('parents.create', nested('DENIED'), childWriter)).outcome
+					).toMatchObject({ kind: 'refused', code: 'forbidden' });
 				})
 			)
 	);

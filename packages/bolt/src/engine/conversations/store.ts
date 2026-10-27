@@ -134,7 +134,7 @@ export function mark(
 	message: string,
 	mark:
 		| { readonly readBy: string }
-		| { readonly about: { readonly collection: string; readonly id: string } | null }
+		| { readonly about: { readonly model: string; readonly id: string } | null }
 ): string {
 	return msg(
 		c,
@@ -154,7 +154,7 @@ export const threadOf = Effect.fn('Messages.threadOf')(function* (
 		return typeof message['thread'] === 'string'
 			? message['thread']
 			: (fallback ??
-					(yield* crypto.randomUUIDv4.pipe(
+					(yield* crypto.randomUUIDv4().pipe(
 						Effect.mapError((error) =>
 							BoltError.make(
 								'unavailable',

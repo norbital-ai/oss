@@ -68,10 +68,18 @@ export function fileAttachments(
 			});
 			if (Option.isNone(stored)) return yield* refused('the file is not stored');
 			const mime = stored.value.mime,
-				bytes = yield* files.get(stored.value.key, MODEL_FILES.bytes),
-				name = ref.name ?? '';
-			if (as === 'image') {
-				if (!mime.startsWith('image/')) return yield* refused(`a ${mime} file is not an image`);
+				name = ref.name ?? '',
+				kind = /^(video|audio)\//.exec(mime)?.[1];
+			// a model views no video or audio: a plain answer, never bytes a provider would refuse
+			if (kind !== undefined)
+				return {
+					name,
+					mime,
+					unreadable: `${kind} attachment — cannot view; ask the sender to describe it or send a photo`
+				};
+			const bytes = yield* files.get(stored.value.key, MODEL_FILES.bytes);
+			// MIME owns visual reads: a model's format guess must not hide the original evidence.
+			if (mime.startsWith('image/')) {
 				return MODEL_IMAGE.test(mime)
 					? { mime, bytes }
 					: {
@@ -79,10 +87,9 @@ export function fileAttachments(
 							bytes: yield* imageJpeg(bytes, 2048).pipe(Effect.provideService(Images, images))
 						};
 			}
-			if (as === 'document') {
-				if (mime !== 'application/pdf') return yield* refused(`a ${mime} file is not a PDF`);
-				return { mime, bytes };
-			}
+			if (mime === 'application/pdf') return { mime, bytes };
+			if (as === 'image') return yield* refused(`a ${mime} file is not an image`);
+			if (as === 'document') return yield* refused(`a ${mime} file is not a PDF`);
 			if (mime === XLSX || name.toLowerCase().endsWith('.xlsx')) {
 				const workbook = yield* Effect.try({
 					try: () => ({ sheets: xlsxSheets(bytes), cells: xlsxCells(bytes, sheet) }),

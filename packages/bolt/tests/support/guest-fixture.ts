@@ -26,31 +26,25 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 const ENTRY = '\0bolt:fixture-entry',
 	INSTALL = '\0bolt:fixture-install';
 const edge = resolve(root, 'src/decl/runtime/guest.ts'),
-	bodies = resolve(root, 'src/decl/body.ts'),
-	policy = resolve(root, 'src/decl/access/policy.ts');
+	bodies = resolve(root, 'src/decl/body.ts');
 class GuestFixtureFailed extends Schema.TaggedError<GuestFixtureFailed>()('GuestFixtureFailed', {
 	message: Schema.String
 }) {}
 const entry = (sourceFile: string) => `import '${INSTALL}';
 import value from ${JSON.stringify(sourceFile)};
 import { attached } from ${JSON.stringify(bodies)};
-import { approvalFlow, snapshotOf } from ${JSON.stringify(policy)};
 const gen = (fn, at) => typeof fn === 'function' && Object.prototype.toString.call(fn) === '[object GeneratorFunction]' ? attached(fn, at) : fn;
-for (const c of Object.values(value.collection ?? {})) {
+for (const c of Object.values(value.model ?? {})) {
 	if (!c?.bodies) continue;
 	for (const key of ['create','update','delete','notify']) c.bodies[key] = gen(c.bodies[key], 1);
-	for (const [name, body] of Object.entries(c.bodies.queries ?? {})) c.bodies.queries[name] = gen(body,1);
 	for (const sync of Object.values(c.bodies.syncs ?? {})) {
 		for (const key of ['read','write']) sync[key] = gen(sync[key],1);
 		for (const [type, body] of Object.entries(sync.parse ?? {})) sync.parse[type] = gen(body,1);
 	}
 }
-for (const p of Object.values(value.policy ?? {})) for (const grant of Object.values(p.grants ?? {})) {
-	for (const op of ['create','update','delete']) if (typeof grant[op]?.approval === 'function') {
-		const approve = grant[op].approval;
-		grant[op].approval = (write) => snapshotOf(approve(write, approvalFlow()));
-	}
-}
+// a policy's write checks, as the compiler's \`__checks\` attaches them (\`policy.<p>.grants.<model>.<op>.check\`)
+for (const p of Object.values(value.policy ?? {})) for (const grant of Object.values(p.grants ?? {}))
+	for (const op of ['create','update','delete']) if (grant?.[op]?.check) grant[op].check = gen(grant[op].check, 1);
 for (const a of Object.values(value.automation ?? {})) a.body = gen(a.body,1);
 for (const page of Object.values(value.page ?? {})) page.body = gen(page.body,1);
 for (const i of Object.values(value.integration_definition ?? {})) if(i?.bodies) i.bodies.test = gen(i.bodies.test,0);
@@ -161,14 +155,14 @@ export const fixtureManifest = Result.getOrThrow(
 		workspace: { tz: 'UTC', locale: 'en' },
 		models: {},
 		relationships: {},
-		collections: {
-			a: { read: { fields: 'all' }, create: { input: { columns: [] } } },
-			b: { read: { fields: 'all' }, update: { input: { columns: [] } } },
+		exposures: {
+			a: { read: { a: { fields: 'all' } }, create: { columns: { a: [] } } },
+			b: { read: { b: { fields: 'all' } }, update: { columns: { b: [] } } },
 			t: {
-				read: { fields: 'all' },
-				create: { input: { columns: [] } }
+				read: { t: { fields: 'all' } },
+				create: { columns: { t: [] } }
 			},
-			jobs: { read: { fields: 'all' }, update: { input: { columns: [] } } }
+			jobs: { read: { jobs: { fields: 'all' } }, update: { columns: { jobs: [] } } }
 		},
 		policies: {},
 		automations: {

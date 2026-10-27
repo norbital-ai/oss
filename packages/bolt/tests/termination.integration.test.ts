@@ -40,7 +40,7 @@ const manifest = Result.getOrThrow(
 			}
 		},
 		relationships: {},
-		collections: { docs: { read: { fields: 'all' }, create: { input: { columns: ['title'] } } } },
+		exposures: { docs: { read: { docs: { fields: 'all' } }, create: { columns: { docs: ['title'] } } } },
 		policies: {
 			p: {
 				description: 'P',
@@ -119,7 +119,7 @@ describe('P38: every run ends, drains interrupt, loops prove progress', () => {
 	);
 
 	it.live(
-		'a seed pack loaded into a semantic collection queues the embed pass (a pack writes past the acts that would)',
+		'a seed pack loaded into a semantic model queues the embed pass (a pack writes past the acts that would)',
 		() =>
 			Effect.scoped(
 				Effect.gen(function* () {
@@ -312,7 +312,7 @@ describe('P38: every run ends, drains interrupt, loops prove progress', () => {
 						route = yield* routeFixture(context);
 					yield* actReply(route, t.as(t.admin).authority, {
 						callable: 'docs.create',
-						input: { title: 'desk' },
+						input: [{ title: 'desk' }],
 						issuedAt: t.clock.now()
 					});
 					const before = yield* sql(
@@ -352,7 +352,7 @@ describe('P38: every run ends, drains interrupt, loops prove progress', () => {
 						route = yield* routeFixture(context);
 					yield* actReply(route, t.as(t.admin).authority, {
 						callable: 'docs.create',
-						input: { title: 'desk' },
+						input: [{ title: 'desk' }],
 						issuedAt: t.clock.now()
 					});
 					yield* t.db.write({

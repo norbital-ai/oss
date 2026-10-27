@@ -7,7 +7,7 @@ import * as NodeServices from '@effect/platform-node/NodeServices';
 import { Context, Effect, Layer, Option, Schema } from 'effect';
 import { memoryAuditLayer } from '../src/test/index.ts';
 import { TestClock } from 'effect/testing';
-import { HttpServerRequest, HttpServerResponse } from 'effect/unstable/http';
+import { HttpServerRequest, HttpServerResponse } from 'effect/http';
 import { DevHost, DevHostLive, type DevHostOptions } from '../src/cli/dev.ts';
 import { ToolFailure } from '../src/cli/build.ts';
 import { localFiles } from '../src/node/files.ts';
@@ -77,13 +77,13 @@ const manifest: EngineManifest = {
 		}
 	},
 	relationships: { 'accounts.owner': { to: 'sys_user' } },
-	collections: {
+	exposures: {
 		accounts: {
-			read: { fields: 'all' },
-			create: { input: { columns: ['name', 'selected', 'owner'] } },
-			update: { input: { columns: ['name', 'selected'] } }
+			read: { accounts: { fields: 'all' } },
+			create: { columns: { accounts: ['name', 'selected', 'owner'] } },
+			update: { columns: { accounts: ['name', 'selected'] } }
 		},
-		visits: { read: { fields: 'all' } }
+		visits: { read: { visits: { fields: 'all' } } }
 	},
 	policies: {
 		source: {
@@ -481,7 +481,7 @@ it.effect(
 				'/__bolt/act',
 				{
 					callable: 'sys_integration.create',
-					input: { integration: 'whatsapp', name: 'Front desk' },
+					input: [{ integration: 'whatsapp', name: 'Front desk' }],
 					issuedAt: NOW
 				},
 				true,

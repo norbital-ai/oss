@@ -2,8 +2,8 @@ import { formatValue as show } from '../kinds/kind.js';
 import { Effect } from 'effect';
 import { fork } from '../effect/index.js';
 import { SvelteMap } from 'svelte/reactivity';
-import type { CollectionExposure } from '../kinds/context.js';
-import type { Row } from '../collection/types.js';
+import type { ModelExposure } from '../kinds/context.js';
+import { byId, firstOf } from '../read/request.js';
 import type { ViewBolt } from '../client/contract.js';
 import { label, msg } from '../text/messages.js';
 /**
@@ -12,7 +12,7 @@ import { label, msg } from '../text/messages.js';
  */
 export function recordLabels(
 	bolt: Pick<ViewBolt, 'query' | 't' | 'locale'>,
-	catalog: () => { readonly [c: string]: CollectionExposure } | undefined
+	catalog: () => { readonly [c: string]: ModelExposure } | undefined
 ) {
 	const known = new SvelteMap<string, string>();
 	const asked = new Set<string>();
@@ -22,7 +22,8 @@ export function recordLabels(
 		if (hit !== undefined || asked.has(key)) return hit ?? '…';
 		asked.add(key);
 		fork(
-			bolt.query<Row | null>(target, { id }).pipe(
+			bolt.query(byId(target, id)).pipe(
+				Effect.map((answer) => firstOf(answer, target)),
 				Effect.tap((row) =>
 					Effect.sync(() =>
 						known.set(

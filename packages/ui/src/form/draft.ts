@@ -1,6 +1,6 @@
 // A form's draft as data (§5.10 behaviour, rule 67): what the form is, what it sends, and how an outcome settles it.
 // Pure, so the Svelte state around it stays a thin shell and every rule here has a test.
-import type { AutomationExposure, CollectionExposure } from '../kinds/context.js';
+import type { AutomationExposure, ModelExposure } from '../kinds/context.js';
 import type { ChildInput } from '../kinds/context.js';
 import { initial, problems, type Fields, type Value, type Kind } from '../kinds/kind.js';
 import { encodeWire } from '@norbital-ai/std/wire';
@@ -14,24 +14,24 @@ export type Outcome =
 	| {
 			kind: 'committed';
 			output: Value;
-			records: readonly { collection: string; id: string; revision: number }[];
+			records: readonly { model: string; id: string; revision: number }[];
 	  }
 	| {
 			kind: 'pendingApproval';
 			requestId: string;
-			records: readonly { collection: string; id: string; revision: number }[];
+			records: readonly { model: string; id: string; revision: number }[];
 	  }
 	| { kind: 'refused'; code: string; message: string; field?: string; row?: number }
 	| {
 			kind: 'conflict';
-			records: readonly { collection: string; id: string; fields: readonly string[] }[];
+			records: readonly { model: string; id: string; fields: readonly string[] }[];
 	  }
 	| { kind: 'unknown'; invocation: string }
 	| { kind: 'running'; run: string };
 
-/** What a `Form` edits: a collection's create or update allowlist, or an automation's input. */
+/** What a `Form` edits: a model's create or update allowlist, or an automation's input. */
 type FormTarget =
-	| { of: 'collection'; collection: string; mode: 'create' | 'update'; id?: string }
+	| { of: 'model'; model: string; mode: 'create' | 'update'; id?: string }
 	| { of: 'automation'; automation: string };
 export type FormSpec = {
 	target: FormTarget;
@@ -50,11 +50,11 @@ export type FormSpec = {
 	children?: Readonly<Record<string, ChildInput>>;
 };
 
-/** The form one `of` describes, from the collection's exposure; `null` when the caller has no such verb. An update the
+/** The form one `of` describes, from the model's exposure; `null` when the caller has no such verb. An update the
  * caller cannot make but can read is the read-only form of the readable fields. */
 export function formSpec(
 	of: string | { automation: string },
-	exposure: CollectionExposure | undefined,
+	exposure: ModelExposure | undefined,
 	mode: 'create' | 'update',
 	id?: string,
 	automation?: AutomationExposure
@@ -76,7 +76,7 @@ export function formSpec(
 	const children = exposure[mode]?.with;
 	return {
 		...(readOnly ? { readonly: true as const } : {}),
-		target: { of: 'collection', collection: of, mode, ...(id === undefined ? {} : { id }) },
+		target: { of: 'model', model: of, mode, ...(id === undefined ? {} : { id }) },
 		fields: [
 			...allow.columns,
 			...(mode === 'update'
@@ -153,7 +153,7 @@ export function payload(spec: FormSpec, base: Row, draft: Row): Value | null {
 	// an absent optional input and a null are the same to decode; absent lets a default apply
 	const present = (row: Row) =>
 		Object.fromEntries(Object.entries(row).filter(([, v]) => v !== null));
-	if (t.of === 'collection') {
+	if (t.of === 'model') {
 		if (t.mode === 'create') return present(draft);
 		const set = Object.fromEntries(
 			Object.entries(changed(base, draft)).filter(([name]) =>

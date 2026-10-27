@@ -372,7 +372,7 @@ function start(kind, path, inputJson, ctxJson, invocationId) {
 	if (typeof body !== 'function') { state = ['missing', path.join('.')]; return; }
 	const input = JSON.parse(inputJson, reviveWire);
 	let ctx;
-	if (['create', 'update', 'delete', 'query', 'notify', 'syncRead', 'syncWrite', 'parse', 'tool', 'automation', 'integration', 'page'].includes(kind)) {
+	if (['create', 'update', 'delete', 'policy', 'notify', 'syncRead', 'syncWrite', 'parse', 'tool', 'automation', 'integration', 'page'].includes(kind)) {
 		const raw = JSON.parse(ctxJson, reviveWire);
 		ctx = Object.defineProperty(kind === 'page'
 			? { actor: raw.actor, now: raw.now, today: raw.today, tz: raw.tz, invocationId }
@@ -383,7 +383,7 @@ function start(kind, path, inputJson, ctxJson, invocationId) {
 		: ctx === undefined ? [input] : [input, ctx];
 	// pure bodies run once per element of one invocation's batch: a rerank over the candidate page (input [query, rows],
 	// one score per row); a validation over every value of its kind (one message or undefined each); an index's vector
-	// over a chunk of rows (one vector or null each); approval returns one flow snapshot for its write.
+	// over a chunk of rows (one vector or null each).
 	Promise.resolve().then(() => kind === 'rerank' ? input[1].map((row) => body(input[0], row)) : kind === 'validation' || kind === 'vector' ? input.map((v) => body(v)) : body(...args)).then(
 		(v) => { state = ['ok', JSON.stringify(v === undefined ? null : v)]; },
 		(e) => { state = failure(e); });

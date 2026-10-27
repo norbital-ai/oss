@@ -5,7 +5,7 @@
 // offered; the builder renders it, never an operator table of its own.
 import { Effect, Result } from 'effect';
 import { untrack } from 'svelte';
-import { useKinds, type CollectionExposure } from '../kinds/context.js';
+import { useKinds, type ModelExposure } from '../kinds/context.js';
 import type { Json, ViewBolt } from '../client/contract.js';
 import {
 	clauses,
@@ -28,14 +28,14 @@ import {
 } from './filter.js';
 import { msg } from '../text/messages.js';
 
-type Catalog = { readonly [collection: string]: CollectionExposure };
+type Catalog = { readonly [model: string]: ModelExposure };
 export type ViewState = ReturnType<typeof viewState>;
 
 export function viewState(
 	bolt: ViewBolt | undefined,
 	o: {
 		key: () => string;
-		collection: () => string;
+		model: () => string;
 		catalog: () => Catalog;
 		initialFilter: () => Json | undefined;
 		/** Controlled row views own their URL state and never apply this viewer's transforms. */
@@ -69,7 +69,7 @@ export function viewState(
 	/** URL → rows and keys: each top-level clause and key decoded alone; the bad ones dropped with one notice. */
 	function load() {
 		if (o.enabled?.() === false) return { rows: [], order: [], touched: false, notice: null };
-		const c = o.collection(),
+		const c = o.model(),
 			cat = o.catalog(),
 			url = readViewUrl(params(), o.key());
 		const fromUrl = url.where !== undefined;
@@ -105,11 +105,11 @@ export function viewState(
 	let touched = $state(first.touched);
 	let notice = $state<string | null>(first.notice);
 
-	// the engine's catalogue, once per collection: the builder's fields, operators and values
+	// the engine's catalogue, once per model: the builder's fields, operators and values
 	let offers = $state<readonly Offer[]>([]);
 	const offerSpec = $derived({
-		collection: o.collection(),
-		fields: localFilterFields(o.collection(), o.catalog()[o.collection()])
+		model: o.model(),
+		fields: localFilterFields(o.model(), o.catalog()[o.model()])
 	});
 	let loaded: typeof offerSpec | null = null,
 		loading: typeof offerSpec | null = null,
@@ -123,7 +123,7 @@ export function viewState(
 			loaded = null;
 			offers = [];
 			const request = ++generation;
-			return bolt.options(spec.collection, spec.fields).pipe(
+			return bolt.options(spec.model, spec.fields).pipe(
 				Effect.tap((result) =>
 					Effect.sync(() => {
 						if (request === generation && spec === offerSpec) {
@@ -150,7 +150,7 @@ export function viewState(
 	// (rule 11a)
 	const lowered = $derived.by(() => {
 		if (o.enabled?.() === false) return { where: undefined, dropped: 0 };
-		const c = o.collection(),
+		const c = o.model(),
 			at = clock(),
 			parts: Where[] = [];
 		let dropped = 0;
@@ -169,7 +169,7 @@ export function viewState(
 	$effect(() => {
 		if (o.enabled?.() === false) return;
 		const next = writeViewUrl(params(), o.key(), {
-			where: rowsWhere(o.catalog(), o.collection(), rows),
+			where: rowsWhere(o.catalog(), o.model(), rows),
 			touched,
 			order
 		});
@@ -229,13 +229,13 @@ export function viewState(
 					return false;
 				};
 				if (bolt?.describe === undefined || text.trim() === '') return Effect.succeed(false);
-				const collection = o.collection();
+				const model = o.model();
 				return bolt
-					.describe(collection, text.trim(), localFilterFields(collection, o.catalog()[collection]))
+					.describe(model, text.trim(), localFilterFields(model, o.catalog()[model]))
 					.pipe(
 						Effect.map((result) => {
 							const parts = clauses(result.where).map((clause) =>
-								fromWhere(o.catalog(), o.collection(), clause)
+								fromWhere(o.catalog(), o.model(), clause)
 							);
 							const keys =
 								result.orderBy === undefined
@@ -243,8 +243,8 @@ export function viewState(
 									: parseOrder(
 											orderText(orderKeys(result.orderBy)),
 											sortable(
-												o.catalog()[o.collection()],
-												!o.collection().startsWith('$'),
+												o.catalog()[o.model()],
+												!o.model().startsWith('$'),
 												o.catalog()
 											)
 										);

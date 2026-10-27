@@ -24,7 +24,7 @@ import {
 	Stream
 } from 'effect';
 import { mountEdge } from '@norbital-ai/ui/effect';
-import { Sse } from 'effect/unstable/encoding';
+import { Sse } from 'effect/encoding';
 import type { Json } from '../src/decl/values.ts';
 import { createBolt } from '../src/page/bolt.ts';
 import type { EventSourceLike } from '../src/page/stream.ts';
@@ -179,10 +179,10 @@ describe('the in-app agent panel (§5.9)', () => {
 							}
 						},
 						relationships: {},
-						collections: {
+						exposures: {
 							quotes: {
-								read: { fields: 'all' },
-								create: { input: { columns: ['title'] } }
+								read: { quotes: { fields: 'all' } },
+								create: { columns: { quotes: ['title'] } }
 							}
 						},
 						policies: {
@@ -213,7 +213,7 @@ describe('the in-app agent panel (§5.9)', () => {
 				);
 				const guest = {
 					source: `export default { automation: { quotes_mark: { body: function* (input, ctx) {
-						return (yield* ctx.act('quotes.create', { title: input.title })).records[0].id;
+						return (yield* ctx.act('quotes.create', [{ title: input.title }])).records[0].id;
 					} } } };`
 				};
 				const steps: (() => AiResponse)[] = [
@@ -330,8 +330,8 @@ describe('public SSR caller scope', () => {
 				quotes: { description: 'A quote', label: 'title', fields: { title: { kind: 'text' } } }
 			},
 			relationships: {},
-			collections: {
-				quotes: { read: { fields: 'all' }, create: { input: { columns: ['title'] } } }
+			exposures: {
+				quotes: { read: { quotes: { fields: 'all' } }, create: { columns: { quotes: ['title'] } } }
 			},
 			policies: {
 				rep: {
@@ -341,7 +341,7 @@ describe('public SSR caller scope', () => {
 				},
 				applicant: {
 					description: 'Apply',
-					grants: { quotes: { read: { where: { title: { eq: 'Desk' } }, fields: ['title'] } } }
+					grants: { quotes: { read: { quotes: { where: { title: { eq: 'Desk' } }, fields: ['title'] } } } }
 				}
 			},
 			apps: {
@@ -403,7 +403,7 @@ describe('public SSR caller scope', () => {
 			'src/app/careers/+apply.page.server.ts': `import { pageServer } from '@norbital-ai/bolt';
 import data from './apply.page.data.ts';
 export default pageServer({ data, load: function* (request, ctx) {
-	const page = yield* ctx.query('quotes', { select: { title: true }, orderBy: { title: 'asc' }, limit: 10 });
+	const { quotes: page } = yield* ctx.query({ quotes: { fields: ['title'], orderBy: { title: 'asc' }, limit: 10 } });
 	return { titles: page.rows.map((row) => row.title), caller: ctx.actor.kind, path: request.pathname };
 } });`,
 			'src/app/careers/+apply.page.svelte': `<script lang="ts">
@@ -539,7 +539,7 @@ describe('G5 UI', () => {
 				}
 			},
 			relationships: { 'entries.person': { to: 'people', inverse: 'entries' } },
-			collections: { people: { read: { fields: 'all' } }, entries: { read: { fields: 'all' } } },
+			exposures: { people: { read: { people: { fields: 'all' } } }, entries: { read: { entries: { fields: 'all' } } } },
 			policies: {},
 			integrations: {},
 			teams: {},

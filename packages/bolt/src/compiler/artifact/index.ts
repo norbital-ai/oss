@@ -49,7 +49,7 @@ const TYPE_SETUP = [
 	'.norbital/names.ts',
 	'.norbital/bolt.d.ts'
 ] as const;
-/** Writes the artifact of a clean `check` into `out` (replaced whole). */
+/** Writes the compiled artifact into `out` (replaced whole). */
 export const writeArtifact = Effect.fn('bolt.writeArtifact')(function* (
 	root: string,
 	c: { manifest: EngineManifest; guest: GuestProgram },

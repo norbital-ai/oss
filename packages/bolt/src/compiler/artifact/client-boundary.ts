@@ -112,7 +112,8 @@ export const clientImportBoundary = (
 			if (resolved === null) return resolved;
 			await guard(resolved.id);
 			const shared = resolved.external ? undefined : platform.get(resolved.id);
-			return shared === undefined ? resolved : { id: shared, external: true };
+			if (shared === undefined) return resolved;
+			return { id: shared, external: true };
 		},
 		// repository-health:allow EFF3 -- Guard resolved IDs before Vite's raw/url loaders read their bytes.
 		async load(id) {

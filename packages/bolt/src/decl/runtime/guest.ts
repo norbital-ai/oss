@@ -14,6 +14,7 @@ import '@norbital-ai/std/decimal';
 import { attached, type Body } from '../body.ts';
 import type { BodyError } from '../ctx.ts';
 import { Refusal } from '../errors/refusal.ts';
+import { Verdict } from '../access/policy.ts';
 import { actFailureTag } from '../errors/act-failure-tag.ts';
 import { txInstruction, type TxInstruction, type TxStep } from '../transaction.ts';
 
@@ -309,8 +310,17 @@ const lift = (call: Call, raw: unknown): unknown => {
 				...instance,
 				files: { get: cross('files.get', 'facility'), text: cross('files.text', 'facility') }
 			};
-		case 'query':
-			return { ...clock, ...actor, ...reads, refuse };
+		// a write grant's check: workspace reads and the three verdicts (decl `PolicyCtx`)
+		case 'policy':
+			return {
+				...clock,
+				...actor,
+				policies,
+				db: { query: cross('db.query') },
+				allow: Verdict.allow,
+				deny: Verdict.deny,
+				approve: Verdict.approve
+			};
 		case 'page':
 			return { ...clock, ...actor, ...reads };
 		case 'tool':
@@ -377,7 +387,11 @@ const wrap = (body: Body, at: number): Body => {
 	const gen = body as (...args: readonly unknown[]) => Effect.fn.Return<unknown, BodyError>; // checked above
 	const wrapped = (...args: readonly unknown[]) => {
 		const call = (globalThis as { readonly [CALL]?: Call })[CALL] ?? outside;
-		return runBody(() => gen(...args.map((arg, i) => (i === at ? lift(call, arg) : arg))));
+		const ran = runBody(() => gen(...args.map((arg, i) => (i === at ? lift(call, arg) : arg))));
+		// a check answers its verdict's data; anything else it returns is an authoring error
+		const ctx = args[at];
+		const kind = Predicate.isObject(ctx) ? ctx[CTX] : undefined;
+		return kind === 'policy' ? ran.then(Verdict.dataOf) : ran;
 	};
 	Object.defineProperty(wrapped, 'name', { value: body.name });
 	return Object.defineProperty(wrapped, Symbol.for('norbital.bolt.generator'), { value: body });

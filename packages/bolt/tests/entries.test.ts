@@ -69,7 +69,7 @@ it('the protocol entry is exactly the 13 wire and artifact types', () => {
 		'ContractDigest'
 	]);
 	// the types are usable as a host outside Bolt would use them
-	const q: Protocol.QueryRequest = { reads: [{ m: 'query', a: ['orders', { all: true }] }] };
+	const q: Protocol.QueryRequest = { reads: [{ m: 'query', a: [{ orders: {} }] }] };
 	const h: Protocol.FileUploadHeaders = { 'Idempotency-Key': 'u1' };
 	const g: keyof IsolateGlobals = 'structuredClone';
 	expect([q.reads.length, h['Idempotency-Key'], g]).toEqual([1, 'u1', 'structuredClone']);

@@ -20,15 +20,17 @@ export default model('sys_api_key', {
 	},
 	table: { primary: 'text' },
 	read: {
-		fields: [
-			'name',
-			'prefix',
-			'team',
-			'created_by',
-			'revoked_at',
-			'last_used_at',
-			'revision',
-			'created_at'
-		]
+		sys_api_key: {
+			fields: [
+				'name',
+				'prefix',
+				'team',
+				'created_by',
+				'revoked_at',
+				'last_used_at',
+				'revision',
+				'created_at'
+			]
+		}
 	}
 });

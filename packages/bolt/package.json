@@ -1,6 +1,6 @@
 {
 	"name": "@norbital-ai/bolt",
-	"version": "0.0.4",
+	"version": "0.0.6",
 	"description": "Bolt: the business OS framework — declarations, compiler, engine, shell client and test kit.",
 	"type": "module",
 	"sideEffects": [
@@ -115,35 +115,37 @@
 		"pdq-wasm": "0.3.9",
 		"rolldown": "1.2.5",
 		"runed": "catalog:",
-		"svelte2tsx": "0.7.61",
 		"tailwindcss": "4.3.3",
 		"terser": "5.51.2",
-		"typescript": "catalog:",
 		"vite": "catalog:"
 	},
 	"peerDependencies": {
-		"@typescript/native": "npm:typescript@7.0.2",
-		"svelte": "^5.0.0"
+		"svelte": "^5.0.0",
+		"svelte2tsx": "0.7.61",
+		"typescript": "catalog:"
 	},
 	"peerDependenciesMeta": {
-		"@typescript/native": {
+		"svelte2tsx": {
+			"optional": true
+		},
+		"typescript": {
 			"optional": true
 		}
 	},
 	"devDependencies": {
 		"@iconify-json/vscode-icons": "1.2.89",
-		"@typescript/native": "npm:typescript@7.0.2",
 		"@sveltejs/package": "^2.5.8",
 		"@types/node": "^26.2.0",
 		"@types/pg": "^8.23.1",
-		"@vitest/browser-playwright": "4.1.11",
+		"@vitest/browser-playwright": "5.0.5",
 		"happy-dom": "^20.11.6",
 		"pg": "^8.23.0",
 		"playwright": "1.63.0",
 		"svelte": "^5.57.1",
 		"svelte-check": "^4.7.6",
+		"svelte2tsx": "0.7.61",
 		"typescript": "catalog:",
-		"vitest": "4.1.11"
+		"vitest": "5.0.5"
 	},
 	"repository": {
 		"type": "git",

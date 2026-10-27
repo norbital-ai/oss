@@ -3,7 +3,7 @@ import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import * as NodeRuntime from '@effect/platform-node/NodeRuntime';
 import { Config, Console, Effect, FileSystem, Option, Redacted, Schema } from 'effect';
-import { HttpClient, HttpClientRequest, HttpClientResponse } from 'effect/unstable/http';
+import { HttpClient, HttpClientRequest, HttpClientResponse } from 'effect/http';
 import {
 	assertSha512Integrity,
 	inspectPackageArchive,
@@ -318,7 +318,7 @@ export const main = Effect.fn('Publication.resolve.main')(function* (
 		catch: PublicationFailed.from
 	});
 	const optional = (name: string) =>
-		Config.option(Config.string(name)).pipe(Effect.map(Option.getOrUndefined));
+		Config.option(Config.String(name)).pipe(Effect.map(Option.getOrUndefined));
 	const source = options.source ?? (yield* optional('NORBITAL_PACKAGE_SOURCE')) ?? 'registry';
 	if (source !== 'registry' && source !== 'workspace')
 		return yield* new PublicationFailed({
@@ -355,12 +355,12 @@ export const main = Effect.fn('Publication.resolve.main')(function* (
 			try: () => normalizedRegistry(sourceInput),
 			catch: PublicationFailed.from
 		});
-		const configured = yield* Config.option(Config.redacted('NPM_REGISTRY_TOKEN'));
+		const configured = yield* Config.option(Config.Redacted('NPM_REGISTRY_TOKEN'));
 		const token =
 			Option.getOrUndefined(configured) ??
 			Option.getOrUndefined(
 				yield* Config.option(
-					Config.redacted(
+					Config.Redacted(
 						registry.hostname === 'npm.pkg.github.com' ? 'GITHUB_PACKAGE_TOKEN' : 'NODE_AUTH_TOKEN'
 					)
 				)

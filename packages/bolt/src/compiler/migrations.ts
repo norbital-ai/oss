@@ -48,6 +48,39 @@ const auditSource = (schema: SchemaSpec): readonly SchemaObject[] =>
 		? [...sourceObjects(), ...auditTriggers(schema.tables)]
 		: [];
 
+/** `function <name> <definition>` lines by name: what a body comparison reads off an introspection. */
+const functionLines = (lines: readonly string[]): ReadonlyMap<string, string> =>
+	new Map(
+		[
+			...Map.groupBy(
+				lines.filter((line) => line.startsWith('function ')),
+				(line) => line.split(' ', 2)[1] ?? ''
+			)
+		].map(([name, defs]) => [name, canonical([...defs].sort())])
+	);
+/**
+ * The declared statements re-creating each function whose declared body neither the verified history (`physical.json`
+ * at its last file) nor this replay holds: an engine or store runtime body a Bolt release changed, which the schema
+ * snapshot cannot see. An edited migration file differs from the held history instead, and stays refused.
+ * ponytail: functions only; a changed native trigger or a removed function still fails the proof until handled here.
+ */
+const runtimeFunctions = (
+	held: readonly string[],
+	replayed: readonly string[],
+	declared: readonly string[],
+	statements: readonly string[]
+): readonly string[] => {
+	const [before, now] = [functionLines(held), functionLines(replayed)];
+	const changed = [...functionLines(declared)]
+		.filter(([name, defs]) => before.get(name) !== defs && now.get(name) !== defs)
+		.map(([name]) => name);
+	return statements.filter((text) =>
+		changed.some((name) =>
+			new RegExp(`create\\s+or\\s+replace\\s+function\\s+(public\\.)?"?${name}"?\\s*\\(`, 'i').test(text)
+		)
+	);
+};
+
 /** Generation leaves editable SQL on a failed proof, but never replaces a verified lock with an unproved history. */
 export const prepareMigrations = Effect.fn('Bolt.prepareMigrations')(function* (
 	root: string,
@@ -83,6 +116,12 @@ export const prepareMigrations = Effect.fn('Bolt.prepareMigrations')(function* (
 			? null
 			: yield* readSnapshot(snapshotText).pipe(Effect.mapError(fromStore));
 	const next = migrationSchema(manifest);
+	const heldLines =
+		physicalText === undefined
+			? undefined
+			: (yield* readPhysicalDefinitions(physicalText).pipe(Effect.mapError(fromStore)))[
+					files.at(-1)?.name ?? ''
+				];
 	if (mode === 'generate' && (previous === null || canonical(previous) !== canonical(next))) {
 		if (previous === null && files.length > 0)
 			return yield* BoltError.make(
@@ -174,8 +213,36 @@ export const prepareMigrations = Effect.fn('Bolt.prepareMigrations')(function* (
 			for (const text of declared) yield* declaredDb.write({ text, params: [] });
 			for (const object of native)
 				for (const text of object.create) yield* declaredDb.write({ text, params: [] });
-			const actual = migrationLines(yield* replayDb.rows(IntrospectRow, inspect), true, true);
+			let actual = migrationLines(yield* replayDb.rows(IntrospectRow, inspect), true, true);
 			const expected = migrationLines(yield* declaredDb.rows(IntrospectRow, inspect), true, true);
+			const bodies =
+				mode === 'generate' && heldLines !== undefined
+					? runtimeFunctions(heldLines, actual, expected, [
+							...declared,
+							...native.flatMap((object) => object.create)
+						])
+					: [];
+			if (bodies.length > 0) {
+				const name = `${String(files.length + 1).padStart(4, '0')}_runtime_functions.sql`;
+				if (yield* fs.exists(path.join(directory, name)))
+					return yield* BoltError.make(
+						'migrationChanged',
+						'admission',
+						`${name} already exists; existing migrations are never overwritten`
+					);
+				const file: MigrationFile = {
+					name,
+					sql: `-- ${name}: runtime function bodies this Bolt release changed.\n\n${bodies.map((text) => `${text.trim().replace(/;$/, '')};`).join('\n\n')}\n`
+				};
+				yield* checkFile(file).pipe(Effect.mapError(fromStore));
+				yield* fs.writeFileString(path.join(directory, name), file.sql);
+				files.push(file);
+				yield* replayDb.write({ text: file.sql, params: [] });
+				actual = migrationLines(yield* replayDb.rows(IntrospectRow, inspect), true, true);
+				prefixes.set(files.length, actual);
+				physical[name] = physicalHash(actual);
+				definitions[name] = actual;
+			}
 			const receipts: SquashReceipt[] = [];
 			for (const receipt of oldLock?.squashes ?? []) {
 				const file = squashes.find((file) => file.name === receipt.file);

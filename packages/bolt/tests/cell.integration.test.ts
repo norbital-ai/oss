@@ -198,7 +198,7 @@ describe('the cell', () => {
 			});
 			expect(verify).toMatchObject({ status: 200, set: ['__Secure-bolt-session'] });
 			expect(cellVerify).toEqual({ ...verify, cookie: cellVerify.cookie });
-			const read = { reads: [{ m: 'query', a: ['customers', { all: true }] }] };
+			const read = { reads: [{ m: 'query', a: [{ customers: {} }] }] };
 			const [q, cellQ] = await both([verify.cookie, cellVerify.cookie], '/__bolt/q', read);
 			expect(q.status).toBe(200);
 			expect({ status: cellQ.status, body: cellQ.body }).toEqual({

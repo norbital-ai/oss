@@ -15,27 +15,18 @@ import type {
 	BucketField,
 	Callable,
 	Committed,
-	DeclaredQuery,
-	DeclaredRow,
 	HistoryOptions,
-	IndexSearch,
-	ListResult,
 	Measures,
 	MessageKey,
 	Outcome,
 	Page,
 	Paged,
 	PendingApproval,
-	QueryCallable,
-	QueryInput,
-	QueryMember,
-	QueryOutput,
-	QuerySet,
-	QuerySetAnswer,
-	ReadResult,
+	ReadAnswer,
+	ReadRequest,
+	ReadRequestBase,
 	Revision,
-	Running,
-	Select
+	Running
 } from '../decl/ctx.ts';
 import type {
 	ActConflict,
@@ -47,14 +38,7 @@ import type {
 	TransportFailed,
 	Unavailable
 } from '../decl/errors.ts';
-import type {
-	CollectionName,
-	FileField,
-	FileSyncName,
-	Is,
-	ReadableName,
-	StoredRow
-} from '../decl/names.ts';
+import type { ModelName, FileField, FileSyncName, Is, ReadableName } from '../decl/names.ts';
 import type {
 	ConvertRequest,
 	ConvertSource,
@@ -62,7 +46,6 @@ import type {
 	StartOutput
 } from '../decl/runtime/facilities.ts';
 import type { FileRef, Id, Instant, PlainDate, RequestId } from '../decl/values.ts';
-import type { OrderBy, Where } from '../decl/where.ts';
 import type { ApprovalView } from '../engine/approvals/approvals.ts';
 import type { RecordCapabilities, RecordParentContext } from '../protocol/record-contracts.ts';
 import type { WireRead } from '../protocol/wire.ts';
@@ -111,11 +94,11 @@ export type PageCall<A, E> = Effect.Effect<A, E>;
 export type PageClock = { readonly today: PlainDate; readonly now: Instant };
 
 type UploadField = {
-	[C in CollectionName]: `${C}.${FileField<C>}` | `${C}.$import.${FileSyncName<C>}`;
-}[CollectionName];
+	[C in ModelName]: `${C}.${FileField<C>}` | `${C}.$import.${FileSyncName<C>}`;
+}[ModelName];
 /** The approval requests a page lists: open ones unless `all`, by model, records or request ids. */
 type ApprovalFilter = {
-	collection?: CollectionName;
+	model?: ModelName;
 	records?: readonly string[];
 	ids?: readonly RequestId[];
 	all?: boolean;
@@ -123,51 +106,17 @@ type ApprovalFilter = {
 
 /** The typed members of `$bolt` (§3.5); a page reads and acts as its viewer, so rows are caller rows. */
 export interface PageBolt {
-	/** Dynamic declarations use the viewer's native read policies and retain any masked selected values. */
-	query<C extends string>(
-		model: Is<C, ReadableName>,
-		args: DeclaredQuery
-	): Query<Page<DeclaredRow<C>>>;
-	/** The record as of `revision`, folded from its history (L-BOLT-181); `null` when its create was pruned or history is not readable. */
-	query<C extends string>(
-		model: Is<C, ReadableName>,
-		args: { id: NoInfer<Id<C>>; revision: number }
-	): Query<StoredRow<C> | null>;
-	/** One record by id as the viewer reads it, with an optional `select`; `null` when it is absent or not readable. */
-	query<C extends string, const S extends Select<C> = {}>(
-		model: Is<C, ReadableName>,
-		args: { id: NoInfer<Id<C>>; select?: S }
-	): Query<ReadResult<C, S> | null>;
-	/** A search over a custom index (`{ search: { colour: input } }`) or `search.semantic`: the nearest rows, each with `$distance`. */
-	query<C extends string, const S extends Select<C> = {}>(
-		model: Is<C, ReadableName>,
-		args: { search: NoInfer<IndexSearch<C>>; where?: NoInfer<Where<C>>; select?: S; limit: number }
-	): Query<Page<ListResult<C, S> & { readonly $distance: number }>>;
 	/**
-	 * A page of rows the viewer may read: `where`, `select`, `orderBy`, a text `search`, and `limit` (or `all: true`).
-	 * Time is an argument like any other: pass `bolt.clock(unit)`'s values to roll over with it.
+	 * A read request, as server code's `ctx.query`: roots (models with `read`) and their declared layers in one read, the
+	 * answer typed from the named layers; live by every row it read, layers included.
 	 * @example
-	 * const day = bolt.clock('day');
-	 * const overdue = $derived(bolt.query('invoices', { where: { due_on: { lt: day.today }, paid: { eq: false } }, all: true }));
+	 * const orders = bolt.query({
+	 * 	orders: { where: { status: { eq: 'issued' } }, fields: ['number', 'total', 'party'], orderBy: 'due_on', limit: 100 },
+	 * 	'orders.party': { fields: ['name'] },
+	 * 	'orders.lines': { fields: ['quantity', 'net'] }
+	 * });
 	 */
-	query<C extends string, const S extends Select<C> = {}>(
-		model: Is<C, ReadableName>,
-		args: {
-			where?: NoInfer<Where<C>>;
-			select?: S;
-			orderBy?: NoInfer<OrderBy<C>>;
-			search?: string;
-		} & Paged
-	): Query<Page<ListResult<C, S>>>;
-	/** Runs a declared query (`'<model>.<query>'`) with its typed input; live by the rows its run read. */
-	query<const N extends string>(
-		name: Is<N, QueryCallable>,
-		input: NoInfer<QueryInput<N>>
-	): Query<QueryOutput<N>>;
-	/** A keyed set of reads answered together, as server code's keyed `ctx.query`. */
-	query<const M extends QuerySet>(
-		set: M & { readonly [K in keyof M]: QueryMember<M[K]['from']> }
-	): Query<QuerySetAnswer<M>>;
+	query<const R extends ReadRequestBase>(request: ReadRequest<R>): Query<ReadAnswer<R>>;
 	/** Without `by`, one row over the whole scope. */
 	aggregate<C extends string>(
 		model: Is<C, ReadableName>,
@@ -207,7 +156,7 @@ export interface PageBolt {
 	 */
 	start<const A extends string>(
 		automation: Is<A, StartableName>,
-		input: NoInfer<StartInput<A>> | readonly NoInfer<StartInput<A>>[]
+		input: NoInfer<StartInput<A> | readonly StartInput<A>[]>
 	): PageStart<A>;
 	/** `accept` and `max` are checked before bytes are stored; a refusal is `ActRefused`. */
 	upload(

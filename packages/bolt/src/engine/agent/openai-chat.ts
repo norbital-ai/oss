@@ -4,7 +4,7 @@
 // their pieces and usage comes from the last chunk. A refusal rejects with the HTTP `status` (the engine spots context
 // overflow by it). An endpoint that ignores `stream` and answers `application/json` is read whole.
 import { Clock, Effect, Option, Predicate, Queue, Schema, Stream } from 'effect';
-import { FetchHttpClient, HttpClient, HttpClientRequest } from 'effect/unstable/http';
+import { FetchHttpClient, HttpClient, HttpClientRequest } from 'effect/http';
 import { csvOf } from '@norbital-ai/std/csv';
 import { FacilityFailure } from '../../decl/errors.ts';
 import { Port, type PortFailure } from '../port.ts';
@@ -109,9 +109,11 @@ function messagesOf(r: AiRequest): Wire[] {
 						)
 						.join('\n')
 				};
-			throw new Error(
-				`${name}: a file of type ${f.mime} cannot be sent to the model; attach an image, a PDF, text or an xlsx workbook`
-			);
+			// a type no provider takes is described, never sent: one odd file must not fail the whole request
+			return {
+				type: 'text',
+				text: `${name}: a ${f.mime} file cannot be shown to you; ask for a photo, a PDF or a text version`
+			};
 		});
 		const last = out.findLast((m) => m['role'] === 'user');
 		if (last === undefined) out.push({ role: 'user', content: parts });

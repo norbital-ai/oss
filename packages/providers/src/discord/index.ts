@@ -10,7 +10,7 @@ import {
 	Predicate,
 	Stream
 } from 'effect';
-import { HttpClient, HttpClientRequest, HttpClientResponse } from 'effect/unstable/http';
+import { HttpClient, HttpClientRequest, HttpClientResponse } from 'effect/http';
 import type { DriverOpen, Json, LinkStatus, OutboundAttachment } from '@norbital-ai/bolt/engine';
 import type { ProviderDef } from '../abi.ts';
 import { answerFailure, ProviderUnavailable } from '../errors.ts';
@@ -362,8 +362,9 @@ export function discord(options: DiscordOptions = {}): ProviderDef {
 							)).id
 						};
 					}),
-				typing: (to: string) =>
-					cred === null
+				// the typing indicator lapses by itself (10 s) or with the next message: nothing stops it early
+				typing: (to: string, on: boolean) =>
+					cred === null || !on
 						? Effect.void
 						: rest(Schema.Unknown, 'POST', `/channels/${encodeURIComponent(to)}/typing`).pipe(
 								Effect.asVoid

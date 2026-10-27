@@ -3,66 +3,34 @@
 // planted mistake.
 import { Effect } from 'effect';
 import { Refusal } from '../../src/decl/errors.ts';
-import { Decimal } from '@norbital-ai/std/decimal';
 import { automation, customField, model } from '../../src/index.ts';
-import type { AutomationCtx, Insert } from '../../src/index.ts';
+import type { AutomationCtx, Insert, Masked } from '../../src/index.ts';
 import type { ValueOf } from '../../src/decl/fields.ts';
 import * as m from './fixture/models.ts';
 import * as rt from './fixture/runtime.ts';
 import './registry.ts';
 
 type Eq<A, B> = (<T>() => T extends A ? 1 : 2) extends <T>() => T extends B ? 1 : 2 ? true : false;
+type Flat<T> = { [K in keyof T]: T[K] };
 const is = <T extends true>(..._proof: T extends true ? [] : never): void => {};
 
-// (1) a query refuses; queries and automations run named similarity searches
-model('orders', {
-	...m.orders.spec,
-	queries: {
-		...m.orders.spec.queries,
-		open_total: {
-			...m.orders.spec.queries.open_total,
-			run: function* ({ since }, ctx) {
-				if (String(since) === '') return yield* ctx.refuse('no date', { field: 'since' });
-				const near = yield* ctx.query('orders', {
-					search: { by_colour: { lab: [1, 2, 3] } },
-					limit: 3,
-					select: { note: true }
-				});
-				const d: number = near.rows[0]!.$distance;
-				const n: string | null = near.rows[0]!.note;
-				void d;
-				void n;
-				return Decimal.of(0);
-			}
-		}
-	}
-});
-model('orders', {
-	...m.orders.spec,
-	queries: {
-		...m.orders.spec.queries,
-		open_total: {
-			...m.orders.spec.queries.open_total,
-			run: function* (_, ctx) {
-				// @ts-expect-error S1 an undeclared similarity
-				yield* ctx.query('orders', { search: { by_shape: {} }, limit: 1 });
-				return Decimal.of(0);
-			}
-		}
-	}
-});
-model('orders', {
-	...m.orders.spec,
-	queries: {
-		...m.orders.spec.queries,
-		open_total: {
-			...m.orders.spec.queries.open_total,
-			run: function* (_, ctx) {
-				// @ts-expect-error S2 a similarity input of the wrong shape
-				yield* ctx.query('orders', { search: { by_colour: { lab: 'red' } }, limit: 1 });
-				return Decimal.of(0);
-			}
-		}
+// (1) automations run named similarity searches (declared queries, and their `refuse`, are gone)
+automation('orders_submit', {
+	...rt.orders_submit.spec,
+	run: function* (_, ctx) {
+		const near = yield* ctx.query({ orders: {
+			search: { by_colour: { lab: [1, 2, 3] } },
+			limit: 3,
+			fields: ['note']
+		} });
+		const d: number = near.orders.rows[0]!.$distance;
+		const n: string | null | Masked = near.orders.rows[0]!.note;
+		void d;
+		void n;
+		// @ts-expect-error S1 an undeclared similarity
+		yield* ctx.query({ orders: { search: { by_shape: {} }, limit: 1 } });
+		// @ts-expect-error S2 a similarity input of the wrong shape
+		yield* ctx.query({ orders: { search: { by_colour: { lab: 'red' } }, limit: 1 } });
 	}
 });
 is<Eq<'refuse' extends keyof AutomationCtx ? 1 : 0, 0>>(); // automations have no refuse
@@ -70,17 +38,17 @@ is<Eq<'refuse' extends keyof AutomationCtx ? 1 : 0, 0>>(); // automations have n
 automation('orders_submit', {
 	...rt.orders_submit.spec,
 	run: function* ({ target: targetId }, ctx) {
-		const target = yield* ctx.query('orders', { id: targetId });
+		const target = (yield* ctx.query({ orders: { where: { id: { eq: targetId } }, limit: 1 } })).orders.rows[0] ?? null;
 		if (target === null)
 			return yield* Effect.fail(new Refusal({ message: 'Choose an existing orders record.' }));
 		yield* ctx.act(
 			'orders.update',
-			{ target: target.id, set: { note: 'observed' } },
+			[{ target: target.id, set: { note: 'observed' } }],
 			{ observed: { [target.id]: target.revision } }
 		);
 		yield* ctx.act(
 			'orders.update',
-			{ target: target.id, set: { note: 'invalid' } },
+			[{ target: target.id, set: { note: 'invalid' } }],
 			// @ts-expect-error an observed revision is numeric
 			{ observed: { [target.id]: '1' } }
 		);
@@ -92,30 +60,30 @@ automation('orders_renote', {
 	...rt.orders_renote.spec,
 	run: function* (_, ctx) {
 		const [notices, notes] = yield* Effect.all([
-			ctx.query('notices', { select: { id: true }, all: true }),
-			ctx.query('notice_notes', { select: { id: true }, all: true })
+			ctx.query({ notices: { fields: ['id'] } }),
+			ctx.query({ notice_notes: { fields: ['id'] } })
 		]);
-		const notice = notices.rows[0],
-			note = notes.rows[0];
+		const notice = notices.notices.rows[0],
+			note = notes.notice_notes.rows[0];
 		if (notice !== undefined)
 			yield* ctx.act(
 				'notice_notes.upsert',
-				{ notice: notice.id, note: 'x' },
+				[{ notice: notice.id, note: 'x' }],
 				{ onConflict: 'update' }
 			);
 		if (note !== undefined)
-			yield* ctx.act('notice_notes.upsert', { id: note.id, note: 'y' }, { onConflict: 'update' });
+			yield* ctx.act('notice_notes.upsert', [{ id: note.id, note: 'y' }], { onConflict: 'update' });
 		return 1;
 	}
 });
 automation('orders_renote', {
 	...rt.orders_renote.spec,
 	run: function* (_, ctx) {
-		const notices = yield* ctx.query('notices', { select: { id: true }, all: true });
-		const notice = notices.rows[0];
+		const notices = yield* ctx.query({ notices: { fields: ['id'] } });
+		const notice = notices.notices.rows[0];
 		if (notice !== undefined)
 			// @ts-expect-error U1 upsert without onConflict (rule 28)
-			yield* ctx.act('notice_notes.upsert', { notice: notice.id, note: 'x' });
+			yield* ctx.act('notice_notes.upsert', [{ notice: notice.id, note: 'x' }]);
 		return 1;
 	}
 });
@@ -123,14 +91,14 @@ automation('orders_renote', {
 // (4) a create field the transform fills is optional in the input
 is<
 	Eq<
-		Insert<'customers'>,
+		Flat<Insert<'customers'>>,
 		{ readonly name?: string; readonly email?: string | null; readonly tier?: 'basic' | 'gold' }
 	>
 >();
 automation('orders_renote', {
 	...rt.orders_renote.spec,
 	run: function* (_, ctx) {
-		yield* ctx.act('customers.create', { email: 'a@b.c' });
+		yield* ctx.act('customers.create', [{ email: 'a@b.c' }]);
 		return 1;
 	}
 });

@@ -26,7 +26,7 @@ export const conversationFor = Effect.fn('Agents.conversationFor')(function* (
 		manifest = yield* Manifest;
 	const member = authority.actor.kind === 'member' ? authority.actor.id : null;
 	const row = yield* db.one(Conversation, {
-		text: `SELECT c.id, c.title, c.owner, c.envoy, c.integration, c.parent, c.status, c.model, c.plan, c.goals, c.run
+		text: `SELECT c.id, c.title, c.owner, c.envoy, c.integration, c.thread, c.parent, c.status, c.model, c.plan, c.goals, c.run
   FROM sys_conversation c WHERE c.id = $1 AND
   ((c.integration IS NULL AND c.owner IS NOT NULL AND ($2 OR c.owner = $3)) OR
    (c.run IS NOT NULL AND $2) OR
@@ -264,7 +264,7 @@ export const agentCallables = Effect.gen(function* () {
 		'sys_message.file': entry(
 			Schema.Struct({
 				message: Schema.String,
-				about: Schema.NullOr(Schema.Struct({ collection: Schema.String, id: Schema.String }))
+				about: Schema.NullOr(Schema.Struct({ model: Schema.String, id: Schema.String }))
 			}),
 			Effect.fn('Agents.fileCallable')(function* (input, authority) {
 				const image = yield* db.one(
@@ -279,7 +279,7 @@ export const agentCallables = Effect.gen(function* () {
 				if (input.about !== null) {
 					const now = yield* Clock.currentTimeMillis;
 					const answer = yield* reads.run(
-						[lowerRead(manifest, 'get', [input.about.collection, input.about.id])],
+						[lowerRead(manifest, 'get', [input.about.model, input.about.id])],
 						{ as: 'caller', authority },
 						bindingsAt(now, manifest.workspace.tz)
 					);

@@ -15,7 +15,7 @@ const manifest = Result.getOrThrow(
 			openings: { description: 'Roles', label: 'title', fields: { title: { kind: 'text' } } }
 		},
 		relationships: {},
-		collections: { openings: { read: { fields: 'all' } } },
+		exposures: { openings: { read: { openings: { fields: 'all' } } } },
 		integrations: {},
 		policies: {
 			rep: {
@@ -168,7 +168,7 @@ layer(workspace)('shell administration', (it) => {
 					Schema.Struct({
 						policies: Schema.Array(Schema.String),
 						admin: Schema.Boolean,
-						collections: Schema.Record(Schema.String, Schema.Unknown),
+						models: Schema.Record(Schema.String, Schema.Unknown),
 						capabilities: Schema.Unknown,
 						key: Schema.optionalKey(Schema.String)
 					})
@@ -178,7 +178,7 @@ layer(workspace)('shell administration', (it) => {
 					admin: false,
 					capabilities: { apps: ['sales'] }
 				});
-				expect(own.collections).toHaveProperty('openings');
+				expect(own.models).toHaveProperty('openings');
 				expect(own.key).toBeUndefined();
 				expect((yield* call(rep, 'GET', `/__bolt/shell/explain?team=${teamId}`)).status).toBe(403);
 				expect(
@@ -234,7 +234,7 @@ layer(workspace)('shell administration', (it) => {
 					telegram: 'Rep_Tg'
 				});
 				expect(s.audit).toContainEqual(
-					expect.objectContaining({ collection: 'sys_user', record: id, op: 'update' })
+					expect.objectContaining({ model: 'sys_user', record: id, op: 'update' })
 				);
 				const boss = s.members.find((u) => u['email'] === 'boss@acme.example')?.['id'];
 				if (typeof boss !== 'string') throw new Error('founder member missing');
@@ -328,10 +328,24 @@ layer(workspace)('shell administration', (it) => {
 			})
 	);
 
-	it.effect('source envoy roles cannot be created, changed or deleted through settings HTTP', () =>
+	it.effect('settings HTTP does not expose source envoy writes; tenant envoys use the model', () =>
 		Effect.gen(function* () {
 			const before = yield* settings(admin);
-			expect(before.envoys).toEqual([{ id: 'service', name: 'Source desk', audience: 'private' }]);
+			expect(before.envoys).toEqual([
+				{
+					id: 'service',
+					name: 'Source desk',
+					audience: 'private',
+					task: 'Answer about openings.',
+					policies: ['rep'],
+					groupMessages: 'mention_or_reply',
+					delegation: 'disabled',
+					triage: false,
+					dm: 'union',
+					active: true,
+					created: false
+				}
+			]);
 			for (const [name, input] of [
 				[
 					'saveEnvoy',

@@ -14,11 +14,11 @@ const recipient = '0199a000-0000-7000-8000-000000000001';
 const manifest: EngineManifest = {
 	...base,
 	workspace: { ...base.workspace, convert: { to: ['pdf'] } },
-	collections: {
-		...base.collections,
+	exposures: {
+		...base.exposures,
 		orders: {
-			...base.collections['orders'],
-			read: { fields: 'all' },
+			...base.exposures['orders'],
+			read: { orders: { fields: 'all' } },
 			notify: true
 		}
 	},
@@ -42,7 +42,7 @@ const setup = (notify: string, convert?: Convert['Service']) =>
 				guest: yield* program(
 					`import { Effect } from 'effect';
 import { ActRefused } from '@norbital-ai/bolt/errors';
-export default {collection:{orders:{bodies:{notify:${notify}}}},automation:{ping:{body:function*(input,ctx){if(input.fail)return yield* Effect.fail(new ActRefused({code:'refused',message:'Refused'}));yield* ctx.notify({title:'Ping',to:[{user:'${recipient}'}]});return 'ack';}}}};`
+export default {model:{orders:{bodies:{notify:${notify}}}},automation:{ping:{body:function*(input,ctx){if(input.fail)return yield* Effect.fail(new ActRefused({code:'refused',message:'Refused'}));yield* ctx.notify({title:'Ping',to:[{user:'${recipient}'}]});return 'ack';}}}};`
 				)
 			})
 		);
@@ -55,7 +55,7 @@ export default {collection:{orders:{bodies:{notify:${notify}}}},automation:{ping
 			params: [recipient]
 		});
 		const request = (key: string) => ({
-			collection: 'orders',
+			model: 'orders',
 			verb: 'create' as const,
 			input: { title: key },
 			key,

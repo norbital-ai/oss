@@ -24,7 +24,7 @@ const initial: EngineManifest = {
 	...manifest,
 	models: { entry: { description: 'An entry', label: 'name', fields: { name: { kind: 'text' } } } },
 	relationships: {},
-	collections: { entry: { read: { fields: 'all' } } },
+	exposures: { entry: { read: { entry: { fields: 'all' } } } },
 	policies: {}
 };
 const extended: EngineManifest = {
@@ -58,7 +58,7 @@ const blank: EngineManifest = {
 	workspace: { tz: 'UTC', locale: 'en' },
 	models: {},
 	relationships: {},
-	collections: {},
+	exposures: {},
 	integrations: {},
 	policies: {},
 	teams: {},
@@ -499,6 +499,44 @@ describe('committed workspace migrations', () => {
 			).pipe(Effect.provide(NodeServices.layer), Effect.provide(Pristine.layer))
 	);
 
+	it.live(
+		'a runtime function body changed by a Bolt release becomes the next migration, and its history verifies',
+		() =>
+			Effect.scoped(
+				Effect.gen(function* () {
+					const directory = yield* root;
+					const fs = yield* FileSystem.FileSystem;
+					yield* prepareMigrations(directory, initial, 'generate');
+					yield* prepareMigrations(directory, extended, 'generate');
+					const source = join(directory, 'migrations');
+					const body =
+						'create or replace function bolt_audit() returns trigger language plpgsql as $$ begin return null; end $$;';
+					const native = engineSchema.sourceObjects();
+					const changed = vi.spyOn(engineSchema, 'sourceObjects').mockReturnValue(
+						native.map((object) =>
+							object.id === 'engine:bolt_audit'
+								? {
+										...object,
+										create: object.create.map((sql) =>
+											/^create or replace function bolt_audit\(\)/i.test(sql) ? body : sql
+										)
+									}
+								: object
+						)
+					);
+					yield* Effect.gen(function* () {
+						yield* prepareMigrations(directory, extended, 'generate');
+						const sql = yield* fs.readFileString(join(source, '0003_runtime_functions.sql'));
+						expect(sql).toContain(body.slice(0, -1));
+						expect(sql).not.toContain('bolt_audit_mark');
+						yield* prepareMigrations(directory, extended, 'verify');
+						// nothing left to re-create
+						yield* prepareMigrations(directory, extended, 'generate');
+						expect((yield* readMigrations(source)).files.map((file) => file.name)).toHaveLength(3);
+					}).pipe(Effect.ensuring(Effect.sync(() => changed.mockRestore())));
+				})
+			).pipe(Effect.provide(NodeServices.layer), Effect.provide(Pristine.layer))
+	);
 	it.live('rejects a changed physical proof without rewriting the edited lock', () =>
 		Effect.scoped(
 			Effect.gen(function* () {

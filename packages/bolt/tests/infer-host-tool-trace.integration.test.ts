@@ -42,24 +42,24 @@ const manifest = {
 		}
 	},
 	relationships: {},
-	collections: {
+	exposures: {
 		invoices: {
-			read: { fields: 'all' },
-			create: { input: { columns: ['number', 'supplier', 'amount'] } },
-			update: { input: { columns: ['note'] } }
+			read: { invoices: { fields: 'all' } },
+			create: { columns: { invoices: ['number', 'supplier', 'amount'] } },
+			update: { columns: { invoices: ['note'] } }
 		},
 		purchase_orders: {
-			read: { fields: 'all' },
-			create: { input: { columns: ['number', 'supplier', 'amount', 'margin'] } }
+			read: { purchase_orders: { fields: 'all' } },
+			create: { columns: { purchase_orders: ['number', 'supplier', 'amount', 'margin'] } }
 		},
-		ledgers: { read: { fields: 'all' }, create: { input: { columns: ['title'] } } }
+		ledgers: { read: { ledgers: { fields: 'all' } }, create: { columns: { ledgers: ['title'] } } }
 	},
 	policies: {
 		matcher: {
 			description: 'Matches invoices',
 			grants: {
 				invoices: { read: true, update: true },
-				purchase_orders: { read: { fields: ['number', 'supplier', 'amount'] } }
+				purchase_orders: { read: { purchase_orders: { fields: ['number', 'supplier', 'amount'] } } }
 			},
 			capabilities: { tools: ['web_search'] }
 		},
@@ -92,15 +92,15 @@ const infer = (ctx, inv) => Effect.result(ctx.ai.sys_2.infer({ prompt: 'Match in
 export default { automation: {
 	match: { body: function* (input, ctx) {
 		for (const id of input.ids) {
-			const inv = yield* ctx.query('invoices', { id });
+			const inv = (yield* ctx.query({ invoices: { where: { id: { eq: id } } } })).invoices.rows[0];
 			const r = yield* infer(ctx, inv);
-			yield* ctx.act('invoices.update', { target: id, set: { note: Result.isFailure(r) ? 'failed' : JSON.stringify(r.success) } });
+			yield* ctx.act('invoices.update', [{ target: id, set: { note: Result.isFailure(r) ? 'failed' : JSON.stringify(r.success) } }]);
 		}
 	} },
 	relay: { body: function* (input, ctx) {
-		const inv = yield* ctx.query('invoices', { id: input.id });
+		const inv = (yield* ctx.query({ invoices: { where: { id: { eq: input.id } } } })).invoices.rows[0];
 		const r = yield* infer(ctx, inv);
-		yield* ctx.act('invoices.update', { target: input.id, set: { note: Result.isFailure(r) ? r.failure._tag + ': ' + r.failure.reason : 'answered' } });
+		yield* ctx.act('invoices.update', [{ target: input.id, set: { note: Result.isFailure(r) ? r.failure._tag + ': ' + r.failure.reason : 'answered' } }]);
 	} }
 } };`);
 
@@ -168,12 +168,18 @@ const create = (t: Kit, route: FixtureRoute, callable: string, input: Json) =>
 		})
 	);
 const note = (t: Kit, route: FixtureRoute, id: string) =>
-	qReply(route, clerk(t), { reads: [{ m: 'query', a: ['invoices', { id: id }] }] }).pipe(
+	qReply(route, clerk(t), {
+		reads: [{ m: 'query', a: [{ invoices: { where: { id: { eq: id } }, fields: ['note'] } }] }]
+	}).pipe(
 		Effect.map(
 			(reply) =>
-				Schema.decodeUnknownSync(Schema.Struct({ note: Schema.NullOr(Schema.String) }))(
-					reply.answers[0]
-				).note
+				Schema.decodeUnknownSync(
+					Schema.Struct({
+						invoices: Schema.Struct({
+							rows: Schema.Array(Schema.Struct({ note: Schema.NullOr(Schema.String) }))
+						})
+					})
+				)(reply.answers[0]).invoices.rows[0]?.note
 		)
 	);
 const toolResults = (request: AiRequest) =>
@@ -206,11 +212,11 @@ describe('sys_2.infer host tools', () => {
 							{ id: 's', name: 'submit', input: {} }
 						])
 					]);
-					yield* create(t, route, 'invoices.create', {
+					yield* create(t, route, 'invoices.create', [{
 						number: 'INV-1',
 						supplier: 'Acme',
 						amount: 1
-					});
+					}]);
 					yield* t.runDue();
 					const rows = t.fakes.logs
 						.filter((r) => r.event === 'infer.tool')

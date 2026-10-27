@@ -30,11 +30,11 @@ rule:
 examples:
   bad:
     - '<p>{record.id}</p>'
-    - '<CollectionTable>{#snippet columns({ Column })}<Column name="id" />{/snippet}</CollectionTable>'
-    - '<CollectionForm>{#snippet children({ Field })}<Field name="id" hidden />{/snippet}</CollectionForm>'
-    - "<CollectionTable>{#snippet columns({ Column })}<Column name={'id'} />{/snippet}</CollectionTable>"
+    - '<ModelTable>{#snippet columns({ Column })}<Column name="id" />{/snippet}</ModelTable>'
+    - '<ModelForm>{#snippet children({ Field })}<Field name="id" hidden />{/snippet}</ModelForm>'
+    - "<ModelTable>{#snippet columns({ Column })}<Column name={'id'} />{/snippet}</ModelTable>"
   good:
     - '<p>{record.name}</p>'
-    - '<CollectionTable query={{ where: { job_id: { eq: record.id } } }} />'
+    - '<ModelTable query={{ where: { job_id: { eq: record.id } } }} />'
     - '{#each rows as row (row.id)}<p>{row.name}</p>{/each}'
     - '<OrganizationSettings tenantId={view.organization.id} />'

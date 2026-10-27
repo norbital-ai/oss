@@ -23,7 +23,7 @@ const manifest: EngineManifest = {
 	workspace: { tz: 'UTC', locale: 'en' },
 	models: {},
 	relationships: {},
-	collections: {},
+	exposures: {},
 	integrations: {},
 	policies: {},
 	teams: {},

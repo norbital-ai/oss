@@ -24,12 +24,13 @@ import {
 	Option,
 	Predicate,
 	Redacted,
+	Result,
 	Schema,
 	SchemaGetter,
 	Semaphore,
 	Stream
 } from 'effect';
-import { HttpServerRequest, HttpServerResponse } from 'effect/unstable/http';
+import { HttpServerRequest, HttpServerResponse } from 'effect/http';
 import type { PlatformError } from 'effect/PlatformError';
 import { createHash, randomUUID } from 'node:crypto';
 import { createRequire } from 'node:module';
@@ -47,25 +48,14 @@ import type {
 	Callable,
 	CallerQuery,
 	Committed,
-	DeclaredQuery,
-	DeclaredRow,
 	Eff,
-	Hit,
-	IndexSearch,
-	ListResult,
-	Page,
-	Paged,
 	PendingApproval,
-	QueryCallable,
-	QueryInput,
-	QueryMember,
-	QueryOutput,
-	QuerySet,
-	QuerySetAnswer,
-	ReadResult,
-	Select,
-	StoredAnswer,
-	StoredMember,
+	DynamicAnswer,
+	HistoryOptions,
+	ReadAnswer,
+	ReadRequest,
+	ReadRequestBase,
+	Revision,
 	WorkspaceQuery
 } from '../decl/ctx.ts';
 import {
@@ -76,14 +66,12 @@ import {
 	FacilityFailure,
 	ReadFailed
 } from '../decl/errors.ts';
-import type { Is, ReadableName, StoredRow, WorkspaceReadField } from '../decl/names.ts';
+import type { Is, ReadableName } from '../decl/names.ts';
 import { nullableOfExpr } from '../decl/model.ts';
 import type { RunHandle, StartInput } from '../decl/runtime/facilities.ts';
 import type { FileRef, Id, Json } from '../decl/values.ts';
-import type { ModelWhere, OrderBy, Where } from '../decl/where.ts';
 import { compileAuthority, type Holder } from '../engine/access/authority.ts';
 import { isBatchCallable, parseCallable } from '../engine/callables/index.ts';
-import { outputSchema } from '../engine/callables/decode.ts';
 import { AgentHost } from '../engine/agent/index.ts';
 import { withBrowser } from '../engine/agent/browser.ts';
 import { DOWNLOAD, mediaType } from '../engine/files/media.ts';
@@ -117,7 +105,7 @@ import {
 	signupOf,
 	type IdentityHost
 } from '../engine/identity/session.ts';
-import { decodeManifest, layered, type EngineManifest } from '../engine/manifest.ts';
+import { decodeManifest, layered, layers, type EngineManifest } from '../engine/manifest.ts';
 import { Port, type PortFailure } from '../engine/port.ts';
 import {
 	Ai,
@@ -149,7 +137,6 @@ import {
 	SchemaSliceSchema
 } from '../engine/schema/plan.ts';
 import { lowerRead } from '../engine/query/engine.ts';
-import { lowerKeyedMember } from '../engine/query/keyed.ts';
 import {
 	Activation,
 	Callables,
@@ -170,16 +157,14 @@ import { restoreSource, seed as restore, type SeedPack } from '../engine/write/s
 import { BoltHost, BoltHostLive } from '../protocol/host.ts';
 import { PublicPages, publicPages } from '../protocol/pages.ts';
 import { catalog } from '../protocol/catalog.ts';
-import {
-	collectionOf,
-	defaultFields,
-	select,
-	storedFields,
-	SYSTEM_COLUMNS,
-	type SelectIR
-} from '@norbital-ai/store';
+import { SYSTEM_COLUMNS } from '@norbital-ai/store';
 import { bindings, RateLimits, SessionAuthority } from '../protocol/http.ts';
-import { declaredQuery } from '../protocol/reads.ts';
+import {
+	decodeReadRequest,
+	planReadRequest,
+	type ReadPlan,
+	type ReadRequestJson
+} from '../protocol/read-request.ts';
 import { ActReply, QReply, WireError } from '../protocol/schema.ts';
 import { HEADERS, PATHS, refusalOfStatus, uuidv7 } from '../protocol/wire.ts';
 import {
@@ -210,21 +195,28 @@ export type ActOptions = {
 	onConflict?: 'update' | 'keep';
 	observed?: { readonly [id: string]: number };
 };
-/** The workspace's generated write callables, including collection erase operations exercised by the test host. */
+/** The workspace's generated write callables, including model erase operations exercised by the test host. */
 export type KitCallable = Callable | `${ReadableName}.erase`;
-/** A callable's native typed input; erase operations accept one or more collection ids and an optional replacement set. */
+/** A callable's native typed input; erase operations accept one or more model ids and an optional replacement set. */
 export type KitInput<N> = N extends `${infer C}.erase`
 	? { target: Id<C> | readonly Id<C>[]; set?: Readonly<Record<string, Json>> }
 	: ActInput<N>;
 /**
  * Reads, writes, approval decisions, uploads and automation starts through the real host routes under one authority, with
- * native decoded values and typed failures. `query` is the one read API with the page's and `ctx.query`'s forms: a page of
- * a model (`where`, `select`, `orderBy`, a text or index `search`), one record (`{ id }`, or `{ id, revision }`), a declared
- * query (`'<model>.<query>'`) or a keyed set.
+ * native decoded values and typed failures. `query` is the one read API with the page's and `ctx.query`'s forms: a read
+ * request (a layer map of roots and their declared layers, answered per root), a page of a model (`where`, `select`,
+ * `orderBy`, a text or index `search`) or one record (`{ id }`, or `{ id, revision }`). Writes are batches: `act` takes a
+ * verb's rows as an array; a policy `check` that denies fails with `ActRefused` (`rule`, `row`, `path`, `field`), one that
+ * approves answers `pendingApproval`.
  */
 export interface Caller {
 	readonly authority: Authority;
 	readonly query: CallerQuery<ReadFailed>['query'];
+	/**
+	 * A record's revisions as the page's `bolt.history` reads them, newest first; `at` starts from an instant, a revision
+	 * or just before an approval request. A record as of a revision: take its `at`, then read the root with `asOf`.
+	 */
+	readonly history: CallerQuery<ReadFailed>['history'];
 	act<const N extends string>(
 		callable: Is<N, KitCallable>,
 		input: NoInfer<KitInput<N>>,
@@ -268,7 +260,8 @@ export type CassetteOptions = {
  */
 export type FakeLinks = {
 	readonly sent: { instance: string; message: Json; attachments?: readonly OutboundFile[] }[];
-	readonly typed: { instance: string; to: string }[];
+	/** Typing notices in order: `on` shows the assistant typing, `false` stops it. */
+	readonly typed: { instance: string; to: string; on: boolean }[];
 	answer: (instance: string, op: Json) => Effect.Effect<Json, PortFailure>;
 	page: (
 		instance: string,
@@ -442,49 +435,8 @@ export type WorkspaceServices =
 	| Turnstile
 	| SessionAuthority;
 
-/**
- * One read as `query(...)` names it, told apart by its arguments: a declared read, one record (`{ id }`, or `{ id, revision }`),
- * an index search, a page of a model, a declared query (`'<model>.<query>'`), or a keyed set.
- */
-type ReadForm =
-	| { readonly kind: 'declared'; readonly model: string; readonly args: unknown }
-	| {
-			readonly kind: 'record';
-			readonly model: string;
-			readonly select: unknown;
-			readonly revision: boolean;
-	  }
-	| { readonly kind: 'search'; readonly model: string; readonly select: unknown }
-	| { readonly kind: 'list'; readonly model: string; readonly select: unknown }
-	| { readonly kind: 'query'; readonly name: string }
-	| { readonly kind: 'set'; readonly members: { readonly [key: string]: unknown } };
-type StoredSelect<C> = { readonly [P in WorkspaceReadField<C>]?: true };
-type StoredResult<C extends string, S> =
-	StoredAnswer<{ from: C; select: S }> extends Page<infer R> ? R : never;
 const field = (o: unknown, key: string): unknown =>
 	Predicate.hasProperty(o, key) ? o[key] : undefined;
-function formOf(first: unknown, second: unknown): ReadForm {
-	if (typeof first !== 'string')
-		return {
-			kind: 'set',
-			members: typeof first === 'object' && first !== null ? { ...first } : {}
-		};
-	// a model name has no dot; a declared query is `<model>.<query>`
-	if (first.includes('.')) return { kind: 'query', name: first };
-	const select = field(second, 'select');
-	if (field(second, 'mode') === 'declared') return { kind: 'declared', model: first, args: second };
-	if (field(second, 'id') !== undefined)
-		return {
-			kind: 'record',
-			model: first,
-			select,
-			revision: field(second, 'revision') !== undefined
-		};
-	const search = field(second, 'search');
-	return typeof search === 'object' && search !== null
-		? { kind: 'search', model: first, select }
-		: { kind: 'list', model: first, select };
-}
 
 /** Native results use the host's catalogue and kind codecs; only caller values admit masks. */
 const nativeAnswers = (manifest: EngineManifest, readAs: 'caller' | 'workspace' = 'caller') => {
@@ -558,11 +510,11 @@ const nativeAnswers = (manifest: EngineManifest, readAs: 'caller' | 'workspace' 
 		}
 		return spec.optional === true ? Schema.NullOr(codec) : codec;
 	};
-	const identity = (collection: string) => {
-		const info = cat.models.get(collection);
-		if (info === undefined) throw new KitInvalid({ message: `unknown model '${collection}'` });
+	const identity = (model: string) => {
+		const info = cat.models.get(model);
+		if (info === undefined) throw new KitInvalid({ message: `unknown model '${model}'` });
 		return info.fields.get('id')?.pg === 'uuid'
-			? inputSchema({ kind: 'id', of: collection })
+			? inputSchema({ kind: 'id', of: model })
 			: Schema.String;
 	};
 	const masked = Schema.Struct({ $masked: Schema.Literal(true) });
@@ -575,73 +527,61 @@ const nativeAnswers = (manifest: EngineManifest, readAs: 'caller' | 'workspace' 
 		date: inputSchema({ kind: 'date' }),
 		instant: inputSchema({ kind: 'instant' })
 	};
-	const admits = Schema.Union([Schema.Literal('all'), Schema.Array(Schema.String)]);
+	const strings = Schema.Array(Schema.String);
 	const grantFields = Schema.Struct({
 		read: Schema.optionalKey(Schema.Unknown),
-		fields: Schema.optionalKey(admits)
+		fields: Schema.optionalKey(Schema.Union([Schema.Literal('all'), strings]))
 	});
-	const readFields = Schema.Struct({ fields: Schema.optionalKey(admits) });
-	const maskable = (collection: string, field: string) =>
-		!SYSTEM_COLUMNS.some((name) => name === field) &&
+	/**
+	 * Whether a caller may see `field` of read layer `path` masked: some policy's grant on the root narrows that layer's
+	 * `fields` (an identity grant's `fields` sit beside its bare `Where`). A layer a grant does not name is read in full.
+	 */
+	const maskable = (root: string, path: string, name: string) =>
+		!SYSTEM_COLUMNS.some((column) => column === name) &&
 		Object.values(m.policies).some((policy) => {
-			const grant = Schema.decodeUnknownOption(grantFields)(policy.grants[collection]);
-			if (Option.isNone(grant) || grant.value.read === undefined) return false;
-			const read = Schema.decodeUnknownOption(readFields)(grant.value.read);
-			const admitted = Option.isSome(read)
-				? (read.value.fields ?? grant.value.fields)
-				: grant.value.fields;
-			return admitted !== undefined && admitted !== 'all' && !admitted.includes(field);
+			const grant = Schema.decodeUnknownOption(grantFields)(policy.grants[root]);
+			if (Option.isNone(grant)) return false;
+			const read = grant.value.read;
+			if (read === undefined || read === true) return false;
+			const layered =
+				Predicate.isObject(read) &&
+				Object.keys(read).some((key) => key === root || key.startsWith(`${root}.`));
+			const admitted = Schema.decodeUnknownOption(strings)(
+				layered ? field(field(read, path), 'fields') : path === root ? grant.value.fields : undefined
+			);
+			return Option.isSome(admitted) && !admitted.value.includes(name);
 		});
-	const row = (
-		collection: string,
-		selected: SelectIR,
-		heavy = false,
-		hit = false
-	): Schema.Decoder<unknown> => {
-		const info = storeSync(collectionOf(cat, collection)),
-			model = m.models[collection];
-		const columns: Record<string, Schema.Decoder<unknown>> = { id: identity(collection) };
-		for (const name of selected.fields ??
-			(readAs === 'workspace' ? storedFields(info.model) : defaultFields(info, heavy))) {
-			if (name === 'id') continue;
-			const relation = m.relationships[`${collection}.${name}`];
-			const declared = model?.fields[name],
-				computed = model?.computed?.[name];
-			let codec: Schema.Decoder<unknown>;
-			if (relation !== undefined) {
-				codec =
-					typeof relation.to === 'string'
-						? identity(relation.to)
-						: Schema.Union(
-								relation.to.map((target) =>
-									Schema.Struct({ collection: Schema.Literal(target), id: identity(target) })
-								)
-							);
-				if (relation.optional) codec = Schema.NullOr(codec);
-			} else if (declared !== undefined) codec = kind(declared);
-			else if (computed !== undefined) {
-				const value = computedKinds[computed.kind];
-				codec =
-					model === undefined || nullableOfExpr(computed.expr, model)
-						? Schema.NullOr(value)
-						: value;
-			} else if (name === 'revision') codec = Schema.Int;
-			else if (name === 'created_at' || name === 'updated_at')
-				codec = inputSchema({ kind: 'instant' });
-			else if (name === 'created_by' || name === 'updated_by')
-				codec = Schema.NullOr(identity('sys_user'));
-			else throw new KitInvalid({ message: `unknown field '${collection}.${name}'` });
-			columns[name] =
-				readAs === 'caller' && maskable(collection, name) ? Schema.Union([codec, masked]) : codec;
+	/** A field's native codec on `model`: a ref's id (or arc), its declared kind, a computed value or a system column. */
+	const fieldCodec = (model: string, name: string): Schema.Decoder<unknown> => {
+		const spec = m.models[model];
+		const relation = m.relationships[`${model}.${name}`];
+		const declared = spec?.fields[name],
+			computed = spec?.computed?.[name];
+		if (relation !== undefined) {
+			const codec =
+				typeof relation.to === 'string'
+					? identity(relation.to)
+					: Schema.Union(
+							relation.to.map((target) =>
+								Schema.Struct({ model: Schema.Literal(target), id: identity(target) })
+							)
+						);
+			return relation.optional ? Schema.NullOr(codec) : codec;
 		}
-		for (const [name, relation] of Object.entries(selected.relations)) {
-			const member = row(relation.target, relation.select);
-			columns[name] = relation.many ? Schema.Array(member) : Schema.NullOr(member);
+		if (declared !== undefined) return kind(declared);
+		if (computed !== undefined) {
+			const value = computedKinds[computed.kind];
+			return spec === undefined || nullableOfExpr(computed.expr, spec)
+				? Schema.NullOr(value)
+				: value;
 		}
-		if (hit) columns['$distance'] = Schema.Number;
-		return Schema.Struct({
-			...columns,
-			$sync: Schema.optionalKey(
+		if (name === 'revision') return Schema.Int;
+		if (name === 'created_at' || name === 'updated_at') return inputSchema({ kind: 'instant' });
+		if (name === 'created_by' || name === 'updated_by') return Schema.NullOr(identity('sys_user'));
+		throw new KitInvalid({ message: `unknown field '${model}.${name}'` });
+	};
+	const rowState = {
+		$sync: Schema.optionalKey(
 				Schema.Record(
 					Schema.String,
 					Schema.Struct({
@@ -665,26 +605,127 @@ const nativeAnswers = (manifest: EngineManifest, readAs: 'caller' | 'workspace' 
 					requestedBy: Schema.String
 				})
 			)
-		});
+	};
+	const loose = Schema.optionalKey(Schema.Record(Schema.String, Schema.Json));
+	const decimals = Schema.optionalKey(
+		Schema.Record(Schema.String, Schema.NullOr(inputSchema({ kind: 'money' })))
+	);
+	/** One aggregate row of a read request's root or many-layer: bucket `key`, `count` and the measures. */
+	const aggRow = Schema.Struct({
+		key: loose,
+		count: Schema.optionalKey(Schema.Number),
+		sum: decimals,
+		avg: decimals,
+		min: loose,
+		max: loose
+	});
+	/**
+	 * One row of read layer `path` under `root`: `id`, any field of the layer's model (the host picks the exposed or named
+	 * ones), and each named sub-layer under its relation name in place of the FK (a ref: the row or `null`; a many-relation:
+	 * its rows, or its aggregate). Root rows carry `$distance` (an index search) and the row state.
+	 */
+	/** Every column of `model` but `id`, each optional (the host picks which come), masked where a root policy masks `path`. */
+	const anyColumns = (root: string, path: string, model: string) => {
+		const names = new Set<string>([
+			...SYSTEM_COLUMNS,
+			...Object.keys(m.models[model]?.fields ?? {}),
+			...Object.keys(m.models[model]?.computed ?? {}),
+			...Object.keys(m.relationships)
+				.filter((key) => key.startsWith(`${model}.`))
+				.map((key) => key.slice(model.length + 1))
+		]);
+		names.delete('id');
+		return Object.fromEntries(
+			[...names].map((name): [string, Schema.optionalKey<Schema.Decoder<unknown>>] => {
+				const codec = fieldCodec(model, name);
+				return [
+					name,
+					Schema.optionalKey(
+						readAs === 'caller' && maskable(root, path, name)
+							? Schema.Union([codec, masked])
+							: codec
+					)
+				];
+			})
+		);
+	};
+	/** A record's revisions (`history`), newest first: each one's number, instant, actor, cause and changed fields. */
+	const revisions = (model: string) =>
+		Schema.Array(
+			Schema.Struct({
+				revision: Schema.Int,
+				at: inputSchema({ kind: 'instant' }),
+				actor: Schema.NullOr(Schema.Struct({ kind: Schema.String, id: Schema.String })),
+				cause: Schema.Literals(['direct', 'cascade', 'derived', 'seed', 'erased']),
+				changed: Schema.Struct(anyColumns(model, model, model))
+			})
+		);
+	const requestRow = (
+		root: string,
+		path: string,
+		named: ReadPlan[string]
+	): Schema.Decoder<unknown> => {
+		const model = layers(m)[root]?.[path];
+		if (model === undefined)
+			throw new KitInvalid({ message: `'${path}' is not a read layer ${root} declares` });
+		const columns: Record<string, Schema.Decoder<unknown> | Schema.optionalKey<Schema.Decoder<unknown>>> =
+			{ id: identity(model), ...anyColumns(root, path, model) };
+		for (const [sub, layer] of Object.entries(named)) {
+			const name = sub.slice(path.length + 1);
+			if (!sub.startsWith(`${path}.`) || name.includes('.')) continue;
+			columns[name] =
+				layer.aggregate !== undefined
+					? layer.aggregate.by === undefined
+						? aggRow
+						: Schema.Array(aggRow)
+					: m.relationships[`${model}.${name}`] !== undefined
+						? Schema.NullOr(requestRow(root, sub, named))
+						: Schema.Array(requestRow(root, sub, named));
+		}
+		return Schema.Struct(
+			path === root
+				? { ...columns, $distance: Schema.optionalKey(Schema.Number), ...rowState }
+				: columns
+		);
+	};
+	/** A read request's answer: per root a page of layer rows, or its aggregate (a page of buckets with `by`). */
+	const requestAnswer = (request: unknown): Schema.Decoder<unknown> => {
+		const plan = Result.match(
+			Result.flatMap(decodeReadRequest(request), (json) => planReadRequest(json, m.exposures)),
+			{
+				onSuccess: (value) => value,
+				onFailure: (message) => {
+					throw new KitInvalid({ message });
+				}
+			}
+		);
+		return Schema.Struct(
+			Object.fromEntries(
+				Object.entries(plan).map(([root, named]): [string, Schema.Decoder<unknown>] => {
+					const aggregate = named[root]?.aggregate;
+					return [
+						root,
+						aggregate === undefined
+							? page(requestRow(root, root, named))
+							: aggregate.by === undefined
+								? aggRow
+								: page(aggRow)
+					];
+				})
+			)
+		);
 	};
 	const page = (member: Schema.Decoder<unknown>) =>
-		Schema.Struct({ rows: Schema.Array(member), next: Schema.NullOr(Schema.String) });
-	/** One record (`{ id }`), nullable; or a page, of hits for an index search. */
-	const read = (collection: string, selection: unknown, shape: 'one' | 'page' | 'hits') => {
-		const member = row(
-			collection,
-			storeSync(select(cat, collection, selection)),
-			shape === 'one',
-			shape === 'hits'
-		);
-		return shape === 'one' ? Schema.NullOr(member) : page(member);
-	};
+		Schema.Struct({
+			rows: Schema.Array(member),
+			next: Schema.optionalKey(Schema.NullOr(Schema.String))
+		});
 	const records = Schema.Array(
 		Schema.Union(
-			[...cat.collections.keys()].map((collection) =>
+			[...cat.exposures.keys()].map((model) =>
 				Schema.Struct({
-					collection: Schema.Literal(collection),
-					id: identity(collection),
+					model: Schema.Literal(model),
+					id: identity(model),
 					revision: Schema.Int
 				})
 			)
@@ -692,55 +733,23 @@ const nativeAnswers = (manifest: EngineManifest, readAs: 'caller' | 'workspace' 
 	);
 	const outputOf = (method: 'act' | 'start', name: string): Schema.Decoder<unknown> => {
 		const dot = name.lastIndexOf('.'),
-			collection = name.slice(0, dot),
+			model = name.slice(0, dot),
 			callable = name.slice(dot + 1);
 		return method === 'start'
 			? Schema.Struct({ id: identity('sys_run'), automation: Schema.String })
 			: callable === 'upsert'
-				? Schema.Array(Schema.NullOr(identity(collection)))
+				? Schema.Array(Schema.NullOr(identity(model)))
 				: callable === 'import'
 					? Schema.Struct({
 							rows: Schema.Array(
 								Schema.Struct({
 									index: Schema.NullOr(Schema.Int),
-									id: Schema.NullOr(identity(collection)),
+									id: Schema.NullOr(identity(model)),
 									action: Schema.Literals(['created', 'updated', 'kept', 'skipped', 'deleted'])
 								})
 							)
 						})
 					: absent;
-	};
-	const readCodec = (form: ReadForm): Schema.Decoder<unknown> => {
-		switch (form.kind) {
-			case 'declared':
-				return read(form.model, declaredQuery(cat, form.model, form.args, readAs).select, 'page');
-			case 'record':
-				return read(form.model, form.select, 'one');
-			case 'search':
-				return read(form.model, form.select, 'hits');
-			case 'list':
-				return read(form.model, form.select, 'page');
-			case 'query': {
-				const dot = form.name.lastIndexOf('.');
-				const output =
-					m.collections[form.name.slice(0, dot)]?.queries?.[form.name.slice(dot + 1)]?.output;
-				if (output === undefined) throw new KitInvalid({ message: `unknown query '${form.name}'` });
-				return outputSchema(m, output);
-			}
-			case 'set':
-				return Schema.Struct(
-					Object.fromEntries(
-						Object.entries(form.members).map(([key, member]): [string, Schema.Decoder<unknown>] => [
-							key,
-							read(
-								String(field(member, 'from')),
-								field(member, 'select'),
-								field(member, 'id') === undefined ? 'page' : 'one'
-							)
-						])
-					)
-				);
-		}
 	};
 	const actCodec = (method: 'act' | 'start', name: string) =>
 		Schema.Union([
@@ -783,7 +792,9 @@ const nativeAnswers = (manifest: EngineManifest, readAs: 'caller' | 'workspace' 
 			return yield* Schema.decodeUnknownEffect(branded)(decoded);
 		});
 	return {
-		read: (form: ReadForm, value: unknown) => native<unknown>(() => readCodec(form), value),
+		/** A read request's answer, per root, as native values (a runtime-built `ReadRequestJson`'s too). */
+		read: (request: unknown, value: unknown) => native<unknown>(() => requestAnswer(request), value),
+		history: (model: string, value: unknown) => native<unknown>(() => revisions(model), value),
 		act: <N extends string>(name: Is<N, KitCallable>, value: unknown) =>
 			native<Committed<ActOutput<N>, N> | PendingApproval<N>>(() => actCodec('act', name), value),
 		start: <A extends string>(value: unknown) =>
@@ -816,12 +827,12 @@ const invalid = (e: unknown) =>
 /** Explicit fixture callbacks activate the same per-verb markers that compiled model declarations carry. */
 function markedTransforms(manifest: EngineManifest, names: ReadonlySet<string>): EngineManifest {
 	if (names.size === 0) return manifest;
-	const collections = { ...manifest.collections };
+	const exposures = { ...manifest.exposures };
 	for (const name of names) {
 		const dot = name.lastIndexOf('.'),
 			model = name.slice(0, dot),
 			verb = name.slice(dot + 1),
-			spec = collections[model];
+			spec = exposures[model];
 		if (dot < 1 || (verb !== 'create' && verb !== 'update' && verb !== 'delete'))
 			throw new KitInvalid({
 				message: `TestWorkspace transform '${name}' must name '<model>.create', '<model>.update' or '<model>.delete'.`
@@ -835,22 +846,22 @@ function markedTransforms(manifest: EngineManifest, names: ReadonlySet<string>):
 				throw new KitInvalid({
 					message: `TestWorkspace transform '${name}' has no declared write verb.`
 				});
-			collections[model] = { ...spec, create: { ...spec.create, transform: true } };
+			exposures[model] = { ...spec, create: { ...spec.create, transform: true } };
 		} else if (verb === 'update') {
 			if (spec.update === undefined)
 				throw new KitInvalid({
 					message: `TestWorkspace transform '${name}' has no declared write verb.`
 				});
-			collections[model] = { ...spec, update: { ...spec.update, transform: true } };
+			exposures[model] = { ...spec, update: { ...spec.update, transform: true } };
 		} else {
 			if (spec.delete === undefined)
 				throw new KitInvalid({
 					message: `TestWorkspace transform '${name}' has no declared write verb.`
 				});
-			collections[model] = { ...spec, delete: { ...spec.delete, check: true } };
+			exposures[model] = { ...spec, delete: { ...spec.delete, check: true } };
 		}
 	}
-	return { ...manifest, collections };
+	return { ...manifest, exposures };
 }
 const node = NodeChildProcessSpawner.layer.pipe(
 	Layer.provideMerge(Layer.mergeAll(NodeFileSystem.layer, NodePath.layer, NodeCrypto.layer))
@@ -1064,14 +1075,14 @@ const namedPack = (root: string, manifest: EngineManifest, name: 'base' | 'sampl
 			return yield* readPack(dir);
 		}
 		const compiler = yield* Effect.tryPromise({
-			try: () => import('../compiler/check/index.ts'),
+			try: () => import('../compiler/seed.ts'),
 			catch: invalid
 		});
 		const artifact = yield* Effect.tryPromise({
 			try: () => import('../compiler/artifact/seed.ts'),
 			catch: invalid
 		});
-		const errors: import('../compiler/check/index.ts').CheckDiagnostic[] = [],
+		const errors: import('../protocol/diagnostic.ts').CheckDiagnostic[] = [],
 			cache = join(root, '.norbital', 'cache');
 		const build = (out: string) =>
 			Effect.gen(function* () {
@@ -1441,9 +1452,9 @@ export class TestWorkspace extends Context.Service<TestWorkspace, Kit>()(
 										});
 										return { providerId: `${instance}:${f.links.sent.length}` };
 									}),
-								typing: (instance, to) =>
+								typing: (instance, to, on) =>
 									Effect.sync(() => {
-										f.links.typed.push({ instance, to });
+										f.links.typed.push({ instance, to, on });
 									}),
 								request: (instance, op) => f.links.answer(instance, op),
 								read: (instance, sync, partition, cursor) =>
@@ -1542,7 +1553,7 @@ export class TestWorkspace extends Context.Service<TestWorkspace, Kit>()(
 						.loadPackWithAssets(db, m, sourceOf(pack), Context.get(portContext, Files), now)
 						.pipe(Effect.provide(node));
 				} else if (typeof seed === 'object' && Object.keys(seed).length > 0) {
-					if (IDENTITY.some((collection) => seed[collection] !== undefined)) {
+					if (IDENTITY.some((model) => seed[model] !== undefined)) {
 						const pack: Pack = {
 							dir: '',
 							rows: seed,
@@ -1692,95 +1703,34 @@ export class TestWorkspace extends Context.Service<TestWorkspace, Kit>()(
 					);
 				const decodeArgs = (args: readonly unknown[]) =>
 					Effect.flatMap(wireJson(args), Schema.decodeUnknownEffect(Schema.Array(Schema.Json)));
-				function storedQuery<C extends string>(
-					model: Is<C, ReadableName>,
-					args: DeclaredQuery
-				): Eff<Page<DeclaredRow<C>>, ReadFailed>;
-				function storedQuery<C extends string>(
-					model: Is<C, ReadableName>,
-					args: { id: NoInfer<Id<C>>; revision?: number }
-				): Eff<StoredRow<C> | null>;
-				function storedQuery<C extends string, const S extends StoredSelect<C> = {}>(
-					model: Is<C, ReadableName>,
-					args: {
-						search: NoInfer<IndexSearch<C>>;
-						where?: NoInfer<ModelWhere<C>>;
-						select?: S;
-						limit: number;
-					}
-				): Eff<Page<Hit<StoredResult<C, S>>>>;
-				function storedQuery<C extends string, const S extends StoredSelect<C> = {}>(
-					model: Is<C, ReadableName>,
-					args: {
-						where?: NoInfer<ModelWhere<C>>;
-						select?: S;
-						orderBy?: NoInfer<OrderBy<C>>;
-						search?: string;
-					} & Paged
-				): Eff<Page<StoredResult<C, S>>>;
-				function storedQuery<const N extends string>(
-					name: Is<N, QueryCallable>,
-					input: NoInfer<QueryInput<N>>
-				): Eff<QueryOutput<N>>;
-				function storedQuery<const M extends QuerySet>(
-					set: M & { readonly [K in keyof M]: StoredMember<M[K]['from']> }
-				): Eff<{ readonly [K in keyof M]: StoredAnswer<M[K]> }>;
-				function storedQuery(first: unknown, second?: unknown): Effect.Effect<unknown, ReadFailed> {
-					const form = formOf(first, second);
+				function storedQuery<const R extends ReadRequestBase>(
+					request: ReadRequest<R>
+				): Eff<ReadAnswer<R, false>>;
+				function storedQuery(request: ReadRequestJson): Eff<DynamicAnswer, ReadFailed>;
+				function storedQuery(request: unknown): Effect.Effect<unknown, ReadFailed> {
 					const query = Effect.gen(function* () {
 						const b = yield* bindings;
-						if (form.kind !== 'set') {
-							const args = yield* decodeArgs(second === undefined ? [first] : [first, second]);
-							const ir = yield* Effect.try({
-								try: () => lowerRead(m, 'db.query', args),
-								catch: decodeFailure
-							});
-							const value = (yield* storedReads.run([ir], { as: 'workspace' }, b))[0];
-							if (value === undefined)
-								return yield* Effect.fail(
-									new ReadFailed({
-										code: 'protocol',
-										message: 'The host returned no stored read answer.'
-									})
-								);
-							return yield* storedAnswer.read(form, value);
-						}
-						const set = yield* Schema.decodeUnknownEffect(
-							Schema.Record(Schema.String, Schema.Json)
-						)(yield* wireJson(first));
-						const earlier = new Set<string>(),
-							scope = randomUUID();
-						const batch = yield* Effect.try({
-							try: () =>
-								Object.entries(set).map(([key, spec]) => {
-									const ir = lowerKeyedMember(
-										'db.query',
-										key,
-										spec,
-										(method, args) => lowerRead(m, method, args),
-										scope,
-										earlier
-									);
-									earlier.add(key);
-									return ir;
-								}),
+						// a read request crosses as its one argument, all roots in one crossing
+						const args = yield* decodeArgs([request]);
+						const ir = yield* Effect.try({
+							try: () => lowerRead(m, 'db.query', args),
 							catch: decodeFailure
 						});
-						const values = yield* storedReads.run(batch, { as: 'workspace' }, b);
-						return yield* storedAnswer.read(
-							form,
-							Object.fromEntries(Object.keys(set).map((key, index) => [key, values[index]]))
-						);
+						const value = (yield* storedReads.run([ir], { as: 'workspace' }, b))[0];
+						if (value === undefined)
+							return yield* Effect.fail(
+								new ReadFailed({
+									code: 'protocol',
+									message: 'The host returned no stored read answer.'
+								})
+							);
+						return yield* storedAnswer.read(request, value);
 					});
-					return (
-						form.kind === 'declared'
-							? query.pipe(Effect.mapError(readFailure))
-							: query.pipe(Effect.orDie)
-					).pipe(Effect.provide(hostContext));
+					return query.pipe(Effect.mapError(readFailure), Effect.provide(hostContext));
 				}
 				const bodyActs: Kit['bodyActs'] = (who) => {
 					const authority =
-						'collections' in who ? who : compileAuthority(m, who, `test:${randomUUID()}`);
+						'models' in who ? who : compileAuthority(m, who, `test:${randomUUID()}`);
 					const batch = (acts: unknown) =>
 						Effect.gen(function* () {
 							const input = yield* Schema.decodeUnknownEffect(
@@ -1824,7 +1774,7 @@ export class TestWorkspace extends Context.Service<TestWorkspace, Kit>()(
 										})
 									);
 								native.push({
-									collection: callable.collection,
+									model: callable.model,
 									verb: callable.verb,
 									input: act.input,
 									...(act.observed === undefined ? {} : { observed: act.observed }),
@@ -1936,58 +1886,43 @@ export class TestWorkspace extends Context.Service<TestWorkspace, Kit>()(
 						}).pipe(Effect.catchTag('KitInvalid', Effect.die));
 					const readError = (error: { readonly message: string }) =>
 						new ReadFailed({ code: 'protocol', message: error.message });
-					// `query(...args)` crosses as `{ m: 'query', a: args }`, as the page's and a body's do
-					function callerQuery<C extends string>(
+					// a read request crosses as `{ m: 'query', a: [request] }`, as the page's and a body's do
+					function callerQuery<const R extends ReadRequestBase>(
+						request: ReadRequest<R>
+					): Eff<ReadAnswer<R>, ReadFailed>;
+					function callerQuery(request: ReadRequestJson): Eff<DynamicAnswer, ReadFailed>;
+					function callerQuery(request: unknown): Effect.Effect<unknown, ReadFailed> {
+						return read('query', [request]).pipe(
+							Effect.flatMap((value) =>
+								answer.read(request, value).pipe(Effect.mapError(readError))
+							)
+						);
+					}
+					// `history(model, id, { at })` crosses as `{ m: 'history', a: [model, id, at?] }`, as the page's does
+					function history<C extends string>(
 						model: Is<C, ReadableName>,
-						args: DeclaredQuery
-					): Eff<Page<DeclaredRow<C>>, ReadFailed>;
-					function callerQuery<C extends string>(
-						model: Is<C, ReadableName>,
-						args: { id: NoInfer<Id<C>>; revision: number }
-					): Eff<StoredRow<C> | null, ReadFailed>;
-					function callerQuery<C extends string, const S extends Select<C> = {}>(
-						model: Is<C, ReadableName>,
-						args: { id: NoInfer<Id<C>>; select?: S }
-					): Eff<ReadResult<C, S> | null, ReadFailed>;
-					function callerQuery<C extends string, const S extends Select<C> = {}>(
-						model: Is<C, ReadableName>,
-						args: {
-							search: NoInfer<IndexSearch<C>>;
-							where?: NoInfer<Where<C>>;
-							select?: S;
-							limit: number;
-						}
-					): Eff<Page<Hit<ListResult<C, S>>>, ReadFailed>;
-					function callerQuery<C extends string, const S extends Select<C> = {}>(
-						model: Is<C, ReadableName>,
-						args: {
-							where?: NoInfer<Where<C>>;
-							select?: S;
-							orderBy?: NoInfer<OrderBy<C>>;
-							search?: string;
-						} & Paged
-					): Eff<Page<ListResult<C, S>>, ReadFailed>;
-					function callerQuery<const N extends string>(
-						name: Is<N, QueryCallable>,
-						input: NoInfer<QueryInput<N>>
-					): Eff<QueryOutput<N>, ReadFailed>;
-					function callerQuery<const M extends QuerySet>(
-						set: M & { readonly [K in keyof M]: QueryMember<M[K]['from']> }
-					): Eff<QuerySetAnswer<M>, ReadFailed>;
-					function callerQuery(
-						first: unknown,
-						second?: unknown
+						id: NoInfer<Id<C>>,
+						options?: HistoryOptions
+					): Eff<readonly Revision<C>[], ReadFailed>;
+					function history(
+						model: string,
+						id: string,
+						options: HistoryOptions = {}
 					): Effect.Effect<unknown, ReadFailed> {
-						const form = formOf(first, second);
-						// a record as of a revision is folded from its history: the stored row, unmasked
-						const decoder = form.kind === 'record' && form.revision ? storedAnswer : answer;
-						return read('query', second === undefined ? [first] : [first, second]).pipe(
-							Effect.flatMap((value) => decoder.read(form, value).pipe(Effect.mapError(readError)))
+						return read('history', [
+							model,
+							id,
+							...(options.at === undefined ? [] : [options.at])
+						]).pipe(
+							Effect.flatMap((value) =>
+								answer.history(model, value).pipe(Effect.mapError(readError))
+							)
 						);
 					}
 					return {
 						authority,
 						query: callerQuery,
+						history,
 						act: <const N extends string>(
 							name: Is<N, KitCallable>,
 							input: NoInfer<KitInput<N>>,
@@ -2131,7 +2066,7 @@ export class TestWorkspace extends Context.Service<TestWorkspace, Kit>()(
 						}
 					},
 					as: (who) =>
-						caller('collections' in who ? who : compileAuthority(m, who, `test:${randomUUID()}`)),
+						caller('models' in who ? who : compileAuthority(m, who, `test:${randomUUID()}`)),
 					visitor: (app, opts) =>
 						caller(new Authorities(m, 'test').visitor(app, randomUUID()), opts?.ip),
 					signIn: (address) =>

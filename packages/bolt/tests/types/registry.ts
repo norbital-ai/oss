@@ -153,70 +153,20 @@ declare module '../../src/index.ts' {
 				};
 			};
 		};
-		collections: {
+		exposures: {
 			customers: {
 				read: {
-					fields: 'all';
-					relations: 'all';
+					customers: { fields: 'all' };
 				};
 				create: {
-					input: {
-						columns: readonly ['name', 'email', 'tier'];
-						filled: readonly ['name'];
-					};
+					columns: { customers: readonly ['name', 'email', 'tier'] };
+					filled: { customers: readonly ['name'] };
 					transform: true;
 				};
 				update: {
-					input: {
-						columns: readonly ['name', 'email', 'tier', 'tags'];
-					};
+					columns: { customers: readonly ['name', 'email', 'tier', 'tags'] };
 				};
 				delete: { check: true };
-				queries: {
-					one: {
-						description: 'One native row';
-						input: {};
-						output: { kind: 'row'; of: 'customers' };
-					};
-					nested: {
-						description: 'Rows inside each composite output';
-						input: {};
-						output: {
-							kind: 'object';
-							fields: {
-								row: { kind: 'row'; of: 'customers' };
-								rows: { kind: 'list'; of: { kind: 'row'; of: 'customers' } };
-								by: { kind: 'record'; of: { kind: 'row'; of: 'customers' } };
-								choice: {
-									kind: 'union';
-									by: 'kind';
-									arms: { one: { row: { kind: 'row'; of: 'customers' } } };
-								};
-							};
-						};
-					};
-					gold: {
-						description: 'Gold customers';
-						input: {
-							min: {
-								kind: 'int';
-								optional: true;
-							};
-						};
-						output: {
-							kind: 'list';
-							of: {
-								kind: 'id';
-								of: 'customers';
-								where: {
-									tier: {
-										eq: 'gold';
-									};
-								};
-							};
-						};
-					};
-				};
 				syncs: {
 					crm: {
 						with: 'erp';
@@ -228,54 +178,27 @@ declare module '../../src/index.ts' {
 			};
 			orders: {
 				read: {
-					fields: 'all';
-					relations: 'all';
+					orders: { fields: 'all' };
+					'orders.customer': { fields: readonly ['name', 'tier'] };
+					'orders.lines': { fields: 'all' };
 				};
 				create: {
-					input: {
-						columns: readonly ['customer', 'note', 'due'];
-						with: {
-							lines: {
-								create: {
-									columns: readonly ['item', 'qty', 'price'];
-								};
-							};
-						};
+					columns: {
+						orders: readonly ['customer', 'note', 'due'];
+						'orders.lines': readonly ['item', 'qty', 'price'];
 					};
+					filled: { orders: readonly ['note'] };
 					transform: true;
 				};
 				update: {
-					input: {
-						columns: readonly ['status', 'note', 'due', 'placed_at'];
-						with: {
-							lines: {
-								create: {
-									columns: readonly ['item', 'qty', 'price'];
-								};
-								update: {
-									columns: readonly ['qty'];
-								};
-								delete: {};
-							};
-						};
+					columns: {
+						orders: readonly ['status', 'note', 'due', 'placed_at'];
+						'orders.lines': readonly ['item', 'qty', 'price'];
 					};
 					transform: true;
 				};
 				delete: {
 					check: true;
-				};
-				queries: {
-					open_total: {
-						description: 'Sum of open orders';
-						input: {
-							since: {
-								kind: 'date';
-							};
-						};
-						output: {
-							kind: 'money';
-						};
-					};
 				};
 				notify: true;
 				syncs: {
@@ -315,27 +238,12 @@ declare module '../../src/index.ts' {
 			};
 			order_lines: {
 				read: {
-					fields: 'all';
-					relations: 'all';
+					order_lines: { fields: 'all' };
 				};
 			};
 			notices: {
 				read: {
-					fields: 'all';
-					relations: 'all';
-				};
-				queries: {
-					recent: {
-						description: 'Latest notices';
-						input: {};
-						output: {
-							kind: 'list';
-							of: {
-								kind: 'id';
-								of: 'notices';
-							};
-						};
-					};
+					notices: { fields: 'all' };
 				};
 				syncs: {
 					mail: {
@@ -346,18 +254,13 @@ declare module '../../src/index.ts' {
 			};
 			notice_notes: {
 				read: {
-					fields: 'all';
-					relations: 'all';
+					notice_notes: { fields: 'all' };
 				};
 				create: {
-					input: {
-						columns: readonly ['notice', 'note'];
-					};
+					columns: { notice_notes: readonly ['notice', 'note'] };
 				};
 				update: {
-					input: {
-						columns: readonly ['note'];
-					};
+					columns: { notice_notes: readonly ['note'] };
 				};
 				syncs: {
 					sheet: {
@@ -384,24 +287,18 @@ declare module '../../src/index.ts' {
 			};
 			sites: {
 				read: {
-					fields: readonly ['name', 'location', 'customer', 'open', 'rating', 'checklist'];
-					relations: readonly [];
+					sites: { fields: readonly ['name', 'location', 'customer', 'open', 'rating', 'checklist'] };
 				};
 				update: {
-					input: {
-						columns: readonly ['name', 'location'];
-					};
+					columns: { sites: readonly ['name', 'location'] };
 				};
 			};
 			products: {
 				read: {
-					fields: 'all';
-					relations: 'all';
+					products: { fields: 'all' };
 				};
 				update: {
-					input: {
-						columns: readonly ['commission_factor'];
-					};
+					columns: { products: readonly ['commission_factor'] };
 				};
 				syncs: {
 					ledger: {
@@ -412,13 +309,10 @@ declare module '../../src/index.ts' {
 			};
 			entries: {
 				read: {
-					fields: 'all';
-					relations: 'all';
+					entries: { fields: 'all' };
 				};
 				update: {
-					input: {
-						columns: readonly ['filed'];
-					};
+					columns: { entries: readonly ['filed'] };
 				};
 				syncs: {
 					calendar: {
@@ -611,6 +505,9 @@ declare module '../../src/index.ts' {
 				url: 'MCP_URL';
 				tools: readonly ['search_docs'];
 			};
+		};
+		layers: {
+			orders: { 'orders.customer': 'customers'; 'orders.lines': 'order_lines' };
 		};
 		models: {
 			customers: {
@@ -997,82 +894,41 @@ declare module '../../src/index.ts' {
 				grants: {
 					orders: {
 						read: {
-							owner: {
-								eq: {
-									actor: 'id';
-								};
+							orders: {
+								where: { owner: { eq: { actor: 'id' } } };
+								fields: readonly ['number', 'status', 'customer', 'note', 'due', 'total', 'owner'];
 							};
+							'orders.customer': { fields: readonly ['name'] };
 						};
 						history: true;
 						create: {
-							where: {
-								customer: {
-									is: {
-										tier: {
-											eq: 'gold';
-										};
-									};
-								};
-							};
-							fields: readonly ['customer', 'note', 'lines'];
+							columns: { orders: readonly ['customer', 'note']; 'orders.lines': readonly ['item', 'qty'] };
+							check: true;
 						};
-						update: {
-							where: 'read';
-							previous: {
-								status: {
-									in: readonly ['draft', 'submitted'];
-								};
-							};
-							fields: readonly ['status', 'note'];
-						};
-						delete: {
-							where: {
-								status: {
-									eq: 'draft';
-								};
-							};
-						};
-						queries: readonly ['open_total'];
+						update: { columns: { orders: readonly ['status', 'note'] }; check: true };
+						delete: { check: true };
 						moves: {
 							status: readonly ['draft->submitted', 'submitted->draft'];
 						};
 					};
-					order_lines: {
-						via: 'order';
-					};
 					customers: {
 						read: {
-							where: {
-								orders: {
-									some: {
-										owner: {
-											eq: {
-												actor: 'id';
-											};
-										};
-									};
-								};
+							customers: {
+								where: { orders: { some: { owner: { eq: { actor: 'id' } } } } };
+								fields: readonly ['name', 'tier'];
 							};
-							fields: readonly ['name', 'tier'];
 						};
-						update: 'read';
-						queries: readonly ['gold'];
+						update: true;
 					};
 					notices: {
 						read: true;
 					};
 					sites: {
 						read: {
-							where: {
-								customer: {
-									in: {
-										actor: {
-											scopes: 'sales_rep';
-										};
-									};
-								};
+							sites: {
+								where: { customer: { in: { actor: { scopes: 'sales_rep' } } } };
+								fields: readonly ['name', 'open'];
 							};
-							fields: readonly ['name', 'open'];
 						};
 					};
 					sys_user: {
@@ -1110,10 +966,6 @@ declare module '../../src/index.ts' {
 						}
 					];
 					convert: '10/min';
-					'customers.gold': {
-						rate: '1/15min';
-						per: 'actor';
-					};
 					'envoys.receive': readonly [
 						{
 							rate: '8/min';
@@ -1125,6 +977,21 @@ declare module '../../src/index.ts' {
 						}
 					];
 					'envoys.unrecognised': '1/15min';
+				};
+			};
+			// reads orders as sales_rep does, and narrows `orders.lines`, which sales_rep reads in full by not naming it
+			auditor: {
+				description: 'Audit orders';
+				grants: {
+					orders: {
+						read: {
+							orders: {
+								fields: readonly ['number', 'status', 'customer', 'note', 'due', 'total', 'owner'];
+							};
+							'orders.customer': { fields: readonly ['name'] };
+							'orders.lines': { fields: readonly ['item'] };
+						};
+					};
 				};
 			};
 		};

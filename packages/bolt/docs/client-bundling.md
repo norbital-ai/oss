@@ -45,7 +45,7 @@ The loader receives only the workspace-relative `pathname`, `search`, and a read
 context containing caller-scoped reads, actor and clock. It has no writes, device, credentials
 or Node capabilities. Existing session, public-app and kiosk admission chooses the authority;
 the loader never substitutes workspace authority. Visitor restrictions still apply, including
-the restriction to admitted model queries. After hydration, interactive actions use
+the restriction to admitted model reads. After hydration, interactive actions use
 the normal browser protocol and its existing authorization and challenge checks.
 
 Load the initial content in `pageServer.load`. Svelte rendering is synchronous: no asynchronous

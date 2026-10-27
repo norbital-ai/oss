@@ -1,7 +1,7 @@
 // Resend's verified sender backs the host transactional email facility.
 import { Effect, Schema } from 'effect';
 import type { Json } from '@norbital-ai/bolt/engine';
-import { HttpClientRequest } from 'effect/unstable/http';
+import { HttpClientRequest } from 'effect/http';
 import {
 	decodeMessage,
 	Email,

@@ -363,7 +363,7 @@ it.effect('only an unknown outcome retries under the same key; a conflict marks 
 			spec,
 			base,
 			base,
-			{ kind: 'conflict', records: [{ collection: 'quotes', id: 'q1', fields: ['title'] }] },
+			{ kind: 'conflict', records: [{ model: 'quotes', id: 'q1', fields: ['title'] }] },
 			text
 		);
 		assert.deepEqual([...c.errors], [['title', 'conflict']]);
@@ -508,7 +508,7 @@ it.live(
 				yield* Fiber.join(tracked);
 				yield* Fiber.join(submitted);
 				assert.equal(validated, true);
-				assert.deepEqual(calls, [{ title: 'Paint', document: ref }]);
+				assert.deepEqual(calls, [[{ title: 'Paint', document: ref }]]);
 			})
 		)
 );

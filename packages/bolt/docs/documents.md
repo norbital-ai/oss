@@ -25,8 +25,8 @@ syncs: {
 ```
 
 This example converts content already supplied by the caller. Export offers each declared
-target; an empty parser list makes this export-only. A file callback's reads, including declared
-queries, retain the exporter's authority and masks. Context is input, never authority; a supplied
+target; an empty parser list makes this export-only. A file callback's reads retain the
+exporter's authority and masks. Context is input, never authority; a supplied
 record id does not bypass its read scope. Remote syncs remain trusted workspace reads.
 Page conversion only converts content the caller already has and is rate limited by the
 policy's `convert` limit (default `30/min`). Download the returned reference with `bolt.fileUrl(ref)`.

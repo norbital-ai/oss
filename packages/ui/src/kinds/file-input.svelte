@@ -41,10 +41,10 @@ the limits are the trigger's hint); files dropped anywhere on the field upload t
 		invalid = false
 	}: FileInputProps = $props();
 	const host = useKinds();
-	// the upload target is `<collection>.<field>` (§5.7); a submit of the enclosing form waits for it
+	// the upload target is `<model>.<field>` (§5.7); a submit of the enclosing form waits for it
 	const form = useForm();
 	const target = $derived(
-		form?.spec.target.of === 'collection' ? `${form.spec.target.collection}.${name}` : name
+		form?.spec.target.of === 'model' ? `${form.spec.target.model}.${name}` : name
 	);
 	const t = uiText();
 	const refs = $derived(((v) => (Arr.isArray(v) ? v : [v]).filter(isFile))(value));

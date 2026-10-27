@@ -3,17 +3,17 @@
 // most two adapters, `read` (theirs → model rows) and `write` (one committed change → a call to them); the engine owns
 // the inbox, id map, version guard, outbox, retries, rate, rollback and health. Bodies are typed from the generated
 // names, so `S` (the sync's name) finds the sync's own data (`with`, `schema`, `context`) in them.
-import type { BodyReturn, Clock, Eff, Loose, WorkspaceQuery } from '../ctx.ts';
+import type { BodyReturn, CallerQuery, Clock, Eff, Loose, WorkspaceQuery } from '../ctx.ts';
 import type { FacilityFailure, Unavailable } from '../errors.ts';
 import type { InputFields, InputOf } from '../fields.ts';
 import type { MediaType } from '../media-types.ts';
 import type {
-	CollectionSpecOf,
+	ExposureSpecOf,
 	ColumnValue,
 	FieldName,
 	InstanceId,
 	IntegrationName,
-	ModelName,
+	AuthoredModelName,
 	Row,
 	WritableField
 } from '../names.ts';
@@ -29,7 +29,7 @@ import type {
 } from './integration.ts';
 
 // ── names ──
-type SyncsOf<M> = CollectionSpecOf<M> extends { syncs: infer S } ? S : {};
+type SyncsOf<M> = ExposureSpecOf<M> extends { syncs: infer S } ? S : {};
 type SyncData<M, S> = S extends keyof SyncsOf<M> ? SyncsOf<M>[S] : {};
 // The startable remote reads (`'<model>.sync.<sync>'`) are `SyncCallable` in `../names.ts`.
 
@@ -70,14 +70,18 @@ type SendOn<D> = [ConversationOf<D>] extends [never]
 			send(message: SendInput<D>): Eff<Id<'sys_message'>, Failure>;
 		};
 /**
- * What a sync body sees: the clock and `db.query` reads. File sync reads honor the caller's grants and masks; remote
- * sync reads use workspace authority. A remote sync over definition `D` also sees the instance's configuration,
- * `request` (request drivers) and `send` (conversation drivers). A sync body writes nothing itself: what it returns
- * is written in one act.
+ * What a remote sync body sees: the clock and `db` reads as the workspace (unmasked, unscoped), the instance's
+ * configuration, `request` (request drivers) and `send` (conversation drivers). A sync body writes nothing itself: what
+ * it returns is written in one act.
  */
 export type SyncCtx<D = never> = Clock & { readonly db: WorkspaceQuery } & ([D] extends [never]
 		? {}
 		: { readonly configuration: ConfigurationOf<D> } & RequestOn<D> & SendOn<D>);
+/**
+ * What a file sync body sees: the clock and `db` reads as the member who started the import or export — each root's
+ * policies filter and mask it and its layers (`ReadAnswer` masked), so a document shows only what that member may read.
+ */
+export type FileSyncCtx = Clock & { readonly db: Pick<CallerQuery, 'query' | 'aggregate'> };
 
 // ── files ──
 /** A built-in parser, run on the host: `xlsx` (row 1 headers match a field's name or `label`, any case; Excel date and
@@ -87,9 +91,9 @@ export type BuiltinParser = 'xlsx' | 'csv' | 'tsv' | 'json' | 'ics';
 /** One parsed record and where it came from: `$at` is its sheet row or line, so findings and refusals point at it. */
 export type FileRecord<R = { readonly [field: string]: Json }> = R & { readonly $at: number };
 /** What a custom `parse` sees: a file sync's ctx and the uploaded file's bytes or text. */
-type ParseCtx = SyncCtx & { readonly files: Pick<Files, 'get' | 'text'> };
+type ParseCtx = FileSyncCtx & { readonly files: Pick<Files, 'get' | 'text'> };
 /** A file export may embed a stored image or its bytes in the document it returns. */
-type FileWriteCtx = SyncCtx & { readonly files: Pick<Files, 'get' | 'image'> };
+type FileWriteCtx = FileSyncCtx & { readonly files: Pick<Files, 'get' | 'image'> };
 /**
  * A parser of the workspace's own for one registered media type: the upload must carry one of `extensions`. `parse`
  * runs in the guest under the 2 s CPU budget and returns each record with its `$at`.
@@ -126,7 +130,7 @@ export type FileReadResult<M> = {
 	readonly rows: readonly Omit<SyncRow<M>, '$id' | '$version'>[];
 	readonly scope?: { readonly by: NonEmpty<WritableField<M>>; readonly range?: WritableField<M> };
 	readonly findings?: readonly Finding[];
-	readonly related?: { readonly [R in ModelName]?: readonly SyncValues<R>[] };
+	readonly related?: { readonly [R in AuthoredModelName]?: readonly SyncValues<R>[] };
 };
 /** What a file sync's `write` receives: the page's context. */
 export type FileWriteInput<X = {}> = { readonly context: ContextOf<X> };
@@ -163,7 +167,7 @@ export type FileSync<M, S extends string = string, X = SyncData<M, S>> = {
 	parser?: readonly (BuiltinParser | CustomParser<RecordOf<M, X>>)[];
 	schema?: InputFields;
 	context?: InputFields;
-	read?: (input: FileReadInput<M, X>, ctx: SyncCtx) => BodyReturn<FileReadResult<M>>;
+	read?: (input: FileReadInput<M, X>, ctx: FileSyncCtx) => BodyReturn<FileReadResult<M>>;
 	write?: (input: FileWriteInput<X>, ctx: FileWriteCtx) => BodyReturn<FileWriteResult<M, X>>;
 };
 

@@ -42,26 +42,26 @@ const manifest = {
 		tickets: { description: 'A ticket', label: 'title', fields: { title: { kind: 'text' } } }
 	},
 	relationships: {},
-	collections: {
+	exposures: {
 		jobs: {
-			read: { fields: 'all' },
-			create: { input: { columns: ['title', 'status'] } },
-			update: { input: { columns: ['status'] } }
+			read: { jobs: { fields: 'all' } },
+			create: { columns: { jobs: ['title', 'status'] } },
+			update: { columns: { jobs: ['status'] } }
 		},
 		sent_emails: {
-			read: { fields: 'all' },
-			create: { input: { columns: ['to', 'subject', 'body'] } },
-			update: { input: { columns: ['sent_at', 'delivered_at', 'failed_reason'] } },
+			read: { sent_emails: { fields: 'all' } },
+			create: { columns: { sent_emails: ['to', 'subject', 'body'] } },
+			update: { columns: { sent_emails: ['sent_at', 'delivered_at', 'failed_reason'] } },
 			syncs: { mail: { with: 'customer_notices', read: true, write: true } }
 		},
 		orders: {
-			read: { fields: 'all' },
-			create: { input: { columns: ['title'] } },
+			read: { orders: { fields: 'all' } },
+			create: { columns: { orders: ['title'] } },
 			notify: true
 		},
 		tickets: {
-			read: { fields: 'all' },
-			create: { input: { columns: ['title'] } },
+			read: { tickets: { fields: 'all' } },
+			create: { columns: { tickets: ['title'] } },
 			notify: true
 		}
 	},
@@ -80,7 +80,7 @@ const manifest = {
 		},
 		sales: {
 			description: 'Sales',
-			grants: { orders: { read: true, create: { approval: true } } }
+			grants: { orders: { read: true, create: { check: true } } }
 		},
 		finance: { description: 'Finance', grants: { orders: { read: true } } }
 	},
@@ -122,7 +122,7 @@ const manifest = {
 } satisfies EngineManifest;
 
 const guest = program(`export default {
-	collection: {
+	model: {
 		sent_emails: { bodies: { syncs: { mail: {
 			write: function* ({op,row},ctx) {
 				if(op!=='create')return null;
@@ -148,7 +148,7 @@ const guest = program(`export default {
 			];
 		} } }
 	},
-	policy: { sales: { grants: { orders: { create: { approval: (_write,flow)=>flow.step('Finance',{teams:['t-fin']}) } } } } }
+	policy: { sales: { grants: { orders: { create: { check: function*(_rows,ctx){return ctx.approve((flow)=>flow.step('Finance',{teams:['t-fin']}));} } } } } }
 };`);
 
 /** "close <id>" asks for `act jobs.update`; a tool result is answered with the result; anything else is echoed. */
@@ -190,7 +190,7 @@ const scriptedAi = () => {
 									name: 'act',
 									input: {
 										callable: 'jobs.update',
-										input: { target: present(close[1]), set: { status: 'done' } }
+										input: [{ target: present(close[1]), set: { status: 'done' } }]
 									}
 								}
 							],
@@ -238,15 +238,21 @@ const setup = Effect.gen(function* () {
 	const job = () =>
 		actReply(route, t.as(t.admin).authority, {
 			callable: 'jobs.create',
-			input: { title: 'Kismis', status: 'open' },
+			input: [{ title: 'Kismis', status: 'open' }],
 			issuedAt: t.clock.now()
 		}).pipe(Effect.map((reply) => ok(reply.outcome)));
 	const status = (id: string) =>
-		qReply(route, t.as(t.admin).authority, { reads: [{ m: 'query', a: ['jobs', { id }] }] }).pipe(
+		qReply(route, t.as(t.admin).authority, {
+			reads: [{ m: 'query', a: [{ jobs: { where: { id: { eq: id } }, fields: ['status'] } }] }]
+		}).pipe(
 			Effect.flatMap((reply) =>
-				Schema.decodeUnknownEffect(Schema.Struct({ status: Schema.String }))(reply.answers[0])
+				Schema.decodeUnknownEffect(
+					Schema.Struct({
+						jobs: Schema.Struct({ rows: Schema.Tuple([Schema.Struct({ status: Schema.String })]) })
+					})
+				)(reply.answers[0])
 			),
-			Effect.map((row) => row.status)
+			Effect.map((answer) => answer.jobs.rows[0].status)
 		);
 	let seq = 0;
 	const say = (
@@ -431,7 +437,7 @@ describe('connections through the engine entry (rule 61)', () => {
 					const id = ok(
 						(yield* actReply(route, t.as(t.member(['staff'])).authority, {
 							callable: 'sent_emails.create',
-							input: { to: 'carol@acme.com', subject: 'PCN 1234', body: 'Your parts change.' },
+							input: [{ to: 'carol@acme.com', subject: 'PCN 1234', body: 'Your parts change.' }],
 							issuedAt: t.clock.now()
 						})).outcome
 					);
@@ -453,9 +459,11 @@ describe('connections through the engine entry (rule 61)', () => {
 					yield* t.runDue();
 					expect(
 						(yield* qReply(route, t.as(t.admin).authority, {
-							reads: [{ m: 'query', a: ['sent_emails', { id }] }]
+							reads: [{ m: 'query', a: [{ sent_emails: { where: { id: { eq: id } } } }] }]
 						})).answers[0]
-					).toMatchObject({ sent_at: sentAt, delivered_at: '2026-09-25T10:01:00.000Z' });
+					).toMatchObject({
+						sent_emails: { rows: [{ sent_at: sentAt, delivered_at: '2026-09-25T10:01:00.000Z' }] }
+					});
 				})
 			)
 	);
@@ -469,7 +477,7 @@ describe('connections through the engine entry (rule 61)', () => {
 					ok(
 						(yield* actReply(route, t.as(t.member(['staff'], { id: ADA })).authority, {
 							callable: 'tickets.create',
-							input: { title: 'Leak' },
+							input: [{ title: 'Leak' }],
 							issuedAt: t.clock.now()
 						})).outcome
 					);
@@ -540,12 +548,12 @@ describe('connections through the engine entry (rule 61)', () => {
 					});
 					const proposal = (yield* actReply(route, yield* t.signIn('sales@ws.example'), {
 						callable: 'orders.create',
-						input: { title: 'desk' },
+						input: [{ title: 'desk' }],
 						issuedAt: t.clock.now()
 					})).outcome;
 					expect(proposal).toMatchObject({
 						kind: 'pendingApproval',
-						records: [{ collection: 'orders' }]
+						records: [{ model: 'orders' }]
 					});
 					expect(
 						(yield* t.db.read([{ text: 'SELECT count(*)::int AS n FROM orders', params: [] }]))[0]
@@ -554,7 +562,7 @@ describe('connections through the engine entry (rule 61)', () => {
 					yield* t.runDue();
 					const [rows] = yield* t.db.read([
 						{
-							text: `SELECT member, title, link->>'collection' AS c, read_at FROM sys_notification ORDER BY member`,
+							text: `SELECT member, title, link->>'model' AS c, read_at FROM sys_notification ORDER BY member`,
 							params: []
 						}
 					]);

@@ -80,7 +80,7 @@ const TriggerSpec = Schema.Union([
 export type EventTrigger = {
 	automation: string;
 	event: 'created' | 'updated' | 'deleted';
-	collection: string;
+	model: string;
 	where?: Pred | undefined;
 	fields?: readonly string[] | undefined;
 	delayMs?: number | undefined;
@@ -132,12 +132,12 @@ export function triggersOf(m: EngineManifest): Triggers {
 				continue;
 			}
 			const event = 'created' in x ? 'created' : 'updated' in x ? 'updated' : 'deleted';
-			const collection = 'created' in x ? x.created : 'updated' in x ? x.updated : x.deleted;
+			const model = 'created' in x ? x.created : 'updated' in x ? x.updated : x.deleted;
 			events.push({
 				automation,
 				event,
-				collection,
-				where: x.where === undefined ? undefined : toPred(m, collection, x.where),
+				model,
+				where: x.where === undefined ? undefined : toPred(m, model, x.where),
 				fields: x.fields,
 				delayMs: x.delay === undefined ? undefined : duration(x.delay)
 			});
@@ -150,29 +150,29 @@ export function triggersOf(m: EngineManifest): Triggers {
 
 const OP = { created: 'create', updated: 'update', deleted: 'delete' } as const;
 /** Fields whose change fires an `updated` trigger without `fields`: stored values, never roll-ups or computed (rule 50). */
-function storedFields(m: EngineManifest, collection: string): readonly string[] {
-	const model = catalogOf(m).models.get(collection);
-	if (model === undefined)
+function storedFields(m: EngineManifest, model: string): readonly string[] {
+	const info = catalogOf(m).models.get(model);
+	if (info === undefined)
 		throw BoltError.make(
 			'internal',
 			'decode',
-			`the event trigger names missing model ${collection}`
+			`the event trigger names missing model ${model}`
 		);
 	return [
-		...[...model.fields.values()]
+		...[...info.fields.values()]
 			.filter(
 				(f) => !f.derived && !f.computed && !(SYSTEM_COLUMNS as readonly string[]).includes(f.name)
 			)
 			.map((f) => f.column),
-		...[...model.one.keys()].filter((k) => !model.fields.has(k))
+		...[...info.one.keys()].filter((k) => !info.fields.has(k))
 	];
 }
 
 /**
  * Rule 49/50: the causing statement's piece. Reads the statement's own row changes (`allp`: `c, id, op, o, n`), keeps
  * those each trigger admits (its `where` on the post-image, the pre-image for `deleted`; an `updated` one only when a
- * named or stored field changed), and inserts one queued run per trigger with `{ collection, ids }` (`rows` for
- * `deleted`); the collection is what lets one automation hold several triggers and tell them apart.
+ * named or stored field changed), and inserts one queued run per trigger with `{ model, ids }` (`rows` for
+ * `deleted`); the model is what lets one automation hold several triggers and tell them apart.
  */
 export function queueTriggered(
 	m: EngineManifest,
@@ -184,24 +184,24 @@ export function queueTriggered(
 	const at = Date.parse(now);
 	const selects = triggersOf(m).events.map((t) => {
 		const image = t.event === 'deleted' ? 'x.o' : 'x.n';
-		const row = `jsonb_populate_record(${nullRowSql(t.collection, catalogOf(m).models.get(t.collection)?.fields.keys() ?? [])}, ${image})`;
+		const row = `jsonb_populate_record(${nullRowSql(t.model, catalogOf(m).models.get(t.model)?.fields.keys() ?? [])}, ${image})`;
 		const changed =
 			t.event !== 'updated'
 				? 'true'
-				: `(${(t.fields ?? storedFields(m, t.collection)).map((f) => `(x.o -> ${c.p(f)}) IS DISTINCT FROM (x.n -> ${c.p(f)})`).join(' OR ') || 'false'})`;
-		// CASE, not AND: Postgres may evaluate the predicate first, and another collection's image (a named
+				: `(${(t.fields ?? storedFields(m, t.model)).map((f) => `(x.o -> ${c.p(f)}) IS DISTINCT FROM (x.n -> ${c.p(f)})`).join(' OR ') || 'false'})`;
+		// CASE, not AND: Postgres may evaluate the predicate first, and another model's image (a named
 		// integration slot's text id) does not cast to this row type
 		const where =
 			t.where === undefined
 				? 'true'
-				: `CASE WHEN x.c = ${c.p(t.collection)} THEN ${storeSync(ownPredSql(t.where, row, c))} ELSE false END`;
-		const event = `'collection', ${c.p(t.collection)}::text`;
+				: `CASE WHEN x.c = ${c.p(t.model)} THEN ${storeSync(ownPredSql(t.where, row, c))} ELSE false END`;
+		const event = `'model', ${c.p(t.model)}::text`;
 		const input =
 			t.event === 'deleted'
 				? `jsonb_build_object('ids', jsonb_agg(x.id), 'rows', jsonb_agg(x.o), ${event})`
 				: `jsonb_build_object('ids', jsonb_agg(x.id), ${event})`;
 		return `SELECT ${c.p(t.automation)}::text AS a, ${input} AS input, ${c.p(iso(dueAt(at, at + (t.delayMs ?? 0))))}::timestamptz AS due, ${c.p(t.event)}::text AS cause
-		FROM ${source} x WHERE x.c = ${c.p(t.collection)} AND x.op = '${OP[t.event]}' AND ${changed} AND ${where} HAVING count(*) > 0`;
+		FROM ${source} x WHERE x.c = ${c.p(t.model)} AND x.op = '${OP[t.event]}' AND ${changed} AND ${where} HAVING count(*) > 0`;
 	});
 	if (selects.length === 0) return;
 	enqueue(c, {

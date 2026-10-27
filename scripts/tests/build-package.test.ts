@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 import * as NodeServices from '@effect/platform-node/NodeServices';
 import { expect, layer } from '@effect/vitest';
 import { Effect, FileSystem, Stream } from 'effect';
-import { ChildProcess, type ChildProcessSpawner } from 'effect/unstable/process';
+import { ChildProcess, type ChildProcessSpawner } from 'effect/process';
 
 const buildScript = fileURLToPath(new URL('../build-package.ts', import.meta.url));
 

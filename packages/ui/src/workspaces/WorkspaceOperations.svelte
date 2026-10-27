@@ -28,8 +28,8 @@
 	import Combobox from '../primitives/combobox/combobox.svelte';
 	import Icon from '../primitives/icon/icon-wrapper.svelte';
 	import Tabs from '../primitives/tabs/tabs.svelte';
-	import ToolbarSearch from '../collection/toolbar/ToolbarSearch.svelte';
-	import ToolbarFilter from '../collection/toolbar/ToolbarFilter.svelte';
+	import ToolbarSearch from '../model/toolbar/ToolbarSearch.svelte';
+	import ToolbarFilter from '../model/toolbar/ToolbarFilter.svelte';
 	import LogView from '../logs/LogView.svelte';
 	import UsageChart, { formatMetricValue } from '../chart/UsageChart.svelte';
 	import ReleaseTimeline from '../releases/ReleaseTimeline.svelte';

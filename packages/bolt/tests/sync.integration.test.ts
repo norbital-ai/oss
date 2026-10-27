@@ -25,11 +25,11 @@ const manifest: EngineManifest = {
 		}
 	},
 	relationships: {},
-	collections: {
+	exposures: {
 		contacts: {
-			read: { fields: 'all' },
-			create: { input: { columns: ['name', 'note'] } },
-			update: { input: { columns: ['name', 'note'] } },
+			read: { contacts: { fields: 'all' } },
+			create: { columns: { contacts: ['name', 'note'] } },
+			update: { columns: { contacts: ['name', 'note'] } },
 			delete: {},
 			syncs: { crm: { with: 'crm', read: true, write: true } }
 		}
@@ -52,18 +52,18 @@ const manifest: EngineManifest = {
 		}
 	}
 };
-const source = `export default { collection: { contacts: { bodies: { syncs: { crm: {
+const source = `export default { model: { contacts: { bodies: { syncs: { crm: {
 	read: function* ({cursor}, ctx) { return yield* ctx.request({method:'GET',path:'/contacts',query:{cursor:JSON.stringify(cursor)}}); },
 	write: function* ({op,row,$id,$version,changed}, ctx) {
 		if(op === 'update' && changed.every((field) => field === 'note')) return null;
 		return yield* ctx.request({method:op === 'create' ? 'POST' : op === 'delete' ? 'DELETE' : 'PATCH',path:$id ? '/contacts/'+$id : '/contacts',headers:$version ? {'If-Match':$version} : {},body:{name:row.name}});
 	}
 } } } } }, automation: { annotate: { body: function* (_, ctx) {
-	const page = yield* ctx.query('contacts', {all:true,select:{name:true}});
-	const row = page.rows[0];
+	const page = yield* ctx.query({contacts:{fields:['name']}});
+	const row = page.contacts.rows[0];
 	if (row === undefined || row.$sync?.crm?.status !== 'pending') throw new Error('Missing pending contact');
 	yield* ctx.progress({text:'Read contact'});
-	const outcome = yield* ctx.act('contacts.update', {target:row.id,set:{note:row.name}});
+	const outcome = yield* ctx.act('contacts.update', [{target:row.id,set:{note:row.name}}]);
 	return {kind:outcome.kind,seen:row.$sync.crm.status};
 } } } };`;
 const Op = Schema.Struct({
@@ -141,7 +141,7 @@ const makeSetup = (database?: Layer.Layer<TenantDb>) =>
 			const key = randomUUID(),
 				now = t.clock.now();
 			return writes.act({
-				collection: 'contacts',
+				model: 'contacts',
 				verb,
 				input,
 				authority,
@@ -248,7 +248,7 @@ describe('durable model sync', () => {
 				Effect.gen(function* () {
 					const f = yield* setup;
 					f.mode('timeout');
-					yield* f.act('create', { name: 'Accepted' });
+					yield* f.act('create', [{ name: 'Accepted' }]);
 					yield* f.handler('sync.deliver');
 					f.t.clock.advance('2min');
 					yield* f.handler('sync.deliver');
@@ -260,12 +260,12 @@ describe('durable model sync', () => {
 					const [row] = yield* f.rows();
 					if (row === undefined) throw new Error('Missing contact');
 					f.mode('refuse');
-					yield* f.act('update', { target: row.id, set: { name: 'Refused' } });
+					yield* f.act('update', [{ target: row.id, set: { name: 'Refused' } }]);
 					yield* f.handler('sync.deliver');
 					expect((yield* f.rows())[0]?.name).toBe('Accepted');
 					expect(f.calls.at(-1)?.headers?.['If-Match']).toBe('1');
 					f.mode('conflict');
-					yield* f.act('update', { target: row.id, set: { name: 'Conflicting' } });
+					yield* f.act('update', [{ target: row.id, set: { name: 'Conflicting' } }]);
 					yield* f.handler('sync.deliver');
 					expect((yield* f.rows())[0]?.name).toBe('Accepted');
 					expect(
@@ -283,10 +283,10 @@ describe('durable model sync', () => {
 			Effect.scoped(
 				Effect.gen(function* () {
 					const f = yield* setup;
-					yield* f.act('create', { name: 'First' });
+					yield* f.act('create', [{ name: 'First' }]);
 					const [row] = yield* f.rows();
 					if (row === undefined) throw new Error('Missing contact');
-					yield* f.act('update', { target: row.id, set: { name: 'Latest' } });
+					yield* f.act('update', [{ target: row.id, set: { name: 'Latest' } }]);
 					expect(
 						yield* f.t.db.value(Schema.Number, {
 							text: 'SELECT count(*)::int FROM sys_outbox',
@@ -336,14 +336,15 @@ describe('durable model sync', () => {
 													Effect.sync(() => {
 														advanced += result.affected;
 													})
-												)
+												),
+												Effect.asVoid
 											)
 									: Effect.void
 							)
 						)
 				});
 				const f = yield* makeSetup(Layer.succeed(TenantDb, intercepted));
-				yield* f.act('create', { name: 'Observed contact' });
+				yield* f.act('create', [{ name: 'Observed contact' }]);
 				expect(yield* Context.get(f.context, Runs).fire('annotate', f.t.clock.now())).toEqual({
 					ran: true
 				});

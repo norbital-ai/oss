@@ -43,12 +43,12 @@ const manifest = {
 		'payslips.entity': { to: 'entities' },
 		'payslips.employee': { to: 'sys_user' }
 	},
-	collections: {
-		entities: { read: { fields: 'all' }, create: { input: { columns: ['name', 'hotline'] } } },
+	exposures: {
+		entities: { read: { entities: { fields: 'all' } }, create: { columns: { entities: ['name', 'hotline'] } } },
 		payslips: {
-			read: { fields: 'all' },
-			create: { input: { columns: ['period', 'net', 'entity', 'employee'] } },
-			update: { input: { columns: ['status'] } }
+			read: { payslips: { fields: 'all' } },
+			create: { columns: { payslips: ['period', 'net', 'entity', 'employee'] } },
+			update: { columns: { payslips: ['status'] } }
 		}
 	},
 	integrations: {},
@@ -59,11 +59,13 @@ const manifest = {
 			grants: {
 				payslips: {
 					read: {
-						where: {
-							employee: { eq: { actor: 'id' } },
-							entity: { is: { hotline: { eq: { actor: 'instance' } } } }
-						},
-						fields: ['period', 'net', 'status']
+						payslips: {
+							where: {
+								employee: { eq: { actor: 'id' } },
+								entity: { is: { hotline: { eq: { actor: 'instance' } } } }
+							},
+							fields: ['period', 'net', 'status']
+						}
 					}
 				}
 			}
@@ -130,12 +132,12 @@ function scriptedAi() {
 						return { content: 'Done.', toolCalls: [], finish: 'stop', usage };
 					const said = text(last.content);
 					if (/^(?:\[[^\]\n]*\] )?slips$/m.test(said))
-						return call('query', { collection: 'payslips', select: { period: true, net: true } });
+						return call('read', { payslips: { fields: ['period', 'net'] } });
 					const pay = /^(?:\[[^\]\n]*\] )?pay (\S+)$/m.exec(said);
 					if (pay !== null)
 						return call('act', {
 							callable: 'payslips.update',
-							input: { target: present(pay[1]), set: { status: 'paid' } }
+							input: [{ target: present(pay[1]), set: { status: 'paid' } }]
 						});
 					const find = /^(?:\[[^\]\n]*\] )?find (\S+)$/m.exec(said);
 					if (find !== null) return call('history', { query: present(find[1]), scope: 'mine' });
@@ -171,26 +173,26 @@ const setup = Effect.gen(function* () {
 			if (o.kind !== 'committed') throw new Error(JSON.stringify(o));
 			return present(o.records[0]).id;
 		});
-	const a = yield* make('entities.create', { name: 'Acme SG', hotline: 'hotline_a' }),
-		b = yield* make('entities.create', { name: 'Acme MY', hotline: 'hotline_b' });
-	slip.cal_a = yield* make('payslips.create', {
+	const a = yield* make('entities.create', [{ name: 'Acme SG', hotline: 'hotline_a' }]),
+		b = yield* make('entities.create', [{ name: 'Acme MY', hotline: 'hotline_b' }]);
+	slip.cal_a = yield* make('payslips.create', [{
 		period: '2026-09',
 		net: 100,
 		entity: a,
 		employee: CAL
-	});
-	slip.cal_b = yield* make('payslips.create', {
+	}]);
+	slip.cal_b = yield* make('payslips.create', [{
 		period: '2026-09',
 		net: 200,
 		entity: b,
 		employee: CAL
-	});
-	slip.ada_a = yield* make('payslips.create', {
+	}]);
+	slip.ada_a = yield* make('payslips.create', [{
 		period: '2026-09',
 		net: 300,
 		entity: a,
 		employee: ADA
-	});
+	}]);
 	let seq = 0;
 	const dm = (instance: string, from: string, text: string) =>
 		t.receive(instance, {
@@ -211,9 +213,11 @@ const setup = Effect.gen(function* () {
 });
 const nets = (result: Json) =>
 	Schema.decodeUnknownSync(
-		Schema.Struct({ rows: Schema.Array(Schema.Struct({ net: Schema.Number })) })
+		Schema.Struct({
+			payslips: Schema.Struct({ rows: Schema.Array(Schema.Struct({ net: Schema.Number })) })
+		})
 	)(result)
-		.rows.map((row) => row.net)
+		.payslips.rows.map((row) => row.net)
 		.sort();
 
 describe("an entity hotline ({ actor: 'instance' }, dm: 'envoy')", () => {
@@ -245,11 +249,22 @@ describe("an entity hotline ({ actor: 'instance' }, dm: 'envoy')", () => {
 					yield* dm('hotline_a', '6591234567@s.whatsapp.net', `pay ${slip.ada_a}`);
 					expect(yield* lastResult()).toEqual({ error: "No tool 'act'." });
 					expect(
-						(yield* Schema.decodeUnknownEffect(Schema.Struct({ status: Schema.String }))(
+						(yield* Schema.decodeUnknownEffect(
+							Schema.Struct({
+								payslips: Schema.Struct({
+									rows: Schema.Tuple([Schema.Struct({ status: Schema.String })])
+								})
+							})
+						)(
 							(yield* qReply(route, t.as(t.admin).authority, {
-								reads: [{ m: 'query', a: ['payslips', { id: slip.ada_a }] }]
+								reads: [
+									{
+										m: 'query',
+										a: [{ payslips: { where: { id: { eq: slip.ada_a } }, fields: ['status'] } }]
+									}
+								]
 							})).answers[0]
-						)).status
+						)).payslips.rows[0].status
 					).toBe('draft');
 				})
 			)
@@ -355,7 +370,7 @@ describe('durable admission (§4.3)', () => {
 					const { t, ai, route } = yield* setup;
 					const o = (yield* actReply(route, t.as(t.admin).authority, {
 						callable: 'sys_integration.update',
-						input: { target: 'hotline_a', set: { active: false } },
+						input: [{ target: 'hotline_a', set: { active: false } }],
 						issuedAt: t.clock.now()
 					})).outcome;
 					expect(o.kind).toBe('committed');

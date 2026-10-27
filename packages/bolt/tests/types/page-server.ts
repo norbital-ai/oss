@@ -11,13 +11,13 @@ const Data = Schema.Struct({ title: Schema.String, count: Schema.Number });
 const declaration = pageServer({
 	data: Data,
 	load: function* (request, ctx) {
-		const read = ctx.query('orders', { select: { number: true }, limit: 10 });
+		const read = ctx.query({ orders: { fields: ['number'], limit: 10 } });
 		is<Eq<Effect.Error<typeof read>, ReadFailed>>();
 		const orders = yield* read;
-		const { customers } = yield* ctx.query({ customers: { from: 'customers', limit: 1 } });
+		const { customers } = yield* ctx.query({ customers: { limit: 1 } });
 		return {
 			title: `${request.pathname}${request.search}`,
-			count: orders.rows.length + customers.rows.length
+			count: orders.orders.rows.length + customers.rows.length
 		};
 	}
 });

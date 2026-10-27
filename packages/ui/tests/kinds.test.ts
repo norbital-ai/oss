@@ -216,7 +216,7 @@ test('a picker searches on the server, patterned seq labels included, and sorts 
 		}
 	} as const;
 	assert.deepEqual(k.pickerRead(target, ['code', 'name'], { limit: 20 }, ''), {
-		select: { id: true, code: true, name: true },
+		fields: ['code', 'name'],
 		limit: 20,
 		orderBy: { code: 'asc' }
 	});
@@ -238,7 +238,7 @@ test('a picker searches on the server, patterned seq labels included, and sorts 
 	// a declared search ranks the typed text; with nothing typed the label sorts
 	const indexed = { ...target, search: ['name'] };
 	assert.deepEqual(k.pickerRead(indexed, ['name'], { limit: 20 }, 'acme'), {
-		select: { id: true, name: true },
+		fields: ['name'],
 		limit: 20,
 		search: 'acme'
 	});

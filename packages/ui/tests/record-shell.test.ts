@@ -3,11 +3,13 @@ import { element } from './elements.ts';
 import {
 	viewFixture,
 	jsonRecord,
+	recordRootsOf,
 	type ActOptions,
 	type ViewScript,
 	browser
 } from './view-fixture.ts';
 import { Deferred, Effect, Schema, Stream } from 'effect';
+import { READ_LIMIT } from '../src/read/request.ts';
 // The record shell's header chrome: the history scrubber (a past revision shows read-only, then back to current), the
 // record/approval toggle for native proposals, and no per-field history or History tab.
 import './dom.ts';
@@ -16,7 +18,7 @@ import type { Json } from '@norbital-ai/std/wire';
 import type { Value } from '@norbital-ai/std/kind';
 import type { ApprovalView, Outcome } from '../src/client/contract.ts';
 import type { RecordCapabilities } from '../src/record/types.ts';
-import type { Row } from '../src/collection/types.ts';
+import type { Row } from '../src/model/types.ts';
 import type { KindsHost } from '../src/kinds/context.ts';
 import type { RecordShellProps } from '../src/record/RecordShell.svelte';
 import type { FormProps } from '../src/form/form.svelte';
@@ -69,7 +71,7 @@ const HISTORY: readonly HistoryRow[] = [
 	}
 ];
 const approvalView = (request: Partial<ApprovalView> & { id: string }): ApprovalView => ({
-	collection: 'jobs',
+	model: 'jobs',
 	record: 'j1',
 	action: 'update',
 	at: '2026-09-01T00:00:00Z',
@@ -81,7 +83,7 @@ const approvalView = (request: Partial<ApprovalView> & { id: string }): Approval
 	userNames: {},
 	requestor: { ref: 'u1', name: 'Ada' },
 	log: [],
-	records: [{ collection: 'jobs', id: 'j1', op: 'update' }],
+	records: [{ model: 'jobs', id: 'j1', op: 'update' }],
 	moves: [],
 	mine: false,
 	participant: true,
@@ -92,22 +94,24 @@ async function fake(
 	requests: readonly (Partial<ApprovalView> & { id: string })[] = []
 ) {
 	const calls: {
-		gets: { c: string; id: string; revision?: number; select?: Readonly<Record<string, Json>> }[];
+		gets: { c: string; id: string; revision?: number; layers?: Readonly<Record<string, Json>> }[];
 		history: number;
 		acts: { callable: string; input: Json; options: ActOptions }[];
 	} = { gets: [], history: 0, acts: [] };
 	const fixture = await viewFixture({
-		get: (c, id, select, options) => {
+		get: (c, id, layers, options) => {
+			// a past revision is read as of the instant its history entry was written
+			const revision = HISTORY.find((entry) => entry.at === options?.asOf)?.revision;
 			calls.gets.push({
 				c,
 				id,
-				...(options?.revision === undefined ? {} : { revision: options.revision }),
-				...(select === undefined ? {} : { select })
+				...(revision === undefined ? {} : { revision }),
+				...(layers === undefined ? {} : { layers })
 			});
 			return c === 'sys_user'
 				? { id, name: 'Ada' }
-				: options?.revision !== undefined
-					? (PAST[options.revision] ?? null)
+				: revision !== undefined
+					? (PAST[revision] ?? null)
 					: live;
 		},
 		history: () => {
@@ -119,7 +123,7 @@ async function fake(
 			return {
 				kind: 'committed',
 				output: null,
-				records: [{ collection: 'jobs', id: 'j1', revision: 4 }]
+				records: [{ model: 'jobs', id: 'j1', revision: 4 }]
 			};
 		},
 		approval: (params) =>
@@ -256,7 +260,7 @@ it.live(
 			const acts: { callable: string; input: Json; observed?: Readonly<Record<string, number>> }[] =
 				[];
 			const preview = (revision: number) => ({
-				collection: 'jobs',
+				model: 'jobs',
 				record: 'j1',
 				revision,
 				live: 3,
@@ -279,7 +283,7 @@ it.live(
 						: {
 								kind: 'committed',
 								output: null,
-								records: [{ collection: 'jobs', id: 'j1', revision: 4 }]
+								records: [{ model: 'jobs', id: 'j1', revision: 4 }]
 							};
 				})
 			);
@@ -303,7 +307,7 @@ it.live(
 				[
 					{
 						callable: 'history.restore',
-						input: { collection: 'jobs', record: 'j1', revision: 2 },
+						input: { model: 'jobs', record: 'j1', revision: 2 },
 						observed: { j1: 3 }
 					}
 				]
@@ -524,7 +528,7 @@ it.live(
 			const reasons = ['underApproval'] as const;
 			const v = yield* browser(() =>
 				show(held, catalog, undefined, () => ({
-					collection: 'jobs',
+					model: 'jobs',
 					id: 'j1',
 					revision: 3,
 					fields: {
@@ -604,6 +608,7 @@ const deals = {
 			channel: { kind: 'enum', values: ['mail'] }
 		},
 		relations: { client: { targets: ['clients'] } },
+		layers: ['client'],
 		update: { columns: ['title', 'kind', 'channel'] }
 	},
 	clients: { label: ['name'], fields: { name: { kind: 'text' } } }
@@ -616,10 +621,10 @@ async function mountDeal(
 	bolt.t = (k) => WORDS[k] ?? k;
 	const get = script.get;
 	// a select naming the relation reads its target nested, as the engine does
-	script.get = (c, id, select, options) =>
-		select?.client
-			? (calls.gets.push({ c, id, select }), { ...DEAL, client: { id: 'c1', name: 'Acme' } })
-			: get(c, id, select, options);
+	script.get = (c, id, layers, options) =>
+		layers?.client
+			? (calls.gets.push({ c, id, layers }), { ...DEAL, client: { id: 'c1', name: 'Acme' } })
+			: get(c, id, layers, options);
 	const target = document.createElement('div');
 	document.body.append(target);
 	const app = mount(Harness, { target, props: { bolt, catalog: deals, ...fixture } });
@@ -644,7 +649,7 @@ it.live(
 			const sub = element<HTMLElement>(document, '[data-record-head] p');
 			assert.equal(sub?.textContent, 'SOW · Acme');
 			assert.equal(
-				calls.gets.filter((g) => g.select?.client).length,
+				calls.gets.filter((g) => g.layers?.client).length,
 				1,
 				'one read for the subtitle relations'
 			);
@@ -813,7 +818,7 @@ it.live('an automation form sends direct input and follows its admitted run', ()
 	})
 );
 
-it.live('a create is headed "New <singular>", never the collection label', () =>
+it.live('a create is headed "New <singular>", never the model label', () =>
 	Effect.gen(function* () {
 		const { bolt, script, setCapabilities } = yield* browser(() => fake(null));
 		const target = document.createElement('div');
@@ -904,15 +909,11 @@ it.live(
 			const { bolt, script, setCapabilities } = yield* browser(() => fake(current));
 			const originalLiveGet = script.get;
 			script.get = (c, id, select, options) =>
-				c === 'jobs' && options?.revision === undefined
+				c === 'jobs' && options?.asOf === undefined
 					? current
 					: originalLiveGet(c, id, select, options);
 			script.changes = (read, emit) => {
-				if (
-					read.m === 'query' &&
-					read.a[0] === 'jobs' &&
-					typeof jsonRecord(read.a[1]).id === 'string'
-				) {
+				if (recordRootsOf(read).includes('jobs')) {
 					readers.add(emit);
 					return () => {
 						readers.delete(emit);
@@ -1016,7 +1017,7 @@ it.live(
 						of: 'jobs',
 						id: 'j1',
 						history: {
-							sources: [{ of: 'activities', query: { where: { job: { eq: 'j1' } }, all: true } }]
+							sources: [{ of: 'activities', where: { job: { eq: 'j1' } } }]
 						}
 					}
 				}
@@ -1028,14 +1029,14 @@ it.live(
 			yield* browser(() => settle());
 			element<HTMLElement>(target, '[data-timeline-trigger]').click();
 			yield* browser(() => settle());
-			assert.deepEqual(query, { where: { job: { eq: 'j1' } }, all: true });
+			assert.deepEqual(query, { where: { job: { eq: 'j1' } }, limit: READ_LIMIT });
 			const events = element<HTMLElement>(document, '[data-record-history-events]');
 			assert.match(textOf(events), /Customer call/);
 			assert.match(textOf(events), /Ada/);
 			assert.doesNotMatch(textOf(events), /Secret/);
 			const firstEvent = required(events.firstElementChild);
 			assert.ok(firstEvent instanceof HTMLElement);
-			assert.equal(firstEvent.dataset.historyCollection, 'activities');
+			assert.equal(firstEvent.dataset.historyModel, 'activities');
 			assert.ok(element<HTMLElement>(document, '[data-record-timeline] [role=slider]'));
 		})
 );
@@ -1115,10 +1116,9 @@ it.live(
 			);
 			yield* browser(() => settle());
 			assert.deepEqual(required(v.calls.acts[0]).options.observed, { j1: 3 });
-			assert.deepEqual(required(v.calls.acts[0]).input, {
-				target: 'j1',
-				set: { title: 'A changed title' }
-			});
+			assert.deepEqual(required(v.calls.acts[0]).input, [
+				{ target: 'j1', set: { title: 'A changed title' } }
+			]);
 		})
 );
 
@@ -1144,7 +1144,7 @@ it.live('closing the sheet while saving asks before removing the pending draft',
 			yield* Deferred.succeed(work, {
 				kind: 'committed',
 				output: null,
-				records: [{ collection: 'jobs', id: 'j1', revision: 4 }]
+				records: [{ model: 'jobs', id: 'j1', revision: 4 }]
 			});
 			yield* browser(() => settle());
 		}
@@ -1216,10 +1216,9 @@ it.live('custom representation forms share the shell view/edit mode, draft and o
 		save.click();
 		yield* browser(() => settle());
 		assert.equal(calls.acts.length, 1);
-		assert.deepEqual(required(calls.acts[0]).input, {
-			target: 'j1',
-			set: { title: 'Shared title', crew: 'Shared crew' }
-		});
+		assert.deepEqual(required(calls.acts[0]).input, [
+			{ target: 'j1', set: { title: 'Shared title', crew: 'Shared crew' } }
+		]);
 		assert.deepEqual(required(calls.acts[0]).options.observed, { j1: 3 });
 		assert.equal(target.querySelector('input'), null, 'committed save returns every form to view');
 		assert.equal(element<HTMLElement>(target, '[data-record-mode]').dataset.recordMode, 'view');
@@ -1235,15 +1234,11 @@ it.live(
 			const { bolt, script, setCapabilities, calls } = yield* browser(() => fake(current));
 			const originalLiveGet = script.get;
 			script.get = (c, id, select, options) =>
-				c === 'jobs' && options?.revision === undefined
+				c === 'jobs' && options?.asOf === undefined
 					? current
 					: originalLiveGet(c, id, select, options);
 			script.changes = (read, emit) => {
-				if (
-					read.m === 'query' &&
-					read.a[0] === 'jobs' &&
-					typeof jsonRecord(read.a[1]).id === 'string'
-				) {
+				if (recordRootsOf(read).includes('jobs')) {
 					readers.add(emit);
 					return () => {
 						readers.delete(emit);
@@ -1294,7 +1289,7 @@ it.live(
 );
 
 const nativeCapabilities: RecordCapabilities = {
-	collection: 'jobs',
+	model: 'jobs',
 	id: 'j1',
 	revision: 3,
 	fields: {
@@ -1404,10 +1399,9 @@ for (const direct of [false, true])
 				request.click();
 				yield* browser(() => settle());
 				assert.deepEqual(required(v.calls.acts[0]).options.observed, { j1: 3 });
-				assert.deepEqual(required(v.calls.acts[0]).input, {
-					target: 'j1',
-					set: { title: 'Proposed title' }
-				});
+				assert.deepEqual(required(v.calls.acts[0]).input, [
+					{ target: 'j1', set: { title: 'Proposed title' } }
+				]);
 				assert.equal(v.target.querySelector('[data-field=title] input'), null);
 				assert.match(textOf(element<HTMLElement>(v.target, '[data-field=title]')), /Paint v3/);
 			})
@@ -1489,15 +1483,11 @@ it.live(
 			setCapabilities(() => new Promise((resolve) => answers.push(resolve)));
 			const originalLiveGet = script.get;
 			script.get = (c, id, select, options) =>
-				c === 'jobs' && options?.revision === undefined
+				c === 'jobs' && options?.asOf === undefined
 					? current
 					: originalLiveGet(c, id, select, options);
 			script.changes = (read, emit) => {
-				if (
-					read.m === 'query' &&
-					read.a[0] === 'jobs' &&
-					typeof jsonRecord(read.a[1]).id === 'string'
-				) {
+				if (recordRootsOf(read).includes('jobs')) {
 					readers.add(emit);
 					return () => {
 						readers.delete(emit);
@@ -1539,7 +1529,7 @@ it.live('a routed create settles pending approval and opens the record it commit
 			return {
 				kind: 'pendingApproval',
 				requestId: 'r1',
-				records: [{ collection: 'jobs', id: 'candidate', revision: 1 }]
+				records: [{ model: 'jobs', id: 'candidate', revision: 1 }]
 			};
 		};
 		history.replaceState(null, '', '/');
@@ -1582,11 +1572,11 @@ it.live(
 						record: 'candidate',
 						action: 'create',
 						status: 'Rejected',
-						records: [{ collection: 'jobs', id: 'candidate', op: 'create' }],
+						records: [{ model: 'jobs', id: 'candidate', op: 'create' }],
 						log: [
 							logEntry('request', 'Pending', 'Ada'),
 							logEntry('reject', 'Rejected', 'Sam', {
-								rolledBack: [{ collection: 'jobs', id: 'candidate', action: 'removed' }]
+								rolledBack: [{ model: 'jobs', id: 'candidate', action: 'removed' }]
 							})
 						]
 					}
@@ -1630,15 +1620,11 @@ it.live(
 					: new Promise<readonly ApprovalView[]>((resolve) => answers.push(resolve));
 			const originalLiveGet = script.get;
 			script.get = (c, id, select, options) =>
-				c === 'jobs' && options?.revision === undefined
+				c === 'jobs' && options?.asOf === undefined
 					? current
 					: originalLiveGet(c, id, select, options);
 			script.changes = (read, emit) => {
-				if (
-					read.m === 'query' &&
-					read.a[0] === 'jobs' &&
-					typeof jsonRecord(read.a[1]).id === 'string'
-				) {
+				if (recordRootsOf(read).includes('jobs')) {
 					readers.add(emit);
 					return () => {
 						readers.delete(emit);

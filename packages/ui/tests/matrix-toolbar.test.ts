@@ -35,9 +35,9 @@ for (const toolbar of [undefined, false] as const)
 		Effect.gen(function* () {
 			const { bolt } = yield* browser(() =>
 				viewFixture({
-					read: (collection) => ({
+					read: (model) => ({
 						rows:
-							collection === 'loans'
+							model === 'loans'
 								? [{ id: 'loan-1', name: 'Principal loan' }]
 								: [{ id: 'repayment-1', loan: 'loan-1', day: '2026-10-20', amount: 100 }],
 						next: null
@@ -71,9 +71,9 @@ it.live('Matrix renders one native toolbar with its title and clickable trailing
 		let clicked = 0;
 		const { bolt } = yield* browser(() =>
 			viewFixture({
-				read: (collection) => ({
+				read: (model) => ({
 					rows:
-						collection === 'loans'
+						model === 'loans'
 							? [{ id: 'loan-1', name: 'Principal loan' }]
 							: [{ id: 'repayment-1', loan: 'loan-1', day: '2026-10-20', amount: 100 }],
 					next: null
@@ -127,9 +127,9 @@ it.live('Matrix renders editable column headers without replacing its amount cel
 		const chosen: import('../src/client/contract.js').Json[] = [];
 		const { bolt } = yield* browser(() =>
 			viewFixture({
-				read: (collection) => ({
+				read: (model) => ({
 					rows:
-						collection === 'loans'
+						model === 'loans'
 							? [{ id: 'loan-1', name: 'Principal loan' }]
 							: [{ id: 'repayment-1', loan: 'loan-1', day: '2026-10-20', amount: 100 }],
 					next: null

@@ -305,7 +305,7 @@ it.live('logs: 10k rows render a window and load an older page on scroll to top'
 	})
 );
 
-it.live("openRecord writes the shell's one record link, ?record=<collection>/<id|new>", () =>
+it.live("openRecord writes the shell's one record link, ?record=<model>/<id|new>", () =>
 	browser(async () => {
 		const { openRecord } = await import('../src/record/navigation.ts');
 		history.replaceState(null, '', '/app/sales/list?q=a');

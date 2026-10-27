@@ -1,17 +1,19 @@
-// Policies → Authority (rules 33–37, 35a): held grants union into arms, `'read'` and `via` resolve, masks derive from
-// the read arms, and an administrator (or a platform run) bypasses authored policy. Plus what a write and a read
-// consult of it: `moves` (rule 34) and the read scope (rule 13); the write judge itself is `write/act.ts`'s.
+// Policies → Authority (rules 33–37, 35a): held grants union into arms per read path, write arms carry the columns they
+// admit per write path and whether a `check` judges them, masks derive per path from the read arms, and an administrator
+// (or a platform run) bypasses authored policy. Plus what a write and a read consult of it: `moves` (rule 34) and the read
+// scope (rule 13); the write judge itself is `write/act.ts`'s.
 import { Schema } from 'effect';
 import type { Admits, WritableColumns, VisitorMayRead, OperandValue } from '../services.ts';
-import type {
-	Arm,
-	Authority,
-	CollectionAuthority,
-	EngineActor,
-	LimitRule,
-	WriteArm
-} from '../contracts.ts';
-import { ScopeData, type EngineManifest, type GrantArm } from '../manifest.ts';
+import type { Arm, Authority, DeleteArm, EngineActor, LimitRule, WriteArm } from '../contracts.ts';
+import {
+	layered,
+	layers,
+	LayerGrant,
+	ScopeData,
+	type EngineManifest,
+	type GrantArm,
+	type GrantData
+} from '../manifest.ts';
 import type { Pred } from '@norbital-ai/store';
 import { or, toPred, TRUE } from './pred.ts';
 import type { Rate } from '../../decl/values.ts';
@@ -30,31 +32,34 @@ export type Holder = {
 	scopes?: { readonly [policy: string]: readonly string[] };
 };
 
-const OPS = ['create', 'update', 'delete'] as const;
-/** Identity collections: read by grant or the kernel directory, written only by their admin verbs (rule 38c). */
+const WRITES = ['create', 'update'] as const;
+/** Identity models: read by grant or the kernel directory, written only by their admin verbs (rule 38c). */
 const IDENTITY = ['sys_user', 'sys_invitation', 'sys_api_key'] as const;
+const isIdentity = (c: string) => (IDENTITY as readonly string[]).includes(c);
 const KERNEL = '$directory';
 
-const emptyCollection = (): Mutable => ({
-	read: [],
+type Mutable = {
+	read: { [path: string]: Arm[] };
+	history: Arm[];
+	create: WriteArm[];
+	update: WriteArm[];
+	delete: DeleteArm[];
+	moves: { [field: string]: 'all' | readonly string[] };
+	masks: { [path: string]: { [field: string]: Pred } };
+};
+const emptyModel = (): Mutable => ({
+	read: {},
 	history: [],
 	create: [],
 	update: [],
 	delete: [],
-	queries: [],
 	moves: {},
 	masks: {}
 });
-type Mutable = {
-	-readonly [
-		K in Exclude<keyof CollectionAuthority, 'moves'>
-	]: CollectionAuthority[K] extends readonly (infer T)[] ? T[] : CollectionAuthority[K];
-} & {
-	moves: { [field: string]: 'all' | readonly string[] };
-};
 
-const isScope = Schema.is(ScopeData);
-/** A grant object is `{ where?, fields?, previous?, approval? }` unless the model has a field of that name. */
+const isScope = Schema.is(ScopeData),
+	isLayer = Schema.is(LayerGrant);
+/** A `history` grant object is `{ where?, fields? }` unless the model has a field of that name. */
 export function scopeObject(
 	m: EngineManifest,
 	model: string,
@@ -64,73 +69,111 @@ export function scopeObject(
 	const keys = Object.keys(g);
 	const own = m.models[model]?.fields ?? {};
 	return keys.length > 0 &&
-		keys.every(
-			(k) => ['where', 'fields', 'previous', 'approval'].includes(k) && own[k] === undefined
-		)
+		keys.every((k) => ['where', 'fields'].includes(k) && own[k] === undefined)
 		? g
 		: undefined;
 }
-
-function readArm(
-	m: EngineManifest,
-	c: string,
-	policy: string,
-	g: GrantArm | undefined
-): Arm | undefined {
-	if (g === undefined) return undefined;
-	if (g === true) return { policy, where: TRUE, fields: 'all' };
-	const s = scopeObject(m, c, g);
-	if (s === undefined) return { policy, where: toPred(m, c, g), fields: 'all' };
-	return {
-		policy,
-		where: s.where === undefined ? TRUE : toPred(m, c, s.where),
-		fields: s.fields ?? 'all'
-	};
-}
-function writeArm(
+/** A `history` (or identity `read`) grant as one arm: `true`, a scope object or a bare `Where`. */
+function scopeArm(
 	m: EngineManifest,
 	c: string,
 	policy: string,
 	g: GrantArm | undefined,
-	read: Arm | undefined
-): WriteArm | undefined {
+	fields: readonly string[] | undefined
+): Arm | undefined {
 	if (g === undefined) return undefined;
-	const scope = (w: GrantArm | undefined): Pred =>
-		w === undefined || w === true ? TRUE : w === 'read' ? (read?.where ?? TRUE) : toPred(m, c, w);
+	if (g === true) return { policy, where: TRUE, fields: fields ?? 'all' };
 	const s = scopeObject(m, c, g);
-	if (s === undefined) return { policy, where: scope(g), fields: 'all' };
+	if (s === undefined) return { policy, where: toPred(m, c, g), fields: fields ?? 'all' };
 	return {
 		policy,
-		where: scope(s.where),
-		fields: s.fields ?? 'all',
-		...(s.previous === undefined ? {} : { previous: scope(s.previous) }),
-		// the manifest marks the policy's approval callback (the guest runs it, kind `approval`)
-		...(s.approval === true ? { approval: s.approval } : {})
+		where: s.where === undefined || s.where === true ? TRUE : toPred(m, c, s.where),
+		fields: s.fields ?? fields ?? 'all'
+	};
+}
+/** The read paths `c` declares (its root first), each with the model behind it. */
+const pathsOf = (m: EngineManifest, c: string): readonly (readonly [string, string])[] => {
+	const read = layered(m).exposures[c]?.read ?? {};
+	const declared = Object.entries(layers(m)[c] ?? {}).filter(([path]) => Object.hasOwn(read, path));
+	return declared.length === 0 ? [[c, c]] : declared;
+};
+/**
+ * One policy's read arms of `c`, one per declared path (decision 3): the grant's layer `where` and `fields` at a path it
+ * names, `{ where: true, fields: 'all' }` at one it does not. An identity model's grant is a bare `Where` with
+ * `fields` beside it, at the root.
+ */
+function readArms(
+	m: EngineManifest,
+	c: string,
+	policy: string,
+	g: GrantData
+): { readonly [path: string]: Arm } | undefined {
+	const read = g.read;
+	if (read === undefined) return undefined;
+	const open: Arm = { policy, where: TRUE, fields: 'all' };
+	const out: { [path: string]: Arm } = {};
+	for (const [path, model] of pathsOf(m, c)) {
+		if (read === true) out[path] = open;
+		else if (isIdentity(c))
+			out[path] = path === c ? (scopeArm(m, c, policy, read, g.fields) ?? open) : open;
+		else {
+			const layer = read[path];
+			out[path] = !isLayer(layer)
+				? open
+				: {
+						policy,
+						where: layer.where === undefined ? TRUE : toPred(m, model, layer.where),
+						fields: layer.fields ?? 'all'
+					};
+		}
+	}
+	return out;
+}
+/** A create or update arm: the columns it admits per write path (default: every column `c` declares) and its `check`. */
+function writeArm(
+	m: EngineManifest,
+	c: string,
+	op: (typeof WRITES)[number],
+	policy: string,
+	g: GrantData[(typeof WRITES)[number]]
+): WriteArm | undefined {
+	if (g === undefined) return undefined;
+	const declared = layered(m).exposures[c]?.[op]?.columns ?? {};
+	return {
+		policy,
+		columns: g === true ? declared : (g.columns ?? declared),
+		check: g !== true && g.check === true
 	};
 }
 
-/** Columns a caller may name: the collection's read exposure plus `id` (rule 10); a system collection's are the built-in layer's. */
-function exposed(m: EngineManifest, c: string): readonly string[] {
-	const sys = Object.hasOwn(SYSTEM.collections, c);
-	const f = (sys ? SYSTEM.collections : m.collections)[c]?.read.fields;
-	const model = (sys ? SYSTEM.models : m.models)[c];
+/** The fields a layer exposes (rule 10), its FKs included; a system model's are its own fields minus the system columns. */
+function exposed(m: EngineManifest, root: string, path: string, model: string): readonly string[] {
+	const all = layered(m);
+	const sys = Object.hasOwn(SYSTEM.models, model);
+	const f = all.exposures[root]?.read[path]?.fields;
 	// a relationship's foreign key is a field of its model too (rule 14: a read grant's `fields` masks an unlisted one)
-	const fks = Object.keys(sys ? SYSTEM.relationships : m.relationships)
-		.filter((k) => k.slice(0, k.indexOf('.')) === c)
+	const fks = Object.keys(all.relationships)
+		.filter((k) => k.slice(0, k.indexOf('.')) === model)
 		.map((k) => k.slice(k.indexOf('.') + 1));
 	// a system row's `revision`, `created_at` and the like are its own fields, unmasked as every row's system columns are
-	const all = [
-		...Object.keys(model?.fields ?? {}),
-		...Object.keys(model?.computed ?? {}),
+	const own = [
+		...Object.keys(all.models[model]?.fields ?? {}),
+		...Object.keys(all.models[model]?.computed ?? {}),
 		...fks
 	].filter((x) => !sys || !(SYSTEM_COLUMNS as readonly string[]).includes(x));
-	return f === undefined || f === 'all' ? all : f;
+	return f === undefined || f === 'all' ? own : f;
 }
-/** Rule 14: a field no read arm narrows is unmasked; otherwise it shows where an arm that lists it holds. */
-function masks(m: EngineManifest, c: string, read: readonly Arm[]): { [field: string]: Pred } {
+/** Rule 14 per path: a field no arm narrows is unmasked; otherwise it shows where an arm that lists it holds. */
+function masks(
+	m: EngineManifest,
+	root: string,
+	path: string,
+	model: string,
+	read: readonly Arm[]
+): { [field: string]: Pred } {
 	const out: { [field: string]: Pred } = {};
 	if (read.length === 0) return out;
-	for (const f of exposed(m, c)) {
+	for (const f of exposed(m, root, path, model)) {
 		const admitting = read.filter((a) => a.fields === 'all' || a.fields.includes(f));
 		const mask = or(admitting.map((a) => a.where));
 		if (admitting.length !== read.length && !(mask.t === 'const' && mask.value)) out[f] = mask;
@@ -179,41 +222,44 @@ export function compileAuthority(m: EngineManifest, holder: Holder, key: string)
 	const bypass = holder.admin || holder.platform === true;
 	const policies = holder.policies.filter((p) => Object.hasOwn(m.policies, p)); // an unknown policy confers nothing
 	const cols: { [c: string]: Mutable } = {};
-	const col = (c: string) => (cols[c] ??= emptyCollection());
-	const via: { c: string; rel: string }[] = [];
+	const col = (c: string) => (cols[c] ??= emptyModel());
+	const addRead = (c: string, arms: { readonly [path: string]: Arm }) => {
+		const a = col(c);
+		for (const [path, arm] of Object.entries(arms)) (a.read[path] ??= []).push(arm);
+	};
 	if (bypass) {
 		// an admin manages the integration instances too (FINAL §3); identity is the admin verbs'
+		const all = layered(m).exposures;
 		for (const c of [
-			...Object.keys(m.collections),
+			...Object.keys(m.exposures),
 			...(holder.admin ? [...IDENTITY, 'sys_integration'] : [])
 		]) {
 			const a = col(c),
-				all: WriteArm = { policy: '$admin', where: TRUE, fields: 'all' };
-			a.read.push(all);
-			a.history.push(all);
-			if (!(IDENTITY as readonly string[]).includes(c))
-				(a.create.push(all), a.update.push(all), a.delete.push(all));
-			a.queries.push(...Object.keys(m.collections[c]?.queries ?? {}));
+				open: Arm = { policy: '$admin', where: TRUE, fields: 'all' };
+			addRead(c, Object.fromEntries(pathsOf(m, c).map(([path]) => [path, open])));
+			a.history.push(open);
+			if (!isIdentity(c)) {
+				for (const op of WRITES)
+					a[op].push({ policy: '$admin', columns: all[c]?.[op]?.columns ?? {}, check: false });
+				a.delete.push({ policy: '$admin', check: false });
+			}
 			for (const [f, k] of Object.entries(m.models[c]?.fields ?? {}))
 				if (k.kind === 'state') a.moves[f] = 'all';
 		}
 	} else {
 		for (const p of policies)
 			for (const [c, g] of Object.entries(m.policies[p]!.grants)) {
-				if (g.via !== undefined) {
-					via.push({ c, rel: g.via });
-					continue;
-				}
 				const a = col(c);
-				const read = readArm(m, c, p, g.read);
-				if (read) a.read.push(read);
-				const history = readArm(m, c, p, g.history);
+				const read = readArms(m, c, p, g);
+				if (read) addRead(c, read);
+				const history = scopeArm(m, c, p, g.history, undefined);
 				if (history) a.history.push(history);
-				for (const op of OPS) {
-					const w = writeArm(m, c, p, g[op], read);
+				for (const op of WRITES) {
+					const w = writeArm(m, c, op, p, g[op]);
 					if (w) a[op].push(w);
 				}
-				a.queries.push(...(g.queries ?? []));
+				if (g.delete !== undefined)
+					a.delete.push({ policy: p, check: g.delete !== true && g.delete.check === true });
 				if (g.moves === 'all')
 					for (const [f, k] of Object.entries(m.models[c]?.fields ?? {})) {
 						if (k.kind === 'state') a.moves[f] = 'all';
@@ -224,35 +270,19 @@ export function compileAuthority(m: EngineManifest, holder: Holder, key: string)
 						a.moves[f] = had === 'all' ? 'all' : [...new Set([...(had ?? []), ...edges])];
 					}
 			}
-		// `via`: the child's rows are the parent's; reads follow the parent's read, writes the parent's update (a child
-		// is edited as part of its parent). A parent that is itself `via` is lifted first, so a chain nests to any depth.
-		const lifted = new Set<(typeof via)[number]>();
-		const liftVia = (v: (typeof via)[number]): void => {
-			if (lifted.has(v)) return;
-			lifted.add(v);
-			const { c, rel } = v,
-				parent = m.relationships[`${c}.${rel}`]?.to;
-			if (typeof parent !== 'string') return;
-			for (const u of via) if (u.c === parent) liftVia(u);
-			const p = cols[parent],
-				a = col(c);
-			// the parent's approval callback judges the parent's writes; a child it lifts to writes directly
-			const lift = ({ approval: _approval, ...arm }: WriteArm): WriteArm => ({
-				...arm,
-				where: { t: 'one', rel, target: parent, pred: arm.where },
-				fields: 'all'
-			});
-			if (p === undefined) return;
-			a.read.push(...p.read.map(lift));
-			a.history.push(...p.history.map(lift));
-			for (const op of OPS) a[op].push(...p.update.map(lift));
-		};
-		for (const v of via) liftVia(v);
-		for (const [c, arm] of Object.entries(directory(holder.actor))) col(c).read.push(arm);
-	}
-	for (const [c, a] of Object.entries(cols)) {
-		a.queries = [...new Set(a.queries)];
-		if (!bypass) a.masks = masks(m, c, a.read);
+		for (const [c, arm] of Object.entries(directory(holder.actor)))
+			addRead(
+				c,
+				Object.fromEntries(
+					pathsOf(m, c).map(([path]) => [
+						path,
+						path === c ? arm : { policy: KERNEL, where: TRUE, fields: 'all' }
+					])
+				)
+			);
+		for (const [c, a] of Object.entries(cols))
+			for (const [path, model] of pathsOf(m, c))
+				a.masks[path] = masks(m, c, path, model, a.read[path] ?? []);
 	}
 	const caps = {
 		apps: new Set<string>(),
@@ -278,7 +308,7 @@ export function compileAuthority(m: EngineManifest, holder: Holder, key: string)
 		actor: holder.actor,
 		admin: holder.admin,
 		policies,
-		collections: cols,
+		models: cols,
 		automations: bypass ? Object.keys(m.automations) : list(automations),
 		capabilities: {
 			apps: list(caps.apps),
@@ -296,38 +326,41 @@ export function compileAuthority(m: EngineManifest, holder: Holder, key: string)
 /** Rule 34: a generated write moves a state only along an edge its grant lists (`'all'`: every declared edge). */
 export function admitMove(
 	auth: Authority,
-	collection: string,
+	model: string,
 	field: string,
 	from: string,
 	to: string
 ): boolean {
 	if (auth.admin || from === to) return true;
-	const moves = auth.collections[collection]?.moves[field];
+	const moves = auth.models[model]?.moves[field];
 	return moves === 'all' || (moves ?? []).includes(`${from}->${to}`);
 }
 
 /** The read scope of a caller (rule 13): the union of its read arms; `undefined` = no read grant at all. */
 export function readScope(
 	auth: Authority,
-	collection: string,
+	model: string,
 	kind: 'read' | 'history' = 'read'
 ): Pred | undefined {
-	const arms = auth.collections[collection]?.[kind] ?? [];
-	return arms.length === 0 ? undefined : or(arms.map((a) => a.where));
+	const a = auth.models[model];
+	const arms = (kind === 'read' ? a?.read[model] : a?.history) ?? [];
+	return arms.length === 0 ? undefined : or(arms.map((x) => x.where));
 }
 
 /** The common field admission used by reads, writes and UI advice. */
 export const admits: Admits = (arms, field) =>
 	arms.some((arm) => arm.fields === 'all' || arm.fields.includes(field));
-export const writableColumns: WritableColumns = (authority, collection, verb) => {
+export const writableColumns: WritableColumns = (authority, model, verb) => {
 	if (authority.admin) return 'all';
-	const arms = authority.collections[collection]?.[verb] ?? [];
-	return arms.some((arm) => arm.fields === 'all')
-		? 'all'
-		: new Set(arms.flatMap((arm) => arm.fields));
+	return new Set(
+		(authority.models[model]?.[verb] ?? []).flatMap(
+			(arm) => arm.columns[model] ?? []
+		)
+	);
 };
-export const visitorMayRead: VisitorMayRead = (authority, collection) =>
-	authority.actor.kind === 'visitor' && (authority.collections[collection]?.read.length ?? 0) > 0;
+export const visitorMayRead: VisitorMayRead = (authority, model) =>
+	authority.actor.kind === 'visitor' &&
+	(authority.models[model]?.read[model]?.length ?? 0) > 0;
 /** Actor operands have one interpretation across SQL, live evaluation and write admission. */
 export const operandValue: OperandValue = (operand, authority) => {
 	const actor = authority.actor;
@@ -368,9 +401,9 @@ export function syncOwned(
 	m: EngineManifest,
 	model: string
 ): { readonly sync: string; readonly local: readonly string[] } | undefined {
-	const spec = m.collections[model];
+	const spec = m.exposures[model];
 	for (const [name, s] of Object.entries(spec?.syncs ?? {}))
 		if (s.with !== 'file' && s.read === true && s.write !== true)
-			return { sync: `${model}.sync.${name}`, local: spec?.update?.input.columns ?? [] };
+			return { sync: `${model}.sync.${name}`, local: spec?.update?.columns[model] ?? [] };
 	return undefined;
 }

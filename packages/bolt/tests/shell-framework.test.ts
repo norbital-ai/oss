@@ -6,7 +6,12 @@ import { describe, expect, it } from '@effect/vitest';
 import { Effect, Fiber } from 'effect';
 import { SHELL_ZH } from '../src/shell/i18n.ts';
 import { environmentLabel, recordsOf, withRecords, type NavNode } from '../src/shell/nav.ts';
-import { pageHits, recordFinder } from '../src/shell/finder/model.ts';
+import {
+	pageHits,
+	recordFinder,
+	type FinderAnswer,
+	type FinderRead
+} from '../src/shell/finder/model.ts';
 
 const SHELL = new URL('../src/shell/', import.meta.url);
 /** Keys the shell passes through `t` as values, not literals (statuses, ops, tables, section titles). */
@@ -71,8 +76,8 @@ describe('record-sheet stack', () => {
 			'https://x.example/app/sales?tab=1&record=orders/o1&record=bad&record=customers/c9'
 		);
 		expect(recordsOf(url)).toEqual([
-			{ collection: 'orders', id: 'o1' },
-			{ collection: 'customers', id: 'c9' }
+			{ model: 'orders', id: 'o1' },
+			{ model: 'customers', id: 'c9' }
 		]);
 		const closed = withRecords(url, 1);
 		expect(closed.searchParams.getAll('record')).toEqual(['orders/o1']);
@@ -122,19 +127,20 @@ describe('finder', () => {
 		]);
 	});
 
-	it.effect('searches every searchable collection, labels rows and drops a stale answer', () =>
+	it.effect('searches every searchable model, labels rows and drops a stale answer', () =>
 		Effect.gen(function* () {
 			const pending: (() => void)[] = [];
-			const read = (collection: string, options: import('../src/decl/values.ts').Json) =>
-				Effect.callback<{ rows: { id: string; name: string; code: string }[] }>((resume) => {
-					const search =
-						options !== null && typeof options === 'object' && 'search' in options
-							? options.search
-							: '';
+			// one read request per searchable root: `{ <model>: { search, limit } }`, answered under that root
+			const read: FinderRead = (request) =>
+				Effect.callback<FinderAnswer>((resume) => {
+					const [model = '', layer] = Object.entries(request)[0] ?? [];
+					const search = layer?.['search'] ?? '';
 					pending.push(() =>
 						resume(
 							Effect.succeed({
-								rows: [{ id: `${collection}-1`, name: `hit ${String(search)}`, code: 'C1' }]
+								[model]: {
+									rows: [{ id: `${model}-1`, name: `hit ${String(search)}`, code: 'C1' }]
+								}
 							})
 						)
 					);
@@ -147,7 +153,7 @@ describe('finder', () => {
 				read,
 				(key) => key
 			);
-			expect(finder.collections).toEqual(['customers']);
+			expect(finder.models).toEqual(['customers']);
 			const first = yield* finder.search('ac').pipe(Effect.forkScoped);
 			yield* Effect.yieldNow;
 			const second = yield* finder.search('acme').pipe(Effect.forkScoped);
@@ -160,7 +166,7 @@ describe('finder', () => {
 					key: 'customers/customers-1',
 					label: 'hit acme · C1',
 					context: 'customers',
-					collection: 'customers',
+					model: 'customers',
 					id: 'customers-1'
 				}
 			]);

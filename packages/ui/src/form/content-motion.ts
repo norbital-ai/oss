@@ -12,6 +12,8 @@ export function contentMotion(node: HTMLElement) {
 		);
 	};
 	let observed = node.firstElementChild;
+	const FIELDS = 'dd,td,li,[data-field]';
+	const known = new Set(node.querySelectorAll<HTMLElement>(FIELDS));
 	const changes = new MutationObserver((records) => {
 		const next = node.firstElementChild;
 		if (resize && next !== observed) {
@@ -21,18 +23,23 @@ export function contentMotion(node: HTMLElement) {
 		}
 		// The record shell handles field changes across section mounts; nested sections only animate height.
 		if (node.matches('[data-section] [id]') && node.closest('[data-view=record]')) return;
+		// A field that arrives with a mounted tab, a virtualised row or a newly opened section is structure, not a value
+		// change: only known fields whose contents mutate flash. New fields join the known set for later updates.
+		const inserted = new Set<HTMLElement>();
+		for (const record of records)
+			for (const added of record.addedNodes) {
+				if (!(added instanceof HTMLElement)) continue;
+				if (added.matches(FIELDS)) inserted.add(added);
+				for (const field of added.querySelectorAll<HTMLElement>(FIELDS)) inserted.add(field);
+			}
+		for (const field of inserted) known.add(field);
 		const fields = new Set<HTMLElement>();
 		for (const record of records) {
 			const element =
 				record.target instanceof HTMLElement ? record.target : record.target.parentElement;
-			const field = element?.closest<HTMLElement>('dd,td,li,[data-field]');
-			if (field && node.contains(field)) fields.add(field);
-			for (const added of record.addedNodes) {
-				if (!(added instanceof HTMLElement)) continue;
-				if (added.matches('dd,td,li,[data-field]')) fields.add(added);
-				for (const child of added.querySelectorAll<HTMLElement>('dd,td,li,[data-field]'))
-					fields.add(child);
-			}
+			const field = element?.closest<HTMLElement>(FIELDS);
+			if (field && known.has(field) && !inserted.has(field) && node.contains(field))
+				fields.add(field);
 		}
 		for (const field of fields)
 			play(

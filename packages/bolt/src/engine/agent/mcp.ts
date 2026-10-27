@@ -48,7 +48,7 @@ export const mcpSessions = Effect.fn('Mcp.sessions')(function* (
 	});
 	const secret = (name: string) =>
 		host === undefined
-			? Config.option(Config.redacted(name)).pipe(
+			? Config.option(Config.Redacted(name)).pipe(
 					Effect.map((value) => Option.getOrUndefined(Option.map(value, Redacted.value))),
 					Effect.mapError(Port.failure('mcp.configuration'))
 				)

@@ -19,7 +19,7 @@ import {
 	Schema,
 	Scope
 } from 'effect';
-import { FetchHttpClient, HttpClient } from 'effect/unstable/http';
+import { FetchHttpClient, HttpClient } from 'effect/http';
 import { defaultProviders, toDrivers } from '@norbital-ai/providers';
 import { PairingInvalid } from '@norbital-ai/providers/errors';
 import { program } from '../../bolt/tests/support/guest-fixture.ts';
@@ -58,12 +58,9 @@ const manifest = {
 		probe: { description: 'Admission probe', label: 'title', fields: { title: { kind: 'text' } } }
 	},
 	relationships: {},
-	collections: {
+	exposures: {
 		probe: {
-			read: { fields: 'all' },
-			queries: {
-				hold: { description: 'Reads through a guest body', input: {}, output: { kind: 'json' } }
-			}
+			read: { probe: { fields: 'all' } }
 		}
 	},
 	policies: {},
@@ -219,7 +216,6 @@ const database: ReturnType<typeof sqlServerDatabase> = {
 const root = join(tmpdir(), 'norbital-scratch', `bolt-server-integrations-${randomUUID()}`),
 	artifact = join(root, 'artifact');
 const guest = `export default {
-	collection: { probe: { bodies: { queries: { hold: function* (_, ctx) { return yield* ctx.query('sys_user', { limit: 1 }); } } } } },
 	integration_definition: { erp: { bodies: { test: function* (ctx) { yield* ctx.request({ method: 'GET', path: '/health' }); } } } },
 };`,
 	compiledGuest = program(guest),
@@ -733,10 +729,8 @@ layer(
 				const spy = vi
 					.spyOn(reads, 'run')
 					.mockImplementation((...args) =>
-						args[0].some(
-							(read) =>
-								read.kind === 'query' && read.collection === 'probe' && read.query === 'hold'
-						)
+						// the held read is the probe's (a read request over `probe`), whatever IR kind lowers it
+						args[0].some((read) => JSON.stringify(read).includes('"probe"'))
 							? Deferred.succeed(entered, undefined).pipe(
 									Effect.andThen(Deferred.await(release)),
 									Effect.andThen(read(...args))
@@ -746,7 +740,7 @@ layer(
 				yield* Effect.addFinalizer(() => Effect.sync(() => spy.mockRestore()));
 				yield* Effect.addFinalizer(() => Deferred.succeed(release, undefined));
 				const held = yield* Effect.forkChild(
-					t.call('POST', '/__bolt/q', { reads: [{ m: 'query', a: ['probe.hold', {}] }] })
+					t.call('POST', '/__bolt/q', { reads: [{ m: 'query', a: [{ probe: { limit: 1 } }] }] })
 				);
 				yield* Deferred.await(entered);
 				let tested = false;

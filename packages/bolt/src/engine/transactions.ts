@@ -82,7 +82,7 @@ type Config = {
 };
 type Held = {
 	snapshot: StepsSnapshot;
-	root: { collection: string; id: string; op: 'create' | 'update' | 'delete' };
+	root: { model: string; id: string; op: 'create' | 'update' | 'delete' };
 };
 type Session = {
 	audit: AuditMutation;
@@ -183,7 +183,7 @@ function nativeRead(read: ReadIR): boolean {
 function netChanges(captured: readonly Captured[]): readonly Captured[] {
 	const rows = new Map<string, Captured>();
 	for (const row of captured) {
-		const key = `${row.collection}/${row.id}`,
+		const key = `${row.model}/${row.id}`,
 			first = rows.get(key);
 		rows.set(
 			key,
@@ -293,7 +293,7 @@ export const makeTransactions = (
 						);
 					state.held ??= {
 						snapshot: commit.approval.route,
-						root: { collection: root.collection, id: root.id, op: root.op }
+						root: { model: root.model, id: root.id, op: root.op }
 					};
 				}
 				const { approval: _approval, ...ordinary } = commit;
@@ -521,13 +521,13 @@ export const makeTransactions = (
 				const result = yield* bound(
 					state,
 					config.writes.act({
-						collection: callable.collection,
+						model: callable.model,
 						verb: callable.verb,
 						input: input.input,
 						mode: { _tag: 'Direct' },
 						key,
 						issuedAt: state.issuedAt,
-						authority: config.authorityForVerb(`${callable.collection}.${callable.verb}`),
+						authority: config.authorityForVerb(`${callable.model}.${callable.verb}`),
 						bindings: config.bindings,
 						invocationId: key,
 						...(input.onConflict === undefined ? {} : { onConflict: input.onConflict })
@@ -554,7 +554,7 @@ export const makeTransactions = (
 							const captures = netChanges(state.captured);
 							const records = captures
 								.filter((row) => row.cause === 'direct')
-								.map(({ collection, id, revision }) => ({ collection, id, revision }));
+								.map(({ model, id, revision }) => ({ model, id, revision }));
 							let outcome: Outcome = {
 								kind: 'committed',
 								output: { value: input.output, omitted: input.omitted },
@@ -628,7 +628,7 @@ export const makeTransactions = (
 											.filter((value): value is string => typeof value === 'string')
 											.sort()[0] ?? null,
 									changed_instances: captures
-										.filter((row) => row.collection === 'sys_integration')
+										.filter((row) => row.model === 'sys_integration')
 										.map((row) => row.id)
 								}
 							};

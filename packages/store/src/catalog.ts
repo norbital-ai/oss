@@ -1,4 +1,4 @@
-// What the query compiler knows of a schema: per model (table), its columns by kind and its relations; per collection,
+// What the query compiler knows of a schema: per model (table), its columns by kind and its relations; per model,
 // its read exposure (a plain schema exposes each table whole). Built once per schema from pure data; browser-safe.
 //
 // Physical naming, shared with the DDL: a model's table is its name, a field's column is its name, a relation's FK
@@ -73,15 +73,23 @@ export type IndexInfo = {
 	readonly candidates?: number | undefined;
 	readonly rerank?: true | undefined;
 };
-export type CollectionInfo = {
+/**
+ * One read level: a root (`path` = `name`) or one of its declared layers (`'orders.party'`), with the model behind it, the
+ * fields it exposes and the sub-layers declared under it (`'all'`: a plain schema's whole table, every relation).
+ */
+export type ExposureInfo = {
 	name: string;
+	path: string;
 	model: ModelInfo;
 	fields: 'all' | ReadonlySet<string>;
 	relations: 'all' | ReadonlySet<string>;
 };
 export type Catalog = {
 	models: ReadonlyMap<string, ModelInfo>;
-	collections: ReadonlyMap<string, CollectionInfo>;
+	/** The read roots by model name. */
+	exposures: ReadonlyMap<string, ExposureInfo>;
+	/** Every declared layer below a root, by its full path. */
+	layers: ReadonlyMap<string, ExposureInfo>;
 };
 
 export const SEARCH_COLUMN = 'bolt_search';
@@ -159,12 +167,9 @@ export type CatalogTable = {
 };
 /** What the catalog reads of a schema: its tables (each ref field a relation). */
 export type CatalogSchema = { readonly tables: { readonly [table: string]: CatalogTable } };
-/** What the catalog reads of a collection: its read exposure. */
-export type CatalogCollection = {
-	readonly read: {
-		readonly fields: 'all' | readonly string[];
-		readonly relations?: 'all' | readonly string[] | undefined;
-	};
+/** What the catalog reads of a model: its read layers by path (the root's key is its name). */
+export type CatalogExposure = {
+	readonly read: { readonly [path: string]: { readonly fields: 'all' | readonly string[] } };
 };
 
 const PG: { readonly [kind: string]: string } = {
@@ -244,16 +249,11 @@ export const keyPg = (spec: CatalogTable | undefined): string => {
 
 /**
  * The query model of a schema. Pure: a `SchemaSpec` has every reference resolved, so a name here always names a table.
- * Without `collections`, every table is exposed whole.
+ * Without `exposures`, every table is exposed whole.
  */
 export function catalogOf(
 	schema: CatalogSchema,
-	collections: { readonly [collection: string]: CatalogCollection } = Object.fromEntries(
-		Object.keys(schema.tables).map((t): [string, CatalogCollection] => [
-			t,
-			{ read: { fields: 'all' } }
-		])
-	)
+	exposures?: { readonly [model: string]: CatalogExposure }
 ): Catalog {
 	const specs = schema.tables;
 	const fields = new Map<string, Map<string, FieldInfo>>();
@@ -348,20 +348,46 @@ export function catalogOf(
 			];
 		})
 	);
-	const exposed = new Map<string, CollectionInfo>();
-	for (const [name, spec] of Object.entries(collections)) {
-		const model = byName.get(name);
-		if (model === undefined) continue;
-		const f = spec.read.fields;
-		const r = spec.read.relations ?? (f === 'all' ? 'all' : []);
-		exposed.set(name, {
-			name,
-			model,
-			fields: f === 'all' ? 'all' : new Set(f),
-			relations: r === 'all' ? 'all' : new Set(r)
-		});
+	const exposed = new Map<string, ExposureInfo>(),
+		layers = new Map<string, ExposureInfo>();
+	if (exposures === undefined) {
+		for (const [name, model] of byName)
+			exposed.set(name, { name, path: name, model, fields: 'all', relations: 'all' });
+		return { models: byName, exposures: exposed, layers };
 	}
-	return { models: byName, collections: exposed };
+	for (const [root, spec] of Object.entries(exposures)) {
+		if (!byName.has(root)) continue;
+		const paths = Object.keys(spec.read);
+		// shortest first: a layer's model is its parent's relation target
+		for (const path of paths.sort((a, b) => a.split('.').length - b.split('.').length)) {
+			const at = path.lastIndexOf('.');
+			const above = path.slice(0, at),
+				parent = at < 0 ? undefined : (layers.get(above) ?? exposed.get(above));
+			const rel = path.slice(at + 1);
+			const name =
+				at < 0
+					? path
+					: parent?.model.one.get(rel)?.targets.length === 1
+						? parent.model.one.get(rel)?.targets[0]
+						: parent?.model.many.get(rel)?.child;
+			const model = name === undefined ? undefined : byName.get(name);
+			if (model === undefined || name === undefined || (at < 0 && path !== root)) continue;
+			const f = spec.read[path]!.fields;
+			const info: ExposureInfo = {
+				name,
+				path,
+				model,
+				fields: f === 'all' ? 'all' : new Set(f),
+				relations: new Set(
+					paths
+						.filter((p) => p.includes('.') && p.slice(0, p.lastIndexOf('.')) === path)
+						.map((p) => p.slice(p.lastIndexOf('.') + 1))
+				)
+			};
+			(at < 0 ? exposed : layers).set(path, info);
+		}
+	}
+	return { models: byName, exposures: exposed, layers };
 }
 
 /** Kinds that compare with each other through a `{ field }` operand (`Family` in `decl/where.ts`). */
@@ -374,31 +400,31 @@ export function family(f: FieldInfo): string {
 /** Quotes an identifier; every name reaching SQL has been checked against the catalog first. */
 export const q = (name: string): string => `"${name.replaceAll('"', '""')}"`;
 
-/** The collection a read names; an unknown name is `invalid`. */
-export const collectionOf = (
+/** The model a read names; an unknown name is `invalid`. */
+export const exposureOf = (
 	cat: Catalog,
 	name: string
-): Effect.Effect<CollectionInfo, StoreError> => {
-	const c = cat.collections.get(name);
+): Effect.Effect<ExposureInfo, StoreError> => {
+	const c = cat.exposures.get(name);
 	return c === undefined
-		? Effect.fail(StoreError.of('invalid', 'decode', `unknown collection '${name}'`))
+		? Effect.fail(StoreError.of('invalid', 'decode', `unknown model '${name}'`))
 		: Effect.succeed(c);
 };
 
-/** Whether a reader may name `field` of collection `c`: the key and audit columns always, else the read exposure. */
-export function exposedField(c: CollectionInfo, name: string): boolean {
+/** Whether a reader may name `field` of model `c`: the key and audit columns always, else the read exposure. */
+export function exposedField(c: ExposureInfo, name: string): boolean {
 	if (SYSTEM_COLUMNS.some((column) => column === name)) return true;
 	const base = name.includes('.') ? name.slice(0, name.indexOf('.')) : name;
 	return c.fields === 'all' ? c.model.fields.has(base) : c.fields.has(base);
 }
-export function exposedRelation(c: CollectionInfo, rel: string): boolean {
+export function exposedRelation(c: ExposureInfo, rel: string): boolean {
 	return c.relations === 'all'
 		? c.model.one.has(rel) || c.model.many.has(rel)
 		: c.relations.has(rel);
 }
 const HEAVY = new Set(['json', 'custom', 'file']);
 /** A scoped reader's default projection: a list leaves out `json`, `custom`, `file` values; a single record keeps them; no polymorphic arm pseudo-fields. */
-export function defaultFields(c: CollectionInfo, heavy = false): string[] {
+export function defaultFields(c: ExposureInfo, heavy = false): string[] {
 	return [...c.model.fields.values()]
 		.filter(
 			(f) => !f.name.includes('.') && (heavy || !HEAVY.has(f.kind)) && exposedField(c, f.name)

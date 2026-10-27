@@ -49,7 +49,7 @@ type KeyKind<S extends AnySchema, T> =
 type RefBase<S extends AnySchema, K> = K extends { to: infer To }
 	? IsUnion<Targets<To>> extends true
 		? {
-				[T in Targets<To>]: { readonly collection: T; readonly id: ValueOf<KeyKind<S, T>> };
+				[T in Targets<To>]: { readonly model: T; readonly id: ValueOf<KeyKind<S, T>> };
 			}[Targets<To>]
 		: ValueOf<KeyKind<S, Targets<To>>>
 	: never;
@@ -269,7 +269,7 @@ export type With<S extends AnySchema, T> = {
 type ArmOf<A> = A extends true ? {} : A;
 type SelectedOf<Q> = Q extends { select: infer Sel } ? keyof Sel : never;
 type WithOf<Q> = Q extends { with: infer W } ? W : {};
-/** A polymorphic relation's row: whichever target it holds, tagged with its `collection`. */
+/** A polymorphic relation's row: whichever target it holds, tagged with its `model`. */
 type TargetArm<A, X> = X extends keyof A
 	? ArmOf<A[X]>
 	: A extends { select: unknown } | { with: unknown }
@@ -277,7 +277,7 @@ type TargetArm<A, X> = X extends keyof A
 		: {};
 type Tagged<S extends AnySchema, X, A> = X extends string
 	? {
-			readonly [P in RowKey<S, X, TargetArm<A, X>> | 'collection']: P extends 'collection'
+			readonly [P in RowKey<S, X, TargetArm<A, X>> | 'model']: P extends 'model'
 				? X
 				: RowValue<S, X, TargetArm<A, X>, P>;
 		}

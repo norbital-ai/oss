@@ -2,7 +2,6 @@ import { install } from '../../../src/decl/runtime/guest.ts';
 install();
 // A hand-written workspace for the type corpus: the `src/data/model/<name>/+model.ts` literals a template writes, every
 // body inline. `../registry.ts` is what `bolt sync` prints for them: each body is typed from it by the model's name.
-import { Decimal } from '@norbital-ai/std/decimal';
 import { customField, model } from '../../../src/index.ts';
 import type { Finding, Notice, SyncRow } from '../../../src/index.ts';
 
@@ -32,27 +31,13 @@ export const customers = model('customers', {
 	search: { text: ['name'] },
 	read: 'all',
 	create: {
-		columns: ['name', 'email', 'tier'],
-		filled: ['name'],
+		columns: { customers: ['name', 'email', 'tier'] },
+		filled: { customers: ['name'] },
 		transform: function* (rows) {
 			return rows.map((r) => (r.name === undefined ? { ...r, name: r.email ?? 'unknown' } : r));
 		}
 	},
-	update: { columns: ['name', 'email', 'tier', 'tags'] },
-	queries: {
-		gold: {
-			description: 'Gold customers',
-			input: { min: { kind: 'int', optional: true } },
-			output: {
-				kind: 'list',
-				of: { kind: 'id', of: 'customers', where: { tier: { eq: 'gold' } } }
-			},
-			run: function* (_, ctx) {
-				const gold = yield* ctx.query('customers', { where: { tier: { eq: 'gold' } }, all: true });
-				return gold.rows.map((c) => c.id);
-			}
-		}
-	},
+	update: { columns: { customers: ['name', 'email', 'tier', 'tags'] } },
 	syncs: {
 		// two ways with the ERP: `read` pulls changed customers, `write` sends each committed change
 		crm: {
@@ -134,33 +119,32 @@ export const orders = model('orders', {
 				input: { lab: { kind: 'vector', dim: 3, metric: 'l2' } },
 				candidates: 4,
 				probe: (q) => ({ vector: q.lab, where: { status: { eq: 'ordered' } } }),
-				rerank: (q, row) => (row.colour === null ? undefined : row.colour.length - q.lab.length)
+				rerank: (q, row) =>
+					Array.isArray(row.colour) ? row.colour.length - q.lab.length : undefined
 			}
 		}
 	},
-	read: 'all',
+	read: {
+		orders: { fields: 'all' },
+		'orders.customer': { fields: ['name', 'tier'] },
+		'orders.lines': { fields: 'all' }
+	},
 	create: {
-		columns: ['customer', 'note', 'due'],
-		with: { lines: { create: { columns: ['item', 'qty', 'price'] } } },
+		columns: { orders: ['customer', 'note', 'due'], 'orders.lines': ['item', 'qty', 'price'] },
 		transform: function* (rows, ctx) {
-			const known = yield* ctx.db.query('customers', {
+			const known = yield* ctx.db.query({ customers: {
 				where: { id: { in: rows.map((r) => r.customer) } },
-				select: { tier: true },
-				all: true
-			});
-			const at = rows.findIndex((r) => !known.rows.some((c) => c.id === r.customer));
+				fields: ['tier']
+			} });
+			const at = rows.findIndex((r) => !known.customers.rows.some((c) => c.id === r.customer));
 			if (at >= 0) return yield* ctx.refuse('Unknown customer.', { field: 'customer', row: at });
 			return rows.map((r) => ({ ...r, placed_at: ctx.now }));
 		}
 	},
 	update: {
-		columns: ['status', 'note', 'due', 'placed_at'],
-		with: {
-			lines: {
-				create: { columns: ['item', 'qty', 'price'] },
-				update: { columns: ['qty'] },
-				delete: {}
-			}
+		columns: {
+			orders: ['status', 'note', 'due', 'placed_at'],
+			'orders.lines': ['item', 'qty', 'price']
 		},
 		transform: function* (changes, ctx) {
 			return changes.map(({ before, set }) =>
@@ -176,35 +160,19 @@ export const orders = model('orders', {
 			if (at >= 0) return yield* ctx.refuse('An ordered order stays.', { row: at });
 		}
 	},
-	queries: {
-		open_total: {
-			description: 'Sum of open orders',
-			input: { since: { kind: 'date' } },
-			output: { kind: 'money' },
-			run: function* ({ since }, ctx) {
-				const open = yield* ctx.query('orders', {
-					where: { status: { ne: 'ordered' }, due: { gte: since } },
-					select: { total: true },
-					all: true
-				});
-				return open.rows.reduce((sum, r) => sum.plus(r.total), Decimal.of(0));
-			}
-		}
-	},
 	notify: function* (event, ctx) {
 		if (event.kind !== 'write' || event.action !== 'create') return [];
-		const buyers = yield* ctx.db.query('customers', {
+		const buyers = yield* ctx.db.query({ customers: {
 			where: { id: { in: event.records.map((o) => o.customer) } },
-			select: { name: true },
-			all: true
-		});
+			fields: ['name']
+		} });
 		return event.records.map((o): Notice => ({
 			title: `New order ${o.number}`,
-			description: buyers.rows.find((c) => c.id === o.customer)?.name ?? '',
+			description: buyers.customers.rows.find((c) => c.id === o.customer)?.name ?? '',
 			to: [{ team: 'finance' }, 'requester'],
 			via: ['whatsapp'],
 			attachments: [{ document: { html: `<h1>${o.number}</h1>` }, to: 'pdf', name: 'order.pdf' }],
-			link: { collection: 'orders', id: o.id }
+			link: { model: 'orders', id: o.id }
 		}));
 	},
 	syncs: {
@@ -242,12 +210,11 @@ export const orders = model('orders', {
 			},
 			context: { since: { kind: 'date' } },
 			read: function* ({ records, context }, ctx) {
-				const known = yield* ctx.db.query('customers', {
+				const known = yield* ctx.db.query({ customers: {
 					where: { name: { in: records.map((r) => r.customer) } },
-					select: { name: true },
-					all: true
-				});
-				const idOf = (name: string) => known.rows.find((c) => c.name === name)?.id;
+					fields: ['name']
+				} });
+				const idOf = (name: string) => known.customers.rows.find((c) => c.name === name)?.id;
 				return {
 					rows: records.flatMap((r) => {
 						const customer = idOf(r.customer);
@@ -264,12 +231,11 @@ export const orders = model('orders', {
 				};
 			},
 			write: function* ({ context }, ctx) {
-				const open = yield* ctx.db.query('orders', {
+				const open = yield* ctx.db.query({ orders: {
 					where: { due: { gte: context.since } },
-					select: { customer: true, note: true },
-					all: true
-				});
-				return open.rows.map((o) => ({ customer: String(o.customer), note: o.note }));
+					fields: ['customer', 'note']
+				} });
+				return open.orders.rows.map((o) => ({ customer: String(o.customer), note: o.note }));
 			}
 		}
 	}
@@ -308,17 +274,6 @@ export const notices = model('notices', {
 		semantic: { fields: ['subject'], model: 'text_small', dim: 1536 }
 	},
 	read: 'all',
-	queries: {
-		recent: {
-			description: 'Latest notices',
-			input: {},
-			output: { kind: 'list', of: { kind: 'id', of: 'notices' } },
-			run: function* (_, ctx) {
-				const page = yield* ctx.query('notices', { orderBy: { received_at: 'desc' }, limit: 20 });
-				return page.rows.map((n) => n.id);
-			}
-		}
-	},
 	syncs: {
 		// one way in: the mailbox's messages are its deliveries
 		mail: {
@@ -356,8 +311,8 @@ export const notice_notes = model('notice_notes', {
 	},
 	unique: [{ fields: ['notice'] }],
 	read: 'all',
-	create: { columns: ['notice', 'note'] },
-	update: { columns: ['note'] }
+	create: { columns: { notice_notes: ['notice', 'note'] } },
+	update: { columns: { notice_notes: ['note'] } }
 });
 
 export const sites = model('sites', {
@@ -393,8 +348,8 @@ export const sites = model('sites', {
 	noOverlap: [{ key: ['name'], period: 'open' }],
 	// a lock is a predicate over the model's own fields
 	locked: { zone: { isNull: false } },
-	read: { fields: ['name', 'location', 'customer', 'open', 'rating', 'checklist'], relations: [] },
-	update: { columns: ['name', 'location'] }
+	read: { sites: { fields: ['name', 'location', 'customer', 'open', 'rating', 'checklist'] } },
+	update: { columns: { sites: ['name', 'location'] } }
 });
 
 export const products = model('products', {
@@ -410,7 +365,7 @@ export const products = model('products', {
 		commission_factor: { kind: 'decimal', scale: 4, optional: true }
 	},
 	read: 'all',
-	update: { columns: ['commission_factor'] },
+	update: { columns: { products: ['commission_factor'] } },
 	syncs: {
 		// one way in from the ledger database, every 15 minutes by default
 		ledger: {
@@ -448,7 +403,7 @@ export const entries = model('entries', {
 		filed: { kind: 'bool', default: false }
 	},
 	read: 'all',
-	update: { columns: ['filed'] },
+	update: { columns: { entries: ['filed'] } },
 	syncs: {
 		// the calendar driver pushes events; one cursor per chosen calendar
 		calendar: {

@@ -2,7 +2,7 @@ import { it } from '@effect/vitest';
 import { fileURLToPath } from 'node:url';
 import * as NodeServices from '@effect/platform-node/NodeServices';
 import { Effect, FileSystem, Option, Path } from 'effect';
-import { ChildProcess, ChildProcessSpawner } from 'effect/unstable/process';
+import { ChildProcess, ChildProcessSpawner } from 'effect/process';
 import { describe, expect } from 'vitest';
 import {
 	actualCounts,

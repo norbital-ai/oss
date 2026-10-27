@@ -16,10 +16,10 @@ const manifest = (
 	workspace: { tz: 'UTC', locale: 'en' },
 	models,
 	relationships,
-	collections: Object.fromEntries(
-		Object.keys(models).map((name): [string, EngineManifest['collections'][string]] => [
+	exposures: Object.fromEntries(
+		Object.keys(models).map((name): [string, EngineManifest['exposures'][string]] => [
 			name,
-			{ read: { fields: 'all' }, delete: {} }
+			{ read: { [name]: { fields: 'all' } }, delete: {} }
 		])
 	),
 	policies,
@@ -87,8 +87,8 @@ describe('approval relationship traversal', () => {
 			},
 			{
 				requester: {
-					description: 'Requests root deletion',
-					grants: { root: { read: true, delete: { approval: true } } }
+					description: 'Requests root deletion: its delete check may approve',
+					grants: { root: { read: true, delete: { check: true } } }
 				}
 			}
 		);

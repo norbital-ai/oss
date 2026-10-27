@@ -14,7 +14,7 @@ import {
 	Schema
 } from 'effect';
 import { TestClock } from 'effect/testing';
-import { FetchHttpClient } from 'effect/unstable/http';
+import { FetchHttpClient } from 'effect/http';
 import {
 	EngineManifestSchema,
 	Facilities,
@@ -216,7 +216,7 @@ describe('the S3 files store (BOLT_FILES_PROVIDER=s3)', () => {
 
 	it.live('round-trips against a real S3-compatible store', (context) =>
 		Effect.gen(function* () {
-			const minio = yield* EffectConfig.option(EffectConfig.string('BOLT_TEST_S3'));
+			const minio = yield* EffectConfig.option(EffectConfig.String('BOLT_TEST_S3'));
 			if (Option.isNone(minio)) return context.skip('BOLT_TEST_S3 is not configured');
 			const [endpoint, credential] = minio.value.split('|');
 			if (endpoint === undefined || credential === undefined)
@@ -264,7 +264,7 @@ describe('activation requirements (rule 69)', () => {
 		Schema.decodeUnknownSync(EngineManifestSchema)({
 			models: {},
 			relationships: {},
-			collections: {},
+			exposures: {},
 			integrations: {},
 			pipelines: {},
 			policies: {},
@@ -608,7 +608,7 @@ describe('web reads (BOLT_WEB_PROVIDER=public)', () => {
 								workspace: { tz: 'UTC', locale: 'en' },
 								models: {},
 								relationships: {},
-								collections: {},
+								exposures: {},
 								integrations: {},
 								pipelines: {},
 								policies: {},

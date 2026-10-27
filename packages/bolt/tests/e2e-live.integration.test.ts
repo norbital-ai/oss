@@ -36,13 +36,13 @@ describe('a live subscription on the engine', () => {
 				);
 				const conn = yield* Deferred.await(hello);
 				yield* live.register(conn, 'orders', {
-					read: lowerRead(manifest, 'query', ['orders', { all: true, select: { title: true } }])
+					read: lowerRead(manifest, 'read', ['orders', { all: true, select: { title: true } }])
 				});
 				const r = yield* writes.act({
-					collection: 'orders',
+					model: 'orders',
 					verb: 'create',
 					mode: { _tag: 'Direct' },
-					input: { title: ' desk ', region: 'north', customer: ACME },
+					input: [{ title: ' desk ', region: 'north', customer: ACME }],
 					key: 'k1',
 					issuedAt: t.clock.now(),
 					authority: rep,

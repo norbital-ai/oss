@@ -2,16 +2,19 @@
 // against values it is given: there is no clock operand (a page passes `bolt.clock(unit)`'s values, server code `ctx.today`).
 import type { Literal } from './fields.ts';
 import type {
-	CollectionName,
+	ModelName,
 	Columns,
 	IsUnion,
+	LayerField,
 	ManyRels,
 	OneRels,
 	OneTarget,
+	PathModel,
 	PolicyName,
 	ReadField,
 	ReadRelation,
 	RelTarget,
+	RootOf,
 	TargetName
 } from './names.ts';
 import type { Json, Point } from './values.ts';
@@ -137,8 +140,11 @@ export type Ops<M, K, S = false> = K extends { kind: 'text' | 'enum'; many: true
 
 type IdOps<T extends string, S> = ScalarOps<never, { kind: 'id'; of: T }, S>;
 
-// X = exposure: a collection name, or 'model' for an unexposed model-level predicate.
-type Visible<M, X, P> = X extends 'model' ? P : P & ReadField<M>;
+// X = exposure: a model name (its root layer), a layer path (`'orders.lines'`: that layer's fields), or 'model' for
+// an unexposed model-level predicate.
+type Visible<M, X, P> = X extends 'model'
+	? P
+	: P & (X extends M ? ReadField<M> : LayerField<RootOf<X>, X>);
 type Crossable<M, X, R> = X extends 'model' ? R : R & ReadRelation<M>;
 type Next<T, X> = X extends 'model' ? ModelWhere<T> : Where<T>;
 type RefWhere<M, R, X> =
@@ -161,15 +167,17 @@ type AggOf<T, X, K> = {
 		? { of: P } & CmpOps<Literal<Columns<T>[P]>>
 		: never;
 }[Visible<T, X, keyof Columns<T> & string>];
+/** The exposure a hop lands in: the hopped-to model's own root access point (its read), or none for a model predicate. */
+type Hop<T, X> = X extends 'model' ? 'model' : T;
 type ManyWhere<T, X> = {
 	some?: Next<T, X>;
 	none?: Next<T, X>;
 	every?: Next<T, X>;
 	count?: CmpOps<number>;
-	sum?: AggOf<T, X, Summable>;
-	avg?: AggOf<T, X, Summable>;
-	min?: AggOf<T, X, Summable | { kind: 'date' | 'instant' }>;
-	max?: AggOf<T, X, Summable | { kind: 'date' | 'instant' }>;
+	sum?: AggOf<T, Hop<T, X>, Summable>;
+	avg?: AggOf<T, Hop<T, X>, Summable>;
+	min?: AggOf<T, Hop<T, X>, Summable | { kind: 'date' | 'instant' }>;
+	max?: AggOf<T, Hop<T, X>, Summable | { kind: 'date' | 'instant' }>;
 };
 
 type WhereOver<M, X> = {
@@ -187,13 +195,19 @@ type WhereOver<M, X> = {
 // Conditional on the name: while a call is inferred, its literal is typed against the generic `Where<C>`, and expanding
 // that predicate for every nested literal of every call cost ~0.5 ms a read (G1 scale fixture). The `[C] extends
 // [infer D]` wrapper keeps the generic form's constraint from being `Where<constraint of C>`: under a template helper's
-// `C extends ReadableName` that is every collection's predicate at once, 0.3 s a call (F28); `D` still distributes over
+// `C extends ReadableName` that is every model's predicate at once, 0.3 s a call (F28); `D` still distributes over
 // a union of names. The applicability check that follows types the literal against the instantiated `Where<'orders'>`.
-// (A mapped index of every collection's predicate was slower still.)
-/** A predicate over collection `C`: only its exposed fields and relations exist (rule 10). */
+// (A mapped index of every model's predicate was slower still.)
+/** A predicate over model `C`: only its exposed fields and relations exist (rule 10). */
 export type Where<C> = [C] extends [infer D]
-	? D extends CollectionName
+	? D extends ModelName
 		? WhereOver<D, D>
+		: never
+	: never;
+/** A predicate over layer `P` of `C`'s read declaration: only the fields that layer exposes (the root: `Where<C>`). */
+export type LayerWhere<C, P> = [PathModel<C, P>] extends [infer T]
+	? T extends TargetName
+		? WhereOver<T, P>
 		: never
 	: never;
 /** A predicate over a model with no exposure filter (an `id` input's picker filter). */
@@ -215,7 +229,7 @@ export type StaticWhere<M, Fk = true> = {
 type Unsortable =
 	{ kind: 'json' | 'file' | 'custom' | 'vector' | 'point' | 'period' } | { many: true };
 /** Fields a read may order by: exposed, ordered kinds, and `created_at`/`updated_at` (§3.3.9); FKs order by id. */
-export type Sortable<C> = C extends CollectionName
+export type Sortable<C> = C extends ModelName
 	? | {
 				[P in ReadField<C> & keyof Columns<C> & string]: Columns<C>[P] extends Unsortable
 					? never
@@ -231,10 +245,10 @@ export type Sortable<C> = C extends CollectionName
 					: never;
 		  }[ReadField<C> & keyof OneRels<C> & string]
 	: never;
-/** One-relations a sort may cross: crossable, into one collection (not an arc). */
-type SortHop<C> = C extends CollectionName
+/** One-relations a sort may cross: crossable, into one model (not an arc). */
+type SortHop<C> = C extends ModelName
 	? {
-			[R in ReadRelation<C> & keyof OneRels<C> & string]: [OneTarget<C, R>] extends [CollectionName]
+			[R in ReadRelation<C> & keyof OneRels<C> & string]: [OneTarget<C, R>] extends [ModelName]
 				? IsUnion<OneTarget<C, R>> extends true
 					? never
 					: R
@@ -245,7 +259,7 @@ type Dir = 'asc' | 'desc';
 type Prev = [never, 0, 1];
 /** Each key's value at one level: a direction, and through a hop (`D` left) one key of the target's level. */
 /** Point fields a read may order by distance from a point, nearest first: `{ location: { near: { lat, lng } } }`. */
-type PointField<C> = C extends CollectionName
+type PointField<C> = C extends ModelName
 	? {
 			[P in ReadField<C> & keyof Columns<C> & string]: Columns<C>[P] extends { kind: 'point' }
 				? P
@@ -267,7 +281,7 @@ type OneKey<L> = {
 	[F in keyof L]: { [K in F]: L[F] } & { [K in Exclude<keyof L, F>]?: never };
 }[keyof L];
 /** A sort key: a field (ascending), `{ field: dir }`, or a related field through at most two one-relations
- * (`{ account: { name: 'asc' } }`); the target field must be `Sortable` on its collection (and, at run time, unmasked). */
+ * (`{ account: { name: 'asc' } }`); the target field must be `Sortable` on its model (and, at run time, unmasked). */
 export type SortKey<C> = Sortable<C> | OneKey<SortLevel<C, 2>>;
 /** Up to `ORDER_MAX_KEYS` keys, each once, then `id` (rule 11); nulls last ascending, first descending. */
 export type OrderBy<C> = SortKey<C> | readonly SortKey<C>[];

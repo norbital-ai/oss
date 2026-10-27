@@ -61,10 +61,10 @@ const manifest = Result.getOrThrow(
 			}
 		},
 		relationships: {},
-		collections: {
-			notes: { read: { fields: 'all' }, create: { input: { columns: ['title'] } } },
-			docs: { read: { fields: 'all' }, create: { input: { columns: ['title', 'file'] } } },
-			secrets: { read: { fields: 'all' }, create: { input: { columns: ['title', 'file'] } } }
+		exposures: {
+			notes: { read: { notes: { fields: 'all' } }, create: { columns: { notes: ['title'] } } },
+			docs: { read: { docs: { fields: 'all' } }, create: { columns: { docs: ['title', 'file'] } } },
+			secrets: { read: { secrets: { fields: 'all' } }, create: { columns: { secrets: ['title', 'file'] } } }
 		},
 		integrations: {},
 		teams: { ops: ['ops'] },
@@ -104,7 +104,7 @@ const source = `import { Effect } from 'effect'; export default { automation: {
 		yield* ctx.progress({ ratio: 0.1, text: 'start' });
 		yield* ctx.web.read('https://hq.example/pause');
 		if (input.title === 'progress') yield* ctx.progress({ ratio: 0.5, text: 'half' });
-		yield* ctx.act('notes.create', { title: input.title });
+		yield* ctx.act('notes.create', [{ title: input.title }]);
 		return 'finished';
 	} },
 	bundle: { body: function* (_, ctx) {
@@ -369,8 +369,8 @@ describe('the files facility in automations (§5.8.1)', () => {
 			});
 			const docFile = yield* Schema.decodeUnknownEffect(File)(doc.output),
 				hiddenFile = yield* Schema.decodeUnknownEffect(File)(hidden.output);
-			yield* act('docs.create', { title: 'd', file: docFile });
-			yield* act('secrets.create', { title: 's', file: hiddenFile });
+			yield* act('docs.create', [{ title: 'd', file: docFile }]);
+			yield* act('secrets.create', [{ title: 's', file: hiddenFile }]);
 			yield* start('read_doc', { ref: docFile });
 			yield* start('read_doc', { ref: hiddenFile });
 			yield* t.runDue();
@@ -495,13 +495,13 @@ describe('the files facility in automations (§5.8.1)', () => {
 					manifest,
 					{
 						...pack,
-						rows: (collection, from) =>
+						rows: (model, from) =>
 							Stream.unwrap(
 								Effect.sync(() => {
 									expect(active).toBe(0);
 									openStreams++;
 									streams++;
-									return pack.rows(collection, from);
+									return pack.rows(model, from);
 								})
 							).pipe(
 								Stream.tap(() => Effect.sync(() => expect(active).toBe(0))),
@@ -571,8 +571,8 @@ export default model('customers', {
 		order_count: { kind: 'count', of: 'orders' }
 	},
 	read: 'all',
-	create: { columns: ['name', 'rating'] },
-	update: { columns: ['name', 'rating'] },
+	create: { columns: { customers: ['name', 'rating'] } },
+	update: { columns: { customers: ['name', 'rating'] } },
 	syncs: {
 		sheet: {
 			with: 'file',
@@ -592,10 +592,10 @@ export default model('customers', {
 			},
 			read: function* buyerSheetRead({ records }, ctx) {
 				const names = records.map((r) => r.name.trim());
-				const known = yield* ctx.db.query('customers', {
-					where: { name: { in: names } }, select: { name: true }, all: true
+				const known = yield* ctx.db.query({
+					customers: { where: { name: { in: names } }, fields: ['name'] }
 				});
-				const existing = new Set(known.rows.map((r) => r.name));
+				const existing = new Set(known.customers.rows.map((r) => r.name));
 				return {
 					rows: records.filter((r) => r.name.trim() !== '').map((r) => ({ name: r.name.trim() })),
 					findings: records.flatMap((r): Finding[] => r.name.trim() === ''
@@ -610,10 +610,10 @@ export default model('customers', {
 				};
 			},
 			write: function* buyerSheetExport(_, ctx) {
-				const buyers = yield* ctx.db.query('customers', {
-					select: { name: true }, orderBy: { name: 'asc' }, all: true
+				const buyers = yield* ctx.db.query({
+					customers: { fields: ['name'], orderBy: { name: 'asc' } }
 				});
-				return buyers.rows.map((r) => ({ name: r.name, related_name: null }));
+				return buyers.customers.rows.map((r) => ({ name: r.name, related_name: null }));
 			}
 		}
 	}
@@ -623,7 +623,7 @@ export default model('customers', {
 				expect(c.errors).toEqual([]);
 				if (c.manifest === undefined || c.guest === undefined)
 					throw new Error('compiled manifest or guest missing');
-				expect(c.manifest.collections['customers']?.syncs?.['sheet']).toMatchObject({
+				expect(c.manifest.exposures['customers']?.syncs?.['sheet']).toMatchObject({
 					with: 'file',
 					parser: ['csv', { type: 'text/plain', extensions: ['.buyers'] }],
 					schema: {

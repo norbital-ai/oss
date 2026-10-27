@@ -26,11 +26,11 @@ const manifest = Result.getOrThrow(
 			}
 		},
 		relationships: {},
-		collections: {
+		exposures: {
 			docs: {
-				read: { fields: 'all' },
-				create: { input: { columns: ['title', 'body'] } },
-				update: { input: { columns: ['title', 'body'] } }
+				read: { docs: { fields: 'all' } },
+				create: { columns: { docs: ['title', 'body'] } },
+				update: { columns: { docs: ['title', 'body'] } }
 			}
 		},
 		policies: {
@@ -133,7 +133,7 @@ describe('search.semantic embeddings (rule 16)', () => {
 						})
 					);
 				const { t, act, run } = yield* setup(embed);
-				const id = created(yield* act('docs.create', { title: 'desk', body: 'oak' }));
+				const id = created(yield* act('docs.create', [{ title: 'desk', body: 'oak' }]));
 				expect(yield* queued(t)).toBe(1);
 				expect(
 					t.fakes.deadlines.announced.map(({ scope, at }) => ({ scope, at: Date.parse(at) })).at(-1)
@@ -141,10 +141,10 @@ describe('search.semantic embeddings (rule 16)', () => {
 				expect(yield* run).toEqual({ embedded: 1 });
 				expect(calls).toEqual([['small', 'desk']]);
 				expect(yield* embedded(t, id)).toBe('[4,0,1]');
-				yield* act('docs.update', { target: id, set: { body: 'pine' } });
+				yield* act('docs.update', [{ target: id, set: { body: 'pine' } }]);
 				expect(yield* embedded(t, id)).toBe('[4,0,1]');
 				expect(yield* queued(t)).toBe(1);
-				yield* act('docs.update', { target: id, set: { title: 'chair' } });
+				yield* act('docs.update', [{ target: id, set: { title: 'chair' } }]);
 				expect(yield* embedded(t, id)).toBeNull();
 				expect(yield* queued(t)).toBe(2);
 				expect(JSON.stringify(yield* sql(t, 'SELECT changes FROM bolt_history'))).not.toContain(
@@ -158,7 +158,7 @@ describe('search.semantic embeddings (rule 16)', () => {
 		() =>
 			Effect.gen(function* () {
 				const { t, act } = yield* setup();
-				const id = created(yield* act('docs.create', { title: 'desk' }));
+				const id = created(yield* act('docs.create', [{ title: 'desk' }]));
 				yield* t.runDue();
 				expect(
 					yield* sql(
@@ -188,26 +188,26 @@ describe('semantic similarity over search.semantic (L-BOLT-123)', () => {
 						Effect.map((texts) => texts.map((text) => near[text] ?? [0, 1, 0]))
 					);
 				const { t, act, read, run } = yield* setup(embed);
-				const desk = created(yield* act('docs.create', { title: 'desk' }));
-				for (const title of ['chair', 'lamp']) yield* act('docs.create', { title });
+				const desk = created(yield* act('docs.create', [{ title: 'desk' }]));
+				for (const title of ['chair', 'lamp']) yield* act('docs.create', [{ title }]);
 				yield* run;
 				const byText = yield* Schema.decodeUnknownEffect(Page)(
-					yield* read('query', ['docs', { search: { semantic: 'table' }, limit: 2 }])
+					yield* read('read', ['docs', { search: { semantic: 'table' }, limit: 2 }])
 				);
 				expect(byText.rows.map((row) => row.title)).toEqual(['desk', 'chair']);
 				expect(typeof required(byText.rows[0]).$distance).toBe('number');
 				expect(
 					(yield* Schema.decodeUnknownEffect(Page)(
-						yield* read('query', ['docs', { search: { semantic: { record: desk } }, limit: 5 }])
+						yield* read('read', ['docs', { search: { semantic: { record: desk } }, limit: 5 }])
 					)).rows.map((row) => row.title)
 				).toEqual(['chair', 'lamp']);
 				const hybrid = yield* Schema.decodeUnknownEffect(Page)(
-					yield* read('query', ['docs', { search: '/semantic lamp', limit: 10 }])
+					yield* read('read', ['docs', { search: '/semantic lamp', limit: 10 }])
 				);
 				expect(hybrid.rows.map((row) => row.title)[0]).toBe('lamp');
 				expect(hybrid.rows).toHaveLength(3);
 				expect(() =>
-					lowerRead(t.manifest, 'query', ['docs', { search: { semantic: '' }, limit: 1 }])
+					lowerRead(t.manifest, 'read', ['docs', { search: { semantic: '' }, limit: 1 }])
 				).toThrow(/to: text/);
 			})
 	);
@@ -230,11 +230,11 @@ describe('semantic similarity over search.semantic (L-BOLT-123)', () => {
 				const workspace = (port: Ai['Service']['embed']) =>
 					Effect.gen(function* () {
 						const fixture = yield* setup(port);
-						yield* fixture.act('docs.create', { title: 'desk' });
+						yield* fixture.act('docs.create', [{ title: 'desk' }]);
 						return fixture;
 					});
 				const probe = (fixture: Effect.Success<ReturnType<typeof workspace>>) =>
-					fixture.read('query', ['docs', { search: { semantic: 'table' }, limit: 2 }], {
+					fixture.read('read', ['docs', { search: { semantic: 'table' }, limit: 2 }], {
 						now: '2026-01-01T00:00:00.000Z',
 						today: '2026-01-01',
 						tz: 'UTC',
@@ -263,7 +263,7 @@ describe('erase and the live lane (rules 38e, 50, 66)', () => {
 	it.live('an erase re-answers the views that showed the row and queues no triggered run', () =>
 		Effect.gen(function* () {
 			const { context, t, act } = yield* setup();
-			const id = created(yield* act('docs.create', { title: 'desk' }));
+			const id = created(yield* act('docs.create', [{ title: 'desk' }]));
 			const admin = t.as(t.admin).authority,
 				live = Context.get(context, Live),
 				queue = yield* Queue.unbounded<Frame>();
@@ -276,13 +276,13 @@ describe('erase and the live lane (rules 38e, 50, 66)', () => {
 			if (hello.t !== 'hello') throw new Error('live connection did not begin with hello');
 			yield* live
 				.register(hello.conn, 'v', {
-					read: lowerRead(manifest, 'query', ['docs', { all: true, select: { title: true } }])
+					read: lowerRead(manifest, 'read', ['docs', { all: true, select: { title: true } }])
 				})
 				.pipe(Effect.provide(context));
 			expect(yield* Queue.take(queue)).toMatchObject({ t: 'answer', view: 'v' });
 			const r = yield* Context.get(context, Writes)
 				.act({
-					collection: 'docs',
+					model: 'docs',
 					verb: 'erase',
 					input: { target: id },
 					mode: { _tag: 'Direct' },

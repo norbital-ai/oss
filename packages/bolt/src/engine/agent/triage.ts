@@ -1,12 +1,15 @@
 // Triage (P31, P40, P41, rule 60a): one mechanism for envoys and the in-app agent decides WHEN admitted messages start a
 // turn, never under whose authority. A triaged row is stored `pending` and (re)queues the conversation's one platform run
 // `agent.triage` at `min(arrival + TRIAGE_DEBOUNCE, first + TRIAGE_DEBOUNCE_MAX)`: a trailing debounce, so a burst is one
-// `sys_1` call once the sender pauses. The run asks the AI facility's `sys_1` (text only: attachments as metadata) to
-// `respond` (admit every pending row), `wait` (ask again ≤ 2 s later, exact time; the chat shows typing) or, in a group conversation only,
-// `ignore` (the rows become ambient); a direct conversation (envoy DM, in-app one-to-one) offers respond and wait alone.
-// A failed decision admits now (`respond`): the single failure outcome, not a fallback. Without an AI facility nothing
-// is triaged. Mentions, replies, a message naming the assistant, the in-app send-now and respond-now are deterministic: they admit at once with every
-// pending row, flush the queued decision and ask nothing. `delivered_turn` (set by the agent's claim, guarded by
+// `sys_1` call once the sender pauses; the chat shows typing from the moment the row is held. The run reads the last
+// 20 settled messages as context and asks the AI facility's `sys_1` (text only: attachments as metadata) to
+// `respond` (admit every pending row), `wait` (ask again ≤ 2 s later, exact time) or, in a group conversation only,
+// `ignore` (the rows become ambient; the chat's typing stops); a direct conversation (envoy DM, in-app one-to-one) offers respond and wait alone.
+// A failed decision admits now (`respond`): the single failure outcome, not a fallback. An envoy's chat message is held for
+// the pause even where nothing decides (triage off, no `sys_1`): the run then admits it without asking. Mentions, replies,
+// a message naming the assistant, and the person it last answered continuing that exchange (10 min, 30 after a question,
+// nobody else spoken since) admit their burst without a decision call once the sender pauses; the in-app
+// send-now and respond-now admit at once with every pending row, flush the queued decision and ask nothing. `delivered_turn` (set by the agent's claim, guarded by
 // `IS NULL`) and `addressed` are the one record of what the agent received, so no row is new input twice.
 import type { EnvoySpec } from '../../decl/runtime/agent.ts';
 import { Clock, Context, Effect, FiberMap, Layer, Schema } from 'effect';
@@ -30,16 +33,23 @@ import { TurnHandlers } from './turns.ts';
 import { decisionEvent, failed, meter, type DecisionRequest } from '../decisions/index.ts';
 import { FileRef, messageCommit, rowsOf, type As } from './schema.ts';
 import { envoyName } from './context.ts';
+import { envoySpec } from '../envoys/spec.ts';
 const TRIAGE_RUN = 'agent.triage';
 /** Engine constants (rule 72's budget row), never authoring options. */
 export const TRIAGE_DEBOUNCE = 2000;
-export const TRIAGE_DEBOUNCE_MAX = 10000;
+/** A burst never holds the first message longer than this, however long the sender keeps typing: the person is waiting, not the model. */
+export const TRIAGE_DEBOUNCE_MAX = 6000;
 const TRIAGE_CONTEXT_ROWS = 20;
-export const TRIAGE_MAX_WAITS = 12;
+/** One extra look at most: 6 s of debounce plus 2 s of wait is the whole silence a sender sees. */
+export const TRIAGE_MAX_WAITS = 1;
 /** A wait is short: the person sees a typing indicator, never a long silence. */
 const WAIT_MS = 2000;
 /** Below this the decider is guessing, and a guessed wait is only delay. */
 const WAIT_MIN_PROBABILITY = 0.7;
+/** Continuity: the person the assistant last answered keeps the exchange unnamed this long after its reply... */
+const EXCHANGE_MS = 10 * 60_000;
+/** ...and this long when that reply asked them something. */
+const EXCHANGE_QUESTION_MS = 30 * 60_000;
 type TriageAction = 'respond' | 'wait' | 'ignore';
 /** One message's verdict: `delay` keeps the whole burst waiting, `no` leaves that message ambient for good. */
 type Verdict = 'yes' | 'no' | 'delay';
@@ -68,13 +78,24 @@ type TriageConfig = {
 	clock: Effect.Effect<string>;
 	announce: (at: string) => Effect.Effect<void>;
 	drain: (conversation: string, envoy: boolean) => Effect.Effect<unknown, EngineError>;
-	typing?: (conversation: string) => Effect.Effect<void, EngineError>;
+	/** The linked chat's typing indicator, on or off (an in-app conversation has none). */
+	typing?: (conversation: string, on: boolean) => Effect.Effect<void, EngineError>;
 };
-type HeldMessage = { readonly chain: Chain; readonly source: string };
+/** `typing`: the sender sees the assistant typing while the row is held (default on). */
+type HeldMessage = { readonly chain: Chain; readonly source: string; readonly typing?: boolean };
 type Row = {
 	readonly [c: string]: Json;
 };
 const ms = (n: number) => `interval '${n} milliseconds'`;
+/** A message's person: the provider handle an envoy row arrived from, or the in-app member. */
+const WHO = (m: string) => `coalesce(${m}.sender, ${m}."as"->>'member')`;
+/** An envoy's triage scope (default 'all') covers this conversation, unless the envoy declares `triage: false`. */
+const decides = (spec: Pick<EnvoySpec, 'triage'>, group: boolean): boolean => {
+	const t = spec.triage;
+	if (t === false) return false;
+	const scope = t?.scope ?? 'all';
+	return scope === 'all' || scope === (group ? 'group' : 'dm');
+};
 const queued = (c: string) =>
 	`automation = '${TRIAGE_RUN}' AND state = 'queued' AND input->>'conversation' = ${c}::text`;
 /**
@@ -106,6 +127,16 @@ const recheck = (chain: Chain, conversation: string, at: string, waits: string) 
         'schedule'::text AS cause, 0 AS depth WHERE NOT EXISTS (SELECT 1 FROM held)`
 	});
 };
+/**
+ * The sender is still typing (a provider's presence report): the queued decision moves to `now + debounce`, never earlier
+ * than it was and never past `first + max`. Answers `held`.
+ */
+export const heldLonger = (chain: Chain, conversation: string, at: string) =>
+	chain.cte(
+		'held',
+		`UPDATE sys_run SET due_at = greatest(due_at, least(${at}::timestamptz + ${ms(TRIAGE_DEBOUNCE)}, (input->>'first')::timestamptz + ${ms(TRIAGE_DEBOUNCE_MAX)}))
+        WHERE ${queued(conversation)} AND input ? 'first' RETURNING due_at`
+	);
 export const triage = Effect.fn('Triage.make')(function* (cfg: TriageConfig) {
 	const debounce = yield* FiberMap.make<string, Json, EngineError>();
 	const logs = yield* Logs;
@@ -141,13 +172,13 @@ export const triage = Effect.fn('Triage.make')(function* (cfg: TriageConfig) {
 	});
 	const admit = Effect.fn('Agents.admit')(function* (conversation: string, envoy: boolean) {
 		yield* release(conversation);
-		if (envoy)
-			yield* (cfg.typing?.(conversation) ?? Effect.void).pipe(
-				Effect.tapCause(Effect.logWarning),
-				Effect.ignore
-			);
 		yield* cfg.drain(conversation, envoy);
 	});
+	const typing = (conversation: string, on: boolean) =>
+		(cfg.typing?.(conversation, on) ?? Effect.void).pipe(
+			Effect.tapCause(Effect.logWarning),
+			Effect.ignore
+		);
 	const run = Effect.fn('Agents.run')(function* (input: Json) {
 		const decoded = yield* Schema.decodeUnknownEffect(
 			Schema.Struct({
@@ -159,14 +190,14 @@ export const triage = Effect.fn('Triage.make')(function* (cfg: TriageConfig) {
 		);
 		const { conversation } = decoded,
 			waits = decoded.waits ?? 0;
-		const [convs, pendingRows, contextRows, posters] = yield* db.read([
+		const [convs, pendingRows, contextRows, posters, later, lastRows] = yield* db.read([
 			{
 				text: `SELECT envoy, kind, status FROM sys_conversation WHERE id = $1`,
 				params: [conversation]
 			},
 			{
 				text: `SELECT id, coalesce(author, sender_name, sender) AS sender, coalesce(text, '') AS text, (extract(epoch FROM coalesce(sent_at, created_at)) * 1000)::float8 AS at,
-				invocation, ${filesOf('m')} AS files FROM sys_message m WHERE conversation = $1 AND state = 'pending' ORDER BY seq`,
+				invocation, ${filesOf('m')} AS files, ${WHO('m')} AS who FROM sys_message m WHERE conversation = $1 AND state = 'pending' ORDER BY seq`,
 				params: [conversation]
 			},
 			{
@@ -177,6 +208,20 @@ export const triage = Effect.fn('Triage.make')(function* (cfg: TriageConfig) {
 			},
 			{
 				text: `SELECT count(DISTINCT "as"->>'member')::int AS n FROM sys_message WHERE conversation = $1 AND role = 'user'`,
+				params: [conversation]
+			},
+			{
+				text: `SELECT (extract(epoch FROM min(due_at)) * 1000)::float8 AS due FROM sys_run WHERE ${queued('$1')}`,
+				params: [conversation]
+			},
+			{
+				// the assistant's last reply, the person whose turn it answered, and who has spoken (settled) since
+				text: `SELECT coalesce(a.text, '') AS text, (extract(epoch FROM coalesce(a.sent_at, a.created_at)) * 1000)::float8 AS at, p.who AS partner, p.name,
+				(SELECT coalesce(jsonb_agg(${WHO('o')}), '[]'::jsonb) FROM sys_message o WHERE o.conversation = $1 AND o.seq > a.seq
+					AND coalesce(o.role, 'user') = 'user' AND o.direction IS DISTINCT FROM 'outbound' AND coalesce(o.state, '') <> 'pending' AND ${WHO('o')} IS NOT NULL) AS since
+				FROM sys_message a LEFT JOIN LATERAL (SELECT ${WHO('u')} AS who, coalesce(u.author, u.sender_name, u.sender) AS name FROM sys_message u
+					WHERE u.conversation = $1 AND u.delivered_turn = a.turn ORDER BY u.seq DESC LIMIT 1) p ON true
+				WHERE a.conversation = $1 AND a.role = 'assistant' AND coalesce(a.text, '') <> '' ORDER BY a.seq DESC LIMIT 1`,
 				params: [conversation]
 			}
 		]);
@@ -202,10 +247,21 @@ export const triage = Effect.fn('Triage.make')(function* (cfg: TriageConfig) {
 				text: Schema.String,
 				at: Schema.Number,
 				invocation: Schema.NullOr(Schema.String),
-				files: Schema.Array(FileRef)
+				files: Schema.Array(FileRef),
+				who: Schema.NullOr(Schema.String)
 			}),
 			pendingRows?.rows ?? []
 		);
+		const last = (yield* decode(
+			Schema.Struct({
+				text: Schema.String,
+				at: Schema.Number,
+				partner: Schema.NullOr(Schema.String),
+				name: Schema.NullOr(Schema.String),
+				since: Schema.Array(Schema.String)
+			}),
+			lastRows?.rows ?? []
+		))[0];
 		const context = yield* decode(
 			Schema.Struct({
 				role: Schema.NullOr(Schema.String),
@@ -220,28 +276,55 @@ export const triage = Effect.fn('Triage.make')(function* (cfg: TriageConfig) {
 		// a stopped conversation triages nothing; with nothing pending there is nothing to decide
 		if (conv === undefined || conv.status === 'stopped' || pending.length === 0)
 			return { pending: 0 };
+		// the sender kept typing (`heldLonger`): the queued run decides at its later time, not this timer
+		const due = later?.rows[0]?.['due'];
+		if (typeof due === 'number' && due > Date.parse(yield* cfg.clock)) return { held: true };
 		const envoyKey = conv.envoy,
 			envoy = envoyKey !== null;
 		if (waits >= TRIAGE_MAX_WAITS) {
 			yield* admit(conversation, envoy);
 			return { action: 'respond', bound: true };
 		}
-		const spec = envoyKey === null ? undefined : m.envoys[envoyKey];
-		const assistant = envoy ? envoyName(spec?.name) : AGENT_NAME;
-		// saying the assistant's name addresses it, as a mention does: those rows are answered without asking the decider,
-		// and a burst of nothing else is admitted at once
-		const named = pending.map(
-			(r) => r.invocation === 'mention' || r.invocation === 'reply' || names(r.text, assistant)
-		);
-		if (named.every(Boolean)) {
-			yield* admit(conversation, envoy);
-			return { action: 'respond', named: true };
-		}
+		const spec = envoyKey === null ? undefined : yield* envoySpec(m, db, envoyKey);
 		// P41: a group (an envoy group, or an in-app conversation more than one member posted in) may be not for the agent;
 		// a direct one (an envoy DM, an in-app one-to-one) always is, so it decides only when
 		const group = envoy ? conv.kind === 'group' : count > 1;
-		const allowed: TriageAction[] = group ? ['respond', 'wait', 'ignore'] : ['respond', 'wait'];
+		// held for the pause alone: an envoy whose triage is off, or no `sys_1` to ask, admits the burst as it is
+		if (envoy && (cfg.ai === undefined || spec === undefined || !decides(spec, group))) {
+			yield* admit(conversation, envoy);
+			return { action: 'respond', held: true };
+		}
+		const assistant = envoy ? envoyName(spec?.name) : AGENT_NAME;
 		const now = yield* cfg.clock;
+		// continuity (a group's; a direct conversation is always addressed): the assistant's last reply answered this person's turn within 10 min (30 when it asked them something)
+		// and nobody else has spoken since — their unnamed next message continues that exchange ("Ya put bob under them")
+		const exchange =
+			group &&
+			last !== undefined &&
+			last.partner !== null &&
+			Date.parse(now) - last.at <=
+				(last.text.trim().endsWith('?') ? EXCHANGE_QUESTION_MS : EXCHANGE_MS)
+				? { ...last, partner: last.partner }
+				: undefined;
+		let unbroken = exchange?.since.every((who) => who === exchange.partner) ?? false;
+		const continues = pending.map((r) => (unbroken &&= r.who === exchange?.partner));
+		// a mention or a reply admits its whole burst without asking; saying the assistant's name addresses it as well, and
+		// so does continuing its exchange: those rows are answered without asking the decider, and a burst of nothing else is admitted at once
+		const named = pending.map(
+			(r, i) =>
+				r.invocation === 'mention' ||
+				r.invocation === 'reply' ||
+				names(r.text, assistant) ||
+				continues[i] === true
+		);
+		if (
+			named.every(Boolean) ||
+			pending.some((r) => r.invocation === 'mention' || r.invocation === 'reply')
+		) {
+			yield* admit(conversation, envoy);
+			return { action: 'respond', named: true };
+		}
+		const allowed: TriageAction[] = group ? ['respond', 'wait', 'ignore'] : ['respond', 'wait'];
 		const pendingIds = pending.map((r) => r.id);
 		const at = (r: { readonly at: number }) => new Date(r.at).toISOString();
 		// attachments go in as metadata only (P37 (3)): name, mime, size, and a caption or text when there is one
@@ -302,7 +385,14 @@ export const triage = Effect.fn('Triage.make')(function* (cfg: TriageConfig) {
 				),
 				// An envoy is named, and a message that says its name is for it whether or not the mention was mechanical:
 				// without this the decider is asked about a nameless assistant and reads `hi <name>` as not addressed.
-				assistant
+				assistant,
+				// whom the assistant is talking with and what it last said: "yes", "ya do that" from them answer it
+				...(exchange === undefined
+					? {}
+					: {
+							talkingWith: exchange.name ?? 'someone',
+							assistantLastMessage: preview(exchange.text)
+						})
 			} as DecisionRequest['state'],
 			// ONE call, one verdict per message: the decider is asked about each pending message by name, so a burst is
 			// judged together and blind to each other rather than folded into a single action for the whole conversation.
@@ -312,7 +402,11 @@ export const triage = Effect.fn('Triage.make')(function* (cfg: TriageConfig) {
 						`m${i}`,
 						{
 							type: 'choice' as const,
-							instructions: `${i + 1}. Message ${i + 1} of ${pending.length} from ${r.sender ?? 'someone'}: should ${assistant} answer this one?`,
+							instructions: `${i + 1}. Message ${i + 1} of ${pending.length} from ${r.sender ?? 'someone'}: should ${assistant} answer this one?${
+								exchange !== undefined && r.who === exchange.partner
+									? ` ${assistant} is talking with them; its last message to them was: "${preview(exchange.text)}"`
+									: ''
+							}`,
 							criteria: VERDICTS
 						}
 					])
@@ -394,12 +488,6 @@ export const triage = Effect.fn('Triage.make')(function* (cfg: TriageConfig) {
 				chain.sql(`least((SELECT min(due_at) FROM held), ${nextDue(chain)})::text AS due`)
 			);
 			if (wake?.due !== null && wake?.due !== undefined) yield* announce(wake.due);
-			// the person sees the assistant is on it while it waits for the rest
-			if (envoy)
-				yield* (cfg.typing?.(conversation) ?? Effect.void).pipe(
-					Effect.tapCause(Effect.logWarning),
-					Effect.ignore
-				);
 		} else {
 			// only the rows the decider saw; a row that arrived meanwhile has its own queued decision. A `no` verdict is
 			// left exactly as an ignored conversation is — the message stays as ambient context for the next address.
@@ -428,9 +516,13 @@ export const triage = Effect.fn('Triage.make')(function* (cfg: TriageConfig) {
 		}
 		yield* meter(cfg.metering, d, call);
 		if (action === 'respond') yield* admit(conversation, envoy);
+		// nothing here was for the assistant: the chat stops showing it typing
+		if (action === 'ignore' && envoy) yield* typing(conversation, false);
 		return event;
 	});
 	const hold = Effect.fn('Triage.hold')(function* (conversation: string, row: HeldMessage) {
+		// a held sender sees typing from arrival, not from the decision: the burst is being read, not ignored
+		if (row.typing !== false) yield* typing(conversation, true);
 		const { chain, source } = row;
 		chain.cte('m', `SELECT * FROM ${source}`);
 		const conversationSql = chain.p(conversation),
@@ -466,13 +558,9 @@ export const triage = Effect.fn('Triage.make')(function* (cfg: TriageConfig) {
 	return {
 		/** The in-app agent is triaged when the host binds the AI facility, unless the workspace declares `agent: { triage: false }`. */
 		inApp: (): boolean => cfg.ai !== undefined && m.workspace.agent?.triage !== false,
-		/** An envoy's message is triaged under its `scope` (default 'all'), unless the envoy declares `triage: false`. */
-		envoy(spec: Pick<EnvoySpec, 'triage'>, group: boolean): boolean {
-			const t = spec.triage;
-			if (cfg.ai === undefined || t === false) return false;
-			const scope = t?.scope ?? 'all';
-			return scope === 'all' || scope === (group ? 'group' : 'dm');
-		},
+		/** An envoy's message is decided under its `scope` (default 'all'), unless the envoy declares `triage: false`. */
+		envoy: (spec: Pick<EnvoySpec, 'triage'>, group: boolean): boolean =>
+			cfg.ai !== undefined && decides(spec, group),
 		/**
 		 * Stores a shared message piece and its decision in one statement; answers the piece's written rows.
 		 */
@@ -536,7 +624,7 @@ export const TriageLive = Layer.effect(
 			clock: Clock.currentTimeMillis.pipe(Effect.map((now) => new Date(now).toISOString())),
 			announce: wake.at,
 			drain: (conversation, envoy) => turns.drain(conversation, envoy ? 'Envoy' : 'Agent'),
-			typing: (conversation) =>
+			typing: (conversation, on) =>
 				Effect.gen(function* () {
 					const [rows] = yield* db.read([
 						{
@@ -547,7 +635,7 @@ export const TriageLive = Layer.effect(
 					const row = rows?.rows[0];
 					if (typeof row?.['integration'] === 'string' && typeof row['thread'] === 'string')
 						yield* links
-							.typing(row['integration'], row['thread'])
+							.typing(row['integration'], row['thread'], on)
 							.pipe(Effect.tapCause(Effect.logWarning), Effect.ignore);
 				})
 		});

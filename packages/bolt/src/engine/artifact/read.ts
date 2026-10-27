@@ -129,10 +129,8 @@ export const artifactHash = Effect.fn('bolt.artifactHash')(function* (
 	);
 });
 
-// `hash` covers the body as written: its nested objects keep their key order
-const decodeArtifactJson = Schema.decodeUnknownResult(Schema.fromJsonString(ArtifactJsonSchema), {
-	propertyOrder: 'original'
-});
+// `hash` covers the body as written: a decoded struct takes its schema's key order, the order `bolt build` writes
+const decodeArtifactJson = Schema.decodeUnknownResult(Schema.fromJsonString(ArtifactJsonSchema));
 /** A file of the artifact, whole; one that cannot be read refuses activation. */
 const file = (path: string) =>
 	Effect.flatMap(FileSystem.FileSystem, (fs) => fs.readFile(path)).pipe(
@@ -369,7 +367,7 @@ const uuidOf = (s: string) => {
 
 type SeedFile = { field: string; path: string; asset: SeedAsset };
 /**
- * The pack's rows with each `{ asset }` value of a `file` field as the `FileRef` of a `sys_file` row (one per collection,
+ * The pack's rows with each `{ asset }` value of a `file` field as the `FileRef` of a `sys_file` row (one per model,
  * field and asset; ids derived, so a reload is the same), and those files by id. An asset the pack lacks refuses the pack.
  */
 const seedFiles = (m: EngineManifest, meta: Pack['meta']) => {

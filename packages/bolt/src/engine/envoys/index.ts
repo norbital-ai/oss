@@ -37,6 +37,7 @@ import type { EngineError } from '../errors.ts';
 import { TurnHandlers } from '../agent/turns.ts';
 import { Authorities } from '../identity/actor.ts';
 import { conversationOf, definitionOf } from '../integrations/instances.ts';
+import { envoySpec } from './spec.ts';
 import { DELIVER, EPOCH } from '../integrations/outbound.ts';
 import { Chain } from '../write/sql.ts';
 import { enqueue, nextDue } from '../runs/queue.ts';
@@ -72,6 +73,8 @@ type Arrived = {
 	thread: string;
 	group: boolean;
 	email: boolean;
+	/** The conversation's status as the row arrived: `running` makes the message steering. */
+	status: string;
 	handle: HandleKind | null;
 	/** What a notice calls the account: the driver, or a custom chat's definition. */ label: string;
 	sender: string;
@@ -159,7 +162,7 @@ export const envoys = Effect.fn('Envoys.make')(function* (cfg: EnvoysConfig) {
 		const [res] = yield* db.read([
 			sql(
 				`SELECT m.integration, m.conversation, m.sender, m.sender_name, coalesce(m.text, '') AS text, m.invocation, m.email->>'subject' AS subject,
-				m.addressed IS NULL AND m.role IS NULL AND m.deleted_at IS NULL AS fresh, c.thread, c.kind, i.integration AS definition, i.envoy, i.active AND i.owner IS NULL AS serving
+				m.addressed IS NULL AND m.role IS NULL AND m.deleted_at IS NULL AS fresh, c.thread, c.kind, c.status, i.integration AS definition, i.envoy, i.active AND i.owner IS NULL AS serving
 			FROM sys_message m JOIN sys_conversation c ON c.id = m.conversation JOIN sys_integration i ON i.id = m.integration WHERE m.id = $1`,
 				id
 			)
@@ -174,7 +177,7 @@ export const envoys = Effect.fn('Envoys.make')(function* (cfg: EnvoysConfig) {
 		)
 			return { admission: 'ignored' };
 		const envoy = r['envoy'],
-			spec = Object.hasOwn(m.envoys, envoy) ? m.envoys[envoy] : undefined;
+			spec = yield* envoySpec(m, db, envoy);
 		const name = String(r['definition']),
 			def = definitionOf(m, name),
 			conv = def === undefined ? undefined : conversationOf(def);
@@ -200,6 +203,7 @@ export const envoys = Effect.fn('Envoys.make')(function* (cfg: EnvoysConfig) {
 				thread: String(r['thread']),
 				group: r['kind'] === 'group',
 				email: conv.kind === 'email',
+				status: String(r['status'] ?? 'idle'),
 				handle: conv.handle,
 				label: def.driver,
 				sender: String(r['sender'] ?? ''),
@@ -215,9 +219,14 @@ export const envoys = Effect.fn('Envoys.make')(function* (cfg: EnvoysConfig) {
 		const groups = spec.groupMessages ?? 'mention_or_reply';
 		if (a.group && groups === 'disabled') return 'ignored';
 		const trigger = a.invocation === 'mention' || a.invocation === 'reply';
-		const addressed = !a.group || a.email || groups === 'all' || trigger;
-		// rule 60a: never email, never a mention or reply (the deterministic trigger), only under the envoy's scope
-		const triaged = !a.email && !trigger && cfg.triage?.envoy(spec, a.group) === true;
+		// rule 60: a message that arrives while the turn runs is steering — queued at once, claimed at its next step,
+		// never held. A DM steers; in a group only a message addressed to the envoy does, so chatter stays out of the turn.
+		const steering = a.status === 'running' && !a.email && (!a.group || trigger);
+		const addressed = !a.group || a.email || groups === 'all' || trigger || steering;
+		// rule 60a: every chat message the envoy may answer is held for the sender's pause (email never is); the decider
+		// is asked only under the envoy's triage scope, and an unaddressed group message is held only for it
+		const decides = !a.email && cfg.triage?.envoy(spec, a.group) === true;
+		const triaged = !a.email && !steering && cfg.triage !== undefined && (addressed || decides);
 		if (!addressed && !triaged) {
 			yield* mark(a.row, 'addressed = false');
 			// A group message that named ids and was still not taken is the one case nobody can explain from outside: record
@@ -278,10 +287,11 @@ export const envoys = Effect.fn('Envoys.make')(function* (cfg: EnvoysConfig) {
 				`UPDATE sys_message SET ${QUEUE('pending')} WHERE id = $1`,
 				'id'
 			);
-			yield* cfg.triage!.hold(a.conversation, { chain, source });
+			// the sender sees typing while they are heard: a DM, or a group message that addressed the envoy
+			yield* cfg.triage!.hold(a.conversation, { chain, source, typing: !a.group || trigger });
 			return 'pending';
 		}
-		yield* cfg.triage?.release(a.conversation) ?? Effect.void; // a trigger admits every pending row with it, and asks no decider
+		yield* cfg.triage?.release(a.conversation) ?? Effect.void; // a steer or an email admits every pending row with it, and asks no decider
 		yield* queue(a, as);
 		yield* track(drain(a.conversation));
 		return 'queued';

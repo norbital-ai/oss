@@ -39,7 +39,7 @@ export function delegatedVerbAuthority(
 		[];
 	if (matches.length === 0) return authority;
 	const dot = callable.lastIndexOf('.'),
-		collection = callable.slice(0, dot),
+		model = callable.slice(0, dot),
 		verb = callable.slice(dot + 1);
 	if (verb !== 'create' && verb !== 'update' && verb !== 'delete')
 		throw BoltError.make(
@@ -48,12 +48,12 @@ export function delegatedVerbAuthority(
 			'Automation delegates only an exact native generated verb.'
 		);
 	const policies = matches.map((item) => item.policy);
-	const own = authority.collections[collection];
+	const own = authority.models[model];
 	if (own === undefined)
 		throw BoltError.make(
 			'forbidden',
 			'admission',
-			'Automation delegation requires its native target collection.'
+			'Automation delegation requires its native target model.'
 		);
 	const delegated = compileAuthority(
 		manifest,
@@ -66,7 +66,7 @@ export function delegatedVerbAuthority(
 		},
 		`${authority.key}:automation:${token.automation}:${callable}`
 	);
-	const arms = delegated.collections[collection]?.[verb] ?? [];
+	const arms = delegated.models[model]?.[verb] ?? [];
 	if (arms.length === 0)
 		throw BoltError.make(
 			'forbidden',
@@ -77,9 +77,9 @@ export function delegatedVerbAuthority(
 		...authority,
 		key: `${authority.key}:run:${token.run}:${callable}`,
 		policies: [...new Set([...authority.policies, ...policies])],
-		collections: {
-			...authority.collections,
-			[collection]: { ...own, [verb]: [...own[verb], ...arms] }
+		models: {
+			...authority.models,
+			[model]: { ...own, [verb]: [...own[verb], ...arms] }
 		}
 	};
 }

@@ -3,7 +3,7 @@ import { element } from './elements.ts';
 import { viewFixture, jsonRecord, type ViewScript, browser } from './view-fixture.ts';
 import { Deferred, Effect, Queue, Schema, Stream } from 'effect';
 // The toolbar's ⚡ menu: an author item is an icon, a name, a description and its handler; the menu keeps each row's
-// state (pending, done, failed in place and as a toast) and wires a collection's file sync in by itself.
+// state (pending, done, failed in place and as a toast) and wires a model's file sync in by itself.
 import './dom.ts';
 import assert from 'node:assert/strict';
 import type { Json } from '@norbital-ai/std/wire';
@@ -11,9 +11,9 @@ import type { Value } from '@norbital-ai/std/kind';
 import { Decimal } from '@norbital-ai/std/decimal';
 import type { KindsHost } from '../src/kinds/context.ts';
 import type { ViewBolt, Outcome, RunRow } from '../src/client/contract.ts';
-import type { Page } from '../src/collection/types.ts';
+import type { Page } from '../src/model/types.ts';
 import type { TableSource, TableProps } from '../src/table/Table.svelte';
-import type { Toolbar, ToolbarItem } from '../src/collection/ViewToolbar.svelte';
+import type { Toolbar, ToolbarItem } from '../src/model/ViewToolbar.svelte';
 import { ActRefused } from '../../bolt/build/decl/errors.js';
 import { runningFibers } from '../src/effect/index.ts';
 import { it, afterEach } from '@effect/vitest';
@@ -113,7 +113,7 @@ const press = async (key: string) => {
 };
 
 it.live(
-	'CSV exports retain value rows without IDs, order, quoting and collection reference labels',
+	'CSV exports retain value rows without IDs, order, quoting and model reference labels',
 	() =>
 		Effect.gen(function* () {
 			const blobs: Blob[] = [];
@@ -392,7 +392,7 @@ it.live('sync starts the declared model sync by name', () =>
 );
 
 it.live(
-	"a collection's import and export file syncs are rows of their own, run through the menu",
+	"a model's import and export file syncs are rows of their own, run through the menu",
 	() =>
 		Effect.gen(function* () {
 			const { bolt, started } = yield* browser(() => fakeBolt());

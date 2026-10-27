@@ -23,7 +23,7 @@ const Operation = Schema.Struct({
 });
 /** Current-row advice only; write admission still checks post-images, write callbacks and database constraints. */
 export const RecordCapabilitiesSchema: Schema.Codec<RecordCapabilities> = Schema.Struct({
-	collection: Schema.NonEmptyString,
+	model: Schema.NonEmptyString,
 	id: Schema.NonEmptyString,
 	revision: Schema.Int,
 	fields: Schema.Record(
@@ -42,7 +42,7 @@ export const RecordCapabilitiesSchema: Schema.Codec<RecordCapabilities> = Schema
 const Change = { field: Schema.String, current: Schema.Json, restored: Schema.Json };
 /** `history.preview`'s answer (rule 17): advice for one restore; `history.restore` recomputes it before writing. */
 export const RestorePreviewSchema: Schema.Codec<RestorePreview> = Schema.Struct({
-	collection: Schema.String,
+	model: Schema.String,
 	record: Schema.String,
 	revision: Schema.Int,
 	live: Schema.Int,

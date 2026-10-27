@@ -37,7 +37,7 @@ const m: EngineManifest = {
 	workspace: { tz: 'UTC', locale: 'en' },
 	models: {},
 	relationships: {},
-	collections: {},
+	exposures: {},
 	integrations: {},
 	policies: {
 		sales: { description: '', grants: {} },
@@ -391,14 +391,14 @@ layer(AdministrationFixtureLive)((it) => {
 					const expected = [
 						{
 							automation: 'invitation_accepted',
-							input: { collection: 'sys_invitation', ids: [invitation.id] },
+							input: { model: 'sys_invitation', ids: [invitation.id] },
 							actor: `member:${session.user}`,
 							cause: 'updated',
 							state: 'queued'
 						},
 						{
 							automation: 'user_born',
-							input: { collection: 'sys_user', ids: [session.user] },
+							input: { model: 'sys_user', ids: [session.user] },
 							actor: `member:${session.user}`,
 							cause: 'created',
 							state: 'queued'
@@ -422,9 +422,9 @@ layer(AdministrationFixtureLive)((it) => {
 							invitation.id
 						)
 					).toEqual([
-						{ collection: 'sys_invitation', op: 'create', revision: 1 },
-						{ collection: 'sys_invitation', op: 'update', revision: 2 },
-						{ collection: 'sys_user', op: 'create', revision: 1 }
+						{ model: 'sys_invitation', op: 'create', revision: 1 },
+						{ model: 'sys_invitation', op: 'update', revision: 2 },
+						{ model: 'sys_user', op: 'create', revision: 1 }
 					]);
 					expect(
 						yield* db.value(Schema.Number, {
@@ -479,7 +479,7 @@ layer(AdministrationFixtureLive)((it) => {
 					);
 					expect(events).toHaveLength(1);
 					expect(events[0]?.['input']).toEqual({
-						collection: 'sys_invitation',
+						model: 'sys_invitation',
 						ids: expect.arrayContaining(sent.ids)
 					});
 					expect(wakes).toBe(1);
@@ -567,7 +567,7 @@ layer(AdministrationFixtureLive)((it) => {
 				if (typeof user?.['id'] !== 'string') throw new Error('Missing non-administrator member');
 				expect(yield* deactivate(host, yield* as(founder), user['id'])).toBeNull();
 				expect(yield* one("SELECT input FROM sys_run WHERE automation = 'active_changed'")).toEqual(
-					[{ input: { collection: 'sys_user', ids: [user['id']] } }]
+					[{ input: { model: 'sys_user', ids: [user['id']] } }]
 				);
 			})
 		);

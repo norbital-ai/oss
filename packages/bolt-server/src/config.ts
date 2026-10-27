@@ -595,10 +595,10 @@ export const BoltConfig = (flags: StartFlags = {}) =>
 			);
 		const entries = yield* Effect.forEach([...KNOWN], (name) =>
 			(secretName(name)
-				? EffectConfig.option(EffectConfig.redacted(name)).pipe(
+				? EffectConfig.option(EffectConfig.Redacted(name)).pipe(
 						Effect.map((value) => (Option.isNone(value) ? undefined : Redacted.value(value.value)))
 					)
-				: EffectConfig.option(EffectConfig.string(name)).pipe(Effect.map(Option.getOrUndefined))
+				: EffectConfig.option(EffectConfig.String(name)).pipe(Effect.map(Option.getOrUndefined))
 			).pipe(Effect.map((value) => [name, value] as const))
 		);
 		return yield* Effect.try({

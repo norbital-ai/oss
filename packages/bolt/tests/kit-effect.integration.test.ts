@@ -17,7 +17,7 @@ const manifest = {
 		customers: { description: 'A customer', label: 'name', fields: { name: { kind: 'text' } } }
 	},
 	relationships: {},
-	collections: { customers: { read: { fields: 'all' }, create: { input: { columns: ['name'] } } } },
+	exposures: { customers: { read: { customers: { fields: 'all' } }, create: { columns: { customers: ['name'] } } } },
 	policies: { reader: { description: 'Reads customers', grants: { customers: { read: true } } } },
 	automations: {},
 	integrations: {},
@@ -36,15 +36,15 @@ it.live(
 		Effect.gen(function* () {
 			const callbacks = {
 				...manifest,
-				collections: {
+				exposures: {
 					customers: {
-						...manifest.collections.customers,
-						update: { input: { columns: ['name'] } },
+						...manifest.exposures.customers,
+						update: { columns: { customers: ['name'] } },
 						delete: {}
 					}
 				}
 			} satisfies EngineManifest;
-			const guest = yield* program(`export default { collection: { customers: { bodies: {
+			const guest = yield* program(`export default { model: { customers: { bodies: {
 			create: function* (rows) { return rows.map((row) => ({...row,name:'created:'+row.name})); },
 			update: function* (changes) { return changes.map(({set}) => ({...set,name:'updated:'+set.name})); },
 			delete: function* (_, ctx) { return yield* ctx.refuse('Keep this fixture.'); }
@@ -59,39 +59,41 @@ it.live(
 				TestWorkspace
 			);
 			const caller = t.as(t.admin);
-			const created = yield* caller.act('customers.create', { name: 'Acme' });
+			const created = yield* caller.act('customers.create', [{ name: 'Acme' }]);
 			if (created.kind !== 'committed') throw new Error('The fixture did not commit.');
-			const record = created.records.find((row) => row.collection === 'customers');
+			const record = created.records.find((row) => row.model === 'customers');
 			if (record === undefined) throw new Error('The fixture returned no customer.');
-			expect(yield* caller.query('customers', { id: record.id })).toMatchObject({
+			// the one customer this fixture holds
+			const customer = { customers: { limit: 1 } } as const;
+			expect((yield* caller.query(customer)).customers.rows[0]).toMatchObject({
 				name: 'created:Acme'
 			});
-			yield* caller.act('customers.update', { target: record.id, set: { name: 'Edited' } });
-			expect(yield* caller.query('customers', { id: record.id })).toMatchObject({
+			yield* caller.act('customers.update', [{ target: record.id, set: { name: 'Edited' } }]);
+			expect((yield* caller.query(customer)).customers.rows[0]).toMatchObject({
 				name: 'updated:Edited'
 			});
 			const batch = yield* t.bodyActs(t.admin).many([
 				{
 					callable: 'customers.upsert',
-					input: { id: record.id, name: 'Batch' },
+					input: [{ id: record.id, name: 'Batch' }],
 					onConflict: 'update'
 				},
-				{ callable: 'customers.create', input: { name: 'Other' } }
+				{ callable: 'customers.create', input: [{ name: 'Other' }] }
 			]);
 			if (batch.kind !== 'committed') throw new Error('The fixture batch is held for approval.');
 			expect(batch.output).toEqual([[record.id], null]);
 			expect(
-				yield* Effect.flip(caller.act('customers.delete', { target: record.id }))
+				yield* Effect.flip(caller.act('customers.delete', [{ target: record.id }]))
 			).toMatchObject({ _tag: 'ActRefused', message: 'Keep this fixture.' });
-			expect(t.manifest.collections['customers']).toMatchObject({
+			expect(t.manifest.exposures['customers']).toMatchObject({
 				create: { transform: true },
 				update: { transform: true },
 				delete: { check: true }
 			});
-			expect(callbacks.collections.customers).toEqual({
+			expect(callbacks.exposures.customers).toEqual({
 				read: { fields: 'all' },
-				create: { input: { columns: ['name'] } },
-				update: { input: { columns: ['name'] } },
+				create: { columns: { None: ['name'] } },
+				update: { columns: { None: ['name'] } },
 				delete: {}
 			});
 		}).pipe(Effect.scoped)
@@ -115,7 +117,7 @@ it.live('fixture callbacks require explicit existing write verbs', () =>
 );
 
 it.live(
-	'declared row outputs revive query values and persist typed queued automation outputs',
+	'read requests revive native values and typed queued automation outputs persist',
 	() =>
 		Effect.gen(function* () {
 			const id = '0199a000-0000-4000-8000-000000000001';
@@ -135,40 +137,11 @@ it.live(
 						}
 					}
 				},
-				collections: {
-					customers: {
-						...manifest.collections.customers,
-						queries: {
-							one: { description: 'One native row', input: {}, output: row },
-							nested: {
-								description: 'Rows inside each composite output',
-								input: {},
-								output: {
-									kind: 'object',
-									fields: {
-										row,
-										rows: { kind: 'list', of: row },
-										by: { kind: 'record', of: row },
-										choice: { kind: 'union', by: 'kind', arms: { one: { row } } }
-									}
-								}
-							}
-						}
-					}
-				},
 				automations: {
 					return_row: { description: 'One recorded row', input: {}, output: row, runAs: 'trigger' }
 				}
 			} satisfies EngineManifest;
-			const guest = yield* program(`export default { collection: { customers: { bodies: {
-			queries: {
-				one: function* (_, ctx) { return yield* ctx.query('customers', {id:'${id}'}); },
-				nested: function* (_, ctx) {
-					const row = yield* ctx.query('customers', {id:'${id}'});
-					return {row, rows:[row], by:{acme:row}, choice:{kind:'one',row}};
-				}
-			}
-		} } }, automation: { return_row: { body: function* (_, ctx) { return yield* ctx.query('customers', {id:'${id}'}); } } } };`);
+			const guest = yield* program(`export default { automation: { return_row: { body: function* (_, ctx) { return (yield* ctx.query({ customers: { where: { id: { eq: '${id}' } } } })).customers.rows[0]; } } } };`);
 			const context = yield* Layer.build(
 				TestWorkspace.layer({
 					manifest: outputs,
@@ -185,17 +158,10 @@ it.live(
 				document: Schema.Struct({ note: Schema.String })
 			});
 			const caller = t.as(t.admin);
-			expect(Schema.is(nativeRow)(yield* caller.query('customers.one', {}))).toBe(true);
-			expect(
-				Schema.is(
-					Schema.Struct({
-						row: nativeRow,
-						rows: Schema.Array(nativeRow),
-						by: Schema.Record(Schema.String, nativeRow),
-						choice: Schema.Struct({ kind: Schema.Literal('one'), row: nativeRow })
-					})
-				)(yield* caller.query('customers.nested', {}))
-			).toBe(true);
+			const page = Schema.Struct({ rows: Schema.Array(nativeRow), next: Schema.Null });
+			const request = { customers: { limit: 1 } } as const;
+			expect(Schema.is(page)((yield* caller.query(request)).customers)).toBe(true);
+			expect(Schema.is(page)((yield* t.storedQuery(request)).customers)).toBe(true);
 			const result = (yield* actReply(yield* routeFixture(context), caller.authority, {
 				callable: 'start',
 				input: { automation: 'return_row', id: uuidv7(Date.parse(t.clock.now())), input: {} },
@@ -236,9 +202,9 @@ it.live(
 		Effect.gen(function* () {
 			const synced = {
 				...manifest,
-				collections: {
+				exposures: {
 					customers: {
-						...manifest.collections.customers,
+						...manifest.exposures.customers,
 						syncs: {
 							remote: { with: 'calendar', partitions: 'calendars', read: true, write: true }
 						}
@@ -256,7 +222,7 @@ it.live(
 				connections: { calendar: { integration: 'calendar' } }
 			} satisfies EngineManifest;
 			const guest =
-				yield* program(`export default { collection: { customers: { bodies: { syncs: { remote: {
+				yield* program(`export default { model: { customers: { bodies: { syncs: { remote: {
 			read: function* ({items}) { return {rows:items.map((item) => ({$id:item.id,name:item.name}))}; },
 			write: function* ({row}, ctx) { return yield* ctx.request({method:'POST',path:'/customers',body:{name:row.name}}); }
 		} } } } } };`);
@@ -286,7 +252,7 @@ it.live(
 				{ instance: 'calendar', sync: 'customers.remote', partition: 'secondary' }
 			]);
 			expect(yield* t.syncs.deliver()).toEqual({ delivered: 0 });
-			expect((yield* t.as(t.admin).act('customers.create', { name: 'Local customer' })).kind).toBe(
+			expect((yield* t.as(t.admin).act('customers.create', [{ name: 'Local customer' }])).kind).toBe(
 				'committed'
 			);
 			expect(yield* t.syncs.deliver()).toEqual({ delivered: 1 });
@@ -331,18 +297,9 @@ it.live('computed NULL values decode without widening required computed strings'
 				),
 				TestWorkspace
 			);
-			const selected = {
-				select: {
-					name: true,
-					email_lower: true,
-					name_upper: true,
-					email_label: true,
-					email_default: true,
-					email_chain: true
-				},
-				all: true
-			} satisfies { select: Record<string, true>; all: true };
-			expect((yield* t.as(t.admin).query('customers', selected)).rows[0]).toMatchObject({
+			// every exposed field, computed ones included
+			const selected = { customers: {} } as const;
+			expect((yield* t.as(t.admin).query(selected)).customers.rows[0]).toMatchObject({
 				name: 'Acme',
 				email_lower: null,
 				name_upper: 'ACME',
@@ -351,7 +308,7 @@ it.live('computed NULL values decode without widening required computed strings'
 				email_chain: null
 			});
 			expect(
-				(yield* t.as(t.member(['reader'])).query('customers', selected)).rows[0]
+				(yield* t.as(t.member(['reader'])).query(selected)).customers.rows[0]
 			).toMatchObject({
 				email_lower: null,
 				name_upper: 'ACME',
@@ -359,9 +316,7 @@ it.live('computed NULL values decode without widening required computed strings'
 				email_chain: null
 			});
 			expect(
-				(yield* t
-					.as(t.admin)
-					.query('sys_user', { select: { party_id: true, phone_key: true }, all: true })).rows[0]
+				(yield* t.as(t.admin).query({ sys_user: {} })).sys_user.rows[0]
 			).toMatchObject({ party_id: null, phone_key: null });
 		})
 	)
@@ -480,10 +435,10 @@ layer(TestWorkspace.layer({ manifest }))('TestWorkspace', (it) => {
 	it.effect('a caller commits through act, and a refused act fails with ActRefused', () =>
 		Effect.gen(function* () {
 			const t = yield* TestWorkspace;
-			const created = yield* t.as(t.admin).act('customers.create', { name: 'Acme' });
+			const created = yield* t.as(t.admin).act('customers.create', [{ name: 'Acme' }]);
 			expect(created.kind).toBe('committed');
 			const refused = yield* Effect.flip(
-				t.as(t.member(['reader'])).act('customers.create', { name: 'Beta' })
+				t.as(t.member(['reader'])).act('customers.create', [{ name: 'Beta' }])
 			);
 			expect(refused).toBeInstanceOf(ActRefused);
 			expect(refused).toMatchObject({ _tag: 'ActRefused', code: 'forbidden' });
@@ -493,7 +448,7 @@ layer(TestWorkspace.layer({ manifest }))('TestWorkspace', (it) => {
 	it.effect('an act exposes only its Effect and fails with the original refusal', () =>
 		Effect.gen(function* () {
 			const t = yield* TestWorkspace;
-			const act = t.as(t.member(['reader'])).act('customers.create', { name: 'Beta' });
+			const act = t.as(t.member(['reader'])).act('customers.create', [{ name: 'Beta' }]);
 			expect(Effect.isEffect(act)).toBe(true);
 			expect('then' in act).toBe(false);
 			expect(yield* Effect.flip(act)).toMatchObject({ _tag: 'ActRefused', code: 'forbidden' });

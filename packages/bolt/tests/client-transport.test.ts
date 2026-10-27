@@ -1,5 +1,5 @@
 import { Effect, Fiber, Stream, SubscriptionRef } from 'effect';
-import { HttpClient, HttpClientResponse } from 'effect/unstable/http';
+import { HttpClient, HttpClientResponse } from 'effect/http';
 import { TestClock } from 'effect/testing';
 import { expect, it } from '@effect/vitest';
 import { Decimal } from '@norbital-ai/std/decimal';
@@ -18,7 +18,7 @@ it.effect('a fake HttpClient sees the act contract/key headers and reads revive 
 					request,
 					Response.json(
 						request.url.endsWith('/q')
-							? { answers: [{ rows: [{ id: 'r1', amount: { $dec: '1.50' } }], next: null }] }
+							? { answers: [{ jobs: { rows: [{ id: 'r1', amount: { $dec: '1.50' } }], next: null } }] }
 							: { outcome: { kind: 'committed', output: null, records: [] }, v: 0 }
 					)
 				)
@@ -32,9 +32,9 @@ it.effect('a fake HttpClient sees the act contract/key headers and reads revive 
 			uuid: () => 'request1',
 			contract: 'contract1'
 		});
-		const answer = yield* bolt.query<{ rows: { amount: Decimal }[] }>('jobs', { limit: 1 });
-		expect(answer.rows[0]?.amount).toBeInstanceOf(Decimal);
-		yield* bolt.act('jobs.create', {});
+		const answer = yield* bolt.query<{ jobs: { rows: { amount: Decimal }[] } }>({ jobs: { limit: 1 } });
+		expect(answer.jobs.rows[0]?.amount).toBeInstanceOf(Decimal);
+		yield* bolt.act('jobs.create', [{}]);
 		expect(requests[1]?.headers[HEADERS.key.toLowerCase()]).toBe('request1');
 		expect(requests[1]?.headers[HEADERS.contract.toLowerCase()]).toBe('contract1');
 	})
@@ -68,7 +68,7 @@ it.effect(
 				}
 			});
 			const seen: unknown[] = [];
-			yield* bolt.observe(bolt.query('jobs', { limit: 1 })).pipe(
+			yield* bolt.observe(bolt.query({ jobs: { aggregate: { count: true } } })).pipe(
 				Stream.runForEach((value) => Effect.sync(() => seen.push(value))),
 				Effect.forkScoped
 			);

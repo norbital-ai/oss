@@ -7,7 +7,7 @@ import { Array as EffectArray, Effect, Predicate, Schema } from 'effect';
 import { inputSchema, type Kind } from '@norbital-ai/std/kind';
 import { Decimal } from '@norbital-ai/std/decimal';
 import { encodeWire, type Wired } from '@norbital-ai/std/wire';
-import { catalogOf, collectionOf, q, type Catalog } from './catalog.ts';
+import { catalogOf, exposureOf, q, type Catalog } from './catalog.ts';
 import {
 	aggregate as decodeAggregate,
 	read as decodeRead,
@@ -169,7 +169,7 @@ function fieldCodec(s: SchemaSpec, cat: Catalog, k: Kind): Codec {
 		targets.length > 1
 			? Schema.Union(
 					targets.map((name) =>
-						Schema.Struct({ collection: Schema.Literal(name), id: targetCodec(name) })
+						Schema.Struct({ model: Schema.Literal(name), id: targetCodec(name) })
 					)
 				)
 			: targetCodec(first ?? '');
@@ -213,7 +213,7 @@ function rowFields(
 							r.targets.map((target) =>
 								Schema.Struct({
 									...rowFields(s, cat, target, r.targetSelects?.[target] ?? r.select),
-									collection: Schema.Literal(target)
+									model: Schema.Literal(target)
 								})
 							)
 						)
@@ -450,7 +450,7 @@ export function store<const S extends SchemaSpec & AnySchema>(s: S) {
 	/** A read compiled, its answer the page its rows make. */
 	const paged = <A>(ir: ListRead) =>
 		Effect.map(compile(cat, ir), (compiled) => {
-			const decode = rows<A>(ir.collection, ir.select);
+			const decode = rows<A>(ir.model, ir.select);
 			return statement(compiled.sql, (answered) =>
 				Effect.gen(function* () {
 					const page = yield* answer(ir, compiled, yield* column(answered, 'j'));
@@ -570,8 +570,8 @@ export function store<const S extends SchemaSpec & AnySchema>(s: S) {
 		}
 	): Effect.Effect<Statement<readonly Row<S, To, { select: Sel }>[]>, StoreError> {
 		return Effect.gen(function* () {
-			const source = yield* collectionOf(cat, from),
-				target = yield* collectionOf(cat, query.to);
+			const source = yield* exposureOf(cat, from),
+				target = yield* exposureOf(cat, query.to);
 			const ir = yield* listRead(query.to, { select: query.select, limit: query.limit });
 			const b = new Build(cat),
 				a = b.alias(),
@@ -615,7 +615,7 @@ export function store<const S extends SchemaSpec & AnySchema>(s: S) {
 				codecs: Codec[] = [];
 			const parts = yield* Effect.forEach(choices, (source) =>
 				Effect.gen(function* () {
-					const c = yield* collectionOf(cat, source.table),
+					const c = yield* exposureOf(cat, source.table),
 						a = b.alias();
 					const f = c.model.fields.get(source.field),
 						spec = s.tables[source.table];

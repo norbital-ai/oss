@@ -8,9 +8,9 @@ export const provideRecordView = (v: { readonly current: RecordView | null }) =>
 export const useRecordView = () =>
 	getContext<{ readonly current: RecordView | null } | undefined>(RECORD_VIEW);
 const REPRESENTATIONS = Symbol('ui.views.representations');
-/** The workspace's representations per collection (the generated registry), set by the shell above every page. */
+/** The workspace's representations per model (the generated registry), set by the shell above every page. */
 export const provideRepresentations = (map: {
-	readonly [collection: string]: RepresentationLoader;
+	readonly [model: string]: RepresentationLoader;
 }) => setContext(REPRESENTATIONS, map);
 export const representations = () =>
 	getContext<{ readonly [c: string]: RepresentationLoader } | undefined>(REPRESENTATIONS);

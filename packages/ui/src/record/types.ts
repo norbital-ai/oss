@@ -1,6 +1,6 @@
 import type { Component } from 'svelte';
 import type { Json } from '@norbital-ai/std/wire';
-import type { RecordOf, InsertOf } from '../collection/types.js';
+import type { RecordOf, InsertOf } from '../model/types.js';
 /** Native advisory capabilities of the current record; saving always rechecks the backend rules. */
 export type RecordRestriction =
 	| 'noGrant'
@@ -13,14 +13,14 @@ export type RecordRestriction =
 	| 'underApproval';
 /** A nested edit uses one declared parent relation and the parent's observed revision. */
 export type RecordParentContext = {
-	collection: string;
+	model: string;
 	id: string;
 	relation: string;
 	revision: number;
 };
 /** Read-filtered field and operation permissions, proposal eligibility and restriction reasons for one revision. */
 export type RecordCapabilities = {
-	collection: string;
+	model: string;
 	id: string;
 	revision: number;
 	fields: Readonly<
@@ -39,16 +39,16 @@ export type RestoreSkip =
  * what it leaves alone and why. `approval`: that field's write routes to an approval rather than committing.
  */
 export type RestorePreview = {
-	collection: string;
+	model: string;
 	record: string;
 	revision: number;
 	live: number;
 	changes: readonly { field: string; current: Json; restored: Json; approval: boolean }[];
 	skipped: readonly { field: string; reason: RestoreSkip; current: Json; restored: Json }[];
 };
-/** X-20: what a `+representation.svelte` receives, `{ view: RecordView<'<collection>'> }`. */
+/** X-20: what a `+representation.svelte` receives, `{ view: RecordView<'<model>'> }`. */
 export type RecordView<C extends string = string> =
-	| { collection: C; mode: 'view' | 'edit'; record: RecordOf<C>; capabilities?: RecordCapabilities }
-	| { collection: C; mode: 'create'; values: Partial<InsertOf<C>> };
-/** A collection's `+representation.svelte`, loaded on first use (its module may import `$bolt`). */
+	| { model: C; mode: 'view' | 'edit'; record: RecordOf<C>; capabilities?: RecordCapabilities }
+	| { model: C; mode: 'create'; values: Partial<InsertOf<C>> };
+/** A model's `+representation.svelte`, loaded on first use (its module may import `$bolt`). */
 export type RepresentationLoader = () => Promise<{ default: Component<{ view: RecordView }> }>;

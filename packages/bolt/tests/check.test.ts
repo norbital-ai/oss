@@ -4,7 +4,7 @@ import * as NodeServices from '@effect/platform-node/NodeServices';
 // `bolt check` (rule 7): stage order, every error in one run, isolate evaluation (rule 2), guest walls (rule 6), the names
 // index `bolt sync` prints, and the build checks of §3.3.9 (model/range, model/seq, automation/cron, automation/event-input,
 // model/label, model/instant-date, access/ip-limit, access/limit, access/visitor-grant, access/visitor-ref,
-// access/masked-search, access/write-many, sync/*, kiosk/embed, app/embed,
+// access/masked-search, sync/*, kiosk/embed, app/embed,
 // write/read-in-loop, notify/via).
 import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
@@ -24,7 +24,7 @@ const emptyManifest: EngineManifest = {
 	workspace: { tz: 'UTC', locale: 'en' },
 	models: {},
 	relationships: {},
-	collections: {},
+	exposures: {},
 	integrations: {},
 	policies: {},
 	teams: {},
@@ -64,12 +64,11 @@ const GOOD = {
 	'src/data/model/orders/+model.ts': `import { model } from '@norbital-ai/bolt';
 export default model('orders', { description: 'Orders', label: 'title', fields: { title: { kind: 'text' },
 	stamp: { kind: 'text', default: new Date().toISOString() }, luck: { kind: 'int', default: Math.floor(Math.random() * 1e9) } },
-	read: { fields: 'all' },
-	create: { columns: ['title'], transform: function* (rows) { return rows; } },
- notify: function* () { return []; },
-	queries: { count: { description: 'Count', input: {}, output: { kind: 'int' },
-		run: function* (input, ctx) { return (yield* ctx.query('orders', { all: true })).rows.length; } } } });`,
-	'src/access_control/policy/+rep.policy.ts': `export default { description: 'Rep', grants: { orders: { read: true, create: true, queries: ['count'] } } };`,
+	read: { orders: { fields: 'all' } },
+	create: { columns: { orders: ['title'] }, transform: function* (rows) { return rows; } },
+ notify: function* () { return []; } });`,
+	'src/access_control/policy/+rep.policy.ts': `export default { description: 'Rep', grants: { orders: { read: true,
+	create: { check: function* (rows, ctx) { return rows.length > 0 ? ctx.allow() : ctx.deny('Nothing to create.'); } } } } };`,
 	'src/automation/+nightly.automation.ts': `import { automation } from '@norbital-ai/bolt';
 export default automation('nightly', { description: 'Nightly', on: { cron: '0 2 * * 1-5' }, runAs: ['rep'], run: function* () {} });`,
 	'seed/orders.json': JSON.stringify([
@@ -95,10 +94,15 @@ describe('bolt check', () => {
 					'rules'
 				]);
 				expect(r.transforms).toEqual(['orders.create']);
-				expect(r.manifest!.collections['orders']).toMatchObject({
-					create: { input: { columns: ['title'] }, transform: true },
-					notify: true,
-					queries: { count: { description: 'Count' } }
+				expect(r.manifest!.exposures['orders']).toMatchObject({
+					read: { orders: { fields: 'all' } },
+					create: { columns: { orders: ['title'] }, transform: true },
+					notify: true
+				});
+				expect(r.manifest!.exposures['orders']).not.toHaveProperty('queries');
+				// a policy's write check is marked in the manifest; its body runs in the guest
+				expect(r.manifest!.policies['rep']!.grants['orders']).toMatchObject({
+					create: { check: true }
 				});
 				expect(r.manifest!.models['orders']!.fields['stamp']).toMatchObject({
 					default: '2000-01-01T00:00:00.000Z'
@@ -112,7 +116,7 @@ describe('bolt check', () => {
 				const names = readFileSync(join(root, '.norbital/names.ts'), 'utf8');
 				expect(names).not.toContain('typeof import');
 				expect(names).toContain('"label": "title";');
-				expect(names).toContain('"columns": readonly ["title"];');
+				expect(names).toContain('"orders": readonly ["title"];');
 				expect(names).toContain('"transform": true;');
 				expect(names).toContain('"nightly": { spec: {');
 			}).pipe(Effect.provide(NodeServices.layer))
@@ -179,7 +183,7 @@ describe('bolt check', () => {
 		'validates full declaration metadata before omitting unused data from the runtime guest',
 		() =>
 			Effect.gen(function* () {
-				const literal = `{ description: 'compile_only_model_marker', label: 'title', fields: { title: { kind: 'text' } }, read: 'all', create: { columns: ['title'] } }`;
+				const literal = `{ description: 'compile_only_model_marker', label: 'title', fields: { title: { kind: 'text' } }, read: 'all', create: { columns: { orders: ['title'] } } }`;
 				const argumentLiteral = literal.replace(
 					"description: 'compile_only_model_marker'",
 					"description: (globalThis.bodyFreeModelArgumentInitialized = true, 'compile_only_model_marker')"
@@ -233,24 +237,20 @@ describe('bolt check', () => {
 					'src/i18n/+zh.messages.ts': `globalThis.roleInitialization.push('locale'); export default { 'orders.title': '订单' };`,
 					'lib/blob.bin': 'bytes\u0000!',
 					'src/access_control/policy/+rep.policy.ts': `export default { description: 'Rep', grants: { orders: { read: true,
-	create: { approval: function approveOrders(write, flow) { return flow.step(write.record.title, { teams: ['sales'] }); } }, queries: ['count'] } } };`,
+	create: { check: function* checkOrders(rows, ctx) { return ctx.allow(); } } } } };`,
 					'src/data/model/orders/+model.ts': `globalThis.roleInitialization.push('model');
 import { model } from '@norbital-ai/bolt';
 import blob from '../../../../lib/blob.bin?bytes';
 class OrderMarker {}
-function* transformOrders(rows) { return rows; }
-function* countOrders() { return blob.length; }
-export default model('orders', { description: 'Orders', label: 'title', fields: { title: { kind: 'text' } }, read: { fields: 'all' },
-	create: { columns: ['title'], transform: transformOrders },
-	queries: { count: { description: OrderMarker.name, input: {}, output: { kind: 'int' }, run: countOrders } } });`
+function* transformOrders(rows) { return rows.map((row) => ({ ...row, size: blob.length })); }
+export default model('orders', { description: OrderMarker.name, label: 'title', fields: { title: { kind: 'text' }, size: { kind: 'int', optional: true } },
+	read: { orders: { fields: 'all' } }, create: { columns: { orders: ['title'] }, transform: transformOrders } });`
 				};
 				const root = workspace(files);
 				const result = yield* check(root);
 				expect(result.errors).toEqual([]);
 				expect(result.manifest).toEqual((yield* check(root)).manifest);
-				expect(result.manifest!.collections['orders']!.queries!['count']!.description).toBe(
-					'OrderMarker'
-				);
+				expect(result.manifest!.models['orders']!.description).toBe('OrderMarker');
 				const map = new TraceMap(JSON.parse(result.guest!.sourceMap!));
 				const source = result.guest!.source;
 				const at = /function\s*\*\s*transformOrders\b/.exec(source)?.index ?? -1;
@@ -300,24 +300,18 @@ export default model('orders', { description: 'Orders', label: 'title', fields: 
 						yield* Effect.tryPromise({
 							try: () =>
 								context.eval(
-									`(async()=>{ const c=__ns.default.collection.orders, approval=__ns.default.policy.rep.grants.orders.create.approval; return { transformName:c.bodies.create.name, queryName:c.bodies.queries.count.name, rows:await c.bodies.create([{title:'kept'}]), count:await c.bodies.queries.count(), approvalName:approval.name, approved:approval({ record: { title: 'Review this order' } }), initialized:globalThis.roleInitialization, roles:Object.keys(__ns.default).sort() }; })()`,
+									`(async()=>{ const c=__ns.default.model.orders, check=__ns.default.policy.rep.grants.orders.create.check; return { transformName:c.bodies.create.name, rows:await c.bodies.create([{title:'kept'}]), checkName:check.name, checkKind:typeof check, initialized:globalThis.roleInitialization, roles:Object.keys(__ns.default).sort() }; })()`,
 									{ promise: true, copy: true }
 								),
 							catch: (cause) => new TestFailure({ cause })
 						})
 					).toEqual({
 						transformName: 'transformOrders',
-						queryName: 'countOrders',
-						rows: [{ title: 'kept' }],
-						count: 7,
-						approvalName: 'approveOrders',
-						approved: {
-							kind: 'steps',
-							steps: [{ name: 'Review this order', teams: ['sales'], users: [] }],
-							superseded_by: []
-						},
+						rows: [{ title: 'kept', size: 7 }],
+						checkName: 'checkOrders',
+						checkKind: 'function',
 						initialized: ['workspace', 'model', 'messages', 'locale'],
-						roles: ['automation', 'collection', 'policy']
+						roles: ['automation', 'model', 'policy']
 					});
 				} finally {
 					isolate.dispose();
@@ -420,29 +414,29 @@ ${plain(
 	`{ description: 'o', label: 'title', search: { text: ['title'], semantic: { fields: ['title'], model: 'default', dim: 5000 } }, fields: { title: { kind: 'text' },
 	v: { kind: 'vector', dim: 5000, metric: 'l2' }, n: { kind: 'seq', pattern: 'X-{abc}' },
 	s: { kind: 'state', initial: 'nope', states: { a: {} } }, at: { kind: 'time', precision: 'month' } },
-	read: { fields: 'all' }, create: { columns: ['title'] } }`
+	read: { orders: { fields: 'all' } }, create: { columns: { orders: ['title'] } } }`
 )}`,
 					'src/data/model/openings/+model.ts': plain(
 						'openings',
-						`{ description: 'o', label: 'title', fields: { title: { kind: 'text' } }, read: { fields: 'all' } }`
+						`{ description: 'o', label: 'title', fields: { title: { kind: 'text' } }, read: { openings: { fields: 'all' } } }`
 					),
 					'src/data/model/sources/+model.ts': plain(
 						'sources',
-						`{ description: 's', label: 'name', fields: { name: { kind: 'text' } }, read: { fields: 'all' } }`
+						`{ description: 's', label: 'name', fields: { name: { kind: 'text' } }, read: { sources: { fields: 'all' } } }`
 					),
 					'src/data/model/applications/+model.ts': plain(
 						'applications',
 						`{ description: 'a', label: 'name', fields: { name: { kind: 'text' },
 	opening: { kind: 'ref', to: 'openings', inverse: 'applications' }, source: { kind: 'ref', to: 'sources' } },
-	read: { fields: 'all' }, create: { columns: ['name', 'opening', 'source'] }, update: { columns: ['name'] } }`
+	read: { applications: { fields: 'all' } }, create: { columns: { applications: ['name', 'opening', 'source'] } },
+	update: { columns: { applications: ['name'] } } }`
 					),
 					'src/access_control/team/+team.ts': `export default { a: [] };`,
 					'src/access_control/policy/+rep.policy.ts': `export default { description: 'r', grants: { orders: { read: true } },
 	limits: { act: { rate: '5/min', per: 'ip' }, read: '0/min' } };`,
-					'src/access_control/policy/+auditor.policy.ts': `export default { description: 'a', grants: { orders: { read: { fields: ['v'] } } } };`,
+					'src/access_control/policy/+auditor.policy.ts': `export default { description: 'a', grants: { orders: { read: { orders: { fields: ['v'] } } } } };`,
 					'src/access_control/policy/+applicant.policy.ts': `export default { description: 'v', grants: { applications: { create: true, update: true } } };`,
 					'src/access_control/policy/+kiosk.policy.ts': `export default { description: 'k', grants: { openings: { read: true } } };`,
-					'src/access_control/policy/+hirer.policy.ts': `export default { description: 'h', grants: { openings: { read: true, update: { where: { or: [{ title: { eq: 'x' } }, { applications: { some: {} } }] } } } } };`,
 					'src/app/careers/+app.ts': `export default { name: 'careers', spec: { title: 'c', description: 'c', icon: 'x', audience: { public: ['applicant', 'kiosk'] }, pages: {} } };`,
 					'src/automation/+tick.automation.ts': `export default { name: 'tick', spec: { description: 't', on: [{ cron: '61 * * * *' }, { created: 'orders' }],
 	input: { note: { kind: 'text' } }, runAs: ['rep'] } };`
@@ -455,7 +449,6 @@ ${plain(
 				'access/masked-search',
 				'access/visitor-grant',
 				'access/visitor-ref',
-				'access/write-many',
 				'automation/cron',
 				'automation/event-input',
 				'automation/no-body',
@@ -486,11 +479,6 @@ ${plain(
 			expect(r.errors.find((e) => e.code === 'access/visitor-ref')!.message).toContain(
 				'applications.source'
 			);
-			expect(r.errors.filter((e) => e.code === 'access/write-many').map((e) => e.message)).toEqual([
-				expect.stringContaining(
-					"openings.update: a write grant cannot scope through the many-relation 'applications'"
-				)
-			]);
 			expect(
 				r.errors
 					.filter((e) => e.code === 'access/visitor-grant')
@@ -510,11 +498,11 @@ ${plain(
 					'src/+workspace.ts': `export default { tz: 'UTC', locale: 'en' };`,
 					'src/data/model/openings/+model.ts': plain(
 						'openings',
-						`{ description: 'o', label: 'title', fields: { title: { kind: 'text' } }, read: { fields: 'all' },
-				create: { columns: ['title'] }, update: { columns: ['title'] } }`
+						`{ description: 'o', label: 'title', fields: { title: { kind: 'text' } }, read: { openings: { fields: 'all' } },
+				create: { columns: { openings: ['title'] } }, update: { columns: { openings: ['title'] } } }`
 					),
 					'src/access_control/policy/+lobby.policy.ts': `export default { description: 'l', grants: { openings: {
-				read: { where: {}, fields: ['id', 'title'] }, update: { where: {}, fields: ['title'] } } } };`
+				read: { openings: { where: {}, fields: ['id', 'title'] } }, update: { columns: { openings: ['title'] } } } } };`
 				};
 				const bad = yield* check(
 					workspace({
@@ -538,7 +526,7 @@ ${plain(
 				const good = yield* check(
 					workspace({
 						...base,
-						'src/access_control/policy/+clerk.policy.ts': `export default { description: 'c', grants: { openings: { read: { fields: ['title'] } } },
+						'src/access_control/policy/+clerk.policy.ts': `export default { description: 'c', grants: { openings: { read: { openings: { fields: ['title'] } } } },
 				capabilities: { kiosks: ['desk'] } };`,
 						'src/kiosk/desk/+kiosk.ts': `export default { name: 'desk', spec: { title: 'D', description: 'D', icon: 'x',
 				auth: 'members', policies: ['clerk'], pages: { home: { title: 'H' } } } };`,
@@ -653,7 +641,7 @@ export default { BYTE_COUNT: { label: String(blob.length) } };`
 					automations: {},
 					apps: {},
 					policies: {},
-					collections: {},
+					exposures: {},
 					integrations: {}
 				};
 				const found = checkRules(m, { automations: [] }, (_r, n) => n).map(
@@ -696,6 +684,28 @@ export default { BYTE_COUNT: { label: String(blob.length) } };`
 			"trials: search.indexes.mismatched: vector 'lab' is a vector field of dim 4"
 		]);
 	});
+	it.live('refuses a polymorphic ref nested in an inline value; a single-target one stands (model/inline-ref)', () =>
+		Effect.gen(function* () {
+			const arc = `{ kind: 'ref', to: ['a', 'b'] }`;
+			const r = yield* check(
+				workspace({
+					'src/+workspace.ts': `export default { tz: 'UTC', locale: 'en' };`,
+					'src/data/model/trials/+model.ts': plain(
+						'trials',
+						`{ description: 't', label: 'name', fields: { name: { kind: 'text' },
+	owner: { kind: 'json', shape: { kind: 'object', fields: { at: { kind: 'ref', to: 'trials' } } } },
+	links: { kind: 'list', of: ${arc} },
+	meta: { kind: 'json', shape: { kind: 'object', fields: { about: ${arc} } } } } }`
+					)
+				})
+			);
+			// tsc refuses this literal; a plain module reaches the rule
+			expect(r.errors.map((e) => `${e.code} ${e.message.split(': ')[1]}`)).toEqual([
+				'model/inline-ref links',
+				'model/inline-ref meta'
+			]);
+		}).pipe(Effect.provide(NodeServices.layer))
+	);
 	it("checks a sync: its connection, a file's parsers, a remote's cadence and partitions, and a write's one instance (sync/*)", () => {
 		const m: EngineManifest = {
 			...emptyManifest,
@@ -721,9 +731,9 @@ export default { BYTE_COUNT: { label: String(blob.length) } };`
 				crm_a: { integration: 'crm' },
 				crm_b: { integration: 'crm' }
 			},
-			collections: {
+			exposures: {
 				customers: {
-					read: { fields: 'all' },
+					read: { customers: { fields: 'all' } },
 					syncs: {
 						sheet: { with: 'file', parser: ['xlsx', 'csv'] },
 						ofx: {
@@ -737,7 +747,7 @@ export default { BYTE_COUNT: { label: String(blob.length) } };`
 					}
 				},
 				events: {
-					read: { fields: 'all' },
+					read: { events: { fields: 'all' } },
 					syncs: {
 						calendar: { with: 'calendar', partitions: 'calendars', read: true, write: true },
 						typo: { with: 'calendar', partitions: 'calendar', read: true }
@@ -805,24 +815,21 @@ export default { BYTE_COUNT: { label: String(blob.length) } };`
 export default model('orders', {
 	description: 'o', label: 'title', fields: { title: { kind: 'text' } }, read: 'all',
 	create: {
-		columns: ['title'],
+		columns: { orders: ['title'] },
 		transform: function* (rows, ctx) {
-			const known = yield* ctx.db.query('orders', { where: { title: { in: rows.map((r) => r.title) } }, all: true });
-			for (const row of rows) yield* ctx.db.query('orders', { where: { title: { eq: row.title } }, limit: 1 });
+			const known = yield* ctx.db.query({ orders: { where: { title: { in: rows.map((r) => r.title) } } } });
+			for (const row of rows) yield* ctx.db.query({ orders: { where: { title: { eq: row.title } }, limit: 1 } });
 			return rows;
 		}
 	},
 	update: {
-		columns: ['title'],
+		columns: { orders: ['title'] },
 		*transform(changes, ctx) {
 			yield* Effect.all(changes.map(function* (c) { return yield* ctx.db.after('orders', { id: { eq: c.before.id } }); }));
 			return changes.map((c) => c.set);
 		}
 	},
-	queries: {
-		touch: { description: 't', input: {}, output: { kind: 'int' }, run: function* (_, ctx) { for (const x of [1, 2]) yield* ctx.query('orders', { limit: 1 }); return 0; } }
-	},
-	notify: function* (event, ctx) { for (const x of [1, 2]) yield* ctx.db.query('orders', { limit: 1 });
+	notify: function* (event, ctx) { for (const x of [1, 2]) yield* ctx.db.query({ orders: { limit: 1 } });
 		return [{ title: 'New', to: [{ team: 'sales' }], via: ['support', 'books', 'nowhere'] }];
 	}
 });`;
@@ -830,8 +837,8 @@ export default model('orders', {
 		expect(found.map((f) => `${f.code} ${f.line}`)).toEqual([
 			'write/read-in-loop 8',
 			'write/read-in-loop 15',
-			'notify/via 23',
-			'notify/via 23'
+			'notify/via 20',
+			'notify/via 20'
 		]);
 		expect(found[0]!.message).toContain('a write callback reads inside a loop over its rows');
 		expect(found[2]!.message).toContain("'books' is not one");
@@ -862,8 +869,8 @@ it.live('refuses a non-generator in a ctx-bearing slot even when attach is bypas
 	Effect.gen(function* () {
 		const root = workspace({
 			'src/+workspace.ts': `export default { tz: 'UTC', locale: 'en' };`,
-			'src/data/model/orders/+model.ts': `export default { name: 'orders', spec: { description: 'Orders', label: 'title', fields: { title: { kind: 'text' } }, read: { fields: 'all' } },
-	bodies: { create: async rows => rows, queries: {}, indexes: {}, syncs: {} } };`
+			'src/data/model/orders/+model.ts': `export default { name: 'orders', spec: { description: 'Orders', label: 'title', fields: { title: { kind: 'text' } }, read: { orders: { fields: 'all' } } },
+	bodies: { create: async rows => rows, indexes: {}, syncs: {} } };`
 		});
 		expect((yield* check(root)).errors).toContainEqual({
 			code: 'guest/body-generator',

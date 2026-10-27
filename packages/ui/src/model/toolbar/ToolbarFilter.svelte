@@ -5,7 +5,7 @@ A toolbar filter trigger with an active-condition count and a popover for custom
 <script lang="ts" module>
 	import type { Snippet } from 'svelte';
 
-	/** The shared toolbar filter trigger and popover, independent of a collection or tenant. */
+	/** The shared toolbar filter trigger and popover, independent of a model or tenant. */
 	export type ToolbarFilterProps = {
 		open?: boolean;
 		count?: number;
@@ -37,7 +37,7 @@ A toolbar filter trigger with an active-condition count and a popover for custom
 				{...props}
 				type="button"
 				class={cn(
-					'hover:bg-accent hover:text-accent-foreground focus-visible:ring-ring relative inline-flex h-9 min-w-9 max-sm:h-11 max-sm:min-w-11 items-center justify-center gap-1 rounded-sm px-2 focus-visible:ring-2 focus-visible:outline-none',
+					'hover:bg-accent hover:text-accent-foreground focus-visible:ring-ring relative inline-flex h-8 min-w-8 max-sm:h-11 max-sm:min-w-11 items-center justify-center gap-1 rounded-sm px-2 focus-visible:ring-2 focus-visible:outline-none',
 					count > 0 && 'bg-accent'
 				)}
 				aria-label={label}
@@ -47,7 +47,7 @@ A toolbar filter trigger with an active-condition count and a popover for custom
 			>
 				<svg
 					viewBox="0 0 24 24"
-					class="size-4"
+					class="size-3.5"
 					fill="none"
 					stroke="currentColor"
 					stroke-width="2"

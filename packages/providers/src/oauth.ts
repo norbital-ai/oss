@@ -3,7 +3,7 @@
 // here is tied to a member: the `state` is bound to one pairing attempt and lives ten minutes.
 import { createHash, randomBytes } from 'node:crypto';
 import { Clock, Effect, Fiber, Schema, Scope, Semaphore, SynchronizedRef } from 'effect';
-import { HttpClient, HttpClientRequest, HttpClientResponse } from 'effect/unstable/http';
+import { HttpClient, HttpClientRequest, HttpClientResponse } from 'effect/http';
 import { OAuthRefused, ProviderUnavailable, type ProviderFailure } from './errors.ts';
 import { same } from './util.ts';
 

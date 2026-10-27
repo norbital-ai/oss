@@ -43,7 +43,6 @@
 	import Picker from '../src/kinds/picker.svelte';
 	import Sheet from '../src/primitives/sheet/sheet.svelte';
 	import { provideBolt } from '../src/client/context.js';
-	import { type Page } from '../src/collection/types.js';
 	import Board from '../src/board/Board.svelte';
 	import Matrix from '../src/matrix/Matrix.svelte';
 	import Button from '../src/primitives/button/button.svelte';
@@ -77,7 +76,7 @@
 		},
 		get query() {
 			const bolt = fixture.bolt;
-			return fixture.query ?? (bolt === undefined ? undefined : (c, o) => bolt.query<Page>(c, o));
+			return fixture.query ?? (bolt === undefined ? undefined : (request) => bolt.query(request));
 		}
 	});
 	let boardScope = $state<BoardProps['where']>(undefined);

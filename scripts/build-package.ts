@@ -26,7 +26,7 @@ import process from 'node:process';
 import * as NodeRuntime from '@effect/platform-node/NodeRuntime';
 import * as NodeServices from '@effect/platform-node/NodeServices';
 import { Console, Effect, FileSystem, Runtime, Schema } from 'effect';
-import { ChildProcess } from 'effect/unstable/process';
+import { ChildProcess } from 'effect/process';
 import { assertDeclarationEmit } from './lib/declaration-emit.ts';
 
 /** A refusal this program reports itself, as one `[build]` message. */

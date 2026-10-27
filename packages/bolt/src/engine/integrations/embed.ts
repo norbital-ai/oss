@@ -42,7 +42,7 @@ export function embedWrites(
 ): { writes: readonly Write[]; stale: boolean } {
 	let stale = false;
 	const out = writes.map((w): Write => {
-		const sem = semanticOf(m, w.collection);
+		const sem = semanticOf(m, w.model);
 		if (sem === undefined) return w;
 		if (w.op === 'create') {
 			stale = true;
@@ -82,7 +82,7 @@ function assertWidth(
 }
 
 /**
- * The platform run: every semantic collection's rows with no vector, a page at a time, one `embed` call per page. A
+ * The platform run: every semantic model's rows with no vector, a page at a time, one `embed` call per page. A
  * row that changed after it was read keeps its null (its own write queued the next run). A port failure fails the
  * run with the facility's kind (`upstream`/`timeout` retry, rule 54). Rule 25a: a page whose guarded write stores 0 of
  * its rows stops the run `noProgress`; after 10,000 rows the run queues one continuation and ends. A row whose `file`
@@ -127,7 +127,7 @@ export const embedRun = Effect.gen(function* () {
 		Effect.gen(function* () {
 			let embedded = 0,
 				selected = 0;
-			for (const [collection, spec] of Object.entries(manifest.models)) {
+			for (const [model, spec] of Object.entries(manifest.models)) {
 				const semantic = spec.search?.semantic;
 				if (semantic === undefined) continue;
 				const fields = semantic.fields.filter((field) => spec.fields[field]?.kind !== 'file'),
@@ -143,7 +143,7 @@ export const embedRun = Effect.gen(function* () {
 						return { embedded, continued: true };
 					}
 					const rows = yield* db.rows(EmbedRow, {
-						text: `SELECT id::text AS id, revision, jsonb_build_array(${fields.map((field) => `${q(field)}::text`).join(', ')}) AS texts, jsonb_build_array(${fileFields.map(q).join(', ')}) AS files FROM ${q(collection)} WHERE ${q(COLUMN)} IS NULL AND id::text > $1 AND ${sources.map((field) => `coalesce(${field}, '')`).join(' || ') || "''"} <> '' ORDER BY id::text LIMIT ${PAGE}`,
+						text: `SELECT id::text AS id, revision, jsonb_build_array(${fields.map((field) => `${q(field)}::text`).join(', ')}) AS texts, jsonb_build_array(${fileFields.map(q).join(', ')}) AS files FROM ${q(model)} WHERE ${q(COLUMN)} IS NULL AND id::text > $1 AND ${sources.map((field) => `coalesce(${field}, '')`).join(' || ') || "''"} <> '' ORDER BY id::text LIMIT ${PAGE}`,
 						params: [after]
 					});
 					const last = rows.at(-1);
@@ -205,7 +205,7 @@ export const embedRun = Effect.gen(function* () {
 						e: JSON.stringify(vectors[index])
 					}));
 					const result = yield* db.write({
-						text: `UPDATE ${q(collection)} t SET ${q(COLUMN)} = v.e::vector FROM jsonb_to_recordset($1::jsonb) AS v(id text, revision int, e text) WHERE t.id::text = v.id AND t.revision = v.revision AND t.${q(COLUMN)} IS NULL RETURNING t.id`,
+						text: `UPDATE ${q(model)} t SET ${q(COLUMN)} = v.e::vector FROM jsonb_to_recordset($1::jsonb) AS v(id text, revision int, e text) WHERE t.id::text = v.id AND t.revision = v.revision AND t.${q(COLUMN)} IS NULL RETURNING t.id`,
 						params: [JSON.stringify(set)]
 					});
 					if (result.rows.length === 0)
@@ -213,7 +213,7 @@ export const embedRun = Effect.gen(function* () {
 							BoltError.make(
 								'noProgress',
 								'commit',
-								`bolt.embed: a pass on ${collection} selected ${todo.length} rows and wrote 0; the run stops (rule 25a)`
+								`bolt.embed: a pass on ${model} selected ${todo.length} rows and wrote 0; the run stops (rule 25a)`
 							)
 						);
 					embedded += result.rows.length;
