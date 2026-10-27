@@ -1239,12 +1239,14 @@ describe('Studio port boundary', () => {
 });
 
 describe('read_attachment over the files port', () => {
-	it.live('answers text for text files and bytes for images; refuses a binary read as text', () =>
+	it.live('reads images and PDFs by MIME even with a wrong mode; refuses unsupported bytes', () =>
 		Effect.gen(function* () {
 			const stored: Record<string, { key: string; mime: string }> = {
 				f1: { key: 'k1', mime: 'text/csv' },
 				f2: { key: 'k2', mime: 'image/png' },
-				f3: { key: 'k3', mime: 'application/pdf' }
+				f3: { key: 'k3', mime: 'application/pdf' },
+				f4: { key: 'k4', mime: 'application/octet-stream' },
+				f5: { key: 'k5', mime: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }
 			};
 			const db = TenantDb.typed({
 				read: (queries) =>
@@ -1262,7 +1264,14 @@ describe('read_attachment over the files port', () => {
 				transaction: () => Effect.die('unused transaction')
 			});
 			const files = Files.of({
-				get: (key) => Effect.succeed(new TextEncoder().encode(`bytes of ${key}`)),
+				get: (key) =>
+					Effect.succeed(
+						key === 'k5'
+							? new Uint8Array(
+									readFileSync(new URL('./fixtures/files/items.xlsx', import.meta.url))
+								)
+							: new TextEncoder().encode(`bytes of ${key}`)
+					),
 				put: () => Effect.die('unused put'),
 				url: () => Effect.die('unused url'),
 				remove: () => Effect.die('unused remove'),
@@ -1274,9 +1283,26 @@ describe('read_attachment over the files port', () => {
 				mime: 'text/csv',
 				text: 'bytes of k1'
 			});
-			expect(yield* a.read({ id: 'f2' }, 'image')).toMatchObject({ mime: 'image/png' });
-			expect(yield* a.read({ id: 'f3' }, 'document')).toMatchObject({ mime: 'application/pdf' });
-			const binary = yield* Effect.flip(a.read({ id: 'f3' }, 'text'));
+			for (const as of ['text', 'image', 'document', 'sheet'] as const) {
+				expect(yield* a.read({ id: 'f2' }, as)).toEqual({
+					mime: 'image/png',
+					bytes: new TextEncoder().encode('bytes of k2')
+				});
+				expect(yield* a.read({ id: 'f3' }, as)).toEqual({
+					mime: 'application/pdf',
+					bytes: new TextEncoder().encode('bytes of k3')
+				});
+			}
+			expect(yield* a.read({ id: 'f5', name: 'items.xlsx' }, 'text')).toMatchObject({
+				sheets: ['Stock'],
+				sheet: 'Stock',
+				cells: [
+					['name', 'qty', 'ok'],
+					['Bolt, M8', 4, true],
+					['Nut', 2.5, false]
+				]
+			});
+			const binary = yield* Effect.flip(a.read({ id: 'f4' }, 'text'));
 			expect(binary.message).toMatch(/cannot be read/);
 			const missing = yield* Effect.flip(a.read({ id: 'nope' }, 'text'));
 			expect(missing.message).toMatch(/not stored/);

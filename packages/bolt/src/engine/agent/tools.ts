@@ -1350,9 +1350,14 @@ export function catalogue(x: ToolContext): Tool[] {
 	const readStored = Effect.fn('AgentTool.work15')(function* (
 		port: NonNullable<typeof x.attachments>,
 		file: Json,
-		i: { as: 'text' | 'image' | 'sheet' | 'document'; sheet?: number }
+		i: { as?: 'text' | 'image' | 'sheet' | 'document'; sheet?: number }
 	) {
-		const as = i.as;
+		const mime = Predicate.isObject(file) && typeof file['mime'] === 'string' ? file['mime'] : '',
+			as = mime.startsWith('image/')
+				? 'image'
+				: mime === 'application/pdf'
+					? 'document'
+					: (i.as ?? 'text');
 		const got = yield* port.read(file, as, i.sheet).pipe(Port.call('files', 30000));
 		if (
 			got !== null &&
@@ -1377,7 +1382,12 @@ export function catalogue(x: ToolContext): Tool[] {
 		);
 	});
 	const readAs = {
-		as: Schema.Literals(['text', 'image', 'sheet', 'document']),
+		as: Schema.optionalKey(
+			Schema.Literals(['text', 'image', 'sheet', 'document']).annotate({
+				description:
+					'Optional format preference. Images and PDFs always use their native model format.'
+			})
+		),
 		sheet: Schema.optionalKey(
 			Schema.Number.check(Schema.isInt()).annotate({
 				description: '0-based XLSX worksheet number, default 0'
@@ -1387,7 +1397,7 @@ export function catalogue(x: ToolContext): Tool[] {
 	if (x.attachments !== undefined)
 		add(
 			'read_attachment',
-			'Read a file attached to a message (its seq and file index as the message lists them). For XLSX, choose a 0-based worksheet number; the response lists sheet names. A PDF can be attached to your next step as a document.',
+			'Read a file attached to a message (its seq and file index as the message lists them). The file type selects its format: screenshots and images, and PDF documents, are attached to your next step for you to inspect. Text is returned directly. For XLSX, choose a 0-based worksheet number; the response lists sheet names.',
 			Schema.Struct({
 				seq: Schema.Number.check(Schema.isInt()),
 				file: Schema.optionalKey(
@@ -1407,7 +1417,7 @@ export function catalogue(x: ToolContext): Tool[] {
 	if (x.attachments !== undefined)
 		add(
 			'read_file',
-			"Read a file stored in a record's file field or this conversation's outputs, by its file reference ({ id }): as an image or a PDF document (attached to your next step), text, or an XLSX sheet. Use it to compare values with the original evidence.",
+			"Read a file stored in a record's file field or this conversation's outputs, by its file reference ({ id }). Its type selects image, PDF document, text or XLSX sheet. For a message attachment, use read_attachment with its seq and file index instead. Use it to compare values with the original evidence.",
 			Schema.Struct({
 				id: Schema.String.annotate({ description: 'the file id from the record' }),
 				...readAs
@@ -1433,16 +1443,16 @@ export function catalogue(x: ToolContext): Tool[] {
 						(field.startsWith('sys_conversation.') && !own) ||
 						(!own &&
 							!(yield* readableFile(
-							{
-								manifest: x.engine.manifest,
-								db: x.engine.db,
-								read: x.engine.read,
-								authority: x.authority,
-								bindings: x.bindings
-							},
-							id,
-							field
-						)))
+								{
+									manifest: x.engine.manifest,
+									db: x.engine.db,
+									read: x.engine.read,
+									authority: x.authority,
+									bindings: x.bindings
+								},
+								id,
+								field
+							)))
 					)
 						return err('No file you can read has this id.');
 					return yield* readStored(x.attachments!, { id }, i);

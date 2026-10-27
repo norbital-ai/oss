@@ -1628,14 +1628,17 @@ describe('toolset parity with today (agent-tools-parity.md)', () => {
 							toolCalls: Array.from({ length: 9 }, (_, i) => ({
 								id: `r${i}`,
 								name: 'read_attachment',
-								input: { seq, file: i, as: 'image' }
+								input: { seq, file: i }
 							})),
 							finish: 'tool',
 							usage: { input: 1, output: 1 }
 						});
 					const fixture = yield* setup([nine, say('seen')], {
 						attachments: {
-							read: () => Effect.succeed({ mime: 'image/png', bytes: new Uint8Array(4) })
+							read: (_file, as) => {
+								expect(as).toBe('image');
+								return Effect.succeed({ mime: 'image/png', bytes: new Uint8Array(4) });
+							}
 						}
 					});
 					return yield* Effect.gen(function* () {
@@ -1658,6 +1661,10 @@ describe('toolset parity with today (agent-tools-parity.md)', () => {
 							JSON.stringify(`file reference ${JSON.stringify(files[0])}`).slice(1, -1)
 						);
 						expect(ai.requests[1]!.files).toHaveLength(8);
+						expect(ai.requests[1]!.files?.[0]).toEqual({
+							mime: 'image/png',
+							bytes: new Uint8Array(4)
+						});
 						expect(toolResults(ai.requests[1]!).at(-1)).toMatchObject({
 							dropped: expect.stringContaining('1 older')
 						});
@@ -1666,7 +1673,7 @@ describe('toolset parity with today (agent-tools-parity.md)', () => {
 			)
 	);
 
-	it.live('read_attachment sends a PDF to the next model step as a document', () =>
+	it.live('read_attachment sends PDF bytes to the next model step without a format guess', () =>
 		Effect.scoped(
 			Effect.gen(function* () {
 				let seq = 0;
@@ -1675,7 +1682,7 @@ describe('toolset parity with today (agent-tools-parity.md)', () => {
 						() =>
 							answer({
 								content: '',
-								toolCalls: [{ id: 'pdf', name: 'read_attachment', input: { seq, as: 'document' } }],
+								toolCalls: [{ id: 'pdf', name: 'read_attachment', input: { seq } }],
 								finish: 'tool',
 								usage: { input: 1, output: 1 }
 							}),
@@ -1683,8 +1690,13 @@ describe('toolset parity with today (agent-tools-parity.md)', () => {
 					],
 					{
 						attachments: {
-							read: () =>
-								Effect.succeed({ mime: 'application/pdf', bytes: new Uint8Array([37, 80, 68, 70]) })
+							read: (_file, as) => {
+								expect(as).toBe('document');
+								return Effect.succeed({
+									mime: 'application/pdf',
+									bytes: new Uint8Array([37, 80, 68, 70])
+								});
+							}
 						}
 					}
 				);
@@ -1699,7 +1711,9 @@ describe('toolset parity with today (agent-tools-parity.md)', () => {
 						files: [{ id: randomUUID(), name: 'report.pdf', mime: 'application/pdf' }]
 					})).seq;
 					yield* agent.drain(c);
-					expect(ai.requests[1]!.files).toMatchObject([{ mime: 'application/pdf' }]);
+					expect(ai.requests[1]!.files).toEqual([
+						{ mime: 'application/pdf', bytes: new Uint8Array([37, 80, 68, 70]) }
+					]);
 					expect(toolResults(ai.requests[1]!)[0]).toMatchObject({
 						attached: 'the file is attached to your next step'
 					});
