@@ -40,14 +40,19 @@ import {
 	type Outcome
 } from '../contracts.ts';
 import { BoltError } from '../../protocol/errors.ts';
-import { ReadRequestSchema, type ReadRequestJson } from '../../protocol/read-request.ts';
+import { describeRead, describeWrite, keyShape } from './describe.ts';
+import {
+	LayerRequestSchema,
+	type LayerRequestJson,
+	type ReadRequestJson
+} from '../../protocol/read-request.ts';
 import type { AgentEngine as Engine } from './index.ts';
 import { lowerRead } from '../query/engine.ts';
 import { BOUNDS, bound, bounded, filesOf, localTime, outputText, page, size } from './context.ts';
 import { MODEL_FILES, ToolAnswer, toolSchema, type AnyTool, type InferTool } from './ai.ts';
 export { ToolAnswer, type AnyTool } from './ai.ts';
 import { REFERENCE, ReferenceIndex, RUN_JS, runFile, runJs } from './run-js.ts';
-import { layered, SKILL_FILE, type EngineManifest, type SkillSpec } from '../manifest.ts';
+import { layered, layers, SKILL_FILE, type EngineManifest, type SkillSpec } from '../manifest.ts';
 import { row as systemRow } from '../system/rows.ts';
 import type { McpSessions, McpTool } from './mcp.ts';
 import {
@@ -243,9 +248,6 @@ export type Catalogue = {
 	/** A refused input (closed: an unknown key is a wrong call) or a failure is the model's answer, never the turn's. */
 	readonly run: (name: string, input: unknown, callId: string) => Effect.Effect<ToolAnswer>;
 };
-/** Filter operators supported by period fields (`…_range`). */
-const PERIODS =
-	"A period field (effective_range and the like) takes contains: a date (today's date from Now: in force today), or overlaps / within: { from, to } (to null is open).";
 /** JSON tool parameters spell every value kind so model routers retain arrays and records. */
 const ToolJson: Schema.Codec<Json> = Schema.suspend(() =>
 	Schema.Union([
@@ -268,6 +270,11 @@ export const WriteInput = Schema.Struct({
 	inputFile: Schema.optionalKey(
 		Schema.String.annotate({
 			description: 'instead of input: the id of a JSON file of yours; its contents are the input'
+		})
+	),
+	describe: Schema.optionalKey(
+		Schema.Literal(true).annotate({
+			description: "instead of writing: answer this callable's exact input type"
 		})
 	)
 });
@@ -386,27 +393,15 @@ function mayDecide(m: Engine['manifest'], a: Authority): boolean {
 		Object.values(m.policies).some((policy) => Object.values(policy.grants).some(routesApproval))
 	);
 }
-/** The fields the actor may read on a root: the union of its root arms' fields (rule 14); a masked field is not described. */
-function visible(a: Authority, c: string, fields: readonly string[]): readonly string[] {
-	const arms = a.models[c]?.read[c] ?? [];
-	if (a.admin || arms.length === 0 || arms.some((x) => x.fields === 'all')) return fields;
-	const allowed = new Set(arms.flatMap((x) => (x.fields === 'all' ? [] : x.fields)));
-	return fields.filter((f) => allowed.has(f));
-}
-/** The step's facts, in the closing note (never the prompt, which is static): the time and whom the turn acts for. */
+/** The step's facts, in the closing note (the system prompt names the identity): the time, and an envoy's sender. */
 export function turnFacts(e: Engine, a: Authority, b: Bindings, tz?: string): string {
 	const x = a.actor,
-		person = x.kind === 'member' ? x : x.kind === 'envoy' ? x.linked : undefined,
 		wtz = e.manifest.workspace.tz;
-	const who =
-		x.kind === 'envoy'
-			? `envoy ${x.envoy} on ${x.instance} for ${x.sender}${person === undefined ? '' : `, linked to ${person.email ?? person.id} (member id ${person.id})`}`
-			: person === undefined
-				? x.kind
-				: `${person.email ?? person.id} (member id ${person.id})${person.teamPath.length > 0 ? ` (${person.teamPath.join(' › ')})` : ''}${person.external ? ', external' : ''}`;
 	return (
-		`Now: ${localTime(b.now, wtz)} (${wtz}, ${b.now})${tz === undefined || tz === wtz ? '' : `; theirs ${localTime(b.now, tz)} (${tz})`}. ` +
-		`You act for ${who}${a.admin ? ', an administrator' : ''}; policies ${a.policies.join(', ') || 'none'}.`
+		`Now: ${localTime(b.now, wtz)} (${wtz}, ${b.now})${tz === undefined || tz === wtz ? '' : `; theirs ${localTime(b.now, tz)} (${tz})`}.` +
+		(x.kind === 'envoy'
+			? ` The newest message is from ${x.sender}${x.linked === undefined ? '' : `, linked to ${x.linked.email ?? x.linked.id} (member id ${x.linked.id})`}.`
+			: '')
 	);
 }
 function receipt(callable: string, o: Outcome): Receipt | null {
@@ -609,23 +604,74 @@ export type ReadToolContext = {
 };
 /** A root read without its own `limit` reads this many rows, a page the model takes in at once (a request's own default is 10,000). */
 const READ_PAGE = 50;
-/** This turn's `read` input: a read request naming only the caller's roots and layers, the enum its JSON Schema shows. */
-const readInput = (paths: readonly string[]) =>
-	ReadRequestSchema.check(
-		Schema.makeFilter(
-			(request: ReadRequestJson) => {
-				const other = Object.keys(request).find((path) => !paths.includes(path));
-				return (
-					other === undefined ||
-					`'${other}' is not a model or layer you may read. You may read: ${paths.join(', ')}.`
+/** A layer named without its parent key: the two calls that read it, in this workspace's own keys. */
+function orphaned(m: EngineManifest, path: string): string {
+	const dot = path.lastIndexOf('.'),
+		parent = path.slice(0, dot),
+		relation = path.slice(dot + 1),
+		root = path.split('.')[0]!;
+	const parentModel = layers(m)[root]?.[parent] ?? root,
+		model = layers(m)[root]?.[path];
+	// a many-layer is its model's rows whose link names the parent row
+	const link = Object.entries(layered(m).relationships).find(
+		([key, r]) => key.startsWith(`${model}.`) && r.to === parentModel && r.inverse === relation
+	)?.[0];
+	const own =
+		model === undefined || link === undefined
+			? ''
+			: `, or read ${model} as its own root: { "${model}": { "where": { "${link.slice(model.length + 1)}": { "eq": "<the ${parentModel} id>" } } } }`;
+	return `"${path}" nests in each "${parent}" row, so name both in one call: { "${parent}": { "where": … }, "${path}": { … } }${own}`;
+}
+/**
+ * This turn's `read` input: one optional property per root and layer the caller may read, each naming exactly the fields
+ * this caller reads there, `search` only where it works and `after` only on a root (no `asOf`: past states are the history tool's) — so the schema is what the engine
+ * accepts (a bare enum of property names is lost in some providers' schema conversion). A layer needs its parent key.
+ */
+const readInput = (m: EngineManifest, a: Authority, paths: readonly string[]) =>
+	Schema.Struct(
+		Object.fromEntries(
+			paths.map((path) => {
+				const dot = path.lastIndexOf('.');
+				const shape = keyShape(m, a, path);
+				// past states are the history tool's: the agent's read is current data only
+				const { search, after, asOf: _asOf, ...base } = LayerRequestSchema.fields;
+				const fields = Schema.optionalKey(Schema.Array(Schema.Literals(shape.fields)));
+				const describe = Schema.optionalKey(
+					Schema.Literal(true).annotate({
+						description: "instead of reading: answer this key's row type"
+					})
 				);
-			},
-			{ toJsonSchema: () => ({ propertyNames: { enum: [...paths] } }) }
+				const description =
+					(dot < 0 ? 'a root' : `a layer of "${path.slice(0, dot)}"`) +
+					(shape.search ? '' : '; no search');
+				const layer =
+					dot < 0
+						? shape.search
+							? Schema.Struct({ ...base, fields, describe, search, after }).annotate({
+									description
+								})
+							: Schema.Struct({ ...base, fields, describe, after }).annotate({ description })
+						: shape.search
+							? Schema.Struct({ ...base, fields, describe, search }).annotate({ description })
+							: Schema.Struct({ ...base, fields, describe }).annotate({ description });
+				return [path, Schema.optionalKey(layer)];
+			})
 		)
+	).check(
+		Schema.makeFilter((request: object) => {
+			const keys = Object.keys(request);
+			if (keys.length === 0)
+				return 'name at least one root: ' + paths.filter((p) => !p.includes('.')).join(', ');
+			// a key asking describe reads nothing, so it stands alone
+			const reading = Object.entries(request).flatMap(([k, v]) =>
+				Predicate.isObject(v) && v['describe'] === true ? [] : [k]
+			);
+			const orphan = reading.find(
+				(k) => k.includes('.') && !keys.includes(k.slice(0, k.lastIndexOf('.')))
+			);
+			return orphan === undefined ? undefined : orphaned(m, orphan);
+		})
 	);
-const READ_HELP =
-	'A key without a dot is a model you read (a root); a dotted key is one of its declared layers, nested in each of its rows: a one-relation as an object in place of its id, a many-relation as a list. ' +
-	'Each value is { where?, fields?, orderBy?, limit?, search?, aggregate? }, and on a root also after (the cursor a page answered as next) and asOf (an instant; only with where { id: { eq } } or { id: { in } }: those records as they stood then). {} reads every field you may see. ';
 /**
  * `read` (rule 58, P3): one read request, a layer map over the models and declared layers the actor may read, answered in
  * one engine read as the actor and bounded by rule 62; `undefined` when nothing is readable. A lone root re-reads exactly
@@ -636,7 +682,6 @@ export function readTool(x: ReadToolContext) {
 		a = x.authority,
 		paths = readPaths(e.manifest, a);
 	if (paths.length === 0) return undefined;
-	const roots = paths.filter((path) => !path.includes('.'));
 	const answer = (request: ReadRequestJson) =>
 		Effect.try({
 			try: () => lowerRead(e.manifest, 'query', [request]),
@@ -696,56 +741,53 @@ export function readTool(x: ReadToolContext) {
 			Effect.catch((failure) => {
 				if (!(failure instanceof BoltError) || failure.code !== 'invalid')
 					return Effect.fail(failure);
-				// what the model may name instead, so its next call differs
+				// one next step, not the whole contract again: describe holds a key's fields and types
 				return Effect.succeed({
 					result: {
 						error: failure.message,
-						paths,
-						fields: Object.fromEntries(
-							named
-								.filter((root) => roots.includes(root))
-								.map((root) => [
-									root,
-									[...visible(a, root, Object.keys(layered(e.manifest).models[root]?.fields ?? {}))]
-								])
-						),
 						hint:
 							(failure.message.includes("unknown operator 'contains'")
-								? `Text takes like: "%value%"; contains is only for a period or a JSON field. `
-								: `A filter is { field: { eq, ne, lt, lte, gt, gte, in, nin, isNull or like: value } }, combined with and, or, not; a date is YYYY-MM-DD. ${PERIODS} `) +
-							'An aggregate is { count: true, sum: [field], by: field or { month: dateField } }. ' +
-							'Name only these keys and fields. If the data cannot answer the question, say so.'
+								? 'Text takes like: "%value%"; contains is only for a period or a JSON field. '
+								: 'Change what the error names. ') +
+							'{ "<key>": { "describe": true } } shows a key\'s fields and types. If the data cannot answer the question, say so.'
 					}
 				});
 			})
 		);
 	});
-	const firstLayer = paths.find((p) => p.split('.').length === 2);
-	const layerExample =
-		firstLayer === undefined
-			? undefined
-			: { path: firstLayer, root: firstLayer.split('.')[0], relation: firstLayer.split('.')[1] };
 	return {
 		tool: Tool.make('read', {
 			description:
-				`Read the records you may see with one layer map. ${READ_HELP}Keys you may name: ${paths.join(', ')}. ` +
-				`A root reads ${READ_PAGE} rows unless you give limit (at most 10,000); a many-layer reads up to 10,000 rows per parent row, so give it a limit too. ` +
-				'Read related rows as layers of one root, and several models as several roots of one call, instead of separate reads. ' +
-				'A layer is its own key "<root>.<relation>" beside the root, never a field of the root' +
-				(layerExample === undefined
-					? '. '
-					: `: { "${layerExample.root}": { "search": "…", "limit": 5 }, "${layerExample.path}": {} } reads the matching ${layerExample.root}, each with its ${layerExample.relation}. `) +
-								'Use where { id: { eq } } for one record, { id: { in: [...] } } for several, and an exact where filter for a known key. ' +
-				'For text use search: "text" or where: { field: { like: "%value%" } }; contains is only for a period or a JSON field. ' +
-				'To count, total, average or compare over time, use aggregate on a root or a many-layer: ONE read answers it, grouped in the database; never page through rows to count them. ' +
-				'Example, leavers per month in 2026: { <model>: { where: { ended_on: { gte: "2026-01-01", lt: "2027-01-01" } }, aggregate: { count: true, by: { month: "ended_on" } } } }. ' +
-				`${PERIODS} ` +
-				"A root's search also takes { <index>: input } for its declared search index (its input as the outline names it), or { semantic: text | { record: id } } where it declares semantic search. " +
-				'orderBy is a field, { field: "asc" | "desc" } or a list of these. Long values are clipped unless you name the field in fields.',
-			parameters: readInput(paths),
+				'Read records: { "<key>": options, … }, several keys in one call. ' +
+				'"<model>" is a root (that model\'s rows); "<root>.<relation>" is a layer (each root row\'s related rows, nested in it), sent beside its root key, never alone or inside the root\'s options. ' +
+				'The schema lists each key\'s fields and options: where { <field>: { eq | ne | lt | lte | gt | gte | in | nin | like | isNull: value } } with and / or / not; like takes % wildcards ("%word%" matches anywhere); a period field takes contains, overlaps, within; fields; ' +
+				`orderBy (a field, { field: "asc" | "desc" } or a list); limit (a root ${READ_PAGE} by default, at most 10,000; limit a many-layer too); search (text; on a root also { <index>: input } or { semantic: text | { record: id } }); ` +
+				'aggregate { count: true, sum | avg | min | max: [fields], by: field | { month: dateField } }; on a root also after (the next cursor a page returned). ' +
+				'A layer filters on its own fields, never its link to the root. A date is YYYY-MM-DD. Long values are clipped unless named in fields. ' +
+				'{ "<key>": { "describe": true } } answers that key\'s row type instead of rows. ' +
+				'Example: { "<root>": { "where": { "id": { "eq": "<id>" } } }, "<root>.<relation>": { "limit": 20 } }.',
+			parameters: readInput(e.manifest, a, paths),
 			success: ToolAnswer
 		}),
-		run: (request: ReadRequestJson): Effect.Effect<ToolAnswer> => guard(run(request))
+		run: (request: {
+			readonly [path: string]: (LayerRequestJson & { readonly describe?: true }) | undefined;
+		}): Effect.Effect<ToolAnswer> => {
+			// a key asking describe answers its row type instead of rows
+			const described = Object.entries(request).filter(([, layer]) => layer?.describe === true);
+			if (described.length > 0)
+				return Effect.succeed({
+					result: described.map(([path]) => describeRead(e.manifest, a, path, paths)).join('\n\n')
+				});
+			return guard(
+				run(
+					Object.fromEntries(
+						Object.entries(request).flatMap(([path, layer]) =>
+							layer === undefined ? [] : [[path, layer] as const]
+						)
+					)
+				)
+			);
+		}
 	};
 }
 /** `read` as a tool an inference is lent (`ai.sys_2.infer` naming `read`, rule 58): the same tool, as the actor. */
@@ -890,6 +932,16 @@ export const catalogue = Effect.fn('AgentTool.catalogue')(function* (x: ToolCont
 			e.manifest.automations[n] !== undefined &&
 			e.manifest.automations[n]?.agent !== 'never'
 	);
+	/** `{ callable, describe: true }`: a model verb's exact input for this caller, an automation's signature. */
+	const described = (callable: string): string => {
+		const dot = callable.lastIndexOf('.'),
+			verb = VERBS.find((v) => v === callable.slice(dot + 1));
+		if (callable.startsWith(`${AUTOMATION}.`))
+			return signature(callable.slice(AUTOMATION.length + 1));
+		return verb === undefined || !acts.has(callable)
+			? 'Its input is as this tool describes it.'
+			: describeWrite(e.manifest, a, callable.slice(0, dot), verb);
+	};
 	const mayStart = (c: string) =>
 		files.has(c) ||
 		syncs.includes(c) ||
@@ -897,7 +949,10 @@ export const catalogue = Effect.fn('AgentTool.catalogue')(function* (x: ToolCont
 	if (agent && (acts.size > 0 || automations.length > 0 || files.size > 0 || syncs.length > 0)) {
 		const actTool = Tool.make('act', {
 			description:
-				`Write: create, update, delete or upsert records, run a generated model write, decide an approval, or start an automation or a sync. Give one write as { callable, input } (the callable sits beside its input). Callables: ${[...acts.keys()].join(', ')}. ` +
+				'Write records, decide an approval, or start an automation or a sync: { callable, input }, one call per write. ' +
+				'A model write "<model>.<verb>" takes an array of rows committed as one batch: create [{ column, <relation>: [row or id] }]; update [{ target: id, set: { column, <relation>: { create: [row], update: [{ target, set }], delete: [id], link: [id], unlink: [id] } } }]; delete [{ target: id }]; upsert [{ id?, column, … }] (an id updates, none creates). ' +
+				'Related rows go inside their root row, never in a separate write. { callable, describe: true } answers its exact input type instead of writing. ' +
+				`Callables: ${[...acts.keys()].join(', ')}. ` +
 				(automations.length > 0
 					? `Automations start as automation.<name> with their declared input: ${automations.map(signature).join('; ')}. A committed start admits a run to the queue; its business result is available only after the run finishes. `
 					: '') +
@@ -907,16 +962,13 @@ export const catalogue = Effect.fn('AgentTool.catalogue')(function* (x: ToolCont
 				(files.size > 0
 					? `A file sync runs as <model>.sync.<sync> with { mode: 'import', file } (a stored file id) or { mode: 'export', to } (a format; the run's output is its file): ${[...files].map(([n, modes]) => `${n}(mode: ${modes})`).join('; ')}. `
 					: '') +
-				'Inputs are arrays of rows: create takes [{ column, rel: [{ column }] }] (a child row, or the id of an existing record to link); update takes [{ target: id, set: { column, rel: { create: [rows], update: [{ target, set }], delete: [ids], link: [ids], unlink: [ids] } } }]; delete takes [{ target: id }]; ' +
-				'upsert takes [{ id?, column, rel: […] }], each row with the id of the record it updates, or no id to create one: look the record up, then one upsert either way. ' +
-				"The workspace outline names each model's writable columns per layer (rel{…} is a child layer written in the same call). A file field takes a file reference { id, name, mime } as a message or tool lists it. " +
-				'Many rows (an import from a sheet) are one call and one statement. ' +
 				(e.files !== undefined
 					? "An input too large to write out that is already a JSON file of yours: give that file's id as inputFile instead of input. "
 					: '') +
 				(acts.has(APPROVE)
 					? `${APPROVE} decides a pending approval request you are an approver of. `
 					: '') +
+				'Your policies decide these callables and check each batch when it commits: a denial names its reason (do not retry it); a write routed to approval waits for its approvers (say so, not that it is done). ' +
 				'A committed write answers the stored rows, and as `runs` any automation runs it started (they run in the background; wait on a run id only when its result is needed now).',
 			parameters: WriteInput,
 			success: ToolAnswer
@@ -934,6 +986,7 @@ export const catalogue = Effect.fn('AgentTool.catalogue')(function* (x: ToolCont
 							}
 							if (!acts.has(i.callable) && !mayStart(i.callable))
 								return err(`You may not run '${i.callable}'.`);
+							if (i.describe === true) return ok(described(i.callable));
 							if (
 								x.inApp &&
 								(acts.get(i.callable)?.confirm === true ||
@@ -2344,7 +2397,16 @@ export const catalogue = Effect.fn('AgentTool.catalogue')(function* (x: ToolCont
 					)
 				),
 				// an unknown tool or a refused input (`Invalid parameters for tool …`): the model's answer
-				Effect.catch((error) => Effect.succeed(err(error.message)))
+				Effect.catch((error) =>
+					Effect.succeed(
+						err(
+							error.message.replace(
+								/^Toolkit\.\w+\.handle: Invalid parameters for tool '\w+': /,
+								''
+							)
+						)
+					)
+				)
 			)
 	} satisfies Catalogue;
 });

@@ -110,7 +110,8 @@
 		/** The open conversation changed (`null`: a new one), for the shell's `?agent=`. */ onConversation?: (
 			id: string | null
 		) => void;
-		/** The `localStorage` key of the last opened conversation, one per workspace and member; none: nothing is remembered. */ storageKey?: string | undefined;
+		/** The `localStorage` key of the last opened conversation, one per workspace and member; none: nothing is remembered. */ storageKey?:
+			string | undefined;
 	} = $props();
 
 	// svelte-ignore state_referenced_locally
@@ -644,10 +645,16 @@
 	 * the transcript moves, and every 2 s while a message waits on triage (a `wait` decision moves no row).
 	 */
 	let log = $state<LogRow[]>([]);
-	/** The decisions a reader opened, by event. */
+	/** The decisions (by event) and steps (by row) a reader opened. */
 	const expanded = new SvelteSet<string>();
+	/** The transcript's rows, not their streaming text: a decision lands with a new row, so a streamed token reads no log. */
+	const moved = $derived(
+		$transcript === undefined
+			? undefined
+			: `${$transcript.rows.length}:${$transcript.rows.at(-1)?.id}`
+	);
 	const decisions = liveEdge(() => {
-		const frame = $transcript;
+		const frame = moved;
 		return !admin || conversation === null || frame === undefined
 			? null
 			: Stream.fromEffect(api.logs({ conversation, text: 'decision.made' }));
@@ -1064,7 +1071,8 @@
 		const open = new Map<string, AgentRow[]>();
 		for (const r of rows) {
 			if (r.turn === undefined) continue;
-			if (r.role === 'user' && r.tag !== 'ambient') open.set(r.turn, [...(open.get(r.turn) ?? []), r]);
+			if (r.role === 'user' && r.tag !== 'ambient')
+				open.set(r.turn, [...(open.get(r.turn) ?? []), r]);
 			else if (r.role === 'assistant' && !!r.text && (open.get(r.turn)?.length ?? 0) > 0) {
 				by.set(r.id, open.get(r.turn)!);
 				open.delete(r.turn);
@@ -1925,7 +1933,7 @@
 													class="size-3 transition-transform group-open/work:rotate-90"
 												/>
 											</summary>
-											<Steps steps={item.steps} {t} />
+											<Steps steps={item.steps} {t} opened={expanded} />
 										</details>
 										{#each item.steps as st (st.id)}
 											<StudioResult step={st} {t} zone={kinds.zone} />
@@ -1961,8 +1969,11 @@
 												<Icon name="lucide:message-circle-off" class="size-3.5 shrink-0" /><span
 													class="shrink-0 font-medium"
 													data-aside-count
-													>{n} {t(
-														n === 1 ? 'message not for the assistant' : 'messages not for the assistant'
+													>{n}
+													{t(
+														n === 1
+															? 'message not for the assistant'
+															: 'messages not for the assistant'
 													)}</span
 												><span class="truncate opacity-70 group-open/aside:hidden" data-aside-last
 													>{said(item.ignored.at(-1)!)}</span
@@ -1971,19 +1982,21 @@
 													class="size-3 shrink-0 transition-transform group-open/aside:rotate-90"
 												/>
 											</summary>
-										<ul class="mt-1 space-y-1">
-											{#each item.ignored as r (r.id)}
-												<li
-													class="break-words whitespace-pre-wrap"
-													data-role="user"
-													data-triage="ambient"
-												>
-													<span class="opacity-70">{r.author ?? ''}{r.author ? ': ' : ''}</span
-													><span data-text>{r.text}</span>{@render attachments(r)}
-												</li>
-											{/each}
-										</ul>
-										{#if dec !== undefined && expanded.has(dec.event.id)}{@render matrix(dec)}{/if}
+											<ul class="mt-1 space-y-1">
+												{#each item.ignored as r (r.id)}
+													<li
+														class="break-words whitespace-pre-wrap"
+														data-role="user"
+														data-triage="ambient"
+													>
+														<span class="opacity-70">{r.author ?? ''}{r.author ? ': ' : ''}</span
+														><span data-text>{r.text}</span>{@render attachments(r)}
+													</li>
+												{/each}
+											</ul>
+											{#if dec !== undefined && expanded.has(dec.event.id)}{@render matrix(
+													dec
+												)}{/if}
 										</details>
 										{#if dec !== undefined}{@render decisionToggle(dec, 'ml-auto shrink-0')}{/if}
 									</li>
@@ -2231,7 +2244,9 @@
 					data-agent-read-only
 				>
 					{automation
-						? t("An automation's inference, recorded as it ran. Read-only here — start a new conversation to retry or ask again.")
+						? t(
+								"An automation's inference, recorded as it ran. Read-only here — start a new conversation to retry or ask again."
+							)
 						: t('An integration conversation, answered by its envoy. Read-only here.')}
 				</p>
 			{:else}

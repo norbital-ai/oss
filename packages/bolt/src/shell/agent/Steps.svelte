@@ -14,8 +14,15 @@
 	let {
 		steps,
 		t,
-		activity = false
-	}: { steps: readonly AgentRow[]; t: (key: string) => string; activity?: boolean } = $props();
+		activity = false,
+		opened = new SvelteSet<string>()
+	}: {
+		steps: readonly AgentRow[];
+		t: (key: string) => string;
+		activity?: boolean;
+		/** The steps a reader opened: only those render their tabs. The panel's own, so a regrouped run keeps them open. */
+		opened?: SvelteSet<string>;
+	} = $props();
 
 	const PageRead = Schema.Struct({ url: Schema.optionalKey(Schema.String), page: Schema.String });
 	const json = (text: string | undefined) =>
@@ -37,8 +44,6 @@
 	const active = (s: AgentRow) => s.tool?.running === true || s.state === 'streaming';
 	const seconds = (ms: number) =>
 		ms < 1000 ? `${(ms / 1000).toFixed(1)}s` : `${Math.round(ms / 1000)}s`;
-	/** The steps a reader opened: only those render their tabs. */
-	const opened = new SvelteSet<string>();
 	const pane = new SvelteMap<string, 'code' | 'input' | 'output'>();
 </script>
 
@@ -59,6 +64,7 @@
 		>
 			<details
 				class="group/step"
+				open={opened.has(s.id)}
 				ontoggle={(e) => (e.currentTarget.open ? opened.add(s.id) : opened.delete(s.id))}
 			>
 				<summary

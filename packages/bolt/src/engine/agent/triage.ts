@@ -277,8 +277,12 @@ export const triage = Effect.fn('Triage.make')(function* (cfg: TriageConfig) {
 		if (conv === undefined || conv.status === 'stopped' || pending.length === 0)
 			return { pending: 0 };
 		// the sender kept typing (`heldLonger`): the queued run decides at its later time, not this timer
+		// a timer firing on time can read `due` a hair late (a float epoch): only a real postponement waits, and then this
+		// decision sleeps until it instead of returning held with nothing left to wake it
 		const due = later?.rows[0]?.['due'];
-		if (typeof due === 'number' && due > Date.parse(yield* cfg.clock)) return { held: true };
+		const left = typeof due === 'number' ? due - Date.parse(yield* cfg.clock) : 0;
+		// (a newer arrival's hold replaces this fiber in `debounce`, so the rows read above are still the burst)
+		if (left > 25) yield* Effect.sleep(left);
 		const envoyKey = conv.envoy,
 			envoy = envoyKey !== null;
 		if (waits >= TRIAGE_MAX_WAITS) {

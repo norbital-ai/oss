@@ -147,7 +147,7 @@ function writeArm(
 }
 
 /** The fields a layer exposes (rule 10), its FKs included; a system model's are its own fields minus the system columns. */
-function exposed(m: EngineManifest, root: string, path: string, model: string): readonly string[] {
+export function exposed(m: EngineManifest, root: string, path: string, model: string): readonly string[] {
 	const all = layered(m);
 	const sys = Object.hasOwn(SYSTEM.models, model);
 	const f = all.exposures[root]?.read[path]?.fields;

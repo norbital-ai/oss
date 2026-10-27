@@ -1346,7 +1346,8 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 						task: envoy?.task,
 						skills: m.agent.skills,
 						outline: external ? undefined : yield* outlineOf(),
-						tools
+						tools,
+						authority
 					}),
 					messages: history,
 					...(files.length === 0 ? {} : { files: files.splice(0, files.length) }),
