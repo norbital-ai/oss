@@ -96,7 +96,6 @@ import {
 	COMPACT_FORMAT,
 	envoyName,
 	messages,
-	outline,
 	outputText,
 	projection,
 	state,
@@ -139,6 +138,7 @@ import {
 	type ToolContext,
 	type WorkspacePort
 } from './tools.ts';
+import { PLATFORM_SKILLS } from './skills.ts';
 export { inferFacility } from './ai.ts';
 export { mcpServers } from './mcp.ts';
 export { type As } from './schema.ts';
@@ -186,7 +186,7 @@ export type AgentConfig = {
 	attachments?: AttachmentPort;
 	geocoder?: Geo['Service'];
 	docs?: Docs['Service'];
-	/** The released source (`workspace_search`, the outline); a host reads it from the artifact (`workspaceFiles`). */
+	/** The released source (`workspace_search`); a host reads it from the artifact (`workspaceFiles`). */
 	workspace?: WorkspacePort;
 	/** The person's Studio draft for `workspace_search { draft: true }`; none where they author nothing. */
 	draft?: (a: Authority) => Promise<WorkspacePort | undefined>;
@@ -270,7 +270,8 @@ export const FIXED = {
 export const ANSWERED = 'This was already answered.';
 /** `modelCall`'s reason when the host binds no AI port. */
 const NO_AI = 'the host provides no ai';
-const CONV_COLS = 'id, title, owner, envoy, integration, thread, parent, status, model, plan, goals';
+const CONV_COLS =
+	'id, title, owner, envoy, integration, thread, parent, status, model, plan, goals';
 const q = (text: string, ...params: Json[]) => ({ text, params });
 /** A step's reply as it streams (`drain`'s `streamer`). */
 type Streamer = {
@@ -288,13 +289,15 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 	const authorities = new Authorities(m, 'agent');
 	// the workspace's skills, their files read from the release where the host binds them
 	const skillFiles = config.skillFiles;
+	// the platform's skills first, so a workspace skill of the same name replaces one
+	const allSkills = { ...PLATFORM_SKILLS, ...m.agent.skills };
 	const workspaceSkills: ToolContext['skills'] = Object.fromEntries(
-		Object.entries(m.agent.skills).map(([name, skill]) => [
+		Object.entries(allSkills).map(([name, skill]) => [
 			name,
 			{
 				...skill,
 				read: (path: string) =>
-					skillFiles === undefined
+					skillFiles === undefined || !(name in m.agent.skills)
 						? Port.unavailable('agent.skills', 'the host binds no skill files')
 						: Port.attempt('agent.skills', () => skillFiles(name, path))
 			}
@@ -597,24 +600,13 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 		);
 	});
 	/** Static per agent (rule 62): an envoy's by its audience, the in-app agent's by the member kind it serves. */
-	/** A public envoy's or an external member's turn: the external brief, and no outline of the workspace's insides. */
+	/** A public envoy's or an external member's turn: the external brief, and no view of the workspace's source. */
 	const outward = Effect.fn('Agents.outward')(function* (conv: ConversationRow, a: Authority) {
 		const envoy = conv.envoy ?? (a.actor.kind === 'envoy' ? a.actor.envoy : null);
 		return envoy !== null
 			? (yield* envoySpec(m, db, envoy))?.audience === 'public'
 			: a.actor.kind === 'member' && a.actor.external;
 	});
-	// the outline is the release's: the manifest and its source list, computed once
-	let outlined: Effect.Effect<string, PortFailure> | undefined;
-	const outlineOf = () =>
-		(outlined ??= Effect.fn('Agents.work10')(function* () {
-			return outline(
-				m,
-				config.workspace === undefined
-					? null
-					: [...(yield* Port.attempt('workspace.files', () => config.workspace!.files()))]
-			);
-		})());
 	const verify = Effect.fn('Agents.verify')(function* (
 		conv: ConversationRow,
 		plan: Plan,
@@ -1101,14 +1093,14 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 					question: who?.text ?? undefined,
 					child: conv.parent !== null,
 					delegation:
-						conv.parent === null &&
-						(conv.envoy === null ? staff : envoy?.delegation === 'enabled'),
+						conv.parent === null && (conv.envoy === null ? staff : envoy?.delegation === 'enabled'),
 					mcp,
 					logs,
 					mcpTools,
 					hostTools,
 					attachments: config.attachments,
-					workspace: config.workspace,
+					// every inward agent reads the source (models, policies) for exact shapes; a public envoy's or external member's turn does not
+					workspace: external ? undefined : config.workspace,
 					draft:
 						hostSide && config.draft !== undefined
 							? yield* Port.attempt('agent.draft', () => config.draft!(authority))
@@ -1330,7 +1322,11 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 					tools = toolset.tools;
 				// the served sender's own unaddressed messages are in the context; other people's chatter is a line where it stood
 				const served = as !== null && 'envoy' in as ? as.envoy.sender : undefined;
-				const note = state(conv, mode === 'plan' ? 'plan' : 'agent', turnFacts(e, authority, b, ctx.tz));
+				const note = state(
+					conv,
+					mode === 'plan' ? 'plan' : 'agent',
+					turnFacts(e, authority, b, ctx.tz)
+				);
 				// the note closes the context, before a reply cut at the wall that this step continues (rule 63)
 				const history = modelTranscript(rows, conv, served);
 				if (note !== undefined)
@@ -1344,8 +1340,7 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 						envoy: envoy === undefined ? undefined : envoyName(envoy.name),
 						brief,
 						task: envoy?.task,
-						skills: m.agent.skills,
-						outline: external ? undefined : yield* outlineOf(),
+						skills: allSkills,
 						tools,
 						authority
 					}),
@@ -1632,7 +1627,8 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 							if (n >= AGENT_LIMITS.sameFailure) result = { ...result, guidance: RECOVERY };
 						}
 						// rule 62: the model sees a bounded result; a clipped one keeps the whole output for `read_output`
-						const shown = 'bounded' in answer && answer.bounded === true ? result : bounded(result).value,
+						const shown =
+								'bounded' in answer && answer.bounded === true ? result : bounded(result).value,
 							clipped = JSON.stringify(shown) !== JSON.stringify(result);
 						// the model does not see its own call ids, so the note names the one read_output takes
 						const more = `clipped: the whole result (${new TextEncoder().encode(outputText(result)).length} bytes). read_output { call: '${call.id}', offset } reads it on`;
@@ -2257,10 +2253,9 @@ export const AgentsLive = Layer.effectContext(
 			host.typing ??
 			(Option.isSome(links)
 				? (integration: string, thread: string, on: boolean) =>
-						links.value.typing(integration, thread, on).pipe(
-							Effect.tapCause(Effect.logWarning),
-							Effect.ignore
-						)
+						links.value
+							.typing(integration, thread, on)
+							.pipe(Effect.tapCause(Effect.logWarning), Effect.ignore)
 				: undefined);
 		const api = yield* agents({
 			...host,

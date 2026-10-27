@@ -40,7 +40,7 @@ import {
 	type Outcome
 } from '../contracts.ts';
 import { BoltError } from '../../protocol/errors.ts';
-import { describeRead, describeWrite, keyShape } from './describe.ts';
+import { exposed } from '../access/authority.ts';
 import {
 	LayerRequestSchema,
 	type LayerRequestJson,
@@ -270,11 +270,6 @@ export const WriteInput = Schema.Struct({
 	inputFile: Schema.optionalKey(
 		Schema.String.annotate({
 			description: 'instead of input: the id of a JSON file of yours; its contents are the input'
-		})
-	),
-	describe: Schema.optionalKey(
-		Schema.Literal(true).annotate({
-			description: "instead of writing: answer this callable's exact input type"
 		})
 	)
 });
@@ -604,6 +599,15 @@ export type ReadToolContext = {
 };
 /** A root read without its own `limit` reads this many rows, a page the model takes in at once (a request's own default is 10,000). */
 const READ_PAGE = 50;
+/** Whether `search` works on one read key for `a`: every field the search covers exposed there and unmasked (rule 14). */
+function searchable(m: EngineManifest, a: Authority, path: string): boolean {
+	const root = path.split('.')[0]!;
+	const model = layers(m)[root]?.[path] ?? root;
+	const here = exposed(m, root, path, model),
+		masked = a.models[root]?.masks[path] ?? {};
+	const text = layered(m).models[model]?.search?.text ?? [];
+	return text.length > 0 && text.every((f) => here.includes(f) && !(f in masked));
+}
 /** A layer named without its parent key: the two calls that read it, in this workspace's own keys. */
 function orphaned(m: EngineManifest, path: string): string {
 	const dot = path.lastIndexOf('.'),
@@ -632,28 +636,27 @@ const readInput = (m: EngineManifest, a: Authority, paths: readonly string[]) =>
 		Object.fromEntries(
 			paths.map((path) => {
 				const dot = path.lastIndexOf('.');
-				const shape = keyShape(m, a, path);
-				// past states are the history tool's: the agent's read is current data only
-				const { search, after, asOf: _asOf, ...base } = LayerRequestSchema.fields;
-				const fields = Schema.optionalKey(Schema.Array(Schema.Literals(shape.fields)));
-				const describe = Schema.optionalKey(
-					Schema.Literal(true).annotate({
-						description: "instead of reading: answer this key's row type"
-					})
-				);
+				const search = searchable(m, a, path);
+				// the model's declared read is the shape; a request only filters, orders and pages it. Past states are the
+				// history tool's, so the agent's read is current data only
+				const {
+					search: text,
+					after,
+					asOf: _asOf,
+					fields: _fields,
+					...base
+				} = LayerRequestSchema.fields;
 				const description =
 					(dot < 0 ? 'a root' : `a layer of "${path.slice(0, dot)}"`) +
-					(shape.search ? '' : '; no search');
+					(search ? '' : '; no search');
 				const layer =
 					dot < 0
-						? shape.search
-							? Schema.Struct({ ...base, fields, describe, search, after }).annotate({
-									description
-								})
-							: Schema.Struct({ ...base, fields, describe, after }).annotate({ description })
-						: shape.search
-							? Schema.Struct({ ...base, fields, describe, search }).annotate({ description })
-							: Schema.Struct({ ...base, fields, describe }).annotate({ description });
+						? search
+							? Schema.Struct({ ...base, search: text, after }).annotate({ description })
+							: Schema.Struct({ ...base, after }).annotate({ description })
+						: search
+							? Schema.Struct({ ...base, search: text }).annotate({ description })
+							: Schema.Struct(base).annotate({ description });
 				return [path, Schema.optionalKey(layer)];
 			})
 		)
@@ -662,11 +665,7 @@ const readInput = (m: EngineManifest, a: Authority, paths: readonly string[]) =>
 			const keys = Object.keys(request);
 			if (keys.length === 0)
 				return 'name at least one root: ' + paths.filter((p) => !p.includes('.')).join(', ');
-			// a key asking describe reads nothing, so it stands alone
-			const reading = Object.entries(request).flatMap(([k, v]) =>
-				Predicate.isObject(v) && v['describe'] === true ? [] : [k]
-			);
-			const orphan = reading.find(
+			const orphan = keys.find(
 				(k) => k.includes('.') && !keys.includes(k.slice(0, k.lastIndexOf('.')))
 			);
 			return orphan === undefined ? undefined : orphaned(m, orphan);
@@ -741,7 +740,7 @@ export function readTool(x: ReadToolContext) {
 			Effect.catch((failure) => {
 				if (!(failure instanceof BoltError) || failure.code !== 'invalid')
 					return Effect.fail(failure);
-				// one next step, not the whole contract again: describe holds a key's fields and types
+				// one next step, not the whole contract again: the model's source holds its fields and types
 				return Effect.succeed({
 					result: {
 						error: failure.message,
@@ -749,7 +748,7 @@ export function readTool(x: ReadToolContext) {
 							(failure.message.includes("unknown operator 'contains'")
 								? 'Text takes like: "%value%"; contains is only for a period or a JSON field. '
 								: 'Change what the error names. ') +
-							'{ "<key>": { "describe": true } } shows a key\'s fields and types. If the data cannot answer the question, say so.'
+							"The model's source (src/data/model/<model>/+model.ts) holds its fields and types. If the data cannot answer the question, say so."
 					}
 				});
 			})
@@ -760,25 +759,20 @@ export function readTool(x: ReadToolContext) {
 			description:
 				'Read records: { "<key>": options, … }, several keys in one call. ' +
 				'"<model>" is a root (that model\'s rows); "<root>.<relation>" is a layer (each root row\'s related rows, nested in it), sent beside its root key, never alone or inside the root\'s options. ' +
-				'The schema lists each key\'s fields and options: where { <field>: { eq | ne | lt | lte | gt | gte | in | nin | like | isNull: value } } with and / or / not; like takes % wildcards ("%word%" matches anywhere); a period field takes contains, overlaps, within; fields; ' +
+				"Each key returns its model's declared read shape; options only filter, order and page it: where { <field>: { <operator>: value } } with and / or / not. " +
+				'Operators by field kind: text eq ne in nin isNull, like with % wildcards ("%word%" matches anywhere); number, decimal, date, instant eq ne lt lte gt gte in nin isNull (an instant also olderThan "7d"); enum, bool, link id eq ne in nin isNull; point near [point, metres], within { bbox | polygon }; period contains, overlaps, within; json contains, isEmpty; ' +
 				`orderBy (a field, { field: "asc" | "desc" } or a list); limit (a root ${READ_PAGE} by default, at most 10,000; limit a many-layer too); search (text; on a root also { <index>: input } or { semantic: text | { record: id } }); ` +
 				'aggregate { count: true, sum | avg | min | max: [fields], by: field | { month: dateField } }; on a root also after (the next cursor a page returned). ' +
-				'A layer filters on its own fields, never its link to the root. A date is YYYY-MM-DD. Long values are clipped unless named in fields. ' +
-				'{ "<key>": { "describe": true } } answers that key\'s row type instead of rows. ' +
+				"Root the read at the model whose rows you want and pick them with its where; a layer's where narrows only each root row's related rows (never which root rows return) and takes its own fields, never its link. " +
+				'To list rows read them with a limit; aggregate only counts or totals; after continues the same request only. A date is YYYY-MM-DD. Long values are clipped; read_output pages a clipped result. ' +
 				'Example: { "<root>": { "where": { "id": { "eq": "<id>" } } }, "<root>.<relation>": { "limit": 20 } }.',
 			parameters: readInput(e.manifest, a, paths),
 			success: ToolAnswer
 		}),
 		run: (request: {
-			readonly [path: string]: (LayerRequestJson & { readonly describe?: true }) | undefined;
-		}): Effect.Effect<ToolAnswer> => {
-			// a key asking describe answers its row type instead of rows
-			const described = Object.entries(request).filter(([, layer]) => layer?.describe === true);
-			if (described.length > 0)
-				return Effect.succeed({
-					result: described.map(([path]) => describeRead(e.manifest, a, path, paths)).join('\n\n')
-				});
-			return guard(
+			readonly [path: string]: LayerRequestJson | undefined;
+		}): Effect.Effect<ToolAnswer> =>
+			guard(
 				run(
 					Object.fromEntries(
 						Object.entries(request).flatMap(([path, layer]) =>
@@ -786,8 +780,7 @@ export function readTool(x: ReadToolContext) {
 						)
 					)
 				)
-			);
-		}
+			)
 	};
 }
 /** `read` as a tool an inference is lent (`ai.sys_2.infer` naming `read`, rule 58): the same tool, as the actor. */
@@ -932,16 +925,6 @@ export const catalogue = Effect.fn('AgentTool.catalogue')(function* (x: ToolCont
 			e.manifest.automations[n] !== undefined &&
 			e.manifest.automations[n]?.agent !== 'never'
 	);
-	/** `{ callable, describe: true }`: a model verb's exact input for this caller, an automation's signature. */
-	const described = (callable: string): string => {
-		const dot = callable.lastIndexOf('.'),
-			verb = VERBS.find((v) => v === callable.slice(dot + 1));
-		if (callable.startsWith(`${AUTOMATION}.`))
-			return signature(callable.slice(AUTOMATION.length + 1));
-		return verb === undefined || !acts.has(callable)
-			? 'Its input is as this tool describes it.'
-			: describeWrite(e.manifest, a, callable.slice(0, dot), verb);
-	};
 	const mayStart = (c: string) =>
 		files.has(c) ||
 		syncs.includes(c) ||
@@ -951,7 +934,7 @@ export const catalogue = Effect.fn('AgentTool.catalogue')(function* (x: ToolCont
 			description:
 				'Write records, decide an approval, or start an automation or a sync: { callable, input }, one call per write. ' +
 				'A model write "<model>.<verb>" takes an array of rows committed as one batch: create [{ column, <relation>: [row or id] }]; update [{ target: id, set: { column, <relation>: { create: [row], update: [{ target, set }], delete: [id], link: [id], unlink: [id] } } }]; delete [{ target: id }]; upsert [{ id?, column, … }] (an id updates, none creates). ' +
-				'Related rows go inside their root row, never in a separate write. { callable, describe: true } answers its exact input type instead of writing. ' +
+				'Related rows go inside their root row, never in a separate write. ' +
 				`Callables: ${[...acts.keys()].join(', ')}. ` +
 				(automations.length > 0
 					? `Automations start as automation.<name> with their declared input: ${automations.map(signature).join('; ')}. A committed start admits a run to the queue; its business result is available only after the run finishes. `
@@ -986,7 +969,6 @@ export const catalogue = Effect.fn('AgentTool.catalogue')(function* (x: ToolCont
 							}
 							if (!acts.has(i.callable) && !mayStart(i.callable))
 								return err(`You may not run '${i.callable}'.`);
-							if (i.describe === true) return ok(described(i.callable));
 							if (
 								x.inApp &&
 								(acts.get(i.callable)?.confirm === true ||
@@ -1494,13 +1476,12 @@ export const catalogue = Effect.fn('AgentTool.catalogue')(function* (x: ToolCont
 	}
 	const staff = a.actor.kind === 'member' && !a.actor.external;
 	// one tool over the source: a text, a path to read, or nothing (the file list); the released source or the author's draft
-	if (x.inApp && staff && (x.workspace !== undefined || x.draft !== undefined)) {
+	if (x.workspace !== undefined || x.draft !== undefined) {
 		const workspaceSearchTool = Tool.make('workspace_search', {
 			description:
-				'Search or read the workspace source (src/: models, exposures, ' +
-				'policies, automations, apps, components, lib), as released or, with draft: true, your Studio draft. ' +
-				'text finds lines containing it (case-insensitive) in any file (.md, .json too). path reads one file as numbered lines, from and to a range. ' +
-				'Nothing lists the files. paths narrows to path prefixes.',
+				'Read or search the workspace source (src/: models, policies, teams, automations, apps, lib), as released or, with draft: true, your Studio draft. ' +
+				'path reads one file as numbered lines (from and to a range); text finds the lines containing it (case-insensitive) in any file, paths narrowing it to path prefixes. ' +
+				'workspace_list shows what a folder holds.',
 			parameters: Schema.Struct({
 				text: Schema.optionalKey(Schema.String.annotate({ description: 'text a line contains' })),
 				path: Schema.optionalKey(Schema.String.annotate({ description: 'a file to read' })),
@@ -1570,10 +1551,52 @@ export const catalogue = Effect.fn('AgentTool.catalogue')(function* (x: ToolCont
 											hits.push({ path, line: n + 1, text: line.trim().slice(0, 200) });
 								return ok({ total, hits });
 							}
-							return ok({
-								files,
-								read: 'pass path (with draft: true for your draft) to read one of these'
-							});
+							return err(
+								'Give path to read a file or text to search; workspace_list shows a folder.'
+							);
+						})
+					)
+			}),
+			{ pure: true }
+		);
+		const workspaceListTool = Tool.make('workspace_list', {
+			description:
+				'List a folder of the workspace source: its subfolders (ending in /) and files, as released or, with draft: true, your Studio draft. ' +
+				'Start at src/ and go down; read a file with workspace_search { path }.',
+			parameters: Schema.Struct({
+				path: Schema.optionalKey(
+					Schema.String.annotate({ description: 'a folder, e.g. src/data/model/; default src/' })
+				),
+				draft: Schema.optionalKey(
+					Schema.Boolean.annotate({ description: 'your Studio draft instead of the release' })
+				)
+			}),
+			success: ToolAnswer
+		});
+		yield* add(
+			workspaceListTool,
+			Toolkit.make(workspaceListTool).toHandlers({
+				workspace_list: (i) =>
+					guard(
+						Effect.gen(function* () {
+							const ws = i.draft === true ? x.draft : x.workspace;
+							if (ws === undefined)
+								return err(
+									i.draft === true
+										? 'You have no Studio draft in this workspace.'
+										: 'This workspace was built without its source.'
+								);
+							const dir = (i.path ?? 'src/').replace(/\/?$/, '/');
+							const entries = new Set<string>();
+							for (const f of yield* Port.attempt('workspace.files', () => ws.files()))
+								if (f.startsWith(dir)) {
+									const rest = f.slice(dir.length),
+										cut = rest.indexOf('/');
+									entries.add(cut < 0 ? rest : rest.slice(0, cut + 1));
+								}
+							return entries.size === 0
+								? err(`Nothing is under '${dir}'.`)
+								: ok({ path: dir, entries: [...entries].sort() });
 						})
 					)
 			}),
@@ -2384,8 +2407,14 @@ export const catalogue = Effect.fn('AgentTool.catalogue')(function* (x: ToolCont
 			...(pure === undefined ? {} : { pure })
 		})),
 		toolkit,
+		// the input is decoded against the tool's own schema here, closed: the toolkit skips decoding a schema it does not
+		// recognise as one, and an unchecked input would reach the handler with keys the schema never offered
 		run: (name: string, input: unknown, callId: string) =>
-			toolkit.handle(name, input, callId, CLOSED).pipe(
+			Schema.decodeUnknownEffect(
+				entries.find((entry) => entry.name === name)?.tool.parametersSchema ?? Schema.Unknown,
+				CLOSED
+			)(input).pipe(
+				Effect.flatMap((decoded) => toolkit.handle(name, decoded, callId, CLOSED)),
 				Effect.flatMap(Stream.runLast),
 				Effect.map((last) =>
 					Option.getOrElse(
