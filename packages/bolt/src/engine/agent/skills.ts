@@ -19,7 +19,7 @@ write of a model in a conversation, read that file; it is the contract the tools
 One read names keys: "<model>" is a root, "<root>.<relation>" a layer of related rows nested in each root row (a
 one-relation as an object in place of its link, a many-relation as a list). Send a layer beside its root, never alone.
 Each key returns the model's declared shape; options only narrow it: where (a filter per field, combined with and / or /
-not), orderBy, limit, search, aggregate, and after for the next page of that same request. Root the read at the model
+not), orderBy, limit, search and aggregate; a result too large to show says so: narrow the read. Root the read at the model
 whose rows you want and pick them with its where: a layer's where narrows only each root row's related rows, never which
 root rows return, and takes the layer's own fields, never its link. To list rows, read them with a limit.
 Count, total or group with aggregate, never by paging rows. Several unrelated models are several roots of one call.

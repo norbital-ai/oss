@@ -14,6 +14,7 @@ import { LIMITS, type AiRequest, type AiResponse } from '../contracts.ts';
 import { xlsxCells, xlsxSheets } from '../files/xlsx.ts';
 import { toBase64 } from '../crypto.ts';
 import { SaidContent, StepContent } from './schema.ts';
+import { STATE_NOTE } from './context.ts';
 
 export type OpenAiChatConfig = {
 	/** The API base, e.g. `https://openrouter.ai/api/v1`. */
@@ -59,7 +60,12 @@ const stepOf = Schema.decodeUnknownOption(StepContent),
 /** Engine messages (`{ text, toolCalls }` assistant rows, `{ id, name, result }` tool rows) as chat messages; files ride the last user message. */
 function messagesOf(r: AiRequest): Wire[] {
 	const out: Wire[] = r.system === undefined ? [] : [{ role: 'system', content: r.system }];
-	for (const m of r.messages) {
+	// only this turn's reasoning goes back (the tool loop a provider may need it for); an earlier turn's would bloat
+	// every later call and teaches a model to think inside its replies
+	const turn = r.messages.findLastIndex(
+		(m) => m.role === 'user' && !(typeof m.content === 'string' && m.content.startsWith(STATE_NOTE))
+	);
+	for (const [n, m] of r.messages.entries()) {
 		if (m.role === 'tool') {
 			const step = Option.getOrUndefined(stepOf(m.content));
 			out.push({
@@ -75,7 +81,7 @@ function messagesOf(r: AiRequest): Wire[] {
 			out.push({
 				role: 'assistant',
 				content: textOf(m.content),
-				...(reply?.reasoning === undefined || reply.reasoning === ''
+				...(n < turn || reply?.reasoning === undefined || reply.reasoning === ''
 					? {}
 					: { reasoning: reply.reasoning }),
 				...(calls.length === 0

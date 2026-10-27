@@ -608,6 +608,13 @@ function searchable(m: EngineManifest, a: Authority, path: string): boolean {
 	const text = layered(m).models[model]?.search?.text ?? [];
 	return text.length > 0 && text.every((f) => here.includes(f) && !(f in masked));
 }
+/** A read's pages without their `next` cursor: the agent reads no further pages, it narrows the read instead. */
+const uncursored = (v: Json): Json =>
+	!Predicate.isObject(v) || EffectArray.isArray<typeof v>(v)
+		? v
+		: 'rows' in v
+			? Object.fromEntries(Object.entries(v).filter(([k]) => k !== 'next'))
+			: Object.fromEntries(Object.entries(v).map(([k, x]) => [k, uncursored(x)]));
 /** A layer named without its parent key: the two calls that read it, in this workspace's own keys. */
 function orphaned(m: EngineManifest, path: string): string {
 	const dot = path.lastIndexOf('.'),
@@ -628,7 +635,7 @@ function orphaned(m: EngineManifest, path: string): string {
 }
 /**
  * This turn's `read` input: one optional property per root and layer the caller may read, each naming exactly the fields
- * this caller reads there, `search` only where it works and `after` only on a root (no `asOf`: past states are the history tool's) — so the schema is what the engine
+ * this caller reads there, `search` only where it works, no paging cursor and no `asOf` (past states are the history tool's) — so the schema is what the engine
  * accepts (a bare enum of property names is lost in some providers' schema conversion). A layer needs its parent key.
  */
 const readInput = (m: EngineManifest, a: Authority, paths: readonly string[]) =>
@@ -639,9 +646,10 @@ const readInput = (m: EngineManifest, a: Authority, paths: readonly string[]) =>
 				const search = searchable(m, a, path);
 				// the model's declared read is the shape; a request only filters, orders and pages it. Past states are the
 				// history tool's, so the agent's read is current data only
+				// no after: a page that did not fit says so, and the agent narrows or raises its limit instead of paging
 				const {
 					search: text,
-					after,
+					after: _after,
 					asOf: _asOf,
 					fields: _fields,
 					...base
@@ -658,8 +666,8 @@ const readInput = (m: EngineManifest, a: Authority, paths: readonly string[]) =>
 				const layer =
 					dot < 0
 						? search
-							? Schema.Struct({ ...base, search: words, after }).annotate({ description })
-							: Schema.Struct({ ...base, after }).annotate({ description })
+							? Schema.Struct({ ...base, search: words }).annotate({ description })
+							: Schema.Struct(base).annotate({ description })
 						: search
 							? Schema.Struct({ ...base, search: words }).annotate({ description })
 							: Schema.Struct(base).annotate({ description });
@@ -669,12 +677,9 @@ const readInput = (m: EngineManifest, a: Authority, paths: readonly string[]) =>
 	).check(
 		Schema.makeFilter((request: object) => {
 			const keys = Object.keys(request);
-			if (keys.length === 0)
-				return 'name at least one root: ' + paths.filter((p) => !p.includes('.')).join(', ');
-			const orphan = keys.find(
-				(k) => k.includes('.') && !keys.includes(k.slice(0, k.lastIndexOf('.')))
-			);
-			return orphan === undefined ? undefined : orphaned(m, orphan);
+			return keys.length > 0
+				? undefined
+				: 'name at least one root: ' + paths.filter((p) => !p.includes('.')).join(', ');
 		})
 	);
 /**
@@ -698,16 +703,29 @@ export function readTool(x: ReadToolContext) {
 			Effect.flatMap((ir) => e.read([ir], { as: 'caller', authority: a }, x.bindings)),
 			Effect.map(([got]) => got ?? null)
 		);
+	/** The model behind a layer, when this caller reads it as a root of its own. */
+	const rootOf = (path: string): string | undefined => {
+		const model = layers(e.manifest)[path.split('.')[0]!]?.[path];
+		return model !== undefined && paths.includes(model) ? model : undefined;
+	};
 	const run = Effect.fn('AgentTool.read')(function* (given: ReadRequestJson) {
-		// a root page the model can take in, unless it asked for one; an empty cursor or search is the model's "none"
+		// a layer named without its parent reads the rows of the model behind it, as that model's own root (its where may
+		// then name the link); one that is not a root of this caller has no reading on its own
+		const stranded = Object.keys(given).find(
+			(path) =>
+				path.includes('.') &&
+				!(path.slice(0, path.lastIndexOf('.')) in given) &&
+				(rootOf(path) === undefined || rootOf(path)! in given)
+		);
+		if (stranded !== undefined)
+			return { result: { error: orphaned(e.manifest, stranded) }, bounded: true } as const;
+		// a root page the model can take in, unless it asked for one; an empty search is the model's "none"
 		const request: { [path: string]: ReadRequestJson[string] } = Object.fromEntries(
-			Object.entries(given).map(([path, asked]) => {
-				const { after, search, ...rest } = asked;
-				const layer = {
-					...rest,
-					...(after === undefined || after === '' ? {} : { after }),
-					...(search === undefined || search === '' ? {} : { search })
-				};
+			Object.entries(given).map(([asked, options]) => {
+				const parent = asked.slice(0, asked.lastIndexOf('.'));
+				const path = asked.includes('.') && !(parent in given) ? rootOf(asked)! : asked;
+				const { after: _after, search, ...rest } = options;
+				const layer = { ...rest, ...(search === undefined || search === '' ? {} : { search }) };
 				return [
 					path,
 					path.includes('.') || layer.limit !== undefined || layer.aggregate !== undefined
@@ -718,35 +736,37 @@ export function readTool(x: ReadToolContext) {
 		);
 		const keep = [...new Set(Object.values(given).flatMap((layer) => layer.fields ?? []))];
 		const named = Object.keys(request).filter((path) => !path.includes('.'));
-		const lone = named.length === 1 ? named[0] : undefined;
+		const single = named.length === 1 ? named[0] : undefined;
 		const pageOf = (v: Json): Json =>
-			lone !== undefined && Predicate.isObject(v) && !EffectArray.isArray<typeof v>(v)
-				? (v[lone] ?? null)
+			single !== undefined && Predicate.isObject(v) && !EffectArray.isArray<typeof v>(v)
+				? (v[single] ?? null)
 				: v;
-		const wrap = (v: Json): Json => (lone === undefined ? v : { [lone]: v });
+		const wrap = (v: Json): Json => (single === undefined ? v : { [single]: v });
 		return yield* Effect.gen(function* () {
 			let out = bounded(pageOf(yield* answer(request)), keep);
 			const clipped = Predicate.isObject(out.value) ? out.value['clipped'] : undefined;
 			// rows dropped for size: re-read exactly the rows shown, so the cursor pages on from the last of them
-			const root = lone === undefined ? undefined : request[lone];
+			const root = single === undefined ? undefined : request[single];
 			let limit = root?.limit ?? 0;
 			while (
-				lone !== undefined &&
+				single !== undefined &&
 				root?.aggregate === undefined &&
 				out.kept !== null &&
 				out.kept > 0 &&
 				out.kept < limit
 			) {
 				limit = out.kept;
-				out = bounded(pageOf(yield* answer({ ...request, [lone]: { ...root, limit } })), keep);
+				out = bounded(pageOf(yield* answer({ ...request, [single]: { ...root, limit } })), keep);
 			}
 			return {
-				result: wrap(
-					clipped === undefined ||
-						!Predicate.isObject(out.value) ||
-						EffectArray.isArray<typeof out.value>(out.value)
-						? out.value
-						: { ...out.value, clipped }
+				result: uncursored(
+					wrap(
+						clipped === undefined ||
+							!Predicate.isObject(out.value) ||
+							EffectArray.isArray<typeof out.value>(out.value)
+							? out.value
+							: { ...out.value, clipped }
+					)
 				),
 				bounded: true
 			} as const;
@@ -788,7 +808,6 @@ Options (all optional)
 - orderBy: "<field>", { "<field>": "asc" | "desc" }, or a list of these.
 - limit: how many rows. A root returns ${READ_PAGE} unless you set it (at most 10,000); a many-layer returns up to 10,000 per root row, so set one.
 - aggregate: { "count": true, "sum" | "avg" | "min" | "max": ["<field>"], "by": "<field>" | { "month": "<date field>" } }: totals instead of rows.
-- after (root only): the "next" cursor a previous page of this same request returned.
 
 Long values are clipped; read_output reads the rest.
 

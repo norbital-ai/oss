@@ -251,7 +251,7 @@ export const NUDGE = {
 		'Your last reply was cut off at 60 seconds while you were still writing a tool call. Make smaller calls: write or edit a large file in several parts.',
 	truncated: (calls: readonly string[]) =>
 		`Some results were too large and you saw only part of them: ${calls.join(', ')}. Do not treat them as complete. ` +
-		"To see the rest, call read_output with that call id and the offset to continue from; or narrow the read (a tighter where, a smaller limit) or page it with after: the result's next cursor."
+		'To see the rest, call read_output with that call id and the offset to continue from; or narrow the read (a tighter where, a smaller limit, fewer layers).'
 } as const;
 /** Rule 59: fixed replies; internal error text never reaches a sender. */
 export const FIXED = {

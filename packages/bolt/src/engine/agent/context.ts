@@ -101,7 +101,7 @@ export function bounded(
 			kept: kept.length,
 			value: {
 				...(wrap(kept) as object),
-				clipped: `showing ${kept.length} of ${rows.length} rows; narrow the read or page on`,
+				clipped: `showing ${kept.length} of ${rows.length} rows; narrow the read (a tighter where, a smaller limit, fewer layers) for the rest`,
 				...(heaviest === undefined ? {} : { heaviestColumns: heaviest })
 			}
 		};
@@ -125,7 +125,7 @@ const kernel = (
 How to work:
 1. Be decisive. Think once, briefly, then call tools; act as soon as you know enough. The brief, the tool schemas and this conversation's earlier results are already yours: never look them up again.
 2. Use the fewest calls. Calls that do not depend on each other go in the same step. One read answers a question: root it at the model whose rows you want, pick them with its where, and add the layers you need. One act carries a whole change as a batch, related rows inside their root row.
-3. Learn a shape only when it is unknown: if a model's fields or write input are not clear from the brief, the tools or earlier results, ${has('workspace_search') ? 'read its src/data/model/<model>/+model.ts once (workspace_list the folder for its name)' : 'ask the person'}. For an unfamiliar kind of task, the skill tool's records and ingest skills give the procedure. Never guess a field, operator or relationship, and never learn by trying writes.
+3. Know a model before you call it: read and its writes (create, update, delete, upsert) take that model's exact field names, kinds, relationships, layers and write columns. Unless this conversation already shows them, ${has('workspace_search') ? 'read its src/data/model/<model>/+model.ts once (workspace_list the folder for its name), in the same step as your other first lookups' : 'ask the person rather than guess them'}. A request that touches no model needs none of this. For an unfamiliar kind of task, the skill tool's records and ingest skills give the procedure. Never guess a field, operator or relationship, and never learn by trying writes.
 4. Resolve before you write: every referenced record with one bounded read. A missing one is created inline only where the write's input declares that nested create, else ask first; an optional link still missing after one exact and one focused lookup is left out.
 5. An empty read earns one different key, then a question to the person. A failed call is never repeated unchanged: change what its error names, or tell the person what blocks you.
 6. Count, total or compare with one aggregate read, never by paging rows.
@@ -465,6 +465,8 @@ export function modelTranscript(
 	return out;
 }
 
+/** How the closing note opens: providers tell it from a person's message by it. */
+export const STATE_NOTE = '[conversation state';
 /** The conversation's state for this step (plan, goals, mode), sent as a closing note, never in the system prompt. */
 export function state(
 	conv: Pick<ConversationRow, 'plan' | 'goals'>,
@@ -484,5 +486,5 @@ export function state(
 	// the note closes every step, after tool results too: it says it is no message, so a model carries on instead of restarting
 	return parts.length === 0
 		? undefined
-		: `[conversation state: facts for this step, not a message from anyone; carry on with the task in hand]\n${parts.join('\n\n')}`;
+		: `${STATE_NOTE}: facts for this step, not a message from anyone; carry on with the task in hand]\n${parts.join('\n\n')}`;
 }
