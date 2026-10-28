@@ -1,6 +1,6 @@
 {
 	"name": "@norbital-ai/providers",
-	"version": "0.0.1",
+	"version": "0.0.2",
 	"description": "Providers behind Bolt's driver kinds and host ports (Twilio, Resend, Sinch, WhatsApp Web, Telegram, Slack, Discord, WeChat, IMAP + SMTP mailboxes, Google Calendar), registered by a host.",
 	"type": "module",
 	"sideEffects": false,
@@ -37,9 +37,9 @@
 		"@norbital-ai/bolt": "workspace:*",
 		"@norbital-ai/std": "workspace:*",
 		"effect": "catalog:",
-		"imapflow": "2.1.2",
-		"nodemailer": "10.0.12",
-		"postal-mime": "4.0.0"
+		"imapflow": "2.9.1",
+		"nodemailer": "10.2.1",
+		"postal-mime": "4.1.4"
 	},
 	"optionalDependencies": {
 		"@whiskeysockets/baileys": "7.0.0-rc14"
@@ -47,7 +47,7 @@
 	"devDependencies": {
 		"@effect/platform-node": "catalog:",
 		"@effect/vitest": "catalog:",
-		"@types/node": "^26.2.0",
+		"@types/node": "^26.6.5",
 		"typescript": "catalog:",
 		"vitest": "5.0.5"
 	},

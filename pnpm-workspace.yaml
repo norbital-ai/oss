@@ -6,13 +6,13 @@ catalog:
   '@effect/platform-node-shared': 4.0.6
   '@effect/vitest': 4.0.6
   effect: 4.0.6
-  '@iconify/svelte': ^5.2.2
+  '@iconify/svelte': ^5.2.3
   runed: ^0.37.1
-  svelte: ^5.57.1
+  svelte: ^5.57.3
   # TS 7 breaks svelte2tsx / @sveltejs/package (fileExists), and doctor uses the compiler API that the
   # Go port's JS surface does not carry. Stay on latest 6.x; the override below holds the same pin.
   typescript: 6.0.3
-  vite: ^8.2.2
+  vite: ^8.3.5
 
 # Migrated from .npmrc / package.json#pnpm for pnpm 11.
 engineStrict: true
