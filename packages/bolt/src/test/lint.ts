@@ -61,6 +61,7 @@ const SKIP = new Set([
 	'fixtures',
 	'.norbital',
 	'.svelte-kit',
+	'.tenant_substrate',
 	'.git'
 ]);
 /** A committed snapshot or screenshot directory: what a snapshot assertion compares against. */

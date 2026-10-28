@@ -6,7 +6,9 @@
 // its own digest in `release.json`. Every host activates the bundle through `readArtifact`.
 import { Effect, FileSystem, Option, Path, Schema } from 'effect';
 import { TemplateManifest } from '../../protocol/schema.ts';
-import { dirname, join } from 'node:path';
+import { constants } from 'node:fs';
+import { cp } from 'node:fs/promises';
+import { dirname, join, relative, sep } from 'node:path';
 import { SKILL_FILE, type EngineManifest } from '../../engine/manifest.ts';
 import type { GuestProgram } from '../../engine/guest/runner.ts';
 import { fingerprint, plan, schemaSlice } from '../../engine/schema/plan.ts';
@@ -32,38 +34,28 @@ const mtime = (stat: FileSystem.File.Info) =>
 		() => 0
 	);
 /**
- * Mirrors `from` into `to`: copies each file `take` admits (a directory it refuses is not entered) unless its copy is
- * as large and no older, and removes the files `from` no longer has. A copy left alone keeps its mtime, so
- * `memoTreeHash` does not read it again.
+ * `from`'s tree as clones into `to`, replaced whole: each path `take` admits (a directory it refuses is not entered),
+ * symbolic links followed. Timestamps are kept, so `memoTreeHash` reads only the files that changed.
  */
-const mirror = Effect.fn('bolt.mirror')(function* (
+export const cloneTree = Effect.fn('bolt.cloneTree')(function* (
 	from: string,
 	to: string,
 	take: (file: string) => boolean = () => true
 ) {
 	const fs = yield* FileSystem.FileSystem;
-	const wanted = new Set<string>(),
-		dirs = (yield* fs.exists(from)) ? [''] : [];
-	for (let dir = dirs.pop(); dir !== undefined; dir = dirs.pop())
-		for (const name of yield* fs.readDirectory(join(from, dir))) {
-			const file = dir === '' ? name : `${dir}/${name}`;
-			if (!take(file)) continue;
-			const source = yield* fs.stat(join(from, file));
-			if (source.type === 'Directory') dirs.push(file);
-			if (source.type !== 'File') continue;
-			wanted.add(file);
-			const copy = yield* Effect.option(fs.stat(join(to, file)));
-			if (
-				Option.isSome(copy) &&
-				copy.value.size === source.size &&
-				mtime(copy.value) >= mtime(source)
-			)
-				continue;
-			yield* fs.makeDirectory(dirname(join(to, file)), { recursive: true });
-			yield* fs.copyFile(join(from, file), join(to, file));
-		}
-	for (const file of yield* tree(to))
-		if (!wanted.has(file)) yield* fs.remove(join(to, file));
+	yield* fs.remove(to, { recursive: true, force: true });
+	if (!(yield* fs.exists(from))) return;
+	yield* Effect.tryPromise({
+		try: () =>
+			cp(from, to, {
+				recursive: true,
+				dereference: true,
+				preserveTimestamps: true,
+				mode: constants.COPYFILE_FICLONE,
+				filter: (at) => at === from || take(relative(from, at).split(sep).join('/'))
+			}),
+		catch: (cause) => new BuildError({ cause })
+	});
 });
 // ponytail: keyed by millisecond mtime, so a same-size rewrite within one millisecond keeps its old digest (a build
 // writes a file once); entries for deleted files stay until the process exits
@@ -119,7 +111,7 @@ const TYPE_SETUP = [
 	'.norbital/bolt.d.ts'
 ] as const;
 const Graph = Schema.Struct({ spa: Schema.Array(Schema.String), pages: Schema.Array(Schema.String) });
-/** Writes the compiled bundle into `out` (replaced whole). */
+/** Writes the compiled bundle into `out`: empty for a full build, a clone of the last bundle for a watch's rebuild. */
 export const writeArtifact = Effect.fn('bolt.writeArtifact')(function* (
 	root: string,
 	c: { manifest: EngineManifest; guest: GuestProgram },
@@ -134,9 +126,10 @@ export const writeArtifact = Effect.fn('bolt.writeArtifact')(function* (
 ) {
 	const fs = yield* FileSystem.FileSystem;
 	const meta = yield* templateMeta(root);
-	const keyFile = join(dirname(out), 'cache', 'client.key'),
-		graphFile = join(dirname(out), 'cache', 'client-graph.json'),
-		kept = join(dirname(out), 'cache', 'client-kept');
+	const cache = join(root, '.norbital', 'cache'),
+		keyFile = join(cache, 'client.key'),
+		graphFile = join(cache, 'client-graph.json'),
+		kept = join(cache, 'client-kept');
 	// what the generated entries are made of: the manifest parts they read and every discovered file's path
 	const clientKey = sha256Hex(
 		JSON.stringify([
@@ -178,8 +171,8 @@ export const writeArtifact = Effect.fn('bolt.writeArtifact')(function* (
 					yield* fs.readFileString(join(out, 'artifact.json'))
 				)
 			: undefined;
-	// a build starts from an empty bundle; a watch's rebuild rewrites it in place, so a file it leaves alone keeps its
-	// mtime and its remembered digest
+	// a build starts from an empty bundle; a watch's rebuild edits a clone of the last one, so a file it leaves alone
+	// keeps its mtime and its remembered digest
 	if (changed === undefined) yield* fs.remove(out, { recursive: true, force: true });
 	else if (previous === undefined) {
 		// the platform layer is the same bytes for every build on this Bolt: a rebuilt client keeps it (`buildClient`)
@@ -209,7 +202,7 @@ export const writeArtifact = Effect.fn('bolt.writeArtifact')(function* (
 		yield* fs.writeFile(join(out, 'guest-assets', hash), bytes);
 	}
 	yield* fs.writeFileString(join(out, 'schema.sql'), schemaSql(c.manifest));
-	yield* mirror(join(root, 'migrations'), join(out, 'migrations'));
+	yield* cloneTree(join(root, 'migrations'), join(out, 'migrations'));
 	const pages: Record<string, ArtifactJson['pages'][string]> = {};
 	let client: ArtifactJson['client'];
 	if (previous !== undefined) {
@@ -242,7 +235,7 @@ export const writeArtifact = Effect.fn('bolt.writeArtifact')(function* (
 		);
 		yield* fs.writeFileString(keyFile, clientKey);
 	}
-	yield* mirror(join(root, 'assets'), join(out, 'assets'));
+	yield* cloneTree(join(root, 'assets'), join(out, 'assets'));
 	// each skill's folder as its tree: `+skill.md` is written as its `SKILL.md`
 	yield* fs.remove(join(out, 'skills'), { recursive: true, force: true });
 	for (const f of files.filter((x) => x.role === 'skill'))
@@ -252,8 +245,8 @@ export const writeArtifact = Effect.fn('bolt.writeArtifact')(function* (
 			yield* fs.copyFile(join(root, dirname(f.path), file === SKILL_FILE ? '+skill.md' : file), to);
 		}
 	if (!served)
-		yield* mirror(join(root, 'src'), join(out, 'workspace', 'src'), (file) => !TEST.test(file));
-	yield* mirror(join(root, 'migrations'), join(out, 'workspace', 'migrations'));
+		yield* cloneTree(join(root, 'src'), join(out, 'workspace', 'src'), (file) => !TEST.test(file));
+	yield* cloneTree(join(root, 'migrations'), join(out, 'workspace', 'migrations'));
 	// the type setup `check` wrote beside it: a host's language tool type-checks the release as built
 	for (const file of TYPE_SETUP)
 		if (yield* fs.exists(join(root, file))) {
@@ -300,14 +293,18 @@ const NOT_SOURCE = new Set([
 	'.DS_Store',
 	HOST_FILE
 ]);
-/** The template's authored tree without tests and its host file, the source Studio edits, mirrored into `out`. */
+/** The template's authored tree without tests and its host file, the source Studio edits, cloned into `out`. */
 export const writeSource = Effect.fn('bolt.writeSource')(function* (root: string, out: string) {
-	yield* mirror(
-		root,
-		out,
-		(file) =>
-			!(file.includes('/') ? file.endsWith('/.DS_Store') : NOT_SOURCE.has(file)) && !TEST.test(file)
-	);
+	const fs = yield* FileSystem.FileSystem;
+	yield* fs.remove(out, { recursive: true, force: true });
+	// entry by entry: `out` lies inside `root` (under `.norbital/`), and cp refuses to copy a tree into itself
+	for (const entry of yield* fs.readDirectory(root))
+		if (!NOT_SOURCE.has(entry) && !TEST.test(entry))
+			yield* cloneTree(
+				join(root, entry),
+				join(out, entry),
+				(file) => !file.endsWith('.DS_Store') && !TEST.test(`${entry}/${file}`)
+			);
 	return yield* memoTreeHash(out);
 });
 

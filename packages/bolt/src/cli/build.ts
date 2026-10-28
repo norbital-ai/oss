@@ -3,6 +3,7 @@ import { Effect, FileSystem, Path, Queue, Schema, Stream } from 'effect';
 import { watch } from 'node:fs';
 import { createHash } from 'node:crypto';
 import {
+	cloneTree,
 	memoTreeHash,
 	ReleaseJson,
 	templateMeta,
@@ -49,8 +50,12 @@ const seedInputs = Effect.fn('bolt.seedInputs')(function* (root: string, schema:
  * authoring diagnostics and type check are `bolt check`, and the audit is doctor's. Any build reuses an unchanged
  * base pack, and an unchanged migration history skips its replay. A watch's rebuild (`changed`) skips the guest's
  * terser pass and takes from its last good build what its edits leave unchanged: the compiled declarations, the
- * platform layer, the seed packs and every unrewritten file's digest. It writes
- * `.norbital/{bundle,source,seed}` and, last, `.norbital/release.json` naming their digests.
+ * platform layer, the seed packs and every unrewritten file's digest.
+ *
+ * A build is published atomically: each part (`bundle`, `source`, `seed`) is assembled under `.norbital/.next/` (a
+ * watch's rebuild starts from clones of the live parts) and renamed into place, then `release.json` names their digests,
+ * replaced whole and written last. A reader that resolves `release.json` and then reads its parts either sees that
+ * build or finds a part whose digest no longer matches (a later build swapped it in), and reads again.
  */
 export const buildWorkspace = Effect.fn('bolt.buildWorkspace')(function* (
 	dir: string,
@@ -69,7 +74,9 @@ export const buildWorkspace = Effect.fn('bolt.buildWorkspace')(function* (
 		path = yield* Path.Path,
 		root = yield* fs.realPath(dir);
 	const { files } = yield* discover(root),
-		out = path.join(root, '.norbital', 'bundle'),
+		norbital = path.join(root, '.norbital'),
+		next = path.join(norbital, '.next'),
+		out = path.join(next, 'bundle'),
 		{ previous, changed } = options,
 		edited = (test: (file: string) => boolean) =>
 			previous === undefined || changed === undefined || changed.some(test);
@@ -90,23 +97,29 @@ export const buildWorkspace = Effect.fn('bolt.buildWorkspace')(function* (
 							: Effect.succeed({ manifest, guest })
 					)
 				);
+	yield* fs.remove(next, { recursive: true, force: true });
+	if (changed !== undefined) yield* cloneTree(path.join(norbital, 'bundle'), out);
 	const artifact = yield* writeArtifact(root, compiled, files, out, {
 		...(changed === undefined ? {} : { changed }),
 		...(options.spaServed === undefined ? {} : { spaServed: options.spaServed })
 	});
-	const seedOut = path.join(root, '.norbital', 'seed');
+	const seedOut = path.join(next, 'seed');
 	// the packs are a function of the seed tree, the schema and the lockfile (which a watch does not see change)
 	const seeded =
 		previous !== undefined &&
 		previous.artifact.artifact.schema === artifact.schema &&
 		!edited((file) => file.startsWith('seed/'))
 			? previous
-			: yield* seedWorkspace(root, compiled.manifest, artifact.schema, seedOut, options.bank);
+			: yield* cloneTree(path.join(norbital, 'seed'), seedOut).pipe(
+					Effect.andThen(
+						seedWorkspace(root, compiled.manifest, artifact.schema, seedOut, options.bank)
+					)
+				);
 	const release: ReleaseJson = {
 		format: 1,
 		handle: artifact.handle,
 		bundle: yield* memoTreeHash(out),
-		source: yield* writeSource(root, path.join(root, '.norbital', 'source')),
+		source: yield* writeSource(root, path.join(next, 'source')),
 		seed:
 			seeded === previous
 				? previous.release.seed
@@ -129,13 +142,27 @@ export const buildWorkspace = Effect.fn('bolt.buildWorkspace')(function* (
 						).pipe(Effect.map((entries) => entries.flat()))
 					)
 	};
-	// written last: a reader that finds it finds every part it names
+	// each part swapped in whole, never rewritten in place; the old one is removed once nothing names it
+	const old = path.join(norbital, '.old');
+	yield* fs.remove(old, { recursive: true, force: true });
+	yield* fs.makeDirectory(old);
+	for (const part of seeded === previous ? ['bundle', 'source'] : ['bundle', 'source', 'seed']) {
+		const live = path.join(norbital, part);
+		if (yield* fs.exists(live)) yield* fs.rename(live, path.join(old, part));
+		yield* fs.rename(path.join(next, part), live);
+	}
+	// replaced whole, last: a reader that finds it finds every part it names
+	const record = path.join(norbital, 'release.json');
 	yield* fs.writeFileString(
-		path.join(root, '.norbital', 'release.json'),
+		`${record}.next`,
 		`${JSON.stringify(Schema.encodeSync(ReleaseJson)(release), null, '\t')}\n`
 	);
+	yield* fs.rename(`${record}.next`, record);
+	yield* fs.remove(old, { recursive: true });
+	yield* fs.remove(next, { recursive: true });
+	const bundle = path.join(norbital, 'bundle');
 	options.log?.(
-		`built ${artifact.handle} ${artifact.hash.slice(0, 12)} (schema ${artifact.schema.slice(0, 12)}) → ${out}`
+		`built ${artifact.handle} ${artifact.hash.slice(0, 12)} (schema ${artifact.schema.slice(0, 12)}) → ${bundle}`
 	);
 	if (seeded !== previous)
 		for (const [name, pack] of Object.entries(seeded.packs))
@@ -148,7 +175,7 @@ export const buildWorkspace = Effect.fn('bolt.buildWorkspace')(function* (
 			);
 	return {
 		// its trees were hashed as they were written
-		artifact: yield* readArtifact(out, [CONTRACT], 'executed'),
+		artifact: yield* readArtifact(bundle, [CONTRACT], 'executed'),
 		files,
 		packs: seeded.packs,
 		release,
