@@ -22,7 +22,7 @@ export default model('sys_envoy', {
 		triage: { kind: 'bool', default: false },
 		dm: { kind: 'enum', values: ['union', 'envoy'], default: 'union' },
 		active: { kind: 'bool', default: true },
-		created_at: { kind: 'instant', default: { now: '' } },
+		created_at: { kind: 'instant', default: { var: 'now' } },
 		revision: { kind: 'int', default: 1 }
 	},
 	table: { primary: 'uuid' },

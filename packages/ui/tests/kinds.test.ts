@@ -168,7 +168,7 @@ test('structured problems carry decode paths; unions check the chosen arm', () =
 
 test('initial values: literal defaults, state initial, empty structures; clock defaults stay to the host', () => {
 	assert.equal(k.initial({ kind: 'int', default: 3 }), 3);
-	assert.equal(k.initial({ kind: 'date', default: { today: '+0d' } }), null);
+	assert.equal(k.initial({ kind: 'date', default: { var: 'today' } }), null);
 	assert.equal(k.initial({ kind: 'state', initial: 'draft', states: { draft: {} } }), 'draft');
 	assert.deepEqual(
 		k.initial({

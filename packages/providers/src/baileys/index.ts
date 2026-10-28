@@ -1620,8 +1620,11 @@ export const baileysSocket: WaOpen = async (c) => {
 					);
 				}
 			}
+			// a photo carries no file name: its message id keeps every one distinct (a name alone does not)
+			const key = Predicate.isObject(message) ? message['key'] : undefined;
+			const id = Predicate.isObject(key) && typeof key['id'] === 'string' ? key['id'] : undefined;
 			return {
-				name: m.fileName ?? `whatsapp.${mime.split('/')[1] ?? 'bin'}`,
+				name: m.fileName ?? `whatsapp${id === undefined ? '' : `-${id}`}.${mime.split('/')[1] ?? 'bin'}`,
 				mime,
 				bytes: data?.byteLength ?? declared,
 				data

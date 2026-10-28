@@ -1,17 +1,16 @@
 /// <reference types="node" />
-// The package entries of §3.3.10 (L-BOLT-940, L-BOLT-1034): `/protocol` (the 13 C8/C9 types), `/type-service`
-// (`TypeService`, its `layer`) and `/isolate-globals` (`IsolateGlobals`) are exported, each built from its source.
+// The package entries of §3.3.10 (L-BOLT-940, L-BOLT-1034): `/protocol` (the 13 C8/C9 types) and `/isolate-globals`
+// (`IsolateGlobals`) are exported, each built from its source.
 import { existsSync, readFileSync } from 'node:fs';
 import { expect, it } from 'vitest';
 import type * as Protocol from '../src/protocol/index.ts';
 import type { IsolateGlobals } from '../src/engine/guest/globals.ts';
-import * as TypeService from '../src/type-service/index.ts';
 
 const pkg = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as {
 	exports: Record<string, { types: string; default: string }>;
 };
 
-it('exports the protocol, type-service and isolate-globals entries over existing sources', () => {
+it('exports the protocol and isolate-globals entries over existing sources', () => {
 	expect(Object.keys(pkg.exports)).toEqual([
 		'.',
 		'./errors',
@@ -24,7 +23,6 @@ it('exports the protocol, type-service and isolate-globals entries over existing
 		'./host-api',
 		'./cell',
 		'./node',
-		'./type-service',
 		'./docs',
 		'./isolate-globals',
 		'./test',
@@ -39,12 +37,6 @@ it('exports the protocol, type-service and isolate-globals entries over existing
 			entry
 		).toBe(true);
 	}
-	expect(Object.keys(TypeService).toSorted()).toEqual([
-		'TypeService',
-		'TypeServiceError',
-		'layer',
-		'make'
-	]);
 });
 
 it('the protocol entry is exactly the 13 wire and artifact types', () => {

@@ -28,7 +28,7 @@ is<Eq<'read' extends keyof Grant<'notices'> ? 1 : 0, 1>>();
 is<Eq<TeamName, 'finance' | 'sales'>>();
 
 // ── valid: today's template behaviour as literals ──
-const ownOrders = { owner: { eq: { actor: 'id' } } } as const;
+const ownOrders = { owner: { eq: { var: 'requestor.id' } } } as const;
 export const salesRep = policy({
 	description: 'Sell to our customers',
 	grants: {
@@ -89,12 +89,12 @@ export const salesRep = policy({
 		sites: {
 			read: {
 				sites: {
-					where: { customer: { in: { actor: { scopes: 'sales_rep' } } } },
+					where: { customer: { in: { var: 'requestor.scopes.sales_rep' } } },
 					fields: ['name', 'open']
 				}
 			}
 		},
-		sys_user: { read: { team: { in: { actor: 'teamTree' } } }, fields: ['name', 'email'] }
+		sys_user: { read: { team: { in: { var: 'requestor.teamTree' } } }, fields: ['name', 'email'] }
 	},
 	automations: ['nightly', 'products.sync.ledger', 'orders_submit', 'orders_renote'],
 	capabilities: { apps: ['sales'], tools: ['browser'], mcp: ['erp'], skills: ['quoting'] },
@@ -157,7 +157,7 @@ policy({ description: 'x', grants: { sites: { read: { sites: { fields: ['zone'] 
 policy({ description: 'x', grants: { orders: { read: { orders: { where: { nope: { eq: 1 } } } } } } });
 // @ts-expect-error A3b a bare `Where` read shorthand is an identity grant's only
 // prettier-ignore
-policy({ description: 'x', grants: { orders: { read: { owner: { eq: { actor: 'id' } } } } } });
+policy({ description: 'x', grants: { orders: { read: { owner: { eq: { var: 'requestor.id' } } } } } });
 // @ts-expect-error A4 a create column outside the declared create columns
 // prettier-ignore
 policy({ description: 'x', grants: { orders: { create: { columns: { orders: ['status'] } } } } });

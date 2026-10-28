@@ -1,7 +1,8 @@
 import { randomUUID } from 'node:crypto';
+import { rmSync } from 'node:fs';
 import { join } from 'node:path';
 import * as NodeServices from '@effect/platform-node/NodeServices';
-import { describe, expect, it } from '@effect/vitest';
+import { afterAll, beforeAll, describe, expect, it } from '@effect/vitest';
 import { vi } from 'vitest';
 import { Effect, FileSystem, Schema } from 'effect';
 import { APPLIED, AppliedRow, checksumOf, type MigrationFile } from '@norbital-ai/store';
@@ -18,6 +19,7 @@ import { PostgresDb, type PgClient } from '../src/node/db/postgres.ts';
 import type { TenantDbShape } from '../src/engine/db/tenant-db.ts';
 import type { EngineManifest } from '../src/engine/manifest.ts';
 import { SYSTEM } from '../src/system/index.ts';
+import { impactLines } from '../src/protocol/migration-impact.ts';
 import { manifest } from './engine-fixture.ts';
 
 const initial: EngineManifest = {
@@ -78,6 +80,84 @@ const root = Effect.gen(function* () {
 		fs.remove(directory, { recursive: true, force: true }).pipe(Effect.orDie)
 	);
 });
+// Generated once per file: each test copies the exact tree `prepareMigrations` would have written in its own folder.
+let fixtureRoot: string | undefined;
+afterAll(() => {
+	if (fixtureRoot !== undefined) rmSync(fixtureRoot, { recursive: true, force: true });
+});
+const fixtures = Effect.runSync(
+	Effect.cached(
+		Effect.gen(function* () {
+			const fs = yield* FileSystem.FileSystem;
+			const root = yield* scratchPath(`migrations-fixture-${randomUUID()}`);
+			fixtureRoot = root;
+			const at = { root, initial: join(root, 'initial'), extended: join(root, 'extended') };
+			yield* fs.makeDirectory(at.initial, { recursive: true });
+			yield* prepareMigrations(at.initial, initial, 'generate');
+			yield* fs.copy(at.initial, at.extended);
+			yield* prepareMigrations(at.extended, extended, 'generate');
+			// The database a fresh PGlite reaches by applying the initial history.
+			const applied = yield* Effect.scoped(
+				Effect.gen(function* () {
+					const pg = yield* PgliteDb.open();
+					yield* applyMigrations(
+						PgliteDb.make(pg),
+						initial,
+						yield* readMigrations(join(at.initial, 'migrations'))
+					);
+					return yield* Effect.promise(() => pg.dumpDataDir('none'));
+				})
+			);
+			return { ...at, applied };
+		})
+	)
+);
+// Built outside any one test's time budget.
+beforeAll(() =>
+	Effect.runPromise(
+		fixtures.pipe(Effect.asVoid, Effect.provide(NodeServices.layer), Effect.provide(Pristine.layer))
+	)
+);
+/** `extended` squashed (`first_release`), extended by `ranked`, squashed again and verified; each stage's bundle. */
+const twiceSquashed = Effect.runSync(
+	Effect.cached(
+		Effect.gen(function* () {
+			const fs = yield* FileSystem.FileSystem;
+			const at = yield* fixtures;
+			const directory = join(at.root, 'squashed');
+			const source = join(directory, 'migrations');
+			yield* fs.copy(at.extended, directory);
+			const first = yield* readMigrations(join(at.initial, 'migrations'));
+			const originals = yield* readMigrations(source);
+			yield* prepareMigrations(directory, extended, 'generate', { squash: 'first_release' });
+			const squashed = yield* readMigrations(source);
+			yield* prepareMigrations(directory, ranked, 'generate');
+			const withSuffix = yield* readMigrations(source);
+			yield* prepareMigrations(directory, ranked, 'generate', { squash: 'second_release' });
+			yield* prepareMigrations(directory, ranked, 'verify');
+			return {
+				source,
+				first,
+				originals,
+				squashed,
+				withSuffix,
+				final: yield* readMigrations(source)
+			};
+		})
+	)
+);
+/** A scope-owned folder holding the generated `initial` or `initial`+`extended` history. */
+const generated = Effect.fn('test.generatedMigrations')(function* (from: 'initial' | 'extended') {
+	const directory = yield* root;
+	yield* (yield* FileSystem.FileSystem).copy((yield* fixtures)[from], directory, {
+		overwrite: true
+	});
+	return directory;
+});
+/** A scope-owned database with the initial history applied. */
+const appliedDb = Effect.gen(function* () {
+	return PgliteDb.make(yield* PgliteDb.open((yield* fixtures).applied));
+});
 const sourceTree = Effect.fn('test.migrationSourceTree')(function* (directory: string) {
 	const fs = yield* FileSystem.FileSystem;
 	const names = (yield* fs.readDirectory(directory, { recursive: true })).sort();
@@ -99,18 +179,14 @@ describe('committed workspace migrations', () => {
 		() =>
 			Effect.scoped(
 				Effect.gen(function* () {
-					const directory = yield* root;
+					const directory = yield* generated('extended');
 					const fs = yield* FileSystem.FileSystem;
 					const source = join(directory, 'migrations');
-					yield* prepareMigrations(directory, initial, 'generate');
-					const first = yield* readMigrations(source);
-					const existing = PgliteDb.make(yield* PgliteDb.open());
-					yield* applyMigrations(existing, initial, first);
+					const existing = yield* appliedDb;
 					yield* existing.write({
 						text: 'insert into entry (id,name) values ($1,$2)',
 						params: [ID, 'Kept']
 					});
-					yield* prepareMigrations(directory, extended, 'generate');
 					const tail = '0003_import.sql';
 					const sql =
 						"do $$ begin insert into entry(id,name) values ('22222222-2222-2222-2222-222222222222','Imported'); end $$;\n";
@@ -141,6 +217,51 @@ describe('committed workspace migrations', () => {
 					).toEqual(bundle.files.map((file) => file.name));
 				})
 			).pipe(Effect.provide(NodeServices.layer), Effect.provide(Pristine.layer))
+	);
+	it.live('answers each step’s rows and the migrate’s duration', () =>
+		Effect.scoped(
+			Effect.gen(function* () {
+				const directory = yield* generated('extended');
+				const fs = yield* FileSystem.FileSystem;
+				const source = join(directory, 'migrations');
+				const db = yield* appliedDb;
+				for (const params of [
+					[ID, 'Kept'],
+					['22222222-2222-2222-2222-222222222222', 'Other']
+				])
+					yield* db.write({ text: 'insert into entry (id,name) values ($1,$2)', params });
+				yield* fs.writeFileString(
+					join(source, '0003_refill.sql'),
+					[
+						'-- step fill:entry.note (backfill)',
+						"update entry set note = 'kept' where name = 'Kept';",
+						'-- step drop:column:entry.note (destructive)',
+						'-- accept: drop:column:entry.note',
+						'alter table "entry" drop column "note";',
+						'alter table "entry" add column "note" text;',
+						''
+					].join('\n')
+				);
+				yield* prepareMigrations(directory, extended, 'generate');
+				const impact = yield* applyMigrations(db, extended, yield* readMigrations(source));
+				expect(impact.durationMs).toBeGreaterThanOrEqual(0);
+				expect(impact.steps.filter((step) => step.hazard !== 'additive')).toEqual([
+					{ id: 'fill:entry.note', hazard: 'backfill', rows: 1, summary: 'Fills note on 1 entry' },
+					{
+						id: 'drop:column:entry.note',
+						hazard: 'destructive',
+						rows: 1,
+						summary: 'Drops column entry.note — 1 row with a value'
+					}
+				]);
+				expect(impactLines(impact).at(-1)).toBe(
+					'Expected downtime about 1 s (measured on the preview)'
+				);
+				expect((yield* applyMigrations(db, extended, yield* readMigrations(source))).steps).toEqual(
+					[]
+				);
+			})
+		).pipe(Effect.provide(NodeServices.layer), Effect.provide(Pristine.layer))
 	);
 	it.live(
 		'replays and applies the complete blank engine schema, including builtin unique indexes',
@@ -225,13 +346,12 @@ describe('committed workspace migrations', () => {
 	it.live('generates editable source, verifies its lock, and applies a file exactly once', () =>
 		Effect.scoped(
 			Effect.gen(function* () {
-				const directory = yield* root;
+				const directory = yield* generated('initial');
 				const fs = yield* FileSystem.FileSystem;
-				yield* prepareMigrations(directory, initial, 'generate');
 				const source = join(directory, 'migrations');
-				const generated = yield* readMigrations(source);
-				expect(generated.files.map((file) => file.name)).toEqual(['0001_initial.sql']);
-				const file = generated.files[0];
+				const bundled = yield* readMigrations(source);
+				expect(bundled.files.map((file) => file.name)).toEqual(['0001_initial.sql']);
+				const file = bundled.files[0];
 				if (file === undefined) return yield* Effect.die('initial migration missing');
 				expect(file.sql).toContain('-- hazard:');
 				const edited = `${file.sql}\ninsert into entry (id, name) values ('${ID}', 'Authored');\n`;
@@ -268,9 +388,8 @@ describe('committed workspace migrations', () => {
 		() =>
 			Effect.scoped(
 				Effect.gen(function* () {
-					const directory = yield* root;
+					const directory = yield* generated('initial');
 					const fs = yield* FileSystem.FileSystem;
-					yield* prepareMigrations(directory, initial, 'generate');
 					const source = join(directory, 'migrations');
 					const before = yield* readMigrations(source);
 					const lock = yield* fs.readFileString(join(source, 'migrations.lock.json'));
@@ -305,12 +424,9 @@ describe('committed workspace migrations', () => {
 	it.live('rechecks physical drift under the SQL batch lock before pending DDL', () =>
 		Effect.scoped(
 			Effect.gen(function* () {
-				const directory = yield* root;
-				yield* prepareMigrations(directory, initial, 'generate');
+				const directory = yield* generated('extended');
 				const source = join(directory, 'migrations');
-				const db = PgliteDb.make(yield* PgliteDb.open());
-				yield* applyMigrations(db, initial, yield* readMigrations(source));
-				yield* prepareMigrations(directory, extended, 'generate');
+				const db = yield* appliedDb;
 				let raced = false;
 				const concurrent: TenantDbShape = {
 					...db,
@@ -349,14 +465,11 @@ describe('committed workspace migrations', () => {
 	it.live('rolls back live-data-dependent schema drift and its ledger receipt', () =>
 		Effect.scoped(
 			Effect.gen(function* () {
-				const directory = yield* root;
+				const directory = yield* generated('extended');
 				const fs = yield* FileSystem.FileSystem;
-				yield* prepareMigrations(directory, initial, 'generate');
 				const source = join(directory, 'migrations');
-				const db = PgliteDb.make(yield* PgliteDb.open());
-				yield* applyMigrations(db, initial, yield* readMigrations(source));
+				const db = yield* appliedDb;
 				yield* db.write({ text: 'insert into entry(id,name) values($1,$2)', params: [ID, 'Live'] });
-				yield* prepareMigrations(directory, extended, 'generate');
 				const pending = (yield* readMigrations(source)).files[1];
 				if (pending === undefined) return yield* Effect.die('second migration missing');
 				yield* fs.writeFileString(
@@ -390,13 +503,11 @@ describe('committed workspace migrations', () => {
 	it.live('refuses changed applied text even after its source has been replay verified again', () =>
 		Effect.scoped(
 			Effect.gen(function* () {
-				const directory = yield* root;
+				const directory = yield* generated('initial');
 				const fs = yield* FileSystem.FileSystem;
-				yield* prepareMigrations(directory, initial, 'generate');
 				const source = join(directory, 'migrations');
 				const bundle = yield* readMigrations(source);
-				const db = PgliteDb.make(yield* PgliteDb.open());
-				yield* applyMigrations(db, initial, bundle);
+				const db = yield* appliedDb;
 				const file = bundle.files[0];
 				if (file === undefined) return yield* Effect.die('initial migration missing');
 				yield* fs.writeFileString(join(source, file.name), `${file.sql}\n-- edited after apply\n`);
@@ -421,10 +532,8 @@ describe('committed workspace migrations', () => {
 		() =>
 			Effect.scoped(
 				Effect.gen(function* () {
-					const directory = yield* root;
+					const directory = yield* generated('extended');
 					const fs = yield* FileSystem.FileSystem;
-					yield* prepareMigrations(directory, initial, 'generate');
-					yield* prepareMigrations(directory, extended, 'generate');
 					const source = join(directory, 'migrations');
 					const bundle = yield* readMigrations(source);
 					const file = bundle.files[1];
@@ -504,10 +613,8 @@ describe('committed workspace migrations', () => {
 		() =>
 			Effect.scoped(
 				Effect.gen(function* () {
-					const directory = yield* root;
+					const directory = yield* generated('extended');
 					const fs = yield* FileSystem.FileSystem;
-					yield* prepareMigrations(directory, initial, 'generate');
-					yield* prepareMigrations(directory, extended, 'generate');
 					const source = join(directory, 'migrations');
 					const body =
 						'create or replace function bolt_audit() returns trigger language plpgsql as $$ begin return null; end $$;';
@@ -540,9 +647,8 @@ describe('committed workspace migrations', () => {
 	it.live('rejects a changed physical proof without rewriting the edited lock', () =>
 		Effect.scoped(
 			Effect.gen(function* () {
-				const directory = yield* root;
+				const directory = yield* generated('initial');
 				const fs = yield* FileSystem.FileSystem;
-				yield* prepareMigrations(directory, initial, 'generate');
 				const source = join(directory, 'migrations');
 				const bundle = yield* readMigrations(source);
 				const file = bundle.files[0];
@@ -566,15 +672,13 @@ describe('committed workspace migrations', () => {
 		() =>
 			Effect.scoped(
 				Effect.gen(function* () {
-					const directory = yield* root;
+					const directory = yield* generated('initial');
 					const fs = yield* FileSystem.FileSystem;
-					yield* prepareMigrations(directory, initial, 'generate');
 					const source = join(directory, 'migrations');
 					const bundle = yield* readMigrations(source);
 					const file = bundle.files[0];
 					if (file === undefined) return yield* Effect.die('initial migration missing');
-					const db = PgliteDb.make(yield* PgliteDb.open());
-					yield* applyMigrations(db, initial, bundle);
+					const db = yield* appliedDb;
 					const sequence = yield* db.value(Schema.String, {
 						text: "select pg_get_serial_sequence('sys_message', 'seq')",
 						params: []
@@ -598,9 +702,8 @@ describe('committed workspace migrations', () => {
 	it.live('refuses verify mode squashing without changing source or its cached proof', () =>
 		Effect.scoped(
 			Effect.gen(function* () {
-				const directory = yield* root;
+				const directory = yield* generated('initial');
 				const fs = yield* FileSystem.FileSystem;
-				yield* prepareMigrations(directory, initial, 'generate');
 				yield* prepareMigrations(directory, initial, 'verify');
 				for (const cached of [true, false]) {
 					if (!cached) yield* fs.remove(join(directory, '.norbital', 'cache', 'migrations.sha256'));
@@ -644,9 +747,7 @@ describe('committed workspace migrations', () => {
 	it.live('keeps table-local trigger names and extra function overloads visible as drift', () =>
 		Effect.scoped(
 			Effect.gen(function* () {
-				const directory = yield* root;
-				yield* prepareMigrations(directory, initial, 'generate');
-				const bundle = yield* readMigrations(join(directory, 'migrations'));
+				const bundle = yield* readMigrations(join(yield* generated('initial'), 'migrations'));
 				const mutations = [
 					'create trigger bolt_notice_push after insert on entry referencing new table as fresh for each statement execute function bolt_notice_push()',
 					"create function bolt_assert(foo text) returns text language sql immutable as 'select foo'"
@@ -654,8 +755,7 @@ describe('committed workspace migrations', () => {
 				for (const sql of mutations)
 					yield* Effect.scoped(
 						Effect.gen(function* () {
-							const db = PgliteDb.make(yield* PgliteDb.open());
-							yield* applyMigrations(db, initial, bundle);
+							const db = yield* appliedDb;
 							yield* db.write({
 								text: 'insert into entry (id, name) values ($1, $2)',
 								params: [ID, 'Kept']
@@ -676,127 +776,109 @@ describe('committed workspace migrations', () => {
 	);
 
 	it.live(
-		'squashes fresh databases while original and older-baseline histories finish their exact suffix',
+		'squashes a released history twice, keeping every original file and archive byte-for-byte',
 		() =>
+			Effect.gen(function* () {
+				const fs = yield* FileSystem.FileSystem;
+				const { source, originals, squashed, withSuffix, final } = yield* twiceSquashed;
+				expect(squashed.squashes).toHaveLength(1);
+				expect(squashed.files).toEqual(originals.files);
+				expect(Object.keys(squashed.lock.files).sort()).toEqual(
+					originals.files.map((file) => file.name)
+				);
+				expect(withSuffix.files.at(-1)?.name).toBe('0003_schema.sql');
+				expect(final.squashes).toHaveLength(2);
+				expect(final.files).toEqual(withSuffix.files);
+				for (const receipt of final.lock.squashes ?? [])
+					for (const original of final.files.slice(0, receipt.replaces.length))
+						expect(
+							yield* fs.readFileString(join(source, 'archive', receipt.archive, original.name))
+						).toBe(original.sql);
+			}).pipe(Effect.provide(NodeServices.layer), Effect.provide(Pristine.layer))
+	);
+
+	for (const name of ['Fresh', 'Partial originals', 'Older baseline'] as const)
+		it.live(`after two squashes, the ${name.toLowerCase()} history finishes its exact suffix`, () =>
 			Effect.scoped(
 				Effect.gen(function* () {
-					const directory = yield* root;
-					const fs = yield* FileSystem.FileSystem;
-					const source = join(directory, 'migrations');
-					yield* prepareMigrations(directory, initial, 'generate');
-					const first = yield* readMigrations(source);
-					yield* prepareMigrations(directory, extended, 'generate');
-					const originals = yield* readMigrations(source);
-					yield* prepareMigrations(directory, extended, 'generate', { squash: 'first_release' });
-					const squashed = yield* readMigrations(source);
+					const { first, squashed, withSuffix, final } = yield* twiceSquashed;
 					const baseline = squashed.squashes[0];
-					if (baseline === undefined) return yield* Effect.die('first squash missing');
-					expect(squashed.files).toEqual(originals.files);
-					expect(Object.keys(squashed.lock.files).sort()).toEqual(
-						originals.files.map((file) => file.name)
-					);
-					yield* prepareMigrations(directory, ranked, 'generate');
-					const withSuffix = yield* readMigrations(source);
 					const suffix = withSuffix.files.at(-1);
-					if (suffix === undefined) return yield* Effect.die('post-squash suffix missing');
-					expect(suffix.name).toBe('0003_schema.sql');
-					yield* prepareMigrations(directory, ranked, 'generate', { squash: 'second_release' });
-					yield* prepareMigrations(directory, ranked, 'verify');
-					const final = yield* readMigrations(source);
-					const newest = final.squashes.find((file) => file.name !== baseline.name);
-					if (newest === undefined) return yield* Effect.die('second squash missing');
-					expect(final.squashes).toHaveLength(2);
-					expect(final.files).toEqual(withSuffix.files);
-					for (const receipt of final.lock.squashes ?? [])
-						for (const original of final.files.slice(0, receipt.replaces.length))
-							expect(
-								yield* fs.readFileString(join(source, 'archive', receipt.archive, original.name))
-							).toBe(original.sql);
-					const scenarios: readonly {
-						name: string;
+					const newest = final.squashes.find((file) => file.name !== baseline?.name);
+					if (baseline === undefined || suffix === undefined || newest === undefined)
+						return yield* Effect.die('squashed history missing');
+					const scenario: {
 						start: { manifest: EngineManifest; bundle: MigrationBundle; note: boolean } | null;
-						target: MigrationBundle;
 						history: readonly MigrationFile[];
-					}[] = [
-						{ name: 'Fresh', start: null, target: final, history: [newest] },
-						{
-							name: 'Partial originals',
-							start: { manifest: initial, bundle: first, note: false },
-							target: final,
-							history: final.files
-						},
-						{
-							name: 'Older baseline',
-							start: { manifest: extended, bundle: squashed, note: true },
-							target: final,
-							history: [baseline, suffix]
-						}
-					];
+					} =
+						name === 'Fresh'
+							? { start: null, history: [newest] }
+							: name === 'Partial originals'
+								? {
+										start: { manifest: initial, bundle: first, note: false },
+										history: final.files
+									}
+								: {
+										start: { manifest: extended, bundle: squashed, note: true },
+										history: [baseline, suffix]
+									};
 					const Entry = Schema.Struct({
 						name: Schema.String,
 						note: Schema.NullOr(Schema.String),
 						rank: Schema.NullOr(Schema.Number)
 					});
-					for (const scenario of scenarios)
-						yield* Effect.scoped(
-							Effect.gen(function* () {
-								const db = PgliteDb.make(yield* PgliteDb.open());
-								const note = scenario.start?.note === true ? 'Kept note' : null;
-								if (scenario.start !== null) {
-									yield* applyMigrations(db, scenario.start.manifest, scenario.start.bundle);
-									yield* db.write(
-										note === null
-											? {
-													text: 'insert into entry (id, name) values ($1, $2)',
-													params: [ID, scenario.name]
-												}
-											: {
-													text: 'insert into entry (id, name, note) values ($1, $2, $3)',
-													params: [ID, scenario.name, note]
-												}
-									);
-								}
-								yield* applyMigrations(db, ranked, scenario.target);
-								if (scenario.start === null)
-									yield* db.write({
+					const db = PgliteDb.make(yield* PgliteDb.open());
+					const note = scenario.start?.note === true ? 'Kept note' : null;
+					if (scenario.start !== null) {
+						yield* applyMigrations(db, scenario.start.manifest, scenario.start.bundle);
+						yield* db.write(
+							note === null
+								? {
 										text: 'insert into entry (id, name) values ($1, $2)',
-										params: [ID, scenario.name]
-									});
-								const expected = scenario.history.map((file) => ({
-									name: file.name,
-									checksum: checksumOf(file)
-								}));
-								expect(yield* db.rows(AppliedRow, { text: APPLIED, params: [] })).toEqual(expected);
-								expect(
-									yield* db.rows(Entry, { text: 'select name,note,rank from entry', params: [] })
-								).toEqual([{ name: scenario.name, note, rank: null }]);
-								yield* applyMigrations(db, ranked, scenario.target);
-								expect(yield* db.rows(AppliedRow, { text: APPLIED, params: [] })).toEqual(expected);
-								expect(
-									yield* db.rows(Entry, { text: 'select name,note,rank from entry', params: [] })
-								).toEqual([{ name: scenario.name, note, rank: null }]);
-							})
+										params: [ID, name]
+									}
+								: {
+										text: 'insert into entry (id, name, note) values ($1, $2, $3)',
+										params: [ID, name, note]
+									}
 						);
+					}
+					yield* applyMigrations(db, ranked, final);
+					if (scenario.start === null)
+						yield* db.write({
+							text: 'insert into entry (id, name) values ($1, $2)',
+							params: [ID, name]
+						});
+					const expected = scenario.history.map((file) => ({
+						name: file.name,
+						checksum: checksumOf(file)
+					}));
+					expect(yield* db.rows(AppliedRow, { text: APPLIED, params: [] })).toEqual(expected);
+					expect(
+						yield* db.rows(Entry, { text: 'select name,note,rank from entry', params: [] })
+					).toEqual([{ name, note, rank: null }]);
+					yield* applyMigrations(db, ranked, final);
+					expect(yield* db.rows(AppliedRow, { text: APPLIED, params: [] })).toEqual(expected);
+					expect(
+						yield* db.rows(Entry, { text: 'select name,note,rank from entry', params: [] })
+					).toEqual([{ name, note, rank: null }]);
 				})
 			).pipe(Effect.provide(NodeServices.layer), Effect.provide(Pristine.layer))
-	);
+		);
 
 	it.live(
 		'rolls back a file, its data changes and its checksum record when live rows refuse it',
 		() =>
 			Effect.scoped(
 				Effect.gen(function* () {
-					const directory = yield* root;
+					const directory = yield* generated('extended');
 					const fs = yield* FileSystem.FileSystem;
-					yield* prepareMigrations(directory, initial, 'generate');
 					const source = join(directory, 'migrations');
-					const db = PgliteDb.make(yield* PgliteDb.open());
-					yield* applyMigrations(db, initial, yield* readMigrations(source));
+					const db = yield* appliedDb;
 					yield* db.write({
 						text: 'insert into entry (id, name) values ($1, $2)',
 						params: [ID, 'Kept']
 					});
-					yield* prepareMigrations(directory, extended, 'generate');
 					const bundle = yield* readMigrations(source);
 					const file = bundle.files[1];
 					if (file === undefined) return yield* Effect.die('second migration missing');
@@ -825,6 +907,44 @@ describe('committed workspace migrations', () => {
 					).toEqual([{ n: 0 }]);
 				})
 			).pipe(Effect.provide(NodeServices.layer), Effect.provide(Pristine.layer))
+	);
+
+	it.live('a check block rolls back the file and its receipt while its query returns rows', () =>
+		Effect.scoped(
+			Effect.gen(function* () {
+				const directory = yield* generated('extended');
+				const fs = yield* FileSystem.FileSystem;
+				const source = join(directory, 'migrations');
+				const db = yield* appliedDb;
+				yield* db.write({
+					text: `insert into entry (id, name) values ('${ID}', 'bad')`,
+					params: []
+				});
+				const second = join(source, '0002_schema.sql');
+				yield* fs.writeFileString(
+					second,
+					`${yield* fs.readFileString(second)}\n-- check: no_bad_names\nselect id from entry where name = 'bad';\n`
+				);
+				yield* prepareMigrations(directory, extended, 'generate');
+				const bundle = yield* readMigrations(source);
+				const refused = yield* Effect.flip(applyMigrations(db, extended, bundle));
+				expect(String(refused.message)).toContain('check no_bad_names failed: 1 row(s)');
+				expect(
+					yield* db.rows(Count, {
+						text: 'select count(*)::int as n from store_migration',
+						params: []
+					})
+				).toEqual([{ n: 1 }]);
+				yield* db.write({ text: "update entry set name = 'good'", params: [] });
+				yield* applyMigrations(db, extended, bundle);
+				expect(
+					yield* db.rows(Count, {
+						text: 'select count(*)::int as n from store_migration',
+						params: []
+					})
+				).toEqual([{ n: 2 }]);
+			})
+		).pipe(Effect.provide(NodeServices.layer), Effect.provide(Pristine.layer))
 	);
 
 	it.live(

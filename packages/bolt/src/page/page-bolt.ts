@@ -127,7 +127,7 @@ export interface PageBolt {
 		model: Is<C, ReadableName>,
 		args: Measures<C> & { by: B } & Paged
 	): Query<Page<AggRow<C, BucketField<B>>>>;
-	/** A record's revisions, newest first, or from an instant, a revision or just before an approval request. */
+	/** A record's revisions, oldest first, or from an instant, a revision or just before an approval request. */
 	history<C extends string>(
 		model: Is<C, ReadableName>,
 		id: NoInfer<Id<C>>,

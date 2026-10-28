@@ -49,7 +49,7 @@ const fixture = (port: AuditPort) =>
 				invocationId: key,
 				authority: t.as(t.admin).authority,
 				mode: { _tag: 'Direct' },
-				bindings: { now, today: now.slice(0, 10), tz: 'UTC', params: {} }
+				bindings: { now, today: now.slice(0, 10), tz: 'UTC' }
 			});
 		};
 		return { t, context, act };
@@ -131,7 +131,7 @@ it.live(
 					})
 				).toBe('Sanitised');
 				const now = f.t.clock.now(),
-					bindings = { now, today: now.slice(0, 10), tz: 'UTC', params: {} };
+					bindings = { now, today: now.slice(0, 10), tz: 'UTC' };
 				const prior = yield* readHistory(
 					f.t.db,
 					manifest,

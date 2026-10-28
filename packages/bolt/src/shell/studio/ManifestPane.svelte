@@ -107,7 +107,7 @@
 	<Tabs
 		bind:value={section}
 		orientation="horizontal"
-		class="px-4 pt-3 sm:px-6"
+		class="pt-3"
 		tabs={SECTIONS.map((s) => ({ name: s, title: t(SECTION_TITLES[s]), body }))}
 	/>
 {/if}

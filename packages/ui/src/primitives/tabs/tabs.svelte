@@ -12,6 +12,8 @@ A tab strip with the selected tab's body; `keepAlive` tabs stay mounted while hi
 		title: string;
 		body: Snippet;
 		icon?: string;
+		/** A count after the title (the rows the tab holds). */
+		count?: number;
 		keepAlive?: true;
 		disabled?: boolean;
 	};
@@ -141,6 +143,10 @@ A tab strip with the selected tab's body; `keepAlive` tabs stay mounted while hi
 					>
 						{#if tab.icon}<Icon name={tab.icon} class="size-3.5 shrink-0" />{/if}
 						<span class="truncate">{tab.title}</span>
+						{#if tab.count !== undefined}<span
+								class="text-muted-foreground tabular-nums"
+								data-tab-count>{tab.count}</span
+							>{/if}
 					</Tabs.Trigger>
 				{/each}
 			</Tabs.List>

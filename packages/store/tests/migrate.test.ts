@@ -9,6 +9,7 @@ import {
 	checksumOf,
 	destructiveSteps,
 	destroyNamespace,
+	executable,
 	generate,
 	lockOf,
 	migrationGuard,
@@ -294,6 +295,43 @@ describe('editable migration files', () => {
 					yield* script(pg, migration.file.sql);
 					yield* script(fresh, `${(yield* build(next)).join(';\n')};`);
 					expect(yield* introspect(pg)).toEqual(yield* introspect(fresh));
+				})
+			)
+	);
+
+	it.live(
+		'a check block fails the file when its query returns rows, and passes when none remain',
+		() =>
+			Effect.scoped(
+				Effect.gen(function* () {
+					const pg = yield* database;
+					const file: MigrationFile = {
+						name: '0001_nationality.sql',
+						sql: [
+							'create table person (id int primary key, nationality text, n int);',
+							"insert into person values (1, 'SG', 1), (2, 'singapore', 2);",
+							'-- check: nationality_is_iso2',
+							"select id, n from person where nationality !~ '^[A-Z]{2}$' -- ';' in a comment",
+							';',
+							'create index person_n on person (n);'
+						].join('\n')
+					};
+					expect(yield* checkFile(file)).toEqual(file);
+					const failed = yield* Effect.exit(
+						Effect.tryPromise(() => pg.transaction((tx) => tx.exec(executable(file))))
+					);
+					expect(String(failed)).toContain('check nationality_is_iso2 failed: 1 row(s) returned');
+					expect(
+						(yield* Effect.promise(() => pg.query("select to_regclass('person') as t"))).rows
+					).toEqual([{ t: null }]);
+					const fixed = { ...file, sql: file.sql.replace("'singapore'", "'MY'") };
+					yield* script(pg, executable(fixed));
+					expect(
+						(yield* Effect.promise(() => pg.query("select to_regclass('person_n') as t"))).rows
+					).toEqual([{ t: 'person_n' }]);
+					expect(
+						yield* failure(checkFile({ ...file, sql: '-- check: writes\ndelete from person;' }))
+					).toContain('check writes needs one SELECT');
 				})
 			)
 	);

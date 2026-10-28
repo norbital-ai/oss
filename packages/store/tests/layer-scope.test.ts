@@ -33,7 +33,7 @@ describe('read layers by path', () => {
 						: undefined;
 				}
 			};
-			const ir = yield* read(cat, 'order', { with: { customer: true, lines: true }, limit: 10 });
+			const ir = yield* read(cat, 'order', { with: { customer: true, lines: { limit: 10 } }, limit: 10 });
 			const { sql } = yield* compile(cat, ir, { scope });
 			expect(new Set(rows)).toEqual(new Set(['order', 'order.customer', 'order.lines']));
 			expect(masks.some((m) => m.startsWith('order.customer.'))).toBe(true);
@@ -67,5 +67,22 @@ describe('read layers by path', () => {
 				);
 				expect(hidden.code).toBe('invalid');
 			})
+	);
+
+	it.effect('filters and sorts only across declared layers, never through a relation the root does not declare', () =>
+		Effect.gen(function* () {
+			const scope: Scope = { rows: () => undefined, mask: () => undefined };
+			const compiled = (q: Parameters<typeof read>[2]) =>
+				read(cat, 'order', q).pipe(Effect.flatMap((ir) => compile(cat, ir, { scope })));
+			// declared: a filter on the customer layer and a quantified filter over the lines layer
+			yield* compiled({ where: { customer: { is: { name: { eq: 'Ada' } } } }, limit: 10 });
+			yield* compiled({ where: { lines: { some: {} } }, limit: 10 });
+			// undeclared: the notes relation, by quantifier and by count
+			for (const where of [{ notes: { some: {} } }, { notes: { count: { gt: 0 } } }]) {
+				const refused = yield* Effect.flip(compiled({ where, limit: 10 }));
+				expect(refused.code).toBe('invalid');
+				expect(refused.message).toContain("declares no read layer 'notes'");
+			}
+		})
 	);
 });

@@ -139,7 +139,7 @@ const manifest = Result.getOrThrow(
 
 describe('skills and the workspace tools (acceptance 1, 3, 8)', () => {
 	it.live(
-		'a compiled triage/+skill.md is listed in the static prompt beside the outline and read by the skill tool; workspace_search answers staff',
+		'a compiled triage/+skill.md is listed in the static prompt beside the source layout and read by the skill tool; workspace_search answers staff',
 		() =>
 			Effect.scoped(
 				Effect.gen(function* () {
@@ -163,17 +163,13 @@ describe('skills and the workspace tools (acceptance 1, 3, 8)', () => {
 					});
 					expect((yield* agent.drain(c)).reply?.text).toBe('Read it first.');
 					expect(ai.requests[0]!.system).toContain('- triage: Triage a notice');
-					const customers = ai.requests[0]!.system?.split('\n').find((line) =>
-						line.includes('customers:')
-					);
-					for (const detail of ['Buyers', 'name', 'rating', 'order_count', 'create'])
-						expect(customers).toContain(detail);
+					expect(ai.requests[0]!.system).toContain('# Workspace source');
 					expect(names(ai.requests[0])).toEqual(
-						expect.arrayContaining(['read', 'act', 'skill', 'workspace_search'])
+						expect.arrayContaining(['read', 'act', 'skill', 'workspace_search', 'workspace_list'])
 					);
 					expect(
-						ai.requests[0]!.tools?.find((tool) => tool.name === 'read')?.description
-					).toContain('customers');
+						JSON.stringify(ai.requests[0]!.tools?.find((tool) => tool.name === 'read')?.input)
+					).toContain('"customers"');
 					expect(results(ai.requests[1]!)[0]).toBe('## Steps\n\nRead it.\n');
 					expect(results(ai.requests[2]!)[1]).toEqual({
 						path: 'src/agent/skill/triage/+skill.md',
@@ -187,13 +183,13 @@ describe('skills and the workspace tools (acceptance 1, 3, 8)', () => {
 	);
 
 	it.live(
-		'a workspace_search identical to the one that just answered is not run again; the file list says how to read one',
+		'a workspace_list identical to the one that just answered is not run again; the list tool says how to read a file',
 		() =>
 			Effect.scoped(
 				Effect.gen(function* () {
 					const ai = cassette([
-						use('workspace_search', { limit: 5 }),
-						use('workspace_search', { limit: 5 }),
+						use('workspace_list', { path: 'src/' }),
+						use('workspace_list', { path: 'src/' }),
 						say('listed')
 					]);
 					const { t, agent } = yield* setup({
@@ -206,8 +202,12 @@ describe('skills and the workspace tools (acceptance 1, 3, 8)', () => {
 					const c = yield* agent.start({ owner: 'ann' });
 					yield* agent.post({ conversation: c, as: { member: 'ann' }, text: 'List the files.' });
 					yield* agent.drain(c);
-					expect(results(ai.requests[1]!)[0]).toMatchObject({
-						read: expect.stringContaining('pass path')
+					expect(
+						ai.requests[0]!.tools?.find((tool) => tool.name === 'workspace_list')?.description
+					).toContain('workspace_search { path }');
+					expect(results(ai.requests[1]!)[0]).toEqual({
+						path: 'src/',
+						entries: ['agent/', 'data/']
 					});
 					expect(results(ai.requests[2]!)[1]).toMatchObject({
 						error: expect.stringContaining('you just made this exact call')
@@ -387,14 +387,14 @@ describe('MCP through the workspace secrets (acceptance 2)', () => {
 
 describe('an envoy over a fake WhatsApp with System 1 triage (acceptance 7)', () => {
 	it.live(
-		'group chatter not for Norbius is ignored (no reply, never input); a mention is answered at once; a DM waits, then is answered',
+		'group chatter not for Norbius is ignored (no reply, never input); a mention is answered after the pause without a decision; a DM waits, then is answered',
 		() =>
 			Effect.scoped(
 				Effect.gen(function* () {
 					const decided: { kind: string; assistant: string; pending: string[]; asked: string[] }[] =
 						[];
 					// one verdict per pending message, in one call: the script is read per message, not per conversation
-					const script = ['no', 'delay', 'yes'];
+					const script = ['no', 'delay'];
 					const sys_1: Ai['Service']['ask'] = (r) =>
 						Effect.sync(() => {
 							const st = Schema.decodeUnknownSync(
@@ -456,7 +456,8 @@ describe('an envoy over a fake WhatsApp with System 1 triage (acceptance 7)', ()
 						);
 					const GROUP = { thread: '1203@g.us', group: true };
 
-					yield* inbound('6591110000@s.whatsapp.net', 'lunch at 12?', GROUP);
+					// chatter from someone else: a sender's own unaddressed line is context for their next address, another's is not
+					yield* inbound('6593330000@s.whatsapp.net', 'lunch at 12?', GROUP);
 					yield* debounce();
 					expect(decided[0]).toEqual({
 						kind: 'envoy group',
@@ -471,6 +472,7 @@ describe('an envoy over a fake WhatsApp with System 1 triage (acceptance 7)', ()
 						...GROUP,
 						invocation: 'mention'
 					});
+					yield* debounce(); // held for the sender's pause
 					expect(decided).toHaveLength(1); // a mention bypasses System 1
 					expect(texts()).toEqual(['Noted.']);
 					expect(JSON.stringify(ai.requests[0]!.messages)).not.toContain('lunch at 12?');
@@ -486,7 +488,7 @@ describe('an envoy over a fake WhatsApp with System 1 triage (acceptance 7)', ()
 					});
 					expect(texts()).toEqual(['Noted.']); // waiting for more
 					yield* debounce(3);
-					expect(decided[2]!.kind).toBe('envoy DM');
+					expect(decided).toHaveLength(2); // one wait at most (TRIAGE_MAX_WAITS): the recheck admits without asking
 					expect(texts()).toEqual(['Noted.', 'On it.']);
 					expect(t.fakes.links.sent.at(-1)!.message).toMatchObject({
 						to: expect.stringContaining('6592220000')
@@ -530,12 +532,12 @@ describe('an envoy over a fake WhatsApp with System 1 triage (acceptance 7)', ()
 				const ai = cassette([say('On the van.')], sys_1);
 				const { t } = yield* setup({ manifest, ports: ai.ports });
 				let n = 0;
-				const inbound = (text: string) =>
+				const inbound = (text: string, handle = '6591110000@s.whatsapp.net') =>
 					t.receive('field_wa', {
 						id: `n${++n}`,
 						thread: '1203@g.us',
 						sentAt: t.clock.now(),
-						from: { handle: '6591110000@s.whatsapp.net', name: null },
+						from: { handle, name: null },
 						text,
 						attachments: [],
 						group: true
@@ -545,7 +547,7 @@ describe('an envoy over a fake WhatsApp with System 1 triage (acceptance 7)', ()
 						(s) => Schema.decodeUnknownSync(Schema.Struct({ text: Schema.String }))(s.message).text
 					);
 
-				yield* inbound('lunch at 12?');
+				yield* inbound('lunch at 12?', '6593330000@s.whatsapp.net'); // another member's chatter
 				yield* inbound('Norbius, the van is late');
 				t.clock.advance(`${TRIAGE_DEBOUNCE / 1000}s`);
 				yield* t.runDue();

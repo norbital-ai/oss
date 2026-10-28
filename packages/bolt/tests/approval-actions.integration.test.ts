@@ -76,7 +76,7 @@ const view = (...args: Parameters<ReturnType<typeof Approvals.of>['view']>) =>
 	Context.get(e, Approvals)
 		.view(...args)
 		.pipe(Effect.map(Option.getOrNull));
-const bindings = { now: NOW, today: TODAY, tz: 'UTC', params: {} };
+const bindings = { now: NOW, today: TODAY, tz: 'UTC' };
 const rows = (sql: string) =>
 	Effect.map(db.read([{ text: sql, params: [] }]), (rows) => rows[0]?.rows ?? []);
 const pending = (outcome: Outcome) => {

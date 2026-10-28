@@ -495,7 +495,7 @@ export type Key<S extends AnySchema, T> = Simplify<ColumnValues<S, T, KeyName<S,
 // ── where ──
 /**
  * The operands a value position admits beside literals, as a type-level function of the position's kind: `Plain`
- * admits none; a host adds its own (Bolt's `{ param }`, `{ actor }` …) by extending `Operands`.
+ * admits none; a host adds its own (Bolt's `{ var }` …) by extending `Operands`.
  */
 export interface Operands {
 	readonly kind: unknown;

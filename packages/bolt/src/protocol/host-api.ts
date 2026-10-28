@@ -121,6 +121,7 @@ import type { OAuthClient, OAuthVendor, Provider } from '../engine/integrations/
 import type { SchemaSlice } from '../engine/schema/plan.ts';
 import { destructiveSteps, fingerprint, readApplied, schemaSlice } from '../engine/schema/plan.ts';
 import { applyMigrations } from '../engine/schema/migrations.ts';
+import type { MigrationImpact } from './migration-impact.ts';
 import { packLoader, readPackSource, type PackStep } from '../engine/write/pack.ts';
 import { Port } from '../engine/port.ts';
 import {
@@ -144,10 +145,11 @@ import { needsGuest, RateLimits, SessionAuthority } from './http.ts';
 import { BoltHost, BoltHostLive } from './host.ts';
 import { PublicPages, publicPages } from './pages.ts';
 export { renderMode } from './pages.ts';
+export { MigrationImpact, impactLines } from './migration-impact.ts';
 import { IntegrationManager, integrationRoutes } from './integrations.ts';
 
 /** Bumped on any change a host on an older copy could misread; the host refuses a release whose `version` differs. */
-export const HOST_API_VERSION = 12;
+export const HOST_API_VERSION = 13;
 
 // ── failures (D10a) ──
 /** A `BoltError` this release raised: an engine answer. `code` stays a string on the wire (the copies' code sets may differ). */
@@ -249,7 +251,7 @@ export type ShellPorts = Pick<
 	| 'ai'
 >;
 /** The agent's host parts (§5.9); the release's source (`workspace_search`) and attachments are this release's own. */
-export type AgentPorts = Pick<AgentConfig, 'draft' | 'hostTools' | 'skills'>;
+export type AgentPorts = Pick<AgentConfig, 'draft' | 'hostTools' | 'skills' | 'documentText'>;
 /** One serving generation of an environment. */
 export type HostPorts = Pick<
 	EnginePorts,
@@ -361,8 +363,13 @@ export type WorkspaceBranch = {
 	/** Persist the engine's admission marker before a cloned branch can serve work. */
 	admitted(options: Signal): Promise<void>;
 	readonly schema: {
-		/** Engine tables, then the release's schema plan (rule 69; destructive steps only when accepted). */
-		migrate(options: Signal & { readonly accept?: true | readonly string[] }): Promise<void>;
+		/**
+		 * Engine tables, then the release's schema plan (rule 69; destructive steps only when accepted). Answers what it
+		 * did (v13): each pending step's rows and the whole duration, measured on this branch.
+		 */
+		migrate(
+			options: Signal & { readonly accept?: true | readonly string[] }
+		): Promise<MigrationImpact>;
 	};
 	readonly packs: {
 		/** Rule 70: a seed pack by name (`base`, `sample`), its assets into `files` when given, ready to load in steps. */

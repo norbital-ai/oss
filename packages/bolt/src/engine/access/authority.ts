@@ -15,10 +15,12 @@ import {
 	type GrantData
 } from '../manifest.ts';
 import type { Pred } from '@norbital-ai/store';
+import { compileVar, evaluateVar, type Requestor } from '@norbital-ai/std/vars';
 import { or, toPred, TRUE } from './pred.ts';
 import type { Rate } from '../../decl/values.ts';
 import { SYSTEM_COLUMNS } from '@norbital-ai/store';
 import { SYSTEM } from '../../system/index.ts';
+import { BoltError } from '../../protocol/errors.ts';
 
 /** Whom an Authority is compiled for: resolved by `identity/actor`. */
 export type Holder = {
@@ -147,7 +149,12 @@ function writeArm(
 }
 
 /** The fields a layer exposes (rule 10), its FKs included; a system model's are its own fields minus the system columns. */
-export function exposed(m: EngineManifest, root: string, path: string, model: string): readonly string[] {
+export function exposed(
+	m: EngineManifest,
+	root: string,
+	path: string,
+	model: string
+): readonly string[] {
 	const all = layered(m);
 	const sys = Object.hasOwn(SYSTEM.models, model);
 	const f = all.exposures[root]?.read[path]?.fields;
@@ -186,9 +193,22 @@ function masks(
 function directory(actor: EngineActor): { [c: string]: Arm } {
 	if (actor.kind !== 'member') return {};
 	const fields = ['id', 'name'];
-	const self: Pred = { t: 'cmp', field: 'id', op: 'eq', arg: { _tag: 'Actor', of: 'id' } };
+	const self: Pred = {
+		t: 'cmp',
+		field: 'id',
+		op: 'eq',
+		arg: { _tag: 'Var', text: 'requestor.id' }
+	};
 	const user: Pred = actor.external
-		? or([self, { t: 'cmp', field: 'party_id', op: 'eq', arg: { _tag: 'Actor', of: 'party' } }])
+		? or([
+				self,
+				{
+					t: 'cmp',
+					field: 'party_id',
+					op: 'eq',
+					arg: { _tag: 'Var', text: 'requestor.party' }
+				}
+			])
 		: { t: 'cmp', field: 'kind', op: 'eq', arg: { _tag: 'Lit', value: 'staff' } };
 	return { sys_user: { policy: KERNEL, where: user, fields } };
 }
@@ -353,43 +373,38 @@ export const admits: Admits = (arms, field) =>
 export const writableColumns: WritableColumns = (authority, model, verb) => {
 	if (authority.admin) return 'all';
 	return new Set(
-		(authority.models[model]?.[verb] ?? []).flatMap(
-			(arm) => arm.columns[model] ?? []
-		)
+		(authority.models[model]?.[verb] ?? []).flatMap((arm) => arm.columns[model] ?? [])
 	);
 };
 export const visitorMayRead: VisitorMayRead = (authority, model) =>
-	authority.actor.kind === 'visitor' &&
-	(authority.models[model]?.read[model]?.length ?? 0) > 0;
-/** Actor operands have one interpretation across SQL, live evaluation and write admission. */
-export const operandValue: OperandValue = (operand, authority) => {
+	authority.actor.kind === 'visitor' && (authority.models[model]?.read[model]?.length ?? 0) > 0;
+/** What the requestor variables read off an authority. */
+export function requestorOf(authority: Authority): Requestor {
 	const actor = authority.actor;
 	const member =
 		actor.kind === 'member' ? actor : actor.kind === 'envoy' ? (actor.linked ?? null) : null;
-	const of = operand.of;
-	if (typeof of === 'object') return [...(authority.scopes[of.scopes] ?? [])];
-	switch (of) {
-		case 'teamTree':
-			return [...authority.teamTree];
-		case 'instance':
-			return actor.kind === 'envoy'
+	return {
+		id: member?.id ?? null,
+		email: member?.email ?? null,
+		phone: member?.phone ?? null,
+		party: member?.party?.id ?? null,
+		visitor: actor.kind === 'visitor' ? actor.visitor : null,
+		instance:
+			actor.kind === 'envoy'
 				? actor.instance
 				: actor.kind === 'system' && 'instance' in actor.by
 					? actor.by.instance
-					: null;
-		case 'teams':
-			return member === null ? [] : [...member.teams];
-		case 'id':
-			return member?.id ?? null;
-		case 'email':
-			return member?.email ?? null;
-		case 'phone':
-			return member?.phone ?? null;
-		case 'visitor':
-			return actor.kind === 'visitor' ? actor.visitor : null;
-		case 'party':
-			return member?.party?.id ?? null;
-	}
+					: null,
+		teams: member === null ? [] : member.teams,
+		teamTree: authority.teamTree,
+		scopes: authority.scopes
+	};
+}
+/** Requestor variables have one interpretation across SQL, live evaluation and write admission. */
+export const operandValue: OperandValue = (operand, authority) => {
+	const c = compileVar(operand.text);
+	if ('error' in c) throw BoltError.make('invalid', 'decode', c.error);
+	return evaluateVar(c, { requestor: requestorOf(authority) });
 };
 
 /**

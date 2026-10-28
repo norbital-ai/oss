@@ -12,7 +12,7 @@
 // send-now and respond-now admit at once with every pending row, flush the queued decision and ask nothing. `delivered_turn` (set by the agent's claim, guarded by
 // `IS NULL`) and `addressed` are the one record of what the agent received, so no row is new input twice.
 import type { EnvoySpec } from '../../decl/runtime/agent.ts';
-import { Clock, Context, Effect, FiberMap, Layer, Schema } from 'effect';
+import { Clock, Context, Effect, FiberMap, Layer, Option, Schema } from 'effect';
 import { Chain } from '../write/sql.ts';
 import { enqueue, nextDue } from '../runs/queue.ts';
 import {
@@ -150,7 +150,11 @@ export const triage = Effect.fn('Triage.make')(function* (cfg: TriageConfig) {
 	});
 	/** The deterministic flush (P40 (3)): every pending row is queued and the conversation's queued decision deleted. */
 	const release = Effect.fn('Triage.release')(function* (conversation: string) {
-		yield* FiberMap.remove(debounce, conversation);
+		// the timer is interrupted unless it is the very fiber deciding: interrupting that would drop this flush
+		const timer = yield* FiberMap.get(debounce, conversation),
+			self = yield* Effect.fiber;
+		if (Option.isNone(timer) || timer.value !== self)
+			yield* FiberMap.remove(debounce, conversation);
 		const chain = new Chain();
 		chain.params.push(conversation);
 		chain.cte('flush', `DELETE FROM sys_run WHERE ${queued('$1')} RETURNING id`);
@@ -579,6 +583,11 @@ export const triage = Effect.fn('Triage.make')(function* (cfg: TriageConfig) {
 			/** The person's IANA zone (their clock, rule 57), kept on the row as an untriaged post keeps it. */ tz?: string;
 		}) {
 			const chain = new Chain();
+			// a person's follow-up in a stopped conversation runs; the stopped turn's cancelled inputs stay cancelled
+			chain.cte(
+				'reopened',
+				`UPDATE sys_conversation SET status = 'idle' WHERE id = ${chain.p(o.conversation)} AND status = 'stopped' RETURNING id`
+			);
 			const source = postMessage(chain, {
 				conversation: o.conversation,
 				role: 'user',

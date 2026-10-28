@@ -70,12 +70,8 @@ export function operand(
 	authority: Authority | null | undefined
 ): Json {
 	switch (o._tag) {
-		case 'Param': {
-			if (!Object.hasOwn(bindings.params, o.name)) throw invalid(`no parameter '${o.name}'`);
-			return bindings.params[o.name] ?? null;
-		}
-		case 'Actor': {
-			if (authority == null) throw invalid('an actor operand needs a caller');
+		case 'Var': {
+			if (authority == null) throw invalid('a requestor variable needs a caller');
 			return operandValue(o, authority);
 		}
 		case 'Field':
@@ -377,7 +373,7 @@ export function contains(a: Json | undefined, b: Json, top = false): boolean {
 		);
 	return a === b;
 }
-/** A period argument's ends, each a literal or a `{ param }` operand. */
+/** A period argument's ends, each a literal or an operand. */
 export function periodEnds(
 	v: Json,
 	bindings: Bindings,

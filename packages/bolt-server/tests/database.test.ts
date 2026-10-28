@@ -1,6 +1,7 @@
 import { beforeEach, expect, it } from '@effect/vitest';
 import { vi } from 'vitest';
 import { Effect, Exit, Fiber } from 'effect';
+import { DATABASE_MAX_BYTES } from '@norbital-ai/bolt/engine';
 import { sqlServerDatabase } from '../src/database.ts';
 import type { config as SqlConfig } from 'mssql';
 const harness = vi.hoisted(
@@ -234,7 +235,7 @@ it.effect(
 );
 it.effect('oversized or unsupported values cancel before storage and drain the pool', () =>
 	Effect.gen(function* () {
-		harness.rows = [{ text: 'x'.repeat(4 * 1024 * 1024) }];
+		harness.rows = [{ text: 'x'.repeat(DATABASE_MAX_BYTES) }];
 		expect(yield* Effect.flip(query())).toMatchObject({
 			message: expect.stringContaining('byte limit')
 		});

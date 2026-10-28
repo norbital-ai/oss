@@ -1,7 +1,7 @@
 // The fixed tool set (rule 58): `read` (a layer map over the models and layers the actor may read: records, aggregates,
 // search indexes), `act` (guarded writes, approval decisions, automation and sync starts), the plan, goal and compaction
 // tools, skills, `history`, `runs` (members), `logs` (administrators), `geocode`, `read_messages` on envoy turns,
-// `read_attachment`, `read_output`, `docs` and `workspace_search` for staff, `document` when it binds a converter,
+// `read_output`, `docs` and `workspace_search` for staff, `document` when it binds a converter,
 // `download` for staff in the app when files are stored, `run_js` (HTTP when a policy names `http`), `subagent` and `wait`
 // under delegation, MCP tools a held policy's capabilities name (a sub-agent has no plan or sub-agents, and asks its
 // delegating agent with `ask_parent`), and host tools (Workspace Studio, browser, personal skills) only on in-app turns of
@@ -30,6 +30,8 @@ import { RUN_VIEW_COLUMNS, RunViewRow, runView } from '../runs/index.ts';
 import { actorRef } from '../write/commit.ts';
 import { readLog } from '../guest/telemetry.ts';
 import { readableFile } from '../decisions/index.ts';
+import { xlsxCells, xlsxSheets } from '../files/xlsx.ts';
+import { toBase64 } from '../crypto.ts';
 import type { Json } from '../../decl/values.ts';
 import { encodeWire } from '@norbital-ai/std/wire';
 import {
@@ -40,7 +42,7 @@ import {
 	type Outcome
 } from '../contracts.ts';
 import { BoltError } from '../../protocol/errors.ts';
-import { exposed } from '../access/authority.ts';
+import { exposed, requestorOf } from '../access/authority.ts';
 import {
 	LayerRequestSchema,
 	type LayerRequestJson,
@@ -48,12 +50,14 @@ import {
 } from '../../protocol/read-request.ts';
 import type { AgentEngine as Engine } from './index.ts';
 import { lowerRead } from '../query/engine.ts';
+import { materializeEach } from '../runs/time.ts';
 import { BOUNDS, bound, bounded, filesOf, localTime, outputText, page, size } from './context.ts';
 import { MODEL_FILES, ToolAnswer, toolSchema, type AnyTool, type InferTool } from './ai.ts';
 export { ToolAnswer, type AnyTool } from './ai.ts';
 import { REFERENCE, ReferenceIndex, RUN_JS, runFile, runJs } from './run-js.ts';
 import { layered, layers, SKILL_FILE, type EngineManifest, type SkillSpec } from '../manifest.ts';
 import { row as systemRow } from '../system/rows.ts';
+import { SYSTEM } from '../../system/index.ts';
 import type { McpSessions, McpTool } from './mcp.ts';
 import {
 	ambient,
@@ -199,9 +203,21 @@ export type ToolContext = {
 	skills: { readonly [name: string]: Skill };
 	agents: readonly string[];
 	receipts: Receipt[];
+	/** What this turn has read (skills, sections, files), each with how the closing note names it: already above. */
+	read: Map<string, string>;
+	/**
+	 * A document's faithful Markdown transcription by the conversation's model (one call, metered with the turn), so it
+	 * stays in the conversation as text instead of a document re-sent on every step; absent where no model is bound.
+	 */
+	transcribe?: (file: { mime: string; bytes: Uint8Array }) => Effect.Effect<string, EngineError>;
+	/** A document's text layer, page by page (the host's extractor); a scanned page is marked as having none. */
+	documentText?: (file: { mime: string; bytes: Uint8Array }) => Effect.Effect<string, EngineError>;
+	/** What this turn opened for the model to see (rule 62's budget), each after the call that opened it. */
 	files: {
 		mime: string;
 		bytes: Uint8Array;
+		call?: string;
+		id?: string;
 	}[];
 	jobs: Jobs;
 	inlineMs?: number | undefined;
@@ -217,7 +233,6 @@ export type ToolContext = {
 		before?: number;
 		key: string;
 	}): Effect.Effect<readonly MessageRow[], EngineError>;
-	row(seq: number): Effect.Effect<MessageRow | undefined, EngineError>;
 	/** The whole output of a clipped call; `null` names the latest clipped call. */
 	output(callId: string | null): Effect.Effect<Json | undefined, EngineError>;
 	history(query: string, scope: 'this' | 'mine', limit: number): Effect.Effect<Json, EngineError>;
@@ -274,6 +289,21 @@ export const WriteInput = Schema.Struct({
 	)
 });
 const ok = (result: Json): ToolAnswer => ({ result });
+/**
+ * A document's text as one answer, whole up to the result bound (never clipped cell-wise like a row's field): past it,
+ * the start and a pointer, the whole kept for `read_output`.
+ */
+const documentAnswer = (answer: { readonly [key: string]: Json }, key: string): ToolAnswer => {
+	const value = answer[key],
+		text = typeof value === 'string' ? value : '',
+		room = BOUNDS.resultBytes - 2_000;
+	if (size(text) <= room) return { result: answer, bounded: true };
+	return {
+		result: { ...answer, [key]: text.slice(0, room) },
+		full: answer,
+		bounded: true
+	};
+};
 /** A JSON value within `bytes` as the model reads it, or its leading text with a note. */
 const clipJson = (v: Json, bytes: number): Json =>
 	size(v) <= bytes ? v : `${JSON.stringify(v).slice(0, bytes)}... [clipped, ${size(v)} bytes]`;
@@ -346,7 +376,10 @@ function section(body: string, title: string): string | undefined {
 export function readPaths(m: EngineManifest, a: Authority): string[] {
 	return Object.entries(layered(m).exposures).flatMap(([root, spec]) =>
 		root !== 'sys_run' &&
-		((a.admin && root in m.exposures) || (a.models[root]?.read[root]?.length ?? 0) > 0)
+		(Object.hasOwn(SYSTEM.models, root)
+			? // a built-in model only through a policy that names it, never the administrator's blanket arm
+				(a.models[root]?.read[root] ?? []).some((arm) => arm.policy !== '$admin')
+			: (a.admin && root in m.exposures) || (a.models[root]?.read[root]?.length ?? 0) > 0)
 			? Object.keys(spec.read)
 			: []
 	);
@@ -550,19 +583,37 @@ export const perform = Effect.fn('AgentTool.perform')(function* (
 		run: String(row['id']),
 		automation: String(row['automation'])
 	}));
-	return { ...r.outcome, stored: encodeWire(stored), ...(runs.length === 0 ? {} : { runs }) };
+	return {
+		...r.outcome,
+		stored: uncursored(encodeWire(stored)),
+		...(runs.length === 0 ? {} : { runs }),
+		...(r.outcome.unchanged === undefined
+			? {}
+			: {
+					note: r.outcome.unchanged
+						.map(
+							({ model, id }) =>
+								`no change: ${model} ${id} already holds these values (a write callback may derive them)`
+						)
+						.join('; ')
+				})
+	};
 });
 const attach = (
 	files: {
 		mime: string;
 		bytes: Uint8Array;
+		id?: string;
 	}[],
 	file: {
 		mime: string;
 		bytes: Uint8Array;
+		id?: string;
 	}
-): number => {
+): number | 'shown' => {
 	if (file.bytes.byteLength > MODEL_FILES.bytes) return 1;
+	// the same stored file read again this turn is already in view: a second copy would only push others out
+	if (file.id !== undefined && files.some((f) => f.id === file.id)) return 'shown';
 	files.push(file);
 	let dropped = 0;
 	while (
@@ -634,43 +685,123 @@ function orphaned(m: EngineManifest, path: string): string {
 	return `"${path}" nests in each "${parent}" row, so name both in one call: { "${parent}": { "where": … }, "${path}": { … } }${own}`;
 }
 /**
+ * `describe`: a read key's declared shape, as this caller reads it — each readable field and its kind (a link names its
+ * model, an enum or state its values), the layers declared below it, and on a root the writes the caller may call
+ * with the columns each takes. The model API in one small answer, instead of its source.
+ */
+function shapeOf(m: EngineManifest, a: Authority, path: string): Json {
+	const root = path.split('.')[0]!,
+		model = layers(m)[root]?.[path] ?? root,
+		all = layered(m),
+		masked = a.models[root]?.masks[path] ?? {};
+	const kind = (f: string): string => {
+		const link = all.relationships[`${model}.${f}`];
+		if (link !== undefined) return `link to ${[link.to].flat().join(' | ')}`;
+		const d = all.models[model]?.fields[f];
+		if (d === undefined) return 'system';
+		const many = 'many' in d && d.many === true ? ' (list)' : '';
+		return d.kind === 'enum'
+			? `enum ${d.values.join(' | ')}${many}`
+			: d.kind === 'state'
+				? `state ${Object.keys(d.states).join(' | ')}`
+				: `${d.kind}${many}`;
+	};
+	const fields = exposed(m, root, path, model).filter((f) => !(f in masked));
+	const below = Object.keys(all.exposures[root]?.read ?? {}).filter(
+		(p) => p.startsWith(`${path}.`) && !p.slice(path.length + 1).includes('.')
+	);
+	const writes = path.includes('.')
+		? []
+		: [...callablesFor(m, a).keys()].filter((c) => c.startsWith(`${root}.`));
+	const columns = (verb: 'create' | 'update') => all.exposures[root]?.[verb]?.columns;
+	return {
+		model,
+		fields: Object.fromEntries(fields.map((f) => [f, kind(f)])),
+		...(below.length === 0
+			? {}
+			: { layers: Object.fromEntries(below.map((p) => [p, layers(m)[root]?.[p] ?? ''])) }),
+		...(writes.length === 0
+			? {}
+			: {
+					writes: Object.fromEntries(
+						writes.map((c) => {
+							const verb = c.slice(root.length + 1);
+							const cols = verb === 'create' || verb === 'update' ? columns(verb) : undefined;
+							return [c, cols ?? true];
+						})
+					)
+				})
+	};
+}
+/**
  * This turn's `read` input: one optional property per root and layer the caller may read, each naming exactly the fields
  * this caller reads there, `search` only where it works, no paging cursor and no `asOf` (past states are the history tool's) — so the schema is what the engine
  * accepts (a bare enum of property names is lost in some providers' schema conversion). A layer needs its parent key.
  */
-const readInput = (m: EngineManifest, a: Authority, paths: readonly string[]) =>
-	Schema.Struct(
+const readInput = (m: EngineManifest, a: Authority, paths: readonly string[]) => {
+	// the model's declared read is the shape; a request only filters, orders and pages it. Past states are the history
+	// tool's, so the agent's read is current data only; no after: a page that did not fit says so, and the agent narrows
+	// or raises its limit instead of paging
+	const {
+		search: text,
+		after: _after,
+		asOf: _asOf,
+		fields: _fields,
+		...base
+	} = LayerRequestSchema.fields;
+	const fields = Schema.optionalKey(Schema.Array(Schema.String));
+	// every parameter typed: an untyped one reaches a routed model wrapped as { item: … }
+	const order = Schema.Union([
+		Schema.String,
+		Schema.Record(Schema.String, Schema.Literals(['asc', 'desc']))
+	]);
+	const typed = {
+		...base,
+		describe: Schema.optionalKey(
+			Schema.Literal(true).annotate({
+				description:
+					"this key's fields and their kinds, its layers and your writes, instead of rows"
+			})
+		),
+		fields,
+		orderBy: Schema.optionalKey(Schema.Union([order, Schema.Array(order)])),
+		aggregate: Schema.optionalKey(
+			Schema.Struct({
+				count: Schema.optionalKey(Schema.Literal(true)),
+				sum: Schema.optionalKey(Schema.Array(Schema.String)),
+				avg: Schema.optionalKey(Schema.Array(Schema.String)),
+				min: Schema.optionalKey(Schema.Array(Schema.String)),
+				max: Schema.optionalKey(Schema.Array(Schema.String)),
+				by: Schema.optionalKey(
+					Schema.Union([
+						Schema.String,
+						Schema.Record(Schema.String, Schema.String),
+						Schema.Array(Schema.Union([Schema.String, Schema.Record(Schema.String, Schema.String)]))
+					])
+				)
+			})
+		)
+	};
+	// three option shapes, each declared once in the tool's JSON Schema ($defs) and named by every key that takes it: a
+	// workspace reads hundreds of paths, and the options repeated per path were most of every step's input
+	const options = Schema.Struct(typed).annotate({ identifier: 'Options' }),
+		words = Schema.Struct({
+			...typed,
+			search: Schema.optionalKey(Schema.String.annotate({ description: 'words to find' }))
+		}).annotate({ identifier: 'SearchOptions' }),
+		indexed = Schema.Struct({ ...typed, search: text }).annotate({
+			identifier: 'IndexSearchOptions'
+		});
+	return Schema.Struct(
 		Object.fromEntries(
 			paths.map((path) => {
-				const dot = path.lastIndexOf('.');
-				const search = searchable(m, a, path);
-				// the model's declared read is the shape; a request only filters, orders and pages it. Past states are the
-				// history tool's, so the agent's read is current data only
-				// no after: a page that did not fit says so, and the agent narrows or raises its limit instead of paging
-				const {
-					search: text,
-					after: _after,
-					asOf: _asOf,
-					fields: _fields,
-					...base
-				} = LayerRequestSchema.fields;
 				// search is words, unless the model declares indexes or semantic search for its object form
 				const declared = layered(m).models[layers(m)[path.split('.')[0]!]?.[path] ?? path]?.search;
-				const words =
-					declared?.semantic !== undefined || Object.keys(declared?.indexes ?? {}).length > 0
-						? text
-						: Schema.optionalKey(Schema.String.annotate({ description: 'words to find' }));
-				const description =
-					(dot < 0 ? 'a root' : `a layer of "${path.slice(0, dot)}"`) +
-					(search ? '' : '; no search');
-				const layer =
-					dot < 0
-						? search
-							? Schema.Struct({ ...base, search: words }).annotate({ description })
-							: Schema.Struct(base).annotate({ description })
-						: search
-							? Schema.Struct({ ...base, search: words }).annotate({ description })
-							: Schema.Struct(base).annotate({ description });
+				const layer = !searchable(m, a, path)
+					? options
+					: declared?.semantic !== undefined || Object.keys(declared?.indexes ?? {}).length > 0
+						? indexed
+						: words;
 				return [path, Schema.optionalKey(layer)];
 			})
 		)
@@ -682,10 +813,11 @@ const readInput = (m: EngineManifest, a: Authority, paths: readonly string[]) =>
 				: 'name at least one root: ' + paths.filter((p) => !p.includes('.')).join(', ');
 		})
 	);
+};
 /**
  * `read` (rule 58, P3): one read request, a layer map over the models and declared layers the actor may read, answered in
- * one engine read as the actor and bounded by rule 62; `undefined` when nothing is readable. A lone root re-reads exactly
- * the rows the bound kept, so its cursor pages on from the last row shown.
+ * one engine read as the actor and bounded by rule 62 (a lone root's page keeps whole rows); `undefined` when nothing is
+ * readable. What the bound cut stays readable with `read_output`.
  */
 export function readTool(x: ReadToolContext) {
 	const e = x.engine,
@@ -694,7 +826,24 @@ export function readTool(x: ReadToolContext) {
 	if (paths.length === 0) return undefined;
 	const answer = (request: ReadRequestJson) =>
 		Effect.try({
-			try: () => lowerRead(e.manifest, 'query', [request]),
+			// time variables are this turn's literals before decode; the requestor variables bind in the read itself
+			try: () =>
+				lowerRead(e.manifest, 'query', [
+					Object.fromEntries(
+						Object.entries(request).map(([path, layer]) => [
+							path,
+							layer.where === undefined
+								? layer
+								: {
+										...layer,
+										where: materializeEach(layer.where, {
+											...x.bindings,
+											requestor: requestorOf(a)
+										})
+									}
+						])
+					)
+				]),
 			catch: (cause) =>
 				cause instanceof BoltError
 					? cause
@@ -734,7 +883,6 @@ export function readTool(x: ReadToolContext) {
 				];
 			})
 		);
-		const keep = [...new Set(Object.values(given).flatMap((layer) => layer.fields ?? []))];
 		const named = Object.keys(request).filter((path) => !path.includes('.'));
 		const single = named.length === 1 ? named[0] : undefined;
 		const pageOf = (v: Json): Json =>
@@ -743,33 +891,8 @@ export function readTool(x: ReadToolContext) {
 				: v;
 		const wrap = (v: Json): Json => (single === undefined ? v : { [single]: v });
 		return yield* Effect.gen(function* () {
-			let out = bounded(pageOf(yield* answer(request)), keep);
-			const clipped = Predicate.isObject(out.value) ? out.value['clipped'] : undefined;
-			// rows dropped for size: re-read exactly the rows shown, so the cursor pages on from the last of them
-			const root = single === undefined ? undefined : request[single];
-			let limit = root?.limit ?? 0;
-			while (
-				single !== undefined &&
-				root?.aggregate === undefined &&
-				out.kept !== null &&
-				out.kept > 0 &&
-				out.kept < limit
-			) {
-				limit = out.kept;
-				out = bounded(pageOf(yield* answer({ ...request, [single]: { ...root, limit } })), keep);
-			}
-			return {
-				result: uncursored(
-					wrap(
-						clipped === undefined ||
-							!Predicate.isObject(out.value) ||
-							EffectArray.isArray<typeof out.value>(out.value)
-							? out.value
-							: { ...out.value, clipped }
-					)
-				),
-				bounded: true
-			} as const;
+			const full = uncursored(yield* answer(request));
+			return { result: wrap(bounded(pageOf(full)).value), full, bounded: true } as const;
 		}).pipe(
 			Effect.catch((failure) => {
 				if (!(failure instanceof BoltError) || failure.code !== 'invalid')
@@ -790,46 +913,67 @@ export function readTool(x: ReadToolContext) {
 	});
 	return {
 		tool: Tool.make('read', {
-			description: `Read records. The input is an object: each key names what to read, its value holds that key's options. Several keys go in one call.
+			description: `Read records. The input is an object: each key names what to read, its value is an object of that key's options (never a JSON string). Several keys go in one call.
 
 Keys
 - "<model>" (a root): rows of that model.
 - "<root>.<relation>" (a layer): for each root row, its related rows, nested inside that row (one related row as an object in place of its link, many as a list). Send it together with its root key.
-Each key returns the fields its model's read declares.
+Each key returns the fields its model's read declares, or only those its fields option names.
 
 Options (all optional)
+- describe: true: instead of rows, the key's fields and their kinds (a link names its model, an enum its values), its layers and your writes with their columns. Describe every model a task needs in one call before you first filter or write them.
 - where: { "<field>": { "<operator>": value } }; several fields must all hold; combine with { "and": [...] }, { "or": [...] }, { "not": {...} }. On a root it chooses which rows return; on a layer it only narrows that layer's rows inside each root row, using the layer's own fields, never its link to the root.
   Operators by field kind:
   text: eq, ne, in, nin, isNull, like ("%word%"; % matches any characters)
   number, decimal, date (YYYY-MM-DD), instant: eq, ne, lt, lte, gt, gte, in, nin, isNull; an instant also olderThan ("7d")
   enum, bool, link (a row id): eq, ne, in, nin, isNull
   point: near ([point, metres]), within ({ bbox } or { polygon }); period: contains, overlaps, within; json: contains, isEmpty
+  A value may be a variable (in a value's place, never a key): { "var": "<CEL>" } over requestor (id: the person you act for, a link to sys_user; email; phone; teams and teamTree, with in; party) and the clock (today, a date; now, an instant), with days(n), weeks(n), months(n), years(n), hours(n), minutes(n) and startOfWeek / startOfMonth / startOfQuarter / startOfYear(today). Its type must match the field. E.g. { "job_assignments": { "where": { "assignee_user_id": { "eq": { "var": "requestor.id" } }, "due_on": { "gte": { "var": "today - days(7)" }, "lte": { "var": "today" } }, "created_at": { "gte": { "var": "now - hours(1)" } } } } }
+  Related rows filter too, through a relation the model's read declares as a layer (a "<model>.<relation>" key here; any other relation is refused):
+  a one-relation: { "<relation>": { "is": { <where on its fields> } } }, or its link's operators
+  a many-relation: { "<relation>": { "some" | "none" | "every": { <where on its fields> } } }, { "<relation>": { "count": { "gte": 2 } } }, { "<relation>": { "sum" | "avg" | "min" | "max": { "of": "<field>", "gt": 100 } } }
+- fields: ["<field>", …]: only these fields of each row (name id when you need it), to keep a wide model's rows small.
 - search: words found across the model's searchable text (where the schema offers it on that key).
 - orderBy: "<field>", { "<field>": "asc" | "desc" }, or a list of these.
 - limit: how many rows. A root returns ${READ_PAGE} unless you set it (at most 10,000); a many-layer returns up to 10,000 per root row, so set one.
-- aggregate: { "count": true, "sum" | "avg" | "min" | "max": ["<field>"], "by": "<field>" | { "month": "<date field>" } }: totals instead of rows.
+- aggregate: { "count": true, "sum" | "avg" | "min" | "max": ["<field>"], "by": "<field>" | { "month": "<date field>" } | a list of both }: totals instead of rows, one per group (day, week, month, quarter or year buckets).
 
 Long values are clipped; read_output reads the rest.
 
 Examples
 - Rows by a filter: { "<model>": { "where": { "<date field>": { "eq": "2026-01-31" } }, "limit": 20 } }
 - Rows with related rows: { "<model>": { "where": { "<text field>": { "like": "%word%" } } }, "<model>.<relation>": { "limit": 20 } }
+- Rows by their related rows: { "<model>": { "where": { "<relation>": { "some": { "<field>": { "eq": "x" } } } } } }
 - A count per value: { "<model>": { "aggregate": { "count": true, "by": "<field>" } } }`,
 			parameters: readInput(e.manifest, a, paths),
 			success: ToolAnswer
 		}),
 		run: (request: {
-			readonly [path: string]: LayerRequestJson | undefined;
-		}): Effect.Effect<ToolAnswer> =>
-			guard(
-				run(
-					Object.fromEntries(
-						Object.entries(request).flatMap(([path, layer]) =>
-							layer === undefined ? [] : [[path, layer] as const]
-						)
-					)
+			readonly [path: string]: (LayerRequestJson & { readonly describe?: true }) | undefined;
+		}): Effect.Effect<ToolAnswer> => {
+			const asked = Object.entries(request).flatMap(([path, layer]) =>
+				layer === undefined ? [] : [[path, layer] as const]
+			);
+			// a described key answers its declared shape; the rest are read as asked
+			const shapes = Object.fromEntries(
+				asked.flatMap(([path, { describe }]) =>
+					describe === true ? [[path, shapeOf(e.manifest, a, path)] as const] : []
 				)
-			)
+			);
+			const rest = asked.flatMap(([path, { describe: _describe, ...layer }]) =>
+				_describe === true ? [] : [[path, layer] as const]
+			);
+			if (rest.length === 0) return Effect.succeed(ok(shapes));
+			return guard(run(Object.fromEntries(rest))).pipe(
+				Effect.map((answer) => {
+					if (Object.keys(shapes).length === 0 || !('result' in answer)) return answer;
+					const got: Json = answer.result;
+					return Predicate.isObject(got) && !EffectArray.isArray<Json>(got)
+						? { ...answer, result: { ...shapes, ...got } }
+						: answer;
+				})
+			);
+		}
 	};
 }
 /** `read` as a tool an inference is lent (`ai.sys_2.infer` naming `read`, rule 58): the same tool, as the actor. */
@@ -1157,9 +1301,11 @@ Related rows go inside their root row in the same call, never in a separate writ
 	);
 	if (skills.length > 0) {
 		const skillTool = Tool.make('skill', {
-			description: `Read a skill: ${skills.map(([n, t]) => `${n} (${skillOf(t.text).description})`).join('; ')}. Give a section to read one part. Its scripts run as written with run_js { file: '<skill>/<path>' }.`,
+			// the system prompt lists each skill with its description: the tool names them only
+			description:
+				"Read one of your skills (the system prompt lists them) whole, or one ## section. Its scripts run as written with run_js { file: '<skill>/<path>' }.",
 			parameters: Schema.Struct({
-				name: Schema.String.annotate({ description: 'skill' }),
+				name: Schema.Literals(skills.map(([n]) => n)),
 				section: Schema.optionalKey(Schema.String.annotate({ description: 'a ## section' }))
 			}),
 			success: ToolAnswer
@@ -1172,6 +1318,10 @@ Related rows go inside their root row in the same call, never in a separate writ
 						Effect.gen(function* () {
 							const t = skills.find(([n]) => n === i.name)?.[1];
 							if (t === undefined) return err(`No skill '${i.name}' is available.`);
+							const key = `${i.name}#${i.section ?? ''}`;
+							if (x.read.has(key))
+								return ok({ note: `You read ${i.name} earlier in this turn; its text is above.` });
+							x.read.set(key, `skill ${i.name}${i.section === undefined ? '' : ` (${i.section})`}`);
 							const s = skillOf(t.text);
 							// its own files, never the packages it vendors
 							const own = t.files.filter(
@@ -1361,7 +1511,65 @@ Related rows go inside their root row in the same call, never in a separate writ
 				: mime === 'application/pdf'
 					? 'document'
 					: (i.as ?? 'text');
+		// a PDF is read as its transcription (text the rest of the turn keeps, cheaply); asked for as an image, it is shown
+		const transcribing =
+			mime === 'application/pdf' && i.as !== 'image' && x.transcribe !== undefined;
+		const fileId =
+				Predicate.isObject(file) && typeof file['id'] === 'string' ? file['id'] : undefined,
+			fileName =
+				Predicate.isObject(file) && typeof file['name'] === 'string'
+					? file['name']
+					: (fileId ?? 'the file');
+		const seen =
+			fileId === undefined
+				? undefined
+				: `file:${fileId}#${transcribing ? 'transcript' : as}:${i.sheet ?? 0}`;
+		if (seen !== undefined && x.read.has(seen))
+			return ok({ note: `You read ${fileName} earlier in this turn; its answer is above.` });
 		const got = yield* port.read(file, as, i.sheet).pipe(Port.call('files', 30000));
+		if (
+			transcribing &&
+			x.transcribe !== undefined &&
+			Predicate.isObject(got) &&
+			got['bytes'] instanceof Uint8Array
+		) {
+			const doc = { mime, bytes: got['bytes'] };
+			// its own text where every page has a text layer: exact and at once; a scanned page needs the model's eyes
+			const layer =
+				x.documentText === undefined
+					? undefined
+					: yield* x
+							.documentText(doc)
+							.pipe(
+								Effect.tapCause(Effect.logWarning),
+								Effect.option,
+								Effect.map(Option.getOrUndefined)
+							);
+			// a page with next to no text (a scan with a stamp or a printed footer) is read by eye
+			const pages = layer?.split(/\[Page \d+\]\n?/).slice(1) ?? [];
+			const scanned =
+				pages.length === 0 ||
+				pages.some((page) => page.trim().length < 80 || page.includes('(no extractable text'));
+			const answer = scanned
+				? documentAnswer(
+						{
+							file: fileName,
+							transcript: yield* x.transcribe(doc),
+							note: "a faithful transcription of the document; read_file with as: 'image' shows the original"
+						},
+						'transcript'
+					)
+				: documentAnswer(
+						{
+							file: fileName,
+							text: layer ?? '',
+							note: "the document's own text, page by page; read_file with as: 'image' shows the original"
+						},
+						'text'
+					);
+			if (seen !== undefined) x.read.set(seen, `file ${fileName}`);
+			return answer;
+		}
 		if (
 			got !== null &&
 			typeof got === 'object' &&
@@ -1370,25 +1578,43 @@ Related rows go inside their root row in the same call, never in a separate writ
 			'mime' in got &&
 			typeof got.mime === 'string'
 		) {
-			const dropped = attach(x.files, { mime: got.mime, bytes: got.bytes });
+			const id =
+				Predicate.isObject(file) && typeof file['id'] === 'string' ? file['id'] : undefined;
+			const dropped = attach(x.files, {
+				mime: got.mime,
+				bytes: got.bytes,
+				...(id === undefined ? {} : { id })
+			});
+			if (dropped === 'shown')
+				return ok({
+					attached: 'this file is already shown to you, after the call that first read it'
+				});
 			return ok({
-				attached: 'the file is attached to your next step',
+				attached:
+					'the file is shown to you from your next step until this turn ends: no need to read it again',
 				...(dropped > 0
 					? { dropped: `${dropped} older file(s) dropped to stay within 8 files / 20 MiB` }
 					: {})
 			});
 		}
-		return ok(
-			yield* Schema.decodeUnknownEffect(Schema.Json)(got).pipe(
-				Effect.mapError((error) => BoltError.make('invalidInput', 'decode', error.message, error))
-			)
+		const answer = yield* Schema.decodeUnknownEffect(Schema.Json)(got).pipe(
+			Effect.mapError((error) => BoltError.make('invalidInput', 'decode', error.message, error))
 		);
+		if (seen !== undefined)
+			x.read.set(seen, `file ${fileName}${i.sheet === undefined ? '' : ` sheet ${i.sheet}`}`);
+		// a text file is one long value: whole up to the bound, as a document is
+		const record = Option.getOrUndefined(
+			Schema.decodeUnknownOption(Schema.Record(Schema.String, Schema.Json))(answer)
+		);
+		return record !== undefined && typeof record['text'] === 'string'
+			? documentAnswer(record, 'text')
+			: ok(answer);
 	});
 	const readAs = {
 		as: Schema.optionalKey(
 			Schema.Literals(['text', 'image', 'sheet', 'document']).annotate({
 				description:
-					'Optional format preference. Images and PDFs always use their native model format.'
+					"Optional. A PDF answers its transcription as text; 'image' shows the original instead. An image is always shown."
 			})
 		),
 		sheet: Schema.optionalKey(
@@ -1397,39 +1623,11 @@ Related rows go inside their root row in the same call, never in a separate writ
 			})
 		)
 	};
-	if (x.attachments !== undefined) {
-		const readAttachmentTool = Tool.make('read_attachment', {
-			description:
-				'Read a file attached to a message (its seq and file index as the message lists them). The same file is a stored document with an id, so read_file can read it by that id too. The file type selects its format: screenshots and images, and PDF documents, are attached to your next step for you to inspect. Text is returned directly. For XLSX, choose a 0-based worksheet number; the response lists sheet names.',
-			parameters: Schema.Struct({
-				seq: Schema.Number.check(Schema.isInt()),
-				file: Schema.optionalKey(
-					Schema.Number.check(Schema.isInt()).annotate({ description: 'index, default 0' })
-				),
-				...readAs
-			}),
-			success: ToolAnswer
-		});
-		yield* add(
-			readAttachmentTool,
-			Toolkit.make(readAttachmentTool).toHandlers({
-				read_attachment: (i) =>
-					guard(
-						Effect.gen(function* () {
-							const row = yield* x.row(i.seq);
-							const file = row === undefined ? undefined : filesOf(row)[i.file ?? 0];
-							if (file === undefined) return err('That message has no such file.');
-							return yield* readStored(x.attachments!, file, i);
-						})
-					)
-			})
-		);
-	}
 	// a file already filed on a record (a scan on a job, a photo on a report): read only when the person reads that record
 	if (x.attachments !== undefined) {
 		const readFileTool = Tool.make('read_file', {
 			description:
-				"Read any stored file by its file reference ({ id }): a record's file field, any of this conversation's inputs (every [file: … id:…] line, filtered messages' files included) or outputs, or the same id a message attachment lists. Video and audio cannot be viewed: the answer says so. Its type selects image, PDF document, text or XLSX sheet. read_attachment is a shortcut for a message attachment by seq and file index; the id is the same document. Use it to compare values with the original evidence.",
+				"Read any stored file by its file reference ({ id }): a record's file field, any of this conversation's inputs (every [file: … id:…] line, filtered messages' files included) or outputs, or a message attachment. An image (or a PDF read with as: 'image') is shown to you from your next step until this turn ends: read each once. A PDF answers its full transcription as text; text answers directly; an XLSX answers one sheet (sheet, 0-based) and lists the sheet names. Video and audio cannot be viewed: the answer says so.",
 			parameters: Schema.Struct({
 				id: Schema.String.annotate({ description: 'the file id' }),
 				...readAs
@@ -1443,6 +1641,15 @@ Related rows go inside their root row in the same call, never in a separate writ
 					guard(
 						Effect.gen(function* () {
 							const id = i.id ?? '';
+							// a file attached to this conversation's messages is this conversation's to read, by its own type
+							const [attached] = yield* x.engine.db.read([
+								{
+									text: `SELECT i - 'message' AS file FROM sys_conversation c, jsonb_array_elements(c.inputs) i WHERE c.id = $1 AND i->>'id' = $2 LIMIT 1`,
+									params: [x.conv.id, id]
+								}
+							]);
+							const input = attached?.rows[0]?.['file'];
+							if (input !== undefined) return yield* readStored(x.attachments!, input, i);
 							const [r] = yield* x.engine.db.read([
 								{
 									text: `SELECT f.field, f.created_by, EXISTS (
@@ -1531,7 +1738,10 @@ Related rows go inside their root row in the same call, never in a separate writ
 	}
 	const staff = a.actor.kind === 'member' && !a.actor.external;
 	// one tool over the source: a text, a path to read, or nothing (the file list); the released source or the author's draft
-	if (x.workspace !== undefined || x.draft !== undefined) {
+	if (
+		(x.workspace !== undefined || x.draft !== undefined) &&
+		!(a.actor.kind === 'member' && a.actor.external)
+	) {
 		const workspaceSearchTool = Tool.make('workspace_search', {
 			description:
 				'Read or search the workspace source (src/: models, policies, teams, automations, apps, lib), as released or, with draft: true, your Studio draft. ' +
@@ -1604,7 +1814,16 @@ Related rows go inside their root row in the same call, never in a separate writ
 										.entries())
 										if (line.toLowerCase().includes(want) && ++total <= limit)
 											hits.push({ path, line: n + 1, text: line.trim().slice(0, 200) });
-								return ok({ total, hits });
+								// the source names no such thing: neither does the data, so the next step is the answer, not another search
+								return ok(
+									total === 0
+										? {
+												total,
+												hits,
+												note: `Nothing in the source mentions '${i.text}': no model holds it. Answer from the fields the models do have, and say what is missing.`
+											}
+										: { total, hits }
+								);
 							}
 							return err(
 								'Give path to read a file or text to search; workspace_list shows a folder.'
@@ -1641,7 +1860,9 @@ Related rows go inside their root row in the same call, never in a separate writ
 										? 'You have no Studio draft in this workspace.'
 										: 'This workspace was built without its source.'
 								);
-							const dir = (i.path ?? 'src/').replace(/\/?$/, '/');
+							// '', '.' and '/' are the workspace root; every other folder ends in one '/'
+							const at = (i.path ?? 'src/').replace(/^(?:\.\/|\/)+/, '').replace(/^\.$/, ''),
+								dir = at === '' ? '' : at.replace(/\/?$/, '/');
 							const entries = new Set<string>();
 							for (const f of yield* Port.attempt('workspace.files', () => ws.files()))
 								if (f.startsWith(dir)) {
@@ -1650,7 +1871,7 @@ Related rows go inside their root row in the same call, never in a separate writ
 									entries.add(cut < 0 ? rest : rest.slice(0, cut + 1));
 								}
 							return entries.size === 0
-								? err(`Nothing is under '${dir}'.`)
+								? err(`Nothing is under '${dir}'; workspace_list { path: '' } shows the root.`)
 								: ok({ path: dir, entries: [...entries].sort() });
 						})
 					)
@@ -1848,11 +2069,18 @@ Related rows go inside their root row in the same call, never in a separate writ
 			})
 		);
 	}
-	// the person's own media from the web: the host fetches and stores it, so no bytes enter the engine
-	if (agent && x.inApp && staff && store !== undefined) {
+	// the person's own media from the web: the host fetches and stores it, so no bytes enter the engine (the browser's
+	// download does the same with its sign-ins, so a turn with a browser has that one)
+	if (
+		agent &&
+		x.inApp &&
+		staff &&
+		store !== undefined &&
+		!x.hostTools.some((t) => t.name === 'browser_download')
+	) {
 		const downloadTool = Tool.make('download', {
 			description:
-				"Save a media file (an image, audio, video, a PDF or an HTML page) at a public http(s) URL as the person's file: the host fetches it and keeps it only if its bytes are media, at most 100 MiB. Source code and archives are read with the browser, not downloaded.",
+				"Save a file at a public http(s) URL as the person's file (an image, audio, video, a PDF, an HTML page, or a CAD model or drawing: STEP, IGES, STL, DWG, DXF, glTF): the host fetches it and keeps it only if its bytes are one of those, at most 100 MiB. Source code and archives are not downloaded.",
 			parameters: Schema.Struct({
 				url: Schema.String.annotate({ description: "the media file's public http(s) URL" })
 			}),
@@ -1886,14 +2114,15 @@ Related rows go inside their root row in the same call, never in a separate writ
 		const runJsTool = Tool.make('run_js', {
 			description:
 				'Run JavaScript in a fresh isolate to parse, transform, aggregate or compute. code is the body of an async function of input (return the answer; await works): ' +
-				'plain JavaScript, no require, process, fetch, timers or files; console lines come back with the answer. ' +
+				'plain JavaScript, no require, process, fetch or timers; console lines come back with the answer. ' +
+				"The conversation files you name in files arrive as input.files, each name → its content (an XLSX's worksheets as rows of cells, text as text, other bytes as base64): compute from them, never retype their values. " +
 				'With http: true (when your policies grant it), await http({ method?, url, headers?, body? }) answers { status, headers, text }: public https only, no redirects, at most 4 MiB. ' +
 				'Return { files: [{ name, text } | { name, base64 }] } to give the person files (text, CSV, JSON, Markdown, media, PDF, office documents, archives; never programs): each is kept as their file and its reference replaces it. ' +
 				(bundler === undefined
 					? ''
 					: "Or file: a skill's script, run as written ('<skill>/<path>'; args are its process.argv): require and import resolve inside the skill's folder (read-only at /app, the working directory) and its own node_modules; " +
 						"fs reads /app and the conversation files you name in files (read-only at /in/<name>) and writes /out, whose files become the person's; path, buffer, process, util are there, every other Node built-in fails by name; with http: true it has fetch. It answers { exitCode, files }. " +
-						"One call holds the whole run, e.g. { file: 'sales/scripts/report.js', args: ['/in/q3.csv', '/out/summary.json'], files: [{ seq: 4, file: 0 }] }: file is required for every run of a script. " +
+						"One call holds the whole run, e.g. { file: 'sales/scripts/report.js', args: ['/in/q3.csv', '/out/summary.json'], files: [{ id: '<file id>' }] }: file is required for every run of a script. " +
 						"A repository reference's file runs the same way ('<reference>/<path>', as reference named it), as pure computation: never with fetch. ") +
 				'Walls: 2 s of CPU, 256 MiB, 60 s, a 4 MiB answer, 64 MiB written, 1 MiB printed.',
 			parameters: Schema.Struct({
@@ -1912,17 +2141,9 @@ Related rows go inside their root row in the same call, never in a separate writ
 					Schema.Array(Schema.String).annotate({ description: "the file's process.argv after it" })
 				),
 				files: Schema.optionalKey(
-					Schema.Array(
-						Schema.Union([
-							Schema.Struct({ id: Schema.String }),
-							Schema.Struct({
-								seq: Schema.Number.check(Schema.isInt()),
-								file: Schema.optionalKey(Schema.Number.check(Schema.isInt()))
-							})
-						])
-					).annotate({
+					Schema.Array(Schema.Struct({ id: Schema.String })).annotate({
 						description:
-							"the conversation files the file reads at /in/<name>: an attachment as read_attachment names it ({ seq, file }), or a file reference's { id }"
+							'conversation files by the id each file line lists: input.files for code, /in/<name> for a file'
 					})
 				),
 				http: Schema.optionalKey(
@@ -1945,19 +2166,32 @@ Related rows go inside their root row in the same call, never in a separate writ
 									: (file: { name: string; mime: string; bytes: Uint8Array }) =>
 											storeFile(x, store, file);
 							const granted = i.http === true ? http : undefined;
-							if (i.file === undefined)
-								return i.code === undefined
-									? err('Give code, or a file to run.')
-									: ok(
-											yield* runJs({
-												code: i.code,
-												input: i.input ?? null,
-												guest,
-												http: granted,
-												invocation: callId,
-												keep
-											})
-										);
+							if (i.file === undefined) {
+								if (i.code === undefined) return err('Give code, or a file to run.');
+								const named = yield* conversationFiles(x, i.files ?? []);
+								if (typeof named === 'string') return err(named);
+								const given = i.input ?? null;
+								if (named.length > 0 && given !== null && !Predicate.isObject(given))
+									return err('With files, input is an object: the files join it as input.files.');
+								return ok(
+									yield* runJs({
+										code: i.code,
+										input:
+											named.length === 0
+												? given
+												: {
+														...(Predicate.isObject(given) ? given : {}),
+														files: Object.fromEntries(
+															named.map(([name, bytes]) => [name, fileContent(name, bytes)])
+														)
+													},
+										guest,
+										http: granted,
+										invocation: callId,
+										keep
+									})
+								);
+							}
 							if (i.code !== undefined) return err('Give code or file, not both.');
 							if (bundler === undefined) return err('This workspace runs no files: give code.');
 							const slash = i.file.indexOf('/'),
@@ -2132,7 +2366,7 @@ Related rows go inside their root row in the same call, never in a separate writ
 			const runsTool = Tool.make('runs', {
 				description:
 					'Automation runs, newest first: filter by automation (an exact name, or a prefix ending in *), status, cause and a due-time window; page with the cursor a page answers as next. ' +
-					'Give id for one run in detail: its input, result, error, every attempt and its log lines. You see the runs of automations you hold and the runs you started (only their status, for runs you merely caused).',
+					'Give id for one run in detail: its input, result, error, every attempt and its log lines. You see the runs of automations you hold and the runs you caused: a run you started answers its result; one you merely triggered, its status.',
 				parameters: Schema.Struct({
 					id: Schema.optionalKey(Schema.String.annotate({ description: 'one run, in detail' })),
 					automation: Schema.optionalKey(
@@ -2467,8 +2701,15 @@ Related rows go inside their root row in the same call, never in a separate writ
 		run: (name: string, input: unknown, callId: string) =>
 			Schema.decodeUnknownEffect(
 				entries.find((entry) => entry.name === name)?.tool.parametersSchema ?? Schema.Unknown,
-				CLOSED
+				// every issue at once, so a wrong call learns all it must change in one answer
+				{ ...CLOSED, errors: 'all' }
 			)(input).pipe(
+				Effect.mapError(
+					(error) =>
+						new Error(
+							`Invalid parameters for tool '${name}': ${error.message}${name === 'read' ? misplaced(input) : ''}`
+						)
+				),
 				Effect.flatMap((decoded) => toolkit.handle(name, decoded, callId, CLOSED)),
 				Effect.flatMap(Stream.runLast),
 				Effect.map((last) =>
@@ -2482,18 +2723,22 @@ Related rows go inside their root row in the same call, never in a separate writ
 				),
 				// an unknown tool or a refused input (`Invalid parameters for tool …`): the model's answer
 				Effect.catch((error) =>
-					Effect.succeed(
-						err(
-							error.message.replace(
-								/^Toolkit\.\w+\.handle: Invalid parameters for tool '\w+': /,
-								''
-							)
-						)
-					)
+					Effect.succeed(err(error.message.replace(/^Toolkit\.\w+\.handle: /, '')))
 				)
 			)
 	} satisfies Catalogue;
 });
+/** A read whose options sit beside its keys instead of inside them: the shape it meant. */
+const OPTIONS = new Set(['fields', 'where', 'orderBy', 'limit', 'search', 'aggregate']);
+const misplaced = (input: unknown): string => {
+	if (!Predicate.isObject(input)) return '';
+	const keys = Object.keys(input),
+		loose = keys.filter((key) => OPTIONS.has(key)),
+		root = keys.find((key) => !OPTIONS.has(key));
+	return loose.length === 0
+		? ''
+		: `\nOptions go inside the key they narrow, as an object: { "${root ?? '<model>'}": { "${loose[0]}": … } }.`;
+};
 /** A file a tool made, stored as the member's (`sys_conversation.outputs`): the reference a file field takes and the panel offers. */
 const storeFile = Effect.fn('Agents.storeFile')(function* (
 	x: ToolContext,
@@ -2510,21 +2755,9 @@ const InputFile = systemRow('sys_file', ['id', 'name', 'key', 'size']);
  */
 const conversationFiles = Effect.fn('Agents.runFileInputs')(function* (
 	x: ToolContext,
-	given: readonly ({ readonly id: string } | { readonly seq: number; readonly file?: number })[]
+	refs: readonly { readonly id: string }[]
 ) {
-	if (given.length === 0) return [];
-	// an attachment is addressed as the transcript lists it: its message's seq and its index there
-	const refs: { readonly id: string }[] = [];
-	for (const ref of given) {
-		if ('id' in ref) {
-			refs.push(ref);
-			continue;
-		}
-		const row = yield* x.row(ref.seq);
-		const id = row === undefined ? undefined : filesOf(row)[ref.file ?? 0]?.id;
-		if (id === undefined) return `Message ${ref.seq} has no stored file ${ref.file ?? 0}.`;
-		refs.push({ id });
-	}
+	if (refs.length === 0) return [];
 	const member = x.authority.actor.kind === 'member' ? x.authority.actor.id : null,
 		files = x.engine.files;
 	if (member === null || files === undefined) return 'This run can be handed no files.';
@@ -2546,6 +2779,16 @@ const conversationFiles = Effect.fn('Agents.runFileInputs')(function* (
 	}
 	return named;
 });
+/** A conversation file as inline code reads it: an XLSX's worksheets by name, text as text, other bytes as base64. */
+const fileContent = (name: string, bytes: Uint8Array): Json => {
+	if (/\.xlsx$/i.test(name))
+		return Object.fromEntries(xlsxSheets(bytes).map((sheet, n) => [sheet, xlsxCells(bytes, n)]));
+	try {
+		return new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+	} catch {
+		return { base64: toBase64(bytes) };
+	}
+};
 const ReferenceFile = systemRow('sys_file', ['key', 'size']);
 const ReferenceJson = Schema.fromJsonString(ReferenceIndex);
 /**

@@ -14,6 +14,7 @@ import type {
 	LayerColumn,
 	LayerField,
 	McpName,
+	PathModel,
 	ReadField,
 	ReadPath,
 	ReadableName,
@@ -24,7 +25,7 @@ import type {
 } from '../names.ts';
 import type { Id, Rate } from '../values.ts';
 import type { GroupName } from '../runtime/names.ts'; // hook:access
-import type { LayerWhere, Where } from '../where.ts';
+import type { ModelWhere } from '../where.ts';
 
 // ── names a grant uses ──
 /** The names of `C`'s `state` fields: what a policy's `moves` grant is keyed by. */
@@ -197,7 +198,9 @@ export class Verdict {
 // ── grants ──
 // `& object` on every all-optional arm: the parameter is `P & Exact<P, …>`, and a string intersected with such an arm
 // is not refused.
-type Scope<C extends ModelName> = Where<C> & object;
+// A grant's `where` is the policy's authority over the model's rows, not a caller's read: it may name any field and cross
+// any relation, and the related model's own policies never apply to it.
+type Scope<C extends ModelName> = ModelWhere<C> & object;
 /**
  * A read grant: `true` (every declared layer, every field), or a layer map over the model's `read` paths. A layer's
  * `where` filters it (the root's: which roots; a deeper one's: that layer's rows, or nulls a ref, never the root) and
@@ -207,7 +210,7 @@ export type ReadGrant<C extends ModelName> =
 	| true
 	| ({
 			[P in ReadPath<C>]?: {
-				where?: LayerWhere<C, P> & object;
+				where?: ModelWhere<PathModel<C, P>> & object;
 				fields?: readonly LayerField<C, P>[];
 			} & object;
 	  } & object);
@@ -312,7 +315,7 @@ type PolicyBase = {
  * 	description: 'Contractors raise variations on their own jobs.',
  * 	grants: {
  * 		variation_requests: {
- * 			read: { variation_requests: { where: { raised_by: { eq: { actor: 'id' } } } } },
+ * 			read: { variation_requests: { where: { raised_by: { eq: { var: 'requestor.id' } } } } },
  * 			create: {
  * 				columns: { variation_requests: ['job_assignment_id', 'title', 'amount'] },
  * 				check: function* (rows, ctx) {

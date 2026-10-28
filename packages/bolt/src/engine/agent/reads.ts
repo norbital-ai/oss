@@ -7,7 +7,14 @@ import { BoltError } from '../../protocol/errors.ts';
 import { publicEnvoys, type EngineManifest } from '../manifest.ts';
 import { inboxRequests, openRequests } from '../approvals/inbox.ts';
 import { INBOX_LIMIT, noticeRow } from '../live/hub.ts';
-import { CONVERSATIONS, conversationRow, isStaff, rowsOf, transcriptRow } from './schema.ts';
+import {
+	CONVERSATIONS,
+	conversationRow,
+	isStaff,
+	rowsOf,
+	sharedConversations,
+	transcriptRow
+} from './schema.ts';
 import { MSG } from '../conversations/store.ts';
 
 /** Direct typed DB reads keep the read service independent of the agent execution service. */
@@ -54,15 +61,14 @@ export const agentRead = Effect.fn('Agents.read')(function* (
 					text: `SELECT to_jsonb(c) || jsonb_build_object('peer', CASE WHEN c.kind = 'dm' THEN (SELECT u.name FROM sys_message p
     JOIN sys_user u ON u.id = COALESCE(p."as"->'envoy'->>'member', p."as"->>'member', p.author) WHERE p.conversation = c.id
     ORDER BY p.seq LIMIT 1) END) AS r FROM sys_conversation c WHERE c.parent IS NULL AND
-    (c.owner = $1 OR (c.integration IS NOT NULL AND (c.envoy IN (SELECT jsonb_array_elements_text($2::jsonb)) OR
-    EXISTS (SELECT 1 FROM sys_message p WHERE p.conversation = c.id AND $1 IN (p.author, p."as"->>'member', p."as"->'envoy'->>'member'))))
-    OR (c.run IS NOT NULL AND $3))
+    (c.owner = $1 OR ${sharedConversations({ member: '$1', admin: '$3', staff: '$4', envoys: '$2' })})
     ORDER BY updated_at DESC, id COLLATE "C" DESC LIMIT ${CONVERSATIONS}`,
 					// an automation's inference transcripts are an administrator's to read
 					params: [
 						read.member,
 						JSON.stringify(publicEnvoys(manifest)),
-						reader.as === 'workspace' || reader.authority.admin
+						reader.as === 'workspace' || reader.authority.admin,
+						reader.as === 'workspace' || isStaff(reader.authority)
 					]
 				}
 			]);

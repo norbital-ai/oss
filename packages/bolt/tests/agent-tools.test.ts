@@ -30,6 +30,7 @@ import { Bundler, Files, GuestIsolates, Http, Logs } from '../src/engine/ports.t
 import { bundler } from '../src/node/bundler/index.ts';
 import { BROKEN, filesOf, RENDER, REPORT, SALES, skillOf } from './support/run-file-trees.ts';
 import { REFERENCE } from '../src/engine/agent/run-js.ts';
+import { BOUNDS } from '../src/engine/agent/context.ts';
 import { treeDigest } from '../src/engine/artifact/read.ts';
 import { Approvals, Callables, Live, Reads, Writes } from '../src/engine/services.ts';
 import { TestWorkspace } from '../src/test/effect.ts';
@@ -65,7 +66,14 @@ const manifest: EngineManifest = {
 	exposures: {
 		tasks: { read: { tasks: { fields: 'all' } }, create: { columns: { tasks: ['title'] } } }
 	},
-	models: { tasks: { description: 'A task', label: 'title', fields: { title: { kind: 'text' } } } },
+	models: {
+		tasks: {
+			description: 'A task',
+			label: 'title',
+			fields: { title: { kind: 'text' } },
+			search: { text: ['title'] }
+		}
+	},
 	relationships: {},
 	integrations: {},
 	agent: { skills: {} },
@@ -122,7 +130,7 @@ const ctx = (
 				...(engine.bundler === undefined ? {} : { bundler: engine.bundler })
 			},
 			authority: member({ admin: true }),
-			bindings: { now: '2026-09-26T00:00:00.000Z', today: '2026-09-26', tz: 'UTC', params: {} },
+			bindings: { now: '2026-09-26T00:00:00.000Z', today: '2026-09-26', tz: 'UTC' },
 			turn: 't1',
 			conv: {
 				id: 'c1',
@@ -148,6 +156,7 @@ const ctx = (
 			mcpTools: [],
 			hostTools: [],
 			receipts: [],
+			read: new Map(),
 			files: [],
 			jobs: yield* jobs(),
 			setPlan: () => Effect.void,
@@ -155,7 +164,6 @@ const ctx = (
 			compact: () => false,
 			ask: () => {},
 			messages: () => Effect.succeed([]),
-			row: () => Effect.succeed(undefined),
 			output: () => Effect.succeed(undefined),
 			history: () => Effect.succeed([]),
 			subagent: {
@@ -187,7 +195,9 @@ const logRows = (
 /** This step's tool names, one tool of its toolkit (or none), and one call run as the actor (P7: the catalogue is a toolkit). */
 const names = (x: ToolContext) => Effect.map(catalogue(x), (c) => c.tools.map((t) => t.name));
 const tool = (x: ToolContext, name: string) =>
-	Effect.map(catalogue(x), (c) => (Object.hasOwn(c.toolkit.tools, name) ? c.toolkit.tools[name] : undefined));
+	Effect.map(catalogue(x), (c) =>
+		Object.hasOwn(c.toolkit.tools, name) ? c.toolkit.tools[name] : undefined
+	);
 const requiredTool = (x: ToolContext, name: string) =>
 	Effect.flatMap(tool(x, name), (t) =>
 		t === undefined ? Effect.die(new Error(`missing tool ${name}`)) : Effect.succeed(t)
@@ -252,7 +262,8 @@ describe('fewer calls for the common paths', () => {
 		() =>
 			Effect.gen(function* () {
 				const reads: Parameters<AgentEngine['read']>[0][number][] = [];
-				const answer = { tasks: { rows: [{ id: '1', title: 'Fix the van' }], next: null } };
+				const id = '01a17f00-7596-7197-9dc4-f6789dfe8829';
+				const answer = { tasks: { rows: [{ id, title: 'Fix the van' }] } };
 				const x = yield* ctx(
 					{},
 					{
@@ -264,16 +275,96 @@ describe('fewer calls for the common paths', () => {
 					}
 				);
 				expect(
-					yield* result(x, 'read', { tasks: { where: { id: { eq: '1' } }, limit: 5 } })
+					yield* result(x, 'read', { tasks: { where: { id: { eq: id } }, limit: 5 } })
 				).toMatchObject({ result: answer });
 				expect(reads).toHaveLength(1);
-				// the schema names the caller's roots and paths (propertyNames): an unreadable root is no valid key
+				// the schema names the caller's roots and paths as its properties: an unreadable root is no valid key
 				expect(yield* result(x, 'read', { tasks: {}, secrets: {} })).toEqual({
 					result: { error: expect.stringContaining('secrets') }
 				});
+				// options beside the key instead of inside it: the answer names the shape it meant
+				expect(yield* result(x, 'read', { tasks: {}, fields: ['title'], limit: 5 })).toEqual({
+					result: {
+						error: expect.stringContaining(
+							'Options go inside the key they narrow, as an object: { "tasks": { "fields": … } }.'
+						)
+					}
+				});
 				const read = yield* requiredTool(x, 'read');
-				expect(JSON.stringify(toolSchema(read))).toContain('propertyNames');
+				expect(JSON.stringify(toolSchema(read))).toContain('"tasks"');
+				expect(JSON.stringify(toolSchema(read))).not.toContain('"secrets"');
 				expect(reads).toHaveLength(1);
+			})
+	);
+	it.effect(
+		"read's variables: the requestor stays an actor operand, { clock } is this turn's literal before decode",
+		() =>
+			Effect.gen(function* () {
+				const reads: Parameters<AgentEngine['read']>[0][number][] = [];
+				const dated: EngineManifest = {
+					...manifest,
+					models: {
+						tasks: {
+							...manifest.models.tasks!,
+							fields: { title: { kind: 'text' }, due: { kind: 'date' }, seen: { kind: 'instant' } }
+						}
+					}
+				};
+				const x = yield* ctx(
+					{},
+					{
+						manifest: dated,
+						read: (irs) =>
+							Effect.sync(() => {
+								reads.push(...irs);
+								return [{ tasks: { rows: [] } }];
+							})
+					}
+				);
+				yield* result(x, 'read', {
+					tasks: {
+						where: {
+							title: { eq: { var: 'requestor.id' } },
+							due: { gte: { var: 'today - days(7)' }, lte: { var: 'today' } },
+							seen: { lt: { var: 'now + hours(1)' } }
+						}
+					}
+				});
+				const sent = JSON.stringify(reads);
+				expect(sent).toContain('"Var"');
+				expect(sent).toContain('2026-09-19');
+				expect(sent).toContain('2026-09-26');
+				expect(sent).toContain('2026-09-26T01:00:00.000Z');
+				expect(sent).not.toContain('today');
+				// a bad expression is the read's own refusal, before any read
+				expect(
+					yield* result(x, 'read', {
+						tasks: { where: { due: { eq: { var: 'today - hours(1)' } } } }
+					})
+				).toMatchObject({ result: { error: expect.stringContaining('whole days') } });
+				expect(reads).toHaveLength(1);
+			})
+	);
+	it.effect(
+		"describe answers a key's declared shape in the same call, and reads nothing for it",
+		() =>
+			Effect.gen(function* () {
+				const reads: Parameters<AgentEngine['read']>[0][number][] = [];
+				const x = yield* ctx(
+					{},
+					{
+						read: (irs) =>
+							Effect.sync(() => {
+								reads.push(...irs);
+								return [{ tasks: { rows: [] } }];
+							})
+					}
+				);
+				const answer = yield* result(x, 'read', { tasks: { describe: true } });
+				expect(answer).toMatchObject({
+					result: { tasks: { model: 'tasks', fields: { title: expect.any(String) } } }
+				});
+				expect(reads).toHaveLength(0);
 			})
 	);
 	it.effect(
@@ -318,7 +409,11 @@ describe('fewer calls for the common paths', () => {
 				const act: AgentEngine['act'] = (r) =>
 					Effect.sync(() => {
 						writes.push({ key: r.key, input: r.input });
-						return { captured: [], v: 0, outcome: { kind: 'committed', output: null, records: [] } };
+						return {
+							captured: [],
+							v: 0,
+							outcome: { kind: 'committed', output: null, records: [] }
+						};
 					});
 				const x = yield* ctx({ inApp: false }, { act }),
 					create = { callable: 'tasks.create', input: [{ title: 'a' }, { title: 'b' }] };
@@ -334,13 +429,39 @@ describe('fewer calls for the common paths', () => {
 				expect(writes).toEqual([{ key: 'agent:t1:call', input: create.input }]);
 			})
 	);
+	it.effect('an act that wrote nothing says so: the record already holds the supplied values', () =>
+		Effect.gen(function* () {
+			const act: AgentEngine['act'] = () =>
+				Effect.succeed({
+					captured: [],
+					v: 0,
+					outcome: {
+						kind: 'committed',
+						output: null,
+						records: [],
+						unchanged: [{ model: 'tasks', id: 't1' }]
+					}
+				});
+			const x = yield* ctx({ inApp: false }, { act });
+			expect(
+				yield* result(x, 'act', { callable: 'tasks.create', input: [{ title: 'a' }] })
+			).toMatchObject({
+				result: {
+					kind: 'committed',
+					note: 'no change: tasks t1 already holds these values (a write callback may derive them)'
+				}
+			});
+		})
+	);
 });
 describe('approval decisions through act', () => {
 	it.effect(
 		'offered to staff when writes need approval; they decide as themselves, confirming first in the app',
 		() =>
 			Effect.gen(function* () {
-				expect(yield* tool(yield* ctx({ authority: member({ external: true }) }), 'act')).toBeUndefined();
+				expect(
+					yield* tool(yield* ctx({ authority: member({ external: true }) }), 'act')
+				).toBeUndefined();
 				const decided: Parameters<AgentEngine['approvals']['decide']>[0][] = [];
 				const approvals: Partial<AgentEngine['approvals']> = {
 					decide: (d) =>
@@ -381,7 +502,9 @@ describe('skill', () => {
 		'a large skill answers whole sections that fit and names the rest, never a clipped body',
 		() =>
 			Effect.gen(function* () {
-				const big = (n: number) => `## Part ${n}\n${'word '.repeat(1200)}\n`;
+				// each part a quarter of the result bound: the first ones fit, Part 5 never does
+				const big = (n: number) =>
+					`## Part ${n}\n${'word '.repeat(Math.ceil(BOUNDS.resultBytes / 20))}\n`;
 				const text = `---\ndescription: How to author\n---\n${[1, 2, 3, 4, 5].map(big).join('')}`;
 				const answer = yield* result(
 					yield* ctx({ skills: { authoring: skillOf({ 'SKILL.md': text }) } }),
@@ -442,176 +565,180 @@ describe('workspace_search', () => {
 					read: async () => 'draft'
 				};
 				expect(
-					yield* result(yield* ctx({ workspace, draft, authority: member() }), 'workspace_search', {
+					yield* result(yield* ctx({ workspace, draft, authority: member() }), 'workspace_list', {
 						draft: true
 					})
-				).toEqual({
-					result: {
-						files: ['src/new.ts'],
-						read: 'pass path (with draft: true for your draft) to read one of these'
-					}
-				});
+				).toEqual({ result: { path: 'src/', entries: ['new.ts'] } });
+				// '', '.' and '/' list the workspace root
+				for (const path of ['', '.', '/'])
+					expect(
+						yield* result(yield* ctx({ workspace, draft, authority: member() }), 'workspace_list', {
+							draft: true,
+							path
+						})
+					).toEqual({ result: { path: '', entries: ['src/'] } });
 				expect(
-					yield* tool(yield* ctx({ workspace, authority: member({ external: true }) }), 'workspace_search')
+					yield* tool(
+						yield* ctx({ workspace, authority: member({ external: true }) }),
+						'workspace_search'
+					)
 				).toBeUndefined();
 			})
 	);
 });
 describe('act starts automations', () => {
-	it.effect(
-		"act starts an automation or the model's named file and remote syncs",
-		() =>
-			Effect.gen(function* () {
-				const started: Parameters<AgentEngine['calls']['start']>[0][] = [];
-				const m: EngineManifest = {
-					...manifest,
-					policies: {},
-					exposures: {
-						tasks: {
-							read: { tasks: { fields: 'all' } },
-							syncs: { sheet: { with: 'file', parser: ['json'], schema: { a: { kind: 'int' } } } }
-						}
+	it.effect("act starts an automation or the model's named file and remote syncs", () =>
+		Effect.gen(function* () {
+			const started: Parameters<AgentEngine['calls']['start']>[0][] = [];
+			const m: EngineManifest = {
+				...manifest,
+				policies: {},
+				exposures: {
+					tasks: {
+						read: { tasks: { fields: 'all' } },
+						syncs: { sheet: { with: 'file', parser: ['json'], schema: { a: { kind: 'int' } } } }
+					}
+				},
+				automations: {
+					tidy: {
+						description: '',
+						runAs: 'trigger',
+						input: { day: { kind: 'date', optional: true } }
+					}
+				}
+			};
+			const calls: Partial<AgentEngine['calls']> = {
+				start: (s) =>
+					Effect.sync(() => {
+						started.push(s);
+						return { kind: 'committed', output: { kind: 'queued' }, records: [] };
+					})
+			};
+			let active: string | null = null;
+			const db: Partial<RawDb> = {
+				read: () =>
+					Effect.sync(() => [{ rows: active === null ? [] : [{ id: active }], affected: 0 }])
+			};
+			const authority = { ...member({ admin: true }), automations: ['tidy'] };
+			const x = yield* ctx({ authority, inApp: false }, { manifest: m, calls, db });
+			expect((yield* requiredTool(x, 'act')).description).toContain('tidy(day?: date)');
+			expect(
+				yield* result(x, 'act', { callable: 'automation.tidy', input: { day: '2026-09-01' } })
+			).toMatchObject({ result: { outcome: { output: { kind: 'queued' } } } });
+			expect(started[0]).toMatchObject({
+				automation: 'tidy',
+				runs: [{ input: { day: '2026-09-01' } }]
+			});
+			expect(yield* result(x, 'act', { callable: 'automation.purge' })).toEqual({
+				result: { error: "You may not run 'automation.purge'." }
+			});
+			expect((yield* requiredTool(x, 'act')).description).toContain(
+				'A file sync runs as <model>.sync.<sync>'
+			);
+			expect((yield* requiredTool(x, 'act')).description).toContain(
+				'tasks.sync.sheet(mode: import | export)'
+			);
+			expect(
+				yield* result(x, 'act', {
+					callable: 'automation.tasks.sync.sheet',
+					input: { mode: 'import' }
+				})
+			).toEqual({ result: { error: "You may not run 'automation.tasks.sync.sheet'." } });
+			yield* result(x, 'act', {
+				callable: 'tasks.sync.sheet',
+				input: { mode: 'import', file: 'f1' }
+			});
+			expect(started[1]).toMatchObject({
+				automation: 'tasks.sync.sheet',
+				runs: [{ input: { mode: 'import', file: 'f1' } }]
+			});
+			yield* result(x, 'act', {
+				callable: 'tasks.sync.sheet',
+				input: { mode: 'export', to: 'json' }
+			});
+			expect(started[2]).toMatchObject({ runs: [{ input: { mode: 'export', to: 'json' } }] });
+			started.pop();
+			const big = { mode: 'import', file: 'uploaded-sheet', context: { company: 'demo' } };
+			const withFiles = yield* ctx(
+				{ authority, inApp: false },
+				{
+					manifest: m,
+					calls,
+					db: {
+						read: (statements) =>
+							Effect.sync(() => {
+								const statement = first(statements);
+								return [
+									{
+										rows:
+											statement.params[1] === 'ann' && statement.params[0] === 'f-json'
+												? [{ key: 'k1', size: 20 }]
+												: [],
+										affected: 0
+									}
+								];
+							})
 					},
-					automations: {
-						tidy: {
-							description: '',
-							runAs: 'trigger',
-							input: { day: { kind: 'date', optional: true } }
-						}
-					}
-				};
-				const calls: Partial<AgentEngine['calls']> = {
-					start: (s) =>
-						Effect.sync(() => {
-							started.push(s);
-							return { kind: 'committed', output: { kind: 'queued' }, records: [] };
-						})
-				};
-				let active: string | null = null;
-				const db: Partial<RawDb> = {
-					read: () =>
-						Effect.sync(() => [{ rows: active === null ? [] : [{ id: active }], affected: 0 }])
-				};
-				const authority = { ...member({ admin: true }), automations: ['tidy'] };
-				const x = yield* ctx({ authority, inApp: false }, { manifest: m, calls, db });
-				expect((yield* requiredTool(x, 'act')).description).toContain('tidy(day?: date)');
-				expect(
-					yield* result(x, 'act', { callable: 'automation.tidy', input: { day: '2026-09-01' } })
-				).toMatchObject({ result: { outcome: { output: { kind: 'queued' } } } });
-				expect(started[0]).toMatchObject({
-					automation: 'tidy',
-					runs: [{ input: { day: '2026-09-01' } }]
-				});
-				expect(yield* result(x, 'act', { callable: 'automation.purge' })).toEqual({
-					result: { error: "You may not run 'automation.purge'." }
-				});
-				expect((yield* requiredTool(x, 'act')).description).toContain(
-					'A file sync runs as <model>.sync.<sync>'
-				);
-				expect((yield* requiredTool(x, 'act')).description).toContain(
-					'tasks.sync.sheet(mode: import | export)'
-				);
-				expect(
-					yield* result(x, 'act', {
-						callable: 'automation.tasks.sync.sheet',
-						input: { mode: 'import' }
-					})
-				).toEqual({ result: { error: "You may not run 'automation.tasks.sync.sheet'." } });
-				yield* result(x, 'act', {
+					files: { get: () => Effect.succeed(new TextEncoder().encode(JSON.stringify(big))) }
+				}
+			);
+			yield* result(withFiles, 'act', { callable: 'tasks.sync.sheet', inputFile: 'f-json' });
+			expect(started[2]).toMatchObject({
+				automation: 'tasks.sync.sheet',
+				runs: [{ input: big }]
+			});
+			started.pop();
+			expect(
+				yield* result(withFiles, 'act', {
 					callable: 'tasks.sync.sheet',
-					input: { mode: 'import', file: 'f1' }
-				});
-				expect(started[1]).toMatchObject({
-					automation: 'tasks.sync.sheet',
-					runs: [{ input: { mode: 'import', file: 'f1' } }]
-				});
-				yield* result(x, 'act', {
-					callable: 'tasks.sync.sheet',
-					input: { mode: 'export', to: 'json' }
-				});
-				expect(started[2]).toMatchObject({ runs: [{ input: { mode: 'export', to: 'json' } }] });
-				started.pop();
-				const big = { mode: 'import', file: 'uploaded-sheet', context: { company: 'demo' } };
-				const withFiles = yield* ctx(
-					{ authority, inApp: false },
-					{
-						manifest: m,
-						calls,
-						db: {
-							read: (statements) =>
-								Effect.sync(() => {
-									const statement = first(statements);
-									return [
-										{
-											rows:
-												statement.params[1] === 'ann' && statement.params[0] === 'f-json'
-													? [{ key: 'k1', size: 20 }]
-													: [],
-											affected: 0
-										}
-									];
-								})
-						},
-						files: { get: () => Effect.succeed(new TextEncoder().encode(JSON.stringify(big))) }
-					}
-				);
-				yield* result(withFiles, 'act', { callable: 'tasks.sync.sheet', inputFile: 'f-json' });
-				expect(started[2]).toMatchObject({
-					automation: 'tasks.sync.sheet',
-					runs: [{ input: big }]
-				});
-				started.pop();
-				expect(
-					yield* result(withFiles, 'act', {
-						callable: 'tasks.sync.sheet',
-						inputFile: 'someone-else'
-					})
-				).toMatchObject({
-					result: { error: expect.stringContaining('No file someone-else of yours') }
-				});
-				const synced = yield* ctx(
-					{ authority: { ...member(), automations: ['tidy', 'tasks.sync.erp'] }, inApp: false },
-					{
-						manifest: {
-							...m,
-							exposures: {
-								tasks: {
-									...m.exposures['tasks'],
-									read: { tasks: { fields: 'all' } },
-									syncs: { erp: { with: 'erp', read: true, every: '1min' } }
-								}
-							},
-							integrations: {
-								erp: {
-									description: 'An ERP',
-									driver: 'http',
-									http: { baseUrl: 'https://erp.example' }
-								}
+					inputFile: 'someone-else'
+				})
+			).toMatchObject({
+				result: { error: expect.stringContaining('No file someone-else of yours') }
+			});
+			const synced = yield* ctx(
+				{ authority: { ...member(), automations: ['tidy', 'tasks.sync.erp'] }, inApp: false },
+				{
+					manifest: {
+						...m,
+						exposures: {
+							tasks: {
+								...m.exposures['tasks'],
+								read: { tasks: { fields: 'all' } },
+								syncs: { erp: { with: 'erp', read: true, every: '1min' } }
 							}
 						},
-						calls,
-						db
-					}
-				);
-				expect((yield* requiredTool(synced, 'act')).description).toContain(
-					'A remote sync reads its source now as <model>.sync.<sync> with {}: tasks.sync.erp'
-				);
-				expect((yield* requiredTool(synced, 'act')).description).not.toContain('tasks.sync.erp()');
-				yield* result(synced, 'act', { callable: 'tasks.sync.erp', input: {} });
-				expect(started.at(-1)).toMatchObject({
-					automation: 'tasks.sync.erp',
-					runs: [{ input: {} }]
-				});
-				started.pop();
-				expect(
-					yield* result(synced, 'act', { callable: 'automation.tasks.sync.erp', input: {} })
-				).toEqual({ result: { error: "You may not run 'automation.tasks.sync.erp'." } });
-				active = 'run-1';
-				expect(
-					yield* result(x, 'act', { callable: 'automation.tidy', input: { day: '2026-09-01' } })
-				).toEqual({ result: { run: 'run-1', alreadyActive: true } });
-				expect(started).toHaveLength(2);
-			})
+						integrations: {
+							erp: {
+								description: 'An ERP',
+								driver: 'http',
+								http: { baseUrl: 'https://erp.example' }
+							}
+						}
+					},
+					calls,
+					db
+				}
+			);
+			expect((yield* requiredTool(synced, 'act')).description).toContain(
+				'A remote sync reads its source now as <model>.sync.<sync> with {}: tasks.sync.erp'
+			);
+			expect((yield* requiredTool(synced, 'act')).description).not.toContain('tasks.sync.erp()');
+			yield* result(synced, 'act', { callable: 'tasks.sync.erp', input: {} });
+			expect(started.at(-1)).toMatchObject({
+				automation: 'tasks.sync.erp',
+				runs: [{ input: {} }]
+			});
+			started.pop();
+			expect(
+				yield* result(synced, 'act', { callable: 'automation.tasks.sync.erp', input: {} })
+			).toEqual({ result: { error: "You may not run 'automation.tasks.sync.erp'." } });
+			active = 'run-1';
+			expect(
+				yield* result(x, 'act', { callable: 'automation.tidy', input: { day: '2026-09-01' } })
+			).toEqual({ result: { run: 'run-1', alreadyActive: true } });
+			expect(started).toHaveLength(2);
+		})
 	);
 });
 describe('wait', () => {
@@ -942,6 +1069,14 @@ describe('run_js', () => {
 			}),
 		30_000
 	);
+	it.live("an answer's own `files` data is data; only the person's file shape is kept", () =>
+		Effect.gen(function* () {
+			const x = yield* ctx();
+			expect(
+				yield* run(x, { code: "return { title: 'x', files: [{ name: 'a.mp4', size: '5' }] };" })
+			).toEqual({ result: { answer: { title: 'x', files: [{ name: 'a.mp4', size: '5' }] } } });
+		})
+	);
 	it.live("reports a throw and a syntax error at the script's line", () =>
 		Effect.gen(function* () {
 			const x = yield* ctx();
@@ -1042,6 +1177,35 @@ describe('run_js over a file', () => {
 				// the skill names its own files to run, never the packages it vendors
 				expect(yield* result(x, 'skill', { name: 'report' })).toMatchObject({
 					result: { files: ['scripts/lib/summarize.js', 'scripts/report.js', 'shared/index.js'] }
+				});
+				// read again in the same turn, its text is already above: a short note, not the skill again
+				expect(yield* result(x, 'skill', { name: 'report' })).toEqual({
+					result: { note: 'You read report earlier in this turn; its text is above.' }
+				});
+			}),
+		60_000
+	);
+	it.live(
+		'hands inline code the conversation files it names as input.files, beside its own input',
+		() =>
+			Effect.gen(function* () {
+				const { x } = yield* files({});
+				const [csv] = Schema.decodeUnknownSync(Kept)(
+					yield* run(x, {
+						input: [{ name: 'sales.csv', text: SALES }],
+						code: 'return { files: input };'
+					})
+				).result.answer.files;
+				if (csv === undefined) throw new Error('no CSV kept');
+				expect(
+					yield* run(x, {
+						code: "return input.files['sales.csv'].split('\\n')[0] + ' / ' + input.unit;",
+						input: { unit: 'kg' },
+						files: [{ id: csv.id }]
+					})
+				).toEqual({ result: { answer: `${SALES.split('\n')[0]} / kg` } });
+				expect(yield* run(x, { code: 'return 1;', input: [1], files: [{ id: csv.id }] })).toEqual({
+					result: { error: expect.stringContaining('input is an object') }
 				});
 			}),
 		60_000
@@ -1236,9 +1400,7 @@ describe('a sub-agent', () => {
 				...(yield* names(yield* ctx({ child: true })))
 			];
 			for (const n of ['update_plan', 'subagent']) expect(child).not.toContain(n);
-			expect(child).toEqual(
-				expect.arrayContaining(['read', 'act', 'wait', 'goals', 'ask_parent'])
-			);
+			expect(child).toEqual(expect.arrayContaining(['read', 'act', 'wait', 'goals', 'ask_parent']));
 			expect(yield* names(yield* ctx({ delegation: true, agents: ['workspace'] }))).not.toContain(
 				'ask_parent'
 			);
@@ -1378,7 +1540,7 @@ describe('runs and logs', () => {
 				expect(yield* result(x, 'runs', { cursor: 'nope' })).toEqual({
 					result: { error: 'That cursor is not one a page answered.' }
 				});
-				// a member holding billing.invoice: its runs in full, a run they caused as its status, nobody else's
+				// a member holding billing.invoice: its runs in full, a run they started with its result, nobody else's
 				const holder = yield* ctx({ authority: { ...member(), automations: ['billing.invoice'] } });
 				yield* runs(holder);
 				expect(ids(yield* result(holder, 'runs', {})).runs.map((r) => r.id)).toEqual([
@@ -1389,11 +1551,9 @@ describe('runs and logs', () => {
 				expect(yield* result(holder, 'runs', { id: 'r1' })).toMatchObject({
 					result: { input: { month: '09' } }
 				});
-				const caused = yield* result(holder, 'runs', { id: 'r4' });
-				expect(caused).toMatchObject({
-					result: { status: 'cancelled', error: { code: 'stopped' } }
+				expect(yield* result(holder, 'runs', { id: 'r4' })).toMatchObject({
+					result: { status: 'cancelled', error: { code: 'stopped' }, input: { secret: 1 } }
 				});
-				expect(caused).not.toHaveProperty('result.input');
 				expect(yield* result(holder, 'runs', { id: 'r5' })).toEqual({
 					result: { error: 'No automation run r5 you may read.' }
 				});

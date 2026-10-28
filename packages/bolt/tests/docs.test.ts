@@ -205,7 +205,7 @@ const docsTool = (external = false) =>
 				plan: null,
 				goals: []
 			},
-			bindings: { now: '2026-10-13T00:00:00.000Z', today: '2026-10-13', tz: 'UTC', params: {} },
+			bindings: { now: '2026-10-13T00:00:00.000Z', today: '2026-10-13', tz: 'UTC' },
 			turn: 't',
 			mode: 'agent',
 			inApp: true,
@@ -219,6 +219,7 @@ const docsTool = (external = false) =>
 			docs: yield* Docs.pipe(Effect.provide(Docs.fromAbi(docsPort()))),
 			hostTools: [],
 			receipts: [],
+			read: new Map(),
 			files: [],
 			jobs: yield* jobs(),
 			setPlan: unexpected,
@@ -226,7 +227,6 @@ const docsTool = (external = false) =>
 			compact: unexpectedSync,
 			ask: unexpectedSync,
 			messages: unexpected,
-			row: unexpected,
 			output: unexpected,
 			history: unexpected,
 			subagent: {

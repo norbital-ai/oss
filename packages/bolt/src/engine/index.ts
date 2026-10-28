@@ -116,6 +116,7 @@ export {
 	statusMigrations,
 	type MigrationBundle
 } from './schema/migrations.ts';
+export { MigrationImpact, impactLines, impactText } from '../protocol/migration-impact.ts';
 export { catalogOf } from './access/pred.ts';
 // ── exports: live ──
 export { LiveHubLive, LIVE, INBOX_LIMIT, noticeRow } from './live/hub.ts';

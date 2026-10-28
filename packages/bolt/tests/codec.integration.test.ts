@@ -87,7 +87,7 @@ const fixture = Effect.gen(function* () {
 				key: `key-${n}`,
 				issuedAt: NOW,
 				authority: admin,
-				bindings: { now: NOW, today: TODAY, tz: 'UTC', params: {} },
+				bindings: { now: NOW, today: TODAY, tz: 'UTC' },
 				invocationId: `inv-${n++}`,
 				...over
 			}
@@ -262,7 +262,7 @@ describe('codec: `Where` says a json list is empty', () => {
 					NOW
 				);
 				const cat = catalogOf(manifest),
-					b = { now: NOW, today: TODAY, tz: 'UTC', params: {} };
+					b = { now: NOW, today: TODAY, tz: 'UTC' };
 				const names = Effect.fnUntraced(function* (isEmpty: boolean) {
 					const [answer] = yield* readEngine({ db, manifest }).run(
 						[
@@ -388,7 +388,7 @@ export default { automation: { payroll: { body: function* (input, ctx) {
 								return (yield* reads.run(
 									batch,
 									{ as: 'workspace' },
-									{ now: NOW, today: TODAY, tz: 'UTC', params: {} }
+									{ now: NOW, today: TODAY, tz: 'UTC' }
 								)).map((value) => ({ ok: true, value }) satisfies CrossAnswer);
 							}).pipe(Effect.orDie)
 					};

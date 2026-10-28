@@ -117,19 +117,22 @@ export const browserTools = (browser: Browser['Service']): readonly HostTool[] =
 	}),
 	tool({
 		name: 'browser_screenshot',
-		description: 'See the open page: a screenshot attached to your next step.',
+		description:
+			'See the open page: a screenshot shown to you from your next step until this turn ends.',
 		readOnly: true,
 		input: Schema.Struct({}),
 		call: (_input, profile, context) =>
 			browser.screenshot(profile).pipe(
 				Effect.tap((bytes) => Effect.sync(() => context.attach({ mime: 'image/png', bytes }))),
-				Effect.as({ attached: 'the screenshot is attached to your next step' })
+				Effect.as({
+					attached: 'the screenshot is shown to you from your next step until this turn ends'
+				})
 			)
 	}),
 	tool({
 		name: 'browser_download',
 		description:
-			"Save a media file (an image, audio, video or a PDF) at an http(s) URL, fetched in your own browser (its sign-ins), as the person's file: it is kept only if its bytes are media, at most 100 MiB, and offered on this step; a file field or a post takes its reference. A public file is saved with download instead.",
+			"Save a file the web shows (an image, audio, video, a PDF, or a CAD model or drawing: STEP, IGES, STL, DWG, DXF, glTF) at its http(s) URL as the person's file, loaded by your own browser as the open page would load it (its sign-ins, the page as referrer): it is kept only if its bytes are one of those, at most 100 MiB, and offered on this step; a file field or a post takes its reference.",
 		input: Schema.Struct({ url: Schema.String }),
 		call: ({ url }, profile, context) =>
 			context.keep === undefined

@@ -49,8 +49,7 @@ describe('a live subscription on the engine', () => {
 					bindings: {
 						now: t.clock.now(),
 						today: t.clock.now().slice(0, 10),
-						tz: 'UTC',
-						params: {}
+						tz: 'UTC'
 					},
 					invocationId: 'i1'
 				});

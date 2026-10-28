@@ -57,17 +57,44 @@ const dataUrl = (f: { mime: string; bytes: Uint8Array }) =>
 /** The engine's messages decoded as its transcript rows hold them, by role. */
 const stepOf = Schema.decodeUnknownOption(StepContent),
 	saidOf = Schema.decodeUnknownOption(SaidContent);
-/** Engine messages (`{ text, toolCalls }` assistant rows, `{ id, name, result }` tool rows) as chat messages; files ride the last user message. */
+/**
+ * Engine messages (`{ text, toolCalls }` assistant rows, `{ id, name, result }` tool rows) as chat messages. A file a call
+ * opened follows that call's results as a user message, in the same place on every later step of the turn (providers
+ * cache the prefix); one whose call is no longer in the history rides the last user message.
+ */
 function messagesOf(r: AiRequest): Wire[] {
 	const out: Wire[] = r.system === undefined ? [] : [{ role: 'system', content: r.system }];
-	// only this turn's reasoning goes back (the tool loop a provider may need it for); an earlier turn's would bloat
-	// every later call and teaches a model to think inside its replies
+	// only the latest step's reasoning goes back (the tool calls it made are what a provider may need it for): earlier
+	// steps' would bloat every call, and a mistaken belief in one ("I have not seen that file") would be read again
+	// on every later step and acted on; an earlier turn's teaches a model to think inside its replies
 	const turn = r.messages.findLastIndex(
-		(m) => m.role === 'user' && !(typeof m.content === 'string' && m.content.startsWith(STATE_NOTE))
+			(m) =>
+				m.role === 'user' && !(typeof m.content === 'string' && m.content.startsWith(STATE_NOTE))
+		),
+		latest = r.messages.findLastIndex((m) => m.role === 'assistant');
+	const files = (r.files ?? []).map((f, n) => ({
+		call: f.call,
+		part: filePart(f, `attachment-${n + 1}`)
+	}));
+	const calls = new Set(
+		r.messages.flatMap((m) =>
+			m.role === 'tool' ? Option.toArray(Option.map(stepOf(m.content), (step) => step.id)) : []
+		)
 	);
+	// the files the run of tool results just written opened, as one user message after it
+	let ran: string[] = [];
+	const opened = () => {
+		const parts = files
+			.filter((f) => f.call !== undefined && ran.includes(f.call))
+			.map((f) => f.part);
+		if (parts.length > 0) out.push({ role: 'user', content: parts });
+		ran = [];
+	};
 	for (const [n, m] of r.messages.entries()) {
+		if (m.role !== 'tool') opened();
 		if (m.role === 'tool') {
 			const step = Option.getOrUndefined(stepOf(m.content));
+			if (step?.id !== undefined) ran.push(step.id);
 			out.push({
 				role: 'tool',
 				tool_call_id: step?.id ?? '',
@@ -81,7 +108,7 @@ function messagesOf(r: AiRequest): Wire[] {
 			out.push({
 				role: 'assistant',
 				content: textOf(m.content),
-				...(n < turn || reply?.reasoning === undefined || reply.reasoning === ''
+				...(n < turn || n !== latest || reply?.reasoning === undefined || reply.reasoning === ''
 					? {}
 					: { reasoning: reply.reasoning }),
 				...(calls.length === 0
@@ -96,36 +123,35 @@ function messagesOf(r: AiRequest): Wire[] {
 			});
 		} else out.push({ role: 'user', content: textOf(m.content) });
 	}
-	const files = r.files ?? [];
-	if (files.length > 0) {
-		// images as image parts, a PDF as a file part, text and an xlsx's sheets (as CSV) as text: providers refuse other file parts
-		const parts = files.map((f, n) => {
-			const name = `attachment-${n + 1}`;
-			if (f.mime.startsWith('image/')) return { type: 'image_url', image_url: { url: dataUrl(f) } };
-			if (f.mime === 'application/pdf')
-				return { type: 'file', file: { filename: name, file_data: dataUrl(f) } };
-			if (TEXT.test(f.mime))
-				return { type: 'text', text: `${name} (${f.mime}):\n${new TextDecoder().decode(f.bytes)}` };
-			if (f.mime === XLSX)
-				return {
-					type: 'text',
-					text: xlsxSheets(f.bytes)
-						.map(
-							(sheet, i) => `${name} sheet ${i} "${sheet}" (CSV):\n${csvOf(xlsxCells(f.bytes, i))}`
-						)
-						.join('\n')
-				};
-			// a type no provider takes is described, never sent: one odd file must not fail the whole request
-			return {
-				type: 'text',
-				text: `${name}: a ${f.mime} file cannot be shown to you; ask for a photo, a PDF or a text version`
-			};
-		});
-		const last = out.findLast((m) => m['role'] === 'user');
-		if (last === undefined) out.push({ role: 'user', content: parts });
-		else last['content'] = [{ type: 'text', text: last['content'] }, ...parts];
+	opened();
+	const loose = files.filter((f) => f.call === undefined || !calls.has(f.call)).map((f) => f.part);
+	if (loose.length > 0) {
+		const last = out.findLast((m) => m['role'] === 'user' && typeof m['content'] === 'string');
+		if (last === undefined) out.push({ role: 'user', content: loose });
+		else last['content'] = [{ type: 'text', text: last['content'] }, ...loose];
 	}
 	return out;
+}
+/** One file as a chat part: an image as an image part, a PDF as a file part, text and an xlsx's sheets (as CSV) as text
+ * (providers refuse other file parts); a type no provider takes is described, never sent, so one odd file cannot fail the
+ * whole request. */
+function filePart(f: { mime: string; bytes: Uint8Array }, name: string): Json {
+	if (f.mime.startsWith('image/')) return { type: 'image_url', image_url: { url: dataUrl(f) } };
+	if (f.mime === 'application/pdf')
+		return { type: 'file', file: { filename: name, file_data: dataUrl(f) } };
+	if (TEXT.test(f.mime))
+		return { type: 'text', text: `${name} (${f.mime}):\n${new TextDecoder().decode(f.bytes)}` };
+	if (f.mime === XLSX)
+		return {
+			type: 'text',
+			text: xlsxSheets(f.bytes)
+				.map((sheet, i) => `${name} sheet ${i} "${sheet}" (CSV):\n${csvOf(xlsxCells(f.bytes, i))}`)
+				.join('\n')
+		};
+	return {
+		type: 'text',
+		text: `${name}: a ${f.mime} file cannot be shown to you; ask for a photo, a PDF or a text version`
+	};
 }
 
 type Call = { id: string; name: string; args: string };
@@ -154,7 +180,13 @@ const Chunk = Schema.Struct({
 			Schema.Struct({
 				prompt_tokens: Schema.optional(Schema.Number),
 				completion_tokens: Schema.optional(Schema.Number),
-				cost: Schema.optional(Schema.Number)
+				cost: Schema.optional(Schema.Number),
+				prompt_tokens_details: Schema.optional(
+					Schema.NullOr(Schema.Struct({ cached_tokens: Schema.optional(Schema.Number) }))
+				),
+				completion_tokens_details: Schema.optional(
+					Schema.NullOr(Schema.Struct({ reasoning_tokens: Schema.optional(Schema.Number) }))
+				)
 			})
 		)
 	),
@@ -196,6 +228,7 @@ export function openAiChat(config: OpenAiChatConfig, options: HttpOptions = {}):
 						messages: messagesOf(request),
 						stream: true,
 						stream_options: { include_usage: true },
+						...(request.effort === undefined ? {} : { reasoning_effort: request.effort }),
 						...(request.tools === undefined || request.tools.length === 0
 							? {}
 							: {
@@ -232,7 +265,8 @@ export function openAiChat(config: OpenAiChatConfig, options: HttpOptions = {}):
 				).pipe(Effect.mapError(Port.failure('ai')));
 				const res = yield* HttpClient.execute(req).pipe(
 					Effect.mapError(Port.failure('ai')),
-					Port.call('ai.headers', LIMITS.callMs.ai)
+					// a provider answers its headers with its first token: as late as an uncached long prompt takes
+					Port.call('ai.headers', 60_000)
 				);
 				if (res.status < 200 || res.status >= 300) {
 					const detail = yield* res.text.pipe(
@@ -368,7 +402,13 @@ export function openAiChat(config: OpenAiChatConfig, options: HttpOptions = {}):
 						input: usage.prompt_tokens ?? 0,
 						output: usage.completion_tokens ?? 0,
 						...(usage.cost === undefined ? {} : { cost: usage.cost }),
-						...(id === '' ? {} : { call: id })
+						...(id === '' ? {} : { call: id }),
+						...(usage.prompt_tokens_details?.cached_tokens == null
+							? {}
+							: { cached: usage.prompt_tokens_details.cached_tokens }),
+						...(usage.completion_tokens_details?.reasoning_tokens == null
+							? {}
+							: { reasoning: usage.completion_tokens_details.reasoning_tokens })
 					}
 				};
 				yield* Queue.offer(queue, { _tag: 'Response', response });

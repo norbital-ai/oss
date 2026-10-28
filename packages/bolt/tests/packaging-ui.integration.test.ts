@@ -95,10 +95,11 @@ describe('/runs', () => {
 			Effect.gen(function* () {
 				const context = yield* Layer.build(TestWorkspace.layer({ manifest }));
 				const t = Context.get(context, TestWorkspace);
+				// caused by the members' writes, not started by hand: a hand start answers its starter in full
 				const run = (automation: string, actor: string) =>
 					t.db.write({
 						text: `INSERT INTO sys_run (id, automation, input, due_at, cause, depth, actor, state, error)
-			VALUES ($1, $2, '{}', now(), 'start', 0, $3, 'failed', '{"code":"invalid","message":"bad row 3"}')`,
+			VALUES ($1, $2, '{}', now(), 'direct', 0, $3, 'failed', '{"code":"invalid","message":"bad row 3"}')`,
 						params: [randomUUID(), automation, actor]
 					});
 				yield* run('export', 'member:u9');
@@ -239,7 +240,9 @@ describe('testWorkspace seed', () => {
 						Effect.flatMap((reply) =>
 							Schema.decodeUnknownEffect(
 								Schema.Struct({
-									customers: Schema.Struct({ rows: Schema.Array(Schema.Struct({ name: Schema.String })) })
+									customers: Schema.Struct({
+										rows: Schema.Array(Schema.Struct({ name: Schema.String }))
+									})
 								})
 							)(reply.answers[0])
 						),

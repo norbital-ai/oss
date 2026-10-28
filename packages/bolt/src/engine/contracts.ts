@@ -97,7 +97,6 @@ export type Bindings = {
 	now: string;
 	today: string;
 	tz: string;
-	params: { readonly [name: string]: Json };
 };
 /** Who reads (rule 15): a caller's Authority (scoped, masked), or the workspace (the transform: unscoped). */
 export type Reader = { as: 'caller'; authority: Authority } | { as: 'workspace' };
@@ -140,7 +139,13 @@ export type Captured = {
 // ── outcomes (rule 32): the author types of decl/ctx with names erased; a write's own `Outcome` is never `running` ──
 export type Written = readonly { model: string; id: string; revision: number }[];
 export type Outcome =
-	| { kind: 'committed'; output: Json; records: Written }
+	| {
+			kind: 'committed';
+			output: Json;
+			records: Written;
+			/** An act that wrote no row: the records already holding every supplied value (after callbacks). */
+			unchanged?: readonly { model: string; id: string }[];
+	  }
 	| { kind: 'pendingApproval'; requestId: string; records: Written }
 	| Refused
 	| {
@@ -169,7 +174,7 @@ export type MemberActor = {
 export type EngineActor =
 	| MemberActor
 	/**
-	 * hook:envoys — P32: the envoy's turn on `instance` (the `sys_integration` row it arrived on, `{ actor: 'instance' }`);
+	 * hook:envoys — P32: the envoy's turn on `instance` (the `sys_integration` row it arrived on, `{ var: 'requestor.instance' }`);
 	 * `member` names the linked sender (either audience); `linked` is set on a linked member's DM and binds `actor` operands.
 	 */
 	| {
@@ -248,7 +253,7 @@ export type Authority = {
 		skills: readonly string[];
 	};
 	limits: readonly LimitRule[];
-	/** Operand values: `actor.teamTree`, `actor.scopes('<policy>')`. */
+	/** Requestor variables: `requestor.teamTree`, `requestor.scopes.<policy>`. */
 	teamTree: readonly string[];
 	scopes: { readonly [policy: string]: readonly string[] };
 };
@@ -412,7 +417,10 @@ export type AiRequest = {
 	messages: readonly AiMessage[];
 	tools?: readonly { name: string; description: string; input: Json }[];
 	output?: Json;
-	files?: readonly { mime: string; bytes: Uint8Array }[];
+	/** A utility call's reasoning effort (a document's transcription); the agent's own steps never set it. */
+	effort?: 'low';
+	/** Images and documents for the model to see; `call` is the tool call that opened one, which it follows. */
+	files?: readonly { mime: string; bytes: Uint8Array; call?: string }[];
 	continuation?: string;
 };
 /** `cut`: the 60 s wall ended a stream; `continuation` resumes it as the next step (rule 63). */
@@ -432,6 +440,10 @@ export type AiResponse = {
 		output: number;
 		/** hook:agent — USD, for the cost disclosure */ cost?: number;
 		/** L-BOLT-432: the provider's call id (the metering key) */ call?: string;
+		/** input tokens the provider read from its prompt cache */ cached?: number;
+		/** output tokens spent reasoning */ reasoning?: number;
+		/** the request's characters: system prompt, messages and tool definitions (where the input tokens went) */
+		prompt?: { system: number; messages: number; tools: number };
 	};
 };
 /** hook:runtime — bytes supplied by a host, or an engine-resolved stored file read by the provider outside the Cell. */

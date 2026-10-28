@@ -78,7 +78,7 @@ it.effect('writes models named after Postgres types using their actual relation 
 					invocationId: `rowtype-${serial++}`,
 					issuedAt: NOW,
 					authority: admin,
-					bindings: { now: NOW, today: TODAY, tz: 'UTC', params: {} }
+					bindings: { now: NOW, today: TODAY, tz: 'UTC' }
 				}
 			).pipe(
 				Effect.map((result) => {

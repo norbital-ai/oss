@@ -117,13 +117,13 @@ const fixture = Effect.gen(function* () {
 				key: `key-${n}`,
 				issuedAt: NOW,
 				authority: admin,
-				bindings: { now: NOW, today: TODAY, tz: 'UTC', params: {} },
+				bindings: { now: NOW, today: TODAY, tz: 'UTC' },
 				invocationId: `inv-${n++}`,
 				...over
 			}
 		).pipe(Effect.map((answer) => answer.outcome));
 	const created = Effect.fnUntraced(function* (input: Json) {
-		const o = yield* run({ verb: 'create', input });
+		const o = yield* run({ verb: 'create', input: [input] });
 		if (o.kind !== 'committed') throw new Error(JSON.stringify(o));
 		const record = o.records[0];
 		if (record === undefined) throw new Error('No created integration instance');
@@ -320,7 +320,10 @@ describe('sys_integration: ordinary acts and the engine transform', () => {
 					owner: ada
 				});
 				expect(
-					yield* run({ verb: 'update', input: [{ target: personal, set: { integration: 'email' } }] })
+					yield* run({
+						verb: 'update',
+						input: [{ target: personal, set: { integration: 'email' } }]
+					})
 				).toMatchObject({ kind: 'refused', code: 'invalidInput' });
 				expect(
 					yield* run({ verb: 'update', input: [{ target: personal, set: { owner: 'u2' } }] })
@@ -361,7 +364,7 @@ describe('sys_integration: ordinary acts and the engine transform', () => {
 		() =>
 			Effect.gen(function* () {
 				const { db, run, created } = yield* SystemFixture;
-				const own = toPred(m, 'sys_integration', { owner: { eq: { actor: 'id' } } });
+				const own = toPred(m, 'sys_integration', { owner: { eq: { var: 'requestor.id' } } });
 				// the kernel directory's staff read (an owner is a readable member), and the instances it owns
 				const caller = authority({
 					sys_user: grants('sys_user', { create: [], update: [], delete: [] }),
@@ -391,7 +394,7 @@ describe('sys_integration: ordinary acts and the engine transform', () => {
 				expect(
 					yield* run({
 						verb: 'update',
-						input: [{ target: mine, set: { configuration: {} } }],
+						input: [{ target: mine, set: { configuration: { region: 'sg' } } }],
 						authority: caller
 					})
 				).toMatchObject({ kind: 'refused', code: 'forbidden', field: 'configuration' });
@@ -409,12 +412,13 @@ describe('sys_integration: ordinary acts and the engine transform', () => {
 						authority: caller
 					})
 				).toMatchObject({ kind: 'refused', code: 'notFound' });
-				// a native form (the shell's instance sheet) reads the same allowlist and grants as advice
+				// a native form (the shell's instance sheet) reads the same allowlist and grants as advice;
+				// the record is the one the caller's read arm (`owner = actor`) reached
 				const row = (_c: string, id: string) =>
 					db
 						.one(Instance, {
-							text: `select id, integration, name, named, owner, active, configuration, revision from sys_integration where id = $1`,
-							params: [id]
+							text: `select id, integration, name, named, owner, active, configuration, revision from sys_integration where id = $1 and owner = $2`,
+							params: [id, ada]
 						})
 						.pipe(Effect.map(Option.getOrNull));
 				const advice = yield* recordCapabilities(
@@ -422,7 +426,7 @@ describe('sys_integration: ordinary acts and the engine transform', () => {
 					'sys_integration',
 					mine,
 					caller,
-					{ now: NOW, today: TODAY, tz: 'UTC', params: {} },
+					{ now: NOW, today: TODAY, tz: 'UTC' },
 					row
 				);
 				expect(
@@ -444,7 +448,7 @@ describe('sys_integration: ordinary acts and the engine transform', () => {
 						'sys_integration',
 						'mail',
 						caller,
-						{ now: NOW, today: TODAY, tz: 'UTC', params: {} },
+						{ now: NOW, today: TODAY, tz: 'UTC' },
 						row
 					)
 				).toBeNull();

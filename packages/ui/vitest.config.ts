@@ -21,6 +21,8 @@ export default defineConfig({
 	test: {
 		include: ['tests/*.test.ts'],
 		environment: 'happy-dom',
+		// happy-dom 21 no longer loads iframe pages by default; the file previews embed one
+		environmentOptions: { happyDOM: { settings: { enableIframePageLoading: true } } },
 		pool: 'forks',
 		// Node's optional storage globals hide the browser storage supplied by happy-dom.
 		execArgv: ['--no-experimental-webstorage'],

@@ -12,6 +12,7 @@
 	import BuildLog from './BuildLog.svelte';
 	import DiagnosisPane from './DiagnosisPane.svelte';
 	import ManifestPane from './ManifestPane.svelte';
+	import { impactLines } from '../../protocol/migration-impact.ts';
 	import {
 		ageText,
 		languageOf,
@@ -53,7 +54,8 @@
 		...(mine ? [{ name: 'manifest', title: t('Manifest'), body: manifest }] : []),
 		{ name: 'logs', title: t('Logs'), body: logs }
 	]);
-	const PANE = 'min-h-0 flex-1 gap-0 [&>div:first-child]:px-4 sm:[&>div:first-child]:px-6';
+	// The frame already pads the window: the pane's chrome and body stay flush with its content edge.
+	const PANE = 'min-h-0 flex-1 gap-0';
 </script>
 
 {#snippet pill(text: string)}
@@ -64,7 +66,7 @@
 
 {#snippet files()}
 	<Scroll name={t('Files')} class="h-full">
-		<Stack gap="sm" class="p-4 sm:p-6">
+		<Stack gap="sm" class="py-4">
 			{#if !mine && change !== null}
 				{@const c = change}
 				<Stack gap="sm" align="center" class="py-12 text-center text-muted-foreground">
@@ -77,9 +79,11 @@
 						>{/if}
 				</Stack>
 			{:else}
-				<p class="text-micro text-muted-foreground">
-					{t('against the Live commit this change left from')}
-				</p>
+				{#if view.changes.length > 0}
+					<p class="text-micro text-muted-foreground">
+						{t('against the Live commit this change left from')}
+					</p>
+				{/if}
 				{#each view.changes as c (c.path)}
 					{@const before = c.baseline ?? null}
 					<Stack gap="none" class="max-w-full overflow-hidden rounded-md border border-border/70">
@@ -143,7 +147,7 @@
 
 {#snippet logs()}
 	<Scroll name={t('Logs')} class="h-full">
-		<Stack gap="lg" class="p-4 sm:p-6">
+		<Stack gap="lg" class="py-4">
 			{#if change?.diagnostics !== undefined}
 				<div class="overflow-hidden rounded-md border border-border/70">
 					<DiagnosisPane diagnostics={change.diagnostics} {onopen} {t} />
@@ -158,7 +162,7 @@
 {/snippet}
 
 <Stack gap="none" fill class="min-h-0">
-	<Stack gap="sm" shrink={false} class="border-b border-border/60 px-4 py-3 sm:px-6">
+	<Stack gap="sm" shrink={false} class="border-b border-border/60 py-3">
 		{#if change === null}
 			<Cluster align="start" gap="sm">
 				<p class="grow text-xs text-muted-foreground">
@@ -260,6 +264,11 @@
 							<code class="font-mono">{c.preview.destructive?.join(', ')}</code></span
 						>{/if}
 				</p>
+				{#if c.preview.impact !== undefined}
+					<ul class="text-micro text-muted-foreground" aria-label={t('What merging does')}>
+						{#each impactLines(c.preview.impact, t) as line, i (i)}<li>{line}</li>{/each}
+					</ul>
+				{/if}
 			{/if}
 		{/if}
 	</Stack>

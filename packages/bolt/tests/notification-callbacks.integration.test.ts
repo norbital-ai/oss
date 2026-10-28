@@ -57,11 +57,11 @@ export default {model:{orders:{bodies:{notify:${notify}}}},automation:{ping:{bod
 		const request = (key: string) => ({
 			model: 'orders',
 			verb: 'create' as const,
-			input: { title: key },
+			input: [{ title: key }],
 			key,
 			issuedAt: t.clock.now(),
 			authority: admin,
-			bindings: { now: t.clock.now(), today: '2026-10-24', tz: 'UTC', params: {} },
+			bindings: { now: t.clock.now(), today: '2026-10-24', tz: 'UTC' },
 			invocationId: key,
 			mode: { _tag: 'Direct' as const }
 		});
@@ -138,7 +138,7 @@ describe('model notification callbacks', () => {
 							automation: 'ping',
 							runs: [{ id, input: { fail: false } }],
 							authority: admin,
-							bindings: { now: f.t.clock.now(), today: '2026-10-24', tz: 'UTC', params: {} }
+							bindings: { now: f.t.clock.now(), today: '2026-10-24', tz: 'UTC' }
 						};
 					expect(yield* f.calls.start(request)).toMatchObject({ kind: 'committed' });
 					expect(yield* f.notes()).toEqual([]);

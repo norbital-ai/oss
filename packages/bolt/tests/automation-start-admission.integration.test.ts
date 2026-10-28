@@ -65,7 +65,7 @@ const fixture = Effect.gen(function* () {
 			automation: 'inspect',
 			runs,
 			authority,
-			bindings: { now: t.clock.now(), today: t.clock.now().slice(0, 10), tz: 'UTC', params: {} }
+			bindings: { now: t.clock.now(), today: t.clock.now().slice(0, 10), tz: 'UTC' }
 		});
 	const count = t.db.value(Schema.Number, {
 		text: "select count(*)::int from sys_run where automation='inspect'",

@@ -73,7 +73,7 @@ export type Scope = {
 /** How one statement compiles: who reads, how operands resolve, which tables it reads, and its byte budget. */
 export type CompileOptions = {
 	readonly scope?: Scope | undefined;
-	/** A non-literal operand (`{ param }`, `{ actor }` …) to its value; without it they are `invalid`. */
+	/** A non-literal operand (`{ var }` …) to its value; without it they are `invalid`. */
 	readonly resolve?: ((o: Operand) => Fx<Json>) | undefined;
 	/** The zone a date bucket of an instant is cut in; UTC when unset. */
 	readonly tz?: string | undefined;
@@ -142,9 +142,7 @@ const fieldOf = (c: ExposureInfo, name: string, lv: Level): Fx<FieldInfo> => {
 	if (f !== undefined && !(lv.exposed && !exposedField(c, name))) return Effect.succeed(f);
 	// name what the layer does expose, so a caller (often a model) can correct the read in one step
 	const readable = [...c.model.fields.keys()].filter((k) => !lv.exposed || exposedField(c, k));
-	return invalid(
-		`'${c.path}' has no readable field '${name}'; it exposes: ${readable.join(', ')}`
-	);
+	return invalid(`'${c.path}' has no readable field '${name}'; it exposes: ${readable.join(', ')}`);
 };
 const maskOf = (b: Build, c: ExposureInfo, name: string, lv: Level): Pred | undefined =>
 	lv.scoped ? b.scope?.mask(c.path, name) : undefined;
@@ -198,24 +196,22 @@ const rhs = Effect.fnUntraced(function* (
 type Link = { t: ExposureInfo; link: (a: string, x: string) => Fx<string> };
 /**
  * The level a hop from `c` through `rel` into `target` reads: the layer `c`'s root declares at that path (its exposure,
- * the root's arms and masks for that path); else, for a filter or sort hop (`select` false) or a plain schema, the
- * target model's own root access point. An unscoped reader may reach a model no model exposes.
+ * the root's arms and masks for that path; the target model's own policies never apply). A scoped reader selects,
+ * filters and sorts only across declared layers; an unscoped reader may reach a model no model exposes.
  */
 const level = (
 	b: Build,
 	c: ExposureInfo,
 	rel: string,
 	target: string,
-	lv: Level,
-	select: boolean
+	lv: Level
 ): Fx<ExposureInfo> => {
 	const layer = b.cat.layers.get(`${c.path}.${rel}`);
 	if (layer !== undefined && layer.name === target) return Effect.succeed(layer);
-	if (
-		lv.exposed &&
-		(select ? !exposedRelation(c, rel) : !c.model.one.has(rel) && !c.model.many.has(rel))
-	)
-		return invalid(`'${c.path}' declares no read layer '${rel}'`);
+	if (lv.exposed && !exposedRelation(c, rel))
+		return invalid(
+			`'${c.path}' declares no read layer '${rel}': a read selects, filters and sorts only across the layers its model's read declares`
+		);
 	const root = b.cat.exposures.get(target);
 	if (root !== undefined) return Effect.succeed(root);
 	const model = b.cat.models.get(target);
@@ -228,10 +224,9 @@ const relation = Effect.fnUntraced(function* (
 	c: ExposureInfo,
 	rel: string,
 	target: string,
-	lv: Level,
-	select = false
+	lv: Level
 ) {
-	const t = yield* level(b, c, rel, target, lv, select);
+	const t = yield* level(b, c, rel, target, lv);
 	const one = c.model.one.get(rel);
 	const many = c.model.many.get(rel);
 	if (one !== undefined) {
@@ -257,23 +252,88 @@ const relation = Effect.fnUntraced(function* (
 		);
 	return { t, link };
 });
-/** The search document and the embedding hold every field they cover: a reader matches them only reading each unmasked. */
-const whole = (
+/**
+ * The links `search.text` names: a row matches when a row it links to matches that model's own `$search`. Scoped and
+ * masked as any `is` through the link; a model already on the way is not searched again.
+ */
+const searchLinks = (
 	b: Build,
+	c: ExposureInfo,
+	a: string,
+	text: string,
+	via: readonly string[],
+	lv: Level
+): Fx<readonly string[]> =>
+	Effect.forEach(
+		c.model.search.flatMap((f) => {
+			const rel = c.model.one.get(f);
+			return rel === undefined ? [] : rel.targets.map((target) => ({ rel: f, target }));
+		}),
+		({ rel, target }) =>
+			via.includes(target) || b.cat.models.get(target)?.search.length === 0
+				? Effect.succeed('false')
+				: pred(
+						b,
+						c,
+						a,
+						{ t: 'one', rel, target, pred: { t: 'search', text, via: [...via, c.model.name] } },
+						lv
+					)
+	).pipe(Effect.map((parts) => parts.filter((x) => x !== 'false')));
+/** A reader may search only fields its read exposure names (rule 14). */
+const exposedAll = (
 	c: ExposureInfo,
 	fields: readonly string[],
 	lv: Level,
 	what: string
 ): Fx<void> => {
-	const hidden = fields.find(
-		(f) => maskOf(b, c, f, lv) !== undefined || (lv.exposed && !exposedField(c, f))
-	);
+	const hidden = fields.find((f) => lv.exposed && !exposedField(c, f));
 	return hidden === undefined
 		? Effect.void
 		: forbidden(
-				`${what} on '${c.name}' covers '${hidden}', which this caller does not read unmasked (rule 14)`
+				`${what} on '${c.name}' covers '${hidden}', which this caller does not read (rule 14)`
 			);
 };
+/** The masks a reader holds on `fields`, as conditions at alias `a`: where all hold, it reads every one of them. */
+const unmasked = Effect.fnUntraced(function* (
+	b: Build,
+	c: ExposureInfo,
+	a: string,
+	fields: readonly string[],
+	lv: Level
+) {
+	const masks: string[] = [];
+	for (const f of fields) {
+		const mask = maskOf(b, c, f, lv);
+		if (mask !== undefined) masks.push(yield* pred(b, c, a, mask, RAW));
+	}
+	return masks;
+});
+/**
+ * The search document a reader matches: the stored one on rows where it reads every field the document holds, else one
+ * built from only the values it reads there, so a match never reveals a masked value (rule 14).
+ */
+const searchDoc = Effect.fnUntraced(function* (b: Build, c: ExposureInfo, a: string, lv: Level) {
+	const own = c.model.search.filter((f) => !c.model.one.has(f)),
+		// a field outside the reader's exposure is in no document it matches, on any row
+		hidden = own.filter((f) => lv.exposed && !exposedField(c, f)),
+		readable = own.filter((f) => !hidden.includes(f));
+	const stored = `${a}.${q(SEARCH_COLUMN)}`,
+		masks = yield* unmasked(b, c, a, readable, lv);
+	if (masks.length === 0 && hidden.length === 0) return stored;
+	const parts: string[] = [];
+	for (const f of readable) {
+		const value = yield* col(b, c, a, f, lv);
+		parts.push(
+			`coalesce(${c.model.fields.get(f)?.pg.endsWith('[]') === true ? `bolt_search_join((${value})::text[])` : `(${value})::text`}, '')`
+		);
+	}
+	const built =
+		parts.length === 0 ? "''::tsvector" : `bolt_search_document(${parts.join(" || ' ' || ")})`;
+	return hidden.length > 0
+		? built
+		: `(CASE WHEN ${conj(...masks)} THEN ${stored} ELSE ${built} END)`;
+});
 const maskAt = (
 	b: Build,
 	c: ExposureInfo,
@@ -413,11 +473,12 @@ export const pred: (b: Build, c: ExposureInfo, a: string, p: Pred, lv: Level) =>
 				}
 				return `(${x} <@ ${b.bind(`(${s.polygon.map((pt) => `(${pt.lng},${pt.lat})`).join(',')})`, 'polygon')})`;
 			}
-			case 'search':
-				yield* whole(b, c, c.model.search, lv, '$search');
-				return `coalesce(${a}.${q(SEARCH_COLUMN)} @@ bolt_search_filter(${b.bind(p.text, 'text')}), false)`;
+			case 'search': {
+				const own = `coalesce(${yield* searchDoc(b, c, a, lv)} @@ bolt_search_filter(${b.bind(p.text, 'text')}), false)`;
+				const linked = yield* searchLinks(b, c, a, p.text, p.via ?? [], lv);
+				return linked.length === 0 ? own : `(${[own, ...linked].join(' OR ')})`;
+			}
 			case 'similar': {
-				yield* whole(b, c, c.model.semantic?.fields ?? [], lv, '$similar');
 				if (p.vector === undefined)
 					return yield* invalid('$similar was not embedded before compiling');
 				// of what this reader reads: the nearest, and every row nearly as near (within SIMILAR_BAND of it), at most `top`
@@ -426,7 +487,11 @@ export const pred: (b: Build, c: ExposureInfo, a: string, p: Pred, lv: Level) =>
 					n = b.alias(),
 					x = `${t}.${q(EMBEDDING_COLUMN)}`,
 					d = `(${x} <=> ${b.bind(`[${p.vector.join(',')}]`, 'vector')})`;
-				return `(${a}."id" IN (SELECT ${n}."id" FROM (SELECT ${t}."id", ${d} AS d, min(${d}) OVER () AS best FROM ${b.from(c.model.name)} ${t} WHERE ${conj(yield* scope(b, c, t, lv), `${x} IS NOT NULL`)} ORDER BY ${d}, ${t}."id" LIMIT ${b.bind(p.top, 'int8')}) ${n} WHERE ${n}.d <= ${n}.best + ${SIMILAR_BAND}))`;
+				// an embedding cannot be rebuilt from what a reader sees: only rows it reads every embedded field of are near
+				const semantic = c.model.semantic?.fields ?? [];
+				yield* exposedAll(c, semantic, lv, '$similar');
+				const masks = yield* unmasked(b, c, t, semantic, lv);
+				return `(${a}."id" IN (SELECT ${n}."id" FROM (SELECT ${t}."id", ${d} AS d, min(${d}) OVER () AS best FROM ${b.from(c.model.name)} ${t} WHERE ${conj(yield* scope(b, c, t, lv), ...masks, `${x} IS NOT NULL`)} ORDER BY ${d}, ${t}."id" LIMIT ${b.bind(p.top, 'int8')}) ${n} WHERE ${n}.d <= ${n}.best + ${SIMILAR_BAND}))`;
 			}
 			case 'path':
 			case 'each': {
@@ -604,14 +669,14 @@ const arm = Effect.fnUntraced(function* (
 		// whichever target the row holds (at most one arm column is set), its row tagged with its `model`
 		const arms = yield* Effect.forEach(r.targets, (target) =>
 			Effect.gen(function* () {
-				const x = yield* relation(b, c, rel, target, lv, true);
+				const x = yield* relation(b, c, rel, target, lv);
 				const t = b.alias();
 				return `(SELECT to_jsonb(r) || jsonb_build_object('model', ${lit(target)}) FROM (SELECT ${(yield* items(b, x.t, t, r.targetSelects?.[target] ?? r.select, lv)).join(', ')} FROM ${b.from(x.t.model.name)} ${t} WHERE ${conj(yield* x.link(a, t), yield* scope(b, x.t, t, lv))}) r)`;
 			})
 		);
 		return `COALESCE(${arms.join(', ')})`;
 	}
-	const x = yield* relation(b, c, rel, r.target, lv, true);
+	const x = yield* relation(b, c, rel, r.target, lv);
 	const t = b.alias();
 	// a ref layer's `where` nulls the row where it fails, as its scope does
 	if (!r.many)
@@ -731,7 +796,7 @@ const readable = Effect.fnUntraced(function* (b: Build, c: ExposureInfo, p: stri
 			maskOf(b, x, s, lv) !== undefined
 		)
 			return yield* bad(`'${x.path}.${s}' is not a relation this caller reads`);
-		const t = yield* level(b, x, s, target, lv, false).pipe(
+		const t = yield* level(b, x, s, target, lv).pipe(
 			Effect.catch(() => bad(`'${target}' is not a model`))
 		);
 		if (lv.scoped && b.scope?.rows(t.path)?.length === 0)
@@ -794,11 +859,7 @@ export type Compiled = {
 	hash: string;
 	keys: number;
 };
-const start = Effect.fnUntraced(function* (
-	cat: Catalog,
-	model: string,
-	options: CompileOptions
-) {
+const start = Effect.fnUntraced(function* (cat: Catalog, model: string, options: CompileOptions) {
 	const c = yield* exposureOf(cat, model);
 	const scoped = options.scope !== undefined;
 	const lv: Level = { scoped, exposed: scoped };
@@ -910,10 +971,12 @@ export const compile = Effect.fn('Store.compile')(function* (
 		// romanized spellings, pinyin joins, Latin skeletons); a row meeting any lexeme is found, and one holding every
 		// native word ranks first, then by how much of the query landed. A term of noise is no tsquery: no rows.
 		const hybrid = probe?.field === SEMANTIC;
-		const doc = `${a}.${q(SEARCH_COLUMN)}`,
+		const doc = yield* searchDoc(b, c, a, lv),
 			term = b.bind(hybrid ? ir.search.replace(/^\/semantic\s+/, '') : ir.search, 'text');
 		const any = `bolt_search_query(${term}, false)`;
-		const match = `coalesce(${doc} @@ ${any}, false)`;
+		const linked = yield* searchLinks(b, c, a, ir.search, [], lv);
+		const own = `coalesce(${doc} @@ ${any}, false)`;
+		const match = linked.length === 0 ? own : `(${own} OR ${linked.join(' OR ')})`;
 		const rank = `(coalesce(${doc} @@ bolt_search_query(${term}, true), false)::int * 2 + coalesce(ts_rank('{1,1,1,1}', ${doc}, ${any}), 0) + 0.1 / (1 + length(${doc})))`;
 		search = match;
 		if (hybrid && probe !== undefined) {

@@ -61,20 +61,27 @@ const manifest = {
 	exposures: {
 		members: { read: { members: { fields: 'all' } } },
 		job_lines: { read: { job_lines: { fields: 'all' } } },
-		// `internal_code` is not exposed; `audits` is no model at all (a `where` may hop any relation into a model with
-		// `read`; no layer is declared here, so each hop reads the target model's own access point)
+		// `internal_code` is not exposed; `audits` is no model at all and `jobs.audit` no layer: a `where` hops only the
+		// layers jobs' read declares, read under jobs' own arms and masks
 		jobs: {
-			read: { jobs: { fields: [
-					'title',
-					'hours',
-					'notes',
-					'scheduled_on',
-					'spot',
-					'window',
-					'status',
-					'tags',
-					'assignee'
-				] } }
+			read: {
+				'jobs.assignee': { fields: 'all' },
+				'jobs.assignee.manager': { fields: 'all' },
+				'jobs.lines': { fields: 'all' },
+				jobs: {
+					fields: [
+						'title',
+						'hours',
+						'notes',
+						'scheduled_on',
+						'spot',
+						'window',
+						'status',
+						'tags',
+						'assignee'
+					]
+				}
+			}
 		}
 	},
 	integrations: {},
@@ -105,10 +112,17 @@ const grant = (model: string, masks: { [f: string]: Pred } = {}): ModelAuthority
 	moves: {},
 	masks: { [model]: masks }
 });
-/** A dispatcher: reads jobs (notes masked), members (rate masked) and job lines. */
+/** A dispatcher: reads jobs (notes masked; its assignee layer's rate masked), members (rate masked) and job lines. */
+const dispatch: ModelAuthority = {
+	...grant('jobs'),
+	masks: {
+		jobs: { notes: { t: 'const', value: false } },
+		'jobs.assignee': { rate: { t: 'const', value: false } }
+	}
+};
 const caller = (
 	models: { [c: string]: ModelAuthority } = {
-		jobs: grant('jobs', { notes: { t: 'const', value: false } }),
+		jobs: dispatch,
 		members: grant('members', { rate: { t: 'const', value: false } }),
 		job_lines: grant('job_lines')
 	}
@@ -134,19 +148,21 @@ const caller = (
 		party: null
 	}
 });
+/** The read's own day and instant: what a described filter's time variables are. */
+const AT = { today: '2026-09-26', now: '2026-09-26T00:00:00.000Z' };
 const decode =
 	(where: Json, orderBy?: Json, a = caller()) =>
 	() =>
-		decodeDescribed(cat, a, 'jobs', { where, ...(orderBy === undefined ? {} : { orderBy }) });
+		decodeDescribed(cat, a, 'jobs', { where, ...(orderBy === undefined ? {} : { orderBy }) }, AT);
 
 describe("decodeDescribed: the caller's exposed query shape, exactly", () => {
 	it('refuses a field outside the exposure, a masked field and an unexposed relation', () => {
 		expect(decode({ internal_code: { eq: 'X1' } })).toThrow(/not a field this caller reads/);
 		expect(decode({ notes: { like: '%pump%' } })).toThrow(/not a field this caller reads/);
 		expect(decode({ audit: { is: { note: { eq: 'x' } } } })).toThrow(
-			/not a relation this caller reads/
+			/is not read by this caller|is not a relation this caller reads/
 		);
-		expect(decode({ assignee: { is: { rate: { gt: 10 } } } })).toThrow(/members\.rate/); // masked on the target
+		expect(decode({ assignee: { is: { rate: { gt: 10 } } } })).toThrow(/jobs\.assignee\.rate/); // masked on the layer
 		expect(decode({ bogus: { eq: 1 } })).toThrow(/unknown field/); // the grammar's own refusal
 	});
 
@@ -162,14 +178,35 @@ describe("decodeDescribed: the caller's exposed query shape, exactly", () => {
 		).not.toThrow();
 	});
 
-	it('refuses a relation into a model the caller does not read', () => {
-		const noMembers = caller({ jobs: grant('jobs'), job_lines: grant('job_lines') });
-		expect(decode({ assignee: { is: { name: { eq: 'Bob' } } } }, undefined, noMembers)).toThrow(
-			/'members' is not read/
+	it("reads a layer under its root's policies; refuses a relation the read declares no layer for", () => {
+		const noMembers = caller({ jobs: grant('jobs') });
+		expect(
+			decode({ assignee: { is: { name: { eq: 'Bob' } } } }, undefined, noMembers)
+		).not.toThrow();
+		expect(decode({ audit: { is: { note: { eq: 'x' } } } })).toThrow(
+			/'jobs\.audit' is not a relation this caller reads/
 		);
 		expect(
 			decode({ assignee: { eq: '00000000-0000-4000-8000-000000000001' } }, undefined, noMembers)
 		).not.toThrow(); // the key itself is jobs'
+	});
+
+	it('takes the variables: the requestor bound by the read, today and now materialized; a bad expression is refused', () => {
+		expect(
+			decode({
+				scheduled_on: {
+					gte: { var: 'today - days(7)' },
+					lt: { var: 'today + days(1)' }
+				}
+			})
+		).not.toThrow();
+		expect(decode({ window: { contains: { var: 'today' } } })).not.toThrow();
+		expect(decode({ scheduled_on: { eq: { var: 'now' } } })).toThrow(/ISO date/); // an instant is no date
+		expect(decode({ scheduled_on: { eq: { var: 'today - hours(1)' } } })).toThrow(/whole days/);
+		expect(decode({ scheduled_on: { eq: { var: 'tomorrow' } } })).toThrow(/Unknown variable/);
+		expect(decode({ scheduled_on: { eq: { var: 'requestor.email' } } })).toThrow(/not a date/);
+		expect(decode({ scheduled_on: { eq: { clock: 'today' } } })).toThrow(); // the former spelling
+		expect(decode({ title: { eq: { var: 'requestor.id' } } })).not.toThrow();
 	});
 
 	it('sorts where OrderBy allows: own sortable fields, a one-relation (by id), a related field the caller reads unmasked, at most 4 keys', () => {
@@ -177,27 +214,32 @@ describe("decodeDescribed: the caller's exposed query shape, exactly", () => {
 		expect(decode({}, { assignee: 'asc' })).not.toThrow(); // the relation's key
 		expect(decode({}, { assignee: { name: 'asc' } })).not.toThrow(); // through an exposed relation, a readable target field
 		expect(decode({}, [{ assignee: { name: 'desc' } }, { title: 'asc' }])).not.toThrow();
-		expect(decode({}, { assignee: { rate: 'asc' } })).toThrow(/members\.rate/); // masked on the target: no ordering by it either
-		expect(decode({}, { audit: { note: 'asc' } })).toThrow(/not a relation this caller reads/); // unexposed relation
-		expect(
-			decode({}, { assignee: { name: 'asc' } }, caller({ jobs: grant('jobs'), job_lines: grant('job_lines') }))
-		).toThrow(/'members' is not read/);
+		expect(decode({}, { assignee: { rate: 'asc' } })).toThrow(/jobs\.assignee\.rate/); // masked on the layer: no ordering by it either
+		expect(decode({}, { audit: { note: 'asc' } })).toThrow(
+			/is not read by this caller|is not a relation this caller reads/
+		); // unexposed relation
 		expect(decode({}, { assignee: { bogus: 'asc' } })).toThrow(/not sortable/); // the grammar's own refusal
 		expect(decode({}, { 'assignee.name': 'asc' })).toThrow(/one \{ field/); // one grammar: nested keys, not a dotted string
 		expect(
 			decode(
 				{},
 				{ assignee: 'asc' },
-				caller({ jobs: grant('jobs', { assignee: { t: 'const', value: false } }), members: grant('members') })
+				caller({
+					jobs: grant('jobs', { assignee: { t: 'const', value: false } }),
+					members: grant('members')
+				})
 			)
 		).toThrow(/not a field this caller reads/);
 		expect(
 			decode(
 				{},
 				{ assignee: { name: 'asc' } },
-				caller({ jobs: grant('jobs', { assignee: { t: 'const', value: false } }), members: grant('members') })
+				caller({
+					jobs: grant('jobs', { assignee: { t: 'const', value: false } }),
+					members: grant('members')
+				})
 			)
-		).toThrow(/not a relation this caller reads/);
+		).toThrow(/is not read by this caller|is not a relation this caller reads/);
 		expect(decode({}, { notes: 'asc' })).toThrow(/not a field this caller reads/);
 		expect(decode({}, { internal_code: 'asc' })).toThrow(/not a field this caller reads/);
 		expect(decode({}, ['title', 'hours', 'status', 'scheduled_on', 'created_at'])).toThrow(
@@ -272,8 +314,7 @@ const describer = (port: System1Port) => nativeDescriber(port);
 const bindings = {
 	now: '2026-09-26T00:00:00.000Z',
 	today: '2026-09-26',
-	tz: 'Asia/Singapore',
-	params: {}
+	tz: 'Asia/Singapore'
 };
 const choices = (q: DecisionQuestion | undefined) =>
 	q?.type === 'choice' ? Object.keys(q.criteria) : [];
@@ -343,10 +384,7 @@ describe('filter.describe offers System 1 the exposure and maps its choices onto
 					nativeDescriber(port, searchable, (batch) =>
 						Effect.succeed(
 							batch.map((q) => ({
-								rows:
-									'model' in q && q.model === 'members'
-										? [{ id: 'm1', name: 'Bob Tan' }]
-										: []
+								rows: 'model' in q && q.model === 'members' ? [{ id: 'm1', name: 'Bob Tan' }] : []
 							}))
 						)
 					);
@@ -464,15 +502,16 @@ describe('filter.describe offers System 1 the exposure and maps its choices onto
 		"the field options are the caller's exposure: own fields, one hop through an exposed relation, nothing else",
 		() =>
 			Effect.gen(function* () {
-				// no job_lines grant, so nothing many-relation is offered and every readable field fits the bound
+				// no `jobs.lines` layer, so nothing many-relation is offered and every readable field fits the bound
+				const { 'jobs.lines': _, ...read } = manifest.exposures.jobs.read;
 				const port = system1(byField({}));
-				yield* describer(port).describe({
+				yield* nativeDescriber(port, {
+					...manifest,
+					exposures: { ...manifest.exposures, jobs: { read } }
+				}).describe({
 					model: 'jobs',
 					text: 'jobs with more than 2 pumps',
-					authority: caller({
-						jobs: grant('jobs', { notes: { t: 'const', value: false } }),
-						members: grant('members', { rate: { t: 'const', value: false } })
-					}),
+					authority: caller({ jobs: dispatch }),
 					bindings
 				});
 				const fields = askedFields(present(port.requests[0]));
@@ -549,6 +588,22 @@ describe('filter.describe offers System 1 the exposure and maps its choices onto
 		})
 	);
 
+	it.effect('"today" stays the today clock operand, so a kept filter rolls with the day', () =>
+		Effect.gen(function* () {
+			const port = system1(byField({ 'Scheduled on': { op: 'is within', value: 'today' } }));
+			const r = yield* describer(port).describe({
+				model: 'jobs',
+				text: 'jobs scheduled today',
+				authority: caller(),
+				bindings
+			});
+			expect(r).toEqual({
+				ok: true,
+				where: { scheduled_on: { gte: { var: 'today' }, lt: { var: 'today + days(1)' } } }
+			});
+		})
+	);
+
 	it.effect('a related sort decodes to a nested OrderBy key', () =>
 		Effect.gen(function* () {
 			const port = system1(
@@ -596,7 +651,7 @@ describe('filter.describe offers System 1 the exposure and maps its choices onto
 						authority: caller(),
 						bindings
 					})
-				).toEqual({ ok: true, where: { window: { contains: '2026-09-26' } } });
+				).toEqual({ ok: true, where: { window: { contains: { var: 'today' } } } });
 				const year = system1(byField({ Window: { op: 'overlaps', value: 'this year' } }));
 				expect(
 					yield* describer(year).describe({
@@ -754,7 +809,12 @@ describe('described choices preserve scalar kinds', () => {
 					jobs: {
 						read: {
 							jobs: {
-								fields: [...manifest.exposures.jobs.read.jobs.fields, 'urgent', 'priority', 'visits']
+								fields: [
+									...manifest.exposures.jobs.read.jobs.fields,
+									'urgent',
+									'priority',
+									'visits'
+								]
 							}
 						}
 					}

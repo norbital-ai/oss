@@ -21,8 +21,7 @@ export function bindingsAt(at: number | string, tz: string): Bindings {
 	return {
 		now: typeof at === 'string' ? at : new Date(at).toISOString(),
 		today: localOf(typeof at === 'number' ? at : Date.parse(at), tz).date,
-		tz,
-		params: {}
+		tz
 	};
 }
 
@@ -51,7 +50,7 @@ export function scopeOf(authority: Authority, approvals: ReadonlySet<string> = n
 				: []
 	};
 }
-/** The invocation's operands (`{ param }`, `{ actor }` …), fixed per invocation (rule 26). */
+/** The invocation's requestor variables (`{ var: 'requestor.…' }`), fixed per invocation (rule 26). */
 export const resolverOf =
 	(bindings: Bindings, authority: Authority | null) =>
 	(o: Operand): Effect.Effect<Json, StoreError> =>

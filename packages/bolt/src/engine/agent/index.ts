@@ -160,6 +160,14 @@ export type AgentEngine = {
 	/** The host's confined bundler: `run_js` runs a skill's file only where there is one. */
 	bundler?: Bundler['Service'] | undefined;
 };
+/** How a document is read for the agent: once, as text it keeps (`read_file` on a PDF). */
+const TRANSCRIBE = `Transcribe the attached document completely and faithfully as Markdown, page by page. Keep every printed and handwritten field with its value in reading order, tables as Markdown tables (every row and column, numbers exactly as written), tick boxes as [x] or [ ], and empty fields as empty. Write a value you cannot read with certainty as [unclear: your best reading]. Do not summarise, interpret, correct or add anything.`;
+/** A cheap content key (FNV-1a over the bytes). */
+const fingerprint = (bytes: Uint8Array): string => {
+	let h = 0x811c9dc5;
+	for (const byte of bytes) h = Math.imul(h ^ byte, 0x01000193);
+	return (h >>> 0).toString(16);
+};
 /** A host skill (the platform authoring skill, a person's own): its tree's listing and each file's bytes by path. */
 export type HostSkill = SkillSpec & { read(path: string): Promise<Uint8Array> };
 export type DrainOptions = {
@@ -184,6 +192,14 @@ export type AgentConfig = {
 	resolve?: (as: As) => Effect.Effect<Authority | null, EngineError>;
 	mcp?: McpHost;
 	attachments?: AttachmentPort;
+	/**
+	 * A document's own text, page by page, where it has a text layer (the host's extractor; a scanned page is marked
+	 * `(no extractable text: …)`): `read_file` answers it instead of a model's transcription, exact and at once.
+	 */
+	documentText?: (
+		file: { mime: string; bytes: Uint8Array },
+		signal: AbortSignal
+	) => Promise<string>;
 	geocoder?: Geo['Service'];
 	docs?: Docs['Service'];
 	/** The released source (`workspace_search`); a host reads it from the artifact (`workspaceFiles`). */
@@ -231,6 +247,13 @@ export const AGENT_LIMITS = {
 } as const;
 /** The platform run that takes over a turn whose lease lapsed (rule 48). */
 export const TURN_RUN = 'agent.turn';
+/** A tool answer that failed: its `error` is set (a run's `error: null` describes a run that did not fail). */
+const failedResult = (result: Json): result is { readonly [key: string]: Json } =>
+	result !== null &&
+	typeof result === 'object' &&
+	!EffectArray.isArray<typeof result>(result) &&
+	result['error'] !== undefined &&
+	result['error'] !== null;
 /**
  * A reply being written reaches its row at most this often: one UPDATE of the whole text so far per flush (a write is
  * one statement), each published live like any other write, so the panel's transcript grows patch by patch.
@@ -691,6 +714,8 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 		let mcpTools: Effect.Success<ReturnType<typeof mcp.tools>> | null = null,
 			mcpFor = '';
 		const receipts: Receipt[] = [...(options.receipts ?? [])],
+			read: ToolContext['read'] = new Map(),
+			transcripts = new Map<string, string>(),
 			files: ToolContext['files'] = [],
 			work = yield* jobs(),
 			failures = new Map<string, number>();
@@ -702,6 +727,8 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 			usage.output += u.output ?? 0;
 			usage.calls += calls;
 			if (typeof u.cost === 'number') usage.cost = (usage.cost ?? 0) + u.cost;
+			if (typeof u.cached === 'number') usage.cached = (usage.cached ?? 0) + u.cached;
+			if (typeof u.reasoning === 'number') usage.reasoning = (usage.reasoning ?? 0) + u.reasoning;
 		};
 		/**
 		 * L-BOLT-432: each provider call is one immutable `ai.call` observation: its call id (the metering key), model, tokens
@@ -725,6 +752,9 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 					model: modelOf,
 					input: r.usage.input,
 					output: r.usage.output,
+					cached: r.usage.cached ?? null,
+					reasoning: r.usage.reasoning ?? null,
+					prompt: r.usage.prompt ?? null,
 					cost: cost ?? null,
 					settlement: incomplete ? 'attention' : 'pending',
 					...(over ? { gauge: AI_GAUGE_USD } : {})
@@ -912,6 +942,8 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 			origin: 'manual' | 'requested' | 'automatic'
 		) {
 			compactions++;
+			// what the turn read before the checkpoint is no longer above: read again, it answers in full
+			read.clear();
 			lastInput = 0;
 			yield* Effect.gen(function* () {
 				const response = yield* modelCall(
@@ -1102,6 +1134,15 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 					mcpTools,
 					hostTools,
 					attachments: config.attachments,
+					...(config.documentText === undefined
+						? {}
+						: {
+								documentText: (file: { mime: string; bytes: Uint8Array }) =>
+									Port.attempt('documents', (signal) => config.documentText!(file, signal)).pipe(
+										Port.call('documents', 30000),
+										Effect.mapError((e) => BoltError.make('unavailable', 'facility', e.message, e))
+									)
+							}),
 					// every inward agent reads the source (models, policies) for exact shapes; a public envoy's or external member's turn does not
 					workspace: external ? undefined : config.workspace,
 					draft:
@@ -1113,6 +1154,40 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 					skills,
 					agents: ['workspace', ...Object.keys(m.envoys)],
 					receipts,
+					read,
+					...(config.ai === undefined
+						? {}
+						: {
+								transcribe: Effect.fn('Agents.transcribe')(function* (file: {
+									mime: string;
+									bytes: Uint8Array;
+								}) {
+									// one transcription per document a turn, however often it is read
+									const key = `${file.bytes.byteLength}:${fingerprint(file.bytes)}`,
+										known = transcripts.get(key);
+									if (known !== undefined) return known;
+									const r = yield* modelCall(
+										config.ai,
+										{
+											model: conv.model,
+											system: TRANSCRIBE,
+											messages: [{ role: 'user', content: 'Transcribe the attached document.' }],
+											files: [file],
+											// a transcription copies what is there: it needs no long deliberation
+											effort: 'low'
+										},
+										wall
+									).pipe(
+										Effect.mapError((e) =>
+											BoltError.make('unavailable', 'facility', `transcription: ${e.message}`, e)
+										)
+									);
+									yield* used(r);
+									const text = textOf(r.content);
+									transcripts.set(key, text);
+									return text;
+								})
+							}),
 					files,
 					jobs: work,
 					inlineMs: config.hostInlineMs,
@@ -1162,16 +1237,6 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 							)
 						]);
 						return yield* rowsOf(result?.rows ?? []);
-					}),
-					row: Effect.fn('Agents.row')(function* (seq: number) {
-						const [result] = yield* db.read([
-							q(
-								`SELECT ${MSG} FROM sys_message m WHERE conversation = $1 AND seq = $2 AND deleted_at IS NULL`,
-								id,
-								seq
-							)
-						]);
-						return (yield* rowsOf(result?.rows ?? []))[0];
 					}),
 					output: Effect.fn('Agents.work22')(function* (call) {
 						return (
@@ -1328,7 +1393,15 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 				const note = state(
 					conv,
 					mode === 'plan' ? 'plan' : 'agent',
-					turnFacts(e, authority, b, ctx.tz)
+					[
+						turnFacts(e, authority, b, ctx.tz),
+						// what this turn already holds: read again it answers only a pointer, so the model works from above
+						read.size === 0
+							? undefined
+							: `Read this turn (their answers are above; do not read them again): ${[...new Set(read.values())].join('; ')}`
+					]
+						.filter((p): p is string => p !== undefined)
+						.join('\n')
 				);
 				// the note closes the context, before a reply cut at the wall that this step continues (rule 63)
 				const history = modelTranscript(rows, conv, served);
@@ -1348,7 +1421,15 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 						authority
 					}),
 					messages: history,
-					...(files.length === 0 ? {} : { files: files.splice(0, files.length) }),
+					...(files.length === 0
+						? {}
+						: {
+								files: files.map(({ mime, bytes, call }) => ({
+									mime,
+									bytes,
+									...(call === undefined ? {} : { call })
+								}))
+							}),
 					...(cut?.continuation === undefined ? {} : { continuation: cut.continuation })
 				};
 				steps++;
@@ -1578,15 +1659,10 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 											} as Json
 										}
 									: yield* toolset.run(call.name, call.input, call.id);
+					// what the call opened stays in view for the rest of the turn, right after the call's result
+					for (const file of files) file.call ??= call.id;
 					previous =
-						tool?.pure !== true ||
-						('result' in answer &&
-							answer.result !== null &&
-							typeof answer.result === 'object' &&
-							!Array.isArray(answer.result) &&
-							'error' in answer.result)
-							? ''
-							: key;
+						tool?.pure !== true || ('result' in answer && failedResult(answer.result)) ? '' : key;
 					if ('confirm' in answer && conv.parent !== null) {
 						yield* wrote(
 							yield* rewrite(
@@ -1619,12 +1695,7 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 						);
 					} else {
 						let result = answer.result;
-						if (
-							result !== null &&
-							typeof result === 'object' &&
-							!EffectArray.isArray<typeof result>(result) &&
-							'error' in result
-						) {
+						if (failedResult(result)) {
 							const n = (failures.get(key) ?? 0) + 1;
 							failures.set(key, n);
 							failed++;
@@ -1632,11 +1703,12 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 							if (n >= AGENT_LIMITS.sameFailure) result = { ...result, guidance: RECOVERY };
 						}
 						// rule 62: the model sees a bounded result; a clipped one keeps the whole output for `read_output`
-						const shown =
-								'bounded' in answer && answer.bounded === true ? result : bounded(result).value,
-							clipped = JSON.stringify(shown) !== JSON.stringify(result);
+						const own = 'bounded' in answer && answer.bounded === true,
+							whole = own && answer.full !== undefined ? answer.full : result,
+							shown = own ? result : bounded(result).value,
+							clipped = JSON.stringify(shown) !== JSON.stringify(whole);
 						// the model does not see its own call ids, so the note names the one read_output takes
-						const more = `TRUNCATED: this shows part of the ${new TextEncoder().encode(outputText(result)).length}-byte result. read_output { call: '${call.id}', offset } reads the rest from where it was cut`;
+						const more = `TRUNCATED: this shows part of the ${new TextEncoder().encode(outputText(whole)).length}-byte result. read_output { call: '${call.id}', offset } reads the rest from where it was cut`;
 						if (clipped) truncated.push(`${call.name} (call '${call.id}')`);
 						yield* wrote(
 							yield* rewrite(
@@ -1654,7 +1726,7 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 											: { truncated: more, start: shown }
 								},
 								null,
-								clipped ? { tag: 'output', full: result } : null
+								clipped ? { tag: 'output', full: whole } : null
 							)
 						);
 					}

@@ -84,7 +84,7 @@ import { preview, stableId } from '../conversations/store.ts';
 import { instanceRequest } from '../integrations/instances.ts';
 import { verifiedWebhook, type WebhookRequest } from './webhook.ts';
 import { enqueue, nextDue, triggersOf } from './queue.ts';
-import { backoffMs, dueAt, iso, offsetMs } from './time.ts';
+import { backoffMs, dueAt, iso, materialize } from './time.ts';
 import { NOTICE_PUSH, noticePush } from './push.ts';
 import { GuestParking, PARK_MS } from '../guest/runner.ts';
 import { RunJournal, type JournalEntry } from './journal.ts';
@@ -245,7 +245,11 @@ export function runView(authority: Authority, row: RunViewRow): RunView | null {
 		progress: row.progress,
 		attempt_count: row.attempts
 	};
-	if (readsRunResult(authority, row))
+	// a run the person started by hand answers them with its declared result, whatever policies it ran under
+	if (
+		readsRunResult(authority, row) ||
+		(row.cause === 'start' && row.actor === actorRef(authority.actor))
+	)
 		return {
 			...base,
 			error: row.error,
@@ -1322,12 +1326,20 @@ export const RunsLive = Layer.effect(
 								const depth = self ? run.depth : run.depth + 1;
 								if (depth > LIMITS.writeDepth)
 									return fail('depth', `Runs chain at most ${LIMITS.writeDepth} deep.`);
+								// `{ var }`: a time expression over `now` and `today` (`now + minutes(1)`), read where the run starts it
+								const when = call.at;
 								const at =
-									call.at === undefined
+									when === undefined
 										? now
-										: typeof call.at === 'string'
-											? Date.parse(call.at)
-											: now + offsetMs(call.at.now);
+										: typeof when === 'string'
+											? Date.parse(when)
+											: Result.match(
+													Result.try(() => materialize(when, bindingsAt(now, m.workspace.tz))),
+													{
+														onSuccess: (v) => (typeof v === 'string' ? Date.parse(v) : Number.NaN),
+														onFailure: () => Number.NaN
+													}
+												);
 								if (!Number.isFinite(at))
 									return fail('invalidInput', 'schedule: at is not an instant');
 								const { key, digest } = keyOf('schedule', call.automation, [

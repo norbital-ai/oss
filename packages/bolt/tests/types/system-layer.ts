@@ -20,9 +20,9 @@ const staff: Where<'sys_user'> = { kind: { eq: 'staff' }, active: { eq: true } }
 // @ts-expect-error S1 a stored user's kind is staff or external, unlike an actor's member kind
 const member: Where<'sys_user'> = { kind: { eq: 'member' } };
 // a member's team is a source handle: `actor.teams` / `actor.teamTree` compare it in a list
-const inTree: Where<'sys_user'> = { team: { in: { actor: 'teamTree' } } };
+const inTree: Where<'sys_user'> = { team: { in: { var: 'requestor.teamTree' } } };
 // @ts-expect-error S1 a team operand only on a team field
-const notTeam: Where<'sys_user'> = { email: { in: { actor: 'teams' } } };
+const notTeam: Where<'sys_user'> = { email: { in: { var: 'requestor.teams' } } };
 void staff;
 void member;
 void inTree;

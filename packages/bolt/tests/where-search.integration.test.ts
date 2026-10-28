@@ -1,6 +1,6 @@
 // `$search` and `$similar` as predicates (rule 16): a row's search document holds every word of the text (prefixes and
 // slipped spellings), or it is among the `top` nearest in meaning. Both nest under a relation like any condition, and
-// both refuse a caller who does not read every field they cover unmasked (rule 14).
+// a caller matches only the values it reads unmasked (rule 14).
 import { describe, expect, it } from '@effect/vitest';
 import { Context, Effect, Layer, Result, Schema, Stream } from 'effect';
 import type { ActOutcome as Outcome } from '../src/engine/contracts.ts';
@@ -27,15 +27,21 @@ const manifest = Result.getOrThrow(
 				label: 'title',
 				fields: { title: { kind: 'text' }, notes: { kind: 'text', optional: true } },
 				search: {
-					text: ['title', 'notes'],
+					text: ['title', 'notes', 'site'],
 					semantic: { fields: ['title'], model: 'small', dim: 3 }
 				}
 			}
 		},
 		relationships: { 'jobs.site': { to: 'sites', inverse: 'jobs' } },
 		exposures: {
-			sites: { read: { sites: { fields: 'all' } }, create: { columns: { sites: ['name', 'address'] } } },
-			jobs: { read: { jobs: { fields: 'all' } }, create: { columns: { jobs: ['title', 'notes', 'site'] } } }
+			sites: {
+				read: { sites: { fields: 'all' } },
+				create: { columns: { sites: ['name', 'address'] } }
+			},
+			jobs: {
+				read: { jobs: { fields: 'all' }, 'jobs.site': { fields: 'all' } },
+				create: { columns: { jobs: ['title', 'notes', 'site'] } }
+			}
 		},
 		// `notes` is masked to the dispatcher: its one jobs arm lists the fields it reads
 		policies: {
@@ -115,11 +121,24 @@ const workspace = () =>
 				const reply = yield* qReply(route, who, {
 					reads: [{ m: 'query', a: [{ jobs: { where, fields: ['title'] } }] }]
 				});
-				return (yield* Schema.decodeUnknownEffect(Schema.Struct({ jobs: Page }))(reply.answers[0])).jobs.rows
+				return (yield* Schema.decodeUnknownEffect(Schema.Struct({ jobs: Page }))(
+					reply.answers[0]
+				)).jobs.rows
 					.map((row) => row.title)
 					.sort();
 			});
-		return { t, titles, dispatcher: t.as(t.member(['dispatch'])).authority };
+		const ranked = (search: string) =>
+			Effect.gen(function* () {
+				const reply = yield* qReply(route, a, {
+					reads: [{ m: 'query', a: [{ jobs: { search, fields: ['title'], limit: 10 } }] }]
+				});
+				return (yield* Schema.decodeUnknownEffect(Schema.Struct({ jobs: Page }))(
+					reply.answers[0]
+				)).jobs.rows
+					.map((row) => row.title)
+					.sort();
+			});
+		return { t, titles, ranked, dispatcher: t.as(t.member(['dispatch'])).authority };
 	});
 
 describe('$search and $similar (rule 16)', () => {
@@ -135,6 +154,19 @@ describe('$search and $similar (rule 16)', () => {
 					expect(yield* titles({ $search: 'pipe paint' })).toEqual([]); // every word, not any
 				})
 			)
+	);
+
+	it.live("a link in search.text finds the row by the linked record's own search text", () =>
+		Effect.scoped(
+			Effect.gen(function* () {
+				const { titles, ranked } = yield* workspace();
+				expect(yield* titles({ $search: 'ridgewood' })).toEqual(['burst pipe', 'paint wall']);
+				expect(yield* ranked('sunset')).toEqual(['door hinge', 'roof drip']);
+				expect(yield* ranked('pipe')).toEqual(['burst pipe']); // its own words still match
+				// every word in one document: the row's own, or one linked row's
+				expect(yield* titles({ $search: 'pipe ridgewood' })).toEqual([]);
+			})
+		)
 	);
 
 	it.live('nests under a relation and composes with other conditions', () =>
@@ -176,7 +208,7 @@ describe('$search and $similar (rule 16)', () => {
 	);
 
 	it.live(
-		'refuses a model without the index and a caller who does not read every covered field unmasked',
+		'refuses a model without the index; a caller matches only the covered values it reads',
 		() =>
 			Effect.scoped(
 				Effect.gen(function* () {
@@ -185,10 +217,9 @@ describe('$search and $similar (rule 16)', () => {
 						/declares no search.semantic/
 					);
 					expect((yield* Effect.flip(titles({ $search: '' }))).message).toMatch(/1–500 characters/);
-					// `notes` is in jobs' search document: searching it would reveal "secret code" to a caller it is masked to
-					expect((yield* Effect.flip(titles({ $search: 'secret' }, dispatcher))).message).toMatch(
-						/covers 'notes'/
-					);
+					// `notes` is in jobs' search document: a caller it is masked to matches only what it reads, never "secret code"
+					expect(yield* titles({ $search: 'secret' }, dispatcher)).toEqual([]);
+					expect(yield* titles({ $search: 'pipe' }, dispatcher)).toEqual(['burst pipe']);
 					expect(yield* titles({ $similar: { to: 'water leak', top: 1 } }, dispatcher)).toEqual([
 						'burst pipe'
 					]); // the embedding covers title only

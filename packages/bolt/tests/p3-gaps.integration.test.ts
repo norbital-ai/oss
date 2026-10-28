@@ -104,7 +104,7 @@ const setup = (embed?: Ai['Service']['embed']) =>
 		const read = (
 			member: string,
 			args: readonly Json[],
-			bindings = { now: t.clock.now(), today: t.clock.now().slice(0, 10), tz: 'UTC', params: {} }
+			bindings = { now: t.clock.now(), today: t.clock.now().slice(0, 10), tz: 'UTC' }
 		) =>
 			Context.get(context, Reads)
 				.run([lowerRead(manifest, member, args)], { as: 'workspace' }, bindings)
@@ -171,6 +171,18 @@ describe('search.semantic embeddings (rule 16)', () => {
 	);
 });
 
+/** One `docs` root searched through the read request; its page. */
+const docs = (
+	read: Effect.Success<ReturnType<typeof setup>>['read'],
+	search: Json,
+	limit: number,
+	...bindings: Parameters<Effect.Success<ReturnType<typeof setup>>['read']>[2][]
+) =>
+	read('query', [{ docs: { search, limit } }], ...bindings).pipe(
+		Effect.flatMap(Schema.decodeUnknownEffect(Schema.Struct({ docs: Schema.Json }))),
+		Effect.map((answer) => answer.docs)
+	);
+
 describe('semantic similarity over search.semantic (L-BOLT-123)', () => {
 	it.live(
 		'query search.semantic ranks text and record probes by the embedding; /semantic fuses it with the lexical hit',
@@ -192,22 +204,22 @@ describe('semantic similarity over search.semantic (L-BOLT-123)', () => {
 				for (const title of ['chair', 'lamp']) yield* act('docs.create', [{ title }]);
 				yield* run;
 				const byText = yield* Schema.decodeUnknownEffect(Page)(
-					yield* read('read', ['docs', { search: { semantic: 'table' }, limit: 2 }])
+					yield* docs(read, { semantic: 'table' }, 2)
 				);
 				expect(byText.rows.map((row) => row.title)).toEqual(['desk', 'chair']);
 				expect(typeof required(byText.rows[0]).$distance).toBe('number');
 				expect(
 					(yield* Schema.decodeUnknownEffect(Page)(
-						yield* read('read', ['docs', { search: { semantic: { record: desk } }, limit: 5 }])
+						yield* docs(read, { semantic: { record: { id: desk } } }, 5)
 					)).rows.map((row) => row.title)
 				).toEqual(['chair', 'lamp']);
 				const hybrid = yield* Schema.decodeUnknownEffect(Page)(
-					yield* read('read', ['docs', { search: '/semantic lamp', limit: 10 }])
+					yield* docs(read, '/semantic lamp', 10)
 				);
 				expect(hybrid.rows.map((row) => row.title)[0]).toBe('lamp');
 				expect(hybrid.rows).toHaveLength(3);
 				expect(() =>
-					lowerRead(t.manifest, 'read', ['docs', { search: { semantic: '' }, limit: 1 }])
+					lowerRead(t.manifest, 'query', [{ docs: { search: { semantic: '' }, limit: 1 } }])
 				).toThrow(/to: text/);
 			})
 	);
@@ -234,11 +246,10 @@ describe('semantic similarity over search.semantic (L-BOLT-123)', () => {
 						return fixture;
 					});
 				const probe = (fixture: Effect.Success<ReturnType<typeof workspace>>) =>
-					fixture.read('read', ['docs', { search: { semantic: 'table' }, limit: 2 }], {
+					docs(fixture.read, { semantic: 'table' }, 2, {
 						now: '2026-01-01T00:00:00.000Z',
 						today: '2026-01-01',
-						tz: 'UTC',
-						params: {}
+						tz: 'UTC'
 					});
 				const off = yield* workspace(native);
 				expect((yield* off.run.pipe(Effect.flip)).message).toMatch(
@@ -292,8 +303,7 @@ describe('erase and the live lane (rules 38e, 50, 66)', () => {
 					bindings: {
 						now: t.clock.now(),
 						today: t.clock.now().slice(0, 10),
-						tz: 'UTC',
-						params: {}
+						tz: 'UTC'
 					},
 					invocationId: 'e1'
 				})

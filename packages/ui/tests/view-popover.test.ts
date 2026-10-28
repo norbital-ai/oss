@@ -19,8 +19,8 @@ import type { ViewBolt, Json } from '../src/client/contract.ts';
 import type { Row, Values } from '../src/model/types.ts';
 import type { Value } from '@norbital-ai/std/kind';
 import type { KindsHost } from '../src/kinds/context.ts';
-import type { Offer, RawArg, Node, Op, SortKey } from '../src/filter/filter.ts';
-import { taggedArg } from '../src/filter/filter.ts';
+import type { Offer, RawArg, Node, Op, Resolved, SortKey } from '../src/filter/filter.ts';
+import { resolve, taggedArg, varError, variableOf, variablesFor } from '../src/filter/filter.ts';
 import type { ViewHarnessProps } from './view-harness.svelte';
 import { it, vi } from '@effect/vitest';
 import {
@@ -48,6 +48,7 @@ const catalog = {
 			title: { kind: 'text' },
 			hours: { kind: 'number', optional: true },
 			scheduled_on: { kind: 'date', optional: true },
+			due_on: { kind: 'date', optional: true },
 			status: {
 				kind: 'state',
 				initial: 'scheduled',
@@ -230,19 +231,22 @@ it.effect(
 				cond('title', 'like', { lit: 'a_b%' }),
 				cond('status', 'in', { list: ['scheduled', 'done'] }),
 				cond('assignee', 'eq', { lit: 'u1' }),
-				cond('assignee', 'eq', { actor: 'id' }),
+				cond('assignee', 'eq', { var: 'requestor.id' }),
 				cond('assignee', 'isNull'),
 				cond('account.owner.name', 'like', { lit: 'bo' }),
 				cond('subject:accounts', 'in', { list: ['a1', 'a2'] }),
 				cond('scheduled_on', 'during', {
-					range: [{ startOf: 'week' }, { startOf: 'week', shift: 1 }]
+					range: [{ var: 'startOfWeek(today)' }, { var: 'startOfWeek(today) + weeks(1)' }]
 				}),
-				cond('scheduled_on', 'during', { range: [{ today: '-7d' }, { today: '+1d' }] }),
-				cond('scheduled_on', 'gte', { startOf: 'month', shift: -1 }),
-				cond('scheduled_on', 'lt', { today: '-7d' }),
+				cond('scheduled_on', 'during', {
+					range: [{ var: 'today - days(7)' }, { var: 'today + days(1)' }]
+				}),
+				cond('scheduled_on', 'gte', { var: 'startOfMonth(today) - months(1)' }),
+				cond('scheduled_on', 'lt', { var: 'today - days(7)' }),
+				cond('scheduled_on', 'lt', { field: 'due_on' }),
 				cond('tags', 'hasAll', { list: ['a', 'b'] }),
 				cond('meta', 'contains', { lit: { a: 1 } }),
-				cond('window', 'contains', { today: '' }),
+				cond('window', 'contains', { var: 'today' }),
 				{ t: 'many', rel: 'lines', q: 'some', of: [cond('qty', 'gt', { lit: 2 })] },
 				{ t: 'many', rel: 'lines', q: 'none', of: [] },
 				{ t: 'many', rel: 'lines', q: 'count', of: [], op: 'gte', n: 3 },
@@ -267,24 +271,49 @@ it.effect(
 					JSON.stringify(w)
 				);
 			}
-			// the shapes decode expects: escaped like, a record in the `is` form, an actor on the FK, calendar bounds, two hops
+			// the shapes decode expects: escaped like, a record in the `is` form, a variable on the FK, calendar bounds, two hops
 			assert.equal(likePattern('a_b%\\'), '%a\\_b\\%\\\\%');
 			assert.deepEqual(toWhere(catalog, 'jobs', required(rows[2])), {
 				assignee: { is: { id: { eq: 'u1' } } }
 			});
 			assert.deepEqual(toWhere(catalog, 'jobs', required(rows[3])), {
-				assignee: { eq: { actor: 'id' } }
+				assignee: { eq: { var: 'requestor.id' } }
 			});
 			assert.deepEqual(toWhere(catalog, 'jobs', required(rows[6])), {
 				subject: { accounts: { is: { id: { in: ['a1', 'a2'] } } } }
 			});
 			assert.deepEqual(toWhere(catalog, 'jobs', required(rows[7])), {
-				scheduled_on: { gte: { startOf: 'week' }, lt: { startOf: 'week', shift: 1 } }
+				scheduled_on: {
+					gte: { var: 'startOfWeek(today)' },
+					lt: { var: 'startOfWeek(today) + weeks(1)' }
+				}
 			});
 			assert.deepEqual(toWhere(catalog, 'jobs', required(rows[5])), {
 				account: { is: { owner: { is: { name: { like: '%bo%' } } } } }
 			});
-			assert.deepEqual(toWhere(catalog, 'jobs', required(rows[17])), {
+			// a variable's one spelling: the URL keeps it, a read sends its literal at the page's clock
+			assert.deepEqual(toWhere(catalog, 'jobs', required(rows[10])), {
+				scheduled_on: { lt: { var: 'today - days(7)' } }
+			});
+			const clock = { today: '2026-01-02', now: '2026-01-02T03:04:05.000Z', zone: 'UTC' };
+			assert.deepEqual(toWhere(catalog, 'jobs', required(rows[10]), clock), {
+				scheduled_on: { lt: '2025-12-26' }
+			});
+			assert.deepEqual(toWhere(catalog, 'jobs', required(rows[11])), {
+				scheduled_on: { lt: { field: 'due_on' } }
+			});
+			assert.deepEqual(toWhere(catalog, 'jobs', required(rows[14])), {
+				window: { contains: { var: 'today' } }
+			});
+			const formerOrWrong: readonly Json[] = [
+				{ today: '' },
+				{ clock: 'today' },
+				{ startOf: 'week' },
+				{ var: 'requestor.email' }
+			];
+			for (const old of formerOrWrong)
+				assert.equal(fromWhere(catalog, 'jobs', { scheduled_on: { lt: old } }), null);
+			assert.deepEqual(toWhere(catalog, 'jobs', required(rows[18])), {
 				lines: { sum: { of: 'amount', gt: 100 } }
 			});
 			// an incomplete row is shown but not sent; a masked field, an unknown one and a wrong-kind literal never parse
@@ -401,7 +430,9 @@ const offers = (c: string): readonly Offer[] =>
 					values: [
 						{
 							label: 'this week',
-							arg: { range: [{ startOf: 'week' }, { startOf: 'week', shift: 1 }] }
+							arg: {
+								range: [{ var: 'startOfWeek(today)' }, { var: 'startOfWeek(today) + weeks(1)' }]
+							}
 						}
 					]
 				},
@@ -1246,7 +1277,12 @@ it.live('Table: a relative-date filter sends literal bounds and follows the page
 			return day;
 		};
 		const w = encodeURIComponent(
-			JSON.stringify({ scheduled_on: { gte: { today: '-6d' }, lt: { today: '+1d' } } })
+			JSON.stringify({
+				scheduled_on: {
+					gte: { var: 'today - days(6)' },
+					lt: { var: 'today + days(1)' }
+				}
+			})
 		);
 		const v = yield* browser(() =>
 			show(
@@ -1258,7 +1294,7 @@ it.live('Table: a relative-date filter sends literal bounds and follows the page
 		const bounds = JSON.stringify(s.last().where);
 		assert.match(bounds, /2025-12-27/);
 		assert.match(bounds, /2026-01-03/);
-		assert.doesNotMatch(bounds, /"today"/);
+		assert.doesNotMatch(bounds, /"var"/);
 		day.today = '2026-01-03';
 		yield* browser(settle);
 		const next = JSON.stringify(s.last().where);
@@ -1266,6 +1302,131 @@ it.live('Table: a relative-date filter sends literal bounds and follows the page
 		assert.match(next, /2026-01-04/);
 		yield* browser(v.done);
 	})
+);
+
+it.effect(
+	'variables: a value position offers the requestor, today and now by its kind; the rows keep them',
+	() =>
+		Effect.sync(() => {
+			const rel = required(resolve(catalog, 'jobs', 'assignee'));
+			const day = required(resolve(catalog, 'jobs', 'scheduled_on'));
+			const names = (r: Resolved, op: Op) => variablesFor(r, op).map((v) => v.name);
+			assert.deepEqual(names(rel, 'eq'), ['requestor', 'requestor.party']);
+			assert.deepEqual(names(rel, 'in'), []);
+			assert.deepEqual(names(day, 'lt'), [
+				'today',
+				'today - days(7)',
+				'startOfWeek(today)',
+				'startOfMonth(today)'
+			]);
+			assert.deepEqual(names(required(resolve(catalog, 'jobs', 'hours')), 'eq'), []);
+			const email: Resolved = {
+				leaf: 'field',
+				kind: { kind: 'text', format: 'email' },
+				nullable: false,
+				label: 'Email'
+			};
+			assert.deepEqual(variablesFor(email, 'eq'), [
+				{ name: 'requestor.email', arg: { _tag: 'var', var: 'requestor.email' } }
+			]);
+			assert.equal(variableOf(taggedArg({ var: 'today - days(7)' })), 'today - days(7)');
+			assert.equal(variableOf(taggedArg({ var: 'requestor.id' })), 'requestor');
+			assert.equal(variableOf(taggedArg({ lit: 'x' })), undefined);
+			// an expression is typed against its position: an email is no date
+			assert.equal(varError(day, 'lt', 'today - days(1)'), undefined);
+			assert.match(varError(day, 'lt', 'requestor.email') ?? '', /not a date/);
+			const rows = nodesOf(catalog, 'jobs', { assignee: { eq: { var: 'requestor.id' } } });
+			assert.deepEqual(rows, [cond('assignee', 'eq', { var: 'requestor.id' })]);
+		})
+);
+
+it.live(
+	'Table: typing @ in a value offers its variables; the chosen one is a chip and reads as its operand',
+	() =>
+		Effect.gen(function* () {
+			const s = yield* browser(() =>
+				scripted({
+					options: (c) =>
+						Effect.succeed({
+							fields: [
+								...offers(c),
+								{
+									label: 'Scheduled on',
+									path: [{ k: 'field', name: 'scheduled_on' }],
+									op: 'lt',
+									opLabel: 'before',
+									kind: 'date'
+								}
+							]
+						})
+				})
+			);
+			const v = yield* browser(() =>
+				show(
+					{ part: 'table', props: { of: 'jobs', columns: ['title'] }, bolt: s.bolt, catalog },
+					'/'
+				)
+			);
+			const $ = (sel: string) => element<HTMLElement>(document, sel);
+			const at = (row: string) => {
+				const target = element<HTMLElement>(document, `[data-cond=${row}] [data-value]`);
+				const into = target.querySelector<HTMLElement>('input, button') ?? target;
+				into.dispatchEvent(
+					new KeyboardEvent('keydown', { key: '@', bubbles: true, cancelable: true })
+				);
+				flushSync();
+			};
+			const options = () =>
+				[...document.querySelectorAll<HTMLElement>('[data-variable-option]')].map(
+					(o) => o.dataset['variableOption']
+				);
+			const add = (path: string) => {
+				$('[data-add-condition]').click();
+				flushSync();
+				[...document.querySelectorAll<HTMLElement>('[data-filter-rows] [data-field-picker]')]
+					.at(-1)
+					?.click();
+				flushSync();
+				$(`[data-field-list] [data-path=${path}]`).click();
+				flushSync();
+			};
+			$('[data-view-trigger]').click();
+			yield* browser(() => settle());
+			add('assignee');
+			at('assignee');
+			assert.deepEqual(options(), ['requestor', 'requestor.party']);
+			const input = element<HTMLInputElement>(document, '[data-variable-input]');
+			input.value = '@req';
+			input.dispatchEvent(new Event('input', { bubbles: true }));
+			input.dispatchEvent(
+				new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true })
+			);
+			yield* browser(() => settle());
+			assert.ok(document.querySelector('[data-cond=assignee] [data-variable=requestor]'));
+			assert.deepEqual(s.last().where, { assignee: { eq: { var: 'requestor.id' } } });
+			add('scheduled_on');
+			$('[data-cond=scheduled_on] [role=combobox][aria-label=Operator]').click();
+			flushSync();
+			yield* browser(() => tick());
+			$('[role=option][data-value="lt"] button').click();
+			flushSync();
+			at('scheduled_on');
+			assert.deepEqual(options(), [
+				'today',
+				'today - days(7)',
+				'startOfWeek(today)',
+				'startOfMonth(today)'
+			]);
+			$('[data-variable-option=today] button').click();
+			yield* browser(() => settle());
+			assert.ok(document.querySelector('[data-cond=scheduled_on] [data-variable=today]'));
+			// the read gets today's literal at the page clock; the rows (and URL) keep the variable
+			assert.deepEqual(s.last().where, {
+				and: [{ assignee: { eq: { var: 'requestor.id' } } }, { scheduled_on: { lt: '2026-01-02' } }]
+			});
+			assert.match(decodeURIComponent(location.search), /"var":"today"/);
+			yield* browser(v.done);
+		})
 );
 
 it.live(

@@ -1,6 +1,6 @@
 // The agent UI's engine half (§5.9): an in-app conversation starts on the workspace's `ai.default`; a failed turn's log
 // line and staff row name the real reason; `setAgent`, `file` and `markRead` over `/__bolt/act`; staff
-// list the envoy conversations with an unread mark; `read_attachment` reads an xlsx into std/sheet's cells.
+// list the envoy conversations with an unread mark; `read_file` reads an xlsx into std/sheet's cells.
 import { deflateRawSync } from 'node:zlib';
 import { describe, expect, it } from '@effect/vitest';
 import { parseInstant } from '@norbital-ai/std/date';
@@ -335,7 +335,7 @@ function xlsx(files: { readonly [name: string]: string }): Uint8Array {
 	return new Uint8Array(Buffer.concat([...local, dir, end]));
 }
 
-describe('read_attachment on an xlsx', () => {
+describe('read_file on an xlsx', () => {
 	it('reads the first worksheet into std/sheet cells', () => {
 		const book = xlsx({
 			'xl/workbook.xml':

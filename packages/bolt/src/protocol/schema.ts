@@ -108,7 +108,13 @@ const Written = Schema.Array(
 );
 /** A write's outcome (rule 32), told apart by `kind`: what the engine stores and replays for an idempotency key. */
 export const WriteOutcome = Schema.Union([
-	Schema.Struct({ kind: Schema.Literal('committed'), output: Schema.Json, records: Written }),
+	Schema.Struct({
+		kind: Schema.Literal('committed'),
+		output: Schema.Json,
+		records: Written,
+		/** An act that wrote no row: the records that already held every supplied value (after callbacks). */
+		unchanged: Schema.optionalKey(Schema.Array(Schema.Struct({ model: Schema.String, id: Schema.String })))
+	}),
 	Schema.Struct({
 		kind: Schema.Literal('pendingApproval'),
 		requestId: Schema.String,
@@ -254,6 +260,9 @@ export const Usage = Schema.Struct({
 	output: Schema.Number,
 	calls: Schema.Number,
 	cost: Schema.optionalKey(Schema.Number),
+	/** input tokens the provider read from its prompt cache, and output tokens spent reasoning, summed */
+	cached: Schema.optionalKey(Schema.Number),
+	reasoning: Schema.optionalKey(Schema.Number),
 	context: Schema.optionalKey(Schema.Number),
 	window: Schema.optionalKey(Schema.Number),
 	model: Schema.optionalKey(Schema.String)

@@ -26,7 +26,7 @@ const manifest = Result.getOrThrow(
 				label: 'title',
 				fields: {
 					title: { kind: 'text' },
-					due: { kind: 'date', optional: true, default: { today: '' } },
+					due: { kind: 'date', optional: true, default: { var: 'today' } },
 					photo: { kind: 'file', accept: ['image/png'], max: '1MiB', optional: true }
 				}
 			}
@@ -82,8 +82,7 @@ it.live(
 				expect(yield* bindings.pipe(Effect.provide(context))).toEqual({
 					now: NOW,
 					today: TODAY,
-					tz: 'Asia/Kuala_Lumpur',
-					params: {}
+					tz: 'Asia/Kuala_Lumpur'
 				});
 				const admin = t.member([], { admin: true }),
 					reader = t.member(['reader'], { teams: ['Readers'] });

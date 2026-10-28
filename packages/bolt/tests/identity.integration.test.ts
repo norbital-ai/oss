@@ -497,13 +497,13 @@ layer(IdentityFixtureLive)((it) => {
 						invited
 					);
 					expect(history[0]).toMatchObject({
-						model: 'sys_user',
+						collection: 'sys_user',
 						op: 'create',
 						actor: `member:${invited}`,
 						changes: expect.objectContaining({ email: 'rep@acme.example' })
 					});
 					expect(history).toContainEqual({
-						model: 'sys_user',
+						collection: 'sys_user',
 						op: 'update',
 						actor: `member:${founder}`,
 						changes: { admin: true }

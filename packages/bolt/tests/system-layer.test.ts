@@ -670,7 +670,7 @@ describe('the built-in layer is compiled as a workspace is', () => {
 							relationships: Object.assign({}, ...parts.map(([, part]) => part.relationships)),
 							exposures: Object.fromEntries(
 								parts.flatMap(([name, part]) =>
-									part.model === undefined ? [] : [[name, part.model]]
+									part.exposure === undefined ? [] : [[name, part.exposure]]
 								)
 							),
 							integrations: Object.fromEntries(

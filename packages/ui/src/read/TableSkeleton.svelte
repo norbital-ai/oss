@@ -1,6 +1,7 @@
 <!--
-	The shape of a short table page while its rows are read: a header band and six skeleton rows. It keeps the ready
-	table's footprint, so the page does not jump when the answer arrives.
+@component
+The shape of a short table page while its rows are read: a header band and six skeleton rows. It keeps the ready
+table's footprint, so the page does not jump when the answer arrives.
 -->
 <div class="bg-card divide-y overflow-hidden rounded-md border">
 	<div class="bg-muted h-9"></div>

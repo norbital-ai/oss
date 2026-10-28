@@ -1,7 +1,7 @@
 /// <reference types="node" />
 /**
  * `bolt check`, the one diagnosis entry point: the compiler's checks, then the type check. A repository's CI runs it
- * on each template, and the sandbox's check job runs it once per tree. The type check is the type service's
+ * on each template, and the sandbox's check job runs it once per tree. The type check is one `tsc --api`
  * whole-program diagnose (compute model §5, "Check: one type service for every tenant") over the workspace on disk:
  * every package, `svelte` and svelte2tsx's shims included, resolves from the workspace's own `node_modules`, so a
  * component and the shims type against one copy. The audit is the host's, never part of a check.
@@ -40,20 +40,19 @@ const workspaceFiles = Effect.fn('bolt.workspaceFiles')(function* (root: string)
 			files.set(rel, yield* fs.readFileString(path.join(root, rel)));
 	return files;
 });
-/** The type service's errors and warnings over `root` (the compiler's `--fail-on-warnings` bar). */
+/** The whole program's errors and warnings over `root` (the compiler's `--fail-on-warnings` bar). */
 const typeDiagnostics = Effect.fn('bolt.typeDiagnostics')(function* (
 	root: string,
 	files: ReadonlyMap<string, string>
 ) {
-	// a build needs no type service: load its TypeScript 7 API only when a check asks for it
-	const { make } = yield* Effect.tryPromise({
-		try: () => import('../type-service/index.ts'),
+	// a build needs no checker: load its TypeScript 7 API only when a check asks for it
+	const { checkWorkspace } = yield* Effect.tryPromise({
+		try: () => import('../typing/workspace.ts'),
 		catch: (cause) => new ToolFailure({ message: `the type check: ${String(cause)}` })
 	});
-	const service = yield* make({ lanes: 1 });
-	const { answer } = yield* service
-		.diagnose({ tenant: root, key: root, files, modules: `${root}/node_modules` })
-		.pipe(Effect.mapError((e) => new ToolFailure({ message: `the type check: ${e.message}` })));
+	const answer = yield* checkWorkspace(files, `${root}/node_modules`).pipe(
+		Effect.mapError((e) => new ToolFailure({ message: `the type check: ${e.message}` }))
+	);
 	return answer
 		.filter((d) => d.category === 'error' || d.category === 'warning')
 		.map((d) => ({

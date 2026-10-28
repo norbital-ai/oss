@@ -287,7 +287,9 @@ declare module '../../src/index.ts' {
 			};
 			sites: {
 				read: {
-					sites: { fields: readonly ['name', 'location', 'customer', 'open', 'rating', 'checklist'] };
+					sites: {
+						fields: readonly ['name', 'location', 'customer', 'open', 'rating', 'checklist'];
+					};
 				};
 				update: {
 					columns: { sites: readonly ['name', 'location'] };
@@ -895,14 +897,17 @@ declare module '../../src/index.ts' {
 					orders: {
 						read: {
 							orders: {
-								where: { owner: { eq: { actor: 'id' } } };
+								where: { owner: { eq: { var: 'requestor.id' } } };
 								fields: readonly ['number', 'status', 'customer', 'note', 'due', 'total', 'owner'];
 							};
 							'orders.customer': { fields: readonly ['name'] };
 						};
 						history: true;
 						create: {
-							columns: { orders: readonly ['customer', 'note']; 'orders.lines': readonly ['item', 'qty'] };
+							columns: {
+								orders: readonly ['customer', 'note'];
+								'orders.lines': readonly ['item', 'qty'];
+							};
 							check: true;
 						};
 						update: { columns: { orders: readonly ['status', 'note'] }; check: true };
@@ -914,7 +919,7 @@ declare module '../../src/index.ts' {
 					customers: {
 						read: {
 							customers: {
-								where: { orders: { some: { owner: { eq: { actor: 'id' } } } } };
+								where: { orders: { some: { owner: { eq: { var: 'requestor.id' } } } } };
 								fields: readonly ['name', 'tier'];
 							};
 						};
@@ -926,7 +931,7 @@ declare module '../../src/index.ts' {
 					sites: {
 						read: {
 							sites: {
-								where: { customer: { in: { actor: { scopes: 'sales_rep' } } } };
+								where: { customer: { in: { var: 'requestor.scopes.sales_rep' } } };
 								fields: readonly ['name', 'open'];
 							};
 						};
@@ -935,7 +940,7 @@ declare module '../../src/index.ts' {
 						read: {
 							team: {
 								in: {
-									actor: 'teamTree';
+									var: 'requestor.teamTree';
 								};
 							};
 						};
@@ -1013,7 +1018,7 @@ declare module '../../src/index.ts' {
 				to: 'sys_user';
 				optional: true;
 				default: {
-					actor: 'id';
+					var: 'requestor.id';
 				};
 			};
 			'orders.ledger': {

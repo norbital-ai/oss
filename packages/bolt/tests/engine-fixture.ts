@@ -82,14 +82,16 @@ export const manifest = {
 			grants: {
 				customers: { read: true },
 				orders: {
-					read: { orders: { where: { created_by: { eq: { actor: 'id' } } } } },
+					read: { orders: { where: { created_by: { eq: { var: 'requestor.id' } } } } },
 					create: { check: true },
 					update: { check: true },
 					delete: { check: true },
 					moves: { status: ['draft->submitted'] }
 				},
 				lines: {
-					read: { lines: { where: { order: { created_by: { eq: { actor: 'id' } } } } } },
+					read: {
+						lines: { where: { order: { is: { created_by: { eq: { var: 'requestor.id' } } } } } }
+					},
 					update: { check: true }
 				}
 			}

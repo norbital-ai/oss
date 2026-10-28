@@ -101,8 +101,7 @@ export function bridgeOn(db: TenantDbShape, m: EngineManifest = manifest) {
 		const bindings: Bindings = {
 			now: inv.ctx.now,
 			today: inv.ctx.today,
-			tz: inv.ctx.tz,
-			params: {}
+			tz: inv.ctx.tz
 		};
 		return {
 			tables: () => [...tables],

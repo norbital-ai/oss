@@ -7,6 +7,7 @@
 	import type { ModelExposure } from '../kinds/context.js';
 	import { CONTROL } from '../kinds/classes.js';
 	import Editor from '../kinds/editor.svelte';
+	import CodeEditor from '../editors/code-editor.svelte';
 	import Combobox from '../primitives/combobox/combobox.svelte';
 	import type { Value, Kind } from '../kinds/kind.js';
 	import Picker from '../kinds/picker.svelte';
@@ -17,6 +18,7 @@
 		argKind,
 		taggedArg,
 		childOf,
+		fieldsFor,
 		manyAt,
 		manyOffers,
 		offersFor,
@@ -25,6 +27,9 @@
 		radiusText,
 		resolve,
 		valueKind,
+		varError,
+		variableOf,
+		variablesFor,
 		type Arg,
 		type RawArg,
 		type Cmp,
@@ -33,8 +38,7 @@
 		type Offer,
 		type Op,
 		type Quant,
-		type Resolved,
-		type Unit
+		type Resolved
 	} from './filter.js';
 	import FilterNode from './FilterNode.svelte';
 	import { humanize, msg } from '../text/messages.js';
@@ -63,16 +67,7 @@
 	} = $props();
 	const bolt = useBolt();
 	const NO_VALUE: readonly Op[] = ['isNull', 'notNull', 'isEmpty', 'notEmpty'];
-	const OPERAND_LABEL = {
-		_tag: 'lit',
-		lit: 'a value',
-		today: 'days from today',
-		now: 'days from now',
-		startOf: 'start of',
-		me: 'me',
-		party: 'my party',
-		team: 'my teams'
-	} as const;
+	const OPERAND_LABEL = { lit: 'a value', var: 'a variable', field: 'a field' } as const;
 	const QUANTS: readonly Quant[] = ['some', 'none', 'every', 'count', 'sum', 'min', 'max', 'avg'];
 	const endStep = (o: Offer): FilterStep | undefined => o.path.at(-1);
 	const aggFn = (o: Offer): Quant | null => {
@@ -85,6 +80,22 @@
 	};
 
 	const blank: Node = { t: 'cond', path: '', op: 'eq', arg: null };
+	/** What follows a typed `@` in a value position (`null`: no variable menu open). */
+	let variable = $state<string | null>(null);
+	/** The variable expression being edited in its chip (`null`: not editing). */
+	let draft = $state<string | null>(null);
+	/** `@` opens the variable menu, unless it is part of a typed literal (`bob@example.com`). */
+	const atKey = (e: KeyboardEvent, offered: boolean) => {
+		const t = e.target;
+		if (
+			e.key !== '@' ||
+			!offered ||
+			(t instanceof HTMLInputElement && t.type === 'text' && t.value !== '')
+		)
+			return;
+		e.preventDefault();
+		variable = '';
+	};
 	function picked(path: string, many: boolean) {
 		if (many) return onChange({ t: 'many', rel: path, q: 'some', of: [] });
 		onChange({
@@ -94,30 +105,12 @@
 			arg: null
 		});
 	}
-	function operand(kind: string): Arg | null {
-		switch (kind) {
-			case 'today':
-				return { _tag: 'today', today: '' };
-			case 'now':
-				return { _tag: 'now', now: '' };
-			case 'startOf':
-				return { _tag: 'startOf', startOf: 'week' };
-			case 'me':
-				return { _tag: 'actor', actor: 'id' };
-			case 'party':
-				return { _tag: 'actor', actor: 'party' };
-			case 'team':
-				return { _tag: 'actor', actor: 'teams' };
-			default:
-				return null;
-		}
+	/** A new operand of `kind`: a variable opens the `@` menu, a field names the first same-kind field. */
+	function operand(kind: string, path: string): Arg | null {
+		if (kind === 'var') variable = '';
+		const first = kind === 'field' ? fieldsFor(catalog, model, path)[0] : undefined;
+		return first === undefined ? null : { _tag: 'field', field: first };
 	}
-	const days = (offset: string) => {
-		const m = /^([+-])(\d+)d$/.exec(offset);
-		return m === null ? 0 : Number(m[2]) * (m[1] === '-' ? -1 : 1);
-	};
-	const offset = (n: number) =>
-		!Number.isFinite(n) || n === 0 ? '' : `${n > 0 ? '+' : '-'}${Math.abs(Math.trunc(n))}d`;
 	const litKind = (r: Extract<Resolved, { leaf: 'field' }>, op: Op): Kind =>
 		op === 'contains' && r.kind.kind === 'period' ? { kind: r.kind.of } : valueKind(r.kind);
 	const setArg = (arg: Arg | null) => node.t === 'cond' && onChange({ ...node, arg });
@@ -275,15 +268,7 @@
 		: []}
 	<div class="flex flex-col gap-1.5" data-many={m.rel}>
 		<div class="flex flex-wrap items-center gap-1.5">
-			<FieldPicker
-				{catalog}
-				{model}
-				{offers}
-				{prefix}
-				value={m.rel}
-				many={top}
-				onPick={picked}
-			/>
+			<FieldPicker {catalog} {model} {offers} {prefix} value={m.rel} many={top} onPick={picked} />
 			<Combobox
 				class="w-auto"
 				aria-label={msg(bolt, 'view.quantifier', 'Quantifier')}
@@ -344,18 +329,12 @@
 	{@const r = node.path === '' ? null : resolve(catalog, model, node.path)}
 	{@const at = offersFor(offers, prefix, node.path)}
 	<div class="flex flex-wrap items-center gap-1.5" data-cond={node.path}>
-		<FieldPicker
-			{catalog}
-			{model}
-			{offers}
-			{prefix}
-			value={node.path}
-			many={top}
-			onPick={picked}
-		/>
+		<FieldPicker {catalog} {model} {offers} {prefix} value={node.path} many={top} onPick={picked} />
 		{#if r !== null}
 			{@const c = node}
-			{@const operands = operandsFor(r, c.op)}
+			{@const operands = operandsFor(r, c.op).filter(
+				(o) => o !== 'field' || fieldsFor(catalog, model, c.path).length > 0
+			)}
 			<Combobox
 				class="w-auto"
 				aria-label={msg(bolt, 'view.operator', 'Operator')}
@@ -391,144 +370,205 @@
 					<span class="sr-only">({radiusText(m)})</span></span
 				>
 			{:else if !NO_VALUE.includes(c.op)}
-				{#if c.op !== 'during' && c.op !== 'like' && operands.length > 1}
-					{@const lit =
-						r.leaf === 'rel'
-							? 'record'
-							: r.kind.kind === 'date' || r.kind.kind === 'instant' || r.kind.kind === 'period'
-								? 'date'
-								: 'lit'}
-					<Combobox
-						class="w-auto"
-						aria-label={msg(bolt, 'view.operand', 'Compare with')}
-						value={argKind(c.arg)}
-						onChange={(o) => setArg(operand(o ?? 'lit'))}
-						options={operands.map((o) => ({
-							value: o,
-							label:
-								o === 'lit'
-									? msg(
-											bolt,
-											`view.operand.${lit}`,
-											lit === 'record' ? 'a record' : lit === 'date' ? 'a date' : 'a value'
-										)
-									: msg(bolt, `view.operand.${o}`, OPERAND_LABEL[o])
-						}))}
-					/>
-				{/if}
-				{#if c.op === 'during'}
-					{@const values = at.find((o) => o.op === 'during')?.values ?? []}
-					<Combobox
-						class="w-auto"
-						aria-label={msg(bolt, 'view.period', 'Period')}
-						value={c.arg !== null && 'range' in c.arg ? JSON.stringify(c.arg.range) : null}
-						onChange={(v) => {
-							const pick = values.find((x) => JSON.stringify(x.arg) === v);
-							setArg(
-								pick === undefined
-									? null
-									: taggedArg({
-											...pick.arg,
-											...('range' in pick.arg ? { label: pick.label } : {})
-										})
-							);
-						}}
-						options={values.map((v) => ({ value: JSON.stringify(v.arg), label: v.label }))}
-					/>
-				{:else if c.arg !== null && ('today' in c.arg || 'now' in c.arg)}
-					{@const key = 'today' in c.arg ? 'today' : 'now'}
-					<input
-						class={cn(CONTROL, 'w-20')}
-						type="number"
-						step="1"
-						aria-label={msg(bolt, 'view.days', 'Days')}
-						value={days('today' in c.arg ? c.arg.today : 'now' in c.arg ? c.arg.now : '')}
-						oninput={(e) =>
-							setArg(
-								key === 'today'
-									? { _tag: 'today', today: offset(Number(e.currentTarget.value)) }
-									: { _tag: 'now', now: offset(Number(e.currentTarget.value)) }
-							)}
-					/>
-				{:else if c.arg !== null && 'startOf' in c.arg}
-					{@const s = c.arg}
-					<Combobox
-						class="w-auto"
-						aria-label={msg(bolt, 'view.shift', 'Which')}
-						value={String(s.shift ?? 0)}
-						onChange={(v) => {
-							const n = Number(v ?? 0);
-							setArg(
-								n === 0
-									? { _tag: 'startOf', startOf: s.startOf }
-									: { _tag: 'startOf', startOf: s.startOf, shift: n }
-							);
-						}}
-						options={[...new Set([-1, 0, 1, s.shift ?? 0])].map((n) => ({
-							value: String(n),
-							label:
-								({ [-1]: 'last', 0: 'this', 1: 'next' } as { readonly [k: number]: string })[n] ??
-								String(n)
-						}))}
-					/>
-					<Combobox
-						class="w-auto"
-						aria-label={msg(bolt, 'view.unit', 'Unit')}
-						value={s.startOf}
-						onChange={(u) => {
-							if (u !== null) setArg({ ...s, startOf: u as Unit });
-						}}
-						options={(['week', 'month', 'quarter', 'year'] as const).map((u) => ({
-							value: u,
-							label: msg(bolt, `view.unit.${u}`, u)
-						}))}
-					/>
-				{:else if c.arg !== null && 'actor' in c.arg}
-					<!-- me / my party / my teams: the operand is the value -->
-				{:else if c.op === 'like'}
-					<input
-						class={cn(CONTROL, 'w-48')}
-						type="text"
-						aria-label={msg(bolt, 'view.text', 'Text')}
-						value={c.arg !== null && 'lit' in c.arg ? String(c.arg.lit ?? '') : ''}
-						oninput={(e) =>
-							setArg(
-								e.currentTarget.value === '' ? null : { _tag: 'lit', lit: e.currentTarget.value }
-							)}
-					/>
-				{:else if c.op === 'in' || c.op === 'nin' || c.op === 'hasAny' || c.op === 'hasAll'}
-					<div class="flex flex-wrap items-center gap-1.5" data-list>
-						{#each list as item, i (i)}
-							{#if r.leaf === 'rel'}
-								{@render one(r, item, (v) =>
-									setList(
-										v === null
-											? list.filter((_, j) => j !== i)
-											: list.map((x, j) => (j === i ? v : x))
-									)
-								)}
-							{:else}
-								<span class="bg-muted inline-flex h-9 items-center gap-1 rounded-sm px-2 text-sm"
-									>{String(item)}
+				{@const variables = c.op === 'during' || c.op === 'like' ? [] : variablesFor(r, c.op)}
+				{@const named = variableOf(c.arg)}
+				<!-- svelte-ignore a11y_no_static_element_interactions: it only listens for the `@` its controls receive -->
+				<div
+					class="relative flex flex-wrap items-center gap-1.5"
+					data-value
+					onkeydown={(e) => atKey(e, variables.length > 0)}
+				>
+					{#if variable !== null}
+						{@const matching = variables.filter((v) => v.name.startsWith(variable ?? ''))}
+						<input
+							class={cn(CONTROL, 'w-40')}
+							type="text"
+							role="combobox"
+							aria-expanded="true"
+							aria-controls="filter-variables"
+							aria-label={msg(bolt, 'view.variable', 'Variable')}
+							data-variable-input
+							value={`@${variable}`}
+							{@attach (el) => el.focus()}
+							oninput={(e) => (variable = e.currentTarget.value.replace(/^@/, ''))}
+							onkeydown={(e) => {
+								e.stopPropagation();
+								if (e.key === 'Escape') variable = null;
+								else if (e.key === 'Enter' && matching[0] !== undefined) {
+									e.preventDefault();
+									setArg(matching[0].arg);
+									variable = null;
+								}
+							}}
+							onblur={() => (variable = null)}
+						/>
+						<ul
+							id="filter-variables"
+							role="listbox"
+							class="bg-popover absolute top-full left-0 z-50 mt-1 min-w-40 rounded-md border p-1 shadow-md"
+							data-variables
+						>
+							{#each matching as v (v.name)}
+								<li role="option" aria-selected="false" data-variable-option={v.name}>
 									<button
 										type="button"
-										aria-label={msg(bolt, 'view.removeValue', 'Remove value')}
-										onclick={() => setList(list.filter((_, j) => j !== i))}>×</button
-									></span
-								>
-							{/if}
-						{/each}
-						{#key list.length}{@render one(
-								r,
-								null,
-								(v) => v !== null && v !== '' && setList([...list, v])
-							)}{/key}
-					</div>
-				{:else}
-					{@render one(r, c.arg !== null && 'lit' in c.arg ? c.arg.lit : null, (v) =>
-						setArg(v === null || v === '' ? null : { _tag: 'lit', lit: v })
-					)}
-				{/if}
+										class="hover:bg-muted w-full rounded-sm px-2 py-1 text-left text-sm"
+										onmousedown={(e) => e.preventDefault()}
+										onclick={() => {
+											setArg(v.arg);
+											variable = null;
+										}}>@{v.name}</button
+									>
+								</li>
+							{/each}
+						</ul>
+					{:else if draft !== null && c.arg !== null && 'var' in c.arg}
+						{@const error = varError(r, c.op, draft)}
+						<div class="flex min-w-48 flex-col gap-0.5" data-variable-editor>
+							<CodeEditor
+								class={cn(CONTROL, 'h-auto w-64 py-1')}
+								language="javascript"
+								wrap
+								minHeight="1.75rem"
+								invalid={error !== undefined}
+								value={draft}
+								aria-label={msg(bolt, 'view.expression', 'Expression')}
+								onChange={(next) => {
+									draft = next;
+									if (varError(r, c.op, next) === undefined) setArg({ _tag: 'var', var: next });
+								}}
+							/>
+							{#if error !== undefined}<span class="text-destructive text-xs" data-variable-error
+									>{error}</span
+								>{/if}
+						</div>
+						<button
+							type="button"
+							class="text-muted-foreground text-sm"
+							onclick={() => (draft = null)}>{msg(bolt, 'view.done', 'Done')}</button
+						>
+					{:else if named !== undefined && c.arg !== null && 'var' in c.arg}
+						{@const text = c.arg.var}
+						<span
+							class="bg-muted inline-flex h-9 items-center gap-1 rounded-sm px-2 text-sm"
+							data-variable={named}
+							><button
+								type="button"
+								class="font-mono"
+								aria-label={msg(bolt, 'view.editVariable', 'Edit variable')}
+								onclick={() => (draft = text)}>@{named}</button
+							>
+							<button
+								type="button"
+								aria-label={msg(bolt, 'view.removeValue', 'Remove value')}
+								onclick={() => setArg(null)}>×</button
+							></span
+						>
+					{/if}
+					{#if c.op !== 'during' && c.op !== 'like' && operands.length > 1}
+						{@const lit =
+							r.leaf === 'rel'
+								? 'record'
+								: r.kind.kind === 'date' || r.kind.kind === 'instant' || r.kind.kind === 'period'
+									? 'date'
+									: 'lit'}
+						<Combobox
+							class="w-auto"
+							aria-label={msg(bolt, 'view.operand', 'Compare with')}
+							value={argKind(c.arg)}
+							onChange={(o) => setArg(operand(o ?? 'lit', c.path))}
+							options={operands.map((o) => ({
+								value: o,
+								label:
+									o === 'lit'
+										? msg(
+												bolt,
+												`view.operand.${lit}`,
+												lit === 'record' ? 'a record' : lit === 'date' ? 'a date' : 'a value'
+											)
+										: msg(bolt, `view.operand.${o}`, OPERAND_LABEL[o])
+							}))}
+						/>
+					{/if}
+					{#if c.op === 'during'}
+						{@const values = at.find((o) => o.op === 'during')?.values ?? []}
+						<Combobox
+							class="w-auto"
+							aria-label={msg(bolt, 'view.period', 'Period')}
+							value={c.arg !== null && 'range' in c.arg ? JSON.stringify(c.arg.range) : null}
+							onChange={(v) => {
+								const pick = values.find((x) => JSON.stringify(x.arg) === v);
+								setArg(
+									pick === undefined
+										? null
+										: taggedArg({
+												...pick.arg,
+												...('range' in pick.arg ? { label: pick.label } : {})
+											})
+								);
+							}}
+							options={values.map((v) => ({ value: JSON.stringify(v.arg), label: v.label }))}
+						/>
+					{:else if c.arg !== null && 'var' in c.arg}
+						<!-- a variable: the chip is the value -->
+					{:else if c.arg !== null && 'field' in c.arg}
+						<Combobox
+							class="w-auto"
+							aria-label={msg(bolt, 'view.field', 'Field')}
+							value={c.arg.field}
+							onChange={(f) => {
+								if (f !== null) setArg({ _tag: 'field', field: f });
+							}}
+							options={fieldsFor(catalog, model, c.path).map((f) => ({
+								value: f,
+								label: catalog[model]?.fields[f]?.label ?? humanize(f)
+							}))}
+						/>
+					{:else if c.op === 'like'}
+						<input
+							class={cn(CONTROL, 'w-48')}
+							type="text"
+							aria-label={msg(bolt, 'view.text', 'Text')}
+							value={c.arg !== null && 'lit' in c.arg ? String(c.arg.lit ?? '') : ''}
+							oninput={(e) =>
+								setArg(
+									e.currentTarget.value === '' ? null : { _tag: 'lit', lit: e.currentTarget.value }
+								)}
+						/>
+					{:else if c.op === 'in' || c.op === 'nin' || c.op === 'hasAny' || c.op === 'hasAll'}
+						<div class="flex flex-wrap items-center gap-1.5" data-list>
+							{#each list as item, i (i)}
+								{#if r.leaf === 'rel'}
+									{@render one(r, item, (v) =>
+										setList(
+											v === null
+												? list.filter((_, j) => j !== i)
+												: list.map((x, j) => (j === i ? v : x))
+										)
+									)}
+								{:else}
+									<span class="bg-muted inline-flex h-9 items-center gap-1 rounded-sm px-2 text-sm"
+										>{String(item)}
+										<button
+											type="button"
+											aria-label={msg(bolt, 'view.removeValue', 'Remove value')}
+											onclick={() => setList(list.filter((_, j) => j !== i))}>×</button
+										></span
+									>
+								{/if}
+							{/each}
+							{#key list.length}{@render one(
+									r,
+									null,
+									(v) => v !== null && v !== '' && setList([...list, v])
+								)}{/key}
+						</div>
+					{:else}
+						{@render one(r, c.arg !== null && 'lit' in c.arg ? c.arg.lit : null, (v) =>
+							setArg(v === null || v === '' ? null : { _tag: 'lit', lit: v })
+						)}
+					{/if}
+				</div>
 			{/if}
 		{/if}
 		{@render remove()}

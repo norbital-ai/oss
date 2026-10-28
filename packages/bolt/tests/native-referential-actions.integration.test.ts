@@ -125,7 +125,7 @@ const fixture = Effect.gen(function* () {
 			issuedAt: now,
 			invocationId: key,
 			mode: { _tag: 'Direct' },
-			bindings: { now, today: now.slice(0, 10), tz: 'UTC', params: {} }
+			bindings: { now, today: now.slice(0, 10), tz: 'UTC' }
 		});
 	};
 	const create = Effect.fnUntraced(function* (model: Model, input: Json) {

@@ -42,6 +42,7 @@
 	import SourceEditor from './SourceEditor.svelte';
 	import SourceTree from './SourceTree.svelte';
 	import WorkbenchToolbar from './WorkbenchToolbar.svelte';
+	import { impactLines } from '../../protocol/migration-impact.ts';
 	import PreviewFrame from '../preview/PreviewFrame.svelte';
 	import studioBanner from '../assets/banners/studio.jpg';
 	import {
@@ -285,6 +286,41 @@
 				describing = null;
 			});
 		});
+	/** When to merge, asked in a dialog: a local date and time, an hour from now by default. */
+	let scheduling = $state<{ when: string; answer: (at: string | null) => void } | null>(null);
+	const localInput = (at: Date) =>
+		new Date(at.getTime() - at.getTimezoneOffset() * 60_000).toISOString().slice(0, 16);
+	const askWhen = () =>
+		Effect.callback<string | null>((resume) => {
+			scheduling = {
+				when: localInput(new Date(Date.now() + 3_600_000)),
+				answer: (at) => {
+					scheduling = null;
+					resume(Effect.succeed(at));
+				}
+			};
+			return Effect.sync(() => {
+				scheduling = null;
+			});
+		});
+	/** A merge at a later instant: saved and previewed as a merge is, then run at that time as the viewer. */
+	const schedule = Effect.fn('Studio.schedule')(function* (c: StudioChangeSet) {
+		if (locked || (c.id === view?.change && !(yield* save()))) return;
+		const current = changeSets.find((x) => x.id === c.id) ?? c;
+		if (current.preview === null || current.preview.url === null || current.preview.stale) {
+			error = t('Preview the latest commit before promoting it.');
+			return;
+		}
+		const when = yield* askWhen();
+		if (when === null) return;
+		const accept = current.preview.destructive ?? [];
+		yield* run({
+			op: 'change.merge',
+			id: current.id,
+			at: new Date(when).toISOString(),
+			...(accept.length > 0 ? { accept } : {})
+		});
+	});
 	const save = Effect.fn('Studio.save')(function* () {
 		if (view === null || Object.keys(drafts).length === 0) return true;
 		const saved = $state.snapshot(drafts),
@@ -381,6 +417,10 @@
 					accept.length > 0
 						? `${t('This applies destructive schema steps:')} ${accept.join(', ')}. `
 						: ''
+				}${
+					current.preview.impact === undefined
+						? ''
+						: `${impactLines(current.preview.impact, t).join('. ')}. `
 				}${t('It merges with live, builds and checks the result, then everyone using the workspace gets it.')}`,
 				confirmLabel: t('Merge'),
 				cancelLabel: t('Cancel'),
@@ -430,6 +470,15 @@
 			: held.op.op === 'rollback'
 				? `${t('Roll back live to')} ${short(held.op.commit)}`
 				: held.op.op;
+	/** A held merge's measured impact on its preview, in plain words. */
+	const heldImpact = (held: StudioApproval) => {
+		const op = held.op;
+		const impact =
+			op.op === 'change.merge'
+				? changeSets.find((c) => c.id === op.id)?.preview?.impact
+				: undefined;
+		return impact === undefined ? '' : `${impactLines(impact, t).join('. ')}. `;
+	};
 	const decide = (held: StudioApproval, kind: 'approved' | 'rejected') =>
 		kind === 'rejected'
 			? run({ op: 'approval.decide', id: held.id, kind })
@@ -440,7 +489,7 @@
 							(held.destructive?.length ?? 0) > 0
 								? `${t('This applies destructive schema steps:')} ${held.destructive?.join(', ')}. `
 								: ''
-						}${t('Everyone using the workspace gets this version once it is switched over.')}`,
+						}${heldImpact(held)}${t('Everyone using the workspace gets this version once it is switched over.')}`,
 						confirmLabel: t('Approve'),
 						cancelLabel: t('Cancel'),
 						destructive: (held.destructive?.length ?? 0) > 0
@@ -723,6 +772,12 @@
 			onmerge={() => {
 				if (mine !== undefined) fork(merge(mine));
 			}}
+			onschedule={() => {
+				if (mine !== undefined) fork(schedule(mine));
+			}}
+			onunschedule={() => {
+				if (mine !== undefined) fork(run({ op: 'change.unschedule', id: mine.id }));
+			}}
 			oninstall={installPackage}
 			onreview={() => {
 				selected = view?.change ?? null;
@@ -753,7 +808,9 @@
 					{@const waiting = building}
 					{@const failed =
 						!waiting &&
-						view?.builds?.some((build) => build.commit === view?.commit && build.status === 'failed')}
+						view?.builds?.some(
+							(build) => build.commit === view?.commit && build.status === 'failed'
+						)}
 					<Stack gap="sm" align="center" justify="center" fill class="text-muted-foreground">
 						<Icon
 							name={waiting
@@ -1056,6 +1113,45 @@
 		</Stack>
 	</Sheet>
 {/if}
+
+<Dialog.Root
+	open={scheduling !== null}
+	onOpenChange={(open) => {
+		if (!open) scheduling?.answer(null);
+	}}
+>
+	<Dialog.Content class="max-w-md">
+		{#if scheduling !== null}
+			{@const asking = scheduling}
+			<Dialog.Header>
+				<Dialog.Title>{t('Schedule the merge')}</Dialog.Title>
+				<Dialog.Description
+					>{t(
+						'It merges at that time. The workspace is down only while it switches over: open pages show that it is updating, then reload.'
+					)}</Dialog.Description
+				>
+			</Dialog.Header>
+			<form
+				class="flex flex-col gap-3"
+				onsubmit={(event) => {
+					event.preventDefault();
+					asking.answer(asking.when === '' ? null : asking.when);
+				}}
+			>
+				<div class="flex flex-col gap-1.5">
+					<label for="studio-merge-at" class="text-label">{t('Merge at')}</label>
+					<Input id="studio-merge-at" type="datetime-local" bind:value={asking.when} />
+				</div>
+				<Dialog.Footer>
+					<Button type="button" variant="ghost" onclick={() => asking.answer(null)}
+						>{t('Cancel')}</Button
+					>
+					<Button type="submit">{t('Schedule')}</Button>
+				</Dialog.Footer>
+			</form>
+		{/if}
+	</Dialog.Content>
+</Dialog.Root>
 
 <Dialog.Root
 	open={describing !== null}

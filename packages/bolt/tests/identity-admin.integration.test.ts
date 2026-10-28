@@ -422,9 +422,9 @@ layer(AdministrationFixtureLive)((it) => {
 							invitation.id
 						)
 					).toEqual([
-						{ model: 'sys_invitation', op: 'create', revision: 1 },
-						{ model: 'sys_invitation', op: 'update', revision: 2 },
-						{ model: 'sys_user', op: 'create', revision: 1 }
+						{ collection: 'sys_invitation', op: 'create', revision: 1 },
+						{ collection: 'sys_invitation', op: 'update', revision: 2 },
+						{ collection: 'sys_user', op: 'create', revision: 1 }
 					]);
 					expect(
 						yield* db.value(Schema.Number, {

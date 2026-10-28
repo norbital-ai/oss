@@ -57,8 +57,7 @@ const ok = (o: Outcome) => {
 	if (o.kind !== 'committed') throw new Error(JSON.stringify(o));
 	return o;
 };
-const idOf = (o: Outcome, c = 'orders') =>
-	present(ok(o).records.find((r) => r.model === c)).id;
+const idOf = (o: Outcome, c = 'orders') => present(ok(o).records.find((r) => r.model === c)).id;
 const writes = <A, E, R>(t: Kit, n: number, run: Effect.Effect<A, E, R>) =>
 	Effect.gen(function* () {
 		const commits = vi.spyOn(t.db, 'transaction'),
@@ -215,13 +214,14 @@ describe('engine: create → read → update → delete through the full pipelin
 			const t = yield* TestWorkspace;
 			const route = yield* routeFixture(yield* Effect.context<TestWorkspace | WorkspaceServices>());
 			const rep = t.as(t.member(['rep']));
-			const input = [{ title: 'desk', region: 'north', customer: ACME }];
+			const row = { title: 'desk', region: 'north', customer: ACME };
+			const input = [row];
 			const first = yield* act(route, t, rep.authority, 'orders.create', input, { key: 'same' });
 			const again = yield* act(route, t, rep.authority, 'orders.create', input, { key: 'same' });
 			expect(JSON.stringify(again)).toBe(JSON.stringify(first));
 			expect((yield* read(route, rep.authority, 'orders')).rows).toHaveLength(1);
 			expect(
-				yield* act(route, t, rep.authority, 'orders.create', [{ ...input, title: 'other' }], {
+				yield* act(route, t, rep.authority, 'orders.create', [{ ...row, title: 'other' }], {
 					key: 'same'
 				})
 			).toMatchObject({ kind: 'refused', code: 'keyReuse' });
@@ -231,7 +231,7 @@ describe('engine: create → read → update → delete through the full pipelin
 					rep.authority,
 					'orders',
 					idOf(
-						ok(yield* act(route, t, rep.authority, 'orders.create', [{ ...input, title: 'next' }]))
+						ok(yield* act(route, t, rep.authority, 'orders.create', [{ ...row, title: 'next' }]))
 					)
 				)
 			).toMatchObject({ number: 'SO-0002' });

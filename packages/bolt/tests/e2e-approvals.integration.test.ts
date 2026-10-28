@@ -419,7 +419,7 @@ describe('decisions over /__bolt/act reach the live lane (rules 46, 47, 66)', ()
 										}
 									],
 									{ as: 'caller', authority: finance() },
-									{ now: t.clock.now(), today: t.clock.now().slice(0, 10), tz: 'UTC', params: {} }
+									{ now: t.clock.now(), today: t.clock.now().slice(0, 10), tz: 'UTC' }
 								)
 								.pipe(Effect.flip)
 						).toMatchObject({ code: 'forbidden' });

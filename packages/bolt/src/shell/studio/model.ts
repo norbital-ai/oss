@@ -4,6 +4,7 @@
 import { Schema, SchemaTransformation } from 'effect';
 import { STUDIO_PHASES, STUDIO_ROLES } from '../../protocol/schema.ts';
 import type { Authority } from '../../engine/contracts.ts';
+import type { MigrationImpact } from '../../protocol/migration-impact.ts';
 import type { EngineManifest } from '../../engine/manifest.ts';
 import type { CheckDiagnostic } from '../../compiler/check/index.ts';
 import type { StudioAuditPort } from './audit.ts';
@@ -69,7 +70,8 @@ type StudioEnvironment = { name: string; release: string; url: string | null };
  * A change's preview (§7): its own copy-on-write fork of live's data, taken when the change was opened, serving the
  * build of `commit` (`stale` once the head moved past it, while the newer head builds). `url` is `null` while it is
  * `shelved`: idle for two hours, its fork was deleted; opening the change again re-forks live and reuses the build.
- * `destructive`: the schema steps merging that build applies (a merge must accept them).
+ * `destructive`: the schema steps merging that build applies (a merge must accept them); `impact`: what applying its
+ * migrations did on the fork (each step's rows, the duration: the merge's expected downtime).
  */
 export type StudioPreview = {
 	url: string | null;
@@ -78,6 +80,7 @@ export type StudioPreview = {
 	stale: boolean;
 	shelved?: true;
 	destructive?: readonly string[];
+	impact?: MigrationImpact;
 };
 /**
  * A Change (§7): a named set of edits on `branch`, from live, with its own preview. `base` is where it left live (the
@@ -95,7 +98,13 @@ export type StudioChangeSet = {
 	head: string;
 	behind: number;
 	preview: StudioPreview | null;
-	merge?: { state: 'running' | 'failed'; at: string; head: string; error?: string };
+	merge?: {
+		state: 'scheduled' | 'running' | 'failed';
+		at: string;
+		head: string;
+		error?: string;
+		runAt?: string;
+	};
 	log: readonly StudioLogLine[];
 	createdAt: string;
 	updatedAt: string;
@@ -151,9 +160,12 @@ export type StudioState = {
  * preview — or opens an existing one again (`id`): the viewer works on one change at a time. `save` commits edits to the
  * viewer's change over `expected` (a stale head is refused; with none open, the save opens one named by its message),
  * `null` deletes a file; a save commits only. `preview` is the build: it builds the head and serves it, and a merge
- * requires the preview of the head it promotes. `change.merge` merges a change into live in the background: git's 3-way merge (conflicts land in the change as
+ * requires the preview of the head it promotes; `squash` also collapses the change's migration history into a verified
+ * baseline and commits it to the change. `change.merge` merges a change into live in the background: git's 3-way merge (conflicts land in the change as
  * marked files, live untouched), a build of the merged tree with its checks, then the cutover; `accept` names the
- * destructive schema steps it may apply (any other refuses it). `change.close` drops a change and its preview.
+ * destructive schema steps it may apply (any other refuses it); `at` schedules it for that instant instead, and
+ * `change.unschedule` drops the schedule. Its cutover is the tenant's only downtime: requests answer maintenance and
+ * in-flight work is cancelled until the new release serves. `change.close` drops a change and its preview.
  * `rollback` brings a Version back, source and data together, recording the state it leaves as an Undo Version first;
  * a schema change refuses it unless `discardDataSince` names the instant whose later writes it discards. It is neither
  * the operator's database restore nor a record's restore. `approval.decide` approves (it runs as the viewer) or rejects
@@ -187,7 +199,9 @@ export const StudioOp = Schema.Union([
 	Schema.Struct({
 		op: Schema.Literal('preview'),
 		/** The explicit change; absent uses the viewer's selected change. */
-		id: Schema.optionalKey(nonempty)
+		id: Schema.optionalKey(nonempty),
+		/** Also squash the migration history's schema prefix into a baseline named this (`bolt build --squash`). */
+		squash: Schema.optionalKey(Schema.String.check(Schema.isPattern(/^[a-z0-9_]{1,40}$/)))
 	}),
 	Schema.Struct({ op: Schema.Literal('preview.claim'), id: nonempty }),
 	Schema.Struct({ op: Schema.Literal('preview.release'), id: nonempty }),
@@ -201,8 +215,11 @@ export const StudioOp = Schema.Union([
 	Schema.Struct({
 		op: Schema.Literal('change.merge'),
 		id: nonempty,
-		accept: Schema.optionalKey(Schema.Array(nonempty))
+		accept: Schema.optionalKey(Schema.Array(nonempty)),
+		/** An instant to merge at instead of now: the tenant is down only for the cutover, at that time. */
+		at: Schema.optionalKey(nonempty)
 	}),
+	Schema.Struct({ op: Schema.Literal('change.unschedule'), id: nonempty }),
 	Schema.Struct({ op: Schema.Literal('change.close'), id: nonempty }),
 	Schema.Struct({
 		op: Schema.Literal('rollback'),

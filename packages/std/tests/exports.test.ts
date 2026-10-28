@@ -17,6 +17,7 @@ describe('std builds', () => {
 			calendar: ['cycleOf', 'businessDays', 'WorkCalendar'],
 			sheet: ['columns', 'decode', 'encode'],
 			versioned: ['sealWrites', 'cloneNext'],
+			vars: ['compileVar', 'evaluateVar'],
 			json: ['parseJson', 'parseJsonResult'],
 			facts: ['facts', 'validateFacts'],
 			label: ['label'],

@@ -194,7 +194,7 @@ describe('write callbacks through real entry paths', () => {
 								automation: 'mutate',
 								runs: [{ id, input }],
 								authority: f.admin,
-								bindings: { now: NOW, today: NOW.slice(0, 10), tz: 'UTC', params: {} }
+								bindings: { now: NOW, today: NOW.slice(0, 10), tz: 'UTC' }
 							})
 						);
 						yield* f.t.runDue();

@@ -74,13 +74,13 @@ const run = (input: Json, verb: 'create' | 'update' = 'create', caller = visible
 		{
 			model: 'orders',
 			verb,
-			input,
+			input: [input],
 			mode: { _tag: 'Direct' },
 			key: `nested-${n}`,
 			invocationId: `nested-${n++}`,
 			issuedAt: NOW,
 			authority: caller,
-			bindings: { now: NOW, today: TODAY, tz: 'UTC', params: {} }
+			bindings: { now: NOW, today: TODAY, tz: 'UTC' }
 		}
 	);
 let allowed: string, hidden: string;
@@ -99,7 +99,7 @@ const setup = Effect.fnUntraced(function* () {
 			invocationId: `tags-${n++}`,
 			issuedAt: NOW,
 			authority: admin,
-			bindings: { now: NOW, today: TODAY, tz: 'UTC', params: {} }
+			bindings: { now: NOW, today: TODAY, tz: 'UTC' }
 		}
 	);
 	if (tags.outcome.kind !== 'committed')

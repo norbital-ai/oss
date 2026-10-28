@@ -92,8 +92,7 @@ const fixture = Effect.gen(function* () {
 	const bindings = {
 		now: t.clock.now(),
 		today: t.clock.now().slice(0, 10),
-		tz: 'UTC',
-		params: {}
+		tz: 'UTC'
 	};
 	const act = (
 		model: 'folders' | 'documents',

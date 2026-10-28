@@ -30,6 +30,9 @@ it.each(['Amount expression', '金额表达式'])(
 		} finally {
 			await unmount(component);
 			target.remove();
+			// happy-dom 21 fires selectionchange synchronously when a stale range is replaced, which a browser queues;
+			// a range left in the removed editor would re-enter the next case's CodeMirror update
+			document.getSelection()?.removeAllRanges();
 		}
 	}
 );

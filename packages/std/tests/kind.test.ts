@@ -160,7 +160,7 @@ const CASES: { readonly [K in FieldKind]: readonly (readonly [Kind, fc.Arbitrary
 				fields: {
 					a: { kind: 'text' },
 					b: { kind: 'int', optional: true },
-					c: { kind: 'date', default: { today: '' } }
+					c: { kind: 'date', default: { var: 'today' } }
 				}
 			},
 			fc.record(

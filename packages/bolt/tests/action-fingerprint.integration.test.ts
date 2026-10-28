@@ -203,8 +203,7 @@ const fixture = (mutateSource = false) =>
 		const bindings = () => ({
 			now: t.clock.now(),
 			today: t.clock.now().slice(0, 10),
-			tz: 'UTC',
-			params: {}
+			tz: 'UTC'
 		});
 		const act = (callable: string, input: Json, authority = caller.authority) =>
 			route.dispatch({ callable, input, key: randomUUID(), issuedAt: t.clock.now() }, authority);

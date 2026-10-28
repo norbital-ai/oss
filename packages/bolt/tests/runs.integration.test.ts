@@ -181,7 +181,7 @@ type Body = (
 				at?:
 					| string
 					| {
-							now: string;
+							var: string;
 					  };
 				key?: string;
 			}
@@ -464,8 +464,7 @@ const world = Effect.fn('TestRuns.world')(function* (
 					bindings: {
 						now: iso(clock.ms),
 						today: iso(clock.ms).slice(0, 10),
-						tz: 'UTC',
-						params: {}
+						tz: 'UTC'
 					},
 					invocationId: randomUUID()
 				})).outcome;
@@ -777,7 +776,7 @@ describe('event triggers (rules 49, 50)', () => {
 						automation: 'review',
 						runs: [{ id: run, input: manual }],
 						authority: yield* w.e.authority(member),
-						bindings: { now: iso(T0), today: '2026-09-25', tz: 'UTC', params: {} }
+						bindings: { now: iso(T0), today: '2026-09-25', tz: 'UTC' }
 					})
 				).toMatchObject({ kind: 'committed' });
 				expect(w.calls).toEqual([]);
@@ -868,12 +867,12 @@ describe('re-queues, attempts and the journal (rules 51, 54, 55, 70)', () => {
 								yield* ctx.schedule(
 									'classify',
 									{},
-									{ at: { now: '+1min' }, key: 'classify_retry' }
+									{ at: { var: 'now + minutes(1)' }, key: 'classify_retry' }
 								);
 								yield* ctx.schedule(
 									'classify',
 									{},
-									{ at: { now: '+1min' }, key: 'classify_retry' }
+									{ at: { var: 'now + minutes(1)' }, key: 'classify_retry' }
 								);
 							})
 					},
@@ -1168,7 +1167,7 @@ describe('webhooks and visibility (rules 56, 56a)', () => {
 					key: randomUUID(),
 					issuedAt: iso(T0),
 					authority: yield* w.e.authority(member),
-					bindings: { now: iso(T0), today: '2026-09-25', tz: 'UTC', params: {} },
+					bindings: { now: iso(T0), today: '2026-09-25', tz: 'UTC' },
 					invocationId: randomUUID()
 				})).outcome;
 				expect(created.kind).toBe('committed');
@@ -1183,7 +1182,7 @@ describe('webhooks and visibility (rules 56, 56a)', () => {
 					key: randomUUID(),
 					issuedAt: iso(T0),
 					authority: yield* w.e.authority(member),
-					bindings: { now: iso(T0), today: '2026-09-25', tz: 'UTC', params: {} },
+					bindings: { now: iso(T0), today: '2026-09-25', tz: 'UTC' },
 					invocationId: randomUUID()
 				});
 				yield* w.until(T0);

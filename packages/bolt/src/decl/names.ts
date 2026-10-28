@@ -60,13 +60,13 @@ export type NamesPart<K extends keyof NamesShape> = K extends keyof Names ? Name
 
 /**
  * One ref field as the relationships part holds it (`'<model>.<field>'`): its target (`to`), the `inverse` many-relation
- * name, `optional`, a default from the actor, `onDelete`, `owned` children and a `where` on the target.
+ * name, `optional`, a default from the requestor, `onDelete`, `owned` children and a `where` on the target.
  */
 export type RelationshipSpec = {
 	to: string | readonly string[];
 	inverse?: string;
 	optional?: true;
-	default?: { actor: 'id' | 'party' };
+	default?: { var: 'requestor.id' | 'requestor.party' };
 	onDelete?: 'restrict' | 'cascade' | 'setNull';
 	owned?: true;
 	where?: object;
@@ -368,11 +368,20 @@ export type ReadField<C> =
 				? F & string
 				: never)
 	| keyof SystemColumns<C>;
+/** The relations path `P` of its root's `read` declares as layers (`'<P>.<rel>'`): the only ones a filter or sort crosses. */
+export type LayerRelation<P> =
+	ReadPath<RootOf<P>> extends infer K
+		? K extends `${P & string}.${infer R}`
+			? R extends `${string}.${string}`
+				? never
+				: R
+			: never
+		: never;
 /**
- * Relations of `C` a `Where` may cross to filter (into a model with `read`, over that model's root fields). A filter
- * through a declared layer is masked by the root's policy; through any other relation it reads the target's access point.
+ * Relations of `C` a `Where` or a sort may cross: the layers its `read` declares, read under the root's policy. A
+ * relation it does not declare is a type error, never the target model's own access point.
  */
-export type ReadRelation<C> = RelNameOf<C>;
+export type ReadRelation<C> = LayerRelation<C>;
 export type ExposureSpecOf<C> = SpecOf<C>;
 
 // ── layer paths (decision 1): generated literal unions, so a path's type is a lookup, never a recursive walk ──
@@ -411,13 +420,14 @@ export type LayerColumn<C, V extends 'create' | 'update', P> =
 			: never
 		: never;
 /** The columns layer `P` of `C`'s `create` fills when the writer omits them (`create.filled`). */
-export type LayerFilled<C, P> = SpecOf<C> extends { create: { filled: infer L } }
-	? P extends keyof L
-		? L[P] extends readonly (infer F)[]
-			? F & string
+export type LayerFilled<C, P> =
+	SpecOf<C> extends { create: { filled: infer L } }
+		? P extends keyof L
+			? L[P] extends readonly (infer F)[]
+				? F & string
+				: never
 			: never
-		: never
-	: never;
+		: never;
 /** The relation names one segment below `P` among `Paths`: `SubLayer<'o' | 'o.lines' | 'o.lines.product', 'o'>` = `'lines'`. */
 export type SubLayer<Paths, P extends string> = Paths extends `${P}.${infer S}`
 	? S extends `${string}.${string}`
@@ -531,7 +541,9 @@ export type CallerValue<C, P> =
 	P extends Maskable<C> ? ColumnValue<C, P> | Masked : ColumnValue<C, P>;
 /** A caller's value of column or FK `F` on layer `P` of `C`, masked by the root's policies. */
 export type LayerValue<C, P, F> =
-	F extends Maskable<C, P> ? ColumnValue<PathModel<C, P>, F> | Masked : ColumnValue<PathModel<C, P>, F>;
+	F extends Maskable<C, P>
+		? ColumnValue<PathModel<C, P>, F> | Masked
+		: ColumnValue<PathModel<C, P>, F>;
 /** A caller's row of model `C`: its exposed fields (maskable ones `| Masked`), FK ids and system columns (rule 10). */
 export type Row<C> = RowOf<C> & RowState;
 /** What a caller's read attaches to each root row beside its fields, whatever it selects (§4.2, rule 46b). */

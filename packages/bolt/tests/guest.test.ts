@@ -65,7 +65,8 @@ const IdRequest = Schema.Record(
 	})
 );
 const lowerRead: GuestOptions['lowerRead'] = (member, args) => {
-	const [root = member, layer] = Object.entries(Schema.decodeUnknownSync(IdRequest)(args[0]))[0] ?? [];
+	const [root = member, layer] =
+		Object.entries(Schema.decodeUnknownSync(IdRequest)(args[0]))[0] ?? [];
 	return {
 		kind: 'get',
 		model: root,
@@ -316,12 +317,7 @@ describe('next guest runner', () => {
 				['probe', 'orders.hue', {}, { vector: [1, 2, 3] }],
 				['rerank', 'orders.hue', [{}, [{ score: 3 }, { score: 1 }]], [3, 1]],
 				['syncRead', 'orders.crm', {}, ['model', 'orders', 'bodies', 'syncs', 'crm', 'read']],
-				[
-					'syncWrite',
-					'orders.crm',
-					{},
-					['model', 'orders', 'bodies', 'syncs', 'crm', 'write']
-				],
+				['syncWrite', 'orders.crm', {}, ['model', 'orders', 'bodies', 'syncs', 'crm', 'write']],
 				[
 					'parse',
 					'orders.crm.application/json',
@@ -403,57 +399,59 @@ describe('next guest runner', () => {
 		})
 	);
 
-	it.live('write callbacks receive workspace reads and stop before a third read crosses', () =>
-		Effect.gen(function* () {
-			const source = `export default { model: { orders: { bodies: {
+	it.live(
+		'write callbacks receive workspace reads and stop before the read past their crossing budget',
+		() =>
+			Effect.gen(function* () {
+				const source = `export default { model: { orders: { bodies: {
 				create: function* (rows, ctx) {
-					for (let i = 0; i < 3; i++) yield* ctx.db.query({ orders: { where: { id: { eq: 'x' } } } });
+					for (let i = 0; i < ${LIMITS.crossings.write + 1}; i++) yield* ctx.db.query({ orders: { where: { id: { eq: 'x' } } } });
 					return rows;
 				},
 				update: function* (changes, ctx) {
 					return { rows: changes.map(({ before, set }) => ({ ...set, previous: before.title })), keys: Object.keys(ctx).sort(), db: Object.keys(ctx.db).sort() };
 				}
 			} } } };`;
-			const { crossings, bridge } = recorder();
-			expect(
-				failure(
-					yield* runIn(
-						source,
-						invocation([], { crossings: LIMITS.crossings.write }, 'create', 'orders'),
-						bridge
-					)
-				)
-			).toMatchObject({ code: 'crossingBudget' });
-			expect(crossings).toHaveLength(2);
-			expect(
-				ok(
-					yield* runIn(
-						source,
-						invocation(
-							[{ before: { title: 'Before' }, set: { title: 'After' } }],
-							{},
-							'update',
-							'orders'
+				const { crossings, bridge } = recorder();
+				expect(
+					failure(
+						yield* runIn(
+							source,
+							invocation([], { crossings: LIMITS.crossings.write }, 'create', 'orders'),
+							bridge
 						)
 					)
-				)
-			).toEqual({
-				rows: [{ title: 'After', previous: 'Before' }],
-				keys: [
-					'actor',
-					'admin',
-					'db',
-					'invocationId',
-					'now',
-					'policies',
-					'refuse',
-					'today',
-					'todayIn',
-					'tz'
-				],
-				db: ['after', 'aggregate', 'query']
-			});
-		})
+				).toMatchObject({ code: 'crossingBudget' });
+				expect(crossings).toHaveLength(LIMITS.crossings.write);
+				expect(
+					ok(
+						yield* runIn(
+							source,
+							invocation(
+								[{ before: { title: 'Before' }, set: { title: 'After' } }],
+								{},
+								'update',
+								'orders'
+							)
+						)
+					)
+				).toEqual({
+					rows: [{ title: 'After', previous: 'Before' }],
+					keys: [
+						'actor',
+						'admin',
+						'db',
+						'invocationId',
+						'now',
+						'policies',
+						'refuse',
+						'today',
+						'todayIn',
+						'tz'
+					],
+					db: ['after', 'aggregate', 'query']
+				});
+			})
 	);
 
 	it.live(
@@ -880,7 +878,9 @@ describe('next guest runner', () => {
 			expect(
 				failure(
 					yield* runIn(
-						automation('function* (_, ctx) { return yield* ctx.query({ t: { where: { id: { eq: "a" } } } }); }'),
+						automation(
+							'function* (_, ctx) { return yield* ctx.query({ t: { where: { id: { eq: "a" } } } }); }'
+						),
 						invocation(),
 						bridge
 					)
@@ -892,27 +892,29 @@ describe('next guest runner', () => {
 		})
 	);
 
-	it.live('reports the total when concurrent read answers together exceed the crossing limit (rule 9)', () =>
-		Effect.gen(function* () {
-			const each = 5 * 1024 * 1024;
-			const total = each * 2;
-			const { crossings, bridge } = recorder(() => ({
-				ok: true,
-				value: 'x'.repeat(each)
-			}));
-			const outcome = yield* runIn(
-				automation(
-					'function* (_, ctx) { return yield* Effect.all([ctx.query({ t: { where: { id: { eq: "a" } } } }), ctx.query({ t: { where: { id: { eq: "b" } } } })], { concurrency: "unbounded" }); }'
-				),
-				invocation(),
-				bridge
-			);
-			expect(crossings.map((calls) => calls.length)).toEqual([2]);
-			expect(failure(outcome)).toEqual({
-				code: 'tooLarge',
-				message: `Could not read 't': too much data returned at once (${(total / 1024 / 1024).toFixed(1)} MB total, over the ${LIMITS.crossingBytes / 1024 / 1024} MB limit). Largest response: ${(each / 1024 / 1024).toFixed(1)} MB. At guest.mjs:2; page it with \`limit\` and the returned cursor, or \`select\` fewer fields.`
-			});
-		})
+	it.live(
+		'reports the total when concurrent read answers together exceed the crossing limit (rule 9)',
+		() =>
+			Effect.gen(function* () {
+				const each = 5 * 1024 * 1024;
+				const total = each * 2;
+				const { crossings, bridge } = recorder(() => ({
+					ok: true,
+					value: 'x'.repeat(each)
+				}));
+				const outcome = yield* runIn(
+					automation(
+						'function* (_, ctx) { return yield* Effect.all([ctx.query({ t: { where: { id: { eq: "a" } } } }), ctx.query({ t: { where: { id: { eq: "b" } } } })], { concurrency: "unbounded" }); }'
+					),
+					invocation(),
+					bridge
+				);
+				expect(crossings.map((calls) => calls.length)).toEqual([2]);
+				expect(failure(outcome)).toEqual({
+					code: 'tooLarge',
+					message: `Could not read 't': too much data returned at once (${(total / 1024 / 1024).toFixed(1)} MB total, over the ${LIMITS.crossingBytes / 1024 / 1024} MB limit). Largest response: ${(each / 1024 / 1024).toFixed(1)} MB. At guest.mjs:2; page it with \`limit\` and the returned cursor, or \`select\` fewer fields.`
+				});
+			})
 	);
 
 	it.live('stops a guest spinning past its CPU budget across awaits (rule 71)', () =>
@@ -979,9 +981,7 @@ describe('next guest runner', () => {
 					u: { limit: 1 }
 				};
 				const o = yield* runIn(
-					automation(
-						`function* (_, ctx) { return yield* ctx.query(${JSON.stringify(request)}); }`
-					),
+					automation(`function* (_, ctx) { return yield* ctx.query(${JSON.stringify(request)}); }`),
 					invocation(null, { crossings: 1 }),
 					bridge,
 					{ lowerRead: stub }
@@ -1036,7 +1036,11 @@ describe('next guest runner', () => {
 			Effect.gen(function* () {
 				const { bridge } = recorder(() => ({
 					ok: false,
-					error: { kind: 'bolt', code: 'invalid', message: "'u.nope' is not a read layer u declares" }
+					error: {
+						kind: 'bolt',
+						code: 'invalid',
+						message: "'u.nope' is not a read layer u declares"
+					}
 				}));
 				expect(
 					ok(

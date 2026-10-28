@@ -6,12 +6,7 @@
 import { describe, expect, it } from '@effect/vitest';
 import { Context, Effect, Layer, Result, Schema } from 'effect';
 import { catalogOf, toPred } from '../src/engine/access/pred.ts';
-import type {
-	Authority,
-	Bindings,
-	ModelAuthority,
-	EngineActor
-} from '../src/engine/contracts.ts';
+import type { Authority, Bindings, ModelAuthority, EngineActor } from '../src/engine/contracts.ts';
 import { PgliteDb } from '../src/node/db/pglite.ts';
 import { TenantDb } from '../src/engine/db/tenant-db.ts';
 import { decodeManifest } from '../src/engine/manifest.ts';
@@ -83,10 +78,10 @@ const manifest = Result.getOrThrow(
 );
 
 // ── the grant predicates, in the new `Where` ──
-const OWN = { assignee: { eq: { actor: 'id' } } };
+const OWN = { assignee: { eq: { var: 'requestor.id' } } };
 const UNCHECKED = { suspicion_checked_at: { isNull: true } };
 const OWN_VARIATION = { assignment: { is: OWN } };
-const OWN_EMPLOYMENT = { employee: { is: { email: { eq: { actor: 'email' } } } } };
+const OWN_EMPLOYMENT = { employee: { is: { email: { eq: { var: 'requestor.email' } } } } };
 const NOT_A_CORRECTION = { kind: { ne: 'MANUAL_ADJUSTMENT' } };
 type Row = {
 	id: string;
@@ -225,7 +220,7 @@ const matrix: readonly Row[] = [
 	{
 		id: 'employee.case-folded-email',
 		root: 'employees',
-		where: { email: { eq: { actor: 'email' } } },
+		where: { email: { eq: { var: 'requestor.email' } } },
 		sql: ['lower('],
 		allow: ['employee-owned'],
 		deny: ['employee-other']
@@ -244,7 +239,7 @@ const u = (n: string) => {
 	}
 	return id;
 };
-const b: Bindings = { now: '2026-09-25T10:00:00.000Z', today: '2026-09-25', tz: 'UTC', params: {} };
+const b: Bindings = { now: '2026-09-25T10:00:00.000Z', today: '2026-09-25', tz: 'UTC' };
 const all = (model: string): ModelAuthority => ({
 	read: { [model]: [{ policy: 'p', where: { t: 'const', value: true }, fields: 'all' }] },
 	history: [],
@@ -286,12 +281,20 @@ const IdRow = Schema.Struct({ id: Schema.String });
 const fixture = Effect.gen(function* () {
 	const db = yield* TenantDb;
 	yield* applyPlan(db, yield* plan(null, manifest), { accept: true });
+	// the grant `Where` is the root's read arm: an authority predicate, compiled raw across any relation
 	const visible = Effect.fnUntraced(function* (root: string, pred: Pred, as: Authority = owner) {
+		const authority: Authority = {
+			...as,
+			models: {
+				...as.models,
+				[root]: { ...all(root), read: { [root]: [{ policy: 'p', where: pred, fields: 'all' }] } }
+			}
+		};
 		const s = yield* whereSql(
 			catalogOf(manifest),
 			root,
-			pred,
-			readOptions({ as: 'caller', authority: as }, b)
+			{ t: 'const', value: true },
+			readOptions({ as: 'caller', authority }, b)
 		).pipe(Effect.mapError(fromStore));
 		return { sql: s.text, ids: (yield* db.rows(IdRow, s)).map((r) => names.get(r.id) ?? r.id) };
 	});

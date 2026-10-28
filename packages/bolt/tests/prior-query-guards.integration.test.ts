@@ -200,7 +200,7 @@ const fixture = (mode: 'concurrent' | 'aba') =>
 					automation,
 					runs: [{ id, input: { account: ACCOUNT, amount: 10, label } }],
 					authority,
-					bindings: { now: t.clock.now(), today: t.clock.now().slice(0, 10), tz: 'UTC', params: {} }
+					bindings: { now: t.clock.now(), today: t.clock.now().slice(0, 10), tz: 'UTC' }
 				});
 				return { id, outcome };
 			});

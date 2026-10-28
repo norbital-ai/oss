@@ -38,8 +38,8 @@ export const slice = (): SchemaSlice => ({
 					jpy: { kind: 'money', currency: 'JPY', optional: true },
 					qty: { kind: 'int', min: 0 },
 					rate: { kind: 'decimal', scale: 2, precision: 5, optional: true },
-					placed: { kind: 'date', default: { today: '' } },
-					at: { kind: 'instant', default: { now: '' } },
+					placed: { kind: 'date', default: { var: 'today' } },
+					at: { kind: 'instant', default: { var: 'now' } },
 					note: { kind: 'json', optional: true }
 				},
 				check: { closed_has_qty: { or: [{ status: { eq: 'open' } }, { qty: { gt: 0 } }] } },

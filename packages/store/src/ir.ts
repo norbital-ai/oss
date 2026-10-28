@@ -7,22 +7,10 @@ import type { Json, Point, Shape } from './values.ts';
 type Lit = { readonly _tag: 'Lit'; readonly value: Json };
 /** A same-row field (`{ field }`): compared within the row, never a relation path. */
 export type Field = { readonly _tag: 'Field'; readonly field: string };
-/** A named parameter bound per invocation (`{ param }`). */
-type Param = { readonly _tag: 'Param'; readonly name: string };
-/** What an `{ actor }` operand reads off the caller's authority. */
-type ActorOperand =
-	| 'id'
-	| 'email'
-	| 'phone'
-	| 'teams'
-	| 'teamTree'
-	| 'party'
-	| 'visitor'
-	| 'instance'
-	| { readonly scopes: string };
-export type Actor = { readonly _tag: 'Actor'; readonly of: ActorOperand };
+/** A `{ var }` CEL expression over the requestor (std/vars), checked at decode and bound once per invocation. */
+export type Var = { readonly _tag: 'Var'; readonly text: string };
 /** A value position resolved at execution. */
-export type Operand = Field | Param | Actor;
+export type Operand = Field | Var;
 /** A value position: a literal or an operand. */
 export type Arg = Lit | Operand;
 /**
@@ -131,8 +119,11 @@ export type Pred =
 	  }
 	| { readonly t: 'json'; readonly field: string; readonly contains: Json }
 	| { readonly t: 'json'; readonly field: string; readonly isEmpty: boolean }
-	/** `$search`: the model's `search.text` document holds every word of `text`. */
-	| { readonly t: 'search'; readonly text: string }
+	/**
+	 * `$search`: the model's `search.text` document holds every word of `text`, or a link it names reaches a row whose own
+	 * search does; `via` is the models already searched on the way, so a cycle of links stops.
+	 */
+	| { readonly t: 'search'; readonly text: string; readonly via?: readonly string[] }
 	/** `$similar`: the rows nearest `to` on `search.semantic`, at most `top`; `vector` is the probe the read embeds first. */
 	| {
 			readonly t: 'similar';

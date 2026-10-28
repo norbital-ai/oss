@@ -114,8 +114,7 @@ export default { model: { orders: { bodies: {
 							model: 'orders',
 							id: 'order',
 							select: { fields: null, relations: {} }
-						},
-						params: {}
+						}
 					}
 				]
 			]);

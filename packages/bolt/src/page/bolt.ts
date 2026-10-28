@@ -126,7 +126,9 @@ const FilterArg = Schema.Union([
 		range: Schema.Tuple([Schema.Json, Schema.Json]),
 		label: Schema.optionalKey(Schema.String)
 	}),
-	Schema.Struct({ actor: Schema.Literals(['id', 'party', 'teams']) })
+	Schema.Struct({
+		var: Schema.Literals(['requestor.id', 'requestor.email', 'requestor.party', 'requestor.teams'])
+	})
 ]);
 const FilterOptionsAnswer = Schema.Struct({
 	fields: Schema.Array(
@@ -717,8 +719,7 @@ export const createBolt = (config: BoltConfig) =>
 				})
 			);
 		return {
-			aggregate: <T = Row[]>(model: string, options: Wired) =>
-				q<T>('aggregate', [model, options]),
+			aggregate: <T = Row[]>(model: string, options: Wired) => q<T>('aggregate', [model, options]),
 			history: <T = Json>(model: string, id: string, options: { at?: Json } = {}) =>
 				q<T>('history', [model, id, ...(options.at === undefined ? [] : [options.at])]),
 			/** One read request: `query({ <root>: { … }, '<root>.<layer>': { … } })`, answered as a page per root. */
@@ -764,9 +765,7 @@ export const createBolt = (config: BoltConfig) =>
 			decode(model: string, view: { where?: Json; orderBy?: Json }) {
 				if (config.catalog === undefined)
 					throw new Error('This client has no catalog to decode against.');
-				return storeSync(
-					decodeView((decoder ??= browserCatalog(config.catalog)), model, view)
-				);
+				return storeSync(decodeView((decoder ??= browserCatalog(config.catalog)), model, view));
 			},
 			...(config.describe === true
 				? {

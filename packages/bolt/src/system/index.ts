@@ -171,7 +171,7 @@ export type SystemNames = {
 				created_at: {
 					kind: 'instant';
 					default: {
-						now: '';
+						var: 'now';
 					};
 				};
 			};
@@ -227,7 +227,7 @@ export type SystemNames = {
 				created_at: {
 					kind: 'instant';
 					default: {
-						now: '';
+						var: 'now';
 					};
 				};
 				title: {
@@ -301,7 +301,7 @@ export type SystemNames = {
 				updated_at: {
 					kind: 'instant';
 					default: {
-						now: '';
+						var: 'now';
 					};
 				};
 			};
@@ -357,7 +357,7 @@ export type SystemNames = {
 				created_at: {
 					kind: 'instant';
 					default: {
-						now: '';
+						var: 'now';
 					};
 				};
 				revision: {
@@ -626,7 +626,7 @@ export type SystemNames = {
 				created_at: {
 					kind: 'instant';
 					default: {
-						now: '';
+						var: 'now';
 					};
 				};
 				conversation: {
@@ -1132,7 +1132,7 @@ export type SystemNames = {
 				started_at: {
 					kind: 'instant';
 					default: {
-						now: '';
+						var: 'now';
 					};
 				};
 				last_read_at: {
@@ -1302,7 +1302,7 @@ export type SystemNames = {
 				created_at: {
 					kind: 'instant';
 					default: {
-						now: '';
+						var: 'now';
 					};
 				};
 			};

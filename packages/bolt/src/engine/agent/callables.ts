@@ -7,7 +7,7 @@ import { type EngineError } from '../errors.ts';
 import { BoltError } from '../../protocol/errors.ts';
 import { publicEnvoys } from '../manifest.ts';
 import { Agents, Manifest, Reads, Turns, type AgentCallables } from '../services.ts';
-import { Conversation, isStaff, type ConversationRow } from './schema.ts';
+import { Conversation, isStaff, sharedConversations, type ConversationRow } from './schema.ts';
 import { RateWindows, chargesFor } from '../access/rate.ts';
 import { TriageService } from './triage.ts';
 import { lowerRead } from '../query/engine.ts';
@@ -29,9 +29,7 @@ export const conversationFor = Effect.fn('Agents.conversationFor')(function* (
 		text: `SELECT c.id, c.title, c.owner, c.envoy, c.integration, c.thread, c.parent, c.status, c.model, c.plan, c.goals, c.run
   FROM sys_conversation c WHERE c.id = $1 AND
   ((c.integration IS NULL AND c.owner IS NOT NULL AND ($2 OR c.owner = $3)) OR
-   (c.run IS NOT NULL AND $2) OR
-   (c.integration IS NOT NULL AND $3 IS NOT NULL AND (($4 AND c.envoy IN (SELECT jsonb_array_elements_text($5::jsonb))) OR
-    EXISTS (SELECT 1 FROM sys_message m WHERE m.conversation = c.id AND $3 IN (m.author, m."as"->>'member', m."as"->'envoy'->>'member')))))`,
+   ${sharedConversations({ member: '$3', admin: '$2', staff: '$4', envoys: '$5' })})`,
 		params: [
 			id,
 			authority.admin,

@@ -22,10 +22,22 @@ a table lock; an ordinary index build blocks writes and scans the table. Proven 
 to preserve stored values, but can rewrite the table and rebuild indexes under an exclusive lock. Hosts bound lock
 waits and roll back a file if its lock cannot be acquired. `CONCURRENTLY` is refused because files run atomically.
 
+Edit generated SQL for data patterns the planner cannot express; replay keeps the edited history equal to the
+declared schema, and `bolt build` rewrites its lock and physical proof. Idempotency is per file: the ledger, the file
+and its receipt commit in one transaction under the `bolt:schema` advisory lock, so a retry after any failure or a
+concurrent applier runs nothing twice. Generated steps are not individually re-runnable; write hand data steps so a
+second run is a no-op. Each file runs under the adapters' `lock_timeout` 5 s, `statement_timeout` 15 s and 20 s call
+wall (`DATABASE_SETTINGS`); a backfill beyond that budget rolls back and must be reshaped.
+
+A `-- check: <name>` line followed by one `SELECT` is a post-condition: the host runs it inside the file's transaction
+and fails the file with SQLSTATE `BM005`, naming the check and its row count, when any row returns. A file holding a
+check stays in a squash's retained suffix.
+
 Run `bolt build --squash=release_name` to create a verified schema baseline for a complete prefix. Use lowercase
 letters, digits and underscores in the name. Its receipt binds the exact original filenames,
 checksums and replayed schema; the original SQL stays under `migrations/archive/` and the alternative baseline under
-`migrations/squashes/`. Commit both directories and the updated lock. A fresh database runs the longest verified
+`migrations/squashes/`. Commit both directories and the updated lock. Studio's `preview` op takes `squash: <name>` and commits the same result to the change. Squashing
+needs no environment to be current: archived originals finish any partially applied database. A fresh database runs the longest verified
 baseline. A database partway through the original files finishes those files; a database on an earlier baseline
 runs the original suffix after that baseline. The ledger records only the SQL each database actually executed, so a
 second squash preserves older histories. Data transformations and unclassified executed SQL cannot be squashed
@@ -49,7 +61,7 @@ Each word names one thing:
 | ----------- | -------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------- |
 | Environment | An operating environment: local, staging or production, and a tenant environment inside one.                         | The operator CLI that resets and operates environments; never a workspace setting. |
 | Secrets     | Encrypted values stored in the tenant database, read by server code.                                                 | `src/+secrets.ts` with `secrets({ NAME: { label } })`.                             |
-| Server code | Transforms, policy checks, automations, syncs, integrations and page loaders.                                              | The `ctx` each receives; declarations from `@norbital-ai/bolt`.                    |
+| Server code | Transforms, policy checks, automations, syncs, integrations and page loaders.                                        | The `ctx` each receives; declarations from `@norbital-ai/bolt`.                    |
 | Page SDK    | What browser-side page code calls.                                                                                   | `@norbital-ai/bolt/page`, imported in pages as `$bolt`.                            |
 | Device      | What the shell running the page provides: location, notifications, push, background notices, opening external links. | `bolt.device` in pages; a shell installs `window.boltDevice`.                      |
 | Shell       | The container a workspace runs in, which implements Device.                                                          | The web shell built into Bolt; native apps from `@norbital-ai/app-shell`.          |
@@ -67,7 +79,6 @@ Each word names one thing:
 | `@norbital-ai/bolt/artifact`          | A host's reader of built artifacts.                                                   |
 | `@norbital-ai/bolt/protocol`          | Wire and artifact types and their Schemas; `/protocol/cursor` decodes page cursors.   |
 | `@norbital-ai/bolt/host-api`          | The Host API between a host and a pinned release.                                     |
-| `@norbital-ai/bolt/type-service`      | Hover, go-to-definition and draft checks over a workspace's tsconfig.                 |
 | `@norbital-ai/bolt/docs`              | The API reference as data.                                                            |
 | `@norbital-ai/bolt/isolate-globals`   | The guest's global surface beyond ECMAScript.                                         |
 | `@norbital-ai/bolt/test`              | `TestWorkspace` and the Effect Vitest helpers; `/test/browser` mounts shell controls. |
@@ -144,9 +155,15 @@ Teams exist only in source: `src/access_control/team/+team.ts` maps each handle 
 or `{ name?, parent?, policies }`. No table holds them. A member's, invitation's or API key's
 `team` is a text field with `format: 'team'` holding one declared handle; every write refuses an
 undeclared handle, and a handle removed from source confers nothing. Authority, the `parent` graph
-(`actor.teamTree`), approval flows (`supersededBy` and step teams are exact handles), team
-previews and the People team picker all read the manifest. `{ actor: 'teams' | 'teamTree' }` is an
-`in`/`nin` operand on `format: 'team'` fields.
+(`requestor.teamTree`), approval flows (`supersededBy` and step teams are exact handles), team
+previews and the People team picker all read the manifest. `{ var: 'requestor.teams' }` and
+`{ var: 'requestor.teamTree' }` are `in`/`nin` operands on `format: 'team'` fields.
+
+A filter value is a literal, `{ field: '<column>' }`, or `{ var: '<CEL>' }` (`@norbital-ai/std/vars`): a
+typed expression over `requestor` and the clock, checked against the field's kind at decode and evaluated once
+per read. Requestor expressions bind server-side; time expressions (`{ var: 'today - days(7)' }`,
+`{ var: 'startOfMonth(today)' }`, `{ var: 'now - hours(1)' }`) are evaluated at the edge and refused by the
+store.
 
 ## Record history and restore
 

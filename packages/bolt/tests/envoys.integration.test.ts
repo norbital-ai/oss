@@ -119,8 +119,7 @@ function scriptedAi(sent: (instance: string) => string[]) {
 					const usage = { input: 10, output: 5 };
 					const last = present(
 						request.messages.findLast(
-							(m) =>
-								!(typeof m.content === 'string' && m.content.startsWith('[conversation state]'))
+							(m) => !(typeof m.content === 'string' && m.content.startsWith('[conversation state'))
 						)
 					); // the step's closing note is the engine's, not a message
 					if (last.role === 'tool') {
@@ -544,7 +543,7 @@ describe('groups (rule 60)', () => {
 	);
 
 	it.live(
-		'a message that arrives while the turn runs steers it: queued at once, never held for a decision',
+		'a message addressed to the envoy while the turn runs steers it: queued at once, never held; chatter stays ambient',
 		() =>
 			Effect.scoped(
 				Effect.gen(function* () {
@@ -557,15 +556,30 @@ describe('groups (rule 60)', () => {
 						text: `UPDATE sys_conversation SET status = 'running' WHERE kind = 'group'`,
 						params: []
 					});
-					// the same chatter that is ambient on an idle group joins a running turn: the next step carries it
-					yield* say('field_wa', '6598765432@s.whatsapp.net', 'and mine?', {
-						...group,
-						invocation: 'ambient'
+					// a reply to the envoy joins the running turn before any pause passes: the next step carries it
+					yield* t.receive('field_wa', {
+						id: 'steer-1',
+						thread: '1203@g.us',
+						group: true,
+						invocation: 'reply',
+						sentAt: t.clock.now(),
+						from: { handle: '6598765432@s.whatsapp.net', name: null },
+						text: 'and mine?',
+						attachments: []
 					});
 					expect(present((yield* rows('and mine?'))[0])).toMatchObject({
 						addressed: true,
 						role: 'user',
 						state: 'queued'
+					});
+					// chatter that does not address the envoy stays out of the running turn, as on an idle group
+					yield* say('field_wa', '6598765432@s.whatsapp.net', 'lunch?', {
+						...group,
+						invocation: 'ambient'
+					});
+					expect(present((yield* rows('lunch?'))[0])).toMatchObject({
+						addressed: false,
+						role: null
 					});
 					// nobody was told to stay quiet, so no unaddressed note was written
 					expect(t.fakes.logs.filter((r) => r.event === 'conversation.unaddressed')).toHaveLength(
@@ -698,9 +712,7 @@ describe('groups (rule 60)', () => {
 						expect(seen).toContain(said);
 					for (const file of ['unit4.jpg', 'unit5.jpg', 'site.mp4'])
 						expect(seen).toMatch(
-							new RegExp(
-								`attachment seq \\d+ file 0: ${file.replace('.', '\\.')}[^\\]]*\\] file reference`
-							)
+							new RegExp(`attachment: ${file.replace('.', '\\.')}[^\\]]*\\] file reference`)
 						);
 					// another person's chatter stays out: a line where it stood counts it and says how to read it
 					expect(seen).not.toContain('lunch?');
@@ -783,7 +795,9 @@ describe('groups (rule 60)', () => {
 					const second = present(ai.requests[1]);
 					expect(second.files?.map((f) => f.mime)).toEqual(['image/jpeg', 'image/jpeg']);
 					const results = JSON.stringify(second.messages.filter((m) => m.role === 'tool'));
-					expect(results).toContain('the file is attached to your next step');
+					expect(results).toContain(
+						'the file is shown to you from your next step until this turn ends: no need to read it again'
+					);
 					expect(results).toContain(
 						'video attachment — cannot view; ask the sender to describe it or send a photo'
 					);

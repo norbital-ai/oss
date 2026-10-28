@@ -172,7 +172,7 @@ it('Studio restores live to a recorded commit through the port after confirmatio
 	await click('Activity');
 	const entry = () => el.querySelector<HTMLElement>('[data-release-timeline] [data-commit="c1"]')!;
 	await press(entry().querySelector<HTMLElement>('button[title="c1"]')!);
-	expect(inspected.at(-1)).toMatchObject({ view: 'activity', build: 'c1' });
+	expect(inspected.at(-1)).toMatchObject({ build: 'c1' });
 	const rollback = () =>
 		[...entry().querySelectorAll<HTMLButtonElement>('button')].find(
 			(button) => button.textContent?.trim() === 'Roll back'
@@ -398,7 +398,14 @@ it('Studio opens another change and merges a previewed head through the port; no
 			commit: `h${id}`,
 			artifact: 'a',
 			stale: false,
-			destructive: ['drop column leave.days']
+			destructive: ['drop column leave.days'],
+			impact: {
+				durationMs: 1200,
+				steps: [
+					{ id: 'create:table:leave_types', hazard: 'additive', rows: 0, summary: '' },
+					{ id: 'drop:column:leave.days', hazard: 'destructive', rows: 331, summary: '' }
+				]
+			}
 		},
 		log: [],
 		createdAt: '2026-09-25T00:00:00Z',
@@ -468,12 +475,19 @@ it('Studio opens another change and merges a previewed head through the port; no
 	// working on it went back to the Workbench; the merge is the Changes pane's
 	await open('Changes');
 	await open('!1 Leave rules');
+	// the review says, in plain words, what the preview measured merging does to the data
+	expect(el.textContent).toContain('Drops column leave.days — 331 rows with a value');
+	expect(el.textContent).not.toContain('Adds leave_types');
 	await open('Work on it');
 	expect(ran.at(-1)).toEqual({ op: 'change.open', id: '1' });
 	expect(el.querySelector('[data-change="1"]')?.textContent).toContain('Leave rules');
 	await open('Merge');
 	// the merge accepts the destructive steps its current preview names, after the person read them
-	expect(await answer(true)).toContain('drop column leave.days');
+	const asked = await answer(true);
+	expect(asked).toContain('drop column leave.days');
+	expect(asked).toContain(
+		'Drops column leave.days — 331 rows with a value. Expected downtime about 1 s (measured on the preview).'
+	);
 	expect(ran.at(-1)).toEqual({ op: 'change.merge', id: '1', accept: ['drop column leave.days'] });
 	const member = studio(false);
 	await settle();
@@ -544,14 +558,14 @@ it('Live delegates run and resource scope to the shared inspection without expos
 		target.remove();
 	});
 	await settle();
-	expect(asked.at(-1)).toEqual({ range: '7d', view: 'logs', build: null, run: null });
+	expect(asked.at(-1)).toEqual({ range: '7d', build: null, run: null });
 	await press(target.querySelector<HTMLElement>('[role="combobox"][aria-label="Automation run"]')!);
 	await press(
 		[...document.querySelectorAll<HTMLElement>('[role="option"]')]
 			.find((option) => option.textContent?.trim() === 'r-7')!
 			.querySelector<HTMLButtonElement>('button')!
 	);
-	expect(asked.at(-1)).toMatchObject({ view: 'logs', run: 'r-7' });
+	expect(asked.at(-1)).toMatchObject({ run: 'r-7' });
 	await press(
 		[...target.querySelectorAll<HTMLElement>('[role="tab"]')].find(
 			(tab) => tab.textContent?.trim() === 'Resources'
@@ -562,7 +576,7 @@ it('Live delegates run and resource scope to the shared inspection without expos
 			(button) => button.textContent?.trim() === '24h'
 		)!
 	);
-	expect(asked.at(-1)).toMatchObject({ range: '24h', view: 'resources', run: 'r-7' });
+	expect(asked.at(-1)).toMatchObject({ range: '24h', run: 'r-7' });
 	expect(operated).toEqual([]);
 	expect(target.querySelector('[data-file-tree], [contenteditable="true"]')).toBeNull();
 });

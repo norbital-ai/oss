@@ -58,7 +58,7 @@ import { compile, context, evaluate } from '@norbital-ai/std/formula';
 
 /** Rule 72: a platform budget checked before the provider's own limit. */
 export const MODEL_FILES = { count: 8, bytes: 20 * 1024 * 1024 } as const;
-/** What a message may carry (envoy and panel alike): images, text, and the documents `read_attachment` reads; 8 files / 20 MiB a message. */
+/** What a message may carry (envoy and panel alike): images, text, and the documents `read_file` reads; 8 files / 20 MiB a message. */
 export const ATTACHMENT_MIME =
 	/^(image\/[\w.+-]+|text\/[\w.+-]+|application\/(pdf|json|(?:[\w.-]+\+)?xml|vnd\.openxmlformats-officedocument\.(?:wordprocessingml\.document|spreadsheetml\.sheet)))$/;
 class ModelIdle extends FacilityFailure {
@@ -103,6 +103,8 @@ export const servesModel = (
 				Effect.map((catalog) => catalog.models.some((x) => x.id === model)),
 				Effect.catchTag('Unavailable', () => Effect.succeed(false))
 			);
+/** How long a model call may take to its first event (time to first byte on an uncached long prompt). */
+const FIRST_EVENT_MS = 60_000;
 /** Silence interrupts the upstream pull; every response/progress event restarts the wall. */
 export const modelCall = Effect.fn('Ai.modelCall')(function* (
 	ai: Ai['Service'] | undefined,
@@ -135,10 +137,13 @@ export const modelCall = Effect.fn('Ai.modelCall')(function* (
 				message: `a model call takes at most ${MODEL_FILES.count} files and 20 MiB`
 			})
 		);
-	const wallMs = options.wallMs ?? LIMITS.callMs.ai;
+	const wallMs = options.wallMs ?? LIMITS.callMs.ai,
+		// a long prompt no provider has cached takes 20–30 s to its first byte; after that the idle wall holds
+		firstMs = options.wallMs ?? FIRST_EVENT_MS;
 	let partial = '',
 		reasoning = '',
-		progressed = false;
+		progressed = false,
+		begun = false;
 	let response: AiResponse | undefined;
 	// Each pull races a native sleep. Business time may be frozen or adjusted independently.
 	yield* Stream.transformPull(
@@ -152,7 +157,10 @@ export const modelCall = Effect.fn('Ai.modelCall')(function* (
 						return Effect.fail(
 							progressed
 								? new ModelIdle(`the model was still writing a tool call at ${wallMs} ms`, true)
-								: (cause ?? new ModelIdle(`the model yielded nothing within ${wallMs} ms`))
+								: (cause ??
+										new ModelIdle(
+											`the model yielded nothing within ${begun ? wallMs : firstMs} ms`
+										))
 						);
 					const cut: AiResponse = {
 						content: partial,
@@ -173,7 +181,7 @@ export const modelCall = Effect.fn('Ai.modelCall')(function* (
 									cause.kind === 'timeout' ? idle(cause) : Effect.fail(cause)
 								),
 								Effect.timeoutOrElse({
-									duration: wallMs,
+									duration: begun ? wallMs : firstMs,
 									orElse: () => idle()
 								})
 							)
@@ -183,6 +191,7 @@ export const modelCall = Effect.fn('Ai.modelCall')(function* (
 	).pipe(
 		Stream.runForEach((event) =>
 			Effect.sync(() => {
+				begun = true;
 				switch (event._tag) {
 					case 'Delta':
 						partial += event.text;
@@ -224,9 +233,13 @@ export const modelCall = Effect.fn('Ai.modelCall')(function* (
 });
 
 /** `confirm`: an in-app call the person must approve first; it executes later under key `(turn, callId)`. */
-/** `bounded`: the tool already bounded its result with the caller's selection (rule 62), so the loop does not clip it again. */
+/** `bounded`: the tool already bounded its result (rule 62), so the loop does not clip it again; `full` is what it cut it from. */
 export const ToolAnswer = Schema.Union([
-	Schema.Struct({ result: Schema.Json, bounded: Schema.optionalKey(Schema.Literal(true)) }),
+	Schema.Struct({
+		result: Schema.Json,
+		bounded: Schema.optionalKey(Schema.Literal(true)),
+		full: Schema.optionalKey(Schema.Json)
+	}),
 	Schema.Struct({ confirm: Schema.Literal(true) })
 ]);
 export type ToolAnswer = typeof ToolAnswer.Type;
@@ -301,7 +314,12 @@ const Finish = Schema.Struct({
 	cut: Schema.Boolean,
 	continuation: Schema.optionalKey(Schema.String),
 	cost: Schema.optionalKey(Schema.Number),
-	call: Schema.optionalKey(Schema.String)
+	call: Schema.optionalKey(Schema.String),
+	cached: Schema.optionalKey(Schema.Number),
+	reasoning: Schema.optionalKey(Schema.Number),
+	prompt: Schema.optionalKey(
+		Schema.Struct({ system: Schema.Number, messages: Schema.Number, tools: Schema.Number })
+	)
 });
 /** A port reply as response parts. */
 const replyParts = (r: AiResponse): Response.PartEncoded[] => [
@@ -323,7 +341,10 @@ const replyParts = (r: AiResponse): Response.PartEncoded[] => [
 				cut: r.finish === 'cut',
 				...(r.continuation === undefined ? {} : { continuation: r.continuation }),
 				...(r.usage.cost === undefined ? {} : { cost: r.usage.cost }),
-				...(r.usage.call === undefined ? {} : { call: r.usage.call })
+				...(r.usage.call === undefined ? {} : { call: r.usage.call }),
+				...(r.usage.cached === undefined ? {} : { cached: r.usage.cached }),
+				...(r.usage.reasoning === undefined ? {} : { reasoning: r.usage.reasoning }),
+				...(r.usage.prompt === undefined ? {} : { prompt: r.usage.prompt })
 			})
 		}
 	}
@@ -361,7 +382,10 @@ const portReply = (
 			input: response.usage.inputTokens.total ?? 0,
 			output: response.usage.outputTokens.total ?? 0,
 			...(finish.cost === undefined ? {} : { cost: finish.cost }),
-			...(finish.call === undefined ? {} : { call: finish.call })
+			...(finish.call === undefined ? {} : { call: finish.call }),
+			...(finish.cached === undefined ? {} : { cached: finish.cached }),
+			...(finish.reasoning === undefined ? {} : { reasoning: finish.reasoning }),
+			...(finish.prompt === undefined ? {} : { prompt: finish.prompt })
 		}
 	};
 };
@@ -385,16 +409,18 @@ export const generate = Effect.fn('Ai.generate')(function* (
 					description: Tool.getDescription(tool) ?? '',
 					input: toolSchema(tool)
 				}));
+				const messages = portMessages(provider.prompt);
 				const reply = yield* modelCall(
 					ai,
-					{
-						...request,
-						messages: portMessages(provider.prompt),
-						...(tools.length === 0 ? {} : { tools })
-					},
+					{ ...request, messages, ...(tools.length === 0 ? {} : { tools }) },
 					options
 				);
-				return replyParts(reply);
+				const prompt = {
+					system: request.system?.length ?? 0,
+					messages: JSON.stringify(messages).length,
+					tools: tools.length === 0 ? 0 : JSON.stringify(tools).length
+				};
+				return replyParts({ ...reply, usage: { ...reply.usage, prompt } });
 			}).pipe(
 				Effect.mapError((error) => {
 					failure = error;

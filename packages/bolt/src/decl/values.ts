@@ -46,8 +46,6 @@ export type IanaZone = string;
 export type LocaleTag = string;
 /** A path under the workspace `assets/` directory (an app `banner`). */
 export type AssetPath = string;
-/** The name of a declared input field, as a `{ param }` operand names it. */
-export type InputName = string;
 /** An approval request's id (`PendingApproval.requestId`, `ApprovalHeld`). */
 export type RequestId = string;
 /** A MIME type or wildcard a `file` field accepts (`image/*`, `application/pdf`). */

@@ -9,6 +9,7 @@ import {
 	checkFile,
 	checkSquashSources,
 	checksumOf,
+	executable,
 	generate,
 	generateSquash,
 	pending,
@@ -80,6 +81,31 @@ const runtimeFunctions = (
 		)
 	);
 };
+
+/**
+ * The definitions a script leaves on a pristine database are a pure function of its text: cached by its hash.
+ * ponytail: clears at 16 entries; a watch loop proves the same few schemas and squashes.
+ */
+const pristineDefinitions = new Map<string, readonly string[]>();
+const definitionsOf = Effect.fn('Bolt.pristineDefinitions')(function* (script: string) {
+	const key = sha256Hex(script);
+	const held = pristineDefinitions.get(key);
+	if (held !== undefined) return held;
+	const lines = yield* Effect.scoped(
+		Effect.gen(function* () {
+			const db = PgliteDb.make(yield* PgliteDb.open());
+			yield* db.write({ text: script, params: [] });
+			return migrationLines(
+				yield* db.rows(IntrospectRow, { text: INTROSPECT, params: [] }),
+				true,
+				true
+			);
+		})
+	);
+	if (pristineDefinitions.size >= 16) pristineDefinitions.clear();
+	pristineDefinitions.set(key, lines);
+	return lines;
+});
 
 /** Generation leaves editable SQL on a failed proof, but never replaces a verified lock with an unproved history. */
 export const prepareMigrations = Effect.fn('Bolt.prepareMigrations')(function* (
@@ -194,7 +220,6 @@ export const prepareMigrations = Effect.fn('Bolt.prepareMigrations')(function* (
 	const proof = yield* Effect.scoped(
 		Effect.gen(function* () {
 			const replayDb = PgliteDb.make(yield* PgliteDb.open());
-			const declaredDb = PgliteDb.make(yield* PgliteDb.open());
 			const inspect = { text: INTROSPECT, params: [] };
 			const physical: Record<string, string> = {};
 			const definitions: Record<string, readonly string[]> = {};
@@ -204,17 +229,19 @@ export const prepareMigrations = Effect.fn('Bolt.prepareMigrations')(function* (
 			physical[''] = physicalHash(empty);
 			definitions[''] = empty;
 			for (const [index, file] of files.entries()) {
-				yield* replayDb.write({ text: file.sql, params: [] });
+				yield* replayDb.write({ text: executable(file), params: [] });
 				const lines = migrationLines(yield* replayDb.rows(IntrospectRow, inspect), true, true);
 				prefixes.set(index + 1, lines);
 				physical[file.name] = physicalHash(lines);
 				definitions[file.name] = lines;
 			}
-			for (const text of declared) yield* declaredDb.write({ text, params: [] });
-			for (const object of native)
-				for (const text of object.create) yield* declaredDb.write({ text, params: [] });
+			// One script, not one transaction per statement: the declared schema is hundreds of statements.
+			const expected = yield* definitionsOf(
+				[...declared, ...native.flatMap((object) => object.create)]
+					.map((text) => `${text.trim().replace(/;$/, '')};`)
+					.join('\n')
+			);
 			let actual = migrationLines(yield* replayDb.rows(IntrospectRow, inspect), true, true);
-			const expected = migrationLines(yield* declaredDb.rows(IntrospectRow, inspect), true, true);
 			const bodies =
 				mode === 'generate' && heldLines !== undefined
 					? runtimeFunctions(heldLines, actual, expected, [
@@ -252,9 +279,7 @@ export const prepareMigrations = Effect.fn('Bolt.prepareMigrations')(function* (
 						'admission',
 						`${receipt.file} is missing`
 					);
-				const baseline = PgliteDb.make(yield* PgliteDb.open());
-				yield* baseline.write({ text: file.sql, params: [] });
-				const lines = migrationLines(yield* baseline.rows(IntrospectRow, inspect), true, true);
+				const lines = yield* definitionsOf(file.sql);
 				const verified = yield* verifySquash(
 					files.slice(0, receipt.replaces.length),
 					file,
@@ -283,19 +308,20 @@ export const prepareMigrations = Effect.fn('Bolt.prepareMigrations')(function* (
 					prefix.push(file);
 				}
 				const complete = prefix.length === files.length;
-				if (complete)
-					for (const table of Object.keys(next.tables)) {
-						const populated = yield* replayDb.value(Schema.Boolean, {
-							text: `select exists(select 1 from ${q(table)} limit 1)`,
-							params: []
-						});
-						if (populated)
-							return yield* BoltError.make(
-								'migrationInvalid',
-								'admission',
-								'a squash cannot replace history that creates rows; schema equality does not prove data equivalence'
-							);
-					}
+				const tables = Object.keys(next.tables);
+				if (
+					complete &&
+					tables.length > 0 &&
+					(yield* replayDb.value(Schema.Boolean, {
+						text: `select ${tables.map((table) => `exists(select 1 from ${q(table)})`).join(' or ')}`,
+						params: []
+					}))
+				)
+					return yield* BoltError.make(
+						'migrationInvalid',
+						'admission',
+						'a squash cannot replace history that creates rows; schema equality does not prove data equivalence'
+					);
 				const slug = `squash_${options.squash}_${archiveOf(prefix).slice(0, 12)}`
 					.replace(/[^a-z0-9]+/gi, '_')
 					.replace(/^_+|_+$/g, '')
@@ -315,9 +341,7 @@ export const prepareMigrations = Effect.fn('Bolt.prepareMigrations')(function* (
 					? { name: proposed.name, sql: yield* fs.readFileString(destination) }
 					: proposed;
 				if (!(yield* fs.exists(destination))) yield* fs.writeFileString(destination, file.sql);
-				const baseline = PgliteDb.make(yield* PgliteDb.open());
-				yield* baseline.write({ text: file.sql, params: [] });
-				const lines = migrationLines(yield* baseline.rows(IntrospectRow, inspect), true, true);
+				const lines = yield* definitionsOf(file.sql);
 				archived = yield* verifySquash(prefix, file, prefixes.get(prefix.length) ?? [], lines).pipe(
 					Effect.mapError(fromStore)
 				);

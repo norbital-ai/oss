@@ -20,6 +20,7 @@ const Sent = Schema.Struct({
 		})
 	),
 	tools: Schema.optionalKey(Schema.Array(Schema.Json)),
+	reasoning_effort: Schema.optionalKey(Schema.String),
 	response_format: Schema.optionalKey(Schema.Json),
 	usage: Schema.optionalKey(Schema.Json)
 });
@@ -118,16 +119,18 @@ describe('openAiChat', () => {
 			})
 	);
 
-	it.effect('headers have a 20-second response deadline that aborts the native fetch', () =>
+	it.effect('headers have a 60-second response deadline that aborts the native fetch', () =>
 		Effect.gen(function* () {
 			const started = yield* Deferred.make<void>();
+			// the native fetch is aborted as the timed-out call is interrupted, a tick after its failure answers
+			const aborted = yield* Deferred.make<void>();
 			const run = yield* FiberSet.makeRuntimePromise();
-			let signal: AbortSignal | undefined;
-			const f: typeof fetch = (input, options) => {
-				const request = new Request(input, options);
-				signal = request.signal;
+			// the client's own signal: a Request's copy follows it only weakly, so a collected Request never hears the abort
+			const f: typeof fetch = (_input, options) => {
+				const signal = options?.signal ?? undefined;
+				signal?.addEventListener('abort', () => Deferred.doneUnsafe(aborted, Effect.void));
 				return run(Deferred.succeed(started, undefined).pipe(Effect.andThen(Effect.never)), {
-					signal: request.signal
+					...(signal === undefined ? {} : { signal })
 				});
 			};
 			const pending = yield* collect(openAiChat(config, { fetch: f })).pipe(
@@ -135,14 +138,14 @@ describe('openAiChat', () => {
 				Effect.forkChild
 			);
 			yield* Deferred.await(started);
-			yield* TestClock.adjust(19_999);
+			yield* TestClock.adjust(59_999);
 			expect(pending.pollUnsafe()).toBeUndefined();
 			yield* TestClock.adjust(1);
 			expect(yield* Fiber.join(pending)).toMatchObject({
 				kind: 'timeout',
-				message: 'ai.headers did not answer within 20000 ms'
+				message: 'ai.headers did not answer within 60000 ms'
 			});
-			expect(signal?.aborted).toBe(true);
+			yield* Deferred.await(aborted);
 		})
 	);
 	it.effect(
@@ -421,6 +424,66 @@ describe('openAiChat', () => {
 			})
 	);
 	it.effect(
+		"a file a call opened follows that call's results, in the same place on every later step; a stranded one rides the last user message",
+		() =>
+			Effect.gen(function* () {
+				const { f, seen } = capture(() =>
+					Response.json({ choices: [{ message: { content: 'ok' } }], usage: {} })
+				);
+				const infer = openAiChat(config, { fetch: f });
+				const step = (id: string) => ({
+					role: 'tool' as const,
+					content: { id, name: 'read_file', result: { attached: 'shown' } }
+				});
+				yield* collect(infer, {
+					model: 'default',
+					messages: [
+						{ role: 'user', content: 'read these' },
+						{
+							role: 'assistant',
+							content: {
+								text: '',
+								toolCalls: [
+									{ id: 'c1', name: 'read_file', input: { id: 'a' } },
+									{ id: 'c2', name: 'read_file', input: { id: 'b' } }
+								]
+							}
+						},
+						step('c1'),
+						step('c2'),
+						{ role: 'assistant', content: 'next' },
+						{ role: 'user', content: '[conversation state: …]' }
+					],
+					files: [
+						{ mime: 'application/pdf', bytes: new Uint8Array([2]), call: 'c1' },
+						{ mime: 'image/png', bytes: new Uint8Array([1]), call: 'gone' }
+					],
+					effort: 'low'
+				});
+				const { sent } = first(seen);
+				expect(sent).toMatchObject({ reasoning_effort: 'low' });
+				expect(sent.messages.map((m) => m.role)).toEqual([
+					'user',
+					'assistant',
+					'tool',
+					'tool',
+					'user',
+					'assistant',
+					'user'
+				]);
+				expect(sent.messages[4]?.content).toEqual([
+					{
+						type: 'file',
+						file: { filename: 'attachment-1', file_data: 'data:application/pdf;base64,Ag==' }
+					}
+				]);
+				expect(sent.messages[6]?.content).toEqual([
+					{ type: 'text', text: '[conversation state: …]' },
+					{ type: 'image_url', image_url: { url: 'data:image/png;base64,AQ==' } }
+				]);
+			})
+	);
+	it.effect(
 		'sends text and an xlsx as text parts, never as file parts providers refuse; an unreadable type is described, not sent, and the call goes on',
 		() =>
 			Effect.gen(function* () {
@@ -473,7 +536,7 @@ describe('openAiChat', () => {
 			})
 	);
 	it.effect(
-		'reasoning streams, comes back verbatim, and is sent back with its reply; a switched call id is refused (L-BOLT-412, L-BOLT-432)',
+		"reasoning streams and comes back verbatim; an earlier turn's reasoning is not sent back; a switched call id is refused (L-BOLT-412, L-BOLT-432)",
 		() =>
 			Effect.gen(function* () {
 				const { f, seen } = capture(() =>
@@ -496,11 +559,37 @@ describe('openAiChat', () => {
 					reasoning: 'None.',
 					usage: { call: 'gen-2' }
 				});
-				expect(first(seen).sent.messages[1]).toMatchObject({
-					role: 'assistant',
-					content: 'a',
-					reasoning: 'Earlier.'
+				expect(first(seen).sent.messages[1]).toEqual({ role: 'assistant', content: 'a' });
+				// within a turn only the latest step's reasoning goes back: an earlier step's belief is not reread
+				const steps = capture(() =>
+					stream([
+						'data: {"id":"gen-5","choices":[{"delta":{"content":"ok"}}]}\n\ndata: [DONE]\n\n'
+					])
+				);
+				const call = (id: string) => ({ id, name: 'read', input: {} });
+				yield* collect(openAiChat(config, { fetch: steps.f }), {
+					...request,
+					messages: [
+						{ role: 'user', content: 'q' },
+						{
+							role: 'assistant',
+							content: { text: '', toolCalls: [call('c1')], reasoning: 'First.' }
+						},
+						{ role: 'tool', content: { id: 'c1', name: 'read', result: 1 } },
+						{
+							role: 'assistant',
+							content: { text: '', toolCalls: [call('c2')], reasoning: 'Second.' }
+						},
+						{ role: 'tool', content: { id: 'c2', name: 'read', result: 2 } }
+					]
 				});
+				expect(first(steps.seen).sent.messages.map((m) => m.reasoning ?? null)).toEqual([
+					null,
+					null,
+					null,
+					'Second.',
+					null
+				]);
 				const mixed = capture(() =>
 					stream([
 						'data: {"id":"gen-3","choices":[{"delta":{"content":"a"}}]}\n\n',

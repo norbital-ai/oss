@@ -167,7 +167,7 @@ const policyData = (i: number) => ({
 			moves: { status: ['draft->open'] }
 		},
 		[m(i + 7)]: {
-			read: { [m(i + 7)]: { where: { email: { eq: { actor: 'email' } }, qty_x2: { gt: 1 } } } }
+			read: { [m(i + 7)]: { where: { email: { eq: { var: 'requestor.email' } }, qty_x2: { gt: 1 } } } }
 		}
 	},
 	automations: [`${m(i)}_go`],

@@ -138,8 +138,7 @@ const lower = (
 				read: yield* Effect.try({
 					try: () => read(member, args),
 					catch: (error) => BoltError.make('invalidInput', 'guest', messageOf(error))
-				}),
-				params: {}
+				})
 			};
 		switch (member) {
 			case 'transaction.begin':
@@ -232,7 +231,7 @@ const lower = (
 				const options = yield* decode(
 					Schema.Struct({
 						at: Schema.optionalKey(
-							Schema.Union([Schema.String, Schema.Struct({ now: Schema.String })])
+							Schema.Union([Schema.String, Schema.Struct({ var: Schema.String })])
 						),
 						key: Schema.optionalKey(Schema.String)
 					}),

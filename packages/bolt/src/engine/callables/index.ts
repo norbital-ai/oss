@@ -27,7 +27,7 @@ import {
 } from '../services.ts';
 import type { EngineManifest } from '../manifest.ts';
 import { enqueue, nextDue } from '../runs/queue.ts';
-import { dueAt as roundedDueAt, offsetMs } from '../runs/time.ts';
+import { dueAt as roundedDueAt } from '../runs/time.ts';
 import { approvalHook } from '../approvals/approvals.ts';
 import { FILE_SYNC_INPUT, fileSyncAdmits } from '../sync/file.ts';
 import { WriteOutcome as importedOutcome } from '../../protocol/schema.ts';
@@ -139,18 +139,10 @@ const starterOf = (a: Authority): Json =>
 		teamTree: a.teamTree,
 		scopes: a.scopes
 	});
-function scheduledAt(now: string, at?: Json): string {
+/** A start's due time: now, rounded as every due time is (rule 52a). */
+function scheduledAt(now: string): string {
 	const time = Date.parse(now);
-	const target =
-		at == null
-			? time
-			: typeof at === 'string'
-				? Date.parse(at)
-				: Predicate.isObject(at) && typeof at['now'] === 'string'
-					? time + offsetMs(at['now'])
-					: Number.NaN;
-	if (Number.isNaN(target)) throw BoltError.make('invalidInput', 'decode', 'at is not an instant');
-	return new Date(roundedDueAt(time, target)).toISOString();
+	return new Date(roundedDueAt(time, time)).toISOString();
 }
 export function parseCallable(
 	callable: string,

@@ -39,7 +39,7 @@ import { sha256Hex } from '@norbital-ai/store';
 import type { EngineManifest } from '../../bolt/src/engine/manifest.ts';
 import { fingerprint, schemaSlice } from '../../bolt/src/engine/schema/plan.ts';
 import { ActReply, Frame, LiveReply, QReply } from '../../bolt/src/protocol/schema.ts';
-import { Audit, Authorities, BoltError, Reads, TenantDb } from '@norbital-ai/bolt/engine';
+import { Audit, Authorities, BoltError, Reads, TenantDb, Writes } from '@norbital-ai/bolt/engine';
 import { BoltConfig, type StartFlags } from '../src/config.ts';
 import { devSink } from '../src/mail.ts';
 import { Server, ServerLive, type StartOptions } from '../src/server.ts';
@@ -659,14 +659,15 @@ layer(Layer.effect(TestServer, TestServer.make).pipe(Layer.provideMerge(NodeServ
 			const entered = yield* Deferred.make<void>(),
 				release = yield* Deferred.make<void>(),
 				queued = yield* Deferred.make<void>();
-			const reads = Context.get(t.server.context, Reads),
-				read = reads.run;
+			// a write and a search run guest code, so they are admitted through the envelope; a plain read is not
+			const writes = Context.get(t.server.context, Writes),
+				write = writes.act;
 			const calls = vi
-				.spyOn(reads, 'run')
+				.spyOn(writes, 'act')
 				.mockImplementation((...args) =>
 					Deferred.succeed(entered, undefined).pipe(
 						Effect.andThen(Deferred.await(release)),
-						Effect.andThen(read(...args))
+						Effect.andThen(write(...args))
 					)
 				);
 			yield* Effect.addFinalizer(() => Effect.sync(() => calls.mockRestore()));
@@ -682,21 +683,23 @@ layer(Layer.effect(TestServer, TestServer.make).pipe(Layer.provideMerge(NodeServ
 					event === 'request' &&
 					request instanceof IncomingMessage &&
 					request.url === '/__bolt/q' &&
-					++requests === 2
+					++requests === 1
 				)
 					request.once('end', () => setImmediate(() => Deferred.doneUnsafe(queued, Effect.void)));
 				return emit.call(this, event, ...args);
 			});
 			yield* Effect.addFinalizer(() => Effect.sync(() => events.mockRestore()));
 			yield* Effect.addFinalizer(() => Deferred.succeed(release, undefined));
-			const query = { reads: [{ m: 'query', a: [{ quotes: { limit: 1 } }] }] };
-			const first = yield* Effect.forkChild(t.call('POST', '/__bolt/q', query));
+			const first = yield* Effect.forkChild(t.act('quotes.create', [{ title: 'first' }]));
 			yield* Deferred.await(entered);
-			const second = yield* Effect.forkChild(t.call('POST', '/__bolt/q', query));
+			// a search's body is read before admission, so its end marks it queued behind the write
+			const search = { reads: [{ m: 'query', a: [{ quotes: { search: { text: 'first' } } }] }] };
+			const second = yield* Effect.forkChild(t.call('POST', '/__bolt/q', search));
 			yield* Deferred.await(queued);
 			const t0 = yield* Clock.currentTimeMillis,
 				stopped = yield* Effect.forkChild(t.close);
-			yield* Effect.yieldNow;
+			// the live stream ends once close has begun draining: only then does the held write finish
+			const ended = yield* Effect.flip(live.next(() => false, 1_000));
 			yield* Deferred.succeed(release, undefined);
 			const finished = yield* Fiber.join(first),
 				refused = yield* Fiber.join(second);
@@ -705,7 +708,6 @@ layer(Layer.effect(TestServer, TestServer.make).pipe(Layer.provideMerge(NodeServ
 			expect(refused.status).toBe(500);
 			expect(calls.mock.calls.length).toBe(1);
 			expect((yield* Clock.currentTimeMillis) - t0).toBeLessThan(3_000);
-			const ended = yield* Effect.flip(live.next(() => false, 1_000));
 			expect(ended).toBeInstanceOf(TestIoError);
 			if (ended instanceof TestIoError)
 				expect(String(ended.cause)).toMatch(/stream ended|terminated|stalled/);

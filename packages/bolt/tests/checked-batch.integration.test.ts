@@ -85,8 +85,7 @@ const fixture = Effect.gen(function* () {
 	const bindings = () => ({
 		now: t.clock.now(),
 		today: t.clock.now().slice(0, 10),
-		tz: 'UTC',
-		params: {}
+		tz: 'UTC'
 	});
 	const batch = (acts: Parameters<typeof calls.acts>[0]['acts']) => {
 		const key = randomUUID();

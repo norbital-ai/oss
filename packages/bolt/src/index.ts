@@ -196,7 +196,6 @@ export type {
 	IanaZone,
 	IconName,
 	Id,
-	InputName,
 	Instant,
 	InstantPeriod,
 	LocaleTag,

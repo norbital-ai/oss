@@ -14,6 +14,7 @@ import { parseRate } from '../../engine/access/rate.ts';
 import { sizeBytes } from '../../engine/callables/upload.ts';
 import { DRIVERS, type IntegrationSpec } from '../../decl/runtime/integration.ts';
 import { SYSTEM } from '../../system/index.ts';
+import { clockDefault } from '@norbital-ai/std/vars';
 
 export type Finding = { code: string; path: string; message: string; line?: number };
 const isList = <T>(v: T | readonly T[]): v is readonly T[] => Array.isArray(v);
@@ -220,6 +221,20 @@ function modelRules({ m, bodies, at }: RuleContext): void {
 							`${f}: '${s}' is unreachable from '${String(k.initial)}'`
 						);
 			}
+			// a clock default is a `{ var }` the database evaluates per row (`today`, `now + hours(1)`); any other object would
+			// be stored as one fixed value, the build day's
+			const d: unknown = 'default' in k ? k.default : undefined;
+			if (
+				(k.kind === 'date' || k.kind === 'instant') &&
+				Predicate.isObject(d) &&
+				!(Object.keys(d).length === 1 && typeof d['var'] === 'string' && clockDefault(d['var']) !== undefined)
+			)
+				at(
+					'model/default',
+					'model',
+					model,
+					`${f}: a ${k.kind} default is a literal or a clock { var: '${k.kind === 'date' ? 'today' : 'now'}' } (a shift like ' + days(1)'), not ${JSON.stringify(d)}`
+				);
 			// a calendar day named as one is a `date`: an instant shows a time and shifts a day across zones
 			if (k.kind === 'instant' && /_(on|date)$/.test(f))
 				at(
@@ -237,6 +252,39 @@ function modelRules({ m, bodies, at }: RuleContext): void {
 					'model',
 					model,
 					`label '${l}' is ${l === 'id' ? 'the row id' : 'a foreign key'}; label with the row's own text fields (a computed field may join them)`
+				);
+		// a link in search.text searches the linked row's own search text, so the model it links to must declare one
+		for (const f of spec.search?.text ?? []) {
+			const rel = m.relationships[`${model}.${f}`];
+			const silent = list(rel?.to ?? []).find((to) => !(m.models[to]?.search?.text.length ?? 0));
+			if (silent !== undefined)
+				at(
+					'model/search',
+					'model',
+					model,
+					`search.text '${f}' links to '${silent}', which declares no search.text to match`
+				);
+		}
+		// the search reads each linked row's own search text, and through its links theirs: every link on the way is a
+		// layer the model's read declares, read under its policies
+		const read = m.exposures[model]?.read;
+		const undeclared = (at: string, of: string, seen: readonly string[]): string[] =>
+			(m.models[of]?.search?.text ?? []).flatMap((f) => {
+				const rel = m.relationships[`${of}.${f}`];
+				if (rel === undefined) return [];
+				const path = `${at}.${f}`;
+				const deeper = list(rel.to).flatMap((to) =>
+					seen.includes(to) ? [] : undeclared(path, to, [...seen, to])
+				);
+				return read?.[path] === undefined ? [path, ...deeper] : deeper;
+			});
+		if (read !== undefined)
+			for (const path of undeclared(model, model, [model]))
+				at(
+					'model/search',
+					'model',
+					model,
+					`search.text crosses '${path}', a link its read does not declare: add that layer to the read (with the linked model's search fields)`
 				);
 		// the embedding column's width, stated: a guess would have to match the host's model class, which it cannot know
 		const sem = spec.search?.semantic;
@@ -306,7 +354,9 @@ function layerRules({ m, at }: RuleContext): void {
 	const backFk = (above: string, rel: string): string | undefined => {
 		const key = Object.keys(relationships).find((k) => {
 			const r = relationships[k]!;
-			return r.inverse === rel && (typeof r.to === 'string' ? r.to === above : r.to.includes(above));
+			return (
+				r.inverse === rel && (typeof r.to === 'string' ? r.to === above : r.to.includes(above))
+			);
 		});
 		return key?.slice(key.indexOf('.') + 1);
 	};
@@ -315,10 +365,20 @@ function layerRules({ m, at }: RuleContext): void {
 		const { models, errors } = layerModels(model, c, relationships);
 		resolved[model] = models;
 		for (const e of errors) at('model/layer', 'model', model, e);
-		const unknown = (where: string, path: string, names: readonly string[], known: readonly string[]) => {
+		const unknown = (
+			where: string,
+			path: string,
+			names: readonly string[],
+			known: readonly string[]
+		) => {
 			for (const f of names)
 				if (!known.includes(f))
-					at('model/layer', 'model', model, `${where}: '${f}' is no ${where === 'read' ? 'field' : 'writable column'} of ${path} (${models[path]})`);
+					at(
+						'model/layer',
+						'model',
+						model,
+						`${where}: '${f}' is no ${where === 'read' ? 'field' : 'writable column'} of ${path} (${models[path]})`
+					);
 		};
 		for (const [path, layer] of Object.entries(c.read))
 			if (models[path] !== undefined && layer.fields !== 'all')
@@ -332,14 +392,25 @@ function layerRules({ m, at }: RuleContext): void {
 				if (target === undefined) continue;
 				unknown(verb, path, cols, writable(target));
 				const dot = path.lastIndexOf('.');
-				const fk = dot < 0 ? undefined : backFk(models[path.slice(0, dot)] ?? '', path.slice(dot + 1));
+				const fk =
+					dot < 0 ? undefined : backFk(models[path.slice(0, dot)] ?? '', path.slice(dot + 1));
 				if (fk !== undefined && cols.includes(fk))
-					at('model/layer', 'model', model, `${verb}: ${path} lists '${fk}', the key the engine sets from its parent row`);
+					at(
+						'model/layer',
+						'model',
+						model,
+						`${verb}: ${path} lists '${fk}', the key the engine sets from its parent row`
+					);
 			}
 		for (const [path, cols] of Object.entries(c.create?.filled ?? {}))
 			for (const f of cols)
 				if (!(c.create?.columns[path] ?? []).includes(f))
-					at('model/layer', 'model', model, `create.filled: '${f}' is not among create.columns of ${path}`);
+					at(
+						'model/layer',
+						'model',
+						model,
+						`create.filled: '${f}' is not among create.columns of ${path}`
+					);
 	}
 	for (const [p, spec] of Object.entries(m.policies))
 		for (const [c, g] of Object.entries(spec.grants)) {
@@ -354,21 +425,31 @@ function layerRules({ m, at }: RuleContext): void {
 						continue;
 					}
 					const fields = Predicate.isObject(layer) && strings(layer.fields) ? layer.fields : [];
-					const known = exposed.fields === 'all' ? fieldsOf(resolved[c]?.[path] ?? c) : [...exposed.fields, ...SYSTEM_COLUMNS];
-					for (const f of fields) if (!known.includes(f)) bad(`read ${path} admits '${f}', which that layer does not expose`);
+					const known =
+						exposed.fields === 'all'
+							? fieldsOf(resolved[c]?.[path] ?? c)
+							: [...exposed.fields, ...SYSTEM_COLUMNS];
+					for (const f of fields)
+						if (!known.includes(f))
+							bad(`read ${path} admits '${f}', which that layer does not expose`);
 				}
 			for (const verb of ['create', 'update', 'delete'] as const) {
 				if (g[verb] === undefined) continue;
 				if (declared[verb] === undefined) {
-					bad(`a ${verb} grant, but ${c} declares no ${verb}`);
+					bad(`${/^[aeiou]/.test(verb) ? 'an' : 'a'} ${verb} grant, but ${c} declares no ${verb}`);
 					continue;
 				}
 				if (verb === 'delete') continue;
-				for (const path of Object.keys(typeof g[verb] === 'object' ? (g[verb].columns ?? {}) : {})) {
+				for (const path of Object.keys(
+					typeof g[verb] === 'object' ? (g[verb].columns ?? {}) : {}
+				)) {
 					const own = declared[verb]?.columns[path];
-					if (own === undefined) bad(`${verb} names '${path}', which ${c}'s ${verb} does not declare`);
-					else for (const col of grantColumns(g[verb], path) ?? [])
-						if (!own.includes(col)) bad(`${verb} ${path} admits '${col}', which ${c}'s ${verb} does not declare there`);
+					if (own === undefined)
+						bad(`${verb} names '${path}', which ${c}'s ${verb} does not declare`);
+					else
+						for (const col of grantColumns(g[verb], path) ?? [])
+							if (!own.includes(col))
+								bad(`${verb} ${path} admits '${col}', which ${c}'s ${verb} does not declare there`);
 				}
 			}
 		}
@@ -546,7 +627,11 @@ function kioskRules({ m, bodies, at }: RuleContext): void {
 		// A kiosk's authority is fixed and always on: its policies admit no open-ended grant. Every read,
 		// history, create and update lists its fields, and nothing deletes. Broad grants are
 		// unrepresentable here by construction.
-		const explicit = (c: string, g: GrantData, op: 'read' | 'history' | 'create' | 'update'): boolean =>
+		const explicit = (
+			c: string,
+			g: GrantData,
+			op: 'read' | 'history' | 'create' | 'update'
+		): boolean =>
 			((op === 'read'
 				? readFields(c, g)
 				: op === 'history'

@@ -186,11 +186,7 @@ export const publicPages = (artifact: Artifact) =>
 								if (!readAdmitted(caller.authority, call.read))
 									return Effect.succeed(denied('Visitors may not do this.'));
 								return reads
-									.run(
-										[call.read],
-										{ as: 'caller', authority: caller.authority },
-										{ ...bound, params: call.params }
-									)
+									.run([call.read], { as: 'caller', authority: caller.authority }, bound)
 									.pipe(
 										Effect.flatMap((answers) =>
 											answers.length === 1 && answers[0] !== undefined

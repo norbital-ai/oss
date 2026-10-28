@@ -1,5 +1,5 @@
 // In-app Norbius attachments (§5.9, rule 58): a panel upload to `sys_conversation.inputs` rides `sys_message.post` as a
-// stored FileRef on the row; the agent reads it with `read_attachment`; triage's state carries it (P37); only the
+// stored FileRef on the row; the agent reads it with `read_file`; triage's state carries it (P37); only the
 // member's own uploads attach, 8 files / 20 MiB, the envoy's media types.
 import { randomUUID } from 'node:crypto';
 import { describe, expect, it } from '@effect/vitest';
@@ -125,16 +125,18 @@ const setup = (triage: boolean) =>
 				Stream.fromEffect(
 					Effect.sync(() => {
 						requests.push(r);
-						const seq = /\[attachment seq (\d+) file 0: /.exec(JSON.stringify(r.messages))?.[1];
+						const id = /\[attachment: [^\]]*\] file reference \{\\"id\\":\\"([^\\]+)\\"/.exec(
+							JSON.stringify(r.messages)
+						)?.[1];
 						const response: AiResponse =
-							requests.length === 1 && seq !== undefined
+							requests.length === 1 && id !== undefined
 								? {
 										content: '',
 										toolCalls: [
 											{
 												id: 'r1',
-												name: 'read_attachment',
-												input: { seq: Number(seq), as: 'image' }
+												name: 'read_file',
+												input: { id, as: 'image' }
 											}
 										],
 										finish: 'tool',
@@ -189,7 +191,7 @@ const setup = (triage: boolean) =>
 	});
 
 describe('in-app attachments', () => {
-	it.live('an image posted from the panel is stored on the row and read by read_attachment', () =>
+	it.live('an image posted from the panel is stored on the row and read by read_file', () =>
 		Effect.scoped(
 			Effect.gen(function* () {
 				const { t, act, put, who, requests, conversation } = yield* setup(false);

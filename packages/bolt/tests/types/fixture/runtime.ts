@@ -131,7 +131,7 @@ export const follow_up = automation('follow_up', {
 					title: `Order ${o.number} is still open`,
 					link: { model: 'orders', id: o.id }
 				});
-		yield* ctx.schedule('nightly', {}, { at: { now: '+1d' }, key: 'chase' });
+		yield* ctx.schedule('nightly', {}, { at: { var: 'now + days(1)' }, key: 'chase' });
 	}
 });
 

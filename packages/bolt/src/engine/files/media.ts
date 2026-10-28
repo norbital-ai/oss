@@ -1,5 +1,5 @@
 // What `download` keeps (compute model §3, "Agents' files"): a body is media by its first bytes, never by the
-// `content-type` it was sent with. Everything else (executables, source code, archives, the unrecognized) is refused;
+// `content-type` it was sent with: images, audio, video, PDFs and CAD models and drawings. Everything else (executables, source code, archives, the unrecognized) is refused;
 // an HTML page is kept as a document beside PDFs.
 
 /** `download`'s limits: the body cap, the stall that ends it, the redirect hops followed, and the head its type is read from. */
@@ -44,8 +44,20 @@ export function mediaType(head: Uint8Array): string | undefined {
 	if (ascii(head, 0, 4) === 'OggS') return 'audio/ogg';
 	if (ascii(head, 0, 4) === 'fLaC') return 'audio/flac';
 	if (ascii(head, 0, 5) === '%PDF-') return 'application/pdf';
+	const tiff = ascii(head, 0, 4);
+	if (tiff === 'II*\0' || tiff === 'MM\0*') return 'image/tiff';
+	// CAD models and drawings, each by its own signature; zip and OLE containers (3MF, SolidWorks) stay archives
+	if (ascii(head, 0, 13) === 'ISO-10303-21;') return 'model/step';
+	if (/^AC10\d\d/.test(ascii(head, 0, 6))) return 'image/vnd.dwg';
+	if (ascii(head, 0, 4) === 'glTF') return 'model/gltf-binary';
+	if (ascii(head, 0, 18) === 'AutoCAD Binary DXF') return 'image/vnd.dxf';
+	const text = ascii(head, 0, head.length);
+	if (/^\s*0\r?\nSECTION\r?\n/.test(text)) return 'image/vnd.dxf';
+	if (/^solid[ \t][^\n]*\r?\n\s*(facet|endsolid)/.test(text)) return 'model/stl';
+	// an IGES start record: 80 columns, its section letter in column 73
+	if (/^.{72}S[ \d]{7}\r?\n/.test(text)) return 'model/iges';
 	// An HTML page is a document the person asked to keep, like a PDF; source code and archives remain refused.
-	const page = Buffer.from(head).toString('latin1').trimStart().toLowerCase();
+	const page = text.trimStart().toLowerCase();
 	if (page.startsWith('<!doctype html') || page.startsWith('<html')) return 'text/html';
 	return undefined;
 }

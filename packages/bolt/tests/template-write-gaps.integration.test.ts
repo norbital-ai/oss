@@ -76,7 +76,7 @@ const manifest = Result.getOrThrow(
 		},
 		relationships: {
 			'activities.regarding': { to: ['projects', 'quotes'], optional: true, inverse: 'activities' },
-			'projects.owner': { to: 'sys_user', optional: true, default: { actor: 'id' } },
+			'projects.owner': { to: 'sys_user', optional: true, default: { var: 'requestor.id' } },
 			'classifications.case': { to: 'cases', inverse: 'classifications' }
 		},
 		exposures: {
@@ -114,7 +114,7 @@ const manifest = Result.getOrThrow(
 					cases: { read: true, create: true },
 					classifications: { read: true, create: true },
 					projects: {
-						read: { projects: { where: { owner: { eq: { actor: 'id' } } } } },
+						read: { projects: { where: { owner: { eq: { var: 'requestor.id' } } } } },
 						create: true,
 						update: { check: true }
 					}

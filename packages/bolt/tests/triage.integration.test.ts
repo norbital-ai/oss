@@ -2,7 +2,7 @@
 // `sys_1` (no vendor) decides when admitted envoy and in-app messages start a turn; the kit's clock drives each exact-time
 // re-check. Mentions and send-now are deterministic, a row is new input at most once, and every decision is costed.
 import { describe, expect, it } from '@effect/vitest';
-import { Context, Effect, Layer, Predicate, Result, Schema, Stream } from 'effect';
+import { Context, Effect, Layer, Predicate, Result, Schedule, Schema, Stream } from 'effect';
 import { Ai, Metering } from '../src/engine/ports.ts';
 import { Port } from '../src/engine/port.ts';
 import { FacilityFailure } from '../src/decl/errors.ts';
@@ -10,11 +10,7 @@ import { Agents, Conversations } from '../src/engine/services.ts';
 import { decodeManifest, type EngineManifest } from '../src/engine/manifest.ts';
 import { actReply, qReply, routeFixture, type FixtureRoute } from './support/route-fixture.ts';
 import type { Json } from '../src/decl/values.ts';
-import {
-	TRIAGE_DEBOUNCE,
-	TRIAGE_DEBOUNCE_MAX,
-	TriageService
-} from '../src/engine/agent/triage.ts';
+import { TRIAGE_DEBOUNCE, TRIAGE_DEBOUNCE_MAX, TriageService } from '../src/engine/agent/triage.ts';
 import type { DecisionResult, System1Request } from '../src/engine/decisions/index.ts';
 import { TestWorkspace, type Kit, type WorkspaceServices } from '../src/test/index.ts';
 
@@ -82,7 +78,7 @@ const ai: Pick<Ai['Service'], 'models' | 'infer'> & { requests: string[][]; raw:
 						(m) =>
 							m.role === 'user' &&
 							!String(typeof m.content === 'string' ? m.content : '').startsWith(
-								'[conversation state]'
+								'[conversation state'
 							)
 					)
 					.map((m) => text(m.content))
@@ -93,7 +89,7 @@ const ai: Pick<Ai['Service'], 'models' | 'infer'> & { requests: string[][]; raw:
 						(m) =>
 							m.role === 'user' &&
 							!String(typeof m.content === 'string' ? m.content : '').startsWith(
-								'[conversation state]'
+								'[conversation state'
 							)
 					)
 					.map((m) => JSON.stringify(m.content))
@@ -108,7 +104,7 @@ const ai: Pick<Ai['Service'], 'models' | 'infer'> & { requests: string[][]; raw:
 					(m) =>
 						m.role === 'user' &&
 						!String(typeof m.content === 'string' ? m.content : '').startsWith(
-							'[conversation state]'
+							'[conversation state'
 						)
 				)
 				.flatMap((m) => [...(/close ([\w-]+)/g.exec(text(m.content)) ?? [])].slice(1))
@@ -141,7 +137,10 @@ const ai: Pick<Ai['Service'], 'models' | 'infer'> & { requests: string[][]; raw:
 							{
 								id: `c${ai.requests.length}`,
 								name: 'act',
-								input: { callable: 'jobs.update', input: [{ target: open, set: { status: 'done' } }] }
+								input: {
+									callable: 'jobs.update',
+									input: [{ target: open, set: { status: 'done' } }]
+								}
 							}
 						],
 						finish: 'tool',
@@ -459,6 +458,31 @@ describe('envoy triage (G12 (10))', () => {
 	);
 
 	it.live(
+		"the pause's own timer admits the burst: its decision is the only one, and no queued decision is left to ask again",
+		() =>
+			Effect.scoped(
+				Effect.gen(function* () {
+					yield* open();
+					port.script = ['respond'];
+					yield* say(DM, 'is the Kismis job done?');
+					t.clock.advance(`${TRIAGE_DEBOUNCE / 1000}s`);
+					// no runDue: the timer that waited out the pause decides and admits on its own
+					const delivered = yield* row('is the Kismis job done?').pipe(
+						Effect.map((message) => message['delivered_turn']),
+						Effect.repeat({
+							until: (turn) => turn !== null,
+							schedule: Schedule.spaced('50 millis'),
+							times: 100
+						})
+					);
+					expect(delivered).not.toBeNull();
+					expect(yield* queued()).toHaveLength(0);
+					expect(yield* decisions()).toHaveLength(1);
+				})
+			)
+	);
+
+	it.live(
 		'a DM in three parts is one turn: a burst is decided once the sender pauses for 2 s',
 		() =>
 			Effect.scoped(
@@ -624,7 +648,7 @@ describe('envoy triage (G12 (10))', () => {
 					const turn = ai.raw[0]?.join('\n');
 					expect(turn).toContain('[replying to Dion');
 					expect(turn).toContain('Put this in to kismi');
-					expect(turn).toMatch(/attachment seq \d+ file 0: p\.jpg/);
+					expect(turn).toMatch(/attachment: p\.jpg/);
 					const [read] = yield* q(
 						`SELECT content FROM sys_message WHERE role = 'tool' AND content->>'name' = 'read_messages'`
 					);
@@ -757,7 +781,12 @@ describe('envoy triage (G12 (10))', () => {
 					expect(t.fakes.links.typed).toContainEqual({ instance: 'field_wa', to: DM, on: true });
 					yield* debounce();
 					expect(port.inputs).toHaveLength(0);
-					expect(ai.requests).toEqual([['hello', 'are you there']]);
+					// the held burst is one turn's input (no model here, so that turn answers the fixed failure)
+					const hello = yield* row('hello'),
+						there = yield* row('are you there');
+					expect(hello).toMatchObject({ state: 'consumed', addressed: true });
+					expect(hello['delivered_turn']).not.toBeNull();
+					expect(there['delivered_turn']).toBe(hello['delivered_turn']);
 					yield* say(DM, 'chatter', GROUP);
 					expect(yield* row('chatter')).toMatchObject({ state: null, delivered_turn: null });
 					expect(yield* queued()).toHaveLength(0);
@@ -831,14 +860,16 @@ describe('envoy triage (G12 (10))', () => {
 			Effect.scoped(
 				Effect.gen(function* () {
 					yield* open();
+					// a tenant-created envoy's id is its row's uuid
+					const desk = '00000000-0000-4000-8000-00000000d35c';
 					yield* t.db.write({
 						text: `INSERT INTO sys_envoy (id, name, audience, task, policies, group_messages, delegation, triage, dm, active)
-						VALUES ('tenant_desk', 'Penny', 'private', 'File site photos.', '["desk"]'::jsonb, 'mention_or_reply', 'disabled', true, 'union', true)`,
-						params: []
+						VALUES ($1, 'Penny', 'private', 'File site photos.', ARRAY['desk'], 'mention_or_reply', 'disabled', true, 'union', true)`,
+						params: [desk]
 					});
 					yield* t.db.write({
-						text: `UPDATE sys_integration SET envoy = 'tenant_desk' WHERE id = 'field_wa'`,
-						params: []
+						text: `UPDATE sys_integration SET envoy = $1 WHERE id = 'field_wa'`,
+						params: [desk]
 					});
 					yield* say(DM, 'here is the pump');
 					yield* debounce();
@@ -868,7 +899,7 @@ describe('envoy triage (G12 (10))', () => {
 	const CAL_WA = '6598765432@s.whatsapp.net';
 
 	it.live(
-		"the person the envoy just asked answers unnamed in the group: their follow-up continues the exchange, no decider",
+		'the person the envoy just asked answers unnamed in the group: their follow-up continues the exchange, no decider',
 		() =>
 			Effect.scoped(
 				Effect.gen(function* () {
@@ -961,6 +992,30 @@ describe('in-app triage', () => {
 					yield* neverTwice();
 				})
 			)
+	);
+
+	it.live('a follow-up in a stopped conversation reopens it and is triaged', () =>
+		Effect.scoped(
+			Effect.gen(function* () {
+				yield* open();
+				const c = yield* start();
+				yield* t.db.write({
+					text: `UPDATE sys_conversation SET status = 'stopped' WHERE id = $1`,
+					params: [c]
+				});
+				port.script = ['respond'];
+				yield* post({
+					conversation: c,
+					as: { member: ADA },
+					text: 'try again',
+					author: ADA,
+					mode: 'agent'
+				});
+				yield* debounce();
+				expect(port.inputs.map((i) => i.pending.length)).toEqual([1]);
+				expect((yield* row('try again'))['delivered_turn']).not.toBeNull();
+			})
+		)
 	);
 
 	it.live(

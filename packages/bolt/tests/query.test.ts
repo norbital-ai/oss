@@ -132,7 +132,7 @@ describe('next query: decode', () => {
 	});
 
 	it('rule 13: a caller without a read grant is forbidden; a field outside exposure does not exist (rule 10)', () => {
-		const none = { ...rep, exposures: {} };
+		const none = { ...rep, models: {} };
 		expect(
 			code(() =>
 				storeSync(
@@ -204,13 +204,15 @@ describe('next query: decode', () => {
 		expect(is(storeSync(where(cat, 'orders', { note: { eq: 'x' } })))).toBe(false);
 		expect(is(storeSync(where(cat, 'orders', { note: { ne: 'x' } })))).toBe(true);
 		expect(is(storeSync(where(cat, 'orders', { not: { note: { eq: 'x' } } })))).toBe(true);
-		expect(is(storeSync(where(cat, 'orders', { email: { eq: { actor: 'email' } } })))).toBe(true);
+		expect(is(storeSync(where(cat, 'orders', { email: { eq: { var: 'requestor.email' } } })))).toBe(
+			true
+		);
 		expect(
 			is(
 				storeSync(
 					where(cat, 'orders', {
 						placed: { gte: '2026-09-18' },
-						total: { gt: { param: 'min' } }
+						total: { gt: '11' }
 					})
 				)
 			)
@@ -235,9 +237,11 @@ describe('next query: decode', () => {
 		} as typeof rep;
 		const guestIs = (p: Pred) =>
 			evaluate({ cat, bindings, authority: guest }, 'orders', p, { ...row, note: 'v-1' });
-		expect(guestIs(storeSync(where(cat, 'orders', { note: { eq: { actor: 'visitor' } } })))).toBe(
-			true
-		);
-		expect(is(storeSync(where(cat, 'orders', { note: { eq: { actor: 'visitor' } } })))).toBe(false);
+		expect(
+			guestIs(storeSync(where(cat, 'orders', { note: { eq: { var: 'requestor.visitor' } } })))
+		).toBe(true);
+		expect(
+			is(storeSync(where(cat, 'orders', { note: { eq: { var: 'requestor.visitor' } } })))
+		).toBe(false);
 	});
 });

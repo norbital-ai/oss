@@ -50,3 +50,17 @@ export {
 } from './net.ts';
 
 export { prepareMigrations } from '../compiler/migrations.ts';
+export {
+	checkWorkspace,
+	filesystem,
+	holder,
+	offsetIn,
+	PROBE,
+	refresh,
+	rootOf,
+	TypeCheckError,
+	view,
+	type Held,
+	type LangDiagnostic,
+	type LangPosition
+} from '../typing/workspace.ts';

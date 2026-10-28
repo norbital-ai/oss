@@ -3,6 +3,7 @@ import { inputSchema, type Value } from '@norbital-ai/std/kind';
 import { Decimal } from '@norbital-ai/std/decimal';
 import { encodeWire } from '@norbital-ai/std/wire';
 import { utcOf } from '@norbital-ai/std/zone';
+import { compileVar, evaluateVar, memberAdmits, type VarResult } from '@norbital-ai/std/vars';
 import { likePattern } from '../kinds/kind.js';
 import { sortable as kindSortable } from '../kinds/registry.js';
 // The view popover's typed model (rule 16b, P34): filter rows that mirror `Where` (§3.3.9) and can only lower to a
@@ -67,40 +68,44 @@ const OpSchema = Schema.Literals([
 ]);
 const CmpSchema = Schema.Literals(['eq', 'ne', 'lt', 'lte', 'gt', 'gte']);
 const AggSchema = Schema.Literals(['count', 'sum', 'min', 'max', 'avg']);
-const UnitSchema = Schema.Literals(['week', 'month', 'quarter', 'year']);
 /** A model's search index (`$search`: every word) and embedding (`$similar`: nearest in meaning) as condition keys. */
 export const INDEX: { readonly [key: string]: { op: 'search' | 'similar'; label: string } } = {
 	$search: { op: 'search', label: 'Search' },
 	$similar: { op: 'similar', label: 'Topic' }
 };
-export type Unit = 'week' | 'month' | 'quarter' | 'year';
-/** A condition's value: a literal, a list, a date span (with the catalogue's label, when it came from one), an actor, or
- * a relative `today`/`now`/`startOf` value. The view keeps the relative form (its URL too, so "this month" rolls over);
- * a read sends the literal it stands for at the page's clock (`toWhere` with a `FilterClock`). */
+/** A condition's value: a literal, a list, a date span (with the catalogue's label, when it came from one), a `{ var }`
+ * CEL expression (`requestor.id`, `today - days(7)`, std/vars) or a same-row `{ field }`. The view keeps a variable as
+ * written (its URL too, so "this month" rolls over); a read sends the literal a time variable stands for at the page's
+ * clock (`toWhere` with a `FilterClock`), and a requestor variable for the host to bind. */
 export type RawArg =
 	| { lit: Value }
 	| { list: readonly Value[] }
 	| { range: readonly [Json, Json]; label?: string }
-	| { today: string }
-	| { now: string }
-	| { startOf: Unit; shift?: number }
-	| { actor: 'id' | 'party' | 'teams' };
+	| { var: string }
+	| { field: string };
 export type Arg =
 	| { readonly _tag: 'lit'; readonly lit: Value }
 	| { readonly _tag: 'list'; readonly list: readonly Value[] }
 	| { readonly _tag: 'range'; readonly range: readonly [Json, Json]; readonly label?: string }
-	| { readonly _tag: 'today'; readonly today: string }
-	| { readonly _tag: 'now'; readonly now: string }
-	| { readonly _tag: 'startOf'; readonly startOf: Unit; readonly shift?: number }
-	| { readonly _tag: 'actor'; readonly actor: 'id' | 'party' | 'teams' };
+	| { readonly _tag: 'var'; readonly var: string }
+	| { readonly _tag: 'field'; readonly field: string };
+/** `{ var: '<CEL>' }`, the one spelling of a variable, as its text. */
+const varOf = (value: Json | Value): string | null =>
+	Predicate.isObject(value) &&
+	keysOf(value).length === 1 &&
+	'var' in value &&
+	typeof value['var'] === 'string'
+		? value['var']
+		: null;
 export function taggedArg(arg: RawArg): Arg {
-	if ('lit' in arg) return { _tag: 'lit', ...arg };
+	if ('lit' in arg) {
+		const text = varOf(arg.lit);
+		return text === null ? { _tag: 'lit', ...arg } : { _tag: 'var', var: text };
+	}
 	if ('list' in arg) return { _tag: 'list', ...arg };
 	if ('range' in arg) return { _tag: 'range', ...arg };
-	if ('today' in arg) return { _tag: 'today', ...arg };
-	if ('now' in arg) return { _tag: 'now', ...arg };
-	if ('startOf' in arg) return { _tag: 'startOf', ...arg };
-	return { _tag: 'actor', ...arg };
+	if ('var' in arg) return { _tag: 'var', ...arg };
+	return { _tag: 'field', ...arg };
 }
 export type Quant = 'some' | 'none' | 'every' | 'count' | 'sum' | 'min' | 'max' | 'avg';
 
@@ -305,50 +310,94 @@ export function valueKind(k: Kind): Kind {
 	if (k.kind === 'sum' || k.kind === 'count' || k.kind === 'money') return { kind: 'number' };
 	return k;
 }
-/** The operand choices of a value position (§3.3.9 `Dyn`): a literal, relative dates, actor references. */
-export function operandsFor(
-	r: Resolved,
-	op: Op
-): ('lit' | 'today' | 'now' | 'startOf' | 'me' | 'party' | 'team')[] {
-	if (r.leaf === 'rel') {
-		const t = r.targets[0];
-		if (op === 'in' || op === 'nin') return ['lit'];
-		return ['lit', ...(t === 'sys_user' ? ['me' as const] : []), 'party'];
-	}
-	if ((op === 'in' || op === 'nin') && r.kind.kind === 'text' && r.kind.format === 'team')
-		return ['lit', 'team'];
-	if (
-		op !== 'eq' &&
-		op !== 'ne' &&
-		op !== 'lt' &&
-		op !== 'lte' &&
-		op !== 'gt' &&
-		op !== 'gte' &&
-		op !== 'contains'
-	)
-		return ['lit'];
+/** The kind of value a variable must produce in a value position, or `null` where none is taken (§3.3.9 `Dyn`). */
+function varResult(r: Resolved, op: Op): VarResult | null {
+	if (op === 'in' || op === 'nin') return 'list';
+	if (!['eq', 'ne', 'lt', 'lte', 'gt', 'gte', 'contains'].includes(op)) return null;
+	if (r.leaf === 'rel') return op === 'eq' || op === 'ne' ? 'text' : null;
+	if (op === 'contains' && r.kind.kind !== 'period') return null;
 	const k = r.kind.kind === 'period' ? (r.kind.of === 'date' ? 'date' : 'instant') : r.kind.kind;
-	if (op === 'contains' && r.kind.kind !== 'period') return ['lit'];
-	return k === 'date'
-		? ['lit', 'today', 'startOf']
-		: k === 'instant'
-			? ['lit', 'now', 'startOf']
-			: ['lit'];
+	return k === 'date' ? 'date' : k === 'instant' ? 'instant' : 'text';
 }
-export const argKind = (arg: Arg | null): string =>
-	arg === null
-		? 'lit'
-		: Match.value(arg).pipe(
-				Match.tagsExhaustive({
-					lit: () => 'lit',
-					list: () => 'list',
-					range: () => 'range',
-					today: () => 'today',
-					now: () => 'now',
-					startOf: () => 'startOf',
-					actor: (value) => ({ id: 'me', party: 'party', teams: 'team' })[value.actor]
-				})
-			);
+/** The field a variable's requestor members are admitted against (std/vars `memberAdmits`). */
+const varField = (r: Resolved) =>
+	r.leaf === 'rel'
+		? { kind: 'id', of: r.targets[0] }
+		: {
+				kind: r.kind.kind,
+				email: r.kind.kind === 'text' && r.kind.format === 'email',
+				phone: r.kind.kind === 'text' && r.kind.format === 'phone',
+				team: r.kind.kind === 'text' && r.kind.format === 'team'
+			};
+/** Why `text` is not a variable this position takes, or `undefined` when it is. An instant position takes a date too
+ * (that day's midnight in the workspace zone). */
+export function varError(r: Resolved, op: Op, text: string): string | undefined {
+	const want = varResult(r, op);
+	if (want === null) return 'this condition takes no variable';
+	let c = compileVar(text, want);
+	if ('error' in c && want === 'instant') {
+		const day = compileVar(text, 'date');
+		if (!('error' in day)) c = day;
+	}
+	if ('error' in c) return c.error;
+	const f = varField(r);
+	const refused = c.requestor.find((m) => !memberAdmits(f, m));
+	return refused === undefined
+		? undefined
+		: `requestor.${refused} does not compare with this field`;
+}
+/** The `@` presets a value position offers: requestor members and clock expressions its kind admits. */
+const PRESETS = [
+	'requestor.id',
+	'requestor.email',
+	'requestor.phone',
+	'requestor.party',
+	'requestor.teams',
+	'requestor.teamTree',
+	'today',
+	'today - days(7)',
+	'startOfWeek(today)',
+	'startOfMonth(today)',
+	'now',
+	'now - hours(1)'
+];
+export const variablesFor = (r: Resolved, op: Op): readonly { name: string; arg: Arg }[] =>
+	// the requestor's id names a member record: offered on a link, though a ported text column may compare with it
+	PRESETS.filter(
+		(text) => varError(r, op, text) === undefined && (text !== 'requestor.id' || r.leaf === 'rel')
+	).map((text) => ({
+		name: variableName(text),
+		arg: { _tag: 'var', var: text }
+	}));
+/** A variable's chip text: `requestor` for the requestor's id, else the expression itself. */
+const variableName = (text: string): string => (text === 'requestor.id' ? 'requestor' : text);
+/** The variable a value is (`requestor`, `today - days(7)`), or `undefined` for a literal or another operand. */
+export const variableOf = (arg: Arg | null): string | undefined =>
+	arg !== null && arg._tag === 'var' ? variableName(arg.var) : undefined;
+/** The operand choices of a value position: a literal, a variable, a same-row field. */
+export function operandsFor(r: Resolved, op: Op): ('lit' | 'var' | 'field')[] {
+	return [
+		'lit',
+		...(variablesFor(r, op).length > 0 ? ['var' as const] : []),
+		...(r.leaf === 'field' && ['eq', 'ne', 'lt', 'lte', 'gt', 'gte'].includes(op)
+			? ['field' as const]
+			: [])
+	];
+}
+/** The same-row fields a `{ field }` operand at `path` may name: the same kind, beside it on its model. */
+export function fieldsFor(cat: Catalog, model: string, path: string): readonly string[] {
+	if (path.includes('.')) return [];
+	const r = resolve(cat, model, path);
+	if (r === null || r.leaf !== 'field') return [];
+	const kind = valueKind(r.kind).kind;
+	return Object.keys(cat[model]?.fields ?? {}).filter((f) => {
+		if (f === path) return false;
+		const o = resolve(cat, model, f);
+		return o !== null && o.leaf === 'field' && valueKind(o.kind).kind === kind;
+	});
+}
+export const argKind = (arg: Arg | null): 'lit' | 'list' | 'range' | 'var' | 'field' =>
+	arg === null ? 'lit' : arg._tag;
 
 // ── literals ──
 /** A `like` pattern as its words: an unescaped `%` inside separates them; an unescaped `_` is not text. */
@@ -368,67 +417,24 @@ export const radiusText = (m: number) =>
 	m >= 1000 ? `${Math.round(m / 100) / 10} km` : `${Math.round(m)} m`;
 const pointText = (p: { lat: number; lng: number }) => `${p.lat.toFixed(4)}, ${p.lng.toFixed(4)}`;
 
-// ── relative values at the page's clock ──
-/** What a relative value resolves against: the page's `bolt.clock('day')` and the workspace zone. */
+// ── variables at the page's clock ──
+/** What a time variable resolves against: the page's `bolt.clock('day')` and the workspace zone. */
 export type FilterClock = { readonly today: string; readonly now: string; readonly zone: string };
-const UNIT_MS: { readonly [unit: string]: number } = {
-	s: 1_000,
-	min: 60_000,
-	h: 3_600_000,
-	d: 86_400_000
-};
-/** `'+3d'`, `'-1h'` as milliseconds; `''` is none. */
-const offsetMs = (offset: string): number => {
-	const m = /^([+-]\d+)(s|min|h|d)$/.exec(offset);
-	return m === null ? 0 : Number(m[1]) * (UNIT_MS[m[2] ?? ''] ?? 0);
-};
-/** The first day of the unit holding `today` (weeks start Monday), moved `shift` units, as the engine reads it. */
-function startOfDate(unit: Unit, shift: number, today: string): string {
-	const d = new Date(`${today}T00:00:00Z`),
-		[y, m] = [d.getUTCFullYear(), d.getUTCMonth()];
-	const out =
-		unit === 'week'
-			? new Date(d.getTime() - ((d.getUTCDay() + 6) % 7) * 86_400_000 + shift * 7 * 86_400_000)
-			: unit === 'month'
-				? new Date(Date.UTC(y, m + shift, 1))
-				: unit === 'quarter'
-					? new Date(Date.UTC(y, m - (m % 3) + 3 * shift, 1))
-					: new Date(Date.UTC(y + shift, 0, 1));
-	return out.toISOString().slice(0, 10);
+/** A `{ var }` as the literal it is at `clock` (a date on an instant position is its midnight in the zone), or as
+ * itself when it reads only the requestor (the host binds it) or without a clock (the URL). */
+function evaluated(text: string, clock: FilterClock | undefined, instant: boolean): Json {
+	const c = compileVar(text);
+	if (clock === undefined || 'error' in c || !c.time || c.requestor.length > 0)
+		return { var: text };
+	const v = evaluateVar(c, clock);
+	return instant && typeof v === 'string' && v.length === 10
+		? new Date(utcOf(v, 0, clock.zone)).toISOString()
+		: v;
 }
-type Relative = Extract<Arg, { _tag: 'today' | 'now' | 'startOf' }>;
-/** A relative value as the date (or, for an instant field, the instant in the workspace zone) it is at `clock`. */
-function literal(arg: Relative, clock: FilterClock, instant: boolean): string {
-	return Match.value(arg).pipe(
-		Match.tagsExhaustive({
-			today: (value) =>
-				new Date(Date.parse(`${clock.today}T00:00:00Z`) + offsetMs(value.today))
-					.toISOString()
-					.slice(0, 10),
-			now: (value) => new Date(Date.parse(clock.now) + offsetMs(value.now)).toISOString(),
-			startOf: (value) => {
-				const date = startOfDate(value.startOf, value.shift ?? 0, clock.today);
-				return instant ? new Date(utcOf(date, 0, clock.zone)).toISOString() : date;
-			}
-		})
-	);
-}
-/** A span's bound: a literal, or a relative value (`{ startOf: 'week' }`) kept as is without a clock. */
+/** A span's bound: a literal, or a variable at `clock`. */
 function bound(value: Json, clock: FilterClock | undefined, instant: boolean): Json {
-	if (clock === undefined || !Predicate.isObject(value)) return value;
-	const unit = value['startOf'],
-		shift = value['shift'];
-	if (typeof value['today'] === 'string')
-		return literal({ _tag: 'today', today: value['today'] }, clock, instant);
-	if (typeof value['now'] === 'string')
-		return literal({ _tag: 'now', now: value['now'] }, clock, instant);
-	if (Schema.is(UnitSchema)(unit) && (shift === undefined || typeof shift === 'number'))
-		return literal(
-			{ _tag: 'startOf', startOf: unit, ...(shift === undefined ? {} : { shift }) },
-			clock,
-			instant
-		);
-	return value;
+	const text = varOf(value);
+	return text === null ? value : evaluated(text, clock, instant);
 }
 
 // ── lowering: Node → Where ──
@@ -438,17 +444,8 @@ function operand(arg: Arg, clock: FilterClock | undefined, instant: boolean): Js
 			lit: (value) => encodeWire(value.lit),
 			list: (value) => encodeWire(value.list),
 			range: (value) => value.range.map((b) => bound(b, clock, instant)),
-			today: (value) =>
-				clock === undefined ? { today: value.today } : literal(value, clock, instant),
-			now: (value) => (clock === undefined ? { now: value.now } : literal(value, clock, instant)),
-			startOf: (value) =>
-				clock === undefined
-					? {
-							startOf: value.startOf,
-							...(value.shift === undefined ? {} : { shift: value.shift })
-						}
-					: literal(value, clock, instant),
-			actor: (value) => ({ actor: value.actor })
+			var: (value) => evaluated(value.var, clock, instant),
+			field: (value) => ({ field: value.field })
 		})
 	);
 }
@@ -501,12 +498,7 @@ function leafOps(
  * A viewer node as a `Where` over `model`; incomplete rows lower to nothing. With `clock`, a relative value is the
  * literal it stands for now (what a read sends); without, it stays relative (the URL).
  */
-export function toWhere(
-	cat: Catalog,
-	model: string,
-	n: Node,
-	clock?: FilterClock
-): Where | null {
+export function toWhere(cat: Catalog, model: string, n: Node, clock?: FilterClock): Where | null {
 	if (!complete(n)) return null;
 	if (n.t === 'group') {
 		const parts = n.of
@@ -552,8 +544,8 @@ export function toWhere(
 		(r.kind.kind === 'instant' || (r.kind.kind === 'period' && r.kind.of !== 'date'));
 	let body = leafOps(n, clock, instant);
 	if (body === null) return null;
-	// a record picked by label is sent in the `is` form (it needs the relation exposed, never its FK column); actor
-	// operands and `isNull` stay on the FK
+	// a record picked by label is sent in the `is` form (it needs the relation exposed, never its FK column); variables
+	// and `isNull` stay on the FK
 	if (r.leaf === 'rel' && n.arg !== null && ('lit' in n.arg || 'list' in n.arg))
 		body = { is: { id: body } };
 	return wrap(steps, { [name]: arm === undefined ? body : { [arm]: body } });
@@ -578,11 +570,17 @@ export function rowsWhere(
 }
 
 // ── parsing: Where → Node (the popover shows `initialFilter`, a URL and an AI answer as rows) ──
-const OPERAND = new Set(['today', 'now', 'startOf', 'actor']);
 function argOf(r: Resolved, op: Op, v: Json): Arg | null {
+	const text = varOf(v);
+	if (text !== null) return varError(r, op, text) === undefined ? { _tag: 'var', var: text } : null;
+	if (
+		Predicate.isObject(v) &&
+		keysOf(v).length === 1 &&
+		typeof v['field'] === 'string' &&
+		operandsFor(r, op).includes('field')
+	)
+		return { _tag: 'field', field: v['field'] };
 	if (op === 'in' || op === 'nin' || op === 'hasAny' || op === 'hasAll') {
-		if (Predicate.isObject(v) && v['actor'] === 'teams' && op !== 'hasAny' && op !== 'hasAll')
-			return operandsFor(r, op).includes('team') ? { _tag: 'actor', actor: 'teams' } : null;
 		if (!Array.isArray(v) || v.length === 0) return null;
 		const k = r.leaf === 'field' ? valueKind(r.kind) : null;
 		return v.every((x) =>
@@ -592,37 +590,6 @@ function argOf(r: Resolved, op: Op, v: Json): Arg | null {
 		)
 			? { _tag: 'list', list: v }
 			: null;
-	}
-	if (Predicate.isObject(v) && keysOf(v).length >= 1 && OPERAND.has(keysOf(v)[0] ?? '')) {
-		const kinds = operandsFor(r, op);
-		if ('actor' in v) {
-			const actor = v['actor'];
-			return (actor === 'id' && kinds.includes('me')) ||
-				(actor === 'party' && kinds.includes('party'))
-				? { _tag: 'actor', actor: actor === 'id' ? 'id' : 'party' }
-				: null;
-		}
-		if ('startOf' in v) {
-			const unit = v['startOf'],
-				shift = v['shift'];
-			return kinds.includes('startOf') &&
-				Schema.is(UnitSchema)(unit) &&
-				(shift === undefined || (typeof shift === 'number' && Number.isInteger(shift)))
-				? { _tag: 'startOf', startOf: unit, ...(shift === undefined ? {} : { shift }) }
-				: null;
-		}
-		const today = v['today'],
-			now = v['now'];
-		if (keysOf(v).length !== 1) return null;
-		if (
-			typeof today === 'string' &&
-			kinds.includes('today') &&
-			/^([+-]\d+(s|min|h|d))?$/.test(today)
-		)
-			return { _tag: 'today', today };
-		if (typeof now === 'string' && kinds.includes('now') && /^([+-]\d+(s|min|h|d))?$/.test(now))
-			return { _tag: 'now', now };
-		return null;
 	}
 	if (r.leaf === 'rel') return typeof v === 'string' && v !== '' ? { _tag: 'lit', lit: v } : null;
 	const k: Kind =
@@ -825,11 +792,7 @@ export const clauses = (w: Json): Json[] =>
 // ── sorting ──
 /** `Sortable<C>`: readable, unmasked, ordered fields and `created_at`/`updated_at` (§3.3.9); with the catalog, also each
  * unmasked one-relation's target fields the viewer reads (`account.name`, shown "Account › Name"), one hop. */
-export function sortable(
-	x: ModelExposure | undefined,
-	system = true,
-	cat?: Catalog
-): string[] {
+export function sortable(x: ModelExposure | undefined, system = true, cat?: Catalog): string[] {
 	if (x === undefined) return [];
 	const own = Object.keys(x.fields).filter(
 		(f) => filterable(x, f) && x.fields[f] !== undefined && kindSortable(x.fields[f])
@@ -917,12 +880,7 @@ export const orderOf = (keys: readonly SortKey[]): Json =>
 			.reduceRight<Json>((v, f) => ({ [f]: v }), k.near === undefined ? k.dir : { near: k.near })
 	);
 /** A sort key in words: "Site › Location nearest to 1.3291, 103.7690", or the field's own label. */
-export const sortText = (
-	cat: Catalog,
-	model: string,
-	k: SortKey,
-	human: (s: string) => string
-) =>
+export const sortText = (cat: Catalog, model: string, k: SortKey, human: (s: string) => string) =>
 	k.near === undefined
 		? pathLabel(cat, model, k.field, human)
 		: `${pathLabel(cat, model, k.field, human)} nearest to ${pointText(k.near)}`;
@@ -1113,7 +1071,6 @@ export function pathLabel(
 	}
 	return out.join(' › ');
 }
-const SHIFTS: Readonly<Record<number, string>> = { 0: 'this', [-1]: 'last', 1: 'next' };
 const argText = (arg: Arg | null): string =>
 	arg === null
 		? ''
@@ -1123,22 +1080,13 @@ const argText = (arg: Arg | null): string =>
 					list: (value) => value.list.map(String).join(', '),
 					range: (value) =>
 						value.label ?? `${boundText(value.range[0])} – ${boundText(value.range[1])}`,
-					actor: (value) => ({ id: 'me', party: 'my party', teams: 'my teams' })[value.actor],
-					startOf: (value) =>
-						`start of ${SHIFTS[value.shift ?? 0] ?? String(value.shift)} ${value.startOf}`,
-					today: (value) => `today ${value.today}`.trim(),
-					now: (value) => `now ${value.now}`.trim()
+					var: (value) => `@${variableName(value.var)}`,
+					field: (value) => value.field
 				})
 			);
 const boundText = (value: Json): string => {
-	if (!Predicate.isObject(value)) return String(value);
-	if (typeof value['today'] === 'string') return argText({ _tag: 'today', today: value['today'] });
-	if (typeof value['now'] === 'string') return argText({ _tag: 'now', now: value['now'] });
-	const unit = value['startOf'],
-		shift = value['shift'];
-	if (Schema.is(UnitSchema)(unit) && (shift === undefined || typeof shift === 'number'))
-		return argText({ _tag: 'startOf', startOf: unit, ...(shift === undefined ? {} : { shift }) });
-	return String(value);
+	const text = varOf(value);
+	return text === null ? String(value) : `@${variableName(text)}`;
 };
 /** One line for a node: the author's read-only scope and a row's summary. `ref` names a relation's record (its label, never
  * its id); `opLabel` names the operator (the catalogue's words, when the caller has them, else the machine operator). */

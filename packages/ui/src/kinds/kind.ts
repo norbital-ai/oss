@@ -522,10 +522,10 @@ export function problems(kind: Kind, value: Value | undefined, at = ''): Map<str
 	return out;
 }
 
-/** The value a new form starts from: the literal default, else empty (`{ today }`/`{ now }` defaults stay to the host). */
+/** The value a new form starts from: the literal default, else empty (`{ var }` defaults stay to the host). */
 export function initial(kind: Kind): Value {
 	const d = kind.default;
-	if (d !== undefined && !(Predicate.isObject(d) && ('today' in d || 'now' in d))) {
+	if (d !== undefined && !(Predicate.isObject(d) && Object.keys(d).length === 1 && 'var' in d)) {
 		const schema = inputSchema(kind);
 		if (Schema.is(schema)(d)) return d;
 		const result = Schema.decodeUnknownResult(schema)(d);

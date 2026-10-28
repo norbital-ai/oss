@@ -517,7 +517,9 @@ describe('in-app turns', () => {
 						yield* agent.post({ conversation: d, as: { member: bob }, text: 'anything?' });
 						yield* agent.drain(d);
 						const names = toolNames(ai.requests[3]);
-						expect(names).not.toContain('skill');
+						// platform skills keep the skill tool for every actor; a workspace skill outside the actor's capabilities is never listed
+						const skill = ai.requests[3]?.tools?.find((tool) => tool.name === 'skill');
+						expect(skill?.description).not.toContain('pricing');
 						expect(names.some((n) => n.startsWith('mcp__'))).toBe(false);
 						expect(names).not.toContain('act');
 						expect({ mcp: mcpServers(manifest, yield* authority(ann)) }).toMatchObject({
@@ -1165,7 +1167,7 @@ describe('toolset parity with today (agent-tools-parity.md)', () => {
 					const { reply } = yield* agent.drain(c);
 					expect(toolResults(ai.requests[1]!)[0]).toMatchObject({
 						kind: 'committed',
-						stored: [{ title: 'Desk', region: 'north' }]
+						stored: { quotes: { rows: [{ title: 'Desk', region: 'north' }] } }
 					});
 					expect(reply?.meta).toMatchObject({ usage: { input: 20, output: 10, calls: 2 } });
 				}).pipe(Effect.provide(fixture.context));
@@ -1174,7 +1176,7 @@ describe('toolset parity with today (agent-tools-parity.md)', () => {
 	);
 
 	it.live(
-		'the system prompt is byte-identical across actors and days and carries the outline; each step closes with the clock and the actor (rule 62, P32)',
+		'the system prompt is shared across actors and days up to whom it acts as, which comes last; each step closes with the clock (rule 62, P32)',
 		() =>
 			Effect.scoped(
 				Effect.gen(function* () {
@@ -1190,44 +1192,47 @@ describe('toolset parity with today (agent-tools-parity.md)', () => {
 						const d = yield* agent.start({ owner: root });
 						yield* post(agent, d, root, 'hi');
 						yield* agent.drain(d);
-						expect(ai.requests[1]!.system).toBe(ai.requests[0]!.system);
-						expect(ai.requests[0]!.system).toContain('# Workspace outline');
-						expect(ai.requests[0]!.system).toMatch(/^- quotes: .*\| title, region/m);
-						const note = (n: number) => JSON.stringify(ai.requests[n]!.messages.at(-1)!.content);
-						expect(note(0)).toMatch(
+						const shared = (n: number) => ai.requests[n]!.system!.split('# Who you are')[0];
+						expect(shared(1)).toBe(shared(0));
+						expect(ai.requests[0]!.system).toMatch(
 							new RegExp(
-								`Now: .*\\(UTC, .*theirs .*\\(Asia/Singapore\\).*You act for ann@x.test \\(member id ${ann}\\) \\(rep\\); policies rep`
+								`# Who you are\\nYou act as ann@x.test \\(member id ${ann}\\), team rep\\. [^\\n]*$`
 							)
 						);
-						expect(note(1)).toContain(
-							`You act for root@x.test (member id ${root}), an administrator`
+						expect(ai.requests[1]!.system).toContain(
+							`You act as root@x.test (member id ${root}), an administrator`
 						);
+						const note = (n: number) => JSON.stringify(ai.requests[n]!.messages.at(-1)!.content);
+						expect(note(0)).toMatch(/Now: .*\(UTC, .*theirs .*\(Asia\/Singapore\)/);
 					}).pipe(Effect.provide(fixture.context));
 				})
 			)
 	);
 
 	it.live(
-		'read keeps named fields whole and pages on from the last row it shows, and honours field masks (parity 1.1, 1.3)',
+		'a read too large to show says so and is narrowed for the rest, and honours field masks (parity 1.1, 1.3)',
 		() =>
 			Effect.scoped(
 				Effect.gen(function* () {
-					const long = (i: number) => `${String(i).padStart(2, '0')} ${'x'.repeat(2_000)}`;
-					const q = { fields: ['title'], orderBy: { title: 'asc' } };
+					const pad = (i: number) => String(i).padStart(2, '0');
+					const long = (i: number) => `${pad(i)} ${'x'.repeat(2_000)}`;
+					const Page = Schema.Struct({
+						quotes: Schema.Struct({
+							rows: Schema.Array(Schema.Struct({ title: Schema.String })),
+							clipped: Schema.optionalKey(Schema.String)
+						})
+					});
+					// no cursor: the agent narrows to the first row the clipped page did not show
 					const onward: Step = (req) =>
 						use('read', {
 							quotes: {
-								...q,
-								limit: 1,
-								after: toolResult(
-									Schema.Struct({ quotes: Schema.Struct({ next: Schema.String }) }),
-									req,
-									0
-								).quotes.next
+								where: {
+									title: { like: `${pad(toolResult(Page, req, 0).quotes.rows.length)} %` }
+								}
 							}
 						})(req);
 					const fixture = yield* setup([
-						use('read', { quotes: { ...q, limit: 30 } }),
+						use('read', { quotes: { orderBy: { title: 'asc' }, limit: 30 } }),
 						onward,
 						say('a'),
 						use('read', { quotes: { limit: 1 } }),
@@ -1244,31 +1249,17 @@ describe('toolset parity with today (agent-tools-parity.md)', () => {
 						const c = yield* agent.start({ owner: root });
 						yield* post(agent, c, root, 'list');
 						yield* agent.drain(c);
-						const page = toolResult(
-							Schema.Struct({
-								quotes: Schema.Struct({
-									rows: Schema.Array(Schema.Struct({ title: Schema.String })),
-									next: Schema.NullOr(Schema.String),
-									clipped: Schema.String
-								})
-							}),
-							ai.requests[1]!,
-							0
-						).quotes;
-						expect(page.rows.length).toBeGreaterThan(0);
-						expect(page.rows.length).toBeLessThan(30);
-						expect(page.rows[0]!.title).toBe(long(0));
-						expect(
-							toolResult(
-								Schema.Struct({
-									quotes: Schema.Struct({
-										rows: Schema.Array(Schema.Struct({ title: Schema.String }))
-									})
-								}),
-								ai.requests[2]!,
-								1
-							).quotes.rows[0]!.title
-						).toBe(long(page.rows.length));
+						const first = toolResult(Page, ai.requests[1]!, 0).quotes;
+						expect(first.rows.length).toBeGreaterThan(0);
+						expect(first.rows.length).toBeLessThan(30);
+						expect(first.rows[0]!.title).toBe(long(0));
+						expect(first.clipped).toMatch(
+							/^showing \d+ of 30 rows; narrow the read \(a tighter where, a smaller limit, fewer layers\) for the rest$/
+						);
+						expect(toolResults(ai.requests[1]!)[0]).not.toHaveProperty('quotes.next');
+						expect(toolResult(Page, ai.requests[2]!, 1).quotes.rows.map((r) => r.title)).toEqual([
+							long(first.rows.length)
+						]);
 						const nora = yield* user('nora', { team: 'narrow' });
 						const d = yield* agent.start({ owner: nora });
 						yield* post(agent, d, nora, 'what is a quote');
@@ -1284,6 +1275,49 @@ describe('toolset parity with today (agent-tools-parity.md)', () => {
 								0
 							).quotes.rows[0]!.region
 						).toEqual({ $masked: true });
+					}).pipe(Effect.provide(fixture.context));
+				})
+			)
+	);
+
+	it.live(
+		'a value read clips is read whole with read_output, as its clip note says (rule 62)',
+		() =>
+			Effect.scoped(
+				Effect.gen(function* () {
+					const huge = `zz ${'z'.repeat(10_000)}`;
+					const fixture = yield* setup([
+						use('read', { quotes: {} }, 'h1'),
+						use('read_output', { call: 'h1' }),
+						say('done')
+					]);
+					return yield* Effect.gen(function* () {
+						const { t, ai, agent, user } = fixture;
+						const root = yield* user('root', { admin: true });
+						yield* t.db.write({
+							text: `INSERT INTO quotes (id, title, region) VALUES (gen_random_uuid(), $1, 'north')`,
+							params: [huge]
+						});
+						const c = yield* agent.start({ owner: root });
+						yield* post(agent, c, root, 'read it');
+						yield* agent.drain(c);
+						const cell = toolResult(
+							Schema.Struct({
+								quotes: Schema.Struct({
+									rows: Schema.Array(Schema.Struct({ title: Schema.String }))
+								})
+							}),
+							ai.requests[1]!,
+							0
+						).quotes.rows[0]!.title;
+						expect(cell).toContain('read_output reads it whole');
+						expect(toolResults(ai.requests[2]!)[1]).not.toHaveProperty('error');
+						const out = toolResult(
+							Schema.Struct({ parts: Schema.Array(Schema.String) }),
+							ai.requests[2]!,
+							1
+						);
+						expect(out.parts.join('')).toContain('z'.repeat(1_000));
 					}).pipe(Effect.provide(fixture.context));
 				})
 			)
@@ -1445,7 +1479,7 @@ describe('toolset parity with today (agent-tools-parity.md)', () => {
 						);
 						const whole = JSON.stringify(big, null, 2);
 						expect(toolResults(ai.requests[3]!)[1]).toMatchObject({
-							readOutput: `clipped: the whole result (${whole.length} bytes). read_output { call: 'b1', offset } reads it on`
+							truncated: `TRUNCATED: this shows part of the ${whole.length}-byte result. read_output { call: 'b1', offset } reads the rest from where it was cut`
 						});
 						expect(toolResults(ai.requests[4]!)[2]).toMatchObject({
 							offset: 100,
@@ -1499,8 +1533,8 @@ describe('toolset parity with today (agent-tools-parity.md)', () => {
 							2
 						);
 						expect(toolResults(ai.requests[1]!)[0]).toMatchObject({
-							readOutput: expect.stringContaining(
-								`). read_output { call: 'r1', offset } reads it on`
+							truncated: expect.stringContaining(
+								`-byte result. read_output { call: 'r1', offset } reads the rest from where it was cut`
 							)
 						});
 						const Out = Schema.Struct({
@@ -1636,19 +1670,15 @@ describe('toolset parity with today (agent-tools-parity.md)', () => {
 	);
 
 	it.live(
-		'in-app attachments are listed as file references and read with read_attachment; images beyond the budget drop the oldest (parity 1.9, 2.10)',
+		'in-app attachments are listed as file references and read with read_file; images beyond the budget drop the oldest (parity 1.9, 2.10)',
 		() =>
 			Effect.scoped(
 				Effect.gen(function* () {
-					let seq = 0;
+					let ids: string[] = [];
 					const nine: Step = () =>
 						answer({
 							content: '',
-							toolCalls: Array.from({ length: 9 }, (_, i) => ({
-								id: `r${i}`,
-								name: 'read_attachment',
-								input: { seq, file: i }
-							})),
+							toolCalls: ids.map((id, i) => ({ id: `r${i}`, name: 'read_file', input: { id } })),
 							finish: 'tool',
 							usage: { input: 1, output: 1 }
 						});
@@ -1669,20 +1699,18 @@ describe('toolset parity with today (agent-tools-parity.md)', () => {
 							name: `p${i}.png`,
 							mime: 'image/png'
 						}));
-						seq = (yield* agent.post({
-							conversation: c,
-							as: { member: root },
-							text: 'look',
-							files
-						})).seq;
+						ids = files.map((file) => file.id);
+						yield* agent.post({ conversation: c, as: { member: root }, text: 'look', files });
 						yield* agent.drain(c);
 						expect(JSON.stringify(ai.requests[0]!.messages)).toContain(
 							JSON.stringify(`file reference ${JSON.stringify(files[0])}`).slice(1, -1)
 						);
 						expect(ai.requests[1]!.files).toHaveLength(8);
+						// each one follows the call that opened it (the oldest, r0, fell out of the budget)
 						expect(ai.requests[1]!.files?.[0]).toEqual({
 							mime: 'image/png',
-							bytes: new Uint8Array(4)
+							bytes: new Uint8Array(4),
+							call: 'r1'
 						});
 						expect(toolResults(ai.requests[1]!).at(-1)).toMatchObject({
 							dropped: expect.stringContaining('1 older')
@@ -1692,53 +1720,81 @@ describe('toolset parity with today (agent-tools-parity.md)', () => {
 			)
 	);
 
-	it.live('read_attachment sends PDF bytes to the next model step without a format guess', () =>
-		Effect.scoped(
-			Effect.gen(function* () {
-				let seq = 0;
-				const fixture = yield* setup(
-					[
+	it.live(
+		'read_file answers a PDF as its transcription, made once by the model; as an image it is shown instead',
+		() =>
+			Effect.scoped(
+				Effect.gen(function* () {
+					const report = { id: randomUUID(), name: 'report.pdf', mime: 'application/pdf' };
+					const pdf = new Uint8Array([37, 80, 68, 70]);
+					// a document longer than one result: shown whole up to the bound, never clipped like a row's field
+					const long = `# Report\n${'| a | b |\n'.repeat(8_000)}`;
+					const read =
+						(input: Json, id: string): Step =>
 						() =>
 							answer({
 								content: '',
-								toolCalls: [{ id: 'pdf', name: 'read_attachment', input: { seq } }],
+								toolCalls: [{ id, name: 'read_file', input }],
 								finish: 'tool',
 								usage: { input: 1, output: 1 }
-							}),
-						say('seen')
-					],
-					{
-						attachments: {
-							read: (_file, as) => {
-								expect(as).toBe('document');
-								return Effect.succeed({
-									mime: 'application/pdf',
-									bytes: new Uint8Array([37, 80, 68, 70])
-								});
+							});
+					const fixture = yield* setup(
+						[
+							read({ id: report.id }, 'pdf'),
+							say(long),
+							read({ id: report.id }, 'again'),
+							read({ id: report.id, as: 'image' }, 'look'),
+							say('seen')
+						],
+						{
+							attachments: {
+								read: (_file, as) => {
+									expect(as).toBe('document');
+									return Effect.succeed({ mime: 'application/pdf', bytes: pdf });
+								}
 							}
 						}
-					}
-				);
-				return yield* Effect.gen(function* () {
-					const { ai, agent, user } = fixture;
-					const root = yield* user('root', { admin: true });
-					const c = yield* agent.start({ owner: root });
-					seq = (yield* agent.post({
-						conversation: c,
-						as: { member: root },
-						text: 'inspect the report',
-						files: [{ id: randomUUID(), name: 'report.pdf', mime: 'application/pdf' }]
-					})).seq;
-					yield* agent.drain(c);
-					expect(ai.requests[1]!.files).toEqual([
-						{ mime: 'application/pdf', bytes: new Uint8Array([37, 80, 68, 70]) }
-					]);
-					expect(toolResults(ai.requests[1]!)[0]).toMatchObject({
-						attached: 'the file is attached to your next step'
-					});
-				}).pipe(Effect.provide(fixture.context));
-			})
-		)
+					);
+					return yield* Effect.gen(function* () {
+						const { ai, agent, user } = fixture;
+						const root = yield* user('root', { admin: true });
+						const c = yield* agent.start({ owner: root });
+						yield* agent.post({
+							conversation: c,
+							as: { member: root },
+							text: 'inspect the report',
+							files: [report]
+						});
+						yield* agent.drain(c);
+						// the transcription is one model call with the document, its answer the tool's
+						expect(ai.requests[1]!.system).toMatch(/^Transcribe the attached document/);
+						expect(ai.requests[1]!.files).toEqual([{ mime: 'application/pdf', bytes: pdf }]);
+						expect(ai.requests[1]!.effort).toBe('low');
+						const shown = toolResults(ai.requests[2]!)[0];
+						expect(shown).toMatchObject({
+							truncated: expect.stringContaining("read_output { call: 'pdf'"),
+							note: "a faithful transcription of the document; read_file with as: 'image' shows the original"
+						});
+						const part = Schema.decodeUnknownSync(Schema.Struct({ transcript: Schema.String }))(
+							shown
+						);
+						expect(part.transcript.length).toBeGreaterThan(60_000);
+						expect(long.startsWith(part.transcript)).toBe(true);
+						// read again in the turn: its text is above, and no second transcription is made
+						// and the closing note names what the turn already holds
+						expect(JSON.stringify(ai.requests[3]!.messages.at(-1)!.content)).toContain(
+							'Read this turn (their answers are above; do not read them again): file report.pdf'
+						);
+						expect(toolResults(ai.requests[3]!).at(-1)).toEqual({
+							note: 'You read report.pdf earlier in this turn; its answer is above.'
+						});
+						// as an image, the original is shown after the call that asked for it
+						expect(ai.requests[4]!.files).toEqual([
+							{ mime: 'application/pdf', bytes: pdf, call: 'look' }
+						]);
+					}).pipe(Effect.provide(fixture.context));
+				})
+			)
 	);
 
 	it.live(
@@ -1996,13 +2052,16 @@ describe('counting is one aggregate read (hr: "why did turnover spike in March 2
 						const read = ai.requests[0]!.tools!.find((x) => x.name === 'read');
 						if (read === undefined) throw new Error('The read tool must be offered.');
 						expect(read.description).toContain('aggregate');
-						expect(read.description).toContain('by: { month:');
+						expect(read.description).toContain('"by": "<field>" | { "month":');
 						// the layer value's schema (per root key) offers aggregate with count and by
 						const schema = JSON.stringify(read.input);
 						expect(schema).toContain('"aggregate"');
 						expect(schema).toContain('"count"');
 						expect(schema).toContain('"by"');
-						expect(ai.requests[0]!.system).toContain('one aggregate read');
+						// how to count lives in the platform's analysis skill, which the prompt lists for every agent
+						expect(ai.requests[0]!.system).toContain(
+							'- analysis: Analysing workspace data - aggregate reads'
+						);
 						const answer = JSON.stringify(toolResults(ai.requests[1]!)[0]);
 						expect(answer).not.toContain('error');
 						expect(answer).toContain('north');
@@ -2026,7 +2085,7 @@ describe('a turn never settles silently (staging: 12 failing reads, then an empt
 		);
 
 	it.live(
-		'a bad filter names the field and the valid ones; identical failing calls are cut short; an empty reply ends with a visible message',
+		"a bad filter names the field and the model's source; identical failing calls are cut short; an empty reply ends with a visible message",
 		() =>
 			Effect.scoped(
 				Effect.gen(function* () {
@@ -2048,10 +2107,10 @@ describe('a turn never settles silently (staging: 12 failing reads, then an empt
 							text: 'Why did turnover spike in March 2026?'
 						});
 						yield* agent.drain(c);
-						// actionable: the bad path, and what may be named instead
+						// actionable: the bad path, and where the model's fields are declared
 						expect(toolResults(ai.requests[1]!)[0]).toMatchObject({
 							error: expect.stringContaining("unknown field 'month'"),
-							fields: ['title', 'region']
+							hint: expect.stringContaining('src/data/model/<model>/+model.ts')
 						});
 						// the fourth identical call is not run again
 						expect(toolResults(ai.requests[4]!).at(-1)).toMatchObject({
@@ -2229,6 +2288,12 @@ describe('reasoning and metering (L-BOLT-412, L-BOLT-432, L-BOLT-547)', () => {
 						const { reply } = yield* agent.drain(c);
 						expect(reply?.text).toBe('Done.');
 						expect(reply?.meta).toMatchObject({ usage: { calls: 2, cost: 6, model: 'default' } });
+						// the request's size in characters, per part
+						const prompt = {
+							system: expect.any(Number),
+							messages: expect.any(Number),
+							tools: expect.any(Number)
+						};
 						expect(yield* events(t)).toEqual([
 							{
 								severity: 'warn',
@@ -2238,6 +2303,9 @@ describe('reasoning and metering (L-BOLT-412, L-BOLT-432, L-BOLT-547)', () => {
 									input: 3,
 									output: 1,
 									cost: 6,
+									cached: null,
+									reasoning: null,
+									prompt,
 									settlement: 'pending',
 									gauge: 5
 								}
@@ -2250,6 +2318,9 @@ describe('reasoning and metering (L-BOLT-412, L-BOLT-432, L-BOLT-547)', () => {
 									input: 3,
 									output: 1,
 									cost: null,
+									cached: null,
+									reasoning: null,
+									prompt,
 									settlement: 'attention'
 								}
 							}

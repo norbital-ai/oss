@@ -341,7 +341,9 @@ describe('public SSR caller scope', () => {
 				},
 				applicant: {
 					description: 'Apply',
-					grants: { quotes: { read: { quotes: { where: { title: { eq: 'Desk' } }, fields: ['title'] } } } }
+					grants: {
+						quotes: { read: { quotes: { where: { title: { eq: 'Desk' } }, fields: ['title'] } } }
+					}
 				}
 			},
 			apps: {
@@ -379,7 +381,7 @@ describe('public SSR caller scope', () => {
 		yield* fs.symlink(join(here, '..', 'node_modules'), join(root, 'node_modules'));
 		const files = {
 			'src/+workspace.ts': `export default ${JSON.stringify(manifest.workspace)} as const;`,
-			'src/data/model/quotes/+model.ts': `import { model } from '@norbital-ai/bolt'; export default model('quotes', ${JSON.stringify({ ...manifest.models['quotes'], read: 'all', create: { columns: ['title'] } })});`,
+			'src/data/model/quotes/+model.ts': `import { model } from '@norbital-ai/bolt'; export default model('quotes', ${JSON.stringify({ ...manifest.models['quotes'], read: 'all', create: { columns: { quotes: ['title'] } } })});`,
 			'src/access_control/team/+team.ts': `import { team } from '@norbital-ai/bolt'; export default team(${JSON.stringify(manifest.teams)});`,
 			...Object.fromEntries(
 				Object.entries(manifest.policies).map(([name, policy]) => [
@@ -539,7 +541,10 @@ describe('G5 UI', () => {
 				}
 			},
 			relationships: { 'entries.person': { to: 'people', inverse: 'entries' } },
-			exposures: { people: { read: { people: { fields: 'all' } } }, entries: { read: { entries: { fields: 'all' } } } },
+			exposures: {
+				people: { read: { people: { fields: 'all' } } },
+				entries: { read: { entries: { fields: 'all' } } }
+			},
 			policies: {},
 			integrations: {},
 			teams: {},

@@ -56,14 +56,15 @@ const r: OrderBy<'orders'>[] = [
 	[{ customer: { order_count: 'desc' } }, { due: 'asc' }],
 	{ customer: 'asc' }
 ];
-const r0: OrderBy<'order_lines'> = { order: { customer: { name: 'desc' } } }; // two hops
+// @ts-expect-error R0 a sort crosses only declared layers (order_lines declares no order layer)
+const r0: OrderBy<'order_lines'> = { order: { customer: { name: 'desc' } } };
 void r;
 void r0;
 // @ts-expect-error R1 a many field on the target has no order
 const r1: OrderBy<'orders'> = { customer: { tags: 'asc' } };
 // @ts-expect-error R2 one field per related key
 const r2: OrderBy<'orders'> = { customer: { name: 'asc', tier: 'desc' } };
-// a sort may cross any one-relation its root reads (the old `relations: []` allowlist is gone)
+// @ts-expect-error R3 nor a one-relation its read does not declare (sites declares no customer layer)
 const r3: OrderBy<'sites'> = { customer: { name: 'asc' } };
 // @ts-expect-error R4 a direction is asc or desc
 const r4: OrderBy<'orders'> = { customer: { name: 'up' } };
@@ -80,3 +81,13 @@ void r4;
 void r5;
 void r6;
 void r7;
+// Context operands: the requestor is a typed actor operand (types/data.ts W1–W7); `{ clock }` is only an edge form (agent
+// read, UI filter state, a described filter), materialized before lowering, so authored reads take `bolt.clock` values.
+const v1: Where<'orders'> = { owner: { eq: { var: 'requestor.id' } } };
+// @ts-expect-error V1 `{ clock }` is no authored operand: materialize the day first
+const v2: Where<'orders'> = { due: { eq: { var: 'today' } } };
+// @ts-expect-error V2 nor on an instant
+const v3: Where<'orders'> = { placed_at: { lt: { var: 'now - hours(1)' } } };
+void v1;
+void v2;
+void v3;

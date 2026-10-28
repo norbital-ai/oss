@@ -285,11 +285,9 @@ export const LiveHubLive = Layer.effect(
 			// a read request's rows hold their layers: a change in any model it read re-reads it (`request` below)
 			if (r.kind === 'request') return 'unknown';
 			// a commit to a related sort key's target (a renamed account) may reorder rows it does not carry: re-read
-			if (r.kind === 'read' && sortTargets(cat, r.model, r.order).has(c.model))
-				return 'unknown';
+			if (r.kind === 'read' && sortTargets(cat, r.model, r.order).has(c.model)) return 'unknown';
 			if (c.model !== r.model)
-				return (r.kind === 'read' || r.kind === 'get') &&
-					selectTargets(cat, r.select).has(c.model)
+				return (r.kind === 'read' || r.kind === 'get') && selectTargets(cat, r.select).has(c.model)
 					? 'unknown'
 					: 'skip';
 			if (r.kind === 'get' || r.kind === 'history') return c.id === r.id ? 'hit' : 'skip';
@@ -297,8 +295,7 @@ export const LiveHubLive = Layer.effect(
 			if (r.kind !== 'read' && r.kind !== 'aggregate' && r.kind !== 'similar') return 'unknown';
 			if ((r.where !== undefined && !decidable(r.where)) || arms?.some((x) => !decidable(x.where)))
 				return 'unknown';
-			const hit = (row: RowData | null) =>
-				row !== null && member(a, r, image(c.model, row), b);
+			const hit = (row: RowData | null) => row !== null && member(a, r, image(c.model, row), b);
 			return Result.getOrElse(
 				Result.try(() => (hit(c.old) || hit(c.new) ? ('hit' as const) : ('skip' as const))),
 				() => 'unknown' as const
@@ -362,8 +359,7 @@ export const LiveHubLive = Layer.effect(
 							model: r.model,
 							id: c.id,
 							select: {
-								fields:
-									r.select.fields ?? defaultFields(storeSync(exposureOf(cat, r.model))),
+								fields: r.select.fields ?? defaultFields(storeSync(exposureOf(cat, r.model))),
 								relations: r.select.relations
 							}
 						}
@@ -457,9 +453,7 @@ export const LiveHubLive = Layer.effect(
 			similar: {
 				...base,
 				decide: (a, view, captured) =>
-					view.read.kind === 'similar' && captured.model === view.read.model
-						? 'unknown'
-						: 'skip'
+					view.read.kind === 'similar' && captured.model === view.read.model ? 'unknown' : 'skip'
 			},
 			after: { ...base, decide: () => 'unknown' },
 			transcript: {
@@ -512,12 +506,18 @@ export const LiveHubLive = Layer.effect(
 			},
 			conversations: {
 				...base,
-				decide: (a, view, captured) =>
-					view.read.kind === 'conversations' &&
-					captured.model === view.read.model &&
-					listed(captured.new ?? captured.old, view.read.member, publicEnvoys(), a.admin)
-						? 'hit'
-						: 'skip',
+				decide: (a, view, captured) => {
+					if (view.read.kind !== 'conversations' || captured.model !== view.read.model) return 'skip';
+					const row = captured.new ?? captured.old;
+					if (listed(row, view.read.member, isStaff(a) ? publicEnvoys() : [], a.admin)) return 'hit';
+					// a thread the member posted in is listed (`sharedConversations`) though no row image says so: re-read
+					// ponytail: every unlisted thread change re-reads the list; track posted threads per view if that gets hot
+					return row !== null &&
+						(row['parent'] ?? null) === null &&
+						(row['integration'] ?? null) !== null
+						? 'unknown'
+						: 'skip';
+				},
 				resolve: (a, view, captured) => ({
 					c: captured,
 					row: captured.new === null ? null : conversationRow(captured.new)
@@ -726,9 +726,7 @@ export const LiveHubLive = Layer.effect(
 							const hits: Captured[] = [];
 							const read = view.read;
 							const changed =
-								read.kind === 'get' || read.kind === 'read'
-									? metadata.get(read.model)
-									: undefined;
+								read.kind === 'get' || read.kind === 'read' ? metadata.get(read.model) : undefined;
 							let unsure =
 								(read.kind === 'request' && read.roots.some((r) => metadata.has(r.root))) ||
 								(read.kind === 'inbox' && metadata.has(read.model)) ||

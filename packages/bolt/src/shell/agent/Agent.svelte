@@ -9,8 +9,9 @@
 	shown, and consecutive ones not for the agent fold into one quiet block, collapsed to its count and last message; on a
 	channel thread each reply names the messages it answers ("Replying to"). Files are attached with the paperclip, by paste
 	or by drop (at most 8 files, 20 MiB); each uploads to `/__bolt/files/sys_conversation.inputs` when the message is sent.
-	The selector switches between the member's own conversations and the envoy conversation threads they may read, segmented by
-	source (newest first); delegated sub-agents live in the session rail (their tasks, live steps and answers),
+	The selector's tabs split the conversations by where they happen (newest first): the member's own (Web UI), one per envoy
+	whose channel conversations they may read, and, for an administrator, automation transcripts; each tab counts its rows, and
+	search filters every tab at once (each count follows its matches). Only Web UI conversations are writable; delegated sub-agents live in the session rail (their tasks, live steps and answers),
 	several working at once, one level deep; messages sent while a turn runs wait in the queue (edit, move up, remove); the context meter reads the
 	last reply's usage; the transcript follows its tail unless the reader scrolled up ("Latest" returns); a running turn
 	stops (asked first) and a stopped one resumes; a draft plan is a collapsed card above the prompt (execute, delete), an
@@ -23,10 +24,10 @@
 	cut reply that no turn continues is marked interrupted; a divider names the model where it changed. Consecutive
 	tool calls, sub-agent messages and reasoning fold into one "Worked for Ns" group whose rows (each event's own icon, what it did, on what,
 	how long) open to tabs: the code it carried, highlighted, its input and its output (`Steps`); a failed row's icon is the alert, so the call that failed reads at a glance. Code blocks copy. The open conversation is the shell's `?agent=` (`onConversation` reports a switch). The
-	picker groups conversations by where they happen: the member's own (Web UI), each envoy's direct messages, and each
-	envoy group chat by its name. For an administrator, a scale mark closes each triaged batch of messages; it opens to the
+	envoy tab heads its direct messages and each group chat by its name. For an administrator, a scale mark closes each triaged batch of messages; it opens to the
 	decider's matrix (each message, its answer and verdict, the wait) and says when a decided reply is still to come. An
-	envoy's integration conversation is read-only here (rule 61): its transcript, and no composer or controls at all.
+	envoy's channel conversation or an automation's transcript is read-only here (rule 61): its transcript, a "Read-only —"
+	notice where the composer was, and no controls at all.
 -->
 <script lang="ts">
 	import { attach as attachEffect, observe as liveEdge, fork } from '@norbital-ai/ui/effect';
@@ -50,6 +51,7 @@
 		ReadonlyMarkdown,
 		Spinner,
 		StructuredData,
+		Tabs,
 		pickerRead,
 		useKinds,
 		virtualList,
@@ -292,19 +294,15 @@
 	const status = $derived(current?.status ?? 'idle');
 	/** An instance or envoy name in words: `field_ops` → `Field ops`. */
 	const human = (s: string) => s.replaceAll('_', ' ').replace(/^./, (c) => c.toUpperCase());
-	/**
-	 * Where a conversation happens, the picker's group: the member's own in-app conversations (Web UI), then each envoy's
-	 * direct messages, then each envoy group chat by its name. `order` keeps Web UI first and an envoy's DMs before its groups.
-	 */
-	function sourceOf(c: AgentConversation): { order: number; label: string } {
-		// an automation's inferences, after every conversation a person has
-		if (c.run != null) return { order: 3, label: t('Automations') };
-		if (c.integration === null) return { order: 0, label: t('Web UI') };
-		const name = envoys[c.envoy ?? ''] ?? human(c.envoy ?? c.integration);
-		return c.kind === 'group'
-			? { order: 2, label: `${name} (${t('Group')}: ${c.title ?? c.thread ?? ''})` }
-			: { order: 1, label: `${name} (DM)` };
-	}
+	/** The selector tab a conversation sits in: the member's own (Web UI), its envoy's, or automation transcripts. */
+	const tabOf = (c: AgentConversation) =>
+		c.run != null
+			? 'automations'
+			: c.integration === null
+				? 'web'
+				: `envoy:${c.envoy ?? c.integration}`;
+	const envoyName = (c: AgentConversation) =>
+		envoys[c.envoy ?? ''] ?? human(c.envoy ?? c.integration ?? '');
 	/** A conversation's own line: its title, else a DM's peer (the provider's address) or the group's thread. */
 	const nameOf = (c: AgentConversation) =>
 		c.title ??
@@ -627,17 +625,71 @@
 	}
 	const when = (at: string) =>
 		new Date(at).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
-	/** Every conversation, grouped by where it happens (a group heading starts where its label changes), latest first within. */
+	/** The selector's search, across every tab, and its open tab. */
+	let query = $state(''),
+		tab = $state('web');
+	const matches = $derived.by(() => {
+		const q = query.trim().toLowerCase();
+		return q === ''
+			? list
+			: list.filter((c) =>
+					`${nameOf(c)} ${c.thread ?? ''} ${c.peer ?? ''}`.toLowerCase().includes(q)
+				);
+	});
+	/**
+	 * The tabs the list holds (Web UI always, then each envoy by name, then automations): the server lists only the envoy
+	 * threads and automation transcripts this member may read, so a tab is here exactly when it has rows to show.
+	 */
+	const tabs = $derived.by(() => {
+		const envoyTabs = new Map<string, string>();
+		for (const c of list)
+			if (c.integration !== null && c.run == null) envoyTabs.set(tabOf(c), envoyName(c));
+		const counted = (name: string, title: string, icon: string) => ({
+			name,
+			title,
+			icon,
+			count: matches.filter((c) => tabOf(c) === name).length,
+			body: noPanel
+		});
+		return [
+			counted('web', t('Web UI'), 'lucide:message-square'),
+			...[...envoyTabs]
+				.sort((a, b) => a[1].localeCompare(b[1]))
+				.map(([name, title]) => counted(name, title, 'lucide:bot')),
+			...(list.some((c) => c.run != null)
+				? [counted('automations', t('Automations'), 'lucide:workflow')]
+				: [])
+		];
+	});
+	const shownTab = $derived(tabs.some((x) => x.name === tab) ? tab : 'web');
+	/** The open tab's matches; in an envoy's tab its direct messages first, then each group chat under its name. */
 	const options = $derived(
-		list
-			.map((c, i) => ({ c, i, s: sourceOf(c) }))
-			.sort((a, b) => a.s.order - b.s.order || a.s.label.localeCompare(b.s.label) || a.i - b.i)
-			.map(({ c, s }) => ({
+		matches
+			.filter((c) => tabOf(c) === shownTab)
+			.map((c, i) => ({
+				c,
+				i,
+				group:
+					c.integration === null
+						? undefined
+						: c.kind === 'group'
+							? `${t('Group')}: ${c.title ?? c.thread ?? ''}`
+							: t('Direct messages')
+			}))
+			.sort(
+				(a, b) =>
+					Number(a.c.kind === 'group') - Number(b.c.kind === 'group') ||
+					(a.group ?? '').localeCompare(b.group ?? '') ||
+					a.i - b.i
+			)
+			.map(({ c, group }) => ({
 				value: c.id,
 				label: nameOf(c),
 				// the picker says which run is live, stopped, or idle; a failed turn is its transcript's last row
 				description: `${when(c.at)} · ${c.status === 'running' ? t('Running') : c.status === 'stopped' ? t('Stopped') : t('Idle')}`,
-				group: s.label
+				// envoy and automation sessions are read-only
+				...(shownTab === 'web' ? {} : { icon: 'lucide:lock' }),
+				...(group === undefined ? {} : { group })
 			}))
 	);
 	/**
@@ -1396,6 +1448,19 @@
 					class="underline">{f.name}</a
 				>{:else}{f.name}{/if}</span
 		>{/each}{/snippet}
+{#snippet noPanel()}{/snippet}
+{#snippet selectorTabs()}
+	<!-- the selector's tabs: each counts its search matches; an envoy's and the automations' tab are read-only -->
+	<div class="min-w-0 pt-1" data-agent-tabs>
+		<Tabs {tabs} value={shownTab} onValueChange={(v) => (tab = v)} class="h-auto gap-0" />
+		{#if shownTab !== 'web'}<p
+				class="flex items-center gap-1.5 px-2 pt-1.5 text-xs text-muted-foreground"
+				data-agent-tab-read-only
+			>
+				<Icon name="lucide:lock" class="size-3 shrink-0" />{t('Read only')}
+			</p>{/if}
+	</div>
+{/snippet}
 {#snippet head()}
 	<!-- Panel header: the mark, the name, the conversation picker as plain text, then new (the sheet adds full screen and close) -->
 	<Inline gap="sm" class="w-full min-w-0" data-agent-head>
@@ -1425,6 +1490,11 @@
 			{...current === undefined ? {} : { display: nameOf(current) }}
 			placeholder={list.length === 0 ? t('No conversations yet') : t('New conversation')}
 			aria-label={t('Conversations')}
+			onSearch={(q) => (query = q)}
+			onOpenChange={(open) => {
+				if (open) tab = current === undefined ? 'web' : tabOf(current);
+			}}
+			header={selectorTabs}
 			onChange={(id) => (id === null ? fresh() : select(id))}
 		/>
 		{#if shownPreview !== null && !thread}<Button
@@ -1969,12 +2039,7 @@
 												<Icon name="lucide:message-circle-off" class="size-3.5 shrink-0" /><span
 													class="shrink-0 font-medium"
 													data-aside-count
-													>{n}
-													{t(
-														n === 1
-															? 'message not for the assistant'
-															: 'messages not for the assistant'
-													)}</span
+													>{`${n} ${t(n === 1 ? 'message not for the assistant' : 'messages not for the assistant')}`}</span
 												><span class="truncate opacity-70 group-open/aside:hidden" data-aside-last
 													>{said(item.ignored.at(-1)!)}</span
 												><Icon
@@ -2244,10 +2309,11 @@
 					data-agent-read-only
 				>
 					{automation
-						? t(
-								"An automation's inference, recorded as it ran. Read-only here — start a new conversation to retry or ask again."
-							)
-						: t('An integration conversation, answered by its envoy. Read-only here.')}
+						? t("Read-only — an automation run's transcript, recorded as it ran.")
+						: t('Read-only — {envoy} answers this channel conversation.').replace(
+								'{envoy}',
+								current === undefined ? t('its envoy') : envoyName(current)
+							)}
 				</p>
 			{:else}
 				{#if drafting && current?.plan}

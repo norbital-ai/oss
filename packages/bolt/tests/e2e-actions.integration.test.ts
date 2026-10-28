@@ -281,8 +281,7 @@ describe('several verbs as one act (`calls.acts`, `ctx.act.many`)', () => {
 						bindings: {
 							now: t.clock.now(),
 							today: t.clock.now().slice(0, 10),
-							tz: 'UTC',
-							params: {}
+							tz: 'UTC'
 						},
 						acts: [
 							{

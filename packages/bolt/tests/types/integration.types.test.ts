@@ -94,8 +94,8 @@ expectTypeOf<InputOf<IntegrationSpecOf<'kingdee'>['configuration']>>().toEqualTy
 	readonly maxLagMinutes?: number;
 	readonly databases?: readonly string[];
 }>();
-const onHotline: Where<'customers'> = { hotline: { eq: { actor: 'instance' } } };
-const onAny: Where<'notice_notes'> = { integration: { eq: { actor: 'instance' } } };
+const onHotline: Where<'customers'> = { hotline: { eq: { var: 'requestor.instance' } } };
+const onAny: Where<'notice_notes'> = { integration: { eq: { var: 'requestor.instance' } } };
 void onHotline;
 void onAny;
 
@@ -271,12 +271,12 @@ model('orders', {
 	}
 });
 // @ts-expect-error instance operands require an integration reference
-const onText: Where<'orders'> = { note: { eq: { actor: 'instance' } } };
+const onText: Where<'orders'> = { note: { eq: { var: 'requestor.instance' } } };
 void onText;
 policy({
 	description: 'x',
 	// @ts-expect-error a customer reference is not an integration reference
-	grants: { orders: { read: { customer: { eq: { actor: 'instance' } } } } }
+	grants: { orders: { read: { customer: { eq: { var: 'requestor.instance' } } } } }
 });
 envoy({
 	name: 'x',

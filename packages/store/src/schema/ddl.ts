@@ -15,6 +15,7 @@ import { where } from '../decode.ts';
 import { ownPredSql } from '../write/predicate.ts';
 import { jsonPath } from '../read/values.ts';
 import { StoreError } from '../errors.ts';
+import { clockDefault } from '@norbital-ai/std/vars';
 import { searchFunctions } from './search.ts';
 import { ROW_RULES_V1, ROW_RULES_V2 } from './rules.ts';
 import { JSON_VALID } from './json.ts';
@@ -320,24 +321,10 @@ function sqlValue(v: unknown, type: string, native = false): Fx<string> {
 	if (typeof v === 'object') return Effect.succeed(`${lit(canonical(v))}::${type}`);
 	return Effect.succeed(`${lit(String(v))}::${type}`);
 }
-const INTERVAL_UNITS: Readonly<Record<string, string>> = {
-	s: 'seconds',
-	min: 'minutes',
-	h: 'hours',
-	d: 'days'
-};
-const OFFSET = /^([+-])(\d+)(s|min|h|d)$/;
-const interval = (offset: string): Fx<string> => {
-	if (offset === '') return Effect.succeed('');
-	const m = OFFSET.exec(offset);
-	const unit = m === null ? undefined : INTERVAL_UNITS[m[3] ?? ''];
-	return m === null || unit === undefined
-		? fail(`bad offset '${offset}'`)
-		: Effect.succeed(` ${m[1]} interval ${lit(`${m[2]} ${unit}`)}`);
-};
 const isRecord = (v: unknown): v is { readonly [k: string]: unknown } =>
 	typeof v === 'object' && v !== null && !ReadonlyArray.isArray(v);
-/** A literal default, or the clock operands (`{ now }`, `{ today }` in the schema's zone); a writer fills the rest. */
+/** A literal default, or a clock variable (`{ var: 'now' }`, `{ var: 'today + days(7)' }` in the schema's zone); a writer
+ * fills the rest (`{ var: 'requestor.id' }`). */
 const defaultSql = Effect.fnUntraced(function* (
 	k: FieldSpec,
 	type: string,
@@ -347,12 +334,17 @@ const defaultSql = Effect.fnUntraced(function* (
 	if (k.kind === 'state') return lit(k.initial);
 	const d = k.default;
 	if (d === undefined) return null;
-	if (isRecord(d)) {
-		if ('now' in d && (!native || k.kind === 'instant'))
-			return `(now()${yield* interval(String(d.now))})`;
-		if ('today' in d && (!native || k.kind === 'date'))
-			return `((now()${yield* interval(String(d.today))}) at time zone ${lit(tz)})::date`;
-		if ('actor' in d && (!native || k.kind === 'ref' || k.kind === 'id' || k.kind === 'text'))
+	if (isRecord(d) && Object.keys(d).length === 1 && typeof d['var'] === 'string') {
+		const text = d['var'],
+			clock = clockDefault(text);
+		if (clock?.base === 'now' && (!native || k.kind === 'instant'))
+			return `(now()${clock.interval})`;
+		if (clock?.base === 'today' && (!native || k.kind === 'date'))
+			return `((now()${clock.interval}) at time zone ${lit(tz)})::date`;
+		if (
+			(text === 'requestor.id' || text === 'requestor.party') &&
+			(!native || k.kind === 'ref' || k.kind === 'id' || k.kind === 'text')
+		)
 			return null;
 	}
 	return yield* sqlValue(d, type, native);
@@ -978,8 +970,10 @@ const objectsWithSearch = (searchDefinitions: typeof searchFunctions) =>
 			}
 			const search = t.spec.search;
 			if (search !== undefined) {
-				// the multilingual document: folded, tokenized and romanized when the row is written
-				const doc = yield* Effect.forEach(search.text, (f) =>
+				// the multilingual document: folded, tokenized and romanized when the row is written. A link in `text` is
+				// matched through the linked row's own document when read, never copied into this one.
+				const own = search.text.filter((f) => t.spec.fields[f]?.kind !== 'ref');
+				const doc = yield* Effect.forEach(own, (f) =>
 					Effect.gen(function* () {
 						const computed = t.spec.computed?.[f];
 						if (computed !== undefined) return text(yield* exprSql(computed.expr, t, s.tz));
@@ -989,7 +983,7 @@ const objectsWithSearch = (searchDefinitions: typeof searchFunctions) =>
 						return col.type.endsWith('[]') ? `bolt_search_join(${q(f)}::text[])` : `${q(f)}::text`;
 					})
 				);
-				const deps = (yield* Effect.forEach(search.text, (f) => {
+				const deps = (yield* Effect.forEach(own, (f) => {
 					const computed = t.spec.computed?.[f];
 					return computed === undefined ? Effect.succeed([f]) : exprDeps(computed.expr, t);
 				})).flat();

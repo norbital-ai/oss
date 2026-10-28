@@ -53,7 +53,7 @@ type WorkspaceBase = {
  * Self sign-up: a newcomer proves an address (`via`: a code by email, by SMS to a mobile number, or either) and becomes
  * an external member holding `policies`. `party` names the record that is them — the row of `model` whose
  * `match[email | phone]` field holds the proven address — so a guest already on file (a customer who booked without an
- * account) is promoted to a registered member bound to their own rows (`{ actor: 'party' }`). An administrator can close
+ * account) is promoted to a registered member bound to their own rows (`{ var: 'requestor.party' }`). An administrator can close
  * sign-up in Settings without a release.
  */
 type Signup = {

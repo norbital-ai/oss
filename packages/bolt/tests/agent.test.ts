@@ -11,15 +11,7 @@ import type { Ai, AiEvent } from '../src/engine/ports.ts';
 import type { FacilityCall } from '../src/engine/services.ts';
 import { applyEdit, inferFacility, modelCall, STALL_MS } from '../src/engine/agent/ai.ts';
 import { jsonDiff } from '../src/engine/agent/draft.ts';
-import {
-	bound,
-	BOUNDS,
-	messages,
-	outline,
-	projection,
-	system
-} from '../src/engine/agent/context.ts';
-import { LAYOUT_HELP } from '../src/decl/layout.ts';
+import { bound, BOUNDS, messages, projection, system } from '../src/engine/agent/context.ts';
 import { listed, type MessageRow } from '../src/engine/agent/schema.ts';
 import { preview } from '../src/engine/conversations/store.ts';
 import { respondSystem1 } from '../src/test/effect.ts';
@@ -90,10 +82,10 @@ const done =
 const elapsed = clockProbe;
 
 describe('tool results are bounded (rule 62)', () => {
-	it('clips long cells and drops trailing rows with a note, within 16 KiB', () => {
+	it('clips long cells and drops trailing rows with a note, within the result bound', () => {
 		const rows = Array.from({ length: 200 }, (_, i) => ({
 			id: String(i),
-			note: 'x'.repeat(2_000)
+			note: 'x'.repeat(BOUNDS.cellBytes + 800)
 		}));
 		const result = bound({ rows, next: null });
 		const out = Schema.decodeUnknownSync(
@@ -103,7 +95,7 @@ describe('tool results are bounded (rule 62)', () => {
 			})
 		)(result);
 		expect(size(result)).toBeLessThanOrEqual(BOUNDS.resultBytes);
-		expect(out.rows[0]!.note).toMatch(/clipped, 2002 bytes/);
+		expect(out.rows[0]!.note).toMatch(new RegExp(`clipped, ${BOUNDS.cellBytes + 802} bytes`));
 		expect(out.clipped).toMatch(new RegExp(`showing ${out.rows.length} of 200 rows`));
 		expect(bound({ a: 1 })).toEqual({ a: 1 });
 	});
@@ -164,121 +156,36 @@ describe('the context projection (rule 60)', () => {
 			{ role: 'user', content: '[note]\nok' }
 		]);
 	});
-	it('the system prompt is the kernel, brief, task and skills list only: no date, actor or conversation state (rule 62)', () => {
+	it('the system prompt is the kernel, brief, skills list, envoy and task only: no date, actor or conversation state (rule 62)', () => {
 		const s = system({
 			envoy: 'Norbius',
 			brief: 'Brief.',
 			task: 'Task.',
 			skills: { pricing: { text: '---\ndescription: How we price\n---\nbody' } }
 		});
+		// what every conversation shares first (brief, skills), then the envoy's channel guidance and its task
 		expect(s).toContain(
-			'Brief.\n\nTask.\n\nSkills (read one with the skill tool):\n- pricing: How we price'
+			"# Brief (the workspace's +agent.md, already here: never read it again)\nBrief.\n\n# Your skills (load one with the skill tool before a task it covers)\n- pricing: How we price\n\nYou are Norbius"
 		);
+		expect(s.endsWith('\n\nTask.')).toBe(true);
 		expect(s).not.toMatch(/20\d\d|clock|timezone/i);
 		// the channel guidance names the envoy, so a message that says the name is readable as addressed to it
 		expect(s).toContain('You are Norbius, answering on a messaging channel.');
 		// and it may not narrate the workspace's own checks
 		expect(s).toContain("Never describe the workspace's own automated checks");
-		// a turn without the source tools (an envoy's) is never told to call them; staff in the app are
-		expect(system({ skills: {}, outline: '# Workspace outline' })).not.toMatch(
-			/workspace_search|workspace_lang/
-		);
-		expect(
-			system({ skills: {}, outline: '# Workspace outline', tools: [{ name: 'workspace_search' }] })
-		).toMatch(/workspace_search reads the source[\s\S]*# Source layout/);
-		// the layout is the compiler's own role table, so a file is never guessed without its +
-		const layout = system({
-			skills: {},
-			outline: '# Workspace outline',
-			tools: [{ name: 'workspace_search' }]
-		});
-		expect(layout).toContain(LAYOUT_HELP);
+		// a turn without the source tools (a public envoy's) is never told to call them; one with them gets the layout
+		expect(system({ skills: {} })).not.toMatch(/workspace_list|workspace_search|workspace_lang/);
+		const layout = system({ skills: {}, tools: [{ name: 'workspace_search' }] });
+		expect(layout).toContain('# Workspace source');
 		expect(layout).toContain('src/data/model/<name>/+model.ts');
-		expect(layout).toContain('src/app/<app>/+<name>.page.svelte');
-		expect(layout).toContain('src/data/model/<name>/+representation.svelte');
-	});
-});
-
-describe('the workspace outline', () => {
-	it("names each model's write contract and nested relation writes, so a write needs no type lookup", () => {
-		const m: EngineManifest = {
-			models: {
-				sites: {
-					description: 'A site',
-					label: 'name',
-					fields: { name: { kind: 'text' }, code: { kind: 'text', optional: true } }
-				},
-				jobs: {
-					description: 'A job',
-					label: 'title',
-					fields: { title: { kind: 'text' }, done: { kind: 'enum', values: ['2', '10'] } },
-					unique: [{ fields: ['title'] }]
-				}
-			},
-			exposures: {
-				sites: {
-					read: { sites: { fields: 'all' } },
-					create: { columns: { sites: ['name', 'code'], 'sites.tasks': ['title'] } },
-					update: { columns: { sites: ['name', 'code'], 'sites.tasks': ['title'] } },
-					delete: {}
-				},
-				jobs: {
-					read: { jobs: { fields: 'all' } },
-					create: { columns: { jobs: ['title'] } },
-					update: { columns: { jobs: ['title', 'done'] } },
-					syncs: {
-						sheet: { with: 'file', parser: ['json'] },
-						erp: { with: 'erp', every: '1h', read: true }
-					}
-				}
-			},
-			relationships: { 'jobs.site_id': { to: 'sites', inverse: 'tasks', optional: true } },
-			integrations: {
-				erp: {
-					description: 'The ERP',
-					driver: 'http',
-					http: { baseUrl: 'https://erp.example' }
-				}
-			},
-			customFields: {},
-			apps: {},
-			automations: {},
-			policies: {},
-			workspace: { tz: 'UTC', locale: 'en' },
-			teams: {},
-			connections: {},
-			envoys: {},
-			mcp: {},
-			agent: { skills: {} }
-		};
-		const lines = outline(m, null).split('\n');
-		// a write layer is named by its relation with the columns its path declares (the FK to the parent is implied)
-		const sites = lines.find((l) => l.startsWith('- sites'));
-		expect(sites).toContain('create(name, code?');
-		expect(sites).toMatch(/tasks\{[^}]*title/);
-		expect(sites).not.toContain('site_id');
-		expect(lines.find((l) => l.startsWith('- jobs'))).toContain(
-			'create(title), update(title, done), upsert, sync sheet(file), sync erp(erp)'
-		);
-		expect(lines.find((l) => l.startsWith('- jobs'))).toContain('done("2"|"10")');
-		// every source file by folder, + files included, so a read names the exact path
-		expect(
-			outline(m, [
-				'src/data/model/jobs/+model.ts',
-				'src/data/model/jobs/+representation.svelte',
-				'src/lib/util.ts',
-				'package.json'
-			])
-		).toContain(
-			'## Source files\n- src/data/model/jobs/ +model.ts +representation.svelte\n- src/lib/ util.ts'
-		);
+		expect(layout).toMatch(/workspace_list[\s\S]*workspace_search/);
 	});
 });
 
 describe('the AI port under the 20 s idle wall (rule 63)', () => {
 	const req: AiRequest = { model: 'default', messages: [{ role: 'user', content: 'hi' }] };
 	it.effect(
-		'the default response deadline cancels and settles a silent provider after 20 seconds',
+		'the default response deadline cancels and settles a silent provider after 60 seconds to its first event',
 		() =>
 			Effect.gen(function* () {
 				let settled = false;
@@ -292,10 +199,10 @@ describe('the AI port under the 20 s idle wall (rule 63)', () => {
 							)
 						)
 					);
-				expect(yield* elapsed(Effect.flip(modelCall(port([silent]).p, req)), 20_001)).toMatchObject(
+				expect(yield* elapsed(Effect.flip(modelCall(port([silent]).p, req)), 60_001)).toMatchObject(
 					{
 						kind: 'timeout',
-						message: 'the model yielded nothing within 20000 ms'
+						message: 'the model yielded nothing within 60000 ms'
 					}
 				);
 				expect(settled).toBe(true);

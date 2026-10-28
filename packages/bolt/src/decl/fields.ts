@@ -19,7 +19,6 @@ import type {
 	Json,
 	MimePattern,
 	Msg,
-	Offset,
 	PlainDate,
 	PlainTime,
 	Point,
@@ -259,10 +258,12 @@ export type Literal<K> = K extends { kind: 'decimal' | 'money' | 'sum' }
 							? V
 							: never
 						: Base<K>;
+/** A clock default's shift: one span, whole days or weeks of `today`, also minutes or hours of `now`. */
+type Shift<U extends string> = '' | ` ${'+' | '-'} ${U}(${number})`;
 type DefaultOf<K> = K extends { kind: 'date' }
-	? Literal<K> | { today: Offset }
+	? Literal<K> | { var: `today${Shift<'days' | 'weeks'>}` }
 	: K extends { kind: 'instant' }
-		? Literal<K> | { now: Offset }
+		? Literal<K> | { var: `now${Shift<'minutes' | 'hours' | 'days' | 'weeks'>}` }
 		: K extends { kind: 'enum' | 'text'; many: true }
 			? readonly Literal<K>[]
 			: // ponytail: a custom default is its value type, so a shape holding a branded value (date, decimal) needs a cast

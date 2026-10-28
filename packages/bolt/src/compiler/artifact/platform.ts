@@ -126,6 +126,17 @@ export const platformConfig = Effect.fn('bolt.platformConfig')(function* (
 			for (const id of [...ids].sort()) this.emitFile({ type: 'chunk', id });
 		}
 	};
+	// an asset URL's placeholder names a per-build random reference id: kept as a sourcemap name, the layer's maps
+	// would differ build to build
+	const stableNames: Plugin = {
+		name: 'bolt:platform-map-names',
+		enforce: 'post',
+		generateBundle(_, bundle) {
+			for (const o of Object.values(bundle))
+				if (o.type === 'asset' && o.fileName.endsWith('.map') && typeof o.source === 'string')
+					o.source = o.source.replace(/import\.meta\.ROLLDOWN_FILE_URL_[\w$]+/g, 'import.meta.url');
+		}
+	};
 	const config: InlineConfig = {
 		configFile: false,
 		logLevel: 'silent',
@@ -137,6 +148,7 @@ export const platformConfig = Effect.fn('bolt.platformConfig')(function* (
 		css: { postcss: {} },
 		plugins: [
 			entries,
+			stableNames,
 			// a scoped class hashes the component's CSS, not its absolute path, which differs per install
 			cachedSvelte(
 				{

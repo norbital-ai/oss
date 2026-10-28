@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { expect, it } from '@effect/vitest';
-import { Context, Effect, Layer, Option, Result, Schema } from 'effect';
+import { Context, Effect, Layer, Option, Schema } from 'effect';
 import type { EngineManifest } from '../src/engine/manifest.ts';
 import { RunHandlers } from '../src/engine/services.ts';
 import { TestWorkspace } from '../src/test/index.ts';
@@ -39,7 +39,7 @@ const manifest: EngineManifest = {
 		sales: {
 			description: 'Own documents',
 			grants: {
-				documents: { read: { documents: { where: { owner: { eq: { actor: 'id' } } } } } }
+				documents: { read: { documents: { where: { owner: { eq: { var: 'requestor.id' } } } } } }
 			}
 		}
 	},
@@ -102,32 +102,30 @@ it.live(
 					policies: ['sales'],
 					admin: false
 				};
-				const denied = yield* Effect.result(
-					handler.value(
-						{ mode: 'export', to: 'csv', context: { document: other } },
-						{ id: randomUUID(), starter }
-					)
-				);
-				expect(Result.isFailure(denied)).toBe(true);
-				expect(
-					yield* t.db.value(Schema.Number, {
-						text: 'SELECT count(*)::int FROM sys_file',
-						params: []
-					})
-				).toBe(0);
-				const allowed = yield* handler.value(
-					{ mode: 'export', to: 'csv', context: { document: own } },
-					{ id: randomUUID(), starter }
-				);
-				expect(allowed).toMatchObject({ file: { name: expect.stringContaining('.csv') } });
-				const [file] = yield* t.db.rows(Schema.Struct({ key: Schema.String }), {
-					text: 'SELECT key FROM sys_file',
-					params: []
-				});
-				if (file === undefined) throw new Error('Missing export');
-				const content = new TextDecoder().decode(t.fakes.files.blobs.get(file.key));
-				expect(content).toContain('Alice secret');
-				expect(content).not.toContain('Bob secret');
+				const exported = (document: string) =>
+					Effect.gen(function* () {
+						const out = yield* Schema.decodeUnknownEffect(
+							Schema.Struct({ file: Schema.Struct({ id: Schema.String, name: Schema.String }) })
+						)(
+							yield* handler.value(
+								{ mode: 'export', to: 'csv', context: { document } },
+								{ id: randomUUID(), starter }
+							)
+						);
+						expect(out.file.name).toContain('.csv');
+						const key = yield* t.db.value(Schema.String, {
+							text: 'SELECT key FROM sys_file WHERE id = $1',
+							params: [out.file.id]
+						});
+						return new TextDecoder().decode(t.fakes.files.blobs.get(key));
+					});
+				// the context names Bob's document: the body's read runs as Alice and reaches nothing
+				const denied = yield* exported(other);
+				expect(denied).toContain('missing');
+				expect(denied).not.toContain('Bob secret');
+				const allowed = yield* exported(own);
+				expect(allowed).toContain('Alice secret');
+				expect(allowed).not.toContain('Bob secret');
 			})
 		)
 );

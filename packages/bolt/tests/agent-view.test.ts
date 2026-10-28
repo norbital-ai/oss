@@ -439,6 +439,10 @@ describe('Studio outcomes outside the folded steps', () => {
 				approval: 'r1'
 			});
 			expect(refused && transcriptRow(refused, true, false)?.tool?.approval).toBeUndefined();
+			expect(refused && transcriptRow(refused, true, false)?.tool?.failed).toBe(true);
+			// a run read in detail carries the run's own `error: null`: the step did not fail
+			const [run] = yield* rowsOf([message(3, { id: 'r1', status: 'succeeded', error: null })]);
+			expect(run && transcriptRow(run, true, false)?.tool?.failed).toBe(false);
 		})
 	);
 });

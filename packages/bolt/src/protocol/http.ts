@@ -54,7 +54,7 @@ import {
 	Guest,
 	type AgentCallables
 } from '../engine/services.ts';
-import type { ReadIR } from './reads.ts';
+import type { ReadIR, RequestRoot } from './reads.ts';
 import {
 	ActBody,
 	LiveBody,
@@ -221,8 +221,7 @@ export const bindings = Effect.gen(function* () {
 			month: '2-digit',
 			day: '2-digit'
 		}).format(new Date(now)),
-		tz: m.workspace.tz,
-		params: {}
+		tz: m.workspace.tz
 	} satisfies Bindings;
 });
 const committed = (output: Json): Outcome => ({ kind: 'committed', output, records: [] });
@@ -288,13 +287,23 @@ export const requestActRate = Effect.fn('protocol.requestActRate')(function* (
 /** Public page loaders and wire reads obey the same visitor surface restrictions. */
 export const readAdmitted = (
 	authority: Authority,
-	read: { readonly kind: string; readonly model?: string | undefined } | undefined
+	read:
+		| {
+				readonly kind: string;
+				readonly model?: string | undefined;
+				readonly roots?: readonly RequestRoot[] | undefined;
+		  }
+		| undefined
 ): boolean =>
 	authority.actor.kind !== 'visitor' ||
 	(read !== undefined &&
-		(read.kind === 'read' || read.kind === 'get') &&
-		typeof read.model === 'string' &&
-		admitVisitor(authority, { read: read.model }) === null);
+		(read.kind === 'request'
+			? // a read request (a page loader's `ctx.query`): every root a current read the visitor may make
+				(read.roots ?? []).length > 0 &&
+				(read.roots ?? []).every((root) => 'read' in root && readAdmitted(authority, root.read))
+			: (read.kind === 'read' || read.kind === 'get') &&
+				typeof read.model === 'string' &&
+				admitVisitor(authority, { read: read.model }) === null));
 const readAdmissions = new WeakMap<
 	HttpServerRequest.HttpServerRequest,
 	Effect.Effect<ReturnType<RateWindows['charge']>, never, RateLimits>
@@ -325,20 +334,20 @@ export const requestReadRate = Effect.fn('protocol.requestReadRate')(function* (
 export const wireReadAdmitted = (authority: Authority, read: WireRead | undefined): boolean => {
 	if (authority.actor.kind !== 'visitor') return true;
 	if (read?.m !== 'query') return false;
-	const admits = (model: Json | undefined, args: Json | undefined): boolean =>
-		typeof model === 'string' &&
-		!model.includes('.') &&
+	const admits = (model: string | undefined, args: Json | undefined): boolean =>
+		model !== undefined &&
 		!(
 			Schema.is(JsonObject)(args) &&
 			args['search'] !== undefined &&
 			typeof args['search'] !== 'string'
 		) &&
 		readAdmitted(authority, { kind: 'read', model: model });
-	const [name, args] = read.a;
-	// a read request: each path's root granted, no index search
-	return Schema.is(JsonObject)(name)
-		? Object.entries(name).every(([path, layer]) => admits(path.split('.', 1)[0], layer))
-		: admits(name, args);
+	const [request] = read.a;
+	// a read request (the only query form): each path's root granted, no index search
+	return (
+		Schema.is(JsonObject)(request) &&
+		Object.entries(request).every(([path, layer]) => admits(path.split('.', 1)[0], layer))
+	);
 };
 const liveViewAdmitted = wireReadAdmitted;
 
@@ -987,9 +996,7 @@ export const BoltRoutes = {
 						: null;
 			if (parent === null)
 				return yield* Effect.fail(
-					invalid(
-						'a nested capability read requires its parent model, id, relation and revision'
-					)
+					invalid('a nested capability read requires its parent model, id, relation and revision')
 				);
 			const m = yield* Manifest,
 				reads = yield* Reads,
@@ -1048,18 +1055,16 @@ export const needsGuest = Effect.fn('protocol.needsGuest')(
 			route.guest === 'reads'
 				? (yield* requestBody(request, QBody)).reads
 				: ((yield* requestBody(request, LiveBody)).add?.map((view) => view.read) ?? []);
-		const queryNeedsGuest = (model: Json | undefined, args: Json | undefined): boolean =>
-			typeof model !== 'string' ||
-			model.includes('.') ||
-			(Schema.is(JsonObject)(args) && Schema.is(JsonObject)(args['search']));
 		return reads.some((read) => {
 			if (read.m !== 'query') return false;
-			const [model, args] = read.a;
-			return Schema.is(JsonObject)(model)
-				? Object.values(model).some(
-						(member) => !Schema.is(JsonObject)(member) || queryNeedsGuest(member['from'], member)
-					)
-				: queryNeedsGuest(model, args);
+			const [request] = read.a;
+			// a layer map is JSON read by the store; only a search body (an index's or semantic search) runs guest code
+			return (
+				!Schema.is(JsonObject)(request) ||
+				Object.values(request).some(
+					(layer) => !Schema.is(JsonObject)(layer) || Schema.is(JsonObject)(layer['search'])
+				)
+			);
 		});
 	},
 	Effect.catch(() => Effect.succeed(true))
@@ -1087,10 +1092,8 @@ export const boltRoutes = (request: HttpServerRequest.HttpServerRequest) =>
 function openapi(m: EngineManifest, authority: Authority, version: string): Json {
 	const may = (model: string, verb: 'read' | 'create' | 'update' | 'delete') =>
 		authority.admin ||
-		((verb === 'read'
-			? authority.models[model]?.read[model]
-			: authority.models[model]?.[verb]
-		)?.length ?? 0) > 0;
+		((verb === 'read' ? authority.models[model]?.read[model] : authority.models[model]?.[verb])
+			?.length ?? 0) > 0;
 	const exposed = Object.keys(m.exposures);
 	const callables = [
 		...exposed.flatMap((model) =>

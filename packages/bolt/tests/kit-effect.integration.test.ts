@@ -17,7 +17,12 @@ const manifest = {
 		customers: { description: 'A customer', label: 'name', fields: { name: { kind: 'text' } } }
 	},
 	relationships: {},
-	exposures: { customers: { read: { customers: { fields: 'all' } }, create: { columns: { customers: ['name'] } } } },
+	exposures: {
+		customers: {
+			read: { customers: { fields: 'all' } },
+			create: { columns: { customers: ['name'] } }
+		}
+	},
 	policies: { reader: { description: 'Reads customers', grants: { customers: { read: true } } } },
 	automations: {},
 	integrations: {},
@@ -91,9 +96,9 @@ it.live(
 				delete: { check: true }
 			});
 			expect(callbacks.exposures.customers).toEqual({
-				read: { fields: 'all' },
-				create: { columns: { None: ['name'] } },
-				update: { columns: { None: ['name'] } },
+				read: { customers: { fields: 'all' } },
+				create: { columns: { customers: ['name'] } },
+				update: { columns: { customers: ['name'] } },
 				delete: {}
 			});
 		}).pipe(Effect.scoped)
@@ -116,84 +121,84 @@ it.live('fixture callbacks require explicit existing write verbs', () =>
 	}).pipe(Effect.scoped)
 );
 
-it.live(
-	'read requests revive native values and typed queued automation outputs persist',
-	() =>
-		Effect.gen(function* () {
-			const id = '0199a000-0000-4000-8000-000000000001';
-			const row = { kind: 'row', of: 'customers' } as const;
-			const outputs = {
-				...manifest,
-				models: {
-					customers: {
-						...manifest.models.customers,
-						fields: {
-							name: { kind: 'text' },
-							balance: { kind: 'decimal', scale: 2 },
-							document: {
-								kind: 'json',
-								shape: { kind: 'object', fields: { note: { kind: 'text' } } }
-							}
+it.live('read requests revive native values and typed queued automation outputs persist', () =>
+	Effect.gen(function* () {
+		const id = '0199a000-0000-4000-8000-000000000001';
+		const row = { kind: 'row', of: 'customers' } as const;
+		const outputs = {
+			...manifest,
+			models: {
+				customers: {
+					...manifest.models.customers,
+					fields: {
+						name: { kind: 'text' },
+						balance: { kind: 'decimal', scale: 2 },
+						document: {
+							kind: 'json',
+							shape: { kind: 'object', fields: { note: { kind: 'text' } } }
 						}
 					}
-				},
-				automations: {
-					return_row: { description: 'One recorded row', input: {}, output: row, runAs: 'trigger' }
 				}
-			} satisfies EngineManifest;
-			const guest = yield* program(`export default { automation: { return_row: { body: function* (_, ctx) { return (yield* ctx.query({ customers: { where: { id: { eq: '${id}' } } } })).customers.rows[0]; } } } };`);
-			const context = yield* Layer.build(
-				TestWorkspace.layer({
-					manifest: outputs,
-					guest,
-					seed: {
-						customers: [{ id, name: 'Acme', balance: '12.34', document: { note: 'Kept' } }]
-					}
-				})
-			);
-			const t = Context.get(context, TestWorkspace);
-			const nativeRow = Schema.Struct({
-				id: Schema.toType(inputSchema({ kind: 'id', of: 'customers' })),
-				balance: Schema.toType(inputSchema({ kind: 'decimal', scale: 2 })),
-				document: Schema.Struct({ note: Schema.String })
-			});
-			const caller = t.as(t.admin);
-			const page = Schema.Struct({ rows: Schema.Array(nativeRow), next: Schema.Null });
-			const request = { customers: { limit: 1 } } as const;
-			expect(Schema.is(page)((yield* caller.query(request)).customers)).toBe(true);
-			expect(Schema.is(page)((yield* t.storedQuery(request)).customers)).toBe(true);
-			const result = (yield* actReply(yield* routeFixture(context), caller.authority, {
-				callable: 'start',
-				input: { automation: 'return_row', id: uuidv7(Date.parse(t.clock.now())), input: {} },
-				issuedAt: t.clock.now()
-			})).outcome;
-			if (result.kind !== 'committed') throw new Error(JSON.stringify(result));
-			const run = yield* Schema.decodeUnknownEffect(Schema.Struct({ id: Schema.String }))(
-				result.output
-			);
-			expect(
-				yield* t.db.value(Schema.String, {
-					text: 'select state from sys_run where id=$1',
-					params: [run.id]
-				})
-			).toBe('queued');
-			yield* t.runDue();
-			expect(
-				yield* t.db.rows(Schema.Struct({ state: Schema.String, output: Schema.Json }), {
-					text: 'select state,output from sys_run where id=$1',
-					params: [run.id]
-				})
-			).toEqual([
-				{
-					state: 'succeeded',
-					output: expect.objectContaining({
-						id,
-						balance: { $dec: '12.34' },
-						document: { note: 'Kept' }
-					})
+			},
+			automations: {
+				return_row: { description: 'One recorded row', input: {}, output: row, runAs: 'trigger' }
+			}
+		} satisfies EngineManifest;
+		const guest = yield* program(
+			`export default { automation: { return_row: { body: function* (_, ctx) { return (yield* ctx.query({ customers: { where: { id: { eq: '${id}' } } } })).customers.rows[0]; } } } };`
+		);
+		const context = yield* Layer.build(
+			TestWorkspace.layer({
+				manifest: outputs,
+				guest,
+				seed: {
+					customers: [{ id, name: 'Acme', balance: '12.34', document: { note: 'Kept' } }]
 				}
-			]);
-		}).pipe(Effect.scoped)
+			})
+		);
+		const t = Context.get(context, TestWorkspace);
+		const nativeRow = Schema.Struct({
+			id: Schema.toType(inputSchema({ kind: 'id', of: 'customers' })),
+			balance: Schema.toType(inputSchema({ kind: 'decimal', scale: 2 })),
+			document: Schema.Struct({ note: Schema.String })
+		});
+		const caller = t.as(t.admin);
+		const page = Schema.Struct({ rows: Schema.Array(nativeRow), next: Schema.Null });
+		const request = { customers: { limit: 1 } } as const;
+		expect(Schema.is(page)((yield* caller.query(request)).customers)).toBe(true);
+		expect(Schema.is(page)((yield* t.storedQuery(request)).customers)).toBe(true);
+		const result = (yield* actReply(yield* routeFixture(context), caller.authority, {
+			callable: 'start',
+			input: { automation: 'return_row', id: uuidv7(Date.parse(t.clock.now())), input: {} },
+			issuedAt: t.clock.now()
+		})).outcome;
+		if (result.kind !== 'committed') throw new Error(JSON.stringify(result));
+		const run = yield* Schema.decodeUnknownEffect(Schema.Struct({ id: Schema.String }))(
+			result.output
+		);
+		expect(
+			yield* t.db.value(Schema.String, {
+				text: 'select state from sys_run where id=$1',
+				params: [run.id]
+			})
+		).toBe('queued');
+		yield* t.runDue();
+		expect(
+			yield* t.db.rows(Schema.Struct({ state: Schema.String, output: Schema.Json }), {
+				text: 'select state,output from sys_run where id=$1',
+				params: [run.id]
+			})
+		).toEqual([
+			{
+				state: 'succeeded',
+				output: expect.objectContaining({
+					id,
+					balance: { $dec: '12.34' },
+					document: { note: 'Kept' }
+				})
+			}
+		]);
+	}).pipe(Effect.scoped)
 );
 
 it.live(
@@ -252,9 +257,9 @@ it.live(
 				{ instance: 'calendar', sync: 'customers.remote', partition: 'secondary' }
 			]);
 			expect(yield* t.syncs.deliver()).toEqual({ delivered: 0 });
-			expect((yield* t.as(t.admin).act('customers.create', [{ name: 'Local customer' }])).kind).toBe(
-				'committed'
-			);
+			expect(
+				(yield* t.as(t.admin).act('customers.create', [{ name: 'Local customer' }])).kind
+			).toBe('committed');
 			expect(yield* t.syncs.deliver()).toEqual({ delivered: 1 });
 			expect(yield* t.syncs.deliver()).toEqual({ delivered: 0 });
 			expect(yield* Effect.flip(t.syncs.read('customers.sync.missing'))).toBeInstanceOf(KitInvalid);
@@ -307,17 +312,16 @@ it.live('computed NULL values decode without widening required computed strings'
 				email_default: 'unknown',
 				email_chain: null
 			});
-			expect(
-				(yield* t.as(t.member(['reader'])).query(selected)).customers.rows[0]
-			).toMatchObject({
+			expect((yield* t.as(t.member(['reader'])).query(selected)).customers.rows[0]).toMatchObject({
 				email_lower: null,
 				name_upper: 'ACME',
 				email_default: 'unknown',
 				email_chain: null
 			});
-			expect(
-				(yield* t.as(t.admin).query({ sys_user: {} })).sys_user.rows[0]
-			).toMatchObject({ party_id: null, phone_key: null });
+			expect((yield* t.as(t.admin).query({ sys_user: {} })).sys_user.rows[0]).toMatchObject({
+				party_id: null,
+				phone_key: null
+			});
 		})
 	)
 );

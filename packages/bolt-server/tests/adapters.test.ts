@@ -472,7 +472,7 @@ describe('the OpenAI-compatible model port (P19)', () => {
 			expect(url).toBe('https://openrouter.ai/api/v1/chat/completions');
 			expect(sent).toMatchObject({
 				model: deepSeekModel,
-				provider: { sort: 'price', require_parameters: true },
+				provider: { sort: 'price', require_parameters: true, ignore: ['open-inference'] },
 				tools: [{ type: 'function', function: { name: 'read' } }],
 				response_format: { type: 'json_schema' }
 			});

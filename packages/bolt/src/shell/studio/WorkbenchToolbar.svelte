@@ -22,6 +22,8 @@
 		onpreview,
 		onopen,
 		onmerge,
+		onschedule,
+		onunschedule,
 		onreview,
 		oninstall,
 		t
@@ -38,6 +40,9 @@
 		onpreview: () => void;
 		onopen: () => void;
 		onmerge: () => void;
+		/** A merge at a later instant: the tenant's downtime is its cutover, at that time. */
+		onschedule: () => void;
+		onunschedule: () => void;
 		onreview: () => void;
 		oninstall: () => void;
 		t: (key: string) => string;
@@ -46,6 +51,11 @@
 	const change = $derived(view.changeSets?.find((c) => c.id === view.change));
 	const behind = $derived(view.behind ?? 0);
 	const merging = $derived(change?.merge?.state === 'running');
+	const scheduled = $derived(
+		change?.merge?.state === 'scheduled' && change.merge.runAt !== undefined
+			? new Date(change.merge.runAt).toLocaleString()
+			: null
+	);
 	const phaseTitle = (p: StudioPhase) =>
 		t(
 			p === 'diagnose'
@@ -83,6 +93,12 @@
 					detail: error,
 					icon: 'lucide:circle-alert',
 					variant: 'destructive'
+				};
+			if (scheduled !== null)
+				return {
+					label: `${t('Merges at')} ${scheduled}`,
+					icon: 'lucide:clock',
+					variant: 'outline'
 				};
 			if (change?.merge?.state === 'failed')
 				return {
@@ -212,6 +228,20 @@
 					>
 						<Icon name="lucide:package-plus" class="size-3.5" />{t('Install package')}
 					</Button>
+					{#if admin}
+						<Button
+							size="sm"
+							variant="ghost"
+							class="justify-start"
+							disabled={busy || merging || (scheduled === null && view.changes.length === 0)}
+							onclick={pick(scheduled === null ? onschedule : onunschedule)}
+						>
+							<Icon
+								name={scheduled === null ? 'lucide:calendar-clock' : 'lucide:calendar-x'}
+								class="size-3.5"
+							/>{t(scheduled === null ? 'Schedule merge…' : 'Unschedule merge')}
+						</Button>
+					{/if}
 				{/if}
 				<p class="border-t border-border/60 px-2 pt-1.5 pb-1 text-micro text-muted-foreground">
 					{#if view.branch !== undefined}<code class="block truncate font-mono">{view.branch}</code

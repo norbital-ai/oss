@@ -3,6 +3,8 @@
 The kit's select: a field-like trigger and a searchable option list in a popover, filtered locally or through `onSearch`.
 -->
 <script lang="ts" module>
+	import type { Snippet } from 'svelte';
+
 	/** One choice: `label` is shown and searched (with `keywords`); `group` heads a section. */
 	export type ComboboxOption<V extends string = string> = {
 		value: V;
@@ -40,6 +42,8 @@ The kit's select: a field-like trigger and a searchable option list in a popover
 		invalid?: boolean;
 		class?: string;
 		'aria-label'?: string;
+		/** Rendered between the search box and the list (tabs that scope `options`, with `onSearch`). */
+		header?: Snippet;
 	};
 	/** A searchable choice field; `multiple: true` toggles an array of choices while keeping the list open. */
 	export type ComboboxProps<
@@ -88,7 +92,8 @@ The kit's select: a field-like trigger and a searchable option list in a popover
 		disabled: ownDisabled,
 		invalid = false,
 		class: className,
-		'aria-label': ariaLabel
+		'aria-label': ariaLabel,
+		header
 	} = $derived(props);
 	// svelte-ignore state_referenced_locally -- the id is fixed at mount
 	const id = ownId ?? claimFieldControl();
@@ -269,6 +274,7 @@ The kit's select: a field-like trigger and a searchable option list in a popover
 					}}
 				/>
 			{/if}
+			{@render header?.()}
 			<ul
 				bind:this={list}
 				class="max-h-64 overflow-auto outline-none"

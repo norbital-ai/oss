@@ -39,7 +39,21 @@ const present = <A>(value: A | null | undefined): A => {
 
 const NOW = '2026-09-25T10:00:00.000Z';
 const manifest = { ...base, teams: { finance: { name: 'Finance', policies: [] } } };
-const bindings = () => ({ now: NOW, today: NOW.slice(0, 10), tz: 'UTC', params: {} });
+const rep = present(base.policies['rep']);
+const repOrders = present(rep.grants['orders']);
+/** Orders without a write `check`: no grant routes them to approval, so a committed image carries every field a read
+ * would (`$approval` is read, never in an image) and a hit patches from it. */
+const imaged: EngineManifest = {
+	...manifest,
+	policies: {
+		...manifest.policies,
+		rep: {
+			...rep,
+			grants: { ...rep.grants, orders: { ...repOrders, create: true, update: true, delete: true } }
+		}
+	}
+};
+const bindings = () => ({ now: NOW, today: NOW.slice(0, 10), tz: 'UTC' });
 const Row = Schema.Record(Schema.String, Schema.Json);
 const Rows = Schema.Struct({ rows: Schema.Array(Row) });
 const BrowserPage = Schema.Struct({
@@ -197,7 +211,11 @@ const cell = (
 			yield* live.settled;
 			for (const flush of flushes) yield* flush();
 		});
-		const write = (authority: Authority, verb: 'create' | 'update' | 'delete', input: Json) =>
+		const write = (
+			authority: Authority,
+			verb: 'create' | 'update' | 'delete',
+			input: readonly Json[]
+		) =>
 			Effect.gen(function* () {
 				const result = yield* writes.act({
 					model: 'orders',
@@ -255,7 +273,9 @@ describe('live + protocol + $bolt on PGlite', () => {
 				const { bolt, orders } = yield* cell();
 				const view = yield* orders();
 				expect(
-					kind(yield* bolt.act('orders.create', [{ title: 'desk', region: 'north', customer: ACME }]))
+					kind(
+						yield* bolt.act('orders.create', [{ title: 'desk', region: 'north', customer: ACME }])
+					)
 				).toBe('committed');
 				expect(view.rows().map((r) => r['title'])).toEqual(['desk']);
 				expect(present(view.rows()[0])['id']).not.toMatch(/^pending:/);
@@ -378,7 +398,10 @@ describe('live deltas on PGlite (rule 65)', () => {
 	it.live('a commit that hits a simple view is patched with 0 view reads', () =>
 		Effect.scoped(
 			Effect.gen(function* () {
-				const { rep, live, queries, count, watcher, register, settled, other } = yield* cell();
+				const { rep, live, queries, count, watcher, register, settled, other } = yield* cell(
+					undefined,
+					imaged
+				);
 				const w = yield* watcher(rep);
 				yield* register(w, 'simple', {
 					read: lowerRead(manifest, 'read', [
@@ -527,7 +550,10 @@ describe('live deltas on PGlite (rule 65)', () => {
 		() =>
 			Effect.scoped(
 				Effect.gen(function* () {
-					const { rep, live, queries, count, watcher, register, settled, other } = yield* cell();
+					const { rep, live, queries, count, watcher, register, settled, other } = yield* cell(
+						undefined,
+						imaged
+					);
 					const w = yield* watcher(rep);
 					const totals = lowerRead(manifest, 'read', [
 						'orders',
@@ -539,15 +565,17 @@ describe('live deltas on PGlite (rule 65)', () => {
 						model: 'orders',
 						verb: 'create',
 						mode: { _tag: 'Direct' },
-						input: [{
-							title: 'desk',
-							region: 'north',
-							customer: ACME,
-							lines: [
-								{ label: 'a', amount: '1.20' },
-								{ label: 'b', amount: '2.00' }
-							]
-						}],
+						input: [
+							{
+								title: 'desk',
+								region: 'north',
+								customer: ACME,
+								lines: [
+									{ label: 'a', amount: '1.20' },
+									{ label: 'b', amount: '2.00' }
+								]
+							}
+						],
 						key: randomUUID(),
 						issuedAt: NOW,
 						authority: rep,
@@ -599,7 +627,12 @@ describe('live deltas on PGlite (rule 65)', () => {
 							invocationId: randomUUID()
 						});
 					const made = yield* write('orders', 'create', [
-						{ title: 'desk', region: 'north', customer: ACME, lines: [{ label: 'a', amount: '1.00' }] }
+						{
+							title: 'desk',
+							region: 'north',
+							customer: ACME,
+							lines: [{ label: 'a', amount: '1.00' }]
+						}
 					]);
 					live.publish(made.captured);
 					yield* settled;
@@ -648,7 +681,7 @@ describe('live deltas on PGlite (rule 65)', () => {
 				byTitle: ['orders', { select: { title: true }, orderBy: { title: 'asc' }, limit: 10 }]
 			};
 			const irs: { [view: string]: ReadIR } = Object.fromEntries(
-				Object.entries(shapes).map(([k, a]) => [k, lowerRead(manifest, 'query', a)])
+				Object.entries(shapes).map(([k, a]) => [k, lowerRead(manifest, 'read', a)])
 			);
 			for (const [view, read] of Object.entries(irs)) yield* register(w, view, { read });
 			const check = () =>
@@ -663,12 +696,14 @@ describe('live deltas on PGlite (rule 65)', () => {
 				(yield* write(both, 'create', [{ title: 'desk', region: 'north', customer: ACME }]))[0]
 			);
 			const c = present(
-				(yield* write(both, 'create', [{
-					title: 'chair',
-					region: 'north',
-					note: 'mine',
-					customer: ACME
-				}]))[0]
+				(yield* write(both, 'create', [
+					{
+						title: 'chair',
+						region: 'north',
+						note: 'mine',
+						customer: ACME
+					}
+				]))[0]
 			);
 			yield* write(both, 'create', [{ title: 'lamp', region: 'north', customer: ACME }]);
 			yield* check();
@@ -708,7 +743,7 @@ describe('live deltas on PGlite (rule 65)', () => {
 				yield* writes.act({
 					model: 'orders',
 					verb,
-					input,
+					input: [input],
 					mode: { _tag: 'Direct' },
 					key: randomUUID(),
 					issuedAt: NOW,
@@ -725,7 +760,7 @@ describe('live deltas on PGlite (rule 65)', () => {
 	it.live('every view shape stays equal to a fresh read (PGlite)', () =>
 		Effect.scoped(
 			Effect.gen(function* () {
-				yield* shapes(yield* cell());
+				yield* shapes(yield* cell(undefined, imaged));
 			})
 		)
 	);

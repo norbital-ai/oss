@@ -961,8 +961,7 @@ const makeShell = Effect.gen(function* () {
 			{
 				now: at.toISOString(),
 				today: localOf(at.getTime(), m.workspace.tz).date,
-				tz: m.workspace.tz,
-				params: {}
+				tz: m.workspace.tz
 			}
 		);
 		if (allowed !== true)

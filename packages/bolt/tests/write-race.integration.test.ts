@@ -40,8 +40,7 @@ const race = Effect.fnUntraced(function* (db: TenantDbShape) {
 						_tag: 'read',
 						read: yield* aggregate(catalogOf(manifest), 'orders', { count: true }).pipe(
 							Effect.mapError(fromStore)
-						),
-						params: {}
+						)
 					}
 				]);
 				if (a?.ok !== true)
@@ -70,7 +69,7 @@ const race = Effect.fnUntraced(function* (db: TenantDbShape) {
 			key: title,
 			issuedAt: NOW,
 			authority: admin,
-			bindings: { now: NOW, today: TODAY, tz: 'UTC', params: {} },
+			bindings: { now: NOW, today: TODAY, tz: 'UTC' },
 			invocationId: `inv-${title}`
 		});
 	yield* run('first');
@@ -130,7 +129,7 @@ describe('engine/write: callback-read-race (rule 26)', () => {
 					key: 'bounded',
 					issuedAt: NOW,
 					authority: admin,
-					bindings: { now: NOW, today: TODAY, tz: 'UTC', params: {} },
+					bindings: { now: NOW, today: TODAY, tz: 'UTC' },
 					invocationId: 'inv-bounded'
 				}
 			);

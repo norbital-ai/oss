@@ -39,7 +39,8 @@ import {
 } from '../decisions/index.ts';
 import { catalogOf } from '../access/pred.ts';
 import { midnight, startOfDate } from '../query/eval.ts';
-import { exposedField, type Catalog, type FieldInfo } from '@norbital-ai/store';
+import { materialize } from '../runs/time.ts';
+import { exposedField, type Catalog, type ExposureInfo, type FieldInfo } from '@norbital-ai/store';
 import * as ir from '../../protocol/reads.ts';
 import { order, where as decodeWhere } from '@norbital-ai/store';
 /** The stated conditions a description may produce. */
@@ -108,7 +109,7 @@ type FilterStep =
 			fn: FilterAgg;
 			of: string;
 	  };
-/** A value offered for an operator: a literal, a list, a span (`[lo, hi)`) or an actor reference. */
+/** A value offered for an operator: a literal, a list, a span (`[lo, hi)`) or a requestor variable. */
 type FilterArg =
 	| {
 			lit: Json;
@@ -120,7 +121,7 @@ type FilterArg =
 			range: readonly [Json, Json];
 	  }
 	| {
-			actor: 'id' | 'party' | 'teams';
+			var: 'requestor.id' | 'requestor.email' | 'requestor.party' | 'requestor.teams';
 	  }
 	/** A one-relation's records whose text field holds a phrase (the description's words a found record holds). */
 	| {
@@ -297,8 +298,8 @@ const STOP = new Set([
 ]);
 const human = (s: string) => s.replaceAll('_', ' ').replace(/^./, (c) => c.toUpperCase());
 /**
- * Rule 16a's spans as literal bounds from `today`: day bounds on `date` fields, calendar bounds (Monday weeks) on both; an
- * instant's bound is that day's midnight in the workspace zone. A read takes values, never a clock operand.
+ * Rule 16a's spans from `today`: day bounds on `date` fields as `{ var: 'today' }` variables, calendar bounds
+ * (Monday weeks) on both; an instant's bound is that day's midnight in the workspace zone. A read takes values, never a time variable.
  */
 function spans(kind: 'date' | 'instant', today: string, tz: string): FilterValue[] {
 	const end = (date: string): Json => (kind === 'date' ? date : midnight(date, tz));
@@ -306,8 +307,10 @@ function spans(kind: 'date' | 'instant', today: string, tz: string): FilterValue
 	const at = (unit: string, shift: number) => startOfDate({ unit, shift }, today);
 	const out: FilterValue[] = [];
 	if (kind === 'date') {
-		const off = (n: number) =>
-			new Date(Date.parse(`${today}T00:00:00Z`) + n * 86_400_000).toISOString().slice(0, 10);
+		// day spans stay time variables (`{ var: 'today - days(7)' }`): a kept filter rolls with the day; every
+		// decode here materializes them, and so does the page before it reads
+		const off = (n: number): Json =>
+			n === 0 ? { var: 'today' } : { var: `today ${n > 0 ? '+' : '-'} days(${Math.abs(n)})` };
 		for (const [label, [a, b]] of [
 			['today', [0, 1]],
 			['yesterday', [-1, 0]],
@@ -315,7 +318,7 @@ function spans(kind: 'date' | 'instant', today: string, tz: string): FilterValue
 			['next 7 days', [0, 8]],
 			['last 30 days', [-30, 1]]
 		] as const)
-			out.push({ label, arg: range(off(a), off(b)) });
+			out.push({ label, arg: { range: [off(a), off(b)] } });
 	}
 	for (const unit of ['week', 'month', 'quarter', 'year']) {
 		out.push({ label: `this ${unit}`, arg: range(at(unit, 0), at(unit, 1)) });
@@ -604,7 +607,7 @@ export const OPS_BY_KIND: Readonly<Record<string, readonly Op[]>> = {
 	ref: []
 };
 function options(
-	f: Pick<FieldInfo, 'kind' | 'many' | 'periodOf' | 'team'>,
+	f: Pick<FieldInfo, 'kind' | 'many' | 'periodOf' | 'team' | 'email'>,
 	s: FieldKind | undefined,
 	optional: boolean,
 	lit: ReturnType<typeof literals>,
@@ -662,7 +665,8 @@ function options(
 		add('no', { lit: false });
 	} else if (k === 'text') {
 		for (const x of [...lit.strings, ...ws]) add(x, echoed(x));
-		if (f.team) add('my team', { actor: 'teams' });
+		if (f.team) add('my team', { var: 'requestor.teams' });
+		if (f.email) add('my email', { var: 'requestor.email' });
 	} else if (NUMERIC.has(k)) {
 		for (const x of lit.numbers) add(String(x), echoed(x));
 	} else if (k === 'date' || k === 'instant' || k === 'time') {
@@ -686,7 +690,7 @@ function options(
 			}
 	} else if (k === 'period' && f.periodOf === 'date') {
 		// a date period (an employment's effective_range): in force on a day, or overlapping / inside a span
-		add('today', { lit: today });
+		add('today', { lit: { var: 'today' } });
 		for (const v of spans('date', today, tz)) add(v.label, v.arg);
 		for (const d of lit.dates) add(d, echoed(d));
 	} else if (k === 'json') {
@@ -739,9 +743,12 @@ export const ARGUMENT_OPERATORS = {
 		};
 		return operators[op];
 	},
-	actor: (op: string, actor: 'id' | 'party' | 'teams'): Json | undefined =>
-		op === 'eq' || op === 'ne' || ((op === 'in' || op === 'nin') && actor === 'teams')
-			? { [op]: { actor } }
+	var: (
+		op: string,
+		name: 'requestor.id' | 'requestor.email' | 'requestor.party' | 'requestor.teams'
+	): Json | undefined =>
+		op === 'eq' || op === 'ne' || ((op === 'in' || op === 'nin') && name === 'requestor.teams')
+			? { [op]: { var: name } }
 			: undefined,
 	match: (op: string, value: { field: string; phrase: string }): Json | undefined =>
 		op === 'eq' ? { is: { [value.field]: { like: loose(value.phrase) } } } : undefined,
@@ -755,7 +762,7 @@ function operator(op: string, arg: FilterArg | undefined): Json | undefined {
 	if ('lit' in arg) return ARGUMENT_OPERATORS.lit(op, arg.lit);
 	if ('list' in arg) return ARGUMENT_OPERATORS.list(op, arg.list);
 	if ('range' in arg) return ARGUMENT_OPERATORS.range(op, arg.range);
-	if ('actor' in arg) return ARGUMENT_OPERATORS.actor(op, arg.actor);
+	if ('var' in arg) return ARGUMENT_OPERATORS.var(op, arg.var);
 	if ('match' in arg) return ARGUMENT_OPERATORS.match(op, arg.match);
 	return ARGUMENT_OPERATORS.near(op, arg.near);
 }
@@ -827,14 +834,23 @@ const SUMMABLE = ['int', 'decimal', 'money', 'sum', 'count', 'number', 'duration
 const QUOTED = new Set(['text', 'search', 'semantic']);
 const same = (a: readonly FilterStep[], b: readonly FilterStep[]) =>
 	Equal.equals(encodeWire(a), encodeWire(b));
+/** The level a hop from `x` through `rel` into `target` reads: its declared layer, or the target's root where `x` declares every relation (a plain schema). */
+const levelOf = (cat: Catalog, x: ExposureInfo, rel: string, target: string) => {
+	const layer = cat.layers.get(`${x.path}.${rel}`);
+	if (layer?.name === target) return layer;
+	return x.relations === 'all' ? cat.exposures.get(target) : undefined;
+};
 export function makeFilterDescribe(cfg: FilterDescribeConfig) {
 	const m = cfg.manifest,
 		cat = catalogOf(m);
 	/** Whether the caller reads model `c` and its field `f` unmasked (rule 14): the narrowing of every option. */
-	const reads = (a: Authority, c: string) =>
-		a.admin || (a.models[c]?.read[c]?.length ?? 0) > 0;
+	const reads = (a: Authority, c: string) => a.admin || (a.models[c]?.read[c]?.length ?? 0) > 0;
 	const unmasked = (a: Authority, c: string, f: string) =>
 		a.admin || a.models[c]?.masks[c]?.[f] === undefined;
+	/** The root whose arms and masks read level `x`: a layer is read under its root's policies, never its own model's. */
+	const owner = (x: ExposureInfo) => x.path.split('.')[0]!;
+	const unmaskedAt = (a: Authority, x: ExposureInfo, f: string) =>
+		a.admin || a.models[owner(x)]?.masks[x.path]?.[f] === undefined;
 	const spec = (c: string, f: string) => m.models[c]?.fields[f];
 	const nameOf = (c: string, f: string) => spec(c, f)?.label ?? human(f);
 	/** A model's searched text fields: where a phrase the person typed can be found. */
@@ -859,15 +875,15 @@ export function makeFilterDescribe(cfg: FilterDescribeConfig) {
 		/** `target`'s fields under `steps`; `sortFrom` is the dot path they sort by (none past one hop); `hops` remain.
 		 * `back` is the relation walked in by, never walked out again ("Assignee › Assigned jobs" is the jobs themselves). */
 		const walk = (
-			target: string,
+			tc: ExposureInfo,
 			steps: readonly FilterStep[],
 			prefix: string,
 			sortFrom: string | undefined,
 			hops: number,
 			back?: string
 		) => {
-			const tc = cat.exposures.get(target);
-			if (tc === undefined || !reads(a, target)) return;
+			const target = tc.name;
+			if (!reads(a, owner(tc))) return;
 			for (const f of tc.model.fields.values()) {
 				const s = spec(target, f.name);
 				const system = steps.length === 0 && (f.name === 'created_at' || f.name === 'updated_at');
@@ -876,7 +892,7 @@ export function makeFilterDescribe(cfg: FilterDescribeConfig) {
 					(!system && s === undefined && !tc.model.one.has(f.name)) ||
 					s?.hidden ||
 					!exposedField(tc, f.name) ||
-					!unmasked(a, target, f.name)
+					!unmaskedAt(a, tc, f.name)
 				)
 					continue;
 				const rel = tc.model.one.get(f.name);
@@ -906,7 +922,7 @@ export function makeFilterDescribe(cfg: FilterDescribeConfig) {
 					});
 					continue;
 				}
-				// a filter may hop any relation into a model the caller reads (the walk below checks it)
+				// a filter hops only a declared read layer (the walk below checks it)
 				if (hops === 0 || back === `${target}.${f.name}`) continue;
 				// the record itself by its key, then its fields one hop on (one arm per target of an exclusive arc)
 				for (const arm of rel.targets.length > 1 ? rel.targets : [undefined]) {
@@ -932,24 +948,26 @@ export function makeFilterDescribe(cfg: FilterDescribeConfig) {
 								: [])
 						],
 						values: [
-							...(at === 'sys_user' ? [{ label: 'me', arg: { actor: 'id' } }] : []),
+							...(at === 'sys_user' ? [{ label: 'me', arg: { var: 'requestor.id' } }] : []),
 							...(a.actor.kind === 'member' && a.actor.party?.model === at
-								? [{ label: 'my party', arg: { actor: 'party' } }]
+								? [{ label: 'my party', arg: { var: 'requestor.party' } }]
 								: [])
 						] as FilterValue[]
 					};
 					out.push(field);
-					walk(
-						at,
-						[
-							...steps,
-							arm === undefined ? { k: 'is', rel: f.name } : { k: 'arm', rel: f.name, arm }
-						],
-						`${field.label} › `,
-						arm === undefined && steps.length === 0 ? f.name : undefined,
-						hops - 1,
-						`${target}.${f.name}`
-					);
+					const layer = levelOf(cat, tc, f.name, at);
+					if (layer !== undefined)
+						walk(
+							layer,
+							[
+								...steps,
+								arm === undefined ? { k: 'is', rel: f.name } : { k: 'arm', rel: f.name, arm }
+							],
+							`${field.label} › `,
+							arm === undefined && steps.length === 0 ? f.name : undefined,
+							hops - 1,
+							`${target}.${f.name}`
+						);
 				}
 			}
 			// many-relations, at the root and one relation hop on ("Customer › Invoices (any) › Status"): has any / none (and, at
@@ -957,10 +975,9 @@ export function makeFilterDescribe(cfg: FilterDescribeConfig) {
 			// the catalogue the builder receives grows with every hop (hr-payroll: 0.4 MB → 3 MB a model at full depth).
 			if (hops > 0 && steps.every((x) => x.k === 'is'))
 				for (const [r, rel] of tc.model.many) {
-					const child = cat.exposures.get(rel.child);
+					const child = levelOf(cat, tc, r, rel.child);
 					if (
 						child === undefined ||
-						!reads(a, rel.child) ||
 						rel.column.includes('__') ||
 						back === `${rel.child}.${rel.column}`
 					)
@@ -976,7 +993,7 @@ export function makeFilterDescribe(cfg: FilterDescribeConfig) {
 								['some', 'any'],
 								['none', 'none']
 							] as const))
-						walk(rel.child, [...steps, { k: q, rel: r }], `${rl} (${word}) › `, undefined, 0);
+						walk(child, [...steps, { k: q, rel: r }], `${rl} (${word}) › `, undefined, 0);
 					// how many: 0 and 1 always ("with no invoices", "with an unpaid one"), then the text's own numbers
 					out.push({
 						label: `${prefix}Number of ${human(r).toLowerCase()}`,
@@ -996,7 +1013,7 @@ export function makeFilterDescribe(cfg: FilterDescribeConfig) {
 							s.hidden ||
 							f.many ||
 							!exposedField(child, f.name) ||
-							!unmasked(a, rel.child, f.name)
+							!unmaskedAt(a, child, f.name)
 						)
 							continue;
 						for (const [word, fn] of AGGS)
@@ -1015,7 +1032,7 @@ export function makeFilterDescribe(cfg: FilterDescribeConfig) {
 				}
 			// the search index and the embedding, to a caller who reads every field they cover unmasked (rule 14)
 			const whole = (fs: readonly string[]) =>
-				fs.every((x) => exposedField(tc, x) && unmasked(a, target, x));
+				fs.every((x) => exposedField(tc, x) && unmaskedAt(a, tc, x));
 			const about = () =>
 				topics(text, [
 					target,
@@ -1040,7 +1057,8 @@ export function makeFilterDescribe(cfg: FilterDescribeConfig) {
 					values: about()
 				});
 		};
-		walk(model, [], '', '', FILTER_MAX_HOPS);
+		const root = cat.exposures.get(model);
+		if (root !== undefined) walk(root, [], '', '', FILTER_MAX_HOPS);
 		return out;
 	}
 	/** Adds a value a read found; it replaces the description's own word of the same label (found beats echoed). */
@@ -1076,9 +1094,17 @@ export function makeFilterDescribe(cfg: FilterDescribeConfig) {
 			const s = f.path[0];
 			if (f.kind !== 'record' || f.path.length !== 1 || s?.k !== 'field') continue;
 			const target = c.model.one.get(s.name)!.targets[0]!,
-				x = cat.exposures.get(target)!;
+				x = cat.exposures.get(target)!,
+				layer = levelOf(cat, c, s.name, target);
 			const tl = [m.models[target]?.label ?? 'name'].flat()[0]!;
-			if (x.model.fields.get(tl)?.kind !== 'text' || !reads(a, target) || !unmasked(a, target, tl))
+			// the phrase is matched through the layer: read the target, then filter across the layer's unmasked label
+			if (
+				layer === undefined ||
+				x.model.fields.get(tl)?.kind !== 'text' ||
+				!reads(a, target) ||
+				!unmasked(a, target, tl) ||
+				!unmaskedAt(a, layer, tl)
+			)
 				continue;
 			const own = points.filter(
 				(p) =>
@@ -1355,7 +1381,7 @@ export function makeFilterDescribe(cfg: FilterDescribeConfig) {
 	 * 3. A field's whole conditions: every (operator, value) its kind admits, each built and decoded as a read literal
 	 * (`model`; `$local` has no catalogue, its kinds are its own three). A pair that does not decode is not offered.
 	 */
-	function condsOf(f: Field, model: string | undefined, text: string): Cond[] {
+	function condsOf(f: Field, model: string | undefined, text: string, b: Bindings): Cond[] {
 		const out: Cond[] = [];
 		const lits = f.values.filter((v) => 'lit' in v.arg);
 		// a list operator's candidates: what the description names (its words, a declared value it says) or a read found
@@ -1382,7 +1408,9 @@ export function makeFilterDescribe(cfg: FilterDescribeConfig) {
 			if (where === undefined || out.some((x) => x.label === label)) return;
 			if (
 				model !== undefined &&
-				Result.isFailure(Result.try(() => storeSync(decodeWhere(cat, model, where))))
+				Result.isFailure(
+					Result.try(() => storeSync(decodeWhere(cat, model, materialize(where, b))))
+				)
 			)
 				return;
 			out.push({
@@ -1403,7 +1431,7 @@ export function makeFilterDescribe(cfg: FilterDescribeConfig) {
 			if (LIST_OPS.has(x.op)) {
 				// a set the schema names ("a final state", "my teams"), or the values the description names, each a yes / no
 				for (const v of f.values)
-					if ('list' in v.arg || 'actor' in v.arg)
+					if ('list' in v.arg || 'var' in v.arg)
 						add(`${head} ${v.label}`, x.op, v.arg, { value: v.label });
 				if (listy && named.length >= 2)
 					add(
@@ -1487,9 +1515,7 @@ export function makeFilterDescribe(cfg: FilterDescribeConfig) {
 		const said = text.toLowerCase(),
 			ws = words(text).filter(
 				(w) =>
-					!tokens(human(model)).some(
-						(x) => w.startsWith(x.replace(/s$/, '')) || x.startsWith(w)
-					)
+					!tokens(human(model)).some((x) => w.startsWith(x.replace(/s$/, '')) || x.startsWith(w))
 			);
 		const akin = (w: string, x: string) =>
 			w.startsWith(x) || x.startsWith(w) || [...w].findIndex((ch, i) => ch !== x[i]) >= 5;
@@ -1694,7 +1720,7 @@ export function makeFilterDescribe(cfg: FilterDescribeConfig) {
 		}[] = [];
 		for (const f of rank(fields, o.text, o.model)) {
 			if (asked.length >= FILTER_MAX_FIELDS) break;
-			const conds = condsOf(f, local ? undefined : o.model, o.text).slice(0, max - 1);
+			const conds = condsOf(f, local ? undefined : o.model, o.text, o.bindings).slice(0, max - 1);
 			if (conds.length > 0) asked.push({ f, conds });
 		}
 		const orders = [...nears, ...fields.filter((f) => f.sort !== undefined).flatMap(orderOf)].slice(
@@ -1889,10 +1915,16 @@ export function makeFilterDescribe(cfg: FilterDescribeConfig) {
 			// rule 11a: the same strict decode as any read literal, held to the caller's exposure
 			const checked = Result.try({
 				try: () =>
-					decodeDescribed(cat, o.authority, o.model, {
-						...(where === undefined ? {} : { where }),
-						...(orderBy === undefined ? {} : { orderBy })
-					}),
+					decodeDescribed(
+						cat,
+						o.authority,
+						o.model,
+						{
+							...(where === undefined ? {} : { where }),
+							...(orderBy === undefined ? {} : { orderBy })
+						},
+						o.bindings
+					),
 				catch: (error) =>
 					error instanceof BoltError
 						? error.message
@@ -1943,72 +1975,64 @@ export function decodeDescribed(
 	q: {
 		where?: Json;
 		orderBy?: Json;
-	}
+	},
+	/** What its time variables (`{ var: 'today' | 'now' }`) are: the read's own day and instant. */
+	at: { readonly today: string; readonly now: string }
 ): void {
-	const info = (c: string) => {
-		const x = cat.exposures.get(c);
-		if (x === undefined || (!a.admin && (a.models[c]?.read[c]?.length ?? 0) === 0))
-			throw refuse(`'${c}' is not read by this caller`);
-		return x;
-	};
-	const field = (c: string, f: string) => {
+	const root = cat.exposures.get(model);
+	if (root === undefined || (!a.admin && (a.models[model]?.read[model]?.length ?? 0) === 0))
+		throw refuse(`'${model}' is not read by this caller`);
+	// a layer reads under its root's arms and masks (decision 3)
+	const masked = (x: ExposureInfo, f: string) =>
+		!a.admin && a.models[x.path.split('.')[0]!]?.masks[x.path]?.[f] !== undefined;
+	const field = (x: ExposureInfo, f: string) => {
 		const base = f.split('.')[0]!;
-		if (
-			!exposedField(info(c), base) ||
-			(!a.admin && a.models[c]?.masks[c]?.[base] !== undefined)
-		)
-			throw refuse(`'${c}.${f}' is not a field this caller reads`);
+		if (!exposedField(x, base) || masked(x, base))
+			throw refuse(`'${x.path}.${f}' is not a field this caller reads`);
 	};
-	const rel = (c: string, r: string) => {
-		const x = info(c);
-		if (
-			(!x.model.one.has(r) && !x.model.many.has(r)) ||
-			(x.model.one.has(r) && !a.admin && a.models[c]?.masks[c]?.[r] !== undefined)
-		)
-			throw refuse(`'${c}.${r}' is not a relation this caller reads`);
+	/** The declared layer a hop through `r` reads; any other hop is refused. */
+	const rel = (x: ExposureInfo, r: string, target: string) => {
+		const t = levelOf(cat, x, r, target);
+		if (t === undefined || (x.model.one.has(r) && masked(x, r)))
+			throw refuse(`'${x.path}.${r}' is not a relation this caller reads`);
+		return t;
 	};
-	const walk = (p: Pred, c: string): void => {
+	const walk = (p: Pred, x: ExposureInfo): void => {
 		switch (p.t) {
 			case 'const':
-				return;
 			// the search document and the embedding cover the model's searched fields, not one field the caller reads
 			case 'search':
 			case 'similar':
-				info(c);
 				return;
 			case 'and':
 			case 'or':
-				return p.of.forEach((x) => walk(x, c));
+				return p.of.forEach((y) => walk(y, x));
 			case 'not':
-				return walk(p.of, c);
+				return walk(p.of, x);
 			case 'one':
 			case 'many':
-				rel(c, p.rel);
-				return walk(p.pred, p.target);
+				return walk(p.pred, rel(x, p.rel, p.target));
 			case 'count':
-				return rel(c, p.rel);
+				rel(x, p.rel, p.target);
+				return;
 			case 'agg':
-				rel(c, p.rel);
-				return field(p.target, p.of);
+				return field(rel(x, p.rel, p.target), p.of);
 			case 'cmp':
-				field(c, p.field);
-				if (typeof p.arg === 'object' && p.arg !== null && 'field' in p.arg) field(c, p.arg.field);
+				field(x, p.field);
+				if (typeof p.arg === 'object' && p.arg !== null && 'field' in p.arg) field(x, p.arg.field);
 				return;
 			default:
-				return field(c, p.field);
+				return field(x, p.field);
 		}
 	};
-	info(model);
-	if (q.where !== undefined) walk(storeSync(decodeWhere(cat, model, q.where)), model);
-	// a related key (`assignee.name`): each hop a relation the caller reads, then the target's field
+	if (q.where !== undefined)
+		walk(storeSync(decodeWhere(cat, model, materialize(q.where, at))), root);
+	// a related key (`assignee.name`): each hop a declared layer, then its field
 	if (q.orderBy !== undefined)
 		for (const k of storeSync(order(q.orderBy, cat, model))) {
 			const steps = k.field.split('.');
-			let c = model;
-			for (const s of steps.slice(0, -1)) {
-				rel(c, s);
-				c = cat.exposures.get(c)!.model.one.get(s)!.targets[0]!;
-			}
-			field(c, steps.at(-1)!);
+			let x = root;
+			for (const s of steps.slice(0, -1)) x = rel(x, s, x.model.one.get(s)?.targets[0] ?? '');
+			field(x, steps.at(-1)!);
 		}
 }

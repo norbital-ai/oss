@@ -1,6 +1,6 @@
 {
 	"name": "@norbital-ai/std",
-	"version": "0.0.2",
+	"version": "0.0.3",
 	"description": "Value libraries for Bolt workspaces: decimals, dates, calendars, sheets, formulas, pricing and billing.",
 	"type": "module",
 	"sideEffects": [
@@ -77,6 +77,10 @@
 		"./sheet": {
 			"types": "./build/sheet.d.ts",
 			"default": "./build/sheet.js"
+		},
+		"./vars": {
+			"types": "./build/vars.d.ts",
+			"default": "./build/vars.js"
 		},
 		"./versioned": {
 			"types": "./build/versioned.d.ts",

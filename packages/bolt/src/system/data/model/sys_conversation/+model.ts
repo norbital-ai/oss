@@ -8,7 +8,7 @@ export default model('sys_conversation', {
 		"A conversation: an agent thread or an integration's chat or mail thread, with its status, plan and goals.",
 	label: 'title',
 	fields: {
-		created_at: { kind: 'instant', default: { now: '' } },
+		created_at: { kind: 'instant', default: { var: 'now' } },
 		title: { kind: 'text', optional: true },
 		owner: { kind: 'text', optional: true },
 		envoy: { kind: 'text', optional: true },
@@ -35,7 +35,7 @@ export default model('sys_conversation', {
 		goals: { kind: 'json', optional: true },
 		read: { kind: 'json', default: {} },
 		revision: { kind: 'int', default: 1 },
-		updated_at: { kind: 'instant', default: { now: '' } }
+		updated_at: { kind: 'instant', default: { var: 'now' } }
 	},
 	table: { primary: 'text' },
 	read: 'all'

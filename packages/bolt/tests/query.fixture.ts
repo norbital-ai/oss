@@ -117,8 +117,7 @@ create table notes (id uuid primary key, revision int not null default 1, create
 export const bindings: Bindings = {
 	now: '2026-09-25T04:00:00.000Z',
 	today: '2026-09-25',
-	tz: 'Asia/Kuala_Lumpur',
-	params: { min: '100', who: 'a@x.io' }
+	tz: 'Asia/Kuala_Lumpur'
 };
 
 const eq = (field: string, value: string): Pred => ({

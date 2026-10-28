@@ -29,7 +29,7 @@ const manifest = Result.getOrThrow(
 		},
 		relationships: {},
 		exposures: {
-			docs: { read: { fields: 'all' }, create: { input: { columns: ['title', 'file'] } } }
+			docs: { read: { docs: { fields: 'all' } }, create: { columns: { docs: ['title', 'file'] } } }
 		},
 		integrations: {},
 		teams: {},

@@ -1,11 +1,13 @@
 // The one predicate language (K3, §3.3.9): reads, grants, `check`, ref `where`, triggers and live routing. A read compares
-// against values it is given: there is no clock operand (a page passes `bolt.clock(unit)`'s values, server code `ctx.today`).
+// against values it is given: the time variables (`{ var: 'today' | 'now' }`) are edge spellings materialized before a
+// read (a page passes `bolt.clock(unit)`'s values, server code `ctx.today`).
 import type { Literal } from './fields.ts';
 import type {
 	ModelName,
 	Columns,
 	IsUnion,
 	LayerField,
+	LayerRelation,
 	ManyRels,
 	OneRels,
 	OneTarget,
@@ -22,18 +24,17 @@ import type { Json, Point } from './values.ts';
 /** A typed operand literal; which ones a position admits depends on the value's kind. */
 export type Operand =
 	| { field: string }
-	| { param: string }
 	| {
-			actor:
-				| 'id'
-				| 'email'
-				| 'phone'
-				| 'teams'
-				| 'teamTree'
-				| 'party'
-				| 'visitor'
-				| 'instance'
-				| { scopes: PolicyName };
+			var:
+				| 'requestor.id'
+				| 'requestor.email'
+				| 'requestor.phone'
+				| 'requestor.teams'
+				| 'requestor.teamTree'
+				| 'requestor.party'
+				| 'requestor.visitor'
+				| 'requestor.instance'
+				| `requestor.scopes.${PolicyName}`;
 	  };
 /** Rule 11a caps: `and`/`or`/`not` and relation nesting together, and each list's items. */
 export const WHERE_MAX_DEPTH = 16,
@@ -72,20 +73,20 @@ type Ordered = { kind: NumKind | 'date' | 'instant' | 'time' | 'duration' | 'tex
 // Operands a value position admits, by kind; S = static (check, unique, ref `where`): values and fields only.
 type Dyn<K, S> = S extends true
 	? never
-	: | { param: string }
-		| (K extends { kind: 'text'; format: 'email' } ? { actor: 'email' } : never)
-		| (K extends { kind: 'text'; format: 'phone' } ? { actor: 'phone' } : never)
+	: | (K extends { kind: 'text'; format: 'email' } ? { var: 'requestor.email' } : never)
+		| (K extends { kind: 'text'; format: 'phone' } ? { var: 'requestor.phone' } : never)
 		/** The anonymous identity (`__Secure-bolt-visitor`): guest-owned rows on a text field, scoped per browser. */
-		| (K extends { kind: 'text' } ? { actor: 'visitor' } : never)
-		| (K extends { kind: 'id'; of: 'sys_user' } ? { actor: 'id' } : never)
-		/** The instance an envoy turn arrived on, or a sync body runs for; null for every other actor. */
-		| (K extends { kind: 'id'; of: 'sys_integration' } ? { actor: 'instance' } : never)
-		| (K extends { kind: 'id' } ? { actor: 'party' } : never);
+		| (K extends { kind: 'text' } ? { var: 'requestor.visitor' } : never)
+		| (K extends { kind: 'id'; of: 'sys_user' } ? { var: 'requestor.id' } : never)
+		/** The instance an envoy turn arrived on, or a sync body runs for; null for every other requestor. */
+		| (K extends { kind: 'id'; of: 'sys_integration' } ? { var: 'requestor.instance' } : never)
+		| (K extends { kind: 'id' } ? { var: 'requestor.party' } : never);
 type DynList<K, S> = S extends true
 	? never
-	: | { param: string }
-		| (K extends { kind: 'id' } ? { actor: { scopes: PolicyName } } : never)
-		| (K extends { kind: 'text'; format: 'team' } ? { actor: 'teams' | 'teamTree' } : never);
+	: | (K extends { kind: 'id' } ? { var: `requestor.scopes.${PolicyName}` } : never)
+		| (K extends { kind: 'text'; format: 'team' }
+				? { var: 'requestor.teams' | 'requestor.teamTree' }
+				: never);
 interface ValOf<M, K, S> {
 	readonly value:
 		Literal<K> | Dyn<K, S> | ([M] extends [never] ? never : { field: SameFamily<M, K> });
@@ -141,23 +142,25 @@ export type Ops<M, K, S = false> = K extends { kind: 'text' | 'enum'; many: true
 type IdOps<T extends string, S> = ScalarOps<never, { kind: 'id'; of: T }, S>;
 
 // X = exposure: a model name (its root layer), a layer path (`'orders.lines'`: that layer's fields), or 'model' for
-// an unexposed model-level predicate.
+// an unexposed model-level predicate. A hop crosses only a layer X declares and lands in that layer (`'<X>.<rel>'`).
 type Visible<M, X, P> = X extends 'model'
 	? P
 	: P & (X extends M ? ReadField<M> : LayerField<RootOf<X>, X>);
-type Crossable<M, X, R> = X extends 'model' ? R : R & ReadRelation<M>;
-type Next<T, X> = X extends 'model' ? ModelWhere<T> : Where<T>;
+type Crossable<M, X, R> = X extends 'model' ? R : R & LayerRelation<X>;
+/** The exposure a hop through `R` lands in: the layer `X` declares at `'<X>.<R>'`, or none for a model predicate. */
+type Hop<X, R> = X extends 'model' ? 'model' : `${X & string}.${R & string}`;
+type Next<T, X, R> = X extends 'model' ? ModelWhere<T> : WhereOver<T, Hop<X, R>>;
 type RefWhere<M, R, X> =
 	OneTarget<M, R> extends infer T extends string
 		? [T] extends [TargetName]
 			? IsUnion<T> extends true
-				? { [A in T]?: IdOps<A, false> | { is: Next<A, X> } }
+				? { [A in T]?: IdOps<A, false> | { is: Next<A, X, R> } }
 				: never
 			: never
 		: never;
 type OneRelWhere<M, R, X> = [RefWhere<M, R, X>] extends [never]
 	? | (R extends Visible<M, X, R> ? IdOps<OneTarget<M, R>, false> : never)
-		| (R extends Crossable<M, X, R> ? { is: Next<OneTarget<M, R>, X> } : never)
+		| (R extends Crossable<M, X, R> ? { is: Next<OneTarget<M, R>, X, R> } : never)
 	: RefWhere<M, R, X>;
 type CmpOps<V> = { eq?: V; ne?: V; lt?: V; lte?: V; gt?: V; gte?: V };
 type Summable = { kind: 'int' | 'decimal' | 'money' | 'duration' };
@@ -167,24 +170,22 @@ type AggOf<T, X, K> = {
 		? { of: P } & CmpOps<Literal<Columns<T>[P]>>
 		: never;
 }[Visible<T, X, keyof Columns<T> & string>];
-/** The exposure a hop lands in: the hopped-to model's own root access point (its read), or none for a model predicate. */
-type Hop<T, X> = X extends 'model' ? 'model' : T;
-type ManyWhere<T, X> = {
-	some?: Next<T, X>;
-	none?: Next<T, X>;
-	every?: Next<T, X>;
+type ManyWhere<T, X, R> = {
+	some?: Next<T, X, R>;
+	none?: Next<T, X, R>;
+	every?: Next<T, X, R>;
 	count?: CmpOps<number>;
-	sum?: AggOf<T, Hop<T, X>, Summable>;
-	avg?: AggOf<T, Hop<T, X>, Summable>;
-	min?: AggOf<T, Hop<T, X>, Summable | { kind: 'date' | 'instant' }>;
-	max?: AggOf<T, Hop<T, X>, Summable | { kind: 'date' | 'instant' }>;
+	sum?: AggOf<T, Hop<X, R>, Summable>;
+	avg?: AggOf<T, Hop<X, R>, Summable>;
+	min?: AggOf<T, Hop<X, R>, Summable | { kind: 'date' | 'instant' }>;
+	max?: AggOf<T, Hop<X, R>, Summable | { kind: 'date' | 'instant' }>;
 };
 
 type WhereOver<M, X> = {
 	[P in Visible<M, X, keyof Columns<M> & string>]?: Ops<M, Columns<M>[P]>;
 } & { [R in keyof OneRels<M> & string]?: OneRelWhere<M, R, X> } & {
 	// no `as` filter: it re-evaluated every relation's predicate on each read; a relation a caller cannot use is `never`
-	[R in Crossable<M, X, keyof ManyRels<M> & string>]?: ManyWhere<RelTarget<M, R>, X>;
+	[R in Crossable<M, X, keyof ManyRels<M> & string>]?: ManyWhere<RelTarget<M, R>, X, R>;
 } & {
 	// inline, not an alias applied to itself: a type argument at the top level is resolved eagerly
 	and?: readonly WhereOver<M, X>[];

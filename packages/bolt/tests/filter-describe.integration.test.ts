@@ -53,7 +53,7 @@ const manifest = {
 	exposures: {
 		members: { read: { members: { fields: 'all' } }, create: { columns: { members: ['name'] } } },
 		jobs: {
-			read: { jobs: { fields: 'all' } },
+			read: { jobs: { fields: 'all' }, 'jobs.assignee': { fields: 'all' } },
 			create: { columns: { jobs: ['title', 'scheduled_on', 'status', 'assignee'] } }
 		}
 	},
@@ -65,16 +65,20 @@ const manifest = {
 			grants: {
 				members: { read: true },
 				jobs: {
-					read: { jobs: { fields: [
-							'id',
-							'title',
-							'scheduled_on',
-							'hours',
-							'status',
-							'assignee',
-							'created_at',
-							'updated_at'
-						] } }
+					read: {
+						jobs: {
+							fields: [
+								'id',
+								'title',
+								'scheduled_on',
+								'hours',
+								'status',
+								'assignee',
+								'created_at',
+								'updated_at'
+							]
+						}
+					}
 				}
 			}
 		}
@@ -220,8 +224,7 @@ const open = (port?: System1, m: EngineManifest = manifest) =>
 				bindings: {
 					now: t.clock.now(),
 					today: t.clock.now().slice(0, 10),
-					tz: 'Asia/Singapore',
-					params: {}
+					tz: 'Asia/Singapore'
 				}
 			});
 		const events = () =>
@@ -345,83 +348,80 @@ describe('filter.describe (rule 16a)', () => {
 			)
 	);
 
-	it.live(
-		'a wide model is asked about the fields the description names, still in one call',
-		() =>
-			Effect.scoped(
-				Effect.gen(function* () {
-					const jobs = manifest.models.jobs;
-					const wide = {
-						...manifest,
-						models: {
-							...manifest.models,
-							jobs: {
-								...jobs,
-								fields: {
-									...jobs.fields,
-									...Object.fromEntries(
-										Array.from({ length: 30 }, (_, i) => [`filler_${i}`, { kind: 'text' as const }])
-									)
-								}
+	it.live('a wide model is asked about the fields the description names, still in one call', () =>
+		Effect.scoped(
+			Effect.gen(function* () {
+				const jobs = manifest.models.jobs;
+				const wide = {
+					...manifest,
+					models: {
+						...manifest.models,
+						jobs: {
+							...jobs,
+							fields: {
+								...jobs.fields,
+								...Object.fromEntries(
+									Array.from({ length: 30 }, (_, i) => [`filler_${i}`, { kind: 'text' as const }])
+								)
 							}
 						}
-					} satisfies EngineManifest;
-					const seen: System1Request[] = [];
-					const context2 = yield* Layer.build(
-						TestWorkspace.layer({
-							manifest: wide,
-							ports: ai({
-								ask: (r) =>
-									Effect.sync<DecisionResult>(() => {
-										seen.push(r);
-										return {
-											costUsd: 0,
-											provider: 'scripted',
-											answers: Object.fromEntries(
-												Object.entries(r.questions).map(([id, q]) => [
-													id,
-													q.type === 'noul'
-														? { type: 'noul', noul: 0.1 }
-														: {
-																type: 'choice',
-																choice: present(Object.keys(q.criteria)[0]),
-																confidence: 1,
-																probabilities: {}
-															}
-												])
-											)
-										};
-									})
-							})
+					}
+				} satisfies EngineManifest;
+				const seen: System1Request[] = [];
+				const context2 = yield* Layer.build(
+					TestWorkspace.layer({
+						manifest: wide,
+						ports: ai({
+							ask: (r) =>
+								Effect.sync<DecisionResult>(() => {
+									seen.push(r);
+									return {
+										costUsd: 0,
+										provider: 'scripted',
+										answers: Object.fromEntries(
+											Object.entries(r.questions).map(([id, q]) => [
+												id,
+												q.type === 'noul'
+													? { type: 'noul', noul: 0.1 }
+													: {
+															type: 'choice',
+															choice: present(Object.keys(q.criteria)[0]),
+															confidence: 1,
+															probabilities: {}
+														}
+											])
+										)
+									};
+								})
 						})
-					);
-					yield* (yield* filterDescribe.pipe(Effect.provide(context2))).describe({
-						model: 'jobs',
-						text: "Bob's jobs this week",
-						authority: Context.get(context2, TestWorkspace).as(
-							Context.get(context2, TestWorkspace).admin
-						).authority,
-						bindings: {
-							now: Context.get(context2, TestWorkspace).clock.now(),
-							today: Context.get(context2, TestWorkspace).clock.now().slice(0, 10),
-							tz: 'Asia/Singapore',
-							params: {}
-						}
-					});
-					expect(seen).toHaveLength(1);
-					const asked = Object.keys(present(seen[0]).questions).filter(
-						(id) => id.startsWith('f') && !id.includes('.')
-					);
-					expect(asked.length).toBe(16);
-					// the field the description names is asked first, and the fillers that name nothing come after everything real
-					const labels = Schema.decodeUnknownSync(
-						Schema.Array(Schema.Struct({ label: Schema.String }))
-					)(present(seen[0]).state.fields).map((f) => f.label);
-					expect(labels.indexOf('Assignee')).toBeLessThan(
-						labels.findIndex((l: string) => l.startsWith('Filler'))
-					);
-				})
-			)
+					})
+				);
+				yield* (yield* filterDescribe.pipe(Effect.provide(context2))).describe({
+					model: 'jobs',
+					text: "Bob's jobs this week",
+					authority: Context.get(context2, TestWorkspace).as(
+						Context.get(context2, TestWorkspace).admin
+					).authority,
+					bindings: {
+						now: Context.get(context2, TestWorkspace).clock.now(),
+						today: Context.get(context2, TestWorkspace).clock.now().slice(0, 10),
+						tz: 'Asia/Singapore'
+					}
+				});
+				expect(seen).toHaveLength(1);
+				const asked = Object.keys(present(seen[0]).questions).filter(
+					(id) => id.startsWith('f') && !id.includes('.')
+				);
+				expect(asked.length).toBe(16);
+				// the field the description names is asked first, and the fillers that name nothing come after everything real
+				const labels = Schema.decodeUnknownSync(
+					Schema.Array(Schema.Struct({ label: Schema.String }))
+				)(present(seen[0]).state.fields).map((f) => f.label);
+				expect(labels.indexOf('Assignee')).toBeLessThan(
+					labels.findIndex((l: string) => l.startsWith('Filler'))
+				);
+			})
+		)
 	);
 
 	it.live(
@@ -472,9 +472,20 @@ describe('filter.describe (rule 16a)', () => {
 						},
 						exposures: {
 							...manifest.exposures,
+							members: {
+								...manifest.exposures.members,
+								read: {
+									members: { fields: 'all' },
+									'members.suspicious_activity_logs': { fields: 'all' }
+								}
+							},
 							suspicious_activity_logs: {
 								read: { suspicious_activity_logs: { fields: 'all' } },
-								create: { columns: { suspicious_activity_logs: ['summary', 'severity', 'raised_on', 'member'] } }
+								create: {
+									columns: {
+										suspicious_activity_logs: ['summary', 'severity', 'raised_on', 'member']
+									}
+								}
 							}
 						}
 					} satisfies EngineManifest;
@@ -494,8 +505,7 @@ describe('filter.describe (rule 16a)', () => {
 						bindings: {
 							now: Context.get(context2, TestWorkspace).clock.now(),
 							today: Context.get(context2, TestWorkspace).clock.now().slice(0, 10),
-							tz: 'Asia/Singapore',
-							params: {}
+							tz: 'Asia/Singapore'
 						}
 					});
 					expect(r).toEqual({
@@ -541,8 +551,7 @@ describe('filter.describe (rule 16a)', () => {
 						bindings: {
 							now: Context.get(context3, TestWorkspace).clock.now(),
 							today: Context.get(context3, TestWorkspace).clock.now().slice(0, 10),
-							tz: 'Asia/Singapore',
-							params: {}
+							tz: 'Asia/Singapore'
 						}
 					});
 					expect(
@@ -611,8 +620,7 @@ describe('filter.describe (rule 16a)', () => {
 						bindings: {
 							now: t.clock.now(),
 							today: t.clock.now().slice(0, 10),
-							tz: 'Asia/Singapore',
-							params: {}
+							tz: 'Asia/Singapore'
 						}
 					});
 					expect(r).toMatchObject({ ok: false, code: 'tooLarge' });
@@ -646,8 +654,7 @@ describe('filter.describe (rule 16a)', () => {
 					bindings: {
 						now: t.clock.now(),
 						today: t.clock.now().slice(0, 10),
-						tz: 'Asia/Singapore',
-						params: {}
+						tz: 'Asia/Singapore'
 					}
 				});
 				expect(opts.ok).toBe(true);
@@ -681,21 +688,27 @@ describe('filter.describe (rule 16a)', () => {
 					})).answers[0]
 				)).members.rows[0]?.id;
 				if (alice === undefined) throw new Error('Missing Alice');
-				yield* create(t, route, 'jobs.create', [{
-					scheduled_on: '2026-09-28',
-					title: 'pump room',
-					assignee: alice
-				}]);
-				yield* create(t, route, 'jobs.create', [{
-					scheduled_on: '2026-09-28',
-					title: 'install',
-					assignee: bob
-				}]);
-				yield* create(t, route, 'jobs.create', [{
-					scheduled_on: '2026-09-28',
-					title: 'other',
-					assignee: alice
-				}]);
+				yield* create(t, route, 'jobs.create', [
+					{
+						scheduled_on: '2026-09-28',
+						title: 'pump room',
+						assignee: alice
+					}
+				]);
+				yield* create(t, route, 'jobs.create', [
+					{
+						scheduled_on: '2026-09-28',
+						title: 'install',
+						assignee: bob
+					}
+				]);
+				yield* create(t, route, 'jobs.create', [
+					{
+						scheduled_on: '2026-09-28',
+						title: 'other',
+						assignee: alice
+					}
+				]);
 				const r = yield* describeAs("pump jobs or Bob's jobs");
 				expect(r).toMatchObject({
 					ok: true,
@@ -732,16 +745,20 @@ describe('filter.describe (rule 16a)', () => {
 					})).answers[0]
 				)).members.rows[0]?.id;
 				if (alice === undefined) throw new Error('Missing Alice');
-				yield* create(t, route, 'jobs.create', [{
-					scheduled_on: '2026-09-28',
-					title: 'bob job',
-					assignee: bob
-				}]);
-				yield* create(t, route, 'jobs.create', [{
-					scheduled_on: '2026-09-28',
-					title: 'alice job',
-					assignee: alice
-				}]);
+				yield* create(t, route, 'jobs.create', [
+					{
+						scheduled_on: '2026-09-28',
+						title: 'bob job',
+						assignee: bob
+					}
+				]);
+				yield* create(t, route, 'jobs.create', [
+					{
+						scheduled_on: '2026-09-28',
+						title: 'alice job',
+						assignee: alice
+					}
+				]);
 				const r = yield* describeAs('jobs whose assignee name contains bob');
 				expect(r).toEqual({ ok: true, where: { assignee: { is: { name: { like: '%bob%' } } } } });
 				expect(
@@ -773,16 +790,20 @@ describe('filter.describe (rule 16a)', () => {
 					})).answers[0]
 				)).members.rows[0]?.id;
 				if (alice === undefined) throw new Error('Missing Alice');
-				yield* create(t, route, 'jobs.create', [{
-					scheduled_on: '2026-09-28',
-					title: 'zzz job',
-					assignee: bob
-				}]);
-				yield* create(t, route, 'jobs.create', [{
-					scheduled_on: '2026-09-28',
-					title: 'aaa job',
-					assignee: alice
-				}]);
+				yield* create(t, route, 'jobs.create', [
+					{
+						scheduled_on: '2026-09-28',
+						title: 'zzz job',
+						assignee: bob
+					}
+				]);
+				yield* create(t, route, 'jobs.create', [
+					{
+						scheduled_on: '2026-09-28',
+						title: 'aaa job',
+						assignee: alice
+					}
+				]);
 				const r = yield* describeAs('sorted by assignee name');
 				expect(r).toEqual({ ok: true, orderBy: { assignee: { name: 'asc' } } });
 				expect(
@@ -831,8 +852,7 @@ describe('dates and relations a description names (live Jev misreadings, 2026-10
 	const at = {
 		now: '2026-10-08T03:00:00.000Z',
 		today: '2026-10-08',
-		tz: 'Asia/Singapore',
-		params: {}
+		tz: 'Asia/Singapore'
 	};
 	// members carry a search document: their candidates come from the indexed search, not a label scan
 	const searchable = {
@@ -948,8 +968,7 @@ describe("named days, lists, ranges and a related record's own related records (
 	const at = {
 		now: '2026-10-08T03:00:00.000Z',
 		today: '2026-10-08',
-		tz: 'Asia/Singapore',
-		params: {}
+		tz: 'Asia/Singapore'
 	};
 	const shop = {
 		workspace: { tz: 'Asia/Singapore', locale: 'en' },
@@ -986,14 +1005,24 @@ describe("named days, lists, ranges and a related record's own related records (
 			'invoices.customer': { to: 'customers', inverse: 'invoices' }
 		},
 		exposures: {
-			customers: { read: { customers: { fields: 'all' } }, create: { columns: { customers: ['name'] } } },
+			customers: {
+				read: { customers: { fields: 'all' }, 'customers.invoices': { fields: 'all' } },
+				create: { columns: { customers: ['name'] } }
+			},
 			invoices: {
 				read: { invoices: { fields: 'all' } },
 				create: { columns: { invoices: ['number', 'status', 'customer'] } }
 			},
-			holidays: { read: { holidays: { fields: 'all' } }, create: { columns: { holidays: ['name', 'date'] } } },
+			holidays: {
+				read: { holidays: { fields: 'all' } },
+				create: { columns: { holidays: ['name', 'date'] } }
+			},
 			jobs: {
-				read: { jobs: { fields: 'all' } },
+				read: {
+					jobs: { fields: 'all' },
+					'jobs.customer': { fields: 'all' },
+					'jobs.customer.invoices': { fields: 'all' }
+				},
 				create: { columns: { jobs: ['title', 'scheduled_on', 'hours', 'status', 'customer'] } }
 			}
 		},

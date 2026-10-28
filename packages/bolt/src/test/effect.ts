@@ -213,7 +213,7 @@ export interface Caller {
 	readonly authority: Authority;
 	readonly query: CallerQuery<ReadFailed>['query'];
 	/**
-	 * A record's revisions as the page's `bolt.history` reads them, newest first; `at` starts from an instant, a revision
+	 * A record's revisions as the page's `bolt.history` reads them, oldest first; `at` starts from an instant, a revision
 	 * or just before an approval request. A record as of a revision: take its `at`, then read the root with `asOf`.
 	 */
 	readonly history: CallerQuery<ReadFailed>['history'];
@@ -547,7 +547,11 @@ const nativeAnswers = (manifest: EngineManifest, readAs: 'caller' | 'workspace' 
 				Predicate.isObject(read) &&
 				Object.keys(read).some((key) => key === root || key.startsWith(`${root}.`));
 			const admitted = Schema.decodeUnknownOption(strings)(
-				layered ? field(field(read, path), 'fields') : path === root ? grant.value.fields : undefined
+				layered
+					? field(field(read, path), 'fields')
+					: path === root
+						? grant.value.fields
+						: undefined
 			);
 			return Option.isSome(admitted) && !admitted.value.includes(name);
 		});
@@ -582,29 +586,29 @@ const nativeAnswers = (manifest: EngineManifest, readAs: 'caller' | 'workspace' 
 	};
 	const rowState = {
 		$sync: Schema.optionalKey(
-				Schema.Record(
-					Schema.String,
-					Schema.Struct({
-						status: Schema.Literals(['pending', 'ok', 'failed']),
-						message: Schema.optionalKey(Schema.String)
-					})
-				)
-			),
-			$approval: Schema.optionalKey(
+			Schema.Record(
+				Schema.String,
 				Schema.Struct({
-					requestId: Schema.String,
-					state: Schema.Literals(['Pending', 'ChangesRequested']),
-					step: Schema.Number,
-					steps: Schema.Array(
-						Schema.Struct({
-							name: Schema.String,
-							teams: Schema.Array(Schema.String),
-							users: Schema.Array(Schema.String)
-						})
-					),
-					requestedBy: Schema.String
+					status: Schema.Literals(['pending', 'ok', 'failed']),
+					message: Schema.optionalKey(Schema.String)
 				})
 			)
+		),
+		$approval: Schema.optionalKey(
+			Schema.Struct({
+				requestId: Schema.String,
+				state: Schema.Literals(['Pending', 'ChangesRequested']),
+				step: Schema.Number,
+				steps: Schema.Array(
+					Schema.Struct({
+						name: Schema.String,
+						teams: Schema.Array(Schema.String),
+						users: Schema.Array(Schema.String)
+					})
+				),
+				requestedBy: Schema.String
+			})
+		)
 	};
 	const loose = Schema.optionalKey(Schema.Record(Schema.String, Schema.Json));
 	const decimals = Schema.optionalKey(
@@ -649,7 +653,7 @@ const nativeAnswers = (manifest: EngineManifest, readAs: 'caller' | 'workspace' 
 			})
 		);
 	};
-	/** A record's revisions (`history`), newest first: each one's number, instant, actor, cause and changed fields. */
+	/** A record's revisions (`history`), oldest first: each one's number, instant, actor, cause and changed fields. */
 	const revisions = (model: string) =>
 		Schema.Array(
 			Schema.Struct({
@@ -668,8 +672,10 @@ const nativeAnswers = (manifest: EngineManifest, readAs: 'caller' | 'workspace' 
 		const model = layers(m)[root]?.[path];
 		if (model === undefined)
 			throw new KitInvalid({ message: `'${path}' is not a read layer ${root} declares` });
-		const columns: Record<string, Schema.Decoder<unknown> | Schema.optionalKey<Schema.Decoder<unknown>>> =
-			{ id: identity(model), ...anyColumns(root, path, model) };
+		const columns: Record<
+			string,
+			Schema.Decoder<unknown> | Schema.optionalKey<Schema.Decoder<unknown>>
+		> = { id: identity(model), ...anyColumns(root, path, model) };
 		for (const [sub, layer] of Object.entries(named)) {
 			const name = sub.slice(path.length + 1);
 			if (!sub.startsWith(`${path}.`) || name.includes('.')) continue;
@@ -793,7 +799,8 @@ const nativeAnswers = (manifest: EngineManifest, readAs: 'caller' | 'workspace' 
 		});
 	return {
 		/** A read request's answer, per root, as native values (a runtime-built `ReadRequestJson`'s too). */
-		read: (request: unknown, value: unknown) => native<unknown>(() => requestAnswer(request), value),
+		read: (request: unknown, value: unknown) =>
+			native<unknown>(() => requestAnswer(request), value),
 		history: (model: string, value: unknown) => native<unknown>(() => revisions(model), value),
 		act: <N extends string>(name: Is<N, KitCallable>, value: unknown) =>
 			native<Committed<ActOutput<N>, N> | PendingApproval<N>>(() => actCodec('act', name), value),

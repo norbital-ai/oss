@@ -154,13 +154,13 @@ const fixture = () =>
 				.act({
 					model,
 					verb: 'create',
-					input,
+					input: [input],
 					key,
 					issuedAt: now,
 					invocationId: key,
 					authority: t.as(t.admin).authority,
 					mode: { _tag: 'Direct' },
-					bindings: { now, today: now.slice(0, 10), tz: 'UTC', params: {} }
+					bindings: { now, today: now.slice(0, 10), tz: 'UTC' }
 				})
 				.pipe(Effect.map((reply) => reply.outcome));
 		};
@@ -180,7 +180,7 @@ const fixture = () =>
 					automation: 'transaction_probe',
 					runs: [{ id: randomUUID(), input: { scenario, account: accountId, entry: entryId } }],
 					authority: t.as(who).authority,
-					bindings: { now, today: now.slice(0, 10), tz: 'UTC', params: {} }
+					bindings: { now, today: now.slice(0, 10), tz: 'UTC' }
 				});
 				if (outcome.kind !== 'committed') throw new Error('Transaction probe did not enqueue');
 				return yield* Schema.decodeUnknownEffect(Schema.Struct({ id: Schema.String }))(

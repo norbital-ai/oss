@@ -2,7 +2,7 @@
 import { describe, expect, it } from '@effect/vitest';
 import { Effect, Schema } from 'effect';
 import type { Json } from '../src/decl/values.ts';
-import type { Invocation } from '../src/engine/contracts.ts';
+import { LIMITS, type Invocation } from '../src/engine/contracts.ts';
 import type { EngineManifest } from '../src/engine/manifest.ts';
 import { TenantDb } from '../src/engine/db/tenant-db.ts';
 import { act, type ActRequest, type WriteEngine } from '../src/engine/write/act.ts';
@@ -83,7 +83,7 @@ const setup = Effect.gen(function* () {
 			invocationId: `callback-${serial++}`,
 			issuedAt: NOW,
 			authority: admin,
-			bindings: { now: NOW, today: TODAY, tz: 'UTC', params: {} },
+			bindings: { now: NOW, today: TODAY, tz: 'UTC' },
 			...request
 		});
 	return { db, calls, run, writes: () => writes };
@@ -213,7 +213,7 @@ describe('per-verb write callbacks', () => {
 	);
 
 	it.effect(
-		'chunks a 10,000-row import into ten calls with two reads each and one native commit',
+		'chunks a 4,000-row import into four calls, each with its own write budget, and one native commit',
 		() =>
 			Effect.gen(function* () {
 				const { run, calls, writes } = yield* setup;
@@ -222,21 +222,21 @@ describe('per-verb write callbacks', () => {
 					yield* run({
 						verb: 'import',
 						input: {
-							rows: Array.from({ length: 10_000 }, (_, i) => ({ title: `bulk-${i}` })),
+							rows: Array.from({ length: 4_000 }, (_, i) => ({ title: `bulk-${i}` })),
 							onConflict: 'update'
 						}
 					})
 				);
-				expect(calls).toHaveLength(10);
+				expect(calls).toHaveLength(4);
 				expect(
 					calls.every(
 						(call) =>
 							Array.isArray(call.input) &&
-							call.input.length === 1_000 &&
-							call.budget.crossings === 2
+							call.input.length === LIMITS.writeChunk &&
+							call.budget.crossings === LIMITS.crossings.write
 					)
 				).toBe(true);
-				expect(new Set(calls.map((call) => call.ctx.seed)).size).toBe(10);
+				expect(new Set(calls.map((call) => call.ctx.seed)).size).toBe(4);
 				expect(writes()).toBe(1);
 				expect(performance.now() - started).toBeLessThan(30_000);
 			}).pipe(Effect.provide(Pristine.layer)),

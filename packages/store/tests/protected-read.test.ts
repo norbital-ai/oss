@@ -33,7 +33,7 @@ const cat = catalogOf({
 });
 
 describe('read contract', () => {
-	it.effect('takes materialized time and parameters, and rejects former clock operands', () =>
+	it.effect('takes materialized time and requestor variables, and rejects time variables', () =>
 		Effect.gen(function* () {
 			for (const { field, clock } of [
 				{ field: 'day', clock: { today: '' } },
@@ -61,11 +61,27 @@ describe('read contract', () => {
 				op: 'gte',
 				arg: { _tag: 'Lit', value: '2026-10-01' }
 			});
-			expect(yield* where(cat, 'document', { day: { gte: { param: 'from' } } })).toEqual({
+			for (const text of ['today', 'today - days(7)', 'startOfMonth(today)'])
+				expect(
+					(yield* Effect.flip(where(cat, 'document', { day: { gte: { var: text } } }))).message
+				).toContain('materialize time before reading');
+			expect(
+				(yield* Effect.flip(where(cat, 'document', { day: { gte: { var: 'requestor.id' } } })))
+					.message
+			).toContain('not a date');
+			expect(
+				(yield* Effect.flip(where(cat, 'document', { title: { eq: { var: 'requestor.email' } } })))
+					.code
+			).toBe('invalid');
+			for (const old of [{ param: 'from' }, { actor: 'id' }, { clock: 'today' }])
+				expect(
+					(yield* Effect.flip(where(cat, 'document', { title: { eq: old } }))).code
+				).toBe('invalid');
+			expect(yield* where(cat, 'document', { title: { eq: { var: 'requestor.id' } } })).toEqual({
 				t: 'cmp',
-				field: 'day',
-				op: 'gte',
-				arg: { _tag: 'Param', name: 'from' }
+				field: 'title',
+				op: 'eq',
+				arg: { _tag: 'Var', text: 'requestor.id' }
 			});
 		})
 	);

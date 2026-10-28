@@ -69,7 +69,7 @@ export const inverted = (f: FieldInfo, lo: unknown, hi: unknown): boolean =>
 		? String(lo) >= String(hi)
 		: Date.parse(String(lo)) > Date.parse(String(hi)));
 
-/** A period argument's ends, each a literal or a `{ param }` operand resolved by `resolve`. */
+/** A period argument's ends, each a literal or an operand resolved by `resolve`. */
 export const periodEnds: (
 	v: Json,
 	resolve: (o: Operand) => Effect.Effect<Json, StoreError>

@@ -62,7 +62,8 @@ export const MIGRATION_GUARD_CODES = {
 	beforeLedger: 'BM001',
 	beforePhysical: 'BM002',
 	afterPhysical: 'BM003',
-	afterLedger: 'BM004'
+	afterLedger: 'BM004',
+	check: 'BM005'
 } as const;
 
 /** Exact ledger and native definition sets, checked inside the host's atomic migration batch. */
@@ -156,6 +157,7 @@ function blocksOf(file: MigrationFile): Block[] {
 type SqlToken = {
 	readonly kind: 'word' | 'literal' | 'body' | 'quoted' | 'symbol';
 	readonly text: string;
+	readonly at: number;
 };
 // Comments and quoted text cannot turn a description or a string value into a SQL command. Keep dollar bodies
 // separate: a function definition stores one; a DO statement executes one.
@@ -192,7 +194,8 @@ function sqlTokens(sql: string): SqlToken[] {
 			const end = sql.indexOf(delimiter, i + delimiter.length);
 			tokens.push({
 				kind: 'body',
-				text: sql.slice(i + delimiter.length, end < 0 ? sql.length : end)
+				text: sql.slice(i + delimiter.length, end < 0 ? sql.length : end),
+				at: i
 			});
 			i = end < 0 ? sql.length : end + delimiter.length;
 			continue;
@@ -213,16 +216,20 @@ function sqlTokens(sql: string): SqlToken[] {
 					i++;
 				i++;
 			}
-			tokens.push({ kind: quote === "'" ? 'literal' : 'quoted', text: sql.slice(start, i) });
+			tokens.push({
+				kind: quote === "'" ? 'literal' : 'quoted',
+				text: sql.slice(start, i),
+				at: start - 1
+			});
 			i++;
 			continue;
 		}
 		const word = /^[a-z_][a-z0-9_$]*/i.exec(rest)?.[0];
 		if (word !== undefined) {
-			tokens.push({ kind: 'word', text: word.toLowerCase() });
+			tokens.push({ kind: 'word', text: word.toLowerCase(), at: i });
 			i += word.length;
 		} else {
-			tokens.push({ kind: 'symbol', text: sql[i] ?? '' });
+			tokens.push({ kind: 'symbol', text: sql[i] ?? '', at: i });
 			i++;
 		}
 	}
@@ -235,6 +242,102 @@ function sqlStatements(sql: string): SqlToken[][] {
 		else statements.at(-1)?.push(token);
 	}
 	return statements.filter((statement) => statement.length > 0);
+}
+type Check = {
+	readonly name: string;
+	readonly query: string;
+	readonly start: number;
+	readonly end: number;
+};
+/** `-- check: <name>` and the one statement after it: a query whose rows are what must not exist. */
+function checksOf(sql: string): Check[] {
+	const out: Check[] = [];
+	for (const marker of sql.matchAll(/^-- check: (\S+)[ \t]*$/gm)) {
+		const from = marker.index + marker[0].length;
+		const semi = sqlTokens(sql.slice(from)).find((t) => t.kind === 'symbol' && t.text === ';');
+		const end = semi === undefined ? sql.length : from + semi.at;
+		out.push({
+			name: marker[1] ?? '',
+			query: sql.slice(from, end).trim(),
+			start: marker.index,
+			end: semi === undefined ? end : end + 1
+		});
+	}
+	return out;
+}
+const quoted = (text: string) => `'${text.replaceAll("'", "''")}'`;
+/**
+ * The SQL a host executes: each check becomes a block that counts its rows and raises `BM005`, naming it, when any
+ * remain, so the file, its data changes and its ledger record roll back together. The checksum stays the file's own.
+ */
+export function executable(file: MigrationFile): string {
+	let out = '';
+	let from = 0;
+	for (const check of checksOf(file.sql)) {
+		const body = `declare n bigint; begin\n\texecute ${quoted(`select count(*) from (${check.query}\n) store_check`)} into n;\n\tif n > 0 then raise exception using errcode = '${MIGRATION_GUARD_CODES.check}', message = format('check %s failed: %s row(s) returned', ${quoted(check.name)}, n); end if;\nend`;
+		let delimiter = '$store_check$';
+		while (body.includes(delimiter)) delimiter = `${delimiter.slice(0, -1)}_$`;
+		out += `${file.sql.slice(from, check.start)}do ${delimiter} ${body} ${delimiter};`;
+		from = check.end;
+	}
+	return out + file.sql.slice(from);
+}
+/** One statement of `executable(file)`, under the step marker before it; SQL before any marker is the file's own `data` step. */
+export type MigrationStatement = {
+	readonly step: string;
+	readonly hazard: string;
+	readonly text: string;
+	/** An INSERT, UPDATE, DELETE or MERGE: its command's row count is the rows it wrote. */
+	readonly writes: boolean;
+};
+const WRITES = /*#__PURE__*/ new Set(['insert', 'update', 'delete', 'merge']);
+/** `executable(file)` statement by statement, in order: the same SQL, so a host can answer each step's rows. */
+export function migrationStatements(file: MigrationFile): readonly MigrationStatement[] {
+	const sql = executable(file);
+	const markers = [...sql.matchAll(/^-- step (\S+) \((\w+)\)[ \t]*$/gm)];
+	const out: MigrationStatement[] = [];
+	let words: SqlToken[] = [];
+	let start: number | undefined;
+	const close = (end: number) => {
+		if (start === undefined) return;
+		const at = start;
+		const marker = markers.findLast((m) => m.index < at);
+		const first = words[0]?.text;
+		out.push({
+			step: marker?.[1] ?? file.name.replace(/\.sql$/, ''),
+			hazard: marker?.[2] ?? 'data',
+			text: sql.slice(at, end),
+			writes:
+				WRITES.has(first ?? '') ||
+				(first === 'with' && words.some((word) => WRITES.has(word.text)))
+		});
+		start = undefined;
+		words = [];
+	};
+	for (const token of sqlTokens(sql)) {
+		if (token.kind === 'symbol' && token.text === ';') close(token.at);
+		else {
+			start ??= token.at;
+			if (token.kind === 'word') words.push(token);
+		}
+	}
+	close(sql.length);
+	return out;
+}
+const ident = (name: string) => `"${name.replaceAll('"', '""')}"`;
+/**
+ * Two statements that answer `n`: the rows of `table`, or with `column` the rows holding a value there, counted inside
+ * the migration's own transaction; `0` when the table is already gone.
+ */
+export function impactCount(table: string, column?: string): readonly [string, string] {
+	const count =
+		column === undefined
+			? 'count(*)'
+			: `count(*) filter (where to_jsonb(x) -> ${quoted(column)} <> 'null'::jsonb)`;
+	return [
+		`do $store_impact$ declare n bigint := 0; begin if to_regclass(${quoted(ident(table))}) is not null then execute ${quoted(`select ${count} from ${ident(table)} x`)} into n; end if; perform set_config('store.impact', n::text, true); end $store_impact$`,
+		`select current_setting('store.impact')::float8 as n`
+	];
 }
 const HOST_BOUNDS = [
 	'lock_timeout',
@@ -297,6 +400,12 @@ export const checkFile = /*#__PURE__*/ (() =>
 				return yield* refuse(
 					'migrationInvalid',
 					`${file.name}: unknown step class '${block.klass}'`
+				);
+		for (const check of checksOf(file.sql))
+			if (!['select', 'with'].includes(sqlTokens(check.query)[0]?.text ?? ''))
+				return yield* refuse(
+					'migrationInvalid',
+					`${file.name}: check ${check.name} needs one SELECT whose rows are the violations`
 				);
 		const refused = blocks.filter((b) => b.klass === 'destructive' && !b.accepted);
 		if (refused.length > 0)
@@ -410,7 +519,10 @@ export const readPhysicalDefinitions = (text: string): Fx<PhysicalDefinitions> =
 			for (const index of indexes) {
 				const line = file.lines[index];
 				if (line === undefined)
-					return yield* refuse('migrationChanged', `${name}: physical definition ${index} is missing`);
+					return yield* refuse(
+						'migrationChanged',
+						`${name}: physical definition ${index} is missing`
+					);
 				lines.push(line);
 			}
 			definitions[name] = lines;

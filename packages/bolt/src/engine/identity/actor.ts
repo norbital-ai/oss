@@ -191,7 +191,7 @@ SELECT (SELECT (n->>'revision')::int FROM bound) AS revision`
 	}
 	/**
 	 * hook:envoys — an envoy's turn on `instance` (P32, §4.4): the envoy's declared `policies`, never admin by itself, no
-	 * party; `{ actor: 'instance' }` is the instance. On a DM from a linked sender, `dm: 'union'` (the default) joins the
+	 * party; `{ var: 'requestor.instance' }` is the instance. On a DM from a linked sender, `dm: 'union'` (the default) joins the
 	 * member's own authority (their policies, team tree, or the admin bypass): the least constraining grant admits;
 	 * `dm: 'envoy'` holds the envoy's policies alone with every operand bound to the member — never admin, no member route,
 	 * tool or automation. Limits stay the envoy's. Re-resolved from the instance and the spec as they are now: `null` when the

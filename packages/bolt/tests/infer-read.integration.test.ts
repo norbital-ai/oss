@@ -205,24 +205,30 @@ describe("sys_2.infer tools: ['read']", () => {
 							{ id: 's', name: 'submit', input: {} }
 						])
 					]);
-					yield* create(t, route, 'purchase_orders.create', [{
-						number: 'PO-1',
-						supplier: 'Acme',
-						amount: 120,
-						margin: 40
-					}]);
-					yield* create(t, route, 'purchase_orders.create', [{
-						number: 'PO-2',
-						supplier: 'Other',
-						amount: 50,
-						margin: 10
-					}]);
+					yield* create(t, route, 'purchase_orders.create', [
+						{
+							number: 'PO-1',
+							supplier: 'Acme',
+							amount: 120,
+							margin: 40
+						}
+					]);
+					yield* create(t, route, 'purchase_orders.create', [
+						{
+							number: 'PO-2',
+							supplier: 'Other',
+							amount: 50,
+							margin: 10
+						}
+					]);
 					yield* create(t, route, 'ledgers.create', [{ title: 'secret' }]);
-					const id = yield* create(t, route, 'invoices.create', [{
-						number: 'INV-9',
-						supplier: 'Acme',
-						amount: 120
-					}]);
+					const id = yield* create(t, route, 'invoices.create', [
+						{
+							number: 'INV-9',
+							supplier: 'Acme',
+							amount: 120
+						}
+					]);
 					yield* t.runDue();
 					expect(yield* note(t, route, id)).toBe(JSON.stringify({ matched: true, po: 'PO-1' }));
 					expect(ai.requests).toHaveLength(3);
@@ -232,11 +238,18 @@ describe("sys_2.infer tools: ['read']", () => {
 						'read',
 						'edit',
 						'submit',
-						'read',
+						'read_answer',
 						'find',
 						'diff'
 					]);
-					expect(offered[0]!.description).toContain('Keys you may name: invoices, purchase_orders.');
+					// the keys the runAs policies may read, and no other
+					expect(
+						Object.keys(
+							Schema.decodeUnknownSync(
+								Schema.Struct({ properties: Schema.Record(Schema.String, Schema.Json) })
+							)(offered[0]!.input).properties
+						).sort()
+					).toEqual(['invoices', 'purchase_orders']);
 					// one bounded page of the matcher's view: the Acme order only, its margin masked away
 					const [page] = toolResults(ai.requests[1]!);
 					const rows = Schema.decodeUnknownSync(
@@ -249,13 +262,14 @@ describe("sys_2.infer tools: ['read']", () => {
 					expect(rows.map((row) => row['number'])).toEqual(['PO-1']);
 					expect(rows[0]!['margin']).toEqual({ $masked: true });
 					expect(toolResults(ai.requests[2]!)[1]).toEqual({
-						error: expect.stringContaining("'ledgers' is not a model or layer you may read")
+						// a root the runAs policies cannot read is not in the tool's schema at all
+						error: expect.stringMatching(/excess property[\s\S]*"ledgers"/)
 					});
 					// steps: 2 spent on the two reads; the final turn offers only the draft tools
 					expect(ai.requests[2]!.tools!.map((tool) => tool.name)).toEqual([
 						'edit',
 						'submit',
-						'read',
+						'read_answer',
 						'find',
 						'diff'
 					]);
@@ -268,11 +282,13 @@ describe("sys_2.infer tools: ['read']", () => {
 			Effect.gen(function* () {
 				const { t, route, ai } = yield* open([]);
 				// the match run (an empty cassette) only notes a failure
-				const id = yield* create(t, route, 'invoices.create', [{
-					number: 'INV-1',
-					supplier: 'Acme',
-					amount: 1
-				}]);
+				const id = yield* create(t, route, 'invoices.create', [
+					{
+						number: 'INV-1',
+						supplier: 'Acme',
+						amount: 1
+					}
+				]);
 				yield* t.runDue();
 				expect(yield* note(t, route, id)).toBe('failed');
 				const asked = ai.requests.length;

@@ -14,3 +14,18 @@ it.effect('decimal flattening admits the sole wire tag and refuses other tagged 
 		assert.deepStrictEqual(invalid.problems, [{ path: ['total'], message: 'expected a decimal' }]);
 	})
 );
+
+it.effect(
+	'a number for a decimal becomes the decimal its digits spell, before any callback reads it',
+	() =>
+		Effect.gen(function* () {
+			const flat = new Flattener(manifest, catalogOf(manifest), () => 'three');
+			flat.create('orders', { columns: ['total'] }, { total: 31.11 }, []);
+			flat.create('orders', { columns: ['total'] }, { total: 1.5e-7 }, []);
+			assert.strictEqual(flat.problems.length, 0);
+			assert.deepStrictEqual(
+				flat.items.map(({ change }) => (change.op === 'create' ? change.values['total'] : null)),
+				[{ $dec: '31.11' }, { $dec: '0.00000015' }]
+			);
+		})
+);

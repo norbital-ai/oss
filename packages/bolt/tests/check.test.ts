@@ -655,6 +655,30 @@ export default { BYTE_COUNT: { label: String(blob.length) } };`
 				]);
 			}).pipe(Effect.provide(NodeServices.layer))
 	);
+	it('refuses a date or instant default that is neither a literal nor a clock { var } (model/default)', () => {
+		const m: EngineManifest = {
+			...emptyManifest,
+			models: {
+				tasks: {
+					description: 'tasks',
+					label: 'title',
+					fields: {
+						title: { kind: 'text' },
+						due_on: { kind: 'date', default: { today: '' } },
+						starts_at: { kind: 'instant', default: { var: 'tomorrow' } },
+						opened_on: { kind: 'date', default: { var: 'today + days(1)' } },
+						seen_at: { kind: 'instant', default: { var: 'now' } },
+						fixed_on: { kind: 'date', default: '2026-01-01' }
+					}
+				}
+			}
+		};
+		expect(
+			checkRules(m, { automations: [] }, (_r, n) => n)
+				.filter((f) => f.code === 'model/default')
+				.map((f) => f.message.split(':')[1]?.trim())
+		).toEqual(['due_on', 'starts_at']);
+	});
 	it('checks a custom search index: its width, its rerank page, its name and its vector field (model/range)', () => {
 		const index = { description: 'x', input: {}, metric: 'l2' as const };
 		const m: EngineManifest = {

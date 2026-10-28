@@ -353,7 +353,7 @@ describe('Store over a schema value', () => {
 							stamp: { kind: 'text' },
 							commit: { kind: 'text' },
 							digest: { kind: 'text' },
-							ready_at: { kind: 'instant', default: { now: '' } },
+							ready_at: { kind: 'instant', default: { var: 'now' } },
 							updated_at: { kind: 'instant', default: '2000-01-01T00:00:00Z' },
 							payload: { kind: 'json', default: { now: 'literal' } }
 						}

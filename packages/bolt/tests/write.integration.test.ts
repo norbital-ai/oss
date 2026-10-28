@@ -110,7 +110,7 @@ const run = (over: Over, engine: Partial<WriteEngine> = {}) =>
 			key: `key-${n}`,
 			issuedAt: NOW,
 			authority: admin,
-			bindings: { now: NOW, today: TODAY, tz: 'UTC', params: {} },
+			bindings: { now: NOW, today: TODAY, tz: 'UTC' },
 			invocationId: `inv-${n++}`,
 			...over
 		}
@@ -544,6 +544,21 @@ describe('engine/write: rows (rules 21, 22, 25, 29, 43)', () => {
 				});
 				expect(yield* one('select note from orders')).toEqual({ note: null });
 			}).pipe(Effect.provide(fixture))
+	);
+
+	it.effect('an update that writes no row answers which records already held its values', () =>
+		Effect.gen(function* () {
+			const id = yield* order('desk');
+			committed((yield* run({ verb: 'update', input: [{ target: id, set: { note: 'x' } }] })).outcome);
+			expect(
+				(yield* run({ verb: 'update', input: [{ target: id, set: { note: 'x' } }] })).outcome
+			).toEqual({
+				kind: 'committed',
+				output: null,
+				records: [],
+				unchanged: [{ model: 'orders', id }]
+			});
+		}).pipe(Effect.provide(fixture))
 	);
 
 	it.effect('upsert matches by id, creates without one, and keep writes nothing (rule 28)', () =>
@@ -1309,7 +1324,7 @@ describe('engine/write: references read scopes; mutations answer to their own ch
 							key: `key-${n}`,
 							issuedAt: NOW,
 							authority: who,
-							bindings: { now: NOW, today: TODAY, tz: 'UTC', params: {} },
+							bindings: { now: NOW, today: TODAY, tz: 'UTC' },
 							invocationId: `inv-${n++}`
 						}
 					);

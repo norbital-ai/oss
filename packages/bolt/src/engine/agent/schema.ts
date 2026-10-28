@@ -281,8 +281,7 @@ export const CONVERSATIONS = 100;
  * Whether a `sys_conversation` image belongs to the member's own list (§5.9) — the same set the `conversations` read
  * returns, so a live patch never carries a row a re-read would not. An instance's thread has no owner (`conversations/index.ts`
  * inserts it without one), so it is admitted by the envoy being `public`: that arm is the one a row can answer alone.
- * A thread of a private envoy the member posted in is in the read but not here, so its conversations row is not patched;
- * its messages still are, through the transcript's own view.
+ * A thread of a private envoy the member posted in is in the read but not here: the live view re-reads for it.
  */
 export const listed = (
 	r: RowData | null,
@@ -297,6 +296,19 @@ export const listed = (
 		: (r['integration'] ?? null) === null
 			? r['owner'] === member
 			: publicEnvoys.includes(String(r['envoy'] ?? '')));
+/**
+ * Which conversations other than a member's own a reader may see (`c` the `sys_conversation` row; each value a SQL
+ * placeholder): an automation's transcript for an administrator, an envoy's channel thread for staff when the envoy is
+ * public, or for anyone who posted in it. Opening one (`conversationFor`) and listing them (the `conversations` read) share it.
+ */
+export const sharedConversations = (p: {
+	readonly member: string;
+	readonly admin: string;
+	readonly staff: string;
+	readonly envoys: string;
+}) => `(c.run IS NOT NULL AND ${p.admin}) OR
+   (c.integration IS NOT NULL AND ${p.member} IS NOT NULL AND ((${p.staff} AND c.envoy IN (SELECT jsonb_array_elements_text(${p.envoys}::jsonb))) OR
+    EXISTS (SELECT 1 FROM sys_message m WHERE m.conversation = c.id AND ${p.member} IN (m.author, m."as"->>'member', m."as"->'envoy'->>'member'))))`;
 /** A `sys_conversation` image as the list shows it, so a live patch matches a re-read. */
 export const conversationRow = (r: RowData): { [k: string]: Json } => ({
 	id: r['id']!,
@@ -461,7 +473,7 @@ export function transcriptRow(r: MessageRow, staff: boolean, thread: boolean): A
 			? {
 					tool: {
 						name: step.name,
-						failed: outcome.error !== undefined,
+						failed: outcome.error !== undefined && outcome.error !== null,
 						...(child === undefined ? {} : { child }),
 						...(runs.length === 0 ? {} : { runs }),
 						...(r.state === 'running' ? { running: true } : {}),

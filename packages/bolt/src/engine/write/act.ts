@@ -24,6 +24,7 @@ import type {
 	Outcome,
 	RowData,
 	Sql,
+	DeleteArm,
 	WriteArm
 } from '../contracts.ts';
 import type { SelectIR } from '@norbital-ai/store';
@@ -43,7 +44,7 @@ const MiB = 1024 * 1024;
 const ACT_INPUT_BYTES = 8 * MiB;
 const ACT_ROWS = 4_000;
 import { readHistory } from '../query/history.ts';
-import { holders } from '../approvals/lock.ts';
+import { heldFields, holders } from '../approvals/lock.ts';
 import { Snapshot } from '../approvals/snapshot.ts';
 import { Effect, Layer, Predicate, Schema } from 'effect';
 import * as EffectArray from 'effect/Array';
@@ -294,9 +295,7 @@ const pipeline = Effect.fn('Bolt.pipeline')(function* (
 ) {
 	const e = {
 		...engine,
-		...(Object.hasOwn(SYSTEM.exposures, r.model)
-			? { manifest: layered(engine.manifest) }
-			: {})
+		...(Object.hasOwn(SYSTEM.exposures, r.model) ? { manifest: layered(engine.manifest) } : {})
 	};
 	const m = e.manifest,
 		cat = catalogOf(m),
@@ -369,24 +368,11 @@ const pipeline = Effect.fn('Bolt.pipeline')(function* (
 		);
 	if (byId) {
 		const invalid = inputs.findIndex((x) => !Predicate.isObject(x));
-		if (invalid >= 0)
-			return none(
-				refused(
-					'invalidInput',
-					'Expected an object.',
-					[invalid]
-				)
-			);
+		if (invalid >= 0) return none(refused('invalidInput', 'Expected an object.', [invalid]));
 		const badId = inputs.findIndex(
 			(x) => Predicate.isObject(x) && x['id'] !== undefined && typeof x['id'] !== 'string'
 		);
-		if (badId >= 0)
-			return none(
-				refused('invalidInput', 'Expected an id.', [
-					badId,
-					'id'
-				])
-			);
+		if (badId >= 0) return none(refused('invalidInput', 'Expected an id.', [badId, 'id']));
 	}
 	// rule 28: an upsert row whose `id` is on file is an update of it (`keep`: left as it is), resolved here, before the
 	// transform, so the transform sees the stored row; a row without an id is a create; an id on no row is refused
@@ -396,27 +382,18 @@ const pipeline = Effect.fn('Bolt.pipeline')(function* (
 				e.db,
 				cat,
 				inputs.flatMap((x) =>
-					Predicate.isObject(x) && typeof x['id'] === 'string'
-						? [[r.model, x['id']] as const]
-						: []
+					Predicate.isObject(x) && typeof x['id'] === 'string' ? [[r.model, x['id']] as const] : []
 				)
 			)
 		: new Map<string, RowData>();
 	const missing = byId
 		? inputs.findIndex(
 				(x) =>
-					Predicate.isObject(x) &&
-					x['id'] !== undefined &&
-					!onFile.has(k(r.model, String(x['id'])))
+					Predicate.isObject(x) && x['id'] !== undefined && !onFile.has(k(r.model, String(x['id'])))
 			)
 		: -1;
 	if (missing >= 0 && sync === undefined)
-		return none(
-			refused('notFound', `No ${r.model} has this id.`, [
-				missing,
-				'id'
-			])
-		);
+		return none(refused('notFound', `No ${r.model} has this id.`, [missing, 'id']));
 	inputs.forEach((x, i) => {
 		const path = [i];
 		if (r.verb === 'create' || (imp !== undefined && imp.onConflict === undefined))
@@ -619,8 +596,7 @@ const pipeline = Effect.fn('Bolt.pipeline')(function* (
 			if (id === null) continue;
 			const row = onFile.get(k(r.model, id));
 			if (row === undefined) continue;
-			if (!readable(r.model, row))
-				return none(refused('notFound', 'The record does not exist.'));
+			if (!readable(r.model, row)) return none(refused('notFound', 'The record does not exist.'));
 			if (!auth.admin && (auth.models[r.model]?.update.length ?? 0) === 0)
 				return none(refused('forbidden', 'You may not make this change.'));
 		}
@@ -740,7 +716,14 @@ const pipeline = Effect.fn('Bolt.pipeline')(function* (
 					(planned.commit.resubmit?.pending === true ? planned.commit.resubmit.request : undefined);
 				return none(
 					request === undefined
-						? { kind: 'committed', output: planned.commit.output, records }
+						? {
+								kind: 'committed',
+								output: planned.commit.output,
+								records,
+								...(planned.commit.unchanged === undefined
+									? {}
+									: { unchanged: planned.commit.unchanged })
+							}
 						: { kind: 'pendingApproval', requestId: request, records }
 				);
 			}
@@ -843,7 +826,8 @@ function admit(
 ): Admitted | Outcome {
 	const verbs = new Map<Json, Judged>();
 	for (const item of items)
-		if (item.parent === undefined) verbs.set(item.change.path[0] ?? null, actionOf(item.change, pre));
+		if (item.parent === undefined)
+			verbs.set(item.change.path[0] ?? null, actionOf(item.change, pre));
 	const needs = new Map<Judged, Need[]>();
 	for (const item of items) {
 		const c = item.change,
@@ -980,7 +964,13 @@ export const judge = Effect.fn('Bolt.judge')(function* (
 		else
 			deny ??= {
 				kind: 'deny',
-				outcome: { kind: 'refused', code: 'refused', message: data.message, rule: target, ...data.at }
+				outcome: {
+					kind: 'refused',
+					code: 'refused',
+					message: data.message,
+					rule: target,
+					...data.at
+				}
 			};
 	}
 	return {
@@ -990,12 +980,18 @@ export const judge = Effect.fn('Bolt.judge')(function* (
 	};
 });
 /** An update check's `before`: the stored row with each declared child layer under it (`StoredTree`), bounded per list. */
-const treeSelect = (cat: Catalog, paths: readonly string[], path: string, model: string): SelectIR => ({
+const treeSelect = (
+	cat: Catalog,
+	paths: readonly string[],
+	path: string,
+	model: string
+): SelectIR => ({
 	fields: null,
 	relations: Object.fromEntries(
 		paths.flatMap((p) => {
 			const rel = p.startsWith(`${path}.`) ? p.slice(path.length + 1) : '';
-			const many = rel === '' || rel.includes('.') ? undefined : cat.models.get(model)?.many.get(rel);
+			const many =
+				rel === '' || rel.includes('.') ? undefined : cat.models.get(model)?.many.get(rel);
 			return many === undefined
 				? []
 				: [
@@ -1114,9 +1110,7 @@ export const readRows = Effect.fn('Bolt.readRows')(function* (
 				return Effect.fail(
 					BoltError.make('internal', 'admission', 'read visibility requires its caller scope')
 				);
-			const ids = [
-				...new Set(want.filter(([model]) => model === table).map(([, id]) => id))
-			];
+			const ids = [...new Set(want.filter(([model]) => model === table).map(([, id]) => id))];
 			for (const id of ids) scope.visibility.set(k(table, id), false);
 			return compileGets(
 				cat,
@@ -1271,11 +1265,7 @@ const plan = Effect.fn('Bolt.plan')(function* (
 						outcome: refused('notFound', 'The record does not exist.', item.change.path)
 					};
 				input.push(
-					verb === 'create'
-						? tree(item)
-						: verb === 'update'
-							? { before, set: tree(item) }
-							: before
+					verb === 'create' ? tree(item) : verb === 'update' ? { before, set: tree(item) } : before
 				);
 			}
 			const judged = yield* judge(
@@ -1486,8 +1476,7 @@ const plan = Effect.fn('Bolt.plan')(function* (
 				const again = new Flattener(m, cat, minter(seed, b.now), identities);
 				for (const [index, item] of chunk.entries()) {
 					const c = item.change;
-					if (c.op === 'create')
-						again.create(model, 'any', g.output[index], c.path, item.parent);
+					if (c.op === 'create') again.create(model, 'any', g.output[index], c.path, item.parent);
 					else if (c.op === 'update')
 						again.update(model, 'any', c.id, g.output[index], c.revision, c.path, item.parent);
 				}
@@ -1545,16 +1534,9 @@ const plan = Effect.fn('Bolt.plan')(function* (
 			{ text: 'SELECT id FROM sys_envoy WHERE active', params: [] }
 		]);
 		const runtimeEnvoys = new Set(
-			(envoys?.rows ?? []).flatMap((row) =>
-				typeof row['id'] === 'string' ? [row['id']] : []
-			)
+			(envoys?.rows ?? []).flatMap((row) => (typeof row['id'] === 'string' ? [row['id']] : []))
 		);
-		const t = instanceTransform(
-			m,
-			items,
-			(id) => pre.get(k(r.model, id)),
-			runtimeEnvoys
-		);
+		const t = instanceTransform(m, items, (id) => pre.get(k(r.model, id)), runtimeEnvoys);
 		if ('kind' in t) return { guest: false, outcome: t };
 		items = [...t];
 	}
@@ -1577,6 +1559,7 @@ const plan = Effect.fn('Bolt.plan')(function* (
 	const deletedIds = new Set(
 		items.filter((i) => i.change.op === 'delete').map((i) => k(i.change.model, i.change.id))
 	);
+	const unchanged: { model: string; id: string }[] = [];
 	for (const it of items) {
 		const c = it.change;
 		if (c.op !== 'delete' && deletedIds.has(k(c.model, c.id)))
@@ -1648,6 +1631,7 @@ const plan = Effect.fn('Bolt.plan')(function* (
 					},
 					item: it
 				});
+			else unchanged.push({ model: c.model, id: c.id });
 		}
 	}
 	// §3.3.2: every custom field value the act writes passes its kind's `validate`
@@ -1674,9 +1658,7 @@ const plan = Effect.fn('Bolt.plan')(function* (
 			!auth.admin &&
 			item.parent === undefined &&
 			item.change.op === 'update' &&
-			!checked.some(
-				({ write }) => write.model === item.change.model && write.id === item.change.id
-			)
+			!checked.some(({ write }) => write.model === item.change.model && write.id === item.change.id)
 		) {
 			const row = pre.get(k(item.change.model, item.change.id));
 			if (row !== undefined)
@@ -1692,9 +1674,7 @@ const plan = Effect.fn('Bolt.plan')(function* (
 				});
 		}
 	const fresh = new Set(
-		writes
-			.filter(({ write }) => write.op === 'create')
-			.map(({ write }) => k(write.model, write.id))
+		writes.filter(({ write }) => write.op === 'create').map(({ write }) => k(write.model, write.id))
 	);
 	const held = yield* holders(
 		own,
@@ -1785,12 +1765,28 @@ const plan = Effect.fn('Bolt.plan')(function* (
 				);
 			})
 		);
-		// the resubmitted change is the request's own verb, judged against its checkpoint by every arm the caller holds
+		// the resubmitted change is the request's own verb, judged against its checkpoint by the caller's arms that admit it
 		const verb = request.action;
 		const [tree] =
 			verb === 'update'
 				? yield* storedTrees(own, m, cat, request.model, [request.record], b)
 				: [null];
+		// relationship actions the request holds stay authored changes until it resolves
+		const relations =
+			verb === 'update' ? yield* heldFields(own, m, cat, request.id) : ([] as readonly string[]);
+		for (const field of relations)
+			pending[field] ??= Predicate.isObject(tree) ? (tree[field] ?? null) : null;
+		const declared =
+			verb === 'delete' ? [] : (m.exposures[request.model]?.[verb]?.columns[request.model] ?? []);
+		const admits = (arm: WriteArm | DeleteArm) =>
+			!('columns' in arm) ||
+			(Object.keys(verb === 'create' ? values : pending).every(
+				(field) =>
+					relations.includes(field) ||
+					!declared.includes(field) ||
+					(arm.columns[request.model]?.includes(field) ?? false)
+			) &&
+				relations.every((field) => Object.hasOwn(arm.columns, `${request.model}.${field}`)));
 		const judged = auth.admin
 			? { guest: false, verdict: { kind: 'allow' } satisfies Judgement }
 			: yield* judge(
@@ -1801,7 +1797,7 @@ const plan = Effect.fn('Bolt.plan')(function* (
 					`${r.invocationId}:resubmit:${request.id}`,
 					request.model,
 					verb,
-					auth.models[request.model]?.[verb] ?? [],
+					(auth.models[request.model]?.[verb] ?? []).filter(admits),
 					[
 						verb === 'create'
 							? values
@@ -1813,7 +1809,8 @@ const plan = Effect.fn('Bolt.plan')(function* (
 				);
 		guest ||= judged.guest;
 		if (judged.verdict.kind === 'deny') return stop(judged.verdict.outcome);
-		const snapshot = judged.verdict.kind === 'approve' ? judged.verdict.flow : { kind: 'allow' as const };
+		const snapshot =
+			judged.verdict.kind === 'approve' ? judged.verdict.flow : { kind: 'allow' as const };
 		guest = true;
 		resubmit = yield* e.approval.resubmit({
 			request: request.id,
@@ -1837,7 +1834,8 @@ const plan = Effect.fn('Bolt.plan')(function* (
 		const root = checked.find(
 			({ item }) => item.parent === undefined && item.change.model === r.model
 		)?.write;
-		if (root === undefined)
+		// an unchanged Save writes nothing for a new request to hold
+		if (root === undefined || writes.length === 0)
 			return stop(refused('forbidden', 'No root record admits this approval.'));
 		const route = yield* e.approval.route({
 			model: r.model,
@@ -1956,6 +1954,7 @@ const plan = Effect.fn('Bolt.plan')(function* (
 								].sort((a, b) => (a.index ?? Infinity) - (b.index ?? Infinity))
 							}
 						: null),
+			...(plain.length === 0 && unchanged.length > 0 ? { unchanged } : {}),
 			...(approval === undefined ? {} : { approval }),
 			...(resubmit === undefined ? {} : { resubmit }),
 			...(guest && fingerprints.length > 0 ? { fingerprints } : {}),
@@ -1987,11 +1986,10 @@ function syncOwnership(m: EngineManifest, r: ActRequest, items: readonly Item[])
 				return refused('forbidden', `A sync writes only ${r.model}.`, c.path);
 			const field = written.find((field) => !sync.fields.includes(field));
 			if (field !== undefined)
-				return refused(
-					'forbidden',
-					`'${field}' of ${c.model} is outside this sync's fields.`,
-					[...c.path, field]
-				);
+				return refused('forbidden', `'${field}' of ${c.model} is outside this sync's fields.`, [
+					...c.path,
+					field
+				]);
 			continue;
 		}
 		const owner = readOnlySync(m, c.model);
@@ -2001,11 +1999,10 @@ function syncOwnership(m: EngineManifest, r: ActRequest, items: readonly Item[])
 		const local = m.exposures[c.model]?.update?.columns[c.model] ?? [];
 		const field = written.find((field) => !local.includes(field));
 		if (field !== undefined)
-			return refused(
-				'forbidden',
-				`'${field}' of ${c.model} is written by its sync ${owner}.`,
-				[...c.path, field]
-			);
+			return refused('forbidden', `'${field}' of ${c.model} is written by its sync ${owner}.`, [
+				...c.path,
+				field
+			]);
 	}
 	return null;
 }
@@ -2083,9 +2080,7 @@ export function ownedLocks(
 	writes: readonly Write[],
 	pre: Map<string, RowData>
 ): OwnedLock[] {
-	const created = new Set(
-		writes.filter((w) => w.op === 'create').map((w) => k(w.model, w.id))
-	);
+	const created = new Set(writes.filter((w) => w.op === 'create').map((w) => k(w.model, w.id)));
 	const locks = new Map<
 		string,
 		{
@@ -2138,13 +2133,9 @@ export const wireRows = Effect.fn('Bolt.wireRows')(function* (
 	if (want.length === 0) return ids.map(() => null);
 	const [res] = yield* db.read([
 		composable(
-			yield* compileGets(
-				cat,
-				c,
-				want,
-				select,
-				readOptions({ as: 'workspace' }, b)
-			).pipe(Effect.mapError(fromStore))
+			yield* compileGets(cat, c, want, select, readOptions({ as: 'workspace' }, b)).pipe(
+				Effect.mapError(fromStore)
+			)
 		)
 	]);
 	const byId = new Map(
@@ -2203,7 +2194,9 @@ export const mayUpdate = Effect.fn('Bolt.mayUpdate')(function* (
 	const m = Object.hasOwn(SYSTEM.exposures, model) ? layered(e.manifest) : e.manifest;
 	const pre = yield* readRows(e.db, catalogOf(m), [[model, id]]);
 	if (!pre.has(k(model, id))) return null;
-	return (yield* opened({ ...e, manifest: m }, authority, bindings, model, 'update', id)) === 'allow';
+	return (
+		(yield* opened({ ...e, manifest: m }, authority, bindings, model, 'update', id)) === 'allow'
+	);
 });
 /**
  * Current-row advice from the act's own admission: the columns the caller's update arms name at the record's write path,
@@ -2228,7 +2221,13 @@ export const recordCapabilities = Effect.fn('Bolt.recordCapabilities')(function*
 	const cat = catalogOf(m),
 		pre = yield* readRows(e.db, cat, [[model, id]]);
 	const row = pre.get(k(model, id));
-	if (row === undefined || typeof row['revision'] !== 'number') return null;
+	// the stored row must be the revision the caller just read: a change between them may move it out of scope
+	if (
+		row === undefined ||
+		typeof row['revision'] !== 'number' ||
+		visible['revision'] !== row['revision']
+	)
+		return null;
 	const probe = { ...e, manifest: m };
 	// the write path the record's fields sit at, and the root whose arms and checks judge it
 	let path = model,
@@ -2254,6 +2253,17 @@ export const recordCapabilities = Effect.fn('Bolt.recordCapabilities')(function*
 		const permission = parentCaps.fields[parent.relation];
 		if (permission === undefined) return null;
 		path = `${parent.model}.${parent.relation}`;
+		// the child is read through the root's layer: that layer's scope (absent = unscoped), never the child's own grant
+		const layer = authority.admin ? undefined : authority.models[parent.model]?.read[path];
+		// ponytail: in-memory over the stored row; a relation predicate in a layer scope denies, read it through the reader if one is needed
+		const inLayer = layer?.some((arm) => {
+			try {
+				return evaluate({ cat, bindings, authority }, model, arm.where, row);
+			} catch {
+				return false;
+			}
+		});
+		if (inLayer === false) return null;
 		owner = parent.model;
 		fk = relation.column;
 		const relationship = m.relationships[`${model}.${fk}`];
@@ -2337,9 +2347,7 @@ export const recordCapabilities = Effect.fn('Bolt.recordCapabilities')(function*
 	const moves =
 		state === undefined
 			? []
-			: transitions.filter((next) =>
-					admitMove(authority, model, state, String(row[state]), next)
-				);
+			: transitions.filter((next) => admitMove(authority, model, state, String(row[state]), next));
 	/** A field's or relation's advice: its own reasons, then the checks' verdict on the record. */
 	const advise = (reasons: RecordRestriction[]) => ({
 		writable: reasons.length === 0 && gate === 'allow',
@@ -2633,8 +2641,7 @@ export function transformBridge(
 	const bindings: Bindings = {
 		now: invocation.ctx.now,
 		today: invocation.ctx.today,
-		tz: invocation.ctx.tz,
-		params: {}
+		tz: invocation.ctx.tz
 	};
 	return {
 		tables: () => [...tables],
@@ -2642,10 +2649,7 @@ export function transformBridge(
 		cross: (calls) =>
 			Effect.gen(function* () {
 				type ReadCall = Extract<Parameters<Bridge['cross']>[0][number], { _tag: 'read' }>;
-				const groups = new Map<
-					string,
-					{ params: Bindings['params']; reads: { index: number; read: ReadCall['read'] }[] }
-				>();
+				const groups = new Map<string, { reads: { index: number; read: ReadCall['read'] }[] }>();
 				const answers = calls.map((call): CrossAnswer => ({
 					ok: false,
 					error: {
@@ -2660,10 +2664,10 @@ export function transformBridge(
 					const cte =
 						call.read.kind === 'read' || call.read.kind === 'get' ? call.read.cte : undefined;
 					const scope = cte === undefined ? index : cte.split(':', 1)[0];
-					const key = canonical([call.params, scope ?? index]);
+					const key = canonical(scope ?? index);
 					let group = groups.get(key);
 					if (group === undefined) {
-						group = { params: call.params, reads: [] };
+						group = { reads: [] };
 						groups.set(key, group);
 					}
 					group.reads.push({ index, read: call.read });
@@ -2676,7 +2680,7 @@ export function transformBridge(
 							.run(
 								group.reads.map(({ read }) => read),
 								{ as: 'workspace' },
-								{ ...bindings, params: group.params }
+								bindings
 							)
 							.pipe(
 								Effect.provideService(ReadDeps, tables),

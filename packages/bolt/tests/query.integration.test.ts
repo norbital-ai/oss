@@ -225,7 +225,6 @@ describe('next query engine (PGlite)', () => {
 				const answers = yield* bridge.cross([
 					{
 						_tag: 'read',
-						params: { scope: 'shared', n: 1 },
 						read: {
 							...accounts,
 							member: 'accounts',
@@ -235,7 +234,6 @@ describe('next query engine (PGlite)', () => {
 					{ _tag: 'notify', notices: null },
 					{
 						_tag: 'read',
-						params: { n: 1, scope: 'shared' },
 						read: {
 							...orders,
 							member: 'orders',
@@ -244,7 +242,6 @@ describe('next query engine (PGlite)', () => {
 					},
 					{
 						_tag: 'read',
-						params: { scope: 'separate' },
 						read: read(cat, 'notes', { all: true, select: { body: true } })
 					}
 				]);
@@ -284,12 +281,10 @@ describe('next query engine (PGlite)', () => {
 				const independent = yield* bridge.cross([
 					{
 						_tag: 'read',
-						params: {},
 						read: { ...notes, model: 'absent' }
 					},
 					{
 						_tag: 'read',
-						params: {},
 						read: read(cat, 'notes', { all: true, select: { body: true } })
 					}
 				]);
@@ -423,8 +418,7 @@ describe('next query engine (PGlite)', () => {
 								{ [cmp()]: v() },
 								{ [cmp()]: v() },
 								{ in: list() },
-								...nums.map((g) => ({ [cmp()]: { field: g.name } })),
-								...(f.kind === 'decimal' ? [{ gte: { param: 'min' } }] : [])
+								...nums.map((g) => ({ [cmp()]: { field: g.name } }))
 							]);
 						}
 						case 'date':
@@ -513,7 +507,7 @@ describe('next query engine (PGlite)', () => {
 								{ isNull: rnd() < 0.5 },
 								...texts.map((g) => ({ [pick(['eq', 'ne'])]: { field: g.name } })),
 								...(f.email && o.actor
-									? [{ eq: { actor: 'email' } }, { eq: { actor: 'email' } }]
+									? [{ eq: { var: 'requestor.email' } }, { eq: { var: 'requestor.email' } }]
 									: []),
 								...(o.text ? [{ [pick(['lt', 'gte'])]: s }] : [])
 							]);
@@ -533,23 +527,26 @@ describe('next query engine (PGlite)', () => {
 							!f.computed &&
 							(EXPOSED[m] ?? [f.name]).includes(f.name)
 					);
-				function gen(m: string, depth: number, o: Opts): object {
+				// a relation only through the read layers `path` declares: a read filters across no other
+				function gen(m: string, depth: number, o: Opts, path = m): object {
 					const info = cat.models.get(m)!;
 					const r = rnd();
-					if (depth < 4 && r < 0.12) return { and: [gen(m, depth + 1, o), gen(m, depth + 1, o)] };
-					if (depth < 4 && r < 0.24) return { or: [gen(m, depth + 1, o), gen(m, depth + 1, o)] };
-					if (depth < 4 && r < 0.3) return { not: gen(m, depth + 1, o) };
-					if (depth < 4 && r < 0.5) {
-						const rels = [...info.one.keys(), ...info.many.keys()].filter(
-							(x) => m !== 'notes' || x === 'about'
-						);
+					if (depth < 4 && r < 0.12)
+						return { and: [gen(m, depth + 1, o, path), gen(m, depth + 1, o, path)] };
+					if (depth < 4 && r < 0.24)
+						return { or: [gen(m, depth + 1, o, path), gen(m, depth + 1, o, path)] };
+					if (depth < 4 && r < 0.3) return { not: gen(m, depth + 1, o, path) };
+					const rels = [...info.one.keys(), ...info.many.keys()].filter((x) =>
+						cat.layers.has(`${path}.${x}`)
+					);
+					if (depth < 4 && r < 0.5 && rels.length > 0) {
 						const rel = pick(rels);
 						const one = info.one.get(rel);
 						if (one !== undefined) {
 							const t = pick(one.targets);
 							const body =
 								rnd() < 0.7
-									? { is: gen(t, depth + 1, o) }
+									? { is: gen(t, depth + 1, o, `${path}.${rel}`) }
 									: pick([
 											{ eq: pick(rows[t]!).id },
 											{ in: rows[t]!.filter(() => rnd() < 0.3).map((x) => x.id) },
@@ -561,7 +558,7 @@ describe('next query engine (PGlite)', () => {
 						const amounts = pool(child, 'amount');
 						return {
 							[rel]: pick([
-								{ [pick(['some', 'none', 'every'])]: gen(child, depth + 1, o) },
+								{ [pick(['some', 'none', 'every'])]: gen(child, depth + 1, o, `${path}.${rel}`) },
 								{ count: { [cmp()]: pick([0, 1, 2]) } },
 								...(child === 'lines'
 									? [
@@ -929,10 +926,15 @@ describe('next query engine (PGlite)', () => {
 						run(caller, read(cat, 'orders', { orderBy: { account: { secret: 'asc' } }, limit: 5 }))
 					)
 				).toMatchObject({ code: 'invalidInput' });
+				// unread: neither the accounts grant nor the orders grant's account layer
 				const { accounts: _accounts, ...withoutAccounts } = rep.models;
+				const { 'orders.account': _layer, ...ordersRead } = rep.models.orders!.read;
 				const noAccounts: Reader = {
 					as: 'caller',
-					authority: { ...rep, models: withoutAccounts }
+					authority: {
+						...rep,
+						models: { ...withoutAccounts, orders: { ...rep.models.orders!, read: ordersRead } }
+					}
 				};
 				expect(
 					yield* Effect.flip(
@@ -1358,25 +1360,20 @@ describe('next query engine (PGlite)', () => {
 				yield* setup();
 				const [answer] = yield* run(
 					caller,
-					lowerRead(manifest, 'read', [
-						'orders',
-						{ search: { hue: {} }, select: { color: true }, limit: 2 }
+					lowerRead(manifest, 'query', [
+						{ orders: { search: { hue: {} }, fields: ['color'], limit: 2 } }
 					])
 				);
-				const page = yield* Schema.decodeUnknownEffect(
+				const { orders: page } = yield* Schema.decodeUnknownEffect(
 					Schema.Struct({
-						rows: Schema.Array(Schema.Record(Schema.String, Schema.Json)),
-						next: Schema.NullOr(Schema.String)
+						orders: Schema.Struct({
+							rows: Schema.Array(Schema.Record(Schema.String, Schema.Json)),
+							next: Schema.NullOr(Schema.String)
+						})
 					})
 				)(answer);
 				const out = page.rows;
 				expect(page.next).toBeNull();
-				expect(
-					(yield* run(
-						caller,
-						lowerRead(manifest, 'read', ['orders', { search: { hue: {} }, limit: 0 }])
-					))[0]
-				).toEqual({ rows: [], next: null });
 				const north = new Set(ACCOUNTS.filter((a) => a.region === 'north').map((a) => a.id));
 				const pool = ORDERS.filter(
 					(o) => o.color !== null && o.status !== 'held' && north.has(o.account)

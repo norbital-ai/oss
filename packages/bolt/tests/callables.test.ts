@@ -1,14 +1,10 @@
 // Pure parts of the callables area: typed-input decode (rules 5, 23, 36) and the rule 52a due time.
 import { describe, expect, it } from '@effect/vitest';
-import { dueAt as roundedDueAt, offsetMs } from '../src/engine/runs/time.ts';
-const dueAt = (now: string, at?: string | { now: string }) => {
+import { dueAt as roundedDueAt, materialize } from '../src/engine/runs/time.ts';
+const dueAt = (now: string, at?: string | { var: string }) => {
 	const ms = Date.parse(now);
-	return new Date(
-		roundedDueAt(
-			ms,
-			at === undefined ? ms : typeof at === 'string' ? Date.parse(at) : ms + offsetMs(at.now)
-		)
-	).toISOString();
+	const when = at === undefined ? now : typeof at === 'string' ? at : materialize(at, { now, today: now.slice(0, 10) });
+	return new Date(roundedDueAt(ms, Date.parse(String(when)))).toISOString();
 };
 import { decodeInput as decode } from '../src/engine/callables/decode.ts';
 
@@ -108,8 +104,8 @@ describe('dueAt (rule 52a)', () => {
 	const now = '2026-09-25T10:01:30.000Z';
 	it('is exact under 5 minutes ahead and rounds up to a 5-minute bucket from 5 minutes on', () => {
 		expect(dueAt(now)).toBe(now);
-		expect(dueAt(now, { now: '+1min' })).toBe('2026-09-25T10:02:30.000Z');
-		expect(dueAt(now, { now: '+1h' })).toBe('2026-09-25T11:05:00.000Z');
+		expect(dueAt(now, { var: 'now + minutes(1)' })).toBe('2026-09-25T10:02:30.000Z');
+		expect(dueAt(now, { var: 'now + hours(1)' })).toBe('2026-09-25T11:05:00.000Z');
 		expect(dueAt(now, '2026-09-26T00:00:00.000Z')).toBe('2026-09-26T00:00:00.000Z');
 	});
 });

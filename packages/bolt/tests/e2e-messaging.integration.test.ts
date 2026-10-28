@@ -170,7 +170,7 @@ const scriptedAi = () => {
 						last = present(
 							request.messages.findLast(
 								(m) =>
-									!(typeof m.content === 'string' && m.content.startsWith('[conversation state]'))
+									!(typeof m.content === 'string' && m.content.startsWith('[conversation state'))
 							)
 						); // not the step's closing note
 					if (last.role === 'tool')
@@ -255,21 +255,29 @@ const setup = Effect.gen(function* () {
 			Effect.map((answer) => answer.jobs.rows[0].status)
 		);
 	let seq = 0;
+	/** A chat message is held for the sender's pause even with triage off: the pause passes, and the held burst is admitted. */
+	const paused = () =>
+		Effect.gen(function* () {
+			t.clock.advance('2s');
+			yield* t.runDue();
+		});
 	const say = (
 		instance: 'field_wa' | 'sales_tg',
 		from: string,
 		body: string,
 		over: { [k: string]: Json } = {}
 	) =>
-		t.receive(instance, {
-			id: `m${++seq}`,
-			thread: from,
-			sentAt: t.clock.now(),
-			from: { handle: from, name: null },
-			text: body,
-			attachments: [],
-			...over
-		});
+		t
+			.receive(instance, {
+				id: `m${++seq}`,
+				thread: from,
+				sentAt: t.clock.now(),
+				from: { handle: from, name: null },
+				text: body,
+				attachments: [],
+				...over
+			})
+			.pipe(Effect.andThen(paused()));
 	const inbound = (body: string) =>
 		t.db
 			.read([

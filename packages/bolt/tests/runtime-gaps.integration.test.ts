@@ -153,7 +153,7 @@ const setup = (web?: WebRead['Service']['read'], shell = false, database?: TestO
 				automation,
 				runs: [{ id, input }],
 				authority: authority(),
-				bindings: { now: t.clock.now(), today: t.clock.now().slice(0, 10), tz: 'UTC', params: {} }
+				bindings: { now: t.clock.now(), today: t.clock.now().slice(0, 10), tz: 'UTC' }
 			});
 		const act = (callable: string, input: Json) =>
 			actReply(route, t.as(t.admin).authority, { callable, input, issuedAt: t.clock.now() }).pipe(

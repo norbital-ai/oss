@@ -9,7 +9,7 @@ import type { Effect, Option, Result, Schema, Scope, Stream } from 'effect';
 import type { Json } from '../decl/values.ts';
 import type { FacilityFailure, Unavailable } from '../decl/errors.ts';
 import type { Frame, ImportStart } from '../protocol/schema.ts';
-import type { Actor, Pred } from '@norbital-ai/store';
+import type { Pred, Var } from '@norbital-ai/store';
 import type { ReadIR } from '../protocol/reads.ts';
 import { LIMITS } from './contracts.ts';
 import type {
@@ -606,7 +606,6 @@ export type CrossCall =
 	| {
 			readonly _tag: 'read';
 			readonly read: ReadIR;
-			readonly params: { readonly [name: string]: Json };
 	  }
 	| {
 			readonly _tag: 'act';
@@ -627,7 +626,7 @@ export type CrossCall =
 			readonly _tag: 'schedule';
 			readonly automation: string;
 			readonly input: Json;
-			readonly at?: string | { readonly now: string } | undefined;
+			readonly at?: string | { readonly var: string } | undefined;
 			readonly key?: string | undefined;
 	  }
 	| { readonly _tag: 'notify'; readonly notices: Json }
@@ -776,7 +775,7 @@ export type WritableColumns = (
 	verb: 'create' | 'update'
 ) => ReadonlySet<string> | 'all';
 export type VisitorMayRead = (authority: Authority, model: string) => boolean;
-export type OperandValue = (operand: Actor, authority: Authority) => Json;
+export type OperandValue = (operand: Var, authority: Authority) => Json;
 /** Who may open an app or kiosk: a signed-in audience, no authentication (`none`), or a public app's policies. */
 export type Audience =
 	| 'members'

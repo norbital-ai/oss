@@ -48,9 +48,7 @@ export function prospectiveBridge(
 							page: { _tag: 'All' as const }
 						};
 						// The original bridge captures the stored source baseline for the act's native lock/fingerprint contract.
-						const baseline = yield* originalBridge.cross([
-							{ _tag: 'read', read: nativeRead, params: call.params }
-						]);
+						const baseline = yield* originalBridge.cross([{ _tag: 'read', read: nativeRead }]);
 						if (baseline.length !== 1)
 							return yield* Effect.fail(
 								BoltError.make(

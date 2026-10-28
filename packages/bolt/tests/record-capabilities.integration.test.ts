@@ -12,7 +12,7 @@ import { admin, arm, authority, grants, manifest, NOW, TODAY, writeArm } from '.
 import { exposure } from '../src/engine/access/exposure.ts';
 import type { RecordParentContext } from '../src/protocol/record-contracts.ts';
 
-const bindings = { now: NOW, today: TODAY, tz: 'UTC', params: {} };
+const bindings = { now: NOW, today: TODAY, tz: 'UTC' };
 const FALSE = { t: 'const', value: false } as const;
 /** A guest answering every policy `check` with `verdict`'s data (the dry run at record open), recording each call. */
 const checks = (verdict: () => Json, calls: Invocation[] = []): Partial<WriteEngine> => ({
@@ -268,13 +268,17 @@ it.live('publishes scoped ordinary grants while omitting unreadable and masked f
 			orders: grants('orders', {
 				read: { orders: [arm(undefined, ['title', 'note', 'status'])] },
 				update: [writeArm({ orders: ['note'] })],
-				masks: { orders: { title: FALSE } }
+				// the compiled form of the arm's field list (fields it omits mask to false), plus the title mask
+				masks: { orders: { title: FALSE, number: FALSE, total: FALSE, big_lines: FALSE } }
 			})
 		});
 		const caps = yield* capabilities('orders', parent, auth);
 		expect(caps?.fields).toEqual({
 			note: { writable: true, proposal: false, reasons: [] },
-			status: { writable: false, proposal: false, reasons: ['noGrant'] }
+			status: { writable: false, proposal: false, reasons: ['noGrant'] },
+			// the declared update layers: the arm names neither
+			lines: { writable: false, proposal: false, reasons: ['noGrant'] },
+			tags: { writable: false, proposal: false, reasons: ['noGrant'] }
 		});
 		expect(caps?.update.allowed).toBe(true);
 		expect(JSON.stringify(caps)).not.toContain('number');

@@ -21,7 +21,7 @@ export default model('sys_sync', {
 		/** The compare-and-set version of the cursor. */
 		version: { kind: 'int', default: 0 },
 		/** First observed state: a fixed baseline for quiet-webhook health. */
-		started_at: { kind: 'instant', default: { now: '' } },
+		started_at: { kind: 'instant', default: { var: 'now' } },
 		last_read_at: { kind: 'instant', optional: true },
 		last_change_at: { kind: 'instant', optional: true },
 		last_hint_at: { kind: 'instant', optional: true }

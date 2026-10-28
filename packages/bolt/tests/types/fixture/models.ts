@@ -82,7 +82,7 @@ export const orders = model('orders', {
 	fields: {
 		number: { kind: 'seq', pattern: 'SO-{0000}' },
 		customer: { kind: 'ref', to: 'customers', inverse: 'orders' },
-		owner: { kind: 'ref', to: 'sys_user', optional: true, default: { actor: 'id' } },
+		owner: { kind: 'ref', to: 'sys_user', optional: true, default: { var: 'requestor.id' } },
 		ledger: {
 			kind: 'ref',
 			to: 'sys_integration',

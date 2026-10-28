@@ -36,7 +36,7 @@ export const layered = policy({
 	grants: {
 		orders: {
 			read: {
-				orders: { where: { owner: { eq: { actor: 'id' } } }, fields: ['number', 'status', 'customer'] },
+				orders: { where: { owner: { eq: { var: 'requestor.id' } } }, fields: ['number', 'status', 'customer'] },
 				'orders.customer': { fields: ['name'] },
 				'orders.lines': { where: { item: { ne: '' } } }
 			},

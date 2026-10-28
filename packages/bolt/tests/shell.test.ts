@@ -284,7 +284,9 @@ describe('exposure (the boot catalog ui reads)', () => {
 			...member([]),
 			models: {
 				sys_integration: access({
-					read: { sys_integration: [{ policy: 'p', where: TRUE, fields: ['name', 'configuration'] }] },
+					read: {
+						sys_integration: [{ policy: 'p', where: TRUE, fields: ['name', 'configuration'] }]
+					},
 					update: [{ policy: 'p', columns: { sys_integration: ['configuration'] }, check: false }]
 				})
 			}
@@ -316,10 +318,14 @@ describe('exposure (the boot catalog ui reads)', () => {
 			}
 		};
 		const catalog = exposure(source, { ...member([]), admin: true });
+		// the write layer carries the child's own columns, as its form edits them in place
 		expect(catalog['jobs']?.update?.with?.['lines']).toEqual({
 			model: 'lines',
 			parent: 'job',
-			owned: true
+			owned: true,
+			create: { columns: ['amount'] },
+			update: { columns: ['amount'] },
+			delete: true
 		});
 		expect(catalog['jobs']?.children?.['lines']).toEqual({
 			model: 'lines',
@@ -397,6 +403,7 @@ describe('exposure (the boot catalog ui reads)', () => {
 				search: ['title'],
 				fields: { title: { kind: 'text' }, pay: { kind: 'money' } },
 				relations: { site: { targets: ['sites'], optional: true } },
+				layers: ['site'],
 				update: { columns: ['title'] },
 				masked: ['pay'],
 				description: 'Work orders on site'
@@ -795,7 +802,9 @@ describe('visitor fetch (§5.10, GAPS r5 11)', () => {
 			actor: { kind: 'visitor', app: 'lobby', visitor: 'v' },
 			models: {
 				openings: {
-					read: { openings: [{ policy: 'visitor', where: { t: 'const', value: true }, fields: 'all' }] },
+					read: {
+						openings: [{ policy: 'visitor', where: { t: 'const', value: true }, fields: 'all' }]
+					},
 					history: [],
 					create: [],
 					update: [],
@@ -817,7 +826,10 @@ describe('visitor fetch (§5.10, GAPS r5 11)', () => {
 			BoltRoutes['POST /__bolt/live'].admits(visitor, { m: 'aggregate', a: ['openings', {}] })
 		).toBe(false);
 		expect(
-			BoltRoutes['POST /__bolt/live'].admits(visitor, { m: 'query', a: [{ openings: {}, orders: {} }] })
+			BoltRoutes['POST /__bolt/live'].admits(visitor, {
+				m: 'query',
+				a: [{ openings: {}, orders: {} }]
+			})
 		).toBe(false);
 		expect(BoltRoutes['POST /__bolt/live'].admits(visitor, undefined)).toBe(false);
 		expect(
@@ -890,6 +902,36 @@ describe('sidebar model', () => {
 		]);
 		// a portal page is no sidebar row or tab: `hr/kiosk` has only its portal page, so the group keeps `hr/people` alone
 		expect(tree(model.sections[1]!.items)).toContainEqual(['hr', ['hr/people']]);
+	});
+	it("an app's page at its folder's own address is not open beside the sibling below it", () => {
+		const pages = [
+			{ name: 'payroll', title: 'Runs', href: '/app/payroll' },
+			{ name: 'compliance', title: 'Compliance', href: '/app/payroll/compliance' }
+		];
+		const boot = {
+			...bootOf(member(['sales'])),
+			nav: [
+				{
+					kind: 'app' as const,
+					name: 'payroll',
+					title: 'Payroll',
+					description: '',
+					icon: 'lucide:receipt',
+					href: '/app/payroll',
+					pages
+				}
+			]
+		};
+		const open = (path: string) =>
+			activeApp(navigationModel(boot, path, (k) => k))?.pages?.map((p) => [p.key, p.active]);
+		expect(open('/app/payroll/compliance')).toEqual([
+			['payroll/payroll', false],
+			['payroll/compliance', true]
+		]);
+		expect(open('/app/payroll')).toEqual([
+			['payroll/payroll', true],
+			['payroll/compliance', false]
+		]);
 	});
 	it("portal pages sit in the ellipsis menu's Portals group, for the viewers who may open them", () => {
 		const model = navigationModel(bootOf(member(['hr'])), '/app/hr/kiosk/clock', (k) => k);
@@ -1228,7 +1270,7 @@ describe('Studio port boundary', () => {
 	});
 });
 
-describe('read_attachment over the files port', () => {
+describe('reading files over the files port', () => {
 	it.live('reads images and PDFs by MIME even with a wrong mode; refuses unsupported bytes', () =>
 		Effect.gen(function* () {
 			const stored: Record<string, { key: string; mime: string }> = {

@@ -30,7 +30,7 @@ import { admin, arm, authority, deleteArm, grants, NOW, TODAY, writeArm } from '
 import { manifest } from './write-p2.fixture.ts';
 
 const count = { reads: 0, writes: 0, statements: 0 };
-const bindings = { now: NOW, today: TODAY, tz: 'UTC', params: {} };
+const bindings = { now: NOW, today: TODAY, tz: 'UTC' };
 type Over = Partial<ActRequest> & Pick<ActRequest, 'verb' | 'input'>;
 const required = <A>(value: A | undefined, at: string): A => {
 	if (value === undefined) throw new Error(`Missing fixture ${at}`);
@@ -357,7 +357,7 @@ describe('engine/write: erase (rule 38e, §5.13)', () => {
 							cause: Schema.String,
 							changes: Changes
 						}),
-						`select collection, op, cause, changes from bolt_history order by collection`
+						`select collection model, op, cause, changes from bolt_history order by collection`
 					)
 				).toEqual([{ model: 'orders', op: 'delete', cause: 'erased', changes: {} }]);
 			}).pipe(Effect.provide(P2FixtureLive))
@@ -553,7 +553,9 @@ describe('engine/query: history (rule 17)', () => {
 				// a grant that depends on the caller resolves its `{ actor }` operand against the reader, not the workspace
 				const own = authority({
 					orders: grants('orders', {
-						history: [arm({ t: 'cmp', field: 'note', op: 'eq', arg: { _tag: 'Actor', of: 'id' } })]
+						history: [
+							arm({ t: 'cmp', field: 'note', op: 'eq', arg: { _tag: 'Var', text: 'requestor.id' } })
+						]
 					})
 				});
 				expect(yield* history(id, own)).toEqual([]);
@@ -655,7 +657,7 @@ describe('engine/query: history (rule 17)', () => {
 					revision: Schema.Number,
 					cause: Schema.String
 				}),
-				`select collection, record::text r, revision, cause from bolt_history order by collection, record, revision`
+				`select collection model, record::text r, revision, cause from bolt_history order by collection, record, revision`
 			);
 			expect(kept.filter((h) => h['r'] === a).map((h) => h['revision'])).toEqual([4]);
 			expect(kept.filter((h) => h['r'] === second).map((h) => h['revision'])).toEqual([2]);
@@ -689,7 +691,7 @@ describe('engine/write: per-record restore (rule 17)', () => {
 		const { db } = yield* P2Fixture;
 		const i = n++;
 		return (yield* restoreRecord(
-			{ manifest, db },
+			{ manifest, db, ...engine },
 			(request) => act({ manifest, db, ...engine }, request),
 			target,
 			{
@@ -1166,8 +1168,7 @@ describe('engine/write: relation actions and cascades (rules 28, 41)', () => {
 				expect(calls.map((call) => call.input)).toMatchObject([[{ id: tag, name: 't' }]]);
 				// an administrator's delete faces the same guard: a business rule (a settled row) is not an authority question
 				expect(
-					(yield* run({ model: 'tags', verb: 'delete', input: [{ target: tag }] }, guard))
-						.outcome
+					(yield* run({ model: 'tags', verb: 'delete', input: [{ target: tag }] }, guard)).outcome
 				).toMatchObject({ kind: 'refused', message: 'the tag is in use' });
 				expect(calls).toHaveLength(2);
 			}).pipe(Effect.provide(P2FixtureLive))

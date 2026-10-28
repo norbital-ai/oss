@@ -141,23 +141,25 @@ const answers = (body: typeof QReply.Type | typeof WireError.Type) => {
 const Titles = Schema.Array(Schema.Struct({ title: Schema.String }));
 
 describe('/q page reads', () => {
-	it.live('serves a read request as the caller; the page derives what a declared query computed', () =>
-		Effect.gen(function* () {
-			const { q } = yield* setup();
-			const r = yield* q([
-				{ m: 'query', a: [{ orders: { fields: ['title'], orderBy: 'title' } }] }
-			]);
-			expect(r.status).toBe(200);
-			const [answer] = answers(r.body);
-			const { orders } = Schema.decodeUnknownSync(
-				Schema.Struct({ orders: Schema.Struct({ rows: Titles, next: Schema.Null }) })
-			)(answer);
-			// a pure helper on the page's side (a former `orders.titled`)
-			expect(orders.rows.map((o) => o.title).filter((t) => t.startsWith('al'))).toEqual([
-				'alder',
-				'alpha 2'
-			]);
-		})
+	it.live(
+		'serves a read request as the caller; the page derives what a declared query computed',
+		() =>
+			Effect.gen(function* () {
+				const { q } = yield* setup();
+				const r = yield* q([
+					{ m: 'query', a: [{ orders: { fields: ['title'], orderBy: 'title' } }] }
+				]);
+				expect(r.status).toBe(200);
+				const [answer] = answers(r.body);
+				const { orders } = Schema.decodeUnknownSync(
+					Schema.Struct({ orders: Schema.Struct({ rows: Titles, next: Schema.Null }) })
+				)(answer);
+				// a pure helper on the page's side (a former `orders.titled`)
+				expect(orders.rows.map((o) => o.title).filter((t) => t.startsWith('al'))).toEqual([
+					'alder',
+					'alpha 2'
+				]);
+			})
 	);
 
 	it.live('a read request with an unknown option is a 400 naming it, not a 500', () =>
@@ -234,7 +236,7 @@ describe('/q page reads', () => {
 	);
 
 	it.live(
-		'named heavy fields carry json; a default list leaves them out (X-33); several requests share one /q',
+		'named heavy fields carry json, as a read naming no fields does; several requests share one /q',
 		() =>
 			Effect.gen(function* () {
 				const { q, id } = yield* setup();
@@ -257,9 +259,11 @@ describe('/q page reads', () => {
 					title: 'alder',
 					doc: { lines: ['alder'] }
 				});
-				expect((yield* Schema.decodeUnknownEffect(Rows)(plain)).orders.rows[0]).not.toHaveProperty(
-					'doc'
-				);
+				// no fields reads every field the layer exposes, heavy ones included (decision 8)
+				expect((yield* Schema.decodeUnknownEffect(Rows)(plain)).orders.rows[0]).toMatchObject({
+					title: 'alder',
+					doc: { lines: ['alder'] }
+				});
 				// a model is one root per request: two records of one shape are two requests in one crossing
 				const two = yield* q([one(1, ['doc']), one(2, ['doc'])]);
 				expect(

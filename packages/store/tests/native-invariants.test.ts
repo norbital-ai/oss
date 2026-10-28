@@ -529,8 +529,8 @@ it.effect(
 						},
 						actor_payload: { kind: 'json', default: { actor: 'literal' } },
 						today_payload: { kind: 'json', default: { today: 'literal' } },
-						at: { kind: 'instant', default: { now: '' } },
-						on: { kind: 'date', default: { today: '' } }
+						at: { kind: 'instant', default: { var: 'now' } },
+						on: { kind: 'date', default: { var: 'today' } }
 					}
 				})
 			});

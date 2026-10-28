@@ -140,13 +140,9 @@ const w1: Where<'orders'> = {
 	due: { lte: plainDate('2026-11-24') },
 	customer: { is: { tier: { eq: 'gold' }, name: { like: 'A%' } } },
 	lines: { some: { qty: { gt: 10 } } },
-	or: [{ owner: { eq: { actor: 'id' } } }, { note: { isNull: true } }]
+	or: [{ owner: { eq: { var: 'requestor.id' } } }, { note: { isNull: true } }]
 };
-const w2: Where<'customers'> = {
-	orders: { none: {} },
-	sites: { count: { gte: 2 } },
-	email: { eq: { actor: 'email' } }
-};
+const w2: Where<'customers'> = { email: { eq: { var: 'requestor.email' } } };
 void w1;
 void w2;
 // @ts-expect-error W1 a state value that does not exist
@@ -157,12 +153,14 @@ const e2: Where<'orders'> = { note: { startsWith: 'x' } };
 const e3: Where<'orders'> = { due: { like: '2026%' } };
 // @ts-expect-error W4 a field the model does not expose (sites reads only four fields)
 const e4: Where<'sites'> = { zone: { eq: 'Asia/Singapore' } };
-// a `where` may hop any relation into a model with `read` (filter only): the old `relations: []` allowlist is gone
-const e5: Where<'sites'> = { customer: { is: { tier: { eq: 'gold' } } } };
+// @ts-expect-error W5 a `where` crosses only the layers its model's read declares (customers declares no orders layer)
+const e5: Where<'customers'> = { orders: { none: {} }, sites: { count: { gte: 2 } } };
+// @ts-expect-error W5 nor a one-relation it does not declare (sites declares no customer layer)
+const e5b: Where<'sites'> = { customer: { is: { tier: { eq: 'gold' } } } };
 // @ts-expect-error W6 clock operands are not values in a read predicate
 const e6: Where<'orders'> = { due: { lt: { now: '-1h' } } };
-// @ts-expect-error W7 `{ actor: 'id' }` on an FK that is not a member
-const e7: Where<'orders'> = { customer: { eq: { actor: 'id' } } };
+// @ts-expect-error W7 `{ var: 'requestor.id' }` on an FK that is not a member
+const e7: Where<'orders'> = { customer: { eq: { var: 'requestor.id' } } };
 // @ts-expect-error W8 a many-relation takes quantifiers, not id operators
 const e8: Where<'orders'> = { lines: { isNull: true } };
 void e1;
@@ -170,6 +168,7 @@ void e2;
 void e3;
 void e4;
 void e5;
+void e5b;
 void e6;
 void e7;
 void e8;
@@ -397,7 +396,7 @@ model('orders', {
 	fields: {
 		...m.orders.spec.fields,
 		// @ts-expect-error R10 an actor id default on a ref that is not a member
-		customer: { kind: 'ref', to: 'customers', default: { actor: 'id' } }
+		customer: { kind: 'ref', to: 'customers', default: { var: 'requestor.id' } }
 	}
 });
 
@@ -510,10 +509,12 @@ model('orders', {
 automation('orders_submit', {
 	...rt.orders_submit.spec,
 	run: function* ({ target }, ctx) {
-		yield* ctx.act('orders.update', [{
-			target: target,
-			set: { status: 'submitted' }
-		}]);
+		yield* ctx.act('orders.update', [
+			{
+				target: target,
+				set: { status: 'submitted' }
+			}
+		]);
 		// a named ref layer (orders.customer) replaces its FK with the row or null
 		const open = yield* ctx.query({
 			orders: { where: { status: { ne: 'ordered' } }, fields: ['total', 'customer'] },
@@ -543,13 +544,16 @@ automation('orders_renote', {
 		const order =
 			id === undefined
 				? undefined
-				: (yield* ctx.query({ orders: { where: { id: { eq: id } }, fields: ['customer'], limit: 1 } }))
-						.orders.rows[0];
+				: (yield* ctx.query({
+						orders: { where: { id: { eq: id } }, fields: ['customer'], limit: 1 }
+					})).orders.rows[0];
 		if (order !== undefined)
-			yield* ctx.act('orders.create', [{
-				customer: order.customer,
-				lines: [{ item: 'x', qty: Decimal.of(1), price: Decimal.of(2) }]
-			}]);
+			yield* ctx.act('orders.create', [
+				{
+					customer: order.customer,
+					lines: [{ item: 'x', qty: Decimal.of(1), price: Decimal.of(2) }]
+				}
+			]);
 		const { customers } = yield* ctx.query({ customers: { where: { tier: { eq: 'gold' } } } });
 		return customers.rows.length;
 	}
@@ -564,13 +568,17 @@ automation('orders_submit', {
 automation('orders_submit', {
 	...rt.orders_submit.spec,
 	run: function* ({ target }, ctx) {
-		const order = (yield* ctx.query({ orders: { where: { id: { eq: target } }, limit: 1 } })).orders.rows[0] ?? null;
+		const order =
+			(yield* ctx.query({ orders: { where: { id: { eq: target } }, limit: 1 } })).orders.rows[0] ??
+			null;
 		if (order === null) return;
-		yield* ctx.act('orders.update', [{
-			target: target,
-			// @ts-expect-error B5 a field outside the update allowlist
-			set: { customer: order.customer }
-		}]);
+		yield* ctx.act('orders.update', [
+			{
+				target: target,
+				// @ts-expect-error B5 a field outside the update allowlist
+				set: { customer: order.customer }
+			}
+		]);
 	}
 });
 automation('orders_renote', {

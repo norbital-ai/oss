@@ -1,6 +1,6 @@
 {
 	"name": "@norbital-ai/bolt",
-	"version": "0.0.2",
+	"version": "0.0.3",
 	"description": "Bolt: the business OS framework — declarations, compiler, engine, shell client and test kit.",
 	"type": "module",
 	"sideEffects": [
@@ -52,10 +52,6 @@
 		"./node": {
 			"types": "./build/node/index.d.ts",
 			"default": "./build/node/index.js"
-		},
-		"./type-service": {
-			"types": "./build/type-service/index.d.ts",
-			"default": "./build/type-service/index.js"
 		},
 		"./docs": {
 			"types": "./build/docs/index.d.ts",
@@ -134,11 +130,11 @@
 	},
 	"devDependencies": {
 		"@iconify-json/vscode-icons": "1.2.94",
-		"@sveltejs/package": "^2.5.8",
+		"@sveltejs/package": "^3.0.1",
 		"@types/node": "^26.6.5",
 		"@types/pg": "^8.23.1",
 		"@vitest/browser-playwright": "5.0.5",
-		"happy-dom": "^20.11.6",
+		"happy-dom": "^21.0.4",
 		"pg": "^8.23.1",
 		"playwright": "1.64.1",
 		"svelte": "catalog:",

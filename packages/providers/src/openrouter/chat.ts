@@ -5,13 +5,17 @@ type DeepSeekRouting = {
 	readonly provider?: {
 		readonly sort: 'price';
 		readonly require_parameters: true;
+		readonly ignore: readonly string[];
 	};
 };
 
-/** OpenRouter selects a compatible DeepSeek provider by price, subject to the account's privacy policy. */
+/**
+ * OpenRouter selects a compatible DeepSeek provider by price, subject to the account's privacy policy. A provider whose
+ * prompt cache serves a stale context (the model cannot see the tool results it was just sent) is never chosen.
+ */
 export const deepSeekRouting = (endpoint: string, model: string): DeepSeekRouting =>
 	model.startsWith('deepseek/') && new URL(endpoint).hostname === 'openrouter.ai'
-		? { provider: { sort: 'price', require_parameters: true } }
+		? { provider: { sort: 'price', require_parameters: true, ignore: ['open-inference'] } }
 		: {};
 
 /** Provider routing uses the resolved model, including a catalog id chosen instead of a configured class. */

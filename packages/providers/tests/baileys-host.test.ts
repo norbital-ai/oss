@@ -131,7 +131,11 @@ describe('the WhatsApp Web link on a host', { timeout: 15_000 }, () => {
 					yield* sdk(() => s.deliver(raw('T1', 'are you there')));
 					const jid = '659@s.whatsapp.net';
 					expect(s.subscribed).toEqual([jid]);
-					yield* host.port.typing('wa', jid, true);
+					// `ready` is processed after this step: typing does nothing until the link is connected
+					const typed = host.port
+						.typing('wa', jid, true)
+						.pipe(Effect.andThen(Effect.sync(() => s.read.length > 0)));
+					while (!(yield* typed)) yield* Effect.sleep('10 millis');
 					expect(s.read).toEqual([{ remoteJid: jid, id: 'T1' }]);
 					expect(s.presence).toEqual([
 						['available', undefined],

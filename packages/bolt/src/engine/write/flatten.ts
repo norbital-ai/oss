@@ -4,13 +4,14 @@
 import { Array as EffectArray, Predicate, Result, Schema } from 'effect';
 import { inputSchema } from '@norbital-ai/std/kind';
 import { encodeWire } from '@norbital-ai/std/wire';
+import { Decimal } from '@norbital-ai/std/decimal';
 import type { Json } from '../../decl/values.ts';
 import type { Change, EngineActor, InputPath, RowData } from '../contracts.ts';
 import type { EngineManifest } from '../manifest.ts';
 import type { LayerColumns } from '../../decl/model.ts';
 import { LIMITS } from '../contracts.ts';
 import type { Catalog, FieldInfo, ModelInfo } from '@norbital-ai/store';
-import { offsetMs } from '../runs/time.ts';
+import { clockDefault, compileVar, evaluateVar } from '@norbital-ai/std/vars';
 import { canonical } from '@norbital-ai/store';
 import { decodeInput, type InputSpec } from '../callables/decode.ts';
 
@@ -39,7 +40,8 @@ export const layerSel = (
 	with: Object.fromEntries(
 		Object.keys(columns).flatMap((p) => {
 			const rel = p.startsWith(`${path}.`) ? p.slice(path.length + 1) : '';
-			const many = rel === '' || rel.includes('.') ? undefined : cat.models.get(model)?.many.get(rel);
+			const many =
+				rel === '' || rel.includes('.') ? undefined : cat.models.get(model)?.many.get(rel);
 			if (many === undefined) return [];
 			const sub = layerSel(m, cat, columns, verb, p, many.child);
 			const free = m.relationships[`${many.child}.${many.column}`]?.owned
@@ -174,7 +176,10 @@ export class Flattener {
 					continue;
 				}
 				values[k] = wired[k];
-			} else values[k] = v;
+			} else
+				values[k] =
+					// a number for a decimal is the decimal its digits spell, exact to every callback and the store
+					typeof v === 'number' && (f.kind === 'decimal' || f.kind === 'money') ? spelled(v) : v;
 			supplied.push(k);
 		}
 		return { values, rels, supplied };
@@ -427,6 +432,13 @@ const SYSTEM = new Set(['id', 'revision', 'created_at', 'created_by', 'updated_a
 export const modelKey = (m: EngineManifest, model: string): readonly string[] =>
 	m.models[model]?.key ?? m.models[model]?.unique?.[0]?.fields ?? [];
 
+/** A JSON number as the decimal its shortest digits spell (`1.5e-7` as 0.00000015). */
+const spelled = (v: number): Json => {
+	const text = String(v),
+		fraction = /\.(\d+)/.exec(text)?.[1]?.length ?? 0,
+		exponent = Number(/e-(\d+)$/.exec(text)?.[1] ?? 0);
+	return encodeWire(Decimal.fromNumber(v, fraction + exponent));
+};
 const isInputKind = (v: unknown): v is InputSpec[string] =>
 	v !== null && typeof v === 'object' && 'kind' in v && typeof v.kind === 'string';
 /** One stored value against its kind; `null` is left to NOT NULL and the required check. */
@@ -542,8 +554,8 @@ export function decodeValue(
 
 /**
  * Defaults (rule 23a) and the required check, on a create's payload as the engine will write it. A state lands in its
- * initial value; `{ now }`/`{ today }` resolve against the invocation clock; actor defaults apply only when the actor
- * has that value. Returns the first missing required field.
+ * initial value; `{ var: 'now' }`/`{ var: 'today + days(7)' }` resolve against the invocation clock; requestor defaults
+ * (`{ var: 'requestor.id' }`) apply only when the requestor has that value. Returns the first missing required field.
  */
 export function withDefaults(
 	m: EngineManifest,
@@ -562,22 +574,21 @@ export function withDefaults(
 		}
 		const d = k.default as Json | undefined;
 		if (d === undefined) continue;
-		const now = Predicate.isObject(d) ? d['now'] : undefined,
-			today = Predicate.isObject(d) ? d['today'] : undefined;
-		if (typeof now === 'string')
-			values[name] = new Date(Date.parse(clock.now) + offsetMs(now)).toISOString();
-		else if (typeof today === 'string')
-			values[name] = new Date(Date.parse(`${clock.today}T00:00:00Z`) + offsetMs(today))
-				.toISOString()
-				.slice(0, 10);
-		else values[name] = d;
+		const text =
+			Predicate.isObject(d) && Object.keys(d).length === 1 && typeof d['var'] === 'string'
+				? d['var']
+				: undefined;
+		const compiled =
+			text !== undefined && clockDefault(text) !== undefined ? compileVar(text) : undefined;
+		values[name] =
+			compiled === undefined || 'error' in compiled ? d : evaluateVar(compiled, clock);
 	}
 	for (const [fk, rel] of cat.models.get(model)!.one) {
 		const r = m.relationships[`${model}.${fk}`];
 		if (values[fk] !== undefined || r?.default === undefined || actor.kind !== 'member') continue;
-		if (r.default.actor === 'id' && rel.targets.includes('sys_user')) values[fk] = actor.id;
+		if (r.default.var === 'requestor.id' && rel.targets.includes('sys_user')) values[fk] = actor.id;
 		else if (
-			r.default.actor === 'party' &&
+			r.default.var === 'requestor.party' &&
 			actor.party !== null &&
 			rel.targets.includes(actor.party.model)
 		)

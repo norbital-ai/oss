@@ -22,7 +22,7 @@ export default model('sys_user', {
 		phone: { kind: 'text', optional: true },
 		telegram: { kind: 'text', optional: true },
 		revision: { kind: 'int', default: 1 },
-		created_at: { kind: 'instant', default: { now: '' } }
+		created_at: { kind: 'instant', default: { var: 'now' } }
 	},
 	computed: {
 		party_id: { kind: 'text', expr: { jsonText: [{ field: 'party' }, 'id'] } },

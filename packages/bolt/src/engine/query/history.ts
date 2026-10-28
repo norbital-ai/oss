@@ -64,7 +64,7 @@ export const readHistory = Effect.fn('Bolt.readHistory')(function* (
 	const masks = Object.entries(auth?.models[read.model]?.masks[read.model] ?? {});
 	const scope = auth === null ? undefined : readScope(auth, read.model, 'history');
 	if (auth !== null) {
-		// grant predicates, so compiled raw; an `{ actor }` operand in them resolves against the caller
+		// grant predicates, so compiled raw; a requestor variable in them resolves against the caller
 		statements.push(
 			{ text: `SELECT 1 FROM ${q(c.model.name)} WHERE id = $1::uuid`, params: [id] },
 			yield* grantSql(

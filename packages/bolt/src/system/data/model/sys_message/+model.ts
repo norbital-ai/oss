@@ -9,7 +9,7 @@ export default model('sys_message', {
 		'A message in a conversation: a transcript step, a queued input, or an integration message in or out.',
 	label: 'preview',
 	fields: {
-		created_at: { kind: 'instant', default: { now: '' } },
+		created_at: { kind: 'instant', default: { var: 'now' } },
 		conversation: { kind: 'text', optional: true },
 		/** The integration instance it travels on; deleted with it. */
 		integration: { kind: 'ref', to: 'sys_integration', optional: true, onDelete: 'cascade' },

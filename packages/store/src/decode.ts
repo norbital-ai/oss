@@ -6,6 +6,7 @@ import { KIND } from '@norbital-ai/std/kind';
 import { Decimal } from '@norbital-ai/std/decimal';
 import { encodeWire } from '@norbital-ai/std/wire';
 import { ELEMENT } from './ir.ts';
+import { compileVar, memberAdmits } from '@norbital-ai/std/vars';
 import type {
 	Arg,
 	Bucket,
@@ -25,32 +26,20 @@ import type { Json } from './values.ts';
 import type { Catalog, FieldInfo, KindSpec, ModelInfo } from './catalog.ts';
 import { SEMANTIC, SYSTEM_COLUMNS, exposureOf, family, fieldInfo } from './catalog.ts';
 
-/** A value position's operand as a literal writes it; which ones a position admits depends on the value's kind. */
-export type WireOperand =
-	| { field: string }
-	| { param: string }
-	| {
-			actor:
-				| 'id'
-				| 'email'
-				| 'phone'
-				| 'teams'
-				| 'teamTree'
-				| 'party'
-				| 'visitor'
-				| 'instance'
-				| { scopes: string };
-	  };
+/**
+ * A value position's operand as a literal writes it: a same-row column, or a `{ var }` CEL expression (std/vars)
+ * whose type and requestor members the position admits. A read never carries a time variable: its edge evaluates it.
+ */
+export type WireOperand = { field: string } | { var: string };
 type Obj = { readonly [k: string]: unknown };
 const invalid = (message: string) => Effect.fail(StoreError.of('invalid', 'decode', message));
 const WHERE_MAX_DEPTH = STORE_LIMITS.where.depth,
 	WHERE_MAX_LIST = STORE_LIMITS.where.list,
 	ORDER_MAX_KEYS = STORE_LIMITS.orderKeys;
-const OPERAND_KEYS = ['field', 'param', 'actor'];
 export const isOperand = (v: unknown): v is WireOperand => {
 	if (!Predicate.isObject(v)) return false;
 	const ks = Object.keys(v);
-	return ks.length === 1 && OPERAND_KEYS.includes(ks[0] ?? '');
+	return ks.length === 1 && (ks[0] === 'field' || ks[0] === 'var');
 };
 /** A read compares against values: its caller materializes time before decoding. */
 const CLOCK_KEYS = ['today', 'now', 'startOf'];
@@ -154,51 +143,9 @@ const literal = (f: FieldInfo, v: unknown, path: string): Effect.Effect<Json, St
 };
 /** Normalize the authored wire shape once; interiors match one discriminator. */
 export function taggedOperand(o: WireOperand): Operand {
-	if ('field' in o) return { _tag: 'Field', field: o.field };
-	if ('param' in o) return { _tag: 'Param', name: o.param };
-	return { _tag: 'Actor', of: o.actor };
+	return 'field' in o ? { _tag: 'Field', field: o.field } : { _tag: 'Var', text: o.var };
 }
 
-/** Whether a position of `f` (read as `kind`) admits operand `o`, in a list position or a value one. */
-function admits(
-	info: ModelInfo,
-	f: FieldInfo,
-	o: WireOperand,
-	list: boolean,
-	kind: string
-): boolean {
-	if ('param' in o) return typeof o.param === 'string';
-	if (list) {
-		if (!('actor' in o)) return false;
-		const a: unknown = o.actor;
-		return a === 'teams' || a === 'teamTree'
-			? f.team === true
-			: f.kind === 'id' &&
-					Predicate.isObject(a) &&
-					typeof a.scopes === 'string' &&
-					Object.keys(a).length === 1;
-	}
-	if ('field' in o) {
-		const g =
-			typeof o.field === 'string' && !o.field.includes('.') ? info.fields.get(o.field) : undefined;
-		return g !== undefined && family(g) === family({ ...f, kind });
-	}
-	const a = o.actor;
-	// an actor id is text too: ported grants compare `{ actor: 'id' }` with a text column
-	return a === 'email'
-		? f.email === true
-		: a === 'phone'
-			? f.phone === true
-			: a === 'id'
-				? f.of === 'sys_user' || f.kind === 'text'
-				: a === 'party'
-					? f.kind === 'id'
-					: a === 'visitor'
-						? f.kind === 'text'
-						: a === 'instance'
-							? f.of === 'sys_integration'
-							: false;
-}
 /** An operand only where its kind admits it (mirrors `Dyn`/`DynList` of the where types). */
 const operand = (
 	info: ModelInfo,
@@ -207,10 +154,29 @@ const operand = (
 	path: string,
 	list: boolean,
 	kind = f.kind
-): Effect.Effect<Operand, StoreError> =>
-	admits(info, f, o, list, kind)
-		? Effect.succeed(taggedOperand(o))
-		: invalid(`${path}: '${f.name}' does not take ${JSON.stringify(o)}`);
+): Effect.Effect<Operand, StoreError> => {
+	const refuse = invalid(`${path}: '${f.name}' does not take ${JSON.stringify(o)}`);
+	if ('field' in o) {
+		const g =
+			!list && typeof o.field === 'string' && !o.field.includes('.')
+				? info.fields.get(o.field)
+				: undefined;
+		return g !== undefined && family(g) === family({ ...f, kind })
+			? Effect.succeed(taggedOperand(o))
+			: refuse;
+	}
+	if (typeof o.var !== 'string') return refuse;
+	const c = compileVar(
+		o.var,
+		list ? 'list' : kind === 'date' ? 'date' : kind === 'instant' ? 'instant' : 'text'
+	);
+	if ('error' in c) return invalid(`${path}: '${f.name}' ${c.error}`);
+	if (c.time)
+		return invalid(
+			`${path}: a read takes a value, not ${JSON.stringify(o)}; materialize time before reading`
+		);
+	return c.requestor.every((m) => memberAdmits(f, m)) ? Effect.succeed(taggedOperand(o)) : refuse;
+};
 const val = (
 	info: ModelInfo,
 	f: FieldInfo,
@@ -230,25 +196,11 @@ const val = (
 			}));
 };
 /** Tagged operands embedded in a period literal keep their validated discriminator. */
-export const isTaggedOperand = (value: unknown): value is Operand => {
-	if (!Predicate.isObject(value)) return false;
-	switch (value._tag) {
-		case 'Field':
-			return typeof value.field === 'string';
-		case 'Param':
-			return typeof value.name === 'string';
-		case 'Actor':
-			return typeof value.of === 'string'
-				? ['id', 'email', 'phone', 'teams', 'teamTree', 'party', 'visitor', 'instance'].includes(
-						value.of
-					)
-				: Predicate.isObject(value.of) &&
-						Object.keys(value.of).length === 1 &&
-						typeof value.of.scopes === 'string';
-		default:
-			return false;
-	}
-};
+export const isTaggedOperand = (value: unknown): value is Operand =>
+	Predicate.isObject(value) &&
+	(value._tag === 'Field'
+		? typeof value.field === 'string'
+		: value._tag === 'Var' && typeof value.text === 'string');
 export const argumentList = (value: Extract<Pred, { t: 'in' }>['args']): value is readonly Json[] =>
 	EffectArray.isArray(value);
 
@@ -264,7 +216,6 @@ const periodArg = Effect.fnUntraced(function* (
 	v: unknown,
 	path: string
 ) {
-	if (isOperand(v) && 'param' in v) return yield* operand(info, f, v, path, false);
 	const lo = f.periodOf === 'date' ? 'from' : 'start',
 		hi = f.periodOf === 'date' ? 'to' : 'end';
 	if (!Predicate.isObject(v) || !(lo in v) || !(hi in v) || Object.keys(v).length !== 2)
@@ -843,7 +794,9 @@ export const order = Effect.fnUntraced(function* (o: unknown, cat?: Catalog, m?:
 		seen.add(field);
 		const head = field.split('.')[0] ?? field;
 		const inline =
-			cat === undefined || m === undefined ? undefined : (yield* modelInfo(cat, m)).fields.get(head);
+			cat === undefined || m === undefined
+				? undefined
+				: (yield* modelInfo(cat, m)).fields.get(head);
 		if (dotted && cat !== undefined && m !== undefined && inline?.shape === undefined)
 			return yield* invalid(
 				`orderBy[${i}]: one { field: 'asc' | 'desc' } per key; a related key nests its relations`
@@ -989,11 +942,7 @@ const selection = (s: unknown, w: unknown): unknown => {
 };
 
 /** `read(model, { where?, select?, with?, orderBy?, search? } & Paged)`. */
-export const read = Effect.fn('Store.decode.read')(function* (
-	cat: Catalog,
-	model: string,
-	q: Obj
-) {
+export const read = Effect.fn('Store.decode.read')(function* (cat: Catalog, model: string, q: Obj) {
 	const { where: w, select: sel, with: rels, orderBy, search, firstPer, ...paged } = q;
 	const s = selection(sel, rels);
 	yield* exposureOf(cat, model);

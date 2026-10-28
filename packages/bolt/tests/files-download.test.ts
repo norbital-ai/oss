@@ -160,6 +160,14 @@ describe('the media rule', () => {
 		expect(mediaType(Buffer.from('  <!doctype HTML>\n<html></html>'))).toBe('text/html');
 		expect(mediaType(Buffer.from([0xff, 0xd8, 0xff, 0xe0]))).toBe('image/jpeg');
 		expect(mediaType(Buffer.from('ID3\x04'))).toBe('audio/mpeg');
+		// CAD models and drawings, each by its own signature
+		expect(mediaType(Buffer.from('ISO-10303-21;\nHEADER;'))).toBe('model/step');
+		expect(mediaType(Buffer.from('AC1032\0\0'))).toBe('image/vnd.dwg');
+		expect(mediaType(Buffer.from('  0\r\nSECTION\r\n  2\r\nHEADER'))).toBe('image/vnd.dxf');
+		expect(mediaType(Buffer.from('solid bracket\n  facet normal 0 0 1'))).toBe('model/stl');
+		expect(mediaType(Buffer.from(`${'Bracket model'.padEnd(72)}S      1\n`))).toBe('model/iges');
+		expect(mediaType(Buffer.from('glTF\x02\0\0\0'))).toBe('model/gltf-binary');
+		expect(mediaType(Buffer.from('II*\0\x08\0'))).toBe('image/tiff');
 		for (const other of [
 			elf,
 			Buffer.from('MZ\x90\x00'),
@@ -167,6 +175,8 @@ describe('the media rule', () => {
 			Buffer.from('export const answer = 42;\n'),
 			Buffer.from([0x1f, 0x8b, 0x08, 0x00]),
 			Buffer.from('PK\x03\x04'),
+			Buffer.from([0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1]),
+			Buffer.from('solid state of the art\nmore prose'),
 			Buffer.from('<svg xmlns="http://www.w3.org/2000/svg"/>'),
 			new Uint8Array()
 		])

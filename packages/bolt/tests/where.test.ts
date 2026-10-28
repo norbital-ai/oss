@@ -46,7 +46,11 @@ describe('rule 11a: one invalid row per shape', () => {
 			'reversed date period',
 			{ span: { overlaps: { from: '2026-01-02', to: '2026-01-01' } } }
 		],
-		['orders', 'period parameter is not a name', { span: { overlaps: { param: 7 } } }],
+		['orders', 'former parameter operand', { span: { overlaps: { param: 'window' } } }],
+		['orders', 'former actor operand', { note: { eq: { actor: 'id' } } }],
+		['orders', 'time variable', { placed: { gte: { var: 'today - days(7)' } } }],
+		['orders', 'requestor email on a date', { placed: { eq: { var: 'requestor.email' } } }],
+		['orders', 'unknown requestor member', { note: { eq: { var: 'requestor.boss' } } }],
 		['orders', 'id not a uuid', { account: { eq: 'x' } }],
 		['orders', 'in not a list', { status: { in: 'open' } }],
 		['orders', 'hasAny not a list', { tags: { hasAny: 'a' } }],
@@ -79,9 +83,9 @@ describe('rule 11a: one invalid row per shape', () => {
 		['orders', 'today on an instant', { at: { lt: { today: '' } } }],
 		['orders', 'startOf on text', { note: { eq: { startOf: 'month' } } }],
 		['orders', 'startOf with a bad unit', { placed: { gte: { startOf: 'fortnight' } } }],
-		['orders', 'actor id on a non-member id', { account: { eq: { actor: 'id' } } }],
-		['orders', 'actor email on plain text', { note: { eq: { actor: 'email' } } }],
-		['orders', 'teams outside in/nin', { account: { eq: { actor: 'teams' } } }],
+		['orders', 'actor id on a non-member id', { account: { eq: { var: 'requestor.id' } } }],
+		['orders', 'actor email on plain text', { note: { eq: { var: 'requestor.email' } } }],
+		['orders', 'teams outside in/nin', { account: { eq: { var: 'requestor.teams' } } }],
 		['orders', 'field operand of another family', { total: { gt: { field: 'note' } } }],
 		['orders', 'bad offset', { placed: { gte: { today: '+-5d' } } }],
 		['accounts', 'relation without a quantifier', { orders: { status: { eq: 'open' } } }],
@@ -175,12 +179,6 @@ describe('one wire literal per kind', () => {
 			field: 'span',
 			op: 'overlaps',
 			arg: { _tag: 'Lit', value: { from: '2026-01-01', to: null } }
-		} satisfies Pred);
-		expect(storeSync(where(cat, 'orders', { span: { within: { param: 'window' } } }))).toEqual({
-			t: 'period',
-			field: 'span',
-			op: 'within',
-			arg: { _tag: 'Param', name: 'window' }
 		} satisfies Pred);
 	});
 	it('preserves instant-period ends and compares their actual instants', () => {
@@ -366,9 +364,20 @@ describe('P34: the widened language', () => {
 		expect(ok).toMatch(/jsonb_build_array\(\(SELECT \w+\."name"/); // the cursor carries the related value
 		expect(code(() => sql({ account: { secret: 'asc' } }))).toBe('invalidInput');
 		expect(code(() => sql({ account: { secret: 'asc' } }, { as: 'workspace' }))).toBe('ok');
-		const { accounts, ...readable } = rep.models;
-		void accounts;
-		const unread = { ...rep, exposures: readable };
+		// authority is per access point: the root's arms for its account layer decide, never the accounts model's own
+		const orders = rep.models['orders']!;
+		const unread = {
+			...rep,
+			models: {
+				...rep.models,
+				orders: {
+					...orders,
+					read: Object.fromEntries(
+						Object.entries(orders.read).filter(([path]) => path === 'orders')
+					)
+				}
+			}
+		};
 		expect(code(() => sql({ account: { name: 'asc' } }, { as: 'caller', authority: unread }))).toBe(
 			'invalidInput'
 		);

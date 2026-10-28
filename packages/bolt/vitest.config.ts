@@ -103,6 +103,10 @@ export default defineConfig({
 						test: {
 							name: 'unit',
 							environment: 'node',
+							// happy-dom 21 loads no stylesheet or iframe unless asked: the shell's asset readiness waits on one, a PDF preview on the other
+							environmentOptions: {
+								happyDOM: { settings: { enableCSSFileLoading: true, enableIframePageLoading: true } }
+							},
 							include: ['tests/*.test.ts'],
 							exclude: [
 								'build/**',

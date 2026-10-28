@@ -345,20 +345,20 @@ model('order_lines', {
 });
 // (a write layer naming the FK that ties it to its parent, `'orders.lines': ['order']`, is `bolt check`'s `model/layer`)
 
-// ── the `{ actor: 'email' }` operand (§3.3.9) ──
-const mine: Where<'customers'> = { email: { eq: { actor: 'email' } } };
+// ── the `{ var: 'requestor.email' }` operand (§3.3.9) ──
+const mine: Where<'customers'> = { email: { eq: { var: 'requestor.email' } } };
 void mine;
 policy({
 	description: 'Customers read themselves',
-	grants: { customers: { read: { customers: { where: { email: { eq: { actor: 'email' } } } } } } }
+	grants: { customers: { read: { customers: { where: { email: { eq: { var: 'requestor.email' } } } } } } }
 });
 // @ts-expect-error E1 on text that is not an email
 // prettier-ignore
-policy({ description: 'x', grants: { customers: { read: { customers: { where: { name: { eq: { actor: 'email' } } } } } } } });
+policy({ description: 'x', grants: { customers: { read: { customers: { where: { name: { eq: { var: 'requestor.email' } } } } } } } });
 policy({
 	description: 'x',
 	// @ts-expect-error E2 on a number
-	grants: { order_lines: { read: { order_lines: { where: { qty: { eq: { actor: 'email' } } } } } } }
+	grants: { order_lines: { read: { order_lines: { where: { qty: { eq: { var: 'requestor.email' } } } } } } }
 });
 // @ts-expect-error E3 an unknown actor operand
 // prettier-ignore
@@ -368,20 +368,20 @@ model('probe', {
 	label: 'e',
 	fields: { e: { kind: 'text', format: 'email' } },
 	// @ts-expect-error E4 not in a static position (`check`, rule 4)
-	check: { mine: { e: { eq: { actor: 'email' } } } }
+	check: { mine: { e: { eq: { var: 'requestor.email' } } } }
 });
 
-// ── the `{ actor: 'visitor' }` operand (anonymous identity) ──
-const guest: Where<'customers'> = { name: { eq: { actor: 'visitor' } } };
+// ── the `{ var: 'requestor.visitor' }` operand (anonymous identity) ──
+const guest: Where<'customers'> = { name: { eq: { var: 'requestor.visitor' } } };
 void guest;
 policy({
 	description: 'Guests read their own rows',
-	grants: { customers: { read: { customers: { where: { name: { eq: { actor: 'visitor' } } } } } } }
+	grants: { customers: { read: { customers: { where: { name: { eq: { var: 'requestor.visitor' } } } } } } }
 });
 policy({
 	description: 'x',
 	// @ts-expect-error V1 on a number
-	grants: { order_lines: { read: { order_lines: { where: { qty: { eq: { actor: 'visitor' } } } } } } }
+	grants: { order_lines: { read: { order_lines: { where: { qty: { eq: { var: 'requestor.visitor' } } } } } } }
 });
 
 // ── the run ledger (rule 56, X-18): an `Id<>` target, never granted, read or written ──

@@ -84,7 +84,7 @@
 				select?: boolean;
 				/** The New button: the record sheet in create mode, or the author's own (a prefilled create). Default: the viewer may create. */
 				new?: boolean | (() => void);
-				/** The page's own scope controls (a period picker, an entity picker), placed in the toolbar before search. Never actions. */
+				/** A view-local control (a grouping, a lane toggle), placed before search. The page scope (entity, period) is AppShell's `actions`; never actions. */
 				controls?: Snippet;
 				/** Compact task controls at the right edge, before New. */
 				trailing?: Snippet;
@@ -1123,7 +1123,7 @@
 					>
 				</Popover.Root>
 			{/if}
-			<!-- scope controls stay left; compact task controls and New share the right edge -->
+			<!-- view controls stay left; compact task controls and New share the right edge -->
 			{#if cfg.controls}<div class="flex min-w-0 flex-wrap items-center gap-1" data-view-controls>
 					{@render cfg.controls()}
 				</div>{/if}

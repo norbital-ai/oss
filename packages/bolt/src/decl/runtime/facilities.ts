@@ -135,7 +135,7 @@ export interface Schedule {
 	<const A extends string>(
 		automation: Is<A, StartableName>,
 		input: StartInput<A>,
-		options?: { at?: Instant | { now: Offset }; key?: string }
+		options?: { at?: Instant | { var: string }; key?: string }
 	): Eff<RunHandle<A>>;
 }
 

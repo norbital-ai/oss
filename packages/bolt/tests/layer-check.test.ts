@@ -104,7 +104,7 @@ describe('layer maps at compile time (bolt check)', () => {
 					nodes: { read: Object.fromEntries(deep.map((path) => [path, { fields: 'all' }])) }
 				}
 			})
-		).toEqual([`model/layer read: '${sixth}' is deeper than ${LAYER_MAX_DEPTH} levels`]);
+		).toEqual([`model/layer nodes: read: '${sixth}' is deeper than ${LAYER_MAX_DEPTH} levels`]);
 		// the fifth level is the deepest a map may declare
 		expect(
 			findings({
@@ -121,7 +121,9 @@ describe('layer maps at compile time (bolt check)', () => {
 					nodes: { read: { nodes: { fields: 'all' }, 'nodes.parent.parent': { fields: 'all' } } }
 				}
 			})
-		).toEqual([`model/layer read: 'nodes.parent.parent' needs its parent layer 'nodes.parent'`]);
+		).toEqual([
+			`model/layer nodes: read: 'nodes.parent.parent' needs its parent layer 'nodes.parent'`
+		]);
 	});
 
 	it('refuses an undeclared relation, an arc, a ref as a write layer, the parent FK and an unknown field', () => {
@@ -146,12 +148,12 @@ describe('layer maps at compile time (bolt check)', () => {
 		});
 		expect(found).toEqual(
 			expect.arrayContaining([
-				"model/layer read: orders.customer: 'customer' is no relation of orders",
-				"model/layer read: orders.notes.about: 'about' is an arc (a ref to several models) and cannot be a layer",
-				"model/layer create.columns: 'orders.party' is a ref; a write layer is a many-relation (its child rows)",
-				"model/layer read: 'nope' is no field of orders (orders)",
-				"model/layer create: 'total' is no writable column of orders (orders)",
-				"model/layer create: orders.lines lists 'order', the key the engine sets from its parent row"
+				"model/layer orders: read: orders.customer: 'customer' is no relation of orders",
+				"model/layer orders: read: orders.notes.about: 'about' is an arc (a ref to several models) and cannot be a layer",
+				"model/layer orders: create.columns: 'orders.party' is a ref; a write layer is a many-relation (its child rows)",
+				"model/layer orders: read: 'nope' is no field of orders (orders)",
+				"model/layer orders: create: 'total' is no writable column of orders (orders)",
+				"model/layer orders: create: orders.lines lists 'order', the key the engine sets from its parent row"
 			])
 		);
 	});
@@ -178,11 +180,11 @@ describe('layer maps at compile time (bolt check)', () => {
 				}
 			})
 		).toEqual([
-			"access/layer orders: read names 'orders.party.orders', which orders does not declare as a read layer",
-			"access/layer orders: read orders.party admits 'secret', which that layer does not expose",
-			"access/layer orders: create orders admits 'total', which orders's create does not declare there",
-			"access/layer orders: create names 'orders.notes', which orders's create does not declare",
-			'access/layer orders: an update grant, but orders declares no update'
+			"access/layer rep: orders: read names 'orders.party.orders', which orders does not declare as a read layer",
+			"access/layer rep: orders: read orders.party admits 'secret', which that layer does not expose",
+			"access/layer rep: orders: create orders admits 'total', which orders's create does not declare there",
+			"access/layer rep: orders: create names 'orders.notes', which orders's create does not declare",
+			'access/layer rep: orders: an update grant, but orders declares no update'
 		]);
 	});
 });

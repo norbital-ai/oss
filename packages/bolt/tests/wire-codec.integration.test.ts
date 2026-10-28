@@ -210,7 +210,7 @@ describe('wire codec: one shape per kind, both ways (D6)', () => {
 					}).pipe(Effect.mapError(fromStore))
 				],
 				{ as: 'workspace' },
-				{ now: a.t.clock.now(), today: a.t.clock.now().slice(0, 10), tz: 'UTC', params: {} }
+				{ now: a.t.clock.now(), today: a.t.clock.now().slice(0, 10), tz: 'UTC' }
 			);
 			expect(page).toMatchObject({
 				rows: [{ key: { day: '2026-01-01' }, count: 1, sum: { amount: { $dec: '1.50' } } }]

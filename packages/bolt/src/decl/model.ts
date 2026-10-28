@@ -532,7 +532,9 @@ interface RefFor<R, T = TargetsOf<R>> {
 	inverse?: R extends { inverse: infer I } ? InverseSpec<I, T> : string;
 	optional?: true;
 	owned?: true;
-	default?: { actor: [T] extends ['sys_user'] ? 'id' | 'party' : 'party' };
+	default?: {
+		var: [T] extends ['sys_user'] ? 'requestor.id' | 'requestor.party' : 'requestor.party';
+	};
 	// `owned` implies cascade; `setNull` needs an optional ref (rule 4)
 	onDelete?: R extends { owned: true }
 		? 'cascade'
@@ -564,7 +566,7 @@ export type RefField = {
 	/** Which target rows the ref may name: a static predicate over the target's own fields (`{ integration: { eq } }` for an instance). */
 	where?: object;
 	/** Filled from the writer when omitted: their member id (`sys_user` refs) or their party. */
-	default?: { actor: 'id' | 'party' };
+	default?: { var: 'requestor.id' | 'requestor.party' };
 };
 
 // ── exposure: what callers read and send, as layer maps ──
@@ -690,7 +692,11 @@ interface ModelFor<
 	}[];
 	computed?: ComputedSpec<Own, C, keyof F | SystemColumn>;
 	search?: {
-		text: readonly OfKind<All, { kind: 'text' | 'enum' } | { kind: 'seq'; pattern: string }>[]; // hook:reads — a patterned seq is text
+		/** Text, enum and patterned seq fields; a link here also finds the row by the linked record's own search text. */
+		text: readonly (
+			| OfKind<All, { kind: 'text' | 'enum' } | { kind: 'seq'; pattern: string }>
+			| OfKind<F, { kind: 'ref' }>
+		)[]; // hook:reads — a patterned seq is text
 		semantic?: {
 			fields: readonly OfKind<Own, { kind: 'text' | 'file' }>[];
 			model: EmbeddingModelName;

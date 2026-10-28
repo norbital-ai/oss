@@ -155,6 +155,16 @@ const checks: WriteEngine['guest'] = {
 			return { kind: 'ok', output: verdict(changes) };
 		})
 };
+/** The approval engine's seam: a routed write is held under one request (persistence is the approval suite's). */
+const approval: WriteEngine['approval'] = {
+	route: (held) =>
+		Effect.succeed({
+			requestId: '0199a000-0000-7000-8000-0000000000aa',
+			route: held.snapshot,
+			pieces: () => {}
+		}),
+	resubmit: () => Effect.die(new Error('This fixture does not resubmit requests.'))
+};
 const fixture = Effect.gen(function* () {
 	const db = yield* TenantDb;
 	yield* applyPlan(db, yield* plan(null, m), { accept: true });
@@ -166,7 +176,7 @@ const fixture = Effect.gen(function* () {
 		authority: Authority = admin
 	) =>
 		act(
-			{ manifest: m, db, guest: checks },
+			{ manifest: m, db, guest: checks, approval },
 			{
 				model,
 				verb,
@@ -175,7 +185,7 @@ const fixture = Effect.gen(function* () {
 				key: `key-${n}`,
 				issuedAt: NOW,
 				authority,
-				bindings: { now: NOW, today: TODAY, tz: 'UTC', params: {} },
+				bindings: { now: NOW, today: TODAY, tz: 'UTC' },
 				invocationId: `inv-${n++}`
 			}
 		).pipe(Effect.map((answer) => answer.outcome));

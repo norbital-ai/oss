@@ -48,6 +48,16 @@ export const media = (src: string): string =>
 
 function item(n: NavNode, path: string, t: Translate): NavItem {
 	const children = n.kind === 'group' ? n.children.map((c) => item(c, path, t)) : [];
+	// the page whose address is the app's own folder sits above its siblings: the longest match is the open one
+	const open =
+		n.kind === 'app'
+			? n.pages
+					.filter((p) => under(path, p.href))
+					.reduce<string | undefined>(
+						(a, p) => (a === undefined || p.href.length > a.length ? p.href : a),
+						undefined
+					)
+			: undefined;
 	const pages =
 		n.kind === 'app' && n.pages.length > 1
 			? n.pages.map((p) => ({
@@ -55,7 +65,7 @@ function item(n: NavNode, path: string, t: Translate): NavItem {
 					label: t(p.title),
 					icon: p.icon ?? null,
 					href: p.href,
-					active: under(path, p.href)
+					active: p.href === open
 				}))
 			: [];
 	return {

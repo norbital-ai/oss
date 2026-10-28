@@ -7,7 +7,7 @@ catalog:
   '@effect/vitest': 4.0.6
   effect: 4.0.6
   '@iconify/svelte': ^5.2.3
-  runed: ^0.37.1
+  runed: ^0.38.0
   svelte: ^5.57.3
   # TS 7 breaks svelte2tsx / @sveltejs/package (fileExists), and doctor uses the compiler API that the
   # Go port's JS surface does not carry. Stay on latest 6.x; the override below holds the same pin.

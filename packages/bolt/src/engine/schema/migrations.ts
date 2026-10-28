@@ -1,5 +1,5 @@
 // Hosts execute committed SQL. Store owns immutable histories, alternatives and their physical replay proofs.
-import { Effect, FileSystem, Path, Schema } from 'effect';
+import { Clock, Effect, FileSystem, Path, Schema } from 'effect';
 import {
 	APPLIED,
 	AppliedRow,
@@ -9,7 +9,9 @@ import {
 	MIGRATION_GUARD_CODES,
 	checksumOf,
 	current,
+	impactCount,
 	migrationGuard,
+	migrationStatements,
 	migrationStatus,
 	pending,
 	readLock,
@@ -24,12 +26,13 @@ import {
 	type SchemaSpec
 } from '@norbital-ai/store';
 import type { TenantDbShape } from '../db/tenant-db.ts';
-import type { Sql } from '../contracts.ts';
+import type { Rows, Sql } from '../contracts.ts';
 import type { EngineManifest } from '../manifest.ts';
 import type { DbError } from '../errors.ts';
 import { BoltError, fromStore } from '../../protocol/errors.ts';
 import { engineOwned, engineOwns } from './engine.ts';
 import { engineBeside, fingerprint, schemaSlice } from './plan.ts';
+import { impactText, type MigrationImpact } from '../../protocol/migration-impact.ts';
 
 export type MigrationBundle = {
 	readonly files: readonly MigrationFile[];
@@ -288,7 +291,26 @@ function guard(
 	);
 	return Effect.succeed(migrationGuard(applied, definitions, stage, excluded));
 }
-/** Each file and its receipt use one immutable SQL batch, guarded under the same advisory lock before and after DDL. */
+/** The rows a step's count answers: what a destructive drop discards, or every row a backfill fills or a check reads. */
+const countedBy = (id: string, hazard: string): readonly [string, string?] | undefined => {
+	const object = id.slice(id.lastIndexOf(':') + 1),
+		dot = object.indexOf('.'),
+		table = dot < 0 ? object : object.slice(0, dot);
+	if (hazard === 'destructive' && id.includes(':column:') && dot > 0)
+		return [table, object.slice(dot + 1)];
+	if (hazard === 'destructive' || hazard === 'backfill' || hazard === 'validating') return [table];
+	return undefined;
+};
+type Measured = {
+	readonly id: string;
+	readonly hazard: string;
+	count?: number;
+	written?: number;
+};
+/**
+ * Each file and its receipt use one immutable SQL batch, guarded under the same advisory lock before and after DDL.
+ * Answers what it did: each step's rows (counted before the step, in the same transaction) and the whole duration.
+ */
 export const applyMigrations = /*#__PURE__*/ (() =>
 	Effect.fn('Bolt.applyMigrations')(function* (
 		db: TenantDbShape,
@@ -299,14 +321,32 @@ export const applyMigrations = /*#__PURE__*/ (() =>
 		yield* pending(bundle.files, bundle.lock, [], bundle.snapshotText, bundle.squashes).pipe(
 			Effect.mapError(fromStore)
 		);
+		const started = yield* Clock.currentTimeMillis;
+		const report: MigrationImpact['steps'][number][] = [];
 		while (true) {
 			const { status } = yield* liveStatus(db, bundle);
 			yield* requirePhysical(status);
 			const file = status.pending[0];
 			const before = yield* guard(bundle, status.applied, 'before');
 			const statements: Sql[] = [{ text: MIGRATIONS_TABLE, params: [] }, before];
+			const steps = new Map<string, Measured>();
+			const reads: { readonly at: number; readonly step: Measured; readonly count: boolean }[] = [];
 			if (file !== undefined) {
-				statements.push({ text: file.sql, params: [] }, recordApplied(file));
+				for (const statement of migrationStatements(file)) {
+					let step = steps.get(statement.step);
+					if (step === undefined) {
+						step = { id: statement.step, hazard: statement.hazard };
+						steps.set(statement.step, step);
+						const counted = countedBy(statement.step, statement.hazard);
+						if (counted !== undefined) {
+							for (const text of impactCount(...counted)) statements.push({ text, params: [] });
+							reads.push({ at: statements.length - 1, step, count: true });
+						}
+					}
+					statements.push({ text: statement.text, params: [] });
+					if (statement.writes) reads.push({ at: statements.length - 1, step, count: false });
+				}
+				statements.push(recordApplied(file));
 				statements.push(
 					yield* guard(
 						bundle,
@@ -325,18 +365,20 @@ export const applyMigrations = /*#__PURE__*/ (() =>
 				// Reasserting host objects must not silently replace a definition owned by the verified source prefix.
 				statements.push(yield* guard(bundle, status.applied, 'after'));
 			}
-			const applied = yield* db
+			const results = yield* db
 				.transaction({ statements, lock: { advisory: ['bolt:schema'] } })
 				.pipe(
-					Effect.as(true),
+					Effect.map((rows): readonly Rows[] | null => rows),
 					Effect.catchTag(
 						'DbError',
-						Effect.fn(function* (error: DbError): Effect.fn.Return<boolean, DbError | BoltError> {
+						Effect.fn(function* (
+							error: DbError
+						): Effect.fn.Return<readonly Rows[] | null, DbError | BoltError> {
 							if (
 								error.sqlstate === MIGRATION_GUARD_CODES.beforeLedger ||
 								error.sqlstate === MIGRATION_GUARD_CODES.beforePhysical
 							)
-								return false;
+								return null;
 							if (
 								error.sqlstate === MIGRATION_GUARD_CODES.afterPhysical ||
 								error.sqlstate === MIGRATION_GUARD_CODES.afterLedger
@@ -353,6 +395,21 @@ export const applyMigrations = /*#__PURE__*/ (() =>
 						})
 					)
 				);
-			if (applied && file === undefined) return;
+			if (results === null) continue;
+			for (const { at, step, count } of reads) {
+				const n = Number(count ? results[at]?.rows[0]?.n : results[at]?.affected);
+				if (count) step.count = n;
+				else step.written = (step.written ?? 0) + n;
+			}
+			for (const { id, hazard, count, written } of steps.values()) {
+				// a drop reports what it discards; any other step what it wrote, else what its count read
+				const rows = (hazard === 'destructive' ? (count ?? written) : (written ?? count)) ?? 0;
+				report.push({ id, hazard, rows, summary: impactText({ id, hazard, rows }) });
+			}
+			if (file === undefined)
+				return {
+					durationMs: (yield* Clock.currentTimeMillis) - started,
+					steps: report
+				} satisfies MigrationImpact;
 		}
 	}))();

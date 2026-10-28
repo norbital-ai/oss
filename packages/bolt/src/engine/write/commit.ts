@@ -70,6 +70,8 @@ export type Commit = {
 	runs: readonly (QueuedRun & { id: string; actor?: string; starter?: Json })[];
 	notices: readonly (NoticeRow & { id: string })[];
 	output: Json;
+	/** An act that writes no row: the updated records that already held their values. */
+	unchanged?: readonly { model: string; id: string }[];
 	/**
 	 * A routed write commits at once (provisional) and opens a request: its pieces follow the domain pieces and read
 	 * `allp` for the checkpoint. `route` is the flow snapshot the approval callback returned (one per statement). When an
@@ -606,7 +608,7 @@ export function compileCommit(m: EngineManifest, cat: Catalog, x: Commit): reado
 	const at = c.p(Object.fromEntries(x.writes.map((w, i) => [`${w.model}/${w.id}`, i])));
 	const records = `(SELECT coalesce(jsonb_agg(jsonb_build_object('model', c, 'id', id, 'revision', revision) ORDER BY (${at}::jsonb ->> (c || '/' || id))::int NULLS LAST, c, id), '[]'::jsonb) FROM allp WHERE cause IN ('direct', 'erased'))`;
 	const commitOutcome = () =>
-		`jsonb_build_object('kind', 'committed', 'output', ${c.p(JSON.stringify(x.output))}::jsonb, 'records', ${records})`;
+		`jsonb_build_object('kind', 'committed', 'output', ${c.p(JSON.stringify(x.output))}::jsonb, 'records', ${records}${x.unchanged === undefined ? '' : `, 'unchanged', ${c.p(JSON.stringify(x.unchanged))}::jsonb`})`;
 	const outcome =
 		x.resubmit?.pending === true
 			? `jsonb_build_object('kind', 'pendingApproval', 'requestId', ${c.p(x.resubmit.request)}::text, 'records', ${records})`

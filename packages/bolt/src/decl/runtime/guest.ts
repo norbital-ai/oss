@@ -73,13 +73,9 @@ type CrossingFailure = Effect.Error<ReturnType<(typeof FAILED)[Family]>>;
  */
 const lifted = (call: Call, member: string, family: Family) => {
 	const cross = (...args: readonly unknown[]): Effect.Effect<unknown, CrossingFailure> => {
+		// every query is one read request; a runtime-built one (`dynamicRead`) fails with `ReadFailed`
 		const failureFamily =
-			family === 'engine' &&
-			(member === 'query' || member === 'db.query') &&
-			Predicate.isObject(args[1]) &&
-			args[1]['mode'] === 'declared'
-				? 'read'
-				: family;
+			family === 'engine' && (member === 'query' || member === 'db.query') ? 'read' : family;
 		const at: { stack?: string } = {};
 		Error.captureStackTrace(at, cross); // the author's frame: by the time the Effect runs the stack is the fiber's
 		const site = at.stack?.split('\n')[1]?.trim() ?? 'unknown';

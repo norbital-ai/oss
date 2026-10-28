@@ -1,5 +1,5 @@
 // A payroll hotline on PGlite (§2.5, §2.7, §4.3, §4.4): one envoy deployed on two WhatsApp connections, one per legal
-// entity (`entities.hotline` names the instance), under `dm: 'envoy'`. A turn's `{ actor: 'instance' }` is the instance
+// entity (`entities.hotline` names the instance), under `dm: 'envoy'`. A turn's `{ var: 'requestor.instance' }` is the instance
 // the message arrived on, so the same member reads only the entity whose hotline they wrote to, and only their own rows;
 // an administrator's DM holds the envoy's policies alone (no bypass); `history`'s 'mine' stays on the instance. Admission
 // is a run the ingest statement queued, so a crash between the two still turns after boot.
@@ -44,7 +44,10 @@ const manifest = {
 		'payslips.employee': { to: 'sys_user' }
 	},
 	exposures: {
-		entities: { read: { entities: { fields: 'all' } }, create: { columns: { entities: ['name', 'hotline'] } } },
+		entities: {
+			read: { entities: { fields: 'all' } },
+			create: { columns: { entities: ['name', 'hotline'] } }
+		},
 		payslips: {
 			read: { payslips: { fields: 'all' } },
 			create: { columns: { payslips: ['period', 'net', 'entity', 'employee'] } },
@@ -61,8 +64,8 @@ const manifest = {
 					read: {
 						payslips: {
 							where: {
-								employee: { eq: { actor: 'id' } },
-								entity: { is: { hotline: { eq: { actor: 'instance' } } } }
+								employee: { eq: { var: 'requestor.id' } },
+								entity: { is: { hotline: { eq: { var: 'requestor.instance' } } } }
 							},
 							fields: ['period', 'net', 'status']
 						}
@@ -124,15 +127,13 @@ function scriptedAi() {
 					requests.push(request);
 					const last = present(
 						request.messages.findLast(
-							(m) =>
-								!(typeof m.content === 'string' && m.content.startsWith('[conversation state]'))
+							(m) => !(typeof m.content === 'string' && m.content.startsWith('[conversation state'))
 						)
 					);
 					if (last.role === 'tool')
 						return { content: 'Done.', toolCalls: [], finish: 'stop', usage };
 					const said = text(last.content);
-					if (/^(?:\[[^\]\n]*\] )?slips$/m.test(said))
-						return call('read', { payslips: { fields: ['period', 'net'] } });
+					if (/^(?:\[[^\]\n]*\] )?slips$/m.test(said)) return call('read', { payslips: {} });
 					const pay = /^(?:\[[^\]\n]*\] )?pay (\S+)$/m.exec(said);
 					if (pay !== null)
 						return call('act', {
@@ -175,34 +176,50 @@ const setup = Effect.gen(function* () {
 		});
 	const a = yield* make('entities.create', [{ name: 'Acme SG', hotline: 'hotline_a' }]),
 		b = yield* make('entities.create', [{ name: 'Acme MY', hotline: 'hotline_b' }]);
-	slip.cal_a = yield* make('payslips.create', [{
-		period: '2026-09',
-		net: 100,
-		entity: a,
-		employee: CAL
-	}]);
-	slip.cal_b = yield* make('payslips.create', [{
-		period: '2026-09',
-		net: 200,
-		entity: b,
-		employee: CAL
-	}]);
-	slip.ada_a = yield* make('payslips.create', [{
-		period: '2026-09',
-		net: 300,
-		entity: a,
-		employee: ADA
-	}]);
+	slip.cal_a = yield* make('payslips.create', [
+		{
+			period: '2026-09',
+			net: 100,
+			entity: a,
+			employee: CAL
+		}
+	]);
+	slip.cal_b = yield* make('payslips.create', [
+		{
+			period: '2026-09',
+			net: 200,
+			entity: b,
+			employee: CAL
+		}
+	]);
+	slip.ada_a = yield* make('payslips.create', [
+		{
+			period: '2026-09',
+			net: 300,
+			entity: a,
+			employee: ADA
+		}
+	]);
 	let seq = 0;
+	/** A DM is held for the sender's pause even with triage off: the pause passes, and the held burst is admitted. */
 	const dm = (instance: string, from: string, text: string) =>
-		t.receive(instance, {
-			id: `h${++seq}`,
-			thread: from,
-			sentAt: t.clock.now(),
-			from: { handle: from, name: null },
-			text,
-			attachments: []
-		});
+		t
+			.receive(instance, {
+				id: `h${++seq}`,
+				thread: from,
+				sentAt: t.clock.now(),
+				from: { handle: from, name: null },
+				text,
+				attachments: []
+			})
+			.pipe(
+				Effect.andThen(
+					Effect.gen(function* () {
+						t.clock.advance('2s');
+						yield* t.runDue();
+					})
+				)
+			);
 	/** The newest tool row's result: what the turn's authority let the tool do. */
 	const lastResult = () =>
 		t.db.value(Schema.Json, {
@@ -220,7 +237,7 @@ const nets = (result: Json) =>
 		.payslips.rows.map((row) => row.net)
 		.sort();
 
-describe("an entity hotline ({ actor: 'instance' }, dm: 'envoy')", () => {
+describe("an entity hotline ({ var: 'requestor.instance' }, dm: 'envoy')", () => {
 	it.live(
 		'the same member reads only their own payslips of the entity whose hotline they wrote to',
 		() =>
@@ -350,6 +367,9 @@ describe('durable admission (§4.3)', () => {
 						),
 						TestWorkspace
 					);
+					yield* after.runDue();
+					yield* after.settled();
+					after.clock.advance('2s'); // the admitted DM waits out the sender's pause
 					yield* after.runDue();
 					yield* after.settled();
 					expect(yield* queued()).toHaveLength(0);

@@ -772,7 +772,7 @@ describe('the agent panel restored', () => {
 	);
 
 	it.live(
-		'groups the picker by where each conversation happens and opens an envoy thread read-only',
+		'tabs the picker by where each conversation happens, counts and searches every tab, and opens an envoy thread read-only',
 		() =>
 			Effect.scoped(
 				Effect.gen(function* () {
@@ -799,6 +799,16 @@ describe('the agent panel restored', () => {
 					});
 					yield* s.t.settled();
 					const thread = conversationId('whatsapp', handle);
+					yield* s.agent.start({ owner: 'ann', title: 'Quote draft' });
+					// an automation's inference transcript, which only an administrator lists
+					yield* s.t.db.write({
+						text: "INSERT INTO sys_conversation (id, title, run, status, model) VALUES ('auto1', 'Nightly sync', 'run1', 'idle', 'default')",
+						params: []
+					});
+					yield* s.t.db.write({
+						text: `UPDATE sys_user SET admin = true, revision = revision + 1 WHERE id = 'ann'`,
+						params: []
+					});
 					try {
 						sessionStorage.clear();
 					} catch {
@@ -818,6 +828,25 @@ describe('the agent panel restored', () => {
 							envoys: { field_ops: 'Norbius' }
 						}
 					});
+					const tabs = () =>
+						[...document.querySelectorAll('[data-agent-tabs] [role="tab"]')].map((x) => [
+							x.textContent?.replace(/\s+/g, ' ').trim(),
+							x.getAttribute('data-state')
+						]);
+					const shown = () =>
+						[...document.querySelectorAll('[role="option"]')].map((x) =>
+							x.getAttribute('data-value')
+						);
+					const search = (q: string) =>
+						Effect.gen(function* () {
+							// the picker's search box, above its tabs
+							const box = document
+								.querySelector('[data-agent-tabs]')!
+								.parentElement!.querySelector('input')!;
+							box.value = q;
+							box.dispatchEvent(new Event('input', { bubbles: true }));
+							yield* tick;
+						});
 					try {
 						// the live list is here once the picker stops saying there are none
 						yield* until(
@@ -827,21 +856,47 @@ describe('the agent panel restored', () => {
 								).includes('No conversations yet')
 						);
 						yield* press(target.querySelector<HTMLElement>('[data-agent-head] [role="combobox"]')!);
-						yield* until(
-							() => document.querySelector(`[role="option"][data-value="${thread}"]`) !== null
+						// one tab per source, each counting its sessions: the member's own first, writable
+						yield* until(() => tabs().length === 3);
+						expect(tabs()).toEqual([
+							['Web UI 1', 'active'],
+							['Norbius 2', 'inactive'],
+							['Automations 1', 'inactive']
+						]);
+						expect(shown()).toHaveLength(1);
+						expect(document.querySelector('[data-agent-tab-read-only]')).toBeNull();
+						// an envoy's tab is read-only: its DMs, then each group chat under its name
+						yield* press(
+							document.querySelectorAll<HTMLElement>('[data-agent-tabs] [role="tab"]')[1]!
 						);
-						// no segment tabs: the picker's own headings say where each conversation happens, DMs before groups
-						expect(target.querySelector('[data-agent-groups]')).toBeNull();
+						yield* until(() => shown().includes(thread));
+						expect(document.querySelector('[data-agent-tab-read-only]')?.textContent).toContain(
+							'Read only'
+						);
 						expect(
 							[...document.querySelectorAll('li[role="presentation"].text-overline')].map((x) =>
 								x.textContent?.trim()
 							)
-						).toEqual(['Norbius (DM)', 'Norbius (Group: Site crew)']);
+						).toEqual(['Direct messages', 'Group: Site crew']);
+						// search filters every tab at once: each count follows its matches, the open tab shows its own
+						yield* search('crew');
+						yield* until(() => tabs()[0]?.[0] === 'Web UI 0');
+						expect(tabs().map((x) => x[0])).toEqual(['Web UI 0', 'Norbius 1', 'Automations 0']);
+						expect(shown()).toEqual([conversationId('whatsapp', '120363000000000001@g.us')]);
+						yield* search('nightly');
+						yield* until(() => tabs()[2]?.[0] === 'Automations 1');
+						expect(tabs().map((x) => x[0])).toEqual(['Web UI 0', 'Norbius 0', 'Automations 1']);
+						expect(shown()).toEqual([]);
+						yield* search('');
+						yield* until(() => shown().includes(thread));
 						// choosing opens the thread, with no composer
 						yield* press(
 							document.querySelector<HTMLElement>(`[role="option"][data-value="${thread}"] button`)!
 						);
 						yield* until(() => target.querySelector('[data-agent-read-only]') !== null);
+						expect(target.querySelector('[data-agent-read-only]')?.textContent?.trim()).toBe(
+							'Read-only — Norbius answers this channel conversation.'
+						);
 						expect(target.querySelector('textarea')).toBeNull();
 						expect(target.querySelector('[data-role="user"] [data-text]')?.textContent).toBe(
 							'hello?'
@@ -855,6 +910,117 @@ describe('the agent panel restored', () => {
 					}
 				})
 			)
+	);
+
+	it.live(
+		'lists exactly the envoy threads and automation transcripts a member may open, and refuses a post into either',
+		() =>
+			Effect.scoped(
+				Effect.gen(function* () {
+					const s = yield* setup(() => Effect.succeed(reply('Done.')), envoyManifest);
+					const handle = '6590000001@s.whatsapp.net';
+					yield* s.t.receive('whatsapp', {
+						id: 'w1',
+						thread: handle,
+						sentAt: s.t.clock.now(),
+						from: { handle, name: 'Kim' },
+						text: 'hello?',
+						attachments: []
+					});
+					yield* s.t.settled();
+					const thread = conversationId('whatsapp', handle);
+					// a private envoy's thread, and an automation's transcript
+					yield* s.t.db.write({
+						text: "INSERT INTO sys_conversation (id, integration, thread, kind, envoy) VALUES ('secret1', 'whatsapp', 'x@s.whatsapp.net', 'dm', 'secret')",
+						params: []
+					});
+					yield* s.t.db.write({
+						text: "INSERT INTO sys_conversation (id, title, run, status, model) VALUES ('auto1', 'Nightly sync', 'run1', 'idle', 'default')",
+						params: []
+					});
+					const ids = () =>
+						listOf(s.fetch).pipe(Effect.map((rows) => rows.map((r) => r.id).sort()));
+					// staff read the public envoy's threads; a private envoy's only once they posted in it; no automations
+					expect(yield* ids()).toEqual([thread]);
+					yield* s.t.db.write({
+						text: "INSERT INTO sys_message (id, conversation, role, content, author) VALUES ('m1', 'secret1', 'user', '{}'::jsonb, 'ann')",
+						params: []
+					});
+					expect(yield* ids()).toEqual(['secret1', thread].sort());
+					// automation transcripts are an administrator's
+					yield* s.t.db.write({
+						text: `UPDATE sys_user SET admin = true, revision = revision + 1 WHERE id = 'ann'`,
+						params: []
+					});
+					expect(yield* ids()).toEqual(['auto1', 'secret1', thread].sort());
+					// an external member reads no public envoy's threads (as opening one refuses them)
+					yield* s.t.db.write({
+						text: `UPDATE sys_user SET kind = 'external', revision = revision + 1 WHERE id = 'bob'`,
+						params: []
+					});
+					s.as('bob');
+					expect(yield* ids()).toEqual([]);
+					s.as('ann');
+					// only Web UI conversations take a post: an envoy thread and an automation transcript refuse even an administrator
+					for (const id of [thread, 'auto1']) {
+						const posted = yield* Effect.result(s.api.agent.post(id, 'hi'));
+						expect(
+							Result.isFailure(posted)
+								? posted.failure.message
+								: posted.success.kind === 'refused'
+									? posted.success.message
+									: posted.success.kind
+						).toBe('Not found or no access.');
+					}
+				})
+			)
+	);
+
+	it.live('a private envoy thread a member posted in refreshes live in their list', () =>
+		Effect.scoped(
+			Effect.gen(function* () {
+				const s = yield* setup(
+					() => Effect.succeed(reply('Done.')),
+					Result.getOrThrow(
+						decodeManifest({
+							...envoyManifest,
+							envoys: {
+								field_ops: { ...envoyManifest.envoys['field_ops'], audience: 'members' }
+							}
+						})
+					)
+				);
+				const handle = '6590000002@s.whatsapp.net',
+					thread = conversationId('whatsapp', handle);
+				yield* s.t.receive('whatsapp', {
+					id: 'w1',
+					thread: handle,
+					sentAt: s.t.clock.now(),
+					from: { handle, name: 'Kim' },
+					text: 'hello?',
+					attachments: []
+				});
+				yield* s.t.settled();
+				yield* s.t.db.write({
+					text: "INSERT INTO sys_message (id, conversation, role, content, author) VALUES ('mine', $1, 'user', '{}'::jsonb, 'ann')",
+					params: [thread]
+				});
+				const List = Schema.Struct({ rows: Schema.Array(AgentConversation) });
+				const seen: (typeof AgentConversation.Type)[][] = [];
+				yield* (yield* liveBolt(s.fetch))
+					.observe({ read: { m: 'conversations', a: [] } })
+					.pipe(
+						Stream.mapEffect((value) => Schema.decodeUnknownEffect(List)(value)),
+						Stream.runForEach(({ rows }) => Effect.sync(() => void seen.push([...rows]))),
+						Effect.forkScoped
+					);
+				yield* until(() => seen.length > 0);
+				// the member posted in it: the list has it, and its change arrives live
+				expect(seen[0]?.find((row) => row.id === thread)?.status).toBe('idle');
+				yield* s.agent.stop(thread);
+				yield* until(() => seen.at(-1)?.find((row) => row.id === thread)?.status === 'stopped');
+			})
+		)
 	);
 
 	it.live(
@@ -1255,7 +1421,7 @@ describe('the agent panel restored', () => {
 					localStorage.clear();
 					localStorage.setItem(key, id);
 					const opened: (string | null)[] = [];
-					const panel = <A>(check: (target: HTMLElement) => Effect.Effect<A>) =>
+					const panel = <A>(check: (target: HTMLElement) => Effect.Effect<A>, bolt = s.bolt) =>
 						Effect.gen(function* () {
 							const target = document.createElement('div');
 							document.body.append(target);
@@ -1263,7 +1429,7 @@ describe('the agent panel restored', () => {
 								target,
 								props: {
 									api: s.api,
-									bolt: s.bolt,
+									bolt,
 									t: (k: string) => k,
 									request: {},
 									onClose: () => {},
@@ -1298,13 +1464,17 @@ describe('the agent panel restored', () => {
 					});
 					yield* s.t.db.write({ text: 'DELETE FROM sys_conversation WHERE id = $1', params: [id] });
 					opened.length = 0;
-					yield* panel((target) =>
-						Effect.gen(function* () {
-							yield* until(() => opened.at(-1) === null);
-							expect(localStorage.getItem(key)).toBeNull();
-							expect(target.querySelector('[data-role]')).toBeNull();
-							expect(target.querySelector('textarea')).not.toBeNull();
-						})
+					// a new session is a new client: the first one still holds its view of the deleted transcript
+					const fresh = yield* liveBolt(s.fetch);
+					yield* panel(
+						(target) =>
+							Effect.gen(function* () {
+								yield* until(() => opened.at(-1) === null);
+								expect(localStorage.getItem(key)).toBeNull();
+								expect(target.querySelector('[data-role]')).toBeNull();
+								expect(target.querySelector('textarea')).not.toBeNull();
+							}),
+						fresh
 					);
 				})
 			)

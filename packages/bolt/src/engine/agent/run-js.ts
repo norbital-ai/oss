@@ -6,7 +6,7 @@
 // its outputs and `fetch`. HTTP is answered here through `Http` only for a run granted it; every other call is refused.
 // The files a run returns are classified by their bytes, and an executable or an unrecognized binary is never kept.
 import { originalPositionFor, TraceMap } from '@jridgewell/trace-mapping';
-import { Effect, Option, Predicate, Result, Schema } from 'effect';
+import { Array as EffectArray, Effect, Option, Predicate, Result, Schema } from 'effect';
 import type { Json } from '../../decl/values.ts';
 import {
 	CONVERT_MIME,
@@ -416,11 +416,17 @@ export const runJs = Effect.fn('Agents.runJs')(function* (run: RunJs) {
 	if (!Predicate.isObject(answer) || !('files' in answer))
 		return { answer, ...printed() } satisfies Json;
 	const returned = Schema.decodeUnknownOption(Returned)(answer);
+	// files are what the person keeps only in their own shape; any other `files` is data the code answered
 	if (Option.isNone(returned))
-		return {
-			error: 'files must be [{ name, text } | { name, base64 }]',
-			...printed()
-		} satisfies Json;
+		return EffectArray.isArray(answer['files']) &&
+			answer['files'].some(
+				(file) => Predicate.isObject(file) && ('text' in file || 'base64' in file)
+			)
+			? ({
+					error: 'files must be [{ name, text } | { name, base64 }]',
+					...printed()
+				} satisfies Json)
+			: ({ answer, ...printed() } satisfies Json);
 	const { kept, refused } = yield* keepAll(
 		returned.value.files.map((file) => ({
 			name: file.name,
