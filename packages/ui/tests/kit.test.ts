@@ -56,6 +56,22 @@ function show(props: ComponentProps<typeof Harness>) {
 }
 const key = (k: string, init: KeyboardEventInit = {}) =>
 	new KeyboardEvent('keydown', { key: k, bubbles: true, cancelable: true, ...init });
+/**
+ * Whether no sheet is open under `root` once a dismissal's exit animation has run (happy-dom implements WAAPI, so a
+ * sheet leaves after its 160 ms animation, never synchronously). A boolean, never the element: asserting on a node
+ * makes node:assert render happy-dom's whole object graph when it fails.
+ */
+const closed = async (root: ParentNode = document, ms = 1_000): Promise<boolean> => {
+	for (
+		const until = Date.now() + ms;
+		Date.now() < until;
+		await new Promise((r) => setTimeout(r, 10))
+	) {
+		flushSync();
+		if (root.querySelector('[role=dialog]') === null) return true;
+	}
+	return false;
+};
 
 it.live('sheet: outside interaction keeps it open and Escape dismisses it', () =>
 	browser(async () => {
@@ -69,14 +85,14 @@ it.live('sheet: outside interaction keeps it open and Escape dismisses it', () =
 		outside.focus();
 		outside.dispatchEvent(key('a'));
 		flushSync();
-		assert.equal(document.activeElement, outside);
+		assert.ok(document.activeElement === outside, 'focus stays where the person put it');
 		assert.ok(document.querySelector('[role=dialog]'), 'still open after outside interaction');
 		// Esc dismisses, and consumes the key: one Esc closes one sheet
 		const esc = key('Escape');
 		window.dispatchEvent(esc);
 		flushSync();
 		assert.equal(esc.defaultPrevented, true);
-		assert.equal(document.querySelector('[role=dialog]'), null);
+		assert.ok(await closed(document), 'the sheet closed');
 		await v.done();
 	})
 );
@@ -86,7 +102,7 @@ it.live('sheet: the close button dismisses', () =>
 		const v = show({ part: 'sheet', sheetOpen: true });
 		element<HTMLButtonElement>(document, '[data-sheet-close]').click();
 		flushSync();
-		assert.equal(document.querySelector('[role=dialog]'), null);
+		assert.ok(await closed(document), 'the sheet closed');
 		await v.done();
 	})
 );
@@ -111,7 +127,7 @@ it.live('sheet: blocked session storage does not prevent opening or resizing', (
 			assert.ok(v.target.querySelector('[role=dialog]'), 'the sheet remains usable after resizing');
 			window.dispatchEvent(key('Escape'));
 			flushSync();
-			assert.equal(v.target.querySelector('[role=dialog]'), null);
+			assert.ok(await closed(v.target), 'the sheet closed');
 			await v.done();
 		} finally {
 			vi.restoreAllMocks();
@@ -145,18 +161,14 @@ it.live(
 				element<HTMLButtonElement>(document, '[data-sheet-close]').click();
 				flushSync();
 				await answer(true);
-				assert.equal(
-					document.querySelector('[role=dialog]'),
-					null,
-					'closed once the person agreed'
-				);
+				assert.ok(await closed(document), 'closed once the person agreed');
 				await v.done();
 				dirty = false;
 				const clean = show({ part: 'guarded', sheetOpen: true, dirty: () => dirty });
 				window.dispatchEvent(key('Escape'));
 				flushSync();
 				assert.equal(asking(), undefined, 'nothing unsaved: no question');
-				assert.equal(document.querySelector('[role=dialog]'), null);
+				assert.ok(await closed(document), 'the sheet closed');
 				await clean.done();
 				assert.equal(native.mock.calls.length, 0);
 			} finally {
@@ -223,15 +235,13 @@ it.live('drawer: closes on a nav tap and on a route change, not on other clicks'
 		} finally {
 			document.removeEventListener('click', stop);
 		}
-		flushSync();
-		assert.ok(!open(), 'a nav tap closes it');
+		assert.ok(await closed(), 'a nav tap closes it');
 		await v.done();
 		// a route change (back button, programmatic navigation)
 		const r = show({ part: 'drawer', drawerOpen: true, path: '/a' });
 		assert.ok(open());
 		r.state.path = '/b';
-		flushSync();
-		assert.ok(!open(), 'a route change closes it');
+		assert.ok(await closed(), 'a route change closes it');
 		await r.done();
 	})
 );

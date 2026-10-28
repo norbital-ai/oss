@@ -61,24 +61,28 @@ export interface TxCtx {
 	readonly act: TxAct;
 }
 
-type TxData<T> = T extends Decimal
-	? Exclude<keyof T, keyof Decimal> extends never
-		? T
-		: never
-	: T extends string | number | boolean | null
-		? T
-		: T extends
-					| PromiseLike<unknown>
-					| ((...args: never[]) => unknown)
-					| (abstract new (...args: never[]) => unknown)
-			? never
-			: T extends readonly unknown[]
-				? undefined extends T[number]
-					? never
-					: { readonly [K in keyof T]: TxData<T[K]> }
-				: T extends object
-					? { readonly [K in keyof T]: TxData<T[K]> }
-					: never;
+// the context itself is refused first: mapping it structurally walks every typed read and write (classic tsc ran out of
+// memory on `return tx`); plain data never has its `query` and `act`, so this test fails at once for it
+type TxData<T> = T extends TxCtx
+	? never
+	: T extends Decimal
+		? Exclude<keyof T, keyof Decimal> extends never
+			? T
+			: never
+		: T extends string | number | boolean | null
+			? T
+			: T extends
+						| PromiseLike<unknown>
+						| ((...args: never[]) => unknown)
+						| (abstract new (...args: never[]) => unknown)
+				? never
+				: T extends readonly unknown[]
+					? undefined extends T[number]
+						? never
+						: { readonly [K in keyof T]: TxData<T[K]> }
+					: T extends object
+						? { readonly [K in keyof T]: TxData<T[K]> }
+						: never;
 
 /** A callback's native return shape, or top-level void; unsupported values are rejected recursively. */
 export type TxValue<T> = T extends void ? T : TxData<T>;

@@ -1,6 +1,6 @@
 {
 	"name": "@norbital-ai/store",
-	"version": "0.0.3",
+	"version": "0.0.4",
 	"description": "One typed data layer for Bolt workspaces and their hosts: schema declarations, the SQL each read, write and migration emits, and the decoders of its rows. It never connects to a database.",
 	"type": "module",
 	"sideEffects": false,
