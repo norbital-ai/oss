@@ -34,7 +34,7 @@ import {
 } from '../catalog.ts';
 import { argumentList, inlineLeaf } from '../decode.ts';
 import { ELEMENT, type PathTest } from '../ir.ts';
-import { comparable, inverted, jsonPath, periodEnds } from './values.ts';
+import { comparable, inverted, jsonPath, periodEnds, periodTest } from './values.ts';
 
 /** One statement with positional parameters (`$1…`): its text is its shape, whatever its parameters are. */
 export type Sql = { readonly text: string; readonly params: readonly Json[] };
@@ -67,12 +67,12 @@ export type Scope = {
 	readonly rows: (path: string) => readonly Pred[] | undefined;
 	/** A field of the level at `path` read only where its mask holds (elsewhere `{ "$masked": true }`, never filtered or sorted by). */
 	readonly mask: (path: string, field: string) => Pred | undefined;
-	/** More columns of a root row, each `<sql> AS <name>`, over the row at `alias`. */
-	readonly root?: (model: string, alias: string) => readonly string[];
 };
 /** How one statement compiles: who reads, how operands resolve, which tables it reads, and its byte budget. */
 export type CompileOptions = {
 	readonly scope?: Scope | undefined;
+	/** More columns of a root row, each `<sql> AS <name>`, over the row at `alias`, scoped or not. */
+	readonly root?: ((model: string, alias: string) => readonly string[]) | undefined;
 	/** A non-literal operand (`{ var }` …) to its value; without it they are `invalid`. */
 	readonly resolve?: ((o: Operand) => Fx<Json>) | undefined;
 	/** The zone a date bucket of an instant is cut in; UTC when unset. */
@@ -91,11 +91,13 @@ export class Build {
 	readonly elements: string[] = [];
 	readonly cat: Catalog;
 	readonly scope: Scope | undefined;
+	readonly root: CompileOptions['root'];
 	readonly tz: string;
 	private readonly options: CompileOptions;
 	constructor(cat: Catalog, options: CompileOptions = {}) {
 		this.cat = cat;
 		this.scope = options.scope;
+		this.root = options.root;
 		this.tz = options.tz ?? 'UTC';
 		this.options = options;
 	}
@@ -458,7 +460,7 @@ export const pred: (b: Build, c: ExposureInfo, a: string, p: Pred, lv: Level) =>
 				const other = date
 					? `daterange(${b.bind(from, 'date')}, ${b.bind(to, 'date')}, '[]')`
 					: `tstzrange(${b.bind(comparable(r.start ?? null), 'timestamptz')}, ${b.bind(comparable(r.end ?? null), 'timestamptz')}, '[)')`;
-				return `(${x} ${p.op === 'overlaps' ? '&&' : '<@'} ${other})`;
+				return periodTest(p.op, x, other, date);
 			}
 			case 'geo': {
 				const x = yield* col(b, c, a, p.field, lv);
@@ -655,7 +657,7 @@ const root = Effect.fnUntraced(function* (
 	lv: Level,
 	one: boolean = false
 ) {
-	return [...(yield* items(b, c, a, s, lv, one)), ...(b.scope?.root?.(c.name, a) ?? [])];
+	return [...(yield* items(b, c, a, s, lv, one)), ...(b.root?.(c.name, a) ?? [])];
 });
 const arm = Effect.fnUntraced(function* (
 	b: Build,

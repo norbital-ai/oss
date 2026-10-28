@@ -115,7 +115,7 @@ The kit's select: a field-like trigger and a searchable option list in a popover
 	const multiLabel = $derived(
 		selectedLabels.length <= 2
 			? selectionText
-			: `${selectedLabels.slice(0, 2).join(', ')} +${selectedLabels.length - 2}`
+			: t('selectedCount').replace('{n}', String(selectedLabels.length))
 	);
 	const withSearch = $derived(searchable ?? (onSearch !== undefined || options.length > 8));
 	const shown = $derived.by(() => {

@@ -38,6 +38,8 @@ export type Op =
 	| 'contains'
 	| 'overlaps'
 	| 'within'
+	| 'startsWithin'
+	| 'endsWithin'
 	| 'near'
 	| 'search'
 	| 'similar';
@@ -62,6 +64,8 @@ const OpSchema = Schema.Literals([
 	'contains',
 	'overlaps',
 	'within',
+	'startsWithin',
+	'endsWithin',
 	'near',
 	'search',
 	'similar'

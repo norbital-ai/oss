@@ -76,7 +76,8 @@ export type ParserExposure = string | { type: string; extensions: readonly strin
  * A model's sync as the toolbar offers it. A file sync: Import… and Download template when the caller may write the
  * model (`import`), its file picker accepting exactly `parser` (default `xlsx`, `csv`); Export in each of `export`'s
  * formats (a records format, `xlsx`/`csv`/…, or the workspace's convert targets when its `write` returns a document).
- * A remote sync with a `read` the caller may start: "Sync now" pulls from `with`, its integration.
+ * `context` names the sync's required context fields: the toolbar offers the sync only when its view's `context`
+ * supplies them. A remote sync with a `read` the caller may start: "Sync now" pulls from `with`, its integration.
  */
 export type SyncExposure =
 	| {
@@ -84,6 +85,7 @@ export type SyncExposure =
 			parser?: readonly ParserExposure[];
 			import?: true;
 			export?: readonly string[];
+			context?: readonly string[];
 	  }
 	| { kind: 'remote'; with: string };
 /** What a custom field's renderer receives, a tenant's `src/data/custom_field/<f>/+renderer.svelte` and a built-in's

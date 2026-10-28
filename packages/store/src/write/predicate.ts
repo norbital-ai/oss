@@ -7,7 +7,7 @@ import type { Json } from '../values.ts';
 import type { Arg, Pred } from '../ir.ts';
 import { q, type FieldInfo } from '../catalog.ts';
 import { StoreError } from '../errors.ts';
-import { databaseValue } from '../read/values.ts';
+import { databaseValue, periodTest } from '../read/values.ts';
 
 /** What binds a literal of a statement being built: its `$n`. */
 export type Binder = { p(v: Json): string };
@@ -122,11 +122,13 @@ export const ownPredSql: (
 				const value = p.arg.value,
 					type = date ? 'date' : 'timestamptz';
 				const range = `${date ? 'daterange' : 'tstzrange'}(${literal(value[date ? 'from' : 'start'] ?? null, type)}, ${literal(value[date ? 'to' : 'end'] ?? null, type)}, '${date ? '[]' : '[)'}')`;
-				return leaf(`${col(p.field)} ${p.op === 'overlaps' ? '&&' : '<@'} ${range}`);
+				return leaf(periodTest(p.op, col(p.field), range, date));
 			}
-			return leaf(
-				`${col(p.field)} ${p.op === 'contains' ? '@>' : p.op === 'overlaps' ? '&&' : '<@'} ${yield* val(p.arg, p.field, p.op === 'contains' ? (date ? 'date' : 'timestamptz') : field?.pg)}`
-			);
+			if (p.op === 'contains')
+				return leaf(
+					`${col(p.field)} @> ${yield* val(p.arg, p.field, date ? 'date' : 'timestamptz')}`
+				);
+			return leaf(periodTest(p.op, col(p.field), yield* val(p.arg, p.field, field?.pg), date));
 		}
 		case 'json':
 			return leaf(

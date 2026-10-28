@@ -255,8 +255,7 @@ export type LayerRow<
 		]: Mask extends true ? LayerValue<C, P, F> : ColumnValue<T, F>;
 	} & { readonly [Q in S]: SubAnswer<C, `${P}.${Q}`, R, Mask, T, Q> }
 >;
-type RootRow<C extends string, R, Mask> = LayerRow<C, C, R, Mask> &
-	(Mask extends true ? RowState : {});
+type RootRow<C extends string, R, Mask> = LayerRow<C, C, R, Mask> & RowState;
 /** A root's answer: its aggregate, its index or semantic search's nearest rows (each with `$distance`), or its page. */
 type RootAnswer<C extends string, R, Mask> =
 	At<R, C> extends { aggregate: infer A }

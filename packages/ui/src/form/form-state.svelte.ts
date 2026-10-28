@@ -73,6 +73,7 @@ export class FormState {
 	#beforeOutcomes = new Set<(outcome: Outcome) => void>();
 	#resets = new Set<() => void>();
 	#validators = new Set<() => Effect.Effect<boolean>>();
+	#confirms = new Set<() => Effect.Effect<boolean>>();
 	#rules = $state.raw<readonly (() => readonly SemanticIssue[])[]>([]);
 	/** Every registered rule's current issues; kept apart from `errors` so fixing a value clears its issue at once. */
 	readonly semanticErrors: readonly SemanticIssue[] = $derived(
@@ -266,6 +267,11 @@ export class FormState {
 		this.#validators.add(validate);
 		return () => this.#validators.delete(validate);
 	}
+	/** Asked once the draft is valid, before it is sent: `false` (the person declined) sends nothing. */
+	confirmSubmit(ask: () => Effect.Effect<boolean>): () => void {
+		this.#confirms.add(ask);
+		return () => this.#confirms.delete(ask);
+	}
 	get revision(): number | undefined {
 		return this.#revision;
 	}
@@ -333,6 +339,7 @@ export class FormState {
 				concurrency: 'unbounded'
 			});
 			if (!this.validate() || valid.some((value) => !value)) return null;
+			for (const ask of this.#confirms) if (!(yield* ask())) return null;
 			const scalar = payload(this.spec, this.base, this.values);
 			const target = this.spec.target;
 			if (target.of === 'automation') {

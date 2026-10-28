@@ -536,7 +536,7 @@ export type LayerValue<C, P, F> =
 		: ColumnValue<PathModel<C, P>, F>;
 /** A caller's row of model `C`: its exposed fields (maskable ones `| Masked`), FK ids and system columns (rule 10). */
 export type Row<C> = RowOf<C> & RowState;
-/** What a caller's read attaches to each root row beside its fields, whatever it selects (§4.2, rule 46b). */
+/** What a read, the caller's or the workspace's, attaches to each root row beside its fields, whatever it selects (§4.2, rule 46b). */
 export type RowState = {
 	readonly $sync?: { readonly [sync: string]: SyncState };
 	readonly $approval?: RowApproval;

@@ -177,7 +177,8 @@ const SyncExposureSchema = Schema.Union([
 			)
 		),
 		import: trueKey,
-		export: Schema.optionalKey(strings)
+		export: Schema.optionalKey(strings),
+		context: Schema.optionalKey(strings)
 	}),
 	Schema.Struct({ kind: Schema.Literal('remote'), with: Schema.String })
 ]);

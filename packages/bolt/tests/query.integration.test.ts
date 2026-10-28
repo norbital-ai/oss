@@ -449,7 +449,7 @@ describe('next query engine (PGlite)', () => {
 									])
 								},
 								{
-									[pick(['overlaps', 'within'])]: {
+									[pick(['overlaps', 'within', 'startsWithin', 'endsWithin'])]: {
 										from: pick(['2026-08-31', '2026-09-01']),
 										to: pick([null, '2026-09-12', bindings.today, '2026-10-01'])
 									}

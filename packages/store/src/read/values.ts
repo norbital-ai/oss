@@ -43,10 +43,7 @@ export function cells(
 ): [string, Json][] {
 	if (f?.arms === undefined) return [[k, databaseValue(v, f)]];
 	const ref = isObject(v) ? v : null;
-	return f.arms.map((arm) => [
-		`${f.column}__${arm}`,
-		ref?.model === arm ? (ref.id ?? null) : null
-	]);
+	return f.arms.map((arm) => [`${f.column}__${arm}`, ref?.model === arm ? (ref.id ?? null) : null]);
 }
 
 /** A literal json path (`'{"a","b"}'`): inline, so a predicate's expression is the one a path index is built on. */
@@ -92,3 +89,24 @@ export const periodEnds: (
 	const ends: Json = out;
 	return ends;
 });
+
+/**
+ * A period column `x` against a period `span` (SQL range text): `overlaps` and `within` test the whole period;
+ * `startsWithin` its first day or start instant; `endsWithin` its last day (the day before a date range's exclusive
+ * upper bound) or end instant. An unbounded end is in no span.
+ */
+export const periodTest = (
+	op: 'overlaps' | 'within' | 'startsWithin' | 'endsWithin',
+	x: string,
+	span: string,
+	date: boolean
+): string =>
+	op === 'overlaps'
+		? `(${x} && ${span})`
+		: op === 'within'
+			? `(${x} <@ ${span})`
+			: op === 'startsWithin'
+				? `(lower(${x}) <@ ${span})`
+				: date
+					? `((upper(${x}) - 1) <@ ${span})`
+					: `(upper(${x}) > lower(${span}) AND (upper_inf(${span}) OR upper(${x}) <= upper(${span})))`;

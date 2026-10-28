@@ -176,6 +176,22 @@ describe('next query: decode', () => {
 		expect(orders.model.fields.get('total')?.pg).toBe('numeric');
 	});
 
+	it('rule 46b: a workspace read of a held model carries `$approval` as a caller read does; no other model does', () => {
+		const ir = storeSync(read(cat, 'orders', { limit: 1 }));
+		const approvals = new Set(['orders']);
+		const held = (reader: Parameters<typeof readOptions>[0], models: ReadonlySet<string>) =>
+			storeSync(compile(cat, ir, readOptions(reader, bindings, { approvals: models }))).sql.text;
+		for (const reader of [{ as: 'workspace' }, { as: 'caller', authority: rep }] as const) {
+			expect(held(reader, approvals)).toContain('AS "$approval"');
+			expect(held(reader, approvals)).toContain("ap.state IN ('Pending', 'ChangesRequested')");
+			expect(held(reader, new Set())).not.toContain('$approval');
+		}
+		// without the held models (a write's own reads) nothing is attached
+		expect(
+			storeSync(compile(cat, ir, readOptions({ as: 'workspace' }, bindings))).sql.text
+		).not.toContain('$approval');
+	});
+
 	it('rule 14: aggregating a field masked to the caller is forbidden', () => {
 		const ir = storeSync(aggregate(cat, 'orders', { sum: ['total'] }));
 		expect(

@@ -164,8 +164,7 @@ export function readTargets(cat: Catalog, ir: ReadIR, authority?: Authority): Re
 	function add(model: string): void {
 		if (out.has(model)) return;
 		out.add(model);
-		const grant =
-			authority === undefined || authority.admin ? undefined : authority.models[model];
+		const grant = authority === undefined || authority.admin ? undefined : authority.models[model];
 		for (const arm of Object.values(grant?.read ?? {}).flat()) pred(arm.where);
 		for (const mask of Object.values(grant?.masks ?? {}).flatMap(Object.values)) pred(mask);
 	}
@@ -289,15 +288,11 @@ export function readEngine(config: ReadEngineConfig): ReadEngine & {
 		// L-BOLT-123: `/semantic <text>` and `similar(c, { to })` over `search.semantic`
 		const embed = Effect.fnUntraced(function* (text: string) {
 			if (
-				(yield* exposureOf(cat, ir.model).pipe(Effect.mapError(fromStore))).model
-					.semantic === undefined
+				(yield* exposureOf(cat, ir.model).pipe(Effect.mapError(fromStore))).model.semantic ===
+				undefined
 			)
 				return yield* Effect.fail(
-					BoltError.make(
-						'invalid',
-						'decode',
-						`'${ir.model}' declares no search.semantic (rule 16)`
-					)
+					BoltError.make('invalid', 'decode', `'${ir.model}' declares no search.semantic (rule 16)`)
 				);
 			if (config.embed === undefined)
 				return yield* Effect.fail(
@@ -543,9 +538,7 @@ export function readEngine(config: ReadEngineConfig): ReadEngine & {
 		const gets = irs.flatMap((ir, i) =>
 			ir.kind === 'get' && ir.cte === undefined ? [[ir, i] as const] : []
 		);
-		for (const g of Map.groupBy(gets, ([ir]) =>
-			JSON.stringify([ir.model, ir.select])
-		).values()) {
+		for (const g of Map.groupBy(gets, ([ir]) => JSON.stringify([ir.model, ir.select])).values()) {
 			if (g.length < 2) continue;
 			mergedSql.push(
 				composable(
@@ -618,58 +611,50 @@ export function readEngine(config: ReadEngineConfig): ReadEngine & {
 			),
 			{ concurrency: 'unbounded' }
 		);
-		const exposed =
-			reader.as !== 'caller'
-				? answers
-				: yield* Effect.all(
-						answers.map(
-							Effect.fnUntraced(function* (answer: Json, index: number) {
-								const ir = irs[index]!;
-								if (
-									(ir.kind !== 'get' && ir.kind !== 'read' && ir.kind !== 'similar') ||
-									answer === null
-								)
-									return answer;
-								const object = (value: Json): value is RowData =>
-									value !== null && typeof value === 'object' && !jsonArray(value);
-								const rows =
-									ir.kind === 'get'
-										? [answer]
-										: object(answer) && jsonArray(answer['rows'])
-											? answer['rows']
-											: [];
-								const records = rows.filter(object).filter((row) => typeof row['id'] === 'string');
-								const ids = records.map((row) => String(row['id']));
-								// a record a write sync sends carries each sync's latest delivery state as `$sync`
-								// Delivery status is advisory; its worker must not invalidate a business read.
-								const states = yield* syncState(
-									config.manifest,
-									config.db,
-									ir.model,
-									ids
-								).pipe(Effect.provideService(SqlReadCapture, undefined));
-								// rule 46b: the statement read the open request holding each row as a raw `$approval` (sql.ts `root`)
-								const names = approvals.has(ir.model) ? rowApproval : undefined;
-								if (states === undefined && names === undefined) return answer;
-								const attach = (row: Json): Json => {
-									if (!object(row) || typeof row['id'] !== 'string') return row;
-									const { $approval: raw, ...rest } = row;
-									const approval = raw === undefined || raw === null ? undefined : names?.(raw);
-									return {
-										...rest,
-										...(states === undefined ? {} : { $sync: states.get(row['id']) ?? {} }),
-										...(approval === undefined ? {} : { $approval: approval })
-									};
-								};
-								return ir.kind === 'get'
-									? attach(answer)
-									: object(answer)
-										? { ...answer, rows: rows.map(attach) }
-										: answer;
-							})
-						),
-						{ concurrency: 'unbounded' }
+		// every reader's root rows carry `$sync` and the open request holding them as `$approval` (rule 46b)
+		const exposed = yield* Effect.all(
+			answers.map(
+				Effect.fnUntraced(function* (answer: Json, index: number) {
+					const ir = irs[index]!;
+					if ((ir.kind !== 'get' && ir.kind !== 'read' && ir.kind !== 'similar') || answer === null)
+						return answer;
+					const object = (value: Json): value is RowData =>
+						value !== null && typeof value === 'object' && !jsonArray(value);
+					const rows =
+						ir.kind === 'get'
+							? [answer]
+							: object(answer) && jsonArray(answer['rows'])
+								? answer['rows']
+								: [];
+					const records = rows.filter(object).filter((row) => typeof row['id'] === 'string');
+					const ids = records.map((row) => String(row['id']));
+					// a record a write sync sends carries each sync's latest delivery state as `$sync`
+					// Delivery status is advisory; its worker must not invalidate a business read.
+					const states = yield* syncState(config.manifest, config.db, ir.model, ids).pipe(
+						Effect.provideService(SqlReadCapture, undefined)
 					);
+					// rule 46b: the statement read the open request holding each row as a raw `$approval` (sql.ts `root`)
+					const names = approvals.has(ir.model) ? rowApproval : undefined;
+					if (states === undefined && names === undefined) return answer;
+					const attach = (row: Json): Json => {
+						if (!object(row) || typeof row['id'] !== 'string') return row;
+						const { $approval: raw, ...rest } = row;
+						const approval = raw === undefined || raw === null ? undefined : names?.(raw);
+						return {
+							...rest,
+							...(states === undefined ? {} : { $sync: states.get(row['id']) ?? {} }),
+							...(approval === undefined ? {} : { $approval: approval })
+						};
+					};
+					return ir.kind === 'get'
+						? attach(answer)
+						: object(answer)
+							? { ...answer, rows: rows.map(attach) }
+							: answer;
+				})
+			),
+			{ concurrency: 'unbounded' }
+		);
 		return keys.map((k) => exposed[unique.indexOf(k)]!);
 	});
 	return { catalog: cat, run };

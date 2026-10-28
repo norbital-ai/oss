@@ -332,9 +332,10 @@
 	const remotes = $derived(
 		syncs.flatMap(([name, s]) => (s.kind === 'remote' ? [{ name, with: s.with }] : []))
 	);
+	// a file sync whose required context the view does not supply (a page-driven export) is the page's to start
 	const files = $derived(
 		syncs.flatMap(([name, s]) =>
-			s.kind === 'file'
+			s.kind === 'file' && (s.context ?? []).every((f) => cfg?.context?.[f] !== undefined)
 				? [
 						{
 							name,

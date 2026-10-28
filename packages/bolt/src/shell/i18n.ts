@@ -79,6 +79,7 @@ const UI_ZH: { readonly [k in UiTextKey]: string } = {
 	previous: '上一个',
 	next: '下一个',
 	more: '还有 {n} 项',
+	selectedCount: '已选 {n} 项',
 	day: '日',
 	week: '周',
 	month: '月',

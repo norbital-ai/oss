@@ -13,7 +13,14 @@ export function contentMotion(node: HTMLElement) {
 	};
 	let observed = node.firstElementChild;
 	const FIELDS = 'dd,td,li,[data-field]';
-	const known = new Set(node.querySelectorAll<HTMLElement>(FIELDS));
+	// A field is known from when it is first seen: one filled while its section is closed, or still rendering just after
+	// it opens, is structure, not a change. Only a field seen for a moment flashes.
+	const SETTLE_MS = 600;
+	const seen = (field: HTMLElement) =>
+		typeof field.checkVisibility === 'function' ? field.checkVisibility() : true;
+	const known = new Map<HTMLElement, number>(
+		[...node.querySelectorAll<HTMLElement>(FIELDS)].filter(seen).map((field) => [field, 0])
+	);
 	const changes = new MutationObserver((records) => {
 		const next = node.firstElementChild;
 		if (resize && next !== observed) {
@@ -32,14 +39,18 @@ export function contentMotion(node: HTMLElement) {
 				if (added.matches(FIELDS)) inserted.add(added);
 				for (const field of added.querySelectorAll<HTMLElement>(FIELDS)) inserted.add(field);
 			}
-		for (const field of inserted) known.add(field);
+		const now = performance.now();
+		for (const field of inserted) if (seen(field)) known.set(field, now);
 		const fields = new Set<HTMLElement>();
 		for (const record of records) {
 			const element =
 				record.target instanceof HTMLElement ? record.target : record.target.parentElement;
 			const field = element?.closest<HTMLElement>(FIELDS);
-			if (field && known.has(field) && !inserted.has(field) && node.contains(field))
-				fields.add(field);
+			if (!field || inserted.has(field) || !node.contains(field)) continue;
+			const since = known.get(field);
+			if (since === undefined) {
+				if (seen(field)) known.set(field, now);
+			} else if (now - since > SETTLE_MS) fields.add(field);
 		}
 		for (const field of fields)
 			play(

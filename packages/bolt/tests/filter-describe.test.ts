@@ -667,8 +667,21 @@ describe('filter.describe offers System 1 the exposure and maps its choices onto
 				).toEqual({
 					ok: true,
 					where: {
-						window: { overlaps: { from: '2026-01-01', to: '2027-01-01' } }
+						window: { overlaps: { from: '2026-01-01', to: '2026-12-31' } }
 					}
+				});
+				// a period's first day in a span: "started this year" (a joined date), never the record's `created_at`
+				const started = system1(byField({ Window: { op: 'starts within', value: 'this year' } }));
+				expect(
+					yield* describer(started).describe({
+						model: 'jobs',
+						text: 'jobs that started this year',
+						authority: caller(),
+						bindings
+					})
+				).toEqual({
+					ok: true,
+					where: { window: { startsWithin: { from: '2026-01-01', to: '2026-12-31' } } }
 				});
 			})
 	);
@@ -705,7 +718,15 @@ describe('filter.describe offers System 1 the exposure and maps its choices onto
 				expect(ops('Hours')).toEqual(
 					expect.arrayContaining(['eq', 'ne', 'gt', 'gte', 'lt', 'lte', 'in', 'nin'])
 				);
-				expect(ops('Window')).toEqual(['contains', 'overlaps', 'within', 'isNull', 'notNull']);
+				expect(ops('Window')).toEqual([
+					'contains',
+					'overlaps',
+					'within',
+					'startsWithin',
+					'endsWithin',
+					'isNull',
+					'notNull'
+				]);
 				expect(ops('Notes')).toEqual([]); // masked to this caller
 				expect(r.fields.some((f) => f.label === 'Internal code')).toBe(false);
 				// two relation hops: `jobs.assignee.manager.name`, with its own sort key
@@ -721,7 +742,15 @@ describe('filter.describe offers System 1 the exposure and maps its choices onto
 				expect(path('Lines › total amount')).toEqual([
 					{ k: 'agg', rel: 'lines', fn: 'sum', of: 'amount' }
 				]);
-				expect(ops('Window')).toEqual(['contains', 'overlaps', 'within', 'isNull', 'notNull']);
+				expect(ops('Window')).toEqual([
+					'contains',
+					'overlaps',
+					'within',
+					'startsWithin',
+					'endsWithin',
+					'isNull',
+					'notNull'
+				]);
 			})
 	);
 
