@@ -88,8 +88,6 @@ export const prepareAudit = Effect.fn('Audit.prepare')(function* (intent: AuditI
 			'facility',
 			'The audit store did not retain its prepared event and recording time.'
 		);
-	// Internal custom AuditShape values may not use the ABI append wrapper.
-	yield* requestAuditRecovery(audit);
 	return {
 		event,
 		recordedAt: stored.recordedAt,
@@ -189,8 +187,9 @@ export const settleAudit = Effect.fn('Audit.settle')(function* (
 		payload: encodeWire({ request: event.payload, change: row })
 	}));
 	yield* (yield* Audit).append([...rows, terminal]);
-	if (status !== 'unknown' && (yield* acknowledgeAudit(db, event.operationId)))
-		yield* drainAuditErases(db);
+	// an unknown commit stays pending for recovery to settle later
+	if (status === 'unknown') yield* requestAuditRecovery(yield* Audit);
+	else if (yield* acknowledgeAudit(db, event.operationId)) yield* drainAuditErases(db);
 	return true;
 });
 export const recoverAudit = Effect.fn('Audit.recover')(
@@ -254,36 +253,53 @@ export const audited = <A, E, R>(
 		if ((yield* AuditMutation) !== undefined || (yield* SqlSessionDb) !== undefined)
 			return yield* effect;
 		const operation = yield* prepareAudit(intent);
-		const result = yield* Effect.result(
-			effect.pipe(Effect.provideService(AuditMutation, operation))
+		// Recovery wakes only for an operation this fiber leaves unsettled (failed, unknown or interrupted): a settled
+		// one has nothing to recover.
+		let settled = false;
+		const audit = yield* Audit;
+		return yield* Effect.gen(function* () {
+			const result = yield* Effect.result(
+				effect.pipe(Effect.provideService(AuditMutation, operation))
+			);
+			const resolved = yield* settleAudit(db, operation.event).pipe(
+				Effect.catch((error) => Effect.andThen(Effect.logWarning(error), Effect.succeed(undefined)))
+			);
+			// settleAudit wakes recovery itself for an unknown commit
+			if (resolved === true) settled = true;
+			if (resolved === false) {
+				const unknown =
+					Result.isFailure(result) &&
+					Predicate.hasProperty(result.failure, 'sqlstate') &&
+					typeof result.failure.sqlstate === 'string' &&
+					result.failure.sqlstate.startsWith('08');
+				const payload = yield* jsonPayload({
+					request: intent.payload,
+					...(Result.isFailure(result)
+						? { error: String(result.failure) }
+						: { outcome: result.success })
+				});
+				const status: AuditEvent['status'] = unknown
+					? 'unknown'
+					: Result.isFailure(result)
+						? 'failed'
+						: statusOf(result.success);
+				const event: AuditEvent = {
+					...operation.event,
+					id: `${operation.event.operationId}:${status === 'unknown' ? 'unknown' : 'terminal'}`,
+					status,
+					payload
+				};
+				yield* audit.append([event]).pipe(
+					Effect.tap(() =>
+						Effect.sync(() => {
+							settled = status !== 'unknown';
+						})
+					),
+					Effect.catch((error) => Effect.logWarning(error))
+				);
+			}
+			return Result.isFailure(result) ? yield* Effect.fail(result.failure) : result.success;
+		}).pipe(
+			Effect.ensuring(Effect.suspend(() => (settled ? Effect.void : requestAuditRecovery(audit))))
 		);
-		const resolved = yield* settleAudit(db, operation.event).pipe(
-			Effect.catch((error) => Effect.andThen(Effect.logWarning(error), Effect.succeed(undefined)))
-		);
-		if (resolved === false) {
-			const unknown =
-				Result.isFailure(result) &&
-				Predicate.hasProperty(result.failure, 'sqlstate') &&
-				typeof result.failure.sqlstate === 'string' &&
-				result.failure.sqlstate.startsWith('08');
-			const payload = yield* jsonPayload({
-				request: intent.payload,
-				...(Result.isFailure(result)
-					? { error: String(result.failure) }
-					: { outcome: result.success })
-			});
-			const status: AuditEvent['status'] = unknown
-				? 'unknown'
-				: Result.isFailure(result)
-					? 'failed'
-					: statusOf(result.success);
-			const event: AuditEvent = {
-				...operation.event,
-				id: `${operation.event.operationId}:${status === 'unknown' ? 'unknown' : 'terminal'}`,
-				status,
-				payload
-			};
-			yield* (yield* Audit).append([event]).pipe(Effect.catch((error) => Effect.logWarning(error)));
-		}
-		return Result.isFailure(result) ? yield* Effect.fail(result.failure) : result.success;
 	});

@@ -252,9 +252,21 @@ export const applyPlan = /*#__PURE__*/ (() =>
 	}))();
 
 const constraints = new WeakMap<EngineManifest, ReadonlyMap<string, ConstraintMeta>>();
-/** Constraint name → its declaration, for the SQLSTATE map; once per manifest, which `bolt check` proved. */
+// by slice too: every load of one workspace is another manifest object over the same schema
+const bySlice = new Map<string, ReadonlyMap<string, ConstraintMeta>>();
+/** Constraint name → its declaration, for the SQLSTATE map; once per schema, which `bolt check` proved. */
 export function constraintIndex(m: EngineManifest): ReadonlyMap<string, ConstraintMeta> {
-	let c = constraints.get(m);
-	if (c === undefined) constraints.set(m, (c = storeSync(storeConstraintIndex(schemaSlice(m)))));
+	const known = constraints.get(m);
+	if (known !== undefined) return known;
+	const slice = schemaSlice(m),
+		key = JSON.stringify(slice);
+	let c = bySlice.get(key);
+	if (c === undefined) {
+		c = storeSync(storeConstraintIndex(slice));
+		// ponytail: oldest-first bound; a host serving more live schemas than this recomputes per manifest
+		for (const old of bySlice.keys()) if (bySlice.size >= 64) bySlice.delete(old);
+		bySlice.set(key, c);
+	}
+	constraints.set(m, c);
 	return c;
 }

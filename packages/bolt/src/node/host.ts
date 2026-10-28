@@ -4,7 +4,7 @@
 import { Clock, Effect, FiberSet, FileSystem, Option, Path, Queue, Result, Schema } from 'effect';
 import { pathToFileURL } from 'node:url';
 import { HOST_FILE } from '../compiler/artifact/index.ts';
-import { activate, off, type Facilities, type Serving } from '../facilities/index.ts';
+import { activate, isOff, off, type Facilities, type Serving } from '../facilities/index.ts';
 import { BoltError, CODES } from '../protocol/errors.ts';
 import {
 	HOST_API,
@@ -116,6 +116,14 @@ export const serveRelease = Effect.fn('bolt.serveRelease')(function* (options: S
 							run(options.admit(Effect.promise(() => work(workspace))))
 						),
 					fetch: globalThis.fetch,
+					tcp: isOff(facilities.ports.outbound)
+						? {
+								connect: () =>
+									Promise.reject(
+										BoltError.make('unavailable', 'facility', 'This host serves no outbound network.')
+									)
+							}
+						: facilities.ports.outbound.tcp,
 					log: options.log
 				},
 				{ signal }

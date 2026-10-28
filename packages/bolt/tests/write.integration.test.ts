@@ -26,7 +26,17 @@ import { aggregate } from '@norbital-ai/store';
 import type { GuestShape } from '../src/engine/services.ts';
 import { BoltError, fromStore } from '../src/protocol/errors.ts';
 import { bridgeOn, open } from './write-p2.fixture.ts';
-import { admin, arm, authority, grants, manifest, member, NOW, TODAY, writeArm } from './write-fixture.ts';
+import {
+	admin,
+	arm,
+	authority,
+	grants,
+	manifest,
+	member,
+	NOW,
+	TODAY,
+	writeArm
+} from './write-fixture.ts';
 
 let pg: PGlite, db: TenantDb;
 const count = { reads: 0, writes: 0 };
@@ -34,37 +44,39 @@ const native = { active: 0, batches: 0, streams: 0 };
 let n = 0;
 const fixtureFor = (schema: EngineManifest) =>
 	Layer.effectDiscard(
-	Effect.gen(function* () {
-		pg = yield* TestDb.open(schema);
-		const client: PgliteClient = {
-			query: (text, params) => pg.query(text, params),
-			exec: (text) => pg.exec(text),
-			transaction: (body) => {
-				let entered = false;
-				return pg
-					.transaction(async (tx) => {
-						expect(native.streams).toBe(0);
-						entered = true;
-						native.active++;
-						native.batches++;
-						return await body(tx);
-					})
-					.finally(() => {
-						if (entered) native.active--;
-					});
-			}
-		};
-		db = PgliteDb.make(client);
-		const inner = db;
-		db = TenantDbService.typed({
-			read: (statements) => (count.reads++, inner.read(statements)),
-			write: (statement, lock) => (count.writes++, inner.write(statement, lock)),
-			transaction: (batch) => (count.writes++, inner.transaction(batch)),
-			session: inner.session
-		});
-		count.reads = 0;
-		count.writes = 0;
-	})
+		Effect.gen(function* () {
+			pg = yield* TestDb.open(schema);
+			const client: PgliteClient = {
+				query: (text, params) => pg.query(text, params),
+				exec: (text) => pg.exec(text),
+				execProtocol: pg.execProtocol.bind(pg),
+				parsers: pg.parsers,
+				transaction: (body) => {
+					let entered = false;
+					return pg
+						.transaction(async (tx) => {
+							expect(native.streams).toBe(0);
+							entered = true;
+							native.active++;
+							native.batches++;
+							return await body(tx);
+						})
+						.finally(() => {
+							if (entered) native.active--;
+						});
+				}
+			};
+			db = PgliteDb.make(client);
+			const inner = db;
+			db = TenantDbService.typed({
+				read: (statements) => (count.reads++, inner.read(statements)),
+				write: (statement, lock) => (count.writes++, inner.write(statement, lock)),
+				transaction: (batch) => (count.writes++, inner.transaction(batch)),
+				session: inner.session
+			});
+			count.reads = 0;
+			count.writes = 0;
+		})
 	);
 /** The write workspace plus the models a few rules need: a ref onto `lines`, an arc, json shapes, checks, a sys_user ref. */
 const ext = {
@@ -90,12 +102,19 @@ const ext = {
 				stock: { kind: 'int', default: 0 }
 			},
 			check: {
-				stock_not_negative: { where: { stock: { gte: 0 } }, message: 'Stock cannot go below zero.' },
+				stock_not_negative: {
+					where: { stock: { gte: 0 } },
+					message: 'Stock cannot go below zero.'
+				},
 				bare: { stock: { lte: 1000 } }
 			}
 		},
 		quotes: { description: 'A quote', label: 'title', fields: { title: { kind: 'text' } } },
-		activities: { description: 'An activity', label: 'subject', fields: { subject: { kind: 'text' } } },
+		activities: {
+			description: 'An activity',
+			label: 'subject',
+			fields: { subject: { kind: 'text' } }
+		},
 		notes: { description: 'A note', label: 'body', fields: { body: { kind: 'text' } } }
 	},
 	relationships: {
@@ -407,7 +426,8 @@ describe('engine/write: model rules (rules 34, 40, 41)', () => {
 					(yield* run({ verb: 'update', input: [{ target: id, set: { title: 'y' } }] })).outcome
 				).toMatchObject({ code: 'locked', field: 'title' });
 				committed(
-					(yield* run({ verb: 'update', input: [{ target: id, set: { note: 'allowed' } }] })).outcome
+					(yield* run({ verb: 'update', input: [{ target: id, set: { note: 'allowed' } }] }))
+						.outcome
 				);
 				// the owned child re-tests its parent's state under FOR SHARE inside the statement: a recorded refusal
 				const [line] = yield* rows(`select id::text from lines`);
@@ -862,7 +882,10 @@ describe('engine/write: references read scopes; mutations answer to their own ch
 					(yield* one(`select id::text from lines where "order" = '${parent}'`))['id']
 				);
 				// the lines check stands in for a read of the parent's status, once it is no longer a draft
-				const lines = checking(() => ({ kind: 'deny', message: 'The order is no longer a draft.' }));
+				const lines = checking(() => ({
+					kind: 'deny',
+					message: 'The order is no longer a draft.'
+				}));
 				const caller = authority({
 					lines: grants('lines', {
 						create: [writeArm({ lines: ['label', 'amount', 'order'] }, true)],
@@ -916,7 +939,11 @@ describe('engine/write: field kinds the template migration found (arcs, json sha
 	const owner = member;
 	const extended = Effect.gen(function* () {
 		yield* Effect.tryPromise({
-			try: () => pg.query(`INSERT INTO sys_user (id, email, name) VALUES ($1, $2, 'Ana')`, [owner.id, owner.email]),
+			try: () =>
+				pg.query(`INSERT INTO sys_user (id, email, name) VALUES ($1, $2, 'Ana')`, [
+					owner.id,
+					owner.email
+				]),
 			catch: dbError
 		});
 	});
@@ -934,7 +961,13 @@ describe('engine/write: field kinds the template migration found (arcs, json sha
 			Effect.gen(function* () {
 				yield* extended;
 				const titles = ['B', 'C', 'A'];
-				const out = committed(yield* write('quotes', 'create', titles.map((title) => ({ title }))));
+				const out = committed(
+					yield* write(
+						'quotes',
+						'create',
+						titles.map((title) => ({ title }))
+					)
+				);
 				const byId = new Map(
 					(yield* rows(`select id::text, title from quotes`)).map((r) => [r['id'], r['title']])
 				);
@@ -947,7 +980,9 @@ describe('engine/write: field kinds the template migration found (arcs, json sha
 					owner: owner.id
 				});
 				const a = created(
-					yield* write('activities', 'create', [{ subject: 's', regarding: { model: 'quotes', id: q } }])
+					yield* write('activities', 'create', [
+						{ subject: 's', regarding: { model: 'quotes', id: q } }
+					])
 				);
 				committed(
 					yield* write('activities', 'update', [
@@ -955,10 +990,14 @@ describe('engine/write: field kinds the template migration found (arcs, json sha
 					])
 				);
 				expect(
-					yield* write('activities', 'create', [{ subject: 's', regarding: { model: 'cases', id: q } }])
+					yield* write('activities', 'create', [
+						{ subject: 's', regarding: { model: 'cases', id: q } }
+					])
 				).toMatchObject({ kind: 'refused', code: 'invalidInput', field: 'regarding' });
 				expect(
-					yield* write('activities', 'create', [{ subject: 's', regarding: { model: 'projects', id: q } }])
+					yield* write('activities', 'create', [
+						{ subject: 's', regarding: { model: 'projects', id: q } }
+					])
 				).toMatchObject({ kind: 'refused', code: 'notFound', field: 'regarding' });
 				expect(
 					yield* write('projects', 'create', [{ title: 'p2', profile: { grade: 'a', extra: 1 } }])
@@ -977,65 +1016,83 @@ describe('engine/write: field kinds the template migration found (arcs, json sha
 	);
 });
 
-it.live('callback-read-race (rule 26): the loser replays once, re-reads the moved quota, and refuses', () =>
-	Effect.gen(function* () {
-		const { db } = yield* open(ext);
-		const orders = manifest.exposures['orders'];
-		if (orders?.create === undefined) throw new Error('The race fixture has no orders create contract');
-		const callbacks: EngineManifest = {
-			...manifest,
-			exposures: { ...manifest.exposures, orders: { ...orders, create: { ...orders.create, transform: true } } }
-		};
-		// orders are capped at two: the create callback counts them and refuses the third
-		let invoked = 0,
-			arrived = 0;
-		const both = yield* Deferred.make<void>();
-		const guest: GuestShape = {
-			invokeProgram: () => Effect.die(new Error('This fixture does not execute supplied guest programs.')),
-			invoke: (inv, bridge) =>
-				Effect.gen(function* () {
-					const racing = ++invoked === 2 || invoked === 3;
-					const [a] = yield* bridge.cross([
-						{
-							_tag: 'read',
-							read: yield* aggregate(catalogOf(callbacks), 'orders', { count: true }).pipe(
-								Effect.mapError(fromStore)
-							)
+it.live(
+	'callback-read-race (rule 26): the loser replays once, re-reads the moved quota, and refuses',
+	() =>
+		Effect.gen(function* () {
+			const { db } = yield* open(ext);
+			const orders = manifest.exposures['orders'];
+			if (orders?.create === undefined)
+				throw new Error('The race fixture has no orders create contract');
+			const callbacks: EngineManifest = {
+				...manifest,
+				exposures: {
+					...manifest.exposures,
+					orders: { ...orders, create: { ...orders.create, transform: true } }
+				}
+			};
+			// orders are capped at two: the create callback counts them and refuses the third
+			let invoked = 0,
+				arrived = 0;
+			const both = yield* Deferred.make<void>();
+			const guest: GuestShape = {
+				invokeProgram: () =>
+					Effect.die(new Error('This fixture does not execute supplied guest programs.')),
+				invoke: (inv, bridge) =>
+					Effect.gen(function* () {
+						const racing = ++invoked === 2 || invoked === 3;
+						const [a] = yield* bridge.cross([
+							{
+								_tag: 'read',
+								read: yield* aggregate(catalogOf(callbacks), 'orders', { count: true }).pipe(
+									Effect.mapError(fromStore)
+								)
+							}
+						]);
+						if (a?.ok !== true)
+							return yield* Effect.fail(
+								BoltError.make('badAnswer', 'guest', 'The quota read failed.')
+							);
+						const { count: n } = yield* Schema.decodeUnknownEffect(
+							Schema.Struct({ count: Schema.Number })
+						)(a.value).pipe(
+							Effect.mapError((error) => BoltError.make('badAnswer', 'guest', error.message, error))
+						);
+						if (racing) {
+							if (++arrived === 2) yield* Deferred.succeed(both, undefined);
+							yield* Deferred.await(both);
 						}
-					]);
-					if (a?.ok !== true)
-						return yield* Effect.fail(BoltError.make('badAnswer', 'guest', 'The quota read failed.'));
-					const { count: n } = yield* Schema.decodeUnknownEffect(Schema.Struct({ count: Schema.Number }))(
-						a.value
-					).pipe(Effect.mapError((error) => BoltError.make('badAnswer', 'guest', error.message, error)));
-					if (racing) {
-						if (++arrived === 2) yield* Deferred.succeed(both, undefined);
-						yield* Deferred.await(both);
-					}
-					const outcome: GuestOutcome =
-						n >= 2 ? { kind: 'refused', message: 'quota' } : { kind: 'ok', output: inv.input };
-					return outcome;
-				}).pipe(Effect.orDie)
-		};
-		const e = { manifest: callbacks, db, guest, bridge: bridgeOn(db, callbacks) };
-		const create = (title: string) =>
-			act(e, {
-				model: 'orders',
-				verb: 'create',
-				mode: { _tag: 'Direct' },
-				input: [{ title }],
-				key: title,
-				issuedAt: NOW,
-				authority: admin,
-				bindings: { now: NOW, today: TODAY, tz: 'UTC' },
-				invocationId: `inv-${title}`
-			});
-		yield* create('first');
-		const [a, b] = yield* Effect.all([create('a'), create('b')], { concurrency: 'unbounded' });
-		expect(
-			[a.outcome, b.outcome].map((o) => (o.kind === 'refused' ? `refused:${o.message}` : o.kind)).sort()
-		).toEqual(['committed', 'refused:quota']);
-		expect(yield* db.value(Schema.Number, { text: 'select count(*)::int as n from orders', params: [] })).toBe(2);
-		expect(invoked).toBe(4); // 'first', a, b, and b's one replay
-	})
+						const outcome: GuestOutcome =
+							n >= 2 ? { kind: 'refused', message: 'quota' } : { kind: 'ok', output: inv.input };
+						return outcome;
+					}).pipe(Effect.orDie)
+			};
+			const e = { manifest: callbacks, db, guest, bridge: bridgeOn(db, callbacks) };
+			const create = (title: string) =>
+				act(e, {
+					model: 'orders',
+					verb: 'create',
+					mode: { _tag: 'Direct' },
+					input: [{ title }],
+					key: title,
+					issuedAt: NOW,
+					authority: admin,
+					bindings: { now: NOW, today: TODAY, tz: 'UTC' },
+					invocationId: `inv-${title}`
+				});
+			yield* create('first');
+			const [a, b] = yield* Effect.all([create('a'), create('b')], { concurrency: 'unbounded' });
+			expect(
+				[a.outcome, b.outcome]
+					.map((o) => (o.kind === 'refused' ? `refused:${o.message}` : o.kind))
+					.sort()
+			).toEqual(['committed', 'refused:quota']);
+			expect(
+				yield* db.value(Schema.Number, {
+					text: 'select count(*)::int as n from orders',
+					params: []
+				})
+			).toBe(2);
+			expect(invoked).toBe(4); // 'first', a, b, and b's one replay
+		})
 );

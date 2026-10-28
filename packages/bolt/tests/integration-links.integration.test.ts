@@ -21,6 +21,7 @@ import {
 } from 'effect';
 import { HttpServerRequest, HttpServerResponse } from 'effect/http';
 import { Drivers } from '../src/engine/ports.ts';
+import { loopbackTcpPort } from '../src/node/tcp.ts';
 import { actReply, json, routeFixture } from './support/route-fixture.ts';
 import { program } from '../src/test/guest.ts';
 import { randomBytes } from 'node:crypto';
@@ -237,6 +238,7 @@ const open = (m: EngineManifest = manifest, ports?: TestOptions<Drivers>['ports'
 				admit: (effect) => effect.pipe(Effect.provide(context)),
 				credentials: store,
 				publicUrl: PUBLIC,
+				tcp: loopbackTcpPort,
 				log: () => {},
 				...over
 			}).pipe(Effect.provide(NodeCrypto.layer));

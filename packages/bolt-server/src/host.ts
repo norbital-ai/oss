@@ -15,7 +15,7 @@ import {
 	type LogRow
 } from '@norbital-ai/bolt/engine';
 import { off, type Challenge, type Facilities, type Serving } from '@norbital-ai/bolt/facilities';
-import { httpPort, keysPort, localAudit, localFiles } from '@norbital-ai/bolt/node';
+import { httpPort, keysPort, localAudit, localFiles, tcpPort } from '@norbital-ai/bolt/node';
 import { drivers } from './drivers.ts';
 import { messaging } from './mail.ts';
 import { nominatim, openAi, s3Files } from './ports.ts';
@@ -290,7 +290,7 @@ export const host = Effect.fn('server.host')(function* (
 			websockets: off,
 			outbound: {
 				http: httpPort,
-				tcp: () => Promise.reject(new Error('This host serves no raw TCP outbound.'))
+				tcp: tcpPort
 			}
 		},
 		sandbox: off,

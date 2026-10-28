@@ -1,4 +1,4 @@
-// The kit's databases. A schema is planned once per machine into a checkpoint (`images/<hash>.tgz` and its shape); a
+// The kit's databases. A schema is planned once per machine into a checkpoint (`images/<hash>.zst` and its shape); a
 // worker loads a checkpoint into one in-memory PGlite and pools it, and every later acquisition restores that database
 // to its checkpoint in place: the tables a test changed emptied and refilled, sequences rewound, session state reset.
 // A database whose catalogs changed (a test ran DDL or kept a temp table) is closed and loaded afresh instead.
@@ -9,7 +9,7 @@ import type { PlatformError } from 'effect/PlatformError';
 import { createHash } from 'node:crypto';
 import { createRequire } from 'node:module';
 import { join } from 'node:path';
-import { gunzipSync, gzipSync } from 'node:zlib';
+import { zstdCompressSync, zstdDecompressSync } from 'node:zlib';
 import { TenantDb } from '../engine/db/tenant-db.ts';
 import { dbError } from '../engine/db/wire.ts';
 import type { DbError } from '../engine/errors.ts';
@@ -24,7 +24,7 @@ export type TestDbFailure = BoltError | DbError | PlatformError;
 /** The PGlite build (its versioned store path): an image from another build is another key. */
 // `createRequire`, not `import.meta.resolve`: a template's vitest module runner supports only the former
 const PGLITE = createRequire(import.meta.url).resolve('@electric-sql/pglite');
-/** Images kept per machine (gzip, a few MiB each): more than one suite's schemas, so a run never evicts its own. */
+/** Images kept per machine (zstd, a few MiB each): more than one suite's schemas, so a run never evicts its own. */
 const KEPT_IMAGES = 256;
 /** Pooled databases a worker keeps idle; the oldest beyond this closes. */
 const IDLE = 4;
@@ -70,7 +70,7 @@ const freshImage = (slice: SchemaSlice) =>
 			return { blob: yield* PgliteDb.dump(pg), shape };
 		})
 	);
-/** The schema's checkpoint (`<hash>.tgz`, its shape `<hash>.json`), else built once and kept (newest few hundred). */
+/** The schema's checkpoint (`<hash>.zst`, its shape `<hash>.json`), else built once and kept (newest few hundred). */
 const image = (slice: SchemaSlice, key: string) =>
 	Effect.gen(function* () {
 		const fs = yield* FileSystem.FileSystem;
@@ -78,29 +78,27 @@ const image = (slice: SchemaSlice, key: string) =>
 		const hash = createHash('sha256')
 			.update(JSON.stringify([PGLITE, yield* inputs.image, key]))
 			.digest('hex');
-		const file = join(dir, `${hash}.tgz`),
+		const file = join(dir, `${hash}.zst`),
 			shapeFile = join(dir, `${hash}.json`);
-		// inflated natively: a gzip Blob makes PGlite inflate it through a web stream on every load
-		const kept = yield* fs.readFile(file).pipe(
-			Effect.flatMap((bytes) => Effect.try(() => gunzipSync(bytes))),
-			Effect.option
-		);
-		if (Option.isSome(kept)) {
-			const shape = yield* fs
-				.readFileString(shapeFile)
-				.pipe(Effect.flatMap(decodeShape), Effect.option);
+		// zstd, inflated natively: several times cheaper than gzip both ways, and PGlite only untars
+		const kept = yield* Effect.all({
+			bytes: fs
+				.readFile(file)
+				.pipe(Effect.flatMap((bytes) => Effect.try(() => zstdDecompressSync(bytes)))),
+			shape: fs.readFileString(shapeFile).pipe(Effect.flatMap(decodeShape))
+		}).pipe(Effect.option);
+		if (Option.isSome(kept))
 			return {
-				blob: new Blob([new Uint8Array(kept.value)]),
-				...(Option.isSome(shape) ? { shape: shape.value } : {})
+				blob: new Blob([kept.value.bytes]),
+				shape: kept.value.shape
 			} satisfies Checkpoint;
-		}
 		return yield* Effect.gen(function* () {
 			const made = yield* freshImage(slice);
 			// the shape first, so an image on disk has its shape beside it
 			yield* keep(shapeFile, JSON.stringify(made.shape));
 			yield* keep(
 				file,
-				gzipSync(new Uint8Array(yield* Effect.promise(() => made.blob.arrayBuffer())))
+				zstdCompressSync(new Uint8Array(yield* Effect.promise(() => made.blob.arrayBuffer())))
 			);
 			yield* prune(dir, KEPT_IMAGES);
 			return made satisfies Checkpoint;
@@ -167,7 +165,9 @@ const capture = async (pg: PGlite, { tables, counts, sequences }: Shape) => {
 	// the write buffers every session keeps exist before the baseline fingerprint, so a test's first write is no DDL change
 	for (const table of CAPTURE_TABLES) await pg.exec(table);
 	await pg.exec(`prepare bolt_kit_fingerprint as ${FINGERPRINT}`);
-	await pg.exec('create temp table bolt_kit_base (x bigint); insert into pg_temp.bolt_kit_base values (0);');
+	await pg.exec(
+		'create temp table bolt_kit_base (x bigint); insert into pg_temp.bolt_kit_base values (0);'
+	);
 	const refill = new Map<number, string>();
 	for (const [i, t] of tables.entries()) {
 		if ((counts[i] ?? 0) === 0 || t.cols === '') continue;

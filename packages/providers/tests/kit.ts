@@ -2,6 +2,7 @@
 // route table, the instance's credentials (each write recorded and applied), emitted events, reported statuses and pairings.
 import { randomUUID } from 'node:crypto';
 import { Effect, FiberSet, Semaphore } from 'effect';
+import { loopbackTcpPort } from '@norbital-ai/bolt/node';
 import { FirstSyncs, ProviderRuntime, type ProviderDef, type LinkDef } from '../src/abi.ts';
 import {
 	oauthClientOf,
@@ -115,6 +116,7 @@ export const host = Effect.fn('ProviderTest.host')(function* (
 			state: async () => `${randomUUID()}.desk`,
 			signal: controller.signal,
 			fetch: f,
+			tcp: loopbackTcpPort,
 			oauthClient: async (vendor) =>
 				oauthClientOf(
 					definition,

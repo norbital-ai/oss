@@ -8,6 +8,7 @@ import { SendRefused } from '../src/engine/conversations/status.ts';
 import { linkCalls, openLink } from '../src/engine/integrations/abi.ts';
 import type { DriverOpen, Link, Provider } from '../src/engine/integrations/driver.ts';
 import type { Json } from '../src/decl/values.ts';
+import { loopbackTcpPort } from '../src/node/tcp.ts';
 
 describe('the driver ABI, engine side', () => {
 	it.effect('interrupting a call aborts the signal the provider was given', () =>
@@ -131,6 +132,7 @@ describe('the driver ABI, engine side', () => {
 				redirectUrl: 'https://test.example/hooks/oauth/callback',
 				state: async () => 'test-state',
 				fetch: globalThis.fetch,
+				tcp: loopbackTcpPort,
 				oauthClient: async () => undefined,
 				credentials: { load: async () => new Map<string, Json>(), write: async () => undefined },
 				emit: async () => undefined,

@@ -57,6 +57,7 @@ export {
 	type PageWrite,
 	type Resolve
 } from './net.ts';
+export { loopbackTcpPort, tcpPort } from './tcp.ts';
 
 export { prepareMigrations } from '../compiler/migrations.ts';
 export { HOST_FILE } from '../compiler/artifact/index.ts';

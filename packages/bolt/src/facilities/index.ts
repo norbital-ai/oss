@@ -12,6 +12,7 @@ import type {
 	KeysPort,
 	LogPort,
 	SpeechPort,
+	TcpPort,
 	TransportPort,
 	WebReadPort
 } from '../engine/contracts.ts';
@@ -85,21 +86,10 @@ export interface Websockets {
 		signal: AbortSignal
 	): Promise<WebSocket>;
 }
-/** A raw TCP connection as two byte streams; `tls` upgrades it, checking the certificate against `host`. */
-export type Socket = {
-	readonly readable: ReadableStream<Uint8Array>;
-	readonly writable: WritableStream<Uint8Array>;
-	close(): Promise<void>;
-};
 /** Outbound under the host's egress policy: HTTP for APIs and OAuth, TCP/TLS for IMAP and SMTP. */
 export interface Outbound {
 	readonly http: HttpPort;
-	tcp(
-		host: string,
-		port: number,
-		options: { readonly tls: boolean },
-		signal: AbortSignal
-	): Promise<Socket>;
+	readonly tcp: TcpPort;
 }
 
 // ── 6. sandbox ──

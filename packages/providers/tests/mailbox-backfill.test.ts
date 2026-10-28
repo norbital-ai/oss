@@ -3,7 +3,8 @@ import { Deferred, Effect, Fiber, Schema } from 'effect';
 import { ProviderUnavailable, type ProviderFailure } from '../src/errors.ts';
 import { mailboxWatch } from '../src/imap-smtp/mailbox-watch.ts';
 import { type Cursor, Mailbox } from '../src/imap-smtp/model.ts';
-import { fakeImap, loopback } from './mail-servers.ts';
+import { loopbackTcpPort } from '@norbital-ai/bolt/node';
+import { fakeImap } from './mail-servers.ts';
 import { until } from './kit.ts';
 
 const range = (first: number, last: number) =>
@@ -62,7 +63,7 @@ const fixture = Effect.fn('MailboxBackfill.fixture')(function* (
 				box,
 				personal,
 				after,
-				net: loopback,
+				net: { tcp: loopbackTcpPort, plain: true },
 				login: () => Effect.succeed({ user: box.user, pass: 'pw' }),
 				cursor: () => cursor,
 				advance: (next) =>

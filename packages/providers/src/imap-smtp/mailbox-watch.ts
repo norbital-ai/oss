@@ -1,11 +1,10 @@
-import { ImapFlow } from 'imapflow';
+import { createStreamsTransport, ImapFlow } from 'imapflow';
 import { Effect, Queue, Semaphore, Stream } from 'effect';
-import { pinnedLookup } from '@norbital-ai/bolt/node';
-import { checkServerIdentity } from 'node:tls';
 import { ProviderUnavailable, type ProviderFailure } from '../errors.ts';
 import {
 	mailCall,
 	serverFailure,
+	streamsSocket,
 	type Cursor,
 	type Login,
 	type Mailbox,
@@ -15,22 +14,18 @@ import {
 export const imap = (box: Mailbox, auth: Login, net: MailNet) =>
 	Effect.gen(function* () {
 		const plain = net.plain;
-		const destination = yield* net.destination(box.imap.host, box.imap.port).pipe(
-			Effect.mapError((error) => new ProviderUnavailable({ message: error.message }))
-		);
+		const signal = yield* Effect.abortSignal;
 		return yield* Effect.acquireRelease(
 			Effect.sync(() => {
 				const client = new ImapFlow({
-					host: destination.hostname,
+					host: box.imap.host,
 					port: box.imap.port,
-					servername: destination.hostname,
-					tls: {
-						lookup: pinnedLookup(destination.addresses),
-						servername: destination.hostname,
-						rejectUnauthorized: true,
-						checkServerIdentity: (_hostname, certificate) =>
-							checkServerIdentity(destination.hostname, certificate)
-					},
+					transport: createStreamsTransport<ReturnType<typeof streamsSocket>>({
+						open: ({ host, port, secure }) =>
+							streamsSocket(net.tcp.connect({ host, port, tls: secure }, signal)),
+						upgrade: (socket) =>
+							streamsSocket(socket.connecting.then((open) => open.startTls(signal)))
+					}),
 					auth,
 					logger: false,
 					secure: !plain && box.imap.port === 993,

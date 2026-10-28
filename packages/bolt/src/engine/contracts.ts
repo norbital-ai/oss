@@ -806,6 +806,31 @@ export interface HttpPort {
 		signal: AbortSignal
 	): Promise<HttpResponse>;
 }
+/** Where a TCP connection goes; `tls` opens it as TLS, verified against `servername` (default `host`). */
+export type TcpEndpoint = {
+	readonly host: string;
+	readonly port: number;
+	readonly tls: boolean;
+	readonly servername?: string;
+};
+/** One outbound TCP connection as two byte streams. */
+export type TcpSocket = {
+	readonly readable: ReadableStream<Uint8Array>;
+	readonly writable: WritableStream<Uint8Array>;
+	close(): Promise<void>;
+	/**
+	 * STARTTLS: TLS over this cleartext connection, verified as the endpoint says. Release both streams' locks first;
+	 * this socket's streams then end and the returned one carries the connection.
+	 */
+	startTls(signal: AbortSignal): Promise<TcpSocket>;
+};
+/**
+ * Outbound TCP/TLS (IMAP, SMTP) under the host's egress policy: the host resolves and checks the destination (a public
+ * host refuses private and reserved networks) and connects. `signal` bounds the connect; `close` ends the connection.
+ */
+export interface TcpPort {
+	connect(endpoint: TcpEndpoint, signal: AbortSignal): Promise<TcpSocket>;
+}
 /** A file run's tree (a skill's folder): its digest, the entry's path in it, and every file by its path in the tree. */
 export type BundleRequest = {
 	/** sha256 hex of the sorted `<path>\0<sha256 hex of its bytes>` lines, `\n`-joined. */

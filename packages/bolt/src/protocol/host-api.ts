@@ -74,6 +74,7 @@ import type {
 	DocsPort,
 	Rows,
 	Sql,
+	TcpPort,
 	WebReadPort
 } from '../engine/contracts.ts';
 import type { Facilities } from '../facilities/index.ts';
@@ -313,6 +314,8 @@ export type LinkHost = {
 	credentials?(sealed: HostCredentials): HostCredentials;
 	/** The providers' network: a cell has no `fetch` of its own. */
 	readonly fetch: typeof fetch;
+	/** The providers' TCP/TLS (IMAP, SMTP), as `Facilities.ports.outbound.tcp`. */
+	readonly tcp: TcpPort;
 	log?(line: string): void;
 };
 
@@ -990,6 +993,7 @@ const links = async (host: LinkHost, options: Signal): Promise<WorkspaceLinks> =
 				secrets,
 				oauth: host.oauth,
 				fetch: host.fetch,
+				tcp: host.tcp,
 				...(host.log === undefined ? {} : { log: host.log }),
 				enter: on(host.enter),
 				admit: on(host.admit)

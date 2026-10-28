@@ -738,6 +738,8 @@ describe('leased database sessions', () => {
 			};
 			const client: PgliteClient = {
 				query,
+				execProtocol: () => Promise.reject(new Error('this fake runs no parameterised statement')),
+				parsers: {},
 				transaction: (body) => {
 					touched = true;
 					return body({ query });

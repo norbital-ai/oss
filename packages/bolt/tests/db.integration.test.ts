@@ -106,6 +106,8 @@ describe('PgliteDb', () => {
 				const client: PgliteClient = {
 					query: pg.query.bind(pg),
 					exec: pg.exec.bind(pg),
+					execProtocol: pg.execProtocol.bind(pg),
+					parsers: pg.parsers,
 					transaction: (body) =>
 						pg.transaction((tx) =>
 							body({

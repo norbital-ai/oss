@@ -1,41 +1,7 @@
 // Local fake IMAP and SMTP servers for the mailbox link's tests: plain TCP on 127.0.0.1, just enough of each
 // protocol for imapflow and nodemailer (IMAP: LOGIN, AUTHENTICATE XOAUTH2, SELECT/EXAMINE, UID FETCH, UID SEARCH, IDLE;
 // SMTP: EHLO with DSN, AUTH, MAIL/RCPT with their parameters, DATA). Never a real mailbox.
-import { createServer, Socket, type AddressInfo, type Server } from 'node:net';
-import { Effect } from 'effect';
-import { FacilityFailure } from '@norbital-ai/bolt/errors';
-import type { MailNet } from '../src/imap-smtp/model.ts';
-
-/** The mailbox's network for these servers: 127.0.0.1 without TLS, no destination guard. */
-export const loopback: MailNet = {
-	plain: true,
-	destination: (hostname, port) =>
-		Effect.succeed({
-			hostname,
-			port,
-			address: { address: hostname, family: 4 },
-			addresses: [{ address: hostname, family: 4 }]
-		}),
-	connect: (hostname, port) =>
-		Effect.gen(function* () {
-			const socket = yield* Effect.acquireRelease(
-				Effect.sync(() => new Socket()),
-				(socket) => Effect.sync(() => void socket.destroy())
-			);
-			return yield* Effect.callback<Socket, FacilityFailure>((resume) => {
-				const ready = () => resume(Effect.succeed(socket));
-				const failed = (error: Error) =>
-					resume(Effect.fail(new FacilityFailure({ kind: 'upstream', message: error.message })));
-				socket.once('connect', ready);
-				socket.once('error', failed);
-				socket.connect(port, hostname);
-				return Effect.sync(() => {
-					socket.removeListener('connect', ready);
-					socket.removeListener('error', failed);
-				});
-			});
-		})
-};
+import { createServer, type AddressInfo, type Server, type Socket } from 'node:net';
 
 const listen = async (server: Server) => {
 	await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));

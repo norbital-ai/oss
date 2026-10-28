@@ -320,7 +320,13 @@ const interceptedDb = Layer.effect(
 			read: inner.read,
 			transaction: (batch) =>
 				Effect.suspend(() => {
-					if (serialization.armed) {
+					// the act's own batches (its orders and its recorded outcome); the member's bootstrap and audit pass through
+					if (
+						serialization.armed &&
+						batch.statements.some(
+							(s) => s.text.includes('"orders"') || s.text.includes('bolt_idem')
+						)
+					) {
 						serialization.attempts.push(batch);
 						if (serialization.failures++ < 2)
 							return Effect.fail(DbError.make('40001', 'serialization fixture'));
@@ -339,294 +345,308 @@ const count = (f: Fixture, sql: string, params: Json[] = []) =>
 
 // One workspace, its tests in order: each test reads only what it wrote (members are fresh per `t.member`), and the
 // kit clock moves only in the last one.
-layer(Layer.effect(Fx, fixture({ db: interceptedDb })), { excludeTestServices: true })('callables', (it) => {
-	it.effect(
-		'queued ctx.act retains its observed revision, and generated batches keep their per-item guards',
-		() =>
-			Effect.gen(function* () {
-				const f = yield* Fx;
-				const admin = f.t.as(f.t.admin);
-				const created = ok(
-					yield* act(f, admin.authority, 'orders.create', [
-						{ title: 'original', region: 'north', customer: ACME }
-					])
-				).records[0];
-				if (created === undefined) throw new Error('Missing created order');
-				const updated = ok(
-					yield* act(f, admin.authority, 'orders.update', [
-						{ target: created.id, set: { title: 'newer edit' } }
-					])
-				).records[0];
-				if (updated === undefined) throw new Error('Missing updated order');
-				const stale = uuidv7(Date.parse(f.t.clock.now()));
-				ok(
-					yield* start(
-						f,
-						admin.authority,
-						'revise',
-						{ order: created.id, revision: created.revision },
-						{ id: stale }
-					)
-				);
-				expect((yield* run(f, stale)).state).toBe('queued');
-				yield* f.t.runDue();
-				expect(yield* run(f, stale)).toMatchObject({ state: 'failed', error: { code: 'conflict' } });
-				expect(
-					yield* Effect.flip(
-						batch(f, admin.authority, [
+layer(Layer.effect(Fx, fixture({ db: interceptedDb })), { excludeTestServices: true })(
+	'callables',
+	(it) => {
+		it.effect(
+			'queued ctx.act retains its observed revision, and generated batches keep their per-item guards',
+			() =>
+				Effect.gen(function* () {
+					const f = yield* Fx;
+					const admin = f.t.as(f.t.admin);
+					const created = ok(
+						yield* act(f, admin.authority, 'orders.create', [
+							{ title: 'original', region: 'north', customer: ACME }
+						])
+					).records[0];
+					if (created === undefined) throw new Error('Missing created order');
+					const updated = ok(
+						yield* act(f, admin.authority, 'orders.update', [
+							{ target: created.id, set: { title: 'newer edit' } }
+						])
+					).records[0];
+					if (updated === undefined) throw new Error('Missing updated order');
+					const stale = uuidv7(Date.parse(f.t.clock.now()));
+					ok(
+						yield* start(
+							f,
+							admin.authority,
+							'revise',
+							{ order: created.id, revision: created.revision },
+							{ id: stale }
+						)
+					);
+					expect((yield* run(f, stale)).state).toBe('queued');
+					yield* f.t.runDue();
+					expect(yield* run(f, stale)).toMatchObject({
+						state: 'failed',
+						error: { code: 'conflict' }
+					});
+					expect(
+						yield* Effect.flip(
+							batch(f, admin.authority, [
+								{
+									model: 'orders',
+									verb: 'update',
+									input: [{ target: created.id, set: { title: 'stale batch' } }],
+									observed: { [created.id]: created.revision }
+								}
+							])
+						)
+					).toMatchObject({ _tag: 'ActConflict' });
+					expect(yield* get(f, admin.authority, 'orders', created.id)).toMatchObject({
+						title: 'newer edit',
+						revision: updated.revision
+					});
+					expect(
+						yield* batch(f, admin.authority, [
 							{
 								model: 'orders',
 								verb: 'update',
-								input: [{ target: created.id, set: { title: 'stale batch' } }],
-								observed: { [created.id]: created.revision }
+								input: [{ target: created.id, set: { title: 'extracted' } }],
+								observed: { [created.id]: updated.revision }
 							}
 						])
-					)
-				).toMatchObject({ _tag: 'ActConflict' });
-				expect(yield* get(f, admin.authority, 'orders', created.id)).toMatchObject({
-					title: 'newer edit',
-					revision: updated.revision
-				});
-				expect(
-					yield* batch(f, admin.authority, [
+					).toMatchObject({ kind: 'committed' });
+					expect(yield* get(f, admin.authority, 'orders', created.id)).toMatchObject({
+						title: 'extracted',
+						revision: updated.revision + 1
+					});
+				})
+		);
+
+		it.effect(
+			'a late generated callback refusal commits no partial rows and a replay adds no business writes',
+			() =>
+				Effect.gen(function* () {
+					const f = yield* Fx,
+						t = f.t,
+						rep = t.as(t.member(['rep']));
+					const orders = yield* count(f, 'orders'),
+						notes = yield* count(f, 'notes');
+					const operations: Batch = [
 						{
 							model: 'orders',
-							verb: 'update',
-							input: [{ target: created.id, set: { title: 'extracted' } }],
-							observed: { [created.id]: updated.revision }
+							verb: 'create',
+							input: [{ title: 'accepted first', region: 'north', customer: ACME }]
+						},
+						{
+							model: 'orders',
+							verb: 'create',
+							input: [{ title: 'no', region: 'north', customer: ACME }]
 						}
-					])
-				).toMatchObject({ kind: 'committed' });
-				expect(yield* get(f, admin.authority, 'orders', created.id)).toMatchObject({
-					title: 'extracted',
-					revision: updated.revision + 1
-				});
-			})
-	);
+					];
+					const commits = vi.spyOn(t.db, 'transaction');
+					const first = yield* Effect.flip(batch(f, rep.authority, operations, 'refused-batch'));
+					expect(first).toMatchObject({
+						_tag: 'ActRefused',
+						code: 'refused',
+						message: 'not that one',
+						field: 'title'
+					});
+					expect(commits).not.toHaveBeenCalled();
+					expect(yield* Effect.flip(batch(f, rep.authority, operations, 'refused-batch'))).toEqual(
+						first
+					);
+					expect(commits).not.toHaveBeenCalled();
+					const id = uuidv7(Date.parse(t.clock.now()));
+					ok(yield* start(f, rep.authority, 'place', { title: 'no', customer: ACME }, { id }));
+					expect((yield* run(f, id)).state).toBe('queued');
+					yield* t.runDue();
+					expect(yield* run(f, id)).toMatchObject({
+						state: 'failed',
+						error: { code: 'refused', message: 'not that one', field: 'title', rule: 'place' }
+					});
+					expect(yield* count(f, 'orders')).toBe(orders);
+					expect(yield* count(f, 'notes')).toBe(notes);
+				})
+		);
 
-	it.effect(
-		'a late generated callback refusal commits no partial rows and a replay adds no business writes',
-		() =>
-			Effect.gen(function* () {
-				const f = yield* Fx,
-					t = f.t,
-					rep = t.as(t.member(['rep']));
-				const orders = yield* count(f, 'orders'),
-					notes = yield* count(f, 'notes');
-				const operations: Batch = [
-					{
-						model: 'orders',
-						verb: 'create',
-						input: [{ title: 'accepted first', region: 'north', customer: ACME }]
-					},
-					{ model: 'orders', verb: 'create', input: [{ title: 'no', region: 'north', customer: ACME }] }
-				];
-				const commits = vi.spyOn(t.db, 'transaction');
-				const first = yield* Effect.flip(batch(f, rep.authority, operations, 'refused-batch'));
-				expect(first).toMatchObject({
-					_tag: 'ActRefused',
-					code: 'refused',
-					message: 'not that one',
-					field: 'title'
-				});
-				expect(commits).not.toHaveBeenCalled();
-				expect(yield* Effect.flip(batch(f, rep.authority, operations, 'refused-batch'))).toEqual(
-					first
-				);
-				expect(commits).not.toHaveBeenCalled();
-				const id = uuidv7(Date.parse(t.clock.now()));
-				ok(yield* start(f, rep.authority, 'place', { title: 'no', customer: ACME }, { id }));
-				expect((yield* run(f, id)).state).toBe('queued');
-				yield* t.runDue();
-				expect(yield* run(f, id)).toMatchObject({
-					state: 'failed',
-					error: { code: 'refused', message: 'not that one', field: 'title', rule: 'place' }
-				});
-				expect(yield* count(f, 'orders')).toBe(orders);
-				expect(yield* count(f, 'notes')).toBe(notes);
-			})
-	);
+		it.effect(
+			'records a terminal serialization conflict after one generated batch replay and returns it on retry',
+			() =>
+				Effect.gen(function* () {
+					const f = yield* Fx,
+						rep = f.t.as(f.t.member(['rep'])),
+						{ attempts } = serialization;
+					const operations: Batch = [
+						{
+							model: 'orders',
+							verb: 'create',
+							input: [{ title: 'bounded callable', region: 'north', customer: ACME }]
+						}
+					];
+					const bounded = "orders WHERE title = 'bounded callable'";
+					serialization.armed = true;
+					const first = yield* Effect.flip(batch(f, rep.authority, operations, 'bounded-callable'));
+					expect(first).toEqual(new ActConflict({ records: [] }));
+					expect(attempts).toHaveLength(3);
+					expect(attempts[1]?.statements).toEqual(attempts[0]?.statements);
+					expect(yield* count(f, bounded)).toBe(0);
+					attempts.length = 0;
+					expect(
+						yield* Effect.flip(batch(f, rep.authority, operations, 'bounded-callable'))
+					).toEqual(first);
+					// A native replay checks the persisted outcome in one batch without adding business rows.
+					expect(attempts).toHaveLength(1);
+					expect(yield* count(f, bounded)).toBe(0);
+				}).pipe(Effect.ensuring(Effect.sync(() => void (serialization.armed = false))))
+		);
 
-	it.effect(
-		'records a terminal serialization conflict after one generated batch replay and returns it on retry',
-		() =>
-			Effect.gen(function* () {
-				const f = yield* Fx,
-					rep = f.t.as(f.t.member(['rep'])),
-					{ attempts } = serialization;
-				const operations: Batch = [
-					{
-						model: 'orders',
-						verb: 'create',
-						input: [{ title: 'bounded callable', region: 'north', customer: ACME }]
+		it.effect(
+			'the client-minted id is the key: same input is the same run, other input keyReuse; a bulk start is one request',
+			() =>
+				Effect.gen(function* () {
+					const f = yield* Fx,
+						t = f.t;
+					const rep = t.as(t.member(['rep']));
+					const order = ok(
+						yield* act(f, rep.authority, 'orders.create', [
+							{ title: 'x', region: 'north', customer: ACME }
+						])
+					).records[0]!.id;
+					const order2 = ok(
+						yield* act(f, rep.authority, 'orders.create', [
+							{ title: 'y', region: 'north', customer: ACME }
+						])
+					).records[0];
+					if (order2 === undefined) throw new Error('Missing second order');
+					const id = uuidv7(Date.parse(t.clock.now()));
+					const first = yield* start(f, rep.authority, 'followup', { order }, { id });
+					expect(first).toEqual({
+						kind: 'committed',
+						output: { id, automation: 'followup', ids: [id] },
+						records: []
+					});
+					expect(yield* start(f, rep.authority, 'followup', { order }, { id })).toEqual(first);
+					expect(
+						yield* Effect.flip(start(f, rep.authority, 'followup', { order: order2.id }, { id }))
+					).toMatchObject({ _tag: 'ActRefused', code: 'keyReuse' });
+					expect(yield* count(f, 'sys_run WHERE id = $1', [id])).toBe(1);
+					// a bulk start queues one run per record in one request, and a retry of it is the same start
+					const ids = [uuidv7(Date.parse(t.clock.now())), uuidv7(Date.parse(t.clock.now()))];
+					const bulk = {
+						automation: 'followup',
+						runs: [
+							{ id: ids[0]!, input: { order } },
+							{ id: ids[1]!, input: { order: order2.id } }
+						]
+					};
+					expect(yield* act(f, rep.authority, 'start', bulk)).toEqual({
+						kind: 'committed',
+						output: { id: ids[0], automation: 'followup', ids },
+						records: []
+					});
+					expect(yield* act(f, rep.authority, 'start', bulk)).toMatchObject({ kind: 'committed' });
+					expect(
+						yield* count(f, 'sys_run WHERE id IN (SELECT jsonb_array_elements_text($1::jsonb))', [
+							[id, ...ids]
+						])
+					).toBe(3);
+				})
+		);
+
+		// rule 38d on the same workspace: a public visitor of the careers app
+		it.effect(
+			'lists open roles masked to the granted fields, applies to an open role, and nothing else',
+			() =>
+				Effect.gen(function* () {
+					const f = yield* Fx,
+						me = f.t.visitor('careers');
+					const open = (yield* read(f, me.authority, 'openings')).rows;
+					expect(open).toHaveLength(1);
+					expect(open[0]).toMatchObject({
+						id: OPEN,
+						title: 'Engineer',
+						location: 'SG',
+						description: 'Build',
+						status: { $masked: true }
+					});
+					ok(
+						yield* act(f, me.authority, 'applications.create', [
+							{ opening: OPEN, name: 'Ada', email: 'ada@example.com' }
+						])
+					);
+					expect(
+						yield* Effect.flip(
+							act(f, me.authority, 'applications.create', [
+								{ opening: CLOSED, name: 'Ada', email: 'ada@example.com' }
+							])
+						)
+					).toMatchObject({ _tag: 'ActRefused', code: 'notFound', field: 'opening' });
+					expect(yield* Effect.flip(read(f, me.authority, 'applications'))).toMatchObject({
+						code: 'forbidden'
+					});
+					expect(
+						yield* Effect.flip(
+							act(f, me.authority, 'applications.update', [{ target: OPEN, set: {} }])
+						)
+					).toMatchObject({ _tag: 'ActRefused', code: 'forbidden' });
+				})
+		);
+
+		it.effect(
+			'the 4th attempt in an hour from one IP is rateLimited, whatever the first three were; a new visitor id does not reset it',
+			() =>
+				Effect.gen(function* () {
+					const f = yield* Fx;
+					const attempt = (ip: string, input: Json) =>
+						act(f, f.t.visitor('careers', { ip }).authority, 'applications.create', [input], {
+							address: ip
+						});
+					for (let i = 0; i < 3; i++) {
+						const input =
+							i % 3 === 0
+								? { opening: OPEN, name: `A${i}`, email: 'a@x.io' }
+								: i % 3 === 1
+									? { opening: CLOSED, name: 'A', email: 'a@x.io' }
+									: { nope: true };
+						const result = yield* Effect.result(attempt('198.51.100.1', input));
+						expect(Result.isSuccess(result) ? result.success.kind : result.failure._tag).not.toBe(
+							'pendingApproval'
+						);
 					}
-				];
-				const bounded = "orders WHERE title = 'bounded callable'";
-				serialization.armed = true;
-				const first = yield* Effect.flip(batch(f, rep.authority, operations, 'bounded-callable'));
-				expect(first).toEqual(new ActConflict({ records: [] }));
-				expect(attempts).toHaveLength(3);
-				expect(attempts[1]?.statements).toEqual(attempts[0]?.statements);
-				expect(yield* count(f, bounded)).toBe(0);
-				attempts.length = 0;
-				expect(yield* Effect.flip(batch(f, rep.authority, operations, 'bounded-callable'))).toEqual(
-					first
-				);
-				// A native replay checks the persisted outcome in one batch without adding business rows.
-				expect(attempts).toHaveLength(1);
-				expect(yield* count(f, bounded)).toBe(0);
-			}).pipe(Effect.ensuring(Effect.sync(() => void (serialization.armed = false))))
-	);
+					expect(
+						yield* Effect.flip(
+							attempt('198.51.100.1', { opening: OPEN, name: 'Z', email: 'z@x.io' })
+						)
+					).toMatchObject({ _tag: 'ActRefused', code: 'rateLimited' });
+					ok(yield* attempt('198.51.100.2', { opening: OPEN, name: 'Z', email: 'z@x.io' }));
+				})
+		);
 
-	it.effect(
-		'the client-minted id is the key: same input is the same run, other input keyReuse; a bulk start is one request',
-		() =>
-			Effect.gen(function* () {
-				const f = yield* Fx,
-					t = f.t;
-				const rep = t.as(t.member(['rep']));
-				const order = ok(
-					yield* act(f, rep.authority, 'orders.create', [
-						{ title: 'x', region: 'north', customer: ACME }
-					])
-				).records[0]!.id;
-				const order2 = ok(
-					yield* act(f, rep.authority, 'orders.create', [
-						{ title: 'y', region: 'north', customer: ACME }
-					])
-				).records[0];
-				if (order2 === undefined) throw new Error('Missing second order');
-				const id = uuidv7(Date.parse(t.clock.now()));
-				const first = yield* start(f, rep.authority, 'followup', { order }, { id });
-				expect(first).toEqual({
-					kind: 'committed',
-					output: { id, automation: 'followup', ids: [id] },
-					records: []
-				});
-				expect(yield* start(f, rep.authority, 'followup', { order }, { id })).toEqual(first);
-				expect(
-					yield* Effect.flip(start(f, rep.authority, 'followup', { order: order2.id }, { id }))
-				).toMatchObject({ _tag: 'ActRefused', code: 'keyReuse' });
-				expect(yield* count(f, 'sys_run WHERE id = $1', [id])).toBe(1);
-				// a bulk start queues one run per record in one request, and a retry of it is the same start
-				const ids = [uuidv7(Date.parse(t.clock.now())), uuidv7(Date.parse(t.clock.now()))];
-				const bulk = {
-					automation: 'followup',
-					runs: [
-						{ id: ids[0]!, input: { order } },
-						{ id: ids[1]!, input: { order: order2.id } }
-					]
-				};
-				expect(yield* act(f, rep.authority, 'start', bulk)).toEqual({
-					kind: 'committed',
-					output: { id: ids[0], automation: 'followup', ids },
-					records: []
-				});
-				expect(yield* act(f, rep.authority, 'start', bulk)).toMatchObject({ kind: 'committed' });
-				expect(
-					yield* count(f, 'sys_run WHERE id IN (SELECT jsonb_array_elements_text($1::jsonb))', [
-						[id, ...ids]
-					])
-				).toBe(3);
-			})
-	);
-
-	// rule 38d on the same workspace: a public visitor of the careers app
-	it.effect(
-		'lists open roles masked to the granted fields, applies to an open role, and nothing else',
-		() =>
+		it.effect('uploads persist one sys_file row per client-minted id; a resend adds none', () =>
 			Effect.gen(function* () {
 				const f = yield* Fx,
 					me = f.t.visitor('careers');
-				const open = (yield* read(f, me.authority, 'openings')).rows;
-				expect(open).toHaveLength(1);
-				expect(open[0]).toMatchObject({
-					id: OPEN,
-					title: 'Engineer',
-					location: 'SG',
-					description: 'Build',
-					status: { $masked: true }
+				const file = {
+					name: 'cv.pdf',
+					mime: 'application/pdf',
+					bytes: new Uint8Array([1, 2, 3]),
+					id: '0199a000-0000-7000-8000-0000000000f1'
+				};
+				const first = yield* me.upload('applications.cv', file);
+				if (first.kind !== 'committed') throw new Error(JSON.stringify(first));
+				expect(first.output).toMatchObject({
+					id: file.id,
+					name: 'cv.pdf',
+					mime: 'application/pdf',
+					bytes: 3
 				});
-				ok(
-					yield* act(f, me.authority, 'applications.create', [
-						{ opening: OPEN, name: 'Ada', email: 'ada@example.com' }
-					])
-				);
+				expect(yield* me.upload('applications.cv', file)).toEqual(first);
+				expect(yield* count(f, 'sys_file')).toBe(1);
+				const { id: _id, ...otherFile } = file;
 				expect(
-					yield* Effect.flip(
-						act(f, me.authority, 'applications.create', [
-							{ opening: CLOSED, name: 'Ada', email: 'ada@example.com' }
-						])
-					)
-				).toMatchObject({ _tag: 'ActRefused', code: 'notFound', field: 'opening' });
-				expect(yield* Effect.flip(read(f, me.authority, 'applications'))).toMatchObject({
+					yield* Effect.flip(me.upload('applications.cv', { ...otherFile, mime: 'image/png' }))
+				).toMatchObject({ _tag: 'ActRefused', code: 'invalidInput' });
+				expect(yield* Effect.flip(me.upload('applications.name', file))).toMatchObject({
+					_tag: 'ActRefused',
 					code: 'forbidden'
 				});
-				expect(
-					yield* Effect.flip(act(f, me.authority, 'applications.update', [{ target: OPEN, set: {} }]))
-				).toMatchObject({ _tag: 'ActRefused', code: 'forbidden' });
 			})
-	);
-
-	it.effect(
-		'the 4th attempt in an hour from one IP is rateLimited, whatever the first three were; a new visitor id does not reset it',
-		() =>
-			Effect.gen(function* () {
-				const f = yield* Fx;
-				const attempt = (ip: string, input: Json) =>
-					act(f, f.t.visitor('careers', { ip }).authority, 'applications.create', [input], {
-						address: ip
-					});
-				for (let i = 0; i < 3; i++) {
-					const input =
-						i % 3 === 0
-							? { opening: OPEN, name: `A${i}`, email: 'a@x.io' }
-							: i % 3 === 1
-								? { opening: CLOSED, name: 'A', email: 'a@x.io' }
-								: { nope: true };
-					const result = yield* Effect.result(attempt('198.51.100.1', input));
-					expect(Result.isSuccess(result) ? result.success.kind : result.failure._tag).not.toBe(
-						'pendingApproval'
-					);
-				}
-				expect(
-					yield* Effect.flip(attempt('198.51.100.1', { opening: OPEN, name: 'Z', email: 'z@x.io' }))
-				).toMatchObject({ _tag: 'ActRefused', code: 'rateLimited' });
-				ok(yield* attempt('198.51.100.2', { opening: OPEN, name: 'Z', email: 'z@x.io' }));
-			})
-	);
-
-	it.effect('uploads persist one sys_file row per client-minted id; a resend adds none', () =>
-		Effect.gen(function* () {
-			const f = yield* Fx,
-				me = f.t.visitor('careers');
-			const file = {
-				name: 'cv.pdf',
-				mime: 'application/pdf',
-				bytes: new Uint8Array([1, 2, 3]),
-				id: '0199a000-0000-7000-8000-0000000000f1'
-			};
-			const first = yield* me.upload('applications.cv', file);
-			if (first.kind !== 'committed') throw new Error(JSON.stringify(first));
-			expect(first.output).toMatchObject({
-				id: file.id,
-				name: 'cv.pdf',
-				mime: 'application/pdf',
-				bytes: 3
-			});
-			expect(yield* me.upload('applications.cv', file)).toEqual(first);
-			expect(yield* count(f, 'sys_file')).toBe(1);
-			const { id: _id, ...otherFile } = file;
-			expect(
-				yield* Effect.flip(me.upload('applications.cv', { ...otherFile, mime: 'image/png' }))
-			).toMatchObject({ _tag: 'ActRefused', code: 'invalidInput' });
-			expect(yield* Effect.flip(me.upload('applications.name', file))).toMatchObject({
-				_tag: 'ActRefused',
-				code: 'forbidden'
-			});
-		})
-	);
-});
+		);
+	}
+);
 
 describe('refusal messages by actor (rule 32)', () => {
 	it('public and API-key actors receive codes only', () => {

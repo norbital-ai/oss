@@ -92,6 +92,7 @@ import { TestDb } from './database.ts';
 import { tenantDbPort } from '../node/db/port.ts';
 import { keysPort } from '../node/keys.ts';
 import { loopbackHttpPort } from '../node/net.ts';
+import { loopbackTcpPort } from '../node/tcp.ts';
 import { off, unmet, type Facilities, type System1, type System2 } from '../facilities/index.ts';
 import { facilityLayers } from '../protocol/host-api.ts';
 import type { Artifact } from '../engine/artifact/read.ts';
@@ -1476,7 +1477,7 @@ export class TestWorkspace extends Context.Service<TestWorkspace, Kit>()(
 						websockets: off,
 						outbound: {
 							http: loopbackHttpPort,
-							tcp: () => scripted('tcp')
+							tcp: loopbackTcpPort
 						}
 					},
 					sandbox: off,

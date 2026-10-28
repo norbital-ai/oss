@@ -79,7 +79,7 @@ const stem = (name: string) => name.split('.', 1)[0] ?? name;
  * name before the first dot); once per directory and process, after its first write. Another process may prune the
  * same directory: an entry gone meanwhile is skipped.
  */
-export const prune = (dir: string, count: number): Effect.Effect<void> =>
+export const prune = (dir: string, count: number): Effect.Effect<void, PlatformError> =>
 	Effect.suspend(() => {
 		if (pruned.has(dir)) return Effect.void;
 		pruned.add(dir);
@@ -102,5 +102,5 @@ export const prune = (dir: string, count: number): Effect.Effect<void> =>
 			for (const name of names)
 				if (old.has(stem(name)))
 					yield* fs.remove(join(dir, name), { recursive: true, force: true });
-		}).pipe(Effect.ignore, Effect.provide(NodeFileSystem.layer));
+		}).pipe(Effect.provide(NodeFileSystem.layer));
 	});

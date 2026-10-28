@@ -21,7 +21,7 @@ import {
 	type Host,
 	type HostOptions
 } from './kit.ts';
-import { fakeImap, fakeSmtp, loopback } from './mail-servers.ts';
+import { fakeImap, fakeSmtp } from './mail-servers.ts';
 
 const cursorOf = (h: Host) =>
 	Option.getOrUndefined(Schema.decodeUnknownOption(Cursor)(h.values.get('state')));
@@ -194,7 +194,7 @@ describe('the mailbox link (password)', () => {
 			(server) => Effect.promise(() => server.close())
 		);
 		imap.deliver(mail('From: old@else.example\nSubject: before\nMessage-ID: <old@else.example>')); // history: never replayed
-		const provider = mailbox({ net: loopback }).find((p) => p.id === 'imap')!;
+		const provider = mailbox({ plain: true }).find((p) => p.id === 'imap')!;
 		const h = yield* host(provider, fakeFetch([]), {}, emit === undefined ? {} : { emit });
 		yield* Effect.addFinalizer(() => h.link.close ?? Effect.void);
 		const input = {
@@ -302,7 +302,7 @@ describe('the mailbox link (password)', () => {
 			yield* Effect.promise(() => smtp.close());
 			for (let i = 0; i < 60; i++)
 				imap.deliver(mail(`From: customer@else.example\nMessage-ID: <history-${i}@else.example>`));
-			const provider = mailbox({ net: loopback }).find((p) => p.id === 'imap')!;
+			const provider = mailbox({ plain: true }).find((p) => p.id === 'imap')!;
 			const personal = yield* host(provider, fakeFetch([]), {}, { personal: true });
 			yield* Effect.addFinalizer(() => personal.link.close ?? Effect.void);
 			const { smtpHost: _host, smtpPort: _port, ...readOnly } = input;
@@ -490,7 +490,7 @@ describe("the mailbox link (the instance's own OAuth)", () => {
 			imap: { host: '127.0.0.1', port: imap.port },
 			smtp: { host: '127.0.0.1', port: smtp.port }
 		};
-		const provider = mailbox({ net: loopback, servers: { microsoft: servers } }).find(
+		const provider = mailbox({ plain: true, servers: { microsoft: servers } }).find(
 			(p) => p.id === 'microsoft'
 		)!;
 		const h = yield* host(provider, f, {}, { personal });
@@ -666,7 +666,7 @@ describe('Gmail: one click, signed in with the host’s Google client', () => {
 			imap: { host: '127.0.0.1', port: imap.port },
 			smtp: { host: '127.0.0.1', port: 1 }
 		};
-		const provider = mailbox({ net: loopback, servers: { google: servers } }).find(
+		const provider = mailbox({ plain: true, servers: { google: servers } }).find(
 			(p) => p.id === 'google'
 		)!;
 		const h = yield* host(

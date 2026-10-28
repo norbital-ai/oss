@@ -2,7 +2,7 @@
 // Every call is a complete SQL batch in one PGlite transaction, the only way to hold its connection exclusively.
 // The 20 s wall requests rollback between native statements. A running WASM statement cannot be forcibly cancelled;
 // interruption waits for its native transaction to settle before the database can be released.
-import { PGlite } from '@electric-sql/pglite';
+import { parse as protocolResults, PGlite, protocol } from '@electric-sql/pglite';
 import { btree_gist } from '@electric-sql/pglite/contrib/btree_gist';
 import { vector } from '@electric-sql/pglite-pgvector';
 import { Context, Duration, Effect, Layer, Option, Schema, type Scope } from 'effect';
@@ -17,7 +17,6 @@ import { TenantDb, type DbBatch, type TenantDbShape } from '../../engine/db/tena
 import {
 	cancelled,
 	copiedBatch,
-	DATABASE_SETTINGS,
 	dbError,
 	lockStatements,
 	param,
@@ -31,7 +30,7 @@ export type PgliteClient = {
 	/** Parameter-free migration scripts use PostgreSQL's simple protocol. */
 	exec?(text: string): Promise<{ rows: unknown[]; affectedRows?: number }[]>;
 	transaction<A>(body: (tx: Pick<PgliteClient, 'query' | 'exec'>) => Promise<A>): Promise<A>;
-};
+} & Pick<PGlite, 'execProtocol' | 'parsers'>;
 /** A native data directory may be initialized from a dump; reopening uses that same directory. */
 export type PgliteSource =
 	string | Blob | { readonly dataDir: string; readonly loadDataDir?: Blob };
@@ -68,6 +67,58 @@ async function run(db: Querier, s: NativeSql): Promise<NativeRows> {
 	const r = await db.query<unknown>(s.text, s.params);
 	return { rows: r.rows, affected: r.affectedRows };
 }
+const { serialize } = protocol;
+/** Distinct statements a session keeps parsed before it closes them all. */
+const NAMED = 2_000;
+/**
+ * Named statements, as the PostgreSQL adapter's: each text is parsed and analysed once per session, then only bound
+ * and executed (its plan cached once a generic one is as cheap), one protocol call each. Called inside the batch's
+ * transaction, whose lock keeps every other batch out.
+ */
+const namedRunner = (
+	execProtocol: PGlite['execProtocol'],
+	parsers: PGlite['parsers']
+): ((s: NativeSql) => Promise<NativeRows>) => {
+	const names = new Map<string, string>();
+	return async (s) => {
+		let name = names.get(s.text);
+		if (name === undefined) {
+			if (names.size >= NAMED) {
+				// only its own: the session may hold others' (the test kit's)
+				await execProtocol(
+					Buffer.concat([
+						...[...names.values()].map((old) => serialize.close({ type: 'S', name: old })),
+						serialize.sync()
+					]),
+					{ syncToFs: false }
+				);
+				names.clear();
+			}
+			name = `bolt_${createHash('sha1').update(s.text).digest('hex')}`;
+			await execProtocol(
+				Buffer.concat([serialize.parse({ name, text: s.text }), serialize.sync()]),
+				{
+					syncToFs: false
+				}
+			);
+			names.set(s.text, name);
+		}
+		const { messages } = await execProtocol(
+			Buffer.concat([
+				serialize.bind({ statement: name, values: s.params }),
+				serialize.describe({ type: 'P' }),
+				serialize.execute({}),
+				serialize.sync()
+			]),
+			{ syncToFs: false }
+		);
+		const result = protocolResults.parseResults(messages, parsers)[0];
+		return { rows: result?.rows ?? [], affected: result?.affectedRows };
+	};
+};
+/** One runner per open session: its statement names live as long as the session does. */
+// keyed by the session's own parser table: every client wrapping one PGlite shares its prepared statements
+const runners = new WeakMap<PgliteClient['parsers'], (s: NativeSql) => Promise<NativeRows>>();
 const closed = (pg: PGlite) =>
 	Effect.tryPromise({ try: () => pg.close(), catch: dbError }).pipe(
 		Effect.uninterruptible,
@@ -86,9 +137,16 @@ const checkpointed = (pg: PGlite) =>
 		},
 		catch: dbError
 	}).pipe(Effect.uninterruptible);
-// The smallest data directory to unpack per open: 1 MiB WAL segments (16 MiB by default), and no template databases
-// (PGlite serves its one database; nothing creates another). Each open writes every file into the in-memory FS.
-const INITDB = ['--wal-segsize=1', '--set=min_wal_size=2MB'];
+// The smallest data directory to unpack per open: 1 MiB WAL segments (16 MiB by default), a checkpoint removes spent
+// segments instead of keeping them as future ones, and no template databases (PGlite serves its one database; nothing
+// creates another). Each open writes every file into the in-memory FS. No full-page images: PGlite already runs
+// without fsync (`-F`), so a torn page is no new risk, and every first write after a load would otherwise log 8 KiB.
+const INITDB = [
+	'--wal-segsize=1',
+	'--set=min_wal_size=2MB',
+	'--set=wal_recycle=off',
+	'--set=full_page_writes=off'
+];
 const TEMPLATES = [
 	`update pg_database set datistemplate = false where datname in ('template0', 'template1')`,
 	'drop database template0',
@@ -127,12 +185,15 @@ const dump = Effect.gen(function* () {
 	const kept = yield* Effect.tryPromise(() => readFile(file)).pipe(Effect.option);
 	if (Option.isSome(kept)) return new Blob([new Uint8Array(kept.value)]);
 	const blob = yield* initdb;
-	yield* Effect.tryPromise(async () => {
-		const temporary = `${file}.${randomUUID()}`;
-		await mkdir(dirname(file), { recursive: true });
-		await writeFile(temporary, new Uint8Array(await blob.arrayBuffer()));
-		await rename(temporary, file);
-	}).pipe(Effect.ignore);
+	yield* Effect.tryPromise({
+		try: async () => {
+			const temporary = `${file}.${randomUUID()}`;
+			await mkdir(dirname(file), { recursive: true });
+			await writeFile(temporary, new Uint8Array(await blob.arrayBuffer()));
+			await rename(temporary, file);
+		},
+		catch: dbError
+	});
 	return blob;
 });
 let pristineDump: Effect.Effect<Blob, DbError> | undefined;
@@ -176,17 +237,18 @@ const create = (from: PgliteSource | undefined): Effect.Effect<PGlite, DbError, 
 export const PgliteDb = {
 	/** The adapter over an open PGlite (its session zone must be UTC; `open` sets it). */
 	make: (pg: PgliteClient): TenantDbShape => {
+		let named = runners.get(pg.parsers);
+		if (named === undefined)
+			runners.set(pg.parsers, (named = namedRunner(pg.execProtocol.bind(pg), pg.parsers)));
 		const exclusive = (batch: DbBatch): Effect.Effect<readonly Rows[], DbError> =>
 			Effect.try({
 				try: () => {
 					const prepared = copiedBatch(batch);
 					return {
 						statements: prepared.statements.map(nativeSql),
-						// one round trip: the settings and locks are parameterless, so one simple-protocol text
-						setup: nativeSql({
-							text: [...DATABASE_SETTINGS, ...lockStatements(prepared.lock)].join(';\n'),
-							params: []
-						}),
+						// No server-side timeouts: a WASM backend has no timer signal to enforce them and no second session to
+						// wait on, so the wall below is the bound. Locks are parameterless: one simple-protocol text, if any.
+						setup: lockStatements(prepared.lock).join(';\n'),
 						rollback: prepared.rollback === true
 					};
 				},
@@ -204,11 +266,13 @@ export const PgliteDb = {
 								.then(() =>
 									pg.transaction(async (tx) => {
 										check();
-										await run(tx, prepared.setup);
+										if (prepared.setup !== '') await run(tx, { text: prepared.setup, params: [] });
 										const results: NativeRows[] = [];
 										for (const statement of prepared.statements) {
 											check();
-											results.push(await run(tx, statement));
+											results.push(
+												await (statement.params.length > 0 ? named(statement) : run(tx, statement))
+											);
 											check();
 										}
 										check();

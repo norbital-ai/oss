@@ -6,7 +6,7 @@
 // a provider's setup is data (`SetupDescription`), its state one of a few words, its facts an `about` object.
 import type { DriverName, IntegrationSpec } from '../../decl/runtime/integration.ts';
 import type { Json } from '../../decl/values.ts';
-import type { DriverEvent, DriverPage, OutboundAttachment } from '../contracts.ts';
+import type { DriverEvent, DriverPage, OutboundAttachment, TcpPort } from '../contracts.ts';
 import type {
 	ImportStart,
 	LinkStatus,
@@ -66,6 +66,8 @@ export type DriverOpen = {
 	signal: AbortSignal;
 	/** The fetch to reach the provider with (tests pass a fake). */
 	fetch: typeof fetch;
+	/** Raw TCP/TLS to the provider's servers (IMAP, SMTP), under the host's egress policy. */
+	tcp: TcpPort;
 	/**
 	 * The OAuth client to grant with for `vendor`: the definition's own (`oauth.client`, `oauth.secret`, both set in the
 	 * workspace's secrets), else the host's (`LinksHost.oauth`); `undefined` when neither is configured. Without a

@@ -5,6 +5,7 @@ import { Deferred, Effect, Exit, Fiber, FiberSet, Schema } from 'effect';
 import type { DriverOpen, Json } from '@norbital-ai/bolt/engine';
 import { toDrivers, type ProviderDef, type Run } from '../src/abi.ts';
 import { PairingInvalid, ProviderRefused, ProviderUnavailable } from '../src/errors.ts';
+import { loopbackTcpPort } from '@norbital-ai/bolt/node';
 import { fakeFetch, HOOK, REDIRECT } from './kit.ts';
 
 class AbiRejected extends Schema.TaggedError<AbiRejected>()('AbiRejected', {
@@ -23,6 +24,7 @@ const context = (): DriverOpen => ({
 	state: async () => `${crypto.randomUUID()}.desk`,
 	signal: new AbortController().signal,
 	fetch: fakeFetch([]),
+	tcp: loopbackTcpPort,
 	oauthClient: async () => undefined,
 	credentials: { load: async () => new Map<string, Json>(), write: async () => {} },
 	emit: async () => {},

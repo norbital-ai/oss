@@ -33,7 +33,7 @@ import type {
 	Pairing,
 	ProviderChoice
 } from '../../protocol/instance-status.ts';
-import type { Authority } from '../contracts.ts';
+import type { Authority, TcpPort } from '../contracts.ts';
 import { TenantDb } from '../db/tenant-db.ts';
 import { SendRefused } from '../conversations/status.ts';
 import { Fenced, type EngineError } from '../errors.ts';
@@ -73,6 +73,7 @@ export type LinksHost = {
 	/** The host's own OAuth clients, used where a definition sets none of its own (a tenant need not register an app). */
 	readonly oauth?: Partial<Record<OAuthVendor, OAuthClient>> | undefined;
 	readonly fetch?: typeof fetch | undefined;
+	readonly tcp: TcpPort;
 	readonly log?: ((line: string) => void) | undefined;
 };
 type LinkError = EngineError | PortFailure | SendRefused;
@@ -571,6 +572,12 @@ export const integrationLinks = (
 										...init,
 										signal: init?.signal == null ? signal : AbortSignal.any([signal, init.signal])
 									}),
+						tcp: {
+							connect: (endpoint, connecting) =>
+								held.replaced
+									? Promise.reject(new Fenced({ instance, message: REPLACED }))
+									: h.tcp.connect(endpoint, AbortSignal.any([signal, connecting]))
+						},
 						credentials: {
 							load: () =>
 								Promise.resolve(new Map([...held.values].filter(([key]) => key !== PROVIDER))),

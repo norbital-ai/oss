@@ -4,7 +4,6 @@ import { expect, it } from '@effect/vitest';
 import { Effect, Exit, Fiber } from 'effect';
 import { FacilityFailure } from '../src/decl/errors.ts';
 import { DbError } from '../src/engine/errors.ts';
-import { DATABASE_SETTINGS } from '../src/engine/db/wire.ts';
 import { TenantDb } from '../src/engine/db/tenant-db.ts';
 import { PgliteDb, type PgliteClient } from '../src/node/db/pglite.ts';
 import { Drivers } from '../src/engine/ports.ts';
@@ -70,6 +69,8 @@ it.live('interrupts a SQL batch and drains native rollback before closing its da
 		const sent: string[] = [];
 		const client: PgliteClient = {
 			query: async () => ({ rows: [] }),
+			execProtocol: () => Promise.reject(new Error('this fake runs no parameterised statement')),
+			parsers: {},
 			transaction: (body) =>
 				body({
 					query: async () => ({ rows: [] }),
@@ -116,10 +117,9 @@ it.live('interrupts a SQL batch and drains native rollback before closing its da
 			yield* Effect.promise(() => rollingBack.promise);
 			yield* Effect.sync(() => {
 				expect(events).toEqual(['statement started', 'statement settled', 'rollback started']);
-				// the batch's settings and locks go as one text, then its statement
+				// the batch's locks go as one text, then its statement
 				expect(sent.slice(-2)).toEqual([
 					[
-						...DATABASE_SETTINGS,
 						'lock table "work" in SHARE ROW EXCLUSIVE mode',
 						"select pg_advisory_xact_lock(hashtext('batch'))"
 					].join(';\n'),

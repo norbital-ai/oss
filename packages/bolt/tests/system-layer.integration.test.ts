@@ -84,6 +84,8 @@ const fixture = Effect.gen(function* () {
 	const client: PgliteClient = {
 		query: (text, params) => pg.query(text, params),
 		exec: (text) => pg.exec(text),
+		execProtocol: pg.execProtocol.bind(pg),
+		parsers: pg.parsers,
 		transaction: (body) => {
 			let entered = false;
 			return pg

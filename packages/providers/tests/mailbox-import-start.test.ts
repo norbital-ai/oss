@@ -5,7 +5,7 @@ import { mailbox } from '../src/imap-smtp/index.ts';
 import { Cursor } from '../src/imap-smtp/model.ts';
 import { ProviderUnavailable } from '../src/errors.ts';
 import { fakeFetch, host, messagesOf, until, type Host } from './kit.ts';
-import { fakeImap, loopback } from './mail-servers.ts';
+import { fakeImap } from './mail-servers.ts';
 
 const after = '2026-10-20T16:00:00.000Z';
 const since = { kind: 'since', at: after, zone: 'Asia/Singapore', origin: 'date' } as const;
@@ -25,7 +25,7 @@ const fixture = Effect.fn('MailboxImportStart.fixture')(function* () {
 		}),
 		(server) => Effect.promise(() => server.close())
 	);
-	const provider = mailbox({ net: loopback }).find((provider) => provider.id === 'imap');
+	const provider = mailbox({ plain: true }).find((provider) => provider.id === 'imap');
 	if (provider === undefined) return yield* Effect.die('The mailbox provider is missing');
 	const open = Effect.fn('MailboxImportStart.open')(function* (
 		start: DriverOpen['importStart'],

@@ -26,8 +26,9 @@ Edit generated SQL for data patterns the planner cannot express; replay keeps th
 declared schema, and `bolt build` rewrites its lock and physical proof. Idempotency is per file: the ledger, the file
 and its receipt commit in one transaction under the `bolt:schema` advisory lock, so a retry after any failure or a
 concurrent applier runs nothing twice. Generated steps are not individually re-runnable; write hand data steps so a
-second run is a no-op. Each file runs under the adapters' `lock_timeout` 5 s, `statement_timeout` 15 s and 20 s call
-wall (`DATABASE_SETTINGS`); a backfill beyond that budget rolls back and must be reshaped.
+second run is a no-op. Each file runs under the PostgreSQL adapter's `lock_timeout` 5 s and `statement_timeout` 15 s
+(`DATABASE_SETTINGS`; PGlite's WASM backend cannot enforce them) and every adapter's 20 s call wall; a backfill beyond
+that budget rolls back and must be reshaped.
 
 A `-- check: <name>` line followed by one `SELECT` is a post-condition: the host runs it inside the file's transaction
 and fails the file with SQLSTATE `BM005`, naming the check and its row count, when any row returns. A file holding a

@@ -82,9 +82,7 @@ const answer = <A>(schema: Schema.Decoder<A>, value: unknown) =>
 		)
 	);
 /** The facility as a value: a host hands it to a verb that may run outside the context that built it. */
-export const auditShape = (
-	port: AuditPort
-): Effect.Effect<AuditShape, never, Crypto.Crypto> =>
+export const auditShape = (port: AuditPort): Effect.Effect<AuditShape, never, Crypto.Crypto> =>
 	Effect.gen(function* () {
 		const disabled: AuditShape = {
 			mode: 'disabled',
@@ -98,20 +96,19 @@ export const auditShape = (
 		if (port.mode === 'disabled') return disabled;
 		const service: AuditShape = {
 			mode: port.mode,
-			uuid: crypto.randomUUIDv4().pipe(
-				Effect.mapError((error) =>
-					BoltError.make(
-						'unavailable',
-						'facility',
-						'Audit operation identity generation failed.',
-						error
+			uuid: crypto
+				.randomUUIDv4()
+				.pipe(
+					Effect.mapError((error) =>
+						BoltError.make(
+							'unavailable',
+							'facility',
+							'Audit operation identity generation failed.',
+							error
+						)
 					)
-				)
-			),
-			append: (events) =>
-				call((signal) => port.append(events, signal)).pipe(
-					Effect.ensuring(requestAuditRecovery(service))
 				),
+			append: (events) => call((signal) => port.append(events, signal)),
 			query: (query) =>
 				call((signal) => port.query(query, signal)).pipe(
 					Effect.flatMap((value) => answer(AuditPage, value))
@@ -128,6 +125,5 @@ export const auditShape = (
 		recoverySources.set(service, port);
 		return service;
 	});
-export const auditFromAbi = (
-	port: AuditPort
-): Layer.Layer<never, never, Crypto.Crypto> => Layer.effect(Audit, auditShape(port));
+export const auditFromAbi = (port: AuditPort): Layer.Layer<never, never, Crypto.Crypto> =>
+	Layer.effect(Audit, auditShape(port));

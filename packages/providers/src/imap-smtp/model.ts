@@ -1,21 +1,20 @@
 import { Effect, Option, Schema } from 'effect';
-import { connectPublic, publicDestination } from '@norbital-ai/bolt/node';
+import type { TcpPort, TcpSocket } from '@norbital-ai/bolt/engine';
 import { OAuthRefused, ProviderRefused, ProviderUnavailable } from '../errors.ts';
 import { codeOf } from './reports.ts';
 
 export type Method = 'password' | 'microsoft' | 'google';
-/** How a mailbox reaches its servers: the destination guard, the socket it connects, and whether TLS is off. */
+/** How a mailbox reaches its servers: the host's TCP/TLS port, and whether TLS is off (the tests' fake servers). */
 export type MailNet = {
+	readonly tcp: TcpPort;
 	readonly plain: boolean;
-	readonly destination: typeof publicDestination;
-	readonly connect: typeof connectPublic;
 };
-/** The production network: the public destination guard, TLS on. */
-export const PUBLIC_NET: MailNet = {
-	plain: false,
-	destination: publicDestination,
-	connect: connectPublic
-};
+/** A port connection as the web streams socket imapflow's streams transport drives. */
+export const streamsSocket = (connecting: Promise<TcpSocket>) => ({
+	connecting,
+	opened: connecting.then((socket) => ({ readable: socket.readable, writable: socket.writable })),
+	close: () => connecting.then((socket) => socket.close()).catch(() => undefined)
+});
 export const Server = Schema.Struct({ host: Schema.NonEmptyString, port: Schema.Number });
 export type Server = typeof Server.Type;
 const fields = {

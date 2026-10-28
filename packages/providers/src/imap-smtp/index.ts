@@ -40,15 +40,14 @@ import {
 	type Login,
 	type MailNet,
 	type Method,
-	type Server,
-	PUBLIC_NET
+	type Server
 } from './model.ts';
 import { imap, mailboxWatch } from './mailbox-watch.ts';
 import { smtp, submit } from './submit.ts';
 
 export type MailboxOptions = {
-	/** The network the mailbox reaches its servers through (default: the public guard, TLS on). */
-	readonly net?: MailNet;
+	/** Cleartext IMAP and SMTP, no TLS: the tests' fake servers only. */
+	readonly plain?: boolean;
 	readonly servers?: Partial<Record<'microsoft' | 'google', { imap: Server; smtp: Server }>>;
 };
 const KNOWN = {
@@ -430,7 +429,7 @@ const open = Effect.fn('Mailbox.open')(function* (
 	known: { imap: Server; smtp: Server } | undefined,
 	options: MailboxOptions
 ) {
-	const net = options.net ?? PUBLIC_NET,
+	const net: MailNet = { tcp: ctx.tcp, plain: options.plain === true },
 		personal = ctx.personal;
 	const stored = yield* hostCall('read mailbox credentials', () => ctx.credentials.load());
 	let box = Option.getOrNull(Schema.decodeUnknownOption(Mailbox)(stored.get('credential')));

@@ -8,6 +8,7 @@ import { HttpServerRequest, HttpServerResponse } from 'effect/http';
 import { decodeProjectedManifest } from '../src/engine/manifest.ts';
 import { credentials } from '../src/engine/integrations/credentials.ts';
 import { integrationLinks } from '../src/engine/integrations/links.ts';
+import { loopbackTcpPort } from '../src/node/tcp.ts';
 import { Secrets } from '../src/engine/secrets.ts';
 import { bindings } from '../src/protocol/http.ts';
 import { IntegrationManager, integrationRoutes } from '../src/protocol/integrations.ts';
@@ -177,6 +178,7 @@ it.live(
 						Effect.provide(NodeCrypto.layer)
 					),
 					publicUrl: ORIGIN,
+					tcp: loopbackTcpPort,
 					log: () => {},
 					enter: (work) =>
 						Effect.gen(function* () {
