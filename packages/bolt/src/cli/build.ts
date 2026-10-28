@@ -126,7 +126,9 @@ export const buildWorkspace = Effect.fn('bolt.buildWorkspace')(function* (
 				: Object.fromEntries(
 						// every pack on disk: a reused base keeps the sample pack an earlier build read from the bank
 						yield* Effect.forEach(
-							(yield* fs.readDirectory(seedOut)).filter((name) => name !== 'inputs.sha256').toSorted(),
+							(yield* fs.readDirectory(seedOut))
+								.filter((name) => name !== 'inputs.sha256')
+								.toSorted(),
 							(name) =>
 								fs
 									.exists(path.join(seedOut, name, 'pack.json'))
@@ -277,29 +279,43 @@ export const watchWorkspace = Effect.fn('bolt.watchWorkspace')(function* (
 	);
 	return yield* changes.pipe(
 		Stream.debounce('150 millis'),
-		Stream.runForEach(() => {
-			const changed = [...pending];
-			pending.clear();
-			return buildWorkspace(root, {
-				...(options.bank === undefined ? {} : { bank: options.bank }),
-				log: options.log,
-				changed,
-				...(previous === undefined ? {} : { previous }),
-				...(options.spaServed === undefined ? {} : { spaServed: options.spaServed })
-			}).pipe(
-				Effect.tap((result) => Effect.sync(() => (previous = result))),
-				Effect.flatMap(built),
-				Effect.catch((error) =>
-					Effect.sync(() => {
-						previous = undefined;
-						options.log(
-							error instanceof AuthorErrors
-								? error.errors.map((diagnostic) => diagnostic.message).join('\n')
-								: String(error)
-						);
-					})
-				)
-			);
-		})
+		Stream.runForEach(() =>
+			Effect.gen(function* () {
+				const edited = [...pending];
+				pending.clear();
+				// an editor's atomic save writes through a temp file: a path neither on disk nor in the last build's source
+				// copy came and went, and would otherwise make a page-only edit look like more
+				const changed = yield* Effect.filter(edited, (file) =>
+					Effect.map(
+						Effect.all([
+							fs.exists(path.join(root, file)),
+							fs.exists(path.join(root, '.norbital', 'source', file))
+						]).pipe(Effect.orElseSucceed(() => [true, true] as const)),
+						([now, before]) => now || before
+					)
+				);
+				if (changed.length === 0) return;
+				yield* buildWorkspace(root, {
+					...(options.bank === undefined ? {} : { bank: options.bank }),
+					log: options.log,
+					changed,
+					...(previous === undefined ? {} : { previous }),
+					...(options.spaServed === undefined ? {} : { spaServed: options.spaServed })
+				}).pipe(
+					Effect.tap((result) => Effect.sync(() => (previous = result))),
+					Effect.flatMap(built),
+					Effect.catch((error) =>
+						Effect.sync(() => {
+							previous = undefined;
+							options.log(
+								error instanceof AuthorErrors
+									? error.errors.map((diagnostic) => diagnostic.message).join('\n')
+									: String(error)
+							);
+						})
+					)
+				);
+			})
+		)
 	);
 });

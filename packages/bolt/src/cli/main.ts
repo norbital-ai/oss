@@ -80,7 +80,11 @@ const watching = (dir: string, bank: Option.Option<string>) =>
 	Effect.scoped(
 		Effect.gen(function* () {
 			const root = resolve(dir);
-			const options = { ...(Option.isNone(bank) ? {} : { bank: bank.value }), log, spaServed: true };
+			const options = {
+				...(Option.isNone(bank) ? {} : { bank: bank.value }),
+				log,
+				spaServed: true
+			};
 			const serve = yield* tethered(root, log);
 			const first = yield* buildWorkspace(root, options).pipe(
 				Effect.map((first): Built | undefined => first),
@@ -92,6 +96,10 @@ const watching = (dir: string, bank: Option.Option<string>) =>
 				Effect.raceFirst(overlaid(root))
 			);
 		})
+	).pipe(
+		// ended by the overlay: exit, so the realm's loop restarts it; the page dev server's watchers would otherwise keep
+		// this process alive, serving nothing
+		Effect.andThen(Effect.sync(() => process.exit(0)))
 	);
 const buildCommand = Command.make(
 	'build',
@@ -136,7 +144,9 @@ const devCommand = Command.make(
 		port: Flag.Int('port').pipe(Flag.withDefault(5180)),
 		host: Flag.String('host').pipe(
 			Flag.optional,
-			Flag.withDescription('serve untethered with this host file (default: the workspace’s norbital.host.ts)')
+			Flag.withDescription(
+				'serve untethered with this host file (default: the workspace’s norbital.host.ts)'
+			)
 		),
 		tethered: Flag.Boolean('tethered').pipe(
 			Flag.withDefault(false),
@@ -148,7 +158,9 @@ const devCommand = Command.make(
 			const root = resolve(options.dir);
 			if (options.tethered) {
 				if (Option.isSome(options.host))
-					return yield* Effect.fail(new ToolFailure({ message: 'bolt dev: --tethered and --host exclude each other' }));
+					return yield* Effect.fail(
+						new ToolFailure({ message: 'bolt dev: --tethered and --host exclude each other' })
+					);
 				return yield* watching(options.dir, options.bank);
 			}
 			const hostFile = yield* hostFileOf(root, Option.getOrUndefined(options.host));

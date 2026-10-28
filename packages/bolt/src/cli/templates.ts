@@ -800,7 +800,14 @@ export const publishTemplates = Effect.fn('bolt.templatesPublish')(function* (op
 			const object = path.join(out, part.startsWith('seed/') ? 'seed' : part, `${digest}.tar.gz`);
 			yield* fs.makeDirectory(path.dirname(object), { recursive: true });
 			if (!(yield* fs.exists(object)))
-				yield* run('tar', ['-czf', object, '-C', path.join(built, part), '.'], { cwd: root });
+				// a part's files and directories only: macOS tar would add `._*` entries for extended attributes
+				yield* run(
+					'env',
+					['COPYFILE_DISABLE=1', 'tar', '-czf', object, '-C', path.join(built, part), '.'],
+					{
+						cwd: root
+					}
+				);
 		}
 		const record = path.join(out, 'template', template.slug, `${release.bundle}.json`);
 		yield* fs.makeDirectory(path.dirname(record), { recursive: true });

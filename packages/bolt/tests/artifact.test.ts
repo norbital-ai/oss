@@ -16,6 +16,7 @@ import { Port } from '../src/engine/port.ts';
 import { sha256Hex } from '@norbital-ai/store';
 import { artifactPort } from '../src/node/artifact.ts';
 import { prepareMigrations } from '../src/compiler/migrations.ts';
+import { writeSource } from '../src/compiler/artifact/index.ts';
 import { Pristine } from '../src/node/db/pglite.ts';
 import type { EngineManifest } from '../src/engine/manifest.ts';
 import { fingerprint, schemaSlice } from '../src/engine/schema/plan.ts';
@@ -257,6 +258,33 @@ it.live(
 					Port.attempt('artifact', (signal) => release.read('server/app/site/home.mjs', signal))
 				)
 			).toMatchObject({ kind: 'invalid', message: expect.stringContaining('has no path') });
+		}).pipe(Effect.provide(NodeServices.layer))
+);
+it.live(
+	'a release source is copied from inside the workspace it copies, without its builds or tests',
+	() =>
+		Effect.gen(function* () {
+			const fs = yield* FileSystem.FileSystem;
+			const path = yield* Path.Path;
+			const root = yield* fs.makeTempDirectoryScoped({ prefix: 'bolt-release-source-' });
+			for (const [file, text] of Object.entries({
+				'src/+workspace.ts': 'workspace',
+				'src/notes.test.ts': 'test',
+				'src/.DS_Store': 'finder',
+				'node_modules/x/index.js': 'installed',
+				'.norbital/bundle/manifest.json': 'built'
+			})) {
+				yield* fs.makeDirectory(path.dirname(path.join(root, file)), { recursive: true });
+				yield* fs.writeFileString(path.join(root, file), text);
+			}
+			// `bolt build` writes the source under the workspace's own `.norbital/`
+			const out = path.join(root, '.norbital', '.next', 'source');
+			const digest = yield* writeSource(root, out);
+			expect((yield* fs.readDirectory(out, { recursive: true })).toSorted()).toEqual([
+				'src',
+				'src/+workspace.ts'
+			]);
+			expect(digest).toBe(yield* treeHash(out));
 		}).pipe(Effect.provide(NodeServices.layer))
 );
 it.live('artifact digests depend on bytes and sorted paths, never mtimes', () =>

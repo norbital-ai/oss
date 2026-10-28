@@ -110,7 +110,10 @@ const TYPE_SETUP = [
 	'.norbital/names.ts',
 	'.norbital/bolt.d.ts'
 ] as const;
-const Graph = Schema.Struct({ spa: Schema.Array(Schema.String), pages: Schema.Array(Schema.String) });
+const Graph = Schema.Struct({
+	spa: Schema.Array(Schema.String),
+	pages: Schema.Array(Schema.String)
+});
 /** Writes the compiled bundle into `out`: empty for a full build, a clone of the last bundle for a watch's rebuild. */
 export const writeArtifact = Effect.fn('bolt.writeArtifact')(function* (
 	root: string,
@@ -147,16 +150,19 @@ export const writeArtifact = Effect.fn('bolt.writeArtifact')(function* (
 		changed === undefined ||
 		(yield* fs.readFileString(keyFile).pipe(Effect.orElseSucceed(() => ''))) !== clientKey
 			? undefined
-			: yield* fs.readFileString(graphFile).pipe(
-					Effect.flatMap(Schema.decodeUnknownEffect(Schema.fromJsonString(Graph))),
-					Effect.option,
-					Effect.map(Option.getOrUndefined)
-				);
+			: yield* fs
+					.readFileString(graphFile)
+					.pipe(
+						Effect.flatMap(Schema.decodeUnknownEffect(Schema.fromJsonString(Graph))),
+						Effect.option,
+						Effect.map(Option.getOrUndefined)
+					);
 	// a page build is reused only while no file in its module graph changed
 	const stale =
 		graph === undefined ||
 		(changed ?? []).some(
-			(file) => graph.pages.includes(file) || (options.spaServed !== true && graph.spa.includes(file))
+			(file) =>
+				graph.pages.includes(file) || (options.spaServed !== true && graph.spa.includes(file))
 		);
 	// an edit only the dev server's internal SPA reaches leaves the bundle as it was, its source copy too: its digest holds,
 	// so a host following the build sees no new release while the dev server hot-updates the page
@@ -193,7 +199,8 @@ export const writeArtifact = Effect.fn('bolt.writeArtifact')(function* (
 	const manifestText = `${JSON.stringify(c.manifest, null, '\t')}\n`;
 	yield* fs.writeFileString(join(out, 'manifest.json'), manifestText);
 	yield* fs.writeFileString(join(out, 'guest.mjs'), c.guest.source);
-	if (c.guest.sourceMap === undefined) yield* fs.remove(join(out, 'guest.mjs.map'), { force: true });
+	if (c.guest.sourceMap === undefined)
+		yield* fs.remove(join(out, 'guest.mjs.map'), { force: true });
 	else yield* fs.writeFileString(join(out, 'guest.mjs.map'), c.guest.sourceMap);
 	// `?bytes` imports (§5.8), by sha256; server-only, never under the browser-served `assets/`. guest.mjs names each sha, so its hash covers them
 	yield* fs.remove(join(out, 'guest-assets'), { recursive: true, force: true });

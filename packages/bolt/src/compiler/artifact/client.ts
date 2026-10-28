@@ -182,6 +182,8 @@ export const clientDevServer = Effect.fn('bolt.clientDevServer')(function* (
 					],
 					appType: 'custom',
 					publicDir: false,
+					// ui's CommonJS dependencies: Vite never crawls a package's Svelte files, so it would not find them to pre-bundle
+					optimizeDeps: { include: ['@norbital-ai/ui > qrcode', '@norbital-ai/ui > leaflet'] },
 					// the build rewrites `.norbital/` on every save: none of it is a page's source
 					server: { middlewareMode: true, ws: { server }, watch: { ignored: ['**/.norbital/**'] } }
 				});
