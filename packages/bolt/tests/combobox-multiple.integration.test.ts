@@ -44,7 +44,7 @@ it('multiple selection toggles by keyboard and pointer, remains open, filters, a
 	await tick();
 	flushSync();
 	expect(changes.at(-1)).toEqual(['a', 'b', 'c']);
-	expect(target.textContent).toContain('+1');
+	expect(target.textContent).toContain('3 selected');
 	input.value = '';
 	input.dispatchEvent(new Event('input', { bubbles: true }));
 	await tick();

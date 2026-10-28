@@ -278,7 +278,7 @@ const fieldOp = Effect.fnUntraced(function* (
 				op,
 				arg: yield* val(info, f, v, at, f.periodOf)
 			} satisfies Pred;
-		if (op === 'overlaps' || op === 'within')
+		if (op === 'overlaps' || op === 'within' || op === 'startsWithin' || op === 'endsWithin')
 			return {
 				t: 'period',
 				field: f.name,

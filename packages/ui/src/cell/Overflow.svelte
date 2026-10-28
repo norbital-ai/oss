@@ -1,7 +1,7 @@
 <!--
 @component
-A dense cell's text on one line; when it is wider than the cell, the cell becomes a bounded, scrollable popover
-holding the full text.
+A dense cell's value on one line of fixed height; when it is wider or taller than the cell, an expand button opens a
+bounded, scrollable popover holding it whole: `full` when given, else `text` as plain text, else the value again.
 -->
 <script lang="ts">
 	import type { Snippet } from 'svelte';
@@ -12,11 +12,14 @@ holding the full text.
 	let {
 		text,
 		class: className,
-		children
+		children,
+		full
 	}: {
-		text: string;
+		text?: string;
 		class?: string;
 		children: Snippet;
+		/** The whole value for the popover, when the cell shows a shorter preview of it. */
+		full?: Snippet;
 	} = $props();
 	const t = uiText();
 	let probe = $state<HTMLElement | null>(null);
@@ -25,7 +28,8 @@ holding the full text.
 		void text;
 		const el = probe;
 		if (el === null) return;
-		const check = () => (overflow = el.scrollWidth > el.clientWidth + 1);
+		const check = () =>
+			(overflow = el.scrollWidth > el.clientWidth + 1 || el.scrollHeight > el.clientHeight + 1);
 		check();
 		const observer = new ResizeObserver(check);
 		observer.observe(el);
@@ -33,24 +37,26 @@ holding the full text.
 	});
 </script>
 
-{#if overflow}
-	<Popover.Root>
-		<Popover.Trigger
-			class={cn('flex max-w-full min-w-0 items-center gap-1 text-left text-inherit', className)}
-			aria-label={t('expand')}
-			onclick={(event: MouseEvent) => event.stopPropagation()}
-		>
-			<span bind:this={probe} class="min-w-0 truncate">{@render children()}</span>
-			<Glyph name="expand" class="text-muted-foreground size-3 shrink-0" />
-		</Popover.Trigger>
-		<Popover.Content
-			align="start"
-			class="max-h-[min(24rem,70vh)] w-[min(40rem,calc(100vw-2rem))] overflow-auto p-3 text-xs break-words whitespace-pre-wrap"
-		>
-			{text}
-		</Popover.Content>
-	</Popover.Root>
-{:else}
-	<span bind:this={probe} class={cn('block min-w-0 truncate', className)}>{@render children()}</span
-	>
-{/if}
+<span class={cn('flex max-w-full min-w-0 items-center gap-1', className)}>
+	<span bind:this={probe} class="block max-h-7 min-w-0 flex-1 truncate [&_*]:whitespace-nowrap!">{@render children()}</span>
+	{#if overflow}
+		<Popover.Root>
+			<Popover.Trigger
+				class="text-muted-foreground hover:text-foreground grid size-5 shrink-0 place-items-center rounded-sm"
+				aria-label={t('expand')}
+				onclick={(event: MouseEvent) => event.stopPropagation()}
+			>
+				<Glyph name="expand" class="size-3" />
+			</Popover.Trigger>
+			<Popover.Content
+				align="start"
+				class={cn(
+					'max-h-[min(24rem,70vh)] w-[min(40rem,calc(100vw-2rem))] overflow-auto p-3',
+					full === undefined && text !== undefined && 'text-xs break-words whitespace-pre-wrap'
+				)}
+			>
+				{#if full}{@render full()}{:else if text !== undefined}{text}{:else}{@render children()}{/if}
+			</Popover.Content>
+		</Popover.Root>
+	{/if}
+</span>

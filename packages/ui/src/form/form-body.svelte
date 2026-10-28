@@ -1,5 +1,6 @@
 <script lang="ts">
 	// The mounted draft: built once its row is known, and handed to every `Field` below by context.
+	import { Effect } from 'effect';
 	import { fork, observeOnce } from '../effect/index.js';
 	import { getContext, onDestroy, untrack, type Snippet } from 'svelte';
 	import { watch } from 'runed';
@@ -17,6 +18,8 @@
 	import { useBolt } from '../client/context.js';
 	import { msg } from '../text/messages.js';
 	import { FormState, provideForm, useRecordController, type Act } from './form-state.svelte.js';
+	import { confirmAction } from '../primitives/dialog/confirm.js';
+	import type { FormConfirm } from './form.svelte';
 
 	let {
 		spec,
@@ -30,6 +33,7 @@
 		readonly: asked,
 		disabled: askedDisabled,
 		onOutcome,
+		confirm,
 		children,
 		actions,
 		class: className
@@ -45,6 +49,7 @@
 		readonly?: boolean;
 		disabled?: boolean;
 		onOutcome?(outcome: Outcome): void;
+		confirm?: FormConfirm;
 		children?: Snippet<[FormState]>;
 		actions?: Snippet<[FormState]>;
 		class?: string;
@@ -133,6 +138,12 @@
 		}
 	);
 	onDestroy(form.onOutcome((outcome) => onOutcome?.(outcome)));
+	onDestroy(
+		form.confirmSubmit(() => {
+			const asked = confirm?.({ values: form.values, before: form.base });
+			return asked == null ? Effect.succeed(true) : confirmAction(asked);
+		})
+	);
 	// the sheet this form sits in asks before closing over its unsaved draft
 	onDestroy(
 		getContext<SheetGuard | undefined>(SHEET_GUARD)?.(

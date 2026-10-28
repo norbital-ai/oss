@@ -94,7 +94,8 @@ const fieldsOf = (entries: readonly (readonly [string, unknown])[]): Fields =>
 const TARGETS = ['sys_user', 'sys_file', 'sys_invitation'] as const;
 /**
  * The caller's syncs on `c` for the view toolbar: a file sync's upload accept list (its parsers' extensions; default
- * xlsx and csv), whether the caller may import (create or update the model) and export (read it); a remote sync with a
+ * xlsx and csv), whether the caller may import (create or update the model) and export (read it), and its required
+ * context fields; a remote sync with a
  * `read`, and whether the caller may start it ("Sync now").
  */
 function syncsOf(
@@ -115,6 +116,9 @@ function syncsOf(
 						: parsers.flatMap((parser) =>
 								['xlsx', 'csv', 'tsv', 'json'].filter((format) => format === parser)
 							);
+				const context = Object.entries(s.context ?? {})
+					.filter(([, k]) => k.optional !== true && k.default === undefined)
+					.map(([f]) => f);
 				return [
 					[
 						name,
@@ -125,7 +129,8 @@ function syncsOf(
 							(a.admin || (ca?.create.length ?? 0) > 0 || (ca?.update.length ?? 0) > 0)
 								? { import: true }
 								: {}),
-							...(a.actor.kind === 'member' && reads ? { export: formats } : {})
+							...(a.actor.kind === 'member' && reads ? { export: formats } : {}),
+							...(context.length > 0 ? { context } : {})
 						}
 					]
 				];

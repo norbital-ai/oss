@@ -390,6 +390,11 @@ leaf values retain the workspace's native kinds, custom renderers and inherited 
 		else onChange?.({ ...object, [key]: next });
 	}
 	const list = $derived<readonly Value[]>(Array.isArray(value) ? value : []);
+	/** A list of plain values (numbers, text, flags): read, it is one line of chips, not a one-column table. */
+	const scalarList = (value: Value | undefined): value is readonly Value[] =>
+		Array.isArray(value) &&
+		value.length > 0 &&
+		value.every((item) => item === null || typeof item !== 'object' || item instanceof Decimal);
 	const previousList = $derived<readonly Value[]>(Array.isArray(before) ? before : []);
 	const itemKind = $derived(kind?.kind === 'list' ? kind.of : undefined);
 	const itemSchema = $derived(
@@ -715,7 +720,10 @@ leaf values retain the workspace's native kinds, custom renderers and inherited 
 			: schemaAt(index)}
 		{@const held = dataEntries(pair.value) ?? row}
 		{@const heldBefore = dataEntries(pair.before) ?? beforeRow}
-		{@const complex = recordList && (dataEntries(next) !== undefined || Array.isArray(next))}
+		{@const complex =
+			recordList &&
+			(dataEntries(next) !== undefined ||
+				(Array.isArray(next) && !(currentMode === 'view' && scalarList(next))))}
 		<div class="relative w-full min-w-0">
 			{#if !complex}<label class="sr-only" for={`${controlId}-${entry.at}-${field}`}
 					>{recordList ? title(field, child, nativeKind) : 'Item'} {index + 1}</label
@@ -750,6 +758,39 @@ leaf values retain the workspace's native kinds, custom renderers and inherited 
 				</Popover.Root>
 			{:else if currentMode === 'view' && typeof next === 'string' && (nativeKind === undefined || (nativeKind.kind === 'text' && nativeKind.format === undefined))}
 				<Overflow text={next}>
+					{@render dataSelf(
+						entry,
+						field,
+						next,
+						previous,
+						nativeKind,
+						child,
+						index,
+						held,
+						heldBefore
+					)}
+				</Overflow>
+			{:else if currentMode === 'view' && typeof next === 'string' && nativeKind?.kind === 'text'}
+				<!-- an expression or formatted text previews as one line; the popover renders it whole -->
+				<Overflow text={next}>
+					<code class="font-mono">{next.replace(/\s+/g, ' ')}</code>
+					{#snippet full()}
+						{@render dataSelf(
+							entry,
+							field,
+							next,
+							previous,
+							nativeKind,
+							child,
+							index,
+							held,
+							heldBefore
+						)}
+					{/snippet}
+				</Overflow>
+			{:else if currentMode === 'view'}
+				<!-- every row keeps one line's height: a taller value clamps and opens whole -->
+				<Overflow>
 					{@render dataSelf(
 						entry,
 						field,
@@ -812,7 +853,7 @@ leaf values retain the workspace's native kinds, custom renderers and inherited 
 			object[field.key],
 			currentMode === 'diff' ? previousObject[field.key] : undefined
 		)}
-		{#if nested}
+		{#if nested && !(locked && currentMode === 'view' && scalarList(object[field.key]))}
 			<Self
 				schema={field.schema}
 				kind={field.kind}
@@ -1071,6 +1112,26 @@ leaf values retain the workspace's native kinds, custom renderers and inherited 
 					)
 				)}>{t('add')}</Button
 		>
+	{:else if layout === 'array' && locked && currentMode === 'view' && scalarList(value)}
+		<span class="flex min-w-0 flex-wrap gap-1" data-structured-chips>
+			{#each list as item, index (index)}
+				<span class="bg-muted inline-flex max-w-full min-w-0 items-center rounded-sm px-1.5 text-sm"
+					><Self
+						schema={schemaAt(index)}
+						kind={itemKind}
+						value={item}
+						mode="view"
+						name={childName(index)}
+						id={`${controlId}-${index}`}
+						readonly
+						{row}
+						root={document}
+						path={pointer(path, index)}
+						depth={depth + 1}
+					/></span
+				>
+			{/each}
+		</span>
 	{:else if layout}
 		{#if heading}<details
 				class="structured-section structured-nested"

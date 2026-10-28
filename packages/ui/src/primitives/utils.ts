@@ -85,6 +85,7 @@ const UI_TEXT = {
 	previous: 'Previous',
 	next: 'Next',
 	more: '+{n} more',
+	selectedCount: '{n} selected',
 	day: 'Day',
 	week: 'Week',
 	month: 'Month',

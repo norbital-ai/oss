@@ -14,6 +14,7 @@
 	} from '../model/types.js';
 	import type { FormState } from './form-state.svelte.js';
 	import type { RecordSection } from './section.svelte';
+	import type { ConfirmOptions } from '../primitives/dialog/confirm.js';
 
 	/**
 	 * `Form of="<c>" mode="create" | "update"` edits a model's allowlisted fields; `Form of={{ automation: '<a>' }}`
@@ -21,9 +22,16 @@
 	 * `children` every allowlisted field renders in order; with `children` the page lays out its own `Field`s.
 	 */
 	/** What a form edits: a model's row, or a declared automation's input. */
-	export type FormSource =
-		ModelKey | { [A in AutomationKey]: { automation: A } }[AutomationKey];
+	export type FormSource = ModelKey | { [A in AutomationKey]: { automation: A } }[AutomationKey];
 	/** The props of `Form`: what it edits (`of`), create or update, the row id, and the layout of its fields. */
+	/**
+	 * A save that asks first: given the draft (`values`) and what it was opened with (`before`), the confirmation to
+	 * show — its title, body and the accept button's words — or `null` to save without asking.
+	 */
+	export type FormConfirm = (change: {
+		readonly values: Readonly<Record<string, Value>>;
+		readonly before: Readonly<Record<string, Value>>;
+	}) => ConfirmOptions | null;
 	export type FormProps<S = FormSource> = {
 		of: S;
 		mode?: 'view' | 'edit' | 'create' | 'update';
@@ -52,6 +60,8 @@
 		disabled?: boolean;
 		/** An automation reports queue admission here; its retained run is followed separately by RunStatus. */
 		onOutcome?(outcome: Outcome): void;
+		/** Asks before a valid draft saves: the dialog to show for this change, or `null` to save without asking. */
+		confirm?: FormConfirm;
 		children?: Snippet<[FormState]>;
 		/** Extra buttons beside submit. */
 		actions?: Snippet<[FormState]>;
@@ -83,6 +93,7 @@
 		readonly,
 		disabled,
 		onOutcome,
+		confirm,
 		children,
 		actions,
 		class: className
@@ -232,6 +243,7 @@
 						readonly={readOnly}
 						{disabled}
 						{onOutcome}
+						{confirm}
 						{children}
 						{actions}
 						class={className}

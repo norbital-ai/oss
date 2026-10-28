@@ -269,6 +269,10 @@ export function evaluate(env: EvalEnv, c: string, p: Pred, row: RowData): boolea
 			if (inverted(f, o.lo, o.hi)) return false;
 			if (p.op === 'overlaps')
 				return below(r.lo, o.hi) && below(o.lo, r.hi) && r.lo !== r.hi && o.lo !== o.hi;
+			// a bound in the span: the first day (start) from its start, the last day (end) up to its end; none unbounded
+			if (p.op === 'startsWithin') return o.lo <= r.lo && below(r.lo, o.hi);
+			if (p.op === 'endsWithin')
+				return r.hi !== null && o.lo < r.hi && (o.hi === null || r.hi <= o.hi);
 			return o.lo <= r.lo && (o.hi === null || (r.hi !== null && r.hi <= o.hi));
 		}
 		case 'geo': {

@@ -64,7 +64,7 @@ export type Pred =
 	| {
 			readonly t: 'period';
 			readonly field: string;
-			readonly op: 'contains' | 'overlaps' | 'within';
+			readonly op: 'contains' | 'overlaps' | 'within' | 'startsWithin' | 'endsWithin';
 			readonly arg: Arg;
 	  }
 	| {

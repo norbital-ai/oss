@@ -496,6 +496,12 @@
 							class="w-auto"
 							aria-label={msg(bolt, 'view.period', 'Period')}
 							value={c.arg !== null && 'range' in c.arg ? JSON.stringify(c.arg.range) : null}
+							display={c.arg !== null && 'range' in c.arg
+								? (c.arg.label ??
+									(c.arg.range.every((bound) => typeof bound === 'string')
+										? c.arg.range.map((bound) => String(bound).slice(0, 10)).join(' – ')
+										: undefined))
+								: undefined}
 							onChange={(v) => {
 								const pick = values.find((x) => JSON.stringify(x.arg) === v);
 								setArg(

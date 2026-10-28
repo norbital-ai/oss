@@ -70,7 +70,7 @@ model and section; a section holding a field with an error opens itself.
 	import { fork } from '../effect/index.js';
 	import { contentMotion } from './content-motion.js';
 	import Icon from '@iconify/svelte';
-	import { setContext } from 'svelte';
+	import { setContext, tick } from 'svelte';
 	import Tooltip from '../primitives/tooltip/tooltip.svelte';
 	import { cn, useControls } from '../primitives/utils.js';
 	import { useModelKey } from '../model/context.js';
@@ -119,11 +119,35 @@ model and section; a section holding a field with an error opens itself.
 			[...form.errors.keys()].some((k) => fields.has(k) || fields.has(k.split('.')[0]!))
 	);
 	const shown = $derived(!canCollapse || open || invalid);
+	let body = $state<HTMLElement | null>(null);
+	/** Opening grows and fades the body in; closing hides it at once, so `aria-expanded` and `hidden` follow the click. */
+	function grow() {
+		const target = body;
+		if (
+			target == null ||
+			target.hidden ||
+			document.hidden ||
+			typeof target.animate !== 'function' ||
+			window.matchMedia('(prefers-reduced-motion: reduce)').matches
+		)
+			return;
+		const growing = target.animate(
+			[
+				{ height: '0px', opacity: 0, overflow: 'clip' },
+				{ height: `${target.scrollHeight}px`, opacity: 1, overflow: 'clip' }
+			],
+			{ duration: 180, easing: 'cubic-bezier(.2,.8,.2,1)' }
+		);
+		// a paused timeline would hold the first frame: the body shows whole on time regardless
+		setTimeout(() => growing.cancel(), 240);
+	}
 	function toggle() {
-		open = !shown;
+		const opening = !shown;
+		open = opening;
+		if (opening) void tick().then(grow);
 		fork(
 			Effect.try({
-				try: () => localStorage.setItem(key, open ? '1' : '0'),
+				try: () => localStorage.setItem(key, opening ? '1' : '0'),
 				catch: (cause) => ({ _tag: 'SectionStorageFailed' as const, cause })
 			}),
 			() => {}
@@ -197,7 +221,7 @@ model and section; a section holding a field with an error opens itself.
 		</div>
 	{/if}
 	<!-- hidden, never unmounted: a collapsed field still belongs to the form's draft and its save -->
-	<div id={`${id}-body`} hidden={!shown} use:contentMotion>
+	<div bind:this={body} id={`${id}-body`} hidden={!shown} use:contentMotion>
 		<div class={cn('grid min-w-0', editing ? 'gap-4' : 'gap-3')}>
 			{@render children()}
 		</div>

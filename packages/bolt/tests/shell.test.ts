@@ -271,6 +271,38 @@ describe('exposure (the boot catalog ui reads)', () => {
 		});
 		expect(exposure(source, auth)['jobs']?.create).not.toHaveProperty('proposalOnly');
 	});
+	it("names a file sync's required context, which a toolbar without it cannot start", () => {
+		const source: EngineManifest = {
+			...em,
+			exposures: {
+				jobs: {
+					read: { jobs: { fields: ['title'] } },
+					syncs: {
+						report: {
+							with: 'file',
+							parser: ['json'],
+							schema: { name: { kind: 'text' } },
+							context: {
+								ids: { kind: 'list', of: { kind: 'id', of: 'jobs' } },
+								kind: { kind: 'enum', values: ['A', 'B'], default: 'A' },
+								at: { kind: 'instant', optional: true }
+							},
+							write: true
+						},
+						sheet: { with: 'file', parser: ['csv'] }
+					}
+				}
+			}
+		};
+		const auth: Authority = {
+			...member([]),
+			models: { jobs: access({ read: { jobs: [{ policy: 'p', where: TRUE, fields: 'all' }] } }) }
+		};
+		expect(exposure(source, auth)['jobs']?.syncs).toEqual({
+			report: { kind: 'file', parser: ['json'], export: ['json'], context: ['ids'] },
+			sheet: { kind: 'file', parser: ['csv'], export: ['csv'] }
+		});
+	});
 	it('exposes native integration instance forms by their grants without exposing the host fence', () => {
 		const admin = exposure(em, { ...member([]), admin: true })['sys_integration'];
 		expect(admin).toMatchObject({

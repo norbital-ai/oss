@@ -18,7 +18,7 @@
 //
 // No fallback (owner): a System 1 failure, or nothing chosen, applies nothing. The whole answers within
 // `FILTER_DEADLINE_MS`. Sorting is by an own sortable field or, one hop through an exposed one-relation, a target field.
-import { Clock, Effect, Equal, Result, Schema } from 'effect';
+import { Clock, Effect, Equal, Predicate, Result, Schema } from 'effect';
 import { encodeWire } from '@norbital-ai/std/wire';
 import { Ai } from '../ports.ts';
 import { Decisions, Manifest, Reads, type DecisionsShape, type ReadsShape } from '../services.ts';
@@ -204,6 +204,8 @@ export type Operator =
 	| 'contains'
 	| 'overlaps'
 	| 'within'
+	| 'startsWithin'
+	| 'endsWithin'
 	| 'near';
 export type Op = {
 	op: Operator;
@@ -212,6 +214,8 @@ export type Op = {
 /** One field: its operators and values. */
 type Field = {
 	label: string;
+	/** The field's declared help: what it means, in words a description may use ("when the person joined"). */
+	hint?: string;
 	path: readonly FilterStep[];
 	kind: string;
 	ops: readonly Op[];
@@ -597,7 +601,9 @@ export const OPS_BY_KIND: Readonly<Record<string, readonly Op[]>> = {
 	period: fieldOps([
 		['contains', 'in force on'],
 		['overlaps', 'overlaps'],
-		['within', 'is within']
+		['within', 'is within'],
+		['startsWithin', 'starts within'],
+		['endsWithin', 'ends within']
 	]),
 	json: fieldOps([['contains', 'contains']]),
 	point: [],
@@ -725,6 +731,13 @@ const SCALAR_OPERATORS: Readonly<Record<string, (value: Json) => Json | undefine
 		])
 	)
 };
+/** The last day of a half-open span ending at `hi`: a date's day before, a time variable's `- days(1)`. */
+const dayBefore = (hi: Json): Json =>
+	typeof hi === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(hi)
+		? new Date(Date.parse(`${hi}T00:00:00Z`) - 86_400_000).toISOString().slice(0, 10)
+		: Predicate.isObject(hi) && typeof hi['var'] === 'string'
+			? { var: `${hi['var']} - days(1)` }
+			: hi;
 export const ARGUMENT_OPERATORS = {
 	lit: (op: string, value: Json): Json | undefined => SCALAR_OPERATORS[op]?.(value),
 	list: (op: string, value: readonly Json[]): Json | undefined =>
@@ -734,8 +747,11 @@ export const ARGUMENT_OPERATORS = {
 			during: { gte: lo, lt: hi },
 			eq: { gte: lo, lt: hi },
 			between: { gte: lo, lte: hi },
-			overlaps: { overlaps: { from: lo, to: hi } },
-			within: { within: { from: lo, to: hi } },
+			// a span is half-open; a date period's `to` is its last day
+			overlaps: { overlaps: { from: lo, to: dayBefore(hi) } },
+			within: { within: { from: lo, to: dayBefore(hi) } },
+			startsWithin: { startsWithin: { from: lo, to: dayBefore(hi) } },
+			endsWithin: { endsWithin: { from: lo, to: dayBefore(hi) } },
 			lt: { lt: lo },
 			lte: { lt: hi },
 			gt: { gte: hi },
@@ -915,6 +931,11 @@ export function makeFilterDescribe(cfg: FilterDescribeConfig) {
 								: `${sortFrom}.${f.name}`;
 					out.push({
 						label,
+						...(system
+							? { hint: 'when this record was entered in the workspace, not a business date' }
+							: s?.help === undefined
+								? {}
+								: { hint: s.help }),
 						path: [...steps, { k: 'field', name: f.name }],
 						kind: f.kind,
 						...o,
@@ -1546,9 +1567,15 @@ export function makeFilterDescribe(cfg: FilterDescribeConfig) {
 					f.values.length > 0
 						? 0.5
 						: 0;
+				// a word of its help names it half as strongly as one of its label
+				const hint = (f.hint ?? '')
+					.toLowerCase()
+					.split(/[^a-z0-9]+/)
+					.filter((x) => x.length > 3);
 				return [
 					f,
 					ws.filter((w) => label.some((x) => akin(w, x))).length +
+						ws.filter((w) => hint.some((x) => akin(w, x))).length / 2 +
 						(f.found !== undefined ? 1 : 0) +
 						(declared ? 1 : 0) +
 						(candidate ? 0.25 : 0) +
@@ -1736,7 +1763,7 @@ export function makeFilterDescribe(cfg: FilterDescribeConfig) {
 		asked.forEach(({ f, conds }, n) => {
 			questions[`f${n + 1}`] = {
 				type: 'choice',
-				instructions: `Which condition does the description state on ${f.label}?${f.found === undefined ? '' : f.kind === 'record' ? ` Its words match these ${f.label} records: ${f.found.join('; ')}.` : ` Records hold its words: ${f.found.join('; ')}.`}`,
+				instructions: `Which condition does the description state on ${f.label}?${f.hint === undefined ? '' : ` (${f.label}: ${f.hint})`}${f.found === undefined ? '' : f.kind === 'record' ? ` Its words match these ${f.label} records: ${f.found.join('; ')}.` : ` Records hold its words: ${f.found.join('; ')}.`}`,
 				criteria: {
 					[NO]: `it states no condition on ${f.label}`,
 					...own(conds.map((c) => c.label))

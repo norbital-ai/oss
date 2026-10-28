@@ -5,7 +5,7 @@ import { Refusal } from '../../src/decl/errors.ts';
 import { Decimal } from '@norbital-ai/std/decimal';
 import { automation, model, policy } from '../../src/index.ts';
 import type { Id, InputOf, Masked, Row, Where } from '../../src/index.ts';
-import type { StoredRow } from '../../src/decl/names.ts';
+import type { RowState, StoredRow } from '../../src/decl/names.ts';
 import * as rt from './fixture/runtime.ts';
 import * as m from './fixture/models.ts';
 import './registry.ts';
@@ -196,7 +196,7 @@ model('orders', {
 			is<
 				Eq<
 					(typeof selected.orders.rows)[number],
-					{ readonly id: Id<'orders'>; readonly number: string }
+					{ readonly id: Id<'orders'>; readonly number: string } & RowState
 				>
 			>();
 			return inputs;

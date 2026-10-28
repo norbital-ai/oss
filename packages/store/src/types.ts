@@ -578,6 +578,10 @@ type ScalarKindOps<K, X extends Operands> = K extends { kind: 'text' | 'enum'; m
 				readonly contains?: Literal<{ kind: K extends { of: 'date' } ? 'date' : 'instant' }>;
 				readonly overlaps?: PeriodArg<K>;
 				readonly within?: PeriodArg<K>;
+				/** The period's first day (start instant) falls in this span: "joined in January". */
+				readonly startsWithin?: PeriodArg<K>;
+				/** The period's last day (end instant) falls in this span; an open-ended period never does. */
+				readonly endsWithin?: PeriodArg<K>;
 				readonly isNull?: boolean;
 			}
 		: K extends { kind: 'point' }
