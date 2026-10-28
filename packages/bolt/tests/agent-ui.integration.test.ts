@@ -8,7 +8,7 @@ import { Context, Effect, Layer, Option, Result, Schema, Stream } from 'effect';
 import { Ai } from '../src/engine/ports.ts';
 import { Port } from '../src/engine/port.ts';
 import { Agents, Conversations } from '../src/engine/services.ts';
-import { decodeManifest } from '../src/engine/manifest.ts';
+import { decodeProjectedManifest } from '../src/engine/manifest.ts';
 import { ActReply, AgentRow, WireError } from '../src/protocol/schema.ts';
 import { json, routeFixture } from './support/route-fixture.ts';
 import { ActRefused, actFailure } from '../src/decl/errors.ts';
@@ -21,7 +21,7 @@ import { xlsxCells, xlsxSheets } from '../src/engine/files/xlsx.ts';
 import { respondSystem1, TestWorkspace } from '../src/test/index.ts';
 
 const manifest = Result.getOrThrow(
-	decodeManifest({
+	decodeProjectedManifest({
 		workspace: {
 			tz: 'UTC',
 			locale: 'en',

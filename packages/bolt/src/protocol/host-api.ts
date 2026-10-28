@@ -1,5 +1,5 @@
 // HOST_API (D10a), `@norbital-ai/bolt/host-api`: the one surface between a host on another module graph and this release.
-// A host loads each workspace's pinned Bolt from that release's own pnpm graph, whose `effect` is another copy: an Effect,
+// A host loads each workspace's pinned Bolt from that release's own install graph, whose `effect` is another copy: an Effect,
 // Layer or service key of one copy is not one of the other. So the contract is plain: Promise + AbortSignal +
 // Schema-encoded JSON, failures included. `Request`, `Response`, `AbortSignal` and `Uint8Array` are the realm's own and
 // cross as they are; a port is a record of Promise functions. The engine's Node dependencies are ports too (the release's
@@ -57,12 +57,15 @@ import { BoltError, CODES, PHASES, storeSync } from './errors.ts';
 import type {
 	ArtifactPort,
 	Authority,
+	BrowserPort,
 	BundlerPort,
+	ConvertPort,
 	CronEntry,
 	CronFired,
-	HostPorts as EnginePorts,
+	DeadlinesPort,
+	FilesPort,
+	GeocoderPort,
 	GuestIsolatesPort,
-	HttpPort,
 	ImagesPort,
 	KeysPort,
 	LinksPort,
@@ -71,8 +74,11 @@ import type {
 	DocsPort,
 	Rows,
 	Sql,
-	TransportPort
+	WebReadPort
 } from '../engine/contracts.ts';
+import type { Facilities } from '../facilities/index.ts';
+import { isOff, off, type Off } from '../facilities/off.ts';
+import { unmet } from '../facilities/needs.ts';
 import { TenantDb, type DbBatch, type RawDb, type TenantDbShape } from '../engine/db/tenant-db.ts';
 import { auditFromAbi } from '../engine/audit.ts';
 import type { AuditPort } from './audit.ts';
@@ -80,7 +86,7 @@ import { copiedBatch, dbError } from '../engine/db/wire.ts';
 import { sha1 } from '../engine/crypto.ts';
 import { sha256 } from '@norbital-ai/store';
 import { EngineLive, type EngineServices, type EngineHost } from '../engine/host.ts';
-import { Activation, Manifest, Runs } from '../engine/services.ts';
+import { Activation, Live, Manifest, Runs } from '../engine/services.ts';
 import {
 	Ai,
 	ArtifactFiles,
@@ -96,9 +102,7 @@ import {
 	Docs,
 	Keys,
 	Logs,
-	logsFromAbi,
 	Mcp,
-	Metering,
 	Speech,
 	Transport,
 	WebRead,
@@ -107,8 +111,6 @@ import {
 import { declaredSecrets } from '../engine/manifest.ts';
 import { Secrets } from '../engine/secrets.ts';
 import { AgentHost, type AgentConfig } from '../engine/agent/index.ts';
-import { JournalEntry, RunJournal, type JournalPort } from '../engine/runs/journal.ts';
-export type { JournalEntry, JournalPort } from '../engine/runs/journal.ts';
 import { withBrowser } from '../engine/agent/browser.ts';
 import {
 	HOOKS,
@@ -149,7 +151,7 @@ export { MigrationImpact, impactLines } from './migration-impact.ts';
 import { IntegrationManager, integrationRoutes } from './integrations.ts';
 
 /** Bumped on any change a host on an older copy could misread; the host refuses a release whose `version` differs. */
-export const HOST_API_VERSION = 13;
+export const HOST_API_VERSION = 14;
 
 // ── failures (D10a) ──
 /** A `BoltError` this release raised: an engine answer. `code` stays a string on the wire (the copies' code sets may differ). */
@@ -252,50 +254,36 @@ export type ShellPorts = Pick<
 >;
 /** The agent's host parts (§5.9); the release's source (`workspace_search`) and attachments are this release's own. */
 export type AgentPorts = Pick<AgentConfig, 'draft' | 'hostTools' | 'skills' | 'documentText'>;
-/** One serving generation of an environment. */
-export type HostPorts = Pick<
-	EnginePorts,
-	| 'files'
-	| 'deadlines'
-	| 'convert'
-	| 'ai'
-	| 'speech'
-	| 'geocoder'
-	| 'web'
-	| 'browser'
-	| 'links'
-	| 'metering'
-	| 'logs'
-	| 'membership'
-	| 'audit'
-> & {
+/**
+ * One serving generation of an environment: the host's `facilities` (`@norbital-ai/bolt/facilities`) and what it serves
+ * around them. Every member is required; one the host may leave out takes `off`.
+ */
+export type HostPorts = {
+	readonly facilities: Facilities;
 	/** Rule 61: this environment's epoch (a fork's rows are never sent). */
 	readonly epoch?: string;
 	/** `<tenant>/<environment>`: the deadlines scope and the log key. */
 	readonly scope: string;
 	readonly release: Release;
-	readonly database: HostTenantDb;
 	/** The workspace's public URL with its path prefix (`https://host/acme`), no trailing slash. */
 	readonly publicUrl: string;
 	/** Rule 70: the seed pack's `start` runs, queued once on the environment's first admission. */
 	readonly start?: readonly string[];
 	/** Guest isolates, made, metered and ended by the host: their CPU is the host's to read and bound. */
 	readonly guestIsolates: GuestIsolatesPort;
-	/** §5.11.4: sealing under the tenant's secrets key, which stays the host's; absent, no declared secret has a value. */
-	readonly keys?: KeysPort;
-	/** Outbound HTTP under the host's public-network policy. */
-	readonly http?: HttpPort;
-	/** The runs' journals in the host's control store; absent, runs journal in the generation's memory. */
-	readonly journal?: JournalPort;
-	/** The confined bundler for the agent's file runs; without one, `run_js` runs inline code only. */
-	readonly bundler?: BundlerPort;
-	readonly images?: ImagesPort;
-	readonly mcp?: McpPort;
+	readonly deadlines: DeadlinesPort;
+	readonly images: ImagesPort;
 	/** This release's API reference files for the agent's `docs` tool. */
-	readonly docs?: DocsPort;
-	/** Web push for inbox notices, over the environment's database (a gone subscription is deleted there). */
-	readonly push?: (db: HostTenantDb) => TransportPort;
-	readonly identity: Pick<IdentityHost, 'mail' | 'sms' | 'phone' | 'devSink'>;
+	readonly docs: DocsPort;
+	/** The confined bundler for the agent's file runs; `off`, `run_js` runs inline code only. */
+	readonly bundler: BundlerPort | Off;
+	readonly convert: ConvertPort | Off;
+	readonly geocoder: GeocoderPort | Off;
+	readonly web: WebReadPort | Off;
+	readonly browser: BrowserPort | Off;
+	readonly mcp: McpPort | Off;
+	/** The environment's live integration links. */
+	readonly links: LinksPort | Off;
 	readonly shell: ShellPorts;
 	readonly agent: AgentPorts;
 };
@@ -303,15 +291,15 @@ export type HostPorts = Pick<
 export type BranchPorts = {
 	readonly release: Release;
 	readonly database: HostTenantDb;
-	/** The environment's durable host store, required when founder bootstrap mutates identity. */
+	/** The environment's durable host store; founder bootstrap, which mutates identity, refuses without it. */
 	readonly audit?: AuditPort;
 };
 /** An environment's integration links (§4.5): they outlive idle generations and re-enter the current one. */
 export type LinkHost = {
 	readonly release: Release;
 	readonly database: HostTenantDb;
-	/** As `HostPorts.keys`: the sealed credentials open through it. */
-	readonly keys?: KeysPort;
+	/** As `Facilities.keys`: the sealed credentials open through it. */
+	readonly keys: KeysPort;
 	/** As `HostPorts.publicUrl`: every webhook URL and the OAuth callback are under it. */
 	readonly publicUrl: string;
 	readonly providers: readonly Provider[];
@@ -375,7 +363,7 @@ export type WorkspaceBranch = {
 		/** Rule 70: a seed pack by name (`base`, `sample`), its assets into `files` when given, ready to load in steps. */
 		load(
 			pack: string,
-			options: Signal & { readonly at: string; readonly files?: EnginePorts['files'] }
+			options: Signal & { readonly at: string; readonly files?: FilesPort }
 		): Promise<PackLoad>;
 	};
 	readonly identity: {
@@ -607,55 +595,43 @@ const activation = (ports: HostPorts, artifact: Artifact) =>
 		guest: Option.some(artifact.guest),
 		start: ports.start ?? []
 	});
+/** The facilities' engine services, each member across its Promise ABI adapter; the test kit composes the same. */
+export const facilityLayers = (f: Facilities) =>
+	Layer.mergeAll(
+		auditFromAbi(f.logs.audit).pipe(Layer.provide(cryptoLayer)),
+		Logs.fromAbi(f.logs.runtime),
+		Files.fromAbi(f.storage.files),
+		Speech.fromAbi(f.intelligence.speech),
+		Ai.fromAbi(f.intelligence),
+		Keys.fromAbi(f.keys),
+		Http.fromAbi(isOff(f.ports.outbound) ? off : f.ports.outbound.http),
+		Turnstile.fromAbi(f.transactional.challenge),
+		Transport.fromAbi({
+			Mail: f.transactional.mail,
+			Sms: f.transactional.sms,
+			Push: isOff(f.transactional.push) ? off : f.transactional.push(f.storage.database)
+		})
+	);
 /** Host-provided records cross only this explicit Promise ABI adapter. */
 const portLayers = (ports: HostPorts) =>
 	Layer.mergeAll(
-		auditFromAbi(ports.audit).pipe(Layer.provide(cryptoLayer)),
-		Files.fromAbi(ports.files),
+		facilityLayers(ports.facilities),
 		Convert.fromAbi(ports.convert),
-		Speech.fromAbi(ports.speech),
 		WebRead.fromAbi(ports.web),
 		Browser.fromAbi(ports.browser),
 		Geo.fromAbi(ports.geocoder),
-		Metering.fromAbi(ports.metering),
 		DeadlinePort.fromAbi(ports.deadlines),
 		Drivers.fromAbi(ports.links),
-		Ai.fromAbi(ports.ai),
 		GuestIsolates.fromAbi(ports.guestIsolates),
-		Keys.fromAbi(ports.keys),
-		Http.fromAbi(ports.http),
 		Images.fromAbi(ports.images),
 		Docs.fromAbi(ports.docs),
 		Mcp.fromAbi(ports.mcp),
-		...(ports.bundler === undefined ? [] : [Bundler.fromAbi(ports.bundler)])
+		...(isOff(ports.bundler) ? [] : [Bundler.fromAbi(ports.bundler)])
 	);
-/** The host's run journals: a rejection the host encoded keeps its code (`journalFull`); a read is decoded once. */
-const journalLayer = (port: JournalPort) => {
-	const call = <A>(work: (signal: AbortSignal) => Promise<A>) =>
-		Effect.tryPromise({
-			try: work,
-			catch: (error) =>
-				isFailure(error)
-					? BoltError.make(isCode(error.code) ? error.code : 'internal', error.phase, error.message)
-					: BoltError.make('upstream', 'facility', `the run journal failed: ${String(error)}`)
-		});
-	const entries = Schema.decodeUnknownEffect(Schema.Array(JournalEntry));
-	return Layer.succeed(RunJournal, {
-		read: (run) =>
-			call((signal) => port.read(run, signal)).pipe(
-				Effect.flatMap((rows) =>
-					entries(rows).pipe(
-						Effect.mapError((error) =>
-							BoltError.make('corrupt', 'facility', `the run journal answered: ${error.message}`)
-						)
-					)
-				)
-			),
-		write: (run, entry) => call((signal) => port.write(run, entry, signal)),
-		clear: (run) => call((signal) => port.clear(run, signal))
-	});
-};
-const identityLayer = (publicUrl: string, identity: HostPorts['identity']) =>
+const identityLayer = (
+	publicUrl: string,
+	identity: Pick<IdentityHost, 'mail' | 'sms' | 'phone'>
+) =>
 	Layer.effect(
 		HostIdentity,
 		Effect.gen(function* () {
@@ -675,7 +651,15 @@ const identityLayer = (publicUrl: string, identity: HostPorts['identity']) =>
 
 const activate = async (ports: HostPorts, options: Signal): Promise<ActiveWorkspace> => {
 	const artifact = await artifactOf(ports.release, options),
-		db = database(ports.database);
+		f = ports.facilities,
+		db = database(f.storage.database);
+	const missing = unmet(artifact.manifest.needs, f);
+	if (missing.length > 0)
+		throw BoltError.make(
+			'unavailable',
+			'admission',
+			`the bundle needs ${missing.join(', ')}, which this host leaves off`
+		);
 	const at = await inRelease(
 		ports.release,
 		readApplied(db).pipe(
@@ -697,13 +681,6 @@ const activate = async (ports: HostPorts, options: Signal): Promise<ActiveWorksp
 		Layer.succeed(TenantDb, db),
 		activation(ports, artifact),
 		portLayers(ports),
-		Transport.fromAbi({
-			Mail: ports.identity.mail,
-			Sms: ports.identity.sms,
-			...(ports.push === undefined ? {} : { Push: ports.push(ports.database) })
-		}),
-		...(ports.logs === undefined ? [] : [Layer.succeed(Logs, logsFromAbi(ports.logs))]),
-		...(ports.journal === undefined ? [] : [journalLayer(ports.journal)]),
 		Layer.effect(
 			AgentHost,
 			Effect.flatMap(Effect.all([workspaceFiles(ROOT), skillFiles(ROOT)]), ([workspace, skills]) =>
@@ -721,19 +698,29 @@ const activate = async (ports: HostPorts, options: Signal): Promise<ActiveWorksp
 	const shell = ShellRoutes.pipe(
 		Layer.provideMerge(
 			Layer.mergeAll(
-				identityLayer(ports.publicUrl, ports.identity),
+				identityLayer(ports.publicUrl, {
+					mail: f.transactional.mail,
+					...(isOff(f.transactional.sms) ? {} : { sms: f.transactional.sms }),
+					...(isOff(f.transactional.phone) ? {} : { phone: f.transactional.phone })
+				}),
 				Layer.succeed(ShellConfig, {
 					...ports.shell,
 					publicUrl: ports.publicUrl,
 					secure: ports.publicUrl.startsWith('https:')
 				}),
-				Turnstile.unavailable,
 				RateLimits.layer
 			).pipe(Layer.provideMerge(engine))
 		)
 	);
 	const runtime = ManagedRuntime.make(
-		Layer.merge(BoltHostLive, publicPages(artifact)).pipe(
+		Layer.mergeAll(
+			BoltHostLive,
+			publicPages(artifact),
+			// "release changed": a closing generation tells its open pages; they reload onto the serving release
+			Layer.effectDiscard(
+				Effect.addFinalizer(() => Effect.flatMap(Live, (live) => live.close(ports.release.id)))
+			)
+		).pipe(
 			Layer.provideMerge(shell),
 			Layer.provideMerge(logging),
 			Layer.provideMerge(
@@ -854,8 +841,15 @@ const branch = async (ports: BranchPorts, options: Signal): Promise<WorkspaceBra
 		identity: {
 			capture: ({ signal }) => run(captureIdentity(db), signal),
 			restore: (snapshot, { signal }) => run(restoreIdentity(db, m, snapshot), signal),
-			founder: (address, { signal, at }) =>
-				run(
+			founder: (address, { signal, at }) => {
+				const audit = ports.audit;
+				if (audit === undefined)
+					return guard(() =>
+						Promise.reject(
+							BoltError.make('unavailable', 'admission', 'founder bootstrap needs the audit store')
+						)
+					);
+				return run(
 					Effect.gen(function* (): Effect.fn.Return<FounderAnswer, EngineError, Crypto.Crypto> {
 						const identity = yield* makeIdentityHost({
 							db,
@@ -874,9 +868,10 @@ const branch = async (ports: BranchPorts, options: Signal): Promise<WorkspaceBra
 								} satisfies FounderAnswer)
 							)
 						);
-					}).pipe(Effect.provide(auditFromAbi(ports.audit))),
+					}).pipe(Effect.provide(auditFromAbi(audit))),
 					signal
-				)
+				);
+			}
 		},
 		directory: {
 			memberOf: (person, { signal }) => run(people.memberOf(person), signal),

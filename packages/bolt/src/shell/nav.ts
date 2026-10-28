@@ -78,20 +78,21 @@ export function crossSite(request: Request, publicUrl: string): boolean {
 export const VISITOR_APP = 'Bolt-App';
 export const SHELL = `${BOLT}/shell`;
 /** The browser's base path: the host names it in `<meta name="bolt-base">` when the workspace is served under a path (`/acme`). */
-export const BASE =
+export const base = (): string =>
 	typeof document === 'undefined'
 		? ''
 		: (document.querySelector('meta[name="bolt-base"]')?.getAttribute('content') ?? '');
 /** The browser URL of a workspace path (`/inbox` → `/acme/inbox`); anything else as it is. */
 export const based = (path: string): string =>
-	path.startsWith('/') && !path.startsWith('//') ? `${BASE}${path}` : path;
+	path.startsWith('/') && !path.startsWith('//') ? `${base()}${path}` : path;
 /** A browser URL as the workspace names it (`/acme/inbox` → `/inbox`), or `null` for one outside the workspace. */
 export function logical(u: string | URL): URL | null {
 	const x = new URL(u, location.href);
 	if (x.origin !== location.origin) return null;
-	if (BASE === '') return x;
-	if (x.pathname !== BASE && !x.pathname.startsWith(`${BASE}/`)) return null;
-	x.pathname = x.pathname.slice(BASE.length) || '/';
+	const at = base();
+	if (at === '') return x;
+	if (x.pathname !== at && !x.pathname.startsWith(`${at}/`)) return null;
+	x.pathname = x.pathname.slice(at.length) || '/';
 	return x;
 }
 

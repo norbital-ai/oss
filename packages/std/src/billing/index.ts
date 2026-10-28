@@ -1,7 +1,5 @@
 // repository-health:allow SEM_PARALLEL -- index is the barrel over rate-card and schemas; the public surface, not a second implementation.
 import type {
-	BillingCatalogue,
-	BillingCataloguePlan,
 	BillingCataloguePrice,
 	BillingCatalogueProduct
 } from './schemas.js';
@@ -50,14 +48,6 @@ export const USAGE_METER_IDS = {
 	disc: 'bolt_disc_gb_hours_v1',
 	files: 'bolt_files_gb_hours_v1',
 	ai: AI_USAGE_METER_ID
-} as const;
-
-/** The unit each meter counts in (milliseconds, micro-GB-hours, micro-SGD). */
-export const USAGE_METER_UNITS = {
-	compute: 'millisecond',
-	disc: 'micro-GB-hour',
-	files: 'micro-GB-hour',
-	ai: 'micro-SGD'
 } as const;
 
 /**
@@ -220,16 +210,6 @@ export function calculateCatalogueMeterCostSgdMicros(meterId: string, quantity: 
 	}
 	return Math.round(quantity * Number(price.unitAmountDecimal) * 10_000);
 }
-
-/** Every plan of the current catalogue. */
-export const LATEST_CATALOGUE_PLANS = LATEST_CATALOGUE_PRODUCTS[0]
-	.plans as readonly BillingCataloguePlan[];
-
-/** The current billing catalogue, as hosts push it to Stripe. */
-export const LATEST_CATALOGUE = {
-	currency: BILLING_CURRENCY,
-	products: LATEST_CATALOGUE_PRODUCTS
-} as const satisfies BillingCatalogue;
 
 export {
 	AI_SGD_PER_PROVIDER_USD,

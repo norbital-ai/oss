@@ -6,29 +6,11 @@ import { vi } from 'vitest';
 import type { KindsHost } from '../src/kinds/context.ts';
 import type { ToolbarItem } from '../src/model/ViewToolbar.svelte';
 import { browser, required, textOf, viewFixture, type ViewScript } from './view-fixture.ts';
-import { element } from './elements.ts';
-
-// The ⚡ menu's standard rows come from the model's exposure alone; a page's own rows come from `toolbar.actions`.
-// The in-app confirmation is a queue the test answers (see board-selection.test.ts).
-const dialog = vi.hoisted(() => ({
-	pending: [] as { title: string; body: string | undefined; answer: (ok: boolean) => void }[]
-}));
-vi.mock('../src/primitives/dialog/confirm.ts', async () => {
-	const { Effect } = await import('effect');
-	return {
-		confirmAction: (options: { title: string; body?: string }) =>
-			Effect.callback<boolean>((resume) => {
-				dialog.pending.push({
-					title: options.title,
-					body: options.body,
-					answer: (ok) => resume(Effect.succeed(ok))
-				});
-			})
-	};
-});
+import { confirmDialog, element } from './elements.ts';
 
 const { flushSync, mount, tick, unmount } = await import('svelte');
 const { default: Harness } = await import('./view-harness.svelte');
+const { default: Table } = await import('../src/table/Table.svelte');
 const { toasts } = await import('../src/toast/toast.svelte.ts');
 const mounted: (() => Promise<void>)[] = [];
 const settle = async () => {
@@ -44,7 +26,6 @@ afterEach(async () => {
 	document.body.replaceChildren();
 	localStorage.clear();
 	toasts.splice(0);
-	dialog.pending.splice(0);
 });
 
 const declared: NonNullable<KindsHost['catalog']> = {
@@ -92,6 +73,7 @@ async function show({
 			catalog,
 			upload: (file: File) => Effect.succeed({ id: 'f1', name: file.name, mime: file.type }),
 			part: 'table',
+			view: Table,
 			props: {
 				of: 'jobs',
 				columns: ['name'],
@@ -219,7 +201,7 @@ it.live('bulk delete confirms, deletes each record, and reports a partial refusa
 		yield* browser(() => open(target));
 		button('delete').click();
 		yield* browser(settle);
-		const asked = required(dialog.pending.shift());
+		const asked = required(confirmDialog());
 		assert.equal(asked.title, 'Delete 2 records?');
 		assert.equal(asked.body, 'This cannot be undone.');
 		asked.answer(true);

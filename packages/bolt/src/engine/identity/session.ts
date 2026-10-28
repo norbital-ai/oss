@@ -58,7 +58,7 @@ export type PhoneVerifier = {
 	check(to: string, code: string, signal: AbortSignal): Promise<boolean>;
 };
 /**
- * The host's transactional messaging, its one injected messaging facility (the host picks the provider: Sinch,
+ * The host's transactional messaging, its one injected messaging facility (the host picks the provider: Bird,
  * Twilio). `email` is required; without `sms` nobody is texted an invitation, without `phone` nobody signs in by number.
  */
 export type TransactionalProvider = {

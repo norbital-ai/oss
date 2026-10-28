@@ -77,7 +77,9 @@ const runtimeFunctions = (
 		.map(([name]) => name);
 	return statements.filter((text) =>
 		changed.some((name) =>
-			new RegExp(`create\\s+or\\s+replace\\s+function\\s+(public\\.)?"?${name}"?\\s*\\(`, 'i').test(text)
+			new RegExp(`create\\s+or\\s+replace\\s+function\\s+(public\\.)?"?${name}"?\\s*\\(`, 'i').test(
+				text
+			)
 		)
 	);
 };
@@ -106,6 +108,23 @@ const definitionsOf = Effect.fn('Bolt.pristineDefinitions')(function* (script: s
 	pristineDefinitions.set(key, lines);
 	return lines;
 });
+
+/**
+ * Replayed migration prefixes by content (`prefixKeys`): each prefix's introspected definitions, and the database after
+ * the last prefix a proof replayed, so the next proof of the same history replays only the files after it.
+ * ponytail: definitions clear at 256 entries, images keep the newest 4; a watch loop and a test file prove few histories.
+ */
+const prefixLines = new Map<string, readonly string[]>();
+const prefixImages = new Map<string, Blob>();
+const prefixKeys = (files: readonly MigrationFile[]): readonly string[] =>
+	files.reduce<string[]>(
+		(keys, file) => [...keys, sha256Hex(`${keys.at(-1)}\n${file.name}\n${checksumOf(file)}`)],
+		[sha256Hex('')]
+	);
+const rememberLines = (key: string, lines: readonly string[]) => {
+	if (prefixLines.size >= 256) prefixLines.clear();
+	prefixLines.set(key, lines);
+};
 
 /** Generation leaves editable SQL on a failed proof, but never replaces a verified lock with an unproved history. */
 export const prepareMigrations = Effect.fn('Bolt.prepareMigrations')(function* (
@@ -214,26 +233,66 @@ export const prepareMigrations = Effect.fn('Bolt.prepareMigrations')(function* (
 		})
 	);
 	const cache = path.join(root, '.norbital', 'cache', 'migrations.sha256');
-	if (mode === 'verify' && (yield* fs.exists(cache)) && (yield* fs.readFileString(cache)) === key)
+	// the same inputs as the last verified proof (either mode): its replay would answer the same physical definitions
+	if (
+		options.squash === undefined &&
+		(yield* fs.exists(cache)) &&
+		(yield* fs.readFileString(cache)) === key
+	)
 		return;
 	yield* Effect.forEach(files, checkFile).pipe(Effect.mapError(fromStore));
 	const proof = yield* Effect.scoped(
 		Effect.gen(function* () {
-			const replayDb = PgliteDb.make(yield* PgliteDb.open());
+			// resume from the longest replayed prefix of this history; every shorter prefix's definitions are remembered
+			const keys = prefixKeys(files);
+			let start = 0,
+				remembered = 0;
+			for (; remembered < keys.length && prefixLines.has(keys[remembered] ?? ''); remembered++)
+				if (prefixImages.has(keys[remembered] ?? '')) start = remembered;
+			// a history whose every prefix is remembered needs no replay: its database opens only for a write after it
+			const all = remembered === keys.length;
+			const history = files.slice(start);
+			const replay = yield* Effect.cached(
+				Effect.gen(function* () {
+					const pg = yield* PgliteDb.open(prefixImages.get(keys[start] ?? ''));
+					const db = PgliteDb.make(pg);
+					if (all)
+						for (const file of history) yield* db.write({ text: executable(file), params: [] });
+					return { pg, db };
+				})
+			);
 			const inspect = { text: INTROSPECT, params: [] };
 			const physical: Record<string, string> = {};
 			const definitions: Record<string, readonly string[]> = {};
 			const prefixes = new Map<number, readonly string[]>();
-			const empty = migrationLines(yield* replayDb.rows(IntrospectRow, inspect), true, true);
-			prefixes.set(0, empty);
-			physical[''] = physicalHash(empty);
-			definitions[''] = empty;
-			for (const [index, file] of files.entries()) {
-				yield* replayDb.write({ text: executable(file), params: [] });
-				const lines = migrationLines(yield* replayDb.rows(IntrospectRow, inspect), true, true);
-				prefixes.set(index + 1, lines);
-				physical[file.name] = physicalHash(lines);
-				definitions[file.name] = lines;
+			const record = (index: number, lines: readonly string[]) => {
+				const name = index === 0 ? '' : (files[index - 1]?.name ?? '');
+				prefixes.set(index, lines);
+				physical[name] = physicalHash(lines);
+				definitions[name] = lines;
+				rememberLines(keys[index] ?? '', lines);
+			};
+			// read before recording: recording may clear the remembered definitions
+			const held = (all ? keys : keys.slice(0, start + 1)).map((key) => prefixLines.get(key));
+			for (const [index, lines] of held.entries())
+				record(
+					index,
+					lines ??
+						migrationLines(yield* (yield* replay).db.rows(IntrospectRow, inspect), true, true)
+				);
+			if (!all) {
+				const { pg, db } = yield* replay;
+				for (const [index, file] of history.entries()) {
+					yield* db.write({ text: executable(file), params: [] });
+					record(
+						start + index + 1,
+						migrationLines(yield* db.rows(IntrospectRow, inspect), true, true)
+					);
+				}
+				const last = keys.at(-1) ?? '';
+				prefixImages.delete(last);
+				if (prefixImages.size >= 4) prefixImages.delete(prefixImages.keys().next().value ?? '');
+				prefixImages.set(last, yield* PgliteDb.dump(pg));
 			}
 			// One script, not one transaction per statement: the declared schema is hundreds of statements.
 			const expected = yield* definitionsOf(
@@ -241,7 +300,7 @@ export const prepareMigrations = Effect.fn('Bolt.prepareMigrations')(function* (
 					.map((text) => `${text.trim().replace(/;$/, '')};`)
 					.join('\n')
 			);
-			let actual = migrationLines(yield* replayDb.rows(IntrospectRow, inspect), true, true);
+			let actual = prefixes.get(files.length) ?? [];
 			const bodies =
 				mode === 'generate' && heldLines !== undefined
 					? runtimeFunctions(heldLines, actual, expected, [
@@ -264,8 +323,9 @@ export const prepareMigrations = Effect.fn('Bolt.prepareMigrations')(function* (
 				yield* checkFile(file).pipe(Effect.mapError(fromStore));
 				yield* fs.writeFileString(path.join(directory, name), file.sql);
 				files.push(file);
-				yield* replayDb.write({ text: file.sql, params: [] });
-				actual = migrationLines(yield* replayDb.rows(IntrospectRow, inspect), true, true);
+				const { db } = yield* replay;
+				yield* db.write({ text: file.sql, params: [] });
+				actual = migrationLines(yield* db.rows(IntrospectRow, inspect), true, true);
 				prefixes.set(files.length, actual);
 				physical[name] = physicalHash(actual);
 				definitions[name] = actual;
@@ -312,7 +372,7 @@ export const prepareMigrations = Effect.fn('Bolt.prepareMigrations')(function* (
 				if (
 					complete &&
 					tables.length > 0 &&
-					(yield* replayDb.value(Schema.Boolean, {
+					(yield* (yield* replay).db.value(Schema.Boolean, {
 						text: `select ${tables.map((table) => `exists(select 1 from ${q(table)})`).join(' or ')}`,
 						params: []
 					}))

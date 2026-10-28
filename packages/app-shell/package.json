@@ -35,8 +35,7 @@
 	"scripts": {
 		"build": "node ../../scripts/build-package.ts sh -c \"tsc -p tsconfig.json --outDir {} && vite build --config runtime/vite.config.ts --outDir {}/runtime\"",
 		"prepack": "pnpm exec turbo run build --filter=@norbital-ai/app-shell",
-		"lint": "tsc -p tsconfig.json --noEmit && tsc -p runtime/tsconfig.json --noEmit && tsc -p tests/tsconfig.json --noEmit",
-		"test": "vitest run"
+		"lint": "tsc -p tsconfig.json --noEmit && tsc -p runtime/tsconfig.json --noEmit && tsc -p tests/tsconfig.json --noEmit"
 	},
 	"dependencies": {
 		"@effect/platform-node": "catalog:",
@@ -49,10 +48,8 @@
 		"@capacitor/core": "8.5.2",
 		"@capacitor/keyboard": "8.0.6",
 		"@capacitor/local-notifications": "8.3.1",
-		"@effect/vitest": "catalog:",
 		"@types/node": "^26.6.5",
 		"typescript": "catalog:",
-		"vite": "catalog:",
-		"vitest": "5.0.5"
+		"vite": "catalog:"
 	}
 }

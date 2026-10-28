@@ -2,7 +2,6 @@
 **/.svelte-kit/
 **/.svelte-check/
 **/build/
-**/.generated/
 
 # Store serializes and verifies these migration proofs; retain the generator's bytes.
 **/migrations/snapshot.json
@@ -13,7 +12,6 @@ packages/bolt/src/node/audit/**/physical.json
 # Tooling / CI
 .turbo/
 .tmp/
-**/.devtools/
 **/test-results/
 **/playwright-report/
 **/coverage/
@@ -36,6 +34,3 @@ pnpm-workspace.yaml
 Thumbs.db
 
 vite.config.js*
-
-# The authoring reference is the built declarations verbatim; scripts/authoring-reference.mjs writes it.
-**/*.generated.ts

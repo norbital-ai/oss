@@ -1,17 +1,24 @@
 #!/usr/bin/env -S node --no-node-snapshot
 /// <reference types="node" />
-import { Effect, Console, Option, Schema } from 'effect';
+import { Effect, Console, Option } from 'effect';
 import { Argument, Command, Flag } from 'effect/cli';
 import * as NodeRuntime from '@effect/platform-node/NodeRuntime';
 import * as NodeServices from '@effect/platform-node/NodeServices';
-import { realpathSync, statSync } from 'node:fs';
-import { createRequire } from 'node:module';
+import { realpathSync, statSync, watch } from 'node:fs';
 import { join, resolve } from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { fileURLToPath } from 'node:url';
 import type { CheckDiagnostic } from '../protocol/diagnostic.ts';
-import { dev } from './dev.ts';
+import { dev, tethered } from './dev.ts';
+import { hostFileOf } from '../node/host.ts';
 import { templatesCommand } from './templates.ts';
-import { AuthorErrors, buildWorkspace, ToolFailure, type Log } from './build.ts';
+import {
+	AuthorErrors,
+	buildWorkspace,
+	ToolFailure,
+	watchWorkspace,
+	type Built,
+	type Log
+} from './build.ts';
 import { testWorkspace } from './test.ts';
 
 const print = (errors: readonly CheckDiagnostic[]) =>
@@ -65,6 +72,27 @@ const syncCommand = Command.make('sync', { dir, json }, ({ dir, json }) =>
 		yield* Console.log(`synced (${result.stages.join(' → ')})`);
 	}).pipe(Effect.catchTag('AuthorErrors', reported(json)))
 );
+/**
+ * `bolt dev` tethered, the realm's per-template process (`env start`): a first build, then one per settled edit, each
+ * handed to the page dev server (`tethered`); a failure never ends it.
+ */
+const watching = (dir: string, bank: Option.Option<string>) =>
+	Effect.scoped(
+		Effect.gen(function* () {
+			const root = resolve(dir);
+			const options = { ...(Option.isNone(bank) ? {} : { bank: bank.value }), log, spaServed: true };
+			const serve = yield* tethered(root, log);
+			const first = yield* buildWorkspace(root, options).pipe(
+				Effect.map((first): Built | undefined => first),
+				Effect.catchTag('AuthorErrors', (error) => print(error.errors).pipe(Effect.as(undefined)))
+			);
+			if (first !== undefined) yield* serve(first);
+			yield* watchWorkspace(root, options, serve, first).pipe(
+				// the realm's overlay replaced this workspace's packages: exit, and the realm restarts this process on the new Bolt
+				Effect.raceFirst(overlaid(root))
+			);
+		})
+	);
 const buildCommand = Command.make(
 	'build',
 	{
@@ -79,33 +107,60 @@ const buildCommand = Command.make(
 		)
 	},
 	({ dir, bank, json, squash }) =>
-		buildWorkspace(resolve(dir), {
-			...(Option.isNone(squash) ? {} : { squash: squash.value }),
-			...(Option.isNone(bank) ? {} : { bank: bank.value }),
-			log
-		}).pipe(Effect.catchTag('AuthorErrors', reported(json)))
+		Effect.gen(function* () {
+			yield* buildWorkspace(resolve(dir), {
+				...(Option.isNone(squash) ? {} : { squash: squash.value }),
+				...(Option.isNone(bank) ? {} : { bank: bank.value }),
+				log
+			}).pipe(Effect.catchTag('AuthorErrors', reported(json)));
+		})
 );
+/** Settles once `env link` writes `.norbital/overlay.stamp`: the installed first-party packages changed. */
+const overlaid = (root: string) =>
+	Effect.callback<void>((resume) => {
+		const watcher = watch(join(root, '.norbital'), (_event, file) => {
+			if (file === 'overlay.stamp') resume(Effect.void);
+		});
+		return Effect.sync(() => watcher.close());
+	});
+/**
+ * `bolt dev`: the workspace's `norbital.host.ts` (or `--host=<file>`) serves it untethered with that file's Facilities,
+ * pages hot reloaded from source. Neither, or `--tethered` (which ignores any host file): tethered, it builds on save,
+ * serves its pages from source for local Colony to proxy, and Colony serves the rest of each build.
+ */
 const devCommand = Command.make(
 	'dev',
 	{
 		dir,
 		bank,
 		port: Flag.Int('port').pipe(Flag.withDefault(5180)),
-		seed: Flag.String('seed').pipe(Flag.withDefault('base')),
-		founder: Flag.String('founder').pipe(Flag.optional),
-		db: Flag.String('db').pipe(Flag.optional)
+		host: Flag.String('host').pipe(
+			Flag.optional,
+			Flag.withDescription('serve untethered with this host file (default: the workspace’s norbital.host.ts)')
+		),
+		tethered: Flag.Boolean('tethered').pipe(
+			Flag.withDefault(false),
+			Flag.withDescription('build for local Colony, ignoring any norbital.host.ts')
+		)
 	},
 	(options) =>
-		Effect.scoped(
-			dev(resolve(options.dir), {
-				port: options.port,
-				seed: options.seed,
-				...(Option.isNone(options.bank) ? {} : { bank: options.bank.value }),
-				...(Option.isNone(options.founder) ? {} : { founder: options.founder.value }),
-				...(Option.isNone(options.db) ? {} : { db: options.db.value }),
-				log
-			}).pipe(Effect.andThen(Effect.never))
-		)
+		Effect.gen(function* () {
+			const root = resolve(options.dir);
+			if (options.tethered) {
+				if (Option.isSome(options.host))
+					return yield* Effect.fail(new ToolFailure({ message: 'bolt dev: --tethered and --host exclude each other' }));
+				return yield* watching(options.dir, options.bank);
+			}
+			const hostFile = yield* hostFileOf(root, Option.getOrUndefined(options.host));
+			if (Option.isNone(hostFile)) return yield* watching(options.dir, options.bank);
+			yield* Effect.scoped(
+				dev(root, hostFile.value, {
+					port: options.port,
+					...(Option.isNone(options.bank) ? {} : { bank: options.bank.value }),
+					log
+				}).pipe(Effect.andThen(Effect.never))
+			);
+		})
 );
 const testCommand = Command.make(
 	'test',
@@ -119,64 +174,16 @@ const testCommand = Command.make(
 						message: `bolt test: ${dir} is a file. Pass the workspace first and the test filter after it, e.g. \`bolt test . tests/${dir.split('/').pop()}\``
 					})
 				);
-			// the template standalone: its tests run against the build of its own source and public packs, never a bank's
-			// sample or a build left from before
-			const nodeEnv = process.env['NODE_ENV'];
-			yield* buildWorkspace(resolve(dir));
-			// Vite's build sets NODE_ENV=production when it is unset; the suite runs under Vitest's own
-			if (nodeEnv === undefined) delete process.env['NODE_ENV'];
+			// no build: the kit checks the source and builds its test pack once per source hash, as checkpoints
 			yield* testWorkspace(resolve(dir), args);
 		})
 );
-const ServerModule = Schema.declare<Pick<typeof import('@norbital-ai/bolt-server'), 'main'>>(
-	(input): input is Pick<typeof import('@norbital-ai/bolt-server'), 'main'> =>
-		typeof input === 'object' &&
-		input !== null &&
-		'main' in input &&
-		typeof input.main === 'function'
-);
-const startCommand = Command.make(
-	'start',
-	{
-		port: Flag.Int('port').pipe(Flag.optional),
-		args: Argument.variadic(Argument.String('args')),
-		seed: Flag.String('seed').pipe(Flag.optional),
-		founder: Flag.String('founder').pipe(Flag.optional),
-		trustProxy: Flag.String('trust-proxy').pipe(Flag.optional),
-		dev: Flag.Boolean('dev').pipe(Flag.withDefault(false))
-	},
-	(options) =>
-		Effect.gen(function* () {
-			const server = yield* Effect.tryPromise({
-				try: () =>
-					import(
-						pathToFileURL(
-							createRequire(join(process.cwd(), 'package.json')).resolve('@norbital-ai/bolt-server')
-						).href
-					),
-				catch: (cause) =>
-					new ToolFailure({ message: '@norbital-ai/bolt-server is not installed', cause })
-			}).pipe(
-				Effect.flatMap(Schema.decodeUnknownEffect(ServerModule)),
-				Effect.mapError((cause) =>
-					cause instanceof ToolFailure
-						? cause
-						: new ToolFailure({ message: 'The Bolt server entry is invalid.', cause })
-				)
-			);
-			const argv = [
-				...(Option.isNone(options.port) ? [] : [`--port=${options.port.value}`]),
-				...(Option.isNone(options.seed) ? [] : [`--seed=${options.seed.value}`]),
-				...(Option.isNone(options.founder) ? [] : [`--founder=${options.founder.value}`]),
-				...(Option.isNone(options.trustProxy) ? [] : [`--trust-proxy=${options.trustProxy.value}`]),
-				...(options.dev ? ['--dev'] : []),
-				...options.args
-			];
-			const code = yield* server.main(argv);
-			if (code !== 0)
-				return yield* Effect.fail(new ToolFailure({ message: `bolt start exited ${code}` }));
-		})
-);
+const testArgv = (rest: readonly string[]): string[] => {
+	const [first, ...more] = rest;
+	return first === undefined || first.startsWith('-')
+		? ['test', '.', '--', ...rest.filter((a) => a !== '--')]
+		: ['test', first, '--', ...more.filter((a) => a !== '--')];
+};
 export const boltCommand = Command.make('bolt').pipe(
 	Command.withSubcommands([
 		devCommand,
@@ -184,13 +191,13 @@ export const boltCommand = Command.make('bolt').pipe(
 		checkCommand,
 		buildCommand,
 		testCommand,
-		startCommand,
 		templatesCommand
 	])
 );
 export const main = (argv: readonly string[]) =>
 	Command.runWith(boltCommand, { version: '1.0.0' })(
-		argv[0] === 'test' && argv[1] === '--' ? ['test', '.', ...argv.slice(1)] : argv
+		// `bolt test [dir] [vitest args…]`: everything after the workspace directory is Vitest's
+		argv[0] === 'test' ? testArgv(argv.slice(1)) : argv
 	).pipe(
 		Effect.as(0),
 		Effect.catchTag('AuthorErrors', (error) => print(error.errors).pipe(Effect.as(1))),

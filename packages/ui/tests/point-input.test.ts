@@ -4,13 +4,19 @@ import { it as test } from '@effect/vitest';
 import { element } from './elements.ts';
 const { flushSync, mount, unmount } = await import('svelte');
 const { default: Harness } = await import('./view-harness.svelte');
+const { default: PointInput } = await import('../src/kinds/point-input.svelte');
 
 test('point search mounts only when opened', async () => {
 	const target = document.createElement('div');
 	document.body.append(target);
 	const app = mount(Harness, {
 		target,
-		props: { catalog: {}, part: 'point', props: { value: null, onChange: () => {}, map: false } }
+		props: {
+			catalog: {},
+			part: 'point',
+			view: PointInput,
+			props: { value: null, onChange: () => {}, map: false }
+		}
 	});
 	try {
 		flushSync();

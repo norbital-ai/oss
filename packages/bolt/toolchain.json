@@ -1,0 +1,27 @@
+{
+	"$comment": "The toolchain of a template pinned to this Bolt release, published with it: `bolt templates lock` writes the set of each template's own pinned Bolt into its package.json. `firstParty` names packages pinned to this Bolt's own version.",
+	"firstParty": {
+		"dependencies": [
+			"@norbital-ai/std",
+			"@norbital-ai/ui"
+		],
+		"devDependencies": []
+	},
+	"dependencies": {
+		"effect": "4.0.6",
+		"svelte": "5.57.3",
+		"vite": "8.3.5"
+	},
+	"devDependencies": {
+		"@effect/vitest": "4.0.6",
+		"@sveltejs/vite-plugin-svelte": "7.3.1",
+		"@types/node": "26.6.5",
+		"@typescript/native": "npm:typescript@7.0.2",
+		"happy-dom": "20.14.5",
+		"prettier": "3.9.9",
+		"prettier-plugin-svelte": "4.1.1",
+		"svelte2tsx": "0.7.61",
+		"typescript": "6.0.3",
+		"vitest": "5.0.5"
+	}
+}

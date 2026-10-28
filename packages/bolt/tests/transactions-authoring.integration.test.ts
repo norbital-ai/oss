@@ -8,7 +8,7 @@ import { Approvals, Callables, Writes } from '../src/engine/services.ts';
 import type { Json } from '../src/decl/values.ts';
 import { TestWorkspace } from '../src/test/index.ts';
 import { manifest as base } from './engine-fixture.ts';
-import { program } from './support/guest-fixture.ts';
+import { program } from '../src/test/guest.ts';
 
 const manifest: EngineManifest = {
 	...base,

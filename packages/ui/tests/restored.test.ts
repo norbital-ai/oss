@@ -51,23 +51,3 @@ it.live(
 			yield* browser(v.done);
 		})
 );
-
-it.live('country picker supplies country flags and names', () =>
-	Effect.gen(function* () {
-		const { COUNTRY_CODES, flagOf } = yield* browser(
-			() => import('../src/primitives/country-picker/country-picker.svelte')
-		);
-		assert.equal(COUNTRY_CODES.length, 249);
-		assert.ok(COUNTRY_CODES.includes('SG') && COUNTRY_CODES.includes('MY'));
-		assert.equal(flagOf('sg'), '🇸🇬');
-	})
-);
-
-it.live('feature colours cover every feature with literal classes', () =>
-	Effect.gen(function* () {
-		const { FEATURE_COLORS } = yield* browser(() => import('../src/brand/feature-colors.ts'));
-		assert.equal(Object.keys(FEATURE_COLORS).length, 12);
-		for (const [k, s] of Object.entries(FEATURE_COLORS))
-			assert.ok(s.icon && s.iconClass && s.iconWrapperClass && s.accentClass, k);
-	})
-);

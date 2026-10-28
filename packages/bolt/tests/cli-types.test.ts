@@ -95,6 +95,5 @@ it.live(
 			// the Svelte compiler's warnings fail a check too (the type service sees types only)
 			write('src/Photo.svelte', '<img src="photo.png" />\n');
 			expect(yield* diagnostics()).toEqual(['src/Photo.svelte:1:svelte/a11y_missing_attribute']);
-		}).pipe(Effect.provide(NodeServices.layer)),
-	120_000
+		}).pipe(Effect.provide(NodeServices.layer))
 );

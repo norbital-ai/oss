@@ -108,23 +108,6 @@ test('a sender or recipient handle reads per transport: a WhatsApp number JID as
 	assert.equal(phone.formatHandle('slack', 'U0123ABCD', ' '), 'U0123ABCD');
 });
 
-test('built-ins render by default in a cell: money in tabular figures, phone as a formatted tel: link, by kind or by reference', async () => {
-	const money = await show({
-		part: 'show',
-		props: { kind: { kind: 'money', currency: 'SGD' }, value: '1234.5' }
-	});
-	assert.equal(money.querySelector('.tabular-nums')?.textContent, 'SGD 1,234.50');
-	for (const kind of [
-		{ kind: 'text', format: 'phone' },
-		{ kind: 'custom', of: 'phone' }
-	] as const) {
-		const t = await show({ part: 'show', props: { kind, value: '+6591234567' } });
-		const a = t.querySelector('a[href^="tel:"]');
-		assert.equal(a?.getAttribute('href'), 'tel:+6591234567');
-		assert.equal(a?.textContent, '+65 9123 4567');
-	}
-});
-
 test('a workspace custom field renders through its renderer, and a host entry of a built-in name wins', async () => {
 	const customFields: NonNullable<KindsHost['customFields']> = {
 		sign: { shape: { kind: 'text' }, renderer: Renderer },

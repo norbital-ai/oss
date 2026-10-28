@@ -4,7 +4,6 @@ import type { Json } from '../src/decl/values.ts';
 import type { EngineManifest } from '../src/engine/manifest.ts';
 import { act, type ActRequest } from '../src/engine/write/act.ts';
 import { restoreSource, seed } from '../src/engine/write/seed.ts';
-import { Pristine } from '../src/node/db/pglite.ts';
 import { admin, manifest as base, NOW, TODAY } from './write-fixture.ts';
 import { open } from './write-p2.fixture.ts';
 
@@ -108,5 +107,5 @@ it.effect('writes models named after Postgres types using their actual relation 
 				params: ['IMPORTED']
 			})
 		).toEqual([{ first: 'first', second: 'second' }]);
-	}).pipe(Effect.provide(Pristine.layer))
+	})
 );

@@ -13,6 +13,7 @@ const manifest = (
 	relationships: EngineManifest['relationships'],
 	policies: EngineManifest['policies'] = {}
 ): EngineManifest => ({
+	needs: [],
 	workspace: { tz: 'UTC', locale: 'en' },
 	models,
 	relationships,

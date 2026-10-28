@@ -27,5 +27,5 @@ Cross-package release contracts belong under [`release/`](./release/README.md).
 Templates are **not** authored here. They live in their own repositories —
 [`norbital-ai/templates`](https://github.com/norbital-ai/templates) for the public ones, which the
 website advertises automatically, and `norbital-ai/templates-private` for the ones it should not.
-Each repository carries its own `templates:check`, `templates:lock`, and projection tooling, and is
-the only place `refs/heads/templates/*` is published from.
+Each repository carries its own `templates:check` and `templates:lock`, and its CI is the only place
+template releases are built and uploaded from.

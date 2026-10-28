@@ -7,7 +7,7 @@ import { type EngineError } from '../errors.ts';
 import { BoltError } from '../../protocol/errors.ts';
 import { publicEnvoys } from '../manifest.ts';
 import { Agents, Manifest, Reads, Turns, type AgentCallables } from '../services.ts';
-import { Conversation, isStaff, sharedConversations, type ConversationRow } from './schema.ts';
+import { Conversation, isStaff, sharedConversations } from './schema.ts';
 import { RateWindows, chargesFor } from '../access/rate.ts';
 import { TriageService } from './triage.ts';
 import { lowerRead } from '../query/engine.ts';

@@ -1,7 +1,19 @@
 import type { Sql } from '../contracts.ts';
 import type { WriteContext } from '../schema/audit.ts';
 
-/** Private native buffers live only on the leased transaction and never retain an audit payload after commit. */
+/** The session's write buffers, created on demand by every write (and up front by a host that pools sessions). */
+export const CAPTURE_TABLES: readonly string[] = [
+	'CREATE TEMP TABLE IF NOT EXISTS bolt_write_context (token text PRIMARY KEY, context jsonb NOT NULL, fresh boolean NOT NULL DEFAULT false, request uuid, authorized uuid, answer jsonb) ON COMMIT DELETE ROWS',
+	"CREATE TEMP TABLE IF NOT EXISTS bolt_write_targets (token text NOT NULL, record_key text NOT NULL, direct boolean NOT NULL, erased boolean NOT NULL, restored int, anonymise jsonb NOT NULL DEFAULT '[]', PRIMARY KEY (token,record_key)) ON COMMIT DELETE ROWS",
+	'CREATE TEMP TABLE IF NOT EXISTS bolt_changes (seq bigint GENERATED ALWAYS AS IDENTITY, token text NOT NULL, c text NOT NULL, id text NOT NULL, revision int NOT NULL, op text NOT NULL, cause text NOT NULL, erased boolean NOT NULL, o jsonb, n jsonb) ON COMMIT DELETE ROWS',
+	'CREATE TEMP TABLE IF NOT EXISTS bolt_erased (token text NOT NULL, c text NOT NULL, id text NOT NULL, PRIMARY KEY (token,c,id)) ON COMMIT DELETE ROWS',
+	'CREATE TEMP TABLE IF NOT EXISTS bolt_origins (token text NOT NULL, c text NOT NULL, id text NOT NULL, revision int NOT NULL, op text NOT NULL, cause text NOT NULL, erased boolean NOT NULL, PRIMARY KEY (token,c,id,revision)) ON COMMIT DELETE ROWS'
+];
+
+/**
+ * Private native buffers: session temp tables created once per connection (`IF NOT EXISTS` also covers a pooler handing
+ * out another backend), emptied at every commit, so no audit payload outlives its transaction and no write pays DDL.
+ */
 export const captureStart = (
 	context: WriteContext,
 	actor: string | null,
@@ -19,42 +31,25 @@ export const captureStart = (
 		restored: restored?.[key] ?? null,
 		anonymise: anonymise[key] ?? []
 	}));
+	// two statements, two round trips: the parameterless buffers and their reset in one simple-protocol text, then the
+	// context, targets and settings in one statement
 	return [
 		{
-			text: 'CREATE TEMP TABLE IF NOT EXISTS bolt_write_context (token text PRIMARY KEY, context jsonb NOT NULL, fresh boolean NOT NULL DEFAULT false, request uuid, authorized uuid, answer jsonb) ON COMMIT DROP',
+			// an earlier act in the same transaction may have left its buffers; a plain delete, so no write pays DDL
+			text: [
+				...CAPTURE_TABLES,
+				'WITH a AS (DELETE FROM pg_temp.bolt_changes), b AS (DELETE FROM pg_temp.bolt_erased), c AS (DELETE FROM pg_temp.bolt_origins), d AS (DELETE FROM pg_temp.bolt_write_targets) DELETE FROM pg_temp.bolt_write_context'
+			].join(';\n'),
 			params: []
 		},
 		{
-			text: "CREATE TEMP TABLE IF NOT EXISTS bolt_write_targets (token text NOT NULL, record_key text NOT NULL, direct boolean NOT NULL, erased boolean NOT NULL, restored int, anonymise jsonb NOT NULL DEFAULT '[]', PRIMARY KEY (token,record_key)) ON COMMIT DROP",
-			params: []
-		},
-		{
-			text: 'CREATE TEMP TABLE IF NOT EXISTS bolt_changes (seq bigint GENERATED ALWAYS AS IDENTITY, token text NOT NULL, c text NOT NULL, id text NOT NULL, revision int NOT NULL, op text NOT NULL, cause text NOT NULL, erased boolean NOT NULL, o jsonb, n jsonb) ON COMMIT DROP',
-			params: []
-		},
-		{
-			text: 'CREATE TEMP TABLE IF NOT EXISTS bolt_erased (token text NOT NULL, c text NOT NULL, id text NOT NULL, PRIMARY KEY (token,c,id)) ON COMMIT DROP',
-			params: []
-		},
-		{
-			text: 'CREATE TEMP TABLE IF NOT EXISTS bolt_origins (token text NOT NULL, c text NOT NULL, id text NOT NULL, revision int NOT NULL, op text NOT NULL, cause text NOT NULL, erased boolean NOT NULL, PRIMARY KEY (token,c,id,revision)) ON COMMIT DROP',
-			params: []
-		},
-		{
-			text: 'TRUNCATE pg_temp.bolt_changes, pg_temp.bolt_erased, pg_temp.bolt_origins, pg_temp.bolt_write_targets, pg_temp.bolt_write_context RESTART IDENTITY',
-			params: []
-		},
-		{
-			text: 'INSERT INTO pg_temp.bolt_write_context (token,context) VALUES ($1,$2::jsonb)',
-			params: [context.token, JSON.stringify(metadata)]
-		},
-		{
-			text: 'INSERT INTO pg_temp.bolt_write_targets (token,record_key,direct,erased,restored,anonymise) SELECT $1,x.key,x.direct,x.erased,x.restored,x.anonymise FROM jsonb_to_recordset($2::jsonb) x(key text,direct boolean,erased boolean,restored int,anonymise jsonb)',
-			params: [context.token, JSON.stringify(targets)]
-		},
-		{
-			text: "SELECT set_config('bolt.write',$1,true), set_config('store.write',$2,true)",
+			text: `WITH context AS (INSERT INTO pg_temp.bolt_write_context (token,context) VALUES ($1,$2::jsonb)),
+	targets AS (INSERT INTO pg_temp.bolt_write_targets (token,record_key,direct,erased,restored,anonymise) SELECT $1,x.key,x.direct,x.erased,x.restored,x.anonymise FROM jsonb_to_recordset($3::jsonb) x(key text,direct boolean,erased boolean,restored int,anonymise jsonb))
+	SELECT set_config('bolt.write',$4,true), set_config('store.write',$5,true)`,
 			params: [
+				context.token,
+				JSON.stringify(metadata),
+				JSON.stringify(targets),
 				JSON.stringify({ token: context.token }),
 				JSON.stringify({ mode: context.mode, actor, at: context.now })
 			]

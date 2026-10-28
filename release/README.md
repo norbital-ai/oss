@@ -26,23 +26,21 @@ move only when their own owner moves them.
 | **Template** | a developer edits source and pushes. It pins its own bolt version until they bump it.     |
 | **Tenant**   | its owner says so. Forked from a template, managed independently.                         |
 
-The only coupling is **notification**: a tenant can be told its upstream template is N commits
-ahead, or that a newer `@norbital-ai/bolt` exists and may break it. Neither acts.
+The only coupling is **notification**: a tenant can be told its upstream template has a newer
+release, or that a newer `@norbital-ai/bolt` exists and may break it. Neither acts.
 
 ## Templates
 
 Templates live in their own repositories —
 [`norbital-ai/templates`](https://github.com/norbital-ai/templates) (public, advertised on the
-website) and `norbital-ai/templates-private` (not advertised) — and each owns projection to
-`refs/heads/templates/<key>`, per-template lockfile resolution and offline-install verification, and
-standalone projection validation.
+website) and `norbital-ai/templates-private` (not advertised) — and each owns per-template lockfile
+resolution, offline-install verification, standalone validation and the one build per release
+(`bolt build` writes `.norbital/{bundle,source,seed}` and `release.json`; `bolt templates publish`
+packs them, named by digest, for the release store).
 
-A host resolves the active set with one
-`git ls-remote --heads <url> 'refs/heads/templates/*'` **per configured remote** and merges the
-results, so template keys must be unique across the remotes. Which repository a template lives in
-decides exactly one thing — whether the website advertises it.
-
-See the template repositories' own READMEs for the projection and lockfile contracts.
+A host serves a release only once `promote` names its bundle digest, so template directory names must be
+unique across both repositories. Which repository a template lives in decides exactly one thing —
+whether the website advertises it.
 
 ## Package archives
 

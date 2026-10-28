@@ -9,7 +9,6 @@ import type { ActConflict, ActRefused, ActUnknown, ReadFailed, Refusal } from '.
 import type { Checked, DateLiteral, Exact, InputOf, Simplify } from './fields.ts';
 import type {
 	AutomationName,
-	CallerValue,
 	ModelName,
 	ExposureSpecOf,
 	ColumnValue,
@@ -27,7 +26,6 @@ import type {
 	NamesPart,
 	OmittableOnInsert,
 	OneRels,
-	OneTarget,
 	OwnedFk,
 	OwnedInverse,
 	PathModel,
@@ -35,7 +33,6 @@ import type {
 	ReadField,
 	ReadPath,
 	ReadableName,
-	RelTarget,
 	RootOf,
 	Row,
 	RowState,

@@ -78,7 +78,6 @@ import {
 } from './wire.ts';
 import { HOOKS, OAUTH_CALLBACK } from '../engine/integrations/links.ts';
 import { sseResponse } from './sse.ts';
-import type { Handler } from './host.ts';
 
 export class SessionAuthority extends Context.Service<
 	SessionAuthority,

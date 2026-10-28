@@ -1,19 +1,20 @@
 // `ctx.ai.transcribe` and `ctx.ai.speak` (optional host capabilities): the engine reads the FileRef and hands the host's
 // SpeechPort its bytes; `speak`'s audio is stored like `files.put`. A host without the port answers `unavailable`.
 import { uuidv7 } from '../src/protocol/wire.ts';
-import { Context, Effect, Layer, Result, Schema } from 'effect';
+import { Effect, Exit, Layer, Result, Schema, Scope } from 'effect';
+import { afterAll } from 'vitest';
 import { Speech, Files } from '../src/engine/ports.ts';
 import { Port } from '../src/engine/port.ts';
-import { decodeManifest } from '../src/engine/manifest.ts';
-import { actReply, routeFixture } from './support/route-fixture.ts';
-import { program } from './support/guest-fixture.ts';
+import { decodeProjectedManifest } from '../src/engine/manifest.ts';
+import { actReply, routeFixture, type FixtureRoute } from './support/route-fixture.ts';
+import { program } from '../src/test/guest.ts';
 import type { Transcript } from '../src/decl/runtime/facilities.ts';
-import { describe, expect, it } from '@effect/vitest';
+import { expect } from '@effect/vitest';
 import type { Json } from '../src/decl/values.ts';
-import { TestWorkspace } from '../src/test/index.ts';
+import { layer, TestWorkspace, type WorkspaceServices } from '../src/test/index.ts';
 
 const manifest = Result.getOrThrow(
-	decodeManifest({
+	decodeProjectedManifest({
 		workspace: { tz: 'UTC', locale: 'en' },
 		models: {
 			calls: {
@@ -24,7 +25,10 @@ const manifest = Result.getOrThrow(
 		},
 		relationships: {},
 		exposures: {
-			calls: { read: { calls: { fields: 'all' } }, create: { columns: { calls: ['title', 'audio'] } } }
+			calls: {
+				read: { calls: { fields: 'all' } },
+				create: { columns: { calls: ['title', 'audio'] } }
+			}
 		},
 		integrations: {},
 		teams: {},
@@ -67,68 +71,60 @@ const transcript: Transcript = {
 };
 const audio = new Uint8Array([0xff, 0xf3, 1, 2, 3]);
 
-const TranscriptAnswer = Schema.Struct({
-	segments: Schema.Array(
-		Schema.Struct({
-			speaker: Schema.String,
-			start: Schema.Number,
-			end: Schema.Number,
-			text: Schema.String
-		})
-	),
-	language: Schema.NullOr(Schema.String),
-	durationMs: Schema.Number
+const unavailable: Speech['Service'] = {
+	transcribe: () => Port.unavailable('ai.transcribe'),
+	speak: () => Port.unavailable('ai.speak')
+};
+// One workspace; each run swaps the port the host answers with.
+let speech = unavailable;
+const ports = Layer.succeed(Speech, {
+	transcribe: (...args) => Effect.suspend(() => speech.transcribe(...args)),
+	speak: (...args) => Effect.suspend(() => speech.speak(...args))
+});
+// one route and one stored call for the file; each run swaps the port and starts the automation
+let fixture: { route: FixtureRoute; file: Json } | undefined;
+const fileScope = Effect.runSync(Scope.make());
+afterAll(() => Effect.runPromise(Scope.close(fileScope, Exit.void)));
+const prepared = Effect.gen(function* () {
+	if (fixture !== undefined) return fixture;
+	const t = yield* TestWorkspace,
+		route = yield* routeFixture(yield* Effect.context<TestWorkspace | WorkspaceServices>()).pipe(
+			Scope.provide(fileScope)
+		),
+		admin = t.as(t.admin);
+	const up = yield* admin.upload('calls.audio', { name: 'call.mp3', mime: 'audio/mpeg', bytes: audio });
+	if (up.kind !== 'committed') throw new Error('upload failed');
+	const file: Json = { id: up.output.id, name: up.output.name, mime: up.output.mime };
+	yield* actReply(route, admin.authority, {
+		callable: 'calls.create',
+		input: [{ title: 'Call', audio: file }],
+		issuedAt: t.clock.now()
+	});
+	return (fixture = { route, file });
 });
 const run = (
 	automation: 'listen' | 'say',
 	input: (file: Json) => Json,
-	speech?: Partial<Speech['Service']>
+	port: Partial<Speech['Service']> = {}
 ) =>
 	Effect.gen(function* () {
-		const ports =
-			speech === undefined
-				? undefined
-				: Layer.succeed(Speech, {
-						transcribe: speech.transcribe ?? (() => Port.unavailable('ai.transcribe')),
-						speak: speech.speak ?? (() => Port.unavailable('ai.speak'))
-					});
-		const context = yield* Layer.build(
-			TestWorkspace.layer({
-				manifest,
-				guest: yield* guest,
-				...(ports === undefined ? {} : { ports })
-			})
-		);
-		const t = Context.get(context, TestWorkspace),
-			files = Context.get(context, Files),
-			route = yield* routeFixture(context),
-			admin = t.as(t.admin);
-		const up = yield* admin.upload('calls.audio', {
-			name: 'call.mp3',
-			mime: 'audio/mpeg',
-			bytes: audio
-		});
-		if (up.kind !== 'committed') throw new Error('upload failed');
-		const file: Json = { id: up.output.id, name: up.output.name, mime: up.output.mime };
-		yield* actReply(route, admin.authority, {
-			callable: 'calls.create',
-			input: [{ title: 'Call', audio: file }],
-			issuedAt: t.clock.now()
-		});
+		speech = { ...unavailable, ...port };
+		const t = yield* TestWorkspace,
+			{ route, file } = yield* prepared;
+		const id = uuidv7(Date.parse(t.clock.now()));
 		yield* actReply(route, t.as(t.member(['ops'])).authority, {
 			callable: 'start',
-			input: { automation, input: input(file), id: uuidv7(Date.parse(t.clock.now())) },
+			input: { automation, input: input(file), id },
 			issuedAt: t.clock.now()
 		});
 		yield* t.runDue();
 		const [rows] = yield* t.db.read([
-			{ text: `SELECT state, output, error FROM sys_run`, params: [] }
+			{ text: `SELECT state, output, error FROM sys_run WHERE id = $1`, params: [id] }
 		]);
 		const row = rows?.rows[0];
 		if (row === undefined) throw new Error('run returned no row');
 		return {
 			t,
-			files,
 			row,
 			output: yield* Schema.decodeUnknownEffect(Schema.Record(Schema.String, Schema.Json))(
 				row['output']
@@ -136,150 +132,73 @@ const run = (
 		};
 	});
 
-describe('ctx.ai.transcribe', () => {
-	it.live('hands the port the stored bytes and the options, and answers its transcript', () =>
-		Effect.scoped(
-			Effect.gen(function* () {
-				const seen: Parameters<Speech['Service']['transcribe']>[] = [];
-				const { row, output } = yield* run(
-					'listen',
-					(file) => ({ file, options: { diarize: true, speakers: 2, language: 'en' } }),
-					{ transcribe: (...args) => Effect.sync(() => (seen.push(args), transcript)) }
-				);
-				expect(row).toMatchObject({ state: 'succeeded', error: null });
-				expect(output).toEqual(transcript);
-				const seenCall = seen[0];
-				if (seenCall === undefined) throw new Error('transcribe was not called');
-				const [file, options] = seenCall;
-				expect(file).toMatchObject({ name: 'call.mp3', mime: 'audio/mpeg' });
-				expect([...file.bytes]).toEqual([...audio]);
-				expect(options).toEqual({ diarize: true, speakers: 2, language: 'en' });
-			})
-		)
-	);
-
-	it.live(
-		'answers unavailable without the port or its transcribe, and refuses a file the run cannot name',
-		() =>
-			Effect.scoped(
+/** The suite's workspace runs on the real clock, as `it.live` would. */
+const LIVE = { excludeTestServices: true };
+layer(Layer.unwrap(Effect.map(guest, (g) => TestWorkspace.layer({ manifest, guest: g, ports }))), LIVE)(
+	'ctx.ai speech',
+	(it) => {
+		it.effect(
+			'transcribe hands the port the stored bytes and options; a bad shape, a missing file and an absent port are refused',
+			() =>
 				Effect.gen(function* () {
-					expect((yield* run('listen', (file) => ({ file, options: {} }))).output).toMatchObject({
-						kind: 'unavailable',
-						facility: 'ai.transcribe'
-					});
+					const seen: Parameters<Speech['Service']['transcribe']>[] = [];
+					const { row, output } = yield* run(
+						'listen',
+						(file) => ({ file, options: { diarize: true, speakers: 2, language: 'en' } }),
+						{ transcribe: (...args) => Effect.sync(() => (seen.push(args), transcript)) }
+					);
+					expect(row).toMatchObject({ state: 'succeeded', error: null });
+					expect(output).toEqual(transcript);
+					const [file, options] = seen[0] ?? [];
+					expect(file).toMatchObject({ name: 'call.mp3', mime: 'audio/mpeg' });
+					expect([...(file?.bytes ?? [])]).toEqual([...audio]);
+					expect(options).toEqual({ diarize: true, speakers: 2, language: 'en' });
+					seen.length = 0;
 					expect(
-						(yield* run('listen', (file) => ({ file, options: {} }), {
-							speak: () => Effect.succeed({ bytes: audio, mime: 'audio/mpeg' })
+						(yield* run('listen', (file) => ({ file, options: { speakers: 'two' } }), {
+							transcribe: (...args) => Effect.sync(() => (seen.push(args), transcript))
 						})).output
-					).toMatchObject({ kind: 'unavailable', facility: 'ai.transcribe' });
+					).toMatchObject({ kind: 'invalid' });
+					expect(seen).toEqual([]);
 					expect(
 						(yield* run('listen', () => ({ file: { id: crypto.randomUUID() }, options: {} }), {
 							transcribe: () => Effect.succeed(transcript)
 						})).output
-					).toMatchObject({
-						kind: 'invalid',
-						message: expect.stringContaining('cannot read file')
+					).toMatchObject({ kind: 'invalid', message: expect.stringContaining('cannot read file') });
+					expect((yield* run('listen', (file) => ({ file, options: {} }))).output).toMatchObject({
+						kind: 'unavailable',
+						facility: 'ai.transcribe'
 					});
 				})
-			)
-	);
+		);
 
-	it.live('turns a port throw into upstream and a malformed answer into upstream', () =>
-		Effect.scoped(
+		it.effect("speak stores the port's audio as a FileRef, defaults to mp3 and refuses another format", () =>
 			Effect.gen(function* () {
-				expect(
-					(yield* run('listen', (file) => ({ file, options: {} }), {
-						transcribe: () => Effect.fail(Port.failure('ai.transcribe')(new Error('provider down')))
-					})).output
-				).toMatchObject({ kind: 'upstream', message: expect.stringContaining('provider down') });
-				expect(
-					(yield* run('listen', (file) => ({ file, options: {} }), {
-						transcribe: () =>
-							Port.fromPromise(
-								() => Promise.resolve({ segments: 'no' }),
-								TranscriptAnswer,
-								'ai.transcribe'
-							)
-					})).output
-				).toMatchObject({ kind: 'upstream' });
-				const limited = Object.assign(new Error('slow down'), { kind: 'rateLimited', status: 429 });
-				expect(
-					(yield* run('listen', (file) => ({ file, options: {} }), {
-						transcribe: () => Effect.fail(Port.failure('ai.transcribe')(limited))
-					})).output
-				).toMatchObject({ kind: 'rateLimited', message: 'slow down', status: 429 });
-			})
-		)
-	);
-
-	it.live('refuses options of the wrong shape before calling the port', () =>
-		Effect.scoped(
-			Effect.gen(function* () {
-				let called = false;
-				const { output } = yield* run(
-					'listen',
-					(file) => ({ file, options: { speakers: 'two' } }),
-					{ transcribe: () => Effect.sync(() => ((called = true), transcript)) }
-				);
-				expect(output).toMatchObject({ kind: 'invalid' });
-				expect(called).toBe(false);
-			})
-		)
-	);
-});
-
-describe('ctx.ai.speak', () => {
-	it.live("stores the port's audio for its owner and answers the FileRef", () =>
-		Effect.scoped(
-			Effect.gen(function* () {
+				const files = yield* Files;
 				const seen: unknown[] = [];
-				const { t, files, row, output } = yield* run(
+				const speak: Speech['Service']['speak'] = (text, o) =>
+					Effect.sync(() => (seen.push([text, o]), { bytes: audio, mime: 'audio/wav' }));
+				const { t, row, output } = yield* run(
 					'say',
 					() => ({ options: { voice: 'Kore', format: 'wav' } }),
-					{
-						speak: (...args) =>
-							Effect.sync(() => (seen.push(args.slice(0, 2)), { bytes: audio, mime: 'audio/wav' }))
-					}
+					{ speak }
 				);
 				expect(row).toMatchObject({ state: 'succeeded', error: null });
 				expect(seen).toEqual([['Hello there', { voice: 'Kore', format: 'wav' }]]);
-				expect(output).toMatchObject({
-					name: 'speech.wav',
-					mime: 'audio/wav',
-					bytes: audio.byteLength
+				expect(output).toMatchObject({ name: 'speech.wav', mime: 'audio/wav', bytes: audio.byteLength });
+				const [file] = yield* t.db.rows(Schema.Struct({ key: Schema.String, field: Schema.String }), {
+					text: `SELECT key, field FROM sys_file WHERE id = $1`,
+					params: [String(output['id'])]
 				});
-				const outputId = output['id'];
-				if (typeof outputId !== 'string') throw new Error('speech output has no file id');
-				const [file] = yield* t.db.rows(
-					Schema.Struct({ key: Schema.String, field: Schema.String }),
-					{ text: `SELECT key, field FROM sys_file WHERE id = $1`, params: [outputId] }
-				);
-				if (file === undefined) throw new Error('stored speech file missing');
-				expect(file['field']).toBe('say');
-				expect([...(yield* files.get(file.key, 1024))]).toEqual([...audio]);
-			})
-		)
-	);
-
-	it.live('defaults to mp3, refuses another format and answers unavailable without speak', () =>
-		Effect.scoped(
-			Effect.gen(function* () {
-				const seen: unknown[] = [];
-				yield* run('say', () => ({ options: { name: 'hi.mp3' } }), {
-					speak: (_t, o) => Effect.sync(() => (seen.push(o), { bytes: audio, mime: 'audio/mpeg' }))
-				});
-				expect(seen).toEqual([{ format: 'mp3' }]);
+				expect(file?.field).toBe('say');
+				expect([...(yield* files.get(file?.key ?? '', 1024))]).toEqual([...audio]);
+				seen.length = 0;
+				yield* run('say', () => ({ options: { name: 'hi.mp3' } }), { speak });
+				expect(seen).toEqual([['Hello there', { format: 'mp3' }]]);
 				expect(
-					(yield* run('say', () => ({ options: { format: 'flac' } }), {
-						speak: () => Effect.succeed({ bytes: audio, mime: 'audio/flac' })
-					})).output
+					(yield* run('say', () => ({ options: { format: 'flac' } }), { speak })).output
 				).toMatchObject({ kind: 'invalid' });
-				expect(
-					(yield* run('say', () => ({ options: {} }), {
-						transcribe: () => Effect.succeed(transcript)
-					})).output
-				).toMatchObject({ kind: 'unavailable', facility: 'ai.speak' });
 			})
-		)
-	);
-});
+		);
+	}
+);

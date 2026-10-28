@@ -5,10 +5,10 @@ import type { EngineManifest } from '../src/engine/manifest.ts';
 import { TenantDb } from '../src/engine/db/tenant-db.ts';
 import { DbError } from '../src/engine/errors.ts';
 import { Callables } from '../src/engine/services.ts';
-import { PgliteDb } from '../src/node/db/pglite.ts';
+import { TestDb } from '../src/test/database.ts';
 import { TestWorkspace } from '../src/test/index.ts';
 import { manifest as base } from './write-fixture.ts';
-import { program } from './support/guest-fixture.ts';
+import { program } from '../src/test/guest.ts';
 
 const ACCOUNT = '0199a000-0000-7000-8000-000000000001';
 const input = {
@@ -143,7 +143,7 @@ const fixture = (mode: 'concurrent' | 'aba') =>
 		let armed = false,
 			passes = 0;
 		const observations: number[] = [];
-		const dbContext = yield* Layer.build(PgliteDb.layer());
+		const dbContext = yield* Layer.build(TestDb.layer(manifest));
 		const db = Context.get(dbContext, TenantDb);
 		const balance = () =>
 			db.value(Schema.Number, {

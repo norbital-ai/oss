@@ -1,6 +1,6 @@
 // What a provider fails with (D3): one tag per way it fails, each a decoded value. `toDrivers` (abi.ts) hands them across
 // the driver ABI in the shape the engine reads: a refusal as the engine's `SendRefused`, any other as itself (an
-// `Error` named by its tag; a `SpeechFailure` also carries the `kind` the engine answers it as).
+// `Error` named by its tag).
 import { Schema } from 'effect';
 import type { Fenced } from '@norbital-ai/bolt/engine';
 
@@ -27,19 +27,6 @@ export class OAuthRefused extends Schema.TaggedError<OAuthRefused>()('OAuthRefus
 	message: Schema.String,
 	revoked: Schema.Boolean
 }) {}
-/** A speech call failed; the engine answers it as the facility failure of `kind`. */
-export class SpeechFailure extends Schema.TaggedError<SpeechFailure>()('SpeechFailure', {
-	kind: Schema.Literals([
-		'upstream',
-		'timeout',
-		'rateLimited',
-		'invalid',
-		'tooLarge',
-		'unsupported'
-	]),
-	message: Schema.String,
-	status: Schema.optional(Schema.Number)
-}) {}
 /** The operator's setup input does not do (a missing or malformed field); the shell shows `message` verbatim. */
 export class PairingInvalid extends Schema.TaggedError<PairingInvalid>()('PairingInvalid', {
 	message: Schema.String
@@ -53,7 +40,6 @@ export type ProviderFailure =
 	| ProviderRefused
 	| ProviderUnavailable
 	| OAuthRefused
-	| SpeechFailure
 	| PairingInvalid
 	| LinkClosed
 	| Fenced;

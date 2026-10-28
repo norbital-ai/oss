@@ -1,6 +1,6 @@
 // Seed packs as hosts read them (rule 70, §7.2): `pack.json` plus `rows/<model>.jsonl`, written by `bolt build`
 // (compiler/artifact/seed.ts). Loading one is a restore into a database with no workspace rows. Here, not in the
-// compiler, so any host (bolt start or an adapter) loads packs through `@norbital-ai/bolt/engine` without the build toolchain.
+// compiler, so any host (tethered or untethered) loads packs through `@norbital-ai/bolt/engine` without the build toolchain.
 import { EMBED } from '../integrations/embed.ts';
 import { SYSTEM } from '../../system/index.ts';
 import { Effect, FileSystem, Schema, Stream } from 'effect';

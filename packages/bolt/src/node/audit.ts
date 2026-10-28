@@ -1,14 +1,14 @@
 /// <reference types="node" />
 import { createHash } from 'node:crypto';
-import { mkdir, realpath } from 'node:fs/promises';
-import { resolve } from 'node:path';
+import { access, mkdir, realpath } from 'node:fs/promises';
+import { join, resolve } from 'node:path';
 import { PGlite } from '@electric-sql/pglite';
 import { pg_trgm } from '@electric-sql/pglite/contrib/pg_trgm';
 import { Effect, Option, Schema } from 'effect';
 import { FacilityFailure } from '../decl/errors.ts';
 import { logStatements, type Sql, type StoreError } from '@norbital-ai/store';
 import { applyAuditMigrations, readAuditMigrations } from './audit-migrations.ts';
-import { PgliteDb } from './db/pglite.ts';
+import { PgliteDb, Pristine } from './db/pglite.ts';
 import { PostgresDb } from './db/postgres.ts';
 import {
 	AuditEvent,
@@ -142,8 +142,20 @@ export const localAudit = Effect.fn('bolt.localAudit')(function* (dataDir: strin
 				opening ??= (async () => {
 					await mkdir(directory, { recursive: true });
 					const scope = await realpath(directory);
+					// a new directory starts from the machine's initdb dump (~13× cheaper than initdb)
+					const fresh = await access(join(scope, 'PG_VERSION')).then(
+						() => false,
+						() => true
+					);
 					const pg = await PGlite.create({
 						dataDir: scope,
+						...(fresh
+							? {
+									loadDataDir: await Effect.runPromise(
+										Pristine.pipe(Effect.flatten, Effect.provide(Pristine.layer))
+									)
+								}
+							: {}),
 						extensions: { pg_trgm },
 						relaxedDurability: false
 					});

@@ -22,11 +22,11 @@ import {
 	Drivers,
 	Files,
 	Geo,
-	Metering,
 	Speech,
 	Transport,
 	WebRead
 } from '../src/engine/ports.ts';
+import { off } from '../src/facilities/index.ts';
 
 /** Runs `f` against the service `key` that `layer` provides. */
 const using = <I, S, A, E>(
@@ -37,7 +37,7 @@ const using = <I, S, A, E>(
 const blob = { key: 'k1', bytes: 2, sha256: 'ab', mime: 'text/plain' };
 
 describe('fromAbi', () => {
-	it.effect('Files: a call round-trips; an absent port is unavailable', () =>
+	it.effect('Files: a call round-trips; a refusal keeps its kind', () =>
 		Effect.gen(function* () {
 			const files = Files.fromAbi({
 				put: async (bytes, meta) => ({ ...blob, bytes: bytes.length, mime: meta.mime }),
@@ -62,15 +62,10 @@ describe('fromAbi', () => {
 			expect(
 				yield* Effect.flip(using(Files, files, (f) => f.download('https://law.example/a.ts')))
 			).toMatchObject({ _tag: 'FacilityFailure', kind: 'invalid', message: 'not media' });
-			const absent = yield* Effect.flip(
-				using(Files, Files.fromAbi(undefined), (f) => f.get('k1', 10))
-			);
-			expect(absent).toBeInstanceOf(Unavailable);
-			expect(absent).toMatchObject({ facility: 'files', reason: 'the host provides no files' });
 		})
 	);
 
-	it.effect('Convert, WebRead, Metering: a call round-trips', () =>
+	it.effect('Convert, WebRead: a call round-trips; an `off` member is unavailable', () =>
 		Effect.gen(function* () {
 			const convert = Convert.fromAbi({
 				targets: ['pdf'],
@@ -93,27 +88,20 @@ describe('fromAbi', () => {
 			expect(yield* using(WebRead, web, (w) => w.read('https://a.example', { raw: true }))).toEqual(
 				{ url: 'https://a.example', title: null, text: 'raw' }
 			);
-			const recorded: string[] = [];
-			const metering = Metering.fromAbi({
-				record: async (meter, quantity, key) => {
-					recorded.push(`${meter}:${quantity}:${key}`);
-				}
-			});
-			yield* using(Metering, metering, (m) => m.record('ai', 0.5, 'call-1'));
-			expect(recorded).toEqual(['ai:0.5:call-1']);
-			expect(
-				yield* Effect.flip(
-					using(Convert, Convert.unavailable, (c) => c.convert({ html: '<p>' }, 'pdf', {}))
-				)
-			).toMatchObject({ facility: 'convert' });
+			const absent = yield* Effect.flip(
+				using(Convert, Convert.fromAbi(off), (c) => c.convert({ html: '<p>' }, 'pdf', {}))
+			);
+			expect(absent).toBeInstanceOf(Unavailable);
+			expect(absent).toMatchObject({ facility: 'convert' });
 		})
 	);
 
-	it.effect('Speech: a provider refusal keeps its kind; an absent member is unavailable', () =>
+	it.effect('Speech: a provider refusal keeps its kind; an `off` group is unavailable', () =>
 		Effect.gen(function* () {
 			const speech = Speech.fromAbi({
 				transcribe: async () =>
-					Promise.reject({ kind: 'tooLarge', message: 'the audio is over 2 hours' })
+					Promise.reject({ kind: 'tooLarge', message: 'the audio is over 2 hours' }),
+				speak: async () => Promise.reject({ kind: 'invalid', message: 'not here' })
 			});
 			const refused = yield* Effect.flip(
 				using(Speech, speech, (s) =>
@@ -123,8 +111,8 @@ describe('fromAbi', () => {
 			expect(refused).toBeInstanceOf(FacilityFailure);
 			expect(refused).toMatchObject({ kind: 'tooLarge', message: 'the audio is over 2 hours' });
 			expect(
-				yield* Effect.flip(using(Speech, speech, (s) => s.speak('hi', { format: 'mp3' })))
-			).toMatchObject({ facility: 'ai.speak', reason: 'the host provides no speech' });
+				yield* Effect.flip(using(Speech, Speech.fromAbi(off), (s) => s.speak('hi', { format: 'mp3' })))
+			).toBeInstanceOf(Unavailable);
 		})
 	);
 
@@ -161,7 +149,7 @@ describe('fromAbi', () => {
 					return { providerId: `p${sent.length}` };
 				}
 			};
-			const transport = Transport.fromAbi({ Mail: port, Push: port });
+			const transport = Transport.fromAbi({ Mail: port, Sms: off, Push: port });
 			expect(
 				yield* using(Transport, transport, (t) =>
 					t.send({ _tag: 'Mail', to: 'a@b.c', subject: 'Code', text: '123456' })
@@ -271,7 +259,7 @@ describe('fromAbi', () => {
 						}
 					}
 				};
-				const ai = Ai.fromAbi(port);
+				const ai = Ai.fromAbi({ system1: port.sys_1, system2: port.sys_2, embed: off });
 				expect(yield* using(Ai, ai, (a) => a.ask({ state: {}, questions: {} }))).toEqual({
 					answers: {},
 					costUsd: 0,
@@ -290,7 +278,11 @@ describe('fromAbi', () => {
 				expect(yield* Effect.flip(using(Ai, ai, (a) => a.embed(['x'], 'default')))).toMatchObject({
 					facility: 'ai.embed'
 				});
-				const embeddings = Ai.fromAbi({ embed: async (inputs) => inputs.map(() => [0.5]) });
+				const embeddings = Ai.fromAbi({
+					system1: off,
+					system2: off,
+					embed: { embed: async (inputs) => inputs.map(() => [0.5]) }
+				});
 				expect(yield* using(Ai, embeddings, (a) => a.embed(['x', 'y'], 'default'))).toEqual([
 					[0.5],
 					[0.5]
@@ -299,13 +291,14 @@ describe('fromAbi', () => {
 					yield* Effect.flip(using(Ai, embeddings, (a) => a.ask({ state: {}, questions: {} })))
 				).toMatchObject({ facility: 'ai' });
 				const failing = Ai.fromAbi({
-					...port,
-					sys_2: {
+					system1: port.sys_1,
+					system2: {
 						models: [],
 						infer: async () => {
 							throw new Error('the model stream failed');
 						}
-					}
+					},
+					embed: off
 				});
 				expect(
 					yield* Effect.flip(

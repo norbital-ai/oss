@@ -8,7 +8,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { it } from '@effect/vitest';
 import { Effect } from 'effect';
-import { clearIgnoreCache, ignoredFile, ignoredRule } from '../build/ignore.js';
+import { clearIgnoreCache, ignoredFile, ignoredRule } from '../src/ignore.ts';
 
 const TREE: Record<string, string> = {
 	'.doctorignore': '**/shared/ COERCE1\n',

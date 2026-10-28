@@ -5,20 +5,20 @@ import * as NodeCrypto from '@effect/platform-node/NodeCrypto';
 import { expect, it } from '@effect/vitest';
 import { Context, Effect, Layer, Option, Redacted, Result, Schema } from 'effect';
 import { HttpServerRequest, HttpServerResponse } from 'effect/http';
-import { decodeManifest } from '../src/engine/manifest.ts';
+import { decodeProjectedManifest } from '../src/engine/manifest.ts';
 import { credentials } from '../src/engine/integrations/credentials.ts';
 import { integrationLinks } from '../src/engine/integrations/links.ts';
 import { Secrets } from '../src/engine/secrets.ts';
 import { bindings } from '../src/protocol/http.ts';
 import { IntegrationManager, integrationRoutes } from '../src/protocol/integrations.ts';
 import { KitInvalid, TestWorkspace } from '../src/test/index.ts';
-import { program } from './support/guest-fixture.ts';
+import { program } from '../src/test/guest.ts';
 
 const NOW = '2026-10-14T17:30:00.000Z'; // 01:30 on 15 October in Kuala Lumpur
 const TODAY = '2026-10-15';
 const ORIGIN = 'http://cell';
 const manifest = Result.getOrThrow(
-	decodeManifest({
+	decodeProjectedManifest({
 		workspace: { tz: 'Asia/Kuala_Lumpur', locale: 'en' },
 		models: {
 			notes: {
@@ -156,11 +156,13 @@ it.live(
 					yield* json(
 						yield* post('/__bolt/act', {
 							callable: 'notes.create',
-							input: [{
-								title: 'held',
-								due: TODAY,
-								photo: { id: photo.id, name: photo.name, mime: photo.mime }
-							}],
+							input: [
+								{
+									title: 'held',
+									due: TODAY,
+									photo: { id: photo.id, name: photo.name, mime: photo.mime }
+								}
+							],
 							issuedAt: NOW
 						})
 					)

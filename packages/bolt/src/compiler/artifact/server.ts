@@ -12,7 +12,7 @@ import type { EngineManifest } from '../../engine/manifest.ts';
 import { publicPageKeys } from '../../engine/artifact/read.ts';
 import { sha256Hex } from '@norbital-ai/store';
 import type { Discovered } from '../discover.ts';
-import { BuildError } from './client.ts';
+import { BuildError, graphSources } from './client.ts';
 import { publicWrapper } from './public-wrapper.ts';
 
 const EXT = import.meta.url.endsWith('.ts') ? '.ts' : '.js';
@@ -31,7 +31,9 @@ export const buildServerPages = Effect.fn('bolt.buildServerPages')(function* (
 	directory: string,
 	files: readonly Discovered[],
 	m: EngineManifest,
-	out: string
+	out: string,
+	/** As `buildClient`'s: every workspace file the server pages bundle. */
+	sources?: Set<string>
 ) {
 	const fs = yield* FileSystem.FileSystem;
 	const root = yield* fs.realPath(directory);
@@ -229,6 +231,7 @@ export default { page: { ${key(route)}: { body: attached(function* (input, ctx) 
 			(item): item is Rolldown.OutputChunk => item.type === 'chunk'
 		);
 		const chunk = chunks.find((item) => item.isEntry);
+		if (sources !== undefined && chunk !== undefined) graphSources(root, chunk.moduleIds, sources);
 		const runtimes = new Set(
 			(chunk?.moduleIds ?? []).flatMap((id) => {
 				const at = id.lastIndexOf('/node_modules/svelte/');

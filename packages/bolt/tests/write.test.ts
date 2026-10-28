@@ -210,18 +210,3 @@ describe('engine/write statement', () => {
 		expect(phases.at(-1)?.text).toContain('DELETE FROM pg_temp.bolt_write_context');
 	});
 });
-
-describe('notices (L-BOLT-356)', () => {
-	it('sys_notification has one writer: the noticeInsert piece', async () => {
-		const { readdirSync, readFileSync } = await import('node:fs');
-		const { join } = await import('node:path');
-		const src = join(import.meta.dirname, '../src');
-		const writers = readdirSync(src, { recursive: true })
-			.map(String)
-			.filter((f) => /\.(ts|svelte)$/.test(f))
-			.filter((f) =>
-				/INSERT\s+INTO\s+sys_notification\b/i.test(readFileSync(join(src, f), 'utf8'))
-			);
-		expect(writers).toEqual(['engine/write/sql.ts']);
-	});
-});

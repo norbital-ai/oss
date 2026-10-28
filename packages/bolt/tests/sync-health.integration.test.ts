@@ -4,7 +4,7 @@ import type { Json } from '../src/decl/values.ts';
 import type { EngineManifest } from '../src/engine/manifest.ts';
 import { SyncHealth } from '../src/engine/sync/health-schema.ts';
 import { TestWorkspace } from '../src/test/index.ts';
-import { program } from './support/guest-fixture.ts';
+import { program } from '../src/test/guest.ts';
 import { json } from './support/route-fixture.ts';
 import { manifest as base } from './write-fixture.ts';
 

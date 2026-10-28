@@ -58,20 +58,6 @@ export type GuestOptions = {
 export const GuestConfig = Context.Reference<GuestOptions>('bolt/GuestConfig', {
 	defaultValue: () => ({})
 });
-/** A wait this long parks a run's guest (compute model §3 "Limits and liveness"). */
-export const PARK_MS = 30_000;
-/**
- * Parking, for a body whose calls a journal answers again (a run's): a wait past `afterMs` with nothing answered
- * disposes the isolate; once every pending call has answered, `resume` readies the journals and the body runs again from
- * its start in a fresh isolate, replaying what was answered. The replay is the unit's own CPU.
- */
-export type Parking = {
-	readonly afterMs: number;
-	readonly resume: Effect.Effect<void, BoltError>;
-};
-export const GuestParking = Context.Reference<Parking | undefined>('bolt/GuestParking', {
-	defaultValue: () => undefined
-});
 const PAGE_READS = new Set(['query', 'aggregate', 'history']);
 const messageOf = (error: unknown): string =>
 	error instanceof Error ? error.message : String(error);
@@ -340,7 +326,6 @@ type Landed = {
 	readonly lowered: readonly (CrossCall | CrossAnswer)[];
 	readonly sent: readonly CrossAnswer[];
 };
-type Pass = GuestOutcome | { readonly kind: 'parked' };
 const run = (
 	open: Effect.Effect<GuestSession, BoltError, Scope.Scope>,
 	program: GuestProgram,
@@ -404,14 +389,13 @@ const run = (
 			error: BoltError.make(code, 'guest', message, cause)
 		});
 		const landed = yield* Queue.unbounded<Landed>();
-		const parking = yield* GuestParking;
 		let pending = 0,
 			crossings = 0,
 			readBytes = 0;
 		const { seed: _seed, ...ctx } = invocation.ctx;
-		/** One run of the body in one isolate, to its end or until it parks. */
+		/** One run of the body in one isolate, to its end. */
 		const pass = (session: GuestSession) =>
-			Effect.gen(function* (): Effect.fn.Return<Pass, BoltError, Scope.Scope> {
+			Effect.gen(function* (): Effect.fn.Return<GuestOutcome, BoltError, Scope.Scope> {
 				let taken = yield* slice(
 					session.start({
 						kind: invocation.kind,
@@ -614,18 +598,12 @@ const run = (
 					}
 					if (pending === 0)
 						return failed('stalled', 'stalled: the body awaits something no ctx call will settle');
-					const landing =
-						parking === undefined
-							? Option.some(yield* Queue.take(landed))
-							: yield* Queue.take(landed).pipe(Effect.timeoutOption(parking.afterMs));
-					if (Option.isNone(landing)) return { kind: 'parked' };
-					const answer = landing.value;
+					const answer = yield* Queue.take(landed);
 					pending--;
 					let next = 0;
 					const answerOf = (value: CrossCall | CrossAnswer): CrossAnswer =>
 						isCall(value) ? (answer.sent[next++] ?? fail('badAnswer', 'no answer')) : value;
 					const answers = answer.lowered.map(answerOf);
-					crossings -= answer.sent.filter((value) => value.journal === true).length;
 					let bytes = 0,
 						biggest = 0,
 						biggestAt = 0;
@@ -719,24 +697,12 @@ const run = (
 				}
 			});
 		return yield* Effect.gen(function* () {
-			for (;;) {
-				const held = yield* Scope.make();
-				const outcome = yield* open.pipe(
-					Scope.provide(held),
-					Effect.flatMap(pass),
-					Effect.ensuring(Scope.close(held, Exit.void))
-				);
-				if (outcome.kind !== 'parked') return outcome;
-				// parked: the isolate is gone; every pending call lands (into the journals) before the body runs again
-				while (pending > 0) {
-					yield* Queue.take(landed);
-					pending--;
-				}
-				// ponytail: the budgets restart with each pass, which replays its reads; count across passes if parking is abused
-				crossings = 0;
-				readBytes = 0;
-				if (parking !== undefined) yield* parking.resume;
-			}
+			const held = yield* Scope.make();
+			return yield* open.pipe(
+				Scope.provide(held),
+				Effect.flatMap(pass),
+				Effect.ensuring(Scope.close(held, Exit.void))
+			);
 		}).pipe(
 			Effect.catch((error) => Effect.succeed({ kind: 'failed', error } satisfies GuestOutcome))
 		);

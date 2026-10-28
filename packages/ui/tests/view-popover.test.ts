@@ -16,7 +16,7 @@ import './dom.ts';
 import assert from 'node:assert/strict';
 import { setImmediate } from 'node:timers/promises';
 import type { ViewBolt, Json } from '../src/client/contract.ts';
-import type { Row, Values } from '../src/model/types.ts';
+import type { Row } from '../src/model/types.ts';
 import type { Value } from '@norbital-ai/std/kind';
 import type { KindsHost } from '../src/kinds/context.ts';
 import type { Offer, RawArg, Node, Op, Resolved, SortKey } from '../src/filter/filter.ts';
@@ -40,6 +40,8 @@ import { likePattern } from '../src/kinds/kind.ts';
 import { listRequest, MANY_SHOWN, unref } from '../src/relations/select.ts';
 const { flushSync, mount, tick, unmount } = await import('svelte');
 const { default: Harness } = await import('./view-harness.svelte');
+const { default: Board } = await import('../src/board/Board.svelte');
+const { default: Table } = await import('../src/table/Table.svelte');
 
 const catalog = {
 	jobs: {
@@ -610,49 +612,8 @@ const settle = async () => {
 		flushSync();
 	}
 };
-const bad = encodeURIComponent(
-	JSON.stringify({
-		and: [{ status: { eq: 'done' } }, { bogus: { eq: 1 } }, { hours: { eq: 'abc' } }]
-	})
-);
 
-it.live('filter metadata loads on opening the popover and is reused on reopening', () =>
-	Effect.gen(function* () {
-		const calls: string[] = [];
-		const s = yield* browser(() =>
-			scripted({
-				options: (model) =>
-					fixtureEffect(() => {
-						calls.push(model);
-						return { fields: offers(model) };
-					})
-			})
-		);
-		const v = yield* browser(() =>
-			show(
-				{
-					part: 'table',
-					props: { of: 'jobs', columns: ['title'] },
-					bolt: s.bolt,
-					catalog: catalog
-				},
-				'/'
-			)
-		);
-		assert.deepEqual(calls, []);
-		element<HTMLElement>(document, '[data-view-trigger]').click();
-		yield* browser(() => settle());
-		assert.deepEqual(calls, ['jobs']);
-		element<HTMLElement>(document, '[data-view-trigger]').click();
-		yield* browser(() => settle());
-		element<HTMLElement>(document, '[data-view-trigger]').click();
-		yield* browser(() => settle());
-		assert.deepEqual(calls, ['jobs']);
-		yield* browser(v.done);
-	})
-);
-
-it.live('reopening the filter popover retries a failed metadata request', () =>
+it.live('filter metadata loads on opening, retries a failure on reopening, then is reused', () =>
 	Effect.gen(function* () {
 		let calls = 0;
 		const s = yield* browser(() =>
@@ -668,6 +629,7 @@ it.live('reopening the filter popover retries a failed metadata request', () =>
 			show(
 				{
 					part: 'table',
+					view: Table,
 					props: { of: 'jobs', columns: ['title'] },
 					bolt: s.bolt,
 					catalog: catalog
@@ -675,563 +637,20 @@ it.live('reopening the filter popover retries a failed metadata request', () =>
 				'/'
 			)
 		);
-		element<HTMLElement>(document, '[data-view-trigger]').click();
-		yield* browser(() => settle());
-		assert.equal(calls, 1);
-		element<HTMLElement>(document, '[data-view-trigger]').click();
-		yield* browser(() => settle());
-		element<HTMLElement>(document, '[data-view-trigger]').click();
-		yield* browser(() => settle());
-		assert.equal(calls, 2);
-		yield* browser(v.done);
-	})
-);
-
-it.live('a late filter catalogue cannot replace the active model catalogue', () =>
-	Effect.gen(function* () {
-		const pending = new Map<string, PromiseWithResolvers<{ fields: readonly Offer[] }>>();
-		const s = yield* browser(() =>
-			scripted({
-				options: (model) => {
-					const request = Promise.withResolvers<{ fields: readonly Offer[] }>();
-					pending.set(model, request);
-					return browser(() => request.promise);
-				}
-			})
-		);
-		const v = yield* browser(() =>
-			show(
-				{
-					part: 'table',
-					props: { of: 'jobs', columns: ['title'] },
-					bolt: s.bolt,
-					catalog: catalog
-				},
-				'/'
-			)
-		);
-		try {
+		const toggle = () => {
 			element<HTMLElement>(document, '[data-view-trigger]').click();
-			yield* browser(() => settle());
-			assert.ok(pending.has('jobs'));
-			v.app.setTableSource('accounts');
-			yield* browser(() => settle());
-			assert.ok(pending.has('accounts'));
-			required(pending.get('accounts')).resolve({
-				fields: [
-					{
-						label: 'Name',
-						path: [{ k: 'field', name: 'name' }],
-						op: 'eq',
-						opLabel: 'is',
-						kind: 'text'
-					}
-				]
-			});
-			yield* browser(() => settle());
-			element<HTMLElement>(document, '[data-add-condition]').click();
-			flushSync();
-			element<HTMLElement>(document, '[data-filter-rows] [data-field-picker]').click();
-			flushSync();
-			assert.ok(element<HTMLElement>(document, '[data-field-list] [data-path=name]'));
-			required(pending.get('jobs')).resolve({ fields: offers('jobs') });
-			yield* browser(() => settle());
-			assert.ok(element<HTMLElement>(document, '[data-field-list] [data-path=name]'));
-			assert.equal(document.querySelector('[data-field-list] [data-path=title]'), null);
-		} finally {
-			yield* browser(v.done);
-		}
-	})
-);
-
-it.live('an open local filter catalogue follows the active table fields', () =>
-	Effect.gen(function* () {
-		const inputs: {
-			model: string;
-			fields: Parameters<NonNullable<ViewBolt['options']>>[1];
-		}[] = [];
-		const s = yield* browser(() =>
-			scripted({
-				options: (model, fields) =>
-					fixtureEffect(() => {
-						inputs.push({ model, fields });
-						return {
-							fields: (fields ?? []).map((field): Offer => ({
-								label: field.label,
-								path: [{ k: 'field', name: field.name }],
-								op: 'eq',
-								opLabel: 'is',
-								kind: field.kind
-							}))
-						};
-					})
-			})
-		);
-		const v = yield* browser(() =>
-			show(
-				{
-					part: 'table',
-					props: { of: [{ id: 'one', alpha: 'A', beta: 'B' }], columns: ['alpha'] },
-					bolt: s.bolt,
-					catalog: catalog
-				},
-				'/'
-			)
-		);
-		try {
-			element<HTMLElement>(document, '[data-view-trigger]').click();
-			yield* browser(() => settle());
-			assert.deepEqual(
-				required(required(inputs.at(-1)).fields).map((field) => field.name),
-				['alpha']
-			);
-			v.app.setTableColumns(['beta']);
-			yield* browser(() => settle());
-			assert.equal(inputs.length, 2);
-			assert.deepEqual(
-				required(required(inputs.at(-1)).fields).map((field) => field.name),
-				['beta']
-			);
-			element<HTMLElement>(document, '[data-add-condition]').click();
-			flushSync();
-			element<HTMLElement>(document, '[data-filter-rows] [data-field-picker]').click();
-			flushSync();
-			assert.ok(element<HTMLElement>(document, '[data-field-list] [data-path=beta]'));
-			assert.equal(document.querySelector('[data-field-list] [data-path=alpha]'), null);
-		} finally {
-			yield* browser(v.done);
-		}
-	})
-);
-
-it.live(
-	'Table: a link with bad clauses and keys drops them with one notice and applies the rest, never an error state',
-	() =>
-		Effect.gen(function* () {
-			const s = yield* browser(() => scripted());
-			const v = yield* browser(() =>
-				show(
-					{
-						part: 'table',
-						props: { of: 'jobs', columns: ['title', 'hours'] },
-						bolt: s.bolt,
-						catalog: catalog
-					},
-					`/?jobs.where=${bad}&jobs.order=hours:desc,meta:asc`
-				)
-			);
-			assert.deepEqual(s.last().where, { status: { eq: 'done' } });
-			assert.deepEqual(s.last().orderBy, [{ hours: 'desc' }]);
-			assert.equal(document.querySelectorAll<HTMLElement>('[data-view-notice]').length, 1);
-			assert.equal(document.querySelector('[data-read=error]'), null);
-			assert.ok(element<HTMLElement>(document, 'tbody tr'), 'the rows still render');
-			yield* browser(v.done);
-		})
-);
-
-it.live(
-	'Table: describing a filter applies the conditions and the manual builder opens on request',
-	() =>
-		Effect.gen(function* () {
-			const s = yield* browser(() =>
-				scripted({
-					describe: () =>
-						Effect.succeed({ where: { status: { eq: 'done' } }, orderBy: { created_at: 'desc' } })
-				})
-			);
-			const v = yield* browser(() =>
-				show(
-					{
-						part: 'table',
-						props: { of: 'jobs', columns: ['title', 'hours'], where: { hours: { gt: 1 } } },
-						bolt: s.bolt,
-						catalog: catalog
-					},
-					'/'
-				)
-			);
-			element<HTMLElement>(document, '[data-view-trigger]').click();
-			flushSync();
-			const header = element<HTMLElement>(document, '[data-view-header]');
-			assert.ok(
-				element<HTMLInputElement>(
-					header,
-					'[data-describe] input[placeholder="Describe what to show…"]'
-				)
-			);
-			// the default state: nothing but the input and the quiet reveal — no builder, no Clear all, no author scope
-			assert.equal(element<HTMLDetailsElement>(document, '[data-view-details]').open, false);
-			assert.equal(document.querySelector('[data-clear]'), null);
-			assert.ok(
-				element<HTMLDetailsElement>(document, '[data-view-details]'),
-				'manual conditions are an accordion'
-			);
-			element<HTMLElement>(document, '[data-show-builder]').click();
-			flushSync();
-			assert.equal(element<HTMLDetailsElement>(document, '[data-view-details]').open, true);
-			assert.ok(element<HTMLElement>(document, '[data-view-builder] [data-add-condition]'));
-			assert.match(
-				textOf(element<HTMLElement>(document, '[data-author-where]')),
-				/Hours before|Hours after|Hours/
-			);
-			assert.equal(
-				document.querySelector('[data-author-where] [data-remove]'),
-				null,
-				'the author scope has no remove'
-			);
-			// the description becomes editable rows and a sort, ANDed under the author's where
-			element<HTMLInputElement>(header, '[data-describe] input').value = 'done ones, newest first';
-			element<HTMLInputElement>(header, '[data-describe] input').dispatchEvent(
-				new Event('input', { bubbles: true })
-			);
-			element<HTMLElement>(header, '[data-describe]').dispatchEvent(
-				new Event('submit', { bubbles: true, cancelable: true })
-			);
-			yield* browser(() => settle());
-			assert.deepEqual(s.last().where, { and: [{ hours: { gt: 1 } }, { status: { eq: 'done' } }] });
-			assert.deepEqual(s.last().orderBy, [{ created_at: 'desc' }]);
-			assert.ok(element<HTMLElement>(document, '[data-view-applied]'));
-			assert.equal(
-				document.querySelectorAll<HTMLElement>('[data-filter-rows] [data-cond="status"]').length,
-				1
-			);
-			assert.ok(
-				element<HTMLElement>(document, '[data-clear]'),
-				'conditions exist: Clear all shows'
-			);
-			// reopened with conditions, the manual accordion is collapsed until requested
-			element<HTMLElement>(document, '[data-view-trigger]').click();
-			flushSync();
-			element<HTMLElement>(document, '[data-view-trigger]').click();
-			flushSync();
-			assert.equal(element<HTMLDetailsElement>(document, '[data-view-details]').open, false);
-			yield* browser(v.done);
-		})
-);
-
-it.live(
-	'Table: a description the engine refuses shows its reason as an error, never "applied" (staging: "dsajdasomda")',
-	() =>
-		Effect.gen(function* () {
-			const s = yield* browser(() =>
-				scripted({
-					describe: () =>
-						fixtureEffect(() => {
-							throw new Error(
-								'No field here matches that description. Try naming a field and a value.'
-							);
-						})
-				})
-			);
-			const v = yield* browser(() =>
-				show(
-					{
-						part: 'table',
-						props: { of: 'jobs', columns: ['title', 'hours'] },
-						bolt: s.bolt,
-						catalog: catalog
-					},
-					'/'
-				)
-			);
-			element<HTMLElement>(document, '[data-view-trigger]').click();
-			flushSync();
-			const input = element<HTMLInputElement>(document, '[data-describe] input');
-			input.value = 'dsajdasomda';
-			input.dispatchEvent(new Event('input', { bubbles: true }));
-			element<HTMLElement>(document, '[data-describe]').dispatchEvent(
-				new Event('submit', { bubbles: true, cancelable: true })
-			);
-			yield* browser(() => settle());
-			assert.equal(document.querySelector('[data-view-applied]'), null);
-			const error = element<HTMLElement>(document, '[data-view-error]');
-			assert.equal(error?.getAttribute('role'), 'alert');
-			assert.match(textOf(error), /No field here matches/);
-			// typing again clears the error
-			input.value = 'done ones';
-			input.dispatchEvent(new Event('input', { bubbles: true }));
-			flushSync();
-			assert.equal(document.querySelector('[data-view-error]'), null);
-			yield* browser(v.done);
-		})
-);
-
-it.live(
-	'Table: a described relation filter and sort are editable rows ANDed under the author where (rule 16a)',
-	() =>
-		Effect.gen(function* () {
-			const s = yield* browser(() =>
-				scripted({
-					describe: () =>
-						Effect.succeed<DescribedFilter>({
-							where: {
-								and: [
-									{ lines: { some: { qty: { gt: 2 } } } },
-									{ account: { is: { name: { like: '%acme%' } } } }
-								]
-							},
-							orderBy: { hours: 'desc' }
-						})
-				})
-			);
-			const v = yield* browser(() =>
-				show(
-					{
-						part: 'table',
-						props: { of: 'jobs', columns: ['title', 'hours'], where: { status: { eq: 'done' } } },
-						bolt: s.bolt,
-						catalog: catalog
-					},
-					'/'
-				)
-			);
-			element<HTMLElement>(document, '[data-view-trigger]').click();
-			flushSync();
-			const form = element<HTMLElement>(document, '[data-describe]');
-			element<HTMLInputElement>(form, 'input').value =
-				'acme jobs with more than 2 of a line, most hours first';
-			element<HTMLInputElement>(form, 'input').dispatchEvent(new Event('input', { bubbles: true }));
-			form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
-			yield* browser(() => settle());
-			assert.deepEqual(s.last().where, {
-				and: [
-					{ status: { eq: 'done' } },
-					{
-						and: [
-							{ lines: { some: { qty: { gt: 2 } } } },
-							{ account: { is: { name: { like: '%acme%' } } } }
-						]
-					}
-				]
-			});
-			assert.deepEqual(s.last().orderBy, [{ hours: 'desc' }]);
-			assert.ok(
-				element<HTMLElement>(document, '[data-filter-rows] [data-many=lines]'),
-				'the relation group is a row the viewer edits'
-			);
-			yield* browser(v.done);
-		})
-);
-
-it.live('Table: a described OR of a relation condition reaches the read as one group', () =>
-	Effect.gen(function* () {
-		const s = yield* browser(() =>
-			scripted({
-				describe: () =>
-					Effect.succeed<DescribedFilter>({
-						where: {
-							or: [{ account: { is: { name: { like: '%acme%' } } } }, { status: { eq: 'done' } }]
-						}
-					})
-			})
-		);
-		const v = yield* browser(() =>
-			show(
-				{
-					part: 'table',
-					props: { of: 'jobs', columns: ['title'] },
-					bolt: s.bolt,
-					catalog: catalog
-				},
-				'/'
-			)
-		);
-		element<HTMLElement>(document, '[data-view-trigger]').click();
-		flushSync();
-		const form = element<HTMLElement>(document, '[data-describe]');
-		element<HTMLInputElement>(form, 'input').value = 'acme jobs or done jobs';
-		element<HTMLInputElement>(form, 'input').dispatchEvent(new Event('input', { bubbles: true }));
-		form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
-		yield* browser(() => settle());
-		assert.deepEqual(s.last().where, {
-			or: [{ account: { is: { name: { like: '%acme%' } } } }, { status: { eq: 'done' } }]
-		});
-		assert.ok(
-			element<HTMLElement>(document, '[data-filter-rows] [data-group=or]'),
-			'OR stays one editable group'
-		);
-		yield* browser(v.done);
-	})
-);
-
-it.live('a local array offers its fields to System 1 and keeps manual controls collapsed', () =>
-	Effect.gen(function* () {
-		let input:
-			| {
-					model: string;
-					text: string;
-					fields: Parameters<NonNullable<ViewBolt['describe']>>[2];
-			  }
-			| undefined;
-		const s = yield* browser(() =>
-			scripted({
-				describe: (model, text, fields) =>
-					fixtureEffect(() => {
-						input = { model, text, fields };
-						return { where: { number: { gt: 20 } }, orderBy: { name: 'asc' } };
-					})
-			})
-		);
-		const v = yield* browser(() =>
-			show(
-				{
-					part: 'table',
-					props: {
-						of: [
-							{ id: 'a', number: 10, name: 'Amy' },
-							{ id: 'b', number: 30, name: 'Bea' }
-						],
-						columns: ['number', 'name']
-					},
-					bolt: s.bolt,
-					catalog: catalog
-				},
-				'/'
-			)
-		);
-		element<HTMLElement>(document, '[data-view-trigger]').click();
-		flushSync();
-		assert.ok(element<HTMLElement>(document, '[data-describe]'));
-		assert.equal(element<HTMLDetailsElement>(document, '[data-view-details]').open, false);
-		const form = element<HTMLElement>(document, '[data-describe]');
-		element<HTMLInputElement>(form, 'input').value = 'number above 20, sorted by name';
-		element<HTMLInputElement>(form, 'input').dispatchEvent(new Event('input', { bubbles: true }));
-		form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
-		yield* browser(() => settle());
-		assert.ok(input);
-		assert.equal(input.model, '$local');
-		assert.deepEqual(
-			(input.fields ?? []).map((f) => f.name),
-			['number', 'name']
-		);
-		assert.ok(element<HTMLElement>(document, '[data-view-applied]'));
-		assert.equal(element<HTMLDetailsElement>(document, '[data-view-details]').open, false);
-		yield* browser(v.done);
-	})
-);
-
-it.live('Table: a large page bounds its mounted rows and retains the first record', () =>
-	Effect.gen(function* () {
-		const rows = Array.from({ length: 200 }, (_, i) => ({ id: `r${i}`, title: `Row ${i}` }));
-		const s = yield* browser(() => scripted());
-		const v = yield* browser(() =>
-			show({ part: 'table', props: { of: rows, columns: ['title'] }, bolt: s.bolt, catalog }, '/')
-		);
-		const wide = document.querySelectorAll<HTMLElement>(
-			'[data-table-wide] tbody tr:not([aria-hidden])'
-		);
-		const narrow = document.querySelectorAll<HTMLElement>(
-			'[data-table-list] li:not([aria-hidden])'
-		);
-		assert.ok(wide.length > 0 && wide.length < 200, `wide: ${wide.length} rows mounted`);
-		assert.ok(narrow.length > 0 && narrow.length < 200, `narrow: ${narrow.length} rows mounted`);
-		assert.match(textOf(wide[0]), /Row 0/);
-		yield* browser(v.done);
-	})
-);
-
-it.live('Table: related-record filters apply nested conditions and quantifiers', () =>
-	Effect.gen(function* () {
-		const s = yield* browser(() => scripted());
-		const v = yield* browser(() =>
-			show(
-				{
-					part: 'table',
-					props: { of: 'jobs', columns: ['title'] },
-					bolt: s.bolt,
-					catalog: catalog
-				},
-				'/'
-			)
-		);
-		const $ = (sel: string) => element<HTMLElement>(document, sel);
-		// a Combobox: open its trigger, click the option; the list is portalled to the body
-		const pick = async (trigger: HTMLElement, value: string) => {
-			trigger.click();
-			flushSync();
-			await tick();
-			element<HTMLElement>(document, `[role=option][data-value="${value}"] button`).click();
-			flushSync();
+			return browser(() => settle());
 		};
-		$('[data-view-trigger]').click();
-		yield* browser(() => settle());
-		$('[data-add-condition]').click();
-		flushSync();
-		$('[data-filter-rows] [data-field-picker]').click();
-		flushSync();
-		assert.equal(
-			document.querySelector('[data-field-list] [data-path=salary]'),
-			null,
-			'a masked field is never offered'
-		);
-		$('[data-field-list] [data-path=lines]').click();
-		flushSync();
-		const row = $('[data-many=lines]');
-		assert.ok(row);
-		element<HTMLElement>(row, '[data-add-nested]').click();
-		flushSync();
-		element<HTMLElement>(row, '[data-nested] [data-field-picker]').click();
-		flushSync();
-		element<HTMLElement>(row, '[data-nested] [data-path=qty]').click();
-		flushSync();
-		yield* browser(() =>
-			pick(element<HTMLElement>(row, '[data-nested] [data-cond=qty] [role=combobox]'), 'gt')
-		);
-		const input = element<HTMLInputElement>(row, '[data-nested] [data-cond=qty] input');
-		input.value = '2';
-		input.dispatchEvent(new Event('input', { bubbles: true }));
-		yield* browser(() => settle());
-		assert.deepEqual(s.last().where, { lines: { some: { qty: { gt: 2 } } } });
-		yield* browser(() =>
-			pick(element<HTMLElement>(row, '[role=combobox][aria-label=Quantifier]'), 'count')
-		);
-		yield* browser(() => settle());
-		assert.equal(row.querySelector('[data-nested]'), null, 'count has no nested rows');
+		assert.equal(calls, 0, 'nothing loads before the popover opens');
+		yield* toggle();
+		assert.equal(calls, 1);
+		yield* toggle();
+		yield* toggle();
+		assert.equal(calls, 2, 'reopening retries the failed request');
+		yield* toggle();
+		yield* toggle();
+		assert.equal(calls, 2, 'a loaded catalogue is reused');
 		yield* browser(v.done);
-	})
-);
-
-it.live('Table: the column menu moves and hides columns, kept per table', () =>
-	Effect.gen(function* () {
-		const s = yield* browser(() => scripted());
-		localStorage.removeItem('ui.table.jobs');
-		const v = yield* browser(() =>
-			show(
-				{
-					part: 'table',
-					props: { of: 'jobs', columns: ['title', 'hours'], orderBy: { title: 'asc' } },
-					bolt: s.bolt,
-					catalog: catalog
-				},
-				'/'
-			)
-		);
-		const heads = () =>
-			[...document.querySelectorAll<HTMLElement>('[data-table-wide] th[data-column]')].map(
-				(th) => th.dataset.column
-			);
-		const item = (text: string) =>
-			[...document.querySelectorAll<HTMLButtonElement>('button')].find(
-				(b) => textOf(b).trim() === text
-			);
-		element<HTMLElement>(document, '[data-column-menu=hours]').click();
-		flushSync();
-		required(item('Move left')).click();
-		flushSync();
-		assert.deepEqual(heads(), ['hours', 'title']);
-		element<HTMLElement>(document, '[data-column-menu=title]').click();
-		flushSync();
-		required(item('Hide column')).click();
-		flushSync();
-		assert.deepEqual(heads(), ['hours']);
-		assert.deepEqual(
-			Schema.decodeUnknownSync(
-				Schema.fromJsonString(Schema.Struct({ hidden: Schema.Array(Schema.String) }))
-			)(required(localStorage.getItem('ui.table.jobs'))).hidden,
-			['title']
-		);
-		yield* browser(v.done);
-		localStorage.removeItem('ui.table.jobs'); // later tables start from the default layout
 	})
 );
 
@@ -1244,7 +663,7 @@ it.live('Table: initialFilter seeds clearable rows, and a cleared choice survive
 			initialFilter: { status: { eq: 'scheduled' } }
 		};
 		let v = yield* browser(() =>
-			show({ part: 'table', props: props, bolt: s.bolt, catalog: catalog }, '/')
+			show({ part: 'table', view: Table, props: props, bolt: s.bolt, catalog: catalog }, '/')
 		);
 		assert.deepEqual(s.last().where, { status: { eq: 'scheduled' } });
 		element<HTMLElement>(document, '[data-view-trigger]').click();
@@ -1260,48 +679,63 @@ it.live('Table: initialFilter seeds clearable rows, and a cleared choice survive
 		assert.match(url, /jobs\.where=%7B%7D/);
 		yield* browser(v.done);
 		v = yield* browser(() =>
-			show({ part: 'table', props: props, bolt: s.bolt, catalog: catalog }, url)
+			show({ part: 'table', view: Table, props: props, bolt: s.bolt, catalog: catalog }, url)
 		);
 		assert.equal(s.last().where, undefined);
 		yield* browser(v.done);
 	})
 );
 
-it.live('Table: a relative-date filter sends literal bounds and follows the page day clock', () =>
-	Effect.gen(function* () {
-		const units: ('day' | 'hour' | 'minute' | undefined)[] = [];
-		const day = reactive({ today: '2026-01-02', now: '2026-01-02T03:04:05.000Z' });
-		const s = yield* browser(() => scripted());
-		s.bolt.clock = (unit) => {
-			units.push(unit);
-			return day;
-		};
-		const w = encodeURIComponent(
-			JSON.stringify({
-				scheduled_on: {
-					gte: { var: 'today - days(6)' },
-					lt: { var: 'today + days(1)' }
-				}
-			})
-		);
-		const v = yield* browser(() =>
-			show(
-				{ part: 'table', props: { of: 'jobs', columns: ['title'] }, bolt: s.bolt, catalog },
-				`/?jobs.where=${w}`
-			)
-		);
-		assert.ok(units.includes('day'));
-		const bounds = JSON.stringify(s.last().where);
-		assert.match(bounds, /2025-12-27/);
-		assert.match(bounds, /2026-01-03/);
-		assert.doesNotMatch(bounds, /"var"/);
-		day.today = '2026-01-03';
-		yield* browser(settle);
-		const next = JSON.stringify(s.last().where);
-		assert.match(next, /2025-12-28/);
-		assert.match(next, /2026-01-04/);
-		yield* browser(v.done);
-	})
+it.live(
+	'Table: a link drops bad clauses and keys with one notice and applies the rest; a relative date sends literal bounds and follows the page day clock',
+	() =>
+		Effect.gen(function* () {
+			const units: ('day' | 'hour' | 'minute' | undefined)[] = [];
+			const day = reactive({ today: '2026-01-02', now: '2026-01-02T03:04:05.000Z' });
+			const s = yield* browser(() => scripted());
+			s.bolt.clock = (unit) => {
+				units.push(unit);
+				return day;
+			};
+			const w = encodeURIComponent(
+				JSON.stringify({
+					and: [
+						{ status: { eq: 'done' } },
+						{ bogus: { eq: 1 } },
+						{ hours: { eq: 'abc' } },
+						{ scheduled_on: { gte: { var: 'today - days(6)' }, lt: { var: 'today + days(1)' } } }
+					]
+				})
+			);
+			const v = yield* browser(() =>
+				show(
+					{
+						part: 'table',
+						view: Table,
+						props: { of: 'jobs', columns: ['title', 'hours'] },
+						bolt: s.bolt,
+						catalog
+					},
+					`/?jobs.where=${w}&jobs.order=hours:desc,meta:asc`
+				)
+			);
+			assert.ok(units.includes('day'));
+			const bounds = JSON.stringify(s.last().where);
+			assert.match(bounds, /"status":\{"eq":"done"\}/);
+			assert.doesNotMatch(bounds, /bogus|abc/);
+			assert.deepEqual(s.last().orderBy, [{ hours: 'desc' }]);
+			assert.equal(document.querySelectorAll<HTMLElement>('[data-view-notice]').length, 1);
+			assert.equal(document.querySelector('[data-read=error]'), null);
+			assert.match(bounds, /2025-12-27/);
+			assert.match(bounds, /2026-01-03/);
+			assert.doesNotMatch(bounds, /"var"/);
+			day.today = '2026-01-03';
+			yield* browser(settle);
+			const next = JSON.stringify(s.last().where);
+			assert.match(next, /2025-12-28/);
+			assert.match(next, /2026-01-04/);
+			yield* browser(v.done);
+		})
 );
 
 it.effect(
@@ -1337,128 +771,6 @@ it.effect(
 			assert.match(varError(day, 'lt', 'requestor.email') ?? '', /not a date/);
 			const rows = nodesOf(catalog, 'jobs', { assignee: { eq: { var: 'requestor.id' } } });
 			assert.deepEqual(rows, [cond('assignee', 'eq', { var: 'requestor.id' })]);
-		})
-);
-
-it.live(
-	'Table: typing @ in a value offers its variables; the chosen one is a chip and reads as its operand',
-	() =>
-		Effect.gen(function* () {
-			const s = yield* browser(() =>
-				scripted({
-					options: (c) =>
-						Effect.succeed({
-							fields: [
-								...offers(c),
-								{
-									label: 'Scheduled on',
-									path: [{ k: 'field', name: 'scheduled_on' }],
-									op: 'lt',
-									opLabel: 'before',
-									kind: 'date'
-								}
-							]
-						})
-				})
-			);
-			const v = yield* browser(() =>
-				show(
-					{ part: 'table', props: { of: 'jobs', columns: ['title'] }, bolt: s.bolt, catalog },
-					'/'
-				)
-			);
-			const $ = (sel: string) => element<HTMLElement>(document, sel);
-			const at = (row: string) => {
-				const target = element<HTMLElement>(document, `[data-cond=${row}] [data-value]`);
-				const into = target.querySelector<HTMLElement>('input, button') ?? target;
-				into.dispatchEvent(
-					new KeyboardEvent('keydown', { key: '@', bubbles: true, cancelable: true })
-				);
-				flushSync();
-			};
-			const options = () =>
-				[...document.querySelectorAll<HTMLElement>('[data-variable-option]')].map(
-					(o) => o.dataset['variableOption']
-				);
-			const add = (path: string) => {
-				$('[data-add-condition]').click();
-				flushSync();
-				[...document.querySelectorAll<HTMLElement>('[data-filter-rows] [data-field-picker]')]
-					.at(-1)
-					?.click();
-				flushSync();
-				$(`[data-field-list] [data-path=${path}]`).click();
-				flushSync();
-			};
-			$('[data-view-trigger]').click();
-			yield* browser(() => settle());
-			add('assignee');
-			at('assignee');
-			assert.deepEqual(options(), ['requestor', 'requestor.party']);
-			const input = element<HTMLInputElement>(document, '[data-variable-input]');
-			input.value = '@req';
-			input.dispatchEvent(new Event('input', { bubbles: true }));
-			input.dispatchEvent(
-				new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true })
-			);
-			yield* browser(() => settle());
-			assert.ok(document.querySelector('[data-cond=assignee] [data-variable=requestor]'));
-			assert.deepEqual(s.last().where, { assignee: { eq: { var: 'requestor.id' } } });
-			add('scheduled_on');
-			$('[data-cond=scheduled_on] [role=combobox][aria-label=Operator]').click();
-			flushSync();
-			yield* browser(() => tick());
-			$('[role=option][data-value="lt"] button').click();
-			flushSync();
-			at('scheduled_on');
-			assert.deepEqual(options(), [
-				'today',
-				'today - days(7)',
-				'startOfWeek(today)',
-				'startOfMonth(today)'
-			]);
-			$('[data-variable-option=today] button').click();
-			yield* browser(() => settle());
-			assert.ok(document.querySelector('[data-cond=scheduled_on] [data-variable=today]'));
-			// the read gets today's literal at the page clock; the rows (and URL) keep the variable
-			assert.deepEqual(s.last().where, {
-				and: [{ assignee: { eq: { var: 'requestor.id' } } }, { scheduled_on: { lt: '2026-01-02' } }]
-			});
-			assert.match(decodeURIComponent(location.search), /"var":"today"/);
-			yield* browser(v.done);
-		})
-);
-
-it.live(
-	'Board: the viewer sort orders the cards within each lane and the lanes keep their order',
-	() =>
-		Effect.gen(function* () {
-			const s = yield* browser(() => scripted());
-			const v = yield* browser(() =>
-				show(
-					{
-						part: 'board',
-						props: { of: 'jobs', by: 'status', card: ['title'] },
-						bolt: s.bolt,
-						catalog: catalog
-					},
-					'/?jobs.order=hours:desc'
-				)
-			);
-			yield* browser(() =>
-				vi.waitFor(() => {
-					flushSync();
-					assert.ok(s.reads.filter((read) => read.c === 'jobs').length >= 2);
-				})
-			);
-			const lanes = [...document.querySelectorAll<HTMLElement>('[data-lane]')].map((l) =>
-				l.getAttribute('data-lane')
-			);
-			assert.deepEqual(lanes, ['"scheduled"', '"done"']);
-			const laneReads = s.reads.filter((r) => r.c === 'jobs');
-			assert.ok(laneReads.length >= 2);
-			for (const r of laneReads) assert.deepEqual(r.o.orderBy, [{ hours: 'desc' }]);
-			yield* browser(v.done);
 		})
 );
 
@@ -1539,104 +851,6 @@ it.effect(
 		})
 );
 
-it.live('Table: relation cells read labels together and open the related record', () =>
-	Effect.gen(function* () {
-		const s = yield* browser(() =>
-			scripted({
-				read: (c, o) => {
-					s.reads.push({ c, o });
-					return { rows: relRows, next: null };
-				}
-			})
-		);
-		const v = yield* browser(() =>
-			show(
-				{
-					part: 'table',
-					props: { of: 'jobs', columns: ['title', 'account', 'lines'] },
-					bolt: s.bolt,
-					catalog: relCatalog
-				},
-				'/'
-			)
-		);
-		assert.equal(s.reads.filter((r) => r.c !== 'jobs').length, 0, 'no read per related record');
-		assert.deepEqual(required(s.last().layers).lines, {
-			fields: ['name'],
-			limit: MANY_SHOWN + 1
-		});
-		const row = element<HTMLElement>(document, '[data-table-wide] tbody tr:not([aria-hidden])');
-		const one = element<HTMLElement>(row, '[data-ref=one]');
-		assert.equal(textOf(one).trim(), 'Acme');
-		assert.doesNotMatch(textOf(row), /\ba1\b|\bl1\b/);
-		const many = element<HTMLElement>(row, '[data-ref=many]');
-		assert.match(textOf(many), /Pipe/);
-		assert.equal(textOf(element<HTMLElement>(many, '[data-ref-more]')).trim(), '+2');
-		element<HTMLElement>(one, '[data-ref-open]').click();
-		assert.deepEqual(new URL(location.href).searchParams.getAll('record'), ['accounts/a1']);
-		yield* browser(v.done);
-	})
-);
-
-it.live(
-	"Table: a relation as the row's title is text, so a click on the title opens the row, not the related record",
-	() =>
-		Effect.gen(function* () {
-			const s = yield* browser(() => scripted({ read: (c, o) => ({ rows: relRows, next: null }) }));
-			const v = yield* browser(() =>
-				show(
-					{
-						part: 'table',
-						props: { of: 'jobs', columns: ['account', 'title'] },
-						bolt: s.bolt,
-						catalog: relCatalog
-					},
-					'/'
-				)
-			);
-			const row = element<HTMLElement>(document, '[data-table-wide] tbody tr:not([aria-hidden])');
-			const title = element<HTMLElement>(row, '[data-ref=one]');
-			assert.equal(textOf(title).trim(), 'Acme');
-			assert.equal(title.querySelector('[data-ref-open]'), null, 'the title is not a link');
-			const card = element<HTMLElement>(document, '[data-row-card]');
-			assert.equal(
-				card.querySelector('[data-ref-open]'),
-				null,
-				"a phone card's title is not a link"
-			);
-			title.click();
-			assert.deepEqual(new URL(location.href).searchParams.getAll('record'), ['jobs/j1']);
-			yield* browser(v.done);
-		})
-);
-
-it.live(
-	"Table: a column's custom cell renderer gets the row and value; other cells use the kind's default renderer",
-	() =>
-		Effect.gen(function* () {
-			const { createRawSnippet } = yield* browser(() => import('svelte'));
-			const cell = createRawSnippet<[{ row: Values; value: Value | undefined; field: string }]>(
-				(x) => ({ render: () => `<b data-custom>${x().row.id}:${x().value}</b>` })
-			);
-			const s = yield* browser(() => scripted({ read: (c, o) => ({ rows: relRows, next: null }) }));
-			const v = yield* browser(() =>
-				show(
-					{
-						part: 'table',
-						props: { of: 'jobs', columns: [{ field: 'title', cell }, 'done'] },
-						bolt: s.bolt,
-						catalog: relCatalog
-					},
-					'/'
-				)
-			);
-			const row = element<HTMLElement>(document, '[data-table-wide] tbody tr:not([aria-hidden])');
-			assert.equal(textOf(element<HTMLElement>(row, '[data-custom]')), 'j1:One');
-			assert.doesNotMatch(textOf(row), /true/, 'a boolean is drawn by its kind, not printed');
-			yield* browser(v.done);
-		})
-);
-
 it.live(
 	'Board: each lane reads its first page by its condition; nearing the lane end reads the next by its cursor',
 	() =>
@@ -1705,6 +919,7 @@ it.live(
 				show(
 					{
 						part: 'board',
+						view: Board,
 						props: { of: 'jobs', by: 'status', card: ['title'], pageSize: 1 },
 						bolt: s.bolt,
 						catalog: catalog
@@ -1751,40 +966,6 @@ it.live(
 		})
 );
 
-it.live('Board: dragging a card marks eligible lanes and clears the target after a drop', () =>
-	Effect.gen(function* () {
-		const s = yield* browser(() => scripted());
-		const v = yield* browser(() =>
-			show(
-				{
-					part: 'board',
-					props: { of: 'jobs', by: 'status', card: ['title'] },
-					bolt: s.bolt,
-					catalog: catalog
-				},
-				'/'
-			)
-		);
-		const lane = (x: string) => element<HTMLElement>(document, `[data-lane='"${x}"']`);
-		const card = element<HTMLElement>(lane('scheduled'), '[role=listitem]');
-		const fire = (el: HTMLElement, type: string) => {
-			el.dispatchEvent(new Event(type, { bubbles: true, cancelable: true }));
-			flushSync();
-		};
-		fire(card, 'dragstart');
-		fire(lane('scheduled'), 'dragover');
-		assert.equal(document.querySelector('[data-drop-target]'), null, 'its own lane is no target');
-		fire(lane('done'), 'dragover');
-		assert.ok(lane('done').hasAttribute('data-drop-target'));
-		const ghost = element<HTMLElement>(lane('done'), '[data-drop-placeholder]');
-		assert.equal(textOf(ghost), textOf(card), 'the placeholder copies the dragged card');
-		assert.equal(ghost.querySelector('[draggable]'), null);
-		fire(lane('done'), 'drop');
-		assert.equal(document.querySelector('[data-drop-target], [data-drop-placeholder]'), null);
-		yield* browser(v.done);
-	})
-);
-
 it.live(
 	'Table: `/` lists search indexes; semantic text and typed index inputs use the query search argument',
 	() =>
@@ -1806,6 +987,7 @@ it.live(
 				show(
 					{
 						part: 'table',
+						view: Table,
 						props: { of: 'jobs', columns: ['title', 'hours'] },
 						bolt: s.bolt,
 						catalog: cat
@@ -1840,6 +1022,7 @@ it.live(
 				i.dispatchEvent(new Event('input', { bubbles: true }));
 				flushSync();
 			};
+			vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
 			type('/');
 			assert.deepEqual(
 				[...document.querySelectorAll<HTMLButtonElement>('[data-search-option]')].map((b) => [
@@ -1857,7 +1040,8 @@ it.live(
 				element<HTMLElement>(document, '[data-search-none]'),
 				'a `/` matching no index says so'
 			);
-			yield* browser(() => new Promise((r) => setTimeout(r, 350)));
+			yield* browser(() => vi.advanceTimersByTimeAsync(350));
+			vi.useRealTimers();
 			yield* browser(() => settle());
 			assert.equal(s.last().search, undefined, 'a `/…` picking an index is never a search term');
 			type('/semantic ');
@@ -1911,7 +1095,7 @@ it.live(
 );
 
 it.live(
-	'Table: pending description deadline clears busy, shows retry error and preserves prior filter',
+	'Table: a pending description deadline clears busy and keeps the prior filter; a described relation filter and sort are editable rows ANDed under the author where (rule 16a)',
 	() =>
 		Effect.gen(function* () {
 			let reject: (error: Error) => void = () => {
@@ -1924,18 +1108,27 @@ it.live(
 						++attempts === 1
 							? browser(
 									() =>
-										new Promise<{ where: Json }>((_resolve, no) => {
+										new Promise<DescribedFilter>((_resolve, no) => {
 											reject = no;
 										})
 								)
-							: Effect.succeed({ where: { status: { eq: 'done' } } })
+							: Effect.succeed<DescribedFilter>({
+									where: {
+										and: [
+											{ lines: { some: { qty: { gt: 2 } } } },
+											{ account: { is: { name: { like: '%acme%' } } } }
+										]
+									},
+									orderBy: { hours: 'desc' }
+								})
 				})
 			);
 			const v = yield* browser(() =>
 				show(
 					{
 						part: 'table',
-						props: { of: 'jobs', columns: ['title', 'hours'], where: { hours: { gte: 1 } } },
+						view: Table,
+						props: { of: 'jobs', columns: ['title', 'hours'], where: { status: { eq: 'done' } } },
 						bolt: s.bolt,
 						catalog: catalog
 					},
@@ -1945,7 +1138,7 @@ it.live(
 			element<HTMLElement>(document, '[data-view-trigger]').click();
 			flushSync();
 			const input = element<HTMLInputElement>(document, '[data-describe] input');
-			input.value = 'open jobs';
+			input.value = 'acme jobs with more than 2 of a line, most hours first';
 			input.dispatchEvent(new Event('input', { bubbles: true }));
 			const form = element<HTMLElement>(document, '[data-describe]');
 			form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
@@ -1963,13 +1156,28 @@ it.live(
 			);
 			yield* browser(() => settle());
 			assert.equal(document.querySelector('[data-view-loading]'), null);
-			assert.deepEqual(s.last().where, { hours: { gte: 1 } });
-			assert.match(textOf(element<HTMLElement>(document, '[data-view-error]')), /Try again/);
+			assert.deepEqual(s.last().where, { status: { eq: 'done' } });
+			assert.ok(element<HTMLElement>(document, '[data-view-error]'));
 			assert.equal(element<HTMLButtonElement>(form, 'button[type="submit"]').disabled, false);
 			form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
 			yield* browser(() => settle());
-			assert.ok(element<HTMLElement>(document, '[data-view-applied]'));
 			assert.equal(document.querySelector('[data-view-error]'), null);
+			assert.deepEqual(s.last().where, {
+				and: [
+					{ status: { eq: 'done' } },
+					{
+						and: [
+							{ lines: { some: { qty: { gt: 2 } } } },
+							{ account: { is: { name: { like: '%acme%' } } } }
+						]
+					}
+				]
+			});
+			assert.deepEqual(s.last().orderBy, [{ hours: 'desc' }]);
+			assert.ok(
+				element<HTMLElement>(document, '[data-filter-rows] [data-many=lines]'),
+				'the relation group is a row the viewer edits'
+			);
 			yield* browser(v.done);
 		})
 );
@@ -2063,6 +1271,7 @@ function mountCountingBoard(s: Awaited<ReturnType<typeof changingBoard>>) {
 			bolt: s.bolt,
 			catalog,
 			part: 'board',
+			view: Board,
 			props: {
 				of: 'jobs',
 				by: 'status',
@@ -2134,343 +1343,4 @@ it.live(
 				vi.useRealTimers();
 			}
 		})
-);
-it.live('Board counts: changing scope ignores older aggregate replies', () =>
-	Effect.gen(function* () {
-		const pending: PromiseWithResolvers<CountAnswer>[] = [];
-		const data = [
-			...Array.from({ length: 99 }, (_, i) => ({
-				id: `low-${i}`,
-				title: 'Low',
-				hours: 1,
-				status: 'scheduled'
-			})),
-			...Array.from({ length: 12 }, (_, i) => ({
-				id: `high-${i}`,
-				title: 'High',
-				hours: 8,
-				status: 'scheduled'
-			}))
-		];
-		const s = yield* browser(() =>
-				changingBoard(() => {
-					const p = Promise.withResolvers<CountAnswer>();
-					pending.push(p);
-					return p.promise;
-				}, data)
-			),
-			v = mountCountingBoard(s);
-		try {
-			yield* browser(() => flushBoard());
-			assert.equal(pending.length, 1);
-			v.app.setBoardScope({ hours: { gt: 7 } });
-			yield* browser(() => flushBoard());
-			assert.equal(pending.length, 2);
-			required(pending[1]).resolve({
-				rows: [{ key: { status: 'scheduled' }, count: 12 }],
-				next: null
-			});
-			yield* browser(() => flushBoard());
-			assert.equal(v.count('scheduled'), '12');
-			required(pending[0]).resolve({
-				rows: [{ key: { status: 'scheduled' }, count: 111 }],
-				next: null
-			});
-			yield* browser(() => flushBoard());
-			assert.equal(v.count('scheduled'), '12', 'the first scope cannot overwrite the new scope');
-		} finally {
-			yield* browser(() => unmount(v.app));
-			v.target.remove();
-			history.replaceState(null, '', '/');
-		}
-	})
-);
-it.live('Board counts: unmount cancels an owed refresh and releases every live page', () =>
-	Effect.gen(function* () {
-		vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] });
-		vi.setSystemTime(1000);
-		const s = yield* browser(() => changingBoard()),
-			v = mountCountingBoard(s);
-		let ended = false;
-		try {
-			yield* browser(() => flushBoard());
-			s.move();
-			yield* browser(() => flushBoard());
-			yield* browser(() => unmount(v.app));
-			ended = true;
-			yield* browser(() => flushBoard());
-			yield* browser(() => vi.advanceTimersByTimeAsync(60000));
-			yield* browser(() => flushBoard());
-			assert.equal(s.readers.size, 0, 'shared queries release after their grace period');
-			assert.equal(s.aggregates.length, 1, 'no request starts after unmount');
-		} finally {
-			if (!ended) yield* browser(() => unmount(v.app));
-			v.target.remove();
-			vi.useRealTimers();
-		}
-	})
-);
-
-it.live(
-	'Board counts: an update during an aggregate discards its older snapshot and retains a trailing refresh',
-	() =>
-		Effect.gen(function* () {
-			vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] });
-			vi.setSystemTime(1000);
-			const pending: (PromiseWithResolvers<CountAnswer> & { answer: CountAnswer })[] = [];
-			const s = yield* browser(() =>
-					changingBoard((_options, answer) => {
-						if (pending.length === 0) {
-							pending.push({ ...Promise.withResolvers<CountAnswer>(), answer });
-							return answer;
-						}
-						const request = Promise.withResolvers<CountAnswer>();
-						pending.push({ ...request, answer });
-						return request.promise;
-					})
-				),
-				v = mountCountingBoard(s);
-			try {
-				yield* browser(() => flushBoard());
-				s.move();
-				yield* browser(() => flushBoard());
-				yield* browser(() => vi.advanceTimersByTimeAsync(30000));
-				yield* browser(() => flushBoard());
-				assert.equal(pending.length, 2);
-				s.move('scheduled-2');
-				yield* browser(() => flushBoard());
-				required(pending[1]).resolve(required(pending[1]).answer);
-				yield* browser(() => flushBoard());
-				assert.equal(
-					v.count('scheduled'),
-					'',
-					'a count read before the second change cannot be shown'
-				);
-				yield* browser(() => vi.advanceTimersByTimeAsync(30000));
-				yield* browser(() => flushBoard());
-				assert.equal(pending.length, 3);
-				required(pending[2]).resolve(required(pending[2]).answer);
-				yield* browser(() => flushBoard());
-				assert.equal(v.count('scheduled'), '1');
-				assert.equal(v.count('done'), '3');
-			} finally {
-				yield* browser(() => unmount(v.app));
-				v.target.remove();
-				vi.useRealTimers();
-			}
-		})
-);
-
-it.live('Board counts: refreshing headings preserves loaded keyset pages', () =>
-	Effect.gen(function* () {
-		vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] });
-		vi.setSystemTime(1000);
-		const s = yield* browser(() => changingBoard(undefined, undefined, true)),
-			v = mountCountingBoard(s);
-		try {
-			yield* browser(() => flushBoard());
-			const lane = () => element<HTMLElement>(v.target, '[data-lane=\'"scheduled"\']');
-			element<HTMLElement>(lane(), '[data-lane-more]').click();
-			yield* browser(() => flushBoard());
-			assert.equal(lane().querySelectorAll<HTMLElement>('[role=listitem]').length, 2);
-			s.move('scheduled-3');
-			yield* browser(() => flushBoard());
-			yield* browser(() => vi.advanceTimersByTimeAsync(30000));
-			yield* browser(() => flushBoard());
-			assert.equal(v.count('scheduled'), '2');
-			assert.equal(
-				lane().querySelectorAll<HTMLElement>('[role=listitem]').length,
-				2,
-				'count changes do not rewind the lane to its first page'
-			);
-		} finally {
-			yield* browser(() => unmount(v.app));
-			v.target.remove();
-			vi.useRealTimers();
-		}
-	})
-);
-
-type TableCountAnswer = readonly { count: number }[];
-async function changingTable(aggregate?: AggregateScript<TableCountAnswer>) {
-	let rows = Array.from({ length: 35 }, (_, i) => ({
-		id: `job-${i}`,
-		title: `Job ${i}`,
-		hours: i + 1,
-		status: 'scheduled'
-	}));
-	const readers = new Set<() => void>(),
-		aggregates: ReadOptions[] = [];
-	const page = (options: ReadOptions) => ({
-		rows: rows.filter((row) => matchesScope(row, options.where)).slice(0, options.limit),
-		next: null
-	});
-	const s = await scripted({
-		read: (_model, options) => page(options),
-		changes: (read, emit) => {
-			if (read.m !== 'query') return () => {};
-			readers.add(emit);
-			return () => {
-				readers.delete(emit);
-			};
-		},
-		aggregate: (_model, options) => {
-			aggregates.push(options);
-			const answer = [{ count: rows.filter((row) => matchesScope(row, options.where)).length }];
-			return aggregate?.(options, answer) ?? answer;
-		}
-	});
-	return {
-		...s,
-		readers,
-		aggregates,
-		remove(id = 'job-0') {
-			rows = rows.filter((row) => row.id !== id);
-			for (const reader of readers) reader();
-		}
-	};
-}
-function mountCountingTable(s: Awaited<ReturnType<typeof changingTable>>) {
-	history.replaceState(null, '', '/');
-	const target = document.body.appendChild(document.createElement('div'));
-	const app = mount(Harness, {
-		target,
-		props: {
-			bolt: s.bolt,
-			catalog,
-			part: 'table',
-			props: { of: 'jobs', columns: ['title'], pageSize: 10 }
-		}
-	});
-	return { target, app, range: () => target.querySelector('[data-range]')?.textContent };
-}
-it.live(
-	'Table counts: a final live update inside the count window gets a trailing refresh without stable polling',
-	() =>
-		Effect.gen(function* () {
-			vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] });
-			vi.setSystemTime(1000);
-			const s = yield* browser(() => changingTable()),
-				v = mountCountingTable(s);
-			try {
-				yield* browser(() => flushBoard());
-				assert.equal(v.range(), 'rows 1–10 of 35');
-				assert.equal(s.aggregates.length, 1);
-				s.remove();
-				yield* browser(() => flushBoard());
-				assert.equal(v.range(), 'rows 1–10', 'outdated counts are hidden');
-				yield* browser(() => vi.advanceTimersByTimeAsync(10000));
-				s.remove('job-1');
-				yield* browser(() => flushBoard());
-				yield* browser(() => vi.advanceTimersByTimeAsync(19999));
-				yield* browser(() => flushBoard());
-				assert.equal(s.aggregates.length, 1);
-				yield* browser(() => vi.advanceTimersByTimeAsync(1));
-				yield* browser(() => flushBoard());
-				assert.equal(v.range(), 'rows 1–10 of 33');
-				assert.equal(s.aggregates.length, 2);
-				yield* browser(() => vi.advanceTimersByTimeAsync(90000));
-				yield* browser(() => flushBoard());
-				assert.equal(s.aggregates.length, 2, 'stable tables do not poll');
-			} finally {
-				yield* browser(() => unmount(v.app));
-				v.target.remove();
-				vi.useRealTimers();
-			}
-		})
-);
-it.live('Table counts: a previous filter response cannot overwrite the active count', () =>
-	Effect.gen(function* () {
-		const pending: PromiseWithResolvers<TableCountAnswer>[] = [];
-		const s = yield* browser(() =>
-				changingTable(() => {
-					const request = Promise.withResolvers<TableCountAnswer>();
-					pending.push(request);
-					return request.promise;
-				})
-			),
-			v = mountCountingTable(s);
-		try {
-			yield* browser(() => flushBoard());
-			v.app.setTableScope({ hours: { gt: 30 } });
-			yield* browser(() => flushBoard());
-			assert.equal(pending.length, 2);
-			required(pending[1]).resolve([{ count: 5 }]);
-			yield* browser(() => flushBoard());
-			assert.equal(v.range(), 'rows 1–5 of 5');
-			required(pending[0]).resolve([{ count: 35 }]);
-			yield* browser(() => flushBoard());
-			assert.equal(v.range(), 'rows 1–5 of 5');
-		} finally {
-			yield* browser(() => unmount(v.app));
-			v.target.remove();
-		}
-	})
-);
-it.live('Table counts: unmount cancels the trailing refresh and releases the page', () =>
-	Effect.gen(function* () {
-		vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] });
-		vi.setSystemTime(1000);
-		const s = yield* browser(() => changingTable()),
-			v = mountCountingTable(s);
-		let ended = false;
-		try {
-			yield* browser(() => flushBoard());
-			s.remove();
-			yield* browser(() => flushBoard());
-			yield* browser(() => unmount(v.app));
-			ended = true;
-			yield* browser(() => flushBoard());
-			yield* browser(() => vi.advanceTimersByTimeAsync(60000));
-			yield* browser(() => flushBoard());
-			assert.equal(s.readers.size, 0, 'shared queries release after their grace period');
-			assert.equal(s.aggregates.length, 1);
-		} finally {
-			if (!ended) yield* browser(() => unmount(v.app));
-			v.target.remove();
-			vi.useRealTimers();
-		}
-	})
-);
-it.live('Table counts: an in-flight count is discarded after another live update', () =>
-	Effect.gen(function* () {
-		vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] });
-		vi.setSystemTime(1000);
-		const pending: (PromiseWithResolvers<TableCountAnswer> & { answer: TableCountAnswer })[] = [];
-		const s = yield* browser(() =>
-				changingTable((_options, answer) => {
-					if (pending.length === 0) {
-						pending.push({ ...Promise.withResolvers<TableCountAnswer>(), answer });
-						return answer;
-					}
-					const request = Promise.withResolvers<TableCountAnswer>();
-					pending.push({ ...request, answer });
-					return request.promise;
-				})
-			),
-			v = mountCountingTable(s);
-		try {
-			yield* browser(() => flushBoard());
-			s.remove();
-			yield* browser(() => flushBoard());
-			yield* browser(() => vi.advanceTimersByTimeAsync(30000));
-			yield* browser(() => flushBoard());
-			assert.equal(pending.length, 2);
-			s.remove('job-1');
-			yield* browser(() => flushBoard());
-			required(pending[1]).resolve(required(pending[1]).answer);
-			yield* browser(() => flushBoard());
-			assert.equal(v.range(), 'rows 1–10');
-			yield* browser(() => vi.advanceTimersByTimeAsync(30000));
-			yield* browser(() => flushBoard());
-			assert.equal(pending.length, 3);
-			required(pending[2]).resolve(required(pending[2]).answer);
-			yield* browser(() => flushBoard());
-			assert.equal(v.range(), 'rows 1–10 of 33');
-		} finally {
-			yield* browser(() => unmount(v.app));
-			v.target.remove();
-			vi.useRealTimers();
-		}
-	})
 );

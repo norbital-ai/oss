@@ -8,6 +8,7 @@ import { LAYER_MAX_DEPTH } from '../src/decl/model.ts';
 import type { EngineManifest } from '../src/engine/manifest.ts';
 
 const base: EngineManifest = {
+	needs: [],
 	workspace: { tz: 'UTC', locale: 'en' },
 	models: {
 		nodes: { description: 'A tree node', label: 'name', fields: { name: { kind: 'text' } } },

@@ -232,13 +232,13 @@ export type HttpOp<O> = {
 	output: O & Checked<InputKind, O, Exact<O, ValidInput<O>>>;
 };
 /**
- * An instance's live request: journalled, credential host-side, paced by the definition's `rate` (a `429` with
+ * An instance's live request: credential host-side, paced by the definition's `rate` (a `429` with
  * `Retry-After` is honoured); it fails with a `FacilityFailure` or `Unavailable`.
  */
 export interface HttpRequester {
 	<const O extends InputKind>(op: HttpOp<O>): Eff<ValueOf<O>, FacilityFailure | Unavailable>;
 }
-/** A database instance's live request: one bounded statement, journalled, its connection string host-side. */
+/** A database instance's live request: one bounded statement, its connection string host-side. */
 export interface DatabaseRequester {
 	(op: DatabaseRequest): Eff<DatabaseResult, FacilityFailure | Unavailable>;
 }

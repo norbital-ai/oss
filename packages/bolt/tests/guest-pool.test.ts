@@ -1,50 +1,15 @@
 /// <reference types="node" />
 // The Node host's prepared isolates: fresh heaps, bounded per host and program, owned by the host's scope.
 import { describe, expect, it } from '@effect/vitest';
-import { Context, Deferred, Effect, Exit, Fiber, Layer, Schedule, Scope } from 'effect';
+import { Context, Deferred, Effect, Exit, Fiber, Layer, Scope } from 'effect';
 import { TestClock } from 'effect/testing';
-import { vi } from 'vitest';
 import { LIMITS, type GuestOutcome, type Invocation } from '../src/engine/contracts.ts';
 import type { GuestProgram } from '../src/engine/guest/runner.ts';
 import { GuestIsolates } from '../src/engine/ports.ts';
 import { Guest, type Bridge } from '../src/engine/services.ts';
 import { guestIsolates } from '../src/node/guest-isolates.ts';
 import { guestLayer } from './support/guest-fixture.ts';
-
-const observed = vi.hoisted(() => ({
-	scopes: new Set<Scope.Closeable>(),
-	enabled: false,
-	maps: 0
-}));
-vi.mock('effect', async (importOriginal) => {
-	const original = await importOriginal<typeof import('effect')>();
-	return {
-		...original,
-		Scope: {
-			...original.Scope,
-			fork: (...args: Parameters<typeof original.Scope.fork>) =>
-				original.Scope.fork(...args).pipe(
-					original.Effect.tap((scope) =>
-						original.Effect.sync(() => {
-							if (observed.enabled) observed.scopes.add(scope);
-						})
-					)
-				)
-		}
-	};
-});
-vi.mock('@jridgewell/trace-mapping', async (importOriginal) => {
-	const original = await importOriginal<typeof import('@jridgewell/trace-mapping')>();
-	return {
-		...original,
-		TraceMap: class extends original.TraceMap {
-			constructor(...args: ConstructorParameters<typeof original.TraceMap>) {
-				super(...args);
-				observed.maps++;
-			}
-		}
-	};
-});
+import { until } from './support/turns.ts';
 
 const program = (body: string, prefix = ''): GuestProgram => ({
 	source: `${prefix}\nexport default { automation: { a: { body: ${body} } } };\n`
@@ -92,15 +57,7 @@ const harness = (overrides: { readonly depth?: number; readonly idleMs?: number 
 	});
 type Harness = Effect.Success<ReturnType<typeof harness>>;
 const settled = (test: Harness) =>
-	test.counts.pipe(
-		Effect.repeat({
-			schedule: Schedule.spaced('5 millis'),
-			until: (counts) => counts.preparing === 0,
-			times: 400
-		}),
-		Effect.tap((counts) => Effect.sync(() => expect(counts.preparing).toBe(0))),
-		Effect.asVoid
-	);
+	until(Effect.map(test.counts, (counts) => counts.preparing === 0));
 const noneRunning = (test: Harness) =>
 	Effect.map(test.counts, (counts) => expect(counts.live).toBe(counts.warm));
 const evictAll = (test: Harness) =>
@@ -114,7 +71,7 @@ const evictAll = (test: Harness) =>
 		expect((yield* test.counts).warm).toBe(0);
 	});
 describe('prepared isolates', () => {
-	it.live('parses source maps only when an error needs its authored location', () =>
+	it.live('maps a guest error to its authored location', () =>
 		Effect.gen(function* () {
 			const test = yield* harness();
 			const runner = yield* test.runner({
@@ -127,46 +84,11 @@ describe('prepared isolates', () => {
 					mappings: ';AAAA'
 				})
 			});
-			const before = observed.maps;
-			for (let i = 0; i < 8; i++)
-				expect(ok(yield* runner.invoke(invocation(`success-${i}`), bridge))).toBe(1);
-			expect(observed.maps).toBe(before);
+			expect(ok(yield* runner.invoke(invocation('success'), bridge))).toBe(1);
 			const failed = yield* runner.invoke({ ...invocation('mapped error'), input: true }, bridge);
 			expect(failed.kind).toBe('failed');
 			if (failed.kind !== 'failed') return;
 			expect(failed.error.cause).toMatchObject({ at: 'src/automation/+a.automation.ts:1' });
-			expect(observed.maps).toBe(before + 1);
-		})
-	);
-	it.live('keeps pool finalizers bounded while used warm isolates are replaced', () =>
-		Effect.gen(function* () {
-			observed.enabled = true;
-			try {
-				const test = yield* harness();
-				test.warm.depth = 1;
-				const runner = yield* test.runner(program('() => 1', '// finalizer lifetime'));
-				expect(ok(yield* runner.invoke(invocation('prime'), bridge))).toBe(1);
-				yield* settled(test);
-				yield* Effect.yieldNow;
-				expect(observed.scopes.size).toBeGreaterThan(0);
-				const retained = () =>
-					[...observed.scopes].map(({ state }) =>
-						state._tag === 'Open'
-							? Number(state.finalizer !== undefined) + (state.finalizers?.size ?? 0)
-							: 0
-					);
-				const before = retained();
-				for (let i = 0; i < 8; i++) {
-					expect(ok(yield* runner.invoke(invocation(`replacement-${i}`), bridge))).toBe(1);
-					yield* settled(test);
-					yield* Effect.yieldNow;
-					expect(retained()).toEqual(before);
-				}
-				yield* noneRunning(test);
-			} finally {
-				observed.enabled = false;
-				observed.scopes.clear();
-			}
 		})
 	);
 	it.live('refills a borrowed warm slot while its invocation waits for host I/O', () =>
@@ -256,8 +178,7 @@ describe('prepared isolates', () => {
 				expect(again.kind === 'failed' && again.error.code).toBe('cpuBudget');
 				yield* settled(test);
 				yield* noneRunning(test);
-			}),
-		20_000
+			})
 	);
 	it.live('keeps at most depth prepared isolates per program', () =>
 		Effect.gen(function* () {

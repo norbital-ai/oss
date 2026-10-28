@@ -1,7 +1,7 @@
 import { expect, it } from '@effect/vitest';
 import { Effect } from 'effect';
-import { PgliteDb, Pristine } from '../src/node/db/pglite.ts';
-import { applyPlan, plan } from '../src/engine/schema/plan.ts';
+import { PgliteDb } from '../src/node/db/pglite.ts';
+import { TestDb } from '../src/test/database.ts';
 import { queueTriggered } from '../src/engine/runs/queue.ts';
 import { Chain } from '../src/engine/write/sql.ts';
 import { manifest as base, NOW } from './write-fixture.ts';
@@ -21,8 +21,7 @@ it.effect("a filtered trigger never casts another model's row image", () =>
 				}
 			}
 		};
-		const db = PgliteDb.make(yield* PgliteDb.open());
-		yield* applyPlan(db, yield* plan(null, manifest), { accept: true });
+		const db = PgliteDb.make(yield* TestDb.open(manifest));
 		const order = '0199a000-0000-4000-8000-000000000091';
 		const c = new Chain();
 		c.cte(
@@ -38,5 +37,5 @@ it.effect("a filtered trigger never casts another model's row image", () =>
 			{ text: `SELECT automation, input->'ids' AS ids FROM sys_run`, params: [] }
 		]);
 		expect(queued?.rows).toEqual([{ automation: 'unnoted', ids: [order] }]);
-	}).pipe(Effect.scoped, Effect.provide(Pristine.layer))
+	}).pipe(Effect.scoped)
 );

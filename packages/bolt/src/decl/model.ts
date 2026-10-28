@@ -1168,15 +1168,6 @@ export function splitModel(name: string, literal: ModelLiteral): ModelParts {
 	return { model: stored, relationships, exposure };
 }
 
-/** Every path one exposure declares, in its read, create and update layer maps. */
-export const layerPaths = (c: ExposureSpec): readonly string[] => [
-	...new Set([
-		...Object.keys(c.read),
-		...Object.keys(c.create?.columns ?? {}),
-		...Object.keys(c.create?.filled ?? {}),
-		...Object.keys(c.update?.columns ?? {})
-	])
-];
 /**
  * The model behind each path `root`'s exposure declares (the root itself included), and what is wrong with the others:
  * a path that does not start at the root, is deeper than `LAYER_MAX_DEPTH`, lacks its parent in the same map, crosses an

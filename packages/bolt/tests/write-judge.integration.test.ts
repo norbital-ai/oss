@@ -6,15 +6,14 @@ import { Context, Effect, Layer, Result, Schema } from 'effect';
 import type { Json } from '../src/decl/values.ts';
 import { compileAuthority } from '../src/engine/access/authority.ts';
 import type { Authority, GuestOutcome, Invocation } from '../src/engine/contracts.ts';
-import { PgliteDb } from '../src/node/db/pglite.ts';
+import { TestDb } from '../src/test/database.ts';
 import { TenantDb } from '../src/engine/db/tenant-db.ts';
-import { decodeManifest } from '../src/engine/manifest.ts';
-import { applyPlan, plan } from '../src/engine/schema/plan.ts';
+import { decodeProjectedManifest } from '../src/engine/manifest.ts';
 import { act, type WriteEngine } from '../src/engine/write/act.ts';
 import { admin, member, NOW, TODAY } from './write-fixture.ts';
 
 const m = Result.getOrThrow(
-	decodeManifest({
+	decodeProjectedManifest({
 		workspace: { tz: 'UTC', locale: 'en' },
 		models: {
 			orders: {
@@ -167,7 +166,6 @@ const approval: WriteEngine['approval'] = {
 };
 const fixture = Effect.gen(function* () {
 	const db = yield* TenantDb;
-	yield* applyPlan(db, yield* plan(null, m), { accept: true });
 	let n = 0;
 	const run = (
 		model: string,
@@ -203,7 +201,7 @@ const fixture = Effect.gen(function* () {
 class JudgeFixture extends Context.Service<JudgeFixture, Effect.Success<typeof fixture>>()(
 	'test/JudgeFixture'
 ) {}
-const JudgeFixtureLive = Layer.effect(JudgeFixture, fixture).pipe(Layer.provide(PgliteDb.layer()));
+const JudgeFixtureLive = Layer.effect(JudgeFixture, fixture).pipe(Layer.provide(TestDb.layer(m)));
 
 describe('engine/write: columns, then one check over the stored and the written row (rule 35)', () => {
 	it.effect(

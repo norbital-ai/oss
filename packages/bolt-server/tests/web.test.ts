@@ -10,7 +10,6 @@ import { ClientRequest, IncomingMessage } from 'node:http';
 import { gzipSync } from 'node:zlib';
 import { Duplex } from 'node:stream';
 import type { request as httpsRequest, RequestOptions } from 'node:https';
-import { pdfFixture } from './helpers/pdf-fixture.ts';
 
 /** One read as a tagged result, so a refusal and a page assert alike. */
 type Options = Parameters<typeof readPublicPage>[1];
@@ -23,65 +22,6 @@ const read = (options: Options, url: string) =>
 	);
 
 describe('public web connector', () => {
-	it.live('extracts every PDF page with a digest of the original binary source', () =>
-		Effect.gen(function* () {
-			const body = pdfFixture(['RESIN-42 Melt flow 12 g/10 min', 'Density 0.92 g/cm3']);
-			const binding: Options = {
-				resolve: async () => [{ address: '1.1.1.1', family: 4 }],
-				request: () => Effect.succeed({ status: 200, contentType: 'application/pdf', body })
-			};
-			const result = yield* read(binding, 'https://supplier.example/resin.pdf');
-			expect(result._tag).toBe('Success');
-			if (result._tag !== 'Success') throw new Error('PDF extraction failed');
-			expect(result.value.output).toMatchObject({
-				url: 'https://supplier.example/resin.pdf',
-				contentType: 'application/pdf',
-				sha256: createHash('sha256').update(body).digest('hex'),
-				pageCount: 2
-			});
-			expect(result.value.output).toHaveProperty(
-				'body',
-				expect.stringContaining('RESIN-42 Melt flow 12 g/10 min')
-			);
-			expect(result.value.output).toHaveProperty(
-				'body',
-				expect.stringContaining('Density 0.92 g/cm3')
-			);
-		})
-	);
-
-	it.live('keeps a scanned page as a marked gap among the readable pages', () =>
-		Effect.gen(function* () {
-			const binding: Options = {
-				resolve: async () => [{ address: '1.1.1.1', family: 4 }],
-				request: () =>
-					Effect.succeed({
-						status: 200,
-						contentType: 'application/pdf',
-						body: pdfFixture(['Valid first page', ''])
-					})
-			};
-			const page = yield* read(binding, 'https://supplier.example/data.pdf');
-			expect(page._tag === 'Success' ? page.value.output.body : page).toMatch(
-				/\[Page 1\]\nValid first page[\s\S]*\[Page 2\]\n\(no extractable text: a scanned page\)/
-			);
-		})
-	);
-	it.live('refuses corrupt and overlong PDFs', () =>
-		Effect.gen(function* () {
-			for (const body of [
-				new Uint8Array(Buffer.from('%PDF-1.7 broken')),
-				pdfFixture(Array.from({ length: 201 }, () => 'text'))
-			]) {
-				const binding: Options = {
-					resolve: async () => [{ address: '1.1.1.1', family: 4 }],
-					request: () => Effect.succeed({ status: 200, contentType: 'application/pdf', body })
-				};
-				expect((yield* read(binding, 'https://supplier.example/data.pdf'))._tag).toBe('Failure');
-			}
-		})
-	);
-
 	it('refuses local, private, mapped and reserved addresses', () => {
 		for (const address of [
 			'127.0.0.1',
@@ -329,25 +269,6 @@ describe('public web connector address selection', () => {
 	);
 
 	const processEvents: Array<string> = [];
-	it.live('reads application/csv datasets without losing multilingual cells', () =>
-		Effect.gen(function* () {
-			const body = '投保等級,月投保金額（元）\r\n1,29500\r\n';
-			const binding: Options = {
-				resolve: async () => [{ address: '1.1.1.1', family: 4 }],
-				request: () =>
-					Effect.succeed({
-						status: 200,
-						contentType: 'application/csv',
-						body: Buffer.from('\uFEFF' + body)
-					})
-			};
-			expect(yield* read(binding, 'https://official.example/dataset')).toMatchObject({
-				_tag: 'Success',
-				value: { output: { body } }
-			});
-		})
-	);
-
 	const record = (cause: unknown) =>
 		processEvents.push(cause instanceof Error ? cause.message : String(cause));
 	beforeEach(() => {

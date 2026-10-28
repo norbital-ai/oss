@@ -106,11 +106,13 @@ export const treeDigest = (files: Iterable<readonly [path: string, bytes: Uint8A
 			.sort()
 			.join('\n')
 	);
+/** A tree's digest; `*.map` files are left out: the bundler writes random names into them, so they are not byte-stable. */
 export const treeHash = Effect.fn('bolt.artifactTreeHash')(function* (dir: string) {
 	const fs = yield* FileSystem.FileSystem;
 	const path = yield* Path.Path;
 	const files: (readonly [string, Uint8Array])[] = [];
-	for (const file of yield* tree(dir)) files.push([file, yield* fs.readFile(path.join(dir, file))]);
+	for (const file of yield* tree(dir))
+		if (!file.endsWith('.map')) files.push([file, yield* fs.readFile(path.join(dir, file))]);
 	return treeDigest(files);
 });
 export const artifactHash = Effect.fn('bolt.artifactHash')(function* (

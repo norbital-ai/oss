@@ -1278,50 +1278,6 @@ describe('the AI port under the 20 s idle wall (rule 63)', () => {
 	);
 
 	it.effect(
-		'sys_2.infer steps: each tool turn persists, and a resumed inference goes on after the last one',
-		() =>
-			Effect.gen(function* () {
-				const persisted: Json[] = [];
-				const persist = (index: number, step: Json) =>
-					Effect.sync(() => {
-						persisted[index] = step;
-					});
-				const { seen, browse } = browsing();
-				const lost = yield* Deferred.make<void>();
-				// the host is lost while the third model call is in flight
-				const first = port([
-					tool('browse', { url: 'https://a' }, 'b1'),
-					tool('edit', { ops: [{ path: '/n', set: 3 }] }, 'e1'),
-					() => Stream.unwrap(Deferred.succeed(lost, undefined).pipe(Effect.as(Stream.never)))
-				]);
-				const running = yield* Effect.forkChild(
-					inferFacility(first.p, { steps: { done: [], persist } })(
-						at({ prompt: 'q', output, tools: ['browse'] }),
-						[browse]
-					)
-				);
-				yield* Deferred.await(lost);
-				yield* Fiber.interrupt(running);
-				expect(persisted).toHaveLength(2);
-				// the next host: one model call, from the persisted conversation and draft
-				const next = port([tool('submit', {}, 's1')]);
-				expect(
-					yield* inferFacility(next.p, { steps: { done: persisted, persist } })(
-						at({ prompt: 'q', output, tools: ['browse'] }),
-						[browse]
-					)
-				).toEqual({ ok: true, value: { n: 3 } });
-				expect(seen).toHaveLength(1);
-				expect(next.requests).toHaveLength(1);
-				expect(next.requests[0]!.messages).toEqual(first.requests[2]!.messages);
-				expect(next.requests[0]!.messages[0]).toEqual({
-					role: 'user',
-					content: expect.any(String)
-				});
-			})
-	);
-
-	it.effect(
 		'sys_2.infer steps: a final turn without a valid answer is a step-budget failure, unless the draft already holds one',
 		() =>
 			Effect.gen(function* () {

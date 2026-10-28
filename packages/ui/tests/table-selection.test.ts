@@ -11,6 +11,7 @@ import type { Value } from '@norbital-ai/std/kind';
 import type { KindsHost } from '../src/kinds/context.ts';
 const { createRawSnippet, flushSync, mount, tick, unmount } = await import('svelte');
 const { default: Harness } = await import('./view-harness.svelte');
+const { default: Table } = await import('../src/table/Table.svelte');
 const mounted: (() => Promise<void>)[] = [];
 const settle = async () => {
 	for (let i = 0; i < 3; i++) {
@@ -40,6 +41,7 @@ async function show(
 			bolt,
 			catalog: {},
 			part: 'table',
+			view: Table,
 			props: {
 				of: rows,
 				columns,
@@ -157,6 +159,7 @@ it.live(
 							bolt,
 							catalog: {},
 							part: 'table',
+							view: Table,
 							props: {
 								of: rows,
 								columns: ['name'],
@@ -220,6 +223,7 @@ it.live('a read request source shows its root and reads exactly the request it w
 				bolt,
 				catalog: { stock: { label: ['name'], fields: { name: { kind: 'text' } } } },
 				part: 'table',
+				view: Table,
 				props: {
 					of: bolt.query({ stock: { where: { warehouse: { eq: 'main' } } } }),
 					columns: ['name'],

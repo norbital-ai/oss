@@ -9,7 +9,7 @@ import { noticeRows } from '../src/engine/notifications/notify.ts';
 import { TestWorkspace } from '../src/test/index.ts';
 import type { EngineManifest } from '../src/engine/manifest.ts';
 import { admin, manifest as base } from './write-fixture.ts';
-import { program } from './support/guest-fixture.ts';
+import { program } from '../src/test/guest.ts';
 const recipient = '0199a000-0000-7000-8000-000000000001';
 const manifest: EngineManifest = {
 	...base,

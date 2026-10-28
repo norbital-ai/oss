@@ -1,10 +1,6 @@
-// The shell's pure parts restored for 0.0.1: every framework string in zh (L-BOLT-535, 619, 765), the environment
-// badge label (L-BOLT-513), the record-sheet URL stack (L-BOLT-514), and the finder's page matches and stale-answer
-// drop (L-BOLT-497, 512).
-import { readdirSync, readFileSync } from 'node:fs';
+
 import { describe, expect, it } from '@effect/vitest';
 import { Effect, Fiber } from 'effect';
-import { SHELL_ZH } from '../src/shell/i18n.ts';
 import { environmentLabel, recordsOf, withRecords, type NavNode } from '../src/shell/nav.ts';
 import {
 	pageHits,
@@ -12,55 +8,6 @@ import {
 	type FinderAnswer,
 	type FinderRead
 } from '../src/shell/finder/model.ts';
-
-const SHELL = new URL('../src/shell/', import.meta.url);
-/** Keys the shell passes through `t` as values, not literals (statuses, ops, tables, section titles). */
-const DYNAMIC = [
-	'queued',
-	'running',
-	'succeeded',
-	'failed',
-	'stopped',
-	'skipped',
-	'open',
-	'accepted',
-	'revoked',
-	'expired',
-	'create',
-	'update',
-	'delete',
-	'member',
-	'invitation',
-	'Progress',
-	'Input',
-	'Result',
-	'Collapse navigation',
-	'Expand navigation',
-	'steps',
-	'This invitation is accepted.',
-	'This invitation is revoked.',
-	'This invitation is expired.'
-];
-
-describe('framework catalogs', () => {
-	it('every string the shell translates has its zh text', () => {
-		const keys = new Set(DYNAMIC);
-		for (const f of [
-			...readdirSync(SHELL),
-			...readdirSync(new URL('integration/', SHELL)).map((n) => `integration/${n}`)
-		].filter((n) => n.endsWith('.svelte') || n === 'model.ts')) {
-			const src = readFileSync(new URL(f, SHELL), 'utf8');
-			for (const m of src.matchAll(/\bt\(\s*(['"])((?:\\.|(?!\1).)+)\1/g))
-				keys.add(m[2]!.replace(/\\'/g, "'"));
-			for (const m of src.matchAll(/\b(?:leaf|group)\('[^']+', '([^']+)'/g)) keys.add(m[1]!);
-			// literal maps whose values reach `t`: Settings' TITLES, Studio's SECTION_TITLES
-			for (const map of src.matchAll(/const (?:TITLES|SECTION_TITLES)\b[^=]*=\s*\{([\s\S]*?)\};/g))
-				for (const v of map[1]!.matchAll(/:\s*'((?:\\.|[^'])+)'/g))
-					keys.add(v[1]!.replace(/\\'/g, "'"));
-		}
-		expect([...keys].filter((k) => SHELL_ZH[k] === undefined)).toEqual([]);
-	});
-});
 
 describe('environment badge', () => {
 	it('hides production and an unset environment, reads development as local, shows any other name', () => {

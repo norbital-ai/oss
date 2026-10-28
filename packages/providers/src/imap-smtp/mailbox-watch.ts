@@ -1,13 +1,21 @@
 import { ImapFlow } from 'imapflow';
 import { Effect, Queue, Semaphore, Stream } from 'effect';
-import { pinnedLookup, publicDestination } from '@norbital-ai/bolt/node';
+import { pinnedLookup } from '@norbital-ai/bolt/node';
 import { checkServerIdentity } from 'node:tls';
 import { ProviderUnavailable, type ProviderFailure } from '../errors.ts';
-import { mailCall, serverFailure, type Cursor, type Login, type Mailbox } from './model.ts';
+import {
+	mailCall,
+	serverFailure,
+	type Cursor,
+	type Login,
+	type Mailbox,
+	type MailNet
+} from './model.ts';
 
-export const imap = (box: Mailbox, auth: Login, plain: boolean) =>
+export const imap = (box: Mailbox, auth: Login, net: MailNet) =>
 	Effect.gen(function* () {
-		const destination = yield* publicDestination(box.imap.host, box.imap.port).pipe(
+		const plain = net.plain;
+		const destination = yield* net.destination(box.imap.host, box.imap.port).pipe(
 			Effect.mapError((error) => new ProviderUnavailable({ message: error.message }))
 		);
 		return yield* Effect.acquireRelease(
@@ -46,7 +54,7 @@ export const imap = (box: Mailbox, auth: Login, plain: boolean) =>
 type WatchOptions = {
 	readonly box: Mailbox;
 	readonly personal: boolean;
-	readonly plain: boolean;
+	readonly net: MailNet;
 	/** A frozen source timestamp boundary; changing it replays the newly requested import scope. */
 	readonly after?: string | undefined;
 	readonly login: () => Effect.Effect<Login, ProviderFailure>;
@@ -64,7 +72,7 @@ type WatchOptions = {
 export const mailboxWatch = Effect.fn('Mailbox.watch')(function* (options: WatchOptions) {
 	return yield* Effect.scoped(
 		Effect.gen(function* () {
-			const client = yield* imap(options.box, yield* options.login(), options.plain);
+			const client = yield* imap(options.box, yield* options.login(), options.net);
 			yield* mailCall(`IMAP ${options.box.imap.host}`, () => client.connect()).pipe(
 				Effect.onInterrupt(() => Effect.sync(() => client.close()))
 			);

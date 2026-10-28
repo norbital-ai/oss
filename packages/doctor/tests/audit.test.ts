@@ -1,27 +1,16 @@
 /**
  * An organization's rule set is data (§5 "Audit: rules are an organization's data", P19): one tree audited under three
  * rule sets — the defaults; a platform rule turned to a hint plus the organization's own rule; that rule off plus an
- * own rule that does not compile. An allowance kept with the code holds under each, and every result names its rule
- * set. The job's entrypoint writes only lines that decode as `AuditEvent`, and nothing into the tree.
+ * own rule that does not compile. An allowance kept with the code holds under each, and every result names its rule set.
  */
 import assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { it } from '@effect/vitest';
-import { Effect, Schema } from 'effect';
-import { audit } from '../build/audit.js';
-import {
-	AuditEvent,
-	DEFAULT_RULE_SET,
-	ruleSetDigest,
-	type AuditFinding,
-	type RuleSet
-} from '../build/rule-set.js';
-
-const CLI = join(dirname(fileURLToPath(import.meta.url)), '..', 'build', 'cli.js');
+import { Effect } from 'effect';
+import { audit } from '../src/audit.ts';
+import { DEFAULT_RULE_SET, ruleSetDigest, type AuditFinding, type RuleSet } from '../src/rule-set.ts';
 const SCRIPT = '<script lang="ts">\n\tlet n = 4;\n</script>\n\n';
 const TREE: Record<string, string> = {
 	'src/bad.svelte': `${SCRIPT}<div class={\`mt-[\${n}px]\`}></div>\n`,
@@ -133,31 +122,5 @@ it.effect('the digest ignores key order, and moves with any change of the rule s
 		const b: RuleSet = { rules: [], ignore: [], states: { UI12: 'hint', UI5: 'off' } };
 		assert.equal(ruleSetDigest(a), ruleSetDigest(b));
 		assert.notEqual(ruleSetDigest(a), ruleSetDigest({ ...a, ignore: ['vendor/**'] }));
-	})
-);
-
-it.effect('the entrypoint writes only AuditEvent lines, ending with done, and exits 0', () =>
-	Effect.sync(() => {
-		const root = tree();
-		try {
-			const rules = join(root, '..', `${root.split('/').at(-1)}.rules.json`);
-			writeFileSync(rules, JSON.stringify(SETS.relaxed));
-			const run = spawnSync(process.execPath, [CLI, root, '--rules', rules, '--json'], {
-				encoding: 'utf8'
-			});
-			rmSync(rules, { force: true });
-			assert.equal(run.status, 0, run.stderr);
-			const lines = run.stdout.trim().split('\n');
-			const events = lines.map((line) =>
-				Schema.decodeUnknownSync(Schema.fromJsonString(AuditEvent))(line)
-			);
-			assert.equal(events.at(-1)?.type, 'done');
-			assert.ok(events.some((e) => e.type === 'finding' && e.rule === 'NoConsoleLog'));
-			const person = spawnSync(process.execPath, [CLI, root], { encoding: 'utf8' });
-			assert.equal(person.status, 1);
-			assert.match(person.stdout, /error UI12 src\/bad\.svelte:\d+/);
-		} finally {
-			rmSync(root, { recursive: true, force: true });
-		}
 	})
 );

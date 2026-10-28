@@ -1,5 +1,5 @@
 import { actReply, qReply, routeFixture } from './support/route-fixture.ts';
-import { program } from './support/guest-fixture.ts';
+import { program } from '../src/test/guest.ts';
 import { Context, Effect, Layer, Schema } from 'effect';
 // End to end through the engine entry and the test kit: a `created` trigger with a delay is queued by the act's own
 // statement, announced to the deadlines port, and runs its body when the deadline wakes (rules 49, 52a).
@@ -50,7 +50,8 @@ const manifest = {
 	mcp: {},
 	apps: {},
 	customFields: {},
-	agent: { skills: {} }
+	agent: { skills: {} },
+	needs: []
 } satisfies EngineManifest;
 const guestSource = `export default { automation: { remind: { body: function* (input, ctx) {
 	for (const id of input.ids) yield* ctx.act('quotes.update', [{ target: id, set: { status: 'sent' } }]);

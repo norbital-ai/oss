@@ -11,28 +11,26 @@ import {
 } from 'effect';
 import { Argument, Command, Flag } from 'effect/cli';
 import { ChildProcess } from 'effect/process';
+import { FetchHttpClient, HttpClient, HttpClientRequest, HttpClientResponse } from 'effect/http';
 import { stripVTControlCharacters } from 'node:util';
 import { availableParallelism } from 'node:os';
 import { TemplateManifest } from '../protocol/schema.ts';
 import { readArtifact } from '../engine/artifact/read.ts';
-import { schemaSql } from '../compiler/artifact/index.ts';
+import { ReleaseJson, schemaSql } from '../compiler/artifact/index.ts';
 import { workers } from './test.ts';
 
 export const templateMetadataFile = 'norbital.template.json';
-export const templateRefNamespace = 'refs/heads/templates';
 export type TemplateCounts = TemplateManifest['counts'];
 export type Template = {
 	slug: string;
 	handle: string;
 	directory: string;
 	path: string;
-	ref: string;
 	metadata: TemplateManifest;
 	counts: TemplateCounts;
 };
 const slugPattern = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const exactVersion = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/;
-const revisionPattern = /^[0-9a-f]{40}$/;
 const localDependency = /^(?:workspace|catalog|file|link|portal):/;
 const Strings = Schema.Record(Schema.String, Schema.String);
 const Package = Schema.Struct({
@@ -97,14 +95,24 @@ export const run = Effect.fn('bolt.templatesProcess')(function* (
 		})
 	);
 });
-export const registryConfiguration = Effect.gen(function* () {
+/** The first-party registry and its token, if any. */
+const registryAccess = Effect.gen(function* () {
 	const registry = (yield* Config.String('NORBITAL_PACKAGE_REGISTRY').pipe(
 		Config.withDefault('https://npm.pkg.github.com')
 	)).trim();
 	const token = yield* Config.option(Config.Redacted('NODE_AUTH_TOKEN'));
+	return {
+		registry,
+		token:
+			Option.isSome(token) && Redacted.value(token.value).trim() !== ''
+				? Redacted.value(token.value).trim()
+				: undefined
+	};
+});
+export const registryConfiguration = Effect.gen(function* () {
+	const { registry, token } = yield* registryAccess;
 	const lines = [`@norbital-ai:registry=${registry}`];
-	if (Option.isSome(token) && Redacted.value(token.value).trim() !== '')
-		lines.push(`//${new URL(registry).host}/:_authToken=${Redacted.value(token.value).trim()}`);
+	if (token !== undefined) lines.push(`//${new URL(registry).host}/:_authToken=${token}`);
 	return `${lines.join('\n')}\n`;
 });
 export const actualCounts = Effect.fn('bolt.templateCounts')(function* (directory: string) {
@@ -158,7 +166,6 @@ export const discoverTemplates = Effect.fn('bolt.discoverTemplates')(function* (
 			handle: metadata.key,
 			directory,
 			path: slug,
-			ref: `${templateRefNamespace}/${slug}`,
 			metadata,
 			counts: metadata.counts
 		});
@@ -170,52 +177,75 @@ export const discoverTemplates = Effect.fn('bolt.discoverTemplates')(function* (
 	if (selected.length === 0) return yield* fail(`No template matched ${filter}.`);
 	return selected;
 });
-/** A pnpm lockfile without its `@norbital-ai/*` package and snapshot entries; importers keep their specifiers. */
-export const withoutFirstParty = (lockfile: string): string =>
-	lockfile
-		.split(/\n(?=\S|  \S)/)
-		.filter((block) => !/^  '?@norbital-ai\//.test(block))
-		.join('\n');
-export const unsatisfiedFirstPartyPeers = (lockfile: string): string[] => {
-	const declared = new Map<string, Map<string, string>>();
-	for (const block of lockfile.split(/\n(?=  '@norbital-ai\/)/)) {
-		const header = /^ {2}'(@norbital-ai\/[^@']+@[^(':]+)':\n/.exec(block);
-		const peers = /\n {4}peerDependencies:\n((?: {6}.+\n?)+)/.exec(block);
-		if (header?.[1] === undefined || peers?.[1] === undefined) continue;
-		const exact = new Map<string, string>();
-		for (const line of peers[1].split('\n')) {
-			const peer = /^ {6}'?([^':]+)'?: (\S+)$/.exec(line);
-			if (peer?.[1] !== undefined && peer[2] !== undefined && exactVersion.test(peer[2]))
-				exact.set(peer[1], peer[2]);
-		}
-		if (exact.size > 0) declared.set(header[1], exact);
+const BunLock = Schema.Struct({
+	packages: Schema.optionalKey(Schema.Record(Schema.String, Schema.Array(Schema.Unknown)))
+});
+/** bun.lock is JSON plus trailing commas. ponytail: the comma strip ignores strings; bun writes none that match. */
+const bunJson = (lockfile: string) => lockfile.replace(/,(\s*[}\]])/g, '$1');
+const parseBunLock = (lockfile: string) =>
+	Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.Record(Schema.String, Schema.Unknown)))(
+		bunJson(lockfile)
+	).pipe(
+		Effect.flatMap((raw) =>
+			Schema.decodeUnknownEffect(BunLock)(raw).pipe(Effect.map((lock) => ({ raw, lock })))
+		),
+		Effect.mapError((error) => new TemplateError({ message: `bun.lock: ${error.message}` }))
+	);
+const identity = (entry: ReadonlyArray<unknown>) => {
+	const id = typeof entry[0] === 'string' ? entry[0] : '';
+	const at = id.lastIndexOf('@');
+	return { name: id.slice(0, at), version: id.slice(at + 1) };
+};
+/** A bun lockfile without its `@norbital-ai/*` package entries; the workspace keeps its specifiers. */
+export const withoutFirstParty = Effect.fnUntraced(function* (lockfile: string) {
+	const { raw, lock } = yield* parseBunLock(lockfile);
+	return JSON.stringify(
+		{
+			...raw,
+			packages: Object.fromEntries(
+				Object.entries(lock.packages ?? {}).filter(
+					([, entry]) => !identity(entry).name.startsWith('@norbital-ai/')
+				)
+			)
+		},
+		null,
+		2
+	);
+});
+/** bun's node_modules lookup from the package at `key`: its own nest, each parent's, then the root. */
+const resolveFrom = (packages: Readonly<Record<string, unknown>>, key: string, name: string) => {
+	const parts = key.split('/'),
+		scopes: string[] = [];
+	for (let i = 0; i < parts.length; i++)
+		scopes.push(parts[i]?.startsWith('@') ? `${parts[i]}/${parts[++i] ?? ''}` : (parts[i] ?? ''));
+	for (let depth = scopes.length; depth >= 0; depth--) {
+		const at = [...scopes.slice(0, depth), name].join('/');
+		if (packages[at] !== undefined) return at;
 	}
+	return undefined;
+};
+const Meta = Schema.Struct({ peerDependencies: Schema.optionalKey(Strings) });
+/** Each first-party package's exact peer pins against the version its install resolves for that peer. */
+export const unsatisfiedFirstPartyPeers = Effect.fnUntraced(function* (lockfile: string) {
+	const packages = (yield* parseBunLock(lockfile)).lock.packages ?? {};
 	const problems: string[] = [];
-	for (const match of lockfile.matchAll(/^ {2}'(@norbital-ai\/[^@']+@[^(':]+)(\(.*\))':$/gm)) {
-		const exact = declared.get(match[1] ?? '');
-		if (exact === undefined) continue;
-		// Top-level `(name@version)` groups only; nested groups are the peers' own peers.
-		const resolved = new Map<string, string>();
-		let depth = 0;
-		let start = 0;
-		for (const [index, character] of [...(match[2] ?? '')].entries()) {
-			if (character === '(' && depth++ === 0) start = index + 1;
-			if (character === ')' && --depth === 0) {
-				const group = (match[2] ?? '').slice(start, index).replace(/\(.*$/, '');
-				const at = group.lastIndexOf('@');
-				if (at > 0) resolved.set(group.slice(0, at), group.slice(at + 1));
-			}
-		}
-		for (const [peer, version] of exact) {
-			const actual = resolved.get(peer);
-			if (actual !== undefined && actual !== version)
+	for (const [key, entry] of Object.entries(packages)) {
+		const { name, version } = identity(entry);
+		if (!name.startsWith('@norbital-ai/')) continue;
+		const meta = Schema.decodeUnknownOption(Meta)(entry[2]);
+		if (meta._tag === 'None') continue;
+		for (const [peer, wanted] of Object.entries(meta.value.peerDependencies ?? {})) {
+			if (!exactVersion.test(wanted)) continue;
+			const at = resolveFrom(packages, key, peer),
+				actual = at === undefined ? undefined : identity(packages[at] ?? []).version;
+			if (actual !== undefined && actual !== wanted)
 				problems.push(
-					`${match[1]} needs ${peer}@${version} but the install resolves ${peer}@${actual}`
+					`${name}@${version} needs ${peer}@${wanted} but the install resolves ${peer}@${actual}`
 				);
 		}
 	}
 	return [...new Set(problems)];
-};
+});
 
 export const checkTemplates = Effect.fn('bolt.templatesCheck')(function* (
 	root: string = process.cwd(),
@@ -236,23 +266,10 @@ export const checkTemplates = Effect.fn('bolt.templatesCheck')(function* (
 			return yield* fail(
 				`Template ${template.slug} must pin @norbital-ai/bolt to an exact version.`
 			);
-		const policy = yield* fs.readFileString(path.join(template.directory, 'pnpm-workspace.yaml'));
-		const exempted = new Map(
-			[...policy.matchAll(/'(@[^']+?)@([^']*)'/g)].flatMap((match) =>
-				match[1] === undefined || match[2] === undefined
-					? []
-					: [[match[1], match[2].split('||').map((entry) => entry.trim())] as const]
-			)
-		);
-		if (/@norbital-ai\/\*/.test(policy))
-			return yield* fail(`${template.slug}: first-party exemptions must name exact versions.`);
-		if (
-			!/supportedArchitectures:/.test(policy) ||
-			['darwin', 'linux', 'win32', 'x64', 'arm64', 'glibc', 'musl'].some(
-				(architecture) => !new RegExp(`- ${architecture}`).test(policy)
-			)
-		)
-			return yield* fail(`${template.slug}: declare every supported architecture.`);
+		// bun config lives in package.json; a template carries no other package-manager settings
+		for (const file of ['pnpm-workspace.yaml', 'pnpm-lock.yaml', '.npmrc'])
+			if (yield* fs.exists(path.join(template.directory, file)))
+				return yield* fail(`${template.slug}: ${file} has no place in a bun template.`);
 		for (const section of [
 			'dependencies',
 			'devDependencies',
@@ -264,17 +281,14 @@ export const checkTemplates = Effect.fn('bolt.templatesCheck')(function* (
 					return yield* fail(
 						`Template ${template.slug} cannot project ${section}.${name} with local protocol ${version}.`
 					);
-				if (
-					name.startsWith('@norbital-ai/') &&
-					(!exactVersion.test(version) || !exempted.get(name)?.includes(version))
-				)
+				if (name.startsWith('@norbital-ai/') && !exactVersion.test(version))
 					return yield* fail(
-						`${template.slug} depends on ${name}@${version} but does not exactly pin and exempt it`
+						`${template.slug} depends on ${name}@${version} but does not exactly pin it`
 					);
 			}
-		const lock = path.join(template.directory, 'pnpm-lock.yaml');
-		if (!(yield* fs.exists(lock))) return yield* fail(`${template.slug}: missing pnpm-lock.yaml`);
-		const problems = unsatisfiedFirstPartyPeers(yield* fs.readFileString(lock));
+		const lock = path.join(template.directory, 'bun.lock');
+		if (!(yield* fs.exists(lock))) return yield* fail(`${template.slug}: missing bun.lock`);
+		const problems = yield* unsatisfiedFirstPartyPeers(yield* fs.readFileString(lock));
 		if (problems.length)
 			return yield* fail(
 				`Template ${template.slug} does not satisfy first-party peer pins:\n  ${problems.join('\n  ')}`
@@ -343,7 +357,7 @@ export const checkTemplates = Effect.fn('bolt.templatesCheck')(function* (
 			return yield* fail(
 				`${template.slug}: committed migrations belong in migrations/, beside src/`
 			);
-		const artifactDir = path.join(template.directory, '.norbital', 'artifact');
+		const artifactDir = path.join(template.directory, '.norbital', 'bundle');
 		if (yield* fs.exists(artifactDir)) {
 			const sql = (yield* fs.readDirectory(artifactDir)).filter((file) => file.endsWith('.sql'));
 			if (sql.length !== 1 || sql[0] !== 'schema.sql')
@@ -381,36 +395,141 @@ export const resolveLockfile = Effect.fn('bolt.resolveTemplateLock')(function* (
 			const fs = yield* FileSystem.FileSystem;
 			const path = yield* Path.Path;
 			const dir = yield* fs.makeTempDirectoryScoped({ prefix: `norbital-lock-${template.slug}-` });
-			for (const file of ['package.json', 'pnpm-workspace.yaml', 'isolated-vm.patch'])
+			for (const file of ['package.json', 'bunfig.toml', 'isolated-vm.patch'])
 				if (yield* fs.exists(path.join(template.directory, file)))
 					yield* fs.copyFile(path.join(template.directory, file), path.join(dir, file));
 			// first-party entries always re-resolve from the registry: a version republished under the same number keeps
 			// its locked integrity otherwise, and the stale lock surfaces only when a host installs it
-			const committed = path.join(template.directory, 'pnpm-lock.yaml');
+			const committed = path.join(template.directory, 'bun.lock');
 			if (yield* fs.exists(committed))
 				yield* fs.writeFileString(
-					path.join(dir, 'pnpm-lock.yaml'),
-					withoutFirstParty(yield* fs.readFileString(committed))
+					path.join(dir, 'bun.lock'),
+					yield* withoutFirstParty(yield* fs.readFileString(committed))
 				);
 			yield* fs.writeFileString(path.join(dir, '.npmrc'), yield* registryConfiguration);
-			const stores = [
-				'--store-dir',
-				path.join(shared ?? dir, '.pnpm-store'),
-				'--cache-dir',
-				path.join(shared ?? dir, '.pnpm-cache')
-			];
-			yield* execute('pnpm', ['install', '--lockfile-only', '--no-frozen-lockfile', ...stores], {
-				cwd: dir
-			});
-			// `install` skips resolution while the importers still match, so the dropped first-party entries need `update`
-			yield* execute('pnpm', ['update', '@norbital-ai/*', '--lockfile-only', ...stores], {
-				cwd: dir
-			});
-			if (!(yield* fs.exists(path.join(dir, 'pnpm-lock.yaml'))))
-				return yield* fail(`Resolving ${template.slug} produced no pnpm-lock.yaml.`);
-			return yield* fs.readFileString(path.join(dir, 'pnpm-lock.yaml'));
+			yield* execute(
+				'bun',
+				[
+					'install',
+					'--lockfile-only',
+					'--ignore-scripts',
+					`--cache-dir=${path.join(shared ?? dir, '.bun-cache')}`
+				],
+				{ cwd: dir }
+			);
+			if (!(yield* fs.exists(path.join(dir, 'bun.lock'))))
+				return yield* fail(`Resolving ${template.slug} produced no bun.lock.`);
+			return yield* fs.readFileString(path.join(dir, 'bun.lock'));
 		})
 	);
+});
+const Toolchain = Schema.Struct({
+	firstParty: Schema.Struct({
+		dependencies: Schema.Array(Schema.String),
+		devDependencies: Schema.Array(Schema.String)
+	}),
+	dependencies: Strings,
+	devDependencies: Strings
+});
+const Packument = Schema.Struct({
+	versions: Schema.Record(
+		Schema.String,
+		Schema.Struct({ dist: Schema.Struct({ tarball: Schema.String }) })
+	)
+});
+/** The `toolchain.json` a published Bolt release carries, read from its registry tarball. */
+const publishedToolchain = Effect.fn('bolt.publishedToolchain')(
+	function* (version: string) {
+		const fs = yield* FileSystem.FileSystem;
+		const path = yield* Path.Path;
+		const http = yield* HttpClient.HttpClient;
+		const { registry, token } = yield* registryAccess;
+		const get = (url: string) =>
+			HttpClientRequest.get(url).pipe(
+				token === undefined ? (request) => request : HttpClientRequest.bearerToken(token),
+				http.execute,
+				Effect.flatMap(HttpClientResponse.filterStatusOk)
+			);
+		const packument = yield* get(`${registry.replace(/\/$/, '')}/@norbital-ai%2fbolt`).pipe(
+			Effect.flatMap(HttpClientResponse.schemaBodyJson(Packument))
+		);
+		const release = packument.versions[version];
+		if (release === undefined)
+			return yield* fail(`@norbital-ai/bolt@${version} is not published on ${registry}`);
+		const bytes = yield* get(release.dist.tarball).pipe(
+			Effect.flatMap((response) => response.arrayBuffer)
+		);
+		const dir = yield* fs.makeTempDirectoryScoped({ prefix: `norbital-bolt-${version}-` });
+		yield* fs.writeFile(path.join(dir, 'bolt.tgz'), new Uint8Array(bytes));
+		yield* run('tar', ['-xzf', 'bolt.tgz', 'package/toolchain.json'], { cwd: dir });
+		return yield* json(Toolchain, path.join(dir, 'package', 'toolchain.json'));
+	},
+	Effect.scoped,
+	Effect.provide(FetchHttpClient.layer),
+	Effect.catchTags({
+		HttpClientError: (error) => fail(`fetching @norbital-ai/bolt: ${error.message}`),
+		SchemaError: (error) => fail(`@norbital-ai/bolt packument: ${error.message}`)
+	})
+);
+/**
+ * A template's toolchain: the `toolchain.json` its own exact `@norbital-ai/bolt` pin publishes (exact third-party
+ * versions; first-party packages at that release's version), read from its installed Bolt at that pin, else fetched
+ * for that exact release. Templates on different Bolt releases each get their own release's set.
+ */
+export const toolchainOf = Effect.fn('bolt.templateToolchain')(function* (template: Template) {
+	const fs = yield* FileSystem.FileSystem;
+	const path = yield* Path.Path;
+	const manifest = yield* json(Package, path.join(template.directory, 'package.json'));
+	const version = manifest.dependencies?.['@norbital-ai/bolt'] ?? '';
+	if (!exactVersion.test(version))
+		return yield* fail(`Template ${template.slug} must pin @norbital-ai/bolt to an exact version.`);
+	const installed = path.join(template.directory, 'node_modules', '@norbital-ai', 'bolt');
+	const local =
+		(yield* fs.exists(path.join(installed, 'toolchain.json'))) &&
+		(yield* json(Schema.Struct({ version: Schema.String }), path.join(installed, 'package.json')))
+			.version === version;
+	const set = local
+		? yield* json(Toolchain, path.join(installed, 'toolchain.json'))
+		: yield* publishedToolchain(version);
+	const pinned = (names: ReadonlyArray<string>) =>
+		Object.fromEntries(names.map((name) => [name, version]));
+	return {
+		version,
+		dependencies: { ...pinned(set.firstParty.dependencies), ...set.dependencies },
+		devDependencies: { ...pinned(set.firstParty.devDependencies), ...set.devDependencies }
+	};
+});
+/** A template's package.json with the toolchain written in: each toolchain package in its section, at its version. */
+export const withToolchain = Effect.fnUntraced(function* (
+	slug: string,
+	text: string,
+	set: Effect.Success<ReturnType<typeof toolchainOf>>
+) {
+	const raw = yield* Schema.decodeUnknownEffect(
+		Schema.fromJsonString(Schema.Record(Schema.String, Schema.Unknown))
+	)(text).pipe(
+		Effect.mapError((error) => new TemplateError({ message: `${slug}: ${error.message}` }))
+	);
+	const manifest = yield* Schema.decodeUnknownEffect(Package)(raw).pipe(
+		Effect.mapError((error) => new TemplateError({ message: `${slug}: ${error.message}` }))
+	);
+	const section = (
+		wanted: Record<string, string>,
+		other: Record<string, string>,
+		current: Record<string, string> = {}
+	) => ({
+		...Object.fromEntries(Object.entries(current).filter(([name]) => !(name in other))),
+		...wanted
+	});
+	return `${JSON.stringify(
+		{
+			...raw,
+			dependencies: section(set.dependencies, set.devDependencies, manifest.dependencies),
+			devDependencies: section(set.devDependencies, set.dependencies, manifest.devDependencies)
+		},
+		null,
+		'\t'
+	)}\n`;
 });
 export const lockTemplates = Effect.fn('bolt.templatesLock')(function* (options: {
 	root?: string;
@@ -429,14 +548,24 @@ export const lockTemplates = Effect.fn('bolt.templatesLock')(function* (options:
 			yield* Effect.forEach(
 				templates,
 				Effect.fnUntraced(function* (template) {
-					const committedPath = path.join(template.directory, 'pnpm-lock.yaml');
+					const manifestPath = path.join(template.directory, 'package.json'),
+						manifest = yield* fs.readFileString(manifestPath),
+						set = yield* toolchainOf(template),
+						tooled = yield* withToolchain(template.slug, manifest, set);
+					if (options.check && tooled !== manifest)
+						drifted.push(
+							`${template.slug}: package.json differs from the toolchain set of its @norbital-ai/bolt@${set.version}`
+						);
+					else if (!options.check && tooled !== manifest)
+						yield* fs.writeFileString(manifestPath, tooled);
+					const committedPath = path.join(template.directory, 'bun.lock');
 					const resolved = yield* resolveLockfile(template, run, resolution);
 					const committed = (yield* fs.exists(committedPath))
 						? yield* fs.readFileString(committedPath)
 						: undefined;
 					if (options.check && committed !== resolved)
 						drifted.push(
-							`${template.slug}: ${committed === undefined ? 'missing pnpm-lock.yaml' : 'pnpm-lock.yaml does not match resolved dependencies'}`
+							`${template.slug}: ${committed === undefined ? 'missing bun.lock' : 'bun.lock does not match resolved dependencies'}`
 						);
 					else if (!options.check && committed !== resolved)
 						yield* fs.writeFileString(committedPath, resolved);
@@ -445,7 +574,7 @@ export const lockTemplates = Effect.fn('bolt.templatesLock')(function* (options:
 			);
 			if (drifted.length)
 				return yield* fail(
-					`Template lockfiles are stale. Run \`pnpm templates:lock\`.\n  ${drifted.join('\n  ')}`
+					`Template lockfiles are stale. Run \`bun run templates:lock\`.\n  ${drifted.join('\n  ')}`
 				);
 		})
 	);
@@ -556,7 +685,7 @@ export const testTemplates = Effect.fn('bolt.templatesTest')(function* (
 	const failed = yield* Effect.forEach(
 		templates,
 		(template) =>
-			run('pnpm', ['run', 'test', '.', '--', share, ...args], { cwd: template.directory }).pipe(
+			run('bun', ['run', 'test', '.', share, ...args], { cwd: template.directory }).pipe(
 				Effect.flatMap((output) => Console.log(`${template.slug}: ${summary(output)}`)),
 				Effect.as(undefined),
 				Effect.catchTag('TemplateError', (error) =>
@@ -577,11 +706,9 @@ export type TemplateTester = (
 	Effect.Services<ReturnType<typeof testTemplates>>
 >;
 /**
- * Each template as a tenant receives it: its tracked files alone, installed offline from its committed lock (fetched
- * once into the shared store, so a lock that cannot install without the network fails here) and checked; then each
- * projection's own `bolt test` through `bolt templates test`, which builds it.
- * `NORBITAL_TEMPLATES_SINCE` (default `origin/main`; `all` for every template) limits it to the templates changed
- * since that revision.
+ * Each template as a tenant receives it: its tracked files alone, installed from its frozen lock, checked and built
+ * once; then each projection's own `bolt test` through `bolt templates test`, against that build.
+ * Unfiltered, it verifies the templates changed since `origin/main`.
  */
 export const verifyTemplates = Effect.fn('bolt.templatesVerify')(function* (
 	root: string = process.cwd(),
@@ -592,26 +719,17 @@ export const verifyTemplates = Effect.fn('bolt.templatesVerify')(function* (
 		Effect.gen(function* () {
 			const fs = yield* FileSystem.FileSystem;
 			const path = yield* Path.Path;
-			const keep = yield* Config.String('KEEP_TEMPLATE_PROJECTIONS').pipe(Config.withDefault('0'));
-			const since = yield* Config.String('NORBITAL_TEMPLATES_SINCE').pipe(
-				Config.withDefault('origin/main')
-			);
-			const dir =
-				keep === '1'
-					? yield* fs.makeTempDirectory({ prefix: 'norbital-template-projections-' })
-					: yield* fs.makeTempDirectoryScoped({ prefix: 'norbital-template-projections-' });
-			if (keep === '1')
-				yield* Effect.addFinalizer(() => Console.log(`Kept standalone projections at ${dir}.`));
+			const since = 'origin/main';
+			const dir = yield* fs.makeTempDirectoryScoped({ prefix: 'norbital-template-projections-' });
 			const all = yield* discoverTemplates(root, filter);
-			const changed =
-				filter !== undefined || since === 'all' ? Option.none() : yield* changedSince(root, since);
+			const changed = filter !== undefined ? Option.none() : yield* changedSince(root, since);
 			const templates = Option.match(changed, {
 				onNone: () => all,
 				onSome: (paths) => all.filter((template) => paths.has(template.path))
 			});
 			if (templates.length < all.length)
 				yield* Console.log(
-					`Verifying ${templates.length} of ${all.length} templates changed since ${since} (NORBITAL_TEMPLATES_SINCE=all for every one).`
+					`Verifying ${templates.length} of ${all.length} templates changed since ${since} (name one to verify it alone).`
 				);
 			const credentials = yield* registryConfiguration;
 			const prepare = Effect.fnUntraced(function* (template: Template) {
@@ -620,8 +738,8 @@ export const verifyTemplates = Effect.fn('bolt.templatesVerify')(function* (
 				yield* materializeCandidate(root, template, destination);
 				const npmrc = path.join(destination, '.npmrc');
 				yield* fs.writeFileString(npmrc, credentials);
-				const pnpm = (label: string, args: readonly string[]) =>
-					run('pnpm', args, { cwd: destination }).pipe(
+				const step = (label: string, command: string, args: readonly string[]) =>
+					run(command, args, { cwd: destination }).pipe(
 						Effect.mapError(
 							(error) =>
 								new TemplateError({
@@ -629,10 +747,12 @@ export const verifyTemplates = Effect.fn('bolt.templatesVerify')(function* (
 								})
 						)
 					);
-				yield* pnpm('fetch', ['fetch', '--frozen-lockfile']);
+				yield* step('install', 'bun', ['install', '--frozen-lockfile']);
 				yield* fs.remove(npmrc);
-				yield* pnpm('install', ['install', '--frozen-lockfile', '--offline']);
-				yield* pnpm('check', ['exec', 'bolt', 'check']);
+				const bolt = path.join(destination, 'node_modules', '.bin', 'bolt');
+				yield* step('check', bolt, ['check', '.']);
+				// the one build: the tests below run against it
+				yield* step('build', bolt, ['build', '.']);
 			});
 			yield* Effect.forEach(templates, prepare, { concurrency: bound, discard: true });
 			if (templates.length > 0)
@@ -641,7 +761,7 @@ export const verifyTemplates = Effect.fn('bolt.templatesVerify')(function* (
 					templates.map((template) => template.slug)
 				);
 			for (const template of templates) {
-				const artifact = path.join(dir, template.slug, '.norbital', 'artifact', 'artifact.json');
+				const artifact = path.join(dir, template.slug, '.norbital', 'release.json');
 				if (!(yield* fs.exists(artifact)))
 					return yield* fail(`${template.slug} bolt build emitted no ${artifact}.`);
 				yield* Console.log(`Validated clean standalone projection: ${template.slug}.`);
@@ -649,94 +769,43 @@ export const verifyTemplates = Effect.fn('bolt.templatesVerify')(function* (
 		})
 	);
 });
+/**
+ * `bolt templates publish --out=<dir>`: each built template's release (`.norbital/release.json`) as the objects CI
+ * uploads under the release store's `releases/`: `bundle/<b>.tar.gz`, `source/<s>.tar.gz`, `seed/<p>.tar.gz` and
+ * `template/<directory>/<b>.json`, named by the digests `bolt build` recorded. `env deploy promote` names the bundle.
+ */
 export const publishTemplates = Effect.fn('bolt.templatesPublish')(function* (options: {
 	root?: string;
-	output?: string;
-	push?: string;
-	updateLocal: boolean;
-	sourceRevision: string;
-	repository?: string;
+	out: string;
+	filter?: string;
 }) {
 	const fs = yield* FileSystem.FileSystem;
 	const path = yield* Path.Path;
-	const root = options.root ?? process.cwd();
-	const git = (args: readonly string[]) => run('git', args, { cwd: root });
-	const sourceRevision = yield* git([
-		'rev-parse',
-		'--verify',
-		`${options.sourceRevision}^{commit}`
-	]);
-	const sourceRepository =
-		options.repository ??
-		(yield* git(['config', '--get', 'remote.origin.url']).pipe(
-			Effect.catchTag('TemplateError', () => Effect.succeed(undefined))
-		));
-	if (options.output !== undefined && sourceRepository === undefined)
-		return yield* fail('A source repository is required for output; pass --repository <url>.');
-	const entries: {
-		slug: string;
-		handle: string;
-		ref: string;
-		revision: string;
-		name: TemplateManifest['name'];
-		industry: TemplateManifest['industry'];
-		description: TemplateManifest['description'];
-		visibility: TemplateManifest['visibility'];
-		counts: TemplateCounts;
-	}[] = [];
-	for (const template of yield* discoverTemplates(root)) {
-		const revision = (yield* git(['subtree', 'split', `--prefix=${template.path}`, sourceRevision]))
-			.split(/\s+/)
-			.at(-1);
-		if (revision === undefined || !revisionPattern.test(revision))
-			return yield* fail(`Projection for ${template.slug} did not produce a commit revision.`);
-		if (options.updateLocal) {
-			const previous = yield* git(['rev-parse', '--verify', template.ref]).pipe(
-				Effect.catchTag('TemplateError', () => Effect.succeed(undefined))
-			);
-			if (previous !== undefined) yield* git(['merge-base', '--is-ancestor', previous, revision]);
-			yield* git([
-				'update-ref',
-				template.ref,
-				revision,
-				...(previous === undefined ? [] : [previous])
-			]);
+	const root = options.root ?? process.cwd(),
+		out = path.resolve(root, options.out);
+	for (const template of yield* discoverTemplates(root, options.filter)) {
+		const built = path.join(template.directory, '.norbital');
+		if (!(yield* fs.exists(path.join(built, 'release.json'))))
+			return yield* fail(`${template.slug} has no .norbital/release.json; run bolt build`);
+		const release = yield* json(ReleaseJson, path.join(built, 'release.json'));
+		const parts: ReadonlyArray<readonly [string, string]> = [
+			['bundle', release.bundle],
+			['source', release.source],
+			// the `test` pack is the template's own test data: built and digested, never published
+			...Object.entries(release.seed)
+				.filter(([pack]) => pack !== 'test')
+				.map(([pack, digest]) => [`seed/${pack}`, digest] as const)
+		];
+		for (const [part, digest] of parts) {
+			const object = path.join(out, part.startsWith('seed/') ? 'seed' : part, `${digest}.tar.gz`);
+			yield* fs.makeDirectory(path.dirname(object), { recursive: true });
+			if (!(yield* fs.exists(object)))
+				yield* run('tar', ['-czf', object, '-C', path.join(built, part), '.'], { cwd: root });
 		}
-		if (options.push !== undefined) {
-			const remote = yield* git(['ls-remote', '--refs', options.push, template.ref]);
-			const previous = remote.split(/\s+/)[0];
-			if (previous !== undefined && previous !== '')
-				yield* git(['merge-base', '--is-ancestor', previous, revision]);
-		}
-		yield* Console.log(`${template.slug}: ${template.ref} -> ${revision}`);
-		const metadata = template.metadata;
-		entries.push({
-			slug: template.slug,
-			handle: template.handle,
-			ref: template.ref,
-			revision,
-			name: metadata.name,
-			industry: metadata.industry,
-			description: metadata.description,
-			visibility: metadata.visibility,
-			counts: metadata.counts
-		});
-	}
-	if (options.push !== undefined)
-		yield* git([
-			'push',
-			'--atomic',
-			options.push,
-			...entries.map((entry) => `${entry.revision}:${entry.ref}`)
-		]);
-	if (options.output !== undefined) {
-		const outputPath = path.resolve(root, options.output);
-		yield* fs.makeDirectory(path.dirname(outputPath), { recursive: true });
-		yield* fs.writeFileString(
-			outputPath,
-			`${JSON.stringify({ schemaVersion: 1, source: { repository: sourceRepository, revision: sourceRevision }, entries }, null, 2)}\n`
-		);
-		yield* Console.log(`Wrote ${outputPath}.`);
+		const record = path.join(out, 'template', template.slug, `${release.bundle}.json`);
+		yield* fs.makeDirectory(path.dirname(record), { recursive: true });
+		yield* fs.copyFile(path.join(built, 'release.json'), record);
+		yield* Console.log(`${template.slug}: bundle ${release.bundle.slice(0, 12)}`);
 	}
 });
 const optional = (name: string) => Flag.String(name).pipe(Flag.optional);
@@ -782,21 +851,9 @@ const verifyCommand = Command.make('verify', { filter: optional('filter') }, ({ 
 );
 const publishCommand = Command.make(
 	'publish',
-	{
-		sourceRevision: Flag.String('source-revision').pipe(Flag.withDefault('HEAD')),
-		repository: optional('repository'),
-		output: optional('output'),
-		push: optional('push'),
-		updateLocal: boolean('update-local')
-	},
-	({ sourceRevision, repository, output, push, updateLocal }) =>
-		publishTemplates({
-			sourceRevision,
-			updateLocal,
-			...(Option.isSome(repository) ? { repository: repository.value } : {}),
-			...(Option.isSome(output) ? { output: output.value } : {}),
-			...(Option.isSome(push) ? { push: push.value } : {})
-		})
+	{ out: Flag.String('out'), filter: optional('filter') },
+	({ out, filter }) =>
+		publishTemplates({ out, ...(Option.isSome(filter) ? { filter: filter.value } : {}) })
 );
 export const templatesCommand = Command.make('templates').pipe(
 	Command.withSubcommands([checkCommand, lockCommand, testCommand, verifyCommand, publishCommand])

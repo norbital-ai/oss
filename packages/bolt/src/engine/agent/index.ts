@@ -24,7 +24,7 @@ import {
 	Stream
 } from 'effect';
 import * as EffectArray from 'effect/Array';
-import { Port, type PortFailure } from '../port.ts';
+import { Port } from '../port.ts';
 import {
 	Ai,
 	Bundler,
@@ -85,7 +85,6 @@ import { Authorities } from '../identity/actor.ts';
 import {
 	generate,
 	isFacilityError,
-	MODEL_FILES,
 	modelCall,
 	overflow,
 	servesModel,
@@ -2098,13 +2097,13 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 				return { conversation: id, ran: true };
 			const [live] = (yield* db.read([
 				q(
-					`SELECT lease_until::text AS until FROM sys_conversation WHERE id = $1 AND status = 'running'`,
+					`SELECT (extract(epoch FROM lease_until) * 1000)::float8 AS until FROM sys_conversation WHERE id = $1 AND status = 'running'`,
 					id
 				)
 			]))[0]!.rows;
 			if (live === undefined) return { conversation: id, ran: false };
 			const due = new Date(
-				Math.max(Date.parse(String(live['until'])), Date.parse((yield* config.bindings).now)) + 1000
+				Math.max(Number(live['until']), Date.parse((yield* config.bindings).now)) + 1000
 			).toISOString();
 			const chain = new Chain();
 			enqueueTurn(chain, id, due);

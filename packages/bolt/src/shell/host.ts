@@ -10,18 +10,16 @@ import {
 	Layer,
 	Option,
 	Queue,
-	Redacted,
 	Result,
 	Schema,
 	Stream
 } from 'effect';
-import * as HttpClient from 'effect/http/HttpClient';
-import * as HttpClientRequest from 'effect/http/HttpClientRequest';
-import * as HttpClientResponse from 'effect/http/HttpClientResponse';
 import * as HttpServerRequest from 'effect/http/HttpServerRequest';
 import * as HttpServerResponse from 'effect/http/HttpServerResponse';
 import * as Headers from 'effect/http/Headers';
 import { Unavailable } from '../decl/errors.ts';
+import type { Challenge } from '../facilities/index.ts';
+import { isOff, type Off } from '../facilities/off.ts';
 import {
 	Activation,
 	Guest,
@@ -42,7 +40,6 @@ import {
 	RateLimits,
 	requestActRate,
 	requestReadRate,
-	readAdmitted,
 	wireReadAdmitted,
 	requestBody,
 	requestUrl,
@@ -54,8 +51,7 @@ import { sseResponse } from '../protocol/sse.ts';
 import type { Handler } from '../protocol/host.ts';
 import { requestKiosk, kioskAuthority, kioskBoot } from './public/kiosk.ts';
 import type { EngineManifest } from '../engine/manifest.ts';
-import type { Json } from '../decl/values.ts';
-import type { Authority, EngineActor, LogQuery } from '../engine/contracts.ts';
+import type { Authority, LogQuery } from '../engine/contracts.ts';
 import { type EngineError } from '../engine/errors.ts';
 import { BoltError, CODES, PHASES } from '../protocol/errors.ts';
 import { addressBucket, chargesFor, macKey, type RateKind } from '../engine/access/rate.ts';
@@ -143,44 +139,27 @@ export class Turnstile extends Context.Service<Turnstile, TurnstileShape>()('bol
 		siteKey: 'dev',
 		verify: (token: string) => Effect.succeed(token === 'dev-pass')
 	});
-	static readonly unavailable = Layer.succeed(Turnstile, {
-		siteKey: undefined,
-		verify: () =>
-			Effect.fail(
-				new Unavailable({ facility: 'turnstile', reason: 'This host verifies no challenge.' })
-			)
-	});
-	static readonly cloudflare = (siteKey: string, secret: Redacted.Redacted<string>) =>
-		Layer.effect(
+	/** The host's challenge facility; `off` verifies none (a challenged app's visitors are refused). */
+	static fromAbi(challenge: Challenge | Off): Layer.Layer<Turnstile> {
+		return Layer.succeed(
 			Turnstile,
-			Effect.gen(function* () {
-				const client = yield* HttpClient.HttpClient;
-				return {
-					siteKey,
-					verify: (token: string, ip: string) =>
-						client
-							.execute(
-								HttpClientRequest.post(
-									'https://challenges.cloudflare.com/turnstile/v0/siteverify'
-								).pipe(
-									HttpClientRequest.bodyUrlParams({
-										secret: Redacted.value(secret),
-										response: token,
-										remoteip: ip
-									})
-								)
+			isOff(challenge)
+				? {
+						siteKey: undefined,
+						verify: () =>
+							Effect.fail(
+								new Unavailable({ facility: 'turnstile', reason: 'This host verifies no challenge.' })
 							)
-							.pipe(
-								Effect.flatMap(
-									HttpClientResponse.schemaBodyJson(Schema.Struct({ success: Schema.Boolean }))
-								),
-								Effect.map((result) => result.success),
-								Effect.timeout('10 seconds'),
+					}
+				: {
+						siteKey: challenge.siteKey,
+						verify: (token, ip) =>
+							Effect.tryPromise((signal) => challenge.verify(token, ip, signal)).pipe(
 								Effect.catch(() => Effect.succeed(false))
 							)
-				};
-			})
+					}
 		);
+	}
 }
 export type ShellHostConfig = {
 	readonly publicUrl: string;

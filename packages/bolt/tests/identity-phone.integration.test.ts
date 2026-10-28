@@ -9,7 +9,7 @@ import { randomUUID } from 'node:crypto';
 import type { Json } from '../src/decl/values.ts';
 import { RateWindows } from '../src/engine/access/rate.ts';
 import type { TransportPort } from '../src/engine/contracts.ts';
-import { PgliteDb } from '../src/node/db/pglite.ts';
+import { TestDb } from '../src/test/database.ts';
 import { TenantDb } from '../src/engine/db/tenant-db.ts';
 import { Authorities } from '../src/engine/identity/actor.ts';
 import { parseAddress } from '../src/engine/identity/address.ts';
@@ -26,10 +26,10 @@ import {
 	type PhoneVerifier
 } from '../src/engine/identity/session.ts';
 import type { EngineManifest } from '../src/engine/manifest.ts';
-import { applyPlan, plan } from '../src/engine/schema/plan.ts';
 import { memoryAuditLayer } from '../src/test/index.ts';
 
 const m: EngineManifest = {
+	needs: [],
 	workspace: {
 		tz: 'UTC',
 		locale: 'en',
@@ -63,7 +63,6 @@ const port = (box: (typeof Text.Type)[]): TransportPort => ({
 const ip = '5.5.5.5';
 const fixture = Effect.gen(function* () {
 	const db = yield* TenantDb;
-	yield* applyPlan(db, yield* plan(null, m), { accept: true });
 	// The record a newcomer is: a customer on file by number, as a template's customers model would be.
 	yield* db.write({ text: 'CREATE TABLE customers (id text PRIMARY KEY, phone text)', params: [] });
 	yield* db.write({
@@ -116,7 +115,7 @@ class PhoneFixture extends Context.Service<PhoneFixture, Effect.Success<typeof f
 	'test/PhoneFixture'
 ) {}
 const PhoneFixtureLive = Layer.effect(PhoneFixture, fixture).pipe(
-	Layer.provide(Layer.mergeAll(PgliteDb.layer(), NodeCrypto.layer, memoryAuditLayer))
+	Layer.provide(Layer.mergeAll(TestDb.layer(m), NodeCrypto.layer, memoryAuditLayer))
 );
 
 layer(PhoneFixtureLive)((it) => {
@@ -364,9 +363,8 @@ layer(PhoneFixtureLive)((it) => {
 			Effect.scoped(
 				Effect.gen(function* () {
 					const { h } = yield* PhoneFixture;
-					const context = yield* Layer.build(Layer.mergeAll(PgliteDb.layer(), memoryAuditLayer));
+					const context = yield* Layer.build(Layer.mergeAll(TestDb.layer(m), memoryAuditLayer));
 					const fdb = Context.get(context, TenantDb);
-					yield* applyPlan(fdb, yield* plan(null, m), { accept: true });
 					const fh = yield* makeIdentityHost({ ...h, db: fdb, keys: yield* loadKeys(fdb) }).pipe(
 						Effect.provide(NodeCrypto.layer)
 					);
@@ -417,7 +415,6 @@ const verifier = () => {
 };
 const verifierFixture = Effect.gen(function* () {
 	const db = yield* TenantDb;
-	yield* applyPlan(db, yield* plan(null, m), { accept: true });
 	yield* db.write({ text: 'CREATE TABLE customers (id text PRIMARY KEY, phone text)', params: [] });
 	yield* TestClock.setTime(Date.parse('2026-09-30T00:00:00Z'));
 	const phone = verifier(),
@@ -440,7 +437,7 @@ class VerifierFixture extends Context.Service<
 	Effect.Success<typeof verifierFixture>
 >()('test/VerifierFixture') {}
 const VerifierFixtureLive = Layer.effect(VerifierFixture, verifierFixture).pipe(
-	Layer.provide(Layer.mergeAll(PgliteDb.layer(), NodeCrypto.layer, memoryAuditLayer))
+	Layer.provide(Layer.mergeAll(TestDb.layer(m), NodeCrypto.layer, memoryAuditLayer))
 );
 
 layer(VerifierFixtureLive)((it) => {

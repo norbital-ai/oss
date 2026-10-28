@@ -1,7 +1,41 @@
 // Local fake IMAP and SMTP servers for the mailbox link's tests: plain TCP on 127.0.0.1, just enough of each
 // protocol for imapflow and nodemailer (IMAP: LOGIN, AUTHENTICATE XOAUTH2, SELECT/EXAMINE, UID FETCH, UID SEARCH, IDLE;
 // SMTP: EHLO with DSN, AUTH, MAIL/RCPT with their parameters, DATA). Never a real mailbox.
-import { createServer, type AddressInfo, type Server, type Socket } from 'node:net';
+import { createServer, Socket, type AddressInfo, type Server } from 'node:net';
+import { Effect } from 'effect';
+import { FacilityFailure } from '@norbital-ai/bolt/errors';
+import type { MailNet } from '../src/imap-smtp/model.ts';
+
+/** The mailbox's network for these servers: 127.0.0.1 without TLS, no destination guard. */
+export const loopback: MailNet = {
+	plain: true,
+	destination: (hostname, port) =>
+		Effect.succeed({
+			hostname,
+			port,
+			address: { address: hostname, family: 4 },
+			addresses: [{ address: hostname, family: 4 }]
+		}),
+	connect: (hostname, port) =>
+		Effect.gen(function* () {
+			const socket = yield* Effect.acquireRelease(
+				Effect.sync(() => new Socket()),
+				(socket) => Effect.sync(() => void socket.destroy())
+			);
+			return yield* Effect.callback<Socket, FacilityFailure>((resume) => {
+				const ready = () => resume(Effect.succeed(socket));
+				const failed = (error: Error) =>
+					resume(Effect.fail(new FacilityFailure({ kind: 'upstream', message: error.message })));
+				socket.once('connect', ready);
+				socket.once('error', failed);
+				socket.connect(port, hostname);
+				return Effect.sync(() => {
+					socket.removeListener('connect', ready);
+					socket.removeListener('error', failed);
+				});
+			});
+		})
+};
 
 const listen = async (server: Server) => {
 	await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
@@ -188,6 +222,7 @@ export async function fakeImap(o: {
 /** Replies by recipient: `full@` 452 4.2.2 (retry), `nobody@` 550 5.1.1 (permanent); everyone else 250. */
 export async function fakeSmtp(o: { accept?: (user: string, secret: string) => boolean } = {}) {
 	const sent: { mailFrom: string; rcpts: string[]; data: string }[] = [];
+	let relay: ((data: string) => void) | undefined;
 	const sockets = new Set<Socket>();
 	const server = createServer((socket) => {
 		sockets.add(socket);
@@ -205,6 +240,7 @@ export async function fakeSmtp(o: { accept?: (user: string, secret: string) => b
 			if (data !== null) {
 				if (l === '.') {
 					sent.push({ ...cur, data: data.join('\r\n') });
+					relay?.(data.join('\r\n'));
 					data = null;
 					cur = { mailFrom: '', rcpts: [] };
 					return say('250 2.0.0 queued');
@@ -272,5 +308,13 @@ export async function fakeSmtp(o: { accept?: (user: string, secret: string) => b
 		});
 	});
 	const port = await listen(server);
-	return { port, sent, close: closer(server, sockets) };
+	return {
+		port,
+		sent,
+		/** Each message accepted from now on also reaches `mailbox`, as a server delivering it back. */
+		relayTo(mailbox: { deliver(raw: string): void }) {
+			relay = (data) => mailbox.deliver(data);
+		},
+		close: closer(server, sockets)
+	};
 }

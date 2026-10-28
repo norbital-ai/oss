@@ -19,8 +19,27 @@ import {
 	withFetch,
 	type Obj
 } from '../util.ts';
-import { twilio } from './messages.ts';
+import { providerJson } from '../transport.ts';
 
+/** One Twilio API call, basic-authenticated as the account (also the host messaging adapters' request). */
+export type TwilioAccount = { readonly accountSid: string; readonly authToken: string };
+export const twilio = <A>(
+	account: TwilioAccount,
+	schema: Schema.Decoder<A>,
+	url: string,
+	form?: { readonly [k: string]: string }
+) => {
+	const request = HttpClientRequest.make(form === undefined ? 'GET' : 'POST')(url, {
+		headers: {
+			authorization: `Basic ${Buffer.from(`${account.accountSid}:${account.authToken}`).toString('base64')}`
+		}
+	});
+	return providerJson(
+		'twilio',
+		schema,
+		form === undefined ? request : request.pipe(HttpClientRequest.bodyUrlParams(form))
+	);
+};
 const API = 'https://api.twilio.com/2010-04-01';
 const MEDIA_MAX = 16 * 1024 * 1024;
 const STATUS: { readonly [s: string]: DeliveryReport['kind'] } = {

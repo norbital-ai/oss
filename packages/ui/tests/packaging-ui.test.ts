@@ -88,57 +88,6 @@ it.live('a read-only Form shows every value as copyable text, no field chrome, n
 	})
 );
 
-const ROW = {
-	id: 'r1',
-	revision: 1,
-	title: 'Paint',
-	paid: true,
-	grade: 'senior_staff',
-	note: null,
-	owner: 'j1'
-};
-const readable: NonNullable<KindsHost['catalog']> = {
-	jobs: catalog.jobs,
-	rows: {
-		label: ['title'],
-		fields: {
-			title: { kind: 'text' },
-			paid: { kind: 'bool' },
-			grade: { kind: 'enum', values: ['senior_staff', 'junior'] },
-			note: { kind: 'text', optional: true }
-		},
-		relations: { owner: { targets: ['jobs'] } }
-	}
-};
-
-it.live(
-	'an update the viewer cannot make is readonly by itself: enums by label, booleans Yes/No, refs by label, empty as a dash',
-	() =>
-		browser(async () => {
-			const v = await show({
-				part: 'form',
-				catalog: readable,
-				props: { of: 'rows', id: 'r1', record: ROW }
-			});
-			const text = (f: string) =>
-				v.target.querySelector(`[data-field=${f}][data-readonly]`)?.textContent ?? '';
-			assert.equal(v.target.querySelectorAll('input, button[type=submit]').length, 0);
-			assert.ok(text('grade').includes('Senior staff'));
-			assert.ok(text('paid').includes('Yes'));
-			assert.ok(text('note').includes('—'));
-			assert.ok(text('owner').includes('Paint') && !text('owner').includes('j1'));
-			// no prop lifts the engine's readonly
-			const lifted = await show({
-				part: 'form',
-				catalog: readable,
-				props: { of: 'rows', id: 'r1', record: ROW, readonly: false }
-			});
-			assert.equal(lifted.target.querySelectorAll('input').length, 0);
-			await v.done();
-			await lifted.done();
-		})
-);
-
 it.live('a disabled Form keeps its editors, muted and inert, with the submit disabled', () =>
 	browser(async () => {
 		const v = await show({

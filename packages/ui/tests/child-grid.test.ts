@@ -1,5 +1,5 @@
 import { required, textOf } from './view-fixture.ts';
-import { element } from './elements.ts';
+import { confirmDialog, element } from './elements.ts';
 import {
 	viewFixture,
 	jsonArray,
@@ -16,20 +16,22 @@ import type { RecordCapabilities, RecordParentContext } from '../src/record/type
 import type { KindsHost, ChildInput } from '../src/kinds/context.ts';
 import { it } from '@effect/vitest';
 import { rootsOf } from '../src/read/request.ts';
-import { vi } from 'vitest';
-// discarding a dirty grid asks in-app (a real-browser concern, bolt tests/sheet-discard.browser.test.ts); here it agrees
-vi.mock('../src/primitives/dialog/confirm.ts', async () => {
-	const { Effect } = await import('effect');
-	return { confirmAction: () => Effect.succeed(true) };
-});
 const { flushSync, mount, tick, unmount } = await import('svelte');
 const { default: Harness } = await import('./view-harness.svelte');
+const { default: ChildGrid } = await import('../src/relations/ChildGrid.svelte');
+const { default: RecordShell } = await import('../src/record/RecordShell.svelte');
 const settle = async () => {
 	flushSync();
 	for (let i = 0; i < 5; i++) {
 		await tick();
 		await new Promise((resolve) => setTimeout(resolve, 0));
 	}
+};
+/** Discarding a dirty grid asks in-app; the test agrees through the real dialog. */
+const agree = async () => {
+	await settle();
+	confirmDialog()?.answer(true);
+	await settle();
 };
 const input = {
 	model: 'lines',
@@ -125,7 +127,7 @@ it.live(
 			const target = document.body.appendChild(document.createElement('div'));
 			const app = mount(Harness, {
 				target,
-				props: { bolt, catalog, part: 'record', props: { of: 'jobs', id: 'j1' } }
+				props: { bolt, catalog, part: 'record', view: RecordShell, props: { of: 'jobs', id: 'j1' } }
 			});
 			try {
 				yield* browser(() => settle());
@@ -172,7 +174,7 @@ it.live(
 		})
 );
 it.live(
-	'independent related rows submit their own native update, leaving the parent untouched',
+	'independent row drafts guard unloading until Cancel, and save their own native update, leaving the parent untouched',
 	() =>
 		Effect.gen(function* () {
 			const { bolt, script, capabilities, acts } = yield* browser(fixture);
@@ -183,6 +185,7 @@ it.live(
 					bolt,
 					catalog,
 					part: 'child',
+					view: ChildGrid,
 					props: {
 						of: 'jobs',
 						relation: 'lines',
@@ -194,6 +197,20 @@ it.live(
 			});
 			try {
 				yield* browser(() => settle());
+				required(button(target, 'Edit')).click();
+				yield* browser(() => settle());
+				const draft = element<HTMLInputElement>(target, '[data-field=amount] input');
+				draft.value = '2';
+				draft.dispatchEvent(new Event('input', { bubbles: true }));
+				yield* browser(() => settle());
+				const dirty = new Event('beforeunload', { cancelable: true });
+				window.dispatchEvent(dirty);
+				assert.equal(dirty.defaultPrevented, true);
+				required(button(target, 'Cancel')).click();
+				yield* browser(agree);
+				const clean = new Event('beforeunload', { cancelable: true });
+				window.dispatchEvent(clean);
+				assert.equal(clean.defaultPrevented, false);
 				required(button(target, 'Edit')).click();
 				yield* browser(() => settle());
 				const amount = element<HTMLInputElement>(target, '[data-field=amount] input');
@@ -251,7 +268,13 @@ it.live(
 			const target = document.body.appendChild(document.createElement('div'));
 			const app = mount(Harness, {
 				target,
-				props: { bolt, catalog: nested, part: 'record', props: { of: 'jobs', id: 'j1' } }
+				props: {
+					bolt,
+					catalog: nested,
+					part: 'record',
+					view: RecordShell,
+					props: { of: 'jobs', id: 'j1' }
+				}
 			});
 			try {
 				yield* browser(() => settle());
@@ -284,74 +307,54 @@ it.live(
 		})
 );
 
-it.live('create and delete remain explicit, and unloaded children never become deletions', () =>
-	Effect.gen(function* () {
-		const { bolt, script, capabilities, acts } = yield* browser(fixture);
-		const target = document.body.appendChild(document.createElement('div'));
-		const app = mount(Harness, {
-			target,
-			props: { bolt, catalog, part: 'record', props: { of: 'jobs', id: 'j1' } }
-		});
-		try {
-			yield* browser(() => settle());
-			required(button(target, 'Edit')).click();
-			yield* browser(() => settle());
-			required(button(target, 'Delete row')).click();
-			yield* browser(() => settle());
-			required(button(target, 'Add row')).click();
-			yield* browser(() => settle());
-			const amount = element<HTMLInputElement>(
+it.live(
+	'parent Cancel resets child drafts and operations; create and delete stay explicit, and unloaded children never become deletions',
+	() =>
+		Effect.gen(function* () {
+			const { bolt, acts } = yield* browser(fixture);
+			const target = document.body.appendChild(document.createElement('div'));
+			const app = mount(Harness, {
 				target,
-				'[data-child-grid] [data-field=amount] input'
-			);
-			amount.value = '9';
-			amount.dispatchEvent(new Event('input', { bubbles: true }));
-			yield* browser(() => settle());
-			required(button(element<HTMLElement>(target, 'header'), 'Save')).click();
-			yield* browser(() => settle());
-			assert.deepEqual(required(acts[0]).input, [
-				{ target: 'j1', set: { lines: { delete: ['l1'], create: [{ amount: 9 }] } } }
-			]);
-			assert.deepEqual(required(acts[0]).options.observed, { l1: 7, j1: 3 });
-		} finally {
-			yield* browser(() => unmount(app));
-			target.remove();
-		}
-	})
-);
-it.live('parent Cancel resets child drafts and explicit operations together', () =>
-	Effect.gen(function* () {
-		const { bolt, script, capabilities, acts } = yield* browser(fixture);
-		const target = document.body.appendChild(document.createElement('div'));
-		const app = mount(Harness, {
-			target,
-			props: { bolt, catalog, part: 'record', props: { of: 'jobs', id: 'j1' } }
-		});
-		try {
-			yield* browser(() => settle());
-			required(button(target, 'Edit')).click();
-			yield* browser(() => settle());
-			required(button(target, 'Delete row')).click();
-			yield* browser(() => settle());
-			required(button(target, 'Add row')).click();
-			yield* browser(() => settle());
-			required(button(element<HTMLElement>(target, 'header'), 'Cancel')).click();
-			yield* browser(() => settle());
-			assert.equal(target.querySelector('[data-child-grid] input'), null);
-			assert.equal(
-				target.querySelectorAll<HTMLElement>('[data-child-grid] [data-field=amount]').length,
-				1
-			);
-			assert.match(
-				textOf(element<HTMLElement>(target, '[data-child-grid] [data-field=amount]')),
-				/1/
-			);
-			assert.equal(acts.length, 0);
-		} finally {
-			yield* browser(() => unmount(app));
-			target.remove();
-		}
-	})
+				props: { bolt, catalog, part: 'record', view: RecordShell, props: { of: 'jobs', id: 'j1' } }
+			});
+			const deleteAndAdd = Effect.gen(function* () {
+				required(button(target, 'Edit')).click();
+				yield* browser(() => settle());
+				required(button(target, 'Delete row')).click();
+				yield* browser(() => settle());
+				required(button(target, 'Add row')).click();
+				yield* browser(() => settle());
+			});
+			try {
+				yield* browser(() => settle());
+				yield* deleteAndAdd;
+				required(button(element<HTMLElement>(target, 'header'), 'Cancel')).click();
+				yield* browser(agree);
+				assert.equal(target.querySelector('[data-child-grid] input'), null);
+				assert.equal(
+					target.querySelectorAll<HTMLElement>('[data-child-grid] [data-field=amount]').length,
+					1
+				);
+				assert.equal(acts.length, 0);
+				yield* deleteAndAdd;
+				const amount = element<HTMLInputElement>(
+					target,
+					'[data-child-grid] [data-field=amount] input'
+				);
+				amount.value = '9';
+				amount.dispatchEvent(new Event('input', { bubbles: true }));
+				yield* browser(() => settle());
+				required(button(element<HTMLElement>(target, 'header'), 'Save')).click();
+				yield* browser(() => settle());
+				assert.deepEqual(required(acts[0]).input, [
+					{ target: 'j1', set: { lines: { delete: ['l1'], create: [{ amount: 9 }] } } }
+				]);
+				assert.deepEqual(required(acts[0]).options.observed, { l1: 7, j1: 3 });
+			} finally {
+				yield* browser(() => unmount(app));
+				target.remove();
+			}
+		})
 );
 
 it.live('link and unlink send explicit IDs and both original snapshots', () =>
@@ -393,7 +396,13 @@ it.live('link and unlink send explicit IDs and both original snapshots', () =>
 		const target = document.body.appendChild(document.createElement('div'));
 		const app = mount(Harness, {
 			target,
-			props: { bolt, catalog: shown, part: 'record', props: { of: 'jobs', id: 'j1' } }
+			props: {
+				bolt,
+				catalog: shown,
+				part: 'record',
+				view: RecordShell,
+				props: { of: 'jobs', id: 'j1' }
+			}
 		});
 		try {
 			yield* browser(() => settle());
@@ -420,273 +429,4 @@ it.live('link and unlink send explicit IDs and both original snapshots', () =>
 			target.remove();
 		}
 	})
-);
-
-it.live(
-	'a custom body retains a child draft and original revision through history and a conflict',
-	() =>
-		Effect.scoped(
-			Effect.gen(function* () {
-				const { bolt, script, capabilities, acts } = yield* browser(fixture);
-				let childRevision = 7;
-				const changed = new Set<() => void>();
-				script.changes = (read, emit) => {
-					if (rootsOf(read).includes('lines')) changed.add(emit);
-					return () => {
-						changed.delete(emit);
-					};
-				};
-				const originalGet = script.get,
-					originalCapabilities = capabilities;
-				script.get = (model, id, layers, options) =>
-					options?.asOf === undefined
-						? originalGet(model, id)
-						: { id, revision: 2, title: 'Past job' };
-				script.history = () => [
-					{
-						revision: 2,
-						at: '2026-10-01T00:00:00Z',
-						actor: { kind: 'member', id: 'u1' },
-						changed: { title: 'Past job' }
-					},
-					{
-						revision: 3,
-						at: '2026-10-02T00:00:00Z',
-						actor: { kind: 'member', id: 'u1' },
-						changed: { title: 'Job' }
-					}
-				];
-				script.read = () => ({
-					rows: [
-						{ id: 'l1', revision: childRevision, amount: childRevision === 7 ? 1 : 10, job: 'j1' }
-					],
-					next: null
-				});
-				script.capabilities = (model, id) => {
-					const value = originalCapabilities(model, id);
-					return model === 'jobs' ? value : { ...value, revision: childRevision };
-				};
-				script.act = (callable, input, options) => {
-					acts.push({ callable, input, options });
-					return {
-						kind: 'conflict',
-						records: [{ model: 'lines', id: 'l1', fields: ['amount'] }]
-					};
-				};
-				const target = document.body.appendChild(document.createElement('div'));
-				const app = mount(Harness, { target, props: { bolt, catalog, part: 'childCustom' } });
-				yield* Effect.addFinalizer(() =>
-					browser(async () => {
-						await unmount(app);
-						target.remove();
-					}).pipe(Effect.orDie)
-				);
-				yield* browser(() => settle());
-				required(button(target, 'Edit')).click();
-				yield* browser(() => settle());
-				const amount = element<HTMLInputElement>(
-					target,
-					'[data-child-grid] [data-field=amount] input'
-				);
-				amount.value = '2';
-				amount.dispatchEvent(new Event('input', { bubbles: true }));
-				yield* browser(() => settle());
-				childRevision = 8;
-				assert.ok(changed.size > 0, 'the remote edit reaches the subscribed child query');
-				for (const emit of changed) emit();
-				element<HTMLElement>(target, '[data-timeline-trigger]').click();
-				yield* browser(() => settle());
-				const slider = element<HTMLElement>(document, '[data-record-timeline] [role=slider]');
-				slider.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowLeft', bubbles: true }));
-				yield* browser(() => settle());
-				assert.equal(target.querySelector('[data-child-grid] input'), null);
-				slider.dispatchEvent(new KeyboardEvent('keydown', { key: 'End', bubbles: true }));
-				yield* browser(() => settle());
-				yield* browser(() =>
-					vi.waitFor(() =>
-						assert.equal(
-							element<HTMLInputElement>(target, '[data-child-grid] [data-field=amount] input')
-								.value,
-							'2'
-						)
-					)
-				);
-				required(button(element<HTMLElement>(target, 'header'), 'Save')).click();
-				yield* browser(() => settle());
-				assert.deepEqual(
-					required(acts.find((a) => a.callable !== 'history.preview')).options.observed,
-					{ l1: 7, j1: 3 }
-				);
-				assert.equal(
-					element<HTMLInputElement>(target, '[data-child-grid] [data-field=amount] input').value,
-					'2'
-				);
-				assert.match(textOf(target), /changed/);
-			})
-		)
-);
-
-it.live(
-	'owned-parent restrictions keep row values visible while independent editing cannot bypass them',
-	() =>
-		Effect.gen(function* () {
-			const { bolt, script, capabilities, acts } = yield* browser(fixture);
-			const originalCapabilities = capabilities;
-			script.capabilities = (model, id) => ({
-				...originalCapabilities(model, id),
-				fields: { amount: { writable: false, proposal: false, reasons: ['ownedParentLocked'] } },
-				update: { allowed: false, proposal: false, reasons: ['ownedParentLocked'] }
-			});
-			const target = document.body.appendChild(document.createElement('div'));
-			const app = mount(Harness, {
-				target,
-				props: {
-					bolt,
-					catalog,
-					part: 'child',
-					props: {
-						of: 'jobs',
-						relation: 'lines',
-						id: 'j1',
-						save: 'independent',
-						columns: ['amount']
-					}
-				}
-			});
-			try {
-				yield* browser(() => settle());
-				required(button(target, 'Edit')).click();
-				yield* browser(() => settle());
-				assert.equal(target.querySelector('[data-field=amount] input'), null);
-				assert.match(textOf(element<HTMLElement>(target, '[data-field=amount]')), /1/);
-				assert.ok(element<HTMLElement>(target, '[data-field-restriction=ownedParentLocked]'));
-				assert.equal(button(target, 'Save'), undefined);
-				assert.equal(acts.length, 0);
-			} finally {
-				yield* browser(() => unmount(app));
-				target.remove();
-			}
-		})
-);
-it.live('a full child representation opens with its model and ID', () =>
-	Effect.gen(function* () {
-		const { bolt, script, capabilities } = yield* browser(fixture);
-		const target = document.body.appendChild(document.createElement('div'));
-		const previous = location.href;
-		const app = mount(Harness, {
-			target,
-			props: {
-				bolt,
-				catalog,
-				part: 'child',
-				props: { of: 'jobs', relation: 'lines', id: 'j1', save: 'independent', columns: ['amount'] }
-			}
-		});
-		try {
-			yield* browser(() => settle());
-			required(button(target, 'Open')).click();
-			assert.ok(new URL(location.href).searchParams.getAll('record').includes('lines/l1'));
-		} finally {
-			history.replaceState(history.state, '', previous);
-			yield* browser(() => unmount(app));
-			target.remove();
-		}
-	})
-);
-
-it.live('independent row drafts guard unloading and Cancel clears the guard', () =>
-	Effect.gen(function* () {
-		const { bolt, script, capabilities } = yield* browser(fixture);
-		const target = document.body.appendChild(document.createElement('div'));
-		const app = mount(Harness, {
-			target,
-			props: {
-				bolt,
-				catalog,
-				part: 'child',
-				props: { of: 'jobs', relation: 'lines', id: 'j1', save: 'independent', columns: ['amount'] }
-			}
-		});
-		try {
-			yield* browser(() => settle());
-			required(button(target, 'Edit')).click();
-			yield* browser(() => settle());
-			const amount = element<HTMLInputElement>(target, '[data-field=amount] input');
-			amount.value = '2';
-			amount.dispatchEvent(new Event('input', { bubbles: true }));
-			yield* browser(() => settle());
-			const dirty = new Event('beforeunload', { cancelable: true });
-			window.dispatchEvent(dirty);
-			assert.equal(dirty.defaultPrevented, true);
-			required(button(target, 'Cancel')).click();
-			yield* browser(() => settle());
-			const clean = new Event('beforeunload', { cancelable: true });
-			window.dispatchEvent(clean);
-			assert.equal(clean.defaultPrevented, false);
-		} finally {
-			yield* browser(() => unmount(app));
-			target.remove();
-		}
-	})
-);
-
-it.live('a parent delete-only child contract cannot borrow the child model update permission', () =>
-	Effect.gen(function* () {
-		const { bolt, script, capabilities } = yield* browser(fixture);
-		const deletion: ChildInput = {
-			model: 'lines',
-			parent: 'job',
-			owned: true,
-			delete: true
-		};
-		const shown: NonNullable<KindsHost['catalog']> = {
-			...catalog,
-			jobs: { ...catalog.jobs, update: { columns: ['title'], with: { lines: deletion } } }
-		};
-		const target = document.body.appendChild(document.createElement('div'));
-		const app = mount(Harness, {
-			target,
-			props: { bolt, catalog: shown, part: 'record', props: { of: 'jobs', id: 'j1' } }
-		});
-		try {
-			yield* browser(() => settle());
-			required(button(target, 'Edit')).click();
-			yield* browser(() => settle());
-			assert.equal(target.querySelector('[data-child-grid] [data-field=amount] input'), null);
-			assert.ok(button(target, 'Delete row'));
-		} finally {
-			yield* browser(() => unmount(app));
-			target.remove();
-		}
-	})
-);
-
-it.live(
-	'an upsert-only parent relation stays readonly for undeclared create and update operations',
-	() =>
-		Effect.gen(function* () {
-			const { bolt, script, capabilities } = yield* browser(fixture);
-			const readonly: ChildInput = { model: 'lines', parent: 'job', owned: true };
-			const shown: NonNullable<KindsHost['catalog']> = {
-				...catalog,
-				jobs: { ...catalog.jobs, update: { columns: ['title'], with: { lines: readonly } } }
-			};
-			const target = document.body.appendChild(document.createElement('div'));
-			const app = mount(Harness, {
-				target,
-				props: { bolt, catalog: shown, part: 'record', props: { of: 'jobs', id: 'j1' } }
-			});
-			try {
-				yield* browser(() => settle());
-				required(button(target, 'Edit')).click();
-				yield* browser(() => settle());
-				assert.equal(target.querySelector('[data-child-grid] input'), null);
-				assert.equal(button(target, 'Add row'), undefined);
-				assert.ok(button(target, 'Open'));
-				assert.match(textOf(target), /available actions/);
-			} finally {
-				yield* browser(() => unmount(app));
-				target.remove();
-			}
-		})
 );

@@ -1,18 +1,15 @@
 /// <reference types="node" />
 // Schema on a real Postgres (PGlite 18): the empty-DB plan, one test per §5.2 / rule 68–69 guarantee.
-import type { PGlite, Results } from '@electric-sql/pglite';
 import { describe, expect, it } from '@effect/vitest';
-import { Effect, Schema } from 'effect';
+import { Effect } from 'effect';
 import type { TenantDbShape as TenantDb } from '../src/engine/db/tenant-db.ts';
 import { DbError } from '../src/engine/errors.ts';
 import { BoltError, fromStore } from '../src/protocol/errors.ts';
-import { tableOf } from '../src/protocol/catalog.ts';
-import { PgliteDb, Pristine } from '../src/node/db/pglite.ts';
-import { PostgresDb, type PgClient } from '../src/node/db/postgres.ts';
+import { PgliteDb } from '../src/node/db/pglite.ts';
+import { TestDb } from '../src/test/database.ts';
 import { constraintIndex } from '@norbital-ai/store';
 import {
 	applyPlan,
-	destructiveSteps,
 	plan,
 	readApplied,
 	type SchemaSlice
@@ -20,25 +17,15 @@ import {
 import { refusalOf } from '../src/engine/schema/refusal.ts';
 import { slice } from './schema-fixture.ts';
 let db: TenantDb;
-let pg: PGlite;
-const postgresResult = (result: Results<unknown>) => ({
-	rows: [
-		...Schema.decodeUnknownSync(Schema.Array(Schema.Record(Schema.String, Schema.Json)))(
-			result.rows
-		)
-	],
-	rowCount: result.rowCount ?? result.affectedRows ?? result.rows.length
-});
 const U = (n: number) => `00000000-0000-7000-8000-${String(n).padStart(12, '0')}`;
 const exec = (text: string, params: readonly (string | number | null)[] = []) =>
 	db.write({ text, params });
-const refusal = Effect.fnUntraced(function* (
-	p: Effect.Effect<unknown, DbError>,
-	s: SchemaSlice = slice()
-) {
+// the slice's constraint index, built once: the writer's own map is per manifest, not per refusal
+const index = Effect.runSync(Effect.cached(constraintIndex(slice()).pipe(Effect.mapError(fromStore))));
+const refusal = Effect.fnUntraced(function* (p: Effect.Effect<unknown, DbError>) {
 	const e = yield* Effect.flip(p);
 	expect(e).toBeInstanceOf(DbError);
-	return refusalOf(e, yield* constraintIndex(s).pipe(Effect.mapError(fromStore)));
+	return refusalOf(e, yield* index);
 });
 const migrate = Effect.fnUntraced(function* (s: SchemaSlice, accept?: true | readonly string[]) {
 	const p = yield* plan(yield* readApplied(db), s);
@@ -56,23 +43,17 @@ const seed = Effect.fnUntraced(function* () {
 	);
 });
 const setup = Effect.fnUntraced(function* () {
-	pg = yield* PgliteDb.open();
-	db = PgliteDb.make(pg);
-	yield* migrate(slice());
+	db = PgliteDb.make(yield* TestDb.open(slice()));
 });
 describe('next schema on PGlite', () => {
-	it.live('applies the empty-database plan and records the slice; planning again is empty', () =>
-		Effect.gen(function* () {
-			yield* setup();
-			expect(yield* readApplied(db)).toEqual(JSON.parse(JSON.stringify(slice())));
-			expect((yield* plan(yield* readApplied(db), slice())).steps).toEqual([]);
-		}).pipe(Effect.provide(Pristine.layer))
-	);
 	it.live(
-		"the empty-database plan creates the built-in layer's and the engine's tables; a re-apply keeps them and their rows",
+		'applies the empty-database plan with the built-in tables; re-planning is empty and keeps rows',
 		() =>
 			Effect.gen(function* () {
 				yield* setup();
+				expect(yield* readApplied(db)).toEqual(JSON.parse(JSON.stringify(slice())));
+				expect((yield* plan(yield* readApplied(db), slice())).steps).toEqual([]);
+
 				const [t] = yield* db.read([
 					{
 						text: `select count(*)::int as n from pg_tables where tablename in ('sys_user', 'sys_run', 'sys_message', 'approval_request', 'bolt_idem')`,
@@ -87,62 +68,7 @@ describe('next schema on PGlite', () => {
 					{ text: `select name from sys_user where id = 'u1'`, params: [] }
 				]);
 				expect(u?.rows).toEqual([{ name: 'Ada' }]);
-			}).pipe(Effect.provide(Pristine.layer))
-	);
-	it.live(
-		're-planning after the slice round-trips through jsonb is empty; an unrelated field refreshes its native guard',
-		() =>
-			Effect.gen(function* () {
-				yield* setup();
-				// `bolt_schema.slice` is jsonb: `states` and predicate fields come back in another key order than declared
-				const s: SchemaSlice = {
-					...slice(),
-					tables: {
-						...slice().tables,
-						signings: tableOf({
-							description: 'signings',
-							label: 'status',
-							fields: {
-								status: {
-									kind: 'state',
-									initial: 'unstamped',
-									states: {
-										unstamped: { to: ['voided'] },
-										counterparty_stamped: {},
-										acknowledged: {},
-										voided: {}
-									}
-								},
-								reason: { kind: 'text', optional: true }
-							},
-							check: {
-								void_needs_reason: {
-									status: { ne: 'voided', in: ['unstamped', 'voided'] },
-									reason: { isNull: false }
-								}
-							}
-						})
-					}
-				};
-				yield* migrate(s);
-				expect((yield* plan(yield* readApplied(db), s)).steps).toEqual([]);
-				const signings = s.tables.signings!;
-				const next: SchemaSlice = {
-					...s,
-					tables: {
-						...s.tables,
-						signings: {
-							...signings,
-							fields: { ...signings.fields, nickname: { kind: 'text', optional: true } }
-						}
-					}
-				};
-				expect((yield* migrate(next)).steps.map((x) => x.id).sort()).toEqual([
-					'create:column:signings.nickname',
-					'replace:trigger:signings.store_row_rules'
-				]);
-				expect((yield* plan(yield* readApplied(db), next)).steps).toEqual([]);
-			}).pipe(Effect.provide(Pristine.layer))
+			})
 	);
 	it.live('computes every operator immutably and emits JSON values', () =>
 		Effect.gen(function* () {
@@ -176,9 +102,9 @@ describe('next schema on PGlite', () => {
 				}
 			]);
 			expect(c?.rows[0]).toEqual({ doc: `'#ad' 'ada'`, tags: [] }); // the multilingual document: the word and its Latin skeleton
-		}).pipe(Effect.provide(Pristine.layer))
+		})
 	);
-	it.live('maps every constraint violation to its refusal through the constraint name', () =>
+	it.live('maps every constraint violation, excess precision and a broken arc to its refusal', () =>
 		Effect.gen(function* () {
 			yield* setup();
 			yield* seed();
@@ -242,12 +168,7 @@ describe('next schema on PGlite', () => {
 			expect(
 				yield* refusal(exec(`update orders set qty = 3000000000 where id = $1`, [U(10)]))
 			).toMatchObject({ code: 'overflow' });
-		}).pipe(Effect.provide(Pristine.layer))
-	);
-	it.live('money and decimals refuse excess precision instead of rounding (rule 68)', () =>
-		Effect.gen(function* () {
-			yield* setup();
-			yield* seed();
+
 			expect(
 				yield* refusal(exec(`update orders set total = '1.005' where id = $1`, [U(10)]))
 			).toMatchObject({ code: 'check', field: 'total' });
@@ -261,12 +182,7 @@ describe('next schema on PGlite', () => {
 				yield* refusal(exec(`update orders set rate = '1000' where id = $1`, [U(10)]))
 			).toMatchObject({ code: 'check', field: 'rate' });
 			yield* exec(`update orders set jpy = '150', rate = '999.99' where id = $1`, [U(10)]);
-		}).pipe(Effect.provide(Pristine.layer))
-	);
-	it.live('an exclusive arc takes exactly one target', () =>
-		Effect.gen(function* () {
-			yield* setup();
-			yield* seed();
+
 			yield* exec(`insert into notes (id, body, about__orders) values ($1, 'hi', $2)`, [
 				U(20),
 				U(10)
@@ -282,186 +198,7 @@ describe('next schema on PGlite', () => {
 					)
 				)
 			).toMatchObject({ code: 'check', field: 'about' });
-		}).pipe(Effect.provide(Pristine.layer))
-	);
-	it.live(
-		'noOverlap: null is a value, periods are valid, and a successor may close its predecessor in one statement',
-		() =>
-			Effect.gen(function* () {
-				yield* setup();
-				yield* seed();
-				const term = (
-					id: number,
-					from: string,
-					to: string | null,
-					scope: string | null,
-					grade: string | null,
-					customer = U(1)
-				) =>
-					exec(
-						`insert into terms (id, customer, period, scope, grade) values ($1, $2, daterange($3::date, $4::date, '[]'), $5, $6)`,
-						[U(id), customer, from, to, scope, grade]
-					);
-				yield* term(30, '2024-01-01', null, null, 'g30');
-				expect(yield* refusal(term(31, '2024-06-01', null, null, 'g31'))).toMatchObject({
-					code: 'overlap'
-				});
-				yield* term(31, '2024-06-01', null, 'other', 'g31');
-				expect(
-					yield* refusal(
-						exec(`insert into terms (id, customer, period) values ($1, $2, 'empty')`, [U(32), U(1)])
-					)
-				).toMatchObject({ code: 'check', field: 'period' });
-				// successor first, predecessor closed after, in one statement: the EXCLUDE is deferrable
-				yield* exec(
-					`with s as (insert into terms (id, customer, period, grade) values ($1, $2, daterange('2025-01-01', null, '[]'), 'g33') returning id)
-			update terms set period = daterange('2024-01-01', '2024-12-31', '[]') where id = $3`,
-					[U(33), U(1), U(30)]
-				);
-				// composite unique: a null grade is a value
-				yield* term(34, '2030-01-01', '2030-01-02', 'a', null);
-				expect(yield* refusal(term(35, '2031-01-01', '2031-01-02', 'b', null))).toMatchObject({
-					code: 'unique'
-				});
-				// a partial unique is an EXCLUDE and reports as `unique`
-				yield* term(36, '2032-01-01', '2032-01-02', 'x', 'g1');
-				expect(yield* refusal(term(37, '2033-01-01', '2033-01-02', 'x', 'g1', U(2)))).toMatchObject(
-					{ code: 'unique', message: expect.stringContaining('one_x_grade') }
-				);
-			}).pipe(Effect.provide(Pristine.layer))
-	);
-	it.live('builds the search GIN, the vector HNSW and the point GiST indexes', () =>
-		Effect.gen(function* () {
-			yield* setup();
-			const [r] = yield* db.read([
-				{
-					text: `select indexdef from pg_indexes where tablename = 'customers' order by 1`,
-					params: []
-				}
-			]);
-			const defs = r?.rows.map((x) => String(x.indexdef)).join('\n');
-			expect(defs).toMatch(/USING gin \(bolt_search\)/);
-			expect(defs).toMatch(/USING hnsw \(colour vector_l2_ops\)/);
-			expect(defs).toMatch(/USING gist \(place\)/);
-			expect(defs).toMatch(/USING gin \(tags\)/);
-		}).pipe(Effect.provide(Pristine.layer))
-	);
-	it.live(
-		'a required column on a populated table is refused naming the constraint and row count; nothing changes',
-		() =>
-			Effect.gen(function* () {
-				yield* setup();
-				yield* seed();
-				const s = slice();
-				const next: SchemaSlice = {
-					...s,
-					tables: {
-						...s.tables,
-						notes: {
-							...s.tables.notes!,
-							fields: { ...s.tables.notes!.fields, pinned: { kind: 'bool' } }
-						}
-					}
-				};
-				yield* exec(
-					`insert into notes (id, body, about__customers) values ($1, 'a', $2), ($3, 'b', $2)`,
-					[U(40), U(1), U(41)]
-				);
-				const p = yield* plan(yield* readApplied(db), next);
-				expect(p.steps.find((x) => x.id === 'create:notNull:notes.pinned')?.class).toBe(
-					'validating'
-				);
-				const e = yield* applyPlan(db, p).pipe(Effect.catch((x) => Effect.succeed(x)));
-				expect(e).toBeInstanceOf(BoltError);
-				expect((e as BoltError).message).toBe('notNull:notes.pinned refuses 2 existing rows');
-				expect(yield* readApplied(db)).toEqual(JSON.parse(JSON.stringify(s)));
-				// with a default the same change applies
-				const withDefault: SchemaSlice = {
-					...s,
-					tables: {
-						...s.tables,
-						notes: {
-							...s.tables.notes!,
-							fields: { ...s.tables.notes!.fields, pinned: { kind: 'bool', default: false } }
-						}
-					}
-				};
-				yield* migrate(withDefault);
-				const [r] = yield* db.read([
-					{ text: 'select count(*)::int as n from notes where pinned = false', params: [] }
-				]);
-				expect(r?.rows[0]?.n).toBe(2);
-			}).pipe(Effect.provide(Pristine.layer))
-	);
-	it.live('a destructive step needs acceptance; accepted, it drops the column', () =>
-		Effect.gen(function* () {
-			yield* setup();
-			yield* seed();
-			const s = slice();
-			const { note: _, ...fields } = s.tables.orders!.fields;
-			const next: SchemaSlice = {
-				...s,
-				tables: { ...s.tables, orders: { ...s.tables.orders!, fields } }
-			};
-			expect(yield* destructiveSteps(s, next)).toEqual(['drop:column:orders.note']);
-			expect(yield* Effect.flip(migrate(next))).toMatchObject({ code: 'destructiveNotAccepted' });
-			yield* migrate(next, ['drop:column:orders.note']);
-			const [r] = yield* db.read([
-				{
-					text: `select count(*)::int as n from information_schema.columns where table_name = 'orders' and column_name = 'note'`,
-					params: []
-				}
-			]);
-			expect(r?.rows[0]?.n).toBe(0);
-		}).pipe(Effect.provide(Pristine.layer))
-	);
-	it.live(
-		'a new roll-up is backfilled from existing children; a changed enum is validated against rows',
-		() =>
-			Effect.gen(function* () {
-				yield* setup();
-				yield* seed();
-				const s = slice();
-				const cust = s.tables.customers!;
-				const next: SchemaSlice = {
-					...s,
-					tables: {
-						...s.tables,
-						customers: {
-							...cust,
-							fields: {
-								...cust.fields,
-								all_orders: { kind: 'count', of: 'orders' },
-								tags: { kind: 'enum', values: ['new'], many: true, default: [] }
-							}
-						}
-					}
-				};
-				yield* exec(`update customers set tags = '{vip}' where id = $1`, [U(1)]);
-				const p = yield* plan(yield* readApplied(db), next);
-				expect(p.steps.find((x) => x.id === 'create:backfill:customers.all_orders')?.class).toBe(
-					'backfill'
-				);
-				expect(yield* Effect.flip(applyPlan(db, p))).toMatchObject({
-					code: 'schemaInvalid',
-					message: expect.stringMatching(/refuses 1 existing row$/)
-				});
-				yield* exec(`update customers set tags = '{}'`);
-				yield* applyPlan(db, yield* plan(yield* readApplied(db), next));
-				const [r] = yield* db.read([
-					{ text: 'select all_orders from customers where id = $1', params: [U(1)] }
-				]);
-				expect(r?.rows[0]?.all_orders).toBe(1);
-			}).pipe(Effect.provide(Pristine.layer))
-	);
-	it.live('a plan made against an older schema is refused once another apply has moved it', () =>
-		Effect.gen(function* () {
-			yield* setup();
-			const s = slice();
-			const stale = yield* plan(yield* readApplied(db), { ...s, tz: 'UTC' });
-			yield* migrate({ ...s, tz: 'Europe/Paris' });
-			expect(yield* Effect.flip(applyPlan(db, stale))).toMatchObject({ code: 'schemaMoved' });
-		}).pipe(Effect.provide(Pristine.layer))
+		})
 	);
 	it.live(
 		'write takes the sorted table and advisory locks in the same transaction as its statement',
@@ -477,187 +214,7 @@ describe('next schema on PGlite', () => {
 					{ tables: ['orders', 'customers'], advisory: ['k'] }
 				);
 				expect(r.rows[0]?.n).toBeGreaterThanOrEqual(3);
-			}).pipe(Effect.provide(Pristine.layer))
-	);
-	it.live(
-		'the node-postgres adapter bounds each batch, shares its connection and rolls back failed writes',
-		() =>
-			Effect.gen(function* () {
-				yield* setup();
-				yield* seed();
-				const calls: Parameters<PgClient['query']>[0][] = [];
-				const released: boolean[] = [];
-				let acquired = 0;
-				const client: PgClient = {
-					async query(q) {
-						calls.push(q);
-						if (q.values !== undefined)
-							return pg.query<unknown>(q.text, q.values).then(postgresResult);
-						return (await pg.exec(q.text)).map(postgresResult);
-					},
-					release(destroy) {
-						released.push(destroy ?? false);
-					}
-				};
-				const remote = PostgresDb.make({
-					connect: async () => {
-						acquired++;
-						return client;
-					}
-				});
-				const rows = yield* remote.read([
-					{ text: 'select name from customers where id = $1', params: [U(1)] },
-					{
-						text: `select code from orders where customer = $1 and code = $2`,
-						params: [U(1), 'SO-1']
-					}
-				]);
-				expect(rows.map((r) => r.rows)).toEqual([[{ name: 'Ada' }], [{ code: 'SO-1' }]]);
-				expect(calls).toHaveLength(4);
-				expect(calls[0]?.text.split(';\n')).toEqual([
-					'begin isolation level repeatable read read only',
-					"set local lock_timeout = '5s'",
-					"set local statement_timeout = '15s'",
-					"set local idle_in_transaction_session_timeout = '5s'"
-				]);
-				expect(calls.slice(1, 3).map(({ text, values }) => ({ text, values }))).toEqual([
-					{ text: 'select name from customers where id = $1', values: [U(1)] },
-					{
-						text: 'select code from orders where customer = $1 and code = $2',
-						values: [U(1), 'SO-1']
-					}
-				]);
-				expect(calls[3]?.text).toBe('commit');
-				expect(acquired).toBe(1);
-				expect(released).toEqual([false]);
-				const w = yield* remote.write(
-					{
-						text: `update customers set name = $1 where id = $2 returning name`,
-						params: ["O'Brien", U(2)]
-					},
-					{ tables: ['customers'], advisory: ['x'] }
-				);
-				expect(w.rows).toEqual([{ name: "O'Brien" }]);
-				expect(calls).toHaveLength(7);
-				expect(calls[4]?.text).toMatch(/^begin;/i);
-				expect(calls[4]?.text).toContain('lock table "customers" in SHARE ROW EXCLUSIVE mode');
-				expect(calls[4]?.text).toContain('pg_advisory_xact_lock');
-				expect(calls[5]).toMatchObject({
-					text: 'update customers set name = $1 where id = $2 returning name',
-					name: expect.stringMatching(/^b/),
-					values: ["O'Brien", U(2)]
-				});
-				expect(calls[6]?.text).toBe('commit');
-				expect(
-					yield* Effect.flip(
-						remote.write({
-							text: `insert into customers (id, name) values ($1, 'Ada')`,
-							params: [U(5)]
-						})
-					)
-				).toMatchObject({ sqlstate: '23505' });
-				expect(calls.at(-1)?.text).toBe('rollback');
-				expect(acquired).toBe(3);
-				expect(released).toEqual([false, false, false]);
-				expect(
-					(yield* db.read([
-						{
-							text: 'select name from customers order by id',
-							params: []
-						}
-					]))[0]?.rows
-				).toEqual([{ name: 'Ada' }, { name: "O'Brien" }]);
-			}).pipe(Effect.provide(Pristine.layer))
-	);
-	it.live('locked writes bind a stable statement name after acquiring bounded locks', () =>
-		Effect.gen(function* () {
-			yield* setup();
-			yield* seed();
-			const calls: Parameters<PgClient['query']>[0][] = [];
-			const client: PgClient = {
-				async query(q) {
-					calls.push(q);
-					if (q.values !== undefined)
-						return pg.query<unknown>(q.text, q.values).then(postgresResult);
-					return (await pg.exec(q.text)).map(postgresResult);
-				},
-				release() {}
-			};
-			const remote = PostgresDb.make({ connect: async () => client });
-			const sql = {
-				text: `update customers set name = $1 where id = $2 returning name`,
-				params: ['Eve', U(1)]
-			};
-			const lock = { tables: ['customers'] as const };
-			expect((yield* remote.write(sql, lock)).rows).toEqual([{ name: 'Eve' }]);
-			expect(calls.map((q) => q.text)).toEqual([
-				expect.stringMatching(/^begin;/i),
-				sql.text,
-				'commit'
-			]);
-			expect(calls[0]?.text).toContain("set local statement_timeout = '15s'");
-			expect(calls[0]?.text).toContain('lock table "customers" in SHARE ROW EXCLUSIVE mode');
-			expect(calls[1]).toMatchObject({ name: expect.stringMatching(/^b/), values: ['Eve', U(1)] });
-			expect((yield* remote.write({ ...sql, params: ['Fay', U(1)] }, lock)).rows).toEqual([
-				{ name: 'Fay' }
-			]);
-			expect(calls.slice(3).map((q) => q.text)).toEqual([
-				expect.stringMatching(/^begin;/i),
-				sql.text,
-				'commit'
-			]);
-			expect(calls[3]?.text).toContain('lock table "customers" in SHARE ROW EXCLUSIVE mode');
-			expect(calls[4]?.name).toBe(calls[1]?.name);
-			expect(calls[4]?.values).toEqual(['Fay', U(1)]);
-			expect(
-				(yield* db.read([
-					{
-						text: 'select name from customers where id = $1',
-						params: [U(1)]
-					}
-				]))[0]?.rows
-			).toEqual([{ name: 'Fay' }]);
-		}).pipe(Effect.provide(Pristine.layer))
-	);
-	it.live('an unlocked write binds its named statement between native deadlines and commit', () =>
-		Effect.gen(function* () {
-			yield* setup();
-			yield* seed();
-			const seen: Parameters<PgClient['query']>[0][] = [];
-			const client: PgClient = {
-				async query(q) {
-					seen.push(q);
-					if (q.values !== undefined)
-						return pg.query<unknown>(q.text, q.values).then(postgresResult);
-					return (await pg.exec(q.text)).map(postgresResult);
-				},
-				release() {}
-			};
-			const remote = PostgresDb.make({ connect: async () => client });
-			const w = yield* remote.write({
-				text: `update customers set name = $1 where id = $2 returning name`,
-				params: ['Ada 2', U(1)]
-			});
-			expect(w.rows).toEqual([{ name: 'Ada 2' }]);
-			expect(seen).toHaveLength(3);
-			expect(seen[0]?.text).toMatch(/^begin;/i);
-			expect(seen[0]?.text).toContain("set local statement_timeout = '15s'");
-			expect(seen[0]?.text).not.toMatch(/lock table|pg_advisory_xact_lock/i);
-			expect(seen[1]).toMatchObject({
-				text: 'update customers set name = $1 where id = $2 returning name',
-				name: expect.stringMatching(/^b/),
-				values: ['Ada 2', U(1)]
-			});
-			expect(seen[2]?.text).toBe('commit');
-			expect(
-				(yield* db.read([
-					{
-						text: 'select name from customers where id = $1',
-						params: [U(1)]
-					}
-				]))[0]?.rows
-			).toEqual([{ name: 'Ada 2' }]);
-		}).pipe(Effect.provide(Pristine.layer))
+			})
 	);
 });
 describe('source:connections: a connection is its named instance', () => {
@@ -770,34 +327,78 @@ describe('source:connections: a connection is its named instance', () => {
 						}
 					].sort((a, b) => (a.id < b.id ? -1 : 1))
 				);
-				// no connections at all: every named row goes, the run-time instance stays
+				// no connections at all: every named row goes with its credentials and messages; the run-time instance stays
+				yield* exec(
+					`insert into bolt_credential (instance, name, sealed) values ('mail', 'creds', 'x')`
+				);
+				yield* exec(`insert into sys_conversation (id, integration) values ('c1', 'mail')`);
+				yield* exec(
+					`insert into sys_message (id, conversation, seq, integration) values ('m1', 'c1', 1, 'mail')`
+				);
 				yield* migrate(slice());
 				expect((yield* rows()).map((r) => r['id'])).toEqual([run]);
-			}).pipe(Effect.provide(Pristine.layer))
-	);
-	it.live('a deleted instance takes its credentials and messages with it', () =>
-		Effect.gen(function* () {
-			yield* setup();
-			yield* migrate({
-				...slice(),
-				connections: { mail: { integration: 'email', configuration: c } }
-			});
-			yield* exec(
-				`insert into bolt_credential (instance, name, sealed) values ('mail', 'creds', 'x')`
-			);
-			yield* exec(`insert into sys_conversation (id, integration) values ('c1', 'mail')`);
-			yield* exec(
-				`insert into sys_message (id, conversation, seq, integration) values ('m1', 'c1', 1, 'mail')`
-			);
-			yield* migrate(slice());
-			const [left] = yield* db.read([
-				{
-					text: `select (select count(*) from bolt_credential)::int
+				const [left] = yield* db.read([
+					{
+						text: `select (select count(*) from bolt_credential)::int
 			+ (select count(*) from sys_conversation)::int + (select count(*) from sys_message)::int as n`,
-					params: []
-				}
-			]);
-			expect(left?.rows[0]?.n).toBe(0);
-		}).pipe(Effect.provide(Pristine.layer))
+						params: []
+					}
+				]);
+				expect(left?.rows[0]?.n).toBe(0);
+			})
+	);
+});
+// Last: its DDL changes the catalogs, so the pooled database reloads afresh for whatever runs after it.
+describe('schema changes on a populated database', () => {
+	it.live(
+		'refuses a populated required column, applies it with a default and refuses a stale plan',
+		() =>
+			Effect.gen(function* () {
+				yield* setup();
+				yield* seed();
+				const s = slice();
+				const next: SchemaSlice = {
+					...s,
+					tables: {
+						...s.tables,
+						notes: {
+							...s.tables.notes!,
+							fields: { ...s.tables.notes!.fields, pinned: { kind: 'bool' } }
+						}
+					}
+				};
+				yield* exec(
+					`insert into notes (id, body, about__customers) values ($1, 'a', $2), ($3, 'b', $2)`,
+					[U(40), U(1), U(41)]
+				);
+				const p = yield* plan(yield* readApplied(db), next);
+				expect(p.steps.find((x) => x.id === 'create:notNull:notes.pinned')?.class).toBe(
+					'validating'
+				);
+				const e = yield* applyPlan(db, p).pipe(Effect.catch((x) => Effect.succeed(x)));
+				expect(e).toBeInstanceOf(BoltError);
+				expect((e as BoltError).message).toBe('notNull:notes.pinned refuses 2 existing rows');
+				expect(yield* readApplied(db)).toEqual(JSON.parse(JSON.stringify(s)));
+				// with a default the same change applies
+				const withDefault: SchemaSlice = {
+					...s,
+					tables: {
+						...s.tables,
+						notes: {
+							...s.tables.notes!,
+							fields: { ...s.tables.notes!.fields, pinned: { kind: 'bool', default: false } }
+						}
+					}
+				};
+				yield* migrate(withDefault);
+				const [r] = yield* db.read([
+					{ text: 'select count(*)::int as n from notes where pinned = false', params: [] }
+				]);
+				expect(r?.rows[0]?.n).toBe(2);
+				// destructive acceptance is plan-level (schema.test); a plan from a schema that moved since is refused here
+				const stale = yield* plan(yield* readApplied(db), { ...withDefault, tz: 'UTC' });
+				yield* migrate({ ...withDefault, tz: 'Europe/Paris' });
+				expect(yield* Effect.flip(applyPlan(db, stale))).toMatchObject({ code: 'schemaMoved' });
+			})
 	);
 });

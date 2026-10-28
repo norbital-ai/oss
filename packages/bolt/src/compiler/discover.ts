@@ -1,7 +1,7 @@
 /// <reference types="node" />
 // Discovery (§3.1, §3.2, rule 1): names come from paths, never from file contents.
 import { Effect, FileSystem, Path } from 'effect';
-import { join, relative, sep } from 'node:path';
+import { join } from 'node:path';
 import { BUILTIN_FIELDS } from '../decl/builtin-fields.ts';
 import { SYSTEM } from '../system/index.ts';
 import { LAYOUT_HELP, NAME, ROLES, type Role } from '../decl/layout.ts';
@@ -247,13 +247,13 @@ export const discover = Effect.fn('bolt.discover')(function* (
 		else seen.set(f.name, f);
 	}
 
-	// Seeds: seed/**/<model>.json[.gz]; seed/assets.json, seed/assets/** and seed/seed.ts are not models. A workspace seeds
-	// its own models and the exposed system models.
+	// Seeds: seed/**/<model>.json[.gz]; seed/assets.json, seed/assets/**, the test pack's seed/test/assets.json and
+	// seed/test/assets/**, and seed/seed.ts are not models. A workspace seeds its own models and the exposed system models.
 	const models = new Set([...of('model').map((f) => f.name), ...Object.keys(SYSTEM.exposures)]);
 	if (!system)
 		for (const path of yield* walk(join(root, 'seed'))) {
 			const m = /^seed\/(?:.+\/)?([^/]+)\.json(?:\.gz)?$/.exec(path);
-			if (!m || path === 'seed/assets.json' || path.startsWith('seed/assets/')) continue;
+			if (!m || /^seed\/(?:test\/)?assets(?:\.json$|\/)/.test(path)) continue;
 			if (!models.has(m[1]!)) fail('seed-unknown-model', path, `'${m[1]}' names no model`);
 		}
 	return { files, errors };

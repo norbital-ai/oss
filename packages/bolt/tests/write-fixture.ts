@@ -14,6 +14,7 @@ export const NOW = '2026-09-25T10:00:00.000Z';
 export const TODAY = '2026-09-25';
 const lineCols = ['label', 'amount'];
 export const manifest: EngineManifest = {
+	needs: [],
 	workspace: { tz: 'UTC', locale: 'en' },
 	models: {
 		orders: {

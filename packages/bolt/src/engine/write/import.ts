@@ -9,7 +9,6 @@ import type { EngineManifest } from '../manifest.ts';
 import type { TenantDbShape as TenantDb } from '../db/tenant-db.ts';
 import { LIMITS } from '../contracts.ts';
 import { type EngineError } from '../errors.ts';
-import { BoltError } from '../../protocol/errors.ts';
 import { catalogOf } from '../access/pred.ts';
 import { nullRowSql, q, type Catalog } from '@norbital-ai/store';
 import { where as decodeWhere } from '@norbital-ai/store';

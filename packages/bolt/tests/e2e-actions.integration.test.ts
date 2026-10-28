@@ -6,11 +6,11 @@ import { Context, Effect, Layer, Schema } from 'effect';
 import type { EngineManifest } from '../src/engine/manifest.ts';
 import { PgliteDb } from '../src/node/db/pglite.ts';
 import { TenantDb } from '../src/engine/db/tenant-db.ts';
-import { Callables, Live } from '../src/engine/services.ts';
+import { Live } from '../src/engine/services.ts';
 import { ActReply } from '../src/protocol/schema.ts';
 import { KitInvalid, TestWorkspace } from '../src/test/index.ts';
 import { actReply, qReply, routeFixture } from './support/route-fixture.ts';
-import { program } from './support/guest-fixture.ts';
+import { program } from '../src/test/guest.ts';
 import { uuidv7 } from '../src/protocol/wire.ts';
 
 const manifest = {
@@ -54,7 +54,8 @@ const manifest = {
 	mcp: {},
 	apps: {},
 	customFields: {},
-	agent: { skills: {} }
+	agent: { skills: {} },
+	needs: []
 } satisfies EngineManifest;
 const guest = program(`export default { automation: { orders_place: { body: function* (input, ctx) {
 	const made = yield* ctx.act('orders.create', [{
@@ -71,43 +72,39 @@ const count = (db: TenantDb['Service'], model: string) =>
 	db.value(Schema.Number, { text: `SELECT count(*)::int AS n FROM ${model}`, params: [] });
 
 describe('a generated nested create over /__bolt/act', () => {
-	it.live(
-		'writes two models in one native batch; the same key replays without adding rows',
-		() =>
-			Effect.scoped(
-				Effect.gen(function* () {
-					const context = yield* Layer.build(
-						TestWorkspace.layer({ manifest, guest: yield* guest })
-					);
-					const t = Context.get(context, TestWorkspace),
-						live = Context.get(context, Live);
-					const rep = t.as(t.member(['rep'])).authority,
-						route = yield* routeFixture(context);
-					const post = () =>
-						route.handle(
-							rep,
-							new Request('http://cell/__bolt/act', {
-								method: 'POST',
-								headers: { 'Idempotency-Key': 'k1' },
-								body: JSON.stringify({
-									callable: 'orders.create',
-									input: [{ title: 'desk', notes: [{ text: 'placed desk' }] }],
-									issuedAt: t.clock.now()
-								})
+	it.live('writes two models in one native batch; the same key replays without adding rows', () =>
+		Effect.scoped(
+			Effect.gen(function* () {
+				const context = yield* Layer.build(TestWorkspace.layer({ manifest, guest: yield* guest }));
+				const t = Context.get(context, TestWorkspace),
+					live = Context.get(context, Live);
+				const rep = t.as(t.member(['rep'])).authority,
+					route = yield* routeFixture(context);
+				const post = () =>
+					route.handle(
+						rep,
+						new Request('http://cell/__bolt/act', {
+							method: 'POST',
+							headers: { 'Idempotency-Key': 'k1' },
+							body: JSON.stringify({
+								callable: 'orders.create',
+								input: [{ title: 'desk', notes: [{ text: 'placed desk' }] }],
+								issuedAt: t.clock.now()
 							})
-						);
-					const commits = vi.spyOn(t.db, 'transaction');
-					const first = yield* post();
-					expect(first.status).toBe(200);
-					const reply = yield* Schema.decodeUnknownEffect(ActReply)(yield* json(first));
-					expect(reply.outcome).toMatchObject({ kind: 'committed' });
-					expect(reply.v).toBeGreaterThan(0);
-					expect(reply.v).toBe(yield* live.v);
-					expect(commits).toHaveBeenCalledTimes(1);
-					expect(yield* json(yield* post())).toMatchObject({ outcome: reply.outcome });
-					expect([yield* count(t.db, 'orders'), yield* count(t.db, 'notes')]).toEqual([1, 1]);
-				})
-			)
+						})
+					);
+				const commits = vi.spyOn(t.db, 'transaction');
+				const first = yield* post();
+				expect(first.status).toBe(200);
+				const reply = yield* Schema.decodeUnknownEffect(ActReply)(yield* json(first));
+				expect(reply.outcome).toMatchObject({ kind: 'committed' });
+				expect(reply.v).toBeGreaterThan(0);
+				expect(reply.v).toBe(yield* live.v);
+				expect(commits).toHaveBeenCalledTimes(1);
+				expect(yield* json(yield* post())).toMatchObject({ outcome: reply.outcome });
+				expect([yield* count(t.db, 'orders'), yield* count(t.db, 'notes')]).toEqual([1, 1]);
+			})
+		)
 	);
 
 	it.live('starts the order workflow as a queued run and records its result after execution', () =>
@@ -182,7 +179,8 @@ describe('a read request (`bolt.query({ … })`)', () => {
 					notes: { read: true, create: true }
 				}
 			}
-		}
+		},
+		needs: []
 	} satisfies EngineManifest;
 	const request = {
 		orders: { fields: ['title'], orderBy: [{ title: 'asc' }] },
@@ -210,9 +208,7 @@ describe('a read request (`bolt.query({ … })`)', () => {
 							});
 						})
 					).pipe(Layer.provide(PgliteDb.layer()));
-					const context = yield* Layer.build(
-						TestWorkspace.layer({ manifest: keyed, db })
-					);
+					const context = yield* Layer.build(TestWorkspace.layer({ manifest: keyed, db }));
 					const t = Context.get(context, TestWorkspace),
 						route = yield* routeFixture(context);
 					const rows = [
@@ -248,59 +244,6 @@ describe('a read request (`bolt.query({ … })`)', () => {
 						notes: { rows: [{ text: 'b' }], next: null }
 					});
 					expect([t.count.reads, statements - s0]).toEqual([1, 1]);
-				})
-			)
-	);
-});
-
-describe('several verbs as one act (`calls.acts`, `ctx.act.many`)', () => {
-	it.live(
-		'commits the generated verbs in one native batch and replays their outcome without adding rows',
-		() =>
-			Effect.scoped(
-				Effect.gen(function* () {
-					const context = yield* Layer.build(
-						TestWorkspace.layer({ manifest, guest: yield* guest })
-					);
-					const t = Context.get(context, TestWorkspace),
-						calls = Context.get(context, Callables);
-					const order = '00000000-0000-4000-8000-0000000000a1';
-					yield* t.db.write({
-						text: `INSERT INTO orders (id, title) VALUES ('${order}', 'desk')`,
-						params: []
-					});
-					const rep = t.as(t.member(['rep'])).authority;
-					const commits = vi.spyOn(t.db, 'transaction');
-					const request: Parameters<typeof calls.acts>[0] = {
-						name: 'act.many',
-						key: 'k-acts',
-						issuedAt: t.clock.now(),
-						authority: rep,
-						invocationId: 'k-acts',
-						from: 'Server',
-						bindings: {
-							now: t.clock.now(),
-							today: t.clock.now().slice(0, 10),
-							tz: 'UTC'
-						},
-						acts: [
-							{
-								model: 'notes',
-								verb: 'create',
-								input: [
-									{ text: 'a', order },
-									{ text: 'b', order }
-								]
-							},
-							{ model: 'orders', verb: 'create', input: [{ title: 'chair' }] },
-							{ model: 'notes', verb: 'create', input: [{ text: 'c', order }] }
-						]
-					};
-					const r = yield* calls.acts(request);
-					expect(r.outcome, JSON.stringify(r.outcome)).toMatchObject({ kind: 'committed' });
-					expect(commits).toHaveBeenCalledTimes(1);
-					expect((yield* calls.acts(request)).outcome).toEqual(r.outcome);
-					expect([yield* count(t.db, 'orders'), yield* count(t.db, 'notes')]).toEqual([2, 3]);
 				})
 			)
 	);

@@ -1,22 +1,12 @@
+// The native constructor refuses a memory limit under 8 MiB: an ordinary isolate construction error.
 import { expect, it } from '@effect/vitest';
-import { vi } from 'vitest';
 import { Context, Effect, Layer } from 'effect';
 import { LIMITS, type Invocation } from '../src/engine/contracts.ts';
 import { GuestIsolates } from '../src/engine/ports.ts';
-import { Guest, type Bridge } from '../src/engine/services.ts';
+import { Guest, GuestLimits, type Bridge } from '../src/engine/services.ts';
 import { guestIsolates } from '../src/node/guest-isolates.ts';
 import { guestLayer } from './support/guest-fixture.ts';
 
-const fault = vi.hoisted(() => ({ error: new Error('constructor unavailable') }));
-vi.mock('isolated-vm', () => ({
-	default: {
-		Isolate: class {
-			constructor() {
-				throw fault.error;
-			}
-		}
-	}
-}));
 const invocation: Invocation = {
 	id: 'constructor',
 	kind: 'automation',
@@ -43,7 +33,17 @@ const harness = (depth: number) =>
 			warm: { maxMiB: 512, depth, idleMs: 60_000 }
 		});
 		const context = yield* Layer.build(
-			guestLayer({ source: 'export default {};' }, {}, undefined, GuestIsolates.fromAbi(port))
+			guestLayer({ source: 'export default {};' }, {}, undefined, GuestIsolates.fromAbi(port)).pipe(
+				Layer.provide(
+					Layer.succeed(GuestLimits, {
+						memoryMiB: 1,
+						crossings: LIMITS.crossings,
+						readBytes: LIMITS.readBytes,
+						crossingBytes: LIMITS.crossingBytes,
+						argsBytes: LIMITS.argsBytes
+					})
+				)
+			)
 		);
 		return { guest: Context.get(context, Guest), counts: port.counts };
 	});
@@ -54,7 +54,7 @@ it.effect('returns a failed outcome for ordinary isolate construction error', ()
 		const result = yield* guest.invoke(invocation, bridge);
 		expect(result).toMatchObject({
 			kind: 'failed',
-			error: { code: 'internal', cause: fault.error }
+			error: { code: 'internal', cause: { message: expect.stringMatching(/memoryLimit/) } }
 		});
 		const after = counts();
 		expect(after.live).toBe(before.live);

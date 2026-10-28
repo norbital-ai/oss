@@ -146,20 +146,17 @@ export const openAiEmbeddings = <E>(config: EmbeddingsConfig<E>) => {
 	});
 };
 
-/** One system's models for P39: the ones to check, what the operator declared they take, and the env var that declares it. */
+/** One system's models for P39: the ones to check against the provider's published metadata. */
 export type ModalityCheck = {
 	readonly system: 'sys_2' | 'embed';
 	readonly endpoint: Endpoint;
 	readonly models: readonly string[];
-	readonly declared: readonly string[] | undefined;
-	readonly env: string;
 };
 
 /**
  * P39 before activation: each model must take images, by the provider's published metadata (`GET /models` and
- * `/embeddings/models`, `architecture.input_modalities`, as OpenRouter publishes them), else by the operator's
- * declaration. One message per refused model, naming the system, the model id and its modalities. `tolerateUnread`: a
- * listing that did not answer is no evidence against an undeclared model (one blip must not refuse the host); it is
+ * `/embeddings/models`, `architecture.input_modalities`, as OpenRouter publishes them). One message per refused model, naming the system, the model id and its modalities. `tolerateUnread`: a
+ * listing that did not answer is no evidence against a model (one blip must not refuse the host); it is
  * logged and passed.
  */
 export const aiModalityRefusals = Effect.fn('openrouter.modalities')(function* (
@@ -187,7 +184,7 @@ export const aiModalityRefusals = Effect.fn('openrouter.modalities')(function* (
 			listings.set(check.endpoint.baseUrl, (read = { meta, unread: catalogue.unread }));
 		}
 		for (const id of new Set(check.models)) {
-			const mods = read.meta.get(id) ?? check.declared;
+			const mods = read.meta.get(id);
 			if (mods?.includes('image') === true) continue;
 			if (mods === undefined && read.unread && options.tolerateUnread) {
 				yield* Effect.logWarning(
@@ -196,7 +193,7 @@ export const aiModalityRefusals = Effect.fn('openrouter.modalities')(function* (
 				continue;
 			}
 			out.push(
-				`${check.system} model '${id}' ${mods === undefined ? `has no published input modalities and ${check.env} is unset` : `takes ${mods.join(', ') || 'nothing'}`}: it must take image (P39)`
+				`${check.system} model '${id}' ${mods === undefined ? 'has no published input modalities' : `takes ${mods.join(', ') || 'nothing'}`}: it must take image (P39)`
 			);
 		}
 	}

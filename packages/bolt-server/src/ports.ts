@@ -1,19 +1,19 @@
-import { Clock, Crypto, Effect, Schema } from 'effect';
+import { Clock, Crypto, Effect, Schema, Stream } from 'effect';
 import { HttpClient, HttpClientRequest, HttpClientResponse } from 'effect/http';
 import { createHash, createHmac, randomUUID } from 'node:crypto';
 import {
-	Ai,
 	Files,
 	Geo,
 	Port,
-	WebRead,
 	decisionsSystem1,
 	openAiChat,
-	structuredSystem1
+	structuredSystem1,
+	type AiResponse
 } from '@norbital-ai/bolt/engine';
+import { off, type Facilities } from '@norbital-ai/bolt/facilities';
 import { downloadMedia, type DownloadOptions } from '@norbital-ai/bolt/node';
 import { openAiEmbeddings, openRouterChat } from '@norbital-ai/providers/openrouter';
-import type { Config } from './config.ts';
+import type { HostSettings } from './host.ts';
 
 /** S3-compatible SigV4, with a provider-requested signed URL expiry. */
 export const s3Files = Effect.fn('server.s3Files')(function* (
@@ -233,11 +233,17 @@ export const s3Files = Effect.fn('server.s3Files')(function* (
 	});
 });
 export type Endpoint = { endpoint: string; credential?: string | undefined };
+type Run = <A, E>(
+	effect: Effect.Effect<A, E, HttpClient.HttpClient>,
+	options?: { readonly signal?: AbortSignal | undefined }
+) => Promise<A>;
+/** The intelligence group over OpenAI-compatible endpoints: `sys_1`, `sys_2` and, when mapped, `embed`. */
 export const openAi = Effect.fn('server.openAi')(function* (
 	endpoints: { sys1: Endpoint & { provider?: string }; sys2: Endpoint; embed?: Endpoint },
-	config: Config['ai'],
+	config: HostSettings['ai'],
 	declared: readonly string[],
-	files: Files['Service']['get']
+	files: Files['Service']['get'],
+	run: Run
 ) {
 	const context = yield* Effect.context<HttpClient.HttpClient | Crypto.Crypto>();
 	const client = yield* HttpClient.HttpClient;
@@ -258,15 +264,16 @@ export const openAi = Effect.fn('server.openAi')(function* (
 					),
 					'sys_1'
 				);
+	const chat = openRouterChat({ ...endpoints.sys2, models: config.sys2 }, { httpClient: client });
+	const mapped = declared.filter((name) => config.sys2[name] !== undefined);
+	const embed = endpoints.embed;
 	const embeddings =
-		endpoints.embed === undefined
+		embed === undefined
 			? undefined
 			: openAiEmbeddings({
 					files,
-					baseUrl: endpoints.embed.endpoint,
-					...(endpoints.embed.credential === undefined
-						? {}
-						: { apiKey: endpoints.embed.credential }),
+					baseUrl: embed.endpoint,
+					...(embed.credential === undefined ? {} : { apiKey: embed.credential }),
 					model: (name) => {
 						const model =
 							config.embed[name] ??
@@ -278,25 +285,46 @@ export const openAi = Effect.fn('server.openAi')(function* (
 								: { id: model.model, batch: model.inputs ?? 1 };
 					}
 				});
-	return Ai.of({
-		ask: system1.ask,
-		maxChoices: system1.maxChoices,
-		models: declared.filter((name) => config.sys2[name] !== undefined),
-		catalog: Effect.succeed({
-			models: declared
-				.filter((name) => config.sys2[name] !== undefined)
-				.map((name) => ({ id: name, label: name })),
-			default: declared.find((name) => config.sys2[name] !== undefined) ?? ''
-		}),
-		infer: openRouterChat({ ...endpoints.sys2, models: config.sys2 }, { httpClient: client }),
-		embed: (inputs, name, dimensions) =>
+	const members: Pick<Facilities['intelligence'], 'system1' | 'system2' | 'embed'> = {
+		system1: {
+			ask: (request, signal) => run(system1.ask(request), { signal }),
+			...(system1.maxChoices === undefined ? {} : { maxChoices: system1.maxChoices })
+		},
+		system2: {
+			models: mapped,
+			catalog: async () => ({
+				models: mapped.map((name) => ({ id: name, label: name })),
+				default: mapped[0] ?? ''
+			}),
+			infer: (request, signal, onDelta, onProgress) =>
+				run(
+					Effect.gen(function* () {
+						let answer: AiResponse | undefined;
+						yield* Stream.runForEach(chat(request), (event) =>
+							Effect.sync(() => {
+								if (event._tag === 'Delta') onDelta?.(event.text);
+								else if (event._tag === 'Progress') onProgress?.(event.reasoning);
+								else answer = event.response;
+							})
+						);
+						if (answer === undefined)
+							return yield* Effect.fail(
+								Port.failure('ai')(new Error('the model stream ended without a response'))
+							);
+						return answer;
+					}),
+					{ signal }
+				)
+		},
+		embed:
 			embeddings === undefined
-				? Port.unavailable('ai.embed')
-				: embeddings(inputs, name, dimensions).pipe(
-						Effect.provide(context),
-						Effect.mapError(Port.failure('ai.embed'))
-					)
-	});
+				? off
+				: {
+						embed: (inputs, name, signal, dimensions) =>
+							run(embeddings(inputs, name, dimensions).pipe(Effect.provide(context)), { signal })
+					}
+	};
+	return members;
 });
 const Hit = Schema.Struct({
 	lat: Schema.String,
@@ -304,7 +332,9 @@ const Hit = Schema.Struct({
 	name: Schema.optionalKey(Schema.String),
 	display_name: Schema.String
 });
-export const nominatim = Effect.fn('server.nominatim')(function* (endpoint: string) {
+export const nominatim = Effect.fn('server.nominatim')(function* (
+	endpoint: string
+): Effect.fn.Return<Geo['Service'], never, HttpClient.HttpClient> {
 	const client = yield* HttpClient.HttpClient;
 	const base = endpoint.replace(/\/$/, '');
 	const hit = (value: typeof Hit.Type) => ({

@@ -11,6 +11,7 @@ import {
 	challengedApps,
 	declaredSecrets,
 	decodeManifest,
+	decodeProjectedManifest,
 	layered,
 	projectManifest,
 	publicEnvoys,
@@ -19,8 +20,13 @@ import {
 	teams,
 	type EngineManifest
 } from '../src/engine/manifest.ts';
+import { install } from '../src/decl/runtime/guest.ts';
+
+// the fixtures' generator bodies attach through the guest edge, as `bolt check` installs it
+install();
 
 const base: EngineManifest = {
+	needs: [],
 	workspace: { tz: 'UTC', locale: 'en' },
 	models: {},
 	relationships: {},
@@ -65,9 +71,15 @@ describe('decodeManifest', () => {
 					p: { description: '', grants: { orders: { approval: { update: { steps: [['f']] } } } } }
 				}
 			},
-			{ ...base, policies: { p: { description: '', grants: { orders: { update: { approval: true } } } } } },
+			{
+				...base,
+				policies: { p: { description: '', grants: { orders: { update: { approval: true } } } } }
+			},
 			// write `where`/`previous` and `via` are gone: a check judges the batch, a layer is its root's
-			{ ...base, policies: { p: { description: '', grants: { orders: { update: { where: 'read' } } } } } },
+			{
+				...base,
+				policies: { p: { description: '', grants: { orders: { update: { where: 'read' } } } } }
+			},
 			{ ...base, policies: { p: { description: '', grants: { lines: { via: 'order' } } } } },
 			{ ...base, pipelines: {} },
 			null
@@ -145,7 +157,7 @@ describe('decodeManifest', () => {
 				const root = fileURLToPath(new URL('./fixtures/good', import.meta.url));
 				const { files } = yield* discover(root);
 				const { manifest } = yield* load(root, files);
-				const m = Result.getOrThrow(decodeManifest(projectManifest(manifest)));
+				const m = Result.getOrThrow(decodeProjectedManifest(projectManifest(manifest)));
 				expect(m.workspace).not.toHaveProperty('connections');
 				expect(m.connections.support).toEqual({ integration: 'mail', envoy: 'desk' });
 				expect(m.teams).toEqual({ Sales: ['sales_rep'] });
@@ -187,7 +199,7 @@ describe('projectManifest', () => {
 	});
 	it('splits each model into its storage, its refs and, with `read`, its exposure; a model without `read` is not exposed', () => {
 		const m = Result.getOrThrow(
-			decodeManifest(
+			decodeProjectedManifest(
 				projectManifest(
 					loaded({
 						model: {
@@ -234,7 +246,7 @@ describe('projectManifest', () => {
 
 	it("marks bodies the engine must know of and keeps no function: a write arm's check, a custom field's validate, an integration's test", () => {
 		const m = Result.getOrThrow(
-			decodeManifest(
+			decodeProjectedManifest(
 				projectManifest(
 					loaded({
 						policy: {

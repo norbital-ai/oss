@@ -1,6 +1,5 @@
 # Dependencies
 node_modules/
-.local-packages/
 
 # Generated package and release archives
 /dist/
@@ -14,11 +13,8 @@ node_modules/
 
 # Build output
 **/build/
-**/build.staging/
-**/build.retired/
 **/build.staging-*/
 **/.svelte-kit/
-**/.generated/
 # Generated workspace state.
 **/.norbital/
 *.tsbuildinfo
@@ -31,10 +27,6 @@ playwright-report/
 **/__screenshots__/
 .tmp/
 
-# Local yalc store
-**/.yalc/
-**/yalc.lock
-
 # Environment and local files
 .env
 .env.*
@@ -43,9 +35,6 @@ playwright-report/
 Thumbs.db
 *.log
 vite.config.*.timestamp-*
-
-# Scratch workspaces for manual and end-to-end runs.
-.test-workspaces/
 
 # Agent worktrees: a working copy of this repo, never part of it.
 #

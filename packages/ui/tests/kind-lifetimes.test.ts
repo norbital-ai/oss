@@ -2,6 +2,7 @@ import './dom.ts';
 import assert from 'node:assert/strict';
 import { it } from '@effect/vitest';
 import { Effect } from 'effect';
+import { vi } from 'vitest';
 import { flushSync, mount, tick, unmount } from 'svelte';
 import Harness from './json-schema-harness.svelte';
 
@@ -46,8 +47,7 @@ it.live('unmounting a point editor interrupts its in-flight geocoder', () =>
 			assert.ok(input);
 			input.value = 'Singapore';
 			input.dispatchEvent(new Event('input', { bubbles: true }));
-			yield* Effect.sleep(400);
-			assert.equal(started, true);
+			yield* Effect.promise(() => vi.waitFor(() => assert.equal(started, true)));
 		} finally {
 			yield* Effect.promise(() => unmount(app));
 			target.remove();

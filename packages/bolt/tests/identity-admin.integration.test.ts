@@ -9,7 +9,7 @@ import { randomUUID } from 'node:crypto';
 import type { Json } from '../src/decl/values.ts';
 import { RateWindows } from '../src/engine/access/rate.ts';
 import type { MembershipPort, TransportPort } from '../src/engine/contracts.ts';
-import { PgliteDb } from '../src/node/db/pglite.ts';
+import { TestDb } from '../src/test/database.ts';
 import { TenantDb } from '../src/engine/db/tenant-db.ts';
 import { Authorities, previewAs } from '../src/engine/identity/actor.ts';
 import {
@@ -30,10 +30,10 @@ import {
 	verifyCode
 } from '../src/engine/identity/session.ts';
 import type { EngineManifest } from '../src/engine/manifest.ts';
-import { applyPlan, plan } from '../src/engine/schema/plan.ts';
 import { memoryAuditLayer } from '../src/test/index.ts';
 
 const m: EngineManifest = {
+	needs: [],
 	workspace: { tz: 'UTC', locale: 'en' },
 	models: {},
 	relationships: {},
@@ -64,7 +64,6 @@ const Mail = Schema.Struct({ to: Schema.String, text: Schema.String });
 const clock = Date.parse('2026-09-25T00:00:00Z');
 const fixture = Effect.gen(function* () {
 	const db = yield* TenantDb;
-	yield* applyPlan(db, yield* plan(null, m), { accept: true });
 	yield* TestClock.setTime(clock);
 	const outbox: (typeof Mail.Type)[] = [],
 		announced: string[] = [];
@@ -131,7 +130,7 @@ class AdministrationFixture extends Context.Service<
 	Effect.Success<typeof fixture>
 >()('test/AdministrationFixture') {}
 const AdministrationFixtureLive = Layer.effect(AdministrationFixture, fixture).pipe(
-	Layer.provide(Layer.mergeAll(PgliteDb.layer(), NodeCrypto.layer, memoryAuditLayer))
+	Layer.provide(Layer.mergeAll(TestDb.layer(m), NodeCrypto.layer, memoryAuditLayer))
 );
 
 layer(AdministrationFixtureLive)((it) => {

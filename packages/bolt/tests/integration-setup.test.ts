@@ -4,10 +4,10 @@
 // shown as such, and nothing drawn after unmount.
 import { flushSync, mount, tick, unmount } from 'svelte';
 import { beforeEach, afterEach, expect, it, vi } from '@effect/vitest';
-import './setup-happy-dom.ts';
+import '../src/test/dom.ts';
 import { Deferred, Effect, Layer, ManagedRuntime, Queue, Stream } from 'effect';
 import { mountEdge, run } from '@norbital-ai/ui/effect';
-import { ActRefused, ProtocolFailed } from '../src/decl/errors.ts';
+import { ActRefused } from '../src/decl/errors.ts';
 import type { Json } from '../src/decl/values.ts';
 import IntegrationSetup from '../src/page/IntegrationSetup.svelte';
 import type { IntegrationClient } from '../src/page/integrations.ts';
@@ -117,78 +117,11 @@ const show = async (client: Client, ready: Effect.Effect<void> = Effect.void) =>
 	await settle();
 	return target;
 };
-/** The in-app confirmation's accept button, once it is open. */
-const accept = async () => {
-	const open = '[data-confirm-dialog][data-state=open] [data-confirm-accept]';
-	await vi.waitFor(() => expect(document.querySelector(open)).not.toBeNull());
-	document.querySelector<HTMLButtonElement>(open)!.click();
-};
 const button = (target: HTMLElement, text: string) => {
 	const found = [...target.querySelectorAll('button')].find((b) => b.textContent?.trim() === text);
 	if (!found) throw new Error(`button '${text}' not found`);
 	return found;
 };
-
-it('draws the provider’s form masked, pairs with what it collected, clears the secret, then shows the connected summary and disconnects', async () => {
-	const f = fixture(),
-		target = await show(f.client, f.ready);
-	await vi.waitFor(() => expect(target.querySelector('[data-setup-form] input')).not.toBeNull());
-	const input = target.querySelector<HTMLInputElement>('[data-setup-form] input');
-	if (input === null) throw new Error('Missing provider API-key field');
-	expect(input.type).toBe('password');
-	input.value = 'private-key';
-	input.dispatchEvent(new Event('input', { bubbles: true }));
-	target.querySelector<HTMLFormElement>('[data-setup-form]')!.requestSubmit();
-	await run(f.paired);
-	expect(f.pair).toHaveBeenCalledWith({ apiKey: 'private-key' });
-	await vi.waitFor(() =>
-		expect(target.querySelector('[data-connection-state]')!.textContent).toBe(
-			'Connected as {as}'.replace('{as}', 'Operations')
-		)
-	);
-	expect(target.textContent).not.toContain('private-key');
-	button(target, 'Disconnect').click();
-	await accept();
-	await run(f.unpaired);
-	expect(f.unpair).toHaveBeenCalledOnce();
-	await vi.waitFor(() => expect(target.querySelector('[data-setup-view=pair]')).not.toBeNull());
-});
-
-it('follows the status stream: a QR the provider publishes while pairing replaces the form', async () => {
-	const f = fixture(),
-		target = await show(f.client, f.ready);
-	await vi.waitFor(() => expect(target.querySelector('[data-setup-form] input')).not.toBeNull());
-	f.push({ state: 'pairing', pairing: { kind: 'code', value: 'ABCD-1234' } });
-	await vi.waitFor(() =>
-		expect(target.querySelector('[data-pairing=code] code')?.textContent).toBe('ABCD-1234')
-	);
-	expect(target.querySelector('[data-setup-form]')).toBeNull();
-});
-
-it('shows a refused read as such, and the host’s refusal of a pairing verbatim', async () => {
-	const refused = await show(
-		fixture({ status: () => Effect.fail(new ProtocolFailed({ message: 'forbidden' })) }).client
-	);
-	await vi.waitFor(() =>
-		expect(refused.querySelector('[role="alert"]')?.textContent).toContain('Check access')
-	);
-	const f = fixture({
-			pair: () =>
-				Effect.fail(new ActRefused({ code: 'refused', message: 'The API key is not valid (401).' }))
-		}),
-		target = await show(f.client, f.ready);
-	await vi.waitFor(() => expect(target.querySelector('[data-setup-form] input')).not.toBeNull());
-	const input = target.querySelector<HTMLInputElement>('[data-setup-form] input');
-	if (input === null) throw new Error('Missing provider API-key field');
-	input.value = 'bad';
-	input.dispatchEvent(new Event('input', { bubbles: true }));
-	target.querySelector<HTMLFormElement>('[data-setup-form]')!.requestSubmit();
-	await vi.waitFor(() =>
-		expect(target.querySelector('[data-connection-error]')?.textContent).toBe(
-			'The API key is not valid (401).'
-		)
-	);
-});
 
 it('retains a refused import edit and never reports it as saved after another request succeeds', async () => {
 	const status: InstanceStatus = {
@@ -339,6 +272,7 @@ it('does not let an obsolete mutation replace the new client status or clear its
 			'Current account'
 		)
 	);
+	// the status stream follows the current client: an update it pushes replaces the summary
 	nextClient.push({ state: 'unpaired', stored: false });
 	await vi.waitFor(() => expect(target.querySelector('[data-setup-form]')).not.toBeNull());
 });

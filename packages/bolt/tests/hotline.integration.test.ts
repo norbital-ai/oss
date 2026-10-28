@@ -2,12 +2,12 @@
 // entity (`entities.hotline` names the instance), under `dm: 'envoy'`. A turn's `{ var: 'requestor.instance' }` is the instance
 // the message arrived on, so the same member reads only the entity whose hotline they wrote to, and only their own rows;
 // an administrator's DM holds the envoy's policies alone (no bypass); `history`'s 'mine' stays on the instance. Admission
-// is a run the ingest statement queued, so a crash between the two still turns after boot.
+// is a run the ingest statement queued, so a crash between the two still turns once runs re-arm.
 import { describe, expect, it } from '@effect/vitest';
-import { Context, Effect, Layer, Predicate, Schema, Stream } from 'effect';
+import { Context, Effect, Exit, Layer, Predicate, Schema, Scope, Stream } from 'effect';
+import { afterAll } from 'vitest';
 import { Ai } from '../src/engine/ports.ts';
 import { Port } from '../src/engine/port.ts';
-import { TenantDb } from '../src/engine/db/tenant-db.ts';
 import { Agents, Conversations } from '../src/engine/services.ts';
 import { actReply, qReply, routeFixture } from './support/route-fixture.ts';
 import type { Json } from '../src/decl/values.ts';
@@ -96,7 +96,8 @@ const manifest = {
 	mcp: {},
 	apps: {},
 	customFields: {},
-	agent: { skills: {} }
+	agent: { skills: {} },
+	needs: []
 } satisfies EngineManifest;
 
 /** The model: "slips" reads the payslips, "pay <id>" marks one paid, "find <word>" searches the sender's own history; then "Done.". */
@@ -151,7 +152,10 @@ function scriptedAi() {
 
 const ADA = 'u-ada',
 	CAL = 'u-cal';
-const setup = Effect.gen(function* () {
+// One workspace for the file, built on first use in the file's scope.
+const fileScope = Effect.runSync(Scope.make());
+afterAll(() => Effect.runPromise(Scope.close(fileScope, Exit.void)));
+const build = Effect.gen(function* () {
 	const ai = scriptedAi(),
 		slip = { cal_a: '', cal_b: '', ada_a: '' };
 	const context = yield* Layer.build(TestWorkspace.layer({ manifest, ports: ai.layer }));
@@ -228,6 +232,7 @@ const setup = Effect.gen(function* () {
 		});
 	return { t, context, ai, slip, agents, conversations, route, dm, lastResult };
 });
+const setup = Effect.runSync(Effect.cached(build.pipe(Scope.provide(fileScope))));
 const nets = (result: Json) =>
 	Schema.decodeUnknownSync(
 		Schema.Struct({
@@ -239,29 +244,18 @@ const nets = (result: Json) =>
 
 describe("an entity hotline ({ var: 'requestor.instance' }, dm: 'envoy')", () => {
 	it.live(
-		'the same member reads only their own payslips of the entity whose hotline they wrote to',
+		"a member reads only their own rows of the instance's entity; an admin's DM holds the envoy's policies alone; history stays on the instance",
 		() =>
 			Effect.scoped(
 				Effect.gen(function* () {
-					const { t, dm, lastResult } = yield* setup;
+					const { t, slip, route, agents, dm, lastResult } = yield* setup;
 					yield* dm('hotline_a', '6598765432@s.whatsapp.net', 'slips');
 					expect(nets(yield* lastResult())).toEqual([100]);
 					yield* dm('hotline_b', '6598765432@s.whatsapp.net', 'slips');
 					expect(nets(yield* lastResult())).toEqual([200]);
 					// each instance answers on its own link
 					expect(t.fakes.links.sent.map((s) => s.instance)).toEqual(['hotline_a', 'hotline_b']);
-				})
-			)
-	);
 
-	it.live(
-		"a linked administrator's DM holds the envoy's policies alone: her own row only, and no update without a grant",
-		() =>
-			Effect.scoped(
-				Effect.gen(function* () {
-					const { t, slip, route, dm, lastResult } = yield* setup;
-					yield* dm('hotline_a', '6591234567@s.whatsapp.net', 'slips');
-					expect(nets(yield* lastResult())).toEqual([300]);
 					// the envoy's policies grant no write, and without the bypass her turn has no write tool at all
 					yield* dm('hotline_a', '6591234567@s.whatsapp.net', `pay ${slip.ada_a}`);
 					expect(yield* lastResult()).toEqual({ error: "No tool 'act'." });
@@ -283,20 +277,11 @@ describe("an entity hotline ({ var: 'requestor.instance' }, dm: 'envoy')", () =>
 							})).answers[0]
 						)).payslips.rows[0].status
 					).toBe('draft');
-				})
-			)
-	);
 
-	it.live(
-		"`history` scope mine searches the member's conversations on this instance only, never another hotline or the app",
-		() =>
-			Effect.scoped(
-				Effect.gen(function* () {
-					const { t, agents, dm, lastResult } = yield* setup;
-					yield* dm('hotline_b', '6598765432@s.whatsapp.net', 'my alpha bonus');
+					// history 'mine' finds the sender's 'slips' on this instance only: not hotline_a's, not the app's
 					const app = yield* agents.start({ owner: CAL });
 					yield* t.db.write({
-						text: `INSERT INTO sys_message (id, conversation, role, text, "as") VALUES ('app-1', $1, 'user', 'alpha in the app', $2::jsonb)`,
+						text: `INSERT INTO sys_message (id, conversation, role, text, "as") VALUES ('app-1', $1, 'user', 'slips', $2::jsonb)`,
 						params: [app, JSON.stringify({ member: CAL })]
 					});
 					const found = () =>
@@ -307,14 +292,11 @@ describe("an entity hotline ({ var: 'requestor.instance' }, dm: 'envoy')", () =>
 								)
 							),
 							Effect.map((result) =>
-								result.hits.map((hit) => hit.text).filter((value) => value !== 'find alpha')
+								result.hits.map((hit) => hit.text).filter((value) => value !== 'find slips')
 							)
 						);
-					yield* dm('hotline_a', '6598765432@s.whatsapp.net', 'find alpha');
-					expect(yield* found()).toEqual([]);
-					yield* dm('hotline_b', '6598765432@s.whatsapp.net', 'find alpha');
-					expect(yield* found()).toContain('my alpha bonus');
-					expect(yield* found()).not.toContain('alpha in the app');
+					yield* dm('hotline_b', '6598765432@s.whatsapp.net', 'find slips');
+					expect(yield* found()).toEqual(['slips']);
 				})
 			)
 	);
@@ -322,12 +304,13 @@ describe("an entity hotline ({ var: 'requestor.instance' }, dm: 'envoy')", () =>
 
 describe('durable admission (§4.3)', () => {
 	it.live(
-		'the ingest is one statement that queues the admission; a host that dies before it runs still turns after boot',
+		'one ingest statement queues the admission, which the run then turns; a paused instance stores without admitting',
 		() =>
 			Effect.scoped(
 				Effect.gen(function* () {
-					const { t, context, ai, conversations, lastResult } = yield* setup;
+					const { t, context, ai, route, conversations, lastResult } = yield* setup;
 					t.count.reset();
+					const asked = ai.requests.length;
 					yield* conversations
 						.receive('hotline_a', {
 							kind: 'messages',
@@ -344,50 +327,23 @@ describe('durable admission (§4.3)', () => {
 						})
 						.pipe(Effect.provide(context));
 					expect(t.count.writes).toBe(1);
-					const queued = () =>
-						t.db
-							.read([
-								{
-									text: `SELECT automation, input FROM sys_run WHERE automation = 'envoys.admit' AND state = 'queued'`,
-									params: []
-								}
-							])
-							.pipe(
-								Effect.map(([result]) => {
-									if (result === undefined) throw new Error('Missing admission runs');
-									return result.rows;
-								})
-							);
-					expect(yield* queued()).toHaveLength(1);
-					expect(ai.requests).toHaveLength(0);
-					// the process is gone: a fresh host on the same database boots and wakes
-					const after = Context.get(
-						yield* Layer.build(
-							TestWorkspace.layer({ manifest, ports: ai.layer, db: Layer.succeed(TenantDb, t.db) })
-						),
-						TestWorkspace
-					);
-					yield* after.runDue();
-					yield* after.settled();
-					after.clock.advance('2s'); // the admitted DM waits out the sender's pause
-					yield* after.runDue();
-					yield* after.settled();
-					expect(yield* queued()).toHaveLength(0);
-					expect(ai.requests).toHaveLength(2);
+					const admissions = (state: string) =>
+						t.db.value(Schema.Number, {
+							text: `SELECT count(*)::int FROM sys_run WHERE automation = 'envoys.admit' AND state LIKE $1`,
+							params: [state]
+						});
+					expect(yield* admissions('queued')).toBe(1);
+					expect(ai.requests).toHaveLength(asked);
+					// the admission is a queued run (a restart re-arms queued runs: runs.integration, lost leases)
+					yield* t.runDue();
+					t.clock.advance('2s'); // the admitted DM waits out the sender's pause
+					yield* t.runDue();
+					yield* t.settled();
+					expect(yield* admissions('queued')).toBe(0);
+					expect(ai.requests).toHaveLength(asked + 2);
 					expect(nets(yield* lastResult())).toEqual([100]);
-					expect(after.fakes.links.sent).toMatchObject([
-						{ instance: 'hotline_a', message: { to: '6598765432@s.whatsapp.net', text: 'Done.' } }
-					]);
-				})
-			)
-	);
 
-	it.live(
-		'a paused instance stores the message and queues no admission; a redelivery is the same row and queues nothing',
-		() =>
-			Effect.scoped(
-				Effect.gen(function* () {
-					const { t, ai, route } = yield* setup;
+					const all = yield* admissions('%');
 					const o = (yield* actReply(route, t.as(t.admin).authority, {
 						callable: 'sys_integration.update',
 						input: [{ target: 'hotline_a', set: { active: false } }],
@@ -399,24 +355,21 @@ describe('durable admission (§4.3)', () => {
 						thread: '6598765432@s.whatsapp.net',
 						sentAt: t.clock.now(),
 						from: { handle: '6598765432@s.whatsapp.net', name: null },
-						text: 'slips',
+						text: 'held',
 						attachments: []
 					};
+					// a redelivery is the same row and queues nothing
 					yield* t.receive('hotline_a', message);
 					yield* t.receive('hotline_a', message);
-					const [rows, runs] = yield* t.db.read([
+					const [rows] = yield* t.db.read([
 						{
-							text: `SELECT role, addressed FROM sys_message WHERE direction = 'inbound'`,
-							params: []
-						},
-						{
-							text: `SELECT count(*)::int AS n FROM sys_run WHERE automation = 'envoys.admit'`,
+							text: `SELECT role, addressed FROM sys_message WHERE direction = 'inbound' AND text = 'held'`,
 							params: []
 						}
 					]);
 					expect(present(rows).rows).toEqual([{ role: null, addressed: null }]);
-					expect(present(present(runs).rows[0])['n']).toBe(0);
-					expect(ai.requests).toHaveLength(0);
+					expect(yield* admissions('%')).toBe(all);
+					expect(ai.requests).toHaveLength(asked + 2);
 				})
 			)
 	);

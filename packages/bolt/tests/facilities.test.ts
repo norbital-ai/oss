@@ -15,17 +15,10 @@ import {
 } from '../src/engine/decisions/index.ts';
 import { Facilities, Manifest, Decisions } from '../src/engine/services.ts';
 import { TenantDb } from '../src/engine/db/tenant-db.ts';
-import {
-	Ai,
-	Convert,
-	Files,
-	Geo,
-	Images,
-	Logs,
-	Metering,
-	Speech,
-	WebRead
-} from '../src/engine/ports.ts';
+import { Ai, Convert, Files, Geo, Images, Logs, Speech, WebRead } from '../src/engine/ports.ts';
+import { off } from '../src/facilities/index.ts';
+import { imagesPort } from '../src/node/images.ts';
+import { refusedFiles } from './support/refused.ts';
 import type { EmbedInput, LogEvent } from '../src/engine/contracts.ts';
 import { FacilityFailure } from '../src/decl/errors.ts';
 import { DbError } from '../src/engine/errors.ts';
@@ -64,18 +57,18 @@ it.effect(
 						})
 				});
 			})
-		).pipe(Layer.provide(Ai.unavailable));
+		).pipe(Layer.provide(Ai.fromAbi({ system1: off, system2: off, embed: off })));
 		const ports = Layer.mergeAll(
 			Layer.succeed(TenantDb, db),
 			Layer.succeed(Manifest, manifest),
 			Layer.succeed(Decisions, { decide: () => Port.unavailable('ai') }),
 			ai,
-			Files.unavailable,
-			Images.unavailable,
-			Convert.unavailable,
-			Speech.unavailable,
-			Geo.unavailable,
-			WebRead.unavailable
+			Files.fromAbi(refusedFiles),
+			Images.fromAbi(imagesPort),
+			Convert.fromAbi(off),
+			Speech.fromAbi(off),
+			Geo.fromAbi(off),
+			WebRead.fromAbi(off)
 		);
 		return Effect.gen(function* () {
 			const facilities = yield* Facilities;
@@ -118,12 +111,12 @@ it.effect('web.read keeps raw options across the facility dispatch boundary', ()
 		Layer.succeed(TenantDb, db),
 		Layer.succeed(Manifest, manifest),
 		Layer.succeed(Decisions, { decide: () => Port.unavailable('ai') }),
-		Files.unavailable,
-		Images.unavailable,
-		Convert.unavailable,
-		Speech.unavailable,
-		Ai.unavailable,
-		Geo.unavailable,
+		Files.fromAbi(refusedFiles),
+		Images.fromAbi(imagesPort),
+		Convert.fromAbi(off),
+		Speech.fromAbi(off),
+		Ai.fromAbi({ system1: off, system2: off, embed: off }),
+		Geo.fromAbi(off),
 		Layer.succeed(WebRead, {
 			read: (url, options) =>
 				Effect.sync(() => {
@@ -182,7 +175,6 @@ it.effect(
 		};
 		const requests: DecisionRequest[] = [];
 		const written: LogEvent[] = [];
-		const metered: { meter: string; quantity: number; key: string }[] = [];
 		let mode: 'ok' | 'refused' | 'offlist' = 'ok';
 		const ai = Layer.effect(
 			Ai,
@@ -222,7 +214,7 @@ it.effect(
 						})
 				});
 			})
-		).pipe(Layer.provide(Ai.unavailable));
+		).pipe(Layer.provide(Ai.fromAbi({ system1: off, system2: off, embed: off })));
 		const ports = Layer.mergeAll(
 			NodeCrypto.layer,
 			Layer.succeed(
@@ -236,19 +228,13 @@ it.effect(
 				})
 			),
 			Layer.succeed(Manifest, manifest),
-			Layer.succeed(Metering, {
-				record: (meter, quantity, key) =>
-					Effect.sync(() => {
-						metered.push({ meter, quantity, key });
-					})
-			}),
 			ai,
-			Files.unavailable,
-			Images.unavailable,
-			Convert.unavailable,
-			Speech.unavailable,
-			Geo.unavailable,
-			WebRead.unavailable
+			Files.fromAbi(refusedFiles),
+			Images.fromAbi(imagesPort),
+			Convert.fromAbi(off),
+			Speech.fromAbi(off),
+			Geo.fromAbi(off),
+			WebRead.fromAbi(off)
 		);
 		const services = DecisionsLive.pipe(Layer.provideMerge(ports));
 		return Effect.gen(function* () {
@@ -287,14 +273,6 @@ it.effect(
 					run: 'run-1',
 					attributes: { use: 'author', automation: 'route', run: 'run-1', answers: result.answers }
 				});
-			expect(metered).toHaveLength(3);
-			expect(new Set(metered.map(({ key }) => key)).size).toBe(3);
-			expect(
-				metered.every(
-					({ meter, quantity, key }) =>
-						meter === 'ai' && quantity === result.costUsd && key.startsWith('decision:')
-				)
-			).toBe(true);
 			mode = 'refused';
 			expect(yield* dispatch).toEqual({
 				ok: false,
@@ -328,7 +306,6 @@ it.effect(
 			).toMatchObject({ ok: false, error: { kind: 'invalid' } });
 			expect(requests).toEqual([request, request, request, request, request]);
 			expect(written).toHaveLength(5);
-			expect(metered).toHaveLength(3);
 		}).pipe(
 			Effect.provide(FacilitiesLive.pipe(Layer.provideMerge(services))),
 			Effect.provideService(Logs, {

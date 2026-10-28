@@ -21,13 +21,6 @@ export type ColumnSpec =
 	| { readonly enum: readonly string[] }
 	| { readonly period: 'date' }
 	| { readonly optional: ColumnSpec };
-/** Presentation hints the host applies when it writes the file; rows and columns are 0-based cell indexes. */
-export type SheetStyle = {
-	readonly bold?: readonly number[]; // rows (the header row is bold by default)
-	readonly merge?: readonly (readonly [row: number, col: number, toRow: number, toCol: number])[];
-	readonly band?: { readonly fill: string; readonly every?: number }; // fill every n-th data row (default 2)
-	readonly numFmt?: { readonly [column: string]: string }; // by header, e.g. { amount: '#,##0.00' }
-};
 
 type Spec = { readonly [name: string]: ColumnSpec };
 type ValueOf<C> = C extends { optional: infer I }

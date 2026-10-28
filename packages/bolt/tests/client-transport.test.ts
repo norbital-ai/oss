@@ -6,7 +6,7 @@ import { Decimal } from '@norbital-ai/std/decimal';
 import { createBolt } from '../src/page/bolt.ts';
 import { liveStream, type EventSourceLike } from '../src/page/stream.ts';
 import { browserTransport, updating } from '../src/protocol/client.ts';
-import { HEADERS } from '../src/protocol/wire.ts';
+import { HEADERS, statusOf } from '../src/protocol/wire.ts';
 
 it.effect('a fake HttpClient sees the act contract/key headers and reads revive decimals', () =>
 	Effect.gen(function* () {
@@ -131,9 +131,8 @@ it.effect('a cutover busy refusal is resent with its key after retry-after, neve
 		const fiber = yield* transport
 			.request('POST', '/__bolt/act', {}, { [HEADERS.key]: 'k1' })
 			.pipe(Effect.forkScoped);
-		// the fake fetch answers on a real promise: let it land before reading the notice count
-		for (let i = 0; i < 50 && SubscriptionRef.getUnsafe(updating) === 0; i++)
-			yield* Effect.promise(() => new Promise((resolve) => setTimeout(resolve, 5)));
+		// the fake fetch answers on microtasks: yield until it lands before reading the notice count
+		for (let i = 0; i < 50 && SubscriptionRef.getUnsafe(updating) === 0; i++) yield* Effect.yieldNow;
 		expect(SubscriptionRef.getUnsafe(updating)).toBe(1);
 		yield* TestClock.adjust('1 second');
 		expect(yield* Fiber.join(fiber)).toEqual({ status: 200, body: { outcome: 'done' } });
@@ -148,5 +147,15 @@ it.effect('any other 503 is answered as is', () =>
 		const reply = yield* transport.request('GET', '/__bolt/shell');
 		expect(reply.status).toBe(503);
 		expect(keys).toHaveLength(1);
+	})
+);
+
+it.effect('a running reply is the act answer, carrying its run id', () =>
+	Effect.gen(function* () {
+		const fetch: typeof globalThis.fetch = async () =>
+			Response.json({ outcome: { kind: 'running', run: 'r1' }, v: 0 }, { status: 202 });
+		const bolt = yield* createBolt({ base: 'https://workspace.test', actor: null, locale: 'en', fetch });
+		expect(yield* bolt.act('jobs.create', [{ title: 'slow' }])).toEqual({ kind: 'running', run: 'r1' });
+		expect(statusOf({ kind: 'running', run: 'r1' })).toBe(202);
 	})
 );

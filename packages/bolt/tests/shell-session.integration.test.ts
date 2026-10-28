@@ -5,7 +5,7 @@ import { randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from '@effect/vitest';
 import { Context, Effect, Layer, Result } from 'effect';
-import { decodeManifest } from '../src/engine/manifest.ts';
+import { decodeManifest, decodeProjectedManifest } from '../src/engine/manifest.ts';
 import { mint, sha256 } from '../src/engine/identity/session.ts';
 import { authorityOf, HostIdentity } from '../src/shell/host.ts';
 import * as HttpServerRequest from 'effect/http/HttpServerRequest';
@@ -15,7 +15,7 @@ import { TestWorkspace } from '../src/test/index.ts';
 import { storedFileUrl } from '../src/page/file-ref.ts';
 
 const manifest = Result.getOrThrow(
-	decodeManifest({
+	decodeProjectedManifest({
 		workspace: { tz: 'UTC', locale: 'en', apps: [], agent: { triage: false } },
 		models: {},
 		relationships: {},

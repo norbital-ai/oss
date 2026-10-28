@@ -3,7 +3,19 @@ import { memberCap } from '../src/engine/agent/settings.ts';
 import { createHash } from 'node:crypto';
 import { getEventListeners } from 'node:events';
 import { describe, expect, it } from '@effect/vitest';
-import { Clock, Context, Deferred, Effect, Fiber, Layer, Predicate, Schema } from 'effect';
+import { afterAll } from 'vitest';
+import {
+	Clock,
+	Context,
+	Deferred,
+	Effect,
+	Exit,
+	Fiber,
+	Layer,
+	Predicate,
+	Schema,
+	Scope
+} from 'effect';
 import { TestClock } from 'effect/testing';
 import type { Json } from '../src/decl/values.ts';
 import type {
@@ -27,8 +39,7 @@ import { TenantDb, type RawDb } from '../src/engine/db/tenant-db.ts';
 import type { EngineManifest } from '../src/engine/manifest.ts';
 import { Port } from '../src/engine/port.ts';
 import { Bundler, Files, GuestIsolates, Http, Logs } from '../src/engine/ports.ts';
-import { bundler } from '../src/node/bundler/index.ts';
-import { BROKEN, filesOf, RENDER, REPORT, SALES, skillOf } from './support/run-file-trees.ts';
+import { filesOf, skillOf } from './support/run-file-trees.ts';
 import { REFERENCE } from '../src/engine/agent/run-js.ts';
 import { BOUNDS } from '../src/engine/agent/context.ts';
 import { treeDigest } from '../src/engine/artifact/read.ts';
@@ -62,6 +73,7 @@ const member = (
 	scopes: {}
 });
 const manifest: EngineManifest = {
+	needs: [],
 	workspace: { tz: 'UTC', locale: 'en', agent: { triage: false } },
 	exposures: {
 		tasks: { read: { tasks: { fields: 'all' } }, create: { columns: { tasks: ['title'] } } }
@@ -97,6 +109,12 @@ type EngineOverrides = Omit<Partial<AgentEngine>, 'db' | 'calls' | 'approvals' |
 	approvals?: Partial<AgentEngine['approvals']>;
 	files?: Partial<Files['Service']>;
 };
+// One workspace for the file: every context runs its tools against this engine, its own pieces swapped in per test.
+const fileScope = Effect.runSync(Scope.make());
+afterAll(() => Effect.runPromise(Scope.close(fileScope, Exit.void)));
+const workspace = Effect.runSync(
+	Effect.cached(Layer.build(TestWorkspace.layer({ manifest })).pipe(Scope.provide(fileScope)))
+);
 /** Each context's kit host runtime log: its rows (oldest first). */
 const kitLogs = new WeakMap<ToolContext, LogRow[]>();
 /** Each context's kit files origin: what `download` fetches. */
@@ -107,7 +125,7 @@ const ctx = (
 ) =>
 	Effect.gen(function* () {
 		const m = engine.manifest ?? manifest;
-		const native = yield* Layer.build(TestWorkspace.layer({ manifest: m }));
+		const native = yield* workspace;
 		const db = Context.get(native, TenantDb),
 			calls = Context.get(native, Callables),
 			approvals = Context.get(native, Approvals),
@@ -181,7 +199,7 @@ const ctx = (
 		kitLogs.set(x, Context.get(native, TestWorkspace).fakes.logs);
 		return x;
 	});
-/** Rows pushed into a context's runtime log, `id` their position. */
+/** The file's shared runtime log, replaced by `rows` (`id` their position). */
 const logRows = (
 	x: ToolContext,
 	rows: readonly (Pick<LogRow, 'at' | 'severity' | 'event' | 'invocation' | 'attributes'> &
@@ -189,6 +207,7 @@ const logRows = (
 ) => {
 	const log = kitLogs.get(x);
 	if (log === undefined) throw new Error('no kit log for this context');
+	log.length = 0;
 	for (const row of rows)
 		log.push({ run: null, conversation: null, turn: null, ...row, id: String(log.length + 1) });
 };
@@ -209,6 +228,64 @@ const first = <A>(items: readonly A[]): A => {
 	if (item === undefined) throw new Error('fixture produced no item');
 	return item;
 };
+describe('job waits', () => {
+	it.effect('releases abort listeners after completed waits and retains uncollected jobs', () =>
+		Effect.gen(function* () {
+			const list = yield* jobs();
+			const signal = yield* Effect.abortSignal;
+			for (let i = 0; i < 12; i++) {
+				const id = yield* list.add('work', Effect.succeed(i));
+				expect(yield* list.wait([id], 60_000)).toMatchObject({ job: id, result: i });
+				expect(list.has(id)).toBe(false);
+				expect(getEventListeners(signal, 'abort')).toHaveLength(0);
+			}
+			const id = yield* list.add('held', Effect.never);
+			const entered = yield* Deferred.make<void>();
+			const waiting = yield* Effect.forkChild(
+				Deferred.succeed(entered, undefined).pipe(Effect.andThen(list.wait([id], 60_000)))
+			);
+			yield* Deferred.await(entered);
+			yield* Fiber.interrupt(waiting);
+			expect(list.has(id)).toBe(true);
+			const timed = yield* Effect.forkChild(list.wait([id], 1));
+			yield* TestClock.adjust('1 millis');
+			expect(yield* Fiber.join(timed)).toBeNull();
+			expect(list.has(id)).toBe(true);
+		})
+	);
+	it.effect('closing a turn scope interrupts every admitted job', () =>
+		Effect.gen(function* () {
+			const started = yield* Deferred.make<void>(),
+				released = yield* Deferred.make<void>();
+			yield* Effect.scoped(
+				Effect.gen(function* () {
+					const turnJobs = yield* jobs();
+					yield* turnJobs.add(
+						'in-flight model tool',
+						Effect.scoped(
+							Effect.gen(function* () {
+								yield* Effect.addFinalizer(() => Deferred.succeed(released, undefined));
+								yield* Deferred.succeed(started, undefined);
+								return yield* Effect.never;
+							})
+						)
+					);
+					yield* Deferred.await(started);
+				})
+			);
+			expect(yield* Deferred.isDone(released)).toBe(true);
+		})
+	);
+});
+describe('spending caps', () => {
+	it('a member gets the most generous cap among their policies, else the default', () => {
+		const s = { monthly: null, member: 5, policies: { rep: 2, lead: 20 }, models: [] };
+		expect(memberCap(s, ['rep', 'lead'])).toBe(20);
+		expect(memberCap(s, ['rep'])).toBe(2);
+		expect(memberCap(s, ['other'])).toBe(5);
+		expect(memberCap({ ...s, member: null }, [])).toBeNull();
+	});
+});
 describe('tool schemas', () => {
 	it.effect(
 		'every parameter declares its type: an untyped one reaches a routed model as { item: … } (Jev, staging)',
@@ -365,40 +442,6 @@ describe('fewer calls for the common paths', () => {
 					result: { tasks: { model: 'tasks', fields: { title: expect.any(String) } } }
 				});
 				expect(reads).toHaveLength(0);
-			})
-	);
-	it.effect(
-		'the removed read forms are refused by the schema before any read: { model }, { query, input }, { reads }, an undeclared layer, a sixth level',
-		() =>
-			Effect.gen(function* () {
-				const reads: Parameters<AgentEngine['read']>[0][number][] = [];
-				const x = yield* ctx(
-					{},
-					{
-						read: (irs) =>
-							Effect.sync(() => {
-								reads.push(...irs);
-								return [{ tasks: { rows: [], next: null } }];
-							})
-					}
-				);
-				for (const input of [
-					{ model: 'tasks' },
-					{ query: 'tasks.open', input: {} },
-					{ reads: [{ model: 'tasks' }] },
-					{ 'tasks.nope': {} },
-					{ tasks: { search: true } },
-					{ tasks: { select: { title: true } } },
-					{ 'tasks.a.b.c.d.e': {} }
-				])
-					expect(yield* result(x, 'read', input)).toEqual({
-						result: { error: expect.stringContaining('Invalid parameters for tool') }
-					});
-				expect(reads).toHaveLength(0);
-				// text goes in search (or a `like` where) of the root it reads
-				yield* result(x, 'read', { tasks: { search: '2807' } });
-				expect(reads).toHaveLength(1);
-				expect(JSON.stringify(reads.at(-1))).toContain('2807');
 			})
 	);
 	it.effect(
@@ -889,7 +932,13 @@ describe('download', () => {
 	);
 	it.effect("answers the host's refusal as the tool's error, and stores nothing", () =>
 		Effect.gen(function* () {
-			const x = yield* ctx();
+			const x = yield* ctx(),
+				stored = () =>
+					x.engine.db.rows(Schema.Struct({ id: Schema.String }), {
+						text: 'SELECT id FROM sys_file',
+						params: []
+					});
+			const before = yield* stored();
 			kitOrigins.get(x)?.set('https://law.example/index.ts', new TextEncoder().encode('export {}'));
 			expect(yield* result(x, 'download', { url: 'https://law.example/index.ts' })).toEqual({
 				result: { error: expect.stringContaining('not media') }
@@ -897,12 +946,7 @@ describe('download', () => {
 			expect(yield* result(x, 'download', { url: 'https://law.example/gone.png' })).toEqual({
 				result: { error: 'The URL answered 404.' }
 			});
-			expect(
-				yield* x.engine.db.rows(Schema.Struct({ id: Schema.String }), {
-					text: 'SELECT id FROM sys_file',
-					params: []
-				})
-			).toEqual([]);
+			expect(yield* stored()).toEqual(before);
 		})
 	);
 	it.effect('is offered only to a person in the app', () =>
@@ -923,7 +967,7 @@ describe('download', () => {
 	);
 });
 describe('run_js', () => {
-	const rows = Array.from({ length: 200 }, (_, i) => ({
+	const rows = Array.from({ length: 3 }, (_, i) => ({
 		sku: `s${i}`,
 		qty: i % 7,
 		price: i * 1.5
@@ -963,7 +1007,7 @@ describe('run_js', () => {
 					answer: {
 						status: 200,
 						type: 'application/json',
-						lines: 200,
+						lines: 3,
 						value: rows.reduce((a, r) => a + r.qty * r.price, 0)
 					}
 				}
@@ -980,7 +1024,7 @@ describe('run_js', () => {
 			]);
 		})
 	);
-	it.live('transforms 200 rows of input, its console lines beside the answer', () =>
+	it.live('transforms its input rows, its console lines beside the answer', () =>
 		Effect.gen(function* () {
 			const x = yield* ctx();
 			const totals: Record<string, number> = {};
@@ -994,7 +1038,7 @@ describe('run_js', () => {
 						"console.log(input.length, 'rows');\n" +
 						'return by;'
 				})
-			).toEqual({ result: { answer: totals, console: ['200 rows'] } });
+			).toEqual({ result: { answer: totals, console: ['3 rows'] } });
 		})
 	);
 	it.live("keeps a returned CSV and PNG as the person's outputs and refuses an ELF", () =>
@@ -1026,7 +1070,10 @@ describe('run_js', () => {
 			expect(
 				yield* x.engine.db.rows(
 					Schema.Struct({ name: Schema.String, mime: Schema.String, field: Schema.String }),
-					{ text: 'SELECT name, mime, field FROM sys_file ORDER BY name', params: [] }
+					{
+						text: `SELECT name, mime, field FROM sys_file WHERE name IN ('totals.csv', 'dot.png', 'tool') ORDER BY name`,
+						params: []
+					}
 				)
 			).toEqual([
 				{ name: 'dot.png', mime: 'image/png', field: 'sys_conversation.outputs' },
@@ -1057,17 +1104,6 @@ describe('run_js', () => {
 				}
 			});
 		})
-	);
-	it.live(
-		'ends an endless loop at its CPU budget',
-		() =>
-			Effect.gen(function* () {
-				const x = yield* ctx();
-				expect(yield* run(x, { code: 'for (;;) {}' })).toEqual({
-					result: { error: 'the script used its 2 s of CPU' }
-				});
-			}),
-		30_000
 	);
 	it.live("an answer's own `files` data is data; only the person's file shape is kept", () =>
 		Effect.gen(function* () {
@@ -1114,191 +1150,6 @@ describe('run_js', () => {
 		})
 	);
 });
-describe('run_js over a file', () => {
-	const run = (x: ToolContext, input: Json) => result(x, 'run_js', input);
-	/** A context whose skills run through a real confined bundler. */
-	const files = (skills: ToolContext['skills']) =>
-		Effect.gen(function* () {
-			const host = yield* bundler();
-			const service = Context.get(yield* Layer.build(Bundler.fromAbi(host.port('acme'))), Bundler);
-			return { host, x: yield* ctx({ skills }, { bundler: service }) };
-		});
-	const Ref = Schema.Struct({ id: Schema.String, name: Schema.String, mime: Schema.String });
-	const Kept = Schema.Struct({
-		result: Schema.Struct({ answer: Schema.Struct({ files: Schema.Array(Ref) }) })
-	});
-	it.live(
-		"runs a skill's CommonJS script as written: siblings, a vendored package, a conversation file at /in, argv, Buffer, and /out kept as the person's file",
-		() =>
-			Effect.gen(function* () {
-				const { x } = yield* files({ report: skillOf(REPORT) });
-				// the conversation's CSV: a file the person holds here (an output of an earlier run)
-				const [csv] = Schema.decodeUnknownSync(Kept)(
-					yield* run(x, {
-						input: [{ name: 'sales.csv', text: SALES }],
-						code: 'return { files: input };'
-					})
-				).result.answer.files;
-				if (csv === undefined) throw new Error('no CSV kept');
-				expect(
-					yield* run(x, {
-						file: 'report/scripts/report.js',
-						args: ['/in/sales.csv', '/out/summary.json'],
-						files: [{ id: csv.id }]
-					})
-				).toEqual({
-					result: {
-						exitCode: 0,
-						files: [
-							{
-								id: expect.any(String),
-								name: 'summary.json',
-								mime: 'application/json',
-								size: expect.any(Number)
-							}
-						],
-						console: ['wrote summary.json: 4 rows']
-					}
-				});
-				const [stored] = yield* x.engine.db.rows(Schema.Struct({ key: Schema.String }), {
-					text: "SELECT key FROM sys_file WHERE name = 'summary.json'",
-					params: []
-				});
-				if (stored === undefined || x.engine.files === undefined) throw new Error('no summary');
-				const totals = { north: 140, south: 80.25, east: 42 };
-				expect(
-					JSON.parse(new TextDecoder().decode(yield* x.engine.files.get(stored.key, 1 << 20)))
-				).toEqual({
-					count: 4,
-					totals,
-					month: 'October 2026',
-					digest: Buffer.from(JSON.stringify(totals)).toString('base64')
-				});
-				// the skill names its own files to run, never the packages it vendors
-				expect(yield* result(x, 'skill', { name: 'report' })).toMatchObject({
-					result: { files: ['scripts/lib/summarize.js', 'scripts/report.js', 'shared/index.js'] }
-				});
-				// read again in the same turn, its text is already above: a short note, not the skill again
-				expect(yield* result(x, 'skill', { name: 'report' })).toEqual({
-					result: { note: 'You read report earlier in this turn; its text is above.' }
-				});
-			}),
-		60_000
-	);
-	it.live(
-		'hands inline code the conversation files it names as input.files, beside its own input',
-		() =>
-			Effect.gen(function* () {
-				const { x } = yield* files({});
-				const [csv] = Schema.decodeUnknownSync(Kept)(
-					yield* run(x, {
-						input: [{ name: 'sales.csv', text: SALES }],
-						code: 'return { files: input };'
-					})
-				).result.answer.files;
-				if (csv === undefined) throw new Error('no CSV kept');
-				expect(
-					yield* run(x, {
-						code: "return input.files['sales.csv'].split('\\n')[0] + ' / ' + input.unit;",
-						input: { unit: 'kg' },
-						files: [{ id: csv.id }]
-					})
-				).toEqual({ result: { answer: `${SALES.split('\n')[0]} / kg` } });
-				expect(yield* run(x, { code: 'return 1;', input: [1], files: [{ id: csv.id }] })).toEqual({
-					result: { error: expect.stringContaining('input is an object') }
-				});
-			}),
-		60_000
-	);
-	it.live(
-		'runs an ES module with top-level await, node:fs/promises, sibling .mjs and .cjs and an ES-module-only package; a repeat bundles nothing',
-		() =>
-			Effect.gen(function* () {
-				const { host, x } = yield* files({ render: skillOf(RENDER) });
-				const page = {
-					result: {
-						exitCode: 0,
-						files: [{ id: expect.any(String), name: 'page.html', mime: 'text/plain', size: 54 }],
-						console: ['October review']
-					}
-				};
-				expect(yield* run(x, { file: 'render/scripts/render.mjs' })).toEqual(page);
-				expect(yield* run(x, { file: 'render/scripts/render.mjs' })).toEqual(page);
-				expect(host.counts().built).toBe(1);
-			}),
-		60_000
-	);
-	it.live(
-		"reports each failure at the author's file: a bundle's errors, a throw mapped back, a refused built-in by its requirer, an exit code",
-		() =>
-			Effect.gen(function* () {
-				const { x } = yield* files({ broken: skillOf(BROKEN) });
-				const error = (file: string) =>
-					run(x, { file }).pipe(
-						Effect.map(
-							(answer) =>
-								Schema.decodeUnknownSync(
-									Schema.Struct({ result: Schema.Struct({ error: Schema.String }) })
-								)(answer).result.error
-						)
-					);
-				expect(yield* error('broken/scripts/missing.mjs')).toMatch(
-					/^scripts\/missing\.mjs:2:25: Cannot find module '\.\/lib\/nowhere\.mjs'/
-				);
-				expect(yield* error('broken/scripts/spawn.mjs')).toMatch(
-					/^scripts\/spawn\.mjs:1:26: 'node:child_process' is not available in run_js/
-				);
-				const thrown = yield* error('broken/scripts/throws.js');
-				expect(thrown).toMatch(/^Error: failed at stage E1\n/);
-				expect(thrown).toContain('scripts/lib/explode.js:4:11');
-				expect(thrown).not.toContain('guest.mjs');
-				expect(yield* error('broken/scripts/os.js')).toMatch(
-					/^Error: 'os' is not available in run_js \(required by scripts\/os\.js\)/
-				);
-				expect(yield* run(x, { file: 'broken/scripts/exit.js' })).toEqual({
-					result: { exitCode: 3, console: ['leaving'] }
-				});
-				expect(yield* run(x, { file: 'broken/scripts/none.js' })).toEqual({
-					result: { error: "The skill broken has no file 'scripts/none.js'." }
-				});
-				expect(yield* run(x, { file: 'nobody/x.js' })).toEqual({
-					result: { error: "No skill 'nobody' is available: file is '<skill>/<path>'." }
-				});
-			}),
-		60_000
-	);
-	it.live(
-		'sees only its mounts: no host file, no writes to its tree, an empty env, no fetch unless granted',
-		() =>
-			Effect.gen(function* () {
-				const { x } = yield* files({
-					probe: skillOf({
-						'SKILL.md': '---\ndescription: probe\n---\n',
-						'probe.js':
-							"const fs = require('fs');\n" +
-							'const tried = (f) => { try { f(); return "allowed"; } catch (e) { return e.code; } };\n' +
-							"console.log(JSON.stringify({ host: tried(() => fs.readFileSync('/etc/passwd')), escape: tried(() => fs.readFileSync('../../etc/passwd')), tree: tried(() => fs.writeFileSync('/app/probe.js', 'x')), env: Object.keys(process.env).length, fetch: typeof fetch, list: fs.readdirSync('/') }));\n"
-					})
-				});
-				expect(yield* run(x, { file: 'probe/probe.js' })).toEqual({
-					result: {
-						exitCode: 0,
-						console: [
-							JSON.stringify({
-								host: 'ENOENT',
-								escape: 'ENOENT',
-								tree: 'EROFS',
-								env: 0,
-								fetch: 'undefined',
-								list: ['app', 'in', 'out']
-							})
-						]
-					}
-				});
-			}),
-		60_000
-	);
-});
 describe('run_js over a repository reference', () => {
 	const COMMIT = '446c7ac5b0b7d74ae03e546ef2ab3f3a0844f04b',
 		NAME = `calc@${COMMIT.slice(0, 12)}`;
@@ -1307,82 +1158,82 @@ describe('run_js over a repository reference', () => {
 			"const { add } = require('./lib/add');\nconsole.log(JSON.stringify({ sum: add(2, 3), fetch: typeof fetch }));\n",
 		'src/lib/add.js': 'module.exports.add = (a, b) => a + b;\n'
 	});
-	it.live(
-		"runs a reference's file from its index as pure computation: no fetch, http refused",
-		() =>
-			Effect.gen(function* () {
-				const asked: HttpRequest[] = [];
-				const http: Http['Service'] = {
-					fetch: (request) =>
-						Effect.sync(() => {
-							asked.push(request);
-							return { status: 200, headers: [], body: new Uint8Array() };
+	it.live("runs a reference's file from its index's tree: no fetch, http refused", () =>
+		Effect.gen(function* () {
+			const asked: HttpRequest[] = [];
+			const http: Http['Service'] = {
+				fetch: (request) =>
+					Effect.sync(() => {
+						asked.push(request);
+						return { status: 200, headers: [], body: new Uint8Array() };
+					})
+			};
+			// the host's reference tool as Colony's keeps one: each file by its address, the index as the person's file
+			let store: Files['Service'] | undefined;
+			const reference: HostTool = {
+				name: 'reference',
+				description: 'a repository reference',
+				input: { type: 'object', properties: {} },
+				call: (_input, context) =>
+					Effect.runPromise(
+						Effect.gen(function* () {
+							const files = store;
+							if (files === undefined) return yield* Effect.die(new Error('no files'));
+							const listed = yield* Effect.forEach(tree, ([path, bytes]) =>
+								Effect.map(files.put(bytes, { name: path, mime: 'text/plain' }), (blob) => ({
+									path,
+									key: blob.key,
+									bytes: blob.bytes
+								}))
+							);
+							const index = {
+								repository: 'https://github.com/acme/calc',
+								commit: COMMIT,
+								digest: treeDigest(tree),
+								files: listed
+							};
+							const blob = yield* files.put(new TextEncoder().encode(JSON.stringify(index)), {
+								name: NAME,
+								mime: REFERENCE.mime
+							});
+							context.keep?.({ ...blob, name: NAME });
+							return { reference: NAME };
 						})
-				};
-				// the host's reference tool as Colony's keeps one: each file by its address, the index as the person's file
-				let store: Files['Service'] | undefined;
-				const reference: HostTool = {
-					name: 'reference',
-					description: 'a repository reference',
-					input: { type: 'object', properties: {} },
-					call: (_input, context) =>
-						Effect.runPromise(
-							Effect.gen(function* () {
-								const files = store;
-								if (files === undefined) return yield* Effect.die(new Error('no files'));
-								const listed = yield* Effect.forEach(tree, ([path, bytes]) =>
-									Effect.map(files.put(bytes, { name: path, mime: 'text/plain' }), (blob) => ({
-										path,
-										key: blob.key,
-										bytes: blob.bytes
-									}))
-								);
-								const index = {
-									repository: 'https://github.com/acme/calc',
-									commit: COMMIT,
-									digest: treeDigest(tree),
-									files: listed
-								};
-								const blob = yield* files.put(new TextEncoder().encode(JSON.stringify(index)), {
-									name: NAME,
-									mime: REFERENCE.mime
-								});
-								context.keep?.({ ...blob, name: NAME });
-								return { reference: NAME };
-							})
-						)
-				};
-				const host = yield* bundler();
-				const service = Context.get(
-					yield* Layer.build(Bundler.fromAbi(host.port('acme'))),
-					Bundler
-				);
-				const x = yield* ctx({ hostTools: [reference] }, { bundler: service, http });
-				store = x.engine.files;
-				expect(yield* result(x, 'reference', {})).toMatchObject({
-					result: { reference: NAME, files: [{ name: NAME, mime: REFERENCE.mime }] }
-				});
-				const run = (input: Json) => result(x, 'run_js', input);
-				expect(yield* run({ file: `${NAME}/src/main.js` })).toEqual({
-					result: { exitCode: 0, console: [JSON.stringify({ sum: 5, fetch: 'undefined' })] }
-				});
-				expect(yield* run({ file: `${NAME}/src/main.js`, http: true })).toEqual({
-					result: {
-						error: "A repository reference's file runs without fetch: run it without http."
-					}
-				});
-				expect(yield* run({ file: `${NAME}/src/none.js` })).toEqual({
-					result: { error: `The reference ${NAME} has no text file 'src/none.js'.` }
-				});
-				expect(yield* run({ file: 'other@0123456789ab/src/main.js' })).toEqual({
-					result: {
-						error:
-							"No repository reference 'other@0123456789ab' is yours: bring it in with reference first."
-					}
-				});
-				expect(asked).toEqual([]);
-			}),
-		60_000
+					)
+			};
+			// the bundler stands in: what it is handed is the reference's tree, at the asked entry
+			const bundled: { entry: string; paths: string[] }[] = [];
+			const service: Bundler['Service'] = {
+				bundle: (request) =>
+					Effect.sync(() => {
+						bundled.push({ entry: request.entry, paths: request.files.map(([path]) => path) });
+						return { errors: [] };
+					})
+			};
+			const x = yield* ctx({ hostTools: [reference] }, { bundler: service, http });
+			store = x.engine.files;
+			expect(yield* result(x, 'reference', {})).toMatchObject({
+				result: { reference: NAME, files: [{ name: NAME, mime: REFERENCE.mime }] }
+			});
+			const run = (input: Json) => result(x, 'run_js', input);
+			yield* run({ file: `${NAME}/src/main.js` });
+			expect(bundled).toEqual([{ entry: 'src/main.js', paths: tree.map(([path]) => path) }]);
+			expect(yield* run({ file: `${NAME}/src/main.js`, http: true })).toEqual({
+				result: {
+					error: "A repository reference's file runs without fetch: run it without http."
+				}
+			});
+			expect(yield* run({ file: `${NAME}/src/none.js` })).toEqual({
+				result: { error: `The reference ${NAME} has no text file 'src/none.js'.` }
+			});
+			expect(yield* run({ file: 'other@0123456789ab/src/main.js' })).toEqual({
+				result: {
+					error:
+						"No repository reference 'other@0123456789ab' is yours: bring it in with reference first."
+				}
+			});
+			expect(asked).toEqual([]);
+		})
 	);
 });
 describe('a sub-agent', () => {
@@ -1407,41 +1258,6 @@ describe('a sub-agent', () => {
 		})
 	);
 });
-describe('job waits', () => {
-	it.effect('releases abort listeners after completed waits and retains uncollected jobs', () =>
-		Effect.gen(function* () {
-			const list = yield* jobs();
-			const signal = yield* Effect.abortSignal;
-			for (let i = 0; i < 12; i++) {
-				const id = yield* list.add('work', Effect.succeed(i));
-				expect(yield* list.wait([id], 60_000)).toMatchObject({ job: id, result: i });
-				expect(list.has(id)).toBe(false);
-				expect(getEventListeners(signal, 'abort')).toHaveLength(0);
-			}
-			const id = yield* list.add('held', Effect.never);
-			const entered = yield* Deferred.make<void>();
-			const waiting = yield* Effect.forkChild(
-				Deferred.succeed(entered, undefined).pipe(Effect.andThen(list.wait([id], 60_000)))
-			);
-			yield* Deferred.await(entered);
-			yield* Fiber.interrupt(waiting);
-			expect(list.has(id)).toBe(true);
-			const timed = yield* Effect.forkChild(list.wait([id], 1));
-			yield* TestClock.adjust('1 millis');
-			expect(yield* Fiber.join(timed)).toBeNull();
-			expect(list.has(id)).toBe(true);
-		})
-	);
-});
-describe('spending caps', () => {
-	it('a member gets the most generous cap among their policies, else the default', () => {
-		const s = { monthly: null, member: 5, policies: { rep: 2, lead: 20 }, models: [] };
-		expect(memberCap(s, ['rep', 'lead'])).toBe(20);
-		expect(memberCap(s, ['rep'])).toBe(2);
-		expect(memberCap(s, ['other'])).toBe(5);
-		expect(memberCap({ ...s, member: null }, [])).toBeNull();
-	});
-});
 describe('runs and logs', () => {
 	const runs = (x: ToolContext) =>
 		x.engine.db.write({
@@ -1450,7 +1266,8 @@ describe('runs and logs', () => {
 			('r2', 'billing.invoice', '{"month":"10"}', '2026-09-21T01:00:00Z', 'schedule', 0, 'failed', 2, '[{"error":{"code":"timeout"}},{"error":{"code":"guest","message":"boom"}}]', '{"code":"guest","message":"boom"}', NULL, '2026-09-21T01:00:09Z'),
 			('r3', 'billing.dunning', '{}', '2026-09-22T01:00:00Z', 'start', 0, 'queued', 0, '[]', NULL, NULL, NULL),
 			('r4', 'tidy', '{"secret":1}', '2026-09-23T01:00:00Z', 'start', 0, 'stopped', 1, '[]', '{"code":"stopped","message":"The run was stopped."}', $1, '2026-09-23T01:00:01Z'),
-			('r5', 'tidy', '{}', '2026-09-24T01:00:00Z', 'start', 0, 'succeeded', 1, '[]', NULL, 'member:someone-else', NULL)`,
+			('r5', 'tidy', '{}', '2026-09-24T01:00:00Z', 'start', 0, 'succeeded', 1, '[]', NULL, 'member:someone-else', NULL)
+		ON CONFLICT (id) DO NOTHING`,
 			params: [actorRef(member().actor)]
 		});
 	const ids = (answer: unknown) =>

@@ -1,15 +1,10 @@
 // These writes bypass Store's compiler: the declared schema itself owns the row invariants.
-import { PGlite } from '@electric-sql/pglite';
-import { btree_gist } from '@electric-sql/pglite/contrib/btree_gist';
+import type { PGlite } from '@electric-sql/pglite';
 import { expect, it } from '@effect/vitest';
 import { Effect, Schema } from 'effect';
 import { build, schema, table } from '../src/index.ts';
-import { exec, script } from './support.ts';
+import { database, exec, script } from './support.ts';
 
-const database = Effect.acquireRelease(
-	Effect.promise(() => PGlite.create({ extensions: { btree_gist } })),
-	(pg) => Effect.promise(() => pg.close())
-);
 const query = (pg: PGlite, text: string) => exec(pg)({ text, params: [] });
 const rejected = Effect.fnUntraced(function* (pg: PGlite, text: string, code: string) {
 	const error = yield* Effect.flip(

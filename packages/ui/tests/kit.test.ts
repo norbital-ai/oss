@@ -5,31 +5,14 @@ import { it, afterEach } from '@effect/vitest';
 import { vi } from 'vitest';
 import { Effect } from 'effect';
 import { browser, required } from './view-fixture.ts';
-import { element } from './elements.ts';
+import { confirmDialog, element } from './elements.ts';
 import type { ComponentProps } from 'svelte';
 import { escapes, navigates } from '../src/primitives/sheet/dismiss.ts';
 import { filterLogs, wantsOlder, type LogLine } from '../src/logs/logs.ts';
 import { offsets, windowOf } from '../src/primitives/virtual/virtual.ts';
 
-// The in-app question itself is a real-browser concern (bolt tests/sheet-discard.browser.test.ts); here it is a queue the
-// test answers, so happy-dom never runs bits-ui's dialog layers.
-const dialog = vi.hoisted(() => ({
-	pending: [] as { title: string; answer: (confirmed: boolean) => void }[]
-}));
-vi.mock('../src/primitives/dialog/confirm.ts', async () => {
-	const { Effect } = await import('effect');
-	return {
-		confirmAction: (options: { title: string }) =>
-			Effect.callback<boolean>((resume) => {
-				dialog.pending.push({
-					title: options.title,
-					answer: (confirmed) => resume(Effect.succeed(confirmed))
-				});
-			})
-	};
-});
 // after the DOM hook: static imports link before it registers
-const { flushSync, mount, unmount } = await import('svelte');
+const { flushSync, mount, tick, unmount } = await import('svelte');
 const { default: Harness } = await import('./kit-harness.svelte');
 const { reactive } = await import('./kit-state.svelte.js');
 
@@ -57,20 +40,20 @@ function show(props: ComponentProps<typeof Harness>) {
 const key = (k: string, init: KeyboardEventInit = {}) =>
 	new KeyboardEvent('keydown', { key: k, bubbles: true, cancelable: true, ...init });
 /**
- * Whether no sheet is open under `root` once a dismissal's exit animation has run (happy-dom implements WAAPI, so a
- * sheet leaves after its 160 ms animation, never synchronously). A boolean, never the element: asserting on a node
- * makes node:assert render happy-dom's whole object graph when it fails.
+ * Whether no sheet is open under `root` once a dismissal's exit animation has run (happy-dom implements WAAPI per element,
+ * not `document.getAnimations`, so a sheet leaves when its animation finishes, never synchronously): waits on them. A boolean, never
+ * the element: asserting on a node makes node:assert render happy-dom's whole object graph when it fails.
  */
-const closed = async (root: ParentNode = document, ms = 1_000): Promise<boolean> => {
-	for (
-		const until = Date.now() + ms;
-		Date.now() < until;
-		await new Promise((r) => setTimeout(r, 10))
-	) {
-		flushSync();
-		if (root.querySelector('[role=dialog]') === null) return true;
-	}
-	return false;
+const closed = async (root: ParentNode = document): Promise<boolean> => {
+	flushSync();
+	await Promise.allSettled(
+		Array.from(document.querySelectorAll('*'), (node) => node.getAnimations())
+			.flat()
+			.map((animation) => animation.finished)
+	);
+	await tick();
+	flushSync();
+	return root.querySelector('[role=dialog]') === null;
 };
 
 it.live('sheet: outside interaction keeps it open and Escape dismisses it', () =>
@@ -143,10 +126,10 @@ it.live(
 			// a WebView answers `window.confirm` false at once: the sheet must never depend on it
 			const native = vi.fn(() => false);
 			vi.stubGlobal('confirm', native);
-			const asking = () => dialog.pending[0];
+			const asking = confirmDialog;
 			const answer = async (accept: boolean) => {
 				await vi.waitFor(() => assert.ok(asking()));
-				dialog.pending.shift()!.answer(accept);
+				asking()!.answer(accept);
 				flushSync();
 			};
 			try {
@@ -307,9 +290,10 @@ it.live('logs: 10k rows render a window and load an older page on scroll to top'
 		const port = element<HTMLElement>(target, '[role=log]');
 		port.scrollTop = 0;
 		port.dispatchEvent(new Event('scroll'));
-		await new Promise((r) => setTimeout(r, 10));
-		flushSync();
-		assert.equal(calls, 1);
+		await vi.waitFor(() => {
+			flushSync();
+			assert.equal(calls, 1);
+		});
 		assert.equal(required(v.state.rows).length, 10_001);
 		await v.done();
 	})

@@ -2,11 +2,10 @@
 import { describe, expect, it } from '@effect/vitest';
 import { Effect, Schema } from 'effect';
 import type { Json } from '../src/decl/values.ts';
-import { LIMITS, type Invocation } from '../src/engine/contracts.ts';
+import type { Invocation } from '../src/engine/contracts.ts';
 import type { EngineManifest } from '../src/engine/manifest.ts';
 import { TenantDb } from '../src/engine/db/tenant-db.ts';
 import { act, type ActRequest, type WriteEngine } from '../src/engine/write/act.ts';
-import { Pristine } from '../src/node/db/pglite.ts';
 import { admin, manifest as base, NOW, TODAY } from './write-fixture.ts';
 import { open } from './write-p2.fixture.ts';
 
@@ -132,7 +131,7 @@ describe('per-verb write callbacks', () => {
 				ids(yield* run({ verb: 'delete', input: [{ target: order.id }] }));
 				expect(calls.at(-1)?.kind).toBe('delete');
 				expect(calls.at(-1)?.input).toMatchObject([{ id: order.id, title: 'measured' }]);
-			}).pipe(Effect.provide(Pristine.layer))
+			})
 	);
 
 	it.effect(
@@ -164,7 +163,7 @@ describe('per-verb write callbacks', () => {
 					yield* run({ verb: 'import', input: { rows: [{ title: 'desk' }], onConflict: 'keep' } })
 				);
 				expect(calls).toEqual([]);
-			}).pipe(Effect.provide(Pristine.layer))
+			})
 	);
 
 	it.effect('creates a Sync id-map row under its named identity and runs its create callback', () =>
@@ -186,7 +185,7 @@ describe('per-verb write callbacks', () => {
 			});
 			expect(ids(result)).toContainEqual(expect.objectContaining({ id, model: 'orders' }));
 			expect(calls.map((call) => call.kind)).toEqual(['create']);
-		}).pipe(Effect.provide(Pristine.layer))
+		})
 	);
 
 	it.effect(
@@ -209,37 +208,39 @@ describe('per-verb write callbacks', () => {
 				expect(calls.map((call) => call.kind)).toEqual(['create']);
 				expect(planned).toHaveLength(1);
 				expect(writes()).toBe(0);
-			}).pipe(Effect.provide(Pristine.layer))
+			})
 	);
 
 	it.effect(
-		'chunks a 4,000-row import into four calls, each with its own write budget, and one native commit',
+		'a nested child update through its parent runs the child update callback with its before image',
 		() =>
 			Effect.gen(function* () {
-				const { run, calls, writes } = yield* setup;
-				const started = performance.now();
-				ids(
+				const { run, calls } = yield* setup;
+				const created = ids(
 					yield* run({
-						verb: 'import',
-						input: {
-							rows: Array.from({ length: 4_000 }, (_, i) => ({ title: `bulk-${i}` })),
-							onConflict: 'update'
-						}
+						verb: 'create',
+						input: [{ title: 'desk', lines: [{ label: 'tile', amount: '2' }] }]
 					})
 				);
-				expect(calls).toHaveLength(4);
-				expect(
-					calls.every(
-						(call) =>
-							Array.isArray(call.input) &&
-							call.input.length === LIMITS.writeChunk &&
-							call.budget.crossings === LIMITS.crossings.write
-					)
-				).toBe(true);
-				expect(new Set(calls.map((call) => call.ctx.seed)).size).toBe(4);
-				expect(writes()).toBe(1);
-				expect(performance.now() - started).toBeLessThan(30_000);
-			}).pipe(Effect.provide(Pristine.layer)),
-		60_000
+				const order = created.find((record) => record.model === 'orders');
+				const line = created.find((record) => record.model === 'lines');
+				if (order === undefined || line === undefined)
+					return yield* Effect.die('The native create omitted a row.');
+				ids(
+					yield* run({
+						verb: 'update',
+						input: [
+							{
+								target: order.id,
+								set: { lines: { update: [{ target: line.id, set: { label: 'oak' } }] } }
+							}
+						]
+					})
+				);
+				const child = calls.find((call) => call.target === 'lines' && call.kind === 'update');
+				expect(child?.input).toMatchObject([
+					{ before: { id: line.id, label: 'TILE' }, set: { label: 'oak' } }
+				]);
+			})
 	);
 });

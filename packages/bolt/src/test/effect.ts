@@ -11,13 +11,12 @@ import * as NodeFileSystem from '@effect/platform-node/NodeFileSystem';
 import * as NodePath from '@effect/platform-node/NodePath';
 import {
 	Clock,
-	Cache,
 	Context,
 	Cron,
 	type Crypto,
 	Duration,
 	Effect,
-	Exit,
+	type Fiber,
 	FileSystem,
 	Layer,
 	type Path,
@@ -27,14 +26,12 @@ import {
 	Result,
 	Schema,
 	SchemaGetter,
-	Semaphore,
-	Stream
+	Semaphore
 } from 'effect';
 import { HttpServerRequest, HttpServerResponse } from 'effect/http';
 import type { PlatformError } from 'effect/PlatformError';
-import { createHash, randomUUID } from 'node:crypto';
-import { createRequire } from 'node:module';
-import { join } from 'node:path';
+import { createHash, randomBytes, randomUUID } from 'node:crypto';
+import { dirname, join } from 'node:path';
 import { fileRef } from '../page/file-ref.ts';
 import { BUILTIN_FIELDS } from '../decl/builtin-fields.ts';
 import type { StartableName } from '../decl/access/policy.ts';
@@ -83,16 +80,24 @@ import type {
 	Authority,
 	DriverPage,
 	EngineActor,
+	FilesPort,
 	LogQuery,
 	LogRow,
-	Sql
+	Sql,
+	TransportPort
 } from '../engine/contracts.ts';
-import { PgliteDb, Pristine } from '../node/db/pglite.ts';
 import { nodePorts } from '../node/ports.ts';
+import { CHECKPOINTS, inputs, keep, prune, treeHash } from './checkpoint.ts';
+import { TestDb } from './database.ts';
+import { tenantDbPort } from '../node/db/port.ts';
+import { keysPort } from '../node/keys.ts';
+import { loopbackHttpPort } from '../node/net.ts';
+import { off, unmet, type Facilities, type System1, type System2 } from '../facilities/index.ts';
+import { facilityLayers } from '../protocol/host-api.ts';
 import type { Artifact } from '../engine/artifact/read.ts';
 import { TenantDb, type TenantDbShape } from '../engine/db/tenant-db.ts';
 import { DbError, type EngineError } from '../engine/errors.ts';
-import { BoltError, storeSync } from '../protocol/errors.ts';
+import { BoltError } from '../protocol/errors.ts';
 import { EngineLive, type EngineServices } from '../engine/host.ts';
 import type { GuestProgram } from '../engine/guest/runner.ts';
 import { memberColumn, memberValue, parseAddress } from '../engine/identity/address.ts';
@@ -121,21 +126,13 @@ import {
 	Keys,
 	Logs,
 	Mcp,
-	Metering,
 	Speech,
 	Transport,
 	WebRead,
 	Browser,
-	type AiEvent,
 	type TransportMessage
 } from '../engine/ports.ts';
-import {
-	applyPlan,
-	plan,
-	readApplied,
-	schemaSlice,
-	SchemaSliceSchema
-} from '../engine/schema/plan.ts';
+import { applyPlan, plan, readApplied } from '../engine/schema/plan.ts';
 import { lowerRead } from '../engine/query/engine.ts';
 import {
 	Activation,
@@ -239,6 +236,8 @@ export interface Caller {
 		): Effect.Effect<void, ActFailure>;
 	};
 }
+/** `runDue` passes before it dies: a chain longer than this is a run requeueing itself at the same instant. */
+const DRAIN_PASSES = 32;
 /** Invalid test configuration, fixture input or compiler setup; these failures cannot be mistaken for a business refusal. */
 export class KitInvalid extends Schema.TaggedError<KitInvalid>()('KitInvalid', {
 	message: Schema.String
@@ -247,11 +246,10 @@ export class KitInvalid extends Schema.TaggedError<KitInvalid>()('KitInvalid', {
 export type KitFailure = KitInvalid | EngineError | PortFailure | PlatformError;
 /** Ordered AI responses per model class, supplied inline or by a JSON file containing a `turns` array. */
 export type Cassette = { readonly [modelClass: string]: readonly AiResponse[] | string };
-/** AI playback configuration: response cassettes, an optional System 1 responder, and a delay before each inference stream's first part. */
+/** AI playback configuration: response cassettes and an optional System 1 responder. */
 export type CassetteOptions = {
 	cassette: Cassette;
 	sys_1?: Ai['Service']['ask'];
-	firstPartMs?: number;
 };
 /**
  * The default integration driver fake, a test's remote system: inspect sent messages and typing notices; `answer` is the
@@ -314,6 +312,7 @@ export const readLogRows = (rows: readonly LogRow[], x: LogQuery): readonly LogR
 };
 /** Host port service keys a test may replace with native Layers, including file storage, conversion, speech, web, geography, transport, AI, outbound HTTP, images and MCP. */
 export type TestPorts =
+	| Logs
 	| Files
 	| Http
 	| Images
@@ -323,7 +322,6 @@ export type TestPorts =
 	| WebRead
 	| Browser
 	| Geo
-	| Metering
 	| Transport
 	| DeadlinePort
 	| Drivers
@@ -334,7 +332,8 @@ export type TestPorts =
  * seed data, control time, and native ports.
  */
 export type TestOptions<P extends TestPorts = never> = {
-	seed?: 'base' | 'sample' | 'none' | SeedPack;
+	/** Default: the template's `test` pack when `root` has `seed/test/`, else none. Rows here replace it. */
+	seed?: 'none' | SeedPack;
 	pack?: Pack;
 	now?: string;
 	secretsKey?: Redacted.Redacted<Uint8Array>;
@@ -392,7 +391,9 @@ export type Kit = {
 	as(who: Holder | Authority): Caller;
 	visitor(app: string, options?: { readonly ip?: string }): Caller;
 	signIn(address: string): Effect.Effect<Authority, KitFailure>;
+	/** Fires crons due at the clock and drains every run due at it, chained runs included; dies if work stays due. */
 	runDue(): Effect.Effect<void, EngineError>;
+	/** The host dies as `runId` ends, before its end is recorded; the next boot requeues it to rerun from the start. */
 	crash(runId: string): Effect.Effect<void, KitFailure>;
 	settled(): Effect.Effect<void>;
 	receive(
@@ -416,11 +417,11 @@ export type WorkspaceServices =
 	| WebRead
 	| Browser
 	| Geo
-	| Metering
 	| Transport
 	| DeadlinePort
 	| Drivers
 	| Ai
+	| Logs
 	| Http
 	| Images
 	| Mcp
@@ -943,30 +944,32 @@ const fromRun = (r: typeof RunChecked.Type) =>
 		};
 		return result;
 	});
-/**
- * Each test file runs in a fresh process; `bolt test` hands its processes one directory for the run
- * (`BOLT_TEST_RUN_CACHE`), so the workspace is checked once per run, not once per file. It is made fresh each run, so a
- * result never outlives the source or the Bolt it came from.
- */
-const runChecked = (root: string, compute: Effect.Effect<CheckResult, KitInvalid>) =>
+/** Checkpoints kept per kind on this machine: more than one run's workspaces, so a run never evicts its own. */
+const KEPT_CHECKS = 256,
+	KEPT_SEEDS = 128;
+/** A workspace's checkpoint key: its source and the Bolt modules the checkpoint is built through. */
+const sourceKey = (root: string, modules: Effect.Effect<string>) =>
 	Effect.gen(function* () {
-		const dir = process.env['BOLT_TEST_RUN_CACHE'];
-		if (dir === undefined || dir === '') return yield* compute;
+		return createHash('sha256')
+			.update(`${yield* modules}\0${yield* treeHash(root)}`)
+			.digest('hex');
+	}).pipe(Effect.mapError(invalid));
+/** A workspace's check, from its checkpoint when its source and the compiler are unchanged, else checked once and kept. */
+const storedCheck = (root: string, compute: Effect.Effect<CheckResult, KitInvalid>) =>
+	Effect.gen(function* () {
 		const fs = yield* FileSystem.FileSystem;
-		const file = join(dir, `${createHash('sha256').update(root).digest('hex')}.json`);
-		const kept = yield* fs.readFileString(file).pipe(Effect.option);
-		if (Option.isSome(kept))
-			return yield* fromRun(
-				yield* Schema.decodeUnknownEffect(Schema.fromJsonString(RunChecked))(kept.value).pipe(
-					Effect.mapError(invalid)
-				)
+		const dir = join(CHECKPOINTS, 'workspaces');
+		const file = join(dir, `${yield* sourceKey(root, inputs.check)}.json`);
+		const kept = yield* fs
+			.readFileString(file)
+			.pipe(
+				Effect.flatMap(Schema.decodeUnknownEffect(Schema.fromJsonString(RunChecked))),
+				Effect.option
 			);
-		const result = yield* compute;
-		// written whole, then renamed: a parallel test process never reads half a result
-		const temporary = `${file}.${randomUUID()}`;
-		yield* fs.writeFileString(temporary, JSON.stringify(toRun(result)));
-		yield* fs.rename(temporary, file);
-		return result;
+		if (Option.isSome(kept)) return yield* fromRun(kept.value);
+		return yield* Effect.tap(compute, (result) =>
+			Effect.andThen(keep(file, JSON.stringify(toRun(result))), prune(dir, KEPT_CHECKS))
+		);
 	}).pipe(Effect.provide(node), Effect.mapError(invalid));
 const checked = (root: string) =>
 	Effect.gen(function* () {
@@ -977,7 +980,12 @@ const checked = (root: string) =>
 				catch: invalid
 			});
 			cached = yield* Effect.cached(
-				runChecked(root, compiler.check(root).pipe(Effect.provide(node), Effect.mapError(invalid)))
+				storedCheck(
+					root,
+					compiler
+						.check(root, { timing: false })
+						.pipe(Effect.provide(node), Effect.mapError(invalid))
+				)
 			);
 			compiled.set(root, cached);
 		}
@@ -985,140 +993,45 @@ const checked = (root: string) =>
 	});
 /** Check a workspace root and return its diagnostics, manifest and guest program; compiler loading and tool failures become `KitInvalid`. */
 export const check = (root: string) => checked(root);
-// Only unseeded images are shared. Every workspace owns its database and loads its own seed.
-type SchemaImageFailure = BoltError | DbError | KitInvalid;
-/** The schema image's key: its slice, and the workspace whose `.norbital/cache` keeps it across test processes. */
-const ImageKey = Schema.Struct({ dir: Schema.NullOr(Schema.String), slice: SchemaSliceSchema });
-/** The PGlite build (its versioned store path): an image from another build is another key. */
-// `createRequire`, not `import.meta.resolve`: a template's vitest module runner supports only the former
-const PGLITE = createRequire(import.meta.url).resolve('@electric-sql/pglite');
-const KEPT_IMAGES = 4;
-/** initdb (~2 s, ~0.8 GB) and the plan (~1 s) for one schema; each test file runs in a fresh process. */
-const freshImage = (slice: typeof SchemaSliceSchema.Type) =>
-	Effect.scoped(
-		Effect.gen(function* () {
-			const pg = yield* PgliteDb.open().pipe(Effect.provide(Pristine.layer));
-			const db = PgliteDb.make(pg);
-			yield* applyPlan(db, yield* plan(yield* readApplied(db), slice), { accept: true });
-			return yield* Effect.tryPromise({
-				try: () => pg.dumpDataDir('none'),
-				catch: invalid
-			}).pipe(Effect.uninterruptible);
-		})
-	);
-/** The image from the workspace's cache, else built once and kept there (newest few) for the next test process. */
-const storedImage = (dir: string, slice: typeof SchemaSliceSchema.Type) =>
+/** The template's `test` pack (`seed/test/`), built once per source beside its checkpoint; the first rename wins. */
+const readTestPack = (root: string, manifest: EngineManifest) =>
 	Effect.gen(function* () {
 		const fs = yield* FileSystem.FileSystem;
-		const file = join(
-			dir,
-			`${createHash('sha256')
-				.update(JSON.stringify([PGLITE, slice]))
-				.digest('hex')}.tar`
-		);
-		const kept = yield* fs.readFile(file).pipe(Effect.option);
-		if (Option.isSome(kept)) return new Blob([kept.value.slice()]);
-		const image = yield* freshImage(slice);
-		const bytes = new Uint8Array(yield* Effect.promise(() => image.arrayBuffer()));
-		yield* fs.makeDirectory(dir, { recursive: true });
-		// written whole, then renamed: a concurrent test process never reads half an image
-		const temporary = `${file}.${randomUUID()}`;
-		yield* fs.writeFile(temporary, bytes);
-		yield* fs.rename(temporary, file);
-		const images = yield* Effect.forEach(
-			(yield* fs.readDirectory(dir)).filter((name) => name.endsWith('.tar')),
-			(name) =>
-				fs
-					.stat(join(dir, name))
-					.pipe(
-						Effect.map((info) => ({ name, at: Option.getOrElse(info.mtime, () => new Date(0)) }))
-					)
-		);
-		for (const old of images.toSorted((a, b) => b.at.getTime() - a.at.getTime()).slice(KEPT_IMAGES))
-			yield* fs.remove(join(dir, old.name), { force: true });
-		return image;
-	}).pipe(Effect.provide(node), Effect.mapError(invalid));
-let schemaImages: Cache.Cache<string, Blob, SchemaImageFailure> | undefined;
-const images = Effect.suspend(() =>
-	schemaImages === undefined
-		? Cache.makeWith(
-				(key: string): Effect.Effect<Blob, SchemaImageFailure> =>
-					Effect.gen(function* () {
-						const { dir, slice } = yield* Schema.decodeUnknownEffect(
-							Schema.fromJsonString(ImageKey)
-						)(key).pipe(Effect.mapError(invalid));
-						return yield* dir === null ? freshImage(slice) : storedImage(dir, slice);
-					}),
-				{
-					capacity: 4,
-					timeToLive: (exit) => (Exit.isSuccess(exit) ? Duration.infinity : Duration.zero)
-				}
-			).pipe(
-				Effect.provideContext(Context.empty()),
-				Effect.map((cache) => (schemaImages ??= cache))
-			)
-		: Effect.succeed(schemaImages)
-);
-const schemaDatabase = (manifest: EngineManifest, root: string | undefined) =>
-	Effect.gen(function* () {
-		const slice = schemaSlice(manifest);
-		const key = JSON.stringify({
-			dir: root === undefined ? null : join(root, '.norbital', 'cache', 'schema-images'),
-			slice: root === undefined ? slice : { ...slice, connections: {} }
-		});
-		return PgliteDb.layer(yield* Cache.get(yield* images, key));
-	});
-const namedPack = (root: string, manifest: EngineManifest, name: 'base' | 'sample') =>
-	Effect.gen(function* () {
-		const fs = yield* FileSystem.FileSystem;
-		if (name === 'sample') {
-			const dir = join(root, '.norbital', 'seed', 'sample');
-			if (!(yield* fs.exists(join(dir, 'pack.json'))))
-				return yield* Effect.fail(
-					new KitInvalid({
-						message: `TestWorkspace: no sample pack at ${dir}; run \`bolt build --bank <bank>\` first`
-					})
-				);
-			return yield* readPack(dir);
-		}
-		const compiler = yield* Effect.tryPromise({
-			try: () => import('../compiler/seed.ts'),
-			catch: invalid
-		});
-		const artifact = yield* Effect.tryPromise({
-			try: () => import('../compiler/artifact/seed.ts'),
-			catch: invalid
-		});
-		const errors: import('../protocol/diagnostic.ts').CheckDiagnostic[] = [],
-			cache = join(root, '.norbital', 'cache');
-		const build = (out: string) =>
-			Effect.gen(function* () {
-				const pack = yield* compiler.seedPack(root, errors);
-				yield* artifact.buildPacks(root, manifest, pack, out, { cache }, errors);
+		const shared = join(CHECKPOINTS, 'seeds', yield* sourceKey(root, inputs.seed));
+		if (!(yield* fs.exists(join(shared, 'test', 'pack.json'))))
+			yield* Effect.gen(function* () {
+				const artifact = yield* Effect.tryPromise({
+					try: () => import('../compiler/artifact/seed.ts'),
+					catch: invalid
+				});
+				const errors: import('../protocol/diagnostic.ts').CheckDiagnostic[] = [];
+				const temporary = `${shared}.${randomUUID()}`;
+				yield* artifact.buildTestPack(root, manifest, temporary, errors);
 				if (errors.length > 0)
 					return yield* Effect.fail(
 						new KitInvalid({
-							message: `TestWorkspace: the base pack failed:\n${errors.map((d) => `  ${d.code} ${d.message}`).join('\n')}`
+							message: `TestWorkspace: the test pack failed:\n${errors.map((d) => `  ${d.code} ${d.message}`).join('\n')}`
 						})
 					);
+				yield* fs.makeDirectory(dirname(shared), { recursive: true });
+				yield* fs
+					.rename(temporary, shared)
+					.pipe(Effect.catch(() => fs.remove(temporary, { recursive: true, force: true })));
+				yield* prune(dirname(shared), KEPT_SEEDS);
 			});
-		// under `bolt test` the pack is built once per run (as `runChecked` checks once), into its own directory and then
-		// renamed, so a parallel test process never reads half a pack; the first rename wins
-		const run = process.env['BOLT_TEST_RUN_CACHE'];
-		if (run === undefined || run === '') {
-			yield* build(join(cache, 'test-seed'));
-			return yield* readPack(join(cache, 'test-seed', 'base'));
-		}
-		const shared = join(run, `seed-${createHash('sha256').update(root).digest('hex')}`);
-		if (!(yield* fs.exists(join(shared, 'base', 'pack.json')))) {
-			const temporary = `${shared}.${randomUUID()}`;
-			yield* build(temporary);
-			yield* fs
-				.rename(temporary, shared)
-				.pipe(Effect.catch(() => fs.remove(temporary, { recursive: true, force: true })));
-		}
-		return yield* readPack(join(shared, 'base'));
+		return yield* readPack(join(shared, 'test'));
 	}).pipe(Effect.provide(node), Effect.mapError(invalid));
+const packs = new Map<string, Effect.Effect<Pack, KitInvalid>>();
+/** The test pack, read once per process (hashing the source tree and decoding every row are not per-test work). */
+const testPack = (root: string, manifest: EngineManifest) =>
+	Effect.gen(function* () {
+		let cached = packs.get(root);
+		if (cached === undefined) {
+			cached = yield* Effect.cached(readTestPack(root, manifest));
+			packs.set(root, cached);
+		}
+		return yield* cached;
+	});
 
 const ResponseCassette = Schema.Struct({
 	content: Schema.Json,
@@ -1163,7 +1076,7 @@ export const respondSystem1: Ai['Service']['ask'] = (request) =>
 			])
 		)
 	}));
-/** Schema-decoded cassettes bind one native Ai layer; no provider Promise adapter. */
+/** Schema-decoded cassettes as the intelligence group's `system1` and `system2`. */
 export const CassetteAi = (options: CassetteOptions) =>
 	Effect.gen(function* () {
 		const fs = yield* FileSystem.FileSystem;
@@ -1190,41 +1103,30 @@ export const CassetteAi = (options: CassetteOptions) =>
 			turns.set(modelClass, decoded);
 		}
 		const requests: AiRequest[] = [];
-		const infer = (request: AiRequest): Stream.Stream<AiEvent, PortFailure> =>
-			Stream.unwrap(
-				Effect.gen(function* () {
-					requests.push(request);
-					const next = turns.get(request.model)?.shift();
-					if (next === undefined)
-						// an exhausted cassette is the fixture's own refusal, never a provider blip to wait out
-						return Stream.fail(
-							new FacilityFailure({
-								kind: 'invalid',
-								message: `cassette: '${request.model}' has no turn left (${requests.length} requests played)`
-							})
-						);
-					if (options.firstPartMs !== undefined) yield* Effect.sleep(options.firstPartMs);
-					const events: AiEvent[] =
-						typeof next.content === 'string' && next.content !== ''
-							? [
-									{ _tag: 'Delta', text: next.content },
-									{ _tag: 'Response', response: next }
-								]
-							: [{ _tag: 'Response', response: next }];
-					return Stream.fromIterable(events);
-				})
-			);
+		const ask = options.sys_1 ?? respondSystem1;
+		const system1: System1 = {
+			ask: (request, signal) => Effect.runPromise(ask(request), { signal })
+		};
+		const system2: System2 = {
+			models: [...turns.keys()],
+			infer: async (request, _signal, onDelta) => {
+				requests.push(request);
+				const next = turns.get(request.model)?.shift();
+				// an exhausted cassette is the fixture's own refusal, never a provider blip to wait out
+				if (next === undefined)
+					throw new FacilityFailure({
+						kind: 'invalid',
+						message: `cassette: '${request.model}' has no turn left (${requests.length} requests played)`
+					});
+				if (typeof next.content === 'string' && next.content !== '') onDelta?.(next.content);
+				return next;
+			}
+		};
 		return {
 			requests,
 			remaining: () => Object.fromEntries([...turns].map(([name, list]) => [name, list.length])),
-			layer: Layer.succeed(Ai, {
-				ask: options.sys_1 ?? respondSystem1,
-				maxChoices: undefined,
-				models: [...turns.keys()],
-				catalog: Port.unavailable('ai.catalog'),
-				infer,
-				embed: () => Port.unavailable('ai.embed')
-			})
+			system1,
+			system2
 		};
 	}).pipe(Effect.provide(node), Effect.mapError(invalid));
 
@@ -1234,6 +1136,27 @@ export const memoryAuditLayer: Layer.Layer<never> = Layer.unwrap(
 		auditFromAbi(store.port).pipe(Layer.provide(NodeCrypto.layer))
 	)
 );
+
+/** The transport ABI bodies the kit's host records as `fakes.sent`. */
+const MailBody = Schema.Struct({
+	to: Schema.String,
+	subject: Schema.String,
+	text: Schema.String,
+	html: Schema.optionalKey(Schema.String),
+	link: Schema.optionalKey(Schema.String)
+});
+const SmsBody = Schema.Struct({ to: Schema.String, text: Schema.String });
+const PushBody = Schema.Struct({
+	subscription: Schema.Struct({
+		kind: Schema.Literals(['web', 'apns']),
+		endpoint: Schema.String,
+		keys: Schema.Json
+	}),
+	title: Schema.String,
+	body: Schema.NullOr(Schema.String),
+	link: Schema.NullOr(Schema.Struct({ model: Schema.String, id: Schema.String })),
+	path: Schema.String
+});
 
 /** A native test workspace service; its layer owns database and engine resources in scope and exposes the same host routes used by deployed workspaces. */
 export class TestWorkspace extends Context.Service<TestWorkspace, Kit>()(
@@ -1247,8 +1170,19 @@ export class TestWorkspace extends Context.Service<TestWorkspace, Kit>()(
 				let { manifest, guest, transforms } = options;
 				const artifact = options.artifact;
 				if (artifact !== undefined) ({ manifest, guest } = artifact);
-				// a suite writes the rows its mechanism needs; the base pack is a product seed, not a test fixture
+				// a template's tests seed from its own `test` pack (`seed/test/`) unless they pass rows or 'none'; the public
+				// `base` and the bank's `sample` are product seeds, never test fixtures
 				const seed = options.seed ?? 'none';
+				const testRoot =
+					options.seed === undefined &&
+					options.root !== undefined &&
+					(yield* FileSystem.FileSystem.pipe(
+						Effect.flatMap((fs) => fs.exists(join(options.root ?? '', 'seed', 'test'))),
+						Effect.provide(node),
+						Effect.mapError(invalid)
+					))
+						? options.root
+						: undefined;
 				if (options.root !== undefined) {
 					const built = yield* checked(options.root);
 					if (built.errors.length > 0 || built.manifest === undefined)
@@ -1262,10 +1196,6 @@ export class TestWorkspace extends Context.Service<TestWorkspace, Kit>()(
 				if (manifest === undefined)
 					return yield* Effect.fail(
 						new KitInvalid({ message: 'TestWorkspace takes a root or a manifest' })
-					);
-				if (typeof seed === 'string' && seed !== 'none' && options.root === undefined)
-					return yield* Effect.fail(
-						new KitInvalid({ message: `TestWorkspace: seed '${seed}' needs a root` })
 					);
 				const sourceManifest = manifest,
 					callbacks = new Set(transforms);
@@ -1283,9 +1213,7 @@ export class TestWorkspace extends Context.Service<TestWorkspace, Kit>()(
 							count.writes = 0;
 						}
 					};
-				const dbContext = yield* Layer.build(
-						options.db ?? (yield* schemaDatabase(m, options.root))
-					),
+				const dbContext = yield* Layer.build(options.db ?? TestDb.layer(m)),
 					inner = Context.get(dbContext, TenantDb);
 				const members = yield* Semaphore.make(1),
 					pending: Sql[] = [];
@@ -1348,10 +1276,48 @@ export class TestWorkspace extends Context.Service<TestWorkspace, Kit>()(
 				// the host's cron clock, stepped by `runDue`: a slot at or before this instant has had its turn
 				let cronsThrough = Date.parse(now);
 				const liveClock = Context.get(Context.empty(), Clock.Clock);
+				// engine sleeps (debounce, wake and refresh timers) wait on this virtual time: `set`/`advance` wakes them, never the wall clock
+				const sleepers = new Set<{ readonly at: number; readonly wake: () => void }>();
+				// fibers a clock step woke that have not yet slept again or ended: `runDue` and `settled` wait for them, so work
+				// a step made due (a debounce timer, a heartbeat) finishes before the host's own due work looks at the rows
+				const woken = new Set<Fiber.Fiber<unknown, unknown>>(),
+					observed = new WeakSet<Fiber.Fiber<unknown, unknown>>();
+				const quiet = Effect.promise(async () => {
+					while (woken.size > 0) await new Promise<void>((resolve) => setImmediate(resolve));
+				});
+				const wakeDue = () => {
+					const at = Date.parse(now);
+					for (const s of [...sleepers].toSorted((a, b) => a.at - b.at))
+						if (s.at <= at) {
+							sleepers.delete(s);
+							s.wake();
+						}
+				};
 				const clock: Clock.Clock = {
 					monotonicTimeNanosUnsafe: () => liveClock.monotonicTimeNanosUnsafe(),
 					monotonicTimeNanos: liveClock.monotonicTimeNanos,
-					sleep: (duration) => liveClock.sleep(duration),
+					sleep: (duration) => {
+						const ms = Duration.toMillis(duration);
+						if (ms <= 0) return Effect.yieldNow;
+						return Effect.withFiber((fiber) => {
+							woken.delete(fiber);
+							return Effect.callback<void>((resume) => {
+								const sleeper = {
+									at: Date.parse(now) + ms,
+									wake: () => {
+										woken.add(fiber);
+										if (!observed.has(fiber)) {
+											observed.add(fiber);
+											fiber.addObserver(() => woken.delete(fiber));
+										}
+										resume(Effect.void);
+									}
+								};
+								sleepers.add(sleeper);
+								return Effect.sync(() => sleepers.delete(sleeper));
+							});
+						});
+					},
 					currentTimeMillisUnsafe: () => Date.parse(now),
 					currentTimeMillis: Effect.sync(() => Date.parse(now)),
 					currentTimeNanosUnsafe: () => BigInt(Date.parse(now)) * 1_000_000n,
@@ -1389,65 +1355,143 @@ export class TestWorkspace extends Context.Service<TestWorkspace, Kit>()(
 						? {}
 						: { ai: { requests: cassette.requests, remaining: cassette.remaining } })
 				};
-				const files = Layer.succeed(Files, {
-					put: (bytes, meta) =>
-						Effect.sync(() => {
-							const key = randomUUID();
-							f.files.blobs.set(key, bytes);
-							return {
-								key,
-								bytes: bytes.byteLength,
-								sha256: createHash('sha256').update(bytes).digest('hex'),
-								mime: meta.mime
-							};
-						}),
-					get: (key) =>
-						Effect.suspend(() => {
-							const bytes = f.files.blobs.get(key);
-							return bytes === undefined
-								? Port.unavailable('files', `no blob ${key}`)
-								: Effect.succeed(bytes);
-						}),
-					url: (key) => Effect.succeed(`memory://${key}`),
-					remove: (key) =>
-						Effect.sync(() => {
-							f.files.blobs.delete(key);
-						}),
-					// the host's rule without the network: media by its first bytes, anything else refused
-					download: (url) =>
-						Effect.suspend(() => {
-							const bytes = f.files.origin.get(url);
-							if (bytes === undefined)
-								return Effect.fail(
-									new FacilityFailure({
-										kind: 'upstream',
-										message: 'The URL answered 404.',
-										status: 404
-									})
-								);
-							const mime = mediaType(bytes.subarray(0, DOWNLOAD.headBytes));
-							if (mime === undefined)
-								return Effect.fail(
-									new FacilityFailure({
-										kind: 'invalid',
-										message:
-											'The file is not media (an image, audio, video or a PDF); nothing was stored.'
-									})
-								);
-							const key = randomUUID();
-							f.files.blobs.set(key, bytes);
-							return Effect.succeed({
-								key,
-								bytes: bytes.byteLength,
-								sha256: createHash('sha256').update(bytes).digest('hex'),
-								mime,
-								name: url.split(/[?#]/)[0]?.split('/').at(-1) || 'download'
+				const {
+					envoys: envoyConfig,
+					agent: agentConfig,
+					secure: hostSecure,
+					...shellConfig
+				} = options.host ?? {};
+				const publicUrl = shellConfig.publicUrl ?? 'http://localhost';
+				const secure = hostSecure ?? new URL(publicUrl).protocol === 'https:';
+				const record = (message: TransportMessage) => {
+					f.sent.push(message);
+					return { providerId: `${message._tag}:${f.sent.length}` };
+				};
+				const mail: TransportPort = {
+					send: async (_kind, value) =>
+						record({ _tag: 'Mail', ...Schema.decodeUnknownSync(MailBody)(value) })
+				};
+				const sms: TransportPort = {
+					send: async (_kind, value) =>
+						record({ _tag: 'Sms', ...Schema.decodeUnknownSync(SmsBody)(value) })
+				};
+				const push: TransportPort = {
+					send: async (_kind, value) =>
+						record({ _tag: 'Push', ...Schema.decodeUnknownSync(PushBody)(value) })
+				};
+				const phone = loggedPhone(() => {}, true);
+				const files: FilesPort = {
+					put: async (bytes, meta) => {
+						const key = randomUUID();
+						f.files.blobs.set(key, bytes);
+						return {
+							key,
+							bytes: bytes.byteLength,
+							sha256: createHash('sha256').update(bytes).digest('hex'),
+							mime: meta.mime
+						};
+					},
+					get: async (key, max) => {
+						const bytes = f.files.blobs.get(key);
+						if (bytes === undefined)
+							throw new FacilityFailure({ kind: 'invalid', message: 'the file is not stored' });
+						if (bytes.byteLength > max)
+							throw new FacilityFailure({
+								kind: 'invalid',
+								message: `the file is over ${max} bytes`
 							});
-						})
-				});
+						return bytes;
+					},
+					url: async (key) => `memory://${key}`,
+					remove: async (key) => {
+						f.files.blobs.delete(key);
+					},
+					// the host's rule without the network: media by its first bytes, anything else refused
+					download: async (url) => {
+						const bytes = f.files.origin.get(url);
+						if (bytes === undefined)
+							throw new FacilityFailure({
+								kind: 'upstream',
+								message: 'The URL answered 404.',
+								status: 404
+							});
+						const mime = mediaType(bytes.subarray(0, DOWNLOAD.headBytes));
+						if (mime === undefined)
+							throw new FacilityFailure({
+								kind: 'invalid',
+								message:
+									'The file is not media (an image, audio, video or a PDF); nothing was stored.'
+							});
+						const key = randomUUID();
+						f.files.blobs.set(key, bytes);
+						return {
+							key,
+							bytes: bytes.byteLength,
+							sha256: createHash('sha256').update(bytes).digest('hex'),
+							mime,
+							name: url.split(/[?#]/)[0]?.split('/').at(-1) || 'download'
+						};
+					}
+				};
+				// a member the test scripts nothing for answers as an absent one does
+				const scripted = (facility: string) =>
+					Promise.reject({
+						kind: 'unavailable',
+						facility,
+						reason: `the host provides no ${facility}`
+					});
+				// the kit is a host like any other: one `Facilities` record, its needs check, the shared ABI adapters
+				const facilities: Facilities = {
+					storage: { database: tenantDbPort(db), files },
+					logs: {
+						runtime: {
+							write: (event) => {
+								f.logs.push({ ...event, id: String(f.logs.length + 1) });
+							},
+							query: async (query) => readLogRows(f.logs, query)
+						},
+						audit: auditStore.port
+					},
+					transactional: {
+						mail,
+						sms,
+						phone,
+						push: () => push,
+						challenge: { siteKey: 'dev', verify: async (token) => token === 'dev-pass' }
+					},
+					intelligence: {
+						// the deterministic decision a cassette also starts from: a workspace with an `ai` block needs system1
+						system1: cassette?.system1 ?? {
+							ask: (request, signal) => Effect.runPromise(respondSystem1(request), { signal })
+						},
+						system2: cassette?.system2 ?? {
+							models: [],
+							infer: () => scripted('ai')
+						},
+						embed: { embed: () => scripted('ai.embed') },
+						speech: off
+					},
+					ports: {
+						webhooks: { publicUrl },
+						websockets: off,
+						outbound: {
+							http: loopbackHttpPort,
+							tcp: () => scripted('tcp')
+						}
+					},
+					sandbox: off,
+					keys: keysPort(
+						options.secretsKey === undefined ? randomBytes(32) : Redacted.value(options.secretsKey)
+					)
+				};
+				const missing = unmet(m.needs, facilities);
+				if (missing.length > 0)
+					return yield* new KitInvalid({
+						message: `TestWorkspace: the bundle needs ${missing.join(', ')}, which the test host leaves off`
+					});
 				const links =
 					options.links === null
-						? Drivers.unavailable
+						? Drivers.fromAbi(off)
 						: Layer.succeed(Drivers, {
 								available: true,
 								send: (instance, message, attachments) =>
@@ -1468,40 +1512,17 @@ export class TestWorkspace extends Context.Service<TestWorkspace, Kit>()(
 									f.links.page(instance, sync, partition, cursor),
 								changed: () => Effect.void
 							});
-				const native = yield* nodePorts({
-					...(artifact === undefined ? {} : { release: artifact.dir }),
-					...(options.secretsKey === undefined
-						? {}
-						: { secretsKey: Redacted.value(options.secretsKey) })
-				});
+				const native = yield* nodePorts(artifact === undefined ? {} : { release: artifact.dir });
 				const ports = Layer.mergeAll(
-					auditFromAbi(auditStore.port).pipe(Layer.provide(NodeCrypto.layer)),
-					files,
+					facilityLayers(facilities),
 					links,
-					Http.fromAbi(native.http),
 					Images.fromAbi(native.images),
 					Docs.fromAbi(native.docs),
 					Mcp.fromAbi(native.mcp),
-					Layer.succeed(Logs, {
-						write: (event) =>
-							Effect.sync(() => {
-								f.logs.push({ ...event, id: String(f.logs.length + 1) });
-							}),
-						query: (query) => Effect.sync(() => readLogRows(f.logs, query))
-					}),
-					Convert.unavailable,
-					Speech.unavailable,
-					WebRead.unavailable,
-					Browser.unavailable,
-					Geo.unavailable,
-					Metering.unavailable,
-					Layer.succeed(Transport, {
-						send: (message) =>
-							Effect.sync(() => {
-								f.sent.push(message);
-								return { providerId: `${message._tag}:${f.sent.length}` };
-							})
-					}),
+					Convert.fromAbi(off),
+					WebRead.fromAbi(off),
+					Browser.fromAbi(off),
+					Geo.fromAbi(off),
 					Layer.succeed(DeadlinePort, {
 						announce: (scope, at) =>
 							Effect.sync(() => {
@@ -1509,22 +1530,12 @@ export class TestWorkspace extends Context.Service<TestWorkspace, Kit>()(
 							}),
 						settle: () => Effect.void,
 						teardown: () => Effect.void
-					}),
-					cassette?.layer ?? Ai.unavailable
+					})
 				);
 				const hostPorts =
 					overrides === undefined ? ports : Layer.merge(ports, Layer.succeedContext(overrides));
-				const {
-					envoys: envoyConfig,
-					agent: agentConfig,
-					secure: hostSecure,
-					...shellConfig
-				} = options.host ?? {};
-				const publicUrl = shellConfig.publicUrl ?? 'http://localhost';
-				const secure = hostSecure ?? new URL(publicUrl).protocol === 'https:';
 				const base = Layer.mergeAll(
 					node,
-					Keys.fromAbi(native.keys),
 					GuestIsolates.fromAbi(native.guestIsolates),
 					Layer.succeed(EnvoyConfig, envoyConfig ?? {}),
 					Layer.effect(AgentHost, withBrowser(agentConfig ?? {})).pipe(Layer.provide(hostPorts)),
@@ -1540,17 +1551,14 @@ export class TestWorkspace extends Context.Service<TestWorkspace, Kit>()(
 						start: []
 					})
 				);
-				// In-process images already hold this exact slice; persistent and injected databases need reassertion.
-				if (options.db !== undefined || options.root !== undefined)
-					yield* applyPlan(db, yield* plan(yield* readApplied(db), m), { accept: true });
-				if (options.pack !== undefined || seed === 'base' || seed === 'sample') {
-					if (options.pack === undefined && options.root === undefined)
-						return yield* Effect.fail(
-							new KitInvalid({ message: 'a named seed pack needs a root' })
-						);
-					const pack =
-						options.pack ??
-						(yield* namedPack(options.root ?? '', m, seed === 'sample' ? 'sample' : 'base'));
+				// A kit database is at this exact slice's checkpoint; an injected one is planned unless it already is.
+				if (options.db !== undefined) {
+					const p = yield* plan(yield* readApplied(db), m);
+					if (p.from !== p.to) yield* applyPlan(db, p, { accept: true });
+				}
+				const pack =
+					options.pack ?? (testRoot === undefined ? undefined : yield* testPack(testRoot, m));
+				if (pack !== undefined) {
 					const artifact = yield* Effect.tryPromise({
 						try: () => import('../engine/artifact/read.ts'),
 						catch: invalid
@@ -1583,35 +1591,15 @@ export class TestWorkspace extends Context.Service<TestWorkspace, Kit>()(
 					runHandlers = Context.get(engineContext, RunHandlers),
 					envoys = Context.get(engineContext, Envoys),
 					integration = Context.get(engineContext, Conversations);
-				const Mail = Schema.Struct({
-					to: Schema.String,
-					subject: Schema.String,
-					text: Schema.String,
-					html: Schema.optionalKey(Schema.String),
-					link: Schema.optionalKey(Schema.String)
-				});
-				const Sms = Schema.Struct({ to: Schema.String, text: Schema.String });
 				const identityHost: IdentityHost = yield* makeIdentityHost({
 					audit: yield* auditShape(auditStore.port).pipe(Effect.provide(NodeCrypto.layer)),
 					db,
 					now: Effect.sync(() => new Date(now)),
 					windows: new RateWindows(),
 					keys: yield* loadKeys(db),
-					mail: {
-						async send(_kind, value) {
-							const message = Schema.decodeUnknownSync(Mail)(value);
-							f.sent.push({ _tag: 'Mail', ...message });
-							return { providerId: `Mail:${f.sent.length}` };
-						}
-					},
-					sms: {
-						async send(_kind, value) {
-							const message = Schema.decodeUnknownSync(Sms)(value);
-							f.sent.push({ _tag: 'Sms', ...message });
-							return { providerId: `Sms:${f.sent.length}` };
-						}
-					},
-					phone: loggedPhone(() => {}, true),
+					mail,
+					sms,
+					phone,
 					devSink: true,
 					publicUrl,
 					...(signupOf(m) === undefined ? {} : { signup: signupOf(m) })
@@ -1619,7 +1607,6 @@ export class TestWorkspace extends Context.Service<TestWorkspace, Kit>()(
 				const shellBase = Layer.mergeAll(
 					RateLimits.layer.pipe(Layer.provide(Layer.succeed(TenantDb, db))),
 					Layer.succeed(HostIdentity, identityHost),
-					Turnstile.dev,
 					Layer.succeed(ShellConfig, {
 						publicUrl,
 						workspace: () => ({ name: 'Test', handle: 'test' }),
@@ -2067,9 +2054,11 @@ export class TestWorkspace extends Context.Service<TestWorkspace, Kit>()(
 						now: () => now,
 						set: (value) => {
 							now = new Date(value).toISOString();
+							wakeDue();
 						},
 						advance: (value) => {
 							now = new Date(Date.parse(now) + duration(value)).toISOString();
+							wakeDue();
 						}
 					},
 					as: (who) =>
@@ -2103,6 +2092,7 @@ export class TestWorkspace extends Context.Service<TestWorkspace, Kit>()(
 						}),
 					runDue: () =>
 						Effect.gen(function* () {
+							yield* quiet;
 							const at = Date.parse(now);
 							for (const entry of yield* runs.crons) {
 								const cron = yield* Effect.orDie(
@@ -2114,7 +2104,27 @@ export class TestWorkspace extends Context.Service<TestWorkspace, Kit>()(
 								if (slot.getTime() > cronsThrough) yield* runs.fire(entry.id, slot.toISOString());
 							}
 							cronsThrough = at;
-							yield* runs.tick;
+							// chained work a run makes due at this instant runs in the same call: drain until nothing is due
+							for (let pass = 1; ; pass++) {
+								yield* runs.tick;
+								yield* quiet;
+								const [due] = yield* Effect.andThen(
+									flush,
+									inner.read([
+										{
+											text: `SELECT 1 FROM sys_run WHERE state = 'queued' AND due_at <= $1::timestamptz LIMIT 1`,
+											params: [now]
+										}
+									])
+								);
+								if ((due?.rows.length ?? 0) === 0) return;
+								if (pass === DRAIN_PASSES)
+									return yield* Effect.die(
+										new KitInvalid({
+											message: `runDue: work is still due at ${now} after ${DRAIN_PASSES} passes (a run requeues itself at the current instant)`
+										})
+									);
+							}
 						}).pipe(Effect.provide(hostContext)),
 					crash: (runId) =>
 						Effect.gen(function* () {
@@ -2129,7 +2139,9 @@ export class TestWorkspace extends Context.Service<TestWorkspace, Kit>()(
 							yield* runs.boot;
 						}).pipe(Effect.provide(hostContext)),
 					settled: () =>
-						Effect.andThen(envoys.settled, host.settled).pipe(Effect.provide(hostContext)),
+						Effect.andThen(quiet, Effect.andThen(envoys.settled, host.settled)).pipe(
+							Effect.provide(hostContext)
+						),
 					receive: (instance, messages, opts = {}) =>
 						Effect.gen(function* () {
 							yield* integration.receive(instance, {

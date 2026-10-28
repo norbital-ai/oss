@@ -45,7 +45,7 @@ export type SessionResponse = S.SessionResponse;
 /** A host channel operation (§7.1: a host's private socket, or bolt-server's MAC-signed `POST /__bolt/ops`). */
 export type HostOperation = S.HostOperation;
 export type HostOperationResult = S.HostOperationResult;
-/** C9: `.norbital/artifact/artifact.json`, what a host activates. */
+/** C9: `.norbital/bundle/artifact.json`, what a host activates. */
 export type ArtifactDescriptor = ArtifactJson;
 /** The engine contract an artifact was built against (sha256 of the engine's name and version, hex). */
 export type ContractDigest = ArtifactJson['contract'];

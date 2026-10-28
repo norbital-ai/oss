@@ -13,7 +13,7 @@ is ignored. Every member is optional. Availability supplies no server authority.
 | `platform`      | `'ios' \| 'android' \| 'web' \| 'desktop'`                                                   | —                                 |
 | `pinned`        | `true`                                                                                       | the workspace switcher shows      |
 | `geolocation`   | `{ source, api: Geolocation, background? }`                                                  | `navigator.geolocation`           |
-| `notifications` | `{ status(), request(), openSettings(), show({ id, title, body, path }), onOpen(listener) }` | the `Notification` API            |
+| `notifications` | `{ status(), request(), openSettings(), show({ id, title, body, path }), onOpen(listener) }` | the browser's Notification API    |
 | `camera`        | `{ status(), request(), openSettings() }`                                                    | `getUserMedia`                    |
 | `push`          | `{ register(): Promise<{ kind: 'web' \| 'apns', endpoint, keys }> }`                         | web push (service worker + VAPID) |
 | `notices`       | `{ start({ url }), stop() }`                                                                 | —                                 |

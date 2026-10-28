@@ -1,5 +1,5 @@
-// `@norbital-ai/providers`: the providers behind Bolt's driver kinds and host ports. Bolt and workspaces name only
-// drivers and ports; a host (bolt-server's `drivers()`, which every host uses) registers these and injects them.
+// `@norbital-ai/providers`: Bolt's built-in integration drivers. Bolt and workspaces name only drivers; a host
+// (bolt-server's `drivers()`, which every host uses) registers these. Facility adapters belong to the host that writes them.
 import type { ProviderDef } from './abi.ts';
 export { toDrivers } from './abi.ts';
 import { baileys } from './baileys/index.ts';
@@ -24,25 +24,10 @@ export function defaultProviders(): readonly ProviderDef[] {
 		googleCalendar()
 	];
 }
-export { twilioMessages, type TwilioAccount } from './twilio/messages.ts';
-export { twilioVerify } from './twilio/verify.ts';
-export { resendMail, type ResendMail } from './resend/mail.ts';
-export {
-	SINCH_REGIONS,
-	sinchMail,
-	sinchSms,
-	sinchVerification,
-	type SinchRegion
-} from './sinch/index.ts';
-export { transactional, type TransactionalConfig, type TransactionalDef } from './transactional.ts';
-// host AI capabilities (`ctx.ai.transcribe`, `ctx.ai.speak`)
-export {
-	openRouterSpeech,
-	type OpenRouterSpeechConfig,
-	type SpeechDef,
-	type SpeechServices
-} from './openrouter/speech.ts';
-export { OAuthRefused, SpeechFailure } from './errors.ts';
+export { OAuthRefused, ProviderRefused, ProviderUnavailable } from './errors.ts';
+// a host's own HTTP adapters answer and fail as these drivers do
+export { decodeMessage, Email, invalid, providerJson, strings, Text } from './transport.ts';
+export { twilio, type TwilioAccount } from './twilio/whatsapp.ts';
 // the shared OAuth grant (PKCE S256, a `state` that lives `STATE_MS`) a host's own oauth driver signs in with (bolt-server's `http`)
 export {
 	attempt,
@@ -54,4 +39,3 @@ export {
 	type OAuthApp
 } from './oauth.ts';
 export { same, field, hostCall, withFetch } from './util.ts';
-export type { TransportDef, PhoneVerifierDef } from './transport.ts';

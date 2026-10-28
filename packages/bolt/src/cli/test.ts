@@ -1,13 +1,14 @@
 /// <reference types="node" />
-import { Effect, FileSystem, Schema } from 'effect';
+import { Effect, Schema } from 'effect';
 import { realpathSync } from 'node:fs';
-import { availableParallelism, totalmem } from 'node:os';
+import { availableParallelism } from 'node:os';
 import { createRequire } from 'node:module';
 import { dirname, extname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import type { Plugin, PluginOption, UserConfig } from 'vite';
 import type {} from 'vitest/config';
 import { EDITOR_SINGLETONS } from '../compiler/editor-dependencies.ts';
+import { lintTests } from '../test/lint.ts';
 import { AuthorErrors, ToolFailure } from './build.ts';
 
 /** This copy of the kit (src or build), so `/test`, `/test/browser` and pages' `$bolt` share one shell and one page SDK. */
@@ -17,23 +18,8 @@ const own = (path: string) =>
 		'..',
 		`${path}${extname(fileURLToPath(import.meta.url))}`
 	);
-// half the cores: a worker runs its isolates, PGlite and Vite transforms on more than one thread, and the CPU budgets
-// suites assert are measured per thread, so an oversubscribed machine (or one spilling onto slower cores) fails them.
-// A worker holds up to about 2 GiB (a large template's PGlite plus its isolates), so memory bounds the pool too.
-const positiveInteger = (name: string, fallback: number): number => {
-	const value = Number(process.env[name] ?? fallback);
-	if (!Number.isSafeInteger(value) || value < 1)
-		throw new Error(`${name} must be a positive integer`);
-	return value;
-};
-const templateWorkers = positiveInteger(
-	'BOLT_TEST_WORKERS',
-	Math.max(1, Math.min(Math.floor(availableParallelism() / 2), Math.floor(totalmem() / 2 ** 31)))
-);
-export const workers = Math.min(
-	templateWorkers,
-	positiveInteger('VITEST_MAX_WORKERS', templateWorkers)
-);
+/** One worker per core but one: the realm runner passes its share with `--maxWorkers`. */
+export const workers = Math.max(1, availableParallelism() - 1);
 
 type Runner = Pick<typeof import('vitest/node'), 'parseCLI' | 'startVitest'>;
 const Runner = Schema.declare<Runner>(
@@ -67,7 +53,7 @@ const load = Effect.fnUntraced(function* (from: string) {
 	return { runner, svelte };
 });
 /** The kit's plugins for one Vite server: Svelte keeps per-server state, so each project gets its own. */
-const plugins = (svelte: Svelte, options: { runCache: string }): Plugin[] => {
+const plugins = (svelte: Svelte): Plugin[] => {
 	const theirs = (config: UserConfig) => {
 		const found = (plugin: PluginOption): boolean =>
 			Array.isArray(plugin)
@@ -96,21 +82,21 @@ const plugins = (svelte: Svelte, options: { runCache: string }): Plugin[] => {
 		name: 'bolt:test',
 		config(config) {
 			const setup = (config.test ??= {});
-			// a hung suite fails fast: the slowest legitimate case is well under a minute
-			setup.testTimeout ??= 60_000;
-			setup.hookTimeout ??= 30_000;
-			// `BOLT_TEST_BAIL=1` stops at the first failure (and at the first file that cannot be collected)
-			if (process.env['BOLT_TEST_BAIL'] === '1') setup.bail ??= 1;
-			// files run in parallel, each in its own process with its own workspace and database
-			setup.fileParallelism ??= true;
+			// the realm's rules for every suite: forks (isolated-vm aborts on a torn-down worker thread), no per-file isolation, a minute's hang guard,
+			// and every failure reported
+			setup.testTimeout = 60_000;
+			setup.hookTimeout = 60_000;
+			delete setup.bail;
+			// real-browser tests live only in Bolt's own suite
+			delete setup.browser;
+			setup.fileParallelism = true;
+			// the module cache is the workspace's own, never a parent directory's: suites run side by side
+			setup.fsModuleCachePath ??= join(process.cwd(), 'node_modules', '.vitest-cache');
+			// a template with no mechanisms of its own (blank) has nothing to prove
+			setup.passWithNoTests = true;
 			setup.maxWorkers ??= workers;
-			setup.env = { ...setup.env, BOLT_TEST_RUN_CACHE: options.runCache };
-			const node = setup.browser?.enabled !== true;
-			if (node) {
-				setup.pool ??= 'forks';
-				if (setup.pool === 'forks')
-					setup.execArgv = [...new Set([...(setup.execArgv ?? []), '--no-node-snapshot'])];
-			}
+			setup.pool = 'forks';
+			setup.isolate = false;
 			setup.setupFiles = [...new Set([own('test/dom'), ...[setup.setupFiles ?? []].flat()])];
 			((config.server ??= {}).fs ??= {}).strict ??= false;
 			if (setup.projects !== undefined)
@@ -150,9 +136,8 @@ const plugins = (svelte: Svelte, options: { runCache: string }): Plugin[] => {
 /**
  * `bolt test`: the workspace's vitest, in process, with the kit preconfigured: the type setup written, svelte compiled,
  * `@norbital-ai/bolt/test(/browser)` and `$bolt` on the kit's copy, DOM environments resolving the browser builds, and
- * the kit's timeouts. The workspace's own vitest config still loads, and wins where it sets a value. Chromium is Vitest
- * browser mode (`@vitest/browser-playwright`, `page` from `vitest/browser`) — https://vitest.dev/guide/browser/ — not
- * a kit launcher.
+ * the realm's pool, hang guard and test lint. The workspace's own vitest config still loads, and wins
+ * elsewhere. No real browser: those tests live only in Bolt's own suite.
  */
 export const testWorkspace = Effect.fn('bolt.test')(function* (
 	dir: string,
@@ -165,16 +150,12 @@ export const testWorkspace = Effect.fn('bolt.test')(function* (
 	const { runner, svelte } = yield* load(join(root, 'package.json'));
 	process.chdir(root);
 	const { filter, options } = runner.parseCLI(['vitest', 'run', ...args]);
-	// one directory per run: the test files' processes share each workspace's check through it (`runChecked` in
-	// test/effect)
-	const fs = yield* FileSystem.FileSystem;
-	const runCache = yield* fs
-		.makeTempDirectory({ prefix: 'bolt-test-run-' })
-		.pipe(
-			Effect.mapError(
-				(cause) => new ToolFailure({ message: 'bolt test: no temporary directory', cause })
-			)
-		);
+	// the test lint first, but the suite still runs: every failure is reported
+	const lint = yield* lintTests(root, { template: true }).pipe(
+		Effect.mapError(
+			(cause) => new ToolFailure({ message: 'bolt test: the test lint failed.', cause })
+		)
+	);
 	yield* Effect.tryPromise({
 		try: () =>
 			runner.startVitest(
@@ -182,15 +163,18 @@ export const testWorkspace = Effect.fn('bolt.test')(function* (
 				filter,
 				{ ...options, root },
 				{
-					plugins: plugins(svelte, { runCache })
+					plugins: plugins(svelte)
 				}
 			),
 		catch: (cause) => new ToolFailure({ message: 'The workspace test runner failed.', cause })
-	}).pipe(
-		Effect.ensuring(fs.remove(runCache, { recursive: true, force: true }).pipe(Effect.ignore))
-	);
+	});
 	const code = Number(process.exitCode ?? 0);
 	process.exitCode = 0;
+	if (lint.length > 0)
+		return yield* new AuthorErrors({
+			message: `The workspace tests break the test lint:\n${lint.map((line) => `  ${line}`).join('\n')}`,
+			errors: []
+		});
 	if (code === 0) return;
 	return yield* Effect.fail(
 		code === 1

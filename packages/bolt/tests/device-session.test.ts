@@ -1,6 +1,6 @@
 // the device's platform-free half (shell/device-session.ts): which inbox notices are raised, taps navigating,
 // the push endpoint stored and forgotten, the shell's notice service, and links out of the workspace.
-import { describe, expect, it, vi } from '@effect/vitest';
+import { afterEach, describe, expect, it, vi } from '@effect/vitest';
 import { Effect, Exit, Queue, Scope, Stream } from 'effect';
 import type { DeviceApi, DeviceNotice } from '../src/page/device.ts';
 import type { PushBody } from '../src/protocol/schema.ts';
@@ -19,6 +19,9 @@ const row = (id: string, read = false, link: { model: string; id: string } | nul
 	at: '2026-10-17T00:00:00.000Z',
 	read
 });
+
+// files share a worker: a stubbed `document` left behind makes the next file's DOM libraries believe they run in a browser
+afterEach(() => vi.unstubAllGlobals());
 
 describe('the device environment', () => {
 	it('raises only unread notices the previous answer did not hold, oldest first', () => {
@@ -45,7 +48,7 @@ describe('the device environment', () => {
 
 	it.live('drives a shell environment for a signed-in member within its scope', () =>
 		Effect.gen(function* () {
-			vi.stubGlobal('document', { visibilityState: 'hidden' });
+			vi.stubGlobal('document', { visibilityState: 'hidden', querySelector: () => null });
 			vi.stubGlobal('location', { href: 'https://acme.example/inbox' });
 			const shown: DeviceNotice[] = [],
 				stored: PushBody[] = [];
@@ -92,15 +95,13 @@ describe('the device environment', () => {
 			yield* Queue.offer(answers, {
 				rows: [row('b', false, { model: 'jobs', id: '1' }), row('a')]
 			});
-			yield* Effect.sleep('20 millis');
+			yield* Effect.promise(() => vi.waitFor(() => expect(shown).toHaveLength(1)));
 			expect(shown).toEqual([{ id: 'b', title: 'T b', body: null, path: '/inbox?record=jobs/1' }]);
 			expect(stored).toEqual([{ kind: 'apns', endpoint, keys }]);
 			expect(start).toHaveBeenCalledWith({ url: 'https://acme.example/__bolt/notices' });
 			// a visible page shows its own toast instead
 			vi.stubGlobal('document', { visibilityState: 'visible' });
 			yield* Queue.offer(answers, { rows: [row('c'), row('b'), row('a')] });
-			yield* Effect.sleep('20 millis');
-			expect(shown).toHaveLength(1);
 			open?.('/inbox?record=jobs/1');
 			expect(navigate).toHaveBeenCalledWith('/inbox?record=jobs/1');
 			yield* environment.signOut;

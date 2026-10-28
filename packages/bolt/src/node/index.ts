@@ -4,6 +4,14 @@ export { bootCell, currentUnit, type Cell, type CellOptions } from './cell-host.
 export { nodePorts, type NodePorts, type NodePortsOptions } from './ports.ts';
 export { cronClock } from './cron-clock.ts';
 export {
+	call,
+	hostFileOf,
+	loadHost,
+	serveRelease,
+	type Generation,
+	type ServeOptions
+} from './host.ts';
+export {
 	guestIsolates,
 	type GuestIsolateCounts,
 	type GuestIsolatesOptions,
@@ -33,6 +41,7 @@ export {
 export { downloadMedia, storeMedia, type DownloadOptions, type DownloadSink } from './download.ts';
 export { tenantDbPort } from './db/port.ts';
 export { PgliteDb, Pristine, type PgliteClient, type PgliteSource } from './db/pglite.ts';
+export { moduleHash } from './module-hash.ts';
 export { PostgresDb, type PgClient, type PgPool } from './db/postgres.ts';
 export {
 	connectPublic,
@@ -50,6 +59,7 @@ export {
 } from './net.ts';
 
 export { prepareMigrations } from '../compiler/migrations.ts';
+export { HOST_FILE } from '../compiler/artifact/index.ts';
 export {
 	checkWorkspace,
 	filesystem,

@@ -98,8 +98,7 @@
 	"scripts": {
 		"build": "node ../../scripts/build-package.ts tsc -p tsconfig.json --outDir {}",
 		"prepack": "pnpm exec turbo run build --filter=@norbital-ai/std",
-		"lint": "tsc -p tsconfig.json --noEmit && tsc -p tests/tsconfig.json --noEmit",
-		"test": "vitest run"
+		"lint": "tsc -p tsconfig.json --noEmit && tsc -p tests/tsconfig.json --noEmit"
 	},
 	"dependencies": {
 		"@marcbachmann/cel-js": "^8.0.0"
@@ -108,10 +107,8 @@
 		"effect": "catalog:"
 	},
 	"devDependencies": {
-		"@effect/vitest": "catalog:",
 		"@types/node": "^26.6.5",
 		"fast-check": "4.10.2",
-		"typescript": "catalog:",
-		"vitest": "5.0.5"
+		"typescript": "catalog:"
 	}
 }

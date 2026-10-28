@@ -149,6 +149,64 @@ describe('reads', () => {
 			);
 		})
 	);
+	/** A client over one hand-driven stream; `fetch` answers every request. */
+	const streamed = (fetch: typeof globalThis.fetch) =>
+		Effect.gen(function* () {
+			let source: EventSourceLike | undefined;
+			const opened = yield* Deferred.make<void>();
+			const bolt = yield* createBolt({
+				actor: null,
+				locale: 'en',
+				base: 'https://workspace.test',
+				fetch,
+				openStream: () => {
+					let handler: EventSourceLike['onmessage'] = null;
+					source = {
+						get onmessage() {
+							return handler;
+						},
+						set onmessage(next) {
+							handler = next;
+							if (next !== null) Deferred.doneUnsafe(opened, Effect.void);
+						},
+						onerror: null,
+						close() {}
+					};
+					return source;
+				}
+			});
+			const fiber = yield* Stream.runDrain(bolt.observe(bolt.query({ jobs: {} }))).pipe(
+				Effect.forkScoped
+			);
+			yield* Deferred.await(opened);
+			const push = (frame: Frame) =>
+				source?.onmessage?.(new MessageEvent('message', { data: JSON.stringify(frame) }));
+			return { bolt, fiber, push };
+		});
+	it.effect('a failed live registration fails the view instead of waiting', () =>
+		Effect.gen(function* () {
+			const { fiber, push } = yield* streamed(async () => {
+				throw new TypeError('offline');
+			});
+			push({ t: 'hello', conn: 'c1', v: 0 });
+			const exit = yield* Fiber.await(fiber);
+			expect(Exit.isFailure(exit) && Cause.squash(exit.cause)).toMatchObject({
+				_tag: 'ReadFailed',
+				code: 'transport'
+			});
+		})
+	);
+	it.effect('a release closes the stream and the client says so (the shell reloads on it)', () =>
+		Effect.gen(function* () {
+			const { bolt, push } = yield* streamed(async () => Response.json({ errors: [] }));
+			push({ t: 'hello', conn: 'c1', v: 0 });
+			push({ t: 'close', release: 'r2' });
+			yield* bolt.sync.pipe(
+				Stream.takeUntil((state) => state === 'closed'),
+				Stream.runDrain
+			);
+		})
+	);
 });
 
 describe('document conversion', () => {

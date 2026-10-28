@@ -4,7 +4,7 @@ import webpush from 'web-push';
 import { Clock, Effect, Option, Schema } from 'effect';
 import { Port, Transport } from '@norbital-ai/bolt/engine';
 import type { PushMessage, Rows, Sql } from '@norbital-ai/bolt/engine';
-import type { Config } from './config.ts';
+import type { HostSettings } from './host.ts';
 type Db<E> = { readonly write: (statement: Sql) => Effect.Effect<Rows, E> };
 const Subscription = Schema.Struct({
 	endpoint: Schema.String,
@@ -115,7 +115,7 @@ const TOKEN_MS = 50 * 60_000;
  */
 export function apns<E>(
 	db: Db<E>,
-	keys: Config['apns'],
+	keys: HostSettings['apns'],
 	request: ApnsRequest = http2Request
 ): Transport['Service'] {
 	const tokens = new Map<string, { readonly token: string; readonly at: number }>();

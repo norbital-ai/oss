@@ -1,5 +1,5 @@
-// SHA-256 in plain JavaScript: a cell and a browser have no `node:crypto`, and what the store hashes (a schema's
-// fingerprint, a constraint's name, a migration's checksum) is small. Canonical JSON is what it hashes.
+// SHA-256: Node's native digest where the process has one (a build hashes whole release trees), else plain JavaScript,
+// since a cell and a browser have no `node:crypto`. Canonical JSON is what the store hashes.
 const utf8 = new TextEncoder();
 const bytesOf = (data: Uint8Array | string): Uint8Array =>
 	typeof data === 'string' ? utf8.encode(data) : data;
@@ -38,7 +38,7 @@ const K256 = new Uint32Array([
 	0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2
 ]);
 
-export const sha256 = (data: Uint8Array | string): Uint8Array => {
+const scalar = (data: Uint8Array | string): Uint8Array => {
 	const h = new Uint32Array([
 			0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19
 		]),
@@ -87,6 +87,12 @@ export const sha256 = (data: Uint8Array | string): Uint8Array => {
 	});
 	return bigEndian(h);
 };
+
+const native = globalThis.process?.getBuiltinModule?.('node:crypto');
+export const sha256 = (data: Uint8Array | string): Uint8Array =>
+	native === undefined
+		? scalar(data)
+		: new Uint8Array(native.createHash('sha256').update(data).digest());
 
 const HEX = Array.from({ length: 256 }, (_, i) => i.toString(16).padStart(2, '0'));
 export const toHex = (bytes: Uint8Array): string => {

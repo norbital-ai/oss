@@ -71,8 +71,8 @@ export function wechat(): ProviderDef {
 				}
 			],
 			fields: [
-				{ name: 'appId', label: 'AppID', hint: 'wx…' },
-				{ name: 'appSecret', label: 'AppSecret', secret: true },
+				{ name: 'appId', label: { en: 'AppID', zh: 'AppID' }, hint: { en: 'wx…', zh: 'wx…' } },
+				{ name: 'appSecret', label: { en: 'AppSecret', zh: 'AppSecret' }, secret: true },
 				{ name: 'token', label: { en: 'Token', zh: '令牌（Token）' }, secret: true },
 				{
 					name: 'encodingAesKey',

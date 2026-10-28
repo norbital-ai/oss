@@ -9,25 +9,9 @@ import { mcpSessions } from '../src/engine/agent/mcp.ts';
 import type { AgentEngine } from '../src/engine/agent/index.ts';
 import { TenantDb } from '../src/engine/db/tenant-db.ts';
 import { DbError } from '../src/engine/errors.ts';
-import { Docs, Logs, Mcp } from '../src/engine/ports.ts';
+import { Docs, Mcp } from '../src/engine/ports.ts';
 import { docsPort } from '../src/node/docs.ts';
-
-it("the reference namespaces are §7.3's, and every symbol they export has a summary", () => {
-	const reference = docs
-		.index()
-		.namespaces.filter((n) => n.reference)
-		.map((n) => n.namespace);
-	expect(reference.filter((n) => !n.startsWith('std/'))).toEqual([
-		'bolt',
-		'bolt/page',
-		'bolt/test',
-		'ui',
-		'ui/capture',
-		'ui/layout'
-	]);
-	expect(reference.filter((n) => n.startsWith('std/')).length).toBeGreaterThan(10);
-	expect(docs.index().missing).toEqual([]);
-});
+import { off } from '../src/facilities/index.ts';
 
 it('one namespace per public entry, with its module and the entry summary', () => {
 	const names = docs.index().namespaces.map((n) => n.namespace);
@@ -120,6 +104,7 @@ const unexpectedSync = (): never => {
 	throw new Error('The docs tool called an unrelated capability.');
 };
 const manifest: AgentEngine['manifest'] = {
+	needs: [],
 	workspace: { tz: 'UTC', locale: 'en' },
 	models: {},
 	exposures: {},
@@ -213,8 +198,8 @@ const docsTool = (external = false) =>
 			child: false,
 			skills: {},
 			agents: [],
-			mcp: yield* mcpSessions(manifest).pipe(Effect.provide(Mcp.unavailable)),
-			logs: yield* Logs,
+			mcp: yield* mcpSessions(manifest).pipe(Effect.provide(Mcp.fromAbi(off))),
+			logs: { write: () => Effect.void, query: () => Effect.succeed([]) },
 			mcpTools: [],
 			docs: yield* Docs.pipe(Effect.provide(Docs.fromAbi(docsPort()))),
 			hostTools: [],
@@ -253,29 +238,35 @@ it.effect(
 			if (tool === undefined) return yield* Effect.die('Staff has no docs tool.');
 			const list = yield* tool.run({}, 'c1');
 			expect(list).toMatchObject({
-				result: expect.arrayContaining([
-					{
-						namespace: 'bolt',
-						import: '@norbital-ai/bolt',
-						summary: expect.any(String),
-						symbols: expect.any(Number)
-					},
-					{
-						namespace: 'ui',
-						import: '@norbital-ai/ui',
-						summary: expect.any(String),
-						symbols: expect.any(Number)
-					},
-					{
-						namespace: 'std/date',
-						import: '@norbital-ai/std/date',
-						summary: expect.any(String),
-						symbols: expect.any(Number)
-					}
-				])
+				result: {
+					namespaces: expect.arrayContaining([
+						{
+							namespace: 'bolt',
+							import: '@norbital-ai/bolt',
+							summary: expect.any(String),
+							symbols: expect.any(Number)
+						},
+						{
+							namespace: 'ui',
+							import: '@norbital-ai/ui',
+							summary: expect.any(String),
+							symbols: expect.any(Number)
+						},
+						{
+							namespace: 'std/date',
+							import: '@norbital-ai/std/date',
+							summary: expect.any(String),
+							symbols: expect.any(Number)
+						}
+					])
+				}
 			});
 			expect(list).not.toMatchObject({
-				result: expect.arrayContaining([expect.objectContaining({ namespace: 'bolt/engine' })])
+				result: {
+					namespaces: expect.arrayContaining([
+						expect.objectContaining({ namespace: 'bolt/engine' })
+					])
+				}
 			});
 			expect(yield* tool.run({ symbol: 'model', namespace: 'bolt' }, 'c2')).toMatchObject({
 				result: [{ import: '@norbital-ai/bolt', name: 'model' }]

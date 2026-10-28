@@ -255,7 +255,7 @@ export class Approvals extends Context.Service<Approvals, ApprovalsShape>()('bol
 // ── decisions (E6) ──
 export type DecisionUse = 'triage' | 'filter' | 'author';
 export type DecisionsShape = {
-	/** One `sys_1` call: one `decision.made` event and one metering report (§5.12). */
+	/** One `sys_1` call: one `decision.made` event (§5.12). */
 	readonly decide: (
 		use: DecisionUse,
 		request: DecisionRequest

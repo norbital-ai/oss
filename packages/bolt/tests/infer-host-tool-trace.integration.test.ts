@@ -9,7 +9,7 @@ import { Port } from '../src/engine/port.ts';
 import { uuidv7 } from '../src/protocol/wire.ts';
 import { Ai } from '../src/engine/ports.ts';
 import { TestWorkspace, respondSystem1, type Kit } from '../src/test/index.ts';
-import { program } from './support/guest-fixture.ts';
+import { program } from '../src/test/guest.ts';
 import { actReply, qReply, routeFixture, type FixtureRoute } from './support/route-fixture.ts';
 
 const manifest = {
@@ -84,7 +84,8 @@ const manifest = {
 	mcp: {},
 	apps: {},
 	customFields: {},
-	agent: { skills: {} }
+	agent: { skills: {} },
+	needs: []
 } satisfies EngineManifest;
 const guest = program(`import { Effect, Result } from 'effect';
 const output = { kind: 'object', fields: { matched: { kind: 'bool' }, po: { kind: 'text' } } };

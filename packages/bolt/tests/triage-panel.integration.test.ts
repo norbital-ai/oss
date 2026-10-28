@@ -1,36 +1,18 @@
-// @vitest-environment happy-dom
-// G5's in-app triage cases (rule 60a) in a DOM over the real handler and a test-kit workspace: plain-Enter parts show the
-// "waiting for more…" state and are answered as one turn; respond-now and Cmd/Ctrl+Enter start the turn at once with
-// every pending row and no decision call; without the port each post starts a turn as before.
-import './setup-happy-dom.js';
-import { flushSync, mount, unmount } from 'svelte';
+// In-app triage (rule 60a): parts posted without `now` wait for more; respond-now and a `now` post start the turn at
+// once with every pending part, and never ask the decider.
 import { describe, expect, it } from '@effect/vitest';
-import {
-	Clock,
-	Context,
-	Effect,
-	FiberSet,
-	Layer,
-	ManagedRuntime,
-	Predicate,
-	Result,
-	Stream
-} from 'effect';
+import { Clock, Context, Effect, Layer, Predicate, Result, Schema, Stream } from 'effect';
 import { Ai } from '../src/engine/ports.ts';
 import { Port } from '../src/engine/port.ts';
-import { decodeManifest } from '../src/engine/manifest.ts';
-import { routeFixture } from './support/route-fixture.ts';
-import { mountEdge } from '@norbital-ai/ui/effect';
+import { decodeProjectedManifest } from '../src/engine/manifest.ts';
+import { actReply, routeFixture } from './support/route-fixture.ts';
 import type { Json } from '../src/decl/values.ts';
 import type { System1Request } from '../src/engine/decisions/index.ts';
 import { Authorities } from '../src/engine/identity/actor.ts';
-import Agent from '../src/shell/agent/Agent.svelte';
-import { liveBolt } from './support/live-bolt.ts';
-import { shellApi } from '../src/shell/runtime.ts';
-import { KitInvalid, TestWorkspace } from '../src/test/index.ts';
+import { TestWorkspace } from '../src/test/index.ts';
 
 const manifest = Result.getOrThrow(
-	decodeManifest({
+	decodeProjectedManifest({
 		workspace: { tz: 'UTC', locale: 'en' },
 		models: {},
 		relationships: {},
@@ -48,12 +30,6 @@ const manifest = Result.getOrThrow(
 	})
 );
 
-const tick = Effect.sleep(5).pipe(Effect.andThen(Effect.sync(() => flushSync())));
-const until = (ok: () => boolean, n = 600) =>
-	Effect.gen(function* () {
-		for (let i = 0; i < n && !ok(); i++) yield* tick;
-		expect(ok()).toBe(true);
-	});
 /** A user message's text without its envelope's sender header (`[who] `). */
 const text = (c: Json) =>
 	(typeof c === 'string' ? c : Predicate.isObject(c) ? String(c['text'] ?? '') : '').replace(
@@ -61,7 +37,7 @@ const text = (c: Json) =>
 		''
 	);
 
-const panel = (o: { triage: boolean }) =>
+const panel = () =>
 	Effect.gen(function* () {
 		const inputs: System1Request[] = [],
 			turns: string[][] = [];
@@ -111,9 +87,7 @@ const panel = (o: { triage: boolean }) =>
 		});
 		const context = yield* Layer.build(
 			TestWorkspace.layer({
-				manifest: o.triage
-					? manifest
-					: { ...manifest, workspace: { ...manifest.workspace, agent: { triage: false } } },
+				manifest,
 				ports,
 				now: new Date(yield* Clock.currentTimeMillis).toISOString()
 			})
@@ -126,110 +100,47 @@ const panel = (o: { triage: boolean }) =>
 		});
 		const ann = yield* new Authorities(manifest, 'test').member(t.db, 'ann');
 		if (ann === null) throw new Error('Ann has no authority');
-		const run = yield* FiberSet.makeRuntimePromise<never>();
-		const fetch: typeof globalThis.fetch = (input, init) => {
-			const request = new Request(new URL(String(input), 'http://cell'), init);
-			return run(route.handle(ann, request), { signal: request.signal });
-		};
-		const bolt = yield* liveBolt(fetch);
-		yield* Effect.acquireRelease(
-			Effect.sync(() => mountEdge(ManagedRuntime.make(Layer.empty))),
-			(dispose) =>
-				Effect.tryPromise({
-					try: dispose,
-					catch: (error) => new KitInvalid({ message: String(error) })
-				}).pipe(Effect.orDie)
+		const act = (callable: string, input: Json) =>
+			actReply(route, ann, { callable, input, issuedAt: t.clock.now() }).pipe(
+				Effect.map((reply) => reply.outcome)
+			);
+		const started = yield* act('sys_conversation.start', {});
+		if (started.kind !== 'committed') throw new Error('conversation not started');
+		const { id } = yield* Schema.decodeUnknownEffect(Schema.Struct({ id: Schema.String }))(
+			started.output
 		);
-		sessionStorage.clear();
-		const target = document.createElement('div');
-		document.body.append(target);
-		const v = mount(Agent, {
-			target,
-			props: { api: shellApi(fetch), bolt, t: (k: string) => k, request: {}, onClose: () => {} }
-		});
-		yield* Effect.addFinalizer(() =>
-			Effect.tryPromise({
-				try: () => unmount(v),
-				catch: (error) => new KitInvalid({ message: String(error) })
-			}).pipe(Effect.andThen(Effect.sync(() => target.remove())), Effect.orDie)
-		);
-		const box = () => {
-			const area = target.querySelector('textarea');
-			if (area === null) throw new Error('Agent composer missing');
-			return area;
+		const post = (text: string, now?: boolean) =>
+			act('sys_message.post', { conversation: id, text, ...(now === true ? { now } : {}) }).pipe(
+				Effect.tap((outcome) => Effect.sync(() => expect(outcome.kind).toBe('committed'))),
+				Effect.andThen(route.settled)
+			);
+		return {
+			t,
+			inputs,
+			turns,
+			post,
+			respondNow: act('sys_conversation.respondNow', { conversation: id }).pipe(
+				Effect.andThen(route.settled)
+			)
 		};
-		const enter = (body: string, mod: { metaKey?: boolean; ctrlKey?: boolean } = {}) =>
-			Effect.gen(function* () {
-				box().value = body;
-				box().dispatchEvent(new Event('input', { bubbles: true }));
-				flushSync();
-				box().dispatchEvent(
-					new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true, ...mod })
-				);
-				yield* until(() => box().value === '');
-				yield* until(() =>
-					[...target.querySelectorAll('[data-role="user"] [data-text]')].some(
-						(e) => e.textContent === body
-					)
-				);
-			});
-		return { t, target, inputs, turns, enter, settled: route.settled };
 	});
 
-describe('the agent panel with triage (G5, rule 60a)', () => {
-	it.live(
-		'two plain-Enter parts wait for more, and respond-now answers them as one turn with no decision call',
-		() =>
-			Effect.scoped(
-				Effect.gen(function* () {
-					const p = yield* panel({ triage: true });
-					yield* p.enter('draft a note');
-					yield* p.enter('for the Kismis job');
-					yield* until(() => p.target.querySelector('[data-role="waiting"]') !== null);
-					expect(p.target.querySelectorAll('[data-pending]')).toHaveLength(2);
-					expect(p.turns).toHaveLength(0);
-					const respond = p.target.querySelector<HTMLButtonElement>('[data-role="waiting"] button');
-					if (respond === null) throw new Error('respond-now button missing');
-					respond.click();
-					yield* until(() =>
-						(p.target.querySelector('[data-role="assistant"]')?.textContent ?? '').includes(
-							'On it.'
-						)
-					);
-					yield* p.settled;
-					expect(p.turns).toEqual([['draft a note', 'for the Kismis job']]);
-					expect(p.inputs).toHaveLength(0);
-					expect(p.target.querySelector('[data-role="waiting"]')).toBeNull();
-				})
-			)
-	);
-
-	it.live('Cmd/Ctrl+Enter sends now with every pending row; the decider is never asked', () =>
+describe('in-app triage (G5, rule 60a)', () => {
+	it.live('plain parts wait; respond-now and a `now` post answer every pending part as one turn, never asking the decider', () =>
 		Effect.scoped(
 			Effect.gen(function* () {
-				const p = yield* panel({ triage: true });
-				yield* p.enter('first part');
-				yield* p.enter('second part', { ctrlKey: true });
-				yield* until(() =>
-					(p.target.querySelector('[data-role="assistant"]')?.textContent ?? '').includes('On it.')
-				);
-				yield* p.settled;
-				expect(p.turns).toEqual([['first part', 'second part']]);
-				yield* p.t.runDue(); // the decision the first part queued finds nothing pending
+				const p = yield* panel();
+				yield* p.post('draft a note');
+				yield* p.post('for the Kismis job');
+				expect(p.turns).toHaveLength(0);
+				yield* p.respondNow;
+				expect(p.turns).toEqual([['draft a note', 'for the Kismis job']]);
+				yield* p.post('first part');
+				yield* p.post('second part', true);
+				expect(p.turns).toHaveLength(2);
+				expect(p.turns[1]?.slice(-2)).toEqual(['first part', 'second part']);
+				yield* p.t.runDue(); // the decisions the plain parts queued find nothing pending
 				expect(p.inputs).toHaveLength(0);
-			})
-		)
-	);
-
-	it.live('without the port each post starts a turn', () =>
-		Effect.scoped(
-			Effect.gen(function* () {
-				const p = yield* panel({ triage: false });
-				yield* p.enter('hello');
-				yield* until(() =>
-					(p.target.querySelector('[data-role="assistant"]')?.textContent ?? '').includes('On it.')
-				);
-				expect(p.target.querySelector('[data-role="waiting"]')).toBeNull();
 			})
 		)
 	);

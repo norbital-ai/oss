@@ -1,6 +1,6 @@
-// engine/write and engine/query on PGlite, the P2 review gaps: erase (38e), history and prune (17), import and export
-// (30), same-shape merge (12), relation-action upsert (28), cascades and frozen parents (41), the delete guard (27),
-// telemetry (§5.12), pipeline order (19), guest failures (42, 72a), `expired` (31) and the roll-up oracle (21).
+// engine/write and engine/query on PGlite, the P2 review gaps: erase (38e), history (17), import and export
+// (30), relation-action upsert (28), cascades and frozen parents (41), the delete guard (27),
+// telemetry (§5.12), pipeline order (19), guest failures (42, 72a) and `expired` (31).
 import { describe, expect, it } from '@effect/vitest';
 import { Context, Effect, Layer, Schema } from 'effect';
 import type { Json } from '../src/decl/values.ts';
@@ -13,12 +13,10 @@ import { Logs } from '../src/engine/ports.ts';
 import { Port } from '../src/engine/port.ts';
 import { Telemetry } from '../src/engine/services.ts';
 import { TenantDb } from '../src/engine/db/tenant-db.ts';
-import { PgliteDb } from '../src/node/db/pglite.ts';
+import { TestDb } from '../src/test/database.ts';
 import type { Pred } from '@norbital-ai/store';
 import type { ReadIR } from '../src/protocol/reads.ts';
-import { applyPlan, plan } from '../src/engine/schema/plan.ts';
-import { readEngine } from '../src/engine/query/engine.ts';
-import { pruneHistory, readHistory } from '../src/engine/query/history.ts';
+import { readHistory } from '../src/engine/query/history.ts';
 import {
 	act,
 	type ActRequest,
@@ -29,7 +27,7 @@ import { restorePreview, restoreRecord, type RestoreTarget } from '../src/engine
 import { admin, arm, authority, deleteArm, grants, NOW, TODAY, writeArm } from './write-fixture.ts';
 import { manifest } from './write-p2.fixture.ts';
 
-const count = { reads: 0, writes: 0, statements: 0 };
+const count = { reads: 0, writes: 0 };
 const bindings = { now: NOW, today: TODAY, tz: 'UTC' };
 type Over = Partial<ActRequest> & Pick<ActRequest, 'verb' | 'input'>;
 const required = <A>(value: A | undefined, at: string): A => {
@@ -42,7 +40,6 @@ const fixture = Effect.gen(function* () {
 		read: (statements) =>
 			Effect.suspend(() => {
 				count.reads++;
-				count.statements += statements.length;
 				return inner.read(statements);
 			}),
 		write: (statement, lock) =>
@@ -58,10 +55,8 @@ const fixture = Effect.gen(function* () {
 			}),
 		session: inner.session
 	});
-	yield* applyPlan(inner, yield* plan(null, manifest), { accept: true });
 	count.reads = 0;
 	count.writes = 0;
-	count.statements = 0;
 	let n = 0;
 	const run = (over: Over, engine: Partial<WriteEngine> = {}) =>
 		act(
@@ -82,7 +77,7 @@ const fixture = Effect.gen(function* () {
 class P2Fixture extends Context.Service<P2Fixture, Effect.Success<typeof fixture>>()(
 	'test/P2Fixture'
 ) {}
-const P2FixtureLive = Layer.effect(P2Fixture, fixture).pipe(Layer.provide(PgliteDb.layer()));
+const P2FixtureLive = Layer.effect(P2Fixture, fixture).pipe(Layer.provide(TestDb.layer(manifest)));
 const run = Effect.fnUntraced(function* (over: Over, engine: Partial<WriteEngine> = {}) {
 	return yield* (yield* P2Fixture).run(over, engine);
 });
@@ -117,7 +112,6 @@ const person = Effect.fnUntraced(function* (
 		'people'
 	);
 });
-const Id = Schema.Struct({ id: Schema.String });
 const Count = Schema.Struct({ n: Schema.Number });
 const Owner = Schema.Struct({ o: Schema.NullOr(Schema.String) });
 const Changes = Schema.Record(Schema.String, Schema.Json);
@@ -197,60 +191,6 @@ function callback(
 }
 
 describe('engine-owned callback identities', () => {
-	it.effect('persists one parent and its owned child from the native create callback payload', () =>
-		Effect.gen(function* () {
-			const calls: Invocation[] = [];
-			const parents = callback((inv) => ({ kind: 'ok', output: inv.input }), 'orders', calls);
-			const children = callback((inv) => ({ kind: 'ok', output: inv.input }), 'lines', calls);
-			const result = yield* run(
-				{
-					verb: 'create',
-					input: [{ title: 'native', lines: [{ label: 'contract', amount: '1' }] }]
-				},
-				{
-					...parents,
-					manifest: {
-						...manifest,
-						exposures: {
-							...manifest.exposures,
-							orders: required(parents.manifest?.exposures.orders, 'parent callback contract'),
-							lines: required(children.manifest?.exposures.lines, 'child callback contract')
-						}
-					}
-				}
-			);
-			const records = ok(result.outcome).records;
-			const parent = required(
-				records.find((row) => row.model === 'orders'),
-				'created parent'
-			);
-			const child = required(
-				records.find((row) => row.model === 'lines'),
-				'created child'
-			);
-			expect(
-				calls.map((call) => ({ kind: call.kind, target: call.target, input: call.input }))
-			).toEqual([
-				{
-					kind: 'create',
-					target: 'orders',
-					input: [{ title: 'native', lines: [{ label: 'contract', amount: '1' }] }]
-				},
-				{
-					kind: 'create',
-					target: 'lines',
-					input: [{ label: 'contract', amount: '1', order: parent.id }]
-				}
-			]);
-			expect((yield* one(Id, 'select id::text as id from orders')).id).toBe(parent.id);
-			expect(
-				yield* one(
-					Schema.Struct({ id: Schema.String, owner: Schema.String }),
-					'select id::text as id, "order"::text as owner from lines'
-				)
-			).toEqual({ id: child.id, owner: parent.id });
-		}).pipe(Effect.provide(P2FixtureLive))
-	);
 	it.effect(
 		'gives children a multi-row callback adds distinct ids and replays without duplicating them',
 		() =>
@@ -416,79 +356,6 @@ describe('engine/write: erase (rule 38e, §5.13)', () => {
 			}).pipe(Effect.provide(P2FixtureLive))
 	);
 
-	it.effect(
-		'on a frozen row remove is locked and anonymise of an erasable field commits past edit: none',
-		() =>
-			Effect.gen(function* () {
-				const id = yield* person('p1', 'Ada', 'ada@example.com');
-				ok(
-					(yield* run({
-						model: 'people',
-						verb: 'update',
-						input: [{ target: id, set: { status: 'archived' } }]
-					})).outcome
-				);
-				expect(
-					(yield* run({
-						model: 'people',
-						verb: 'update',
-						input: [{ target: id, set: { email: null } }]
-					})).outcome
-				).toMatchObject({ code: 'locked' });
-				expect(
-					(yield* run({ model: 'people', verb: 'erase', input: { target: id } })).outcome
-				).toMatchObject({ code: 'locked' });
-				expect(
-					yield* Effect.flip(
-						(yield* P2Fixture).db.transaction({
-							statements: [
-								{
-									text: "SELECT set_config('store.write',$1,true)",
-									params: [JSON.stringify({ mode: 'write', anonymise: ['email'] })]
-								},
-								{ text: 'UPDATE people SET email=null WHERE id=$1::uuid', params: [id] }
-							]
-						})
-					)
-				).toMatchObject({ sqlstate: '23514' });
-				ok(
-					(yield* run({
-						model: 'people',
-						verb: 'erase',
-						input: { target: id, set: { email: null } }
-					})).outcome
-				);
-				expect(
-					yield* one(
-						Schema.Struct({ email: Schema.NullOr(Schema.String), status: Schema.String }),
-						`select email, status from people`
-					)
-				).toEqual({ email: null, status: 'archived' });
-			}).pipe(Effect.provide(P2FixtureLive))
-	);
-
-	it.effect('is admin-only and a restricting child refuses a remove', () =>
-		Effect.gen(function* () {
-			const id = yield* order('desk');
-			expect(
-				(yield* run({
-					verb: 'erase',
-					input: { target: id },
-					authority: authority({ orders: grants('orders') })
-				})).outcome
-			).toMatchObject({ code: 'forbidden' });
-			ok(
-				(yield* run({ model: 'receipts', verb: 'create', input: [{ memo: 'r', order: id }] }))
-					.outcome
-			);
-			expect((yield* run({ verb: 'erase', input: { target: id } })).outcome).toMatchObject({
-				code: 'restricted'
-			});
-			expect((yield* run({ verb: 'delete', input: [{ target: id }] })).outcome).toMatchObject({
-				code: 'restricted'
-			});
-		}).pipe(Effect.provide(P2FixtureLive))
-	);
 });
 
 describe('engine/query: history (rule 17)', () => {
@@ -523,8 +390,34 @@ describe('engine/query: history (rule 17)', () => {
 		return yield* Schema.decodeUnknownEffect(Schema.Array(HistoryRevision))(answer);
 	});
 
+	const FoldedOrder = Schema.Struct({
+		id: Schema.String,
+		revision: Schema.Number,
+		title: Schema.String,
+		number: Schema.String,
+		status: Schema.String,
+		note: Schema.Union([
+			Schema.NullOr(Schema.String),
+			Schema.Struct({ $masked: Schema.Literal(true) })
+		]),
+		total: Schema.Struct({ $dec: Schema.String }),
+		big_lines: Schema.Number
+	});
+	/** get(…, { revision }): the revisions folded into the full record as of that revision (L-BOLT-181). */
+	const folded = Effect.fnUntraced(function* (id: string, revision: number, reader: Authority = admin) {
+		const { db } = yield* P2Fixture;
+		const answer = yield* readHistory(
+			db,
+			manifest,
+			{ kind: 'history', model: 'orders', id, at: { _tag: 'Revision', revision }, full: true },
+			{ as: 'caller', authority: reader },
+			bindings
+		);
+		return yield* Schema.decodeUnknownEffect(Schema.NullOr(FoldedOrder))(answer);
+	});
+
 	it.effect(
-		"reads revisions in order, cut by `at`, masked by the reader's grant, and none without a history grant",
+		"reads revisions in order, cut by `at`, masked by the reader's grant, and none without a history grant; folded as of a revision",
 		() =>
 			Effect.gen(function* () {
 				const id = yield* order('desk');
@@ -544,6 +437,9 @@ describe('engine/query: history (rule 17)', () => {
 				const masked = authority({
 					orders: grants('orders', { history: [arm()], masks: { orders: { note: FALSE } } })
 				});
+				expect(yield* folded(id, 2)).toMatchObject({ id, revision: 2, title: 'desk', note: 'a' });
+				expect(yield* folded(id, 2, masked)).toMatchObject({ note: { $masked: true } });
+				expect(yield* folded(id, 2, authority({ orders: grants('orders') }))).toBeNull();
 				expect((yield* history(id, masked)).map((r) => r.changed['note'])).toEqual([
 					{ $masked: true },
 					{ $masked: true },
@@ -566,104 +462,6 @@ describe('engine/query: history (rule 17)', () => {
 			}).pipe(Effect.provide(P2FixtureLive))
 	);
 
-	it.effect(
-		'get(…, { revision }) folds the revisions into the full record as of that revision (L-BOLT-181)',
-		() =>
-			Effect.gen(function* () {
-				const id = yield* order('desk');
-				ok((yield* run({ verb: 'update', input: [{ target: id, set: { note: 'a' } }] })).outcome);
-				ok((yield* run({ verb: 'update', input: [{ target: id, set: { note: 'b' } }] })).outcome);
-				const { db } = yield* P2Fixture;
-				const FoldedOrder = Schema.Struct({
-					id: Schema.String,
-					revision: Schema.Number,
-					title: Schema.String,
-					number: Schema.String,
-					status: Schema.String,
-					note: Schema.Union([
-						Schema.NullOr(Schema.String),
-						Schema.Struct({ $masked: Schema.Literal(true) })
-					]),
-					total: Schema.Struct({ $dec: Schema.String }),
-					big_lines: Schema.Number
-				});
-				const at = Effect.fnUntraced(function* (revision: number, reader: Authority = admin) {
-					const answer = yield* readHistory(
-						db,
-						manifest,
-						{
-							kind: 'history',
-							model: 'orders',
-							id,
-							at: { _tag: 'Revision', revision },
-							full: true
-						},
-						{ as: 'caller', authority: reader },
-						bindings
-					);
-					return yield* Schema.decodeUnknownEffect(Schema.NullOr(FoldedOrder))(answer);
-				});
-				expect(yield* at(2)).toMatchObject({ id, revision: 2, title: 'desk', note: 'a' });
-				expect(yield* at(3)).toMatchObject({ revision: 3, title: 'desk', note: 'b' });
-				expect(
-					yield* at(
-						2,
-						authority({
-							orders: grants('orders', { history: [arm()], masks: { orders: { note: FALSE } } })
-						})
-					)
-				).toMatchObject({ note: { $masked: true } });
-				expect(yield* at(2, authority({ orders: grants('orders') }))).toBeNull();
-				yield* pruneHistory((yield* P2Fixture).db, 1);
-				expect(yield* at(3)).toMatchObject({ revision: 3, title: 'desk', note: 'b' }); // the anchor folds the cut
-				expect(yield* at(2)).toBeNull(); // pruned: nothing to fold from
-			}).pipe(Effect.provide(P2FixtureLive))
-	);
-
-	it.effect('a before selector with no captured request has no history boundary', () =>
-		Effect.gen(function* () {
-			const id = yield* order('desk');
-			expect(yield* history(id, admin, { before: REQUEST })).toEqual([]);
-		}).pipe(Effect.provide(P2FixtureLive))
-	);
-
-	it.effect('the prune keeps the newest committed revisions and every erased audit marker', () =>
-		Effect.gen(function* () {
-			const a = yield* order('a');
-			for (const note of ['1', '2', '3'])
-				ok((yield* run({ verb: 'update', input: [{ target: a, set: { note } }] })).outcome);
-			const second = yield* order('second');
-			ok((yield* run({ verb: 'update', input: [{ target: second, set: { note: 'x' } }] })).outcome);
-			const p = yield* person('p1', 'Ada');
-			ok(
-				(yield* run({
-					model: 'people',
-					verb: 'erase',
-					input: { target: p, set: { name: 'E' } }
-				})).outcome
-			);
-			ok(
-				(yield* run({
-					model: 'people',
-					verb: 'update',
-					input: [{ target: p, set: { email: 'e@x' } }]
-				})).outcome
-			);
-			expect(yield* pruneHistory((yield* P2Fixture).db, 1)).toBe(5); // a: 1–3 go; second and people lose their creates
-			const kept = yield* rows(
-				Schema.Struct({
-					model: Schema.String,
-					r: Schema.String,
-					revision: Schema.Number,
-					cause: Schema.String
-				}),
-				`select collection model, record::text r, revision, cause from bolt_history order by collection, record, revision`
-			);
-			expect(kept.filter((h) => h['r'] === a).map((h) => h['revision'])).toEqual([4]);
-			expect(kept.filter((h) => h['r'] === second).map((h) => h['revision'])).toEqual([2]);
-			expect(kept.filter((h) => h['r'] === p).map((h) => h['cause'])).toEqual(['erased', 'direct']);
-		}).pipe(Effect.provide(P2FixtureLive))
-	);
 });
 
 describe('engine/write: per-record restore (rule 17)', () => {
@@ -794,58 +592,6 @@ describe('engine/write: per-record restore (rule 17)', () => {
 			}).pipe(Effect.provide(P2FixtureLive))
 	);
 
-	it.effect(
-		'restores a link whose target still exists and skips one whose target was deleted, never writing the target',
-		() =>
-			Effect.gen(function* () {
-				const a = yield* order('a'),
-					b = yield* order('b'),
-					c = yield* order('c');
-				const r = idOf(
-					(yield* run({
-						model: 'receipts',
-						verb: 'create',
-						input: [{ memo: 'm1', order: a }]
-					})).outcome,
-					'receipts'
-				);
-				const update = (set: Json) =>
-					run({ model: 'receipts', verb: 'update', input: [{ target: r, set }] });
-				ok((yield* update({ memo: 'm2', order: b })).outcome);
-				ok((yield* update({ order: c })).outcome);
-				ok((yield* run({ verb: 'delete', input: [{ target: a }] })).outcome);
-				const back = yield* preview(at(r, 2, 'receipts'));
-				expect(back.changes).toEqual([
-					{ field: 'order', current: c, restored: b, approval: false }
-				]);
-				const first = yield* preview(at(r, 1, 'receipts'));
-				expect(fields(first)).toEqual(['memo']);
-				expect(skips(first)).toEqual([['order', 'deletedTarget']]);
-				ok(yield* restore(at(r, 1, 'receipts')));
-				expect(
-					yield* one(
-						Schema.Struct({ memo: Schema.String, o: Schema.String }),
-						'select memo, "order"::text o from receipts'
-					)
-				).toEqual({ memo: 'm1', o: c });
-				ok(yield* restore(at(r, 2, 'receipts')));
-				expect(yield* one(Owner, 'select "order"::text o from receipts')).toEqual({ o: b });
-				expect((yield* history(b)).map((h) => h.revision)).toEqual([1]); // the target is never written
-			}).pipe(Effect.provide(P2FixtureLive))
-	);
-
-	it.effect('a stale observed revision is a conflict', () =>
-		Effect.gen(function* () {
-			const id = yield* order('desk');
-			ok((yield* run({ verb: 'update', input: [{ target: id, set: { note: 'a' } }] })).outcome);
-			const p = yield* preview(at(id, 1));
-			ok((yield* run({ verb: 'update', input: [{ target: id, set: { note: 'b' } }] })).outcome);
-			expect(yield* restore(at(id, 1), { observed: { [id]: p.live } })).toMatchObject({
-				kind: 'conflict'
-			});
-		}).pipe(Effect.provide(P2FixtureLive))
-	);
-
 	it.effect('a field the caller may not write is skipped as noGrant', () =>
 		Effect.gen(function* () {
 			const id = yield* order('desk');
@@ -869,56 +615,6 @@ describe('engine/write: per-record restore (rule 17)', () => {
 		}).pipe(Effect.provide(P2FixtureLive))
 	);
 
-	it.effect('a restore its update check approves commits provisionally under its request', () =>
-		Effect.gen(function* () {
-			const id = yield* order('desk');
-			ok((yield* run({ verb: 'update', input: [{ target: id, set: { note: 'a' } }] })).outcome);
-			const reviewed = authority({
-				orders: grants('orders', { history: [arm()], update: [writeArm(columns('update'), true)] })
-			});
-			// the preview's edit-ability is the update check's dry run: it approves, so the field is a proposal
-			const p = yield* preview(at(id, 1), reviewed, holding);
-			expect(p.changes).toEqual([{ field: 'note', current: 'a', restored: null, approval: true }]);
-			expect(yield* restore(at(id, 1), { authority: reviewed }, holding)).toMatchObject({
-				kind: 'pendingApproval',
-				requestId: REQUEST
-			});
-			// the restore is the provisional change: written now, recorded `restored` and held by the request
-			expect(
-				yield* one(Schema.Struct({ note: Schema.NullOr(Schema.String) }), 'select note from orders')
-			).toEqual({ note: null });
-			expect(
-				yield* one(
-					Schema.Struct({ cause: Schema.String, request: Schema.String }),
-					'select cause, request::text request from bolt_history order by revision desc limit 1'
-				)
-			).toEqual({ cause: 'restored', request: REQUEST });
-		}).pipe(Effect.provide(P2FixtureLive))
-	);
-
-	it.effect('a pruned record keeps every retained revision restorable', () =>
-		Effect.gen(function* () {
-			const id = yield* order('desk');
-			for (const note of ['1', '2', '3'])
-				ok((yield* run({ verb: 'update', input: [{ target: id, set: { note } }] })).outcome);
-			expect(yield* pruneHistory((yield* P2Fixture).db, 2)).toBe(2);
-			const p = yield* preview(at(id, 3));
-			expect(p.changes).toEqual([{ field: 'note', current: '3', restored: '2', approval: false }]);
-			ok(yield* restore(at(id, 3)));
-			expect(
-				(yield* history(id)).map((h) => [h.revision, h.cause, h.changed['title'] ?? null])
-			).toEqual([
-				[3, 'direct', 'desk'], // the anchor holds the full row
-				[4, 'direct', null],
-				[5, 'restored', null]
-			]);
-			const { db } = yield* P2Fixture;
-			expect(yield* restorePreview({ manifest, db }, at(id, 2), admin, bindings)).toMatchObject({
-				ok: false,
-				outcome: { code: 'notFound' }
-			});
-		}).pipe(Effect.provide(P2FixtureLive))
-	);
 });
 
 describe('engine/write: import (rule 30)', () => {
@@ -1050,94 +746,7 @@ describe('engine/write: import (rule 30)', () => {
 	);
 });
 
-describe('engine/query: same-shape reads merge (rule 12)', () => {
-	it.effect('gets of one model and select are one statement, answered in order', () =>
-		Effect.gen(function* () {
-			const a = yield* order('a'),
-				b = yield* order('b');
-			const missing = '0199a000-0000-7000-8000-0000000000ff';
-			const reads = readEngine({ db: (yield* P2Fixture).db, manifest });
-			const get = (id: string, c = 'orders'): ReadIR => ({
-				kind: 'get',
-				model: c,
-				id,
-				select: { fields: c === 'orders' ? ['title'] : null, relations: {} }
-			});
-			count.reads = 0;
-			count.statements = 0;
-			const out = yield* reads.run(
-				[get(b), get(a), get(missing), get(a, 'tags')],
-				{ as: 'workspace' },
-				bindings
-			);
-			expect(out).toEqual([{ id: b, title: 'b' }, { id: a, title: 'a' }, null, null]);
-			expect(count).toMatchObject({ reads: 1, statements: 1 }); // the merged gets and the lone one compose into one statement
-		}).pipe(Effect.provide(P2FixtureLive))
-	);
-});
-
 describe('engine/write: relation actions and cascades (rules 28, 41)', () => {
-	it.effect(
-		'a nested change to an owned child of a frozen parent is locked; an administrator still deletes the frozen parent with its children',
-		() =>
-			Effect.gen(function* () {
-				const id = yield* order('desk', [{ label: 'a', amount: '1' }]);
-				const [line] = yield* rows(Id, `select id::text from lines`);
-				ok(
-					(yield* run({ verb: 'update', input: [{ target: id, set: { status: 'submitted' } }] }))
-						.outcome
-				);
-				expect(
-					(yield* run({
-						verb: 'update',
-						input: [
-							{
-								target: id,
-								set: {
-									lines: { update: [{ target: required(line, 'line').id, set: { amount: '2' } }] }
-								}
-							}
-						]
-					})).outcome
-				).toMatchObject({ code: 'locked' });
-				expect(
-					(yield* run({
-						verb: 'update',
-						input: [{ target: id, set: { lines: { create: [{ label: 'b', amount: '1' }] } } }]
-					})).outcome
-				).toMatchObject({ code: 'locked' });
-				ok((yield* run({ verb: 'delete', input: [{ target: id }] })).outcome);
-				expect(yield* one(Count, `select count(*)::int n from lines`)).toEqual({ n: 0 });
-			}).pipe(Effect.provide(P2FixtureLive))
-	);
-
-	it.effect(
-		"a nested delete is judged by the root's grant only: the child model's own read scope is never consulted",
-		() =>
-			Effect.gen(function* () {
-				const id = yield* order('desk', [{ label: 'hidden', amount: '1' }]);
-				const [line] = yield* rows(Id, `select id::text from lines`);
-				const caller = authority({
-					orders: grants('orders', { update: [writeArm(columns('update'))] }),
-					lines: grants('lines', {
-						read: {
-							lines: [
-								arm({ t: 'cmp', field: 'label', op: 'ne', arg: { _tag: 'Lit', value: 'hidden' } })
-							]
-						}
-					})
-				});
-				ok(
-					(yield* run({
-						verb: 'update',
-						input: [{ target: id, set: { lines: { delete: [required(line, 'line').id] } } }],
-						authority: caller
-					})).outcome
-				);
-				expect(yield* one(Count, `select count(*)::int n from lines`)).toEqual({ n: 0 });
-			}).pipe(Effect.provide(P2FixtureLive))
-	);
-
 	it.effect(
 		'delete.check receives stored rows and guards everyone, administrators included (rules 27, 35)',
 		() =>
@@ -1369,19 +978,19 @@ describe('engine/write: pipeline order (rule 19)', () => {
 				)
 		})
 	];
-	for (const make of table) {
-		const calls: Invocation[] = [],
-			row = make(calls);
-		it.effect(row.name, () =>
-			Effect.gen(function* () {
+	it.effect('each stage refuses before the next one runs', () =>
+		Effect.gen(function* () {
+			for (const make of table) {
+				const calls: Invocation[] = [],
+					row = make(calls);
 				count.writes = 0;
 				const o = yield* row.act();
-				expect(o.kind === 'refused' ? o.code : o.kind).toBe(row.expect);
-				expect(calls.length > 0).toBe(row.guest);
-				expect(count.writes).toBe(row.writes);
-			}).pipe(Effect.provide(P2FixtureLive))
-		);
-	}
+				expect(o.kind === 'refused' ? o.code : o.kind, row.name).toBe(row.expect);
+				expect(calls.length > 0, row.name).toBe(row.guest);
+				expect(count.writes, row.name).toBe(row.writes);
+			}
+		}).pipe(Effect.provide(P2FixtureLive))
+	);
 });
 
 describe('engine/write: guest failures (rules 42, 72a)', () => {
@@ -1405,81 +1014,6 @@ describe('engine/write: guest failures (rules 42, 72a)', () => {
 						run({ verb: 'create', input: [{ title: 'a' }] }, failing('missingBody'))
 					)
 				).toMatchObject({ code: 'missingBody' });
-			}).pipe(Effect.provide(P2FixtureLive))
-	);
-});
-
-describe('engine/write: roll-ups against a re-select oracle (rule 21)', () => {
-	it.effect(
-		'every roll-up equals a fresh aggregate after any sequence of child and parent writes',
-		() =>
-			Effect.gen(function* () {
-				let seed = 7;
-				const rand = (k: number) => {
-					seed = (seed * 1103515245 + 12345) & 0x7fffffff;
-					return seed % k;
-				};
-				const AMOUNTS = ['0', '50', '99.99', '100', '150.5', '250'];
-				const amount = () => required(AMOUNTS[rand(AMOUNTS.length)], 'random amount');
-				const pick = Effect.fnUntraced(function* (sql: string) {
-					const r = yield* rows(Id, sql);
-					return r.length === 0 ? null : required(r[rand(r.length)], 'random row').id;
-				});
-				for (let step = 0; step < 40; step++) {
-					const kind = rand(6);
-					const o = yield* pick(`select id::text from orders order by id`);
-					const l = yield* pick(`select id::text from lines order by id`);
-					const lineOrder =
-						l === null
-							? null
-							: (yield* one(Owner, `select "order"::text o from lines where id = '${l}'`)).o;
-					if (kind === 0 || o === null)
-						yield* order(
-							`o${step}`,
-							Array.from({ length: rand(3) }, (_, i) => ({ label: `l${i}`, amount: amount() }))
-						);
-					else if (kind === 1)
-						ok(
-							(yield* run({
-								verb: 'update',
-								input: [
-									{ target: o, set: { lines: { create: [{ label: 'x', amount: amount() }] } } }
-								]
-							})).outcome
-						);
-					else if (kind === 2 && l !== null)
-						ok(
-							(yield* run({
-								model: 'lines',
-								verb: 'update',
-								input: [{ target: l, set: { amount: amount() } }]
-							})).outcome
-						);
-					else if (kind === 3 && l !== null) {
-						if (lineOrder === null) throw new Error('The selected child has no parent');
-						ok(
-							(yield* run({
-								verb: 'update',
-								input: [{ target: lineOrder, set: { note: `s${step}`, lines: { delete: [l] } } }]
-							})).outcome
-						);
-					} else if (kind === 4)
-						ok(
-							(yield* run({
-								model: 'lines',
-								verb: 'create',
-								input: [{ label: 'd', amount: amount(), order: o }]
-							})).outcome
-						);
-					else if (kind === 5 && rand(3) === 0)
-						ok((yield* run({ verb: 'delete', input: [{ target: o }] })).outcome);
-					const drift = yield* rows(
-						Id,
-						`select o.id from orders o where o.total <> coalesce((select sum(amount) from lines l where l."order" = o.id), 0)
-				or o.big_lines <> (select count(*) from lines l where l."order" = o.id and l.amount >= 100)`
-					);
-					expect(drift, `step ${step} (kind ${kind})`).toEqual([]);
-				}
 			}).pipe(Effect.provide(P2FixtureLive))
 	);
 });

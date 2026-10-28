@@ -1,14 +1,9 @@
-import { PGlite } from '@electric-sql/pglite';
-import { btree_gist } from '@electric-sql/pglite/contrib/btree_gist';
+import type { PGlite } from '@electric-sql/pglite';
 import { expect, it } from '@effect/vitest';
 import { Effect, Schema } from 'effect';
 import { build, constraintIndex, schema, table, type FieldSpec, type Sql } from '../src/index.ts';
-import { exec, script } from './support.ts';
+import { database, exec, script } from './support.ts';
 
-const database = Effect.acquireRelease(
-	Effect.promise(() => PGlite.create({ extensions: { btree_gist } })),
-	(pg) => Effect.promise(() => pg.close())
-);
 const rejected = Effect.fnUntraced(function* (pg: PGlite, statement: Sql) {
 	const error = yield* Effect.flip(
 		Effect.tryPromise({

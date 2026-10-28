@@ -1,17 +1,17 @@
 // The unified page query wire: read requests, index search, record/list projections and text ids; history stays explicit.
-import { describe, expect, it } from '@effect/vitest';
+import { expect, layer } from '@effect/vitest';
 import { Context, Effect, Layer, Result, Schema } from 'effect';
 import type { Json } from '../src/decl/values.ts';
 import type { Authority } from '../src/engine/contracts.ts';
-import { decodeManifest } from '../src/engine/manifest.ts';
+import { decodeProjectedManifest } from '../src/engine/manifest.ts';
 import { QReply, WireError } from '../src/protocol/schema.ts';
 import { actReply, json, routeFixture } from './support/route-fixture.ts';
-import { program } from './support/guest-fixture.ts';
+import { program } from '../src/test/guest.ts';
 import type { WireRead } from '../src/protocol/wire.ts';
-import { TestWorkspace } from '../src/test/index.ts';
+import { TestWorkspace, type WorkspaceServices } from '../src/test/index.ts';
 
 const manifest = Result.getOrThrow(
-	decodeManifest({
+	decodeProjectedManifest({
 		workspace: { tz: 'UTC', locale: 'en' },
 		models: {
 			orders: {
@@ -88,34 +88,18 @@ const guest =
 	} },
 } } } };`);
 
-const setup = () =>
+// every test reads the same rows: seeded once per file
+const ids: string[] = [];
+const fixture = () =>
 	Effect.gen(function* () {
-		const context = yield* Layer.build(TestWorkspace.layer({ manifest, guest: yield* guest }));
+		const context = yield* Effect.context<TestWorkspace | WorkspaceServices>();
 		const t = Context.get(context, TestWorkspace),
 			route = yield* routeFixture(context);
-		const rep = t.as(t.member(['rep'])).authority,
-			ids: string[] = [];
+		const rep = t.as(t.member(['rep'])).authority;
 		const act = (callable: string, input: Json) =>
 			actReply(route, rep, { callable, input, issuedAt: t.clock.now() }).pipe(
 				Effect.map((reply) => reply.outcome)
 			);
-		for (const [title, r] of [
-			['alpha', 0.1],
-			['alder', 0.45],
-			['beta', 0.9],
-			['bravo', 0.6]
-		] as const) {
-			const o = yield* act('orders.create', [{ title, doc: { lines: [title] }, color: [r, 0, 0] }]);
-			if (o.kind !== 'committed' || o.records[0] === undefined) throw new Error(JSON.stringify(o));
-			ids.push(o.records[0].id);
-		}
-		const first = ids[0];
-		if (first === undefined) throw new Error('first order missing');
-		yield* act('orders.update', [{ target: first, set: { title: 'alpha 2' } }]);
-		yield* t.db.write({
-			text: `INSERT INTO sys_user (id, email, name, kind) VALUES ('ada', 'ada@x.test', 'Ada', 'staff')`,
-			params: []
-		});
 		const q = (reads: readonly WireRead[], who: Authority = rep) =>
 			Effect.gen(function* () {
 				const response = yield* route.handle(
@@ -132,16 +116,45 @@ const setup = () =>
 			if (value === undefined) throw new Error('order id missing');
 			return value;
 		};
-		return { t, q, id };
+		return { t, act, q, id };
 	});
+const seeded = Layer.effectDiscard(
+	Effect.scoped(
+		Effect.gen(function* () {
+			const { t, act } = yield* fixture();
+			for (const [title, r] of [
+				['alpha', 0.1],
+				['alder', 0.45],
+				['beta', 0.9],
+				['bravo', 0.6]
+			] as const) {
+				const o = yield* act('orders.create', [{ title, doc: { lines: [title] }, color: [r, 0, 0] }]);
+				if (o.kind !== 'committed' || o.records[0] === undefined) throw new Error(JSON.stringify(o));
+				ids.push(o.records[0].id);
+			}
+			const first = ids[0];
+			if (first === undefined) throw new Error('first order missing');
+			yield* act('orders.update', [{ target: first, set: { title: 'alpha 2' } }]);
+			yield* t.db.write({
+				text: `INSERT INTO sys_user (id, email, name, kind) VALUES ('ada', 'ada@x.test', 'Ada', 'staff')`,
+				params: []
+			});
+		})
+	)
+).pipe(
+	Layer.provideMerge(
+		Layer.unwrap(Effect.map(guest, (guest) => TestWorkspace.layer({ manifest, guest })))
+	)
+);
+const setup = fixture;
 const answers = (body: typeof QReply.Type | typeof WireError.Type) => {
 	if ('error' in body) throw new Error(body.error.message);
 	return body.answers;
 };
 const Titles = Schema.Array(Schema.Struct({ title: Schema.String }));
 
-describe('/q page reads', () => {
-	it.live(
+layer(seeded, { excludeTestServices: true })('/q page reads', (it) => {
+	it.effect(
 		'serves a read request as the caller; the page derives what a declared query computed',
 		() =>
 			Effect.gen(function* () {
@@ -162,7 +175,7 @@ describe('/q page reads', () => {
 			})
 	);
 
-	it.live('a read request with an unknown option is a 400 naming it, not a 500', () =>
+	it.effect('a read request with an unknown option is a 400 naming it, not a 500', () =>
 		Effect.gen(function* () {
 			const { q } = yield* setup();
 			const r = yield* q([{ m: 'query', a: [{ orders: { prefix: 'al' } }] }]);
@@ -171,7 +184,7 @@ describe('/q page reads', () => {
 		})
 	);
 
-	it.live(
+	it.effect(
 		'serves an indexed search: probe through the index, rerank by the exact score, nearest first',
 		() =>
 			Effect.gen(function* () {
@@ -217,7 +230,7 @@ describe('/q page reads', () => {
 			})
 	);
 
-	it.live('answers a browser history with no `at` or a null `at`', () =>
+	it.effect('answers a browser history with no `at` or a null `at`', () =>
 		Effect.gen(function* () {
 			const { q, id } = yield* setup();
 			for (const a of [
@@ -235,7 +248,7 @@ describe('/q page reads', () => {
 		})
 	);
 
-	it.live(
+	it.effect(
 		'named heavy fields carry json, as a read naming no fields does; several requests share one /q',
 		() =>
 			Effect.gen(function* () {
@@ -278,7 +291,7 @@ describe('/q page reads', () => {
 			})
 	);
 
-	it.live('text search matches a patterned seq', () =>
+	it.effect('text search matches a patterned seq', () =>
 		Effect.gen(function* () {
 			const { q } = yield* setup();
 			const r = yield* q([
@@ -297,7 +310,7 @@ describe('/q page reads', () => {
 		})
 	);
 
-	it.live('reads sys_user by its text id, one and several', () =>
+	it.effect('reads sys_user by its text id, one and several', () =>
 		Effect.gen(function* () {
 			const { t, q } = yield* setup();
 			const admin = t.as(t.admin).authority;

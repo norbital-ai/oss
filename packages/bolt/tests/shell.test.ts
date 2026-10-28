@@ -29,23 +29,9 @@ import {
 } from '../src/shell/nav.ts';
 import { challengeQueue, kioskFetch, visitorFetch, shellApi } from '../src/shell/runtime.ts';
 import { BoltRoutes } from '../src/protocol/http.ts';
-import { activeApp, media, navigationModel, NORBIUS } from '../src/shell/model.ts';
+import { activeApp, media, navigationModel } from '../src/shell/model.ts';
 import { fileAttachments } from '../src/engine/agent/attachments.ts';
-import {
-	dirtyFolders,
-	foldLog,
-	foldPhase,
-	languageOf,
-	reach,
-	ageText,
-	routedEnvironment,
-	settleDrafts,
-	stepLabel,
-	StudioOp,
-	studioView,
-	suggestMessage,
-	type StudioState
-} from '../src/shell/studio/model.ts';
+import { dirtyFolders, foldPhase, languageOf, reach, routedEnvironment, settleDrafts, stepLabel, StudioOp, studioView, suggestMessage, type StudioState } from '../src/shell/studio/model.ts';
 import { decodeManifest, type EngineManifest } from '../src/engine/manifest.ts';
 /** The Node host's image port, as the agent's attachments read through it. */
 const hostImages = Effect.map(Layer.build(Images.fromAbi(imagesPort)), (context) =>
@@ -582,7 +568,6 @@ describe('exposure (the boot catalog ui reads)', () => {
 			label: ['name'],
 			fields: { name: { kind: 'text' } }
 		});
-		expect(exposure(em, auth)['sys_team']).toBeUndefined();
 	});
 });
 
@@ -882,27 +867,6 @@ describe('sidebar model', () => {
 	const tree = (
 		items: readonly { key: string; children?: readonly { key: string }[] }[] | undefined
 	) => (items ?? []).map((i) => [i.key, (i.children ?? []).map((c) => c.key)]);
-
-	it("Operations (Norbius, Approvals) above Applications; the inbox count as a badge; an app's pages its tabs, a group's apps its children", () => {
-		const model = navigationModel(bootOf(member(['sales', 'hr'])), '/app/sales/quotes', (k) => k);
-		expect(model.sections.map((s) => [s.key, s.items.map((i) => i.key)])).toEqual([
-			['operations', ['norbius', 'approvals']],
-			['applications', ['sales', 'hr']]
-		]);
-		expect(model.sections[0]!.items).toMatchObject([
-			{ href: NORBIUS, badge: '⌘K' },
-			{ href: '/inbox', badge: '2' }
-		]);
-		const sales = model.sections[1]!.items[0]!;
-		expect(sales.active).toBe(true);
-		expect(activeApp(model)?.key).toBe('sales');
-		expect(sales.pages?.map((c) => [c.key, c.active])).toEqual([
-			['sales/deals', false],
-			['sales/quotes', true]
-		]);
-		// a portal page is no sidebar row or tab: `hr/kiosk` has only its portal page, so the group keeps `hr/people` alone
-		expect(tree(model.sections[1]!.items)).toContainEqual(['hr', ['hr/people']]);
-	});
 	it("an app's page at its folder's own address is not open beside the sibling below it", () => {
 		const pages = [
 			{ name: 'payroll', title: 'Runs', href: '/app/payroll' },
@@ -931,20 +895,6 @@ describe('sidebar model', () => {
 		expect(open('/app/payroll')).toEqual([
 			['payroll/payroll', true],
 			['payroll/compliance', false]
-		]);
-	});
-	it("portal pages sit in the ellipsis menu's Portals group, for the viewers who may open them", () => {
-		const model = navigationModel(bootOf(member(['hr'])), '/app/hr/kiosk/clock', (k) => k);
-		expect(tree(model.utilities)).toEqual([
-			['portals', ['hr/kiosk/clock']],
-			['kiosks', ['lobby']]
-		]);
-		expect(model.utilities[0]!.children).toMatchObject([
-			{ label: 'Clock', href: '/app/hr/kiosk/clock', active: true }
-		]);
-		expect(activeApp(model)).toBeNull();
-		expect(tree(navigationModel(bootOf(member(['sales'])), '/', (k) => k).utilities)).toEqual([
-			['kiosks', ['lobby']]
 		]);
 	});
 	it("kiosks sit in the ellipsis menu's Kiosks group: members ones by capability, `none` ones for everyone", () => {
@@ -976,29 +926,6 @@ describe('sidebar model', () => {
 					.utilities
 			)
 		).toContainEqual(['kiosks', ['clock', 'lobby']]);
-	});
-	it('the account popover: Settings (People, Organization, Audit, Automations) apart from System (no Logs: Studio holds the log); a member has neither', () => {
-		expect(
-			tree(navigationModel(bootOf(member([], {}, true), true), '/', (k) => k).utilities)
-		).toEqual([
-			['settings', ['people', 'organization', 'audit', 'automations']],
-			['system', ['integrations', 'secrets', 'studio']],
-			['portals', ['hr/kiosk/clock']],
-			['kiosks', ['clock', 'lobby']]
-		]);
-		const settings = navigationModel(
-			bootOf(member([], {}, true)),
-			'/settings/automations',
-			(k) => k
-		).utilities?.[0];
-		expect(settings).toMatchObject({ key: 'settings', active: true });
-		expect(settings?.children?.find((c) => c.key === 'automations')).toMatchObject({
-			href: '/settings/automations',
-			active: true
-		});
-		expect(tree(navigationModel(bootOf(member(['sales'])), '/', (k) => k).utilities)).toEqual([
-			['kiosks', ['lobby']]
-		]);
 	});
 });
 
@@ -1066,15 +993,6 @@ describe('Studio port boundary', () => {
 			decodeOp({ op: 'preview', id: '' }),
 			decodeOp({ op: 'preview', id: 3 })
 		]).toEqual([null, null, null, null, null]);
-	});
-	it('says an age in short words', () => {
-		const t0 = Date.parse('2026-09-01T00:30:00.000Z');
-		expect([
-			ageText('2026-09-01T00:30:00.000Z', t0),
-			ageText('2026-09-01T00:30:00.000Z', t0 + 90 * 60_000),
-			ageText('bad', t0),
-			ageText(null, t0)
-		]).toEqual(['just now', '1h', '', '']);
 	});
 	it('marks every ancestor folder of a draft, and edits a path in its language (L-BOLT-528)', () => {
 		expect([...dirtyFolders(['src/app/x/+app.ts', 'README.md'])]).toEqual([
@@ -1209,16 +1127,6 @@ describe('Studio port boundary', () => {
 		const saved = { 'src/a.ts': 'two', 'src/b.ts': 'two', 'src/c.ts': null };
 		const drafts = { 'src/a.ts': 'three', 'src/b.ts': 'two', 'src/c.ts': null, 'src/d.ts': 'new' };
 		expect(settleDrafts(drafts, saved)).toEqual({ 'src/a.ts': 'three', 'src/d.ts': 'new' });
-	});
-	it('folds a pushed log line: ANSI stripped, clipped to 800, the last 256 kept (L-BOLT-530)', () => {
-		const line = (message: string) => ({ at: 't', level: 'error' as const, message });
-		expect(foldLog([], line('\u001b[31mfailed\u001b[0m'))).toEqual([line('failed')]);
-		expect(foldLog([], line('x'.repeat(900)))[0]!.message).toBe(`${'x'.repeat(800)}…`);
-		const full = Array.from({ length: 256 }, (_, i) => line(String(i)));
-		expect(foldLog(full, line('new')).map((l) => l.message)).toEqual([
-			...full.slice(1).map((l) => l.message),
-			'new'
-		]);
 	});
 	it('folds pushed phases diagnose → preview → merge; a phase starting again clears the later ones (L-BOLT-530)', () => {
 		let p = foldPhase({}, 'diagnose', 'running');
@@ -1371,8 +1279,7 @@ describe('reading files over the files port', () => {
 					throw new Error('Expected image bytes.');
 				expect(got.mime).toBe('image/jpeg');
 				expect([...got.bytes.subarray(0, 3)]).toEqual([0xff, 0xd8, 0xff]);
-			}),
-		30_000
+			})
 	);
 });
 

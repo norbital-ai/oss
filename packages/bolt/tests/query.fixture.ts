@@ -6,6 +6,7 @@ import type { Pred } from '@norbital-ai/store';
 
 const sys = { description: 'x', label: 'name' } as const;
 export const manifest: EngineManifest = {
+	needs: [],
 	workspace: { tz: 'Asia/Kuala_Lumpur', locale: 'en' },
 	models: {
 		accounts: {

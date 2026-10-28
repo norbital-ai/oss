@@ -244,16 +244,12 @@ describe('aiModalityRefusals (P39)', () => {
 		{
 			system: 'sys_2' as const,
 			endpoint,
-			models: ['vendor/chat'],
-			declared: undefined,
-			env: 'SYS_2_MODALITIES'
+			models: ['vendor/chat']
 		},
 		{
 			system: 'embed' as const,
 			endpoint,
-			models: ['vendor/embed'],
-			declared: undefined,
-			env: 'EMBED_MODALITIES'
+			models: ['vendor/embed']
 		}
 	];
 	const listing = (mods: readonly string[]) => (s: Seen) =>
@@ -289,7 +285,7 @@ describe('aiModalityRefusals (P39)', () => {
 	);
 
 	it.effect(
-		'lets an undeclared model through a listing that did not answer only when tolerated; a declaration decides otherwise',
+		'lets a model through a listing that did not answer only when tolerated',
 		() =>
 			Effect.gen(function* () {
 				const down = () => fake(() => json({ error: 'down' }, 503));
@@ -299,14 +295,9 @@ describe('aiModalityRefusals (P39)', () => {
 				expect(
 					yield* aiModalityRefusals(checks, { tolerateUnread: false }).pipe(down().provide)
 				).toEqual([
-					"sys_2 model 'vendor/chat' has no published input modalities and SYS_2_MODALITIES is unset: it must take image (P39)",
-					"embed model 'vendor/embed' has no published input modalities and EMBED_MODALITIES is unset: it must take image (P39)"
+					"sys_2 model 'vendor/chat' has no published input modalities: it must take image (P39)",
+					"embed model 'vendor/embed' has no published input modalities: it must take image (P39)"
 				]);
-				expect(
-					yield* aiModalityRefusals([{ ...checks[0]!, declared: ['text', 'image'] }], {
-						tolerateUnread: false
-					}).pipe(down().provide)
-				).toEqual([]);
 			})
 	);
 });

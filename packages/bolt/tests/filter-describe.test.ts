@@ -5,7 +5,8 @@ import { describe, expect, it } from '@effect/vitest';
 import * as NodeCrypto from '@effect/platform-node/NodeCrypto';
 import type { Arm, Authority, ModelAuthority } from '../src/engine/contracts.ts';
 import { Effect, Layer, Schema } from 'effect';
-import { Ai, Metering } from '../src/engine/ports.ts';
+import { Ai, Logs } from '../src/engine/ports.ts';
+import { off } from '../src/facilities/index.ts';
 import { TenantDb } from '../src/engine/db/tenant-db.ts';
 import { Manifest, Reads, type ReadsShape } from '../src/engine/services.ts';
 import { DbError } from '../src/engine/errors.ts';
@@ -19,7 +20,7 @@ import type {
 	System1Port,
 	System1Request
 } from '../src/engine/decisions/index.ts';
-import { decodeDescribed, filterDescribe } from '../src/engine/filter-describe/index.ts';
+import { decodeDescribed, filterDescribe, literals } from '../src/engine/filter-describe/index.ts';
 import { catalog } from '../src/protocol/catalog.ts';
 
 const manifest = {
@@ -93,7 +94,8 @@ const manifest = {
 	mcp: {},
 	apps: {},
 	customFields: {},
-	agent: { skills: {} }
+	agent: { skills: {} },
+	needs: []
 } satisfies EngineManifest;
 const present = <A>(value: A | null | undefined): A => {
 	if (value === null || value === undefined) throw new Error('Missing fixture value');
@@ -291,15 +293,16 @@ const nativeDescriber = (
 		Layer.succeed(Manifest, m),
 		Layer.succeed(Reads, { run: read }),
 		Layer.succeed(TenantDb, db),
-		Metering.unavailable,
+		Logs.fromAbi({ write: () => {}, query: async () => [] }),
 		Ai.fromAbi({
-			sys_1: port,
-			sys_2: {
+			system1: port,
+			system2: {
 				models: ['x'],
 				infer: async () => {
 					throw new Error('System 2 is never asked (P35)');
 				}
-			}
+			},
+			embed: off
 		})
 	);
 	const native = filterDescribe.pipe(Effect.provide(DecisionsLive.pipe(Layer.provideMerge(ports))));
@@ -378,7 +381,8 @@ describe('filter.describe offers System 1 the exposure and maps its choices onto
 					models: {
 						...manifest.models,
 						members: { ...manifest.models.members, search: { text: ['name'] } }
-					}
+					},
+					needs: []
 				} satisfies EngineManifest;
 				const found = (port: System1Port) =>
 					nativeDescriber(port, searchable, (batch) =>
@@ -952,4 +956,37 @@ describe('described selection must fit the exposed grammar', () => {
 				expect(r).toMatchObject({ ok: true, where: { is_current: { eq: true } } });
 			})
 	);
+});
+
+describe('a description fails closed', () => {
+	it.effect('a failed System 1 call applies nothing', () =>
+		Effect.gen(function* () {
+			const down: System1Port = {
+				ask: () => Promise.reject(new Error('provider down'))
+			};
+			expect(
+				yield* describer(down).describe({
+					model: 'jobs',
+					text: 'jobs over 3 hours',
+					authority: caller(),
+					bindings
+				})
+			).toMatchObject({ ok: false, code: 'upstream' });
+		})
+	);
+});
+
+it('literals: quoted strings, numbers and dates from the text', () => {
+	expect(
+		literals('jobs over 3 hours named "pump room" before 2026-10-01 or 5/10/2026', 'en', '2026-10-08')
+	).toEqual({ strings: ['pump room'], numbers: [3], dates: ['2026-10-01', '2026-10-05'] });
+	// a named month, its year today's unless stated; a day the month lacks is no date
+	expect(
+		literals('after 3rd October, before Oct 9th 2027, the 1st of jan or 31 June', 'en', '2026-10-08').dates.sort()
+	).toEqual(['2026-01-01', '2026-10-03', '2027-10-09']);
+	expect(literals('jobs with 3 decimal places in march', 'en', '2026-10-08')).toEqual({
+		strings: [],
+		numbers: [3],
+		dates: []
+	});
 });

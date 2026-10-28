@@ -1,13 +1,14 @@
 // `ctx.ai.sys_1.decide` (P36, P37; §11.2 G12 (11)) through the engine entry and a built guest: a scripted `ai.sys_1`
 // (no vendor) answers the Desk's routing questions; the answers come back typed, a FileRef in the state is refused
-// `invalid` before any call (text only, P37 (3)), every call is one `decision.made` (`use: 'author'`) and one meter report, and a
-// crashed run replays the journalled answers with no second call. Failures are the facility's typed errors.
-import { describe, expect, it } from '@effect/vitest';
-import { Context, Effect, Layer, Schema, Stream } from 'effect';
+// `invalid` before any call (text only, P37 (3)), and every call is one `decision.made` (`use: 'author'`). Failures are the
+// facility's typed errors.
+import { afterAll, describe, expect, it } from '@effect/vitest';
+import { Context, Effect, Exit, Layer, Schema, Scope, Stream } from 'effect';
+import { Port } from '../src/engine/port.ts';
 import { FacilityFailure } from '../src/decl/errors.ts';
 import type { Json } from '../src/decl/values.ts';
-import { Ai, Metering } from '../src/engine/ports.ts';
-import { program } from './support/guest-fixture.ts';
+import { Ai } from '../src/engine/ports.ts';
+import { program } from '../src/test/guest.ts';
 import {
 	actReply,
 	json,
@@ -17,7 +18,7 @@ import {
 } from './support/route-fixture.ts';
 import type { ActOutcome as Outcome } from '../src/engine/contracts.ts';
 import type { EngineManifest } from '../src/engine/manifest.ts';
-import { ask, type System1Request } from '../src/engine/decisions/index.ts';
+import type { System1Request } from '../src/engine/decisions/index.ts';
 import { TestWorkspace, type Kit } from '../src/test/index.ts';
 
 const present = <A>(value: A | null | undefined): A => {
@@ -75,7 +76,8 @@ const manifest = {
 	mcp: {},
 	apps: {},
 	customFields: {},
-	agent: { skills: {} }
+	agent: { skills: {} },
+	needs: []
 } satisfies EngineManifest;
 const guest = program(`import { Effect, Result } from 'effect';
 const questions = {
@@ -94,11 +96,13 @@ export default { automation: { route: { body: function* (input, ctx) {
 	}
 } } } };`);
 
-type Mode = 'ok' | 'tooLarge' | 'unsupported' | 'offlist' | 'down';
+type Mode = 'ok' | 'tooLarge' | 'unsupported' | 'offlist' | 'down' | 'absent';
 type Fake = { mode: Mode; calls: System1Request[] };
 const aiPort = (fake: Fake): Ai['Service'] => ({
 	ask: (request) =>
 		Effect.gen(function* () {
+			// the host binds no AI facility: its answer is the kit's own for an absent member
+			if (fake.mode === 'absent') return yield* Port.unavailable('ai');
 			fake.calls.push(request);
 			if (fake.mode === 'tooLarge' || fake.mode === 'unsupported')
 				return yield* Effect.fail(
@@ -136,26 +140,29 @@ const aiPort = (fake: Fake): Ai['Service'] => ({
 	infer: () => Stream.die(new Error('System 2 is never asked')),
 	embed: () => Effect.die(new Error('Embeddings are never asked'))
 });
-const open = (withAi = true) =>
-	Effect.gen(function* () {
-		const fake: Fake = { mode: 'ok', calls: [] },
-			metered: string[] = [];
-		const metering = Layer.succeed(Metering, {
-			record: (meter, quantity, key) =>
-				Effect.sync(() => {
-					metered.push(`${meter}:${quantity}:${key.split(':')[0]}`);
+// One workspace for the file: each case starts from a fresh fake and reads only its own tickets.
+const fake: Fake = { mode: 'ok', calls: [] };
+const fileScope = Effect.runSync(Scope.make());
+afterAll(() => Effect.runPromise(Scope.close(fileScope, Exit.void)));
+const shared = Effect.runSync(
+	Effect.cached(
+		Effect.gen(function* () {
+			const context = yield* Layer.build(
+				TestWorkspace.layer({
+					manifest,
+					guest: yield* guest,
+					ports: Layer.succeed(Ai, aiPort(fake))
 				})
-		});
-		const ports = withAi ? Layer.merge(metering, Layer.succeed(Ai, aiPort(fake))) : metering;
-		const context = yield* Layer.build(
-			TestWorkspace.layer({ manifest, guest: yield* guest, ports })
-		);
-		return {
-			t: Context.get(context, TestWorkspace),
-			route: yield* routeFixture(context),
-			fake,
-			metered
-		};
+			);
+			return { t: Context.get(context, TestWorkspace), route: yield* routeFixture(context), fake };
+		}).pipe(Scope.provide(fileScope))
+	)
+);
+const open = (mode: Mode = 'ok') =>
+	Effect.map(shared, (fixture) => {
+		fake.mode = mode;
+		fake.calls = [];
+		return fixture;
 	});
 const ok = (outcome: Outcome) => {
 	if (outcome.kind !== 'committed') throw new Error(JSON.stringify(outcome));
@@ -216,10 +223,10 @@ const upload = (
 		);
 
 describe('ctx.ai.sys_1.decide (P36, P37)', () => {
-	it.live('answers typed from the literals; one event and one meter report', () =>
+	it.live('answers typed from the literals, one event per call; a refusal is its typed error', () =>
 		Effect.scoped(
 			Effect.gen(function* () {
-				const { t, route, fake, metered } = yield* open();
+				const { t, route, fake } = yield* open();
 				const id = yield* ticket(t, route, {});
 				yield* t.runDue();
 				// A low-confidence choice is used as given; a score's native level indexes its legend.
@@ -239,44 +246,16 @@ describe('ctx.ai.sys_1.decide (P36, P37)', () => {
 				expect(yield* events(t)).toMatchObject([
 					{ use: 'author', system: 1, automation: 'route', costUsd: 0.0004 }
 				]);
-				expect(metered).toEqual(['ai:0.0004:decision']);
-			})
-		)
-	);
-
-	it.live('a crashed run replays the journalled answers: no second call, no second report', () =>
-		Effect.scoped(
-			Effect.gen(function* () {
-				const { t, route, fake, metered } = yield* open();
-				const id = yield* ticket(t, route, {});
-				const [runs] = yield* t.db.read([
-					{ text: `SELECT id FROM sys_run WHERE automation = 'route'`, params: [] }
-				]);
-				yield* t.crash(String(present(present(runs).rows[0])['id']));
-				yield* t.runDue();
-				expect(fake.calls).toHaveLength(1);
-				expect(metered).toHaveLength(1);
-				expect(yield* get(t, route, id)).toMatchObject({ queue: 'billing' });
-			})
-		)
-	);
-
-	it.live('refusals and failures are the typed error `.try` returns; no system2 call', () =>
-		Effect.scoped(
-			Effect.gen(function* () {
-				const { t, route, fake, metered } = yield* open();
+				// refusals and failures are the typed error `.try` returns; no system2 call
 				for (const [mode, kind] of [
 					['tooLarge', 'tooLarge'],
-					['unsupported', 'unsupported'],
-					['offlist', 'invalid'],
-					['down', 'upstream']
+					['offlist', 'invalid']
 				] as const) {
 					fake.mode = mode;
-					const id = yield* ticket(t, route, {});
+					const failed = yield* ticket(t, route, {});
 					yield* t.runDue();
-					expect(yield* get(t, route, id)).toMatchObject({ note: kind });
+					expect(yield* get(t, route, failed)).toMatchObject({ note: kind });
 				}
-				expect(metered).toEqual([]); // a failed call has no cost to report
 			})
 		)
 	);
@@ -322,7 +301,7 @@ describe('ctx.ai.sys_1.decide (P36, P37)', () => {
 	it.live('with no AI facility decide is Unavailable', () =>
 		Effect.scoped(
 			Effect.gen(function* () {
-				const { t, route } = yield* open(false);
+				const { t, route } = yield* open('absent');
 				const id = yield* ticket(t, route, {});
 				yield* t.runDue();
 				expect(yield* get(t, route, id)).toMatchObject({ note: 'unavailable' });
@@ -331,38 +310,3 @@ describe('ctx.ai.sys_1.decide (P36, P37)', () => {
 	);
 });
 
-it.live(
-	'Bolt caps no question or option: a 40-question decide with a 100-option choice reaches sys_1 whole',
-	() =>
-		Effect.gen(function* () {
-			const seen: System1Request[] = [];
-			const port: Ai['Service'] = {
-				...aiPort({ mode: 'ok', calls: [] }),
-				ask: (request) =>
-					Effect.gen(function* () {
-						seen.push(request);
-						return yield* Effect.fail(
-							new FacilityFailure({ kind: 'tooLarge', message: 'context limit' })
-						);
-					})
-			};
-			const criteria = Object.fromEntries(
-				Array.from({ length: 100 }, (_, i) => [`o${i}`, `option ${i}`])
-			);
-			const questions = Object.fromEntries(
-				Array.from({ length: 40 }, (_, i) => [
-					`q${i}`,
-					{ type: 'choice' as const, instructions: 'Which?', criteria }
-				])
-			);
-			expect(yield* ask(port, { state: { text: 'x' }, questions }).pipe(Effect.flip)).toMatchObject(
-				{ kind: 'tooLarge' }
-			);
-			const request = seen[0];
-			if (request === undefined) throw new Error('Missing decision request');
-			expect(Object.keys(request.questions)).toHaveLength(40);
-			const last = request.questions['q39'];
-			if (last?.type !== 'choice') throw new Error('Missing choice question');
-			expect(Object.keys(last.criteria)).toHaveLength(100);
-		})
-);

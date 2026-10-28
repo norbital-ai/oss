@@ -1,84 +1,77 @@
-import { Clock, Effect, Schema } from 'effect';
-import { Port, Transport, loggedPhone } from '@norbital-ai/bolt/engine';
-import { transactional } from '@norbital-ai/providers';
-import type { Config } from './config.ts';
+// This host's transactional facilities (sign-in codes, invitations): each one explicit in its settings.
+import { Effect } from 'effect';
+import type { HttpClient } from 'effect/http/HttpClient';
+import { loggedPhone, type Json, type TransportPort } from '@norbital-ai/bolt/engine';
+import { off, type Facilities } from '@norbital-ai/bolt/facilities';
+import type { ProviderRefused, ProviderUnavailable } from '@norbital-ai/providers';
+import type { HostSettings } from './host.ts';
+import { resendMail } from './resend.ts';
+import { twilioMessages, twilioVerify } from './twilio.ts';
 
-export type Sender = Transport['Service']['send'];
-export function devSink() {
-	const mail: Extract<Parameters<Sender>[0], { _tag: 'Mail' }>[] = [];
-	return {
-		mail,
-		send: (message: Parameters<Sender>[0]) =>
-			Effect.sync(() => {
-				if (message._tag === 'Mail') mail.push(message);
-				return { providerId: `dev-${mail.length}` };
-			})
-	};
-}
-export function logSink(kind: 'mail' | 'sms', log: (line: string) => void): Transport['Service'] {
-	return {
-		send: Effect.fn('server.logSink')(function* (message) {
-			const text = message._tag === 'Push' ? (message.body ?? '') : message.text;
-			const code = /\b(\d{6})\b/.exec(text)?.[1];
-			const to = message._tag === 'Push' ? message.subscription.endpoint : message.to;
-			log(
-				`${kind} → ${to}: ${message._tag === 'Mail' ? message.subject : text}${code === undefined ? '' : ` (sign-in code ${code})`}`
-			);
-			return { providerId: `log-${yield* Clock.currentTimeMillis}` };
-		})
-	};
-}
+/** One message sent through a provider API. */
+export type TransportDef = {
+	readonly send: (
+		message: Json
+	) => Effect.Effect<
+		{ readonly providerId: string },
+		ProviderRefused | ProviderUnavailable,
+		HttpClient
+	>;
+};
+/** A number's sign-in code, sent and checked by the provider. */
+export type PhoneVerifierDef = {
+	readonly via: readonly ('sms' | 'whatsapp')[];
+	readonly start: (
+		to: string,
+		via: 'sms' | 'whatsapp'
+	) => Effect.Effect<void, ProviderRefused | ProviderUnavailable, HttpClient>;
+	readonly check: (
+		to: string,
+		code: string
+	) => Effect.Effect<boolean, ProviderRefused | ProviderUnavailable, HttpClient>;
+};
+export type Run = <A, E>(
+	effect: Effect.Effect<A, E, HttpClient>,
+	options?: { readonly signal?: AbortSignal | undefined }
+) => Promise<A>;
+
+/** A transport that writes each message as one log line (a `log` selection). */
+const logged = (kind: string, log: (line: string) => void): TransportPort => ({
+	send: async (_kind, message: Json) => {
+		log(`${kind} → ${JSON.stringify(message)}`);
+		return { providerId: `log-${Date.now()}` };
+	}
+});
+
 export const messaging = Effect.fn('server.messaging')(function* (
-	config: Config,
+	config: Pick<HostSettings, 'transactional'>,
+	run: Run,
 	log: (line: string) => void
 ) {
-	const configured =
-		config.transactional === null ? {} : yield* transactional(config.transactional);
-	const context = yield* Effect.context<import('effect/http/HttpClient').HttpClient>();
-	const email = configured.email,
-		sms = configured.sms,
-		configuredPhone = configured.phone;
-	const native = (port: NonNullable<typeof email>): Transport['Service'] => ({
-		send: (message) =>
-			port.send(message).pipe(Effect.provide(context), Effect.mapError(Port.failure('transport')))
+	const { email, phone } = config.transactional;
+	const native = (def: TransportDef): TransportPort => ({
+		send: (_kind, message, signal) => run(def.send(message), { signal })
 	});
-	const localPhone =
-		config.mode === 'production' ? undefined : loggedPhone(log, config.mode === 'dev');
-	const phone =
-		configuredPhone === undefined
-			? localPhone === undefined
-				? undefined
-				: {
-						via: localPhone.via,
-						start: (to: string, via: 'sms' | 'whatsapp') =>
-							Port.attempt('phone', (signal) => localPhone.start(to, via, signal)),
-						check: (to: string, code: string) =>
-							Port.attempt('phone', (signal) => localPhone.check(to, code, signal))
-					}
-			: {
-					via: configuredPhone.via,
-					start: (to: string, via: 'sms' | 'whatsapp') =>
-						configuredPhone
-							.start(to, via)
-							.pipe(Effect.provide(context), Effect.mapError(Port.failure('phone'))),
-					check: (to: string, code: string) =>
-						configuredPhone
-							.check(to, code)
-							.pipe(Effect.provide(context), Effect.mapError(Port.failure('phone')))
-				};
-	return {
-		email:
-			email === undefined
-				? config.mode === 'production'
-					? undefined
-					: logSink('mail', log)
-				: native(email),
+	const twilio = phone === null || phone.provider === 'log' ? undefined : phone;
+	const verifier = twilio === undefined ? undefined : yield* twilioVerify(twilio);
+	const members: Pick<Facilities['transactional'], 'mail' | 'sms' | 'phone'> = {
+		mail: email.provider === 'log' ? logged('mail', log) : native(resendMail(email)),
 		sms:
-			sms === undefined
-				? config.mode === 'production'
-					? undefined
-					: logSink('sms', log)
-				: native(sms),
-		phone
+			phone === null
+				? off
+				: twilio === undefined
+					? logged('sms', log)
+					: native(yield* twilioMessages(twilio)),
+		phone:
+			phone === null
+				? off
+				: verifier === undefined
+					? loggedPhone(log)
+					: {
+							via: verifier.via,
+							start: (to, via, signal) => run(verifier.start(to, via), { signal }),
+							check: (to, code, signal) => run(verifier.check(to, code), { signal })
+						}
 	};
+	return members;
 });

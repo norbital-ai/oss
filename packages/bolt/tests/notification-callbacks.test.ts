@@ -3,7 +3,8 @@ import { Context, Effect, Layer } from 'effect';
 import { LIMITS, type CrossAnswer, type Invocation } from '../src/engine/contracts.ts';
 import { Guest, type Bridge, type CrossCall } from '../src/engine/services.ts';
 import { noticeRows, type NotifyWire } from '../src/engine/notifications/notify.ts';
-import { guestLayer, program } from './support/guest-fixture.ts';
+import { program } from '../src/test/guest.ts';
+import { guestLayer } from './support/guest-fixture.ts';
 import { manifest, NOW, TODAY, admin } from './write-fixture.ts';
 
 const input: NotifyWire = {

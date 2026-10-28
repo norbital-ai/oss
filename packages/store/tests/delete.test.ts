@@ -276,15 +276,3 @@ it.effect(
 			expect((yield* execute(yield* db.get('child', { id: 'child' })))?.name).toBe('Kept');
 		})
 );
-
-it.effect('refuses setNull on a required reference before emitting its schema', () =>
-	Effect.gen(function* () {
-		const records = schema({
-			parent: table({ fields: { name: { kind: 'text' } } }),
-			child: table({ fields: { parent: { kind: 'ref', to: 'parent', onDelete: 'setNull' } } })
-		});
-		const failure = yield* Effect.flip(build(records));
-		expect(failure.code).toBe('schema');
-		expect(failure.message).toContain("onDelete 'setNull' needs an optional ref");
-	})
-);

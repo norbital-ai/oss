@@ -6,7 +6,7 @@ import { randomUUID } from 'node:crypto';
 import type { Json } from '../src/decl/values.ts';
 import { OPEN_WINDOWS_SQL, RateWindows } from '../src/engine/access/rate.ts';
 import type { TransportPort } from '../src/engine/contracts.ts';
-import { PgliteDb } from '../src/node/db/pglite.ts';
+import { TestDb } from '../src/test/database.ts';
 import { TenantDb } from '../src/engine/db/tenant-db.ts';
 import { DbError } from '../src/engine/errors.ts';
 import { Authorities, previewAs } from '../src/engine/identity/actor.ts';
@@ -34,10 +34,10 @@ import {
 	verifyCode
 } from '../src/engine/identity/session.ts';
 import type { EngineManifest } from '../src/engine/manifest.ts';
-import { applyPlan, plan } from '../src/engine/schema/plan.ts';
 import { memoryAuditLayer } from '../src/test/index.ts';
 
 const m: EngineManifest = {
+	needs: [],
 	workspace: { tz: 'UTC', locale: 'en' },
 	models: {},
 	relationships: {},
@@ -66,7 +66,6 @@ const RateWindow = Schema.Struct({
 });
 const fixture = Effect.gen(function* () {
 	const db = yield* TenantDb;
-	yield* applyPlan(db, yield* plan(null, m), { accept: true });
 	const keys = yield* loadKeys(db);
 	expect(yield* loadKeys(db)).toEqual(keys); // 38a(e): a second cell reads the same secrets
 	yield* TestClock.setTime(Date.parse('2026-09-25T00:00:00Z'));
@@ -107,7 +106,7 @@ class IdentityFixture extends Context.Service<IdentityFixture, Effect.Success<ty
 	'test/IdentityFixture'
 ) {}
 const IdentityFixtureLive = Layer.effect(IdentityFixture, fixture).pipe(
-	Layer.provide(Layer.mergeAll(PgliteDb.layer(), NodeCrypto.layer, memoryAuditLayer))
+	Layer.provide(Layer.mergeAll(TestDb.layer(m), NodeCrypto.layer, memoryAuditLayer))
 );
 
 it.live(
@@ -116,7 +115,6 @@ it.live(
 		Effect.scoped(
 			Effect.gen(function* () {
 				const db = yield* TenantDb;
-				yield* applyPlan(db, yield* plan(null, m), { accept: true });
 				yield* db.write({
 					text: `INSERT INTO sys_user(id,name,email,phone,active,admin) VALUES
 			('admin','Boss','Boss@directory.test',null,true,true),
@@ -144,7 +142,7 @@ it.live(
 				).toEqual(['admin', 'email', 'inactive', 'phone']);
 				expect(yield* people.administered('match@directory.test')).toBeNull();
 			})
-		).pipe(Effect.provide(PgliteDb.layer()))
+		).pipe(Effect.provide(TestDb.layer(m)))
 );
 
 it.live(
@@ -153,7 +151,6 @@ it.live(
 		Effect.scoped(
 			Effect.gen(function* () {
 				const db = yield* TenantDb;
-				yield* applyPlan(db, yield* plan(null, m), { accept: true });
 				let initializations = 0;
 				const observed = TenantDb.typed({
 					...db,
@@ -187,7 +184,7 @@ it.live(
 				});
 				expect(yield* Effect.flip(loadKeys(observed))).toBeInstanceOf(DbError);
 				expect(initializations).toBe(initialized + 1);
-			}).pipe(Effect.provide(PgliteDb.layer()))
+			}).pipe(Effect.provide(TestDb.layer(m)))
 		)
 );
 

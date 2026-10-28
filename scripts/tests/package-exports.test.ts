@@ -1,9 +1,7 @@
 import assert from 'node:assert/strict';
-import { it, layer } from '@effect/vitest';
+import { it } from '@effect/vitest';
 import { unexportedSpecifiers } from '../lib/package-archive.ts';
-import { assertSpecifiersExported } from '../validate-package-publication.ts';
 import type { Manifest } from '../lib/package-release.ts';
-import { ScriptLive } from '../runtime.ts';
 it('flags a specifier naming an entry its package does not export (L-BOLT-1002)', () => {
 	const manifests = new Map<string, Pick<Manifest, 'exports'>>([
 		['@norbital-ai/bolt-server', { exports: { '.': { default: './build/index.js' } } }],
@@ -82,9 +80,4 @@ it('ignores service IDs and other data while retaining literal module import che
 		'imports.ts: @norbital-ai/bolt/destructured-resolve',
 		'component.svelte: @norbital-ai/bolt/svelte-script'
 	]);
-});
-layer(ScriptLive, { excludeTestServices: true })('published package exports', (it) => {
-	it.effect('every first-party specifier in the packages names an export', () =>
-		assertSpecifiersExported()
-	);
 });

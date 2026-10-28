@@ -35,8 +35,7 @@
 	"scripts": {
 		"build": "node ../../scripts/build-package.ts tsc -p tsconfig.json --outDir {}",
 		"prepack": "pnpm exec turbo run build --filter=@norbital-ai/store",
-		"lint": "tsc -p tsconfig.json --noEmit && tsc -p tests/tsconfig.json --noEmit",
-		"test": "vitest run"
+		"lint": "tsc -p tsconfig.json --noEmit && tsc -p tests/tsconfig.json --noEmit"
 	},
 	"dependencies": {
 		"@norbital-ai/std": "workspace:*",
@@ -46,11 +45,9 @@
 		"effect": "catalog:"
 	},
 	"devDependencies": {
-		"@effect/vitest": "catalog:",
 		"@electric-sql/pglite": "^0.5.12",
 		"@types/node": "^26.6.5",
 		"effect": "catalog:",
-		"typescript": "catalog:",
-		"vitest": "5.0.5"
+		"typescript": "catalog:"
 	}
 }

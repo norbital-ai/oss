@@ -71,9 +71,6 @@ export type IdOf<C> = C extends unknown
 		? I
 		: string
 	: never;
-/** `'<c>.<verb>'` generated writes and other callables, with their inputs. */
-export type ActionKey = keyof Names['actions'] & string;
-export type ActionInputOf<N> = N extends keyof Names['actions'] ? Names['actions'][N] : Values;
 /** A declared automation and its input as a native start form sees them. */
 export type AutomationKey = keyof Names['automations'] & string;
 /** A declared automation's input, as a native start form sees it. */

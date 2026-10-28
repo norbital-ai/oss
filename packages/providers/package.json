@@ -1,7 +1,7 @@
 {
 	"name": "@norbital-ai/providers",
 	"version": "0.0.5",
-	"description": "Providers behind Bolt's driver kinds and host ports (Twilio, Resend, Sinch, WhatsApp Web, Telegram, Slack, Discord, WeChat, IMAP + SMTP mailboxes, Google Calendar), registered by a host.",
+	"description": "Bolt's built-in integration drivers (WhatsApp via Web or Twilio, Telegram, Slack, Discord, WeChat, IMAP + SMTP mailboxes, Google Calendar), registered by a host.",
 	"type": "module",
 	"sideEffects": false,
 	"license": "AGPL-3.0-only",
@@ -30,7 +30,6 @@
 	"scripts": {
 		"build": "node ../../scripts/build-package.ts tsc -p tsconfig.json --outDir {}",
 		"lint": "tsc -p tsconfig.json --noEmit && tsc -p tests/tsconfig.json --noEmit",
-		"test": "vitest run",
 		"prepack": "pnpm exec turbo run build --filter=@norbital-ai/providers"
 	},
 	"dependencies": {
@@ -46,10 +45,8 @@
 	},
 	"devDependencies": {
 		"@effect/platform-node": "catalog:",
-		"@effect/vitest": "catalog:",
 		"@types/node": "^26.6.5",
-		"typescript": "catalog:",
-		"vitest": "5.0.5"
+		"typescript": "catalog:"
 	},
 	"repository": {
 		"type": "git",

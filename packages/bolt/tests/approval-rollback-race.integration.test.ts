@@ -9,7 +9,7 @@ import { TenantDb } from '../src/engine/db/tenant-db.ts';
 import { Approvals, Writes } from '../src/engine/services.ts';
 import { PgliteDb } from '../src/node/db/pglite.ts';
 import { TestWorkspace } from '../src/test/index.ts';
-import { program } from './support/guest-fixture.ts';
+import { program } from '../src/test/guest.ts';
 import { manifest as base } from './write-fixture.ts';
 
 const recordId = '0199a000-0000-7000-8000-000000000001',

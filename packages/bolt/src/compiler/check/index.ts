@@ -14,7 +14,11 @@ import { Effect, FileSystem, Option, Result, Schema } from 'effect';
 import ivm from 'isolated-vm';
 import { build, type Rolldown } from 'vite';
 import { minify, type MinifyOptions } from 'terser';
-import { decodeManifest, projectManifest, type EngineManifest } from '../../engine/manifest.ts';
+import {
+	decodeProjectedManifest,
+	projectManifest,
+	type EngineManifest
+} from '../../engine/manifest.ts';
 import { PRELUDE } from '../../engine/guest/prelude.ts';
 import type { GuestProgram } from '../../engine/guest/runner.ts';
 import { assetHook, digest, randomStream } from '../../node/guest-isolates.ts';
@@ -84,7 +88,8 @@ const front = Effect.fn('bolt.front')(function* (
 	root: string,
 	stage: (s: Stage) => void,
 	errors: CheckDiagnostic[],
-	bolt: string | undefined
+	bolt: string | undefined,
+	timing = true
 ) {
 	stage('discover');
 	const { files, errors: layout } = yield* discover(root);
@@ -97,7 +102,7 @@ const front = Effect.fn('bolt.front')(function* (
 	if (guest === undefined) return undefined;
 
 	stage('evaluate');
-	const evaluated = yield* evaluateTwice(guest, errors);
+	const evaluated = yield* evaluateTwice(guest, errors, timing);
 	if (evaluated === undefined) return undefined;
 
 	stage('manifest');
@@ -140,7 +145,15 @@ export const sync = Effect.fn('bolt.sync')(function* (
 	return { stages, errors };
 });
 
-type CompilerOptions = { bolt?: string; migrations?: 'generate' | 'verify'; squash?: string };
+type CompilerOptions = {
+	bolt?: string;
+	migrations?: 'generate' | 'verify';
+	squash?: string;
+	/** Rule 6's evaluation CPU budget is a gate for `bolt check` and CI; a test run on a busy machine measures load, not the workspace. */
+	timing?: boolean;
+	/** The runtime guest's second compression pass (seconds per changed guest); a watch's rebuild ships rolldown's minified output. */
+	compress?: boolean;
+};
 /** Shared declaration compilation; the diagnostic pass belongs to `bolt check`. */
 const workspace = Effect.fn('bolt.workspace')(function* (
 	dir: string,
@@ -154,11 +167,11 @@ const workspace = Effect.fn('bolt.workspace')(function* (
 	const stage = (s: Stage) => stages.push(s);
 	const out: CheckResult = { stages, errors, transforms: [] };
 
-	const evaluated = yield* front(root, stage, errors, options.bolt);
+	const evaluated = yield* front(root, stage, errors, options.bolt, options.timing ?? true);
 	if (evaluated === undefined) return out;
 	const { files, code, guest, manifest, bodies } = evaluated;
 	out.guest = guest;
-	const decoded = decodeManifest(projectManifest(manifest));
+	const decoded = decodeProjectedManifest(projectManifest(manifest));
 	if (Result.isFailure(decoded)) {
 		errors.push({
 			code: 'manifest/invalid',
@@ -190,6 +203,23 @@ const workspace = Effect.fn('bolt.workspace')(function* (
 						: String(decodedSeed.failure.cause)
 			});
 		else out.seed = tenant;
+		// the test pack (`seed/test/`) decodes against the same manifest; it is never provisioned
+		const test = Object.fromEntries(
+			Object.entries(yield* seedPack(root, errors, 'test')).filter(([c]) => !c.startsWith('sys_'))
+		);
+		const decodedTest = Result.try({
+			try: () => decodeSeed(m, test),
+			catch: (cause) => new EvalError({ cause })
+		});
+		if (Result.isFailure(decodedTest))
+			errors.push({
+				code: 'seed/decode',
+				path: 'seed/test',
+				message:
+					decodedTest.failure.cause instanceof Error
+						? decodedTest.failure.cause.message
+						: String(decodedTest.failure.cause)
+			});
 	}
 
 	stage('schema');
@@ -237,7 +267,7 @@ const workspace = Effect.fn('bolt.workspace')(function* (
 		errors.push(...sourceRules(m, sources));
 	}
 	if (errors.length === 0) {
-		const runtime = yield* bundle(root, code, errors, true, bodies.models);
+		const runtime = yield* bundle(root, code, errors, true, bodies.models, options.compress ?? true);
 		if (runtime !== undefined) out.guest = runtime;
 	}
 	return out;
@@ -313,7 +343,8 @@ const bundle = Effect.fn('bolt.bundle')(function* (
 	code: readonly Discovered[],
 	errors: CheckDiagnostic[],
 	runtime: boolean = false,
-	models: readonly string[] = []
+	models: readonly string[] = [],
+	compress = false
 ) {
 	const fs = yield* FileSystem.FileSystem;
 	const byRole = Map.groupBy(code, (f) => f.role);
@@ -443,7 +474,7 @@ const bundle = Effect.fn('bolt.bundle')(function* (
 		);
 	let source = chunk.code;
 	let sourceMap = chunk.map?.toString();
-	if (runtime) {
+	if (runtime && compress) {
 		// Compress the native output with its map; declaration validation and module ordering stay upstream.
 		const inputMap = chunk.map?.toString();
 		const options: MinifyOptions = {
@@ -608,7 +639,8 @@ function missing(specifier: string, source: string): string {
 
 const evaluateTwice = Effect.fn('bolt.evaluateTwice')(function* (
 	program: GuestProgram,
-	errors: CheckDiagnostic[]
+	errors: CheckDiagnostic[],
+	timing: boolean
 ) {
 	const runs = yield* Effect.all([evaluate(program), evaluate(program)], { concurrency: 1 }).pipe(
 		Effect.result
@@ -649,7 +681,7 @@ const evaluateTwice = Effect.fn('bolt.evaluateTwice')(function* (
 			message: 'two evaluations of the declarations gave different manifests (rule 2)'
 		});
 	// the cheaper of the two runs: a busy machine only ever adds CPU time, never removes it
-	if (Math.min(a.cpuMs, b.cpuMs) > EVAL_CPU_MS)
+	if (timing && Math.min(a.cpuMs, b.cpuMs) > EVAL_CPU_MS)
 		errors.push({
 			code: 'guest/eval-cpu',
 			path: 'guest.mjs',

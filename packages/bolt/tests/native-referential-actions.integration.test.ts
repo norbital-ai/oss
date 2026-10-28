@@ -6,7 +6,7 @@ import type { Json } from '../src/decl/values.ts';
 import type { EngineManifest } from '../src/engine/manifest.ts';
 import { Approvals, Writes } from '../src/engine/services.ts';
 import { TestWorkspace } from '../src/test/index.ts';
-import { program } from './support/guest-fixture.ts';
+import { program } from '../src/test/guest.ts';
 import { manifest as base } from './write-fixture.ts';
 
 const manifest: EngineManifest = {
@@ -226,11 +226,34 @@ const fixture = Effect.gen(function* () {
 
 describe('database-owned referential actions', () => {
 	it.live(
-		'raw DELETE cascades without inverses and records both polymorphic SET NULL updates atomically',
+		'raw DELETE refuses a held descendant; released, it cascades and records both polymorphic SET NULL updates atomically',
 		() =>
 			Effect.scoped(
 				Effect.gen(function* () {
 					const f = yield* fixture;
+					const held = yield* f.act(
+						'watchers',
+						'update',
+						[{ target: f.watcher, set: { name: 'Held watcher' } }],
+						f.requester
+					);
+					assert.ok(held.outcome.kind === 'pendingApproval');
+					const holding = yield* f.snapshot();
+					const refused = yield* Effect.result(f.t.db.write(f.rawDelete));
+					assert.ok(Result.isFailure(refused));
+					assert.equal(refused.failure.sqlstate, 'BA001');
+					assert.match(refused.failure.message, /^underApproval(?: |$)/);
+					assert.deepEqual(yield* f.snapshot(), holding);
+					yield* f.cleanJournal;
+					assert.deepEqual(yield* f.counts(), [{ roots: 1, branches: 1, leaves: 1, archives: 1 }]);
+					yield* f.approvals.decide({
+						requestId: held.outcome.requestId,
+						decision: 'reject',
+						reason: 'Keep the name',
+						authority: f.reviewer,
+						now: f.t.clock.now()
+					});
+					// the held update and its rejection are revisions 2 and 3
 					const before = yield* f.snapshot();
 					const failed = yield* Effect.result(
 						f.t.db.transaction({
@@ -258,7 +281,7 @@ describe('database-owned referential actions', () => {
 							first__archives: null,
 							second__roots: null,
 							second__archives: null,
-							revision: 3
+							revision: 5
 						}
 					]);
 					const history = yield* f.history();
@@ -278,7 +301,7 @@ describe('database-owned referential actions', () => {
 						]
 					);
 					const updates = history.filter(
-						(row) => row.model === 'watchers' && row.op === 'update'
+						(row) => row.model === 'watchers' && row.op === 'update' && row.cause === 'cascade'
 					);
 					assert.deepEqual(
 						updates.map((row) => ({
@@ -287,8 +310,8 @@ describe('database-owned referential actions', () => {
 							request: row.request
 						})),
 						[
-							{ revision: 2, cause: 'cascade', request: null },
-							{ revision: 3, cause: 'cascade', request: null }
+							{ revision: 4, cause: 'cascade', request: null },
+							{ revision: 5, cause: 'cascade', request: null }
 						]
 					);
 					assert.deepEqual(updates.flatMap((row) => Object.keys(row.changes)).sort(), [
@@ -296,31 +319,6 @@ describe('database-owned referential actions', () => {
 						'second__roots'
 					]);
 					for (const row of updates) assert.deepEqual(Object.values(row.changes), [null]);
-				})
-			)
-	);
-
-	it.live(
-		'raw DELETE refuses a held descendant and rolls back every native referential effect',
-		() =>
-			Effect.scoped(
-				Effect.gen(function* () {
-					const f = yield* fixture;
-					const held = yield* f.act(
-						'watchers',
-						'update',
-						[{ target: f.watcher, set: { name: 'Held watcher' } }],
-						f.requester
-					);
-					assert.ok(held.outcome.kind === 'pendingApproval');
-					const before = yield* f.snapshot();
-					const failed = yield* Effect.result(f.t.db.write(f.rawDelete));
-					assert.ok(Result.isFailure(failed));
-					assert.equal(failed.failure.sqlstate, 'BA001');
-					assert.match(failed.failure.message, /^underApproval(?: |$)/);
-					assert.deepEqual(yield* f.snapshot(), before);
-					yield* f.cleanJournal;
-					assert.deepEqual(yield* f.counts(), [{ roots: 1, branches: 1, leaves: 1, archives: 1 }]);
 				})
 			)
 	);

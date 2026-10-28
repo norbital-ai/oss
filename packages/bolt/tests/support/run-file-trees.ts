@@ -51,8 +51,6 @@ export const REPORT: Tree = {
 		'};'
 	)
 };
-export const SALES = 'region,amount\nnorth,120.50\nsouth,80.25\nnorth,19.50\neast,42\n';
-
 export const RENDER: Tree = {
 	'SKILL.md': lines('---', 'description: Render notes as a page', '---'),
 	'scripts/render.mjs': lines(

@@ -316,7 +316,7 @@ export type CrossAnswer = (
 				| { kind: 'refused'; code: string; message: string }
 				| { kind: 'bolt'; code: string; message: string };
 	  }
-) & { /** hook:runner — a journal hit (rule 55): costs no crossing (rule 12). */ journal?: true };
+);
 export type GuestOutcome =
 	| { kind: 'ok'; output: Json }
 	/** `ctx.refuse(message, { field, row })`; `row` indexes the batch a write callback received. */
@@ -628,9 +628,6 @@ export interface LogPort {
 	write(event: LogEvent): void;
 	query(query: LogQuery, signal: AbortSignal): Promise<readonly LogRow[]>;
 }
-export interface MeteringPort {
-	record(meter: string, quantity: number, key: string): Promise<void>;
-}
 export interface TenancyPort {
 	/** The environment scope a request's host name addresses, or `null`. */
 	resolve(host: string): Promise<string | null>;
@@ -697,7 +694,7 @@ export interface LinksPort {
 /**
  * The release's files, read-only. Paths are posix and relative to the release directory (`artifact.json`,
  * `client/index.html`), with no `.`, empty, `\` or NUL segment; `..` only as `../seed/<pack>/…`, the build's seed packs
- * beside the release (`.norbital/artifact` + `.norbital/seed/<pack>`). The host refuses any other path and resolves
+ * beside the release (`.norbital/bundle` + `.norbital/seed/<pack>`). The host refuses any other path and resolves
  * symlinks itself, so a path never leaves those roots. `stat` answers `null` for nothing there; `list` answers every
  * file (never a directory) under `dir`, recursively, relative to `dir`, sorted.
  */
@@ -920,7 +917,6 @@ export type HostPorts = {
 	browser?: BrowserPort;
 	push?: TransportPort;
 	links?: LinksPort;
-	metering?: MeteringPort;
 	logs?: LogPort;
 	tenancy?: TenancyPort;
 	membership?: MembershipPort;

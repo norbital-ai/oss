@@ -1,28 +1,10 @@
 import { describe, expect, it } from '@effect/vitest';
 import { Deferred, Effect, Fiber, Schema } from 'effect';
-import { vi } from 'vitest';
 import { ProviderUnavailable, type ProviderFailure } from '../src/errors.ts';
 import { mailboxWatch } from '../src/imap-smtp/mailbox-watch.ts';
 import { type Cursor, Mailbox } from '../src/imap-smtp/model.ts';
-import { fakeImap } from './mail-servers.ts';
+import { fakeImap, loopback } from './mail-servers.ts';
 import { until } from './kit.ts';
-
-vi.mock('@norbital-ai/bolt/node', async (original) => {
-	const actual = await original<typeof import('@norbital-ai/bolt/node')>();
-	const { Effect } = await import('effect');
-	return {
-		...actual,
-		publicDestination: (hostname: string, port: number) =>
-			hostname !== '127.0.0.1'
-				? actual.publicDestination(hostname, port)
-				: Effect.succeed({
-						hostname,
-						port,
-						address: { address: hostname, family: 4 },
-						addresses: [{ address: hostname, family: 4 }]
-					})
-	};
-});
 
 const range = (first: number, last: number) =>
 	Array.from({ length: last - first + 1 }, (_, index) => first + index);
@@ -80,7 +62,7 @@ const fixture = Effect.fn('MailboxBackfill.fixture')(function* (
 				box,
 				personal,
 				after,
-				plain: true,
+				net: loopback,
 				login: () => Effect.succeed({ user: box.user, pass: 'pw' }),
 				cursor: () => cursor,
 				advance: (next) =>
@@ -104,7 +86,7 @@ const fixture = Effect.fn('MailboxBackfill.fixture')(function* (
 	};
 });
 
-describe('mailbox history checkpoints', { timeout: 15_000 }, () => {
+describe('mailbox history checkpoints', () => {
 	it.live(
 		'retains a workspace mailbox’s unconsumed checkpoint backlog when its boundary changes',
 		() =>

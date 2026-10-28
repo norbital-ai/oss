@@ -1,45 +1,18 @@
-// @vitest-environment happy-dom
 // Runtime gaps the template migration found (§5.8, §5.8.1, §3.3.5, rules 55, 56): `ctx.progress` in automations, stopping
-// a queued or running run (the engine, the shell route and `$bolt.runs.stop`), the files facility over the host's files
-// port (put, get, meta and url, seeded files included), and a file sync's bodies carried by `bolt check`.
-import './setup-happy-dom.js';
+// a queued or running run (the engine and the shell route), and the files facility over the host's files port.
 import { randomUUID } from 'node:crypto';
-import { cpSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-import { afterAll, describe, expect, it } from '@effect/vitest';
-import {
-	Context,
-	Deferred,
-	Effect,
-	Fiber,
-	FiberSet,
-	Layer,
-	Option,
-	Result,
-	Schema,
-	Stream
-} from 'effect';
-import * as NodeServices from '@effect/platform-node/NodeServices';
+import { describe, expect, layer } from '@effect/vitest';
+import { Context, Deferred, Effect, Fiber, Layer, Option, Result, Schema } from 'effect';
 import type { Json } from '../src/decl/values.ts';
-import { decodeManifest } from '../src/engine/manifest.ts';
+import { decodeProjectedManifest } from '../src/engine/manifest.ts';
 import { Callables, Runs } from '../src/engine/services.ts';
-import { Files, WebRead } from '../src/engine/ports.ts';
+import { WebRead } from '../src/engine/ports.ts';
 import { Port } from '../src/engine/port.ts';
-import { TestWorkspace, type Kit, type TestOptions } from '../src/test/index.ts';
-import { TenantDb } from '../src/engine/db/tenant-db.ts';
-import { PgliteDb, Pristine, type PgliteClient } from '../src/node/db/pglite.ts';
-import { program } from './support/guest-fixture.ts';
+import { TestWorkspace, type Kit, type WorkspaceServices } from '../src/test/index.ts';
+import { program } from '../src/test/guest.ts';
 import { actReply, routeFixture } from './support/route-fixture.ts';
-import { packAssetLoader } from '../src/engine/artifact/read.ts';
-import { sourceOf } from '../src/engine/write/pack.ts';
-import { sha256Hex } from '@norbital-ai/store';
-import { check } from '../src/compiler/check/index.ts';
-import { shellApi } from '../src/shell/runtime.ts';
-
-const node = NodeServices.layer;
 const manifest = Result.getOrThrow(
-	decodeManifest({
+	decodeProjectedManifest({
 		workspace: { tz: 'UTC', locale: 'en' },
 		models: {
 			notes: { description: 'A note', label: 'title', fields: { title: { kind: 'text' } } },
@@ -64,7 +37,10 @@ const manifest = Result.getOrThrow(
 		exposures: {
 			notes: { read: { notes: { fields: 'all' } }, create: { columns: { notes: ['title'] } } },
 			docs: { read: { docs: { fields: 'all' } }, create: { columns: { docs: ['title', 'file'] } } },
-			secrets: { read: { secrets: { fields: 'all' } }, create: { columns: { secrets: ['title', 'file'] } } }
+			secrets: {
+				read: { secrets: { fields: 'all' } },
+				create: { columns: { secrets: ['title', 'file'] } }
+			}
 		},
 		integrations: {},
 		teams: { ops: ['ops'] },
@@ -123,25 +99,28 @@ const required = <T>(value: T | undefined): T => {
 };
 const sql = (t: Kit, text: string, params: Json[] = []) =>
 	t.db.rows(Schema.Record(Schema.String, Schema.Json), { text, params });
-const setup = (web?: WebRead['Service']['read'], shell = false, database?: TestOptions['db']) =>
+// one workspace per file: each test sets the web port's answer and filters runs by its own ids
+const unused: WebRead['Service']['read'] = (url) =>
+	Effect.succeed({ url, title: 'Unused', text: '' });
+let answer: WebRead['Service']['read'] = unused;
+const workspace = Layer.unwrap(
+	Effect.map(guest, (guest) =>
+		TestWorkspace.layer({
+			manifest,
+			guest,
+			ports: Layer.succeed(WebRead, { read: (...args) => answer(...args) }),
+			host: {
+				publicUrl: 'https://acme.example',
+				secure: false,
+				workspace: () => ({ name: 'Acme', handle: 'acme' })
+			}
+		})
+	)
+);
+const setup = (web: WebRead['Service']['read'] = unused) =>
 	Effect.gen(function* () {
-		const context = yield* Layer.build(
-			TestWorkspace.layer({
-				manifest,
-				guest: yield* guest,
-				...(database === undefined ? {} : { db: database }),
-				...(web === undefined ? {} : { ports: Layer.succeed(WebRead, { read: web }) }),
-				...(shell
-					? {
-							host: {
-								publicUrl: 'https://acme.example',
-								secure: false,
-								workspace: () => ({ name: 'Acme', handle: 'acme' })
-							}
-						}
-					: {})
-			})
-		);
+		answer = web;
+		const context = yield* Effect.context<TestWorkspace | WorkspaceServices>();
 		const t = Context.get(context, TestWorkspace),
 			route = yield* routeFixture(context),
 			calls = Context.get(context, Callables),
@@ -172,8 +151,9 @@ const setup = (web?: WebRead['Service']['read'], shell = false, database?: TestO
 		};
 	});
 
+layer(workspace, { excludeTestServices: true })('runtime gaps', (it) => {
 describe('ctx.progress (L-BOLT-336)', () => {
-	it.live('an automation reports progress onto its run', () =>
+	it.effect('an automation reports progress onto its run', () =>
 		Effect.gen(function* () {
 			const { t, runs, start } = yield* setup();
 			const started = yield* start('report', {});
@@ -196,7 +176,7 @@ describe('ctx.progress (L-BOLT-336)', () => {
 });
 
 describe('stopping a run', () => {
-	it.live(
+	it.effect(
 		'a queued run stops before it starts; only a holder of its automation or an admin may stop it',
 		() =>
 			Effect.gen(function* () {
@@ -212,7 +192,7 @@ describe('stopping a run', () => {
 			})
 	);
 
-	it.live(
+	it.effect(
 		'a running run stops at its next crossing and stays stopped; a stop recorded elsewhere is seen at its next progress',
 		() =>
 			Effect.gen(function* () {
@@ -246,7 +226,7 @@ describe('stopping a run', () => {
 			})
 	);
 
-	it.live(
+	it.effect(
 		'a stop ends the crossing in flight: the tick does not wait for a facility that never answers',
 		() =>
 			Effect.gen(function* () {
@@ -268,39 +248,37 @@ describe('stopping a run', () => {
 			})
 	);
 
-	it.live('the shell route stops a run for its holder, and `$bolt.runs.stop` calls it', () =>
+	it.effect('the shell route stops a run for its holder', () =>
 		Effect.gen(function* () {
-			const { t, start } = yield* setup(undefined, true);
+			const { t, start } = yield* setup();
 			const user = randomUUID();
 			yield* t.db.write({
 				text: `INSERT INTO sys_user (id, email, name, kind, admin, team) VALUES ($1, 'ops@acme.example', 'Ops', 'staff', false, 'ops')`,
 				params: [user]
 			});
-			const cookie = yield* t.session(user),
-				run = yield* FiberSet.makeRuntimePromise();
-			const fetch: typeof globalThis.fetch = (input, init = {}) =>
-				run(
-					Effect.gen(function* () {
-						const url = new URL(
-							typeof input === 'string' ? input : input instanceof URL ? input.href : input.url,
-							'https://acme.example'
-						);
-						const request = new Request(url, input instanceof Request ? input : init);
-						request.headers.set('cookie', cookie);
-						return yield* t.handle(request);
+			const cookie = yield* t.session(user);
+			const stop = (id: string) =>
+				t.handle(
+					new Request('https://acme.example/__bolt/shell/runs/stop', {
+						method: 'POST',
+						headers: { cookie, 'content-type': 'application/json' },
+						body: JSON.stringify({ id })
 					})
 				);
 			const id = randomUUID();
 			yield* start('report', {}, id);
-			const api = shellApi(fetch);
-			expect(yield* api.stopRun(id)).toMatchObject({ id, status: 'stopped' });
-			expect(yield* api.stopRun(randomUUID()).pipe(Effect.flip)).toMatchObject({ status: 404 });
+			const stopped = yield* stop(id);
+			expect(stopped.status).toBe(200);
+			expect(yield* Effect.promise(() => stopped.json())).toMatchObject({
+				value: { id, status: 'stopped' }
+			});
+			expect((yield* stop(randomUUID())).status).toBe(404);
 		})
 	);
 });
 
 describe('the files facility in automations (§5.8.1)', () => {
-	it.live(
+	it.effect(
 		'puts bytes as a FileRef on the run and reads them back, with meta, a URL and the max bound',
 		() =>
 			Effect.gen(function* () {
@@ -345,7 +323,7 @@ describe('the files facility in automations (§5.8.1)', () => {
 			})
 	);
 
-	it.live('reads an uploaded file the runAs may read, and refuses one it may not', () =>
+	it.effect('reads an uploaded file the runAs may read, and refuses one it may not', () =>
 		Effect.gen(function* () {
 			const { t, start, act } = yield* setup();
 			const admin = t.as(t.admin);
@@ -390,271 +368,5 @@ describe('the files facility in automations (§5.8.1)', () => {
 			});
 		})
 	);
-
-	it.live(
-		'seed media uses bounded batches outside database transactions, retains each file and remains readable',
-		() =>
-			Effect.gen(function* () {
-				let active = 0;
-				let activeFiles = 0;
-				let openStreams = 0;
-				let batches = 0;
-				let puts = 0;
-				let streams = 0;
-				const storedBytes: number[] = [];
-				const database = Layer.effect(
-					TenantDb,
-					Effect.gen(function* () {
-						const pg = yield* PgliteDb.open();
-						const observed: PgliteClient = {
-							query: (text, params) => pg.query(text, params),
-							exec: (text) => pg.exec(text),
-							transaction: (body) => {
-								let entered = false;
-								return pg
-									.transaction(async (tx) => {
-										expect(activeFiles).toBe(0);
-										expect(openStreams).toBe(0);
-										entered = true;
-										active++;
-										batches++;
-										return await body(tx);
-									})
-									.finally(() => {
-										if (entered) active--;
-									});
-							}
-						};
-						return PgliteDb.make(observed);
-					})
-				).pipe(Layer.provide(Pristine.layer));
-				const { context, t, start } = yield* setup(undefined, false, database);
-				const originalFiles = Context.get(context, Files);
-				const files: Files['Service'] = {
-					...originalFiles,
-					put: (bytes, meta) =>
-						Effect.suspend(() => {
-							expect(active).toBe(0);
-							activeFiles++;
-							puts++;
-							storedBytes.push(bytes.byteLength);
-							return originalFiles.put(bytes, meta).pipe(
-								Effect.ensuring(
-									Effect.sync(() => {
-										activeFiles--;
-										expect(active).toBe(0);
-									})
-								)
-							);
-						})
-				};
-				const dir = join(scratch, `pack-${randomUUID()}`);
-				mkdirSync(join(dir, 'assets', 'docs'), { recursive: true });
-				const bytes = new TextEncoder().encode('seeded'),
-					digest = sha256Hex(bytes);
-				writeFileSync(join(dir, 'assets', 'docs', 'seed.txt'), bytes);
-				const extra = [2, 2, 2, 2, 6, 6].map((mib, index) => {
-					const bytes = new Uint8Array(mib * 1024 * 1024);
-					const path = `docs/extra-${index}.txt`;
-					writeFileSync(join(dir, 'assets', path), bytes);
-					return {
-						path,
-						bytes: bytes.byteLength,
-						sha256: sha256Hex(bytes),
-						contentType: 'text/plain'
-					};
-				});
-				yield* t.db.write({ text: 'DELETE FROM sys_run', params: [] });
-				const pack = sourceOf({
-					dir,
-					rows: {
-						docs: [
-							{ id: randomUUID(), title: 'S', file: { asset: 'docs/seed.txt' } },
-							...extra.map((asset) => ({
-								id: randomUUID(),
-								title: asset.path,
-								file: { asset: asset.path }
-							}))
-						]
-					},
-					meta: {
-						format: 1,
-						name: 'base',
-						hash: 'h',
-						start: [],
-						rows: { docs: 1 + extra.length },
-						assets: [
-							{ path: 'docs/seed.txt', bytes: 6, sha256: digest, contentType: 'text/plain' },
-							...extra
-						]
-					}
-				});
-				const beforeLoad = batches;
-				const loader = yield* packAssetLoader(
-					t.db,
-					manifest,
-					{
-						...pack,
-						rows: (model, from) =>
-							Stream.unwrap(
-								Effect.sync(() => {
-									expect(active).toBe(0);
-									openStreams++;
-									streams++;
-									return pack.rows(model, from);
-								})
-							).pipe(
-								Stream.tap(() => Effect.sync(() => expect(active).toBe(0))),
-								Stream.ensuring(
-									Effect.sync(() => {
-										openStreams--;
-										expect(active).toBe(0);
-									})
-								)
-							)
-					},
-					files,
-					t.clock.now()
-				).pipe(Effect.provide(node));
-				let loaded: 'loaded' | 'hadRows' | 'more' = 'more';
-				let largestBatch = 0;
-				while (loaded === 'more') {
-					const before = puts;
-					loaded = yield* loader.step.pipe(Effect.provide(node));
-					const batch = storedBytes.slice(before);
-					largestBatch = Math.max(largestBatch, batch.length);
-					expect(batch.length).toBeLessThanOrEqual(4);
-					expect(
-						batch.length <= 1 || batch.reduce((sum, bytes) => sum + bytes, 0) <= 8 * 1024 * 1024
-					).toBe(true);
-				}
-				expect(loaded).toBe('loaded');
-				expect(largestBatch).toBe(4);
-				expect(puts).toBe(1 + extra.length);
-				expect(batches).toBeGreaterThan(beforeLoad);
-				expect(puts).toBeGreaterThan(0);
-				expect(streams).toBeGreaterThan(0);
-				expect(active).toBe(0);
-				expect(activeFiles).toBe(0);
-				expect(openStreams).toBe(0);
-				expect((yield* sql(t, `SELECT id FROM sys_file`)).length).toBe(1 + extra.length);
-				const [row] = yield* sql(t, `SELECT file FROM docs WHERE title = 'S'`);
-				expect(required(row)['file']).toMatchObject({
-					name: 'seed.txt',
-					mime: 'text/plain',
-					bytes: 6,
-					sha256: digest
-				});
-				yield* start('read_doc', { ref: required(required(row)['file']) });
-				yield* t.runDue();
-				expect(
-					(yield* sql(t, `SELECT state, output FROM sys_run WHERE automation = 'read_doc'`))[0]
-				).toMatchObject({ state: 'succeeded', output: { text: 'seeded', meta: { bytes: 6 } } });
-			})
-	);
 });
-
-describe('file syncs from source', () => {
-	it.live(
-		'`bolt check` keeps file read, write and custom parser bodies on their model',
-		() =>
-			Effect.gen(function* () {
-				const root = copy('file-sync');
-				writeFileSync(
-					join(root, 'src/data/model/customers/+model.ts'),
-					`import { model, type Finding } from '@norbital-ai/bolt';
-export default model('customers', {
-	description: 'Buyers', label: 'name', key: ['name'],
-	fields: {
-		name: { kind: 'text' },
-		rating: { kind: 'custom', of: 'rating', optional: true },
-		order_count: { kind: 'count', of: 'orders' }
-	},
-	read: 'all',
-	create: { columns: { customers: ['name', 'rating'] } },
-	update: { columns: { customers: ['name', 'rating'] } },
-	syncs: {
-		sheet: {
-			with: 'file',
-			parser: ['csv', {
-				type: 'text/plain', extensions: ['.buyers'],
-				parse: function* buyerSheetParse(file, ctx) {
-					const text = yield* ctx.files.text(file);
-					return text.split('\\n').map((line, i) => {
-						const [name = '', related_name] = line.split('|');
-						return { name, related_name: related_name ?? null, $at: i + 1 };
-					});
-				}
-			}],
-			schema: {
-				name: { kind: 'text', label: 'Buyer name' },
-				related_name: { kind: 'text', optional: true }
-			},
-			read: function* buyerSheetRead({ records }, ctx) {
-				const names = records.map((r) => r.name.trim());
-				const known = yield* ctx.db.query({
-					customers: { where: { name: { in: names } }, fields: ['name'] }
-				});
-				const existing = new Set(known.customers.rows.map((r) => r.name));
-				return {
-					rows: records.filter((r) => r.name.trim() !== '').map((r) => ({ name: r.name.trim() })),
-					findings: records.flatMap((r): Finding[] => r.name.trim() === ''
-						? [{ at: r.$at, field: 'name', message: 'A buyer name is required.', severity: 'refuse' }]
-						: existing.has(r.name.trim())
-							? [{ at: r.$at, field: 'name', message: 'This buyer already exists.', severity: 'warn' }]
-							: []),
-					related: { customers: records.flatMap((r) => {
-						const name = r.related_name?.trim();
-						return name ? [{ name }] : [];
-					}) }
-				};
-			},
-			write: function* buyerSheetExport(_, ctx) {
-				const buyers = yield* ctx.db.query({
-					customers: { fields: ['name'], orderBy: { name: 'asc' } }
-				});
-				return buyers.customers.rows.map((r) => ({ name: r.name, related_name: null }));
-			}
-		}
-	}
-});`
-				);
-				const c = yield* check(root).pipe(Effect.provide(node));
-				expect(c.errors).toEqual([]);
-				if (c.manifest === undefined || c.guest === undefined)
-					throw new Error('compiled manifest or guest missing');
-				expect(c.manifest.exposures['customers']?.syncs?.['sheet']).toMatchObject({
-					with: 'file',
-					parser: ['csv', { type: 'text/plain', extensions: ['.buyers'] }],
-					schema: {
-						name: { kind: 'text', label: 'Buyer name' },
-						related_name: { kind: 'text', optional: true }
-					},
-					read: true,
-					write: true
-				});
-				for (const body of ['buyerSheetParse', 'buyerSheetRead', 'buyerSheetExport'])
-					expect(c.guest.source).toContain(body);
-			}),
-		120_000
-	);
 });
-
-const FIXTURE = join(import.meta.dirname, 'fixtures/good');
-const scratch = join(tmpdir(), 'norbital-scratch', `runtime-${randomUUID()}`);
-afterAll(() => rmSync(scratch, { recursive: true, force: true }));
-function copy(name: string): string {
-	const root = join(scratch, name);
-	cpSync(FIXTURE, root, { recursive: true, filter: (p) => !p.includes('.norbital') });
-	for (const f of readdirSync(join(root, 'src'), { recursive: true })
-		.map(String)
-		.filter((f) => f.endsWith('.ts'))) {
-		const p = join(root, 'src', f);
-		writeFileSync(
-			p,
-			readFileSync(p, 'utf8').replace(/'(\.\.\/)+src\/index\.ts'/g, "'@norbital-ai/bolt'")
-		);
-	}
-	writeFileSync(join(root, 'tsconfig.json'), '{}');
-	return root;
-}

@@ -82,10 +82,9 @@ export const param = (v: Json): string | null =>
 	v === null ? null : typeof v === 'object' ? JSON.stringify(v) : String(v);
 
 /** Server-side bounds stay below the adapter's 20-second whole-call wall. */
+// one statement, so each batch pays one round trip for its transaction-local limits
 export const DATABASE_SETTINGS: readonly string[] = Object.freeze([
-	"set local lock_timeout = '5s'",
-	"set local statement_timeout = '15s'",
-	"set local idle_in_transaction_session_timeout = '5s'"
+	"select set_config('lock_timeout', '5s', true), set_config('statement_timeout', '15s', true), set_config('idle_in_transaction_session_timeout', '5s', true)"
 ]);
 
 const copiedJson = (value: Json): Json => {

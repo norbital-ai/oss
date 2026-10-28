@@ -1,6 +1,6 @@
 import { expect, it } from '@effect/vitest';
 import { Context, Effect, Layer } from 'effect';
-import { program } from './support/guest-fixture.ts';
+import { program } from '../src/test/guest.ts';
 import { actReply, qReply, routeFixture } from './support/route-fixture.ts';
 import { TestWorkspace } from '../src/test/index.ts';
 import { ACME, manifest, seed } from './engine-fixture.ts';

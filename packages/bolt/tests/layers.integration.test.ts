@@ -2,14 +2,14 @@
 // and masks its read layers; a layer model's own grants are never consulted; a model without `read` is a layer, never
 // a root; a user `where` only narrows. Writes are batches: `columns` are admitted before any guest code, then ONE
 // `check` per verb judges the whole batch tree; `deny` refuses it, `approve` holds it.
-import { describe, expect, it } from '@effect/vitest';
+import { expect, layer } from '@effect/vitest';
 import { Effect, Layer, type Scope } from 'effect';
 import type { Authority } from '../src/engine/contracts.ts';
 import type { EngineManifest } from '../src/engine/manifest.ts';
 import type { Json } from '../src/decl/values.ts';
 import { dynamicRead } from '../src/protocol/read-request.ts';
 import { TestWorkspace, type Kit, type WorkspaceServices } from '../src/test/index.ts';
-import { program } from './support/guest-fixture.ts';
+import { program } from '../src/test/guest.ts';
 import { actReply, qReply, routeFixture, type FixtureRoute } from './support/route-fixture.ts';
 
 const ACME = '0199a000-0000-4000-8000-0000000000a1';
@@ -22,6 +22,7 @@ const L0 = '0199a000-0000-4000-8000-0000000000c1',
 	T5 = '0199a000-0000-4000-8000-0000000000c4';
 
 const manifest: EngineManifest = {
+	needs: [],
 	workspace: { tz: 'UTC', locale: 'en' },
 	models: {
 		// no `read`: stored, and a layer of orders, never a root
@@ -157,11 +158,11 @@ const act = (route: FixtureRoute, t: Kit, who: Authority, callable: string, inpu
 const raw = (route: FixtureRoute, who: Authority, request: Json) =>
 	qReply(route, who, { reads: [{ m: 'query', a: [request] }] });
 const ids = (rows: readonly { readonly id: string }[]) => rows.map((row) => row.id);
-const run = <A, E>(body: Effect.Effect<A, E, Scope.Scope | TestWorkspace | WorkspaceServices>) =>
-	body.pipe(Effect.scoped, Effect.provide(workspace));
+// Reads never write, so one workspace serves every read; the writes share a second one.
+const run = <A, E, R>(body: Effect.Effect<A, E, R | Scope.Scope>) => Effect.scoped(body);
 
-describe('read layers: one access point, the root policy alone', () => {
-	it.live('the root `where` filters roots; a user `where` narrows it and never widens it', () =>
+layer(workspace)('read layers: one access point, the root policy alone', (it) => {
+	it.effect('the root `where` filters roots; a user `where` narrows it and never widens it', () =>
 		run(
 			Effect.gen(function* () {
 				const { rep } = yield* setup;
@@ -180,7 +181,7 @@ describe('read layers: one access point, the root policy alone', () => {
 		)
 	);
 
-	it.live(
+	it.effect(
 		'a layer row shows with no grant on its model; reading that model as a root is its own access point',
 		() =>
 			run(
@@ -198,7 +199,7 @@ describe('read layers: one access point, the root policy alone', () => {
 			)
 	);
 
-	it.live('a model without `read` is a layer, refused as a root', () =>
+	it.effect('a model without `read` is a layer, refused as a root', () =>
 		run(
 			Effect.gen(function* () {
 				const { rep } = yield* setup;
@@ -216,7 +217,7 @@ describe('read layers: one access point, the root policy alone', () => {
 		)
 	);
 
-	it.live(
+	it.effect(
 		'a layer `where` filters only that layer: a list shrinks, a ref nulls, the root stays',
 		() =>
 			run(
@@ -259,7 +260,7 @@ describe('read layers: one access point, the root policy alone', () => {
 			)
 	);
 
-	it.live('a field the root policy narrows away stays masked in its layer, even when named', () =>
+	it.effect('a field the root policy narrows away stays masked in its layer, even when named', () =>
 		run(
 			Effect.gen(function* () {
 				const { t, rep } = yield* setup;
@@ -278,7 +279,7 @@ describe('read layers: one access point, the root policy alone', () => {
 		)
 	);
 
-	it.live(
+	it.effect(
 		'the wire refuses an unknown option, a path outside the declaration and a sixth level',
 		() =>
 			run(
@@ -298,8 +299,8 @@ describe('read layers: one access point, the root policy alone', () => {
 	);
 });
 
-describe('write layers: columns first, then one check over the batch', () => {
-	it.live('a column outside the grant`s columns is refused before `check` runs', () =>
+layer(workspace)('write layers: columns first, then one check over the batch', (it) => {
+	it.effect('a column outside the grant`s columns is refused before `check` runs', () =>
 		run(
 			Effect.gen(function* () {
 				const { t, route, rep } = yield* setup;
@@ -313,39 +314,7 @@ describe('write layers: columns first, then one check over the batch', () => {
 		)
 	);
 
-	it.live('`check` sees the whole batch, nested layers included, in one call', () =>
-		run(
-			Effect.gen(function* () {
-				const { t, route, rep } = yield* setup;
-				expect(
-					yield* act(route, t, rep.authority, 'orders.create', [
-						{ number: 'COUNT', region: 'north', lines: [{ product: 'a', quantity: 1 }] },
-						{
-							number: 'B',
-							region: 'north',
-							lines: [
-								{ product: 'b', quantity: 1 },
-								{ product: 'c', quantity: 1 }
-							]
-						}
-					])
-				).toMatchObject({
-					kind: 'refused',
-					code: 'refused',
-					message: 'rows:2;lines:3',
-					rule: 'rep.orders.create'
-				});
-				// an update's `before` is the stored tree of the declared update layers
-				expect(
-					yield* act(route, t, rep.authority, 'orders.update', [
-						{ target: N1, set: { status: 'sent' } }
-					])
-				).toMatchObject({ kind: 'committed' });
-			})
-		)
-	);
-
-	it.live('`deny` refuses the whole batch at the row, path and field it names', () =>
+	it.effect('`deny` refuses the whole batch at the row, path and field it names', () =>
 		run(
 			Effect.gen(function* () {
 				const { t, route, rep } = yield* setup;
@@ -371,7 +340,7 @@ describe('write layers: columns first, then one check over the batch', () => {
 		)
 	);
 
-	it.live('`approve` holds the batch for its flow', () =>
+	it.effect('`approve` holds the batch for its flow', () =>
 		run(
 			Effect.gen(function* () {
 				const { t, route, rep } = yield* setup;

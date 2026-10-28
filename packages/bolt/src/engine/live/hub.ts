@@ -89,9 +89,6 @@ const PageSchema = Schema.Struct({
 });
 const pageOf = Schema.decodeUnknownOption(PageSchema);
 const rowOf = Schema.decodeUnknownOption(Schema.Record(Schema.String, Schema.Json));
-type Read = Extract<ReadIR, { kind: 'read' }>;
-/** Reads whose answer is a `{ rows }` page the engine answers itself, placed by its own order. */
-type Own = Extract<ReadIR, { kind: 'transcript' | 'inbox' | 'conversations' }>;
 /** What one captured row is to a view: its row as the view shows it (`null`: not in it), a PK `get` of it, or a re-read. */
 type Resolved = { c: Captured; row: Row | null } | { c: Captured; get: ReadIR } | 'full';
 type Answer = { ok: Json } | { err: unknown };

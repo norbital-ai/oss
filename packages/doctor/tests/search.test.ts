@@ -5,7 +5,7 @@
 import assert from 'node:assert/strict';
 import { it } from '@effect/vitest';
 import { Effect } from 'effect';
-import { search } from '../build/index.js';
+import { search } from '../src/index.ts';
 
 const files: Record<string, string> = {
 	'src/a.ts':

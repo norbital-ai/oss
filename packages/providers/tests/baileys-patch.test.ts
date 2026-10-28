@@ -247,7 +247,6 @@ describe('the Baileys patch', () => {
 				expect(p.frames).toEqual([]);
 				expect(p.histories).toEqual([]);
 				p.deliverHistory('HIST1-NEXT', ['NEXT']);
-				yield* Effect.sleep('10 millis');
 				expect(offered).toHaveLength(1);
 				expect(notifications).toBe(1);
 				release();

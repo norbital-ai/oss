@@ -103,8 +103,7 @@ describe('the confined bundler', () => {
 				// its whole CPU went to the one tenant it served
 				expect(billed.length).toBeGreaterThan(0);
 				expect(new Set(billed)).toEqual(new Set(['acme']));
-			}),
-		60_000
+			})
 	);
 	it.live(
 		'fails a bundle at the author’s file, line and column',
@@ -136,8 +135,7 @@ describe('the confined bundler', () => {
 				expect('code' in os && os.code).toContain(
 					"'os' is not available in run_js (required by scripts/os.js)"
 				);
-			}),
-		60_000
+			})
 	);
 	it.live(
 		'serves one tenant per process: another tenant’s bundle, and one past the recycle threshold, start a fresh one',
@@ -165,7 +163,6 @@ describe('the confined bundler', () => {
 						tight.port('acme').bundle(request(REPORT, entry), signal)
 					);
 				expect(tight.counts()).toMatchObject({ started: 2, built: 2, pid: undefined });
-			}),
-		60_000
+			})
 	);
 });

@@ -4,7 +4,8 @@ import type { Json } from '../src/decl/values.ts';
 import { Effect } from 'effect';
 import { type Invocation, LIMITS } from '../src/engine/contracts.ts';
 import { Guest, type Bridge } from '../src/engine/services.ts';
-import { guestLayer, program } from './support/guest-fixture.ts';
+import { program } from '../src/test/guest.ts';
+import { guestLayer } from './support/guest-fixture.ts';
 import { createBolt } from '../src/page/bolt.ts';
 import { Decimal } from '@norbital-ai/std/decimal';
 

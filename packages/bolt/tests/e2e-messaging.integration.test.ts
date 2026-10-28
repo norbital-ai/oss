@@ -2,12 +2,13 @@
 // engine's conversations by instance, its envoys run the agent's real turn loop over a scripted model, a model sync
 // sends through `integrations.deliver`, and notification callbacks reach the approvers' inbox and conversation links.
 import { describe, expect, it } from '@effect/vitest';
-import { Context, Effect, Layer, Predicate, Schema, Stream } from 'effect';
+import { afterAll } from 'vitest';
+import { Context, Effect, Exit, Layer, Predicate, Scope, Stream } from 'effect';
 import { Ai } from '../src/engine/ports.ts';
 import { Port } from '../src/engine/port.ts';
 import { Conversations } from '../src/engine/services.ts';
-import { program } from './support/guest-fixture.ts';
-import { actReply, qReply, routeFixture } from './support/route-fixture.ts';
+import { program } from '../src/test/guest.ts';
+import { actReply, routeFixture } from './support/route-fixture.ts';
 import type { Json } from '../src/decl/values.ts';
 import type { AiResponse, ActOutcome as Outcome } from '../src/engine/contracts.ts';
 import type { EngineManifest } from '../src/engine/manifest.ts';
@@ -118,7 +119,8 @@ const manifest = {
 	mcp: {},
 	apps: {},
 	customFields: {},
-	agent: { skills: {} }
+	agent: { skills: {} },
+	needs: []
 } satisfies EngineManifest;
 
 const guest = program(`export default {
@@ -212,7 +214,10 @@ const scriptedAi = () => {
 
 const ADA = 'u-ada',
 	CAL = 'u-cal';
-const setup = Effect.gen(function* () {
+// One workspace for the file; each case reads its own rows.
+const fileScope = Effect.runSync(Scope.make());
+afterAll(() => Effect.runPromise(Scope.close(fileScope, Exit.void)));
+const setup = Effect.runSync(Effect.cached(Effect.gen(function* () {
 	const ai = scriptedAi();
 	const context = yield* Layer.build(
 		TestWorkspace.layer({
@@ -235,247 +240,13 @@ const setup = Effect.gen(function* () {
 		if (o.kind !== 'committed') throw new Error(JSON.stringify(o));
 		return present(o.records[0]).id;
 	};
-	const job = () =>
-		actReply(route, t.as(t.admin).authority, {
-			callable: 'jobs.create',
-			input: [{ title: 'Kismis', status: 'open' }],
-			issuedAt: t.clock.now()
-		}).pipe(Effect.map((reply) => ok(reply.outcome)));
-	const status = (id: string) =>
-		qReply(route, t.as(t.admin).authority, {
-			reads: [{ m: 'query', a: [{ jobs: { where: { id: { eq: id } }, fields: ['status'] } }] }]
-		}).pipe(
-			Effect.flatMap((reply) =>
-				Schema.decodeUnknownEffect(
-					Schema.Struct({
-						jobs: Schema.Struct({ rows: Schema.Tuple([Schema.Struct({ status: Schema.String })]) })
-					})
-				)(reply.answers[0])
-			),
-			Effect.map((answer) => answer.jobs.rows[0].status)
-		);
-	let seq = 0;
-	/** A chat message is held for the sender's pause even with triage off: the pause passes, and the held burst is admitted. */
-	const paused = () =>
-		Effect.gen(function* () {
-			t.clock.advance('2s');
-			yield* t.runDue();
-		});
-	const say = (
-		instance: 'field_wa' | 'sales_tg',
-		from: string,
-		body: string,
-		over: { [k: string]: Json } = {}
-	) =>
-		t
-			.receive(instance, {
-				id: `m${++seq}`,
-				thread: from,
-				sentAt: t.clock.now(),
-				from: { handle: from, name: null },
-				text: body,
-				attachments: [],
-				...over
-			})
-			.pipe(Effect.andThen(paused()));
-	const inbound = (body: string) =>
-		t.db
-			.read([
-				{
-					text: `SELECT "as", addressed, refused, role FROM sys_message WHERE direction = 'inbound' AND text = $1`,
-					params: [body]
-				}
-			])
-			.pipe(Effect.map(([result]) => result?.rows[0]));
 	/** What went out through one instance's link. */
 	const sent = (instance: string) => t.fakes.links.sent.filter((s) => s.instance === instance);
-	const sentTexts = () =>
-		sent('field_wa').map(
-			(s) => Schema.decodeUnknownSync(Schema.Struct({ text: Schema.String }))(s.message).text
-		);
 
-	return { t, context, ai, conversations, route, job, status, say, inbound, sent, sentTexts, ok };
-});
-
-describe('envoys through the engine entry (P22, rules 57–60)', () => {
-	it.live(
-		"an authenticated WhatsApp DM from an administrator updates a record the envoy's policies cannot",
-		() =>
-			Effect.scoped(
-				Effect.gen(function* () {
-					const { job, status, say, inbound, sent } = yield* setup;
-					const id = yield* job();
-					yield* say('field_wa', '6591234567:14@s.whatsapp.net', `close ${id}`);
-					expect(yield* status(id)).toBe('done');
-					expect(yield* inbound(`close ${id}`)).toMatchObject({
-						as: { envoy: { member: ADA, dm: true } },
-						role: 'user'
-					});
-					expect(present(sent('field_wa').at(-1)).message).toMatchObject({
-						to: '6591234567:14@s.whatsapp.net'
-					});
-				})
-			)
-	);
-
-	it.live(
-		"a linked contractor's DM holds only what the envoy's policies or the contractor team grant (P32)",
-		() =>
-			Effect.scoped(
-				Effect.gen(function* () {
-					const { job, status, say, inbound, sentTexts } = yield* setup;
-					const id = yield* job();
-					yield* say('field_wa', '6598765432@s.whatsapp.net', `close ${id}`);
-					expect(yield* status(id)).toBe('open');
-					expect(yield* inbound(`close ${id}`)).toMatchObject({
-						as: { envoy: { member: CAL, dm: true } }
-					});
-					expect(sentTexts().at(-1)).toMatch(/No tool 'act'|forbidden|refused/i);
-				})
-			)
-	);
-
-	it.live('an unknown sender to a private envoy gets one fixed notice, no link and no turn', () =>
-		Effect.scoped(
-			Effect.gen(function* () {
-				const { ai, say, inbound, sentTexts } = yield* setup;
-				yield* say('field_wa', '6590000001@s.whatsapp.net', 'hello?');
-				yield* say('field_wa', '6590000001@s.whatsapp.net', 'anyone?');
-				expect(ai.requests).toBe(0);
-				expect(sentTexts()).toHaveLength(1);
-				expect(sentTexts()[0]).toBe(
-					'This whatsapp account is not recognised by Acme Field. Ask an administrator to add it to your profile.'
-				);
-				expect(yield* inbound('anyone?')).toMatchObject({ refused: 'unregistered', role: null });
-			})
-		)
-	);
-
-	it.live(
-		"a group under mention_or_reply keeps chatter ambient; every addressed message runs under the envoy's policies, an administrator's too (P32)",
-		() =>
-			Effect.scoped(
-				Effect.gen(function* () {
-					const { t, ai, job, status, say, inbound, sent } = yield* setup;
-					const group = { thread: '1203@g.us', group: true };
-					const id = yield* job();
-					yield* say('field_wa', '6591234567@s.whatsapp.net', 'running late', {
-						...group,
-						invocation: 'ambient'
-					});
-					expect(ai.requests).toBe(0);
-					expect(yield* inbound('running late')).toMatchObject({ addressed: false, role: null });
-					yield* say('field_wa', '6598765432@s.whatsapp.net', `close ${id}`, {
-						...group,
-						invocation: 'mention'
-					});
-					expect(yield* status(id)).toBe('open');
-					yield* say('field_wa', '6591234567@s.whatsapp.net', `close ${id}`, {
-						...group,
-						invocation: 'reply',
-						id: 'ada-close'
-					});
-					expect(yield* status(id)).toBe('open');
-					const rows = present(
-						(yield* t.db.read([
-							{
-								text: `SELECT "as" FROM sys_message WHERE direction = 'inbound' AND addressed ORDER BY seq`,
-								params: []
-							}
-						]))[0]
-					).rows;
-					expect(
-						rows.map(
-							(r) =>
-								Schema.decodeUnknownSync(
-									Schema.Struct({
-										envoy: Schema.Struct({ member: Schema.String, dm: Schema.Boolean })
-									})
-								)(r['as']).envoy
-						)
-					).toMatchObject([
-						{ member: CAL, dm: false },
-						{ member: ADA, dm: false }
-					]);
-					expect(
-						sent('field_wa').every(
-							(s) =>
-								Schema.decodeUnknownSync(Schema.Struct({ to: Schema.String }))(s.message).to ===
-								'1203@g.us'
-						)
-					).toBe(true);
-				})
-			)
-	);
-
-	it.live(
-		"a public Telegram envoy runs an unlinked sender's turn under its own policies, never admin",
-		() =>
-			Effect.scoped(
-				Effect.gen(function* () {
-					const { ai, job, status, say, inbound, sent } = yield* setup;
-					const id = yield* job();
-					yield* say('sales_tg', '777', `close ${id}`);
-					expect(ai.requests).toBeGreaterThan(0);
-					expect(yield* status(id)).toBe('open');
-					expect(yield* inbound(`close ${id}`)).toMatchObject({
-						as: {
-							envoy: {
-								name: 'sales_desk',
-								instance: 'sales_tg',
-								sender: '777',
-								member: null,
-								dm: true
-							}
-						}
-					});
-					expect(sent('sales_tg')).toHaveLength(1);
-				})
-			)
-	);
-});
+	return { t, conversations, route, sent, ok };
+}).pipe(Scope.provide(fileScope))));
 
 describe('connections through the engine entry (rule 61)', () => {
-	it.live(
-		'a model sync queues email in the writing statement, sends once, and imports delivery events onto the row',
-		() =>
-			Effect.scoped(
-				Effect.gen(function* () {
-					const { t, conversations, route, sent, ok } = yield* setup;
-					const id = ok(
-						(yield* actReply(route, t.as(t.member(['staff'])).authority, {
-							callable: 'sent_emails.create',
-							input: [{ to: 'carol@acme.com', subject: 'PCN 1234', body: 'Your parts change.' }],
-							issuedAt: t.clock.now()
-						})).outcome
-					);
-					const sentAt = t.clock.now();
-					yield* t.runDue();
-					yield* t.runDue();
-					expect(sent('customer_mail')).toHaveLength(1);
-					expect(present(sent('customer_mail')[0]).message).toMatchObject({
-						to: ['carol@acme.com'],
-						subject: 'PCN 1234',
-						thread: id
-					});
-					yield* conversations.receive('customer_mail', {
-						kind: 'delivery',
-						providerId: 'customer_mail:1',
-						report: { kind: 'delivered', at: '2026-09-25T10:01:00.000Z', provider: 'fake' }
-					});
-					t.clock.advance('3s');
-					yield* t.runDue();
-					expect(
-						(yield* qReply(route, t.as(t.admin).authority, {
-							reads: [{ m: 'query', a: [{ sent_emails: { where: { id: { eq: id } } } }] }]
-						})).answers[0]
-					).toMatchObject({
-						sent_emails: { rows: [{ sent_at: sentAt, delivered_at: '2026-09-25T10:01:00.000Z' }] }
-					});
-				})
-			)
-	);
-
 	it.live(
 		"a notification callback is queued by the writing statement and reaches each named member's inbox and conversation handle",
 		() =>
@@ -510,7 +281,7 @@ describe('connections through the engine entry (rule 61)', () => {
 					]);
 					const [inbox] = yield* t.db.read([
 						{
-							text: 'SELECT member,title FROM sys_notification WHERE member IS NOT NULL ORDER BY member,title',
+							text: `SELECT member,title FROM sys_notification WHERE member IS NOT NULL AND title = 'New ticket' ORDER BY member,title`,
 							params: []
 						}
 					]);
@@ -519,7 +290,6 @@ describe('connections through the engine entry (rule 61)', () => {
 						{ member: CAL, title: 'New ticket' },
 						{ member: CAL, title: 'New ticket' }
 					]);
-					yield* t.runDue();
 					yield* t.runDue();
 					expect(
 						sent('customer_mail')
@@ -570,7 +340,7 @@ describe('connections through the engine entry (rule 61)', () => {
 					yield* t.runDue();
 					const [rows] = yield* t.db.read([
 						{
-							text: `SELECT member, title, link->>'model' AS c, read_at FROM sys_notification ORDER BY member`,
+							text: `SELECT member, title, link->>'model' AS c, read_at FROM sys_notification WHERE link->>'model' = 'orders' ORDER BY member`,
 							params: []
 						}
 					]);

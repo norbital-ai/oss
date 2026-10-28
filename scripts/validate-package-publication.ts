@@ -30,7 +30,7 @@ export const copyWorkspace = Effect.fn('Publication.copyWorkspace')(function* (
 	const fs = yield* FileSystem.FileSystem;
 	yield* fs.makeDirectory(destination, { recursive: true });
 	for (const name of yield* fs.readDirectory(source)) {
-		if (excluded.has(name) || name.startsWith('build.staging') || name === 'build.retired')
+		if (excluded.has(name) || name.startsWith('build.staging'))
 			continue;
 		const from = path.join(source, name);
 		const to = path.join(destination, name);

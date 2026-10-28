@@ -2,8 +2,8 @@ import { expect, it } from '@effect/vitest';
 import { Effect, Layer } from 'effect';
 import { Live, Links, Wake } from '../src/engine/services.ts';
 import { committed, executeCommit, type Commit } from '../src/engine/write/commit.ts';
-import { PgliteDb, Pristine } from '../src/node/db/pglite.ts';
-import { applyPlan, plan } from '../src/engine/schema/plan.ts';
+import { PgliteDb } from '../src/node/db/pglite.ts';
+import { TestDb } from '../src/test/database.ts';
 import { catalogOf } from '../src/engine/access/pred.ts';
 import { manifest as base, NOW, TODAY } from './write-fixture.ts';
 import type { EngineManifest } from '../src/engine/manifest.ts';
@@ -54,9 +54,8 @@ it.effect('a mixed commit purges only erased history and triggers only ordinary 
 				changed: { description: 'Changed orders', on: { updated: 'orders' }, runAs: 'trigger' }
 			}
 		};
-		const pg = yield* PgliteDb.open(),
+		const pg = yield* TestDb.open(manifest),
 			db = PgliteDb.make(pg);
-		yield* applyPlan(db, yield* plan(null, manifest), { accept: true });
 		const first = '0199a000-0000-4000-8000-000000000071',
 			second = '0199a000-0000-4000-8000-000000000072';
 		const common: Omit<Commit, 'writes'> = {
@@ -127,5 +126,5 @@ it.effect('a mixed commit purges only erased history and triggers only ordinary 
 		]);
 		expect(history[0]?.rows[0]?.['changes']).not.toHaveProperty('note');
 		expect(history[0]?.rows[1]?.['changes']).toHaveProperty('note', 'retained');
-	}).pipe(Effect.provide(Pristine.layer))
+	})
 );

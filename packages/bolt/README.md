@@ -5,10 +5,10 @@ A workspace is a source tree of `+`-files; the `bolt` CLI checks it, builds it, 
 serves the resulting artifact.
 
 ```sh
-pnpm add @norbital-ai/bolt
-pnpm exec bolt check
-pnpm exec bolt build
-pnpm exec bolt test
+bun add --exact @norbital-ai/bolt
+bunx bolt check
+bunx bolt build
+bunx bolt test
 ```
 
 Entries:

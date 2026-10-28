@@ -4,7 +4,8 @@
 // and a `runAs: 'trigger'` run cannot offer `read`.
 import { FacilityFailure } from '../src/decl/errors.ts';
 import { describe, expect, it } from '@effect/vitest';
-import { Context, Effect, Layer, Schema, Stream } from 'effect';
+import { Context, Effect, Exit, Layer, Schema, Scope, Stream } from 'effect';
+import { afterAll } from 'vitest';
 import type { Json } from '../src/decl/values.ts';
 import type { AiRequest, ActOutcome as Outcome } from '../src/engine/contracts.ts';
 import type { EngineManifest } from '../src/engine/manifest.ts';
@@ -12,7 +13,7 @@ import { Port } from '../src/engine/port.ts';
 import { uuidv7 } from '../src/protocol/wire.ts';
 import { Ai } from '../src/engine/ports.ts';
 import { TestWorkspace, respondSystem1, type Kit } from '../src/test/index.ts';
-import { program } from './support/guest-fixture.ts';
+import { program } from '../src/test/guest.ts';
 import { actReply, qReply, routeFixture, type FixtureRoute } from './support/route-fixture.ts';
 
 const manifest = {
@@ -86,7 +87,8 @@ const manifest = {
 	mcp: {},
 	apps: {},
 	customFields: {},
-	agent: { skills: {} }
+	agent: { skills: {} },
+	needs: []
 } satisfies EngineManifest;
 const guest = program(`import { Effect, Result } from 'effect';
 const output = { kind: 'object', fields: { matched: { kind: 'bool' }, po: { kind: 'text' } } };
@@ -114,9 +116,10 @@ const use =
 			_tag: 'Response',
 			response: { content: '', toolCalls: calls, finish: 'tool', usage: { input: 1, output: 1 } }
 		});
-const cassette = (steps: readonly Step[]) => {
+/** The provider's script: `arm` replaces its steps and clears its requests for the next test. */
+const cassette = () => {
 	const requests: AiRequest[] = [];
-	let index = 0;
+	const script: { steps: readonly Step[]; index: number } = { steps: [], index: 0 };
 	const port: Ai['Service'] = {
 		ask: respondSystem1,
 		maxChoices: undefined,
@@ -127,22 +130,37 @@ const cassette = (steps: readonly Step[]) => {
 			Stream.unwrap(
 				Effect.sync(() => {
 					requests.push(request);
-					const step = steps[index++];
+					const step = script.steps[script.index++];
 					return step === undefined
 						? Stream.fail(new FacilityFailure({ kind: 'invalid', message: 'cassette exhausted' }))
 						: step(request);
 				})
 			)
 	};
-	return { port, requests };
+	const arm = (steps: readonly Step[]) => {
+		Object.assign(script, { steps, index: 0 });
+		requests.length = 0;
+	};
+	return { port, requests, arm };
 };
+// One workspace for the file, its provider script armed per test.
+const ai = cassette();
+const fileScope = Effect.runSync(Scope.make());
+afterAll(() => Effect.runPromise(Scope.close(fileScope, Exit.void)));
+const shared = Effect.runSync(
+	Effect.cached(
+		Effect.gen(function* () {
+			const context = yield* Layer.build(
+				TestWorkspace.layer({ manifest, guest: yield* guest, ports: Layer.succeed(Ai, ai.port) })
+			);
+			return { t: Context.get(context, TestWorkspace), route: yield* routeFixture(context), ai };
+		}).pipe(Scope.provide(fileScope))
+	)
+);
 const open = (steps: readonly Step[]) =>
-	Effect.gen(function* () {
-		const ai = cassette(steps);
-		const context = yield* Layer.build(
-			TestWorkspace.layer({ manifest, guest: yield* guest, ports: Layer.succeed(Ai, ai.port) })
-		);
-		return { t: Context.get(context, TestWorkspace), route: yield* routeFixture(context), ai };
+	Effect.map(shared, (fixture) => {
+		ai.arm(steps);
+		return fixture;
 	});
 const clerk = (t: Kit) => t.as(t.member(['clerk'])).authority;
 const create = (t: Kit, route: FixtureRoute, callable: string, input: Json) =>
@@ -206,20 +224,8 @@ describe("sys_2.infer tools: ['read']", () => {
 						])
 					]);
 					yield* create(t, route, 'purchase_orders.create', [
-						{
-							number: 'PO-1',
-							supplier: 'Acme',
-							amount: 120,
-							margin: 40
-						}
-					]);
-					yield* create(t, route, 'purchase_orders.create', [
-						{
-							number: 'PO-2',
-							supplier: 'Other',
-							amount: 50,
-							margin: 10
-						}
+						{ number: 'PO-1', supplier: 'Acme', amount: 120, margin: 40 },
+						{ number: 'PO-2', supplier: 'Other', amount: 50, margin: 10 }
 					]);
 					yield* create(t, route, 'ledgers.create', [{ title: 'secret' }]);
 					const id = yield* create(t, route, 'invoices.create', [

@@ -1,555 +1,205 @@
 /// <reference types="node" />
-import {
-	Clock,
-	Config,
-	ConfigProvider,
-	Context,
-	Deferred,
-	Effect,
-	FiberSet,
-	FileSystem,
-	Layer,
-	Option,
-	Path,
-	Queue,
-	Redacted,
-	Result,
-	Schema,
-	Scope,
-	ScopedRef,
-	Semaphore,
-	Stream
-} from 'effect';
-import {
-	FetchHttpClient,
-	HttpServer,
-	HttpServerRequest,
-	HttpServerResponse
-} from 'effect/http';
+// `bolt dev` untethered: the workspace's `norbital.host.ts` (or `--host=<file>`) default-exports every facility
+// (`satisfies Facilities`) and optionally its `serving` parts. Each build is migrated on the host's own database and
+// served through `serveRelease`, the path bolt-server takes: integration links, `activate` (whose needs check is the only
+// gate), deadline wakes and crons. The internal SPA is served from source by a Vite dev server, so a page edit is a hot
+// update; a model edit rebuilds the manifest and guest only.
+import { Effect, FileSystem, Option, Path, Scope, ScopedRef } from 'effect';
+import { HttpServerRequest, HttpServerResponse } from 'effect/http';
 import * as NodeHttpServer from '@effect/platform-node/NodeHttpServer';
 import { createServer } from 'node:http';
-import { watch } from 'node:fs';
-import { randomBytes } from 'node:crypto';
-import { loadPackWithAssets, workspaceFiles, type Artifact } from '../engine/artifact/read.ts';
-import { readPackSource, type PackSource } from '../engine/write/pack.ts';
-import { PgliteDb } from '../node/db/pglite.ts';
-import { localFiles } from '../node/files.ts';
-import { localAudit } from '../node/audit.ts';
+import { clientDevServer } from '../compiler/artifact/client.ts';
+import { artifactPort } from '../node/artifact.ts';
+import { call, loadHost, serveRelease } from '../node/host.ts';
 import { nodePorts } from '../node/ports.ts';
-import { cronClock } from '../node/cron-clock.ts';
-import { TenantDb } from '../engine/db/tenant-db.ts';
-import { EngineLive, type EngineServices } from '../engine/host.ts';
-import { Audit, auditShape, type AuditShape } from '../engine/audit.ts';
-import { Activation, Live, Runs } from '../engine/services.ts';
-import {
-	Ai,
-	Convert,
-	DeadlinePort,
-	Drivers,
-	Files,
-	Geo,
-	GuestIsolates,
-	Http,
-	Docs,
-	Images,
-	Keys,
-	Mcp,
-	Metering,
-	Speech,
-	Transport,
-	WebRead,
-	Browser
-} from '../engine/ports.ts';
-import { AgentHost } from '../engine/agent/index.ts';
-import { withBrowser } from '../engine/agent/browser.ts';
-import { declaredSecrets } from '../engine/manifest.ts';
-import { Secrets } from '../engine/secrets.ts';
-import { loggedTransport } from '../engine/facilities.ts';
-import { documentConverter } from '../engine/convert.ts';
-import { inProcessDeadlines } from '../engine/runs/deadlines.ts';
-import { credentials } from '../engine/integrations/credentials.ts';
-import { BoltError } from '../protocol/errors.ts';
-import { integrationLinks, type LinkManager } from '../engine/integrations/links.ts';
-import type { Provider } from '../engine/integrations/driver.ts';
-import {
-	founderBootstrap,
-	loadKeys,
-	loggedPhone,
-	makeIdentityHost,
-	signupOf
-} from '../engine/identity/session.ts';
-import { RateWindows } from '../engine/access/rate.ts';
-import { applyMigrations } from '../engine/schema/migrations.ts';
-import { BoltHost, BoltHostLive } from '../protocol/host.ts';
-import { PublicPages, publicPages } from '../protocol/pages.ts';
-import { IntegrationManager } from '../protocol/integrations.ts';
+import { HOST_API } from '../protocol/host-api.ts';
+import { responseError } from '../protocol/http.ts';
 import { clientPage } from '../protocol/static.ts';
-import { basePath } from '../protocol/wire.ts';
-import { RateLimits, responseError } from '../protocol/http.ts';
-import { HostIdentity, ShellConfig, ShellRoutes, Turnstile } from '../shell/host.ts';
-import { AuthorErrors, buildWorkspace, ToolFailure, type Log } from './build.ts';
+import { buildWorkspace, ToolFailure, watchWorkspace, type Built, type Log } from './build.ts';
 
-export type DevOptions = {
-	port?: number;
-	seed?: string;
-	bank?: string;
-	founder?: string;
-	db?: string;
-	log: Log;
-	watch?: boolean;
-	providers?: readonly Provider[];
-	publicUrl?: string;
-};
-export type DevHostOptions = {
-	port: number;
-	/** The host-supplied durable mutation-audit facility; normal dev owns a separate local database. */
-	audit?: AuditShape;
-	pack?: PackSource;
-	founder?: string;
-	files: Files['Service'];
-	convert?: Convert['Service'];
-	log: Log;
-	providers?: readonly Provider[];
-	keyFile?: string;
-	publicUrl?: string;
-};
-type DevGeneration = {
-	readonly context: Context.Context<
-		EngineServices | TenantDb | BoltHost | HostIdentity | PublicPages
-	>;
-	readonly artifact: Artifact;
-	readonly manager: LinkManager;
-};
-export class DevHost extends Context.Service<
-	DevHost,
-	Readonly<Effect.Success<ReturnType<typeof makeDevHost>>>
->()('bolt/DevHost') {}
-
-export const devConverter = Effect.gen(function* () {
-	const config = yield* Config.all({
-		provider: Config.option(Config.String('BOLT_CONVERT_PROVIDER')),
-		endpoint: Config.option(Config.URL('BOLT_CONVERT_ENDPOINT')),
-		credential: Config.option(Config.Redacted('BOLT_CONVERT_CREDENTIAL'))
+/**
+ * `bolt dev` tethered (no host file), the process `env start` runs per template: the realm's watcher hands each build to
+ * the callback this returns. The internal SPA is served from source by a Vite dev server on loopback under
+ * `/__bolt/dev/<directory>/`, recorded in `.norbital/dev.json` with the build it serves (`artifact`). Local Colony
+ * serves that build's document from it and proxies its modules and hot-update socket to it, so a page or component
+ * edit is a hot update in the open tab; the bundle's client is kept (`spaServed`), so its digest does not move. Any
+ * other edit is a new digest Colony cuts over to. The record is removed when the process ends.
+ */
+export const tethered = Effect.fn('bolt.tethered')(function* (root: string, log: Log) {
+	const fs = yield* FileSystem.FileSystem,
+		path = yield* Path.Path,
+		scope = yield* Effect.scope;
+	const base = `/__bolt/dev/${path.basename(root)}/`,
+		record = path.join(root, '.norbital', 'dev.json');
+	let client: Effect.Success<ReturnType<typeof clientDevServer>> | undefined;
+	const server = createServer((request, response) => {
+		if (client === undefined) return response.writeHead(503).end();
+		if (request.url === base)
+			return response
+				.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-cache' })
+				.end(client.document);
+		client.middlewares(request, response, () => response.writeHead(404).end());
 	});
-	if (Option.isNone(config.provider) || config.provider.value === '') {
-		if (Option.isSome(config.endpoint) || Option.isSome(config.credential))
-			return yield* Effect.fail(
-				new ToolFailure({
-					message: 'BOLT_CONVERT_ENDPOINT/CREDENTIAL without BOLT_CONVERT_PROVIDER'
-				})
+	yield* Effect.acquireRelease(
+		Effect.callback<void, ToolFailure>((resume) => {
+			server.once('error', (cause) =>
+				resume(Effect.fail(new ToolFailure({ message: 'The page dev server could not listen.', cause })))
 			);
-		return Option.none<Convert['Service']>();
-	}
-	if (config.provider.value !== 'norbital')
-		return yield* Effect.fail(
-			new ToolFailure({
-				message: 'BOLT_CONVERT_PROVIDER must be norbital'
+			server.listen(0, '127.0.0.1', () => resume(Effect.void));
+		}),
+		() =>
+			Effect.callback<void>((resume) => {
+				server.closeAllConnections();
+				server.close(() => resume(Effect.void));
 			})
-		);
-	if (Option.isNone(config.endpoint))
-		return yield* Effect.fail(
-			new ToolFailure({ message: 'BOLT_CONVERT_PROVIDER needs BOLT_CONVERT_ENDPOINT' })
-		);
-	if (Option.isNone(config.credential))
-		return yield* Effect.fail(
-			new ToolFailure({ message: 'BOLT_CONVERT_PROVIDER needs BOLT_CONVERT_CREDENTIAL' })
-		);
-	if (!['http:', 'https:'].includes(config.endpoint.value.protocol))
-		return yield* Effect.fail(
-			new ToolFailure({ message: 'BOLT_CONVERT_ENDPOINT must use HTTP or HTTPS' })
-		);
-	return Option.some(
-		documentConverter({
-			url: config.endpoint.value.href,
-			key: Redacted.value(config.credential.value)
-		})
 	);
-});
-const masterKey = Effect.fn('dev.masterKey')(function* (file: string, artifact: string) {
-	const fs = yield* FileSystem.FileSystem,
-		path = yield* Path.Path;
-	const keyPath = path.resolve(file),
-		dir = path.resolve(artifact);
-	if (keyPath === dir || keyPath.startsWith(dir + path.sep))
-		return yield* Effect.fail(
-			new ToolFailure({ message: 'The development master key must be outside the artifact.' })
-		);
-	yield* fs.makeDirectory(path.dirname(keyPath), { recursive: true });
-	if (!(yield* fs.exists(keyPath)))
-		yield* fs
-			.writeFile(keyPath, randomBytes(32), { flag: 'wx', mode: 0o600 })
-			.pipe(
-				Effect.catch((error) =>
-					fs
-						.exists(keyPath)
-						.pipe(Effect.flatMap((exists) => (exists ? Effect.void : Effect.fail(error))))
-				)
-			);
-	yield* fs.chmod(keyPath, 0o600);
-	const key = yield* fs.readFile(keyPath);
-	if (key.byteLength !== 32)
-		return yield* Effect.fail(
-			new ToolFailure({ message: 'The development master key must contain 32 bytes.' })
-		);
-	return Redacted.make(key);
-});
-
-const makeDevHost = (artifact: Artifact, options: DevHostOptions) =>
-	Effect.gen(function* () {
-		const db = yield* TenantDb,
-			path = yield* Path.Path,
-			fs = yield* FileSystem.FileSystem;
-		const keyFile = path.resolve(
-			options.keyFile ?? path.join(path.dirname(artifact.dir), 'cache', 'dev-master.key')
-		);
-		const key = yield* masterKey(keyFile, artifact.dir),
-			publicUrl = options.publicUrl ?? `http://127.0.0.1:${options.port}`;
-		const serial = yield* Semaphore.make(1),
-			active = yield* ScopedRef.make(() => Option.none<DevGeneration>());
-		const io = yield* Effect.context<
-			FileSystem.FileSystem | Path.Path | import('effect/http/HttpPlatform').HttpPlatform
-		>();
-		const runProviderRuntime =
-			yield* FiberSet.makeRuntimePromise<import('effect/http/HttpClient').HttpClient>();
-		const runProviders = <A, E>(
-			effect: Effect.Effect<A, E>,
-			options?: { readonly signal?: AbortSignal | undefined }
-		) => runProviderRuntime(Effect.result(effect), options).then(Result.getOrThrow);
-		const providers =
-			options.providers ??
-			(yield* Effect.tryPromise({
-				try: () => import('@norbital-ai/bolt-server'),
-				catch: (cause) =>
-					new ToolFailure({
-						message: 'Native integration development requires @norbital-ai/bolt-server',
-						cause
-					})
-			}).pipe(Effect.flatMap((server) => server.toDrivers(server.drivers(), runProviders))));
-		const mail = loggedTransport('dev', options.log);
-		const deadlines = inProcessDeadlines(() =>
-			ScopedRef.get(active).pipe(
-				Effect.flatMap((current) =>
-					Option.isNone(current)
-						? Effect.void
-						: Effect.flatMap(Runs, (runs) => runs.tick).pipe(Effect.provide(current.value.context))
-				)
-			)
-		);
-		const acquire = Effect.fn('dev.activate')(function* (next: Artifact, pack?: PackSource) {
-			yield* masterKey(keyFile, next.dir);
-			yield* applyMigrations(db, next.manifest, next.migrations);
-			if (pack !== undefined)
-				options.log(
-					(yield* loadPackWithAssets(
-						db,
-						next.manifest,
-						pack,
-						options.files,
-						new Date(yield* Clock.currentTimeMillis).toISOString()
-					))
-						? `seeded pack ${pack.meta.name}`
-						: `pack ${pack.meta.name} not loaded: the database has rows`
+	const address = server.address();
+	const origin = `http://127.0.0.1:${address !== null && typeof address === 'object' ? address.port : 0}`;
+	yield* Effect.addFinalizer(() => fs.remove(record, { force: true }).pipe(Effect.ignore));
+	return (built: Built) =>
+		Effect.gen(function* () {
+			const manifest = built.artifact.manifest;
+			if (client === undefined)
+				client = yield* clientDevServer(
+					root,
+					built.files,
+					manifest,
+					path.join(built.artifact.dir, 'client'),
+					built.artifact.artifact.name,
+					server,
+					base
 				);
-			const native = yield* nodePorts({ release: next.dir, secretsKey: Redacted.value(key) }),
-				keys = Keys.fromAbi(native.keys);
-			const secretContext = yield* Layer.build(
-				Secrets.layer(declaredSecrets(next.manifest)).pipe(
-					Layer.provide(Layer.mergeAll(Layer.succeed(TenantDb, db), keys))
-				)
+			else yield* client.refresh(built.files, manifest);
+			// replaced whole: Colony never reads half a record
+			yield* fs.writeFileString(
+				`${record}.next`,
+				JSON.stringify({ origin, base, artifact: built.artifact.artifact.hash })
 			);
-			const codec = Context.get(secretContext, Secrets);
-			const ready = yield* Deferred.make<Context.Context<EngineServices | TenantDb>>();
-			const secrets = Object.fromEntries(
-				(yield* Effect.forEach(declaredSecrets(next.manifest), (name) =>
-					Config.option(Config.String(name)).pipe(
-						Effect.provideService(ConfigProvider.ConfigProvider, codec.config),
-						Effect.map((value) => (Option.isSome(value) ? [[name, value.value] as const] : []))
-					)
-				)).flat()
-			);
-			const manager = yield* integrationLinks({
-				providers,
-				credentials: yield* credentials(db, codec),
-				publicUrl,
-				secrets,
-				log: options.log,
-				enter: (effect) =>
-					Deferred.await(ready).pipe(
-						Effect.flatMap((context) => effect.pipe(Effect.provide(context)))
-					),
-				admit: (effect) =>
-					Deferred.await(ready).pipe(
-						Effect.flatMap((context) => effect.pipe(Effect.provide(context)))
-					)
-			});
-			const workspace = yield* workspaceFiles(next.dir);
-			const ports = Layer.mergeAll(
-				options.audit === undefined ? Layer.empty : Layer.succeed(Audit, options.audit),
-				Layer.effect(AgentHost, withBrowser(workspace === undefined ? {} : { workspace })).pipe(
-					Layer.provide(Browser.unavailable)
-				),
-				Layer.succeed(TenantDb, db),
-				keys,
-				GuestIsolates.fromAbi(native.guestIsolates),
-				Http.fromAbi(native.http),
-				Images.fromAbi(native.images),
-				Docs.fromAbi(native.docs),
-				Mcp.fromAbi(native.mcp),
-				Layer.succeed(Files, options.files),
-				Layer.succeed(Transport, mail),
-				options.convert === undefined
-					? Convert.unavailable
-					: Layer.succeed(Convert, options.convert),
-				Ai.unavailable,
-				Speech.unavailable,
-				WebRead.unavailable,
-				Geo.unavailable,
-				Metering.unavailable,
-				deadlines,
-				Layer.succeed(Drivers, manager.port),
-				Layer.succeed(IntegrationManager, Option.some(manager)),
-				Layer.succeed(Activation, {
-					scope: 'dev',
-					epoch: '',
-					release: next.artifact.hash,
-					publicUrl,
-					guest: Option.some(next.guest),
-					start: pack?.meta.start ?? []
-				})
-			);
-			const engineContext = yield* Layer.build(
-				EngineLive(next.manifest).pipe(Layer.provideMerge(ports))
-			);
-			yield* Deferred.succeed(ready, engineContext);
-			const runs = Context.get(engineContext, Runs);
-			yield* cronClock({ crons: runs.crons, fire: runs.fire });
-			const engine = Layer.succeedContext(engineContext);
-			const hostIdentity = Layer.effect(
-				HostIdentity,
-				Effect.gen(function* () {
-					return yield* makeIdentityHost({
-						db,
-						now: Clock.currentTimeMillis.pipe(Effect.map((at) => new Date(at))),
-						windows: new RateWindows(),
-						keys: yield* loadKeys(db),
-						publicUrl,
-						mail: {
-							send: (_kind, message, signal) =>
-								runProviders(
-									mail.send({
-										_tag: 'Mail',
-										...Schema.decodeUnknownSync(
-											Schema.Struct({
-												to: Schema.String,
-												subject: Schema.String,
-												text: Schema.String,
-												html: Schema.optionalKey(Schema.String)
-											})
-										)(message)
-									}),
-									{ signal }
-								)
-						},
-						phone: loggedPhone(options.log, true),
-						devSink: true,
-						...(signupOf(next.manifest) === undefined ? {} : { signup: signupOf(next.manifest) })
-					});
-				})
-			);
-			const shell = ShellRoutes.pipe(
-				Layer.provideMerge(
-					Layer.mergeAll(
-						hostIdentity,
-						Layer.succeed(ShellConfig, {
-							publicUrl,
-							workspace: () => ({ name: next.artifact.name, handle: next.artifact.handle }),
-							secure: false,
-							ai: false
-						}),
-						Turnstile.dev,
-						RateLimits.layer
-					).pipe(Layer.provideMerge(engine))
-				)
-			);
-			const context = yield* Layer.build(
-				Layer.merge(BoltHostLive, publicPages(next)).pipe(Layer.provideMerge(shell))
-			).pipe(Effect.provide(io));
-			yield* Effect.addFinalizer(() => Context.get(context, Live).close(next.artifact.hash));
-			return { context, artifact: next, manager };
-		});
-		const swap = (next: Artifact, pack?: PackSource) =>
-			serial.withPermit(
-				Effect.gen(function* () {
-					yield* ScopedRef.set(
-						active,
-						acquire(next, pack).pipe(Effect.provide(io), Effect.map(Option.some))
-					);
-					const current = yield* ScopedRef.get(active);
-					if (Option.isSome(current)) yield* current.value.manager.resume;
-				})
-			);
-		yield* ScopedRef.set(active, acquire(artifact, options.pack).pipe(Effect.map(Option.some)));
-		const initial = yield* ScopedRef.get(active);
-		if (Option.isSome(initial)) yield* initial.value.manager.resume;
-		if (Option.isSome(initial) && options.founder !== undefined)
-			yield* founderBootstrap(
-				Context.get(initial.value.context, HostIdentity),
-				options.founder
-			).pipe(
-				Effect.tap(() =>
-					Effect.sync(() =>
-						options.log(`founder ${options.founder}: sign in with code 123456 (dev sink)`)
-					)
-				)
-			);
-		return {
-			url: publicUrl.replace(/\/+$/, ''),
-			swap: (next: Artifact) => swap(next),
-			handle: (request: HttpServerRequest.HttpServerRequest) =>
-				Effect.gen(function* () {
-					const current = yield* ScopedRef.get(active);
-					if (Option.isNone(current)) return HttpServerResponse.empty({ status: 503 });
-					const url = new URL(request.url, publicUrl),
-						base = basePath(publicUrl);
-					if (base !== '' && url.pathname !== base && !url.pathname.startsWith(base + '/'))
-						return HttpServerResponse.empty({ status: 404 });
-					const routePath = url.pathname.slice(base.length) || '/';
-					const local = request.modify({ url: routePath + url.search });
-					const response = yield* Context.get(current.value.context, BoltHost).handle(local);
-					if (Option.isSome(response)) return response.value;
-					const rendered = yield* Context.get(current.value.context, PublicPages).render(local);
-					if (Option.isSome(rendered)) return rendered.value;
-					const page = yield* clientPage(
-						current.value.artifact.dir,
-						routePath,
-						current.value.artifact.manifest
-					).pipe(Effect.provide(io));
-					if (page === undefined) return HttpServerResponse.empty({ status: 404 });
-					if (base !== '' && page.document) {
-						const html = yield* fs.readFileString(page.file).pipe(Effect.provide(io));
-						const escaped = base
-							.replace(/&/g, '&amp;')
-							.replace(/"/g, '&quot;')
-							.replace(/</g, '&lt;');
-						return HttpServerResponse.text(
-							html.replace(
-								'<head>',
-								`<head><base href="${escaped}/"><meta name="bolt-base" content="${escaped}">`
-							),
-							{ headers: page.headers }
-						);
-					}
-					return yield* HttpServerResponse.file(page.file, { headers: page.headers }).pipe(
-						Effect.provide(io)
-					);
-				}).pipe(Effect.catch((error) => Effect.succeed(responseError(error))))
-		};
-	});
-
-export const DevHostLive = (artifact: Artifact, options: DevHostOptions) =>
-	Layer.effect(DevHost, makeDevHost(artifact, options)).pipe(
-		Layer.provideMerge(Layer.mergeAll(FetchHttpClient.layer, NodeHttpServer.layerHttpServices))
-	);
-
-const packOf = Effect.fn('dev.packOf')(function* (root: string, name: string) {
-	if (name === 'none') return undefined;
-	const path = yield* Path.Path;
-	return yield* readPackSource(
-		name === 'base' || name === 'sample'
-			? path.join(root, '.norbital', 'seed', name)
-			: path.resolve(name)
-	);
+			yield* fs.rename(`${record}.next`, record);
+		}).pipe(
+			Effect.catch((error) => Effect.sync(() => log(String(error)))),
+			Effect.provideService(Scope.Scope, scope),
+			Effect.provideService(FileSystem.FileSystem, fs),
+			Effect.provideService(Path.Path, path)
+		);
 });
-export const dev = Effect.fn('bolt.dev')(function* (root: string, options: DevOptions) {
-	const path = yield* Path.Path,
-		convert = yield* devConverter;
-	const initial = yield* buildWorkspace(root, {
+
+export const dev = Effect.fn('bolt.dev')(function* (
+	root: string,
+	hostFile: string,
+	options: { readonly port: number; readonly bank?: string; readonly log: Log }
+) {
+	const path = yield* Path.Path;
+	const { facilities, serving } = yield* loadHost(hostFile);
+	const publicUrl = `http://127.0.0.1:${options.port}`;
+	const native = yield* nodePorts();
+	const watching = {
 		...(options.bank === undefined ? {} : { bank: options.bank }),
-		log: options.log
-	});
-	const pack = yield* packOf(root, options.seed ?? 'base');
-	const fs = yield* FileSystem.FileSystem,
-		auditDirectory = path.join(root, '.norbital', 'data', 'audit');
-	yield* fs.makeDirectory(auditDirectory, { recursive: true });
-	if (
-		options.db !== undefined &&
-		(yield* fs.exists(options.db)) &&
-		(yield* fs.realPath(options.db)) === (yield* fs.realPath(auditDirectory))
-	)
-		return yield* new ToolFailure({
-			message: 'The tenant database must be separate from the development audit database.'
-		});
-	const audit = yield* auditShape(yield* localAudit(auditDirectory));
-	const hostLayer = DevHostLive(initial.artifact, {
-		port: options.port ?? 5180,
-		audit,
-		files: localFiles(path.join(root, '.norbital', 'cache', 'dev-files')),
-		keyFile:
-			options.db === undefined
-				? path.join(root, '.norbital', 'cache', 'dev-master.key')
-				: path.join(path.resolve(options.db), 'bolt-master.key'),
-		...(pack === undefined ? {} : { pack }),
-		...(options.founder === undefined ? {} : { founder: options.founder }),
-		...(Option.isNone(convert) ? {} : { convert: convert.value }),
-		...(options.providers === undefined ? {} : { providers: options.providers }),
-		...(options.publicUrl === undefined ? {} : { publicUrl: options.publicUrl }),
-		log: options.log
-	}).pipe(Layer.provideMerge(PgliteDb.layer(options.db)));
-	const context = yield* Layer.build(hostLayer),
-		host = Context.get(context, DevHost);
-	const server = yield* NodeHttpServer.make(() => createServer(), {
-		host: '127.0.0.1',
-		port: options.port ?? 5180
-	});
-	yield* server
-		.serve(Effect.flatMap(HttpServerRequest.HttpServerRequest, host.handle))
-		.pipe(Effect.provide(NodeHttpServer.layerHttpServices));
-	options.log(`dev ready: ${host.url}`);
-	if (options.watch !== false) {
-		const fs = yield* FileSystem.FileSystem,
-			dirs = yield* Effect.filter(
-				['src', 'seed', 'migrations'].map((name) => ({ name, directory: path.join(root, name) })),
-				({ directory }) => fs.exists(directory)
-			);
-		const changes = Stream.callback<void, ToolFailure>((queue) =>
-			Effect.acquireRelease(
-				Effect.try({
-					try: () =>
-						dirs.map(({ name, directory }) =>
-							watch(directory, { recursive: true }, (_event, file) => {
-								// A build rewrites migration metadata; only editable SQL starts another build.
-								if (name !== 'migrations' || file?.endsWith('.sql') === true)
-									Queue.offerUnsafe(queue, undefined);
-							})
-						),
-					catch: (cause) =>
-						new ToolFailure({ message: 'The development watcher could not open.', cause })
-				}),
-				(watchers) =>
-					Effect.sync(() => {
-						for (const watcher of watchers) watcher.close();
-					})
-			)
-		);
-		yield* changes.pipe(
-			Stream.debounce('150 millis'),
-			Stream.runForEach(() =>
-				buildWorkspace(root).pipe(
-					Effect.flatMap((next) => host.swap(next.artifact)),
-					Effect.tap(() => Effect.sync(() => options.log('reloaded'))),
-					Effect.catch((error) =>
-						Effect.sync(() =>
-							options.log(
-								error instanceof AuthorErrors
-									? error.errors.map((diagnostic) => diagnostic.message).join('\n')
-									: String(error)
-							)
-						)
-					)
+		log: options.log,
+		spaServed: true
+	};
+	/** One build, migrated on the host's database and served; closed when the next one replaces it. */
+	const activated = (built: Built) =>
+		Effect.gen(function* () {
+			const release = { id: built.artifact.artifact.hash, artifact: artifactPort(built.artifact.dir) };
+			const branch = yield* call((signal) =>
+				HOST_API.branch(
+					{ release, database: facilities.storage.database, audit: facilities.logs.audit },
+					{ signal }
 				)
-			),
-			Effect.forkScoped
+			);
+			yield* call((signal) => branch.schema.migrate({ signal }));
+			const served = yield* serveRelease({
+				scope: 'dev',
+				release,
+				publicUrl,
+				facilities,
+				serving,
+				native,
+				workspace: { name: built.artifact.artifact.name, handle: built.artifact.artifact.handle },
+				admit: (work) => work,
+				log: options.log
+			});
+			return { ...served, built };
+		}).pipe(
+			Effect.mapError((cause) => new ToolFailure({ message: 'The build could not be activated.', cause }))
 		);
-	}
-	return host;
+	const first = yield* buildWorkspace(root, watching);
+	const active = yield* ScopedRef.fromAcquire(activated(first));
+	const server = createServer();
+	const client = yield* clientDevServer(
+		root,
+		first.files,
+		first.artifact.manifest,
+		path.join(first.artifact.dir, 'client'),
+		first.artifact.artifact.name,
+		server,
+		'/'
+	);
+	// Bolt's routes first, then the release's own files (brand icons, public page entries); a document is the SPA's
+	const app = Effect.gen(function* () {
+		const incoming = yield* HttpServerRequest.HttpServerRequest;
+		const request = yield* HttpServerRequest.toWeb(incoming);
+		const address = Option.getOrElse(incoming.remoteAddress, () => '127.0.0.1');
+		const { workspace, links, built } = yield* ScopedRef.get(active);
+		const pathname = new URL(incoming.url, publicUrl).pathname;
+		const response = yield* pathname.startsWith('/hooks/integration/') ||
+			pathname === '/hooks/oauth/callback'
+			? call(() => links.hook(request))
+			: pathname.startsWith('/__bolt/integrations/')
+				? call(async (signal) => {
+						const authority = await workspace.identity.authority(request.clone(), { signal });
+						return authority === null
+							? Response.json(
+									{ error: { code: 'unauthenticated', message: 'Sign in to manage integrations.' } },
+									{ status: 401 }
+								)
+							: links.admin(request, authority);
+					})
+				: call(
+						async (signal) =>
+							(await workspace.handle(request, { address })) ??
+							(await workspace.render(request, { address, signal }))
+					);
+		if (response !== null) return HttpServerResponse.fromWeb(response);
+		const page = yield* clientPage(built.artifact.dir, pathname, built.artifact.manifest);
+		if (page === undefined) return HttpServerResponse.empty({ status: 404 });
+		return page.document
+			? HttpServerResponse.text(client.document, { headers: page.headers })
+			: yield* HttpServerResponse.file(page.file, { headers: page.headers });
+	}).pipe(Effect.catch((error) => Effect.succeed(responseError(error))));
+	const bolt = yield* NodeHttpServer.makeHandler(app, { scope: yield* Effect.scope }).pipe(
+		Effect.provide(NodeHttpServer.layerHttpServices)
+	);
+	// Vite answers its own module, asset and hot-update requests; everything else is Bolt's
+	server.on('request', (request, response) =>
+		client.middlewares(request, response, () => bolt(request, response))
+	);
+	yield* Effect.acquireRelease(
+		Effect.callback<void, ToolFailure>((resume) => {
+			server.once('error', (cause) =>
+				resume(Effect.fail(new ToolFailure({ message: `Port ${options.port} is unavailable.`, cause })))
+			);
+			server.listen(options.port, '127.0.0.1', () => resume(Effect.void));
+		}),
+		() =>
+			Effect.callback<void>((resume) => {
+				server.closeAllConnections();
+				server.close(() => resume(Effect.void));
+			})
+	);
+	options.log(`dev ready (untethered, ${hostFile}): ${publicUrl}`);
+	const io = yield* Effect.context<FileSystem.FileSystem | Path.Path>();
+	yield* watchWorkspace(
+		root,
+		watching,
+		(next) =>
+			client.refresh(next.files, next.artifact.manifest).pipe(
+				Effect.andThen(ScopedRef.set(active, activated(next))),
+				Effect.tap(() => Effect.sync(() => options.log('reloaded'))),
+				Effect.catch((error) => Effect.sync(() => options.log(String(error)))),
+				Effect.provide(io)
+			),
+		first
+	).pipe(Effect.forkScoped);
 });

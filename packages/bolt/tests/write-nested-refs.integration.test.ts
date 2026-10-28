@@ -6,8 +6,8 @@ import type { EngineManifest } from '../src/engine/manifest.ts';
 import type { TenantDbShape as TenantDb } from '../src/engine/db/tenant-db.ts';
 import type { Json } from '../src/decl/values.ts';
 import { toPred } from '../src/engine/access/pred.ts';
-import { PgliteDb, Pristine } from '../src/node/db/pglite.ts';
-import { applyPlan, plan } from '../src/engine/schema/plan.ts';
+import { PgliteDb } from '../src/node/db/pglite.ts';
+import { TestDb } from '../src/test/database.ts';
 import { act } from '../src/engine/write/act.ts';
 import { admin, arm, authority, grants, manifest, NOW, TODAY, writeArm } from './write-fixture.ts';
 const orderModel = manifest.models.orders,
@@ -85,9 +85,8 @@ const run = (input: Json, verb: 'create' | 'update' = 'create', caller = visible
 	);
 let allowed: string, hidden: string;
 const setup = Effect.fnUntraced(function* () {
-	pg = yield* PgliteDb.open();
+	pg = yield* TestDb.open(m);
 	db = PgliteDb.make(pg);
-	yield* applyPlan(db, yield* plan(null, m), { accept: true });
 	const tags = yield* act(
 		{ manifest: m, db },
 		{
@@ -126,7 +125,7 @@ it.live('refuses unreadable and missing custom list targets without creating the
 		expect((yield* db.read([{ text: 'SELECT title FROM orders', params: [] }]))[0]?.rows).toEqual(
 			[]
 		);
-	}).pipe(Effect.provide(Pristine.layer))
+	})
 );
 it.live('checks IDs nested in JSON objects and lists, preserving nullable targets', () =>
 	Effect.gen(function* () {
@@ -152,7 +151,7 @@ it.live('checks IDs nested in JSON objects and lists, preserving nullable target
 		expect(
 			(yield* db.read([{ text: 'SELECT metadata FROM orders', params: [] }]))[0]?.rows
 		).toEqual([{ metadata: { groups: [{ target: null }, { target: allowed }] } }]);
-	}).pipe(Effect.provide(Pristine.layer))
+	})
 );
 it.live('retains the existing value when an update supplies an unreadable reference', () =>
 	Effect.gen(function* () {
@@ -168,7 +167,7 @@ it.live('retains the existing value when an update supplies an unreadable refere
 		expect(
 			(yield* db.read([{ text: 'SELECT preferences, revision FROM orders', params: [] }]))[0]?.rows
 		).toEqual([{ preferences: [allowed], revision: 1 }]);
-	}).pipe(Effect.provide(Pristine.layer))
+	})
 );
 it.live('decodes a custom shape before reference admission and writes only valid values', () =>
 	Effect.gen(function* () {
@@ -187,5 +186,5 @@ it.live('decodes a custom shape before reference admission and writes only valid
 		expect(
 			(yield* db.read([{ text: 'SELECT preferences FROM orders', params: [] }]))[0]?.rows
 		).toEqual([{ preferences: [allowed] }]);
-	}).pipe(Effect.provide(Pristine.layer))
+	})
 );

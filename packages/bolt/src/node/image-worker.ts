@@ -10,7 +10,6 @@ import { convertIndexedToRgb, decode as decodePng, encode as encodePng } from 'f
 import jpeg from 'jpeg-js';
 import type { ImagePreview } from '../engine/contracts.ts';
 import { ImagePreviewMime, ImagePreviewSize } from './images.ts';
-import createLibheif from 'libheif-js/libheif-wasm/libheif-bundle.mjs';
 class ImageError extends Schema.TaggedError<ImageError>()('ImageError', {
 	message: Schema.String
 }) {}
@@ -237,7 +236,8 @@ const decode = Effect.fn('Image.decode')(function* (
 	if (bytes.length >= 12 && ascii(bytes, 4) === 'ftyp' && HEIF_BRANDS.has(ascii(bytes, 8))) {
 		yield* Effect.try({ try: () => checkHeif(bytes), catch: failed });
 		const heif = yield* Effect.tryPromise({
-			try: () => Promise.resolve(createLibheif()),
+			// the 2 MB libheif bundle loads only for a HEIC: every other image's worker skips parsing it
+			try: () => import('libheif-js/libheif-wasm/libheif-bundle.mjs').then((m) => m.default()),
 			catch: failed
 		});
 		if (heif.ready !== undefined)

@@ -10,12 +10,7 @@
 		"scripts/build-package.ts",
 		"scripts/lib/declaration-emit.mjs"
 	],
-	"globalPassThroughEnv": [
-		"CI",
-		"VITEST_MAX_WORKERS",
-		"BOLT_TEST_MAX_WORKERS",
-		"BOLT_TEST_WORKERS"
-	],
+	"globalPassThroughEnv": ["CI"],
 	"tasks": {
 		"build": {
 			"dependsOn": ["^build"],
@@ -35,30 +30,6 @@
 		},
 		"types:compat": {
 			"dependsOn": ["^build"]
-		},
-		"@norbital-ai/doctor#test": {
-			"dependsOn": ["build", "^build", "^test"],
-			"inputs": [
-				"$TURBO_DEFAULT$",
-				"$TURBO_ROOT$/packages/*/src/**",
-				"$TURBO_ROOT$/packages/*/docs/**",
-				"$TURBO_ROOT$/packages/*/assets/**",
-				"$TURBO_ROOT$/packages/*/README.md",
-				"$TURBO_ROOT$/packages/*/package.json"
-			]
-		},
-		// The database-backed half of bolt's suite, on owned PGlite workspaces. Kept off `test` so a
-		// merge is not gated on the full integration wall; run on its own schedule, and on demand.
-		"test:integration": {
-			"dependsOn": ["^build"]
-		},
-		"test": {
-			// The server-artifact fixture materializes each package exactly as a consumer receives it,
-			// including Bolt's own `build/` directory. Its test must therefore follow this package's build:
-			// otherwise a source export removal can leave the fixture evaluating stale emitted imports.
-			// A task dependency is ordered, so `build` finishes before `test` starts and cannot race the
-			// build's opening cleanup of the output directory.
-			"dependsOn": ["build", "^build", "^test"]
 		}
 	}
 }

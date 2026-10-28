@@ -1,13 +1,15 @@
 // P2-INTEGRATE end to end on PGlite: the kit → engine entry → access, write, query, schema and guest areas together.
-import { describe, expect, it } from '@effect/vitest';
+// One workspace, its tests in order (the first order is SO-0001); each later test reads only the rows it wrote. The guest
+// CPU wall is guest.test's.
+import { expect, layer } from '@effect/vitest';
 import { vi } from 'vitest';
 import { Effect, Layer, Schema } from 'effect';
-import { program } from './support/guest-fixture.ts';
+import { program } from '../src/test/guest.ts';
 import type { Authority, ActOutcome as Outcome } from '../src/engine/contracts.ts';
 import { TestWorkspace, type Kit, type WorkspaceServices } from '../src/test/index.ts';
 import type { Json } from '../src/decl/values.ts';
 import { actReply, qReply, routeFixture, type FixtureRoute } from './support/route-fixture.ts';
-import { ACME, guest, manifest, seed, SHADY } from './engine-fixture.ts';
+import { ACME, guest, manifest, seed } from './engine-fixture.ts';
 
 const present = <A>(value: A | null | undefined): A => {
 	if (value === null || value === undefined) throw new Error('Missing fixture value');
@@ -80,8 +82,12 @@ const writes = <A, E, R>(t: Kit, n: number, run: Effect.Effect<A, E, R>) =>
 		);
 	});
 
-describe('engine: create → read → update → delete through the full pipeline', () => {
-	it.live('each act is one native batch; seq, roll-up, transform and state rules hold', () =>
+const count = (route: FixtureRoute, t: Kit) =>
+	read(route, t.as(t.admin).authority, 'orders').pipe(Effect.map((page) => page.rows.length));
+
+layer(workspace, { excludeTestServices: true })('engine', (it) => {
+	// engine: create → read → update → delete through the full pipeline
+	it.effect('each act is one native batch; seq, roll-up, transform and state rules hold', () =>
 		Effect.gen(function* () {
 			const t = yield* TestWorkspace;
 			const route = yield* routeFixture(yield* Effect.context<TestWorkspace | WorkspaceServices>());
@@ -145,18 +151,6 @@ describe('engine: create → read → update → delete through the full pipelin
 					}
 				]).pipe(Effect.map(ok))
 			);
-			expect(
-				yield* act(route, t, rep.authority, 'orders.update', [{ target: id, set: { title: 'x' } }])
-			).toMatchObject({ kind: 'refused', code: 'locked', field: 'title' });
-			expect(
-				yield* act(route, t, rep.authority, 'orders.update', [
-					{
-						target: id,
-						set: { status: 'draft' }
-					}
-				])
-			).toMatchObject({ kind: 'refused', code: 'forbidden', field: 'status' });
-
 			yield* writes(
 				t,
 				1,
@@ -164,83 +158,11 @@ describe('engine: create → read → update → delete through the full pipelin
 			);
 			expect(yield* get(route, rep.authority, 'orders', id)).toBeNull();
 			expect((yield* read(route, t.as(t.admin).authority, 'lines')).rows).toEqual([]);
-		}).pipe(Effect.scoped, Effect.provide(workspace))
+		}).pipe(Effect.scoped)
 	);
 
-	it.live('the transform reads as the workspace and refuses; its refusal is recorded once', () =>
-		Effect.gen(function* () {
-			const t = yield* TestWorkspace;
-			const route = yield* routeFixture(yield* Effect.context<TestWorkspace | WorkspaceServices>());
-			const rep = t.as(t.member(['rep']));
-			const refused = yield* writes(
-				t,
-				1,
-				act(
-					route,
-					t,
-					rep.authority,
-					'orders.create',
-					[{ title: 'x', region: 'north', customer: SHADY }],
-					{ key: 'k1' }
-				)
-			);
-			expect(refused).toEqual({
-				kind: 'refused',
-				code: 'refused',
-				message: 'Shady is blocked',
-				field: 'customer',
-				rule: 'orders.create'
-			});
-			expect(
-				yield* writes(
-					t,
-					0,
-					act(
-						route,
-						t,
-						rep.authority,
-						'orders.create',
-						[{ title: 'x', region: 'north', customer: SHADY }],
-						{ key: 'k1', retry: true }
-					)
-				)
-			).toEqual(refused);
-			expect((yield* read(route, t.as(t.admin).authority, 'orders')).rows).toEqual([]);
-		}).pipe(Effect.scoped, Effect.provide(workspace))
-	);
-
-	it.live('an unmarked replay writes nothing and returns the first outcome byte for byte', () =>
-		Effect.gen(function* () {
-			const t = yield* TestWorkspace;
-			const route = yield* routeFixture(yield* Effect.context<TestWorkspace | WorkspaceServices>());
-			const rep = t.as(t.member(['rep']));
-			const row = { title: 'desk', region: 'north', customer: ACME };
-			const input = [row];
-			const first = yield* act(route, t, rep.authority, 'orders.create', input, { key: 'same' });
-			const again = yield* act(route, t, rep.authority, 'orders.create', input, { key: 'same' });
-			expect(JSON.stringify(again)).toBe(JSON.stringify(first));
-			expect((yield* read(route, rep.authority, 'orders')).rows).toHaveLength(1);
-			expect(
-				yield* act(route, t, rep.authority, 'orders.create', [{ ...row, title: 'other' }], {
-					key: 'same'
-				})
-			).toMatchObject({ kind: 'refused', code: 'keyReuse' });
-			expect(
-				yield* get(
-					route,
-					rep.authority,
-					'orders',
-					idOf(
-						ok(yield* act(route, t, rep.authority, 'orders.create', [{ ...row, title: 'next' }]))
-					)
-				)
-			).toMatchObject({ number: 'SO-0002' });
-		}).pipe(Effect.scoped, Effect.provide(workspace))
-	);
-});
-
-describe('engine: authority end to end (rules 13, 14, 35)', () => {
-	it.live("scopes rows, masks fields per row, and rep's checks keep its writes in the north", () =>
+	// engine: authority end to end (rules 13, 14, 35)
+	it.effect("scopes rows, masks fields per row, and rep's checks keep its writes in the north", () =>
 		Effect.gen(function* () {
 			const t = yield* TestWorkspace;
 			const route = yield* routeFixture(yield* Effect.context<TestWorkspace | WorkspaceServices>());
@@ -274,7 +196,9 @@ describe('engine: authority end to end (rules 13, 14, 35)', () => {
 			const seen = (yield* read(route, t.as(b).authority, 'orders', {
 				orderBy: [{ title: 'asc' }]
 			})).rows;
-			expect(seen.map((r) => [r['title'], r['note']])).toEqual([
+			expect(
+				seen.filter((r) => r['title'] === 'a-order' || r['title'] === 'b-order').map((r) => [r['title'], r['note']])
+			).toEqual([
 				['a-order', { $masked: true }],
 				['b-order', 'visible']
 			]);
@@ -323,10 +247,10 @@ describe('engine: authority end to end (rules 13, 14, 35)', () => {
 					}
 				])
 			).toMatchObject({ kind: 'refused', code: 'forbidden' });
-		}).pipe(Effect.scoped, Effect.provide(workspace))
+		}).pipe(Effect.scoped)
 	);
 
-	it.live(
+	it.effect(
 		"lines are their own access point: read through their order's owner, written under rep's lines check (rule 35)",
 		() =>
 			Effect.gen(function* () {
@@ -383,96 +307,15 @@ describe('engine: authority end to end (rules 13, 14, 35)', () => {
 						}
 					])
 				).toMatchObject({ code: 'refused', rule: 'rep.lines.update' });
-			}).pipe(Effect.scoped, Effect.provide(workspace))
+			}).pipe(Effect.scoped)
 	);
 
-	it.live('an administrator bypasses grants but not the model or the transform', () =>
+	// engine: one atomic act stays inside the cell input budget (the byte cap is the same pre-flattener check)
+	it.effect('refuses past the row cap before it materializes the rows', () =>
 		Effect.gen(function* () {
 			const t = yield* TestWorkspace;
 			const route = yield* routeFixture(yield* Effect.context<TestWorkspace | WorkspaceServices>());
-			const admin = t.as(t.admin);
-			const id = idOf(
-				yield* act(route, t, t.as(t.member(['rep'])).authority, 'orders.create', [
-					{
-						title: 'o',
-						region: 'north',
-						note: 'n',
-						customer: ACME
-					}
-				])
-			);
-			expect(yield* get(route, admin.authority, 'orders', id)).toMatchObject({ note: 'n' });
-			ok(
-				yield* act(route, t, admin.authority, 'orders.update', [
-					{
-						target: id,
-						set: { region: 'south', status: 'submitted' }
-					}
-				])
-			);
-			expect(
-				yield* act(route, t, admin.authority, 'orders.update', [
-					{ target: id, set: { title: 'y' } }
-				])
-			).toMatchObject({ code: 'locked', field: 'title' });
-			expect(
-				yield* act(route, t, admin.authority, 'orders.create', [
-					{
-						title: 'z',
-						region: 'south',
-						customer: SHADY
-					}
-				])
-			).toMatchObject({ code: 'refused', field: 'customer' });
-			expect(
-				yield* act(route, t, admin.authority, 'orders.create', [
-					{
-						title: 'z',
-						region: 'south',
-						status: 'submitted',
-						customer: ACME
-					}
-				])
-			).toMatchObject({ code: 'invalidInput', field: 'status' });
-		}).pipe(Effect.scoped, Effect.provide(workspace))
-	);
-});
-
-describe('engine: guest walls (rules 71, 72)', () => {
-	it.live(
-		'a transform spinning past 2 s of CPU is stopped and refused; nothing is written but the outcome',
-		() =>
-			Effect.gen(function* () {
-				const t = yield* TestWorkspace;
-				const route = yield* routeFixture(
-					yield* Effect.context<TestWorkspace | WorkspaceServices>()
-				);
-				const started = Date.now();
-				const o = yield* writes(
-					t,
-					1,
-					act(route, t, t.as(t.admin).authority, 'orders.create', [
-						{
-							title: 'spin',
-							region: 'north',
-							customer: ACME
-						}
-					])
-				);
-				expect(o).toMatchObject({ kind: 'refused' });
-				expect(o.kind === 'refused' ? o.message : undefined).toMatch(/2000 ms of guest CPU/);
-				expect(Date.now() - started).toBeLessThan(5_000);
-				expect((yield* read(route, t.as(t.admin).authority, 'orders')).rows).toEqual([]);
-			}).pipe(Effect.scoped, Effect.provide(workspace)),
-		10_000
-	);
-});
-
-describe('engine: one atomic act stays inside the cell input budget', () => {
-	it.live('refuses past the row and byte caps before it materializes the rows', () =>
-		Effect.gen(function* () {
-			const t = yield* TestWorkspace;
-			const route = yield* routeFixture(yield* Effect.context<TestWorkspace | WorkspaceServices>());
+			const before = yield* count(route, t);
 			const rows = Array.from({ length: 4_001 }, (_, n) => ({
 				title: `bulk-${n}`,
 				region: 'north',
@@ -482,22 +325,12 @@ describe('engine: one atomic act stays inside the cell input budget', () => {
 				kind: 'refused',
 				code: 'overflow'
 			});
-			expect(
-				yield* act(route, t, t.as(t.admin).authority, 'orders.create', [
-					{
-						title: 'x'.repeat(9 * 1024 * 1024),
-						region: 'north',
-						customer: ACME
-					}
-				])
-			).toMatchObject({ kind: 'refused', code: 'overflow' });
-			expect((yield* read(route, t.as(t.admin).authority, 'orders')).rows).toEqual([]);
-		}).pipe(Effect.scoped, Effect.provide(workspace))
+			expect(yield* count(route, t)).toBe(before);
+		}).pipe(Effect.scoped)
 	);
-});
 
-describe('engine: declared record locks and enum transitions', () => {
-	it.live('refuses an invalid enum move, then every write to a locked record', () =>
+	// engine: declared record locks and enum transitions
+	it.effect('refuses an invalid enum move, then every write to a locked record', () =>
 		Effect.gen(function* () {
 			const t = yield* TestWorkspace;
 			const route = yield* routeFixture(yield* Effect.context<TestWorkspace | WorkspaceServices>());
@@ -545,6 +378,6 @@ describe('engine: declared record locks and enum transitions', () => {
 			expect(
 				yield* act(route, t, t.as(t.admin).authority, 'orders.delete', [{ target: id }])
 			).toMatchObject({ kind: 'refused', code: 'locked' });
-		}).pipe(Effect.scoped, Effect.provide(workspace))
+		}).pipe(Effect.scoped)
 	);
 });

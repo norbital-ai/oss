@@ -34,8 +34,7 @@ import {
 	choiceOf,
 	noulOf,
 	type DecisionQuestion,
-	type DecisionRequest,
-	type DecisionResult
+	type DecisionRequest
 } from '../decisions/index.ts';
 import { catalogOf } from '../access/pred.ts';
 import { midnight, startOfDate } from '../query/eval.ts';
@@ -1953,7 +1952,6 @@ export function makeFilterDescribe(cfg: FilterDescribeConfig) {
 	});
 	return { describe, options: opts };
 }
-export type FilterDescribe = ReturnType<typeof makeFilterDescribe>;
 export const filterDescribe = Effect.gen(function* () {
 	const manifest = yield* Manifest,
 		reads = yield* Reads,

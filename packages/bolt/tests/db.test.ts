@@ -15,9 +15,7 @@ const EMPTY: Answer = { rows: [], rowCount: 0 };
 const statement = { text: 'select 1', params: [] };
 const begin = [
 	'begin',
-	"set local lock_timeout = '5s'",
-	"set local statement_timeout = '15s'",
-	"set local idle_in_transaction_session_timeout = '5s'"
+	"select set_config('lock_timeout', '5s', true), set_config('statement_timeout', '15s', true), set_config('idle_in_transaction_session_timeout', '5s', true)"
 ].join(';\n');
 const hang = () => new Promise<Answer>(() => {});
 /** A pool of one connection whose queries `answer` decides; what was sent and how it was released are recorded. */

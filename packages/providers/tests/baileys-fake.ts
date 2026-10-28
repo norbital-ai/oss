@@ -48,14 +48,11 @@ export const raw = (id: string, text = id, extra: object = {}) => ({
 });
 /**
  * The patched Baileys over a fake WhatsApp: each socket it opened, as the test drives it; `refuse` makes the next open
- * throw, `delay` makes it take that many ms.
+ * throw, and `nextOpen` holds the next open until it settles.
  */
 export const fake = (log: string[] = [], options: BaileysOptions = {}) => {
 	const opened: Sock[] = [];
-	const control: { refuse: boolean; delay: number; nextOpen?: () => Promise<void> } = {
-		refuse: false,
-		delay: 0
-	};
+	const control: { refuse: boolean; nextOpen?: () => Promise<void> } = { refuse: false };
 	const listening = new Set<Sock>();
 	const observations = new Set<{
 		index: number | undefined;
@@ -85,11 +82,6 @@ export const fake = (log: string[] = [], options: BaileysOptions = {}) => {
 		if (control.refuse) {
 			control.refuse = false;
 			throw new Error('no network');
-		}
-		if (control.delay > 0) {
-			const ms = control.delay;
-			control.delay = 0;
-			await new Promise((r) => setTimeout(r, ms));
 		}
 		log.push('open');
 		const ev = new EventEmitter<Record<string, [unknown]>>();

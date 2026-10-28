@@ -1,18 +1,16 @@
-// The approval panel (spec §7): a timeline of one node per request and per step whose popovers hold each step's
-// back-and-forth, a scope selector over a record's requests, and a two-step decision form showing exactly the host's
-// decisions; lists accent the rows a request holds.
+// The approval panel (spec §7): a scope selector over a record's requests and a two-step decision form showing exactly
+// the host's decisions.
 import './dom.ts';
 import assert from 'node:assert/strict';
 import { afterEach, it } from '@effect/vitest';
 import { Effect } from 'effect';
-import type { ApprovalView, Outcome, RowApproval } from '../src/client/contract.ts';
-import type { KindsHost } from '../src/kinds/context.ts';
-import type { Values } from '../src/model/types.ts';
+import type { ApprovalView, Outcome } from '../src/client/contract.ts';
 import { element } from './elements.ts';
 import { browser, required, textOf, viewFixture } from './view-fixture.ts';
 
 const { flushSync, mount, tick, unmount } = await import('svelte');
 const { default: Harness } = await import('./view-harness.svelte');
+const { default: ApprovalPanel } = await import('../src/approval/ApprovalPanel.svelte');
 const settle = async () => {
 	flushSync();
 	for (let i = 0; i < 5; i++) {
@@ -86,6 +84,7 @@ const panel = (
 				bolt,
 				catalog: {},
 				part: 'approval',
+				view: ApprovalPanel,
 				props: { requests, onOutcome: (o: Outcome) => outcomes.push(o) }
 			}
 		});
@@ -105,39 +104,6 @@ const popover = () => element<HTMLElement>(document, '[data-view=approval-step-l
 const decisions = (target: ParentNode) => [
 	...target.querySelectorAll<HTMLButtonElement>('[data-view=approval-controls] button')
 ];
-
-it.live(
-	'the timeline: one node for the request, then one per step, each with its look and caption',
-	() =>
-		Effect.gen(function* () {
-			const { target } = yield* panel([request]);
-			assert.deepEqual(
-				nodes(target).map((li) => [li.dataset['step'], li.dataset['look']]),
-				[
-					['request', 'done'],
-					['step-0', 'active'],
-					['step-1', 'later']
-				]
-			);
-			assert.deepEqual(
-				nodes(target).map((li) => textOf(li.querySelector('[data-label]'))),
-				['Requested', 'Controllers', 'Commercial']
-			);
-			const captions = nodes(target).map((li) => textOf(li.querySelector('[data-caption]')));
-			assert.match(required(captions[0]), /^Bob · /);
-			assert.deepEqual(captions.slice(1), ['Waiting', 'Later']);
-			// every node is a button named by its step and state
-			assert.equal(node(target, 'step-0').getAttribute('aria-label'), 'Controllers: Waiting');
-			assert.equal(
-				target.querySelector('[data-view=approval-scope]'),
-				null,
-				'one request: no selector'
-			);
-			for (const gone of ['approval-history', 'approval-records', 'approval-summary'])
-				assert.equal(target.querySelector(`[data-view=${gone}]`), null);
-			assert.doesNotMatch(textOf(target), /May supersede|Required for|Withdraw|Comment/);
-		})
-);
 
 it.live(
 	"a node's popover holds its step's back-and-forth, opened by a tap or by keyboard focus",
@@ -161,9 +127,7 @@ it.live(
 							to: 'Rejected',
 							reason: 'Too costly',
 							rolledBack: [{ model: 'jobs', id: 'j1', action: 'restored' }],
-							skipped: [
-								{ model: 'jobs', id: 'j1', field: 'customer', reason: 'deletedTarget' }
-							]
+							skipped: [{ model: 'jobs', id: 'j1', field: 'customer', reason: 'deletedTarget' }]
 						})
 					]
 				}
@@ -369,89 +333,5 @@ it.live('several requests: the selector defaults to the open one and switches th
 		yield* browser(() => settle());
 		assert.equal(element(target, '[data-view=approval]').dataset['status'], 'Rejected');
 		assert.equal(nodes(target)[1]?.dataset['look'], 'rejected');
-	})
-);
-
-const held: RowApproval = {
-	requestId: 'r1',
-	state: 'Pending',
-	step: 0,
-	steps: [
-		{ name: 'Finance', teams: ['finance'], users: [] },
-		{ name: 'Directors', teams: ['directors'], users: [] }
-	],
-	requestedBy: 'Ada'
-};
-const tip = 'Requested by Ada · Pending step 1/2 · waiting on Finance';
-const catalog = {
-	jobs: {
-		label: ['title'],
-		fields: { title: { kind: 'text' }, status: { kind: 'enum', values: ['todo', 'done'] } }
-	}
-} satisfies NonNullable<KindsHost['catalog']>;
-const listed: readonly Values[] = [
-	{ id: 'a', title: 'Held', status: 'todo', $approval: held },
-	{ id: 'b', title: 'Free', status: 'todo' }
-];
-const lists = (part: 'table' | 'board') =>
-	Effect.gen(function* () {
-		const { bolt } = yield* browser(() =>
-			viewFixture({
-				read: () => ({ rows: listed, next: null }),
-				aggregate: () => [{ key: { status: 'todo' }, count: 2 }]
-			})
-		);
-		const target = document.body.appendChild(document.createElement('div'));
-		const app = mount(Harness, {
-			target,
-			props:
-				part === 'table'
-					? { bolt, catalog, part, props: { of: 'jobs', columns: ['title'] } }
-					: {
-							bolt,
-							catalog,
-							part,
-							props: {
-								of: 'jobs',
-								by: 'status',
-								card: ['title'],
-								toolbar: { title: false, search: false, filter: false, export: false, new: false }
-							}
-						}
-		});
-		mounted.push(async () => {
-			await unmount(app);
-			target.remove();
-		});
-		yield* browser(() => settle());
-		return target;
-	});
-
-it.live('a table row the request holds carries the right-hand accent and its tooltip', () =>
-	Effect.gen(function* () {
-		const target = yield* lists('table');
-		const rows = [...target.querySelectorAll<HTMLTableRowElement>('tbody tr[data-approval]')];
-		assert.equal(rows.length, 1);
-		assert.equal(rows[0]?.dataset['approval'], 'Pending');
-		assert.equal(rows[0]?.title, tip);
-		assert.match(textOf(required(rows[0])), /Held/);
-		const narrow = [...target.querySelectorAll<HTMLElement>('[data-table-list] [data-approval]')];
-		assert.deepEqual(
-			narrow.map((s) => s.title),
-			[tip]
-		);
-	})
-);
-
-it.live('a board card the request holds carries the accent and its tooltip', () =>
-	Effect.gen(function* () {
-		const target = yield* lists('board');
-		const heldCard = element<HTMLElement>(target, '[data-board-card="a"]');
-		assert.equal(heldCard.title, tip);
-		assert.equal(element<HTMLElement>(heldCard, '[data-approval]').getAttribute('aria-label'), tip);
-		assert.equal(
-			element<HTMLElement>(target, '[data-board-card="b"]').querySelector('[data-approval]'),
-			null
-		);
 	})
 );

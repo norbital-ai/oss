@@ -13,10 +13,6 @@ export type IntegrationOf<N> = N extends ConnectionName
 	: N extends InstanceId<infer D>
 		? D
 		: never;
-/** The connections of definition `N`. */
-export type ConnectionsOf<N> = {
-	[K in ConnectionName]: Connections[K] extends { integration: N } ? K : never;
-}[ConnectionName];
 /** A name declared in `src/+secrets.ts`. */
 export type SecretName = keyof NamesPart<'secrets'> & string;
 type Ai = NamesPart<'workspace'> extends { ai: infer A } ? A : {};

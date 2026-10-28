@@ -42,7 +42,7 @@ import { isTransient, type EngineError } from '../errors.ts';
 import { BoltError } from '../../protocol/errors.ts';
 import { SqlReadCapture, TenantDb } from '../db/tenant-db.ts';
 import { ReadDeps } from '../query/engine.ts';
-import { Ai, Drivers, Logs, Transport } from '../ports.ts';
+import { Ai, Drivers, Logs } from '../ports.ts';
 import {
 	Activation,
 	Callables,
@@ -78,7 +78,7 @@ import { bindingsAt } from '../query/reader.ts';
 import { encodeWire } from '@norbital-ai/std/wire';
 import { decodeInput, decodeOutput } from '../callables/decode.ts';
 import { isBatchCallable } from '../callables/index.ts';
-import { DecisionTrace, readableFile, storedFiles } from '../decisions/index.ts';
+import { DecisionTrace, readableFile } from '../decisions/index.ts';
 import { prepareSend, sendPiece } from '../conversations/outbound.ts';
 import { preview, stableId } from '../conversations/store.ts';
 import { instanceRequest } from '../integrations/instances.ts';
@@ -86,8 +86,6 @@ import { verifiedWebhook, type WebhookRequest } from './webhook.ts';
 import { enqueue, nextDue, triggersOf } from './queue.ts';
 import { backoffMs, dueAt, iso, materialize } from './time.ts';
 import { NOTICE_PUSH, noticePush } from './push.ts';
-import { GuestParking, PARK_MS } from '../guest/runner.ts';
-import { RunJournal, type JournalEntry } from './journal.ts';
 import { makeTransactions, transactionFailure } from '../transactions.ts';
 import { Audit } from '../audit.ts';
 import { audited } from '../audit-operation.ts';
@@ -274,7 +272,7 @@ const EFFECTS = new Set([
 ]);
 /**
  * What a facility call is to a run's gates, decoded once from its arguments with the shapes the dispatcher takes: the
- * stored files it reads (each must be the run's to read), whether it stores a new one (journalled, then the run's own),
+ * stored files it reads (each must be the run's to read), whether it stores a new one (then the run's own),
  * and the host tools an inference names. Arguments of another shape gate nothing; the dispatcher refuses them.
  */
 type CallFacts = {
@@ -392,56 +390,6 @@ const fail = (code: string, message: string): CrossAnswer => ({
 });
 const failure = (error: EngineError): CrossAnswer =>
 	fail(error._tag === 'BoltError' ? error.code : 'internal', error.message);
-const JournalAnswer = Schema.Union([
-	Schema.Struct({
-		ok: Schema.Literal(true),
-		value: Schema.Json,
-		journal: Schema.optionalKey(Schema.Boolean)
-	}),
-	Schema.Struct({
-		ok: Schema.Literal(false),
-		error: Schema.Union([
-			Schema.Struct({
-				kind: Schema.Literals(['bolt', 'refused']),
-				code: Schema.String,
-				message: Schema.String
-			}),
-			Schema.Struct({
-				kind: Schema.Literal('unavailable'),
-				facility: Schema.String,
-				reason: Schema.String
-			}),
-			Schema.Struct({
-				kind: Schema.Literals([
-					'invalid',
-					'tooLarge',
-					'unsupported',
-					'rateLimited',
-					'upstream',
-					'timeout'
-				]),
-				message: Schema.String,
-				status: Schema.optionalKey(Schema.Number)
-			})
-		]),
-		journal: Schema.optionalKey(Schema.Boolean)
-	})
-]);
-type Failed = Extract<CrossAnswer, { ok: false }>['error'];
-/** A failed answer as its journal holds it. */
-const failureJson = (error: Failed): Json =>
-	error.kind === 'unavailable'
-		? { kind: error.kind, facility: error.facility, reason: error.reason }
-		: error.kind === 'bolt' || error.kind === 'refused'
-			? { kind: error.kind, code: error.code, message: error.message }
-			: {
-					kind: error.kind,
-					message: error.message,
-					...(error.status === undefined ? {} : { status: error.status })
-				};
-/** What one execution leaves in its run's journal: whether there is one to delete, and whether it filled. */
-type Durability = { touched: boolean; full: boolean };
-const JOURNAL_FULL = "The run's journal is full: its AI, infer and HTTP answers are over 64 MiB.";
 const CreatedFile = Schema.Struct({
 	id: Schema.String.check(Schema.isUUID()),
 	name: Schema.String,
@@ -470,13 +418,6 @@ export const RunsLive = Layer.effect(
 		const ai = yield* Ai,
 			logs = yield* Logs,
 			agentHost = yield* AgentHost;
-		const hostJournal = yield* Effect.serviceOption(RunJournal);
-		const runJournal = Option.isSome(hostJournal) ? hostJournal.value : yield* RunJournal.memory;
-		/** A completed run's journal goes; one left behind is the host's to expire. */
-		const forget = (durability: Durability, run: string) =>
-			durability.touched
-				? runJournal.clear(run).pipe(Effect.tapCause(Effect.logWarning), Effect.ignore)
-				: Effect.void;
 		const crypto = yield* Crypto.Crypto;
 		const uuid = crypto
 			.randomUUIDv4()
@@ -611,7 +552,7 @@ export const RunsLive = Layer.effect(
 		): Effect.fn.Return<{ deleted: number; continued?: number }, EngineError> {
 			const aged = {
 				sys_run: `state IN ('succeeded', 'failed', 'stopped', 'skipped') AND finished_at < $1::timestamptz - interval '90 days'`,
-				// a pruned run's journal goes with it, in this pass or (past the cap) as an orphan in a later one
+				// a webhook delivery's key goes with its run
 				bolt_idem: `((run IS NOT NULL AND (run IN (SELECT id FROM sel_sys_run) OR NOT EXISTS (SELECT 1 FROM sys_run r WHERE r.id = bolt_idem.run)))
 				OR (run IS NULL AND issued_at < $1::timestamptz - interval '24 hours'))
 				AND NOT EXISTS (SELECT 1 FROM bolt_audit_receipt a WHERE a.outcome_key=bolt_idem.key AND a.acknowledged_at IS NULL AND a.expired_at IS NULL)`,
@@ -701,8 +642,7 @@ export const RunsLive = Layer.effect(
 			input: Json,
 			dues: number[],
 			warnings: string[],
-			record: Ledger['record'],
-			durability: Durability
+			record: Ledger['record']
 		) =>
 			Effect.gen(function* () {
 				const cause = yield* Schema.decodeUnknownEffect(
@@ -759,106 +699,22 @@ export const RunsLive = Layer.effect(
 					'bolt_approvals',
 					'bolt_run_admitted'
 				]);
-				let replaying = run.attempts > 1 || run.leases > 0;
-				const journal = new Map<string, Json>();
 				const createdFiles = new Set<string>();
 				const halt = yield* Deferred.make<void>();
 				halts.set(run.id, halt);
-				/** The side effects' outcomes this run already committed (`bolt_idem`), for a replay. */
-				const committed = db
-					.rows(Schema.Struct({ key: Schema.String, outcome: Schema.Json }), {
-						text: `SELECT i.key, o.outcome FROM bolt_idem i JOIN bolt_idem_outcome o USING (key) WHERE i.run = $1`,
-						params: [run.id]
-					})
-					.pipe(
-						Effect.map((rows) => {
-							journal.clear();
-							for (const row of rows) journal.set(row.key, row.outcome);
-						})
-					);
-				if (replaying) yield* committed;
-				/** The run's own journal of AI, infer and HTTP answers, read once per pass at its first such call. */
-				const readJournal = Effect.cached(
-					runJournal.read(run.id).pipe(
-						Effect.map((entries) => {
-							if (entries.length > 0) durability.touched = true;
-							return new Map(entries.map((entry): [string, JournalEntry] => [entry.key, entry]));
-						})
-					)
-				);
-				let stored = yield* readJournal;
-				/** Journals one answer: past its cap the run ends `journalFull`; another failed write only costs durability. */
-				const note = (key: string, answer: Json) =>
-					runJournal.write(run.id, { key, attempt: run.attempts, answer }).pipe(
-						Effect.andThen(
-							Effect.sync(() => {
-								durability.touched = true;
-							})
-						),
-						Effect.catch((error) =>
-							error.code === 'journalFull'
-								? Effect.sync(() => {
-										durability.full = true;
-									})
-								: Effect.logWarning(error)
-						)
-					);
-				/** An AI, infer or HTTP call: its journalled answer when it already answered, else live and then journalled. */
-				const durably = (key: string, live: Effect.Effect<CrossAnswer, EngineError>) =>
-					Effect.gen(function* (): Effect.fn.Return<CrossAnswer, EngineError> {
-						if (durability.full) return fail('journalFull', JOURNAL_FULL);
-						const entry = (yield* stored).get(key);
-						if (entry !== undefined) {
-							const replayed = yield* replayAnswer(entry.answer);
-							// a failure stands only for the attempt that met it: a retry asks again
-							if (replayed.ok || entry.attempt === run.attempts) return replayed;
-						}
-						const got = yield* live;
-						// bytes ride no journal: such an answer is asked again on a replay
-						if (got.ok && (got.bins?.length ?? 0) > 0) return got;
-						yield* note(
-							key,
-							got.ok ? { ok: true, value: got.value } : { ok: false, error: failureJson(got.error) }
-						);
-						return got;
-					});
-				/** A parked run's next pass: a fresh isolate replays from the start, effects and answers from their journals. */
-				const resume = Effect.gen(function* () {
-					replaying = true;
-					seen.clear();
-					yield* committed;
-					stored = yield* readJournal;
-				}).pipe(
-					Effect.mapError((error) =>
-						error._tag === 'BoltError'
-							? error
-							: BoltError.make('internal', 'guest', 'the parked run could not resume', error)
-					)
-				);
+				// keys are per attempt: a rerun starts from the beginning and writes again (no replay)
 				const seen = new Map<string, number>();
 				const keyOf = (kind: string, target: string, args: Json) => {
 					const digest = sha256Hex(canonical([kind, target, args])),
 						ordinal = seen.get(digest) ?? 0;
 					seen.set(digest, ordinal + 1);
-					return { key: `${run.id}:${digest}:${ordinal}`, digest };
+					return `${run.id}:${run.attempts}:${digest}:${ordinal}`;
 				};
-				const hit = (key: string) => {
-					const value = journal.get(key);
-					journal.delete(key);
-					return value;
-				};
-				const journalled = (
-					key: string,
-					digest: string,
-					pieces: (c: Chain) => void,
-					outcome: (c: Chain) => string
-				) =>
+				/** One statement of a run's own effect (schedule, notify, send), ungated. */
+				const effect = (pieces: (c: Chain) => void, outcome: (c: Chain) => string) =>
 					Effect.gen(function* () {
 						const c = new Chain();
-						c.cte(
-							'idem',
-							`INSERT INTO bolt_idem (key, digest, issued_at, run) VALUES (${c.p(key)}, ${c.p(digest)}, ${c.p(b.now)}::timestamptz, ${c.p(run.id)}) ON CONFLICT (key) DO NOTHING RETURNING key`
-						);
+						c.cte('idem', 'SELECT 1 AS active');
 						pieces(c);
 						const rows = yield* db.returning(
 							Schema.Struct({
@@ -877,25 +733,18 @@ export const RunsLive = Layer.effect(
 								next_due: Schema.NullOr(Schema.String)
 							}),
 							c.sql(
-								`${answer(c, key, digest, outcome(c))}, ${noticeCaptures(c)} AS notices, (${nextDue(c)})::text AS next_due`
+								`${outcome(c)} AS outcome, ${noticeCaptures(c)} AS notices, (${nextDue(c)})::text AS next_due`
 							)
 						);
 						const result = rows[0];
 						if (result === undefined)
 							return yield* Effect.fail(
-								BoltError.make('internal', 'commit', 'a journal statement returned no answer')
+								BoltError.make('internal', 'commit', 'an effect statement returned no answer')
 							);
 						live.publish(result.notices);
 						if (result.next_due !== null) yield* announce(result.next_due);
 						return result.outcome;
 					});
-				const replayAnswer = (value: Json): Effect.Effect<CrossAnswer, BoltError> =>
-					Schema.decodeUnknownEffect(JournalAnswer)(value).pipe(
-						Effect.map((answer): CrossAnswer => ({ ...answer, journal: true })),
-						Effect.mapError(() =>
-							BoltError.make('corrupt', 'guest', 'a run journal contains an invalid answer')
-						)
-					);
 				const rememberFile = (facts: CallFacts, answer: CrossAnswer) =>
 					Effect.gen(function* () {
 						if (!answer.ok || !facts.stores) return;
@@ -929,7 +778,7 @@ export const RunsLive = Layer.effect(
 						}
 						return true;
 					});
-				/** A facility call, gated by its `facts`; `key` names an infer's own steps in the run's journal. */
+				/** A facility call, gated by its `facts`; `key` names an infer's session. */
 				const facility = (call: FacilityCall, facts: CallFacts, key: string) =>
 					Effect.gen(function* (): Effect.fn.Return<CrossAnswer, PortFailure> {
 						if (call._tag === 'ai.sys_1.decide')
@@ -1101,32 +950,10 @@ export const RunsLive = Layer.effect(
 								})
 								.pipe(Effect.tapCause(Effect.logWarning), Effect.ignore);
 						};
-						// each step the inference persists is in the journal under its call's key: a lost host costs one step
-						const prefix = `${key}#step:`;
-						// `durably` read the journal before this live call: a failed read resumes nothing
-						const entries = yield* stored.pipe(
-							Effect.orElseSucceed(() => new Map<string, JournalEntry>())
-						);
-						const steps = [...entries.values()]
-							.flatMap((entry) =>
-								entry.key.startsWith(prefix)
-									? [[Number(entry.key.slice(prefix.length)), entry.answer] as const]
-									: []
-							)
-							.sort(([a], [b]) => a - b)
-							.map(([, step]) => step);
 						return yield* inferFacility(ai, {
 							load: facilities.fileLoader,
 							onDraft: recorded,
-							onMessage: transcribe,
-							onResume: () =>
-								db
-									.write({
-										text: 'DELETE FROM sys_message WHERE conversation = $1',
-										params: [session]
-									})
-									.pipe(Effect.tapCause(Effect.logWarning), Effect.ignore),
-							steps: { done: steps, persist: (index, step) => note(`${prefix}${index}`, step) }
+							onMessage: transcribe
 						})(call, [...records, ...tools].map(traced)).pipe(
 							Effect.ensuring(
 								db
@@ -1167,7 +994,7 @@ export const RunsLive = Layer.effect(
 							return fail('stopped', 'This cron slot already ran.');
 						switch (call._tag) {
 							case 'transactionBegin': {
-								const { key } = keyOf('transaction', 'transaction', null);
+								const key = keyOf('transaction', 'transaction', null);
 								transactionInvocationId = key;
 								const snapshot = priorReads.snapshot();
 								const begun = yield* transactions.begin({
@@ -1242,7 +1069,7 @@ export const RunsLive = Layer.effect(
 									call.callable._tag === 'Verb'
 										? `${call.callable.model}.${call.callable.verb}`
 										: '';
-								const { key } = keyOf(
+								const key = keyOf(
 									'act',
 									name,
 									call.options?.observed === undefined
@@ -1264,7 +1091,7 @@ export const RunsLive = Layer.effect(
 										: { readGuards: guards }),
 									key: k,
 									issuedAt: b.now,
-									retry: replaying,
+									retry: false,
 									authority: delegatedVerbAuthority(m, authority, delegation, name),
 									bindings: b,
 									invocationId: k,
@@ -1294,7 +1121,7 @@ export const RunsLive = Layer.effect(
 										...(act.onConflict === undefined ? {} : { onConflict: act.onConflict })
 									});
 								}
-								const { key } = keyOf('acts', 'acts', encodeWire(acts));
+								const key = keyOf('acts', 'acts', encodeWire(acts));
 								const observedRead = priorReads.snapshot();
 								const guards = observedRead.guards;
 								const result = yield* calls.acts({
@@ -1342,13 +1169,6 @@ export const RunsLive = Layer.effect(
 												);
 								if (!Number.isFinite(at))
 									return fail('invalidInput', 'schedule: at is not an instant');
-								const { key, digest } = keyOf('schedule', call.automation, [
-									call.input,
-									call.at ?? null,
-									call.key ?? null
-								]);
-								const previous = hit(key);
-								if (previous !== undefined) return { ok: true, value: previous, journal: true };
 								const due = iso(dueAt(now, at)),
 									runKey =
 										call.key === undefined
@@ -1356,9 +1176,7 @@ export const RunsLive = Layer.effect(
 											: target.runAs === 'trigger'
 												? `${actorRef(holder.actor)}:${call.key}`
 												: call.key;
-								const value = yield* journalled(
-									key,
-									digest,
+								const value = yield* effect(
 									(c) => {
 										const queued = enqueue(
 											c,
@@ -1385,22 +1203,15 @@ export const RunsLive = Layer.effect(
 								return { ok: true, value };
 							}
 							case 'notify': {
-								const { key, digest } = keyOf('notify', '', call.notices),
-									previous = hit(key);
+								const key = keyOf('notify', '', call.notices);
 								const report = (value: Json) => {
 									if (Predicate.isObject(value) && EffectArray.isArray(value['unaddressed']))
 										for (const title of value['unaddressed'])
 											warnings.push(`notify: '${String(title)}' reached no member`);
 								};
-								if (previous !== undefined) {
-									report(previous);
-									return { ok: true, value: null, journal: true };
-								}
 								const rows = yield* noticeRows(call.notices, { manifest: m, id: key });
 								report(
-									yield* journalled(
-										key,
-										digest,
+									yield* effect(
 										(c) =>
 											noticeInsert(
 												c,
@@ -1422,13 +1233,8 @@ export const RunsLive = Layer.effect(
 									return fail('invalidInput', 'ctx.send names its connection or instance');
 								const prepared = yield* prepareSend(m, db, call.to, call.message, crypto);
 								if ('error' in prepared) return fail('invalidInput', prepared.error);
-								const { key, digest } = keyOf('send', call.to, call.message),
-									previous = hit(key);
-								if (previous !== undefined) return { ok: true, value: previous, journal: true };
 								const id = yield* uuid;
-								const value = yield* journalled(
-									key,
-									digest,
+								const value = yield* effect(
 									(c) => {
 										const sent = sendPiece(c, { ...prepared, id }, b.now, true);
 										c.cte('sent', `SELECT id FROM ${sent}`);
@@ -1440,10 +1246,10 @@ export const RunsLive = Layer.effect(
 							case 'request': {
 								if (call.to === null)
 									return fail('invalidInput', 'ctx.request names its connection or instance');
-								const { key } = keyOf('request', call.to, call.operation);
-								return yield* durably(
-									key,
-									instanceRequest({ manifest: m, db, links: drivers }, call.to, call.operation)
+								return yield* instanceRequest(
+									{ manifest: m, db, links: drivers },
+									call.to,
+									call.operation
 								);
 							}
 							default: {
@@ -1453,34 +1259,8 @@ export const RunsLive = Layer.effect(
 										ok: false,
 										error: { kind: 'invalid', message: 'this run cannot read file' }
 									};
-								// AI and web answers are slow, costly or unrepeatable: the run's journal keeps them (§3 "Durable steps")
-								const durable = call._tag.startsWith('ai.') || call._tag === 'web.read';
-								if (!durable && !effecting(call)) return yield* facility(call, facts, '');
-								const files: Effect.Success<ReturnType<typeof storedFiles>> =
-									call._tag === 'ai.embed' ? yield* storedFiles(db, call.args[0]) : new Map();
-								const digests = [...files].map(([id, row]) => [id, row.sha256]).sort();
-								const { key, digest } = keyOf(call._tag, '', [...call.args, digests]);
-								if (durable) {
-									const got = yield* durably(key, facility(call, facts, key));
-									yield* rememberFile(facts, got);
-									return got;
-								}
-								const previous = hit(key);
-								if (previous !== undefined) {
-									const got = yield* replayAnswer(previous);
-									yield* rememberFile(facts, got);
-									return got;
-								}
-								const got = yield* facility(call, facts, key);
-								if (got.ok) {
-									yield* rememberFile(facts, got);
-									yield* journalled(
-										key,
-										digest,
-										() => {},
-										(c) => `${c.p({ ok: true, value: got.value })}::jsonb`
-									);
-								}
+								const got = yield* facility(call, facts, keyOf(call._tag, '', call.args));
+								yield* rememberFile(facts, got);
 								return got;
 							}
 						}
@@ -1614,13 +1394,6 @@ export const RunsLive = Layer.effect(
 						}
 					)
 					.pipe(
-						// a wait past PARK_MS parks the run: no isolate while it waits, a fresh one replays when it answers
-						Effect.provideService(GuestParking, { afterMs: PARK_MS, resume }),
-						Effect.map((outcome): GuestOutcome =>
-							durability.full
-								? { kind: 'failed', error: BoltError.make('journalFull', 'guest', JOURNAL_FULL) }
-								: outcome
-						),
 						Effect.ensuring(Effect.sync(() => halts.delete(run.id)))
 					);
 			}).pipe(Effect.scoped);
@@ -1641,8 +1414,7 @@ export const RunsLive = Layer.effect(
 				const now = yield* Clock.currentTimeMillis,
 					spec = m.automations[head.automation],
 					dues: number[] = [],
-					warnings: string[] = [],
-					durability: Durability = { touched: false, full: false };
+					warnings: string[] = [];
 				let input: Json = head.input;
 				if (head.event !== undefined)
 					input = {
@@ -1749,8 +1521,7 @@ export const RunsLive = Layer.effect(
 							input,
 							dues,
 							warnings,
-							ledger.record,
-							durability
+							ledger.record
 						);
 					}
 				}
@@ -1771,10 +1542,7 @@ export const RunsLive = Layer.effect(
 						outcome.kind === 'ok' &&
 						(spec !== undefined ||
 							(Predicate.isObject(outcome.output) && outcome.output['pages'] === 0));
-					if (idle || !(yield* ledger.record)) {
-						yield* forget(durability, head.id);
-						return dues;
-					}
+					if (idle || !(yield* ledger.record)) return dues;
 				}
 				for (const row of rows) stopping.delete(row.id);
 				const platformRetry = yield* registry.retry(head.automation),
@@ -1835,7 +1603,6 @@ export const RunsLive = Layer.effect(
 					},
 					db.write(c.sql(`(SELECT count(*) FROM done)::int AS n`))
 				).pipe(Effect.provideService(Audit, audit));
-				if (state !== 'queued') yield* forget(durability, head.id);
 				return dues;
 			}).pipe(
 				Effect.onInterrupt(() =>

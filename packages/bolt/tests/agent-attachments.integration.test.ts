@@ -3,10 +3,11 @@
 // member's own uploads attach, 8 files / 20 MiB, the envoy's media types.
 import { randomUUID } from 'node:crypto';
 import { describe, expect, it } from '@effect/vitest';
-import { Context, Effect, Layer, Option, Result, Schema, Stream } from 'effect';
+import { afterAll } from 'vitest';
+import { Context, Effect, Exit, Layer, Option, Result, Schema, Scope, Stream } from 'effect';
 import { Ai } from '../src/engine/ports.ts';
 import { Port } from '../src/engine/port.ts';
-import { decodeManifest } from '../src/engine/manifest.ts';
+import { decodeProjectedManifest } from '../src/engine/manifest.ts';
 import { ActReply, WireError } from '../src/protocol/schema.ts';
 import { ActRefused, actFailure } from '../src/decl/errors.ts';
 import type { Json } from '../src/decl/values.ts';
@@ -23,25 +24,39 @@ import { KitInvalid, TestWorkspace, type Kit } from '../src/test/index.ts';
 import { actReply, routeFixture } from './support/route-fixture.ts';
 import { filesOf } from '../src/engine/conversations/store.ts';
 
-const manifest = (triage: boolean) =>
-	Result.getOrThrow(
-		decodeManifest({
-			workspace: { tz: 'UTC', locale: 'en', agent: triage ? {} : { triage: false } },
-			models: {},
-			relationships: {},
-			exposures: {},
-			policies: {},
-			agent: { internal: 'Staff brief.', skills: {} },
-			integrations: {},
-			teams: {},
-			automations: {},
-			connections: {},
-			envoys: {},
-			mcp: {},
-			apps: {},
-			customFields: {}
-		})
-	);
+// One workspace: triage on (the in-app default), a model whose records carry a file.
+const manifest = Result.getOrThrow(
+	decodeProjectedManifest({
+		workspace: { tz: 'UTC', locale: 'en' },
+		models: {
+			photos: {
+				description: 'A photo',
+				label: 'title',
+				fields: {
+					title: { kind: 'text' },
+					file: { kind: 'file', accept: ['image/*'], max: '1MiB' }
+				}
+			}
+		},
+		relationships: {},
+		exposures: {
+			photos: {
+				read: { photos: { fields: 'all' } },
+				create: { columns: { photos: ['title', 'file'] } }
+			}
+		},
+		policies: { inspector: { description: 'Inspectors', grants: { photos: { read: true } } } },
+		teams: { Inspectors: ['inspector'] },
+		agent: { internal: 'Staff brief.', skills: {} },
+		integrations: {},
+		automations: {},
+		connections: {},
+		envoys: {},
+		mcp: {},
+		apps: {},
+		customFields: {}
+	})
+);
 const fileOf = (value: unknown) =>
 	Schema.decodeUnknownSync(
 		Schema.Struct({ kind: Schema.Literal('committed'), output: Schema.Json })
@@ -88,8 +103,9 @@ const conversation = (effect: Effect.Effect<Outcome, unknown>) =>
 				: Effect.die(new Error('conversation did not start'))
 		)
 	);
-const setup = (triage: boolean) =>
-	Effect.gen(function* () {
+/** The record file `read_file` is asked for when a message carries no attachment of its own. */
+let recordFile = '';
+const setup = Effect.gen(function* () {
 		const requests: AiRequest[] = [],
 			states: System1Request['state'][] = [];
 		const ports = Layer.succeed(Ai, {
@@ -125,11 +141,16 @@ const setup = (triage: boolean) =>
 				Stream.fromEffect(
 					Effect.sync(() => {
 						requests.push(r);
-						const id = /\[attachment: [^\]]*\] file reference \{\\"id\\":\\"([^\\]+)\\"/.exec(
-							JSON.stringify(r.messages)
-						)?.[1];
+						const last = r.messages.findLast(
+							(m) => !(typeof m.content === 'string' && m.content.startsWith('[conversation state'))
+						);
+						// a posted attachment is read by its id; else the record's file
+						const id =
+							/\[attachment: [^\]]*\] file reference \{\\"id\\":\\"([^\\]+)\\"/.exec(
+								JSON.stringify(r.messages)
+							)?.[1] ?? recordFile;
 						const response: AiResponse =
-							requests.length === 1 && id !== undefined
+							last?.role !== 'tool' && id !== ''
 								? {
 										content: '',
 										toolCalls: [
@@ -152,13 +173,12 @@ const setup = (triage: boolean) =>
 					})
 				)
 		});
-		const context = yield* Layer.build(TestWorkspace.layer({ manifest: manifest(triage), ports }));
+		const context = yield* Layer.build(TestWorkspace.layer({ manifest, ports }));
 		const t = Context.get(context, TestWorkspace);
-		for (const id of ['ann', 'bob'])
-			yield* t.db.write({
-				text: `INSERT INTO sys_user (id, email, name) VALUES ($1, $2, $1)`,
-				params: [id, `${id}@x.test`]
-			});
+		yield* t.db.write({
+			text: `INSERT INTO sys_user (id, email, name, team) VALUES ('ann', 'ann@x.test', 'Ann', 'Inspectors'), ('bob', 'bob@x.test', 'Bob', NULL)`,
+			params: []
+		});
 		const authorities = new Authorities(t.manifest, 'test');
 		const who = (id: string) =>
 			authorities
@@ -179,74 +199,96 @@ const setup = (triage: boolean) =>
 				authority,
 				now: t.clock.now()
 			}).pipe(Effect.provide(context));
+		/** A post is held for the sender's pause (P40), then decided and answered. */
+		const post = (as: string, input: Json) =>
+			Effect.gen(function* () {
+				const outcome = yield* act(t, as, 'sys_message.post', input);
+				t.clock.advance('2s');
+				yield* t.runDue();
+				yield* t.settled();
+				return outcome;
+			});
 		return {
 			t,
+			context,
 			act: (as: string, name: string, input: Json) => act(t, as, name, input),
+			post,
 			put,
 			who,
 			requests,
 			states,
-			conversation: () => conversation(act(t, 'ann', 'sys_conversation.start', {}))
+			conversation: (as = 'ann') => conversation(act(t, as, 'sys_conversation.start', {}))
 		};
 	});
 
+const fileScope = Effect.runSync(Scope.make());
+afterAll(() => Effect.runPromise(Scope.close(fileScope, Exit.void)));
+const plain = Effect.runSync(Effect.cached(setup.pipe(Scope.provide(fileScope))));
+
 describe('in-app attachments', () => {
-	it.live('an image posted from the panel is stored on the row and read by read_file', () =>
-		Effect.scoped(
-			Effect.gen(function* () {
-				const { t, act, put, who, requests, conversation } = yield* setup(false);
-				const ann = yield* who('ann'),
-					c = yield* conversation();
-				const ref = yield* put(ann, 'pump.png', 'image/png', PNG);
-				expect(ref).toMatchObject({
-					kind: 'committed',
-					output: { name: 'pump.png', mime: 'image/png', bytes: PNG.length }
-				});
-				const file = fileOf(ref);
-				expect(
-					yield* act('ann', 'sys_message.post', {
-						conversation: c,
-						text: 'what is this?',
-						attachments: [file]
-					})
-				).toMatchObject({ kind: 'committed' });
-				yield* t.settled();
-				const [row] = (yield* t.db.read([
-					{
-						text: `SELECT ${filesOf('m')} AS files FROM sys_message m WHERE conversation = $1 AND role = 'user'`,
-						params: [c]
-					}
-				]))[0]!.rows;
-				expect(row!['files']).toEqual([
-					{
-						id: Schema.decodeUnknownSync(Schema.Struct({ id: Schema.String }))(file).id,
+	it.live(
+		'an image posted from the panel is stored on the row, reaches sys_1 as metadata only (P37 (3)) and is read by read_file',
+		() =>
+			Effect.scoped(
+				Effect.gen(function* () {
+					const { t, post, put, who, requests, states, conversation } = yield* plain;
+					const ann = yield* who('ann'),
+						c = yield* conversation();
+					const ref = yield* put(ann, 'pump.png', 'image/png', PNG);
+					expect(ref).toMatchObject({
+						kind: 'committed',
+						output: { name: 'pump.png', mime: 'image/png', bytes: PNG.length }
+					});
+					const file = fileOf(ref),
+						asked = requests.length;
+					expect(
+						yield* post('ann', { conversation: c, text: 'what is this?', attachments: [file] })
+					).toMatchObject({ kind: 'committed' });
+					const state = yield* Schema.decodeUnknownEffect(
+						Schema.Struct({
+							pending: Schema.Array(
+								Schema.Struct({ attachments: Schema.optionalKey(Schema.Array(Schema.Json)) })
+							)
+						})
+					)(states.at(-1));
+					expect(state.pending[0]?.attachments?.[0]).toEqual({
 						name: 'pump.png',
 						mime: 'image/png',
-						bytes: PNG.length
-					}
-				]);
-				// the message names it by the id read_file takes
-				expect(String(requests[0]!.messages[0]!.content)).toContain(
-					`file reference ${JSON.stringify({ id: Schema.decodeUnknownSync(Schema.Struct({ id: Schema.String }))(file).id, name: 'pump.png', mime: 'image/png' })}`
-				);
-				expect([...requests[1]!.files![0]!.bytes]).toEqual([...PNG]);
-				expect(requests[1]!.files![0]!.mime).toBe('image/png');
-				// the posted file is one of the conversation's inputs
-				const [held] = (yield* t.db.read([
-					{ text: `SELECT inputs, outputs FROM sys_conversation WHERE id = $1`, params: [c] }
-				]))[0]!.rows;
-				expect(held).toMatchObject({ inputs: row!['files'], outputs: [] });
-				expect(held!['inputs']).toEqual([
-					expect.objectContaining({ name: 'pump.png', message: expect.any(String) })
-				]);
-			})
-		)
+						size: PNG.length
+					});
+					const [row] = (yield* t.db.read([
+						{
+							text: `SELECT ${filesOf('m')} AS files FROM sys_message m WHERE conversation = $1 AND role = 'user'`,
+							params: [c]
+						}
+					]))[0]!.rows;
+					const id = Schema.decodeUnknownSync(Schema.Struct({ id: Schema.String }))(file).id;
+					expect(row!['files']).toEqual([
+						{ id, name: 'pump.png', mime: 'image/png', bytes: PNG.length }
+					]);
+					// the message names it by the id read_file takes
+					const [first, second] = requests.slice(asked);
+					expect(String(first!.messages[0]!.content)).toContain(
+						`file reference ${JSON.stringify({ id, name: 'pump.png', mime: 'image/png' })}`
+					);
+					expect([...second!.files![0]!.bytes]).toEqual([...PNG]);
+					expect(second!.files![0]!.mime).toBe('image/png');
+					// the posted file is one of the conversation's inputs
+					const [held] = (yield* t.db.read([
+						{ text: `SELECT inputs, outputs FROM sys_conversation WHERE id = $1`, params: [c] }
+					]))[0]!.rows;
+					expect(held).toMatchObject({ inputs: row!['files'], outputs: [] });
+					expect(held!['inputs']).toEqual([
+						expect.objectContaining({ name: 'pump.png', message: expect.any(String) })
+					]);
+				})
+			)
 	);
 
 	it.live("only the member's own uploads attach, at most 8, of the envoy media types", () =>
 		Effect.scoped(
 			Effect.gen(function* () {
-				const { act, put, who, conversation } = yield* setup(false);
+				const { act, put, who, conversation } = yield* plain;
 				const ann = yield* who('ann'),
 					bob = yield* who('bob'),
 					c = yield* conversation();
@@ -273,108 +315,16 @@ describe('in-app attachments', () => {
 			})
 		)
 	);
-
-	it.live('a triaged post puts its attachment in the sys_1 state as metadata only (P37 (3))', () =>
-		Effect.scoped(
-			Effect.gen(function* () {
-				const { t, act, put, who, states, conversation } = yield* setup(true);
-				const c = yield* conversation(),
-					file = fileOf(yield* put(yield* who('ann'), 'pump.png', 'image/png', PNG));
-				yield* act('ann', 'sys_message.post', {
-					conversation: c,
-					text: 'see photo',
-					attachments: [file]
-				});
-				t.clock.advance('2s'); // the trailing debounce (P40)
-				yield* t.runDue();
-				const state = yield* Schema.decodeUnknownEffect(
-					Schema.Struct({
-						pending: Schema.Array(
-							Schema.Struct({ attachments: Schema.optionalKey(Schema.Array(Schema.Json)) })
-						)
-					})
-				)(states[0]);
-				const got = state.pending[0]?.attachments?.[0];
-				expect(got).toEqual({ name: 'pump.png', mime: 'image/png', size: PNG.length });
-			})
-		)
-	);
 });
 
 // A file already filed on a record (a site photo on a job) is read with `read_file`, only by someone who reads that record.
 describe('read_file', () => {
-	const filed = Result.getOrThrow(
-		decodeManifest({
-			workspace: { tz: 'UTC', locale: 'en', agent: { triage: false } },
-			models: {
-				photos: {
-					description: 'A photo',
-					label: 'title',
-					fields: {
-						title: { kind: 'text' },
-						file: { kind: 'file', accept: ['image/*'], max: '1MiB' }
-					}
-				}
-			},
-			relationships: {},
-			exposures: {
-				photos: {
-					read: { photos: { fields: 'all' } },
-					create: { columns: { photos: ['title', 'file'] } }
-				}
-			},
-			policies: { inspector: { description: 'Inspectors', grants: { photos: { read: true } } } },
-			teams: { Inspectors: ['inspector'] },
-			agent: { internal: 'Staff brief.', skills: {} },
-			integrations: {},
-			automations: {},
-			connections: {},
-			envoys: {},
-			mcp: {},
-			apps: {},
-			customFields: {}
-		})
-	);
-
 	it.live(
 		"reads a record's file into the next step for a reader, and refuses anyone who cannot read the record",
 		() =>
 			Effect.scoped(
 				Effect.gen(function* () {
-					const requests: AiRequest[] = [];
-					let fileId = '';
-					const ports = Layer.succeed(Ai, {
-						ask: () => Effect.die(new Error('no triage')),
-						maxChoices: undefined,
-						models: ['default'],
-						catalog: Port.unavailable('ai.catalog'),
-						embed: () => Port.unavailable('ai.embed'),
-						infer: (r) =>
-							Stream.fromEffect(
-								Effect.sync(() => {
-									requests.push(r);
-									const response: AiResponse =
-										requests.length % 2 === 1
-											? {
-													content: '',
-													toolCalls: [
-														{ id: 'f1', name: 'read_file', input: { id: fileId, as: 'image' } }
-													],
-													finish: 'tool',
-													usage: { input: 1, output: 1 }
-												}
-											: {
-													content: 'Read.',
-													toolCalls: [],
-													finish: 'stop',
-													usage: { input: 1, output: 1 }
-												};
-									return { _tag: 'Response' as const, response };
-								})
-							)
-					});
-					const context = yield* Layer.build(TestWorkspace.layer({ manifest: filed, ports }));
-					const t = Context.get(context, TestWorkspace);
+					const { t, context, post, requests, conversation } = yield* plain;
 					const admin = t.as(t.admin);
 					const up = yield* admin.upload('photos.file', {
 						name: 'sheet.png',
@@ -382,9 +332,8 @@ describe('read_file', () => {
 						bytes: PNG
 					});
 					if (up.kind !== 'committed') throw new Error(up.kind);
-					fileId = up.output.id;
-					const route = yield* routeFixture(context);
-					yield* actReply(route, admin.authority, {
+					recordFile = up.output.id;
+					yield* actReply(yield* routeFixture(context), admin.authority, {
 						callable: 'photos.create',
 						input: [
 							{
@@ -394,18 +343,9 @@ describe('read_file', () => {
 						],
 						issuedAt: t.clock.now()
 					});
-					yield* t.db.write({
-						text: `INSERT INTO sys_user (id, email, name, team) VALUES ('ann', 'ann@x.test', 'Ann', 'Inspectors'), ('bob', 'bob@x.test', 'Bob', NULL)`,
-						params: []
-					});
 					const ask = (who: string) =>
 						Effect.gen(function* () {
-							const c = yield* conversation(act(t, who, 'sys_conversation.start', {}));
-							yield* act(t, who, 'sys_message.post', {
-								conversation: c,
-								text: 'what does the sheet show?'
-							});
-							yield* t.settled();
+							yield* post(who, { conversation: yield* conversation(who), text: 'what does the sheet show?' });
 							const request = requests.at(-1);
 							if (request === undefined) throw new Error('no model request');
 							return request;
@@ -417,70 +357,5 @@ describe('read_file', () => {
 					expect(JSON.stringify(refused.messages)).toContain('No file you can read has this id.');
 				})
 			)
-	);
-	it.live('reads an uploaded conversation input by its file id', () =>
-		Effect.scoped(
-			Effect.gen(function* () {
-				const requests: AiRequest[] = [];
-				let fileId = '';
-				const ports = Layer.succeed(Ai, {
-					ask: () => Effect.die(new Error('no triage')),
-					maxChoices: undefined,
-					models: ['default'],
-					catalog: Port.unavailable('ai.catalog'),
-					embed: () => Port.unavailable('ai.embed'),
-					infer: (r) =>
-						Stream.fromEffect(
-							Effect.sync(() => {
-								requests.push(r);
-								const response: AiResponse =
-									requests.length % 2 === 1
-										? {
-												content: '',
-												toolCalls: [
-													{ id: 'f1', name: 'read_file', input: { id: fileId, as: 'image' } }
-												],
-												finish: 'tool',
-												usage: { input: 1, output: 1 }
-											}
-										: {
-												content: 'Read.',
-												toolCalls: [],
-												finish: 'stop',
-												usage: { input: 1, output: 1 }
-											};
-								return { _tag: 'Response' as const, response };
-							})
-						)
-				});
-				const context = yield* Layer.build(TestWorkspace.layer({ manifest: filed, ports }));
-				const t = Context.get(context, TestWorkspace);
-				yield* t.db.write({
-					text: `INSERT INTO sys_user (id, email, name) VALUES ('ann', 'ann@x.test', 'Ann')`,
-					params: []
-				});
-				const authorities = new Authorities(t.manifest, 'test');
-				const ann = yield* authorities.member(t.db, 'ann');
-				if (ann === null) throw new Error('no member');
-				const ref = yield* upload({
-					id: randomUUID(),
-					model: 'sys_conversation',
-					field: 'inputs',
-					name: 'input.png',
-					mime: 'image/png',
-					bytes: PNG,
-					authority: ann,
-					now: t.clock.now()
-				}).pipe(Effect.provide(context));
-				fileId = Schema.decodeUnknownSync(Schema.Struct({ id: Schema.String }))(fileOf(ref)).id;
-				const c = yield* conversation(act(t, 'ann', 'sys_conversation.start', {}));
-				yield* act(t, 'ann', 'sys_message.post', {
-					conversation: c,
-					text: 'read the input'
-				});
-				yield* t.settled();
-				expect(requests.at(-1)?.files?.[0]?.bytes).toEqual(PNG);
-			})
-		)
 	);
 });

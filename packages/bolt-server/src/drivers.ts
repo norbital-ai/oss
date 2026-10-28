@@ -120,9 +120,9 @@ export function httpProvider(options: Pick<DriversOptions, 'fetch'> = {}): Provi
 		_tag: 'ProviderDef',
 		driver: 'http',
 		id: 'http',
-		label: 'HTTP',
+		label: { en: 'HTTP', zh: 'HTTP' },
 		setup: { kind: 'none', steps: [] },
-		describe: ({ definition }) => ({ label: 'HTTP', setup: setup(definition) }),
+		describe: ({ definition }) => ({ label: { en: 'HTTP', zh: 'HTTP' }, setup: setup(definition) }),
 		open: Effect.fn('HTTP.open')(function* (ctx: DriverOpen) {
 			const definition = ctx.definition,
 				oauth = httpOAuth(definition);
@@ -249,10 +249,10 @@ export function sqlServerProvider(database: ReturnType<typeof sqlServerDatabase>
 		_tag: 'ProviderDef',
 		driver: 'sqlserver',
 		id: 'sqlserver',
-		label: 'SQL Server',
+		label: { en: 'SQL Server', zh: 'SQL Server' },
 		setup: { kind: 'form', steps: [] },
 		describe: ({ definition }) => ({
-			label: 'SQL Server',
+			label: { en: 'SQL Server', zh: 'SQL Server' },
 			setup: { kind: 'form', steps: [], fields: credentialFields(definition) }
 		}),
 		open: Effect.fn('SQLServer.open')(function* (ctx: DriverOpen) {

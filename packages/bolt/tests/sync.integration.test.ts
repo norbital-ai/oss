@@ -1,7 +1,8 @@
 import { randomUUID } from 'node:crypto';
 import { describe, expect, it } from '@effect/vitest';
 import { Instant } from '@norbital-ai/std/date';
-import { Context, Effect, Layer, Option, Schema } from 'effect';
+import { Context, Effect, Exit, Layer, Option, Schema, Scope } from 'effect';
+import { afterAll } from 'vitest';
 import { FacilityFailure } from '../src/decl/errors.ts';
 import type { Json } from '../src/decl/values.ts';
 import { TenantDb } from '../src/engine/db/tenant-db.ts';
@@ -10,9 +11,9 @@ import { Identity, RunHandlers, Runs, Writes } from '../src/engine/services.ts';
 import { Syncs, syncTriggers } from '../src/engine/sync/index.ts';
 import { remoteVersionNewer } from '../src/engine/sync/read.ts';
 import { retryDelay } from '../src/engine/sync/write.ts';
-import { PgliteDb } from '../src/node/db/pglite.ts';
+import { TestDb } from '../src/test/database.ts';
 import { TestWorkspace } from '../src/test/index.ts';
-import { program } from './support/guest-fixture.ts';
+import { program } from '../src/test/guest.ts';
 import { manifest as base } from './write-fixture.ts';
 
 const manifest: EngineManifest = {
@@ -59,7 +60,7 @@ const source = `export default { model: { contacts: { bodies: { syncs: { crm: {
 		return yield* ctx.request({method:op === 'create' ? 'POST' : op === 'delete' ? 'DELETE' : 'PATCH',path:$id ? '/contacts/'+$id : '/contacts',headers:$version ? {'If-Match':$version} : {},body:{name:row.name}});
 	}
 } } } } }, automation: { annotate: { body: function* (_, ctx) {
-	const page = yield* ctx.query({contacts:{fields:['name']}});
+	const page = yield* ctx.query({contacts:{where:{name:{eq:'Observed contact'}},fields:['name']}});
 	const row = page.contacts.rows[0];
 	if (row === undefined || row.$sync?.crm?.status !== 'pending') throw new Error('Missing pending contact');
 	yield* ctx.progress({text:'Read contact'});
@@ -73,13 +74,29 @@ const Op = Schema.Struct({
 	),
 	body: Schema.optionalKey(Schema.Struct({ name: Schema.String }))
 });
-const makeSetup = (database?: Layer.Layer<TenantDb>) =>
-	Effect.gen(function* () {
+/** Runs after each write that records a run's progress, while a case sets it: the moment between an automation's read and its write. */
+let afterProgress: Effect.Effect<void, never, TenantDb> | undefined;
+// One workspace for the file: each case names its own rows and starts with an empty CRM log.
+const fileScope = Effect.runSync(Scope.make());
+afterAll(() => Effect.runPromise(Scope.close(fileScope, Exit.void)));
+const setup = Effect.gen(function* () {
+		const db = Context.get(yield* Layer.build(TestDb.layer(manifest)), TenantDb);
+		const intercepted = TenantDb.typed({
+			...db,
+			write: (statement, lock) =>
+				db.write(statement, lock).pipe(
+					Effect.tap(() =>
+						afterProgress !== undefined && statement.text.includes('UPDATE sys_run SET progress')
+							? afterProgress.pipe(Effect.provideService(TenantDb, db))
+							: Effect.void
+					)
+				)
+		});
 		const context = yield* Layer.build(
 			TestWorkspace.layer({
 				manifest,
 				guest: yield* program(source),
-				...(database === undefined ? {} : { db: database }),
+				db: Layer.succeed(TenantDb, intercepted),
 				now: '2026-10-24T08:00:00.000Z'
 			})
 		);
@@ -121,7 +138,9 @@ const makeSetup = (database?: Layer.Layer<TenantDb>) =>
 				if (existing !== undefined) return { status: 200, body: existing };
 				if (mode === 'refuse') return { status: 422, body: 'Refused by CRM' };
 				if (mode === 'conflict') return { status: 412, body: 'Version conflict' };
-				const ack = { $id: 'remote-contact', $version: String(++remoteVersion) };
+				// a remote id per create: the cases share one workspace, and a remote id maps to one row
+				const n = ++remoteVersion,
+					ack = { $id: `remote-contact-${n}`, $version: String(n) };
 				accepted.set(key, ack);
 				if (mode === 'timeout') {
 					mode = 'ok';
@@ -161,6 +180,13 @@ const makeSetup = (database?: Layer.Layer<TenantDb>) =>
 				}
 			);
 		return {
+			/** A case starts with an empty fake CRM log (the workspace's rows stay; each case names its own). */
+			fresh: () =>
+				Effect.sync(() => {
+					calls.length = 0;
+					accepted.clear();
+					mode = 'ok';
+				}),
 			t,
 			context,
 			syncs,
@@ -176,8 +202,7 @@ const makeSetup = (database?: Layer.Layer<TenantDb>) =>
 				mode = value;
 			}
 		};
-	});
-const setup = makeSetup();
+	}).pipe(Scope.provide(fileScope), Effect.cached, Effect.runSync);
 
 describe('durable model sync', () => {
 	it('compares versions exactly and caps retry delays', () => {
@@ -187,66 +212,12 @@ describe('durable model sync', () => {
 		expect(retryDelay(8, 0.5)).toBe(3_600_000);
 	});
 	it.live(
-		'dedupes hints, rejects older rows and deletes, and catches a lost hint on its scheduled read',
-		() =>
-			Effect.scoped(
-				Effect.gen(function* () {
-					const f = yield* setup;
-					f.page({
-						rows: [
-							{ $id: 'one', $version: '2', name: 'Current' },
-							{ $id: 'one', $version: '1', name: 'Old' }
-						],
-						cursor: '2',
-						more: false
-					});
-					const delivery = {
-						kind: 'webhook' as const,
-						id: 'delivery',
-						at: Instant(f.t.clock.now()),
-						headers: {},
-						body: {}
-					};
-					yield* f.syncs.hint('crm', delivery);
-					yield* f.syncs.hint('crm', delivery);
-					expect(
-						yield* f.t.db.value(Schema.Number, {
-							text: 'SELECT count(*)::int FROM sys_inbox',
-							params: []
-						})
-					).toBe(1);
-					yield* f.handler('contacts.sync.crm');
-					expect((yield* f.rows()).map((row) => row.name)).toEqual(['Current']);
-					f.page({
-						rows: [{ $id: 'one', $version: '1', $deleted: true }],
-						cursor: '3',
-						more: false
-					});
-					yield* f.handler('contacts.sync.crm');
-					expect((yield* f.rows()).map((row) => row.name)).toEqual(['Current']);
-					f.page({
-						rows: [{ $id: 'one', $version: '3', name: 'Caught up' }],
-						cursor: '4',
-						more: false
-					});
-					expect(syncTriggers(manifest).map((cron) => cron.id)).toContain('contacts.sync.crm');
-					yield* Context.get(f.context, Runs).fire('contacts.sync.crm', f.t.clock.now());
-					expect((yield* f.rows()).map((row) => row.name)).toEqual(['Caught up']);
-					expect(
-						yield* f.t.db.value(Schema.Number, {
-							text: 'SELECT count(*)::int FROM sys_outbox',
-							params: []
-						})
-					).toBe(0);
-				})
-			)
-	);
-	it.live(
 		'retries a timed-out create with the same key, acknowledges once, and rolls back refused updates and conflicts',
 		() =>
 			Effect.scoped(
 				Effect.gen(function* () {
 					const f = yield* setup;
+					yield* f.fresh();
 					f.mode('timeout');
 					yield* f.act('create', [{ name: 'Accepted' }]);
 					yield* f.handler('sync.deliver');
@@ -257,23 +228,20 @@ describe('durable model sync', () => {
 					expect(f.calls[0]?.headers?.['idempotency-key']).toBe(
 						f.calls[1]?.headers?.['idempotency-key']
 					);
-					const [row] = yield* f.rows();
+					const named = (name: string) =>
+						f.rows().pipe(Effect.map((rows) => rows.filter((r) => r.name === name)));
+					const [row] = yield* named('Accepted');
 					if (row === undefined) throw new Error('Missing contact');
 					f.mode('refuse');
 					yield* f.act('update', [{ target: row.id, set: { name: 'Refused' } }]);
 					yield* f.handler('sync.deliver');
-					expect((yield* f.rows())[0]?.name).toBe('Accepted');
+					expect((yield* named('Accepted'))[0]?.name).toBe('Accepted');
 					expect(f.calls.at(-1)?.headers?.['If-Match']).toBe('1');
 					f.mode('conflict');
 					yield* f.act('update', [{ target: row.id, set: { name: 'Conflicting' } }]);
 					yield* f.handler('sync.deliver');
-					expect((yield* f.rows())[0]?.name).toBe('Accepted');
-					expect(
-						yield* f.t.db.value(Schema.Number, {
-							text: "SELECT count(*)::int FROM sys_outbox WHERE status = 'failed'",
-							params: []
-						})
-					).toBe(2);
+					expect((yield* named('Accepted'))[0]?.name).toBe('Accepted');
+					expect(yield* f.syncs.health('crm')).toMatchObject({ failed: 2 });
 				})
 			)
 	);
@@ -283,14 +251,15 @@ describe('durable model sync', () => {
 			Effect.scoped(
 				Effect.gen(function* () {
 					const f = yield* setup;
+					yield* f.fresh();
 					yield* f.act('create', [{ name: 'First' }]);
-					const [row] = yield* f.rows();
+					const [row] = (yield* f.rows()).filter((r) => r.name === 'First');
 					if (row === undefined) throw new Error('Missing contact');
 					yield* f.act('update', [{ target: row.id, set: { name: 'Latest' } }]);
 					expect(
 						yield* f.t.db.value(Schema.Number, {
-							text: 'SELECT count(*)::int FROM sys_outbox',
-							params: []
+							text: 'SELECT count(*)::int FROM sys_outbox WHERE record::text = $1',
+							params: [row.id]
 						})
 					).toBe(1);
 					f.mode('down');
@@ -313,37 +282,26 @@ describe('durable model sync', () => {
 				})
 			)
 	);
-	it.live('commits a guarded automation when only advisory sync delivery metadata changes', () =>
+	it.live(
+		'commits a guarded automation when only advisory sync delivery metadata changes; its scheduled read dedupes hints and catches a lost one', () =>
 		Effect.scoped(
 			Effect.gen(function* () {
-				const dbContext = yield* Layer.build(PgliteDb.layer());
-				const db = Context.get(dbContext, TenantDb);
 				let advanced = 0;
 				const deliveryError = { message: 'CRM delivery failed after the contact read' };
-				const intercepted = TenantDb.typed({
-					...db,
-					write: (statement, lock) =>
-						db.write(statement, lock).pipe(
-							Effect.tap(() =>
-								statement.text.includes('UPDATE sys_run SET progress')
-									? db
-											.write({
-												text: "UPDATE sys_outbox SET status = 'dead', error = $1::jsonb WHERE model = 'contacts' AND op = 'create' AND status = 'queued'",
-												params: [deliveryError]
-											})
-											.pipe(
-												Effect.tap((result) =>
-													Effect.sync(() => {
-														advanced += result.affected;
-													})
-												),
-												Effect.asVoid
-											)
-									: Effect.void
-							)
-						)
-				});
-				const f = yield* makeSetup(Layer.succeed(TenantDb, intercepted));
+				afterProgress = Effect.gen(function* () {
+					const result = yield* (yield* TenantDb).write({
+						text: "UPDATE sys_outbox SET status = 'dead', error = $1::jsonb WHERE model = 'contacts' AND op = 'create' AND status = 'queued'",
+						params: [deliveryError]
+					});
+					advanced += result.affected;
+				}).pipe(Effect.orDie);
+				yield* Effect.addFinalizer(() =>
+					Effect.sync(() => {
+						afterProgress = undefined;
+					})
+				);
+				const f = yield* setup;
+				yield* f.fresh();
 				yield* f.act('create', [{ name: 'Observed contact' }]);
 				expect(yield* Context.get(f.context, Runs).fire('annotate', f.t.clock.now())).toEqual({
 					ran: true
@@ -371,7 +329,10 @@ describe('durable model sync', () => {
 							note: Schema.String,
 							revision: Schema.Number
 						}),
-						{ text: 'SELECT name, note, revision FROM contacts', params: [] }
+						{
+							text: "SELECT name, note, revision FROM contacts WHERE name = 'Observed contact'",
+							params: []
+						}
 					)
 				).toEqual([{ name: 'Observed contact', note: 'Observed contact', revision: 2 }]);
 				expect(
@@ -381,11 +342,51 @@ describe('durable model sync', () => {
 							error: Schema.Json
 						}),
 						{
-							text: "SELECT status, error FROM sys_outbox WHERE model = 'contacts' AND op = 'create'",
+							text: "SELECT o.status, o.error FROM sys_outbox o JOIN contacts c ON c.id::text = o.record::text WHERE o.op = 'create' AND c.name = 'Observed contact'",
 							params: []
 						}
 					)
 				).toEqual([{ status: 'dead', error: deliveryError }]);
+				// the scheduled read: hints dedupe, older rows and deletes lose, a lost hint is caught up
+				const count = (table: string) =>
+					f.t.db.value(Schema.Number, { text: `SELECT count(*)::int FROM ${table}`, params: [] });
+				const synced = () =>
+					f.rows().pipe(
+						Effect.map((rows) =>
+							rows.map((row) => row.name).filter((name) => ['Current', 'Old', 'Caught up'].includes(name))
+						)
+					);
+				const inbox = yield* count('sys_inbox'),
+					outbox = yield* count('sys_outbox');
+				f.page({
+					rows: [
+						{ $id: 'one', $version: '2', name: 'Current' },
+						{ $id: 'one', $version: '1', name: 'Old' }
+					],
+					cursor: '2',
+					more: false
+				});
+				const delivery = {
+					kind: 'webhook' as const,
+					id: 'delivery',
+					at: Instant(f.t.clock.now()),
+					headers: {},
+					body: {}
+				};
+				yield* f.syncs.hint('crm', delivery);
+				yield* f.syncs.hint('crm', delivery);
+				expect(yield* count('sys_inbox')).toBe(inbox + 1);
+				yield* f.handler('contacts.sync.crm');
+				expect(yield* synced()).toEqual(['Current']);
+				f.page({ rows: [{ $id: 'one', $version: '1', $deleted: true }], cursor: '3', more: false });
+				yield* f.handler('contacts.sync.crm');
+				expect(yield* synced()).toEqual(['Current']);
+				f.page({ rows: [{ $id: 'one', $version: '3', name: 'Caught up' }], cursor: '4', more: false });
+				expect(syncTriggers(manifest).map((cron) => cron.id)).toContain('contacts.sync.crm');
+				yield* Context.get(f.context, Runs).fire('contacts.sync.crm', f.t.clock.now());
+				expect(yield* synced()).toEqual(['Caught up']);
+				// a read-in row queues no delivery
+				expect(yield* count('sys_outbox')).toBe(outbox);
 			})
 		)
 	);

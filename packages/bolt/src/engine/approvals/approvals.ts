@@ -15,7 +15,6 @@ import {
 	Live,
 	Manifest,
 	type ApprovalFilter,
-	type ApprovalsShape,
 	type Readable
 } from '../services.ts';
 import { TenantDb, type TenantDbShape } from '../db/tenant-db.ts';

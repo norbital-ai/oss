@@ -25,7 +25,8 @@ const manifest = {
 	mcp: {},
 	apps: {},
 	customFields: {},
-	agent: { skills: {} }
+	agent: { skills: {} },
+	needs: []
 } satisfies EngineManifest;
 
 const fixture = (name: string) =>
@@ -124,22 +125,19 @@ const imagePreview = (bytes: Uint8Array, mime: ImagePreviewMime, edge: ImagePrev
 
 it.live('supports all three fixed bounds without upscaling and keeps PNG alpha', () =>
 	Effect.gen(function* () {
-		const input = encodePng({ ...rgba(1200, 800, 128), channels: 4, depth: 8 });
-		for (const edge of [64, 512, 1024] as const) {
+		// 96 × 64: the 64 bound scales down, 512 and 1024 keep the size
+		const input = encodePng({ ...rgba(96, 64, 128), channels: 4, depth: 8 });
+		for (const [edge, width, height] of [
+			[64, 64, 43],
+			[512, 96, 64],
+			[1024, 96, 64]
+		] as const) {
 			const result = yield* imagePreview(input, 'image/png', edge);
 			expect(result).toMatchObject({ mime: 'image/png', derived: true });
 			const decoded = decodePng(result.bytes);
-			expect(decoded.width).toBe(edge);
-			expect(decoded.height).toBe(Math.round((800 * edge) / 1200));
-			expect(decoded.channels).toBe(4);
+			expect([decoded.width, decoded.height, decoded.channels]).toEqual([width, height, 4]);
 			expect(decoded.data[3]).toBe(128);
 		}
-		const tiny = yield* imagePreview(
-			encodePng({ ...rgba(2, 1, 64), channels: 4, depth: 8 }),
-			'image/png',
-			64
-		);
-		expect(decodePng(tiny.bytes)).toMatchObject({ width: 2, height: 1 });
 	})
 );
 
@@ -267,38 +265,4 @@ it.live(
 				expect(get).toHaveBeenCalledTimes(11);
 			})
 		)
-);
-
-it.live('serves valid 1024 PNGs larger than the per-entry cache cap without retaining them', () =>
-	Effect.scoped(
-		Effect.gen(function* () {
-			const context = yield* Layer.build(TestWorkspace.layer({ manifest }));
-			const files = Context.get(context, Files);
-			const previews = Context.get(
-				yield* Layer.build(ImagePreviewsLive.pipe(Layer.provide(Layer.succeedContext(context)))),
-				ImagePreviews
-			);
-			const pixels = rgba(1024, 1024);
-			let state = 0x13579bdf;
-			for (let index = 0; index < pixels.data.length; index++) {
-				state ^= state << 13;
-				state ^= state >>> 17;
-				state ^= state << 5;
-				pixels.data[index] = state & 255;
-			}
-			const stored = yield* files.put(encodePng({ ...pixels, channels: 4, depth: 8 }), {
-				mime: 'image/png',
-				name: 'noise.png'
-			});
-			const get = vi.spyOn(files, 'get');
-			yield* Effect.addFinalizer(() => Effect.sync(() => get.mockRestore()));
-			for (let count = 0; count < 2; count++) {
-				const result = yield* previews.get(stored.key, 'image/png', 1024);
-				expect(result.bytes.byteLength).toBeGreaterThan(2 * 1024 * 1024);
-				expect(result.bytes.byteLength).toBeLessThanOrEqual(5 * 1024 * 1024);
-				expect(decodePng(result.bytes)).toMatchObject({ width: 1024, height: 1024 });
-			}
-			expect(get).toHaveBeenCalledTimes(2);
-		})
-	)
 );

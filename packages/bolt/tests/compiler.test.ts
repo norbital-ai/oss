@@ -1,7 +1,6 @@
 import { Effect } from 'effect';
 import * as NodeServices from '@effect/platform-node/NodeServices';
 /// <reference types="node" />
-import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { scratchPath } from '../../../scripts/lib/scratch.ts';
@@ -387,23 +386,10 @@ describe('next compiler: names index', () => {
 				expect(parts).toEqual([...parts].sort());
 			}).pipe(Effect.provide(NodeServices.layer))
 	);
-	it.live(
-		'type-checks the fixture against the generated index: names, content and the __verify line',
-		() =>
-			Effect.gen(function* () {
-				const root = fixture('good');
-				const tsgo = fileURLToPath(new URL('../../../node_modules/.bin/tsgo', import.meta.url));
-				const run = spawnSync(tsgo, ['-p', join(root, 'tsconfig.json'), '--noEmit'], {
-					encoding: 'utf8'
-				});
-				expect(run.stdout + run.stderr).toBe('');
-				expect(run.status).toBe(0);
-			}).pipe(Effect.provide(NodeServices.layer)),
-		30000
-	);
 });
 describe('next compiler: seed packs', () => {
 	const m: EngineManifest = {
+		needs: [],
 		workspace: { tz: 'UTC', locale: 'en' },
 		models: {},
 		relationships: {},

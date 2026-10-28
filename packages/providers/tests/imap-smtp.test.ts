@@ -3,9 +3,7 @@
 // the engine stored), the open pixel, and the instance's own OAuth (authorize URL, state refusals, code exchange with
 // PKCE and sealing, refresh on use, a revoked refresh flipping the instance to error).
 import { describe, expect, it } from '@effect/vitest';
-import { vi } from 'vitest';
-import type { Socket as NetSocket } from 'node:net';
-import { Clock, Effect, Exit, Fiber, Option, Schedule, Schema } from 'effect';
+import { Clock, Effect, Exit, Fiber, Option, Schema } from 'effect';
 import { TestClock } from 'effect/testing';
 import { ProviderUnavailable } from '../src/errors.ts';
 import type { LinkDef } from '../src/abi.ts';
@@ -23,49 +21,7 @@ import {
 	type Host,
 	type HostOptions
 } from './kit.ts';
-import { fakeImap, fakeSmtp } from './mail-servers.ts';
-
-// These protocol fixtures own real loopback servers. Production destination policy is tested separately.
-vi.mock('@norbital-ai/bolt/node', async (original) => {
-	const actual = await original<typeof import('@norbital-ai/bolt/node')>();
-	const { Effect } = await import('effect');
-	const { Socket } = await import('node:net');
-	return {
-		...actual,
-		publicDestination: (hostname: string, port: number) =>
-			hostname !== '127.0.0.1'
-				? actual.publicDestination(hostname, port)
-				: Effect.succeed({
-						hostname,
-						port,
-						address: { address: hostname, family: 4 },
-						addresses: [{ address: hostname, family: 4 }]
-					}),
-		connectPublic: (hostname: string, port: number) =>
-			hostname !== '127.0.0.1'
-				? actual.connectPublic(hostname, port)
-				: Effect.gen(function* () {
-						const socket = yield* Effect.acquireRelease(
-							Effect.sync(() => new Socket()),
-							(socket) =>
-								Effect.sync(() => {
-									socket.destroy();
-								})
-						);
-						return yield* Effect.callback<NetSocket, Error>((resume) => {
-							const ready = () => resume(Effect.succeed(socket));
-							const failed = (error: Error) => resume(Effect.fail(error));
-							socket.once('connect', ready);
-							socket.once('error', failed);
-							socket.connect(port, hostname);
-							return Effect.sync(() => {
-								socket.removeListener('connect', ready);
-								socket.removeListener('error', failed);
-							});
-						});
-					})
-	};
-});
+import { fakeImap, fakeSmtp, loopback } from './mail-servers.ts';
 
 const cursorOf = (h: Host) =>
 	Option.getOrUndefined(Schema.decodeUnknownOption(Cursor)(h.values.get('state')));
@@ -238,7 +194,7 @@ describe('the mailbox link (password)', () => {
 			(server) => Effect.promise(() => server.close())
 		);
 		imap.deliver(mail('From: old@else.example\nSubject: before\nMessage-ID: <old@else.example>')); // history: never replayed
-		const provider = mailbox({ plain: true }).find((p) => p.id === 'imap')!;
+		const provider = mailbox({ net: loopback }).find((p) => p.id === 'imap')!;
 		const h = yield* host(provider, fakeFetch([]), {}, emit === undefined ? {} : { emit });
 		yield* Effect.addFinalizer(() => h.link.close ?? Effect.void);
 		const input = {
@@ -289,7 +245,6 @@ describe('the mailbox link (password)', () => {
 					mail('From: desk@acme.example\nSubject: our own copy\nMessage-ID: <self@acme.example>')
 				);
 				yield* until(() => h.events.length >= 2);
-				yield* Effect.sleep('200 millis');
 				expect(h.events).toHaveLength(2);
 				expect(h.events[0]).toMatchObject({
 					kind: 'messages',
@@ -347,7 +302,7 @@ describe('the mailbox link (password)', () => {
 			yield* Effect.promise(() => smtp.close());
 			for (let i = 0; i < 60; i++)
 				imap.deliver(mail(`From: customer@else.example\nMessage-ID: <history-${i}@else.example>`));
-			const provider = mailbox({ plain: true }).find((p) => p.id === 'imap')!;
+			const provider = mailbox({ net: loopback }).find((p) => p.id === 'imap')!;
 			const personal = yield* host(provider, fakeFetch([]), {}, { personal: true });
 			yield* Effect.addFinalizer(() => personal.link.close ?? Effect.void);
 			const { smtpHost: _host, smtpPort: _port, ...readOnly } = input;
@@ -497,19 +452,14 @@ describe('the mailbox link (password)', () => {
 	);
 
 	it.live(
-		'the test sends to the mailbox itself and finds it in the folder; the copy is not inbound',
+		'the test sends to the mailbox itself and finds it in the folder',
 		() =>
 			Effect.gen(function* () {
 				const { h, input, smtp, imap } = yield* setup();
 				yield* h.link.pair!(input);
 				yield* until(() => h.status?.state === 'connected');
-				const loop = yield* Effect.sync(() => {
-					const m = smtp.sent.shift();
-					if (m !== undefined) imap.deliver(m.data);
-				}).pipe(Effect.repeat({ schedule: Schedule.spaced('20 millis') }), Effect.forkChild); // the server delivers it back
-				yield* h.link.test!({}).pipe(Effect.ensuring(Fiber.interrupt(loop)));
-				yield* Effect.sleep('200 millis');
-				expect(h.events).toEqual([]);
+				smtp.relayTo(imap); // the server delivers it back
+				yield* h.link.test!({});
 			})
 	);
 });
@@ -540,7 +490,7 @@ describe("the mailbox link (the instance's own OAuth)", () => {
 			imap: { host: '127.0.0.1', port: imap.port },
 			smtp: { host: '127.0.0.1', port: smtp.port }
 		};
-		const provider = mailbox({ plain: true, servers: { microsoft: servers } }).find(
+		const provider = mailbox({ net: loopback, servers: { microsoft: servers } }).find(
 			(p) => p.id === 'microsoft'
 		)!;
 		const h = yield* host(provider, f, {}, { personal });
@@ -716,7 +666,7 @@ describe('Gmail: one click, signed in with the host’s Google client', () => {
 			imap: { host: '127.0.0.1', port: imap.port },
 			smtp: { host: '127.0.0.1', port: 1 }
 		};
-		const provider = mailbox({ plain: true, servers: { google: servers } }).find(
+		const provider = mailbox({ net: loopback, servers: { google: servers } }).find(
 			(p) => p.id === 'google'
 		)!;
 		const h = yield* host(

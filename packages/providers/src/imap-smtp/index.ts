@@ -8,12 +8,11 @@ import {
 	type InstanceState,
 	type Json,
 	type LinkStatus,
-	type LocalText,
-	type OutboundAttachment,
-	type SetupDescription,
-	type SetupField
+	type OutboundAttachment
 } from '@norbital-ai/bolt/engine';
-import type { ProviderDef } from '../abi.ts';
+import type { ProviderDef, ProviderText } from '../abi.ts';
+
+type ProviderSetup = ProviderDef['setup'];
 import {
 	OAuthRefused,
 	PairingInvalid,
@@ -33,12 +32,23 @@ import {
 	type OAuthApp
 } from '../oauth.ts';
 import { readMail } from './reports.ts';
-import { Cursor, Mailbox, Wire, mailCall, type Login, type Method, type Server } from './model.ts';
+import {
+	Cursor,
+	Mailbox,
+	Wire,
+	mailCall,
+	type Login,
+	type MailNet,
+	type Method,
+	type Server,
+	PUBLIC_NET
+} from './model.ts';
 import { imap, mailboxWatch } from './mailbox-watch.ts';
 import { smtp, submit } from './submit.ts';
 
 export type MailboxOptions = {
-	readonly plain?: boolean;
+	/** The network the mailbox reaches its servers through (default: the public guard, TLS on). */
+	readonly net?: MailNet;
 	readonly servers?: Partial<Record<'microsoft' | 'google', { imap: Server; smtp: Server }>>;
 };
 const KNOWN = {
@@ -74,7 +84,7 @@ const appOf = (m: Mailbox, personal = false): OAuthApp =>
 			};
 
 // ── setup, as data the shell renders ──
-const t = (en: string, zh: string): LocalText => ({ en, zh });
+const t = (en: string, zh: string): ProviderText => ({ en, zh });
 const F = {
 	address: {
 		name: 'address',
@@ -117,14 +127,14 @@ const F = {
 	},
 	clientId: { name: 'clientId', label: t('Client ID', '客户端 ID') },
 	clientSecret: { name: 'clientSecret', label: t('Client secret', '客户端密钥'), secret: true }
-} satisfies { [k: string]: SetupField };
+} satisfies { [k: string]: ProviderSetup['fields'] extends readonly (infer F)[] | undefined ? F : never };
 const COMMON = [F.fromName, F.folder, F.tracking, F.quietHours];
 const WATCHED = t(
 	"Mail arriving in the watched folder enters this integration; replies are sent through SMTP as this address. Bounce and delay reports landing there update each message's delivery status (spam complaints are not reported over IMAP).",
 	'到达所监视文件夹的邮件会进入此集成；回复通过 SMTP 以此地址发出。落入该文件夹的退信和延迟报告会更新每封邮件的送达状态（IMAP 不报告垃圾邮件投诉）。'
 );
 
-const PASSWORD: SetupDescription = {
+const PASSWORD: ProviderSetup = {
 	kind: 'form',
 	steps: [
 		{
@@ -168,7 +178,7 @@ const PASSWORD: SetupDescription = {
 	]
 };
 
-const MICROSOFT: SetupDescription = {
+const MICROSOFT: ProviderSetup = {
 	kind: 'form',
 	steps: [
 		{
@@ -209,9 +219,9 @@ const MICROSOFT: SetupDescription = {
 };
 
 /** One click: the host's Google client signs in, and the sign-in names the mailbox. */
-const GOOGLE: SetupDescription = { kind: 'oauth', steps: [] };
+const GOOGLE: ProviderSetup = { kind: 'oauth', steps: [] };
 
-const syncSetup = (method: Method): SetupDescription => {
+const syncSetup = (method: Method): ProviderSetup => {
 	if (method === 'google') return GOOGLE;
 	const setup = { password: PASSWORD, microsoft: MICROSOFT }[method];
 	const fields = (setup.fields ?? [])
@@ -420,7 +430,7 @@ const open = Effect.fn('Mailbox.open')(function* (
 	known: { imap: Server; smtp: Server } | undefined,
 	options: MailboxOptions
 ) {
-	const plain = options.plain === true,
+	const net = options.net ?? PUBLIC_NET,
 		personal = ctx.personal;
 	const stored = yield* hostCall('read mailbox credentials', () => ctx.credentials.load());
 	let box = Option.getOrNull(Schema.decodeUnknownOption(Mailbox)(stored.get('credential')));
@@ -529,7 +539,7 @@ const open = Effect.fn('Mailbox.open')(function* (
 		Effect.scoped(
 			Effect.gen(function* () {
 				const auth = yield* login(mailbox, token),
-					client = yield* imap(mailbox, auth, plain);
+					client = yield* imap(mailbox, auth, net);
 				yield* mailCall(`IMAP ${mailbox.imap.host}`, () => client.connect()).pipe(
 					Effect.onInterrupt(() => Effect.sync(() => client.close()))
 				);
@@ -537,7 +547,7 @@ const open = Effect.fn('Mailbox.open')(function* (
 					client.mailboxOpen(mailbox.folder, { readOnly: true })
 				);
 				if (!personal) {
-					const transport = yield* smtp(mailbox, auth, plain);
+					const transport = yield* smtp(mailbox, auth, net);
 					yield* mailCall(`SMTP ${mailbox.smtp?.host}`, () => transport.verify());
 				}
 			})
@@ -605,7 +615,7 @@ const open = Effect.fn('Mailbox.open')(function* (
 				supervisor,
 				mailboxWatch({
 					box: mailbox,
-					plain,
+					net,
 					personal,
 					after,
 					login: () => login(mailbox),
@@ -816,7 +826,7 @@ const open = Effect.fn('Mailbox.open')(function* (
 					yield* submit(
 						mailbox,
 						yield* login(mailbox),
-						plain,
+						net,
 						{ ...wire, ...(html === undefined ? {} : { html }) },
 						mid,
 						{},
@@ -852,7 +862,7 @@ const open = Effect.fn('Mailbox.open')(function* (
 					yield* submit(
 						mailbox,
 						auth,
-						plain,
+						net,
 						{
 							id: local,
 							to: [mailbox.address],
@@ -862,7 +872,7 @@ const open = Effect.fn('Mailbox.open')(function* (
 						mid,
 						{ 'X-Norbital-Test': local }
 					);
-					const client = yield* imap(mailbox, auth, plain);
+					const client = yield* imap(mailbox, auth, net);
 					yield* mailCall('IMAP test connect', () => client.connect()).pipe(
 						Effect.onInterrupt(() => Effect.sync(() => client.close()))
 					);

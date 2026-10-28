@@ -1,7 +1,7 @@
 import { expect, it } from '@effect/vitest';
 import { Effect } from 'effect';
 import { imap } from '../src/imap-smtp/mailbox-watch.ts';
-import { mailCall, type Mailbox } from '../src/imap-smtp/model.ts';
+import { mailCall, PUBLIC_NET, type Mailbox } from '../src/imap-smtp/model.ts';
 import { smtp } from '../src/imap-smtp/submit.ts';
 
 const box = (host: string): Mailbox => ({
@@ -24,7 +24,7 @@ it.effect(
 	() =>
 		Effect.gen(function* () {
 			for (const host of ['127.0.0.1', '169.254.169.254', '::1']) {
-				const failure = yield* Effect.scoped(imap(box(host), login, false)).pipe(Effect.flip);
+				const failure = yield* Effect.scoped(imap(box(host), login, PUBLIC_NET)).pipe(Effect.flip);
 				expect(failure._tag).toBe('ProviderUnavailable');
 				expect(failure.message).toContain('private or reserved');
 			}
@@ -36,7 +36,7 @@ it.live(
 	() =>
 		Effect.scoped(
 			Effect.gen(function* () {
-				const transport = yield* smtp(box('127.0.0.1'), login, false);
+				const transport = yield* smtp(box('127.0.0.1'), login, PUBLIC_NET);
 				for (let attempt = 0; attempt < 2; attempt++) {
 					const failure = yield* mailCall('verify SMTP', () => transport.verify()).pipe(
 						Effect.flip

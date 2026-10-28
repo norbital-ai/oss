@@ -403,7 +403,12 @@ const RESERVED = new Set([
 const MAX_REDIRECTS = 5,
 	TIMEOUT_MS = 30_000;
 
-type PublicRequestOptions = { resolve?: Resolve; request?: RequestPage; allowLoopback?: boolean };
+type PublicRequestOptions = {
+	resolve?: Resolve;
+	request?: RequestPage;
+	allowLoopback?: boolean;
+	loopbackOnly?: boolean;
+};
 
 /** One request under the policy, every redirect hop re-checked; its caller owns the wall and interruption. */
 const guarded = (
@@ -429,6 +434,8 @@ const guarded = (
 		let method = request.method.toUpperCase(),
 			body = request.body;
 		for (let hop = 0; hop <= limits.redirects; hop++) {
+			if (options.loopbackOnly === true && !isLoopbackName(target.hostname.replace(/^\[|\]$/g, '')))
+				return yield* Effect.fail(invalid(`This host reaches loopback only, not ${target.hostname}.`));
 			const addresses = yield* publicAddresses(target, options.resolve, options.allowLoopback);
 			const response = yield* send(
 				target,
@@ -471,6 +478,14 @@ const guarded = (
 /** The engine's outbound HTTP (`HttpPort`); the wall is the engine's (`Port.call`). */
 export const httpPort: HttpPort = {
 	fetch: (request, limits, signal) => Effect.runPromise(guarded(request, limits), { signal })
+};
+/** Outbound HTTP to this machine only (the test kit): every hop to another host is refused. */
+export const loopbackHttpPort: HttpPort = {
+	fetch: (request, limits, signal) =>
+		Effect.runPromise(
+			guarded(request, limits, { allowLoopback: true, loopbackOnly: true }),
+			{ signal }
+		)
 };
 
 /** The provider's fetch ABI runs guarded work on its already supplied scoped host runner. */

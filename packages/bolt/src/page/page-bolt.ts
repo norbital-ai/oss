@@ -42,8 +42,7 @@ import type { ModelName, FileField, FileSyncName, Is, ReadableName } from '../de
 import type {
 	ConvertRequest,
 	ConvertSource,
-	StartInput,
-	StartOutput
+	StartInput
 } from '../decl/runtime/facilities.ts';
 import type { FileRef, Id, Instant, PlainDate, RequestId } from '../decl/values.ts';
 import type { ApprovalView } from '../engine/approvals/approvals.ts';

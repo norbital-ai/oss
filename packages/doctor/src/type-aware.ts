@@ -115,6 +115,32 @@ function compilerOptions(configPath: string | undefined): ts.CompilerOptions {
 	return { ...parsed.options, noEmit: true, allowJs: true, skipLibCheck: true };
 }
 
+/**
+ * Lib and dependency declarations parsed once per process and shared by every program (as a language service's document
+ * registry does): a scan builds one program per configuration, and reparsing TypeScript's lib files dominated each.
+ * ponytail: never evicted; a scan process is short-lived and its node_modules do not change under it.
+ */
+const shared = new Map<string, ts.SourceFile>();
+function compilerHost(options: ts.CompilerOptions): ts.CompilerHost {
+	const host = ts.createCompilerHost(options);
+	const lib = dirname(ts.getDefaultLibFilePath(options));
+	const getSourceFile = host.getSourceFile.bind(host);
+	host.getSourceFile = (fileName, version, onError, shouldCreate) => {
+		if (!fileName.startsWith(lib) && !fileName.includes(`${sep}node_modules${sep}`))
+			return getSourceFile(fileName, version, onError, shouldCreate);
+		const key =
+			typeof version === 'object'
+				? `${version.languageVersion}\0${version.impliedNodeFormat ?? ''}\0${fileName}`
+				: `${version}\0\0${fileName}`;
+		const cached = shared.get(key);
+		if (cached !== undefined) return cached;
+		const file = getSourceFile(fileName, version, onError, shouldCreate);
+		if (file !== undefined) shared.set(key, file);
+		return file;
+	};
+	return host;
+}
+
 type TypeAwareOptions = Readonly<{
 	readonly root: string;
 	/** Repository-relative files the scan selected. Non-program extensions are skipped. */
@@ -141,9 +167,11 @@ export function runTypeAware(options: TypeAwareOptions): ReadonlyArray<Finding> 
 
 	const findings: Array<Finding> = [];
 	for (const [config, files] of [...groups].sort(([left], [right]) => left.localeCompare(right))) {
+		const programOptions = compilerOptions(config === '' ? undefined : config);
 		const program = ts.createProgram({
 			rootNames: files.map((file) => join(options.root, file)),
-			options: compilerOptions(config === '' ? undefined : config)
+			options: programOptions,
+			host: compilerHost(programOptions)
 		});
 		const checker = program.getTypeChecker();
 

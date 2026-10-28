@@ -350,16 +350,26 @@ export const createBolt = (config: BoltConfig) =>
 						read: view.read
 					}))
 				};
-				const response = yield* transport.request('POST', PATHS.live, body).pipe(Effect.result);
+				const answer = yield* transport.request('POST', PATHS.live, body).pipe(
+					Effect.flatMap((response) => {
+						const refusal = errorOf(response.body);
+						return Option.isSome(refusal)
+							? Effect.succeed(add.map((view) => ({ view: view.id, ...refusal.value.error })))
+							: decode(LiveReply, response.body).pipe(Effect.map((reply) => reply.errors));
+					}),
+					Effect.result
+				);
 				if (generation !== registeredGeneration) return;
-				if (response._tag === 'Failure') {
-					for (const view of add) view.registered = false;
+				if (answer._tag === 'Failure') {
+					// a view whose registration failed hears it, instead of waiting for frames that never come
+					const failed = new ReadFailed({ code: 'transport', message: answer.failure.message });
+					for (const view of add) {
+						view.registered = false;
+						yield* notify(view, failed);
+					}
 					return;
 				}
-				const refusal = errorOf(response.success.body);
-				const errors = Option.isSome(refusal)
-					? add.map((view) => ({ view: view.id, ...refusal.value.error }))
-					: (yield* decode(LiveReply, response.success.body)).errors;
+				const errors = answer.success;
 				if (
 					errors.some(
 						(error) => error.code === 'notFound' && error.message === 'the live connection is gone'

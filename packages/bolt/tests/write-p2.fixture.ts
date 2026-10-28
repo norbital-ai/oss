@@ -2,10 +2,10 @@
 import { Effect, Result } from 'effect';
 import type { Bindings, Invocation } from '../src/engine/contracts.ts';
 import { PgliteDb } from '../src/node/db/pglite.ts';
+import { TestDb } from '../src/test/database.ts';
 import type { TenantDbShape } from '../src/engine/db/tenant-db.ts';
 import { decodeManifest, type EngineManifest } from '../src/engine/manifest.ts';
 import { readEngine } from '../src/engine/query/engine.ts';
-import { applyPlan, plan } from '../src/engine/schema/plan.ts';
 import type { Bridge } from '../src/engine/services.ts';
 import type { Fingerprint } from '../src/engine/write/sql.ts';
 import { fingerprinting } from '../src/engine/write/sql.ts';
@@ -79,14 +79,10 @@ export const manifest = Result.getOrThrow(
 	})
 );
 
-/** A manifest's schema on an explicit native tenant database. */
-export const migrate = (db: TenantDbShape, m: EngineManifest = manifest) =>
-	Effect.flatMap(plan(null, m), (p) => applyPlan(db, p, { accept: true }));
 export const open = (m: EngineManifest = manifest) =>
 	Effect.gen(function* () {
-		const pg = yield* PgliteDb.open(),
+		const pg = yield* TestDb.open(m),
 			db = PgliteDb.make(pg);
-		yield* migrate(db, m);
 		return { pg, db };
 	});
 

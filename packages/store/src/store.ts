@@ -77,10 +77,6 @@ class PreparedStatement<A> {
 		this.batchable = batchable;
 	}
 }
-/** What a host pairs the store with: one statement in, its rows out. The store implements none. */
-export type Executor<E = never, R = never> = (
-	statement: Sql
-) => Effect.Effect<readonly ResultRow[], E, R>;
 
 // ── declarations ──
 type RefTargets<Tables> = {

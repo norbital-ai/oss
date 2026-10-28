@@ -65,7 +65,7 @@ Each word names one thing:
 | Page SDK    | What browser-side page code calls.                                                                                   | `@norbital-ai/bolt/page`, imported in pages as `$bolt`.                            |
 | Device      | What the shell running the page provides: location, notifications, push, background notices, opening external links. | `bolt.device` in pages; a shell installs `window.boltDevice`.                      |
 | Shell       | The container a workspace runs in, which implements Device.                                                          | The web shell built into Bolt; native apps from `@norbital-ai/app-shell`.          |
-| Host        | The server that runs workspaces: a hosting platform or a self-hosted `bolt-server`.                                  | The Host API.                                                                      |
+| Host        | The server that runs a bundle and supplies its facilities: Colony (tethered, the default) or an untethered host.      | `@norbital-ai/bolt/facilities`; the Host API. See [hosts](./hosts.md).             |
 
 ## Package entries
 
@@ -94,8 +94,8 @@ use `Effect.fnUntraced` or `Effect.fnUntracedEager`; Bolt owns the invocation ru
 call tools, per batch of files), and no time limit: it goes on while it progresses (a model token, a reply, a tool
 result), and five minutes without progress end it with the answer its draft already holds, else `timeout`. Once `steps`
 is spent one final turn offers only the draft tools and must answer; without a valid answer there or in the draft the call fails `invalid`, naming the budget and what the draft still breaks.
-In an automation run each tool turn is a durable step in the run's journal, with its AI, infer and HTTP answers: a run
-resumed on another host goes on after its last step, and a run waiting over 30 s parks, holding no isolate.
+An inference reruns with the run that called it: a run the process drops goes back to `queued` and reruns from the
+start (up to 3 times), asking its AI, infer and HTTP calls again. Only chat sessions resume, from their saved turns.
 
 `ctx.ai.embed` resolves each FileRef against the workspace's stored file record and sends its
 metadata to the host. The provider reads the media through the host's scoped file facility after
@@ -209,8 +209,7 @@ Audit payloads do not belong in the host's system/control database or in a new t
 `bolt_history` remains in the tenant database because revision reads, approval rollback and
 record restore require it. Native model triggers capture revisions and referential cascades;
 application policy checks still belong to admitted Bolt writes. Runtime logs remain diagnostic
-events with their own size, rate and retention limits; run journals remain temporary execution
-state. These are separate contracts.
+events with their own size, rate and retention limits. These are separate contracts.
 
 Hosts declare `durable`, `buffered` or `disabled` acknowledgement. A buffered host can lose
 accepted events in a crash before its disk flush; append/read-back is not an fsync receipt.
@@ -324,8 +323,8 @@ for Node 20 and later. The Bolt executable and fork test workers supply this
 flag. A custom host or direct `node` invocation must supply it before loading the engine.
 
 Native installs require Python 3, make and a C++ compiler. The repository's pinned isolated-vm 7.0.1
-patch fixes module-code-cache consumption and builds the addon from source. Keep the pnpm workspace
-policy, patch file and lockfile together when projecting a standalone template.
+patch fixes module-code-cache consumption and builds the addon from source. A template keeps the patch file,
+its `patchedDependencies` entry and `bun.lock` together.
 
 Guests initialize their prelude and evaluate tenant source in a fresh isolated heap. Builds produce
 no native V8 snapshot, and artifact readers never open historical snapshot blobs. Historical
@@ -366,7 +365,10 @@ native engine failures and browser protocol decoders use those same identities.
 Vitest helpers. Suites declare `@effect/vitest` directly and import their helpers from it.
 Acquire `yield* TestWorkspace` in `it.effect`, then yield native `t.as(actor)`
 calls. Use `Effect.flip` or `Effect.result` to assert failures. The layer closes its database,
-host and provider resources. Use the browser test entry to mount actual controls and exercise
+host and provider resources. With a `root`, the layer seeds from the template's `test` pack
+(`seed/test/`, built once per source hash; `bolt build` also writes it to `.norbital/seed/test`, and no
+host provisions it). It never loads the public `base` pack or the bank's `sample`; `seed: 'none'` or
+inline rows replace the test pack. Use the browser test entry to mount actual controls and exercise
 current interactions. Edge case tests cover core behavior with synthetic fixtures; automated
 layout/markup/CSS/pixel assertions, surface sweeps, seeded legal/catalogue correctness matrices and
 retired-API absence checks do not belong in these suites. Templates run standalone without a host;
@@ -374,10 +376,11 @@ hosts test their own behavior independently of template suites.
 
 ## CLI and publication
 
-The CLI is declared with `effect/cli` in `src/cli/main.ts`. `bolt sync`, `check`, `build`, `test`,
-`dev` and `start` operate on one workspace. From a template repository root, `bolt templates`
-provides `check`, `lock`, `verify` and `publish`; publication creates immutable projection refs
-and checks fast-forward ancestry. Repository scripts may delegate to those commands.
+The CLI is declared with `effect/cli` in `src/cli/main.ts`. `bolt sync`, `check`, `build`, `test`
+and `dev` operate on one workspace ([the dev loop](./dev-loop.md)). From a template repository root,
+`bolt templates` provides `check`, `lock`, `test`, `verify` and `publish`; `publish --out=<dir>` packs
+each built template's release, by digest, for CI's R2 upload ([releases](./releases.md)). Repository
+scripts may delegate to those commands.
 
 Package builds and publication validation use the maintained TypeScript entries
 `scripts/build-package.ts` and `scripts/validate-package-publication.ts` at the OSS root. Public
@@ -386,6 +389,9 @@ before a coordinated immutable package release; consumers import public package 
 
 ## Documents
 
+- [The template dev loop](./dev-loop.md)
+- [Releases](./releases.md)
+- [Host facilities](./hosts.md)
 - [Schema and public type inference](./inference.md)
 - [Workspace contract and file roles](./workspace-contract.md)
 - [Models and write callbacks](./models.md)
@@ -400,4 +406,4 @@ before a coordinated immutable package release; consumers import public package 
 - [Client bundles and public rendering](./client-bundling.md)
 - [Device, device notices and app sessions](./device.md)
 - [Changing the workspace with Norbius (ask, preview, approve)](./norbius-changes.md)
-- [Self-hosted server (`@norbital-ai/bolt-server`)](../../bolt-server/README.md)
+- [Example untethered host (`@norbital-ai/bolt-server`)](../../bolt-server/README.md)

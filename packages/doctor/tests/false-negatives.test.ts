@@ -9,7 +9,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { it } from '@effect/vitest';
 import { Effect } from 'effect';
-import { doctor } from '../build/index.js';
+import { doctor } from '../src/index.ts';
 
 /** Load a pack holding one rule, `PROBE`, and run it over `files`; answers the files it reported. */
 function probe(

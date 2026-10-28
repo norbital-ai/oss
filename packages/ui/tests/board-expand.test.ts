@@ -11,6 +11,7 @@ import { browser, required, viewFixture, type ReadOptions } from './view-fixture
 
 const { flushSync, mount, tick, unmount } = await import('svelte');
 const { default: Harness } = await import('./view-harness.svelte');
+const { default: Board } = await import('../src/board/Board.svelte');
 
 // An expanded lane: the lane's cards in a modal grid, searched within that lane only, closing back to its button.
 const catalog = {
@@ -52,8 +53,7 @@ function filtered(options: ReadOptions) {
 	const text = typeof options.search === 'string' ? options.search.toLowerCase() : '';
 	return rows.filter(
 		(row) =>
-			nodes.every((node) => matches(row, node)) &&
-			String(row['title']).toLowerCase().includes(text)
+			nodes.every((node) => matches(row, node)) && String(row['title']).toLowerCase().includes(text)
 	);
 }
 async function show() {
@@ -76,6 +76,7 @@ async function show() {
 			bolt: fixture.bolt,
 			catalog,
 			part: 'board',
+			view: Board,
 			props: {
 				of: 'jobs',
 				by: 'status',
@@ -122,7 +123,6 @@ it.live('expand opens the lane in a modal, search narrows within it, closing ret
 		const box = element<HTMLInputElement>(document, '[data-search]');
 		box.value = 'alpha';
 		box.dispatchEvent(new Event('input', { bubbles: true }));
-		yield* browser(() => new Promise((resolve) => setTimeout(resolve, 350)));
 		yield* browser(() =>
 			vi.waitFor(async () => {
 				await settle();

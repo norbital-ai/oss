@@ -1,7 +1,7 @@
 {
 	"name": "@norbital-ai/bolt-server",
 	"version": "0.0.5",
-	"description": "`bolt start` and the self-host adapters of Bolt's host ports.",
+	"description": "An example untethered Bolt host: one workspace artifact served on its own facility adapters.",
 	"type": "module",
 	"sideEffects": false,
 	"license": "AGPL-3.0-only",
@@ -11,6 +11,9 @@
 			"default": "./build/index.js"
 		}
 	},
+	"bin": {
+		"bolt-server": "./build/main.js"
+	},
 	"files": [
 		"build",
 		"package.json"
@@ -18,7 +21,6 @@
 	"scripts": {
 		"build": "node ../../scripts/build-package.ts tsc -p tsconfig.json --outDir {}",
 		"lint": "tsc -p tsconfig.json --noEmit && tsc -p tests/tsconfig.json --noEmit",
-		"test": "vitest run",
 		"prepack": "pnpm exec turbo run build --filter=@norbital-ai/bolt-server"
 	},
 	"dependencies": {
@@ -36,13 +38,11 @@
 		"web-push": "^3.6.7"
 	},
 	"devDependencies": {
-		"@effect/vitest": "catalog:",
 		"@types/mssql": "12.3.0",
 		"@types/node": "^26.6.5",
 		"@types/pg": "^8.23.1",
 		"@types/web-push": "^3.6.4",
-		"typescript": "catalog:",
-		"vitest": "5.0.5"
+		"typescript": "catalog:"
 	},
 	"repository": {
 		"type": "git",

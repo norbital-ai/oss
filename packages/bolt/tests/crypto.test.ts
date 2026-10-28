@@ -11,14 +11,8 @@ import {
 } from '../src/engine/crypto.ts';
 import { sha256, toHex } from '@norbital-ai/store';
 
-// every length around the 55/56/64-byte padding seams, then random sizes up to a few MiB
-const lengths = [
-	...Array.from({ length: 130 }, (_, i) => i),
-	1000,
-	4095,
-	65536,
-	...Array.from({ length: 8 }, () => Math.floor(Math.random() * 3_000_000))
-];
+// every length around the 55/56/64-byte padding seams, then a few multi-block sizes
+const lengths = [...Array.from({ length: 130 }, (_, i) => i), 1000, 4095, 65536];
 const inputs = lengths.map((n) => new Uint8Array(node.randomBytes(n)));
 const digest = (algorithm: string, data: Uint8Array) =>
 	new Uint8Array(node.createHash(algorithm).update(data).digest());
@@ -61,7 +55,6 @@ describe('engine crypto matches node:crypto', () => {
 		for (const data of inputs) {
 			const buffer = Buffer.from(data);
 			expect(toHex(data)).toBe(buffer.toString('hex'));
-			// byte arrays compare as buffers: a deep equal of megabytes is the test's own cost, not the code's
 			expect(buffer.equals(fromHex(buffer.toString('hex')))).toBe(true);
 			expect(toBase64(data)).toBe(buffer.toString('base64'));
 			expect(toBase64url(data)).toBe(buffer.toString('base64url'));

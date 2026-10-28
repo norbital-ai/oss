@@ -28,7 +28,7 @@ import {
 import { SqlReadCapture, SqlSessionDb, type TenantDbShape } from '../engine/db/tenant-db.ts';
 import { AuditMutation } from '../engine/audit-context.ts';
 import type { DbError } from '../engine/errors.ts';
-import { PgliteDb } from './db/pglite.ts';
+import { PgliteDb, Pristine } from './db/pglite.ts';
 import { auditLogSpec } from './audit-schema.ts';
 
 export type AuditMigrations = {
@@ -75,9 +75,11 @@ export const auditMigrationProof = (
 ) =>
 	Effect.scoped(
 		Effect.gen(function* () {
+			// from the machine's initdb dump (~13× cheaper than initdb), with the log's own extension
+			const pristine = yield* (yield* Pristine).pipe(Effect.mapError((e) => invalid(e.message)));
 			const open = Effect.acquireRelease(
 				Effect.tryPromise({
-					try: () => PGlite.create({ extensions: { pg_trgm } }),
+					try: () => PGlite.create({ loadDataDir: pristine, extensions: { pg_trgm } }),
 					catch: (cause) => invalid(String(cause))
 				}),
 				(pg) => Effect.promise(() => pg.close())
@@ -110,7 +112,7 @@ export const auditMigrationProof = (
 				physical: physicalDefinitionsOf(physical)
 			};
 		})
-	);
+	).pipe(Effect.provide(Pristine.layer));
 
 /** The same native adapter bounds each file; exact legacy adoption records only a receipt and preserves payloads. */
 export const applyAuditMigrations = (db: TenantDbShape, migrations: AuditMigrations) =>

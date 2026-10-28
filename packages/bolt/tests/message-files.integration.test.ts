@@ -7,11 +7,11 @@ import { Context, Effect, Layer, Result } from 'effect';
 import { messages } from '../src/engine/agent/context.ts';
 import { rowsOf, transcriptRow } from '../src/engine/agent/schema.ts';
 import { MSG } from '../src/engine/conversations/store.ts';
-import { decodeManifest } from '../src/engine/manifest.ts';
+import { decodeProjectedManifest } from '../src/engine/manifest.ts';
 import { TestWorkspace } from '../src/test/index.ts';
 
 const manifest = Result.getOrThrow(
-	decodeManifest({
+	decodeProjectedManifest({
 		workspace: { tz: 'UTC', locale: 'en' },
 		models: {},
 		relationships: {},

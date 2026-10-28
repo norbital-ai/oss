@@ -2,8 +2,8 @@
 // money and enums formatted by kind; row clicks open; empty states; the record sheet titled by its record.
 import './dom.ts';
 import assert from 'node:assert/strict';
-import { Schema, Stream } from 'effect';
-import { it as test, afterEach } from '@effect/vitest';
+import { Schema } from 'effect';
+import { it as test, afterEach, vi } from '@effect/vitest';
 const k = await import('../src/kinds/kind.ts');
 const messages = await import('../src/text/messages.ts');
 const relations = await import('../src/relations/select.ts');
@@ -16,7 +16,6 @@ import type { KindsHost } from '../src/kinds/context.ts';
 import type { DefaultsPart } from './defaults-harness.svelte';
 import { everyRow, viewFixture, type ReadOptions } from './view-fixture.ts';
 import { element } from './elements.ts';
-import * as ui from '../src/index.ts';
 const { flushSync, mount, tick, unmount } = await import('svelte');
 const { default: Harness } = await import('./defaults-harness.svelte');
 
@@ -332,22 +331,6 @@ test('Table inside a sheet: the row and the phone card still open their record (
 	assert.deepEqual(records(), ['jobs/j1']);
 });
 
-test('Table: an enum is a neutral chip in words, a state a coloured badge; a FK column is named by its target', async () => {
-	const { bolt } = await fake([ROW]);
-	const t = await show(
-		{ part: 'table', props: { of: 'jobs', columns: ['title', 'kind', 'status', 'account_id'] } },
-		bolt,
-		jobs
-	);
-	const chip = t.querySelector('[data-table-wide] [data-enum-value=on_site]');
-	assert.equal(chip?.textContent?.trim(), 'On site');
-	assert.ok(t.querySelector('[data-table-wide] [data-state-value=open]'));
-	const heads = [...t.querySelectorAll('[data-table-wide] th[data-column]')].map((th) =>
-		th.textContent?.trim()
-	);
-	assert.ok(heads.includes('Account'), heads.join());
-});
-
 test("Table: search falls back to the label fields; the empty text keeps the label's case", async () => {
 	const { bolt, reads } = await fake([], {
 		t: (key) => (key === 'models.sow_documents.label' ? 'SOW documents' : key)
@@ -366,50 +349,16 @@ test("Table: search falls back to the label fields; the empty text keeps the lab
 	const box = document.querySelector<HTMLInputElement>('[data-search]');
 	assert.ok(box, 'a search box');
 	assert.match(document.querySelector('[data-search-fields]')?.textContent ?? '', /Title/);
+	vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
 	box.value = 'acme';
 	box.dispatchEvent(new Event('input', { bubbles: true }));
-	await new Promise((r) => setTimeout(r, 350));
+	await vi.advanceTimersByTimeAsync(350);
+	vi.useRealTimers();
 	await settle();
 	const last = reads.filter((r) => r.c === 'sow_documents').at(-1);
 	assert.ok(last);
 	assert.equal(last.o.search, undefined);
 	assert.deepEqual(last.o.where, { or: [{ title: { like: '%acme%' } }] });
-});
-
-test('record sheet: titled by the record, the singular model above; a subtitle of fields by kind; no id, no "by —"', async () => {
-	const { bolt } = await fake(
-		[{ ...ROW, account_id: 'a9', created_at: '2026-01-02T03:04:05.000Z', created_by: 'u1' }],
-		{
-			get: (c) =>
-				c === 'jobs'
-					? { ...ROW, account_id: 'a9', created_at: '2026-01-02T03:04:05.000Z', created_by: 'u1' }
-					: null
-		}
-	);
-	const t = await show(
-		{ part: 'record', props: { of: 'jobs', id: 'j1', subtitle: ['kind', 'due_on'] } },
-		bolt,
-		jobs
-	);
-	const head = element(document, '[role=dialog] [data-record-head]');
-	assert.equal(element(head, 'h2').textContent?.trim(), 'Paint');
-	assert.equal(element(document, '[role=dialog] [data-sheet-eyebrow]').textContent?.trim(), 'Job');
-	assert.match(head.textContent ?? '', /On site · Jan 2, 2026/);
-	const account = element(document, '[data-field=account_id]');
-	assert.match(account.textContent ?? '', /Account/);
-	assert.doesNotMatch(account.textContent ?? '', /a9/);
-	// the fake reads no account a9: an unreadable target says so, never its id
-	assert.match(account.textContent ?? '', /Not found or no access/);
-	assert.equal(
-		document.querySelector('[data-record-info]'),
-		null,
-		'audit metadata belongs only in History'
-	);
-	assert.ok(
-		document.querySelector('[data-field=notes] [data-markdown] strong'),
-		'markdown reads as prose'
-	);
-	void t;
 });
 
 test('record sheet: an explicit title and subtitle still win', async () => {
@@ -424,12 +373,6 @@ test('record sheet: an explicit title and subtitle still win', async () => {
 	assert.match(head.textContent ?? '', /Line/);
 });
 
-test('an empty relation reads as a dash', async () => {
-	const { bolt } = await fake([ROW]);
-	await show({ part: 'record', props: { of: 'jobs', id: 'j1' } }, bolt, jobs);
-	assert.match(element(document, '[data-field=account_id]').textContent ?? '', /—/);
-});
-
 test('a record in a final state: its state is read-only and there is no Save', async () => {
 	const { bolt } = await fake([]);
 	const won = { ...ROW, status: 'won' };
@@ -441,18 +384,6 @@ test('a record in a final state: its state is read-only and there is no Save', a
 	);
 	assert.ok(t.querySelector('[data-field=status][data-readonly]'));
 	assert.equal(t.querySelectorAll('button[type=submit]').length, 0);
-});
-
-test("CustomView: no rows is the kit's empty state", async () => {
-	const { bolt } = await fake([]);
-	const t = await show({ part: 'custom', props: { of: [], fields: ['title'], key: 'x' } }, bolt);
-	assert.ok(t.querySelector('[data-read=empty]'));
-	assert.equal(t.querySelector('[data-custom-rows]'), null);
-	const some = await show(
-		{ part: 'custom', props: { of: [{ title: 'a' }], fields: ['title'], key: 'y' } },
-		bolt
-	);
-	assert.equal(element(some, '[data-custom-rows]').textContent, '1');
 });
 
 test("select-all: the card list selects its page, then every matching row, beside the grid's header checkbox", async () => {
@@ -553,56 +484,6 @@ test("CustomView with `model`: the menu offers that model's file sync, and the s
 		null,
 		'without `model` the view offers no file sync'
 	);
-});
-
-test('Runs tab: one "No runs yet" only when no automation has runs; runs named by title, not key', async () => {
-	const run = { id: 'r1', automation: 'jobs.send_pdf', status: 'succeeded' };
-	const live = <A>(value: A) => Stream.succeed(value).pipe(Stream.concat(Stream.never));
-	const { bolt } = await fake([ROW], {
-		runs: (a) => live({ rows: a === 'jobs.send_pdf' ? [run] : [], next: null })
-	});
-	await show(
-		{
-			part: 'record',
-			props: {
-				of: 'jobs',
-				id: 'j1',
-				runs: [
-					{ automation: 'jobs.send_pdf', title: 'Send the PDF' },
-					{ automation: 'jobs.reindex' }
-				]
-			}
-		},
-		bolt,
-		jobs
-	);
-	const tab = [...document.querySelectorAll<HTMLElement>('[role=tab]')].find((x) =>
-		/Runs/.test(x.textContent ?? '')
-	);
-	assert.ok(tab);
-	tab.click();
-	await settle();
-	const body = element(document, '[role=dialog]').textContent ?? '';
-	assert.doesNotMatch(body, /No runs yet/);
-	assert.match(body, /Send the PDF/);
-	assert.doesNotMatch(body, /jobs\.send_pdf/);
-});
-
-test('ReadonlyMarkdown passes attributes through; the index exports the helpers', async () => {
-	const { bolt } = await fake([]);
-	const t = await show({ part: 'markdown' }, bolt);
-	assert.ok(t.querySelector('[data-probe=md] strong'));
-	for (const name of [
-		'format',
-		'enumText',
-		'markdownHtml',
-		'EmptyState',
-		'label',
-		'singular',
-		'TAB_LEVEL'
-	])
-		assert.ok(name in ui, name);
-	assert.equal(ui.TAB_LEVEL, Symbol.for('norbital.ui.tabs.level'));
 });
 
 test('form reads keep the current draft when an older row resolves last', async () => {

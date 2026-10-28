@@ -57,7 +57,6 @@ export type EnvoysConfig = {
 	/** Rule 60a: System 1 triage, when the host binds its port. */
 	triage?: Pick<Triage, 'envoy' | 'hold' | 'release'>;
 };
-type Admission = 'ignored' | 'ambient' | 'unregistered' | 'rateLimited' | 'queued' | 'pending';
 /** Rule 59: fixed, recorded replies; internal text never reaches a sender. */
 export const NOTICES = {
 	rateLimited:

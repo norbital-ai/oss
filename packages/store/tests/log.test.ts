@@ -1,9 +1,7 @@
-import { PGlite } from '@electric-sql/pglite';
-import { pg_trgm } from '@electric-sql/pglite/contrib/pg_trgm';
 import { it, expect } from '@effect/vitest';
 import { Effect } from 'effect';
 import { logDdl, logStatements, type AppendOnlyLogSpec, type Json } from '../src/index.ts';
-import { exec, script } from './support.ts';
+import { database, exec, script } from './support.ts';
 
 const declaration: AppendOnlyLogSpec = {
 	format: 1,
@@ -41,10 +39,7 @@ it.live(
 	'enforces idempotent immutable append, bounded retention and durable retirement with scoped search',
 	() =>
 		Effect.gen(function* () {
-			const pg = yield* Effect.acquireRelease(
-				Effect.promise(() => PGlite.create({ extensions: { pg_trgm } })),
-				(pg) => Effect.promise(() => pg.close())
-			);
+			const pg = yield* database;
 			for (const text of yield* logDdl(declaration)) yield* script(pg, `${text};`);
 			const commands = yield* logStatements(declaration),
 				execute = exec(pg),

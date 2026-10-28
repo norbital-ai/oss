@@ -14,8 +14,7 @@ versions and archive integrity stay coherent.
    `resolve-published-packages.ts`. It does not re-run CI's unit, lint and type suite; it does run
    `publication:check` again on the packed archives.
 4. After the release publishes, re-resolve and commit every consumer lockfile. A consumer manifest
-   bumped to the new version while its lockfile still pins the old one fails
-   `pnpm install --frozen-lockfile` on every deployed host, so the manifest bump and the lockfile
+   bumped to the new version while its lockfile still pins the old one fails its frozen install, so the manifest bump and the lockfile
    must land in the same commit — and neither can land before the version exists on the registry.
 
 `readPublicPackageEntries` rejects any package whose version differs from the workspace version —
@@ -33,12 +32,13 @@ GitHub token). An already-published version is skipped, not failed — the set c
 turning an ordinary source-only push into a red release. Published archives carry the `realm-v25`
 dist-tag; `latest` is not moved, so consumers should pin exact versions. A deployed pin keeps meaning
 the bytes it was tested with. Consumers configure the `@norbital-ai`
-scope and a read token through normal npm/pnpm configuration.
+scope and a read token through `.npmrc`.
 
-## Template refs
+## Template releases
 
-Templates are published from their own repositories, which own the projection to
-`refs/heads/templates/<key>` and their own dependency locking. This repository publishes packages
+Templates are released from their own repositories, whose CI builds each template once and uploads its
+release (bundle, source and seed, each named by its digest) to the release store, and which own their
+dependency locking. This repository publishes packages
 and, separately, the Convert service image.
 
 There is no platform release, no builder image, and no tenant-runtime image. See

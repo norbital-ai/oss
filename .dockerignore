@@ -1,7 +1,5 @@
 .git
 .github
-.changeset
-.local-packages
 .tmp
 **/.norbital
 **/.svelte-kit

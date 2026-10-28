@@ -698,13 +698,6 @@ export type Paged =
 	| { readonly all: true; readonly limit?: never; readonly after?: never };
 /** One page of rows, and the cursor to the next, `null` on the last. */
 export type Page<R> = { readonly rows: readonly R[]; readonly next: string | null };
-/** A read of `T`: the shapes Bolt's `ctx.read` takes, with relations under `with`. */
-export type ReadQuery<S extends AnySchema, T, X extends Operands = Plain> = {
-	readonly where?: Where<S, T, X>;
-	readonly select?: Select<S, T>;
-	readonly with?: With<S, T>;
-	readonly orderBy?: OrderBy<S, T>;
-} & Paged;
 
 // ── aggregates ──
 type ExtremeKind =

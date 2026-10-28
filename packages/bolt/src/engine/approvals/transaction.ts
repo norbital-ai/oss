@@ -8,7 +8,7 @@ import type { EngineError } from '../errors.ts';
 import type { EngineManifest } from '../manifest.ts';
 import { BoltError } from '../../protocol/errors.ts';
 import type { HeldRecord, StepsSnapshot } from '../write/act.ts';
-import { actorRef, CommitAnswer } from '../write/commit.ts';
+import { CommitAnswer } from '../write/commit.ts';
 import { answer, Chain, gate, GATED, type ReadGuards } from '../write/sql.ts';
 import { nextDue } from '../runs/queue.ts';
 import { approvalHook } from './approvals.ts';

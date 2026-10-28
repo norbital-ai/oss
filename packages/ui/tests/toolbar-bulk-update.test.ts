@@ -16,6 +16,7 @@ import { element } from './elements.ts';
 
 const { flushSync, mount, tick, unmount } = await import('svelte');
 const { default: Harness } = await import('./view-harness.svelte');
+const { default: Table } = await import('../src/table/Table.svelte');
 const { toasts } = await import('../src/toast/toast.svelte.ts');
 const mounted: (() => Promise<void>)[] = [];
 const settle = async () => {
@@ -80,6 +81,7 @@ async function show(
 			bolt,
 			catalog: cat,
 			part: 'table',
+			view: Table,
 			props: { of, columns: ['name'], toolbar: toolbar ?? { new: false } }
 		}
 	});

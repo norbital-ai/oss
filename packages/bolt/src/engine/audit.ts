@@ -83,7 +83,7 @@ const answer = <A>(schema: Schema.Decoder<A>, value: unknown) =>
 	);
 /** The facility as a value: a host hands it to a verb that may run outside the context that built it. */
 export const auditShape = (
-	port: AuditPort | undefined
+	port: AuditPort
 ): Effect.Effect<AuditShape, never, Crypto.Crypto> =>
 	Effect.gen(function* () {
 		const disabled: AuditShape = {
@@ -95,7 +95,7 @@ export const auditShape = (
 			pending: unavailable
 		};
 		const crypto = yield* Crypto.Crypto;
-		if (port === undefined || port.mode === 'disabled') return disabled;
+		if (port.mode === 'disabled') return disabled;
 		const service: AuditShape = {
 			mode: port.mode,
 			uuid: crypto.randomUUIDv4().pipe(
@@ -129,5 +129,5 @@ export const auditShape = (
 		return service;
 	});
 export const auditFromAbi = (
-	port: AuditPort | undefined
+	port: AuditPort
 ): Layer.Layer<never, never, Crypto.Crypto> => Layer.effect(Audit, auditShape(port));

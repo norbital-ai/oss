@@ -3,7 +3,8 @@
 // `ctx.db.query`, an aggregate and a seed load give back.
 import { dec } from '@norbital-ai/std/decimal';
 import { describe, expect, it } from '@effect/vitest';
-import { Context, Deferred, Effect, Layer, Queue, Schema, Stream } from 'effect';
+import { afterAll } from 'vitest';
+import { Context, Deferred, Effect, Exit, Layer, Queue, Schema, Scope, Stream } from 'effect';
 import type { Json } from '../src/decl/values.ts';
 import type { ActOutcome as Outcome } from '../src/engine/contracts.ts';
 import type { EngineManifest } from '../src/engine/manifest.ts';
@@ -12,10 +13,10 @@ import { lowerRead } from '../src/engine/index.ts';
 import { aggregate } from '@norbital-ai/store';
 import type { Frame } from '../src/protocol/wire.ts';
 import { fromStore } from '../src/protocol/errors.ts';
-import { TestWorkspace, type TestOptions } from '../src/test/index.ts';
+import { TestWorkspace } from '../src/test/index.ts';
 import { Live, Reads } from '../src/engine/services.ts';
 import { actReply, qReply, routeFixture } from './support/route-fixture.ts';
-import { program } from './support/guest-fixture.ts';
+import { program } from '../src/test/guest.ts';
 
 const columns = ['name', 'amount', 'day', 'at', 'span', 'slot', 'notes'];
 const manifest = {
@@ -53,7 +54,8 @@ const manifest = {
 	mcp: {},
 	apps: {},
 	customFields: {},
-	agent: { skills: {} }
+	agent: { skills: {} },
+	needs: []
 } satisfies EngineManifest;
 
 /** An update callback records the stored row beside its set and through one batched workspace query. */
@@ -81,29 +83,23 @@ const committed = (o: Outcome) => {
 };
 
 const Row = Schema.Record(Schema.String, Schema.Json);
-const open = Effect.fn('Test.wireCodec')(function* (
-	options: Omit<Extract<TestOptions, { artifact?: never }>, 'manifest' | 'guest'> = {},
-	transformed = false
-) {
+/** A seeded row written from std values (`dec`), as a seed pack holds it. */
+const seeded = Schema.decodeUnknownSync(Schema.fromJsonString(Row))(
+	JSON.stringify({ id: ID, ...input, amount: dec('1.50') })
+);
+// One workspace for the file: the seed pack holds one row, and the update exposure runs the recording callback.
+const open = Effect.fn('Test.wireCodec')(function* () {
 	const context = yield* Layer.build(
 		TestWorkspace.layer({
-			manifest,
-			...options,
-			...(transformed
-				? {
-						manifest: {
-							...manifest,
-							exposures: {
-								items: {
-									...manifest.exposures.items,
-									update: { ...manifest.exposures.items.update, transform: true }
-								}
-							}
-						},
-						guest: yield* guest,
-						transforms: ['items.update']
-					}
-				: {})
+			manifest: {
+				...manifest,
+				exposures: {
+					items: { ...manifest.exposures.items, update: { ...manifest.exposures.items.update, transform: true } }
+				}
+			},
+			guest: yield* guest,
+			transforms: ['items.update'],
+			seed: { items: [seeded] }
 		})
 	);
 	const t = Context.get(context, TestWorkspace),
@@ -126,6 +122,9 @@ const open = Effect.fn('Test.wireCodec')(function* (
 		);
 	return { t, context, authority, act, get };
 });
+const fileScope = Effect.runSync(Scope.make());
+afterAll(() => Effect.runPromise(Scope.close(fileScope, Exit.void)));
+const shared = Effect.runSync(Effect.cached(open().pipe(Scope.provide(fileScope))));
 const createdId = (outcome: Outcome) => {
 	const first = committed(outcome).records[0];
 	if (first === undefined) throw new Error('The create returned no record');
@@ -133,9 +132,36 @@ const createdId = (outcome: Outcome) => {
 };
 
 describe('wire codec: one shape per kind, both ways (D6)', () => {
+	it.live('an aggregate keys a date bucket by its ISO day and sums to `{ $dec }`', () =>
+		Effect.gen(function* () {
+			const a = yield* shared; // before any act: the seeded row alone
+			const reads = Context.get(a.context, Reads);
+			const [page] = yield* reads.run(
+				[
+					yield* aggregate(catalogOf(manifest), 'items', {
+						by: [{ month: 'day' }],
+						count: true,
+						sum: ['amount'],
+						all: true
+					}).pipe(Effect.mapError(fromStore))
+				],
+				{ as: 'workspace' },
+				{ now: a.t.clock.now(), today: a.t.clock.now().slice(0, 10), tz: 'UTC' }
+			);
+			expect(page).toMatchObject({
+				rows: [{ key: { day: '2026-01-01' }, count: 1, sum: { amount: { $dec: '1.50' } } }]
+			});
+		})
+	);
+	it.live('a seed pack written from std values loads back as the read shape', () =>
+		Effect.gen(function* () {
+			expect(seeded['amount']).toEqual({ $dec: '1.50' });
+			expect(yield* (yield* shared).get(ID)).toMatchObject(input);
+		})
+	);
 	it.live('date both ways: q gives back exactly what act took and the read row goes back in', () =>
 		Effect.gen(function* () {
-			const a = yield* open({}, true);
+			const a = yield* shared;
 			const id = createdId(yield* a.act('items.create', [input]));
 			const row = yield* a.get(id);
 			if (row === null) throw new Error('Missing created row');
@@ -151,7 +177,7 @@ describe('wire codec: one shape per kind, both ways (D6)', () => {
 	);
 	it.live('the callback reads the same shapes through before and ctx.db.query', () =>
 		Effect.gen(function* () {
-			const a = yield* open({}, true);
+			const a = yield* shared;
 			const id = createdId(yield* a.act('items.create', [input]));
 			committed(yield* a.act('items.update', [{ target: id, set: { name: 'b' } }]));
 			const shape = {
@@ -166,7 +192,7 @@ describe('wire codec: one shape per kind, both ways (D6)', () => {
 	);
 	it.live('a live patch carries the shapes a read gives', () =>
 		Effect.gen(function* () {
-			const a = yield* open();
+			const a = yield* shared;
 			const live = Context.get(a.context, Live);
 			const frames: Frame[] = [],
 				ready = yield* Deferred.make<string>(),
@@ -193,38 +219,7 @@ describe('wire codec: one shape per kind, both ways (D6)', () => {
 				yield* Queue.take(received);
 				last = frames.filter((frame) => frame.t === 'patch').at(-1);
 			}
-			expect(last.ops).toMatchObject([{ op: 'upsert', index: 0, row: input }]);
-		})
-	);
-	it.live('an aggregate keys a date bucket by its ISO day and sums to `{ $dec }`', () =>
-		Effect.gen(function* () {
-			const a = yield* open({ seed: { items: [{ id: ID, ...input }] } });
-			const reads = Context.get(a.context, Reads);
-			const [page] = yield* reads.run(
-				[
-					yield* aggregate(catalogOf(manifest), 'items', {
-						by: [{ month: 'day' }],
-						count: true,
-						sum: ['amount'],
-						all: true
-					}).pipe(Effect.mapError(fromStore))
-				],
-				{ as: 'workspace' },
-				{ now: a.t.clock.now(), today: a.t.clock.now().slice(0, 10), tz: 'UTC' }
-			);
-			expect(page).toMatchObject({
-				rows: [{ key: { day: '2026-01-01' }, count: 1, sum: { amount: { $dec: '1.50' } } }]
-			});
-		})
-	);
-	it.live('a seed pack written from std values loads back as the read shape', () =>
-		Effect.gen(function* () {
-			const row = Schema.decodeUnknownSync(Schema.fromJsonString(Row))(
-				JSON.stringify({ id: ID, ...input, amount: dec('1.50') })
-			);
-			expect(row['amount']).toEqual({ $dec: '1.50' });
-			const a = yield* open({ seed: { items: [row] } });
-			expect(yield* a.get(ID)).toMatchObject(input);
+			expect(last.ops).toMatchObject([{ op: 'upsert', row: input }]);
 		})
 	);
 });

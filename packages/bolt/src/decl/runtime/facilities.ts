@@ -23,7 +23,6 @@ import type {
 	Instant,
 	Json,
 	Msg,
-	Offset,
 	Point,
 	RecordRef,
 	RequestId,
@@ -210,7 +209,7 @@ type RequestPayload<N, O> =
 			: RequestOf<IntegrationOf<N>, O>;
 /**
  * A live request through one `http` or `sqlserver` instance: an HTTP op (its path under the definition's base URL) or a
- * database statement, journalled, with the credential host-side; it fails with a `FacilityFailure`, or `Unavailable`
+ * database statement, with the credential host-side; it fails with a `FacilityFailure`, or `Unavailable`
  * while the instance is unpaired.
  */
 export interface Request {

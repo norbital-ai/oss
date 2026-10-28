@@ -57,20 +57,16 @@ export class Secrets extends Context.Service<Secrets, SecretsShape>()('bolt/Secr
 				});
 				// copied envelopes cannot open under another owner/name
 				const open = (owner: string, name: string, envelope: string) =>
-					keys.available
-						? keys
-								.open(fromBase64(envelope), aad(owner, name))
-								.pipe(
-									Effect.map(Option.map((plain) => new TextDecoder().decode(plain))),
-									Effect.mapError(failed('the secret could not be opened'))
-								)
-						: Effect.succeed(Option.none<string>());
-				const rows = !keys.available
-					? []
-					: yield* db.rows(stored.annotate({ identifier: 'sys_config' }), {
-							text: 'SELECT key, value FROM sys_config WHERE key LIKE $1',
-							params: [`${prefix('workspace')}%`]
-						});
+					keys
+						.open(fromBase64(envelope), aad(owner, name))
+						.pipe(
+							Effect.map(Option.map((plain) => new TextDecoder().decode(plain))),
+							Effect.mapError(failed('the secret could not be opened'))
+						);
+				const rows = yield* db.rows(stored.annotate({ identifier: 'sys_config' }), {
+					text: 'SELECT key, value FROM sys_config WHERE key LIKE $1',
+					params: [`${prefix('workspace')}%`]
+				});
 				for (const row of rows) {
 					const name = row.key.slice(prefix('workspace').length);
 					const value = yield* open('workspace', name, row.value);

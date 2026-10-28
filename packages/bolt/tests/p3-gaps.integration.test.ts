@@ -1,9 +1,9 @@
 // P3 gaps: native semantic embeddings, the erase live lane, and caller-minted start ids.
-import { describe, expect, it } from '@effect/vitest';
+import { describe, expect, layer } from '@effect/vitest';
 import { Context, Effect, Layer, Queue, Result, Schema, Stream } from 'effect';
 import type { Json } from '../src/decl/values.ts';
 import type { ActOutcome as Outcome } from '../src/engine/contracts.ts';
-import { decodeManifest } from '../src/engine/manifest.ts';
+import { decodeProjectedManifest } from '../src/engine/manifest.ts';
 import { lowerRead } from '../src/engine/query/engine.ts';
 import { embedRun } from '../src/engine/integrations/embed.ts';
 import { Ai } from '../src/engine/ports.ts';
@@ -11,11 +11,11 @@ import { Port } from '../src/engine/port.ts';
 import { Live, Reads, Writes } from '../src/engine/services.ts';
 import { ActReply, WireError } from '../src/protocol/schema.ts';
 import { uuidv7, uuidv7Within, type Frame } from '../src/protocol/wire.ts';
-import { respondSystem1, TestWorkspace, type Kit } from '../src/test/index.ts';
+import { respondSystem1, TestWorkspace, type Kit, type WorkspaceServices } from '../src/test/index.ts';
 import { actReply, json, routeFixture } from './support/route-fixture.ts';
 
 const manifest = Result.getOrThrow(
-	decodeManifest({
+	decodeProjectedManifest({
 		workspace: { tz: 'UTC', locale: 'en' },
 		models: {
 			docs: {
@@ -75,28 +75,27 @@ const Titles = Schema.Array(
 	Schema.Struct({ title: Schema.String, $distance: Schema.optionalKey(Schema.Number) })
 );
 const Page = Schema.Struct({ rows: Titles, next: Schema.Null });
-const setup = (embed?: Ai['Service']['embed']) =>
+// one workspace per file: each test swaps the embeddings port's answer and starts from empty tables
+let answer: Ai['Service']['embed'] = () => Port.unavailable('ai.embed');
+const workspace = TestWorkspace.layer({
+	manifest,
+	ports: Layer.succeed(Ai, {
+		ask: respondSystem1,
+		maxChoices: undefined,
+		models: ['small'],
+		catalog: Effect.succeed({ models: [{ id: 'small', label: 'Small' }], default: 'small' }),
+		infer: () => Stream.fail(Port.failure('ai')(new Error('unused'))),
+		embed: (inputs, model, dimensions) => answer(inputs, model, dimensions)
+	})
+});
+const setup = (embed: Ai['Service']['embed'] = () => Port.unavailable('ai.embed')) =>
 	Effect.gen(function* () {
-		const ports =
-			embed === undefined
-				? {}
-				: {
-						ports: Layer.succeed(Ai, {
-							ask: respondSystem1,
-							maxChoices: undefined,
-							models: ['small'],
-							catalog: Effect.succeed({
-								models: [{ id: 'small', label: 'Small' }],
-								default: 'small'
-							}),
-							infer: () => Stream.fail(Port.failure('ai')(new Error('unused'))),
-							embed
-						})
-					};
-		const context = yield* Layer.build(TestWorkspace.layer({ manifest, ...ports }));
+		answer = embed;
+		const context = yield* Effect.context<TestWorkspace | WorkspaceServices>();
 		const t = Context.get(context, TestWorkspace),
 			route = yield* routeFixture(context),
 			authority = t.as(t.admin).authority;
+		yield* t.db.write({ text: 'TRUNCATE docs, sys_run, bolt_history CASCADE', params: [] });
 		const act = (callable: string, input: Json) =>
 			actReply(route, authority, { callable, input, issuedAt: t.clock.now() }).pipe(
 				Effect.map((reply) => reply.outcome)
@@ -118,8 +117,9 @@ const setup = (embed?: Ai['Service']['embed']) =>
 		return { context, t, route, act, read, run };
 	});
 
+layer(workspace, { excludeTestServices: true })('p3 gaps', (it) => {
 describe('search.semantic embeddings (rule 16)', () => {
-	it.live(
+	it.effect(
 		'a create queues bolt.embed with its native commit; the run embeds after commit; only a source-field change makes it stale again',
 		() =>
 			Effect.gen(function* () {
@@ -153,7 +153,7 @@ describe('search.semantic embeddings (rule 16)', () => {
 			})
 	);
 
-	it.live(
+	it.effect(
 		'without an embeddings port the queued run fails unavailable and the vector stays missing',
 		() =>
 			Effect.gen(function* () {
@@ -184,7 +184,7 @@ const docs = (
 	);
 
 describe('semantic similarity over search.semantic (L-BOLT-123)', () => {
-	it.live(
+	it.effect(
 		'query search.semantic ranks text and record probes by the embedding; /semantic fuses it with the lexical hit',
 		() =>
 			Effect.gen(function* () {
@@ -224,7 +224,7 @@ describe('semantic similarity over search.semantic (L-BOLT-123)', () => {
 			})
 	);
 
-	it.live(
+	it.effect(
 		'the run and the probe both ask for the declared width, and a host that ignores it fails here, not in pgvector',
 		() =>
 			Effect.gen(function* () {
@@ -239,39 +239,34 @@ describe('semantic similarity over search.semantic (L-BOLT-123)', () => {
 					});
 				const native: Ai['Service']['embed'] = (inputs) =>
 					Effect.succeed(inputs.map(() => [1, 0, 0, 1]));
-				const workspace = (port: Ai['Service']['embed']) =>
-					Effect.gen(function* () {
-						const fixture = yield* setup(port);
-						yield* fixture.act('docs.create', [{ title: 'desk' }]);
-						return fixture;
-					});
-				const probe = (fixture: Effect.Success<ReturnType<typeof workspace>>) =>
+				const fixture = yield* setup(native);
+				yield* fixture.act('docs.create', [{ title: 'desk' }]);
+				const probe = () =>
 					docs(fixture.read, { semantic: 'table' }, 2, {
 						now: '2026-01-01T00:00:00.000Z',
 						today: '2026-01-01',
 						tz: 'UTC'
 					});
-				const off = yield* workspace(native);
-				expect((yield* off.run.pipe(Effect.flip)).message).toMatch(
+				expect((yield* fixture.run.pipe(Effect.flip)).message).toMatch(
 					/'small' answered a 4-wide vector, not the 3 it was asked for/
 				);
-				expect(yield* probe(off).pipe(Effect.flip)).toMatchObject({
+				expect(yield* probe().pipe(Effect.flip)).toMatchObject({
 					code: 'badAnswer',
 					phase: 'facility',
 					message: 'The embedding width differs from its declared dimension.'
 				});
-				const fixture = yield* workspace(embed);
+				answer = embed;
 				yield* fixture.run;
-				expect(
-					required((yield* Schema.decodeUnknownEffect(Page)(yield* probe(fixture))).rows[0]).title
-				).toBe('desk');
+				expect(required((yield* Schema.decodeUnknownEffect(Page)(yield* probe())).rows[0]).title).toBe(
+					'desk'
+				);
 				expect(asked).toEqual([3, 3]);
 			})
 	);
 });
 
 describe('erase and the live lane (rules 38e, 50, 66)', () => {
-	it.live('an erase re-answers the views that showed the row and queues no triggered run', () =>
+	it.effect('an erase re-answers the views that showed the row and queues no triggered run', () =>
 		Effect.gen(function* () {
 			const { context, t, act } = yield* setup();
 			const id = created(yield* act('docs.create', [{ title: 'desk' }]));
@@ -321,7 +316,7 @@ describe('erase and the live lane (rules 38e, 50, 66)', () => {
 });
 
 describe('start over /__bolt/act (rules 24, 31)', () => {
-	it.live(
+	it.effect(
 		'takes a uuidv7 minted within 24 h; a v4 or a stale id is invalidInput; a resend is the same run',
 		() =>
 			Effect.gen(function* () {
@@ -367,4 +362,5 @@ describe('start over /__bolt/act (rules 24, 31)', () => {
 				).toEqual([{ n: 1 }]);
 			})
 	);
+});
 });

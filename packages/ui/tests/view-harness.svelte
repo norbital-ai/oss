@@ -1,25 +1,35 @@
 <script lang="ts" module>
+	// Each fixture passes the view component it mounts (`view`): a file loads only the components it uses.
 	import type { ComponentProps } from 'svelte';
 	import type { KindsHost } from '../src/kinds/context.js';
 	import type { ViewBolt } from '../src/client/contract.js';
-	import NativeTable, { type TableSource } from '../src/table/Table.svelte';
-	const Table = NativeTable<TableSource>;
+	import type NativeTable from '../src/table/Table.svelte';
+	import type { TableSource } from '../src/table/Table.svelte';
+	import type Board from '../src/board/Board.svelte';
+	import type Matrix from '../src/matrix/Matrix.svelte';
+	import type RecordShell from '../src/record/RecordShell.svelte';
+	import type PointInput from '../src/kinds/point-input.svelte';
+	import type Picker from '../src/kinds/picker.svelte';
+	import type Form from '../src/form/form.svelte';
+	import type ApprovalPanel from '../src/approval/ApprovalPanel.svelte';
+	import type ChildGrid from '../src/relations/ChildGrid.svelte';
+	type Table = typeof NativeTable<TableSource>;
 	export type ViewPart =
-		| { part: 'table'; props: ComponentProps<typeof Table> }
+		| { part: 'table'; view: Table; props: ComponentProps<Table> }
 		| {
 				part: 'matrix';
+				view: typeof Matrix;
 				props: ComponentProps<typeof Matrix>;
 				onTrailing?: () => void;
 				onColumn?: (col: import('../src/client/contract.js').Json) => void;
 		  }
-		| { part: 'board'; props: ComponentProps<typeof Board> }
-		| { part: 'record'; props: ComponentProps<typeof RecordShell> }
-		| { part: 'point'; props: ComponentProps<typeof PointInput> }
-		| { part: 'picker'; props: ComponentProps<typeof Picker> }
-		| { part: 'form'; props: ComponentProps<typeof Form> }
-		| { part: 'approval'; props: ComponentProps<typeof ApprovalPanel> }
-		| { part: 'child'; props: ComponentProps<typeof ChildGrid> }
-		| { part: 'childCustom'; props?: Record<string, never> };
+		| { part: 'board'; view: typeof Board; props: ComponentProps<typeof Board> }
+		| { part: 'record'; view: typeof RecordShell; props: ComponentProps<typeof RecordShell> }
+		| { part: 'point'; view: typeof PointInput; props: ComponentProps<typeof PointInput> }
+		| { part: 'picker'; view: typeof Picker; props: ComponentProps<typeof Picker> }
+		| { part: 'form'; view: typeof Form; props: ComponentProps<typeof Form> }
+		| { part: 'approval'; view: typeof ApprovalPanel; props: ComponentProps<typeof ApprovalPanel> }
+		| { part: 'child'; view: typeof ChildGrid; props: ComponentProps<typeof ChildGrid> };
 	export type ViewHarnessProps = {
 		catalog: NonNullable<KindsHost['catalog']>;
 		automations?: KindsHost['automations'];
@@ -34,25 +44,16 @@
 </script>
 
 <script lang="ts">
-	// Mounts a view under a scripted `bolt` and catalog: a Table, a Board, a Form, or a RecordShell inside a Sheet.
+	// Mounts the fixture's view under a scripted `bolt` and catalog; a RecordShell inside a Sheet.
 	import { Layer, ManagedRuntime } from 'effect';
 	import { onDestroy } from 'svelte';
 	import { mountEdge } from '../src/effect/index.js';
 	import { provideKinds } from '../src/kinds/context.js';
-	import PointInput from '../src/kinds/point-input.svelte';
-	import Picker from '../src/kinds/picker.svelte';
 	import Sheet from '../src/primitives/sheet/sheet.svelte';
 	import { provideBolt } from '../src/client/context.js';
-	import Board from '../src/board/Board.svelte';
-	import Matrix from '../src/matrix/Matrix.svelte';
 	import Button from '../src/primitives/button/button.svelte';
 	import Icon from '../src/primitives/icon/icon-wrapper.svelte';
 	import type { BoardProps } from '../src/board/Board.svelte';
-	import Form from '../src/form/form.svelte';
-	import RecordShell from '../src/record/RecordShell.svelte';
-	import ApprovalPanel from '../src/approval/ApprovalPanel.svelte';
-	import ChildGrid from '../src/relations/ChildGrid.svelte';
-	import ChildCustom from './child-custom-harness.svelte';
 
 	let fixture: ViewHarnessProps = $props();
 	onDestroy(mountEdge(ManagedRuntime.make(Layer.empty)));
@@ -98,14 +99,14 @@
 </script>
 
 {#if fixture.part === 'table'}
-	<Table
+	<fixture.view
 		{...fixture.props}
 		{...tableSource === undefined ? {} : { of: tableSource }}
 		{...tableColumns === undefined ? {} : { columns: tableColumns }}
 		{...tableScope === undefined ? {} : { where: tableScope }}
 	/>
 {:else if fixture.part === 'board'}
-	<Board {...fixture.props} {...boardScope === undefined ? {} : { where: boardScope }} />
+	<fixture.view {...fixture.props} {...boardScope === undefined ? {} : { where: boardScope }} />
 {:else if fixture.part === 'matrix'}
 	{#snippet trailing()}
 		<Button
@@ -124,25 +125,23 @@
 	})}
 		<Button variant="ghost" size="sm" onclick={() => fixture.onColumn?.(col)}>{label}</Button>
 	{/snippet}
-	<Matrix
+	<fixture.view
 		{...fixture.props}
 		{...fixture.onColumn === undefined ? {} : { columnHeader }}
 		{...fixture.onTrailing === undefined
 			? {}
 			: { toolbar: { ...(fixture.props.toolbar || {}), trailing } }}
 	/>
+{:else if fixture.part === 'record'}
+	<Sheet open title="jobs"><fixture.view {...fixture.props} /></Sheet>
 {:else if fixture.part === 'point'}
-	<PointInput {...fixture.props} />
-{:else if fixture.part === 'form'}
-	<Form {...fixture.props} />
-{:else if fixture.part === 'approval'}
-	<ApprovalPanel {...fixture.props} />
-{:else if fixture.part === 'child'}
-	<ChildGrid {...fixture.props} />
-{:else if fixture.part === 'childCustom'}
-	<ChildCustom />
+	<fixture.view {...fixture.props} />
 {:else if fixture.part === 'picker'}
-	<Picker {...fixture.props} />
+	<fixture.view {...fixture.props} />
+{:else if fixture.part === 'form'}
+	<fixture.view {...fixture.props} />
+{:else if fixture.part === 'approval'}
+	<fixture.view {...fixture.props} />
 {:else}
-	<Sheet open title="jobs"><RecordShell {...fixture.props} /></Sheet>
+	<fixture.view {...fixture.props} />
 {/if}

@@ -25,6 +25,7 @@ import type { IntegrationSpec } from '../decl/runtime/integration.ts';
 import type { KioskSpec } from '../decl/runtime/kiosk.ts';
 import { SYSTEM } from '../system/index.ts';
 import { ManifestInvalid } from './errors.ts';
+import { NEEDS, needsOf } from '../facilities/needs.ts';
 
 // ── parts without a decl type of their own: the literal as the manifest holds it ──
 /** A `history` (or identity read) scope: `true` or a `Where`. */
@@ -190,7 +191,7 @@ const Agent = Schema.Struct({
 	skills: Schema.Record(Schema.String, SkillSchema)
 });
 
-export const EngineManifestSchema = Schema.Struct({
+const manifestFields = {
 	workspace: Workspace,
 	models: Schema.Record(Schema.String, ModelData),
 	relationships: parts<RelationshipSpec>('relationship'),
@@ -212,17 +213,30 @@ export const EngineManifestSchema = Schema.Struct({
 	groups: Schema.optionalKey(parts<GroupSpec>('group')),
 	customFields: parts<CustomFieldData>('custom field'),
 	agent: Agent
+};
+export const EngineManifestSchema = Schema.Struct({
+	...manifestFields,
+	/** What the bundle needs from its host (`@norbital-ai/bolt/facilities`), recorded at build. */
+	needs: Schema.Array(Schema.Literals(NEEDS))
 });
 /** Pure data: declaration literals by path-derived name, bodies stripped (they run in the guest). */
 export type EngineManifest = Schema.Schema.Type<typeof EngineManifestSchema>;
 
-const decode = Schema.decodeUnknownResult(EngineManifestSchema, {
-	errors: 'all',
-	onExcessProperty: 'error'
-});
-/** The one manifest decoder (A.4): `bolt check`'s evaluated manifest and every artifact read. */
+const options = { errors: 'all', onExcessProperty: 'error' } as const;
+const decode = Schema.decodeUnknownResult(EngineManifestSchema, options),
+	decodeProjected = Schema.decodeUnknownResult(Schema.Struct(manifestFields), options);
+const invalid = (e: Schema.SchemaError) => new ManifestInvalid({ issues: e.message.split('\n') });
+/** The one manifest decoder (A.4): every artifact read. */
 export const decodeManifest = (u: unknown): Result.Result<EngineManifest, ManifestInvalid> =>
-	Result.mapError(decode(u), (e) => new ManifestInvalid({ issues: e.message.split('\n') }));
+	Result.mapError(decode(u), invalid);
+/** `bolt check`'s evaluated manifest (`projectManifest`), decoded, with its needs recorded. */
+export const decodeProjectedManifest = (
+	u: unknown
+): Result.Result<EngineManifest, ManifestInvalid> =>
+	Result.mapBoth(decodeProjected(u), {
+		onFailure: invalid,
+		onSuccess: (m) => ({ ...m, needs: needsOf(m) })
+	});
 
 const object = (v: unknown): { readonly [key: string]: unknown } =>
 	Predicate.isObject(v) ? v : {};
@@ -316,7 +330,7 @@ export function projectManifest(m: Manifest): unknown {
 }
 /** A loaded manifest the caller has already checked, decoded; a refusal throws `ManifestInvalid` (tests, fixtures). */
 export const engineManifest = (m: Manifest): EngineManifest =>
-	Result.getOrThrow(decodeManifest(projectManifest(m)));
+	Result.getOrThrow(decodeProjectedManifest(projectManifest(m)));
 
 // ── accessors: each derived once per decoded manifest ──
 const memo = <A>(derive: (m: EngineManifest) => A) => {

@@ -37,7 +37,8 @@ const manifest = {
 	envoys: {},
 	mcp: {},
 	apps: {},
-	customFields: {}
+	customFields: {},
+	needs: []
 } satisfies EngineManifest;
 
 it.live(
@@ -220,8 +221,7 @@ it.live(
 				});
 				expect(yield* status('eve', inbound.id)).toBe(200);
 			})
-		),
-	30_000
+		)
 );
 
 it.live(
@@ -243,7 +243,8 @@ it.live(
 					},
 					exposures: {
 						photos: { read: { photos: { fields: 'all' } }, create: { columns: { photos: ['name', 'photo'] } } }
-					}
+					},
+					needs: []
 				} satisfies EngineManifest;
 				const context = yield* Layer.build(TestWorkspace.layer({ manifest: filed }));
 				const t = Context.get(context, TestWorkspace),
@@ -325,7 +326,8 @@ it.live(
 							}
 						},
 						other_handover: { description: 'Another file owner', runAs: 'trigger', output: file }
-					}
+					},
+					needs: []
 				} satisfies EngineManifest;
 				const context = yield* Layer.build(TestWorkspace.layer({ manifest: handover }));
 				const t = Context.get(context, TestWorkspace),

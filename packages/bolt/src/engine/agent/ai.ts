@@ -267,9 +267,18 @@ const closed: LanguageModel.CodecTransformer = (schema) => {
 				: { ...document.schema, $defs: document.definitions }
 	};
 };
+/** Each input's JSON Schema, by the object it is derived from: a turn's later steps offer the same tools again. */
+const toolSchemas = new WeakMap<object, Json>();
 /** The JSON Schema a tool's input is offered as: a dynamic tool's raw schema, else its closed Schema document. */
-export const toolSchema = (tool: Tool.Any): Json =>
-	Schema.decodeUnknownSync(Schema.Json)(Tool.getJsonSchema(tool, { transformer: closed }));
+export const toolSchema = (tool: Tool.Any): Json => {
+	const source = Tool.isDynamic(tool) && tool.jsonSchema !== undefined ? tool.jsonSchema : tool.parametersSchema;
+	let schema = toolSchemas.get(source);
+	if (schema === undefined) {
+		schema = Schema.decodeUnknownSync(Schema.Json)(Tool.getJsonSchema(tool, { transformer: closed }));
+		toolSchemas.set(source, schema);
+	}
+	return schema;
+};
 
 /** The AI port's own content of a message or a reply part rides this provider option, so the ABI sees it unchanged. */
 const BOLT = 'bolt';
@@ -713,18 +722,6 @@ function jsonSchemaOf(k: Kind): Json {
 export const STALL_MS = 5 * 60_000;
 /** Turns that may finish the answer once tools end: a submission the output or rules refuse is repaired, not lost. */
 const FINAL_TURNS = 3;
-/** One persisted step of an inference: what its turn added to its batch's conversation, and where it left the answer. */
-const InferStep = Schema.Struct({
-	/** The index of its batch's first file. */
-	from: Schema.Int,
-	messages: Schema.Array(
-		Schema.Struct({ role: Schema.Literals(['user', 'assistant', 'tool']), content: Schema.Json })
-	),
-	draft: Schema.Json,
-	turns: Schema.Int,
-	spent: Schema.Boolean
-});
-
 /** A rule the answer must hold beside its shape: CEL over the answer's top-level properties, and what to say when it fails. */
 type Rule = { expression: string; message: string };
 /** `output` as a JSON Schema (draft 2020-12) for the structure and CEL `rules` for the logic, instead of a declared kind. */
@@ -888,16 +885,6 @@ export function inferFacility(
 		onDraft?: (name: string, input: Json) => Effect.Effect<void>;
 		/** Each message of the transcript as it is written: the host keeps the inference's whole conversation. */
 		onMessage?: (message: AiMessage, index: number) => Effect.Effect<void>;
-		/** Rebuild the transcript from its durable steps, in their original order. */
-		onResume?: () => Effect.Effect<void>;
-		/**
-		 * Durable steps (a run's journal): `done` are the steps an earlier attempt persisted, which it resumes after; each
-		 * tool turn is persisted with `persist`, so a lost host costs at most the step in flight.
-		 */
-		steps?: {
-			readonly done: readonly Json[];
-			readonly persist: (index: number, step: Json) => Effect.Effect<void>;
-		};
 	} = {}
 ) {
 	return Effect.fn('Ai.inferFacility')(function* (
@@ -978,18 +965,8 @@ export function inferFacility(
 								: null;
 		/** What `diff` compares against: the draft the call started from. */
 		const original = draft;
-		// a resumed inference goes on after its last persisted step: its batch's conversation and answer as they were
-		const done = (options.steps?.done ?? []).flatMap((step) =>
-			Option.toArray(Schema.decodeUnknownOption(InferStep)(step))
-		);
-		const resumed = done.at(-1);
-		if (resumed !== undefined) draft = resumed.draft;
-		const history = done.flatMap((step) => step.messages);
-		if (options.onResume !== undefined) yield* options.onResume();
 		const onMessage = options.onMessage;
-		if (onMessage !== undefined) yield* Effect.forEach(history, onMessage, { discard: true });
-		let messageIndex = history.length;
-		let stepIndex = done.length;
+		let messageIndex = 0;
 		const clock = yield* Clock.Clock;
 		/** The last progress (a model token, a reply, a tool result): STALL_MS after it the inference ends. */
 		let progressed = clock.currentTimeMillisUnsafe();
@@ -1099,28 +1076,15 @@ export function inferFacility(
 							discard: true
 						});
 			});
-		const read = (
-			files: { mime: string; bytes: Uint8Array }[],
-			prompt: string,
-			final: boolean,
-			from: number
-		) => {
-			const at = resumed?.from === from ? resumed : undefined;
-			const messages: AiMessage[] =
-				at === undefined
-					? [{ role: 'user', content: prompt }]
-					: done.filter((step) => step.from === from).flatMap((step) => [...step.messages]);
-			// the transcript already holds a resumed conversation
-			if (at !== undefined) recorded.set(messages, messages.length);
-			return batch(files, messages, final, from, at).pipe(Effect.ensuring(record(messages)));
+		const read = (files: { mime: string; bytes: Uint8Array }[], prompt: string, final: boolean) => {
+			const messages: AiMessage[] = [{ role: 'user', content: prompt }];
+			return batch(files, messages, final).pipe(Effect.ensuring(record(messages)));
 		};
 		/** One conversation over one batch of files; a batch before the last hands back its draft unchecked. */
 		const batch = Effect.fn('Ai.inferBatch')(function* (
 			files: { mime: string; bytes: Uint8Array }[],
 			messages: AiMessage[],
-			final: boolean,
-			from: number,
-			at: typeof InferStep.Type | undefined
+			final: boolean
 		): Effect.fn.Return<CrossAnswer, PortFailure> {
 			const settle = (value: Json): CrossAnswer => (final ? decoded(value) : { ok: true, value });
 			let text = '',
@@ -1130,12 +1094,10 @@ export function inferFacility(
 				failures = 0,
 				stalls = 0,
 				idles = 0,
-				turns = at?.turns ?? 0,
-				spent = at?.spent ?? false,
+				turns = 0,
+				spent = false,
 				finals = 0,
 				finished = false,
-				// a fresh batch's first step carries its prompt
-				persisted = at === undefined ? 0 : messages.length,
 				last: CrossAnswer | undefined;
 			for (;;) {
 				// `steps` spent and the final, tool-less turn answered without a valid answer: a draft that holds one still stands
@@ -1391,17 +1353,6 @@ export function inferFacility(
 								: `${budget}: no more tools. Give your answer now from what you have found.`
 						});
 					}
-					// the turn is a durable step: what it added to the conversation, and the answer as it left it
-					if (options.steps !== undefined) {
-						yield* options.steps.persist(stepIndex++, {
-							from,
-							messages: messages.slice(persisted),
-							draft,
-							turns,
-							spent
-						});
-						persisted = messages.length;
-					}
 					continue;
 				}
 				if (typeof whole === 'string' && whole.trim() === '') {
@@ -1445,9 +1396,9 @@ export function inferFacility(
 				? (a.prompt ?? '')
 				: `${a.prompt ?? ''}\n\n${lead}Use other tools and more turns whenever you need to check something; once the answer is complete, call ${SUBMIT} in the same reply as your last ${EDIT}. ${a.initial === undefined ? `Build your answer with ${EDIT}, starting from ${JSON.stringify(draft)}` : `Your answer is already initialized in memory. Use ${draftRead} and ${FIND} to inspect it and ${EDIT} to change only the paths that need it`}, into this JSON Schema, then call ${SUBMIT}:\n\n\`\`\`json\n${JSON.stringify(shape, null, 2)}\n\`\`\`${rulesText}`;
 		const answering = Effect.gen(function* (): Effect.fn.Return<CrossAnswer, PortFailure> {
-			if (refs.length === 0) return yield* read([], ask(''), true, 0);
+			if (refs.length === 0) return yield* read([], ask(''), true);
 			// files load a batch at a time, so a thousand scans are never all in memory at once
-			let from = resumed?.from ?? 0;
+			let from = 0;
 			while (from < refs.length) {
 				const batch: { mime: string; bytes: Uint8Array }[] = [];
 				let bytes = 0;
@@ -1467,7 +1418,7 @@ export function inferFacility(
 					refs.length <= batch.length
 						? ''
 						: `You are reading ${refs.length} source files in batches; these are files ${from + 1}–${to}.${from === 0 ? '' : ` The draft below already holds what files 1–${from} gave: keep it, append to its lists, fill what it lacks, and change a value only where these files show it differently.`} ${final ? `These are the last files: call ${SUBMIT} when the whole answer is complete; it is then checked.` : `Add everything these files hold with ${EDIT}, then call ${SUBMIT} to move on to the next files; the answer is checked after the last batch.`}\n\n`;
-				const answer = yield* read(batch, ask(lead), final, from);
+				const answer = yield* read(batch, ask(lead), final);
 				if (!answer.ok || final) return answer;
 				draft = answer.value;
 				from = to;

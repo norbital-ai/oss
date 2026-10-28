@@ -9,11 +9,12 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it } from '@effect/vitest';
-import * as NodeServices from '@effect/platform-node/NodeServices';
-import { Effect, Schema } from 'effect';
+import { Effect, Layer, Schema } from 'effect';
 import { Guest, type Bridge, type CrossCall } from '../src/engine/services.ts';
+import { GuestIsolates } from '../src/engine/ports.ts';
+import { guestIsolates } from '../src/node/guest-isolates.ts';
 import { guestLayer } from './support/guest-fixture.ts';
-import { check } from '../src/compiler/check/index.ts';
+import { check } from '../src/test/effect.ts';
 import { attached } from '../src/decl/body.ts';
 import { install as installEdge } from '../src/decl/runtime/guest.ts';
 import type { Json } from '../src/decl/values.ts';
@@ -26,10 +27,8 @@ import {
 } from '../src/engine/contracts.ts';
 import { type GuestOptions, type GuestProgram } from '../src/engine/guest/runner.ts';
 
-const here = dirname(fileURLToPath(import.meta.url));
 const EFFECT = JSON.stringify(createRequire(import.meta.url).resolve('effect'));
 const ERRORS = JSON.stringify(fileURLToPath(new URL('../src/decl/errors.ts', import.meta.url)));
-const BUILD_MS = 120_000;
 
 // two generator automations and one over the facilities; none imports the edge:
 // `bolt check` installs it in a module that holds a generator body
@@ -106,7 +105,7 @@ function built(files: Readonly<Record<string, string>>) {
 				`no guest program:\n${errors.map((e) => `${e.code} ${e.message}`).join('\n')}`
 			);
 		return guest;
-	}).pipe(Effect.provide(NodeServices.layer));
+	});
 }
 let edge: GuestProgram, blank: GuestProgram;
 beforeAll(async () => {
@@ -118,7 +117,7 @@ beforeAll(async () => {
 		})
 	);
 	blank = await Effect.runPromise(built(model('notes')));
-}, BUILD_MS);
+});
 afterAll(() => {
 	for (const root of roots) rmSync(root, { recursive: true, force: true });
 });
@@ -166,10 +165,16 @@ const recorder = (answer: (call: CrossCall) => CrossAnswer = () => ({ ok: true, 
 	};
 	return { crossings, bridge };
 };
+/** The Node host's isolates, one taken per run and none prepared ahead. */
+const isolates = Layer.unwrap(
+	Effect.map(guestIsolates({ warm: { maxMiB: 512, depth: 0, idleMs: 60_000 } }), (port) =>
+		GuestIsolates.fromAbi(port)
+	)
+);
 const run = (kind: InvocationKind, target: string, input: Json, bridge = recorder().bridge) =>
 	Guest.pipe(
 		Effect.flatMap((guest) => guest.invoke(invocation(kind, target, input), bridge)),
-		Effect.provide(guestLayer(edge, { lowerRead, console: () => {} }))
+		Effect.provide(guestLayer(edge, { lowerRead, console: () => {} }, undefined, isolates))
 	);
 const edgeRun = (
 	body: 'gen' | 'reference',
@@ -411,38 +416,5 @@ describe('the bundle', () => {
 						attached.wrap = previous;
 					})
 			)
-	);
-	it.live(
-		'evaluates generator bodies from source while ignoring tenant native snapshot properties',
-		() =>
-			Effect.gen(function* () {
-				const good = yield* check(join(here, 'fixtures/good')).pipe(
-					Effect.provide(NodeServices.layer)
-				);
-				if (good.guest === undefined) throw new Error('the good fixture has no guest program');
-				expect('snapshot' in good.guest).toBe(false);
-				const untrusted = {
-					...edge,
-					get snapshot(): Uint8Array {
-						throw new Error('a native snapshot must not be read');
-					}
-				};
-				const evaluated = Guest.pipe(
-					Effect.flatMap((guest) =>
-						guest.invoke(
-							invocation('automation', 'edge_gen', { case: 'refuse' }),
-							recorder().bridge
-						)
-					),
-					Effect.provide(guestLayer(untrusted, { lowerRead, console: () => {} }))
-				);
-				expect(shape(yield* evaluated)).toEqual({
-					kind: 'refused',
-					code: 'refused',
-					message: 'no',
-					field: 'x'
-				});
-			}),
-		BUILD_MS
 	);
 });

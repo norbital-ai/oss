@@ -27,6 +27,7 @@ const state = {
 	}
 } as const;
 const m: EngineManifest = {
+	needs: [],
 	workspace: { tz: 'UTC', locale: 'en' },
 	models: {
 		orders: {

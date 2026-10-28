@@ -253,7 +253,6 @@ const open = Effect.fn('WhatsAppTest.open')(function* (
 	if (stored['creds'] !== undefined) yield* f.socket();
 	return h;
 });
-const wait = (ms: number) => Effect.sleep(ms);
 const sdk = <A>(read: () => Promise<A>) =>
 	Effect.tryPromise({
 		try: read,
@@ -411,7 +410,7 @@ describe('the WhatsApp Web link', () => {
 			yield* h.link.pair!({});
 			yield* f.socket(0);
 			f.opened[0]!.drop(408, 'QR refs attempts ended');
-			yield* wait(20);
+			yield* until(() => h.status?.state === 'error');
 			expect(f.opened).toHaveLength(1);
 			expect(h.status).toMatchObject({
 				state: 'error',
@@ -431,7 +430,7 @@ describe('the WhatsApp Web link', () => {
 				h = yield* open(f, { creds: CREDS });
 			f.opened[0]!.ready();
 			f.opened[0]!.drop(440, 'Stream Errored (conflict)');
-			yield* wait(20);
+			yield* until(() => h.status?.state === 'error');
 			expect(f.opened).toHaveLength(1);
 			expect(h.status).toMatchObject({ state: 'error', code: 'replaced' });
 			yield* h.link.close ?? Effect.void;
@@ -535,7 +534,6 @@ describe('the WhatsApp Web link', () => {
 			yield* until(() => h.status?.state === 'error');
 			expect(h.status).toMatchObject({ code: 'replaced' });
 			expect(s.ended).toBe(true);
-			yield* wait(20);
 			expect(f.opened).toHaveLength(1);
 			yield* h.link.close ?? Effect.void;
 		})
@@ -784,10 +782,20 @@ describe('the ingest gate', () => {
 		() =>
 			Effect.gen(function* () {
 				const f = fake();
-				const h = yield* open(f, { creds: CREDS }, { emit: () => new Promise<void>(() => {}) });
+				let storing = false;
+				const h = yield* open(
+					f,
+					{ creds: CREDS },
+					{
+						emit: () => {
+							storing = true;
+							return new Promise<void>(() => {});
+						}
+					}
+				);
 				f.opened[0]!.ready();
 				const pending = f.opened[0]!.deliver(raw('M1'));
-				yield* wait(10);
+				yield* until(() => storing);
 				yield* h.link.close ?? Effect.void;
 				yield* sdk(() => pending);
 				expect(f.opened[0]!.receipts).toEqual([]);
@@ -847,7 +855,7 @@ describe('the ingest gate', () => {
 				s.ready();
 				yield* until(() => h.status?.state === 'connected');
 				s.ev.emit('messaging-history.set', { messages: [raw('H1'), raw('H2')] });
-				yield* wait(10);
+				yield* until(() => refusals < 1);
 				yield* h.link.close ?? Effect.void;
 				expect(
 					messagesOf(h.events).map(
@@ -1238,7 +1246,6 @@ describe('deletions and deltas', () => {
 				expect(next.config.store.get('app-state-sync-key', ['AAAA'])).toEqual({ AAAA: key });
 				next.ready();
 				yield* until(() => reopened.status?.state === 'connected');
-				yield* wait(20);
 				expect(reopened.events).toEqual([]);
 				yield* reopened.link.close ?? Effect.void;
 			})

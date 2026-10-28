@@ -219,13 +219,6 @@ type ManyRelKeys<M> = View<M>['keys'];
 export type OneRels<M> = View<M>['one'];
 /** Many-relations of `M` (inverses): the inverse name → the source model. */
 export type ManyRels<M> = View<M>['many'];
-/** The FK field on the child that a many-relation of `M` runs through. */
-export type ManyRelFk<M, I> = ManyRelFkOf<M, I>;
-type ManyRelFkOf<M, I, Keys = ManyRelKeys<M>> = I extends keyof Keys
-	? Keys[I] extends `${string}.${infer F}`
-		? F
-		: never
-	: never;
 export type OneTarget<M, R> = OneTargetOf<M, R>;
 type OneTargetOf<M, R, Targets = View<M>['target']> = R extends keyof Targets
 	? Targets[R] & string
@@ -536,9 +529,6 @@ type GrantOf<P> = P extends keyof Policies
 		: never
 	: never;
 type Granted = keyof ReadGrants;
-/** A caller's value of column or FK `P` of `C`. */
-export type CallerValue<C, P> =
-	P extends Maskable<C> ? ColumnValue<C, P> | Masked : ColumnValue<C, P>;
 /** A caller's value of column or FK `F` on layer `P` of `C`, masked by the root's policies. */
 export type LayerValue<C, P, F> =
 	F extends Maskable<C, P>
@@ -575,9 +565,3 @@ type RowOf<C, Mask = Maskable<C>> = Simplify<{
 /** A stored row as write callbacks see it (`before`, `delete.check`'s rows, `ctx.db`): never masked, every stored field,
  * no seq, roll-up or computed (rule 10). */
 export type StoredRow<M> = Simplify<ColumnValues<M, WritableField<M> | keyof SystemColumns<M>>>;
-export type WorkspaceReadField<M> = (
-	WritableField<M> | OfKind<M, { kind: 'seq' }> | keyof SystemColumns<M>
-) &
-	(keyof Columns<M> | keyof OneRels<M>);
-/** Explicit workspace projections also admit existing engine-assigned sequence labels; never roll-ups or computed fields. */
-export type WorkspaceReadRow<M> = Simplify<ColumnValues<M, WorkspaceReadField<M>>>;

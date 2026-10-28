@@ -3,7 +3,6 @@
 import { randomUUID } from 'node:crypto';
 import { Effect, FiberSet, Semaphore } from 'effect';
 import { FirstSyncs, ProviderRuntime, type ProviderDef, type LinkDef } from '../src/abi.ts';
-import { ProviderUnavailable } from '../src/errors.ts';
 import {
 	oauthClientOf,
 	type DriverEvent,
@@ -167,15 +166,11 @@ export const host = Effect.fn('ProviderTest.host')(function* (
 });
 export const json = (v: unknown, status = 200) => Response.json(v, { status });
 export const signal = () => AbortSignal.timeout(5_000);
-export const until = (ok: () => boolean, ms = 8000) =>
+/** Turns the event loop until `ok` holds, reading no clock; a mechanism that never gets there fails by the test's timeout. */
+export const until = (ok: () => boolean) =>
 	Effect.gen(function* () {
-		while (!ok()) yield* Effect.sleep('10 millis');
-	}).pipe(
-		Effect.timeoutOrElse({
-			duration: ms,
-			orElse: () => Effect.fail(new ProviderUnavailable({ message: 'timed out' }))
-		})
-	);
+		while (!ok()) yield* Effect.promise(() => new Promise<void>((resolve) => setTimeout(resolve, 0)));
+	});
 /** The messages an event carries (`[]` for any other event). */
 export const messagesOf = (events: readonly DriverEvent[]) =>
 	events.flatMap((e) => (e.kind === 'messages' ? e.messages : []));

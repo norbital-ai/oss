@@ -1,14 +1,14 @@
 /// <reference types="node" />
 import { describe, expect, it } from '@effect/vitest';
-import { Context, Effect, Exit, Fiber, Layer, Result, Schedule, Scope } from 'effect';
-import type ivm from 'isolated-vm';
-import { vi } from 'vitest';
+import { Context, Effect, Exit, Fiber, Layer, Result, Scope } from 'effect';
+import ivm from 'isolated-vm';
 import { LIMITS, type Invocation } from '../src/engine/contracts.ts';
 import type { GuestProgram } from '../src/engine/guest/runner.ts';
 import { GuestIsolates } from '../src/engine/ports.ts';
 import { Guest, type Bridge } from '../src/engine/services.ts';
 import { guestIsolates } from '../src/node/guest-isolates.ts';
 import { guestLayer } from './support/guest-fixture.ts';
+import { until } from './support/turns.ts';
 
 type Gate = {
 	allowed: Promise<void>;
@@ -18,60 +18,49 @@ type Gate = {
 	enter(): void;
 	drop(): void;
 };
-const observed = vi.hoisted(() => ({
+const observed = {
 	produced: 0,
 	consumed: new Set<ivm.ExternalCopy<unknown>>(),
 	gate: undefined as Gate | undefined
-}));
-
-vi.mock('isolated-vm', async (importOriginal) => {
-	const original = await importOriginal<{ default: typeof ivm }>();
-	const native = original.default;
-	const Isolate = new Proxy(native.Isolate, {
-		construct(target, args: unknown[], newTarget) {
-			const value: unknown = Reflect.construct(target, args, newTarget);
-			if (!(value instanceof native.Isolate)) throw new Error('Expected the real native isolate');
-			let held: Gate | undefined;
-			return new Proxy(value, {
-				get(isolate, property) {
-					const member: unknown = Reflect.get(isolate, property, isolate);
-					if (property === 'compileModule' && typeof member === 'function')
-						return (...values: unknown[]) => {
-							const options = values[1];
-							if (typeof options === 'object' && options !== null) {
-								if ('produceCachedData' in options && options.produceCachedData === true)
-									observed.produced++;
-								if ('cachedData' in options && options.cachedData instanceof native.ExternalCopy) {
-									observed.consumed.add(options.cachedData);
-									held = observed.gate;
-								}
-							}
-							const result: unknown = Reflect.apply(member, isolate, values);
-							if (held === undefined) return result;
-							if (!(result instanceof Promise))
-								throw new Error('Expected the native compilation promise');
-							const gate = held;
-							return result.then(async (module: unknown) => {
-								gate.enter();
-								await gate.allowed;
-								return module;
-							});
-						};
-					if (property === 'dispose' && typeof member === 'function')
-						return () => {
-							const result: unknown = Reflect.apply(member, isolate, []);
-							held?.drop();
-							return result;
-						};
-					return typeof member === 'function' ? member.bind(isolate) : member;
-				}
-			});
+};
+/** A real isolate whose module compiles are observed: cache produced, cache consumed, and an optional hold. */
+const observedIsolate = (memoryLimit: number): ivm.Isolate => {
+	const isolate = new ivm.Isolate({ memoryLimit });
+	let held: Gate | undefined;
+	return new Proxy(isolate, {
+		get(target, property) {
+			const member: unknown = Reflect.get(target, property, target);
+			if (property === 'compileModule' && typeof member === 'function')
+				return (...values: unknown[]) => {
+					const options = values[1];
+					if (typeof options === 'object' && options !== null) {
+						if ('produceCachedData' in options && options.produceCachedData === true)
+							observed.produced++;
+						if ('cachedData' in options && options.cachedData instanceof ivm.ExternalCopy) {
+							observed.consumed.add(options.cachedData);
+							held = observed.gate;
+						}
+					}
+					const result: unknown = Reflect.apply(member, target, values);
+					if (held === undefined) return result;
+					if (!(result instanceof Promise)) throw new Error('Expected the native compilation promise');
+					const gate = held;
+					return result.then(async (module: unknown) => {
+						gate.enter();
+						await gate.allowed;
+						return module;
+					});
+				};
+			if (property === 'dispose' && typeof member === 'function')
+				return () => {
+					const result: unknown = Reflect.apply(member, target, []);
+					held?.drop();
+					return result;
+				};
+			return typeof member === 'function' ? member.bind(target) : member;
 		}
 	});
-	const measured: typeof ivm = Object.create(native);
-	Object.defineProperty(measured, 'Isolate', { value: Isolate, enumerable: true });
-	return { ...original, default: measured };
-});
+};
 
 const invocation = (id: string): Invocation => ({
 	id,
@@ -99,7 +88,7 @@ const program = (value: string): GuestProgram => ({
 /** The Node host's isolates; its pool reads `warm` live. */
 const harness = Effect.gen(function* () {
 	const warm = { maxMiB: 512, depth: 2, idleMs: 60_000 };
-	const port = yield* guestIsolates({ cpuMs: LIMITS.guestCpuMs, warm });
+	const port = yield* guestIsolates({ cpuMs: LIMITS.guestCpuMs, warm, isolate: observedIsolate });
 	const counts = Effect.sync(port.counts);
 	return {
 		warm,
@@ -108,15 +97,7 @@ const harness = Effect.gen(function* () {
 			Layer.build(guestLayer(source, {}, undefined, GuestIsolates.fromAbi(port))).pipe(
 				Effect.map((context) => Context.get(context, Guest))
 			),
-		settled: counts.pipe(
-			Effect.repeat({
-				schedule: Schedule.spaced('5 millis'),
-				until: (counts) => counts.preparing === 0,
-				times: 400
-			}),
-			Effect.tap((counts) => Effect.sync(() => expect(counts.preparing).toBe(0))),
-			Effect.asVoid
-		)
+		settled: until(Effect.map(counts, (counts) => counts.preparing === 0))
 	};
 });
 const reset = () => {

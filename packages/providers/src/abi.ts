@@ -9,6 +9,7 @@ import {
 	type DriverPage,
 	type Json,
 	type Link,
+	type LocalText,
 	type OutboundAttachment,
 	type Provider
 } from '@norbital-ai/bolt/engine';
@@ -56,8 +57,26 @@ export type LinkDef = {
 	readonly renew?: (() => Effect.Effect<string | null, ProviderFailure>) | undefined;
 	readonly webhook?: ((request: Request) => Effect.Effect<Response, ProviderFailure>) | undefined;
 };
+/** Operator text a built-in provider writes, in every locale the shell ships: `zh` is required, never a bare string. */
+export type ProviderText = { readonly en: string; readonly zh: string };
+/** `T` with each `LocalText` it holds (setup labels, hints, steps, names) as `ProviderText`. */
+type Translated<T> = [T] extends [LocalText]
+	? [LocalText] extends [T]
+		? ProviderText
+		: T
+	: T extends PromiseLike<unknown>
+		? T
+		: T extends (...args: infer A) => infer R
+		? (...args: A) => Translated<R>
+		: T extends readonly (infer E)[]
+			? readonly Translated<E>[]
+			: T extends object
+				? { readonly [K in keyof T]: Translated<T[K]> }
+				: T;
 /** A provider written as Effects: `open` acquires the link's resources in the scope `close` ends. */
-export type ProviderDef = Omit<Provider, 'open'> & {
+export type ProviderDef = Translated<Omit<Provider, 'open' | 'describe'>> & {
+	/** Labels the workspace's own definition authored pass through untranslated. */
+	readonly describe?: NonNullable<Provider['describe']>;
 	readonly _tag: 'ProviderDef';
 	readonly open: (
 		ctx: DriverOpen

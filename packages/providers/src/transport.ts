@@ -8,26 +8,6 @@ import {
 import type { Json } from '@norbital-ai/bolt/engine';
 import { answerFailure, ProviderRefused, ProviderUnavailable } from './errors.ts';
 
-export type TransportDef = {
-	readonly send: (
-		message: Json
-	) => Effect.Effect<
-		{ readonly providerId: string },
-		ProviderRefused | ProviderUnavailable,
-		HttpClient.HttpClient
-	>;
-};
-export type PhoneVerifierDef = {
-	readonly via: readonly ('sms' | 'whatsapp')[];
-	readonly start: (
-		to: string,
-		via: 'sms' | 'whatsapp'
-	) => Effect.Effect<void, ProviderRefused | ProviderUnavailable, HttpClient.HttpClient>;
-	readonly check: (
-		to: string,
-		code: string
-	) => Effect.Effect<boolean, ProviderRefused | ProviderUnavailable, HttpClient.HttpClient>;
-};
 const Address = Schema.Union([Schema.String, Schema.Array(Schema.String)]);
 export const Email = Schema.Struct({
 	to: Address,

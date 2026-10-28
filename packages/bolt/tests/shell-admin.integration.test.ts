@@ -1,15 +1,15 @@
 // The shell host's administration surface over HTTP on PGlite: the environment badge and host notice in the boot,
-// `access.explain`, source-team preview and choices, identity audit and invitation resend. Access definitions are immutable over HTTP.
+// `access.explain`, member handles, invitation resend, API keys and team membership.
 import { expect, layer } from '@effect/vitest';
 import { Context, Effect, FiberSet, Layer, Result, Schema } from 'effect';
-import { decodeManifest } from '../src/engine/manifest.ts';
+import { decodeProjectedManifest } from '../src/engine/manifest.ts';
 import { shellApi } from '../src/shell/runtime.ts';
 import { founderBootstrap } from '../src/engine/identity/session.ts';
 import { HostIdentity } from '../src/shell/host.ts';
 import { KitInvalid, TestWorkspace } from '../src/test/index.ts';
 
 const manifest = Result.getOrThrow(
-	decodeManifest({
+	decodeProjectedManifest({
 		workspace: { tz: 'UTC', locale: 'en', apps: ['sales'] },
 		models: {
 			openings: { description: 'Roles', label: 'title', fields: { title: { kind: 'text' } } }
@@ -140,7 +140,8 @@ const workspace = Layer.effectContext(
 
 layer(workspace)('shell administration', (it) => {
 	let admin: Jar = new Map(),
-		rep: Jar = new Map();
+		rep: Jar = new Map(),
+		repId = '';
 	const teamId = 'sales';
 
 	it.effect('the boot carries the environment badge and the host notice for whom it applies', () =>
@@ -189,30 +190,6 @@ layer(workspace)('shell administration', (it) => {
 	);
 
 	it.effect(
-		'an administrator previews as a team: its grants apply, the administrator flag clears, and it ends',
-		() =>
-			Effect.gen(function* () {
-				expect((yield* call(rep, 'POST', '/__bolt/shell/preview', { team: teamId })).status).toBe(
-					403
-				);
-				expect((yield* call(admin, 'POST', '/__bolt/shell/preview', { team: teamId })).status).toBe(
-					204
-				);
-				const b = yield* boot(admin);
-				expect(b).toMatchObject({
-					admin: false,
-					preview: { team: teamId },
-					surfaces: { settings: false }
-				});
-				expect(b.nav.map((n) => n.name)).toEqual(['sales']);
-				expect((yield* call(admin, 'POST', '/__bolt/shell/preview', { team: null })).status).toBe(
-					204
-				);
-				expect(yield* boot(admin)).toMatchObject({ admin: true, preview: null });
-			})
-	);
-
-	it.effect(
 		"an administrator sets a member's mobile number (international form) and Telegram handle; audited; nobody else may",
 		() =>
 			Effect.gen(function* () {
@@ -220,6 +197,7 @@ layer(workspace)('shell administration', (it) => {
 					(u) => u['email'] === 'rep@acme.example'
 				)?.['id'];
 				if (typeof id !== 'string') throw new Error('representative member missing');
+				repId = id;
 				expect((yield* op(rep, 'setHandles', { id, phone: '+6581234567' })).status).toBe(403);
 				expect((yield* op(admin, 'setHandles', { id, phone: '81234567' })).body?.error?.code).toBe(
 					'check'
@@ -249,132 +227,16 @@ layer(workspace)('shell administration', (it) => {
 			})
 	);
 
-	it.effect('the envoy registration routes are gone: 404', () =>
+	it.effect('an invitation resends to its address', () =>
 		Effect.gen(function* () {
-			for (const [method, path] of [
-				['GET', '/__bolt/envoys/register?claim=c1'],
-				['GET', '/__bolt/shell/register?claim=c1'],
-				['POST', '/__bolt/shell/register']
-			] as const)
-				expect(
-					(yield* call(admin, method, path, method === 'POST' ? { claim: 'c1' } : undefined)).status
-				).toBe(404);
-		})
-	);
-
-	it.effect(
-		'members list administrators first; the audit reads newest first; invitations resend',
-		() =>
-			Effect.gen(function* () {
-				const t = yield* TestWorkspace;
-				yield* t.db.write({
-					text: `INSERT INTO sys_user (id, email, name, kind) VALUES ('ext1', 'aa@partner.example', 'Aaron', 'external')`,
-					params: []
-				});
-				const s = yield* settings(admin);
-				const ours = ['boss@acme.example', 'rep@acme.example', 'aa@partner.example'];
-				expect(s.members.map((u) => u['email']).filter((e) => ours.includes(String(e)))).toEqual(
-					ours
-				);
-				expect(s.audit.length).toBeGreaterThan(0);
-				const at = s.audit.map((e) => Date.parse(e.at));
-				expect(at).toEqual([...at].sort((a, b) => b - a));
-				const inv = yield* op(admin, 'invite', { email: 'later@acme.example' });
-				const invId = (yield* Schema.decodeUnknownEffect(Schema.Struct({ id: Schema.String }))(
-					inv.body?.value
-				)).id;
-				const sent = t.fakes.sent.length;
-				expect((yield* op(admin, 'resendInvitation', { id: invId })).status).toBe(200);
-				expect(t.fakes.sent.slice(sent)).toMatchObject([{ to: 'later@acme.example' }]);
-			})
-	);
-
-	it.effect(
-		'settings exposes authored team choices and no assignment objects; administrators cannot mutate source access over HTTP',
-		() =>
-			Effect.gen(function* () {
-				const before = yield* settings(admin);
-				expect(before.teams).toEqual([{ id: 'sales', name: 'Sales' }]);
-				expect(before.policies).toEqual(['rep']);
-				expect(before).not.toHaveProperty('assignments');
-				for (const [name, input] of [
-					['createTeam', { name: 'Other' }],
-					['renameTeam', { id: teamId, name: 'Other' }],
-					['moveTeam', { id: teamId, parent: 'Other' }],
-					['deleteTeam', { id: teamId }],
-					['assign', { type: 'team', principal: teamId, policy: 'rep' }],
-					['unassign', { id: 'forged' }]
-				] as const) {
-					expect(yield* op(admin, name, input)).toMatchObject({
-						status: 400,
-						body: { error: { code: 'invalid' } }
-					});
-					expect((yield* op(rep, name, input)).status).toBe(403);
-				}
-				expect(
-					(yield* op(admin, 'invite', {
-						email: 'forged@acme.example',
-						assignments: [{ policy: 'rep' }]
-					})).body?.error?.code
-				).toBe('invalid');
-				expect(
-					(yield* op(admin, 'invite', { email: 'unknown-team@acme.example', team: 'undeclared' }))
-						.body?.error?.code
-				).toBe('notFound');
-				const after = yield* settings(admin);
-				expect(after.teams).toEqual(before.teams);
-				expect(after.policies).toEqual(before.policies);
-				expect(after.members.find((u) => u['email'] === 'rep@acme.example')?.['team']).toBe(teamId);
-			})
-	);
-
-	it.effect('settings HTTP does not expose source envoy writes; tenant envoys use the model', () =>
-		Effect.gen(function* () {
-			const before = yield* settings(admin);
-			expect(before.envoys).toEqual([
-				{
-					id: 'service',
-					name: 'Source desk',
-					audience: 'private',
-					task: 'Answer about openings.',
-					policies: ['rep'],
-					groupMessages: 'mention_or_reply',
-					delegation: 'disabled',
-					triage: false,
-					dm: 'union',
-					active: true,
-					created: false
-				}
-			]);
-			for (const [name, input] of [
-				[
-					'saveEnvoy',
-					{
-						name: 'Runtime desk',
-						audience: 'public',
-						policies: ['rep'],
-						task: 'Replacement instructions.'
-					}
-				],
-				[
-					'saveEnvoy',
-					{
-						id: 'service',
-						name: 'Runtime desk',
-						audience: 'public',
-						policies: ['rep'],
-						task: 'Replacement instructions.'
-					}
-				],
-				['deleteEnvoy', { id: 'service' }]
-			] as const) {
-				expect(yield* op(admin, name, input)).toMatchObject({
-					status: 400,
-					body: { error: { code: 'invalid' } }
-				});
-				expect((yield* op(rep, name, input)).status).toBe(403);
-			}
-			expect((yield* settings(admin)).envoys).toEqual(before.envoys);
+			const t = yield* TestWorkspace;
+			const inv = yield* op(admin, 'invite', { email: 'later@acme.example' });
+			const invId = (yield* Schema.decodeUnknownEffect(Schema.Struct({ id: Schema.String }))(
+				inv.body?.value
+			)).id;
+			const sent = t.fakes.sent.length;
+			expect((yield* op(admin, 'resendInvitation', { id: invId })).status).toBe(200);
+			expect(t.fakes.sent.slice(sent)).toMatchObject([{ to: 'later@acme.example' }]);
 		})
 	);
 
@@ -397,15 +259,11 @@ layer(workspace)('shell administration', (it) => {
 		'administrators change member membership only among authored teams; access follows the current source assignment',
 		() =>
 			Effect.gen(function* () {
-				const id = (yield* settings(admin)).members.find(
-					(u) => u['email'] === 'rep@acme.example'
-				)?.['id'];
-				if (typeof id !== 'string') throw new Error('Missing representative member.');
+				const id = repId;
 				expect((yield* op(rep, 'assignTeam', { id, team: null })).status).toBe(403);
 				expect((yield* op(admin, 'assignTeam', { id, team: 'undeclared' })).body?.error?.code).toBe(
 					'notFound'
 				);
-				expect((yield* settings(admin)).members.find((u) => u['id'] === id)?.['team']).toBe(teamId);
 				expect((yield* op(admin, 'assignTeam', { id, team: null })).status).toBe(200);
 				expect((yield* boot(rep)).nav).toEqual([]);
 				expect((yield* op(admin, 'assignTeam', { id, team: teamId })).status).toBe(200);

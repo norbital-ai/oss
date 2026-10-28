@@ -28,6 +28,8 @@ export type GuestIsolatesOptions = {
 	/** The prepared-isolate pool, read live: idle heap ceiling, depth per program, idle eviction (fixed at creation). */
 	readonly warm?:
 		{ readonly maxMiB: number; readonly depth: number; readonly idleMs: number } | undefined;
+	/** Makes one native isolate under its heap cap (default `new ivm.Isolate`). */
+	readonly isolate?: ((memoryMiB: number) => ivm.Isolate) | undefined;
 };
 export type GuestIsolateCounts = {
 	readonly live: number;
@@ -181,7 +183,12 @@ export const guestIsolates = Effect.fn('node.guestIsolates')(function* (
 				: error instanceof Error
 					? error
 					: new Error(messageOf(error));
-	const { slot, meter, cpuMs = LIMITS.guestCpuMs } = options;
+	const {
+		slot,
+		meter,
+		cpuMs = LIMITS.guestCpuMs,
+		isolate: makeIsolate = (memoryLimit: number) => new ivm.Isolate({ memoryLimit })
+	} = options;
 	const over = failure(
 		'cpuBudget',
 		`the invocation used its ${typeof cpuMs === 'number' ? cpuMs : LIMITS.guestCpuMs} ms of guest CPU`
@@ -252,7 +259,7 @@ export const guestIsolates = Effect.fn('node.guestIsolates')(function* (
 		Effect.gen(function* () {
 			// Native snapshots contain machine code; tenant programs are evaluated only as source.
 			const isolate = yield* Effect.try({
-				try: () => new ivm.Isolate({ memoryLimit: key.memoryMiB }),
+				try: () => makeIsolate(key.memoryMiB),
 				catch: fault(key.memoryMiB)
 			});
 			const cpuStart = isolate.cpuTime;

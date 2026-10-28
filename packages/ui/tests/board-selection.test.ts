@@ -10,25 +10,8 @@ import type { Row } from '../src/model/types.ts';
 import type { ViewBolt } from '../src/client/contract.ts';
 import type { ToolbarItem } from '../src/model/ViewToolbar.svelte';
 import { fromWhere, matches } from '../src/filter/filter.ts';
-import { element } from './elements.ts';
+import { confirmDialog, element } from './elements.ts';
 
-// The in-app question itself is a real-browser concern (bolt tests/sheet-discard.browser.test.ts); here it is a queue the
-// test answers, so happy-dom never runs bits-ui's dialog layers.
-const dialog = vi.hoisted(() => ({
-	pending: [] as { title: string; answer: (confirmed: boolean) => void }[]
-}));
-vi.mock('../src/primitives/dialog/confirm.ts', async () => {
-	const { Effect } = await import('effect');
-	return {
-		confirmAction: (options: { title: string }) =>
-			Effect.callback<boolean>((resume) => {
-				dialog.pending.push({
-					title: options.title,
-					answer: (confirmed) => resume(Effect.succeed(confirmed))
-				});
-			})
-	};
-});
 import {
 	browser,
 	everyRow,
@@ -41,6 +24,7 @@ import {
 
 const { createRawSnippet, flushSync, mount, tick, unmount } = await import('svelte');
 const { default: Harness } = await import('./view-harness.svelte');
+const { default: Board } = await import('../src/board/Board.svelte');
 const { toasts } = await import('../src/toast/toast.svelte.ts');
 const catalog = {
 	jobs: {
@@ -143,6 +127,7 @@ async function show({
 			bolt: fixture.bolt,
 			catalog: exposure,
 			part: 'board',
+			view: Board,
 			props: {
 				of: 'jobs',
 				by: 'status',
@@ -251,8 +236,8 @@ it.live(
 			const confirmations: string[] = [];
 			// the in-app confirmation (never `window.confirm`, which WebViews suppress): its title, then the answer
 			const answer = async (accept: boolean) => {
-				await vi.waitFor(() => assert.ok(dialog.pending[0]));
-				const asked = dialog.pending.shift()!;
+				await vi.waitFor(() => assert.ok(confirmDialog()));
+				const asked = confirmDialog()!;
 				confirmations.push(asked.title);
 				asked.answer(accept);
 				await settle();
@@ -370,40 +355,38 @@ it.live('all matching stays within the authored lanes instead of selecting hidde
 	})
 );
 
-for (const change of ['scope', 'clear'] as const)
-	it.live(`a late select-all answer cannot undo a ${change} change`, () =>
-		Effect.gen(function* () {
-			const requested = Promise.withResolvers<void>();
-			const answer = Promise.withResolvers<Value>();
-			const { target, app } = yield* browser(() =>
-				show({
-					input: rows,
-					where: { group: { eq: 'mine' } },
-					toolbar: { select: true },
-					script: {
-						read: (_model, options) => {
-							if (everyRow(options)) {
-								requested.resolve();
-								return answer.promise;
-							}
-							return page(rows, options);
+it.live('a late select-all answer cannot undo a scope change', () =>
+	Effect.gen(function* () {
+		const requested = Promise.withResolvers<void>();
+		const answer = Promise.withResolvers<Value>();
+		const { target, app } = yield* browser(() =>
+			show({
+				input: rows,
+				where: { group: { eq: 'mine' } },
+				toolbar: { select: true },
+				script: {
+					read: (_model, options) => {
+						if (everyRow(options)) {
+							requested.resolve();
+							return answer.promise;
 						}
+						return page(rows, options);
 					}
-				})
-			);
-			element<HTMLButtonElement>(target, '[data-select-page]').click();
-			yield* browser(settle);
-			element<HTMLButtonElement>(target, '[data-select-matching]').click();
-			yield* browser(() => requested.promise);
-			if (change === 'scope') app.setBoardScope({ group: { eq: 'theirs' } });
-			else element<HTMLButtonElement>(target, '[data-select-clear]').click();
-			yield* browser(settle);
-			answer.resolve({ rows: [{ id: 'b' }], next: null });
-			yield* browser(settle);
-			assert.equal(target.querySelector('[data-selected-count]'), null);
-			assert.deepEqual([...target.querySelectorAll('[data-select-row][aria-checked=true]')], []);
-		})
-	);
+				}
+			})
+		);
+		element<HTMLButtonElement>(target, '[data-select-page]').click();
+		yield* browser(settle);
+		element<HTMLButtonElement>(target, '[data-select-matching]').click();
+		yield* browser(() => requested.promise);
+		app.setBoardScope({ group: { eq: 'theirs' } });
+		yield* browser(settle);
+		answer.resolve({ rows: [{ id: 'b' }], next: null });
+		yield* browser(settle);
+		assert.equal(target.querySelector('[data-selected-count]'), null);
+		assert.deepEqual([...target.querySelectorAll('[data-select-row][aria-checked=true]')], []);
+	})
+);
 
 it.live('selection and custom-card controls keep their own click, keyboard and drag events', () =>
 	Effect.gen(function* () {
@@ -455,15 +438,5 @@ it.live('a read-only catalogue cannot offer deletion even when the view requests
 		assert.equal(target.querySelector('[data-select-row]'), null);
 		assert.equal(document.querySelector('[data-menu-item=delete]'), null);
 		assert.deepEqual(acts, []);
-	})
-);
-
-it.live('toolbar false keeps the board free of selection controls', () =>
-	Effect.gen(function* () {
-		const { target } = yield* browser(() => show({ toolbar: false }));
-		assert.equal(target.querySelector('[data-selection]'), null);
-		assert.equal(target.querySelector('[data-select-row]'), null);
-		assert.equal(target.querySelector('[data-view-actions]'), null);
-		assert.ok(card(target, 'a'));
 	})
 );

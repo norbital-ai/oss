@@ -30,7 +30,6 @@ const common = {
 
 /** One field's kind: std's kind language (`@norbital-ai/std/kind`), `was` naming the field it renames. */
 export type FieldSpec = Kind & { readonly storage?: 'int64' };
-export type FieldSpecs = { readonly [name: string]: FieldSpec };
 export type FieldKind = FieldSpec['kind'];
 const arm = <K extends string, F extends Schema.Struct.Fields>(kind: K, fields: F) =>
 	Schema.Struct({ kind: Schema.Literal(kind), ...common, ...fields });

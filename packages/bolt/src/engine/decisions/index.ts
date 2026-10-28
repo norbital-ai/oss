@@ -1,4 +1,4 @@
-// Structured decisions: one schema at each boundary, one persisted event and one metering report per call.
+// Structured decisions: one schema at each boundary and one persisted event per call; the host meters at its facility.
 import {
 	Clock,
 	Context,
@@ -23,8 +23,8 @@ import {
 	type EmbedInput
 } from '../contracts.ts';
 import type { EngineManifest } from '../manifest.ts';
-import { TenantDb, type TenantDbShape } from '../db/tenant-db.ts';
-import { Ai, Logs, Metering, type AiEvent } from '../ports.ts';
+import { type TenantDbShape } from '../db/tenant-db.ts';
+import { Ai, Logs, type AiEvent } from '../ports.ts';
 import { Decisions, type DecisionUse, type ReadsShape, type ShapeOf } from '../services.ts';
 import { BoltError } from '../../protocol/errors.ts';
 import { catalogOf } from '../access/pred.ts';
@@ -291,16 +291,6 @@ export const decisionEvent = (
 				...(result.tokens === undefined ? {} : { tokens: result.tokens })
 			})
 });
-export const meter = (
-	metering: ShapeOf<typeof Metering>,
-	result: DecisionResult | FacilityError,
-	call: string
-) =>
-	failed(result)
-		? Effect.void
-		: metering
-				.record('ai', result.costUsd, `decision:${call}`)
-				.pipe(Effect.tapCause(Effect.logWarning), Effect.ignore);
 export const DecisionTrace = Context.Reference<
 	{ readonly invocation: string; readonly run: string; readonly automation: string } | undefined
 >('bolt/DecisionTrace', { defaultValue: () => undefined });
@@ -309,9 +299,7 @@ export const DecisionsLive = Layer.effect(
 	Effect.gen(function* () {
 		const ai = yield* Ai,
 			crypto = yield* Crypto.Crypto,
-			db = yield* TenantDb,
-			logs = yield* Logs,
-			metering = yield* Metering;
+			logs = yield* Logs;
 		return Decisions.of({
 			decide: Effect.fn('Decisions.decide')(function* (use, request) {
 				const trace = yield* DecisionTrace;
@@ -336,7 +324,6 @@ export const DecisionsLive = Layer.effect(
 						...(trace === undefined ? {} : { automation: trace.automation, run: trace.run })
 					}
 				});
-				yield* meter(metering, event, call);
 				if (Result.isFailure(result)) return yield* Effect.fail(result.failure);
 				return result.success;
 			})

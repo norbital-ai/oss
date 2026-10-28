@@ -1,17 +1,17 @@
 import { createTransport } from 'nodemailer';
 import { Effect, FiberSet, Scope } from 'effect';
 import type { OutboundAttachment } from '@norbital-ai/bolt/engine';
-import { connectPublic } from '@norbital-ai/bolt/node';
 import type { Socket } from 'node:net';
 import { checkServerIdentity } from 'node:tls';
 import { ProviderRefused } from '../errors.ts';
-import { mailCall, type Login, type Mailbox, type Wire } from './model.ts';
+import { mailCall, type Login, type Mailbox, type MailNet, type Wire } from './model.ts';
 
 const msgid = (value: string | undefined): value is string =>
 	value !== undefined && /^<[^<>\s]+>$/.test(value);
 
-export const smtp = (box: Mailbox, auth: Login, plain: boolean) =>
+export const smtp = (box: Mailbox, auth: Login, net: MailNet) =>
 	Effect.gen(function* () {
+		const plain = net.plain;
 		if (box.smtp === undefined)
 			return yield* Effect.fail(
 				new ProviderRefused({
@@ -39,7 +39,7 @@ export const smtp = (box: Mailbox, auth: Login, plain: boolean) =>
 						callback: (error: Error | null, answer?: { connection: Socket }) => void
 					) => {
 						void run(
-							connectPublic(server.host, server.port).pipe(
+							net.connect(server.host, server.port).pipe(
 								Effect.provideService(Scope.Scope, scope)
 							)
 						).then(
@@ -67,7 +67,7 @@ export const smtp = (box: Mailbox, auth: Login, plain: boolean) =>
 export const submit = (
 	box: Mailbox,
 	auth: Login,
-	plain: boolean,
+	net: MailNet,
 	wire: Wire,
 	mid: string,
 	headers: Record<string, string> = {},
@@ -75,7 +75,7 @@ export const submit = (
 ) =>
 	Effect.scoped(
 		Effect.gen(function* () {
-			const transport = yield* smtp(box, auth, plain);
+			const transport = yield* smtp(box, auth, net);
 			const inReplyTo = msgid(wire.inReplyTo) ? wire.inReplyTo : undefined,
 				references = (wire.references ?? []).filter(msgid);
 			yield* mailCall(`SMTP ${box.smtp?.host}`, () =>

@@ -174,10 +174,10 @@ describe('the membrane', () => {
 				if (!(request instanceof Request)) return expect.unreachable('a request crosses');
 				return request.text();
 			})();
-			await new Promise((resolve) => setTimeout(resolve, 10));
+			await new Promise((resolve) => setImmediate(resolve));
 			for (let at = 0; at < 3; at++) {
 				collect();
-				await new Promise((resolve) => setTimeout(resolve, 10));
+				await new Promise((resolve) => setImmediate(resolve));
 			}
 			chunk?.('kept');
 			await expect(text).resolves.toBe('kept');
@@ -207,7 +207,7 @@ describe('the membrane', () => {
 		const first = await reader.read();
 		expect(new TextDecoder().decode(first.value)).toBe('data: 0\n\n');
 		await reader.cancel();
-		await new Promise((resolve) => setTimeout(resolve, 10));
+		await new Promise((resolve) => setImmediate(resolve));
 		expect(canceled).toBe(true);
 		const whole = toKernel(new Response('whole'));
 		if (!(whole instanceof Response)) return expect.unreachable('a response crosses as a response');
@@ -237,7 +237,7 @@ describe('the membrane', () => {
 			process.on('unhandledRejection', listen);
 			void never();
 			kernel.close({ _tag: 'HostFailure', code: 'memory', phase: 'admission', message: 'gone' });
-			await new Promise((resolve) => setTimeout(resolve, 20));
+			await new Promise((resolve) => setImmediate(resolve));
 			process.off('unhandledRejection', listen);
 			expect(escaped).toEqual([]);
 		}

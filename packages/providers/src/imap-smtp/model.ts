@@ -1,8 +1,21 @@
 import { Effect, Option, Schema } from 'effect';
+import { connectPublic, publicDestination } from '@norbital-ai/bolt/node';
 import { OAuthRefused, ProviderRefused, ProviderUnavailable } from '../errors.ts';
 import { codeOf } from './reports.ts';
 
 export type Method = 'password' | 'microsoft' | 'google';
+/** How a mailbox reaches its servers: the destination guard, the socket it connects, and whether TLS is off. */
+export type MailNet = {
+	readonly plain: boolean;
+	readonly destination: typeof publicDestination;
+	readonly connect: typeof connectPublic;
+};
+/** The production network: the public destination guard, TLS on. */
+export const PUBLIC_NET: MailNet = {
+	plain: false,
+	destination: publicDestination,
+	connect: connectPublic
+};
 export const Server = Schema.Struct({ host: Schema.NonEmptyString, port: Schema.Number });
 export type Server = typeof Server.Type;
 const fields = {

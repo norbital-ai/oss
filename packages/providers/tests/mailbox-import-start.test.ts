@@ -1,29 +1,11 @@
 import { describe, expect, it } from '@effect/vitest';
 import { Effect, Option, Schema } from 'effect';
-import { vi } from 'vitest';
 import type { DriverOpen } from '@norbital-ai/bolt/engine';
 import { mailbox } from '../src/imap-smtp/index.ts';
 import { Cursor } from '../src/imap-smtp/model.ts';
 import { ProviderUnavailable } from '../src/errors.ts';
 import { fakeFetch, host, messagesOf, until, type Host } from './kit.ts';
-import { fakeImap } from './mail-servers.ts';
-
-vi.mock('@norbital-ai/bolt/node', async (original) => {
-	const actual = await original<typeof import('@norbital-ai/bolt/node')>();
-	const { Effect } = await import('effect');
-	return {
-		...actual,
-		publicDestination: (hostname: string, port: number) =>
-			hostname !== '127.0.0.1'
-				? actual.publicDestination(hostname, port)
-				: Effect.succeed({
-						hostname,
-						port,
-						address: { address: hostname, family: 4 },
-						addresses: [{ address: hostname, family: 4 }]
-					})
-	};
-});
+import { fakeImap, loopback } from './mail-servers.ts';
 
 const after = '2026-10-20T16:00:00.000Z';
 const since = { kind: 'since', at: after, zone: 'Asia/Singapore', origin: 'date' } as const;
@@ -43,7 +25,7 @@ const fixture = Effect.fn('MailboxImportStart.fixture')(function* () {
 		}),
 		(server) => Effect.promise(() => server.close())
 	);
-	const provider = mailbox({ plain: true }).find((provider) => provider.id === 'imap');
+	const provider = mailbox({ net: loopback }).find((provider) => provider.id === 'imap');
 	if (provider === undefined) return yield* Effect.die('The mailbox provider is missing');
 	const open = Effect.fn('MailboxImportStart.open')(function* (
 		start: DriverOpen['importStart'],

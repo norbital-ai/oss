@@ -1,10 +1,10 @@
 // A catalogue workspace: an ERP item file import and a CSV catalogue export as product syncs, a `sales` writer and a
 // `viewer` reader; a suite that needs a plain workspace with a few policies boots it.
 import { Result } from 'effect';
-import { decodeManifest } from '../src/engine/manifest.ts';
+import { decodeProjectedManifest } from '../src/engine/manifest.ts';
 
 export const manifest = Result.getOrThrow(
-	decodeManifest({
+	decodeProjectedManifest({
 		workspace: { tz: 'UTC', locale: 'en' },
 		models: {
 			products: {

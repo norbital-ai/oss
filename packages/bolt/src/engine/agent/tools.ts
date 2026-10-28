@@ -1879,7 +1879,8 @@ Related rows go inside their root row in the same call, never in a separate writ
 			{ pure: true }
 		);
 	}
-	// the platform's API reference (`@norbital-ai/bolt/docs`), narrowed to what a workspace imports; authoring is the staff's
+	// the platform's docs corpus (`@norbital-ai/bolt/docs`): the API reference narrowed to what a workspace imports, and the
+	// authoring skills; authoring is the staff's
 	const reference = x.docs;
 	if (staff && reference !== undefined) {
 		const docsTool = Tool.make('docs', {
@@ -1887,7 +1888,8 @@ Related rows go inside their root row in the same call, never in a separate writ
 				'The API reference of what a workspace can import: bolt (the declaration functions and their types), bolt/page ($bolt in pages), ' +
 				'bolt/test (the test kit), ui and ui/layout (views, field kinds, inputs, Form, primitives, layout), ui/capture and the std value libraries (std/date, std/decimal, …). ' +
 				'Nothing given lists the namespaces; query searches names, summaries and signatures; namespace lists one; symbols (up to 8, with or without namespace) ' +
-				'reads each: its signature, parameters or props, docs, examples and source. Read what you need in one call.',
+				'reads each: its signature, parameters or props, docs, examples and source. skill reads an authoring skill (SKILL.md, or one of its ' +
+				'files with file); nothing given also lists the skills. Read what you need in one call.',
 			parameters: Schema.Struct({
 				query: Schema.optionalKey(Schema.String.annotate({ description: 'words to find' })),
 				namespace: Schema.optionalKey(
@@ -1898,6 +1900,12 @@ Related rows go inside their root row in the same call, never in a separate writ
 					Schema.Array(Schema.String)
 						.check(Schema.isMaxLength(8))
 						.annotate({ description: 'exported names to read together' })
+				),
+				skill: Schema.optionalKey(
+					Schema.String.annotate({ description: 'an authoring skill, e.g. authoring-tenant-workspace' })
+				),
+				file: Schema.optionalKey(
+					Schema.String.annotate({ description: "a skill's file, e.g. references/studio.md" })
 				)
 			}),
 			success: ToolAnswer
@@ -1909,6 +1917,23 @@ Related rows go inside their root row in the same call, never in a separate writ
 					guard(
 						Effect.gen(function* () {
 							const docs = yield* reference.corpus;
+							if (i.skill !== undefined) {
+								const skill = docs.skill(i.skill),
+									path = i.file ?? 'SKILL.md';
+								const file = skill?.files.find((f) => f.path === path);
+								return skill === null
+									? err(
+											`No skill '${i.skill}'. Skills: ${docs
+												.index()
+												.skills.map((k) => k.name)
+												.join(', ')}.`
+										)
+									: file === undefined
+										? err(
+												`No file '${path}' in ${i.skill}. Files: ${skill.files.map((f) => f.path).join(', ')}.`
+											)
+										: ok({ skill: i.skill, path, text: file.text });
+							}
 							const all = docs.index().namespaces.filter((n) => n.reference),
 								names = all.map((n) => n.namespace);
 							const ns = i.namespace === undefined ? undefined : i.namespace;
@@ -1961,14 +1986,19 @@ Related rows go inside their root row in the same call, never in a separate writ
 									}))
 								});
 							}
-							return ok(
-								all.map((n) => ({
+							return ok({
+								namespaces: all.map((n) => ({
 									namespace: n.namespace,
 									import: n.module,
 									summary: n.summary,
 									symbols: n.symbols
+								})),
+								skills: docs.index().skills.map((k) => ({
+									name: k.name,
+									description: k.description,
+									files: k.files
 								}))
-							);
+							});
 						})
 					)
 			})

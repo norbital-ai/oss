@@ -22,10 +22,15 @@ import { storeSync } from '../src/protocol/errors.ts';
 import { decodeIdentity } from '../src/engine/write/pack.ts';
 import { SYSTEM } from '../src/system/index.ts';
 import { Port } from '../src/engine/port.ts';
+import { install } from '../src/decl/runtime/guest.ts';
+
+// the fixtures' generator bodies attach through the guest edge, as `bolt check` installs it
+install();
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const Platform = Layer.mergeAll(NodeFileSystem.layer, NodePath.layer);
 const EMPTY: EngineManifest = {
+	needs: [],
 	workspace: { tz: 'UTC', locale: 'en' },
 	models: {},
 	relationships: {},

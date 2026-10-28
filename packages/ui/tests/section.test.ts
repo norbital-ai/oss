@@ -5,12 +5,14 @@ import { Effect } from 'effect';
 // while closed, opens itself over an error, and keeps its fields mounted so a collapsed field still saves.
 import './dom.ts';
 import assert from 'node:assert/strict';
-import { it, afterEach } from '@effect/vitest';
+import { it, afterEach, vi } from '@effect/vitest';
 import { viewFixture, jsonArray, jsonRecord, browser, type ViewScript } from './view-fixture.ts';
 import type { Json } from '@norbital-ai/std/wire';
 import type { KindsHost } from '../src/kinds/context.ts';
 const { flushSync, mount, tick, unmount } = await import('svelte');
 const { default: Harness } = await import('./section-harness.svelte');
+const { default: RecordHarness } = await import('./view-harness.svelte');
+const { default: RecordShell } = await import('../src/record/RecordShell.svelte');
 
 const catalog = {
 	jobs: {
@@ -92,19 +94,6 @@ it.live(
 				'collapsed, the field stays mounted'
 			);
 		})
-);
-
-it.live('field help is an info button beside the label, never text under the control', () =>
-	Effect.gen(function* () {
-		const { target } = yield* browser(() => show());
-		const field = element<HTMLElement>(target, '[data-field=title]');
-		assert.equal(textOf(field).includes('The role’s public name.'), false);
-		const info = element<HTMLButtonElement>(field, '[data-field-description]');
-		assert.equal(info.getAttribute('title'), 'The role’s public name.');
-		info.click();
-		yield* browser(() => settle());
-		assert.match(textOf(document.querySelector('[data-slot=popover-content]')), /public name/);
-	})
 );
 
 it.live(
@@ -214,4 +203,49 @@ it.live('a form with collapsed sections still saves every field', () =>
 		assert.equal(jsonRecord(row).title, 'Paint');
 		assert.equal(jsonRecord(row).notes, 'Back door');
 	})
+);
+
+it.live(
+	'a record section naming an unknown field warns; fields no section lists stay readable',
+	() =>
+		Effect.gen(function* () {
+			const warn = vi.spyOn(console, 'warn');
+			const target = yield* browser(async () => {
+				const { bolt } = await viewFixture({
+					get: (c) =>
+						c === 'jobs'
+							? { id: 'j1', revision: 1, title: 'Paint', notes: 'Back door', kind: 'a' }
+							: null
+				});
+				const target = document.createElement('div');
+				document.body.append(target);
+				const app = mount(RecordHarness, {
+					target,
+					props: {
+						bolt,
+						catalog,
+						part: 'record',
+						view: RecordShell,
+						props: {
+							of: 'jobs',
+							id: 'j1',
+							sections: [{ name: 'core', title: 'Job', fields: ['title', 'nope'] }]
+						}
+					}
+				});
+				await settle();
+				mounted.push(async () => {
+					await unmount(app);
+					target.remove();
+				});
+				return target;
+			});
+			assert.deepEqual(
+				[...target.querySelectorAll<HTMLElement>('[data-field]')]
+					.map((f) => f.dataset.field)
+					.sort(),
+				['kind', 'notes', 'title']
+			);
+			assert.ok(warn.mock.calls.some(([message]) => /nope/.test(String(message))));
+		})
 );

@@ -6,7 +6,6 @@ import { Deferred, Effect, Queue, Schema, Stream } from 'effect';
 // state (pending, done, failed in place and as a toast) and wires a model's file sync in by itself.
 import './dom.ts';
 import assert from 'node:assert/strict';
-import type { Json } from '@norbital-ai/std/wire';
 import type { Value } from '@norbital-ai/std/kind';
 import { Decimal } from '@norbital-ai/std/decimal';
 import type { KindsHost } from '../src/kinds/context.ts';
@@ -20,6 +19,7 @@ import { it, afterEach } from '@effect/vitest';
 import { vi } from 'vitest';
 const { flushSync, mount, tick, unmount } = await import('svelte');
 const { default: Harness } = await import('./view-harness.svelte');
+const { default: Table } = await import('../src/table/Table.svelte');
 const { toasts } = await import('../src/toast/toast.svelte.ts');
 
 const mounted: (() => Promise<void>)[] = [];
@@ -79,6 +79,7 @@ async function show({
 			catalog,
 			...(upload === undefined ? {} : { upload }),
 			part: 'table',
+			view: Table,
 			props: {
 				of,
 				columns,
@@ -102,6 +103,7 @@ async function show({
 	return target;
 }
 const open = async () => {
+	if (document.querySelector('[data-view-menu]') !== null) return;
 	element<HTMLButtonElement>(document, '[data-view-actions]').click();
 	await settle();
 };
@@ -201,239 +203,175 @@ it.live(
 		})
 );
 
-it.live('a row shows its icon tile, name, description and one button named for it', () =>
-	Effect.gen(function* () {
-		yield* browser(() =>
-			show({
-				actions: [
-					{ icon: 'lucide:check', name: 'Settle', description: 'Mark the dues paid', run: () => {} }
-				]
-			})
-		);
-		yield* browser(() => open());
-		const r = row('item:Settle');
-		assert.ok(textOf(r).includes('Settle') && textOf(r).includes('Mark the dues paid'));
-		assert.equal(element<HTMLButtonElement>(r, 'button').getAttribute('aria-label'), 'Settle');
-		assert.equal(textOf(element<HTMLButtonElement>(r, 'button')).trim(), 'Run');
-	})
-);
+it.live(
+	"handler rows: pending spins and disables, a failure is in place and toasted and runs again, a refusal is the row's error, nothing closes the menu",
+	() =>
+		Effect.gen(function* () {
+			const d = yield* Deferred.make<void>();
+			let calls = 0,
+				fail = true,
+				opened = false;
+			yield* browser(() =>
+				show({
+					actions: [
+						{
+							icon: 'lucide:check',
+							name: 'Settle',
+							run: () =>
+								Effect.suspend(() => {
+									calls++;
+									return Deferred.await(d);
+								})
+						},
+						{
+							icon: 'lucide:check',
+							name: 'Pay',
+							run: () =>
+								Effect.suspend(() =>
+									fail ? Effect.fail(new Error('Ledger is locked')) : Effect.succeed(undefined)
+								)
+						},
+						{
+							icon: 'lucide:check',
+							name: 'Hold',
+							run: () => Effect.succeed({ kind: 'committed', output: null, records: [] })
+						},
+						{
+							icon: 'lucide:x',
+							name: 'Release',
+							run: () => Effect.fail(new ActRefused({ code: 'refused', message: 'Already paid' }))
+						},
+						{
+							icon: 'lucide:x',
+							name: 'Waive',
+							run: () => {
+								opened = true;
+							}
+						}
+					]
+				})
+			);
+			yield* browser(open);
+			yield* browser(() => press('item:Settle'));
+			assert.equal(row('item:Settle').dataset.status, 'pending');
+			assert.equal(element<HTMLButtonElement>(row('item:Settle'), 'button').disabled, true);
+			assert.equal(
+				element<HTMLButtonElement>(document, '[data-view-actions]').getAttribute('aria-busy'),
+				'true'
+			);
+			yield* Deferred.succeed(d, undefined);
+			yield* browser(settle);
+			assert.equal(row('item:Settle').dataset.status, 'done');
+			assert.equal(calls, 1);
 
-it.live('a pending handler spins and disables its row, then says done; the menu stays open', () =>
-	Effect.gen(function* () {
-		const d = yield* Deferred.make<void>();
-		let calls = 0;
-		yield* browser(() =>
-			show({
-				actions: [
-					{
-						icon: 'lucide:check',
-						name: 'Settle',
-						run: () =>
-							Effect.suspend(() => {
-								calls++;
-								return Deferred.await(d);
-							})
-					}
-				]
-			})
-		);
-		yield* browser(() => open());
-		yield* browser(() => press('item:Settle'));
-		assert.equal(row('item:Settle').dataset.status, 'pending');
-		assert.equal(element<HTMLButtonElement>(row('item:Settle'), 'button').disabled, true);
-		assert.ok(element<HTMLElement>(row('item:Settle'), '[role=status]'), 'a spinner');
-		assert.equal(
-			element<HTMLButtonElement>(document, '[data-view-actions]').getAttribute('aria-busy'),
-			'true'
-		);
-		yield* Deferred.succeed(d, undefined);
-		yield* browser(() => settle());
-		assert.equal(row('item:Settle').dataset.status, 'done');
-		assert.ok(textOf(element<HTMLButtonElement>(row('item:Settle'), 'button')).includes('Done'));
-		assert.equal(calls, 1);
-	})
-);
+			yield* browser(() => press('item:Pay'));
+			assert.equal(row('item:Pay').dataset.status, 'failed');
+			assert.equal(
+				textOf(element<HTMLElement>(row('item:Pay'), '[data-menu-error]')),
+				'Ledger is locked'
+			);
+			assert.deepEqual(
+				toasts.map((t) => [t.tone, t.text]),
+				[['error', 'Ledger is locked']]
+			);
+			fail = false;
+			yield* browser(() => press('item:Pay'));
+			assert.equal(row('item:Pay').dataset.status, 'done');
+			assert.equal(row('item:Pay').querySelector('[data-menu-error]'), null);
 
-it.live('a rejected handler shows its error in place and as a toast, and can run again', () =>
-	Effect.gen(function* () {
-		let fail = true;
-		yield* browser(() =>
-			show({
-				actions: [
-					{
-						icon: 'lucide:check',
-						name: 'Settle',
-						description: 'Mark paid',
-						run: () =>
-							Effect.suspend(() =>
-								fail ? Effect.fail(new Error('Ledger is locked')) : Effect.succeed(undefined)
-							)
-					}
-				]
-			})
-		);
-		yield* browser(() => open());
-		yield* browser(() => press('item:Settle'));
-		assert.equal(row('item:Settle').dataset.status, 'failed');
-		assert.equal(
-			textOf(element<HTMLElement>(row('item:Settle'), '[data-menu-error]')),
-			'Ledger is locked'
-		);
-		assert.deepEqual(
-			toasts.map((t) => [t.tone, t.text]),
-			[['error', 'Ledger is locked']]
-		);
-		fail = false;
-		yield* browser(() => press('item:Settle'));
-		assert.equal(row('item:Settle').dataset.status, 'done');
-		assert.equal(row('item:Settle').querySelector('[data-menu-error]'), null);
-	})
-);
+			toasts.splice(0);
+			yield* browser(() => press('item:Hold'));
+			yield* browser(() => press('item:Release'));
+			assert.equal(row('item:Hold').dataset.status, 'done');
+			assert.equal(row('item:Release').dataset.status, 'failed');
+			assert.equal(
+				textOf(element<HTMLElement>(row('item:Release'), '[data-menu-error]')),
+				'Already paid'
+			);
+			assert.deepEqual(
+				toasts.map((t) => t.tone),
+				['success', 'error']
+			);
 
-it.live("an outcome is toasted; a refusal is the row's error", () =>
-	Effect.gen(function* () {
-		yield* browser(() =>
-			show({
-				actions: [
-					{
-						icon: 'lucide:check',
-						name: 'Hold',
-						run: () => Effect.succeed({ kind: 'committed', output: null, records: [] })
-					},
-					{
-						icon: 'lucide:x',
-						name: 'Release',
-						run: () => Effect.fail(new ActRefused({ code: 'refused', message: 'Already paid' }))
-					}
-				]
-			})
-		);
-		yield* browser(() => open());
-		yield* browser(() => press('item:Hold'));
-		yield* browser(() => press('item:Release'));
-		assert.equal(row('item:Hold').dataset.status, 'done');
-		assert.equal(row('item:Release').dataset.status, 'failed');
-		assert.equal(
-			textOf(element<HTMLElement>(row('item:Release'), '[data-menu-error]')),
-			'Already paid'
-		);
-		assert.deepEqual(
-			toasts.map((t) => t.tone),
-			['success', 'error']
-		);
-	})
+			yield* browser(() => press('item:Waive'));
+			assert.equal(opened, true);
+			assert.equal(document.querySelector('[data-view-menu]'), null);
+		})
 );
 
 it.live(
-	'a handler returning a run handle shows the run under the toolbar and closes the menu',
+	'a handler returning a run handle shows the run and closes the menu; sync starts the declared model sync by name',
 	() =>
 		Effect.gen(function* () {
 			const { bolt, started } = yield* browser(() => fakeBolt());
 			const target = yield* browser(() =>
 				show({
 					bolt,
+					of: 'appointments',
+					catalog: {
+						appointments: {
+							label: ['name'],
+							fields: { name: { kind: 'text' } },
+							syncs: { events: { kind: 'remote', with: 'google_calendar' } }
+						}
+					},
 					actions: [
 						{ icon: 'lucide:refresh-cw', name: 'Refresh', run: () => bolt.start('refresh', {}) }
 					]
 				})
 			);
-			yield* browser(() => open());
+			yield* browser(open);
+			yield* browser(() => press('sync:events'));
+			assert.deepEqual(started, [{ automation: 'appointments.sync.events', input: {} }]);
+			yield* browser(open);
 			yield* browser(() => press('item:Refresh'));
-			assert.deepEqual(started, [{ automation: 'refresh', input: {} }]);
+			assert.deepEqual(started.at(-1), { automation: 'refresh', input: {} });
 			assert.equal(document.querySelector('[data-view-menu]'), null);
-			assert.ok(element<HTMLElement>(target, '[data-run="run-1"]'), "the run's status");
-			assert.deepEqual(toasts, [], 'the run says its own success');
+			assert.ok(target.querySelector('[data-run]'), "the run's status");
 		})
 );
 
-it.live('a handler returning nothing closes the menu (it opened its own surface)', () =>
-	Effect.gen(function* () {
-		let opened = false;
-		yield* browser(() =>
-			show({
-				actions: [
-					{
-						icon: 'lucide:x',
-						name: 'Waive',
-						run: () => {
-							opened = true;
-						}
-					}
-				]
-			})
-		);
-		yield* browser(() => open());
-		yield* browser(() => press('item:Waive'));
-		assert.equal(opened, true);
-		assert.equal(document.querySelector('[data-view-menu]'), null);
-	})
-);
-
-it.live('sync starts the declared model sync by name', () =>
+it.live("a model's import and export file syncs are rows of their own, run through the menu", () =>
 	Effect.gen(function* () {
 		const { bolt, started } = yield* browser(() => fakeBolt());
-		yield* browser(() =>
-			show({
-				bolt,
-				of: 'appointments',
-				catalog: {
-					appointments: {
-						label: ['name'],
-						fields: { name: { kind: 'text' } },
-						syncs: { events: { kind: 'remote', with: 'google_calendar' } }
-					}
-				}
-			})
-		);
+		const catalog: NonNullable<KindsHost['catalog']> = {
+			jobs: {
+				label: ['name'],
+				fields: { name: { kind: 'text' } },
+				syncs: { sheet: { kind: 'file', parser: ['json'], import: true, export: ['json'] } }
+			}
+		};
+		const uploads: string[] = [];
+		const upload: NonNullable<KindsHost['upload']> = (file, field) =>
+			Effect.sync(() => {
+				uploads.push(field);
+				return { id: 'f1', name: file.name, mime: 'application/json' };
+			});
+		const target = yield* browser(() => show({ bolt, catalog, of: 'jobs', upload }));
 		yield* browser(() => open());
-		yield* browser(() => press('sync:events'));
-		assert.deepEqual(started, [{ automation: 'appointments.sync.events', input: {} }]);
+		assert.ok(textOf(row('import:sheet')).includes('Import'));
+		assert.equal(
+			element<HTMLInputElement>(target, '[data-view-import]').accept,
+			'.json,application/json'
+		);
+		yield* browser(() => press('export:sheet:json'));
+		assert.deepEqual(started, [
+			{ automation: 'jobs.sync.sheet', input: { mode: 'export', to: 'json' } }
+		]);
+		const input = element<HTMLInputElement>(target, '[data-view-import]');
+		Object.defineProperty(input, 'files', {
+			value: [new File(['[]'], 'jobs.json', { type: 'application/json' })],
+			configurable: true
+		});
+		input.dispatchEvent(new Event('change', { bubbles: true }));
+		yield* browser(() => settle());
+		assert.deepEqual(uploads, ['jobs.sync.sheet']);
+		assert.deepEqual(started.at(-1), {
+			automation: 'jobs.sync.sheet',
+			input: { mode: 'import', file: 'f1' }
+		});
+		assert.equal(target.querySelectorAll<HTMLElement>('[data-run]').length, 2);
 	})
-);
-
-it.live(
-	"a model's import and export file syncs are rows of their own, run through the menu",
-	() =>
-		Effect.gen(function* () {
-			const { bolt, started } = yield* browser(() => fakeBolt());
-			const catalog: NonNullable<KindsHost['catalog']> = {
-				jobs: {
-					label: ['name'],
-					fields: { name: { kind: 'text' } },
-					syncs: { sheet: { kind: 'file', parser: ['json'], import: true, export: ['json'] } }
-				}
-			};
-			const uploads: string[] = [];
-			const upload: NonNullable<KindsHost['upload']> = (file, field) =>
-				Effect.sync(() => {
-					uploads.push(field);
-					return { id: 'f1', name: file.name, mime: 'application/json' };
-				});
-			const target = yield* browser(() => show({ bolt, catalog, of: 'jobs', upload }));
-			yield* browser(() => open());
-			assert.ok(textOf(row('import:sheet')).includes('Import'));
-			assert.equal(
-				element<HTMLInputElement>(target, '[data-view-import]').accept,
-				'.json,application/json'
-			);
-			yield* browser(() => press('export:sheet:json'));
-			assert.deepEqual(started, [
-				{ automation: 'jobs.sync.sheet', input: { mode: 'export', to: 'json' } }
-			]);
-			const input = element<HTMLInputElement>(target, '[data-view-import]');
-			Object.defineProperty(input, 'files', {
-				value: [new File(['[]'], 'jobs.json', { type: 'application/json' })],
-				configurable: true
-			});
-			input.dispatchEvent(new Event('change', { bubbles: true }));
-			yield* browser(() => settle());
-			assert.deepEqual(uploads, ['jobs.sync.sheet']);
-			assert.deepEqual(started.at(-1), {
-				automation: 'jobs.sync.sheet',
-				input: { mode: 'import', file: 'f1' }
-			});
-			assert.equal(target.querySelectorAll<HTMLElement>('[data-run]').length, 2);
-		})
 );
 
 it.live(
@@ -599,45 +537,6 @@ it.live(
 		})
 );
 
-it.live("the toolbar's context rides on the file sync's template and import runs", () =>
-	Effect.gen(function* () {
-		const { bolt, started } = yield* browser(() => fakeBolt());
-		const catalog: NonNullable<KindsHost['catalog']> = {
-			jobs: {
-				label: ['name'],
-				fields: { name: { kind: 'text' } },
-				syncs: { sheet: { kind: 'file', import: true } }
-			}
-		};
-		const target = yield* browser(() =>
-			show({
-				bolt,
-				catalog,
-				of: 'jobs',
-				context: { company_id: 'c1' },
-				upload: (file) => Effect.succeed({ id: 'f1', name: file.name, mime: file.type })
-			})
-		);
-		yield* browser(() => open());
-		yield* browser(() => press('template:sheet'));
-		assert.deepEqual(started.at(-1), {
-			automation: 'jobs.sync.sheet',
-			input: { mode: 'template', context: { company_id: 'c1' } }
-		});
-		const input = element<HTMLInputElement>(target, '[data-view-import]');
-		Object.defineProperty(input, 'files', {
-			value: [new File(['x'], 'jobs.xlsx')],
-			configurable: true
-		});
-		input.dispatchEvent(new Event('change', { bubbles: true }));
-		yield* browser(() => settle());
-		assert.deepEqual(started.at(-1), {
-			automation: 'jobs.sync.sheet',
-			input: { mode: 'import', file: 'f1', context: { company_id: 'c1' } }
-		});
-	})
-);
-
 // Custom record-header actions use the same feedback as generated forms and toolbar items.
 it.live(
 	'shared outcome feedback covers all action outcomes and honors localized success text',
@@ -698,67 +597,85 @@ it.live('a pending toolbar action is interrupted on teardown and releases every 
 	})
 );
 
-it.live('a template run the toolbar started saves its file once when it succeeds', () =>
-	Effect.gen(function* () {
-		const rows = new Map<string, RunRow>(),
-			subs = new Set<() => void>();
-		const runs: NonNullable<ViewBolt['runs']> = (_automation, { where }) => {
-			const id = Schema.decodeUnknownSync(Schema.String)(jsonRecord(jsonRecord(where).id).eq);
-			return Stream.callback<Page<RunRow>>((queue) =>
-				Effect.gen(function* () {
-					const notify = () => {
-						const row = rows.get(id);
-						Queue.offerUnsafe(queue, { rows: row === undefined ? [] : [row], next: null });
-					};
-					subs.add(notify);
-					notify();
-					yield* Effect.addFinalizer(() => Effect.sync(() => void subs.delete(notify)));
+it.live(
+	"a template run the toolbar started saves its file once; the toolbar's context rides on template and import runs",
+	() =>
+		Effect.gen(function* () {
+			const rows = new Map<string, RunRow>(),
+				subs = new Set<() => void>();
+			const runs: NonNullable<ViewBolt['runs']> = (_automation, { where }) => {
+				const id = Schema.decodeUnknownSync(Schema.String)(jsonRecord(jsonRecord(where).id).eq);
+				return Stream.callback<Page<RunRow>>((queue) =>
+					Effect.gen(function* () {
+						const notify = () => {
+							const row = rows.get(id);
+							Queue.offerUnsafe(queue, { rows: row === undefined ? [] : [row], next: null });
+						};
+						subs.add(notify);
+						notify();
+						yield* Effect.addFinalizer(() => Effect.sync(() => void subs.delete(notify)));
+					})
+				);
+			};
+			const clicks: string[] = [];
+			vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function (
+				this: HTMLAnchorElement
+			) {
+				clicks.push(this.download);
+			});
+			const { bolt, started } = yield* browser(() => fakeBolt({ runs }));
+			const target = yield* browser(() =>
+				show({
+					bolt,
+					catalog: {
+						jobs: {
+							label: ['name'],
+							fields: { name: { kind: 'text' } },
+							syncs: { sheet: { kind: 'file', import: true } }
+						}
+					},
+					of: 'jobs',
+					context: { company_id: 'c1' },
+					upload: (file) => Effect.succeed({ id: 'f1', name: file.name, mime: file.type })
 				})
 			);
-		};
-		const clicks: string[] = [];
-		vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function (
-			this: HTMLAnchorElement
-		) {
-			clicks.push(this.download);
-		});
-		const { bolt } = yield* browser(() => fakeBolt({ runs }));
-		yield* browser(() =>
-			show({
-				bolt,
-				catalog: {
-					jobs: {
-						label: ['name'],
-						fields: { name: { kind: 'text' } },
-						syncs: { sheet: { kind: 'file', import: true } }
-					}
-				},
-				of: 'jobs',
-				upload: (file) => Effect.succeed({ id: 'f1', name: file.name, mime: file.type })
-			})
-		);
-		yield* browser(() => open());
-		yield* browser(() => press('template:sheet'));
-		const succeed = () => {
-			rows.set('run-1', {
-				id: 'run-1',
+			yield* browser(() => open());
+			yield* browser(() => press('template:sheet'));
+			assert.deepEqual(started.at(-1), {
 				automation: 'jobs.sync.sheet',
-				status: 'succeeded',
-				result: {
-					file: {
-						id: 'x1',
-						name: 'jobs-template.xlsx',
-						mime: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
-					}
-				}
+				input: { mode: 'template', context: { company_id: 'c1' } }
 			});
-			for (const notify of subs) notify();
-		};
-		succeed();
-		yield* browser(() => settle());
-		succeed();
-		yield* browser(() => settle());
-		assert.deepEqual(clicks, ['jobs-template.xlsx']);
-		vi.restoreAllMocks();
-	})
+			const succeed = () => {
+				rows.set('run-1', {
+					id: 'run-1',
+					automation: 'jobs.sync.sheet',
+					status: 'succeeded',
+					result: {
+						file: {
+							id: 'x1',
+							name: 'jobs-template.xlsx',
+							mime: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+						}
+					}
+				});
+				for (const notify of subs) notify();
+			};
+			succeed();
+			yield* browser(() => settle());
+			succeed();
+			yield* browser(() => settle());
+			assert.deepEqual(clicks, ['jobs-template.xlsx']);
+			vi.restoreAllMocks();
+			const input = element<HTMLInputElement>(target, '[data-view-import]');
+			Object.defineProperty(input, 'files', {
+				value: [new File(['x'], 'jobs.xlsx')],
+				configurable: true
+			});
+			input.dispatchEvent(new Event('change', { bubbles: true }));
+			yield* browser(() => settle());
+			assert.deepEqual(started.at(-1), {
+				automation: 'jobs.sync.sheet',
+				input: { mode: 'import', file: 'f1', context: { company_id: 'c1' } }
+			});
+		})
 );

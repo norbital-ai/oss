@@ -36,8 +36,6 @@ export type Duration = `${bigint}${'s' | 'min' | 'h' | 'd'}`;
 export type Offset = `${'+' | '-'}${Duration}` | '';
 /** A `point` field's value: latitude and longitude in degrees. */
 export type Point = { readonly lat: number; readonly lng: number };
-/** A calendar unit: `{ startOf }` is the first day of the unit containing today (weeks start Monday). */
-export type CalendarUnit = 'week' | 'month' | 'quarter' | 'year';
 /** A geographic area a `point` filter tests: a polygon, or a bounding box of two corners. */
 export type Shape =
 	{ readonly polygon: readonly Point[] } | { readonly bbox: readonly [Point, Point] };

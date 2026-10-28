@@ -12,7 +12,7 @@
 // send-now and respond-now admit at once with every pending row, flush the queued decision and ask nothing. `delivered_turn` (set by the agent's claim, guarded by
 // `IS NULL`) and `addressed` are the one record of what the agent received, so no row is new input twice.
 import type { EnvoySpec } from '../../decl/runtime/agent.ts';
-import { Clock, Context, Effect, FiberMap, Layer, Option, Schema } from 'effect';
+import { Clock, Context, Effect, FiberMap, Layer, Option, Schema, Semaphore } from 'effect';
 import { Chain } from '../write/sql.ts';
 import { enqueue, nextDue } from '../runs/queue.ts';
 import {
@@ -24,13 +24,13 @@ import {
 import type { Json } from '../../decl/values.ts';
 import type { EngineManifest } from '../manifest.ts';
 import { TenantDb, type TenantDbShape } from '../db/tenant-db.ts';
-import { Ai, Logs, Metering } from '../ports.ts';
+import { Ai, Logs } from '../ports.ts';
 import { Manifest, Live, Turns, Links, Wake, RunHandlers, type LiveShape } from '../services.ts';
 import { type EngineError } from '../errors.ts';
 import { BoltError } from '../../protocol/errors.ts';
 import { Port } from '../port.ts';
 import { TurnHandlers } from './turns.ts';
-import { decisionEvent, failed, meter, type DecisionRequest } from '../decisions/index.ts';
+import { decisionEvent, failed, type DecisionRequest } from '../decisions/index.ts';
 import { FileRef, messageCommit, rowsOf, type As } from './schema.ts';
 import { envoyName } from './context.ts';
 import { envoySpec } from '../envoys/spec.ts';
@@ -74,7 +74,6 @@ const names = (text: string, name: string): boolean =>
 type TriageConfig = {
 	engine: { manifest: EngineManifest; db: TenantDbShape; live?: Pick<LiveShape, 'publish'> };
 	ai?: Ai['Service'];
-	metering: Metering['Service'];
 	clock: Effect.Effect<string>;
 	announce: (at: string) => Effect.Effect<void>;
 	drain: (conversation: string, envoy: boolean) => Effect.Effect<unknown, EngineError>;
@@ -139,6 +138,16 @@ export const heldLonger = (chain: Chain, conversation: string, at: string) =>
 	);
 export const triage = Effect.fn('Triage.make')(function* (cfg: TriageConfig) {
 	const debounce = yield* FiberMap.make<string, Json, EngineError>();
+	// One decision per conversation at a time: the debounce timer and the queued run fall due together, and a decision admits
+	// and drains its turn inline, so neither may interrupt or overlap the other. A woken timer is deciding, no longer a timer.
+	// ponytail: one semaphore per conversation ever triaged in this process; evict idle ones if that set grows large
+	const locks = new Map<string, Semaphore.Semaphore>(),
+		deciding = new Set<string>();
+	const serial = (conversation: string) => {
+		let lock = locks.get(conversation);
+		if (lock === undefined) locks.set(conversation, (lock = Semaphore.makeUnsafe(1)));
+		return Semaphore.withPermit(lock);
+	};
 	const logs = yield* Logs;
 	const { manifest: m, db } = cfg.engine;
 	/** The host's wake, and a wake already open behind a long run (`nudge`): a decision never queues behind other automations. */
@@ -153,7 +162,7 @@ export const triage = Effect.fn('Triage.make')(function* (cfg: TriageConfig) {
 		// the timer is interrupted unless it is the very fiber deciding: interrupting that would drop this flush
 		const timer = yield* FiberMap.get(debounce, conversation),
 			self = yield* Effect.fiber;
-		if (Option.isNone(timer) || timer.value !== self)
+		if ((Option.isNone(timer) || timer.value !== self) && !deciding.has(conversation))
 			yield* FiberMap.remove(debounce, conversation);
 		const chain = new Chain();
 		chain.params.push(conversation);
@@ -183,7 +192,28 @@ export const triage = Effect.fn('Triage.make')(function* (cfg: TriageConfig) {
 			Effect.tapCause(Effect.logWarning),
 			Effect.ignore
 		);
-	const run = Effect.fn('Agents.run')(function* (input: Json) {
+	const run = (input: Json) =>
+		Schema.decodeUnknownOption(Schema.Struct({ conversation: Schema.String }))(input).pipe(
+			Option.match({
+				onNone: () => decide(input),
+				onSome: ({ conversation }) => serial(conversation)(decide(input))
+			})
+		);
+	/**
+	 * The debounce timer is the queued run deciding on time: it takes the conversation's due run (its `waits` included), so the
+	 * host's wake finds it gone. A run the host already claimed, or one a newer hold postponed, is the host's to decide.
+	 */
+	const fire = (conversation: string) =>
+		serial(conversation)(
+			Effect.gen(function* () {
+				const [claimed] = yield* db.returning(Schema.Struct({ input: Schema.Json }), {
+					text: `DELETE FROM sys_run WHERE ${queued('$1')} AND due_at <= $2::timestamptz + interval '25 milliseconds' RETURNING input`,
+					params: [conversation, yield* cfg.clock]
+				});
+				return claimed === undefined ? null : yield* decide(claimed.input);
+			})
+		);
+	const decide = Effect.fn('Agents.run')(function* (input: Json) {
 		const decoded = yield* Schema.decodeUnknownEffect(
 			Schema.Struct({
 				conversation: Schema.String,
@@ -280,13 +310,13 @@ export const triage = Effect.fn('Triage.make')(function* (cfg: TriageConfig) {
 		// a stopped conversation triages nothing; with nothing pending there is nothing to decide
 		if (conv === undefined || conv.status === 'stopped' || pending.length === 0)
 			return { pending: 0 };
-		// the sender kept typing (`heldLonger`): the queued run decides at its later time, not this timer
-		// a timer firing on time can read `due` a hair late (a float epoch): only a real postponement waits, and then this
-		// decision sleeps until it instead of returning held with nothing left to wake it
+		// the sender kept typing (`heldLonger`) or wrote again: the later queued run decides the burst at its time
 		const due = later?.rows[0]?.['due'];
 		const left = typeof due === 'number' ? due - Date.parse(yield* cfg.clock) : 0;
-		// (a newer arrival's hold replaces this fiber in `debounce`, so the rows read above are still the burst)
-		if (left > 25) yield* Effect.sleep(left);
+		if (left > 25) return { held: true };
+		// past its pause the timer decides and admits: from here no release or newer hold interrupts it
+		const timer = yield* FiberMap.get(debounce, conversation);
+		if (Option.isSome(timer) && timer.value === (yield* Effect.fiber)) deciding.add(conversation);
 		const envoyKey = conv.envoy,
 			envoy = envoyKey !== null;
 		if (waits >= TRIAGE_MAX_WAITS) {
@@ -333,7 +363,6 @@ export const triage = Effect.fn('Triage.make')(function* (cfg: TriageConfig) {
 			return { action: 'respond', named: true };
 		}
 		const allowed: TriageAction[] = group ? ['respond', 'wait', 'ignore'] : ['respond', 'wait'];
-		const pendingIds = pending.map((r) => r.id);
 		const at = (r: { readonly at: number }) => new Date(r.at).toISOString();
 		// attachments go in as metadata only (P37 (3)): name, mime, size, and a caption or text when there is one
 		const fileIds = pending.flatMap((r) =>
@@ -522,7 +551,6 @@ export const triage = Effect.fn('Triage.make')(function* (cfg: TriageConfig) {
 				yield* published(result.written);
 			}
 		}
-		yield* meter(cfg.metering, d, call);
 		if (action === 'respond') yield* admit(conversation, envoy);
 		// nothing here was for the assistant: the chat stops showing it typing
 		if (action === 'ignore' && envoy) yield* typing(conversation, false);
@@ -551,12 +579,17 @@ export const triage = Effect.fn('Triage.make')(function* (cfg: TriageConfig) {
 		const due = result.triage_due;
 		if (due !== null) yield* announce(new Date(due).toISOString());
 		yield* published(result.written);
-		if (due !== null)
+		// a timer already deciding is left to finish: the queued run decides this row after it
+		if (due !== null && !deciding.has(conversation))
 			yield* FiberMap.run(
 				debounce,
 				conversation,
 				Effect.sleep(Math.max(0, due - (yield* Clock.currentTimeMillis))).pipe(
-					Effect.andThen(run({ conversation, waits: 0 })),
+					Effect.andThen(
+						fire(conversation).pipe(
+							Effect.ensuring(Effect.sync(() => deciding.delete(conversation)))
+						)
+					),
 					Effect.tapCause(Effect.logWarning),
 					Effect.catch(() => Effect.succeed(null))
 				)
@@ -624,7 +657,6 @@ export const TriageLive = Layer.effect(
 			db = yield* TenantDb,
 			live = yield* Live,
 			ai = yield* Ai,
-			metering = yield* Metering,
 			turns = yield* Turns,
 			wake = yield* Wake,
 			links = yield* Links,
@@ -633,7 +665,6 @@ export const TriageLive = Layer.effect(
 		const api = yield* triage({
 			engine: { manifest, db, live },
 			...(Ai.hasSystem1(ai) ? { ai } : {}),
-			metering,
 			clock: Clock.currentTimeMillis.pipe(Effect.map((now) => new Date(now).toISOString())),
 			announce: wake.at,
 			drain: (conversation, envoy) => turns.drain(conversation, envoy ? 'Envoy' : 'Agent'),

@@ -5,7 +5,7 @@ import type { EngineManifest } from '../src/engine/manifest.ts';
 import { RunHandlers } from '../src/engine/services.ts';
 import { TestWorkspace } from '../src/test/index.ts';
 import { manifest as base } from './write-fixture.ts';
-import { program } from './support/guest-fixture.ts';
+import { program } from '../src/test/guest.ts';
 
 const alice = '0199a000-0000-7000-8000-000000000001',
 	bob = '0199a000-0000-7000-8000-000000000002',

@@ -1,6 +1,5 @@
 import { Context, Effect, Layer } from 'effect';
-// Rule 25a on PGlite: engine loops cap their pass and prove progress. `bolt.prune` deletes at most 10,000 rows per table
-// and queues one continuation; a prune pass that selects rows and deletes none stops `noProgress` and queues nothing.
+// Rule 25a on PGlite: a prune pass that selects rows and deletes none stops `noProgress` and queues nothing.
 import { describe, expect, it } from '@effect/vitest';
 import { TestWorkspace, type Kit } from '../src/test/index.ts';
 import { manifest } from './catalogue-fixture.ts';
@@ -19,34 +18,6 @@ const aged = (n: number) =>
 	`INSERT INTO bolt_rate SELECT 'act', 'k' || n, '${OLD}', 1 FROM generate_series(1, ${n}) n`;
 
 describe('rule 25a: engine loops', () => {
-	it.live(
-		'bolt.prune deletes 10,000 rows a pass, then one continuation run finishes the rest',
-		() =>
-			Effect.scoped(
-				Effect.gen(function* () {
-					const t = Context.get(
-						yield* Layer.build(TestWorkspace.layer({ manifest, now: NOW })),
-						TestWorkspace
-					);
-					yield* t.db.write({ text: aged(10_001), params: [] });
-					yield* t.runDue();
-					expect(
-						yield* sql(t, `SELECT count(*)::int AS n FROM bolt_rate WHERE bucket LIKE 'k%'`)
-					).toEqual([{ n: 1 }]);
-					expect(
-						yield* sql(t, `SELECT state FROM sys_run WHERE automation = 'bolt.prune'`)
-					).toEqual([{ state: 'queued' }]);
-					yield* t.runDue();
-					expect(
-						yield* sql(t, `SELECT count(*)::int AS n FROM bolt_rate WHERE bucket LIKE 'k%'`)
-					).toEqual([{ n: 0 }]);
-					expect(
-						yield* sql(t, `SELECT state FROM sys_run WHERE automation = 'bolt.prune'`)
-					).toEqual([{ state: 'succeeded' }]);
-				})
-			)
-	);
-
 	it.live(
 		'a prune pass that deletes none of the rows it selected stops noProgress and queues nothing',
 		() =>

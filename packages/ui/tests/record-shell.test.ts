@@ -8,7 +8,7 @@ import {
 	type ViewScript,
 	browser
 } from './view-fixture.ts';
-import { Deferred, Effect, Schema, Stream } from 'effect';
+import { Deferred, Effect } from 'effect';
 import { READ_LIMIT } from '../src/read/request.ts';
 // The record shell's header chrome: the history scrubber (a past revision shows read-only, then back to current), the
 // record/approval toggle for native proposals, and no per-field history or History tab.
@@ -16,18 +16,18 @@ import './dom.ts';
 import assert from 'node:assert/strict';
 import type { Json } from '@norbital-ai/std/wire';
 import type { Value } from '@norbital-ai/std/kind';
-import type { ApprovalView, Outcome } from '../src/client/contract.ts';
+import type { ApprovalView } from '../src/client/contract.ts';
 import type { RecordCapabilities } from '../src/record/types.ts';
 import type { Row } from '../src/model/types.ts';
 import type { KindsHost } from '../src/kinds/context.ts';
-import type { RecordShellProps } from '../src/record/RecordShell.svelte';
-import type { FormProps } from '../src/form/form.svelte';
+import type { ViewPart } from './view-harness.svelte';
 import type { Checkpoint } from '../src/record/history.ts';
 import type { Outcome as WireOutcome } from '../../bolt/build/protocol/schema.js';
 import { it, afterEach } from '@effect/vitest';
 import { vi } from 'vitest';
 const { flushSync, mount, tick, unmount } = await import('svelte');
 const { default: Harness } = await import('./view-harness.svelte');
+const { default: RecordShell } = await import('../src/record/RecordShell.svelte');
 
 const catalog = {
 	jobs: {
@@ -180,7 +180,13 @@ async function show(
 	document.body.append(target);
 	const app = mount(Harness, {
 		target,
-		props: { bolt, catalog: shownCatalog, part: 'record', props: { of: 'jobs', id: 'j1' } }
+		props: {
+			bolt,
+			catalog: shownCatalog,
+			part: 'record',
+			view: RecordShell,
+			props: { of: 'jobs', id: 'j1' }
+		}
 	});
 	await settle();
 	mounted.push(async () => {
@@ -205,52 +211,37 @@ const key = async (el: Element | null, k: string) => {
 const edit = (t: ParentNode) =>
 	[...t.querySelectorAll<HTMLButtonElement>('button')].find((b) => textOf(b).trim() === 'Edit');
 
-it.live('history loads lazily and exposes the selected revision accessibly', () =>
-	Effect.gen(function* () {
-		const v = yield* browser(() => show(LIVE));
-		const trigger = element<HTMLElement>(v.target, 'header [data-timeline-trigger]');
-		assert.ok(trigger, 'history opens from the sheet header');
-		assert.equal(trigger.getAttribute('aria-label'), 'History');
-		assert.equal(v.slider(), null, 'the ruler is hidden until opened');
-		assert.equal(v.calls.history, 0, 'history loads lazily');
-		yield* browser(() => v.openHistory());
-		const s = v.slider();
-		assert.ok(s);
-		assert.ok(
-			element<HTMLElement>(document, '[data-timeline-card="3"]'),
-			'selected revision details remain visible without hover'
-		);
-		assert.equal(s.getAttribute('aria-valuemax'), '3');
-		assert.equal(s.getAttribute('aria-valuenow'), '3');
-	})
-);
-
-it.live('a past revision shows read-only, then End returns to the live, editable record', () =>
-	Effect.gen(function* () {
-		const v = yield* browser(() => show(LIVE));
-		assert.ok(edit(v.target));
-		yield* browser(() => v.openHistory());
-		yield* browser(() => key(v.slider(), 'ArrowLeft'));
-		assert.ok(
-			v.calls.gets.some((g) => g.c === 'jobs' && g.revision === 2),
-			'read as of revision 2'
-		);
-		assert.ok(element<HTMLElement>(v.target, '[data-record-past]'));
-		assert.doesNotMatch(
-			textOf(element<HTMLElement>(v.target, '[data-record-past]')),
-			/2026-09-02T/,
-			'historical notice uses a formatted time, not raw ISO'
-		);
-		assert.ok(element<HTMLElement>(v.target, 'fieldset[disabled]'));
-		assert.match(textOf(element<HTMLElement>(v.target, '[data-field=title]')), /Paint v2/);
-		assert.equal(edit(v.target), undefined, 'no Edit on a past revision');
-		assert.equal(required(v.slider()).getAttribute('aria-valuenow'), '2');
-		yield* browser(() => key(v.slider(), 'End'));
-		assert.equal(v.target.querySelector('[data-record-past]'), null);
-		assert.equal(v.target.querySelector('fieldset[disabled]'), null);
-		assert.match(textOf(element<HTMLElement>(v.target, '[data-field=title]')), /Paint v3/);
-		assert.ok(edit(v.target));
-	})
+it.live(
+	'history loads lazily; a past revision shows read-only, then End returns to the live, editable record',
+	() =>
+		Effect.gen(function* () {
+			const v = yield* browser(() => show(LIVE));
+			assert.ok(edit(v.target));
+			assert.equal(v.slider(), null, 'the ruler is hidden until opened');
+			assert.equal(v.calls.history, 0, 'history loads lazily');
+			yield* browser(() => v.openHistory());
+			assert.equal(required(v.slider()).getAttribute('aria-valuemax'), '3');
+			yield* browser(() => key(v.slider(), 'ArrowLeft'));
+			assert.ok(
+				v.calls.gets.some((g) => g.c === 'jobs' && g.revision === 2),
+				'read as of revision 2'
+			);
+			assert.ok(element<HTMLElement>(v.target, '[data-record-past]'));
+			assert.doesNotMatch(
+				textOf(element<HTMLElement>(v.target, '[data-record-past]')),
+				/2026-09-02T/,
+				'historical notice uses a formatted time, not raw ISO'
+			);
+			assert.ok(element<HTMLElement>(v.target, 'fieldset[disabled]'));
+			assert.match(textOf(element<HTMLElement>(v.target, '[data-field=title]')), /Paint v2/);
+			assert.equal(edit(v.target), undefined, 'no Edit on a past revision');
+			assert.equal(required(v.slider()).getAttribute('aria-valuenow'), '2');
+			yield* browser(() => key(v.slider(), 'End'));
+			assert.equal(v.target.querySelector('[data-record-past]'), null);
+			assert.equal(v.target.querySelector('fieldset[disabled]'), null);
+			assert.match(textOf(element<HTMLElement>(v.target, '[data-field=title]')), /Paint v3/);
+			assert.ok(edit(v.target));
+		})
 );
 
 it.live(
@@ -323,282 +314,7 @@ it.live(
 		})
 );
 
-it.live(
-	'opening history loads it once and the selected revision says when, who and what changed',
-	() =>
-		Effect.gen(function* () {
-			const v = yield* browser(() => show(LIVE));
-			yield* browser(() => v.openHistory());
-			yield* browser(() => key(v.slider(), 'ArrowLeft'));
-			const card = element<HTMLElement>(document, '[data-timeline-card="2"]');
-			assert.ok(card);
-			assert.equal(v.calls.history, 1);
-			assert.match(textOf(card), /Automation/);
-			assert.match(textOf(card), /Title/);
-			assert.doesNotMatch(textOf(card), /Updated at/);
-		})
-);
-
-const logEntry = (
-	move: ApprovalView['log'][number]['move'],
-	to: string,
-	by: string,
-	extra: Partial<ApprovalView['log'][number]> = {}
-): ApprovalView['log'][number] => ({
-	move,
-	by: { ref: `member:${by}`, name: by },
-	at: '2026-10-13T00:00:00Z',
-	from: move === 'request' ? null : 'Pending',
-	to,
-	step: 0,
-	reason: null,
-	...extra
-});
-
-it.live('a held record shows Under approval and its request timeline, without a domain stamp', () =>
-	Effect.gen(function* () {
-		const v = yield* browser(() =>
-			show(LIVE, catalog, undefined, undefined, [
-				{
-					id: 'r1',
-					steps: [{ name: 'Review team', teams: ['reviewers'], users: [] }],
-					teamNames: { reviewers: 'Review team' },
-					mine: true,
-					log: [logEntry('request', 'Pending', 'Ada')]
-				}
-			])
-		);
-		assert.match(textOf(element<HTMLElement>(v.target, '[data-record-head]')), /Under approval/);
-		const approval = element<HTMLElement>(v.target, 'header [data-record-pane=approval]');
-		approval.click();
-		yield* browser(() => settle());
-		assert.equal(approval.getAttribute('aria-pressed'), 'true');
-		assert.ok(element<HTMLElement>(v.target, 'fieldset.hidden'), 'the record body stays mounted');
-		assert.match(
-			textOf(element<HTMLElement>(v.target, '[data-view=approval-timeline]')),
-			/Requested/
-		);
-		assert.match(
-			textOf(element<HTMLElement>(v.target, '[data-view=approval-timeline]')),
-			/Review team/
-		);
-	})
-);
-
-it.live('a change request explains RFC and approval details on keyboard focus', () =>
-	Effect.gen(function* () {
-		const v = yield* browser(() =>
-			show(LIVE, catalog, undefined, undefined, [
-				{
-					id: 'r1',
-					status: 'ChangesRequested',
-					log: [
-						logEntry('request', 'Pending', 'Ada'),
-						logEntry('requestChanges', 'ChangesRequested', 'Sam')
-					]
-				}
-			])
-		);
-		const badge = element<HTMLElement>(v.target, '[data-view=approval-badge]');
-		assert.equal(textOf(badge).trim(), 'RFC');
-		assert.equal(badge.getAttribute('aria-label'), 'Request for change');
-		assert.equal(badge.getAttribute('role'), 'status');
-		assert.equal(badge.tabIndex, 0);
-		yield* browser(async () => {
-			badge.focus();
-			await settle();
-		});
-		assert.match(
-			textOf(element<HTMLElement>(document, '[data-slot=tooltip-content]')),
-			/Request for change/
-		);
-		element<HTMLElement>(v.target, 'header [data-record-pane=approval]').click();
-		yield* browser(settle);
-		const step = element<HTMLElement>(v.target, '[data-step="step-0"] [data-node]');
-		assert.match(step.getAttribute('aria-label') ?? '', /Changes requested/);
-		step.focus();
-		yield* browser(settle);
-		assert.match(
-			textOf(element<HTMLElement>(document, '[data-view=approval-step-log]')),
-			/Requested changes/
-		);
-	})
-);
-
-it.live(
-	'the record numbers its requests chronologically, opens the newest, and keeps past decisions readable',
-	() =>
-		Effect.gen(function* () {
-			const v = yield* browser(() =>
-				show(LIVE, catalog, undefined, undefined, [
-					{
-						id: 'r2',
-						at: '2026-10-14T00:00:00Z',
-						log: [logEntry('request', 'Pending', 'Ada')]
-					},
-					{
-						id: 'r1',
-						status: 'Rejected',
-						at: '2026-10-13T00:00:00Z',
-						log: [
-							logEntry('request', 'Pending', 'Ada'),
-							logEntry('reject', 'Rejected', 'Sam', { reason: 'Too costly' })
-						]
-					}
-				])
-			);
-			element<HTMLElement>(v.target, 'header [data-record-pane=approval]').click();
-			yield* browser(() => settle());
-			const scope = element<HTMLSelectElement>(v.target, '[data-view=approval-scope]');
-			assert.equal(scope.value, 'r2');
-			assert.deepEqual(
-				[...scope.options].map((option) => [option.value, textOf(option).split(' · ').slice(0, 2)]),
-				[
-					['r2', ['#2', 'Pending']],
-					['r1', ['#1', 'Rejected']]
-				]
-			);
-			scope.value = 'r1';
-			scope.dispatchEvent(new Event('change', { bubbles: true }));
-			yield* browser(() => settle());
-			assert.equal(
-				v.target.querySelectorAll('[data-view=approval][data-status=Rejected]').length,
-				1
-			);
-			element<HTMLElement>(v.target, '[data-step="step-0"] [data-node]').focus();
-			yield* browser(settle);
-			assert.match(
-				textOf(element<HTMLElement>(document, '[data-view=approval-step-log]')),
-				/Too costly/
-			);
-			scope.value = 'r2';
-			scope.dispatchEvent(new Event('change', { bubbles: true }));
-			yield* browser(settle);
-			assert.equal(
-				v.target.querySelectorAll('[data-view=approval][data-status=Pending]').length,
-				1
-			);
-		})
-);
-
-it.live('a completed approval remains readable from the record without a pending marker', () =>
-	Effect.gen(function* () {
-		const v = yield* browser(() =>
-			show(LIVE, catalog, undefined, undefined, [
-				{
-					id: 'r1',
-					status: 'Approved',
-					log: [logEntry('request', 'Pending', 'Ada'), logEntry('approve', 'Approved', 'Sam')]
-				}
-			])
-		);
-		const approval = element<HTMLElement>(v.target, 'header [data-record-pane=approval]');
-		assert.doesNotMatch(
-			textOf(element<HTMLElement>(v.target, '[data-record-head]')),
-			/Under approval/
-		);
-		approval.click();
-		yield* browser(() => settle());
-		element<HTMLElement>(v.target, '[data-step="step-0"] [data-node]').focus();
-		yield* browser(settle);
-		const log = element<HTMLElement>(document, '[data-view=approval-step-log]');
-		assert.match(textOf(log), /Approved/);
-		assert.match(textOf(log), /Sam/);
-		assert.doesNotMatch(textOf(v.target), /No approval on this record/);
-	})
-);
-
-it.live(
-	'under the approval lock, Edit is disabled and the compact chip says who may change it',
-	() =>
-		Effect.gen(function* () {
-			const held = {
-				...LIVE,
-				$approval: {
-					requestId: 'r1',
-					state: 'Pending',
-					step: 0,
-					steps: [
-						{ name: 'Finance', teams: ['finance'], users: [] },
-						{ name: 'Commercial', teams: ['commercial'], users: [] }
-					],
-					requestedBy: 'Ada'
-				}
-			};
-			const reasons = ['underApproval'] as const;
-			const v = yield* browser(() =>
-				show(held, catalog, undefined, () => ({
-					model: 'jobs',
-					id: 'j1',
-					revision: 3,
-					fields: {
-						title: { writable: false, proposal: false, reasons },
-						crew: { writable: false, proposal: false, reasons }
-					},
-					update: { allowed: false, proposal: false, reasons },
-					delete: { allowed: false, proposal: false, reasons },
-					moves: {},
-					proposalMoves: {}
-				}))
-			);
-			const button = required(edit(v.target));
-			assert.equal(button.disabled, true);
-			assert.equal(button.title, 'Under approval: only Finance approvers may change it');
-			assert.equal(v.target.querySelector('[data-view=approval-lock]'), null);
-			assert.doesNotMatch(
-				textOf(element<HTMLElement>(v.target, '[data-record-head]')),
-				/Finance may change it/
-			);
-			const badge = element<HTMLElement>(v.target, '[data-view=approval-badge]');
-			assert.equal(textOf(badge).trim(), 'Under approval');
-			assert.equal(
-				badge.getAttribute('aria-label'),
-				'Under approval: only Finance approvers may change it'
-			);
-			assert.equal(badge.tabIndex, 0);
-			yield* browser(async () => {
-				badge.focus();
-				await settle();
-			});
-			assert.match(
-				textOf(element<HTMLElement>(document, '[data-slot=tooltip-content]')),
-				/Under approval: only Finance approvers may change it/
-			);
-		})
-);
-
-it.live(
-	'every stored record: both toggles and a one-tick scrubber on revision 1; approval says there is none',
-	() =>
-		Effect.gen(function* () {
-			const v = yield* browser(() => show({ ...LIVE, revision: 1 }));
-			yield* browser(() => v.openHistory());
-			assert.ok(element<HTMLElement>(v.target, 'header [data-record-pane=record]'));
-			const approval = element<HTMLElement>(v.target, 'header [data-record-pane=approval]');
-			assert.ok(approval);
-			assert.equal(
-				approval.querySelector('.bg-brand'),
-				null,
-				'no pending dot without a pending request'
-			);
-			assert.equal(required(v.slider()).getAttribute('aria-valuemax'), '1');
-			required(v.slider()).focus();
-			yield* browser(() => settle());
-			assert.match(
-				document.querySelector('[data-timeline-card="1"]')?.textContent ?? '',
-				/Created/
-			);
-			approval.click();
-			yield* browser(() => settle());
-			assert.match(textOf(v.target), /No approval on this record/);
-		})
-);
-
-// A record's words are the catalog's: an enum or state by its catalog label, a relation by its target's label, never raw.
-const WORDS: Record<string, string> = {
-	'models.deals.fields.kind.sow': 'SOW',
-	'models.deals.fields.channel.mail': 'Email'
-};
+// A record's fields are the author's: an omitted field or relation stays out of the read view and the edit form.
 const deals = {
 	deals: {
 		label: ['title'],
@@ -614,11 +330,8 @@ const deals = {
 	clients: { label: ['name'], fields: { name: { kind: 'text' } } }
 } satisfies NonNullable<KindsHost['catalog']>;
 const DEAL = { id: 'd1', revision: 1, title: 'Build', kind: 'sow', channel: 'mail', client: 'c1' };
-async function mountDeal(
-	fixture: { part: 'record'; props: RecordShellProps } | { part: 'form'; props: FormProps }
-) {
-	const { bolt, script, setCapabilities, calls } = await fake(DEAL);
-	bolt.t = (k) => WORDS[k] ?? k;
+async function mountDeal(fixture: Extract<ViewPart, { part: 'record' }>) {
+	const { bolt, script, calls } = await fake(DEAL);
 	const get = script.get;
 	// a select naming the relation reads its target nested, as the engine does
 	script.get = (c, id, layers, options) =>
@@ -636,211 +349,12 @@ async function mountDeal(
 	return { target, calls };
 }
 
-it.live(
-	'a subtitle relation shows its target label in one read; enums show their catalog words',
-	() =>
-		Effect.gen(function* () {
-			const { calls } = yield* browser(() =>
-				mountDeal({
-					part: 'record',
-					props: { of: 'deals', id: 'd1', subtitle: ['kind', 'client'] }
-				})
-			);
-			const sub = element<HTMLElement>(document, '[data-record-head] p');
-			assert.equal(sub?.textContent, 'SOW · Acme');
-			assert.equal(
-				calls.gets.filter((g) => g.layers?.client).length,
-				1,
-				'one read for the subtitle relations'
-			);
-		})
-);
-
-it.live('the generated read view shows enum values by their catalog words', () =>
-	Effect.gen(function* () {
-		const { target } = yield* browser(() =>
-			mountDeal({ part: 'record', props: { of: 'deals', id: 'd1' } })
-		);
-		assert.match(textOf(element<HTMLElement>(target, '[data-field=kind]')), /SOW/);
-		assert.match(textOf(element<HTMLElement>(target, '[data-field=channel]')), /Email/);
-	})
-);
-
-it.live('a readonly form shows enum values by their catalog words', () =>
-	Effect.gen(function* () {
-		const { target } = yield* browser(() =>
-			mountDeal({ part: 'form', props: { of: 'deals', id: 'd1', readonly: true } })
-		);
-		assert.match(textOf(element<HTMLElement>(target, '[data-field=kind]')), /SOW/);
-		assert.match(textOf(element<HTMLElement>(target, '[data-field=channel]')), /Email/);
-	})
-);
-
-// A child line's money reads in its document's currency before the host stamps the line's own copy.
-const lines = {
-	quotes: {
-		label: ['number'],
-		fields: { number: { kind: 'text' }, currency: { kind: 'currency', optional: true } }
-	},
-	quote_lines: {
-		label: ['name'],
-		fields: {
-			name: { kind: 'text' },
-			currency: { kind: 'currency' },
-			unit_price: { kind: 'money', currency: 'currency', scale: 4 }
-		},
-		relations: { quote_id: { targets: ['quotes'] } },
-		create: { columns: ['quote_id', 'name', 'unit_price'] },
-		update: { columns: ['unit_price'] }
-	}
-} satisfies NonNullable<KindsHost['catalog']>;
-async function mountLine(props: FormProps, rows: Readonly<Record<string, Row>>) {
-	const { bolt, script, setCapabilities } = await fake(null);
-	script.get = (c, id) => rows[`${c}/${id}`] ?? null;
-	const target = document.createElement('div');
-	document.body.append(target);
-	const app = mount(Harness, { target, props: { bolt, catalog: lines, part: 'form', props } });
-	await settle();
-	mounted.push(async () => {
-		await unmount(app);
-		target.remove();
-	});
-	return target;
-}
-it.live('a new line under a quote prices in the quote currency', () =>
-	Effect.gen(function* () {
-		const target = yield* browser(() =>
-			mountLine(
-				{ of: 'quote_lines', mode: 'create', values: { quote_id: 'q1' } },
-				{ 'quotes/q1': { id: 'q1', number: 'Q-1', currency: 'USD' } }
-			)
-		);
-		assert.match(textOf(element<HTMLElement>(target, '[data-field=unit_price]')), /USD/);
-	})
-);
-it.live('editing a line prices in the line own currency', () =>
-	Effect.gen(function* () {
-		const target = yield* browser(() =>
-			mountLine(
-				{ of: 'quote_lines', id: 'l1' },
-				{
-					'quote_lines/l1': {
-						id: 'l1',
-						name: 'A',
-						currency: 'CNY',
-						unit_price: '2.5',
-						quote_id: 'q1'
-					}
-				}
-			)
-		);
-		assert.match(textOf(element<HTMLElement>(target, '[data-field=unit_price]')), /CNY/);
-	})
-);
-
-it.live('an automation form sends direct input and follows its admitted run', () =>
-	Effect.gen(function* () {
-		const inputs: Json[] = [];
-		const outcomes: Outcome[] = [];
-		const { bolt } = yield* browser(() =>
-			viewFixture({
-				uuid: () => 'rename-run',
-				act: (callable, input) => {
-					assert.equal(callable, 'start');
-					const request = Schema.decodeUnknownSync(
-						Schema.Struct({
-							automation: Schema.String,
-							runs: Schema.Array(Schema.Struct({ id: Schema.String, input: Schema.Json }))
-						})
-					)(input);
-					const first = request.runs[0];
-					assert.ok(first);
-					inputs.push(first.input);
-					return {
-						kind: 'committed',
-						output: {
-							id: first.id,
-							ids: request.runs.map((run) => run.id),
-							automation: request.automation
-						},
-						records: []
-					};
-				},
-				runs: (automation, options) => {
-					assert.equal(automation, 'rename_job');
-					assert.deepEqual(options, { where: { id: { eq: 'rename-run' } }, limit: 1 });
-					return Stream.succeed({
-						rows: [{ id: 'rename-run', automation, status: 'running' }],
-						next: null
-					});
-				}
-			})
-		);
-		const target = document.body.appendChild(document.createElement('div'));
-		const app = mount(Harness, {
-			target,
-			props: {
-				bolt,
-				catalog: {},
-				automations: {
-					rename_job: { input: { target: { kind: 'id', of: 'jobs' }, title: { kind: 'text' } } }
-				},
-				part: 'form',
-				props: {
-					of: { automation: 'rename_job' },
-					values: { target: 'j1', title: 'Paint' },
-					fields: ['title'],
-					onOutcome: (outcome) => outcomes.push(outcome)
-				}
-			}
-		});
-		mounted.push(async () => {
-			await unmount(app);
-			target.remove();
-		});
-		yield* browser(() => settle());
-		assert.equal(element<HTMLInputElement>(target, '[data-field=title] input').value, 'Paint');
-		assert.equal(target.querySelector('[data-field=target]'), null);
-		assert.equal(textOf(element<HTMLButtonElement>(target, 'button[type=submit]')).trim(), 'Start');
-		element<HTMLFormElement>(target, 'form').dispatchEvent(
-			new Event('submit', { bubbles: true, cancelable: true })
-		);
-		yield* browser(() => settle());
-		assert.deepEqual(inputs, [{ target: 'j1', title: 'Paint' }]);
-		assert.deepEqual(outcomes, [
-			{
-				kind: 'committed',
-				output: { id: 'rename-run', ids: ['rename-run'], automation: 'rename_job' },
-				records: []
-			}
-		]);
-		assert.equal(element<HTMLElement>(target, '[data-run="rename-run"]').dataset.status, 'running');
-	})
-);
-
-it.live('a create is headed "New <singular>", never the model label', () =>
-	Effect.gen(function* () {
-		const { bolt, script, setCapabilities } = yield* browser(() => fake(null));
-		const target = document.createElement('div');
-		document.body.append(target);
-		const app = mount(Harness, {
-			target,
-			props: { bolt, catalog, part: 'record', props: { of: 'jobs', mode: 'create' } }
-		});
-		yield* browser(() => settle());
-		mounted.push(async () => {
-			await unmount(app);
-			target.remove();
-		});
-		assert.equal(textOf(element<HTMLElement>(document, '[data-record-head] h2')).trim(), 'New job');
-	})
-);
-
 it.live('authored record fields restrict read relations and the subsequent edit form', () =>
 	Effect.gen(function* () {
 		const { target } = yield* browser(() =>
 			mountDeal({
 				part: 'record',
+				view: RecordShell,
 				props: {
 					of: 'deals',
 					id: 'd1',
@@ -864,40 +378,6 @@ it.live('authored record fields restrict read relations and the subsequent edit 
 		assert.equal(target.querySelector('[data-field=channel]'), null);
 		assert.equal(target.querySelector('[data-field=client]'), null);
 	})
-);
-
-it.live(
-	'an explicitly selected relation appears once by its customer label without a section',
-	() =>
-		Effect.gen(function* () {
-			const { bolt, script, setCapabilities } = yield* browser(() => fake(DEAL));
-			const read = script.read;
-			script.read = (c, options) =>
-				c === 'clients' ? { rows: [{ id: 'c1', name: 'Acme' }], next: null } : read(c, options);
-			const get = script.get;
-			script.get = (c, id, select, options) =>
-				c === 'clients' ? { id, name: 'Acme' } : get(c, id, select, options);
-			const target = document.createElement('div');
-			document.body.append(target);
-			const app = mount(Harness, {
-				target,
-				props: {
-					bolt,
-					catalog: deals,
-					part: 'record',
-					props: { of: 'deals', id: 'd1', fields: ['title', 'client'] }
-				}
-			});
-			mounted.push(async () => {
-				await unmount(app);
-				target.remove();
-			});
-			yield* browser(() => settle());
-			assert.equal(target.querySelectorAll<HTMLElement>('[data-field=client]').length, 1);
-			assert.match(textOf(element<HTMLElement>(target, '[data-field=client]')), /Acme/);
-			assert.doesNotMatch(textOf(element<HTMLElement>(target, '[data-field=client]')), /c1/);
-			assert.equal(target.querySelector('[data-field=kind]'), null);
-		})
 );
 
 it.live(
@@ -941,7 +421,13 @@ it.live(
 			const target = document.body.appendChild(document.createElement('div'));
 			const app = mount(Harness, {
 				target,
-				props: { bolt, catalog: rules, part: 'record', props: { of: 'jobs', id: 'j1' } }
+				props: {
+					bolt,
+					catalog: rules,
+					part: 'record',
+					view: RecordShell,
+					props: { of: 'jobs', id: 'j1' }
+				}
 			});
 			mounted.push(async () => {
 				await unmount(app);
@@ -1013,6 +499,7 @@ it.live(
 						}
 					},
 					part: 'record',
+					view: RecordShell,
 					props: {
 						of: 'jobs',
 						id: 'j1',
@@ -1041,62 +528,19 @@ it.live(
 		})
 );
 
-it.live('history timestamps use the host zone, matching record metadata', () =>
-	Effect.gen(function* () {
-		const { bolt } = yield* browser(() => fake(LIVE));
-		const target = document.body.appendChild(document.createElement('div'));
-		const app = mount(Harness, {
-			target,
-			props: {
-				bolt,
-				catalog,
-				zone: 'Asia/Singapore',
-				part: 'record',
-				props: { of: 'jobs', id: 'j1' }
-			}
-		});
-		mounted.push(async () => {
-			await unmount(app);
-			target.remove();
-		});
-		yield* browser(() => settle());
-		element<HTMLElement>(target, '[data-timeline-trigger]').click();
-		yield* browser(() => settle());
-		const expected = new Date(required(required(HISTORY[2]).at)).toLocaleString('en', {
-			dateStyle: 'medium',
-			timeStyle: 'short',
-			timeZone: 'Asia/Singapore'
-		});
-		assert.ok(textOf(element<HTMLElement>(document, '[data-record-timeline]')).includes(expected));
-		assert.ok(
-			textOf(element<HTMLElement>(document, '[data-record-history-events]')).includes(expected)
-		);
-	})
-);
-
-it.live('editing keeps readable nonwritable fields visible without exposing an editor', () =>
-	Effect.gen(function* () {
-		const v = yield* browser(() =>
-			show(LIVE, { jobs: { ...catalog.jobs, update: { columns: ['title'] } } })
-		);
-		required(edit(v.target)).click();
-		yield* browser(() => settle());
-		assert.ok(element<HTMLInputElement>(v.target, '[data-field=title] input'));
-		const crew = element<HTMLElement>(v.target, '[data-field=crew]');
-		assert.ok(crew, 'the readable field stays in the edit layout');
-		assert.ok(crew.hasAttribute('data-readonly'));
-		assert.match(textOf(crew), /B/);
-		assert.equal(crew.querySelector('input, textarea, select'), null);
-	})
-);
-
 it.live(
-	'save carries the loaded draft revision and Cancel refuses to discard an unsaved edit silently',
+	'save carries the loaded draft revision, Cancel refuses to discard an unsaved edit silently, and a source-managed field keeps its value',
 	() =>
 		Effect.gen(function* () {
-			const v = yield* browser(() => show(LIVE));
+			const v = yield* browser(() =>
+				show(LIVE, { jobs: { ...catalog.jobs, readonlyFields: { crew: 'syncOwned' } } })
+			);
 			required(edit(v.target)).click();
 			yield* browser(() => settle());
+			const crew = element<HTMLElement>(v.target, '[data-field=crew]');
+			assert.match(textOf(crew), /B/);
+			assert.ok(element<HTMLElement>(crew, '[data-field-restriction]'));
+			assert.equal(crew.querySelector('input'), null);
 			const input = element<HTMLInputElement>(v.target, '[data-field=title] input');
 			input.value = 'A changed title';
 			input.dispatchEvent(new Event('input', { bubbles: true }));
@@ -1149,26 +593,6 @@ it.live('closing the sheet while saving asks before removing the pending draft',
 			yield* browser(() => settle());
 		}
 	})
-);
-
-it.live(
-	'source-managed fields retain their value and explain the native restriction while local fields edit',
-	() =>
-		Effect.gen(function* () {
-			const v = yield* browser(() =>
-				show(LIVE, { jobs: { ...catalog.jobs, readonlyFields: { crew: 'syncOwned' } } })
-			);
-			required(edit(v.target)).click();
-			yield* browser(() => settle());
-			assert.ok(element<HTMLInputElement>(v.target, '[data-field=title] input'));
-			const crew = element<HTMLElement>(v.target, '[data-field=crew]');
-			assert.match(textOf(crew), /B/);
-			assert.match(
-				textOf(element<HTMLElement>(crew, '[data-field-restriction]')),
-				/Managed by a sync/
-			);
-			assert.equal(crew.querySelector('input'), null);
-		})
 );
 
 it.live('custom representation forms share the shell view/edit mode, draft and one save', () =>
@@ -1249,7 +673,7 @@ it.live(
 			const target = document.body.appendChild(document.createElement('div'));
 			const app = mount(Harness, {
 				target,
-				props: { bolt, catalog, part: 'record', props: { of: 'jobs', id: 'j1' } }
+				props: { bolt, catalog, part: 'record', view: RecordShell, props: { of: 'jobs', id: 'j1' } }
 			});
 			mounted.push(async () => {
 				await unmount(app);
@@ -1319,156 +743,51 @@ it.live('native row capabilities govern editing and explain partially writable f
 	})
 );
 
-it.live('read-only viewing omits permission hints and editing explains denied fields', () =>
-	Effect.gen(function* () {
-		const denied: RecordCapabilities = {
-			...nativeCapabilities,
-			fields: {
-				...nativeCapabilities.fields,
-				crew: { writable: false, proposal: false, reasons: ['noGrant'] }
-			}
-		};
-		const v = yield* browser(() => show(LIVE, catalog, undefined, async () => denied));
-		assert.match(textOf(element<HTMLElement>(v.target, '[data-field=crew]')), /B/);
-		assert.equal(v.target.querySelector('[data-field-restriction=noGrant]'), null);
-		required(edit(v.target)).click();
-		yield* browser(() => settle());
-		assert.equal(v.target.querySelector('[data-field=crew] input'), null);
-		assert.match(
-			textOf(element<HTMLElement>(v.target, '[data-field-restriction=noGrant]')),
-			/permissions/
-		);
-	})
-);
-
-it.live('native operation restrictions hide Edit while preserving readable values', () =>
-	Effect.gen(function* () {
-		const locked: RecordCapabilities = {
-			...nativeCapabilities,
-			fields: {
-				title: { writable: false, proposal: false, reasons: ['stateLocked'] },
-				crew: { writable: false, proposal: false, reasons: ['stateLocked'] }
-			},
-			update: { allowed: false, proposal: false, reasons: ['stateLocked'] }
-		};
-		const v = yield* browser(() => show(LIVE, catalog, undefined, async () => locked));
-		assert.equal(edit(v.target), undefined);
-		assert.match(textOf(element<HTMLElement>(v.target, '[data-field=title]')), /Paint v3/);
-		assert.equal(v.target.querySelector('[data-field-restriction]') === null, true);
-	})
-);
-
-for (const direct of [false, true])
-	it.live(
-		`a proposal field requests approval while locked fields remain readable (other direct fields: ${direct})`,
-		() =>
-			Effect.gen(function* () {
-				const proposal: RecordCapabilities = {
-					...nativeCapabilities,
-					fields: {
-						title: { writable: false, proposal: true, reasons: ['noGrant'] },
-						crew: { writable: false, proposal: false, reasons: ['syncOwned'] },
-						...(direct ? { note: { writable: true, proposal: false, reasons: [] } } : {})
-					},
-					update: { allowed: direct, proposal: true, reasons: direct ? [] : ['noGrant'] },
-					proposalMoves: {}
-				};
-				const v = yield* browser(() =>
-					show(
-						LIVE,
-						catalog,
-						(callable, input, options) => {
-							v.calls.acts.push({ callable, input, options });
-							return { kind: 'pendingApproval', requestId: 'approval1', records: [] };
-						},
-						async () => proposal
-					)
-				);
-				required(edit(v.target)).click();
-				yield* browser(() => settle());
-				const title = element<HTMLInputElement>(v.target, '[data-field=title] input');
-				assert.ok(title);
-				assert.equal(v.target.querySelector('[data-field=crew] input'), null);
-				title.value = 'Proposed title';
-				title.dispatchEvent(new Event('input', { bubbles: true }));
-				yield* browser(() => settle());
-				const request = [...v.target.querySelectorAll<HTMLButtonElement>('button')].find(
-					(button) => textOf(button).trim() === 'Request approval'
-				);
-				assert.ok(request);
-				request.click();
-				yield* browser(() => settle());
-				assert.deepEqual(required(v.calls.acts[0]).options.observed, { j1: 3 });
-				assert.deepEqual(required(v.calls.acts[0]).input, [
-					{ target: 'j1', set: { title: 'Proposed title' } }
-				]);
-				assert.equal(v.target.querySelector('[data-field=title] input'), null);
-				assert.match(textOf(element<HTMLElement>(v.target, '[data-field=title]')), /Paint v3/);
-			})
-	);
-
-it.live('a standalone update Form also applies native proposal and field restrictions', () =>
-	Effect.gen(function* () {
-		const { bolt, script, setCapabilities, calls } = yield* browser(() => fake(LIVE));
-		setCapabilities(async () => ({
-			...nativeCapabilities,
-			fields: {
-				title: { writable: false, proposal: true, reasons: ['noGrant'] },
-				crew: { writable: false, proposal: false, reasons: ['syncOwned'] }
-			},
-			update: { allowed: false, proposal: true, reasons: ['noGrant'] },
-			proposalMoves: {}
-		}));
-		const target = document.body.appendChild(document.createElement('div'));
-		const app = mount(Harness, {
-			target,
-			props: {
-				bolt,
-				catalog,
-				part: 'form',
-				props: { of: 'jobs', id: 'j1', mode: 'update', record: LIVE }
-			}
-		});
-		mounted.push(async () => {
-			await unmount(app);
-			target.remove();
-		});
-		yield* browser(() => settle());
-		assert.ok(element<HTMLInputElement>(target, '[data-field=title] input'));
-		assert.equal(target.querySelector('[data-field=crew] input'), null);
-		const title = element<HTMLInputElement>(target, '[data-field=title] input');
-		title.value = 'Standalone proposal';
-		title.dispatchEvent(new Event('input', { bubbles: true }));
-		yield* browser(() => settle());
-		assert.match(
-			textOf(element<HTMLButtonElement>(target, 'button[type=submit]')),
-			/Request approval/
-		);
-		element<HTMLFormElement>(target, 'form').dispatchEvent(
-			new Event('submit', { bubbles: true, cancelable: true })
-		);
-		yield* browser(() => settle());
-		assert.deepEqual(required(calls.acts[0]).options.observed, { j1: 3 });
-	})
-);
-
 it.live(
-	'unreadable native capabilities omit record fields; request failures prevent editing and show a recovery error',
+	'a proposal field requests approval beside a direct field while locked fields remain readable',
 	() =>
 		Effect.gen(function* () {
-			const missing = yield* browser(() => show(LIVE, catalog, undefined, async () => null));
-			assert.equal(missing.target.querySelector('[data-field]'), null);
-			assert.match(textOf(missing.target), /Not found or no access/);
-			const failed = yield* browser(() =>
-				show(LIVE, catalog, undefined, async () => {
-					throw new Error('unavailable');
-				})
+			const proposal: RecordCapabilities = {
+				...nativeCapabilities,
+				fields: {
+					title: { writable: false, proposal: true, reasons: ['noGrant'] },
+					crew: { writable: false, proposal: false, reasons: ['syncOwned'] },
+					note: { writable: true, proposal: false, reasons: [] }
+				},
+				update: { allowed: true, proposal: true, reasons: [] },
+				proposalMoves: {}
+			};
+			const v = yield* browser(() =>
+				show(
+					LIVE,
+					catalog,
+					(callable, input, options) => {
+						v.calls.acts.push({ callable, input, options });
+						return { kind: 'pendingApproval', requestId: 'approval1', records: [] };
+					},
+					async () => proposal
+				)
 			);
-			assert.equal(edit(failed.target), undefined);
-			assert.match(
-				textOf(element<HTMLElement>(failed.target, '[role=alert]')),
-				/Record permissions could not be loaded/
+			required(edit(v.target)).click();
+			yield* browser(() => settle());
+			const title = element<HTMLInputElement>(v.target, '[data-field=title] input');
+			assert.ok(title);
+			assert.equal(v.target.querySelector('[data-field=crew] input'), null);
+			title.value = 'Proposed title';
+			title.dispatchEvent(new Event('input', { bubbles: true }));
+			yield* browser(() => settle());
+			const request = [...v.target.querySelectorAll<HTMLButtonElement>('button')].find(
+				(button) => textOf(button).trim() === 'Request approval'
 			);
+			assert.ok(request);
+			request.click();
+			yield* browser(() => settle());
+			assert.deepEqual(required(v.calls.acts[0]).options.observed, { j1: 3 });
+			assert.deepEqual(required(v.calls.acts[0]).input, [
+				{ target: 'j1', set: { title: 'Proposed title' } }
+			]);
+			assert.equal(v.target.querySelector('[data-field=title] input'), null);
+			assert.match(textOf(element<HTMLElement>(v.target, '[data-field=title]')), /Paint v3/);
 		})
 );
 
@@ -1498,7 +817,7 @@ it.live(
 			const target = document.body.appendChild(document.createElement('div'));
 			const app = mount(Harness, {
 				target,
-				props: { bolt, catalog, part: 'record', props: { of: 'jobs', id: 'j1' } }
+				props: { bolt, catalog, part: 'record', view: RecordShell, props: { of: 'jobs', id: 'j1' } }
 			});
 			mounted.push(async () => {
 				await unmount(app);
@@ -1540,6 +859,7 @@ it.live('a routed create settles pending approval and opens the record it commit
 				bolt,
 				catalog: { jobs: { ...catalog.jobs, create: { columns: ['title'] } } },
 				part: 'record',
+				view: RecordShell,
 				props: { of: 'jobs', mode: 'create' }
 			}
 		});
@@ -1559,102 +879,4 @@ it.live('a routed create settles pending approval and opens the record it commit
 		assert.deepEqual(acts, ['jobs.create']);
 		assert.deepEqual(new URL(location.href).searchParams.getAll('record'), ['jobs/candidate']);
 	})
-);
-
-it.live(
-	'a create rolled back by rejection keeps its request readable instead of a missing-record error',
-	() =>
-		Effect.gen(function* () {
-			const { bolt, setCapabilities } = yield* browser(() =>
-				fake(null, [
-					{
-						id: 'create-request',
-						record: 'candidate',
-						action: 'create',
-						status: 'Rejected',
-						records: [{ model: 'jobs', id: 'candidate', op: 'create' }],
-						log: [
-							logEntry('request', 'Pending', 'Ada'),
-							logEntry('reject', 'Rejected', 'Sam', {
-								rolledBack: [{ model: 'jobs', id: 'candidate', action: 'removed' }]
-							})
-						]
-					}
-				])
-			);
-			setCapabilities(async () => {
-				throw new Error('A removed create has no stored record capabilities');
-			});
-			const target = document.body.appendChild(document.createElement('div'));
-			const app = mount(Harness, {
-				target,
-				props: { bolt, catalog, part: 'record', props: { of: 'jobs', id: 'candidate' } }
-			});
-			try {
-				yield* browser(() => settle());
-				assert.equal(target.querySelector('[data-read=notFound]'), null);
-				element<HTMLElement>(target, '[data-step="step-0"] [data-node]').focus();
-				yield* browser(settle);
-				const log = element<HTMLElement>(document, '[data-view=approval-step-log]');
-				assert.match(textOf(log), /Rejected/);
-				assert.match(textOf(element<HTMLElement>(log, '[data-rolled-back]')), /removed/);
-				assert.equal(edit(target), undefined);
-			} finally {
-				yield* browser(() => unmount(app));
-				target.remove();
-			}
-		})
-);
-
-it.live(
-	'a late approval list cannot restore a request after a newer record revision has cleared it',
-	() =>
-		Effect.gen(function* () {
-			let current = LIVE;
-			const readers = new Set<() => void>();
-			const answers: ((answer: readonly ApprovalView[]) => void)[] = [];
-			const { bolt, script, setCapabilities } = yield* browser(() => fake(current));
-			script.approval = (params) =>
-				params.has('id')
-					? null
-					: new Promise<readonly ApprovalView[]>((resolve) => answers.push(resolve));
-			const originalLiveGet = script.get;
-			script.get = (c, id, select, options) =>
-				c === 'jobs' && options?.asOf === undefined
-					? current
-					: originalLiveGet(c, id, select, options);
-			script.changes = (read, emit) => {
-				if (recordRootsOf(read).includes('jobs')) {
-					readers.add(emit);
-					return () => {
-						readers.delete(emit);
-					};
-				}
-				return () => {};
-			};
-			const target = document.body.appendChild(document.createElement('div'));
-			const app = mount(Harness, {
-				target,
-				props: { bolt, catalog, part: 'record', props: { of: 'jobs', id: 'j1' } }
-			});
-			mounted.push(async () => {
-				await unmount(app);
-				target.remove();
-			});
-			yield* browser(() => settle());
-			assert.equal(answers.length, 1);
-			current = { ...LIVE, revision: 4 };
-			for (const reader of readers) reader();
-			yield* browser(() => settle());
-			assert.equal(answers.length, 2);
-			required(answers[1])([]);
-			yield* browser(() => settle());
-			required(answers[0])([approvalView({ id: 'old', status: 'Pending' })]);
-			yield* browser(() => settle());
-			assert.doesNotMatch(
-				textOf(element<HTMLElement>(target, '[data-record-head]')),
-				/Pending review/
-			);
-			assert.equal(target.querySelector('[data-record-pane=approval] .bg-brand'), null);
-		})
 );

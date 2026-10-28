@@ -4,9 +4,9 @@ import { expect, it, vi } from '@effect/vitest';
 import { ConfigProvider, Deferred, Effect, Exit, Fiber, Scope } from 'effect';
 import { TestClock } from 'effect/testing';
 import { FacilityFailure } from '../src/decl/errors.ts';
-import type { Authority, McpServer, McpToolInfo } from '../src/engine/contracts.ts';
+import type { Authority, McpPort, McpServer, McpToolInfo } from '../src/engine/contracts.ts';
 import type { Json } from '../src/decl/values.ts';
-import type { PortFailure } from '../src/engine/port.ts';
+import { Port, type PortFailure } from '../src/engine/port.ts';
 import { Mcp } from '../src/engine/ports.ts';
 import { mcpSessions, type McpHost } from '../src/engine/agent/mcp.ts';
 
@@ -344,5 +344,34 @@ it.effect('ends a call past its wall as a timeout and interrupts the port call',
 			message: 'mcp:good.echo did not answer within 25 ms'
 		});
 		expect(interrupted).toBe(true);
+	})
+);
+
+it.effect("over a host's Promise port, an interrupted connect aborts the port's signal and leaves nothing to close", () =>
+	Effect.gen(function* () {
+		const started = Promise.withResolvers<void>();
+		let signal: AbortSignal | undefined;
+		const close = vi.fn(async (_session: string) => {});
+		const port: McpPort = {
+			connect: (_server, s) => {
+				signal = s;
+				started.resolve();
+				return new Promise<string>(() => {});
+			},
+			tools: async () => [],
+			call: async () => ({ content: [] }),
+			close
+		};
+		const scope = yield* Scope.make();
+		const sessions = yield* mcpSessions(manifest, host()).pipe(
+			Scope.provide(scope),
+			Effect.provide(Mcp.fromAbi(port))
+		);
+		const call = yield* Effect.forkChild(sessions.call('good', 'echo', {}));
+		yield* Port.attempt('fixture.connect', () => started.promise);
+		yield* Fiber.interrupt(call);
+		expect(signal?.aborted).toBe(true);
+		yield* Scope.close(scope, Exit.void);
+		expect(close).not.toHaveBeenCalled();
 	})
 );

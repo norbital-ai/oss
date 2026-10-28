@@ -59,9 +59,18 @@ importers:
       '@typescript/native-preview':
         specifier: 7.0.0-dev.20260707.2
         version: 7.0.0-dev.20260707.2
+      '@vitest/browser-playwright':
+        specifier: 5.0.5
+        version: 5.0.5(playwright@1.64.1)(vite@8.3.5(@types/node@26.6.5)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))(vitest@5.0.5)
       effect:
         specifier: 'catalog:'
         version: 4.0.6
+      happy-dom:
+        specifier: 21.0.4
+        version: 21.0.4
+      playwright:
+        specifier: 1.64.1
+        version: 1.64.1
       prettier:
         specifier: ^3.9.10
         version: 3.9.10
@@ -108,9 +117,6 @@ importers:
       '@capacitor/local-notifications':
         specifier: 8.3.1
         version: 8.3.1(@capacitor/core@8.5.2)
-      '@effect/vitest':
-        specifier: 'catalog:'
-        version: 4.0.6(effect@4.0.6)(vitest@5.0.5)
       '@types/node':
         specifier: ^26.6.5
         version: 26.6.5
@@ -120,9 +126,6 @@ importers:
       vite:
         specifier: 'catalog:'
         version: 8.3.5(@types/node@26.6.5)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1)
-      vitest:
-        specifier: 5.0.5
-        version: 5.0.5(@types/node@26.6.5)(@vitest/browser-playwright@5.0.5)(@vitest/ui@5.0.5)(happy-dom@21.0.4)(vite@8.3.5(@types/node@26.6.5)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))
 
   packages/bolt:
     dependencies:
@@ -171,9 +174,6 @@ importers:
       '@typescript/native':
         specifier: npm:typescript@7.0.2
         version: typescript@7.0.2
-      effect:
-        specifier: 'catalog:'
-        version: 4.0.6
       exifr:
         specifier: 7.1.3
         version: 7.1.3
@@ -229,27 +229,18 @@ importers:
       '@types/pg':
         specifier: ^8.23.1
         version: 8.23.1
-      '@vitest/browser-playwright':
-        specifier: 5.0.5
-        version: 5.0.5(playwright@1.64.1)(vite@8.3.5(@types/node@26.6.5)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))(vitest@5.0.5)
-      happy-dom:
-        specifier: ^21.0.4
-        version: 21.0.4
+      effect:
+        specifier: 'catalog:'
+        version: 4.0.6
       pg:
         specifier: ^8.23.1
         version: 8.23.1
-      playwright:
-        specifier: 1.64.1
-        version: 1.64.1
       svelte:
         specifier: 'catalog:'
         version: 5.57.3
       svelte-check:
         specifier: ^4.7.7
         version: 4.7.7(picomatch@4.0.7)(svelte@5.57.3)(typescript@6.0.3)
-      vitest:
-        specifier: 5.0.5
-        version: 5.0.5(@types/node@26.6.5)(@vitest/browser-playwright@5.0.5)(@vitest/ui@5.0.5)(happy-dom@21.0.4)(vite@8.3.5(@types/node@26.6.5)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))
 
   packages/bolt-server:
     dependencies:
@@ -290,9 +281,6 @@ importers:
         specifier: ^3.6.7
         version: 3.6.7(supports-color@7.2.0)
     devDependencies:
-      '@effect/vitest':
-        specifier: 'catalog:'
-        version: 4.0.6(effect@4.0.6)(vitest@5.0.5)
       '@types/mssql':
         specifier: 12.3.0
         version: 12.3.0(supports-color@7.2.0)
@@ -308,9 +296,6 @@ importers:
       typescript:
         specifier: 6.0.3
         version: 6.0.3
-      vitest:
-        specifier: 5.0.5
-        version: 5.0.5(@types/node@26.6.5)(@vitest/browser-playwright@5.0.5)(@vitest/ui@5.0.5)(happy-dom@21.0.4)(vite@8.3.5(@types/node@26.6.5)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))
 
   packages/doctor:
     dependencies:
@@ -327,15 +312,9 @@ importers:
       '@effect/platform-node':
         specifier: 'catalog:'
         version: 4.0.6(effect@4.0.6)
-      '@effect/vitest':
-        specifier: 'catalog:'
-        version: 4.0.6(effect@4.0.6)(vitest@5.0.5)
       '@types/node':
         specifier: ^26.6.5
         version: 26.6.5
-      vitest:
-        specifier: 5.0.5
-        version: 5.0.5(@types/node@26.6.5)(@vitest/browser-playwright@5.0.5)(@vitest/ui@5.0.5)(happy-dom@21.0.4)(vite@8.3.5(@types/node@26.6.5)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))
 
   packages/providers:
     dependencies:
@@ -361,18 +340,12 @@ importers:
       '@effect/platform-node':
         specifier: 'catalog:'
         version: 4.0.6(effect@4.0.6)
-      '@effect/vitest':
-        specifier: 'catalog:'
-        version: 4.0.6(effect@4.0.6)(vitest@5.0.5)
       '@types/node':
         specifier: ^26.6.5
         version: 26.6.5
       typescript:
         specifier: 6.0.3
         version: 6.0.3
-      vitest:
-        specifier: 5.0.5
-        version: 5.0.5(@types/node@26.6.5)(@vitest/browser-playwright@5.0.5)(@vitest/ui@5.0.5)(happy-dom@21.0.4)(vite@8.3.5(@types/node@26.6.5)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))
     optionalDependencies:
       '@whiskeysockets/baileys':
         specifier: 7.0.0-rc14
@@ -387,9 +360,6 @@ importers:
         specifier: 'catalog:'
         version: 4.0.6
     devDependencies:
-      '@effect/vitest':
-        specifier: 'catalog:'
-        version: 4.0.6(effect@4.0.6)(vitest@5.0.5)
       '@types/node':
         specifier: ^26.6.5
         version: 26.6.5
@@ -399,9 +369,6 @@ importers:
       typescript:
         specifier: 6.0.3
         version: 6.0.3
-      vitest:
-        specifier: 5.0.5
-        version: 5.0.5(@types/node@26.6.5)(@vitest/browser-playwright@5.0.5)(@vitest/ui@5.0.5)(happy-dom@21.0.4)(vite@8.3.5(@types/node@26.6.5)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))
 
   packages/store:
     dependencies:
@@ -412,9 +379,6 @@ importers:
         specifier: 0.8.3
         version: 0.8.3
     devDependencies:
-      '@effect/vitest':
-        specifier: 'catalog:'
-        version: 4.0.6(effect@4.0.6)(vitest@5.0.5)
       '@electric-sql/pglite':
         specifier: ^0.5.12
         version: 0.5.12
@@ -427,9 +391,6 @@ importers:
       typescript:
         specifier: 6.0.3
         version: 6.0.3
-      vitest:
-        specifier: 5.0.5
-        version: 5.0.5(@types/node@26.6.5)(@vitest/browser-playwright@5.0.5)(@vitest/ui@5.0.5)(happy-dom@21.0.4)(vite@8.3.5(@types/node@26.6.5)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))
 
   packages/ui:
     dependencies:
@@ -481,9 +442,6 @@ importers:
       d3-shape:
         specifier: ^3.2.0
         version: 3.2.0
-      effect:
-        specifier: 'catalog:'
-        version: 4.0.6
       fflate:
         specifier: 0.8.3
         version: 0.8.3
@@ -512,9 +470,6 @@ importers:
         specifier: ^1.4.0
         version: 1.4.0
     devDependencies:
-      '@effect/vitest':
-        specifier: 'catalog:'
-        version: 4.0.6(effect@4.0.6)(vitest@5.0.5)
       '@iconify-json/lucide':
         specifier: 1.2.147
         version: 1.2.147
@@ -536,9 +491,9 @@ importers:
       '@types/qrcode':
         specifier: ^1.5.6
         version: 1.5.6
-      happy-dom:
-        specifier: ^21.0.4
-        version: 21.0.4
+      effect:
+        specifier: 'catalog:'
+        version: 4.0.6
       prettier:
         specifier: ^3.9.10
         version: 3.9.10
@@ -554,9 +509,6 @@ importers:
       typescript:
         specifier: 6.0.3
         version: 6.0.3
-      vitest:
-        specifier: 5.0.5
-        version: 5.0.5(@types/node@26.6.5)(@vitest/browser-playwright@5.0.5)(@vitest/ui@5.0.5)(happy-dom@21.0.4)(vite@8.3.5(@types/node@26.6.5)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))
 
 packages:
 

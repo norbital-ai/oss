@@ -113,7 +113,8 @@ export const manifest = {
 	mcp: {},
 	apps: {},
 	customFields: {},
-	agent: { skills: {} }
+	agent: { skills: {} },
+	needs: []
 } satisfies EngineManifest;
 
 /** Explicit opt-in for fixtures that bind the guest's create and update callbacks. */

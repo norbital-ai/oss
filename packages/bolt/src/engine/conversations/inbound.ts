@@ -1,6 +1,5 @@
 // The inbound trust boundary is shared by every conversation driver and custom conversation.
 import { Effect, Option, Predicate, Schema } from 'effect';
-import type { Json } from '../../decl/values.ts';
 import type { RowData } from '../contracts.ts';
 import { Instant } from '@norbital-ai/std/date';
 

@@ -7,11 +7,11 @@ import { describe, expect, it } from '@effect/vitest';
 import { Context, Effect, Layer, Result, Schema } from 'effect';
 import { catalogOf, toPred } from '../src/engine/access/pred.ts';
 import type { Authority, Bindings, ModelAuthority, EngineActor } from '../src/engine/contracts.ts';
-import { PgliteDb } from '../src/node/db/pglite.ts';
+import { TestDb } from '../src/test/database.ts';
 import { TenantDb } from '../src/engine/db/tenant-db.ts';
-import { decodeManifest } from '../src/engine/manifest.ts';
+import { decodeProjectedManifest } from '../src/engine/manifest.ts';
 import { whereSql, type Pred } from '@norbital-ai/store';
-import { applyPlan, plan } from '../src/engine/schema/plan.ts';
+import { plan } from '../src/engine/schema/plan.ts';
 import { readOptions } from '../src/engine/query/reader.ts';
 import { fromStore } from '../src/protocol/errors.ts';
 
@@ -45,7 +45,7 @@ const models = {
 	}
 };
 const manifest = Result.getOrThrow(
-	decodeManifest({
+	decodeProjectedManifest({
 		workspace: { tz: 'UTC', locale: 'en' },
 		models,
 		relationships: {
@@ -280,7 +280,6 @@ const owner = who();
 const IdRow = Schema.Struct({ id: Schema.String });
 const fixture = Effect.gen(function* () {
 	const db = yield* TenantDb;
-	yield* applyPlan(db, yield* plan(null, manifest), { accept: true });
 	// the grant `Where` is the root's read arm: an authority predicate, compiled raw across any relation
 	const visible = Effect.fnUntraced(function* (root: string, pred: Pred, as: Authority = owner) {
 		const authority: Authority = {
@@ -378,7 +377,7 @@ class PolicyFixture extends Context.Service<PolicyFixture, Effect.Success<typeof
 	'test/PolicyFixture'
 ) {}
 const PolicyFixtureLive = Layer.effect(PolicyFixture, fixture).pipe(
-	Layer.provide(PgliteDb.layer())
+	Layer.provide(TestDb.layer(manifest))
 );
 
 describe('the production read-policy matrix on the new engine (L-BOLT-229)', () => {

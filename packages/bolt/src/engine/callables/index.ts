@@ -13,14 +13,11 @@ import {
 	Reads,
 	Wake,
 	Links,
-	type Bridge,
-	type Entry,
 	type CallerContext,
 	type CallResult,
 	type StartRequest,
 	type PlannedCommit,
 	type ReadsShape,
-	type GuestShape,
 	type Callable,
 	type CallablesShape,
 	type ShapeOf
@@ -37,7 +34,6 @@ import type { Json } from '../../decl/values.ts';
 import {
 	LIMITS,
 	type Authority,
-	type CrossAnswer,
 	type EngineActor,
 	type Outcome,
 	type RowData
@@ -82,7 +78,6 @@ type ActsRequest = Caller & {
 };
 type CallablesConfig = {
 	engine: WriteEngine & { read: ReadsShape['run'] };
-	guest: GuestShape;
 	live: ShapeOf<typeof Live>;
 	wake: ShapeOf<typeof Wake>;
 	links: ShapeOf<typeof Links>;
@@ -123,12 +118,6 @@ export function isBatchCallable(callable: Callable): callable is Extract<
 			callable.verb === 'delete')
 	);
 }
-const fail = (code: string, message: string): CrossAnswer => ({
-	ok: false,
-	error: { kind: 'bolt', code, message }
-});
-const failed = (e: unknown): CrossAnswer =>
-	fail(e instanceof BoltError ? e.code : 'internal', e instanceof Error ? e.message : String(e));
 const problems = (d: Decoded) => d.problems.map((p) => `${p.path}: ${p.message}`).join('; ');
 /** The `Holder` a `'trigger'` run is recompiled from (`sys_run.starter`, read by the runs area). */
 const starterOf = (a: Authority): Json =>
@@ -171,7 +160,6 @@ function makeCallables(config: CallablesConfig): CallablesShape {
 	const e = config.engine,
 		m = e.manifest,
 		cat = catalogOf(m);
-	const guest = config.guest;
 	const constraints = constraintIndex(m);
 
 	/** Rule 33: a start or schedule needs the automation in `policy.automations`; its input decodes (rule 23). */
@@ -686,7 +674,6 @@ export const CallablesLive = Layer.effect(
 		};
 		const callables = makeCallables({
 			engine: native,
-			guest,
 			live,
 			wake,
 			links

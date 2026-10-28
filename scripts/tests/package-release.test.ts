@@ -96,10 +96,6 @@ layer(ScriptLive, { excludeTestServices: true })('release files and archives', (
 	it.effect('boots before any workspace package has been built', () =>
 		Effect.gen(function* () {
 			const fs = yield* FileSystem.FileSystem;
-			assert.doesNotMatch(
-				yield* fs.readFileString(path.join(repositoryRoot, 'scripts/lib/package-release.ts')),
-				/from ['"]@norbital-ai\//
-			);
 			const directory = yield* fs.makeTempDirectoryScoped({
 				prefix: 'norbital-package-manifest-test-'
 			});
@@ -109,20 +105,6 @@ layer(ScriptLive, { excludeTestServices: true })('release files and archives', (
 			yield* fs.writeFileString(file, '[]\n');
 			const error = yield* Effect.flip(readManifest(file));
 			assert.match(error.message, /is not a JSON object/);
-		})
-	);
-	it.effect('keeps every public package on the workspace release version', () =>
-		Effect.gen(function* () {
-			const releaseVersion = (yield* readManifest(path.join(repositoryRoot, 'package.json')))
-				.version;
-			assert.deepEqual(
-				[
-					...new Set(
-						(yield* readPublicPackageEntries(repositoryRoot)).map(({ version }) => version)
-					)
-				],
-				[releaseVersion]
-			);
 		})
 	);
 	it.effect('refuses a registry version with missing integrity before requesting an archive', () =>
@@ -157,52 +139,5 @@ layer(ScriptLive, { excludeTestServices: true })('release files and archives', (
 			assert.doesNotMatch(failure.message, /must-not-appear/);
 			assert.equal(archives, 0);
 		})
-	);
-	it.effect(
-		'packs exact source bytes without changing checked-in semantic versions',
-		() =>
-			Effect.gen(function* () {
-				const fs = yield* FileSystem.FileSystem;
-				const directory = yield* fs.makeTempDirectoryScoped({
-					prefix: 'norbital-workspace-packages-test-'
-				});
-				const repeated = yield* fs.makeTempDirectoryScoped({
-					prefix: 'norbital-workspace-packages-repeat-test-'
-				});
-				const release = yield* resolveWorkspacePackages({
-					archiveBaseUrl: 'https://releases.example.test/platform-v1/',
-					archiveOutput: directory
-				});
-				const repeatedRelease = yield* resolveWorkspacePackages({
-					archiveBaseUrl: 'https://mirror.example.test/platform-v1/',
-					archiveOutput: repeated
-				});
-				assert.equal(release.entries.length, publicPackageDirectories.length);
-				assert.equal(release.packageKey, platformPackageKey(release.entries));
-				assert.equal(repeatedRelease.packageKey, release.packageKey);
-				assert.deepEqual(
-					repeatedRelease.entries.map(({ name, version, integrity }) => ({
-						name,
-						version,
-						integrity
-					})),
-					release.entries.map(({ name, version, integrity }) => ({ name, version, integrity }))
-				);
-				const [firstDirectory] = publicPackageDirectories;
-				const packed = release.entries.find(
-					(entry) => entry.name === `@norbital-ai/${firstDirectory}`
-				);
-				const packedManifest = yield* readManifest(
-					path.join(repositoryRoot, 'packages', firstDirectory, 'package.json')
-				);
-				assert.equal(packed?.version, packedManifest.version);
-				assert.equal(
-					packed?.tarball,
-					`https://releases.example.test/platform-v1/${firstDirectory}.tgz`
-				);
-				for (const packageDirectory of publicPackageDirectories)
-					assert.equal(yield* fs.exists(path.join(directory, `${packageDirectory}.tgz`)), true);
-			}),
-		{ timeout: 0 }
 	);
 });

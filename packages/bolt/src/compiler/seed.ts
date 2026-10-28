@@ -4,14 +4,19 @@ import { gunzipSync } from 'node:zlib';
 import type { RowData } from '../engine/contracts.ts';
 import type { CheckDiagnostic } from '../protocol/diagnostic.ts';
 
-/** `seed/**\/<model>.json[.gz]`, one pack (discover already refused unknown models). */
+/**
+ * One pack's `<model>.json[.gz]` files (discover already refused unknown models): `base` is `seed/**` outside
+ * `seed/test/`, `test` is `seed/test/**`. Each pack's `assets.json` and `assets/**` are not rows.
+ */
 export const seedPack = Effect.fn('bolt.seedPack')(function* (
 	root: string,
-	errors: CheckDiagnostic[]
+	errors: CheckDiagnostic[],
+	name: 'base' | 'test' = 'base'
 ) {
 	const fs = yield* FileSystem.FileSystem;
 	const pathService = yield* Path.Path;
-	const dir = pathService.join(root, 'seed'),
+	const prefix = name === 'test' ? 'seed/test' : 'seed',
+		dir = pathService.join(root, prefix),
 		pack: { [c: string]: RowData[] } = {};
 	if (!(yield* fs.exists(dir))) return pack;
 	for (const entry of yield* fs.readDirectory(dir, { recursive: true })) {
@@ -21,8 +26,9 @@ export const seedPack = Effect.fn('bolt.seedPack')(function* (
 		if (
 			(yield* fs.stat(absolute)).type !== 'File' ||
 			hit === null ||
-			path === 'seed/assets.json' ||
-			path.startsWith('seed/assets/')
+			path === `${prefix}/assets.json` ||
+			path.startsWith(`${prefix}/assets/`) ||
+			(name === 'base' && path.startsWith('seed/test/'))
 		)
 			continue;
 		const model = hit[1];

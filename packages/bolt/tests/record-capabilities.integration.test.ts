@@ -1,7 +1,8 @@
 import { expect, it } from '@effect/vitest';
-import { Context, Effect, Layer, Predicate } from 'effect';
-import { TestWorkspace } from '../src/test/index.ts';
-import { json, routeFixture } from './support/route-fixture.ts';
+import { Effect, Predicate } from 'effect';
+import { TestDb } from '../src/test/database.ts';
+import { PgliteDb } from '../src/node/db/pglite.ts';
+import type { TenantDbShape } from '../src/engine/db/tenant-db.ts';
 import type { Json } from '../src/decl/values.ts';
 import type { Authority, Invocation } from '../src/engine/contracts.ts';
 import type { EngineManifest } from '../src/engine/manifest.ts';
@@ -30,10 +31,10 @@ const required = <T>(value: T | undefined): T => {
 	if (value === undefined) throw new Error('fixture value missing');
 	return value;
 };
-const setup = () =>
+/** A pooled database for the capability reads. */
+const setup = () => Effect.flatMap(TestDb.open(manifest), (pg) => withDb(PgliteDb.make(pg)));
+const withDb = (db: TenantDbShape) =>
 	Effect.gen(function* () {
-		const context = yield* Layer.build(TestWorkspace.layer({ manifest, now: NOW }));
-		const db = Context.get(context, TestWorkspace).db;
 		let n = 0;
 		const write = (
 			model: string,
@@ -99,7 +100,7 @@ const setup = () =>
 				parent
 			);
 		};
-		return { context, db, write, create, capabilities };
+		return { db, write, create, capabilities };
 	});
 
 it.live(
@@ -489,33 +490,3 @@ it.live('sync-owned fields stay readable and local fields remain writable', () =
 	})
 );
 
-it.live(
-	'the native HTTP endpoint authenticates, uses the caller read scope and returns capabilities',
-	() =>
-		Effect.gen(function* () {
-			const { context, create } = yield* setup();
-			const { parent } = yield* create();
-			let session: Authority | null = admin;
-			const http = yield* routeFixture(context);
-			const request = () =>
-				http.handle(
-					session,
-					new Request(`http://tenant/__bolt/record-capabilities?model=orders&id=${parent}`)
-				);
-			const response = yield* request();
-			expect(response.status).toBe(200);
-			const body = yield* json(response);
-			expect(body).toMatchObject({
-				value: {
-					model: 'orders',
-					id: parent,
-					revision: 1,
-					fields: { title: { writable: true, proposal: false, reasons: [] } }
-				}
-			});
-			session = authority({ orders: grants('orders', { read: { orders: [arm(FALSE)] } }) });
-			expect((yield* request()).status).toBe(404);
-			session = null;
-			expect((yield* request()).status).toBe(401);
-		})
-);

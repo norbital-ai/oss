@@ -1,21 +1,22 @@
 // Kit edge cases: the generated verb catalogue owns erase, and member setup is never a counted statement.
 import { expect, it } from '@effect/vitest';
-import { Effect, Layer, Result } from 'effect';
-import * as NodeCrypto from '@effect/platform-node/NodeCrypto';
+import { Effect, Result } from 'effect';
 import { VERBS } from '../src/engine/callables/index.ts';
-import { decodeManifest } from '../src/engine/manifest.ts';
+import { decodeProjectedManifest } from '../src/engine/manifest.ts';
 import { ActRefused } from '../src/decl/errors.ts';
 import { TestWorkspace } from '../src/test/effect.ts';
-import { auditFromAbi } from '../src/engine/audit.ts';
 const manifest = Result.getOrThrow(
-	decodeManifest({
+	decodeProjectedManifest({
 		workspace: { tz: 'UTC', locale: 'en' },
 		models: {
 			customers: { description: 'A customer', label: 'name', fields: { name: { kind: 'text' } } }
 		},
 		relationships: {},
 		exposures: {
-			customers: { read: { customers: { fields: 'all' } }, create: { columns: { customers: ['name'] } } }
+			customers: {
+				read: { customers: { fields: 'all' } },
+				create: { columns: { customers: ['name'] } }
+			}
 		},
 		policies: { reader: { description: 'Reads customers', grants: { customers: { read: true } } } },
 		automations: {},
@@ -77,13 +78,5 @@ it.effect(
 			);
 			expect(t.count.reads).toBe(4);
 			expect(t.count.writes).toBe(0);
-		}).pipe(
-			Effect.provide(
-				TestWorkspace.layer({
-					manifest,
-					// This fixture measures member setup without a background audit-recovery worker.
-					ports: auditFromAbi(undefined).pipe(Layer.provide(NodeCrypto.layer))
-				})
-			)
-		)
+		}).pipe(Effect.provide(TestWorkspace.layer({ manifest })))
 );

@@ -5,7 +5,12 @@
 import { PGlite } from '@electric-sql/pglite';
 import { btree_gist } from '@electric-sql/pglite/contrib/btree_gist';
 import { vector } from '@electric-sql/pglite-pgvector';
-import { Context, Duration, Effect, Layer, Schema, type Scope } from 'effect';
+import { Context, Duration, Effect, Layer, Option, Schema, type Scope } from 'effect';
+import { createHash, randomUUID } from 'node:crypto';
+import { mkdir, readFile, rename, stat, writeFile } from 'node:fs/promises';
+import { createRequire } from 'node:module';
+import { tmpdir } from 'node:os';
+import { dirname, join } from 'node:path';
 import { LIMITS, type Rows, type Sql } from '../../engine/contracts.ts';
 import { DbError } from '../../engine/errors.ts';
 import { TenantDb, type DbBatch, type TenantDbShape } from '../../engine/db/tenant-db.ts';
@@ -32,6 +37,13 @@ export type PgliteSource =
 	string | Blob | { readonly dataDir: string; readonly loadDataDir?: Blob };
 type Querier = Pick<PgliteClient, 'query' | 'exec'>;
 const parsers = Object.fromEntries(PARSED_OIDS.map((oid) => [oid, (s: string) => parse(oid, s)]));
+/**
+ * PGlite scans every array type on open to install its own array parsers over these (hundreds, which it then copies on
+ * every query). Bolt parses each value itself (`parsers`, text otherwise), exactly as the node-postgres adapter does.
+ */
+class Pglite extends PGlite {
+	override async _initArrayTypes(): Promise<void> {}
+}
 const extensions = { vector, btree_gist };
 const rowsOf = Schema.decodeUnknownSync(Schema.Array(Schema.Record(Schema.String, Schema.Json)));
 
@@ -62,14 +74,67 @@ const closed = (pg: PGlite) =>
 		Effect.tapCause(Effect.logWarning),
 		Effect.orDie
 	);
-const dump = Effect.acquireUseRelease(
-	Effect.tryPromise({ try: () => PGlite.create({ extensions }), catch: dbError }),
+/**
+ * A dump that opens without redo: `dumpDataDir` alone leaves every change since the last checkpoint to replay on each
+ * open of the dump.
+ */
+const checkpointed = (pg: PGlite) =>
+	Effect.tryPromise({
+		try: async () => {
+			await pg.exec('checkpoint');
+			return pg.dumpDataDir('none');
+		},
+		catch: dbError
+	}).pipe(Effect.uninterruptible);
+// The smallest data directory to unpack per open: 1 MiB WAL segments (16 MiB by default), and no template databases
+// (PGlite serves its one database; nothing creates another). Each open writes every file into the in-memory FS.
+const INITDB = ['--wal-segsize=1', '--set=min_wal_size=2MB'];
+const TEMPLATES = [
+	`update pg_database set datistemplate = false where datname in ('template0', 'template1')`,
+	'drop database template0',
+	'drop database template1'
+];
+const initdb = Effect.acquireUseRelease(
+	Effect.tryPromise({
+		try: () => PGlite.create({ extensions, initDbStartParams: INITDB }),
+		catch: dbError
+	}),
 	(pg) =>
-		Effect.tryPromise({ try: () => pg.dumpDataDir('none'), catch: dbError }).pipe(
-			Effect.uninterruptible
-		),
+		Effect.tryPromise({
+			// one statement per call: DROP DATABASE refuses a multi-statement batch's implicit transaction
+			try: async () => {
+				for (const statement of TEMPLATES) await pg.exec(statement);
+			},
+			catch: dbError
+		}).pipe(Effect.andThen(checkpointed(pg))),
 	closed
 );
+/** Keyed by the PGlite and extension builds (entry path, size, mtime) and the initdb shape: another is another dump. */
+const pristineFile = async () => {
+	const require = createRequire(import.meta.url),
+		hash = createHash('sha256');
+	for (const name of ['@electric-sql/pglite', '@electric-sql/pglite-pgvector']) {
+		const path = require.resolve(name),
+			info = await stat(path);
+		hash.update(`${path}\0${info.size}\0${info.mtimeMs}\0`);
+	}
+	hash.update(JSON.stringify([INITDB, TEMPLATES]));
+	return join(tmpdir(), 'norbital-pglite', `${hash.digest('hex')}.tar`);
+};
+// The machine's dump, else initdb once and keep it (written whole, then renamed, so no process reads half of one).
+const dump = Effect.gen(function* () {
+	const file = yield* Effect.tryPromise({ try: pristineFile, catch: dbError });
+	const kept = yield* Effect.tryPromise(() => readFile(file)).pipe(Effect.option);
+	if (Option.isSome(kept)) return new Blob([new Uint8Array(kept.value)]);
+	const blob = yield* initdb;
+	yield* Effect.tryPromise(async () => {
+		const temporary = `${file}.${randomUUID()}`;
+		await mkdir(dirname(file), { recursive: true });
+		await writeFile(temporary, new Uint8Array(await blob.arrayBuffer()));
+		await rename(temporary, file);
+	}).pipe(Effect.ignore);
+	return blob;
+});
 let pristineDump: Effect.Effect<Blob, DbError> | undefined;
 const pristine = Effect.suspend(() =>
 	pristineDump === undefined
@@ -77,7 +142,7 @@ const pristine = Effect.suspend(() =>
 		: Effect.succeed(pristineDump)
 );
 
-/** One initdb per process: an in-memory database starts from this dump (~4× faster than a fresh cluster). */
+/** One initdb per machine and PGlite build: an in-memory database starts from this dump (~13× cheaper than initdb). */
 export class Pristine extends Context.Service<Pristine, Effect.Effect<Blob, DbError>>()(
 	'bolt/PglitePristine'
 ) {
@@ -98,11 +163,14 @@ const create = (from: PgliteSource | undefined): Effect.Effect<PGlite, DbError, 
 					: 'dataDir' in from
 						? from
 						: { loadDataDir: from };
-		const pg = yield* Effect.tryPromise({
-			try: () => PGlite.create({ ...at, extensions, parsers }),
+		return yield* Effect.tryPromise({
+			try: async () => {
+				const pg = new Pglite({ ...at, extensions, parsers });
+				await pg.waitReady;
+				return pg;
+			},
 			catch: dbError
 		});
-		return pg;
 	});
 
 export const PgliteDb = {
@@ -114,9 +182,11 @@ export const PgliteDb = {
 					const prepared = copiedBatch(batch);
 					return {
 						statements: prepared.statements.map(nativeSql),
-						setup: [...DATABASE_SETTINGS, ...lockStatements(prepared.lock)].map((text) =>
-							nativeSql({ text, params: [] })
-						),
+						// one round trip: the settings and locks are parameterless, so one simple-protocol text
+						setup: nativeSql({
+							text: [...DATABASE_SETTINGS, ...lockStatements(prepared.lock)].join(';\n'),
+							params: []
+						}),
 						rollback: prepared.rollback === true
 					};
 				},
@@ -134,11 +204,7 @@ export const PgliteDb = {
 								.then(() =>
 									pg.transaction(async (tx) => {
 										check();
-										for (const statement of prepared.setup) {
-											check();
-											await run(tx, statement);
-											check();
-										}
+										await run(tx, prepared.setup);
 										const results: NativeRows[] = [];
 										for (const statement of prepared.statements) {
 											check();
@@ -208,6 +274,8 @@ export const PgliteDb = {
 				)
 		});
 	},
+	/** The open database as a dump to load (`PgliteSource`), checkpointed first so loading it replays no WAL. */
+	dump: checkpointed,
 	/** Scope-owned PGlite; close settles uninterruptibly and an uncertain close remains a canonical DbError defect. */
 	open: (from?: PgliteSource): Effect.Effect<PGlite, DbError, Pristine | Scope.Scope> =>
 		Effect.acquireRelease(create(from), closed).pipe(

@@ -58,7 +58,7 @@ import { browserTransport } from '../protocol/client.ts';
 import { ProtocolFailed, TransportFailed } from '../decl/errors.ts';
 import { ActReply, WireError } from '../protocol/schema.ts';
 import { AuditPage, AuditRecord } from '../protocol/audit.ts';
-import { based, BASE, href, SHELL, VISITOR_APP, type ShellBoot } from './nav.ts';
+import { based, base, href, SHELL, VISITOR_APP, type ShellBoot } from './nav.ts';
 
 const requestFailure = (status: number): ShellError =>
 	new ShellError({
@@ -428,7 +428,7 @@ export function kioskFetch(
 	return async (input, init = {}) => {
 		const k = kiosk();
 		const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
-		const path = new URL(url, 'http://x').pathname.slice(BASE.length);
+		const path = new URL(url, 'http://x').pathname.slice(base().length);
 		if (k === null || !path.startsWith(`${BOLT}/`)) return f(input, init);
 		const headers = new Headers(init.headers);
 		headers.set(HEADERS.kiosk, k);
@@ -444,7 +444,7 @@ export function visitorFetch(
 ): typeof fetch {
 	return async (input, init = {}) => {
 		const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
-		const path = new URL(url, 'http://x').pathname.slice(BASE.length);
+		const path = new URL(url, 'http://x').pathname.slice(base().length);
 		if (!path.startsWith(`${BOLT}/`)) return f(input, init);
 		const headers = new Headers(init.headers);
 		headers.set(VISITOR_APP, app);
@@ -580,7 +580,7 @@ export function shellBolt(
 						typeof notice['body'] === 'string' ? { description: notice['body'] } : undefined
 					);
 			},
-			base: BASE,
+			base: base(),
 			actor: boot.actor,
 			locale: boot.workspace.locale,
 			tz: boot.workspace.tz,

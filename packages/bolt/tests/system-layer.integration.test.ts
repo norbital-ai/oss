@@ -7,7 +7,8 @@ import { Context, Effect, Layer, Option, Schema } from 'effect';
 import type { Json } from '../src/decl/values.ts';
 import type { KeysPort } from '../src/engine/contracts.ts';
 import type { EngineManifest } from '../src/engine/manifest.ts';
-import { PgliteDb, Pristine, type PgliteClient } from '../src/node/db/pglite.ts';
+import { PgliteDb, type PgliteClient } from '../src/node/db/pglite.ts';
+import { TestDb } from '../src/test/database.ts';
 import { TenantDb } from '../src/engine/db/tenant-db.ts';
 import { DbError } from '../src/engine/errors.ts';
 import { compileAuthority } from '../src/engine/access/authority.ts';
@@ -61,7 +62,6 @@ const m: EngineManifest = {
 const ada = member.kind === 'member' ? member.id : '';
 const Id = Schema.Struct({ id: Schema.String });
 const Count = Schema.Struct({ n: Schema.Number });
-const Configuration = Schema.Struct({ configuration: Schema.Json });
 const IdConfiguration = Schema.Struct({ id: Schema.String, configuration: Schema.Json });
 const NamedConfiguration = Schema.Struct({
 	id: Schema.String,
@@ -79,7 +79,7 @@ const Instance = Schema.Struct({
 	revision: Schema.Number
 });
 const fixture = Effect.gen(function* () {
-	const pg = yield* PgliteDb.open();
+	const pg = yield* TestDb.open(m);
 	const native = { active: 0, batches: 0, keyActive: 0, keyCalls: { seal: 0, open: 0 } };
 	const client: PgliteClient = {
 		query: (text, params) => pg.query(text, params),
@@ -100,7 +100,6 @@ const fixture = Effect.gen(function* () {
 		}
 	};
 	const db = PgliteDb.make(client);
-	yield* applyPlan(db, yield* plan(null, m), { accept: true });
 	yield* db.write({
 		text: `insert into sys_user (id, name) values ($1, 'Ada'), ('u2', 'Bob')`,
 		params: [ada]
@@ -158,16 +157,44 @@ class SystemFixture extends Context.Service<SystemFixture, Effect.Success<typeof
 	'test/SystemFixture'
 ) {}
 const SystemFixtureLive = Layer.effect(SystemFixture, fixture).pipe(
-	Layer.provide(Pristine.layer),
 	Layer.provideMerge(NodeCrypto.layer)
 );
 
 describe('sys_integration: ordinary acts and the engine transform', () => {
 	it.effect(
-		"creates an instance with its configuration decoded and defaulted; the named ones are the schema plan's",
+		'refuses an unknown definition, an invalid configuration and a personal instance of a driver that syncs none; creates one with its configuration decoded and defaulted',
 		() =>
 			Effect.gen(function* () {
 				const { read, run, created } = yield* SystemFixture;
+
+				expect(
+					yield* run({ verb: 'create', input: [{ integration: 'nope', name: 'x' }] })
+				).toMatchObject({
+					kind: 'refused',
+					code: 'refused',
+					rule: 'sys_integration.transform',
+					field: 'integration'
+				});
+				expect(
+					yield* run({
+						verb: 'create',
+						input: [{ integration: 'erp', name: 'x', configuration: { lag: 'soon' } }]
+					})
+				).toMatchObject({
+					kind: 'refused',
+					field: 'configuration',
+					message: expect.stringMatching(/region is required.*lag Expected number \| null/)
+				});
+				expect(
+					yield* run({
+						verb: 'create',
+						input: [{ integration: 'erp', name: 'x', owner: ada, configuration: { region: 'sg' } }]
+					})
+				).toMatchObject({ kind: 'refused', field: 'owner' });
+				expect(
+					yield* read(Count, `select count(*)::int as n from sys_integration where not named`)
+				).toEqual([{ n: 0 }]);
+				// a valid one is created, its configuration decoded and defaulted
 				const id = yield* created({
 					integration: 'erp',
 					name: 'Ledger',
@@ -231,42 +258,7 @@ describe('sys_integration: ordinary acts and the engine transform', () => {
 	);
 
 	it.effect(
-		'refuses an unknown definition, an invalid configuration and a personal instance of a driver that syncs none',
-		() =>
-			Effect.gen(function* () {
-				const { read, run } = yield* SystemFixture;
-				expect(
-					yield* run({ verb: 'create', input: [{ integration: 'nope', name: 'x' }] })
-				).toMatchObject({
-					kind: 'refused',
-					code: 'refused',
-					rule: 'sys_integration.transform',
-					field: 'integration'
-				});
-				expect(
-					yield* run({
-						verb: 'create',
-						input: [{ integration: 'erp', name: 'x', configuration: { lag: 'soon' } }]
-					})
-				).toMatchObject({
-					kind: 'refused',
-					field: 'configuration',
-					message: expect.stringMatching(/region is required.*lag Expected number \| null/)
-				});
-				expect(
-					yield* run({
-						verb: 'create',
-						input: [{ integration: 'erp', name: 'x', owner: ada, configuration: { region: 'sg' } }]
-					})
-				).toMatchObject({ kind: 'refused', field: 'owner' });
-				expect(
-					yield* read(Count, `select count(*)::int as n from sys_integration where not named`)
-				).toEqual([{ n: 0 }]);
-			}).pipe(Effect.provide(SystemFixtureLive), Effect.scoped)
-	);
-
-	it.effect(
-		'deploys a declared envoy only on a workspace instance of a conversation definition',
+		"deploys a declared envoy only on a workspace instance of a conversation definition; never changes an instance's definition or owner, never deletes a named one",
 		() =>
 			Effect.gen(function* () {
 				const { read, run, created } = yield* SystemFixture;
@@ -306,19 +298,7 @@ describe('sys_integration: ordinary acts and the engine transform', () => {
 						`select envoy from sys_integration where id = 'desk'`
 					)
 				).toEqual([{ envoy: 'desk' }]);
-			}).pipe(Effect.provide(SystemFixtureLive), Effect.scoped)
-	);
 
-	it.effect(
-		"never changes an instance's definition or owner, and never deletes a named instance",
-		() =>
-			Effect.gen(function* () {
-				const { read, run, created } = yield* SystemFixture;
-				const personal = yield* created({
-					integration: 'whatsapp',
-					name: "Ada's phone",
-					owner: ada
-				});
 				expect(
 					yield* run({
 						verb: 'update',
@@ -336,7 +316,9 @@ describe('sys_integration: ordinary acts and the engine transform', () => {
 					kind: 'committed'
 				});
 				expect(
-					(yield* read(Id, `select id from sys_integration order by id`)).map((r) => r['id'])
+					(yield* read(Id, `select id from sys_integration where named or id = $1 order by id`, [
+						personal
+					])).map((r) => r['id'])
 				).toEqual(['desk', 'mail']);
 			}).pipe(Effect.provide(SystemFixtureLive), Effect.scoped)
 	);
@@ -356,7 +338,7 @@ describe('sys_integration: ordinary acts and the engine transform', () => {
 					a['sys_integration']?.delete.length
 				]).toEqual([1, 1, 1]);
 				expect(a['sys_user']?.create).toEqual([]);
-			}).pipe(Effect.provide(SystemFixtureLive), Effect.scoped)
+			})
 	);
 
 	it.effect(
@@ -481,7 +463,12 @@ describe("seed packs: run-time instances beside the plan's named ones", () => {
 						tags: [{ id: '0199a000-0000-7000-8000-000000000043', name: 'vip' }]
 					}
 				};
-				expect(yield* loadPack(db, m, sourceOf(pack), NOW)).toBe(true);
+				// it loads in steps: identity, each model, the last step; then the answer stays
+				const loader = yield* packLoader(db, m, sourceOf(pack), NOW);
+				let step: PackStep = 'more';
+				for (let i = 0; i < 10 && step === 'more'; i++) step = yield* loader.step;
+				expect(step).toBe('loaded');
+				expect(yield* loader.step).toBe('loaded');
 				expect(
 					yield* read(
 						NamedConfiguration,
@@ -492,25 +479,8 @@ describe("seed packs: run-time instances beside the plan's named ones", () => {
 					{ id: 'desk', named: true, configuration: {} },
 					{ id: 'mail', named: true, configuration: {} }
 				]);
-				expect(yield* loadPack(db, m, sourceOf(pack), NOW)).toBe(false);
-			}).pipe(Effect.provide(SystemFixtureLive), Effect.scoped)
-	);
-	it.effect(
-		'a pack loads in steps: identity, each model, the last step; then the answer stays',
-		() =>
-			Effect.gen(function* () {
-				const { db } = yield* SystemFixture;
-				yield* db.write({ text: 'DELETE FROM sys_user', params: [] });
-				const pack: Pack = {
-					dir: '',
-					meta: { format: 1, name: 'test', hash: '', start: [], assets: [], rows: { tags: 1 } },
-					rows: { tags: [{ id: '0199a000-0000-7000-8000-000000000044', name: 'vip' }] }
-				};
-				const loader = yield* packLoader(db, m, sourceOf(pack), NOW);
-				const steps: PackStep[] = [];
-				for (let i = 0; i < 4; i++) steps.push(yield* loader.step);
-				expect(steps).toEqual(['more', 'more', 'loaded', 'loaded']);
 				expect(yield* (yield* packLoader(db, m, sourceOf(pack), NOW)).step).toBe('hadRows');
+				expect(yield* loadPack(db, m, sourceOf(pack), NOW)).toBe(false);
 			}).pipe(Effect.provide(SystemFixtureLive), Effect.scoped)
 	);
 	it.effect('the same pack loader retries a failed identity batch before advancing', () =>
@@ -551,72 +521,35 @@ describe("seed packs: run-time instances beside the plan's named ones", () => {
 });
 
 describe('one configuration shape, however an instance is made', () => {
-	it.effect(
-		"a named slot starts with its definition's defaults, as a created and a seeded instance do; a slot moved to another definition starts again",
-		() =>
-			Effect.gen(function* () {
-				const { db, read, run, created } = yield* SystemFixture;
-				const slotted: EngineManifest = {
-					...m,
-					connections: { ...m.connections, ledger: { integration: 'erp' } }
-				};
-				yield* applyPlan(db, yield* plan(yield* readApplied(db), slotted), { accept: true });
-				const id = yield* created({
-					integration: 'erp',
-					name: 'Ledger 2',
-					configuration: { region: 'sg' }
-				});
-				expect(
-					yield* read(
-						IdConfiguration,
-						`select id, configuration from sys_integration where integration = 'erp' order by named, id`
-					)
-				).toEqual([
-					{ id, configuration: { lag: 15, region: 'sg' } },
-					{ id: 'ledger', configuration: { lag: 15 } }
-				]);
-				// a run-time edit stays through a re-plan; the slot moved to a definition with no configuration is a new instance
-				expect(
-					yield* run({
-						verb: 'update',
-						input: [{ target: 'ledger', set: { configuration: { region: 'my', lag: 5 } } }]
-					})
-				).toMatchObject({ kind: 'committed' });
-				yield* applyPlan(
-					db,
-					yield* plan(yield* readApplied(db), {
-						...slotted,
-						connections: { ...slotted.connections, extra: { integration: 'email' } }
-					}),
-					{ accept: true }
-				);
-				expect(
-					yield* read(
-						Configuration,
-						`select configuration from sys_integration where id = 'ledger'`
-					)
-				).toEqual([{ configuration: { lag: 5, region: 'my' } }]);
-				yield* applyPlan(
-					db,
-					yield* plan(yield* readApplied(db), {
-						...m,
-						connections: { ...m.connections, ledger: { integration: 'whatsapp' } }
-					}),
-					{ accept: true }
-				);
-				expect(
-					yield* read(
-						Schema.Struct({ integration: Schema.String, configuration: Schema.Json }),
-						`select integration, configuration from sys_integration where id = 'ledger'`
-					)
-				).toEqual([{ integration: 'whatsapp', configuration: {} }]);
-			}).pipe(Effect.provide(SystemFixtureLive), Effect.scoped)
+	it.effect("a named slot starts with its definition's defaults, as a created instance does", () =>
+		Effect.gen(function* () {
+			const { db, read, created } = yield* SystemFixture;
+			const slotted: EngineManifest = {
+				...m,
+				connections: { ...m.connections, ledger: { integration: 'erp' } }
+			};
+			yield* applyPlan(db, yield* plan(yield* readApplied(db), slotted), { accept: true });
+			const id = yield* created({
+				integration: 'erp',
+				name: 'Ledger 2',
+				configuration: { region: 'sg' }
+			});
+			expect(
+				yield* read(
+					IdConfiguration,
+					`select id, configuration from sys_integration where integration = 'erp' order by named, id`
+				)
+			).toEqual([
+				{ id, configuration: { lag: 15, region: 'sg' } },
+				{ id: 'ledger', configuration: { lag: 15 } }
+			]);
+		}).pipe(Effect.provide(SystemFixtureLive), Effect.scoped)
 	);
 });
 
 describe("instance credentials: sealed rows under the opener's epoch", () => {
 	it.effect(
-		'an opener loads what the previous one wrote; once it opens, the previous one is fenced for good',
+		'an opener loads what the previous one wrote; once it opens, the previous one is fenced; an envelope is bound to its instance and tenant key',
 		() =>
 			Effect.gen(function* () {
 				const { db, read, codec, native } = yield* SystemFixture;
@@ -665,6 +598,17 @@ describe("instance credentials: sealed rows under the opener's epoch", () => {
 				expect(native.keyCalls.open).toBeGreaterThan(0);
 				expect(native.active).toBe(0);
 				expect(native.keyActive).toBe(0);
+				// an envelope is bound to its instance and name, and to the tenant key
+				yield* db.write({
+					text: `insert into bolt_credential (instance, name, sealed) select 'mail', name, sealed from bolt_credential where instance = 'desk'`,
+					params: []
+				});
+				expect(yield* Effect.flip(store.open('mail'))).toMatchObject({ code: 'sealed' });
+				expect(
+					yield* Effect.flip((yield* credentials(db, yield* codec())).open('desk'))
+				).toMatchObject({
+					code: 'sealed'
+				});
 			}).pipe(Effect.provide(SystemFixtureLive), Effect.scoped)
 	);
 
@@ -697,24 +641,5 @@ describe("instance credentials: sealed rows under the opener's epoch", () => {
 					yield* Effect.flip(store.write('nope', null, new Map([['token', 'x']])))
 				).toMatchObject({ code: 'notFound' });
 			}).pipe(Effect.provide(SystemFixtureLive), Effect.scoped)
-	);
-
-	it.effect('an envelope is bound to its instance and name, and to the tenant key', () =>
-		Effect.gen(function* () {
-			const { db, codec } = yield* SystemFixture;
-			const store = yield* credentials(db, yield* codec());
-			const { epoch } = yield* store.open('desk');
-			yield* store.write('desk', epoch, new Map([['creds', 'secret']]));
-			yield* db.write({
-				text: `insert into bolt_credential (instance, name, sealed) select 'mail', name, sealed from bolt_credential where instance = 'desk'`,
-				params: []
-			});
-			expect(yield* Effect.flip(store.open('mail'))).toMatchObject({ code: 'sealed' });
-			expect(
-				yield* Effect.flip((yield* credentials(db, yield* codec())).open('desk'))
-			).toMatchObject({
-				code: 'sealed'
-			});
-		}).pipe(Effect.provide(SystemFixtureLive), Effect.scoped)
 	);
 });

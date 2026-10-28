@@ -4,7 +4,6 @@
 // (`syncTriggers`, engine/sync/index.ts).
 import { Result, Schema } from 'effect';
 import { BoltError, storeSync } from '../../protocol/errors.ts';
-import type { Json } from '../../decl/values.ts';
 import type { CronEntry, QueuedRun } from '../contracts.ts';
 import type { Pred } from '@norbital-ai/store';
 import type { EngineManifest } from '../manifest.ts';

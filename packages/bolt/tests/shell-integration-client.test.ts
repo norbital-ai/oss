@@ -5,17 +5,14 @@ import { Effect, Schema } from 'effect';
 import type { ShellBoot } from '../src/shell/nav.ts';
 import type { IntegrationSetupLoader } from '../src/page/integration.ts';
 import type { InstanceStatus } from '../src/protocol/instance-status.ts';
+import { shellBolt } from '../src/shell/runtime.ts';
 
-// Mounted tests cover the UI; this verifies the scoped account transport and setup registry.
-vi.mock('@norbital-ai/ui', () => ({ toast: { error: vi.fn(), success: vi.fn(), info: vi.fn() } }));
-
+// The host serves the workspace under a path; the shell reads it per request.
 const meta = document.createElement('meta');
-let shellBolt: (typeof import('../src/shell/runtime.ts'))['shellBolt'];
-beforeAll(async () => {
+beforeAll(() => {
 	meta.name = 'bolt-base';
 	meta.content = '/workspaces/hq';
 	document.head.append(meta);
-	({ shellBolt } = await import('../src/shell/runtime.ts'));
 });
 afterAll(() => meta.remove());
 

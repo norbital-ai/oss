@@ -1,5 +1,6 @@
-// The API reference (§3.3.10, §7.3) over any loader of its JSON documents (one per namespace, plus `index.json`, written
-// by `src/cli/docs.ts`): `docs/index.ts` reads them from `build/docs/`; a cell's host serves them through `Docs`.
+// The docs corpus (§3.3.10, §7.3) over any loader of its JSON documents (one per namespace, one per authoring skill, plus
+// `index.json`, written by `src/cli/docs.ts`): `docs/index.ts` reads them from `build/docs/`; a cell's host serves them
+// through `Docs`.
 
 /** A property, prop or parameter field: its declared type as written, and its doc's first paragraph. */
 export type DocMember = { name: string; type: string; optional?: true; summary?: string };
@@ -28,6 +29,8 @@ export type DocNamespace = {
 	summary: string;
 	symbols: DocSymbol[];
 };
+/** One authoring skill compiled from `oss/skills/<name>/`: its `SKILL.md` and references, by relative path. */
+export type DocSkill = { name: string; description: string; files: { path: string; text: string }[] };
 /**
  * The combined index: every namespace (`reference` marks what a workspace author imports: bolt's root, `/client` and
  * `/test`, ui's authoring entries and std), and the reference symbols that still lack a summary (`namespace#name`).
@@ -41,12 +44,16 @@ export type DocIndex = {
 		reference: boolean;
 	}[];
 	missing: string[];
+	/** Every authoring skill: its name, description and file paths (`SKILL.md` first). */
+	skills: { name: string; description: string; files: string[] }[];
 };
 /** A search hit: the namespace, name, kind and summary of one symbol. */
 export type DocHit = { namespace: string; name: string; kind: DocKind; summary: string };
 
 /** The file a namespace is written to: `bolt/page` → `bolt.page.json`. */
 const docFile = (namespace: string) => `${namespace.replaceAll('/', '.')}.json`;
+/** The file a skill is written to: `authoring-test-suites` → `skill.authoring-test-suites.json`. */
+export const skillFile = (name: string) => `skill.${name}.json`;
 
 /**
  * The API reference corpus: `index()`, `namespace(ns)`, `symbol(ns, name)` and `search(text)`.
@@ -66,6 +73,12 @@ export const corpus = (load: <T>(file: string) => T) => {
 		/** One symbol by namespace and exported name. */
 		symbol(namespace: string, name: string): DocSymbol | null {
 			return docs.namespace(namespace)?.symbols.find((s) => s.name === name) ?? null;
+		},
+		/** One authoring skill with its files' text, or `null` for an unknown one. */
+		skill(name: string): DocSkill | null {
+			return docs.index().skills.some((k) => k.name === name)
+				? load<DocSkill>(skillFile(name))
+				: null;
 		},
 		/**
 		 * Symbols whose name, summary or signature contain any word of `text`, best first: an exact name, then a name that

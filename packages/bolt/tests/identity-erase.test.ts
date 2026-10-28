@@ -4,6 +4,7 @@ import type { EngineManifest } from '../src/engine/manifest.ts';
 import { erasableFields, judgeErase } from '../src/engine/identity/erase.ts';
 
 const m: EngineManifest = {
+	needs: [],
 	workspace: { tz: 'UTC', locale: 'en' },
 	models: {
 		payslips: {

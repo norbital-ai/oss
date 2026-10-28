@@ -3,8 +3,9 @@
 // status map runs both ways, the own callables keep their refusals, an instance status drops what it cannot read, the
 // artifact's files are decoded once (`ManifestInvalid`) as native Effects, and a workspace's pages resolve alike
 // on every host.
-import { mkdirSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { cpSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { afterAll } from 'vitest';
 import { describe, expect, it } from '@effect/vitest';
 import { Effect, FileSystem, Schema } from 'effect';
 import * as NodeServices from '@effect/platform-node/NodeServices';
@@ -367,6 +368,7 @@ describe('norbital.template.json', () => {
 
 // ── the artifact (C9) ──
 const workspace: EngineManifest = {
+	needs: [],
 	workspace: { tz: 'Asia/Singapore', locale: 'en' },
 	models: {},
 	relationships: {},
@@ -382,6 +384,16 @@ const workspace: EngineManifest = {
 	customFields: {},
 	agent: { skills: {} }
 };
+/** The workspace's generated migrations, prepared (and replay-verified) once for every artifact below. */
+const migrations = await Effect.runPromise(
+	Effect.gen(function* () {
+		const fs = yield* FileSystem.FileSystem;
+		const dir = yield* fs.makeTempDirectory({ prefix: 'bolt-artifact-migrations-' });
+		yield* prepareMigrations(dir, workspace, 'generate');
+		return join(dir, 'migrations');
+	}).pipe(Effect.provide(Pristine.layer), Effect.provide(NodeServices.layer))
+);
+afterAll(() => rmSync(dirname(migrations), { recursive: true, force: true }));
 /** A minimal built artifact: the manifest, a guest, one client document and one asset, digests recorded. */
 const built = Effect.gen(function* () {
 	const fs = yield* FileSystem.FileSystem;
@@ -395,7 +407,7 @@ const built = Effect.gen(function* () {
 	writeFileSync(join(dir, 'client', 'app.js'), 'export {};');
 	mkdirSync(join(dir, 'assets'));
 	writeFileSync(join(dir, 'assets', 'logo.png'), 'png');
-	yield* prepareMigrations(dir, workspace, 'generate');
+	cpSync(migrations, join(dir, 'migrations'), { recursive: true });
 	const body = {
 		format: 1 as const,
 		contract: CONTRACT,
@@ -416,7 +428,7 @@ const built = Effect.gen(function* () {
 		JSON.stringify({ ...body, hash: yield* artifactHash(dir, body) })
 	);
 	return dir;
-}).pipe(Effect.provide(Pristine.layer));
+});
 
 describe('the artifact a host reads', () => {
 	it.effect('reads the native artifact once with its manifest and descriptor', () =>

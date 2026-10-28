@@ -1,11 +1,12 @@
 // Mutations: removing isolate finalization leaves live > warm; dropping final[4] loses timeout retry classification.
 import { expect, it } from '@effect/vitest';
-import { Context, Effect, Exit, Fiber, Layer, Schedule, Scope } from 'effect';
+import { Context, Effect, Exit, Fiber, Layer, Scope } from 'effect';
 import { LIMITS, type Invocation } from '../src/engine/contracts.ts';
 import { GuestIsolates } from '../src/engine/ports.ts';
 import { Guest, type Bridge } from '../src/engine/services.ts';
 import { guestIsolates } from '../src/node/guest-isolates.ts';
 import { guestLayer } from './support/guest-fixture.ts';
+import { until } from './support/turns.ts';
 const invocation: Invocation = {
 	id: 'scope',
 	kind: 'automation',
@@ -43,13 +44,7 @@ it.live('closing a generation disposes its running isolates', () =>
 			const running = yield* Context.get(context, Guest)
 				.invoke(invocation, noCalls)
 				.pipe(Effect.forkIn(scope));
-			yield* Effect.sync(port.counts).pipe(
-				Effect.repeat({
-					schedule: Schedule.spaced('1 millis'),
-					until: (counts) => counts.live > 0,
-					times: 1000
-				})
-			);
+			yield* until(Effect.sync(() => port.counts().live > 0));
 			yield* Scope.close(scope, Exit.succeed(undefined));
 			yield* Fiber.await(running);
 			expect(port.counts().live).toBe(0);

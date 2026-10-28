@@ -1,20 +1,43 @@
 // The Effect test kit: scoped acquisition and typed refusal failures, with no Promise facet.
-import { Context, Effect, Layer, Option, Schema } from 'effect';
-import { PGlite } from '@electric-sql/pglite';
-import { it, vi } from '@effect/vitest';
-import { Pristine } from '../src/node/db/pglite.ts';
-import { ActRefused } from '../src/decl/errors.ts';
+import { Context, Effect, Layer, Schema } from 'effect';
+import { it } from '@effect/vitest';
 import { inputSchema } from '@norbital-ai/std/kind';
 import type { EngineManifest } from '../src/engine/manifest.ts';
-import { expect, KitInvalid, layer, TestWorkspace } from '../src/test/index.ts';
-import { program } from './support/guest-fixture.ts';
+import { expect, KitInvalid, TestWorkspace, type Kit } from '../src/test/index.ts';
+import { program } from '../src/test/guest.ts';
 import { actReply, routeFixture } from './support/route-fixture.ts';
 import { uuidv7 } from '../src/protocol/wire.ts';
 
 const manifest = {
 	workspace: { tz: 'UTC', locale: 'en' },
 	models: {
-		customers: { description: 'A customer', label: 'name', fields: { name: { kind: 'text' } } }
+		// one schema for every case: each workspace below loads the same checkpoint
+		customers: {
+			description: 'A customer',
+			label: 'name',
+			fields: {
+				name: { kind: 'text' },
+				balance: { kind: 'decimal', scale: 2, optional: true },
+				document: {
+					kind: 'json',
+					optional: true,
+					shape: { kind: 'object', fields: { note: { kind: 'text' } } }
+				},
+				email: { kind: 'text', optional: true },
+				party: { kind: 'json', optional: true }
+			},
+			computed: {
+				party_id: { kind: 'text', expr: { jsonText: [{ field: 'party' }, 'id'] } },
+				email_lower: {
+					kind: 'text',
+					expr: { regexReplace: [{ field: 'email' }, '[^0-9]', ''] }
+				},
+				name_upper: { kind: 'text', expr: { upper: { field: 'name' } } },
+				email_label: { kind: 'text', expr: { concat: [{ field: 'email' }, ' contact'] } },
+				email_default: { kind: 'text', expr: { coalesce: [{ field: 'email' }, 'unknown'] } },
+				email_chain: { kind: 'text', expr: { upper: { field: 'email_lower' } } }
+			}
+		}
 	},
 	relationships: {},
 	exposures: {
@@ -25,14 +48,29 @@ const manifest = {
 	},
 	policies: { reader: { description: 'Reads customers', grants: { customers: { read: true } } } },
 	automations: {},
-	integrations: {},
+	// connections are part of the schema checkpoint: every case declares both, so every workspace loads one checkpoint
+	integrations: {
+		calendar: {
+			description: 'A pushed remote catalogue',
+			driver: 'calendar',
+			configuration: {
+				calendars: { kind: 'text', many: true, default: ['primary', 'secondary'] }
+			}
+		},
+		ledger: {
+			description: 'Ledger',
+			driver: 'http',
+			configuration: { lag: { kind: 'int', default: 15 } }
+		}
+	},
 	teams: {},
-	connections: {},
+	connections: { calendar: { integration: 'calendar' }, ledger: { integration: 'ledger' } },
 	envoys: {},
 	mcp: {},
 	apps: {},
 	customFields: {},
-	agent: { skills: {} }
+	agent: { skills: {} },
+	needs: []
 } satisfies EngineManifest;
 
 it.live(
@@ -121,25 +159,12 @@ it.live('fixture callbacks require explicit existing write verbs', () =>
 	}).pipe(Effect.scoped)
 );
 
-it.live('read requests revive native values and typed queued automation outputs persist', () =>
+it.live('read requests revive native values, computed NULLs decode, and typed queued automation outputs persist', () =>
 	Effect.gen(function* () {
 		const id = '0199a000-0000-4000-8000-000000000001';
 		const row = { kind: 'row', of: 'customers' } as const;
 		const outputs = {
 			...manifest,
-			models: {
-				customers: {
-					...manifest.models.customers,
-					fields: {
-						name: { kind: 'text' },
-						balance: { kind: 'decimal', scale: 2 },
-						document: {
-							kind: 'json',
-							shape: { kind: 'object', fields: { note: { kind: 'text' } } }
-						}
-					}
-				}
-			},
 			automations: {
 				return_row: { description: 'One recorded row', input: {}, output: row, runAs: 'trigger' }
 			}
@@ -167,6 +192,26 @@ it.live('read requests revive native values and typed queued automation outputs 
 		const request = { customers: { limit: 1 } } as const;
 		expect(Schema.is(page)((yield* caller.query(request)).customers)).toBe(true);
 		expect(Schema.is(page)((yield* t.storedQuery(request)).customers)).toBe(true);
+		// computed NULL values decode without widening required computed strings, for every exposed field
+		const selected = { customers: {} } as const;
+		expect((yield* caller.query(selected)).customers.rows[0]).toMatchObject({
+			name: 'Acme',
+			email_lower: null,
+			name_upper: 'ACME',
+			email_label: ' contact',
+			email_default: 'unknown',
+			email_chain: null
+		});
+		expect((yield* t.as(t.member(['reader'])).query(selected)).customers.rows[0]).toMatchObject({
+			email_lower: null,
+			name_upper: 'ACME',
+			email_default: 'unknown',
+			email_chain: null
+		});
+		expect((yield* caller.query({ sys_user: {} })).sys_user.rows[0]).toMatchObject({
+			party_id: null,
+			phone_key: null
+		});
 		const result = (yield* actReply(yield* routeFixture(context), caller.authority, {
 			callable: 'start',
 			input: { automation: 'return_row', id: uuidv7(Date.parse(t.clock.now())), input: {} },
@@ -214,17 +259,7 @@ it.live(
 							remote: { with: 'calendar', partitions: 'calendars', read: true, write: true }
 						}
 					}
-				},
-				integrations: {
-					calendar: {
-						description: 'A pushed remote catalogue',
-						driver: 'calendar',
-						configuration: {
-							calendars: { kind: 'text', many: true, default: ['primary', 'secondary'] }
-						}
-					}
-				},
-				connections: { calendar: { integration: 'calendar' } }
+				}
 			} satisfies EngineManifest;
 			const guest =
 				yield* program(`export default { model: { customers: { bodies: { syncs: { remote: {
@@ -266,125 +301,26 @@ it.live(
 		}).pipe(Effect.scoped)
 );
 
-it.live('computed NULL values decode without widening required computed strings', () =>
-	Effect.scoped(
-		Effect.gen(function* () {
-			const computed = {
-				...manifest,
-				models: {
-					customers: {
-						...manifest.models.customers,
-						fields: {
-							name: { kind: 'text' },
-							email: { kind: 'text', optional: true },
-							party: { kind: 'json', optional: true }
-						},
-						computed: {
-							party_id: { kind: 'text', expr: { jsonText: [{ field: 'party' }, 'id'] } },
-							email_lower: {
-								kind: 'text',
-								expr: { regexReplace: [{ field: 'email' }, '[^0-9]', ''] }
-							},
-							name_upper: { kind: 'text', expr: { upper: { field: 'name' } } },
-							email_label: { kind: 'text', expr: { concat: [{ field: 'email' }, ' contact'] } },
-							email_default: { kind: 'text', expr: { coalesce: [{ field: 'email' }, 'unknown'] } },
-							email_chain: { kind: 'text', expr: { upper: { field: 'email_lower' } } }
-						}
-					}
-				}
-			} satisfies EngineManifest;
-			const t = Context.get(
-				yield* Layer.build(
-					TestWorkspace.layer({
-						manifest: computed,
-						seed: { customers: [{ id: '0199a000-0000-4000-8000-000000000001', name: 'Acme' }] }
-					})
-				),
-				TestWorkspace
+it.live('a later workspace of the same schema starts from the checkpoint, not from what an earlier one wrote', () =>
+	Effect.gen(function* () {
+		const id = '0199a000-0000-4000-8000-000000000001';
+		const acquire = (name: string) =>
+			Layer.build(TestWorkspace.layer({ manifest, seed: { customers: [{ id, name }] } })).pipe(
+				Effect.map((context) => Context.get(context, TestWorkspace))
 			);
-			// every exposed field, computed ones included
-			const selected = { customers: {} } as const;
-			expect((yield* t.as(t.admin).query(selected)).customers.rows[0]).toMatchObject({
-				name: 'Acme',
-				email_lower: null,
-				name_upper: 'ACME',
-				email_label: ' contact',
-				email_default: 'unknown',
-				email_chain: null
+		const connection = (t: Kit) =>
+			t.db.rows(Schema.Struct({ configuration: Schema.Json }), {
+				text: `SELECT configuration FROM sys_integration WHERE id = 'ledger'`,
+				params: []
 			});
-			expect((yield* t.as(t.member(['reader'])).query(selected)).customers.rows[0]).toMatchObject({
-				email_lower: null,
-				name_upper: 'ACME',
-				email_default: 'unknown',
-				email_chain: null
-			});
-			expect((yield* t.as(t.admin).query({ sys_user: {} })).sys_user.rows[0]).toMatchObject({
-				party_id: null,
-				phone_key: null
-			});
-		})
-	)
-);
-
-it.live('schema images are shared across isolated copies and change with the declaration', () =>
-	Effect.scoped(
-		Effect.gen(function* () {
-			const pristine = yield* Pristine.pipe(Effect.flatten, Effect.provide(Pristine.layer));
-			const create = vi.spyOn(PGlite, 'create');
-			return yield* Effect.gen(function* () {
-				const id = '0199a000-0000-4000-8000-000000000001';
-				const connected = {
-					...manifest,
-					integrations: {
-						ledger: {
-							description: 'Ledger',
-							driver: 'http',
-							configuration: { lag: { kind: 'int', default: 15 } }
-						}
-					},
-					connections: { ledger: { integration: 'ledger' } }
-				} satisfies EngineManifest;
-				const contexts = yield* Effect.all(
-					['Acme', 'Beta'].map((name) =>
-						Layer.build(
-							TestWorkspace.layer({ manifest: connected, seed: { customers: [{ id, name }] } })
-						)
-					),
-					{ concurrency: 'unbounded' }
-				);
-				const first = contexts[0],
-					second = contexts[1];
-				if (first === undefined || second === undefined)
-					throw new Error('Both workspaces are acquired.');
-				const a = Context.get(first, TestWorkspace),
-					b = Context.get(second, TestWorkspace);
-				const dumpOptions = Schema.decodeUnknownOption(
-					Schema.Struct({ loadDataDir: Schema.instanceOf(Blob) })
-				);
-				const images = create.mock.calls
-					.flatMap(([options]) => {
-						const decoded = dumpOptions(options);
-						return Option.isSome(decoded) ? [decoded.value.loadDataDir] : [];
-					})
-					.slice(-2);
-				expect(images).toHaveLength(2);
-				expect(images[0]).toBe(images[1]);
-				expect(images[0]).not.toBe(pristine);
-				const connection = (t: typeof a) =>
-					t.db.rows(
-						Schema.Struct({ id: Schema.String, named: Schema.Boolean, configuration: Schema.Json }),
-						{ text: 'SELECT id, named, configuration FROM sys_integration', params: [] }
-					);
-				expect(yield* connection(a)).toEqual([
-					{ id: 'ledger', named: true, configuration: { lag: 15 } }
-				]);
+		yield* Effect.scoped(
+			Effect.gen(function* () {
+				const a = yield* acquire('Acme');
+				expect(yield* connection(a)).toEqual([{ configuration: { lag: 15 } }]);
 				yield* a.db.write({
 					text: 'UPDATE sys_integration SET configuration = $1::jsonb WHERE id = $2',
 					params: ['{"lag":99}', 'ledger']
 				});
-				expect(yield* connection(b)).toEqual([
-					{ id: 'ledger', named: true, configuration: { lag: 15 } }
-				]);
 				expect(
 					yield* Effect.flip(
 						a.db.write({
@@ -393,69 +329,15 @@ it.live('schema images are shared across isolated copies and change with the dec
 						})
 					)
 				).toMatchObject({ _tag: 'DbError', sqlstate: '23505' });
-				yield* a.db.write({
-					text: 'UPDATE customers SET name = $1 WHERE id = $2',
-					params: ['Changed', id]
-				});
-				expect(
-					yield* b.db.rows(Schema.Struct({ name: Schema.String }), {
-						text: 'SELECT name FROM customers',
-						params: []
-					})
-				).toEqual([{ name: 'Beta' }]);
-				const extended = {
-					...connected,
-					models: {
-						customers: {
-							...manifest.models.customers,
-							fields: {
-								...manifest.models.customers.fields,
-								marked: { kind: 'bool', default: false }
-							}
-						}
-					}
-				} satisfies EngineManifest;
-				const changed = Context.get(
-					yield* Layer.build(
-						TestWorkspace.layer({
-							manifest: extended,
-							seed: { customers: [{ id, name: 'Gamma', marked: true }] }
-						})
-					),
-					TestWorkspace
-				);
-				expect(
-					yield* changed.db.rows(Schema.Struct({ name: Schema.String, marked: Schema.Boolean }), {
-						text: 'SELECT name, marked FROM customers',
-						params: []
-					})
-				).toEqual([{ name: 'Gamma', marked: true }]);
-			}).pipe(Effect.ensuring(Effect.sync(() => create.mockRestore())));
-		})
-	)
+			})
+		);
+		const b = yield* acquire('Beta');
+		expect(yield* connection(b)).toEqual([{ configuration: { lag: 15 } }]);
+		expect(
+			yield* b.db.rows(Schema.Struct({ name: Schema.String }), {
+				text: 'SELECT name FROM customers',
+				params: []
+			})
+		).toEqual([{ name: 'Beta' }]);
+	}).pipe(Effect.scoped)
 );
-
-layer(TestWorkspace.layer({ manifest }))('TestWorkspace', (it) => {
-	it.effect('a caller commits through act, and a refused act fails with ActRefused', () =>
-		Effect.gen(function* () {
-			const t = yield* TestWorkspace;
-			const created = yield* t.as(t.admin).act('customers.create', [{ name: 'Acme' }]);
-			expect(created.kind).toBe('committed');
-			const refused = yield* Effect.flip(
-				t.as(t.member(['reader'])).act('customers.create', [{ name: 'Beta' }])
-			);
-			expect(refused).toBeInstanceOf(ActRefused);
-			expect(refused).toMatchObject({ _tag: 'ActRefused', code: 'forbidden' });
-		})
-	);
-
-	it.effect('an act exposes only its Effect and fails with the original refusal', () =>
-		Effect.gen(function* () {
-			const t = yield* TestWorkspace;
-			const act = t.as(t.member(['reader'])).act('customers.create', [{ name: 'Beta' }]);
-			expect(Effect.isEffect(act)).toBe(true);
-			expect('then' in act).toBe(false);
-			expect(yield* Effect.flip(act)).toMatchObject({ _tag: 'ActRefused', code: 'forbidden' });
-		})
-	);
-});

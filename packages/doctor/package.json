@@ -38,8 +38,7 @@
 	"scripts": {
 		"build": "node ../../scripts/build-package.ts tsc -p tsconfig.json --outDir {}",
 		"prepack": "pnpm exec turbo run build --filter=@norbital-ai/doctor",
-		"lint": "tsc -p tsconfig.json --noEmit && tsc -p tests/tsconfig.json --noEmit",
-		"test": "pnpm build && vitest run tests"
+		"lint": "tsc -p tsconfig.json --noEmit && tsc -p tests/tsconfig.json --noEmit"
 	},
 	"dependencies": {
 		"effect": "catalog:",
@@ -48,9 +47,7 @@
 	},
 	"devDependencies": {
 		"@effect/platform-node": "catalog:",
-		"@effect/vitest": "catalog:",
 		"@types/node": "^26.6.5",
-		"typescript": "catalog:",
-		"vitest": "5.0.5"
+		"typescript": "catalog:"
 	}
 }

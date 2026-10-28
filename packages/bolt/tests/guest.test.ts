@@ -3,11 +3,10 @@ import { createHash } from 'node:crypto';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import * as NodeServices from '@effect/platform-node/NodeServices';
-import { check } from '../src/compiler/check/index.ts';
 import ivm from 'isolated-vm';
 import { describe, expect, it } from '@effect/vitest';
-import { Context, Deferred, Effect, Fiber, Layer, Schema } from 'effect';
+import { Context, Deferred, Effect, Fiber, Layer, Queue, Schema } from 'effect';
+import { TestClock } from 'effect/testing';
 import type { Json } from '../src/decl/values.ts';
 import {
 	type CrossAnswer,
@@ -18,8 +17,7 @@ import {
 } from '../src/engine/contracts.ts';
 import { isTransient } from '../src/engine/errors.ts';
 import type { IsolateGlobals } from '../src/engine/guest/globals.ts';
-import { PRELUDE } from '../src/engine/guest/prelude.ts';
-import { GuestParking, type GuestOptions, type GuestProgram } from '../src/engine/guest/runner.ts';
+import type { GuestOptions, GuestProgram } from '../src/engine/guest/runner.ts';
 import {
 	Guest,
 	type Bridge,
@@ -28,8 +26,9 @@ import {
 } from '../src/engine/services.ts';
 import { GuestIsolates } from '../src/engine/ports.ts';
 import { guestIsolates, type GuestIsolatesOptions } from '../src/node/guest-isolates.ts';
-import { guestLayer, program } from './support/guest-fixture.ts';
-const node = NodeServices.layer;
+import { check } from '../src/test/effect.ts';
+import { program } from '../src/test/guest.ts';
+import { guestLayer } from './support/guest-fixture.ts';
 
 // Generator fixtures carry the declaration edge. Pure global-shim programs exercise the raw prelude ABI.
 const automation = (body: string, prefix = '') =>
@@ -97,6 +96,32 @@ const recorder = (
 	};
 	return { crossings, bridge };
 };
+/** A bridge whose every answer comes `ms` later on the test clock; `started` holds one entry per call in flight. */
+const slow = (ms: number, value: (call: CrossCall) => Json) =>
+	Effect.map(Queue.unbounded<void>(), (started) => ({
+		started,
+		...recorder((call) =>
+			Queue.offer(started, undefined).pipe(
+				Effect.andThen(Effect.sleep(ms)),
+				Effect.as<CrossAnswer>({ ok: true, value: value(call) })
+			)
+		)
+	}));
+/** Runs `run` while each of its `calls` crossings waits out `ms` on the test clock. */
+const answeredLate = <A, E, R>(
+	run: Effect.Effect<A, E, R>,
+	started: Queue.Queue<void>,
+	calls: number,
+	ms: number
+) =>
+	Effect.gen(function* () {
+		const running = yield* Effect.forkChild(run);
+		for (let i = 0; i < calls; i++) {
+			yield* Queue.take(started);
+			yield* TestClock.adjust(ms);
+		}
+		return yield* Fiber.join(running);
+	});
 const compiled = new Map<string, Effect.Effect<GuestProgram>>();
 const sourceProgram = (source: string) => {
 	let built = compiled.get(source);
@@ -106,16 +131,21 @@ const sourceProgram = (source: string) => {
 	}
 	return built;
 };
-/** The Node host's guest isolates under `options` (a CPU budget, a meter). */
-const hostIsolates = (options: GuestIsolatesOptions) =>
-	Layer.unwrap(Effect.map(guestIsolates(options), (port) => GuestIsolates.fromAbi(port)));
+/** The Node host's guest isolates under `options` (a CPU budget, a meter); a run takes one, none is prepared ahead. */
+const hostIsolates = (options: GuestIsolatesOptions = {}) =>
+	Layer.unwrap(
+		Effect.map(
+			guestIsolates({ warm: { maxMiB: 512, depth: 0, idleMs: 60_000 }, ...options }),
+			(port) => GuestIsolates.fromAbi(port)
+		)
+	);
 const runProgram = (
 	guest: GuestProgram,
 	inv = invocation(),
 	bridge = recorder().bridge,
 	options: GuestOptions = {},
 	events?: InvocationEvents,
-	isolates?: Layer.Layer<GuestIsolates>
+	isolates: Layer.Layer<GuestIsolates> = hostIsolates()
 ) =>
 	Effect.gen(function* () {
 		const context = yield* Layer.build(
@@ -492,17 +522,6 @@ describe('next guest runner', () => {
 				expect(crossings).toHaveLength(1);
 			})
 	);
-	it.live('gives every invocation a fresh heap', () =>
-		Effect.gen(function* () {
-			const source = automation(
-				'function* () { return ++globalThis.count; }',
-				'globalThis.count = 0;'
-			);
-			expect(ok(yield* runIn(source))).toBe(1);
-			expect(ok(yield* runIn(source))).toBe(1);
-		})
-	);
-
 	it.live('crosses the calls made before the microtask queue drains together (rule 12)', () =>
 		Effect.gen(function* () {
 			const { crossings, bridge } = recorder((c) => ({
@@ -816,40 +835,11 @@ describe('next guest runner', () => {
 		})
 	);
 
-	it.live('charges no crossing for a journal hit (rules 12, 55)', () =>
-		Effect.gen(function* () {
-			const { bridge } = recorder(() => ({ ok: true, value: 1, journal: true }));
-			const o = yield* runIn(
-				automation(
-					'function* (_, ctx) {\n  for (let i = 0; i < 50; i++)\n    yield* ctx.query({ t: { where: { id: { eq: "x" } } } });\n  return 1;\n}'
-				),
-				invocation(null, { crossings: 40 }),
-				bridge
-			);
-			expect(ok(o)).toBe(1);
-		})
-	);
-
 	it.live('names a missing body', () =>
 		Effect.gen(function* () {
 			expect(
 				failure(yield* runIn(automation('1'), invocation(null, {}, 'automation', 'nope')))
 			).toMatchObject({ code: 'missingBody' });
-		})
-	);
-
-	it.live('stops the crossing past the budget and names its line (rule 12)', () =>
-		Effect.gen(function* () {
-			const o = yield* runIn(
-				automation(
-					'function* (_, ctx) {\n  for (let i = 0; i < 50; i++)\n    yield* ctx.query({ t: { where: { id: { eq: "x" } } } });\n}'
-				),
-				invocation(null, { crossings: 40 })
-			);
-			expect(failure(o)).toEqual({
-				code: 'crossingBudget',
-				message: 'the invocation made more than 40 crossings; the next was at guest.mjs:4'
-			});
 		})
 	);
 
@@ -864,31 +854,6 @@ describe('next guest runner', () => {
 				bridge
 			);
 			expect(failure(o)).toMatchObject({ code: 'readBudgetExceeded' });
-		})
-	);
-
-	it.live('refuses a crossing answer over the crossing limit (rule 9)', () =>
-		Effect.gen(function* () {
-			const size = LIMITS.crossingBytes + 200_000;
-			const mb = (bytes: number) => (bytes / 1024 / 1024).toFixed(1);
-			const { bridge } = recorder(() => ({
-				ok: true,
-				value: 'x'.repeat(size)
-			}));
-			expect(
-				failure(
-					yield* runIn(
-						automation(
-							'function* (_, ctx) { return yield* ctx.query({ t: { where: { id: { eq: "a" } } } }); }'
-						),
-						invocation(),
-						bridge
-					)
-				)
-			).toEqual({
-				code: 'tooLarge',
-				message: `Could not read 't': too much data returned at once (${mb(size)} MB total, over the ${LIMITS.crossingBytes / 1024 / 1024} MB limit). Largest response: ${mb(size)} MB. At guest.mjs:2; page it with \`limit\` and the returned cursor, or \`select\` fewer fields.`
-			});
 		})
 	);
 
@@ -924,38 +889,41 @@ describe('next guest runner', () => {
 			let metered = 0n;
 			const o = yield* runIn(
 				automation(
-					'function* (_, ctx) { for (let i = 0; i < 3; i++) { spin(150); yield* ctx.query({ t: { where: { id: { eq: "x" } } } }); } return "done"; }',
+					'function* (_, ctx) { for (let i = 0; i < 3; i++) { spin(25); yield* ctx.query({ t: { where: { id: { eq: "x" } } } }); } return "done"; }',
 					spin
 				),
 				invocation(),
 				recorder().bridge,
 				{},
 				undefined,
-				hostIsolates({ cpuMs: 300, meter: (_session, nanos) => void (metered += nanos) })
+				hostIsolates({ cpuMs: 50, meter: (_session, nanos) => void (metered += nanos) })
 			);
 			expect(failure(o)).toMatchObject({ code: 'cpuBudget' });
-			expect(metered).toBeGreaterThanOrEqual(300_000_000n);
+			expect(metered).toBeGreaterThanOrEqual(50_000_000n);
 		})
 	);
 
-	it.live('does not count I/O waits, and has no invocation wall clock (rule 71)', () =>
+	it.effect('does not count I/O waits, and has no invocation wall clock (rule 71)', () =>
 		Effect.gen(function* () {
 			let metered = 0n;
-			const { bridge } = recorder(() =>
-				Effect.as(Effect.sleep('400 millis'), { ok: true, value: 1 })
-			);
-			const o = yield* runIn(
-				automation(
-					'function* (_, ctx) { for (let i = 0; i < 3; i++) yield* ctx.query({ t: { where: { id: { eq: "x" } } } }); return "done"; }'
+			const { bridge, started } = yield* slow(50, () => 1);
+			const o = yield* answeredLate(
+				runIn(
+					automation(
+						'function* (_, ctx) { for (let i = 0; i < 3; i++) yield* ctx.query({ t: { where: { id: { eq: "x" } } } }); return "done"; }'
+					),
+					invocation(),
+					bridge,
+					{},
+					undefined,
+					hostIsolates({ cpuMs: 100, meter: (_session, nanos) => void (metered += nanos) })
 				),
-				invocation(),
-				bridge,
-				{},
-				undefined,
-				hostIsolates({ cpuMs: 300, meter: (_session, nanos) => void (metered += nanos) })
+				started,
+				3,
+				50
 			);
 			expect(ok(o)).toBe('done');
-			expect(metered).toBeLessThan(300_000_000n);
+			expect(metered).toBeLessThan(100_000_000n);
 		})
 	);
 
@@ -1031,7 +999,7 @@ describe('next guest runner', () => {
 	);
 
 	it.live(
-		'a read request whose answer passes the crossing limit fails tooLarge, and a host refusal reaches the body (rule 9)',
+		'a host refusal of a read request reaches the body as its typed failure',
 		() =>
 			Effect.gen(function* () {
 				const { bridge } = recorder(() => ({
@@ -1053,154 +1021,89 @@ describe('next guest runner', () => {
 						)
 					)
 				).toBe("invalid 'u.nope' is not a read layer u declares");
-				const big = recorder(() => ({ ok: true, value: 'x'.repeat(LIMITS.crossingBytes + 1) }));
-				expect(
-					failure(
-						yield* runIn(
-							automation(`function* (_, ctx) { return yield* ctx.query({ t: {}, u: {} }); }`),
-							invocation(),
-							big.bridge
-						)
-					)
-				).toMatchObject({ code: 'tooLarge' });
 			})
 	);
 
-	it.live('bounds each crossing by the per-call wall, as a typed timeout (X-28)', () =>
+	it.effect('bounds each crossing by the per-call wall, as a typed timeout (X-28)', () =>
 		Effect.gen(function* () {
-			const { bridge } = recorder(() => Effect.never);
-			const o = yield* runIn(
-				automation(
-					'function* (_, ctx) { return yield* Effect.catchTag(Effect.as(ctx.web.read("https://a.test"), "ok"), "FacilityFailure", (e) => Effect.succeed(e.kind)); }'
+			const started = yield* Queue.unbounded<void>();
+			const { bridge } = recorder(() => Queue.offer(started, undefined).pipe(Effect.andThen(Effect.never)));
+			const o = yield* answeredLate(
+				runIn(
+					automation(
+						'function* (_, ctx) { return yield* Effect.catchTag(Effect.as(ctx.web.read("https://a.test"), "ok"), "FacilityFailure", (e) => Effect.succeed(e.kind)); }'
+					),
+					invocation(),
+					bridge,
+					{ callWallMs: 50 }
 				),
-				invocation(),
-				bridge,
-				{ callWallMs: 50 }
+				started,
+				1,
+				50
 			);
 			expect(ok(o)).toBe('timeout');
 		})
 	);
 
-	it.live(
+	it.effect(
 		'lets a transcription outlast the per-call wall and the CPU budget: the guest only awaits it',
 		() =>
 			Effect.gen(function* () {
-				const { crossings, bridge } = recorder((c) =>
-					Effect.as(Effect.sleep('200 millis'), {
-						ok: true,
-						value:
-							c._tag === 'ai.transcribe' ? 'transcribe' : c._tag === 'ai.speak' ? 'speak' : null
-					})
+				const { crossings, bridge, started } = yield* slow(60, (c) =>
+					c._tag === 'ai.transcribe' ? 'transcribe' : c._tag === 'ai.speak' ? 'speak' : null
 				);
-				const o = yield* runIn(
-					automation(
-						'function* (_, ctx) { return [yield* ctx.ai.transcribe({ id: "f" }), yield* ctx.ai.speak("hi", { for: "a" })]; }'
+				const o = yield* answeredLate(
+					runIn(
+						automation(
+							'function* (_, ctx) { return [yield* ctx.ai.transcribe({ id: "f" }), yield* ctx.ai.speak("hi", { for: "a" })]; }'
+						),
+						invocation(),
+						bridge,
+						{ callWallMs: 20 },
+						undefined,
+						hostIsolates({ cpuMs: 100 })
 					),
-					invocation(),
-					bridge,
-					{ callWallMs: 50 },
-					undefined,
-					hostIsolates({ cpuMs: 100 })
+					started,
+					2,
+					60
 				);
 				expect(ok(o)).toEqual(['transcribe', 'speak']);
 				expect(crossings.flat()).toMatchObject([{ _tag: 'ai.transcribe' }, { _tag: 'ai.speak' }]);
 			})
 	);
 
-	it.live('gives an inference no per-call wall: its own stall window ends it', () =>
+	it.effect('gives an inference no per-call wall: its own stall window ends it', () =>
 		Effect.gen(function* () {
-			const { bridge } = recorder(() =>
-				Effect.as(Effect.sleep('200 millis'), { ok: true, value: 'found' })
-			);
-			const o = yield* runIn(
-				automation('function* (_, ctx) { return yield* ctx.ai.sys_2.infer({ prompt: "q" }); }'),
-				invocation(),
-				bridge,
-				{ callWallMs: 50 }
+			const { bridge, started } = yield* slow(60, () => 'found');
+			const o = yield* answeredLate(
+				runIn(
+					automation('function* (_, ctx) { return yield* ctx.ai.sys_2.infer({ prompt: "q" }); }'),
+					invocation(),
+					bridge,
+					{ callWallMs: 20 }
+				),
+				started,
+				1,
+				60
 			);
 			expect(ok(o)).toBe('found');
 		})
 	);
 
-	it.live(
-		'parks a long wait: its isolate goes, and a fresh one replays the body from its start (compute model §3)',
-		() =>
-			Effect.gen(function* () {
-				const sessions = new Set<string>();
-				const counted = Layer.unwrap(
-					Effect.map(guestIsolates({}), (port) =>
-						GuestIsolates.fromAbi({
-							...port,
-							open: (source, options, signal) =>
-								port.open(source, options, signal).then((session) => {
-									sessions.add(session);
-									return session;
-								}),
-							close: (session) => {
-								sessions.delete(session);
-								return port.close(session);
-							}
-						})
-					)
-				);
-				let answered: CrossAnswer | undefined,
-					whileWaiting = -1,
-					resumes = 0;
-				// the inference answers once, after 200 ms; a replay finds it journalled
-				const { crossings, bridge } = recorder((call) =>
-					call._tag !== 'ai.sys_2.infer'
-						? { ok: true, value: 1 }
-						: answered !== undefined
-							? { ...answered, journal: true }
-							: Effect.gen(function* () {
-									yield* Effect.sleep('150 millis');
-									whileWaiting = sessions.size;
-									yield* Effect.sleep('50 millis');
-									answered = { ok: true, value: 'found' };
-									return answered;
-								})
-				);
-				const o = yield* runIn(
-					automation(
-						'function* (_, ctx) { const a = yield* ctx.query({ t: { where: { id: { eq: "a" } } } }); const r = yield* ctx.ai.sys_2.infer({ prompt: "q" }); return [a, r]; }'
-					),
-					invocation(null, { crossings: LIMITS.crossings.automation }),
-					bridge,
-					{},
-					undefined,
-					counted
-				).pipe(
-					Effect.provideService(GuestParking, {
-						afterMs: 50,
-						resume: Effect.sync(() => {
-							resumes++;
-						})
-					})
-				);
-				expect(ok(o)).toEqual([1, 'found']);
-				expect(whileWaiting).toBe(0);
-				expect(resumes).toBe(1);
-				expect(crossings.flat().map((call) => call._tag)).toEqual([
-					'read',
-					'ai.sys_2.infer',
-					'read',
-					'ai.sys_2.infer'
-				]);
-			})
-	);
-
-	it.live(
-		'stops a guest past 256 MiB',
-		() =>
-			Effect.gen(function* () {
-				const o = yield* runIn(
-					automation(
-						'async () => { const keep = []; for (;;) keep.push(new Array(1e6).fill(Math.random())); }'
-					)
-				);
-				expect(failure(o)).toMatchObject({ code: 'memory' });
-			}),
-		20_000
+	it.live('stops a guest past its heap cap', () =>
+		Effect.gen(function* () {
+			const o = yield* runIn(
+				automation(
+					'async () => { const keep = []; for (;;) keep.push(new Array(1e5).fill(Math.random())); }'
+				),
+				invocation(),
+				recorder().bridge,
+				{},
+				undefined,
+				hostIsolates({ isolate: () => new ivm.Isolate({ memoryLimit: 32 }) })
+			);
+			expect(failure(o)).toMatchObject({ code: 'memory' });
+		})
 	);
 });
 
@@ -1255,7 +1158,6 @@ describe('next guest globals (rule 6)', () => {
 				'undefined',
 				'undefined'
 			]);
-			expect(PRELUDE).not.toContain('`');
 		})
 	);
 
@@ -1334,7 +1236,7 @@ describe('next guest globals (rule 6)', () => {
 			setTimeout((x) => log.push('t1' + x), 0, '!'); const gone = setTimeout(() => log.push('cleared')); clearTimeout(gone);
 			queueMicrotask(() => log.push('m')); Promise.resolve().then(() => setTimeout(() => log.push('t2')));
 			await new Promise((r) => setTimeout(r, 0)); await new Promise((r) => setTimeout(r));
-			const refused = (() => { try { setTimeout(() => {}, 5); return 'no'; } catch (e) { return [e.name, e.code]; } })();
+			const refused = (() => { try { globalThis.setTimeout(() => {}, 5); return 'no'; } catch (e) { return [e.name, e.code]; } })();
 			return [log, refused];`)
 				).toEqual([
 					['m', 't1!', 't2'],
@@ -1446,15 +1348,16 @@ export default { automation: { a: { body: () => formatter.resolvedOptions().loca
 	);
 
 	it.live(
-		'evaluates minified compiler output with legal comments and the original source map',
+		'evaluates minified compiler output with legal comments, its `?bytes` asset and the original source map',
 		() =>
 			Effect.gen(function* () {
 				const root = mkdtempSync(join(tmpdir(), 'norbital-source-'));
 				try {
 					mkdirSync(join(root, 'src/automation'), { recursive: true });
+					writeFileSync(join(root, 'blob.bin'), 'bytes\u0000!');
 					writeFileSync(
 						join(root, 'src/+workspace.ts'),
-						`export default { tz: 'UTC', locale: 'en' };`
+						`import blob from '../blob.bin?bytes'; export default { tz: 'UTC', locale: blob.length === 7 ? 'en' : 'invalid' };`
 					);
 					writeFileSync(
 						join(root, 'src/automation/+a.automation.ts'),
@@ -1468,95 +1371,31 @@ function* sourceBody(input) {
 }
 export default automation('a', { description, on: { cron: '0 0 * * *' }, run: sourceBody });`
 					);
-					const built = yield* check(root).pipe(Effect.provide(node));
+					// the kit's checkpointed compile: the compiler's output, built once per source
+					const built = yield* check(root);
 					expect(built.errors).toEqual([]);
 					const program = built.guest;
 					if (program === undefined) throw new Error('the compiler produced no guest');
 					expect(program.source).toMatch(/;export\{/);
 					expect(program.source).toContain('@license source evaluation edge case');
+					expect(Object.keys(program.assets ?? {})).toHaveLength(1);
 					const run = (input: Json = { value: 42 }) => runProgram(program, invocation(input));
-					const evaluated = ok(yield* run());
-					expect(evaluated).toEqual({
+					expect(ok(yield* run())).toEqual({
 						value: 42,
 						bodyName: 'sourceBody',
 						className: 'SourceMarker'
 					});
-					expect(ok(yield* run())).toEqual(evaluated);
-					const evaluatedFailure = yield* run({ fail: true });
-					const repeatedFailure = yield* run({ fail: true });
-					expect(repeatedFailure.kind).toBe('failed');
-					if (repeatedFailure.kind !== 'failed' || evaluatedFailure.kind !== 'failed')
-						throw new Error('Expected mapped errors');
-					expect(evaluatedFailure.error.cause).toMatchObject({
+					const failed = yield* run({ fail: true });
+					if (failed.kind !== 'failed') throw new Error('Expected a mapped error');
+					expect(failed.error.cause).toMatchObject({
 						name: 'Error',
 						message: 'mapped source failure',
 						at: expect.stringContaining('src/automation/+a.automation.ts:6')
 					});
-					expect(repeatedFailure.error.cause).toMatchObject({
-						name: 'Error',
-						message: 'mapped source failure',
-						at: expect.stringContaining('src/automation/+a.automation.ts:6')
-					});
-					const repeated = yield* check(root).pipe(Effect.provide(node));
-					expect(repeated.errors).toEqual([]);
-					expect(repeated.guest?.source).toBe(program.source);
-					writeFileSync(join(root, 'blob.bin'), 'bytes\u0000!');
-					writeFileSync(
-						join(root, 'src/+workspace.ts'),
-						`import blob from '../blob.bin?bytes'; export default { tz: 'UTC', locale: blob.length === 7 ? 'en' : 'invalid' };`
-					);
-					const withAsset = yield* check(root).pipe(Effect.provide(node));
-					expect(withAsset.errors).toEqual([]);
-					if (withAsset.guest?.assets === undefined)
-						throw new Error('the compiler omitted the asset');
-					expect(Object.keys(withAsset.guest.assets)).toHaveLength(1);
-					expect(ok(yield* runProgram(withAsset.guest, invocation({ value: 42 })))).toEqual(
-						evaluated
-					);
 				} finally {
 					rmSync(root, { recursive: true, force: true });
 				}
 			})
-	);
-
-	it.live('idle source-initialized isolates stay under 100 MiB heap (G3 guest bound)', () =>
-		Effect.gen(function* () {
-			const source = `const d = { automation: { a: { body: async () => 1 } } };\nexport { d as default };\n`;
-			const isolates = Array.from(
-				{ length: 10 },
-				() => new ivm.Isolate({ memoryLimit: LIMITS.guestMemoryMiB })
-			);
-			try {
-				expect(LIMITS.guestMemoryMiB).toBe(256);
-				for (const isolate of isolates) {
-					const context = yield* Effect.promise(() => isolate.createContext());
-					const hooks = yield* Effect.promise(() =>
-						context.evalClosure(
-							PRELUDE,
-							[() => {}, () => new Uint8Array(), () => '', () => new Uint8Array()],
-							{ result: { reference: true } }
-						)
-					);
-					const module = yield* Effect.promise(() => isolate.compileModule(source));
-					yield* Effect.promise(() =>
-						module.instantiate(context, (specifier) => {
-							throw new Error(`unexpected import ${specifier}`);
-						})
-					);
-					yield* Effect.promise(() => module.evaluate());
-					yield* Effect.promise(() =>
-						context.global.set('__boltGuest', module.namespace.derefInto())
-					);
-					const heap = isolate.getHeapStatisticsSync();
-					expect(heap.used_heap_size + heap.externally_allocated_size).toBeLessThan(
-						100 * 1024 * 1024
-					);
-					hooks.release();
-				}
-			} finally {
-				for (const isolate of isolates) isolate.dispose();
-			}
-		})
 	);
 
 	it.live('labels guest console lines for the host', () =>

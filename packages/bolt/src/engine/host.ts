@@ -38,8 +38,8 @@ import {
 	Http,
 	Images,
 	Keys,
+	Logs,
 	Mcp,
-	Metering,
 	Speech,
 	Transport,
 	WebRead
@@ -107,7 +107,6 @@ export type EngineHost =
 	| WebRead
 	| Geo
 	| Docs
-	| Metering
 	| Transport
 	| DeadlinePort
 	| Drivers
@@ -117,6 +116,7 @@ export type EngineHost =
 	| Http
 	| Images
 	| Mcp
+	| Logs
 	| FileSystem.FileSystem
 	| Path.Path;
 

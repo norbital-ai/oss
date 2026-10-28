@@ -1,20 +1,14 @@
 import { it } from '@effect/vitest';
-import { fileURLToPath } from 'node:url';
 import * as NodeServices from '@effect/platform-node/NodeServices';
-import { Effect, FileSystem, Option, Path } from 'effect';
-import { ChildProcess, ChildProcessSpawner } from 'effect/process';
+import { Effect, FileSystem, Path } from 'effect';
 import { describe, expect } from 'vitest';
 import {
 	actualCounts,
-	changedSince,
 	checkTemplates,
 	discoverTemplates,
-	publishTemplates,
 	resolveLockfile,
-	run,
 	testTemplates,
 	unsatisfiedFirstPartyPeers,
-	verifyTemplates,
 	withoutFirstParty
 } from '../src/cli/templates.ts';
 
@@ -28,8 +22,9 @@ const metadata = {
 	counts: { models: 0, apps: 0, automations: 0 },
 	tags: []
 };
-const policy =
-	"minimumReleaseAgeExclude:\n - '@norbital-ai/bolt@0.0.1'\nsupportedArchitectures:\n os:\n  - darwin\n  - linux\n  - win32\n cpu:\n  - x64\n  - arm64\n libc:\n  - glibc\n  - musl\n";
+/** A bun.lock (JSON with trailing commas): `packages` maps an install path to `[id, registry, meta, integrity]`. */
+const bunLock = (packages: Record<string, readonly unknown[]>) =>
+	`${JSON.stringify({ lockfileVersion: 1, workspaces: { '': { name: 'fixture' } }, packages }, null, 2).replace(/\n(\s*)([}\]])/g, ',\n$1$2')}\n`;
 const fixture = Effect.gen(function* () {
 	const fs = yield* FileSystem.FileSystem;
 	const path = yield* Path.Path;
@@ -48,8 +43,7 @@ const fixture = Effect.gen(function* () {
 			dependencies: { '@norbital-ai/bolt': '0.0.1' }
 		})
 	);
-	yield* fs.writeFileString(path.join(directory, 'pnpm-workspace.yaml'), policy);
-	yield* fs.writeFileString(path.join(directory, 'pnpm-lock.yaml'), 'lockfileVersion: 9.0\n');
+	yield* fs.writeFileString(path.join(directory, 'bun.lock'), bunLock({}));
 	return { root, directory };
 });
 describe('bolt templates', () => {
@@ -58,7 +52,6 @@ describe('bolt templates', () => {
 			const { root } = yield* fixture;
 			const templates = yield* discoverTemplates(root);
 			expect(templates).toHaveLength(1);
-			expect(templates[0]?.ref).toBe('refs/heads/templates/fixture');
 			expect(yield* discoverTemplates(root, 'fixture')).toEqual(templates);
 			expect(yield* discoverTemplates(root, 'norbital_fixture')).toEqual(templates);
 			expect(
@@ -102,32 +95,29 @@ describe('bolt templates', () => {
 			yield* checkTemplates(root);
 		}).pipe(Effect.provide(NodeServices.layer))
 	);
-	it.live(
-		'requires exact first-party pins, explicit exemptions, architectures and a committed lock',
-		() =>
-			Effect.gen(function* () {
-				const fs = yield* FileSystem.FileSystem;
-				const path = yield* Path.Path;
-				const { root, directory } = yield* fixture;
-				yield* checkTemplates(root);
-				yield* fs.writeFileString(
-					path.join(directory, 'pnpm-workspace.yaml'),
-					policy.replace('@norbital-ai/bolt@0.0.1', '@norbital-ai/*')
-				);
-				expect((yield* checkTemplates(root).pipe(Effect.flip)).message).toContain('exact versions');
-				yield* fs.writeFileString(
-					path.join(directory, 'pnpm-workspace.yaml'),
-					policy.replace(' - darwin', ' - other')
-				);
-				expect((yield* checkTemplates(root).pipe(Effect.flip)).message).toContain(
-					'supported architecture'
-				);
-				yield* fs.writeFileString(path.join(directory, 'pnpm-workspace.yaml'), policy);
-				yield* fs.remove(path.join(directory, 'pnpm-lock.yaml'));
-				expect((yield* checkTemplates(root).pipe(Effect.flip)).message).toContain(
-					'missing pnpm-lock.yaml'
-				);
-			}).pipe(Effect.provide(NodeServices.layer))
+	it.live('requires an exact first-party pin, a committed bun.lock and no pnpm files', () =>
+		Effect.gen(function* () {
+			const fs = yield* FileSystem.FileSystem;
+			const path = yield* Path.Path;
+			const { root, directory } = yield* fixture;
+			yield* checkTemplates(root);
+			yield* fs.writeFileString(path.join(directory, 'pnpm-workspace.yaml'), '');
+			expect((yield* checkTemplates(root).pipe(Effect.flip)).message).toContain(
+				'pnpm-workspace.yaml has no place'
+			);
+			yield* fs.remove(path.join(directory, 'pnpm-workspace.yaml'));
+			yield* fs.remove(path.join(directory, 'bun.lock'));
+			expect((yield* checkTemplates(root).pipe(Effect.flip)).message).toContain('missing bun.lock');
+			yield* fs.writeFileString(
+				path.join(directory, 'package.json'),
+				JSON.stringify({
+					private: true,
+					scripts: { build: 'bolt build', test: 'bolt test' },
+					dependencies: { '@norbital-ai/bolt': '^0.0.1' }
+				})
+			);
+			expect((yield* checkTemplates(root).pipe(Effect.flip)).message).toContain('exact version');
+		}).pipe(Effect.provide(NodeServices.layer))
 	);
 	it.live('refuses source imports outside the template and misplaced committed migrations', () =>
 		Effect.gen(function* () {
@@ -147,174 +137,50 @@ describe('bolt templates', () => {
 			);
 		}).pipe(Effect.provide(NodeServices.layer))
 	);
-	it.live('preserves the committed dependency resolution while generating a lockfile', () =>
+	it.live('resolves a lockfile from the committed one without its first-party entries', () =>
 		Effect.gen(function* () {
 			const fs = yield* FileSystem.FileSystem;
 			const path = yield* Path.Path;
 			const { root, directory } = yield* fixture;
-			const committed = 'lockfileVersion: 9.0\n# example remains at 1.0.0 even when 1.1.0 exists\n';
-			const patch = yield* fs.readFileString(
-				fileURLToPath(new URL('../../../patches/isolated-vm@7.0.1.patch', import.meta.url))
-			);
-			yield* fs.writeFileString(path.join(directory, 'isolated-vm.patch'), patch);
 			yield* fs.writeFileString(
-				path.join(directory, 'pnpm-workspace.yaml'),
-				`${policy}patchedDependencies: {"isolated-vm@7.0.1": "isolated-vm.patch"}\n`
+				path.join(directory, 'bun.lock'),
+				bunLock({
+					'@norbital-ai/bolt': ['@norbital-ai/bolt@0.0.1', '', {}, 'sha512-old'],
+					effect: ['effect@4.0.0', '', {}, 'sha512-e']
+				})
 			);
-			yield* fs.writeFileString(path.join(directory, 'pnpm-lock.yaml'), committed);
 			const template = (yield* discoverTemplates(root))[0];
 			if (template === undefined) throw new Error('fixture template missing');
 			const resolved = yield* resolveLockfile(template, (command, args, options) =>
 				Effect.gen(function* () {
-					expect(command).toBe('pnpm');
-					expect(options?.cwd).toBeDefined();
+					expect(command).toBe('bun');
+					expect(args).toEqual(expect.arrayContaining(['install', '--lockfile-only']));
 					if (options?.cwd === undefined) throw new Error('fixture execution cwd missing');
-					expect(yield* fs.readFileString(path.join(options.cwd, 'pnpm-lock.yaml'))).toBe(
-						committed
-					);
-					expect(yield* fs.readFileString(path.join(options.cwd, 'isolated-vm.patch'))).toBe(patch);
-					// install resolves the rest; update re-resolves the first-party entries install would skip
-					expect(args[0] === 'install' ? args : ['--no-frozen-lockfile']).toContain(
-						'--no-frozen-lockfile'
-					);
-					if (args[0] === 'update')
-						expect(args).toEqual(expect.arrayContaining(['@norbital-ai/*', '--lockfile-only']));
-					expect(args).not.toContain('--force');
-					expect(args).not.toContain('--ignore-workspace');
+					const handed = yield* fs.readFileString(path.join(options.cwd, 'bun.lock'));
+					expect(handed).not.toContain('sha512-old');
+					expect(handed).toContain('sha512-e');
 					return '';
 				})
 			);
-			expect(resolved).toBe(committed);
-			expect(yield* fs.readFileString(path.join(directory, 'pnpm-lock.yaml'))).toBe(committed);
-		}).pipe(Effect.provide(NodeServices.layer))
-	);
-	it.live('verifies clean projections, each suite its own bolt test', () =>
-		Effect.gen(function* () {
-			const fs = yield* FileSystem.FileSystem;
-			const path = yield* Path.Path;
-			const created = yield* fixture;
-			const root = yield* fs.realPath(created.root);
-			const directory = path.join(root, 'fixture');
-			yield* fs.writeFileString(
-				path.join(directory, 'package.json'),
-				JSON.stringify({
-					private: true,
-					scripts: { build: 'bolt build', test: 'bolt test' }
-				})
-			);
-			yield* run('git', ['init', '--initial-branch=main'], { cwd: root });
-			const native = yield* ChildProcessSpawner.ChildProcessSpawner;
-			const commands: (readonly string[])[] = [];
-			const processes = ChildProcessSpawner.make((command) =>
-				Effect.gen(function* () {
-					if (command._tag !== 'StandardCommand' || command.command !== 'pnpm')
-						return yield* native.spawn(command);
-					commands.push(command.args);
-					const cwd = command.options.cwd;
-					if (cwd === undefined) throw new Error('standalone command cwd missing');
-					expect(yield* fs.exists(path.join(cwd, '..', 'seed_bank'))).toBe(false);
-					if (command.args[0] === 'exec') {
-						const artifact = path.join(cwd, '.norbital', 'artifact');
-						yield* fs.makeDirectory(artifact, { recursive: true });
-						yield* fs.writeFileString(path.join(artifact, 'artifact.json'), '{}');
-					}
-					return yield* native.spawn(ChildProcess.make(process.execPath, ['-e', '']));
-				})
-			);
-			const tested: (readonly string[])[] = [];
-			// each suite's own `bolt test` builds what it tests
-			const tester = (projections: string, only: readonly string[]) =>
-				Effect.gen(function* () {
-					tested.push(only);
-					for (const slug of only) {
-						const artifact = path.join(projections, slug, '.norbital', 'artifact');
-						yield* fs.makeDirectory(artifact, { recursive: true });
-						yield* fs.writeFileString(path.join(artifact, 'artifact.json'), '{}');
-					}
-				}).pipe(Effect.orDie);
-			yield* verifyTemplates(root, undefined, tester).pipe(
-				Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, processes)
-			);
-			// fetched with the registry, installed without it, checked with the template's own Bolt
-			expect(commands).toEqual([
-				['fetch', '--frozen-lockfile'],
-				['install', '--frozen-lockfile', '--offline'],
-				['exec', 'bolt', 'check']
-			]);
-			expect(tested).toEqual([['fixture']]);
+			expect(resolved).not.toContain('sha512-old');
 		}).pipe(Effect.provide(NodeServices.layer))
 	);
 });
-const lockfile = (effect: string) =>
-	`packages:\n\n  '@norbital-ai/bolt@0.0.103':\n    resolution: {integrity: sha512-x}\n    peerDependencies:\n      '@norbital-ai/doctor': 0.0.103\n      effect: 4.0.0-rc.112\n      svelte: ^5.0.0\n\nsnapshots:\n\n  '@norbital-ai/bolt@0.0.103(@norbital-ai/doctor@0.0.103)(@tiptap/pm@3.31.3(effect@4.0.0-rc.1))(effect@${effect})(svelte@5.57.0)':\n    dependencies: {}\n`;
 it.effect('names an exact peer the locked install resolves to another version', () =>
-	Effect.sync(() => {
-		expect(unsatisfiedFirstPartyPeers(lockfile('4.0.0-rc.111'))).toEqual([
+	Effect.gen(function* () {
+		const lock = (effect: string) =>
+			bunLock({
+				'@norbital-ai/bolt': [
+					'@norbital-ai/bolt@0.0.103',
+					'',
+					{ peerDependencies: { effect: '4.0.0-rc.112', svelte: '^5.0.0' } },
+					'sha512-x'
+				],
+				effect: [`effect@${effect}`, '', {}, 'sha512-e']
+			});
+		expect(yield* unsatisfiedFirstPartyPeers(lock('4.0.0-rc.111'))).toEqual([
 			'@norbital-ai/bolt@0.0.103 needs effect@4.0.0-rc.112 but the install resolves effect@4.0.0-rc.111'
 		]);
-		expect(unsatisfiedFirstPartyPeers(lockfile('4.0.0-rc.112'))).toEqual([]);
+		expect(yield* unsatisfiedFirstPartyPeers(lock('4.0.0-rc.112'))).toEqual([]);
 	})
 );
-
-it.live(
-	'publishes a projected ref and refuses a non-fast-forward local replacement',
-	() =>
-		Effect.gen(function* () {
-			const { root } = yield* fixture;
-			const git = (args: readonly string[]) => run('git', args, { cwd: root });
-			yield* git(['init', '--initial-branch=main']);
-			yield* git(['config', 'user.email', 'template-fixture@example.test']);
-			yield* git(['config', 'user.name', 'Template fixture']);
-			yield* git(['add', '.']);
-			yield* git(['commit', '-m', 'fixture']);
-			yield* publishTemplates({
-				root,
-				sourceRevision: 'HEAD',
-				repository: 'fixture',
-				updateLocal: true
-			});
-			expect(yield* git(['show', 'refs/heads/templates/fixture:norbital.template.json'])).toBe(
-				JSON.stringify(metadata)
-			);
-			const unrelated = yield* git(['rev-parse', 'HEAD']);
-			yield* git(['update-ref', 'refs/heads/templates/fixture', unrelated]);
-			expect(
-				(yield* publishTemplates({
-					root,
-					sourceRevision: 'HEAD',
-					repository: 'fixture',
-					updateLocal: true
-				}).pipe(Effect.flip)).message
-			).toContain('merge-base --is-ancestor');
-			expect(yield* git(['rev-parse', 'refs/heads/templates/fixture'])).toBe(unrelated);
-		}).pipe(Effect.provide(NodeServices.layer)),
-	30_000
-);
-
-it.live('names the templates changed since a revision, and none it cannot resolve', () =>
-	Effect.gen(function* () {
-		const fs = yield* FileSystem.FileSystem;
-		const path = yield* Path.Path;
-		const { root, directory } = yield* fixture;
-		const git = (args: readonly string[]) => run('git', args, { cwd: root });
-		yield* git(['init', '--initial-branch=main']);
-		yield* git(['config', 'user.email', 'template-fixture@example.test']);
-		yield* git(['config', 'user.name', 'Template fixture']);
-		yield* git(['add', '.']);
-		yield* git(['commit', '-m', 'fixture']);
-		expect(yield* changedSince(root, 'HEAD')).toEqual(Option.some(new Set()));
-		yield* fs.writeFileString(path.join(directory, 'README.md'), 'changed');
-		expect(yield* changedSince(root, 'HEAD')).toEqual(Option.some(new Set(['fixture'])));
-		expect(yield* changedSince(root, 'origin/main')).toEqual(Option.none());
-	}).pipe(Effect.scoped, Effect.provide(NodeServices.layer))
-);
-
-it('drops first-party package and snapshot entries so a republished version re-resolves; importers keep theirs', () => {
-	const lock = `lockfileVersion: '9.0'\n\nimporters:\n\n  .:\n    dependencies:\n      '@norbital-ai/bolt':\n        specifier: 0.0.1\n        version: 0.0.1\n\npackages:\n\n  '@norbital-ai/bolt@0.0.1':\n    resolution: {integrity: sha512-old}\n\n  effect@4.0.0:\n    resolution: {integrity: sha512-e}\n\nsnapshots:\n\n  '@norbital-ai/bolt@0.0.1(effect@4.0.0)':\n    dependencies: {}\n\n  effect@4.0.0: {}\n`;
-	const stripped = withoutFirstParty(lock);
-	expect(stripped).not.toContain('sha512-old');
-	expect(stripped).not.toContain("'@norbital-ai/bolt@0.0.1(");
-	expect(stripped).toContain("'@norbital-ai/bolt':\n        specifier: 0.0.1");
-	expect(stripped).toContain('effect@4.0.0:\n    resolution');
-	expect(stripped).toContain('  effect@4.0.0: {}');
-});

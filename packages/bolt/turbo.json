@@ -1,0 +1,8 @@
+{
+	"$schema": "https://turbo.build/schema.json",
+	"extends": ["//"],
+	"tasks": {
+		// the docs corpus compiles `oss/skills/` (src/cli/docs.ts)
+		"build": { "inputs": ["$TURBO_EXTENDS$", "$TURBO_ROOT$/skills/**"] }
+	}
+}

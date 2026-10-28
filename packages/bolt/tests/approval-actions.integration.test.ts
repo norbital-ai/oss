@@ -9,10 +9,10 @@ import type { PGlite } from '@electric-sql/pglite';
 import type { Authority, Outcome } from '../src/engine/contracts.ts';
 type Engine = Effect.Success<ReturnType<typeof acquireEngine>>;
 import { Authorities } from '../src/engine/identity/actor.ts';
-import { PgliteDb, Pristine } from '../src/node/db/pglite.ts';
-import { applyPlan, plan } from '../src/engine/schema/plan.ts';
+import { PgliteDb } from '../src/node/db/pglite.ts';
+import { TestDb } from '../src/test/database.ts';
 import { NOW, TODAY } from './write-fixture.ts';
-import { program } from './support/guest-fixture.ts';
+import { program } from '../src/test/guest.ts';
 
 const salesId = '0199a000-0000-7000-8000-000000000001',
 	financeId = '0199a000-0000-7000-8000-000000000002';
@@ -23,6 +23,7 @@ const grant: GrantData = {
 	update: { columns: { orders: ['note'] }, check: true }
 };
 const manifest: EngineManifest = {
+	needs: [],
 	workspace: { tz: 'UTC', locale: 'en' },
 	models: {
 		orders: {
@@ -123,9 +124,8 @@ const approve = (requestId: string) =>
 	});
 const fixture = Layer.effectDiscard(
 	Effect.gen(function* () {
-		pg = yield* PgliteDb.open();
+		pg = yield* TestDb.open(manifest);
 		db = PgliteDb.make(pg);
-		yield* applyPlan(db, yield* plan(null, manifest), { accept: true });
 		yield* exec(
 			`INSERT INTO sys_user(id,name,team) VALUES('${salesId}','Sales','Sales'),('${financeId}','Finance','Finance');INSERT INTO orders(id,title) VALUES('${left}','Left'),('${right}','Right');
 			INSERT INTO bolt_history(collection,record,revision,op,cause,changes) SELECT 'orders',id,1,'create','seed',to_jsonb(o) FROM orders o`
@@ -138,7 +138,7 @@ const fixture = Layer.effectDiscard(
 		finance = reviewer;
 		e = yield* acquireEngine(manifest, db, yield* guest);
 	})
-).pipe(Layer.provide(Pristine.layer));
+);
 
 it.effect(
 	'one request holds the complete atomic batch and queues its effects once; approval keeps the writes',
@@ -162,6 +162,20 @@ it.effect(
 				yield* rows('SELECT jsonb_array_length(records) n, state FROM bolt_approvals')
 			).toEqual([{ n: 2, state: 'Pending' }]);
 			expect((yield* view(id, finance, () => Effect.succeed(true)))?.records).toHaveLength(2);
+			// the requester cannot change the records its pending batch holds
+			const again = yield* Context.get(e, Callables).acts({
+				name: 'orders.batch',
+				acts: [
+					{ model: 'orders', verb: 'update', input: [{ target: left, set: { note: 'again' } }] }
+				],
+				authority: sales,
+				bindings,
+				invocationId: 'bundle-again',
+				key: 'bundle-again',
+				issuedAt: NOW,
+				from: 'Client'
+			});
+			expect(again.outcome).toMatchObject({ kind: 'refused', code: 'locked', data: { requestId: id } });
 			expect((yield* submit()).outcome).toEqual(result.outcome);
 			expect(yield* notices()).toHaveLength(1);
 			expect(yield* approve(id)).toMatchObject({ kind: 'decided', status: 'Approved' });
@@ -204,59 +218,6 @@ it.effect(
 			).toEqual([{ n: 2 }]);
 		}).pipe(Effect.provide(fixture))
 );
-it.effect('the requester cannot change the records its pending batch holds', () =>
-	Effect.gen(function* () {
-		const id = pending((yield* submit()).outcome);
-		const again = yield* Context.get(e, Callables).acts({
-			name: 'orders.batch',
-			acts: [
-				{ model: 'orders', verb: 'update', input: [{ target: left, set: { note: 'again' } }] }
-			],
-			authority: sales,
-			bindings,
-			invocationId: 'bundle-again',
-			key: 'bundle-again',
-			issuedAt: NOW,
-			from: 'Client'
-		});
-		expect(again.outcome).toMatchObject({
-			kind: 'refused',
-			code: 'locked',
-			data: { requestId: id }
-		});
-		expect(yield* rows("SELECT count(*)::int n FROM sys_run WHERE automation='followup'")).toEqual([
-			{ n: 1 }
-		]);
-	}).pipe(Effect.provide(fixture))
-);
-it.effect('a batch of generated verbs opens one request over both writes', () =>
-	Effect.gen(function* () {
-		const result = yield* Context.get(e, Callables).acts({
-			name: 'orders.batch',
-			acts: [
-				{ model: 'orders', verb: 'update', input: [{ target: left, set: { note: 'one' } }] },
-				{ model: 'orders', verb: 'update', input: [{ target: right, set: { note: 'two' } }] }
-			],
-			authority: sales,
-			bindings,
-			invocationId: 'batch-invocation',
-			key: 'batch',
-			issuedAt: NOW,
-			from: 'Client'
-		});
-		const id = pending(result.outcome);
-		expect(yield* rows('SELECT note FROM orders ORDER BY title')).toEqual([
-			{ note: 'one' },
-			{ note: 'two' }
-		]);
-		expect(yield* approve(id)).toMatchObject({ kind: 'decided', status: 'Approved' });
-		expect(yield* rows('SELECT note FROM orders ORDER BY title')).toEqual([
-			{ note: 'one' },
-			{ note: 'two' }
-		]);
-	}).pipe(Effect.provide(fixture))
-);
-
 it.effect('a refused item leaves every batch write, approval and queued effect absent', () =>
 	Effect.gen(function* () {
 		// the fixture's own raw inserts are audited too: the refusal must add nothing to that baseline

@@ -1,6 +1,7 @@
 /// <reference types="node" />
-// Seed packs (rule 70, X-13, X-15, §7.2): the public `base` pack from `seed/**`, and a `sample` pack read from a bank
-// tree by the template's `seed/seed.ts` (or, without one, every `<model>.json` of the tree). A pack is a sibling of
+// Seed packs (rule 70, X-13, X-15, §7.2): the public `base` pack from `seed/**`, a `sample` pack read from a bank
+// tree by the template's `seed/seed.ts` (or, without one, every `<model>.json` of the tree), and the `test` pack from
+// `seed/test/**` as authored (the template's own tests seed from it; no host provisions it). A pack is a sibling of
 // the artifact with its own hash: `pack.json`, `rows/<model>.jsonl`, `assets/**`. Loading one is a restore.
 import { createHash } from 'node:crypto';
 import { Effect, FileSystem, Predicate, Result, Schema } from 'effect';
@@ -20,6 +21,7 @@ import {
 } from '../../engine/write/pack.ts';
 import type { CheckDiagnostic } from '../check/index.ts';
 import { assetPath } from '../../engine/artifact/read.ts';
+import { seedPack } from '../seed.ts';
 
 /** Rows per model, the identity rows (`sys_user`, run-time `sys_integration` instances) included. */
 export type SeedRows = {
@@ -178,22 +180,26 @@ const seedSource = Effect.fn('bolt.seedSource')(function* (root: string, cache: 
 	).pipe(Effect.mapError((cause) => new SeedSourceError({ cause })));
 });
 
-/** `seed/assets.json` (`{ path, sha256, bytes, contentType }`) checked against `seed/assets/**` (rule 70). */
-const assetList = Effect.fn('bolt.seedAssets')(function* (root: string, errors: CheckDiagnostic[]) {
+/** `<dir>/assets.json` (`{ path, sha256, bytes, contentType }`) checked against `<dir>/assets/**` (rule 70). */
+const assetList = Effect.fn('bolt.seedAssets')(function* (
+	root: string,
+	dir: 'seed' | 'seed/test',
+	errors: CheckDiagnostic[]
+) {
 	const fs = yield* FileSystem.FileSystem;
-	const file = join(root, 'seed/assets.json');
+	const file = join(root, dir, 'assets.json');
 	if (!(yield* fs.exists(file))) return [];
 	const list = yield* Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.Array(Asset)))(
 		yield* fs.readFileString(file)
 	);
 	const ok: SeedAsset[] = [];
 	for (const a of list) {
-		const path = join(root, 'seed/assets', a.path);
+		const path = join(root, dir, 'assets', a.path);
 		const fail = (message: string) =>
 			errors.push({
 				code: 'seed/asset',
-				path: `seed/assets/${a.path}`,
-				message: `seed/assets/${a.path}: ${message}`
+				path: `${dir}/assets/${a.path}`,
+				message: `${dir}/assets/${a.path}: ${message}`
 			});
 		if (!(yield* fs.exists(path))) {
 			fail('missing');
@@ -391,7 +397,34 @@ const noBank: BankReader = {
 };
 
 /**
- * The `base` pack (always, possibly empty) and, with `bank` (a bank checkout), the `sample` pack of the tree `seed.ts`
+ * The `test` pack: `seed/test/**` rows and `seed/test/assets*` as authored, no `seed.ts` and no bank. Without a
+ * `seed/test/` directory there is none (an earlier one is removed). The kit builds it the same way.
+ */
+export const buildTestPack = Effect.fn('bolt.buildTestPack')(function* (
+	root: string,
+	m: EngineManifest,
+	out: string,
+	errors: CheckDiagnostic[]
+) {
+	const fs = yield* FileSystem.FileSystem;
+	if (!(yield* fs.exists(join(root, 'seed/test')))) {
+		yield* fs.remove(join(out, 'test'), { recursive: true, force: true });
+		return undefined;
+	}
+	return yield* writePack(
+		out,
+		'test',
+		m,
+		yield* seedPack(root, errors, 'test'),
+		[],
+		yield* assetList(root, 'seed/test', errors),
+		join(root, 'seed/test/assets'),
+		errors
+	);
+});
+
+/**
+ * The `base` pack (always, possibly empty), the `test` pack when `seed/test/` exists and, with `bank` (a bank checkout), the `sample` pack of the tree `seed.ts`
  * names, or the tree `tree` names when there is no `seed.ts`. hook:packaging-ui — with a `seed.ts`, the base pack is
  * its rows over no bank (the template's public seed files through the same conversion as the sample); without one,
  * the `seed/**` files as they are.
@@ -445,11 +478,13 @@ export const buildPacks = Effect.fn('bolt.buildPacks')(function* (
 					m,
 					baseRows,
 					[],
-					yield* assetList(root, errors),
+					yield* assetList(root, 'seed', errors),
 					join(root, 'seed/assets'),
 					errors
 				);
 	if (base !== undefined) packs['base'] = base;
+	const test = yield* buildTestPack(root, m, out, errors);
+	if (test !== undefined) packs['test'] = test;
 	const tree = source?.bank ?? options.tree;
 	if (tree === undefined && (source !== undefined || !hasReader))
 		yield* fs.remove(join(out, 'sample'), { recursive: true, force: true });

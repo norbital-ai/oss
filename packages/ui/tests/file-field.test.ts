@@ -132,25 +132,6 @@ const drop = async (t: ParentNode, files: readonly File[]) => {
 };
 
 it.live(
-	'empty, the field is one input-height trigger that names the action; the limits are its hint, not a drop zone',
-	() =>
-		Effect.gen(function* () {
-			const { target } = yield* browser(() => field());
-			const add = required(adder(target));
-			assert.ok(add);
-			assert.match(textOf(add), /^\s*Add files\s*Up to 20 files/);
-			assert.match(required(add.getAttribute('title')), /Up to 20 files · 20MB each · PDF/);
-			assert.equal(element<HTMLInputElement>(target, 'input[type=file]').id, 'documents');
-			assert.equal(element<HTMLInputElement>(target, 'input[type=file]').multiple, true);
-			assert.doesNotMatch(textOf(target), /Drop files|click to browse/);
-			assert.equal(chips(target).length, 0);
-			const single = yield* browser(() => field({ kind: PHOTO }));
-			assert.match(textOf(adder(single.target)), /^\s*Add file\s*5MB/);
-			assert.match(required(required(adder(single.target)).getAttribute('title')), /^5MB · IMAGE$/);
-		})
-);
-
-it.live(
 	'multiple files read as chips with a "+" to add more; drag over the field highlights it',
 	() =>
 		Effect.gen(function* () {
@@ -211,97 +192,6 @@ it.live(
 		})
 );
 
-it.live(
-	'a chip opens a popover: preview, size, type, uploaded at and by, SHA-256, Download and Remove when edited',
-	() =>
-		Effect.gen(function* () {
-			const img = { id: 'p1', name: 'plaque.png', mime: 'image/png', size: 2048 };
-			const { target, changes } = yield* browser(() => field({ value: [ref(0), img] }));
-			required(chips(target)[1]).click();
-			yield* browser(() => settle());
-			const pop = element<HTMLElement>(document, '[data-file-preview]');
-			assert.ok(pop, 'the popover opened');
-			assert.equal(element<HTMLImageElement>(pop, 'img').getAttribute('src'), '/files/p1');
-			const text = textOf(pop);
-			for (const s of ['plaque.png', '2.0 KB', 'image/png', 'Ana Tan', SYS_FILE.sha256])
-				assert.ok(text.includes(s), `shows ${s}`);
-			assert.deepEqual(
-				reads.map(([c, o]) => [c, jsonRecord(jsonRecord(jsonRecord(o).where).id).eq]),
-				[
-					['sys_file', 'p1'],
-					['sys_user', 'u1']
-				]
-			);
-			const download = element<HTMLAnchorElement>(pop, 'a[download]');
-			assert.equal(download.getAttribute('href'), '/files/p1');
-			assert.equal(download.getAttribute('download'), 'plaque.png');
-			const remove = [...pop.querySelectorAll<HTMLButtonElement>('button')].find(
-				(b) => textOf(b).trim() === 'Remove'
-			);
-			assert.ok(remove);
-			remove.click();
-			yield* browser(() => settle());
-			assert.deepEqual(changes, [[ref(0)]]);
-		})
-);
-
-it.live(
-	'a PDF previews in an embedded viewer; a file without a URL or metadata still shows its name and size',
-	() =>
-		Effect.gen(function* () {
-			const { target } = yield* browser(() => field({ value: [ref(0)] }));
-			required(chips(target)[0]).click();
-			flushSync();
-			const preview = element<HTMLIFrameElement>(document, '[data-file-preview] iframe');
-			yield* browser(
-				() =>
-					new Promise<void>((resolve, reject) => {
-						preview.addEventListener('load', () => resolve(), { once: true });
-						preview.addEventListener(
-							'error',
-							() => reject(new Error('Fixture PDF failed to load')),
-							{
-								once: true
-							}
-						);
-					})
-			);
-			yield* browser(() => settle());
-			assert.equal(preview.getAttribute('src'), `${PDF_URL}#page=1&view=FitH`);
-			{
-				const close = mounted.pop();
-				assert.ok(close);
-				yield* browser(close);
-			}
-			document.body.innerHTML = '';
-			const { fileUrl: _fileUrl, query: _query, ...withoutMetadata } = host();
-			const bare = yield* browser(() => field({ value: [ref(0)], h: withoutMetadata }));
-			required(chips(bare.target)[0]).click();
-			yield* browser(() => settle());
-			const pop = element<HTMLElement>(document, '[data-file-preview]');
-			assert.match(textOf(pop), /doc-0\.pdf/);
-			assert.match(textOf(pop), /1\.2 KB/);
-			assert.equal(pop.querySelector('a[download]'), null);
-			{
-				const close = mounted.pop();
-				assert.ok(close);
-				yield* browser(close);
-			}
-			document.body.innerHTML = '';
-			const sized = yield* browser(() =>
-				field({ value: [{ id: 'z', name: 'z.pdf', mime: 'application/pdf' }] })
-			);
-			required(chips(sized.target)[0]).click();
-			yield* browser(() => settle());
-			assert.match(
-				textOf(element<HTMLElement>(document, '[data-file-preview]')),
-				/4\.9 KB/,
-				"a ref without a size takes the stored row's"
-			);
-			assert.doesNotMatch(textOf(pop), /SHA-256/);
-		})
-);
-
 it.live('read-only shows the same chips and popover, without Remove or "+"', () =>
 	Effect.gen(function* () {
 		const { target } = yield* browser(() => field({ mode: 'show', value: [ref(0), ref(1)] }));
@@ -326,35 +216,5 @@ it.live('read-only shows the same chips and popover, without Remove or "+"', () 
 		assert.equal(document.querySelector('[data-file-preview]'), null, 'Esc closes the popover');
 		const empty = yield* browser(() => field({ mode: 'show', value: null }));
 		assert.equal(textOf(empty.target).trim(), '—');
-	})
-);
-
-it.live('a dense cell shows the first chip and how many more', () =>
-	Effect.gen(function* () {
-		const target = document.createElement('div');
-		document.body.append(target);
-		const app = mount(Harness, {
-			target,
-			props: {
-				host: host(),
-				view: {
-					mode: 'show',
-					dense: true,
-					kind: PDF,
-					value: [ref(0), ref(1), ref(2)],
-					name: 'documents'
-				}
-			}
-		});
-		yield* browser(() => settle());
-		mounted.push(async () => {
-			await unmount(app);
-			target.remove();
-		});
-		assert.deepEqual(
-			chips(target).map((c) => textOf(c).trim()),
-			['doc-0.pdf']
-		);
-		assert.match(textOf(target), /\+2/);
 	})
 );

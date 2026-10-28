@@ -1,6 +1,6 @@
 import { Clock, Effect, Layer, Option, Schema } from 'effect';
 import { csvRows } from '@norbital-ai/std/csv';
-import { FacilityFailure, Unavailable } from '../decl/errors.ts';
+import { FacilityFailure } from '../decl/errors.ts';
 import type { Json } from '../decl/values.ts';
 import type { ConvertSource } from '../decl/runtime/facilities.ts';
 import {

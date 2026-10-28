@@ -1,7 +1,9 @@
 import { it } from '@effect/vitest';
 import * as NodeServices from '@effect/platform-node/NodeServices';
 import { Effect, FileSystem, Path } from 'effect';
-import { expect } from 'vitest';
+import { cpSync, rmSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { afterAll, expect } from 'vitest';
 import {
 	artifactHash,
 	CONTRACT,
@@ -19,6 +21,7 @@ import type { EngineManifest } from '../src/engine/manifest.ts';
 import { fingerprint, schemaSlice } from '../src/engine/schema/plan.ts';
 
 const manifest: EngineManifest = {
+	needs: [],
 	workspace: { tz: 'UTC', locale: 'en' },
 	models: {},
 	relationships: {},
@@ -84,6 +87,23 @@ const publicManifest: EngineManifest = {
 		}
 	}
 };
+/** Each manifest's generated migrations, prepared (and replay-verified) once for the whole file. */
+const prepared = await Effect.runPromise(
+	Effect.gen(function* () {
+		const fs = yield* FileSystem.FileSystem;
+		const generate = (m: EngineManifest) =>
+			Effect.gen(function* () {
+				const dir = yield* fs.makeTempDirectory({ prefix: 'bolt-artifact-migrations-' });
+				yield* prepareMigrations(dir, m, 'generate');
+				return join(dir, 'migrations');
+			});
+		return { plain: yield* generate(manifest), public: yield* generate(publicManifest) };
+	}).pipe(Effect.provide(Pristine.layer), Effect.provide(NodeServices.layer))
+);
+afterAll(() => {
+	for (const migrations of Object.values(prepared))
+		rmSync(dirname(migrations), { recursive: true, force: true });
+});
 const publicFixture = Effect.fnUntraced(function* () {
 	const fs = yield* FileSystem.FileSystem;
 	const path = yield* Path.Path;
@@ -99,7 +119,7 @@ const publicFixture = Effect.fnUntraced(function* () {
 	yield* fs.makeDirectory(path.join(dir, 'server', 'app', 'site'), { recursive: true });
 	yield* fs.writeFileString(path.join(dir, 'manifest.json'), text);
 	yield* fs.writeFileString(path.join(dir, 'guest.mjs'), source);
-	yield* prepareMigrations(dir, publicManifest, 'generate').pipe(Effect.provide(Pristine.layer));
+	cpSync(prepared.public, path.join(dir, 'migrations'), { recursive: true });
 	yield* fs.writeFileString(path.join(dir, 'client', 'assets', 'site.js'), '/* public client */');
 	yield* fs.writeFileString(path.join(dir, 'client', 'assets', 'site.css'), 'h1{color:orange}');
 	yield* fs.writeFileString(
@@ -269,7 +289,7 @@ it.live('reads lazily, decodes artifact files once and refuses a changed digest'
 		const source = 'export default {};';
 		yield* fs.writeFileString(path.join(dir, 'manifest.json'), text);
 		yield* fs.writeFileString(path.join(dir, 'guest.mjs'), source);
-		yield* prepareMigrations(dir, manifest, 'generate').pipe(Effect.provide(Pristine.layer));
+		cpSync(prepared.plain, path.join(dir, 'migrations'), { recursive: true });
 		const body: Omit<ArtifactJson, 'hash'> = {
 			format: 1,
 			contract: CONTRACT,
@@ -309,7 +329,7 @@ it.live(
 				source = 'export default {};';
 			yield* fs.writeFileString(path.join(dir, 'manifest.json'), text);
 			yield* fs.writeFileString(path.join(dir, 'guest.mjs'), source);
-			yield* prepareMigrations(dir, manifest, 'generate').pipe(Effect.provide(Pristine.layer));
+			cpSync(prepared.plain, path.join(dir, 'migrations'), { recursive: true });
 			const write = (contract: string) =>
 				Effect.gen(function* () {
 					const body: Omit<ArtifactJson, 'hash'> = {
@@ -353,7 +373,7 @@ it.live(
 				bytes = new Uint8Array([0, 1, 2, 3]);
 			yield* fs.writeFileString(path.join(dir, 'manifest.json'), text);
 			yield* fs.writeFileString(path.join(dir, 'guest.mjs'), source);
-			yield* prepareMigrations(dir, manifest, 'generate').pipe(Effect.provide(Pristine.layer));
+			cpSync(prepared.plain, path.join(dir, 'migrations'), { recursive: true });
 			yield* fs.writeFile(path.join(dir, 'guest.snapshot'), bytes);
 			const body: Omit<ArtifactJson, 'hash'> = {
 				format: 1,

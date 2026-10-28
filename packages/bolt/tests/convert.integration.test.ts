@@ -1,16 +1,16 @@
 // `ctx.convert.document` (optional host capability): Markdown or HTML to a target the workspace declares, over the host's
-// ConvertPort, stored like `files.put`; then the provider against Norbital Convert, the service behind that port.
+// ConvertPort, stored like `files.put`; then the converter client against a local Norbital Convert service.
 import { uuidv7 } from '../src/protocol/wire.ts';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll } from 'vitest';
 import { describe, expect, it } from '@effect/vitest';
-import { Config, Context, Effect, Layer, Option, Result, Schema } from 'effect';
+import { Context, Effect, Layer, Result, Schema } from 'effect';
 import { Convert, Files } from '../src/engine/ports.ts';
-import { decodeManifest } from '../src/engine/manifest.ts';
+import { decodeProjectedManifest } from '../src/engine/manifest.ts';
 import { actReply, routeFixture } from './support/route-fixture.ts';
-import { program } from './support/guest-fixture.ts';
+import { program } from '../src/test/guest.ts';
 import { service } from '../../../services/convert/src/server.ts';
 import { ConversionFailed } from '../../../services/convert/src/convert.ts';
 import type { Json } from '../src/decl/values.ts';
@@ -18,7 +18,7 @@ import { documentConverter } from '../src/engine/convert.ts';
 import { TestWorkspace } from '../src/test/index.ts';
 
 const manifest = Result.getOrThrow(
-	decodeManifest({
+	decodeProjectedManifest({
 		workspace: { tz: 'UTC', locale: 'en', convert: { to: ['pdf', 'docx'] } },
 		models: {
 			docs: {
@@ -77,11 +77,8 @@ const Output = Schema.Struct({
 	message: Schema.optionalKey(Schema.String),
 	reason: Schema.optionalKey(Schema.String)
 });
-const make = (
-	options: Readonly<Record<string, Json>>,
-	convert?: Convert['Service'],
-	reference?: Uint8Array
-) =>
+/** One workspace bound to `convert`; `make` starts one conversion run there and answers its row. */
+const workspace = (convert?: Convert['Service'], reference?: Uint8Array) =>
 	Effect.gen(function* () {
 		const context = yield* Layer.build(
 			TestWorkspace.layer({
@@ -109,36 +106,40 @@ const make = (
 				issuedAt: t.clock.now()
 			});
 		}
-		yield* actReply(route, t.as(t.member(['ops'])).authority, {
-			callable: 'start',
-			input: {
-				automation: 'make',
-				input: { options: { ...options, ...(ref === undefined ? {} : { reference: ref }) } },
-				id: uuidv7(Date.parse(t.clock.now()))
-			},
-			issuedAt: t.clock.now()
-		});
-		yield* t.runDue();
-		const [run] = (yield* t.db.read([
-			{ text: `SELECT state, output, error FROM sys_run`, params: [] }
-		]))[0]!.rows;
-		if (run === undefined) throw new Error('make did not produce a run');
-		return { t, files, run, output: yield* Schema.decodeUnknownEffect(Output)(run['output']) };
+		const make = (options: Readonly<Record<string, Json>>, withReference = false) =>
+			Effect.gen(function* () {
+				const id = uuidv7(Date.parse(t.clock.now()));
+				yield* actReply(route, t.as(t.member(['ops'])).authority, {
+					callable: 'start',
+					input: {
+						automation: 'make',
+						input: {
+							options: { ...options, ...(withReference && ref !== undefined ? { reference: ref } : {}) }
+						},
+						id
+					},
+					issuedAt: t.clock.now()
+				});
+				yield* t.runDue();
+				const [run] = (yield* t.db.read([
+					{ text: `SELECT state, output, error FROM sys_run WHERE id = $1`, params: [id] }
+				]))[0]!.rows;
+				if (run === undefined) throw new Error('make did not produce a run');
+				return { run, output: yield* Schema.decodeUnknownEffect(Output)(run['output']) };
+			});
+		return { t, files, make };
 	});
 
 describe('ctx.convert.document', () => {
 	it.live(
-		'converts to a declared target, hands the port the reference bytes and stores the output for its owner',
+		'converts to a declared target with its reference and page options, stores the output, and refuses bad options',
 		() =>
 			Effect.scoped(
 				Effect.gen(function* () {
 					const calls: Call[] = [];
 					const letterhead = new Uint8Array([80, 75, 3, 4, 1, 2, 3]);
-					const { t, files, run, output } = yield* make(
-						{ to: 'docx' },
-						fake(['pdf', 'docx'], calls),
-						letterhead
-					);
+					const { t, files, make } = yield* workspace(fake(['pdf', 'docx', 'pptx'], calls), letterhead);
+					const { run, output } = yield* make({ to: 'docx' }, true);
 					expect(run).toMatchObject({ state: 'succeeded', error: null });
 					expect(calls).toHaveLength(1);
 					const [src, to, opts] = calls[0]!;
@@ -155,42 +156,26 @@ describe('ctx.convert.document', () => {
 					expect(row!['field']).toBe('make');
 					const stored = yield* files.get(String(row!['key']), 1024);
 					expect(new TextDecoder().decode(stored)).toBe('converted to docx');
+					yield* make({ to: 'pdf', page: 'Letter', landscape: true });
+					expect(calls[1]![2]).toEqual({ page: 'Letter', landscape: true });
+					expect((yield* make({ to: 'pptx' })).output).toMatchObject({
+						kind: 'invalid',
+						message: expect.stringContaining("'pptx' is not declared")
+					});
+					expect((yield* make({ to: 'pdf', page: 'A5' })).output).toMatchObject({
+						kind: 'invalid',
+						message: expect.stringMatching(/A4.*A3.*Letter/)
+					});
+					expect((yield* make({ to: 'docx', landscape: true })).output).toMatchObject({
+						kind: 'invalid',
+						message: expect.stringContaining("a pdf's")
+					});
+					expect((yield* make({ to: 'pdf' }, true)).output).toMatchObject({
+						kind: 'invalid',
+						message: expect.stringContaining('takes no reference')
+					});
 				})
 			)
-	);
-
-	it.live('passes a PDF its paper and orientation', () =>
-		Effect.scoped(
-			Effect.gen(function* () {
-				const calls: Call[] = [];
-				yield* make({ to: 'pdf', page: 'Letter', landscape: true }, fake(['pdf'], calls));
-				expect(calls[0]![2]).toEqual({ page: 'Letter', landscape: true });
-			})
-		)
-	);
-
-	it.live('refuses an undeclared target and options another target owns', () =>
-		Effect.scoped(
-			Effect.gen(function* () {
-				expect((yield* make({ to: 'pptx' }, fake(['pdf', 'docx', 'pptx']))).output).toMatchObject({
-					kind: 'invalid',
-					message: expect.stringContaining("'pptx' is not declared")
-				});
-				expect((yield* make({ to: 'pdf', page: 'A5' }, fake(['pdf']))).output).toMatchObject({
-					kind: 'invalid',
-					message: expect.stringMatching(/A4.*A3.*Letter/)
-				});
-				expect((yield* make({ to: 'docx', landscape: true }, fake(['docx']))).output).toMatchObject(
-					{ kind: 'invalid', message: expect.stringContaining("a pdf's") }
-				);
-				expect(
-					(yield* make({ to: 'pdf' }, fake(['pdf']), new Uint8Array([1]))).output
-				).toMatchObject({
-					kind: 'invalid',
-					message: expect.stringContaining('takes no reference')
-				});
-			})
-		)
 	);
 
 	it.live(
@@ -198,11 +183,13 @@ describe('ctx.convert.document', () => {
 		() =>
 			Effect.scoped(
 				Effect.gen(function* () {
-					expect((yield* make({ to: 'pdf' })).output).toMatchObject({
+					expect((yield* (yield* workspace()).make({ to: 'pdf' })).output).toMatchObject({
 						kind: 'unavailable',
 						facility: 'convert'
 					});
-					expect((yield* make({ to: 'pdf' }, fake(['docx']))).output).toMatchObject({
+					expect(
+						(yield* (yield* workspace(fake(['docx']))).make({ to: 'pdf' })).output
+					).toMatchObject({
 						kind: 'unavailable',
 						reason: expect.stringContaining('no pdf')
 					});
@@ -212,7 +199,7 @@ describe('ctx.convert.document', () => {
 });
 
 // The provider against the service itself (oss/services/convert), in process with a stand-in converter, so the wire shapes
-// are the service's own; the live test runs pandoc and Typst when BOLT_TEST_CONVERT_URL / BOLT_TEST_CONVERT_KEY name one.
+// are the service's own.
 describe('documentConverter (Norbital Convert)', () => {
 	const seen: unknown[] = [];
 	let url = '',
@@ -327,50 +314,3 @@ describe('documentConverter (Norbital Convert)', () => {
 		)
 	);
 });
-
-const live = await Effect.runPromise(
-	Config.all({
-		url: Config.String('BOLT_TEST_CONVERT_URL').pipe(Config.option),
-		key: Config.String('BOLT_TEST_CONVERT_KEY').pipe(Config.option)
-	}).pipe(
-		Effect.map(({ url, key }) => ({
-			url: Option.getOrUndefined(url),
-			key: Option.getOrUndefined(key)
-		}))
-	)
-);
-describe.skipIf(live.url === undefined || live.key === undefined)(
-	'documentConverter against a live service',
-	() => {
-		const port = documentConverter({ url: live.url ?? '', key: live.key ?? '' });
-		const md = {
-			markdown: '# Report\n\n| Panel | R-E (MΩ) |\n|---|--:|\n| 2A | 20,000 |\n\n45 µΩ at 31 °C'
-		};
-		const run = (to: Parameters<Convert['Service']['convert']>[1], options = {}) =>
-			port.convert(md, to, options).pipe(Effect.timeout('30 seconds'));
-
-		it.live('writes every target as its own format', () =>
-			Effect.scoped(
-				Effect.gen(function* () {
-					const magic = (to: Parameters<Convert['Service']['convert']>[1]) =>
-						run(to).pipe(Effect.map((bytes) => new TextDecoder().decode(bytes.slice(0, 4))));
-					expect(yield* magic('pdf')).toBe('%PDF');
-					for (const to of ['docx', 'pptx', 'odt', 'epub'] as const)
-						expect(yield* magic(to)).toBe('PK\u0003\u0004');
-					expect(new TextDecoder().decode(yield* run('html'))).toContain('45 µΩ at 31 °C');
-				})
-			)
-		);
-
-		it.live('styles a docx with a reference document', () =>
-			Effect.scoped(
-				Effect.gen(function* () {
-					const reference = yield* run('docx');
-					expect(new TextDecoder().decode((yield* run('docx', { reference })).slice(0, 2))).toBe(
-						'PK'
-					);
-				})
-			)
-		);
-	}
-);

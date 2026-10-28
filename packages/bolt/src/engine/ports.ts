@@ -1,7 +1,7 @@
 // Host ports as services (D4, B.1; P18, P19): what the engine asks of its host, by capability, never by provider.
-// Every member fails typed — the facility's failure or `Unavailable` — and every service has `unavailable`, the layer
-// a host without that capability provides (no optional ports). Walls are the caller's (`Port.call`). The tenant
-// database is `TenantDb` (`db/tenant-db.ts`).
+// Every member fails typed — the facility's failure or `Unavailable`. A port is required; one the host may leave out
+// takes `off` explicitly (`@norbital-ai/bolt/facilities`), and only then answers `Unavailable`. Walls are the caller's
+// (`Port.call`). The tenant database is `TenantDb` (`db/tenant-db.ts`).
 import {
 	ByteSize,
 	Context,
@@ -74,7 +74,6 @@ import type {
 	McpPort,
 	McpServer,
 	McpToolInfo,
-	MeteringPort,
 	SpeechPort,
 	TransportPort,
 	WebReadPort
@@ -87,7 +86,10 @@ import type { GuestProgram } from './guest/runner.ts';
 import { BoltError, CODES } from '../protocol/errors.ts';
 import { linkFailure } from './integrations/abi.ts';
 import { Port, type PortFailure } from './port.ts';
-import { corpus, type DocsCorpus } from './docs-corpus.ts';
+import { corpus, skillFile, type DocsCorpus } from './docs-corpus.ts';
+import { isOff, type Off } from '../facilities/off.ts';
+
+const turnedOff = (facility: string) => Port.unavailable(facility, 'the host turned this facility off');
 
 // ── files ──
 /** Stored blobs; the `sys_file` row is the engine's (rule 18). `get` answers at most `max` bytes (more is `invalid`). */
@@ -105,17 +107,8 @@ export class Files extends Context.Service<
 		readonly download: (url: string) => Effect.Effect<Downloaded, PortFailure>;
 	}
 >()('bolt/Files') {
-	static readonly unavailable: Layer.Layer<Files> = Layer.succeed(Files, {
-		put: () => Port.unavailable('files'),
-		get: () => Port.unavailable('files'),
-		url: () => Port.unavailable('files'),
-		remove: () => Port.unavailable('files'),
-		download: () => Port.unavailable('files')
-	});
-	static fromAbi(port: FilesPort | undefined): Layer.Layer<Files> {
-		return port === undefined
-			? Files.unavailable
-			: Layer.succeed(Files, {
+	static fromAbi(port: FilesPort): Layer.Layer<Files> {
+		return Layer.succeed(Files, {
 					put: (bytes, meta) => Port.attempt('files', (signal) => port.put(bytes, meta, signal)),
 					get: (key, max) => Port.attempt('files', (signal) => port.get(key, max, signal)),
 					url: (key, expiresInS) =>
@@ -145,13 +138,9 @@ export class Convert extends Context.Service<
 		) => Effect.Effect<Uint8Array, PortFailure>;
 	}
 >()('bolt/Convert') {
-	static readonly unavailable: Layer.Layer<Convert> = Layer.succeed(Convert, {
-		targets: [],
-		convert: () => Port.unavailable('convert')
-	});
-	static fromAbi(port: ConvertPort | undefined): Layer.Layer<Convert> {
-		return port === undefined
-			? Convert.unavailable
+	static fromAbi(port: ConvertPort | Off): Layer.Layer<Convert> {
+		return isOff(port)
+			? Layer.succeed(Convert, { targets: [], convert: () => turnedOff('convert') })
 			: Layer.succeed(Convert, {
 					targets: port.targets,
 					convert: (source, to, options) =>
@@ -192,33 +181,30 @@ export class Speech extends Context.Service<
 		) => Effect.Effect<{ readonly bytes: Uint8Array; readonly mime: string }, PortFailure>;
 	}
 >()('bolt/Speech') {
-	static readonly unavailable: Layer.Layer<Speech> = Layer.succeed(Speech, {
-		transcribe: () => Port.unavailable('ai.transcribe', 'the host provides no transcription'),
-		speak: () => Port.unavailable('ai.speak', 'the host provides no speech')
-	});
-	static fromAbi(port: SpeechPort | undefined): Layer.Layer<Speech> {
-		const transcribe = port?.transcribe?.bind(port),
-			speak = port?.speak?.bind(port);
-		return Layer.succeed(Speech, {
-			transcribe:
-				transcribe === undefined
-					? () => Port.unavailable('ai.transcribe', 'the host provides no transcription')
-					: (audio, options) =>
+	static fromAbi(port: Required<SpeechPort> | Off): Layer.Layer<Speech> {
+		return Layer.succeed(
+			Speech,
+			isOff(port)
+				? { transcribe: () => turnedOff('ai.transcribe'), speak: () => turnedOff('ai.speak') }
+				: {
+						transcribe: (audio, options) =>
 							Port.fromPromise(
-								(signal) => transcribe(audio, options, signal),
+								(signal) => port.transcribe(audio, options, signal),
 								TranscriptAnswer,
 								'ai.transcribe'
 							),
-			speak:
-				speak === undefined
-					? () => Port.unavailable('ai.speak', 'the host provides no speech')
-					: (text, options) =>
-							Port.fromPromise((signal) => speak(text, options, signal), SpeechAnswer, 'ai.speak')
-		});
+						speak: (text, options) =>
+							Port.fromPromise(
+								(signal) => port.speak(text, options, signal),
+								SpeechAnswer,
+								'ai.speak'
+							)
+					}
+		);
 	}
 }
 
-// ── web, geo, metering ──
+// ── web, geo ──
 /** Reads a public page; refuses private, loopback and link-local addresses. `raw` also answers the markup and its links. */
 export class WebRead extends Context.Service<
 	WebRead,
@@ -229,18 +215,15 @@ export class WebRead extends Context.Service<
 		) => Effect.Effect<WebPage, PortFailure>;
 	}
 >()('bolt/WebRead') {
-	static readonly unavailable: Layer.Layer<WebRead> = Layer.succeed(WebRead, {
-		read: () => Port.unavailable('web')
-	});
-	static fromAbi(port: WebReadPort | undefined): Layer.Layer<WebRead> {
-		return port === undefined
-			? WebRead.unavailable
+	static fromAbi(port: WebReadPort | Off): Layer.Layer<WebRead> {
+		return isOff(port)
+			? Layer.succeed(WebRead, { read: () => turnedOff('web') })
 			: Layer.succeed(WebRead, {
 					read: (url, options) => Port.attempt('web', (signal) => port.read(url, signal, options))
 				});
 	}
 }
-/** The browsing facility (`BrowserPort`); a host that supplies none fails each call as unavailable. */
+/** The browsing facility (`BrowserPort`); a host that turns it off fails each call as unavailable. */
 export class Browser extends Context.Service<
 	Browser,
 	{
@@ -262,21 +245,19 @@ export class Browser extends Context.Service<
 		readonly download: (profile: string, url: string) => Effect.Effect<Downloaded, PortFailure>;
 	}
 >()('bolt/Browser') {
-	static readonly unavailable: Layer.Layer<Browser> = Layer.sync(Browser, () => {
-		const none = () => Port.unavailable('browser', 'the host provides no browser facility');
-		return {
-			navigate: none,
-			snapshot: none,
-			act: none,
-			evaluate: none,
-			screenshot: none,
-			download: none
-		};
-	});
-	static fromAbi(port: BrowserPort | undefined): Layer.Layer<Browser> {
-		return port === undefined
-			? Browser.unavailable
-			: Layer.succeed(Browser, {
+	static fromAbi(port: BrowserPort | Off): Layer.Layer<Browser> {
+		if (isOff(port)) {
+			const none = () => turnedOff('browser');
+			return Layer.succeed(Browser, {
+				navigate: none,
+				snapshot: none,
+				act: none,
+				evaluate: none,
+				screenshot: none,
+				download: none
+			});
+		}
+		return Layer.succeed(Browser, {
 					navigate: (profile, to, find) =>
 						Port.attempt('browser', (signal) => port.navigate(profile, to, find, signal)),
 					snapshot: (profile, options) =>
@@ -299,62 +280,29 @@ export class Geo extends Context.Service<
 		readonly reverse: (point: Point) => Effect.Effect<GeoHit | null, PortFailure>;
 	}
 >()('bolt/Geo') {
-	static readonly unavailable: Layer.Layer<Geo> = Layer.succeed(Geo, {
-		search: () => Port.unavailable('geo'),
-		reverse: () => Port.unavailable('geo')
-	});
-	static fromAbi(port: GeocoderPort | undefined): Layer.Layer<Geo> {
-		return port === undefined
-			? Geo.unavailable
+	static fromAbi(port: GeocoderPort | Off): Layer.Layer<Geo> {
+		return isOff(port)
+			? Layer.succeed(Geo, { search: () => turnedOff('geo'), reverse: () => turnedOff('geo') })
 			: Layer.succeed(Geo, {
 					search: (query) => Port.attempt('geo', (signal) => port.search(query, signal)),
 					reverse: (point) => Port.attempt('geo', (signal) => port.reverse(point, signal))
 				});
 	}
 }
-/**
- * The runtime log (§5.12), held by the host: `write` never waits or fails. Without a host port each event is one line
- * through this runtime's logger and there is nothing to read.
- */
+/** The runtime log (§5.12), held by the host: `write` never waits or fails. */
 export type LogsShape = {
 	readonly write: (event: LogEvent) => Effect.Effect<void>;
 	readonly query: (query: LogQuery) => Effect.Effect<readonly LogRow[], PortFailure>;
 };
-export const Logs = Context.Reference<LogsShape>('bolt/Logs', {
-	defaultValue: () => ({
-		write: (event) => Effect.logInfo(JSON.stringify(event)),
-		query: () => Port.unavailable('logs')
-	})
-});
-export const logsFromAbi = (port: LogPort): LogsShape => ({
-	write: (event) =>
-		Effect.try({ try: () => port.write(event), catch: (error) => error }).pipe(Effect.ignore),
-	query: (query) => Port.attempt('logs', (signal) => port.query(query, signal))
-});
-/** Usage the host bills: `quantity` of `meter`, once per `key`. */
-export class Metering extends Context.Service<
-	Metering,
-	{
-		readonly record: (
-			meter: string,
-			quantity: number,
-			key: string
-		) => Effect.Effect<void, PortFailure>;
-	}
->()('bolt/Metering') {
-	static readonly unavailable: Layer.Layer<Metering> = Layer.succeed(Metering, {
-		record: () => Port.unavailable('metering')
-	});
-	static fromAbi(port: MeteringPort | undefined): Layer.Layer<Metering> {
-		return port === undefined
-			? Metering.unavailable
-			: Layer.succeed(Metering, {
-					record: (meter, quantity, key) =>
-						Port.attempt('metering', () => port.record(meter, quantity, key))
-				});
+export class Logs extends Context.Service<Logs, LogsShape>()('bolt/Logs') {
+	static fromAbi(port: LogPort): Layer.Layer<Logs> {
+		return Layer.succeed(Logs, {
+			write: (event) =>
+				Effect.try({ try: () => port.write(event), catch: (error) => error }).pipe(Effect.ignore),
+			query: (query) => Port.attempt('logs', (signal) => port.query(query, signal))
+		});
 	}
 }
-
 // ── transport ──
 /** A transactional email (a sign-in code, an invitation); `link` is the invitation's. */
 export type MailMessage = {
@@ -401,18 +349,18 @@ export class Transport extends Context.Service<
 		) => Effect.Effect<{ readonly providerId: string }, PortFailure>;
 	}
 >()('bolt/Transport') {
-	static readonly unavailable: Layer.Layer<Transport> = Layer.succeed(Transport, {
-		send: (m) => Port.unavailable(TRANSPORT[m._tag].facility)
-	});
+	/** Mail is mandatory; SMS and push may be `off`. */
 	static fromAbi(ports: {
-		readonly [T in TransportMessage['_tag']]?: TransportPort | undefined;
+		readonly Mail: TransportPort;
+		readonly Sms: TransportPort | Off;
+		readonly Push: TransportPort | Off;
 	}): Layer.Layer<Transport> {
 		return Layer.succeed(Transport, {
 			send: (m) => {
 				const port = ports[m._tag],
 					{ kind, facility } = TRANSPORT[m._tag];
-				return port === undefined
-					? Port.unavailable(facility)
+				return isOff(port)
+					? turnedOff(facility)
 					: Port.attempt(facility, (signal) => port.send(kind, messageBody(m), signal));
 			}
 		});
@@ -451,15 +399,8 @@ export class DeadlinePort extends Context.Service<
 		readonly teardown: (scope: string) => Effect.Effect<void, Unavailable>;
 	}
 >()('bolt/DeadlinePort') {
-	static readonly unavailable: Layer.Layer<DeadlinePort> = Layer.succeed(DeadlinePort, {
-		announce: () => Port.unavailable('deadlines'),
-		settle: () => Port.unavailable('deadlines'),
-		teardown: () => Port.unavailable('deadlines')
-	});
-	static fromAbi(port: DeadlinesPort | undefined): Layer.Layer<DeadlinePort> {
-		return port === undefined
-			? DeadlinePort.unavailable
-			: Layer.succeed(DeadlinePort, {
+	static fromAbi(port: DeadlinesPort): Layer.Layer<DeadlinePort> {
+		return Layer.succeed(DeadlinePort, {
 					announce: (scope, notLaterThan) => Effect.sync(() => port.announce(scope, notLaterThan)),
 					settle: (scope, nextDue) => Effect.sync(() => port.settle(scope, nextDue)),
 					teardown: (scope) => Effect.sync(() => port.teardown(scope))
@@ -501,15 +442,9 @@ export class Drivers extends Context.Service<
 		readonly changed: (instance: string) => Effect.Effect<void, Unavailable>;
 	}
 >()('bolt/Drivers') {
-	static readonly unavailable: Layer.Layer<Drivers> = Layer.succeed(Drivers, {
-		available: false,
-		send: () => Port.unavailable('link'),
-		typing: () => Port.unavailable('link'),
-		request: () => Port.unavailable('link'),
-		read: () => Port.unavailable('link'),
-		changed: () => Port.unavailable('link')
-	});
-	static fromAbi(port: LinksPort | undefined): Layer.Layer<Drivers> {
+	/** `off`: this environment binds no live integration drivers. */
+	static fromAbi(links: LinksPort | Off): Layer.Layer<Drivers> {
+		const port = isOff(links) ? undefined : links;
 		const send = port?.send?.bind(port),
 			typing = port?.typing?.bind(port),
 			request = port?.request?.bind(port),
@@ -608,40 +543,39 @@ export class Ai extends Context.Service<
 		) => Effect.Effect<readonly (readonly number[])[], PortFailure>;
 	}
 >()('bolt/Ai') {
-	private static readonly noSystem1: Ai['Service']['ask'] = () => Port.unavailable('ai');
+	private static readonly noSystem1: Ai['Service']['ask'] = () => turnedOff('ai');
 	/** Whether the host bound a decision function; provider failures do not change capability presence. */
 	static hasSystem1(service: Ai['Service']): boolean {
 		return service.ask !== Ai.noSystem1;
 	}
-	static readonly unavailable: Layer.Layer<Ai> = Layer.succeed(Ai, {
-		ask: Ai.noSystem1,
-		maxChoices: undefined,
-		models: [],
-		catalog: Port.unavailable('ai'),
-		infer: () =>
-			Stream.fail(new Unavailable({ facility: 'ai', reason: 'the host provides no ai' })),
-		embed: () => Port.unavailable('ai.embed', 'the host provides no embeddings')
-	});
-	static fromAbi(port: AiPort | EmbeddingsPort | undefined): Layer.Layer<Ai> {
-		const ai = port !== undefined && 'sys_2' in port ? port : undefined,
-			embed = port?.embed?.bind(port);
-		const catalog = ai === undefined ? undefined : ai.sys_2.catalog?.bind(ai.sys_2);
+	/** The intelligence group: each member the host's, or `off`. */
+	static fromAbi(ports: {
+		readonly system1: AiPort['sys_1'] | Off;
+		readonly system2: AiPort['sys_2'] | Off;
+		readonly embed: EmbeddingsPort | Off;
+	}): Layer.Layer<Ai> {
+		const sys1 = isOff(ports.system1) ? undefined : ports.system1,
+			sys2 = isOff(ports.system2) ? undefined : ports.system2,
+			embed = isOff(ports.embed) ? undefined : ports.embed;
+		const catalog = sys2?.catalog?.bind(sys2);
 		return Layer.succeed(Ai, {
 			ask:
-				ai === undefined
+				sys1 === undefined
 					? Ai.noSystem1
-					: (request) => Port.attempt('sys_1', (signal) => ai.sys_1.ask(request, signal)),
-			maxChoices: ai?.sys_1.maxChoices,
-			models: ai?.sys_2.models ?? [],
-			catalog: catalog === undefined ? Port.unavailable('ai') : Port.attempt('ai', () => catalog()),
+					: (request) => Port.attempt('sys_1', (signal) => sys1.ask(request, signal)),
+			maxChoices: sys1?.maxChoices,
+			models: sys2?.models ?? [],
+			catalog: catalog === undefined ? turnedOff('ai') : Port.attempt('ai', () => catalog()),
 			infer:
-				ai === undefined
+				sys2 === undefined
 					? () =>
-							Stream.fail(new Unavailable({ facility: 'ai', reason: 'the host provides no ai' }))
+							Stream.fail(
+								new Unavailable({ facility: 'ai', reason: 'the host turned this facility off' })
+							)
 					: (request) =>
 							Stream.callback<AiEvent, PortFailure>((queue) =>
 								Port.attempt('ai', (signal) =>
-									ai.sys_2.infer(
+									sys2.infer(
 										request,
 										signal,
 										(text) => {
@@ -659,9 +593,9 @@ export class Ai extends Context.Service<
 							),
 			embed:
 				embed === undefined
-					? () => Port.unavailable('ai.embed', 'the host provides no embeddings')
+					? () => turnedOff('ai.embed')
 					: (inputs, model, dimensions) =>
-							Port.attempt('ai.embed', (signal) => embed(inputs, model, signal, dimensions))
+							Port.attempt('ai.embed', (signal) => embed.embed(inputs, model, signal, dimensions))
 		});
 	}
 }
@@ -780,7 +714,6 @@ export class ArtifactFiles extends Context.Service<
 export class Keys extends Context.Service<
 	Keys,
 	{
-		readonly available: boolean;
 		readonly seal: (plain: Uint8Array, aad: Uint8Array) => Effect.Effect<Uint8Array, PortFailure>;
 		readonly open: (
 			sealed: Uint8Array,
@@ -788,16 +721,8 @@ export class Keys extends Context.Service<
 		) => Effect.Effect<Option.Option<Uint8Array>, PortFailure>;
 	}
 >()('bolt/Keys') {
-	static readonly unavailable: Layer.Layer<Keys> = Layer.succeed(Keys, {
-		available: false,
-		seal: () => Port.unavailable('keys', 'this activation has no secrets key'),
-		open: () => Port.unavailable('keys', 'this activation has no secrets key')
-	});
-	static fromAbi(port: KeysPort | undefined): Layer.Layer<Keys> {
-		return port === undefined
-			? Keys.unavailable
-			: Layer.succeed(Keys, {
-					available: true,
+	static fromAbi(port: KeysPort): Layer.Layer<Keys> {
+		return Layer.succeed(Keys, {
 					seal: (plain, aad) => Port.attempt('keys', (signal) => port.seal(plain, aad, signal)),
 					open: (sealed, aad) =>
 						Port.attempt('keys', (signal) => port.open(sealed, aad, signal)).pipe(
@@ -912,12 +837,9 @@ export class Http extends Context.Service<
 		) => Effect.Effect<HttpResponse, PortFailure>;
 	}
 >()('bolt/Http') {
-	static readonly unavailable: Layer.Layer<Http> = Layer.succeed(Http, {
-		fetch: () => Port.unavailable('http')
-	});
-	static fromAbi(port: HttpPort | undefined): Layer.Layer<Http> {
-		return port === undefined
-			? Http.unavailable
+	static fromAbi(port: HttpPort | Off): Layer.Layer<Http> {
+		return isOff(port)
+			? Layer.succeed(Http, { fetch: () => turnedOff('http') })
 			: Layer.succeed(Http, {
 					fetch: (request, options) =>
 						Port.attempt('http', (signal) => port.fetch(request, options, signal))
@@ -953,15 +875,8 @@ export class Images extends Context.Service<
 		) => Effect.Effect<ImagePreview, PortFailure>;
 	}
 >()('bolt/Images') {
-	static readonly unavailable: Layer.Layer<Images> = Layer.succeed(Images, {
-		facts: () => Port.unavailable('files.image'),
-		jpeg: () => Port.unavailable('files.image'),
-		preview: () => Port.unavailable('files.image')
-	});
-	static fromAbi(port: ImagesPort | undefined): Layer.Layer<Images> {
-		return port === undefined
-			? Images.unavailable
-			: Layer.succeed(Images, {
+	static fromAbi(port: ImagesPort): Layer.Layer<Images> {
+		return Layer.succeed(Images, {
 					facts: (bytes) => Port.attempt('files.image', (signal) => port.facts(bytes, signal)),
 					jpeg: (bytes, maxEdge) =>
 						Port.attempt('files.image', (signal) => port.jpeg(bytes, maxEdge, signal)),
@@ -983,12 +898,9 @@ export class Mcp extends Context.Service<
 		readonly connect: (server: McpServer) => Effect.Effect<McpSession, PortFailure, Scope.Scope>;
 	}
 >()('bolt/Mcp') {
-	static readonly unavailable: Layer.Layer<Mcp> = Layer.succeed(Mcp, {
-		connect: () => Port.unavailable('mcp')
-	});
-	static fromAbi(port: McpPort | undefined): Layer.Layer<Mcp> {
-		return port === undefined
-			? Mcp.unavailable
+	static fromAbi(port: McpPort | Off): Layer.Layer<Mcp> {
+		return isOff(port)
+			? Layer.succeed(Mcp, { connect: () => turnedOff('mcp') })
 			: Layer.succeed(Mcp, {
 					connect: (server) =>
 						Effect.acquireRelease(
@@ -1010,18 +922,14 @@ export class Mcp extends Context.Service<
 	}
 }
 /**
- * The release's API reference for the agent's `docs` tool, loaded from the host once per activation on first use: the
- * index, then every namespace it lists.
+ * The release's docs corpus for the agent's `docs` tool, loaded from the host once per activation on first use: the
+ * index, then every namespace and skill it lists.
  */
 export class Docs extends Context.Service<
 	Docs,
 	{ readonly corpus: Effect.Effect<DocsCorpus, PortFailure> }
 >()('bolt/Docs') {
-	static readonly unavailable: Layer.Layer<Docs> = Layer.succeed(Docs, {
-		corpus: Port.unavailable('docs')
-	});
-	static fromAbi(port: DocsPort | undefined): Layer.Layer<Docs> {
-		if (port === undefined) return Docs.unavailable;
+	static fromAbi(port: DocsPort): Layer.Layer<Docs> {
 		const read = (file: string) =>
 			Port.attempt('docs', (signal) => port.read(file, signal)).pipe(
 				Effect.flatMap((text) =>
@@ -1042,6 +950,8 @@ export class Docs extends Context.Service<
 							const file = `${n.namespace.replaceAll('/', '.')}.json`;
 							files.set(file, yield* read(file));
 						}
+						for (const k of index.skills)
+							files.set(skillFile(k.name), yield* read(skillFile(k.name)));
 						return corpus(<T>(file: string) => files.get(file) as T);
 					})
 				),

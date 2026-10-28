@@ -5,20 +5,25 @@
 // to `build/docs/`, where `@norbital-ai/bolt/docs` reads them. Output is sorted and carries no time, so a build of
 // the same sources is byte-identical. Svelte components are read through svelte-package's `.svelte.d.ts`: their
 // props are the second parameter of the component's call signature. `index.json` marks the reference namespaces an
-// author reads, and `missing` lists every symbol of them with no doc comment; `tests/docs.test.ts` fails on it. bolt-server builds after bolt, so it is not part of the corpus.
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+// author reads, and `missing` lists every symbol of them with no doc comment; `tests/docs.test.ts` fails on it. A docs page (`docs/*.md`) naming a call the corpus does not declare fails the build. bolt-server builds after bolt, so it is not part of the corpus.
+// `oss/skills/` (the one source of authoring skills, which realm agents read by path) compiles beside it:
+// one `skill.<name>.json` per skill folder holding every Markdown file, listed in `index.json`'s `skills`.
+// `docs/hosts.md` is generated from the `Facilities` type (`src/facilities/index.ts`): what a host supplies.
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join, relative, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import ts from 'typescript';
 import { Effect, Schema } from 'effect';
 import * as NodeRuntime from '@effect/platform-node/NodeRuntime';
 import { ToolFailure } from './build.ts';
+import { skillFile } from '../engine/docs-corpus.ts';
 import type {
 	DocIndex,
 	DocKind,
 	DocMember,
 	DocNamespace,
 	DocParam,
+	DocSkill,
 	DocSymbol
 } from '../docs/index.ts';
 
@@ -29,6 +34,9 @@ const REFERENCE = (ns: string) =>
 	ns.startsWith('std/');
 const root = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..'); // oss/packages
 const out = join(root, 'bolt', 'build', 'docs');
+const SKILLS = join(root, '..', 'skills'); // oss/skills: the authoring skills
+const FACILITIES = join(root, 'bolt', 'build', 'facilities', 'index.d.ts');
+const HOSTS = join(root, 'bolt', 'docs', 'hosts.md');
 const posix = (p: string) => p.split(sep).join('/');
 const clip = (s: string, n: number) => (s.length <= n ? s : `${s.slice(0, n - 1)}…`);
 /** Code-unit order: the same on every machine, whatever its locale. */
@@ -64,19 +72,16 @@ export const generateDocs = Effect.try({
 			});
 		}).sort((a, b) => byCode(a.namespace, b.namespace));
 
-		const program = ts.createProgram(
-			entries.map((e) => e.file),
-			{
-				noEmit: true,
-				skipLibCheck: true,
-				strict: true,
-				target: ts.ScriptTarget.ESNext,
-				module: ts.ModuleKind.ESNext,
-				moduleResolution: ts.ModuleResolutionKind.Bundler,
-				allowArbitraryExtensions: true,
-				types: []
-			}
-		);
+		const program = ts.createProgram([...entries.map((e) => e.file), FACILITIES], {
+			noEmit: true,
+			skipLibCheck: true,
+			strict: true,
+			target: ts.ScriptTarget.ESNext,
+			module: ts.ModuleKind.ESNext,
+			moduleResolution: ts.ModuleResolutionKind.Bundler,
+			allowArbitraryExtensions: true,
+			types: []
+		});
 		const checker = program.getTypeChecker();
 		const FORMAT =
 			ts.TypeFormatFlags.NoTruncation | ts.TypeFormatFlags.UseAliasDefinedOutsideCurrentScope;
@@ -343,7 +348,42 @@ export const generateDocs = Effect.try({
 		}
 
 		mkdirSync(out, { recursive: true });
-		const index: DocIndex = { namespaces: [], missing: [] };
+		const index: DocIndex = { namespaces: [], missing: [], skills: [] };
+		const corpusSymbols: DocSymbol[] = [];
+		for (const name of readdirSync(SKILLS)
+			.filter((n) => existsSync(join(SKILLS, n, 'SKILL.md')))
+			.sort(byCode)) {
+			const markdown = (dir: string): string[] =>
+				readdirSync(join(SKILLS, name, dir), { withFileTypes: true }).flatMap((d) =>
+					d.isDirectory()
+						? markdown(posix(join(dir, d.name)))
+						: d.name.endsWith('.md')
+							? [posix(join(dir, d.name))]
+							: []
+				);
+			const paths = [
+				'SKILL.md',
+				...markdown('.')
+					.filter((p) => p !== 'SKILL.md')
+					.sort(byCode)
+			];
+			const files = paths.map((path) => ({
+				path,
+				text: readFileSync(join(SKILLS, name, path), 'utf8')
+			}));
+			const description = (
+				/^---\n[\s\S]*?^description:\s*(?:>-?\n)?([\s\S]*?)\n(?:\S[^\n]*:|---)/m.exec(
+					files[0]?.text ?? ''
+				)?.[1] ?? ''
+			)
+				.replace(/\s+/g, ' ')
+				.trim();
+			if (description === '')
+				throw new Error(`[docs] oss/skills/${name}/SKILL.md has no description`);
+			const skill: DocSkill = { name, description, files };
+			writeFileSync(join(out, skillFile(name)), `${JSON.stringify(skill, null, '\t')}\n`);
+			index.skills.push({ name, description, files: paths });
+		}
 		for (const e of entries) {
 			const sf = program.getSourceFile(e.file);
 			const mod = sf === undefined ? undefined : checker.getSymbolAtLocation(sf);
@@ -354,6 +394,7 @@ export const generateDocs = Effect.try({
 				.map(symbolOf)
 				.filter((s): s is DocSymbol => s !== null)
 				.sort((a, b) => byCode(a.name, b.name));
+			corpusSymbols.push(...symbols);
 			const ns: DocNamespace = {
 				namespace: e.namespace,
 				module: e.module,
@@ -377,8 +418,112 @@ export const generateDocs = Effect.try({
 				);
 		}
 		writeFileSync(join(out, 'index.json'), `${JSON.stringify(index, null, '\t')}\n`);
+
+		// every call a docs page names (`` `ctx.allow()` ``, `` `model(name, spec)` ``) names something the corpus declares:
+		// a symbol, a member, a parameter or an identifier of their types
+		const declared = new Set<string>(),
+			words = (text: string) => text.match(/[A-Za-z_$][\w$]*/g) ?? [];
+		const member = (m: DocParam): void => {
+			declared.add(m.name);
+			for (const w of words(m.type)) declared.add(w);
+			for (const f of m.fields ?? []) member(f);
+		};
+		for (const s of corpusSymbols) {
+			declared.add(s.name);
+			for (const w of words(s.signature)) declared.add(w);
+			for (const m of [...(s.params ?? []), ...(s.props ?? []), ...(s.members ?? [])]) member(m);
+		}
+		const pages = join(root, 'bolt', 'docs');
+		const unknown = readdirSync(pages)
+			.filter((f) => f.endsWith('.md'))
+			.sort(byCode)
+			.flatMap((f) =>
+				[
+					...readFileSync(join(pages, f), 'utf8').matchAll(
+						/`([A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*)\([^`]*\)`/g
+					)
+				]
+					.filter((m) => !declared.has(m[1]?.split('.').pop() ?? ''))
+					.map((m) => `docs/${f}: ${m[0]}`)
+			);
+		if (unknown.length > 0)
+			throw new Error(
+				`[docs] pages name calls the corpus does not declare:\n  ${unknown.join('\n  ')}`
+			);
+
+		// docs/hosts.md: each facility group and member of `Facilities`, from its declared type and that type's comment
+		const facilitiesFile = program.getSourceFile(FACILITIES);
+		const facilities =
+			facilitiesFile === undefined
+				? undefined
+				: facilitiesFile.statements
+						.filter(ts.isTypeAliasDeclaration)
+						.find((d) => d.name.text === 'Facilities');
+		if (facilities === undefined || !ts.isTypeLiteralNode(facilities.type))
+			throw new Error(`[docs] ${posix(relative(root, FACILITIES))} declares no Facilities type`);
+		const row = (member: ts.TypeElement) => {
+			if (!ts.isPropertySignature(member) || member.type === undefined) return [];
+			const declared = member.type;
+			const optional =
+				ts.isTypeReferenceNode(declared) &&
+				declared.typeName.getText() === 'Optional' &&
+				declared.typeArguments?.[0] !== undefined;
+			const inner = optional ? (declared.typeArguments?.[0] ?? declared) : declared;
+			const target = ts.isTypeReferenceNode(inner)
+				? checker.getSymbolAtLocation(inner.typeName)
+				: undefined;
+			const summary =
+				target === undefined
+					? ''
+					: first(
+							ts.displayPartsToString(
+								(target.flags & ts.SymbolFlags.Alias
+									? checker.getAliasedSymbol(target)
+									: target
+								).getDocumentationComment(checker)
+							)
+						);
+			return [
+				`| \`${member.name.getText()}\` | \`${inner.getText()}\` | ${optional ? 'or `off`' : 'required'} | ${summary.replaceAll('|', '\\|')} |`
+			];
+		};
+		const table = (members: readonly ts.TypeElement[]) => [
+			'| Member | Interface | Supply | What it is |',
+			'| --- | --- | --- | --- |',
+			...members.flatMap(row)
+		];
+		const groups = facilities.type.members.filter(
+			(m): m is ts.PropertySignature =>
+				ts.isPropertySignature(m) && m.type !== undefined && ts.isTypeLiteralNode(m.type)
+		);
+		const single = facilities.type.members.filter((m) => !groups.some((g) => g === m));
+		writeFileSync(
+			HOSTS,
+			[
+				'# Host facilities',
+				'',
+				'Generated by `src/cli/docs.ts` from the `Facilities` type in `src/facilities/index.ts`; do not edit.',
+				'',
+				'A host wraps a bundle and supplies every member below. Without a host file, Colony supplies them all (tethered, the',
+				'default). A workspace\'s `norbital.host.ts`, or the file `--host=<file>` names, makes `bolt dev` and bolt-server serve it',
+				'untethered: its default export is this `Facilities` record (`satisfies Facilities`), and an optional `serving` export',
+				'adds the parts served around it (`Serving`). The host file is never part of the release\'s source. `off` is the only',
+				'way to leave an optional member out; `mail` has none. Activation refuses a bundle whose recorded needs name a member',
+				'left `off`, naming each one.',
+				...groups.flatMap((g) =>
+					g.type !== undefined && ts.isTypeLiteralNode(g.type)
+						? ['', `## ${g.name.getText()}`, '', ...table(g.type.members)]
+						: []
+				),
+				'',
+				'## Host-wide',
+				'',
+				...table(single),
+				''
+			].join('\n')
+		);
 		console.log(
-			`[docs] ${index.namespaces.map((n) => `${n.namespace} ${n.symbols}`).join(', ')}; ${index.missing.length} reference symbols without a summary`
+			`[docs] ${index.namespaces.map((n) => `${n.namespace} ${n.symbols}`).join(', ')}; ${index.missing.length} reference symbols without a summary; skills ${index.skills.map((k) => k.name).join(', ')}`
 		);
 	},
 	catch: (cause) =>

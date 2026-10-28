@@ -2,13 +2,13 @@
 import { describe, expect, it } from '@effect/vitest';
 import { Context, Effect, Layer, Option, Result, Schema } from 'effect';
 import { actFailure } from '../src/decl/errors.ts';
-import { decodeManifest } from '../src/engine/manifest.ts';
+import { decodeProjectedManifest } from '../src/engine/manifest.ts';
 import { TestWorkspace } from '../src/test/index.ts';
-import { program } from './support/guest-fixture.ts';
+import { program } from '../src/test/guest.ts';
 import { actReply, qReply, routeFixture } from './support/route-fixture.ts';
 import { uuidv7 } from '../src/protocol/wire.ts';
 const manifest = Result.getOrThrow(
-	decodeManifest({
+	decodeProjectedManifest({
 		workspace: { tz: 'UTC', locale: 'en' },
 		models: {
 			rates: {
@@ -109,15 +109,6 @@ const fixture = Effect.gen(function* () {
 	return { t, route, rep, startPut, run, read };
 });
 describe('ctx gaps', () => {
-	it.live('a dotted name is no read: declared queries are gone, a page reads layers instead', () =>
-		Effect.gen(function* () {
-			const { route, rep } = yield* fixture;
-			const failure = yield* Effect.flip(
-				qReply(route, rep, { reads: [{ m: 'query', a: ['rates.check', {}] }] })
-			);
-			expect(failure).not.toMatchObject({ code: 'refused' });
-		})
-	);
 	it.live('a queued automation upserts through ctx.act with onConflict', () =>
 		Effect.gen(function* () {
 			const { t, startPut, run, read } = yield* fixture;

@@ -13,13 +13,15 @@ import { createRequire } from 'node:module';
 import { dirname, isAbsolute, join, posix } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import tailwindcss from '@tailwindcss/vite';
-import { build, type InlineConfig, type Rolldown } from 'vite';
+import type { Server } from 'node:http';
+import { build, createServer, type Connect, type InlineConfig, type Rolldown } from 'vite';
 import type { EngineManifest } from '../../engine/manifest.ts';
 import type { ShellManifest } from '../../shell/nav.ts';
 import type { Discovered } from '../discover.ts';
 import { EDITOR_SINGLETONS } from '../editor-dependencies.ts';
 import { clientImportBoundary } from './client-boundary.ts';
 import {
+	PLATFORM,
 	platformConfig,
 	platformLayer,
 	shellRuntime,
@@ -49,6 +51,16 @@ const escape = (text: string) =>
 export class BuildError extends Schema.TaggedError<BuildError>()('BuildError', {
 	cause: Schema.Defect()
 }) {}
+/** The workspace files in the internal SPA's module graph, and in the public pages' (browser and server) graphs. */
+export type Graphs = { readonly spa: Set<string>; readonly pages: Set<string> };
+/** Adds each module id under `root` (outside its `.norbital/`) to `into`, root-relative. */
+export const graphSources = (root: string, ids: readonly string[], into: Set<string>) => {
+	for (const id of ids) {
+		const file = id.split('?', 1)[0] ?? '';
+		if (file.startsWith(`${root}/`) && !file.startsWith(`${root}/.norbital/`))
+			into.add(file.slice(root.length + 1));
+	}
+};
 /** One Vite build's output: a watcher or an empty result is a failure. */
 const bundle = Effect.fnUntraced(function* (config: InlineConfig) {
 	const built = yield* Effect.tryPromise({
@@ -122,8 +134,88 @@ ${css.map((c) => `<link rel="stylesheet" href="/${c}">`).join('\n')}
 </html>
 `;
 
+/**
+ * `bolt dev`'s internal SPA served from source: a Vite dev server in middleware mode under `base` whose hot updates ride
+ * `server`'s upgrades at `base`, and the document that loads it. `refresh` regenerates the entry after a rebuild (a
+ * changed manifest or page list) and reloads open pages when it changed. A page edit reaches the browser by hot update,
+ * with no build.
+ */
+export const clientDevServer = Effect.fn('bolt.clientDevServer')(function* (
+	root: string,
+	files: readonly Discovered[],
+	m: EngineManifest,
+	out: string,
+	title: string,
+	server: Server,
+	base: string
+) {
+	const fs = yield* FileSystem.FileSystem;
+	let source = (yield* spaEntry(root, files, m, out, title)).entry;
+	const vite = yield* Effect.acquireRelease(
+		Effect.tryPromise({
+			// Vite derives `isProduction` from the process's NODE_ENV, which its first `vite build` here set to production, and
+			// a production dev server compiles no hot updates. Bolt reads no env: a first plugin resolves this server as
+			// development before Svelte's plugin reads it, and `define` gives the pages the same mode.
+			try: () => {
+				const config = graphConfig(root, files, () => source, false);
+				return createServer({
+					...config,
+					base,
+					mode: 'development',
+					define: { 'process.env.NODE_ENV': JSON.stringify('development') },
+					plugins: [
+						{
+							name: 'bolt:development',
+							enforce: 'pre',
+							// `order: 'pre'` as Svelte's own configResolved, which reads `isProduction`; first in the list, it runs first
+							configResolved: {
+								order: 'pre',
+								handler: (resolved) => {
+									Object.assign(resolved, {
+										isProduction: false,
+										env: { ...resolved.env, DEV: true, PROD: false }
+									});
+								}
+							}
+						},
+						...config.plugins
+					],
+					appType: 'custom',
+					publicDir: false,
+					// the build rewrites `.norbital/` on every save: none of it is a page's source
+					server: { middlewareMode: true, ws: { server }, watch: { ignored: ['**/.norbital/**'] } }
+				});
+			},
+			catch: (cause) => new BuildError({ cause })
+		}),
+		(vite) => Effect.promise(() => vite.close())
+	);
+	const accessStyles = yield* fs.readFileString(
+		createRequire(import.meta.url).resolve('@norbital-ai/ui/brand/access.css')
+	);
+	// the entry and Vite's client under `base`; the icons and manifest stay the host's (the release's own files)
+	const html = document(title, `${base.slice(1)}@id/${ENTRY}`, [], [], accessStyles).replace(
+		'</head>',
+		`<script type="module" src="${base}@vite/client"></script>\n</head>`
+	);
+	const refresh = Effect.fn('bolt.clientDevServer.refresh')(function* (
+		files: readonly Discovered[],
+		m: EngineManifest
+	) {
+		const next = (yield* spaEntry(root, files, m, out, title)).entry;
+		if (next === source) return;
+		source = next;
+		const module = vite.moduleGraph.getModuleById(`\0${ENTRY}`);
+		if (module !== undefined) vite.moduleGraph.invalidateModule(module);
+		vite.ws.send({ type: 'full-reload' });
+	});
+	const middlewares: Connect.Server = vite.middlewares;
+	return { middlewares, document: html, refresh };
+});
+
 /** Builds `<out>/index.html` and `<out>/assets/**`; returns the entry chunk and stylesheets. */
-export const buildClient = Effect.fn('bolt.buildClient')(function* (
+/** The internal SPA's generated entry module, and the workspace's public page files: what the build and `bolt dev`'s dev server load. */
+const spaEntry = Effect.fn('bolt.spaEntry')(function* (
 	root: string,
 	files: readonly Discovered[],
 	m: EngineManifest,
@@ -131,7 +223,6 @@ export const buildClient = Effect.fn('bolt.buildClient')(function* (
 	title: string
 ) {
 	const fs = yield* FileSystem.FileSystem;
-	const sourceRoot = yield* fs.realPath(root);
 	const publicFiles = files.filter((file) => {
 		if (file.role !== 'page' && file.role !== 'kiosk_page') return false;
 		const owner = file.name.slice(0, file.name.lastIndexOf('/'));
@@ -163,9 +254,9 @@ export const buildClient = Effect.fn('bolt.buildClient')(function* (
 	yield* fs.makeDirectory(gen, { recursive: true });
 	yield* fs.writeFileString(
 		styles,
-		// the compile caches and the output (the platform layer is built into it first) hold compiled code, never a class
-		// source (.gitignore or not)
-		`@import ${key(createRequire(import.meta.url).resolve('@norbital-ai/ui/base.css'))};\n@source ${key(SHELL)};\n@source ${key(root)};\n@source not ${key(join(root, '.norbital', 'cache'))};\n@source not ${key(out)};\n`
+		// `.norbital/` (caches, generated names, the release's parts) and the output (the platform layer is built into it
+		// first) hold generated or copied code, never a class source (.gitignore or not)
+		`@import ${key(createRequire(import.meta.url).resolve('@norbital-ai/ui/base.css'))};\n@source ${key(SHELL)};\n@source ${key(root)};\n@source not ${key(join(root, '.norbital'))};\n@source not ${key(out)};\n`
 	);
 	// hook:server-cli — the messages: the base (`+messages.ts`) under the reader's first matching `+<locale>.messages.ts`
 	const reps = files
@@ -207,7 +298,76 @@ ready.then(() => mountShell(document.getElementById('bolt'), { ready, workspaceN
 	if (status !== null) { status.textContent = 'The workspace could not finish loading. Reload to try again.'; status.setAttribute('role', 'alert'); }
 	console.error(cause);
 });`;
-	/** `layer` (the internal SPA): its modules are imported from the platform layer already built into `destination`. */
+	return { entry, publicFiles, gen };
+});
+/**
+ * One client graph's Vite config without its `build`: `layer` (the internal SPA) imports its modules from the platform
+ * layer already built into the destination. `source` is the entry module's text, or the public entries by route.
+ */
+const graphConfig = (
+	root: string,
+	files: readonly Discovered[],
+	source: () => string | Record<string, string>,
+	publicPage: boolean,
+	layer?: PlatformLayer
+) =>
+	({
+		configFile: false,
+		logLevel: 'silent',
+		root,
+		// relative: chunks and assets resolve from their importer, so the host may serve the workspace under a path
+		base: './',
+		// `$bolt` is resolved below, not aliased: rolldown reads `$bolt` in a regex alias's replacement as a capture group
+		resolve: {
+			dedupe: EDITOR_SINGLETONS,
+			alias: [{ find: /^@norbital-ai\/bolt$/, replacement: BOLT }]
+		},
+		plugins: [
+			clientImportBoundary(root, files, layer?.modules),
+			{
+				name: 'bolt:client',
+				enforce: 'pre',
+				// repository-health:allow EFF3 -- Vite resolves through its Promise plugin ABI.
+				async resolveId(id, importer) {
+					if (id === ENTRY) return `\0${id}`;
+					if (id === '$bolt' || (publicPage && id === '@norbital-ai/bolt/page'))
+						return publicPage
+							? join(SHELL, 'public', `client${EXT}`)
+							: join(SOURCE, '../../page', `index${EXT}`);
+					// one Svelte runtime and one ui, the shell's: pages and the record view reach ui as the shell does, so its
+					// contexts (`$bolt`, kinds) are the shell's
+					if (shellRuntime(id, importer))
+						return this.resolve(id, join(SHELL, `mount${EXT}`), { skipSelf: true });
+					return null;
+				},
+				load: (id) => {
+					const text = source();
+					return id === `\0${ENTRY}` && typeof text === 'string' ? text : null;
+				}
+			},
+			// template pages compile in Svelte's async mode (`await` in markup); a public page hydrates its synchronous SSR
+			cachedSvelte(
+				{ configFile: false, compilerOptions: { experimental: { async: !publicPage } } },
+				join(root, '.norbital', 'cache', 'svelte')
+			),
+			tailwindcss()
+		]
+	}) satisfies InlineConfig;
+
+/** The platform layer this process last built, and where. */
+let platform: { readonly out: string; readonly layer: PlatformLayer } | undefined;
+export const buildClient = Effect.fn('bolt.buildClient')(function* (
+	root: string,
+	files: readonly Discovered[],
+	m: EngineManifest,
+	out: string,
+	title: string,
+	/** Collects every workspace file each graph bundles (root-relative): the build is reused while none changes. */
+	sources?: Graphs
+) {
+	const fs = yield* FileSystem.FileSystem;
+	const sourceRoot = yield* fs.realPath(root);
+	const { entry, publicFiles, gen } = yield* spaEntry(root, files, m, out, title);
 	const compile = Effect.fn('bolt.buildClient.bundle')(function* (
 		source: string | Record<string, string>,
 		destination: string,
@@ -215,43 +375,7 @@ ready.then(() => mountShell(document.getElementById('bolt'), { ready, workspaceN
 		layer?: PlatformLayer
 	) {
 		const result = yield* bundle({
-			// relative: chunks and assets resolve from their importer, so the host may serve the workspace under a path
-			configFile: false,
-			logLevel: 'silent',
-			root,
-			base: './',
-			// `$bolt` is resolved below, not aliased: rolldown reads `$bolt` in a regex alias's replacement as a capture group
-			resolve: {
-				dedupe: EDITOR_SINGLETONS,
-				alias: [{ find: /^@norbital-ai\/bolt$/, replacement: BOLT }]
-			},
-			plugins: [
-				clientImportBoundary(root, files, layer?.modules),
-				{
-					name: 'bolt:client',
-					enforce: 'pre',
-					// repository-health:allow EFF3 -- Vite resolves through its Promise plugin ABI.
-					async resolveId(id, importer) {
-						if (id === ENTRY) return `\0${id}`;
-						if (id === '$bolt' || (publicPage && id === '@norbital-ai/bolt/page'))
-							return publicPage
-								? join(SHELL, 'public', `client${EXT}`)
-								: join(SOURCE, '../../page', `index${EXT}`);
-						// one Svelte runtime and one ui, the shell's: pages and the record view reach ui as the shell does, so its
-						// contexts (`$bolt`, kinds) are the shell's
-						if (shellRuntime(id, importer))
-							return this.resolve(id, join(SHELL, `mount${EXT}`), { skipSelf: true });
-						return null;
-					},
-					load: (id) => (id === `\0${ENTRY}` && typeof source === 'string' ? source : null)
-				},
-				// template pages compile in Svelte's async mode (`await` in markup); a public page hydrates its synchronous SSR
-				cachedSvelte(
-					{ configFile: false, compilerOptions: { experimental: { async: !publicPage } } },
-					join(root, '.norbital', 'cache', 'svelte')
-				),
-				tailwindcss()
-			],
+			...graphConfig(root, files, () => source, publicPage, layer),
 			// maps name their sources but carry none: an asset's placeholder id in a source's text follows emission order, so an
 			// embedded source made two builds of one workspace differ (the artifact is byte for byte)
 			build: {
@@ -281,6 +405,9 @@ ready.then(() => mountShell(document.getElementById('bolt'), { ready, workspaceN
 				.filter((item): item is Rolldown.OutputChunk => item.type === 'chunk')
 				.map((item) => [item.fileName, item])
 		);
+		if (sources !== undefined)
+			for (const item of chunks.values())
+				graphSources(sourceRoot, item.moduleIds, publicPage ? sources.pages : sources.spa);
 		const graph = new Map([...(layer?.chunks ?? []), ...chunks]);
 		/** Every chunk `entry` reaches through static and dynamic imports, itself and the layer's included. */
 		const reach = (entry: string) => {
@@ -364,10 +491,15 @@ ready.then(() => mountShell(document.getElementById('bolt'), { ready, workspaceN
 			});
 		return { chunk, name: projection[0], page: projection[1] };
 	});
-	// the layer first: it empties `out`, and the workspace's own chunks are written beside it
-	const layer = platformLayer(
-		yield* bundle(yield* platformConfig(out, join(root, '.norbital', 'cache', 'platform')))
-	);
+	// the layer first: it empties `out`, and the workspace's own chunks are written beside it. It is a function of this
+	// Bolt install alone, so a rebuild into the same `out` (which `writeArtifact` left holding it) reuses it
+	const layer =
+		platform?.out === out && (yield* fs.exists(join(out, PLATFORM)))
+			? platform.layer
+			: platformLayer(
+					yield* bundle(yield* platformConfig(out, join(root, '.norbital', 'cache', 'platform')))
+				);
+	platform = { out, layer };
 	const internal = yield* compile(entry, out, false, layer);
 	const css = [...layer.css, ...internal.css];
 	const require = createRequire(import.meta.url);

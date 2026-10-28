@@ -19,7 +19,7 @@ Starter workspaces live in their own repository:
 - [`@norbital-ai/app-shell`](./packages/app-shell) — native iOS and Android shell and the `norbital-app` CLI
 
 Templates are authored in [`norbital-ai/templates`](https://github.com/norbital-ai/templates),
-which is also where `refs/heads/templates/*` is published from. This repository holds no template
+whose CI builds and uploads each template release. This repository holds no template
 source.
 
 ## Documentation

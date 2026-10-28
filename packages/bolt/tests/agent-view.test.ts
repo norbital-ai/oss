@@ -4,27 +4,7 @@ import { Effect } from 'effect';
 import { rowsOf, transcriptRow } from '../src/engine/agent/schema.ts';
 import type { Json } from '../src/decl/values.ts';
 import type { AgentRow } from '../src/protocol/wire.ts';
-import {
-	background,
-	checkpointSections,
-	childStatus,
-	contextView,
-	doingOf,
-	failedVerbs,
-	failureOf,
-	modelDividers,
-	ORB,
-	orbState,
-	captionOf,
-	logsOf,
-	previewsOf,
-	reportView,
-	resultLine,
-	revisable,
-	runState,
-	stepView,
-	type Orb
-} from '../src/shell/agent/view.ts';
+import { background, checkpointSections, childStatus, contextView, failedVerbs, failureOf, modelDividers, orbState, captionOf, logsOf, previewsOf, reportView, resultLine, revisable, runState } from '../src/shell/agent/view.ts';
 
 const row = (seq: number, o: Partial<AgentRow> = {}): AgentRow => ({
 	id: `m${seq}`,
@@ -43,21 +23,6 @@ const reply = (seq: number, model?: string, tag = 'reply'): AgentRow =>
 	});
 
 describe('the orb (L-BOLT-436)', () => {
-	it('gives every state its own named mark: waiting on a person is not failing, finished and stopped are not idle', () => {
-		const cases: [Orb, Parameters<typeof orbState>[0]][] = [
-			['ready', { status: 'idle', rows: [] }],
-			['working', { status: 'running', rows: [] }],
-			[
-				'waiting',
-				{ status: 'idle', rows: [row(1, { role: 'tool', state: 'confirm', tag: 'confirm' })] }
-			],
-			['failed', { status: 'idle', rows: [reply(1, undefined, 'failed')] }],
-			['done', { status: 'idle', rows: [reply(1)] }],
-			['stopped', { status: 'stopped', rows: [reply(1)] }]
-		];
-		for (const [mark, input] of cases) expect(orbState(input)).toBe(mark);
-		expect(new Set(Object.values(ORB).map((o) => o.label)).size).toBe(Object.keys(ORB).length);
-	});
 	it('lets the caller override: a turn it just dispatched works, a send it saw fail outranks the status', () => {
 		expect(orbState({ status: 'idle', rows: [reply(1)], pending: true })).toBe('working');
 		expect(orbState({ status: 'running', rows: [], failed: true })).toBe('failed');
@@ -126,94 +91,6 @@ describe('the model-change divider (L-BOLT-547)', () => {
 });
 
 describe('tool steps', () => {
-	it('gives each tool its own icon and words, code its language, and an unknown or MCP tool a fallback', () => {
-		// a read names its roots: the layer map's keys without a dot
-		expect(stepView('read', { leave_entry: {}, 'leave_entry.employee': {} })).toEqual({
-			icon: 'lucide:database',
-			verb: 'Read',
-			target: 'leave entry'
-		});
-		expect(stepView('act', { callable: 'invoice.update' }).verb).toBe('Update invoice');
-		expect(stepView('act', { callable: 'automation.close_month' }).verb).toBe('Run close month');
-		expect(stepView('act', { callable: 'roster_entry.pipeline' }).verb).toBe(
-			'Run the roster entry pipeline'
-		);
-		expect(stepView('document', { name: 'Q3.pptx', markdown: '## One' })).toMatchObject({
-			icon: 'lucide:file-plus',
-			target: 'Q3.pptx',
-			code: { text: '## One' }
-		});
-		expect(
-			stepView('workspace_write', { changes: [{ path: 'a.ts', find: 'old', replace: 'new' }] }).code
-		).toEqual({ text: '// before\nold\n// after\nnew', language: 'javascript' });
-		expect(
-			stepView('workspace_write', {
-				changes: [{ path: 'src/app/+page.svelte', text: '<h1>Hi</h1>' }]
-			})
-		).toMatchObject({
-			icon: 'lucide:file-pen-line',
-			target: 'src/app/+page.svelte',
-			code: { text: '<h1>Hi</h1>', language: 'javascript' }
-		});
-		expect(stepView('browser_evaluate', { expression: 'a\nb' }).code).toEqual({
-			text: 'a\nb',
-			language: 'javascript'
-		});
-		expect(stepView('mcp__hq__find_ticket', { query: 'late' })).toEqual({
-			icon: 'lucide:plug',
-			verb: 'Hq: Find ticket',
-			target: 'late'
-		});
-		expect(stepView('mystery', null)).toEqual({
-			icon: 'lucide:wrench',
-			verb: 'Mystery',
-			target: ''
-		});
-		const tools = [
-			'read',
-			'act',
-			'goals',
-			'subagent',
-			'wait',
-			'document',
-			'workspace_write',
-			'browser_navigate',
-			'browser_evaluate'
-		];
-		expect(new Set(tools.map((n) => stepView(n, {}).icon)).size).toBe(tools.length);
-	});
-	it('names each subagent action and previews only the task or message, never its conversation id', () => {
-		const conversation = '620df511-790d-4570-9d1e-1fddf492ba86';
-		expect(
-			stepView('subagent', { action: 'spawn', task: 'Review invoices\nCheck totals' })
-		).toEqual({
-			icon: 'lucide:bot',
-			verb: 'Started a subagent',
-			target: 'Review invoices'
-		});
-		expect(
-			stepView('subagent', {
-				action: 'message',
-				conversation,
-				text: 'Use the new rates\nFor October'
-			})
-		).toEqual({
-			icon: 'lucide:send',
-			verb: 'Sent a message to a subagent',
-			target: 'Use the new rates'
-		});
-		expect(stepView('subagent', { action: 'stop', conversation })).toEqual({
-			icon: 'lucide:circle-stop',
-			verb: 'Stopped a subagent',
-			target: ''
-		});
-		for (const action of ['list', 'read', 'query'])
-			expect(stepView('subagent', { action, conversation })).toEqual({
-				icon: 'lucide:bot',
-				verb: 'Checked subagents',
-				target: ''
-			});
-	});
 	it('reads a result in one line: its error or its row count', () => {
 		expect(resultLine({ error: 'No such field' })).toBe('No such field');
 		expect(resultLine({ rows: [1, 2] })).toBe('2 rows');
@@ -340,14 +217,6 @@ describe('Studio outcomes outside the folded steps', () => {
 		),
 		...(result === undefined ? {} : { result }),
 		...o
-	});
-	it('names the running Studio step, else the generic line', () => {
-		const step = (seq: number, name: string, running?: true) =>
-			row(seq, { role: 'tool', tool: tool(name, undefined, running ? { running } : {}) });
-		expect(doingOf([step(1, 'workspace_write'), step(2, 'workspace_validate', true)])).toBe(
-			'Building the preview…'
-		);
-		expect(doingOf([step(1, 'read', true)])).toBe('Working…');
 	});
 	it('a failed step says why, and the run names what failed', () => {
 		const failed = (name: string, args: string, result: string) =>

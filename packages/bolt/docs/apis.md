@@ -121,8 +121,8 @@ Automations cannot approve requests.
 
 Automations use `ctx.request(instance, operation)` and `ctx.send(instance, message)` through sealed
 host links. Remote syncs request through their own instance. Decode provider answers once.
-`ai.sys_2.infer`, `ai.sys_1.decide` and `ai.embed` are automation facilities; inference progress and
-durable replay are described in [the runtime overview](./README.md#authoring-and-pages).
+`ai.sys_2.infer`, `ai.sys_1.decide` and `ai.embed` are automation facilities; inference progress is
+described in [the runtime overview](./README.md#authoring-and-pages).
 
 `ctx.notify` accepts the same notices returned by [model notify callbacks](./notifications.md).
 [Documents](./documents.md) covers conversion, [Device](./device.md) covers browser resources.

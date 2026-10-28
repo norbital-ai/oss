@@ -42,7 +42,7 @@ describe('toDrivers', () => {
 				const def: ProviderDef = {
 					_tag: 'ProviderDef',
 					id: 'fake',
-					label: 'Fake',
+					label: { en: 'Fake', zh: 'Fake' },
 					setup: { kind: 'none', steps: [] },
 					driver: 'email',
 					open: () =>
@@ -121,7 +121,7 @@ describe('toDrivers', () => {
 			const def: ProviderDef = {
 				_tag: 'ProviderDef',
 				id: 'failing',
-				label: 'Failing',
+				label: { en: 'Failing', zh: 'Failing' },
 				setup: { kind: 'none', steps: [] },
 				driver: 'email',
 				open: () =>
