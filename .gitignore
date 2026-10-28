@@ -44,3 +44,6 @@ vite.config.*.timestamp-*
 # and got committed once as a gitlink: a submodule pointer to a branch that exists on no remote.
 **/.claude/worktrees/
 .vitest-attachments/
+
+# a package build in progress (scripts/build-package.ts)
+.building

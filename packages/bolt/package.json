@@ -83,7 +83,7 @@
 		"package.json"
 	],
 	"scripts": {
-		"build": "node ../../scripts/build-package.ts svelte-package -i src -o {} --tsconfig tsconfig.json && node src/cli/docs.ts && node scripts/cell-bundle.ts",
+		"build": "node ../../scripts/build-package.ts svelte-package -i src -o {} --tsconfig tsconfig.json --then node src/cli/docs.ts --then node scripts/cell-bundle.ts",
 		"lint": "svelte-check --tsconfig ./tsconfig.json && tsgo -p tests/tsconfig.json --noEmit",
 		"types:compat": "tsc -p tests/tsconfig.json --noEmit",
 		"migrations:audit": "node --experimental-strip-types scripts/audit-migrations.ts",

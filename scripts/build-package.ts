@@ -18,8 +18,11 @@
  * interrupted build (SIGINT or SIGTERM, through `runMain`) kills the compiler, waits for it to
  * exit, and only then removes the staging directory, so no `build.staging-*` outlives its build.
  *
- * Usage: `node build-package.ts <command> [...args]`; `{}` in an argument expands to the staging
- * directory.
+ * Steps that read the swapped-in `build/` (bolt's docs corpus and cell bundle) follow `--then`. The whole build holds
+ * `.building` (this process's pid), so the realm's overlay never packs a build missing their output.
+ *
+ * Usage: `node build-package.ts <command> [...args] [--then <command> [...args]]…`; `{}` in an argument expands to
+ * the staging directory.
  */
 import path from 'node:path';
 import process from 'node:process';
@@ -105,13 +108,22 @@ const assertDependenciesBuilt = Effect.fn('buildPackage.assertDependenciesBuilt'
 });
 
 const program = Effect.gen(function* () {
-	const [command, ...commandArguments] = process.argv.slice(2);
-	if (command === undefined)
+	const [[command, ...commandArguments] = [], ...after] = process.argv
+		.slice(2)
+		.join('\0')
+		.split('\0--then\0')
+		.map((step) => step.split('\0'));
+	if (command === undefined || command === '')
 		return yield* new BuildFailed({
-			message: 'usage: build-package.ts <command> [...args]   # `{}` expands to the staging dir'
+			message:
+				'usage: build-package.ts <command> [...args] [--then <command> [...args]]…   # `{}` expands to the staging dir'
 		});
 	const fs = yield* FileSystem.FileSystem;
 	const packageRoot = process.cwd();
+	const building = path.join(packageRoot, '.building');
+	yield* Effect.acquireRelease(fs.writeFileString(building, String(process.pid)), () =>
+		Effect.orDie(fs.remove(building, { force: true }))
+	);
 	const output = path.join(packageRoot, 'build');
 	const manifest = yield* readManifest(path.join(packageRoot, 'package.json'));
 	yield* assertDependenciesBuilt(packageRoot, manifest);
@@ -164,6 +176,22 @@ const program = Effect.gen(function* () {
 	if (yield* fs.exists(output)) yield* fs.rename(output, retired);
 	yield* fs.rename(staging, output);
 	yield* fs.remove(retired, { recursive: true, force: true });
+	for (const [step, ...stepArguments] of after) {
+		if (step === undefined) continue;
+		const stepCode = yield* Effect.scoped(
+			Effect.flatMap(
+				ChildProcess.make(step, stepArguments, {
+					cwd: packageRoot,
+					stdin: 'inherit',
+					stdout: 'inherit',
+					stderr: 'inherit'
+				}),
+				(child) => child.exitCode
+			)
+		);
+		if (stepCode !== 0)
+			return yield* new BuildFailed({ message: `${step} exited with code ${stepCode}.` });
+	}
 }).pipe(Effect.scoped);
 
 NodeRuntime.runMain(
