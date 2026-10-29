@@ -50,7 +50,8 @@ export const bareHost = (
 						sms: off,
 						phone: off,
 						push: off,
-						challenge: off
+						challenge: off,
+						fixedCodes: false
 					},
 					intelligence: { system1: off, system2: off, embed: off, speech: off },
 					ports: { webhooks: off, websockets: off, outbound: off },

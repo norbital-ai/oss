@@ -120,31 +120,43 @@ model and section; a section holding a field with an error opens itself.
 	);
 	const shown = $derived(!canCollapse || open || invalid);
 	let body = $state<HTMLElement | null>(null);
-	/** Opening grows and fades the body in; closing hides it at once, so `aria-expanded` and `hidden` follow the click. */
-	function grow() {
-		const target = body;
-		if (
-			target == null ||
-			target.hidden ||
-			document.hidden ||
-			typeof target.animate !== 'function' ||
-			window.matchMedia('(prefers-reduced-motion: reduce)').matches
-		)
-			return;
-		const growing = target.animate(
-			[
-				{ height: '0px', opacity: 0, overflow: 'clip' },
-				{ height: `${target.scrollHeight}px`, opacity: 1, overflow: 'clip' }
-			],
-			{ duration: 180, easing: 'cubic-bezier(.2,.8,.2,1)' }
-		);
-		// a paused timeline would hold the first frame: the body shows whole on time regardless
-		setTimeout(() => growing.cancel(), 240);
+	/** The body still showing while it shrinks closed: `aria-expanded` follows the click, `hidden` the motion's end. */
+	let closing = $state(false);
+	const moving = (target: HTMLElement | null): target is HTMLElement =>
+		target != null &&
+		!target.hidden &&
+		!document.hidden &&
+		typeof target.animate === 'function' &&
+		!window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+	/** The body's height and opacity from one end to the other; a paused timeline ends on time regardless. */
+	function slide(target: HTMLElement, opening: boolean, done: () => void) {
+		const ends = [
+			{ height: '0px', opacity: 0, overflow: 'clip' },
+			{ height: `${target.scrollHeight}px`, opacity: 1, overflow: 'clip' }
+		];
+		const motion = target.animate(opening ? ends : [...ends].reverse(), {
+			duration: 180,
+			easing: 'cubic-bezier(.2,.8,.2,1)'
+		});
+		const end = () => {
+			motion.cancel();
+			done();
+		};
+		motion.onfinish = end;
+		setTimeout(end, 240);
 	}
 	function toggle() {
 		const opening = !shown;
 		open = opening;
-		if (opening) void tick().then(grow);
+		if (opening) {
+			closing = false;
+			void tick().then(() => {
+				if (moving(body)) slide(body, true, () => {});
+			});
+		} else if (moving(body)) {
+			closing = true;
+			slide(body, false, () => (closing = false));
+		}
 		fork(
 			Effect.try({
 				try: () => localStorage.setItem(key, opening ? '1' : '0'),
@@ -221,7 +233,7 @@ model and section; a section holding a field with an error opens itself.
 		</div>
 	{/if}
 	<!-- hidden, never unmounted: a collapsed field still belongs to the form's draft and its save -->
-	<div bind:this={body} id={`${id}-body`} hidden={!shown} use:contentMotion>
+	<div bind:this={body} id={`${id}-body`} hidden={!shown && !closing} use:contentMotion>
 		<div class={cn('grid min-w-0', editing ? 'gap-4' : 'gap-3')}>
 			{@render children()}
 		</div>

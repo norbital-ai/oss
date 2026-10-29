@@ -209,7 +209,7 @@ const facilitiesOf = (database: Facilities['storage']['database'], sent: string[
 	return {
 		storage: { database, files },
 		logs: { runtime: { write: () => {}, query: async () => [] }, audit: memoryAudit().port },
-		transactional: { mail, sms: off, phone: off, push: off, challenge: off },
+		transactional: { mail, sms: off, phone: off, push: off, challenge: off, fixedCodes: false },
 		intelligence: { system1: off, system2: off, embed: off, speech: off },
 		ports: { webhooks: off, websockets: off, outbound: off },
 		sandbox: off,

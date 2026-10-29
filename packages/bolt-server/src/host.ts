@@ -241,6 +241,7 @@ export const host = Effect.fn('server.host')(function* (
 			mail: messages.mail,
 			sms: messages.sms,
 			phone: messages.phone,
+			fixedCodes: messages.fixedCodes,
 			push: (database) => {
 				// a gone subscription is deleted on the database the engine hands over
 				const db = {

@@ -90,7 +90,7 @@ export function loggedPhone(log: (line: string) => void, fixed = false): PhoneVe
 /**
  * What identity needs from its host (its `TransactionalProvider`'s parts): `mail` sends emailed codes and
  * invitations, `sms` texted invitations, `phone` sends and checks a mobile number's code — without it, numbers
- * cannot sign in. `devSink` is `bolt dev` and the test kit only: the fixed code `123456` (38a(f)).
+ * cannot sign in. `devSink` is a local host's (its facilities' `fixedCodes`) and the test kit's: the fixed code `123456` (38a(f)).
  */
 export type IdentityHost = {
 	readonly audit?: import('../audit.ts').AuditShape;

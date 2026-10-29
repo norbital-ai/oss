@@ -54,8 +54,10 @@ export const messaging = Effect.fn('server.messaging')(function* (
 	});
 	const twilio = phone === null || phone.provider === 'log' ? undefined : phone;
 	const verifier = twilio === undefined ? undefined : yield* twilioVerify(twilio);
-	const members: Pick<Facilities['transactional'], 'mail' | 'sms' | 'phone'> = {
+	const members: Pick<Facilities['transactional'], 'mail' | 'sms' | 'phone' | 'fixedCodes'> = {
 		mail: email.provider === 'log' ? logged('mail', log) : native(resendMail(email)),
+		// a host whose mail is the log is a local one: its codes are 123456
+		fixedCodes: email.provider === 'log',
 		sms:
 			phone === null
 				? off
@@ -66,7 +68,7 @@ export const messaging = Effect.fn('server.messaging')(function* (
 			phone === null
 				? off
 				: verifier === undefined
-					? loggedPhone(log)
+					? loggedPhone(log, true)
 					: {
 							via: verifier.via,
 							start: (to, via, signal) => run(verifier.start(to, via), { signal }),

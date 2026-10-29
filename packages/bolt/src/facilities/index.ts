@@ -57,6 +57,8 @@ export type Sms = TransportPort;
 export type Phone = PhoneVerifier;
 /** Web and native push for inbox notices, over the environment's database (a gone subscription is deleted there). */
 export type Push = (database: Database) => TransportPort;
+/** A local host's sign-in codes are all `123456` (38a(f)); a deployed host's are random. */
+export type FixedCodes = boolean;
 /** Turnstile-style bot protection: the public site key the widget renders, and the server-side check. */
 export interface Challenge {
 	readonly siteKey: string;
@@ -125,6 +127,7 @@ export type Facilities = {
 		readonly phone: Optional<Phone>;
 		readonly push: Optional<Push>;
 		readonly challenge: Optional<Challenge>;
+		readonly fixedCodes: FixedCodes;
 	};
 	readonly intelligence: {
 		readonly system1: Optional<System1>;

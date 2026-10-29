@@ -32,6 +32,7 @@ left `off`, naming each one.
 | `phone` | `Phone` | or `off` | Sends and checks a mobile number's sign-in code. |
 | `push` | `Push` | or `off` | Web and native push for inbox notices, over the environment's database (a gone subscription is deleted there). |
 | `challenge` | `Challenge` | or `off` | Turnstile-style bot protection: the public site key the widget renders, and the server-side check. |
+| `fixedCodes` | `FixedCodes` | required | A local host's sign-in codes are all `123456` (38a(f)); a deployed host's are random. |
 
 ## intelligence
 

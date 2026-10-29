@@ -1458,7 +1458,8 @@ export class TestWorkspace extends Context.Service<TestWorkspace, Kit>()(
 						sms,
 						phone,
 						push: () => push,
-						challenge: { siteKey: 'dev', verify: async (token) => token === 'dev-pass' }
+						challenge: { siteKey: 'dev', verify: async (token) => token === 'dev-pass' },
+						fixedCodes: true
 					},
 					intelligence: {
 						// the deterministic decision a cassette also starts from: a workspace with an `ai` block needs system1

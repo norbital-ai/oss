@@ -633,7 +633,7 @@ const portLayers = (ports: HostPorts) =>
 	);
 const identityLayer = (
 	publicUrl: string,
-	identity: Pick<IdentityHost, 'mail' | 'sms' | 'phone'>
+	identity: Pick<IdentityHost, 'mail' | 'sms' | 'phone' | 'devSink'>
 ) =>
 	Layer.effect(
 		HostIdentity,
@@ -703,6 +703,7 @@ const activate = async (ports: HostPorts, options: Signal): Promise<ActiveWorksp
 			Layer.mergeAll(
 				identityLayer(ports.publicUrl, {
 					mail: f.transactional.mail,
+					devSink: f.transactional.fixedCodes,
 					...(isOff(f.transactional.sms) ? {} : { sms: f.transactional.sms }),
 					...(isOff(f.transactional.phone) ? {} : { phone: f.transactional.phone })
 				}),

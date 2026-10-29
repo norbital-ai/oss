@@ -88,6 +88,9 @@ it.live(
 			b.click();
 			flushSync();
 			assert.equal(b.getAttribute('aria-expanded'), 'false');
+			assert.equal(body(target, 'Job').hidden, false, 'the body shrinks closed before it hides');
+			yield* Effect.sleep('250 millis');
+			flushSync();
 			assert.equal(body(target, 'Job').hidden, true);
 			assert.ok(
 				element<HTMLElement>(target, '[data-field=title]'),
@@ -192,6 +195,7 @@ it.live('a form with collapsed sections still saves every field', () =>
 		type(target, 'title', 'Paint');
 		type(target, 'notes', 'Back door');
 		header(target, 'Job').click();
+		yield* Effect.sleep('250 millis');
 		flushSync();
 		assert.equal(body(target, 'Job').hidden, true);
 		assert.equal(body(target, 'Notes').hidden, true);
