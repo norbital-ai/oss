@@ -38,6 +38,7 @@
 	import { idsOf } from '../form/form-state.svelte.js';
 	import { currencyOf, format, pickerRead } from './kind.js';
 	import { byId } from '../read/request.js';
+	import { withOutputs } from '../client/context.js';
 
 	let {
 		of,
@@ -78,7 +79,9 @@
 		const q = query;
 		return Effect.sleep(q === '' ? 0 : 250).pipe(
 			Effect.flatMap(() =>
-				read({ [of]: pickerRead(target, labels, { where, orderBy, limit }, q) })
+				read(
+					withOutputs({ [of]: pickerRead(target, labels, { where, orderBy, limit }, q) }, host.catalog)
+				)
 			),
 			Effect.map((answer) =>
 				(answer[of]?.rows ?? []).map((row) => ({ id: row.id, text: textOf(row) }))
@@ -89,7 +92,7 @@
 		const read = host.query,
 			id = value;
 		if (read === undefined || id === null) return null;
-		return read(byId(of, id, labels)).pipe(
+		return read(withOutputs(byId(of, id, labels), host.catalog)).pipe(
 			Effect.map((answer): Hit => {
 				const row = answer[of]?.rows[0];
 				return { id, text: row === undefined ? t('notFound') : textOf(row) };

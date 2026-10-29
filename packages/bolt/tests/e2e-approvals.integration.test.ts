@@ -10,8 +10,8 @@ import type { EngineManifest } from '../src/engine/manifest.ts';
 import { Authorities } from '../src/engine/identity/actor.ts';
 import { dynamicRead } from '../src/protocol/read-request.ts';
 import { ActReply, type Frame } from '../src/protocol/schema.ts';
-import { TestWorkspace, type WorkspaceServices } from '../src/test/index.ts';
-import { program } from '../src/test/guest.ts';
+import { TestWorkspace, type WorkspaceServices } from '../../bolt-cli/src/test/index.ts';
+import { program } from '../../bolt-cli/src/test/guest.ts';
 
 const manifest: EngineManifest = {
 	needs: [],
@@ -319,33 +319,38 @@ layer(workspace, { excludeTestServices: true })('an approval flow in the policy 
 			)
 	);
 
-	it.effect('history.preview lists the change; history.restore commits it as a restored revision', () =>
-		Effect.scoped(
-			Effect.gen(function* () {
-				const { t, held, post } = yield* setup;
-				const admin = () => t.as(t.admin).authority;
-				const id = created(
-					(yield* post(admin, 'orders.create', [{ title: 'desk', note: 'a' }])).reply.outcome
-				);
-				ok((yield* post(admin, 'orders.update', [{ target: id, set: { note: 'b' } }])).reply.outcome);
-				const target = { model: 'orders', record: id, revision: 1 };
-				expect((yield* post(admin, 'history.preview', target)).reply.outcome).toMatchObject({
-					kind: 'committed',
-					output: {
-						live: 2,
-						changes: [{ field: 'note', current: 'b', restored: 'a', approval: false }],
-						skipped: []
-					}
-				});
-				ok((yield* post(admin, 'history.restore', target)).reply.outcome);
-				expect(yield* held(id)).toEqual({ title: 'desk', note: 'a' });
-				expect(
-					yield* t.db.value(Schema.Number, {
-						text: "SELECT restored_from FROM bolt_history WHERE record = $1::uuid AND cause = 'restored'",
-						params: [id]
-					})
-				).toBe(1);
-			})
-		)
+	it.effect(
+		'history.preview lists the change; history.restore commits it as a restored revision',
+		() =>
+			Effect.scoped(
+				Effect.gen(function* () {
+					const { t, held, post } = yield* setup;
+					const admin = () => t.as(t.admin).authority;
+					const id = created(
+						(yield* post(admin, 'orders.create', [{ title: 'desk', note: 'a' }])).reply.outcome
+					);
+					ok(
+						(yield* post(admin, 'orders.update', [{ target: id, set: { note: 'b' } }])).reply
+							.outcome
+					);
+					const target = { model: 'orders', record: id, revision: 1 };
+					expect((yield* post(admin, 'history.preview', target)).reply.outcome).toMatchObject({
+						kind: 'committed',
+						output: {
+							live: 2,
+							changes: [{ field: 'note', current: 'b', restored: 'a', approval: false }],
+							skipped: []
+						}
+					});
+					ok((yield* post(admin, 'history.restore', target)).reply.outcome);
+					expect(yield* held(id)).toEqual({ title: 'desk', note: 'a' });
+					expect(
+						yield* t.db.value(Schema.Number, {
+							text: "SELECT restored_from FROM bolt_history WHERE record = $1::uuid AND cause = 'restored'",
+							params: [id]
+						})
+					).toBe(1);
+				})
+			)
 	);
 });

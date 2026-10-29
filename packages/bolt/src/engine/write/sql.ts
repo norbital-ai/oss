@@ -13,6 +13,7 @@ import {
 	type TenantDbShape
 } from '../db/tenant-db.ts';
 import { DbError } from '../errors.ts';
+import { RATE_LIMITED } from '../../protocol/wire.ts';
 import { copiedSql, dbError, inline } from '../db/wire.ts';
 import { composable } from '../query/reader.ts';
 import { BoltError } from '../../protocol/errors.ts';
@@ -194,7 +195,7 @@ export function decided(e: unknown, constraints: ReadonlyMap<string, ConstraintM
 		// a recorded `rateLimited` would answer the client's resend after `retryAfter` for 24 h (rule 20)
 		if (code === 'rateLimited')
 			return {
-				outcome: { kind: 'refused', code, message: 'Too many requests; try again later.' },
+				outcome: { kind: 'refused', code, message: RATE_LIMITED },
 				record: false,
 				replay: false
 			};

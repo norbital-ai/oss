@@ -13,11 +13,11 @@ src/i18n/
 
 ```ts
 // src/i18n/+messages.ts
-import { messages } from "@norbital-ai/bolt";
+import { messages } from '@norbital-ai/bolt';
 export default messages({
-  "app.quotes.title": "Quotes",
-  "app.quotes.description": "Draft, send and track customer quotes.",
-  "component.doc_no": "Document {no}",
+	'app.quotes.title': 'Quotes',
+	'app.quotes.description': 'Draft, send and track customer quotes.',
+	'component.doc_no': 'Document {no}'
 });
 ```
 
@@ -39,7 +39,11 @@ export default messages({
 	import { AppShell } from '@norbital-ai/ui/layout';
 </script>
 
-<AppShell icon="lucide:file-text" title={bolt.t('app.quotes.title')} description={bolt.t('app.quotes.description')}>
+<AppShell
+	icon="lucide:file-text"
+	title={bolt.t('app.quotes.title')}
+	description={bolt.t('app.quotes.description')}
+>
 	…
 </AppShell>
 ```

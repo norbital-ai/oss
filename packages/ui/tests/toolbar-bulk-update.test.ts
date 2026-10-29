@@ -43,15 +43,13 @@ const catalog: NonNullable<KindsHost['catalog']> = {
 			count: { kind: 'int', default: 8 },
 			amount: { kind: 'decimal', scale: 3 },
 			note: { kind: 'text', optional: true },
-			masked: { kind: 'text' },
 			locked: { kind: 'text' },
 			secret: { kind: 'text', hidden: true },
 			state: { kind: 'state', initial: 'open', states: { open: {} } }
 		},
 		update: {
-			columns: ['name', 'enabled', 'count', 'amount', 'note', 'masked', 'locked', 'secret', 'state']
+			columns: ['name', 'enabled', 'count', 'amount', 'note', 'locked', 'secret', 'state']
 		},
-		masked: ['masked'],
 		readonlyFields: { locked: 'syncOwned' },
 		delete: true
 	}
@@ -69,9 +67,9 @@ async function show(
 				{ id: 'job-a', name: 'A' },
 				{ id: 'job-b', name: 'B' }
 			],
-			next: null
+			next: null,
+			total: 2
 		}),
-		aggregate: () => [{ count: 2 }],
 		act
 	});
 	const target = document.body.appendChild(document.createElement('div'));
@@ -230,10 +228,10 @@ it.live(
 				selectionEnabled(
 					{},
 					{
-						label: ['masked'],
-						fields: { masked: { kind: 'text' }, secret: { kind: 'text', hidden: true } },
-						masked: ['masked'],
-						update: { columns: ['masked', 'secret'] }
+						label: ['locked'],
+						fields: { locked: { kind: 'text' }, secret: { kind: 'text', hidden: true } },
+						readonlyFields: { locked: 'syncOwned' },
+						update: { columns: ['locked', 'secret'] }
 					}
 				),
 				false

@@ -21,13 +21,13 @@ import type {
 	LayerColumn,
 	LayerField,
 	LayerFilled,
-	LayerValue,
 	ManyRels,
 	NamesPart,
 	OmittableOnInsert,
 	OneRels,
 	OwnedFk,
 	OwnedInverse,
+	OutputName,
 	PathModel,
 	Prefixes,
 	ReadField,
@@ -105,7 +105,9 @@ export type IndexSearch<C> =
 // ── aggregates ──
 type Unit = 'day' | 'week' | 'month' | 'quarter' | 'year';
 /** What `aggregate` buckets by: a readable field, or a date or instant field truncated to a calendar unit. */
-export type Bucket<C> = ReadField<C> | { [U in Unit]: { readonly [P in U]: ReadField<C> } }[Unit];
+export type Bucket<C, O = 'default'> =
+	| ReadField<C, O>
+	| { [U in Unit]: { readonly [P in U]: ReadField<C, O> } }[Unit];
 type BucketOf<B> = B extends string
 	? B
 	: B extends { readonly [unit: string]: infer F }
@@ -114,39 +116,41 @@ type BucketOf<B> = B extends string
 /** The fields a `by` buckets on: a bucket's own field, or the field a calendar unit truncates. */
 export type BucketField<B> = B extends readonly (infer X)[] ? BucketOf<X> : BucketOf<B>;
 /** Readable fields `sum` and `avg` measure. */
-type NumericField<C> = {
-	[P in ReadField<C> & keyof Columns<C>]: Columns<C>[P] extends {
+type NumericField<C, O = 'default'> = {
+	[P in ReadField<C, O> & keyof Columns<C>]: Columns<C>[P] extends {
 		kind: 'int' | 'decimal' | 'money' | 'sum' | 'count';
 	}
 		? P
 		: never;
-}[ReadField<C> & keyof Columns<C>] &
+}[ReadField<C, O> & keyof Columns<C>] &
 	string;
 /** What an `aggregate` measures over its scope (`where`): a `count`, sums and averages of numbers, minimums and maximums. */
-export type Measures<C> = {
+export type Measures<C, O = 'default'> = {
 	count?: true;
-	sum?: readonly NoInfer<NumericField<C>>[];
-	avg?: readonly NoInfer<NumericField<C>>[];
-	min?: readonly NoInfer<ReadField<C>>[];
-	max?: readonly NoInfer<ReadField<C>>[];
-	where?: NoInfer<Where<C>>;
+	sum?: readonly NoInfer<NumericField<C, O>>[];
+	avg?: readonly NoInfer<NumericField<C, O>>[];
+	min?: readonly NoInfer<ReadField<C, O>>[];
+	max?: readonly NoInfer<ReadField<C, O>>[];
+	where?: NoInfer<Where<C, O>>;
 };
 /**
- * An `aggregate` row: with `by`, the bucket's values under `key` (the bucketed fields of the row); then each measure asked
- * for: `count`, a `sum` or `avg` per numeric field (a `Decimal`, `null` over no rows), a `min` or `max` per field.
+ * An `aggregate` row: with `by`, the bucket's values under `key` (the bucketed fields of the row) and its row `count`
+ * (always); then each measure asked for: `count`, a `sum` or `avg` per numeric field (a `Decimal`, `null` over no rows),
+ * a `min` or `max` per field.
  */
-export type AggRow<C, By = never> = ([By] extends [never]
-	? {}
-	: { readonly key: Pick<Row<C>, By & keyof Row<C>> }) & {
-	readonly count?: number;
-	readonly sum?: { readonly [F in NumericField<C>]?: Decimal | null };
-	readonly avg?: { readonly [F in NumericField<C>]?: Decimal | null };
-	readonly min?: { readonly [F in keyof Row<C>]?: Row<C>[F] | null };
-	readonly max?: { readonly [F in keyof Row<C>]?: Row<C>[F] | null };
+export type AggRow<C, By = never, O = 'default'> = ([By] extends [never]
+	? { readonly count?: number }
+	: { readonly key: Pick<Row<C, O>, By & keyof Row<C, O>>; readonly count: number }) & {
+	readonly sum?: { readonly [F in NumericField<C, O>]?: Decimal | null };
+	readonly avg?: { readonly [F in NumericField<C, O>]?: Decimal | null };
+	readonly min?: { readonly [F in keyof Row<C, O>]?: Row<C, O>[F] | null };
+	readonly max?: { readonly [F in keyof Row<C, O>]?: Row<C, O>[F] | null };
 };
 /** Where a record's `history` starts: an instant, a revision, or just before an approval request. */
-export type HistoryOptions = {
+export type HistoryOptions<C = string> = {
 	at?: { instant: Instant } | { revision: number } | { before: RequestId };
+	/** The read output whose fields each revision shows (`default` when absent); the caller must hold it. */
+	output?: OutputName<C>;
 };
 
 // ── read requests (decisions 1, 4, 7, 8): one layer map for pages, `ctx.query`, policies and the agent ──
@@ -167,32 +171,38 @@ export type LayerAggregate<F extends string> = {
 	max?: readonly F[];
 	by?: F | readonly F[];
 };
-/** A root layer of `C`: its filter, fields, order and page, a text or index search, an aggregate, and `asOf`. */
-export type RootRequest<C> = {
-	where?: Where<C>;
-	fields?: readonly ReadField<C>[];
-	orderBy?: OrderBy<C>;
+/**
+ * A root layer of `C`: the read `output` it answers (`default` when absent), its filter, fields, order and page, a text
+ * or index search, an aggregate, and `asOf`.
+ */
+export type RootRequest<C, O = 'default'> = {
+	/** The model's named read output: its fixed fields and layers. The caller's policies grant it and filter its rows. */
+	output?: OutputName<C>;
+	where?: Where<C, O>;
+	fields?: readonly ReadField<C, O>[];
+	orderBy?: OrderBy<C, O>;
 	/** 1 to 10,000 (the default). */
 	limit?: number;
 	after?: Cursor;
 	search?: string | IndexSearch<C>;
-	aggregate?: Omit<Measures<C>, 'where'> & { by?: Bucket<C> | readonly Bucket<C>[] };
+	aggregate?: Omit<Measures<C, O>, 'where'> & { by?: Bucket<C, O> | readonly Bucket<C, O>[] };
 	/** An ISO instant: the root and its layers as they stood then (folded from history). */
 	asOf?: string;
 };
-/** A deeper layer `P` of `C`: `where` filters that layer's rows (a list) or nulls it (a ref), never removing the root. */
-export type LayerRequest<C, P> = {
-	where?: LayerWhere<C, P>;
-	fields?: readonly LayerField<C, P>[];
-	orderBy?: LayerOrderBy<LayerField<C, P> & string>;
+/** A deeper layer `P` of `C`'s output `O`: `where` filters that layer's rows (a list) or nulls it (a ref), never removing the root. */
+export type LayerRequest<C, P, O = 'default'> = {
+	where?: LayerWhere<C, P, O>;
+	fields?: readonly LayerField<C, P, O>[];
+	orderBy?: LayerOrderBy<LayerField<C, P, O> & string>;
 	/** 1 to 10,000 (the default) rows per parent row. */
 	limit?: number;
 	search?: string;
-	aggregate?: LayerAggregate<LayerField<C, P> & string>;
+	aggregate?: LayerAggregate<LayerField<C, P, O> & string>;
 };
 /** The general shape a read request literal is inferred against (the constraint, not the check); JSON only, so a function is never a `where`. */
 export type ReadRequestBase = {
 	readonly [path: string]: {
+		readonly output?: string;
 		readonly where?: { readonly [key: string]: unknown };
 		readonly fields?: readonly string[];
 		readonly orderBy?: unknown;
@@ -203,16 +213,22 @@ export type ReadRequestBase = {
 		readonly asOf?: string;
 	};
 };
-/** Each key of request `R` checked: a root of a model with `read`, or a read layer that root declares. */
+/** The output root `C` of request `R` names (`default` when it names none). */
+export type OutputOf<R, C> = C extends keyof R
+	? R[C] extends { output: infer O extends string }
+		? O
+		: 'default'
+	: 'default';
+/** Each key of request `R` checked: a root of a model with `read`, or a read layer its output declares. */
 export type RequestSpec<R> = {
 	[K in keyof R]: K extends `${infer C}.${string}`
 		? C extends ReadableName
-			? K extends ReadPath<C>
-				? LayerRequest<C, K>
-				: `error: '${K & string}' is not a read layer ${C} declares`
+			? K extends ReadPath<C, OutputOf<R, C>>
+				? LayerRequest<C, K, OutputOf<R, C>>
+				: `error: '${K & string}' is not a read layer ${C}'s ${OutputOf<R, C>} output declares`
 			: `error: '${C}' is no read root: a root is a model with read`
 		: K extends ReadableName
-			? RootRequest<K>
+			? RootRequest<K, OutputOf<R, K>>
 			: `error: '${K & string}' is no read root: a root is a model with read`;
 };
 /** A read request literal, checked exactly: an unknown key, path, field or option fails to type-check. */
@@ -220,68 +236,77 @@ export type ReadRequest<R> = R & NoInfer<Checked<ReadRequestBase, R, Exact<R, Re
 type At<R, P> = P extends keyof R ? R[P] : {};
 type Named<R> = Prefixes<keyof R & string>;
 type LayerPick<C, P, R> =
-	At<R, P> extends { fields: readonly (infer F)[] } ? F & string : LayerField<C, P>;
-type LayerAggRow<F extends string> = {
-	readonly key?: { readonly [K in F]?: unknown };
-	readonly count?: number;
+	At<R, P> extends { fields: readonly (infer F)[] }
+		? F & string
+		: LayerField<C, P, OutputOf<R, RootOf<P>>>;
+/** A layer aggregate row; grouped (`by`), each bucket carries its `key` and row `count`. */
+type LayerAggRow<F extends string, Grouped extends boolean = false> = (Grouped extends true
+	? { readonly key: { readonly [K in F]?: unknown }; readonly count: number }
+	: { readonly count?: number }) & {
 	readonly sum?: { readonly [K in F]?: Decimal | null };
 	readonly avg?: { readonly [K in F]?: Decimal | null };
 	readonly min?: { readonly [K in F]?: unknown };
 	readonly max?: { readonly [K in F]?: unknown };
 };
-type SubAnswer<C, Q extends string, R, Mask, T, S> = S extends keyof OneRels<T>
-	? LayerRow<C, Q, R, Mask> | null
+type SubAnswer<C, Q extends string, R, T, S> = S extends keyof OneRels<T>
+	? LayerRow<C, Q, R> | null
 	: At<R, Q> extends { aggregate: infer A }
 		? A extends { by: unknown }
-			? readonly LayerAggRow<LayerField<C, Q> & string>[]
-			: LayerAggRow<LayerField<C, Q> & string>
-		: readonly LayerRow<C, Q, R, Mask>[];
+			? readonly LayerAggRow<LayerField<C, Q, OutputOf<R, C>> & string, true>[]
+			: LayerAggRow<LayerField<C, Q, OutputOf<R, C>> & string>
+		: readonly LayerRow<C, Q, R>[];
 /**
- * One row of layer `P`: `id`, its picked fields (all it exposes without `fields`), and each named sub-layer under its
- * relation name in place of the FK (a ref: the row or `null`; a many-relation: its rows). `Mask` masks by the root's
- * policies (a caller's read); a workspace read is unmasked.
+ * One row of layer `P` of the root's output: `id`, its picked fields (all the output exposes there without `fields`),
+ * and each named sub-layer under its relation name in place of the FK (a ref: the row or `null`; a many-relation: its
+ * rows).
  */
 export type LayerRow<
 	C,
 	P extends string,
 	R,
-	Mask = true,
 	T = PathModel<C, P>,
 	S extends string = SubLayer<Named<R>, P>
 > = Simplify<
 	{ readonly id: Id<T & string> } & {
 		readonly [
 			F in Exclude<LayerPick<C, P, R>, S | 'id'> & (keyof Columns<T> | keyof OneRels<T>)
-		]: Mask extends true ? LayerValue<C, P, F> : ColumnValue<T, F>;
-	} & { readonly [Q in S]: SubAnswer<C, `${P}.${Q}`, R, Mask, T, Q> }
+		]: ColumnValue<T, F>;
+	} & { readonly [Q in S]: SubAnswer<C, `${P}.${Q}`, R, T, Q> }
 >;
-type RootRow<C extends string, R, Mask> = LayerRow<C, C, R, Mask> & RowState;
-/** A root's answer: its aggregate, its index or semantic search's nearest rows (each with `$distance`), or its page. */
-type RootAnswer<C extends string, R, Mask> =
+type RootRow<C extends string, R> = LayerRow<C, C, R> & RowState;
+/**
+ * A root's answer: its aggregate, its index or semantic search's nearest rows (each with `$distance`), or its page with
+ * `total`, every row the read matches (scope, `where`, text search), its `limit` and `after` aside.
+ */
+type RootAnswer<C extends string, R> =
 	At<R, C> extends { aggregate: infer A }
 		? A extends { by: infer B }
-			? Page<AggRow<C, BucketField<B>>>
-			: AggRow<C>
+			? Page<AggRow<C, BucketField<B>, OutputOf<R, C>>>
+			: AggRow<C, never, OutputOf<R, C>>
 		: At<R, C> extends { search: object }
-			? Page<RootRow<C, R, Mask> & { readonly $distance: number }>
-			: Page<RootRow<C, R, Mask>>;
+			? Page<RootRow<C, R> & { readonly $distance: number }>
+			: Page<RootRow<C, R>> & { readonly total: number };
 /** A runtime-built read request's answer (`dynamicRead`): per root, a page of rows as JSON. */
 export type DynamicAnswer = {
-	readonly [root: string]: Page<{ readonly id: string; readonly [field: string]: Json }>;
+	readonly [root: string]: Page<{ readonly id: string; readonly [field: string]: Json }> & {
+		readonly total?: number;
+	};
 };
-/** A read request's answer: per root, a page of layer rows (or its aggregate), typed from the named layers. */
-export type ReadAnswer<R, Mask = true> = {
-	readonly [C in RootOf<keyof R & string>]: RootAnswer<C, R, Mask>;
+/** A read request's answer: per root, a page of layer rows (or its aggregate), typed from its output's named layers. */
+export type ReadAnswer<R> = {
+	readonly [C in RootOf<keyof R & string>]: RootAnswer<C, R>;
 };
 
 /**
- * The one read API as the caller (queries, automations under `runAs`, page loaders): exposed fields only, masked
- * where grants mask. Pages call the same `query` on `bolt` (`PageBolt`); every read is one read request (a layer map).
+ * The one read API as the caller (queries, automations under their policies, page loaders): each root reads one named
+ * output, the rows its granting policies admit. Pages call the same `query` on `bolt` (`PageBolt`); every read is one
+ * read request (a layer map).
  */
 export interface CallerQuery<E = never> {
 	/**
-	 * A read request: a layer map of roots (models with `read`) and their declared layers, in one crossing and ONE
-	 * statement, under the caller's authority: each root's policy alone filters and masks it and its layers.
+	 * A read request: a layer map of roots (models with `read`) and the layers of the output each names, in one crossing
+	 * and ONE statement, under the caller's authority: each root's policies granting that output alone filter it and
+	 * its layers.
 	 * @example
 	 * const { orders, commercial_settings } = yield* ctx.query({
 	 *   orders: { where: { status: { eq: 'issued' } }, fields: ['number', 'total'], limit: 100 },
@@ -309,16 +334,16 @@ export interface CallerQuery<E = never> {
 	history<C extends string>(
 		model: Is<C, ReadableName>,
 		id: NoInfer<Id<C>>,
-		options?: HistoryOptions
+		options?: HistoryOptions<C>
 	): Eff<readonly Revision<C>[], E>;
 }
 /**
  * The one read API as the workspace (write callbacks, `notify`, sync bodies, rule 15): the same shapes as `CallerQuery`,
- * answered with unmasked stored rows under no grant.
+ * answered with every stored row under no grant.
  */
 export interface WorkspaceQuery {
-	/** A read request (as the caller's), answered as the workspace: unmasked, unscoped, the same declared layers. */
-	query<const R extends ReadRequestBase>(request: ReadRequest<R>): Eff<ReadAnswer<R, false>>;
+	/** A read request (as the caller's), answered as the workspace: unscoped, the same declared outputs and layers. */
+	query<const R extends ReadRequestBase>(request: ReadRequest<R>): Eff<ReadAnswer<R>>;
 	/** The same layer map built at runtime, checked host-side; answered untyped. */
 	query(request: DynamicRead): Eff<DynamicAnswer, ReadFailed>;
 	/** Without `by`, one row over the whole model. */
@@ -662,9 +687,9 @@ export type DenyAt<M, V> = V extends 'create' | 'update'
 				};
 		  }[Exclude<WritePath<M, V>, M>]
 	: { readonly row?: number };
-/** A policy check's reads: read requests as the workspace (unmasked), at most ten per call, as a write callback's. */
+/** A policy check's reads: read requests as the workspace (unscoped), at most ten per call, as a write callback's. */
 export interface PolicyReads {
-	query<const R extends ReadRequestBase>(request: ReadRequest<R>): Eff<ReadAnswer<R, false>>;
+	query<const R extends ReadRequestBase>(request: ReadRequest<R>): Eff<ReadAnswer<R>>;
 }
 /**
  * What a policy's write `check` sees: who writes (`actor`, `policies`), the clock, `db.query` (read requests as the

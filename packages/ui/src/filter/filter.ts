@@ -1,10 +1,10 @@
-import { Match, Predicate, Result, Schema } from 'effect';
+import { Match, Result, Schema } from 'effect';
 import { inputSchema, type Value } from '@norbital-ai/std/kind';
 import { Decimal } from '@norbital-ai/std/decimal';
 import { encodeWire } from '@norbital-ai/std/wire';
 import { utcOf } from '@norbital-ai/std/zone';
 import { compileVar, evaluateVar, memberAdmits, type VarResult } from '@norbital-ai/std/vars';
-import { likePattern } from '../kinds/kind.js';
+import { format, isPoint, likePattern, valueObject } from '../kinds/kind.js';
 import { sortable as kindSortable } from '../kinds/registry.js';
 // The view popover's typed model (rule 16b, P34): filter rows that mirror `Where` (§3.3.9) and can only lower to a
 // decodable one, sort keys that are an `OrderBy`, and their URL form. Pure: no DOM, no relative value imports.
@@ -94,8 +94,8 @@ export type Arg =
 	| { readonly _tag: 'var'; readonly var: string }
 	| { readonly _tag: 'field'; readonly field: string };
 /** `{ var: '<CEL>' }`, the one spelling of a variable, as its text. */
-const varOf = (value: Json | Value): string | null =>
-	Predicate.isObject(value) &&
+const varOf = (value: Value): string | null =>
+	valueObject(value) &&
 	keysOf(value).length === 1 &&
 	'var' in value &&
 	typeof value['var'] === 'string'
@@ -245,6 +245,9 @@ export const manyAt = (
 	return { prefix: [...prefix, ...steps.map((r) => ({ k: 'is' as const, rel: r }))], name };
 };
 const keysOf = (v: object) => Object.keys(v);
+/** The where/orderBy decoder's one object test: an initial filter, a URL and an AI answer arrive as untyped JSON. */
+const jsonObject = (v: Json | undefined): v is { readonly [key: string]: Json } =>
+	typeof v === 'object' && v !== null && !Array.isArray(v);
 
 // ── the field tree ──
 /** What a path ends on: a field of a kind, or a one-relation (a record condition). */
@@ -252,12 +255,9 @@ export type Resolved =
 	| { leaf: 'field'; kind: Kind; nullable: boolean; label: string }
 	| { leaf: 'rel'; targets: readonly string[]; nullable: boolean; label: string };
 const RESERVED = new Set(['and', 'or', 'not']);
-/** Fields a viewer may filter on: readable, not hidden, not masked (rule 16a narrowing). */
+/** Fields a viewer may filter on: readable in its output, not hidden (rule 16a narrowing). */
 export const filterable = (x: ModelExposure, f: string) =>
-	!RESERVED.has(f) &&
-	x.fields[f] !== undefined &&
-	!x.fields[f]?.hidden &&
-	!(x.masked ?? []).includes(f);
+	!RESERVED.has(f) && x.fields[f] !== undefined && !x.fields[f]?.hidden;
 const SYS: { readonly [f: string]: Kind } = {
 	created_at: { kind: 'instant' },
 	updated_at: { kind: 'instant' }
@@ -272,7 +272,7 @@ export function resolve(cat: Catalog, model: string, path: string): Resolved | n
 		const [name = '', arm] = (steps[i] ?? '').split(':');
 		const rel = x.relations?.[name];
 		const last = i === steps.length - 1;
-		if (rel !== undefined && !(x.masked ?? []).includes(name)) {
+		if (rel !== undefined) {
 			const targets = arm === undefined ? rel.targets : rel.targets.includes(arm) ? [arm] : [];
 			if (targets.length === 0 || (rel.targets.length > 1 && arm === undefined)) return null; // an arc is named by its arm
 			if (last)
@@ -313,6 +313,110 @@ export function valueKind(k: Kind): Kind {
 	if (k.kind === 'seq') return k.pattern === undefined ? { kind: 'int' } : { kind: 'text' };
 	if (k.kind === 'sum' || k.kind === 'count' || k.kind === 'money') return { kind: 'number' };
 	return k;
+}
+/** The kind a condition's literal is for `op`: a period's day for "in force on", a JSON document as itself, else
+ * `valueKind`. */
+export const litKind = (r: Extract<Resolved, { leaf: 'field' }>, op: Op): Kind =>
+	op === 'contains' && r.kind.kind === 'period'
+		? { kind: r.kind.of }
+		: op === 'contains' && r.kind.kind === 'json'
+			? r.kind
+			: valueKind(r.kind);
+/** An operator's own words (bolt's), where the catalogue has none. */
+export const OP_LABEL: { readonly [op in Op]: string } = {
+	eq: 'is',
+	ne: 'is not',
+	lt: 'less than',
+	lte: 'at most',
+	gt: 'more than',
+	gte: 'at least',
+	in: 'is any of',
+	nin: 'is none of',
+	like: 'contains',
+	isNull: 'is empty',
+	notNull: 'is not empty',
+	has: 'has',
+	hasAny: 'has any of',
+	hasAll: 'has all of',
+	isEmpty: 'is empty',
+	notEmpty: 'is not empty',
+	during: 'is within',
+	contains: 'contains',
+	overlaps: 'overlaps',
+	within: 'is within',
+	startsWithin: 'starts within',
+	endsWithin: 'ends within',
+	near: 'is within',
+	search: 'matches',
+	similar: 'is about'
+};
+const DATE_WORDS: { readonly [op in Op]?: string } = {
+	gt: 'after',
+	gte: 'on or after',
+	lt: 'before',
+	lte: 'on or before',
+	contains: 'in force on'
+};
+/** An operator's fallback words on a resolved path: a date's or period's own ("after", "in force on"), else bolt's. */
+const opWord = (op: Op, r: Resolved | null): string =>
+	(r?.leaf === 'field' && ['date', 'instant', 'period'].includes(r.kind.kind)
+		? DATE_WORDS[op]
+		: undefined) ?? OP_LABEL[op];
+const CMP_OPS: readonly Op[] = ['eq', 'ne', 'gt', 'gte', 'lt', 'lte'];
+const EQUALITY_OPS: readonly Op[] = ['eq', 'ne', 'in', 'nin'];
+/** The grammar's operators for a path by its kind (`during` needs the catalogue's spans, so it waits for them). */
+function kindOps(r: Resolved): readonly Op[] {
+	const nulls: readonly Op[] = r.nullable ? ['isNull', 'notNull'] : [];
+	if (r.leaf === 'rel') return [...EQUALITY_OPS, ...nulls];
+	const k = r.kind;
+	if ((k.kind === 'text' || k.kind === 'enum') && k.many)
+		return ['has', 'hasAny', 'hasAll', 'isEmpty', 'notEmpty'];
+	const own: readonly Op[] = Match.value(k.kind).pipe(
+		Match.when('text', (): readonly Op[] => ['like', ...EQUALITY_OPS]),
+		Match.whenOr('enum', 'state', 'id', 'currency', (): readonly Op[] => EQUALITY_OPS),
+		Match.when('bool', (): readonly Op[] => ['eq']),
+		Match.whenOr(
+			'int',
+			'decimal',
+			'money',
+			'number',
+			'count',
+			'sum',
+			'duration',
+			'time',
+			'date',
+			'instant',
+			(): readonly Op[] => CMP_OPS
+		),
+		Match.when('period', (): readonly Op[] => [
+			'contains',
+			'overlaps',
+			'within',
+			'startsWithin',
+			'endsWithin'
+		]),
+		Match.when('json', (): readonly Op[] => ['contains']),
+		Match.orElse((): readonly Op[] => [])
+	);
+	return [...own, ...nulls];
+}
+/** The operators a condition on `path` offers: the catalogue's, else (still loading, or a path it does not walk, such as
+ * a related record's own relation) the grammar's for its kind, so the operator is never an empty choice. */
+export function operatorsFor(
+	offers: readonly Offer[],
+	prefix: readonly FilterStep[],
+	path: string,
+	r: Resolved
+): readonly { op: Op; label: string }[] {
+	const offered = offersFor(offers, prefix, path).flatMap((o) =>
+		Schema.is(OpSchema)(o.op) ? [{ op: o.op, label: o.opLabel }] : []
+	);
+	if (offered.length > 0) return offered;
+	const index = INDEX[path.split('.').at(-1) ?? ''];
+	return (index === undefined ? kindOps(r) : [index.op]).map((op) => ({
+		op,
+		label: opWord(op, r)
+	}));
 }
 /** The kind of value a variable must produce in a value position, or `null` where none is taken (§3.3.9 `Dyn`). */
 function varResult(r: Resolved, op: Op): VarResult | null {
@@ -414,8 +518,6 @@ const unlike = (p: string): string | null => {
 		.filter((w) => w !== '')
 		.join(' ');
 };
-const isPoint = (v: Json): v is { lat: number; lng: number } =>
-	Predicate.isObject(v) && typeof v['lat'] === 'number' && typeof v['lng'] === 'number';
 /** A radius as words: "500 m", "1.5 km". */
 export const radiusText = (m: number) =>
 	m >= 1000 ? `${Math.round(m / 100) / 10} km` : `${Math.round(m)} m`;
@@ -578,7 +680,7 @@ function argOf(r: Resolved, op: Op, v: Json): Arg | null {
 	const text = varOf(v);
 	if (text !== null) return varError(r, op, text) === undefined ? { _tag: 'var', var: text } : null;
 	if (
-		Predicate.isObject(v) &&
+		jsonObject(v) &&
 		keysOf(v).length === 1 &&
 		typeof v['field'] === 'string' &&
 		operandsFor(r, op).includes('field')
@@ -596,19 +698,13 @@ function argOf(r: Resolved, op: Op, v: Json): Arg | null {
 			: null;
 	}
 	if (r.leaf === 'rel') return typeof v === 'string' && v !== '' ? { _tag: 'lit', lit: v } : null;
-	const k: Kind =
-		op === 'contains' && r.kind.kind === 'period'
-			? { kind: r.kind.of }
-			: op === 'contains' && r.kind.kind === 'json'
-				? r.kind
-				: valueKind(r.kind);
 	if (v === null) return null;
-	const decoded = Schema.decodeUnknownResult(inputSchema(k))(v);
+	const decoded = Schema.decodeUnknownResult(inputSchema(litKind(r, op)))(v);
 	return decoded._tag === 'Success' ? { _tag: 'lit', lit: decoded.success } : null;
 }
 function fieldNodes(cat: Catalog, model: string, path: string, ops: Json): Node[] | null {
 	const r = resolve(cat, model, path);
-	if (r === null || !Predicate.isObject(ops) || keysOf(ops).length === 0) return null;
+	if (r === null || !jsonObject(ops) || keysOf(ops).length === 0) return null;
 	const out: Node[] = [];
 	let rest: { [k: string]: Json } = { ...ops };
 	// a `{ gte, lt }` pair on a date or instant is one relative span (`during`); anything else is its own row
@@ -668,7 +764,7 @@ export function fromWhere(
 	prefix = ''
 ): Node[] | null {
 	const x = cat[at];
-	if (!Predicate.isObject(w) || x === undefined) return null;
+	if (!jsonObject(w) || x === undefined) return null;
 	const out: Node[] = [];
 	for (const [key, v] of Object.entries(w)) {
 		if (key === 'and' || key === 'or') {
@@ -682,7 +778,7 @@ export function fromWhere(
 			else out.push({ t: 'group', join: key, of: flat });
 		} else if (key === 'not') {
 			// `is: { not }` differs from `not: { is }` on a null relation: only the root form is a row
-			if (prefix !== '' || !Predicate.isObject(v) || keysOf(v).length === 0) return null;
+			if (prefix !== '' || !jsonObject(v) || keysOf(v).length === 0) return null;
 			const of = fromWhere(cat, root, v);
 			if (of === null) return null;
 			out.push({ t: 'group', join: 'and', not: true, of });
@@ -697,7 +793,7 @@ export function fromWhere(
 				rel = prefix + key;
 			if (
 				prefix.split('.').length > 2 ||
-				!Predicate.isObject(v) ||
+				!jsonObject(v) ||
 				keysOf(v).length === 0 ||
 				child === undefined
 			)
@@ -708,7 +804,7 @@ export function fromWhere(
 					if (of === null) return null;
 					out.push({ t: 'many', rel, q, of });
 				} else if (Schema.is(AggSchema)(q)) {
-					if (!Predicate.isObject(body)) return null;
+					if (!jsonObject(body)) return null;
 					const { of: field, ...cmp } = body;
 					const [op, n] = Object.entries(cmp)[0] ?? [];
 					if (keysOf(cmp).length !== 1 || !Schema.is(CmpSchema)(op) || typeof n !== 'number')
@@ -733,19 +829,18 @@ export function fromWhere(
 		} else if (x.relations?.[key] !== undefined) {
 			const rel = x.relations[key];
 			if (rel === undefined) return null;
-			if (!Predicate.isObject(v) || keysOf(v).length === 0) return null;
+			if (!jsonObject(v) || keysOf(v).length === 0) return null;
 			const arms: [string | null, Json][] =
 				rel.targets.length > 1 ? Object.entries(v) : [[null, v]];
 			for (const [arm, body] of arms) {
 				if (arm !== null && !rel.targets.includes(arm)) return null;
 				const path = prefix + (arm === null ? key : `${key}:${arm}`);
-				if (!Predicate.isObject(body) || keysOf(body).length === 0) return null;
+				if (!jsonObject(body) || keysOf(body).length === 0) return null;
 				let nodes: Node[] | null;
 				if ('is' in body) {
 					const is = body['is'];
-					if (keysOf(body).length !== 1 || !Predicate.isObject(is) || keysOf(is).length === 0)
-						return null;
-					const idOps = keysOf(is).length === 1 && Predicate.isObject(is['id']) ? is['id'] : null;
+					if (keysOf(body).length !== 1 || !jsonObject(is) || keysOf(is).length === 0) return null;
+					const idOps = keysOf(is).length === 1 && jsonObject(is['id']) ? is['id'] : null;
 					nodes =
 						idOps !== null && keysOf(idOps).every((k) => ['eq', 'ne', 'in', 'nin'].includes(k))
 							? fieldNodes(cat, root, path, idOps)
@@ -787,15 +882,15 @@ function aggregable(cat: Catalog, child: string, q: Quant): string[] {
 }
 /** Top-level conjuncts: each is kept or dropped alone. */
 export const clauses = (w: Json): Json[] =>
-	!Predicate.isObject(w) || keysOf(w).length === 0
+	!jsonObject(w) || keysOf(w).length === 0
 		? []
 		: keysOf(w).length === 1 && Array.isArray(w['and'])
 			? [...w['and']]
 			: Object.entries(w).map(([k, v]) => ({ [k]: v }));
 
 // ── sorting ──
-/** `Sortable<C>`: readable, unmasked, ordered fields and `created_at`/`updated_at` (§3.3.9); with the catalog, also each
- * unmasked one-relation's target fields the viewer reads (`account.name`, shown "Account › Name"), one hop. */
+/** `Sortable<C>`: readable, ordered fields and `created_at`/`updated_at` (§3.3.9); with the catalog, also each
+ * one-relation's target fields the viewer reads (`account.name`, shown "Account › Name"), one hop. */
 export function sortable(x: ModelExposure | undefined, system = true, cat?: Catalog): string[] {
 	if (x === undefined) return [];
 	const own = Object.keys(x.fields).filter(
@@ -806,7 +901,7 @@ export function sortable(x: ModelExposure | undefined, system = true, cat?: Cata
 			? []
 			: Object.entries(x.relations ?? {}).flatMap(([r, rel]) => {
 					const t = rel.targets.length === 1 ? cat[rel.targets[0] ?? ''] : undefined;
-					return t === undefined || (x.masked ?? []).includes(r)
+					return t === undefined
 						? []
 						: sortable(t, false)
 								.filter((f) => t.relations?.[f] === undefined)
@@ -855,10 +950,7 @@ export function parseOrder(
 }
 /** An `OrderBy` literal as keys (an AI answer or the author's); a related key `{ account: { name: 'asc' } }` is `account.name`. */
 export function orderKeys(o: Json | undefined): SortKey[] {
-	const jsonArray = (value: Json): value is readonly Json[] => Array.isArray(value);
-	const jsonObject = (value: Json): value is { readonly [key: string]: Json } =>
-		Predicate.isObject(value);
-	const items = o === undefined || o === null ? [] : jsonArray(o) ? o : [o];
+	const items = o === undefined || o === null ? [] : Array.isArray(o) ? o : [o];
 	const flat = (value: Json, at: string): SortKey[] => {
 		if (typeof value === 'string')
 			return value === 'asc' || value === 'desc' ? [{ field: at, dir: value }] : [];
@@ -934,7 +1026,7 @@ export function matches(row: { readonly [f: string]: Value }, n: Node): boolean 
 		n.path
 			.split('.')
 			.reduce<Value | undefined>(
-				(object, key) => (Predicate.isObject(object) ? object[key] : undefined),
+				(object, key) => (valueObject(object) ? object[key] : undefined),
 				row
 			) ?? null;
 	const a = n.arg !== null && 'lit' in n.arg ? n.arg.lit : null,
@@ -990,7 +1082,7 @@ export function sortRows<R extends { readonly [f: string]: Value }>(
 			const at = (r: R) =>
 				k.field
 					.split('.')
-					.reduce<Value | undefined>((o, f) => (Predicate.isObject(o) ? o[f] : undefined), r);
+					.reduce<Value | undefined>((o, f) => (valueObject(o) ? o[f] : undefined), r);
 			const a = at(x) ?? null,
 				b = at(y) ?? null;
 			const c = a === b ? 0 : a === null ? 1 : b === null ? -1 : cmpVal(a, b);
@@ -1075,62 +1167,120 @@ export function pathLabel(
 	}
 	return out.join(' › ');
 }
-const argText = (arg: Arg | null): string =>
-	arg === null
-		? ''
-		: Match.value(arg).pipe(
-				Match.tagsExhaustive({
-					lit: (value) => String(value.lit),
-					list: (value) => value.list.map(String).join(', '),
-					range: (value) =>
-						value.label ?? `${boundText(value.range[0])} – ${boundText(value.range[1])}`,
-					var: (value) => `@${variableName(value.var)}`,
-					field: (value) => value.field
-				})
-			);
-const boundText = (value: Json): string => {
-	const text = varOf(value);
-	return text === null ? String(value) : `@${variableName(text)}`;
+/** One piece of a row's words, by what it names, so a chip styles field, operator and value apart. */
+export type Part = { readonly text: string; readonly role: 'field' | 'op' | 'value' | 'join' };
+/** Whether a space goes before part `i` (none inside parentheses). */
+export const spaced = (parts: readonly Part[], i: number): boolean =>
+	i > 0 && parts[i]?.text !== ')' && parts[i - 1]?.text !== '(';
+export const partsText = (parts: readonly Part[]): string =>
+	parts.map((p, i) => (spaced(parts, i) ? ` ${p.text}` : p.text)).join('');
+const part = (role: Part['role'], text: string): Part[] => (text === '' ? [] : [{ role, text }]);
+/** Parts joined by a word (`and`, `or`). */
+const joined = (groups: readonly (readonly Part[])[], word: string): Part[] =>
+	groups.flatMap((g, i) => (i === 0 ? [...g] : [...part('join', word), ...g]));
+/** How a row's values read: a related record by its label, every literal through its kind's formatter. */
+type Words = {
+	human: (s: string) => string;
+	ref: ((target: string, id: string) => string) | undefined;
+	op: (op: string, path: string, r?: Resolved | null) => string;
+	locale: string;
 };
-/** One line for a node: the author's read-only scope and a row's summary. `ref` names a relation's record (its label, never
- * its id); `opLabel` names the operator (the catalogue's words, when the caller has them, else the machine operator). */
-export function nodeText(
+const yesNo = (v: Value) => (v === true ? 'yes' : v === false ? 'no' : String(v));
+function litText(r: Resolved | null, op: Op, v: Value, w: Words): string {
+	if (r === null) return String(v);
+	if (r.leaf === 'rel')
+		return typeof v === 'string' && w.ref !== undefined ? w.ref(r.targets[0] ?? '', v) : String(v);
+	const k = litKind(r, op);
+	return k.kind === 'bool' ? yesNo(v) : format(k, v, { locale: w.locale }) || String(v);
+}
+function boundText(r: Resolved | null, v: Json, w: Words): string {
+	const text = varOf(v);
+	if (text !== null) return `@${variableName(text)}`;
+	return r?.leaf === 'field' && (r.kind.kind === 'date' || r.kind.kind === 'instant')
+		? format({ kind: r.kind.kind }, v, { locale: w.locale }) || String(v)
+		: String(v);
+}
+function argText(cat: Catalog, model: string, r: Resolved | null, op: Op, arg: Arg, w: Words) {
+	return Match.value(arg).pipe(
+		Match.tagsExhaustive({
+			lit: (value) => litText(r, op, value.lit, w),
+			list: (value) => value.list.map((v) => litText(r, op, v, w)).join(', '),
+			range: (value) =>
+				value.label ?? `${boundText(r, value.range[0], w)} – ${boundText(r, value.range[1], w)}`,
+			var: (value) => `@${variableName(value.var)}`,
+			field: (value) => pathLabel(cat, model, value.field, w.human)
+		})
+	);
+}
+function partsOf(cat: Catalog, model: string, n: Node, w: Words): Part[] {
+	if (n.t === 'group') {
+		const inner = joined(
+			n.of.map((x) => partsOf(cat, model, x, w)),
+			n.join
+		);
+		const wrapped =
+			n.not || n.of.length > 1 ? [...part('join', '('), ...inner, ...part('join', ')')] : inner;
+		return n.not ? [...part('join', 'not'), ...wrapped] : wrapped;
+	}
+	const head = part('field', pathLabel(cat, model, n.t === 'many' ? n.rel : n.path, w.human));
+	if (n.t === 'many') {
+		const child = childOf(cat, model, n.rel) ?? '';
+		if (n.q === 'some' || n.q === 'none' || n.q === 'every')
+			return [
+				...head,
+				...part('op', `${QUANT_LABEL[n.q]}${n.of.length > 0 ? ':' : ''}`),
+				...joined(
+					n.of.map((x) => partsOf(cat, child, x, w)),
+					'and'
+				)
+			];
+		return [
+			...head,
+			...part('op', QUANT_LABEL[n.q]),
+			...part('field', n.field === undefined ? '' : pathLabel(cat, child, n.field, w.human)),
+			...part('op', w.op(n.op ?? 'eq', n.rel)),
+			...part(
+				'value',
+				n.n === undefined || n.n === null
+					? ''
+					: format({ kind: 'number' }, n.n, { locale: w.locale })
+			)
+		];
+	}
+	if (n.op === 'near' && n.arg !== null && 'lit' in n.arg && Array.isArray(n.arg.lit)) {
+		const [p, m] = n.arg.lit;
+		if (!isPoint(p ?? null) || typeof m !== 'number') return head;
+		return [
+			...head,
+			...part('op', 'within'),
+			...part('value', `${radiusText(m)} of ${pointText(p)}`)
+		];
+	}
+	const r = resolve(cat, model, n.path);
+	return [
+		...head,
+		...part('op', w.op(n.op, n.path, r)),
+		...part('value', n.arg === null ? '' : argText(cat, model, r, n.op, n.arg, w))
+	];
+}
+/** A row's words as parts: the author's read-only scope and a viewer row's chip. `ref` names a relation's record (its
+ * label, never its id); `opLabel` names the operator (the catalogue's words, when the caller has them; a caller's machine
+ * fallback reads as the operator's own words). Values format by their kind in `locale`. */
+export function nodeParts(
 	cat: Catalog,
 	model: string,
 	n: Node,
 	human: (s: string) => string,
 	ref?: (target: string, id: string) => string,
-	opLabel: (op: string, path: string) => string = (op) => op
-): string {
-	if (n.t === 'group') {
-		const inner = n.of
-			.map((x) => nodeText(cat, model, x, human, ref, opLabel))
-			.join(n.join === 'and' ? ' and ' : ' or ');
-		return n.not ? `not (${inner})` : n.of.length > 1 ? `(${inner})` : inner;
-	}
-	const head = pathLabel(cat, model, n.t === 'many' ? n.rel : n.path, human);
-	if (n.t === 'many') {
-		const child = childOf(cat, model, n.rel) ?? '';
-		return ['some', 'none', 'every'].includes(n.q)
-			? `${head} ${QUANT_LABEL[n.q]}${n.of.length ? `: ${n.of.map((x) => nodeText(cat, child, x, human, ref, opLabel)).join(' and ')}` : ''}`
-			: `${head} ${QUANT_LABEL[n.q]}${n.field ? ` ${pathLabel(cat, child, n.field, human)}` : ''} ${opLabel(n.op ?? 'eq', n.rel)} ${n.n}`;
-	}
-	if (n.op === 'near' && n.arg !== null && 'lit' in n.arg && Array.isArray(n.arg.lit)) {
-		const [p, m] = n.arg.lit;
-		if (!isPoint(p ?? null) || typeof m !== 'number') return head;
-		return `${head} within ${radiusText(m)} of ${pointText(p)}`;
-	}
-	const r = resolve(cat, model, n.path),
-		a = n.arg;
-	const named = (v: Value) =>
-		r?.leaf === 'rel' && ref !== undefined && typeof v === 'string'
-			? ref(r.targets[0] ?? '', v)
-			: String(v);
-	const arg =
-		a !== null && 'lit' in a
-			? named(a.lit)
-			: a !== null && 'list' in a
-				? a.list.map(named).join(', ')
-				: argText(a);
-	return `${head} ${opLabel(n.op, n.path)} ${arg}`.trim();
+	opLabel?: (op: string, path: string) => string,
+	locale = 'en'
+): Part[] {
+	const op = (o: string, path: string, r: Resolved | null = null) => {
+		const said = opLabel?.(o, path);
+		return said !== undefined && said !== o ? said : Schema.is(OpSchema)(o) ? opWord(o, r) : o;
+	};
+	return partsOf(cat, model, n, { human, ref, op, locale });
 }
+/** One line for a row: `nodeParts` as text. */
+export const nodeText = (...args: Parameters<typeof nodeParts>): string =>
+	partsText(nodeParts(...args));

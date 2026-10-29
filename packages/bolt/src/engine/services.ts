@@ -81,7 +81,8 @@ export type ActivationShape = {
 	readonly release: string;
 	readonly publicUrl: string;
 	readonly guest: Option.Option<GuestProgram>;
-	readonly start: readonly string[];
+	/** `HostPorts.overran`: the previous generation stopped past a unit's CPU budget. */
+	readonly overran?: string;
 };
 export class Activation extends Context.Service<Activation, ActivationShape>()('bolt/Activation') {}
 
@@ -207,6 +208,8 @@ export type StartRequest = {
 	readonly runs: readonly { readonly id: string; readonly input: Json }[];
 	readonly authority: Authority;
 	readonly bindings: Bindings;
+	/** Norbius started it in this conversation for `authority`'s member (recorded on the run's trigger). */
+	readonly agent?: { readonly conversation: string };
 };
 /** A re-planned proposal (`guest`: its plan ran guest code), or the outcome that refuses it. */
 /** `error`: the cause behind an `unknown` outcome (a guest throw or budget, rule 72a). */
@@ -339,8 +342,11 @@ export class RunHandlers extends Context.Service<RunHandlers, RunHandlersShape>(
 ) {}
 
 export type RunsShape = {
-	/** Restart recovery and release install: one statement, then `settle` (rule 52a). */
-	readonly boot: Effect.Effect<void, EngineError>;
+	/**
+	 * A generation's recovery (rule 52a), run as it activates: the runs the previous one left `running` rerun (up to 3
+	 * leases), or fail `cpuBudget` with `overran` when it stopped past a unit's CPU budget; then `settle`.
+	 */
+	readonly boot: (overran?: string) => Effect.Effect<void, EngineError>;
 	/** One wake: claim every due run, run them, settle with the next due time. */
 	readonly tick: Effect.Effect<void, EngineError>;
 	/** A run queued for `at`: an open wake claims it when due. */

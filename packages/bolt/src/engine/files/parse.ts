@@ -2,7 +2,7 @@
 // (its `schema`, else the model's writable fields), each with `$at` (its sheet row or line) so findings point at it. A
 // header or key matches a column's name or `label`, any case; an unknown one is ignored. A custom parser runs in the guest
 // (`sync/file.ts`); this module only says which parser an upload is read with.
-import { Array as EffectArray, Result, Schema } from 'effect';
+import { Array as EffectArray, Predicate, Result, Schema } from 'effect';
 import { csvDelimiter, csvRows, csvText } from '@norbital-ai/std/csv';
 import { isPlainDate } from '@norbital-ai/std/date';
 import { utcOf } from '@norbital-ai/std/zone';
@@ -162,7 +162,6 @@ function fromTable(
 	return { records, findings: [] };
 }
 
-const isObj = (v: Json): v is Obj => v !== null && typeof v === 'object' && !EffectArray.isArray(v);
 const notParsed = (message: string): Parsed => ({
 	records: [],
 	findings: [{ at: 0, message, severity: 'refuse' }]
@@ -174,7 +173,7 @@ function fromJson(text: string, columns: InputFields): Parsed {
 	const value: Json = decoded.success;
 	const list = EffectArray.isArray<typeof value>(value)
 		? value
-		: isObj(value) && EffectArray.isArray<Json | undefined>(value['records'])
+		: Predicate.isObject(value) && EffectArray.isArray<Json | undefined>(value['records'])
 			? value['records']
 			: null;
 	if (list === null)
@@ -183,7 +182,7 @@ function fromJson(text: string, columns: InputFields): Parsed {
 		records: Obj[] = [],
 		findings: Finding[] = [];
 	list.forEach((item, i) => {
-		if (!isObj(item)) {
+		if (!Predicate.isObject(item)) {
 			findings.push({ at: i + 1, message: 'This is not a record.', severity: 'refuse' });
 			return;
 		}

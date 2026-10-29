@@ -26,7 +26,7 @@ declare const db: WorkspaceQuery;
 /** A template's reader over both native reads (hr-payroll's `Read`): one read request, either answer. */
 declare const both: <const R extends ReadRequestBase>(
 	request: ReadRequest<R>
-) => Eff<ReadAnswer<R> | ReadAnswer<R, false>>;
+) => Eff<ReadAnswer<R>>;
 declare const customer: Id<'customers'>;
 declare const after: Cursor;
 

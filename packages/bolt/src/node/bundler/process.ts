@@ -5,7 +5,7 @@
 // `{ id, entry, files }` (paths in the tree); out: `{ id, code, map }` or `{ id, errors }`. Its replies are untrusted.
 import { posix } from 'node:path';
 import { rolldown, type Plugin } from 'rolldown';
-import { APP, resolver } from './resolver.ts';
+import { APP, array, record, resolver } from './resolver.ts';
 
 const NODE = `globalThis[Symbol.for('norbital.node')]`;
 const RUN = '\0run';
@@ -13,8 +13,6 @@ const decode = (bytes: Uint8Array) => new TextDecoder().decode(bytes);
 const plain = (text: string) => text.replace(/\u001b\[[0-9;]*m/g, '');
 const rel = (id: string) => (id.startsWith(`${APP}/`) ? id.slice(APP.length + 1) : id);
 const escape = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-const object = (value: unknown): value is object => typeof value === 'object' && value !== null;
-const array = (value: unknown): value is readonly unknown[] => Array.isArray(value);
 
 /** What an error of rolldown's says: its message and, for a syntax or link error, where. */
 type Log = {
@@ -23,8 +21,8 @@ type Log = {
 };
 const logOf = (x: unknown): Log => {
 	const message =
-		object(x) && 'message' in x && typeof x.message === 'string' ? x.message : String(x);
-	const loc = object(x) && 'loc' in x && object(x.loc) ? x.loc : undefined;
+		record(x) && 'message' in x && typeof x.message === 'string' ? x.message : String(x);
+	const loc = record(x) && 'loc' in x && record(x.loc) ? x.loc : undefined;
 	return loc !== undefined &&
 		'file' in loc &&
 		typeof loc.file === 'string' &&
@@ -37,7 +35,7 @@ const logOf = (x: unknown): Log => {
 };
 /** A failed build's errors: rolldown's `BundleError.errors`, else the throw itself. */
 const logsOf = (error: unknown): readonly Log[] => {
-	const errors: unknown = object(error) && 'errors' in error ? error.errors : undefined;
+	const errors: unknown = record(error) && 'errors' in error ? error.errors : undefined;
 	return array(errors) ? errors.map(logOf) : [logOf(error)];
 };
 
@@ -81,7 +79,7 @@ function treePlugin(files: ReadonlyMap<string, Uint8Array>, entry: string) {
 			if (id.startsWith('\0refused:')) {
 				const refused: unknown = JSON.parse(id.slice('\0refused:'.length));
 				const message =
-					object(refused) && 'error' in refused && 'by' in refused
+					record(refused) && 'error' in refused && 'by' in refused
 						? `${String(refused.error)} (required by ${String(refused.by)})`
 						: 'a module is not available in run_js';
 				return `throw Object.assign(new Error(${JSON.stringify(message)}), { code: 'MODULE_NOT_FOUND' });`;
@@ -140,7 +138,7 @@ const bundle = async (entry: string, files: ReadonlyMap<string, Uint8Array>) => 
 
 process.on('message', (message: unknown) => {
 	if (
-		!object(message) ||
+		!record(message) ||
 		!('id' in message) ||
 		!('entry' in message) ||
 		!('files' in message) ||

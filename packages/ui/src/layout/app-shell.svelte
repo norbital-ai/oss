@@ -89,9 +89,9 @@ Every `+<page>.page.svelte` renders inside one.
 	construction — authored apps never set outer padding themselves. Spacing between regions
 	belongs to the parent (Stack gap / Cover gap), never margins on the content.
 -->
-<Cover>
+<Cover size="fill">
 	{#if variant === 'page'}
-		<Bound size="full" inset>
+		<Bound size="fill" inset>
 			{@render children()}
 		</Bound>
 	{:else}

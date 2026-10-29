@@ -9,7 +9,7 @@ description: >-
   confident wrong answers.
 license: MIT
 metadata:
-  package: "@norbital-ai/bolt"
+  package: '@norbital-ai/bolt'
 ---
 
 # The Norbital platform
@@ -35,7 +35,7 @@ model before proposing a source release or a runtime edit.
 | An external connection: driver, configuration, credentials, webhook verification, rate and inline `test` | `src/integration/<name>/+integration.ts` (whatsapp, email, telegram, slack, discord and wechat are built in) |
 | File imports/exports and remote data exchange                                                            | the model's inline `syncs.<name>` (`with: 'file'` or an integration name)                                    |
 | A structured value the built-in kinds cannot express                                                     | `src/data/custom_field/<name>/+definition.ts`                                                                |
-| What each policy permits; masks, apps, tools, MCP, skills, limits                                        | `src/access_control/policy/+<name>.policy.ts`                                                                |
+| What each policy permits; outputs, apps, tools, MCP, skills, limits                                      | `src/access_control/policy/+<name>.policy.ts`                                                                |
 | Source teams and their policy links                                                                      | `src/access_control/team/+team.ts`, exact handles mapped to policy lists or structured entries               |
 | Approval routes and steps                                                                                | `ctx.approve(...)` in the relevant policy write grant's `check`                                              |
 | Screens                                                                                                  | `src/app/<app>/+app.ts` and `+<page>.page.svelte`                                                            |
@@ -45,7 +45,7 @@ model before proposing a source release or a runtime edit.
 | The in-app agent's brief (staff / external members)                                                      | `src/agent/+agent.md`, `src/agent/+agent.external.md`                                                        |
 | Envoy name, audience, policies, DM authority, triage and task                                            | runtime `sys_envoy` rows; `src/agent/envoy/+<id>.envoy.ts` is only a source default                          |
 | Envoy deployment, pairing and pause                                                                      | runtime `sys_integration.envoy` / `active` on a workspace conversation instance                              |
-| Supported formulas, rates, catalogue variants, extraction schema and report templates                    | runtime business configuration models; source defines their language and guards                         |
+| Supported formulas, rates, catalogue variants, extraction schema and report templates                    | runtime business configuration models; source defines their language and guards                              |
 | Workspace skills (indexed in the system prompt, read via `read_skill`)                                   | `src/agent/skill/+<name>.skill.md`                                                                           |
 | Remote MCP servers                                                                                       | `src/agent/mcp/+<name>.mcp.ts`                                                                               |
 | Time zone, locale, currency, app order, AI model classes, connections                                    | `src/+workspace.ts`                                                                                          |

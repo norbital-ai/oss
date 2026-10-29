@@ -1,18 +1,17 @@
 <!--
-	Settings → Automations (rule 48): every run, newest first, in ui's `Table` (search, filter and sort, CSV), re-read
-	every few seconds while shown. A queued or running run has Stop (rule 56); a failed or stopped one has Retry, a new run
-	of its automation with the same input. Run now starts any automation the member may start that needs no input. Opening a row shows the run as `runs.view` redacts it (`?run=<id>`).
+	The command center's Automations (rule 48): every run, newest first, with who or what triggered it, in ui's `Table` (search, filter and sort, CSV), the live
+	`runs` read (a `sys_run` change re-answers it; nothing polls). A queued or running run has Stop (rule 56); a failed or stopped one has Retry, a new run
+	of its automation with the same input. Run now starts any automation the member may start that needs no input. Opening a row shows the run as `runs.view` redacts it (`?run=<id>`), read once again whenever that run's live row
+	changes.
 -->
 <script lang="ts">
 	import { fork, observe } from '@norbital-ai/ui/effect';
-	import { Array as EffectArray, Effect, Predicate, Schedule, Stream } from 'effect';
+	import { Effect, Stream } from 'effect';
 	import { Button, Combobox, EmptyState, Show, Table, useKinds } from '@norbital-ai/ui';
 	import type { RunView } from '../../engine/runs/index.ts';
 	import type { Act } from '../Acts.svelte';
 	import Acts from '../Acts.svelte';
 	import DetailSheet from '../DetailSheet.svelte';
-	import SystemPage from '../SystemPage.svelte';
-	import automationsBanner from '../assets/banners/automations.jpg';
 	import type { ShellBolt } from '../runtime.ts';
 	import type { ShellApi } from '../api-types.ts';
 
@@ -34,14 +33,37 @@
 
 	const kinds = useKinds();
 	const runs = observe(() =>
-		Stream.fromEffectSchedule(api.runs({ limit: 500 }), Schedule.spaced('3 seconds'))
+		bolt.observe<{ rows: RunView[] }>({ read: { m: 'runs', a: [{ limit: 500, brief: true }] } })
 	);
-	const detail = observe(() =>
-		run === null ? null : Stream.fromEffectSchedule(api.run(run), Schedule.spaced('3 seconds'))
-	);
+	// the open run's detail (attempts, output files) is the shell's one-off read, asked again when its live row changes
+	const detail = observe(() => {
+		if (run === null) return null;
+		const id = run;
+		return bolt
+			.observe<{ rows: RunView[] }>({ read: { m: 'runs', a: [{ id, limit: 1, brief: true }] } })
+			.pipe(
+				Stream.map((answer) => JSON.stringify(answer.rows)),
+				Stream.changes,
+				Stream.mapEffect(() => api.run(id))
+			);
+	});
+	// who or what started a run: a person (and Norbius when it started it for them), else the system and why
+	const triggerOf = (trigger: RunView['trigger']) =>
+		trigger === null
+			? '—'
+			: trigger.kind === 'person'
+				? `${trigger.name ?? trigger.ref}${trigger.agent ? ` · ${t('via Norbius')}` : ''}`
+				: `${t('System')} · ${
+						trigger.cause === 'effect'
+							? `${trigger.model}.${trigger.verb}`
+							: trigger.cause === 'schedule'
+								? (trigger.by?.automation ?? t('schedule'))
+								: trigger.cause
+					}`;
 	const runRow = (r: RunView) => ({
 		id: r.id,
 		automation: r.automation,
+		trigger: triggerOf(r.trigger),
 		cause: r.cause,
 		status: r.status,
 		due_at: r.due_at,
@@ -51,7 +73,7 @@
 		attempt_count: r.attempt_count
 	});
 	type RunRow = ReturnType<typeof runRow>;
-	const rows = $derived($runs?.map(runRow) ?? null);
+	const rows = $derived(runs.current?.rows.map(runRow) ?? null);
 	const one = $derived($detail ?? null);
 	let mutationError = $state<string | null>(null);
 	const error = $derived(mutationError ?? runs.error?.message ?? detail.error?.message ?? null);
@@ -82,15 +104,7 @@
 	];
 	const when = (v: string | null | undefined) =>
 		v ? new Date(v).toLocaleString(bolt.locale) : '—';
-	const warnings = (r: RunView): string[] =>
-		EffectArray.isArray(r.attempts)
-			? r.attempts.flatMap((attempt) => {
-					const values = Predicate.isObject(attempt) ? attempt['warnings'] : undefined;
-					return EffectArray.isArray(values)
-						? values.filter((value): value is string => typeof value === 'string')
-						: [];
-				})
-			: [];
+	const warnings = (r: RunView) => (r.attempts ?? []).flatMap((attempt) => attempt.warnings ?? []);
 </script>
 
 {#snippet status({ row }: { row: RunRow; value: unknown })}
@@ -115,18 +129,15 @@
 	>{/snippet}
 {#snippet actions({ row }: { row: RunRow; value: unknown })}<Acts acts={acts(row)} />{/snippet}
 
-<SystemPage
-	name="settings-automations"
-	title={t('Automations')}
-	icon="lucide:play"
-	banner={automationsBanner}
-	description={t(
-		'Every automation run, newest first. Run one now, stop a queued or running run, or retry a failed one.'
-	)}
-	{error}
->
+<div class="flex flex-col gap-3">
+	{#if error !== null}<p
+			role="alert"
+			class="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive"
+		>
+			{error}
+		</p>{/if}
 	{#if startable.length > 0}
-		<div class="mb-3 flex flex-wrap items-center gap-2" data-run-now>
+		<div class="flex flex-wrap items-center gap-2" data-run-now>
 			<Combobox
 				class="w-72"
 				options={startable.map((a) => ({
@@ -156,6 +167,7 @@
 			columns={[
 				{ field: 'automation', label: t('Automation') },
 				{ field: 'status', label: t('Status'), cell: status },
+				{ field: 'trigger', label: t('Triggered by') },
 				{ field: 'cause', label: t('Cause') },
 				{ field: 'due_at', label: t('Due'), cell: at },
 				{ field: 'started', label: t('Started'), cell: at },
@@ -173,7 +185,7 @@
 			{/snippet}
 		</Table>
 	{/if}
-</SystemPage>
+</div>
 
 {#if run !== null && one !== null}
 	{@const w = warnings(one)}
@@ -183,6 +195,7 @@
 		acts={acts(one)}
 		onClose={() => onRun(null)}
 		fields={[
+			{ label: t('Triggered by'), value: triggerOf(one.trigger) },
 			{ label: t('Cause'), value: one.cause },
 			{ label: t('Status'), value: t(one.status) },
 			{ label: t('Due'), value: when(one.due_at) },

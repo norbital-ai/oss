@@ -1,38 +1,27 @@
 // A read row's `$approval` (the host attaches it to every record an open approval request holds) and its one-line text.
 import type { RowApproval, ViewBolt } from '../client/contract.js';
 import { msg } from '../text/messages.js';
+import { Option, Schema } from 'effect';
 
-const strings = (v: unknown): boolean =>
-	Array.isArray(v) && v.every((s: unknown) => typeof s === 'string');
-const isStep = (v: unknown): boolean =>
-	typeof v === 'object' &&
-	v !== null &&
-	'name' in v &&
-	typeof v.name === 'string' &&
-	'teams' in v &&
-	strings(v.teams) &&
-	'users' in v &&
-	strings(v.users);
-const isApproval = (v: unknown): v is RowApproval =>
-	typeof v === 'object' &&
-	v !== null &&
-	'requestId' in v &&
-	typeof v.requestId === 'string' &&
-	'state' in v &&
-	(v.state === 'Pending' || v.state === 'ChangesRequested') &&
-	'step' in v &&
-	typeof v.step === 'number' &&
-	'steps' in v &&
-	Array.isArray(v.steps) &&
-	v.steps.every(isStep) &&
-	'requestedBy' in v &&
-	typeof v.requestedBy === 'string';
+const RowApprovalSchema: Schema.Codec<RowApproval> = Schema.Struct({
+	requestId: Schema.String,
+	state: Schema.Literals(['Pending', 'ChangesRequested']),
+	step: Schema.Number,
+	steps: Schema.Array(
+		Schema.Struct({
+			name: Schema.String,
+			teams: Schema.Array(Schema.String),
+			users: Schema.Array(Schema.String)
+		})
+	),
+	requestedBy: Schema.String
+});
+// `$approval` is a host-attached system member no model declares: it arrives untyped on the row and decodes here once.
+const decodeApproval = Schema.decodeUnknownOption(Schema.Struct({ $approval: RowApprovalSchema }));
 
 /** The row's open approval, or null. */
 export const approvalOf = (row: unknown): RowApproval | null =>
-	typeof row === 'object' && row !== null && '$approval' in row && isApproval(row.$approval)
-		? row.$approval
-		: null;
+	Option.getOrNull(Option.map(decodeApproval(row), (held) => held.$approval));
 
 /** Who the request waits on: the current step's name, or the requester while changes are requested. */
 const waiting = (a: RowApproval): string =>

@@ -50,8 +50,9 @@
 	let { title, unit, lines, utilization = null }: UsageChartProps = $props();
 	const W = 600,
 		H = 160;
+	// the use is the brand line; its bounds take the chart palette after it
 	const COLORS = [
-		'var(--chart-1)',
+		'var(--brand)',
 		'var(--chart-2)',
 		'var(--chart-3)',
 		'var(--chart-4)',

@@ -10,9 +10,10 @@ import type { Authority, Outcome } from '../src/engine/contracts.ts';
 type Engine = Effect.Success<ReturnType<typeof acquireEngine>>;
 import { Authorities } from '../src/engine/identity/actor.ts';
 import { PgliteDb } from '../src/node/db/pglite.ts';
-import { TestDb } from '../src/test/database.ts';
+import { TestDb } from '../../bolt-cli/src/test/database.ts';
 import { NOW, TODAY } from './write-fixture.ts';
-import { program } from '../src/test/guest.ts';
+import { actorRef } from '../src/engine/write/commit.ts';
+import { program } from '../../bolt-cli/src/test/guest.ts';
 
 const salesId = '0199a000-0000-7000-8000-000000000001',
 	financeId = '0199a000-0000-7000-8000-000000000002';
@@ -37,21 +38,16 @@ const manifest: EngineManifest = {
 		orders: {
 			read: { orders: { fields: 'all' } },
 			update: { columns: { orders: ['note'] } },
-			notify: true
+			notify: true,
+			effect: { updated: true }
 		}
 	},
 	teams: { Sales: ['seller'], Finance: ['reviewer'] },
 	policies: {
-		seller: { description: 'Seller', grants: { orders: grant }, automations: ['followup'] },
+		seller: { description: 'Seller', grants: { orders: grant } },
 		reviewer: { description: 'Reviewer', grants: { orders: { read: true } } }
 	},
-	automations: {
-		followup: {
-			description: 'Followup',
-			on: { updated: 'orders', fields: ['note'], where: { note: { isNull: false } } },
-			runAs: ['seller']
-		}
-	},
+	automations: {},
 	integrations: {},
 	connections: {},
 	envoys: {},
@@ -65,8 +61,7 @@ const guest = program(`export default {
   if(event.kind!=='write')return [];
   if(event.action!=='update'||event.records.length!==2)throw Error('Expected the complete committed batch');
   return [{to:[{user:'${salesId}'}],title:'Bundle committed'}];
- } } } },
- automation: { followup: { body: function*(){return null;} } },
+ }, effect: { updated: function*(){return null;} } } } },
  policy: { seller: { grants: { orders: { update: {
   check: function*(_changes,ctx){ return ctx.approve((flow)=>flow.step('Finance',{teams:['Finance']})); }
  } } } } }
@@ -153,9 +148,9 @@ it.effect(
 				{ note: 'first' },
 				{ note: 'second' }
 			]);
-			expect(yield* rows("SELECT automation FROM sys_run WHERE automation='followup'")).toEqual([
-				{ automation: 'followup' }
-			]);
+			expect(
+				yield* rows("SELECT actor FROM sys_run WHERE automation='orders.effect.updated'")
+			).toEqual([{ actor: actorRef(sales.actor) }]);
 			expect(yield* rows('SELECT title FROM sys_notification')).toEqual([]);
 			expect(yield* notices()).toEqual([{ title: 'Bundle committed' }]);
 			expect(
@@ -175,7 +170,11 @@ it.effect(
 				issuedAt: NOW,
 				from: 'Client'
 			});
-			expect(again.outcome).toMatchObject({ kind: 'refused', code: 'locked', data: { requestId: id } });
+			expect(again.outcome).toMatchObject({
+				kind: 'refused',
+				code: 'locked',
+				data: { requestId: id }
+			});
 			expect((yield* submit()).outcome).toEqual(result.outcome);
 			expect(yield* notices()).toHaveLength(1);
 			expect(yield* approve(id)).toMatchObject({ kind: 'decided', status: 'Approved' });
@@ -185,13 +184,13 @@ it.effect(
 			]);
 			expect(yield* approve(id)).toMatchObject({ kind: 'refused', code: 'invalidInput' });
 			expect(
-				yield* rows("SELECT automation FROM sys_run WHERE automation='followup'")
+				yield* rows("SELECT automation FROM sys_run WHERE automation='orders.effect.updated'")
 			).toHaveLength(1);
 			expect(yield* notices()).toHaveLength(1);
 		}).pipe(Effect.provide(fixture))
 );
 it.effect(
-	'rejecting the batch restores both writes; its committed notification and queued followup stay',
+	'rejecting the batch restores both writes, the restore running the effect as the approver; its committed notification and first effect stay',
 	() =>
 		Effect.gen(function* () {
 			const id = pending((yield* submit()).outcome);
@@ -209,9 +208,11 @@ it.effect(
 				{ note: null },
 				{ note: null }
 			]);
-			expect(yield* rows("SELECT automation FROM sys_run WHERE automation='followup'")).toEqual([
-				{ automation: 'followup' }
-			]);
+			expect(
+				(yield* rows("SELECT actor FROM sys_run WHERE automation='orders.effect.updated'"))
+					.map((row) => row['actor'])
+					.sort()
+			).toEqual([actorRef(sales.actor), actorRef(finance.actor)].sort());
 			expect(yield* notices()).toEqual([{ title: 'Bundle committed' }]);
 			expect(
 				yield* rows("SELECT count(*)::int n FROM bolt_history WHERE cause = 'restored'")

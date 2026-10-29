@@ -10,9 +10,9 @@
 //   { $back: id }               a mirror handed back: the other side's own function, object or signal again
 //   { $error: fields }          an Error's name, message and own fields (an encoded `HostApiFailure` is already data)
 //   { $obj: fields }            a data object that has one of these keys itself
-// No Node and no isolated-vm here: in a cell this runs over the cell's globals.
+// No Node here: in a cell this runs over the cell's globals.
 import { Schema } from 'effect';
-import { BODY_BYTES } from './cell-globals.ts';
+import { BODY_BYTES, isObject } from './cell-globals.ts';
 
 /** The kernel refuses a cell whose number differs from its own. */
 export const CELL_ABI_VERSION = 1;
@@ -114,7 +114,6 @@ export type Membrane = {
 	readonly close: (failure: unknown) => void;
 };
 
-const isObject = (value: unknown): value is object => typeof value === 'object' && value !== null;
 const isThenable = (value: unknown): value is PromiseLike<unknown> =>
 	isObject(value) && typeof Reflect.get(value, 'then') === 'function';
 const utf8 = new TextEncoder();

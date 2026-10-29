@@ -1,5 +1,6 @@
 // What server code may cause beyond its own write (§3.3.9 effects, §5.8): runs, notices, and the automation-only I/O
 // facilities. Each answers an Effect (D8); a facility fails with `FacilityFailure` or `Unavailable` (`../errors.ts`).
+import type { Actor } from '../access/actor.ts';
 import type { StartableName } from '../access/policy.ts';
 import type { Eff } from '../ctx.ts';
 import type { OutputOf } from '../body.ts';
@@ -47,24 +48,55 @@ import type {
 export type RunHandle<A = StartableName> = { readonly id: Id<'sys_run'>; readonly automation: A };
 /** Where a run stands. */
 export type RunStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'stopped' | 'skipped';
-/** Why a run started; `handoff`: an act that outlived the person-wait, held by its run (compute model §3). */
-export type RunCause =
-	| 'cron'
-	| 'webhook'
-	| 'created'
-	| 'updated'
-	| 'deleted'
-	| 'schedule'
-	| 'start'
-	| 'retry'
-	| 'handoff';
 /**
- * A run as `$bolt.runs` and the run ledger show it: cause, status, due and start time, progress, result and error.
+ * Why a run started; `effect`: a model's `effect` after a committed write; `handoff`: an act that outlived the
+ * person-wait, held by its run (compute model §3).
+ */
+export type RunCause = 'cron' | 'webhook' | 'effect' | 'schedule' | 'start' | 'retry' | 'handoff';
+/**
+ * Who or what triggered an automation run (`sys_run.trigger`, `ctx.run.trigger`). It never grants authority: every run
+ * executes as the reserved system identity holding its automation's `policies`. A `person` started it by hand (Run now,
+ * the `start` callable, an envoy), `agent` set when Norbius started it in that conversation for them; else the `system`
+ * did: a `cron` or `webhook`, a model `effect` after `verb` on `records`, or a `schedule` from another run's code (`by`,
+ * absent on a run queued before triggers were recorded).
+ */
+export type RunTrigger =
+	| {
+			readonly kind: 'person';
+			readonly actor: Exclude<Actor, { kind: 'system' }>;
+			readonly agent?: { readonly conversation: string };
+	  }
+	| { readonly kind: 'system'; readonly cause: 'cron' | 'webhook' }
+	| {
+			readonly kind: 'system';
+			readonly cause: 'effect';
+			readonly model: ModelName;
+			readonly verb: 'created' | 'updated' | 'deleted';
+			readonly records: readonly string[];
+	  }
+	| {
+			readonly kind: 'system';
+			readonly cause: 'schedule';
+			readonly by?: { readonly automation: string; readonly run: Id<'sys_run'> };
+	  };
+/** A run's trigger as the run ledger shows it: a person by reference and display name. */
+export type RunTriggerView =
+	| Exclude<RunTrigger, { kind: 'person' }>
+	| {
+			readonly kind: 'person';
+			readonly ref: string;
+			readonly name: string | null;
+			readonly agent?: true;
+	  };
+/**
+ * A run as `$bolt.runs` and the run ledger show it: cause and trigger, status, due and start time, progress, result
+ * and error. `trigger` is null on an effect's or platform run.
  */
 export type RunRow<O = unknown> = {
 	readonly id: Id<'sys_run'>;
 	readonly automation: StartableName;
 	readonly cause: RunCause;
+	readonly trigger: RunTriggerView | null;
 	readonly status: RunStatus;
 	readonly due_at: Instant;
 	readonly started: Instant | null;
@@ -97,7 +129,7 @@ type SyncModel<A> = A extends `${infer M}.sync.${string}` ? M : never;
 type SyncContext<X> = X extends { context: infer F } ? InputOf<F> : {};
 /** File syncs import a stored upload or export the view to a sheet or declared document target. */
 export type FileSyncStartInput<A> = (
-	| { readonly mode: 'import'; readonly file: Id<'sys_file'>; readonly accept?: boolean }
+	| { readonly mode: 'import'; readonly file: Id<'sys_file'> }
 	| {
 			readonly mode: 'template' | 'export';
 			readonly format?: 'xlsx' | 'csv' | 'tsv' | 'json';
@@ -259,8 +291,7 @@ type FileFieldOf<C> = {
 	[P in keyof Columns<C> & string]: Columns<C>[P] extends { kind: 'file' } ? P : never;
 }[keyof Columns<C> & string];
 /** Where a stored file belongs: a model's file field, or an automation's run (collected with it). */
-type FileOwner =
-	{ [C in ModelName]: `${C}.${FileFieldOf<C>}` }[ModelName] | StartableName;
+type FileOwner = { [C in ModelName]: `${C}.${FileFieldOf<C>}` }[ModelName] | StartableName;
 /** One worksheet: its name and rows of cell values. */
 type Sheet = {
 	readonly name: string;
@@ -354,8 +385,8 @@ type InferRequest<O, Tools> = {
 } & (Tools extends true
 	? {
 			/**
-			 * Tools the model may call between `edit`s: host tools the `runAs` policies name, and `'read'`, workspace
-			 * records read as those policies (grants, masks and row scopes as for `ctx.query`; a bounded page per call; batch up to 8).
+			 * Tools the model may call between `edit`s: host tools the automation's policies name, and `'read'`, workspace
+			 * records read as those policies (granted outputs and row scopes as for `ctx.query`; a bounded page per call; batch up to 8).
 			 * @example Three-way matching: check an invoice against its open PO and goods receipts before answering.
 			 * ```ts
 			 * const match = yield* ctx.ai.sys_2.infer({
@@ -391,7 +422,7 @@ interface Infer<Tools> {
 		request: InferRequest<O, Tools>
 	): Eff<ValueOf<O>, Failure>;
 }
-/** `Tools`: host tools exist only when `runAs` is a policy list (rule 58). */
+/** `Tools`: host tools exist only in an automation, which holds its policies (rule 58); an effect has none. */
 /**
  * A `sys_1` state (P37 (3)): structured text, never a file. A `FileRef` anywhere in it is a tsc error here and `invalid`
  * at run time; describe a file in text (name, mime, size, caption) instead.

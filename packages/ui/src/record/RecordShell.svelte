@@ -1,7 +1,7 @@
 <script lang="ts" module>
 	import type { Snippet } from 'svelte';
 	import type { ModelKey, InsertOf, RecordOf, Row } from '../model/types.js';
-	import type { Outcome } from '../client/contract.js';
+	import type { Outcome, QueryAnswer } from '../client/contract.js';
 	import type { FormProps } from '../form/form.svelte';
 	import type { RunsForProps } from '../runs/RunsFor.svelte';
 	import type { RecordSection } from '../form/section.svelte';
@@ -46,6 +46,11 @@
 		actions?: Snippet;
 		/** Beside the label in the chrome (color-matching's timeline trigger). */
 		trailing?: Snippet;
+		/**
+		 * A short line at the start of the footer, opposite Edit / Save (a status, what saving does). While a draft has
+		 * unsaved changes the footer says so instead.
+		 */
+		footer?: string | Snippet;
 		tabs?: readonly RecordTab[];
 		/** Related records included in the native History popover, scoped by read queries. */
 		history?: RecordHistoryConfig;
@@ -128,6 +133,7 @@
 		hint,
 		actions,
 		trailing,
+		footer,
 		tabs = [],
 		history: historyOptions,
 		runs = [],
@@ -201,7 +207,7 @@
 	// read in this component, the query is live: it follows the record's revisions until the shell unmounts
 	const record = $derived(
 		mode !== 'create' && id !== undefined
-			? mapped(bolt.query(byId(of, id)), (answer) => firstOf<StoredRecord>(answer, of))
+			? mapped(bolt.query<QueryAnswer<StoredRecord>>(byId(of, id)), (answer) => firstOf(answer, of))
 			: null
 	);
 	const loaded = $derived(queryState(record));
@@ -230,8 +236,8 @@
 		// ponytail: two revisions in one millisecond fold to the later; an asOf revision would pin it exactly
 		if (at === null) return back();
 		fork(
-			bolt.query({ [of]: { where: { id: { eq: id } }, asOf: at } }).pipe(
-				Effect.map((answer) => firstOf<StoredRecord>(answer, of)),
+			bolt.query<QueryAnswer<StoredRecord>>({ [of]: { where: { id: { eq: id } }, asOf: at } }).pipe(
+				Effect.map((answer) => firstOf(answer, of)),
 				Effect.tap((value) =>
 					Effect.sync(() => {
 						if (n !== asked) return;
@@ -674,31 +680,50 @@
 				</div>
 				{#if subline}<p class="text-muted-foreground truncate text-sm">{subline}</p>{/if}
 			</div>
-			{#if controller?.mode === 'view' && shownPast === null && exposure?.update !== undefined && modelLocked}
+			{#if actions}{@render actions()}{/if}
+		</div>
+	</div>
+{/snippet}
+
+{#snippet foot()}
+	<!-- the record's footer: its note, then Edit (or the lock, or Cancel + Save while editing) flush bottom-right -->
+	{@const current = shownPast === null && exposure?.update !== undefined && controller !== null}
+	{@const lockedHere = current && controller?.mode === 'view' && (modelLocked || underApproval)}
+	{@const canEdit = current && controller?.mode === 'view' && !lockedHere && controller.canSubmit}
+	{@const inEdit = current && controller?.mode === 'edit'}
+	{#if footer !== undefined || lockedHere || canEdit || inEdit}
+		<footer
+			class="flex shrink-0 flex-wrap items-center justify-end gap-2 border-t pt-3"
+			data-record-foot
+		>
+			<span class="text-meta mr-auto min-w-0 truncate" role="status"
+				>{#if inEdit && controller?.dirty && !controller.pending}{formText(
+						'unsaved'
+					)}{:else if typeof footer === 'string'}{footer}{:else}{@render footer?.()}{/if}</span
+			>
+			{#if lockedHere}
 				<Tooltip text={lockReason}>
 					{#snippet trigger({ props })}
-						<Button {...props} size="sm" variant="outline" disabled aria-label={lockReason}>
+						<Button
+							{...props}
+							size="sm"
+							variant="outline"
+							disabled
+							aria-label={lockReason}
+							data-record-lock
+						>
 							<Icon icon="lucide:lock" class="size-3.5" />
 						</Button>
 					{/snippet}
 				</Tooltip>
-			{:else if controller?.mode === 'view' && shownPast === null && exposure?.update !== undefined && controller.canSubmit}
+			{:else if canEdit}
 				<Button
 					size="sm"
 					variant="outline"
 					class="min-w-[4.25rem] justify-center"
 					onclick={() => controller?.edit()}>{msg(bolt, 'record.edit', 'Edit')}</Button
 				>
-			{:else if controller?.mode === 'view' && shownPast === null && exposure?.update !== undefined && underApproval}
-				<Button
-					size="sm"
-					variant="outline"
-					class="min-w-[4.25rem] justify-center"
-					disabled
-					title={lockReason}>{msg(bolt, 'record.edit', 'Edit')}</Button
-				>
-			{/if}
-			{#if controller?.mode === 'edit' && shownPast === null}
+			{:else if inEdit && controller !== null}
 				{@const saving = controller.pending
 					? formText('saving')
 					: controller.resubmitting
@@ -707,16 +732,13 @@
 							? msg(bolt, 'record.requestApproval', 'Request approval')
 							: formText('save')}
 				<div
-					class="inline-flex min-w-[4.25rem] shrink-0 items-center justify-end gap-1"
+					class="inline-flex shrink-0 items-center gap-2"
 					role="group"
 					aria-label={msg(bolt, 'record.editing', 'Editing')}
 				>
 					<Button
-						size="icon-sm"
+						size="sm"
 						variant="ghost"
-						class="text-muted-foreground hover:text-foreground"
-						hint={msg(bolt, 'record.cancel', 'Cancel')}
-						aria-label={msg(bolt, 'record.cancel', 'Cancel')}
 						disabled={controller.pending}
 						onclick={() => {
 							if (!controller?.dirty) return void controller?.view();
@@ -736,34 +758,36 @@
 							);
 						}}
 					>
-						<Icon icon="lucide:x" class="size-4" />
-						<span class="sr-only">{msg(bolt, 'record.cancel', 'Cancel')}</span>
+						<Icon icon="lucide:undo-2" class="size-3.5" />{msg(bolt, 'record.cancel', 'Cancel')}
 					</Button>
 					<Button
-						size="icon-sm"
-						class="min-w-8"
+						size="sm"
 						disabled={!controller.canSave || !controller.dirty}
 						onclick={() => (controller === null ? undefined : fork(controller.submit()))}
 						data-record-save
-						aria-label={saving}
-						hint={saving}
 					>
-						<Icon
-							icon={controller.pending ? 'lucide:loader-circle' : 'lucide:check'}
-							class={['size-4', controller.pending && 'animate-spin']}
-						/>
-						<span class="sr-only">{saving}</span>
+						{#if controller.pending}<Icon
+								icon="lucide:loader-circle"
+								class="size-3.5 animate-spin"
+							/>{/if}{saving}
 					</Button>
 				</div>
 			{/if}
-			{#if actions}{@render actions()}{/if}
-		</div>
-	</div>
+		</footer>
+	{/if}
 {/snippet}
 
 {#snippet generated()}
+	<!-- the form fills the body; a child grid follows below it, where the body scrolls -->
 	{#if mode === 'create'}
-		<Form {of} mode="create" {values} {...fields.length > 0 ? { fields } : {}} {sections} />
+		<Form
+			{of}
+			mode="create"
+			{values}
+			{...fields.length > 0 ? { fields } : {}}
+			{sections}
+			class="shrink-0"
+		/>
 	{:else if editing && id !== undefined && shownPast === null}
 		<Form
 			{of}
@@ -772,9 +796,10 @@
 			record={row}
 			{...fields.length > 0 ? { fields } : {}}
 			{sections}
+			class="shrink-0"
 		/>
 	{:else}
-		<div data-view="record-generated">
+		<div class="contents" data-view="record-generated">
 			{#key shownPast}<Form
 					{of}
 					mode="update"
@@ -783,6 +808,7 @@
 					{...fields.length > 0 ? { fields } : {}}
 					{sections}
 					readonly
+					class="shrink-0"
 				/>{/key}
 		</div>
 	{/if}
@@ -792,8 +818,14 @@
 {/snippet}
 
 {#snippet body()}
-	{#if children && view}{#key shownPast}{@render children(view)}{/key}
-	{:else}{@render generated()}{/if}
+	<!-- the body fits the record: a section or table inside scrolls itself; past their floors, the body scrolls -->
+	<div
+		class="-mx-1 flex h-full min-h-0 min-w-0 flex-1 flex-col overflow-x-hidden overflow-y-auto px-1 [overflow-wrap:anywhere]"
+		data-record-body
+	>
+		{#if children && view}{#key shownPast}{@render children(view)}{/key}
+		{:else}{@render generated()}{/if}
+	</div>
 {/snippet}
 
 {#snippet approval()}
@@ -1064,6 +1096,7 @@
 					value={lastTab.get(`${of}/${id}`)}
 					onValueChange={(v) => lastTab.set(`${of}/${id}`, v)}
 				/>{/if}
+			{#if mode !== 'create' && !nested}{@render foot()}{/if}
 		</article>
 	{/if}
 {/snippet}

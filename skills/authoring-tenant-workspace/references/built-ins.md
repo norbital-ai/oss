@@ -3,7 +3,7 @@
 Read this before writing any page. Everything below comes with the platform; a template that rebuilds
 one of them ships a second, drifting spelling of the same control. When a page seems to need
 something on this list, configure the built-in (a model declaration, a toolbar key, a column
-option) instead of writing UI. Exact props: `bolt docs` (`ui`, `ui/layout`) or the installed
+option) instead of writing UI. Exact props: the `@norbital-ai/bolt/docs` corpus (`ui`, `ui/layout`) or the installed
 declarations.
 
 ## Every page has the same shape
@@ -28,18 +28,18 @@ declarations.
 
 ## Table and the toolbar
 
-| Built in                                                                                                           | How you get it                                                                                                                     |
-| ------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------- |
-| Search box                                                                                                         | Declare `search.text` on the model: own text, enum and patterned `seq` fields, plus links (see below). Without it, the label's text fields are matched. |
-| Filter and sort popover                                                                                            | On by default. The author's fixed scope is `where`; a starting filter the viewer can clear is `initialFilter`.                     |
-| Column menu (pin, hide, move, width, saved per viewer)                                                             | Always there.                                                                                                                      |
-| Export CSV                                                                                                         | `toolbar.export`. A `with: 'file'` sync replaces it.                                                                               |
-| ⚡ menu: Import, Download template, Export (file syncs), Sync now, Update selected, Delete selected                 | The model's syncs and grants.                                                                                                      |
-| Page operations                                                                                                    | `toolbar.actions`: `{ icon, name, description?, run, requiresSelection?, disabled? }`. The menu shows the spinner, outcome toast and run status. |
-| New button                                                                                                         | A `create` grant. It opens the record sheet with the page's context.                                                               |
-| Row open                                                                                                           | Opens the record sheet (`?record=<model>/<id>`) unless you pass `onOpen`.                                                          |
-| Selection, "select all matching", cursor paging, row-range footer, empty states, approval accents                  | Always there.                                                                                                                      |
-| Cell rendering                                                                                                     | By field kind. A link column shows the linked row's label. Use a `cell` snippet only for a value computed for display.             |
+| Built in                                                                                            | How you get it                                                                                                                                          |
+| --------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Search box                                                                                          | Declare `search.text` on the model: own text, enum and patterned `seq` fields, plus links (see below). Without it, the label's text fields are matched. |
+| Filter and sort popover                                                                             | On by default. The author's fixed scope is `where`; a starting filter the viewer can clear is `initialFilter`.                                          |
+| Column menu (pin, hide, move, width, saved per viewer)                                              | Always there.                                                                                                                                           |
+| Export CSV                                                                                          | `toolbar.export`. A `with: 'file'` sync replaces it.                                                                                                    |
+| ⚡ menu: Import, Download template, Export (file syncs), Sync now, Update selected, Delete selected | The model's syncs and grants.                                                                                                                           |
+| Page operations                                                                                     | `toolbar.actions`: `{ icon, name, description?, run, requiresSelection?, disabled? }`. The menu shows the spinner, outcome toast and run status.        |
+| New button                                                                                          | A `create` grant. It opens the record sheet with the page's context.                                                                                    |
+| Row open                                                                                            | Opens the record sheet (`?record=<model>/<id>`) unless you pass `onOpen`.                                                                               |
+| Selection, "select all matching", cursor paging, row-range footer, empty states, approval accents   | Always there.                                                                                                                                           |
+| Cell rendering                                                                                      | By field kind. A link column shows the linked row's label. Use a `cell` snippet only for a value computed for display.                                  |
 
 `toolbar.controls` holds a view-local presentation control, such as a grouping toggle. Scope is never one of them.
 

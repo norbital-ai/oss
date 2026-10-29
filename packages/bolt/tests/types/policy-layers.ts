@@ -2,10 +2,10 @@
 // the model's own declaration. Each `@ts-expect-error` line is a planted mistake from the plan's table; a clean tsc proves
 // every valid literal compiles and every mistake is refused at its literal.
 import { policy } from '../../src/index.ts';
-import type { ColumnValue, LayerValue, Masked } from '../../src/decl/names.ts';
 import type {
 	CreateTree,
 	LayerField,
+	OutputName,
 	PathModel,
 	ReadPath,
 	StoredTree,
@@ -24,6 +24,10 @@ is<Eq<WritePath<'orders', 'create'>, 'orders' | 'orders.lines'>>();
 is<Eq<PathModel<'orders', 'orders.lines'>, 'order_lines'>>();
 is<Eq<PathModel<'orders', 'orders'>, 'orders'>>();
 is<Eq<Exclude<LayerField<'orders', 'orders.customer'>, System>, 'name' | 'tier'>>();
+// a named output's paths and fields are its own declaration
+is<Eq<OutputName<'orders'>, 'default' | 'logistics'>>();
+is<Eq<ReadPath<'orders', 'logistics'>, 'orders' | 'orders.lines'>>();
+is<Eq<Exclude<LayerField<'orders', 'orders.lines', 'logistics'>, System>, 'item' | 'qty'>>();
 // ── the trees a check judges ──
 is<Eq<keyof CreateTree<'orders'>, 'customer' | 'note' | 'due' | 'lines'>>();
 is<Eq<keyof NonNullable<CreateTree<'orders'>['lines']>[number], 'item' | 'qty' | 'price'>>();
@@ -36,10 +40,11 @@ export const layered = policy({
 	grants: {
 		orders: {
 			read: {
-				orders: { where: { owner: { eq: { var: 'requestor.id' } } }, fields: ['number', 'status', 'customer'] },
-				'orders.customer': { fields: ['name'] },
+				orders: { where: { owner: { eq: { var: 'requestor.id' } } } },
+				'orders.customer': { where: { tier: { eq: 'gold' } } },
 				'orders.lines': { where: { item: { ne: '' } } }
 			},
+			outputs: { logistics: { orders: { where: { status: { ne: 'draft' } } } } },
 			history: true,
 			create: {
 				columns: { orders: ['customer', 'note'], 'orders.lines': ['item', 'qty'] },
@@ -82,8 +87,8 @@ policy({
 });
 policy({
 	description: 'x',
-	// @ts-expect-error a field from another layer (`note` is the root's)
-	grants: { orders: { read: { 'orders.customer': { fields: ['note'] } } } }
+	// @ts-expect-error a layer filter on a field of another layer (`note` is the root's)
+	grants: { orders: { read: { 'orders.customer': { where: { note: { isNull: true } } } } } }
 });
 policy({
 	description: 'x',
@@ -146,10 +151,6 @@ policy({
 	grants: { orders: { queries: ['open_total'] }, order_lines: { via: 'order' } }
 });
 
-// ── masking per path: a grant that does not name a declared layer reads it in full, so auditor's narrow
-// `orders.lines` masks nothing while sales_rep reads that layer whole; both narrow `orders.customer` to `name` ──
-is<Eq<LayerValue<'orders', 'orders.lines', 'qty'>, ColumnValue<'order_lines', 'qty'>>>();
-is<Eq<Masked extends LayerValue<'orders', 'orders.customer', 'tier'> ? 1 : 0, 1>>();
 // ── `create.filled` naming another layer leaves this layer's required columns required ──
 type Line = NonNullable<CreateTree<'orders'>['lines']>[number];
 is<Eq<{} extends Pick<Line, 'item'> ? 1 : 0, 0>>();

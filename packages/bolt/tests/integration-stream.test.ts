@@ -58,7 +58,7 @@ it.live(
 			yield* Effect.promise(() => vi.waitFor(() => expect(opened).toHaveLength(1)));
 			const source = opened[0];
 			if (source === undefined) throw new Error('Missing shared integration socket');
-			expect(source.url).toBe('/tenant/__bolt/integrations/?stream=1');
+			expect(source.url).toBe('/tenant/__bolt/integrations?stream=1');
 			for (const instance of ['mail', 'phone', 'calendar']) source.send(instance);
 			expect((yield* Queue.take(received)).instance).toBe('mail');
 			expect((yield* Queue.take(received)).instance).toBe('phone');

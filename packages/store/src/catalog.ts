@@ -84,12 +84,19 @@ export type ExposureInfo = {
 	fields: 'all' | ReadonlySet<string>;
 	relations: 'all' | ReadonlySet<string>;
 };
+/** One read output of a root: its root level and its layers by full path. */
+export type OutputInfo = {
+	readonly root: ExposureInfo;
+	readonly layers: ReadonlyMap<string, ExposureInfo>;
+};
 export type Catalog = {
 	models: ReadonlyMap<string, ModelInfo>;
-	/** The read roots by model name. */
+	/** The read roots by model name, as their `default` output declares them. */
 	exposures: ReadonlyMap<string, ExposureInfo>;
-	/** Every declared layer below a root, by its full path. */
+	/** Every declared layer below a root, by its full path, in the root's `default` output. */
 	layers: ReadonlyMap<string, ExposureInfo>;
+	/** Each root's named outputs (never `default`). */
+	outputs: ReadonlyMap<string, ReadonlyMap<string, OutputInfo>>;
 };
 
 export const SEARCH_COLUMN = 'bolt_search';
@@ -168,9 +175,14 @@ export type CatalogTable = {
 /** What the catalog reads of a schema: its tables (each ref field a relation). */
 export type CatalogSchema = { readonly tables: { readonly [table: string]: CatalogTable } };
 /** What the catalog reads of a model: its read layers by path (the root's key is its name). */
+type LayerFields = { readonly [path: string]: { readonly fields: 'all' | readonly string[] } };
+/** A model's read outputs: `read` is its `default` output, `outputs` its named ones, each a layer map. */
 export type CatalogExposure = {
-	readonly read: { readonly [path: string]: { readonly fields: 'all' | readonly string[] } };
+	readonly read: LayerFields;
+	readonly outputs?: { readonly [output: string]: LayerFields };
 };
+/** The output a read names when it names none. */
+export const DEFAULT_OUTPUT = 'default';
 
 const PG: { readonly [kind: string]: string } = {
 	text: 'text',
@@ -349,45 +361,98 @@ export function catalogOf(
 		})
 	);
 	const exposed = new Map<string, ExposureInfo>(),
-		layers = new Map<string, ExposureInfo>();
+		layers = new Map<string, ExposureInfo>(),
+		outputs = new Map<string, Map<string, OutputInfo>>();
 	if (exposures === undefined) {
 		for (const [name, model] of byName)
 			exposed.set(name, { name, path: name, model, fields: 'all', relations: 'all' });
-		return { models: byName, exposures: exposed, layers };
+		return { models: byName, exposures: exposed, layers, outputs };
 	}
 	for (const [root, spec] of Object.entries(exposures)) {
 		if (!byName.has(root)) continue;
-		const paths = Object.keys(spec.read);
-		// shortest first: a layer's model is its parent's relation target
-		for (const path of paths.sort((a, b) => a.split('.').length - b.split('.').length)) {
-			const at = path.lastIndexOf('.');
-			const above = path.slice(0, at),
-				parent = at < 0 ? undefined : (layers.get(above) ?? exposed.get(above));
-			const rel = path.slice(at + 1);
-			const name =
-				at < 0
-					? path
-					: parent?.model.one.get(rel)?.targets.length === 1
-						? parent.model.one.get(rel)?.targets[0]
-						: parent?.model.many.get(rel)?.child;
-			const model = name === undefined ? undefined : byName.get(name);
-			if (model === undefined || name === undefined || (at < 0 && path !== root)) continue;
-			const f = spec.read[path]!.fields;
-			const info: ExposureInfo = {
-				name,
-				path,
-				model,
-				fields: f === 'all' ? 'all' : new Set(f),
-				relations: new Set(
-					paths
-						.filter((p) => p.includes('.') && p.slice(0, p.lastIndexOf('.')) === path)
-						.map((p) => p.slice(p.lastIndexOf('.') + 1))
-				)
-			};
-			(at < 0 ? exposed : layers).set(path, info);
+		const declared = levels(byName, root, spec.read);
+		if (declared === undefined) continue;
+		exposed.set(root, declared.root);
+		for (const [path, info] of declared.layers) layers.set(path, info);
+		for (const [name, read] of Object.entries(spec.outputs ?? {})) {
+			const output = levels(byName, root, read);
+			if (output !== undefined) outputs.set(root, (outputs.get(root) ?? new Map()).set(name, output));
 		}
 	}
-	return { models: byName, exposures: exposed, layers };
+	return { models: byName, exposures: exposed, layers, outputs };
+}
+/** One layer map's levels: its root and each layer whose parent resolves, shortest path first. */
+function levels(
+	byName: ReadonlyMap<string, ModelInfo>,
+	root: string,
+	read: LayerFields
+): OutputInfo | undefined {
+	const out = new Map<string, ExposureInfo>();
+	const paths = Object.keys(read);
+	// shortest first: a layer's model is its parent's relation target
+	for (const path of paths.sort((a, b) => a.split('.').length - b.split('.').length)) {
+		const at = path.lastIndexOf('.');
+		const parent = at < 0 ? undefined : out.get(path.slice(0, at));
+		const rel = path.slice(at + 1);
+		const name =
+			at < 0
+				? path
+				: parent?.model.one.get(rel)?.targets.length === 1
+					? parent.model.one.get(rel)?.targets[0]
+					: parent?.model.many.get(rel)?.child;
+		const model = name === undefined ? undefined : byName.get(name);
+		if (model === undefined || name === undefined || (at < 0 && path !== root)) continue;
+		const f = read[path]!.fields;
+		out.set(path, {
+			name,
+			path,
+			model,
+			fields: f === 'all' ? 'all' : new Set(f),
+			relations: new Set(
+				paths
+					.filter((p) => p.includes('.') && p.slice(0, p.lastIndexOf('.')) === path)
+					.map((p) => p.slice(p.lastIndexOf('.') + 1))
+			)
+		});
+	}
+	const top = out.get(root);
+	if (top === undefined) return undefined;
+	out.delete(root);
+	return { root: top, layers: out };
+}
+const viewed = new WeakMap<Catalog, Map<string, Catalog>>();
+/**
+ * The catalog a read of `root`'s `output` compiles against: that output's root level and layers in place of the
+ * `default` ones (every other root unchanged); an output `root` does not declare is `invalid`.
+ */
+export function catalogFor(
+	cat: Catalog,
+	root: string,
+	output: string | undefined
+): Effect.Effect<Catalog, StoreError> {
+	if (output === undefined || output === DEFAULT_OUTPUT) return Effect.succeed(cat);
+	const key = `${root}\u0000${output}`;
+	const seen = viewed.get(cat)?.get(key);
+	if (seen !== undefined) return Effect.succeed(seen);
+	const info = cat.outputs.get(root)?.get(output);
+	if (info === undefined)
+		return Effect.fail(
+			StoreError.of(
+				'invalid',
+				'decode',
+				`'${root}' declares no read output '${output}'; it declares: ${[DEFAULT_OUTPUT, ...(cat.outputs.get(root)?.keys() ?? [])].join(', ')}`
+			)
+		);
+	const layers = new Map([...cat.layers].filter(([path]) => !path.startsWith(`${root}.`)));
+	for (const [path, level] of info.layers) layers.set(path, level);
+	const view: Catalog = {
+		...cat,
+		exposures: new Map(cat.exposures).set(root, info.root),
+		layers
+	};
+	if (!viewed.has(cat)) viewed.set(cat, new Map());
+	viewed.get(cat)!.set(key, view);
+	return Effect.succeed(view);
 }
 
 /** Kinds that compare with each other through a `{ field }` operand (`Family` in `decl/where.ts`). */

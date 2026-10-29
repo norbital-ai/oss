@@ -1,7 +1,6 @@
 // The integration workspace: customers ← orders (a seq, a state with a per-state `edit`, a roll-up) → owned lines; a
 // callbacks on orders that read the customer and refuse a blocked one; two policies, `rep` (own rows; its write `check`s
-// keep orders in the north) and `auditor` (every row, `note` narrowed away, so a caller holding both sees `note` masked
-// on others' rows). Lines are a layer of orders (read and written through it) and their own access point.
+// keep orders in the north) and `auditor` (every row through the narrower `audit` output, which omits `note`). Lines are a layer of orders (read and written through it) and their own access point.
 import type { EngineManifest } from '../src/engine/manifest.ts';
 
 const lineCols = ['label', 'amount'];
@@ -59,6 +58,9 @@ export const manifest = {
 				'orders.customer': { fields: 'all' },
 				'orders.lines': { fields: 'all' }
 			},
+			outputs: {
+				audit: { orders: { fields: ['title', 'region', 'number', 'status', 'total', 'customer'] } }
+			},
 			create: {
 				columns: {
 					orders: ['title', 'region', 'note', 'stage', 'customer'],
@@ -100,9 +102,7 @@ export const manifest = {
 			description: 'Reads every order',
 			grants: {
 				customers: { read: true },
-				orders: {
-					read: { orders: { fields: ['title', 'region', 'number', 'status', 'total', 'customer'] } }
-				}
+				orders: { outputs: { audit: true } }
 			}
 		}
 	},

@@ -1,6 +1,6 @@
 <!--
 @component
-A dense, filterable log: one line per event, oldest first, following the tail and loading older pages on request.
+A dense, filterable log: one fixed-height line per event (a JSON payload previewed, highlighted and truncated), oldest first, following the tail and loading older pages on request.
 -->
 <script lang="ts" module>
 	import { Effect } from 'effect';
@@ -30,9 +30,10 @@ A dense, filterable log: one line per event, oldest first, following the tail an
 	import { offsets, windowOf } from '../primitives/virtual/virtual.js';
 	import {
 		LOG_LEVELS,
-		ROW_ESTIMATE,
+		ROW_HEIGHT,
 		atBottom,
 		filterLogs,
+		logPreview,
 		wantsOlder,
 		type LogLevel
 	} from './logs.js';
@@ -48,7 +49,6 @@ A dense, filterable log: one line per event, oldest first, following the tail an
 
 	let hidden = $state<Partial<Record<LogLevel, boolean>>>({});
 	let q = $state('');
-	let heights = $state<Record<string, number>>({});
 	let port = $state<HTMLDivElement>();
 	let scrollTop = $state(0);
 	let viewport = $state(0);
@@ -74,7 +74,7 @@ A dense, filterable log: one line per event, oldest first, following the tail an
 	const notice = $derived(olderPage.error?.message ?? null);
 
 	const shown = $derived(filterLogs(rows, hidden, q));
-	const offs = $derived(offsets(shown.map((r) => heights[r.id] || ROW_ESTIMATE)));
+	const offs = $derived(offsets(shown.map(() => ROW_HEIGHT)));
 	const total = $derived(offs[offs.length - 1]);
 	const win = $derived(windowOf(offs, scrollTop, viewport));
 	const time = $derived(
@@ -163,8 +163,7 @@ A dense, filterable log: one line per event, oldest first, following the tail an
 			<div class="absolute inset-x-0 top-0" style:transform="translateY({offs[win.start]}px)">
 				{#each shown.slice(win.start, win.end) as row (row.id)}
 					<div
-						bind:offsetHeight={heights[row.id]}
-						class="hover:bg-muted/50 grid grid-cols-[auto_3.5rem_minmax(0,1fr)] items-start gap-x-3 px-3 py-px"
+						class="hover:bg-muted/50 grid h-[22px] grid-cols-[auto_3.5rem_minmax(0,1fr)] items-start gap-x-3 px-3 py-px"
 						data-log-level={row.level}
 					>
 						<time
@@ -174,10 +173,12 @@ A dense, filterable log: one line per event, oldest first, following the tail an
 						<span class={cn('rounded px-1 text-center text-[10px] uppercase', BADGE[row.level])}
 							>{row.level}</span
 						>
-						<span class="whitespace-pre-wrap break-words"
+						<code class="truncate whitespace-pre"
 							>{#if row.source}<span class="text-muted-foreground"
 									>{row.source}
-								</span>{' '}{/if}{row.message}</span
+								</span>{/if}{#each logPreview(row.message) as token, i (i)}<span
+									class={token.cls || undefined}>{token.text}</span
+								>{/each}</code
 						>
 					</div>
 				{/each}

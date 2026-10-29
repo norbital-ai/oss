@@ -33,7 +33,7 @@ export type RecordCapabilities = {
 };
 /** Why a past value is not written back by a per-record restore. */
 export type RestoreSkip =
-	'deletedTarget' | 'readOnly' | 'noGrant' | 'stateLocked' | 'masked' | 'definitionChanged';
+	'deletedTarget' | 'readOnly' | 'noGrant' | 'stateLocked' | 'definitionChanged';
 /**
  * `history.preview`: what restoring past `revision` would write over the live record (`live`), field by field, and
  * what it leaves alone and why. `approval`: that field's write routes to an approval rather than committing.

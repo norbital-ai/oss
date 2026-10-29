@@ -33,7 +33,7 @@ export const salesRep = policy({
 	description: 'Sell to our customers',
 	grants: {
 		orders: {
-			read: { orders: { where: ownOrders }, 'orders.customer': { fields: ['name'] } },
+			read: { orders: { where: ownOrders } },
 			history: true,
 			create: {
 				columns: { orders: ['customer', 'note'], 'orders.lines': ['item', 'qty'] },
@@ -81,20 +81,14 @@ export const salesRep = policy({
 			},
 			moves: { status: ['draft->submitted', 'submitted->draft'] }
 		},
+		// a narrow named output: the shape is the model's, the grant only filters rows
 		customers: {
-			read: { customers: { where: { orders: { some: ownOrders } }, fields: ['name', 'tier'] } },
+			outputs: { directory: { customers: { where: { orders: { some: ownOrders } } } } },
 			update: true
 		},
 		notices: { read: true },
-		sites: {
-			read: {
-				sites: {
-					where: { customer: { in: { var: 'requestor.scopes.sales_rep' } } },
-					fields: ['name', 'open']
-				}
-			}
-		},
-		sys_user: { read: { team: { in: { var: 'requestor.teamTree' } } }, fields: ['name', 'email'] }
+		sites: { outputs: { summary: { sites: { where: { customer: { in: { var: 'requestor.scopes.sales_rep' } } } } } } },
+		sys_user: { outputs: { directory: { team: { in: { var: 'requestor.teamTree' } } } } }
 	},
 	automations: ['nightly', 'products.sync.ledger', 'orders_submit', 'orders_renote'],
 	capabilities: { apps: ['sales'], tools: ['browser'], mcp: ['erp'], skills: ['quoting'] },
@@ -117,7 +111,7 @@ export const salesRep = policy({
 export const applicant = policy({
 	description: 'Anyone may apply',
 	grants: {
-		customers: { read: { customers: { where: { tier: { eq: 'gold' } }, fields: ['name'] } } },
+		customers: { outputs: { directory: { customers: { where: { tier: { eq: 'gold' } } } } } },
 		orders: { create: { columns: { orders: ['customer'] } } }
 	},
 	limits: { register: { rate: '10/h', per: 'ip' } }
@@ -149,9 +143,29 @@ policy({ description: 'x', grants: { oders: { read: true } } });
 // @ts-expect-error A1 teams are source declarations, never a grantable model
 // prettier-ignore
 policy({ description: 'x', grants: { sys_team: { read: true } } });
-// @ts-expect-error A2 a read field the layer does not expose (sites reads six fields)
+// @ts-expect-error A2 a read grant never names fields: the output's shape is the model's
 // prettier-ignore
-policy({ description: 'x', grants: { sites: { read: { sites: { fields: ['zone'] } } } } });
+policy({ description: 'x', grants: { sites: { read: { sites: { fields: ['name'] } } } } });
+// @ts-expect-error A2b nor does a named output's grant
+// prettier-ignore
+policy({ description: 'x', grants: { sites: { outputs: { summary: { sites: { fields: ['name'] } } } } } });
+// @ts-expect-error A2c an output the model does not declare
+// prettier-ignore
+policy({ description: 'x', grants: { sites: { outputs: { full: true } } } });
+// @ts-expect-error A2d `default` is granted by `read`, never named under `outputs`
+// prettier-ignore
+policy({ description: 'x', grants: { sites: { outputs: { default: true } } } });
+// @ts-expect-error A2e a grant path outside its output (logistics has no orders.customer layer)
+// prettier-ignore
+policy({ description: 'x', grants: { orders: { outputs: { logistics: { 'orders.customer': { where: { tier: { eq: 'gold' } } } } } } } });
+// @ts-expect-error A2f a history grant names no fields
+// prettier-ignore
+policy({ description: 'x', grants: { orders: { history: { where: { note: { isNull: true } }, fields: ['note'] } } } });
+// @ts-expect-error A2g an identity grant names no fields beside its read
+// prettier-ignore
+policy({ description: 'x', grants: { sys_user: { read: true, fields: ['name'] } } });
+// a named output's layer filter names that output's paths
+policy({ description: 'x', grants: { orders: { outputs: { logistics: { 'orders.lines': { where: { qty: { gt: 0 } } } } } } } });
 // @ts-expect-error A3 a layer scope naming an unknown field
 // prettier-ignore
 policy({ description: 'x', grants: { orders: { read: { orders: { where: { nope: { eq: 1 } } } } } } });
@@ -338,10 +352,21 @@ const synced: Actor = {
 	run: '' as Id<'sys_run'>,
 	by: { sync: 'products.sync.ledger', instance: '' as Id<'sys_integration'> }
 };
+// an automation run: the system identity; who started it is the run's trigger, never its actor
+const automationRun: Actor = {
+	kind: 'system',
+	run: '' as Id<'sys_run'>,
+	by: { automation: 'orders_submit' }
+};
+// @ts-expect-error A40a a run's actor carries no requestor
+// prettier-ignore
+const startedRun: Actor = { kind: 'system', run: '' as Id<'sys_run'>, by: { automation: 'orders_submit' }, requestor: member };
+void startedRun;
 void member;
 void envoy;
 void run;
 void synced;
+void automationRun;
 // @ts-expect-error A41 a non-string team display path
 // prettier-ignore
 const a1: Actor = { kind: 'member', id: '' as Id<'sys_user'>, email: null, phone: null, external: false, teams: [], teamPath: [42], admin: false, party: null };

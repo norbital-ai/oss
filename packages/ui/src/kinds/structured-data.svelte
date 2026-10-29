@@ -51,9 +51,7 @@ leaf values retain the workspace's native kinds, custom renderers and inherited 
 	const node = (schema: JsonSchema) => (typeof schema === 'boolean' ? {} : schema);
 	const unitTitle = (label: string, schema: JsonSchema): string => {
 		const unit = node(schema).unit;
-		return typeof unit === 'string' && unit.trim() && !label.trim().endsWith(`(${unit})`)
-			? `${label} (${unit})`
-			: label;
+		return unit?.trim() && !label.trim().endsWith(`(${unit})`) ? `${label} (${unit})` : label;
 	};
 	const pointer = (path: string, key: string | number) =>
 		`${path}/${String(key).replace(/~/g, '~0').replace(/\//g, '~1')}`;
@@ -83,7 +81,6 @@ leaf values retain the workspace's native kinds, custom renderers and inherited 
 		host: ReturnType<typeof useKinds>
 	): Value => {
 		if (value === undefined) return null;
-		if (isMasked(value)) return '•••';
 		const native = kind ? fieldEntry(kind, host) : undefined;
 		if (native?.entry.renderer) return native.entry.label ?? kind?.label ?? 'Details';
 		const planned = shape(native?.entry.shape ?? kind, value);
@@ -132,12 +129,11 @@ leaf values retain the workspace's native kinds, custom renderers and inherited 
 	import * as Popover from '../primitives/popover/index.js';
 	import { fieldEntry } from './builtin/index.js';
 	import { useKinds } from './context.js';
-	import { armValue, formatValue, inferKind, initial, isMasked } from './kind.js';
+	import { armValue, formatValue, inferKind, initial } from './kind.js';
 	import { FIELD_TYPES, jsonSchemaFromRows, jsonSchemaRows } from './json-schema-rows.js';
 	import { provideControls, uiText } from '../primitives/utils.js';
 	import { humanize } from '../text/messages.js';
 	import {
-		isJsonSchema,
 		jsonSchemaGroups,
 		jsonSchemaInitial,
 		jsonSchemaKind,
@@ -213,7 +209,6 @@ leaf values retain the workspace's native kinds, custom renderers and inherited 
 		if (currentMode !== 'edit' || seeded || !newRecord || depth !== 0 || onChange === undefined)
 			return;
 		seeded = true;
-		if (isMasked(value)) return;
 		const next = dataDefaults(rawSchema, value, document);
 		if (next !== undefined) onChange(next);
 	});
@@ -225,7 +220,6 @@ leaf values retain the workspace's native kinds, custom renderers and inherited 
 	/** One line for a complex cell; its fields open in the bounded editor popover. */
 	const summaryOf = (held: Value | undefined): string => {
 		if (held === undefined || held === null) return '—';
-		if (isMasked(held)) return '•••';
 		if (Array.isArray(held)) return `${held.length} ${held.length === 1 ? 'item' : 'items'}`;
 		const entries = dataEntries(held);
 		if (entries === undefined) return formatValue(held, host.locale);
@@ -243,7 +237,7 @@ leaf values retain the workspace's native kinds, custom renderers and inherited 
 		next: Value | undefined,
 		previous?: Value
 	): 'object' | 'array' | undefined {
-		if (depth >= 24 || isMasked(next) || isMasked(previous)) return;
+		if (depth >= 24) return;
 		const leaf = node(structuredSchema(s, document, next === undefined ? previous : next));
 		if (currentMode === 'edit' && (leaf.const !== undefined || leaf.enum !== undefined)) return;
 		// A variant switch is one replacement; each side keeps its own renderer and visibility rules.
@@ -257,14 +251,13 @@ leaf values retain the workspace's native kinds, custom renderers and inherited 
 		)
 			return;
 		const held = next === undefined ? previous : next;
+		const entries = dataEntries(held);
 		if (
 			currentMode === 'diff' &&
 			(next === undefined || previous === undefined) &&
-			held !== undefined &&
-			held !== null &&
-			typeof held === 'object' &&
-			!(held instanceof Decimal) &&
-			Object.keys(held).length === 0
+			(Array.isArray(held)
+				? held.length === 0
+				: entries !== undefined && Object.keys(entries).length === 0)
 		)
 			return;
 		const declared = shape(k, next === undefined ? previous : next);
@@ -403,10 +396,7 @@ leaf values retain the workspace's native kinds, custom renderers and inherited 
 				? kindJsonSchema(itemKind)
 				: (node(inferJsonSchema([...previousList, ...list])).items ?? true))
 	);
-	const schemaAt = (index: number): JsonSchema =>
-		Array.isArray(spec.prefixItems) && isJsonSchema(spec.prefixItems[index])
-			? spec.prefixItems[index]
-			: itemSchema;
+	const schemaAt = (index: number): JsonSchema => spec.prefixItems?.[index] ?? itemSchema;
 	const pairs = $derived(
 		currentMode === 'diff'
 			? pairDataRows(
@@ -507,18 +497,8 @@ leaf values retain the workspace's native kinds, custom renderers and inherited 
 					: undefined;
 	};
 	const bounds = $derived({
-		min:
-			typeof spec.minItems === 'number'
-				? spec.minItems
-				: kind?.kind === 'list'
-					? (kind.min ?? 0)
-					: 0,
-		max:
-			typeof spec.maxItems === 'number'
-				? spec.maxItems
-				: kind?.kind === 'list'
-					? kind.max
-					: undefined
+		min: spec.minItems ?? (kind?.kind === 'list' ? (kind.min ?? 0) : 0),
+		max: spec.maxItems ?? (kind?.kind === 'list' ? kind.max : undefined)
 	});
 	const changed = $derived(currentMode === 'diff' && !dataEqual(before, value));
 	const leafKind = $derived.by((): Kind => {
@@ -569,7 +549,7 @@ leaf values retain the workspace's native kinds, custom renderers and inherited 
 			.filter((type) => !['object', 'array'].includes(type))
 			.join(' | ');
 		const details = [
-			typeof spec.format === 'string' ? spec.format : '',
+			spec.format ?? '',
 			spec.enum ? spec.enum.map((v) => JSON.stringify(v)).join(', ') : '',
 			spec.minimum !== undefined ? `≥ ${spec.minimum}` : '',
 			spec.maximum !== undefined ? `≤ ${spec.maximum}` : '',
@@ -601,7 +581,7 @@ leaf values retain the workspace's native kinds, custom renderers and inherited 
 					)
 				)
 			];
-		if (array && Array.isArray(spec.prefixItems) && spec.prefixItems.every(isJsonSchema))
+		if (array && spec.prefixItems !== undefined)
 			return [
 				...(at ? [own] : []),
 				...spec.prefixItems.flatMap((child, index) =>
@@ -613,12 +593,10 @@ leaf values retain the workspace's native kinds, custom renderers and inherited 
 				...(at ? [own] : []),
 				...schemaRows(spec.items, pointer(at, 'items'), level + (at ? 1 : 0), false, nextSeen)
 			];
-		const composition = [spec.allOf, spec.oneOf, spec.anyOf].find(
-			(part) => Array.isArray(part) && part.every(isJsonSchema)
-		);
-		if (!spec.type && Array.isArray(composition))
+		const composition = spec.allOf ?? spec.oneOf ?? spec.anyOf;
+		if (!spec.type && composition !== undefined)
 			return composition.flatMap((child, index) =>
-				isJsonSchema(child) ? schemaRows(child, pointer(at, index), level, required, nextSeen) : []
+				schemaRows(child, pointer(at, index), level, required, nextSeen)
 			);
 		return [own];
 	}
@@ -1028,7 +1006,6 @@ leaf values retain the workspace's native kinds, custom renderers and inherited 
 			? { kind: 'decimal' as const, scale: held.scale }
 			: declared}
 	{#if held === undefined}<span class="text-sm text-muted-foreground">Not set</span>
-	{:else if isMasked(held)}<Show kind={{ kind: 'text' }} value={held} {name} />
 	{:else if held === null}<span class="text-sm text-muted-foreground">Null</span>
 	{:else if field}<Show kind={declared} value={held} {name} row={context} readonly />
 	{:else if Array.isArray(held) && held.length === 0}<span class="text-sm text-muted-foreground"
@@ -1100,7 +1077,6 @@ leaf values retain the workspace's native kinds, custom renderers and inherited 
 			key={`schema:${name || controlId}`}
 			rowClass={(row) => (row.section ? 'structured-schema-section' : undefined)}
 		/>
-	{:else if isMasked(value)}{@render shown(value)}
 	{:else if !locked && kind?.kind === 'object' && kind.optional && (value === null || value === undefined)}<Button
 			variant="ghost"
 			size="sm"
@@ -1253,18 +1229,24 @@ leaf values retain the workspace's native kinds, custom renderers and inherited 
 	.structured-leaf > :global(p[role='alert']) {
 		flex-basis: 100%;
 	}
+	/* clip, not hidden: a hidden box is a scroll container and would pin the sticky labels to itself */
 	.structured-root {
-		overflow: hidden;
+		overflow: clip;
 		border: 1px solid var(--color-border);
 		border-radius: var(--radius-md);
 	}
 	.structured-field {
 		display: grid;
 		grid-template-columns: minmax(8rem, 32%) minmax(0, 1fr);
-		align-items: center;
+		align-items: baseline;
 		gap: 10px;
 		padding: 6px 12px;
 		border-bottom: 1px solid var(--color-border);
+	}
+	/* the label sits on the value's first line and stays in view while a tall value (code, a long list) scrolls */
+	.structured-field > label {
+		position: sticky;
+		top: 0;
 	}
 	.structured-field:last-child {
 		border-bottom: 0;
@@ -1296,7 +1278,7 @@ leaf values retain the workspace's native kinds, custom renderers and inherited 
 	/* A nested object or list is its own small card, inset on both sides: its border no longer runs into the parent's. */
 	.structured-nested {
 		margin: 6px 8px;
-		overflow: hidden;
+		overflow: clip;
 		border: 1px solid var(--color-border);
 		border-radius: var(--radius-sm);
 		background: var(--color-card);

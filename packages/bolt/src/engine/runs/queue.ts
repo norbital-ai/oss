@@ -1,17 +1,18 @@
-// The one queue (rules 48–52a): `sys_run` rows with a `due_at`. Event-triggered runs are a piece of the causing act's
-// statement, their `where` evaluated there once; a due time 5 minutes or more ahead is rounded up to a 5-minute bucket.
+// The one queue (rules 48–52a): `sys_run` rows with a `due_at`. A model's effect runs are a piece of the causing write's
+// statement (`queueEffects`); a due time 5 minutes or more ahead is rounded up to a 5-minute bucket.
 // Crons are not queued: the host's clock fires them (`Runs.fire`), automations' and remote syncs' reads alike
 // (`syncTriggers`, engine/sync/index.ts).
 import { Result, Schema } from 'effect';
-import { BoltError, storeSync } from '../../protocol/errors.ts';
-import type { CronEntry, QueuedRun } from '../contracts.ts';
-import type { Pred } from '@norbital-ai/store';
+import { BoltError } from '../../protocol/errors.ts';
+import { LIMITS, type Authority, type CronEntry, type QueuedRun } from '../contracts.ts';
+import type { Json } from '../../decl/values.ts';
+import type { Holder } from '../access/authority.ts';
 import type { EngineManifest } from '../manifest.ts';
-import { catalogOf, toPred } from '../access/pred.ts';
-import { nullRowSql, SYSTEM_COLUMNS } from '@norbital-ai/store';
-import { ownPredSql } from '@norbital-ai/store';
+import { catalogOf } from '../access/pred.ts';
+import { SYSTEM_COLUMNS } from '@norbital-ai/store';
+import { EFFECT_VERBS } from '../../decl/model.ts';
 import { type Chain } from '../write/sql.ts';
-import { duration, dueAt, iso } from './time.ts';
+import { actorRef } from '../write/commit.ts';
 
 /** Every run INSERT belongs to this builder; the registry also supplies the commit's exact wake time. */
 const pieces = new WeakMap<Chain, string[]>();
@@ -41,10 +42,10 @@ export function enqueue(
 				: '';
 	return c.cte(
 		name,
-		`INSERT INTO sys_run (id, automation, input, due_at, key, cause, depth, actor, starter, state, attempts, started_at, error, finished_at)
+		`INSERT INTO sys_run (id, automation, input, due_at, key, cause, depth, actor, starter, trigger, state, attempts, started_at, error, finished_at)
 	SELECT coalesce(r.j->>'id', gen_random_uuid()::text), r.j->>'automation', coalesce(r.j->'input', '{}'::jsonb),
 		coalesce(r.j->>'due_at', r.j->>'dueAt', 'now')::timestamptz, r.j->>'key', r.j->>'cause', coalesce((r.j->>'depth')::int, 0),
-		r.j->>'actor', r.j->'starter', coalesce(r.j->>'state', 'queued'), coalesce((r.j->>'attempts')::int, 0),
+		r.j->>'actor', r.j->'starter', r.j->'trigger', coalesce(r.j->>'state', 'queued'), coalesce((r.j->>'attempts')::int, 0),
 		(r.j->>'started_at')::timestamptz, r.j->'error', (r.j->>'finished_at')::timestamptz
 	FROM (${source}) v CROSS JOIN LATERAL (SELECT ${json} AS j) r
 	${options.when === undefined ? '' : `WHERE ${options.when}`} ${conflict}
@@ -61,32 +62,15 @@ export function nextDue(c: Chain): string {
 		: `(SELECT min(due_at) FROM (${selects.join(' UNION ALL ')}) queued_due)`;
 }
 
-const EventFields = {
-	where: Schema.optionalKey(Schema.Json),
-	fields: Schema.optionalKey(Schema.Array(Schema.String)),
-	delay: Schema.optionalKey(Schema.String)
-};
 const TriggerSpec = Schema.Union([
 	Schema.Struct({ cron: Schema.String, tz: Schema.optionalKey(Schema.String) }),
 	Schema.Struct({
 		webhook: Schema.String,
 		verify: Schema.Struct({ scheme: Schema.String, secret: Schema.String })
-	}),
-	Schema.Struct({ created: Schema.String, ...EventFields }),
-	Schema.Struct({ updated: Schema.String, ...EventFields }),
-	Schema.Struct({ deleted: Schema.String, ...EventFields })
+	})
 ]);
-export type EventTrigger = {
-	automation: string;
-	event: 'created' | 'updated' | 'deleted';
-	model: string;
-	where?: Pred | undefined;
-	fields?: readonly string[] | undefined;
-	delayMs?: number | undefined;
-};
 export type WebhookTrigger = { automation: string; path: string; scheme: string; secret: string };
 export type Triggers = {
-	events: readonly EventTrigger[];
 	crons: readonly CronEntry[];
 	webhooks: readonly WebhookTrigger[];
 };
@@ -102,12 +86,11 @@ const MACROS: { readonly [macro: string]: string } = {
 };
 const fields = (cron: string) => MACROS[cron.trim()] ?? cron;
 const cache = new WeakMap<EngineManifest, Triggers>();
-/** Every declared trigger, compiled once per manifest (`where` → Pred); the host's clock computes the crons' slots. */
+/** Every declared trigger, compiled once per manifest; the host's clock computes the crons' slots. */
 export function triggersOf(m: EngineManifest): Triggers {
 	const cached = cache.get(m);
 	if (cached !== undefined) return cached;
-	const events: EventTrigger[] = [],
-		crons: CronEntry[] = [],
+	const crons: CronEntry[] = [],
 		webhooks: WebhookTrigger[] = [];
 	for (const [automation, spec] of Object.entries(m.automations)) {
 		const decoded = Schema.decodeUnknownResult(Schema.Array(TriggerSpec))(
@@ -125,38 +108,63 @@ export function triggersOf(m: EngineManifest): Triggers {
 				crons.push({ id: automation, cron: fields(x.cron), zone: x.tz ?? m.workspace.tz });
 				continue;
 			}
-			if ('webhook' in x) {
-				const v = x.verify;
-				webhooks.push({ automation, path: x['webhook'], scheme: v.scheme, secret: v.secret });
-				continue;
-			}
-			const event = 'created' in x ? 'created' : 'updated' in x ? 'updated' : 'deleted';
-			const model = 'created' in x ? x.created : 'updated' in x ? x.updated : x.deleted;
-			events.push({
-				automation,
-				event,
-				model,
-				where: x.where === undefined ? undefined : toPred(m, model, x.where),
-				fields: x.fields,
-				delayMs: x.delay === undefined ? undefined : duration(x.delay)
-			});
+			const v = x.verify;
+			webhooks.push({ automation, path: x.webhook, scheme: v.scheme, secret: v.secret });
 		}
 	}
-	const triggers = { events, crons, webhooks };
+	const triggers = { crons, webhooks };
 	cache.set(m, triggers);
 	return triggers;
 }
 
+/**
+ * Who committed a write: the holder its model effects run as (`sys_run.starter`), its actor ref, and the depth the
+ * effects run at (one below the run that wrote, 0 for a write outside any run).
+ */
+export type Writer = { readonly starter: Json; readonly actor: string; readonly depth: number };
+/**
+ * The holder an authority is compiled from: a run's own (`Authority.run`, never a delegation's added policies), else
+ * the authority's. A platform or sync actor stays the platform.
+ */
+export const holderOf = (a: Authority): Holder =>
+	a.run?.holder ?? {
+		actor: a.actor,
+		policies: a.policies,
+		admin: a.admin,
+		teamTree: a.teamTree,
+		scopes: a.scopes,
+		...(a.actor.kind === 'system' && !('automation' in a.actor.by) ? { platform: true } : {})
+	};
+export const writerOf = (a: Authority): Writer => {
+	const holder = holderOf(a);
+	return {
+		starter: Schema.encodeSync(Schema.Json)(holder),
+		actor: actorRef(holder.actor),
+		depth: a.run === undefined ? 0 : a.run.depth + 1
+	};
+};
+/** A model effect's run name, and back. */
+export const effectRun = (model: string, verb: (typeof EFFECT_VERBS)[number]) =>
+	`${model}.effect.${verb}`;
+export function effectOf(
+	m: EngineManifest,
+	automation: string
+): { readonly model: string; readonly verb: (typeof EFFECT_VERBS)[number] } | undefined {
+	const at = automation.lastIndexOf('.effect.');
+	if (at <= 0) return undefined;
+	const model = automation.slice(0, at),
+		verb = EFFECT_VERBS.find((v) => v === automation.slice(at + 8));
+	return verb !== undefined && m.exposures[model]?.effect?.[verb] === true
+		? { model, verb }
+		: undefined;
+}
+
 const OP = { created: 'create', updated: 'update', deleted: 'delete' } as const;
-/** Fields whose change fires an `updated` trigger without `fields`: stored values, never roll-ups or computed (rule 50). */
+/** Fields whose change runs an `updated` effect: stored values, never roll-ups, computed or system columns. */
 function storedFields(m: EngineManifest, model: string): readonly string[] {
 	const info = catalogOf(m).models.get(model);
 	if (info === undefined)
-		throw BoltError.make(
-			'internal',
-			'decode',
-			`the event trigger names missing model ${model}`
-		);
+		throw BoltError.make('internal', 'decode', `the effect names missing model ${model}`);
 	return [
 		...[...info.fields.values()]
 			.filter(
@@ -168,43 +176,45 @@ function storedFields(m: EngineManifest, model: string): readonly string[] {
 }
 
 /**
- * Rule 49/50: the causing statement's piece. Reads the statement's own row changes (`allp`: `c, id, op, o, n`), keeps
- * those each trigger admits (its `where` on the post-image, the pre-image for `deleted`; an `updated` one only when a
- * named or stored field changed), and inserts one queued run per trigger with `{ model, ids }` (`rows` for
- * `deleted`); the model is what lets one automation hold several triggers and tell them apart.
+ * The causing statement's piece: reads its own row changes (`source`: `c, id, op, o, n`) and queues one run per model
+ * effect verb they reach, as `writer` (`'trigger'` authority), with the committed images: `{ ids, rows }` (created: the
+ * new rows; deleted: the old) or `{ ids, changes: [{ before, after }] }` (updated, when a stored field changed). Past
+ * the chain depth the run is recorded failed instead, which ends an effect loop.
  */
-export function queueTriggered(
+export function queueEffects(
 	m: EngineManifest,
 	c: Chain,
 	now: string,
-	actor: string,
+	writer: Writer,
 	source = 'allp'
 ): void {
-	const at = Date.parse(now);
-	const selects = triggersOf(m).events.map((t) => {
-		const image = t.event === 'deleted' ? 'x.o' : 'x.n';
-		const row = `jsonb_populate_record(${nullRowSql(t.model, catalogOf(m).models.get(t.model)?.fields.keys() ?? [])}, ${image})`;
-		const changed =
-			t.event !== 'updated'
-				? 'true'
-				: `(${(t.fields ?? storedFields(m, t.model)).map((f) => `(x.o -> ${c.p(f)}) IS DISTINCT FROM (x.n -> ${c.p(f)})`).join(' OR ') || 'false'})`;
-		// CASE, not AND: Postgres may evaluate the predicate first, and another model's image (a named
-		// integration slot's text id) does not cast to this row type
-		const where =
-			t.where === undefined
-				? 'true'
-				: `CASE WHEN x.c = ${c.p(t.model)} THEN ${storeSync(ownPredSql(t.where, row, c))} ELSE false END`;
-		const event = `'model', ${c.p(t.model)}::text`;
-		const input =
-			t.event === 'deleted'
-				? `jsonb_build_object('ids', jsonb_agg(x.id), 'rows', jsonb_agg(x.o), ${event})`
-				: `jsonb_build_object('ids', jsonb_agg(x.id), ${event})`;
-		return `SELECT ${c.p(t.automation)}::text AS a, ${input} AS input, ${c.p(iso(dueAt(at, at + (t.delayMs ?? 0))))}::timestamptz AS due, ${c.p(t.event)}::text AS cause
-		FROM ${source} x WHERE x.c = ${c.p(t.model)} AND x.op = '${OP[t.event]}' AND ${changed} AND ${where} HAVING count(*) > 0`;
-	});
+	const selects = Object.entries(m.exposures).flatMap(([model, spec]) =>
+		EFFECT_VERBS.filter((verb) => spec.effect?.[verb] === true).map((verb) => {
+			const changed =
+				verb !== 'updated'
+					? 'true'
+					: `(${
+							storedFields(m, model)
+								.map((f) => `(x.o -> ${c.p(f)}) IS DISTINCT FROM (x.n -> ${c.p(f)})`)
+								.join(' OR ') || 'false'
+						})`;
+			const images =
+				verb === 'updated'
+					? `'changes', jsonb_agg(jsonb_build_object('before', x.o, 'after', x.n) ORDER BY x.id)`
+					: `'rows', jsonb_agg(x.${verb === 'deleted' ? 'o' : 'n'} ORDER BY x.id)`;
+			return `SELECT ${c.p(effectRun(model, verb))}::text AS a, jsonb_build_object('ids', jsonb_agg(x.id ORDER BY x.id), ${images}) AS input
+		FROM ${source} x WHERE x.c = ${c.p(model)} AND x.op = '${OP[verb]}' AND ${changed} HAVING count(*) > 0`;
+		})
+	);
 	if (selects.length === 0) return;
+	const deep = writer.depth > LIMITS.writeDepth;
 	enqueue(c, {
-		select: `SELECT t.a AS automation, t.input, t.due AS due_at, t.cause, 0 AS depth, ${c.p(actor)}::text AS actor
+		select: `SELECT t.a AS automation, t.input, ${c.p(now)}::timestamptz AS due_at, 'effect'::text AS cause,
+		${c.p(writer.depth)}::int AS depth, ${c.p(writer.actor)}::text AS actor, ${c.p(writer.starter)}::jsonb AS starter${
+			deep
+				? `, 'failed'::text AS state, ${c.p({ code: 'depth', message: `Effects chain at most ${LIMITS.writeDepth} deep: this write's effect did not run.` })}::jsonb AS error, ${c.p(now)}::timestamptz AS finished_at`
+				: ''
+		}
 		FROM (${selects.join(' UNION ALL ')}) t`
 	});
 }

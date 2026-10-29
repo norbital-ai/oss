@@ -20,6 +20,7 @@ import { audienceOf, framePolicy, route, type ShellManifest } from '../shell/nav
 import { BoltError } from './errors.ts';
 import {
 	bindings,
+	rateLimitedResponse,
 	readAdmitted,
 	requestReadRate,
 	requestUrl,
@@ -142,13 +143,7 @@ export const publicPages = (artifact: Artifact) =>
 				const rate = yield* requestReadRate(caller.request, caller.authority).pipe(
 					Effect.provideService(RateLimits, rates)
 				);
-				if (!rate.ok)
-					return Option.some(
-						HttpServerResponse.jsonUnsafe(
-							{ error: { code: 'rateLimited', message: 'rateLimited' } },
-							{ status: 429, headers: { 'retry-after': String(rate.retryAfter) } }
-						)
-					);
+				if (!rate.ok) return Option.some(rateLimitedResponse(rate.retryAfter));
 				const boot = yield* toPublicBoot(caller.boot, {
 					base: caller.base,
 					kiosk: selected.kind === 'kiosk' ? selected.kiosk : null,

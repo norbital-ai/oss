@@ -41,7 +41,8 @@ export type HostSettings = {
 	publicUrl: string;
 	/** Separate durable audit database directory; retained across process and artifact restarts. */
 	auditDir: string;
-	files: { provider: 'local'; root: string } | { provider: 's3'; endpoint: string; credential: string };
+	files:
+		{ provider: 'local'; root: string } | { provider: 's3'; endpoint: string; credential: string };
 	/** Seals the tenant's secrets. */
 	masterKey: Buffer;
 	/** Host Google app shared by Gmail and Calendar where the workspace declares none of its own. */

@@ -1,5 +1,5 @@
-// The runs area on PGlite (rules 48–56a, 70): the one queue, the deadlines port, buckets, event triggers written in the
-// causing statement, re-queues, attempts, webhooks, visibility, restart recovery (a dropped run reruns from the start).
+// The runs area on PGlite (rules 48–56a, 70): the one queue, the deadlines port, buckets, model effects written in the
+// causing statement and run as its writer, re-queues, attempts, webhooks, visibility, restart recovery (a dropped run reruns from the start).
 // One engine per mechanism group; each test's phases share it. Crons: runs-fire. Observed revisions: callables.
 import { randomUUID } from 'node:crypto';
 import { afterAll, describe, expect, it } from '@effect/vitest';
@@ -25,12 +25,11 @@ import type { EngineManifest } from '../src/engine/manifest.ts';
 import { type EngineError } from '../src/engine/errors.ts';
 import { BoltError, CODES } from '../src/protocol/errors.ts';
 import { PgliteDb } from '../src/node/db/pglite.ts';
-import { TestDb } from '../src/test/database.ts';
+import { TestDb } from '../../bolt-cli/src/test/database.ts';
 import { TenantDb, type TenantDbShape } from '../src/engine/db/tenant-db.ts';
 import { EngineLive, type EngineHost, type EngineServices } from '../src/engine/host.ts';
 import { bareHost } from './effect-engine.ts';
 import {
-	Activation,
 	Callables,
 	Guest,
 	Identity,
@@ -50,6 +49,7 @@ import { Secrets, type SecretsShape } from '../src/engine/secrets.ts';
 import { RunsLive } from '../src/engine/runs/index.ts';
 import { parseCallable } from '../src/engine/callables/index.ts';
 import { Outcome } from '../src/protocol/schema.ts';
+import { canonical } from '@norbital-ai/store';
 import type { Verb } from '../src/engine/write/act.ts';
 const base: EngineManifest = {
 	needs: [],
@@ -72,9 +72,11 @@ const base: EngineManifest = {
 	exposures: {
 		quotes: {
 			read: { quotes: { fields: 'all' } },
+			outputs: { titles: { quotes: { fields: ['title'] } } },
 			create: { columns: { quotes: ['title', 'status'] } },
 			update: { columns: { quotes: ['title', 'status'] } },
-			delete: {}
+			delete: {},
+			effect: { created: true, updated: true, deleted: true }
 		}
 	},
 	integrations: {},
@@ -91,25 +93,40 @@ const base: EngineManifest = {
 			grants: { quotes: { read: true, create: true, update: true, delete: true } },
 			automations: ['classify']
 		},
+		// a writer that reads the `titles` output only: its effects see the rows it wrote as that output
+		clerk: {
+			description: 'Write quotes, read their titles',
+			grants: {
+				quotes: {
+					outputs: { titles: true },
+					create: true,
+					update: true,
+					delete: true
+				}
+			}
+		},
 		limited: {
 			description: 'Read quote titles and start a manual review',
-			grants: { quotes: { read: { quotes: { fields: ['title'] } } } },
+			grants: { quotes: { outputs: { titles: true } } },
 			automations: ['review']
+		},
+		writer: {
+			description: 'Write quotes; starts nothing',
+			grants: { quotes: { read: true, create: true } }
+		},
+		starter: { description: 'Starts a retitle', grants: {}, automations: ['retitle'] },
+		// the requestor's own quotes: in a run the requestor is the system identity, which owns none
+		own: {
+			description: "Retitle the requestor's quotes",
+			grants: {
+				quotes: {
+					read: { quotes: { where: { created_by: { eq: { var: 'requestor.id' } } } } },
+					update: true
+				}
+			}
 		}
 	},
 	automations: {
-		remind: {
-			description: 'Remind 3 days after a quote',
-			on: { created: 'quotes', delay: '3d' },
-			runAs: ['ops']
-		},
-		sent: {
-			description: 'A quote was sent',
-			on: { updated: 'quotes', fields: ['status'], where: { status: { eq: 'sent' } } },
-			runAs: ['ops']
-		},
-		// a deleted pre-image is read under its runner's grant: `limited` reads titles only
-		gone: { description: 'A quote was deleted', on: { deleted: 'quotes' }, runAs: ['limited'] },
 		review: {
 			description: 'Review authored rows',
 			input: {
@@ -127,19 +144,24 @@ const base: EngineManifest = {
 					}
 				}
 			},
-			runAs: ['limited']
+			policies: ['limited']
 		},
-		pair: { description: 'Two independent reviews', runAs: ['ops'], concurrency: { max: 2 } },
-		classify: { description: 'Re-queues itself while work is left', runAs: ['ops'] },
+		pair: { description: 'Two independent reviews', policies: ['ops'], concurrency: { max: 2 } },
+		classify: { description: 'Re-queues itself while work is left', policies: ['ops'] },
 		flaky: {
 			description: 'Fails transiently twice',
-			runAs: ['ops'],
+			policies: ['ops'],
 			retry: { attempts: 3, backoff: '1min' }
+		},
+		retitle: {
+			description: "Retitle the requestor's quote",
+			input: { quote: { kind: 'text' } },
+			policies: ['own']
 		},
 		hook: {
 			description: 'A webhook',
 			on: { webhook: '/in', verify: { scheme: 'bearer', secret: 'HOOK' } },
-			runAs: ['ops']
+			policies: ['ops']
 		}
 	}
 };
@@ -313,7 +335,11 @@ const sharedDb = TenantDb.typed({
 		}),
 	write: (statement, lock) =>
 		Effect.suspend(() => {
-			shared.statements.push({ at: shared.clock.ms, text: statement.text, params: statement.params });
+			shared.statements.push({
+				at: shared.clock.ms,
+				text: statement.text,
+				params: statement.params
+			});
 			return current().write(statement, lock);
 		}),
 	// Keep every native batch statement visible, including audit receipts and acknowledgements.
@@ -371,7 +397,6 @@ const world = Effect.fn('TestRuns.world')(function* (
 		[name: string]: Body;
 	} = {},
 	extra: {
-		start?: readonly string[];
 		platform?: {
 			readonly [name: string]: RunHandler;
 		};
@@ -390,14 +415,7 @@ const world = Effect.fn('TestRuns.world')(function* (
 	const runContext = yield* Layer.build(
 		RunsLive.pipe(
 			Layer.provide(
-				Layer.succeedContext(
-					Context.add(context, Guest, fakeGuest(manifest, bodies, calls)).pipe(
-						Context.add(Activation, {
-							...Context.get(context, Activation),
-							start: extra.start ?? []
-						})
-					)
-				)
+				Layer.succeedContext(Context.add(context, Guest, fakeGuest(manifest, bodies, calls)))
 			),
 			Layer.provide(ConfigProvider.layer(Context.get(context, Secrets).config))
 		)
@@ -424,7 +442,7 @@ const world = Effect.fn('TestRuns.world')(function* (
 		admin: true
 	};
 	const wakes: number[] = [];
-	yield* r.boot;
+	yield* r.boot();
 	statements.length = 0;
 	return {
 		context,
@@ -498,47 +516,57 @@ const member = (policies: string[]): Holder => ({
 });
 
 describe('lost leases (rules 52a, 70)', () => {
-	it.effect(
-		'a dropped run reruns from the start at most 3 times, then fails lostLease',
-		() =>
-			Effect.gen(function* () {
-				let starts = 0,
-					entered = yield* Deferred.make<void>();
-				const w = yield* world(base, {
-					classify: () =>
-						Effect.gen(function* () {
-							starts++;
-							yield* Deferred.succeed(entered, undefined);
-							return yield* Effect.never;
-						})
-				});
-				yield* queue(w, 'dropped', 'classify', T0);
-				for (let drop = 1; drop <= 4; drop++) {
-					const ticking = yield* Effect.forkChild(w.r.tick);
-					yield* Deferred.await(entered);
-					entered = yield* Deferred.make<void>();
-					// the process drops the run: its fiber ends, and the next boot finds it still running
-					yield* Fiber.interrupt(ticking);
-					yield* w.r.boot;
-					expect(starts).toBe(drop);
-				}
-				expect(
-					yield* w.sql(
-						`SELECT state, attempts, leases, error->>'code' AS code FROM sys_run WHERE id = 'dropped'`
-					)
-				).toEqual([{ state: 'failed', attempts: 4, leases: 4, code: 'lostLease' }]);
-			})
+	it.effect('a dropped run reruns from the start at most 3 times, then fails lostLease', () =>
+		Effect.gen(function* () {
+			let starts = 0,
+				entered = yield* Deferred.make<void>();
+			const w = yield* world(base, {
+				classify: () =>
+					Effect.gen(function* () {
+						starts++;
+						yield* Deferred.succeed(entered, undefined);
+						return yield* Effect.never;
+					})
+			});
+			yield* queue(w, 'dropped', 'classify', T0);
+			for (let drop = 1; drop <= 4; drop++) {
+				const ticking = yield* Effect.forkChild(w.r.tick);
+				yield* Deferred.await(entered);
+				entered = yield* Deferred.make<void>();
+				// the process drops the run: its fiber ends, and the next boot finds it still running
+				yield* Fiber.interrupt(ticking);
+				yield* w.r.boot();
+				expect(starts).toBe(drop);
+			}
+			expect(
+				yield* w.sql(
+					`SELECT state, attempts, leases, error->>'code' AS code FROM sys_run WHERE id = 'dropped'`
+				)
+			).toEqual([{ state: 'failed', attempts: 4, leases: 4, code: 'lostLease' }]);
+		})
 	);
 });
 
-describe('event triggers and starts (rules 49, 50, 51)', () => {
+/** The ids an effect body received: its rows', or its changes' `after` images'. */
+const EffectImages = Schema.Array(
+	Schema.Union([
+		Schema.Struct({ after: Schema.Struct({ id: Schema.String }) }),
+		Schema.Struct({ id: Schema.String })
+	])
+);
+const effectIds = (input: Json): string[] =>
+	Schema.decodeUnknownSync(EffectImages)(input).map((x) => ('after' in x ? x.after.id : x.id));
+describe('model effects and starts (rules 49, 50, 51)', () => {
 	it.effect(
-		'each causing statement writes its event run: an undelayed run is due at its commit with `where` and `fields` judged on the firing write, a deleted pre-image keeps its runner’s field mask, and a manual start keeps its rows',
+		'each committed verb queues one effect run as its writer, due at its commit, its rows the writer’s view output; its schedule needs no start grant and records the effect as its trigger; a write that changes nothing queues none; a manual start keeps its rows',
 		() =>
 			Effect.gen(function* () {
 				const w = yield* world(base, {
-					sent: () => Effect.void,
-					gone: (input) => Effect.succeed(input),
+					'quotes.effect.created': (input) => Effect.succeed(input),
+					'quotes.effect.updated': (input) => Effect.succeed(input),
+					// code schedules without a start grant: the clerk may not start `classify`, its effect may
+					'quotes.effect.deleted': (_, ctx) => ctx.schedule('classify', {}),
+					classify: () => Effect.void,
 					review: (input) => Effect.succeed(input)
 				});
 				// a manual start: its authored rows reach the body intact
@@ -566,34 +594,226 @@ describe('event triggers and starts (rules 49, 50, 51)', () => {
 					{ target: 'review', input: manual }
 				]);
 
-				// without delay: due at its exact commit
+				// the clerk writes; each effect runs as the clerk, due at its exact commit
+				const clerk = member(['clerk']);
+				const as = (verb: Verb, input: Json) =>
+					Effect.gen(function* () {
+						return (yield* w.e.act({
+							model: 'quotes',
+							mode: { _tag: 'Direct' },
+							verb,
+							input,
+							key: randomUUID(),
+							issuedAt: iso(w.clock.ms),
+							authority: yield* w.e.authority(clerk),
+							bindings: { now: iso(w.clock.ms), today: '2026-09-25', tz: 'UTC' },
+							invocationId: randomUUID()
+						})).outcome;
+					});
 				const at = T0 + 6 * 60000;
 				yield* setNow(w, at + 17000);
-				const created = yield* w.act('quotes', 'create', [{ title: 'a' }]);
-				if (created.kind !== 'committed' || created.records[0] === undefined)
-					throw new Error('Missing quote');
-				const id = created.records[0].id;
-				yield* w.act('quotes', 'update', [{ target: id, set: { title: 'b' } }]); // status unchanged: no run
-				expect(
-					yield* w.sql(`SELECT count(*)::int AS n FROM sys_run WHERE automation = 'sent'`)
-				).toEqual([{ n: 0 }]);
+				const created = yield* as('create', [{ title: 'a' }, { title: 'c' }]);
+				if (created.kind !== 'committed' || created.records[1] === undefined)
+					throw new Error('Missing quotes');
+				const first = created.records[0]?.id ?? '',
+					second = created.records[1].id;
 				yield* setNow(w, at + 23000);
-				yield* w.act('quotes', 'update', [{ target: id, set: { status: 'sent' } }]);
-				yield* w.act('quotes', 'delete', [{ target: id }]);
+				yield* as('update', [{ target: first, set: { title: 'b' } }]);
+				yield* as('update', [{ target: first, set: { title: 'b' } }]); // nothing changes: no run
+				yield* as('delete', [{ target: first }]);
 				const woken = w.wakes.length;
 				yield* w.until(at + 60000);
-				expect(w.wakes.slice(woken)).toEqual([at + 23000]);
-				const input = (target: string) => w.calls.find((c) => c.target === target)?.input;
-				expect(input('sent')).toEqual({ model: 'quotes', ids: [id] });
-				expect(input('gone')).toEqual({
-					model: 'quotes',
-					ids: [id],
-					rows: [{ id, revision: expect.any(Number), title: 'b' }]
-				});
-				expect(yield* w.sql("SELECT state, cause FROM sys_run WHERE automation = 'gone'")).toEqual([
-					{ state: 'succeeded', cause: 'deleted' }
+				expect([...new Set(w.wakes.slice(woken))]).toEqual([at + 23000]);
+				const effects = w.calls.filter((c) => c.kind === 'effect');
+				expect(effects.map((c) => c.target).sort()).toEqual([
+					'quotes.effect.created',
+					'quotes.effect.deleted',
+					'quotes.effect.updated'
 				]);
+				const input = (verb: string) =>
+					effects.find((c) => c.target === `quotes.effect.${verb}`)?.input;
+				// one bulk run per committed batch, each image only the fields the clerk's `titles` output reads
+				expect(input('created')).toEqual(
+					[
+						{ id: first, revision: 1, title: 'a' },
+						{ id: second, revision: 1, title: 'c' }
+					].sort((x, y) => String(x.id).localeCompare(String(y.id)))
+				);
+				expect(input('updated')).toEqual([
+					{
+						before: { id: first, revision: 1, title: 'a' },
+						after: { id: first, revision: 2, title: 'b' }
+					}
+				]);
+				expect(input('deleted')).toEqual([{ id: first, revision: 2, title: 'b' }]);
+				expect(effects.every((c) => canonical(c.ctx.actor) === canonical(clerk.actor))).toBe(true);
+				expect(
+					yield* w.sql(
+						`SELECT automation, state, cause, depth, actor, starter->'policies' AS policies FROM sys_run WHERE cause = 'effect' ORDER BY due_at, automation`
+					)
+				).toEqual(
+					['quotes.effect.created', 'quotes.effect.deleted', 'quotes.effect.updated'].map(
+						(automation) => ({
+							automation,
+							state: 'succeeded',
+							cause: 'effect',
+							depth: 0,
+							actor: `member:${clerk.actor.kind === 'member' ? clerk.actor.id : ''}`,
+							policies: ['clerk']
+						})
+					)
+				);
+				// the scheduled run is the system holding `ops`; its trigger is the effect after the clerk's delete
+				const classify = w.calls.find((c) => c.target === 'classify');
+				expect(classify?.ctx.actor).toEqual({
+					kind: 'system',
+					run: classify?.run,
+					by: { automation: 'classify' }
+				});
+				expect(classify?.ctx.run?.trigger).toEqual({
+					kind: 'system',
+					cause: 'effect',
+					model: 'quotes',
+					verb: 'deleted',
+					records: [first]
+				});
+				expect(
+					yield* w.sql(`SELECT state, cause FROM sys_run WHERE automation = 'classify'`)
+				).toEqual([{ state: 'succeeded', cause: 'schedule' }]);
+			})
+	);
+	it.effect(
+		'an effect retries a transient failure; one whose writes run their own effects stops at the chain depth with a failed run; an automation run’s write runs its effect as that run',
+		() =>
+			Effect.gen(function* () {
+				let failures = 1;
+				const w = yield* world(base, {
+					'quotes.effect.created': (input, ctx) =>
+						Effect.gen(function* () {
+							if (failures-- > 0)
+								return yield* Effect.fail(BoltError.make('upstream', 'guest', '502'));
+							for (const id of effectIds(input))
+								yield* ctx.act('quotes.update', [{ target: id, set: { title: 'loop 0' } }]);
+						}),
+					'quotes.effect.updated': (input, ctx) =>
+						Effect.gen(function* () {
+							for (const id of effectIds(input))
+								yield* ctx.act('quotes.update', [
+									{ target: id, set: { title: `loop ${randomUUID()}` } }
+								]);
+						}),
+					classify: (_, ctx) => ctx.act('quotes.create', [{ title: 'by a run' }])
+				});
+				yield* w.act('quotes', 'create', [{ title: 'start' }]);
+				yield* w.until(T0 + 10 * 60000);
+				expect(
+					yield* w.sql(
+						`SELECT attempts, state FROM sys_run WHERE automation = 'quotes.effect.created'`
+					)
+				).toEqual([{ attempts: 2, state: 'succeeded' }]);
+				const chain = yield* w.sql(
+					`SELECT depth, state, error->>'code' AS code FROM sys_run WHERE automation = 'quotes.effect.updated' ORDER BY depth`
+				);
+				expect(chain.map((r) => r['depth'])).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9]);
+				expect(chain.slice(0, 8).every((r) => r['state'] === 'succeeded')).toBe(true);
+				expect(chain[8]).toEqual({ depth: 9, state: 'failed', code: 'depth' });
 
+				yield* w.db.write({
+					text: `INSERT INTO sys_run (id, automation, input, due_at, cause, depth) VALUES ('classify-run', 'classify', '{}', $1::timestamptz, 'start', 0)`,
+					params: [iso(w.clock.ms)]
+				});
+				yield* w.r.boot();
+				yield* w.until(w.clock.ms + 60000);
+				expect(
+					yield* w.sql(
+						`SELECT depth, actor, starter->'actor'->'by' AS by, starter->'policies' AS policies FROM sys_run WHERE automation = 'quotes.effect.created' AND actor = 'system:classify-run'`
+					)
+				).toEqual([
+					{
+						depth: 1,
+						actor: 'system:classify-run',
+						by: { automation: 'classify' },
+						policies: ['ops']
+					}
+				]);
+			})
+	);
+});
+
+describe('a run is the system holding its policies; its trigger records who started it', () => {
+	it.effect(
+		'an effect-scheduled, a manual and an unattributed run record their trigger; none lends the run its starter, so a requestor-scoped grant matches nothing; code schedules without a start grant',
+		() =>
+			Effect.gen(function* () {
+				const quote = (input: Json) =>
+					Schema.decodeUnknownSync(Schema.Struct({ quote: Schema.String }))(input).quote;
+				const w = yield* world(base, {
+					// the writer holds no start grant: its effect's code schedules all the same
+					'quotes.effect.created': (input, ctx) =>
+						Effect.forEach(effectIds(input), (id) => ctx.schedule('retitle', { quote: id })),
+					'quotes.effect.updated': () => Effect.void,
+					retitle: (input, ctx) =>
+						ctx.act('quotes.update', [{ target: quote(input), set: { title: 'retitled' } }])
+				});
+				const writer = member(['writer']),
+					starter = member(['starter']);
+				const bindings = { now: iso(T0), today: '2026-09-25', tz: 'UTC' };
+				const created = yield* w.e.act({
+					model: 'quotes',
+					mode: { _tag: 'Direct' },
+					verb: 'create',
+					input: [{ title: 'mine' }],
+					key: randomUUID(),
+					issuedAt: iso(T0),
+					authority: yield* w.e.authority(writer),
+					bindings,
+					invocationId: randomUUID()
+				});
+				if (created.outcome.kind !== 'committed') throw new Error('Missing quote');
+				const id = created.outcome.records[0]?.id ?? '';
+				yield* w.until(T0 + 60000);
+				const start = (holder: Holder, run: string) =>
+					Effect.gen(function* () {
+						return yield* Context.get(w.context, Callables).start({
+							automation: 'retitle',
+							runs: [{ id: run, input: { quote: id } }],
+							authority: yield* w.e.authority(holder),
+							bindings,
+							agent: { conversation: 'c1' }
+						});
+					});
+				// a manual start needs the grant on the starter's policy
+				expect(yield* start(writer, randomUUID())).toMatchObject({
+					kind: 'refused',
+					code: 'forbidden'
+				});
+				const manual = randomUUID();
+				expect(yield* start(starter, manual)).toMatchObject({ kind: 'committed' });
+				// a run queued before triggers were recorded reads as an unattributed schedule
+				yield* w.db.write({
+					text: `INSERT INTO sys_run (id, automation, input, due_at, cause, depth) VALUES ('orphan', 'retitle', $1::jsonb, $2::timestamptz, 'schedule', 0)`,
+					params: [{ quote: id }, iso(T0)]
+				});
+				yield* w.r.boot();
+				yield* w.until(T0 + 2 * 60000);
+				const runs = w.calls.filter((c) => c.target === 'retitle');
+				// every run is the system identity, whoever triggered it
+				expect(runs.map((c) => c.ctx.actor.kind)).toEqual(['system', 'system', 'system']);
+				expect(runs.map((c) => c.ctx.run?.trigger)).toEqual([
+					{ kind: 'system', cause: 'effect', model: 'quotes', verb: 'created', records: [id] },
+					{ kind: 'person', actor: starter.actor, agent: { conversation: 'c1' } },
+					{ kind: 'system', cause: 'schedule' }
+				]);
+				expect(
+					yield* w.sql(
+						`SELECT cause, state, error->>'code' AS code, trigger->>'kind' AS kind FROM sys_run WHERE automation = 'retitle' ORDER BY cause DESC, id = 'orphan'`
+					)
+				).toEqual([
+					{ cause: 'start', state: 'failed', code: 'notFound', kind: 'person' },
+					{ cause: 'schedule', state: 'failed', code: 'notFound', kind: 'system' },
+					{ cause: 'schedule', state: 'failed', code: 'notFound', kind: null }
+				]);
+				expect(yield* w.sql('SELECT title FROM quotes')).toEqual([{ title: 'mine' }]);
 			})
 	);
 });
@@ -605,43 +825,39 @@ describe('re-queues, attempts and notices (rules 21, 54, 55, 70)', () => {
 			Effect.gen(function* () {
 				let left = 1,
 					refused: unknown;
-				const w = yield* world(
-					base,
-					{
-						classify: (_, ctx) =>
-							Effect.gen(function* () {
-								if (left === 1) {
-									refused = yield* ctx.notify({ to: [], title: 'nowhere' }).pipe(
-										Effect.as('sent'),
-										Effect.catch((error) => Effect.succeed(error.code))
-									);
-									yield* ctx.notify({ to: [{ team: 'nobody' }], title: 'unheard' });
-								}
-								if (left-- <= 0) return;
-								for (let i = 0; i < 2; i++)
-									yield* ctx.schedule(
-										'classify',
-										{},
-										{ at: { var: 'now + minutes(1)' }, key: 'classify_retry' }
-									);
-							}),
-						flaky: (input, ctx) =>
-							Effect.gen(function* () {
-								if (Predicate.hasProperty(input, 'bug'))
-									return yield* Effect.fail(BoltError.make('guestError', 'guest', 'bug'));
-								yield* ctx.act('quotes.create', [{ title: 'once' }]);
-								yield* ctx.notify({
-									to: [{ policy: 'ops' }, { team: 'ops' }, { user: 'holder' }],
-									title: 'For ops',
-									once: 'source-policy-notice'
-								});
-								if (!ctx.attempt.endsWith(':3'))
-									return yield* Effect.fail(BoltError.make('upstream', 'guest', '502'));
-								return 'done';
-							})
-					},
-					{ start: ['classify', 'flaky'] }
-				);
+				const w = yield* world(base, {
+					classify: (_, ctx) =>
+						Effect.gen(function* () {
+							if (left === 1) {
+								refused = yield* ctx.notify({ to: [], title: 'nowhere' }).pipe(
+									Effect.as('sent'),
+									Effect.catch((error) => Effect.succeed(error.code))
+								);
+								yield* ctx.notify({ to: [{ team: 'nobody' }], title: 'unheard' });
+							}
+							if (left-- <= 0) return;
+							for (let i = 0; i < 2; i++)
+								yield* ctx.schedule(
+									'classify',
+									{},
+									{ at: { var: 'now + minutes(1)' }, key: 'classify_retry' }
+								);
+						}),
+					flaky: (input, ctx) =>
+						Effect.gen(function* () {
+							if (Predicate.hasProperty(input, 'bug'))
+								return yield* Effect.fail(BoltError.make('guestError', 'guest', 'bug'));
+							yield* ctx.act('quotes.create', [{ title: 'once' }]);
+							yield* ctx.notify({
+								to: [{ policy: 'ops' }, { team: 'ops' }, { user: 'holder' }],
+								title: 'For ops',
+								once: 'source-policy-notice'
+							});
+							if (!ctx.attempt.endsWith(':3'))
+								return yield* Effect.fail(BoltError.make('upstream', 'guest', '502'));
+							return 'done';
+						})
+				});
 				yield* w.db.write({
 					// holder resolution itself is source-access's; here the notice is sent once across retries
 					text: `INSERT INTO sys_user(id,name,team,active,kind) VALUES ('holder','Holder','ops',true,'staff')`,
@@ -651,7 +867,12 @@ describe('re-queues, attempts and notices (rules 21, 54, 55, 70)', () => {
 					text: `INSERT INTO sys_run (id, automation, input, due_at, cause, depth) VALUES ('bug', 'flaky', '{"bug":true}', $1::timestamptz, 'schedule', 0)`,
 					params: [iso(T0)]
 				});
-				yield* w.r.boot; // the seed's first admission queued each start; a second boot queues nothing
+				// a seed pack's `start` runs, queued as its load queues them
+				yield* w.db.write({
+					text: `INSERT INTO sys_run (id, automation, input, due_at, cause, depth) SELECT gen_random_uuid(), a, '{}', $1::timestamptz, 'start', 0 FROM unnest(ARRAY['classify', 'flaky']) a`,
+					params: [iso(T0)]
+				});
+				yield* w.r.boot();
 				// flaky's retries back off 1 then 2 minutes (jittered) and classify re-queues by the minute: ten minutes hold them all
 				yield* w.until(T0 + 10 * 60000);
 				// classify's re-queues land on their exact minute (flaky's retries are jittered backoffs)
@@ -677,7 +898,9 @@ describe('re-queues, attempts and notices (rules 21, 54, 55, 70)', () => {
 					)
 				).toEqual([{ state: 'succeeded', attempts: 3, output: 'done', results: 3 }]);
 				expect(
-					yield* w.sql(`SELECT state, attempts, error->>'code' AS code FROM sys_run WHERE id = 'bug'`)
+					yield* w.sql(
+						`SELECT state, attempts, error->>'code' AS code FROM sys_run WHERE id = 'bug'`
+					)
 				).toEqual([{ state: 'failed', attempts: 1, code: 'guestError' }]);
 				expect(yield* w.sql(`SELECT count(*)::int AS n FROM quotes WHERE title = 'once'`)).toEqual([
 					{ n: 3 }
@@ -696,7 +919,8 @@ describe('webhooks and visibility (rules 56, 56a)', () => {
 			Effect.gen(function* () {
 				const w = yield* world(base, {
 					hook: (input) => Effect.succeed(input),
-					sent: () => Effect.fail(BoltError.make('guestError', 'guest', 'secret detail'))
+					'quotes.effect.updated': () =>
+						Effect.fail(BoltError.make('guestError', 'guest', 'secret detail'))
 				});
 				yield* w.secrets.set('workspace', 'HOOK', 'tok');
 				w.statements.length = 0;
@@ -716,7 +940,9 @@ describe('webhooks and visibility (rules 56, 56a)', () => {
 					yield* w.r.webhook('/in', { ...ok, body: new TextEncoder().encode('not json') })
 				).toEqual({ status: 400 });
 				yield* w.until(T0);
-				expect(w.calls.map((c) => c.input)).toEqual([{ order: 1 }]);
+				expect(w.calls.filter((c) => c.target === 'hook').map((c) => c.input)).toEqual([
+					{ order: 1 }
+				]);
 				expect(
 					yield* w.sql(
 						`SELECT state, count(*)::int AS n FROM sys_run WHERE automation = 'hook' GROUP BY state ORDER BY state`
@@ -748,8 +974,10 @@ describe('webhooks and visibility (rules 56, 56a)', () => {
 				const id = created.records[0].id;
 				yield* as('update', [{ target: id, set: { status: 'sent' } }]);
 				yield* w.until(T0);
-				const [run] = yield* w.sql(`SELECT id FROM sys_run WHERE automation = 'sent'`);
-				if (run === undefined) throw new Error('Missing sent run');
+				const [run] = yield* w.sql(
+					`SELECT id FROM sys_run WHERE automation = 'quotes.effect.updated'`
+				);
+				if (run === undefined) throw new Error('Missing updated effect run');
 				const runId = String(run['id']);
 				const seen = Option.getOrNull(yield* w.r.view(yield* w.e.authority(holder), runId));
 				expect(seen).toEqual(

@@ -13,16 +13,19 @@
 	import type { Json } from '../client/contract.js';
 	import { useBolt } from '../client/context.js';
 	import {
+		complete,
 		fromWhere,
-		nodeText,
+		nodeParts,
 		ORDER_MAX_KEYS,
 		pathLabel,
 		pathOf,
 		sortText,
 		type Node as FilterRow,
+		type Part,
 		type SortKey
 	} from './filter.js';
 	import FilterNode from './FilterNode.svelte';
+	import FilterSummary from './FilterSummary.svelte';
 	import Glyph from '../primitives/icon/Glyph.svelte';
 	import { recordLabels } from '../record/labels.svelte.js';
 	import { humanize, msg } from '../text/messages.js';
@@ -60,17 +63,21 @@
 	);
 	let details: HTMLDetailsElement | null = $state(null);
 	const blank: FilterRow = { t: 'cond', path: '', op: 'eq', arg: null };
-	const count = $derived(view.rows.length + view.order.length);
+	// the badge counts what applies: an incomplete row (a field, no value yet) is not sent
+	const count = $derived(view.rows.filter(complete).length + view.order.length);
 	const describes = $derived(bolt.describe !== undefined);
 	/** The catalogue's words for an operator on a path (the fallback is the machine operator). */
 	const opWords = (op: string, path: string) =>
 		view.offers.find((o) => o.op === op && pathOf(o.path).endsWith(path))?.opLabel ?? op;
-	const authorText = $derived.by(() => {
+	const authorParts = $derived.by((): Part[] | null => {
 		if (author === undefined || author === null) return null;
 		const rows = fromWhere(catalog, model, author);
 		return rows === null
-			? JSON.stringify(author)
-			: rows.map((n) => nodeText(catalog, model, n, humanize, named, opWords)).join(' and ');
+			? [{ role: 'value', text: JSON.stringify(author) }]
+			: rows.flatMap((n, i) => [
+					...(i === 0 ? [] : [{ role: 'join' as const, text: 'and' }]),
+					...nodeParts(catalog, model, n, humanize, named, opWords, bolt.locale)
+				]);
 	});
 	const setRow = (i: number, n: FilterRow) =>
 		view.setRows(view.rows.map((x, j) => (j === i ? n : x)));
@@ -145,7 +152,7 @@
 		{:else}<p class="flex-1 text-sm font-medium">
 				{msg(bolt, 'view.title', 'Filters & sort')}
 			</p>{/if}
-		{#if count > 0}
+		{#if view.rows.length + view.order.length > 0}
 			<button
 				type="button"
 				class="text-muted-foreground hover:text-foreground shrink-0 text-xs"
@@ -184,20 +191,31 @@
 				({count}){/if}
 		</summary>
 		<div class="mt-3 flex flex-col gap-3" data-view-builder>
-			{#if authorText !== null}
+			{#if authorParts !== null}
 				<p
-					class="bg-muted/50 text-muted-foreground rounded-sm px-2 py-1.5 text-xs"
+					class="bg-muted/50 text-muted-foreground flex items-center gap-1 rounded-sm px-2 py-1.5 text-xs"
 					data-author-where
 				>
-					<Glyph name="lock" class="mr-1 inline size-3 align-[-2px]" />{msg(
-						bolt,
-						'view.always',
-						'Always'
-					)}: {authorText}
+					<Glyph name="lock" class="size-3 shrink-0" /><span class="shrink-0"
+						>{msg(bolt, 'view.always', 'Always')}:</span
+					>
+					<FilterSummary parts={authorParts} />
 				</p>
 			{/if}
 			<section class="flex flex-col gap-1.5" data-filter-rows>
+				{#if view.rows.length > 1}
+					<p class="text-muted-foreground text-xs" data-rows-heading>
+						{msg(bolt, 'view.matchAll', 'Show records that match all of:')}
+					</p>
+				{/if}
 				{#each view.rows as n, i (i)}
+					{#if i > 0}
+						<!-- top-level rows always all hold (each is its own link clause); "Add group" holds an any-of -->
+						<span
+							class="text-muted-foreground text-[11px] font-medium tracking-wide uppercase"
+							data-join="and">{msg(bolt, 'view.and', 'and')}</span
+						>
+					{/if}
 					<FilterNode
 						node={n}
 						{catalog}
@@ -235,9 +253,7 @@
 						<div class="flex items-center gap-1.5" data-sort={k.field}>
 							{#if k.near !== undefined}
 								<!-- nearest first from a described place: shown, not re-pointed here -->
-								<span class="text-sm" data-sort-near
-									>{sortText(catalog, model, k, humanize)}</span
-								>
+								<span class="text-sm" data-sort-near>{sortText(catalog, model, k, humanize)}</span>
 							{:else}
 								<Combobox
 									class="w-auto"

@@ -6,8 +6,10 @@ import { audienceAdmits, type EmbedOrigin } from './app.ts';
 // (`members`, `external`, `all`) or `'none'` for no authentication at all. What it may do inside is
 // `policies`: the assigned policies it runs as, envoy-style — an override of the requestor's own rights,
 // so a public kiosk whose requestor holds no policy still reads and writes through its assigned policy.
-// A member kiosk still needs opening rights: a held policy's `capabilities.kiosks` naming it (or an
-// administrator); the inside authority is always the kiosk's own policies with no admin bypass.
+// Staff still need opening rights: a held policy's `capabilities.kiosks` naming it (or an administrator).
+// A signed-in external opens any kiosk whose `auth` admits externals — it is their portal: signing in
+// (an invitation or the workspace's `signup`) is the whole admission. The inside authority is always the
+// kiosk's own policies with no admin bypass.
 import type { Checked, Exact } from '../fields.ts';
 import type { KioskName, PolicyName } from '../names.ts';
 import type { IconName, Msg, NonEmpty } from '../values.ts';
@@ -22,7 +24,10 @@ export type KioskSpec = {
 	icon: IconName;
 	/** The kiosk card image, an asset path. */
 	banner?: string;
-	/** Who may open it: a signed-in audience, or `'none'` for no authentication (default `'members'`). */
+	/**
+	 * Who may open it: a signed-in audience, or `'none'` for no authentication (default `'members'`). Staff open by a
+	 * held `capabilities.kiosks`; every signed-in external opens a kiosk that admits externals.
+	 */
 	auth?: KioskAuth;
 	/** The assigned policies it runs as inside (envoy-style override, never an admin bypass). */
 	policies: NonEmpty<string>;
@@ -87,6 +92,8 @@ export const canOpenKiosk: import('../../engine/services.ts').CanOpenKiosk = (
 	return (
 		authority.admin ||
 		(audienceAdmits(spec.auth ?? 'members', authority) &&
-			(authority.capabilities.kiosks ?? []).some((k) => k === '*' || k === name))
+			// an external's portal: signing in opens it, and its policies are the whole authority inside
+			(authority.actor.external ||
+				(authority.capabilities.kiosks ?? []).some((k) => k === '*' || k === name)))
 	);
 };

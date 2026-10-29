@@ -4,19 +4,19 @@
 // itself is `null`, and the caller shows its own placeholder.
 import { parseJsonResult } from './json.ts';
 import { Decimal } from './decimal.ts';
-import { Predicate } from 'effect';
+import type { Value } from './kind.ts';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const INSTANT = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:\d{2})$/;
 
 /** The locale-free text of one value: an instant as `YYYY-MM-DD HH:mm` UTC (a UTC midnight as its day), a `Decimal` as its exact text, a relation as its own `label`; anything structured is no title. */
-function text(v: unknown): string | null {
+function text(v: Value | undefined): string | null {
 	if (v === null || v === undefined) return null;
-	if (Predicate.isObject(v)) {
-		if (v instanceof Decimal) return text(String(v));
-		return typeof v['label'] === 'string' ? text(v['label']) : null;
+	if (v instanceof Decimal) return text(v.toString());
+	if (typeof v === 'object') {
+		const own = members(v)?.['label'];
+		return typeof own === 'string' ? text(own) : null;
 	}
-	if (Array.isArray(v)) return null;
 	const s = String(v).trim();
 	if (s === '' || UUID.test(s) || (/^[{[]/.test(s) && isJsonContainer(s))) return null;
 	if (INSTANT.test(s)) {
@@ -33,9 +33,16 @@ const isJsonContainer = (s: string) => {
 	return result._tag === 'Success' && typeof result.success === 'object';
 };
 
+const isList = (v: Value): v is readonly Value[] => Array.isArray(v);
+/** A structured value's members: a relation read `with` its target; a scalar, decimal or list has none. */
+const members = (v: Value | undefined) =>
+	v === null || v === undefined || typeof v !== 'object' || v instanceof Decimal || isList(v)
+		? undefined
+		: v;
+
 /** A dotted path's value: `customer.name` reads a relation read `with` its target. */
-const at = (row: unknown, path: string): unknown =>
-	path.split('.').reduce<unknown>((v, k) => (Predicate.isObject(v) ? v[k] : undefined), row);
+const at = (row: Value, path: string): Value | undefined =>
+	path.split('.').reduce<Value | undefined>((v, k) => members(v)?.[k], row);
 
 /**
  * A record's title from its model's `label` paths: each value shown per kind (through `show` when given), empty terms dropped,
@@ -44,15 +51,14 @@ const at = (row: unknown, path: string): unknown =>
  * label({ name: 'Ann', team: { name: 'Ops' } }, ['name', 'team.name']) // 'Ann · Ops'
  */
 export function label(
-	row: { readonly [field: string]: unknown },
+	row: { readonly [field: string]: Value },
 	paths: readonly string[],
-	show?: (path: string, value: unknown) => string
+	show?: (path: string, value: Value) => string
 ): string | null {
 	const terms = paths
 		.map((p) => {
 			const v = at(row, p);
-			const shown = show === undefined || v === null || v === undefined ? v : show(p, v);
-			return text(shown);
+			return text(show === undefined || v === null || v === undefined ? v : show(p, v));
 		})
 		.filter((t): t is string => t !== null);
 	return terms.length === 0 ? null : terms.join(' · ');

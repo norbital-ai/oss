@@ -271,10 +271,13 @@ const closed: LanguageModel.CodecTransformer = (schema) => {
 const toolSchemas = new WeakMap<object, Json>();
 /** The JSON Schema a tool's input is offered as: a dynamic tool's raw schema, else its closed Schema document. */
 export const toolSchema = (tool: Tool.Any): Json => {
-	const source = Tool.isDynamic(tool) && tool.jsonSchema !== undefined ? tool.jsonSchema : tool.parametersSchema;
+	const source =
+		Tool.isDynamic(tool) && tool.jsonSchema !== undefined ? tool.jsonSchema : tool.parametersSchema;
 	let schema = toolSchemas.get(source);
 	if (schema === undefined) {
-		schema = Schema.decodeUnknownSync(Schema.Json)(Tool.getJsonSchema(tool, { transformer: closed }));
+		schema = Schema.decodeUnknownSync(Schema.Json)(
+			Tool.getJsonSchema(tool, { transformer: closed })
+		);
 		toolSchemas.set(source, schema);
 	}
 	return schema;
@@ -496,14 +499,11 @@ export const declaredToolkit = Effect.fn('Ai.declaredToolkit')(function* (
 
 export const textOf = (content: Json): string => {
 	if (typeof content === 'string') return content;
-	const t =
-		content !== null && typeof content === 'object' && !Array.isArray(content)
-			? (content as { text?: Json }).text
-			: undefined;
+	const t = Predicate.isObject(content) ? content['text'] : undefined;
 	return typeof t === 'string' ? t : JSON.stringify(content);
 };
 
-/** A tool `ctx.ai.sys_2.infer` offers the model (rule 58: a host tool its run's `runAs` policies name); a throw is a failed result. */
+/** A tool `ctx.ai.sys_2.infer` offers the model (rule 58: a host tool its automation's policies name); a throw is a failed result. */
 export type InferTool = {
 	name: string;
 	description: string;
@@ -726,8 +726,6 @@ const FINAL_TURNS = 3;
 type Rule = { expression: string; message: string };
 /** `output` as a JSON Schema (draft 2020-12) for the structure and CEL `rules` for the logic, instead of a declared kind. */
 type SchemaOutput = { jsonSchema: Json; rules?: readonly Rule[] };
-const isSchemaOutput = (o: unknown): o is SchemaOutput =>
-	o !== null && typeof o === 'object' && 'jsonSchema' in o;
 
 const Rules = Schema.Array(Schema.Struct({ expression: Schema.String, message: Schema.String }));
 const InferOutput = Schema.Union([
@@ -914,7 +912,7 @@ export function inferFacility(
 				ok: false,
 				error: { kind: 'unavailable', facility: 'files', reason: 'the host provides no file reads' }
 			};
-		const schemaOut = isSchemaOutput(a.output) ? a.output : undefined;
+		const schemaOut = a.output !== undefined && 'jsonSchema' in a.output ? a.output : undefined;
 		const out =
 			a.output !== undefined && 'kind' in a.output && a.output.kind !== 'text'
 				? a.output

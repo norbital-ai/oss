@@ -20,7 +20,15 @@ import type { Row } from '../src/model/types.ts';
 import type { Value } from '@norbital-ai/std/kind';
 import type { KindsHost } from '../src/kinds/context.ts';
 import type { Offer, RawArg, Node, Op, Resolved, SortKey } from '../src/filter/filter.ts';
-import { resolve, taggedArg, varError, variableOf, variablesFor } from '../src/filter/filter.ts';
+import {
+	nodeParts,
+	operatorsFor,
+	resolve,
+	taggedArg,
+	varError,
+	variableOf,
+	variablesFor
+} from '../src/filter/filter.ts';
 import type { ViewHarnessProps } from './view-harness.svelte';
 import { it, vi } from '@effect/vitest';
 import {
@@ -66,8 +74,7 @@ const catalog = {
 			account: { targets: ['accounts'] },
 			subject: { targets: ['accounts', 'sys_user'] }
 		},
-		many: ['lines'],
-		masked: ['salary']
+		many: ['lines']
 	},
 	accounts: {
 		label: ['name'],
@@ -318,10 +325,9 @@ it.effect(
 			assert.deepEqual(toWhere(catalog, 'jobs', required(rows[18])), {
 				lines: { sum: { of: 'amount', gt: 100 } }
 			});
-			// an incomplete row is shown but not sent; a masked field, an unknown one and a wrong-kind literal never parse
+			// an incomplete row is shown but not sent; an unknown field and a wrong-kind literal never parse
 			assert.equal(toWhere(catalog, 'jobs', cond('title', 'eq')), null);
 			const invalid: readonly Json[] = [
-				{ salary: { gt: 1 } },
 				{ bogus: { eq: 1 } },
 				{ hours: { eq: 'abc' } },
 				{ status: { eq: 'nope' } },
@@ -353,17 +359,13 @@ it.effect('sort: nulls last ascending and first descending', () =>
 );
 
 it.effect(
-	'sort: related keys — one hop through unmasked one-relations into read models; keys nest, and round-trip through the URL',
+	'sort: related keys — one hop through one-relations into read models; keys nest, and round-trip through the URL',
 	() =>
 		Effect.sync(() => {
 			const s = sortable(catalog.jobs, true, catalog);
 			assert.ok(s.includes('account.name') && s.includes('assignee.name'), s.join());
 			assert.ok(!s.includes('account.owner'), 'a target FK is no sort key'); // it would order by an id
 			assert.ok(!s.some((f) => f.startsWith('subject')), 'an arc is no hop');
-			assert.ok(
-				!sortable({ ...catalog.jobs, masked: ['account'] }, true, catalog).includes('account.name'),
-				'a masked FK is no hop'
-			);
 			assert.ok(
 				!sortable(catalog.jobs, true).some((f) => f.includes('.')),
 				'no catalog, no related keys'
@@ -385,6 +387,87 @@ it.effect(
 			assert.deepEqual(
 				sortRows(rows, [{ field: 'account.name', dir: 'asc' }]).map((r) => r.id),
 				['b', 'a', 'c']
+			);
+		})
+);
+
+it.effect(
+	'a chip formats every value by its kind: a date range reads as dates, never [object Object]; parts keep their roles',
+	() =>
+		Effect.sync(() => {
+			const range = cond('window', 'startsWithin', {
+				lit: { from: '2026-01-01', to: '2026-12-31' }
+			});
+			const text = nodeText(catalog, 'jobs', range, (x) => x);
+			assert.doesNotMatch(text, /object Object/);
+			assert.equal(text, 'window starts within Jan 1, 2026 – Dec 31, 2026');
+			assert.deepEqual(
+				nodeParts(catalog, 'jobs', range, (x) => x).map((p) => p.role),
+				['field', 'op', 'value']
+			);
+			// nested under a many-relation, a date and a list of states format the same way
+			const nested: Node = {
+				t: 'many',
+				rel: 'lines',
+				q: 'some',
+				of: [cond('qty', 'gt', { lit: 2 })]
+			};
+			assert.equal(
+				nodeText(catalog, 'jobs', nested, (x) => x),
+				'lines has any: qty more than 2'
+			);
+			assert.equal(
+				nodeText(catalog, 'jobs', cond('scheduled_on', 'lt', { lit: '2026-10-29' }), (x) => x),
+				'scheduled_on before Oct 29, 2026'
+			);
+			assert.equal(
+				nodeText(catalog, 'jobs', cond('window', 'contains', { lit: '2026-10-29' }), (x) => x),
+				'window in force on Oct 29, 2026'
+			);
+			// a caller's machine fallback (`eq`) reads as the operator's words
+			assert.equal(
+				nodeText(
+					catalog,
+					'jobs',
+					cond('status', 'eq', { lit: 'done' }),
+					(x) => x,
+					undefined,
+					(op) => op
+				),
+				'status is Done'
+			);
+		})
+);
+
+it.effect(
+	"a condition's operators are never an empty choice: the catalogue's, else the grammar's for its kind",
+	() =>
+		Effect.sync(() => {
+			const ops = (path: string) =>
+				operatorsFor([], [], path, required(resolve(catalog, 'jobs', path))).map((o) => o.op);
+			assert.deepEqual(ops('assignee'), ['eq', 'ne', 'in', 'nin', 'isNull', 'notNull']);
+			assert.deepEqual(ops('window'), [
+				'contains',
+				'overlaps',
+				'within',
+				'startsWithin',
+				'endsWithin',
+				'isNull',
+				'notNull'
+			]);
+			assert.deepEqual(ops('tags'), ['has', 'hasAny', 'hasAll', 'isEmpty', 'notEmpty']);
+			assert.equal(
+				operatorsFor([], [], 'scheduled_on', required(resolve(catalog, 'jobs', 'scheduled_on')))[2]
+					?.label,
+				'after'
+			);
+			// the catalogue's own words win where it offers the path
+			assert.deepEqual(
+				operatorsFor(offers('jobs'), [], 'hours', required(resolve(catalog, 'jobs', 'hours'))),
+				[
+					{ op: 'eq', label: 'is' },
+					{ op: 'gt', label: 'more than' }
+				]
 			);
 		})
 );
@@ -554,7 +637,7 @@ async function scripted(extra: Partial<ViewScript> = {}) {
 			return { rows, next: null };
 		},
 		get: (_c, id) => ({ id, title: 'One', status: 'done' }),
-		aggregate: (_c, o) =>
+		aggregate: (_c, o): Value =>
 			o.by
 				? {
 						rows: [
@@ -563,8 +646,8 @@ async function scripted(extra: Partial<ViewScript> = {}) {
 						],
 						next: null
 					}
-				: [{ count: 1 }],
-		history: () => ({ rows: [], next: null }),
+				: { count: 1 },
+		history: () => [],
 		options: (c) => Effect.succeed({ fields: offers(c) }),
 		...extra
 	});
@@ -684,6 +767,75 @@ it.live('Table: initialFilter seeds clearable rows, and a cleared choice survive
 		assert.equal(s.last().where, undefined);
 		yield* browser(v.done);
 	})
+);
+
+it.live(
+	'Table: without a catalogue a relation still offers has any / has none / all match, a picked field its operators, and a group switches and/or',
+	() =>
+		Effect.gen(function* () {
+			const s = yield* browser(() => scripted({ options: () => Effect.succeed({ fields: [] }) }));
+			const v = yield* browser(() =>
+				show(
+					{
+						part: 'table',
+						view: Table,
+						props: {
+							of: 'jobs',
+							columns: ['title'],
+							initialFilter: {
+								lines: { some: { qty: { gt: 2 } } },
+								or: [{ hours: { gt: 1 } }, { title: { eq: 'x' } }]
+							}
+						},
+						bolt: s.bolt,
+						catalog
+					},
+					'/'
+				)
+			);
+			assert.match(
+				textOf(element<HTMLElement>(document, '[data-filter-chip]')),
+				/lines has any: qty more than 2/i
+			);
+			element<HTMLElement>(document, '[data-view-trigger]').click();
+			yield* browser(settle);
+			element<HTMLDetailsElement>(document, '[data-view-details]').open = true;
+			/** The values of the list `control` opens (an earlier list may still be leaving). */
+			const options = (control: HTMLElement) => {
+				const before = new Set(document.querySelectorAll('[role=option]'));
+				control.click();
+				flushSync();
+				const values = [...document.querySelectorAll<HTMLElement>('[role=option]')]
+					.filter((o) => !before.has(o))
+					.map((o) => o.dataset['value']);
+				control.click();
+				flushSync();
+				return values;
+			};
+			const many = element<HTMLElement>(document, '[data-many=lines]');
+			assert.deepEqual(options(element<HTMLElement>(many, '[aria-label=Quantifier]')), [
+				'some',
+				'none',
+				'every'
+			]);
+			assert.ok(element<HTMLElement>(many, '[data-many-heading]'));
+			assert.deepEqual(
+				options(element<HTMLElement>(many, '[data-cond=qty] [aria-label=Operator]')),
+				['eq', 'ne', 'gt', 'gte', 'lt', 'lte']
+			);
+			// the group's combinator sits between its conditions and switches it
+			const toggle = element<HTMLButtonElement>(document, '[data-group] [data-join-toggle]');
+			assert.equal(toggle.dataset['joinToggle'], 'or');
+			toggle.click();
+			yield* browser(settle);
+			assert.equal(
+				element<HTMLElement>(document, '[data-group] [data-join-toggle]').dataset['joinToggle'],
+				'and'
+			);
+			assert.match(JSON.stringify(s.last().where), /"hours":\{"gt":1\}/);
+			assert.doesNotMatch(JSON.stringify(s.last().where), /"or"/);
+			yield* browser(v.done);
+		})
 );
 
 it.live(
@@ -1342,5 +1494,96 @@ it.live(
 				v.target.remove();
 				vi.useRealTimers();
 			}
+		})
+);
+
+it.live(
+	'Table: a chip reads as the builder does, an incomplete row neither applies nor counts, and the picker offers only fields a member reads',
+	() =>
+		Effect.gen(function* () {
+			const jobs = {
+				...catalog.jobs,
+				search: ['title'],
+				semantic: true,
+				fields: {
+					...catalog.jobs.fields,
+					face: { kind: 'vector', dim: 3, metric: 'cosine', optional: true },
+					facts: { kind: 'json', shape: { kind: 'record', of: { kind: 'json' } }, optional: true }
+				}
+			} satisfies NonNullable<KindsHost['catalog']>[string];
+			const cat = { ...catalog, jobs };
+			const field = (name: string, op: string, kind: string): Offer => ({
+				label: name,
+				path: [{ k: 'field', name }],
+				op,
+				opLabel: op === 'contains' && kind === 'period' ? 'in force on' : 'is',
+				kind
+			});
+			const s = yield* browser(() =>
+				scripted({
+					options: () =>
+						Effect.succeed({
+							fields: [
+								...offers('jobs'),
+								field('window', 'contains', 'period'),
+								field('meta', 'isNull', 'json'),
+								field('facts', 'isNull', 'json'),
+								field('face', 'isNull', 'vector'),
+								field('$search', 'search', 'text'),
+								field('$similar', 'similar', 'text')
+							]
+						})
+				})
+			);
+			const v = yield* browser(() =>
+				show(
+					{
+						part: 'table',
+						view: Table,
+						props: {
+							of: 'jobs',
+							columns: ['title'],
+							initialFilter: { window: { contains: '2026-10-29' } }
+						},
+						bolt: s.bolt,
+						catalog: cat
+					},
+					'/'
+				)
+			);
+			const chip = () => textOf(element<HTMLElement>(document, '[data-filter-chip]'));
+			const before = chip();
+			assert.match(before, /window in force on/i);
+			element<HTMLElement>(document, '[data-view-trigger]').click();
+			yield* browser(settle);
+			assert.equal(chip(), before, 'one wording before and after the catalogue loads');
+			element<HTMLDetailsElement>(document, '[data-view-details]').open = true;
+			const where = s.last().where;
+			element<HTMLElement>(document, '[data-add-condition]').click();
+			yield* browser(settle);
+			const pickers = document.querySelectorAll<HTMLElement>('[data-field-picker]');
+			required(pickers[pickers.length - 1]).click();
+			flushSync();
+			const list = element<HTMLElement>(document, '[data-field-list]');
+			const paths = [...list.querySelectorAll<HTMLElement>('[data-path]')].map(
+				(b) => b.dataset['path']
+			);
+			assert.ok(paths.includes('title') && paths.includes('window'), paths.join());
+			for (const hidden of ['meta', 'facts', 'face', '$search', '$similar'])
+				assert.ok(!paths.includes(hidden), `${hidden} is not offered: ${paths.join()}`);
+			assert.match(
+				textOf(element<HTMLElement>(list, '[data-path=lines]')),
+				/^lines related records$/i
+			);
+			element<HTMLElement>(list, '[data-path=title]').click();
+			yield* browser(settle);
+			assert.equal(
+				document.querySelectorAll('[data-filter-chip]').length,
+				1,
+				'no chip for a row without a value'
+			);
+			assert.equal(textOf(element<HTMLElement>(document, '[data-view-count]')), '1');
+			assert.deepEqual(s.last().where, where, 'the incomplete row is not sent');
+			yield* browser(v.done);
 		})
 );

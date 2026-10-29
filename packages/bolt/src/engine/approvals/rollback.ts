@@ -51,8 +51,7 @@ export const rollbackPlan = Effect.fn('Approvals.rollbackPlan')(function* (
 > {
 	const cat = catalogOf(m);
 	const first = new Map<string, Checkpoint>();
-	for (const r of records)
-		if (!first.has(k(r.model, r.id))) first.set(k(r.model, r.id), r);
+	for (const r of records) if (!first.has(k(r.model, r.id))) first.set(k(r.model, r.id), r);
 	// a model a release removed has no rows to restore: reported, never fatal
 	const entries = [...first.values()].filter((r) => cat.models.get(r.model) !== undefined);
 	const removed = [...first.values()]

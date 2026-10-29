@@ -8,7 +8,7 @@ import { messages } from '../src/engine/agent/context.ts';
 import { rowsOf, transcriptRow } from '../src/engine/agent/schema.ts';
 import { MSG } from '../src/engine/conversations/store.ts';
 import { decodeProjectedManifest } from '../src/engine/manifest.ts';
-import { TestWorkspace } from '../src/test/index.ts';
+import { TestWorkspace } from '../../bolt-cli/src/test/index.ts';
 
 const manifest = Result.getOrThrow(
 	decodeProjectedManifest({

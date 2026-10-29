@@ -1,6 +1,6 @@
 <script lang="ts" generics="C extends ModelKey">
-	import type { ModelKey, Page, Row, RowOf } from '../model/types.js';
-	import type { Json } from '../client/contract.js';
+	import type { ModelKey, Row, RowOf } from '../model/types.js';
+	import type { Json, QueryAnswer } from '../client/contract.js';
 	import { watch as watchSource } from 'runed';
 	import { untrack } from 'svelte';
 	import { useKinds } from '../kinds/context.js';
@@ -12,7 +12,6 @@
 	import { label, msg } from '../text/messages.js';
 	import { listRequest, refOf, unref } from '../relations/select.js';
 	import { requestJson } from '../read/request.js';
-	import { nextOf, rowsOf } from '../read/results.js';
 	import { pageRead } from '../read/paging.js';
 	import Glyph from '../primitives/icon/Glyph.svelte';
 	import ReadGate from '../read/ReadGate.svelte';
@@ -73,10 +72,10 @@
 		// Count metadata can rebuild an equivalent lane filter; keep its existing query and pages.
 		void query;
 		return untrack(() =>
-			pageRead<Page<RowOf<C> & Row>>(
+			pageRead(
 				of,
 				(limit, at) =>
-					bolt.query(
+					bolt.query<QueryAnswer<RowOf<C> & Row>>(
 						requestJson(
 							listRequest(
 								kinds.catalog,
@@ -106,7 +105,7 @@
 		}
 	);
 	$effect(() => {
-		if (state.kind === 'ready') onNext(nextOf(state.value));
+		if (state.kind === 'ready') onNext(state.value.next);
 	});
 	const cards = $derived(
 		state.kind === 'ready'
@@ -158,9 +157,13 @@
 		{/if}
 		<!-- the cards' spacing is their margin (measured with them); the page gives the last one back to the lane's gap -->
 		<div class={grid ? 'contents' : ['flex flex-col', cards.length > 0 && '-mb-2']}>
-			{#if !grid}<div aria-hidden="true" style="height:{lane.before}px" {@attach lane.anchor}></div>{/if}
+			{#if !grid}<div
+					aria-hidden="true"
+					style="height:{lane.before}px"
+					{@attach lane.anchor}
+				></div>{/if}
 			{#each grid ? cards : lane.slice(cards) as row (row['id'])}
-				{@const displayed = unref(kinds.catalog, of, fields, rowsOf([row]), bolt.locale)[0] ?? row}
+				{@const displayed = unref(kinds.catalog, of, fields, [row], bolt.locale)[0] ?? row}
 				<!-- not a <button>: a card snippet's own buttons and links must receive their clicks; the card opens on the rest -->
 				<!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_noninteractive_element_interactions -->
 				<div

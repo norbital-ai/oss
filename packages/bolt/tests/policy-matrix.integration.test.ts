@@ -7,11 +7,10 @@ import { describe, expect, it } from '@effect/vitest';
 import { Context, Effect, Layer, Result, Schema } from 'effect';
 import { catalogOf, toPred } from '../src/engine/access/pred.ts';
 import type { Authority, Bindings, ModelAuthority, EngineActor } from '../src/engine/contracts.ts';
-import { TestDb } from '../src/test/database.ts';
+import { TestDb } from '../../bolt-cli/src/test/database.ts';
 import { TenantDb } from '../src/engine/db/tenant-db.ts';
 import { decodeProjectedManifest } from '../src/engine/manifest.ts';
 import { whereSql, type Pred } from '@norbital-ai/store';
-import { plan } from '../src/engine/schema/plan.ts';
 import { readOptions } from '../src/engine/query/reader.ts';
 import { fromStore } from '../src/protocol/errors.ts';
 
@@ -241,13 +240,12 @@ const u = (n: string) => {
 };
 const b: Bindings = { now: '2026-09-25T10:00:00.000Z', today: '2026-09-25', tz: 'UTC' };
 const all = (model: string): ModelAuthority => ({
-	read: { [model]: [{ policy: 'p', where: { t: 'const', value: true }, fields: 'all' }] },
+	read: { default: { [model]: [{ policy: 'p', where: { t: 'const', value: true } }] } },
 	history: [],
 	create: [],
 	update: [],
 	delete: [],
-	moves: {},
-	masks: {}
+	moves: {}
 });
 const who = (
 	over: Partial<Extract<EngineActor, { kind: 'member' }>> = {},
@@ -286,7 +284,7 @@ const fixture = Effect.gen(function* () {
 			...as,
 			models: {
 				...as.models,
-				[root]: { ...all(root), read: { [root]: [{ policy: 'p', where: pred, fields: 'all' }] } }
+				[root]: { ...all(root), read: { default: { [root]: [{ policy: 'p', where: pred }] } } }
 			}
 		};
 		const s = yield* whereSql(

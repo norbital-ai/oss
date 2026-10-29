@@ -20,6 +20,14 @@ const run = (text: string, result: 'text' | 'date' | 'instant' | 'list') => {
 };
 
 describe('filter variables', () => {
+	it('names the requestor members an expression reads at any depth', () => {
+		const c = compileVar('requestor.id in requestor.scopes.sales_rep || size(requestor.teams) > 0');
+		expect('error' in c ? c.error : [...c.requestor].sort()).toEqual([
+			'id',
+			'scopes.sales_rep',
+			'teams'
+		]);
+	});
 	it('evaluates requestor members, a missing one as null', () => {
 		expect(run('requestor.id', 'text')).toBe('u1');
 		expect(run('requestor.email', 'text')).toBeNull();

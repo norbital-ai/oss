@@ -23,7 +23,6 @@ type Previewed =
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const PAST = '__bolt_restore_past';
 const SYSTEM = new Set<string>(SYSTEM_COLUMNS);
-const masked = (v: Json | undefined) => Predicate.isObject(v) && v['$masked'] === true;
 const stored = (v: Json): Json =>
 	Predicate.isObject(v) && Object.keys(v).length === 1 && typeof v['$dec'] === 'string'
 		? v['$dec']
@@ -77,14 +76,7 @@ export const restorePreview = Effect.fn('Bolt.restorePreview')(function* (
 	const caps =
 		authority === null
 			? null
-			: yield* recordCapabilities(
-					{ ...e, manifest: m },
-					model,
-					id,
-					authority,
-					bindings,
-					readable
-				);
+			: yield* recordCapabilities({ ...e, manifest: m }, model, id, authority, bindings, readable);
 	if (authority !== null && caps === null) return gone;
 	if (caps?.update.reasons.includes('underApproval'))
 		return {
@@ -108,7 +100,7 @@ export const restorePreview = Effect.fn('Bolt.restorePreview')(function* (
 			reader,
 			bindings
 		);
-	// the caller's fold authorizes (the history grant) and masks; the workspace's is the stored past to compare
+	// the caller's fold authorizes (the history grant); the workspace's is the stored past to compare
 	const seen = yield* history(caller);
 	const raw = yield* history({ as: 'workspace' });
 	if (!Predicate.isObject(seen) || !Predicate.isObject(raw) || Array.isArray(raw))
@@ -165,7 +157,7 @@ FROM kept, ${q(table)} t WHERE t.id::text = $3`,
 				field: key,
 				reason: 'definitionChanged',
 				current: null,
-				restored: masked(seen[key]) ? { $masked: true } : value
+				restored: value
 			});
 	const state = stateField(m, model);
 	for (const [name, f] of c.model.fields) {
@@ -187,10 +179,6 @@ FROM kept, ${q(table)} t WHERE t.id::text = $3`,
 			continue;
 		}
 		if (!cols.some((col) => differs.includes(col))) continue;
-		if (masked(current) || masked(restored) || present.some((col) => masked(seen[col]))) {
-			skip('masked');
-			continue;
-		}
 		if (decodeValue(f, restored, m.models[model]?.fields[name]) !== null) {
 			skip('definitionChanged');
 			continue;

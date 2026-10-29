@@ -5,7 +5,7 @@ import { describe, expect, it, layer } from '@effect/vitest';
 import { Context, Effect, FiberSet, Layer, Result, Schema } from 'effect';
 import { decodeProjectedManifest } from '../src/engine/manifest.ts';
 import { shellApi } from '../src/shell/runtime.ts';
-import { program } from '../src/test/guest.ts';
+import { program } from '../../bolt-cli/src/test/guest.ts';
 import { founderBootstrap } from '../src/engine/identity/session.ts';
 import { HostIdentity } from '../src/shell/host.ts';
 import type { StudioOp, StudioPort, StudioState } from '../src/shell/studio/model.ts';
@@ -13,8 +13,8 @@ import type { StudioInspectInput } from '../src/shell/studio/inspection.ts';
 import type { AuditRuleSet, StudioAuditRules } from '../src/shell/studio/audit.ts';
 import { BoltError } from '../src/protocol/errors.ts';
 import { HEADERS, PATHS } from '../src/protocol/wire.ts';
-import { SHELL } from '../src/shell/nav.ts';
-import { KitInvalid, TestWorkspace } from '../src/test/index.ts';
+import { SHELL, type ShellBoot } from '../src/shell/nav.ts';
+import { KitInvalid, TestWorkspace } from '../../bolt-cli/src/test/index.ts';
 
 const OPEN = '0199a000-0000-4000-8000-00000000000a';
 const manifest = Result.getOrThrow(
@@ -34,7 +34,11 @@ const manifest = Result.getOrThrow(
 		},
 		relationships: { 'applications.opening': { to: 'openings', inverse: 'applications' } },
 		exposures: {
-			openings: { read: { openings: { fields: 'all' } } },
+			// what a visitor or kiosk reads of a role: its title
+			openings: {
+				read: { openings: { fields: 'all' } },
+				outputs: { public: { openings: { fields: ['title'] } } }
+			},
 			applications: {
 				read: { applications: { fields: 'all' } },
 				create: { columns: { applications: ['opening', 'name'] } }
@@ -45,18 +49,14 @@ const manifest = Result.getOrThrow(
 			applicant: {
 				description: 'Apply',
 				grants: {
-					openings: {
-						read: { openings: { where: { status: { eq: 'open' } }, fields: ['title'] } }
-					},
+					openings: { outputs: { public: { openings: { where: { status: { eq: 'open' } } } } } },
 					applications: { create: { check: true } }
 				}
 			},
 			lobby: {
 				description: 'Lobby kiosk',
 				grants: {
-					openings: {
-						read: { openings: { where: { status: { eq: 'open' } }, fields: ['title'] } }
-					},
+					openings: { outputs: { public: { openings: { where: { status: { eq: 'open' } } } } } },
 					applications: {
 						create: { columns: { applications: ['opening', 'name'] }, check: true }
 					}
@@ -399,7 +399,6 @@ layer(workspace)('shell routes', (it) => {
 		rep: Jar = jar(),
 		repId = '';
 	describe('shell host (§5.10)', () => {
-
 		it.effect(
 			'signs the founder in with an emailed code; the boot shows every app and the settings',
 			() =>
@@ -538,58 +537,63 @@ layer(workspace)('shell routes', (it) => {
 			})
 		);
 
-		it.effect('the workspace log reads the host log through its query; admin-only; a malformed bound is refused', () =>
-			Effect.gen(function* () {
-				const t = yield* TestWorkspace;
-				t.fakes.logs.splice(0);
-				for (const [i, severity] of (['info', 'error'] as const).entries())
-					t.fakes.logs.push({
-						id: String(i + 1),
-						at: `2026-09-25T00:00:0${i}.000Z`,
-						severity,
-						event: 'act.settled',
-						invocation: `i${i}`,
-						run: null,
-						conversation: null,
-						turn: null,
-						attributes: { n: i }
-					});
-				const ns = (q: string) =>
-					call(admin, 'GET', `/__bolt/shell/logs${q}`).pipe(
-						Effect.flatMap((reply) =>
-							Schema.decodeUnknownEffect(
-								Schema.Array(Schema.Struct({ attributes: Schema.Struct({ n: Schema.Number }) }))
-							)(reply.body?.value)
-						),
-						Effect.map((rows) => rows.map((r) => r.attributes.n))
-					);
-				expect(yield* ns('')).toEqual([1, 0]);
-				expect(yield* ns('?level=error')).toEqual([1]);
-				expect((yield* call(admin, 'GET', '/__bolt/shell/logs?since=soon')).status).toBe(400);
-				expect((yield* call(rep, 'GET', '/__bolt/shell/logs')).status).toBe(403);
-			})
+		it.effect(
+			'the workspace log reads the host log through its query; admin-only; a malformed bound is refused',
+			() =>
+				Effect.gen(function* () {
+					const t = yield* TestWorkspace;
+					t.fakes.logs.splice(0);
+					for (const [i, severity] of (['info', 'error'] as const).entries())
+						t.fakes.logs.push({
+							id: String(i + 1),
+							at: `2026-09-25T00:00:0${i}.000Z`,
+							severity,
+							event: 'act.settled',
+							invocation: `i${i}`,
+							run: null,
+							conversation: null,
+							turn: null,
+							attributes: { n: i }
+						});
+					const ns = (q: string) =>
+						call(admin, 'GET', `/__bolt/shell/logs${q}`).pipe(
+							Effect.flatMap((reply) =>
+								Schema.decodeUnknownEffect(
+									Schema.Array(Schema.Struct({ attributes: Schema.Struct({ n: Schema.Number }) }))
+								)(reply.body?.value)
+							),
+							Effect.map((rows) => rows.map((r) => r.attributes.n))
+						);
+					expect(yield* ns('')).toEqual([1, 0]);
+					expect(yield* ns('?level=error')).toEqual([1]);
+					expect((yield* call(admin, 'GET', '/__bolt/shell/logs?since=soon')).status).toBe(400);
+					expect((yield* call(rep, 'GET', '/__bolt/shell/logs')).status).toBe(403);
+				})
 		);
 
-		it.effect('Studio runs over the host port for staff members; ops are checked at the boundary', () =>
-			Effect.gen(function* () {
-				expect(
-					(yield* call(admin, 'POST', '/__bolt/shell/studio', { op: { op: 'rollback', commit: 'c1' } }))
-						.status
-				).toBe(200);
-				expect(studioOps).toEqual([{ op: 'rollback', commit: 'c1' }]);
-				expect(
-					(yield* call(admin, 'POST', '/__bolt/shell/studio', {
-						op: { op: 'save', expected: 'c2', files: { '../../etc': 'x' } }
-					})).status
-				).toBe(422);
-				const stale = yield* call(admin, 'POST', '/__bolt/shell/studio', {
-					op: { op: 'save', expected: 'c1', files: { 'src/a.ts': 'y' } }
-				});
-				expect([stale.status, stale.body?.error?.code]).toEqual([409, 'conflict']);
-				// a staff member opens Studio too; the host's metering is an administrator's
-				expect((yield* call(rep, 'GET', '/__bolt/shell/studio')).status).toBe(200);
-				expect((yield* call(rep, 'GET', '/__bolt/shell/studio/usage')).status).toBe(403);
-			})
+		it.effect(
+			'Studio runs over the host port for staff members; ops are checked at the boundary',
+			() =>
+				Effect.gen(function* () {
+					expect(
+						(yield* call(admin, 'POST', '/__bolt/shell/studio', {
+							op: { op: 'rollback', commit: 'c1' }
+						})).status
+					).toBe(200);
+					expect(studioOps).toEqual([{ op: 'rollback', commit: 'c1' }]);
+					expect(
+						(yield* call(admin, 'POST', '/__bolt/shell/studio', {
+							op: { op: 'save', expected: 'c2', files: { '../../etc': 'x' } }
+						})).status
+					).toBe(422);
+					const stale = yield* call(admin, 'POST', '/__bolt/shell/studio', {
+						op: { op: 'save', expected: 'c1', files: { 'src/a.ts': 'y' } }
+					});
+					expect([stale.status, stale.body?.error?.code]).toEqual([409, 'conflict']);
+					// a staff member opens Studio too; the host's metering is an administrator's
+					expect((yield* call(rep, 'GET', '/__bolt/shell/studio')).status).toBe(200);
+					expect((yield* call(rep, 'GET', '/__bolt/shell/studio/usage')).status).toBe(403);
+				})
 		);
 
 		it.effect(
@@ -625,6 +629,23 @@ layer(workspace)('shell routes', (it) => {
 				})
 		);
 
+		it.effect('answers a repeated or trailing slash with one 308 to the canonical path', () =>
+			Effect.gen(function* () {
+				for (const [path, canonical] of [
+					['/inbox/', '/inbox'],
+					['//inbox', '/inbox'],
+					['/sign-in/?next=%2F', '/sign-in?next=%2F'],
+					['/__bolt/session/methods/', '/__bolt/session/methods'],
+					['/app//hr/', '/app/hr']
+				] as const) {
+					const res = yield* handle(new Request(`${ORIGIN}${path}`));
+					expect(res.status).toBe(308);
+					expect(res.headers.get('location')).toBe(`${ORIGIN}${canonical}`);
+				}
+				for (const path of ['/', '/inbox', '/manifest.webmanifest'])
+					expect((yield* handle(new Request(`${ORIGIN}${path}`))).status).not.toBe(308);
+			})
+		);
 		it.effect('serves the PWA manifest from the configured origin, never the Host header', () =>
 			Effect.gen(function* () {
 				const res = yield* handle(
@@ -657,15 +678,17 @@ layer(workspace)('shell routes', (it) => {
 						visitor: { app: 'careers', siteKey: 'dev' },
 						surfaces: { inbox: false, agent: false }
 					});
-					expect(b.catalog['openings']?.fields).toEqual({ title: { kind: 'text' } }); // the grant's fields narrow the exposure
+					// the views read the output the visitor holds: its fields
+					expect(b.catalog['openings']?.fields).toEqual({ title: { kind: 'text' } });
+					expect(b.catalog['openings']?.output).toBe('public');
 					expect(b.catalog['applications']?.create).toEqual({ columns: ['opening', 'name'] });
 					expect(b.nav.map((n) => n.name)).toEqual(['careers']);
-					// the root's grant scopes the rows and narrows the fields
+					// the output's grant scopes the rows; the output fixes the fields
 					const request = yield* call(
 						j,
 						'POST',
 						'/__bolt/q',
-						{ reads: [{ m: 'query', a: [{ openings: { fields: ['title'] } }] }] },
+						{ reads: [{ m: 'query', a: [{ openings: { output: 'public', fields: ['title'] } }] }] },
 						V
 					);
 					expect(request.status).toBe(200);
@@ -771,8 +794,14 @@ layer(workspace)('shell routes', (it) => {
 
 	describe('kiosks (standalone surfaces running as their assigned policies)', () => {
 		const K = (kiosk: string) => ({ 'Bolt-Kiosk': kiosk });
-		const read = (j: Jar, model: string, headers: Record<string, string> = {}) =>
-			call(j, 'POST', '/__bolt/q', { reads: [{ m: 'query', a: [{ [model]: {} }] }] }, headers);
+		const read = (j: Jar, model: string, headers: Record<string, string> = {}, output?: string) =>
+			call(
+				j,
+				'POST',
+				'/__bolt/q',
+				{ reads: [{ m: 'query', a: [{ [model]: output === undefined ? {} : { output } }] }] },
+				headers
+			);
 		const act = (j: Jar, callable: string, input: unknown, headers: Record<string, string> = {}) =>
 			Effect.gen(function* () {
 				const t = yield* TestWorkspace;
@@ -820,8 +849,8 @@ layer(workspace)('shell routes', (it) => {
 					const j = jar();
 					yield* boot(j, undefined, 'lobby');
 					// no sign-in, no requestor policy: the kiosk policy answers
-					const rows = (jj: Jar, headers: Record<string, string>) =>
-						read(jj, 'openings', headers).pipe(
+					const rows = (jj: Jar, headers: Record<string, string>, output?: string) =>
+						read(jj, 'openings', headers, output).pipe(
 							Effect.flatMap((reply) =>
 								Schema.decodeUnknownEffect(
 									Schema.Struct({
@@ -835,12 +864,12 @@ layer(workspace)('shell routes', (it) => {
 						);
 					expect((yield* read(jar(), 'openings')).status).toBe(401);
 					expect((yield* read(j, 'openings', K('nope'))).status).toBe(403);
-					expect(yield* rows(j, K('lobby'))).toEqual([
+					expect(yield* rows(j, K('lobby'), 'public')).toEqual([
 						expect.objectContaining({ title: 'Engineer' })
 					]);
-					expect((yield* rows(j, K('lobby')))[0]).toEqual(
-						expect.objectContaining({ title: 'Engineer', status: { $masked: true } })
-					);
+					expect((yield* rows(j, K('lobby'), 'public'))[0]).not.toHaveProperty('status');
+					// the kiosk holds no `default` grant
+					expect((yield* read(j, 'openings', K('lobby'))).status).toBe(403);
 					// the kiosk creates through its own grant, and nothing beyond it
 					expect(
 						(yield* act(j, 'applications.create', [{ opening: OPEN, name: 'Kay' }], K('lobby')))
@@ -851,12 +880,12 @@ layer(workspace)('shell routes', (it) => {
 					);
 					// a member's broader grants are replaced inside, not joined — and no admin bypass applies
 					expect((yield* rows(rep, {})).map((r) => r['status'])).toEqual(['open']);
-					expect((yield* rows(rep, K('desk')))[0]).toEqual(
-						expect.objectContaining({ title: 'Engineer', status: { $masked: true } })
-					);
-					expect((yield* rows(admin, K('desk')))[0]).toEqual(
-						expect.objectContaining({ title: 'Engineer', status: { $masked: true } })
-					);
+					const desk = (yield* rows(rep, K('desk'), 'public'))[0];
+					expect(desk).toMatchObject({ title: 'Engineer' });
+					expect(desk).not.toHaveProperty('status');
+					expect((yield* rows(admin, K('desk'), 'public'))[0]).not.toHaveProperty('status');
+					expect((yield* read(rep, 'openings', K('desk'))).status).toBe(403);
+					expect((yield* read(admin, 'openings', K('desk'))).status).toBe(403);
 					expect((yield* read(rep, 'openings', K('vault'))).status).toBe(403);
 				})
 		);
@@ -914,7 +943,25 @@ it.effect(
 					init
 				);
 				const path = new URL(request.url).pathname;
-				if (path === SHELL) return Response.json({ value: { contract: 'booted' } });
+				if (path === SHELL)
+					return Response.json({
+						value: {
+							workspace: { name: 'Acme', locale: 'en', tz: 'UTC' },
+							actor: null,
+							name: null,
+							admin: false,
+							preview: null,
+							nav: [],
+							surfaces: { inbox: false, runs: false, settings: false, agent: false, studio: false },
+							inbox: 0,
+							kiosks: [],
+							push: null,
+							visitor: null,
+							catalog: {},
+							automations: {},
+							contract: 'booted'
+						} satisfies ShellBoot
+					});
 				if (path === PATHS.act) stated.push(request.headers.get(HEADERS.contract));
 				return Response.json({ outcome: { kind: 'committed', output: null, records: [] }, v: 0 });
 			};

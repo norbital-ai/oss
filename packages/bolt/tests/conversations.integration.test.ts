@@ -11,12 +11,12 @@ import { Drivers, Files } from '../src/engine/ports.ts';
 import { Port } from '../src/engine/port.ts';
 import { Conversations, Outbound } from '../src/engine/services.ts';
 import { decodeProjectedManifest } from '../src/engine/manifest.ts';
-import { program } from '../src/test/guest.ts';
+import { program } from '../../bolt-cli/src/test/guest.ts';
 import { actReply, qReply, routeFixture } from './support/route-fixture.ts';
 import type { Json } from '../src/decl/values.ts';
 import type { Authority, ActOutcome as Outcome } from '../src/engine/contracts.ts';
 import { SendRefused } from '../src/engine/conversations/status.ts';
-import { TestWorkspace } from '../src/test/index.ts';
+import { TestWorkspace } from '../../bolt-cli/src/test/index.ts';
 import { filesOf } from '../src/engine/conversations/store.ts';
 
 const manifest = Result.getOrThrow(
@@ -316,12 +316,11 @@ const fixture = () =>
 				[k: string]: Json;
 			}
 		) =>
-			conversations
-				.receive(instance, {
-					kind: 'delivery',
-					providerId,
-					report: { provider: 'fake', ...r }
-				});
+			conversations.receive(instance, {
+				kind: 'delivery',
+				providerId,
+				report: { provider: 'fake', ...r }
+			});
 		const timeline = () =>
 			rows(
 				`SELECT status, delivery FROM sys_message m WHERE direction = 'outbound' AND ${fresh('sys_message', 'm')} ORDER BY seq`

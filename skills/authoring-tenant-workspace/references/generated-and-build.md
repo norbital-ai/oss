@@ -8,9 +8,10 @@ How a host later publishes or routes the artifact is not this skill.
 ```bash
 bolt sync [dir]                  # evaluate declarations and emit literal data types
 bolt check [dir]                 # every error of every stage in one run
-bolt build [dir] [--bank=<dir>]  # .norbital/bundle, source, seed/base, seed/test (from seed/test/), seed/sample (with --bank), release.json digests
+bolt build [dir]                 # .norbital/bundle, source, seed/base (from seed/public/), seed/test (from seed/test/), release.json digests
 bolt test  [dir] [-- vitest args]
-bolt dev   [dir] [--bank=<dir>] [--tethered | --host=<file> [--port=<n>]]  # tethered: rebuild on save + page HMR for local Colony; --host: untethered dev server
+bolt seed  [dir] --bank=<dir> [--target=<origin> --tenant=<handle>]  # the seeder's bank tree in memory: decoded, or reset into one demo (Bolt docs/seeding.md)
+bolt dev   [dir] [--tethered | --host=<file> [--port=<n>]]  # tethered: rebuild on save + page HMR for local Colony; --host: untethered dev server
 ```
 
 Exit 0 ok, 1 author error, 2 tool failure. `bolt check` runs discover → names → bundle → evaluate →
@@ -20,7 +21,7 @@ a check; its allowance must name a rule that fires on its line. Inspect reported
 separately rather than assuming an exit code proves every presentation concern resolved.
 `bolt build` is the only gate a host runs.
 
-Declarations are evaluated once, at build, in an isolate with a frozen clock, twice: a declaration
+Declarations are evaluated at build on a worker thread stripped to a guest's globals, with a frozen clock and a seeded `Math.random`, twice: a declaration
 whose manifest hash differs between the runs (reads the clock, `Math.random`, the network) is refused.
 
 ## Generated files (never edited)
@@ -32,7 +33,7 @@ whose manifest hash differs between the runs (reads the clock, `Math.random`, th
 ├── representations.check.ts
 ├── bundle/                     # what a host runs (manifest, guest, client, server, assets, migrations)
 ├── source/                     # the source Studio edits (no tests)
-├── seed/                       # base, test (and sample) packs
+├── seed/                       # base and test packs (a release carries base)
 ├── release.json                # each part's digest; written last
 └── cache/**
 ```

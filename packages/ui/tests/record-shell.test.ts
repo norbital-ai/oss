@@ -16,12 +16,11 @@ import './dom.ts';
 import assert from 'node:assert/strict';
 import type { Json } from '@norbital-ai/std/wire';
 import type { Value } from '@norbital-ai/std/kind';
-import type { ApprovalView } from '../src/client/contract.ts';
+import type { ApprovalView, HistoryEntry } from '../src/client/contract.ts';
 import type { RecordCapabilities } from '../src/record/types.ts';
 import type { Row } from '../src/model/types.ts';
 import type { KindsHost } from '../src/kinds/context.ts';
 import type { ViewPart } from './view-harness.svelte';
-import type { Checkpoint } from '../src/record/history.ts';
 import type { Outcome as WireOutcome } from '../../bolt/build/protocol/schema.js';
 import { it, afterEach } from '@effect/vitest';
 import { vi } from 'vitest';
@@ -47,26 +46,29 @@ const PAST: Record<number, Row> = {
 		updated_at: '2026-09-02T00:00:00.000Z'
 	}
 };
-type HistoryRow = Pick<Checkpoint, 'revision' | 'at' | 'actor'> & {
-	changed: Readonly<Record<string, Json>>;
-};
-const HISTORY: readonly HistoryRow[] = [
+const HISTORY: readonly HistoryEntry[] = [
 	{
 		revision: 1,
 		at: '2026-09-01T00:00:00.000Z',
 		actor: { kind: 'member', id: 'u1' },
+		restoredFrom: null,
+		approval: null,
 		changed: { title: 'Paint' }
 	},
 	{
 		revision: 2,
 		at: '2026-09-02T00:00:00.000Z',
 		actor: { kind: 'system', id: 'run1' },
+		restoredFrom: null,
+		approval: null,
 		changed: { title: 'Paint v2', updated_at: 'x' }
 	},
 	{
 		revision: 3,
 		at: '2026-09-03T00:00:00.000Z',
 		actor: { kind: 'member', id: 'u1' },
+		restoredFrom: null,
+		approval: null,
 		changed: { title: 'Paint v3', crew: 'B' }
 	}
 ];
@@ -216,7 +218,11 @@ it.live(
 	() =>
 		Effect.gen(function* () {
 			const v = yield* browser(() => show(LIVE));
-			assert.ok(edit(v.target));
+			assert.ok(
+				edit(element<HTMLElement>(v.target, '[data-record-foot]')),
+				'Edit is in the footer'
+			);
+			assert.equal(edit(element<HTMLElement>(v.target, '[data-record-head]')), undefined);
 			assert.equal(v.slider(), null, 'the ruler is hidden until opened');
 			assert.equal(v.calls.history, 0, 'history loads lazily');
 			yield* browser(() => v.openHistory());
@@ -466,7 +472,7 @@ it.live(
 );
 
 it.live(
-	'native history merges scoped related records without masked field names and keeps its scrubber',
+	'native history merges scoped related records and keeps its scrubber',
 	() =>
 		Effect.gen(function* () {
 			const { bolt, script, setCapabilities, calls } = yield* browser(() => fake(LIVE));
@@ -483,7 +489,9 @@ it.live(
 								revision: 2,
 								at: '2026-09-04T00:00:00.000Z',
 								actor: { kind: 'member', id: 'u1' },
-								changed: { title: 'Customer call', secret: { $masked: true } }
+								restoredFrom: null,
+								approval: null,
+								changed: { title: 'Customer call' }
 							}
 						];
 			const target = document.body.appendChild(document.createElement('div'));
@@ -495,7 +503,7 @@ it.live(
 						...catalog,
 						activities: {
 							label: ['title'],
-							fields: { title: { kind: 'text' }, secret: { kind: 'text' } }
+							fields: { title: { kind: 'text' } }
 						}
 					},
 					part: 'record',
@@ -520,7 +528,6 @@ it.live(
 			const events = element<HTMLElement>(document, '[data-record-history-events]');
 			assert.match(textOf(events), /Customer call/);
 			assert.match(textOf(events), /Ada/);
-			assert.doesNotMatch(textOf(events), /Secret/);
 			const firstEvent = required(events.firstElementChild);
 			assert.ok(firstEvent instanceof HTMLElement);
 			assert.equal(firstEvent.dataset.historyModel, 'activities');
@@ -633,7 +640,7 @@ it.live('custom representation forms share the shell view/edit mode, draft and o
 			input.dispatchEvent(new Event('input', { bubbles: true }));
 		}
 		yield* browser(() => settle());
-		const save = [...target.querySelectorAll<HTMLButtonElement>('[data-record-head] button')].find(
+		const save = [...target.querySelectorAll<HTMLButtonElement>('[data-record-foot] button')].find(
 			(b) => textOf(b).trim() === 'Save'
 		);
 		assert.ok(save);

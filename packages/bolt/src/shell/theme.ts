@@ -1,5 +1,5 @@
 // The viewer's appearance (light, dark, or the system's), a per-browser choice under `bolt.theme` — the key the access
-// pages' switch writes. The page document applies it before paint (`compiler/artifact/client.ts`); the shell re-applies
+// pages' switch writes. The page document applies it before paint (bolt-cli's `compiler/artifact/client.ts`); the shell re-applies
 // it on a change of choice or of the system preference. Absent means `system`, the theme default.
 import { Effect, Schema } from 'effect';
 

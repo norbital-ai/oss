@@ -10,6 +10,7 @@ import {
 	RequestResolver,
 	Result,
 	Layer,
+	Predicate,
 	Schema
 } from 'effect';
 import type { Authority, Bindings, CrossAnswer, Reader, RowData, Rows, Sql } from '../contracts.ts';
@@ -30,6 +31,7 @@ import { Ai } from '../ports.ts';
 import { decodeInput, type Decoded } from '../callables/decode.ts';
 import { encodeWire } from '@norbital-ai/std/wire';
 import { agentRead } from '../agent/reads.ts';
+import { runList } from '../runs/index.ts';
 import { readHistory } from './history.ts';
 import type { Json } from '../../decl/values.ts';
 import {
@@ -39,6 +41,7 @@ import {
 	defaultFields,
 	encodeCursor,
 	OVER,
+	totalOf,
 	q,
 	SEMANTIC,
 	storedFields,
@@ -72,7 +75,7 @@ type ReadEngineConfig = {
 	/** Reads another area answers: `history` (§5.2), `after` (the write compiler), `transcript` (the agent). */
 	delegate?: Partial<
 		Record<
-			'history' | 'after' | 'transcript' | 'inbox' | 'conversations',
+			'history' | 'after' | 'transcript' | 'inbox' | 'conversations' | 'runs',
 			(
 				read: ReadIR,
 				reader: Reader,
@@ -131,7 +134,7 @@ export const selectTargets = (cat: Catalog, s: SelectIR, out = new Set<string>()
 };
 /**
  * The models one read touches: its own, each one its `where`, selection (every layer) and order cross, and those the
- * caller's read arms and masks on each of them cross. A read request touches what each of its roots' reads does.
+ * caller's read arms on each of them cross. A read request touches what each of its roots' reads does.
  */
 export function readTargets(cat: Catalog, ir: ReadIR, authority?: Authority): ReadonlySet<string> {
 	if (ir.kind === 'request')
@@ -165,8 +168,8 @@ export function readTargets(cat: Catalog, ir: ReadIR, authority?: Authority): Re
 		if (out.has(model)) return;
 		out.add(model);
 		const grant = authority === undefined || authority.admin ? undefined : authority.models[model];
-		for (const arm of Object.values(grant?.read ?? {}).flat()) pred(arm.where);
-		for (const mask of Object.values(grant?.masks ?? {}).flatMap(Object.values)) pred(mask);
+		for (const arm of Object.values(grant?.read ?? {}).flatMap((paths) => Object.values(paths).flat()))
+			pred(arm.where);
 	}
 	add(ir.model);
 	if ('where' in ir) pred(ir.where);
@@ -223,7 +226,8 @@ export function readEngine(config: ReadEngineConfig): ReadEngine & {
 			ir.kind === 'after' ||
 			ir.kind === 'transcript' ||
 			ir.kind === 'inbox' ||
-			ir.kind === 'conversations'
+			ir.kind === 'conversations' ||
+			ir.kind === 'runs'
 		) {
 			const d = config.delegate?.[ir.kind];
 			if (d === undefined)
@@ -422,12 +426,16 @@ export function readEngine(config: ReadEngineConfig): ReadEngine & {
 		}[]
 	) {
 		const c = p.compiled!;
-		const answered = rows.map(
-			(r) =>
-				r.j as {
-					[k: string]: Json;
-				}
+		const counted = totalOf(
+			rows.map(
+				(r) =>
+					r.j as {
+						[k: string]: Json;
+					}
+			)
 		);
+		const total = counted.total === undefined ? {} : { total: counted.total };
+		const answered = counted.rows;
 		// the database stopped at the read's byte budget (`budgeted`): the marker is no row
 		const over = answered.at(-1)?.[OVER] === true;
 		const js = over ? answered.slice(0, -1) : answered;
@@ -463,7 +471,7 @@ export function readEngine(config: ReadEngineConfig): ReadEngine & {
 				return yield* Effect.fail(
 					tooLarge(`the read${of} is larger than ${allBytes} bytes; page it (rule 9)`)
 				);
-			return { rows: js, next: null };
+			return { rows: js, next: null, ...total };
 		}
 		// a page ends early at one crossing's bytes, its cursor after the last row that fits
 		if (over && js.length === 0)
@@ -477,7 +485,7 @@ export function readEngine(config: ReadEngineConfig): ReadEngine & {
 		const last = page.at(-1);
 		const next =
 			more && last !== undefined ? encodeCursor(c.hash, last.$k as (string | null)[]) : null;
-		return { rows: page.map(({ $k: _, ...row }) => row), next };
+		return { rows: page.map(({ $k: _, ...row }) => row), next, ...total };
 	});
 	const run: ReadEngine['run'] = Effect.fn('Bolt.read')(function* (
 		batch: readonly ReadIR[],
@@ -502,7 +510,7 @@ export function readEngine(config: ReadEngineConfig): ReadEngine & {
 						const keep = r.fields === undefined ? undefined : new Set(['id', ...r.fields]);
 						const rows = r.asOf.flatMap((): Json[] => {
 							const row = next();
-							if (row === null || typeof row !== 'object' || jsonArray(row)) return [];
+							if (!Predicate.isObject(row)) return [];
 							return [
 								keep === undefined
 									? row
@@ -618,15 +626,15 @@ export function readEngine(config: ReadEngineConfig): ReadEngine & {
 					const ir = irs[index]!;
 					if ((ir.kind !== 'get' && ir.kind !== 'read' && ir.kind !== 'similar') || answer === null)
 						return answer;
-					const object = (value: Json): value is RowData =>
-						value !== null && typeof value === 'object' && !jsonArray(value);
 					const rows =
 						ir.kind === 'get'
 							? [answer]
-							: object(answer) && jsonArray(answer['rows'])
+							: Predicate.isObject(answer) && jsonArray(answer['rows'])
 								? answer['rows']
 								: [];
-					const records = rows.filter(object).filter((row) => typeof row['id'] === 'string');
+					const records = rows
+						.filter((row) => Predicate.isObject(row))
+						.filter((row) => typeof row['id'] === 'string');
 					const ids = records.map((row) => String(row['id']));
 					// a record a write sync sends carries each sync's latest delivery state as `$sync`
 					// Delivery status is advisory; its worker must not invalidate a business read.
@@ -637,7 +645,7 @@ export function readEngine(config: ReadEngineConfig): ReadEngine & {
 					const names = approvals.has(ir.model) ? rowApproval : undefined;
 					if (states === undefined && names === undefined) return answer;
 					const attach = (row: Json): Json => {
-						if (!object(row) || typeof row['id'] !== 'string') return row;
+						if (!Predicate.isObject(row) || typeof row['id'] !== 'string') return row;
 						const { $approval: raw, ...rest } = row;
 						const approval = raw === undefined || raw === null ? undefined : names?.(raw);
 						return {
@@ -648,7 +656,7 @@ export function readEngine(config: ReadEngineConfig): ReadEngine & {
 					};
 					return ir.kind === 'get'
 						? attach(answer)
-						: object(answer)
+						: Predicate.isObject(answer)
 							? { ...answer, rows: rows.map(attach) }
 							: answer;
 				})
@@ -834,11 +842,9 @@ function armsFit(
 		for (const [rel, r] of Object.entries(sel.relations))
 			for (const row of rs) {
 				const v = row[rel];
-				const isRow = (value: Json): value is { [k: string]: Json } =>
-					value !== null && typeof value === 'object' && !jsonArray(value);
 				const list = (
 					r.many ? (jsonArray(v) ? v : []) : v === null || v === undefined ? [] : [v]
-				).filter(isRow);
+				).filter((value) => Predicate.isObject(value));
 				if (
 					r.many &&
 					r.page !== undefined &&
@@ -856,7 +862,6 @@ function armsFit(
 	};
 	walk(ir.select, rows);
 }
-const isJsonObject = Schema.is(Schema.Record(Schema.String, Schema.Json));
 /**
  * The one read API's call (`query(request)`; `db.query` as the workspace) as the decoder's member: a read request, the
  * only shape `query` takes. Other members (`aggregate`, `history`, the engine's own `get`, `read`, `after`) pass through.
@@ -864,7 +869,7 @@ const isJsonObject = Schema.is(Schema.Record(Schema.String, Schema.Json));
 function decoderCall(member: string, args: readonly Json[]): [string, readonly Json[]] {
 	if (member !== 'query' && member !== 'db.query') return [member, args];
 	const [request] = args;
-	if (args.length !== 1 || !isJsonObject(request))
+	if (args.length !== 1 || !Predicate.isObject(request))
 		throw BoltError.make(
 			'invalid',
 			'decode',
@@ -951,7 +956,18 @@ export const ReadsLive = Layer.effect(
 					history,
 					transcript: (read, who) => agentRead(over, manifest, read, who),
 					inbox: (read, who) => agentRead(over, manifest, read, who),
-					conversations: (read, who) => agentRead(over, manifest, read, who)
+					conversations: (read, who) => agentRead(over, manifest, read, who),
+					runs: (read, who) =>
+						read.kind !== 'runs' || who.as !== 'caller'
+							? Effect.fail(BoltError.make('invalid', 'decode', 'Expected a caller runs read.'))
+							: runList(over, who.authority, read.limit, read.automation, read.id).pipe(
+									Effect.map((rows) => ({
+										rows: read.brief
+											? rows.map(({ input: _i, result: _r, attempts: _a, ...row }) => row)
+											: rows,
+										next: null
+									}))
+								)
 				},
 				index: (model, name, bindings) => {
 					const index = manifest.models[model]?.search?.indexes?.[name];

@@ -21,7 +21,9 @@ initialization free of device work; mounted effects belong to the page or sessio
 An app whose audience is not `members`, or a kiosk whose auth is not `members`, uses server
 rendering. The response contains the requested page's rendered body and head, followed by
 hydration with the same component wrapper and typed data. Navigation to another such page is a
-document request that admits and renders the new route.
+document request that admits and renders the new route. A signed-out document request for a page
+that needs sign-in (an `external` or `all` app, a kiosk whose auth is not `none`) is answered with
+`303` to `/sign-in?next=<path>`, which signs in or signs up and returns.
 
 Each route has an independent browser entry and CSS built from its own transitive dependencies.
 It does not warm the internal workspace or import unrelated pages, app sessions, Norbius or

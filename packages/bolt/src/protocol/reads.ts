@@ -4,6 +4,7 @@
 import { Predicate, Result, Schema } from 'effect';
 import {
 	aggregate,
+	catalogFor,
 	exposureOf,
 	get as storeGet,
 	read as storeRead,
@@ -43,6 +44,8 @@ export type ReadIR =
 	| {
 			readonly kind: 'history';
 			readonly model: string;
+			/** The output whose root fields each revision shows (`default` when absent). */
+			readonly output?: string | undefined;
 			readonly id: string;
 			readonly at?: HistoryAt | undefined;
 			readonly full?: true | undefined;
@@ -78,6 +81,16 @@ export type ReadIR =
 			readonly kind: 'conversations';
 			readonly model: 'sys_conversation';
 			readonly member: string;
+	  }
+	/** Automation runs as the caller may see them (rule 56), newest first: one automation's, or one run by id. */
+	| {
+			readonly kind: 'runs';
+			readonly model: 'sys_run';
+			readonly limit: number;
+			readonly automation?: string | undefined;
+			readonly id?: string | undefined;
+			/** Without each run's input, result and attempts: a list's columns. */
+			readonly brief?: true | undefined;
 	  };
 
 /**
@@ -97,13 +110,25 @@ const declared = new WeakMap<Catalog, { readonly [root: string]: ExposureSpec }>
 const declarationsOf = (cat: Catalog) => {
 	let out = declared.get(cat);
 	if (out === undefined) {
-		const paths: { [root: string]: { [path: string]: { fields: 'all' } } } = {};
+		type Paths = { [path: string]: { fields: 'all' } };
+		const paths: { [root: string]: Paths } = {};
 		for (const root of cat.exposures.keys()) paths[root] = { [root]: { fields: 'all' } };
 		for (const path of cat.layers.keys()) {
 			const at = paths[path.split('.', 1)[0]!];
 			if (at !== undefined) at[path] = { fields: 'all' };
 		}
-		out = Object.fromEntries(Object.entries(paths).map(([root, read]) => [root, { read }]));
+		const named = (root: string): { [output: string]: Paths } =>
+			Object.fromEntries(
+				[...(cat.outputs.get(root) ?? [])].map(([output, info]) => [
+					output,
+					Object.fromEntries(
+						[root, ...info.layers.keys()].map((path) => [path, { fields: 'all' as const }])
+					)
+				])
+			);
+		out = Object.fromEntries(
+			Object.entries(paths).map(([root, read]) => [root, { read, outputs: named(root) }])
+		);
 		declared.set(cat, out);
 	}
 	return out;
@@ -159,17 +184,22 @@ export function compose(
  * lowered with its named layers nested (a ref layer replaces its FK with the row or `null`, a many-layer lists or
  * measures its rows per parent row). Every list defaults to `READ_LIMIT`; authority is the reader's scope, per path.
  */
-export function request(cat: Catalog, json: Json | undefined): ReadIR {
+export function request(base: Catalog, json: Json | undefined): ReadIR {
 	const decoded = decodeReadRequest(json);
 	if (Result.isFailure(decoded)) throw invalid(decoded.failure);
-	const plan = planReadRequest(decoded.success, declarationsOf(cat));
+	const plan = planReadRequest(decoded.success, declarationsOf(base));
 	if (Result.isFailure(plan)) throw invalid(plan.failure);
 	const roots = Object.entries(plan.success).map(([root, layers]): RequestRoot => {
 		const top = layers[root]!;
+		// the root's output: its fields and layers replace the default ones for this root's reads
+		const cat = storeSync(catalogFor(base, root, top.output));
+		const output = top.output === undefined ? {} : { output: top.output };
 		const below = Object.keys(layers).filter((path) => path !== root);
 		const only = (what: string) => {
 			if (below.length > 0)
-				throw invalid(`'${root}': ${what} names no layers (${below.join(', ')})`);
+				throw invalid(
+					`'${root}': ${what} names no layers (${below.join(', ')}); remove those keys from this read, or read the layers in a separate read without aggregate/asOf`
+				);
 		};
 		const sub = (path: string, model: string): SelectIR => {
 			const fields = layers[path]?.fields;
@@ -253,6 +283,7 @@ export function request(cat: Catalog, json: Json | undefined): ReadIR {
 				asOf: ids.map((id) => ({
 					kind: 'history',
 					model: root,
+					...output,
 					id,
 					at: { _tag: 'Instant', instant: top.asOf! },
 					full: true
@@ -265,14 +296,17 @@ export function request(cat: Catalog, json: Json | undefined): ReadIR {
 			const { by } = top.aggregate;
 			return {
 				root,
-				read: storeSync(
-					aggregate(cat, root, {
-						...top.aggregate,
-						...(top.where === undefined ? {} : { where: top.where }),
-						...(by === undefined ? {} : { limit: top.limit ?? READ_LIMIT }),
-						...(by === undefined || top.after === undefined ? {} : { after: top.after })
-					})
-				)
+				read: {
+					...storeSync(
+						aggregate(cat, root, {
+							...top.aggregate,
+							...(top.where === undefined ? {} : { where: top.where }),
+							...(by === undefined ? {} : { limit: top.limit ?? READ_LIMIT }),
+							...(by === undefined || top.after === undefined ? {} : { after: top.after })
+						})
+					),
+					...output
+				}
 			};
 		}
 		const select = sub(root, root);
@@ -287,13 +321,16 @@ export function request(cat: Catalog, json: Json | undefined): ReadIR {
 				index === 'semantic'
 					? storeSync(semantic(cat, root, { ...options, to: input }))
 					: storeSync(similar(cat, root, index, input, options));
-			return { root, read: { ...ir, select } };
+			return { root, read: { ...ir, select, ...output } };
 		}
 		const listed: ListRead = {
 			kind: 'read',
 			model: root,
+			...output,
 			select,
 			page: storeSync(page({ limit, ...(top.after === undefined ? {} : { after: top.after }) })),
+			// a root page counts every row it matches (`total`) in the same statement
+			total: true,
 			...(top.where === undefined ? {} : { where: storeSync(where(cat, root, top.where)) }),
 			...(top.orderBy === undefined ? {} : { order: storeSync(order(top.orderBy, cat, root)) }),
 			...(typeof top.search === 'string' && top.search !== '' ? { search: top.search } : {})
@@ -367,8 +404,7 @@ export function decodeRead(
 						: similar(cat, model, String(a), b ?? null, object(d))
 				);
 			case 'after': {
-				const query =
-					b === undefined ? undefined : read(cat, model, { ...object(b), where: a });
+				const query = b === undefined ? undefined : read(cat, model, { ...object(b), where: a });
 				return {
 					kind: 'after',
 					model,
@@ -376,13 +412,18 @@ export function decodeRead(
 					...(query?.kind === 'read' ? { query } : {})
 				};
 			}
-			case 'history':
+			case 'history': {
+				// the third argument is `{ at?, output? }`, or (from older pages) the `at` value itself
+				const options: { readonly at?: Json | undefined; readonly output?: Json | undefined } =
+					Predicate.isObject(b) && ('at' in b || 'output' in b) ? b : { at: b };
 				return {
 					kind: 'history',
 					model,
 					id: String(a),
-					...(b == null ? {} : { at: historyAt(b) })
+					...(options.at == null ? {} : { at: historyAt(options.at) }),
+					...(typeof options.output === 'string' ? { output: options.output } : {})
 				};
+			}
 			case 'request':
 				return request(cat, args[0]);
 			default:

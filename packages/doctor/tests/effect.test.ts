@@ -84,11 +84,11 @@ it.live('skill fences report only registered tenant async bodies at their Markdo
 		yield* fs.makeDirectory(path.dirname(path.join(root, file)), { recursive: true });
 		yield* fs.writeFileString(path.join(root, '.norbital-doctor-effect-scope.json'), '[]');
 		const badTs =
-			'task("job", { description: "job", runAs: "trigger", run: async (payload, services) => services.query("notes") });';
+			'task("job", { description: "job", policies: ["clerk"], run: async (payload, services) => services.query("notes") });';
 		const badJs =
-			'bolt.automation("job", { description: "job", runAs: "trigger", run: async () => 1 });';
+			'bolt.automation("job", { description: "job", policies: ["clerk"], run: async () => 1 });';
 		const badSvelte =
-			'job("job", { description: "job", runAs: "trigger", run: async (value, api) => api.query("notes") });';
+			'job("job", { description: "job", policies: ["clerk"], run: async (value, api) => api.query("notes") });';
 		const lines = [
 			'# Tenant bodies',
 			'Prose mentioning a.run(async (input, ctx) => ctx.read("notes")) is not code.',
@@ -127,17 +127,17 @@ it.live('skill fences report only registered tenant async bodies at their Markdo
 			'import { automation } from "@norbital-ai/bolt";',
 			'function shadowed(automation) {',
 			'  const task = automation;',
-			'  task("presentation", { description: "presentation", runAs: "trigger", run: async (input, ctx) => ctx.query("notes") });',
+			'  task("presentation", { description: "presentation", policies: ["clerk"], run: async (input, ctx) => ctx.query("notes") });',
 			'}',
 			'const isolated = automation;',
 			'```',
 			'```ts',
-			'isolated("job", { description: "job", runAs: "trigger", run: async (input, ctx) => ctx.query("notes") });',
+			'isolated("job", { description: "job", policies: ["clerk"], run: async (input, ctx) => ctx.query("notes") });',
 			'```',
 			'````markdown',
 			'```ts',
 			'import { automation } from "@norbital-ai/bolt";',
-			'automation("quoted", { description: "quoted example", runAs: "trigger", run: async () => 1 });',
+			'automation("quoted", { description: "quoted example", policies: ["clerk"], run: async () => 1 });',
 			'```',
 			'````'
 		];
@@ -161,15 +161,15 @@ it.live('skill fences report only registered tenant async bodies at their Markdo
 			source
 				.replace(
 					badTs,
-					'task("job", { description: "job", runAs: "trigger", run: function* (payload, services) { return yield* services.query("notes"); } });'
+					'task("job", { description: "job", policies: ["clerk"], run: function* (payload, services) { return yield* services.query("notes"); } });'
 				)
 				.replace(
 					badJs,
-					'bolt.automation("job", { description: "job", runAs: "trigger", run: function* () { return 1; } });'
+					'bolt.automation("job", { description: "job", policies: ["clerk"], run: function* () { return 1; } });'
 				)
 				.replace(
 					badSvelte,
-					'job("job", { description: "job", runAs: "trigger", run: function* (value, api) { return yield* api.query("notes"); } });'
+					'job("job", { description: "job", policies: ["clerk"], run: function* (value, api) { return yield* api.query("notes"); } });'
 				)
 		);
 		expect(findings()).toEqual([]);

@@ -7,8 +7,8 @@ import type { EngineManifest } from '../src/engine/manifest.ts';
 import { compileAuthority } from '../src/engine/access/authority.ts';
 import { pruneHistory } from '../src/engine/query/history.ts';
 import { Approvals, RunHandlers, Writes } from '../src/engine/services.ts';
-import { TestWorkspace } from '../src/test/index.ts';
-import { program } from '../src/test/guest.ts';
+import { TestWorkspace } from '../../bolt-cli/src/test/index.ts';
+import { program } from '../../bolt-cli/src/test/guest.ts';
 import { manifest as base } from './write-fixture.ts';
 
 const requesterId = '0199a000-0000-7000-8000-000000000001',
@@ -295,64 +295,62 @@ layer(workspace, { excludeTestServices: true })('approval snapshots and saves', 
 				})
 			)
 	);
-	it.effect(
-		'held owned relation actions still require review on a same-value parent Save',
-		() =>
-			Effect.scoped(
-				Effect.gen(function* () {
-					const f = yield* fixture;
-					const created = (yield* f.act(
-						'create',
-						[
-							{
-								name: 'Travel',
-								amount: 50,
-								manager: managerId,
-								lines: [{ name: 'First' }]
-							}
-						],
-						f.t.as(f.t.admin).authority
-					)).outcome;
-					if (created.kind !== 'committed') throw new Error(JSON.stringify(created));
-					const id = created.records.find((row) => row.model === 'expenses')?.id;
-					const line = created.records.find((row) => row.model === 'lines')?.id;
-					if (id === undefined || line === undefined) throw new Error('Missing expense or line');
-					const revision = yield* f.t.db.value(Schema.Int, {
+	it.effect('held owned relation actions still require review on a same-value parent Save', () =>
+		Effect.scoped(
+			Effect.gen(function* () {
+				const f = yield* fixture;
+				const created = (yield* f.act(
+					'create',
+					[
+						{
+							name: 'Travel',
+							amount: 50,
+							manager: managerId,
+							lines: [{ name: 'First' }]
+						}
+					],
+					f.t.as(f.t.admin).authority
+				)).outcome;
+				if (created.kind !== 'committed') throw new Error(JSON.stringify(created));
+				const id = created.records.find((row) => row.model === 'expenses')?.id;
+				const line = created.records.find((row) => row.model === 'lines')?.id;
+				if (id === undefined || line === undefined) throw new Error('Missing expense or line');
+				const revision = yield* f.t.db.value(Schema.Int, {
+					text: 'SELECT revision FROM expenses WHERE id=$1::uuid',
+					params: [id]
+				});
+				const proposed = (yield* f.act('update', [
+					{
+						target: id,
+						set: { lines: { update: [{ target: line, set: { name: 'Second' } }] } }
+					}
+				])).outcome;
+				if (proposed.kind !== 'pendingApproval') throw new Error(JSON.stringify(proposed));
+				const requestId = proposed.requestId;
+				// relationship actions stay authored until this request resolves
+				const set = { lines: { update: [{ target: line, set: { name: 'First' } }] } };
+				expect(
+					yield* f.decide(requestId, 'requestChanges', f.manager, 'Clarify the line')
+				).toMatchObject({ kind: 'decided', status: 'ChangesRequested' });
+				expect((yield* f.act('update', [{ target: id, set }])).outcome).toMatchObject({
+					kind: 'pendingApproval',
+					requestId
+				});
+				expect(yield* f.request(requestId)).toMatchObject({ state: 'Pending' });
+				expect(
+					yield* f.t.db.value(Schema.Int, {
 						text: 'SELECT revision FROM expenses WHERE id=$1::uuid',
 						params: [id]
-					});
-					const proposed = (yield* f.act('update', [
-						{
-							target: id,
-							set: { lines: { update: [{ target: line, set: { name: 'Second' } }] } }
-						}
-					])).outcome;
-					if (proposed.kind !== 'pendingApproval') throw new Error(JSON.stringify(proposed));
-					const requestId = proposed.requestId;
-					// relationship actions stay authored until this request resolves
-					const set = { lines: { update: [{ target: line, set: { name: 'First' } }] } };
-					expect(
-						yield* f.decide(requestId, 'requestChanges', f.manager, 'Clarify the line')
-					).toMatchObject({ kind: 'decided', status: 'ChangesRequested' });
-					expect((yield* f.act('update', [{ target: id, set }])).outcome).toMatchObject({
-						kind: 'pendingApproval',
-						requestId
-					});
-					expect(yield* f.request(requestId)).toMatchObject({ state: 'Pending' });
-					expect(
-						yield* f.t.db.value(Schema.Int, {
-							text: 'SELECT revision FROM expenses WHERE id=$1::uuid',
-							params: [id]
-						})
-					).toBe(revision);
-					yield* f.decide(requestId, 'reject', f.manager, 'Restore the line');
-					expect(
-						yield* f.t.db.value(Schema.String, {
-							text: 'SELECT name FROM lines WHERE id=$1::uuid',
-							params: [line]
-						})
-					).toBe('First');
-				})
-			)
+					})
+				).toBe(revision);
+				yield* f.decide(requestId, 'reject', f.manager, 'Restore the line');
+				expect(
+					yield* f.t.db.value(Schema.String, {
+						text: 'SELECT name FROM lines WHERE id=$1::uuid',
+						params: [line]
+					})
+				).toBe('First');
+			})
+		)
 	);
 });

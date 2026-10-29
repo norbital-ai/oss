@@ -217,7 +217,7 @@ async function fake(
 	extra: {
 		read?(model: string, options: ReadOptions): Page | Promise<Page>;
 		get?(model: string, id: string): Row | null | Response | Promise<Row | null | Response>;
-		aggregate?(): readonly Values[];
+		aggregate?(): Values;
 		start?(automation: string, input: Value): void;
 		t?: ViewBolt['t'];
 		runs?: ViewBolt['runs'];
@@ -232,8 +232,8 @@ async function fake(
 		},
 		get: (model, id) =>
 			extra.get === undefined ? (rows.find((row) => row.id === id) ?? null) : extra.get(model, id),
-		aggregate: () => extra.aggregate?.() ?? [{ count: rows.length }],
-		history: () => ({ rows: [], next: null })
+		aggregate: () => extra.aggregate?.() ?? { count: rows.length },
+		history: () => []
 	});
 	return { bolt: client.bolt, reads };
 }
@@ -316,6 +316,28 @@ test('Table: a row click opens its record; links, buttons and selected text do n
 	assert.equal(tr.tabIndex, 0);
 });
 
+test('Table: a row has one open control, the side-panel glyph, and its title cell no truncation expand', async () => {
+	const scroll = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'scrollWidth');
+	Object.defineProperty(HTMLElement.prototype, 'scrollWidth', {
+		configurable: true,
+		get: () => 500
+	});
+	try {
+		const { bolt } = await fake([ROW]);
+		const t = await show(
+			{ part: 'table', props: { of: 'jobs', columns: ['title', 'kind'] } },
+			bolt,
+			jobs
+		);
+		const tr = element(t, '[data-table-wide] tbody tr:not([aria-hidden])');
+		assert.equal(tr.querySelectorAll('[data-row-open]').length, 1);
+		assert.ok(element(tr, '[data-row-open] [data-icon=panel]'));
+		assert.equal(element(tr, 'td').querySelectorAll('[data-icon=expand]').length, 0);
+	} finally {
+		if (scroll) Object.defineProperty(HTMLElement.prototype, 'scrollWidth', scroll);
+	}
+});
+
 test('Table inside a sheet: the row and the phone card still open their record (the sheet is no control of the row)', async () => {
 	const { bolt } = await fake([ROW]);
 	const t = await show(
@@ -390,11 +412,11 @@ test("select-all: the card list selects its page, then every matching row, besid
 	const all = Array.from({ length: 30 }, (_, i) => ({ ...ROW, id: `j${i}`, title: `Job ${i}` }));
 	const reads: ReadOptions[] = [];
 	const { bolt } = await fake(all.slice(0, 25), {
-		aggregate: () => [{ count: 30 }],
 		read: (_c, o) => {
 			reads.push(o);
 			const rows = everyRow(o) ? all.map((r) => ({ id: r.id })) : all.slice(0, 25);
-			return { rows, next: everyRow(o) ? null : 'c1' };
+			// a root page counts every row it matches
+			return { rows, next: everyRow(o) ? null : 'c1', total: all.length };
 		}
 	});
 	const t = await show(

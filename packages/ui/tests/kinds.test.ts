@@ -199,9 +199,8 @@ test('state helpers: edges, edit locks and a stable tone', () => {
 	assert.equal(k.tone('approved'), 'success');
 });
 
-test('display text: dates never shift, masked values stay masked', () => {
+test('display text: dates never shift', () => {
 	assert.equal(k.format({ kind: 'date' }, '2026-01-01', { locale: 'en-US' }), 'Jan 1, 2026');
-	assert.equal(k.format({ kind: 'text' }, { $masked: true }), '•••');
 	assert.equal(k.format({ kind: 'decimal', scale: 2 }, '1234.50', { locale: 'en' }), '1,234.5'); // only money pads
 	assert.equal(k.format({ kind: 'enum', values: ['a', 'b'], many: true }, ['a', 'b']), 'A, B');
 });

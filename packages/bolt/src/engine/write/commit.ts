@@ -22,7 +22,7 @@ import { relations, type EngineManifest } from '../manifest.ts';
 import { Live, Wake, Links } from '../services.ts';
 import { toPred } from '../access/pred.ts';
 import { q, cells, nullRowSql, ownPredSql, type Catalog, type FieldInfo } from '@norbital-ai/store';
-import { enqueue, nextDue, queueTriggered } from '../runs/queue.ts'; // hook:automations
+import { enqueue, nextDue, queueEffects, type Writer } from '../runs/queue.ts'; // hook:automations
 import { syncOutboxPiece } from '../sync/write.ts'; // hook:syncs (H3)
 import { purgeProposals } from '../approvals/erase.ts';
 import {
@@ -64,6 +64,8 @@ export type Commit = {
 	now: string;
 	today: string;
 	actor: EngineActor;
+	/** Who wrote: the model effects this statement queues run as them (`writerOf`). */
+	writer: Writer;
 	writes: readonly Write[];
 	owned: readonly OwnedLock[];
 	rate: readonly RateCharge[];
@@ -113,9 +115,15 @@ export type Commit = {
 };
 type Piece = { name: string; table: string };
 
-/** `created_by`/`updated_by`: a member's id, or an envoy turn's linked sender (hook:envoys, P32); other actors are recorded in history only. */
+/** `created_by`/`updated_by`: a member's or anonymous visitor's id, or an envoy turn's linked sender (hook:envoys, P32); other actors are recorded in history only. */
 export const actorId = (a: EngineActor): string | null =>
-	a.kind === 'member' ? a.id : a.kind === 'envoy' ? a.member : null;
+	a.kind === 'member'
+		? a.id
+		: a.kind === 'envoy'
+			? a.member
+			: a.kind === 'visitor' && a.anonymous === true
+				? a.visitor
+				: null;
 /** History's actor (rule 17): `<kind>:<id>`. */
 export const actorRef = (a: EngineActor): string =>
 	`${a.kind}:${a.kind === 'member' ? a.id : a.kind === 'system' ? a.run : a.kind === 'apiKey' ? a.key : a.kind === 'visitor' ? a.visitor : a.sender}`;
@@ -556,7 +564,7 @@ export function compileCommit(m: EngineManifest, cat: Catalog, x: Commit): reado
 	x.resubmit?.pieces(c);
 	if (erasures.length > 0 && hasWrites) erasePieces(c, erasures);
 	c.cte('effectp', 'SELECT * FROM allp WHERE NOT erased');
-	if (x.transactionStage !== true) queueTriggered(m, c, x.now, actorRef(x.actor), 'effectp'); // event runs exclude erased rows (rule 50)
+	if (x.transactionStage !== true) queueEffects(m, c, x.now, x.writer, 'effectp'); // effects exclude erased rows (rule 50)
 	if (x.transactionStage !== true && x.approvalDecision === undefined && x.rollback !== true) {
 		const notified = Object.entries(m.exposures).filter(
 			([model, spec]) => spec.notify === true && byTable.has(model)
@@ -906,6 +914,7 @@ export function transactionEffects(
 	c: Chain,
 	now: string,
 	actor: EngineActor,
+	writer: Writer,
 	captured: readonly Captured[],
 	held = false
 ): void {
@@ -924,7 +933,7 @@ export function transactionEffects(
 			}))
 		)}::jsonb) AS x(c text,id text,revision int,op text,cause text,erased boolean,o jsonb,n jsonb) WHERE ${GATED}`
 	);
-	queueTriggered(m, c, now, actorRef(actor), source);
+	queueEffects(m, c, now, writer, source);
 	const written = new Set(captured.map((row) => row.model));
 	const notified = Object.entries(m.exposures).filter(
 		([model, spec]) => spec.notify === true && written.has(model)

@@ -1,6 +1,7 @@
 // `Pred` → JS (K3): the second evaluator, for live routing and tests. It must answer exactly as the SQL compiler does
 // (`sql.ts`); a randomized test holds the two equal. A null never matches (SQL's unknown collapses to false), `ne` and
 // `nin` are "distinct from", and `not` negates the collapsed value.
+import { Predicate } from 'effect';
 import type { Authority, Bindings, RowData } from '../contracts.ts';
 
 import { BoltError } from '../../protocol/errors.ts';
@@ -9,9 +10,7 @@ import {
 	argumentList,
 	comparable,
 	inverted,
-	isOperand,
-	isTaggedOperand,
-	taggedOperand,
+	type Arg,
 	type Catalog,
 	type FieldInfo,
 	type Operand,
@@ -112,25 +111,18 @@ function haversine(a: { lat: number; lng: number }, b: { lat: number; lng: numbe
 export type EvalEnv = {
 	cat: Catalog;
 	bindings: Bindings;
-	/** The caller: operands resolve against it; with `scoped`, related rows are filtered by its scope and fields masked. */
+	/** The caller: operands resolve against it; with `scoped`, related rows are filtered by its scope. */
 	authority?: Authority | null;
 	scoped?: boolean;
 	/** The rows of `target` related to `row` through `rel` of `model` (a one-relation gives 0 or 1). */
 	related?: (model: string, rel: string, target: string, row: RowData) => readonly RowData[];
 };
 
-function field(env: EvalEnv, c: string, row: RowData, name: string): Json {
+function field(_env: EvalEnv, _c: string, row: RowData, name: string): Json {
 	const dot = name.indexOf('.');
-	let v: Json;
-	if (dot > 0) {
-		const ref = row[name.slice(0, dot)] as { model?: string; id?: string } | null | undefined;
-		v = ref?.model === name.slice(dot + 1) ? (ref.id ?? null) : null;
-	} else v = row[name] ?? null;
-	const mask =
-		env.scoped && env.authority && !env.authority.admin
-			? env.authority.models[c]?.masks[c]?.[name]
-			: undefined;
-	return mask === undefined || evaluate({ ...env, scoped: false }, c, mask, row) ? v : null;
+	if (dot < 0) return row[name] ?? null;
+	const ref = row[name.slice(0, dot)] as { model?: string; id?: string } | null | undefined;
+	return ref?.model === name.slice(dot + 1) ? (ref.id ?? null) : null;
 }
 function info(env: EvalEnv, c: string, name: string): FieldInfo {
 	const f = env.cat.models.get(c)?.fields.get(name);
@@ -140,8 +132,9 @@ function info(env: EvalEnv, c: string, name: string): FieldInfo {
 function visible(env: EvalEnv, c: string, row: RowData): boolean {
 	const a = env.authority;
 	if (!env.scoped || a == null || a.admin) return true;
-	return (a.models[c]?.read[c] ?? []).some((arm) =>
-		evaluate({ ...env, scoped: false }, c, arm.where, row)
+	// a related row is visible where any output the caller holds of its model admits it
+	return Object.values(a.models[c]?.read ?? {}).some((paths) =>
+		(paths[c] ?? []).some((arm) => evaluate({ ...env, scoped: false }, c, arm.where, row))
 	);
 }
 function rows(env: EvalEnv, c: string, rel: string, target: string, row: RowData): RowData[] {
@@ -251,21 +244,24 @@ export function evaluate(env: EvalEnv, c: string, p: Pred, row: RowData): boolea
 			const f = info(env, c, p.field);
 			const r = range(f, field(env, c, row, p.field));
 			if (r === null) return false;
-			const arg =
-				p.arg._tag === 'Lit'
-					? p.arg.value
-					: p.arg._tag === 'Field'
-						? field(env, c, row, p.arg.field)
-						: operand(p.arg, env.bindings, env.authority);
-			if (arg === null) return false;
 			if (p.op === 'contains') {
+				const arg =
+					p.arg._tag === 'Lit'
+						? p.arg.value
+						: p.arg._tag === 'Field'
+							? field(env, c, row, p.arg.field)
+							: operand(p.arg, env.bindings, env.authority);
+				if (arg === null) return false;
 				const x =
 					f.periodOf === 'date'
 						? (comparable(arg) as string)
 						: Date.parse(comparable(arg) as string);
 				return r.lo <= x && below(x, r.hi);
 			}
-			const o = range(f, periodEnds(arg, env.bindings, env.authority))!;
+			const end = (e: Arg): Json =>
+				e._tag === 'Lit' ? e.value : operand(e, env.bindings, env.authority);
+			const [lo, hi] = f.periodOf === 'date' ? ['from', 'to'] : ['start', 'end'];
+			const o = range(f, { [lo]: end(p.lo), [hi]: end(p.hi) })!;
 			if (inverted(f, o.lo, o.hi)) return false;
 			if (p.op === 'overlaps')
 				return below(r.lo, o.hi) && below(o.lo, r.hi) && r.lo !== r.hi && o.lo !== o.hi;
@@ -320,17 +316,6 @@ export function evaluate(env: EvalEnv, c: string, p: Pred, row: RowData): boolea
 			return cmp(p.op, rows(env, c, p.rel, p.target, row).length, p.n);
 		case 'agg': {
 			const f = info(env, p.target, p.of);
-			if (
-				env.scoped &&
-				env.authority &&
-				!env.authority.admin &&
-				env.authority.models[p.target]?.masks[p.target]?.[p.of] !== undefined
-			)
-				throw BoltError.make(
-					'forbidden',
-					'admission',
-					`'${p.of}' is masked to this caller and cannot be aggregated (rule 14)`
-				);
 			const xs = rows(env, c, p.rel, p.target, row)
 				.map((r) => norm(f, r[p.of] ?? null))
 				.filter((x): x is number => x !== null) as number[];
@@ -368,33 +353,8 @@ export function contains(a: Json | undefined, b: Json, top = false): boolean {
 	}
 	if (typeof a === 'object')
 		return (
-			typeof b === 'object' &&
-			b !== null &&
-			!jsonArray(b) &&
-			Object.entries(b).every(
-				([k, x]) => Object.hasOwn(a, k) && contains((a as { [k: string]: Json })[k]!, x)
-			)
+			Predicate.isObject(b) &&
+			Object.entries(b).every(([k, x]) => Object.hasOwn(a, k) && contains(a[k], x))
 		);
 	return a === b;
-}
-/** A period argument's ends, each a literal or an operand. */
-export function periodEnds(
-	v: Json,
-	bindings: Bindings,
-	authority: Authority | null | undefined
-): Json {
-	const r = comparable(v);
-	if (typeof r !== 'object' || r === null || jsonArray(r)) return r;
-	return Object.fromEntries(
-		Object.entries(r).map(([k, x]): [string, Json] => [
-			k,
-			typeof x === 'object' && x !== null && !jsonArray(x) && !Object.hasOwn(x, '$dec')
-				? isOperand(x)
-					? operand(taggedOperand(x), bindings, authority)
-					: isTaggedOperand(x)
-						? operand(x, bindings, authority)
-						: x
-				: x
-		])
-	);
 }

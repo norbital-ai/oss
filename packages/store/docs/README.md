@@ -47,9 +47,9 @@ const page = yield * statement.decode(rows);
 
 This is the standalone store's own read form over a whole schema. Bolt never sends it: its one read is a read
 request (`query({ person: { … }, 'person.company': { fields: ['name'] } })`), which Bolt lowers to this IR with the
-catalog's declared read layers. A scoped read (a `Scope`) nests only declared layers, each scoped and masked by its
-root's arms for that path (`Scope.rows(path)`, `Scope.mask(path, field)`); a `where` may still cross any relation into a
-model the reader reads, through that model's own access point.
+catalog's read layers of the output the root names. A scoped read (a `Scope`) nests only that output's layers, each
+scoped by its root's arms for that output and path (`Scope.rows(path, output)`); a `where` may still cross any relation
+into a model the reader reads, through that model's own access point.
 
 `statement.shape` is a stable hash of SQL text for the host's prepared cache. Parameters remain separate.
 The result type follows the literal projection, with the primary key included. One nested read emits one statement;
@@ -60,8 +60,8 @@ each target's own `select` and `with`, and the result discriminates them by `mod
 `store.read` accepts `firstPer: ['group_column']` to select one matching row per group. Group columns lead
 the result order; `orderBy` chooses the row within each group, with primary keys breaking ties. PostgreSQL
 selects each group's first row before applying the cursor, so older rows cannot reappear on later pages.
-Filtering, projections, relation bounds and page byte limits still apply. Group columns must be sortable,
-readable and unmasked; this option cannot be combined with search ranking.
+Filtering, projections, relation bounds and page byte limits still apply. Group columns must be sortable
+and readable; this option cannot be combined with search ranking.
 
 Inline `object`, `list` and shaped `json` fields store as jsonb. Their declared scalar paths can filter, sort and use
 expression indexes. Updates accept deep `$patch` for objects and `$append` / `$remove` for lists. The field's codec

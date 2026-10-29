@@ -176,11 +176,3 @@ export const restoreIdentity = (db: TenantDbShape, manifest: EngineManifest, sna
 		})
 		.pipe(Effect.asVoid);
 };
-
-export const markAdmitted = (db: TenantDbShape) =>
-	db
-		.write({
-			text: 'INSERT INTO bolt_run_admitted (at) SELECT now() WHERE NOT EXISTS (SELECT 1 FROM bolt_run_admitted)',
-			params: []
-		})
-		.pipe(Effect.asVoid);

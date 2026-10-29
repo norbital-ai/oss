@@ -6,7 +6,7 @@ A click handler can `await bolt.query(...)`; other Effects cross the page edge t
 
 | API                           | Page                | Write callback            | Policy check              | Automation           | Sync                          | Notify                 |
 | ----------------------------- | ------------------- | ------------------------- | ------------------------- | -------------------- | ----------------------------- | ---------------------- |
-| `query`                       | live / once         | `ctx.db.query`, workspace | `ctx.db.query`, workspace | runAs                | file: caller; remote: trusted | workspace              |
+| `query`                       | live / once         | `ctx.db.query`, workspace | `ctx.db.query`, workspace | its policies         | file: caller; remote: trusted | workspace              |
 | `act`                         | yes                 | return rows               | none (returns a verdict)  | yes                  | return changes                | none                   |
 | `transaction`                 | none                | none                      | none                      | native session       | none                          | none                   |
 | `start` / `schedule`          | `bolt.start`        | none                      | none                      | yes                  | none                          | none                   |
@@ -18,7 +18,7 @@ A click handler can `await bolt.query(...)`; other Effects cross the page edge t
 | `approvals`, history, restore | yes                 | none                      | none                      | none                 | none                          | none                   |
 | `device`                      | yes                 | none                      | none                      | none                 | none                          | none                   |
 
-Each guest invocation has 2 s cumulative CPU and 256 MiB heap. Ordinary bodies allow 40 facility
+Each guest invocation has 3 s cumulative CPU and 256 MiB heap. Ordinary bodies allow 40 facility
 crossings; a write callback or policy check may cross at most 10 times. Automations allow 10,000 crossings, and
 streamed progress refreshes the 20 s idle deadline of a host I/O response. CPU admission is
 released while waiting for host I/O. Budgets apply per invocation, including each 1000-row write
@@ -65,17 +65,22 @@ read request: one record is `query({ orders: { where: { id: { eq: id } } } })`, 
 
 A read request is one JSON layer map, the same on a page (`bolt.query({...})`), in server code
 (`ctx.query({...})`), in a policy check (`ctx.db.query({...})`) and for the agent's `read` tool. Each
-key without a dot is a root (a model with `read`), at most once per request; `'<root>.<rel>…'` is a
-layer that root declares, and naming a deep path implies its parents. A layer takes `where`,
-`fields` (without it, every field the layer exposes), `orderBy`, `limit`, `search` and `aggregate`;
-a root also takes `after` and `asOf`. Unknown keys and options are refused. Every
+key without a dot is a root (a model with `read`), at most once per request. A root reads one of its
+model's outputs (`output`, `default` when absent), which a held policy must grant; `'<root>.<rel>…'`
+is a layer of that output, and naming a deep path implies its parents. A layer takes `where`,
+`fields` (without it, every field the output's layer declares), `orderBy`, `limit`, `search` and `aggregate`;
+a root also takes `output`, `after` and `asOf`. `history(model, id, { output })` names one too. Unknown keys and options are refused. Every
 list (a root page, or a nested many-layer per parent row) defaults to `limit` 10,000 and the root's
 default order; the 4 MiB page budget still applies. The answer is a tree typed from the named
-layers: per root `{ rows, next }`, each row with its picked fields, a named ref layer in place of its
-FK (the row or `null`) and a many-layer as its rows. Only the root's policy filters and masks the
-tree; a user filter, a prefilter and the policy compose per key (`where` AND, `fields` intersect,
-`limit` capped), so nothing widens the policy. Derive several views of one root on the client from
+layers: per root `{ rows, next, total }` (`total` counts every row the root matches under the same
+policy, `where` and text search, its `limit` and `after` aside, in the same statement and live with
+the page; an index search root has none, and a nested many-layer none per parent), each row with its picked fields, a named ref layer in place of its
+FK (the row or `null`) and a many-layer as its rows. The output fixes the fields; only the root's
+policy filters the rows of the tree, and a user filter, a prefilter and the policy compose per key
+(`where` AND, `limit` capped), so nothing widens the policy. Derive several views of one root on the client from
 that one read.
+An `aggregate` without `by` answers one row of the measures asked (`count: true` for a count); with
+`by` it answers a page of buckets, each with its `key` and row `count` always, plus the other measures.
 
 Time is explicit: `bolt.clock('day').today` or `bolt.clock('minute' | 'hour').now` updates at that
 grain, while server transforms and automations use invocation-bound `ctx.today`/`ctx.now`. Live clocks tick only while the page is visible;
@@ -112,10 +117,29 @@ callback automatically.
 
 `bolt.start(name, input)` starts an automation or file sync. `ctx.schedule(name, input, { at?, key? })`
 queues after commit; a key replaces queued work with that key. Use the runs catalogue for progress
-and result. An automation declares `runAs: [policies]` or, for started-only runs, `'trigger'`.
-Starting requires an explicit `policy.automations` grant. A started-only automation can use
-`runAs: 'trigger'` to retain the caller's authority; its standard writes still need their grants.
-Automations cannot approve requests.
+and result. An automation declares `policies` (at least one); every run executes as the reserved
+system identity (`ctx.actor.kind === 'system'`) holding exactly them, whoever started it. The run
+records who did as `sys_run.trigger`, read in the body as `ctx.run.trigger`: `{ kind: 'person', actor,
+agent? }` for a manual start (`agent: { conversation }` when Norbius started it for them), else
+`{ kind: 'system', cause }` — `cron`, `webhook`, `effect` (with the `model`, `verb` and `records` whose
+effect scheduled it) or `schedule` (with `by`, the run whose code scheduled it). The trigger never
+grants authority: `{ var: 'requestor.*' }` in a run names the system identity, so a requestor-scoped
+grant matches nothing there and a ref's `requestor.id` default does not apply. Code that acts for its
+starter checks the trigger explicitly — "a customer cancels only their own booking" reads the booking
+and refuses unless its customer is `trigger.actor.party`. A policy's `automations` grants manual starts
+only (a person or the agent), rate limited per starter by the automation's `limit`; code that
+schedules needs no start grant. Automations cannot approve requests. The Command center's
+Automations list and run detail show each run's trigger.
+
+A model's `effect` (`created`, `updated`, `deleted`) is the work that follows a committed write: a
+durable run `<model>.effect.<verb>` per committed batch, queued by the write's own statement,
+retried 3 times on a transient failure and never rate limited. It receives the rows (`updated`:
+`[{ before, after }]` for changes to a stored field) as the root fields of the writer's output of the
+model (`default` when it holds it, else the first named output it holds) and runs as the writer —
+the member, envoy, visitor or automation run (that run's policies) — holding no policy of its own,
+with an automation's ctx (`EffectCtx`). An effect's writes run effects one level deeper; past 8 levels the
+run is recorded failed with `depth`. The writer sees its effect run's status and error code; an
+administrator sees its input.
 
 ## I/O and notices
 

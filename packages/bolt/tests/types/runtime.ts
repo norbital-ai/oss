@@ -1,8 +1,8 @@
 // Type corpus for the runtime roles (§3.3.1, §3.3.5, §3.3.6, §3.3.8, §3.4, rules 50–63b). Each `@ts-expect-error` line
 // is a planted mistake; a clean tsc proves every valid line compiles and every mistake is refused at its literal.
-import { app, automation, model, group, mcp, secrets, workspace } from '../../src/index.ts';
-import { currency, Decimal } from '@norbital-ai/std/decimal';
-import type { CurrencyCode, FileRef, Id, Instant } from '../../src/index.ts';
+import { app, automation, idOf, model, group, mcp, secrets, workspace } from '../../src/index.ts';
+import { currency } from '@norbital-ai/std/decimal';
+import type { Actor, CurrencyCode, FileRef, Id, Instant } from '../../src/index.ts';
 import type { RunInput, RunOutput } from '../../src/decl/runtime/automation.ts';
 import type { SkillFrontmatter } from '../../src/decl/runtime/agent.ts';
 import type { StartInput } from '../../src/decl/runtime/facilities.ts';
@@ -15,12 +15,7 @@ type Eq<A, B> = (<T>() => T extends A ? 1 : 2) extends <T>() => T extends B ? 1 
 const is = <T extends true>(..._proof: T extends true ? [] : never): void => {};
 
 // ── run inputs and outputs, from the literal ──
-is<
-	Eq<
-		RunInput<typeof rt.follow_up.spec>,
-		{ readonly model: 'orders'; readonly ids: readonly Id<'orders'>[] }
-	>
->(); // event triggers only
+is<Eq<RunInput<typeof rt.follow_up.spec>, { readonly ids: readonly Id<'orders'>[] }>>(); // declared input
 is<Eq<RunInput<typeof rt.render.spec>, { readonly order: Id<'orders'> }>>(); // declared input
 is<Eq<RunInput<typeof rt.nightly.spec>, {}>>(); // cron: nothing
 is<Eq<RunOutput<typeof rt.nightly.spec>, number>>();
@@ -29,18 +24,23 @@ is<Eq<StartInput<'products.sync.ledger'>, { readonly [key: string]: never }>>();
 const mixed = automation('follow_up', {
 	...rt.follow_up.spec,
 	description: 'x',
-	runAs: ['sales_rep'],
-	on: [{ cron: '@daily' }, { deleted: 'orders' }],
+	policies: ['sales_rep'],
+	on: [
+		{ cron: '@daily' },
+		// @ts-expect-error a row write runs its model's effect, never an automation trigger
+		{ deleted: 'orders' }
+	],
 	run: function* ({ ids = [] }, ctx) {
 		is<Eq<typeof ctx.actor.kind, 'system'>>();
-		yield* ctx.act('orders.update', ids.map((id) => ({ target: id, set: { note: 'swept' } })));
+		yield* ctx.act(
+			'orders.update',
+			ids.map((id) => ({ target: id, set: { note: 'swept' } }))
+		);
 		const id = ids[0];
 		if (id !== undefined) {
-			yield* ctx.act(
-				'orders.update',
-				[{ target: id, set: { note: 'observed' } }],
-				{ observed: { [id]: 1 } }
-			);
+			yield* ctx.act('orders.update', [{ target: id, set: { note: 'observed' } }], {
+				observed: { [id]: 1 }
+			});
 			yield* ctx.act(
 				'orders.update',
 				[{ target: id, set: { note: 'invalid' } }],
@@ -106,8 +106,6 @@ const mixed = automation('follow_up', {
 		void (ctx.now satisfies Instant);
 	}
 });
-is<Eq<RunInput<typeof mixed.spec>['ids'], readonly Id<'orders'>[] | undefined>>(); // cron runs carry no ids
-is<Eq<NonNullable<RunInput<typeof mixed.spec>['rows']>[number]['number'], string>>(); // deleted pre-images
 declare const ref0: FileRef;
 
 rt.render.body; // inline in the fixture
@@ -116,112 +114,121 @@ rt.render.body; // inline in the fixture
 automation('nightly', {
 	...rt.nightly.spec,
 	description: 'x',
-	runAs: ['sales_rep'],
+	policies: ['sales_rep'],
 	// @ts-expect-error A1 a cron with six fields
 	on: { cron: '0 0 2 * * *' }
 });
 automation('nightly', {
 	...rt.nightly.spec,
 	description: 'x',
-	runAs: ['sales_rep'],
+	policies: ['sales_rep'],
 	// @ts-expect-error A2 a cron with four fields
 	on: { cron: '0 2 * *' }
 });
 automation('nightly', {
 	...rt.nightly.spec,
 	description: 'x',
-	runAs: ['sales_rep'],
+	policies: ['sales_rep'],
 	// @ts-expect-error A3 a trigger on an unknown model
 	on: { created: 'ordres' }
 });
 automation('nightly', {
 	...rt.nightly.spec,
 	description: 'x',
-	runAs: ['sales_rep'],
+	policies: ['sales_rep'],
 	// @ts-expect-error A4 `fields` only on `updated`
 	on: { created: 'orders', fields: ['status'] }
 });
 automation('nightly', {
 	...rt.nightly.spec,
 	description: 'x',
-	runAs: ['sales_rep'],
+	policies: ['sales_rep'],
 	// @ts-expect-error A5 a delay that is not a Duration
 	on: { created: 'orders', delay: '3 days' }
 });
 automation('nightly', {
 	...rt.nightly.spec,
 	description: 'x',
-	runAs: ['sales_rep'],
+	policies: ['sales_rep'],
 	// @ts-expect-error A6 a trigger where on a field orders lacks
 	on: { updated: 'orders', where: { stauts: { eq: 'draft' } } }
 });
 automation('nightly', {
 	...rt.nightly.spec,
 	description: 'x',
-	runAs: ['sales_rep'],
+	policies: ['sales_rep'],
 	// @ts-expect-error A7 `fields` names an unknown field
 	on: { updated: 'orders', fields: ['stauts'] }
 });
 automation('nightly', {
 	...rt.nightly.spec,
 	description: 'x',
-	// @ts-expect-error A8 runAs 'trigger' on a triggered automation (rule 53)
+	// @ts-expect-error A8 runAs is gone: a run holds its declared policies
 	runAs: 'trigger',
 	on: { cron: '@daily' }
 });
+// @ts-expect-error A8b policies are required
+automation('nightly', { description: 'x', on: { cron: '@daily' }, run: function* () { return 0; } });
 automation('nightly', {
 	...rt.nightly.spec,
 	description: 'x',
-	// @ts-expect-error A9 an unknown policy in runAs
-	runAs: ['sales_rap'],
+	// @ts-expect-error A8c policies are non-empty
+	policies: [],
 	on: { cron: '@daily' }
 });
 automation('nightly', {
 	...rt.nightly.spec,
 	description: 'x',
-	runAs: ['sales_rep'],
+	// @ts-expect-error A9 an unknown policy
+	policies: ['sales_rap'],
+	on: { cron: '@daily' }
+});
+automation('nightly', {
+	...rt.nightly.spec,
+	description: 'x',
+	policies: ['sales_rep'],
 	// @ts-expect-error A10 retry attempts outside 2–8
 	retry: { attempts: 9 }
 });
 automation('nightly', {
 	...rt.nightly.spec,
 	description: 'x',
-	runAs: ['sales_rep'],
+	policies: ['sales_rep'],
 	// @ts-expect-error A11 concurrency above 16
 	concurrency: { max: 17 }
 });
 automation('nightly', {
 	...rt.nightly.spec,
 	description: 'x',
-	runAs: ['sales_rep'],
+	policies: ['sales_rep'],
 	// @ts-expect-error A12 an unknown webhook scheme
 	on: { webhook: '/in', verify: { scheme: 'github', secret: 'HOOK_SECRET' } }
 });
 automation('nightly', {
 	...rt.nightly.spec,
 	description: 'x',
-	runAs: ['sales_rep'],
+	policies: ['sales_rep'],
 	// @ts-expect-error A13 a webhook secret that is not a declared secret name
 	on: { webhook: '/in', verify: { scheme: 'standard', secret: 'hook-secret' } }
 });
 automation('nightly', {
 	...rt.nightly.spec,
 	description: 'x',
-	runAs: ['sales_rep'],
+	policies: ['sales_rep'],
 	// @ts-expect-error A14 a ledger is never a trigger target (X-18)
 	on: { created: 'sys_run' }
 });
 automation('nightly', {
 	...rt.nightly.spec,
 	description: 'x',
-	runAs: ['sales_rep'],
+	policies: ['sales_rep'],
 	// @ts-expect-error A15 a misspelt trigger arm
 	on: { create: 'orders' }
 });
 automation('nightly', {
 	...rt.nightly.spec,
 	description: 'x',
-	runAs: ['sales_rep'],
+	policies: ['sales_rep'],
 	// @ts-expect-error A16 an operator the field's kind lacks, in the second trigger of an array
 	on: [{ cron: '@daily' }, { updated: 'orders', where: { due: { like: '2026%' } } }]
 });
@@ -230,21 +237,21 @@ automation('nightly', { ...rt.nightly.spec, description: 'x', run_as: ['sales_re
 automation('nightly', {
 	...rt.nightly.spec,
 	description: 'x',
-	runAs: ['sales_rep'],
+	policies: ['sales_rep'],
 	// @ts-expect-error A18 an unknown input kind
 	input: { n: { kind: 'integer' } }
 });
 automation('nightly', {
 	...rt.nightly.spec,
 	description: 'x',
-	runAs: ['sales_rep'],
+	policies: ['sales_rep'],
 	// @ts-expect-error A19 a webhook path without its leading slash
 	on: { webhook: 'in', verify: { scheme: 'bearer', secret: 'HOOK_SECRET' } }
 });
 
 automation('body', {
 	description: 'x',
-	runAs: ['sales_rep'],
+	policies: ['sales_rep'],
 	input: { n: { kind: 'int' } },
 	output: { kind: 'text' },
 	// @ts-expect-error B1 the body returns what `output` does not declare
@@ -255,12 +262,17 @@ automation('body', {
 
 automation('trig', {
 	description: 'x',
-	runAs: 'trigger',
+	policies: ['sales_rep'],
 	run: function* (_, ctx) {
-		// @ts-expect-error B2 host tools only when runAs is a policy list (rule 58)
-		yield* ctx.ai.sys_2.infer({ prompt: 'x', tools: ['browser'] });
-		// @ts-expect-error B2 nor record reads (rule 58)
-		yield* ctx.ai.sys_2.infer({ prompt: 'x', tools: ['read'] });
+		// B2 a run holds its policies: host tools and record reads are its own
+		yield* ctx.ai.sys_2.infer({ prompt: 'x', tools: ['browser', 'read'] });
+		is<Eq<typeof ctx.actor.kind, 'system'>>();
+		// B2a who started it is the run's trigger, a person or the system
+		const trigger = ctx.run.trigger;
+		if (trigger.kind === 'person')
+			void (trigger.actor satisfies Exclude<Actor, { kind: 'system' }>);
+		else void (trigger.cause satisfies 'cron' | 'webhook' | 'effect' | 'schedule');
+		void (ctx.run.id satisfies Id<'sys_run'>);
 		// @ts-expect-error B3 scheduling an unknown automation
 		yield* ctx.schedule('nigthly', {});
 		// @ts-expect-error B4 the scheduled input does not match the automation's
@@ -332,10 +344,12 @@ model('notice_notes', {
 			context: { notice: { kind: 'id', of: 'notices' } },
 			read: function* ({ records, context }, ctx) {
 				is<Eq<typeof context.notice, Id<'notices'>>>();
-				const notices = yield* ctx.db.query({ notices: {
-					where: { id: { eq: context.notice } },
-					limit: 1
-				} });
+				const notices = yield* ctx.db.query({
+					notices: {
+						where: { id: { eq: context.notice } },
+						limit: 1
+					}
+				});
 				return {
 					rows:
 						notices.notices.rows.length === 0
@@ -513,3 +527,7 @@ automation('order_lines_chase', {
 	}
 });
 
+// ── record ids: `idOf` decodes into one model's branded id ──
+is<Eq<ReturnType<typeof idOf<'orders'>>['Type'], Id<'orders'>>>();
+// @ts-expect-error a model the workspace does not declare
+idOf('no_such_model');

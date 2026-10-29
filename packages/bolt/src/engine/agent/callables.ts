@@ -8,7 +8,6 @@ import { BoltError } from '../../protocol/errors.ts';
 import { publicEnvoys } from '../manifest.ts';
 import { Agents, Manifest, Reads, Turns, type AgentCallables } from '../services.ts';
 import { Conversation, isStaff, sharedConversations } from './schema.ts';
-import { RateWindows, chargesFor } from '../access/rate.ts';
 import { TriageService } from './triage.ts';
 import { lowerRead } from '../query/engine.ts';
 
@@ -63,7 +62,6 @@ export const agentCallables = Effect.gen(function* () {
 		turns = yield* Turns,
 		reads = yield* Reads,
 		triage = yield* TriageService;
-	const windows = new RateWindows();
 	const started = yield* AgentBackground;
 	const context = yield* Effect.context<TenantDb | Manifest>();
 	const readable = (authority: Authority, id: string) =>
@@ -140,18 +138,6 @@ export const agentCallables = Effect.gen(function* () {
 						BoltError.make('invalid', 'decode', 'a post needs text or an attachment')
 					);
 				const files = yield* agents.attachments(who, input.attachments ?? []);
-				const limited = windows.charge(
-					chargesFor(authority, ['agent'], { actor: who }),
-					yield* Clock.currentTimeMillis
-				);
-				if (!limited.ok)
-					return yield* Effect.fail(
-						BoltError.make(
-							'rateLimited',
-							'admission',
-							`Too many requests; retry in ${limited.retryAfter} s.`
-						)
-					);
 				const team = authority.key.startsWith('preview:team:')
 					? authority.key.split(':')[2]
 					: undefined;

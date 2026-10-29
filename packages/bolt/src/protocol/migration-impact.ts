@@ -27,7 +27,14 @@ export function impactText(
 		dot = object.indexOf('.'),
 		table = dot < 0 ? object : object.slice(0, dot),
 		name = dot < 0 ? object : object.slice(dot + 1),
-		values = { object, table, name, n: step.rows, rows: step.rows === 1 ? '1 row' : `${step.rows} rows`, id: step.id };
+		values = {
+			object,
+			table,
+			name,
+			n: step.rows,
+			rows: step.rows === 1 ? '1 row' : `${step.rows} rows`,
+			id: step.id
+		};
 	switch (step.hazard) {
 		case 'destructive':
 			return fill(

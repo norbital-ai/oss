@@ -45,7 +45,7 @@ A grid of `rows` records by `cols` values (dates or a relation) whose cells hold
 
 <script lang="ts">
 	import { formatValue as show } from '../kinds/kind.js';
-	import { Effect } from 'effect';
+	import { Effect, Predicate } from 'effect';
 	import { fork } from '../effect/index.js';
 	import { SvelteMap } from 'svelte/reactivity';
 	import { Button } from '../primitives/button/index.js';
@@ -55,7 +55,6 @@ A grid of `rows` records by `cols` values (dates or a relation) whose cells hold
 	import { actOutcome, outcomeText } from '../actions/outcome.js';
 	import { and } from '../filter/scope.js';
 	import { cellKey, MATRIX_PAGE, matrixCells } from './cells.js';
-	import { isRow, nextOf, rowsOf } from '../read/results.js';
 	import { label, msg } from '../text/messages.js';
 	import { pageOf, READ_LIMIT, requestJson } from '../read/request.js';
 	import { valueAt } from '../cell/value.js';
@@ -90,7 +89,7 @@ A grid of `rows` records by `cols` values (dates or a relation) whose cells hold
 	const columnConfig = (
 		value: MatrixProps['cols'][number]
 	): value is { value: Json; label: string } =>
-		isRow(value) && 'value' in value && typeof value['label'] === 'string';
+		Predicate.isObject(value) && 'value' in value && typeof value['label'] === 'string';
 	const columns = $derived(
 		cols.map((c) =>
 			columnConfig(c)
@@ -120,7 +119,7 @@ A grid of `rows` records by `cols` values (dates or a relation) whose cells hold
 			)
 		)
 	);
-	const pageRows = $derived(rowPage.kind === 'ready' ? rowsOf(rowPage.value) : []);
+	const pageRows = $derived(rowPage.kind === 'ready' ? rowPage.value.rows : []);
 	const ids = $derived(pageRows.map((r) => r.id));
 	// the page's rows window inside the grid's scroll port; the sticky header row and first column stay put
 	const grid = virtualList({
@@ -167,12 +166,12 @@ A grid of `rows` records by `cols` values (dates or a relation) whose cells hold
 		)
 	);
 	const cells = $derived(
-		items.kind === 'ready' ? matrixCells(rowsOf(items.value), row, col) : new Map<string, Row[]>()
+		items.kind === 'ready' ? matrixCells(items.value.rows, row, col) : new Map<string, Row[]>()
 	);
 	const markCells = $derived.by(() => {
 		if (marks === undefined || markRead.kind !== 'ready') return new Map<string, Row[]>();
 		return matrixCells(
-			rowsOf(markRead.value).map((m) => (marks.row ? m : { ...m, $row: '*' })),
+			markRead.value.rows.map((m) => (marks.row ? m : { ...m, $row: '*' })),
 			marks.row ?? '$row',
 			marks.at
 		);
@@ -347,11 +346,11 @@ A grid of `rows` records by `cols` values (dates or a relation) whose cells hold
 				<Button
 					size="sm"
 					variant="outline"
-					disabled={rowPage.kind !== 'ready' || nextOf(rowPage.value) === null}
+					disabled={rowPage.kind !== 'ready' || rowPage.value.next === null}
 					onclick={() => {
 						if (rowPage.kind === 'ready') {
 							back = [...back, after];
-							after = nextOf(rowPage.value);
+							after = rowPage.value.next;
 						}
 					}}>{msg(bolt, 'table.next', 'Next')}</Button
 				>

@@ -41,7 +41,7 @@ async function fakeBolt(extra: Partial<ViewScript> = {}) {
 	const started: { automation: string; input: Value }[] = [];
 	let serial = 0;
 	const fixture = await viewFixture({
-		aggregate: () => [{ count: 0 }],
+		aggregate: () => ({ count: 0 }),
 		start: (automation, input) => {
 			started.push({ automation, input });
 		},
@@ -365,7 +365,7 @@ it.live("a model's import and export file syncs are rows of their own, run throu
 		});
 		input.dispatchEvent(new Event('change', { bubbles: true }));
 		yield* browser(() => settle());
-		assert.deepEqual(uploads, ['jobs.sync.sheet']);
+		assert.deepEqual(uploads, ['jobs.$import.sheet']);
 		assert.deepEqual(started.at(-1), {
 			automation: 'jobs.sync.sheet',
 			input: { mode: 'import', file: 'f1' }
@@ -375,7 +375,7 @@ it.live("a model's import and export file syncs are rows of their own, run throu
 );
 
 it.live(
-	'an import run is watched to its end: warnings wait in the menu, "Accept and import" re-submits the file, the counts are toasted',
+	'an import run is watched to its end in one step: its counts are toasted and its warnings listed',
 	() =>
 		Effect.gen(function* () {
 			const rows = new Map<string, RunRow>(),
@@ -449,29 +449,23 @@ it.live(
 			set(first, {
 				status: 'succeeded',
 				result: {
-					applied: false,
+					applied: true,
+					created: 2,
+					updated: 1,
+					deleted: 0,
 					findings: [{ at: 3, field: 'Day', message: 'a holiday', severity: 'warn' }]
 				}
 			});
 			yield* browser(() => settle());
-			assert.ok(element<HTMLElement>(document, '[data-view-menu]'), 'the menu opens on findings');
-			assert.equal(row('import:sheet').dataset.status, 'review');
+			// one step: the import ran; its warnings come with its counts, and nothing is offered to accept
+			assert.equal(started.length, 2);
+			assert.ok(element<HTMLElement>(document, '[data-view-menu]'), 'the menu opens on warnings');
+			assert.equal(row('import:sheet').dataset.status, 'done');
 			assert.match(
 				textOf(element<HTMLElement>(document, '[data-import-findings]')),
 				/Row 3 · Day: a holiday/
 			);
-			element<HTMLButtonElement>(document, '[data-import-accept]').click();
-			yield* browser(() => settle());
-			assert.deepEqual(started.at(-1), {
-				automation: 'jobs.sync.sheet',
-				input: { mode: 'import', file: 'f1', accept: true }
-			});
-			set(`run-${started.length}`, {
-				status: 'succeeded',
-				result: { applied: true, created: 2, updated: 1, deleted: 0, findings: [] }
-			});
-			yield* browser(() => settle());
-			assert.equal(row('import:sheet').dataset.status, 'done');
+			assert.equal(document.querySelector('[data-import-accept]'), null);
 			assert.deepEqual(
 				toasts.map((t) => [t.tone, t.text]),
 				[['success', '2 created, 1 updated, 0 deleted']]
@@ -480,7 +474,7 @@ it.live(
 );
 
 it.live(
-	'an import whose findings refuse says nothing was imported, lists them, and offers no accept',
+	'an import whose findings refuse says nothing was imported and lists them',
 	() =>
 		Effect.gen(function* () {
 			const rows = new Map<string, RunRow>();
@@ -532,7 +526,6 @@ it.live(
 				textOf(element<HTMLElement>(document, '[data-import-findings]')),
 				/Row 2 · Hours: expected an integer/
 			);
-			assert.equal(document.querySelector('[data-import-accept]'), null);
 			assert.equal(required(toasts.at(-1)).tone, 'error');
 		})
 );

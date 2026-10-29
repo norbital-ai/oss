@@ -38,7 +38,7 @@ import {
 	committed
 } from '../write/commit.ts';
 import { Chain, GATED, minter, decided } from '../write/sql.ts';
-import { enqueue } from '../runs/queue.ts';
+import { enqueue, writerOf } from '../runs/queue.ts';
 import { syncOutboxPiece } from '../sync/write.ts';
 import { notifyRun, type NotifyWire } from '../notifications/notify.ts';
 import { participant, rolesOf, sameFlow, unknownTeam, type Request } from './route.ts';
@@ -258,8 +258,7 @@ function makeApprovals(m: EngineManifest, db: TenantDbShape, options: ApprovalsO
 	/** The root model's held rows as they are now (a removed one as its id): the notify event's records. */
 	const current = Effect.fn('Approvals.current')(function* (a: Stored) {
 		const ids = a.records.filter((r) => r.model === a.model).map((r) => r.id);
-		if (cat.exposures.get(a.model) === undefined || ids.length === 0)
-			return [{ id: a.record }];
+		if (cat.exposures.get(a.model) === undefined || ids.length === 0) return [{ id: a.record }];
 		const rows = yield* db.rows(Schema.Struct({ j: Schema.Record(Schema.String, Schema.Json) }), {
 			text: `SELECT to_jsonb(t) AS j FROM ${q(table(a.model))} t WHERE t.id::text IN (SELECT jsonb_array_elements_text($1::jsonb))`,
 			params: [JSON.stringify(ids)]
@@ -551,9 +550,7 @@ function makeApprovals(m: EngineManifest, db: TenantDbShape, options: ApprovalsO
 						skipped: [] as Skipped[],
 						observations: []
 					};
-		if (
-			plan.skipped.some((record) => record.field === '*' && record.reason !== 'modelRemoved')
-		)
+		if (plan.skipped.some((record) => record.field === '*' && record.reason !== 'modelRemoved'))
 			return refused(
 				'invalidInput',
 				'An approval checkpoint cannot be restored. The request and its records remain held.'
@@ -568,14 +565,7 @@ function makeApprovals(m: EngineManifest, db: TenantDbShape, options: ApprovalsO
 			reason: reason === '' ? null : reason,
 			...(edge.rollback === true ? { rolledBack: plan.rolledBack, skipped: plan.skipped } : {})
 		};
-		const runs = notified(
-			a,
-			a.route,
-			move,
-			next,
-			notifies(a.model) ? yield* current(a) : [],
-			now
-		);
+		const runs = notified(a, a.route, move, next, notifies(a.model) ? yield* current(a) : [], now);
 		const refreshKey = `approval:${a.id}:${a.log.length}`;
 		const mint = minter(`approval:${a.id}:${a.log.length}`, now);
 		const shown = face(a.route, next);
@@ -586,6 +576,7 @@ function makeApprovals(m: EngineManifest, db: TenantDbShape, options: ApprovalsO
 			now,
 			today: b.today,
 			actor: auth.actor,
+			writer: writerOf(auth),
 			writes: plan.writes,
 			owned: [],
 			rate: [],

@@ -3,7 +3,7 @@
 import { Effect, Fiber, FiberSet } from 'effect';
 import { getContext, setContext } from 'svelte';
 import { encodeWire } from '@norbital-ai/std/wire';
-import type { Value } from '../kinds/kind.js';
+import { valueObject, type Value } from '../kinds/kind.js';
 import type { IdOf } from '../model/types.js';
 import type { RecordCapabilities, RecordRestriction } from '../record/types.js';
 import type { RunHandle, ViewBolt } from '../client/contract.js';
@@ -367,16 +367,14 @@ export class FormState {
 			}
 			const nested = childOperations(this.children);
 			const hasChildren = Object.keys(nested.set).length > 0;
-			const object = (value: Value | null | undefined): value is Row =>
-				value !== null && value !== undefined && typeof value === 'object' && !Array.isArray(value);
 			const input = !hasChildren
 				? scalar
 				: target.of === 'model' && target.mode === 'create'
-					? { ...(object(scalar) ? scalar : {}), ...nested.set }
+					? { ...(valueObject(scalar) ? scalar : {}), ...nested.set }
 					: {
 							target: target.id ?? null,
 							set: {
-								...(object(scalar) && object(scalar['set']) ? scalar['set'] : {}),
+								...(valueObject(scalar) && valueObject(scalar['set']) ? scalar['set'] : {}),
 								...nested.set
 							}
 						};

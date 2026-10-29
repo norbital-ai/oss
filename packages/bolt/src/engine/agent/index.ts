@@ -23,7 +23,6 @@ import {
 	Scope,
 	Stream
 } from 'effect';
-import * as EffectArray from 'effect/Array';
 import { Port } from '../port.ts';
 import {
 	Ai,
@@ -82,14 +81,7 @@ import type { Json } from '../../decl/values.ts';
 import { encodeWire } from '@norbital-ai/std/wire';
 import type { AiRequest, AiResponse, Authority, Bindings } from '../contracts.ts';
 import { Authorities } from '../identity/actor.ts';
-import {
-	generate,
-	isFacilityError,
-	modelCall,
-	overflow,
-	servesModel,
-	textOf
-} from './ai.ts';
+import { generate, isFacilityError, modelCall, overflow, servesModel, textOf } from './ai.ts';
 import {
 	bounded,
 	COMPACT_FORMAT,
@@ -130,6 +122,7 @@ import {
 	jobs,
 	perform,
 	turnFacts,
+	workspaceSchema,
 	WriteInput,
 	CLOSED,
 	type AttachmentPort,
@@ -138,6 +131,7 @@ import {
 	type WorkspacePort
 } from './tools.ts';
 import { PLATFORM_SKILLS } from './skills.ts';
+import { isObj } from './draft.ts';
 export { inferFacility } from './ai.ts';
 export { mcpServers } from './mcp.ts';
 export { type As } from './schema.ts';
@@ -160,7 +154,7 @@ export type AgentEngine = {
 	bundler?: Bundler['Service'] | undefined;
 };
 /** How a document is read for the agent: once, as text it keeps (`read_file` on a PDF). */
-const TRANSCRIBE = `Transcribe the attached document completely and faithfully as Markdown, page by page. Keep every printed and handwritten field with its value in reading order, tables as Markdown tables (every row and column, numbers exactly as written), tick boxes as [x] or [ ], and empty fields as empty. Write a value you cannot read with certainty as [unclear: your best reading]. Do not summarise, interpret, correct or add anything.`;
+const TRANSCRIBE = `Transcribe the attached document completely and faithfully as Markdown, page by page, in reading order. Keep every printed and handwritten field with its value; mark a handwritten value (handwritten). Tables as Markdown tables: every row and column, an unlabelled row or column kept empty, numbers exactly as written. A printed box as [x] when ticked and [ ] when empty; text that has no printed box is never a box. Struck-out text as ~~text~~, followed by what was written in its place. Copy names, product names and codes letter by letter as written: never change them to a word you know. Write a value you cannot read with certainty as [unclear: your best reading], and text that runs off the page as [cut off: what is visible]. Do not summarise, interpret, correct or add anything.`;
 /** A cheap content key (FNV-1a over the bytes). */
 const fingerprint = (bytes: Uint8Array): string => {
 	let h = 0x811c9dc5;
@@ -199,6 +193,15 @@ export type AgentConfig = {
 		file: { mime: string; bytes: Uint8Array },
 		signal: AbortSignal
 	) => Promise<string>;
+	/**
+	 * A PDF's first `pages` pages as JPEG images (the host's renderer): `read_file` shows a scan as pixels and
+	 * transcribes it from them. Without it the PDF goes to the provider as a file, whose own handling may OCR it to text.
+	 */
+	documentPages?: (
+		file: { mime: string; bytes: Uint8Array },
+		pages: number,
+		signal: AbortSignal
+	) => Promise<readonly Uint8Array[]>;
 	geocoder?: Geo['Service'];
 	docs?: Docs['Service'];
 	/** The released source (`workspace_search`); a host reads it from the artifact (`workspaceFiles`). */
@@ -248,11 +251,7 @@ export const AGENT_LIMITS = {
 export const TURN_RUN = 'agent.turn';
 /** A tool answer that failed: its `error` is set (a run's `error: null` describes a run that did not fail). */
 const failedResult = (result: Json): result is { readonly [key: string]: Json } =>
-	result !== null &&
-	typeof result === 'object' &&
-	!EffectArray.isArray<typeof result>(result) &&
-	result['error'] !== undefined &&
-	result['error'] !== null;
+	isObj(result) && result['error'] !== undefined && result['error'] !== null;
 /**
  * A reply being written reaches its row at most this often: one UPDATE of the whole text so far per flush (a write is
  * one statement), each published live like any other write, so the panel's transcript grows patch by patch.
@@ -263,14 +262,76 @@ export const TYPING_REFRESH_MS = 10_000;
 /** After the same call failed this often in a turn (today's recovery guidance). */
 export const RECOVERY =
 	'This call has failed the same way several times. Do not repeat it: change the approach, or tell the person plainly what is blocking.';
+/** Characters a model can slip into a name unseen: format (zero-width, bidi) and default-ignorable code points. */
+const INVISIBLE = /[\p{Cf}\p{Default_Ignorable_Code_Point}]/gu;
+const plain = (text: string) => text.normalize('NFKC').replace(INVISIBLE, '');
+const canonical = (v: Json): Json =>
+	typeof v === 'string'
+		? plain(v)
+		: Array.isArray(v)
+			? v.map(canonical)
+			: isObj(v)
+				? Object.fromEntries(
+						Object.entries(v)
+							.map(([k, x]): [string, Json] => [plain(k), canonical(x)])
+							.sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+					)
+				: v;
+/**
+ * What makes two calls the same call: the tool and its input normalised (NFKC, invisible characters dropped, keys in
+ * order), so a name dressed in zero-width characters or a reordered object is never a new call to the repeat guards.
+ */
+export const callKey = (name: string, input: Json): string =>
+	`${name}\u0000${JSON.stringify(canonical(input))}`;
+/** A paged tool's continuation: the argument that takes the `next` its answer gave. */
+const RESUME: { readonly [tool: string]: string } = {
+	read: 'after',
+	runs: 'cursor',
+	logs: 'cursor',
+	read_output: 'offset',
+	workspace_search: 'from',
+	browser_snapshot: 'from'
+};
+/**
+ * Where the rest of a tool answer is, when the tool itself stopped short: a page's `next` (read's per root key) or the
+ * tool's own `truncated` line. One line per call for the step's closing note; nothing when the answer is whole.
+ */
+export function rest(name: string, call: string, result: Json): string[] {
+	if (!isObj(result)) return [];
+	const head = `${name} (call '${call}')`,
+		arg = RESUME[name];
+	const lines = typeof result['truncated'] === 'string' ? [`${head}: ${result['truncated']}`] : [];
+	if (arg === undefined) return lines;
+	if (name !== 'read')
+		return result['next'] === undefined || result['next'] === null
+			? lines
+			: [
+					...lines,
+					`${head}: more follows; the rest: call ${name} again with the same arguments and ${arg}: ${JSON.stringify(result['next'])}`
+				];
+	return [
+		...lines,
+		...Object.entries(result).flatMap(([key, page]) =>
+			!isObj(page) || page['next'] === undefined || page['next'] === null
+				? []
+				: [
+						`${head}: more "${key}" rows follow${Array.isArray(page['rows']) ? ` the ${page['rows'].length} shown${typeof page['total'] === 'number' ? ` of ${page['total']}` : ''}` : ''}; the rest: call read again with the same "${key}" options and "after": ${JSON.stringify(page['next'])}`
+					]
+		)
+	];
+}
 /** Steps whose every tool call failed, and an empty reply, are told this before the turn ends visibly. */
 export const NUDGE = {
 	failing:
 		'Your last tool calls all failed. Do not repeat them: answer the person now with what you have, or tell them plainly what blocks you.',
 	empty:
 		'Your last reply was empty. Answer the person now in plain text, or tell them plainly what blocks you.',
+	resumed: (request: string) =>
+		`Your turn was interrupted and has resumed. The person's request is still open: "${request.length > 2000 ? `${request.slice(0, 2000)}…` : request}". Carry on from the work above and end with your answer to it, not a summary of your own work.`,
 	cutTool:
 		'Your last reply was cut off at 60 seconds while you were still writing a tool call. Make smaller calls: write or edit a large file in several parts.',
+	more: (lines: readonly string[]) =>
+		`Some answers stopped short; the rest is not above:\n${lines.map((l) => `- ${l}`).join('\n')}`,
 	truncated: (calls: readonly string[]) =>
 		`Some results were too large and you saw only part of them: ${calls.join(', ')}. Do not treat them as complete. ` +
 		'To see the rest, call read_output with that call id and the offset to continue from; or narrow the read (a tighter where, a smaller limit, fewer layers).'
@@ -611,6 +672,24 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 		if (result.next_due !== null) yield* config.announce?.(result.next_due) ?? Effect.void;
 		return result.images.length !== 1 ? null : result.taken ? 'takeover' : 'claimed';
 	});
+	/**
+	 * A turn interrupted while its process lives on (an engine cutover; a dead process runs no finalizer): its lease lapses
+	 * now and its takeover run is due now, so the next engine goes on at once instead of a lease later (rule 48).
+	 */
+	const release = (id: string) =>
+		Effect.gen(function* () {
+			const now = (yield* config.bindings).now;
+			const moved = yield* db.write(
+				q(
+					`WITH c AS (UPDATE sys_conversation SET lease_until = $2::timestamptz WHERE id = $1 AND status = 'running' RETURNING id)
+					UPDATE sys_run SET due_at = $2::timestamptz WHERE automation = '${TURN_RUN}' AND state = 'queued' AND input->>'conversation' = $1
+					AND EXISTS (SELECT 1 FROM c) RETURNING id`,
+					id,
+					now
+				)
+			);
+			if (moved.rows.length > 0) yield* config.announce?.(now) ?? Effect.void;
+		}).pipe(Effect.timeout(2000), Effect.tapCause(Effect.logWarning), Effect.ignore);
 	/** Idle only when nothing is queued; otherwise the turn goes on (a message landed as it finished). */
 	const settle = Effect.fn('Agents.work9')(function* (id: string) {
 		return (
@@ -991,9 +1070,21 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 			// answers; its input was already consumed, so only a turn that had replied or was waiting on a card settles
 			if (admitted === 'takeover') {
 				yield* unfinished(id);
-				const last = (yield* transcript(id)).at(-1);
+				const rows = yield* transcript(id),
+					last = rows.at(-1);
 				force ||=
 					last?.meta?.tag !== 'reply' && last?.meta?.tag !== 'failed' && last?.state !== 'confirm';
+				// cut mid-work, the transcript ends in the model's own rows: name the open request, or the resumed step
+				// reads it as finished work to summarise
+				const request = rows.findLast((r) => r.role === 'user' && r.state === 'consumed');
+				if (force && (last?.role === 'assistant' || last?.role === 'tool') && request !== undefined)
+					yield* write({
+						conversation: id,
+						role: 'system',
+						content: { text: NUDGE.resumed(request.text ?? '') },
+						text: NUDGE.resumed(request.text ?? ''),
+						meta: { tag: 'note' }
+					});
 			}
 			for (;;) {
 				// an administrator's runtime settings narrow the model and cap the month's spend (settings.ts)
@@ -1142,6 +1233,17 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 										Effect.mapError((e) => BoltError.make('unavailable', 'facility', e.message, e))
 									)
 							}),
+					...(config.documentPages === undefined
+						? {}
+						: {
+								documentPages: (file: { mime: string; bytes: Uint8Array }, pages: number) =>
+									Port.attempt('documents', (signal) =>
+										config.documentPages!(file, pages, signal)
+									).pipe(
+										Port.call('documents', 60000),
+										Effect.mapError((e) => BoltError.make('unavailable', 'facility', e.message, e))
+									)
+							}),
 					// every inward agent reads the source (models, policies) for exact shapes; a public envoy's or external member's turn does not
 					workspace: external ? undefined : config.workspace,
 					draft:
@@ -1157,12 +1259,13 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 					...(config.ai === undefined
 						? {}
 						: {
-								transcribe: Effect.fn('Agents.transcribe')(function* (file: {
-									mime: string;
-									bytes: Uint8Array;
-								}) {
+								transcribe: Effect.fn('Agents.transcribe')(function* (
+									files: readonly { mime: string; bytes: Uint8Array }[]
+								) {
 									// one transcription per document a turn, however often it is read
-									const key = `${file.bytes.byteLength}:${fingerprint(file.bytes)}`,
+									const key = files
+											.map((f) => `${f.bytes.byteLength}:${fingerprint(f.bytes)}`)
+											.join(','),
 										known = transcripts.get(key);
 									if (known !== undefined) return known;
 									const r = yield* modelCall(
@@ -1170,8 +1273,16 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 										{
 											model: conv.model,
 											system: TRANSCRIBE,
-											messages: [{ role: 'user', content: 'Transcribe the attached document.' }],
-											files: [file],
+											messages: [
+												{
+													role: 'user',
+													content:
+														files.length === 1 && files[0]?.mime === 'application/pdf'
+															? 'Transcribe the attached document.'
+															: `Transcribe the attached document: its ${files.length} page image(s), in order.`
+												}
+											],
+											files: [...files],
 											// a transcription copies what is there: it needs no long deliberation
 											effort: 'low'
 										},
@@ -1417,6 +1528,9 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 						task: envoy?.task,
 						skills: allSkills,
 						tools,
+						schema: tools.some((t) => t.name === 'read')
+							? workspaceSchema(m, authority)
+							: undefined,
 						authority
 					}),
 					messages: history,
@@ -1618,7 +1732,8 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 				let waiting = false,
 					failed = 0;
 				// the calls whose result this step clipped: the step closes with one note naming them, so the model knows
-				const truncated: string[] = [];
+				const truncated: string[] = [],
+					rests: string[] = [];
 				for (const call of calls) {
 					// the call is a `running` row while it runs, finished in place when it answers
 					const started = yield* Clock.currentTimeMillis,
@@ -1632,7 +1747,7 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 					});
 					const took = (now: number) => now - started;
 					const tool = tools.find((t) => t.name === call.name),
-						key = `${call.name}\u0000${JSON.stringify(call.input)}`,
+						key = callKey(call.name, call.input),
 						// what the step is to the shell's Studio surfaces, as the tool declared it
 						role = tool?.studio === undefined ? {} : { studio: tool.studio };
 					// the same call that already failed this often is not run again; nor is a call identical to the one
@@ -1709,6 +1824,7 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 						// the model does not see its own call ids, so the note names the one read_output takes
 						const more = `TRUNCATED: this shows part of the ${new TextEncoder().encode(outputText(whole)).length}-byte result. read_output { call: '${call.id}', offset } reads the rest from where it was cut`;
 						if (clipped) truncated.push(`${call.name} (call '${call.id}')`);
+						rests.push(...rest(call.name, call.id, shown));
 						yield* wrote(
 							yield* rewrite(
 								step,
@@ -1720,7 +1836,7 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 									ms: took(yield* Clock.currentTimeMillis),
 									result: !clipped
 										? shown
-										: shown !== null && typeof shown === 'object' && !Array.isArray(shown)
+										: isObj(shown)
 											? { truncated: more, ...shown }
 											: { truncated: more, start: shown }
 								},
@@ -1755,8 +1871,11 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 					if (yield* settle(id)) break;
 					continue;
 				}
-				if (truncated.length > 0) {
-					const text = NUDGE.truncated(truncated);
+				if (truncated.length > 0 || rests.length > 0) {
+					const text = [
+						...(truncated.length > 0 ? [NUDGE.truncated(truncated)] : []),
+						...(rests.length > 0 ? [NUDGE.more(rests)] : [])
+					].join('\n');
 					yield* write({
 						conversation: id,
 						role: 'system',
@@ -1830,9 +1949,14 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 	)(function* (id: string, options: Parameters<typeof drainTurn>[1] = {}) {
 		const existing = yield* FiberMap.get(running, id);
 		if (Option.isSome(existing)) return { ran: false, reply: null };
-		const fiber = yield* FiberMap.run(running, id, Effect.scoped(drainTurn(id, options)), {
-			onlyIfMissing: true
-		});
+		const fiber = yield* FiberMap.run(
+			running,
+			id,
+			Effect.scoped(drainTurn(id, options)).pipe(Effect.onInterrupt(() => release(id))),
+			{
+				onlyIfMissing: true
+			}
+		);
 		// a stopped sub-agent's turn is interrupted (stop removes it from `running`), yet its parent is still told
 		const exit = yield* Fiber.await(fiber);
 		if (Exit.isFailure(exit) || exit.value.ran)
@@ -2231,7 +2355,9 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 								authority,
 								bindings: yield* config.bindings,
 								turn: r.turn ?? r.id,
-								receipts
+								receipts,
+								// a confirmation card is the in-app agent's: a start records the conversation it came from
+								agent: { conversation: r.conversation }
 							},
 							write.callable,
 							write.input ?? null,

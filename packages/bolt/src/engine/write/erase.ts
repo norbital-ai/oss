@@ -24,6 +24,7 @@ import {
 	type WriteEngine
 } from './act.ts';
 import { executeCommit, compileOutcomeRecord, type Commit, type Write } from './commit.ts';
+import { writerOf } from '../runs/queue.ts';
 import { Flattener } from './flatten.ts';
 import { decided } from './sql.ts';
 export const erase = Effect.fn('Bolt.erase')(function* (
@@ -39,9 +40,7 @@ export const erase = Effect.fn('Bolt.erase')(function* (
 		model = m.models[c];
 	const none = (outcome: Outcome): ActResult => ({ outcome, captured: [], v: 0 });
 	if (model === undefined || m.exposures[c] === undefined)
-		return yield* Effect.fail(
-			BoltError.make('unknownModel', 'decode', `unknown model '${c}'`)
-		);
+		return yield* Effect.fail(BoltError.make('unknownModel', 'decode', `unknown model '${c}'`));
 	const late = expired(r);
 	if (late !== null) return none(late);
 	if (!auth.admin) return none(refused('forbidden', 'Only an administrator can erase.'));
@@ -140,6 +139,7 @@ export const erase = Effect.fn('Bolt.erase')(function* (
 		now: b.now,
 		today: b.today,
 		actor: auth.actor,
+		writer: writerOf(auth),
 		writes,
 		owned: req.mode === 'remove' ? ownedLocks(m, cat, writes, rows) : [],
 		runs: [],

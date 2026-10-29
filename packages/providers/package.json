@@ -1,6 +1,6 @@
 {
 	"name": "@norbital-ai/providers",
-	"version": "0.0.5",
+	"version": "0.0.6",
 	"description": "Bolt's built-in integration drivers (WhatsApp via Web or Twilio, Telegram, Slack, Discord, WeChat, IMAP + SMTP mailboxes, Google Calendar), registered by a host.",
 	"type": "module",
 	"sideEffects": false,

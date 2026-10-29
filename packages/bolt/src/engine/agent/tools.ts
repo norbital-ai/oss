@@ -42,9 +42,10 @@ import {
 	type Outcome
 } from '../contracts.ts';
 import { BoltError } from '../../protocol/errors.ts';
-import { exposed, requestorOf } from '../access/authority.ts';
+import { exposed, outputsOf, readsAny, requestorOf } from '../access/authority.ts';
 import {
 	LayerRequestSchema,
+	READ_LIMIT,
 	type LayerRequestJson,
 	type ReadRequestJson
 } from '../../protocol/read-request.ts';
@@ -84,12 +85,17 @@ export type HostToolContext = {
 	keep?(file: Downloaded): void;
 };
 
-/** A host capability (`capabilities.tools`): offered to staff members in the app only; `readOnly` ones also while planning. */
+/**
+ * A host capability (`capabilities.tools`): offered to staff members in the app only; `readOnly` ones also while planning.
+ * An administrator holds every one, another member those their policies grant, and every staff member a read-only
+ * `source` tool (it reads the workspace's own source, never a secret or a host file).
+ */
 export type HostTool = {
 	name: string;
 	description: string;
 	input: Json;
 	readOnly?: boolean;
+	source?: true;
 	studio?: StudioRole;
 	call(input: Json, ctx: HostToolContext, signal: AbortSignal): Promise<Json>;
 };
@@ -209,9 +215,16 @@ export type ToolContext = {
 	 * A document's faithful Markdown transcription by the conversation's model (one call, metered with the turn), so it
 	 * stays in the conversation as text instead of a document re-sent on every step; absent where no model is bound.
 	 */
-	transcribe?: (file: { mime: string; bytes: Uint8Array }) => Effect.Effect<string, EngineError>;
+	transcribe?: (
+		files: readonly { mime: string; bytes: Uint8Array }[]
+	) => Effect.Effect<string, EngineError>;
 	/** A document's text layer, page by page (the host's extractor); a scanned page is marked as having none. */
 	documentText?: (file: { mime: string; bytes: Uint8Array }) => Effect.Effect<string, EngineError>;
+	/** A PDF's first `pages` pages as JPEG images (the host's renderer): what the model reads a scan from. */
+	documentPages?: (
+		file: { mime: string; bytes: Uint8Array },
+		pages: number
+	) => Effect.Effect<readonly Uint8Array[], EngineError>;
 	/** What this turn opened for the model to see (rule 62's budget), each after the call that opened it. */
 	files: {
 		mime: string;
@@ -304,9 +317,21 @@ const documentAnswer = (answer: { readonly [key: string]: Json }, key: string): 
 		bounded: true
 	};
 };
-/** A JSON value within `bytes` as the model reads it, or its leading text with a note. */
-const clipJson = (v: Json, bytes: number): Json =>
-	size(v) <= bytes ? v : `${JSON.stringify(v).slice(0, bytes)}... [clipped, ${size(v)} bytes]`;
+/** Clips one value of a view to `bytes`; the whole view uses the value itself. */
+type Clip = (v: Json, bytes: number) => Json;
+/** A JSON value within `bytes` as the model reads it, or its leading text with a note naming where the rest is. */
+const clipJson =
+	(call: string): Clip =>
+	(v, bytes) =>
+		size(v) <= bytes
+			? v
+			: `${JSON.stringify(v).slice(0, bytes)}... [clipped, ${size(v)} bytes; read_output with call id ${call} reads it whole]`;
+/** A view with its values clipped (bounded as any answer), the whole view kept for `read_output` under call `call`. */
+const clippedView = (view: (clip: Clip) => Json, call: string): ToolAnswer => ({
+	result: bound(view(clipJson(call))),
+	full: view((v) => v),
+	bounded: true
+});
 /** `runs { id }`: the run's latest log lines. */
 const RUN_LOG_LINES = 100;
 const err = (
@@ -369,20 +394,35 @@ function section(body: string, title: string): string | undefined {
 	);
 }
 /**
- * What the actor may read: each read root (a model with `read`, never the run ledger) whose root access point admits it,
- * with every layer path it declares (a layer its policy does not name is read in full). An administrator reads every
- * workspace model; a built-in model only through a grant.
+ * The read outputs of `root` the actor may read (`default` first, then the named ones in declaration order). An
+ * administrator reads every workspace model and the member directory; another built-in model only through a grant.
+ */
+export function readOutputs(m: EngineManifest, a: Authority, root: string): readonly string[] {
+	if (root === 'sys_run') return [];
+	return outputsOf(m, root).filter((output) => {
+		const arms = a.models[root]?.read[output]?.[root] ?? [];
+		return Object.hasOwn(SYSTEM.models, root)
+			? // a built-in model only through a policy that names it, never the administrator's blanket arm; the member
+				// directory is the exception: an administrator resolves the people a document names (a sales owner) by it
+				arms.some((arm) => arm.policy !== '$admin' || root === 'sys_user')
+			: arms.length > 0;
+	});
+}
+/** The layer map of output `output` of `root`. */
+const outputLayers = (m: EngineManifest, root: string, output: string) => {
+	const spec = layered(m).exposures[root];
+	return (output === 'default' ? spec?.read : spec?.outputs?.[output]) ?? {};
+};
+/**
+ * What the actor may read: each read root (a model with `read`, never the run ledger) with an output it may read, with
+ * every layer path those outputs declare.
  */
 export function readPaths(m: EngineManifest, a: Authority): string[] {
-	return Object.entries(layered(m).exposures).flatMap(([root, spec]) =>
-		root !== 'sys_run' &&
-		(Object.hasOwn(SYSTEM.models, root)
-			? // a built-in model only through a policy that names it, never the administrator's blanket arm
-				(a.models[root]?.read[root] ?? []).some((arm) => arm.policy !== '$admin')
-			: (a.admin && root in m.exposures) || (a.models[root]?.read[root]?.length ?? 0) > 0)
-			? Object.keys(spec.read)
-			: []
-	);
+	return Object.keys(layered(m).exposures).flatMap((root) => [
+		...new Set(
+			readOutputs(m, a, root).flatMap((output) => Object.keys(outputLayers(m, root, output)))
+		)
+	]);
 }
 /** What the actor may write, by model: the generated verbs its write arms admit (rules 33a, 58), and approval decisions. */
 function callablesFor(m: EngineManifest, a: Authority): Map<string, Spec> {
@@ -450,7 +490,10 @@ function receipt(callable: string, o: Outcome): Receipt | null {
 }
 /** Runs one `act` write under the call's key and answers its outcome. */
 export const perform = Effect.fn('AgentTool.perform')(function* (
-	x: Pick<ToolContext, 'engine' | 'authority' | 'bindings' | 'turn' | 'receipts'>,
+	x: Pick<ToolContext, 'engine' | 'authority' | 'bindings' | 'turn' | 'receipts'> & {
+		/** The in-app agent's conversation: a start it makes for its member records it on the run's trigger. */
+		readonly agent?: { readonly conversation: string };
+	},
 	callable: string,
 	input: Json,
 	callId: string
@@ -499,7 +542,8 @@ export const perform = Effect.fn('AgentTool.perform')(function* (
 			automation,
 			runs: [{ id: run, input: args }],
 			authority: x.authority,
-			bindings: x.bindings
+			bindings: x.bindings,
+			...(x.agent === undefined ? {} : { agent: x.agent })
 		});
 		// This receipt commits the queue admission; the run records its business result after execution.
 		const rc = receipt(callable, outcome);
@@ -561,7 +605,7 @@ export const perform = Effect.fn('AgentTool.perform')(function* (
 					Effect.tapCause(Effect.logWarning),
 					Effect.catch(() => Effect.succeed({}))
 				);
-	// the event runs this write queued carry its record ids (`queueTriggered`): answer them, so the model can `wait` on one
+	// the effect runs this write queued carry its record ids (`queueEffects`): answer them, so the model can `wait` on one
 	const ids = r.outcome.records.map((c) => c.id);
 	const [queued] =
 		ids.length === 0
@@ -570,7 +614,7 @@ export const perform = Effect.fn('AgentTool.perform')(function* (
 					.read([
 						{
 							text: `SELECT id, automation FROM sys_run
-		WHERE state IN ('queued', 'running') AND cause IN ('created', 'updated', 'deleted')
+		WHERE state IN ('queued', 'running') AND cause = 'effect'
 		AND input -> 'ids' ?| ARRAY(SELECT jsonb_array_elements_text($1::jsonb))`,
 							params: [JSON.stringify(ids)]
 						}
@@ -648,18 +692,7 @@ export type ReadToolContext = {
 	authority: Authority;
 	bindings: Bindings;
 };
-/** A root read without its own `limit` reads this many rows, a page the model takes in at once (a request's own default is 10,000). */
-const READ_PAGE = 50;
-/** Whether `search` works on one read key for `a`: every field the search covers exposed there and unmasked (rule 14). */
-function searchable(m: EngineManifest, a: Authority, path: string): boolean {
-	const root = path.split('.')[0]!;
-	const model = layers(m)[root]?.[path] ?? root;
-	const here = exposed(m, root, path, model),
-		masked = a.models[root]?.masks[path] ?? {};
-	const text = layered(m).models[model]?.search?.text ?? [];
-	return text.length > 0 && text.every((f) => here.includes(f) && !(f in masked));
-}
-/** A read's pages without their `next` cursor: the agent reads no further pages, it narrows the read instead. */
+/** A committed write's stored rows without their pages' `next` cursor: the answer is those rows, not a read to page. */
 const uncursored = (v: Json): Json =>
 	!Predicate.isObject(v) || EffectArray.isArray<typeof v>(v)
 		? v
@@ -685,15 +718,14 @@ function orphaned(m: EngineManifest, path: string): string {
 	return `"${path}" nests in each "${parent}" row, so name both in one call: { "${parent}": { "where": … }, "${path}": { … } }${own}`;
 }
 /**
- * `describe`: a read key's declared shape, as this caller reads it — each readable field and its kind (a link names its
- * model, an enum or state its values), the layers declared below it, and on a root the writes the caller may call
- * with the columns each takes. The model API in one small answer, instead of its source.
+ * `describe`: a read key's declared shape in one output — each field and its kind (a link names its model, an enum or
+ * state its values), the layers declared below it, and on a root the outputs the caller may read and the writes it may
+ * call with the columns each takes. The model API in one small answer, instead of its source.
  */
-function shapeOf(m: EngineManifest, a: Authority, path: string): Json {
+function shapeOf(m: EngineManifest, a: Authority, path: string, output = 'default'): Json {
 	const root = path.split('.')[0]!,
 		model = layers(m)[root]?.[path] ?? root,
-		all = layered(m),
-		masked = a.models[root]?.masks[path] ?? {};
+		all = layered(m);
 	const kind = (f: string): string => {
 		const link = all.relationships[`${model}.${f}`];
 		if (link !== undefined) return `link to ${[link.to].flat().join(' | ')}`;
@@ -706,16 +738,19 @@ function shapeOf(m: EngineManifest, a: Authority, path: string): Json {
 				? `state ${Object.keys(d.states).join(' | ')}`
 				: `${d.kind}${many}`;
 	};
-	const fields = exposed(m, root, path, model).filter((f) => !(f in masked));
-	const below = Object.keys(all.exposures[root]?.read ?? {}).filter(
+	const fields = exposed(m, root, path, model, output);
+	const below = Object.keys(outputLayers(m, root, output)).filter(
 		(p) => p.startsWith(`${path}.`) && !p.slice(path.length + 1).includes('.')
 	);
 	const writes = path.includes('.')
 		? []
 		: [...callablesFor(m, a).keys()].filter((c) => c.startsWith(`${root}.`));
 	const columns = (verb: 'create' | 'update') => all.exposures[root]?.[verb]?.columns;
+	const outputs = path.includes('.') ? [] : readOutputs(m, a, root);
 	return {
 		model,
+		...(output === 'default' ? {} : { output }),
+		...(outputs.length > 1 || outputs[0] !== output ? { outputs } : {}),
 		fields: Object.fromEntries(fields.map((f) => [f, kind(f)])),
 		...(below.length === 0
 			? {}
@@ -733,78 +768,81 @@ function shapeOf(m: EngineManifest, a: Authority, path: string): Json {
 				})
 	};
 }
+/** The system prompt's schema section is at most this many bytes; the models past it are named, for describe. */
+const SCHEMA_BYTES = 16_000;
 /**
- * This turn's `read` input: one optional property per root and layer the caller may read, each naming exactly the fields
- * this caller reads there, `search` only where it works, no paging cursor and no `asOf` (past states are the history tool's) — so the schema is what the engine
- * accepts (a bare enum of property names is lost in some providers' schema conversion). A layer needs its parent key.
+ * Every root the actor reads, one line per output it may read: its description, the output's fields with their kinds
+ * (a link names its model, an enum or state its values) and its layers. The schema `describe` answers, up front, so a
+ * task starts with its first real read instead of a describe per model. `undefined` when nothing is readable.
  */
-const readInput = (m: EngineManifest, a: Authority, paths: readonly string[]) => {
-	// the model's declared read is the shape; a request only filters, orders and pages it. Past states are the history
-	// tool's, so the agent's read is current data only; no after: a page that did not fit says so, and the agent narrows
-	// or raises its limit instead of paging
-	const {
-		search: text,
-		after: _after,
-		asOf: _asOf,
-		fields: _fields,
-		...base
-	} = LayerRequestSchema.fields;
-	const fields = Schema.optionalKey(Schema.Array(Schema.String));
-	// every parameter typed: an untyped one reaches a routed model wrapped as { item: … }
-	const order = Schema.Union([
-		Schema.String,
-		Schema.Record(Schema.String, Schema.Literals(['asc', 'desc']))
-	]);
-	const typed = {
-		...base,
+export function workspaceSchema(m: EngineManifest, a: Authority): string | undefined {
+	const roots = readPaths(m, a).filter((path) => !path.includes('.'));
+	if (roots.length === 0) return undefined;
+	const lines: string[] = [],
+		rest: string[] = [];
+	let used = 0;
+	for (const [root, output] of roots.flatMap((root) =>
+		readOutputs(m, a, root).map((output) => [root, output] as const)
+	)) {
+		const shape = shapeOf(m, a, root, output),
+			fields = Predicate.isObject(shape) ? shape['fields'] : undefined,
+			layers = Predicate.isObject(shape) ? shape['layers'] : undefined,
+			about = layered(m).models[root]?.description ?? '';
+		const line =
+			`- ${root}${output === 'default' ? '' : ` output "${output}"`}${about === '' ? '' : ` (${about})`}: ` +
+			(Predicate.isObject(fields)
+				? Object.entries(fields)
+						.filter(([, kind]) => kind !== 'system')
+						.map(([f, kind]) => `${f} ${String(kind)}`)
+						.join(', ')
+				: '') +
+			(Predicate.isObject(layers) && Object.keys(layers).length > 0
+				? `; layers ${Object.entries(layers)
+						.map(([path, model]) => `${path} (${String(model)})`)
+						.join(', ')}`
+				: '');
+		if (used + size(line) > SCHEMA_BYTES) {
+			if (!rest.includes(root)) rest.push(root);
+		}
+		else {
+			lines.push(line);
+			used += size(line);
+		}
+	}
+	return (
+		'# Models you read (fields and kinds per output; a line naming an output is read with that "output" option, the others are "default"; every row also has id, created_at, created_by, updated_at, updated_by; read describe answers the same, with your writes and their columns)\n' +
+		lines.join('\n') +
+		(rest.length === 0
+			? ''
+			: `\nAlso (read { "<model>": { "describe": true } } first): ${rest.join(', ')}`)
+	);
+}
+/**
+ * This turn's `read` input: the one read request a page's `bolt.query` and `/__bolt/q` send (`LayerRequestSchema`, the
+ * same options, defaults and limits), one optional property per root and layer the caller may read, plus `describe`.
+ * A bare enum of property names is lost in some providers' schema conversion, so the paths are properties.
+ */
+const readInput = (paths: readonly string[]) => {
+	// one option shape, declared once in the tool's JSON Schema ($defs) and named by every key: a workspace reads
+	// hundreds of paths, and the options repeated per path were most of every step's input
+	// the contract's free JSON options as the same any-JSON, spelled out: an untyped parameter reaches a routed model
+	// wrapped as { item: … }
+	const { orderBy: _orderBy, aggregate, ...fields } = LayerRequestSchema.fields;
+	const options = Schema.Struct({
+		...fields,
+		orderBy: Schema.optionalKey(ToolJson),
+		aggregate: Schema.optionalKey(
+			Schema.Struct({ ...aggregate.schema.fields, by: Schema.optionalKey(ToolJson) })
+		),
 		describe: Schema.optionalKey(
 			Schema.Literal(true).annotate({
 				description:
 					"this key's fields and their kinds, its layers and your writes, instead of rows"
 			})
-		),
-		fields,
-		orderBy: Schema.optionalKey(Schema.Union([order, Schema.Array(order)])),
-		aggregate: Schema.optionalKey(
-			Schema.Struct({
-				count: Schema.optionalKey(Schema.Literal(true)),
-				sum: Schema.optionalKey(Schema.Array(Schema.String)),
-				avg: Schema.optionalKey(Schema.Array(Schema.String)),
-				min: Schema.optionalKey(Schema.Array(Schema.String)),
-				max: Schema.optionalKey(Schema.Array(Schema.String)),
-				by: Schema.optionalKey(
-					Schema.Union([
-						Schema.String,
-						Schema.Record(Schema.String, Schema.String),
-						Schema.Array(Schema.Union([Schema.String, Schema.Record(Schema.String, Schema.String)]))
-					])
-				)
-			})
 		)
-	};
-	// three option shapes, each declared once in the tool's JSON Schema ($defs) and named by every key that takes it: a
-	// workspace reads hundreds of paths, and the options repeated per path were most of every step's input
-	const options = Schema.Struct(typed).annotate({ identifier: 'Options' }),
-		words = Schema.Struct({
-			...typed,
-			search: Schema.optionalKey(Schema.String.annotate({ description: 'words to find' }))
-		}).annotate({ identifier: 'SearchOptions' }),
-		indexed = Schema.Struct({ ...typed, search: text }).annotate({
-			identifier: 'IndexSearchOptions'
-		});
+	}).annotate({ identifier: 'Options' });
 	return Schema.Struct(
-		Object.fromEntries(
-			paths.map((path) => {
-				// search is words, unless the model declares indexes or semantic search for its object form
-				const declared = layered(m).models[layers(m)[path.split('.')[0]!]?.[path] ?? path]?.search;
-				const layer = !searchable(m, a, path)
-					? options
-					: declared?.semantic !== undefined || Object.keys(declared?.indexes ?? {}).length > 0
-						? indexed
-						: words;
-				return [path, Schema.optionalKey(layer)];
-			})
-		)
+		Object.fromEntries(paths.map((path) => [path, Schema.optionalKey(options)]))
 	).check(
 		Schema.makeFilter((request: object) => {
 			const keys = Object.keys(request);
@@ -868,19 +906,10 @@ export function readTool(x: ReadToolContext) {
 		);
 		if (stranded !== undefined)
 			return { result: { error: orphaned(e.manifest, stranded) }, bounded: true } as const;
-		// a root page the model can take in, unless it asked for one; an empty search is the model's "none"
 		const request: { [path: string]: ReadRequestJson[string] } = Object.fromEntries(
-			Object.entries(given).map(([asked, options]) => {
+			Object.entries(given).map(([asked, layer]) => {
 				const parent = asked.slice(0, asked.lastIndexOf('.'));
-				const path = asked.includes('.') && !(parent in given) ? rootOf(asked)! : asked;
-				const { after: _after, search, ...rest } = options;
-				const layer = { ...rest, ...(search === undefined || search === '' ? {} : { search }) };
-				return [
-					path,
-					path.includes('.') || layer.limit !== undefined || layer.aggregate !== undefined
-						? layer
-						: { ...layer, limit: READ_PAGE }
-				];
+				return [asked.includes('.') && !(parent in given) ? rootOf(asked)! : asked, layer];
 			})
 		);
 		const named = Object.keys(request).filter((path) => !path.includes('.'));
@@ -891,8 +920,14 @@ export function readTool(x: ReadToolContext) {
 				: v;
 		const wrap = (v: Json): Json => (single === undefined ? v : { [single]: v });
 		return yield* Effect.gen(function* () {
-			const full = uncursored(yield* answer(request));
-			return { result: wrap(bounded(pageOf(full)).value), full, bounded: true } as const;
+			const full = yield* answer(request),
+				shown = bounded(pageOf(full));
+			// rows the bound cut lie before the page's cursor: what it left out is read_output's, not the next page's
+			return {
+				result: wrap(shown.kept === null ? shown.value : uncursored(shown.value)),
+				full,
+				bounded: true
+			} as const;
 		}).pipe(
 			Effect.catch((failure) => {
 				if (!(failure instanceof BoltError) || failure.code !== 'invalid')
@@ -913,39 +948,49 @@ export function readTool(x: ReadToolContext) {
 	});
 	return {
 		tool: Tool.make('read', {
-			description: `Read records. The input is an object: each key names what to read, its value is an object of that key's options (never a JSON string). Several keys go in one call.
+			description: `Read records. The input is an object: each key names what to read, its value is an object of that key's options (never a JSON string). Several keys go in one call and are answered by one read.
 
 Keys
-- "<model>" (a root): rows of that model.
+- "<model>" (a root): a page of that model's rows.
 - "<root>.<relation>" (a layer): for each root row, its related rows, nested inside that row (one related row as an object in place of its link, many as a list). Send it together with its root key.
-Each key returns the fields its model's read declares, or only those its fields option names.
+
+Outputs
+A model declares named read outputs: "default" and any others its schema lists. An output is a fixed set of fields and layers. A root reads one output (its output option, "default" when absent), and its layer keys are that output's layers. You may read the outputs your schema lists for you, and the rows your access admits in each.
 
 Options (all optional)
-- describe: true: instead of rows, the key's fields and their kinds (a link names its model, an enum its values), its layers and your writes with their columns. Describe every model a task needs in one call before you first filter or write them.
-- where: { "<field>": { "<operator>": value } }; several fields must all hold; combine with { "and": [...] }, { "or": [...] }, { "not": {...} }. On a root it chooses which rows return; on a layer it only narrows that layer's rows inside each root row, using the layer's own fields, never its link to the root.
+- output (a root): the output to read.
+- describe: true, alone in a key (or with output): instead of rows, the key's fields and their kinds (a link names its model, an enum its values), its layers, the outputs you read and your writes with their columns. Describe every model a task needs in one call before you first filter or write them.
+- fields: ["<field>", …]: only these fields of each row (id is always returned). Without it a row has every field the output declares.
+- where: exact conditions on field values: { "<field>": { "<operator>": value } }; several fields must all hold; combine with { "and": [...] }, { "or": [...] }, { "not": {...} }. On a root it chooses which rows return; on a layer it narrows that layer's rows inside each root row, using the layer's own fields, never its link to the root.
   Operators by field kind:
   text: eq, ne, in, nin, isNull, like ("%word%"; % matches any characters)
   number, decimal, date (YYYY-MM-DD), instant: eq, ne, lt, lte, gt, gte, in, nin, isNull; an instant also olderThan ("7d")
-  enum, bool, link (a row id): eq, ne, in, nin, isNull
+  enum, state, bool, link (a row id): eq, ne, in, nin, isNull
   point: near ([point, metres]), within ({ bbox } or { polygon }); period: contains, overlaps, within; json: contains, isEmpty
-  A value may be a variable (in a value's place, never a key): { "var": "<CEL>" } over requestor (id: the person you act for, a link to sys_user; email; phone; teams and teamTree, with in; party) and the clock (today, a date; now, an instant), with days(n), weeks(n), months(n), years(n), hours(n), minutes(n) and startOfWeek / startOfMonth / startOfQuarter / startOfYear(today). Its type must match the field. E.g. { "job_assignments": { "where": { "assignee_user_id": { "eq": { "var": "requestor.id" } }, "due_on": { "gte": { "var": "today - days(7)" }, "lte": { "var": "today" } }, "created_at": { "gte": { "var": "now - hours(1)" } } } } }
-  Related rows filter too, through a relation the model's read declares as a layer (a "<model>.<relation>" key here; any other relation is refused):
+  A value may be a variable (in a value's place, never a key): { "var": "<CEL>" } over requestor (id: the person you act for, a link to sys_user; email; phone; teams and teamTree, with in; party) and the clock (today, a date; now, an instant), with days(n), weeks(n), months(n), years(n), hours(n), minutes(n) and startOfWeek / startOfMonth / startOfQuarter / startOfYear(today). Its type must match the field. E.g. { "job_assignments": { "where": { "assignee_user_id": { "eq": { "var": "requestor.id" } }, "due_on": { "gte": { "var": "today - days(7)" }, "lte": { "var": "today" } } } } }
+  Related rows filter too, through a relation the output declares as a layer (a "<model>.<relation>" key here; any other relation is refused):
   a one-relation: { "<relation>": { "is": { <where on its fields> } } }, or its link's operators
   a many-relation: { "<relation>": { "some" | "none" | "every": { <where on its fields> } } }, { "<relation>": { "count": { "gte": 2 } } }, { "<relation>": { "sum" | "avg" | "min" | "max": { "of": "<field>", "gt": 100 } } }
-- fields: ["<field>", …]: only these fields of each row (name id when you need it), to keep a wide model's rows small.
-- search: words found across the model's searchable text (where the schema offers it on that key).
-- orderBy: "<field>", { "<field>": "asc" | "desc" }, or a list of these.
-- limit: how many rows. A root returns ${READ_PAGE} unless you set it (at most 10,000); a many-layer returns up to 10,000 per root row, so set one.
-- aggregate: { "count": true, "sum" | "avg" | "min" | "max": ["<field>"], "by": "<field>" | { "month": "<date field>" } | a list of both }: totals instead of rows, one per group (day, week, month, quarter or year buckets).
+- search: a text: rows whose searchable text (the fields the model declares for search, and the search text of the records those link to) holds every word of it, each word matched case- and accent-insensitively, also as the start of a longer word. It narrows rows like a where condition and combines with one. On a root it may instead be { "<index>": input } (a search index the model declares) or { "semantic": text } (when the model declares semantic search): the rows nearest to the input, nearest first, each with $distance.
+- orderBy: "<field>", { "<field>": "asc" | "desc" }, or a list of these; then id.
+- limit: how many rows, at most ${READ_LIMIT} (the default) for a root and for a many-layer per root row.
+- after (a root): the next cursor a page answered: the page after it.
+- asOf (a root): an ISO instant: the rows as they stood then.
+- aggregate: { "count": true, "sum" | "avg" | "min" | "max": ["<field>"], "by": "<field>" | { "day" | "week" | "month" | "quarter" | "year": "<date field>" } | a list of these }: totals over the matched rows instead of rows; with by, one answer per group, each carrying its key and its row count.
+
+Totals, counts, rankings and the largest or smallest over many rows are computed, never added up or compared by you: aggregate with the where and by that give the answer directly (aggregate again, narrower, when its groups still need adding), or run_js over the rows you read.
+
+A root's page answers rows, next (the cursor for after, null on the last page) and total (how many rows the read matches in all, beyond this page).
 
 Long values are clipped; read_output reads the rest.
 
 Examples
 - Rows by a filter: { "<model>": { "where": { "<date field>": { "eq": "2026-01-31" } }, "limit": 20 } }
+- Rows in another output: { "<model>": { "output": "<output>", "limit": 20 } }
 - Rows with related rows: { "<model>": { "where": { "<text field>": { "like": "%word%" } } }, "<model>.<relation>": { "limit": 20 } }
 - Rows by their related rows: { "<model>": { "where": { "<relation>": { "some": { "<field>": { "eq": "x" } } } } } }
 - A count per value: { "<model>": { "aggregate": { "count": true, "by": "<field>" } } }`,
-			parameters: readInput(e.manifest, a, paths),
+			parameters: readInput(paths),
 			success: ToolAnswer
 		}),
 		run: (request: {
@@ -954,15 +999,21 @@ Examples
 			const asked = Object.entries(request).flatMap(([path, layer]) =>
 				layer === undefined ? [] : [[path, layer] as const]
 			);
-			// a described key answers its declared shape; the rest are read as asked
+			// a key with describe alone (or with its output) answers its declared shape; describe beside read options is
+			// dropped and the key read as asked (a model adds it to reads it means)
+			const described = ([, { describe, output: _output, ...layer }]: (typeof asked)[number]) =>
+				describe === true && Object.keys(layer).length === 0;
 			const shapes = Object.fromEntries(
-				asked.flatMap(([path, { describe }]) =>
-					describe === true ? [[path, shapeOf(e.manifest, a, path)] as const] : []
+				asked.flatMap((entry) =>
+					described(entry)
+						? [[entry[0], shapeOf(e.manifest, a, entry[0], entry[1].output)] as const]
+						: []
 				)
 			);
-			const rest = asked.flatMap(([path, { describe: _describe, ...layer }]) =>
-				_describe === true ? [] : [[path, layer] as const]
-			);
+			const rest = asked.flatMap((entry) => {
+				const [path, { describe: _describe, ...layer }] = entry;
+				return described(entry) ? [] : [[path, layer] as const];
+			});
 			if (rest.length === 0) return Effect.succeed(ok(shapes));
 			return guard(run(Object.fromEntries(rest))).pipe(
 				Effect.map((answer) => {
@@ -1176,7 +1227,15 @@ Related rows go inside their root row in the same call, never in a separate writ
 											'confirm'))
 							)
 								return { confirm: true } as const;
-							return ok(yield* perform(x, i.callable, i.input ?? null, id));
+							return ok(
+								yield* perform(
+									// the in-app agent starts for its member; an envoy's turn is the envoy's own start
+									x.inApp ? { ...x, agent: { conversation: x.conv.id } } : x,
+									i.callable,
+									i.input ?? null,
+									id
+								)
+							);
 						})
 					)
 			})
@@ -1527,13 +1586,39 @@ Related rows go inside their root row in the same call, never in a separate writ
 		if (seen !== undefined && x.read.has(seen))
 			return ok({ note: `You read ${fileName} earlier in this turn; its answer is above.` });
 		const got = yield* port.read(file, as, i.sheet).pipe(Port.call('files', 30000));
-		if (
-			transcribing &&
-			x.transcribe !== undefined &&
-			Predicate.isObject(got) &&
-			got['bytes'] instanceof Uint8Array
-		) {
-			const doc = { mime, bytes: got['bytes'] };
+		const bytes =
+			Predicate.isObject(got) && got['bytes'] instanceof Uint8Array ? got['bytes'] : undefined;
+		// a PDF's pages as images where the host renders them: the model reads a scan's pixels, never a provider's OCR of it
+		const pages =
+			mime !== 'application/pdf' || bytes === undefined || x.documentPages === undefined
+				? undefined
+				: yield* x.documentPages({ mime, bytes }, MODEL_FILES.count).pipe(
+						Effect.tapCause(Effect.logWarning),
+						Effect.option,
+						Effect.map((o) =>
+							Option.getOrUndefined(o)?.map((page, n) => ({
+								mime: 'image/jpeg',
+								bytes: page,
+								...(fileId === undefined ? {} : { id: `${fileId}#page${n + 1}` })
+							}))
+						)
+					);
+		const show = (images: readonly { mime: string; bytes: Uint8Array; id?: string }[]) => {
+			const outcomes = images.map((image) => attach(x.files, image)),
+				dropped = outcomes.reduce<number>((n, o) => n + (o === 'shown' ? 0 : o), 0);
+			return {
+				...(outcomes.every((o) => o === 'shown')
+					? { attached: 'already shown to you, after the call that first read it' }
+					: {
+							attached: `${images.length === 1 ? 'the file is' : `its ${images.length} pages are`} shown to you from your next step until this turn ends: no need to read it again`
+						}),
+				...(dropped > 0
+					? { dropped: `${dropped} older file(s) dropped to stay within 8 files / 20 MiB` }
+					: {})
+			};
+		};
+		if (transcribing && x.transcribe !== undefined && bytes !== undefined) {
+			const doc = { mime, bytes };
 			// its own text where every page has a text layer: exact and at once; a scanned page needs the model's eyes
 			const layer =
 				x.documentText === undefined
@@ -1546,16 +1631,23 @@ Related rows go inside their root row in the same call, never in a separate writ
 								Effect.map(Option.getOrUndefined)
 							);
 			// a page with next to no text (a scan with a stamp or a printed footer) is read by eye
-			const pages = layer?.split(/\[Page \d+\]\n?/).slice(1) ?? [];
+			const texts = layer?.split(/\[Page \d+\]\n?/).slice(1) ?? [];
 			const scanned =
-				pages.length === 0 ||
-				pages.some((page) => page.trim().length < 80 || page.includes('(no extractable text'));
+				texts.length === 0 ||
+				texts.some((page) => page.trim().length < 80 || page.includes('(no extractable text'));
 			const answer = scanned
 				? documentAnswer(
 						{
 							file: fileName,
-							transcript: yield* x.transcribe(doc),
-							note: "a faithful transcription of the document; read_file with as: 'image' shows the original"
+							transcript: yield* x.transcribe(pages ?? [doc]),
+							...(pages === undefined
+								? {
+										note: "a model's transcription of the document; read_file with as: 'image' shows the original"
+									}
+								: {
+										...show(pages),
+										note: "a model's transcription of the pages shown to you: names, codes, handwriting, ticks and crossings-out may be misread. Check each value you use against the page; ask the person about one you cannot read for certain."
+									})
 						},
 						'transcript'
 					)
@@ -1563,27 +1655,25 @@ Related rows go inside their root row in the same call, never in a separate writ
 						{
 							file: fileName,
 							text: layer ?? '',
-							note: "the document's own text, page by page; read_file with as: 'image' shows the original"
+							note: "the document's own text, page by page; read_file with as: 'image' shows its pages"
 						},
 						'text'
 					);
 			if (seen !== undefined) x.read.set(seen, `file ${fileName}`);
 			return answer;
 		}
+		if (pages !== undefined) return ok(show(pages));
 		if (
-			got !== null &&
-			typeof got === 'object' &&
+			Predicate.isObject(got) &&
 			'bytes' in got &&
 			got.bytes instanceof Uint8Array &&
 			'mime' in got &&
 			typeof got.mime === 'string'
 		) {
-			const id =
-				Predicate.isObject(file) && typeof file['id'] === 'string' ? file['id'] : undefined;
 			const dropped = attach(x.files, {
 				mime: got.mime,
 				bytes: got.bytes,
-				...(id === undefined ? {} : { id })
+				...(fileId === undefined ? {} : { id: fileId })
 			});
 			if (dropped === 'shown')
 				return ok({
@@ -1614,7 +1704,7 @@ Related rows go inside their root row in the same call, never in a separate writ
 		as: Schema.optionalKey(
 			Schema.Literals(['text', 'image', 'sheet', 'document']).annotate({
 				description:
-					"Optional. A PDF answers its transcription as text; 'image' shows the original instead. An image is always shown."
+					"Optional. A PDF answers its text (a scan: a transcription, with its pages shown to you); 'image' shows its pages only. An image is always shown."
 			})
 		),
 		sheet: Schema.optionalKey(
@@ -1627,7 +1717,7 @@ Related rows go inside their root row in the same call, never in a separate writ
 	if (x.attachments !== undefined) {
 		const readFileTool = Tool.make('read_file', {
 			description:
-				"Read any stored file by its file reference ({ id }): a record's file field, any of this conversation's inputs (every [file: … id:…] line, filtered messages' files included) or outputs, or a message attachment. An image (or a PDF read with as: 'image') is shown to you from your next step until this turn ends: read each once. A PDF answers its full transcription as text; text answers directly; an XLSX answers one sheet (sheet, 0-based) and lists the sheet names. Video and audio cannot be viewed: the answer says so.",
+				"Read any stored file by its file reference ({ id }): a record's file field, any of this conversation's inputs (every [file: … id:…] line, filtered messages' files included) or outputs, or a message attachment. An image (or a PDF read with as: 'image') is shown to you from your next step until this turn ends: read each once. A PDF answers its own text, or for a scan a transcription with its pages shown to you in the same call; text answers directly; an XLSX answers one sheet (sheet, 0-based) and lists the sheet names. Video and audio cannot be viewed: the answer says so.",
 			parameters: Schema.Struct({
 				id: Schema.String.annotate({ description: 'the file id' }),
 				...readAs
@@ -1737,6 +1827,20 @@ Related rows go inside their root row in the same call, never in a separate writ
 		);
 	}
 	const staff = a.actor.kind === 'member' && !a.actor.external;
+	// a member reads the source of the models they may read, and every file that is no model's: an administrator all of it
+	const unseen = (path: string) => {
+		const model = /^src\/data\/model\/([^/]+)\//.exec(path)?.[1];
+		return model !== undefined && !readsAny(a, model);
+	};
+	const visible = (ws: WorkspacePort | undefined): WorkspacePort | undefined =>
+		ws === undefined
+			? undefined
+			: {
+					files: () => ws.files().then((files) => files.filter((f) => !unseen(f))),
+					read: (path) => (unseen(path) ? Promise.resolve(null) : ws.read(path))
+				};
+	const released = visible(x.workspace),
+		drafted = visible(x.draft);
 	// one tool over the source: a text, a path to read, or nothing (the file list); the released source or the author's draft
 	if (
 		(x.workspace !== undefined || x.draft !== undefined) &&
@@ -1776,7 +1880,7 @@ Related rows go inside their root row in the same call, never in a separate writ
 				workspace_search: (i) =>
 					guard(
 						Effect.gen(function* () {
-							const ws = i.draft === true ? x.draft : x.workspace;
+							const ws = i.draft === true ? drafted : released;
 							if (ws === undefined)
 								return err(
 									i.draft === true
@@ -1853,7 +1957,7 @@ Related rows go inside their root row in the same call, never in a separate writ
 				workspace_list: (i) =>
 					guard(
 						Effect.gen(function* () {
-							const ws = i.draft === true ? x.draft : x.workspace;
+							const ws = i.draft === true ? drafted : released;
 							if (ws === undefined)
 								return err(
 									i.draft === true
@@ -1902,7 +2006,9 @@ Related rows go inside their root row in the same call, never in a separate writ
 						.annotate({ description: 'exported names to read together' })
 				),
 				skill: Schema.optionalKey(
-					Schema.String.annotate({ description: 'an authoring skill, e.g. authoring-tenant-workspace' })
+					Schema.String.annotate({
+						description: 'an authoring skill, e.g. authoring-tenant-workspace'
+					})
 				),
 				file: Schema.optionalKey(
 					Schema.String.annotate({ description: "a skill's file, e.g. references/studio.md" })
@@ -2154,7 +2260,7 @@ Related rows go inside their root row in the same call, never in a separate writ
 						"fs reads /app and the conversation files you name in files (read-only at /in/<name>) and writes /out, whose files become the person's; path, buffer, process, util are there, every other Node built-in fails by name; with http: true it has fetch. It answers { exitCode, files }. " +
 						"One call holds the whole run, e.g. { file: 'sales/scripts/report.js', args: ['/in/q3.csv', '/out/summary.json'], files: [{ id: '<file id>' }] }: file is required for every run of a script. " +
 						"A repository reference's file runs the same way ('<reference>/<path>', as reference named it), as pure computation: never with fetch. ") +
-				'Walls: 2 s of CPU, 256 MiB, 60 s, a 4 MiB answer, 64 MiB written, 1 MiB printed.',
+				'Walls: 3 s of CPU, 256 MiB, 60 s, a 4 MiB answer, 64 MiB written, 1 MiB printed.',
 			parameters: Schema.Struct({
 				code: Schema.optionalKey(
 					Schema.String.annotate({
@@ -2424,7 +2530,7 @@ Related rows go inside their root row in the same call, never in a separate writ
 			yield* add(
 				runsTool,
 				Toolkit.make(runsTool).toHandlers({
-					runs: (i) =>
+					runs: (i, { toolCallId: call = '' }) =>
 						guard(
 							Effect.gen(function* () {
 								const bad = [i.since, i.until].find(
@@ -2476,21 +2582,27 @@ Related rows go inside their root row in the same call, never in a separate writ
 									if (one === undefined) return err(`No automation run ${i.id} you may read.`);
 									const { row, view } = one;
 									// a store that cannot answer says so in place of the lines, never as an empty log
-									const logs =
+									const lines =
 										view.input === undefined
 											? []
 											: yield* readLog(x.logs, { run: view.id, limit: RUN_LOG_LINES }).pipe(
 													Effect.map((lines) =>
 														lines
 															.toReversed()
-															.map(({ id, at, severity, event, attributes }) =>
-																clipJson({ id, at, severity, event, attributes }, 1024)
-															)
+															.map(({ id, at, severity, event, attributes }): Json => ({
+																id,
+																at,
+																severity,
+																event,
+																attributes
+															}))
 													),
 													Effect.catch((error) => Effect.succeed(error.message))
 												);
-									return ok(
-										encodeWire({
+									return clippedView((clip) => {
+										const logs =
+											typeof lines === 'string' ? lines : lines.map((line) => clip(line, 1024));
+										return encodeWire({
 											id: view.id,
 											automation: view.automation,
 											status: view.status === 'stopped' ? 'cancelled' : view.status,
@@ -2499,46 +2611,50 @@ Related rows go inside their root row in the same call, never in a separate writ
 											started: view.started,
 											finished: row.finished,
 											attempt_count: view.attempt_count,
-											progress: clipJson(view.progress, 2048),
-											error: clipJson(encodeWire(view.error), 4096),
+											progress: clip(view.progress, 2048),
+											error: clip(encodeWire(view.error), 4096),
 											...(view.input === undefined
 												? {}
 												: {
-														input: clipJson(view.input, 4096),
-														result: clipJson(view.result ?? null, 4096),
+														input: clip(view.input, 4096),
+														result: clip(view.result ?? null, 4096),
 														attempts: EffectArray.isArray<typeof view.attempts>(view.attempts)
-															? view.attempts.map((attempt) => clipJson(attempt, 1024))
-															: clipJson(view.attempts ?? null, 4096),
+															? view.attempts.map((attempt) => clip(attempt, 1024))
+															: clip(view.attempts ?? null, 4096),
 														logs
 													})
-										})
-									);
+										});
+									}, call);
 								}
 								const last = rows.length > limit ? rows[limit - 1] : undefined;
-								return ok(
-									encodeWire({
-										runs: shown.map(({ row, view }) => ({
-											id: view.id,
-											automation: view.automation,
-											status: view.status === 'stopped' ? 'cancelled' : view.status,
-											cause: view.cause,
-											due: view.due_at,
-											started: view.started,
-											finished: row.finished,
-											attempt_count: view.attempt_count,
-											error:
-												view.error === null
-													? null
-													: {
-															code: view.error.code,
-															...(view.error.message === undefined
-																? {}
-																: { message: view.error.message.slice(0, 200) })
-														},
-											progress: clipJson(view.progress, 512)
-										})),
-										...(last === undefined ? {} : { next: JSON.stringify([last.due_at, last.id]) })
-									})
+								return clippedView(
+									(clip) =>
+										encodeWire({
+											runs: shown.map(({ row, view }) => ({
+												id: view.id,
+												automation: view.automation,
+												status: view.status === 'stopped' ? 'cancelled' : view.status,
+												cause: view.cause,
+												due: view.due_at,
+												started: view.started,
+												finished: row.finished,
+												attempt_count: view.attempt_count,
+												error:
+													view.error === null
+														? null
+														: {
+																code: view.error.code,
+																...(view.error.message === undefined
+																	? {}
+																	: { message: clip(view.error.message, 200) })
+															},
+												progress: clip(view.progress, 512)
+											})),
+											...(last === undefined
+												? {}
+												: { next: JSON.stringify([last.due_at, last.id]) })
+										}),
+									call
 								);
 							})
 						)
@@ -2573,7 +2689,7 @@ Related rows go inside their root row in the same call, never in a separate writ
 		yield* add(
 			logsTool,
 			Toolkit.make(logsTool).toHandlers({
-				logs: (i) =>
+				logs: (i, { toolCallId: call = '' }) =>
 					guard(
 						Effect.gen(function* () {
 							const limit = Math.min(Math.max(1, i.limit ?? 50), 200);
@@ -2585,19 +2701,22 @@ Related rows go inside their root row in the same call, never in a separate writ
 								limit
 							});
 							const last = rows.length === limit ? rows.at(-1) : undefined;
-							return ok({
-								lines: rows.map((row) => ({
-									id: row.id,
-									at: row.at,
-									level: row.severity,
-									event: row.event,
-									invocation: row.invocation,
-									run: row.run,
-									conversation: row.conversation,
-									attributes: clipJson(row.attributes, 1024)
-								})),
-								...(last === undefined ? {} : { next: last.id })
-							});
+							return clippedView(
+								(clip) => ({
+									lines: rows.map((row) => ({
+										id: row.id,
+										at: row.at,
+										level: row.severity,
+										event: row.event,
+										invocation: row.invocation,
+										run: row.run,
+										conversation: row.conversation,
+										attributes: clip(row.attributes, 1024)
+									})),
+									...(last === undefined ? {} : { next: last.id })
+								}),
+								call
+							);
 						})
 					)
 			})
@@ -2643,7 +2762,9 @@ Related rows go inside their root row in the same call, never in a separate writ
 			if (
 				!(WORKSPACE_OVERRIDES.has(host.name) && own.has(host.name)) &&
 				(agent || host.readOnly === true) &&
-				(a.admin || a.capabilities.tools.includes(host.name))
+				(a.admin ||
+					a.capabilities.tools.includes(host.name) ||
+					(host.source === true && host.readOnly === true))
 			)
 				yield* dynamic(
 					host.name,

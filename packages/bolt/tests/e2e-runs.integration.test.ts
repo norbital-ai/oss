@@ -1,11 +1,12 @@
 import { actReply, qReply, routeFixture } from './support/route-fixture.ts';
-import { program } from '../src/test/guest.ts';
+import { program } from '../../bolt-cli/src/test/guest.ts';
 import { Context, Effect, Layer, Schema } from 'effect';
-// End to end through the engine entry and the test kit: a `created` trigger with a delay is queued by the act's own
-// statement, announced to the deadlines port, and runs its body when the deadline wakes (rules 49, 52a).
+// End to end through the engine entry and the test kit: a model's `created` effect is queued by the act's own
+// statement and runs as the writer; the delayed follow-up it schedules is announced to the deadlines port and runs its
+// body when the deadline wakes (rules 49, 52a).
 import { describe, expect, it } from '@effect/vitest';
 import type { EngineManifest } from '../src/engine/manifest.ts';
-import { TestWorkspace } from '../src/test/index.ts';
+import { TestWorkspace } from '../../bolt-cli/src/test/index.ts';
 import { uuidv7 } from '../src/protocol/wire.ts';
 
 const present = <A>(value: A | null | undefined): A => {
@@ -30,17 +31,22 @@ const manifest = {
 		quotes: {
 			read: { quotes: { fields: 'all' } },
 			create: { columns: { quotes: ['title'] } },
-			update: { columns: { quotes: ['status'] } }
+			update: { columns: { quotes: ['status'] } },
+			effect: { created: true }
 		}
 	},
 	policies: {
-		ops: { description: 'Ops', grants: { quotes: { read: true, create: true, update: true } } }
+		// the writer's effect schedules the follow-up from code: no start grant needed
+		ops: {
+			description: 'Ops',
+			grants: { quotes: { read: true, create: true, update: true } }
+		}
 	},
 	automations: {
 		remind: {
 			description: 'Send an hour after creation',
-			on: { created: 'quotes', delay: '1h' },
-			runAs: ['ops']
+			input: { ids: { kind: 'list', of: { kind: 'id', of: 'quotes' } } },
+			policies: ['ops']
 		}
 	},
 	integrations: {},
@@ -53,11 +59,16 @@ const manifest = {
 	agent: { skills: {} },
 	needs: []
 } satisfies EngineManifest;
-const guestSource = `export default { automation: { remind: { body: function* (input, ctx) {
-	for (const id of input.ids) yield* ctx.act('quotes.update', [{ target: id, set: { status: 'sent' } }]);
-} } } };`;
+const guestSource = `export default {
+	model: { quotes: { bodies: { effect: { created: function* (rows, ctx) {
+		yield* ctx.schedule('remind', { ids: rows.map((row) => row.id) }, { at: { var: 'now + hours(1)' } });
+	} } } } },
+	automation: { remind: { body: function* (input, ctx) {
+		for (const id of input.ids) yield* ctx.act('quotes.update', [{ target: id, set: { status: 'sent' } }]);
+	} } }
+};`;
 
-describe('an automation on created with a delay', () => {
+describe('a created effect that schedules a delayed follow-up', () => {
 	it.live('fires once through the deadlines port, not before its due time', () =>
 		Effect.scoped(
 			Effect.gen(function* () {
@@ -79,6 +90,7 @@ describe('an automation on created with a delay', () => {
 				if (created.kind !== 'committed' || created.records[0] === undefined)
 					throw new Error('Missing created quote');
 				const id = created.records[0].id;
+				yield* t.runDue(); // the effect runs at its commit and schedules the follow-up an hour out
 				expect(
 					t.fakes.deadlines.announced.map(({ scope, at }) => ({ scope, at: Date.parse(at) }))
 				).toContainEqual({
@@ -88,7 +100,11 @@ describe('an automation on created with a delay', () => {
 				yield* t.runDue();
 				expect(
 					yield* Schema.decodeUnknownEffect(
-						Schema.Struct({ quotes: Schema.Struct({ rows: Schema.Array(Schema.Record(Schema.String, Schema.Json)) }) })
+						Schema.Struct({
+							quotes: Schema.Struct({
+								rows: Schema.Array(Schema.Record(Schema.String, Schema.Json))
+							})
+						})
 					)(
 						(yield* qReply(route, ops.authority, {
 							reads: [{ m: 'query', a: [{ quotes: { where: { id: { eq: id } } } }] }]
@@ -99,7 +115,11 @@ describe('an automation on created with a delay', () => {
 				yield* t.runDue();
 				expect(
 					yield* Schema.decodeUnknownEffect(
-						Schema.Struct({ quotes: Schema.Struct({ rows: Schema.Array(Schema.Record(Schema.String, Schema.Json)) }) })
+						Schema.Struct({
+							quotes: Schema.Struct({
+								rows: Schema.Array(Schema.Record(Schema.String, Schema.Json))
+							})
+						})
 					)(
 						(yield* qReply(route, ops.authority, {
 							reads: [{ m: 'query', a: [{ quotes: { where: { id: { eq: id } } } }] }]
@@ -107,9 +127,14 @@ describe('an automation on created with a delay', () => {
 					).pipe(Effect.map((answer) => answer.quotes.rows[0]))
 				).toMatchObject({ status: 'sent' });
 				const runs = present(
-					(yield* t.db.read([{ text: 'SELECT automation, state FROM sys_run', params: [] }]))[0]
+					(yield* t.db.read([
+						{ text: 'SELECT automation, state, cause FROM sys_run ORDER BY due_at', params: [] }
+					]))[0]
 				).rows;
-				expect(runs).toEqual([{ automation: 'remind', state: 'succeeded' }]);
+				expect(runs).toEqual([
+					{ automation: 'quotes.effect.created', state: 'succeeded', cause: 'effect' },
+					{ automation: 'remind', state: 'succeeded', cause: 'schedule' }
+				]);
 			})
 		)
 	);
@@ -136,7 +161,7 @@ describe('a started automation whose body fails', () => {
 									quotes_boom: {
 										description: 'Throws',
 										input: {},
-										runAs: 'trigger'
+										policies: ['ops']
 									}
 								}
 							},

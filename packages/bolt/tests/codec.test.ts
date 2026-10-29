@@ -4,7 +4,7 @@ import type { Json } from '../src/decl/values.ts';
 import { Effect } from 'effect';
 import { type Invocation, LIMITS } from '../src/engine/contracts.ts';
 import { Guest, type Bridge } from '../src/engine/services.ts';
-import { program } from '../src/test/guest.ts';
+import { program } from '../../bolt-cli/src/test/guest.ts';
 import { guestLayer } from './support/guest-fixture.ts';
 import { createBolt } from '../src/page/bolt.ts';
 import { Decimal } from '@norbital-ai/std/decimal';
@@ -48,7 +48,9 @@ export default { automation: { a: { body: function* (input, ctx) {
 				};
 				const bridge: Bridge = {
 					cross: (calls) =>
-						Effect.succeed(calls.map(() => ({ ok: true, value: { t: { rows: [row], next: null } } })))
+						Effect.succeed(
+							calls.map(() => ({ ok: true, value: { t: { rows: [row], next: null } } }))
+						)
 				};
 				const guest = yield* program(source);
 				const o = yield* Guest.pipe(
@@ -104,7 +106,8 @@ describe('codec: $bolt reads hand pages real values', () => {
 				],
 				next: null
 			};
-			const fetch: typeof globalThis.fetch = async () => Response.json({ answers: [{ t: answer }] });
+			const fetch: typeof globalThis.fetch = async () =>
+				Response.json({ answers: [{ t: answer }] });
 			const bolt = yield* createBolt({
 				base: 'https://workspace.test',
 				actor: null,
@@ -113,12 +116,14 @@ describe('codec: $bolt reads hand pages real values', () => {
 				openStream: () => ({ onmessage: null, onerror: null, close() {} })
 			});
 			const { t: page } = yield* bolt.query<{
-				t: { rows: {
-					amount: Decimal;
-					day: string;
-					span: { start: string };
-					lines: { price: Decimal }[];
-				}[] };
+				t: {
+					rows: {
+						amount: Decimal;
+						day: string;
+						span: { start: string };
+						lines: { price: Decimal }[];
+					}[];
+				};
 			}>({ t: { limit: 1 } });
 			const row = page.rows[0];
 			if (row === undefined) throw new Error('The fixture page returned no row');

@@ -10,14 +10,14 @@ type Eq<A, B> = (<T>() => T extends A ? 1 : 2) extends <T>() => T extends B ? 1 
 const is = <T extends true>(): T => true as T;
 type Flat<T> = { [K in keyof T]: T[K] };
 
-is<Eq<ColumnValue<'sys_user', 'kind'>, 'staff' | 'external'>>();
+is<Eq<ColumnValue<'sys_user', 'kind'>, 'staff' | 'external' | 'anonymous'>>();
 is<Eq<ColumnValue<'sys_user', 'email'>, string | null>>();
 is<Eq<ColumnValue<'sys_user', 'team'>, string | null>>();
 is<Eq<ColumnValue<'approval_request', 'id'>, Id<'approval_request'>>>();
 is<Eq<'sys_run' extends SystemName ? true : false, true>>();
 is<Eq<'sys_session' extends ModelName ? true : false, false>>();
 const staff: Where<'sys_user'> = { kind: { eq: 'staff' }, active: { eq: true } };
-// @ts-expect-error S1 a stored user's kind is staff or external, unlike an actor's member kind
+// @ts-expect-error S1 a stored user's kind is staff, external or anonymous, unlike an actor's member kind
 const member: Where<'sys_user'> = { kind: { eq: 'member' } };
 // a member's team is a source handle: `actor.teams` / `actor.teamTree` compare it in a list
 const inTree: Where<'sys_user'> = { team: { in: { var: 'requestor.teamTree' } } };

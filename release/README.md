@@ -1,7 +1,7 @@
 # Distribution contracts
 
 Norbital OSS publishes two immutable resource types: exact public package archives for
-`@norbital-ai/app-shell`, `bolt`, `bolt-server`, `doctor`, `providers`, `std`, and `ui`, plus the
+`@norbital-ai/app-shell`, `bolt`, `bolt-cli`, `bolt-server`, `doctor`, `providers`, `std`, `store`, and `ui`, plus the
 Norbital Convert service image at `ghcr.io/norbital-ai/convert`.
 
 Template source is the other half of the distribution story, and it is published from the template
@@ -20,11 +20,11 @@ than storing or provisioning a duplicate.
 Bolt, templates, and tenants do not propagate into one another. They respect each other's APIs and
 move only when their own owner moves them.
 
-| Train        | Moves when                                                                                |
-| ------------ | ----------------------------------------------------------------------------------------- |
-| **Bolt**     | a versioned change lands on `main` → publish the seven-package set, attested per archive. |
-| **Template** | a developer edits source and pushes. It pins its own bolt version until they bump it.     |
-| **Tenant**   | its owner says so. Forked from a template, managed independently.                         |
+| Train        | Moves when                                                                                 |
+| ------------ | ------------------------------------------------------------------------------------------ |
+| **Bolt**     | a versioned change lands on `main` → publish the public package set, attested per archive. |
+| **Template** | a developer edits source and pushes. It pins its own bolt version until they bump it.      |
+| **Tenant**   | its owner says so. Forked from a template, managed independently.                          |
 
 The only coupling is **notification**: a tenant can be told its upstream template has a newer
 release, or that a newer `@norbital-ai/bolt` exists and may break it. Neither acts.

@@ -4,6 +4,7 @@ import { catalog } from '../src/protocol/catalog.ts';
 import { evaluate, likeRegex } from '../src/engine/query/eval.ts';
 import {
 	aggregate,
+	catalogFor,
 	compile,
 	encodeCursor,
 	read,
@@ -13,7 +14,7 @@ import {
 } from '@norbital-ai/store';
 import { storeSync } from '../src/protocol/errors.ts';
 import { readOptions } from '../src/engine/query/reader.ts';
-import { bindings, manifest, rep } from './query.fixture.ts';
+import { bindings, clerk, manifest, rep } from './query.fixture.ts';
 
 const cat = catalog(manifest);
 const code = (f: () => unknown) => {
@@ -79,6 +80,10 @@ describe('next query: decode', () => {
 
 	it('an unknown field or operator is invalid at decode, never an ignored filter', () => {
 		expect(code(() => storeSync(where(cat, 'orders', { nope: { eq: 1 } })))).toBe('invalid');
+		// the refusal names the model's fields, and a name dressed in an invisible character says so
+		expect(() => storeSync(where(cat, 'orders', { 'sta\u200btus': { eq: 'open' } }))).toThrow(
+			/unknown field 'sta\u200btus' on 'orders' \(the name holds invisible characters\); its fields: .*\bstatus\b/
+		);
 		expect(code(() => storeSync(where(cat, 'orders', { total: { like: 'x' } })))).toBe('invalid');
 		expect(code(() => storeSync(where(cat, 'orders', { doc: { eq: 1 } })))).toBe('invalid');
 		expect(code(() => storeSync(where(cat, 'notes', { about: { lines: { is: {} } } })))).toBe(
@@ -192,15 +197,40 @@ describe('next query: decode', () => {
 		).not.toContain('$approval');
 	});
 
-	it('rule 14: aggregating a field masked to the caller is forbidden', () => {
-		const ir = storeSync(aggregate(cat, 'orders', { sum: ['total'] }));
+	it('a grouped aggregate always counts its buckets; an ungrouped one counts only when asked', () => {
+		const sql = (q: { [k: string]: unknown }) =>
+			storeSync(
+				compile(
+					cat,
+					storeSync(aggregate(cat, 'orders', q)),
+					readOptions({ as: 'workspace' }, bindings)
+				)
+			).sql.text;
+		expect(storeSync(aggregate(cat, 'orders', { by: 'status', limit: 2 }))).toMatchObject({
+			count: true
+		});
+		expect(sql({ by: 'status', limit: 2 })).toContain('count(*) AS "count"');
+		expect(sql({ by: 'status', sum: ['total'], limit: 2 })).toContain('count(*) AS "count"');
+		expect(storeSync(aggregate(cat, 'orders', { sum: ['total'] }))).not.toHaveProperty('count');
+		expect(sql({ sum: ['total'] })).not.toContain('count(*)');
+	});
+
+	it('an output is its fields: aggregating a field it omits is invalid; an ungranted output is forbidden', () => {
+		const brief = storeSync(catalogFor(cat, 'orders', 'brief'));
+		const clerkReads = readOptions({ as: 'caller', authority: clerk }, bindings);
+		const omitted = {
+			...storeSync(aggregate(brief, 'orders', { sum: ['total'] })),
+			output: 'brief'
+		};
+		expect(code(() => storeSync(compile(brief, omitted, clerkReads)))).toBe('invalid');
+		const total = storeSync(aggregate(cat, 'orders', { sum: ['total'] }));
+		expect(code(() => storeSync(compile(cat, total, clerkReads)))).toBe('forbidden');
+		const qty = { ...storeSync(aggregate(brief, 'orders', { max: ['qty'] })), output: 'brief' };
+		expect(code(() => storeSync(compile(brief, qty, clerkReads)))).toBe('ok');
 		expect(
 			code(() =>
-				storeSync(compile(cat, ir, readOptions({ as: 'caller', authority: rep }, bindings)))
+				storeSync(compile(cat, total, readOptions({ as: 'caller', authority: rep }, bindings)))
 			)
-		).toBe('forbidden');
-		expect(
-			code(() => storeSync(compile(cat, ir, readOptions({ as: 'workspace' }, bindings))))
 		).toBe('ok');
 	});
 

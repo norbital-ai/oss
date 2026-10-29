@@ -45,6 +45,7 @@ export const readManifest = Effect.fn('Publication.readManifest')(function* (fil
 export const publicPackageDirectories = [
 	'app-shell',
 	'bolt',
+	'bolt-cli',
 	'bolt-server',
 	'doctor',
 	'providers',

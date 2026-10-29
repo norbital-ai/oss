@@ -2,7 +2,8 @@
 // `requestor.teams`, `requestor.scopes.<policy>` …) and the clock (`today`, a date; `now`, an instant), evaluated once
 // per read and never per row: `today - days(7)`, `startOfMonth(today)`, `now - hours(1)`. Helpers: minutes, hours,
 // days, weeks, months and years spans (`±` on a date or an instant), and startOfWeek/Month/Quarter/Year of a date.
-import { Environment, type ParseResult } from '@marcbachmann/cel-js';
+import { Environment, type ASTNode, type ParseResult } from '@marcbachmann/cel-js';
+import { children } from './cel-ast.ts';
 import * as Result from 'effect/Result';
 import { addDays, addMonths, PlainDate } from './date.ts';
 import type { Json } from './wire.ts';
@@ -151,34 +152,26 @@ export type CompiledVar = {
 	/** The one member it is (`requestor.email`), read directly so a missing value is null. */
 	readonly member: string | undefined;
 };
-type Node = { readonly op: string; readonly args: unknown };
-const isNode = (v: unknown): v is Node => typeof v === 'object' && v !== null && 'op' in v;
 /** The identifiers and requestor member paths an AST reads. */
-function reads(node: unknown, out: { ids: Set<string>; requestor: Set<string> }): void {
-	if (Array.isArray(node)) return node.forEach((x) => reads(x, out));
-	if (!isNode(node)) return;
-	if (node.op === 'id' && typeof node.args === 'string') return void out.ids.add(node.args);
-	if (node.op === '.' && Array.isArray(node.args)) {
+function reads(node: ASTNode, out: { ids: Set<string>; requestor: Set<string> }): void {
+	if (node.op === 'id') return void out.ids.add(node.args);
+	if (node.op === '.') {
 		const [obj, prop] = node.args;
-		if (isNode(obj) && obj.op === 'id' && obj.args === 'requestor' && typeof prop === 'string') {
+		if (obj.op === 'id' && obj.args === 'requestor') {
 			out.ids.add('requestor');
 			return void out.requestor.add(prop);
 		}
 		if (
-			isNode(obj) &&
 			obj.op === '.' &&
-			Array.isArray(obj.args) &&
-			isNode(obj.args[0]) &&
 			obj.args[0].op === 'id' &&
 			obj.args[0].args === 'requestor' &&
-			obj.args[1] === 'scopes' &&
-			typeof prop === 'string'
+			obj.args[1] === 'scopes'
 		) {
 			out.ids.add('requestor');
 			return void out.requestor.add(`scopes.${prop}`);
 		}
 	}
-	reads(node.args, out);
+	for (const x of children(node)) reads(x, out);
 }
 const first = (e: unknown) => (e instanceof Error ? e.message : String(e)).split('\n')[0]!;
 const cache = new Map<string, CompiledVar | { readonly error: string }>();

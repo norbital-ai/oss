@@ -13,7 +13,7 @@ import { off } from '../src/facilities/index.ts';
 import { Agents } from '../src/engine/services.ts';
 import { decodeProjectedManifest } from '../src/engine/manifest.ts';
 import type { AiResponse } from '../src/engine/contracts.ts';
-import { TestWorkspace, type TestOptions } from '../src/test/index.ts';
+import { TestWorkspace, type TestOptions } from '../../bolt-cli/src/test/index.ts';
 
 const manifest = Result.getOrThrow(
 	decodeProjectedManifest({

@@ -28,7 +28,7 @@ write, stores it in a hidden column and maintains HNSW. Return `null` to exclude
 that need I/O, an automation writes an ordinary vector field and the index uses `vector: 'field'`.
 
 Search through `bolt.query({ trials: { search: { colour: input }, limit: 20 } })`, or the same
-request on `ctx.query`; each row carries its `$distance`. Caller grants and field masks always apply. A probe's `where` narrows inside the
+request on `ctx.query`; each row carries its `$distance`. The read output and caller grants always apply. A probe's `where` narrows inside the
 index scan. Dimension is at most 2000; candidates is 1–16 and multiplies the requested page before
 pure ascending reranking. The toolbar offers each index as a search mode with its typed input
 form, including custom datatype renderers. No wrapper query is needed.

@@ -148,7 +148,20 @@ export class Flattener {
 			}
 			const f = info.fields.get(k);
 			if (f === undefined || k.includes('.')) {
-				this.bad(at, `'${k}' is not a field of ${model}`);
+				// name what may be written here, so a wrong or junk name is corrected in one step
+				const writable = [...info.fields]
+					.filter(
+						([name, x]) =>
+							!x.computed &&
+							!x.derived &&
+							!SYSTEM.has(name) &&
+							(sel === 'any' || sel.columns.includes(name))
+					)
+					.map(([name]) => name);
+				this.bad(
+					at,
+					`'${k}' is not a field of ${model}${/\p{Cf}/u.test(k) ? ' (the name holds invisible characters)' : ''}; its fields: ${writable.join(', ')}`
+				);
 				continue;
 			}
 			if (f.computed || f.derived || SYSTEM.has(k)) {
@@ -555,7 +568,8 @@ export function decodeValue(
 /**
  * Defaults (rule 23a) and the required check, on a create's payload as the engine will write it. A state lands in its
  * initial value; `{ var: 'now' }`/`{ var: 'today + days(7)' }` resolve against the invocation clock; requestor defaults
- * (`{ var: 'requestor.id' }`) apply only when the requestor has that value. Returns the first missing required field.
+ * (`{ var: 'requestor.id' }`) apply only when the requestor has that value (the system identity, an automation run, has
+ * none: its code sets the field). Returns the first missing required field.
  */
 export function withDefaults(
 	m: EngineManifest,
@@ -572,7 +586,7 @@ export function withDefaults(
 			values[name] = k.initial;
 			continue;
 		}
-		const d = k.default as Json | undefined;
+		const d = k.default;
 		if (d === undefined) continue;
 		const text =
 			Predicate.isObject(d) && Object.keys(d).length === 1 && typeof d['var'] === 'string'
@@ -580,19 +594,27 @@ export function withDefaults(
 				: undefined;
 		const compiled =
 			text !== undefined && clockDefault(text) !== undefined ? compileVar(text) : undefined;
-		values[name] =
-			compiled === undefined || 'error' in compiled ? d : evaluateVar(compiled, clock);
+		values[name] = compiled === undefined || 'error' in compiled ? d : evaluateVar(compiled, clock);
 	}
+	// a visitor's anonymous user is its requestor id too (it owns what it creates)
+	const requestor = actor;
+	const id =
+		requestor?.kind === 'member'
+			? requestor.id
+			: requestor?.kind === 'visitor' && requestor.anonymous === true
+				? requestor.visitor
+				: undefined;
 	for (const [fk, rel] of cat.models.get(model)!.one) {
 		const r = m.relationships[`${model}.${fk}`];
-		if (values[fk] !== undefined || r?.default === undefined || actor.kind !== 'member') continue;
-		if (r.default.var === 'requestor.id' && rel.targets.includes('sys_user')) values[fk] = actor.id;
+		if (values[fk] !== undefined || r?.default === undefined || id === undefined) continue;
+		if (r.default.var === 'requestor.id' && rel.targets.includes('sys_user')) values[fk] = id;
 		else if (
+			requestor?.kind === 'member' &&
 			r.default.var === 'requestor.party' &&
-			actor.party !== null &&
-			rel.targets.includes(actor.party.model)
+			requestor.party !== null &&
+			rel.targets.includes(requestor.party.model)
 		)
-			values[fk] = actor.party.id;
+			values[fk] = requestor.party.id;
 	}
 	const required = Object.entries(spec.fields).find(
 		([n, k]) =>

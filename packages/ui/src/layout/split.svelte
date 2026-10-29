@@ -4,7 +4,7 @@ Two panes side by side at a ratio (`rail`, `sidebar`, `third`, `half`, `wide`) t
 -->
 <script lang="ts" module>
 	import type { Snippet } from 'svelte';
-	import type { LayoutAttributes, LayoutElement, LayoutGap } from './layout.shared.js';
+	import type { LayoutAttributes, LayoutElement, LayoutGap, LayoutSize } from './layout.shared.js';
 
 	/** How a `Split` divides its width between `start` and `end`. */
 	export type SplitRatio = 'rail' | 'sidebar' | 'third' | 'half' | 'wide';
@@ -17,8 +17,10 @@ Two panes side by side at a ratio (`rail`, `sidebar`, `third`, `half`, `wide`) t
 		collapse?: SplitCollapse;
 		collapseAt?: 'compact' | 'narrow';
 		gap?: LayoutGap;
-		/** Fill a definite-height parent so both panes can hand that height to their contents. */
-		fill?: boolean;
+		/** `content` (default): its own height; `fill`: the space left in its parent, handed to both panes (down to `minHeight`). */
+		size?: LayoutSize;
+		/** A `fill` split's floor (a CSS length; default 0). */
+		minHeight?: string;
 		start: Snippet;
 		end: Snippet;
 		switchLabels?: readonly [string, string];
@@ -27,7 +29,7 @@ Two panes side by side at a ratio (`rail`, `sidebar`, `third`, `half`, `wide`) t
 
 <script lang="ts">
 	import { cn } from '../primitives/utils.js';
-	import { GAP_CLASSES } from './layout.shared.js';
+	import { GAP_CLASSES, SIZE_CLASSES } from './layout.shared.js';
 
 	let {
 		as = 'div',
@@ -36,7 +38,8 @@ Two panes side by side at a ratio (`rail`, `sidebar`, `third`, `half`, `wide`) t
 		collapse = 'stack',
 		collapseAt = 'narrow',
 		gap = 'md',
-		fill = false,
+		size = 'content',
+		minHeight,
 		start,
 		end,
 		switchLabels,
@@ -58,13 +61,14 @@ Two panes side by side at a ratio (`rail`, `sidebar`, `third`, `half`, `wide`) t
 	this={as}
 	bind:this={ref}
 	class={cn(
-		'split min-h-0 min-w-0',
+		'split min-w-0',
 		GAP_CLASSES[gap],
 		ratioClasses[ratio],
-		fill && 'h-full',
+		SIZE_CLASSES[size],
 		// The caller's class last: floors, layers and colours it names win; layout itself is props (doctor-enforced).
 		className
 	)}
+	style:min-height={size === 'fill' ? minHeight : undefined}
 	data-layout="split"
 	data-collapse={collapse}
 	data-collapse-at={collapseAt}

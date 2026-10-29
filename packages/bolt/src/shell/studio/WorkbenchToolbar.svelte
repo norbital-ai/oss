@@ -154,8 +154,15 @@
 	</Button>
 {/snippet}
 
-<Inline gap="xs" shrink={false} class="h-10 min-w-0 border-b border-border/60 sm:h-9">
-	<Scroll name={t('Workbench')} axis="x" layout="inline" gap="xs" grow class="min-w-0 items-center">
+<Inline gap="xs" class="h-10 min-w-0 border-b border-border/60 sm:h-9">
+	<Scroll
+		name={t('Workbench')}
+		axis="x"
+		layout="inline"
+		gap="xs"
+		size="fill"
+		class="min-w-0 items-center"
+	>
 		<span
 			class="max-w-64 shrink-0 truncate text-xs font-medium text-foreground"
 			data-change={change?.id}
@@ -185,7 +192,7 @@
 			>
 		{/if}
 	</Scroll>
-	<Inline gap="xs" shrink={false}>
+	<Inline gap="xs">
 		{@render action('lucide:save', t('Save'), onsave, busy || drafts === 0)}
 		{#if change !== undefined}
 			{@render action('lucide:scan-eye', t('Preview'), onpreview, busy || drafts > 0, previewing)}

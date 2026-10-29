@@ -5,14 +5,22 @@ import { BoltError, CODE } from './errors.ts';
 import type { WireError } from './schema.ts';
 
 export const BOLT = '/__bolt';
+/** The integrations a member may connect (a canonical path keeps no trailing slash). */
+export const INTEGRATION_LIST = `${BOLT}/integrations`;
 /** An integration instance's management routes; its `test` verb may invoke an authored guest body. */
-export const INTEGRATIONS = `${BOLT}/integrations/`;
+export const INTEGRATIONS = `${INTEGRATION_LIST}/`;
 /** A workspace path under its public URL, which may carry a path (`https://host/acme`: one host serving many workspaces). */
 export const under = (publicUrl: string, path: string): string =>
 	`${publicUrl.replace(/\/+$/, '')}${path}`;
 /** The path a workspace is served under (`/acme`), `''` at the root; cookies and the service worker are scoped to it. */
 export const basePath = (publicUrl: string): string =>
 	new URL(publicUrl).pathname.replace(/\/+$/, '');
+/**
+ * The one spelling of a workspace path (`docs/hosts.md`, URL scheme): repeated slashes collapse and a trailing slash
+ * goes, the root `/` aside. A host answers any other spelling with one 308 to this one.
+ */
+export const canonicalPath = (path: string): string =>
+	path.replace(/\/{2,}/g, '/').replace(/(.)\/$/, '$1');
 /** The C8 wire table's data endpoints; hooks, the manifest and host ops are routed by their own owners. */
 export const PATHS = {
 	q: `${BOLT}/q`,
@@ -46,9 +54,7 @@ export const PATHS = {
 	recordCapabilities: `${BOLT}/record-capabilities`
 } as const;
 /** The workspace path a notice opens: its linked record over the inbox, or the inbox. */
-export const noticePath = (
-	link: { readonly model: string; readonly id: string } | null
-): string =>
+export const noticePath = (link: { readonly model: string; readonly id: string } | null): string =>
 	link === null
 		? '/inbox'
 		: `/inbox?record=${encodeURIComponent(link.model)}/${encodeURIComponent(link.id)}`;
@@ -98,6 +104,8 @@ const REFUSED_STATUS: {
 	notFound: 404,
 	rateLimited: 429
 };
+/** Every `rateLimited` refusal's one message; the shell translates it (shell/i18n.ts). */
+export const RATE_LIMITED = 'Too many requests. Wait a moment and try again.';
 export const statusOf = (o: ActOutcome): number =>
 	o.kind === 'refused' ? (REFUSED_STATUS[o.code] ?? 422) : OUTCOME_STATUS[o.kind];
 /** The client's reading of a transport failure's status (`statusOf` reversed): the refusal it stands for, else `null` (the outcome is unknown). */

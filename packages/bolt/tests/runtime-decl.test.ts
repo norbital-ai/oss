@@ -50,7 +50,7 @@ describe('runtime declarations', () => {
 		expect(original(declared.body)).toBe(rt.nightly.spec.run);
 		const submitted = automation('orders_submit', rt.orders_submit.spec);
 		expect(submitted.name).toBe('orders_submit');
-		expect(submitted.spec.runAs).toBe('trigger');
+		expect(submitted.spec.policies).toEqual(['sales_rep']);
 		expect(original(submitted.body)).toBe(rt.orders_submit.spec.run);
 	});
 

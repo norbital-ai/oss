@@ -41,7 +41,7 @@ export {
 } from './schema/ddl.ts';
 export * from './schema/plan.ts';
 export { searchFunctions } from './schema/search.ts';
-export { answer, armsFit } from './read/page.ts';
+export { answer, armsFit, totalOf } from './read/page.ts';
 export { nullRowSql } from './write/row.ts';
 export {
 	compileWrite,

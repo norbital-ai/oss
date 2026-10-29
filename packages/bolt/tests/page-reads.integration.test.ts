@@ -6,9 +6,9 @@ import type { Authority } from '../src/engine/contracts.ts';
 import { decodeProjectedManifest } from '../src/engine/manifest.ts';
 import { QReply, WireError } from '../src/protocol/schema.ts';
 import { actReply, json, routeFixture } from './support/route-fixture.ts';
-import { program } from '../src/test/guest.ts';
+import { program } from '../../bolt-cli/src/test/guest.ts';
 import type { WireRead } from '../src/protocol/wire.ts';
-import { TestWorkspace, type WorkspaceServices } from '../src/test/index.ts';
+import { TestWorkspace, type WorkspaceServices } from '../../bolt-cli/src/test/index.ts';
 
 const manifest = Result.getOrThrow(
 	decodeProjectedManifest({
@@ -128,8 +128,11 @@ const seeded = Layer.effectDiscard(
 				['beta', 0.9],
 				['bravo', 0.6]
 			] as const) {
-				const o = yield* act('orders.create', [{ title, doc: { lines: [title] }, color: [r, 0, 0] }]);
-				if (o.kind !== 'committed' || o.records[0] === undefined) throw new Error(JSON.stringify(o));
+				const o = yield* act('orders.create', [
+					{ title, doc: { lines: [title] }, color: [r, 0, 0] }
+				]);
+				if (o.kind !== 'committed' || o.records[0] === undefined)
+					throw new Error(JSON.stringify(o));
 				ids.push(o.records[0].id);
 			}
 			const first = ids[0];

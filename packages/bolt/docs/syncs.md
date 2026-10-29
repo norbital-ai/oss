@@ -103,12 +103,12 @@ syncs: {
 ```
 
 `$at` identifies the source row or line. Findings use `{ at, field, message, severity }`, where
-severity is `warn` or `refuse`. A refusal writes nothing; warnings require accepting and rerunning
-the same file. The whole import commits atomically. `scope: { by, range? }` declares a complete
+severity is `warn` or `refuse`. An import is one step: a refusal writes nothing; otherwise the file
+is imported and its warnings are reported with the counts. The whole import commits atomically. `scope: { by, range? }` declares a complete
 snapshot for reconciliation. Returned rows still run the model's write callbacks.
 
 File callback reads through `ctx.db.query` retain the importing or exporting caller's authority
-and masks. Context narrows/defaults the operation; it never elevates
+and outputs. Context narrows/defaults the operation; it never elevates
 authority. Remote sync reads instead use trusted workspace authority.
 
 The toolbar supplies Import, Export and Download template. `write` returns records for export;
@@ -121,4 +121,4 @@ Built-in parsers are `xlsx`, `csv`, `tsv`, `json` and `ics`. The parser list is 
 accept. XLSX handles date/time serials; CSV/TSV handle encoding and delimiters; JSON accepts rows
 or `{ records }`; ICS reads VEVENTs. A custom parser is
 `{ type: '<registered IANA media type>', extensions: ['.ext'], parse: function* (file, ctx) { … } }`.
-Its body has the same 2 s CPU budget. Remote syncs map their data directly and do not use parsers.
+Its body has the same 3 s CPU budget. Remote syncs map their data directly and do not use parsers.

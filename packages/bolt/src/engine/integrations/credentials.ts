@@ -52,11 +52,13 @@ export const credentials = Effect.fn('Credentials.make')(function* (
 	codec: SecretsCodec
 ): Effect.fn.Return<Credentials, never, Crypto.Crypto> {
 	const crypto = yield* Crypto.Crypto;
-	const uuid = crypto.randomUUIDv4().pipe(
-		Effect.mapError((error) =>
-			BoltError.make('unavailable', 'facility', 'Secure random UUID generation failed.', error)
-		)
-	);
+	const uuid = crypto
+		.randomUUIDv4()
+		.pipe(
+			Effect.mapError((error) =>
+				BoltError.make('unavailable', 'facility', 'Secure random UUID generation failed.', error)
+			)
+		);
 	const opened = (instance: string, rows: readonly (typeof Sealed.Type)[]) =>
 		Effect.forEach(rows, (r) =>
 			Effect.gen(function* () {

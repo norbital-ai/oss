@@ -22,7 +22,11 @@ import {
 	type ActBody,
 	type QBody
 } from '../../src/protocol/schema.ts';
-import { KitInvalid, TestWorkspace, type WorkspaceServices } from '../../src/test/effect.ts';
+import {
+	KitInvalid,
+	TestWorkspace,
+	type WorkspaceServices
+} from '../../../bolt-cli/src/test/effect.ts';
 
 export const json = (response: Response): Effect.Effect<unknown, KitInvalid> =>
 	Effect.tryPromise({

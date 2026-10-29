@@ -6,9 +6,9 @@ import { isBatchCallable, parseCallable } from '../src/engine/callables/index.ts
 import { Approvals, Callables } from '../src/engine/services.ts';
 import type { EngineManifest } from '../src/engine/manifest.ts';
 import type { Json } from '../src/decl/values.ts';
-import { TestWorkspace } from '../src/test/index.ts';
+import { TestWorkspace } from '../../bolt-cli/src/test/index.ts';
 import { manifest as base } from './write-fixture.ts';
-import { program } from '../src/test/guest.ts';
+import { program } from '../../bolt-cli/src/test/guest.ts';
 
 const manifest: EngineManifest = {
 	...base,
@@ -57,7 +57,7 @@ const manifest: EngineManifest = {
 		followup: {
 			description: 'Checked batch in a run',
 			input: { operations: { kind: 'json' } },
-			runAs: 'trigger'
+			policies: ['writer']
 		}
 	}
 };
@@ -149,117 +149,119 @@ it('batch admission accepts exactly the four generated verbs', () => {
 	expect(isBatchCallable({ _tag: 'Sync', model: 'customers', sync: 'sheet' })).toBe(false);
 });
 
-it.live('native and queued checked batches use validation, authority, per-item upsert modes and observed revisions, and one atomic commit', () =>
-	Effect.scoped(
-		Effect.gen(function* () {
-			const f = yield* fixture;
-			const committed = yield* f.batch([
-				{ model: 'customers', verb: 'create', input: [{ name: 'First' }] },
-				{ model: 'orders', verb: 'create', input: [{ title: 'First order' }] }
-			]);
-			expect(committed.outcome).toMatchObject({ kind: 'committed', output: [null, null] });
-			expect(yield* f.count('customers')).toBe(1);
-			expect(yield* f.count('orders')).toBe(1);
-			const malformed = yield* f.batch([
-				{ model: 'customers', verb: 'create', input: [{ name: 'Must roll back' }] },
-				{ model: 'orders', verb: 'create', input: [{}] }
-			]);
-			expect(malformed.outcome.kind).toBe('refused');
-			expect(yield* f.count('customers')).toBe(1);
-			expect(yield* f.count('orders')).toBe(1);
-			const denied = yield* Effect.flip(
-				f.t.bodyActs(f.restricted).checked([
-					{ callable: 'customers.create', input: [{ name: 'Also roll back' }] },
-					{ callable: 'orders.create', input: [{ title: 'Forbidden' }] }
-				])
-			);
-			expect(denied).toMatchObject({ _tag: 'ActRefused', code: 'forbidden' });
-			expect(yield* f.count('customers')).toBe(1);
-			// a verb outside the four generated ones is refused through guest JSON (admission: the unit test above)
-			expect(yield* f.checkedJson([{ callable: 'customers.import', input: {} }])).toMatchObject({
-				_tag: 'Some',
-				value: { state: 'failed', error: { code: 'invalidInput' } }
-			});
-			expect(yield* f.count('customers')).toBe(1);
-			const id = randomUUID();
-			expect(
-				yield* f.calls.start({
-					automation: 'followup',
-					runs: [
-						{
-							id,
-							input: {
-								operations: [{ callable: 'customers.create', input: [{ name: 'From a run' }] }]
+it.live(
+	'native and queued checked batches use validation, authority, per-item upsert modes and observed revisions, and one atomic commit',
+	() =>
+		Effect.scoped(
+			Effect.gen(function* () {
+				const f = yield* fixture;
+				const committed = yield* f.batch([
+					{ model: 'customers', verb: 'create', input: [{ name: 'First' }] },
+					{ model: 'orders', verb: 'create', input: [{ title: 'First order' }] }
+				]);
+				expect(committed.outcome).toMatchObject({ kind: 'committed', output: [null, null] });
+				expect(yield* f.count('customers')).toBe(1);
+				expect(yield* f.count('orders')).toBe(1);
+				const malformed = yield* f.batch([
+					{ model: 'customers', verb: 'create', input: [{ name: 'Must roll back' }] },
+					{ model: 'orders', verb: 'create', input: [{}] }
+				]);
+				expect(malformed.outcome.kind).toBe('refused');
+				expect(yield* f.count('customers')).toBe(1);
+				expect(yield* f.count('orders')).toBe(1);
+				const denied = yield* Effect.flip(
+					f.t.bodyActs(f.restricted).checked([
+						{ callable: 'customers.create', input: [{ name: 'Also roll back' }] },
+						{ callable: 'orders.create', input: [{ title: 'Forbidden' }] }
+					])
+				);
+				expect(denied).toMatchObject({ _tag: 'ActRefused', code: 'forbidden' });
+				expect(yield* f.count('customers')).toBe(1);
+				// a verb outside the four generated ones is refused through guest JSON (admission: the unit test above)
+				expect(yield* f.checkedJson([{ callable: 'customers.import', input: {} }])).toMatchObject({
+					_tag: 'Some',
+					value: { state: 'failed', error: { code: 'invalidInput' } }
+				});
+				expect(yield* f.count('customers')).toBe(1);
+				const id = randomUUID();
+				expect(
+					yield* f.calls.start({
+						automation: 'followup',
+						runs: [
+							{
+								id,
+								input: {
+									operations: [{ callable: 'customers.create', input: [{ name: 'From a run' }] }]
+								}
 							}
-						}
-					],
-					authority: f.t.as(f.writer).authority,
-					bindings: f.bindings()
-				})
-			).toMatchObject({ kind: 'committed' });
-			yield* f.t.runDue();
-			expect(yield* f.count('customers')).toBe(2);
-			expect(
-				yield* f.t.db.value(Schema.Json, {
-					text: 'SELECT output FROM sys_run WHERE id = $1',
-					params: [id]
-				})
-			).toMatchObject({ kind: 'committed', output: [null] });
-			// each upsert item names its own mode; an update item keeps its observed revision
-			const created = yield* f.batch([
-				{ model: 'customers', verb: 'create', input: [{ name: 'Second', note: 'Original' }] }
-			]);
-			if (created.outcome.kind !== 'committed')
-				throw new Error('The batch fixture did not commit.');
-			const record = created.outcome.records[0];
-			if (record === undefined) throw new Error('The batch fixture returned no customer.');
-			const checked = f.t.bodyActs(f.writer).checked;
-			expect(
-				yield* checked([
-					{
-						callable: 'customers.upsert',
-						input: [{ name: 'Second', note: 'Updated' }],
-						onConflict: 'update'
-					}
-				])
-			).toMatchObject({ kind: 'committed' });
-			expect(
-				yield* checked([
-					{
-						callable: 'customers.upsert',
-						input: [{ name: 'Second', note: 'Ignored' }],
-						onConflict: 'keep'
-					}
-				])
-			).toMatchObject({ kind: 'committed' });
-			expect(
-				yield* f.checkedJson([
-					{ callable: 'customers.upsert', input: [{ name: 'Second', note: 'Missing mode' }] }
-				])
-			).toMatchObject({
-				_tag: 'Some',
-				value: { state: 'failed', error: { code: 'invalidInput' } }
-			});
-			expect(
-				yield* Effect.flip(
-					checked([
+						],
+						authority: f.t.as(f.writer).authority,
+						bindings: f.bindings()
+					})
+				).toMatchObject({ kind: 'committed' });
+				yield* f.t.runDue();
+				expect(yield* f.count('customers')).toBe(2);
+				expect(
+					yield* f.t.db.value(Schema.Json, {
+						text: 'SELECT output FROM sys_run WHERE id = $1',
+						params: [id]
+					})
+				).toMatchObject({ kind: 'committed', output: [null] });
+				// each upsert item names its own mode; an update item keeps its observed revision
+				const created = yield* f.batch([
+					{ model: 'customers', verb: 'create', input: [{ name: 'Second', note: 'Original' }] }
+				]);
+				if (created.outcome.kind !== 'committed')
+					throw new Error('The batch fixture did not commit.');
+				const record = created.outcome.records[0];
+				if (record === undefined) throw new Error('The batch fixture returned no customer.');
+				const checked = f.t.bodyActs(f.writer).checked;
+				expect(
+					yield* checked([
 						{
-							callable: 'customers.update',
-							input: [{ target: record.id, set: { note: 'Stale' } }],
-							observed: { [record.id]: 1 }
+							callable: 'customers.upsert',
+							input: [{ name: 'Second', note: 'Updated' }],
+							onConflict: 'update'
 						}
 					])
-				)
-			).toMatchObject({ _tag: 'ActConflict' });
-			expect(
-				yield* f.t.db.value(Schema.String, {
-					text: 'select note from customers where id=$1::uuid',
-					params: [record.id]
-				})
-			).toBe('Updated');
-			expect(yield* f.count('customers')).toBe(3);
-		})
-	)
+				).toMatchObject({ kind: 'committed' });
+				expect(
+					yield* checked([
+						{
+							callable: 'customers.upsert',
+							input: [{ name: 'Second', note: 'Ignored' }],
+							onConflict: 'keep'
+						}
+					])
+				).toMatchObject({ kind: 'committed' });
+				expect(
+					yield* f.checkedJson([
+						{ callable: 'customers.upsert', input: [{ name: 'Second', note: 'Missing mode' }] }
+					])
+				).toMatchObject({
+					_tag: 'Some',
+					value: { state: 'failed', error: { code: 'invalidInput' } }
+				});
+				expect(
+					yield* Effect.flip(
+						checked([
+							{
+								callable: 'customers.update',
+								input: [{ target: record.id, set: { note: 'Stale' } }],
+								observed: { [record.id]: 1 }
+							}
+						])
+					)
+				).toMatchObject({ _tag: 'ActConflict' });
+				expect(
+					yield* f.t.db.value(Schema.String, {
+						text: 'select note from customers where id=$1::uuid',
+						params: [record.id]
+					})
+				).toBe('Updated');
+				expect(yield* f.count('customers')).toBe(3);
+			})
+		)
 );
 
 it.live(

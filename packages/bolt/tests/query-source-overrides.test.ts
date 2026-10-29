@@ -57,7 +57,7 @@ describe('engine-owned prospective query sources', () => {
 			expect(prospective.sql.text).not.toMatch(/FROM "(?:accounts|orders|lines)"/);
 		}
 	});
-	it('keeps caller scope and masks when replacing physical sources', () => {
+	it('keeps caller scope when replacing physical sources', () => {
 		const query = storeSync(
 			read(cat, 'orders', {
 				limit: 3,
@@ -68,7 +68,7 @@ describe('engine-owned prospective query sources', () => {
 		const ordinary = storeSync(compile(cat, query, readOptions(caller, bindings)));
 		const prospective = storeSync(compile(cat, query, readOptions(caller, bindings, { sources })));
 		expect(prospective.sql.params).toEqual(ordinary.sql.params);
-		expect(prospective.sql.text).toContain('CASE WHEN');
+		expect(prospective.sql.params).toContain('north');
 		expect(prospective.sql.text).not.toMatch(/FROM "(?:accounts|orders)"/);
 	});
 	it('routes single, batched and predicate reads, quoting source identifiers as identifiers', () => {

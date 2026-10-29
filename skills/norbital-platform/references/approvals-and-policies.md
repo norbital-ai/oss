@@ -1,7 +1,8 @@
 # Source teams, policies and inline approvals
 
-Access control is source configuration: teams link to policies, and policies declare grants,
-masks, capabilities, limits and inline approval configuration. Do not expose a runtime editor
+Access control is source configuration: teams link to policies, and policies declare grants
+(the read outputs holders read and the rows of each, writes, state moves), manual starts,
+capabilities, limits and inline approval configuration. Do not expose a runtime editor
 for teams, policies or approval routes. A write becomes an approval request only through a source
 grant's `check` returning `ctx.approve(...)`, never a runtime route object.
 
@@ -26,13 +27,17 @@ Changing source teams, policy links or approval configuration requires a source 
 
 ## Grants and enforcement
 
-Grants are layer maps typed from the model's own declaration. `read` is `true` or, per declared
-path, `{ where?, fields? }`: the root's `where` scopes the roots (it may hop relations), a deeper
-layer's `where` filters that layer's rows (or nulls a ref) and never removes the root, and `fields`
-masks within the layer; a declared layer the grant does not name reads in full. `history` admits a
-scope and optionally fields. `create` and `update` are `true` or `{ columns?, check? }` with
+Grants are layer maps typed from the model's own declaration. The model declares its read
+outputs (`read` is `default`, `outputs` the named ones), each a fixed layer map. `read` grants the
+`default` output and `outputs: { <name>: … }` named ones, each `true` or, per path of that output,
+`{ where? }`: the root's `where` scopes the roots (it may hop relations), a deeper layer's `where`
+filters that layer's rows (or nulls a ref) and never removes the root; a layer the grant does not
+name is unfiltered. A policy never changes an output's fields: a narrower audience is granted a
+narrower named output. `history` admits a scope. `create` and `update` are `true` or `{ columns?, check? }` with
 `columns` per write path; `delete` is `true` or `{ check? }`. `moves` grants state transitions. The
-policy's separate `automations` list grants explicit run starts. Capabilities expose apps, tools,
+policy's separate `automations` list grants manual starts (a person or the agent); code that
+schedules needs none. An automation holds exactly its declared `policies`, with its starter as
+`requestor`; an effect runs as its writer and holds no policy. Capabilities expose apps, tools,
 MCP and skills; limits constrain use.
 
 **Authority is per access point.** `read`, `create`, `update` and `delete` of a model are access
@@ -42,8 +47,9 @@ the `orders` grant; the `parties` and `order_lines` policies are never consulted
 Reading `parties` directly is its own access point. A child's `transform` still runs as business
 validation, not authority.
 
-Every read uses native caller scope. An unreadable row does not exist to that caller; masked values
-cannot be filtered, sorted or aggregated. Relationship hops and masks are enforced by the engine,
+Every read names one output and uses native caller scope. An unreadable row does not exist to that
+caller; a field outside the output cannot be filtered, sorted or aggregated. Every member reads
+`sys_user` output `directory` (id, name). Relationship hops and outputs are enforced by the engine,
 not a parallel matcher in template UI. An administrator is a native flag on an admitted staff
 identity, not an invented role or source team label.
 
@@ -138,7 +144,7 @@ Verify its rows and eligible reviewer count advance without reloading the page.
 ## Evidence required after migration
 
 Verify source team-to-policy links and all three verdict branches (allow, approve, deny),
-member affiliation and hierarchy through native tests. Cover masks, layer scope under the root's
+member affiliation and hierarchy through native tests. Cover granted outputs, layer scope under the root's
 policy, `columns` refusal before `check`, sealed and
 source-owned fields, the lock on every write path, rejection rollback, request-for-change and
 resubmit, and source changes during pending requests.

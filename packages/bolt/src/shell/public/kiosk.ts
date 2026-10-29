@@ -21,7 +21,7 @@ export const kioskAuthority = Effect.fn('shell.kioskAuthority')(function* (
 	manifest: EngineManifest,
 	name: string,
 	member: Authority | null,
-	visitor: string
+	visitor: { readonly id: string; readonly anonymous: boolean }
 ) {
 	const spec = Option.getOrUndefined(kioskOf(manifest, name));
 	if (
@@ -34,13 +34,18 @@ export const kioskAuthority = Effect.fn('shell.kioskAuthority')(function* (
 	const identity = yield* Identity;
 	const authority = yield* identity.authority(
 		{
-			actor: member?.actor ?? { kind: 'visitor', app: name, visitor },
+			actor: member?.actor ?? {
+				kind: 'visitor',
+				app: name,
+				visitor: visitor.id,
+				...(visitor.anonymous ? { anonymous: true as const } : {})
+			},
 			policies: spec.policies,
 			admin: false,
 			...(member?.teamTree === undefined ? {} : { teamTree: member.teamTree }),
 			...(member?.scopes === undefined ? {} : { scopes: member.scopes })
 		},
-		`kiosk:${name}:${member?.key ?? `visitor:${visitor}`}`
+		`kiosk:${name}:${member?.key ?? `visitor:${visitor.id}:${visitor.anonymous}`}`
 	);
 	return Option.some({ ...authority, kiosk: name });
 });
@@ -54,7 +59,7 @@ export const kioskBoot = Effect.fn('shell.kioskBoot')(function* (
 	manifest: EngineManifest,
 	name: string,
 	member: Authority | null,
-	visitor: string
+	visitor: { readonly id: string; readonly anonymous: boolean }
 ): Effect.fn.Return<KioskBoot, never, Identity> {
 	const spec = Option.getOrUndefined(kioskOf(manifest, name));
 	if (spec === undefined) return { _tag: 'Unknown' };

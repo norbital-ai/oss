@@ -1,16 +1,14 @@
 // A read statement's rows (`j` each, in wire form) → its answer: a page with its cursor, one row, or an aggregate.
 // The database already stopped at the byte budget (`$over`); past a cap nothing is clamped — the read is refused.
-import { Array as EffectArray, Effect } from 'effect';
+import { Array as EffectArray, Effect, Predicate } from 'effect';
 import type { Json } from '../values.ts';
 import type { ReadIR, SelectIR } from '../ir.ts';
 import { StoreError } from '../errors.ts';
 import { STORE_LIMITS } from '../limits.ts';
-import { encodeCursor, OVER, type Compiled } from './sql.ts';
+import { encodeCursor, OVER, TOTAL, type Compiled } from './sql.ts';
 
 type Wire = { readonly [k: string]: Json };
 const tooLarge = (message: string) => Effect.fail(StoreError.of('tooLarge', 'deliver', message));
-const isWire = (v: Json): v is Wire =>
-	v !== null && typeof v === 'object' && !EffectArray.isArray<typeof v>(v);
 const cursorKeys = (v: Json | undefined): readonly (string | null)[] =>
 	EffectArray.isArray<typeof v>(v) ? v.map((x) => (typeof x === 'string' ? x : null)) : [];
 
@@ -29,7 +27,7 @@ export const armsFit = (ir: ReadIR, rows: readonly Wire[]): Effect.Effect<void, 
 						: v === null || v === undefined
 							? []
 							: [v]
-				).filter(isWire);
+				).filter((v) => Predicate.isObject(v));
 				if (r.many && r.page?._tag === 'All' && list.length > STORE_LIMITS.page.relationArm)
 					return rel;
 				const deeper =
@@ -55,6 +53,15 @@ export const armsFit = (ir: ReadIR, rows: readonly Wire[]): Effect.Effect<void, 
 			);
 };
 
+/** A counted read's rows without its last `{"$total": n}` row, and that total (`{}` when the read counts nothing). */
+export const totalOf = <R extends Json>(
+	rows: readonly R[]
+): { readonly rows: readonly R[]; readonly total?: number } => {
+	const last = rows.at(-1);
+	return Predicate.isObject(last) && typeof last[TOTAL] === 'number'
+		? { rows: rows.slice(0, -1), total: last[TOTAL] }
+		: { rows };
+};
 /** The answer of a compiled `read`, `get` or `aggregate`: `{ rows, next }`, a row or `null`, or the aggregate. */
 export const answer = Effect.fnUntraced(function* (
 	ir: ReadIR,
@@ -62,7 +69,9 @@ export const answer = Effect.fnUntraced(function* (
 	rows: readonly Json[],
 	allBytes: number = STORE_LIMITS.page.allBytes
 ) {
-	const answered = rows.filter(isWire);
+	const counted = totalOf(rows);
+	const total = counted.total === undefined ? {} : { total: counted.total };
+	const answered = counted.rows.filter((v) => Predicate.isObject(v));
 	// the database stopped at the read's byte budget (`budgeted`): the marker is no row
 	const over = answered.at(-1)?.[OVER] === true;
 	const js = over ? answered.slice(0, -1) : answered;
@@ -79,7 +88,7 @@ export const answer = Effect.fnUntraced(function* (
 			);
 		if (over)
 			return yield* tooLarge(`the read${of} is larger than ${allBytes} bytes; page it (rule 9)`);
-		const all: Json = { rows: [...js], next: null };
+		const all: Json = { rows: [...js], next: null, ...total };
 		return all;
 	}
 	// a page ends early at its byte budget, its cursor after the last row that fits
@@ -93,7 +102,8 @@ export const answer = Effect.fnUntraced(function* (
 	const next = more && last !== undefined ? encodeCursor(c.hash, cursorKeys(last['$k'])) : null;
 	const paged: Json = {
 		rows: page.map((row) => Object.fromEntries(Object.entries(row).filter(([k]) => k !== '$k'))),
-		next
+		next,
+		...total
 	};
 	return paged;
 });

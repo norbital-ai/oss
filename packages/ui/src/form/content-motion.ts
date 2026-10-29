@@ -71,7 +71,8 @@ export function contentMotion(node: HTMLElement) {
 			: new ResizeObserver(([entry]) => {
 					if (!entry) return;
 					const next = entry.contentRect.height;
-					if (height > 0 && next > 0 && Math.abs(next - height) > 1)
+					// a section's own open or close animates the body; this one would fight it
+					if (height > 0 && next > 0 && Math.abs(next - height) > 1 && !('moving' in node.dataset))
 						play(node, [
 							{ height: `${height}px`, overflow: 'clip' },
 							{ height: `${next}px`, overflow: 'clip' }

@@ -72,3 +72,20 @@ test('conditionals that only require keys keep their controls; stored schemas de
 	assert.equal(isJsonSchema({ type: 'object', required: 'kind' }), false);
 	assert.equal(isJsonSchema([]), false);
 });
+test('a stored schema decodes its read keywords once; a pointer target is decoded where it lands', () => {
+	assert.equal(isJsonSchema({ type: 'array', minItems: '3' }), false);
+	assert.equal(isJsonSchema({ allOf: { type: 'string' } }), false);
+	assert.equal(isJsonSchema({ type: 'object', vendor: { any: ['json'] } }), true);
+	const root: JsonSchema = {
+		$defs: { text: { type: 'string', maxLength: 4 }, bad: { type: 7 }, list: [1] }
+	};
+	assert.deepEqual(jsonSchemaKind(resolveJsonSchema({ $ref: '#/$defs/text' }, root)), {
+		kind: 'text',
+		label: undefined,
+		help: undefined,
+		max: 4
+	});
+	assert.equal(resolveJsonSchema({ $ref: '#/$defs/bad' }, root), true);
+	assert.equal(resolveJsonSchema({ $ref: '#/$defs/list' }, root), true);
+	assert.equal(resolveJsonSchema({ $ref: '#/$defs/list/0' }, root), true);
+});

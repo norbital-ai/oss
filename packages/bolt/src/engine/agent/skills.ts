@@ -39,7 +39,8 @@ where crosses a declared layer: { "<one>": { "is": { … } } }, { "<many>": { "s
 lookup: a value may be a variable, a typed CEL expression: { "var": "requestor.id" } (the person you act for),
 { "var": "today - days(7)" }, { "var": "startOfMonth(today)" } or { "var": "now - hours(1)" }. To list rows, read them
 with a limit.
-Count, total or group with aggregate, never by paging rows. Several unrelated models are several roots of one call.
+Count, total, rank or group with aggregate, never by paging rows or adding them up yourself; what aggregate cannot give
+is run_js over the rows. search is only for words the person asked to find: filter by values with where. Several unrelated models are several roots of one call.
 
 ## Writing
 A write is "<model>.<verb>" with an array of rows, committed together (a large or computed batch is a JSON file run_js

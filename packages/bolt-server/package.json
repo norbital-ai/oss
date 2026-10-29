@@ -1,6 +1,6 @@
 {
 	"name": "@norbital-ai/bolt-server",
-	"version": "0.0.5",
+	"version": "0.0.6",
 	"description": "An example untethered Bolt host: one workspace artifact served on its own facility adapters.",
 	"type": "module",
 	"sideEffects": false,
@@ -26,6 +26,7 @@
 	"dependencies": {
 		"@effect/platform-node": "catalog:",
 		"@norbital-ai/bolt": "workspace:*",
+		"@norbital-ai/bolt-cli": "workspace:*",
 		"@norbital-ai/providers": "workspace:*",
 		"@norbital-ai/std": "workspace:*",
 		"@norbital-ai/store": "workspace:*",

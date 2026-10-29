@@ -45,6 +45,24 @@ function liveFixture(): Plugin {
 	};
 }
 
+/** `@norbital-ai/bolt` and its subpaths as this source: one copy of every module for the suite and bolt-cli's source. */
+const SOURCE = Object.entries({
+	'': 'index',
+	'/artifact': 'engine/artifact/read',
+	'/engine': 'engine/index',
+	'/errors': 'decl/errors',
+	'/facilities': 'facilities/index',
+	'/guest-hooks': 'node/guest-hooks',
+	'/host-api': 'protocol/host-api',
+	'/node': 'node/index',
+	'/protocol': 'protocol/index',
+	'/tooling': 'tooling/index',
+	'/tooling/browser': 'tooling/browser'
+}).map(([subpath, file]) => ({
+	find: new RegExp(`^@norbital-ai/bolt${subpath}$`),
+	replacement: fileURLToPath(new URL(`./src/${file}.ts`, import.meta.url))
+}));
+
 // One Node project (unit and PGlite files alike, a minute's hang guard) and the browser project
 // (https://vitest.dev/guide/browser/): one headless Chromium shared by its files. Each project is self-contained
 // (`extends: false`): none inherits the root's plugins or test options.
@@ -64,7 +82,11 @@ export default defineConfig({
 			{
 				extends: false,
 				plugins: [svelte()],
-				resolve: { conditions: ['svelte', 'browser'] },
+				resolve: {
+					conditions: ['svelte', 'browser'],
+					// bolt-cli's test kit and guest runner, which the suite imports from source, read this source
+					alias: SOURCE
+				},
 				test: {
 					name: 'node',
 					environment: 'node',
@@ -78,7 +100,6 @@ export default defineConfig({
 					},
 					include: ['tests/*.test.ts'],
 					exclude: ['build/**', '.norbital/**', 'tests/*.browser.test.ts'],
-					// forks: isolated-vm aborts the process when a worker thread holding isolates is torn down
 					pool: 'forks',
 					isolate: false,
 					testTimeout: 60_000,
@@ -89,6 +110,7 @@ export default defineConfig({
 			{
 				extends: false,
 				plugins: [liveFixture(), svelte(), tailwindcss()],
+				resolve: { alias: SOURCE },
 				optimizeDeps: { include: ['@norbital-ai/ui > leaflet'] },
 				test: {
 					name: 'browser',

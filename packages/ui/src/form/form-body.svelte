@@ -191,7 +191,8 @@
 		<div role="status" aria-busy="true"><Spinner /></div>
 	{:else}
 		<div class="min-h-0 flex-1 overflow-auto pb-4" data-form-body>
-			<div class="grid gap-4">
+			<!-- a column the body's height bounds: open sections share it and scroll inside themselves -->
+			<div class="flex h-full flex-col gap-4">
 				{#if form.capabilities === null}<Alert variant="secondary">{t('notFound')}</Alert>{/if}
 				{#if children}
 					{@render children(form)}

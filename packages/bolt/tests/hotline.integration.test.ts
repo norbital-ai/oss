@@ -13,7 +13,7 @@ import { actReply, qReply, routeFixture } from './support/route-fixture.ts';
 import type { Json } from '../src/decl/values.ts';
 import type { AiResponse, AiRequest } from '../src/engine/contracts.ts';
 import type { EngineManifest } from '../src/engine/manifest.ts';
-import { respondSystem1, TestWorkspace } from '../src/test/index.ts';
+import { respondSystem1, TestWorkspace } from '../../bolt-cli/src/test/index.ts';
 
 const present = <A>(value: A | null | undefined): A => {
 	if (value === null || value === undefined) throw new Error('Missing fixture value');

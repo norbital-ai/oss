@@ -3,6 +3,7 @@
 import type { EngineManifest } from '../src/engine/manifest.ts';
 import type { Pred } from '@norbital-ai/store';
 import type {
+	Arm,
 	Authority,
 	ModelAuthority,
 	DeleteArm,
@@ -54,7 +55,11 @@ export const manifest: EngineManifest = {
 			},
 			create: { columns: { orders: ['title', 'note', 'status'], 'orders.lines': lineCols } },
 			update: {
-				columns: { orders: ['title', 'note', 'status'], 'orders.lines': lineCols, 'orders.tags': [] }
+				columns: {
+					orders: ['title', 'note', 'status'],
+					'orders.lines': lineCols,
+					'orders.tags': []
+				}
 			},
 			delete: {}
 		},
@@ -93,36 +98,28 @@ export const member: EngineActor = {
 	party: null
 };
 /** A read (or history) arm of policy `p`. */
-const arm = (where: Pred = TRUE, fields: readonly string[] | 'all' = 'all') => ({
-	policy: 'p',
-	where,
-	fields
-});
+const arm = (where: Pred = TRUE): Arm => ({ policy: 'p', where });
 /** A create or update arm of policy `p`: the columns it admits per write path, and whether `p` declares its `check`. */
-export const writeArm = (
-	columns: WriteArm['columns'],
-	check = false,
-	policy = 'p'
-): WriteArm => ({ policy, columns, check });
+export const writeArm = (columns: WriteArm['columns'], check = false, policy = 'p'): WriteArm => ({
+	policy,
+	columns,
+	check
+});
 /** A delete arm of policy `p`. */
 export const deleteArm = (check = false, policy = 'p'): DeleteArm => ({ policy, check });
 /**
  * `model`'s access points under policy `p` (decision 3): its root read in full, and create, update and delete admitting
  * every column the model declares per write path, with no `check` (an arm without one allows).
  */
-export const grants = (
-	model: string,
-	over: Partial<ModelAuthority> = {}
-): ModelAuthority => {
+export const grants = (model: string, over: Partial<ModelAuthority> = {}): ModelAuthority => {
 	const spec = manifest.exposures[model];
 	return {
-		read: { [model]: [arm()] },
+		read: { default: { [model]: [arm()] } },
 		history: [],
 		create: spec?.create === undefined ? [] : [writeArm(spec.create.columns)],
 		update: spec?.update === undefined ? [] : [writeArm(spec.update.columns)],
 		delete: spec?.delete === undefined ? [] : [deleteArm()],
 		moves: { status: 'all' },
-		masks: {},
 		...over
 	};
 };

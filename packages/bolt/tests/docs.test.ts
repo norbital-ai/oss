@@ -1,4 +1,4 @@
-// The API reference (§7.3): `src/cli/docs.ts` writes it into `build/docs/` at the end of bolt's build, so this reads
+// The API reference (§7.3): `scripts/docs.ts` writes it into `build/docs/` at the end of bolt's build, so this reads
 // the corpus the last build produced (`pnpm --dir oss build` first). Every symbol a workspace imports has a summary;
 // declaration functions carry their option shapes; the agent's `docs` tool reads the same corpus.
 import { expect, it } from '@effect/vitest';
@@ -19,7 +19,7 @@ it('one namespace per public entry, with its module and the entry summary', () =
 		expect.arrayContaining([
 			'bolt',
 			'bolt/page',
-			'bolt/test',
+			'bolt-cli/test',
 			'ui',
 			'ui/layout',
 			'std/date',
@@ -35,7 +35,7 @@ it('one namespace per public entry, with its module and the entry summary', () =
 		expect(n.summary, n.namespace).not.toBe('');
 });
 
-it('the declaration functions and native mask guard are documented, and spec parameters list their fields', () => {
+it('the declaration functions are documented, and spec parameters list their fields', () => {
 	const fns = docs
 		.namespace('bolt')!
 		.symbols.filter((s) => s.kind === 'function')
@@ -46,10 +46,10 @@ it('the declaration functions and native mask guard are documented, and spec par
 		'customField',
 		'envoy',
 		'group',
+		'idOf',
 		'instanceId',
 		'integration',
 		'isInstance',
-		'isMasked',
 		'jsonDiff',
 		'kiosk',
 		'mcp',
@@ -58,6 +58,7 @@ it('the declaration functions and native mask guard are documented, and spec par
 		'pageServer',
 		'policy',
 		'secrets',
+		'seeder',
 		'team',
 		'workspace'
 	]);

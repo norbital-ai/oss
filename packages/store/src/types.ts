@@ -758,9 +758,9 @@ type Metric<S extends AnySchema, T, Q, Fn extends string> = Q extends {
 	: {};
 type Buckets<Q> = Q extends { by: infer B } ? (B extends readonly (infer E)[] ? E : B) : never;
 type BucketField<B> = B extends string ? B : B[keyof B];
-/** Exactly the metrics the query asks for; nullable metrics account for an empty input. */
+/** Exactly the metrics the query asks for (a grouped query always counts); nullable metrics account for an empty input. */
 export type AggregateRow<S extends AnySchema, T, Q> = Simplify<
-	(Q extends { count: true } ? { readonly count: number } : {}) &
+	(Q extends { count: true } | { by: unknown } ? { readonly count: number } : {}) &
 		Metric<S, T, Q, 'sum'> &
 		Metric<S, T, Q, 'avg'> &
 		Metric<S, T, Q, 'min'> &

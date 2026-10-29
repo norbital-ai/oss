@@ -142,22 +142,11 @@ const UI_TEXT = {
 	searchCommands: 'Type / for a command',
 	schemaField: 'Field',
 	schemaKey: 'Key',
-	schemaKeyHelp: "Dotted key; [] steps into a list's items, e.g. lines[].amount",
 	schemaType: 'Type',
 	schemaLabel: 'Label',
 	schemaValues: 'Allowed values',
-	schemaValuesHelp: 'Comma-separated: a, b, c',
 	schemaHelp: 'Description',
-	schemaValue: 'Value',
-	schemaNone: 'No fields',
-	schemaItem: 'Each item',
-	typeString: 'Text',
-	typeDate: 'Date',
-	typeNumber: 'Number',
-	typeInteger: 'Whole number',
-	typeBoolean: 'Yes / no',
-	typeObject: 'Group',
-	typeArray: 'List'
+	schemaValue: 'Value'
 } as const;
 /** A key of the kit's own chrome strings. */
 export type UiTextKey = keyof typeof UI_TEXT;

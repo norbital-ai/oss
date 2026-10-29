@@ -86,11 +86,11 @@ Consequences you can rely on:
 
 `AppShell` is the root of every app (see [app-structure.md](app-structure.md)). Its body:
 
-| `AppShell` body holds                      | Write                                                  |
-| ------------------------------------------ | ------------------------------------------------------ |
-| one view (`Table`, `Board`, `Matrix`)      | `AppShell` (default `page` variant pads) + the surface |
-| `Tabs`                                     | `AppShell variant="full"` + `Tabs` — the panels pad    |
-| flowing content (cards, charts, summaries) | `AppShell variant="full"` + `<Scroll name="…" inset>`  |
+| `AppShell` body holds                      | Write                                                             |
+| ------------------------------------------ | ----------------------------------------------------------------- |
+| one view (`Table`, `Board`, `Matrix`)      | `AppShell` (default `page` variant pads) + the surface            |
+| `Tabs`                                     | `AppShell variant="full"` + `Tabs` — the panels pad               |
+| flowing content (cards, charts, summaries) | `AppShell variant="full"` + `<Scroll name="…" size="fill" inset>` |
 
 ```svelte
 <!-- Tabs: each panel pads; a panel that scrolls its own content claims the inset for its Scroll. -->
@@ -99,7 +99,7 @@ Consequences you can rely on:
 </AppShell>
 
 {#snippet overview()}
-	<Scroll name="Overview" inset>…</Scroll> <!-- claims the panel's inset: the Scroll pads -->
+	<Scroll name="Overview" size="fill" inset>…</Scroll> <!-- claims the panel's inset: the Scroll pads -->
 {/snippet}
 
 {#snippet profiles()}

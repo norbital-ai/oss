@@ -1,6 +1,6 @@
 # Releasing
 
-All seven public packages carry one version, taken from the workspace manifest, and move together.
+All public packages carry one version, taken from the workspace manifest, and move together.
 A package change on `main` publishes the complete set to GitHub Packages so internal package
 versions and archive integrity stay coherent.
 

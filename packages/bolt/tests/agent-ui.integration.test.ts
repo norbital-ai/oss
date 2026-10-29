@@ -18,7 +18,7 @@ import { conversationId } from '../src/engine/conversations/store.ts';
 import { Authorities } from '../src/engine/identity/actor.ts';
 import { instanceMessages } from '../src/shell/integration/messages.ts';
 import { xlsxCells, xlsxSheets } from '../src/engine/files/xlsx.ts';
-import { respondSystem1, TestWorkspace } from '../src/test/index.ts';
+import { respondSystem1, TestWorkspace } from '../../bolt-cli/src/test/index.ts';
 
 const manifest = Result.getOrThrow(
 	decodeProjectedManifest({

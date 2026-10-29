@@ -26,15 +26,25 @@ import {
 	type EngineError
 } from '../engine/errors.ts';
 import { BoltError, CODE } from './errors.ts';
-import { addressBucket, chargesFor, macKey, RateWindows } from '../engine/access/rate.ts';
+import {
+	addressBucket,
+	chargesFor,
+	macKey,
+	OPEN_WINDOWS_SQL,
+	OpenWindow,
+	RateWindows,
+	resetAfter,
+	type Charge
+} from '../engine/access/rate.ts';
 import { loadKeys } from '../engine/identity/session.ts';
-import { admitVisitor, parseCallable } from '../engine/callables/index.ts';
+import { admitVisitor, parseCallable, startCharge } from '../engine/callables/index.ts';
 import { AgentBackground, agentCallables, conversationFor } from '../engine/agent/callables.ts';
 import { isStaff, transcriptRow } from '../engine/agent/schema.ts';
 import { mcpServers } from '../engine/agent/mcp.ts';
 import { agentSettings, allowedModel, spent } from '../engine/agent/settings.ts';
 import { convertDocument } from '../engine/facilities.ts';
 import { lowerRead } from '../engine/query/engine.ts';
+import { readsAny, viewOutput } from '../engine/access/authority.ts';
 import { fingerprint, schemaSlice } from '../engine/schema/plan.ts';
 import { recordCapabilities, transformBridge } from '../engine/write/act.ts';
 import { restorePreview, restoreRecord } from '../engine/write/restore.ts';
@@ -71,6 +81,7 @@ import {
 	INTEGRATIONS,
 	PATHS,
 	noticePath,
+	RATE_LIMITED,
 	redact,
 	statusOf,
 	uuidv7Within,
@@ -131,8 +142,15 @@ export class RateLimits extends Context.Service<
 	static readonly layer = Layer.effect(
 		RateLimits,
 		Effect.gen(function* () {
-			const windows = yield* Ref.make(new RateWindows());
-			const keys = yield* loadKeys(yield* TenantDb);
+			const db = yield* TenantDb;
+			// a cell taking a tenant restores its persisted open windows, so a restart does not reset the acts' buckets
+			const loaded = new RateWindows();
+			loaded.load(
+				yield* db.rows(OpenWindow, { text: OPEN_WINDOWS_SQL, params: [] }),
+				yield* Clock.currentTimeMillis
+			);
+			const windows = yield* Ref.make(loaded);
+			const keys = yield* loadKeys(db);
 			return {
 				ipBucket: (address: string) => macKey(keys.ipMac, addressBucket(address)),
 				charge: (charges: Parameters<RateWindows['charge']>[0], now: number) =>
@@ -142,6 +160,12 @@ export class RateLimits extends Context.Service<
 	);
 }
 
+/** Every `rateLimited` refusal on the wire: one message and `Retry-After`. */
+export const rateLimitedResponse = (retryAfter: number) =>
+	HttpServerResponse.jsonUnsafe(
+		{ error: { code: 'rateLimited', message: RATE_LIMITED } },
+		{ status: 429, headers: { 'retry-after': String(retryAfter) } }
+	);
 export const requestUrl = (request: HttpServerRequest.HttpServerRequest) =>
 	new URL(request.url, 'http://bolt.local');
 export const header = (request: HttpServerRequest.HttpServerRequest, name: string) =>
@@ -228,11 +252,23 @@ const JsonObject = Schema.Record(Schema.String, Schema.Json);
 type ActRateAdmission = {
 	readonly verdict: ReturnType<RateWindows['charge']>;
 	readonly charges: readonly RateCharge[];
+	/** Seconds until every charged window resets: the `Retry-After` of a refusal the statement decides. */
+	readonly resetAfter: number;
 };
 const actAdmissions = new WeakMap<
 	HttpServerRequest.HttpServerRequest,
 	Effect.Effect<ActRateAdmission, EngineError, RateLimits>
 >();
+/**
+ * Whom a `per: 'actor'` limit counts: a member, else a visitor's IP. An anonymous user is an identity for ownership and
+ * linking, never a rate bucket: one client could mint many, and its IP is what it cannot change cheaply.
+ */
+const individual = (authority: Authority, ip: () => string): string | undefined =>
+	authority.actor.kind === 'member'
+		? authority.actor.id
+		: authority.actor.kind === 'visitor'
+			? ip()
+			: undefined;
 /** Shell admission and dispatch share one charge; direct protocol hosts use the same native peer address. */
 export const requestActRate = Effect.fn('protocol.requestActRate')(function* (
 	request: HttpServerRequest.HttpServerRequest,
@@ -244,27 +280,26 @@ export const requestActRate = Effect.fn('protocol.requestActRate')(function* (
 		Effect.gen(function* () {
 			const now = yield* Clock.currentTimeMillis;
 			const limits = yield* RateLimits;
-			const ip = authority.limits.some((rule) => rule.per === 'ip')
-				? limits.ipBucket(Option.getOrElse(request.remoteAddress, () => '0.0.0.0'))
-				: undefined;
+			const address = () =>
+				limits.ipBucket(Option.getOrElse(request.remoteAddress, () => '0.0.0.0'));
+			const ip = authority.limits.some((rule) => rule.per === 'ip') ? address() : undefined;
+			const actor = individual(authority, address);
 			const who = {
-				...(authority.actor.kind === 'member' ? { actor: authority.actor.id } : {}),
+				...(actor === undefined ? {} : { actor }),
 				...(ip === undefined ? {} : { ip })
 			};
-			const common = chargesFor(
-				authority,
-				['act', ...(authority.actor.kind === 'visitor' ? ['register'] : [])],
-				who
-			);
-			const persistent = (charges: ReturnType<typeof chargesFor>): readonly RateCharge[] =>
-				charges.map((charge) => ({
+			const common = chargesFor(authority, ['act'], who);
+			const persistent = (charges: readonly Charge[]) => ({
+				charges: charges.map((charge) => ({
 					rule: charge.rule,
 					bucket: charge.bucket,
 					limit: charge.limit,
 					windowStart: new Date(now - (now % charge.windowMs)).toISOString()
-				}));
+				})),
+				resetAfter: resetAfter(charges, now)
+			});
 			const verdict = yield* limits.charge(common, now);
-			if (!verdict.ok) return { verdict, charges: persistent(common) };
+			if (!verdict.ok) return { verdict, ...persistent(common) };
 			const body = yield* requestBody(request, ActBody);
 			const named = chargesFor(
 				authority,
@@ -276,7 +311,7 @@ export const requestActRate = Effect.fn('protocol.requestActRate')(function* (
 			);
 			return {
 				verdict: yield* limits.charge(named, now),
-				charges: persistent([...common, ...named])
+				...persistent([...common, ...named])
 			};
 		})
 	);
@@ -284,6 +319,12 @@ export const requestActRate = Effect.fn('protocol.requestActRate')(function* (
 	return yield* admission;
 });
 /** Public page loaders and wire reads obey the same visitor surface restrictions. */
+/** One record as the caller's generic views read it: through its view output (`default` when held). */
+const viewGet = (m: EngineManifest, authority: Authority, model: string, id: string): ReadIR => {
+	const read = lowerRead(m, 'get', [model, id]),
+		output = viewOutput(m, authority, model);
+	return read.kind === 'get' && output !== undefined ? { ...read, output } : read;
+};
 export const readAdmitted = (
 	authority: Authority,
 	read:
@@ -307,20 +348,27 @@ const readAdmissions = new WeakMap<
 	HttpServerRequest.HttpServerRequest,
 	Effect.Effect<ReturnType<RateWindows['charge']>, never, RateLimits>
 >();
-/** Charge one visitor read request before decoding or running its loader. */
+/** Charge one read request (`/q`, a live registration, a page loader) once, before decoding or running it. */
 export const requestReadRate = Effect.fn('protocol.requestReadRate')(function* (
 	request: HttpServerRequest.HttpServerRequest,
 	authority: Authority
 ) {
-	if (authority.actor.kind !== 'visitor') return { ok: true } as const;
 	const existing = readAdmissions.get(request);
 	if (existing !== undefined) return yield* existing;
 	const admission = yield* Effect.cached(
 		Effect.gen(function* () {
 			const limits = yield* RateLimits;
+			const address = () =>
+				limits.ipBucket(Option.getOrElse(request.remoteAddress, () => '0.0.0.0'));
+			const ip =
+				authority.actor.kind === 'visitor' || authority.limits.some((rule) => rule.per === 'ip')
+					? address()
+					: undefined;
+			const actor = individual(authority, address);
 			return yield* limits.charge(
 				chargesFor(authority, ['read'], {
-					ip: limits.ipBucket(Option.getOrElse(request.remoteAddress, () => '0.0.0.0'))
+					...(actor === undefined ? {} : { actor }),
+					...(ip === undefined ? {} : { ip })
 				}),
 				yield* Clock.currentTimeMillis
 			);
@@ -368,16 +416,15 @@ export const dispatchAct = Effect.fn('protocol.dispatchAct')(function* (
 	const m = yield* Manifest,
 		live = yield* Live,
 		b = yield* bindings;
+	const limited = (retryAfter: number) =>
+		Effect.map(live.v, (v) => ({
+			outcome: { kind: 'refused', code: 'rateLimited', message: RATE_LIMITED } satisfies Outcome,
+			v,
+			retryAfter
+		}));
 	const admitted = request === undefined ? undefined : yield* requestActRate(request, authority);
 	if (admitted !== undefined && !admitted.verdict.ok)
-		return {
-			outcome: {
-				kind: 'refused',
-				code: 'rateLimited',
-				message: `Too many requests; retry in ${admitted.verdict.retryAfter} s.`
-			} satisfies Outcome,
-			v: yield* live.v
-		};
+		return yield* limited(admitted.verdict.retryAfter);
 	const own = yield* AgentCallTable;
 	const agent = own[call.callable];
 	if (agent !== undefined) {
@@ -393,15 +440,7 @@ export const dispatchAct = Effect.fn('protocol.dispatchAct')(function* (
 				),
 				Date.parse(b.now)
 			);
-			if (!verdict.ok)
-				return {
-					outcome: {
-						kind: 'refused',
-						code: 'rateLimited',
-						message: `Too many requests; retry in ${verdict.retryAfter} s.`
-					} satisfies Outcome,
-					v: yield* live.v
-				};
+			if (!verdict.ok) return yield* limited(verdict.retryAfter);
 		}
 		const output = yield* agent.run(input, authority);
 		return { outcome: committed(output), v: yield* live.v };
@@ -441,6 +480,10 @@ export const dispatchAct = Effect.fn('protocol.dispatchAct')(function* (
 						message: 'A run id is a uuidv7 minted within 24 hours.',
 						field: 'id'
 					};
+			if (outcome.kind === 'refused' && outcome.code === 'rateLimited')
+				return yield* limited(
+					resetAfter([startCharge(m, decoded.input.automation, authority)], Date.parse(b.now))
+				);
 		} else if (decoded.callable === 'approvals.decide') {
 			const decision = yield* (yield* Approvals).decide({
 				...decoded.input,
@@ -523,15 +566,7 @@ export const dispatchAct = Effect.fn('protocol.dispatchAct')(function* (
 					),
 					Date.parse(b.now)
 				);
-				if (!verdict.ok)
-					return {
-						outcome: {
-							kind: 'refused',
-							code: 'rateLimited',
-							message: `Too many requests; retry in ${verdict.retryAfter} s.`
-						} satisfies Outcome,
-						v: yield* live.v
-					};
+				if (!verdict.ok) return yield* limited(verdict.retryAfter);
 				const result = yield* filters.describe({
 					model: decoded.input.model,
 					text: decoded.input.text,
@@ -649,6 +684,31 @@ const lower = Effect.fn('protocol.lowerRead')(function* (
 			...(Schema.is(JsonObject)(options) && options['requests'] === true ? { requests: true } : {})
 		};
 	}
+	if (read.m === 'runs') {
+		const o = read.a[0];
+		const options = Schema.is(JsonObject)(o) ? o : {};
+		const automation =
+			typeof options['automation'] === 'string' ? options['automation'] : undefined;
+		const id = typeof options['id'] === 'string' ? options['id'] : undefined;
+		// rule 56: every run is staff's; a holder of an automation (external included) reads its runs; one run by id is
+		// answered as `runView` lets the caller read it
+		if (
+			authority.actor.kind !== 'member' ||
+			(authority.actor.external &&
+				id === undefined &&
+				(automation === undefined || !authority.automations.includes(automation)))
+		)
+			return yield* Effect.fail(BoltError.make('forbidden', 'admission', 'No runs for this member.'));
+		const limit = typeof options['limit'] === 'number' ? options['limit'] : 100;
+		return {
+			kind: 'runs',
+			model: 'sys_run',
+			limit,
+			automation,
+			id,
+			...(options['brief'] === true ? { brief: true } : {})
+		};
+	}
 	return yield* Effect.try({
 		try: () => lowerRead(m, read.m, read.a),
 		catch: (e) => (e instanceof BoltError ? e : invalid(String(e)))
@@ -673,6 +733,8 @@ export const BoltRoutes = {
 			request: HttpServerRequest.HttpServerRequest,
 			authority: Authority
 		) {
+			const rate = yield* requestReadRate(request, authority);
+			if (!rate.ok) return rateLimitedResponse(rate.retryAfter);
 			const body = yield* requestBody(request, QBody);
 			if (body.reads.some((r) => ['transcript', 'inbox', 'conversations'].includes(r.m)))
 				return yield* Effect.fail(invalid('This read is live-only.'));
@@ -718,10 +780,23 @@ export const BoltRoutes = {
 				authority,
 				request
 			).pipe(
-				Effect.map(({ outcome, v }) => ({ outcome: redact(outcome, authority.actor), v })),
 				Effect.provide(yield* Effect.context<Effect.Services<ReturnType<typeof dispatchAct>>>())
 			);
-			return HttpServerResponse.jsonUnsafe(reply, { status: statusOf(reply.outcome) });
+			const outcome = redact(reply.outcome, authority.actor);
+			// every 429 names its wait: a cell's own count says it; a refusal the statement decided waits out its windows
+			const retryAfter =
+				outcome.kind === 'refused' && outcome.code === 'rateLimited'
+					? 'retryAfter' in reply
+						? reply.retryAfter
+						: (yield* requestActRate(request, authority)).resetAfter
+					: undefined;
+			return HttpServerResponse.jsonUnsafe(
+				{ outcome, v: reply.v },
+				{
+					status: statusOf(outcome),
+					...(retryAfter === undefined ? {} : { headers: { 'retry-after': String(retryAfter) } })
+				}
+			);
 		})
 	},
 	[`GET ${PATHS.live}` as const]: {
@@ -792,6 +867,8 @@ export const BoltRoutes = {
 			request: HttpServerRequest.HttpServerRequest,
 			authority: Authority
 		) {
+			const rate = yield* requestReadRate(request, authority);
+			if (!rate.ok) return rateLimitedResponse(rate.retryAfter);
 			const body = yield* requestBody(request, LiveBody),
 				live = yield* Live,
 				owner = yield* live.authorityOf(body.conn);
@@ -942,7 +1019,7 @@ export const BoltRoutes = {
 				b = yield* bindings,
 				m = yield* Manifest;
 			const readable = (model: string, id: string) =>
-				reads.run([lowerRead(m, 'get', [model, id])], { as: 'caller', authority }, b).pipe(
+				reads.run([viewGet(m, authority, model, id)], { as: 'caller', authority }, b).pipe(
 					Effect.map(([row]) => row !== null && row !== undefined),
 					Effect.catchTag('BoltError', () => Effect.succeed(false))
 				);
@@ -1008,7 +1085,7 @@ export const BoltRoutes = {
 				b,
 				(c, i): Effect.Effect<RowData | null, EngineError> =>
 					reads
-						.run([lowerRead(m, 'get', [c, i])], { as: 'caller', authority }, b)
+						.run([viewGet(m, authority, c, i)], { as: 'caller', authority }, b)
 						.pipe(Effect.map(([row]) => (Schema.is(JsonObject)(row) ? row : null))),
 				parent
 			);
@@ -1090,9 +1167,9 @@ export const boltRoutes = (request: HttpServerRequest.HttpServerRequest) =>
 
 function openapi(m: EngineManifest, authority: Authority, version: string): Json {
 	const may = (model: string, verb: 'read' | 'create' | 'update' | 'delete') =>
-		authority.admin ||
-		((verb === 'read' ? authority.models[model]?.read[model] : authority.models[model]?.[verb])
-			?.length ?? 0) > 0;
+		verb === 'read'
+			? readsAny(authority, model)
+			: authority.admin || (authority.models[model]?.[verb]?.length ?? 0) > 0;
 	const exposed = Object.keys(m.exposures);
 	const callables = [
 		...exposed.flatMap((model) =>

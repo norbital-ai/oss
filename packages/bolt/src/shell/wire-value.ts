@@ -7,7 +7,6 @@ import { Array as Arr, Result } from 'effect';
 export function displayWireValue(value: Json): Value {
 	if (value === null || typeof value !== 'object') return value;
 	if (Arr.isArray<Json>(value)) return value.map(displayWireValue);
-	if (value['$masked'] === true) return value;
 	// Historical or ordinary JSON may contain invalid tags: retain them instead of failing the whole viewer.
 	if (Object.keys(value).length === 1 && typeof value['$dec'] === 'string') {
 		const revived = Result.try({ try: () => reviveWire('', value), catch: () => undefined });

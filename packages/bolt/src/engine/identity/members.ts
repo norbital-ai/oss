@@ -185,7 +185,7 @@ export const invite = Effect.fn('Bolt.invite')(function* (
 		);
 	return { id: result.ids[0]! };
 });
-/** Validate the entire batch before saving; all invitations and their automation events commit together. */
+/** Validate the entire batch before saving; all invitations commit together. */
 export const inviteMany = Effect.fn('Bolt.inviteMany')(function* (
 	h: IdentityHost,
 	m: EngineManifest,
@@ -214,7 +214,7 @@ export const inviteMany = Effect.fn('Bolt.inviteMany')(function* (
 		prepared.push({ input, to, id: yield* newId(h.crypto) });
 	}
 	const now = yield* h.now,
-		s = new IdentityStatement({ ...h, events: h.events ?? { manifest: m, announce: Effect.void } });
+		s = new IdentityStatement({ ...h, events: h.events ?? { announce: Effect.void } });
 	const values = prepared.map(
 		({
 			input,

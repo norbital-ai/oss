@@ -19,11 +19,13 @@ export const subscribe = (user: string, body: PushBody) =>
 				text: `DELETE FROM bolt_push_subscriptions WHERE "user" = $1 AND endpoint = $2`,
 				params: [user, body.endpoint]
 			});
-		const id = yield* (yield* Crypto.Crypto).randomUUIDv4().pipe(
-			Effect.mapError((error) =>
-				BoltError.make('unavailable', 'facility', 'Secure random UUID generation failed.', error)
-			)
-		);
+		const id = yield* (yield* Crypto.Crypto)
+			.randomUUIDv4()
+			.pipe(
+				Effect.mapError((error) =>
+					BoltError.make('unavailable', 'facility', 'Secure random UUID generation failed.', error)
+				)
+			);
 		return yield* db.write({
 			text: `WITH gone AS (DELETE FROM bolt_push_subscriptions WHERE endpoint = $3) INSERT INTO bolt_push_subscriptions (id, "user", endpoint, keys, kind) VALUES ($1, $2, $3, $4::jsonb, $5)`,
 			params: [id, user, body.endpoint, JSON.stringify(body.keys), body.kind ?? 'web']

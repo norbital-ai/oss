@@ -111,7 +111,7 @@ export async function viewFixture(extra: Partial<ViewScript> = {}) {
 	const script: ViewScript = {
 		read: () => ({ rows: [], next: null }),
 		get: () => null,
-		aggregate: () => [],
+		aggregate: (_model, options) => (options.by === undefined ? null : { rows: [], next: null }),
 		history: () => [],
 		act: () => ({ kind: 'committed', output: null, records: [] }),
 		...extra

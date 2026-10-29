@@ -33,8 +33,10 @@ import {
 	type HostTool,
 	type HostToolContext,
 	type ToolContext,
-	type WorkspacePort
+	type WorkspacePort,
+	workspaceSchema
 } from '../src/engine/agent/tools.ts';
+import { compileAuthority } from '../src/engine/access/authority.ts';
 import { TenantDb, type RawDb } from '../src/engine/db/tenant-db.ts';
 import type { EngineManifest } from '../src/engine/manifest.ts';
 import { Port } from '../src/engine/port.ts';
@@ -44,7 +46,7 @@ import { REFERENCE } from '../src/engine/agent/run-js.ts';
 import { BOUNDS } from '../src/engine/agent/context.ts';
 import { treeDigest } from '../src/engine/artifact/read.ts';
 import { Approvals, Callables, Live, Reads, Writes } from '../src/engine/services.ts';
-import { TestWorkspace } from '../src/test/effect.ts';
+import { TestWorkspace } from '../../bolt-cli/src/test/effect.ts';
 import { toolSchema } from '../src/engine/agent/ai.ts';
 import { actorRef } from '../src/engine/write/commit.ts';
 
@@ -65,7 +67,19 @@ const member = (
 	},
 	admin: o.admin ?? false,
 	policies: [],
-	models: {},
+	// an administrator reads every output of every workspace model, as `compileAuthority` grants it
+	models:
+		o.admin === true
+			? compileAuthority(
+					manifest,
+					{
+						actor: { kind: 'system', run: 'r', by: { platform: 'test' } },
+						admin: true,
+						policies: []
+					},
+					'k'
+				).models
+			: {},
 	automations: [],
 	capabilities: { apps: [], tools: o.tools ?? [], mcp: [], skills: [] },
 	limits: [],
@@ -442,6 +456,113 @@ describe('fewer calls for the common paths', () => {
 					result: { tasks: { model: 'tasks', fields: { title: expect.any(String) } } }
 				});
 				expect(reads).toHaveLength(0);
+				// describe beside read options is the read the model meant: rows, not the shape
+				expect(
+					yield* result(x, 'read', {
+						tasks: { describe: true, aggregate: { count: true, by: 'title' } }
+					})
+				).toMatchObject({ result: { tasks: { rows: [] } } });
+				expect(reads).toHaveLength(1);
+			})
+	);
+	it.effect(
+		'read names one output per root; the schema and describe answer per output the caller holds',
+		() =>
+			Effect.gen(function* () {
+				const reads: Parameters<AgentEngine['read']>[0][number][] = [];
+				const outputs: EngineManifest = {
+					...manifest,
+					models: {
+						tasks: {
+							...manifest.models.tasks!,
+							fields: { title: { kind: 'text' }, cost: { kind: 'int' } }
+						}
+					},
+					exposures: {
+						tasks: {
+							read: { tasks: { fields: 'all' } },
+							outputs: { brief: { tasks: { fields: ['title'] } } }
+						}
+					},
+					policies: {
+						viewer: { description: '', grants: { tasks: { outputs: { brief: true } } } }
+					}
+				};
+				const viewer = compileAuthority(
+					outputs,
+					{ actor: member().actor, admin: false, policies: ['viewer'] },
+					'v'
+				);
+				const x = yield* ctx(
+					{ authority: viewer },
+					{
+						manifest: outputs,
+						read: (irs) =>
+							Effect.sync(() => {
+								reads.push(...irs);
+								return [{ tasks: { rows: [] } }];
+							})
+					}
+				);
+				// the schema lists the one output held, by name, with only its fields
+				const schema = workspaceSchema(outputs, viewer) ?? '';
+				expect(schema).toContain('- tasks output "brief" (A task): title text');
+				expect(schema).not.toContain('cost');
+				// describe of a named output: its fields alone
+				expect(yield* result(x, 'read', { tasks: { describe: true, output: 'brief' } })).toEqual({
+					result: { tasks: { model: 'tasks', output: 'brief', fields: { title: 'text' } } }
+				});
+				// the read names its output; the engine reads it
+				yield* result(x, 'read', { tasks: { output: 'brief' } });
+				expect(JSON.stringify(reads)).toContain('"output":"brief"');
+				// an administrator reads every output: describe of default names both
+				const admin = compileAuthority(
+					outputs,
+					{ actor: member({ admin: true }).actor, admin: true, policies: [] },
+					'a'
+				);
+				const y = yield* ctx({ authority: admin }, { manifest: outputs });
+				expect(yield* result(y, 'read', { tasks: { describe: true } })).toMatchObject({
+					result: {
+						tasks: { outputs: ['default', 'brief'], fields: { title: 'text', cost: 'int' } }
+					}
+				});
+			})
+	);
+	it.effect(
+		"read is the client's read: its options and defaults, its page answered with its next cursor",
+		() =>
+			Effect.gen(function* () {
+				const reads: Parameters<AgentEngine['read']>[0][number][] = [];
+				const page = { tasks: { rows: [{ id: 'a', title: 'Fix the van' }], next: 'cursor' } };
+				const x = yield* ctx(
+					{},
+					{
+						read: (irs) =>
+							Effect.sync(() => {
+								reads.push(...irs);
+								return [page];
+							})
+					}
+				);
+				expect(yield* result(x, 'read', { tasks: { search: '', after: 'c0' } })).toMatchObject({
+					result: page
+				});
+				// no agent default limit and no dropped option: the request is lowered as the client's is
+				const sent = JSON.stringify(reads);
+				expect(sent).toContain('"limit":10000,"after":"c0"');
+				const schema = JSON.stringify(toolSchema(yield* requiredTool(x, 'read')));
+				for (const option of [
+					'where',
+					'fields',
+					'orderBy',
+					'limit',
+					'after',
+					'search',
+					'aggregate',
+					'asOf'
+				])
+					expect(schema).toContain(`"${option}"`);
 			})
 	);
 	it.effect(
@@ -629,6 +750,145 @@ describe('workspace_search', () => {
 			})
 	);
 });
+describe('reading the source is every staff member’s; changing it is an administrator’s', () => {
+	const source: { [path: string]: string } = {
+		'src/data/model/tasks/+model.ts': "model('tasks', {})",
+		'src/data/model/payroll/+model.ts': "model('payroll', {})",
+		'src/access_control/team/+team.ts': 'export default {}'
+	};
+	const workspace: WorkspacePort = {
+		files: async () => Object.keys(source),
+		read: async (path) => source[path] ?? null
+	};
+	const host = (name: string, o: Partial<HostTool> = {}): HostTool => ({
+		name,
+		description: name,
+		input: { type: 'object', properties: {} },
+		call: async () => ({ ok: name }),
+		...o
+	});
+	const hostTools = [
+		host('workspace_lang', { readOnly: true, source: true }),
+		host('workspace_write', { studio: 'preview' }),
+		host('workspace_build', { readOnly: true, studio: 'logs' }),
+		host('web_search', { readOnly: true })
+	];
+	// a member whose policy reads tasks and nothing else
+	const reader = compileAuthority(
+		{
+			...manifest,
+			policies: { staff: { description: '', grants: { tasks: { read: true } } } }
+		},
+		{ actor: member().actor, policies: ['staff'], admin: false },
+		'reader'
+	);
+	it.effect(
+		'a member without admin reads the source of the models they read and the read-only source tools, never a mutating one',
+		() =>
+			Effect.gen(function* () {
+				const x = yield* ctx({ workspace, hostTools, authority: reader });
+				const offered = yield* names(x);
+				expect(offered).toEqual(
+					expect.arrayContaining(['workspace_search', 'workspace_list', 'workspace_lang'])
+				);
+				for (const mutating of ['workspace_write', 'workspace_build', 'web_search'])
+					expect(offered).not.toContain(mutating);
+				expect(yield* result(x, 'workspace_lang', {})).toMatchObject({
+					result: { ok: 'workspace_lang' }
+				});
+				expect(yield* result(x, 'workspace_list', { path: 'src/data/model/' })).toEqual({
+					result: { path: 'src/data/model/', entries: ['tasks/'] }
+				});
+				expect(
+					yield* result(x, 'workspace_search', { path: 'src/data/model/payroll/+model.ts' })
+				).toMatchObject({ result: { error: expect.stringContaining('No file') } });
+				expect(yield* result(x, 'workspace_search', { text: 'model(' })).toMatchObject({
+					result: { total: 1, hits: [{ path: 'src/data/model/tasks/+model.ts' }] }
+				});
+				// an administrator holds every host tool and reads all of the source
+				const admin = yield* ctx({ workspace, hostTools, authority: member({ admin: true }) });
+				expect(yield* names(admin)).toEqual(
+					expect.arrayContaining(['workspace_lang', 'workspace_write', 'workspace_build'])
+				);
+				expect(yield* result(admin, 'workspace_search', { text: 'model(' })).toMatchObject({
+					result: { total: 2 }
+				});
+				// a host tool that changes something is never a source tool, whatever it claims
+				const claims = yield* ctx({
+					workspace,
+					hostTools: [host('workspace_merge', { source: true, studio: 'merge' })],
+					authority: reader
+				});
+				expect(yield* names(claims)).not.toContain('workspace_merge');
+			})
+	);
+	it.effect(
+		'an administrator in no team reads the member directory, so a person a document names resolves',
+		() =>
+			Effect.gen(function* () {
+				const holder = member({ admin: true }).actor;
+				const admin = compileAuthority(manifest, { actor: holder, policies: [], admin: true }, 'a');
+				const x = yield* ctx({ authority: admin });
+				const read = yield* requiredTool(x, 'read');
+				expect(JSON.stringify(toolSchema(read))).toContain('"sys_user"');
+				// other built-in models stay a grant's
+				expect(JSON.stringify(toolSchema(read))).not.toContain('"sys_conversation"');
+				expect(workspaceSchema(manifest, admin)).toContain('- sys_user');
+			})
+	);
+});
+describe('read_file on a scanned PDF', () => {
+	it.effect(
+		'one call: the pages are shown as images and the transcription is made from them, never from the PDF file',
+		() =>
+			Effect.gen(function* () {
+				const pdf = new TextEncoder().encode('%PDF-1.7 scan'),
+					pages = [new Uint8Array([1]), new Uint8Array([2])];
+				const transcribed: (readonly { mime: string }[])[] = [];
+				const x = yield* ctx(
+					{
+						attachments: { read: () => Effect.succeed({ mime: 'application/pdf', bytes: pdf }) },
+						documentText: () => Effect.succeed('[Page 1]\n(no extractable text: a scanned page)'),
+						documentPages: (_file, count) => Effect.succeed(pages.slice(0, count)),
+						transcribe: (files) =>
+							Effect.sync(() => {
+								transcribed.push(files);
+								return 'Raw Mat: Makrolon 2807 (handwritten)';
+							})
+					},
+					{
+						db: {
+							read: () =>
+								Effect.succeed([
+									{
+										rows: [{ file: { id: 'f1', name: 'form.pdf', mime: 'application/pdf' } }],
+										affected: 0
+									}
+								])
+						}
+					}
+				);
+				expect(yield* result(x, 'read_file', { id: 'f1' })).toMatchObject({
+					result: {
+						transcript: 'Raw Mat: Makrolon 2807 (handwritten)',
+						attached: expect.stringContaining('its 2 pages are shown to you')
+					}
+				});
+				expect(transcribed).toEqual([
+					[
+						{ mime: 'image/jpeg', bytes: pages[0], id: 'f1#page1' },
+						{ mime: 'image/jpeg', bytes: pages[1], id: 'f1#page2' }
+					]
+				]);
+				expect(x.files.map((f) => f.mime)).toEqual(['image/jpeg', 'image/jpeg']);
+				// asked for again as an image: the same pages, already in view, and no PDF part
+				expect(yield* result(x, 'read_file', { id: 'f1', as: 'image' })).toMatchObject({
+					result: { attached: expect.stringContaining('already shown') }
+				});
+				expect(x.files).toHaveLength(2);
+			})
+	);
+});
 describe('act starts automations', () => {
 	it.effect("act starts an automation or the model's named file and remote syncs", () =>
 		Effect.gen(function* () {
@@ -645,7 +905,7 @@ describe('act starts automations', () => {
 				automations: {
 					tidy: {
 						description: '',
-						runAs: 'trigger',
+						policies: ['staff'],
 						input: { day: { kind: 'date', optional: true } }
 					}
 				}
@@ -826,7 +1086,9 @@ describe('wait', () => {
 													results: [],
 													input: {},
 													actor: null,
-													starter: null
+													starter: null,
+													trigger: null,
+													trigger_name: null
 												}
 											]
 										: []
@@ -1263,7 +1525,7 @@ describe('runs and logs', () => {
 		x.engine.db.write({
 			text: `INSERT INTO sys_run (id, automation, input, due_at, cause, depth, state, attempts, results, error, actor, finished_at) VALUES
 			('r1', 'billing.invoice', '{"month":"09"}', '2026-09-20T01:00:00Z', 'schedule', 0, 'succeeded', 1, '[]', NULL, NULL, '2026-09-20T01:00:05Z'),
-			('r2', 'billing.invoice', '{"month":"10"}', '2026-09-21T01:00:00Z', 'schedule', 0, 'failed', 2, '[{"error":{"code":"timeout"}},{"error":{"code":"guest","message":"boom"}}]', '{"code":"guest","message":"boom"}', NULL, '2026-09-21T01:00:09Z'),
+			('r2', 'billing.invoice', '{"month":"10"}', '2026-09-21T01:00:00Z', 'schedule', 0, 'failed', 2, '[{"attempt":1,"at":"2026-09-21T01:00:04Z","state":"failed","error":{"code":"timeout"}},{"attempt":2,"at":"2026-09-21T01:00:09Z","state":"failed","error":{"code":"guest","message":"boom"}}]', '{"code":"guest","message":"boom"}', NULL, '2026-09-21T01:00:09Z'),
 			('r3', 'billing.dunning', '{}', '2026-09-22T01:00:00Z', 'start', 0, 'queued', 0, '[]', NULL, NULL, NULL),
 			('r4', 'tidy', '{"secret":1}', '2026-09-23T01:00:00Z', 'start', 0, 'stopped', 1, '[]', '{"code":"stopped","message":"The run was stopped."}', $1, '2026-09-23T01:00:01Z'),
 			('r5', 'tidy', '{}', '2026-09-24T01:00:00Z', 'start', 0, 'succeeded', 1, '[]', NULL, 'member:someone-else', NULL)
@@ -1374,6 +1636,30 @@ describe('runs and logs', () => {
 				expect(yield* result(holder, 'runs', { id: 'r5' })).toEqual({
 					result: { error: 'No automation run r5 you may read.' }
 				});
+			})
+	);
+	it.effect(
+		"a run's clipped values name read_output's call id, and the whole run stays for it",
+		() =>
+			Effect.gen(function* () {
+				const x = yield* ctx();
+				const big = { text: 'x'.repeat(6_000) };
+				yield* x.engine.db.write({
+					text: `INSERT INTO sys_run (id, automation, input, due_at, cause, depth, state, attempts, results, error, actor, finished_at)
+				VALUES ('rb', 'billing.invoice', $1::jsonb, '2026-09-25T01:00:00Z', 'start', 0, 'succeeded', 1, '[]', NULL, NULL, NULL)`,
+					params: [JSON.stringify(big)]
+				});
+				const answer = Schema.decodeUnknownSync(
+					Schema.Struct({
+						result: Schema.Struct({ input: Schema.String }),
+						full: Schema.Struct({ input: Schema.Struct({ text: Schema.String }) }),
+						bounded: Schema.Literal(true)
+					})
+				)(yield* result(x, 'runs', { id: 'rb' }));
+				expect(answer.result.input).toMatch(
+					/\.\.\. \[clipped, \d+ bytes; read_output with call id call reads it whole\]$/
+				);
+				expect(answer.full.input.text).toBe(big.text);
 			})
 	);
 	it.effect(

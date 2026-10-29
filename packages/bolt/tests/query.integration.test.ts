@@ -2,13 +2,14 @@ import type { PGlite } from '@electric-sql/pglite';
 import { describe, expect, it } from '@effect/vitest';
 import { Effect, Predicate, Schema } from 'effect';
 import { PgliteDb } from '../src/node/db/pglite.ts';
-import { TestDb } from '../src/test/database.ts';
+import { TestDb } from '../../bolt-cli/src/test/database.ts';
 import { dbError } from '../src/engine/db/wire.ts';
 import { TenantDb, type TenantDbShape } from '../src/engine/db/tenant-db.ts';
 import type { Json } from '../src/decl/values.ts';
 import type { Authority, Reader, RowData } from '../src/engine/contracts.ts';
 import {
 	aggregate,
+	catalogFor,
 	decodeView,
 	where,
 	whereSql,
@@ -19,13 +20,12 @@ import { get, read, type ReadIR } from '../src/protocol/reads.ts';
 import { fromStore, storeSync } from '../src/protocol/errors.ts';
 import { readOptions } from '../src/engine/query/reader.ts';
 import { lowerRead, readEngine, readTargets } from '../src/engine/query/engine.ts';
-import type { EngineManifest } from '../src/engine/manifest.ts';
 import { transformBridge } from '../src/engine/write/act.ts';
 import { LIMITS } from '../src/engine/contracts.ts';
 import { evaluate } from '../src/engine/query/eval.ts';
 import { browserCatalog } from '../src/protocol/catalog.ts';
 import { exposure } from '../src/engine/access/exposure.ts';
-import { DDL, bindings, manifest, rep } from './query.fixture.ts';
+import { DDL, bindings, clerk, manifest, rep } from './query.fixture.ts';
 // ── a PGlite TenantDb: `read` runs its statements in order inside one call ──
 let pg: PGlite;
 let reads = 0,
@@ -317,7 +317,52 @@ describe('next query engine (PGlite)', () => {
 			})
 	);
 	it.live(
-		'K3, rule 11a: grammar-generated predicates decode, round-trip, and agree in SQL and JS for the workspace and a masked caller; a corrupted clause is invalid',
+		"a read request's root page counts every row the reader may see and the filter matches, on every page",
+		() =>
+			Effect.gen(function* () {
+				yield* setup();
+				const counted = Schema.Struct({
+					orders: Schema.Struct({
+						rows: Schema.Array(Schema.Struct({ id: Schema.String })),
+						next: Schema.NullOr(Schema.String),
+						total: Schema.Number
+					})
+				});
+				const page = Effect.fnUntraced(function* (reader: Reader, after?: string) {
+					const [answer] = yield* run(
+						reader,
+						lowerRead(manifest, 'query', [
+							{
+								orders: {
+									where: { status: { ne: 'held' } },
+									fields: ['status'],
+									limit: 2,
+									...(after === undefined ? {} : { after })
+								}
+							}
+						])
+					);
+					return Schema.decodeUnknownSync(counted)(answer).orders;
+				});
+				for (const reader of [caller, workspace]) {
+					const visible = (
+						(yield* run(
+							reader,
+							read(cat, 'orders', { all: true, where: { status: { ne: 'held' } } })
+						))[0] as Page
+					).rows.length;
+					const first = yield* page(reader);
+					expect(first.rows).toHaveLength(2);
+					expect(first.total).toBe(visible);
+					// the cursor moves the page, never the count
+					expect((yield* page(reader, first.next ?? undefined)).total).toBe(visible);
+				}
+				// the policy scopes the count exactly as it scopes the rows
+				expect((yield* page(caller)).total).toBeLessThan((yield* page(workspace)).total);
+			})
+	);
+	it.live(
+		'K3, rule 11a: grammar-generated predicates decode, round-trip, and agree in SQL and JS for the workspace and a scoped caller; a corrupted clause is invalid',
 		() =>
 			Effect.gen(function* () {
 				yield* setup();
@@ -643,7 +688,7 @@ describe('next query engine (PGlite)', () => {
 					s.obj[s.key] = s.rel ? pick([{}, { bogus: {} }]) : pick(BAD);
 					return copy;
 				}
-				// the workspace (unmasked) and a masked caller; an admin reads as the workspace does
+				// the workspace (unscoped) and a scoped caller; an admin reads as the workspace does
 				for (const [reader, authority] of [
 					[workspace, null],
 					[caller, rep]
@@ -667,7 +712,7 @@ describe('next query engine (PGlite)', () => {
 					const inScope = (r: RowData) =>
 						authority === null ||
 						authority.admin ||
-						(authority.models.orders!.read['orders'] ?? []).some((a) =>
+						(authority.models.orders!.read['default']?.['orders'] ?? []).some((a) =>
 							evaluate({ ...env, scoped: false }, 'orders', a.where, r)
 						);
 					let telling = 0;
@@ -824,7 +869,7 @@ describe('next query engine (PGlite)', () => {
 			})
 	);
 	it.live(
-		'rules 11 and 14: a related sort key orders by the target field, pages through it by cursor, and needs the target read unmasked',
+		'rules 11 and 14: a related sort key orders by the target field, pages through it by cursor, and needs the target in the read output',
 		() =>
 			Effect.gen(function* () {
 				yield* setup();
@@ -919,20 +964,32 @@ describe('next query engine (PGlite)', () => {
 						)
 					)
 				).toMatchObject({ code: 'badCursor' });
-				// rule 14: a masked target field, an unread target and a masked FK refuse; the workspace sorts by any of them
+				// rule 14: a target field the output's layer omits and an unread target refuse; the workspace sorts by any of them
+				const brief = storeSync(catalogFor(cat, 'orders', 'brief'));
+				const asClerk = (orderBy: Json) => ({
+					...read(brief, 'orders', { orderBy, limit: 5 }),
+					output: 'brief'
+				});
+				const clerkReads: Reader = { as: 'caller', authority: clerk };
 				expect(
-					yield* Effect.flip(
-						run(caller, read(cat, 'orders', { orderBy: { account: { secret: 'asc' } }, limit: 5 }))
-					)
+					yield* Effect.flip(run(clerkReads, asClerk({ account: { secret: 'asc' } })))
 				).toMatchObject({ code: 'invalidInput' });
+				expect(
+					((yield* run(clerkReads, asClerk({ account: { name: 'asc' } })))[0] as Page).rows.map(
+						(r) => r.id
+					)
+				).toEqual(scoped.slice(0, 5));
 				// unread: neither the accounts grant nor the orders grant's account layer
 				const { accounts: _accounts, ...withoutAccounts } = rep.models;
-				const { 'orders.account': _layer, ...ordersRead } = rep.models.orders!.read;
+				const { 'orders.account': _layer, ...ordersRead } = rep.models.orders!.read['default']!;
 				const noAccounts: Reader = {
 					as: 'caller',
 					authority: {
 						...rep,
-						models: { ...withoutAccounts, orders: { ...rep.models.orders!, read: ordersRead } }
+						models: {
+							...withoutAccounts,
+							orders: { ...rep.models.orders!, read: { default: ordersRead } }
+						}
 					}
 				};
 				expect(
@@ -941,24 +998,6 @@ describe('next query engine (PGlite)', () => {
 							noAccounts,
 							read(cat, 'orders', { orderBy: { account: { name: 'asc' } }, limit: 5 })
 						)
-					)
-				).toMatchObject({ code: 'invalidInput' });
-				const maskedFk: Reader = {
-					as: 'caller',
-					authority: {
-						...rep,
-						models: {
-							...rep.models,
-							orders: {
-								...rep.models.orders!,
-								masks: { orders: { account: { t: 'const', value: false } } }
-							}
-						}
-					}
-				};
-				expect(
-					yield* Effect.flip(
-						run(maskedFk, read(cat, 'orders', { orderBy: { account: { name: 'asc' } }, limit: 5 }))
 					)
 				).toMatchObject({ code: 'invalidInput' });
 				expect(
@@ -1217,8 +1256,10 @@ describe('next query engine (PGlite)', () => {
 							lines: {
 								...rep.models['lines']!,
 								read: {
-									lines: [{ policy: 'rep', where: { t: 'const', value: true }, fields: 'all' }],
-									'lines.order': [{ policy: 'rep', where: northern, fields: 'all' }]
+									default: {
+										lines: [{ policy: 'rep', where: { t: 'const', value: true } }],
+										'lines.order': [{ policy: 'rep', where: northern }]
+									}
 								}
 							}
 						}
@@ -1235,97 +1276,50 @@ describe('next query engine (PGlite)', () => {
 			})
 	);
 	it.live(
-		'rule 14: a masked field neither leaks through where, order or select nor aggregates',
+		"rule 14: an output is its fields: one it omits neither filters, orders, selects nor aggregates; its rows are its grant's; an ungranted output is forbidden",
 		() =>
 			Effect.gen(function* () {
 				yield* setup();
-				const where = { total: { gt: '500' } };
-				const [raw, masked] = [
-					(yield* run(
-						workspace,
-						read(cat, 'orders', { all: true, where, select: { status: true, account: true } })
-					))[0] as Page,
-					(yield* run(
-						caller,
-						read(cat, 'orders', { all: true, where, select: { status: true, total: true } })
-					))[0] as Page
-				];
+				const brief = storeSync(catalogFor(cat, 'orders', 'brief'));
+				const clerkReads: Reader = { as: 'caller', authority: clerk };
+				const asBrief = (q: { [k: string]: Json }) => ({
+					...read(brief, 'orders', q),
+					output: 'brief'
+				});
 				const north = new Set(ACCOUNTS.filter((a) => a.region === 'north').map((a) => a.id));
-				const oracle = raw.rows.filter((r) => north.has(r.account as string));
-				expect(oracle.some((r) => r.status !== 'open')).toBe(true);
-				expect(masked.rows.map((r) => r.id)).toEqual(
-					oracle.filter((r) => r.status === 'open').map((r) => r.id)
+				const [page] = (yield* run(
+					clerkReads,
+					asBrief({ all: true, select: { status: true, account: { select: { name: true } } } })
+				)) as [Page];
+				expect(page.rows.map((r) => r.id).sort()).toEqual(
+					ORDERS.filter((o) => north.has(o.account))
+						.map((o) => o.id)
+						.sort()
 				);
-				const shown = (
-					(yield* run(
-						caller,
-						read(cat, 'orders', { all: true, select: { status: true, total: true } })
-					))[0] as Page
-				).rows;
+				expect(page.rows.every((r) => r.account !== null && !('total' in r))).toBe(true);
+				for (const q of [
+					{ all: true, where: { total: { gt: '500' } } },
+					{ all: true, orderBy: { total: 'asc' } },
+					{ all: true, select: { total: true } },
+					{ all: true, select: { account: { select: { secret: true } } } }
+				])
+					expect(yield* Effect.flip(run(clerkReads, asBrief(q)))).toMatchObject({
+						code: expect.stringMatching(/^invalid/)
+					});
+				const max = yield* aggregate(brief, 'orders', { max: ['total'] }).pipe(
+					Effect.mapError(fromStore)
+				);
+				expect(yield* Effect.flip(run(clerkReads, { ...max, output: 'brief' }))).toMatchObject({
+					code: expect.stringMatching(/^invalid/)
+				});
+				// the clerk holds no `default` output of orders
 				expect(
-					shown
-						.filter((r) => r.status !== 'open')
-						.every((r) => JSON.stringify(r.total) === '{"$masked":true}')
-				).toBe(true);
-				expect(
-					shown
-						.filter((r) => r.status === 'open')
-						.every(
-							(r) =>
-								typeof (
-									r.total as {
-										$dec?: string;
-									}
-								).$dec === 'string'
-						)
-				).toBe(true);
-				expect(
-					yield* Effect.flip(
-						run(
-							caller,
-							yield* aggregate(cat, 'orders', { max: ['total'] }).pipe(Effect.mapError(fromStore))
-						)
-					)
+					yield* Effect.flip(run(clerkReads, read(cat, 'orders', { all: true })))
 				).toMatchObject({ code: 'forbidden' });
 			})
 	);
-	it.live('rule 14: a masked foreign key reads masked, filters nothing and joins nothing', () =>
-		Effect.gen(function* () {
-			yield* setup();
-			const blind: Reader = {
-				as: 'caller',
-				authority: {
-					...rep,
-					key: 'blind',
-					models: {
-						...rep.models,
-						orders: {
-							...rep.models['orders']!,
-							masks: { orders: { account: { t: 'const', value: false } } }
-						}
-					}
-				}
-			};
-			const [rows] = (yield* run(
-				blind,
-				read(cat, 'orders', { all: true, select: { account: true, status: true } })
-			)) as [Page];
-			expect(rows.rows.length).toBeGreaterThan(0);
-			expect(rows.rows.map((r) => r.account)).toEqual(rows.rows.map(() => ({ $masked: true })));
-			const [joined] = (yield* run(
-				blind,
-				read(cat, 'orders', { all: true, select: { account: { select: { name: true } } } })
-			)) as [Page];
-			expect(joined.rows.every((r) => r.account === null)).toBe(true);
-			const [probe] = (yield* run(
-				blind,
-				read(cat, 'orders', { all: true, where: { account: { eq: ORDERS[0]!.account } } })
-			)) as [Page];
-			expect(probe.rows).toEqual([]);
-		})
-	);
 	it.live(
-		'rules 10 and 15, X-33: a workspace row is stored fields unmasked; a caller default row omits json; an explicit select returns it',
+		'rules 10 and 15, X-33: a workspace row is its stored fields; a caller default row omits json; an explicit select returns it',
 		() =>
 			Effect.gen(function* () {
 				yield* setup();
@@ -1338,7 +1332,7 @@ describe('next query engine (PGlite)', () => {
 				)) as [[RowData], [RowData]];
 				expect(ws[0]).toMatchObject({ name: 'alpha acme', secret: 'shh', revision: 1 });
 				expect(ws[0]).not.toHaveProperty('shout');
-				expect(call[0]).toMatchObject({ shout: 'ALPHA ACME', secret: { $masked: true } });
+				expect(call[0]).toMatchObject({ shout: 'ALPHA ACME', secret: 'shh' });
 				const [dflt, explicit] = (yield* run(
 					workspace,
 					read(cat, 'orders', { limit: 1 }),
@@ -1444,10 +1438,15 @@ describe('next query engine (PGlite)', () => {
 			}
 			const p1 = (yield* run(
 				workspace,
-				yield* aggregate(cat, 'orders', { by: ['status'], count: true, limit: 2 }).pipe(
+				yield* aggregate(cat, 'orders', { by: ['status'], limit: 2 }).pipe(
 					Effect.mapError(fromStore)
 				)
 			))[0] as Page;
+			// grouped: each bucket counts its rows without `count: true`
+			for (const g of p1.rows)
+				expect(g.count).toBe(
+					ORDERS.filter((o) => o.status === (g.key as { status: string }).status).length
+				);
 			const p2 = (yield* run(
 				workspace,
 				yield* aggregate(cat, 'orders', {

@@ -59,7 +59,7 @@ export const embedQueued = (id: string, now: string): QueuedRun & { id: string }
 	automation: EMBED,
 	input: {},
 	dueAt: now,
-	cause: 'updated',
+	cause: 'schedule',
 	depth: 0
 });
 

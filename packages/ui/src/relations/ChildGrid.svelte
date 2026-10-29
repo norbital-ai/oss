@@ -37,7 +37,6 @@ A related-record grid with explicit child operations, original revisions and par
 	import { type Outcome } from '../client/contract.js';
 	import { actOutcome } from '../actions/outcome.js';
 	import { and } from '../filter/scope.js';
-	import { isRow, rowsOf } from '../read/results.js';
 	import { msg } from '../text/messages.js';
 	import { byId, firstOf, pageOf, requestJson } from '../read/request.js';
 	import { mapped, queryState } from '../read/state.js';
@@ -120,7 +119,7 @@ A related-record grid with explicit child operations, original revisions and par
 				)
 	);
 	const loaded = $derived(queryState(reads));
-	const rows = $derived(loaded.kind === 'ready' ? rowsOf(loaded.value) : []);
+	const rows = $derived(loaded.kind === 'ready' ? loaded.value.rows : []);
 	type Draft = {
 		form: FormState;
 		row: Row;
@@ -268,9 +267,7 @@ A related-record grid with explicit child operations, original revisions and par
 						if (request !== entry.request) return;
 						if (
 							value !== null &&
-							(value.id !== row.id ||
-								value.model !== model ||
-								value.revision !== row['revision'])
+							(value.id !== row.id || value.model !== model || value.revision !== row['revision'])
 						) {
 							notice = text.conflict;
 							return;
@@ -553,11 +550,9 @@ A related-record grid with explicit child operations, original revisions and par
 				} else {
 					if (id === undefined) return;
 					const outcome = yield* actOutcome(
-						bolt.act(
-							`${model}.update`,
-							[{ target: selected, set: { [identity.parent]: id } }],
-							{ observed: { [selected]: row['revision'] } }
-						)
+						bolt.act(`${model}.update`, [{ target: selected, set: { [identity.parent]: id } }], {
+							observed: { [selected]: row['revision'] }
+						})
 					);
 					if (outcome.kind !== 'committed' && outcome.kind !== 'pendingApproval')
 						notice =
@@ -610,10 +605,8 @@ A related-record grid with explicit child operations, original revisions and par
 	{@const entry = drafts.get(key)}
 	{#if entry !== undefined}
 		<div class="flex flex-wrap gap-1">
-			{#if !entry.created}<Button
-					size="sm"
-					variant="ghost"
-					onclick={() => openRecord(model, key)}>{msg(bolt, 'child.open', 'Open')}</Button
+			{#if !entry.created}<Button size="sm" variant="ghost" onclick={() => openRecord(model, key)}
+					>{msg(bolt, 'child.open', 'Open')}</Button
 				>{/if}
 			{#if editing}
 				{#if save === 'independent' && (entry.created || entry.form.dirty)}<Button
@@ -716,16 +709,11 @@ A related-record grid with explicit child operations, original revisions and par
 	{:else}
 		{#if id !== undefined}<ReadGate state={loaded} what={model}>{@render table()}</ReadGate
 			>{:else}{@render table()}{/if}
-		{#if loaded.kind === 'ready' && isRow(loaded.value) && typeof loaded.value['next'] === 'string'}<Button
+		{#if loaded.kind === 'ready' && loaded.value.next !== null}<Button
 				size="sm"
 				variant="outline"
 				onclick={() => {
-					if (
-						loaded.kind === 'ready' &&
-						isRow(loaded.value) &&
-						typeof loaded.value['next'] === 'string'
-					)
-						after = loaded.value['next'];
+					if (loaded.kind === 'ready' && loaded.value.next !== null) after = loaded.value.next;
 				}}>{msg(bolt, 'child.next', 'Next page')}</Button
 			>{/if}
 		{#if editing && !identity.owned && strategy.link && (id !== undefined || (save === 'parent' && owner?.mode === 'create'))}<div

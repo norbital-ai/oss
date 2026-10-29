@@ -47,7 +47,7 @@
 	});
 </script>
 
-<Bound clip size="full" class="access-frame">
+<Bound clip size="fill" class="access-frame">
 	<div class="access-backdrop"><NorbiusField /></div>
 
 	<Center

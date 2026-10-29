@@ -15,6 +15,7 @@ export type JsonChange = {
 /** The kind of a part nothing declares: any JSON, unkeyed. */
 export const ANY: Kind = { kind: 'json' };
 type Obj = { readonly [key: string]: Json };
+/** A JSON object member of the `Json` union (no Effect import: this module is pure, for guests). */
 export const isObj = (v: Json | undefined): v is Obj =>
 	v !== null && typeof v === 'object' && !Array.isArray(v);
 export const isList = (v: Json | undefined): v is readonly Json[] => Array.isArray(v);

@@ -1,5 +1,5 @@
 // P2/P3 gates end to end on PGlite (decisions 3, 6, 8): authority is per access point. A root's policy alone filters
-// and masks its read layers; a layer model's own grants are never consulted; a model without `read` is a layer, never
+// its read layers, and the output it reads fixes their fields; a layer model's own grants are never consulted; a model without `read` is a layer, never
 // a root; a user `where` only narrows. Writes are batches: `columns` are admitted before any guest code, then ONE
 // `check` per verb judges the whole batch tree; `deny` refuses it, `approve` holds it.
 import { expect, layer } from '@effect/vitest';
@@ -8,8 +8,8 @@ import type { Authority } from '../src/engine/contracts.ts';
 import type { EngineManifest } from '../src/engine/manifest.ts';
 import type { Json } from '../src/decl/values.ts';
 import { dynamicRead } from '../src/protocol/read-request.ts';
-import { TestWorkspace, type Kit, type WorkspaceServices } from '../src/test/index.ts';
-import { program } from '../src/test/guest.ts';
+import { TestWorkspace, type Kit, type WorkspaceServices } from '../../bolt-cli/src/test/index.ts';
+import { program } from '../../bolt-cli/src/test/guest.ts';
 import { actReply, qReply, routeFixture, type FixtureRoute } from './support/route-fixture.ts';
 
 const ACME = '0199a000-0000-4000-8000-0000000000a1';
@@ -65,6 +65,13 @@ const manifest: EngineManifest = {
 				'orders.party': { fields: ['name', 'code', 'credit_limit'] },
 				'orders.lines': { fields: 'all' }
 			},
+			// a narrower output: a party shows its name and code, never its credit limit
+			outputs: {
+				brief: {
+					orders: { fields: ['number', 'region', 'party'] },
+					'orders.party': { fields: ['name', 'code'] }
+				}
+			},
 			create: {
 				columns: {
 					orders: ['number', 'region', 'status', 'party'],
@@ -85,7 +92,6 @@ const manifest: EngineManifest = {
 				orders: {
 					read: {
 						orders: { where: { region: { eq: 'north' } } },
-						'orders.party': { fields: ['name', 'code'] },
 						'orders.lines': { where: { cost: { gt: 0 } } }
 					},
 					create: {
@@ -100,7 +106,11 @@ const manifest: EngineManifest = {
 				}
 			}
 		},
-		reviewer: { description: 'Finance', grants: { orders: { read: true } } }
+		reviewer: { description: 'Finance', grants: { orders: { read: true } } },
+		partner: {
+			description: 'Northern orders, briefly',
+			grants: { orders: { outputs: { brief: { orders: { where: { region: { eq: 'north' } } } } } } }
+		}
 	},
 	teams: { finance: ['reviewer'], sales: ['rep'] },
 	automations: {},
@@ -260,23 +270,43 @@ layer(workspace)('read layers: one access point, the root policy alone', (it) =>
 			)
 	);
 
-	it.effect('a field the root policy narrows away stays masked in its layer, even when named', () =>
-		run(
-			Effect.gen(function* () {
-				const { t, rep } = yield* setup;
-				const named = dynamicRead({
-					orders: { where: { number: { eq: 'N1' } }, fields: ['party'] },
-					'orders.party': { fields: ['name', 'credit_limit'] }
-				});
-				expect((yield* rep.query(named)).orders?.rows).toMatchObject([
-					{ party: { name: 'Acme', credit_limit: { $masked: true } } }
-				]);
-				// a caller without that narrowing reads it
-				expect(
-					(yield* t.as(t.member(['reviewer'])).query(named)).orders?.rows[0]?.['party']
-				).not.toMatchObject({ credit_limit: { $masked: true } });
-			})
-		)
+	it.effect(
+		'an output fixes its layer fields: a field it omits is refused even when named; its rows are its grant`s',
+		() =>
+			run(
+				Effect.gen(function* () {
+					const { t } = yield* setup;
+					const partner = t.as(t.member(['partner']));
+					const brief = dynamicRead({
+						orders: { output: 'brief', where: { number: { eq: 'N1' } }, fields: ['party'] },
+						'orders.party': {}
+					});
+					const [row] = (yield* partner.query(brief)).orders?.rows ?? [];
+					expect(row?.['party']).toEqual(expect.objectContaining({ name: 'Acme', code: 'AC' }));
+					expect(row?.['party']).not.toHaveProperty('credit_limit');
+					const named = dynamicRead({
+						orders: { output: 'brief', fields: ['party'] },
+						'orders.party': { fields: ['name', 'credit_limit'] }
+					});
+					expect(yield* Effect.flip(partner.query(named))).toMatchObject({ code: 'invalid' });
+					// the partner holds no `default` grant: reading it is forbidden
+					expect(yield* Effect.flip(partner.query(dynamicRead({ orders: {} })))).toMatchObject({
+						code: 'forbidden'
+					});
+					// the brief rows are the partner's grant's: the northern orders only
+					const all = dynamicRead({ orders: { output: 'brief', orderBy: 'number' } });
+					expect(ids((yield* partner.query(all)).orders?.rows ?? [])).toEqual([N1, N2]);
+					// a caller reading `default` reads the credit limit
+					expect(
+						(yield* t.as(t.member(['reviewer'])).query(
+							dynamicRead({
+								orders: { where: { number: { eq: 'N1' } }, fields: ['party'] },
+								'orders.party': { fields: ['name', 'credit_limit'] }
+							})
+						)).orders?.rows[0]?.['party']
+					).toHaveProperty('credit_limit');
+				})
+			)
 	);
 
 	it.effect(

@@ -38,7 +38,6 @@ packageExtensionsChecksum: sha256-szM874KBbSxTYSFw7iIzEUKof84HNiD4esRjMM2jF0w=
 
 patchedDependencies:
   '@whiskeysockets/baileys@7.0.0-rc14': 31f8fbde137d5b67598b366406070017541e5a5dcbb2839914fd191022190fc8
-  isolated-vm@7.0.1: b1e019643d694a5e527a3041db64bf787b3f7c73f5a7b4f459da04822d65dc83
 
 importers:
 
@@ -135,18 +134,12 @@ importers:
       '@effect/platform-node':
         specifier: 'catalog:'
         version: 4.0.6(effect@4.0.6)
-      '@effect/vitest':
-        specifier: 'catalog:'
-        version: 4.0.6(effect@4.0.6)(vitest@5.0.5)
       '@electric-sql/pglite':
         specifier: ^0.5.12
         version: 0.5.12
       '@electric-sql/pglite-pgvector':
         specifier: ^0.0.13
         version: 0.0.13(@electric-sql/pglite@0.5.12)
-      '@iconify-json/lucide':
-        specifier: 1.2.147
-        version: 1.2.147
       '@iconify/svelte':
         specifier: 'catalog:'
         version: 5.2.3(svelte@5.57.3)
@@ -165,12 +158,6 @@ importers:
       '@norbital-ai/ui':
         specifier: workspace:*
         version: link:../ui
-      '@sveltejs/vite-plugin-svelte':
-        specifier: ^7.3.1
-        version: 7.3.1(svelte@5.57.3)(vite@8.3.5(@types/node@26.6.5)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))
-      '@tailwindcss/vite':
-        specifier: 4.3.3
-        version: 4.3.3(vite@8.3.5(@types/node@26.6.5)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))
       '@typescript/native':
         specifier: npm:typescript@7.0.2
         version: typescript@7.0.2
@@ -183,9 +170,6 @@ importers:
       fflate:
         specifier: 0.8.3
         version: 0.8.3
-      isolated-vm:
-        specifier: 7.0.1
-        version: 7.0.1(patch_hash=b1e019643d694a5e527a3041db64bf787b3f7c73f5a7b4f459da04822d65dc83)
       jpeg-js:
         specifier: 0.4.4
         version: 0.4.4
@@ -207,15 +191,9 @@ importers:
       tailwindcss:
         specifier: 4.3.3
         version: 4.3.3
-      terser:
-        specifier: 5.51.2
-        version: 5.51.2
       typescript:
         specifier: 6.0.3
         version: 6.0.3
-      vite:
-        specifier: 'catalog:'
-        version: 8.3.5(@types/node@26.6.5)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1)
     devDependencies:
       '@iconify-json/vscode-icons':
         specifier: 1.2.94
@@ -223,6 +201,12 @@ importers:
       '@sveltejs/package':
         specifier: ^3.0.1
         version: 3.0.1(svelte@5.57.3)(typescript@6.0.3)
+      '@sveltejs/vite-plugin-svelte':
+        specifier: ^7.3.1
+        version: 7.3.1(svelte@5.57.3)(vite@8.3.5(@types/node@26.6.5)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))
+      '@tailwindcss/vite':
+        specifier: 4.3.3
+        version: 4.3.3(vite@8.3.5(@types/node@26.6.5)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))
       '@types/node':
         specifier: ^26.6.5
         version: 26.6.5
@@ -241,6 +225,67 @@ importers:
       svelte-check:
         specifier: ^4.7.7
         version: 4.7.7(picomatch@4.0.7)(svelte@5.57.3)(typescript@6.0.3)
+      vite:
+        specifier: 'catalog:'
+        version: 8.3.5(@types/node@26.6.5)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1)
+
+  packages/bolt-cli:
+    dependencies:
+      '@effect/platform-node':
+        specifier: 'catalog:'
+        version: 4.0.6(effect@4.0.6)
+      '@effect/vitest':
+        specifier: 'catalog:'
+        version: 4.0.6(effect@4.0.6)(vitest@5.0.5)
+      '@electric-sql/pglite':
+        specifier: ^0.5.12
+        version: 0.5.12
+      '@iconify-json/lucide':
+        specifier: 1.2.147
+        version: 1.2.147
+      '@iconify/svelte':
+        specifier: 'catalog:'
+        version: 5.2.3(svelte@5.57.3)
+      '@norbital-ai/bolt':
+        specifier: workspace:*
+        version: link:../bolt
+      '@norbital-ai/std':
+        specifier: workspace:*
+        version: link:../std
+      '@norbital-ai/store':
+        specifier: workspace:*
+        version: link:../store
+      '@norbital-ai/ui':
+        specifier: workspace:*
+        version: link:../ui
+      '@sveltejs/vite-plugin-svelte':
+        specifier: ^7.3.1
+        version: 7.3.1(svelte@5.57.3)(vite@8.3.5(@types/node@26.6.5)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))
+      '@tailwindcss/vite':
+        specifier: 4.3.3
+        version: 4.3.3(vite@8.3.5(@types/node@26.6.5)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))
+      tailwindcss:
+        specifier: 4.3.3
+        version: 4.3.3
+      terser:
+        specifier: 5.51.2
+        version: 5.51.2
+      typescript:
+        specifier: 6.0.3
+        version: 6.0.3
+      vite:
+        specifier: 'catalog:'
+        version: 8.3.5(@types/node@26.6.5)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1)
+    devDependencies:
+      '@types/node':
+        specifier: ^26.6.5
+        version: 26.6.5
+      effect:
+        specifier: 'catalog:'
+        version: 4.0.6
+      svelte:
+        specifier: 'catalog:'
+        version: 5.57.3
 
   packages/bolt-server:
     dependencies:
@@ -250,6 +295,9 @@ importers:
       '@norbital-ai/bolt':
         specifier: workspace:*
         version: link:../bolt
+      '@norbital-ai/bolt-cli':
+        specifier: workspace:*
+        version: link:../bolt-cli
       '@norbital-ai/providers':
         specifier: workspace:*
         version: link:../providers
@@ -2521,10 +2569,6 @@ packages:
   isexe@2.0.0:
     resolution: {integrity: sha512-RHxMLp9lnKHGHRng9QFhRCMbYAcVpn69smSGcq3f36xjgVVWThj4qqLbTLlq7Ssj8B+fIQ1EuCEGI2lKsyQeIw==}
 
-  isolated-vm@7.0.1:
-    resolution: {integrity: sha512-nBCQ1hXEaYKYJ79wwfhaF44ITOJC30Hw0wPEsFeNsdD3hdeKK7FW1SGMQYBUA+qasvkqdOazI+iBuq0lcbN/aw==}
-    engines: {node: '>=24.0.0'}
-
   jiti@2.7.0:
     resolution: {integrity: sha512-AC/7JofJvZGrrneWNaEnJeOLUx+JlGt7tNa0wZiRPT4MY1wmfKjt2+6O2p2uz2+skll8OZZmJMNqeke7kKbNgQ==}
     hasBin: true
@@ -2891,10 +2935,6 @@ packages:
 
   native-duplexpair@1.0.0:
     resolution: {integrity: sha512-E7QQoM+3jvNtlmyfqRZ0/U75VFgCls+fSkbml2MpgWkWyz3ox8Y58gNhfuziuQYGNNQAbFZJQck55LHCnCK6CA==}
-
-  node-gyp-build@4.8.4:
-    resolution: {integrity: sha512-LA4ZjwlnUblHVgq0oBF3Jl/6h/Nvs5fzBLwdEF4nuxnFdsfajde4WfxtJr3CaiH+F6ewcIB/q4jQ4UzPyid+CQ==}
-    hasBin: true
 
   nodemailer@10.2.1:
     resolution: {integrity: sha512-ZrDNsPFoDMwefNs7sJwrYiEJ/CG4ClJWDZv05iNJsEBWa8GRDry1QJHTJxsuTAY9eDDKjX4k+q3SxslXJOao7w==}
@@ -5855,10 +5895,6 @@ snapshots:
 
   isexe@2.0.0: {}
 
-  isolated-vm@7.0.1(patch_hash=b1e019643d694a5e527a3041db64bf787b3f7c73f5a7b4f459da04822d65dc83):
-    dependencies:
-      node-gyp-build: 4.8.4
-
   jiti@2.7.0: {}
 
   jose@6.2.13: {}
@@ -6209,8 +6245,6 @@ snapshots:
   nanoid@3.3.20: {}
 
   native-duplexpair@1.0.0: {}
-
-  node-gyp-build@4.8.4: {}
 
   nodemailer@10.2.1: {}
 

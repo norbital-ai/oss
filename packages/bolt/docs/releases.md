@@ -7,14 +7,20 @@ and the same bytes run on staging and production.
 
 `bolt build` writes three parts under `.norbital/` and, last, `release.json` naming them:
 
-| Part | Holds | Used by |
-| --- | --- | --- |
-| `bundle/` | manifest, guest, client and server pages, assets, migrations | the host runs it |
-| `source/` | the authored tree without tests or generated/installed folders | Studio edits it (a customer workspace's starting source) |
-| `seed/<pack>/` | `base` (public, from `seed/`), `sample` (the private bank, with `--bank`), `test` (from `seed/test/`) | provision and reset; `test` only for the template's own tests, never published |
+| Part           | Holds                                                            | Used by                                                                                                                                              |
+| -------------- | ---------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `bundle/`      | manifest, guest, client and server pages, assets, migrations     | the host runs it                                                                                                                                     |
+| `source/`      | the authored tree without tests or generated/installed folders   | Studio edits it (a customer workspace's starting source)                                                                                             |
+| `seed/<pack>/` | `base` (public, from `seed/public/`), `test` (from `seed/test/`) | `base`: provision and reset; `test` only for the template's own tests, never published. Private rows never enter a release ([seeding](./seeding.md)) |
 
 ```json
-{ "format": 1, "handle": "norbital_hr", "bundle": "<sha256>", "source": "<sha256>", "seed": { "base": "<sha256>", "sample": "<sha256>" } }
+{
+	"format": 1,
+	"handle": "norbital_hr",
+	"bundle": "<sha256>",
+	"source": "<sha256>",
+	"seed": { "base": "<sha256>" }
+}
 ```
 
 Each digest is a SHA-256 over the part's file tree, leaving out `*.map` (the bundler writes random names into source
@@ -26,7 +32,7 @@ maps). Identical source gives an identical bundle digest, and a comment-only edi
 ```
 template push (main)
   -> CI per template: bun install --frozen-lockfile, bolt check,
-     bolt build --bank (the ONE build), bolt test
+     bolt build (the ONE build), bolt test
   -> bolt templates publish --out=<dir>
        bundle/<b>.tar.gz  source/<s>.tar.gz  seed/<p>.tar.gz
        template/<directory>/<b>.json   (the release.json)

@@ -104,10 +104,13 @@ async function show({
 		aggregate: (model, options) => {
 			if (script.aggregate !== undefined) return script.aggregate(model, options);
 			const matching = filtered(input, options);
-			return ['todo', 'done'].map((status) => ({
-				key: { status },
-				count: matching.filter((row) => row.status === status).length
-			}));
+			return {
+				rows: ['todo', 'done'].map((status) => ({
+					key: { status },
+					count: matching.filter((row) => row.status === status).length
+				})),
+				next: null
+			};
 		},
 		act: (callable, input, options) => {
 			acts.push({ callable, input });

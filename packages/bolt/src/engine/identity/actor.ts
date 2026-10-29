@@ -100,7 +100,8 @@ SELECT (SELECT (n->>'revision')::int FROM bound) AS revision`
 				const found = yield* Schema.decodeUnknownEffect(UserSchema)(value).pipe(
 					Effect.mapError((error) => BoltError.make('corrupt', 'decode', error.message, error))
 				);
-				if (found === undefined || !found.active) return null;
+				// an anonymous user is a visitor's identity (a cookie, never a session): it is no member
+				if (found === undefined || !found.active || found.kind === 'anonymous') return null;
 				const u = yield* this.bind(db, found);
 				const graph = teams(this.m),
 					team = u.team !== null && Object.hasOwn(graph, u.team) ? u.team : null;
@@ -265,8 +266,11 @@ SELECT (SELECT (n->>'revision')::int FROM bound) AS revision`
 			}.bind(this)
 		);
 	}
-	/** A visitor holds exactly the app's public policies (rule 38d). `visitor` is an idempotency id, never an identity. */
-	visitor(app: string, visitor: string): Authority {
+	/**
+	 * A visitor holds exactly the app's public policies (rule 38d). `visitor` is the visitor's anonymous user when
+	 * `anonymous`, else a per-request id that owns nothing.
+	 */
+	visitor(app: string, visitor: string, anonymous = false): Authority {
 		const audience = this.m.apps[app]?.audience;
 		const policies =
 			typeof audience === 'object' && audience !== null && 'public' in audience
@@ -275,13 +279,22 @@ SELECT (SELECT (n->>'revision')::int FROM bound) AS revision`
 		if (policies === undefined)
 			throw BoltError.make('forbidden', 'admission', `app '${app}' has no public audience`);
 		return this.compile(
-			{ actor: { kind: 'visitor', app, visitor }, admin: false, policies },
-			`visitor:${app}:${visitor}`
+			{
+				actor: {
+					kind: 'visitor',
+					app,
+					visitor,
+					...(anonymous ? { anonymous: true as const } : {})
+				},
+				admin: false,
+				policies
+			},
+			`visitor:${app}:${visitor}:${anonymous}`
 		);
 	}
 	/**
-	 * A system actor: an automation's `runAs` policies (or, for `'trigger'`, the trigger's own authority), or a platform run
-	 * or a remote sync (the workspace's own work). Syncs hold no authored policies or team and cannot approve.
+	 * A system actor: an automation's declared policies, or a platform run or a remote sync (the workspace's own work).
+	 * Syncs hold no authored policies or team and cannot approve.
 	 */
 	system(
 		run: string,
@@ -290,8 +303,7 @@ SELECT (SELECT (n->>'revision')::int FROM bound) AS revision`
 			{
 				kind: 'system';
 			}
-		>['by'],
-		trigger?: Authority
+		>['by']
 	): Authority {
 		const actor: EngineActor = { kind: 'system', run, by };
 		if ('platform' in by)
@@ -304,20 +316,11 @@ SELECT (SELECT (n->>'revision')::int FROM bound) AS revision`
 				{ actor, admin: false, platform: true, policies: [] },
 				`sync:${by.sync}:${by.instance}:${run}`
 			);
-		const runAs = this.m.automations[by.automation]?.runAs;
-		if (runAs === undefined)
+		const policies = this.m.automations[by.automation]?.policies;
+		if (policies === undefined)
 			throw BoltError.make('unknownAutomation', 'admission', `no automation '${by.automation}'`);
-		if (runAs === 'trigger') {
-			if (trigger === undefined)
-				throw BoltError.make(
-					'noTrigger',
-					'admission',
-					`'${by.automation}' runs as its trigger, and none was given`
-				);
-			return trigger;
-		}
 		return this.compile(
-			{ actor, admin: false, policies: runAs },
+			{ actor, admin: false, policies },
 			`automation:${by.automation}:${run}`
 		);
 	}

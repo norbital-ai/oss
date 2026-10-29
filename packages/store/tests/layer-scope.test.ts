@@ -1,6 +1,6 @@
-// Read layers in one statement (decision 3): every level is scoped and masked by its PATH under the root
-// (`Scope.rows(path)`, `Scope.mask(path, field)`), never by the layer model's own name; a model without `read` is only
-// a layer; a relation the root does not declare is refused, and a layer exposes only its declared fields.
+// Read layers in one statement (decision 3): every level is scoped by its PATH under the root and the output the read
+// names (`Scope.rows(path, output)`), never by the layer model's own name; a model without `read` is only a layer; a
+// relation the root's output does not declare is refused, and a layer exposes only its declared fields.
 import { describe, expect, it } from '@effect/vitest';
 import { Effect } from 'effect';
 import { catalogOf, compile, read, type Scope } from '../src/index.ts';
@@ -12,36 +12,51 @@ const cat = catalogOf(shop, {
 			order: { fields: 'all' },
 			'order.customer': { fields: ['name'] },
 			'order.lines': { fields: 'all' }
-		}
+		},
+		outputs: { brief: { order: { fields: ['number'] }, 'order.customer': { fields: ['name'] } } }
 	}
 });
 
 describe('read layers by path', () => {
-	it.effect('scopes and masks each level by its path under the root, never by its model', () =>
+	it.effect('scopes each level by its path under the root, never by its model', () =>
 		Effect.gen(function* () {
-			const rows: string[] = [],
-				masks: string[] = [];
+			const rows: string[] = [];
 			const scope: Scope = {
-				rows: (path) => {
-					rows.push(path);
+				rows: (path, output) => {
+					rows.push(`${output}:${path}`);
 					return path === 'order.lines' ? [{ t: 'const', value: false }] : undefined;
-				},
-				mask: (path, field) => {
-					masks.push(`${path}.${field}`);
-					return path === 'order.customer' && field === 'name'
-						? { t: 'const', value: false }
-						: undefined;
 				}
 			};
 			const ir = yield* read(cat, 'order', { with: { customer: true, lines: { limit: 10 } }, limit: 10 });
 			const { sql } = yield* compile(cat, ir, { scope });
-			expect(new Set(rows)).toEqual(new Set(['order', 'order.customer', 'order.lines']));
-			expect(masks.some((m) => m.startsWith('order.customer.'))).toBe(true);
-			expect(
-				[...rows, ...masks].some((p) => p.startsWith('customer') || p.startsWith('line'))
-			).toBe(false);
+			expect(new Set(rows)).toEqual(
+				new Set(['default:order', 'default:order.customer', 'default:order.lines'])
+			);
 			// the layer's own arm (false) filters its rows, inside the root's statement
 			expect(sql.text).toContain('false');
+		})
+	);
+
+	it.effect('reads a named output: its fields and layers, scoped by that output', () =>
+		Effect.gen(function* () {
+			const rows: string[] = [];
+			const scope: Scope = {
+				rows: (path, output) => {
+					rows.push(`${output}:${path}`);
+					return undefined;
+				}
+			};
+			const ir = yield* read(cat, 'order', { with: { customer: true }, limit: 10 });
+			const { sql } = yield* compile(cat, { ...ir, output: 'brief' }, { scope });
+			expect(new Set(rows)).toEqual(new Set(['brief:order', 'brief:order.customer']));
+			expect(sql.text).not.toContain('"total"');
+			const lines = yield* read(cat, 'order', { with: { lines: { limit: 10 } }, limit: 10 });
+			expect(
+				(yield* Effect.flip(compile(cat, { ...lines, output: 'brief' }, { scope }))).code
+			).toBe('invalid');
+			expect(
+				(yield* Effect.flip(compile(cat, { ...ir, output: 'missing' }, { scope }))).code
+			).toBe('invalid');
 		})
 	);
 
@@ -52,7 +67,7 @@ describe('read layers by path', () => {
 				expect((yield* Effect.flip(read(cat, 'customer', {}))).code).toBe('invalid');
 				const undeclared = yield* read(cat, 'order', { with: { notes: true } }).pipe(
 					Effect.flatMap((ir) =>
-						compile(cat, ir, { scope: { rows: () => undefined, mask: () => undefined } })
+						compile(cat, ir, { scope: { rows: () => undefined } })
 					),
 					Effect.flip
 				);
@@ -61,7 +76,7 @@ describe('read layers by path', () => {
 					with: { customer: { select: { credit: true } } }
 				}).pipe(
 					Effect.flatMap((ir) =>
-						compile(cat, ir, { scope: { rows: () => undefined, mask: () => undefined } })
+						compile(cat, ir, { scope: { rows: () => undefined } })
 					),
 					Effect.flip
 				);
@@ -71,7 +86,7 @@ describe('read layers by path', () => {
 
 	it.effect('filters and sorts only across declared layers, never through a relation the root does not declare', () =>
 		Effect.gen(function* () {
-			const scope: Scope = { rows: () => undefined, mask: () => undefined };
+			const scope: Scope = { rows: () => undefined };
 			const compiled = (q: Parameters<typeof read>[2]) =>
 				read(cat, 'order', q).pipe(Effect.flatMap((ir) => compile(cat, ir, { scope })));
 			// declared: a filter on the customer layer and a quantified filter over the lines layer

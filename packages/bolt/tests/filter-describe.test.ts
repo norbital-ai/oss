@@ -11,7 +11,9 @@ import { TenantDb } from '../src/engine/db/tenant-db.ts';
 import { Manifest, Reads, type ReadsShape } from '../src/engine/services.ts';
 import { DbError } from '../src/engine/errors.ts';
 import { DecisionsLive } from '../src/engine/decisions/index.ts';
-import type { Pred } from '@norbital-ai/store';
+import { catalogFor, type Pred } from '@norbital-ai/store';
+import { viewOutput } from '../src/engine/access/authority.ts';
+import { storeSync } from '../src/protocol/errors.ts';
 import type { Json } from '../src/decl/values.ts';
 import type { EngineManifest } from '../src/engine/manifest.ts';
 import type {
@@ -63,8 +65,29 @@ const manifest = {
 		members: { read: { members: { fields: 'all' } } },
 		job_lines: { read: { job_lines: { fields: 'all' } } },
 		// `internal_code` is not exposed; `audits` is no model at all and `jobs.audit` no layer: a `where` hops only the
-		// layers jobs' read declares, read under jobs' own arms and masks
+		// layers jobs' output declares, read under jobs' own arms. `dispatch` omits `notes` and the assignee's `rate`;
+		// `bare` declares no layer and no `assignee`.
 		jobs: {
+			outputs: {
+				dispatch: {
+					jobs: {
+						fields: [
+							'title',
+							'hours',
+							'scheduled_on',
+							'spot',
+							'window',
+							'status',
+							'tags',
+							'assignee'
+						]
+					},
+					'jobs.assignee': { fields: ['name', 'manager'] },
+					'jobs.assignee.manager': { fields: 'all' },
+					'jobs.lines': { fields: 'all' }
+				},
+				bare: { jobs: { fields: ['title', 'hours'] } }
+			},
 			read: {
 				'jobs.assignee': { fields: 'all' },
 				'jobs.assignee.manager': { fields: 'all' },
@@ -104,28 +127,21 @@ const present = <A>(value: A | null | undefined): A => {
 const cat = catalog(manifest);
 
 const TRUE: Pred = { t: 'const', value: true };
-const arm: Arm = { policy: 'dispatch', where: TRUE, fields: 'all' };
-const grant = (model: string, masks: { [f: string]: Pred } = {}): ModelAuthority => ({
-	read: { [model]: [arm] },
+const arm: Arm = { policy: 'dispatch', where: TRUE };
+const grant = (model: string, output = 'default'): ModelAuthority => ({
+	read: { [output]: { [model]: [arm] } },
 	history: [],
 	create: [],
 	update: [],
 	delete: [],
-	moves: {},
-	masks: { [model]: masks }
+	moves: {}
 });
-/** A dispatcher: reads jobs (notes masked; its assignee layer's rate masked), members (rate masked) and job lines. */
-const dispatch: ModelAuthority = {
-	...grant('jobs'),
-	masks: {
-		jobs: { notes: { t: 'const', value: false } },
-		'jobs.assignee': { rate: { t: 'const', value: false } }
-	}
-};
+/** A dispatcher: reads jobs' `dispatch` output (no notes; no rate on its assignee layer), members and job lines. */
+const dispatch = grant('jobs', 'dispatch');
 const caller = (
 	models: { [c: string]: ModelAuthority } = {
 		jobs: dispatch,
-		members: grant('members', { rate: { t: 'const', value: false } }),
+		members: grant('members'),
 		job_lines: grant('job_lines')
 	}
 ): Authority => ({
@@ -155,16 +171,22 @@ const AT = { today: '2026-09-26', now: '2026-09-26T00:00:00.000Z' };
 const decode =
 	(where: Json, orderBy?: Json, a = caller()) =>
 	() =>
-		decodeDescribed(cat, a, 'jobs', { where, ...(orderBy === undefined ? {} : { orderBy }) }, AT);
+		decodeDescribed(
+			storeSync(catalogFor(cat, 'jobs', viewOutput(manifest, a, 'jobs'))),
+			a,
+			'jobs',
+			{ where, ...(orderBy === undefined ? {} : { orderBy }) },
+			AT
+		);
 
 describe("decodeDescribed: the caller's exposed query shape, exactly", () => {
-	it('refuses a field outside the exposure, a masked field and an unexposed relation', () => {
+	it('refuses a field outside the exposure, a field its view output omits and an unexposed relation', () => {
 		expect(decode({ internal_code: { eq: 'X1' } })).toThrow(/not a field this caller reads/);
 		expect(decode({ notes: { like: '%pump%' } })).toThrow(/not a field this caller reads/);
 		expect(decode({ audit: { is: { note: { eq: 'x' } } } })).toThrow(
 			/is not read by this caller|is not a relation this caller reads/
 		);
-		expect(decode({ assignee: { is: { rate: { gt: 10 } } } })).toThrow(/jobs\.assignee\.rate/); // masked on the layer
+		expect(decode({ assignee: { is: { rate: { gt: 10 } } } })).toThrow(/jobs\.assignee\.rate/); // the output's layer omits it
 		expect(decode({ bogus: { eq: 1 } })).toThrow(/unknown field/); // the grammar's own refusal
 	});
 
@@ -211,12 +233,12 @@ describe("decodeDescribed: the caller's exposed query shape, exactly", () => {
 		expect(decode({ title: { eq: { var: 'requestor.id' } } })).not.toThrow();
 	});
 
-	it('sorts where OrderBy allows: own sortable fields, a one-relation (by id), a related field the caller reads unmasked, at most 4 keys', () => {
+	it('sorts where OrderBy allows: own sortable fields, a one-relation (by id), a related field its output reads, at most 4 keys', () => {
 		expect(decode({}, [{ scheduled_on: 'desc' }, { hours: 'asc' }])).not.toThrow();
 		expect(decode({}, { assignee: 'asc' })).not.toThrow(); // the relation's key
 		expect(decode({}, { assignee: { name: 'asc' } })).not.toThrow(); // through an exposed relation, a readable target field
 		expect(decode({}, [{ assignee: { name: 'desc' } }, { title: 'asc' }])).not.toThrow();
-		expect(decode({}, { assignee: { rate: 'asc' } })).toThrow(/jobs\.assignee\.rate/); // masked on the layer: no ordering by it either
+		expect(decode({}, { assignee: { rate: 'asc' } })).toThrow(/jobs\.assignee\.rate/); // the output's layer omits it: no ordering by it either
 		expect(decode({}, { audit: { note: 'asc' } })).toThrow(
 			/is not read by this caller|is not a relation this caller reads/
 		); // unexposed relation
@@ -226,20 +248,14 @@ describe("decodeDescribed: the caller's exposed query shape, exactly", () => {
 			decode(
 				{},
 				{ assignee: 'asc' },
-				caller({
-					jobs: grant('jobs', { assignee: { t: 'const', value: false } }),
-					members: grant('members')
-				})
+				caller({ jobs: grant('jobs', 'bare'), members: grant('members') })
 			)
 		).toThrow(/not a field this caller reads/);
 		expect(
 			decode(
 				{},
 				{ assignee: { name: 'asc' } },
-				caller({
-					jobs: grant('jobs', { assignee: { t: 'const', value: false } }),
-					members: grant('members')
-				})
+				caller({ jobs: grant('jobs', 'bare'), members: grant('members') })
 			)
 		).toThrow(/is not read by this caller|is not a relation this caller reads/);
 		expect(decode({}, { notes: 'asc' })).toThrow(/not a field this caller reads/);
@@ -507,11 +523,14 @@ describe('filter.describe offers System 1 the exposure and maps its choices onto
 		() =>
 			Effect.gen(function* () {
 				// no `jobs.lines` layer, so nothing many-relation is offered and every readable field fits the bound
-				const { 'jobs.lines': _, ...read } = manifest.exposures.jobs.read;
+				const { 'jobs.lines': _, ...narrow } = manifest.exposures.jobs.outputs.dispatch;
 				const port = system1(byField({}));
 				yield* nativeDescriber(port, {
 					...manifest,
-					exposures: { ...manifest.exposures, jobs: { read } }
+					exposures: {
+						...manifest.exposures,
+						jobs: { ...manifest.exposures.jobs, outputs: { dispatch: narrow } }
+					}
 				}).describe({
 					model: 'jobs',
 					text: 'jobs with more than 2 pumps',
@@ -534,7 +553,7 @@ describe('filter.describe offers System 1 the exposure and maps its choices onto
 					expect(fields).not.toContain(hidden);
 				expect(fields.some((f) => f.startsWith('Audit'))).toBe(false);
 				expect(fields.some((f) => f.startsWith('Lines'))).toBe(false);
-				// sorting: own fields and, one hop through a one-relation, readable unmasked target fields; never a many-relation
+				// sorting: own fields and, one hop through a one-relation, the output's target fields; never a many-relation
 				const sorts = choices(present(port.requests[0]).questions['sort']);
 				expect(sorts).toEqual(
 					expect.arrayContaining([
@@ -714,7 +733,7 @@ describe('filter.describe offers System 1 the exposure and maps its choices onto
 				// a many-valued field offers the builder's list operators (ir's grammar), never a comparison on the list itself
 				expect(ops('Tags')).toEqual(['has', 'hasAny', 'hasAll', 'isEmpty', 'notEmpty']);
 				expect(path('Tags')).toEqual([{ k: 'field', name: 'tags' }]);
-				// `in`/`nin` and the null tests are offered; a masked field never is
+				// `in`/`nin` and the null tests are offered; a field the view output omits never is
 				expect(ops('Hours')).toEqual(
 					expect.arrayContaining(['eq', 'ne', 'gt', 'gte', 'lt', 'lte', 'in', 'nin'])
 				);
@@ -727,7 +746,7 @@ describe('filter.describe offers System 1 the exposure and maps its choices onto
 					'isNull',
 					'notNull'
 				]);
-				expect(ops('Notes')).toEqual([]); // masked to this caller
+				expect(ops('Notes')).toEqual([]); // `dispatch` omits it
 				expect(r.fields.some((f) => f.label === 'Internal code')).toBe(false);
 				// two relation hops: `jobs.assignee.manager.name`, with its own sort key
 				expect(path('Assignee › Manager › Name')).toEqual([
@@ -1007,11 +1026,19 @@ describe('a description fails closed', () => {
 
 it('literals: quoted strings, numbers and dates from the text', () => {
 	expect(
-		literals('jobs over 3 hours named "pump room" before 2026-10-01 or 5/10/2026', 'en', '2026-10-08')
+		literals(
+			'jobs over 3 hours named "pump room" before 2026-10-01 or 5/10/2026',
+			'en',
+			'2026-10-08'
+		)
 	).toEqual({ strings: ['pump room'], numbers: [3], dates: ['2026-10-01', '2026-10-05'] });
 	// a named month, its year today's unless stated; a day the month lacks is no date
 	expect(
-		literals('after 3rd October, before Oct 9th 2027, the 1st of jan or 31 June', 'en', '2026-10-08').dates.sort()
+		literals(
+			'after 3rd October, before Oct 9th 2027, the 1st of jan or 31 June',
+			'en',
+			'2026-10-08'
+		).dates.sort()
 	).toEqual(['2026-01-01', '2026-10-03', '2027-10-09']);
 	expect(literals('jobs with 3 decimal places in march', 'en', '2026-10-08')).toEqual({
 		strings: [],

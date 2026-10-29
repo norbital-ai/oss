@@ -17,7 +17,7 @@ import { readdir, readFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { Effect, FiberSet, Option, Schema, Semaphore } from 'effect';
+import { Effect, FiberSet, Option, Predicate, Schema, Semaphore } from 'effect';
 import type { Bundled, BundlerPort, BundleRequest } from '../../engine/contracts.ts';
 
 const MiB = 1024 * 1024;
@@ -265,8 +265,7 @@ export const bundler = Effect.fn('node.bundler')(function* (options: BundlerOpti
 		});
 		const replies = new Map<number, (reply: unknown) => void>();
 		child.on('message', (reply: unknown) => {
-			const id =
-				typeof reply === 'object' && reply !== null && 'id' in reply ? reply.id : undefined;
+			const id = Predicate.isObject(reply) ? reply['id'] : undefined;
 			for (const [key, answer] of replies)
 				if (key === id) {
 					replies.delete(key);
@@ -351,9 +350,7 @@ export const bundler = Effect.fn('node.bundler')(function* (options: BundlerOpti
 						if (Option.isNone(decoded) || size > BUNDLER.replyBytes) {
 							yield* retire;
 							return failed(
-								typeof reply === 'object' && reply !== null && 'exited' in reply
-									? 'it stopped'
-									: 'a malformed reply'
+								Predicate.isObject(reply) && 'exited' in reply ? 'it stopped' : 'a malformed reply'
 							);
 						}
 						if (used === undefined || used.rss > recycleBytes) yield* retire;

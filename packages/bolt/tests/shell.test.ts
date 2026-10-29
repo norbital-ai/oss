@@ -14,6 +14,7 @@ import type { Authority, ModelAuthority, EngineActor } from '../src/engine/contr
 import { exposure } from '../src/engine/access/exposure.ts';
 import {
 	canOpen,
+	commandCenterTabs,
 	crossSite,
 	framePolicy,
 	holdsPublic,
@@ -22,6 +23,7 @@ import {
 	kioskHref,
 	kioskNav,
 	nav,
+	navApps,
 	previewRoute,
 	startableAutomations,
 	route,
@@ -31,7 +33,19 @@ import { challengeQueue, kioskFetch, visitorFetch, shellApi } from '../src/shell
 import { BoltRoutes } from '../src/protocol/http.ts';
 import { activeApp, media, navigationModel } from '../src/shell/model.ts';
 import { fileAttachments } from '../src/engine/agent/attachments.ts';
-import { dirtyFolders, foldPhase, languageOf, reach, routedEnvironment, settleDrafts, stepLabel, StudioOp, studioView, suggestMessage, type StudioState } from '../src/shell/studio/model.ts';
+import {
+	dirtyFolders,
+	foldPhase,
+	languageOf,
+	reach,
+	routedEnvironment,
+	settleDrafts,
+	stepLabel,
+	StudioOp,
+	studioView,
+	suggestMessage,
+	type StudioState
+} from '../src/shell/studio/model.ts';
 import { decodeManifest, type EngineManifest } from '../src/engine/manifest.ts';
 /** The Node host's image port, as the agent's attachments read through it. */
 const hostImages = Effect.map(Layer.build(Images.fromAbi(imagesPort)), (context) =>
@@ -169,6 +183,10 @@ describe('app visibility (§3.9, capabilities.apps)', () => {
 		};
 		expect(Object.keys(m.apps).filter((a) => canOpen(m, visitor, a))).toEqual(['careers']);
 	});
+	it("the shell renders only its nav's apps: an external's members app is no access", () => {
+		expect(navApps(nav(m, member(['*'], { external: true })))).toEqual(['both', 'portal']);
+		expect(navApps(nav(m, member(['hr'])))).toEqual(['hr/people', 'hr/kiosk']);
+	});
 	it('externals and visitors get no settings, runs or staff inbox; the agent follows the briefs', () => {
 		expect(surfaces(m, member([]).actor, true)).toEqual({
 			inbox: true,
@@ -205,7 +223,6 @@ describe('exposure (the boot catalog ui reads)', () => {
 		update: [],
 		delete: [],
 		moves: {},
-		masks: {},
 		...over
 	});
 	const em = Result.getOrThrow(
@@ -245,7 +262,7 @@ describe('exposure (the boot catalog ui reads)', () => {
 			...member([]),
 			models: {
 				jobs: access({
-					read: { jobs: [{ policy: 'p', where: TRUE, fields: 'all' }] },
+					read: { default: { jobs: [{ policy: 'p', where: TRUE }] } },
 					create: [{ policy: 'p', columns: { jobs: ['title'] }, check: true }],
 					update: [{ policy: 'p', columns: { jobs: ['title'] }, check: false }]
 				})
@@ -282,7 +299,7 @@ describe('exposure (the boot catalog ui reads)', () => {
 		};
 		const auth: Authority = {
 			...member([]),
-			models: { jobs: access({ read: { jobs: [{ policy: 'p', where: TRUE, fields: 'all' }] } }) }
+			models: { jobs: access({ read: { default: { jobs: [{ policy: 'p', where: TRUE }] } } }) }
 		};
 		expect(exposure(source, auth)['jobs']?.syncs).toEqual({
 			report: { kind: 'file', parser: ['json'], export: ['json'], context: ['ids'] },
@@ -302,9 +319,7 @@ describe('exposure (the boot catalog ui reads)', () => {
 			...member([]),
 			models: {
 				sys_integration: access({
-					read: {
-						sys_integration: [{ policy: 'p', where: TRUE, fields: ['name', 'configuration'] }]
-					},
+					read: { default: { sys_integration: [{ policy: 'p', where: TRUE }] } },
 					update: [{ policy: 'p', columns: { sys_integration: ['configuration'] }, check: false }]
 				})
 			}
@@ -312,7 +327,6 @@ describe('exposure (the boot catalog ui reads)', () => {
 		const restricted = exposure(em, auth)['sys_integration'];
 		expect(restricted?.update?.columns).toEqual(['configuration']);
 		expect(restricted?.create).toBeUndefined();
-		expect(restricted?.relations).toBeUndefined();
 		expect(restricted?.fields).not.toHaveProperty('epoch');
 	});
 	it('a declared write layer exposes its child identity (model, parent FK, owned) beside the read layer', () => {
@@ -396,7 +410,7 @@ describe('exposure (the boot catalog ui reads)', () => {
 		const auth: Authority = {
 			...member([]),
 			models: {
-				jobs: access({ read: { jobs: [{ policy: 'p', where: TRUE, fields: 'all' }] } })
+				jobs: access({ read: { default: { jobs: [{ policy: 'p', where: TRUE }] } } })
 			}
 		};
 		expect(exposure(source, auth)['jobs']?.syncs).toBeUndefined();
@@ -404,14 +418,13 @@ describe('exposure (the boot catalog ui reads)', () => {
 			jobs: { kind: 'remote', with: 'operations' }
 		});
 	});
-	it('sends relations, guarded write inputs and fields masked on some rows; never an unexposed field', () => {
+	it('sends relations, guarded write inputs and the fields of the output the views read; never an unexposed field', () => {
 		const auth: Authority = {
 			...member([]),
 			models: {
 				jobs: access({
-					read: { jobs: [{ policy: 'p', where: TRUE, fields: 'all' }] },
-					update: [{ policy: 'p', columns: { jobs: ['title'] }, check: false }],
-					masks: { jobs: { pay: { t: 'const', value: false } } }
+					read: { default: { jobs: [{ policy: 'p', where: TRUE }] } },
+					update: [{ policy: 'p', columns: { jobs: ['title'] }, check: false }]
 				})
 			}
 		};
@@ -423,10 +436,45 @@ describe('exposure (the boot catalog ui reads)', () => {
 				relations: { site: { targets: ['sites'], optional: true } },
 				layers: ['site'],
 				update: { columns: ['title'] },
-				masked: ['pay'],
 				description: 'Work orders on site'
 			}
 		});
+	});
+	it('a caller holding only a named output reads that output: its fields, its layers, its name', () => {
+		const source: EngineManifest = {
+			...em,
+			exposures: {
+				jobs: {
+					...em.exposures['jobs']!,
+					outputs: { brief: { jobs: { fields: ['title'] } } }
+				}
+			}
+		};
+		const auth: Authority = {
+			...member([]),
+			models: { jobs: access({ read: { brief: { jobs: [{ policy: 'p', where: TRUE }] } } }) }
+		};
+		expect(exposure(source, auth)['jobs']).toEqual({
+			label: ['title'],
+			search: ['title'],
+			fields: { title: { kind: 'text' } },
+			output: 'brief',
+			description: 'Work orders on site'
+		});
+		// granted both, the views read `default`
+		const both: Authority = {
+			...auth,
+			models: {
+				jobs: access({
+					read: {
+						default: { jobs: [{ policy: 'p', where: TRUE }] },
+						brief: { jobs: [{ policy: 'p', where: TRUE }] }
+					}
+				})
+			}
+		};
+		expect(exposure(source, both)['jobs']).not.toHaveProperty('output');
+		expect(exposure(source, both)['jobs']?.fields).toHaveProperty('pay');
 	});
 	it('sends a readable computed field, so a label naming one resolves (A5)', () => {
 		const withComputed = Result.getOrThrow(
@@ -592,13 +640,14 @@ describe('exposure (the boot catalog ui reads)', () => {
 			...member([]),
 			models: {
 				sys_user: access({
-					read: { sys_user: [{ policy: '$directory', where: TRUE, fields: ['id', 'name'] }] }
+					read: { directory: { sys_user: [{ policy: '$directory', where: TRUE }] } }
 				})
 			}
 		};
 		expect(exposure(em, auth)['sys_user']).toEqual({
 			label: ['name'],
-			fields: { name: { kind: 'text' } }
+			fields: { name: { kind: 'text' } },
+			output: 'directory'
 		});
 	});
 });
@@ -657,12 +706,18 @@ describe('preview environments drop the meta tools', () => {
 	});
 	it('Studio, People and Integrations open the apps launcher; apps, approvals and other Settings stay', () => {
 		expect(
-			['/studio', '/studio/mrs', '/settings', '/settings/people', '/settings/integrations'].map(at)
-		).toEqual(Array.from({ length: 5 }, () => ({ kind: 'home' })));
+			['/studio', '/studio/changes', '/command-center/people', '/settings/integrations'].map(at)
+		).toEqual(Array.from({ length: 4 }, () => ({ kind: 'home' })));
 		expect(at('/app/sales/quotes')).toEqual({ kind: 'page', app: 'sales', page: 'quotes' });
-		expect([at('/inbox'), at('/settings/automations'), at('/settings/secrets')]).toEqual([
+		expect([
+			at('/inbox'),
+			at('/settings/organization'),
+			at('/command-center/automations'),
+			at('/settings/secrets')
+		]).toEqual([
 			{ kind: 'inbox' },
-			{ kind: 'settings', tab: 'automations' },
+			{ kind: 'settings', tab: 'organization' },
+			{ kind: 'commandCenter', tab: 'automations' },
 			{ kind: 'settings', tab: 'secrets' }
 		]);
 		expect(previewRoute({ kind: 'studio' }, false)).toEqual({ kind: 'studio' });
@@ -691,8 +746,43 @@ describe('preview environments drop the meta tools', () => {
 		const keys = [...model.sections, ...model.utilities].flatMap((x) =>
 			'items' in x ? x.items.map((i) => i.key) : [x.key, ...(x.children ?? []).map((c) => c.key)]
 		);
-		expect(keys).toEqual(expect.arrayContaining(['approvals', 'automations', 'secrets']));
-		expect(keys.filter((k) => ['norbius', 'people', 'studio'].includes(k))).toEqual([]);
+		expect(keys).toEqual(
+			expect.arrayContaining(['approvals', 'command-center', 'organization', 'secrets'])
+		);
+		expect(keys.filter((k) => ['norbius', 'integrations', 'studio'].includes(k))).toEqual([]);
+		// no People and no Studio inspection in a preview: the audit trail, runs and inference stay
+		expect(commandCenterTabs(surfaces(m, auth.actor, true, true, true), true, true)).toEqual([
+			'audit',
+			'automations'
+		]);
+	});
+	it('the command center: inspection needs a Studio host, the rest follows the viewer', () => {
+		const admin = member([], {}, true).actor,
+			staff = member([]).actor;
+		// tethered (Colony serves Studio): every tab
+		expect(commandCenterTabs(surfaces(m, admin, true, true), true, false)).toEqual([
+			'activity',
+			'resources',
+			'logs',
+			'audit',
+			'automations',
+			'inference',
+			'people'
+		]);
+		// untethered: no host inspection, the rest stays
+		expect(commandCenterTabs(surfaces(m, admin, true), true, false)).toEqual([
+			'audit',
+			'automations',
+			'inference',
+			'people'
+		]);
+		// a staff member: their runs only; an external: none
+		expect(commandCenterTabs(surfaces(m, staff, false, true), false, false)).toEqual([
+			'automations'
+		]);
+		expect(
+			commandCenterTabs(surfaces(m, member([], { external: true }).actor, false), false, false)
+		).toEqual([]);
 	});
 });
 
@@ -700,7 +790,12 @@ describe('routes and hrefs', () => {
 	const at = (path: string) => route(m, new URL(path, 'https://w.example'));
 	it('resolves the longest app prefix, the default page and a record', () => {
 		expect(at('/app/hr/kiosk/clock')).toEqual({ kind: 'page', app: 'hr/kiosk', page: 'clock' });
-		expect(at('/app/sales')).toEqual({ kind: 'page', app: 'sales', page: 'deals' });
+		// one spelling per page: a named page is never also its app's folder, and the folder's own-leaf page is only the folder
+		expect([at('/app/sales'), at('/app/sales/deals'), at('/app/sales/')]).toEqual([
+			{ kind: 'notFound' },
+			{ kind: 'page', app: 'sales', page: 'deals' },
+			{ kind: 'notFound' }
+		]);
 		expect(at(href('sales', 'quotes', { model: 'quotes', id: 'q/1' }))).toEqual({
 			kind: 'page',
 			app: 'sales',
@@ -712,16 +807,45 @@ describe('routes and hrefs', () => {
 	});
 	it('shell routes; sign-in keeps only a same-origin next', () => {
 		expect(at('/inbox')).toEqual({ kind: 'inbox' });
-		// runs live in Settings → Automations and the workspace log in Studio's runtime log; there is no `/runs` or `/logs`
+		// runs and the workspace log live in the command center; there is no `/runs` or `/logs`
 		expect([at('/runs'), at('/logs')]).toEqual([{ kind: 'notFound' }, { kind: 'notFound' }]);
-		expect(at('/settings/automations')).toEqual({ kind: 'settings', tab: 'automations' });
 		expect(at('/settings/secrets')).toEqual({ kind: 'settings', tab: 'secrets' });
-		expect(at('/settings/bogus')).toEqual({ kind: 'settings', tab: 'people' });
+		// no default or fallback tab: each other spelling is not found
+		expect([
+			at('/settings'),
+			at('/settings/bogus'),
+			at('/settings/people'),
+			at('/settings/secrets/x'),
+			at('/studio/workbench'),
+			at('/sign-in/x'),
+			at('/invite/abc/x'),
+			at('/inbox/')
+		]).toEqual(Array.from({ length: 8 }, () => ({ kind: 'notFound' })));
+		// each command center tab is a stable deep link
+		expect([
+			at('/command-center'),
+			at('/command-center/audit'),
+			at('/command-center/people'),
+			at('/command-center/x'),
+			at('/command-center/audit/1')
+		]).toEqual([
+			{ kind: 'commandCenter' },
+			{ kind: 'commandCenter', tab: 'audit' },
+			{ kind: 'commandCenter', tab: 'people' },
+			{ kind: 'notFound' },
+			{ kind: 'notFound' }
+		]);
 		expect([at('/studio'), at('/studio/x')]).toEqual([{ kind: 'studio' }, { kind: 'notFound' }]);
-		// L-BOLT-528: each Studio tab is a stable deep link
-		expect([at('/studio/mrs'), at('/studio/runtime'), at('/studio/mrs/1')]).toEqual([
-			{ kind: 'studio', tab: 'mrs' },
-			{ kind: 'studio', tab: 'runtime' },
+		// L-BOLT-528: each Studio tab is a stable deep link; Live moved to the command center
+		expect([
+			at('/studio/changes'),
+			at('/studio/versions'),
+			at('/studio/live'),
+			at('/studio/changes/1')
+		]).toEqual([
+			{ kind: 'studio', tab: 'changes' },
+			{ kind: 'studio', tab: 'versions' },
+			{ kind: 'notFound' },
 			{ kind: 'notFound' }
 		]);
 		expect(at('/invite/abc')).toEqual({ kind: 'invite', id: 'abc' });
@@ -820,14 +944,13 @@ describe('visitor fetch (§5.10, GAPS r5 11)', () => {
 			models: {
 				openings: {
 					read: {
-						openings: [{ policy: 'visitor', where: { t: 'const', value: true }, fields: 'all' }]
+						kiosk: { openings: [{ policy: 'visitor', where: { t: 'const', value: true } }] }
 					},
 					history: [],
 					create: [],
 					update: [],
 					delete: [],
-					moves: {},
-					masks: {}
+					moves: {}
 				}
 			}
 		};
@@ -859,7 +982,7 @@ describe('startable automations', () => {
 	it('Settings → Automations offers only automations the member may start and that need no input', () => {
 		const spec = (input?: EngineManifest['automations'][string]['input']) => ({
 			description: 'd',
-			runAs: ['p'] as const,
+			policies: ['p'] as const,
 			...(input === undefined ? {} : { input })
 		});
 		const withRuns: EngineManifest = {
@@ -1051,7 +1174,7 @@ describe('Studio port boundary', () => {
 				apps: { x: { title: 'X', description: 'X workspace', icon: 'lucide:box', pages: {} } },
 				policies: { rep: { description: 'Representative', grants: {} } },
 				envoys: {},
-				automations: { nightly: { description: 'Nightly task', runAs: 'trigger' } },
+				automations: { nightly: { description: 'Nightly task', policies: ['rep'] } },
 				connections: { stripe: { integration: 'stripe' }, mail: { integration: 'mail' } },
 				mcp: { docs: { description: 'Documentation tools', url: 'API' } },
 				integrations: {
@@ -1280,38 +1403,36 @@ describe('reading files over the files port', () => {
 			expect(missing.message).toMatch(/not stored/);
 		})
 	);
-	it.live(
-		'reads a HEIC attachment as a derived JPEG, the image a model takes',
-		() =>
-			Effect.gen(function* () {
-				const db = TenantDb.typed({
-					read: () => Effect.succeed([{ rows: [{ key: 'k', mime: 'image/heic' }], affected: 0 }]),
-					write: () => Effect.die('unused write'),
-					session: () =>
-						Effect.fail(DbError.make('0A000', 'this fixture does not support leased sessions')),
-					transaction: () => Effect.die('unused transaction')
-				});
-				const files = Files.of({
-					get: () =>
-						Effect.succeed(
-							new Uint8Array(readFileSync(new URL('./fixtures/files/photo.heic', import.meta.url)))
-						),
-					put: () => Effect.die('unused put'),
-					url: () => Effect.die('unused url'),
-					remove: () => Effect.die('unused remove'),
-					download: () => Effect.die('unused download')
-				});
-				const got = yield* fileAttachments(db, files, yield* hostImages).read({ id: 'f' }, 'image');
-				if (
-					typeof got !== 'object' ||
-					got === null ||
-					!('bytes' in got) ||
-					!(got.bytes instanceof Uint8Array)
-				)
-					throw new Error('Expected image bytes.');
-				expect(got.mime).toBe('image/jpeg');
-				expect([...got.bytes.subarray(0, 3)]).toEqual([0xff, 0xd8, 0xff]);
-			})
+	it.live('reads a HEIC attachment as a derived JPEG, the image a model takes', () =>
+		Effect.gen(function* () {
+			const db = TenantDb.typed({
+				read: () => Effect.succeed([{ rows: [{ key: 'k', mime: 'image/heic' }], affected: 0 }]),
+				write: () => Effect.die('unused write'),
+				session: () =>
+					Effect.fail(DbError.make('0A000', 'this fixture does not support leased sessions')),
+				transaction: () => Effect.die('unused transaction')
+			});
+			const files = Files.of({
+				get: () =>
+					Effect.succeed(
+						new Uint8Array(readFileSync(new URL('./fixtures/files/photo.heic', import.meta.url)))
+					),
+				put: () => Effect.die('unused put'),
+				url: () => Effect.die('unused url'),
+				remove: () => Effect.die('unused remove'),
+				download: () => Effect.die('unused download')
+			});
+			const got = yield* fileAttachments(db, files, yield* hostImages).read({ id: 'f' }, 'image');
+			if (
+				typeof got !== 'object' ||
+				got === null ||
+				!('bytes' in got) ||
+				!(got.bytes instanceof Uint8Array)
+			)
+				throw new Error('Expected image bytes.');
+			expect(got.mime).toBe('image/jpeg');
+			expect([...got.bytes.subarray(0, 3)]).toEqual([0xff, 0xd8, 0xff]);
+		})
 	);
 });
 
@@ -1398,6 +1519,20 @@ describe('shell HTTP failures', () => {
 				).boot()
 			);
 			expect(result).toMatchObject({ status: 410, message: 'The link expired.' });
+		})
+	);
+	it.effect('answers every rateLimited refusal with the one friendly message', () =>
+		Effect.gen(function* () {
+			const result = yield* Effect.flip(
+				shellApi(async () =>
+					Response.json({ error: { code: 'rateLimited', message: 'rateLimited' } }, { status: 429 })
+				).boot()
+			);
+			expect(result).toMatchObject({
+				status: 429,
+				code: 'rateLimited',
+				message: 'Too many requests. Wait a moment and try again.'
+			});
 		})
 	);
 	it.effect('distinguishes a connection failure from an invalid successful response', () =>

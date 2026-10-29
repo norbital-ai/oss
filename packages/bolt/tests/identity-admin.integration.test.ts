@@ -9,7 +9,7 @@ import { randomUUID } from 'node:crypto';
 import type { Json } from '../src/decl/values.ts';
 import { RateWindows } from '../src/engine/access/rate.ts';
 import type { MembershipPort, TransportPort } from '../src/engine/contracts.ts';
-import { TestDb } from '../src/test/database.ts';
+import { TestDb } from '../../bolt-cli/src/test/database.ts';
 import { TenantDb } from '../src/engine/db/tenant-db.ts';
 import { Authorities, previewAs } from '../src/engine/identity/actor.ts';
 import {
@@ -30,7 +30,7 @@ import {
 	verifyCode
 } from '../src/engine/identity/session.ts';
 import type { EngineManifest } from '../src/engine/manifest.ts';
-import { memoryAuditLayer } from '../src/test/index.ts';
+import { memoryAuditLayer } from '../../bolt-cli/src/test/index.ts';
 
 const m: EngineManifest = {
 	needs: [],
@@ -332,32 +332,17 @@ layer(AdministrationFixtureLive)((it) => {
 		);
 	});
 
-	describe('identity automation events and bulk invitations', () => {
+	describe('identity sign-in and bulk invitations', () => {
 		it.effect(
-			'new invitation sign-in queues birth, acceptance and membership once in one statement',
+			'new invitation sign-in records birth and acceptance and queues membership once in one statement',
 			() =>
 				Effect.gen(function* () {
 					const { db, bound, founder, as, one, lastCode } = yield* AdministrationFixture;
-					const manifest: EngineManifest = {
-						...m,
-						automations: {
-							user_born: {
-								description: 'Provision the new member profile',
-								on: { created: 'sys_user' },
-								runAs: ['sales']
-							},
-							invitation_accepted: {
-								description: 'Finish the accepted invitation profile',
-								on: { updated: 'sys_invitation', fields: ['accepted_at'] },
-								runAs: ['sales']
-							}
-						}
-					};
+					const manifest = m;
 					let wakes = 0;
 					const host = {
 						...bound,
 						events: {
-							manifest,
 							announce: Effect.sync(() => {
 								wakes++;
 							})
@@ -383,27 +368,6 @@ layer(AdministrationFixtureLive)((it) => {
 							invitation.id
 						)
 					).toEqual([{ accepted: true, revision: 2 }]);
-					const events = () =>
-						one(
-							"SELECT automation, input, actor, cause, state FROM sys_run WHERE automation IN ('user_born', 'invitation_accepted') ORDER BY automation"
-						);
-					const expected = [
-						{
-							automation: 'invitation_accepted',
-							input: { model: 'sys_invitation', ids: [invitation.id] },
-							actor: `member:${session.user}`,
-							cause: 'updated',
-							state: 'queued'
-						},
-						{
-							automation: 'user_born',
-							input: { model: 'sys_user', ids: [session.user] },
-							actor: `member:${session.user}`,
-							cause: 'created',
-							state: 'queued'
-						}
-					];
-					expect(yield* events()).toEqual(expected);
 					expect(
 						yield* one(
 							"SELECT input FROM sys_run WHERE automation = 'bolt.membership' AND input->>'user' = $1",
@@ -434,32 +398,21 @@ layer(AdministrationFixtureLive)((it) => {
 					expect(yield* Effect.flip(verifyCode(host, email, code, '7.7.7.7'))).toMatchObject({
 						code: 'invalidCode'
 					});
-					expect(yield* events()).toEqual(expected);
 					expect(wakes).toBe(1);
 				})
 		);
 
 		it.effect(
-			'queues a single invitation event containing the entire batch, after validating all addresses',
+			'saves the entire invitation batch in one statement, after validating all addresses',
 			() =>
 				Effect.gen(function* () {
 					const { h, founder, as, one, outbox, mail } = yield* AdministrationFixture;
-					const manifest: EngineManifest = {
-						...m,
-						automations: {
-							invitation_profile: {
-								description: 'Provision profiles',
-								on: { created: 'sys_invitation' },
-								runAs: ['sales']
-							}
-						}
-					};
+					const manifest = m;
 					let wakes = 0;
 					const host = {
 						...h,
 						sms: mail,
 						events: {
-							manifest,
 							announce: Effect.sync(() => {
 								wakes++;
 							})
@@ -473,14 +426,12 @@ layer(AdministrationFixtureLive)((it) => {
 					]);
 					expect(sent).toMatchObject({ ids: expect.any(Array) });
 					expect(sent.failed).toEqual([]);
-					const events = yield* one(
-						"SELECT input FROM sys_run WHERE automation = 'invitation_profile'"
-					);
-					expect(events).toHaveLength(1);
-					expect(events[0]?.['input']).toEqual({
-						model: 'sys_invitation',
-						ids: expect.arrayContaining(sent.ids)
-					});
+					expect(
+						yield* one(
+							'SELECT count(*)::int AS n FROM sys_invitation WHERE id IN (SELECT jsonb_array_elements_text($1::jsonb))',
+							sent.ids
+						)
+					).toEqual([{ n: 3 }]);
 					expect(wakes).toBe(1);
 					expect(outbox.slice(-3).map((message) => message.to)).toContain('bulk-one@example.com');
 					const [before] = yield* one('SELECT count(*)::int AS n FROM sys_invitation');
@@ -545,30 +496,6 @@ layer(AdministrationFixtureLive)((it) => {
 						)
 					).toMatchObject({ _tag: 'IdentityRefusal' });
 				})
-		);
-
-		it.effect('queues user field changes from identity administration', () =>
-			Effect.gen(function* () {
-				const { h, founder, as, one } = yield* AdministrationFixture;
-				const manifest: EngineManifest = {
-					...m,
-					automations: {
-						active_changed: {
-							description: 'Watch activation',
-							on: { updated: 'sys_user', fields: ['active'] },
-							runAs: ['sales']
-						}
-					}
-				};
-				const host = { ...h, events: { manifest, announce: Effect.void } };
-				const [user] = yield* one('SELECT id FROM sys_user WHERE NOT admin LIMIT 1');
-				expect(user).toBeDefined();
-				if (typeof user?.['id'] !== 'string') throw new Error('Missing non-administrator member');
-				expect(yield* deactivate(host, yield* as(founder), user['id'])).toBeNull();
-				expect(yield* one("SELECT input FROM sys_run WHERE automation = 'active_changed'")).toEqual(
-					[{ input: { model: 'sys_user', ids: [user['id']] } }]
-				);
-			})
 		);
 	});
 });

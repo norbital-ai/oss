@@ -145,12 +145,8 @@
 	{/if}
 {/snippet}
 
-<Stack as="nav" gap="none" fill class="min-h-0" aria-label={t('Source')}>
-	<Inline
-		gap="xs"
-		shrink={false}
-		class="border-b border-border/60 px-3 py-0.5 text-muted-foreground"
-	>
+<Stack as="nav" gap="none" size="fill" aria-label={t('Source')}>
+	<Inline gap="xs" class="border-b border-border/60 px-3 py-0.5 text-muted-foreground">
 		<Icon name="lucide:file-code-2" class="size-3.5 shrink-0" />
 		<span class="shrink-0 truncate text-sm">{t('Source')}</span>
 		{#if files.length > 0}<span
@@ -171,7 +167,7 @@
 			/>
 		</label>
 	</Inline>
-	<Scroll name={t('Source')} grow class="min-h-0 py-1">
+	<Scroll name={t('Source')} size="fill" class="py-1">
 		<div role="tree" data-file-tree class="relative w-full min-w-0 px-1">
 			{#if needle !== ''}
 				{#each matches as path (path)}{@render row(

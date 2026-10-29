@@ -2,7 +2,7 @@
 import { Effect, Result } from 'effect';
 import type { Bindings, Invocation } from '../src/engine/contracts.ts';
 import { PgliteDb } from '../src/node/db/pglite.ts';
-import { TestDb } from '../src/test/database.ts';
+import { TestDb } from '../../bolt-cli/src/test/database.ts';
 import type { TenantDbShape } from '../src/engine/db/tenant-db.ts';
 import { decodeManifest, type EngineManifest } from '../src/engine/manifest.ts';
 import { readEngine } from '../src/engine/query/engine.ts';

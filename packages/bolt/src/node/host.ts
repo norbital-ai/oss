@@ -3,7 +3,6 @@
 // bolt-server and `bolt dev --host` both serve through it; Colony makes the same engine calls across its tenants.
 import { Clock, Effect, FiberSet, FileSystem, Option, Path, Queue, Result, Schema } from 'effect';
 import { pathToFileURL } from 'node:url';
-import { HOST_FILE } from '../compiler/artifact/index.ts';
 import { activate, isOff, off, type Facilities, type Serving } from '../facilities/index.ts';
 import { BoltError, CODES } from '../protocol/errors.ts';
 import {
@@ -14,8 +13,8 @@ import {
 	type WorkspaceLinks
 } from '../protocol/host-api.ts';
 import { cronClock } from './cron-clock.ts';
+import type { GuestIsolatesPort } from '../engine/contracts.ts';
 import type { NodePorts } from './ports.ts';
-
 
 const isCode = Schema.is(Schema.Literals(CODES));
 /** A HOST_API rejection (an encoded `HostApiFailure`) as the BoltError it names. */
@@ -30,6 +29,9 @@ const refused = (cause: unknown): BoltError =>
 /** One HOST_API call, its rejection decoded. */
 export const call = <A>(work: (signal: AbortSignal) => Promise<A>) =>
 	Effect.tryPromise({ try: work, catch: refused });
+
+/** The host file a workspace serves untethered with (plan 01); never part of its source. */
+export const HOST_FILE = 'norbital.host.ts';
 
 /** `flag`'s host file, else `root`'s own `norbital.host.ts`; none means the tethered loop. */
 export const hostFileOf = Effect.fn('bolt.hostFileOf')(function* (
@@ -57,15 +59,24 @@ const HostModule = Schema.Struct({
 export const loadHost = Effect.fn('bolt.loadHost')(function* (file: string) {
 	const module = yield* Effect.tryPromise({
 		try: () => import(pathToFileURL(file).href),
-		catch: (cause) => BoltError.make('invalidSpec', 'admission', `${file} could not load.`, cause)
-	}).pipe(
-		Effect.flatMap((module) => Schema.decodeUnknownEffect(HostModule)(module)),
-		Effect.mapError((cause) =>
+		catch: (cause) =>
 			BoltError.make(
 				'invalidSpec',
 				'admission',
-				`${file} must default-export its Facilities (every group, \`off\` where left out).`,
+				`${file} could not load: ${cause instanceof Error ? cause.message : String(cause)}`,
 				cause
+			)
+	}).pipe(
+		Effect.flatMap((module) =>
+			Schema.decodeUnknownEffect(HostModule)(module).pipe(
+				Effect.mapError((cause) =>
+					BoltError.make(
+						'invalidSpec',
+						'admission',
+						`${file} must default-export its Facilities (every group, \`off\` where left out).`,
+						cause
+					)
+				)
 			)
 		)
 	);
@@ -82,11 +93,11 @@ export type ServeOptions = {
 	readonly publicUrl: string;
 	readonly facilities: Facilities;
 	readonly serving: Serving;
+	/** The host's guest runner (`nodeGuests` from `@norbital-ai/bolt-cli/guests` for bolt-server and `bolt dev`). */
+	readonly guests: GuestIsolatesPort;
 	readonly native: NodePorts;
 	/** The shell's workspace name and handle. */
 	readonly workspace: { readonly name: string; readonly handle: string };
-	/** The seed pack's `start` runs. */
-	readonly start?: readonly string[];
 	/** Runs guest work under the host's compute envelope: link ingress, deadline wakes and cron fires. */
 	readonly admit: <A, E>(work: Effect.Effect<A, E>) => Effect.Effect<A, E | BoltError>;
 	readonly log: (line: string) => void;
@@ -120,7 +131,11 @@ export const serveRelease = Effect.fn('bolt.serveRelease')(function* (options: S
 						? {
 								connect: () =>
 									Promise.reject(
-										BoltError.make('unavailable', 'facility', 'This host serves no outbound network.')
+										BoltError.make(
+											'unavailable',
+											'facility',
+											'This host serves no outbound network.'
+										)
 									)
 							}
 						: facilities.ports.outbound.tcp,
@@ -141,8 +156,7 @@ export const serveRelease = Effect.fn('bolt.serveRelease')(function* (options: S
 					scope: options.scope,
 					release,
 					publicUrl,
-					...(options.start === undefined ? {} : { start: options.start }),
-					guestIsolates: options.native.guestIsolates,
+					guests: options.guests,
 					deadlines: {
 						announce: (_scope, notLaterThan) => {
 							const next = Date.parse(notLaterThan);

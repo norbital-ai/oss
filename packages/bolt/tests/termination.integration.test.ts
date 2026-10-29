@@ -18,16 +18,16 @@ import {
 	Stream
 } from 'effect';
 import { TestClock } from 'effect/testing';
-import { Ai, WebRead } from '../src/engine/ports.ts';
+import { Ai, RunUnits, WebRead } from '../src/engine/ports.ts';
 import { Port } from '../src/engine/port.ts';
 import { Runs } from '../src/engine/services.ts';
 import { LIMITS } from '../src/engine/contracts.ts';
 import { decodeProjectedManifest } from '../src/engine/manifest.ts';
-import { program } from '../src/test/guest.ts';
-import { TestDb } from '../src/test/database.ts';
+import { program } from '../../bolt-cli/src/test/guest.ts';
+import { TestDb } from '../../bolt-cli/src/test/database.ts';
 import { FacilityFailure } from '../src/decl/errors.ts';
 import { embedRun } from '../src/engine/integrations/embed.ts';
-import { TestWorkspace, type Kit } from '../src/test/index.ts';
+import { TestWorkspace, type Kit } from '../../bolt-cli/src/test/index.ts';
 import { loadPack, sourceOf } from '../src/engine/write/pack.ts';
 import { randomUUID } from 'node:crypto';
 
@@ -54,9 +54,9 @@ const manifest = Result.getOrThrow(
 			}
 		},
 		automations: {
-			hang: { description: 'Waits on a call nobody answers', runAs: ['p'] },
-			pair: { description: 'Two reads at once', runAs: ['p'] },
-			relay: { description: 'A fast branch beside a slow one', runAs: ['p'] }
+			hang: { description: 'Waits on a call nobody answers', policies: ['p'] },
+			pair: { description: 'Two reads at once', policies: ['p'] },
+			relay: { description: 'A fast branch beside a slow one', policies: ['p'] }
 		},
 		integrations: {},
 		teams: {},
@@ -111,7 +111,8 @@ const shared = Layer.unwrap(
 							inflight--;
 						}
 						if (next !== undefined && url.includes('slow')) yield* Deferred.await(next);
-						if (next !== undefined && url.includes('next')) yield* Deferred.succeed(next, undefined);
+						if (next !== undefined && url.includes('next'))
+							yield* Deferred.succeed(next, undefined);
 						return page(url);
 					})
 			})
@@ -156,7 +157,14 @@ layer(shared, { excludeTestServices: true })('P38: facility calls in a body', (i
 					manifest,
 					sourceOf({
 						dir: '',
-						meta: { format: 1, name: 'base', hash: 'semantic', start: [], assets: [], rows: { docs: 1 } },
+						meta: {
+							format: 1,
+							name: 'base',
+							hash: 'semantic',
+							start: [],
+							assets: [],
+							rows: { docs: 1 }
+						},
 						rows: { docs: [{ id: randomUUID(), title: 'seeded' }] }
 					}),
 					'2026-09-27T00:00:00.000Z'
@@ -174,7 +182,10 @@ layer(shared, { excludeTestServices: true })('P38: facility calls in a body', (i
 			Effect.gen(function* () {
 				const t = yield* TestWorkspace;
 				yield* t.db.write({ text: 'DELETE FROM docs', params: [] });
-				yield* t.db.write({ text: `INSERT INTO docs (id, title) VALUES ('${randomUUID()}', 'desk')`, params: [] });
+				yield* t.db.write({
+					text: `INSERT INTO docs (id, title) VALUES ('${randomUUID()}', 'desk')`,
+					params: []
+				});
 				const queued = `SELECT count(*)::int AS n FROM sys_run WHERE automation = 'bolt.embed'`;
 				const before = yield* sql(t, queued);
 				let passes = 0;
@@ -234,7 +245,7 @@ describe('P38: every run ends, drains interrupt, loops prove progress', () => {
 	);
 
 	it.live(
-		'aborting the generation interrupts a guest stuck on a facility that never answers; the run is re-queued (rule 71a)',
+		'aborting the generation interrupts a guest stuck on a facility that never answers; the run is re-queued (rule 71a), or failed when its generation overran',
 		() =>
 			Effect.scoped(
 				Effect.gen(function* () {
@@ -243,15 +254,22 @@ describe('P38: every run ends, drains interrupt, loops prove progress', () => {
 							Scope.close(scope, Exit.void)
 						);
 					const startedCall = yield* Deferred.make<void>();
+					let units = 0;
 					const context = yield* Layer.build(
 						TestWorkspace.layer({
 							manifest,
 							guest: yield* guest,
 							db: Layer.succeedContext(dbContext),
-							ports: Layer.succeed(WebRead, {
-								read: () =>
-									Deferred.succeed(startedCall, undefined).pipe(Effect.andThen(Effect.never))
-							})
+							ports: Layer.mergeAll(
+								Layer.succeed(WebRead, {
+									read: () =>
+										Deferred.succeed(startedCall, undefined).pipe(Effect.andThen(Effect.never))
+								}),
+								// each run tells the kernel's meter it begins the next unit of its wake
+								Layer.succeed(RunUnits, {
+									next: () => Effect.sync(() => void units++)
+								})
+							)
 						})
 					).pipe(Scope.provide(generation));
 					const t = Context.get(context, TestWorkspace),
@@ -259,18 +277,30 @@ describe('P38: every run ends, drains interrupt, loops prove progress', () => {
 					yield* t.db.write({ text: queue('hang'), params: [] });
 					yield* Effect.forkIn(runs.tick.pipe(Effect.provide(context)), generation);
 					yield* Deferred.await(startedCall);
+					expect(units).toBe(1);
 					const started = yield* Clock.currentTimeMillis;
 					yield* Scope.close(generation, Exit.void);
 					expect((yield* Clock.currentTimeMillis) - started).toBeLessThan(1_000);
 					expect(yield* sql(t, `SELECT state, error->>'code' AS code FROM sys_run`)).toEqual([
 						{ state: 'running', code: 'interrupted' }
 					]);
-					yield* runs.boot.pipe(Effect.provide(context));
+					yield* runs.boot().pipe(Effect.provide(context));
 					expect(yield* sql(t, `SELECT state, leases FROM sys_run`)).toEqual([
 						{ state: 'queued', leases: 1 }
+					]);
+					// a generation the kernel stopped past a unit's CPU budget: its run fails at once, never reruns
+					yield* t.db.write({ text: `UPDATE sys_run SET state = 'running'`, params: [] });
+					yield* runs.boot('The run used its CPU budget.').pipe(Effect.provide(context));
+					expect(
+						yield* sql(t, `SELECT state, error, finished_at IS NOT NULL AS finished FROM sys_run`)
+					).toEqual([
+						{
+							state: 'failed',
+							error: { code: 'cpuBudget', message: 'The run used its CPU budget.' },
+							finished: true
+						}
 					]);
 				})
 			)
 	);
-
 });

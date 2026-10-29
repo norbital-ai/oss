@@ -3,11 +3,11 @@
 One directory per template at the repository root. Authors declare identity and marketing facts in
 the template itself — not in a host or a website checkout.
 
-| File / path              | Supplies                                                                       |
-| ------------------------ | ------------------------------------------------------------------------------ |
-| `norbital.template.json` | handle, catalogue copy, tags, visibility, counts and optional seed-bank source |
-| `README.md`              | the detail page body, rendered as markdown                                     |
-| `assets/thumbnail.svg`   | **marketing thumbnail** for website cards and `og:image`                       |
+| File / path              | Supplies                                                 |
+| ------------------------ | -------------------------------------------------------- |
+| `norbital.template.json` | handle, catalogue copy, tags, visibility and counts      |
+| `README.md`              | the detail page body, rendered as markdown               |
+| `assets/thumbnail.svg`   | **marketing thumbnail** for website cards and `og:image` |
 
 ## Marketing thumbnail (declare once)
 
@@ -44,33 +44,32 @@ The `<directory>` written in paths always means the directory, never the handle.
 
 ```json
 {
-  "schemaVersion": 1,
-  "key": "norbital_service_desk",
-  "name": "Service Desk",
-  "description": "Client agreements, service work and configured fees.",
-  "industry": "Professional Services",
-  "visibility": "public",
-  "counts": { "models": 2, "apps": 1, "automations": 0 },
-  "tags": ["Service", "Operations"],
-  "name_zh": "服务台",
-  "description_zh": "管理客户协议、服务工作和费用规则。"
+	"schemaVersion": 1,
+	"key": "norbital_service_desk",
+	"name": "Service Desk",
+	"description": "Client agreements, service work and configured fees.",
+	"industry": "Professional Services",
+	"visibility": "public",
+	"counts": { "models": 2, "apps": 1, "automations": 0 },
+	"tags": ["Service", "Operations"],
+	"name_zh": "服务台",
+	"description_zh": "管理客户协议、服务工作和费用规则。"
 }
 ```
 
-| Field                             | Required | Meaning                                                                                                           |
-| --------------------------------- | -------- | ----------------------------------------------------------------------------------------------------------------- |
-| `schemaVersion`                   | yes      | `1`                                                                                                               |
-| `key`                             | yes      | the workspace handle                                                                                              |
-| `name`, `description`, `industry` | yes      | nonempty English strings                                                                                          |
-| `name_zh`, `description_zh`       | no       | maintained Chinese catalogue copy                                                                                 |
-| `tags`                            | yes      | card chips                                                                                                        |
-| `visibility`                      | yes      | `public` or `unlisted`                                                                                            |
-| `counts`                          | yes      | nonnegative model, app and automation counts matching the current source                                     |
-| `seed`                            | no       | seed-reader metadata such as `bankTree`, `layout` and ordered `stages`; use the owning template's reader contract |
+| Field                             | Required | Meaning                                                                  |
+| --------------------------------- | -------- | ------------------------------------------------------------------------ |
+| `schemaVersion`                   | yes      | `1`                                                                      |
+| `key`                             | yes      | the workspace handle                                                     |
+| `name`, `description`, `industry` | yes      | nonempty English strings                                                 |
+| `name_zh`, `description_zh`       | no       | maintained Chinese catalogue copy                                        |
+| `tags`                            | yes      | card chips                                                               |
+| `visibility`                      | yes      | `public` or `unlisted`                                                   |
+| `counts`                          | yes      | nonnegative model, app and automation counts matching the current source |
 
 The repository's metadata check compares declared counts to source. Refresh them when entities or
-roles change; do not hard-code counts in a website or host. `seed.bankTree` names the private bank
-tree consumed by `bolt build --bank=...`; it is not public seed data. Whether source is public is decided by the
+roles change; do not hard-code counts in a website or host. The manifest has no `seed` block: the
+private bank tree is named by `seed/+seeder.ts` (`bank.tree`) and read only by `bolt seed`. Whether source is public is decided by the
 directory the template lives in: moving a private template to the public repository publishes it
 with nothing inside it changed.
 

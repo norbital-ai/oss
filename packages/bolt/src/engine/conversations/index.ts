@@ -82,11 +82,13 @@ const TOMBSTONE = `text = CASE WHEN sys_message.role IS NULL THEN '' ELSE sys_me
 	email = CASE WHEN sys_message.role IS NULL THEN NULL ELSE sys_message.email END`;
 export function conversations(cfg: ConversationsConfig) {
 	const { manifest: m, db } = cfg.engine;
-	const uuid = cfg.crypto.randomUUIDv4().pipe(
-		Effect.mapError((error) =>
-			BoltError.make('unavailable', 'facility', 'Secure random UUID generation failed.', error)
-		)
-	);
+	const uuid = cfg.crypto
+		.randomUUIDv4()
+		.pipe(
+			Effect.mapError((error) =>
+				BoltError.make('unavailable', 'facility', 'Secure random UUID generation failed.', error)
+			)
+		);
 	const clock =
 		cfg.clock ?? Clock.currentTimeMillis.pipe(Effect.map((now) => new Date(now).toISOString()));
 	const instanceOf = Effect.fn('Agents.instanceOf')(function* (id: string) {

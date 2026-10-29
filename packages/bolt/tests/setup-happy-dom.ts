@@ -1,5 +1,5 @@
 // Use the SDK's shared storage shim and offline icon cache before shell components load.
-import '../src/test/dom.ts';
+import '../../bolt-cli/src/test/dom.ts';
 import { icons as vscodeIcons } from '@iconify-json/vscode-icons/index.js';
 import { addCollection } from '@iconify/svelte/dist/functions';
 

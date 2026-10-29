@@ -1,0 +1,25 @@
+{
+	"extends": "../tsconfig.json",
+	"compilerOptions": {
+		"noEmit": true,
+		"rootDir": "../../..",
+		"types": ["node", "vitest/globals", "vite/client"],
+		// Bolt's source, as the suite's Vite aliases it (`vitest.config.ts`): one copy of every Bolt module
+		"paths": {
+			"@norbital-ai/bolt": ["../../bolt/src/index.ts"],
+			"@norbital-ai/bolt/artifact": ["../../bolt/src/engine/artifact/read.ts"],
+			"@norbital-ai/bolt/engine": ["../../bolt/src/engine/index.ts"],
+			"@norbital-ai/bolt/errors": ["../../bolt/src/decl/errors.ts"],
+			"@norbital-ai/bolt/facilities": ["../../bolt/src/facilities/index.ts"],
+			"@norbital-ai/bolt/guest-hooks": ["../../bolt/src/node/guest-hooks.ts"],
+			"@norbital-ai/bolt/host-api": ["../../bolt/src/protocol/host-api.ts"],
+			"@norbital-ai/bolt/node": ["../../bolt/src/node/index.ts"],
+			"@norbital-ai/bolt/protocol": ["../../bolt/src/protocol/index.ts"],
+			"@norbital-ai/bolt/tooling": ["../../bolt/src/tooling/index.ts"],
+			"@norbital-ai/bolt/tooling/browser": ["../../bolt/src/tooling/browser.ts"]
+		}
+	},
+	// the literal names Bolt's type corpus registers, which the kit's typed callers read
+	"include": ["./**/*.ts", "../src/**/*.ts", "../../bolt/tests/types/registry.ts"],
+	"exclude": []
+}

@@ -351,19 +351,27 @@ type SpecOf<C> = C extends keyof Exposed
 	: C extends SystemName
 		? SystemNames['exposures'][C]
 		: { read: { readonly [path: string]: { fields: 'all' } } };
-type ReadSpec<C> = SpecOf<C> extends { read: infer R } ? R : never;
-type RootSpec<C> = ReadSpec<C> extends infer R ? (C extends keyof R ? R[C] : never) : never;
-/** Fields of `C`'s root layer any grant can ever see (system columns always). */
-export type ReadField<C> =
-	| (RootSpec<C> extends { fields: 'all' }
+type OutputsOf<C> = SpecOf<C> extends { outputs: infer O } ? O : {};
+/** The read outputs model `C` declares: `default` (its `read`) and each named one of its `outputs`. */
+export type OutputName<C> = 'default' | (keyof OutputsOf<C> & string);
+/** The layer map of output `O` of `C` (`default`: its `read`). */
+type ReadSpec<C, O = 'default'> = O extends 'default'
+	? SpecOf<C> extends { read: infer R }
+		? R
+		: never
+	: OutputsOf<C>[O & keyof OutputsOf<C>];
+type RootSpec<C, O> = ReadSpec<C, O> extends infer R ? (C extends keyof R ? R[C] : never) : never;
+/** Fields of `C`'s root layer in output `O` (system columns always). */
+export type ReadField<C, O = 'default'> =
+	| (RootSpec<C, O> extends { fields: 'all' }
 			? FieldName<C>
-			: RootSpec<C> extends { fields: readonly (infer F)[] }
+			: RootSpec<C, O> extends { fields: readonly (infer F)[] }
 				? F & string
 				: never)
 	| keyof SystemColumns<C>;
-/** The relations path `P` of its root's `read` declares as layers (`'<P>.<rel>'`): the only ones a filter or sort crosses. */
-export type LayerRelation<P> =
-	ReadPath<RootOf<P>> extends infer K
+/** The relations path `P` of its root's output `O` declares as layers (`'<P>.<rel>'`): the only ones a filter or sort crosses. */
+export type LayerRelation<P, O = 'default'> =
+	ReadPath<RootOf<P>, O> extends infer K
 		? K extends `${P & string}.${infer R}`
 			? R extends `${string}.${string}`
 				? never
@@ -371,16 +379,16 @@ export type LayerRelation<P> =
 			: never
 		: never;
 /**
- * Relations of `C` a `Where` or a sort may cross: the layers its `read` declares, read under the root's policy. A
- * relation it does not declare is a type error, never the target model's own access point.
+ * Relations of `C` a `Where` or a sort may cross: the layers its output `O` declares. A relation it does not declare is
+ * a type error, never the target model's own access point.
  */
-export type ReadRelation<C> = LayerRelation<C>;
+export type ReadRelation<C, O = 'default'> = LayerRelation<C, O>;
 export type ExposureSpecOf<C> = SpecOf<C>;
 
 // ── layer paths (decision 1): generated literal unions, so a path's type is a lookup, never a recursive walk ──
 type Layers = NamesPart<'layers'>;
-/** The read paths `C` declares: `'<C>'` and each `'<C>.<rel>…'` layer of its `read`. */
-export type ReadPath<C> = keyof ReadSpec<C> & string;
+/** The read paths output `O` of `C` declares: `'<C>'` and each `'<C>.<rel>…'` layer. */
+export type ReadPath<C, O = 'default'> = keyof ReadSpec<C, O> & string;
 type WriteLayers<C, V> = SpecOf<C> extends { [P in V & string]: { columns: infer L } } ? L : {};
 /** The write paths `C`'s `create` or `update` declares: `'<C>'` and each child layer of its `columns`. */
 export type WritePath<C, V extends 'create' | 'update'> = keyof WriteLayers<C, V> & string;
@@ -394,12 +402,12 @@ export type PathModel<C, P> = P extends C
 			? Layers[C][P] & TargetName
 			: never
 		: never;
-type LayerSpec<C, P> = ReadSpec<C> extends infer R ? R[P & keyof R] : never;
-/** The fields layer `P` of `C`'s `read` exposes (system columns always): what its `where`, `fields` and output name. */
-export type LayerField<C, P> =
-	| (LayerSpec<C, P> extends { fields: 'all' }
+type LayerSpec<C, P, O> = ReadSpec<C, O> extends infer R ? R[P & keyof R] : never;
+/** The fields layer `P` of `C`'s output `O` exposes (system columns always): what its `where` and `fields` name. */
+export type LayerField<C, P, O = 'default'> =
+	| (LayerSpec<C, P, O> extends { fields: 'all' }
 			? FieldName<PathModel<C, P>>
-			: LayerSpec<C, P> extends { fields: readonly (infer F)[] }
+			: LayerSpec<C, P, O> extends { fields: readonly (infer F)[] }
 				? F & string
 				: never)
 	| keyof SystemColumns<PathModel<C, P>>;
@@ -481,61 +489,8 @@ export type OmittableOnInsert<M, P> = P extends keyof OneRels<M>
 type ColumnValues<M, P extends PropertyKey, Rels = OneRels<M>> = {
 	readonly [K in P & keyof Columns<M>]: ValueOf<Columns<M>[K]>;
 } & { readonly [K in P & keyof Rels]: FkValue<Rels[K]> };
-declare const masked: unique symbol;
-/** A value the reading caller's grants do not admit (rules 10, 14). */
-export type Masked = {
-	readonly [masked]: true;
-	readonly $masked: true;
-};
-/** The canonical wire marker for a field omitted by the reading caller's grants. */
-export const isMasked = (value: unknown): value is Masked =>
-	typeof value === 'object' && value !== null && '$masked' in value && value.$masked === true;
-// What one grant's read admits on each declared path of `C`: a named layer's `fields`, else 'all' (`read: true` and a
-// layer the grant does not name read in full). An identity grant writes `fields` beside `read`.
-type PathAdmits<C extends string, G> = G extends { read: unknown; fields: readonly (infer F)[] }
-	? { path: C; admits: F }
-	: G extends { read: infer R }
-		? {
-				[P in ReadPath<C>]: {
-					path: P;
-					admits: R extends object
-						? P extends keyof R
-							? R[P] extends { fields: readonly (infer F)[] }
-								? F
-								: 'all'
-							: 'all'
-						: 'all';
-				};
-			}[ReadPath<C>]
-		: never;
-type Policies = NamesPart<'policies'>;
-/**
- * Fields of layer `P` of `C` some policy's read grant leaves out: `Value | Masked` to every caller, since any caller may
- * hold it. Only the root's policy masks a layer (decision 3).
- */
-export type Maskable<C, P = C> = (P extends Granted ? ReadGrants[P] : never) extends infer X
-	? X extends { admits: infer F }
-		? 'all' extends F
-			? never
-			: Exclude<LayerField<C, P>, F | keyof SystemColumns<PathModel<C, P>>>
-		: never
-	: never;
-// Every policy's read grants grouped by path in one scan, `{ admits }` per grant: scanning every policy for each
-// model was quadratic in the workspace. A path names its root, so paths of different roots never collide.
-type ReadGrants = { [X in GrantOf<keyof Policies> as X['path']]: { admits: X['admits'] } };
-type GrantOf<P> = P extends keyof Policies
-	? Policies[P] extends { grants: infer G }
-		? { [C in keyof G & string]: PathAdmits<C, G[C]> }[keyof G & string]
-		: never
-	: never;
-type Granted = keyof ReadGrants;
-/** A caller's value of column or FK `F` on layer `P` of `C`, masked by the root's policies. */
-export type LayerValue<C, P, F> =
-	F extends Maskable<C, P>
-		? ColumnValue<PathModel<C, P>, F> | Masked
-		: ColumnValue<PathModel<C, P>, F>;
-/** A caller's row of model `C`: its exposed fields (maskable ones `| Masked`), FK ids and system columns (rule 10). */
-export type Row<C> = RowOf<C> & RowState;
+/** A caller's row of model `C` as output `O` reads it: that output's root fields, FK ids and system columns (rule 10). */
+export type Row<C, O = 'default'> = RowOf<C, O> & RowState;
 /** What a read, the caller's or the workspace's, attaches to each root row beside its fields, whatever it selects (§4.2, rule 46b). */
 export type RowState = {
 	readonly $sync?: { readonly [sync: string]: SyncState };
@@ -557,10 +512,8 @@ export type SyncState = {
 	readonly status: 'pending' | 'ok' | 'failed';
 	readonly message?: string;
 };
-type RowOf<C, Mask = Maskable<C>> = Simplify<{
-	readonly [P in ReadField<C> & (keyof Columns<C> | keyof OneRels<C>)]: P extends Mask
-		? ColumnValue<C, P> | Masked
-		: ColumnValue<C, P>;
+type RowOf<C, O> = Simplify<{
+	readonly [P in ReadField<C, O> & (keyof Columns<C> | keyof OneRels<C>)]: ColumnValue<C, P>;
 }>;
 /** A stored row as write callbacks see it (`before`, `delete.check`'s rows, `ctx.db`): never masked, every stored field,
  * no seq, roll-up or computed (rule 10). */

@@ -243,7 +243,7 @@ const column = (
 ): Effect.Effect<readonly Json[], StoreError> =>
 	Effect.forEach(rows, (row) => {
 		const value = row[name];
-		return value !== null && typeof value === 'object' && !EffectArray.isArray<typeof value>(value)
+		return Predicate.isObject(value)
 			? Effect.succeed(value)
 			: Effect.fail(StoreError.of('internal', 'decode', `a result row lacks its '${name}' object`));
 	});

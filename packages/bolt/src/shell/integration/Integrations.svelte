@@ -5,9 +5,8 @@
 -->
 <script lang="ts">
 	import { fork, observeOnce } from '@norbital-ai/ui/effect';
-	import { Effect, Predicate } from 'effect';
-	import { Decimal } from '@norbital-ai/std/decimal';
-	import type { Value } from '@norbital-ai/std/kind';
+	import { Effect } from 'effect';
+	import type { Fields, Value } from '@norbital-ai/std/kind';
 	import { watch } from 'runed';
 	import {
 		Button,
@@ -21,9 +20,9 @@
 		formatHandle,
 		StateBadge,
 		Tabs,
+		valueObject,
 		type FieldEditor
 	} from '@norbital-ai/ui';
-	import type { InputFields } from '../../decl/fields.ts';
 	import IntegrationSetup from '../../page/IntegrationSetup.svelte';
 	import { driverLabel, type IntegrationSetupEntry } from './setup.ts';
 	import type { InstanceMessage } from '../api-types.ts';
@@ -55,9 +54,7 @@
 
 	type Instance = Settings['instances'][number];
 	type Definition = Settings['integrations'][number];
-	const objectValue = (v: Value | undefined): v is Readonly<Record<string, Value>> =>
-		Predicate.isObject(v) && !(v instanceof Decimal);
-	const obj = (v: Value | undefined): { readonly [k: string]: Value } => (objectValue(v) ? v : {});
+	const obj = (v: Value | undefined): { readonly [k: string]: Value } => (valueObject(v) ? v : {});
 	const str = (v: Value | undefined) => (v === null || v === undefined ? '' : String(v));
 	const when = (v: Value | undefined) =>
 		typeof v === 'string' && v !== ''
@@ -176,12 +173,12 @@
 		);
 	}
 
-	const labelOf = (name: string, f: InputFields[string]) =>
+	const labelOf = (name: string, f: Fields[string]) =>
 		f.label ?? name.replace(/_/g, ' ').replace(/^\w/, (x) => x.toUpperCase());
 </script>
 
 <!-- `configuration` by its definition's fields, each by its kind's editor: the stored value, which starts as the definition's defaults -->
-{#snippet configuration(fields: InputFields, { value, onChange, id }: FieldEditor)}
+{#snippet configuration(fields: Fields, { value, onChange, id }: FieldEditor)}
 	<div class="flex flex-col gap-3" {id}>
 		{#each Object.entries(fields) as [name, f] (name)}
 			<div class="flex flex-col gap-1 text-sm">
@@ -204,15 +201,7 @@
 	</div>
 {/snippet}
 
-<Envoys
-	{api}
-	{bolt}
-	{settings}
-	{t}
-	{locale}
-	onManage={(instance) => (open = instance)}
-	{reload}
-/>
+<Envoys {api} {bolt} {settings} {t} {locale} onManage={(instance) => (open = instance)} {reload} />
 
 {#if current !== undefined}
 	{@const i = current}
@@ -524,4 +513,3 @@
 		</div>
 	</DetailSheet>
 {/if}
-

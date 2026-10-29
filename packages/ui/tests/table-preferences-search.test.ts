@@ -1,4 +1,4 @@
-import { required, textOf } from './view-fixture.ts';
+import { textOf } from './view-fixture.ts';
 import { element } from './elements.ts';
 import { browser } from './view-fixture.ts';
 import { Effect } from 'effect';

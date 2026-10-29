@@ -1,7 +1,7 @@
-// `ctx.ai.sys_2.infer({ tools: ['read'] })` in an automation: the model reads workspace records as the run's `runAs`
-// policies over several turns (the agent's `query` tool: grants, masks, bounded pages), then edits and submits; a
-// model outside the policies is refused, a masked field never reaches the model, `steps` still caps the tool turns,
-// and a `runAs: 'trigger'` run cannot offer `read`.
+// `ctx.ai.sys_2.infer({ tools: ['read'] })` in an automation: the model reads workspace records as the run's
+// policies over several turns (the agent's `read` tool: granted outputs, row scopes, bounded pages), then edits and
+// submits; a model outside the policies and an ungranted output are refused, a field outside the granted output never
+// reaches the model, `steps` still caps the tool turns, and a run whose policies grant no read cannot offer `read`.
 import { FacilityFailure } from '../src/decl/errors.ts';
 import { describe, expect, it } from '@effect/vitest';
 import { Context, Effect, Exit, Layer, Schema, Scope, Stream } from 'effect';
@@ -12,8 +12,8 @@ import type { EngineManifest } from '../src/engine/manifest.ts';
 import { Port } from '../src/engine/port.ts';
 import { uuidv7 } from '../src/protocol/wire.ts';
 import { Ai } from '../src/engine/ports.ts';
-import { TestWorkspace, respondSystem1, type Kit } from '../src/test/index.ts';
-import { program } from '../src/test/guest.ts';
+import { TestWorkspace, respondSystem1, type Kit } from '../../bolt-cli/src/test/index.ts';
+import { program } from '../../bolt-cli/src/test/guest.ts';
 import { actReply, qReply, routeFixture, type FixtureRoute } from './support/route-fixture.ts';
 
 const manifest = {
@@ -50,10 +50,12 @@ const manifest = {
 		invoices: {
 			read: { invoices: { fields: 'all' } },
 			create: { columns: { invoices: ['number', 'supplier', 'amount'] } },
-			update: { columns: { invoices: ['note'] } }
+			update: { columns: { invoices: ['note'] } },
+			effect: { created: true }
 		},
 		purchase_orders: {
 			read: { purchase_orders: { fields: 'all' } },
+			outputs: { matching: { purchase_orders: { fields: ['number', 'supplier', 'amount'] } } },
 			create: { columns: { purchase_orders: ['number', 'supplier', 'amount', 'margin'] } }
 		},
 		ledgers: { read: { ledgers: { fields: 'all' } }, create: { columns: { ledgers: ['title'] } } }
@@ -63,9 +65,10 @@ const manifest = {
 			description: 'Matches invoices',
 			grants: {
 				invoices: { read: true, update: true },
-				purchase_orders: { read: { purchase_orders: { fields: ['number', 'supplier', 'amount'] } } }
+				purchase_orders: { outputs: { matching: true } }
 			}
 		},
+		noter: { description: 'Notes ledgers', grants: { ledgers: { create: true } } },
 		clerk: {
 			description: 'Enters documents',
 			grants: {
@@ -77,8 +80,16 @@ const manifest = {
 		}
 	},
 	automations: {
-		match: { description: 'Match a new invoice', on: { created: 'invoices' }, runAs: ['matcher'] },
-		relay: { description: 'Relay as the clerk', input: { id: { kind: 'text' } }, runAs: 'trigger' }
+		match: {
+			description: 'Match new invoices',
+			input: { ids: { kind: 'list', of: { kind: 'id', of: 'invoices' } } },
+			policies: ['matcher']
+		},
+		relay: {
+			description: 'Relay as a ledger writer',
+			input: { id: { kind: 'text' } },
+			policies: ['noter']
+		}
 	},
 	integrations: {},
 	teams: {},
@@ -93,7 +104,11 @@ const manifest = {
 const guest = program(`import { Effect, Result } from 'effect';
 const output = { kind: 'object', fields: { matched: { kind: 'bool' }, po: { kind: 'text' } } };
 const infer = (ctx, inv) => Effect.result(ctx.ai.sys_2.infer({ prompt: 'Match invoice ' + inv.number, output, tools: ['read'], steps: 2 }));
-export default { automation: {
+export default {
+model: { invoices: { bodies: { effect: { created: function* (rows, ctx) {
+	yield* ctx.schedule('match', { ids: rows.map((row) => row.id) });
+} } } } },
+automation: {
 	match: { body: function* (input, ctx) {
 		for (const id of input.ids) {
 			const inv = (yield* ctx.query({ invoices: { where: { id: { eq: id } } } })).invoices.rows[0];
@@ -102,9 +117,8 @@ export default { automation: {
 		}
 	} },
 	relay: { body: function* (input, ctx) {
-		const inv = (yield* ctx.query({ invoices: { where: { id: { eq: input.id } } } })).invoices.rows[0];
-		const r = yield* infer(ctx, inv);
-		yield* ctx.act('invoices.update', [{ target: input.id, set: { note: Result.isFailure(r) ? r.failure._tag + ': ' + r.failure.reason : 'answered' } }]);
+		const r = yield* infer(ctx, { number: input.id });
+		yield* ctx.act('ledgers.create', [{ title: Result.isFailure(r) ? r.failure._tag + ': ' + r.failure.reason : 'answered' }]);
 	} }
 } };`);
 
@@ -151,7 +165,11 @@ const shared = Effect.runSync(
 	Effect.cached(
 		Effect.gen(function* () {
 			const context = yield* Layer.build(
-				TestWorkspace.layer({ manifest, guest: yield* guest, ports: Layer.succeed(Ai, ai.port) })
+				TestWorkspace.layer({
+					manifest,
+					guest: yield* guest,
+					ports: Layer.succeed(Ai, ai.port)
+				})
 			);
 			return { t: Context.get(context, TestWorkspace), route: yield* routeFixture(context), ai };
 		}).pipe(Scope.provide(fileScope))
@@ -196,7 +214,7 @@ const toolResults = (request: AiRequest) =>
 
 describe("sys_2.infer tools: ['read']", () => {
 	it.live(
-		'reads over two turns as the runAs policies (refused root, masked field), then the spent budget leaves the draft tools',
+		"reads over two turns as the run's policies (refused root and output, a narrow output), then the spent budget leaves the draft tools",
 		() =>
 			Effect.scoped(
 				Effect.gen(function* () {
@@ -205,10 +223,15 @@ describe("sys_2.infer tools: ['read']", () => {
 							{
 								id: 'r1',
 								name: 'read',
-								input: { purchase_orders: { where: { supplier: { eq: 'Acme' } } } }
+								input: {
+									purchase_orders: { output: 'matching', where: { supplier: { eq: 'Acme' } } }
+								}
 							}
 						]),
-						use([{ id: 'r2', name: 'read', input: { ledgers: {} } }]),
+						use([
+							{ id: 'r2', name: 'read', input: { ledgers: {} } },
+							{ id: 'r3', name: 'read', input: { purchase_orders: {} } }
+						]),
 						use([
 							{
 								id: 'p',
@@ -248,7 +271,7 @@ describe("sys_2.infer tools: ['read']", () => {
 						'find',
 						'diff'
 					]);
-					// the keys the runAs policies may read, and no other
+					// the keys the run's policies may read, and no other
 					expect(
 						Object.keys(
 							Schema.decodeUnknownSync(
@@ -256,7 +279,7 @@ describe("sys_2.infer tools: ['read']", () => {
 							)(offered[0]!.input).properties
 						).sort()
 					).toEqual(['invoices', 'purchase_orders']);
-					// one bounded page of the matcher's view: the Acme order only, its margin masked away
+					// one bounded page of the matcher's `matching` output: the Acme order only, no margin
 					const [page] = toolResults(ai.requests[1]!);
 					const rows = Schema.decodeUnknownSync(
 						Schema.Struct({
@@ -266,10 +289,15 @@ describe("sys_2.infer tools: ['read']", () => {
 						})
 					)(page).purchase_orders.rows;
 					expect(rows.map((row) => row['number'])).toEqual(['PO-1']);
-					expect(rows[0]!['margin']).toEqual({ $masked: true });
-					expect(toolResults(ai.requests[2]!)[1]).toEqual({
-						// a root the runAs policies cannot read is not in the tool's schema at all
+					expect(rows[0]).not.toHaveProperty('margin');
+					const [, ledgers, defaults] = toolResults(ai.requests[2]!);
+					// a root the run's policies cannot read is not in the tool's schema at all
+					expect(ledgers).toEqual({
 						error: expect.stringMatching(/excess property[\s\S]*"ledgers"/)
+					});
+					// purchase orders' `default` output is not granted: reading it is refused
+					expect(defaults).toEqual({
+						error: expect.stringContaining("no held policy grants reading 'purchase_orders'")
 					});
 					// steps: 2 spent on the two reads; the final turn offers only the draft tools
 					expect(ai.requests[2]!.tools!.map((tool) => tool.name)).toEqual([
@@ -283,7 +311,7 @@ describe("sys_2.infer tools: ['read']", () => {
 			)
 	);
 
-	it.live('a runAs trigger run cannot offer read', () =>
+	it.live('a run whose policies grant no read cannot offer read', () =>
 		Effect.scoped(
 			Effect.gen(function* () {
 				const { t, route, ai } = yield* open([]);
@@ -304,7 +332,12 @@ describe("sys_2.infer tools: ['read']", () => {
 					issuedAt: t.clock.now()
 				});
 				yield* t.runDue();
-				expect(yield* note(t, route, id)).toMatch(/^Unavailable: 'read' needs runAs policies/);
+				const ledgers = yield* qReply(route, clerk(t), {
+					reads: [{ m: 'query', a: [{ ledgers: { fields: ['title'] } }] }]
+				});
+				expect(JSON.stringify(ledgers.answers[0])).toContain(
+					"Unavailable: 'read' needs an automation's policies that grant a read"
+				);
 				expect(ai.requests).toHaveLength(asked); // refused before any model call
 			})
 		)

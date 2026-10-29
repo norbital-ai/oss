@@ -142,55 +142,56 @@ export type Ops<M, K, S = false> = K extends { kind: 'text' | 'enum'; many: true
 type IdOps<T extends string, S> = ScalarOps<never, { kind: 'id'; of: T }, S>;
 
 // X = exposure: a model name (its root layer), a layer path (`'orders.lines'`: that layer's fields), or 'model' for
-// an unexposed model-level predicate. A hop crosses only a layer X declares and lands in that layer (`'<X>.<rel>'`).
-type Visible<M, X, P> = X extends 'model'
+// an unexposed model-level predicate; O = the root's read output. A hop crosses only a layer X declares in O and lands
+// in that layer (`'<X>.<rel>'`).
+type Visible<M, X, P, O> = X extends 'model'
 	? P
-	: P & (X extends M ? ReadField<M> : LayerField<RootOf<X>, X>);
-type Crossable<M, X, R> = X extends 'model' ? R : R & LayerRelation<X>;
+	: P & (X extends M ? ReadField<M, O> : LayerField<RootOf<X>, X, O>);
+type Crossable<M, X, R, O> = X extends 'model' ? R : R & LayerRelation<X, O>;
 /** The exposure a hop through `R` lands in: the layer `X` declares at `'<X>.<R>'`, or none for a model predicate. */
 type Hop<X, R> = X extends 'model' ? 'model' : `${X & string}.${R & string}`;
-type Next<T, X, R> = X extends 'model' ? ModelWhere<T> : WhereOver<T, Hop<X, R>>;
-type RefWhere<M, R, X> =
+type Next<T, X, R, O> = X extends 'model' ? ModelWhere<T> : WhereOver<T, Hop<X, R>, O>;
+type RefWhere<M, R, X, O> =
 	OneTarget<M, R> extends infer T extends string
 		? [T] extends [TargetName]
 			? IsUnion<T> extends true
-				? { [A in T]?: IdOps<A, false> | { is: Next<A, X, R> } }
+				? { [A in T]?: IdOps<A, false> | { is: Next<A, X, R, O> } }
 				: never
 			: never
 		: never;
-type OneRelWhere<M, R, X> = [RefWhere<M, R, X>] extends [never]
-	? | (R extends Visible<M, X, R> ? IdOps<OneTarget<M, R>, false> : never)
-		| (R extends Crossable<M, X, R> ? { is: Next<OneTarget<M, R>, X, R> } : never)
-	: RefWhere<M, R, X>;
+type OneRelWhere<M, R, X, O> = [RefWhere<M, R, X, O>] extends [never]
+	? | (R extends Visible<M, X, R, O> ? IdOps<OneTarget<M, R>, false> : never)
+		| (R extends Crossable<M, X, R, O> ? { is: Next<OneTarget<M, R>, X, R, O> } : never)
+	: RefWhere<M, R, X, O>;
 type CmpOps<V> = { eq?: V; ne?: V; lt?: V; lte?: V; gt?: V; gte?: V };
 type Summable = { kind: 'int' | 'decimal' | 'money' | 'duration' };
 /** Child fields a child aggregate may name: `sum`/`avg` numeric or duration, `min`/`max` also dates and instants. */
-type AggOf<T, X, K> = {
-	[P in Visible<T, X, keyof Columns<T> & string>]: Columns<T>[P] extends K
+type AggOf<T, X, K, O> = {
+	[P in Visible<T, X, keyof Columns<T> & string, O>]: Columns<T>[P] extends K
 		? { of: P } & CmpOps<Literal<Columns<T>[P]>>
 		: never;
-}[Visible<T, X, keyof Columns<T> & string>];
-type ManyWhere<T, X, R> = {
-	some?: Next<T, X, R>;
-	none?: Next<T, X, R>;
-	every?: Next<T, X, R>;
+}[Visible<T, X, keyof Columns<T> & string, O>];
+type ManyWhere<T, X, R, O> = {
+	some?: Next<T, X, R, O>;
+	none?: Next<T, X, R, O>;
+	every?: Next<T, X, R, O>;
 	count?: CmpOps<number>;
-	sum?: AggOf<T, Hop<X, R>, Summable>;
-	avg?: AggOf<T, Hop<X, R>, Summable>;
-	min?: AggOf<T, Hop<X, R>, Summable | { kind: 'date' | 'instant' }>;
-	max?: AggOf<T, Hop<X, R>, Summable | { kind: 'date' | 'instant' }>;
+	sum?: AggOf<T, Hop<X, R>, Summable, O>;
+	avg?: AggOf<T, Hop<X, R>, Summable, O>;
+	min?: AggOf<T, Hop<X, R>, Summable | { kind: 'date' | 'instant' }, O>;
+	max?: AggOf<T, Hop<X, R>, Summable | { kind: 'date' | 'instant' }, O>;
 };
 
-type WhereOver<M, X> = {
-	[P in Visible<M, X, keyof Columns<M> & string>]?: Ops<M, Columns<M>[P]>;
-} & { [R in keyof OneRels<M> & string]?: OneRelWhere<M, R, X> } & {
+type WhereOver<M, X, O = 'default'> = {
+	[P in Visible<M, X, keyof Columns<M> & string, O>]?: Ops<M, Columns<M>[P]>;
+} & { [R in keyof OneRels<M> & string]?: OneRelWhere<M, R, X, O> } & {
 	// no `as` filter: it re-evaluated every relation's predicate on each read; a relation a caller cannot use is `never`
-	[R in Crossable<M, X, keyof ManyRels<M> & string>]?: ManyWhere<RelTarget<M, R>, X, R>;
+	[R in Crossable<M, X, keyof ManyRels<M> & string, O>]?: ManyWhere<RelTarget<M, R>, X, R, O>;
 } & {
 	// inline, not an alias applied to itself: a type argument at the top level is resolved eagerly
-	and?: readonly WhereOver<M, X>[];
-	or?: readonly WhereOver<M, X>[];
-	not?: WhereOver<M, X>;
+	and?: readonly WhereOver<M, X, O>[];
+	or?: readonly WhereOver<M, X, O>[];
+	not?: WhereOver<M, X, O>;
 } & { $search?: string; $similar?: string | { to: string; top?: number } }; // `search.text`: every word, fuzzily; `search.semantic`: the nearest in meaning and every row nearly as near (at most `top`, default 20)
 
 // Conditional on the name: while a call is inferred, its literal is typed against the generic `Where<C>`, and expanding
@@ -199,16 +200,16 @@ type WhereOver<M, X> = {
 // `C extends ReadableName` that is every model's predicate at once, 0.3 s a call (F28); `D` still distributes over
 // a union of names. The applicability check that follows types the literal against the instantiated `Where<'orders'>`.
 // (A mapped index of every model's predicate was slower still.)
-/** A predicate over model `C`: only its exposed fields and relations exist (rule 10). */
-export type Where<C> = [C] extends [infer D]
+/** A predicate over model `C` read as output `O`: only that output's fields and layers exist (rule 10). */
+export type Where<C, O = 'default'> = [C] extends [infer D]
 	? D extends ModelName
-		? WhereOver<D, D>
+		? WhereOver<D, D, O>
 		: never
 	: never;
-/** A predicate over layer `P` of `C`'s read declaration: only the fields that layer exposes (the root: `Where<C>`). */
-export type LayerWhere<C, P> = [PathModel<C, P>] extends [infer T]
+/** A predicate over layer `P` of `C`'s output `O`: only the fields that layer exposes (the root: `Where<C, O>`). */
+export type LayerWhere<C, P, O = 'default'> = [PathModel<C, P>] extends [infer T]
 	? T extends TargetName
-		? WhereOver<T, P>
+		? WhereOver<T, P, O>
 		: never
 	: never;
 /** A predicate over a model with no exposure filter (an `id` input's picker filter). */
@@ -230,50 +231,51 @@ export type StaticWhere<M, Fk = true> = {
 type Unsortable =
 	{ kind: 'json' | 'file' | 'custom' | 'vector' | 'point' | 'period' } | { many: true };
 /** Fields a read may order by: exposed, ordered kinds, and `created_at`/`updated_at` (§3.3.9); FKs order by id. */
-export type Sortable<C> = C extends ModelName
+export type Sortable<C, O = 'default'> = C extends ModelName
 	? | {
-				[P in ReadField<C> & keyof Columns<C> & string]: Columns<C>[P] extends Unsortable
+				[P in ReadField<C, O> & keyof Columns<C> & string]: Columns<C>[P] extends Unsortable
 					? never
 					: P extends 'id' | 'revision' | 'created_by' | 'updated_by'
 						? never
 						: P;
-		  }[ReadField<C> & keyof Columns<C> & string]
+		  }[ReadField<C, O> & keyof Columns<C> & string]
 		| {
-				[R in ReadField<C> & keyof OneRels<C> & string]: [OneTarget<C, R>] extends [TargetName]
+				[R in ReadField<C, O> & keyof OneRels<C> & string]: [OneTarget<C, R>] extends [TargetName]
 					? IsUnion<OneTarget<C, R>> extends true
 						? never
 						: R
 					: never;
-		  }[ReadField<C> & keyof OneRels<C> & string]
+		  }[ReadField<C, O> & keyof OneRels<C> & string]
 	: never;
 /** One-relations a sort may cross: crossable, into one model (not an arc). */
-type SortHop<C> = C extends ModelName
+type SortHop<C, O> = C extends ModelName
 	? {
-			[R in ReadRelation<C> & keyof OneRels<C> & string]: [OneTarget<C, R>] extends [ModelName]
+			[R in ReadRelation<C, O> & keyof OneRels<C> & string]: [OneTarget<C, R>] extends [ModelName]
 				? IsUnion<OneTarget<C, R>> extends true
 					? never
 					: R
 				: never;
-		}[ReadRelation<C> & keyof OneRels<C> & string]
+		}[ReadRelation<C, O> & keyof OneRels<C> & string]
 	: never;
 type Dir = 'asc' | 'desc';
 type Prev = [never, 0, 1];
 /** Each key's value at one level: a direction, and through a hop (`D` left) one key of the target's level. */
 /** Point fields a read may order by distance from a point, nearest first: `{ location: { near: { lat, lng } } }`. */
-type PointField<C> = C extends ModelName
+type PointField<C, O> = C extends ModelName
 	? {
-			[P in ReadField<C> & keyof Columns<C> & string]: Columns<C>[P] extends { kind: 'point' }
+			[P in ReadField<C, O> & keyof Columns<C> & string]: Columns<C>[P] extends { kind: 'point' }
 				? P
 				: never;
-		}[ReadField<C> & keyof Columns<C> & string]
+		}[ReadField<C, O> & keyof Columns<C> & string]
 	: never;
-type SortLevel<C, D extends 0 | 1 | 2> = {
-	[K in Sortable<C> | PointField<C> | ([D] extends [0] ? never : SortHop<C>)]:
-		| (K extends Sortable<C> ? Dir : never)
-		| (K extends PointField<C> ? { near: Point } : never)
+// a hop lands in the target model's own `default` exposure, as the store's sort compiler reads it
+type SortLevel<C, D extends 0 | 1 | 2, O = 'default'> = {
+	[K in Sortable<C, O> | PointField<C, O> | ([D] extends [0] ? never : SortHop<C, O>)]:
+		| (K extends Sortable<C, O> ? Dir : never)
+		| (K extends PointField<C, O> ? { near: Point } : never)
 		| ([D] extends [0]
 				? never
-				: K extends SortHop<C>
+				: K extends SortHop<C, O>
 					? OneKey<SortLevel<OneTarget<C, K>, Prev[D]>>
 					: never);
 };
@@ -282,7 +284,7 @@ type OneKey<L> = {
 	[F in keyof L]: { [K in F]: L[F] } & { [K in Exclude<keyof L, F>]?: never };
 }[keyof L];
 /** A sort key: a field (ascending), `{ field: dir }`, or a related field through at most two one-relations
- * (`{ account: { name: 'asc' } }`); the target field must be `Sortable` on its model (and, at run time, unmasked). */
-export type SortKey<C> = Sortable<C> | OneKey<SortLevel<C, 2>>;
+ * (`{ account: { name: 'asc' } }`); the target field must be `Sortable` on its model. */
+export type SortKey<C, O = 'default'> = Sortable<C, O> | OneKey<SortLevel<C, 2, O>>;
 /** Up to `ORDER_MAX_KEYS` keys, each once, then `id` (rule 11); nulls last ascending, first descending. */
-export type OrderBy<C> = SortKey<C> | readonly SortKey<C>[];
+export type OrderBy<C, O = 'default'> = SortKey<C, O> | readonly SortKey<C, O>[];

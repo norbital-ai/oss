@@ -12,6 +12,8 @@ import { browserTransport } from '../protocol/client.ts';
 
 type Options = { fetch?: typeof fetch; base?: string };
 const BASE = '/__bolt/integrations/';
+/** The list's path: a canonical path keeps no trailing slash. */
+const list = (options: Options) => (options.base ?? BASE).slice(0, -1);
 /** One integration route's `value`, its refusal as `ActRefused`. */
 const answer = (options: Options, method: 'GET' | 'POST', url: string, body?: Json) =>
 	browserTransport(options.fetch === undefined ? {} : { fetch: options.fetch })
@@ -45,9 +47,9 @@ const answer = (options: Options, method: 'GET' | 'POST', url: string, body?: Js
 			})
 		);
 
-/** Every definition with the providers this host offers for it (`GET /__bolt/integrations/`). */
+/** Every definition with the providers this host offers for it (`GET /__bolt/integrations`). */
 export const integrationOffers = (options: Options = {}) =>
-	answer(options, 'GET', options.base ?? BASE).pipe(
+	answer(options, 'GET', list(options)).pipe(
 		Effect.flatMap((value) =>
 			Schema.decodeUnknownEffect(Schema.Array(IntegrationOffer))(value).pipe(
 				Effect.mapError(
@@ -149,7 +151,7 @@ export function integrationClients(options: Options = {}) {
 	const subscribers = new Set<Subscriber>();
 	let source: EventSource | null = null;
 	const open = () => {
-		const opened = new EventSource(`${options.base ?? BASE}?stream=1`);
+		const opened = new EventSource(`${list(options)}?stream=1`);
 		opened.onmessage = (event: MessageEvent<unknown>) => {
 			const parsed = Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Json))(event.data);
 			const status = Option.isSome(parsed) ? decodeStatus(parsed.value) : null;

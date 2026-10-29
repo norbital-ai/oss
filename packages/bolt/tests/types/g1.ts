@@ -4,7 +4,7 @@ import { Refusal } from '../../src/decl/errors.ts';
 // one planted mistake each. Each `@ts-expect-error` line is a planted mistake.
 import { Decimal } from '@norbital-ai/std/decimal';
 import { automation, model, policy } from '../../src/index.ts';
-import type { Id, InputOf, Masked, Row, Where } from '../../src/index.ts';
+import type { Id, InputOf, Row, Where } from '../../src/index.ts';
 import type { RowState, StoredRow } from '../../src/decl/names.ts';
 import * as rt from './fixture/runtime.ts';
 import * as m from './fixture/models.ts';
@@ -284,30 +284,32 @@ automation('orders_submit', {
 	}
 });
 
-// ── rule 10: caller rows mask what some grant does not admit (`Value | Masked`); stored rows are never masked ──
-is<Eq<Row<'customers'>['email'], string | null | Masked>>(); // sales_rep reads customers' name and tier only
-is<Eq<Row<'customers'>['name'], string>>();
+// ── rule 10: a caller row is its output's fields, plain values; policies filter rows, never mask a field ──
+is<Eq<Row<'customers'>['email'], string | null>>();
+is<Eq<Row<'customers', 'directory'>['name'], string>>();
+// @ts-expect-error K0 a field outside the named output is not on its row
+type DirectoryEmail = Row<'customers', 'directory'>['email'];
 is<Eq<StoredRow<'customers'>['email'], string | null>>();
 automation('orders_renote', {
 	...rt.orders_renote.spec,
 	run: function* (_, ctx) {
 		const page = yield* ctx.query({ customers: {
-			fields: ['name', 'email'],
+			output: 'directory',
 			limit: 1
 		} });
 		const first = page.customers.rows[0];
 		const name: string | undefined = first?.name;
-		// @ts-expect-error K1 a maskable field is not a plain value until the mask is ruled out
-		const email: string | null | undefined = first?.email;
+		// @ts-expect-error K1 the directory output carries no email
+		void first?.email;
 		void name;
-		void email;
 		const { orders } = yield* ctx.query({
-			orders: { fields: ['customer'], limit: 1 },
-			'orders.customer': { fields: ['name', 'tier'] }
+			orders: { output: 'logistics', limit: 1 },
+			'orders.lines': {}
 		});
-		// @ts-expect-error K2 a layer masks by the root's policy per path (orders.customer admits name only)
-		const tier: 'basic' | 'gold' | undefined = orders.rows[0]?.customer?.tier;
-		void tier;
+		const qty = orders.rows[0]?.lines[0]?.qty;
+		// @ts-expect-error K2 a layer field outside the named output (logistics lines carry item and qty)
+		void orders.rows[0]?.lines[0]?.price;
+		void qty;
 		return 0;
 	}
 });

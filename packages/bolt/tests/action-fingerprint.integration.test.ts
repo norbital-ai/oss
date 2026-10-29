@@ -2,12 +2,12 @@ import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { it } from '@effect/vitest';
 import { Context, Effect, Layer, Schema } from 'effect';
-import { TestDb } from '../src/test/database.ts';
+import { TestDb } from '../../bolt-cli/src/test/database.ts';
 import { TenantDb } from '../src/engine/db/tenant-db.ts';
 import { Callables } from '../src/engine/services.ts';
 import { routeFixture } from './support/route-fixture.ts';
-import { TestWorkspace } from '../src/test/index.ts';
-import { program } from '../src/test/guest.ts';
+import { TestWorkspace } from '../../bolt-cli/src/test/index.ts';
+import { program } from '../../bolt-cli/src/test/guest.ts';
 import type { EngineManifest } from '../src/engine/manifest.ts';
 import type { Json } from '../src/decl/values.ts';
 import { manifest as base } from './write-fixture.ts';
@@ -49,13 +49,13 @@ const manifest: EngineManifest = {
 		place: {
 			description: 'Generated create',
 			input: { title: { kind: 'text' } },
-			runAs: 'trigger'
+			policies: ['operator']
 		},
 		queryplace: {
 			description: 'Read request pricing',
 			input: { title: { kind: 'text' } },
-			runAs: 'trigger'
-		},
+			policies: ['operator']
+		}
 	},
 	integrations: {},
 	teams: {},
@@ -150,7 +150,10 @@ const fixture = () =>
 			tz: 'UTC'
 		});
 		const act = (callable: string, input: Json) =>
-			route.dispatch({ callable, input, key: randomUUID(), issuedAt: t.clock.now() }, caller.authority);
+			route.dispatch(
+				{ callable, input, key: randomUUID(), issuedAt: t.clock.now() },
+				caller.authority
+			);
 		const batch = (acts: Parameters<typeof calls.acts>[0]['acts']) => {
 			const key = randomUUID();
 			return calls.acts({

@@ -30,14 +30,11 @@ publicHoistPattern:
 allowBuilds:
   '@tailwindcss/oxide': true
   esbuild: true
-  # Build the patched module code-cache support from source; shipped prebuilds omit it.
-  isolated-vm: true
   msgpackr-extract: false
   protobufjs: true
   '@whiskeysockets/baileys': true
 
 patchedDependencies:
-  'isolated-vm@7.0.1': patches/isolated-vm@7.0.1.patch
   # bolt-server's optional WhatsApp transport.
   '@whiskeysockets/baileys@7.0.0-rc14': patches/@whiskeysockets__baileys@7.0.0-rc14.patch
 

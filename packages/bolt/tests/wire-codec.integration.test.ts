@@ -13,10 +13,10 @@ import { lowerRead } from '../src/engine/index.ts';
 import { aggregate } from '@norbital-ai/store';
 import type { Frame } from '../src/protocol/wire.ts';
 import { fromStore } from '../src/protocol/errors.ts';
-import { TestWorkspace } from '../src/test/index.ts';
+import { TestWorkspace } from '../../bolt-cli/src/test/index.ts';
 import { Live, Reads } from '../src/engine/services.ts';
 import { actReply, qReply, routeFixture } from './support/route-fixture.ts';
-import { program } from '../src/test/guest.ts';
+import { program } from '../../bolt-cli/src/test/guest.ts';
 
 const columns = ['name', 'amount', 'day', 'at', 'span', 'slot', 'notes'];
 const manifest = {
@@ -94,7 +94,10 @@ const open = Effect.fn('Test.wireCodec')(function* () {
 			manifest: {
 				...manifest,
 				exposures: {
-					items: { ...manifest.exposures.items, update: { ...manifest.exposures.items.update, transform: true } }
+					items: {
+						...manifest.exposures.items,
+						update: { ...manifest.exposures.items.update, transform: true }
+					}
 				}
 			},
 			guest: yield* guest,
@@ -114,9 +117,9 @@ const open = Effect.fn('Test.wireCodec')(function* () {
 			reads: [{ m: 'query', a: [{ items: { where: { id: { eq: id } } } }] }]
 		}).pipe(
 			Effect.flatMap((reply) =>
-				Schema.decodeUnknownEffect(Schema.Struct({ items: Schema.Struct({ rows: Schema.Array(Row) }) }))(
-					reply.answers[0]
-				)
+				Schema.decodeUnknownEffect(
+					Schema.Struct({ items: Schema.Struct({ rows: Schema.Array(Row) }) })
+				)(reply.answers[0])
 			),
 			Effect.map((answer) => answer.items.rows[0] ?? null)
 		);
@@ -167,10 +170,12 @@ describe('wire codec: one shape per kind, both ways (D6)', () => {
 			if (row === null) throw new Error('Missing created row');
 			expect(row).toMatchObject(input);
 			committed(
-				yield* a.act('items.update', [{
-					target: id,
-					set: Object.fromEntries(columns.map((f) => [f, row[f] ?? null]))
-				}])
+				yield* a.act('items.update', [
+					{
+						target: id,
+						set: Object.fromEntries(columns.map((f) => [f, row[f] ?? null]))
+					}
+				])
 			);
 			expect(yield* a.get(id)).toMatchObject(input);
 		})

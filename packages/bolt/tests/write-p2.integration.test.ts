@@ -4,7 +4,7 @@
 import { describe, expect, it } from '@effect/vitest';
 import { Context, Effect, Layer, Schema } from 'effect';
 import type { Json } from '../src/decl/values.ts';
-import type { Authority, GuestOutcome, Invocation, Outcome } from '../src/engine/contracts.ts';
+import type { Authority, GuestOutcome, Invocation, Outcome, Sql } from '../src/engine/contracts.ts';
 import { type EngineError } from '../src/engine/errors.ts';
 import { BoltError, type Code } from '../src/protocol/errors.ts';
 import { TelemetryLive } from '../src/engine/guest/telemetry.ts';
@@ -13,8 +13,7 @@ import { Logs } from '../src/engine/ports.ts';
 import { Port } from '../src/engine/port.ts';
 import { Telemetry } from '../src/engine/services.ts';
 import { TenantDb } from '../src/engine/db/tenant-db.ts';
-import { TestDb } from '../src/test/database.ts';
-import type { Pred } from '@norbital-ai/store';
+import { TestDb } from '../../bolt-cli/src/test/database.ts';
 import type { ReadIR } from '../src/protocol/reads.ts';
 import { readHistory } from '../src/engine/query/history.ts';
 import {
@@ -26,8 +25,11 @@ import {
 import { restorePreview, restoreRecord, type RestoreTarget } from '../src/engine/write/restore.ts';
 import { admin, arm, authority, deleteArm, grants, NOW, TODAY, writeArm } from './write-fixture.ts';
 import { manifest } from './write-p2.fixture.ts';
+import type { EngineManifest } from '../src/engine/manifest.ts';
 
 const count = { reads: 0, writes: 0 };
+/** Every read statement, oldest first. */
+const statements: Sql[] = [];
 const bindings = { now: NOW, today: TODAY, tz: 'UTC' };
 type Over = Partial<ActRequest> & Pick<ActRequest, 'verb' | 'input'>;
 const required = <A>(value: A | undefined, at: string): A => {
@@ -37,10 +39,11 @@ const required = <A>(value: A | undefined, at: string): A => {
 const fixture = Effect.gen(function* () {
 	const inner = yield* TenantDb;
 	const db = TenantDb.typed({
-		read: (statements) =>
+		read: (read) =>
 			Effect.suspend(() => {
 				count.reads++;
-				return inner.read(statements);
+				statements.push(...read);
+				return inner.read(read);
 			}),
 		write: (statement, lock) =>
 			Effect.suspend(() => {
@@ -132,7 +135,6 @@ const ImportReport = Schema.Struct({
 		})
 	)
 });
-const FALSE: Pred = { t: 'const', value: false };
 const REQUEST = '0199a000-0000-7000-8000-0000000000aa';
 const columns = (op: 'create' | 'update') => manifest.exposures['orders']?.[op]?.columns ?? {};
 /** A write its policy `check` approves. The fake hook still cannot mutate domain data. */
@@ -355,14 +357,23 @@ describe('engine/write: erase (rule 38e, §5.13)', () => {
 				).toEqual({ name: 'Erased', shout: 'ERASED' });
 			}).pipe(Effect.provide(P2FixtureLive))
 	);
-
 });
 
 describe('engine/query: history (rule 17)', () => {
+	// a narrower `brief` output of orders, without `note`
+	const orders = required(manifest.exposures['orders'], 'orders exposure');
+	const viewed: EngineManifest = {
+		...manifest,
+		exposures: {
+			...manifest.exposures,
+			orders: { ...orders, outputs: { brief: { orders: { fields: ['title', 'status'] } } } }
+		}
+	};
 	const history = Effect.fnUntraced(function* (
 		id: string,
 		reader: Authority,
-		at?: { revision: number } | { before: string }
+		at?: { revision: number } | { before: string },
+		output?: string
 	) {
 		const { db } = yield* P2Fixture;
 		const selector =
@@ -377,12 +388,13 @@ describe('engine/query: history (rule 17)', () => {
 						>);
 		const answer = yield* readHistory(
 			db,
-			manifest,
+			viewed,
 			{
 				kind: 'history',
 				model: 'orders',
 				id,
-				...(selector === undefined ? {} : { at: selector })
+				...(selector === undefined ? {} : { at: selector }),
+				...(output === undefined ? {} : { output })
 			},
 			{ as: 'caller', authority: reader },
 			bindings
@@ -396,28 +408,51 @@ describe('engine/query: history (rule 17)', () => {
 		title: Schema.String,
 		number: Schema.String,
 		status: Schema.String,
-		note: Schema.Union([
-			Schema.NullOr(Schema.String),
-			Schema.Struct({ $masked: Schema.Literal(true) })
-		]),
+		note: Schema.NullOr(Schema.String),
 		total: Schema.Struct({ $dec: Schema.String }),
 		big_lines: Schema.Number
 	});
 	/** get(…, { revision }): the revisions folded into the full record as of that revision (L-BOLT-181). */
-	const folded = Effect.fnUntraced(function* (id: string, revision: number, reader: Authority = admin) {
+	const folded = Effect.fnUntraced(function* (
+		id: string,
+		revision: number,
+		reader: Authority = admin
+	) {
 		const { db } = yield* P2Fixture;
 		const answer = yield* readHistory(
 			db,
-			manifest,
+			viewed,
 			{ kind: 'history', model: 'orders', id, at: { _tag: 'Revision', revision }, full: true },
 			{ as: 'caller', authority: reader },
 			bindings
 		);
 		return yield* Schema.decodeUnknownEffect(Schema.NullOr(FoldedOrder))(answer);
 	});
+	const foldedBrief = Effect.fnUntraced(function* (
+		id: string,
+		revision: number,
+		reader: Authority
+	) {
+		const { db } = yield* P2Fixture;
+		const answer = yield* readHistory(
+			db,
+			viewed,
+			{
+				kind: 'history',
+				model: 'orders',
+				id,
+				at: { _tag: 'Revision', revision },
+				full: true,
+				output: 'brief'
+			},
+			{ as: 'caller', authority: reader },
+			bindings
+		);
+		return answer;
+	});
 
 	it.effect(
-		"reads revisions in order, cut by `at`, masked by the reader's grant, and none without a history grant; folded as of a revision",
+		'reads revisions in order, cut by `at`, showing the output the read names, and none without a history grant or that output; folded as of a revision',
 		() =>
 			Effect.gen(function* () {
 				const id = yield* order('desk');
@@ -434,17 +469,20 @@ describe('engine/query: history (rule 17)', () => {
 					id: admin.actor.kind === 'member' ? admin.actor.id : ''
 				});
 				expect(yield* history(id, admin, { revision: 2 })).toHaveLength(2);
-				const masked = authority({
-					orders: grants('orders', { history: [arm()], masks: { orders: { note: FALSE } } })
+				// a reader holding only the `brief` output: its revisions show brief's fields, never `note`
+				const brief = authority({
+					orders: grants('orders', { history: [arm()], read: { brief: { orders: [arm()] } } })
 				});
 				expect(yield* folded(id, 2)).toMatchObject({ id, revision: 2, title: 'desk', note: 'a' });
-				expect(yield* folded(id, 2, masked)).toMatchObject({ note: { $masked: true } });
+				const asBrief = yield* foldedBrief(id, 2, brief);
+				expect(asBrief).toMatchObject({ id, revision: 2, title: 'desk' });
+				expect(asBrief).not.toHaveProperty('note');
 				expect(yield* folded(id, 2, authority({ orders: grants('orders') }))).toBeNull();
-				expect((yield* history(id, masked)).map((r) => r.changed['note'])).toEqual([
-					{ $masked: true },
-					{ $masked: true },
-					{ $masked: true }
-				]);
+				const briefRevisions = yield* history(id, brief, undefined, 'brief');
+				expect(briefRevisions).toHaveLength(3);
+				expect(briefRevisions.every((r) => !('note' in r.changed))).toBe(true);
+				// the default output is not granted to it: no revisions
+				expect(yield* history(id, brief)).toEqual([]);
 				expect(yield* history(id, authority({ orders: grants('orders') }))).toEqual([]);
 				// a grant that depends on the caller resolves its `{ actor }` operand against the reader, not the workspace
 				const own = authority({
@@ -461,7 +499,6 @@ describe('engine/query: history (rule 17)', () => {
 				).toHaveLength(4); // read: true sees a deleted row's
 			}).pipe(Effect.provide(P2FixtureLive))
 	);
-
 });
 
 describe('engine/write: per-record restore (rule 17)', () => {
@@ -614,7 +651,6 @@ describe('engine/write: per-record restore (rule 17)', () => {
 			).toEqual({ title: 'desk', note: 'a' });
 		}).pipe(Effect.provide(P2FixtureLive))
 	);
-
 });
 
 describe('engine/write: import (rule 30)', () => {
@@ -722,6 +758,35 @@ describe('engine/write: import (rule 30)', () => {
 				)
 			).toEqual({ p: 2, i: 2 });
 		}).pipe(Effect.provide(P2FixtureLive))
+	);
+
+	it.effect(
+		'a keyed import finds its stored rows by a hash join on its required key, never a nested loop',
+		() =>
+			Effect.gen(function* () {
+				const rows = (name: string) =>
+					Array.from({ length: 400 }, (_, i) => ({ code: `c${i}`, name }));
+				ok((yield* imp({ rows: rows('A'), onConflict: 'update' })).outcome);
+				statements.length = 0;
+				expect(
+					report((yield* imp({ rows: rows('B'), onConflict: 'update' })).outcome).filter((r) =>
+						r.endsWith(':updated')
+					)
+				).toHaveLength(400);
+				const lookup = required(
+					statements.find((s) => s.text.includes('jsonb_populate_recordset')),
+					'the key lookup'
+				);
+				expect(lookup.text).not.toContain('IS NOT DISTINCT FROM');
+				const plan = yield* (yield* P2Fixture).db.rows(
+					Schema.Struct({ 'QUERY PLAN': Schema.String }),
+					{
+						text: `EXPLAIN ${lookup.text}`,
+						params: lookup.params
+					}
+				);
+				expect(plan.map((r) => r['QUERY PLAN']).join('\n')).not.toContain('Nested Loop');
+			}).pipe(Effect.provide(P2FixtureLive))
 	);
 
 	it.effect("a ref accepts the target's key values", () =>

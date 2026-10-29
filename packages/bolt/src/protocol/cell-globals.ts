@@ -23,7 +23,12 @@ const named = (name: string, message: string) => {
 	error.name = name;
 	return error;
 };
-const isObject = (value: unknown): value is object => typeof value === 'object' && value !== null;
+/**
+ * The realm boundary's one object guard: values here arrive from another isolate or from guest code, as anything.
+ * Shared with the membrane; Effect's `Predicate` is unavailable because this module evaluates before any import.
+ */
+export const isObject = (value: unknown): value is object =>
+	typeof value === 'object' && value !== null;
 const isIterable = (value: unknown): value is Iterable<unknown> =>
 	isObject(value) && typeof Reflect.get(value, Symbol.iterator) === 'function';
 const field = (init: unknown, key: string): unknown =>
@@ -1585,8 +1590,7 @@ const install = (): CellGlobals => {
 			return handle;
 		},
 		clearImmediate: (handle: unknown) => {
-			if (typeof handle === 'object' && handle !== null && 'cancelled' in handle)
-				Reflect.set(handle, 'cancelled', true);
+			if (isObject(handle) && 'cancelled' in handle) Reflect.set(handle, 'cancelled', true);
 		},
 		performance: { timeOrigin: origin, now: () => Date.now() - origin },
 		crypto: { getRandomValues, randomUUID },

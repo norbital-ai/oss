@@ -43,14 +43,14 @@
 {#if view.current?.status === 'open' && !signedIn}
 	<SignIn {api} {t} next="/" address={view.current.email ?? view.current.phone ?? ''} {workspace} />
 {:else}
-	<Stack gap="sm" grow class="access-invitation" aria-busy={view.loading || busy}>
+	<Stack gap="sm" size="fill" class="access-invitation" aria-busy={view.loading || busy}>
 		{#if workspace}
 			<Stack as="header" gap="xs" class="access-identity min-w-0">
 				<p class="text-overline">{t('Signing in to')}</p>
 				<p class="text-subhead break-words text-foreground">{workspace}</p>
 			</Stack>
 		{/if}
-		<Stack gap="lg" grow class="access-invitation-content">
+		<Stack gap="lg" size="fill" class="access-invitation-content">
 			<h1 class="text-title text-balance">{t('Accept the invitation')}</h1>
 			<p
 				class="access-invitation-description text-sm leading-relaxed text-muted-foreground"

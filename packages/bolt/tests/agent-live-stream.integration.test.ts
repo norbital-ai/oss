@@ -9,7 +9,7 @@ import { Ai, type AiEvent } from '../src/engine/ports.ts';
 import { Port } from '../src/engine/port.ts';
 import { STREAM_FLUSH_MS } from '../src/engine/agent/index.ts';
 import type { MessageRow } from '../src/engine/agent/schema.ts';
-import { respondSystem1, TestWorkspace } from '../src/test/index.ts';
+import { respondSystem1, TestWorkspace } from '../../bolt-cli/src/test/index.ts';
 
 const manifest = Result.getOrThrow(
 	decodeProjectedManifest({
@@ -99,35 +99,39 @@ const virtual = <A, E, R>(body: Effect.Effect<A, E, R>) =>
 layer(TestWorkspace.layer({ manifest, ports }))('agent streaming', (it) => {
 	describe('a streamed reply', () => {
 		it.effect('flushes while the model writes; the final write is the same row', () =>
-			virtual(Effect.gen(function* () {
-				yield* arm([
-					{ _tag: 'Delta', text: 'done.' },
-					{
-						_tag: 'Response',
-						response: { content: 'Half done.', toolCalls: [], finish: 'stop', usage }
-					}
-				]);
-				const { replies, streamed, turn } = yield* start;
-				yield* Deferred.succeed(script.gate, undefined);
-				yield* Fiber.join(turn);
-				expect(yield* replies).toEqual([
-					expect.objectContaining({ id: streamed?.id, state: null, text: 'Half done.' })
-				]);
-			}))
+			virtual(
+				Effect.gen(function* () {
+					yield* arm([
+						{ _tag: 'Delta', text: 'done.' },
+						{
+							_tag: 'Response',
+							response: { content: 'Half done.', toolCalls: [], finish: 'stop', usage }
+						}
+					]);
+					const { replies, streamed, turn } = yield* start;
+					yield* Deferred.succeed(script.gate, undefined);
+					yield* Fiber.join(turn);
+					expect(yield* replies).toEqual([
+						expect.objectContaining({ id: streamed?.id, state: null, text: 'Half done.' })
+					]);
+				})
+			)
 		);
 
 		it.effect('a stop mid-reply keeps what was written, finished as cut', () =>
-			virtual(Effect.gen(function* () {
-				yield* arm([]);
-				const { agent, c, replies, turn } = yield* start;
-				yield* agent.stop(c);
-				yield* Fiber.await(turn);
-				expect((yield* replies).at(-1)).toMatchObject({
-					state: null,
-					text: 'Half ',
-					meta: { tag: 'cut' }
-				});
-			}))
+			virtual(
+				Effect.gen(function* () {
+					yield* arm([]);
+					const { agent, c, replies, turn } = yield* start;
+					yield* agent.stop(c);
+					yield* Fiber.await(turn);
+					expect((yield* replies).at(-1)).toMatchObject({
+						state: null,
+						text: 'Half ',
+						meta: { tag: 'cut' }
+					});
+				})
+			)
 		);
 	});
 });

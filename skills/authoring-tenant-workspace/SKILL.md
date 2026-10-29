@@ -17,7 +17,7 @@ untethered host supplies every facility itself. See [hosts-and-facilities.md](re
 
 Work from the installed Bolt declarations and the `@norbital-ai/bolt/docs` corpus when an API is uncertain. In the realm,
 the declarations and compiler role table live in `oss/packages/bolt/src/decl/` and
-`oss/packages/bolt/src/compiler/discover.ts`. These references explain authoring choices; they do
+`oss/packages/bolt-cli/src/compiler/discover.ts`. These references explain authoring choices; they do
 not make an unimplemented API available.
 
 ## Mental model
@@ -37,38 +37,42 @@ guarded write verbs, views and integration lifecycle rather than rebuilding them
 
 Each word names one thing:
 
-| Term        | Means                                                                                                                | Where                                                                              |
-| ----------- | -------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------- |
-| Environment | An operating environment: local, staging or production, and a tenant environment inside one.                         | The operator CLI that resets and operates environments; never a workspace setting. |
-| Secrets     | Encrypted values stored in the tenant database, read by server code.                                                 | `src/+secrets.ts` with `secrets({ NAME: { label } })`.                             |
-| Server code | Transforms, policy checks, automations, syncs, integrations and page loaders.                               | The `ctx` each receives; declarations from `@norbital-ai/bolt`.                    |
-| Page SDK    | What browser-side page code calls.                                                                                   | `@norbital-ai/bolt/page`, imported in pages as `$bolt`.                            |
-| Device      | What the shell running the page provides: location, notifications, push, background notices, opening external links. | `bolt.device` in pages; a shell installs `window.boltDevice`.                      |
-| Shell       | The container a workspace runs in, which implements Device.                                                          | The web shell built into Bolt; native apps from `@norbital-ai/app-shell`.          |
-| Host        | The server that runs a bundle and supplies its facilities: Colony (tethered, the default) or an untethered host.      | `@norbital-ai/bolt/facilities`; the Host API.                                      |
+| Term        | Means                                                                                                                      | Where                                                                              |
+| ----------- | -------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------- |
+| Environment | An operating environment: local, staging or production, and a tenant environment inside one.                               | The operator CLI that resets and operates environments; never a workspace setting. |
+| Secrets     | Encrypted values stored in the tenant database, read by server code.                                                       | `src/+secrets.ts` with `secrets({ NAME: { label } })`.                             |
+| Server code | Transforms, policy checks, automations, syncs, integrations and page loaders.                                              | The `ctx` each receives; declarations from `@norbital-ai/bolt`.                    |
+| Page SDK    | What browser-side page code calls.                                                                                         | `@norbital-ai/bolt/page`, imported in pages as `$bolt`.                            |
+| Device      | What the shell running the page provides: location, notifications, push, background notices, opening external links.       | `bolt.device` in pages; a shell installs `window.boltDevice`.                      |
+| Shell       | The container a workspace runs in, which implements Device.                                                                | The web shell built into Bolt; native apps from `@norbital-ai/app-shell`.          |
+| Host        | The server that runs a bundle and supplies its facilities: Colony (tethered, the default) or an untethered host.           | `@norbital-ai/bolt/facilities`; the Host API.                                      |
+| Output      | A model's named read shape, a fixed layer map: `read` is `default`, `outputs` names the others. Every read names one.      | `+model.ts` `read` and `outputs`; a read root's `output` option.                   |
+| Policy      | What holders may do: the outputs they read and the rows of each, writes, state moves, capabilities, limits, manual starts. | `src/access_control/policy/`; held by teams, kiosks, envoys and automations.       |
+| Automation  | A job the system identity runs with its declared `policies`; the run records its trigger (system or a person).             | `src/automation/+<name>.automation.ts`.                                            |
+| Effect      | The work after a committed write. It runs as the writer and holds no policy.                                               | A model's `effect`.                                                                |
 
 ## Reference routing
 
-| Task                                                                                              | Reference                                                       |
-| ------------------------------------------------------------------------------------------------- | --------------------------------------------------------------- |
-| **Deciding entity boundaries, inline values and runtime-configured business behaviour**           | [model-boundaries.md](references/model-boundaries.md)           |
-| Field kinds, ref fields, layer maps, write callbacks, search and syncs                            | [models-and-modeling.md](references/models-and-modeling.md)     |
-| Dates, instants, periods, the workspace zone, date filters                                        | [dates-and-time.md](references/dates-and-time.md)               |
-| Reads: `bolt.query`, read requests, live and once, paging, `src/lib` helpers, no N+1              | [data-access.md](references/data-access.md)                     |
-| Apps, pages, groups, automations, policies, agents, integration definitions and runtime instances | [apps-and-server-roles.md](references/apps-and-server-roles.md) |
+| Task                                                                                                 | Reference                                                       |
+| ---------------------------------------------------------------------------------------------------- | --------------------------------------------------------------- |
+| **Deciding entity boundaries, inline values and runtime-configured business behaviour**              | [model-boundaries.md](references/model-boundaries.md)           |
+| Field kinds, ref fields, layer maps, write callbacks, search and syncs                               | [models-and-modeling.md](references/models-and-modeling.md)     |
+| Dates, instants, periods, the workspace zone, date filters                                           | [dates-and-time.md](references/dates-and-time.md)               |
+| Reads: `bolt.query`, read requests, live and once, paging, `src/lib` helpers, no N+1                 | [data-access.md](references/data-access.md)                     |
+| Apps, pages, groups, automations, policies, agents, integration definitions and runtime instances    | [apps-and-server-roles.md](references/apps-and-server-roles.md) |
 | **What the platform already renders** — the page shape, toolbar, search, record sheet: never rebuild | [built-ins.md](references/built-ins.md)                         |
-| **Where things go on a page** — header, actions, tabs, forms (readonly vs disabled), inner scroll | [app-structure.md](references/app-structure.md)                 |
-| Template UI review: disclosure, alignment, useful charts and reuse of shared controls             | [ui-standard.md](references/ui-standard.md)                     |
-| Why the layout system is shaped this way                                                          | [interface-ideology.md](references/interface-ideology.md)       |
-| Composition, scrolling, scroll traps                                                              | [layout-and-scrolling.md](references/layout-and-scrolling.md)   |
-| Controller UI: inline, `$derived`, no UUIDs                                                       | [controller-surfaces.md](references/controller-surfaces.md)     |
-| Padding, gaps, the app inset                                                                      | [padding-and-spacing.md](references/padding-and-spacing.md)     |
-| Headings, labels, captions                                                                        | [typography.md](references/typography.md)                       |
-| `bolt` verbs, `.norbital/`, schema changes                                                        | [generated-and-build.md](references/generated-and-build.md)     |
-| Tethered vs untethered, facilities, needs, `norbital.host.ts`, `bolt dev --host`                  | [hosts-and-facilities.md](references/hosts-and-facilities.md)   |
-| Message catalogs, locales, the raw-text rule                                                      | [internationalization.md](references/internationalization.md)   |
-| Template manifest, README, marketing thumbnail                                                    | [template-repository.md](references/template-repository.md)     |
-| Authoring in Studio: changes, previews, merges, rollbacks, checks                                  | [studio.md](references/studio.md)                               |
+| **Where things go on a page** — header, actions, tabs, forms (readonly vs disabled), inner scroll    | [app-structure.md](references/app-structure.md)                 |
+| Template UI review: disclosure, alignment, useful charts and reuse of shared controls                | [ui-standard.md](references/ui-standard.md)                     |
+| Why the layout system is shaped this way                                                             | [interface-ideology.md](references/interface-ideology.md)       |
+| Composition, scrolling, scroll traps                                                                 | [layout-and-scrolling.md](references/layout-and-scrolling.md)   |
+| Controller UI: inline, `$derived`, no UUIDs                                                          | [controller-surfaces.md](references/controller-surfaces.md)     |
+| Padding, gaps, the app inset                                                                         | [padding-and-spacing.md](references/padding-and-spacing.md)     |
+| Headings, labels, captions                                                                           | [typography.md](references/typography.md)                       |
+| `bolt` verbs, `.norbital/`, schema changes                                                           | [generated-and-build.md](references/generated-and-build.md)     |
+| Tethered vs untethered, facilities, needs, `norbital.host.ts`, `bolt dev --host`                     | [hosts-and-facilities.md](references/hosts-and-facilities.md)   |
+| Message catalogs, locales, the raw-text rule                                                         | [internationalization.md](references/internationalization.md)   |
+| Template manifest, README, marketing thumbnail                                                       | [template-repository.md](references/template-repository.md)     |
+| Authoring in Studio: changes, previews, merges, rollbacks, checks                                    | [studio.md](references/studio.md)                               |
 
 Read only the relevant reference. Policy and approval behaviour is in the `norbital-platform` skill;
 tests are in `authoring-test-suites`.
@@ -91,7 +95,8 @@ come from paths. A declaration with bodies repeats its path-derived name as its 
 <workspace>/
 ├── package.json, tsconfig.json, norbital.template.json
 ├── assets/                              marketing thumbnail + runtime assets
-├── seed/                                model rows, assets, optional seed.ts
+├── seed/                                optional +seeder.ts (bolt docs: seeding.md)
+│   ├── public/                          public rows + assets: the release's `base` pack
 │   └── test/                            the test pack: synthetic rows the template's tests seed from
 ├── tests/                               native TestWorkspace + @effect/vitest
 ├── .norbital/                           generated, never edited or committed
@@ -122,14 +127,14 @@ catalogs, `$types.js`, Promise-based guest handlers.
 
 ## The declaration contract
 
-| Declaration               | Callbacks inside the literal                                                                                                      |
-| ------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
-| `model(name, spec)`       | `create.transform`, `update.transform`, `delete.check`, `search.indexes.*`, `notify`, `syncs.*`                                  |
-| `customField(name, spec)` | `validate`                                                                                                                        |
-| `policy(spec)`            | `check` on each `create`, `update` and `delete` grant                                                                             |
-| `integration(name, spec)` | `test`; the connection's data includes `webhook.verify` and `rate`                                                                |
-| `automation(name, spec)`  | `run`                                                                                                                             |
-| `team(spec)`              | none                                                                                                                              |
+| Declaration               | Callbacks inside the literal                                                                    |
+| ------------------------- | ----------------------------------------------------------------------------------------------- |
+| `model(name, spec)`       | `create.transform`, `update.transform`, `delete.check`, `search.indexes.*`, `notify`, `syncs.*` |
+| `customField(name, spec)` | `validate`                                                                                      |
+| `policy(spec)`            | `check` on each `create`, `update` and `delete` grant                                           |
+| `integration(name, spec)` | `test`; the connection's data includes `webhook.verify` and `rate`                              |
+| `automation(name, spec)`  | `run`                                                                                           |
+| `team(spec)`              | none                                                                                            |
 
 A model holds storage and exposure together. Relations are `kind: 'ref'` fields on the model
 holding the foreign key; policies, views, reads and seeds name models. Syncs live on models and
@@ -139,41 +144,43 @@ installed package before using an uncertain option.
 
 `read`, `create.columns` and `update.columns` are **layer maps**: flat objects keyed by path,
 `'orders'` the root, `'orders.customer'` and `'orders.lines'` the relations under it, at most five
-levels, each parent declared too. `read: 'all'` is the root with every field. A model without
-`read` is no read root but may be another model's layer. A write layer is a many-relation (child
+levels, each parent declared too. `read: 'all'` is the root with every field. `read` is the
+model's `default` output; `outputs: { logistics: { orders: { fields: [...] }, … } }` declares named
+outputs beside it, each a fixed layer map. Every read names one output (`output`, `default` when
+absent). A model without `read` is no read root but may be another model's layer. A write layer is a many-relation (child
 rows) and never lists the key tying it to its parent. A model declares no named queries.
 
 ```ts
 // src/data/model/orders/+model.ts
-import { model } from "@norbital-ai/bolt";
-export default model("orders", {
-  description: "Customer orders.",
-  label: "number",
-  fields: {
-    number: { kind: "seq", pattern: "SO-{yyyy}-{0000}" },
-    customer: { kind: "ref", to: "customers", inverse: "orders" },
-    notes: { kind: "text", optional: true },
-  },
-  read: {
-    orders: { fields: ["number", "customer", "notes"] },
-    "orders.customer": { fields: ["name", "code"] },
-  },
-  create: {
-    columns: { orders: ["customer", "notes"] },
-    transform: function* (rows, ctx) {
-      if (rows.some((row) => row.notes === ""))
-        return yield* ctx.refuse("Notes cannot be blank.", { field: "notes" });
-      return rows;
-    },
-  },
-  update: {
-    columns: { orders: ["notes"] },
-    transform: function* (changes, ctx) {
-      if (changes.some(({ set }) => set.notes === ""))
-        return yield* ctx.refuse("Notes cannot be blank.", { field: "notes" });
-      return changes.map(({ set }) => set);
-    },
-  },
+import { model } from '@norbital-ai/bolt';
+export default model('orders', {
+	description: 'Customer orders.',
+	label: 'number',
+	fields: {
+		number: { kind: 'seq', pattern: 'SO-{yyyy}-{0000}' },
+		customer: { kind: 'ref', to: 'customers', inverse: 'orders' },
+		notes: { kind: 'text', optional: true }
+	},
+	read: {
+		orders: { fields: ['number', 'customer', 'notes'] },
+		'orders.customer': { fields: ['name', 'code'] }
+	},
+	create: {
+		columns: { orders: ['customer', 'notes'] },
+		transform: function* (rows, ctx) {
+			if (rows.some((row) => row.notes === ''))
+				return yield* ctx.refuse('Notes cannot be blank.', { field: 'notes' });
+			return rows;
+		}
+	},
+	update: {
+		columns: { orders: ['notes'] },
+		transform: function* (changes, ctx) {
+			if (changes.some(({ set }) => set.notes === ''))
+				return yield* ctx.refuse('Notes cannot be blank.', { field: 'notes' });
+			return changes.map(({ set }) => set);
+		}
+	}
 });
 ```
 
@@ -184,16 +191,21 @@ children. A create receives rows; an update receives `{ before, set }` and retur
 checks receive stored rows and may refuse. Seed restores and derived roll-ups bypass callbacks.
 Children run their own callbacks after the parent's. Prefetch before mapping: a callback may
 read at most twice through `ctx.db.query`, as the workspace, and never writes or performs I/O.
-Each 1000-row chunk gets one callback per verb per model and its own 2 s CPU budget; the whole
+Each 1000-row chunk gets one callback per verb per model and its own 3 s CPU budget; the whole
 file remains one transaction. SQL writes are set-based, O(N/1000), with history and approvals.
 
 A computed answer is a read request plus a pure, browser-safe `src/lib` helper: the page calls
 `bolt.query({...})` then the helper, server code calls the same helper over `ctx.query({...})`,
 and a heavy export is a `with: 'file'` sync. Business operations are named
-automations with explicit typed inputs, `ctx.act`, `ctx.schedule`, `ctx.notify` and `ctx.refuse`. They
-run as their `runAs` policies (or `'trigger'` for started-only runs) and add business I/O:
+automations with explicit typed inputs, `ctx.act`, `ctx.schedule`, `ctx.notify` and `ctx.refuse`. Each
+runs as the reserved system identity with its declared `policies` (`ctx.run.trigger` records who started it;
+code acting for that person checks it explicitly) and adds business I/O:
 `request`, `send`, `web`, `files`, `convert`, `ai` and `geo`. Remote sync reads/writes are trusted,
-return changes/acknowledgements and request through their own instance. File sync callbacks retain the importing/exporting caller's read scope and masks;
+return changes/acknowledgements and request through their own instance. Work that follows a committed write is the
+model's `effect` (`created` rows, `updated` `{ before, after }` changes, `deleted` rows): a durable run after the commit,
+once per batch, as the writer, holding no policy; its rows are the root fields of the writer's output of the model; automations
+have no row triggers, only `cron`, `webhook` and starts (see
+[model effects](references/apps-and-server-roles.md#model-effects-effect-in-modelts)). File sync callbacks retain the importing/exporting caller's read scope and outputs;
 context never elevates authority. Notify callbacks read
 as the workspace after commit and return notices. Policy checks read as the workspace (at most
 twice through `ctx.db.query`), never write or perform I/O, and return a verdict.
@@ -201,9 +213,9 @@ Page-server loaders have caller-scoped reads only.
 
 Model writes are only `create`, `update`, `delete` and keyed `upsert`, and every one takes an
 array: `ctx.act('orders.create', [{ … }])`, `[{ target, set }]`, `[{ target }]`. Name business operations
-as `<model>_<operation>` automations with explicit typed IDs/inputs. A started-only run uses
-`runAs: 'trigger'` when it must retain the caller's authority, with explicit `policy.automations`
-permission to start it and grants for every read and write it uses. Use `ctx.act.many(...)`
+as `<model>_<operation>` automations with explicit typed IDs/inputs. Its `policies` grant every
+read and write it uses; scope "own records" with `{ var: 'requestor.id' }` in those grants. A
+holder's `policy.automations` lets a person or the agent start it by hand; code needs no start grant. Use `ctx.act.many(...)`
 for independent atomic writes and the parent's write layers (nested child rows) for dependent creates. Dependent reads
 and writes use `ctx.transaction(function* (tx) { ... })`, with `tx.query` and guarded `tx.act`,
 read-your-writes and one commit. Its fixed five-second native session requires PostgreSQL 17+;
@@ -212,7 +224,7 @@ observations. Inner answers are provisional; the outer result alone is committed
 no callback output in the held arm. See [data access](references/data-access.md). A whole durable
 automation can contain several transactions.
 
-Every invocation has 2 s cumulative CPU, 256 MiB heap, 40 facility crossings (10,000 for an
+Every invocation has 3 s cumulative CPU, 256 MiB heap, 40 facility crossings (10,000 for an
 automation) and a 20 s idle deadline per host response, refreshed by progress. CPU admission is
 released while awaiting I/O. Batch reads as one read request,
 `ctx.query({ orders: { … }, 'orders.lines': {}, settings: { limit: 1 } })`, or `ctx.db.query({ … })`
@@ -235,14 +247,22 @@ A page uses the generated `$bolt` module:
 	import { AppShell } from '@norbital-ai/ui/layout';
 </script>
 
-<AppShell icon="lucide:package" title={bolt.t('orders.title')} description={bolt.t('orders.description')}>
-	<Table of="orders" where={{ status: { ne: 'shipped' } }} columns={['number', 'customer', 'status', 'total']} />
+<AppShell
+	icon="lucide:package"
+	title={bolt.t('orders.title')}
+	description={bolt.t('orders.description')}
+>
+	<Table
+		of="orders"
+		where={{ status: { ne: 'shipped' } }}
+		columns={['number', 'customer', 'status', 'total']}
+	/>
 </AppShell>
 ```
 
 `bolt.query` takes one read shape, the read request: a layer map whose keys without a dot are
 roots and whose deep keys are declared layers, `bolt.query({ orders: { where, fields, orderBy, limit }, 'orders.customer': {} })`,
-answering `{ orders: { rows, next } }`. A record is `where: { id: { eq: id } }, limit: 1`; an index
+answering `{ orders: { rows, next, total } }` (`total`: every row the read matches, its page aside). A record is `where: { id: { eq: id } }, limit: 1`; an index
 search is a root `search`. Every list defaults to `limit` 10,000. Its `Query<T>` is
 live when `.current`, `.loading` or `.error` is read reactively, once when awaited outside a
 reactive context, and an Effect when composed with `yield*`. `aggregate` and `history` share that
@@ -284,10 +304,13 @@ one narrow state and look at them — compilation cannot prove visual correctnes
 ## Access in one paragraph
 
 A policy (`src/access_control/policy/+<name>.policy.ts`, named by its file) holds `grants` per model
-(`read history create update delete moves`), `automations` a holder may start, `capabilities`
-(`apps tools mcp skills`) and `limits`. Grants are layer maps typed from the model's own
-declaration: `read` is `true` or `{ orders: { where?, fields? }, 'orders.lines': { where?, fields? } }`
-(a deeper `where` filters that layer only; an unnamed declared layer reads in full); `create` and
+(`read outputs history create update delete moves`), `automations` a person or the agent may start
+by hand, `capabilities` (`apps tools mcp skills`) and `limits`. Grants are layer maps typed from the
+model's own declaration: `read` grants the `default` output and `outputs: { <name>: … }` named ones,
+each `true` or `{ orders: { where? }, 'orders.lines': { where? } }` over that output's layers (a
+deeper `where` filters that layer only; an unnamed layer is unfiltered). The model fixes each
+output's fields; a policy filters rows, never shape. `history` is `true` or a `where`. Every member
+reads `sys_user` output `directory` (id, name). `create` and
 `update` are `true` or `{ columns?: { orders: [...], 'orders.lines': [...] }, check? }`; `delete` is
 `true` or `{ check? }`. Authority is per access point: the root's policy alone guards a read or
 write and every layer under it; the related model's policies are never consulted on that path.
@@ -323,7 +346,8 @@ template does not re-test it. Details: `norbital-platform` → `approvals-and-po
 bolt sync         # regenerate literal declaration types
 bolt check        # sync, then every error of every stage in one run: layout, names, bundle, schema, then tsc or svelte-check
 bolt test         # @effect/vitest with TestWorkspace.layer
-bolt build        # .norbital/{bundle,source,seed} + release.json: packs base, test (when seed/test/ exists) and, with --bank=<bank checkout>, the private sample
+bolt build        # .norbital/{bundle,source,seed} + release.json: packs base (seed/public/) and test (when seed/test/ exists)
+bolt seed --bank=<bank checkout> [--target=<origin> --tenant=<handle>]  # the seeder's bank tree, in memory: decoded, or reset into one demo
 bolt dev          # norbital.host.ts (or --host=<file>): untethered with page HMR; none: tethered, rebuild on save + page HMR in local Colony
 ```
 
@@ -332,11 +356,12 @@ a successful process does not prove that a UI warning or manual acceptance conce
 
 ## Verify behaviour and inspect the result
 
-Prove changed rules through the authored code (`TestWorkspace.layer({ root })`, `yield* t.as(member).act(…)` inside `it.effect`).
+Prove changed rules through the authored code (`TestWorkspace.layer({ root })` from `@norbital-ai/bolt-cli/test`,
+`yield* t.as(member).act(…)` inside `it.effect`; the kit runs guest code on its own runner).
 A test proves one of the workspace's own mechanisms (a calculation, a guard, a write callback) on
 small synthetic input, within 2 s, with no timeouts, sleeps, spawns or builds. `TestWorkspace.layer({ root })`
 seeds from the template's `test` pack (`seed/test/`): small synthetic rows written for its mechanisms. It never
-loads the public `base` pack or the bank's `sample`; never put bank or customer data in it. Seed correctness
+loads the public `base` pack or bank rows; never put bank or customer data in it. Seed correctness
 matrices, absence checks, Svelte mounts and layout/markup/CSS assertions are not tests; see
 `authoring-test-suites`.
 Inspecting a running standalone artifact is a probe: exercise the task, check the resulting records
@@ -348,8 +373,7 @@ From the realm root, `serve` runs `bolt build`, then the example untethered host
 an embedded PGlite, local files, and a loopback mail catcher that prints sign-in codes to the log:
 
 ```bash
-bun run env -- serve --template=hr-payroll                 # sample pack from the private seed bank
-bun run env -- serve --template=hr-payroll --seed=base   # the template's public `base` pack
+bun run env -- serve --template=hr-payroll                 # the template's public `base` pack
 bun run env -- serve --template=./path/to/workspace --port=4181 --seed=none
 bun run env -- status                                      # lists it; kill <pid> stops it
 ```

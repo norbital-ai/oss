@@ -2,6 +2,7 @@ import './resolve.ts';
 import assert from 'node:assert/strict';
 import { it } from '@effect/vitest';
 import { Decimal } from '@norbital-ai/std/decimal';
+import type { JsonSchema } from '../src/kinds/json-schema.ts';
 import {
 	dataChanged,
 	dataDefaults,
@@ -86,16 +87,13 @@ it('equality distinguishes missing, null, false, zero and empty text, ignoring o
 	assert.equal(dataEqual([1, 2], [2, 1]), false);
 });
 
-it('decimals remain opaque, exact values and masks do not expose their internals', () => {
+it('decimals remain opaque and exact values do not expose their internals', () => {
 	const held = Decimal.of('9007199254740993.10');
 	assert.equal(dataEntries(held), undefined);
 	assert.equal(dataEqual(held, Decimal.of('9007199254740993.100')), true);
 	assert.equal(dataEqual(held, Decimal.of('9007199254740993.11')), false);
 	assert.equal(dataEqual(held, '9007199254740993.10'), false);
 	assert.deepEqual(inferJsonSchema(held), { type: 'number' });
-	assert.equal(dataEntries({ $masked: true }), undefined);
-	assert.equal(dataEqual({ $masked: true, a: 1 }, { $masked: true, a: 2 }), true);
-	assert.deepEqual(inferJsonSchema({ $masked: true }), {});
 });
 
 it('composite identities pair new row order and append removed rows without pairing unrelated records', () => {
@@ -244,7 +242,7 @@ it('display plans fold local structural allOf without changing the source schema
 });
 
 it('variants select one observed type or discriminator and remain intact for schema-only or ambiguity', () => {
-	const variants = {
+	const variants: JsonSchema = {
 		title: 'Response',
 		oneOf: [
 			{ type: 'object', properties: { kind: { const: 'ok' }, count: { type: 'integer' } } },

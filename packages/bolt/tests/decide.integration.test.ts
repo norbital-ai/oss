@@ -8,7 +8,7 @@ import { Port } from '../src/engine/port.ts';
 import { FacilityFailure } from '../src/decl/errors.ts';
 import type { Json } from '../src/decl/values.ts';
 import { Ai } from '../src/engine/ports.ts';
-import { program } from '../src/test/guest.ts';
+import { program } from '../../bolt-cli/src/test/guest.ts';
 import {
 	actReply,
 	json,
@@ -19,7 +19,7 @@ import {
 import type { ActOutcome as Outcome } from '../src/engine/contracts.ts';
 import type { EngineManifest } from '../src/engine/manifest.ts';
 import type { System1Request } from '../src/engine/decisions/index.ts';
-import { TestWorkspace, type Kit } from '../src/test/index.ts';
+import { TestWorkspace, type Kit } from '../../bolt-cli/src/test/index.ts';
 
 const present = <A>(value: A | null | undefined): A => {
 	if (value === null || value === undefined) throw new Error('Missing fixture value');
@@ -56,7 +56,8 @@ const manifest = {
 		tickets: {
 			read: { tickets: { fields: 'all' } },
 			create: { columns: { tickets: ['subject', 'photo', 'ref_id'] } },
-			update: { columns: { tickets: ['queue', 'urgent', 'level', 'note'] } }
+			update: { columns: { tickets: ['queue', 'urgent', 'level', 'note'] } },
+			effect: { created: true }
 		},
 		secret_docs: {
 			read: { secret_docs: { fields: 'all' } },
@@ -66,9 +67,7 @@ const manifest = {
 	policies: {
 		desk: { description: 'Desk', grants: { tickets: { read: true, create: true, update: true } } }
 	},
-	automations: {
-		route: { description: 'Route a new ticket', on: { created: 'tickets' }, runAs: ['desk'] }
-	},
+	automations: {},
 	integrations: {},
 	teams: {},
 	connections: {},
@@ -84,8 +83,8 @@ const questions = {
 	queue: { type: 'choice', instructions: 'Which queue?', criteria: { billing: 'money', technical: 'broken', accounts: 'login' } },
 	blocked: { type: 'noul', instructions: 'Is the customer blocked?', criteria: { true: 'cannot work', false: 'can work' } },
 	urgency: { type: 'score', instructions: 'How urgent?', criteria: ['low', 'medium', 'high'] } };
-export default { automation: { route: { body: function* (input, ctx) {
-	for (const id of input.ids) {
+export default { model: { tickets: { bodies: { effect: { created: function* (rows, ctx) {
+	for (const { id } of rows) {
 		const t = (yield* ctx.query({ tickets: { where: { id: { eq: id } }, fields: ['subject', 'photo', 'ref_id'] } })).tickets.rows[0];
 		const photo = t.ref_id ? { id: t.ref_id, name: 'x.png', mime: 'image/png' } : t.photo;
 		const r = yield* Effect.result(ctx.ai.sys_1.decide({ state: { subject: t.subject, ...(photo ? { photo } : {}) }, questions }));
@@ -94,7 +93,7 @@ export default { automation: { route: { body: function* (input, ctx) {
 		yield* ctx.act('tickets.update', [{ target: id, set: { queue: result.answers.queue.choice, urgent: result.answers.blocked.noul > 0.5,
 			level: result.answers.urgency.level, note: 'cost ' + result.costUsd } }]);
 	}
-} } } };`);
+} } } } } };`);
 
 type Mode = 'ok' | 'tooLarge' | 'unsupported' | 'offlist' | 'down' | 'absent';
 type Fake = { mode: Mode; calls: System1Request[] };
@@ -244,7 +243,7 @@ describe('ctx.ai.sys_1.decide (P36, P37)', () => {
 				]);
 				expect(sent.state).toEqual({ subject: 'Charged twice' });
 				expect(yield* events(t)).toMatchObject([
-					{ use: 'author', system: 1, automation: 'route', costUsd: 0.0004 }
+					{ use: 'author', system: 1, automation: 'tickets.effect.created', costUsd: 0.0004 }
 				]);
 				// refusals and failures are the typed error `.try` returns; no system2 call
 				for (const [mode, kind] of [
@@ -309,4 +308,3 @@ describe('ctx.ai.sys_1.decide (P36, P37)', () => {
 		)
 	);
 });
-

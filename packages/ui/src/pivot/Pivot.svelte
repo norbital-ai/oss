@@ -21,7 +21,7 @@
 	import { and, compact } from '../filter/scope.js';
 	import { label, msg } from '../text/messages.js';
 	import { pivotGrid } from './grid.js';
-	import { objectsOf } from '../read/results.js';
+	import type { Page, Values } from '../model/types.js';
 	import ReadGate from '../read/ReadGate.svelte';
 	import { queryState } from '../read/state.js';
 	import { useKinds } from '../kinds/context.js';
@@ -39,7 +39,7 @@
 		initialFilter: () => undefined
 	});
 	const agg = $derived(
-		bolt.aggregate(
+		bolt.aggregate<Page<Values>>(
 			of,
 			compact({
 				by: cols === undefined ? [rows] : [rows, cols],
@@ -55,7 +55,7 @@
 <ViewToolbar config={toolbar} model={of} {view} {catalog} author={where} />
 <ReadGate state={queryState(agg)} what={label(bolt, of)}>
 	{#snippet children(v)}
-		{@const g = pivotGrid(objectsOf(v), rows, cols, value)}
+		{@const g = pivotGrid(v.rows, rows, cols, value)}
 		{#if g.rowKeys.length === 0}
 			<p class="text-muted-foreground p-4 text-sm" data-read="empty">
 				{msg(bolt, 'table.none', 'No rows')}

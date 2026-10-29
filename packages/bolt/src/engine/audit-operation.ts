@@ -178,13 +178,17 @@ export const settleAudit = Effect.fn('Audit.settle')(function* (
 			committedAt: receipt.value.at
 		})
 	};
+	// the request rides on a row event only when it wrote that one row: a bulk write's request is the terminal event's
+	// alone, as copying it into each of its N row events is N² bytes (a 1,700-row import overran its 2 s of CPU)
 	const rows: AuditEvent[] = written.map((row) => ({
 		...event,
 		id: `${event.operationId}:row:${row.model}:${row.id}:${row.revision}`,
 		action: `${row.model}.${row.op}`,
 		status,
 		subject: { model: row.model, id: row.id, revision: row.revision },
-		payload: encodeWire({ request: event.payload, change: row })
+		payload: encodeWire(
+			written.length === 1 ? { request: event.payload, change: row } : { change: row }
+		)
 	}));
 	yield* (yield* Audit).append([...rows, terminal]);
 	// an unknown commit stays pending for recovery to settle later

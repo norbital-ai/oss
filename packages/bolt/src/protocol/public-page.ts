@@ -195,54 +195,68 @@ const child = Schema.Struct({
 });
 const children = Schema.optionalKey(Schema.Record(Schema.String, child));
 
+const relation = {
+	targets: strings,
+	optional: trueKey,
+	label: optionalString,
+	inverse: optionalString
+};
+/** A model's presentation metadata both catalogs share. */
+const exposure = {
+	label: strings,
+	search: Schema.optionalKey(strings),
+	semantic: trueKey,
+	indexes: Schema.optionalKey(
+		Schema.Record(Schema.String, Schema.Struct({ input: fields(), description: Schema.String }))
+	),
+	queries: Schema.optionalKey(
+		Schema.Record(
+			Schema.String,
+			Schema.Struct({ input: fields(), output: OutputKindSchema, description: Schema.String })
+		)
+	),
+	fields: fields(),
+	relations: Schema.optionalKey(Schema.Record(Schema.String, Schema.Struct(relation))),
+	many: Schema.optionalKey(strings),
+	children: Schema.optionalKey(Schema.Record(Schema.String, Schema.Struct(childIdentity))),
+	/** The named read output the caller's views read this model as (absent: `default`). */
+	output: Schema.optionalKey(Schema.String),
+	create: Schema.optionalKey(
+		Schema.Struct({
+			columns: strings,
+			filled: Schema.optionalKey(strings),
+			proposalOnly: trueKey,
+			with: children
+		})
+	),
+	update: Schema.optionalKey(Schema.Struct({ columns: strings, with: children })),
+	readonlyFields: Schema.optionalKey(
+		Schema.Record(Schema.String, Schema.Literals(['syncOwned', 'ownedParent']))
+	),
+	description: optionalString,
+	delete: trueKey,
+	syncs: Schema.optionalKey(Schema.Record(Schema.String, SyncExposureSchema))
+};
 /** Caller-filtered presentation metadata, decoded without trusting a manifest or arbitrary object cast. */
-const PublicCatalog = Schema.Record(
-	Schema.String,
-	Schema.Struct({
-		label: strings,
-		search: Schema.optionalKey(strings),
-		semantic: trueKey,
-		indexes: Schema.optionalKey(
-			Schema.Record(Schema.String, Schema.Struct({ input: fields(), description: Schema.String }))
-		),
-		queries: Schema.optionalKey(
-			Schema.Record(
-				Schema.String,
-				Schema.Struct({ input: fields(), output: OutputKindSchema, description: Schema.String })
-			)
-		),
-		fields: fields(),
-		relations: Schema.optionalKey(
-			Schema.Record(
-				Schema.String,
-				Schema.Struct({
-					targets: strings,
-					optional: trueKey,
-					label: optionalString,
-					inverse: optionalString
-				})
-			)
-		),
-		many: Schema.optionalKey(strings),
-		children: Schema.optionalKey(Schema.Record(Schema.String, Schema.Struct(childIdentity))),
-		masked: Schema.optionalKey(strings),
-		create: Schema.optionalKey(
-			Schema.Struct({
-				columns: strings,
-				filled: Schema.optionalKey(strings),
-				proposalOnly: trueKey,
-				with: children
-			})
-		),
-		update: Schema.optionalKey(Schema.Struct({ columns: strings, with: children })),
-		readonlyFields: Schema.optionalKey(
-			Schema.Record(Schema.String, Schema.Literals(['syncOwned', 'ownedParent']))
-		),
-		description: optionalString,
-		delete: trueKey,
-		syncs: Schema.optionalKey(Schema.Record(Schema.String, SyncExposureSchema))
-	})
-);
+const PublicCatalog = Schema.Record(Schema.String, Schema.Struct(exposure));
+/** One model as the signed-in shell's catalog exposes it to its caller (ui's `ModelExposure`): a relation's static
+ * `where`, the read layers and the own-field lock as well. */
+export const ModelExposureSchema = Schema.Struct({
+	...exposure,
+	relations: Schema.optionalKey(
+		Schema.Record(
+			Schema.String,
+			Schema.Struct({ ...relation, where: Schema.optionalKey(predicate) })
+		)
+	),
+	layers: Schema.optionalKey(strings),
+	locked: Schema.optionalKey(predicate)
+});
+/** A declared automation the caller may start (ui's `AutomationExposure`). */
+export const AutomationExposureSchema = Schema.Struct({
+	input: fields(),
+	description: optionalString
+});
 
 /** The entire public hydration boot: no authority, internal navigation, credentials, agent or Studio data. */
 export const PublicBoot = Schema.Struct({
@@ -262,10 +276,7 @@ export const PublicBoot = Schema.Struct({
 	describe: Schema.Boolean,
 	messages: Schema.Record(Schema.String, Schema.String),
 	catalog: PublicCatalog,
-	automations: Schema.Record(
-		Schema.String,
-		Schema.Struct({ input: fields(), description: optionalString })
-	)
+	automations: Schema.Record(Schema.String, AutomationExposureSchema)
 });
 export interface PublicBoot extends Schema.Schema.Type<typeof PublicBoot> {}
 

@@ -46,8 +46,8 @@ const inert = <T>(method: Query<T>['read']['m'], args: readonly Json[]): Query<T
 /** Views share the same narrow synchronous metadata; their interactive methods cannot perform SSR side effects. */
 export const bolt = {
 	aggregate: <T>(...args: readonly Json[]) => inert<T>('aggregate', args),
-	history: <T>(model: string, id: string, options?: { at?: Json }) =>
-		inert<T>('history', [model, id, ...(options?.at === undefined ? [] : [options.at])]),
+	history: <T>(model: string, id: string, options?: { at?: Json; output?: string }) =>
+		inert<T>('history', [model, id, options ?? {}]),
 	query: <T>(...args: readonly Json[]) => inert<T>('query', args),
 	clock: () => {
 		const now = new Date().toISOString();

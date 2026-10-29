@@ -33,12 +33,13 @@ fix races, cold module acquisition or resource contention with time.
 
 ## Native and template data paths
 
-Use `TestWorkspace.layer({ root })` from `@norbital-ai/bolt/test` for authored workspace behaviour. It
-compiles the real source and supplies the existing engine, fake facilities and clock. Reuse the
+Use `TestWorkspace.layer({ root })` from `@norbital-ai/bolt-cli/test` for authored workspace behaviour. It compiles
+the real source and supplies the existing engine, fake facilities and clock, and runs guest code on its own `node:vm`
+runner. Reuse the
 owning template's kit rather than reconstructing a second runtime.
 
 For domain helpers that normally receive transform reads, `t.storedRead` supplies the workspace's
-native unmasked stored reader. `t.bodyActs(holderOrAuthority)` supplies an automation's
+native whole-row stored reader. `t.bodyActs(holderOrAuthority)` supplies an automation's
 native `many` writer under that authority. Both use the real engine and its codecs; preserve the
 helper's declared reader/writer types instead of casting a fake `ctx` or reimplementing queries.
 Checked `mode: 'declared'` reads expose `ReadFailed`; ordinary stored reads retain the transform
@@ -46,7 +47,7 @@ contract in which engine and decode faults are defects.
 
 ```ts
 import { Effect } from 'effect';
-import { TestWorkspace, expect, layer } from '@norbital-ai/bolt/test';
+import { TestWorkspace, expect, layer } from '@norbital-ai/bolt-cli/test';
 
 layer(TestWorkspace.layer({ root }))('authored rules', (it) => {
 	it.effect('creates an allowed record', () =>

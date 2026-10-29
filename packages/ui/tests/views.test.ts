@@ -3,7 +3,6 @@ import { required, textOf, browser } from './view-fixture.ts';
 import assert from 'node:assert/strict';
 import { it, vi } from '@effect/vitest';
 import { and, compact } from '../src/filter/scope.ts';
-import { countOf } from '../src/read/results.ts';
 import { flat } from '../src/read/aggregate.ts';
 import { label, msg } from '../src/text/messages.ts';
 import { like } from '../src/cell/value.ts';
@@ -14,7 +13,8 @@ import { rangeText, searchRows, readTableState, writeTableState } from '../src/t
 import { readState, failed } from '../src/read/state.ts';
 import { rowsOps } from '../src/relations/operations.ts';
 import { series } from '../src/chart/series.ts';
-import type { Query } from '../src/client/contract.ts';
+import { withOutputs } from '../src/client/context.ts';
+import type { HistoryEntry, Query, QueryAnswer } from '../src/client/contract.ts';
 import { reactive } from './kit-state.svelte.js';
 import { listRequest, unref, refOf } from '../src/relations/select.ts';
 import { Deferred, Effect, Queue } from 'effect';
@@ -105,13 +105,13 @@ it.live('a later page stays live through Query state; a restored cursor reads on
 		};
 		const state = reactive<{
 			of: string;
-			read(limit: number, after?: string): Query<unknown>;
+			read(limit: number, after?: string): Query<QueryAnswer>;
 			index: number | null;
 			after: string | null;
 		}>({
 			of: 'c',
 			read: (limit: number, after?: string) =>
-				bolt.query({ c: after === undefined ? { limit } : { limit, after } }),
+				bolt.query<QueryAnswer>({ c: after === undefined ? { limit } : { limit, after } }),
 			index: 0,
 			after: null
 		});
@@ -143,8 +143,6 @@ it.effect('range and count', () =>
 		assert.equal(rangeText(bolt, 25, 25, 312), 'rows 26–50 of 312');
 		assert.equal(rangeText(bolt, 0, 0, null), 'No rows');
 		assert.equal(rangeText(bolt, 0, 1, 0), 'rows 1–1'); // a live row ahead of the 30 s count
-		assert.equal(countOf([{ count: 12 }]), 12);
-		assert.equal(countOf({ count: '7' }), 7);
 		assert.equal(
 			msg({ t: (k) => (k === 'ui.table.next' ? 'Suivant' : k) }, 'table.next', 'Next'),
 			'Suivant'
@@ -153,9 +151,30 @@ it.effect('range and count', () =>
 	})
 );
 
-it.effect('values display by shape; masks are locked', () =>
+it.effect("a view's read names each root's view output unless it names one", () =>
 	Effect.sync(() => {
-		assert.equal(show({ $masked: true }), '•••');
+		const catalog = {
+			people: { label: ['name'], fields: { name: { kind: 'text' } }, output: 'directory' },
+			jobs: { label: ['title'], fields: { title: { kind: 'text' } } }
+		} satisfies NonNullable<KindsHost['catalog']>;
+		assert.deepEqual(
+			withOutputs(
+				{ people: { limit: 5 }, 'people.jobs': {}, jobs: {}, sys_user: { output: 'default' } },
+				{ ...catalog, sys_user: { ...catalog.people } }
+			),
+			{
+				people: { limit: 5, output: 'directory' },
+				'people.jobs': {},
+				jobs: {},
+				sys_user: { output: 'default' }
+			}
+		);
+		assert.deepEqual(withOutputs({ people: {} }, undefined), { people: {} });
+	})
+);
+
+it.effect('values display by shape', () =>
+	Effect.sync(() => {
 		assert.equal(show(Decimal.of('1234.5'), 'en'), '1,234.5');
 		assert.equal(show({ from: '2026-01-01', to: null }), '2026-01-01 – …');
 		assert.equal(show({ id: 'f', name: 'a.pdf', mime: 'application/pdf' }), 'a.pdf');
@@ -530,7 +549,7 @@ it.live(
 			const { checkpoints, tickAt, tickOf, drawnTicks } = yield* browser(
 				() => import('../src/record/history.ts')
 			);
-			const history = [
+			const history: readonly HistoryEntry[] = [
 				{
 					revision: 2,
 					at: '2026-09-02T00:00:00.000Z',
@@ -543,9 +562,11 @@ it.live(
 					revision: 1,
 					at: '2026-09-01T00:00:00.000Z',
 					actor: { kind: 'member', id: 'u1' },
+					restoredFrom: null,
+					approval: null,
 					changed: { title: 'Paint', id: 'j1' }
 				},
-				{ revision: 3, at: null, actor: null, changed: null }
+				{ revision: 3, at: null, actor: null, restoredFrom: null, approval: null, changed: {} }
 			];
 			assert.deepEqual(checkpoints(history), [
 				{
@@ -566,7 +587,7 @@ it.live(
 				},
 				{ revision: 3, at: null, actor: null, fields: [], restoredFrom: null, approval: null }
 			]);
-			assert.deepEqual(checkpoints(null), []);
+			assert.deepEqual(checkpoints([]), []);
 			assert.equal(tickAt(1, 5), 0);
 			assert.equal(tickAt(5, 5), 100);
 			assert.equal(tickAt(1, 1), 100);

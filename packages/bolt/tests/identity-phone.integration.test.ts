@@ -9,7 +9,7 @@ import { randomUUID } from 'node:crypto';
 import type { Json } from '../src/decl/values.ts';
 import { RateWindows } from '../src/engine/access/rate.ts';
 import type { TransportPort } from '../src/engine/contracts.ts';
-import { TestDb } from '../src/test/database.ts';
+import { TestDb } from '../../bolt-cli/src/test/database.ts';
 import { TenantDb } from '../src/engine/db/tenant-db.ts';
 import { Authorities } from '../src/engine/identity/actor.ts';
 import { parseAddress } from '../src/engine/identity/address.ts';
@@ -26,7 +26,7 @@ import {
 	type PhoneVerifier
 } from '../src/engine/identity/session.ts';
 import type { EngineManifest } from '../src/engine/manifest.ts';
-import { memoryAuditLayer } from '../src/test/index.ts';
+import { memoryAuditLayer } from '../../bolt-cli/src/test/index.ts';
 
 const m: EngineManifest = {
 	needs: [],

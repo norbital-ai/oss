@@ -8,7 +8,7 @@ import type { Json } from '../src/decl/values.ts';
 import type { KeysPort } from '../src/engine/contracts.ts';
 import type { EngineManifest } from '../src/engine/manifest.ts';
 import { PgliteDb, type PgliteClient } from '../src/node/db/pglite.ts';
-import { TestDb } from '../src/test/database.ts';
+import { TestDb } from '../../bolt-cli/src/test/database.ts';
 import { TenantDb } from '../src/engine/db/tenant-db.ts';
 import { DbError } from '../src/engine/errors.ts';
 import { compileAuthority } from '../src/engine/access/authority.ts';
@@ -353,7 +353,7 @@ describe('sys_integration: ordinary acts and the engine transform', () => {
 				const caller = authority({
 					sys_user: grants('sys_user', { create: [], update: [], delete: [] }),
 					sys_integration: grants('sys_integration', {
-						read: { sys_integration: [arm(own)] },
+						read: { default: { sys_integration: [arm(own)] } },
 						create: [writeArm({ sys_integration: ['integration', 'name', 'owner'] })],
 						update: [writeArm({ sys_integration: ['name', 'active'] })],
 						delete: [deleteArm()]

@@ -1,7 +1,9 @@
 // A member (§5.11.1): the session principal. `party_id` is what the kernel directory grant compares for externals
 // (rule 35a); only a staff member can be an admin (rule 38c). A member signs in with their email or their mobile number:
-// each is unique among members (`phone_key` is the number's digits, as a WhatsApp handle compares it). Read through the
-// kernel directory (rule 35a) or a read grant; written by the admin verbs.
+// each is unique among members (`phone_key` is the number's digits, as a WhatsApp handle compares it). Read as its
+// `directory` output through the kernel directory (rule 35a) or a read grant; written by the admin verbs. An `anonymous` user is a visitor's identity on
+// a public app or a no-sign-in kiosk: no address, no member; signing in links it (session.ts `verifyCode`), and the daily
+// prune removes it 30 days after its last visit unless a record still references it.
 import { model } from '../../../../decl/model.ts';
 
 export default model('sys_user', {
@@ -10,7 +12,7 @@ export default model('sys_user', {
 	fields: {
 		email: { kind: 'text', format: 'email', optional: true },
 		name: { kind: 'text' },
-		kind: { kind: 'enum', values: ['staff', 'external'], default: 'staff' },
+		kind: { kind: 'enum', values: ['staff', 'external', 'anonymous'], default: 'staff' },
 		active: { kind: 'bool', default: true },
 		admin: { kind: 'bool', default: false },
 		/** Grant origin: self-signup policies are resolved from the current source declaration. */
@@ -36,5 +38,7 @@ export default model('sys_user', {
 			{ on: ['phone_key'], unique: true }
 		]
 	},
-	read: 'all'
+	read: 'all',
+	/** The kernel directory (rule 35a): who a member is, by name. Staff read staff; externals themselves and their party. */
+	outputs: { directory: { sys_user: { fields: ['name'] } } }
 });

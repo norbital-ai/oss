@@ -89,7 +89,6 @@
 	{#if icon}
 		<Frame
 			ratio="square"
-			shrink={false}
 			class={cn(
 				compact ? 'size-8 rounded-lg' : 'size-11 rounded-xl',
 				scrim
@@ -101,7 +100,7 @@
 		</Frame>
 	{/if}
 	{#if title || description}
-		<Stack gap="none" grow class="min-w-0">
+		<Stack gap="none" size="fill" class="min-w-0">
 			{#if title}
 				<h1
 					class={cn(
@@ -158,13 +157,9 @@
 				justify="between"
 				class={cn('min-h-11 py-0.5', leading === undefined && 'pl-2')}
 			>
-				{#if leading}<Inline gap="none" shrink={false} class={cn(onScrim)}
-						>{@render leading()}</Inline
-					>{/if}
+				{#if leading}<Inline gap="none" class={cn(onScrim)}>{@render leading()}</Inline>{/if}
 				{@render identity()}
-				{#if trailing}<Inline gap="none" shrink={false} class={cn(onScrim)}
-						>{@render trailing()}</Inline
-					>{/if}
+				{#if trailing}<Inline gap="none" class={cn(onScrim)}>{@render trailing()}</Inline>{/if}
 			</Inline>
 			{#if actions}
 				<Scroll
@@ -196,12 +191,11 @@
 		{@render banner()}
 		<!-- Dark scrim: strong at the copy edge, lighter toward the top; the copy sits on its bottom edge. -->
 		<Imposter placement="fill" class="bg-linear-to-t from-black/80 via-black/50 to-black/25">
-			<Stack gap="none" justify="end" fill>
+			<Stack gap="none" justify="end" size="fill">
 				<Inline align="end" justify="between" gap="md" class={cn(INSET_X_CLASS, 'py-3')}>
 					{@render identity()}
 					{#if actions}
-						<Cluster justify="end" shrink={false} class={cn(onScrim)} data-app-actions
-							>{@render actions()}</Cluster
+						<Cluster justify="end" class={cn(onScrim)} data-app-actions>{@render actions()}</Cluster
 						>
 					{/if}
 				</Inline>

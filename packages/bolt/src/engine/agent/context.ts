@@ -15,6 +15,7 @@ import {
 	type MessageRow
 } from './schema.ts';
 import type { StudioRole } from './tools.ts';
+import { isList, isObj } from './draft.ts';
 
 /** Rule 62: tool results are bounded; clipped cells and dropped rows say so. */
 export const BOUNDS = { resultBytes: 64 * 1024, cellBytes: 8_000 } as const;
@@ -54,7 +55,7 @@ function clipCells(v: Json, keep: ReadonlySet<string>): Json {
 			? `${v.slice(0, BOUNDS.cellBytes)}... [clipped, ${size(v)} bytes; read_output reads it whole]`
 			: v;
 	if (EffectArray.isArray<typeof v>(v)) return v.map((x) => clipCells(x, keep));
-	if (v !== null && typeof v === 'object')
+	if (isObj(v))
 		return Object.fromEntries(
 			Object.entries(v).map(([k, x]) => [k, keep.has(k) ? x : clipCells(x, keep)])
 		);
@@ -74,33 +75,29 @@ export function bounded(
 ): { value: Json; kept: number | null } {
 	const v = clipCells(result, new Set([...keep, 'next'])); // a cursor is never clipped
 	if (size(v) <= BOUNDS.resultBytes) return { value: v, kept: null };
-	const pageRows =
-		v !== null && typeof v === 'object' && !EffectArray.isArray<typeof v>(v)
-			? v['rows']
-			: undefined;
-	const rows = EffectArray.isArray<typeof v>(v)
-		? v
-		: EffectArray.isArray<typeof pageRows>(pageRows)
-			? pageRows
-			: null;
+	const page = isObj(v) ? v : null;
+	const rows = isList(v) ? v : page !== null && isList(page['rows']) ? page['rows'] : null;
 	if (rows !== null) {
 		const kept = [...rows];
-		const wrap = (r: Json[]): Json =>
-			Array.isArray(v) ? { rows: r } : { ...(v as object), rows: r };
+		const wrap = (r: Json[]): { readonly [key: string]: Json } =>
+			page === null ? { rows: r } : { ...page, rows: r };
 		while (kept.length > 0 && size(wrap(kept)) > BOUNDS.resultBytes - 400) kept.pop();
+		const first = rows[0];
 		const heaviest =
-			kept.length > 0 || rows[0] === undefined || rows[0] === null || typeof rows[0] !== 'object'
+			kept.length > 0 || first === undefined || !(isObj(first) || isList(first))
 				? undefined
-				: Object.entries<Json>(rows[0])
+				: Object.entries(first)
 						.map(([k, x]) => [k, size(x)] as const)
 						.sort((a, b) => b[1] - a[1])
 						.slice(0, 3)
 						.map(([k]) => k);
+		// a read page counts every row it matches (`total`), beyond this page's own
+		const total = page !== null && typeof page['total'] === 'number' ? page['total'] : rows.length;
 		return {
 			kept: kept.length,
 			value: {
-				...(wrap(kept) as object),
-				clipped: `showing ${kept.length} of ${rows.length} rows; narrow the read (a tighter where, a smaller limit, fewer layers) for the rest`,
+				...wrap(kept),
+				clipped: `showing ${kept.length} of ${total} rows${total === rows.length ? '' : ` (this page read ${rows.length})`}; narrow the read (a tighter where, a smaller limit, fewer layers) for the rest`,
 				...(heaviest === undefined ? {} : { heaviestColumns: heaviest })
 			}
 		};
@@ -124,7 +121,7 @@ const kernel = (
 How to work:
 1. First settle what the person wants and the shortest way your tools get there; then be decisive: act as soon as you know enough, and make independent calls in one step.
 2. Your skills (listed below) hold the procedures: load the one a task needs with the skill tool before you start it, once per conversation.
-3. Never guess a field, operator, relationship or id, and never invent people, records, dates or measurements. When no field holds what is asked, say so and answer from what the data does hold: never search the source or the rows for it.
+3. Never guess a field, operator, relationship or id, and never invent people, records, dates or measurements. When no field holds what is asked, say so and answer from what the data does hold: never search the source or the rows for it. A person a document or message names (an owner, an assignee) is the one user you read whose name matches; when none or several match, or you cannot read users, ask: never copy a person from another record.
 4. A failed call is never repeated unchanged. A refusal is a policy boundary: tell the person what you cannot do.
 5. Write for the person: brief, only what you found, did or cannot do. Keep your method to yourself.
 6. ${has('read_file') ? 'Every file in this conversation has its id where it arrived; read_file { id } opens it (images and PDFs are shown to you, text and sheets come back as text). ' : ''}A file field takes the file's reference { id, name, mime }. Never guess what a file you cannot read contains.
@@ -365,6 +362,8 @@ export function system(parts: {
 	task?: string | undefined;
 	skills: { readonly [name: string]: { readonly text: string } };
 	tools?: readonly { name: string; studio?: StudioRole }[];
+	/** The models this actor reads and their fields (`workspaceSchema`), when it may read any. */
+	schema?: string | undefined;
 	authority?: Authority | undefined;
 }): string {
 	const has = (tool: string) => parts.tools?.some((t) => t.name === tool) === true,
@@ -387,6 +386,7 @@ export function system(parts: {
 			: `# Your skills (load one with the skill tool before a task it covers)\n${skills.join('\n')}`,
 		parts.envoy === undefined ? undefined : envoy(parts.envoy),
 		parts.task,
+		parts.schema,
 		parts.authority === undefined ? undefined : identity(parts.authority, source)
 	]
 		.filter((p): p is string => p !== undefined && p.trim() !== '')

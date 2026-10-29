@@ -5,7 +5,6 @@ import { Cause, Deferred, Effect, Exit, Fiber, Schema, Stream } from 'effect';
 import { FacilityFailure } from '../src/decl/errors.ts';
 import type { Json } from '../src/decl/values.ts';
 import type { AiRequest, AiResponse } from '../src/engine/contracts.ts';
-import type { EngineManifest } from '../src/engine/manifest.ts';
 import { Port, type PortFailure } from '../src/engine/port.ts';
 import type { Ai, AiEvent } from '../src/engine/ports.ts';
 import type { FacilityCall } from '../src/engine/services.ts';
@@ -14,7 +13,7 @@ import { jsonDiff } from '../src/engine/agent/draft.ts';
 import { bound, BOUNDS, messages, projection, system } from '../src/engine/agent/context.ts';
 import { listed, type MessageRow } from '../src/engine/agent/schema.ts';
 import { preview } from '../src/engine/conversations/store.ts';
-import { respondSystem1 } from '../src/test/effect.ts';
+import { respondSystem1 } from '../../bolt-cli/src/test/effect.ts';
 import { clockProbe } from './support/clock-probe.ts';
 
 const size = (value: unknown) => new TextEncoder().encode(JSON.stringify(value)).length;
@@ -98,6 +97,11 @@ describe('tool results are bounded (rule 62)', () => {
 		expect(out.rows[0]!.note).toMatch(new RegExp(`clipped, ${BOUNDS.cellBytes + 802} bytes`));
 		expect(out.clipped).toMatch(new RegExp(`showing ${out.rows.length} of 200 rows`));
 		expect(bound({ a: 1 })).toEqual({ a: 1 });
+		// a read page's total is what the note counts against
+		const counted = Schema.decodeUnknownSync(Schema.Struct({ clipped: Schema.String }))(
+			bound({ rows, next: 'c', total: 1284 })
+		);
+		expect(counted.clipped).toMatch(/^showing \d+ of 1284 rows \(this page read 200\)/);
 	});
 	it('previews are at most 2 KiB', () => {
 		expect(new TextEncoder().encode(preview('é'.repeat(3_000))).length).toBeLessThanOrEqual(2051);

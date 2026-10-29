@@ -341,7 +341,7 @@ export const configurationDefaults = (
 ): { readonly [field: string]: Json } =>
 	Object.fromEntries(
 		Object.entries(def?.configuration ?? {}).flatMap(([k, f]) =>
-			'default' in f && f.default !== undefined ? [[k, f.default as Json]] : []
+			'default' in f && f.default !== undefined ? [[k, f.default]] : []
 		)
 	);
 

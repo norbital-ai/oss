@@ -12,8 +12,8 @@ import { loopbackTcpPort } from '../src/node/tcp.ts';
 import { Secrets } from '../src/engine/secrets.ts';
 import { bindings } from '../src/protocol/http.ts';
 import { IntegrationManager, integrationRoutes } from '../src/protocol/integrations.ts';
-import { KitInvalid, TestWorkspace } from '../src/test/index.ts';
-import { program } from '../src/test/guest.ts';
+import { KitInvalid, TestWorkspace } from '../../bolt-cli/src/test/index.ts';
+import { program } from '../../bolt-cli/src/test/guest.ts';
 
 const NOW = '2026-10-14T17:30:00.000Z'; // 01:30 on 15 October in Kuala Lumpur
 const TODAY = '2026-10-15';

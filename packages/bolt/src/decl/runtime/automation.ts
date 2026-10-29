@@ -15,17 +15,8 @@ import type {
 	ValidInputs,
 	ValueOf
 } from '../fields.ts';
-import type {
-	AutomationName,
-	ModelName,
-	PolicyName,
-	ReadField,
-	ReadableName,
-	Row,
-	SystemColumns
-} from '../names.ts';
-import type { Where } from '../where.ts';
-import type { Duration, IanaZone, Id, NonEmpty } from '../values.ts';
+import type { AutomationName, ModelName, PolicyName } from '../names.ts';
+import type { Duration, IanaZone, Id, NonEmpty, Rate } from '../values.ts';
 import type {
 	Ai,
 	Convert,
@@ -34,6 +25,7 @@ import type {
 	Notify,
 	Request,
 	RunCause,
+	RunTrigger,
 	Schedule,
 	Send,
 	Web
@@ -56,37 +48,15 @@ export type Cron<S> = S extends Macro
  * `stripe`, `slack` and `meta` those providers' own signatures, `bearer` a shared token in `Authorization`.
  */
 export type WebhookScheme = 'standard' | 'hmac-sha256' | 'stripe' | 'slack' | 'meta' | 'bearer';
-/** Ledgers take no trigger (X-18). */
-type TriggerTarget = ReadableName;
-/** Fields an `updated` trigger may name: exposed, stored or derived, never system columns. */
-type TriggerField<C> = Exclude<ReadField<C>, keyof SystemColumns<C>>;
-
-/**
- * When an automation runs (its `on`): a `cron` schedule, a `webhook` path, or a row `created`, `updated` or `deleted` in a
- * model (optionally filtered by `where`, `fields`, and delayed).
- */
+/** When an automation runs (its `on`): a `cron` schedule or a `webhook` path. Row writes run a model's `effect`. */
 export type Trigger =
 	| { cron: string; tz?: IanaZone }
-	| { webhook: `/${string}`; verify: { scheme: WebhookScheme; secret: string } }
-	| { created: string; where?: object; delay?: Duration }
-	| { updated: string; where?: object; fields?: readonly string[]; delay?: Duration }
-	| { deleted: string; where?: object; delay?: Duration };
+	| { webhook: `/${string}`; verify: { scheme: WebhookScheme; secret: string } };
 type ValidTrigger<T> = T extends { cron: infer S }
 	? { cron: Cron<S>; tz?: IanaZone }
 	: T extends { webhook: unknown }
 		? { webhook: `/${string}`; verify: { scheme: WebhookScheme; secret: SecretName } }
-		: T extends { created: infer C }
-			? { created: TriggerTarget; where?: Where<C>; delay?: Duration }
-			: T extends { updated: infer C }
-				? {
-						updated: TriggerTarget;
-						where?: Where<C>;
-						fields?: readonly TriggerField<C>[];
-						delay?: Duration;
-					}
-				: T extends { deleted: infer C }
-					? { deleted: TriggerTarget; where?: Where<C>; delay?: Duration }
-					: Trigger;
+		: Trigger;
 
 type Attempts = 2 | 3 | 4 | 5 | 6 | 7 | 8;
 type Max = 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14 | 15 | 16;
@@ -97,10 +67,13 @@ export type AutomationSpec = {
 	input?: InputFields;
 	/** The typed result recorded on the run. */
 	output?: OutputKind;
-	/** What runs it: cron, webhook, or a row created, updated or deleted; absent means started only. */
+	/** What runs it: cron or webhook; absent means started only. */
 	on?: Trigger | readonly Trigger[];
-	/** The policies the run holds, or `'trigger'` (the starter's authority) for an automation with no `on`. */
-	runAs: NonEmpty<string> | 'trigger';
+	/**
+	 * The policies every run holds, whoever or whatever starts it: a run executes as the reserved system identity, and
+	 * who triggered it (`ctx.run.trigger`) never changes its authority.
+	 */
+	policies: NonEmpty<string>;
 	/** Native generated verbs delegated to this authenticated run and its child action lineage only. */
 	delegations?: readonly { verb: `${string}.${'create' | 'update' | 'delete'}`; policy: string }[];
 	/** Retries of a failed run, with backoff. */
@@ -109,8 +82,13 @@ export type AutomationSpec = {
 	concurrency?: { max: Max };
 	/** How the agent may start it (`direct`, `confirm`, `never`). */
 	agent?: AgentUse;
+	/**
+	 * Manual starts per starter (`'10/min'`; default `'30/min'`): the `start` callable, Run now and the agent, each
+	 * admitted by a policy's `automations`. Cron, webhook and model effect runs, schedules from code, and the acts a run's
+	 * body performs, are never rate limited and need no start grant.
+	 */
+	limit?: Rate;
 };
-type On<S> = S extends { on: infer O } ? (O extends readonly unknown[] ? O[number] : O) : never;
 type AutomationFor<N, S> = {
 	description: string;
 	input?: S extends { input: infer I } ? ValidInputs<I> : InputFields;
@@ -120,12 +98,7 @@ type AutomationFor<N, S> = {
 			? { [I in keyof O]: ValidTrigger<O[I]> }
 			: ValidTrigger<O>
 		: never;
-	/** 'trigger' (the starter's authority) only when nothing triggers it (rule 53). */
-	runAs:
-		| NonEmpty<PolicyName>
-		| (S extends { on: unknown }
-				? 'error: runAs trigger needs an automation without on'
-				: 'trigger');
+	policies: NonEmpty<PolicyName>;
 	delegations?: readonly {
 		verb: `${ModelName}.${'create' | 'update' | 'delete'}`;
 		policy: PolicyName;
@@ -133,56 +106,50 @@ type AutomationFor<N, S> = {
 	retry?: { attempts: Attempts; backoff?: Duration };
 	concurrency?: { max: Max };
 	agent?: AgentUse;
+	limit?: Rate;
 	run: RunBody<SpecOf<N>>;
 };
 
 // ── the run's input and ctx ──
-type Target<T> = T extends { created: infer C } | { updated: infer C } | { deleted: infer C }
-	? C & ModelName
-	: never;
-type Deleted<T> = T extends { deleted: infer C } ? C & ModelName : never;
-/** One row-event trigger's input: which model fired, correlated with the ids it fired for. */
-type RowArm<T> = T extends { created: infer C } | { updated: infer C } | { deleted: infer C }
-	? { readonly model: C & ModelName; readonly ids: readonly Id<C & ModelName>[] }
-	: never;
-type EventInput<T> = [Target<T>] extends [never]
-	? {}
-	: Exclude<T, { created: unknown } | { updated: unknown } | { deleted: unknown }> extends never
-		? RowArm<T> // all triggers are row events: one arm per model (a declared union)
-		: Partial<{ readonly model: Target<T>; readonly ids: readonly Id<Target<T>>[] }>;
-/** A `deleted` run also receives the pre-images, masked to its `runAs` read grant (rule 50). */
-type Removed<T> = [Deleted<T>] extends [never]
-	? {}
-	: { readonly rows?: readonly Row<Deleted<T>>[] };
-/** What `run` receives: the declared input, else the row event that fired it (and a `deleted` run's pre-images). */
-export type RunInput<S> = Simplify<
-	(S extends { input: infer I } ? InputOf<I> : EventInput<On<S>>) & Removed<On<S>>
->;
+/** What `run` receives: the declared input (a cron or webhook run without one receives `{}`). */
+export type RunInput<S> = Simplify<S extends { input: infer I } ? InputOf<I> : {}>;
 /** What `run` returns: the declared output, recorded on the run. */
 export type RunOutput<S> = S extends { output: infer O } ? ValueOf<O> : void;
 
-/** `run`'s ctx (§3.4): reads (`ctx.query`), writes and schedules as its `runAs` policies; the only place for I/O. */
-export type AutomationCtx<S = AutomationSpec> = Omit<Clock, 'actor'> &
-	CallerQuery & { invocationId: string } & {
-	actor: S extends { runAs: 'trigger' } ? Actor : Extract<Actor, { kind: 'system' }>;
-	/** 1 on the first attempt. */
-	attempt: number;
-	cause: RunCause;
-	progress(update: { ratio?: number | null; text?: string | null }): Eff<void>;
-	act: Act;
-	/** Caller-scoped model reads and guarded CRUD in one fixed five-second native transaction. */
-	transaction: Transaction;
-	schedule: Schedule;
-	notify: Notify;
-	send: Send;
-	request: Request;
-	web: Web;
-	files: Files;
-	/** Markdown or HTML to a declared document format (optional host capability; absent → `unavailable`). */
-	convert: Convert;
-	ai: Ai<S extends { runAs: 'trigger' } ? false : true>;
-	geo: Geo;
+/**
+ * `run`'s ctx (§3.4): reads (`ctx.query`), writes and schedules as its `policies`; the only place for I/O. `actor` is
+ * the reserved system identity; `run.trigger` records who or what started the run. Code acting for a starter checks it
+ * explicitly (`trigger.kind === 'person'`, then their id, party or teams against the rows it touches).
+ */
+export type AutomationCtx<_S = AutomationSpec> = RunCtx<Extract<Actor, { kind: 'system' }>, true> & {
+	readonly run: { readonly id: Id<'sys_run'>; readonly trigger: RunTrigger };
 };
+type RunCtx<A, Tools extends boolean> = Omit<Clock, 'actor'> &
+	CallerQuery & { invocationId: string } & {
+		actor: A;
+		/** 1 on the first attempt. */
+		attempt: number;
+		cause: RunCause;
+		progress(update: { ratio?: number | null; text?: string | null }): Eff<void>;
+		act: Act;
+		/** Caller-scoped model reads and guarded CRUD in one fixed five-second native transaction. */
+		transaction: Transaction;
+		schedule: Schedule;
+		notify: Notify;
+		send: Send;
+		request: Request;
+		web: Web;
+		files: Files;
+		/** Markdown or HTML to a declared document format (optional host capability; absent → `unavailable`). */
+		convert: Convert;
+		ai: Ai<Tools>;
+		geo: Geo;
+	};
+/**
+ * A model `effect`'s ctx: an automation run's facilities, as the writer whose committed write ran it (its actor, its
+ * authority); an effect holds no policy of its own.
+ */
+export type EffectCtx = RunCtx<Actor, false>;
 type RunBody<S> = (input: RunInput<S>, ctx: AutomationCtx<S>) => BodyReturn<RunOutput<S>>;
 /** Automation `N`'s data from the generated names; the general shape until the first sync knows it. */
 type SpecOf<N> = [AutomationSpecOf<N>] extends [never] ? AutomationSpec : AutomationSpecOf<N>;
@@ -196,14 +163,13 @@ export type Automation<N extends string, S> = {
 };
 
 /**
- * `src/automation/+<a>.automation.ts`: work that runs on a trigger (`on`: cron, webhook, a row created, updated or deleted)
- * or when started, as the policies in `runAs`, with typed `input` and `output`, retries and concurrency. `run` is a
- * generator in the literal; `ctx` carries reads (`ctx.query`), `act`, files, AI and the other facilities.
+ * `src/automation/+<a>.automation.ts`: a job that runs on a trigger (`on`: cron or webhook) or when started, executed by
+ * the reserved system identity with the declared `policies` (`ctx.run.trigger` records who started it), with typed `input` and `output`, retries and concurrency. `run` is a generator in the literal; `ctx` carries reads (`ctx.query`), `act`, files, AI and the other facilities.
  * @example
  * export default automation('sweep_quotes', {
  * 	description: 'Daily sweep of lapsed quotes.',
  * 	on: { cron: '0 6 * * *' },
- * 	runAs: ['quote_watch'],
+ * 	policies: ['quote_watch'],
  * 	run: function* (_, ctx) {
  * 		const lapsed = yield* ctx.query('quotes', { where: { valid_until: { lt: ctx.today } }, limit: 50 });
  * 		yield* ctx.progress({ text: `${lapsed.rows.length} lapsed` });

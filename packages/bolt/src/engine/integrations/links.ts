@@ -170,11 +170,13 @@ export const integrationLinks = (
 ): Effect.Effect<LinkManager, never, Scope.Scope | Crypto.Crypto> =>
 	Effect.gen(function* () {
 		const crypto = yield* Crypto.Crypto;
-		const uuid = crypto.randomUUIDv4().pipe(
-			Effect.mapError((error) =>
-				BoltError.make('unavailable', 'facility', 'Secure random UUID generation failed.', error)
-			)
-		);
+		const uuid = crypto
+			.randomUUIDv4()
+			.pipe(
+				Effect.mapError((error) =>
+					BoltError.make('unavailable', 'facility', 'Secure random UUID generation failed.', error)
+				)
+			);
 		const f = h.fetch ?? fetch;
 		const callbacks = yield* FiberSet.make<unknown, LinkError>();
 		const events = yield* Effect.acquireRelease(

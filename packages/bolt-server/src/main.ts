@@ -1,4 +1,4 @@
-#!/usr/bin/env -S node --no-node-snapshot
+#!/usr/bin/env node
 import { Console, Effect, Layer, Option } from 'effect';
 import { Argument, Command, Flag } from 'effect/cli';
 import * as NodeRuntime from '@effect/platform-node/NodeRuntime';
@@ -21,8 +21,11 @@ const cidrs = (list: string) =>
 		(c) => {
 			const [net = '', bits] = c.split('/');
 			const v = isIP(net);
-			return v === 0 || (bits !== undefined && !(/^\d+$/.test(bits) && Number(bits) <= (v === 6 ? 128 : 32)))
-				? Effect.fail(BoltError.make('invalidSpec', 'admission', `--trust-proxy: '${c}' is not a CIDR`))
+			return v === 0 ||
+				(bits !== undefined && !(/^\d+$/.test(bits) && Number(bits) <= (v === 6 ? 128 : 32)))
+				? Effect.fail(
+						BoltError.make('invalidSpec', 'admission', `--trust-proxy: '${c}' is not a CIDR`)
+					)
 				: Effect.succeed(c);
 		}
 	);

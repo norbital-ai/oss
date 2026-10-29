@@ -3,8 +3,8 @@ import { Context, Effect, Layer, Schema } from 'effect';
 import type { Json } from '../src/decl/values.ts';
 import type { EngineManifest } from '../src/engine/manifest.ts';
 import { SyncHealth } from '../src/engine/sync/health-schema.ts';
-import { TestWorkspace } from '../src/test/index.ts';
-import { program } from '../src/test/guest.ts';
+import { TestWorkspace } from '../../bolt-cli/src/test/index.ts';
+import { program } from '../../bolt-cli/src/test/guest.ts';
 import { json } from './support/route-fixture.ts';
 import { manifest as base } from './write-fixture.ts';
 
@@ -49,7 +49,12 @@ const guest = program(`export default { policy: { self: { grants: { sys_integrat
 
 const setup = Effect.gen(function* () {
 	const context = yield* Layer.build(
-		TestWorkspace.layer({ manifest, guest: yield* guest, now: NOW, host: { publicUrl: ORIGIN } })
+		TestWorkspace.layer({
+			manifest,
+			guest: yield* guest,
+			now: NOW,
+			host: { publicUrl: ORIGIN }
+		})
 	);
 	const t = Context.get(context, TestWorkspace);
 	const owner = t.member(['self'], { teams: ['owners'] });

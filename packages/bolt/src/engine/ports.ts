@@ -408,6 +408,15 @@ export class DeadlinePort extends Context.Service<
 	}
 }
 
+// ── run units ──
+/**
+ * The kernel's meter, told as each run starts: the run begins the next unit of its wake, with a CPU budget of its own.
+ * Without a host meter, a wake is one unit.
+ */
+export const RunUnits = Context.Reference<{
+	readonly next: () => Effect.Effect<void>;
+}>('bolt/RunUnits', { defaultValue: () => ({ next: () => Effect.void }) });
+
 // ── drivers ──
 /**
  * The live links' driver calls, by instance (§4.5): a conversation driver sends (a provider refusal is `SendRefused`,

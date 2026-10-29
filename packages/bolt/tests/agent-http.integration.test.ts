@@ -14,7 +14,7 @@ import { ActRefused, actFailure } from '../src/decl/errors.ts';
 import type { Json } from '../src/decl/values.ts';
 import type { AiResponse } from '../src/engine/contracts.ts';
 import { conversationId } from '../src/engine/conversations/store.ts';
-import { KitInvalid, respondSystem1, TestWorkspace } from '../src/test/index.ts'; // hook:decisions
+import { KitInvalid, respondSystem1, TestWorkspace } from '../../bolt-cli/src/test/index.ts'; // hook:decisions
 
 const manifest = Result.getOrThrow(
 	decodeProjectedManifest({

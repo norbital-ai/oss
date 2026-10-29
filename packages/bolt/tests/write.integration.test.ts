@@ -11,7 +11,7 @@ import type { Json } from '../src/decl/values.ts';
 import type { ApprovalSnapshot } from '../src/decl/access/policy.ts';
 import type { GuestOutcome, Invocation, Lock, Outcome } from '../src/engine/contracts.ts';
 import { PgliteDb, type PgliteClient } from '../src/node/db/pglite.ts';
-import { TestDb } from '../src/test/database.ts';
+import { TestDb } from '../../bolt-cli/src/test/database.ts';
 import { catalogOf } from '../src/engine/access/pred.ts';
 import type { EngineManifest } from '../src/engine/manifest.ts';
 import {
@@ -461,7 +461,9 @@ describe('engine/write: the caller (rules 13, 19, 35)', () => {
 					(yield* run({
 						verb: 'update',
 						input: [{ target: id, set: { note: 'x' } }],
-						authority: authority({ orders: grants('orders', { read: { orders: [arm(notMine)] } }) })
+						authority: authority({
+							orders: grants('orders', { read: { default: { orders: [arm(notMine)] } } })
+						})
 					})).outcome
 				).toMatchObject({ code: 'notFound' });
 				const calls: Invocation[] = [];
@@ -647,6 +649,7 @@ describe('engine/write: locks and queued pieces (rules 26, 49)', () => {
 				now: NOW,
 				today: TODAY,
 				actor: admin.actor,
+				writer: { starter: null, actor: 'test', depth: 0 },
 				writes: [],
 				owned: [],
 				rate: [],

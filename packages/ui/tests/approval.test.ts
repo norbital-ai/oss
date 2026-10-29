@@ -335,3 +335,18 @@ it.live('several requests: the selector defaults to the open one and switches th
 		assert.equal(nodes(target)[1]?.dataset['look'], 'rejected');
 	})
 );
+it('a row approval decodes once; a malformed `$approval` is no approval', async () => {
+	const { approvalOf, resubmits } = await import('../src/approval/row.ts');
+	const $approval = {
+		requestId: 'r1',
+		state: 'ChangesRequested',
+		step: 0,
+		steps: [{ name: 'Review', teams: ['ops'], users: [] }],
+		requestedBy: 'ada'
+	};
+	assert.deepEqual(approvalOf({ id: 'x', $approval }), $approval);
+	assert.equal(resubmits({ $approval }), true);
+	assert.equal(approvalOf({ $approval: { ...$approval, state: 'Approved' } }), null);
+	assert.equal(approvalOf({ $approval: { ...$approval, steps: [{ name: 'Review' }] } }), null);
+	assert.equal(approvalOf(null), null);
+});

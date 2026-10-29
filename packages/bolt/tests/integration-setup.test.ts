@@ -4,7 +4,7 @@
 // shown as such, and nothing drawn after unmount.
 import { flushSync, mount, tick, unmount } from 'svelte';
 import { beforeEach, afterEach, expect, it, vi } from '@effect/vitest';
-import '../src/test/dom.ts';
+import '../../bolt-cli/src/test/dom.ts';
 import { Deferred, Effect, Layer, ManagedRuntime, Queue, Stream } from 'effect';
 import { mountEdge, run } from '@norbital-ai/ui/effect';
 import { ActRefused } from '../src/decl/errors.ts';

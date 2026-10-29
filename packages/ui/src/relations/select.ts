@@ -1,8 +1,7 @@
+import { Predicate } from 'effect';
 import { formatValue as show } from '../kinds/kind.js';
 import type { ModelExposure } from '../kinds/context.js';
-import type { Json } from '@norbital-ai/std/wire';
 import type { Row, Values } from '../model/types.js';
-import { isRow } from '../read/results.js';
 import { READ_LIMIT, type Layer, type Request } from '../read/request.js';
 const HEAVY = new Set(['json', 'custom', 'file']);
 type Catalog = { readonly [model: string]: ModelExposure } | undefined;
@@ -130,7 +129,7 @@ export function unref(
 				child = manyTarget(cat, of, rel);
 			if (child !== undefined) {
 				const list = (Array.isArray(t) ? t : []).filter(
-					(x): x is Row => isRow(x) && typeof x['id'] === 'string'
+					(x): x is Row => Predicate.isObject(x) && typeof x['id'] === 'string'
 				);
 				const items = (all ? list : list.slice(0, MANY_SHOWN)).map((x) => ({
 					id: x.id,
@@ -147,7 +146,7 @@ export function unref(
 			}
 			// a relation its root reads as no layer keeps its FK id, unlabelled
 			if (typeof t === 'string') continue;
-			if (!isRow(t) || typeof t['id'] !== 'string') {
+			if (!Predicate.isObject(t) || typeof t['id'] !== 'string') {
 				out[rel] = null;
 				continue;
 			} // ponytail: an unreadable target reads as null, so its FK id is lost
@@ -159,12 +158,18 @@ export function unref(
 	});
 }
 export function refOf(row: Values, relation: string): Ref | undefined {
-	const value = isRow(row['$refs']) ? row['$refs'][relation] : undefined;
-	if (!isRow(value) || typeof value['of'] !== 'string' || typeof value['text'] !== 'string')
+	const value = Predicate.isObject(row['$refs']) ? row['$refs'][relation] : undefined;
+	if (
+		!Predicate.isObject(value) ||
+		typeof value['of'] !== 'string' ||
+		typeof value['text'] !== 'string'
+	)
 		return undefined;
 	const items = Array.isArray(value['items'])
 		? value['items'].flatMap((item) =>
-				isRow(item) && typeof item['id'] === 'string' && typeof item['text'] === 'string'
+				Predicate.isObject(item) &&
+				typeof item['id'] === 'string' &&
+				typeof item['text'] === 'string'
 					? [{ id: item['id'], text: item['text'] }]
 					: []
 			)

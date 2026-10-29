@@ -9,12 +9,12 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it } from '@effect/vitest';
-import { Effect, Layer, Schema } from 'effect';
+import { Effect, Schema } from 'effect';
 import { Guest, type Bridge, type CrossCall } from '../src/engine/services.ts';
 import { GuestIsolates } from '../src/engine/ports.ts';
-import { guestIsolates } from '../src/node/guest-isolates.ts';
+import { guests } from './support/guests.ts';
 import { guestLayer } from './support/guest-fixture.ts';
-import { check } from '../src/test/effect.ts';
+import { check } from '../../bolt-cli/src/test/effect.ts';
 import { attached } from '../src/decl/body.ts';
 import { install as installEdge } from '../src/decl/runtime/guest.ts';
 import type { Json } from '../src/decl/values.ts';
@@ -66,12 +66,12 @@ const reference = function* (input, ctx) {
 `;
 const edgeAutomation = (body: 'gen' | 'reference') => `${EDGE_BODIES}
 export default automation('edge_${body}', {
-	description: 'The guest edge', runAs: 'trigger', input: { case: { kind: 'text' } }, run: ${body}
+	description: 'The guest edge', policies: ['edge'], input: { case: { kind: 'text' } }, run: ${body}
 });
 `;
 const AUTOMATION = `import { automation } from '@norbital-ai/bolt';
 import { Effect } from ${EFFECT};
-export default automation('facility', { description: 'Facilities', runAs: 'trigger', input: { case: { kind: 'text' } }, run: function* (input, ctx) {
+export default automation('facility', { description: 'Facilities', policies: ['edge'], input: { case: { kind: 'text' } }, run: function* (input, ctx) {
 	switch (input.case) {
 		case 'uncaught': return yield* ctx.web.read('https://a.test');
 		case 'caught': return yield* ctx.web.read('https://a.test').pipe(Effect.catchTag('FacilityFailure', (failure) => Effect.succeed(failure.kind)));
@@ -165,12 +165,8 @@ const recorder = (answer: (call: CrossCall) => CrossAnswer = () => ({ ok: true, 
 	};
 	return { crossings, bridge };
 };
-/** The Node host's isolates, one taken per run and none prepared ahead. */
-const isolates = Layer.unwrap(
-	Effect.map(guestIsolates({ warm: { maxMiB: 512, depth: 0, idleMs: 60_000 } }), (port) =>
-		GuestIsolates.fromAbi(port)
-	)
-);
+/** The Node host's guest sessions. */
+const isolates = GuestIsolates.fromAbi(guests);
 const run = (kind: InvocationKind, target: string, input: Json, bridge = recorder().bridge) =>
 	Guest.pipe(
 		Effect.flatMap((guest) => guest.invoke(invocation(kind, target, input), bridge)),

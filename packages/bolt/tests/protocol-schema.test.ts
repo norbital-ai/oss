@@ -10,7 +10,7 @@ import { describe, expect, it } from '@effect/vitest';
 import { Effect, FileSystem, Schema } from 'effect';
 import * as NodeServices from '@effect/platform-node/NodeServices';
 import { artifactHash, CONTRACT, readArtifact, treeHash } from '../src/engine/artifact/read.ts';
-import { prepareMigrations } from '../src/compiler/migrations.ts';
+import { prepareMigrations } from '../../bolt-cli/src/compiler/migrations.ts';
 import { Pristine } from '../src/node/db/pglite.ts';
 import { sha256Hex } from '@norbital-ai/store';
 import type { Outcome as EngineOutcome } from '../src/engine/contracts.ts';

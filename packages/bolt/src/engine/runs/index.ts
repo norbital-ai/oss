@@ -18,12 +18,14 @@ import {
 	Result,
 	Redacted,
 	Schema,
-	Semaphore
+	Semaphore,
+	Stream
 } from 'effect';
 import * as EffectArray from 'effect/Array';
 import type { Json } from '../../decl/values.ts';
-const jsonArray = (value: Json | undefined): value is readonly Json[] => Array.isArray(value);
-import type { Holder } from '../access/authority.ts';
+import { RunAttempt, RunError } from './attempt.ts';
+import { EngineActorSchema, RunTriggerSchema } from '../../protocol/schema.ts';
+import { exposed, viewOutput, type Holder } from '../access/authority.ts';
 import { issueAutomationDelegation, delegatedVerbAuthority } from '../access/delegation.ts';
 import { Port, type PortFailure } from '../port.ts';
 import { AgentHost } from '../agent/index.ts';
@@ -35,14 +37,17 @@ import {
 	LIMITS,
 	type AiMessage,
 	type Authority,
+	type RowData,
 	type CrossAnswer,
-	type GuestOutcome
+	type GuestOutcome,
+	type RunTrigger,
+	type RunTriggerView
 } from '../contracts.ts';
 import { isTransient, type EngineError } from '../errors.ts';
 import { BoltError } from '../../protocol/errors.ts';
-import { SqlReadCapture, TenantDb } from '../db/tenant-db.ts';
+import { SqlReadCapture, TenantDb, type TenantDbShape } from '../db/tenant-db.ts';
 import { ReadDeps } from '../query/engine.ts';
-import { Ai, Drivers, Logs } from '../ports.ts';
+import { Ai, Drivers, Logs, RunUnits } from '../ports.ts';
 import {
 	Activation,
 	Callables,
@@ -74,6 +79,7 @@ import {
 } from '../write/sql.ts';
 import { canonical, sha256Hex } from '@norbital-ai/store';
 import { pruneHistory } from '../query/history.ts';
+import { layered, relations, type EngineManifest } from '../manifest.ts';
 import { bindingsAt } from '../query/reader.ts';
 import { encodeWire } from '@norbital-ai/std/wire';
 import { decodeInput, decodeOutput } from '../callables/decode.ts';
@@ -83,7 +89,10 @@ import { prepareSend, sendPiece } from '../conversations/outbound.ts';
 import { preview, stableId } from '../conversations/store.ts';
 import { instanceRequest } from '../integrations/instances.ts';
 import { verifiedWebhook, type WebhookRequest } from './webhook.ts';
-import { enqueue, nextDue, triggersOf } from './queue.ts';
+import { effectOf, enqueue, nextDue, triggersOf } from './queue.ts';
+import { evaluate, type EvalEnv } from '../query/eval.ts';
+import { catalogOf } from '../access/pred.ts';
+import type { AutomationSpec } from '../../decl/runtime/automation.ts';
 import { backoffMs, dueAt, iso, materialize } from './time.ts';
 import { NOTICE_PUSH, noticePush } from './push.ts';
 import { makeTransactions, transactionFailure } from '../transactions.ts';
@@ -93,41 +102,9 @@ import { NOTIFY, noticeRows, runNotify } from '../notifications/notify.ts';
 import { fileSyncHandlers } from '../sync/file.ts';
 import { syncTriggers } from '../sync/index.ts';
 import { EMBED, embedRun } from '../integrations/embed.ts';
-const Member = Schema.Struct({
-	kind: Schema.Literal('member'),
-	id: Schema.String,
-	email: Schema.NullOr(Schema.String),
-	phone: Schema.NullOr(Schema.String),
-	external: Schema.Boolean,
-	teams: Schema.Array(Schema.String),
-	teamPath: Schema.Array(Schema.String),
-	admin: Schema.Boolean,
-	party: Schema.NullOr(Schema.Struct({ model: Schema.String, id: Schema.String }))
-});
-const Actor = Schema.Union([
-	Member,
-	Schema.Struct({
-		kind: Schema.Literal('envoy'),
-		envoy: Schema.String,
-		instance: Schema.String,
-		sender: Schema.String,
-		member: Schema.NullOr(Schema.String),
-		linked: Schema.optionalKey(Member)
-	}),
-	Schema.Struct({ kind: Schema.Literal('visitor'), app: Schema.String, visitor: Schema.String }),
-	Schema.Struct({ kind: Schema.Literal('apiKey'), key: Schema.String }),
-	Schema.Struct({
-		kind: Schema.Literal('system'),
-		run: Schema.String,
-		by: Schema.Union([
-			Schema.Struct({ automation: Schema.String }),
-			Schema.Struct({ platform: Schema.String }),
-			Schema.Struct({ sync: Schema.String, instance: Schema.String })
-		])
-	})
-]);
+import { INDEX, indexRun } from '../write/index-run.ts';
 const HolderSchema = Schema.Struct({
-	actor: Actor,
+	actor: EngineActorSchema,
 	policies: Schema.Array(Schema.String),
 	admin: Schema.Boolean,
 	platform: Schema.optionalKey(Schema.Boolean),
@@ -145,22 +122,76 @@ const RowSchema = Schema.Struct({
 	attempts: Schema.Number,
 	leases: Schema.Number,
 	actor: Schema.NullOr(Schema.String),
-	starter: Schema.NullOr(HolderSchema)
+	starter: Schema.NullOr(HolderSchema),
+	trigger: Schema.NullOr(RunTriggerSchema)
+});
+type Row = typeof RowSchema.Type;
+const Image = Schema.Record(Schema.String, Schema.Json);
+/** An effect run's input (`queueEffects`): the committed rows, or an update's before and after images. */
+const EffectInput = Schema.Union([
+	Schema.Struct({ ids: Schema.Array(Schema.String), rows: Schema.Array(Image) }),
+	Schema.Struct({
+		ids: Schema.Array(Schema.String),
+		changes: Schema.Array(Schema.Struct({ before: Image, after: Image }))
+	})
+]);
+const effectImages = Schema.decodeUnknownOption(EffectInput);
+/** A model effect's run: the writer's authority (`sys_run.starter`), retried 3 times; it holds no policy of its own. */
+const EFFECT: Pick<AutomationSpec, 'description' | 'retry' | 'input' | 'output'> = {
+	description: 'A model effect.',
+	retry: { attempts: 3 }
+};
+type Starter = typeof HolderSchema.Type;
+/**
+ * The holder an automation run is: the reserved system identity holding exactly its declared policies. Who started it
+ * (`sys_run.trigger`) never enters its authority.
+ */
+const policyHolder = (head: Row, policies: readonly string[]): Holder => ({
+	actor: { kind: 'system', run: head.id, by: { automation: head.automation } },
+	policies,
+	admin: false
 });
 /**
- * An event run's input (`queueTriggered`): one model's changed ids, and a delete's old images. A run's input by its
- * cause: an event's is this, decoded once as the run is claimed (`Row.event`); any other's is the start's own JSON.
+ * Who a run's schedule records as its starter, the person who may read its result: an effect's writer (the holder it
+ * runs as), else this run's own starter.
  */
-const EventInput = Schema.StructWithRest(
-	Schema.Struct({
-		model: Schema.String,
-		ids: Schema.Array(Schema.Json),
-		rows: Schema.optionalKey(Schema.Array(Schema.Json))
-	}),
-	[Schema.Record(Schema.String, Schema.Json)]
-);
-const eventOf = Schema.decodeUnknownOption(EventInput);
-type Row = typeof RowSchema.Type & { readonly event: typeof EventInput.Type | undefined };
+const starterOf = (run: Row, holder: Holder): Starter | null =>
+	holder.actor.kind === 'system' ? run.starter : holder;
+/** What a run's schedule records as the scheduled run's trigger: the effect and its rows, or the scheduling run. */
+function scheduledBy(m: EngineManifest, run: Row): RunTrigger {
+	const effect = effectOf(m, run.automation);
+	const images = effect === undefined ? Option.none() : effectImages(run.input);
+	return effect !== undefined && Option.isSome(images)
+		? {
+				kind: 'system',
+				cause: 'effect',
+				model: effect.model,
+				verb: effect.verb,
+				records: images.value.ids
+			}
+		: { kind: 'system', cause: 'schedule', by: { automation: run.automation, run: run.id } };
+}
+/**
+ * An effect's images as its writer reads them: the root fields of the writer's output of the model (`default` when it
+ * holds it, else the first named output it holds, in declaration order); nothing when it holds none. The rows
+ * themselves are the writer's own write, admitted by its grant.
+ */
+function writerImages(
+	m: EngineManifest,
+	a: Authority,
+	model: string,
+	input: typeof EffectInput.Type
+): Json {
+	if (a.admin) return 'rows' in input ? input.rows : input.changes;
+	const output = viewOutput(m, a, model);
+	if (output === undefined) return [];
+	const keep = new Set(['id', 'revision', ...exposed(m, model, model, model, output)]);
+	const shown = (image: RowData): RowData =>
+		Object.fromEntries(Object.entries(image).filter(([field]) => keep.has(field)));
+	return 'rows' in input
+		? input.rows.map(shown)
+		: input.changes.map((change) => ({ before: shown(change.before), after: shown(change.after) }));
+}
 export const RunViewRow = Schema.Struct({
 	id: Schema.String,
 	automation: Schema.String,
@@ -170,33 +201,14 @@ export const RunViewRow = Schema.Struct({
 	started: Schema.NullOr(Schema.String),
 	progress: Schema.Json,
 	output: Schema.Json,
-	error: Schema.NullOr(
-		Schema.Struct({
-			code: Schema.String,
-			message: Schema.optionalKey(Schema.String),
-			field: Schema.optionalKey(Schema.String),
-			path: Schema.optionalKey(Schema.String),
-			row: Schema.optionalKey(Schema.Number),
-			rows: Schema.optionalKey(Schema.Array(Schema.Number)),
-			rule: Schema.optionalKey(Schema.String),
-			data: Schema.optionalKey(Schema.Struct({ requestId: Schema.String })),
-			records: Schema.optionalKey(
-				Schema.Array(
-					Schema.Struct({
-						model: Schema.String,
-						id: Schema.String,
-						fields: Schema.Array(Schema.String)
-					})
-				)
-			),
-			invocation: Schema.optionalKey(Schema.String)
-		})
-	),
+	error: Schema.NullOr(RunError),
 	attempts: Schema.Number,
-	results: Schema.Json,
+	results: Schema.Array(RunAttempt),
 	input: Schema.Json,
 	actor: Schema.NullOr(Schema.String),
-	starter: Schema.NullOr(HolderSchema)
+	starter: Schema.NullOr(HolderSchema),
+	trigger: Schema.NullOr(RunTriggerSchema),
+	trigger_name: Schema.NullOr(Schema.String)
 });
 export type RunViewRow = typeof RunViewRow.Type;
 /** Actual output and authorization columns for a stored automation-file candidate. */
@@ -221,6 +233,7 @@ export type RunView = {
 	id: string;
 	automation: string;
 	cause: string;
+	trigger: RunTriggerView | null;
 	status: string;
 	due_at: string;
 	started: string | null;
@@ -229,23 +242,35 @@ export type RunView = {
 	attempt_count: number;
 	result?: Json;
 	input?: Json;
-	attempts?: Json;
+	attempts?: readonly RunAttempt[];
 };
-export const RUN_VIEW_COLUMNS = `id, automation, cause, state, due_at::text AS due_at, started_at::text AS started, progress, output, error, attempts, results, input, actor, starter`;
+export const RUN_VIEW_COLUMNS = `id, automation, cause, state, due_at::text AS due_at, started_at::text AS started, progress, output, error, attempts, results, input, actor, starter, trigger,
+	(SELECT coalesce(u.name, u.email) FROM sys_user u WHERE u.id::text = coalesce(trigger->'actor'->>'id', trigger->'actor'->>'member')) AS trigger_name`;
+const triggerView = (row: RunViewRow): RunTriggerView | null =>
+	row.trigger?.kind === 'person'
+		? {
+				kind: 'person',
+				ref: actorRef(row.trigger.actor),
+				name: row.trigger_name,
+				...(row.trigger.agent === undefined ? {} : { agent: true as const })
+			}
+		: row.trigger;
 export function runView(authority: Authority, row: RunViewRow): RunView | null {
 	const base = {
 		id: row.id,
 		automation: row.automation,
 		cause: row.cause,
+		trigger: triggerView(row),
 		status: row.state,
 		due_at: row.due_at,
 		started: row.started,
 		progress: row.progress,
 		attempt_count: row.attempts
 	};
-	// a run the person started by hand answers them with its declared result, whatever policies it ran under
+	// a run the person started by hand answers them with its declared result, whatever policies it ran under; an
+	// effect's input holds the write's whole images, so its writer sees what any causing actor does
 	if (
-		readsRunResult(authority, row) ||
+		(readsRunResult(authority, row) && (row.cause !== 'effect' || authority.admin)) ||
 		(row.cause === 'start' && row.actor === actorRef(authority.actor))
 	)
 		return {
@@ -259,7 +284,35 @@ export function runView(authority: Authority, row: RunViewRow): RunView | null {
 		? { ...base, error: row.error === null ? null : { code: row.error.code } }
 		: null;
 }
-const EVENTS = new Set(['created', 'updated', 'deleted']);
+/**
+ * The runs list (the `runs` read: the command center's Automations, `bolt.runs`): an administrator sees every run; a
+ * member (staff or external) the runs of automations they hold and the runs they caused, each as rule 56 lets them read
+ * it (status, progress and the error code only for a run they merely caused). `automation` narrows the list to one
+ * automation; `id` to one run.
+ */
+export const runList = Effect.fn('Runs.list')(function* (
+	db: TenantDbShape,
+	auth: Authority,
+	limit: number = 100,
+	automation?: string,
+	id?: string
+) {
+	const a = auth.actor;
+	if (a.kind !== 'member') return [];
+	const rows = yield* db.rows(RunViewRow, {
+		text: `SELECT ${RUN_VIEW_COLUMNS} FROM sys_run
+		WHERE ($1 OR actor = $2 OR automation IN (SELECT jsonb_array_elements_text($3::jsonb))) AND ($4::text IS NULL OR automation = $4) AND ($5::text IS NULL OR id = $5)
+		ORDER BY due_at DESC LIMIT ${Math.min(Math.max(1, limit), 500)}`,
+		params: [
+			auth.admin,
+			actorRef(a),
+			JSON.stringify(auth.automations),
+			automation ?? null,
+			id ?? null
+		]
+	});
+	return rows.flatMap((row) => runView(auth, row) ?? []);
+});
 const EFFECTS = new Set([
 	'act',
 	'acts',
@@ -337,6 +390,8 @@ function factsOf(call: FacilityCall): CallFacts {
 const stepOf = Schema.decodeUnknownOption(StepContent),
 	saidOf = Schema.decodeUnknownOption(SaidContent);
 const MAX_IDS = 10000,
+	/** A model effect's runs: no authored retry, so a transient failure is retried this often, with backoff. */
+	EFFECT_RETRY: RetrySpec = { attempts: 3, backoff: '10s' },
 	DAY = 86400000,
 	/** Workspace automations that may run side by side; one automation's own runs stay one at a time. */
 	LANES = 4;
@@ -451,37 +506,39 @@ export const RunsLive = Layer.effect(
 			[NOTICE_PUSH]: yield* noticePush,
 			[NOTIFY]: yield* runNotify,
 			[EMBED]: yield* embedRun,
+			[INDEX]: yield* indexRun,
 			...(yield* fileSyncHandlers)
 		});
+		// a nudge follows every commit that queued a run: live `runs` reads see it before it is claimed
+		yield* Stream.fromPubSub(nudges).pipe(
+			Stream.runForEach(() => Effect.sync(() => live.syncChanged('sys_run'))),
+			Effect.forkScoped
+		);
 		const announce = (at: string) =>
 			deadlines
 				.announce(at)
 				.pipe(Effect.andThen(PubSub.publish(nudges, Date.parse(at))), Effect.asVoid);
-		const boot = Effect.gen(function* () {
-			const now = yield* Clock.currentTimeMillis,
-				c = new Chain();
-			c.cte(
-				'lost',
-				// a handed-off request's work lived in its generation's memory: it is not run again (the person asks again)
-				`UPDATE sys_run SET leases = leases + 1, due_at = ${c.p(iso(now))}::timestamptz, state = CASE WHEN cause = 'handoff' OR leases >= 3 THEN 'failed' ELSE 'queued' END, error = CASE WHEN cause = 'handoff' THEN '{"code":"lostLease","message":"The host was lost before the request answered."}'::jsonb WHEN leases < 3 THEN error ELSE '{"code":"lostLease","message":"The run lost its lease 3 times."}'::jsonb END WHERE state = 'running' RETURNING id, state, due_at`
-			);
-			if (activation.start.length > 0) {
+		const boot = (overran?: string) =>
+			Effect.gen(function* () {
+				const now = yield* Clock.currentTimeMillis,
+					c = new Chain(),
+					at = c.p(iso(now)),
+					over = c.p(overran ?? null),
+					// a handed-off request's work lived in its generation's memory: it is not run again (the person asks again);
+					// a run its generation stopped past the CPU budget would only overrun again
+					fails = `(${over}::text IS NOT NULL OR cause = 'handoff' OR leases >= 3)`;
 				c.cte(
-					'admitted',
-					`INSERT INTO bolt_run_admitted (at) SELECT ${c.p(iso(now))}::timestamptz WHERE NOT EXISTS (SELECT 1 FROM bolt_run_admitted) RETURNING at`
+					'lost',
+					`UPDATE sys_run SET leases = leases + 1, due_at = ${at}::timestamptz, state = CASE WHEN ${fails} THEN 'failed' ELSE 'queued' END, finished_at = CASE WHEN ${fails} THEN ${at}::timestamptz END, error = CASE WHEN ${over}::text IS NOT NULL THEN jsonb_build_object('code', 'cpuBudget', 'message', ${over}::text) WHEN cause = 'handoff' THEN '{"code":"lostLease","message":"The host was lost before the request answered."}'::jsonb WHEN leases < 3 THEN error ELSE '{"code":"lostLease","message":"The run lost its lease 3 times."}'::jsonb END WHERE state = 'running' RETURNING id, state, due_at`
 				);
-				enqueue(c, {
-					select: `SELECT a AS automation, '{}'::jsonb AS input, x.at AS due_at, 'start'::text AS cause, 0 AS depth FROM admitted x, jsonb_array_elements_text(${c.p(activation.start)}::jsonb) a`
-				});
-			}
-			const rows = yield* db.returning(
-				Schema.Struct({ next: Schema.NullOr(Schema.String) }),
-				c.sql(
-					`least((SELECT min(due_at) FROM sys_run WHERE state = 'queued'), (SELECT min(due_at) FROM lost WHERE state = 'queued'), ${nextDue(c)})::text AS next`
-				)
-			);
-			yield* deadlines.settle(rows[0]?.next ?? null);
-		});
+				const rows = yield* db.returning(
+					Schema.Struct({ next: Schema.NullOr(Schema.String) }),
+					c.sql(
+						`least((SELECT min(due_at) FROM sys_run WHERE state = 'queued'), (SELECT min(due_at) FROM lost WHERE state = 'queued'), ${nextDue(c)})::text AS next`
+					)
+				);
+				yield* deadlines.settle(rows[0]?.next ?? null);
+			});
 		const claim = (now: number, pruned = false, custom = false) =>
 			Effect.gen(function* () {
 				const c = new Chain(),
@@ -489,23 +546,15 @@ export const RunsLive = Layer.effect(
 					capacity = c.p(capacities),
 					due = c.p(iso(now)),
 					eligible = `r.state = 'queued' AND r.due_at <= ${due}::timestamptz AND (NOT ${c.p(pruned)} OR r.automation <> ${c.p(PRUNE)}) AND (SELECT count(*) FROM sys_run x WHERE x.automation = r.automation AND x.state = 'running') < coalesce((${capacity}::jsonb ->> r.automation)::int, 1)`;
-				if (custom) {
-					c.cte(
-						'head',
-						`SELECT r.* FROM sys_run r WHERE ${eligible} AND r.automation IN (SELECT jsonb_array_elements_text(${automations}::jsonb)) ORDER BY r.due_at, r.id LIMIT 1 FOR UPDATE SKIP LOCKED`
-					);
-					c.cte(
-						'pending',
-						`SELECT r.* FROM sys_run r, head h WHERE ${eligible} AND r.automation = h.automation AND (r.id = h.id OR (h.cause IN ('created', 'updated', 'deleted') AND r.cause = h.cause AND (r.input->>'model') IS NOT DISTINCT FROM (h.input->>'model'))) ORDER BY r.due_at, r.id LIMIT 1000`
-					);
-				}
-				// The batch must be computed once, rather than rescanned for every queued candidate.
-				const batch = custom
-					? `WITH batch AS MATERIALIZED (SELECT id, row_number() OVER (ORDER BY due_at, id) AS position, sum(CASE WHEN jsonb_typeof(input->'ids') = 'array' THEN jsonb_array_length(input->'ids') ELSE 0 END) OVER (ORDER BY due_at, id) AS ids FROM pending)`
-					: '';
+				// an authored automation's lane claims one run; every other (platform and effect runs) is claimed in bulk
+				// its own CTE, run once: a locking LIMIT inside the UPDATE's IN may be evaluated again and claim more
+				c.cte(
+					'head',
+					`SELECT r.id FROM sys_run r WHERE ${eligible} AND r.automation ${custom ? '' : 'NOT '}IN (SELECT jsonb_array_elements_text(${automations}::jsonb)) ORDER BY r.due_at, r.id LIMIT ${custom ? 1 : 1000} FOR UPDATE SKIP LOCKED`
+				);
 				c.cte(
 					'claimed',
-					`${batch} UPDATE sys_run s SET state = 'running', attempts = s.attempts + 1, started_at = ${due}::timestamptz, run_key = coalesce(s.key, s.run_key), key = CASE WHEN s.automation IN (SELECT jsonb_array_elements_text(${automations}::jsonb)) THEN NULL ELSE s.key END WHERE s.state = 'queued' AND s.id IN (SELECT r.id FROM sys_run r WHERE ${eligible} AND ${custom ? `r.id IN (SELECT id FROM batch WHERE position = 1 OR ids <= ${c.p(MAX_IDS)})` : `r.automation NOT IN (SELECT jsonb_array_elements_text(${automations}::jsonb))`} ORDER BY r.due_at, r.id LIMIT 1000 FOR UPDATE SKIP LOCKED) RETURNING s.*`
+					`UPDATE sys_run s SET state = 'running', attempts = s.attempts + 1, started_at = ${due}::timestamptz, run_key = coalesce(s.key, s.run_key), key = CASE WHEN s.automation IN (SELECT jsonb_array_elements_text(${automations}::jsonb)) THEN NULL ELSE s.key END WHERE s.state = 'queued' AND s.id IN (SELECT id FROM head) RETURNING s.*`
 				);
 				const rows = yield* db.returning(
 					Schema.Struct({ runs: Schema.Array(RowSchema), next: Schema.NullOr(Schema.String) }),
@@ -516,37 +565,16 @@ export const RunsLive = Layer.effect(
 					{ advisory: ['bolt:runs:claim'] }
 				);
 				const claimed = rows[0];
+				if (claimed !== undefined && claimed.runs.length > 0)
+					live.syncChanged(
+						'sys_run',
+						claimed.runs.map((run) => run.id)
+					);
 				return {
-					runs: (claimed?.runs ?? []).map((row): Row => ({
-						...row,
-						event: EVENTS.has(row.cause) ? Option.getOrUndefined(eventOf(row.input)) : undefined
-					})),
+					runs: claimed?.runs ?? [],
 					next: claimed?.next ?? null
 				};
 			});
-		const batches = (rows: readonly Row[]): Row[][] => {
-			const out: Row[][] = [];
-			for (const group of Map.groupBy(
-				rows,
-				(row) =>
-					`${row.automation}\u0000${row.event === undefined ? row.id : `${row.cause}\u0000${row.event.model}`}`
-			).values()) {
-				let batch: Row[] = [],
-					count = 0;
-				for (const row of group) {
-					const size = row.event?.ids.length ?? 0;
-					if (batch.length > 0 && count + size > MAX_IDS) {
-						out.push(batch);
-						batch = [];
-						count = 0;
-					}
-					batch.push(row);
-					count += size;
-				}
-				if (batch.length > 0) out.push(batch);
-			}
-			return out;
-		};
 		const prune = Effect.fn('Runs.prune')(function* (
 			now: number
 		): Effect.fn.Return<{ deleted: number; continued?: number }, EngineError> {
@@ -558,7 +586,18 @@ export const RunsLive = Layer.effect(
 				AND NOT EXISTS (SELECT 1 FROM bolt_audit_receipt a WHERE a.outcome_key=bolt_idem.key AND a.acknowledged_at IS NULL AND a.expired_at IS NULL)`,
 				bolt_rate: `window_start < $1::timestamptz - interval '1 day'`,
 				sys_notification: `(read_at < $1::timestamptz - interval '90 days') OR at < $1::timestamptz - interval '365 days'`, // L-BOLT-354
-				bolt_host_nonce: `at < $1::timestamptz - CASE WHEN key LIKE 'nonce:%' THEN interval '10 minutes' ELSE interval '30 days' END`
+				bolt_host_nonce: `at < $1::timestamptz - CASE WHEN key LIKE 'nonce:%' THEN interval '10 minutes' ELSE interval '30 days' END`,
+				// an anonymous user whose session lapsed (30 days unused) or was retired by a sign-in, unless a record references it
+				sys_user: `kind = 'anonymous' AND NOT EXISTS (SELECT 1 FROM sys_session s WHERE s."user" = sys_user.id AND s.expires_at > $1::timestamptz)${relations(
+					layered(m)
+				)
+					.all.filter(
+						(r) => r.from !== 'sys_session' && r.targets.length === 1 && r.targets[0] === 'sys_user'
+					)
+					.map(
+						(r) => ` AND NOT EXISTS (SELECT 1 FROM "${r.from}" r WHERE r."${r.fk}" = sys_user.id)`
+					)
+					.join('')}`
 			};
 			const tables = Object.keys(aged);
 			const ctes = Object.entries(aged).map(
@@ -646,16 +685,7 @@ export const RunsLive = Layer.effect(
 		) =>
 			Effect.gen(function* () {
 				const cause = yield* Schema.decodeUnknownEffect(
-					Schema.Literals([
-						'cron',
-						'webhook',
-						'created',
-						'updated',
-						'deleted',
-						'schedule',
-						'start',
-						'retry'
-					])
+					Schema.Literals(['cron', 'webhook', 'effect', 'schedule', 'start', 'retry'])
 				)(run.cause).pipe(
 					Effect.mapError(() =>
 						BoltError.make('invalidInput', 'admission', 'The automation run has an unknown cause.')
@@ -663,7 +693,8 @@ export const RunsLive = Layer.effect(
 				);
 				const now = yield* Clock.currentTimeMillis,
 					b = bindingsAt(now, m.workspace.tz),
-					authority = yield* identity.authority(holder);
+					// the run's writes queue model effects one deeper, as this holder (`writerOf`)
+					authority = { ...(yield* identity.authority(holder)), run: { depth: run.depth, holder } };
 				const delegation = issueAutomationDelegation(m, authority, run.id, run.automation);
 				// One optimistic read boundary per confirmed commit, retained across failures within this attempt.
 				const priorReads = makeReadGuards(activation.release);
@@ -796,9 +827,9 @@ export const RunsLive = Layer.effect(
 							typeof hostTools === 'function'
 								? yield* Port.attempt('hostTools', () => hostTools(authority, run.id))
 								: (hostTools ?? []);
-						// `read`: workspace records as the run's `runAs` policies, through the agent's own read tool (rule 58)
+						// `read`: workspace records as the run's policies, through the agent's own read tool (rule 58)
 						const reader =
-							names.includes('read') && m.automations[run.automation]?.runAs !== 'trigger'
+							names.includes('read') && m.automations[run.automation] !== undefined
 								? readInferTool({
 										engine: { manifest: m, read: reads.run },
 										authority,
@@ -820,7 +851,7 @@ export const RunsLive = Layer.effect(
 									facility: `tool ${missing}`,
 									reason:
 										missing === 'read'
-											? "'read' needs runAs policies that grant a read"
+											? "'read' needs an automation's policies that grant a read"
 											: `'${missing}' is not a host tool this run's policies name`
 								}
 							} satisfies CrossAnswer;
@@ -1058,6 +1089,7 @@ export const RunsLive = Layer.effect(
 										})
 									]
 								});
+								live.syncChanged('sys_run', ids);
 								if (result[0]?.state === 'stopped') {
 									stopping.add(run.id);
 									return fail('stopped', 'The run was stopped.');
@@ -1145,6 +1177,7 @@ export const RunsLive = Layer.effect(
 								if (target === undefined)
 									return fail('invalidInput', `no automation '${call.automation}'`);
 								const self = call.automation === run.automation;
+								// code schedules without a start grant: `automations` admits manual starts only
 								if (self && call.at === undefined && canonical(call.input) === canonical(run.input))
 									return fail(
 										'hotLoop',
@@ -1170,12 +1203,7 @@ export const RunsLive = Layer.effect(
 								if (!Number.isFinite(at))
 									return fail('invalidInput', 'schedule: at is not an instant');
 								const due = iso(dueAt(now, at)),
-									runKey =
-										call.key === undefined
-											? undefined
-											: target.runAs === 'trigger'
-												? `${actorRef(holder.actor)}:${call.key}`
-												: call.key;
+									runKey = call.key;
 								const value = yield* effect(
 									(c) => {
 										const queued = enqueue(
@@ -1189,7 +1217,8 @@ export const RunsLive = Layer.effect(
 													cause: 'schedule',
 													depth,
 													actor: actorRef(holder.actor),
-													...(target.runAs === 'trigger' ? { starter: holder } : {})
+													starter: starterOf(run, holder),
+													trigger: scheduledBy(m, run)
 												}
 											],
 											{ when: GATED, conflict: 'replace' }
@@ -1274,7 +1303,7 @@ export const RunsLive = Layer.effect(
 						{
 							id: `${run.id}:${run.attempts}`,
 							run: run.id,
-							kind: 'automation',
+							kind: effectOf(m, run.automation) === undefined ? 'automation' : 'effect',
 							target: run.automation,
 							input,
 							ctx: {
@@ -1283,7 +1312,19 @@ export const RunsLive = Layer.effect(
 								today: b.today,
 								tz: b.tz,
 								seed: run.id,
-								cause
+								cause,
+								...(effectOf(m, run.automation) === undefined && m.automations[run.automation] !== undefined
+									? {
+											run: {
+												id: run.id,
+												// ponytail: a run queued before triggers were recorded reads as an unattributed schedule
+												trigger: run.trigger ?? {
+													kind: 'system' as const,
+													cause: 'schedule' as const
+												}
+											}
+										}
+									: {})
 							},
 							budget: {
 								crossings: LIMITS.crossings.automation,
@@ -1393,9 +1434,7 @@ export const RunsLive = Layer.effect(
 								})
 						}
 					)
-					.pipe(
-						Effect.ensuring(Effect.sync(() => halts.delete(run.id)))
-					);
+					.pipe(Effect.ensuring(Effect.sync(() => halts.delete(run.id))));
 			}).pipe(Effect.scoped);
 		const interrupted = (rows: readonly Row[], message: string) =>
 			db
@@ -1411,23 +1450,14 @@ export const RunsLive = Layer.effect(
 			Effect.gen(function* () {
 				const head = rows[0];
 				if (head === undefined) return [];
+				yield* (yield* RunUnits).next();
 				const now = yield* Clock.currentTimeMillis,
-					spec = m.automations[head.automation],
+					effect = effectOf(m, head.automation),
+					spec = m.automations[head.automation] ?? (effect === undefined ? undefined : EFFECT),
 					dues: number[] = [],
 					warnings: string[] = [];
 				let input: Json = head.input;
-				if (head.event !== undefined)
-					input = {
-						...head.event,
-						ids: rows.flatMap((row) => row.event?.ids ?? []),
-						...(head.cause === 'deleted'
-							? { rows: rows.flatMap((row) => row.event?.rows ?? []) }
-							: {})
-					};
-				const decoded =
-					spec?.input === undefined || EVENTS.has(head.cause)
-						? undefined
-						: decodeInput(spec.input, input);
+				const decoded = spec?.input === undefined ? undefined : decodeInput(spec.input, input);
 				let outcome: GuestOutcome;
 				const handler =
 					head.automation === PRUNE
@@ -1467,53 +1497,36 @@ export const RunsLive = Layer.effect(
 					};
 				else {
 					if (decoded?.value !== undefined) input = encodeWire(decoded.value);
+					// an effect runs as its writer; an automation as the system identity with its policies
+					const automation = m.automations[head.automation];
 					const holder: Holder | undefined =
-						spec.runAs === 'trigger'
+						automation === undefined
 							? (head.starter ?? undefined)
-							: {
-									actor: { kind: 'system', run: head.id, by: { automation: head.automation } },
-									policies: spec.runAs,
-									admin: false
-								};
+							: policyHolder(head, automation.policies);
+					const images = effect === undefined ? undefined : effectImages(input);
 					if (holder === undefined)
 						outcome = {
 							kind: 'failed',
 							error: BoltError.make('noTrigger', 'admission', 'the run has no starter')
 						};
+					else if (images !== undefined && Option.isNone(images))
+						outcome = {
+							kind: 'failed',
+							error: BoltError.make(
+								'invalidInput',
+								'decode',
+								'The effect run input did not decode.'
+							)
+						};
 					else {
-						const removedRows = Predicate.isObject(input) ? input['rows'] : undefined;
-						if (
-							head.cause === 'deleted' &&
-							head.event !== undefined &&
-							Predicate.isObject(input) &&
-							jsonArray(removedRows) &&
-							!holder.admin
-						) {
-							const authority = yield* identity.authority(holder),
-								model = head.event.model;
-							const arms = authority.models[model]?.read[model] ?? [],
-								all = arms.some((arm) => arm.fields === 'all'),
-								keep = new Set([
-									'id',
-									'revision',
-									...arms.flatMap((arm) => (arm.fields === 'all' ? [] : arm.fields))
-								]);
-							input = {
-								...input,
-								rows:
-									arms.length === 0
-										? []
-										: all
-											? removedRows
-											: removedRows.map((row) =>
-													Predicate.isObject(row)
-														? Object.fromEntries(
-																Object.entries(row).filter(([field]) => keep.has(field))
-															)
-														: row
-												)
-							};
-						}
+						// an effect's images as its writer reads them, handed over as the body's first argument
+						if (effect !== undefined && images !== undefined && Option.isSome(images))
+							input = writerImages(
+								m,
+								yield* identity.authority(holder),
+								effect.model,
+								images.value
+							);
 						outcome = yield* invoke(
 							head,
 							rows.map((row) => row.id),
@@ -1573,11 +1586,11 @@ export const RunsLive = Layer.effect(
 									...(outcome.invocation === undefined ? {} : { invocation: outcome.invocation })
 								}
 							: { code: outcome.error.code, message: outcome.error.message };
-				const result = {
+				const result: RunAttempt = {
 					attempt: head.attempts,
 					at: iso(at),
 					state,
-					...(outcome.kind === 'ok' ? { output: outcome.output } : { error }),
+					...(outcome.kind === 'ok' ? { output: outcome.output } : error === null ? {} : { error }),
 					...(warnings.length === 0 ? {} : { warnings }),
 					...(head.cause === 'cron' && now - Date.parse(head.due_at) > 60_000
 						? { missed: true }
@@ -1603,6 +1616,10 @@ export const RunsLive = Layer.effect(
 					},
 					db.write(c.sql(`(SELECT count(*) FROM done)::int AS n`))
 				).pipe(Effect.provideService(Audit, audit));
+				live.syncChanged(
+					'sys_run',
+					rows.map((row) => row.id)
+				);
 				return dues;
 			}).pipe(
 				Effect.onInterrupt(() =>
@@ -1668,8 +1685,8 @@ export const RunsLive = Layer.effect(
 					const start = (claimed: readonly Row[]) => {
 						if (claimed.some((row) => row.automation === PRUNE)) pruned = true;
 						return Effect.forEach(
-							[...Map.groupBy(batches(claimed), (group) => group[0]?.automation ?? '')],
-							([, groups]) => track(Effect.forEach(groups, run, { discard: true })),
+							[...Map.groupBy(claimed, (row) => row.automation)],
+							([, rows]) => track(Effect.forEach(rows, (row) => run([row]), { discard: true })),
 							{ discard: true }
 						).pipe(
 							Effect.andThen(
@@ -1747,6 +1764,7 @@ export const RunsLive = Layer.effect(
 					text: `UPDATE sys_run SET state = 'stopped', key = NULL, finished_at = $2::timestamptz, error = jsonb_build_object('code', 'stopped', 'message', 'The run was stopped.') WHERE id = $1 AND state IN ('queued', 'running') RETURNING ${RUN_VIEW_COLUMNS}`,
 					params: [id, iso(yield* Clock.currentTimeMillis)]
 				});
+				if (rows.length > 0) live.syncChanged('sys_run', [id]);
 				if (rows.length > 0 && found.value.state === 'running') stopping.add(id);
 				const halt = halts.get(id);
 				if (rows.length > 0 && halt !== undefined) yield* Deferred.succeed(halt, undefined);
@@ -1785,7 +1803,7 @@ export const RunsLive = Layer.effect(
 					`INSERT INTO bolt_idem (key, digest, issued_at, run) VALUES (${c.p(key)}, '', ${c.p(due)}::timestamptz, ${c.p(id)}) ON CONFLICT (key) DO NOTHING RETURNING key`
 				);
 				enqueue(c, {
-					select: `SELECT ${c.p(id)}::text AS id, ${c.p(trigger.automation)}::text AS automation, ${c.p(verified.body ?? {})}::jsonb AS input, ${c.p(due)}::timestamptz AS due_at, 'webhook'::text AS cause, 0 AS depth, ${refused ? `'failed'::text AS state, '{"code":"invalidInput","message":"The body did not decode."}'::jsonb AS error, ${c.p(due)}::timestamptz AS finished_at` : `'queued'::text AS state, NULL::jsonb AS error, NULL::timestamptz AS finished_at`} WHERE ${GATED}`
+					select: `SELECT ${c.p(id)}::text AS id, ${c.p(trigger.automation)}::text AS automation, ${c.p(verified.body ?? {})}::jsonb AS input, ${c.p(due)}::timestamptz AS due_at, 'webhook'::text AS cause, '{"kind":"system","cause":"webhook"}'::jsonb AS trigger, 0 AS depth, ${refused ? `'failed'::text AS state, '{"code":"invalidInput","message":"The body did not decode."}'::jsonb AS error, ${c.p(due)}::timestamptz AS finished_at` : `'queued'::text AS state, NULL::jsonb AS error, NULL::timestamptz AS finished_at`} WHERE ${GATED}`
 				});
 				yield* db.write(c.sql(answer(c, key, '', `'null'::jsonb`)));
 				if (refused) return { status: 400 };
@@ -1814,7 +1832,7 @@ export const RunsLive = Layer.effect(
 				leases: 0,
 				actor: null,
 				starter: null,
-				event: undefined
+				trigger: { kind: 'system', cause: 'cron' }
 			};
 			let written = false;
 			const record = yield* Effect.cached(
@@ -1823,7 +1841,7 @@ export const RunsLive = Layer.effect(
 					const inserted = enqueue(
 						c,
 						{
-							select: `SELECT ${c.p(run.id)}::text AS id, ${c.p(run.automation)}::text AS automation, ${c.p(run.due_at)}::timestamptz AS due_at, 'cron'::text AS cause, 0 AS depth, 'running'::text AS state, 1 AS attempts, ${c.p(iso(now))}::timestamptz AS started_at`
+							select: `SELECT ${c.p(run.id)}::text AS id, ${c.p(run.automation)}::text AS automation, ${c.p(run.due_at)}::timestamptz AS due_at, 'cron'::text AS cause, ${c.p(run.trigger)}::jsonb AS trigger, 0 AS depth, 'running'::text AS state, 1 AS attempts, ${c.p(iso(now))}::timestamptz AS started_at`
 						},
 						{ conflict: 'keep' }
 					);

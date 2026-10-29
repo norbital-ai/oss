@@ -237,20 +237,6 @@ it.live('empty container additions and removals remain visible as inline changes
 	})
 );
 
-it.live('masked fields remain opaque while neighboring fields are edited', () =>
-	browser(async () => {
-		const { target, changes } = await show({
-			initial: { restricted: { $masked: true }, name: 'Allowed' },
-			mode: 'edit'
-		});
-		const field = element(target, '[data-schema-field="input.restricted"]');
-		assert.ok(textOf(field).includes('•••'));
-		assert.equal(textOf(field).includes('$masked'), false);
-		assert.equal(field.querySelector('input, textarea, .cm-editor'), null);
-		assert.deepEqual(changes, []);
-	})
-);
-
 it.live(
 	'schema authoring uses the native table and preserves unedited keywords while changing fields',
 	() =>

@@ -5,19 +5,12 @@ import { ByteSize, Clock, Context, Effect, Fiber, Layer, Option } from 'effect';
 import { HttpServerRequest, HttpServerResponse, HttpIncomingMessage } from 'effect/http';
 import * as NodeHttpServer from '@effect/platform-node/NodeHttpServer';
 import { createServer } from 'node:http';
-import { join } from 'node:path';
 import { readArtifact } from '@norbital-ai/bolt/artifact';
-import {
-	clientAddress,
-	clientPage,
-	readPackSource,
-	renderMode,
-	LIMITS,
-	wireError
-} from '@norbital-ai/bolt/engine';
+import { clientAddress, clientPage, renderMode, LIMITS, wireError } from '@norbital-ai/bolt/engine';
 import { isOff } from '@norbital-ai/bolt/facilities';
 import { HOST_API, type ActiveWorkspace, type Release } from '@norbital-ai/bolt/host-api';
 import { artifactPort, call, loadHost, nodePorts, serveRelease } from '@norbital-ai/bolt/node';
+import { nodeGuests } from '@norbital-ai/bolt-cli/guests';
 import { envelope } from './envelope.ts';
 
 export type ServeOptions = {
@@ -31,7 +24,7 @@ export type ServeOptions = {
 	readonly trustProxy: readonly string[];
 	/** An address made the workspace's founder at start. */
 	readonly founder?: string;
-	/** A seed pack of the release by name (`base`, `sample`), loaded into an empty database. */
+	/** A seed pack of the release by name (`base`), loaded into an empty database. */
 	readonly seed?: string;
 	readonly maxConcurrent?: number;
 	readonly log?: (line: string) => void;
@@ -85,10 +78,6 @@ export const ServerLive = (options: ServeOptions) =>
 			const founder = options.founder;
 			if (founder !== undefined)
 				yield* call((signal) => branch.identity.founder(founder, { signal, at }));
-			const start =
-				seed === undefined
-					? undefined
-					: (yield* readPackSource(join(artifact.dir, '..', 'seed', seed))).meta.start;
 			const admitted = yield* envelope(options.maxConcurrent ?? 8);
 			const { workspace, links } = yield* serveRelease({
 				scope: 'start',
@@ -96,14 +85,17 @@ export const ServerLive = (options: ServeOptions) =>
 				publicUrl,
 				facilities,
 				serving,
+				// this host's own guest runner, never the host file's: `node:vm` contexts for operator-trusted code
+				guests: nodeGuests(),
 				native: yield* nodePorts(),
 				workspace: { name: artifact.artifact.name, handle: artifact.artifact.handle },
-				...(start === undefined ? {} : { start }),
 				admit: (work) => admitted.admit(1, work),
 				log
 			});
 			const answer = (response: Response | null) =>
-				response === null ? HttpServerResponse.empty({ status: 404 }) : HttpServerResponse.fromWeb(response);
+				response === null
+					? HttpServerResponse.empty({ status: 404 })
+					: HttpServerResponse.fromWeb(response);
 			const handle = Effect.gen(function* () {
 				const incoming = yield* HttpServerRequest.HttpServerRequest;
 				const address = clientAddress(
@@ -115,7 +107,7 @@ export const ServerLive = (options: ServeOptions) =>
 				const request = yield* HttpServerRequest.toWeb(incoming);
 				if (path.startsWith('/hooks/integration/') || path === '/hooks/oauth/callback')
 					return answer(yield* call(() => links.hook(request)));
-				if (path.startsWith('/__bolt/integrations/')) {
+				if (path === '/__bolt/integrations' || path.startsWith('/__bolt/integrations/')) {
 					const authority = yield* call((signal) =>
 						workspace.identity.authority(request.clone(), { signal })
 					);
@@ -144,12 +136,12 @@ export const ServerLive = (options: ServeOptions) =>
 			}).pipe(
 				Effect.catch((error) => {
 					const failure = wireError(error);
-					return Effect.succeed(HttpServerResponse.jsonUnsafe(failure.body, { status: failure.status }));
+					return Effect.succeed(
+						HttpServerResponse.jsonUnsafe(failure.body, { status: failure.status })
+					);
 				}),
 				Effect.catchCause((cause) =>
-					Effect.logWarning(cause).pipe(
-						Effect.as(json('internal', 'The request failed.', 500))
-					)
+					Effect.logWarning(cause).pipe(Effect.as(json('internal', 'The request failed.', 500)))
 				)
 			);
 			const http = yield* NodeHttpServer.make(() => createServer(), {

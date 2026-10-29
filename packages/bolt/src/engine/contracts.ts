@@ -26,9 +26,10 @@ import type {
 	Transcript,
 	WebPage
 } from '../decl/runtime/facilities.ts';
-import type { Json, Point, Rate } from '../decl/values.ts';
+import type { Json, Point } from '../decl/values.ts';
 import type { Pred } from '@norbital-ai/store';
 import type { GuestProgram } from './guest/runner.ts';
+import type { Holder } from './access/authority.ts';
 
 /** The precise facility failure sent across the guest ABI; interior failures remain tagged errors. */
 export type FacilityError =
@@ -39,7 +40,8 @@ export type FacilityError =
 const MiB = 1024 * 1024;
 /** Every wall and cap as one table; each overrun is a typed `BoltError`, never a clamp (rule 9). */
 export const LIMITS = {
-	guestCpuMs: 2_000,
+	/** One unit's guest CPU: Colony's meter budget (`BUDGET_MS`), so the kit and dev refuse what a deployed host refuses. */
+	guestCpuMs: 3_000,
 	guestMemoryMiB: 256,
 	/**
 	 * Per I/O response, never per invocation (X-28). Streaming model responses reset their idle deadline on progress;
@@ -59,7 +61,7 @@ export const LIMITS = {
 	/** Read crossings per invocation: `write` for one write-callback call (`create.transform`, `update.transform`,
 	 * `delete.check`: read for the whole batch, never per row), `sync` for every other synchronous body. */
 	crossings: { sync: 40, write: 10, automation: 10_000 },
-	/** Rows per write-callback invocation: a batch of N rows is ⌈N/1000⌉ calls per verb per model, one 2 s budget each. */
+	/** Rows per write-callback invocation: a batch of N rows is ⌈N/1000⌉ calls per verb per model, one 3 s budget each. */
 	writeChunk: 1_000,
 	readBytes: 32 * MiB,
 	/** Coalesced native reads retained between an automation's successful read and its next act. */
@@ -98,7 +100,7 @@ export type Bindings = {
 	today: string;
 	tz: string;
 };
-/** Who reads (rule 15): a caller's Authority (scoped, masked), or the workspace (the transform: unscoped). */
+/** Who reads (rule 15): a caller's Authority (scoped to the outputs it holds), or the workspace (the transform: unscoped). */
 export type Reader = { as: 'caller'; authority: Authority } | { as: 'workspace' };
 // ── changes: everything one act's statement writes besides the engine's bookkeeping (A5) ──
 /** A row's stored values in wire form: `$dec` preserves decimal scale; dates and instants are ISO strings. */
@@ -121,6 +123,8 @@ export type QueuedRun = {
 	id?: string;
 	actor?: string;
 	starter?: Json;
+	/** An automation run's trigger; absent on an effect's or platform run. */
+	trigger?: RunTrigger;
 	cause: string;
 	depth: number;
 };
@@ -185,16 +189,43 @@ export type EngineActor =
 			member: string | null;
 			linked?: MemberActor;
 	  }
-	| { kind: 'visitor'; app: string; visitor: string }
+	/**
+	 * A visitor of a public app or a no-sign-in kiosk. `anonymous`: `visitor` is the anonymous `sys_user` the visitor's
+	 * cookie holds (`requestor.id`, its own rows' owner); absent, `visitor` is a per-request id that owns nothing.
+	 */
+	| { kind: 'visitor'; app: string; visitor: string; anonymous?: true }
 	| { kind: 'apiKey'; key: string }
-	/** An automation's or platform run's work, or a remote sync's read page for the instance it runs for (`'<model>.sync.<sync>'`). */
+	/**
+	 * The reserved system identity: an automation's or platform run's work, or a remote sync's read page for the
+	 * instance it runs for (`'<model>.sync.<sync>'`). Its `requestor.*` operands name no person.
+	 */
 	| {
 			kind: 'system';
 			run: string;
 			by: { automation: string } | { platform: string } | { sync: string; instance: string };
 	  };
-/** One read arm of one layer; arms of every held policy union (rule 35). `fields: 'all'` = no field narrowing. */
-export type Arm = { policy: string; where: Pred; fields: readonly string[] | 'all' };
+/** The decl `RunTrigger` with names erased (`sys_run.trigger`): who or what started an automation run. */
+export type RunTrigger =
+	| {
+			kind: 'person';
+			actor: Exclude<EngineActor, { kind: 'system' }>;
+			agent?: { conversation: string };
+	  }
+	| { kind: 'system'; cause: 'cron' | 'webhook' }
+	| {
+			kind: 'system';
+			cause: 'effect';
+			model: string;
+			verb: 'created' | 'updated' | 'deleted';
+			records: readonly string[];
+	  }
+	| { kind: 'system'; cause: 'schedule'; by?: { automation: string; run: string } };
+/** A run's trigger as the ledger shows it (decl `RunTriggerView`): a person by actor ref and display name. */
+export type RunTriggerView =
+	| Exclude<RunTrigger, { kind: 'person' }>
+	| { kind: 'person'; ref: string; name: string | null; agent?: true };
+/** One read arm of one layer of one output: its policy's row filter; arms of every held policy union (rule 35). */
+export type Arm = { policy: string; where: Pred };
 /**
  * A create or update arm: the columns it admits per write path (checked before any guest code) and whether its policy
  * declares a `check` (`policy.<p>.grants.<model>.<op>.check`, invocation kind `policy`); without one the arm allows. The
@@ -214,20 +245,19 @@ export type DeleteArm = { policy: string; check: boolean };
  */
 export type ModelAuthority = {
 	/**
-	 * Per read path (`'<model>'`, `'<model>.<rel>'`, …): one arm per policy granting the root's `read`. The root arm's
-	 * `where` scopes the roots; a deeper arm's scopes that layer's rows (a ref layer: nulls it). A path a grant does not
-	 * name is `{ where: true, fields: 'all' }`.
+	 * Per read output the caller is granted (`default`, a named one), per read path of that output (`'<model>'`,
+	 * `'<model>.<rel>'`, …): one arm per policy granting it. The root arm's `where` scopes the roots; a deeper arm's
+	 * scopes that layer's rows (a ref layer: nulls it). A path a grant does not name is `{ where: true }`. An output
+	 * absent here is not granted.
 	 */
-	read: { readonly [path: string]: readonly Arm[] };
+	read: { readonly [output: string]: { readonly [path: string]: readonly Arm[] } };
 	history: readonly Arm[];
 	create: readonly WriteArm[];
 	update: readonly WriteArm[];
 	delete: readonly DeleteArm[];
 	moves: { readonly [stateField: string]: 'all' | readonly string[] };
-	/** Per read path: field → the predicate of the arms that admit it (rule 14); absent = unmasked for this caller. */
-	masks: { readonly [path: string]: { readonly [field: string]: Pred } };
 };
-export type LimitRule = { key: string; rate: Rate; per: 'actor' | 'ip' | 'sender' | 'subject' };
+export type LimitRule = { key: string; rate: string; per: 'actor' | 'ip' | 'sender' | 'subject' };
 /** Compiled once per `key` = (actor, affiliation revision, source release) (rule 37). */
 export type Authority = {
 	key: string;
@@ -243,6 +273,11 @@ export type Authority = {
 	 * agent's, acting for this authority's own member in `conversation`. A host holds live-changing work from it.
 	 */
 	agent?: { readonly conversation: string };
+	/**
+	 * Set inside an automation or effect run (runs/index.ts `invoke`): the run's chain depth and the holder it runs as,
+	 * which the model effects its writes queue run as, one deeper (`writerOf`).
+	 */
+	run?: { readonly depth: number; readonly holder: Holder };
 	models: { readonly [model: string]: ModelAuthority };
 	automations: readonly string[];
 	capabilities: {
@@ -272,6 +307,7 @@ export type InvocationKind =
 	| 'parse'
 	| 'policy'
 	| 'automation'
+	| 'effect'
 	| 'integration'
 	| 'page'
 	| 'validation'
@@ -280,7 +316,7 @@ export type InvocationKind =
  * One fresh-isolate run of one body. `target` names it: `'<model>'` (write callbacks `create`/`update`/`delete`,
  * `notify`), `'<model>.<index>'` (`vector`, `probe`, `rerank`), `'<model>.<sync>'` (`syncRead`, `syncWrite`),
  * `'<model>.<sync>.<media type>'` (`parse`), `'<policy>.<model>.<op>'` (`policy`: a write grant's `check`, answering a
- * `VerdictData`), `'<a>'` (automation), or `'<app>/<page>'` (page).
+ * `VerdictData`), `'<a>'` (automation), `'<model>.effect.<verb>'` (effect), or `'<app>/<page>'` (page).
  */
 export type Invocation = {
 	id: string;
@@ -296,6 +332,8 @@ export type Invocation = {
 		tz: string;
 		seed: string;
 		cause?: RunCause;
+		/** An automation run's id and trigger (`ctx.run`). */
+		run?: { id: string; trigger: RunTrigger };
 		admin?: boolean;
 		policies?: readonly string[];
 		/** A sync body's or integration test's instance and configuration; `key` a sync write's `Idempotency-Key`. */
@@ -307,7 +345,7 @@ export type Invocation = {
 	};
 	budget: { crossings: number; readBytes: number };
 };
-export type CrossAnswer = (
+export type CrossAnswer =
 	| { ok: true; value: Json; bins?: readonly Uint8Array[] }
 	| {
 			ok: false;
@@ -315,8 +353,7 @@ export type CrossAnswer = (
 				| FacilityError
 				| { kind: 'refused'; code: string; message: string }
 				| { kind: 'bolt'; code: string; message: string };
-	  }
-);
+	  };
 export type GuestOutcome =
 	| { kind: 'ok'; output: Json }
 	/** `ctx.refuse(message, { field, row })`; `row` indexes the batch a write callback received. */

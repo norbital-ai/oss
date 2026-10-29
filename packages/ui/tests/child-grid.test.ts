@@ -15,7 +15,6 @@ import type { Json } from '@norbital-ai/std/wire';
 import type { RecordCapabilities, RecordParentContext } from '../src/record/types.ts';
 import type { KindsHost, ChildInput } from '../src/kinds/context.ts';
 import { it } from '@effect/vitest';
-import { rootsOf } from '../src/read/request.ts';
 const { flushSync, mount, tick, unmount } = await import('svelte');
 const { default: Harness } = await import('./view-harness.svelte');
 const { default: ChildGrid } = await import('../src/relations/ChildGrid.svelte');
@@ -150,7 +149,7 @@ it.live(
 				second.value = '4';
 				second.dispatchEvent(new Event('input', { bubbles: true }));
 				yield* browser(() => settle());
-				required(button(element<HTMLElement>(target, 'header'), 'Save')).click();
+				required(button(element<HTMLElement>(target, '[data-record-foot]'), 'Save')).click();
 				yield* browser(() => settle());
 				assert.deepEqual(required(acts[0]).input, [
 					{
@@ -289,7 +288,7 @@ it.live(
 				amount.value = '3';
 				amount.dispatchEvent(new Event('input', { bubbles: true }));
 				yield* browser(() => settle());
-				required(button(element<HTMLElement>(target, 'header'), 'Save')).click();
+				required(button(element<HTMLElement>(target, '[data-record-foot]'), 'Save')).click();
 				yield* browser(() => settle());
 				assert.ok(contexts.some((parent) => parent?.revision === 3 && parent.relation === 'lines'));
 				assert.ok(contexts.some((parent) => parent?.revision === 4 && parent.relation === 'lines'));
@@ -328,7 +327,7 @@ it.live(
 			try {
 				yield* browser(() => settle());
 				yield* deleteAndAdd;
-				required(button(element<HTMLElement>(target, 'header'), 'Cancel')).click();
+				required(button(element<HTMLElement>(target, '[data-record-foot]'), 'Cancel')).click();
 				yield* browser(agree);
 				assert.equal(target.querySelector('[data-child-grid] input'), null);
 				assert.equal(
@@ -344,7 +343,7 @@ it.live(
 				amount.value = '9';
 				amount.dispatchEvent(new Event('input', { bubbles: true }));
 				yield* browser(() => settle());
-				required(button(element<HTMLElement>(target, 'header'), 'Save')).click();
+				required(button(element<HTMLElement>(target, '[data-record-foot]'), 'Save')).click();
 				yield* browser(() => settle());
 				assert.deepEqual(required(acts[0]).input, [
 					{ target: 'j1', set: { lines: { delete: ['l1'], create: [{ amount: 9 }] } } }
@@ -418,7 +417,7 @@ it.live('link and unlink send explicit IDs and both original snapshots', () =>
 			yield* browser(() => settle());
 			required(button(target, 'Link existing')).click();
 			yield* browser(() => settle());
-			required(button(element<HTMLElement>(target, 'header'), 'Save')).click();
+			required(button(element<HTMLElement>(target, '[data-record-foot]'), 'Save')).click();
 			yield* browser(() => settle());
 			assert.deepEqual(required(acts[0]).input, [
 				{ target: 'j1', set: { lines: { link: ['free'], unlink: ['l1'] } } }

@@ -2,7 +2,7 @@
 
 `bolt build` turns a workspace into a bundle. A **host** runs the bundle and supplies its
 **facilities**: everything the engine needs from outside (database, files, logs, mail, AI, network,
-sandbox, the secrets key). Bolt ships only the facility interfaces (`@norbital-ai/bolt/facilities`);
+sandbox, the secrets key, the guest runner). Bolt ships only the facility interfaces (`@norbital-ai/bolt/facilities`);
 the host writes the implementations. The full member table is `@norbital-ai/bolt/docs` → `hosts.md`.
 
 ## Tethered (the default): nothing to configure
@@ -24,7 +24,8 @@ Rules:
 1. Every key is required. `satisfies Facilities` turns a missing key into a type error.
 2. `off` is the only way to leave a member out. There are no defaults and no fallbacks.
 3. `mail` has no `off`: every host sends sign-in codes and invitations. `database`, `files`,
-   both logs and `keys` are required too.
+   both logs and `keys` are required too. The guest runner is no facility: the host serving the
+   file owns it (bolt-server and `bolt dev` run bolt-cli's `nodeGuests`).
 4. Bolt reads no env vars. Whatever the host needs (keys, endpoints, credentials) it reads itself.
 5. Facility adapters (Resend, Twilio, OpenRouter, S3, …) are the host's own code, never Bolt's.
 
@@ -33,16 +34,16 @@ Rules:
 The build records the bundle's **needs** in its manifest, derived from the declarations. Needs are
 never config or secrets.
 
-| Need        | Recorded when the workspace declares                                   | Facility member               |
-| ----------- | ---------------------------------------------------------------------- | ----------------------------- |
-| `sms`       | phone sign-up (`signup.via` includes `phone`): texted invitations      | `transactional.sms`           |
-| `phone`     | phone sign-up (`signup.via` includes `phone`)                          | `transactional.phone`         |
-| `challenge` | an app whose audience sets `challenge: 'turnstile'`                    | `transactional.challenge`     |
-| `system1`   | an `ai` block in `+workspace.ts`                                       | `intelligence.system1`        |
-| `system2`   | an `ai` block in `+workspace.ts`                                       | `intelligence.system2`        |
-| `embed`     | `ai.embeddings`                                                        | `intelligence.embed`          |
-| `webhooks`  | an integration, a connection, or an automation triggered by a webhook  | `ports.webhooks`              |
-| `outbound`  | an integration, a connection, or a secret in `+secrets.ts`             | `ports.outbound`              |
+| Need        | Recorded when the workspace declares                                  | Facility member           |
+| ----------- | --------------------------------------------------------------------- | ------------------------- |
+| `sms`       | phone sign-up (`signup.via` includes `phone`): texted invitations     | `transactional.sms`       |
+| `phone`     | phone sign-up (`signup.via` includes `phone`)                         | `transactional.phone`     |
+| `challenge` | an app whose audience sets `challenge: 'turnstile'`                   | `transactional.challenge` |
+| `system1`   | an `ai` block in `+workspace.ts`                                      | `intelligence.system1`    |
+| `system2`   | an `ai` block in `+workspace.ts`                                      | `intelligence.system2`    |
+| `embed`     | `ai.embeddings`                                                       | `intelligence.embed`      |
+| `webhooks`  | an integration, a connection, or an automation triggered by a webhook | `ports.webhooks`          |
+| `outbound`  | an integration, a connection, or a secret in `+secrets.ts`            | `ports.outbound`          |
 
 Activation checks the needs first. A need whose member is `off` refuses the whole activation and
 names every unmet member: `the bundle needs phone, system2, which this host leaves off`. Nothing
@@ -80,7 +81,7 @@ reads its own `BOLT_*` settings and composes bolt-server's adapters, every membe
 ## `bolt dev`
 
 ```bash
-bolt dev [--port=5180] [--bank=<dir>]   # norbital.host.ts present: untethered, at http://127.0.0.1:5180
+bolt dev [--port=5180]                  # norbital.host.ts present: untethered, at http://127.0.0.1:5180
                                         # absent: tethered, build on save; local Colony serves it
 bolt dev --host=./dev.host.ts           # untethered with another host file
 bolt dev --tethered                     # tethered even when norbital.host.ts is present

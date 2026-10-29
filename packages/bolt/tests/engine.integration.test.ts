@@ -4,9 +4,9 @@
 import { expect, layer } from '@effect/vitest';
 import { vi } from 'vitest';
 import { Effect, Layer, Schema } from 'effect';
-import { program } from '../src/test/guest.ts';
+import { program } from '../../bolt-cli/src/test/guest.ts';
 import type { Authority, ActOutcome as Outcome } from '../src/engine/contracts.ts';
-import { TestWorkspace, type Kit, type WorkspaceServices } from '../src/test/index.ts';
+import { TestWorkspace, type Kit, type WorkspaceServices } from '../../bolt-cli/src/test/index.ts';
 import type { Json } from '../src/decl/values.ts';
 import { actReply, qReply, routeFixture, type FixtureRoute } from './support/route-fixture.ts';
 import { ACME, guest, manifest, seed } from './engine-fixture.ts';
@@ -19,7 +19,12 @@ const present = <A>(value: A | null | undefined): A => {
 const workspace = Layer.unwrap(
 	program(guest.source).pipe(
 		Effect.map((guest) =>
-			TestWorkspace.layer({ manifest, guest, transforms: ['orders.create', 'orders.update'], seed })
+			TestWorkspace.layer({
+				manifest,
+				guest,
+				transforms: ['orders.create', 'orders.update'],
+				seed
+			})
 		)
 	)
 );
@@ -162,92 +167,98 @@ layer(workspace, { excludeTestServices: true })('engine', (it) => {
 	);
 
 	// engine: authority end to end (rules 13, 14, 35)
-	it.effect("scopes rows, masks fields per row, and rep's checks keep its writes in the north", () =>
-		Effect.gen(function* () {
-			const t = yield* TestWorkspace;
-			const route = yield* routeFixture(yield* Effect.context<TestWorkspace | WorkspaceServices>());
-			const a = t.member(['rep']),
-				b = t.member(['rep', 'auditor']);
-			const mine = idOf(
-				yield* act(route, t, t.as(a).authority, 'orders.create', [
-					{
-						title: 'a-order',
-						region: 'north',
-						note: 'secret',
-						customer: ACME
-					}
-				])
-			);
-			const theirs = idOf(
-				yield* act(route, t, t.as(b).authority, 'orders.create', [
-					{
-						title: 'b-order',
-						region: 'north',
-						note: 'visible',
-						customer: ACME
-					}
-				])
-			);
+	it.effect(
+		"scopes rows per output, an output fixes its fields, and rep's checks keep its writes in the north",
+		() =>
+			Effect.gen(function* () {
+				const t = yield* TestWorkspace;
+				const route = yield* routeFixture(
+					yield* Effect.context<TestWorkspace | WorkspaceServices>()
+				);
+				const a = t.member(['rep']),
+					b = t.member(['rep', 'auditor']);
+				const mine = idOf(
+					yield* act(route, t, t.as(a).authority, 'orders.create', [
+						{
+							title: 'a-order',
+							region: 'north',
+							note: 'secret',
+							customer: ACME
+						}
+					])
+				);
+				const theirs = idOf(
+					yield* act(route, t, t.as(b).authority, 'orders.create', [
+						{
+							title: 'b-order',
+							region: 'north',
+							note: 'visible',
+							customer: ACME
+						}
+					])
+				);
 
-			expect((yield* read(route, t.as(a).authority, 'orders')).rows.map((r) => r['title'])).toEqual(
-				['a-order']
-			);
-			expect(yield* get(route, t.as(a).authority, 'orders', theirs)).toBeNull();
-			const seen = (yield* read(route, t.as(b).authority, 'orders', {
-				orderBy: [{ title: 'asc' }]
-			})).rows;
-			expect(
-				seen.filter((r) => r['title'] === 'a-order' || r['title'] === 'b-order').map((r) => [r['title'], r['note']])
-			).toEqual([
-				['a-order', { $masked: true }],
-				['b-order', 'visible']
-			]);
+				expect(
+					(yield* read(route, t.as(a).authority, 'orders')).rows.map((r) => r['title'])
+				).toEqual(['a-order']);
+				expect(yield* get(route, t.as(a).authority, 'orders', theirs)).toBeNull();
+				// rep's `default` output: its own rows, every field; the auditor's `audit` output: every row, never `note`
+				const own = (yield* read(route, t.as(b).authority, 'orders', {
+					orderBy: [{ title: 'asc' }]
+				})).rows;
+				expect(own.map((r) => [r['title'], r['note']])).toEqual([['b-order', 'visible']]);
+				const audited = (yield* read(route, t.as(b).authority, 'orders', {
+					output: 'audit',
+					orderBy: [{ title: 'asc' }]
+				})).rows;
+				expect(audited.map((r) => r['title'])).toEqual(['a-order', 'b-order']);
+				expect(audited.every((r) => !('note' in r))).toBe(true);
 
-			expect(
-				yield* act(route, t, t.as(a).authority, 'orders.update', [
-					{
-						target: theirs,
-						set: { note: 'x' }
-					}
-				])
-			).toMatchObject({ kind: 'refused', code: 'notFound' });
-			expect(
-				yield* act(route, t, t.as(a).authority, 'orders.update', [
-					{
-						target: mine,
-						set: { region: 'south' }
-					}
-				])
-			).toMatchObject({
-				kind: 'refused',
-				code: 'refused',
-				rule: 'rep.orders.update',
-				field: 'region'
-			});
-			expect(
-				yield* act(route, t, t.as(a).authority, 'orders.create', [
-					{
-						title: 'c',
-						region: 'south',
-						customer: ACME
-					}
-				])
-			).toMatchObject({
-				kind: 'refused',
-				code: 'refused',
-				rule: 'rep.orders.create',
-				row: 0,
-				field: 'region'
-			});
-			expect(
-				yield* act(route, t, t.as(t.member(['auditor'])).authority, 'orders.update', [
-					{
-						target: mine,
-						set: { note: 'x' }
-					}
-				])
-			).toMatchObject({ kind: 'refused', code: 'forbidden' });
-		}).pipe(Effect.scoped)
+				expect(
+					yield* act(route, t, t.as(a).authority, 'orders.update', [
+						{
+							target: theirs,
+							set: { note: 'x' }
+						}
+					])
+				).toMatchObject({ kind: 'refused', code: 'notFound' });
+				expect(
+					yield* act(route, t, t.as(a).authority, 'orders.update', [
+						{
+							target: mine,
+							set: { region: 'south' }
+						}
+					])
+				).toMatchObject({
+					kind: 'refused',
+					code: 'refused',
+					rule: 'rep.orders.update',
+					field: 'region'
+				});
+				expect(
+					yield* act(route, t, t.as(a).authority, 'orders.create', [
+						{
+							title: 'c',
+							region: 'south',
+							customer: ACME
+						}
+					])
+				).toMatchObject({
+					kind: 'refused',
+					code: 'refused',
+					rule: 'rep.orders.create',
+					row: 0,
+					field: 'region'
+				});
+				expect(
+					yield* act(route, t, t.as(t.member(['auditor'])).authority, 'orders.update', [
+						{
+							target: mine,
+							set: { note: 'x' }
+						}
+					])
+				).toMatchObject({ kind: 'refused', code: 'forbidden' });
+			}).pipe(Effect.scoped)
 	);
 
 	it.effect(
@@ -330,54 +341,64 @@ layer(workspace, { excludeTestServices: true })('engine', (it) => {
 	);
 
 	// engine: declared record locks and enum transitions
-	it.effect('refuses an invalid enum move, then every write to a locked record', () =>
-		Effect.gen(function* () {
-			const t = yield* TestWorkspace;
-			const route = yield* routeFixture(yield* Effect.context<TestWorkspace | WorkspaceServices>());
-			const id = idOf(
-				yield* act(route, t, t.as(t.admin).authority, 'orders.create', [
-					{
-						title: 'lock-check',
-						region: 'north',
-						customer: ACME
-					}
-				])
-			);
-			expect(
-				yield* act(route, t, t.as(t.admin).authority, 'orders.update', [
-					{
-						target: id,
-						set: { stage: 'lost' }
-					}
-				])
-			).toMatchObject({ kind: 'refused', code: 'invalidInput', field: 'stage' });
-			ok(
-				yield* act(route, t, t.as(t.admin).authority, 'orders.update', [
-					{
-						target: id,
-						set: { stage: 'won' }
-					}
-				])
-			);
-			ok(
-				yield* act(route, t, t.as(t.admin).authority, 'orders.update', [
-					{
-						target: id,
-						set: { archived: true }
-					}
-				])
-			);
-			expect(
-				yield* act(route, t, t.as(t.admin).authority, 'orders.update', [
-					{
-						target: id,
-						set: { title: 'changed' }
-					}
-				])
-			).toMatchObject({ kind: 'refused', code: 'locked' });
-			expect(
-				yield* act(route, t, t.as(t.admin).authority, 'orders.delete', [{ target: id }])
-			).toMatchObject({ kind: 'refused', code: 'locked' });
-		}).pipe(Effect.scoped)
+	it.effect(
+		'refuses an invalid enum move, then every change to a locked record (restating it is no write)',
+		() =>
+			Effect.gen(function* () {
+				const t = yield* TestWorkspace;
+				const route = yield* routeFixture(
+					yield* Effect.context<TestWorkspace | WorkspaceServices>()
+				);
+				const id = idOf(
+					yield* act(route, t, t.as(t.admin).authority, 'orders.create', [
+						{
+							title: 'lock-check',
+							region: 'north',
+							customer: ACME
+						}
+					])
+				);
+				expect(
+					yield* act(route, t, t.as(t.admin).authority, 'orders.update', [
+						{
+							target: id,
+							set: { stage: 'lost' }
+						}
+					])
+				).toMatchObject({ kind: 'refused', code: 'invalidInput', field: 'stage' });
+				ok(
+					yield* act(route, t, t.as(t.admin).authority, 'orders.update', [
+						{
+							target: id,
+							set: { stage: 'won' }
+						}
+					])
+				);
+				ok(
+					yield* act(route, t, t.as(t.admin).authority, 'orders.update', [
+						{
+							target: id,
+							set: { archived: true }
+						}
+					])
+				);
+				expect(
+					yield* act(route, t, t.as(t.admin).authority, 'orders.update', [
+						{
+							target: id,
+							set: { title: 'changed' }
+						}
+					])
+				).toMatchObject({ kind: 'refused', code: 'locked' });
+				// restating the locked row changes nothing: no write, no refusal (an unchanged re-import)
+				ok(
+					yield* act(route, t, t.as(t.admin).authority, 'orders.update', [
+						{ target: id, set: { stage: 'won', archived: true } }
+					])
+				);
+				expect(
+					yield* act(route, t, t.as(t.admin).authority, 'orders.delete', [{ target: id }])
+				).toMatchObject({ kind: 'refused', code: 'locked' });
+			}).pipe(Effect.scoped)
 	);
 });

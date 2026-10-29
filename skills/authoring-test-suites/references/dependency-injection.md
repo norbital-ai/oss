@@ -20,11 +20,11 @@ Current native examples include:
 - `oss/packages/bolt/tests/integration-links.integration.test.ts`: the actual links manager,
   instance verbs and engine over a narrow injected provider; checks authorization before any
   credential is sealed or read.
-- The test kit's `t.fakes.links` (`@norbital-ai/bolt/test`): the default link of every instance.
+- The test kit's `t.fakes.links` (`@norbital-ai/bolt-cli/test`): the default link of every instance.
   It records sends and answers only the `answer` / `page` a test sets; anything else fails loudly
   (`'<instance>' has no link`).
 - `oss/packages/bolt/tests/record-capabilities.integration.test.ts`: real PGlite reads and native
-  grant evaluation; masked and unreadable names do not leak into capabilities.
+  grant evaluation; names outside the granted output do not leak into capabilities.
 
 Inspect the current file before copying fixture types or helper names.
 

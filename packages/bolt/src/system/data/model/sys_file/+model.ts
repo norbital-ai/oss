@@ -34,5 +34,7 @@ export default model('sys_file', {
 				'updated_by'
 			]
 		}
-	}
+	},
+	/** What a file picker or attachment list shows: its name and type, without size, digest or uploader. */
+	outputs: { meta: { sys_file: { fields: ['name', 'mime'] } } }
 });

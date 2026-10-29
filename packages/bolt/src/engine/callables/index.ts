@@ -23,7 +23,7 @@ import {
 	type ShapeOf
 } from '../services.ts';
 import type { EngineManifest } from '../manifest.ts';
-import { enqueue, nextDue } from '../runs/queue.ts';
+import { enqueue, holderOf, nextDue, writerOf } from '../runs/queue.ts';
 import { dueAt as roundedDueAt } from '../runs/time.ts';
 import { approvalHook } from '../approvals/approvals.ts';
 import { FILE_SYNC_INPUT, fileSyncAdmits } from '../sync/file.ts';
@@ -36,10 +36,14 @@ import {
 	type Authority,
 	type EngineActor,
 	type Outcome,
-	type RowData
+	type RowData,
+	type RunTrigger
 } from '../contracts.ts';
 import { BoltError } from '../../protocol/errors.ts';
+import { RATE_LIMITED } from '../../protocol/wire.ts';
+import { parseRate, RateWindows, type Charge } from '../access/rate.ts';
 import { catalogOf } from '../access/pred.ts';
+import { readsAny, viewOutput } from '../access/authority.ts';
 
 import * as ir from '../../protocol/reads.ts';
 import { constraintIndex } from '../schema/plan.ts';
@@ -119,15 +123,32 @@ export function isBatchCallable(callable: Callable): callable is Extract<
 	);
 }
 const problems = (d: Decoded) => d.problems.map((p) => `${p.path}: ${p.message}`).join('; ');
-/** The `Holder` a `'trigger'` run is recompiled from (`sys_run.starter`, read by the runs area). */
-const starterOf = (a: Authority): Json =>
-	Schema.encodeSync(Schema.Json)({
-		actor: a.actor,
-		policies: a.policies,
-		admin: a.admin,
-		teamTree: a.teamTree,
-		scopes: a.scopes
-	});
+/** The `Holder` a started run records (`sys_run.starter`): a sync's authority, who may read an automation run's result. */
+const starterOf = (a: Authority): Json => Schema.encodeSync(Schema.Json)(holderOf(a));
+/** A start's trigger (`sys_run.trigger`): the person, and the agent conversation they started it through; a run's code is a schedule. */
+const triggerOf = (
+	a: Authority,
+	agent: { readonly conversation: string } | undefined
+): RunTrigger =>
+	a.actor.kind === 'system'
+		? {
+				kind: 'system',
+				cause: 'schedule',
+				by: {
+					automation:
+						'automation' in a.actor.by
+							? a.actor.by.automation
+							: 'platform' in a.actor.by
+								? a.actor.by.platform
+								: a.actor.by.sync,
+					run: a.actor.run
+				}
+			}
+		: {
+				kind: 'person',
+				actor: a.actor,
+				...(agent === undefined ? {} : { agent: { conversation: agent.conversation } })
+			};
 /** A start's due time: now, rounded as every due time is (rule 52a). */
 function scheduledAt(now: string): string {
 	const time = Date.parse(now);
@@ -156,11 +177,30 @@ export function parseCallable(
 		BoltError.make('unknownCallable', 'decode', `'${callable}' is not a declared callable`)
 	);
 }
+/** Without a declared `limit`, an automation's manual starts per starter. */
+const START_LIMIT = '30/min';
+/** The one bucket a manual start charges: the automation's `limit`, per starter (rule 38). */
+export const startCharge = (
+	m: EngineManifest,
+	automation: string,
+	authority: Authority
+): Charge => {
+	const rate = m.automations[automation]?.limit ?? START_LIMIT;
+	return {
+		rule: `start:${automation}:${rate}`,
+		bucket: actorRef(authority.actor),
+		...parseRate(rate)
+	};
+};
+
 function makeCallables(config: CallablesConfig): CallablesShape {
 	const e = config.engine,
 		m = e.manifest,
 		cat = catalogOf(m);
 	const constraints = constraintIndex(m);
+	// only manual starts (the `start` callable, Run now, the agent) come through here; cron, webhook and model effect
+	// runs, and the acts a run's body performs, are never rate limited
+	const starts = new RateWindows();
 
 	/** Rule 33: a start or schedule needs the automation in `policy.automations`; its input decodes (rule 23). */
 	function startable(name: string, auth: Authority, input: Json): Refused | null {
@@ -178,7 +218,7 @@ function makeCallables(config: CallablesConfig): CallablesShape {
 					: null;
 			}
 			if (entry?.read !== true) return refused('forbidden', `'${name}' has no read.`);
-			if (!auth.admin && (auth.models[model]?.read[model]?.length ?? 0) === 0)
+			if (!readsAny(auth, model))
 				return refused('forbidden', `You may not sync '${model}'.`);
 			const decoded = decodeInput(
 				{ instance: { kind: 'text', optional: true }, partition: { kind: 'text', optional: true } },
@@ -386,9 +426,7 @@ function makeCallables(config: CallablesConfig): CallablesShape {
 				)
 					return yield* record(refused('overflow', 'The batch exceeds its native change budget.'));
 				const seen = new Set<string>();
-				const twice = writes.find(
-					(w) => seen.size === seen.add(`${w.model}\u0000${w.id}`).size
-				);
+				const twice = writes.find((w) => seen.size === seen.add(`${w.model}\u0000${w.id}`).size);
 				if (twice !== undefined)
 					return yield* record(
 						refused(
@@ -431,6 +469,7 @@ function makeCallables(config: CallablesConfig): CallablesShape {
 					now: r.bindings.now,
 					today: r.bindings.today,
 					actor,
+					writer: writerOf(r.authority),
 					writes,
 					owned: rec.commits.flatMap((x) => x.commit.owned),
 					fingerprints: rec.commits.flatMap((x) => x.commit.fingerprints ?? []),
@@ -504,6 +543,8 @@ function makeCallables(config: CallablesConfig): CallablesShape {
 	): Effect.fn.Return<Outcome, import('../errors.ts').EngineError> {
 		if (r.runs.length === 0)
 			return refused('invalidInput', 'A start names at least one run.', 'runs');
+		if (!starts.charge([startCharge(m, r.automation, r.authority)], Date.parse(r.bindings.now)).ok)
+			return refused('rateLimited', RATE_LIMITED);
 		for (const run of r.runs) {
 			const no = startable(r.automation, r.authority, run.input);
 			if (no !== null) return no;
@@ -513,18 +554,21 @@ function makeCallables(config: CallablesConfig): CallablesShape {
 				return refused('invalidInput', problems(decoded), decoded.problems[0]?.path);
 			const refs = decoded?.refs ?? [];
 			if (refs.length > 0) {
+				// an id input names a record the starter reads, in any output it holds (its view output)
 				const found = yield* e
 					.read(
-						refs.map((ref) =>
-							ir.read(cat, ref.model, {
+						refs.map((ref) => {
+							const read = ir.read(cat, ref.model, {
 								where:
 									ref.where === undefined || Object.keys(ref.where).length === 0
 										? { id: { eq: ref.id } }
 										: { and: [{ id: { eq: ref.id } }, ref.where] },
 								select: { id: true },
 								limit: 1
-							})
-						),
+							});
+							const output = viewOutput(m, r.authority, ref.model);
+							return read.kind === 'read' && output !== undefined ? { ...read, output } : read;
+						}),
 						{ as: 'caller', authority: r.authority },
 						r.bindings
 					)
@@ -535,11 +579,7 @@ function makeCallables(config: CallablesConfig): CallablesShape {
 					return !EffectArray.isArray(rows) || rows.length === 0;
 				});
 				if (missing !== undefined)
-					return refused(
-						'notFound',
-						`No readable ${missing.model} has this id.`,
-						missing.field
-					);
+					return refused('notFound', `No readable ${missing.model} has this id.`, missing.field);
 			}
 			if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(run.id))
 				return refused('invalidInput', 'A run id is a client-minted uuid.', 'id');
@@ -549,12 +589,9 @@ function makeCallables(config: CallablesConfig): CallablesShape {
 			catch: (error) =>
 				error instanceof BoltError ? error : BoltError.make('invalidInput', 'decode', String(error))
 		});
-		const parsed = parseCallable(r.automation, m);
-		const starter =
-			m.automations[r.automation]?.runAs === 'trigger' ||
-			(Result.isSuccess(parsed) && parsed.success._tag === 'Sync')
-				? starterOf(r.authority)
-				: null;
+		// the starter: a sync runs as them; an automation run records them as its trigger and runs as the system
+		const starter = starterOf(r.authority),
+			trigger = triggerOf(r.authority, r.agent ?? r.authority.agent);
 		const actor = actorRef(r.authority.actor);
 		const chain = new Chain();
 		const inserted = enqueue(
@@ -567,7 +604,8 @@ function makeCallables(config: CallablesConfig): CallablesShape {
 				cause: 'start' as const,
 				depth: 0,
 				actor,
-				starter
+				starter,
+				trigger
 			})),
 			{ conflict: 'keep' }
 		);
@@ -632,7 +670,7 @@ export function admitVisitor(auth: Authority, s: Surface): Refused | null {
 	if (auth.actor.kind !== 'visitor') return null;
 	const ok =
 		'read' in s
-			? (auth.models[s.read]?.read[s.read]?.length ?? 0) > 0
+			? readsAny(auth, s.read)
 			: 'act' in s
 				? s.verb === 'create' && (auth.models[s.act]?.create.length ?? 0) > 0
 				: false;

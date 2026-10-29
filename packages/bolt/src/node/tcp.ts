@@ -15,7 +15,11 @@ const failed = (error: unknown) =>
 	});
 
 /** `socket` once it emits `ready`; an error or `signal` destroys it. */
-const opened = <S extends Socket>(socket: S, ready: 'connect' | 'secureConnect', signal: AbortSignal) =>
+const opened = <S extends Socket>(
+	socket: S,
+	ready: 'connect' | 'secureConnect',
+	signal: AbortSignal
+) =>
 	new Promise<S>((resolve, reject) => {
 		const done = () => {
 			socket.off(ready, ok).off('error', fail);
@@ -134,7 +138,10 @@ export const loopbackTcpPort: TcpPort = tcpOver((host) => {
 	const address = LOOPBACK[host];
 	return address === undefined
 		? Effect.fail(
-				new FacilityFailure({ kind: 'invalid', message: 'The test host connects to this machine only.' })
+				new FacilityFailure({
+					kind: 'invalid',
+					message: 'The test host connects to this machine only.'
+				})
 			)
 		: Effect.succeed({ hostname: address.address, addresses: [address] });
 });

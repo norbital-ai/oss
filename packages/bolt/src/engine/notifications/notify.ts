@@ -56,10 +56,13 @@ export type NotifyWire = typeof NotifyWire.Type;
 const NotifyInput = Schema.Struct({ model: Schema.String, event: NotifyWire });
 
 /** H1: the queued run that hands `event` to `model`'s `notify` after the causing statement commits. */
-export const notifyRun = (
-	input: { model: string; event: NotifyWire },
-	now: string
-): QueuedRun => ({ automation: NOTIFY, input, dueAt: now, cause: 'schedule', depth: 0 });
+export const notifyRun = (input: { model: string; event: NotifyWire }, now: string): QueuedRun => ({
+	automation: NOTIFY,
+	input,
+	dueAt: now,
+	cause: 'schedule',
+	depth: 0
+});
 
 const Recipient = Schema.Union([
 	Schema.Literals(['requester', 'approvers']),

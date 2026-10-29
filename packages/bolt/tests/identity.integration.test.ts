@@ -4,9 +4,9 @@ import { Clock, Context, Effect, Layer, Result, Schema } from 'effect';
 import { TestClock } from 'effect/testing';
 import { randomUUID } from 'node:crypto';
 import type { Json } from '../src/decl/values.ts';
-import { OPEN_WINDOWS_SQL, RateWindows } from '../src/engine/access/rate.ts';
+import { OPEN_WINDOWS_SQL, OpenWindow, RateWindows } from '../src/engine/access/rate.ts';
 import type { TransportPort } from '../src/engine/contracts.ts';
-import { TestDb } from '../src/test/database.ts';
+import { TestDb } from '../../bolt-cli/src/test/database.ts';
 import { TenantDb } from '../src/engine/db/tenant-db.ts';
 import { DbError } from '../src/engine/errors.ts';
 import { Authorities, previewAs } from '../src/engine/identity/actor.ts';
@@ -34,7 +34,7 @@ import {
 	verifyCode
 } from '../src/engine/identity/session.ts';
 import type { EngineManifest } from '../src/engine/manifest.ts';
-import { memoryAuditLayer } from '../src/test/index.ts';
+import { memoryAuditLayer } from '../../bolt-cli/src/test/index.ts';
 
 const m: EngineManifest = {
 	needs: [],
@@ -57,12 +57,6 @@ const Mail = Schema.Struct({
 	to: Schema.String,
 	text: Schema.String,
 	html: Schema.optionalKey(Schema.String)
-});
-const RateWindow = Schema.Struct({
-	rule: Schema.String,
-	bucket: Schema.String,
-	window_start: Schema.String,
-	n: Schema.Number
 });
 const fixture = Effect.gen(function* () {
 	const db = yield* TenantDb;
@@ -307,7 +301,10 @@ layer(IdentityFixtureLive)((it) => {
 						code: 'rateLimited'
 					});
 					const fresh = new RateWindows();
-					fresh.load(yield* db.rows(RateWindow, { text: OPEN_WINDOWS_SQL, params: [] }));
+					fresh.load(
+						yield* db.rows(OpenWindow, { text: OPEN_WINDOWS_SQL, params: [] }),
+						Date.now()
+					);
 					expect(
 						yield* Effect.flip(sendCode({ ...h, windows: fresh }, 'flood@acme.example', '3.3.3.10'))
 					).toMatchObject({ code: 'rateLimited' });

@@ -27,8 +27,9 @@ prunes committed history (about 256 revisions per row by default).
   to see a known revision with its layers, take its instant `at` from
   `bolt.history(model, id, { at: { revision } })`, then read
   `query({ <model>: { where: { id: { eq: id } }, asOf: at } })`. Server caller contexts read a prior
-  state the same way with a root `asOf` instant; they do not expose `ctx.history`. Reads are
-  masked by the reader's current `history` grant; a deleted record's history stays visible to
+  state the same way with a root `asOf` instant; they do not expose `ctx.history`. A revision
+  shows the root fields of the output the read names (`output`, `default` when absent), scoped by
+  the reader's current `history` grant; a deleted record's history stays visible to
   `read: true` holders and administrators until pruned or erased.
 - **Per-record restore.** Pages preview with `bolt.restore.preview(model, id, revision)` and
   apply with `bolt.restore.run(model, id, revision, currentRevision)`. A restore is a guarded
@@ -45,7 +46,7 @@ prunes committed history (about 256 revisions per row by default).
 
 ## Administrator audit
 
-Settings → Audit is administrator-only. It queries the host's audit facility (VictoriaLogs in Colony) using
+The command center's Audit is administrator-only. It queries the host's audit facility (VictoriaLogs in Colony) using
 server-side text, actor, time, operation, status and record filters with bounded cursor pages.
 The Table lists summaries; opening an event fetches its full payload. The host binds workspace
 and environment scope. An unavailable backend is an error, never an empty result.
@@ -62,7 +63,7 @@ scheduled cleanup then uses permanent purge. Demo reset purges immediately throu
 ## Telemetry
 
 Operational events (decisions made, runs, delivery, refusals) are the workspace's runtime log, held by the host's
-log store, not a model: Studio's runtime log and the agent's `logs` tool read it, for administrators. History
+log store, not a model: the command center's Logs and the agent's `logs` tool read it, for administrators. History
 says what a row _was_; events say what the platform _did_.
 
 ## Live data and the browser

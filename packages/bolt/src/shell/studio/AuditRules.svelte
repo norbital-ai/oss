@@ -1,5 +1,5 @@
 <!--
-	Settings → Audit rules (§5 "Audit: rules are an organization's data"), an administrator's: every rule grouped by
+	Studio → Audit rules (§5 "Audit: rules are an organization's data"), an administrator's: every rule grouped by
 	pack with its summary, principles, rationale and its bad and good examples as code, a state per rule (error, hint,
 	off), the organization's path scopes and its own rules. Edits are a draft: Save stores it over the revision it read
 	(the host compiles every own rule first and answers the compiler's message if one fails), Try audits the head with
@@ -95,7 +95,7 @@
 		<Spinner class="size-3" />{t('Reading the audit rules…')}
 	</p>
 {:else}
-	<Scroll name={t('Audit rules')} class="h-full">
+	<Scroll name={t('Audit rules')} size="fill">
 		<Stack gap="lg" class="p-4 sm:p-6" data-audit-rules>
 			<Cluster gap="sm" align="start" justify="between">
 				<Stack gap="xs" class="min-w-0">

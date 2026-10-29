@@ -19,7 +19,7 @@ const Precision = Schema.Literals(['year', 'month', 'week', 'day', 'hour', 'minu
 /** What every kind takes: `was` names the field it renames (a migration hint). */
 const common = {
 	optional: Bool,
-	default: Schema.optionalKey(Schema.Unknown),
+	default: Schema.optionalKey(Schema.Json),
 	unique: Bool,
 	label: Str,
 	help: Str,

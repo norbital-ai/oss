@@ -1,9 +1,12 @@
 // Rate limits (rule 38): fixed windows counted first in the serving cell's memory, persisted by acts as a piece of their
-// one statement (`bolt_rate`), and loaded in one read when a cell takes a tenant. Client addresses are resolved through
-// the trusted-proxy list; IPv6 counts by its /64; an address never reaches a bucket key in plain text.
+// one statement (`bolt_rate`), and loaded in one read when a cell takes a tenant (`OPEN_WINDOWS_SQL`). Client addresses
+// are resolved through the trusted-proxy list; IPv6 counts by its /64; an address never reaches a bucket key in plain text.
+// Limits charge requests (HTTP acts, reads, uploads, agent posts, sign-in, envoy traffic) and an automation's manual starts
+// (its own `limit`, callables/index.ts); cron, webhook and model effect runs and run bodies' acts are never limited.
+import { Schema } from 'effect';
 import type { Json } from '../../decl/values.ts';
 import { hmacSha256, toBase64url } from '../crypto.ts';
-import type { Authority, LimitRule } from '../contracts.ts';
+import type { Authority } from '../contracts.ts';
 
 import { duration } from '../runs/time.ts';
 
@@ -17,40 +20,114 @@ export function parseRate(rate: string): { limit: number; windowMs: number } {
 	return { limit: Number(n), windowMs: duration(/^\d/.test(unit) ? unit : `1${unit}`) };
 }
 const windowStart = (nowMs: number, windowMs: number) => nowMs - (nowMs % windowMs);
-const id = (c: Charge, start: number) => `${c.rule}\u0000${c.bucket}\u0000${start}`;
+/**
+ * A bucket's key within its window: a 53-bit hash (cyrb53) of `rule` and `bucket`, so a bucket costs one number however
+ * long its names. At 10 000 open buckets a collision is ~1 in 10^8; it would only share two buckets' counts.
+ */
+const id = (rule: string, bucket: string): number => {
+	let h1 = 0xdeadbeef,
+		h2 = 0x41c6ce57;
+	const mix = (c: number) => {
+		h1 = Math.imul(h1 ^ c, 2654435761);
+		h2 = Math.imul(h2 ^ c, 1597334677);
+	};
+	for (let i = 0; i < rule.length; i++) mix(rule.charCodeAt(i));
+	mix(0);
+	for (let i = 0; i < bucket.length; i++) mix(bucket.charCodeAt(i));
+	h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909);
+	h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909);
+	return 4294967296 * (2097151 & h2) + (h1 >>> 0);
+};
+/** Seconds until the last of these windows resets: a persisted refusal's `Retry-After`. */
+export const resetAfter = (charges: readonly Charge[], nowMs: number): number =>
+	Math.max(
+		1,
+		...charges.map((c) => Math.ceil((windowStart(nowMs, c.windowMs) + c.windowMs - nowMs) / 1000))
+	);
+const DAY = 86_400_000;
 
-/** One tenant's open windows in one cell. At most `max` buckets; the least recently used is evicted (rule 72). */
+/**
+ * One tenant's open windows in one cell, at most `max` buckets (rule 72). Buckets group by the instant their window
+ * starts, each a number key and a small-integer count; a hit only increments. When full, every group whose windows all
+ * ended is dropped, then the oldest buckets until half remain, so eviction is amortized O(1). An evicted bucket restarts
+ * at 0.
+ */
 export class RateWindows {
-	private readonly counts = new Map<string, number>();
+	/** window start → the latest end among its buckets, and each bucket's count */
+	private readonly windows = new Map<number, { end: number; counts: Map<number, number> }>();
+	private count = 0;
 	private readonly max: number;
 	constructor(max = 10_000) {
 		this.max = max;
+	}
+	get size(): number {
+		return this.count;
+	}
+	private add(start: number, end: number, k: number, n: number, nowMs: number): number {
+		let window = this.windows.get(start);
+		const prior = window?.counts.get(k);
+		if (prior === undefined) {
+			if (this.count >= this.max) {
+				this.evict(nowMs);
+				window = this.windows.get(start);
+			}
+			this.count += 1;
+		}
+		if (window === undefined) {
+			window = { end, counts: new Map() };
+			this.windows.set(start, window);
+		} else if (end > window.end) window.end = end;
+		const next = (prior ?? 0) + n;
+		window.counts.set(k, next);
+		return next;
 	}
 	/** Increments every bucket, then refuses if any is over: refusals count (rule 38). */
 	charge(charges: readonly Charge[], nowMs: number): RateVerdict {
 		let retryAfter = 0;
 		for (const c of charges) {
 			const start = windowStart(nowMs, c.windowMs),
-				k = id(c, start);
-			const n = (this.counts.get(k) ?? 0) + 1;
-			this.counts.delete(k);
-			this.counts.set(k, n);
-			if (n > c.limit)
-				retryAfter = Math.max(retryAfter, Math.ceil((start + c.windowMs - nowMs) / 1000));
+				end = start + c.windowMs;
+			if (this.add(start, end, id(c.rule, c.bucket), 1, nowMs) > c.limit)
+				retryAfter = Math.max(retryAfter, Math.ceil((end - nowMs) / 1000));
 		}
-		while (this.counts.size > this.max) this.counts.delete(this.counts.keys().next().value!);
 		return retryAfter > 0 ? { ok: false, retryAfter } : { ok: true };
 	}
-	/** A cell taking a tenant: persisted counts of open windows. An evicted bucket restarts here too. */
-	load(rows: readonly { rule: string; bucket: string; window_start: string; n: number }[]): void {
+	private evict(nowMs: number): void {
+		for (const [start, window] of this.windows)
+			if (window.end <= nowMs) {
+				this.count -= window.counts.size;
+				this.windows.delete(start);
+			}
+		for (const start of [...this.windows.keys()].sort((a, b) => a - b)) {
+			const counts = this.windows.get(start)!.counts;
+			for (const k of counts.keys()) {
+				if (this.count <= this.max / 2) return;
+				counts.delete(k);
+				this.count -= 1;
+			}
+			this.windows.delete(start);
+		}
+	}
+	/** A cell taking a tenant: persisted counts of open windows (`OPEN_WINDOWS_SQL`). */
+	load(rows: readonly (typeof OpenWindow.Type)[], nowMs: number): void {
 		for (const r of rows) {
-			const k = `${r.rule}\u0000${r.bucket}\u0000${Date.parse(r.window_start)}`;
-			this.counts.set(k, Math.max(this.counts.get(k) ?? 0, Number(r.n)));
+			if (this.count >= this.max) return;
+			const k = id(r.rule, r.bucket),
+				prior = this.windows.get(r.start)?.counts.get(k) ?? 0;
+			// a window's length is not stored: it ends within a day, and its next charge sets the real end
+			if (r.n > prior) this.add(r.start, r.start + DAY, k, r.n - prior, nowMs);
 		}
 	}
 }
-/** The one read that loads a tenant's open windows (longest window a limit declares: a day). */
-export const OPEN_WINDOWS_SQL = `SELECT rule, bucket, window_start, n FROM bolt_rate WHERE window_start > now() - interval '1 day'`;
+/** One row of `OPEN_WINDOWS_SQL`. */
+export const OpenWindow = Schema.Struct({
+	rule: Schema.String,
+	bucket: Schema.String,
+	start: Schema.Number,
+	n: Schema.Number
+});
+/** The one read that loads a tenant's open windows (longest window a limit declares: a day), newest first. */
+export const OPEN_WINDOWS_SQL = `SELECT rule, bucket, (extract(epoch FROM window_start) * 1000)::float8 AS start, n FROM bolt_rate WHERE window_start > now() - interval '1 day' ORDER BY window_start DESC LIMIT 10000`;
 
 /**
  * The persisted piece of an act's statement: CTE `rate` upserts every bucket and returns only the ones still under
@@ -178,7 +255,7 @@ export function chargesFor(
 	who: Who
 ): Charge[] {
 	const out: Charge[] = [];
-	for (const rule of auth.limits as readonly LimitRule[]) {
+	for (const rule of auth.limits) {
 		if (!kinds.includes(rule.key)) continue;
 		const bucket = who[rule.per];
 		if (bucket === undefined) continue;

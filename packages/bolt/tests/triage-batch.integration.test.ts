@@ -8,7 +8,7 @@ import { decodeProjectedManifest } from '../src/engine/manifest.ts';
 import type { AiRequest, AiResponse } from '../src/engine/contracts.ts';
 import type { DecisionAnswer } from '../src/engine/decisions/index.ts';
 import { TRIAGE_DEBOUNCE } from '../src/engine/agent/triage.ts';
-import { TestWorkspace, type TestOptions } from '../src/test/index.ts';
+import { TestWorkspace, type TestOptions } from '../../bolt-cli/src/test/index.ts';
 
 const say = (text: string) => (): AiResponse => ({
 	content: text,

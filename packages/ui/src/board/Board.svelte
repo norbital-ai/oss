@@ -7,6 +7,7 @@
 		Page,
 		RecordFieldOf,
 		RowOf,
+		Values,
 		WhereOf
 	} from '../model/types.js';
 	import type { Json } from '../client/contract.js';
@@ -52,7 +53,7 @@
 
 <script lang="ts" generics="C extends ModelKey">
 	import { formatValue as show } from '../kinds/kind.js';
-	import { Effect, Schedule, Stream } from 'effect';
+	import { Effect, Predicate, Schedule, Stream } from 'effect';
 	import { SvelteMap, SvelteSet } from 'svelte/reactivity';
 	import { encodeWire } from '@norbital-ai/std/wire';
 	import { fork } from '../effect/index.js';
@@ -72,7 +73,6 @@
 	import { and } from '../filter/scope.js';
 	import { COUNT_EVERY_MS } from '../read/paging.js';
 	import { flat } from '../read/aggregate.js';
-	import { isRow, objectsOf, rowsOf } from '../read/results.js';
 	import { label, lowerLead, msg } from '../text/messages.js';
 	import { listRequest } from '../relations/select.js';
 	import { pageOf, READ_LIMIT, requestJson } from '../read/request.js';
@@ -182,7 +182,7 @@
 						)
 					)
 				)
-				.pipe(Effect.map((answer) => pageOf(answer, of)))
+				.pipe(Effect.map((answer) => pageOf(answer, of)?.rows ?? []))
 	});
 
 	// lane values and counts: one aggregate by `by` (the one-shot count rule 7 applies per lane)
@@ -192,13 +192,12 @@
 		const model = of,
 			field = by,
 			where = scope;
-		let cached: unknown,
-			first = true;
+		let cached: Page<Values> | undefined;
 		const read = Effect.suspend(() => {
-			if (!first && !countsInvalid) return Effect.succeed(cached);
+			if (cached !== undefined && !countsInvalid) return Effect.succeed(cached);
 			const revision = countsRevision;
 			return bolt
-				.aggregate(model, {
+				.aggregate<Page<Values>>(model, {
 					by: [field],
 					count: true,
 					all: true,
@@ -208,7 +207,6 @@
 					Effect.tap((answer) =>
 						Effect.sync(() => {
 							cached = answer;
-							first = false;
 							countsInvalid = revision !== countsRevision;
 						})
 					)
@@ -227,7 +225,7 @@
 		>
 	>(() => {
 		if (countsRead.state.kind !== 'ready') return countsRead.state;
-		const rows = objectsOf(countsRead.state.value).map(flat);
+		const rows = countsRead.state.value.rows.map(flat);
 		const counts = new Map(
 			rows.map((row) => [JSON.stringify(row[by] ?? null), Number(String(row['count'] ?? 0))])
 		);
@@ -237,7 +235,7 @@
 			value: import('@norbital-ai/std/kind').Value;
 			label: string;
 			where?: Json;
-		} => isRow(lane) && 'value' in lane && typeof lane['label'] === 'string';
+		} => Predicate.isObject(lane) && 'value' in lane && typeof lane['label'] === 'string';
 		const list =
 			lanes === undefined
 				? rows.map((row) => ({ value: row[by] ?? null, label: '' }))
@@ -263,7 +261,7 @@
 		search === '' &&
 			found.kind === 'ready' &&
 			found.value.every((lane) => lane.count !== null) &&
-			!lanes?.some((lane) => isRow(lane) && lane['where'] !== undefined)
+			!lanes?.some((lane) => Predicate.isObject(lane) && lane['where'] !== undefined)
 			? found.value.reduce((total, lane) => total + (lane.count ?? 0), 0)
 			: null
 	);
@@ -303,7 +301,7 @@
 						Effect.sync(() => {
 							if (revision !== selectionRevision || current !== selectionScope || queryText !== q)
 								return;
-							for (const row of rowsOf(pageOf(answer, of)))
+							for (const row of pageOf(answer, of)?.rows ?? [])
 								if (recordId(row.id)) selected.add(row.id);
 						})
 					),

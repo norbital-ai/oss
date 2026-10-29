@@ -331,6 +331,7 @@ const lift = (call: Call, raw: unknown): unknown => {
 				target: raw['row']
 			};
 		case 'automation':
+		case 'effect':
 			return {
 				...clock,
 				...actor,
@@ -338,6 +339,8 @@ const lift = (call: Call, raw: unknown): unknown => {
 				...writes,
 				transaction,
 				cause: raw['cause'],
+				// an automation run's id and trigger; an effect has none
+				...(raw['run'] === undefined ? {} : { run: raw['run'] }),
 				send: cross('send'),
 				progress: cross('progress'),
 				request: cross('request', 'facility'),

@@ -10,12 +10,12 @@ import { Context, Effect, Layer, Result, Schema } from 'effect';
 import { Convert, Files } from '../src/engine/ports.ts';
 import { decodeProjectedManifest } from '../src/engine/manifest.ts';
 import { actReply, routeFixture } from './support/route-fixture.ts';
-import { program } from '../src/test/guest.ts';
+import { program } from '../../bolt-cli/src/test/guest.ts';
 import { service } from '../../../services/convert/src/server.ts';
 import { ConversionFailed } from '../../../services/convert/src/convert.ts';
 import type { Json } from '../src/decl/values.ts';
 import { documentConverter } from '../src/engine/convert.ts';
-import { TestWorkspace } from '../src/test/index.ts';
+import { TestWorkspace } from '../../bolt-cli/src/test/index.ts';
 
 const manifest = Result.getOrThrow(
 	decodeProjectedManifest({
@@ -45,7 +45,7 @@ const manifest = Result.getOrThrow(
 		automations: {
 			make: {
 				description: 'Converts a document',
-				runAs: ['ops'],
+				policies: ['ops'],
 				input: { options: { kind: 'json' } }
 			}
 		}
@@ -114,7 +114,10 @@ const workspace = (convert?: Convert['Service'], reference?: Uint8Array) =>
 					input: {
 						automation: 'make',
 						input: {
-							options: { ...options, ...(withReference && ref !== undefined ? { reference: ref } : {}) }
+							options: {
+								...options,
+								...(withReference && ref !== undefined ? { reference: ref } : {})
+							}
 						},
 						id
 					},
@@ -138,7 +141,10 @@ describe('ctx.convert.document', () => {
 				Effect.gen(function* () {
 					const calls: Call[] = [];
 					const letterhead = new Uint8Array([80, 75, 3, 4, 1, 2, 3]);
-					const { t, files, make } = yield* workspace(fake(['pdf', 'docx', 'pptx'], calls), letterhead);
+					const { t, files, make } = yield* workspace(
+						fake(['pdf', 'docx', 'pptx'], calls),
+						letterhead
+					);
 					const { run, output } = yield* make({ to: 'docx' }, true);
 					expect(run).toMatchObject({ state: 'succeeded', error: null });
 					expect(calls).toHaveLength(1);

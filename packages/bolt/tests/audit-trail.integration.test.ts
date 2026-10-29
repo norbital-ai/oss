@@ -7,7 +7,7 @@ import { recoverAudit } from '../src/engine/audit-operation.ts';
 import { pruneHistory, readHistory } from '../src/engine/query/history.ts';
 import { applyPlan, plan, readApplied } from '../src/engine/schema/plan.ts';
 import { Writes } from '../src/engine/services.ts';
-import { TestWorkspace, memoryAudit } from '../src/test/index.ts';
+import { TestWorkspace, memoryAudit } from '../../bolt-cli/src/test/index.ts';
 import type { AuditPort } from '../src/protocol/audit.ts';
 import { layered, type EngineManifest } from '../src/engine/manifest.ts';
 import { manifest as base } from './write-fixture.ts';
@@ -405,6 +405,30 @@ it.live('committed writes recover complete external payloads after terminal appe
 			)(updated.payload);
 			expect(image.change.old).toEqual({ title: original, revision: 1 });
 			expect(image.change.new).toEqual({ title: 'Updated', revision: 2 });
+		})
+	)
+);
+
+it.live("a bulk write's request rides on its terminal event, not on each row event", () =>
+	Effect.scoped(
+		Effect.gen(function* () {
+			const store = memoryAudit();
+			const f = yield* fixture(store.port);
+			const has = (payload: unknown) =>
+				typeof payload === 'object' && payload !== null && 'request' in payload;
+			const rowEvents = () =>
+				[...store.records.values()].filter((event) => event.id.includes(':row:'));
+			expect(yield* f.act('create', [{ title: 'One' }])).toMatchObject({
+				outcome: { kind: 'committed' }
+			});
+			expect(rowEvents().map((event) => has(event.payload))).toEqual([true]);
+			store.records.clear();
+			expect(
+				yield* f.act('create', [{ title: 'A' }, { title: 'B' }, { title: 'C' }])
+			).toMatchObject({ outcome: { kind: 'committed' } });
+			expect(rowEvents().map((event) => has(event.payload))).toEqual([false, false, false]);
+			const terminal = [...store.records.values()].find((event) => event.id.endsWith(':terminal'));
+			expect(has(terminal?.payload)).toBe(true);
 		})
 	)
 );

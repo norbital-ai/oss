@@ -1,9 +1,10 @@
 import type { Json } from '@norbital-ai/std/wire';
-import { isRow } from '../read/results.js';
+import { Predicate } from 'effect';
 /** `and` of the author's scope and the viewer's clauses; the viewer never widens the author's `where` (final-ui rule 6). */
 export function and(...parts: readonly (Json | undefined)[]): Json | undefined {
 	const list = parts.filter(
-		(p): p is Json => p !== undefined && p !== null && !(isRow(p) && Object.keys(p).length === 0)
+		(p): p is Json =>
+			p !== undefined && p !== null && !(Predicate.isObject(p) && Object.keys(p).length === 0)
 	);
 	return list.length === 0 ? undefined : list.length === 1 ? list[0] : { and: list };
 }

@@ -30,6 +30,7 @@ export const customers = model('customers', {
 	},
 	search: { text: ['name'] },
 	read: 'all',
+	outputs: { directory: { customers: { fields: ['name', 'tier'] } } },
 	create: {
 		columns: { customers: ['name', 'email', 'tier'] },
 		filled: { customers: ['name'] },
@@ -129,13 +130,18 @@ export const orders = model('orders', {
 		'orders.customer': { fields: ['name', 'tier'] },
 		'orders.lines': { fields: 'all' }
 	},
+	outputs: {
+		logistics: { orders: { fields: ['number', 'status', 'customer'] }, 'orders.lines': { fields: ['item', 'qty'] } }
+	},
 	create: {
 		columns: { orders: ['customer', 'note', 'due'], 'orders.lines': ['item', 'qty', 'price'] },
 		transform: function* (rows, ctx) {
-			const known = yield* ctx.db.query({ customers: {
-				where: { id: { in: rows.map((r) => r.customer) } },
-				fields: ['tier']
-			} });
+			const known = yield* ctx.db.query({
+				customers: {
+					where: { id: { in: rows.map((r) => r.customer) } },
+					fields: ['tier']
+				}
+			});
 			const at = rows.findIndex((r) => !known.customers.rows.some((c) => c.id === r.customer));
 			if (at >= 0) return yield* ctx.refuse('Unknown customer.', { field: 'customer', row: at });
 			return rows.map((r) => ({ ...r, placed_at: ctx.now }));
@@ -162,10 +168,12 @@ export const orders = model('orders', {
 	},
 	notify: function* (event, ctx) {
 		if (event.kind !== 'write' || event.action !== 'create') return [];
-		const buyers = yield* ctx.db.query({ customers: {
-			where: { id: { in: event.records.map((o) => o.customer) } },
-			fields: ['name']
-		} });
+		const buyers = yield* ctx.db.query({
+			customers: {
+				where: { id: { in: event.records.map((o) => o.customer) } },
+				fields: ['name']
+			}
+		});
 		return event.records.map((o): Notice => ({
 			title: `New order ${o.number}`,
 			description: buyers.customers.rows.find((c) => c.id === o.customer)?.name ?? '',
@@ -174,6 +182,26 @@ export const orders = model('orders', {
 			attachments: [{ document: { html: `<h1>${o.number}</h1>` }, to: 'pdf', name: 'order.pdf' }],
 			link: { model: 'orders', id: o.id }
 		}));
+	},
+	effect: {
+		created: function* (rows, ctx) {
+			const first: string | undefined = rows[0]?.number;
+			const actor: 'member' | 'envoy' | 'visitor' | 'apiKey' | 'system' = ctx.actor.kind;
+			if (first !== undefined && actor === 'member') yield* ctx.schedule('nightly', {});
+		},
+		updated: function* (changes, ctx) {
+			const moved = changes.filter(({ before, after }) => before.status !== after.status);
+			if (moved.length > 0)
+				yield* ctx.act(
+					'orders.update',
+					moved.map(({ after }) => ({ target: after.id, set: { note: 'moved' } }))
+				);
+		},
+		deleted: function* (rows, ctx) {
+			yield* ctx.notify(
+				rows.map((o) => ({ title: `Order ${o.number} removed`, to: [{ team: 'finance' }] }))
+			);
+		}
 	},
 	syncs: {
 		// one way out: an ordered order is submitted to the ledger
@@ -210,10 +238,12 @@ export const orders = model('orders', {
 			},
 			context: { since: { kind: 'date' } },
 			read: function* ({ records, context }, ctx) {
-				const known = yield* ctx.db.query({ customers: {
-					where: { name: { in: records.map((r) => r.customer) } },
-					fields: ['name']
-				} });
+				const known = yield* ctx.db.query({
+					customers: {
+						where: { name: { in: records.map((r) => r.customer) } },
+						fields: ['name']
+					}
+				});
 				const idOf = (name: string) => known.customers.rows.find((c) => c.name === name)?.id;
 				return {
 					rows: records.flatMap((r) => {
@@ -231,10 +261,12 @@ export const orders = model('orders', {
 				};
 			},
 			write: function* ({ context }, ctx) {
-				const open = yield* ctx.db.query({ orders: {
-					where: { due: { gte: context.since } },
-					fields: ['customer', 'note']
-				} });
+				const open = yield* ctx.db.query({
+					orders: {
+						where: { due: { gte: context.since } },
+						fields: ['customer', 'note']
+					}
+				});
 				return open.orders.rows.map((o) => ({ customer: String(o.customer), note: o.note }));
 			}
 		}
@@ -349,6 +381,7 @@ export const sites = model('sites', {
 	// a lock is a predicate over the model's own fields
 	locked: { zone: { isNull: false } },
 	read: { sites: { fields: ['name', 'location', 'customer', 'open', 'rating', 'checklist'] } },
+	outputs: { summary: { sites: { fields: ['name', 'open'] } } },
 	update: { columns: { sites: ['name', 'location'] } }
 });
 

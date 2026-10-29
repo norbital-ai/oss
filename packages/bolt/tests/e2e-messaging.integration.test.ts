@@ -7,12 +7,12 @@ import { Context, Effect, Exit, Layer, Predicate, Scope, Stream } from 'effect';
 import { Ai } from '../src/engine/ports.ts';
 import { Port } from '../src/engine/port.ts';
 import { Conversations } from '../src/engine/services.ts';
-import { program } from '../src/test/guest.ts';
+import { program } from '../../bolt-cli/src/test/guest.ts';
 import { actReply, routeFixture } from './support/route-fixture.ts';
 import type { Json } from '../src/decl/values.ts';
 import type { AiResponse, ActOutcome as Outcome } from '../src/engine/contracts.ts';
 import type { EngineManifest } from '../src/engine/manifest.ts';
-import { TestWorkspace, respondSystem1 } from '../src/test/index.ts'; // hook:decisions
+import { TestWorkspace, respondSystem1 } from '../../bolt-cli/src/test/index.ts'; // hook:decisions
 
 const present = <A>(value: A | null | undefined): A => {
 	if (value === null || value === undefined) throw new Error('Missing fixture value');
@@ -217,34 +217,38 @@ const ADA = 'u-ada',
 // One workspace for the file; each case reads its own rows.
 const fileScope = Effect.runSync(Scope.make());
 afterAll(() => Effect.runPromise(Scope.close(fileScope, Exit.void)));
-const setup = Effect.runSync(Effect.cached(Effect.gen(function* () {
-	const ai = scriptedAi();
-	const context = yield* Layer.build(
-		TestWorkspace.layer({
-			manifest,
-			guest: yield* guest,
-			ports: ai.layer,
-			host: { envoys: { workspace: 'Acme Field' } }
-		})
-	);
-	const t = Context.get(context, TestWorkspace),
-		conversations = Context.get(context, Conversations),
-		route = yield* routeFixture(context);
-	yield* t.db.write({
-		text: `INSERT INTO sys_user (id, email, name, admin, team, phone) VALUES
+const setup = Effect.runSync(
+	Effect.cached(
+		Effect.gen(function* () {
+			const ai = scriptedAi();
+			const context = yield* Layer.build(
+				TestWorkspace.layer({
+					manifest,
+					guest: yield* guest,
+					ports: ai.layer,
+					host: { envoys: { workspace: 'Acme Field' } }
+				})
+			);
+			const t = Context.get(context, TestWorkspace),
+				conversations = Context.get(context, Conversations),
+				route = yield* routeFixture(context);
+			yield* t.db.write({
+				text: `INSERT INTO sys_user (id, email, name, admin, team, phone) VALUES
 			('${ADA}', 'ada@ws.example', 'Ada', true, NULL, '+65 9123 4567'),
 			('${CAL}', 'cal@ws.example', 'Cal', false, 't-con', '6598765432')`,
-		params: []
-	});
-	const ok = (o: Outcome) => {
-		if (o.kind !== 'committed') throw new Error(JSON.stringify(o));
-		return present(o.records[0]).id;
-	};
-	/** What went out through one instance's link. */
-	const sent = (instance: string) => t.fakes.links.sent.filter((s) => s.instance === instance);
+				params: []
+			});
+			const ok = (o: Outcome) => {
+				if (o.kind !== 'committed') throw new Error(JSON.stringify(o));
+				return present(o.records[0]).id;
+			};
+			/** What went out through one instance's link. */
+			const sent = (instance: string) => t.fakes.links.sent.filter((s) => s.instance === instance);
 
-	return { t, conversations, route, sent, ok };
-}).pipe(Scope.provide(fileScope))));
+			return { t, conversations, route, sent, ok };
+		}).pipe(Scope.provide(fileScope))
+	)
+);
 
 describe('connections through the engine entry (rule 61)', () => {
 	it.live(

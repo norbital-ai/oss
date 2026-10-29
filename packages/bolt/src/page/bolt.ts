@@ -6,6 +6,7 @@ import {
 	Effect,
 	FiberMap,
 	Option,
+	Predicate,
 	Queue,
 	Schedule,
 	Schema,
@@ -46,7 +47,14 @@ import {
 	type WireRead
 } from '../protocol/wire.ts';
 import { ActReply, LiveReply, QReply, WireError } from '../protocol/schema.ts';
-import { liveStream, pageSignals, type EventSourceLike, type Signals } from './stream.ts';
+import {
+	liveStream,
+	pageSignals,
+	shareable,
+	sharedSource,
+	type EventSourceLike,
+	type Signals
+} from './stream.ts';
 import { browserCatalog, type BrowserCatalog } from '../protocol/catalog.ts';
 import { decodeView, type Catalog } from '@norbital-ai/store';
 import { storeSync } from '../protocol/errors.ts';
@@ -170,7 +178,7 @@ function settled(
 			return Effect.fail(new ActUnknown({ invocation: outcome.invocation }));
 	}
 }
-const isRow = (v: unknown): v is Row => typeof v === 'object' && v !== null && !Array.isArray(v);
+const isRow = (v: Json | undefined): v is Row => Predicate.isObject(v);
 const list = (value: Json): readonly Json[] => (jsonArray(value) ? value : [value]);
 const RELATION_OPS = ['create', 'update', 'delete', 'upsert', 'link', 'unlink'];
 const PAINTED = new Set(['create', 'update', 'delete']);
@@ -208,7 +216,13 @@ const rootsOf = (read: WireRead): readonly string[] => {
 function paintOf(model: string, verb: string, input: Json, key: string): Paint {
 	const rows = (v: Json, each: (rows: readonly Row[]) => readonly Row[]): Json => {
 		const values = isRow(v) ? v['rows'] : undefined;
-		return isRow(v) && jsonArray(values) && values.every(isRow) ? { ...v, rows: each(values) } : v;
+		if (!isRow(v) || !jsonArray(values) || !values.every(isRow)) return v;
+		const painted = each(values);
+		const total = v['total'];
+		// a painted row in or out of the page moves its `total` with it
+		return typeof total === 'number'
+			? { ...v, rows: painted, total: total + painted.length - values.length }
+			: { ...v, rows: painted };
 	};
 	if (verb === 'create') {
 		const created = list(input).map((x, i): Row => ({
@@ -218,7 +232,7 @@ function paintOf(model: string, verb: string, input: Json, key: string): Paint {
 		return { model, apply: (v) => rows(v, (rs) => [...created, ...rs]) };
 	}
 	if (verb === 'delete') {
-		const gone = new Set(list((isRow(input) ? input['target'] : null) as Json).map(String));
+		const gone = new Set(list((isRow(input) ? input['target'] : null) ?? null).map(String));
 		return {
 			model,
 			apply: (v) => rows(v, (rs) => rs.filter((r) => !gone.has(String(r['id']))))
@@ -256,6 +270,10 @@ export const createBolt = (config: BoltConfig) =>
 		const grace = yield* FiberMap.make<string, void, never>();
 		const reconnects = yield* Queue.sliding<void>(1);
 		const status = yield* SubscriptionRef.make<SyncStatus>('idle');
+		const live = `${base}${PATHS.live}`;
+		// a page's own stream is shared with the browser's other tabs (`sharedSource`); a given `openStream` is not
+		const shared = config.openStream === undefined && shareable();
+		const tab = shared ? `${uuid()}:` : '';
 		let conn: string | null = null,
 			applied = 0,
 			n = 0,
@@ -462,11 +480,28 @@ export const createBolt = (config: BoltConfig) =>
 						return;
 				}
 			});
+		const open = () => new EventSource(live, { withCredentials: true });
+		// a shared connection outlives this tab's part in it: the tab's views are dropped from it, not left running
+		const leave = () => {
+			const drop = [...views.values()].filter((view) => view.registered).map((view) => view.id);
+			if (!shared || conn === null || drop.length === 0) return;
+			const body: LiveBody = { conn, drop };
+			void (config.fetch ?? fetch)(live, {
+				method: 'POST',
+				keepalive: true,
+				credentials: 'same-origin',
+				headers: { 'content-type': 'application/json' },
+				body: JSON.stringify(body)
+			}).catch(() => undefined);
+		};
+		if (shared) {
+			window.addEventListener('pagehide', leave);
+			yield* Effect.addFinalizer(() => Effect.sync(() => window.removeEventListener('pagehide', leave)));
+		}
 		const frames = yield* liveStream(
-			() =>
-				config.openStream?.(`${base}${PATHS.live}`) ??
-				new EventSource(`${base}${PATHS.live}`, { withCredentials: true }),
+			() => config.openStream?.(live) ?? (shared ? sharedSource(live, open) : open()),
 			Effect.gen(function* () {
+				leave();
 				conn = null;
 				generation++;
 				for (const view of views.values()) view.registered = false;
@@ -556,7 +591,7 @@ export const createBolt = (config: BoltConfig) =>
 					let view = [...views.values()].find((item) => item.key === key);
 					if (view === undefined) {
 						view = {
-							id: `v${++n}`,
+							id: `${tab}v${++n}`,
 							key,
 							read: query.read,
 							server: undefined,
@@ -730,8 +765,8 @@ export const createBolt = (config: BoltConfig) =>
 			);
 		return {
 			aggregate: <T = Row[]>(model: string, options: Wired) => q<T>('aggregate', [model, options]),
-			history: <T = Json>(model: string, id: string, options: { at?: Json } = {}) =>
-				q<T>('history', [model, id, ...(options.at === undefined ? [] : [options.at])]),
+			history: <T = Json>(model: string, id: string, options: { at?: Json; output?: string } = {}) =>
+				q<T>('history', [model, id, options]),
 			/** One read request: `query({ <root>: { … }, '<root>.<layer>': { … } })`, answered as a page per root. */
 			query: <T = Json>(request: Readonly<Record<string, Wired>>) => q<T>('query', [request]),
 			/** Internal stream edge for shell surfaces. Pages read Query properties directly. */

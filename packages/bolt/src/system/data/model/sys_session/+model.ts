@@ -10,7 +10,8 @@ export default model('sys_session', {
 		user: { kind: 'ref', to: 'sys_user', onDelete: 'cascade' },
 		/** The administrator previewing as `user`. */
 		impersonated_by: { kind: 'ref', to: 'sys_user', optional: true },
-		via: { kind: 'enum', values: ['code', 'invitation', 'signup', 'host'] },
+		/** How it began; `anonymous`: a visitor's anonymous user, held by the visitor cookie (30 days unused). */
+		via: { kind: 'enum', values: ['code', 'invitation', 'signup', 'host', 'anonymous'] },
 		created_at: { kind: 'instant' },
 		expires_at: { kind: 'instant' },
 		refreshed_at: { kind: 'instant' },

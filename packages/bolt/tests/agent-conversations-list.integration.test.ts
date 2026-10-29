@@ -9,7 +9,7 @@ import { decodeProjectedManifest } from '../src/engine/manifest.ts';
 import { AgentConversation } from '../src/protocol/schema.ts';
 import { conversationId } from '../src/engine/conversations/store.ts';
 import { shellApi } from '../src/shell/runtime.ts';
-import { TestWorkspace } from '../src/test/index.ts';
+import { TestWorkspace } from '../../bolt-cli/src/test/index.ts';
 
 const manifest = Result.getOrThrow(
 	decodeProjectedManifest({
@@ -43,7 +43,9 @@ const ORIGIN = 'http://cell';
 
 /** One workspace for the file: a public whatsapp envoy beside the in-app agent; no model runs (posts only queue). */
 const fixture = Effect.gen(function* () {
-	const context = yield* Layer.build(TestWorkspace.layer({ manifest, host: { publicUrl: ORIGIN } }));
+	const context = yield* Layer.build(
+		TestWorkspace.layer({ manifest, host: { publicUrl: ORIGIN } })
+	);
 	const t = Context.get(context, TestWorkspace),
 		agent = Context.get(context, Agents);
 	for (const id of ['ann', 'bob'])
@@ -91,7 +93,9 @@ const fixture = Effect.gen(function* () {
 	};
 });
 
-class Fixture extends Context.Service<Fixture, Effect.Success<typeof fixture>>()('test/ConversationsList') {}
+class Fixture extends Context.Service<Fixture, Effect.Success<typeof fixture>>()(
+	'test/ConversationsList'
+) {}
 
 layer(Layer.effect(Fixture, fixture))('the conversations read', (it) => {
 	it.effect(
@@ -107,7 +111,11 @@ layer(Layer.effect(Fixture, fixture))('the conversations read', (it) => {
 				});
 				s.t.clock.advance('1s');
 				const second = yield* s.agent.start({ owner: 'ann', title: 'Budget review' });
-				yield* s.agent.post({ conversation: second, as: { member: 'ann' }, text: 'numbers please' });
+				yield* s.agent.post({
+					conversation: second,
+					as: { member: 'ann' },
+					text: 'numbers please'
+				});
 				yield* s.agent.start({ owner: 'ann', parent: first, title: 'a sub-agent' }); // a child is never a root
 				const other = yield* s.agent.start({ owner: 'bob', title: 'Bob only' });
 				const rows = yield* s.list;
@@ -143,7 +151,14 @@ layer(Layer.effect(Fixture, fixture))('the conversations read', (it) => {
 					params: []
 				});
 				const ids = () =>
-					s.list.pipe(Effect.map((rows) => rows.map((r) => r.id).filter((id) => !own.includes(id)).sort()));
+					s.list.pipe(
+						Effect.map((rows) =>
+							rows
+								.map((r) => r.id)
+								.filter((id) => !own.includes(id))
+								.sort()
+						)
+					);
 				// staff read the public envoy's threads; a private envoy's only once they posted in it; no automations
 				expect(yield* ids()).toEqual([thread]);
 				yield* s.t.db.write({

@@ -1,5 +1,5 @@
+import { Predicate } from 'effect';
 import type { Row } from '../model/types.js';
-import { isRow } from '../read/results.js';
 import { valueAt } from '../cell/value.js';
 export const cellKey = (
 	row: import('@norbital-ai/std/kind').Value,
@@ -14,7 +14,7 @@ export function matrixCells(
 	const id = (
 		value: import('@norbital-ai/std/kind').Value | undefined
 	): import('@norbital-ai/std/kind').Value =>
-		isRow(value) && typeof value['id'] === 'string' ? value['id'] : (value ?? null);
+		Predicate.isObject(value) && typeof value['id'] === 'string' ? value['id'] : (value ?? null);
 	const out = new Map<string, Row[]>();
 	for (const it of items) {
 		const k = cellKey(id(it[rowField]), id(valueAt(it, colField)));

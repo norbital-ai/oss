@@ -6,7 +6,6 @@ import { PlainDate as plainDate } from '@norbital-ai/std/date';
 import type {
 	Id,
 	Insert,
-	Masked,
 	Patch,
 	PlainDate,
 	PlainTime,
@@ -58,7 +57,7 @@ is<Eq<ColumnValue<'orders' | 'notice_notes', 'note'>, string | null>>();
 is<Eq<Row<'orders'>['status'], 'draft' | 'submitted' | 'ordered'>>();
 is<Eq<Row<'orders'>['number'], string>>(); // seq with a pattern
 is<Eq<Row<'orders'>['total'], Decimal>>(); // sum roll-up
-is<Eq<Row<'orders'>['due_soon'], PlainDate | null | Masked>>(); // optional date propagates through computed SQL; masked: sales_rep's root layer omits it
+is<Eq<Row<'orders'>['due_soon'], PlainDate | null>>(); // optional date propagates through computed SQL
 is<Eq<ColumnValue<'customers', 'name_upper'>, string>>();
 is<Eq<ColumnValue<'customers', 'email_lower'>, string | null>>();
 is<Eq<ColumnValue<'customers', 'email_label'>, string>>();
@@ -67,9 +66,11 @@ is<Eq<ColumnValue<'customers', 'email_chain'>, string | null>>();
 is<Eq<Row<'orders'>['customer'], Id<'customers'>>>(); // inline ref field
 is<Eq<Row<'orders'>['owner'], Id<'sys_user'> | null>>();
 is<Eq<Row<'customers'>['tier'], 'basic' | 'gold'>>();
-is<Eq<Row<'customers'>['tags'], readonly string[] | null | Masked>>(); // masked: sales_rep reads name and tier
+is<Eq<Row<'customers'>['tags'], readonly string[] | null>>();
+// a named output's row holds that output's root fields only (no masks: a narrower shape is its own output)
+is<Eq<Exclude<keyof Row<'customers', 'directory'>, 'id' | 'revision' | 'created_at' | 'updated_at' | 'created_by' | 'updated_by' | '$sync' | '$approval'>, 'name' | 'tier'>>();
 is<Eq<Row<'sites'>['open'], { readonly from: PlainDate; readonly to: PlainDate | null }>>();
-is<Eq<Row<'sites'>['location'], { readonly lat: number; readonly lng: number } | null | Masked>>();
+is<Eq<Row<'sites'>['location'], { readonly lat: number; readonly lng: number } | null>>();
 is<
 	Eq<
 		keyof Row<'sites'>,
@@ -646,3 +647,16 @@ model('orders', {
 		}
 	}
 });
+
+// ── named read outputs: each a fixed layer map beside `read` (the `default` output) ──
+// prettier-ignore
+model('probe', { description: 'x', label: 'a', fields: { a: { kind: 'text' }, b: { kind: 'int' } }, read: 'all', outputs: { narrow: { probe: { fields: ['a'] } }, whole: 'all' } });
+// prettier-ignore
+// @ts-expect-error O1 `default` is the model's `read`, never a named output
+model('probe', { description: 'x', label: 'a', fields: { a: { kind: 'text' } }, read: 'all', outputs: { default: { probe: { fields: ['a'] } } } });
+// prettier-ignore
+// @ts-expect-error O2 an output field the model lacks
+model('probe', { description: 'x', label: 'a', fields: { a: { kind: 'text' } }, read: 'all', outputs: { narrow: { probe: { fields: ['zone'] } } } });
+// prettier-ignore
+// @ts-expect-error O3 outputs need the model's `read`
+model('probe', { description: 'x', label: 'a', fields: { a: { kind: 'text' } }, outputs: { narrow: { probe: { fields: ['a'] } } } });

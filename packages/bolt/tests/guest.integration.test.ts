@@ -6,7 +6,7 @@ import { TelemetryLive } from '../src/engine/guest/telemetry.ts';
 import { Logs } from '../src/engine/ports.ts';
 import { Port } from '../src/engine/port.ts';
 import { Guest, Telemetry, type Bridge, type InvocationEvents } from '../src/engine/services.ts';
-import { program } from '../src/test/guest.ts';
+import { program } from '../../bolt-cli/src/test/guest.ts';
 import { guestLayer } from './support/guest-fixture.ts';
 
 const invocation: Invocation = {

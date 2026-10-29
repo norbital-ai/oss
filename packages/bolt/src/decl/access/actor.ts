@@ -7,16 +7,18 @@ export type Handle = string;
 // ponytail: the platform automations named in §4.5 and §5.11.3; the runs area owns the closed list.
 /**
  * A platform automation a `system` actor can run as: notification delivery, a model's `notify` after a commit,
- * membership sync and embedding.
+ * membership sync, embedding and pure index backfill.
  */
 export type PlatformAutomation =
-	'notifications.deliver' | 'bolt.notify' | 'bolt.membership' | 'bolt.embed';
+	'notifications.deliver' | 'bolt.notify' | 'bolt.membership' | 'bolt.embed' | 'bolt.index';
 
 /**
  * Who a request runs as (§3.9), discriminated by `kind`: a `member` (with teams and admin), an `envoy` answering a sender on
  * the instance it is deployed on, a public `visitor` of an app, an `apiKey`, or the `system` running an automation, a
  * remote sync's read or write for one instance (`'<model>.sync.<sync>'`: the engine never sends a sync's own writes back
- * through it), or a platform run.
+ * through it), or a platform run. `system` is the one reserved identity of the platform's own work: an automation run is
+ * it, holding the automation's `policies` whoever started it (who did is the run's `trigger`, `ctx.run.trigger`), and
+ * its `requestor.*` operands name no member, party or team, so a requestor-scoped grant matches nothing.
  */
 export type Actor =
 	| {

@@ -25,7 +25,9 @@ export default model('sys_run', {
 		error: { kind: 'json', optional: true },
 		results: { kind: 'json', default: [] },
 		actor: { kind: 'text', optional: true },
-		starter: { kind: 'json', optional: true }
+		starter: { kind: 'json', optional: true },
+		// who or what started an automation run (`RunTrigger`); never its authority
+		trigger: { kind: 'json', optional: true }
 	},
 	table: { primary: 'text', indexes: [{ on: ['due_at'], where: { state: { eq: 'queued' } } }] },
 	read: 'all'

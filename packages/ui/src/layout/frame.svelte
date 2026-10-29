@@ -1,6 +1,6 @@
 <!--
 @component
-Crops media to a named aspect ratio (`square`, `portrait`, `landscape`, `widescreen`, `banner`).
+Crops media to a named aspect ratio (`square`, `portrait`, `landscape`, `widescreen`, `banner`). A crop is its own size: never squeezed.
 -->
 <script lang="ts" module>
 	import type { Snippet } from 'svelte';
@@ -12,8 +12,6 @@ Crops media to a named aspect ratio (`square`, `portrait`, `landscape`, `widescr
 	export interface FrameProps extends LayoutAttributes {
 		as?: LayoutElement;
 		ratio?: FrameRatio;
-		/** Allow this region to shrink when its parent is constrained. */
-		shrink?: boolean;
 		children: Snippet;
 	}
 </script>
@@ -25,7 +23,6 @@ Crops media to a named aspect ratio (`square`, `portrait`, `landscape`, `widescr
 		as = 'div',
 		ref = $bindable(null),
 		ratio = 'landscape',
-		shrink = true,
 		class: className,
 		children,
 		...restProps
@@ -43,9 +40,8 @@ Crops media to a named aspect ratio (`square`, `portrait`, `landscape`, `widescr
 	this={as}
 	bind:this={ref}
 	class={cn(
-		'flex min-w-0 items-center justify-center overflow-clip [&>img]:size-full [&>img]:object-cover [&>video]:size-full [&>video]:object-cover',
+		'flex min-w-0 flex-none items-center justify-center overflow-clip [&>img]:size-full [&>img]:object-cover [&>video]:size-full [&>video]:object-cover',
 		ratioClasses[ratio],
-		!shrink && 'shrink-0',
 		// The caller's class last: floors, layers and colours it names win; layout itself is props (doctor-enforced).
 		className
 	)}

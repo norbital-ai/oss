@@ -1,5 +1,5 @@
 // The docs corpus (§3.3.10, §7.3) over any loader of its JSON documents (one per namespace, one per authoring skill, plus
-// `index.json`, written by `src/cli/docs.ts`): `docs/index.ts` reads them from `build/docs/`; a cell's host serves them
+// `index.json`, written by `scripts/docs.ts`): `docs/index.ts` reads them from `build/docs/`; a cell's host serves them
 // through `Docs`.
 
 /** A property, prop or parameter field: its declared type as written, and its doc's first paragraph. */
@@ -30,7 +30,11 @@ export type DocNamespace = {
 	symbols: DocSymbol[];
 };
 /** One authoring skill compiled from `oss/skills/<name>/`: its `SKILL.md` and references, by relative path. */
-export type DocSkill = { name: string; description: string; files: { path: string; text: string }[] };
+export type DocSkill = {
+	name: string;
+	description: string;
+	files: { path: string; text: string }[];
+};
 /**
  * The combined index: every namespace (`reference` marks what a workspace author imports: bolt's root, `/client` and
  * `/test`, ui's authoring entries and std), and the reference symbols that still lack a summary (`namespace#name`).

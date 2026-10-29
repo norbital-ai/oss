@@ -1,8 +1,9 @@
 // The one read request (P3, decisions 1, 4, 7, 8): a page's `bolt.query`, an automation's or policy's `ctx.query` and the
-// agent's `read` tool send the same JSON layer map. Keys without a dot are roots (models with `read`); `'<root>.<rel>…'`
-// is one of that root's declared read layers, at most `LAYER_MAX_DEPTH` segments. `decodeReadRequest` refuses anything
-// but that JSON (an unknown option, a sixth level, `asOf`/`after` below a root, a function); `planReadRequest` checks the
-// paths against the declarations and groups them by root, implied parents filled in.
+// agent's `read` tool send the same JSON layer map. Keys without a dot are roots (models with `read`), each reading one
+// named output (`output`, `default` when absent); `'<root>.<rel>…'` is one of that output's declared read layers, at most
+// `LAYER_MAX_DEPTH` segments. `decodeReadRequest` refuses anything but that JSON (an unknown option, a sixth level,
+// `output`/`asOf`/`after` below a root, a function); `planReadRequest` checks the paths against the declarations and
+// groups them by root, implied parents filled in.
 import { Result, Schema } from 'effect';
 import { LAYER_MAX_DEPTH, type ExposureSpec } from '../decl/model.ts';
 
@@ -18,8 +19,10 @@ const Aggregate = Schema.Struct({
 	/** A field, a list of fields, or a calendar bucket (`{ month: 'issued_on' }`) on a root. */
 	by: Schema.optionalKey(Schema.Json)
 });
-/** One layer's value; `asOf` and `after` belong to a root only. `{}` reads every exposed field with the defaults. */
+/** One layer's value; `output`, `asOf` and `after` belong to a root only. `{}` reads every exposed field with the defaults. */
 export const LayerRequestSchema = Schema.Struct({
+	/** The root's named read output (`default` when absent): its fixed fields and layers. */
+	output: Schema.optionalKey(Schema.String),
 	where: Schema.optionalKey(Schema.JsonObject),
 	fields: Schema.optionalKey(Fields),
 	orderBy: Schema.optionalKey(Schema.Json),
@@ -44,8 +47,11 @@ const shape = (request: { readonly [path: string]: LayerRequestJson }): string |
 		if (!PATH.test(path))
 			return `'${path}' is no layer path: a model, then up to ${LAYER_MAX_DEPTH - 1} relations, dot-separated`;
 		const layer = request[path]!;
-		if (path.includes('.') && (layer.asOf !== undefined || layer.after !== undefined))
-			return `'${path}': asOf and after belong to a root`;
+		if (
+			path.includes('.') &&
+			(layer.output !== undefined || layer.asOf !== undefined || layer.after !== undefined)
+		)
+			return `'${path}': output, asOf and after belong to a root`;
 	}
 	return undefined;
 };
@@ -75,8 +81,9 @@ export type ReadPlan = {
 };
 /**
  * The request checked against the declarations (`exposures`, the built-in layer's included): each root is a model with
- * `read` other than a ledger, each path one its root declares. Naming `'orders.lines.product'` implies `'orders'` and
- * `'orders.lines'`. Authority, defaults and lowering are the host's (`ReadEngine`).
+ * `read` other than a ledger reading an output it declares, each path one that output declares. Naming
+ * `'orders.lines.product'` implies `'orders'` and `'orders.lines'`. Authority, defaults and lowering are the host's
+ * (`ReadEngine`).
  */
 export function planReadRequest(
 	request: ReadRequestJson,
@@ -86,11 +93,19 @@ export function planReadRequest(
 	for (const [path, layer] of Object.entries(request)) {
 		const segments = path.split('.'),
 			root = segments[0]!;
-		const read = exposures[root]?.read;
-		if (read === undefined || root === 'sys_run')
+		const spec = exposures[root];
+		if (spec === undefined || root === 'sys_run')
 			return Result.fail(`'${root}' is no read root: a root is a model with read`);
+		const output = request[root]?.output ?? 'default';
+		const read = output === 'default' ? spec.read : spec.outputs?.[output];
+		if (read === undefined)
+			return Result.fail(
+				`'${root}' declares no read output '${output}'; it declares: ${['default', ...Object.keys(spec.outputs ?? {})].join(', ')}`
+			);
 		if (!Object.hasOwn(read, path))
-			return Result.fail(`'${path}' is not a read layer ${root} declares`);
+			return Result.fail(
+				`'${path}' is not a read layer ${root}${output === 'default' ? '' : `'s ${output} output`} declares`
+			);
 		const layers = (plan[root] ??= {});
 		for (let i = 1; i < segments.length; i++) layers[segments.slice(0, i).join('.')] ??= {};
 		layers[path] = layer;

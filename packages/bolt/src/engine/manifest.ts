@@ -6,7 +6,6 @@
 // without its zone is `ManifestInvalid`. The accessors derive, once per manifest, what interiors recomputed and cast.
 // Runtime imports stay off `contracts.ts`: it re-exports this module.
 import { Predicate, Result, Schema } from 'effect';
-import type { Manifest } from '../compiler/load.ts';
 import type { TeamData, TeamEntries, SourceTeam } from '../decl/access/team.ts';
 import type { customField } from '../decl/custom-field.ts';
 import type { FieldKind } from '../decl/fields.ts';
@@ -18,6 +17,7 @@ import {
 	type ModelSpec
 } from '../decl/model.ts';
 import type { RelationshipSpec } from '../decl/names.ts';
+import type { Role } from '../decl/layout.ts';
 import type { EnvoySpec, mcp } from '../decl/runtime/agent.ts';
 import type { AppSpec, GroupSpec } from '../decl/runtime/app.ts';
 import type { AutomationSpec } from '../decl/runtime/automation.ts';
@@ -30,23 +30,17 @@ import { NEEDS, needsOf } from '../facilities/needs.ts';
 // ── parts without a decl type of their own: the literal as the manifest holds it ──
 /** A `history` (or identity read) scope: `true` or a `Where`. */
 const ScopeWhere = Schema.Union([Schema.Literal(true), Schema.JsonObject]);
-/** `{ where?, fields? }` of a `history` grant; a `Where` naming a model field of one of those names is told apart by `scopeObject`. */
-export const ScopeData = Schema.Struct({
-	where: Schema.optionalKey(ScopeWhere),
-	fields: Schema.optionalKey(Schema.Array(Schema.String))
-});
+/** `{ where }` of a `history` grant; a `Where` naming a model field `where` is told apart by `scopeObject`. */
+export const ScopeData = Schema.Struct({ where: Schema.optionalKey(ScopeWhere) });
 export type ScopeData = typeof ScopeData.Type;
 /** A `history` grant (or an identity model's `read`): `true`, a scope object or a bare `Where`. */
 const GrantArm = Schema.Union([Schema.Literal(true), ScopeData, Schema.JsonObject]);
 export type GrantArm = typeof GrantArm.Type;
-/** One read layer of a grant: its `where` and the `fields` it admits. */
-export const LayerGrant = Schema.Struct({
-	where: Schema.optionalKey(Schema.JsonObject),
-	fields: Schema.optionalKey(Schema.Array(Schema.String))
-});
+/** One read layer of a grant: its row filter. */
+export const LayerGrant = Schema.Struct({ where: Schema.optionalKey(Schema.JsonObject) });
 /**
- * A `read` grant: `true`, a layer map by read path, or (on an identity model, `sys_user`/`sys_invitation`) a bare
- * `Where` with the grant's `fields` beside it.
+ * A grant of one read output: `true`, a layer map by read path, or (on an identity model, `sys_user`/`sys_invitation`)
+ * a bare `Where`.
  */
 const ReadGrantData = Schema.Union([
 	Schema.Literal(true),
@@ -71,26 +65,34 @@ const DeleteGrantData = Schema.Union([
 	Schema.Struct({ check: Schema.optionalKey(Schema.Literal(true)) })
 ]);
 export type DeleteGrantData = typeof DeleteGrantData.Type;
-/** A policy's grant on one model, workspace-agnostic (the decl side is `Grant<C>`); `fields` is an identity grant's. */
+/** A policy's grant on one model, workspace-agnostic (the decl side is `Grant<C>`): `read` grants `default`, `outputs` named ones. */
 const GrantData = Schema.Struct({
 	read: Schema.optionalKey(ReadGrantData),
+	outputs: Schema.optionalKey(Schema.Record(Schema.String, ReadGrantData)),
 	history: Schema.optionalKey(GrantArm),
 	create: Schema.optionalKey(WriteGrantData),
 	update: Schema.optionalKey(WriteGrantData),
 	delete: Schema.optionalKey(DeleteGrantData),
-	fields: Schema.optionalKey(Schema.Array(Schema.String)),
 	moves: Schema.optionalKey(
 		Schema.Union([Schema.Literal('all'), Schema.Record(Schema.String, Schema.Array(Schema.String))])
 	)
 });
 export type GrantData = typeof GrantData.Type;
+/** One `limits` entry (rule 38): a bare rate counts per actor (an envoy key: per sender); a list applies every rule. */
+const LimitData = Schema.Union([
+	Schema.String,
+	Schema.Struct({ rate: Schema.String, per: Schema.Literals(['actor', 'ip', 'sender', 'subject']) })
+]);
+export type LimitData = typeof LimitData.Type;
 /** A `+*.policy.ts` literal; its grants decode here once, and the access compiler reads them (`access/authority.ts`). */
 const PolicyData = Schema.Struct({
 	description: Schema.String,
 	grants: Schema.Record(Schema.String, GrantData),
 	automations: Schema.optionalKey(Schema.Array(Schema.String)),
 	capabilities: Schema.optionalKey(Schema.Record(Schema.String, Schema.Array(Schema.String))),
-	limits: Schema.optionalKey(Schema.Record(Schema.String, Schema.Unknown))
+	limits: Schema.optionalKey(
+		Schema.Record(Schema.String, Schema.Union([LimitData, Schema.Array(LimitData)]))
+	)
 });
 /** A definition's optional test body is marked in the engine projection. */
 type IntegrationData = IntegrationSpec & { readonly test?: true };
@@ -269,9 +271,7 @@ const policyData = (p: unknown): unknown =>
 							? Object.fromEntries(
 									Object.entries(object(grant)).map(([op, arm]) => [
 										op,
-										Predicate.isObject(arm) &&
-										'check' in arm &&
-										typeof arm.check === 'function'
+										Predicate.isObject(arm) && 'check' in arm && typeof arm.check === 'function'
 											? { ...arm, check: true }
 											: arm
 									])
@@ -302,8 +302,14 @@ function modelParts(role: Record<string, unknown>) {
 	}
 	return { models, relationships, exposures };
 }
+/**
+ * `manifest[role][name]`: a `.ts` role's default export (declarations are data), a `.md` role's text, a `.svelte`
+ * role's path (the bundler compiles it).
+ */
+export type LoadedManifest = { [R in Role]: Record<string, unknown> };
+
 /** P1's loaded manifest as the engine's, before `decodeManifest`: `+secrets.ts` joins the workspace as `secrets`. */
-export function projectManifest(m: Manifest): unknown {
+export function projectManifest(m: LoadedManifest): unknown {
 	const { connections = {}, ...workspace } = object(m.workspace['']);
 	const secrets = m.secrets[''];
 	return {
@@ -329,7 +335,7 @@ export function projectManifest(m: Manifest): unknown {
 	};
 }
 /** A loaded manifest the caller has already checked, decoded; a refusal throws `ManifestInvalid` (tests, fixtures). */
-export const engineManifest = (m: Manifest): EngineManifest =>
+export const engineManifest = (m: LoadedManifest): EngineManifest =>
 	Result.getOrThrow(decodeProjectedManifest(projectManifest(m)));
 
 // ── accessors: each derived once per decoded manifest ──
@@ -389,15 +395,17 @@ export const layered = memo((m): EngineManifest => ({
  * what the store scope, the authority and the lowering key every path by. `bolt check` refuses a path that resolves to
  * nothing (`model/layer`), so a decoded artifact's paths all resolve.
  */
-export const layers = memo((m): { readonly [model: string]: { readonly [path: string]: string } } => {
-	const all = layered(m);
-	return Object.fromEntries(
-		Object.entries(all.exposures).map(([model, c]) => [
-			model,
-			layerModels(model, c, all.relationships).models
-		])
-	);
-});
+export const layers = memo(
+	(m): { readonly [model: string]: { readonly [path: string]: string } } => {
+		const all = layered(m);
+		return Object.fromEntries(
+			Object.entries(all.exposures).map(([model, c]) => [
+				model,
+				layerModels(model, c, all.relationships).models
+			])
+		);
+	}
+);
 
 export type StateKind = Extract<FieldKind, { kind: 'state' }>;
 /** `model`'s state field (`bolt check` admits at most one): its name and its states. */

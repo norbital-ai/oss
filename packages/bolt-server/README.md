@@ -13,9 +13,10 @@ A host file default-exports its `Facilities` (`@norbital-ai/bolt/facilities`, `s
 database, options)`) from `BOLT_*` variables; its header lists them. The variables are the example host file's, not
 Bolt's or bolt-server's: Bolt reads no environment.
 
-Direct Node launches require `node --no-node-snapshot <entry>` for the native guest engine,
-as specified by [isolated-vm](https://github.com/laverdet/isolated-vm#requirements). The Bolt CLI
-and the server's fork test workers supply the flag.
+Bolt carries no guest runner, and the runner is no facility: this host owns its own, bolt-cli's `nodeGuests()`
+(`@norbital-ai/bolt-cli/guests`), and hands it to the engine as `HostPorts.guests`. It runs `node:vm` contexts in the
+host's process, metered against each session's CPU budget, for operator-trusted code only (no memory cap, no security
+boundary). A host file never names a runner; `bolt dev` and the test kit run on the same one.
 
 Schema changes ship as committed files in `migrations/`: editable SQL, `snapshot.json` and
 `migrations.lock.json`. Review the generated SQL and add `-- accept: <step-id>` within each destructive

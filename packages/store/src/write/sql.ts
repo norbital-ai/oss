@@ -1,7 +1,7 @@
 // Writes → one statement each: a `WITH` chain whose data-modifying pieces return their rows, then one select that
 // projects them exactly as a read would (the same columns in wire form, the same relations). Many rows of one write
 // are one chain; a revision the writer observed, or a condition, decides in the database which rows change.
-import { Effect } from 'effect';
+import { Effect, Predicate } from 'effect';
 import type { Json } from '../values.ts';
 import type { Order, Pred, SelectIR } from '../ir.ts';
 import { StoreError } from '../errors.ts';
@@ -100,13 +100,9 @@ export type CompiledWrite = {
 
 const invalid = (message: string) => Effect.fail(StoreError.of('invalid', 'decode', message));
 const isChange = (v: Json): v is InlineChange =>
-	v !== null &&
-	typeof v === 'object' &&
-	!Array.isArray(v) &&
+	Predicate.isObject(v) &&
 	Object.keys(v).length === 1 &&
 	('$patch' in v || '$append' in v || '$remove' in v);
-const isObject = (v: Json): v is { readonly [key: string]: Json } =>
-	v !== null && typeof v === 'object' && !Array.isArray(v);
 
 /** A field a write may set: stored, not computed or derived; a table's key and audit columns are the store's. */
 const writable = (c: ExposureInfo, name: string): Fx<FieldInfo> => {
@@ -212,7 +208,7 @@ const leaves = (
 	at: readonly string[] = []
 ): [string[], Json][] =>
 	Object.entries(o).flatMap(([k, v]) =>
-		isObject(v) && Object.keys(v).length > 0 ? leaves(v, [...at, k]) : [[[...at, k], v]]
+		Predicate.isObject(v) && Object.keys(v).length > 0 ? leaves(v, [...at, k]) : [[[...at, k], v]]
 	);
 /** One assignment of an update: a value, or an inline change applied to the column as it is. */
 const assignedValue = (b: Build, f: FieldInfo, column: string, v: Json): Fx<string> => {

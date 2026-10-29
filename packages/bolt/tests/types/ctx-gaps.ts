@@ -4,7 +4,7 @@
 import { Effect } from 'effect';
 import { Refusal } from '../../src/decl/errors.ts';
 import { automation, customField, model } from '../../src/index.ts';
-import type { AutomationCtx, Insert, Masked } from '../../src/index.ts';
+import type { AutomationCtx, Insert } from '../../src/index.ts';
 import type { ValueOf } from '../../src/decl/fields.ts';
 import * as m from './fixture/models.ts';
 import * as rt from './fixture/runtime.ts';
@@ -24,7 +24,7 @@ automation('orders_submit', {
 			fields: ['note']
 		} });
 		const d: number = near.orders.rows[0]!.$distance;
-		const n: string | null | Masked = near.orders.rows[0]!.note;
+		const n: string | null = near.orders.rows[0]!.note;
 		void d;
 		void n;
 		// @ts-expect-error S1 an undeclared similarity

@@ -5,7 +5,12 @@ import { Effect, Option, Schema, SchemaTransformation } from 'effect';
 import { isArray } from 'effect/Array';
 import { DRIVERS, type DriverName } from '../decl/runtime/integration.ts';
 import { Instant, Zone } from '@norbital-ai/std/date';
-import { CONVERT_TARGETS } from '../engine/contracts.ts';
+import {
+	CONVERT_TARGETS,
+	type EngineActor,
+	type RunTrigger,
+	type RunTriggerView
+} from '../engine/contracts.ts';
 
 /** An authoring phase (L-BOLT-530): diagnose (`bolt build`'s checks) → copy (the preview's data) → preview → merge. */
 export const STUDIO_PHASES = ['diagnose', 'copy', 'preview', 'merge'] as const;
@@ -21,6 +26,86 @@ export const STUDIO_PHASES = ['diagnose', 'copy', 'preview', 'merge'] as const;
  */
 export const STUDIO_ROLES = ['preview', 'view', 'logs', 'merge', 'rollback'] as const;
 
+const Member = Schema.Struct({
+	kind: Schema.Literal('member'),
+	id: Schema.String,
+	email: Schema.NullOr(Schema.String),
+	phone: Schema.NullOr(Schema.String),
+	external: Schema.Boolean,
+	teams: Schema.Array(Schema.String),
+	teamPath: Schema.Array(Schema.String),
+	admin: Schema.Boolean,
+	party: Schema.NullOr(Schema.Struct({ model: Schema.String, id: Schema.String }))
+});
+const Requestor = Schema.Union([
+	Member,
+	Schema.Struct({
+		kind: Schema.Literal('envoy'),
+		envoy: Schema.String,
+		instance: Schema.String,
+		sender: Schema.String,
+		member: Schema.NullOr(Schema.String),
+		linked: Schema.optionalKey(Member)
+	}),
+	Schema.Struct({
+		kind: Schema.Literal('visitor'),
+		app: Schema.String,
+		visitor: Schema.String,
+		anonymous: Schema.optionalKey(Schema.Literal(true))
+	}),
+	Schema.Struct({ kind: Schema.Literal('apiKey'), key: Schema.String })
+]);
+/** An engine actor (`EngineActor`): a member, an envoy's turn, a visitor, an API key or the system identity's run. */
+export const EngineActorSchema: Schema.Codec<EngineActor> = Schema.Union([
+	...Requestor.members,
+	Schema.Struct({
+		kind: Schema.Literal('system'),
+		run: Schema.String,
+		by: Schema.Union([
+			Schema.Struct({ automation: Schema.String }),
+			Schema.Struct({ platform: Schema.String }),
+			Schema.Struct({ sync: Schema.String, instance: Schema.String })
+		])
+	})
+]);
+const SystemTrigger = [
+	Schema.Struct({ kind: Schema.Literal('system'), cause: Schema.Literals(['cron', 'webhook']) }),
+	Schema.Struct({
+		kind: Schema.Literal('system'),
+		cause: Schema.Literal('effect'),
+		model: Schema.String,
+		verb: Schema.Literals(['created', 'updated', 'deleted']),
+		records: Schema.Array(Schema.String)
+	}),
+	Schema.Struct({
+		kind: Schema.Literal('system'),
+		cause: Schema.Literal('schedule'),
+		by: Schema.optionalKey(Schema.Struct({ automation: Schema.String, run: Schema.String }))
+	})
+] as const;
+/** An automation run's trigger (`RunTrigger`, `sys_run.trigger`). */
+export const RunTriggerSchema: Schema.Codec<RunTrigger> = Schema.Union([
+	Schema.Struct({
+		kind: Schema.Literal('person'),
+		actor: Requestor,
+		agent: Schema.optionalKey(Schema.Struct({ conversation: Schema.String }))
+	}),
+	...SystemTrigger
+]);
+/** A run's trigger as the run ledger answers it (`RunTriggerView`). */
+export const RunTriggerViewSchema: Schema.Codec<RunTriggerView> = Schema.Union([
+	Schema.Struct({
+		kind: Schema.Literal('person'),
+		ref: Schema.String,
+		name: Schema.NullOr(Schema.String),
+		agent: Schema.optionalKey(Schema.Literal(true))
+	}),
+	...SystemTrigger
+]);
+/** A driver bolt declares (`DRIVERS`). */
+export const Driver = Schema.String.pipe(
+	Schema.refine<Schema.String, DriverName>((d): d is DriverName => Object.hasOwn(DRIVERS, d))
+);
 /** An optional key whose value is dropped, not fatal, when it does not decode: one stray member never hides the rest. */
 const tolerant = <S extends Schema.Constraint>(schema: S) =>
 	Schema.optionalKey(Schema.catchDecoding<S>(() => Effect.succeedNone)(schema));
@@ -44,13 +129,15 @@ const READ_METHODS = [
 	'query',
 	'transcript',
 	'inbox',
-	'conversations'
+	'conversations',
+	'runs'
 ] as const;
 /**
  * One read as the guest names it (`ctx.query('c', q)` → `{ m: 'query', a: ['c', q] }`; a read request
  * `ctx.query({ … })` → `{ m: 'query', a: [request] }`); `lowerRead` decodes `a`.
  * `transcript` (`a: [conversation]`) and `conversations` (`a: []`, the member's own) are the agent panel's, live only:
- * `/live` checks the caller may read them, `/q` refuses them.
+ * `/live` checks the caller may read them, `/q` refuses them. `runs` (`a: [{ automation?, id?, limit?, brief? }]`) is the runs
+ * the caller may see (rule 56), live through `sys_run` changes.
  */
 export const WireRead = Schema.Struct({
 	m: Schema.Literals(READ_METHODS),
@@ -113,7 +200,9 @@ export const WriteOutcome = Schema.Union([
 		output: Schema.Json,
 		records: Written,
 		/** An act that wrote no row: the records that already held every supplied value (after callbacks). */
-		unchanged: Schema.optionalKey(Schema.Array(Schema.Struct({ model: Schema.String, id: Schema.String })))
+		unchanged: Schema.optionalKey(
+			Schema.Array(Schema.Struct({ model: Schema.String, id: Schema.String }))
+		)
 	}),
 	Schema.Struct({
 		kind: Schema.Literal('pendingApproval'),
@@ -717,14 +806,12 @@ export const ProviderChoice = Schema.Struct({
 });
 export type ProviderChoice = typeof ProviderChoice.Type;
 /**
- * One definition a member may connect (`GET /__bolt/integrations/`): its providers for a member's own account
+ * One definition a member may connect (`GET /__bolt/integrations`): its providers for a member's own account
  * (`personal`) and for a workspace instance (`workspace`), each possibly empty on this host.
  */
 export const IntegrationOffer = Schema.Struct({
 	integration: Schema.String,
-	driver: Schema.String.pipe(
-		Schema.refine<Schema.String, DriverName>((d): d is DriverName => Object.hasOwn(DRIVERS, d))
-	),
+	driver: Driver,
 	description: Schema.String,
 	/** It carries a conversation, so an envoy can answer on it. */
 	conversation: Schema.Boolean,
@@ -784,9 +871,7 @@ export const InstanceStatus = Schema.Struct({
 	...LinkStatusFields,
 	instance: Schema.String,
 	integration: Schema.String.pipe(Schema.withDecodingDefaultKey(Effect.succeed(''))),
-	driver: Schema.String.pipe(
-		Schema.refine<Schema.String, DriverName>((d): d is DriverName => Object.hasOwn(DRIVERS, d))
-	),
+	driver: Driver,
 	/** A credential is stored, so reconnecting needs no new pairing. */
 	stored: Schema.Boolean.pipe(Schema.withDecodingDefaultKey(Effect.succeed(false))),
 	/** When `state` was entered. */
@@ -853,17 +938,6 @@ export const TemplateManifest = Schema.Struct({
 	counts: Schema.Struct({ models: Count, apps: Count, automations: Count }),
 	tags: Schema.Array(Schema.String),
 	name_zh: Schema.optionalKey(Schema.NonEmptyString),
-	description_zh: Schema.optionalKey(Schema.NonEmptyString),
-	/** The seed reader's metadata: the private bank tree `bolt build --bank` reads, and the owning template's layout and stages. */
-	seed: Schema.optionalKey(
-		Schema.Struct({
-			bankTree: Schema.optionalKey(Schema.String),
-			layout: Schema.optionalKey(Schema.String),
-			stages: Schema.optionalKey(Schema.Array(Schema.Array(Schema.String))),
-			producers: Schema.optionalKey(
-				Schema.Array(Schema.Struct({ model: Schema.String, kind: Schema.String }))
-			)
-		})
-	)
+	description_zh: Schema.optionalKey(Schema.NonEmptyString)
 });
 export type TemplateManifest = typeof TemplateManifest.Type;

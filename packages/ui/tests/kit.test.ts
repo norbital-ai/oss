@@ -8,7 +8,7 @@ import { browser, required } from './view-fixture.ts';
 import { confirmDialog, element } from './elements.ts';
 import type { ComponentProps } from 'svelte';
 import { escapes, navigates } from '../src/primitives/sheet/dismiss.ts';
-import { filterLogs, wantsOlder, type LogLine } from '../src/logs/logs.ts';
+import { filterLogs, logPreview, wantsOlder, type LogLine } from '../src/logs/logs.ts';
 import { offsets, windowOf } from '../src/primitives/virtual/virtual.ts';
 
 // after the DOM hook: static imports link before it registers
@@ -258,6 +258,18 @@ it.live('logs: level + text filter; a virtual window; older pages near the top',
 		assert.equal(wantsOlder(0, false, false), false);
 	})
 );
+
+it('logs: a JSON payload previews compact and highlighted, also when JSON-encoded as a string', () => {
+	const text = (message: string) =>
+		logPreview(message)
+			.map((token) => token.text)
+			.join('');
+	const nested = `decision.made ${JSON.stringify(JSON.stringify({ use: 'filter', n: [1, true] }))}`;
+	assert.equal(text(nested), 'decision.made {"use":"filter","n":[1,true]}');
+	assert.ok(logPreview(nested).some((token) => token.text === '"filter"' && token.cls !== ''));
+	assert.deepEqual(logPreview('boot "unterminated'), [{ text: 'boot "unterminated', cls: '' }]);
+	assert.equal(text(`big ${JSON.stringify({ a: 'x'.repeat(1000) })}`).length, 404);
+});
 
 it.live('logs: 10k rows render a window and load an older page on scroll to top', () =>
 	browser(async () => {

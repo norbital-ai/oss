@@ -55,7 +55,6 @@ export const RestorePreviewSchema: Schema.Codec<RestorePreview> = Schema.Struct(
 				'readOnly',
 				'noGrant',
 				'stateLocked',
-				'masked',
 				'definitionChanged'
 			])
 		})

@@ -1,7 +1,7 @@
 import { expect, it } from '@effect/vitest';
 import { Context, Deferred, Effect, Exit, Fiber, Layer, Scope, Stream } from 'effect';
 import { Live } from '../src/engine/services.ts';
-import { TestDb } from '../src/test/database.ts';
+import { TestDb } from '../../bolt-cli/src/test/database.ts';
 import { bareHost } from './effect-engine.ts';
 import { TenantDb } from '../src/engine/db/tenant-db.ts';
 import { EngineLive } from '../src/engine/host.ts';

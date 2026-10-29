@@ -2,11 +2,14 @@
 
 Workspace Studio is the same path as [asking Norbius](./norbius-changes.md), by hand: edit the source, preview it,
 publish or merge it, and roll back if needed. Every step that changes what the workspace's users get asks for an
-explicit approval that says what it changes.
+explicit approval that says what it changes. Studio needs a host that serves it (Colony); an untethered workspace has
+none. What happens across the workspace — the build and release timeline, resource use, runtime logs, the audit
+trail, automation runs, inference calls and people — is the **Command center** (`/command-center/<tab>`), in tethered
+and untethered workspaces alike; it shows the timeline but never rolls back.
 
 ## 1. Edit
 
-Open **Studio** from the sidebar. The Workbench shows the source tree and an editor over your own draft; nobody else
+Open **Workspace Studio** from the account menu's System group. The Workbench shows the source tree and an editor over your own draft; nobody else
 sees it. Edit, then **Save**. Save asks "What does this change do?" with a suggestion filled in ("Update i18n
 messages"); the description is required and becomes the saved version's description, which the publish confirmation
 shows. Norbius describes its own saves the same way.
@@ -44,7 +47,7 @@ change can be fixed and merged again.
 
 ## 4. Roll back
 
-On the **Live** tab pick a deployment (a checkpoint) and press **Roll back**. Only a deployment whose checkpoint is
+On the **Versions** tab (`/studio/versions`) pick a deployment (a checkpoint) and press **Roll back**. Only a deployment whose checkpoint is
 still restorable can be picked: a reset replaces live's database, so deployments from before it stay listed, marked
 "Before the last reset — can't roll back to this", and never reach the confirmation; a version without a checkpoint
 says "This version has no checkpoint to roll back to". Norbius lists the same checkpoints (`workspace_builds`, with

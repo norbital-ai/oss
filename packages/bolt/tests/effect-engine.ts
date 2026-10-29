@@ -13,29 +13,27 @@ import {
 	DeadlinePort,
 	Drivers,
 	Geo,
-	GuestIsolates,
 	Docs,
+	GuestIsolates,
 	Images,
 	Mcp,
 	WebRead
 } from '../src/engine/ports.ts';
 import { nodePorts } from '../src/node/ports.ts';
+import { guests } from './support/guests.ts';
 import { keysPort } from '../src/node/keys.ts';
 import { tenantDbPort } from '../src/node/db/port.ts';
 import { facilityLayers } from '../src/protocol/host-api.ts';
 import { TenantDb, type TenantDbShape } from '../src/engine/db/tenant-db.ts';
 import { EngineLive } from '../src/engine/host.ts';
-import { memoryAudit } from '../src/test/index.ts';
+import { memoryAudit } from '../../bolt-cli/src/test/index.ts';
 import type { GuestProgram } from '../src/engine/guest/runner.ts';
 
 /**
  * A bare engine's host: the shared facility adapters over an in-memory audit and refusing members, everything optional
  * `off`. Merge a service after it to replace one (`Layer.merge(bareHost(db), Layer.succeed(Ai, ai))`).
  */
-export const bareHost = (
-	db: TenantDbShape,
-	options: { readonly guest?: GuestProgram; readonly start?: readonly string[] } = {}
-) =>
+export const bareHost = (db: TenantDbShape, options: { readonly guest?: GuestProgram } = {}) =>
 	Layer.unwrap(
 		Effect.map(nodePorts(), (ports) =>
 			Layer.mergeAll(
@@ -58,7 +56,7 @@ export const bareHost = (
 					sandbox: off,
 					keys: keysPort(randomBytes(32))
 				}),
-				GuestIsolates.fromAbi(ports.guestIsolates),
+				GuestIsolates.fromAbi(guests),
 				Images.fromAbi(ports.images),
 				Docs.fromAbi(ports.docs),
 				Mcp.fromAbi(ports.mcp),
@@ -76,8 +74,7 @@ export const bareHost = (
 					epoch: '',
 					release: 'test',
 					publicUrl: 'http://localhost',
-					guest: Option.fromNullishOr(options.guest),
-					start: options.start ?? []
+					guest: Option.fromNullishOr(options.guest)
 				})
 			)
 		)
@@ -85,7 +82,5 @@ export const bareHost = (
 
 export const acquireEngine = (manifest: EngineManifest, db: TenantDbShape, guest?: GuestProgram) =>
 	Layer.build(
-		EngineLive(manifest).pipe(
-			Layer.provide(bareHost(db, guest === undefined ? {} : { guest }))
-		)
+		EngineLive(manifest).pipe(Layer.provide(bareHost(db, guest === undefined ? {} : { guest })))
 	);

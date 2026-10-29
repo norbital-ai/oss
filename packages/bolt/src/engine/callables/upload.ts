@@ -10,6 +10,7 @@ import { Manifest } from '../services.ts';
 import { Files } from '../ports.ts';
 import { sha256 as sha256Of, toHex } from '@norbital-ai/store';
 import { BoltError } from '../../protocol/errors.ts';
+import { RATE_LIMITED } from '../../protocol/wire.ts';
 import type { RateCharge } from '../write/commit.ts';
 import { Chain, KEY_REUSE, rate } from '../write/sql.ts';
 import { ATTACHMENT_MIME } from '../agent/ai.ts'; // hook:attachments
@@ -138,7 +139,7 @@ export const upload = Effect.fn('Callables.upload')(function* (u: Upload) {
 			)
 		);
 	const row = answer[0];
-	if (row === undefined) return refuse('rateLimited', 'Too many uploads; try again later.');
+	if (row === undefined) return refuse('rateLimited', RATE_LIMITED);
 	const ref = row.ref;
 	return ref === null
 		? KEY_REUSE

@@ -36,11 +36,7 @@
 		class="group w-68 max-w-[calc(100vw-3rem)] shrink-0 snap-start overflow-hidden rounded-xl border bg-card shadow-card outline-none transition-colors duration-150 hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring"
 	>
 		<Stack gap="none">
-			<Frame
-				ratio="banner"
-				shrink={false}
-				class="relative bg-linear-to-br from-muted via-background to-brand/10"
-			>
+			<Frame ratio="banner" class="relative bg-linear-to-br from-muted via-background to-brand/10">
 				{#if app.thumbnail}
 					<Image
 						src={app.thumbnail}
@@ -50,21 +46,20 @@
 						loading="lazy"
 					/>
 				{:else}
-					<Inline fill justify="center" align="center" aria-hidden="true"
+					<Inline size="fill" justify="center" align="center" aria-hidden="true"
 						><Icon name={app.icon ?? 'lucide:layout-grid'} class="size-10 text-brand/45" /></Inline
 					>
 				{/if}
 			</Frame>
 			<Inline align="start" gap="sm" class="p-3">
 				<Inline
-					shrink={false}
 					justify="center"
 					align="center"
 					class="size-8 rounded-md border border-input bg-background text-foreground shadow-xs"
 				>
 					<Icon name={app.icon ?? 'lucide:file-text'} class="size-4" />
 				</Inline>
-				<Stack gap="xs" grow class="min-w-0">
+				<Stack gap="xs" size="fill" class="min-w-0">
 					<p class="truncate text-xs font-semibold text-foreground">{app.label}</p>
 					<p class="line-clamp-2 min-h-8 text-micro leading-4 text-muted-foreground">
 						{app.description ?? ''}
@@ -75,7 +70,7 @@
 	</a>
 {/snippet}
 
-<Scroll name={t('Workspace overview')} inset>
+<Scroll name={t('Workspace overview')} size="fill" inset>
 	<Center measure="wide">
 		<Stack gap="xl" class="py-2 sm:py-4 lg:py-6">
 			<Stack as="header" gap="xs">
@@ -122,7 +117,6 @@
 						<Stack as="section" gap="sm" class="border-l-2 border-brand/40 pl-3">
 							<Inline gap="sm" align="center">
 								<Inline
-									shrink={false}
 									justify="center"
 									align="center"
 									class="size-8 rounded-md border border-input bg-background text-foreground shadow-xs"

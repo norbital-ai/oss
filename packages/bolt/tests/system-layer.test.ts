@@ -6,10 +6,10 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { format, resolveConfig } from 'prettier';
 import { describe, expect, it } from '@effect/vitest';
-import { discover } from '../src/compiler/discover.ts';
+import { discover } from '../../bolt-cli/src/compiler/discover.ts';
 import { ROLES } from '../src/decl/layout.ts';
-import { load, manifestErrors, spec, type Manifest } from '../src/compiler/load.ts';
-import { modelParts, systemIndex } from '../src/compiler/names.ts';
+import { load, manifestErrors, spec, type Manifest } from '../../bolt-cli/src/compiler/load.ts';
+import { modelParts, systemIndex } from '../../bolt-cli/src/compiler/names.ts';
 import { Effect, FileSystem, Layer, Result, Schema } from 'effect';
 import * as NodeFileSystem from '@effect/platform-node/NodeFileSystem';
 import * as NodePath from '@effect/platform-node/NodePath';
@@ -527,7 +527,8 @@ const EXPECTED: { [table: string]: Shape } = {
 			error: 'jsonb',
 			results: 'jsonb not null default []',
 			actor: 'text',
-			starter: 'jsonb'
+			starter: 'jsonb',
+			trigger: 'jsonb'
 		},
 		unique: ['(key)'],
 		indexes: ["(due_at) where (state = 'queued'::text)"],
@@ -538,6 +539,7 @@ const EXPECTED: { [table: string]: Shape } = {
 			"((progress is null or store_json_valid(progress, '{kind:json,optional:true}'::jsonb) is true))",
 			"((results is null or store_json_valid(results, '{default:[],kind:json}'::jsonb) is true))",
 			"((starter is null or store_json_valid(starter, '{kind:json,optional:true}'::jsonb) is true))",
+			"((trigger is null or store_json_valid(trigger, '{kind:json,optional:true}'::jsonb) is true))",
 			'(isfinite(due_at))',
 			'(isfinite(finished_at))',
 			'(isfinite(started_at))'
@@ -565,7 +567,7 @@ const EXPECTED: { [table: string]: Shape } = {
 			'(isfinite(created_at))',
 			'(isfinite(expires_at))',
 			'(isfinite(refreshed_at))',
-			"(via in ('code', 'invitation', 'signup', 'host'))"
+			"(via in ('code', 'invitation', 'signup', 'host', 'anonymous'))"
 		]
 	},
 	sys_sync: {
@@ -641,7 +643,7 @@ const EXPECTED: { [table: string]: Shape } = {
 			"((party is null or store_json_valid(party, '{kind:json,optional:true}'::jsonb) is true))",
 			"(email ~ '^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$')",
 			'(isfinite(created_at))',
-			"(kind in ('staff', 'external'))"
+			"(kind in ('staff', 'external', 'anonymous'))"
 		]
 	}
 };

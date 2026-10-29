@@ -1,5 +1,6 @@
 <script lang="ts">
-	// A form in sections: the core one open, a secondary one collapsed with a summary, an untitled one, and one that opts out.
+	// A form in sections: the core one open, a secondary one collapsed with a summary, and one that opts out holding a
+	// field kept read-only while the form edits.
 	import { Layer, ManagedRuntime } from 'effect';
 	import { onDestroy } from 'svelte';
 	import { mountEdge } from '../src/effect/index.js';
@@ -27,6 +28,10 @@
 
 <Form of="jobs" mode="create">
 	<Section first title="Job"><Field name="title" /></Section>
-	<Section title="Notes" defaultOpen={false} summary="Not set"><Field name="notes" /></Section>
-	<Section title="Fixed" collapsible={false}><Field name="kind" /></Section>
+	<Section title="Notes" defaultOpen={false} summary="Not set" size="fill" minHeight="8rem"
+		><Field name="notes" /></Section
+	>
+	<Section title="Fixed" collapsible={false} size="fill" minHeight="8rem"
+		><Field name="kind" readonly /></Section
+	>
 </Form>

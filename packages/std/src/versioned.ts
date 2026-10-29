@@ -4,6 +4,7 @@
 // `cloneNext` and sealed over the old version. The seal's write is held by the model's `update` grant (§3.8).
 import { addDays, PlainDate, type DatePeriod, type Instant } from './date.ts';
 import { Decimal } from './decimal.ts';
+import { Schema } from 'effect';
 
 /** The columns of a versioned row these helpers read. */
 export type Lineage = {
@@ -34,6 +35,10 @@ const equal = (a: unknown, b: unknown): boolean => {
 };
 const same = (a: unknown, b: unknown) => equal(a ?? null, b ?? null);
 const periodOf = (p: DatePeriod) => ({ from: p.from, to: p.to ?? null });
+/** An update's `period` is caller input: a date period's ends as their ISO text. */
+const isPeriod = Schema.is(
+	Schema.Struct({ from: Schema.String, to: Schema.NullOr(Schema.String) })
+);
 
 /**
  * The one update list (X-24) that seals `draft`: the sealed version it follows ends the day before it starts, and the
@@ -85,8 +90,8 @@ export function onlyShortens(before: Lineage, input: Input): string | null {
 	for (const [field, value] of Object.entries(input)) {
 		if (field === 'voided_at' || field === 'void_reason' || same(value, (before as Input)[field]))
 			continue;
-		if (field === 'period' && value !== null && typeof value === 'object') {
-			const p = value as DatePeriod,
+		if (field === 'period' && isPeriod(value)) {
+			const p = value,
 				was = periodOf(before.period);
 			if (
 				p.from === was.from &&

@@ -42,14 +42,14 @@
 </script>
 
 {#if path === ''}
-	<Stack gap="sm" align="center" justify="center" fill class="text-muted-foreground">
+	<Stack gap="sm" align="center" justify="center" size="fill" class="text-muted-foreground">
 		<Icon name="lucide:file-code-2" class="size-8 opacity-30" />
 		<p class="text-xs">{t(fileCount === 0 ? 'No source files' : 'Open a file to edit it.')}</p>
 	</Stack>
 {:else}
 	<div class="grid h-full min-h-0 grid-rows-[auto_minmax(0,1fr)]">
 		<Inline gap="xs" class="min-w-0 border-b border-border/60 bg-muted/20 pr-2">
-			<Scroll axis="x" name={t('File path')} grow class="min-w-0">
+			<Scroll axis="x" name={t('File path')} size="fill" class="min-w-0">
 				<ol
 					class="flex h-8 flex-nowrap items-center gap-1.5 px-3 font-mono text-xs text-muted-foreground"
 				>

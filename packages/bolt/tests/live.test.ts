@@ -17,7 +17,8 @@ import {
 import { TestClock } from 'effect/testing';
 import { Live, Manifest, Reads, type ReadsShape } from '../src/engine/services.ts';
 import { get, read, type ReadIR } from '../src/protocol/reads.ts';
-import { BoltError } from '../src/protocol/errors.ts';
+import { storeSync } from '../src/protocol/errors.ts';
+import { catalogFor } from '@norbital-ai/store';
 import type { Json } from '../src/decl/values.ts';
 import { compileAuthority } from '../src/engine/access/authority.ts';
 import { catalogOf } from '../src/engine/access/pred.ts';
@@ -386,14 +387,19 @@ describe('engine/live: deltas from the RETURNING image (rule 65)', () => {
 		first: Json,
 		commit: readonly Captured[],
 		who: Authority = admin,
-		got: (r: ReadIR) => Json = () => null
+		got: (r: ReadIR) => Json = () => null,
+		output?: string
 	) {
 		let answered = false;
 		const { hub, frames, asked, connect } = yield* setup((r) =>
 			answered ? got(r) : ((answered = true), first)
 		);
 		const c = yield* connect(who);
-		yield* hub.register(c, 'v', { read: read(cat, 'orders', query) });
+		const ir =
+			output === undefined
+				? read(cat, 'orders', query)
+				: { ...read(storeSync(catalogFor(cat, 'orders', output)), 'orders', query), output };
+		yield* hub.register(c, 'v', { read: ir });
 		yield* TestClock.adjust(0);
 		frames.length = 0;
 		asked.length = 0;
@@ -496,7 +502,7 @@ describe('engine/live: deltas from the RETURNING image (rule 65)', () => {
 	);
 
 	it.effect(
-		"a field masked to the caller is `$masked` on another's row and plain on the caller's own",
+		"each output's rows are its granting policies': `default` the caller's own, `audit` every row without `note`",
 		() =>
 			Effect.gen(function* () {
 				const both = compileAuthority(
@@ -504,27 +510,45 @@ describe('engine/live: deltas from the RETURNING image (rule 65)', () => {
 					{ actor: member('u1'), policies: ['rep', 'auditor'], admin: false },
 					'both'
 				);
-				const x = yield* after(
+				const commit = [
+					cap(null, row(1, { note: 'mine' })),
+					cap(null, row(2, { note: 'theirs', created_by: 'u2' }))
+				];
+				const own = yield* after(
 					{ select: { title: true, note: true }, all: true },
 					page(),
-					[
-						cap(null, row(1, { note: 'mine' })),
-						cap(null, row(2, { note: 'theirs', created_by: 'u2' }))
-					],
+					commit,
 					both
 				);
-				expect(x.frames).toEqual([
+				expect(own.frames).toEqual([
+					{
+						t: 'patch',
+						view: 'v',
+						v: 1,
+						ops: [{ op: 'upsert', index: 0, row: { id: O(1), title: 't1', note: 'mine' } }]
+					}
+				]);
+				const audit = yield* after(
+					{ select: { title: true }, all: true },
+					page(),
+					commit,
+					both,
+					() => null,
+					'audit'
+				);
+				expect(audit.frames).toEqual([
 					{
 						t: 'patch',
 						view: 'v',
 						v: 1,
 						ops: [
-							{ op: 'upsert', index: 0, row: { id: O(1), title: 't1', note: 'mine' } },
-							{ op: 'upsert', index: 1, row: { id: O(2), title: 't2', note: { $masked: true } } }
+							{ op: 'upsert', index: 0, row: { id: O(1), title: 't1' } },
+							{ op: 'upsert', index: 1, row: { id: O(2), title: 't2' } }
 						]
 					}
 				]);
-				expect(x.asked).toEqual([]);
+				expect(own.asked).toEqual([]);
+				expect(audit.asked).toEqual([]);
 			})
 	);
 

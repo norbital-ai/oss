@@ -11,6 +11,8 @@
 		data: WorkspaceOperationsData;
 		range: WorkspaceRange;
 		view: WorkspaceView;
+		/** The views to offer, in order (all four by default); with one, it renders without its own tab strip. */
+		views?: readonly WorkspaceView[];
 		busy?: boolean;
 		/** Stable workspace identity: a pending confirmation cannot cross a scope change. */
 		scopeKey?: string;
@@ -41,6 +43,7 @@
 		data,
 		range,
 		view,
+		views = ['activity', 'resources', 'logs', 'users'],
 		busy = false,
 		scopeKey = '',
 		onChange,
@@ -166,6 +169,13 @@
 			}
 		);
 	}
+	const TABS = {
+		activity: { title: 'Activity', icon: 'lucide:history' },
+		resources: { title: 'Resources', icon: 'lucide:activity' },
+		logs: { title: 'Runtime & runs', icon: 'lucide:scroll-text' },
+		users: { title: 'Users', icon: 'lucide:users' }
+	} as const;
+	const BODIES = { activity, resources, logs: runtime, users };
 	function restore(commit: string) {
 		const target = studio?.releases.find((release) => release.commit === commit);
 		if (target === undefined || rollbackReason(target) !== null) return;
@@ -215,22 +225,31 @@
 	}
 </script>
 
-<div class="grid min-w-0 gap-3 text-xs" aria-busy={locked} data-workspace-operations>
+<!-- fills a bounded parent: on a wide container Activity's timeline and details each scroll in place -->
+<div
+	class="@container flex min-h-0 min-w-0 flex-1 flex-col gap-3 text-xs"
+	aria-busy={locked}
+	data-workspace-operations
+>
 	{#if notice}<p role="alert" class="text-destructive">{notice}</p>{/if}
-	<Tabs
-		value={view}
-		class="gap-3"
-		onValueChange={(next) =>
-			onChange({
-				view: next === 'resources' || next === 'logs' || next === 'users' ? next : 'activity'
-			})}
-		tabs={[
-			{ name: 'activity', title: t('Activity'), icon: 'lucide:history', body: activity },
-			{ name: 'resources', title: t('Resources'), icon: 'lucide:activity', body: resources },
-			{ name: 'logs', title: t('Runtime & runs'), icon: 'lucide:scroll-text', body: runtime },
-			{ name: 'users', title: t('Users'), icon: 'lucide:users', body: users }
-		]}
-	/>
+	{#if views.length === 1}
+		{@render BODIES[view]()}
+	{:else}
+		<Tabs
+			value={view}
+			class="gap-3"
+			onValueChange={(next) => {
+				const picked = views.find((v) => v === next);
+				if (picked !== undefined) onChange({ view: picked });
+			}}
+			tabs={views.map((name) => ({
+				name,
+				...TABS[name],
+				title: t(TABS[name].title),
+				body: BODIES[name]
+			}))}
+		/>
+	{/if}
 </div>
 {#snippet restricted()}
 	<div
@@ -257,19 +276,14 @@
 					>{/each}
 			</nav>
 		</div>
-		<p class="text-meta">
-			{t(
-				'Interval peaks for sampled resources; totals for compute and AI. Storage carries the latest successful reading.'
-			)}
-		</p>
-		<div class="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+		<div class="grid gap-3 @2xl:grid-cols-2 @5xl:grid-cols-3">
 			{#each data.usage as chart (chart.title)}<UsageChart {...chart} />{/each}
 		</div>
 	</div>
 {/snippet}
 {#snippet activity()}
 	{#if !canInspect}{@render restricted()}{:else}
-		<div class="grid min-w-0 gap-5">
+		<div class="flex min-w-0 flex-col gap-5 @4xl:min-h-0 @4xl:flex-1">
 			<div class="flex min-w-0 flex-wrap items-center gap-1" data-view-toolbar>
 				<h2 class="mr-1 text-sm font-semibold">{t('Build and release activity')}</h2>
 				<ToolbarSearch
@@ -300,13 +314,14 @@
 			{#if data.errors?.studio}<p role="alert" class="text-destructive">
 					{data.errors.studio}
 				</p>{/if}
-			<div class="grid min-w-0 gap-5 xl:grid-cols-[minmax(16rem,22rem)_minmax(0,1fr)]">
-				<section class="min-w-0" aria-label={t('Commit timeline')}>
+			<div
+				class="grid min-w-0 gap-5 @4xl:min-h-0 @4xl:flex-1 @4xl:grid-cols-[minmax(16rem,22rem)_minmax(0,1fr)]"
+			>
+				<section class="min-w-0 @4xl:overflow-y-auto" aria-label={t('Commit timeline')}>
 					<ReleaseTimeline
 						builds={shownBuilds}
 						releases={shownReleases}
 						changes={shownChanges}
-						environments={studio?.environments ?? []}
 						selected={studio?.build?.build.commit ?? data.filters.build}
 						onSelect={(commit) => onChange({ build: commit })}
 						onBuild={(commit) => onChange({ build: commit })}
@@ -315,7 +330,7 @@
 						{t}
 					/>
 				</section>
-				<div class="grid min-w-0 content-start gap-4">
+				<div class="grid min-w-0 content-start gap-4 @4xl:overflow-y-auto">
 					{#if studio?.build}
 						<section class="grid min-w-0 gap-3" aria-label={t('Selected build')}>
 							<div class="flex flex-wrap items-start justify-between gap-3">
@@ -358,9 +373,7 @@
 									</ul>
 								</details>{/if}
 						</section>
-					{:else}<p class="text-meta">
-							{data.errors?.build ?? t('Select a retained build to inspect its output.')}
-						</p>{/if}
+					{:else if data.errors?.build}<p class="text-meta">{data.errors.build}</p>{/if}
 					{#if (studio?.changes.length ?? 0) > 0}
 						<section class="grid gap-2" aria-label={t('Change controls')}>
 							<div class="flex flex-wrap items-center justify-between gap-2">
@@ -447,11 +460,7 @@
 												>
 											{/if}
 										</div>
-									{:else}<p class="text-meta">
-											{t(
-												'This change is complete. Preview cleanup is reported below; retained builds follow retention rules.'
-											)}
-										</p>{/if}
+									{/if}
 								</div>
 							{/if}
 						</section>
@@ -483,7 +492,7 @@
 		{#if data.errors?.bundles}<p role="alert" class="text-destructive">
 				{data.errors.bundles}
 			</p>{/if}
-		<dl class="grid gap-4 border-b border-border pb-3 sm:grid-cols-2">
+		<dl class="grid gap-4 border-b border-border pb-3 @xl:grid-cols-2">
 			<div>
 				<dt class="text-meta">{t(bundles?.live ? 'Live artifact' : 'Selected build artifact')}</dt>
 				<dd class="mt-1 truncate font-mono" title={bundles?.digest}>
@@ -513,11 +522,6 @@
 				{t('entries referenced by this release')}
 			</p>{/if}
 		{#if data.errors?.cache}<p role="alert" class="text-destructive">{data.errors.cache}</p>{/if}
-		<p class="text-meta">
-			{t(
-				'An artifact retained for a live release, restore point or recent build is expected. A leftover preview environment after merge or close needs attention.'
-			)}
-		</p>
 		{#if (data.health?.cleanup.length ?? 0) > 0}<div class="overflow-x-auto">
 				<table class="w-full text-left">
 					<caption class="sr-only">{t('Preview cleanup status')}</caption><thead
@@ -626,20 +630,10 @@
 					)}
 				</p>{/if}
 		</details>
-		<details class="text-meta">
-			<summary class="w-fit cursor-pointer underline decoration-border underline-offset-4"
-				>{t('How retention and cache are counted')}</summary
-			>
-			<p class="mt-2 max-w-prose">
-				{t(
-					'Each environment selects one immutable artifact. Closing or merging removes the preview environment, while artifact cleanup follows references and retention. Content-addressed cache buffers may be shared by multiple tenants. Artifact bytes are logical size, not exclusive physical disk usage.'
-				)}
-			</p>
-		</details>
 	</section>
 {/snippet}
 {#snippet runtime()}
-	{#if !canInspect}{@render restricted()}{:else}<div class="grid gap-3">
+	{#if !canInspect}{@render restricted()}{:else}<div class="flex min-h-0 flex-1 flex-col gap-3">
 			<div class="flex flex-wrap items-center justify-between gap-3">
 				<div>
 					<h2 class="text-sm font-semibold">{t('Runtime & run logs')}</h2>
@@ -660,12 +654,7 @@
 			</div>
 			{#if data.errors?.logs}<p role="alert" class="text-destructive">
 					{data.errors.logs}
-				</p>{/if}<LogView rows={runtimeLines} follow={false} class="h-[32rem]" />
-			<p class="text-meta">
-				{t(
-					'Select a recent run or search for its exact ID. Search and level filters use the shared toolbar; Refresh reads a new snapshot.'
-				)}
-			</p>
+				</p>{/if}<LogView rows={runtimeLines} follow={false} class="min-h-80 flex-1" />
 		</div>{/if}
 {/snippet}
 {#snippet users()}
@@ -743,11 +732,6 @@
 					>
 				</table>
 			</div>
-			<p class="text-meta">
-				{t(
-					'Last activity is the latest successful authenticated workspace request. It does not establish a login time or an open session.'
-				)}
-			</p>
 		</div>{/if}
 {/snippet}
 

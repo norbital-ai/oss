@@ -1,6 +1,6 @@
 // Type corpus for layer-map read requests (P3): roots are models with `read`, deeper keys the layers a root declares, the
 // answer typed from the named layers. Each `@ts-expect-error` line is a planted mistake.
-import type { CallerQuery, Id, Masked, ReadAnswer } from '../../src/index.ts';
+import type { CallerQuery, Id, ReadAnswer } from '../../src/index.ts';
 import './registry.ts';
 
 type Eq<A, B> = (<T>() => T extends A ? 1 : 2) extends <T>() => T extends B ? 1 : 2 ? true : false;
@@ -21,24 +21,58 @@ is<Eq<NonNullable<Order['customer']>['id'], Id<'customers'>>>();
 is<Eq<NonNullable<Order['customer']>['name'], string>>();
 is<Eq<Order['lines'][number]['id'], Id<'order_lines'>>>();
 is<Eq<'notices' extends keyof Answer ? 1 : 0, 1>>();
+// a root page counts every row it matches
+is<Eq<Answer['orders']['total'], number>>();
 // a deep path implies its parents, the root included
 type Implied = ReadAnswer<{ readonly 'orders.lines': { readonly fields: readonly ['item'] } }>;
 is<Eq<Implied['orders']['rows'][number]['lines'][number]['item'], string>>();
-// the root's policy masks a layer field it leaves out (sales_rep admits only `name` on `orders.customer`)
+// a layer field is the output's plain value: policies filter rows, never mask a field
 type Tier = NonNullable<
 	ReadAnswer<{ readonly 'orders.customer': {} }>['orders']['rows'][number]['customer']
 >['tier'];
-is<Eq<Masked extends Tier ? 1 : 0, 1>>();
+is<Eq<Tier, 'basic' | 'gold'>>();
+// a root naming an output reads that output's fixed fields and layers
+type Logistics = ReadAnswer<{
+	readonly orders: { readonly output: 'logistics' };
+	readonly 'orders.lines': {};
+}>['orders']['rows'][number];
+type System = 'id' | 'revision' | 'created_at' | 'updated_at' | 'created_by' | 'updated_by';
+is<Eq<Exclude<keyof Logistics, System | '$sync' | '$approval'>, 'number' | 'status' | 'customer' | 'lines'>>();
+is<Eq<Exclude<keyof Logistics['lines'][number], System>, 'item' | 'qty'>>();
+// a grouped aggregate always carries each bucket's row count; an ungrouped one only when asked
+type Grouped = ReadAnswer<{ readonly orders: { readonly aggregate: { readonly by: 'status' } } }>;
+is<Eq<Grouped['orders']['rows'][number]['count'], number>>();
+type GroupedLayer = ReadAnswer<{
+	readonly 'orders.lines': { readonly aggregate: { readonly by: 'item' } };
+}>;
+is<Eq<GroupedLayer['orders']['rows'][number]['lines'][number]['count'], number>>();
+type Ungrouped = ReadAnswer<{
+	readonly orders: { readonly aggregate: { readonly sum: readonly ['total'] } };
+}>;
+is<Eq<Ungrouped['orders']['count'], number | undefined>>();
 
 // ── valid calls ──
 export const reads = [
 	ctx.query({
-		orders: { where: { status: { eq: 'draft' } }, fields: ['number', 'total'], orderBy: 'due', limit: 100 },
+		orders: {
+			where: { status: { eq: 'draft' } },
+			fields: ['number', 'total'],
+			orderBy: 'due',
+			limit: 100
+		},
 		'orders.lines': { where: { item: { ne: '' } }, limit: 50 },
 		'orders.customer': {},
 		notices: { limit: 1 }
 	}),
-	ctx.query({ orders: { aggregate: { count: true } }, 'orders.lines': { aggregate: { sum: ['qty'] } } })
+	ctx.query({
+		orders: { aggregate: { count: true } },
+		'orders.lines': { aggregate: { sum: ['qty'] } }
+	}),
+	ctx.query({
+		orders: { output: 'logistics', where: { status: { eq: 'submitted' } }, fields: ['number'] },
+		'orders.lines': { where: { qty: { gt: 0 } } }
+	}),
+	ctx.query({ orders: { output: 'default' }, 'orders.customer': {} })
 ];
 
 // ── refused ──
@@ -60,3 +94,11 @@ ctx.query({ orders: { where: () => ({}) } });
 ctx.query({ orders: {}, 'orders.customer': { where: { email: { eq: 'a@b.c' } } } });
 // @ts-expect-error a root `where` cannot name a field outside the model
 ctx.query({ orders: { where: { secret: { eq: 1 } } } });
+// @ts-expect-error an output the model does not declare
+ctx.query({ orders: { output: 'full' } });
+// @ts-expect-error a layer outside the named output (logistics declares no orders.customer)
+ctx.query({ orders: { output: 'logistics' }, 'orders.customer': {} });
+// @ts-expect-error a field outside the named output
+ctx.query({ orders: { output: 'logistics', fields: ['note'] } });
+// @ts-expect-error a root `where` over a field outside the named output
+ctx.query({ orders: { output: 'logistics', where: { note: { isNull: true } } } });

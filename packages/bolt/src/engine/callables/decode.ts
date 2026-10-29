@@ -340,12 +340,10 @@ export function outputSchema(
 						'guest',
 						`Unknown output field '${output.of}.${name}'.`
 					);
-				const masked = Schema.Struct({ $masked: Schema.Literal(true) });
-				const readable = Schema.Union([member, masked]);
 				columns[name] =
 					declared !== undefined && ['json', 'custom', 'file'].includes(declared.kind)
-						? Schema.optionalKey(readable)
-						: readable;
+						? Schema.optionalKey(member)
+						: member;
 			}
 			codec = Schema.Struct({
 				...columns,

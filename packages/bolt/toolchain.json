@@ -1,11 +1,8 @@
 {
 	"$comment": "The toolchain of a template pinned to this Bolt release, published with it: `bolt templates lock` writes the set of each template's own pinned Bolt into its package.json. `firstParty` names packages pinned to this Bolt's own version.",
 	"firstParty": {
-		"dependencies": [
-			"@norbital-ai/std",
-			"@norbital-ai/ui"
-		],
-		"devDependencies": []
+		"dependencies": ["@norbital-ai/std", "@norbital-ai/ui"],
+		"devDependencies": ["@norbital-ai/bolt-cli"]
 	},
 	"dependencies": {
 		"effect": "4.0.6",

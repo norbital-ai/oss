@@ -2,7 +2,7 @@
 import type { Effect, Stream } from 'effect';
 import type { Json } from '@norbital-ai/std/wire';
 import type { Value, FileRef, FileUrlOptions } from '@norbital-ai/std/kind';
-import type { Page, Values } from '../model/types.js';
+import type { Page, Row, Values } from '../model/types.js';
 import type { RecordCapabilities, RecordParentContext, RestorePreview } from '../record/types.js';
 import type { Offer } from '../filter/filter.js';
 export type { Json } from '@norbital-ai/std/wire';
@@ -14,6 +14,20 @@ export type ReadError = Error &
 		| { readonly _tag: 'ReadFailed'; readonly code: string; readonly message: string }
 		| { readonly _tag: 'TransportFailed'; readonly status: number; readonly message: string }
 	);
+/** A read request's answer (`query`): one page per root. */
+export type QueryAnswer<R = Row> = { readonly [root: string]: Page<R> };
+/** One revision of a record as `history` answers it (rule 17). */
+export type HistoryEntry = {
+	readonly revision: number;
+	readonly at: string | null;
+	readonly actor: { readonly kind: string; readonly id: string } | null;
+	/** A per-record restore's source revision; `null` for any other write. */
+	readonly restoredFrom: number | null;
+	/** The approval request this revision belongs to and that request's state now. */
+	readonly approval: { readonly request: string; readonly state: string | null } | null;
+	/** The fields this revision wrote, as the read's output shows them. */
+	readonly changed: Values;
+};
 /**
  * A read (`query`, `aggregate`, `history`), as bolt's `Query<T>`: read in a component (`.current`, `.loading`, `.error`)
  * it is live, subscribing on the first reactive read and unsubscribing 30 s after its last reader is destroyed; awaited
@@ -132,8 +146,7 @@ export type ApprovalView = {
 		rolledBack?:
 			| readonly { model: string; id: string; action: 'restored' | 'removed' | 'recreated' }[]
 			| undefined;
-		skipped?:
-			readonly { model: string; id: string; field: string; reason: string }[] | undefined;
+		skipped?: readonly { model: string; id: string; field: string; reason: string }[] | undefined;
 	}[];
 	/** The records the provisional change holds: committed already, rolled back on rejection. */
 	records: readonly { model: string; id: string; op: 'create' | 'update' | 'delete' }[];
@@ -160,13 +173,15 @@ export type ViewBolt = {
 	 * One read request (`query({ <root>: { where?, fields?, orderBy?, limit?, after?, search? }, '<root>.<layer>': { … } })`),
 	 * answered as a page per root; a declared layer nests under its relation in each row.
 	 */
-	query<T = { readonly [root: string]: Page }>(request: {
-		readonly [path: string]: Json;
-	}): Query<T>;
-	/** Without `by`, one row over the scope; with `by`, a page of buckets. */
-	aggregate<T = readonly Values[]>(model: string, args: Value): Query<T>;
+	query<T = QueryAnswer>(request: { readonly [path: string]: Json }): Query<T>;
+	/** Without `by`, one row over the scope (`Values`); with `by`, a page of buckets (`Page<Values>`). */
+	aggregate<T>(model: string, args: Value): Query<T>;
 	/** A record's revisions, newest first, or from `at` (`{ instant } | { revision } | { before }`). */
-	history<T = Json>(model: string, id: string, options?: { at?: Json }): Query<T>;
+	history<T = readonly HistoryEntry[]>(
+		model: string,
+		id: string,
+		options?: { at?: Json; output?: string }
+	): Query<T>;
 	/** With a unit, reactive (it changes at each minute, hour or day in the workspace zone); without, the page's open. */
 	clock(unit?: 'minute' | 'hour' | 'day'): Clock;
 	recordCapabilities?(
@@ -184,11 +199,7 @@ export type ViewBolt = {
 	 * write; `run` writes it as one update observed at `live`, recorded in history as restored from that revision.
 	 */
 	restore?: {
-		preview(
-			model: string,
-			record: string,
-			revision: number
-		): Effect.Effect<RestorePreview, Error>;
+		preview(model: string, record: string, revision: number): Effect.Effect<RestorePreview, Error>;
 		run(
 			model: string,
 			record: string,

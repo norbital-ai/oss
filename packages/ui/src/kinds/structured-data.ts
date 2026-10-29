@@ -1,7 +1,7 @@
 import { Decimal } from '@norbital-ai/std/decimal';
-import { Array as Arr } from 'effect';
-import { isMasked, type Kind, type Value } from './kind.js';
-import { isJsonSchema, resolveJsonSchema, type JsonSchema } from './json-schema.js';
+import { Array as Arr, Schema } from 'effect';
+import { valueObject, type Kind, type Value } from './kind.js';
+import { resolveJsonSchema, type JsonSchema } from './json-schema.js';
 
 /** Stable row identities by JSON Pointer; a tuple names a composite identity. */
 export type ArrayKeys = Readonly<Record<string, string | readonly string[]>>;
@@ -13,23 +13,15 @@ export type DataPair = {
 	index: number | undefined;
 };
 
-/** Structures only: decimals and masked values remain opaque leaves. */
+/** Structures only: decimals remain opaque leaves. */
 export function dataEntries(value: Value | undefined): Readonly<Record<string, Value>> | undefined {
-	return value !== undefined &&
-		value !== null &&
-		typeof value === 'object' &&
-		!Arr.isArray<Value>(value) &&
-		!(value instanceof Decimal) &&
-		!isMasked(value)
-		? value
-		: undefined;
+	return valueObject(value) ? value : undefined;
 }
 
 /** Equality preserves missing/null and scalar types; object declaration order is immaterial. */
 export function dataEqual(before: Value | undefined, value: Value | undefined): boolean {
 	if (before === value) return true;
 	if (before === undefined || value === undefined) return false;
-	if (isMasked(before) || isMasked(value)) return isMasked(before) && isMasked(value);
 	if (before instanceof Decimal || value instanceof Decimal)
 		return before instanceof Decimal && value instanceof Decimal && before.eq(value);
 	if (Arr.isArray<Value>(before) || Arr.isArray<Value>(value))
@@ -67,7 +59,7 @@ const observedType = (value: Value): ObservedType => {
 };
 
 function inferValues(values: readonly Value[]): JsonSchema {
-	if (values.length === 0 || values.some(isMasked)) return {};
+	if (values.length === 0) return {};
 	const groups = new Map<ObservedType, Value[]>();
 	for (const value of values) {
 		const type = observedType(value);
@@ -116,8 +108,6 @@ export function inferJsonSchema(value: Value | undefined): JsonSchema {
 type SchemaObject = Exclude<JsonSchema, boolean>;
 const schemaTypes = (schema: SchemaObject): readonly string[] =>
 	typeof schema.type === 'string' ? [schema.type] : (schema.type ?? []);
-const schemaParts = (value: unknown): readonly JsonSchema[] | undefined =>
-	Arr.isArray(value) && value.every(isJsonSchema) ? value : undefined;
 const intersection = (left: JsonSchema, right: JsonSchema): JsonSchema =>
 	left === true
 		? right
@@ -127,12 +117,18 @@ const intersection = (left: JsonSchema, right: JsonSchema): JsonSchema =>
 				? false
 				: { allOf: [left, right] };
 
+const isLower = Schema.is(
+	Schema.Literals(['minimum', 'exclusiveMinimum', 'minLength', 'minItems', 'minProperties'])
+);
+const isUpper = Schema.is(
+	Schema.Literals(['maximum', 'exclusiveMaximum', 'maxLength', 'maxItems', 'maxProperties'])
+);
 /** Merge only intersections whose shared keywords have an unambiguous rendering plan. */
 function intersectPlan(left: JsonSchema, right: JsonSchema): JsonSchema | undefined {
 	if (left === false || right === false) return false;
 	if (left === true) return right;
 	if (right === true) return left;
-	const merged: Record<string, unknown> = { ...right, ...left };
+	const merged: { -readonly [K in keyof SchemaObject]: SchemaObject[K] } = { ...right, ...left };
 	for (const key of Object.keys(left).filter((key) => Object.hasOwn(right, key))) {
 		if (left[key] === right[key] || key === 'title' || key === 'description') continue;
 		if (key === 'type') {
@@ -168,19 +164,18 @@ function intersectPlan(left: JsonSchema, right: JsonSchema): JsonSchema | undefi
 			merged.required = [...new Set([...(left.required ?? []), ...(right.required ?? [])])];
 		else if (key === 'items' && left.items !== undefined && right.items !== undefined)
 			merged.items = intersection(left.items, right.items);
-		else if (key === 'additionalProperties' && isJsonSchema(left[key]) && isJsonSchema(right[key]))
-			merged[key] = intersection(left[key], right[key]);
 		else if (
-			['minimum', 'exclusiveMinimum', 'minLength', 'minItems', 'minProperties'].includes(key) &&
-			typeof left[key] === 'number' &&
-			typeof right[key] === 'number'
+			key === 'additionalProperties' &&
+			left.additionalProperties !== undefined &&
+			right.additionalProperties !== undefined
 		)
+			merged.additionalProperties = intersection(
+				left.additionalProperties,
+				right.additionalProperties
+			);
+		else if (isLower(key) && left[key] !== undefined && right[key] !== undefined)
 			merged[key] = Math.max(left[key], right[key]);
-		else if (
-			['maximum', 'exclusiveMaximum', 'maxLength', 'maxItems', 'maxProperties'].includes(key) &&
-			typeof left[key] === 'number' &&
-			typeof right[key] === 'number'
-		)
+		else if (isUpper(key) && left[key] !== undefined && right[key] !== undefined)
 			merged[key] = Math.min(left[key], right[key]);
 		else if (key === 'enum' && left.enum !== undefined && right.enum !== undefined)
 			merged.enum = left.enum.filter((item) => right.enum?.some((other) => dataEqual(item, other)));
@@ -244,9 +239,7 @@ export function structuredSchema(schema: JsonSchema, root: JsonSchema, value?: V
 			return resolved === false || raw.$ref === undefined ? resolved : raw;
 		let current: JsonSchema = resolved;
 		if (resolved.allOf !== undefined) {
-			const parts = schemaParts(resolved.allOf);
-			if (parts === undefined) return resolved;
-			const { allOf: _allOf, ...base } = resolved;
+			const { allOf: parts, ...base } = resolved;
 			current = base;
 			for (const part of parts) {
 				const merged = intersectPlan(current, plan(part, held, depth + 1, nextSeen));
@@ -255,7 +248,7 @@ export function structuredSchema(schema: JsonSchema, root: JsonSchema, value?: V
 			}
 		}
 		if (typeof current === 'boolean' || held === undefined) return current;
-		const variants = schemaParts(current.oneOf ?? current.anyOf);
+		const variants = current.oneOf ?? current.anyOf;
 		if (variants === undefined) return current;
 		const candidates = variants.map((branch) => plan(branch, held, depth + 1, nextSeen));
 		const matches = candidates.filter((branch) => compatible(branch, held, depth + 1) === true);

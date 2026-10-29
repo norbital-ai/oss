@@ -9,13 +9,13 @@ Name the records people find in a table, the actions they take and the changes t
 Then choose storage. A screen, tab, schema property or noun does not by itself justify a model.
 Keep the smallest set of entities that preserves the required behaviour.
 
-| Need                                                                           | Prefer                                            |
-| ------------------------------------------------------------------------------ | ------------------------------------------------- |
-| A scalar with a built-in meaning                                               | its built-in field kind                           |
-| A structured value meaningful only within one parent                           | shaped `json` or a custom datatype on that parent |
-| A reusable value shape with validation or editing beyond the built-in renderer | `customField` plus its companion renderer         |
-| Independent identity, lifecycle, permissions, history or relational queries    | a model                            |
-| Reused, effective-dated configuration that other records reference             | a runtime catalogue model                    |
+| Need                                                                           | Prefer                                                       |
+| ------------------------------------------------------------------------------ | ------------------------------------------------------------ |
+| A scalar with a built-in meaning                                               | its built-in field kind                                      |
+| A structured value meaningful only within one parent                           | shaped `json` or a custom datatype on that parent            |
+| A reusable value shape with validation or editing beyond the built-in renderer | `customField` plus its companion renderer                    |
+| Independent identity, lifecycle, permissions, history or relational queries    | a model                                                      |
+| Reused, effective-dated configuration that other records reference             | a runtime catalogue model                                    |
 | A result derivable from existing facts                                         | a computed field, roll-up, or a read plus a `src/lib` helper |
 
 Prefer inline values when their entries are born, edited, sealed and discarded with the parent.

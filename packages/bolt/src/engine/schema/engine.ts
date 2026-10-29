@@ -200,7 +200,7 @@ const REGISTRY = (): readonly Private[] => [
 	{
 		name: 'bolt_run_admitted',
 		rank: 'table',
-		why: 'the first-admission marker (rule 70): one timestamp row, no key',
+		why: 'retired first-admission marker: a pack load queues its `start` runs; kept so existing databases plan unchanged',
 		sql: ['create table if not exists bolt_run_admitted (at timestamptz not null)']
 	},
 	noticeTrigger('bolt_notice_deliver', NOTIFY, '<>', ' and f.member is null'),

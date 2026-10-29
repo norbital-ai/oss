@@ -38,6 +38,7 @@ import {
 	header,
 	invalid,
 	RateLimits,
+	rateLimitedResponse,
 	requestActRate,
 	requestReadRate,
 	wireReadAdmitted,
@@ -64,6 +65,8 @@ import {
 } from '../engine/identity/members.ts';
 import {
 	authenticate,
+	mergeAnonymous,
+	mintAnonymous,
 	requireAdmin,
 	revokeSession,
 	sendCode,
@@ -71,11 +74,11 @@ import {
 	verifyCode,
 	type IdentityHost
 } from '../engine/identity/session.ts';
-import { BOLT, HEADERS, PATHS, SW, basePath, under } from '../protocol/wire.ts';
+import { BOLT, HEADERS, PATHS, SW, basePath, canonicalPath, under } from '../protocol/wire.ts';
 import { fingerprint, schemaSlice } from '../engine/schema/plan.ts';
 import { inbox } from './inbox/data.ts';
 import { instanceMessages } from './integration/messages.ts';
-import { runList } from './runs/data.ts';
+import { runList } from '../engine/runs/index.ts';
 import { outputFiles } from '../engine/runs/output-files.ts';
 import { settings, SettingsOp, applySettings } from './settings/data.ts';
 import { exposure } from '../engine/access/exposure.ts';
@@ -87,7 +90,9 @@ import {
 	canOpen,
 	challengeOf,
 	holdsPublic,
+	isOpenRoute,
 	kioskNav,
+	route,
 	startableAutomations,
 	automationInputs,
 	cookieNames,
@@ -148,7 +153,10 @@ export class Turnstile extends Context.Service<Turnstile, TurnstileShape>()('bol
 						siteKey: undefined,
 						verify: () =>
 							Effect.fail(
-								new Unavailable({ facility: 'turnstile', reason: 'This host verifies no challenge.' })
+								new Unavailable({
+									facility: 'turnstile',
+									reason: 'This host verifies no challenge.'
+								})
 							)
 					}
 				: {
@@ -362,7 +370,6 @@ const makeShell = Effect.gen(function* () {
 	const authorities = new Authorities(m, (yield* Activation).release);
 
 	h.events = {
-		manifest: m,
 		announce: h.now.pipe(Effect.flatMap((now) => runs.nudge(now.toISOString())))
 	};
 	const secure = c.secure ?? true;
@@ -443,6 +450,43 @@ const makeShell = Effect.gen(function* () {
 		);
 		return s === null ? null : { token, ...s };
 	});
+	type Visitor = {
+		readonly id: string;
+		readonly anonymous: boolean;
+		readonly token: string | null;
+	};
+	/** The visitor's anonymous user, whose session token the visitor cookie holds; without one, a per-request id. */
+	const visitorOf = Effect.fn('shell.visitorOf')(function* (
+		request: HttpServerRequest.HttpServerRequest
+	) {
+		const token = sessionToken(request, names.visitor);
+		const s =
+			token === null
+				? null
+				: yield* authenticate(h, token).pipe(
+						Effect.catchTag('IdentityRefusal', () => Effect.succeed(null))
+					);
+		return s === null || token === null
+			? ({ id: yield* uuid, anonymous: false, token: null } satisfies Visitor)
+			: ({ id: s.user, anonymous: true, token } satisfies Visitor);
+	});
+	/** Opening a public surface without an identity mints an anonymous user, at most `register` per IP; past it, none. */
+	const mintVisitor = Effect.fn('shell.mintVisitor')(function* (
+		request: HttpServerRequest.HttpServerRequest,
+		auth: Authority
+	) {
+		const ip = rateLimits.ipBucket(Option.getOrElse(request.remoteAddress, () => '0.0.0.0'));
+		const verdict = yield* rateLimits.charge(
+			chargesFor(auth, ['register'], { ip }),
+			yield* Clock.currentTimeMillis
+		);
+		if (!verdict.ok) return null;
+		const minted = yield* mintAnonymous(h);
+		return { id: minted.user, anonymous: true, token: minted.token } satisfies Visitor;
+	});
+	/** The visitor cookie follows the anonymous user's sliding session. */
+	const visitorCookie = (v: Visitor): Record<string, string> =>
+		v.token === null ? {} : { 'set-cookie': cookie(names.visitor, v.token, VISITOR_S) };
 	const resolveCaller = Effect.fn('shell.caller')(function* (
 		request: HttpServerRequest.HttpServerRequest
 	): Effect.fn.Return<Caller, EngineError> {
@@ -455,7 +499,7 @@ const makeShell = Effect.gen(function* () {
 		if (kiosk === null) return x;
 		const me = x.authority !== null && x.authority.actor.kind === 'member' ? x.authority : null;
 		const authority = Option.getOrNull(
-			yield* kioskAuthority(m, kiosk, me, cookies(scoped).get(names.visitor) ?? (yield* uuid)).pipe(
+			yield* kioskAuthority(m, kiosk, me, yield* visitorOf(scoped)).pipe(
 				Effect.provideService(Identity, identity)
 			)
 		);
@@ -482,8 +526,9 @@ const makeShell = Effect.gen(function* () {
 			const me = s === null || member === null ? null : marked(s, member);
 			if (s !== null && me !== null && holdsPublic(me, app))
 				return { authority: me, real: me, token: s.token, preview: null, expiresAt: s.expiresAt };
+			const v = yield* visitorOf(request);
 			return {
-				authority: authorities.visitor(app, jar.get(names.visitor) ?? (yield* uuid)),
+				authority: authorities.visitor(app, v.id, v.anonymous),
 				real: null,
 				token: null,
 				preview: null
@@ -551,7 +596,7 @@ const makeShell = Effect.gen(function* () {
 				chargesFor(auth, [kind], { ip: macKey(h.keys.ipMac, addressBucket(ip)) }),
 				yield* Clock.currentTimeMillis
 			);
-			return verdict.ok ? null : refused('rateLimited', 'rateLimited', 429, verdict.retryAfter);
+			return verdict.ok ? null : rateLimitedResponse(verdict.retryAfter);
 		});
 		const challenge = Effect.gen(function* () {
 			if (challengeOf(m, app) === undefined) return null;
@@ -563,12 +608,16 @@ const makeShell = Effect.gen(function* () {
 				: refused('forbidden', 'forbidden', 403);
 		});
 		const forbidden = refused('forbidden', 'Visitors may not do this.', 403);
-		if (auth.kiosk !== undefined && path === PATHS.live) return yield* charge('read');
-		if (path === PATHS.q && request.method === 'POST') {
+		const read = Effect.gen(function* () {
 			const verdict = yield* requestReadRate(request, auth).pipe(
 				Effect.provideService(RateLimits, rateLimits)
 			);
-			if (!verdict.ok) return refused('rateLimited', 'rateLimited', 429, verdict.retryAfter);
+			return verdict.ok ? null : rateLimitedResponse(verdict.retryAfter);
+		});
+		if (auth.kiosk !== undefined && path === PATHS.live) return yield* read;
+		if (path === PATHS.q && request.method === 'POST') {
+			const limited = yield* read;
+			if (limited !== null) return limited;
 			const body = yield* requestBody(request, QBody);
 			return body.reads.every((read) => wireReadAdmitted(auth, read)) ? null : forbidden;
 		}
@@ -578,7 +627,7 @@ const makeShell = Effect.gen(function* () {
 			);
 			const limited = admission.verdict.ok
 				? null
-				: refused('rateLimited', 'rateLimited', 429, admission.verdict.retryAfter);
+				: rateLimitedResponse(admission.verdict.retryAfter);
 			const checked = limited ?? (yield* challenge);
 			if (checked !== null) return checked;
 			const body = yield* requestBody(request, ActBody),
@@ -632,12 +681,15 @@ const makeShell = Effect.gen(function* () {
 		// cut to what the kiosk may read. Anything else is unauthenticated (signed-out) or forbidden.
 		const kioskName = Option.getOrNull(requestKiosk(request, true));
 		if (kioskName !== null) {
-			const jar = cookies(request),
-				id = jar.get(names.visitor) ?? (yield* uuid);
+			let v = yield* visitorOf(request);
 			const meAuth = x.authority?.actor.kind === 'member' ? x.authority : null;
-			const opened = yield* kioskBoot(m, kioskName, meAuth, id).pipe(
-				Effect.provideService(Identity, identity)
-			);
+			const open = (visitor: Visitor) =>
+				kioskBoot(m, kioskName, meAuth, visitor).pipe(Effect.provideService(Identity, identity));
+			let opened = yield* open(v);
+			if (opened._tag === 'Visitor' && !v.anonymous) {
+				const minted = yield* mintVisitor(request, opened.authority);
+				if (minted !== null) opened = yield* open((v = minted));
+			}
 			if (opened._tag === 'Unknown') return rejected(refused('notFound', 'No such kiosk.', 404));
 			if (opened._tag === 'SignIn')
 				return rejected(
@@ -671,27 +723,23 @@ const makeShell = Effect.gen(function* () {
 			}
 			const auth = opened.authority;
 			const b = { ...bootFor(m, ws, auth), nav: [], visitor: { app: kioskName } };
-			return ready(
-				b,
-				auth,
-				jar.has(names.visitor) ? {} : { 'set-cookie': cookie(names.visitor, id, VISITOR_S) }
-			);
+			return ready(b, auth, visitorCookie(v));
 		}
-		// a visitor page (unless the member signed in holds it): the visitor cookie is minted when absent, and the page sees only its own app
+		// a visitor page (unless the member signed in holds it): an anonymous user is minted when absent, and the page sees
+		// only its own app
 		if (app !== null && !(x.authority !== null && holdsPublic(x.authority, app))) {
-			const jar = cookies(request),
-				id = jar.get(names.visitor) ?? (yield* uuid);
-			const auth = authorities.visitor(app, id);
+			let v = yield* visitorOf(request);
+			let auth = authorities.visitor(app, v.id, v.anonymous);
+			if (!v.anonymous) {
+				const minted = yield* mintVisitor(request, auth);
+				if (minted !== null) auth = authorities.visitor(app, (v = minted).id, true);
+			}
 			const siteKey = challengeOf(m, app) === undefined ? undefined : turnstile?.siteKey;
 			const b = {
 				...bootFor(m, ws, auth),
 				visitor: { app, ...(siteKey === undefined ? {} : { siteKey }) }
 			};
-			return ready(
-				b,
-				auth,
-				jar.has(names.visitor) ? {} : { 'set-cookie': cookie(names.visitor, id, VISITOR_S) }
-			);
+			return ready(b, auth, visitorCookie(v));
 		}
 		const auth = x.authority;
 		// the access pages name the workspace (and its environment) to a signed-out caller
@@ -761,9 +809,8 @@ const makeShell = Effect.gen(function* () {
 	): Effect.fn.Return<PublicPageCaller, EngineError> {
 		if (duplicateCredentials(request, credentialNames))
 			return rejected(refused('invalid', 'Duplicate credentials are refused.', 400));
-		const jar = cookies(request);
-		const id = jar.get(names.visitor) ?? (yield* uuid);
 		const url = requestUrl(request);
+		const next = `${url.pathname}${url.search}`;
 		url.searchParams.delete('app');
 		url.searchParams.delete('kiosk');
 		url.searchParams.set(
@@ -772,16 +819,17 @@ const makeShell = Effect.gen(function* () {
 		);
 		let headers = Headers.remove(Headers.remove(request.headers, VISITOR_APP), HEADERS.kiosk);
 		if (target.kind === 'app') headers = Headers.set(headers, VISITOR_APP, target.app);
-		if (!jar.has(names.visitor))
-			headers = Headers.set(
-				headers,
-				'cookie',
-				[getHeader(request, 'cookie'), `${names.visitor}=${encodeURIComponent(id)}`]
-					.filter((value) => value !== null && value !== '')
-					.join('; ')
-			);
 		const selected = request.modify({ url: url.pathname + url.search, headers });
-		const state = yield* bootState(selected, yield* baseCaller(selected));
+		const x = yield* baseCaller(selected);
+		// a page that needs sign-in sends a signed-out caller to sign in (or sign up), and back to it after
+		if (x.authority === null && !isOpenRoute(m, route(m, url)))
+			return rejected(
+				HttpServerResponse.redirect(
+					under(c.publicUrl, `/sign-in?next=${encodeURIComponent(next)}`),
+					{ status: 303 }
+				)
+			);
+		const state = yield* bootState(selected, x);
 		if (state._tag === 'Refused') return state;
 		if (target.kind === 'app' && !canOpen(m, state.authority, target.app))
 			return rejected(refused('forbidden', 'This page is not open to you.', 403));
@@ -789,12 +837,7 @@ const makeShell = Effect.gen(function* () {
 			...state,
 			request: selected,
 			base: new URL(c.publicUrl).pathname.replace(/\/$/, ''),
-			headers: {
-				...state.headers,
-				...(!jar.has(names.visitor) && state.authority.actor.kind === 'visitor'
-					? { 'set-cookie': cookie(names.visitor, id, VISITOR_S) }
-					: {})
-			}
+			headers: state.headers
 		};
 	});
 	const sessionRoutes: Readonly<
@@ -842,15 +885,37 @@ const makeShell = Effect.gen(function* () {
 					request,
 					Schema.Struct({ address: Schema.String, code: Schema.String })
 				);
+				// the visitor's anonymous user links to the account: a newcomer becomes it, an existing account absorbs it
+				const v = yield* visitorOf(request);
 				const session = yield* verifyCode(
 					h,
 					body.address,
 					body.code,
-					Option.getOrElse(request.remoteAddress, () => '0.0.0.0')
+					Option.getOrElse(request.remoteAddress, () => '0.0.0.0'),
+					v.anonymous ? v.id : null
 				);
-				return json({ value: { user: session.user } }, 200, {
+				if (v.anonymous && session.user !== v.id) yield* mergeAnonymous(h, m, v.id, session.user);
+				const response = json({ value: { user: session.user } }, 200, {
 					'set-cookie': cookie(names.session, session.token, SESSION_S)
 				});
+				return v.token === null
+					? response
+					: response.pipe(
+							HttpServerResponse.setCookiesUnsafe([
+								[
+									names.visitor,
+									'',
+									{
+										path: basePath(c.publicUrl) || '/',
+										httpOnly: true,
+										secure,
+										partitioned: secure,
+										sameSite: secure ? 'none' : 'lax',
+										maxAge: 0
+									}
+								]
+							])
+						);
 			}),
 		[`POST ${PATHS.session.signout}`]: (request) =>
 			Effect.gen(function* () {
@@ -1305,6 +1370,16 @@ const makeShell = Effect.gen(function* () {
 	const handle: Handler = (request) =>
 		Effect.gen(function* () {
 			const path = requestUrl(request).pathname;
+			// the request line as sent: `//x` would parse as an authority
+			const at = request.url.indexOf('?'),
+				sent = at < 0 ? request.url : request.url.slice(0, at);
+			if (sent.startsWith('/') && canonicalPath(sent) !== sent)
+				return Option.some(
+					HttpServerResponse.redirect(
+						`${under(c.publicUrl, canonicalPath(sent))}${at < 0 ? '' : request.url.slice(at)}`,
+						{ status: 308 }
+					)
+				);
 			if (duplicateCredentials(request, credentialNames))
 				return Option.some(refused('invalid', 'Duplicate credentials are refused.', 400));
 			const origin = getHeader(request, 'origin'),

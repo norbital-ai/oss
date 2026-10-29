@@ -7,6 +7,7 @@ import { relations as manifestRelations } from '../manifest.ts';
 import { nullableOfExpr, type LayerColumns } from '../../decl/model.ts';
 import { FieldsSchema } from '../../protocol/public-page.ts';
 import { SYSTEM } from '../../system/index.ts';
+import { viewOutput } from './authority.ts';
 
 /** A relationship's static `where` is JSON by construction; decoded once for the browser's picker. */
 const pickerWhere = Schema.decodeUnknownSync(Schema.Record(Schema.String, Schema.Json));
@@ -169,9 +170,9 @@ function sumOf(
 	};
 }
 /**
- * The caller's models for ui: the model's label and search fields, the fields and one-relations the model and
- * the caller's read arms expose (rule 14), the create/update columns the caller holds, and which of the
- * exposed fields are masked on some rows for this caller.
+ * The caller's models for ui: the model's label and search fields, the fields, one-relations and layers of the output
+ * the caller's views read (`default` when granted, else the first named output it holds; `output` names a named one),
+ * and the create/update columns the caller holds.
  */
 export function exposure(
 	m: EngineManifest,
@@ -195,18 +196,16 @@ export function exposure(
 	for (const [c, spec] of Object.entries(m.exposures)) {
 		const ca = a.models[c],
 			model = m.models[c];
-		const arms = ca?.read[c] ?? [];
-		const reads = a.admin || arms.length > 0;
+		const output = viewOutput(m, a, c);
+		const reads = output !== undefined;
+		const read = (output === undefined || output === 'default' ? spec.read : spec.outputs?.[output]) ?? {};
 		const writes = (['create', 'update'] as const).filter(
 			(v) => spec[v] !== undefined && (a.admin || (ca?.[v].length ?? 0) > 0)
 		);
 		if (model === undefined || (!reads && writes.length === 0)) continue;
-		// the root layer's declared fields, narrowed by the caller's root read arms (rule 14)
-		const declared = spec.read[c]?.fields ?? [];
-		const armed = (field: string) =>
-			a.admin || arms.some((arm) => arm.fields === 'all' || arm.fields.includes(field));
-		const readable = (f: string) =>
-			reads && (declared === 'all' || declared.includes(f)) && armed(f);
+		// the root layer's fields in the output the caller's views read
+		const declared = read[c]?.fields ?? [];
+		const readable = (f: string) => reads && (declared === 'all' || declared.includes(f));
 		// the columns this caller's own create/update arms admit (rule 14): a column no held arm names is filled by the host
 		const remote = syncFields(m, c);
 		const owned = (manifestRelations(m).from.get(c) ?? [])
@@ -253,7 +252,7 @@ export function exposure(
 		// the root's read layers one level down (a ref or a many-relation); the many-relations among them
 		const layers = !reads
 			? []
-			: Object.keys(spec.read).flatMap((path) => {
+			: Object.keys(read).flatMap((path) => {
 					const rel = path.startsWith(`${c}.`) ? path.slice(c.length + 1) : '';
 					return rel === '' || rel.includes('.') ? [] : [rel];
 				});
@@ -282,11 +281,9 @@ export function exposure(
 				.filter((field) => readable(field) || relations.some(([fk]) => fk === field))
 				.map((field) => [field, 'ownedParent'] as const)
 		]);
-		const masked = a.admin
-			? []
-			: Object.keys(ca?.masks[c] ?? {}).filter((f) => fields.some(([x]) => x === f));
 		out[c] = {
 			label: [model.label].flat(),
+			...(output === undefined || output === 'default' ? {} : { output }),
 			...(model.search === undefined ? {} : { search: model.search.text }),
 			...(model.search?.semantic === undefined ? {} : { semantic: true as const }),
 			fields: fieldsOf(fields),
@@ -319,7 +316,6 @@ export function exposure(
 					];
 				})
 			),
-			...(masked.length === 0 ? {} : { masked }),
 			...(Object.keys(readonlyFields).length === 0 ? {} : { readonlyFields }),
 			...(model.locked === undefined ? {} : { locked: model.locked }),
 			description: model.description,
@@ -329,22 +325,19 @@ export function exposure(
 			...syncsOf(m, a, c, reads)
 		};
 	}
-	// the system targets a relation, an `id` input or a file field points at: their declared fields as the caller's grants or
-	// the kernel directory let it read them
+	// the system targets a relation, an `id` input or a file field points at: the fields of the output the caller's grants
+	// or the kernel directory let it read
 	for (const c of TARGETS) {
-		const arms = a.models[c]?.read[c] ?? [],
-			model = SYSTEM.models[c]!,
-			read = SYSTEM.exposures[c]!.read[c]?.fields ?? [];
-		if (!a.admin && arms.length === 0) continue;
-		const readable = Object.entries(model.fields).filter(
-			([f]) =>
-				(read === 'all' || read.includes(f)) &&
-				(a.admin || arms.some((x) => x.fields === 'all' || x.fields.includes(f)))
-		);
+		const output = viewOutput(m, a, c);
+		if (output === undefined) continue;
+		const model = SYSTEM.models[c]!,
+			spec = SYSTEM.exposures[c]!,
+			read = (output === 'default' ? spec.read : spec.outputs?.[output])?.[c]?.fields ?? [];
+		const shown = (f: string) => read === 'all' || read.includes(f);
+		const readable = Object.entries(model.fields).filter(([f]) => shown(f));
 		const relations = Object.entries(SYSTEM.relationships).flatMap(([key, relation]) => {
 			const [from, field] = key.split('.');
-			return from === c &&
-				(a.admin || arms.some((arm) => arm.fields === 'all' || arm.fields.includes(field!)))
+			return from === c && shown(field!)
 				? ([
 						[
 							field!,
@@ -358,6 +351,7 @@ export function exposure(
 		});
 		out[c] = {
 			label: [model.label].flat(),
+			...(output === 'default' ? {} : { output }),
 			fields: fieldsOf(readable),
 			...(relations.length > 0 ? { relations: Object.fromEntries(relations) } : {})
 		};

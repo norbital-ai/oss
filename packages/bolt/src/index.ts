@@ -12,10 +12,11 @@ export type { AppSpec, DeviceRequirement, EmbedOrigin, GroupSpec } from './decl/
 export { kiosk } from './decl/runtime/kiosk.ts';
 export type { KioskSpec } from './decl/runtime/kiosk.ts';
 export { automation } from './decl/runtime/automation.ts';
+export { seeder, type Seeder } from './decl/seeder.ts';
+export { idOf } from './decl/id.ts';
 export { integration, instanceId, isInstance } from './decl/runtime/integration.ts';
 export { pageServer } from './decl/runtime/page.ts';
 export type { PageData, PageLoad, PageLoadRequest, PageServer } from './decl/runtime/page.ts';
-export { isMasked } from './decl/names.ts';
 /** Pure: what changed between two JSON values, keyed list items matched by key (a reviewed draft's changes). */
 export { jsonDiff } from './engine/agent/draft.ts';
 export type { JsonChange } from './engine/agent/draft.ts';
@@ -167,10 +168,10 @@ export type {
 	KioskName,
 	McpName,
 	AuthoredModelName,
-	Masked,
 	Names,
 	RowApproval,
 	RowState,
+	OutputName,
 	PolicyName,
 	ReadField,
 	ReadPath,
@@ -218,6 +219,7 @@ export type {
 	AutomationCtx,
 	AutomationSpec,
 	Cron,
+	EffectCtx,
 	RunInput,
 	RunOutput,
 	Trigger,
@@ -248,6 +250,8 @@ export type {
 	RunCause,
 	RunHandle,
 	RunRow,
+	RunTrigger,
+	RunTriggerView,
 	RunStatus,
 	Schedule,
 	Send,
@@ -326,7 +330,6 @@ export type {
 	PageName,
 	SecretName
 } from './decl/runtime/names.ts';
-export type { BankReader, SeedSource } from './compiler/artifact/seed.ts'; // hook:cli — X-15's seed reader types (§3.3.10)
 export type { CustomFieldView, RecordView } from './shell/runtime.ts'; // hook:packaging-ui — X-20 and role 5's view props
 
 export type { Unavailable } from './decl/errors.ts';

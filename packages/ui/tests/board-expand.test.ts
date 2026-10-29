@@ -63,11 +63,13 @@ async function show() {
 			reads.push(options);
 			return { rows: filtered(options), next: null };
 		},
-		aggregate: (_model, options) =>
-			['todo', 'done'].map((status) => ({
+		aggregate: (_model, options) => ({
+			rows: ['todo', 'done'].map((status) => ({
 				key: { status },
 				count: filtered(options).filter((row) => row['status'] === status).length
-			}))
+			})),
+			next: null
+		})
 	});
 	const target = document.body.appendChild(document.createElement('div'));
 	const app = mount(Harness, {

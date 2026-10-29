@@ -8,7 +8,8 @@
 		"tsconfig.base.json",
 		"**/.env.*local",
 		"scripts/build-package.ts",
-		"scripts/lib/declaration-emit.mjs"
+		"scripts/lib/declaration-emit.ts",
+		"scripts/lib/error.ts"
 	],
 	"globalPassThroughEnv": ["CI"],
 	"tasks": {

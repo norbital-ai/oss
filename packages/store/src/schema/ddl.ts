@@ -5,7 +5,7 @@
 // One enforcing place per declared constraint: kind / NOT NULL / CHECK, FK, UNIQUE / EXCLUDE, GENERATED STORED
 // (`computed`, the search document). An audited table's uniques, checks and exclusions are DEFERRABLE INITIALLY
 // IMMEDIATE (a natural key is not: it is an `on conflict` arbiter). Legacy snapshots retain their original DDL.
-import { Effect, Schema } from 'effect';
+import { Effect, Predicate, Schema } from 'effect';
 import * as ReadonlyArray from 'effect/Array';
 import { sha256, toHex, canonical } from '../hash.ts';
 import type { Json } from '../values.ts';
@@ -33,11 +33,7 @@ export type ConstraintMeta = {
 };
 /** A check is a bare where literal or `{ where, message }` (the message is the refusal a reader is shown). */
 export const checkOf = (c: object): { where: object; message?: string } =>
-	'where' in c &&
-	typeof c.where === 'object' &&
-	c.where !== null &&
-	'message' in c &&
-	typeof c.message === 'string'
+	'where' in c && Predicate.isObject(c.where) && 'message' in c && typeof c.message === 'string'
 		? { where: c.where, message: c.message }
 		: { where: c };
 /** Create order: a later rank may depend on an earlier one; drops run in reverse. */
@@ -321,8 +317,6 @@ function sqlValue(v: unknown, type: string, native = false): Fx<string> {
 	if (typeof v === 'object') return Effect.succeed(`${lit(canonical(v))}::${type}`);
 	return Effect.succeed(`${lit(String(v))}::${type}`);
 }
-const isRecord = (v: unknown): v is { readonly [k: string]: unknown } =>
-	typeof v === 'object' && v !== null && !ReadonlyArray.isArray(v);
 /** A literal default, or a clock variable (`{ var: 'now' }`, `{ var: 'today + days(7)' }` in the schema's zone); a writer
  * fills the rest (`{ var: 'requestor.id' }`). */
 const defaultSql = Effect.fnUntraced(function* (
@@ -334,7 +328,11 @@ const defaultSql = Effect.fnUntraced(function* (
 	if (k.kind === 'state') return lit(k.initial);
 	const d = k.default;
 	if (d === undefined) return null;
-	if (isRecord(d) && Object.keys(d).length === 1 && typeof d['var'] === 'string') {
+	if (
+		Predicate.isReadonlyObject(d) &&
+		Object.keys(d).length === 1 &&
+		typeof d['var'] === 'string'
+	) {
 		const text = d['var'],
 			clock = clockDefault(text);
 		if (clock?.base === 'now' && (!native || k.kind === 'instant'))
@@ -377,7 +375,7 @@ const staticSql = Effect.fnUntraced(function* (
 /** A where literal with every object's keys sorted, at every depth: one predicate renders one way. */
 function sortedKeys(v: unknown): unknown {
 	if (ReadonlyArray.isArray(v)) return v.map(sortedKeys);
-	if (!isRecord(v)) return v;
+	if (!Predicate.isReadonlyObject(v)) return v;
 	return Object.fromEntries(
 		Object.entries(v)
 			.sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
@@ -1369,12 +1367,10 @@ function whereDeps(w: object): string[] {
 	return Object.entries(record).flatMap(([key, value]) =>
 		key === 'and' || key === 'or'
 			? ReadonlyArray.isArray(value)
-				? value.flatMap((part) =>
-						typeof part === 'object' && part !== null ? whereDeps(part) : []
-					)
+				? value.flatMap((part) => (Predicate.isObject(part) ? whereDeps(part) : []))
 				: []
 			: key === 'not'
-				? typeof value === 'object' && value !== null
+				? Predicate.isObject(value)
 					? whereDeps(value)
 					: []
 				: [key]

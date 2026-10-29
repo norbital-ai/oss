@@ -1,6 +1,6 @@
 {
 	"name": "@norbital-ai/oss",
-	"version": "0.0.5",
+	"version": "0.0.6",
 	"private": true,
 	"type": "module",
 	"packageManager": "pnpm@11.22.0",
@@ -13,11 +13,11 @@
 		"check:packages:ci": "pnpm exec turbo run build --concurrency=1 && pnpm exec turbo run lint --concurrency=1 && pnpm types:compat && pnpm test && pnpm publication:check",
 		"format": "prettier --write .",
 		"format:check": "prettier --check .",
-		"lint": "turbo lint && node packages/bolt/src/test/lint.ts packages scripts",
+		"lint": "turbo lint && node packages/bolt-cli/src/test/lint.ts packages scripts",
 		"packages:build": "pnpm --filter @norbital-ai/ui... build",
 		"packages:resolve": "node scripts/resolve-published-packages.ts",
 		"publication:check": "node scripts/validate-package-publication.ts",
-		"test": "NODE_OPTIONS=\"--no-node-snapshot --no-experimental-webstorage\" vitest run",
+		"test": "NODE_OPTIONS=--no-experimental-webstorage vitest run",
 		"types:compat": "turbo run types:compat --filter=@norbital-ai/bolt"
 	},
 	"devDependencies": {

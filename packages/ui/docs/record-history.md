@@ -22,6 +22,6 @@ Use `history` to include related models: each source names its model and the `wh
 
 A registered representation’s inner shell can supply this configuration to the outer shell’s native
 History control. Optional `fields` on the configuration or an individual source restrict the displayed
-change labels. Native read/history permissions still apply; masked changes and hidden fields are omitted.
+change labels. Native read/history permissions still apply; a revision shows only the fields of the output it reads.
 History loads on demand. Related queries refresh when the popover opens, and partial failures are reported
 without hiding the primary record’s history. No additional event model or template-specific timeline is needed.

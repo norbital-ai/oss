@@ -14,7 +14,6 @@ keys pick a revision; `End`/`Escape` return to the current one.
 	import * as Popover from '../primitives/popover/index.js';
 	import Glyph from '../primitives/icon/Glyph.svelte';
 	import { checkpoints, drawnTicks, tickAt, tickOf, type Checkpoint } from './history.js';
-	import { rowsOf } from '../read/results.js';
 	import { byId, firstOf, pageOf, READ_LIMIT, requestJson } from '../read/request.js';
 	import { label, msg } from '../text/messages.js';
 
@@ -189,14 +188,13 @@ keys pick a revision; `End`/`Escape` return to the current one.
 				(source) =>
 					Effect.result(
 						Effect.gen(function* () {
-							const records = rowsOf(
+							const records =
 								pageOf(
 									yield* bolt.query(
 										requestJson({ [source.of]: { where: source.where, limit: READ_LIMIT } })
 									),
 									source.of
-								)
-							);
+								)?.rows ?? [];
 							const groups = yield* Effect.forEach(
 								records,
 								(row) =>

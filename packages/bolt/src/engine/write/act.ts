@@ -34,8 +34,9 @@ import type { GuestShape as GuestPort } from '../services.ts';
 import type { TenantDbShape as TenantDb } from '../db/tenant-db.ts';
 import { LIMITS } from '../contracts.ts';
 import { SerializationReplay, type EngineError } from '../errors.ts';
+import { RATE_LIMITED } from '../../protocol/wire.ts';
 import { BoltError, fromStore } from '../../protocol/errors.ts';
-import { admitMove } from '../access/authority.ts';
+import { admitMove, readsAny } from '../access/authority.ts';
 import { catalogOf } from '../access/pred.ts';
 import { approvalHook } from '../approvals/approvals.ts';
 
@@ -76,7 +77,7 @@ import {
 	readTargets,
 	ReadDeps
 } from '../query/engine.ts';
-import { composable, readOptions } from '../query/reader.ts';
+import { anyOutputScope, composable, readOptions } from '../query/reader.ts';
 import { constraintIndex } from '../schema/plan.ts';
 import { type ConstraintMeta } from '@norbital-ai/store';
 import {
@@ -89,6 +90,7 @@ import {
 	type OwnedLock,
 	type Write
 } from './commit.ts';
+import { writerOf } from '../runs/queue.ts';
 import {
 	changed,
 	Flattener,
@@ -305,8 +307,7 @@ const pipeline = Effect.fn('Bolt.pipeline')(function* (
 	const none = (outcome: Outcome): ActResult => ({ outcome, captured: [], v: 0 });
 	// 1. rate admission (host memory, rule 38): never recorded
 	const limited = e.admit?.(r);
-	if (limited)
-		return none(refused('rateLimited', `Too many requests; retry in ${limited.retryAfter} s.`));
+	if (limited) return none(refused('rateLimited', RATE_LIMITED));
 	const late = expired(r);
 	if (late !== null) return none(late);
 	// 2. decode against the model's input allowlist, every offender at once (rule 23)
@@ -1081,7 +1082,8 @@ type ReadVisibility = {
 };
 /**
  * Reads raw rows and, with a caller `scope`, which of them its native read scope admits, in one composed statement, keyed
- * `model␀id`. Only a model the caller reads at its root is checked; any other row is not readable.
+ * `model␀id`: a row any output the caller holds admits. Only a model the caller reads is checked; any other row is not
+ * readable.
  */
 export const readRows = Effect.fn('Bolt.readRows')(function* (
 	db: TenantDb,
@@ -1095,7 +1097,7 @@ export const readRows = Effect.fn('Bolt.readRows')(function* (
 	const checks =
 		scope === undefined || scope.authority.admin
 			? []
-			: tables.filter((table) => (scope.authority.models[table]?.read[table]?.length ?? 0) > 0);
+			: tables.filter((table) => readsAny(scope.authority, table));
 	const res = yield* readComposed(db, [
 		...tables.map((t) =>
 			composable({
@@ -1117,7 +1119,10 @@ export const readRows = Effect.fn('Bolt.readRows')(function* (
 				table,
 				ids,
 				{ fields: ['id'], relations: {} },
-				readOptions({ as: 'caller', authority: scope.authority }, scope.bindings)
+				{
+					...readOptions({ as: 'caller', authority: scope.authority }, scope.bindings),
+					scope: anyOutputScope(scope.authority)
+				}
 			).pipe(Effect.map(composable), Effect.mapError(fromStore));
 		}))
 	]);
@@ -1488,8 +1493,10 @@ const plan = Effect.fn('Bolt.plan')(function* (
 							.map((problem) => `${problem.path.join('.')}: ${problem.message}`)
 							.join('; ')
 					);
+				// one lookup per replacement: a find over the chunk is quadratic in a 1,000-row transform chunk
+				const owners = new Map(chunk.toReversed().map((root) => [token(root), root.belongs]));
 				const replacements: Item[] = again.items.map((item) => {
-					const belongs = chunk.find((root) => token(root) === token(item))?.belongs;
+					const belongs = owners.get(token(item));
 					return {
 						...item,
 						supplied: supplied.get(token(item)) ?? [],
@@ -1617,7 +1624,8 @@ const plan = Effect.fn('Bolt.plan')(function* (
 				continue;
 			}
 			const set = changed(row, c.set);
-			const locked = modelRules(env, m, c.model, row, set);
+			// an update that changes nothing is no write: restating a locked row (an unchanged re-import) is no refusal
+			const locked = Object.keys(set).length === 0 ? null : modelRules(env, m, c.model, row, set);
 			if (locked !== null && !(sync !== undefined && locked.code === 'locked'))
 				return stop(refused(locked.code, locked.message, [...c.path, locked.field])); // hook:envoys, hook:integrations
 			if (Object.keys(set).length > 0)
@@ -1860,45 +1868,28 @@ const plan = Effect.fn('Bolt.plan')(function* (
 			if (e.guest === undefined)
 				return yield* BoltError.make('noGuest', 'guest', 'this host runs no guest code');
 			for (let offset = 0; offset < entries.length; offset += LIMITS.writeChunk) {
-				const chunk = entries.slice(offset, offset + LIMITS.writeChunk),
-					seed = `${r.invocationId}:vector:${model}:${name}:${offset / LIMITS.writeChunk}`;
-				const g = yield* e.guest.invoke(
+				const chunk = entries.slice(offset, offset + LIMITS.writeChunk);
+				const g = yield* pureVectors(
+					e.guest,
+					model,
+					name,
+					index.dim,
+					chunk.map(({ write }) => ({
+						...pre.get(k(model, write.id)),
+						...(write.op === 'create' ? write.values : write.op === 'update' ? write.set : {}),
+						id: write.id
+					})),
 					{
-						id: seed,
-						kind: 'vector',
-						target: `${model}.${name}`,
-						input: chunk.map(({ write }) => ({
-							...pre.get(k(model, write.id)),
-							...(write.op === 'create' ? write.values : write.op === 'update' ? write.set : {}),
-							id: write.id
-						})),
-						ctx: { actor: auth.actor, now: b.now, today: b.today, tz: b.tz, seed },
-						budget: { crossings: 0, readBytes: 0 }
-					},
-					{ cross: () => Effect.succeed([]) }
+						actor: auth.actor,
+						now: b.now,
+						today: b.today,
+						tz: b.tz,
+						seed: `${r.invocationId}:vector:${model}:${name}:${offset / LIMITS.writeChunk}`
+					}
 				);
 				guest = true;
-				if (g.kind === 'failed') return stop(yield* guestFailure(g.error));
-				if (g.kind === 'refused')
-					return stop(refused('internal', 'A pure search vector cannot refuse a write.'));
-				const vectors = yield* Schema.decodeUnknownEffect(
-					Schema.Array(Schema.NullOr(Schema.Array(Schema.Number)))
-				)(g.output).pipe(
-					Effect.mapError((error) => BoltError.make('badAnswer', 'guest', error.message, error))
-				);
-				if (
-					vectors.length !== chunk.length ||
-					vectors.some(
-						(vector) =>
-							vector !== null &&
-							(vector.length !== index.dim || vector.some((value) => !Number.isFinite(value)))
-					)
-				)
-					return yield* BoltError.make(
-						'badAnswer',
-						'guest',
-						`Index ${model}.${name} returns exactly ${index.dim} finite numbers per row, or null.`
-					);
+				if ('failed' in g) return stop(yield* guestFailure(g.failed));
+				const vectors = g.vectors;
 				for (const [position, entry] of chunk.entries()) {
 					const write = entry.write,
 						column = indexColumn(name),
@@ -1931,6 +1922,7 @@ const plan = Effect.fn('Bolt.plan')(function* (
 			now: b.now,
 			today: b.today,
 			actor: auth.actor,
+			writer: writerOf(r.authority),
 			writes: plain,
 			owned: ownedLocks(
 				m,
@@ -2253,8 +2245,12 @@ export const recordCapabilities = Effect.fn('Bolt.recordCapabilities')(function*
 		const permission = parentCaps.fields[parent.relation];
 		if (permission === undefined) return null;
 		path = `${parent.model}.${parent.relation}`;
-		// the child is read through the root's layer: that layer's scope (absent = unscoped), never the child's own grant
-		const layer = authority.admin ? undefined : authority.models[parent.model]?.read[path];
+		// the child is read through the root's layer: that layer's scope in any output the caller holds (absent =
+		// unscoped), never the child's own grant
+		const arms = Object.values(authority.models[parent.model]?.read ?? {}).flatMap(
+			(paths) => paths[path] ?? []
+		);
+		const layer = authority.admin || arms.length === 0 ? undefined : arms;
 		// ponytail: in-memory over the stored row; a relation predicate in a layer scope denies, read it through the reader if one is needed
 		const inLayer = layer?.some((arm) => {
 			try {
@@ -2363,7 +2359,6 @@ export const recordCapabilities = Effect.fn('Bolt.recordCapabilities')(function*
 		)
 			continue;
 		const value = visible[field];
-		if (Predicate.isObject(value) && value['$masked'] === true) continue;
 		const reasons = [...restrictions, ...parentReasons];
 		if (!granted(field)) reasons.push('noGrant');
 		if (remote.includes(field)) reasons.push('syncOwned');
@@ -2419,6 +2414,15 @@ export const recordCapabilities = Effect.fn('Bolt.recordCapabilities')(function*
 		proposalMoves: state !== undefined && fields[state]?.proposal ? { [state]: transitions } : {}
 	};
 });
+/**
+ * A NOT NULL key column (a field or single-column ref that is not optional): its upsert lookup joins with `=`, which
+ * hashes or uses the key index; `IS NOT DISTINCT FROM` admits only a nested loop, rows × table.
+ */
+const required = (m: EngineManifest, model: string, field: string): boolean => {
+	const kind = m.models[model]?.fields[field],
+		rel = m.relationships[`${model}.${field}`];
+	return kind !== undefined ? kind.optional !== true : rel !== undefined && rel.optional !== true;
+};
 const resolveUpserts = Effect.fn('Bolt.resolveUpserts')(function* (
 	db: TenantDb,
 	m: EngineManifest,
@@ -2439,7 +2443,7 @@ const resolveUpserts = Effect.fn('Bolt.resolveUpserts')(function* (
 			).on; // hook:integrations — the act's own key
 			return composable({
 				text: `SELECT DISTINCT ${exactRowSql(cat, t, 't')} AS j FROM ${q(t)} t JOIN jsonb_populate_recordset(${nullRowSql(t, cat.models.get(t)?.fields.keys() ?? [])}, $1::jsonb) r
-			ON ${on.map((f) => `t.${q(f)} IS NOT DISTINCT FROM r.${q(f)}`).join(' AND ')}`,
+			ON ${on.map((f) => `t.${q(f)} ${required(m, t, f) ? '=' : 'IS NOT DISTINCT FROM'} r.${q(f)}`).join(' AND ')}`,
 				params: [
 					JSON.stringify(
 						byTable.get(t)!.map((i) =>
@@ -2576,6 +2580,55 @@ const validateCustom = Effect.fn('Bolt.validateCustom')(function* (
  * Rules 42, 72: what a failed guest invocation answers. A throw from tenant code is `internal` (its message reaches
  * members only, rule 32); a budget keeps its own code; anything else is a platform fault, thrown with its cause (72a).
  */
+/**
+ * One batch (at most `LIMITS.writeChunk` rows) of a pure search index's vectors, guest-evaluated: an act joins them into
+ * its row writes, `bolt.index` backfills seeded rows with them. `failed` is the guest's failure, for the caller to map.
+ */
+export const pureVectors = Effect.fn('Bolt.pureVectors')(function* (
+	guest: GuestPort,
+	model: string,
+	name: string,
+	dim: number,
+	rows: readonly RowData[],
+	ctx: Invocation['ctx']
+): Effect.fn.Return<
+	{ readonly failed: BoltError } | { readonly vectors: readonly (readonly number[] | null)[] },
+	EngineError
+> {
+	const g = yield* guest.invoke(
+		{
+			id: ctx.seed,
+			kind: 'vector',
+			target: `${model}.${name}`,
+			input: rows,
+			ctx,
+			budget: { crossings: 0, readBytes: 0 }
+		},
+		{ cross: () => Effect.succeed([]) }
+	);
+	if (g.kind === 'failed') return { failed: g.error };
+	if (g.kind === 'refused')
+		return { failed: BoltError.make('internal', 'guest', 'A pure search vector cannot refuse a write.') };
+	const vectors = yield* Schema.decodeUnknownEffect(
+		Schema.Array(Schema.NullOr(Schema.Array(Schema.Number)))
+	)(g.output).pipe(
+		Effect.mapError((error) => BoltError.make('badAnswer', 'guest', error.message, error))
+	);
+	if (
+		vectors.length !== rows.length ||
+		vectors.some(
+			(vector) =>
+				vector !== null && (vector.length !== dim || vector.some((value) => !Number.isFinite(value)))
+		)
+	)
+		return yield* BoltError.make(
+			'badAnswer',
+			'guest',
+			`Index ${model}.${name} returns exactly ${dim} finite numbers per row, or null.`
+		);
+	return { vectors };
+});
+
 function guestFailure(error: BoltError): Effect.Effect<Outcome, BoltError> {
 	switch (error.code) {
 		case 'guestError':

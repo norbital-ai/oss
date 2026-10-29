@@ -1,4 +1,4 @@
-// The actual page augmentation must retain workspace names through ui's value constraints, including masked rows.
+// The actual page augmentation must retain workspace names through ui's value constraints.
 import { Effect } from 'effect';
 import { expectTypeOf } from 'vitest';
 import {
@@ -10,9 +10,8 @@ import {
 	type RowOf,
 	type Workspace
 } from '@norbital-ai/ui';
-import type { Value } from '@norbital-ai/std/kind';
 import type { ViewNames } from '../../src/decl/ctx.ts';
-import type { AutomationName, Id, ListRow, Masked, Row, StartInput } from '../../src/index.ts';
+import type { AutomationName, Id, ListRow, Row, StartInput } from '../../src/index.ts';
 import { bolt } from '../../src/page/index.ts';
 import './registry.ts';
 
@@ -21,7 +20,6 @@ expectTypeOf<AutomationKey>().toEqualTypeOf<AutomationName>();
 expectTypeOf<RowOf<'orders'>>().toEqualTypeOf<ListRow<'orders'>>();
 expectTypeOf<RecordOf<'sites'>>().toEqualTypeOf<Row<'sites'>>();
 expectTypeOf<AutomationInputOf<'render'>>().toEqualTypeOf<StartInput<'render'>>();
-expectTypeOf<Masked>().toExtend<Value>();
 
 declare const order: Id<'orders'>;
 declare const site: Row<'sites'>;

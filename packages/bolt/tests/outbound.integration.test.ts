@@ -2,7 +2,7 @@ import { expect, it } from '@effect/vitest';
 import { Context, Effect, Layer, Schema } from 'effect';
 import { Activation, Conversations, Outbound } from '../src/engine/services.ts';
 import { OutboundLive } from '../src/engine/integrations/outbound.ts';
-import { TestWorkspace } from '../src/test/index.ts';
+import { TestWorkspace } from '../../bolt-cli/src/test/index.ts';
 import { manifest as base } from './write-fixture.ts';
 
 it.live('keeps missing default epochs implicit and persists only changed epochs', () =>

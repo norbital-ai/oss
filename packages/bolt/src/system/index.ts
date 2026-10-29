@@ -1054,6 +1054,10 @@ export type SystemNames = {
 					kind: 'json';
 					optional: true;
 				};
+				trigger: {
+					kind: 'json';
+					optional: true;
+				};
 			};
 		};
 		sys_session: {
@@ -1069,7 +1073,7 @@ export type SystemNames = {
 				};
 				via: {
 					kind: 'enum';
-					values: readonly ['code', 'invitation', 'signup', 'host'];
+					values: readonly ['code', 'invitation', 'signup', 'host', 'anonymous'];
 				};
 				created_at: {
 					kind: 'instant';
@@ -1263,7 +1267,7 @@ export type SystemNames = {
 				};
 				kind: {
 					kind: 'enum';
-					values: readonly ['staff', 'external'];
+					values: readonly ['staff', 'external', 'anonymous'];
 					default: 'staff';
 				};
 				active: {
@@ -1456,6 +1460,13 @@ export type SystemNames = {
 					];
 				};
 			};
+			outputs: {
+				meta: {
+					sys_file: {
+						fields: readonly ['name', 'mime'];
+					};
+				};
+			};
 		};
 		sys_integration: {
 			read: {
@@ -1518,6 +1529,13 @@ export type SystemNames = {
 			read: {
 				sys_user: {
 					fields: 'all';
+				};
+			};
+			outputs: {
+				directory: {
+					sys_user: {
+						fields: readonly ['name'];
+					};
 				};
 			};
 		};

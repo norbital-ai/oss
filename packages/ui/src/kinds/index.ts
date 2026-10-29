@@ -40,6 +40,7 @@ export {
 	formatValue,
 	fieldName,
 	pickerRead,
+	valueObject,
 	type EnumScope,
 	type ShowOptions,
 	type Fields,

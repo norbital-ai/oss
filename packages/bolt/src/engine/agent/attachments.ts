@@ -16,6 +16,7 @@ const TEXT = /^(text\/|application\/(json|xml|csv))/;
 const MODEL_IMAGE = /^image\/(jpeg|png|webp|gif)$/;
 const XLSX = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
 const SHEET_ROWS = 2000;
+const TEXT_CHARS = 64 * 1024;
 const refused = (message: string) => Effect.fail(BoltError.make('invalidInput', 'decode', message));
 
 /** Only the member's own panel uploads can be attached, with one query for the whole set. */
@@ -111,12 +112,24 @@ export function fileAttachments(
 					rows: workbook.cells.length,
 					cells: workbook.cells.slice(0, SHEET_ROWS),
 					...(workbook.cells.length > SHEET_ROWS
-						? { truncated: `only the first ${SHEET_ROWS} rows are shown` }
+						? {
+								truncated: `only the first ${SHEET_ROWS} of ${workbook.cells.length} rows are shown; the rest: run_js with files: [{ id: '${ref.id}' }] reads every row`
+							}
 						: {})
 				};
 			}
 			if (!TEXT.test(mime)) return yield* refused(`a ${mime} file cannot be read as ${as} here`);
-			return { name, mime, text: new TextDecoder().decode(bytes).slice(0, 64 * 1024) };
+			const text = new TextDecoder().decode(bytes);
+			return {
+				name,
+				mime,
+				text: text.slice(0, TEXT_CHARS),
+				...(text.length > TEXT_CHARS
+					? {
+							truncated: `only the first ${TEXT_CHARS} of ${text.length} characters are shown; the rest: run_js with files: [{ id: '${ref.id}' }] reads it whole`
+						}
+					: {})
+			};
 		})
 	};
 }

@@ -9,8 +9,8 @@ import { decodeProjectedManifest } from '../src/engine/manifest.ts';
 import { Authorities } from '../src/engine/identity/actor.ts';
 import { AgentRow } from '../src/protocol/schema.ts';
 import { actReply, json, routeFixture } from './support/route-fixture.ts';
-import { program } from '../src/test/guest.ts';
-import { TestWorkspace, type Kit, type WorkspaceServices } from '../src/test/index.ts';
+import { program } from '../../bolt-cli/src/test/guest.ts';
+import { TestWorkspace, type Kit, type WorkspaceServices } from '../../bolt-cli/src/test/index.ts';
 
 const manifest = Result.getOrThrow(
 	decodeProjectedManifest({
@@ -23,7 +23,8 @@ const manifest = Result.getOrThrow(
 		exposures: {
 			quotes: {
 				read: { quotes: { fields: 'all' } },
-				create: { columns: { quotes: ['title'] } }
+				create: { columns: { quotes: ['title'] } },
+				effect: { created: true }
 			},
 			logs: { read: { logs: { fields: 'all' } }, create: { columns: { logs: ['line'] } } }
 		},
@@ -42,10 +43,9 @@ const manifest = Result.getOrThrow(
 				description: 'Mark a quote',
 				input: { title: { kind: 'text' } },
 				output: { kind: 'text' },
-				runAs: 'trigger',
+				policies: ['rep'],
 				agent: 'confirm'
-			},
-			log: { description: 'Log each new quote', on: { created: 'quotes' }, runAs: ['rep'] }
+			}
 		},
 		envoys: {},
 		agent: { internal: 'Staff brief.', skills: {} },
@@ -59,12 +59,12 @@ const manifest = Result.getOrThrow(
 );
 const guest = {
 	source: `export default {
-	automation: {
-	quotes_mark: { body: function* (input, ctx) { return (yield* ctx.act('quotes.create', [{ title: input.title }])).records[0].id; } },
-	log: { body: function* (input, ctx) {
-		for (const id of input.ids) yield* ctx.act('logs.create', [{ line: 'quote ' + id }]);
+	model: { quotes: { bodies: { effect: { created: function* (rows, ctx) {
+		for (const { id } of rows) yield* ctx.act('logs.create', [{ line: 'quote ' + id }]);
 		yield* ctx.notify({ to: [{ policy: 'rep' }], title: 'Logged' });
-	} } },
+	} } } } },
+	automation: {
+	quotes_mark: { body: function* (input, ctx) { return (yield* ctx.act('quotes.create', [{ title: input.title }])).records[0].id; } } },
 };`
 };
 
@@ -200,179 +200,185 @@ const quotes = (t: Kit) =>
 	});
 
 layer(workspace, { excludeTestServices: true })('p4 gaps', (it) => {
-describe('the in-app agent over /__bolt (§5.9)', () => {
-	it.effect('starts a conversation and queues a confirmed automation only for its person', () =>
-		Effect.gen(function* () {
-			const { t, bolt, user, act, transcript } = yield* setup();
-			const ann = yield* user('ann'),
-				bob = yield* user('bob');
-			const c = output(yield* act(ann, 'sys_conversation.start', { title: 'Help' })).id;
-			const posted = yield* act(ann, 'sys_message.post', {
-				conversation: c,
-				text: 'mark a chair'
-			});
-			expect(posted.kind).toBe('committed');
-			yield* bolt.settled;
-			const held = required(
-				required((yield* transcript(ann, c)).rows).find((r) => r.state === 'confirm')
-			);
-			expect(held).toMatchObject({
-				tag: 'confirm',
-				call: { name: 'act', input: { callable: 'automation.quotes_mark' } }
-			});
-			expect(yield* quotes(t)).toEqual([]);
-			// another member sees neither the transcript nor the card
-			expect((yield* transcript(bob, c)).status).toBe(404);
-			expect(
-				yield* act(bob, 'sys_message.confirm', { message: held.id, approve: true }).pipe(
-					Effect.flip
-				)
-			).toMatchObject({ _tag: 'ActRefused', code: 'notFound' });
-			expect(
-				(yield* act(ann, 'sys_message.confirm', { message: held.id, approve: true })).kind
-			).toBe('committed');
-			yield* bolt.settled;
-			expect(yield* quotes(t)).toEqual([]);
-			expect(
-				yield* t.db.rows(Schema.Struct({ state: Schema.String }), {
-					text: "SELECT state FROM sys_run WHERE automation = 'quotes_mark'",
-					params: []
-				})
-			).toEqual([{ state: 'queued' }]);
-			const reply = required(required((yield* transcript(ann, c)).rows).at(-1));
-			expect(reply).toMatchObject({
-				role: 'assistant',
-				text: 'Marked.',
-				receipts: [{ outcome: 'committed', callable: 'automation.quotes_mark' }]
-			});
-			yield* t.runDue();
-			expect(yield* quotes(t)).toEqual([{ title: 'Chair' }]);
-			const quoteId = yield* t.db.value(Schema.String, {
-				text: 'SELECT id FROM quotes',
-				params: []
-			});
-			expect(
-				yield* t.db.rows(Schema.Struct({ state: Schema.String, output: Schema.Json }), {
-					text: "SELECT state, output FROM sys_run WHERE automation = 'quotes_mark'",
-					params: []
-				})
-			).toEqual([{ state: 'succeeded', output: quoteId }]);
-		})
-	);
-
-	it.effect(
-		"refuses members the workspace gives no assistant, and a body that is not the callable's",
-		() =>
+	describe('the in-app agent over /__bolt (§5.9)', () => {
+		it.effect('starts a conversation and queues a confirmed automation only for its person', () =>
 			Effect.gen(function* () {
-				const { user, act, call } = yield* setup();
-				const ext = yield* user('ext', { external: true });
-				expect(yield* act(ext, 'sys_conversation.start', {}).pipe(Effect.flip)).toMatchObject({
-					_tag: 'ActRefused',
-					code: 'forbidden'
+				const { t, bolt, user, act, transcript } = yield* setup();
+				const ann = yield* user('ann'),
+					bob = yield* user('bob');
+				const c = output(yield* act(ann, 'sys_conversation.start', { title: 'Help' })).id;
+				const posted = yield* act(ann, 'sys_message.post', {
+					conversation: c,
+					text: 'mark a chair'
 				});
-				const dan = yield* user('dan');
-				const res = yield* call(dan, 'POST', '/__bolt/act', {
-					callable: 'sys_message.post',
-					input: { conversation: 1 },
-					issuedAt: '2026-09-25T10:00:00.000Z'
-				});
-				expect(res.status).toBe(400);
-			})
-	);
-});
-
-describe('push and the notice stream (§5.7)', () => {
-	it.effect(
-		'stores web and apns subscriptions and pushes each notice to the devices of the members it addresses, from a run',
-		() =>
-			Effect.gen(function* () {
-				const { t, user, call, act } = yield* setup();
-				const eve = yield* user('eve');
-				const token = 'ab'.repeat(32),
-					keys = { topic: 'ai.norbital.app', environment: 'production', teamId: 'TEAM123456' };
-				expect(
-					(yield* call(eve, 'POST', '/__bolt/push', { endpoint: 'http://insecure' })).status
-				).toBe(400);
-				expect(
-					(yield* call(eve, 'POST', '/__bolt/push', { kind: 'apns', endpoint: 'not-hex', keys }))
-						.status
-				).toBe(400);
-				// with no device subscribed, a notice queues no push run
-				yield* t.db.write({
-					text: `INSERT INTO sys_notification (id, recipient, title, at) VALUES ('n0', '{"user":"eve"}', 'Early', now())`,
-					params: []
-				});
-				const pushRuns = t.db.value(Schema.Number, {
-					text: `SELECT count(*)::int AS n FROM sys_run WHERE automation = 'bolt.push'`,
-					params: []
-				});
-				expect(yield* pushRuns).toBe(0);
-				const web = { kind: 'web', endpoint: 'https://push.example/eve', keys: { p256dh: 'k', auth: 'a' } };
-				expect((yield* call(eve, 'POST', '/__bolt/push', web)).status).toBe(204);
-				expect(
-					(yield* call(eve, 'POST', '/__bolt/push', { kind: 'apns', endpoint: token, keys })).status
-				).toBe(204);
-				// an automation's notice (a guest `ctx.notify` inside its run's statement) is pushed by the next wake
-				yield* act(eve, 'quotes.create', [{ title: 'Desk' }]);
-				yield* t.runDue();
-				const pushed = () => t.fakes.sent.filter((message) => message._tag === 'Push');
-				expect(pushed()).toHaveLength(2);
-				expect(pushed()).toEqual(
-					expect.arrayContaining([
-						expect.objectContaining({ subscription: web, title: 'Logged', path: '/inbox' }),
-						expect.objectContaining({
-							subscription: { kind: 'apns', endpoint: token, keys },
-							title: 'Logged',
-							path: '/inbox'
-						})
-					])
+				expect(posted.kind).toBe('committed');
+				yield* bolt.settled;
+				const held = required(
+					required((yield* transcript(ann, c)).rows).find((r) => r.state === 'confirm')
 				);
+				expect(held).toMatchObject({
+					tag: 'confirm',
+					call: { name: 'act', input: { callable: 'automation.quotes_mark' } }
+				});
+				expect(yield* quotes(t)).toEqual([]);
+				// another member sees neither the transcript nor the card
+				expect((yield* transcript(bob, c)).status).toBe(404);
 				expect(
-					(yield* call(eve, 'POST', '/__bolt/push', { endpoint: web.endpoint, remove: true })).status
-				).toBe(204);
+					yield* act(bob, 'sys_message.confirm', { message: held.id, approve: true }).pipe(
+						Effect.flip
+					)
+				).toMatchObject({ _tag: 'ActRefused', code: 'notFound' });
 				expect(
-					yield* t.db.value(Schema.Number, {
-						text: `SELECT count(*)::int AS n FROM bolt_push_subscriptions WHERE kind = 'web'`,
+					(yield* act(ann, 'sys_message.confirm', { message: held.id, approve: true })).kind
+				).toBe('committed');
+				yield* bolt.settled;
+				expect(yield* quotes(t)).toEqual([]);
+				expect(
+					yield* t.db.rows(Schema.Struct({ state: Schema.String }), {
+						text: "SELECT state FROM sys_run WHERE automation = 'quotes_mark'",
 						params: []
 					})
-				).toBe(0);
-			})
-	);
-
-	it.effect(
-		'refuses a signed-out caller, replays unread notices after Last-Event-ID, then streams each new one',
-		() =>
-			Effect.gen(function* () {
-				const { t, bolt, user, act, authorities } = yield* setup();
-				const cat = yield* user('cat');
-				expect((yield* bolt.handle(null, new Request('http://cell/__bolt/notices'))).status).toBe(
-					401
-				);
-				yield* t.db.write({
-					text: `INSERT INTO sys_notification (id, recipient, member, title, at) VALUES
-						('old', '{"user":"cat"}', 'cat', 'Old', '2020-01-01T00:00:00Z'),
-						('mid', '{"user":"cat"}', 'cat', 'Missed', '2020-01-02T00:00:00Z')`,
+				).toEqual([{ state: 'queued' }]);
+				const reply = required(required((yield* transcript(ann, c)).rows).at(-1));
+				expect(reply).toMatchObject({
+					role: 'assistant',
+					text: 'Marked.',
+					receipts: [{ outcome: 'committed', callable: 'automation.quotes_mark' }]
+				});
+				yield* t.runDue();
+				expect(yield* quotes(t)).toEqual([{ title: 'Chair' }]);
+				const quoteId = yield* t.db.value(Schema.String, {
+					text: 'SELECT id FROM quotes',
 					params: []
 				});
-				const authority = required((yield* authorities.member(t.db, cat)) ?? undefined);
-				const response = yield* bolt.handle(
-					authority,
-					new Request('http://cell/__bolt/notices', {
-						headers: { 'Last-Event-ID': '2020-01-01T00:00:00.000Z' }
+				expect(
+					yield* t.db.rows(Schema.Struct({ state: Schema.String, output: Schema.Json }), {
+						text: "SELECT state, output FROM sys_run WHERE automation = 'quotes_mark'",
+						params: []
 					})
-				);
-				expect(response.status).toBe(200);
-				expect(response.headers.get('content-type')).toContain('text/event-stream');
-				const next = sseEvents(required(response.body ?? undefined));
-				// the notice missed since the last event replays; the one before it does not
-				const missed = yield* next;
-				expect(missed.data).toEqual({ id: 'mid', title: 'Missed', body: null, path: '/inbox' });
-				expect(Date.parse(missed.id ?? '')).toBe(Date.parse('2020-01-02T00:00:00Z'));
-				// an automation's notice reaches the open stream as it commits
-				yield* act(cat, 'quotes.create', [{ title: 'Desk' }]);
-				yield* t.runDue();
-				expect((yield* next).data).toMatchObject({ title: 'Logged', body: null, path: '/inbox' });
+				).toEqual([{ state: 'succeeded', output: quoteId }]);
 			})
-	);
-});
+		);
+
+		it.effect(
+			"refuses members the workspace gives no assistant, and a body that is not the callable's",
+			() =>
+				Effect.gen(function* () {
+					const { user, act, call } = yield* setup();
+					const ext = yield* user('ext', { external: true });
+					expect(yield* act(ext, 'sys_conversation.start', {}).pipe(Effect.flip)).toMatchObject({
+						_tag: 'ActRefused',
+						code: 'forbidden'
+					});
+					const dan = yield* user('dan');
+					const res = yield* call(dan, 'POST', '/__bolt/act', {
+						callable: 'sys_message.post',
+						input: { conversation: 1 },
+						issuedAt: '2026-09-25T10:00:00.000Z'
+					});
+					expect(res.status).toBe(400);
+				})
+		);
+	});
+
+	describe('push and the notice stream (§5.7)', () => {
+		it.effect(
+			'stores web and apns subscriptions and pushes each notice to the devices of the members it addresses, from a run',
+			() =>
+				Effect.gen(function* () {
+					const { t, user, call, act } = yield* setup();
+					const eve = yield* user('eve');
+					const token = 'ab'.repeat(32),
+						keys = { topic: 'ai.norbital.app', environment: 'production', teamId: 'TEAM123456' };
+					expect(
+						(yield* call(eve, 'POST', '/__bolt/push', { endpoint: 'http://insecure' })).status
+					).toBe(400);
+					expect(
+						(yield* call(eve, 'POST', '/__bolt/push', { kind: 'apns', endpoint: 'not-hex', keys }))
+							.status
+					).toBe(400);
+					// with no device subscribed, a notice queues no push run
+					yield* t.db.write({
+						text: `INSERT INTO sys_notification (id, recipient, title, at) VALUES ('n0', '{"user":"eve"}', 'Early', now())`,
+						params: []
+					});
+					const pushRuns = t.db.value(Schema.Number, {
+						text: `SELECT count(*)::int AS n FROM sys_run WHERE automation = 'bolt.push'`,
+						params: []
+					});
+					expect(yield* pushRuns).toBe(0);
+					const web = {
+						kind: 'web',
+						endpoint: 'https://push.example/eve',
+						keys: { p256dh: 'k', auth: 'a' }
+					};
+					expect((yield* call(eve, 'POST', '/__bolt/push', web)).status).toBe(204);
+					expect(
+						(yield* call(eve, 'POST', '/__bolt/push', { kind: 'apns', endpoint: token, keys }))
+							.status
+					).toBe(204);
+					// an automation's notice (a guest `ctx.notify` inside its run's statement) is pushed by the next wake
+					yield* act(eve, 'quotes.create', [{ title: 'Desk' }]);
+					yield* t.runDue();
+					const pushed = () => t.fakes.sent.filter((message) => message._tag === 'Push');
+					expect(pushed()).toHaveLength(2);
+					expect(pushed()).toEqual(
+						expect.arrayContaining([
+							expect.objectContaining({ subscription: web, title: 'Logged', path: '/inbox' }),
+							expect.objectContaining({
+								subscription: { kind: 'apns', endpoint: token, keys },
+								title: 'Logged',
+								path: '/inbox'
+							})
+						])
+					);
+					expect(
+						(yield* call(eve, 'POST', '/__bolt/push', { endpoint: web.endpoint, remove: true }))
+							.status
+					).toBe(204);
+					expect(
+						yield* t.db.value(Schema.Number, {
+							text: `SELECT count(*)::int AS n FROM bolt_push_subscriptions WHERE kind = 'web'`,
+							params: []
+						})
+					).toBe(0);
+				})
+		);
+
+		it.effect(
+			'refuses a signed-out caller, replays unread notices after Last-Event-ID, then streams each new one',
+			() =>
+				Effect.gen(function* () {
+					const { t, bolt, user, act, authorities } = yield* setup();
+					const cat = yield* user('cat');
+					expect((yield* bolt.handle(null, new Request('http://cell/__bolt/notices'))).status).toBe(
+						401
+					);
+					yield* t.db.write({
+						text: `INSERT INTO sys_notification (id, recipient, member, title, at) VALUES
+						('old', '{"user":"cat"}', 'cat', 'Old', '2020-01-01T00:00:00Z'),
+						('mid', '{"user":"cat"}', 'cat', 'Missed', '2020-01-02T00:00:00Z')`,
+						params: []
+					});
+					const authority = required((yield* authorities.member(t.db, cat)) ?? undefined);
+					const response = yield* bolt.handle(
+						authority,
+						new Request('http://cell/__bolt/notices', {
+							headers: { 'Last-Event-ID': '2020-01-01T00:00:00.000Z' }
+						})
+					);
+					expect(response.status).toBe(200);
+					expect(response.headers.get('content-type')).toContain('text/event-stream');
+					const next = sseEvents(required(response.body ?? undefined));
+					// the notice missed since the last event replays; the one before it does not
+					const missed = yield* next;
+					expect(missed.data).toEqual({ id: 'mid', title: 'Missed', body: null, path: '/inbox' });
+					expect(Date.parse(missed.id ?? '')).toBe(Date.parse('2020-01-02T00:00:00Z'));
+					// an automation's notice reaches the open stream as it commits
+					yield* act(cat, 'quotes.create', [{ title: 'Desk' }]);
+					yield* t.runDue();
+					expect((yield* next).data).toMatchObject({ title: 'Logged', body: null, path: '/inbox' });
+				})
+		);
+	});
 });

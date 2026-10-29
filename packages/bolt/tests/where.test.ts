@@ -5,11 +5,11 @@ import { BoltError, storeSync } from '../src/protocol/errors.ts';
 import type { Reader, RowData } from '../src/engine/contracts.ts';
 import { browserCatalog, catalog } from '../src/protocol/catalog.ts';
 import { contains, evaluate, midnight, startOfDate } from '../src/engine/query/eval.ts';
-import { compile, decodeView, order, read, where, type Pred } from '@norbital-ai/store';
+import { catalogFor, compile, decodeView, order, read, where, type Pred } from '@norbital-ai/store';
 import { readOptions } from '../src/engine/query/reader.ts';
 import { createBolt } from '../src/page/bolt.ts';
 import { exposure } from '../src/engine/access/exposure.ts';
-import { bindings, manifest, rep } from './query.fixture.ts';
+import { bindings, clerk, manifest, rep } from './query.fixture.ts';
 
 const cat = catalog(manifest);
 const code = (f: () => unknown) => {
@@ -178,7 +178,8 @@ describe('one wire literal per kind', () => {
 			t: 'period',
 			field: 'span',
 			op: 'overlaps',
-			arg: { _tag: 'Lit', value: { from: '2026-01-01', to: null } }
+			lo: { _tag: 'Lit', value: '2026-01-01' },
+			hi: { _tag: 'Lit', value: null }
 		} satisfies Pred);
 	});
 	it('preserves instant-period ends and compares their actual instants', () => {
@@ -187,7 +188,8 @@ describe('one wire literal per kind', () => {
 			t: 'period',
 			field: 'slot',
 			op: 'within',
-			arg: { _tag: 'Lit', value }
+			lo: { _tag: 'Lit', value: value.start },
+			hi: { _tag: 'Lit', value: value.end }
 		} satisfies Pred);
 		expect(
 			storeSync(where(instants, 'clock', { slot: { overlaps: { start: value.start, end: null } } }))
@@ -195,7 +197,8 @@ describe('one wire literal per kind', () => {
 			t: 'period',
 			field: 'slot',
 			op: 'overlaps',
-			arg: { _tag: 'Lit', value: { start: value.start, end: null } }
+			lo: { _tag: 'Lit', value: value.start },
+			hi: { _tag: 'Lit', value: null }
 		} satisfies Pred);
 		expect(
 			code(() =>
@@ -248,7 +251,7 @@ describe('P34: the widened language', () => {
 		expect(sql.params).toContain(nextMonth);
 		expect(sql.params).toContain(week);
 	});
-	it('child aggregates: sum of none is 0, min/max/avg of none match nothing; a masked of is forbidden', () => {
+	it('child aggregates: sum of none is 0, min/max/avg of none match nothing', () => {
 		const env = {
 			cat,
 			bindings,
@@ -268,22 +271,6 @@ describe('P34: the widened language', () => {
 		expect(
 			is({ lines: { max: { of: 'amount', gte: '10.2' }, min: { of: 'amount', lt: 10.2 } } }, 'b')
 		).toBe(true);
-		expect(
-			code(() =>
-				storeSync(
-					compile(
-						cat,
-						storeSync(
-							read(cat, 'accounts', {
-								limit: 1,
-								where: { orders: { sum: { of: 'total', gt: 1 } } }
-							})
-						),
-						readOptions({ as: 'caller', authority: rep }, bindings)
-					)
-				)
-			)
-		).toBe('forbidden');
 	});
 	it('json contains is jsonb @>', () => {
 		expect(storeSync(where(cat, 'orders', { doc: { contains: { big: 'x' } } }))).toEqual({
@@ -350,7 +337,7 @@ describe('P34: the widened language', () => {
 			code(() => storeSync(order({ order: { account: { name: { x: 'asc' } } } }, cat, 'lines')))
 		).toBe('invalid'); // three hops
 	});
-	it('rule 14: a related key compiles to a subselect only where the caller reads the target field unmasked, else invalidInput', () => {
+	it("rule 14: a related key compiles to a subselect only through a layer the caller's output reads, else invalidInput", () => {
 		const sql = (orderBy: unknown, reader: Reader = { as: 'caller', authority: rep }) =>
 			storeSync(
 				compile(
@@ -362,8 +349,19 @@ describe('P34: the widened language', () => {
 		const ok = sql({ account: { name: 'asc' } }).sql.text;
 		expect(ok).toMatch(/ORDER BY \(SELECT \w+\."name" FROM "accounts"/);
 		expect(ok).toMatch(/jsonb_build_array\(\(SELECT \w+\."name"/); // the cursor carries the related value
-		expect(code(() => sql({ account: { secret: 'asc' } }))).toBe('invalidInput');
-		expect(code(() => sql({ account: { secret: 'asc' } }, { as: 'workspace' }))).toBe('ok');
+		expect(code(() => sql({ account: { secret: 'asc' } }))).toBe('ok');
+		// the `brief` output's account layer omits `secret`: no ordering by it
+		const brief = storeSync(catalogFor(cat, 'orders', 'brief'));
+		const asClerk = (orderBy: unknown) =>
+			storeSync(
+				compile(
+					brief,
+					{ ...storeSync(read(brief, 'orders', { limit: 5, orderBy })), output: 'brief' },
+					readOptions({ as: 'caller', authority: clerk }, bindings)
+				)
+			);
+		expect(code(() => asClerk({ account: { secret: 'asc' } }))).toBe('invalidInput');
+		expect(code(() => asClerk({ account: { name: 'asc' } }))).toBe('ok');
 		// authority is per access point: the root's arms for its account layer decide, never the accounts model's own
 		const orders = rep.models['orders']!;
 		const unread = {
@@ -372,9 +370,11 @@ describe('P34: the widened language', () => {
 				...rep.models,
 				orders: {
 					...orders,
-					read: Object.fromEntries(
-						Object.entries(orders.read).filter(([path]) => path === 'orders')
-					)
+					read: {
+						default: Object.fromEntries(
+							Object.entries(orders.read['default']!).filter(([path]) => path === 'orders')
+						)
+					}
 				}
 			}
 		};

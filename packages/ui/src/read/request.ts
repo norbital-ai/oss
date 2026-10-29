@@ -1,7 +1,8 @@
 // One read shape (a read request, the layer map `bolt.query` takes): what views build and how they take its answer apart.
+import { Predicate } from 'effect';
 import type { Json } from '@norbital-ai/std/wire';
-import type { Row } from '../model/types.js';
-import { isRow, rowsOf } from './results.js';
+import type { QueryAnswer, WireRead } from '../client/contract.js';
+import type { Page } from '../model/types.js';
 
 /** Every list's largest page: a read request's `limit` cap and default (an export reads up to it). */
 export const READ_LIMIT = 10_000;
@@ -33,19 +34,15 @@ export const byId = (
 	fields?: readonly string[]
 ): { readonly [path: string]: Json } =>
 	requestJson({ [of]: { where: { id: { eq: id } }, limit: 1, fields } });
-/** Root `of`'s page of a request answer. */
-export const pageOf = (answer: unknown, of: string): unknown =>
-	isRow(answer) ? answer[of] : undefined;
-/** Root `of`'s first row of a request answer (a `byId` read's record), or `null`; typed as the caller names it, as `query<T>` is. */
-export const firstOf = <R extends Row = Row>(answer: unknown, of: string): R | null =>
-	(rowsOf(pageOf(answer, of))[0] as R | undefined) ?? null;
+/** Root `of`'s page of a request answer; `undefined` when the answer has no such root. */
+export const pageOf = <R>(answer: QueryAnswer<R>, of: string): Page<R> | undefined => answer[of];
+/** Root `of`'s first row of a request answer (a `byId` read's record), or `null`. */
+export const firstOf = <R>(answer: QueryAnswer<R>, of: string): R | null =>
+	pageOf(answer, of)?.rows[0] ?? null;
 /** The roots a read request names (`query({ … })`'s keys without a dot). */
-export const rootsOf = (read: {
-	readonly m: string;
-	readonly a: readonly unknown[];
-}): readonly string[] => {
+export const rootsOf = (read: WireRead): readonly string[] => {
 	const request = read.a[0];
-	return read.m === 'query' && isRow(request)
+	return read.m === 'query' && Predicate.isObject(request)
 		? Object.keys(request).filter((path) => !path.includes('.'))
 		: [];
 };

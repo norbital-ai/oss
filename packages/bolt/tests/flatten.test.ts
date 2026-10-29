@@ -29,3 +29,17 @@ it.effect(
 			);
 		})
 );
+
+it.effect('an unknown field names the fields that may be written, and an invisible character in it', () =>
+	Effect.gen(function* () {
+		const flat = new Flattener(manifest, catalogOf(manifest), () => 'four');
+		flat.create('orders', { columns: ['total', 'note'] }, { 'to​tal': { $dec: '1' } }, []);
+		assert.deepStrictEqual(flat.problems, [
+			{
+				path: ['to​tal'],
+				message:
+					"'to​tal' is not a field of orders (the name holds invisible characters); its fields: total, note"
+			}
+		]);
+	})
+);

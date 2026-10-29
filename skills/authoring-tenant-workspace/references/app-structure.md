@@ -19,7 +19,7 @@ lays it out — a slot never moves. Everything else has a slot:
 | page scope (company, entity, site, period, month)                                                 | `AppShell`'s `actions` snippet: one set of pickers in the header that every view and tab on the page reads    |
 | a view-local presentation control (a grouping, a lane toggle)                                     | the view's `toolbar.controls` snippet — never scope                                                           |
 | every page-level operation (run, import, export, a template download, bulk change, a view toggle) | the view's ⚡ actions menu: `toolbar.actions`                                                                 |
-| operations on one row                                                                             | the view's row `actions`: start an explicitly granted automation or call a standard guarded write verb                                           |
+| operations on one row                                                                             | the view's row `actions`: start an explicitly granted automation or call a standard guarded write verb        |
 | operations on one record                                                                          | `RecordShell`'s `actions` snippet — the record sheet header                                                   |
 | a run's progress                                                                                  | the toolbar shows the run of an item whose `run` returns `bolt.start(…)`; `RunStatus` / `RunsFor` elsewhere   |
 | creating a record                                                                                 | the toolbar's New (`toolbar.new`), which opens `RecordShell mode="create"`                                    |
@@ -78,31 +78,38 @@ and toolbar actions. It does not own the request, pending state or transport-err
 	import { bankFiles } from '../../../lib/payroll/bank_files.js'; // pure: rows in, documents out
 	// scope, companyPicker and t come from this page's controls and messages.
 	const exportRuns = (ids: readonly Id<'payroll_run'>[]) =>
-		bolt.query({
-			payroll_run: { where: { id: { in: ids } }, fields: ['period', 'pay_date'] },
-			'payroll_run.payslips': { fields: ['employee', 'net', 'bank_account'] },
-			'payroll_run.payslips.employee': { fields: ['name'] }
-		}).pipe(
-			Effect.tap(({ payroll_run }) =>
-				Effect.sync(() => downloadTextFiles(bankFiles(payroll_run.rows), 'payroll-exports.zip')))
-		);
+		bolt
+			.query({
+				payroll_run: { where: { id: { in: ids } }, fields: ['period', 'pay_date'] },
+				'payroll_run.payslips': { fields: ['employee', 'net', 'bank_account'] },
+				'payroll_run.payslips.employee': { fields: ['name'] }
+			})
+			.pipe(
+				Effect.tap(({ payroll_run }) =>
+					Effect.sync(() => downloadTextFiles(bankFiles(payroll_run.rows), 'payroll-exports.zip'))
+				)
+			);
 </script>
 
 <AppShell icon="lucide:receipt" title={t('app.payroll.runs_title')}>
 	{#snippet actions()}{@render companyPicker()}{/snippet}
 	{#if scope.id !== null}
-	<Table
-		of="payroll_run"
-		where={{ company_id: { eq: scope.id } }}
-		columns={['period', 'kind', 'pay_date']}
-		toolbar={{
-			title: t('app.payroll.runs_title'),
-			actions: [
-				{ icon: 'lucide:download', name: t('app.payroll.export'), requiresSelection: true,
-					run: exportRuns }
-			]
-		}}
-	/>
+		<Table
+			of="payroll_run"
+			where={{ company_id: { eq: scope.id } }}
+			columns={['period', 'kind', 'pay_date']}
+			toolbar={{
+				title: t('app.payroll.runs_title'),
+				actions: [
+					{
+						icon: 'lucide:download',
+						name: t('app.payroll.export'),
+						requiresSelection: true,
+						run: exportRuns
+					}
+				]
+			}}
+		/>
 	{/if}
 </AppShell>
 ```
@@ -114,8 +121,15 @@ A view that is not a `Table`, `Board`, `Map` or `Pivot` (a roster grid, a calend
 `controls`; the body snippet receives the rows they leave.
 
 ```svelte
-<CustomView of={people} key="roster" fields={[{ field: 'number', label: t('number') }, { field: 'name', label: t('name') }]}
-	toolbar={{ title: t('roster.title'), description: t('roster.help'), actions: rosterActions }}>
+<CustomView
+	of={people}
+	key="roster"
+	fields={[
+		{ field: 'number', label: t('number') },
+		{ field: 'name', label: t('name') }
+	]}
+	toolbar={{ title: t('roster.title'), description: t('roster.help'), actions: rosterActions }}
+>
 	{#snippet children(shown)}<RosterGrid people={shown} />{/snippet}
 </CustomView>
 ```
@@ -164,13 +178,14 @@ The shell and tab bodies never overflow. Scrolling happens inside the view that 
 `Board`, `Matrix`, a `Scroll`. When a view is the whole region it fills it; inside flowing content it
 gets a height contract:
 
-| Context                                  | Write                                                                                        |
-| ---------------------------------------- | -------------------------------------------------------------------------------------------- |
-| view is the region (page body, tab body) | the view directly — it fills                                                                 |
-| view inside a `Scroll` of other content  | `<Bound size="standard">` around it; `fit` to track the viewport; `compact` for a short list |
-| board lanes                              | the board scrolls horizontally, each lane vertically — never the page                        |
+| Context                                  | Write                                                                                   |
+| ---------------------------------------- | --------------------------------------------------------------------------------------- |
+| view is the region (page body, tab body) | the view directly — it fills                                                            |
+| view beside other content in a column    | a `Section size="fill"` (or a `size="fill"` primitive) around it, `minHeight` its floor |
+| view inside a `Scroll` of other content  | `<Bound size="viewport">` around it — the height below the page chrome                  |
+| board lanes                              | the board scrolls horizontally, each lane vertically — never the page                   |
 
-A view never takes `min-h-[…]`: minimums are `Bound size` tokens.
+A view never takes `min-h-[…]`: a `fill` box's floor is its `minHeight`.
 
 A `Table` fills a bounded region (a flex column or a definite height) down to its own minimum and
 scrolls inside its card, header sticky and footer (row range, page size, previous/next) pinned; it
@@ -228,8 +243,12 @@ For example, terms form one group while a document list can be secondary disclos
 			<Field name="instalment" />
 		</Grid>
 	</Section>
-	<Section name="documents" title={bolt.t('loan.section.documents')} defaultOpen={false}
-		summary={bolt.t('loan.files', { n: loan.documents.length })}>
+	<Section
+		name="documents"
+		title={bolt.t('loan.section.documents')}
+		defaultOpen={false}
+		summary={bolt.t('loan.files', { n: loan.documents.length })}
+	>
 		<Field name="documents" />
 	</Section>
 </Form>
@@ -237,16 +256,18 @@ For example, terms form one group while a document list can be secondary disclos
 
 `Section` (from `@norbital-ai/ui`), all props optional but `children`:
 
-| Prop                  | Default | Meaning                                                                                            |
-| --------------------- | ------- | -------------------------------------------------------------------------------------------------- |
-| `title`               | —       | the heading; untitled, the section is plain content, always open                                   |
-| `hint`                | —       | one sentence behind an ⓘ beside the title                                                          |
-| `name`                | `title` | the stable key the viewer's open state is remembered under (set it: titles change with the locale) |
-| `first`               | `false` | no rule above (the first section of a body)                                                        |
-| `collapsible`         | `true`  | `false` keeps a titled section always open, no toggle                                              |
-| `defaultOpen`         | `true`  | `false` marks a secondary section: closed until the viewer opens it                                |
-| `summary`             | —       | a string or snippet beside the title while closed ("3 files", "2 overridden", "Not set")           |
-| `trailing`, `actions` | —       | a mark (badge) after the title; controls at the end of the heading row                             |
+| Prop                  | Default   | Meaning                                                                                              |
+| --------------------- | --------- | ---------------------------------------------------------------------------------------------------- |
+| `title`               | —         | the heading; untitled, the section is plain content, always open                                     |
+| `hint`                | —         | one sentence behind an ⓘ beside the title                                                            |
+| `name`                | `title`   | the stable key the viewer's open state is remembered under (set it: titles change with the locale)   |
+| `first`               | `false`   | no rule above (the first section of a body)                                                          |
+| `collapsible`         | `true`    | `false` keeps a titled section always open, no toggle                                                |
+| `defaultOpen`         | `true`    | `false` marks a secondary section: closed until the viewer opens it                                  |
+| `summary`             | —         | a string or snippet beside the title while closed ("3 files", "2 overridden", "Not set")             |
+| `trailing`, `actions` | —         | a mark (badge) after the title; controls at the end of the heading row                               |
+| `size`                | `content` | `fill` shares the column's height left and scrolls inside itself ([layout](layout-and-scrolling.md)) |
+| `minHeight`           | —         | a `fill` section's floor (a CSS length; default its content or 16rem, whichever is less)             |
 
 The whole heading is one button (`aria-expanded`, `aria-controls`, Enter/Space). A collapsed body is
 hidden, never unmounted, so its fields still validate and save. The viewer's choice is kept in
@@ -260,11 +281,24 @@ edit and create). Where grouping is useful, supply it declaratively with `sectio
 `RecordShell`, or on a generated `Form` (no `children`):
 
 ```svelte
-<RecordShell of="customers" {id} sections={[
-	{ name: 'contact', title: bolt.t('customer.section.contact'), fields: ['name', 'phone', 'email'] },
-	{ name: 'billing', title: bolt.t('customer.section.billing'), fields: ['billing_address', 'tax_id'],
-		defaultOpen: false, summary: (row) => row.tax_id ? String(row.tax_id) : bolt.t('common.not_set') },
-]} />
+<RecordShell
+	of="customers"
+	{id}
+	sections={[
+		{
+			name: 'contact',
+			title: bolt.t('customer.section.contact'),
+			fields: ['name', 'phone', 'email']
+		},
+		{
+			name: 'billing',
+			title: bolt.t('customer.section.billing'),
+			fields: ['billing_address', 'tax_id'],
+			defaultOpen: false,
+			summary: (row) => (row.tax_id ? String(row.tax_id) : bolt.t('common.not_set'))
+		}
+	]}
+/>
 ```
 
 `RecordShell` props for its generated view:

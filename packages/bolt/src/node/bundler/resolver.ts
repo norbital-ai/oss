@@ -59,8 +59,9 @@ export type Resolved =
 	{ readonly builtin: string } | { readonly path: string } | { readonly error: string };
 type Mode = 'import' | 'require';
 const decode = (bytes: Uint8Array) => new TextDecoder().decode(bytes);
-const array = (value: unknown): value is readonly unknown[] => Array.isArray(value);
-const record = (value: unknown): value is { readonly [key: string]: unknown } =>
+// package manifests and rolldown's errors arrive as anything: the bundler process's guards (it loads no Effect)
+export const array = (value: unknown): value is readonly unknown[] => Array.isArray(value);
+export const record = (value: unknown): value is { readonly [key: string]: unknown } =>
 	typeof value === 'object' && value !== null && !array(value);
 
 /** `exports`' target for `mode`: a string, the first of an array that has one, or the first matching condition. */

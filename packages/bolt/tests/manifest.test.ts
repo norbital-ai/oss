@@ -4,8 +4,8 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from '@effect/vitest';
 import { Effect, Result } from 'effect';
 import * as NodeServices from '@effect/platform-node/NodeServices';
-import { discover } from '../src/compiler/discover.ts';
-import { load, type Manifest } from '../src/compiler/load.ts';
+import { discover } from '../../bolt-cli/src/compiler/discover.ts';
+import { load, type Manifest } from '../../bolt-cli/src/compiler/load.ts';
 import { ManifestInvalid } from '../src/engine/errors.ts';
 import {
 	challengedApps,
@@ -101,7 +101,7 @@ describe('decodeManifest', () => {
 				automations: {
 					orders_submit: {
 						description: 'Submit an order through its native update.',
-						runAs: 'trigger',
+						policies: ['clerk'],
 						input: { target: { kind: 'id', of: 'orders' } }
 					}
 				}
@@ -109,7 +109,7 @@ describe('decodeManifest', () => {
 		);
 		expect(m.automations.orders_submit).toEqual({
 			description: 'Submit an order through its native update.',
-			runAs: 'trigger',
+			policies: ['clerk'],
 			input: { target: { kind: 'id', of: 'orders' } }
 		});
 		expect(m.exposures.orders).toEqual({ read: { orders: { fields: 'all' } } });

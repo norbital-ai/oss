@@ -1,6 +1,6 @@
 // Source access catalogue: handles identify teams; labels and hierarchy never confer another team's policies.
 // A handle is readable snake_case words (`hr_manager`, `field_ops_controllers`): members, invitations and API keys carry
-// it, approval flows name it, and a template's `seed/seed.ts` maps a seed bank's own team ids onto it.
+// it, approval flows name it, and seeded `sys_user` rows name it in `team`.
 import type { Checked } from '../fields.ts';
 import type { PolicyName } from '../names.ts';
 

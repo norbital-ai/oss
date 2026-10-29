@@ -10,27 +10,23 @@ the scoped kit drives the real host routes. A denied create fails with `ActRefus
 the row count unchanged:
 
 ```ts
-import { Effect } from "effect";
-import { TestWorkspace, expect, layer } from "@norbital-ai/bolt/test";
+import { Effect } from 'effect';
+import { TestWorkspace, expect, layer } from '@norbital-ai/bolt-cli/test';
 
-layer(TestWorkspace.layer({ root, seed: "none" }))("orders", (it) => {
-  it.effect("commits an admitted create and preserves rows after denial", () =>
-    Effect.gen(function* () {
-      const t = yield* TestWorkspace;
-      const admin = t.as(t.admin);
-      expect(
-        (yield* admin.act("orders.create", [{ notes: "Allowed" }])).kind,
-      ).toBe("committed");
-      const before = yield* admin.query({ orders: {} });
-      const failure = yield* Effect.flip(
-        t.as(t.member([])).act("orders.create", [{ notes: "Denied" }]),
-      );
-      expect(failure).toMatchObject({ _tag: "ActRefused", code: "forbidden" });
-      expect((yield* admin.query({ orders: {} })).orders.rows).toEqual(
-        before.orders.rows,
-      );
-    }),
-  );
+layer(TestWorkspace.layer({ root, seed: 'none' }))('orders', (it) => {
+	it.effect('commits an admitted create and preserves rows after denial', () =>
+		Effect.gen(function* () {
+			const t = yield* TestWorkspace;
+			const admin = t.as(t.admin);
+			expect((yield* admin.act('orders.create', [{ notes: 'Allowed' }])).kind).toBe('committed');
+			const before = yield* admin.query({ orders: {} });
+			const failure = yield* Effect.flip(
+				t.as(t.member([])).act('orders.create', [{ notes: 'Denied' }])
+			);
+			expect(failure).toMatchObject({ _tag: 'ActRefused', code: 'forbidden' });
+			expect((yield* admin.query({ orders: {} })).orders.rows).toEqual(before.orders.rows);
+		})
+	);
 });
 ```
 
@@ -41,7 +37,7 @@ assertion. `TestWorkspace.layer` owns the database and host scope, including cle
 ## The test seed pack
 
 A template's tests seed from `seed/test/`, authored like `seed/`: `<model>.json[.gz]` (basename = model, any
-subdirectory), identity rows as `sys_user.json`, optional `assets.json` + `assets/**`. No `seed.ts`, no bank.
+subdirectory), identity rows as `sys_user.json`, optional `assets.json` + `assets/**`. No seeder, no bank.
 `bolt check` decodes it; `bolt build` writes it to `.norbital/seed/test` with its own digest; no host provisions it.
 The kit builds it once per source hash and loads it into every `TestWorkspace.layer({ root })` (it does not
 layer on `base`; a row a test needs is in `seed/test/`).
@@ -54,16 +50,16 @@ seed/test/
 ```
 
 ```ts
-layer(TestWorkspace.layer({ root }))("orders seed", (it) => {
-  it.effect("refuses edits to a closed order", () =>
-    Effect.gen(function* () {
-      const t = yield* TestWorkspace;
-      const failure = yield* Effect.flip(
-        t.as(t.admin).act("orders.update", [{ id: "o-2", notes: "Changed" }]),
-      );
-      expect(failure).toMatchObject({ _tag: "ActRefused" });
-    }),
-  );
+layer(TestWorkspace.layer({ root }))('orders seed', (it) => {
+	it.effect('refuses edits to a closed order', () =>
+		Effect.gen(function* () {
+			const t = yield* TestWorkspace;
+			const failure = yield* Effect.flip(
+				t.as(t.admin).act('orders.update', [{ id: 'o-2', notes: 'Changed' }])
+			);
+			expect(failure).toMatchObject({ _tag: 'ActRefused' });
+		})
+	);
 });
 ```
 
@@ -85,7 +81,7 @@ different defects. The persisted version and refusal assertions carry the behavi
 ## Record capabilities and disclosure
 
 `oss/packages/bolt/tests/record-capabilities.integration.test.ts` uses PGlite and native reads/grants.
-It checks readable fields, masks, layers under the root's policy and scope changes during capability reads.
+It checks readable fields, granted outputs, layers under the root's policy and scope changes during capability reads.
 A UI implementation guessing from an update contract would not satisfy those assertions.
 
 Shared UI tests in the ui package should similarly exercise admitted/readonly fields, draft edits,
@@ -127,7 +123,7 @@ A template test reaches the same paths through the kit, stubbing only the link:
   `t.fakes.links.sent` (`instance`, `message`); request writes use `t.fakes.links.answer`. Read the
   source row's `$sync['<sync>']` status and the acknowledged remote state, including refusal/retry.
 - File syncs start as the importing/exporting member with the declared context; test scope and
-  masks as well as findings, callback refusal and atomic row results.
+  outputs as well as findings, callback refusal and atomic row results.
 
 Assert stored rows and the record's state, not only that a fake was called.
 
@@ -143,7 +139,7 @@ page and beyond-page rows rather than assuming a short fixture represents the co
 
 ## Migration replay and build integrity
 
-`oss/packages/bolt/tests/migrations.integration.test.ts` exercises migration replay and database
+`oss/packages/bolt-cli/tests/migrations.integration.test.ts` exercises migration replay and database
 definitions against owned PGlite. Native PostgreSQL replay runs in deployed staging/production
 acceptance. A workspace keeps numbered SQL, `snapshot.json`, `migrations.lock.json` and
 `physical.json` under root `migrations/`. Builds compare replay with the declared source; checks

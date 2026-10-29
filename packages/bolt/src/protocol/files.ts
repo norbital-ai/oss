@@ -3,7 +3,7 @@ import * as HttpServerRequest from 'effect/http/HttpServerRequest';
 import * as HttpServerResponse from 'effect/http/HttpServerResponse';
 import { LIMITS } from '../engine/contracts.ts';
 import { BoltError } from './errors.ts';
-import { chargesFor } from '../engine/access/rate.ts';
+import { chargesFor, resetAfter } from '../engine/access/rate.ts';
 import { upload } from '../engine/callables/upload.ts';
 import { readableFile } from '../engine/decisions/index.ts';
 import { TenantDb } from '../engine/db/tenant-db.ts';
@@ -14,6 +14,7 @@ import {
 	header,
 	invalid,
 	RateLimits,
+	rateLimitedResponse,
 	requestUrl,
 	responseError,
 	SessionAuthority
@@ -50,8 +51,11 @@ export const filesRoutes = (request: HttpServerRequest.HttpServerRequest) =>
 			catch: () => invalid('The file path does not decode.')
 		});
 		if (request.method === 'PUT') {
-			const [model = '', field] = rest.split('.');
-			if (field === undefined) return yield* Effect.fail(invalid('upload to <model>.<field>'));
+			// the field keeps its own dots: a file sync's upload is `<model>.$import.<sync>`
+			const dot = rest.indexOf('.');
+			const model = rest.slice(0, dot),
+				field = rest.slice(dot + 1);
+			if (dot < 0) return yield* Effect.fail(invalid('upload to <model>.<field>'));
 			const charges = chargesFor(
 					auth,
 					['upload'],
@@ -59,13 +63,7 @@ export const filesRoutes = (request: HttpServerRequest.HttpServerRequest) =>
 				),
 				now = yield* Clock.currentTimeMillis;
 			const verdict = yield* (yield* RateLimits).charge(charges, now);
-			if (!verdict.ok)
-				return Option.some(
-					HttpServerResponse.jsonUnsafe(
-						{ error: { code: 'rateLimited', message: 'Too many uploads; try again later.' } },
-						{ status: 429, headers: { 'retry-after': String(verdict.retryAfter) } }
-					)
-				);
+			if (!verdict.ok) return Option.some(rateLimitedResponse(verdict.retryAfter));
 			const disposition = /filename\*=UTF-8''([^;]+)/i.exec(
 				header(request, 'content-disposition') ?? ''
 			)?.[1];
@@ -95,15 +93,17 @@ export const filesRoutes = (request: HttpServerRequest.HttpServerRequest) =>
 			return Option.some(
 				outcome.kind === 'committed'
 					? HttpServerResponse.jsonUnsafe(outcome.output)
-					: HttpServerResponse.jsonUnsafe(
-							{
-								error: {
-									code: outcome.kind === 'refused' ? outcome.code : outcome.kind,
-									message: outcome.kind === 'refused' ? outcome.message : outcome.kind
-								}
-							},
-							{ status: statusOf(outcome) }
-						)
+					: outcome.kind === 'refused' && outcome.code === 'rateLimited'
+						? rateLimitedResponse(resetAfter(charges, now))
+						: HttpServerResponse.jsonUnsafe(
+								{
+									error: {
+										code: outcome.kind === 'refused' ? outcome.code : outcome.kind,
+										message: outcome.kind === 'refused' ? outcome.message : outcome.kind
+									}
+								},
+								{ status: statusOf(outcome) }
+							)
 			);
 		}
 		if (request.method !== 'GET' && request.method !== 'HEAD')

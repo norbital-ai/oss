@@ -50,6 +50,7 @@ const row = {
 	user: 'u1',
 	impersonated_by: null,
 	agent: null,
+	via: 'code',
 	refreshed_at: '2026-09-26T00:00:00Z',
 	expires_at: '2026-10-03T00:00:00Z'
 };

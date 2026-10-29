@@ -1,4 +1,5 @@
-<!-- A bounded, server-filtered view of the environment's separate host audit store. -->
+<!-- The command center's audit trail: a bounded, server-filtered view of the environment's separate host audit store, read
+once (Refresh, or the opt-in Auto-refresh). -->
 <script lang="ts">
 	import {
 		Button,
@@ -23,9 +24,8 @@
 		type AuditSummary
 	} from '../../protocol/audit.ts';
 	import type { ShellApi } from '../api-types.ts';
+	import AutoRefresh from '../AutoRefresh.svelte';
 	import DetailSheet from '../DetailSheet.svelte';
-	import SystemPage from '../SystemPage.svelte';
-	import auditBanner from '../assets/banners/audit.jpg';
 	import { displayWireValue } from '../wire-value.ts';
 
 	let {
@@ -130,11 +130,14 @@
 		key: JSON.stringify([filterKey, position.after]),
 		query: { ...query, ...(position.after === null ? {} : { after: position.after }) }
 	});
+	// read by key: the debounced words settle into an equal new object, which must not read the page again
+	const requestKey = $derived(request.key);
 	const page = observeOnce(() => {
-		const own = request;
+		const key = requestKey;
+		const query = untrack(() => request.query);
 		return !admin || customError !== null
 			? null
-			: api.audit(own.query).pipe(Effect.map((page) => ({ key: own.key, page })));
+			: api.audit(query).pipe(Effect.map((page) => ({ key, page })));
 	});
 	const answer = $derived(page.current?.key === request.key ? page.current.page : undefined);
 	const opened = observeOnce(() => {
@@ -283,13 +286,10 @@
 			onFailure: () => null
 		});
 		if (decoded === null) return [];
-		const request = decoded.request;
-		const given = Result.match(
-			Schema.decodeUnknownResult(Given)(
-				typeof request === 'object' && request !== null && !Array.isArray(request) ? request : null
-			),
-			{ onSuccess: (value) => value, onFailure: () => undefined }
-		);
+		const given = Result.match(Schema.decodeUnknownResult(Given)(decoded.request), {
+			onSuccess: (value) => value,
+			onFailure: () => undefined
+		});
 		const list = [
 			...(decoded.change === undefined ? [] : [decoded.change]),
 			...(decoded.records ?? [])
@@ -445,16 +445,13 @@
 	</div>
 {/snippet}
 
-<SystemPage
-	name="settings-audit"
-	title={t('Audit trail')}
-	icon="lucide:scroll-text"
-	banner={auditBanner}
-	description={t(
-		'Workspace activity, decisions, and outcomes. Open an event to inspect its full payload.'
-	)}
-	error={admin ? error : t('Administrator access required.')}
->
+<div class="flex flex-col gap-3">
+	{#if (admin ? error : t('Administrator access required.')) !== null}<p
+			role="alert"
+			class="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive"
+		>
+			{admin ? error : t('Administrator access required.')}
+		</p>{/if}
 	{#if admin}
 		<div class="flex flex-col gap-2" data-audit-toolbar>
 			<div class="flex flex-wrap items-center gap-2">
@@ -585,6 +582,7 @@
 						order = value === 'oldest' ? 'oldest' : 'newest';
 					}}
 				/>
+				<AutoRefresh {t} onRefresh={refresh} />
 				<Button
 					size="icon-sm"
 					variant="ghost"
@@ -638,7 +636,7 @@
 			/>
 		</div>
 	{/if}
-</SystemPage>
+</div>
 
 {#if admin && selected !== null}
 	<DetailSheet

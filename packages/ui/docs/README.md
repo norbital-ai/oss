@@ -13,7 +13,7 @@ logic and tenant presentation decisions in the workspace that uses them.
 | ------------------- | ---------------------------------------------------------------------------------------- |
 | Design foundation   | Tokens, base styles, typography, colour, editor themes, logos, and favicons.             |
 | Portable primitives | Buttons, cards, dialogs, inputs, layout primitives, navigation, and feedback components. |
-| Views               | Table, Board, Form, RecordShell and the other model views of RFC §3.6.              |
+| Views               | Table, Board, Form, RecordShell and the other model views of RFC §3.6.                   |
 
 ## Boundaries
 
@@ -31,6 +31,8 @@ query execution and lifetime. Shared text, cells and actions have their own modu
 ## Async reads
 
 Use `Form` and `RecordShell` for record editing; they own loading, drafts and mutation feedback.
+Table, Board, RecordShell and the pickers read the caller's view output of the model
+(`ModelExposure.output`: `default` when granted, else the first granted named output).
 For custom workspace reads, import `bolt` from `$bolt` and capture reactive arguments in `$derived`.
 `bolt.query(name, input)` returns a `Query<T>` whose `.current`, `.error` and `.loading` subscribe
 when read in a component. The same query reads once when awaited in an event handler and composes
@@ -79,8 +81,8 @@ The view toolbar's ⚡ menu derives its standard rows from the model's exposure 
 configuration: callables and model syncs (remote reads, file Import, Download template and Export),
 Export CSV, "Update selected records" (declared and permitted update fields) and "Delete selected records" (declared and
 permitted delete). An undeclared or unpermitted row is absent. It watches an import run to its
-end: a spinner, then the counts as a toast, or its findings in the menu with "Accept and import" when they are only
-warnings ([Bolt's sync guide](../../bolt/docs/syncs.md)). A page adds ad-hoc rows (running an automation by hand) with
+end in one step: a spinner, then the counts as a toast with any warnings in the menu, or, when a finding refuses, its
+findings and nothing written ([Bolt's sync guide](../../bolt/docs/syncs.md)). A page adds ad-hoc rows (running an automation by hand) with
 `toolbar.actions`, listed under Actions, each pure configuration:
 
 ```ts
@@ -105,7 +107,7 @@ Update and delete are disabled with "Select records first" until records are sel
 naming the count and that it cannot be undone, then deletes each record on its own and reports the result:
 "3 deleted" or "3 deleted, 1 kept: <refusal>".
 
-Update selected records offers the model's permitted update fields, excluding masked, hidden, derived and
+Update selected records offers the model's permitted update fields, excluding hidden, derived and
 readonly fields. Check each field to include it, enter its value, then apply once to the selected IDs.
 Unchecked fields stay untouched; explicit false, zero and null values are retained. The native update
 enforces every record's grants and state restrictions and reports refusals or pending approval in the menu.

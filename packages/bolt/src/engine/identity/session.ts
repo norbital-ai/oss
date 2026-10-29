@@ -7,9 +7,10 @@ import { audited } from '../audit-operation.ts';
 import { fromHex, hmacSha256, timingSafeEqual, toBase64url } from '../crypto.ts';
 import { canonical, sha256 as sha256Bytes, toHex } from '@norbital-ai/store';
 import { addressBucket, macKey, ratePiece, type Charge, type RateWindows } from '../access/rate.ts';
+import { RATE_LIMITED } from '../../protocol/wire.ts';
 import { LIMITS, type Authority, type Lock, type TransportPort } from '../contracts.ts';
-import { Cache, Clock, Crypto, Effect, Layer, Result, Schema } from 'effect';
-import type { EngineManifest } from '../manifest.ts';
+import { Cache, Clock, Crypto, Effect, Layer, Option, Result, Schema } from 'effect';
+import { relations, type EngineManifest } from '../manifest.ts';
 import { TenantDb as TenantDbService, type TenantDbShape as TenantDb } from '../db/tenant-db.ts';
 import { Activation, Identity, Manifest, type Authenticated } from '../services.ts';
 import { Authorities } from './actor.ts';
@@ -19,7 +20,6 @@ import { DbError, IdentityRefusal } from '../errors.ts';
 import { answer, Chain, GATED, gate } from '../write/sql.ts';
 import { historyPiece } from '../write/commit.ts';
 import { enqueue } from '../runs/queue.ts';
-import { queueTriggered } from '../runs/queue.ts';
 import {
 	ADDRESS_HINT,
 	addressKey,
@@ -96,7 +96,6 @@ export type IdentityHost = {
 	readonly audit?: import('../audit.ts').AuditShape;
 	crypto: Crypto.Crypto;
 	events?: {
-		manifest: EngineManifest;
 		announce: Effect.Effect<void>;
 	};
 	db: TenantDb;
@@ -153,12 +152,15 @@ export class IdentityStatement extends Chain {
 export const sha256 = (s: string) => toHex(sha256Bytes(s));
 const randomToken = () => toBase64url(crypto.getRandomValues(new Uint8Array(32)));
 export const newId = (crypto: Crypto.Crypto) =>
-	crypto.randomUUIDv4().pipe(
-		Effect.mapError(() => refuse('unavailable', 'Secure random UUID generation failed.'))
-	);
+	crypto
+		.randomUUIDv4()
+		.pipe(Effect.mapError(() => refuse('unavailable', 'Secure random UUID generation failed.')));
 const HOUR = 3600000,
 	DAY = 24 * HOUR;
 const SESSION_MS = 7 * DAY;
+/** An anonymous user's session (its `via`) and how long it lives unused: the visitor cookie's lifetime, the prune's horizon. */
+const ANONYMOUS = 'anonymous',
+	ANONYMOUS_MS = 30 * DAY;
 const CODE_MS = 10 * 60000,
 	ATTEMPTS = 3;
 /** Texts to numbers that are not yet members, per workspace per hour: what open sign-up can cost at most. */
@@ -234,7 +236,7 @@ function admitMemory(
 	nowMs: number
 ): IdentityRefusal | null {
 	const v = h.windows.charge(charges, nowMs);
-	return v.ok ? null : refuse('rateLimited', 'Too many attempts. Try again later.', v.retryAfter);
+	return v.ok ? null : refuse('rateLimited', RATE_LIMITED, v.retryAfter);
 }
 const retryAfter = (now: Date) => Math.ceil((HOUR - (now.getTime() % HOUR)) / 1000);
 const codeMac = (h: IdentityHost, a: Address, code: string) =>
@@ -341,9 +343,7 @@ ch AS (INSERT INTO sys_challenge (address_mac, code_mac, attempts, expires_at)
 SELECT count(*)::int AS saved FROM ch`
 	});
 	if (saved.rows[0]!.saved !== 1)
-		return yield* Effect.fail(
-			refuse('rateLimited', 'Too many attempts. Try again later.', retryAfter(now))
-		);
+		return yield* Effect.fail(refuse('rateLimited', RATE_LIMITED, retryAfter(now)));
 	const sent =
 		a.kind === 'email'
 			? yield* identityPort('email', h.mail, LIMITS.callMs.other, (m, signal) =>
@@ -413,8 +413,6 @@ export function identityHistory(
    'direct'::text AS cause,false AS erased,o,n FROM ${cte}`
 		);
 		historyPiece(chain, source);
-		if (s.host?.events !== undefined)
-			queueTriggered(s.host.events.manifest, chain, at.toISOString(), actor ?? 'host', source);
 	});
 }
 /** The actor a history row names: `member:<id>` (as the write area's `actorRef`), or the host. */
@@ -541,7 +539,9 @@ export const verifyCode = Effect.fn('Bolt.verifyCode')(function* (
 	h: IdentityHost,
 	typed: string,
 	code: string,
-	ip: string
+	ip: string,
+	/** The caller's anonymous user (the visitor cookie's), linked to the account this proves; see `mergeAnonymous`. */
+	anonymous: string | null = null
 ) {
 	const a = parseAddress(typed);
 	if (a === null) return yield* Effect.fail(refuse('check', ADDRESS_HINT));
@@ -631,10 +631,31 @@ SELECT 1`
 		return yield* Effect.fail(
 			refuse('notMember', 'This address has no invitation to this workspace.')
 		);
+	// a newcomer who was an anonymous visitor keeps that id: the anonymous user becomes the account, its rows with it
+	const upgraded =
+		user === undefined && anonymous !== null
+			? Option.getOrNull(
+					yield* h.db.one(Schema.Struct({ id: Schema.String }), {
+						text: `SELECT id FROM sys_user WHERE id = $1 AND kind = 'anonymous' AND active`,
+						params: [anonymous]
+					})
+				)?.id
+			: undefined;
 	const token = randomToken(),
-		userId = user?.id ?? (yield* newId(h.crypto)),
+		userId = user?.id ?? upgraded ?? (yield* newId(h.crypto)),
 		sessionId = yield* newId(h.crypto);
 	const born = user === undefined;
+	/** The newcomer's row: inserted, or the anonymous user's, updated in place (`kind = 'anonymous'` guards the race). */
+	const birth = (columns: { readonly [column: string]: string }, when: string) =>
+		upgraded === undefined
+			? `born AS (INSERT INTO sys_user (id, ${Object.keys(columns).join(', ')})
+	SELECT ${s.p(userId)}, ${Object.values(columns).join(', ')}
+	WHERE ${when} ${IMAGES})`
+			: `born AS (UPDATE sys_user SET ${Object.entries(columns)
+					.map(([k, v]) => `${k} = ${v}`)
+					.join(', ')}, revision = revision + 1
+	WHERE id = ${s.p(userId)} AND kind = 'anonymous' AND active AND ${when} ${IMAGES}),
+anonymous_sessions AS (DELETE FROM sys_session WHERE "user" IN (SELECT id FROM born) AND via = ${s.p(ANONYMOUS)})`;
 	const via = !born ? 'code' : signup ? 'signup' : 'invitation';
 	const payload = {
 		user: userId,
@@ -651,16 +672,25 @@ SELECT 1`
 	const email = a.kind === 'email' ? a.value : (inv?.email ?? null),
 		phone = a.kind === 'phone' ? a.value : (inv?.phone ?? null);
 	const name = defaultName(a);
+	// parameters bind as they are named, so only a branch that writes the newcomer names their contact
+	const contact = () => ({ email: s.p(email), phone: s.p(phone), name: s.p(name) });
 	if (user === undefined && inv !== undefined) {
-		pieces.push(`born AS (INSERT INTO sys_user (id, email, phone, name, kind, team, party)
-	SELECT ${s.p(userId)}, ${s.p(email)}, ${s.p(phone)}, ${s.p(name)}, ${s.p(inv.external ? 'external' : 'staff')}, ${s.p(inv.team)}, ${s.p(jsonb(inv.party))}::jsonb
-	WHERE EXISTS (SELECT 1 FROM used) AND EXISTS (SELECT 1 FROM sys_invitation WHERE ${openInvitation(s, inv.id, now)}) ${IMAGES}),
+		pieces.push(`${birth(
+			{
+				...contact(),
+				kind: s.p(inv.external ? 'external' : 'staff'),
+				team: s.p(inv.team),
+				party: `${s.p(jsonb(inv.party))}::jsonb`
+			},
+			`EXISTS (SELECT 1 FROM used) AND EXISTS (SELECT 1 FROM sys_invitation WHERE ${openInvitation(s, inv.id, now)})`
+		)},
 ${identityHistory(s, 'sys_user', 'born', now, `member:${userId}`)}`);
 		pieces.push(acceptPieces(s, inv, userId, now, 'EXISTS (SELECT 1 FROM born)', true));
 	} else if (signup) {
-		pieces.push(`born AS (INSERT INTO sys_user (id, email, phone, name, kind, party, signup)
-	SELECT ${s.p(userId)}, ${s.p(email)}, ${s.p(phone)}, ${s.p(name)}, 'external', ${s.p(jsonb(party))}::jsonb, true
-	WHERE EXISTS (SELECT 1 FROM used) ${IMAGES}),
+		pieces.push(`${birth(
+			{ ...contact(), kind: `'external'`, party: `${s.p(jsonb(party))}::jsonb`, signup: 'true' },
+			'EXISTS (SELECT 1 FROM used)'
+		)},
 ${identityHistory(s, 'sys_user', 'born', now, `member:${userId}`)},
 member AS (SELECT id FROM born)`);
 	} else if (user!.kind === 'external' && user!.party === null && party !== null) {
@@ -708,6 +738,73 @@ ${result.cte} SELECT ${result.select}`
 	if (project !== '') yield* announceMembership(h);
 	if (h.events !== undefined) yield* h.events.announce;
 	return { token, user: out.output.user, expiresAt: new Date(out.output.expiresAt).toISOString() };
+});
+/**
+ * A visitor's anonymous identity (Firebase-style anonymous sign-in): a `sys_user` of kind `anonymous` and one session,
+ * whose token the visitor cookie holds. It slides for 30 days unused; the daily prune removes it after that.
+ */
+export const mintAnonymous = Effect.fn('Bolt.mintAnonymous')(function* (h: IdentityHost) {
+	const now = yield* h.now,
+		token = randomToken(),
+		user = yield* newId(h.crypto),
+		session = yield* newId(h.crypto),
+		s = new IdentityStatement(h),
+		at = s.p(now.toISOString());
+	yield* h.db.write({
+		params: s.params,
+		text: `WITH born AS (INSERT INTO sys_user (id, name, kind) VALUES (${s.p(user)}, 'Anonymous', ${s.p(ANONYMOUS)}) ${IMAGES}),
+${identityHistory(s, 'sys_user', 'born', now, `visitor:${user}`)},
+sess AS (INSERT INTO sys_session ${SESSION_COLUMNS} SELECT ${s.p(session)}, id, ${s.p(sha256(token))}, ${s.p(ANONYMOUS)},
+	${at}::timestamptz, ${s.p(new Date(now.getTime() + ANONYMOUS_MS).toISOString())}::timestamptz, ${at}::timestamptz FROM born)
+SELECT 1`
+	});
+	return { token, user };
+});
+/**
+ * Signing in to an account that already exists while holding an anonymous user (`from`): every `sys_user` ref of a
+ * workspace model holding `from` moves to the account (`to`), except where the row's state locks that field, and the
+ * anonymous user is retired (deactivated, its sessions gone; the prune deletes it once nothing references it). Text
+ * copies of the id and `created_by` keep it. A refused move (a record under approval) moves nothing and is logged.
+ */
+export const mergeAnonymous = Effect.fn('Bolt.mergeAnonymous')(function* (
+	h: IdentityHost,
+	m: EngineManifest,
+	from: string,
+	to: string
+) {
+	const now = yield* h.now,
+		s = new IdentityStatement(h),
+		anon = `(SELECT id FROM anon)`;
+	const moves = relations(m).all.flatMap((r, i) => {
+		if (r.targets.length !== 1 || r.targets[0] !== 'sys_user') return [];
+		const locked = Object.entries(m.models[r.from]?.fields ?? {}).flatMap(([field, k]) => {
+			if (k.kind !== 'state') return [];
+			const states = Object.entries(k.states).filter(
+				([, st]) =>
+					(st.edit ?? 'all') !== 'all' && !(Array.isArray(st.edit) && st.edit.includes(r.fk))
+			);
+			return states.length === 0
+				? []
+				: [`t."${field}" NOT IN (${states.map(([name]) => s.p(name)).join(', ')})`];
+		});
+		return [
+			`move_${i} AS (UPDATE "${r.from}" t SET "${r.fk}" = ${s.p(to)} WHERE t."${r.fk}" = ${anon}${locked.map((l) => ` AND ${l}`).join('')} RETURNING 1)`
+		];
+	});
+	yield* h.db
+		.write({
+			params: s.params,
+			text: `WITH anon AS (SELECT id FROM sys_user WHERE id = ${s.p(from)} AND kind = ${s.p(ANONYMOUS)} AND id <> ${s.p(to)}),
+${[...moves, ''].join(',\n')}gone AS (DELETE FROM sys_session WHERE "user" = ${anon}),
+retired AS (UPDATE sys_user SET active = false, revision = revision + 1 WHERE id = ${anon} AND active ${IMAGES}),
+${identityHistory(s, 'sys_user', 'retired', now, `member:${to}`)}
+SELECT 1`
+		})
+		.pipe(
+			Effect.catchTag('DbError', (error) =>
+				Effect.logWarning('an anonymous user was not merged into its account', error)
+			)
+		);
 });
 const lock = (born: boolean): Lock | undefined =>
 	born ? { advisory: ['sys_user.address'] } : undefined;
@@ -758,7 +855,7 @@ const lookup = Effect.fn('Bolt.lookup')(function* (
 	const now = yield* h.now;
 	const [rows] = yield* h.db.read([
 		{
-			text: `SELECT s.id, s."user", s.impersonated_by, s.agent, s.refreshed_at, s.expires_at FROM sys_session s JOIN sys_user u ON u.id = s."user"
+			text: `SELECT s.id, s."user", s.impersonated_by, s.agent, s.via, s.refreshed_at, s.expires_at FROM sys_session s JOIN sys_user u ON u.id = s."user"
 		WHERE s.token_hash = $1 AND s.expires_at > $2::timestamptz AND u.active`,
 			params: [hash, now.toISOString()]
 		}
@@ -770,6 +867,7 @@ const lookup = Effect.fn('Bolt.lookup')(function* (
 				user: Schema.String,
 				impersonated_by: Schema.NullOr(Schema.String),
 				agent: Schema.NullOr(Schema.String),
+				via: Schema.String,
 				refreshed_at: Schema.String,
 				expires_at: Schema.String
 			})
@@ -779,7 +877,7 @@ const lookup = Effect.fn('Bolt.lookup')(function* (
 	if (r === undefined) return null;
 	let expiresAt = Date.parse(String(r.expires_at));
 	if (now.getTime() - Date.parse(r.refreshed_at) >= DAY) {
-		expiresAt = now.getTime() + SESSION_MS;
+		expiresAt = now.getTime() + (r.via === ANONYMOUS ? ANONYMOUS_MS : SESSION_MS);
 		yield* h.db.write({
 			text: `UPDATE sys_session SET refreshed_at = $2::timestamptz, expires_at = $3::timestamptz WHERE id = $1`,
 			params: [r.id, now.toISOString(), new Date(expiresAt).toISOString()]

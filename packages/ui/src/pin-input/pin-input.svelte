@@ -60,7 +60,7 @@ A one-time code in separate cells (bits-ui PinInput): the sign-in code step.
 					)}
 				>
 					{#snippet child({ props })}
-						<Inline gap="none" justify="center" grow {...props}>
+						<Inline gap="none" justify="center" size="fill" {...props}>
 							{#if cell.char}
 								{cell.char}
 							{:else if cell.hasFakeCaret}

@@ -1,8 +1,8 @@
 import { expect, it } from '@effect/vitest';
 import { Context, Effect, Layer } from 'effect';
-import { program } from '../src/test/guest.ts';
+import { program } from '../../bolt-cli/src/test/guest.ts';
 import { actReply, qReply, routeFixture } from './support/route-fixture.ts';
-import { TestWorkspace } from '../src/test/index.ts';
+import { TestWorkspace } from '../../bolt-cli/src/test/index.ts';
 import { ACME, manifest, seed } from './engine-fixture.ts';
 
 it.effect(
@@ -44,11 +44,13 @@ it.effect(
 				for (const number of ['SO-0001', 'SO-0002']) {
 					const created = (yield* actReply(route, as.authority, {
 						callable: 'orders.create',
-						input: [{
-							title: number,
-							region: 'north',
-							customer: ACME
-						}],
+						input: [
+							{
+								title: number,
+								region: 'north',
+								customer: ACME
+							}
+						],
 						issuedAt: t.clock.now()
 					})).outcome;
 					expect(created.kind).toBe('committed');

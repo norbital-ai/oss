@@ -61,11 +61,14 @@ export type Pred =
 			readonly op: 'has' | 'hasAny' | 'hasAll' | 'isEmpty';
 			readonly arg: Json;
 	  }
+	| { readonly t: 'period'; readonly field: string; readonly op: 'contains'; readonly arg: Arg }
+	/** A period against a span: its ends, each a literal or an operand; a null literal `hi` is open. */
 	| {
 			readonly t: 'period';
 			readonly field: string;
-			readonly op: 'contains' | 'overlaps' | 'within' | 'startsWithin' | 'endsWithin';
-			readonly arg: Arg;
+			readonly op: 'overlaps' | 'within' | 'startsWithin' | 'endsWithin';
+			readonly lo: Arg;
+			readonly hi: Arg;
 	  }
 	| {
 			readonly t: 'geo';
@@ -185,6 +188,8 @@ export type Bucket = {
 export type ListRead = {
 	readonly kind: 'read';
 	readonly model: string;
+	/** The root's read output whose fields and layers the read answers (`default` when absent). */
+	readonly output?: string | undefined;
 	readonly where?: Pred | undefined;
 	readonly select: SelectIR;
 	readonly order?: Order | undefined;
@@ -192,6 +197,8 @@ export type ListRead = {
 	/** First row of each group, in the declared order; grouping precedes cursor seeking. */
 	readonly firstPer?: readonly string[] | undefined;
 	readonly page: PageIR;
+	/** Also count every row the read matches (scope, `where`, search), its page and cursor aside: the answer's `total`. */
+	readonly total?: true | undefined;
 	readonly member?: string | undefined;
 	readonly cte?: string | undefined;
 };
@@ -201,6 +208,7 @@ export type ReadIR =
 	| {
 			readonly kind: 'get';
 			readonly model: string;
+			readonly output?: string | undefined;
 			readonly id: string;
 			readonly select: SelectIR;
 			readonly member?: string | undefined;
@@ -209,12 +217,14 @@ export type ReadIR =
 	| (Measures & {
 			readonly kind: 'aggregate';
 			readonly model: string;
+			readonly output?: string | undefined;
 			readonly where?: Pred | undefined;
 			readonly page?: PageIR | undefined;
 	  })
 	| {
 			readonly kind: 'similar';
 			readonly model: string;
+			readonly output?: string | undefined;
 			/** A `search.indexes` entry, or `SEMANTIC` for `search.semantic`. */
 			readonly index: string;
 			readonly input: Json;

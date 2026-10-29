@@ -38,7 +38,6 @@ import { RateWindows } from '../engine/access/rate.ts';
 import {
 	captureIdentity,
 	directory,
-	markAdmitted,
 	restoreIdentity,
 	type DirectoryPerson,
 	type DirectoryMember,
@@ -107,7 +106,8 @@ import {
 	Speech,
 	Transport,
 	WebRead,
-	Browser
+	Browser,
+	RunUnits
 } from '../engine/ports.ts';
 import { declaredSecrets } from '../engine/manifest.ts';
 import { Secrets } from '../engine/secrets.ts';
@@ -125,7 +125,17 @@ import type { SchemaSlice } from '../engine/schema/plan.ts';
 import { destructiveSteps, fingerprint, readApplied, schemaSlice } from '../engine/schema/plan.ts';
 import { applyMigrations } from '../engine/schema/migrations.ts';
 import type { MigrationImpact } from './migration-impact.ts';
-import { packLoader, readPackSource, type PackStep } from '../engine/write/pack.ts';
+import {
+	decodeIdentity,
+	IDENTITY,
+	memorySource,
+	packLoader,
+	readPackSource,
+	type PackSource,
+	type PackStep,
+	type SeedAsset
+} from '../engine/write/pack.ts';
+import { decodeSeed } from '../engine/write/seed.ts';
 import { Port } from '../engine/port.ts';
 import {
 	authorityOf,
@@ -152,7 +162,7 @@ export { MigrationImpact, impactLines } from './migration-impact.ts';
 import { IntegrationManager, integrationRoutes } from './integrations.ts';
 
 /** Bumped on any change a host on an older copy could misread; the host refuses a release whose `version` differs. */
-export const HOST_API_VERSION = 14;
+export const HOST_API_VERSION = 15;
 
 // ── failures (D10a) ──
 /** A `BoltError` this release raised: an engine answer. `code` stays a string on the wire (the copies' code sets may differ). */
@@ -254,7 +264,10 @@ export type ShellPorts = Pick<
 	| 'ai'
 >;
 /** The agent's host parts (§5.9); the release's source (`workspace_search`) and attachments are this release's own. */
-export type AgentPorts = Pick<AgentConfig, 'draft' | 'hostTools' | 'skills' | 'documentText'>;
+export type AgentPorts = Pick<
+	AgentConfig,
+	'draft' | 'hostTools' | 'skills' | 'documentText' | 'documentPages'
+>;
 /**
  * One serving generation of an environment: the host's `facilities` (`@norbital-ai/bolt/facilities`) and what it serves
  * around them. Every member is required; one the host may leave out takes `off`.
@@ -268,10 +281,8 @@ export type HostPorts = {
 	readonly release: Release;
 	/** The workspace's public URL with its path prefix (`https://host/acme`), no trailing slash. */
 	readonly publicUrl: string;
-	/** Rule 70: the seed pack's `start` runs, queued once on the environment's first admission. */
-	readonly start?: readonly string[];
-	/** Guest isolates, made, metered and ended by the host: their CPU is the host's to read and bound. */
-	readonly guestIsolates: GuestIsolatesPort;
+	/** The host's own guest runner: isolates it makes, meters and ends for guest code (bodies, page loaders, `run_js`). */
+	readonly guests: GuestIsolatesPort;
 	readonly deadlines: DeadlinesPort;
 	readonly images: ImagesPort;
 	/** This release's API reference files for the agent's `docs` tool. */
@@ -287,6 +298,13 @@ export type HostPorts = {
 	readonly links: LinksPort | Off;
 	readonly shell: ShellPorts;
 	readonly agent: AgentPorts;
+	/** The kernel's meter: as each run of a wake starts, the run begins the next unit, with a CPU budget of its own. */
+	readonly units?: { next(): Promise<void> };
+	/**
+	 * Why the previous generation ended, when the kernel stopped it past a unit's CPU budget: the runs it left `running`
+	 * fail `cpuBudget` with this message instead of rerunning (they would only overrun again).
+	 */
+	readonly overran?: string;
 };
 /** A branch the lifecycle prepares outside any serving generation (provision, reset, probe, restore). */
 export type BranchPorts = {
@@ -351,8 +369,6 @@ export type ActiveWorkspace = {
 	};
 };
 export type WorkspaceBranch = {
-	/** Persist the engine's admission marker before a cloned branch can serve work. */
-	admitted(options: Signal): Promise<void>;
 	readonly schema: {
 		/**
 		 * Engine tables, then the release's schema plan (rule 69; destructive steps only when accepted). Answers what it
@@ -363,10 +379,24 @@ export type WorkspaceBranch = {
 		): Promise<MigrationImpact>;
 	};
 	readonly packs: {
-		/** Rule 70: a seed pack by name (`base`, `sample`), its assets into `files` when given, ready to load in steps. */
+		/** Rule 70: the release's seed pack by name (`base`), its assets into `files` when given, ready to load in steps. */
 		load(
 			pack: string,
 			options: Signal & { readonly at: string; readonly files?: FilesPort }
+		): Promise<PackLoad>;
+		/**
+		 * Rule 70: rows `bolt seed` sent, held only in memory, decoded here and loaded in steps like a pack; each of
+		 * `assets` is read through `asset` into `files`.
+		 */
+		restore(
+			rows: { readonly [model: string]: readonly { readonly [field: string]: Json }[] },
+			options: Signal & {
+				readonly at: string;
+				readonly start: readonly string[];
+				readonly assets: readonly SeedAsset[];
+				readonly asset: (path: string, options: Signal) => Promise<Uint8Array>;
+				readonly files: FilesPort;
+			}
 		): Promise<PackLoad>;
 	};
 	readonly identity: {
@@ -581,9 +611,29 @@ const inRelease = <A, E>(
 		),
 		{ signal }
 	).then(Result.getOrThrow);
-/** The kernel admitted the release (every digest) before handing it over: here only what runs is checked again. */
-const artifactOf = (release: Release, options: Signal) =>
-	inRelease(release, readArtifact(ROOT, [CONTRACT], 'executed'), options.signal);
+/**
+ * The kernel admitted the release (every digest) before handing it over: here only what runs is checked again, once per
+ * release. A cell serves one release at a time, and every page load's static call reads it: concurrent reads of the
+ * whole release (guest code, source map, asset digests) would exhaust the cell's memory. The shared read outlives any
+ * one caller, so a caller's abort leaves it running; a failed read is not kept.
+ */
+let held: { readonly id: string; readonly artifact: Promise<Artifact> } | undefined;
+const artifactOf = (release: Release, options: Signal): Promise<Artifact> => {
+	options.signal.throwIfAborted();
+	if (held?.id !== release.id) {
+		const artifact = inRelease(
+			release,
+			readArtifact(ROOT, [CONTRACT], 'executed'),
+			new AbortController().signal
+		);
+		const entry = { id: release.id, artifact };
+		held = entry;
+		artifact.catch(() => {
+			if (held === entry) held = undefined;
+		});
+	}
+	return held.artifact;
+};
 
 const activeRuns = new WeakMap<
 	ActiveWorkspace,
@@ -596,7 +646,7 @@ const activation = (ports: HostPorts, artifact: Artifact) =>
 		release: ports.release.id,
 		publicUrl: ports.publicUrl,
 		guest: Option.some(artifact.guest),
-		start: ports.start ?? []
+		...(ports.overran === undefined ? {} : { overran: ports.overran })
 	});
 /** The facilities' engine services, each member across its Promise ABI adapter; the test kit composes the same. */
 export const facilityLayers = (f: Facilities) =>
@@ -616,20 +666,25 @@ export const facilityLayers = (f: Facilities) =>
 		})
 	);
 /** Host-provided records cross only this explicit Promise ABI adapter. */
-const portLayers = (ports: HostPorts) =>
+const portLayers = ({ units, ...ports }: HostPorts) =>
 	Layer.mergeAll(
 		facilityLayers(ports.facilities),
+		GuestIsolates.fromAbi(ports.guests),
 		Convert.fromAbi(ports.convert),
 		WebRead.fromAbi(ports.web),
 		Browser.fromAbi(ports.browser),
 		Geo.fromAbi(ports.geocoder),
 		DeadlinePort.fromAbi(ports.deadlines),
 		Drivers.fromAbi(ports.links),
-		GuestIsolates.fromAbi(ports.guestIsolates),
 		Images.fromAbi(ports.images),
 		Docs.fromAbi(ports.docs),
 		Mcp.fromAbi(ports.mcp),
-		...(isOff(ports.bundler) ? [] : [Bundler.fromAbi(ports.bundler)])
+		...(isOff(ports.bundler) ? [] : [Bundler.fromAbi(ports.bundler)]),
+		units === undefined
+			? Layer.empty
+			: Layer.succeed(RunUnits, {
+					next: () => Effect.tryPromise(() => units.next()).pipe(Effect.ignore)
+				})
 	);
 const identityLayer = (
 	publicUrl: string,
@@ -820,25 +875,45 @@ const branch = async (ports: BranchPorts, options: Signal): Promise<WorkspaceBra
 		signal: AbortSignal
 	) => guard(() => inRelease(ports.release, effect, signal));
 	const people = directory(db);
+	// the loader's state stays in this cell between the host's entries
+	const loader = (at: string, files: FilesPort | undefined) => (pack: PackSource) =>
+		(files === undefined
+			? packLoader(db, m, pack, at)
+			: Effect.flatMap(Files, (store) => packAssetLoader(db, m, pack, store, at)).pipe(
+					Effect.provide(Files.fromAbi(files))
+				)
+		).pipe(Effect.map(({ step }): PackLoad => ({ step: (options) => run(step, options.signal) })));
 	return {
-		admitted: ({ signal }) => run(markAdmitted(db), signal),
 		schema: {
 			migrate: ({ signal }) => run(applyMigrations(db, m, artifact.migrations), signal)
 		},
 		packs: {
 			load: (pack, { signal, at, files }) =>
+				run(readPackSource(`../seed/${pack}`).pipe(Effect.flatMap(loader(at, files))), signal),
+			restore: (rows, { signal, at, start, assets, asset, files }) =>
 				run(
-					readPackSource(`../seed/${pack}`).pipe(
-						Effect.flatMap((pack) =>
-							files === undefined
-								? packLoader(db, m, pack, at)
-								: Effect.flatMap(Files, (store) => packAssetLoader(db, m, pack, store, at)).pipe(
-										Effect.provide(Files.fromAbi(files))
-									)
-						),
-						// the loader's state stays in this cell between the host's entries
-						Effect.map(({ step }): PackLoad => ({ step: (options) => run(step, options.signal) }))
-					),
+					Effect.try({
+						try: () => {
+							decodeIdentity(m, rows);
+							decodeSeed(
+								m,
+								Object.fromEntries(
+									Object.entries(rows).filter(([c]) => !(IDENTITY as readonly string[]).includes(c))
+								)
+							);
+							return memorySource('private', rows, start, assets, (path) =>
+								Effect.tryPromise({
+									try: (signal) => asset(path, { signal }),
+									catch: (cause) =>
+										BoltError.make('seedDecode', 'decode', `seed asset ${path}: ${String(cause)}`)
+								})
+							);
+						},
+						catch: (cause) =>
+							cause instanceof BoltError
+								? cause
+								: BoltError.make('seedDecode', 'decode', String(cause))
+					}).pipe(Effect.flatMap(loader(at, files))),
 					signal
 				)
 		},

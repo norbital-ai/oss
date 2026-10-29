@@ -6,14 +6,9 @@ import type { TenantDbShape as TenantDb } from '../src/engine/db/tenant-db.ts';
 import { DbError } from '../src/engine/errors.ts';
 import { BoltError, fromStore } from '../src/protocol/errors.ts';
 import { PgliteDb } from '../src/node/db/pglite.ts';
-import { TestDb } from '../src/test/database.ts';
+import { TestDb } from '../../bolt-cli/src/test/database.ts';
 import { constraintIndex } from '@norbital-ai/store';
-import {
-	applyPlan,
-	plan,
-	readApplied,
-	type SchemaSlice
-} from '../src/engine/schema/plan.ts';
+import { applyPlan, plan, readApplied, type SchemaSlice } from '../src/engine/schema/plan.ts';
 import { refusalOf } from '../src/engine/schema/refusal.ts';
 import { slice } from './schema-fixture.ts';
 let db: TenantDb;
@@ -21,7 +16,9 @@ const U = (n: number) => `00000000-0000-7000-8000-${String(n).padStart(12, '0')}
 const exec = (text: string, params: readonly (string | number | null)[] = []) =>
 	db.write({ text, params });
 // the slice's constraint index, built once: the writer's own map is per manifest, not per refusal
-const index = Effect.runSync(Effect.cached(constraintIndex(slice()).pipe(Effect.mapError(fromStore))));
+const index = Effect.runSync(
+	Effect.cached(constraintIndex(slice()).pipe(Effect.mapError(fromStore)))
+);
 const refusal = Effect.fnUntraced(function* (p: Effect.Effect<unknown, DbError>) {
 	const e = yield* Effect.flip(p);
 	expect(e).toBeInstanceOf(DbError);

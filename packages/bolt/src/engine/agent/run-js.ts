@@ -25,7 +25,7 @@ import type { BoltError } from '../../protocol/errors.ts';
 import { NODE_SHIM } from './run-js-node.ts';
 
 const MiB = 1024 * 1024;
-/** The script's walls besides the host's CPU (what is left of the unit's 2 s) and its 256 MiB heap. */
+/** The script's walls besides the host's CPU (what is left of the unit's 3 s) and its 256 MiB heap. */
 export const RUN_JS = {
 	wallMs: 60_000,
 	httpMs: 20_000,

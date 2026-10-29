@@ -3,7 +3,7 @@ import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 import * as NodeServices from '@effect/platform-node/NodeServices';
 import { expect, layer } from '@effect/vitest';
-import { Effect, FileSystem, Stream } from 'effect';
+import { Effect, Fiber, FileSystem, Schema, Stream } from 'effect';
 import { ChildProcess, type ChildProcessSpawner } from 'effect/process';
 
 const buildScript = fileURLToPath(new URL('../build-package.ts', import.meta.url));
@@ -71,6 +71,25 @@ const hasBuild = (packageRoot: string) =>
 	});
 
 layer(NodeServices.layer, { excludeTestServices: true })('build-package', (it) => {
+	it.effect('turbo hashes the build script and every module it imports', () =>
+		Effect.gen(function* () {
+			const fs = yield* FileSystem.FileSystem;
+			const ossRoot = path.resolve(path.dirname(buildScript), '..');
+			const turbo = yield* fs.readFileString(path.join(ossRoot, 'turbo.json'));
+			const { globalDependencies } = yield* Schema.decodeUnknownEffect(
+				Schema.fromJsonString(Schema.Struct({ globalDependencies: Schema.Array(Schema.String) }))
+			)(turbo.replace(/^\s*\/\/.*$/gm, ''));
+			// without them turbo replays a build from before an edit to the script or its checks
+			const pending = [buildScript];
+			for (let file = pending.pop(); file !== undefined; file = pending.pop()) {
+				expect(globalDependencies).toContain(path.relative(ossRoot, file));
+				for (const [, relative] of (yield* fs.readFileString(file)).matchAll(
+					/from '(\.\.?\/[^']+)'/g
+				))
+					if (relative !== undefined) pending.push(path.resolve(path.dirname(file), relative));
+			}
+		})
+	);
 	it.effect('keeps a generated package binary executable for npm publication', () =>
 		Effect.gen(function* () {
 			const fs = yield* FileSystem.FileSystem;
@@ -194,7 +213,7 @@ layer(NodeServices.layer, { excludeTestServices: true })('build-package', (it) =
 		})
 	);
 
-	it.effect('one build cannot delete another build’s admitted staging output', () =>
+	it.effect('a second build of the package waits for the first, then swaps in its own output', () =>
 		Effect.gen(function* () {
 			const fs = yield* FileSystem.FileSystem;
 			const packageRoot = yield* scaffold(
@@ -214,12 +233,15 @@ if (mode === 'first') {
 			const first = yield* start(packageRoot, 'first');
 			yield* staged(first);
 
-			const second = yield* build(packageRoot, 'second');
-			expect(second.code, second.output).toBe(0);
+			const second = yield* build(packageRoot, 'second').pipe(Effect.forkChild);
+			yield* Effect.sleep('1 second');
+			expect(second.pollUnsafe(), 'the second build waits on .building').toBeUndefined();
 
 			yield* Stream.run(Stream.encodeText(Stream.make('continue')), first.stdin);
 			expect(yield* first.exitCode).toBe(0);
-			expect(yield* fs.readFileString(path.join(packageRoot, 'build/index.js'))).toBe('first');
+			const done = yield* Fiber.join(second);
+			expect(done.code, done.output).toBe(0);
+			expect(yield* fs.readFileString(path.join(packageRoot, 'build/index.js'))).toBe('second');
 		})
 	);
 

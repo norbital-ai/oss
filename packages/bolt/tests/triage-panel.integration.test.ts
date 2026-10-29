@@ -9,7 +9,7 @@ import { actReply, routeFixture } from './support/route-fixture.ts';
 import type { Json } from '../src/decl/values.ts';
 import type { System1Request } from '../src/engine/decisions/index.ts';
 import { Authorities } from '../src/engine/identity/actor.ts';
-import { TestWorkspace } from '../src/test/index.ts';
+import { TestWorkspace } from '../../bolt-cli/src/test/index.ts';
 
 const manifest = Result.getOrThrow(
 	decodeProjectedManifest({
@@ -126,22 +126,24 @@ const panel = () =>
 	});
 
 describe('in-app triage (G5, rule 60a)', () => {
-	it.live('plain parts wait; respond-now and a `now` post answer every pending part as one turn, never asking the decider', () =>
-		Effect.scoped(
-			Effect.gen(function* () {
-				const p = yield* panel();
-				yield* p.post('draft a note');
-				yield* p.post('for the Kismis job');
-				expect(p.turns).toHaveLength(0);
-				yield* p.respondNow;
-				expect(p.turns).toEqual([['draft a note', 'for the Kismis job']]);
-				yield* p.post('first part');
-				yield* p.post('second part', true);
-				expect(p.turns).toHaveLength(2);
-				expect(p.turns[1]?.slice(-2)).toEqual(['first part', 'second part']);
-				yield* p.t.runDue(); // the decisions the plain parts queued find nothing pending
-				expect(p.inputs).toHaveLength(0);
-			})
-		)
+	it.live(
+		'plain parts wait; respond-now and a `now` post answer every pending part as one turn, never asking the decider',
+		() =>
+			Effect.scoped(
+				Effect.gen(function* () {
+					const p = yield* panel();
+					yield* p.post('draft a note');
+					yield* p.post('for the Kismis job');
+					expect(p.turns).toHaveLength(0);
+					yield* p.respondNow;
+					expect(p.turns).toEqual([['draft a note', 'for the Kismis job']]);
+					yield* p.post('first part');
+					yield* p.post('second part', true);
+					expect(p.turns).toHaveLength(2);
+					expect(p.turns[1]?.slice(-2)).toEqual(['first part', 'second part']);
+					yield* p.t.runDue(); // the decisions the plain parts queued find nothing pending
+					expect(p.inputs).toHaveLength(0);
+				})
+			)
 	);
 });

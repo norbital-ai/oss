@@ -53,7 +53,7 @@ automation('orders_renote', {
 		note: { kind: 'text' }
 	},
 	output: { kind: 'int' },
-	runAs: 'trigger',
+	policies: ['sales_rep'],
 	run: function* (input, ctx) {
 		expectTypeOf(input).toEqualTypeOf<{
 			readonly ids: readonly Id<'orders'>[];

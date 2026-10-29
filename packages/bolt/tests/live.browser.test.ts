@@ -1,7 +1,7 @@
 import { Effect, Stream } from 'effect';
 import { expect, it } from '@effect/vitest';
 import { page } from 'vitest/browser';
-import { liveStream, pageSignals } from '../src/page/stream.ts';
+import { liveStream, pageSignals, shareable, sharedSource } from '../src/page/stream.ts';
 import { PATHS } from '../src/protocol/wire.ts';
 
 it.live('native EventSource delivers live frames in Chromium (L-BOLT-1012)', () =>
@@ -53,5 +53,26 @@ it.live('a page hands the live stream its own visibility and connectivity', () =
 		document.dispatchEvent(new Event('visibilitychange'));
 		window.dispatchEvent(new Event('online'));
 		expect(woke).toBe(2);
+	})
+);
+
+it.live('two shared sources on one page hold one EventSource and both hear its frames', () =>
+	Effect.gen(function* () {
+		expect(shareable()).toBe(true);
+		let opened = 0;
+		const open = () => {
+			opened++;
+			return new EventSource(PATHS.live);
+		};
+		const [first, second] = yield* Effect.all(
+			[
+				liveStream(() => sharedSource(PATHS.live, open)).pipe(Stream.take(2), Stream.runCollect),
+				liveStream(() => sharedSource(PATHS.live, open)).pipe(Stream.take(2), Stream.runCollect)
+			],
+			{ concurrency: 'unbounded' }
+		).pipe(Effect.timeout('5 seconds'));
+		expect(opened).toBe(1);
+		expect(first).toEqual(second);
+		expect(first[0]).toEqual({ t: 'hello', conn: 'browser', v: 0 });
 	})
 );

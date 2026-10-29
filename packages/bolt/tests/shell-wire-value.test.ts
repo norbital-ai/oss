@@ -34,9 +34,7 @@ it('revives exact wire decimal tags at any depth without losing precision or cha
 	expect(source).toEqual({ total: { $dec: amount }, lines: [{ amount: { $dec: '-0.00500' } }] });
 });
 
-it('leaves masks opaque and preserves primitive values, unknown keys and ordinary tag-shaped objects', () => {
-	const masked = { $masked: true, hidden: { $dec: '1.20' } };
-	expect(displayWireValue(masked)).toBe(masked);
+it('preserves primitive values, unknown keys and ordinary tag-shaped objects', () => {
 	for (const value of [
 		null,
 		false,

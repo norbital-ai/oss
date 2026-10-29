@@ -59,7 +59,7 @@ async function show({
 			],
 			next: null
 		}),
-		aggregate: () => [{ count: 2 }],
+		aggregate: () => ({ count: 2 }),
 		act: (callable, input, options) => {
 			acts.push({ callable, input });
 			return act(callable, input, options);

@@ -98,32 +98,33 @@ export const erp_mcp = mcp({
 
 export const nightly = automation('nightly', {
 	description: 'Nightly order digest',
-	runAs: ['sales_rep'],
+	policies: ['sales_rep'],
 	on: { cron: '0 2 * * *' },
 	output: { kind: 'int' },
 	run: function* (_, ctx) {
-		const open = yield* ctx.query({ orders: {
-			where: { status: { eq: 'submitted' } },
-			fields: ['number']
-		} });
+		const open = yield* ctx.query({
+			orders: {
+				where: { status: { eq: 'submitted' } },
+				fields: ['number']
+			}
+		});
 		return open.orders.rows.length;
 	}
 });
 
 export const follow_up = automation('follow_up', {
 	description: 'Chase an order three days after it is placed',
-	runAs: ['sales_rep'],
-	on: [
-		{ created: 'orders', delay: '3d', where: { status: { eq: 'draft' } } },
-		{ updated: 'orders', fields: ['status', 'total'] }
-	],
+	policies: ['sales_rep'],
+	input: { ids: { kind: 'list', of: { kind: 'id', of: 'orders' } } },
 	retry: { attempts: 3, backoff: '1min' },
 	concurrency: { max: 1 },
 	run: function* ({ ids }, ctx) {
-		const orders = yield* ctx.query({ orders: {
-			where: { id: { in: ids } },
-			fields: ['number', 'owner']
-		} });
+		const orders = yield* ctx.query({
+			orders: {
+				where: { id: { in: ids } },
+				fields: ['number', 'owner']
+			}
+		});
 		for (const o of orders.orders.rows)
 			if (o.owner !== null)
 				yield* ctx.notify({
@@ -137,7 +138,7 @@ export const follow_up = automation('follow_up', {
 
 export const render = automation('render', {
 	description: 'Render an order confirmation',
-	runAs: 'trigger',
+	policies: ['sales_rep'],
 	input: { order: { kind: 'id', of: 'orders' } },
 	output: { kind: 'file', accept: ['application/pdf'], max: '5MiB' },
 	run: function* ({ order }, ctx) {
@@ -153,7 +154,7 @@ export const render = automation('render', {
 
 export const inbound_hook = automation('inbound_hook', {
 	description: 'Payment provider callback',
-	runAs: ['sales_rep'],
+	policies: ['sales_rep'],
 	on: { webhook: '/payments', verify: { scheme: 'stripe', secret: 'HOOK_SECRET' } },
 	input: { order: { kind: 'text' } },
 	run: function* ({ order }, ctx) {
@@ -174,17 +175,15 @@ export const inbound_hook = automation('inbound_hook', {
 export const orders_submit = automation('orders_submit', {
 	description: 'Submit this order',
 	input: { target: { kind: 'id', of: 'orders' } },
-	runAs: 'trigger',
+	policies: ['sales_rep'],
 	run: function* ({ target }, ctx) {
 		const order = (yield* ctx.query({ orders: { where: { id: { eq: target } }, limit: 1 } })).orders
 			.rows[0];
 		if (order === undefined)
 			return yield* Effect.fail(new Refusal({ message: 'Choose an existing order.' }));
-		yield* ctx.act(
-			'orders.update',
-			[{ target: order.id, set: { status: 'submitted' } }],
-			{ observed: { [order.id]: order.revision } }
-		);
+		yield* ctx.act('orders.update', [{ target: order.id, set: { status: 'submitted' } }], {
+			observed: { [order.id]: order.revision }
+		});
 	}
 });
 
@@ -192,12 +191,14 @@ export const orders_renote = automation('orders_renote', {
 	description: 'Set a note on many orders',
 	input: { ids: { kind: 'list', of: { kind: 'id', of: 'orders' } }, note: { kind: 'text' } },
 	output: { kind: 'int' },
-	runAs: 'trigger',
+	policies: ['sales_rep'],
 	run: function* ({ ids, note }, ctx) {
-		const orders = yield* ctx.query({ orders: {
-			where: { id: { in: ids } },
-			fields: ['id', 'revision']
-		} });
+		const orders = yield* ctx.query({
+			orders: {
+				where: { id: { in: ids } },
+				fields: ['id', 'revision']
+			}
+		});
 		yield* ctx.act(
 			'orders.update',
 			ids.map((id) => ({ target: id, set: { note } })),
@@ -225,7 +226,7 @@ export const order_lines_pay = automation('order_lines_pay', {
 		split: { kind: 'record', of: { kind: 'decimal', scale: 2 } }
 	},
 	output: { kind: 'text' },
-	runAs: 'trigger',
+	policies: ['sales_rep'],
 	run: function* ({ p, split }) {
 		return (p.method === 'card' ? p.last4 : p.iban) + Object.keys(split).join();
 	}
@@ -234,7 +235,7 @@ export const order_lines_pay = automation('order_lines_pay', {
 export const order_lines_chase = automation('order_lines_chase', {
 	description: 'Chase the lines',
 	input: {},
-	runAs: 'trigger',
+	policies: ['sales_rep'],
 	run: function* (_, ctx) {
 		yield* ctx.schedule('nightly', {});
 		yield* ctx.notify({ title: 'Chased', to: [{ policy: 'sales_rep' }] });
@@ -245,7 +246,7 @@ export const customers_return_row = automation('customers_return_row', {
 	description: 'One native row',
 	input: {},
 	output: { kind: 'row', of: 'customers' },
-	runAs: 'trigger',
+	policies: ['sales_rep'],
 	run: function* (_, ctx) {
 		const page = yield* ctx.query({ customers: { limit: 1 } });
 		const customer = page.customers.rows[0];

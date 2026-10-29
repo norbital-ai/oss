@@ -1,16 +1,11 @@
 // Wire values → what a statement binds: decimals as their text, periods as range literals, points as `(lng,lat)`,
 // durations as seconds. Shared by the read and write compilers and the DDL.
-import { Effect } from 'effect';
+import { Predicate } from 'effect';
 import type { Json } from '../values.ts';
-import type { Operand } from '../ir.ts';
 import type { FieldInfo } from '../catalog.ts';
-import { isOperand, isTaggedOperand, taggedOperand } from '../decode.ts';
-import type { StoreError } from '../errors.ts';
 
 const UNIT_S: { readonly [unit: string]: number } = { s: 1, min: 60, h: 3_600, d: 86_400 };
 const DURATION = /^(\d+)(s|min|h|d)$/;
-const isObject = (value: Json): value is { readonly [key: string]: Json } =>
-	value !== null && typeof value === 'object' && !Array.isArray(value);
 
 /**
  * Wire decimals (`$dec`) → their text, which Postgres casts per column; dates and instants are ISO strings. With the
@@ -18,7 +13,7 @@ const isObject = (value: Json): value is { readonly [key: string]: Json } =>
  * stores `[from,to+1)`), an instant period `{ start, end }` closed-open; a null end is open; a point `(lng,lat)`.
  */
 export function databaseValue(v: Json, f?: Pick<FieldInfo, 'kind' | 'periodOf'>): Json {
-	if (isObject(v)) {
+	if (Predicate.isObject(v)) {
 		const o = v,
 			keys = Object.keys(o);
 		if (keys.length === 1 && keys[0] === '$dec') return o['$dec'] ?? null;
@@ -42,7 +37,7 @@ export function cells(
 	f?: Pick<FieldInfo, 'kind' | 'periodOf' | 'arms' | 'column'>
 ): [string, Json][] {
 	if (f?.arms === undefined) return [[k, databaseValue(v, f)]];
-	const ref = isObject(v) ? v : null;
+	const ref = Predicate.isObject(v) ? v : null;
 	return f.arms.map((arm) => [`${f.column}__${arm}`, ref?.model === arm ? (ref.id ?? null) : null]);
 }
 
@@ -65,30 +60,6 @@ export const inverted = (f: FieldInfo, lo: unknown, hi: unknown): boolean =>
 	(f.periodOf === 'date'
 		? String(lo) >= String(hi)
 		: Date.parse(String(lo)) > Date.parse(String(hi)));
-
-/** A period argument's ends, each a literal or an operand resolved by `resolve`. */
-export const periodEnds: (
-	v: Json,
-	resolve: (o: Operand) => Effect.Effect<Json, StoreError>
-) => Effect.Effect<Json, StoreError> = Effect.fnUntraced(function* (
-	v: Json,
-	resolve: (o: Operand) => Effect.Effect<Json, StoreError>
-) {
-	const r = comparable(v);
-	if (typeof r !== 'object' || r === null || Array.isArray(r)) return r;
-	const out: { [k: string]: Json } = {};
-	for (const [k, x] of Object.entries(r))
-		out[k] =
-			typeof x === 'object' && x !== null && !Array.isArray(x) && !Object.hasOwn(x, '$dec')
-				? isOperand(x)
-					? yield* resolve(taggedOperand(x))
-					: isTaggedOperand(x)
-						? yield* resolve(x)
-						: x
-				: x;
-	const ends: Json = out;
-	return ends;
-});
 
 /**
  * A period column `x` against a period `span` (SQL range text): `overlaps` and `within` test the whole period;

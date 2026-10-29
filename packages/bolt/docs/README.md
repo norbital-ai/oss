@@ -58,15 +58,19 @@ This workflow assumes `public` is the active schema for both replay and host con
 
 Each word names one thing:
 
-| Term        | Means                                                                                                                | Where                                                                              |
-| ----------- | -------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------- |
-| Environment | An operating environment: local, staging or production, and a tenant environment inside one.                         | The operator CLI that resets and operates environments; never a workspace setting. |
-| Secrets     | Encrypted values stored in the tenant database, read by server code.                                                 | `src/+secrets.ts` with `secrets({ NAME: { label } })`.                             |
-| Server code | Transforms, policy checks, automations, syncs, integrations and page loaders.                                        | The `ctx` each receives; declarations from `@norbital-ai/bolt`.                    |
-| Page SDK    | What browser-side page code calls.                                                                                   | `@norbital-ai/bolt/page`, imported in pages as `$bolt`.                            |
-| Device      | What the shell running the page provides: location, notifications, push, background notices, opening external links. | `bolt.device` in pages; a shell installs `window.boltDevice`.                      |
-| Shell       | The container a workspace runs in, which implements Device.                                                          | The web shell built into Bolt; native apps from `@norbital-ai/app-shell`.          |
-| Host        | The server that runs a bundle and supplies its facilities: Colony (tethered, the default) or an untethered host.      | `@norbital-ai/bolt/facilities`; the Host API. See [hosts](./hosts.md).             |
+| Term        | Means                                                                                                                      | Where                                                                              |
+| ----------- | -------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------- |
+| Environment | An operating environment: local, staging or production, and a tenant environment inside one.                               | The operator CLI that resets and operates environments; never a workspace setting. |
+| Secrets     | Encrypted values stored in the tenant database, read by server code.                                                       | `src/+secrets.ts` with `secrets({ NAME: { label } })`.                             |
+| Server code | Transforms, policy checks, automations, syncs, integrations and page loaders.                                              | The `ctx` each receives; declarations from `@norbital-ai/bolt`.                    |
+| Page SDK    | What browser-side page code calls.                                                                                         | `@norbital-ai/bolt/page`, imported in pages as `$bolt`.                            |
+| Device      | What the shell running the page provides: location, notifications, push, background notices, opening external links.       | `bolt.device` in pages; a shell installs `window.boltDevice`.                      |
+| Shell       | The container a workspace runs in, which implements Device.                                                                | The web shell built into Bolt; native apps from `@norbital-ai/app-shell`.          |
+| Host        | The server that runs a bundle and supplies its facilities: Colony (tethered, the default) or an untethered host.           | `@norbital-ai/bolt/facilities`; the Host API. See [hosts](./hosts.md).             |
+| Output      | A model's named read shape, a fixed layer map: `read` is `default`, `outputs` names the others. Every read names one.      | `+model.ts` `read` and `outputs`; a read root's `output` option.                   |
+| Policy      | What holders may do: the outputs they read and the rows of each, writes, state moves, capabilities, limits, manual starts. | `src/access_control/policy/`; held by teams, kiosks, envoys and automations.       |
+| Automation  | A job the system identity runs with its declared `policies`; the run records its trigger (system or a person).             | `src/automation/+<name>.automation.ts`.                                            |
+| Effect      | The work after a committed write. It runs as the writer and holds no policy.                                               | A model's `effect`.                                                                |
 
 ## Package entries
 
@@ -82,7 +86,8 @@ Each word names one thing:
 | `@norbital-ai/bolt/host-api`          | The Host API between a host and a pinned release.                                     |
 | `@norbital-ai/bolt/docs`              | The API reference as data.                                                            |
 | `@norbital-ai/bolt/isolate-globals`   | The guest's global surface beyond ECMAScript.                                         |
-| `@norbital-ai/bolt/test`              | `TestWorkspace` and the Effect Vitest helpers; `/test/browser` mounts shell controls. |
+| `@norbital-ai/bolt/guest-hooks`       | The prelude's host hooks every guest runner serves.                                   |
+| `@norbital-ai/bolt-cli/test`          | `TestWorkspace` and the Effect Vitest helpers; `/test/browser` mounts shell controls. |
 
 ## Authoring and pages
 
@@ -111,10 +116,10 @@ item's path; keys are distinct and non-empty. Request `rules` (CEL over the outp
 it (`coverage.all(c, c.status != 'pending')`). `jsonDiff(before, after, output?)` from `@norbital-ai/bolt` is the same
 pure comparison, for verifying changed rows and composing a change summary.
 
-With `runAs` policies, `tools` may name `'read'` beside host tools: the model reads workspace
-records as those policies (grants, field masks and row scopes as for `ctx.query`), one read
-request per call: a layer map whose keys are the caller's roots and their declared layers (unknown
-keys refused; a root reads 50 rows unless it sets `limit`), across as many turns as `steps` allows. A `runAs: 'trigger'` run cannot offer it. The draft's reader is then named
+In an automation, `tools` may name `'read'` beside host tools: the model reads workspace records
+as the run's policies (granted outputs and row scopes as for `ctx.query`), one read request per
+call: a layer map whose keys are the caller's roots and the layers of the output each names (unknown
+keys refused; the same options, defaults and pages as `ctx.query`), across as many turns as `steps` allows. The draft's reader is then named
 `read_answer`.
 
 ```ts
@@ -150,6 +155,25 @@ modules initialize and stylesheets load. Public and external apps, and kiosks wh
 needs a `+<page>.page.server.ts` read-only loader and shared `<page>.page.data.ts` codec. See
 [Client bundles and public rendering](./client-bundling.md) for authoring, artifact and host boundaries.
 
+Portals carry their policies. A kiosk's `policies` are the whole authority on its pages: with
+`auth: 'none'` a signed-out visitor holds exactly them, as its anonymous user (below); with
+`auth: 'external'` every external who signs in (invitation or the workspace's `signup`) opens it and
+holds exactly them there, as themselves (`requestor.id`, `requestor.party`), and nothing of them
+elsewhere. Staff open a kiosk only by a held `capabilities.kiosks`. The build checks the named
+policies exist and refuses `capabilities` on an external portal's policies.
+
+Anonymous users (Firebase-style). Opening a public app or an `auth: 'none'` kiosk without one mints a
+`sys_user` of kind `anonymous` (no address, never a member, absent from People) and a 30-day sliding
+session whose token the visitor cookie holds. It is the visitor's `requestor.id`: a `sys_user` ref
+defaulting to `{ var: 'requestor.id' }` makes it own what it creates, and a read `where` on that ref
+lets it (alone) read them back. Its limits count per IP, as every visitor's do; minting is limited per IP
+(`register`), and past that ceiling the page opens with no identity (a per-request id that owns nothing).
+Signing in or up with that cookie links it: a newcomer's account _is_ the anonymous user (same id, rows
+included); an existing account absorbs it — every workspace `sys_user` ref holding the anonymous id
+moves to the account unless the row's state locks that field, and the anonymous user is deactivated.
+Text copies of the id and `created_by` keep the anonymous id. The daily `bolt.prune` deletes anonymous
+users with no live session (30 days unused, or retired by a link) that no record references.
+
 ## Teams
 
 Teams exist only in source: `src/access_control/team/+team.ts` maps each handle to a policy list
@@ -165,6 +189,24 @@ typed expression over `requestor` and the clock, checked against the field's kin
 per read. Requestor expressions bind server-side; time expressions (`{ var: 'today - days(7)' }`,
 `{ var: 'startOfMonth(today)' }`, `{ var: 'now - hours(1)' }`) are evaluated at the edge and refused by the
 store.
+
+## Rate limits
+
+A policy's `limits` throttle requests per holder (rule 38): `act` (every `/act`), `read` (`/q`, live
+registrations and public page loaders, members per actor and visitors per IP), `upload`, `convert`,
+`agent` (agent posts and filter descriptions), visitor `register` (minting an anonymous user), and envoy
+`receive`/`unrecognised`. A visitor's limits count per IP, anonymous user or not.
+Undeclared keys take defaults (members: `act 600/min`, `read 3000/min`, `upload 120/min`, `convert 30/min`,
+`agent 100/h`; visitors, all per IP: `act 120/h`, `read 600/min`, `upload 20/h`,
+`register 20/h`). Windows are fixed and
+counted in the serving cell's memory; acts also persist theirs in their statement (`bolt_rate`), and a
+cell taking a tenant reloads the open ones. Every refusal is `429` with `Retry-After` (seconds until the
+window resets) and `{ code: 'rateLimited' }`, whose one message the shell translates.
+
+Automations are limited only when started manually (the `start` callable, Run now, the agent): each
+counts against the automation's own `limit` (`automation('x', { …, limit: '10/min' })`, per starter,
+default `30/min`). Cron, webhook and model effect runs, and the acts any run's body performs, are never rate
+limited; run budgets bound them.
 
 ## Record history and restore
 
@@ -184,7 +226,7 @@ Per-record restore is two own callables, `history.preview` and `history.restore`
 `{ model, record, revision }` (`bolt.restore.preview` / `bolt.restore.run` in pages). The
 preview lists each field that would change (current and restored value) and each one left alone,
 with its reason: a link whose target was deleted, read-only (integration-owned or the owned
-parent's key), no grant, a locked state move, masked, or a definition that changed. Only the
+parent's key), no grant, a locked state move, or a definition that changed. Only the
 record's own stored columns are restored; computed fields, roll-ups, `seq`, system columns, owned
 children and many-relations are never touched, and a link's target is never written. The restore
 is one ordinary `update` observed at the previewed revision, so a concurrent change is a conflict
@@ -194,7 +236,7 @@ cannot be restored this way: History is shown on live records.
 
 ## Administrator audit trail
 
-Settings → Audit queries a separate host-owned audit store. Administrators can search event
+The command center's Audit (`/command-center/audit`) queries a separate host-owned audit store. Administrators can search event
 payloads and filter by time, actor, operation, status, model, record, invocation or run. Pages
 contain bounded metadata summaries; opening an event loads its complete payload. Time and
 event id determine stable cursor order. A missing audit backend is unavailable, rather than an
@@ -243,10 +285,17 @@ copies. Unresolved recovery fences remain during an audit-store outage.
 
 ## Approvals
 
-A policy grants per model, as layer maps typed from the model's own declaration. A `read` grant
-is `true` or `{ '<model>': { where?, fields? }, '<model>.<rel>': { where?, fields? }, … }`: the root's
+A policy grants per model, as layer maps typed from the model's own declaration. The model fixes
+each output's shape; a policy grants outputs and filters their rows. `read` grants the `default`
+output and `outputs: { <name>: … }` the named ones, each `true` or
+`{ '<model>': { where? }, '<model>.<rel>': { where? }, … }` over that output's layers: the root's
 `where` scopes the roots (it may hop relations), a deeper layer's `where` filters that layer's rows
-(or nulls a ref) and never removes the root, `fields` masks within the layer. A `create` or `update`
+(or nulls a ref) and never removes the root. A read of an output needs a held grant of it; its rows
+are the union of the granting policies' `where`s. `history` is `true` or a `where`. Every member
+reads `sys_user`'s `directory` output (id, name): staff read staff, externals themselves and their
+party; a read of `sys_user` without a `default` grant names `output: 'directory'`. `sys_file` declares
+`default` (name, type, size, digest, field, uploader) and `meta` (id, name, mime) for a holder that only
+lists files. A `create` or `update`
 grant is `true` or `{ columns?: { '<model>': [...], '<model>.<rel>': [...] }, check? }`; `delete` is
 `true` or `{ check? }`. `columns` is checked before any guest code; `check` judges the whole batch,
 nested layers included, and returns a verdict: `ctx.allow()`, `ctx.deny(message, { row?, path?, field? })`
@@ -318,28 +367,19 @@ These modules return Effects; the host owns execution and resource lifetime.
 `NodeCrypto.layer` or the complete `NodeServices.layer` from `@effect/platform-node`.
 Engine and identity constructors capture this service for their returned operations.
 
-Native guest execution uses `isolated-vm` 7 on Node 26. Start Node with
-`--no-node-snapshot`, as required by [isolated-vm](https://github.com/laverdet/isolated-vm#requirements)
-for Node 20 and later. The Bolt executable and fork test workers supply this
-flag. A custom host or direct `node` invocation must supply it before loading the engine.
+Bolt carries no guest runner, and the runner is no facility: each host owns its own and hands it to
+the engine as `HostPorts.guests` (`GuestIsolatesPort`). bolt-cli's `nodeGuests()`
+(`@norbital-ai/bolt-cli/guests`) runs Node vm contexts in the host's own process: each call runs under
+a timeout of what is left of the session's CPU budget, and the thread's CPU around it is metered. A vm
+context shares the host's heap and is not a security boundary, so it caps no guest memory and runs
+operator-trusted code only; bolt-server and `bolt dev` serve on it, and the test kit runs on it
+internally. A multi-tenant kernel brings its own native isolates (Colony uses isolated-vm). `bolt check` runs no guest: it evaluates
+the declarations twice, each on a worker thread stripped to a guest's ECMAScript globals.
 
-Native installs require Python 3, make and a C++ compiler. The repository's pinned isolated-vm 7.0.1
-patch fixes module-code-cache consumption and builds the addon from source. A template keeps the patch file,
-its `patchedDependencies` entry and `bun.lock` together.
-
-Guests initialize their prelude and evaluate tenant source in a fresh isolated heap. Builds produce
+Guests initialize their prelude and evaluate tenant source in a fresh context. Builds produce
 no native V8 snapshot, and artifact readers never open historical snapshot blobs. Historical
 descriptor metadata remains covered by artifact integrity checks. `HOST_API.guestExecution`
 declares `source`; hosts require that policy before admitting a runtime.
-
-Fresh invocation preparation does not sample heap statistics. Only isolates retained in the warm
-pool need that measurement for its memory cap. All preparation CPU remains charged.
-
-Each program pool may retain a private module code cache produced from its exact source. Cache bytes
-and prepared heaps share the warm-memory cap; disabling warm preparation also disables code caching.
-Every invocation still evaluates a fresh module heap, and the first cache producer retains its actual
-preparation CPU charge. Closing the pool disposes compiling isolates and waits for native settlement
-before releasing borrowed cache handles. Borrowing a prepared isolate immediately refills its warm slot.
 
 The compiler first bundles every declaration and evaluates it twice for the manifest and all build
 checks. Only a clean check produces the runtime `guest.mjs`: a second native bundle exports the
@@ -359,26 +399,46 @@ A pinned release crosses a separate host module graph through `@norbital-ai/bolt
 inside their own graph. Integration provider drivers use the same kind of single boundary adapter.
 
 Runtime artifact decoding lives in `src/engine/artifact/read.ts`, separate from the compiler
-that writes artifacts. `src/protocol/errors.ts` owns the shared failure class and code table;
+(bolt-cli) that writes artifacts. `src/protocol/errors.ts` owns the shared failure class and code table;
 native engine failures and browser protocol decoders use those same identities.
 
-`@norbital-ai/bolt/test` exports `TestWorkspace`, `TestWorkspace.layer(options)`, and the Effect
-Vitest helpers. Suites declare `@effect/vitest` directly and import their helpers from it.
+`@norbital-ai/bolt-cli/test` exports `TestWorkspace`, `TestWorkspace.layer(options)`, and the Effect
+Vitest helpers; guest code runs on the kit's own `node:vm` runner. Suites declare `@effect/vitest` directly and import their helpers from it.
 Acquire `yield* TestWorkspace` in `it.effect`, then yield native `t.as(actor)`
 calls. Use `Effect.flip` or `Effect.result` to assert failures. The layer closes its database,
 host and provider resources. With a `root`, the layer seeds from the template's `test` pack
 (`seed/test/`, built once per source hash; `bolt build` also writes it to `.norbital/seed/test`, and no
-host provisions it). It never loads the public `base` pack or the bank's `sample`; `seed: 'none'` or
+host provisions it). It never loads the public `base` pack or bank rows; `seed: 'none'` or
 inline rows replace the test pack. Use the browser test entry to mount actual controls and exercise
 current interactions. Edge case tests cover core behavior with synthetic fixtures; automated
 layout/markup/CSS/pixel assertions, surface sweeps, seeded legal/catalogue correctness matrices and
 retired-API absence checks do not belong in these suites. Templates run standalone without a host;
 hosts test their own behavior independently of template suites.
 
+### Workspace URLs
+
+Every host serves the same workspace-relative paths: an untethered host (bolt-server, `bolt dev --host`) at its
+root, a tethered one under the base its `publicUrl` names (`/<label>` on Colony, whose own paths stay under
+`/__colony`).
+
+| Path                                                                                                                                    | Serves                                                                                                            |
+| --------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| `/`                                                                                                                                     | The shell home.                                                                                                   |
+| `/sign-in[?next=<path>]`                                                                                                                | The one sign-in page.                                                                                             |
+| `/inbox`, `/settings/<tab>`, `/command-center[/<tab>]`, `/studio[/<tab>]`, `/app/<app>/<page>`, `/kiosk/<kiosk>/<page>`, `/invite/<id>` | Shell routes (`shell/nav.ts` `route`).                                                                            |
+| `/__bolt/*`                                                                                                                             | The wire (`protocol/wire.ts` `PATHS`), `/__bolt/shell/*`, `/__bolt/integrations[/<instance>/…]`, `/__bolt/sw.js`. |
+| `/hooks/integration/<instance>`, `/hooks/oauth/callback`                                                                                | Integration ingress.                                                                                              |
+| `/manifest.webmanifest`, `/assets/*`, the client build's files                                                                          | The PWA manifest and client bytes.                                                                                |
+
+Each has one spelling, `canonicalPath` (`protocol/wire.ts`): a repeated or trailing slash is answered with one 308
+to it, query kept; the root keeps its `/`. The shell handler answers it first, so every host that routes through
+`workspace.handle` answers it alike.
+
 ## CLI and publication
 
-The CLI is declared with `effect/cli` in `src/cli/main.ts`. `bolt sync`, `check`, `build`, `test`
-and `dev` operate on one workspace ([the dev loop](./dev-loop.md)). From a template repository root,
+The CLI is `@norbital-ai/bolt-cli` (a workspace devDependency that never enters a release), declared
+with `effect/cli` in its `src/cli/main.ts` beside the compiler and the test kit. `bolt sync`, `check`,
+`build`, `test` and `dev` operate on one workspace ([the dev loop](./dev-loop.md)). From a template repository root,
 `bolt templates` provides `check`, `lock`, `test`, `verify` and `publish`; `publish --out=<dir>` packs
 each built template's release, by digest, for CI's R2 upload ([releases](./releases.md)). Repository
 scripts may delegate to those commands.
@@ -392,6 +452,7 @@ before a coordinated immutable package release; consumers import public package 
 
 - [The template dev loop](./dev-loop.md)
 - [Releases](./releases.md)
+- [Seeding](./seeding.md)
 - [Host facilities](./hosts.md)
 - [Schema and public type inference](./inference.md)
 - [Workspace contract and file roles](./workspace-contract.md)

@@ -4,7 +4,7 @@ import { describe, expect, it } from '@effect/vitest';
 import { Context, Effect, Layer, Schema } from 'effect';
 import type { Json } from '../src/decl/values.ts';
 import type { Invocation, Outcome } from '../src/engine/contracts.ts';
-import { TestDb } from '../src/test/database.ts';
+import { TestDb } from '../../bolt-cli/src/test/database.ts';
 import { TenantDb } from '../src/engine/db/tenant-db.ts';
 import type { EngineManifest } from '../src/engine/manifest.ts';
 import { type GuestShape } from '../src/engine/services.ts';
@@ -86,7 +86,9 @@ const fixture = Effect.gen(function* () {
 class CodecFixture extends Context.Service<CodecFixture, Effect.Success<typeof fixture>>()(
 	'test/CodecFixture'
 ) {}
-const CodecFixtureLive = Layer.effect(CodecFixture, fixture).pipe(Layer.provide(TestDb.layer(manifest)));
+const CodecFixtureLive = Layer.effect(CodecFixture, fixture).pipe(
+	Layer.provide(TestDb.layer(manifest))
+);
 
 describe('codec: periods reach Postgres as ranges on every write path (X-11)', () => {
 	it.effect(
@@ -223,4 +225,3 @@ describe('codec: the update callback reads `before` in wire form (§5.8)', () =>
 			}).pipe(Effect.provide(CodecFixtureLive))
 	);
 });
-

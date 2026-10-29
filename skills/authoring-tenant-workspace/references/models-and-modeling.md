@@ -19,8 +19,8 @@ Every field is required unless it says `optional: true`. Use the installed kind 
 | currency, bool                | `{ kind: 'currency' }`, `{ kind: 'bool' }`                                                             |                                                                                                                                                                                                               |
 | date, instant, time, duration | `{ kind: 'date' }` …                                                                                   | a calendar day is `date`: `bolt check` refuses an `instant` named `*_on` / `*_date`; see [dates-and-time.md](dates-and-time.md)                                                                               |
 | period                        | `{ kind: 'period', of: 'date' \| 'instant' }`                                                          | date: `{ from, to \| null }` inclusive; instant: `{ start, end \| null }` half-open                                                                                                                           |
-| enum                          | `{ kind: 'enum', values: [...], many?, transitions? }`                                                  | `transitions` declares the valid state moves; a write outside them is refused                                                                                                                                |
-| state                         | `{ kind: 'state', initial, states: { s: { to?, edit? } } }`                                            | a lifecycle that also owns which fields `edit` admits                                                                                                                                                        |
+| enum                          | `{ kind: 'enum', values: [...], many?, transitions? }`                                                 | `transitions` declares the valid state moves; a write outside them is refused                                                                                                                                 |
+| state                         | `{ kind: 'state', initial, states: { s: { to?, edit? } } }`                                            | a lifecycle that also owns which fields `edit` admits                                                                                                                                                         |
 | seq                           | `{ kind: 'seq', pattern?: 'PO-{yyyy}-{0000}', per? }`                                                  | never reused; `{yyyy}` in the workspace zone at commit                                                                                                                                                        |
 | sum, count                    | `{ kind: 'sum', of: 'lines.amount', where? }`, `{ kind: 'count', of: 'lines', where? }`                | roll-ups through a relationship's `inverse`                                                                                                                                                                   |
 | json                          | `{ kind: 'json', shape?: InputKind }`                                                                  | typed by the same literal language                                                                                                                                                                            |
@@ -66,22 +66,29 @@ read: {
   "orders.customer": { fields: ["name", "code"] },
   "orders.lines": { fields: ["product", "quantity", "net"] },
 },
+// named outputs beside `default` (never named `default`): a narrower audience's fixed shape
+outputs: {
+  logistics: { orders: { fields: ["number", "status"] }, "orders.lines": { fields: ["product", "quantity"] } },
+},
 create: { columns: { orders: ["customer", "notes"], "orders.lines": ["product", "quantity", "net"] } },
 update: { columns: { orders: ["status", "notes"], "orders.lines": ["quantity", "net"] } },
 ```
 
-Authority is per access point: a layer is read or written under the root model's policy alone,
-never the related model's. Each new layer is visible to every reader of the root unless the root's
-policy narrows it.
+`read` is the `default` output; `outputs` are the others. Every read names one output (`output`,
+`default` when absent) and reads only its layers and fields. A policy grants outputs and filters
+their rows; it never changes a shape, so an audience that must see fewer fields reads a narrower
+named output. Authority is per access point: a layer is read or written under the root model's
+policy alone, never the related model's. Each new layer of an output is visible to every reader of
+that output unless the root's policy filters its rows.
 
 ## Locks and state moves
 
 Declare immutability on the model, not in callbacks:
 
 ```ts
-export default model("loans", {
-  // ...
-  locked: { settled_at: { notNull: true } },
+export default model('loans', {
+	// ...
+	locked: { settled_at: { notNull: true } }
 });
 ```
 
@@ -110,41 +117,39 @@ check, or a custom form.
 ## Write callbacks
 
 ```ts
-export default model("orders", {
-  description: "Customer orders.",
-  label: "number",
-  fields: {
-    number: { kind: "seq", pattern: "SO-{yyyy}-{0000}" },
-    customer: { kind: "ref", to: "customers", inverse: "orders" },
-    status: { kind: "enum", values: ["draft", "placed"], default: "draft" },
-    placed_at: { kind: "instant", optional: true },
-    notes: { kind: "text", optional: true },
-  },
-  read: "all",
-  create: {
-    columns: { orders: ["customer", "notes"] },
-    transform: function* (rows, ctx) {
-      if (rows.some((r) => r.notes === ""))
-        return yield* ctx.refuse("Notes cannot be blank.", { field: "notes" });
-      return rows;
-    },
-  },
-  update: {
-    columns: { orders: ["status", "notes"] },
-    transform: function* (changes, ctx) {
-      return changes.map(({ before, set }) =>
-        set.status === "placed" && before.status === "draft"
-          ? { ...set, placed_at: ctx.now }
-          : set,
-      );
-    },
-  },
-  delete: {
-    check: function* (rows, ctx) {
-      if (rows.some((r) => r.status === "placed"))
-        return yield* ctx.refuse("A placed order cannot be deleted.");
-    },
-  },
+export default model('orders', {
+	description: 'Customer orders.',
+	label: 'number',
+	fields: {
+		number: { kind: 'seq', pattern: 'SO-{yyyy}-{0000}' },
+		customer: { kind: 'ref', to: 'customers', inverse: 'orders' },
+		status: { kind: 'enum', values: ['draft', 'placed'], default: 'draft' },
+		placed_at: { kind: 'instant', optional: true },
+		notes: { kind: 'text', optional: true }
+	},
+	read: 'all',
+	create: {
+		columns: { orders: ['customer', 'notes'] },
+		transform: function* (rows, ctx) {
+			if (rows.some((r) => r.notes === ''))
+				return yield* ctx.refuse('Notes cannot be blank.', { field: 'notes' });
+			return rows;
+		}
+	},
+	update: {
+		columns: { orders: ['status', 'notes'] },
+		transform: function* (changes, ctx) {
+			return changes.map(({ before, set }) =>
+				set.status === 'placed' && before.status === 'draft' ? { ...set, placed_at: ctx.now } : set
+			);
+		}
+	},
+	delete: {
+		check: function* (rows, ctx) {
+			if (rows.some((r) => r.status === 'placed'))
+				return yield* ctx.refuse('A placed order cannot be deleted.');
+		}
+	}
 });
 ```
 
@@ -157,7 +162,7 @@ and derived roll-ups bypass callbacks. Share pure business helpers between verbs
 Prefetch the whole batch through `ctx.db.query` as the workspace, with at most two reads. One read
 request may gather several roots and their declared layers in one statement. Never read per
 row. The engine prefetches `before`, delete rows and upsert matches. Each 1000-row chunk has its
-own 2 s CPU budget and one callback per verb/model; all chunks remain in the import's one
+own 3 s CPU budget and one callback per verb/model; all chunks remain in the import's one
 transaction. Writes, history, roll-ups and approval locks are set-based, O(N/1000) statements.
 
 Native defaults, checks, uniqueness, foreign keys and state triggers enforce the invariants the
@@ -182,21 +187,33 @@ writes. A business operation is a named automation in `src/automation/+<model>_<
 import { automation } from '@norbital-ai/bolt';
 
 export default automation('orders_duplicate', {
-  description: 'Copy an order as a new draft.',
-  input: { order: { kind: 'id', of: 'orders' } },
-  runAs: 'trigger',
-  run: function* ({ order: id }, ctx) {
-    const { orders } = yield* ctx.query({ orders: { where: { id: { eq: id } }, limit: 1 } });
-    const order = orders.rows[0];
-    if (order === undefined) return yield* ctx.refuse('This order is unavailable.');
-    yield* ctx.act('orders.create', [{ customer: order.customer, notes: order.notes }]);
-  }
+	description: 'Copy an order as a new draft.',
+	input: { order: { kind: 'id', of: 'orders' } },
+	policies: ['order_duplicating'],
+	run: function* ({ order: id }, ctx) {
+		const { orders } = yield* ctx.query({ orders: { where: { id: { eq: id } }, limit: 1 } });
+		const order = orders.rows[0];
+		const by = ctx.run.trigger;
+		// only the starter's own orders: the trigger names them, the policies never do
+		if (
+			order === undefined ||
+			by.kind !== 'person' ||
+			by.actor.kind !== 'member' ||
+			order.owner !== by.actor.id
+		)
+			return yield* ctx.refuse('This order is unavailable.');
+		yield* ctx.act('orders.create', [
+			{ customer: order.customer, notes: order.notes, owner: order.owner }
+		]);
+	}
 });
 ```
 
-Use explicit IDs and typed input; a run has no implicit target record. A started-only
-`runAs: 'trigger'` run keeps its starter's authority. Grant its start explicitly through
-`policy.automations: ['orders_duplicate']`, alongside the read/create grants its body needs.
+Use explicit IDs and typed input; a run has no implicit target record. The run is the system
+identity holding exactly its `policies`; `order_duplicating` grants the read/create its body needs.
+Who started it is `ctx.run.trigger`, never authority: a rule about the starter ("only their own
+orders") is an explicit check in the body, and refs the run writes are set explicitly. A person or the agent
+starts it by hand through a held `policy.automations: ['orders_duplicate']`; code needs no start grant.
 A page starts it with `bolt.start('orders_duplicate', { order: id })` and shows native run status.
 Every generated write takes an array of rows. For independent writes that must commit together,
 use one `ctx.act.many(...)`; dependent parent/child creates use the parent's write layers. Dependent reads and writes use
@@ -214,7 +231,7 @@ The pure vector callback returns a vector or null; the engine stores and indexes
 commit. For I/O-derived vectors, an automation writes a vector field and the index names it.
 A probe returns vector and optional where; rerank is pure ascending exact scoring on candidates.
 Dimensions are at most 2000 and candidate multipliers 1–16. Call
-`bolt.query({ trials: { search: { colour: input }, limit: 20 } })`; grants/masks still apply and the
+`bolt.query({ trials: { search: { colour: input }, limit: 20 } })`; the read output and grants still apply and the
 view toolbar offers every index's typed form, including custom renderers.
 
 ## Syncs
@@ -228,7 +245,7 @@ id/version, or null for local changes. The engine owns no-echo, ordering, idempo
 approval timing, conflict rollback and dead letters.
 
 A file sync uses `with: 'file'`, `parser: ['xlsx', 'csv']`, optional schema/context and inline read
-or write. File callback reads retain the importing/exporting caller's scope and masks; remote
+or write. File callback reads retain the importing/exporting caller's scope and outputs; remote
 syncs read as trusted workspace. Context is input and cannot elevate authority.
 Read receives parsed records with `$at` source positions and returns rows plus optional
 findings/snapshot scope. Write returns export records, or `{ document: { html }, name }`. The

@@ -4,11 +4,11 @@ import { describe, expect, it } from '@effect/vitest';
 import { Context, Effect, Layer, Schema } from 'effect';
 import type { EngineManifest } from '../src/engine/manifest.ts';
 import { WebRead } from '../src/engine/ports.ts';
-import { Approvals, Callables, Writes } from '../src/engine/services.ts';
+import { Callables, Writes } from '../src/engine/services.ts';
 import type { Json } from '../src/decl/values.ts';
-import { TestWorkspace } from '../src/test/index.ts';
+import { TestWorkspace } from '../../bolt-cli/src/test/index.ts';
 import { manifest as base } from './engine-fixture.ts';
-import { program } from '../src/test/guest.ts';
+import { program } from '../../bolt-cli/src/test/guest.ts';
 
 const manifest: EngineManifest = {
 	...base,
@@ -70,7 +70,7 @@ const manifest: EngineManifest = {
 	automations: {
 		transaction_probe: {
 			description: 'Exercise an authored transaction',
-			runAs: 'trigger',
+			policies: ['writer'],
 			output: { kind: 'json' },
 			input: {
 				scenario: { kind: 'text' },

@@ -154,16 +154,18 @@ export const threadOf = Effect.fn('Messages.threadOf')(function* (
 		return typeof message['thread'] === 'string'
 			? message['thread']
 			: (fallback ??
-					(yield* crypto.randomUUIDv4().pipe(
-						Effect.mapError((error) =>
-							BoltError.make(
-								'unavailable',
-								'facility',
-								'Secure random UUID generation failed.',
-								error
+					(yield* crypto
+						.randomUUIDv4()
+						.pipe(
+							Effect.mapError((error) =>
+								BoltError.make(
+									'unavailable',
+									'facility',
+									'Secure random UUID generation failed.',
+									error
+								)
 							)
-						)
-					)));
+						)));
 	const to = String(message['to']);
 	const db = yield* TenantDb;
 	const found = yield* db.one(Schema.Struct({ thread: Schema.String }), {

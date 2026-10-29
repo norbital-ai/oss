@@ -1,10 +1,18 @@
 <!--
 @component
 The one scroll owner of a region: scrolls on `axis`, fades edges with content beyond them, and optionally snaps children. `name` identifies it (a page restores its position).
+A vertical scroll owner is `size="fill"` (the space left in its parent, scrolling inside) or `content` capped by `max`
+(a popover list); a `content` Scroll without a cap is its content's height and scrolls only on `x`.
 -->
 <script lang="ts" module>
 	import type { Snippet } from 'svelte';
-	import type { LayoutAttributes, LayoutElement, LayoutGap, ScrollAxis } from './layout.shared.js';
+	import type {
+		LayoutAttributes,
+		LayoutElement,
+		LayoutGap,
+		LayoutSize,
+		ScrollAxis
+	} from './layout.shared.js';
 
 	type ScrollLayout = 'block' | 'inline' | 'stack';
 	/** The props of `Scroll`. */
@@ -25,15 +33,15 @@ The one scroll owner of a region: scrolls on `axis`, fades edges with content be
 		gap?: LayoutGap;
 		align?: 'start' | 'center' | 'end' | 'baseline' | 'stretch';
 		justify?: 'start' | 'center' | 'end' | 'between';
-		/** Take the remaining space along the parent's main axis. */
-		grow?: boolean;
-		/** Allow this region to shrink when its parent is constrained. */
-		shrink?: boolean;
+		/** `content` (default): its own height, up to `max`; `fill`: the space left in its parent, scrolling inside, down to `minHeight`. */
+		size?: LayoutSize;
+		/** A `fill` scroll's floor (a CSS length; default 0). */
+		minHeight?: string;
 		/** Snap children to the start edge along the scroll axis — a reel of lanes or cards. */
 		snap?: boolean;
 		/**
-		 * Grow with the content up to a named cap instead of filling the parent — a popover list, a
-		 * disclosure body. Same scale as `Bound size`.
+		 * A `content` scroll's cap: it grows with its content up to it, then scrolls — a popover list,
+		 * a disclosure body. Capped by the viewport too.
 		 */
 		max?: 'compact' | 'standard' | 'tall';
 		ref?: HTMLElement | null;
@@ -49,6 +57,7 @@ The one scroll owner of a region: scrolls on `axis`, fades edges with content be
 		GAP_CLASSES,
 		INSET_CLASS,
 		SCROLL_AXIS_CLASSES,
+		SIZE_CLASSES,
 		SCROLL_PORT_CONTEXT,
 		type ScrollPort
 	} from './layout.shared.js';
@@ -65,8 +74,8 @@ The one scroll owner of a region: scrolls on `axis`, fades edges with content be
 		gap = 'none',
 		align,
 		justify = 'start',
-		grow = false,
-		shrink = true,
+		size = 'content',
+		minHeight,
 		snap = false,
 		max,
 		ref = $bindable(null),
@@ -78,8 +87,8 @@ The one scroll owner of a region: scrolls on `axis`, fades edges with content be
 		block: undefined,
 		// `flex-nowrap` and `[&>*]:shrink-0` say the same thing on the two axes: a scroll container
 		// scrolls, its children do not compress to fit. Without it on the stack axis, a column whose
-		// content overruns shrank every child — and a child carrying `min-h-0`, which the layout
-		// primitives set, has no floor, so the agent transcript collapsed every message to zero height
+		// content overruns shrank every child — and a child carrying `min-h-0`, which a `fill`
+		// primitive sets, has no floor, so the agent transcript collapsed every message to zero height
 		// and the replies painted over one another.
 		inline: 'flex flex-row flex-nowrap',
 		stack: 'flex flex-col [&>*]:shrink-0'
@@ -120,16 +129,15 @@ The one scroll owner of a region: scrolls on `axis`, fades edges with content be
 	aria-label={name}
 	tabindex="0"
 	class={cn(
-		max ? MAX_CLASSES[max] : 'h-full max-h-full',
-		'min-h-0 min-w-0 [scrollbar-gutter:stable] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring',
+		SIZE_CLASSES[size],
+		size === 'content' && max && MAX_CLASSES[max],
+		'min-w-0 [scrollbar-gutter:stable] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring',
 		SCROLL_AXIS_CLASSES[axis],
 		layoutClasses[layout],
 		layout !== 'block' && GAP_CLASSES[gap],
 		layout !== 'block' && alignClasses[resolvedAlign],
 		layout !== 'block' && justifyClasses[justify],
 		padsInset && INSET_CLASS,
-		grow && 'flex-1',
-		!shrink && 'shrink-0',
 		snap &&
 			(axis === 'x'
 				? 'snap-x snap-mandatory [&>*]:snap-start'
@@ -137,6 +145,7 @@ The one scroll owner of a region: scrolls on `axis`, fades edges with content be
 		// The caller's class last: floors, layers and colours it names win; layout itself is props (doctor-enforced).
 		className
 	)}
+	style:min-height={size === 'fill' ? minHeight : undefined}
 	data-layout="scroll"
 	data-scroll-axis={axis}
 	data-scroll-inset={padsInset || undefined}

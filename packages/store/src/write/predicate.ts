@@ -117,18 +117,12 @@ export const ownPredSql: (
 		}
 		case 'period': {
 			const field = fields?.get(p.field),
-				date = field?.periodOf === 'date';
-			if (ddl && p.op !== 'contains' && p.arg._tag === 'Lit' && Predicate.isObject(p.arg.value)) {
-				const value = p.arg.value,
-					type = date ? 'date' : 'timestamptz';
-				const range = `${date ? 'daterange' : 'tstzrange'}(${literal(value[date ? 'from' : 'start'] ?? null, type)}, ${literal(value[date ? 'to' : 'end'] ?? null, type)}, '${date ? '[]' : '[)'}')`;
-				return leaf(periodTest(p.op, col(p.field), range, date));
-			}
+				date = field?.periodOf === 'date',
+				type = date ? 'date' : 'timestamptz';
 			if (p.op === 'contains')
-				return leaf(
-					`${col(p.field)} @> ${yield* val(p.arg, p.field, date ? 'date' : 'timestamptz')}`
-				);
-			return leaf(periodTest(p.op, col(p.field), yield* val(p.arg, p.field, field?.pg), date));
+				return leaf(`${col(p.field)} @> ${yield* val(p.arg, p.field, type)}`);
+			const range = `${date ? 'daterange' : 'tstzrange'}(${yield* val(p.lo, p.field, type)}, ${yield* val(p.hi, p.field, type)}, '${date ? '[]' : '[)'}')`;
+			return leaf(periodTest(p.op, col(p.field), range, date));
 		}
 		case 'json':
 			return leaf(

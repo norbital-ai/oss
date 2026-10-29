@@ -1,72 +1,116 @@
 import { Array as Arr, Predicate, Schema } from 'effect';
 import type { Json, Kind } from './kind.js';
 
-/** JSON Schema is data, never executable code. Remote references are deliberately not fetched. */
-export type JsonSchema =
-	| boolean
-	| {
-			readonly [keyword: string]: unknown;
-			readonly $ref?: string;
-			readonly type?: string | readonly string[];
-			readonly title?: string;
-			readonly description?: string;
-			readonly properties?: Readonly<Record<string, JsonSchema>>;
-			readonly required?: readonly string[];
-			readonly items?: JsonSchema;
-			readonly enum?: readonly Json[];
-			readonly const?: Json;
-			readonly default?: Json;
-			readonly readOnly?: boolean;
-			readonly 'x-norbital'?: {
-				readonly datatype?: string;
-				readonly section?: string;
-				readonly advanced?: boolean;
-				readonly order?: number;
-			};
-	  };
+/**
+ * JSON Schema is data, never executable code. Remote references are deliberately not fetched. Every keyword this
+ * renderer reads is typed; any other keyword is carried as JSON (`$defs`, vendor keywords) for `$ref` resolution.
+ */
+export type JsonSchema = boolean | JsonSchemaObject;
+type JsonSchemaObject = {
+	readonly [keyword: string]: Json | JsonSchema | readonly JsonSchema[] | undefined;
+	readonly $schema?: string;
+	readonly $ref?: string;
+	readonly type?: string | readonly string[];
+	readonly format?: string;
+	readonly title?: string;
+	readonly description?: string;
+	readonly unit?: string;
+	readonly properties?: Readonly<Record<string, JsonSchema>>;
+	readonly additionalProperties?: JsonSchema;
+	readonly required?: readonly string[];
+	readonly items?: JsonSchema;
+	readonly prefixItems?: readonly JsonSchema[];
+	readonly allOf?: readonly JsonSchema[];
+	readonly anyOf?: readonly JsonSchema[];
+	readonly oneOf?: readonly JsonSchema[];
+	readonly if?: JsonSchema;
+	readonly then?: JsonSchema;
+	readonly else?: JsonSchema;
+	readonly not?: JsonSchema;
+	readonly enum?: readonly Json[];
+	readonly const?: Json;
+	readonly default?: Json;
+	readonly readOnly?: boolean;
+	readonly minimum?: number;
+	readonly maximum?: number;
+	readonly exclusiveMinimum?: number;
+	readonly exclusiveMaximum?: number;
+	readonly minLength?: number;
+	readonly maxLength?: number;
+	readonly minItems?: number;
+	readonly maxItems?: number;
+	readonly minProperties?: number;
+	readonly maxProperties?: number;
+	readonly 'x-norbital'?: {
+		readonly datatype?: string;
+		readonly section?: string;
+		readonly advanced?: boolean;
+		readonly order?: number;
+	};
+};
 
-const isJson = Schema.is(Schema.Json);
-const isStrings = (value: unknown) => Arr.isArray(value) && value.every(Predicate.isString);
-const absentOr = (value: unknown, check: (value: unknown) => boolean) =>
-	value === undefined || check(value);
-const isRecord = (value: unknown): value is { readonly [key: string]: unknown } =>
-	Predicate.isObject(value) && !Arr.isArray(value);
+const optional = Schema.optionalKey;
+const Node: Schema.Codec<JsonSchema> = Schema.Union([
+	Schema.Boolean,
+	Schema.StructWithRest(
+		Schema.Struct({
+			$schema: optional(Schema.String),
+			$ref: optional(Schema.String),
+			type: optional(Schema.Union([Schema.String, Schema.Array(Schema.String)])),
+			format: optional(Schema.String),
+			title: optional(Schema.String),
+			description: optional(Schema.String),
+			unit: optional(Schema.String),
+			properties: optional(
+				Schema.Record(
+					Schema.String,
+					Schema.suspend(() => Node)
+				)
+			),
+			additionalProperties: optional(Schema.suspend(() => Node)),
+			required: optional(Schema.Array(Schema.String)),
+			items: optional(Schema.suspend(() => Node)),
+			prefixItems: optional(Schema.Array(Schema.suspend(() => Node))),
+			allOf: optional(Schema.Array(Schema.suspend(() => Node))),
+			anyOf: optional(Schema.Array(Schema.suspend(() => Node))),
+			oneOf: optional(Schema.Array(Schema.suspend(() => Node))),
+			if: optional(Schema.suspend(() => Node)),
+			then: optional(Schema.suspend(() => Node)),
+			else: optional(Schema.suspend(() => Node)),
+			not: optional(Schema.suspend(() => Node)),
+			enum: optional(Schema.Array(Schema.Json)),
+			const: optional(Schema.Json),
+			default: optional(Schema.Json),
+			readOnly: optional(Schema.Boolean),
+			minimum: optional(Schema.Number),
+			maximum: optional(Schema.Number),
+			exclusiveMinimum: optional(Schema.Number),
+			exclusiveMaximum: optional(Schema.Number),
+			minLength: optional(Schema.Number),
+			maxLength: optional(Schema.Number),
+			minItems: optional(Schema.Number),
+			maxItems: optional(Schema.Number),
+			minProperties: optional(Schema.Number),
+			maxProperties: optional(Schema.Number),
+			'x-norbital': optional(
+				Schema.Struct({
+					datatype: optional(Schema.String),
+					section: optional(Schema.String),
+					advanced: optional(Schema.Boolean),
+					order: optional(Schema.Number)
+				})
+			)
+		}),
+		[Schema.Record(Schema.String, Schema.Json)]
+	)
+]);
 
 /** Whether a stored value is a JSON Schema in the keywords this renderer reads: decode once where a schema enters a page. */
-export function isJsonSchema(value: unknown): value is JsonSchema {
-	if (Predicate.isBoolean(value)) return true;
-	if (!isRecord(value)) return false;
-	const meta = value['x-norbital'];
-	return (
-		absentOr(value.$ref, Predicate.isString) &&
-		absentOr(value.type, (type) => Predicate.isString(type) || isStrings(type)) &&
-		absentOr(value.title, Predicate.isString) &&
-		absentOr(value.description, Predicate.isString) &&
-		absentOr(
-			value.properties,
-			(properties) => isRecord(properties) && Object.values(properties).every(isJsonSchema)
-		) &&
-		absentOr(value.required, isStrings) &&
-		absentOr(value.items, isJsonSchema) &&
-		absentOr(value.enum, (values) => Arr.isArray(values) && values.every(isJson)) &&
-		absentOr(value.const, isJson) &&
-		absentOr(value.default, isJson) &&
-		absentOr(value.readOnly, Predicate.isBoolean) &&
-		absentOr(
-			meta,
-			(held) =>
-				isRecord(held) &&
-				absentOr(held.datatype, Predicate.isString) &&
-				absentOr(held.section, Predicate.isString) &&
-				absentOr(held.advanced, Predicate.isBoolean) &&
-				absentOr(held.order, Predicate.isNumber)
-		)
-	);
-}
+export const isJsonSchema: (value: unknown) => value is JsonSchema = Schema.is(Node);
 
 /** A JSON Schema document: an object naming its dialect in `$schema`, the keyword by which a value says it is a schema. */
 export const isJsonSchemaDocument = (value: unknown): value is Exclude<JsonSchema, boolean> =>
-	isRecord(value) && Predicate.isString(value.$schema) && isJsonSchema(value);
+	isJsonSchema(value) && typeof value !== 'boolean' && value.$schema !== undefined;
 
 const COMPOSITIONS = [
 	'allOf',
@@ -81,16 +125,18 @@ const COMPOSITIONS = [
 	'prefixItems'
 ] as const;
 /** A conditional whose arms only add `required` keys: it changes no control, only what a validator demands. */
-const requiresOnly = (part: unknown) =>
-	isRecord(part) &&
-	Object.entries(part).every(
-		([key, arm]) =>
-			arm === undefined ||
-			key === 'if' ||
-			((key === 'then' || key === 'else') &&
-				isRecord(arm) &&
-				Object.keys(arm).every((keyword) => keyword === 'required'))
+const requiresOnly = (part: JsonSchema) => {
+	if (typeof part === 'boolean') return false;
+	const { if: _when, then, else: otherwise, ...rest } = part;
+	return (
+		Object.values(rest).every((keyword) => keyword === undefined) &&
+		[then, otherwise].every(
+			(arm) =>
+				arm === undefined ||
+				(typeof arm !== 'boolean' && Object.keys(arm).every((keyword) => keyword === 'required'))
+		)
 	);
+};
 /**
  * Whether a schema composes others in a way that changes its shape. Conditionals (top-level or in `allOf`) that only
  * require keys do not: the base object renders and the caller's validator enforces them.
@@ -98,11 +144,11 @@ const requiresOnly = (part: unknown) =>
 export function composesJsonSchema(schema: Exclude<JsonSchema, boolean>): boolean {
 	const { if: when, then, else: otherwise, allOf, ...rest } = schema;
 	if (COMPOSITIONS.some((keyword) => keyword in rest)) return true;
-	const conditionals = [
+	const conditionals: JsonSchema[] = [
 		...(when === undefined && then === undefined && otherwise === undefined
 			? []
 			: [{ if: when, then, else: otherwise }]),
-		...(allOf === undefined ? [] : Arr.isArray(allOf) ? allOf : [null])
+		...(allOf ?? [])
 	];
 	return !conditionals.every(requiresOnly);
 }
@@ -112,6 +158,15 @@ export const nullableJsonSchema = (schema: JsonSchema) =>
 	typeof schema !== 'boolean' &&
 	(schema.type === 'null' || (Arr.isArray(schema.type) && schema.type.includes('null')));
 
+type Pointed = Json | JsonSchema | readonly JsonSchema[] | undefined;
+/** One JSON Pointer step through the decoded document: a member or an index, else nothing. */
+const step = (at: Pointed, key: string): Pointed =>
+	at === null || typeof at !== 'object' || !Object.hasOwn(at, key)
+		? undefined
+		: Arr.isArray<Pointed>(at)
+			? at[Number(key)]
+			: at[key];
+
 /** Resolve local JSON Pointers, with cycle detection. Unsupported references keep their JSON editor. */
 export function resolveJsonSchema(schema: JsonSchema, root: JsonSchema = schema): JsonSchema {
 	const seen = new Set<string>();
@@ -119,23 +174,16 @@ export function resolveJsonSchema(schema: JsonSchema, root: JsonSchema = schema)
 		const ref = schema.$ref;
 		if (!ref.startsWith('#/') || seen.has(ref)) return true;
 		seen.add(ref);
-		let target: unknown = root;
-		for (const part of ref.slice(2).split('/')) {
-			const key = part.replace(/~1/g, '/').replace(/~0/g, '~');
-			target =
-				typeof target === 'object' && target !== null && Object.hasOwn(target, key)
-					? (target as Record<string, unknown>)[key]
-					: undefined;
-		}
-		if (
-			typeof target !== 'boolean' &&
-			(typeof target !== 'object' || target === null || Arr.isArray(target))
-		)
-			return true;
+		const target = ref
+			.slice(2)
+			.split('/')
+			.reduce((at: Pointed, part) => step(at, part.replace(/~1/g, '/').replace(/~0/g, '~')), root);
+		// a pointer may land under any keyword, `$defs` included: what it names is decoded there
+		if (!isJsonSchema(target)) return true;
 		const { $ref: _ref, ...siblings } = schema;
 		// Sibling assertions are intersections, not overrides. Keep ambiguous intersections in JSON.
 		if (typeof target === 'boolean') return Object.keys(siblings).length === 0 ? target : true;
-		const resolved = target as Exclude<JsonSchema, boolean>;
+		const resolved = target;
 		if (
 			Object.keys(siblings).some(
 				(key) => key in resolved && !['title', 'description', 'x-norbital'].includes(key)
@@ -147,6 +195,7 @@ export function resolveJsonSchema(schema: JsonSchema, root: JsonSchema = schema)
 	return schema;
 }
 
+const isTextFormat = Schema.is(Schema.Literals(['email', 'url', 'phone', 'zone', 'markdown']));
 /** A conservative rendering plan. Validation remains the caller/server's JSON Schema validator. */
 export function jsonSchemaKind(schema: JsonSchema): Kind {
 	if (typeof schema === 'boolean') return { kind: 'json' };
@@ -154,12 +203,10 @@ export function jsonSchemaKind(schema: JsonSchema): Kind {
 	if (composesJsonSchema(schema)) return { ...common, kind: 'json' };
 	if (schema['x-norbital']?.datatype)
 		return { ...common, kind: 'custom', of: schema['x-norbital'].datatype };
-	if (schema.enum?.every((v) => typeof v === 'string'))
-		return { ...common, kind: 'enum', values: schema.enum as readonly string[] };
+	const values = schema.enum;
+	if (values?.every(Predicate.isString)) return { ...common, kind: 'enum', values };
 	const type = Arr.isArray(schema.type) ? schema.type.filter((t) => t !== 'null') : [schema.type];
 	if (type.length !== 1) return { ...common, kind: 'json' };
-	const number = (key: string) =>
-		typeof schema[key] === 'number' ? (schema[key] as number) : undefined;
 	switch (type[0]) {
 		case 'object':
 			return { ...common, kind: 'object', fields: {} };
@@ -170,8 +217,8 @@ export function jsonSchemaKind(schema: JsonSchema): Kind {
 						...common,
 						kind: 'list',
 						of: { kind: 'json' },
-						min: number('minItems'),
-						max: number('maxItems')
+						min: schema.minItems,
+						max: schema.maxItems
 					};
 		case 'boolean':
 			return { ...common, kind: 'bool' };
@@ -180,8 +227,8 @@ export function jsonSchemaKind(schema: JsonSchema): Kind {
 			return {
 				...common,
 				kind: type[0] === 'integer' ? 'int' : 'number',
-				min: number('minimum'),
-				max: number('maximum')
+				min: schema.minimum,
+				max: schema.maximum
 			};
 		case 'string': {
 			if (schema.format === 'date' || schema.format === 'date-time' || schema.format === 'time')
@@ -193,10 +240,8 @@ export function jsonSchemaKind(schema: JsonSchema): Kind {
 			return {
 				...common,
 				kind: 'text',
-				max: number('maxLength'),
-				...(['email', 'url', 'phone', 'zone', 'markdown'].includes(String(format))
-					? { format: format as 'email' | 'url' | 'phone' | 'zone' | 'markdown' }
-					: {})
+				max: schema.maxLength,
+				...(isTextFormat(format) ? { format } : {})
 			};
 		}
 		default:

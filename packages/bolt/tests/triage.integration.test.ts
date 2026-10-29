@@ -11,7 +11,7 @@ import { decodeProjectedManifest } from '../src/engine/manifest.ts';
 import type { Json } from '../src/decl/values.ts';
 import { TRIAGE_DEBOUNCE, TriageService } from '../src/engine/agent/triage.ts';
 import type { DecisionResult, System1Request } from '../src/engine/decisions/index.ts';
-import { TestWorkspace, type Kit, type WorkspaceServices } from '../src/test/index.ts';
+import { TestWorkspace, type Kit, type WorkspaceServices } from '../../bolt-cli/src/test/index.ts';
 
 const manifest = Result.getOrThrow(
 	decodeProjectedManifest({
@@ -75,7 +75,9 @@ const ai: Pick<Ai['Service'], 'models' | 'infer'> & { requests: string[][] } = {
 				.filter(
 					(m) =>
 						m.role === 'user' &&
-						!String(typeof m.content === 'string' ? m.content : '').startsWith('[conversation state')
+						!String(typeof m.content === 'string' ? m.content : '').startsWith(
+							'[conversation state'
+						)
 				)
 				.map((m) => text(m.content));
 			ai.requests.push(lines);
@@ -313,7 +315,10 @@ describe('envoy triage (G12 (10))', () => {
 			);
 			yield* debounce();
 			expect(port.inputs.map((i) => i.pending.length)).toEqual([3]);
-			expect(port.inputs[0]).toMatchObject({ kind: 'envoy DM', directive: 'Keep jobs up to date.' });
+			expect(port.inputs[0]).toMatchObject({
+				kind: 'envoy DM',
+				directive: 'Keep jobs up to date.'
+			});
 			expect(ai.requests).toHaveLength(1);
 			const turns = new Set(
 				yield* Effect.forEach(['the Kismis job', 'is finished', 'mark it done please'], (b) =>
@@ -349,7 +354,10 @@ describe('envoy triage (G12 (10))', () => {
 			yield* say(CAL_WA, 'failing chatter', GROUP);
 			yield* debounce();
 			expect((yield* row('failing hello'))['delivered_turn']).not.toBeNull();
-			expect(yield* row('failing chatter')).toMatchObject({ delivered_turn: null, addressed: false });
+			expect(yield* row('failing chatter')).toMatchObject({
+				delivered_turn: null,
+				addressed: false
+			});
 			const failed = (yield* decisions()).map(
 				(e) =>
 					[
@@ -360,7 +368,9 @@ describe('envoy triage (G12 (10))', () => {
 					] as const
 			);
 			expect(failed.length).toBeGreaterThan(0);
-			expect(failed.every(([severity, error]) => severity === 'warn' && error === 'upstream')).toBe(true);
+			expect(failed.every(([severity, error]) => severity === 'warn' && error === 'upstream')).toBe(
+				true
+			);
 			yield* t.settled();
 		})
 	);
@@ -372,7 +382,11 @@ describe('envoy triage (G12 (10))', () => {
 			yield* say(CAL_WA, 'lunch?', group(1));
 			yield* debounce();
 			expect(port.inputs[0]).toMatchObject({ kind: 'envoy group' });
-			expect(yield* row('lunch?')).toMatchObject({ state: null, addressed: false, delivered_turn: null });
+			expect(yield* row('lunch?')).toMatchObject({
+				state: null,
+				addressed: false,
+				delivered_turn: null
+			});
 			expect(ai.requests).toHaveLength(0);
 			const calls = port.inputs.length;
 			yield* say(DM, 'the van is late', group(1));
@@ -393,7 +407,10 @@ describe('envoy triage (G12 (10))', () => {
 		Effect.gen(function* () {
 			yield* open();
 			port.script = ['ignore'];
-			yield* say(DM, '@bot the Kismis job needs a contractor', { ...group(2), invocation: 'mention' });
+			yield* say(DM, '@bot the Kismis job needs a contractor', {
+				...group(2),
+				invocation: 'mention'
+			});
 			yield* debounce();
 			expect(port.inputs).toHaveLength(0);
 			yield* t.settled();
@@ -415,9 +432,21 @@ describe('in-app triage', () => {
 			yield* open();
 			const c = yield* start();
 			port.script = ['wait', 'ignore'];
-			yield* post({ conversation: c, as: { member: ADA }, text: 'draft a note', author: ADA, mode: 'agent' });
+			yield* post({
+				conversation: c,
+				as: { member: ADA },
+				text: 'draft a note',
+				author: ADA,
+				mode: 'agent'
+			});
 			yield* debounce();
-			yield* post({ conversation: c, as: { member: ADA }, text: 'for the Kismis job', author: ADA, mode: 'agent' });
+			yield* post({
+				conversation: c,
+				as: { member: ADA },
+				text: 'for the Kismis job',
+				author: ADA,
+				mode: 'agent'
+			});
 			yield* debounce();
 			// one question per pending message, both parts of the second decision in the same call
 			expect(port.inputs.map((i) => [i.kind, i.asked.length, i.pending.length])).toEqual([

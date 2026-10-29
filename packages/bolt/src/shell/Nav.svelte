@@ -171,7 +171,7 @@
 </script>
 
 {#snippet avatar(name: string, identifier: string, logo: string | null, size: string)}
-	<Frame ratio="square" shrink={false} class={cn('rounded-full text-tiny font-medium', size)}>
+	<Frame ratio="square" class={cn('rounded-full text-tiny font-medium', size)}>
 		{#if logo}<img src={logo} alt="" class="size-full rounded-md object-cover" />
 		{:else}<Inline
 				as="span"
@@ -186,7 +186,6 @@
 	{@const color = item.featureColor === undefined ? null : FEATURE_COLORS[item.featureColor]}
 	<Frame
 		ratio="square"
-		shrink={false}
 		class={cn(
 			'size-6 rounded-md border shadow-xs',
 			color?.iconWrapperClass ?? 'border-input bg-background text-foreground'
@@ -283,7 +282,7 @@
 				follow(e, item.href);
 			}}
 		>
-			<Frame as="span" ratio="square" shrink={false} class="size-6"
+			<Frame as="span" ratio="square" class="size-6"
 				><Icon name={item.icon ?? 'lucide:file'} class="size-3.5" /></Frame
 			>
 			<span class={LABEL}>{item.label}</span>

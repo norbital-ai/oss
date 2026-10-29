@@ -3,7 +3,8 @@
 // 'decimal' (default) evaluates money and decimals exactly as `Decimal`, 'float' in doubles (hr's law, D21).
 // Registered functions keep today's `registerFunction` signatures, so hr's law seed (`.age_on(`, `.birthday(`) runs
 // unchanged; object roots are `map<string, dyn>` for them, and their member paths are checked here instead.
-import { Environment, type ParseResult } from '@marcbachmann/cel-js';
+import { Environment, type ASTNode, type ParseResult } from '@marcbachmann/cel-js';
+import { children } from './cel-ast.ts';
 import * as Result from 'effect/Result';
 import { Decimal } from './decimal.ts';
 import { PlainDate } from './date.ts';
@@ -192,25 +193,14 @@ export function context<
 	return ctx;
 }
 
-type Node = { readonly op: string; readonly args: unknown };
-const isNode = (v: unknown): v is Node => typeof v === 'object' && v !== null && 'op' in v;
-function chain(n: Node): string[] | null {
-	if (n.op === 'id' && typeof n.args === 'string') return [n.args];
+function chain(n: ASTNode): string[] | null {
+	if (n.op === 'id') return [n.args];
 	if (n.op !== '.' && n.op !== '.?') return null;
-	const [obj, prop] = n.args as [unknown, unknown];
-	const c = isNode(obj) ? chain(obj) : null;
-	return c === null || typeof prop !== 'string' ? null : [...c, prop];
+	const c = chain(n.args[0]);
+	return c === null ? null : [...c, n.args[1]];
 }
 /** The first member path through an object root that its literal does not declare. */
-function unknownPath(n: unknown, roots: Roots): string | null {
-	if (Array.isArray(n)) {
-		for (const x of n) {
-			const u = unknownPath(x, roots);
-			if (u) return u;
-		}
-		return null;
-	}
-	if (!isNode(n)) return null;
+function unknownPath(n: ASTNode, roots: Roots): string | null {
 	const c = chain(n);
 	if (c !== null) {
 		let k: Kind | undefined = roots[c[0]!];
@@ -220,7 +210,11 @@ function unknownPath(n: unknown, roots: Roots): string | null {
 		}
 		return null;
 	}
-	return unknownPath(n.args, roots);
+	for (const x of children(n)) {
+		const u = unknownPath(x, roots);
+		if (u) return u;
+	}
+	return null;
 }
 
 const ACCEPTS: { readonly [T in FormulaResult]: { readonly [M in Mode]: readonly string[] } } = {

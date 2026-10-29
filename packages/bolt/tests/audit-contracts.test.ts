@@ -13,7 +13,7 @@ import { shellApi } from '../src/shell/runtime.ts';
 import * as NodeCrypto from '@effect/platform-node/NodeCrypto';
 import { auditShape } from '../src/engine/audit.ts';
 import { FacilityFailure } from '../src/decl/errors.ts';
-import { memoryAudit } from '../src/test/audit.ts';
+import { memoryAudit } from '../../bolt-cli/src/test/audit.ts';
 
 const event: AuditEvent = {
 	id: 'act-1/accounts/account-1/2/committed',

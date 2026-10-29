@@ -39,11 +39,7 @@ import type {
 	Unavailable
 } from '../decl/errors.ts';
 import type { ModelName, FileField, FileSyncName, Is, ReadableName } from '../decl/names.ts';
-import type {
-	ConvertRequest,
-	ConvertSource,
-	StartInput
-} from '../decl/runtime/facilities.ts';
+import type { ConvertRequest, ConvertSource, StartInput } from '../decl/runtime/facilities.ts';
 import type { FileRef, Id, Instant, PlainDate, RequestId } from '../decl/values.ts';
 import type { ApprovalView } from '../engine/approvals/approvals.ts';
 import type { RecordCapabilities, RecordParentContext } from '../protocol/record-contracts.ts';
@@ -130,7 +126,7 @@ export interface PageBolt {
 	history<C extends string>(
 		model: Is<C, ReadableName>,
 		id: NoInfer<Id<C>>,
-		options?: HistoryOptions
+		options?: HistoryOptions<C>
 	): Query<readonly Revision<C>[]>;
 	/**
 	 * The page's clock. With a unit, reactive: `today` and `now` change at each minute, hour or day boundary in the

@@ -6,10 +6,10 @@ import { Convert } from '../src/engine/ports.ts';
 import { compileAuthority } from '../src/engine/access/authority.ts';
 import { readableFile } from '../src/engine/decisions/index.ts';
 import { noticeRows } from '../src/engine/notifications/notify.ts';
-import { TestWorkspace } from '../src/test/index.ts';
+import { TestWorkspace } from '../../bolt-cli/src/test/index.ts';
 import type { EngineManifest } from '../src/engine/manifest.ts';
 import { admin, manifest as base } from './write-fixture.ts';
-import { program } from '../src/test/guest.ts';
+import { program } from '../../bolt-cli/src/test/guest.ts';
 const recipient = '0199a000-0000-7000-8000-000000000001';
 const manifest: EngineManifest = {
 	...base,
@@ -27,9 +27,10 @@ const manifest: EngineManifest = {
 			description: 'Ping',
 			input: { fail: { kind: 'bool' } },
 			output: { kind: 'text' },
-			runAs: 'trigger'
+			policies: ['pinger']
 		}
 	},
+	policies: { pinger: { description: 'Pings', grants: {} } },
 	teams: { reviewers: [] }
 };
 const setup = (notify: string, convert?: Convert['Service']) =>

@@ -25,12 +25,14 @@ import type {
 	IntegrationName,
 	OneRels,
 	RelationshipSpec,
+	Row,
 	StoredRow,
 	SyncName,
 	TargetName,
 	TargetsOf
 } from './names.ts';
 import type { MediaType } from './media-types.ts';
+import type { EffectCtx } from './runtime/automation.ts';
 import type { Notice } from './runtime/facilities.ts';
 import type { EmbeddingModelName } from './runtime/names.ts';
 import type { BuiltinParser, FileSync, RemoteSync } from './runtime/sync.ts';
@@ -611,14 +613,20 @@ interface UpdateFor<K, S, F> {
 	>;
 	transform?: unknown;
 }
-type ReadFor<K, S, F, C> =
+type ReadFor<K, L, F, C> =
 	| 'all'
 	| Layers<
 			K,
-			S extends { read: infer L } ? L : {},
+			L,
 			{ fields: 'all' | readonly ((keyof F | keyof C) & string)[] },
 			{ fields: 'all' | readonly string[] }
 	  >;
+/** Named outputs beside `read` (the `default` output): each a fixed layer map, typed as `read` is. */
+type OutputsFor<K, O, F, C> = {
+	[N in keyof O]: N extends 'default'
+		? "error: 'default' is the model's read; name another output"
+		: ReadFor<K, O[N], F, C>;
+};
 type Part<S, K extends string> = S extends { [P in K]: infer V } ? V : {};
 
 // ── search indexes ──
@@ -713,11 +721,13 @@ interface ModelFor<
 			where?: OwnWhere<All>;
 		}[];
 	};
-	read?: ReadFor<K, S, F, C>;
+	read?: ReadFor<K, S extends { read: infer L } ? L : {}, F, C>;
+	outputs?: Exposed<S, OutputsFor<K, Part<S, 'outputs'>, F, C>>;
 	create?: Exposed<S, CreateFor<K, S, F>>;
 	update?: Exposed<S, UpdateFor<K, S, F>>;
 	delete?: Exposed<S, { check?: unknown }>;
 	notify?: Exposed<S, unknown>;
+	effect?: Exposed<S, { created?: unknown; updated?: unknown; deleted?: unknown }>;
 	syncs?: Exposed<S, { [N in keyof Part<S, 'syncs'>]: SyncFor<Part<S, 'syncs'>[N]> }>;
 }
 
@@ -776,6 +786,24 @@ interface BodiesFor<K> {
 	 * It reads as the workspace and does no I/O, so a notification never delays or fails a write.
 	 */
 	notify?: (event: NotifyEvent<K>, ctx: NotifyCtx) => BodyReturn<readonly Notice[]>;
+	/**
+	 * Runs after the commit, once per committed batch of each verb, as a durable run (`<model>.effect.<verb>`: queued,
+	 * retried on a transient failure, shown in the Command center's runs). It holds no policy of its own: it runs with the
+	 * writer's authority — the member, envoy, visitor, or automation run (its declared policies) whose write committed —
+	 * and its rows are the root fields of the writer's output of the model (`default` when it holds it, else the first
+	 * named output it holds). Writes it makes run effects in turn, at most 8 deep. Never rate limited.
+	 */
+	effect?: {
+		/** The created rows. */
+		created?: (rows: readonly Row<K>[], ctx: EffectCtx) => BodyReturn<void>;
+		/** Each updated row before and after the write; only writes that change a stored field. */
+		updated?: (
+			changes: readonly { readonly before: Row<K>; readonly after: Row<K> }[],
+			ctx: EffectCtx
+		) => BodyReturn<void>;
+		/** The deleted rows as they were stored. */
+		deleted?: (rows: readonly Row<K>[], ctx: EffectCtx) => BodyReturn<void>;
+	};
 	search?: { indexes?: { [I in IndexName<K>]?: IndexBodies<K, InputOf<IndexInput<K, I>>> } };
 	syncs?: { [Sy in SyncName<K>]?: FileSync<K, Sy> | RemoteSync<K, Sy> };
 }
@@ -833,10 +861,16 @@ export type ModelLiteral = {
 	};
 	table?: TableSpec;
 	/**
-	 * The read layers (policies narrow them): `'all'` is the root with every own field (`{ <model>: { fields: 'all' } }`).
-	 * Without `read` the model is no read root; it may still be a layer of another model's declaration.
+	 * The `default` read output: its layers and fields (`'all'` is the root with every own field,
+	 * `{ <model>: { fields: 'all' } }`). Without `read` the model is no read root; it may still be a layer of another
+	 * model's declaration. Policies grant outputs and filter their rows; they never change an output's shape.
 	 */
 	read?: 'all' | ReadLayers;
+	/**
+	 * Named read outputs beside `default` (`read`), each a fixed layer map: what a narrower audience reads
+	 * (`{ logistics: { orders: { fields: ['number', 'ship_to'] } } }`). A read names one output; a policy grants it.
+	 */
+	outputs?: { readonly [output: string]: 'all' | ReadLayers };
 	/** The generated `create`: per layer the columns a writer sends and those its `transform` fills (`filled`). */
 	create?: { columns: LayerColumns; filled?: LayerColumns; transform?: unknown };
 	/** The generated `update`: per layer the columns a writer changes, and its `transform`. */
@@ -845,6 +879,8 @@ export type ModelLiteral = {
 	delete?: { check?: unknown };
 	/** The notices each write and approval event sends. */
 	notify?: unknown;
+	/** The work each committed create, update and delete runs afterwards, as the writer. */
+	effect?: { created?: unknown; updated?: unknown; deleted?: unknown };
 	/** How rows are exchanged with a file or another system: `read` brings rows in, `write` sends changes out. */
 	syncs?: {
 		readonly [sync: string]: {
@@ -956,14 +992,18 @@ export type SyncEntry = {
 /**
  * A model's exposure as the engine's `exposures` part holds it: its `read` layers (the root key is the model), the
  * `create`/`update` column layers, `delete` and syncs; `true` marks a body the model declares (`transform`, `check`,
- * `notify`), which runs in the guest. Each path's model is `layerModels`'.
+ * `notify`, an `effect` verb), which runs in the guest. Each path's model is `layerModels`'.
  */
 export type ExposureSpec = {
+	/** The `default` output. */
 	read: ReadLayers;
+	/** The named outputs. */
+	outputs?: { readonly [output: string]: ReadLayers };
 	create?: { columns: LayerColumns; filled?: LayerColumns; transform?: true };
 	update?: { columns: LayerColumns; transform?: true };
 	delete?: { check?: true };
 	notify?: true;
+	effect?: { created?: true; updated?: true; deleted?: true };
 	syncs?: { readonly [sync: string]: SyncEntry };
 };
 
@@ -973,6 +1013,7 @@ export type ModelBodies = {
 	readonly update?: Body;
 	readonly delete?: Body;
 	readonly notify?: Body;
+	readonly effect: { readonly created?: Body; readonly updated?: Body; readonly deleted?: Body };
 	readonly indexes: {
 		readonly [index: string]: {
 			readonly vector?: Body;
@@ -1003,6 +1044,8 @@ const mapValues = <V, R>(
 	f: (value: V) => R
 ): { [key: string]: R } => Object.fromEntries(Object.entries(o).map(([k, v]) => [k, f(v)]));
 
+/** The verbs a model `effect` declares, in their run names' order (`<model>.effect.<verb>`). */
+export const EFFECT_VERBS = ['created', 'updated', 'deleted'] as const;
 function bodiesOf(m: ModelLiteral): ModelBodies {
 	const create = guest(m.create?.transform),
 		update = guest(m.update?.transform),
@@ -1013,6 +1056,12 @@ function bodiesOf(m: ModelLiteral): ModelBodies {
 		...(update === undefined ? {} : { update }),
 		...(check === undefined ? {} : { delete: check }),
 		...(notify === undefined ? {} : { notify }),
+		effect: Object.fromEntries(
+			EFFECT_VERBS.flatMap((verb) => {
+				const body = guest(m.effect?.[verb]);
+				return body === undefined ? [] : [[verb, body]];
+			})
+		),
 		// pure: stored as authored, called without a ctx
 		indexes: mapValues(m.search?.indexes ?? {}, (x) => ({
 			...(isBody(x.vector) ? { vector: x.vector } : {}),
@@ -1040,7 +1089,7 @@ function bodiesOf(m: ModelLiteral): ModelBodies {
 /**
  * `src/data/model/<name>/+model.ts`: one entity. Its storage (`fields`, `ref` fields that relate it to other models, keys,
  * checks, computed fields, `search`), its exposure (`read` layers; `create`, `update` and `delete` with their column
- * layers and write callbacks), `notify` and `syncs`. Every callback sits on what triggers it, inside the literal, and is
+ * layers and write callbacks), `notify`, `effect` and `syncs`. Every callback sits on what triggers it, inside the literal, and is
  * typed from the generated names by `name` (`bolt sync`; `bolt check` refuses a name that is not the folder's): until the
  * next sync a body does not see a field just added. Returns the name, the literal and the bodies.
  * @example
@@ -1087,7 +1136,19 @@ export type ModelParts = {
  * serializer's `true`) becomes its marker, and `read: 'all'` is the root layer with every field.
  */
 export function splitModel(name: string, literal: ModelLiteral): ModelParts {
-	const { fields, search, read, create, update, delete: del, notify, syncs, ...storage } = literal;
+	const {
+		fields,
+		search,
+		read,
+		outputs,
+		create,
+		update,
+		delete: del,
+		notify,
+		effect,
+		syncs,
+		...storage
+	} = literal;
 	const own: { [field: string]: FieldKind } = {};
 	const relationships: { [key: string]: RelationshipSpec } = {};
 	for (const [field, kind] of Object.entries(fields)) {
@@ -1123,8 +1184,11 @@ export function splitModel(name: string, literal: ModelLiteral): ModelParts {
 				})
 	};
 	if (read === undefined) return { model: stored, relationships };
+	const layersOf = (r: 'all' | ReadLayers): ReadLayers =>
+		r === 'all' ? { [name]: { fields: 'all' } } : r;
 	const exposure: ExposureSpec = {
-		read: read === 'all' ? { [name]: { fields: 'all' } } : read,
+		read: layersOf(read),
+		...(outputs === undefined ? {} : { outputs: mapValues(outputs, layersOf) }),
 		...(create === undefined
 			? {}
 			: {
@@ -1144,6 +1208,15 @@ export function splitModel(name: string, literal: ModelLiteral): ModelParts {
 				}),
 		...(del === undefined ? {} : { delete: del.check === undefined ? {} : { check: true } }),
 		...(notify === undefined ? {} : { notify: true }),
+		...(effect === undefined
+			? {}
+			: {
+					effect: Object.fromEntries(
+						EFFECT_VERBS.flatMap((verb) =>
+							effect[verb] === undefined ? [] : [[verb, true] as const]
+						)
+					)
+				}),
 		...(syncs === undefined
 			? {}
 			: {
@@ -1201,6 +1274,9 @@ export function layerModels(
 		boolean
 	])[] = [
 		['read', c.read, false],
+		...Object.entries(c.outputs ?? {}).map(
+			([output, layers]) => [`outputs.${output}`, layers, false] as const
+		),
 		['create.columns', c.create?.columns, true],
 		['create.filled', c.create?.filled, true],
 		['update.columns', c.update?.columns, true]

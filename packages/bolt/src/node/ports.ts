@@ -15,11 +15,6 @@ import type { HostTenantDb } from '../protocol/host-api.ts';
 import { artifactPort } from './artifact.ts';
 import { docsPort } from './docs.ts';
 import { tenantDbPort } from './db/port.ts';
-import {
-	guestIsolates,
-	type GuestIsolatesOptions,
-	type NodeGuestIsolates
-} from './guest-isolates.ts';
 import { imagesPort } from './images.ts';
 import { keysPort } from './keys.ts';
 import { mcpPort } from './mcp.ts';
@@ -32,27 +27,23 @@ export type NodePortsOptions = {
 	readonly secretsKey?: Uint8Array | undefined;
 	/** The environment's database, as `HOST_API` takes it. */
 	readonly database?: TenantDbShape | undefined;
-	/** The guests' CPU slot, meter and budget, and their warm pool. */
-	readonly guests?: GuestIsolatesOptions | undefined;
 };
 export type NodePorts = {
 	readonly artifact?: ArtifactPort;
 	readonly keys?: KeysPort;
 	readonly database?: HostTenantDb;
-	readonly guestIsolates: NodeGuestIsolates;
 	readonly http: HttpPort;
 	readonly images: ImagesPort;
 	readonly mcp: McpPort;
 	readonly docs: DocsPort;
 };
 
-/** The ports, alive until the scope closes: guest isolates and MCP sessions end with it. */
+/** The ports, alive until the scope closes: MCP sessions end with it. */
 export const nodePorts = Effect.fn('node.ports')(function* (options: NodePortsOptions = {}) {
 	const ports: NodePorts = {
 		...(options.release === undefined ? {} : { artifact: artifactPort(options.release) }),
 		...(options.secretsKey === undefined ? {} : { keys: keysPort(options.secretsKey) }),
 		...(options.database === undefined ? {} : { database: tenantDbPort(options.database) }),
-		guestIsolates: yield* guestIsolates(options.guests ?? {}),
 		http: httpPort,
 		images: imagesPort,
 		mcp: yield* mcpPort,

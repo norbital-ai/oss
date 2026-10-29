@@ -5,8 +5,8 @@ import { Context, Effect, Layer, Result, Schema } from 'effect';
 import type { Json } from '../src/decl/values.ts';
 import type { EngineManifest } from '../src/engine/manifest.ts';
 import { Approvals, Writes } from '../src/engine/services.ts';
-import { TestWorkspace } from '../src/test/index.ts';
-import { program } from '../src/test/guest.ts';
+import { TestWorkspace } from '../../bolt-cli/src/test/index.ts';
+import { program } from '../../bolt-cli/src/test/guest.ts';
 import { manifest as base } from './write-fixture.ts';
 
 const manifest: EngineManifest = {

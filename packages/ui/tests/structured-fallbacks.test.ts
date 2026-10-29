@@ -51,7 +51,7 @@ it.live('untyped structured JSON edits inferred native fields without losing oth
 );
 
 it.live(
-	'structured read-only fallback preserves native kinds and never reveals hidden fields or masks',
+	'structured read-only fallback preserves native kinds and never reveals hidden fields',
 	() =>
 		browser(async () => {
 			const { target } = await show({
@@ -60,16 +60,13 @@ it.live(
 					kind: 'object',
 					fields: {
 						name: { kind: 'text' },
-						secret: { kind: 'text', hidden: true },
-						restricted: { kind: 'json' }
+						secret: { kind: 'text', hidden: true }
 					}
 				},
-				initial: { name: 'Shown', secret: 'private value', restricted: { $masked: true } }
+				initial: { name: 'Shown', secret: 'private value' }
 			});
 			assert.ok(target.textContent?.includes('Shown'));
-			assert.ok(target.textContent?.includes('•••'));
 			assert.equal(target.textContent?.includes('private value'), false);
-			assert.equal(target.textContent?.includes('$masked'), false);
 		})
 );
 
@@ -153,7 +150,7 @@ it.live('model summaries respect hidden fields through nested JSON and custom sh
 	})
 );
 
-it.live('untyped scalar JSON uses native inferred controls and keeps edit masks opaque', () =>
+it.live('untyped scalar JSON uses native inferred controls', () =>
 	browser(async () => {
 		const boolean = await show({ kind: { kind: 'json' }, initial: false });
 		assert.equal(boolean.target.querySelector('.cm-editor'), null);
@@ -162,14 +159,6 @@ it.live('untyped scalar JSON uses native inferred controls and keeps edit masks 
 		assert.equal(boolean.changes.at(-1), true);
 		const text = await show({ kind: { kind: 'custom', of: 'unregistered' }, initial: 'kept' });
 		assert.equal(text.target.querySelector<HTMLInputElement>('input')?.value, 'kept');
-		const masked = await show({
-			kind: { kind: 'json' },
-			initial: { $masked: true },
-			rawJson: true
-		});
-		assert.equal(masked.target.querySelector('.cm-editor,input,textarea'), null);
-		assert.ok(masked.target.textContent?.includes('•••'));
-		assert.deepEqual(masked.changes, []);
 	})
 );
 

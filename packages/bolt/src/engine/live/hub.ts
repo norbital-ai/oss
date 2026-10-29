@@ -1,6 +1,6 @@
 // The live engine (rules 64–66, §5.7): one lane per cell. A commit's RETURNING set is routed host-side: each view is
 // judged in memory against the pre- and post-images, and a hit is sent as a patch built from the post-image (projected
-// through the view's select and the caller's masks, placed by its order), with no read. A delta that cannot be exact
+// through the view's select and output, placed by its order), with no read. A delta that cannot be exact
 // falls back as narrowly as it can — a PK `get` of the one row, else a re-read of the view — and is counted
 // (`conservative=`, listed by `sweep()`). Commits coalesce per lane batch; each connection's fallbacks are one pipelined
 // read. Budgets are typed errors on the view; the stream is untouched.
@@ -43,7 +43,7 @@ import {
 	transcriptRow,
 	Message
 } from '../agent/schema.ts';
-import { exposureOf, defaultFields, type FieldInfo } from '@norbital-ai/store';
+import { catalogFor, exposureOf, defaultFields, type FieldInfo } from '@norbital-ai/store';
 import { evaluate, type EvalEnv } from '../query/eval.ts';
 
 const MiB = 1024 * 1024;
@@ -176,12 +176,11 @@ function wireOf(f: FieldInfo, v: Json | undefined): Json | undefined {
 			return v;
 	}
 }
-/** A wire value as the order compares it: `undefined` when the row does not carry it; a mask reads as null (`sql.ts` `col`). */
+/** A wire value as the order compares it: `undefined` when the row does not carry it. */
 function sortable(v: Json | undefined): string | number | boolean | null | undefined {
 	if (v === undefined || v === null) return v;
 	if (typeof v !== 'object') return v;
 	if (!Predicate.isObject(v)) return undefined;
-	if ('$masked' in v) return null;
 	return typeof v['$dec'] === 'string' ? Number(v['$dec']) : undefined;
 }
 
@@ -258,11 +257,11 @@ export const LiveHubLive = Layer.effect(
 		/** Whether a row image is one of the view's rows for this caller: a read arm admits it and the view's `where` holds. */
 		function member(
 			a: Authority,
-			r: { model: string; where?: Pred | undefined },
+			r: { model: string; where?: Pred | undefined; output?: string | undefined },
 			row: RowData,
 			b: Bindings
 		): boolean {
-			const arms = a.admin ? null : (a.models[r.model]?.read[r.model] ?? []);
+			const arms = a.admin ? null : (a.models[r.model]?.read[r.output ?? 'default']?.[r.model] ?? []);
 			const env: EvalEnv = { cat, bindings: b, authority: a, scoped: true };
 			return (
 				(arms === null ||
@@ -288,8 +287,8 @@ export const LiveHubLive = Layer.effect(
 					? 'unknown'
 					: 'skip';
 			if (r.kind === 'get' || r.kind === 'history') return c.id === r.id ? 'hit' : 'skip';
-			const arms = a.admin ? null : (a.models[c.model]?.read[c.model] ?? []);
 			if (r.kind !== 'read' && r.kind !== 'aggregate' && r.kind !== 'similar') return 'unknown';
+			const arms = a.admin ? null : (a.models[c.model]?.read[r.output ?? 'default']?.[c.model] ?? []);
 			if ((r.where !== undefined && !decidable(r.where)) || arms?.some((x) => !decidable(x.where)))
 				return 'unknown';
 			const hit = (row: RowData | null) => row !== null && member(a, r, image(c.model, row), b);
@@ -299,15 +298,14 @@ export const LiveHubLive = Layer.effect(
 			);
 		}
 
-		/** A row image as the read projects it (`sql.ts` `items`): `id`, the selected fields in wire form, a mask as `$masked`;
+		/** A row image as the read projects it (`sql.ts` `items`): `id` and the selected fields of its output in wire form;
 		 * `undefined` when the image cannot give it exactly (a relation arm, an arc arm field, a numeric number, a column it lacks). */
 		function project(
-			a: Authority,
 			model: string,
+			output: string | undefined,
 			select: SelectIR,
 			row: RowData,
-			one: boolean,
-			b: Bindings
+			one: boolean
 		): Row | undefined {
 			if (
 				Object.keys(select.relations).length > 0 ||
@@ -315,7 +313,7 @@ export const LiveHubLive = Layer.effect(
 				approvable(manifest, cat).has(model)
 			)
 				return undefined; // `$sync` and `$approval` are read, never in an image
-			const c = storeSync(exposureOf(cat, model));
+			const c = storeSync(exposureOf(storeSync(catalogFor(cat, model, output)), model));
 			const out: { [k: string]: Json } = { id: row['id']! };
 			for (const name of select.fields ?? defaultFields(c, one)) {
 				if (name === 'id') continue;
@@ -323,12 +321,7 @@ export const LiveHubLive = Layer.effect(
 				if (f === undefined || name.includes('.')) return undefined;
 				const value = f.arms === undefined ? wireOf(f, row[f.column]) : row[name];
 				if (value === undefined) return undefined;
-				const mask = a.admin ? undefined : a.models[model]?.masks[model]?.[name];
-				out[name] =
-					mask === undefined ||
-					evaluate({ cat, bindings: b, authority: a, scoped: false }, model, mask, row)
-						? value
-						: { $masked: true };
+				out[name] = value;
 			}
 			return jb(out);
 		}
@@ -342,7 +335,7 @@ export const LiveHubLive = Layer.effect(
 			const projected = Result.try(() =>
 				!member(a, r.kind === 'get' ? { model: r.model } : r, row, b)
 					? null
-					: project(a, r.model, r.select, row, r.kind === 'get', b)
+					: project(r.model, r.output, r.select, row, r.kind === 'get')
 			);
 			if (Result.isFailure(projected)) return 'full';
 			if (projected.success !== undefined) return { c, row: projected.success };
@@ -354,9 +347,14 @@ export const LiveHubLive = Layer.effect(
 						get: {
 							kind: 'get',
 							model: r.model,
+							...(r.output === undefined ? {} : { output: r.output }),
 							id: c.id,
 							select: {
-								fields: r.select.fields ?? defaultFields(storeSync(exposureOf(cat, r.model))),
+								fields:
+									r.select.fields ??
+									defaultFields(
+										storeSync(exposureOf(storeSync(catalogFor(cat, r.model, r.output)), r.model))
+									),
 								relations: r.select.relations
 							}
 						}
@@ -401,7 +399,6 @@ export const LiveHubLive = Layer.effect(
 				return (
 					c.old !== null &&
 					c.new !== null &&
-					(a.admin || a.models[r.model]?.masks[r.model]?.[head] === undefined) &&
 					same(c.old[col], c.new[col] ?? null)
 				);
 			});
@@ -504,9 +501,11 @@ export const LiveHubLive = Layer.effect(
 			conversations: {
 				...base,
 				decide: (a, view, captured) => {
-					if (view.read.kind !== 'conversations' || captured.model !== view.read.model) return 'skip';
+					if (view.read.kind !== 'conversations' || captured.model !== view.read.model)
+						return 'skip';
 					const row = captured.new ?? captured.old;
-					if (listed(row, view.read.member, isStaff(a) ? publicEnvoys() : [], a.admin)) return 'hit';
+					if (listed(row, view.read.member, isStaff(a) ? publicEnvoys() : [], a.admin))
+						return 'hit';
 					// a thread the member posted in is listed (`sharedConversations`) though no row image says so: re-read
 					// ponytail: every unlisted thread change re-reads the list; track posted threads per view if that gets hot
 					return row !== null &&
@@ -522,7 +521,9 @@ export const LiveHubLive = Layer.effect(
 				place: newest,
 				kept: sameAt,
 				limit: () => CONVERSATIONS
-			}
+			},
+			// `sys_run` changes arrive as `syncChanged('sys_run')` (the queue writes no captures): each re-reads the list
+			runs: { ...base, decide: () => 'skip', resolve: () => 'full' }
 		} satisfies { [K in ReadIR['kind']]: Strategy };
 
 		/** Applies one resolved row to a working value; the ops that did it, or `'full'` when only a re-read is exact. */
@@ -727,6 +728,7 @@ export const LiveHubLive = Layer.effect(
 							let unsure =
 								(read.kind === 'request' && read.roots.some((r) => metadata.has(r.root))) ||
 								(read.kind === 'inbox' && metadata.has(read.model)) ||
+								(read.kind === 'runs' && metadata.has(read.model)) ||
 								(read.kind === 'inbox' &&
 									read.requests === true &&
 									metadata.has('approval_request')) ||

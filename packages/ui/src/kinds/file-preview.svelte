@@ -12,6 +12,7 @@ when the host reads), Download, and Remove when `onRemove` is given.
 	import type { ReadError } from '../client/contract.js';
 	import type { Row } from '../model/types.js';
 	import { byId } from '../read/request.js';
+	import { withOutputs } from '../client/context.js';
 	import Button from '../primitives/button/button.svelte';
 	import Image from '../primitives/image/image.svelte';
 	import { formatFileSize, uiText } from '../primitives/utils.js';
@@ -33,20 +34,21 @@ when the host reads), Download, and Remove when `onRemove` is given.
 		const read = host.query;
 		return read === undefined
 			? Effect.succeed(undefined)
-			: read(byId(model, id, fields)).pipe(
+			: read(withOutputs(byId(model, id, fields), host.catalog)).pipe(
 					Effect.map((answer) => answer[model]?.rows[0])
 				);
 	};
+	// only the fields the caller's `sys_file` output reads (a `meta` holder reads none of these)
+	const details = $derived(
+		['size', 'sha256', 'created_at', 'created_by'].filter(
+			(f) => host.catalog === undefined || host.catalog['sys_file']?.fields[f] !== undefined
+		)
+	);
 	const meta = observeOnce(() =>
-		host.query === undefined
+		host.query === undefined || details.length === 0
 			? null
 			: Effect.gen(function* () {
-					const row = yield* one('sys_file', file.id, [
-						'size',
-						'sha256',
-						'created_at',
-						'created_by'
-					]);
+					const row = yield* one('sys_file', file.id, details);
 					if (row === undefined) return null;
 					const by =
 						typeof row['created_by'] === 'string'

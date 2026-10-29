@@ -1,3 +1,4 @@
+import { Predicate } from 'effect';
 import type { LiveError, Query } from '../client/contract.js';
 export type ReadState<T> =
 	| { kind: 'loading' }
@@ -18,7 +19,8 @@ export function readState<T>(
 }
 /** A one-shot read's rejection as a state (reads reject with `{ code }`, §3.5). */
 export const failed = (e: unknown): ReadState<never> => {
-	const code = typeof e === 'object' && e !== null && 'code' in e ? String(e.code) : 'error';
+	// a rejection is untyped: only its `code` member is read
+	const code = Predicate.hasProperty(e, 'code') ? String(e.code) : 'error';
 	return code === 'forbidden'
 		? { kind: 'noAccess' }
 		: { kind: 'error', code, message: e instanceof Error ? e.message : String(e) };
@@ -32,16 +34,25 @@ export const queryState = <T>(q: Reading<T> | null): ReadState<T> =>
 		: q.error !== undefined
 			? failed(q.error)
 			: readState(q.current, undefined, q.loading);
-/** `q`'s answer seen through `f` (a later page's own rows), keeping its wait and failure. */
-export const mapped = <A, B>(q: Reading<A>, f: (answer: A) => B): Reading<B> => ({
-	get current() {
-		const answer = q.current;
-		return answer === undefined ? undefined : f(answer);
-	},
-	get loading() {
-		return q.loading;
-	},
-	get error() {
-		return q.error;
-	}
-});
+/**
+ * `q`'s answer seen through `f` (a later page's own rows), keeping its wait and failure; `f`'s `undefined` is no answer
+ * yet. `Q` is the reading itself, so a `bolt.query(…)` argument keeps its own answer type.
+ */
+export function mapped<Q extends Reading<unknown>, B>(
+	q: Q,
+	f: (answer: Exclude<Q['current'], undefined>) => B | undefined
+): Reading<B>;
+export function mapped<A, B>(q: Reading<A>, f: (answer: A) => B | undefined): Reading<B> {
+	return {
+		get current() {
+			const answer = q.current;
+			return answer === undefined ? undefined : f(answer);
+		},
+		get loading() {
+			return q.loading;
+		},
+		get error() {
+			return q.error;
+		}
+	};
+}

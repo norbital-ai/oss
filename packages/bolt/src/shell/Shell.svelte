@@ -43,13 +43,14 @@
 	import type { ShellMountConfig } from './mount.ts';
 	import {
 		based,
+		commandCenterTabs,
 		isOpenRoute,
 		logical,
+		navApps,
 		previewRoute,
 		recordsOf,
 		route,
 		withRecords,
-		type NavNode,
 		type ShellBoot
 	} from './nav.ts';
 	import { chosenLocale, frameworkText, setLocale, uiTextFor } from './i18n.ts';
@@ -73,7 +74,7 @@
 	import AgentPanel from './agent/Agent.svelte';
 	import Inbox from './inbox/Inbox.svelte';
 	import Settings from './settings/Settings.svelte';
-	import Audit from './audit/Audit.svelte';
+	import CommandCenter from './command-center/CommandCenter.svelte';
 	import Studio from './studio/Studio.svelte';
 	import RecordSheet from './RecordSheet.svelte';
 	import Turnstile from './auth/Turnstile.svelte';
@@ -240,6 +241,9 @@
 	// a preview environment drops the meta tools: Norbius and Studio (`surfaces`), People, Integrations and preview-as
 	const previewEnv = $derived(boot?.workspace.live !== undefined);
 	const current = $derived(previewRoute(route(config.manifest, url), previewEnv));
+	const commandTabs = $derived(
+		boot === null ? [] : commandCenterTabs(boot.surfaces, boot.admin, previewEnv)
+	);
 	// the record-sheet stack (rule 10): every `?record=`, the last on top
 	const records = $derived(recordsOf(url));
 	// a `portal: true` page or any kiosk page renders alone: no sidebar, banner, tabs, finder or agent; the way out is the URL bar
@@ -307,7 +311,7 @@
 		);
 		url = next;
 	}
-	/** Settings → Automations' open run is `?run=<id>`, beside whatever the table keeps in the URL. */
+	/** The command center's open automation run is `?run=<id>`, beside whatever the table keeps in the URL. */
 	function openRun(id: string | null): void {
 		const next = here();
 		if (id === null) next.searchParams.delete('run');
@@ -456,9 +460,11 @@
 	);
 	// the boot follows the audience: a public page boots its visitor, a kiosk its kiosk, everything else the session
 	const kioskRoute = $derived(current.kind === 'kiosk' ? current.kiosk : null);
+	// lazy: the mount's own load is the first; an eager run would boot twice, cancelling the first request
 	watch(
 		() => [publicApp, kioskRoute] as const,
-		([app, kiosk]) => requestLoad?.(app, kiosk)
+		([app, kiosk]) => requestLoad?.(app, kiosk),
+		{ lazy: true }
 	);
 
 	function pageOf(key: string): Promise<Component> | null {
@@ -466,11 +472,14 @@
 		return chunk === undefined ? null : chunk().then((m) => m.default);
 	}
 	// keyed by a string: a query change (`?record=`) re-derives `current` but must not remount the page
+	// a member's page outside their nav (another audience's app, or one no policy names) is no access, not rendered
 	const pageKey = $derived(
 		bolt === null
 			? null
 			: current.kind === 'page'
-				? `${current.app}/${current.page}`
+				? boot?.visitor === null && !navApps(boot.nav).includes(current.app)
+					? null
+					: `${current.app}/${current.page}`
 				: current.kind === 'kiosk'
 					? `kiosk/${current.kiosk}/${current.page}`
 					: null
@@ -551,11 +560,9 @@
 			? null
 			: navigationModel(waiting === null ? boot : { ...boot, inbox: waiting }, url.pathname, t)
 	);
-	const sessionApps = (nodes: readonly NavNode[]): string[] =>
-		nodes.flatMap((node) => (node.kind === 'app' ? [node.name] : sessionApps(node.children)));
 	const sessions = $derived(
 		boot?.visitor === null
-			? sessionApps(boot.nav).flatMap((name) =>
+			? navApps(boot.nav).flatMap((name) =>
 					config.sessions?.[name] === undefined ? [] : [{ name, component: config.sessions[name] }]
 				)
 			: []
@@ -699,10 +706,10 @@
 			<!-- hook:view-ui — a page sits inset from the sidebar; a page's own AppShell inset finds this owner and stays flush -->
 			<svelte:boundary>
 				{#if requires.length === 0}
-					<Bound size="full" inset><Page /></Bound>
+					<Bound size="fill" inset><Page /></Bound>
 				{:else}
 					<DeviceWall {requires} {access} native={device.geolocation?.source === 'native'} {t}>
-						<Bound size="full" inset><Page /></Bound>
+						<Bound size="fill" inset><Page /></Bound>
 					</DeviceWall>
 				{/if}
 				{#snippet failed(error)}
@@ -718,19 +725,28 @@
 		{/if}
 	{:else if current.kind === 'inbox' && boot?.surfaces.inbox && bolt}
 		<Inbox {bolt} {t} onCount={(n) => (waiting = n)} />
-	{:else if current.kind === 'settings' && current.tab === 'audit' && boot?.surfaces.settings && boot.admin && bolt}
-		<Audit {api} {t} locale={bolt.locale} admin={boot.admin} />
-	{:else if current.kind === 'settings' && current.tab !== 'audit' && boot?.surfaces.settings && bolt}
+	{:else if current.kind === 'settings' && boot?.surfaces.settings && bolt}
 		<Settings
 			{api}
 			{bolt}
 			{t}
 			tab={current.tab}
 			workspace={boot.workspace}
+			integrationSetups={config.integrationSetups}
+		/>
+	{:else if current.kind === 'commandCenter' && commandTabs.length > 0 && boot !== null && bolt}
+		<CommandCenter
+			{api}
+			{bolt}
+			{t}
+			tabs={commandTabs}
+			tab={current.tab}
+			onTab={(x) => navigate(`/command-center/${x}`)}
+			admin={boot.admin}
 			startable={boot.startable ?? []}
 			run={url.searchParams.get('run')}
 			onRun={openRun}
-			integrationSetups={config.integrationSetups}
+			onConversation={boot.surfaces.agent ? (conversation) => agent.open({ conversation }) : null}
 		/>
 	{:else if current.kind === 'studio' && boot?.surfaces.studio}
 		<Studio
@@ -948,7 +964,7 @@
 						</AppHeader>
 					</div>
 				{/if}
-				<Stack gap="none" fill class="min-h-0 pb-[env(safe-area-inset-bottom)] md:pb-0">
+				<Stack gap="none" size="fill" class="pb-[env(safe-area-inset-bottom)] md:pb-0">
 					{#if sync === 'closed'}
 						<Inline role="alert" justify="between" class="bg-warning/15 px-4 py-2 text-xs">
 							<span

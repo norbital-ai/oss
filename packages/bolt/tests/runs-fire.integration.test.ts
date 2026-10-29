@@ -1,13 +1,13 @@
 // Crons on the host's clock (rule 52): `Runs.crons` lists what the manifest declares, and `Runs.fire` runs one slot once.
 // A fired run writes its `sys_run` row only with its first effect, so a run that only reads leaves nothing behind.
 import { expect, layer } from '@effect/vitest';
-import { Context, Effect, Layer } from 'effect';
+import { Effect, Layer } from 'effect';
 import { FacilityFailure } from '../src/decl/errors.ts';
 import type { Json } from '../src/decl/values.ts';
 import type { EngineManifest } from '../src/engine/manifest.ts';
 import { Runs } from '../src/engine/services.ts';
-import { TestWorkspace } from '../src/test/index.ts';
-import { program } from '../src/test/guest.ts';
+import { TestWorkspace } from '../../bolt-cli/src/test/index.ts';
+import { program } from '../../bolt-cli/src/test/guest.ts';
 
 const manifest = {
 	workspace: { tz: 'UTC', locale: 'en' },
@@ -41,11 +41,11 @@ const manifest = {
 		ops: { description: 'Ops', grants: { quotes: { read: true, create: true } } }
 	},
 	automations: {
-		tidy: { description: 'Files a quote', on: { cron: '*/15 * * * *' }, runAs: ['ops'] },
+		tidy: { description: 'Files a quote', on: { cron: '*/15 * * * *' }, policies: ['ops'] },
 		peek: {
 			description: 'Counts the quotes',
 			on: { cron: '@daily', tz: 'Asia/Singapore' },
-			runAs: ['ops']
+			policies: ['ops']
 		}
 	},
 	teams: {},
@@ -59,7 +59,8 @@ const manifest = {
 } satisfies EngineManifest;
 const guestSource = `export default {
 	automation: {
-		tidy: { body: function* (input, ctx) { yield* ctx.act('quotes.create', [{ title: 'tick' }]); } },
+		tidy: { body: function* (input, ctx) {
+			yield* ctx.act('quotes.create', [{ title: ctx.run.trigger.kind === 'system' ? ctx.run.trigger.cause : 'requested' }]); } },
 		peek: { body: function* (input, ctx) {
 			const n = (yield* ctx.query({ quotes: {} })).quotes.rows.length;
 			if (n > 1) throw new Error('too many quotes');
@@ -109,29 +110,40 @@ layer(Fixture, { excludeTestServices: true })('crons on the host clock', (it) =>
 		})
 	);
 
-	it.effect('a run that only reads writes no row; a run that writes has its row; each slot runs once', () =>
-		Effect.gen(function* () {
-			const { fire, sql } = yield* setup;
-			expect(yield* fire('peek', '2026-09-24T16:00:00.000Z')).toEqual({ ran: false });
-			expect(yield* sql(`SELECT count(*)::int AS n FROM sys_run`)).toEqual([{ n: 0 }]);
-			expect(yield* fire('tidy', SLOT)).toEqual({ ran: true });
-			expect(yield* fire('tidy', SLOT)).toEqual({ ran: false });
-			expect(
-				yield* sql(
-					`SELECT automation, cause, state, attempts, due_at = $1::timestamptz AS at_slot FROM sys_run`,
-					[SLOT]
-				)
-			).toEqual([
-				{ automation: 'tidy', cause: 'cron', state: 'succeeded', attempts: 1, at_slot: true }
-			]);
-			expect(yield* sql(`SELECT title FROM quotes`)).toEqual([{ title: 'tick' }]);
-			expect(yield* fire('tidy', NEXT)).toEqual({ ran: true });
-			// the read-only run that fails keeps its row
-			expect(yield* fire('peek', '2026-09-25T16:00:00.000Z')).toEqual({ ran: true });
-			expect(yield* sql(`SELECT state FROM sys_run WHERE automation = 'peek'`)).toEqual([
-				{ state: 'failed' }
-			]);
-		})
+	it.effect(
+		'a run that only reads writes no row; a run that writes has its row, with no starter and the cron as its trigger; each slot runs once',
+		() =>
+			Effect.gen(function* () {
+				const { fire, sql } = yield* setup;
+				expect(yield* fire('peek', '2026-09-24T16:00:00.000Z')).toEqual({ ran: false });
+				expect(yield* sql(`SELECT count(*)::int AS n FROM sys_run`)).toEqual([{ n: 0 }]);
+				expect(yield* fire('tidy', SLOT)).toEqual({ ran: true });
+				expect(yield* fire('tidy', SLOT)).toEqual({ ran: false });
+				expect(
+					yield* sql(
+						`SELECT automation, cause, state, attempts, due_at = $1::timestamptz AS at_slot, starter, trigger FROM sys_run`,
+						[SLOT]
+					)
+				).toEqual([
+					{
+						automation: 'tidy',
+						cause: 'cron',
+						state: 'succeeded',
+						attempts: 1,
+						at_slot: true,
+						starter: null,
+						trigger: { kind: 'system', cause: 'cron' }
+					}
+				]);
+				// the run held `ops` as the system; its body read the cron as its trigger
+				expect(yield* sql(`SELECT title FROM quotes`)).toEqual([{ title: 'cron' }]);
+				expect(yield* fire('tidy', NEXT)).toEqual({ ran: true });
+				// the read-only run that fails keeps its row
+				expect(yield* fire('peek', '2026-09-25T16:00:00.000Z')).toEqual({ ran: true });
+				expect(yield* sql(`SELECT state FROM sys_run WHERE automation = 'peek'`)).toEqual([
+					{ state: 'failed' }
+				]);
+			})
 	);
 
 	it.effect(

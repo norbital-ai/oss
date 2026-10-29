@@ -3,7 +3,7 @@
 import { Effect } from 'effect';
 import { Refusal } from '../../src/decl/errors.ts';
 import { automation, model } from '../../src/index.ts';
-import type { AutomationCtx, WriteCtx } from '../../src/index.ts';
+import type { Actor, AutomationCtx, EffectCtx, WriteCtx } from '../../src/index.ts';
 import type {
 	ActConflict,
 	ActRefused,
@@ -122,7 +122,7 @@ automation('orders_submit', {
 
 automation('sweep', {
 	description: 'x',
-	runAs: ['sales_rep'],
+	policies: ['sales_rep'],
 	run: function* (_, ctx) {
 		const page = ctx.web.read('https://a.test');
 		is<Eq<Effect.Error<typeof page>, FacilityFailure | Unavailable>>();
@@ -144,7 +144,7 @@ declare const automationCtx: AutomationCtx;
 const promiseRead: Promise<unknown> = automationCtx.query({ orders: { } });
 automation('sweep', {
 	description: 'x',
-	runAs: ['sales_rep'],
+	policies: ['sales_rep'],
 	run: function* (_, ctx) {
 		// @ts-expect-error E7 act has no .try twin
 		ctx.act.try('orders.update', [{ target: 'o1', set: {} }]);
@@ -152,3 +152,11 @@ automation('sweep', {
 		ctx.web.read.try('https://a.test');
 	}
 });
+
+// ── a model effect holds no policy: it runs as the writer, without host tools ──
+declare const effectCtx: EffectCtx;
+is<Eq<typeof effectCtx.actor, Actor>>();
+// @ts-expect-error E9 an effect has no host tools
+void effectCtx.ai.sys_2.infer({ prompt: 'x', tools: ['browser'] });
+// @ts-expect-error E9 nor record reads
+void effectCtx.ai.sys_2.infer({ prompt: 'x', tools: ['read'] });

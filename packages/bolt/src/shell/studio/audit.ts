@@ -4,7 +4,7 @@
 import { Option, Schema } from 'effect';
 import type { Authority } from '../../engine/contracts.ts';
 
-const AuditRuleState = Schema.Literals(['error', 'hint', 'off']);
+export const AuditRuleState = Schema.Literals(['error', 'hint', 'off']);
 export type AuditRuleState = typeof AuditRuleState.Type;
 /**
  * One organization's rule set: each platform rule's state by id, the paths the audit skips, its own rules (doctor's

@@ -1,5 +1,5 @@
 /// <reference types="node" />
-// `@norbital-ai/bolt/docs` (§3.3.10, §7.3): the API reference and the authoring skills as data. `src/cli/docs.ts` writes
+// `@norbital-ai/bolt/docs` (§3.3.10, §7.3): the API reference and the authoring skills as data. `scripts/docs.ts` writes
 // it at build time from every public entry's declarations and `oss/skills/` (one JSON document per
 // namespace and per skill, plus `index.json`); the website renders it and
 // the agent's `docs` tool searches it (through its host's `Docs` port). Read lazily from `build/docs/`, next to this

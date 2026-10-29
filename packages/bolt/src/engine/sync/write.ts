@@ -7,7 +7,7 @@ import { catalogOf } from '../access/pred.ts';
 import { BoltError } from '../../protocol/errors.ts';
 import { isTransient } from '../errors.ts';
 import { Chain, GATED, noticeInsert } from '../write/sql.ts';
-import { actorId, executeCommit } from '../write/commit.ts';
+import { actorId, actorRef, executeCommit } from '../write/commit.ts';
 import { rollbackPlan } from '../approvals/rollback.ts';
 import { enqueue } from '../runs/queue.ts';
 import { iso } from '../runs/time.ts';
@@ -191,6 +191,11 @@ export function makeDeliver(e: SyncEngine) {
 			now: bindings.now,
 			today: bindings.today,
 			actor,
+			writer: {
+				starter: { actor, policies: [], admin: false, platform: true },
+				actor: actorRef(actor),
+				depth: 0
+			},
 			writes: plan.writes,
 			owned: [],
 			rate: [],

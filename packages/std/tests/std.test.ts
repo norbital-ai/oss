@@ -494,6 +494,16 @@ describe('std/formula', () => {
 		assert.match(unknown.error, /nobody/);
 		assert.equal(formula(site, 'bool')('person.age > 18'), undefined);
 		assert.equal(formula(site, 'bool')('person.nope'), 'unknown path person.nope');
+		// the walk reaches every operand position: call arguments, receivers, ternaries, lists and maps
+		for (const text of [
+			'round(person.nope, 2) > 1',
+			'person.nope.size() > 0',
+			'base > 1 ? person.nope : 1',
+			'[person.nope].size() > 0',
+			'{"a": person.nope}.size() > 0',
+			'!(person.nope)'
+		])
+			assert.equal(formula(site, 'bool')(text), 'unknown path person.nope', text);
 	});
 	it('keeps float mode for law written against doubles', () => {
 		const law = context(

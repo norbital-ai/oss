@@ -5,7 +5,7 @@
 -->
 <script lang="ts">
 	import { Input } from '@norbital-ai/ui';
-	import { Array as EffectArray } from 'effect';
+	import { Array as EffectArray, Schema } from 'effect';
 	import type { Json } from '../../decl/values.ts';
 
 	let { facts, t }: { facts: readonly (readonly [string, Json])[]; t: (key: string) => string } =
@@ -25,19 +25,11 @@
 		account: t('Account'),
 		from: t('Sender')
 	});
+	// facts are the provider's published JSON: a list member that names itself reads as its name
+	const named = Schema.is(Schema.Struct({ name: Schema.String }));
 	const text = (v: Json): string =>
 		EffectArray.isArray<Json>(v)
-			? v
-					.map((x) =>
-						typeof x === 'object' &&
-						x !== null &&
-						!EffectArray.isArray<Json>(x) &&
-						'name' in x &&
-						typeof x['name'] === 'string'
-							? x['name']
-							: text(x)
-					)
-					.join(', ')
+			? v.map((x) => (named(x) ? x.name : text(x))).join(', ')
 			: v === null || typeof v === 'object'
 				? ''
 				: String(v);

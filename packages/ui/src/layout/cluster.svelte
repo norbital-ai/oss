@@ -4,7 +4,7 @@ A wrapping row of items with a gap: tags, buttons, metadata. Children wrap to th
 -->
 <script lang="ts" module>
 	import type { Snippet } from 'svelte';
-	import type { LayoutAttributes, LayoutElement, LayoutGap } from './layout.shared.js';
+	import type { LayoutAttributes, LayoutElement, LayoutGap, LayoutSize } from './layout.shared.js';
 
 	/** The props of `Cluster`. */
 	export interface ClusterProps extends LayoutAttributes {
@@ -12,12 +12,10 @@ A wrapping row of items with a gap: tags, buttons, metadata. Children wrap to th
 		gap?: LayoutGap;
 		align?: 'start' | 'center' | 'end' | 'baseline';
 		justify?: 'start' | 'center' | 'end' | 'between';
-		/** Take the remaining space along the parent's main axis. */
-		grow?: boolean;
-		/** Fill the parent's height. */
-		fill?: boolean;
-		/** Allow this region to shrink when its parent is constrained. */
-		shrink?: boolean;
+		/** `content` (default): its own size, never squeezed; `fill`: the space left in its parent, down to `minHeight`. */
+		size?: LayoutSize;
+		/** A `fill` box's floor (a CSS length; default 0). */
+		minHeight?: string;
 		/** A hairline between children — a segmented strip. Pair with `gap="none"`. */
 		divided?: boolean;
 		children: Snippet;
@@ -26,7 +24,7 @@ A wrapping row of items with a gap: tags, buttons, metadata. Children wrap to th
 
 <script lang="ts">
 	import { cn } from '../primitives/utils.js';
-	import { GAP_CLASSES } from './layout.shared.js';
+	import { GAP_CLASSES, SIZE_CLASSES } from './layout.shared.js';
 
 	let {
 		as = 'div',
@@ -34,9 +32,8 @@ A wrapping row of items with a gap: tags, buttons, metadata. Children wrap to th
 		gap = 'sm',
 		align = 'center',
 		justify = 'start',
-		grow = false,
-		fill = false,
-		shrink = true,
+		size = 'content',
+		minHeight,
 		divided = false,
 		class: className,
 		children,
@@ -61,17 +58,16 @@ A wrapping row of items with a gap: tags, buttons, metadata. Children wrap to th
 	this={as}
 	bind:this={ref}
 	class={cn(
-		'flex min-h-0 min-w-0 flex-row flex-wrap',
+		'flex min-w-0 flex-row flex-wrap',
 		GAP_CLASSES[gap],
 		alignClasses[align],
 		justifyClasses[justify],
-		grow && 'flex-1',
-		fill && 'h-full',
-		!shrink && 'shrink-0',
+		SIZE_CLASSES[size],
 		divided && 'divide-x divide-border',
 		// The caller's class last: floors, layers and colours it names win; layout itself is props (doctor-enforced).
 		className
 	)}
+	style:min-height={size === 'fill' ? minHeight : undefined}
 	data-layout="cluster"
 	{...restProps}
 >

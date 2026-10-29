@@ -9,7 +9,7 @@
 	import Editor from '../kinds/editor.svelte';
 	import CodeEditor from '../editors/code-editor.svelte';
 	import Combobox from '../primitives/combobox/combobox.svelte';
-	import type { Value, Kind } from '../kinds/kind.js';
+	import type { Value } from '../kinds/kind.js';
 	import Picker from '../kinds/picker.svelte';
 	import { cn } from '../primitives/utils.js';
 	import { useBolt } from '../client/context.js';
@@ -19,14 +19,16 @@
 		taggedArg,
 		childOf,
 		fieldsFor,
+		litKind,
 		manyAt,
 		manyOffers,
 		offersFor,
 		operandsFor,
+		operatorsFor,
+		pathLabel,
 		QUANT_LABEL,
 		radiusText,
 		resolve,
-		valueKind,
 		varError,
 		variableOf,
 		variablesFor,
@@ -80,6 +82,8 @@
 	};
 
 	const blank: Node = { t: 'cond', path: '', op: 'eq', arg: null };
+	const joinWord = (join: 'and' | 'or') =>
+		join === 'and' ? msg(bolt, 'view.and', 'and') : msg(bolt, 'view.or', 'or');
 	/** What follows a typed `@` in a value position (`null`: no variable menu open). */
 	let variable = $state<string | null>(null);
 	/** The variable expression being edited in its chip (`null`: not editing). */
@@ -96,12 +100,14 @@
 		e.preventDefault();
 		variable = '';
 	};
+	/** A picked field starts on its first operator, so the row is never left without one. */
 	function picked(path: string, many: boolean) {
 		if (many) return onChange({ t: 'many', rel: path, q: 'some', of: [] });
+		const r = resolve(catalog, model, path);
 		onChange({
 			t: 'cond',
 			path,
-			op: (offersFor(offers, prefix, path)[0]?.op ?? 'eq') as Op,
+			op: (r === null ? undefined : operatorsFor(offers, prefix, path, r)[0]?.op) ?? 'eq',
 			arg: null
 		});
 	}
@@ -111,8 +117,6 @@
 		const first = kind === 'field' ? fieldsFor(catalog, model, path)[0] : undefined;
 		return first === undefined ? null : { _tag: 'field', field: first };
 	}
-	const litKind = (r: Extract<Resolved, { leaf: 'field' }>, op: Op): Kind =>
-		op === 'contains' && r.kind.kind === 'period' ? { kind: r.kind.of } : valueKind(r.kind);
 	const setArg = (arg: Arg | null) => node.t === 'cond' && onChange({ ...node, arg });
 	const list = $derived(
 		node.t === 'cond' && node.arg !== null && 'list' in node.arg ? node.arg.list : []
@@ -166,8 +170,26 @@
 	isTop: boolean,
 	atPrefix: readonly FilterStep[]
 )}
-	<div class="border-border ml-2 flex flex-col gap-1.5 border-l pl-3" data-nested>
+	<div class="border-border ml-2 flex flex-col gap-1.5 border-l-2 pl-3" data-nested>
 		{#each n.of as child, i (i)}
+			{#if i > 0}
+				{#if n.t === 'group'}
+					<!-- the group's combinator between its conditions: one click switches every "and" to "or" -->
+					<button
+						type="button"
+						class="text-muted-foreground hover:text-foreground hover:bg-muted self-start rounded-sm border px-1.5 py-0.5 text-[11px] font-medium tracking-wide uppercase"
+						data-join-toggle={n.join}
+						title={msg(bolt, 'view.switchJoin', 'Switch between all of and any of')}
+						onclick={() => onChange({ ...n, join: n.join === 'and' ? 'or' : 'and' })}
+						>{joinWord(n.join)}</button
+					>
+				{:else}
+					<span
+						class="text-muted-foreground text-[11px] font-medium tracking-wide uppercase"
+						data-join="and">{joinWord('and')}</span
+					>
+				{/if}
+			{/if}
 			<FilterNode
 				node={child}
 				{catalog}
@@ -187,14 +209,30 @@
 					)}
 			/>
 		{/each}
-		<button
-			type="button"
-			class="text-muted-foreground hover:text-foreground self-start text-xs"
-			data-add-nested
-			onclick={() => children(n, [...n.of, blank])}
-		>
-			+ {msg(bolt, 'view.addCondition', 'Add condition')}
-		</button>
+		<div class="flex gap-3 text-xs">
+			<button
+				type="button"
+				class="text-muted-foreground hover:text-foreground"
+				data-add-nested
+				onclick={() => children(n, [...n.of, blank])}
+			>
+				+ {msg(bolt, 'view.addCondition', 'Add condition')}
+			</button>
+			{#if n.t === 'group'}
+				<button
+					type="button"
+					class="text-muted-foreground hover:text-foreground"
+					data-add-nested-group
+					onclick={() =>
+						children(n, [
+							...n.of,
+							{ t: 'group', join: n.join === 'and' ? 'or' : 'and', of: [blank] }
+						])}
+				>
+					+ {msg(bolt, 'view.addGroup', 'Add group')}
+				</button>
+			{/if}
+		</div>
 	</div>
 {/snippet}
 
@@ -223,7 +261,7 @@
 
 {#if node.t === 'group'}
 	{@const g = node}
-	<div class="flex flex-col gap-1.5 rounded-md border p-2" data-group={g.join}>
+	<div class="bg-muted/20 flex flex-col gap-1.5 rounded-md border p-2" data-group={g.join}>
 		<div class="flex items-center gap-1.5">
 			<Combobox
 				class="w-auto"
@@ -245,6 +283,9 @@
 						});
 				}}
 			/>
+			<span class="text-muted-foreground text-sm"
+				>{msg(bolt, 'view.theseConditions', 'these conditions')}</span
+			>
 			{@render remove()}
 		</div>
 		{@render nested(g, model, top, prefix)}
@@ -254,12 +295,16 @@
 	{@const child = childOf(catalog, model, m.rel) ?? ''}
 	{@const agg = m.q !== 'some' && m.q !== 'none' && m.q !== 'every'}
 	{@const mo = manyOffers(offers, prefix, m.rel)}
+	<!-- has any / has none are the grammar's for every many-relation, all match at the view's own model; count and totals
+	     are the catalogue's -->
 	{@const quantOptions = QUANTS.filter((q) =>
-		q === 'some' || q === 'none' || q === 'every'
-			? mo.all
-			: q === 'count'
-				? mo.count.length > 0
-				: mo.aggs.some((o) => aggFn(o) === q)
+		q === 'some' || q === 'none'
+			? true
+			: q === 'every'
+				? prefix.length === 0 && !m.rel.includes('.')
+				: q === 'count'
+					? mo.count.length > 0
+					: mo.aggs.some((o) => aggFn(o) === q)
 	)}
 	{@const aggAt = agg
 		? m.q === 'count'
@@ -320,10 +365,23 @@
 			{/if}
 			{@render remove()}
 		</div>
-		{#if !agg}{@const at = manyAt(prefix, m.rel)}{@render nested(m, child, false, [
+		{#if !agg}
+			{@const at = manyAt(prefix, m.rel)}
+			{@const rel = pathLabel(catalog, model, m.rel, humanize)}
+			{#if m.of.length > 0}
+				<p class="text-muted-foreground ml-2 text-xs" data-many-heading>
+					{m.q === 'every'
+						? msg(bolt, 'view.many.every', 'Every {rel} matches all of:', { rel })
+						: m.q === 'none'
+							? msg(bolt, 'view.many.none', 'No {rel} matches all of:', { rel })
+							: msg(bolt, 'view.many.some', 'At least one {rel} matches all of:', { rel })}
+				</p>
+			{/if}
+			{@render nested(m, child, false, [
 				...at.prefix,
 				{ k: m.q as 'some' | 'every' | 'none', rel: at.name }
-			])}{/if}
+			])}
+		{/if}
 	</div>
 {:else}
 	{@const r = node.path === '' ? null : resolve(catalog, model, node.path)}
@@ -340,12 +398,13 @@
 				aria-label={msg(bolt, 'view.operator', 'Operator')}
 				value={c.op}
 				onChange={(op) => {
-					if (op !== null) onChange({ ...c, op: op as Op, arg: null });
+					if (op !== null) onChange({ ...c, op, arg: null });
 				}}
+				placeholder={msg(bolt, 'view.operator', 'Operator')}
 				options={[
-					...at.map((o) => ({ value: o.op, label: o.opLabel })),
+					...operatorsFor(offers, prefix, c.path, r).map((o) => ({ value: o.op, label: o.label })),
 					...(c.op === 'near' && !at.some((o) => o.op === 'near')
-						? [{ value: 'near', label: msg(bolt, 'view.near', 'is within') }]
+						? [{ value: 'near' as const, label: msg(bolt, 'view.near', 'is within') }]
 						: [])
 				]}
 			/>

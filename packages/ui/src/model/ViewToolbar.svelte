@@ -15,7 +15,7 @@
 	export const editableFields = (exposure: ModelExposure | undefined) =>
 		(formSpec('', exposure, 'update')?.fields ?? []).flatMap((field) => {
 			const kind = field.kind;
-			if (field.readonly || kind.hidden || exposure?.masked?.includes(field.name)) return [];
+			if (field.readonly || kind.hidden) return [];
 			if (kind.kind !== 'state') return presentation(kind).derived ? [] : [field];
 			const to = [...new Set(Object.keys(kind.states).flatMap((s) => edgesFrom(kind, s)))];
 			return to.length === 0
@@ -34,8 +34,7 @@
 	/** The many-relations "Edit selected" offers, one level deep: those the caller's update contract (`update.with`) admits. */
 	export const editableRelations = (exposure: ModelExposure | undefined) =>
 		Object.entries(exposure?.update?.with ?? {}).flatMap(([name, child]) =>
-			exposure?.masked?.includes(name) ||
-			(child.create === undefined && !child.link && !child.unlink && !child.delete)
+			child.create === undefined && !child.link && !child.unlink && !child.delete
 				? []
 				: [{ name, child }]
 		);
@@ -126,12 +125,12 @@
 		fields: readonly string[];
 		labels: readonly string[];
 		kinds?: Fields;
-		read: () => Effect.Effect<unknown, Error>;
+		read: () => Effect.Effect<readonly Values[], Error>;
 	};
 </script>
 
 <script lang="ts" generics="R extends object = Row">
-	import { FiberSet, Schema } from 'effect';
+	import { FiberSet, Predicate, Schema } from 'effect';
 	import { encodeWire } from '@norbital-ai/std/wire';
 	import { fork, attach } from '../effect/index.js';
 	import { Button } from '../primitives/button/index.js';
@@ -147,11 +146,10 @@
 	import { offerContexts, openRecord } from '../record/navigation.js';
 	import { useBolt } from '../client/context.js';
 	import { type Outcome, type RunHandle } from '../client/contract.js';
-	import { nodeText, pathLabel, pathOf, sortText } from '../filter/filter.js';
+	import { complete, nodeParts, pathLabel, pathOf, sortText } from '../filter/filter.js';
 	import { CSV_BOM, csvCell } from '../table/csv.js';
 	import { filesOf } from '../cell/value.js';
 	import { humanize, label, msg } from '../text/messages.js';
-	import { isRow, objectsOf } from '../read/results.js';
 	import { actOutcome, notify, outcomeText } from '../actions/outcome.js';
 	import { searchIndexes, SLASH, type SearchIndex } from '../table/model.js';
 	import { and } from '../filter/scope.js';
@@ -161,6 +159,7 @@
 	import Icon from '../primitives/icon/icon-wrapper.svelte';
 	import RunStatus from '../runs/RunStatus.svelte';
 	import ViewPopover from '../filter/ViewPopover.svelte';
+	import FilterSummary from '../filter/FilterSummary.svelte';
 	import ToolbarSearch from './toolbar/ToolbarSearch.svelte';
 	import { downloadTextFiles } from '../utilities/download.js';
 	import { toast } from '../toast/toast.svelte.js';
@@ -489,8 +488,7 @@
 								hint: msg(bolt, 'view.templateHint', "The import's columns as a spreadsheet"),
 								why: null,
 								button: msg(bolt, 'view.download', 'Download'),
-								act: () =>
-									bolt.start(`${model}.sync.${f.name}`, { mode: 'template', ...scoped() })
+								act: () => bolt.start(`${model}.sync.${f.name}`, { mode: 'template', ...scoped() })
 							} satisfies Entry
 						]
 					: []),
@@ -605,11 +603,7 @@
 	);
 	let runs = $state<{ automation: string; id: string }[]>([]);
 	// each row's state, as a query's is: running, done (briefly), or failed with its message until it runs again
-	type Status =
-		| { state: 'pending' }
-		| { state: 'done' }
-		| { state: 'review' }
-		| { state: 'failed'; message: string };
+	type Status = { state: 'pending' } | { state: 'done' } | { state: 'failed'; message: string };
 	let status = $state<{ [key: string]: Status }>({});
 	const mark = (key: string, s: Status) => {
 		status = { ...status, [key]: s };
@@ -734,11 +728,11 @@
 		fork(FiberSet.run(owned, work));
 	}
 
-	// ── a file sync's import: the file is uploaded to `<c>.sync.<s>` (refused unless one of its parsers reads it), then the
-	// run reads it back. Its run is watched to its end: pending, done with its counts, its findings to review (warnings to
-	// accept), or its error. A finding's `at` is the record's sheet row or line; 0 is the file as a whole.
+	// ── a file sync's import: the file is uploaded to `<c>.$import.<s>` (refused unless one of its parsers reads it), then the
+	// run reads it back and imports it in one step. Its run is watched to its end: pending, done with its counts and any
+	// warnings, or refused with its findings (nothing written). A finding's `at` is the record's sheet row or line; 0 is the file as a whole.
 	type Finding = { at: number; field: string | null; message: string; severity: 'warn' | 'refuse' };
-	let imported = $state<{ sync: string; id: string; file: string } | null>(null);
+	let imported = $state<{ sync: string; id: string } | null>(null);
 	const importRun = live(() =>
 		imported === null || bolt.runs === undefined
 			? null
@@ -751,11 +745,13 @@
 		imported === null ? undefined : importRun.value?.rows.find((r) => r.id === imported?.id)
 	);
 	const importOut = $derived(
-		importRow?.status === 'succeeded' && isRow(importRow.result) ? importRow.result : null
+		importRow?.status === 'succeeded' && Predicate.isObject(importRow.result)
+			? importRow.result
+			: null
 	);
 	const findings = $derived(
 		(Array.isArray(importOut?.['findings']) ? importOut['findings'] : []).flatMap((f): Finding[] =>
-			isRow(f)
+			Predicate.isObject(f)
 				? [
 						{
 							at: typeof f['at'] === 'number' ? f['at'] : 0,
@@ -767,7 +763,6 @@
 				: []
 		)
 	);
-	const blocked = $derived(findings.some((f) => f.severity === 'refuse'));
 	const importStatus = $derived.by((): Status | undefined => {
 		if (imported === null) return undefined;
 		const r = importRow;
@@ -779,16 +774,14 @@
 				message: r.error?.message ?? r.error?.code ?? msg(bolt, `run.status.${r.status}`, r.status)
 			};
 		if (importOut?.['applied'] === false)
-			return blocked
-				? {
-						state: 'failed',
-						message: msg(
-							bolt,
-							'view.importRefused',
-							'Nothing was imported: fix the rows below and upload the file again.'
-						)
-					}
-				: { state: 'review' };
+			return {
+				state: 'failed',
+				message: msg(
+					bolt,
+					'view.importRefused',
+					'Nothing was imported: fix the rows below and upload the file again.'
+				)
+			};
 		return { state: 'done' };
 	});
 	/** The row the watched import shows on. */
@@ -805,34 +798,31 @@
 				})
 			: ''
 	);
-	// the run ends while the menu is closed: say so, and open the menu on findings to review
+	// the run ends while the menu is closed: say so, and open the menu on its findings (refusals, or the warnings of what it imported)
 	watch(
 		() => importStatus?.state,
 		(now, before) => {
 			if (now === undefined || now === 'pending' || now === before) return;
-			if (now === 'done') toast.success(counts);
-			else if (now === 'failed' && importStatus?.state === 'failed') {
+			if (now === 'done') {
+				toast.success(counts);
+				if (findings.length > 0) menuOpen = true;
+			} else if (now === 'failed' && importStatus?.state === 'failed') {
 				toast.error(importStatus.message);
 				menuOpen = true;
-			} else if (now === 'review') menuOpen = true;
+			}
 		}
 	);
 	const scoped = (): { readonly [k: string]: Json } =>
 		cfg?.context === undefined ? {} : { context: cfg.context };
 	/** What the page shows: the author's scope and the viewer's filter. */
 	const shown = () => and(author, view?.where);
-	function startImport(sync: string, file: string, accept: boolean) {
-		const h = bolt.start(`${model}.sync.${sync}`, {
-			mode: 'import',
-			file,
-			...(accept ? { accept } : {}),
-			...scoped()
-		});
+	function startImport(sync: string, file: string) {
+		const h = bolt.start(`${model}.sync.${sync}`, { mode: 'import', file, ...scoped() });
 		if (bolt.runs === undefined) return track(h); // no run reads here: RunStatus says so
 		return h.pipe(
 			Effect.map((outcome) => {
 				if (!ok(outcome)) return outcome;
-				imported = { sync, id: h.id, file };
+				imported = { sync, id: h.id };
 				return undefined;
 			})
 		);
@@ -842,8 +832,8 @@
 		if (file === undefined || upload === undefined) return;
 		imported = null;
 		perform(importKey(sync), () =>
-			upload(file, `${model}.sync.${sync}`).pipe(
-				Effect.flatMap((ref) => startImport(sync, ref.id, false)),
+			upload(file, `${model}.$import.${sync}`).pipe(
+				Effect.flatMap((ref) => startImport(sync, ref.id)),
 				Effect.ensuring(
 					Effect.sync(() => {
 						const picker = pickers[sync];
@@ -854,8 +844,6 @@
 		);
 	}
 
-	const accept = (sync: string, file: string) =>
-		perform(importKey(sync), () => startImport(sync, file, true));
 	/**
 	 * Asks in-app first, then deletes each record on its own so one refusal keeps only that record: the outcome says how
 	 * many were deleted and why the first kept one was refused ("3 deleted, 1 kept: …").
@@ -955,7 +943,7 @@
 				kinds.catalog,
 				model,
 				exporter.fields,
-				objectsOf(yield* exporter.read()),
+				yield* exporter.read(),
 				bolt.locale,
 				true
 			);
@@ -984,10 +972,12 @@
 	const chips = $derived(
 		view === undefined
 			? []
-			: view.rows.map((n, i) => ({
-					i,
-					text: nodeText(catalog, source, n, humanize, named, opWords)
-				}))
+			: view.rows.flatMap((n, i) =>
+					// an incomplete row (a field, no value yet) stays in the builder; it is not applied, so it is no chip
+					complete(n)
+						? [{ i, parts: nodeParts(catalog, source, n, humanize, named, opWords, bolt.locale) }]
+						: []
+				)
 	);
 </script>
 
@@ -1023,13 +1013,6 @@
 					class="text-destructive block text-xs"
 					data-menu-error>{st.message}</span
 				>
-			{:else if watching(e) && st?.state === 'review'}<span
-					class="text-warning-foreground dark:text-warning block text-xs"
-					data-menu-review
-					>{msg(bolt, 'view.importReview', 'Review {n} warnings before importing', {
-						n: findings.length
-					})}</span
-				>
 			{:else if watching(e) && st?.state === 'done' && counts !== ''}<span
 					class="text-muted-foreground block text-xs">{counts}</span
 				>
@@ -1056,8 +1039,8 @@
 			{st?.state === 'done' ? msg(bolt, 'view.done', 'Done') : e.button}
 		</Button>
 	</div>
-	{#if watching(e) && imported !== null && findings.length > 0 && (st?.state === 'review' || st?.state === 'failed')}
-		<!-- the import's findings: each sheet row's problem; with only warnings, accepting re-submits the same file -->
+	{#if watching(e) && imported !== null && findings.length > 0 && (st?.state === 'done' || st?.state === 'failed')}
+		<!-- the import's findings: each sheet row's problem; refusals wrote nothing, warnings came with what it imported -->
 		<div class="border-border mx-2 mb-1 grid gap-2 rounded-md border p-2" data-import-findings>
 			<ul class="grid max-h-48 gap-1 overflow-y-auto text-xs">
 				{#each findings as f, i (i)}
@@ -1080,14 +1063,6 @@
 					</li>
 				{/each}
 			</ul>
-			{#if !blocked}
-				<Button
-					size="sm"
-					class="justify-self-end"
-					onclick={() => imported !== null && accept(imported.sync, imported.file)}
-					data-import-accept>{msg(bolt, 'view.acceptImport', 'Accept and import')}</Button
-				>
-			{/if}
 		</div>
 	{/if}
 {/snippet}
@@ -1350,8 +1325,7 @@
 															for={`${editorId}-${field.name}-choose`}
 															id={`${editorId}-${field.name}-label`}
 														>
-															{field.kind.label ??
-																pathLabel(catalog, model, field.name, humanize)}
+															{field.kind.label ?? pathLabel(catalog, model, field.name, humanize)}
 														</label>
 													</div>
 													{#if chosen}
@@ -1473,7 +1447,7 @@
 						class="bg-muted/60 inline-flex h-6 max-w-full items-center gap-1 rounded-full border pr-1 pl-2"
 						data-filter-chip
 					>
-						<span class="truncate">{c.text}</span>
+						<FilterSummary parts={c.parts} />
 						<button
 							type="button"
 							class="hover:bg-accent grid size-4 place-items-center rounded-full"

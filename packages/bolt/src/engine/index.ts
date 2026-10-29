@@ -47,6 +47,7 @@ export {
 	loadPack,
 	readPack,
 	readPackSource,
+	memorySource,
 	sourceOf,
 	type Pack,
 	type PackJson,
@@ -86,7 +87,6 @@ export {
 export { Authorities, previewAs } from './identity/actor.ts';
 export {
 	compileAuthority,
-	admits,
 	writableColumns,
 	visitorMayRead,
 	operandValue
@@ -137,11 +137,11 @@ export {
 export {
 	enqueue,
 	nextDue,
-	queueTriggered,
+	queueEffects,
 	triggersOf,
 	type Triggers,
-	type EventTrigger,
-	type WebhookTrigger
+	type WebhookTrigger,
+	type Writer
 } from './runs/queue.ts';
 export { duration, offsetMs, dueAt, backoffMs, BUCKET_MS, iso } from './runs/time.ts';
 // ── exports: runs ──

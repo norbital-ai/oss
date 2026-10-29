@@ -84,7 +84,10 @@ export interface Webhooks {
 export interface Websockets {
 	connect(
 		url: string,
-		options: { readonly protocols?: readonly string[]; readonly headers?: Readonly<Record<string, string>> },
+		options: {
+			readonly protocols?: readonly string[];
+			readonly headers?: Readonly<Record<string, string>>;
+		},
 		signal: AbortSignal
 	): Promise<WebSocket>;
 }
@@ -117,7 +120,10 @@ export interface Sandbox {
 	): Promise<SandboxResult>;
 }
 
-/** Everything a host supplies. `keys` seals the tenant's secrets under a key only the host holds. */
+/**
+ * Everything a host supplies. `keys` seals the tenant's secrets under a key only the host holds. The guest runner is no
+ * facility: each host owns its own (`HostPorts.guests`).
+ */
 export type Facilities = {
 	readonly storage: { readonly database: Database; readonly files: Files };
 	readonly logs: { readonly runtime: RuntimeLog; readonly audit: AuditLog };

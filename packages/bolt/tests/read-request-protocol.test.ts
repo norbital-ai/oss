@@ -8,7 +8,7 @@ import { TenantDb } from '../src/engine/db/tenant-db.ts';
 import { DbError } from '../src/engine/errors.ts';
 import { BoltError } from '../src/protocol/errors.ts';
 import { Manifest, Reads, type ReadsShape } from '../src/engine/services.ts';
-import { BoltRoutes } from '../src/protocol/http.ts';
+import { BoltRoutes, RateLimits } from '../src/protocol/http.ts';
 import type { ReadIR } from '../src/protocol/reads.ts';
 import { decodeReadRequest, planReadRequest } from '../src/protocol/read-request.ts';
 import { QReply, type QBody } from '../src/protocol/schema.ts';
@@ -30,13 +30,16 @@ const request = (body: QBody) =>
 		})
 	);
 const run = (body: QBody, reads: ReadsShape) =>
-	BoltRoutes['POST /__bolt/q']
-		.run(request(body), rep)
-		.pipe(
-			Effect.provideService(Manifest, manifest),
-			Effect.provideService(Reads, reads),
-			Effect.provideService(TenantDb, db)
-		);
+	BoltRoutes['POST /__bolt/q'].run(request(body), rep).pipe(
+		Effect.provideService(Manifest, manifest),
+		Effect.provideService(Reads, reads),
+		Effect.provideService(TenantDb, db),
+		// rate limits are rate-limits.integration.test.ts's: every read here is admitted
+		Effect.provideService(RateLimits, {
+			ipBucket: (address) => address,
+			charge: () => Effect.succeed({ ok: true })
+		})
+	);
 const reply = (response: HttpServerResponse.HttpServerResponse) =>
 	Effect.tryPromise({
 		try: () => HttpServerResponse.toWeb(response).json(),
@@ -44,51 +47,53 @@ const reply = (response: HttpServerResponse.HttpServerResponse) =>
 	}).pipe(Effect.flatMap(Schema.decodeUnknownEffect(QReply)));
 
 describe('native /q read requests', () => {
-	it.effect('lowers each request to one read of the caller’s one batch and answers it per root', () =>
-		Effect.gen(function* () {
-			const batches: (readonly ReadIR[])[] = [];
-			const values: readonly Json[] = [
-				{
-					accounts: { rows: [{ id: 'account-a', name: 'North', orders: [] }], next: null },
-					notes: { rows: [], next: null }
-				},
-				{ accounts: { rows: [{ id: 'account-b', name: 'South' }], next: null } }
-			];
-			const response = yield* run(
-				{
-					reads: [
-						{
-							m: 'query',
-							a: [
-								{
-									accounts: { where: { region: { eq: 'north' } }, fields: ['name'] },
-									'accounts.orders': { where: { status: { eq: 'open' } }, fields: ['status'] },
-									notes: { limit: 5 }
-								}
-							]
-						},
-						{ m: 'query', a: [{ accounts: { where: { name: { eq: 'South' } } } }] }
-					]
-				},
-				{
-					run: (batch, reader) =>
-						Effect.sync(() => {
-							batches.push(batch);
-							expect(reader).toEqual({ as: 'caller', authority: rep });
-							return values;
-						})
-				}
-			);
-			expect(batches).toHaveLength(1);
-			const [first, second] = batches[0] ?? [];
-			// one read for the whole request: its roots in request order, layers inside their root
-			expect(first).toMatchObject({
-				kind: 'request',
-				roots: [{ root: 'accounts' }, { root: 'notes' }]
-			});
-			expect(second).toMatchObject({ kind: 'request', roots: [{ root: 'accounts' }] });
-			expect(yield* reply(response)).toEqual({ answers: values });
-		})
+	it.effect(
+		'lowers each request to one read of the caller’s one batch and answers it per root',
+		() =>
+			Effect.gen(function* () {
+				const batches: (readonly ReadIR[])[] = [];
+				const values: readonly Json[] = [
+					{
+						accounts: { rows: [{ id: 'account-a', name: 'North', orders: [] }], next: null },
+						notes: { rows: [], next: null }
+					},
+					{ accounts: { rows: [{ id: 'account-b', name: 'South' }], next: null } }
+				];
+				const response = yield* run(
+					{
+						reads: [
+							{
+								m: 'query',
+								a: [
+									{
+										accounts: { where: { region: { eq: 'north' } }, fields: ['name'] },
+										'accounts.orders': { where: { status: { eq: 'open' } }, fields: ['status'] },
+										notes: { limit: 5 }
+									}
+								]
+							},
+							{ m: 'query', a: [{ accounts: { where: { name: { eq: 'South' } } } }] }
+						]
+					},
+					{
+						run: (batch, reader) =>
+							Effect.sync(() => {
+								batches.push(batch);
+								expect(reader).toEqual({ as: 'caller', authority: rep });
+								return values;
+							})
+					}
+				);
+				expect(batches).toHaveLength(1);
+				const [first, second] = batches[0] ?? [];
+				// one read for the whole request: its roots in request order, layers inside their root
+				expect(first).toMatchObject({
+					kind: 'request',
+					roots: [{ root: 'accounts' }, { root: 'notes' }]
+				});
+				expect(second).toMatchObject({ kind: 'request', roots: [{ root: 'accounts' }] });
+				expect(yield* reply(response)).toEqual({ answers: values });
+			})
 	);
 
 	it.effect('refuses anything but the declared JSON layer map before dispatch', () =>
@@ -141,9 +146,9 @@ describe('decodeReadRequest and planReadRequest', () => {
 			true
 		);
 		expect(Result.isFailure(decodeReadRequest({ accounts: { limit: () => 1 } }))).toBe(true);
-		expect(Result.isSuccess(decodeReadRequest({ accounts: { where: { name: { eq: 'x' } } } }))).toBe(
-			true
-		);
+		expect(
+			Result.isSuccess(decodeReadRequest({ accounts: { where: { name: { eq: 'x' } } } }))
+		).toBe(true);
 	});
 
 	it('fills the implied parents of a deep layer and groups the paths by root', () => {

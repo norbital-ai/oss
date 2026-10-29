@@ -173,12 +173,8 @@
 	const HANDLE = 'absolute touch-none bg-border/0 transition-colors hover:bg-primary/30';
 </script>
 
-<Stack gap="none" fill class="min-h-0">
-	<Inline
-		gap="xs"
-		shrink={false}
-		class="h-9 border-b border-border/60 px-2 text-micro text-muted-foreground"
-	>
+<Stack gap="none" size="fill">
+	<Inline gap="xs" class="h-9 border-b border-border/60 px-2 text-micro text-muted-foreground">
 		<strong class="min-w-0 truncate px-1 text-xs font-medium text-foreground"
 			>{label ?? t('Preview')}</strong
 		>

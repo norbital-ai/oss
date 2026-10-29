@@ -16,6 +16,7 @@
 		type Offer
 	} from './filter.js';
 	import { humanize, msg } from '../text/messages.js';
+	import type { Kind } from '@norbital-ai/std/kind';
 
 	type Entry = { path: string; label: string; depth: number; many?: true; open?: boolean };
 	let {
@@ -44,6 +45,15 @@
 		query = $state('');
 	const expanded = new SvelteSet<string>();
 	const offered = $derived(offeredPaths(offers, prefix));
+	/** The view's own model (not under a many-relation): its search index and embedding are the toolbar's search box. */
+	const root = $derived(prefix.length === 0);
+	/** Machine data no member reads as a value: an embedding, or JSON with no typed shape (a record or list of bare JSON). */
+	const opaque = (k: Kind | undefined): boolean =>
+		k?.kind === 'vector' ||
+		(k?.kind === 'json' &&
+			(k.shape === undefined ||
+				k.shape.kind === 'json' ||
+				((k.shape.kind === 'record' || k.shape.kind === 'list') && k.shape.of.kind === 'json')));
 
 	function level(c: string, prefix: string, depth: number, all: boolean): Entry[] {
 		const x = catalog[c];
@@ -52,6 +62,7 @@
 		for (const f of [...Object.keys(x.fields), 'created_at', 'updated_at']) {
 			if (
 				x.relations?.[f] !== undefined ||
+				opaque(x.fields[f]) ||
 				(!filterable(x, f) && f !== 'created_at' && f !== 'updated_at')
 			)
 				continue;
@@ -63,10 +74,11 @@
 			)
 				out.push({ path, label: pathLabel(catalog, c, f, humanize), depth });
 		}
-		// the search index and the embedding: offered where the engine's catalogue offers them
-		for (const f of Object.keys(INDEX))
-			if (offered.conditions.has(prefix + f) && resolve(catalog, model, prefix + f) !== null)
-				out.push({ path: prefix + f, label: pathLabel(catalog, c, f, humanize), depth });
+		// a related record's search index and embedding, where the engine's catalogue offers them
+		if (depth > 0 || !root)
+			for (const f of Object.keys(INDEX))
+				if (offered.conditions.has(prefix + f) && resolve(catalog, model, prefix + f) !== null)
+					out.push({ path: prefix + f, label: pathLabel(catalog, c, f, humanize), depth });
 		for (const [fk, rel] of Object.entries(x.relations ?? {})) {
 			for (const step of rel.targets.length > 1 ? rel.targets.map((t) => `${fk}:${t}`) : [fk]) {
 				const path = prefix + step;
@@ -182,7 +194,7 @@
 							data-path={e.path}
 							onclick={() => pick(e)}
 						>
-							{e.label}{#if e.many}<span class="text-muted-foreground ml-1 text-xs"
+							{e.label}{#if e.many}{' '}<span class="text-muted-foreground text-xs"
 									>{msg(bolt, 'view.related', 'related records')}</span
 								>{/if}
 						</button>

@@ -1,7 +1,7 @@
 // AI filtering (rule 16a, P33, P34, P37): the view popover's "Describe what to show…" becomes a typed `Where` and an
 // `OrderBy` key through ONE `sys_1` call. System 1 never writes a filter: it chooses among conditions the engine built.
 //
-//   1. Fields: the model's exposure narrowed to what the caller reads unmasked — own fields, one-relations and
+//   1. Fields: the model's exposure narrowed to what the caller reads — own fields, one-relations and
 //      many-relations (any / all / none, count, child totals) up to `FILTER_MAX_HOPS`, the search index (`$search`) and
 //      the embedding (`$similar`). Plain data (`FilterStep` paths): `filter.options` hands the same catalogue to the builder.
 //   2. Values: the description's own literals (dates, numbers, quoted strings, words, topic phrases), relative spans,
@@ -37,11 +37,21 @@ import {
 	type DecisionRequest
 } from '../decisions/index.ts';
 import { catalogOf } from '../access/pred.ts';
+import { readsAny, viewOutput } from '../access/authority.ts';
 import { midnight, startOfDate } from '../query/eval.ts';
 import { materialize } from '../runs/time.ts';
-import { exposedField, type Catalog, type ExposureInfo, type FieldInfo } from '@norbital-ai/store';
+import {
+	catalogFor,
+	DEFAULT_OUTPUT,
+	exposedField,
+	type Catalog,
+	type ExposureInfo,
+	type FieldInfo
+} from '@norbital-ai/store';
 import * as ir from '../../protocol/reads.ts';
 import { order, where as decodeWhere } from '@norbital-ai/store';
+/** A stored point (`{ lat, lng }`) among a row's values. */
+const isPoint = Schema.is(Schema.Struct({ lat: Schema.Number, lng: Schema.Number }));
 /** The stated conditions a description may produce. */
 const FILTER_MAX_CONDITIONS = 4;
 /** Fields asked about in the one request: the ones the description most plausibly names. */
@@ -858,14 +868,21 @@ const levelOf = (cat: Catalog, x: ExposureInfo, rel: string, target: string) => 
 export function makeFilterDescribe(cfg: FilterDescribeConfig) {
 	const m = cfg.manifest,
 		cat = catalogOf(m);
-	/** Whether the caller reads model `c` and its field `f` unmasked (rule 14): the narrowing of every option. */
-	const reads = (a: Authority, c: string) => a.admin || (a.models[c]?.read[c]?.length ?? 0) > 0;
-	const unmasked = (a: Authority, c: string, f: string) =>
-		a.admin || a.models[c]?.masks[c]?.[f] === undefined;
-	/** The root whose arms and masks read level `x`: a layer is read under its root's policies, never its own model's. */
+	/** Whether the caller reads model `c` (any output it holds): the narrowing of every option. */
+	const reads = (a: Authority, c: string) => readsAny(a, c);
+	/** The output a caller's generic views read `c` as, and the catalog of it: its fields and layers are what it offers. */
+	const viewOf = (a: Authority, c: string) => {
+		const output = viewOutput(m, a, c) ?? DEFAULT_OUTPUT;
+		return { output, cat: storeSync(catalogFor(cat, c, output)) };
+	};
+	/** A read of `c` as the caller's view output. */
+	const readAs = (a: Authority, c: string, q: Parameters<typeof ir.read>[2]) => {
+		const v = viewOf(a, c);
+		const read = ir.read(v.cat, c, q);
+		return v.output === DEFAULT_OUTPUT ? read : { ...read, output: v.output };
+	};
+	/** The root whose arms read level `x`: a layer is read under its root's policies, never its own model's. */
 	const owner = (x: ExposureInfo) => x.path.split('.')[0]!;
-	const unmaskedAt = (a: Authority, x: ExposureInfo, f: string) =>
-		a.admin || a.models[owner(x)]?.masks[x.path]?.[f] === undefined;
 	const spec = (c: string, f: string) => m.models[c]?.fields[f];
 	const nameOf = (c: string, f: string) => spec(c, f)?.label ?? human(f);
 	/** A model's searched text fields: where a phrase the person typed can be found. */
@@ -877,6 +894,7 @@ export function makeFilterDescribe(cfg: FilterDescribeConfig) {
 	function fieldsOf(model: string, text: string, a: Authority, b: Bindings): Field[] {
 		const lit = literals(text, m.workspace.locale, b.today),
 			ws = words(text),
+			view = viewOf(a, model).cat,
 			out: Field[] = [];
 		const cmp: Op[] = [
 			{ op: 'eq', label: 'is' },
@@ -906,8 +924,7 @@ export function makeFilterDescribe(cfg: FilterDescribeConfig) {
 					f.name.includes('.') ||
 					(!system && s === undefined && !tc.model.one.has(f.name)) ||
 					s?.hidden ||
-					!exposedField(tc, f.name) ||
-					!unmaskedAt(a, tc, f.name)
+					!exposedField(tc, f.name)
 				)
 					continue;
 				const rel = tc.model.one.get(f.name);
@@ -975,7 +992,7 @@ export function makeFilterDescribe(cfg: FilterDescribeConfig) {
 						] as FilterValue[]
 					};
 					out.push(field);
-					const layer = levelOf(cat, tc, f.name, at);
+					const layer = levelOf(view, tc, f.name, at);
 					if (layer !== undefined)
 						walk(
 							layer,
@@ -995,7 +1012,7 @@ export function makeFilterDescribe(cfg: FilterDescribeConfig) {
 			// the catalogue the builder receives grows with every hop (hr-payroll: 0.4 MB → 3 MB a model at full depth).
 			if (hops > 0 && steps.every((x) => x.k === 'is'))
 				for (const [r, rel] of tc.model.many) {
-					const child = levelOf(cat, tc, r, rel.child);
+					const child = levelOf(view, tc, r, rel.child);
 					if (
 						child === undefined ||
 						rel.column.includes('__') ||
@@ -1028,14 +1045,7 @@ export function makeFilterDescribe(cfg: FilterDescribeConfig) {
 					});
 					for (const f of child.model.fields.values()) {
 						const s = spec(rel.child, f.name);
-						if (
-							s === undefined ||
-							s.hidden ||
-							f.many ||
-							!exposedField(child, f.name) ||
-							!unmaskedAt(a, child, f.name)
-						)
-							continue;
+						if (s === undefined || s.hidden || f.many || !exposedField(child, f.name)) continue;
 						for (const [word, fn] of AGGS)
 							if (
 								SUMMABLE.includes(f.kind) ||
@@ -1050,9 +1060,8 @@ export function makeFilterDescribe(cfg: FilterDescribeConfig) {
 								});
 					}
 				}
-			// the search index and the embedding, to a caller who reads every field they cover unmasked (rule 14)
-			const whole = (fs: readonly string[]) =>
-				fs.every((x) => exposedField(tc, x) && unmaskedAt(a, tc, x));
+			// the search index and the embedding, to a caller who reads every field they cover (rule 14)
+			const whole = (fs: readonly string[]) => fs.every((x) => exposedField(tc, x));
 			const about = () =>
 				topics(text, [
 					target,
@@ -1077,7 +1086,7 @@ export function makeFilterDescribe(cfg: FilterDescribeConfig) {
 					values: about()
 				});
 		};
-		const root = cat.exposures.get(model);
+		const root = view.exposures.get(model);
 		if (root !== undefined) walk(root, [], '', '', FILTER_MAX_HOPS);
 		return out;
 	}
@@ -1094,7 +1103,8 @@ export function makeFilterDescribe(cfg: FilterDescribeConfig) {
 		a: Authority,
 		b: Bindings
 	) {
-		const c = cat.exposures.get(model)!,
+		const view = viewOf(a, model).cat,
+			c = view.exposures.get(model)!,
 			ts = terms(text),
 			orders: Order[] = [];
 		const radius = metresOf(text),
@@ -1114,16 +1124,15 @@ export function makeFilterDescribe(cfg: FilterDescribeConfig) {
 			const s = f.path[0];
 			if (f.kind !== 'record' || f.path.length !== 1 || s?.k !== 'field') continue;
 			const target = c.model.one.get(s.name)!.targets[0]!,
-				x = cat.exposures.get(target)!,
-				layer = levelOf(cat, c, s.name, target);
+				x = viewOf(a, target).cat.exposures.get(target)!,
+				layer = levelOf(view, c, s.name, target);
 			const tl = [m.models[target]?.label ?? 'name'].flat()[0]!;
-			// the phrase is matched through the layer: read the target, then filter across the layer's unmasked label
+			// the phrase is matched through the layer: read the target, then filter across the layer's label
 			if (
 				layer === undefined ||
 				x.model.fields.get(tl)?.kind !== 'text' ||
-				!reads(a, target) ||
-				!unmasked(a, target, tl) ||
-				!unmaskedAt(a, layer, tl)
+				!exposedField(x, tl) ||
+				!reads(a, target)
 			)
 				continue;
 			const own = points.filter(
@@ -1150,7 +1159,7 @@ export function makeFilterDescribe(cfg: FilterDescribeConfig) {
 								).name
 						)
 				]
-					.filter((n) => unmasked(a, target, n))
+					.filter((n) => exposedField(x, n))
 					.map((n) => [n, true])
 			);
 			const then = (rows: readonly RowData[]) => {
@@ -1184,21 +1193,7 @@ export function makeFilterDescribe(cfg: FilterDescribeConfig) {
 									).name
 								]
 						)
-						.find(
-							(
-								v
-							): v is {
-								lat: number;
-								lng: number;
-							} =>
-								typeof v === 'object' &&
-								v !== null &&
-								typeof (
-									v as {
-										lat?: unknown;
-									}
-								).lat === 'number'
-						);
+						.find(isPoint);
 					if (pt !== undefined)
 						for (const p of own) {
 							found(p, `${within} of ${label}`, { near: [pt, radius] });
@@ -1213,13 +1208,13 @@ export function makeFilterDescribe(cfg: FilterDescribeConfig) {
 			// by the description's terms: a one- or two-letter word is a prefix of half the records ("a" found "Acme")
 			if (x.model.search.length > 0 && ts.length > 0)
 				reads_.push({
-					q: ir.read(cat, target, { search: ts.join(' '), select, limit: CANDIDATES }),
+					q: readAs(a, target, { search: ts.join(' '), select, limit: CANDIDATES }),
 					then
 				});
 			else
 				for (const w of ts)
 					reads_.push({
-						q: ir.read(cat, target, {
+						q: readAs(a, target, {
 							where: { [tl]: { like: `%${esc(w)}%` } },
 							select,
 							limit: CANDIDATES
@@ -1245,7 +1240,7 @@ export function makeFilterDescribe(cfg: FilterDescribeConfig) {
 				search = at([{ k: 'field', name: '$search' }]);
 			if (ts.length > 0)
 				reads_.push({
-					q: ir.read(cat, model, {
+					q: readAs(a, model, {
 						search: ts.join(' '),
 						select: Object.fromEntries(
 							own.map((f) => [
@@ -1314,20 +1309,20 @@ export function makeFilterDescribe(cfg: FilterDescribeConfig) {
 		}[] = [];
 		if (dated.length > 0 && ts.length > 0 && DAY_WORDS.test(text)) {
 			let n = 0;
-			for (const [name, x] of cat.exposures) {
+			for (const name of cat.exposures.keys()) {
 				if (n >= MAX_DATED || name.startsWith('sys_') || !reads(a, name)) continue;
+				const x = viewOf(a, name).cat.exposures.get(name)!;
 				const readable = (f: string, kind: string) =>
 					x.model.fields.get(f)?.kind === kind &&
 					!x.model.fields.get(f)!.many &&
-					exposedField(x, f) &&
-					unmasked(a, name, f);
+					exposedField(x, f);
 				const label = [m.models[name]?.label ?? 'name'].flat()[0]!;
 				const title = [label, ...x.model.search, 'name', 'title'].find((f) => readable(f, 'text'));
 				const when = [label, ...x.model.fields.keys()].find((f) => readable(f, 'date'));
 				if (title === undefined || when === undefined) continue;
 				n++;
 				reads_.push({
-					q: ir.read(cat, name, {
+					q: readAs(a, name, {
 						where: { or: ts.map((w) => ({ [title]: { like: `%${esc(w)}%` } })) },
 						select: { [title]: true, [when]: true },
 						limit: 20
@@ -1942,7 +1937,7 @@ export function makeFilterDescribe(cfg: FilterDescribeConfig) {
 			const checked = Result.try({
 				try: () =>
 					decodeDescribed(
-						cat,
+						viewOf(o.authority, o.model).cat,
 						o.authority,
 						o.model,
 						{
@@ -1990,8 +1985,8 @@ export const filterDescribe = Effect.gen(function* () {
 const refuse = (message: string) => BoltError.make('invalid', 'decode', message);
 /**
  * The strict decode of a described filter and sort (rule 11a, rule 16a): `ir.where`/`ir.order`'s grammar, and every
- * field, relation and sort key within what the caller reads unmasked — the models it reads, their exposed fields
- * and relations, one-relation keys it reads unmasked. Anything else is `invalid`; nothing is dropped silently.
+ * field, relation and sort key within what the caller reads — the models it reads, their exposed fields
+ * and relations, one-relation keys it reads. Anything else is `invalid`; nothing is dropped silently.
  */
 export function decodeDescribed(
 	cat: Catalog,
@@ -2005,21 +2000,16 @@ export function decodeDescribed(
 	at: { readonly today: string; readonly now: string }
 ): void {
 	const root = cat.exposures.get(model);
-	if (root === undefined || (!a.admin && (a.models[model]?.read[model]?.length ?? 0) === 0))
+	if (root === undefined || !readsAny(a, model))
 		throw refuse(`'${model}' is not read by this caller`);
-	// a layer reads under its root's arms and masks (decision 3)
-	const masked = (x: ExposureInfo, f: string) =>
-		!a.admin && a.models[x.path.split('.')[0]!]?.masks[x.path]?.[f] !== undefined;
 	const field = (x: ExposureInfo, f: string) => {
 		const base = f.split('.')[0]!;
-		if (!exposedField(x, base) || masked(x, base))
-			throw refuse(`'${x.path}.${f}' is not a field this caller reads`);
+		if (!exposedField(x, base)) throw refuse(`'${x.path}.${f}' is not a field this caller reads`);
 	};
 	/** The declared layer a hop through `r` reads; any other hop is refused. */
 	const rel = (x: ExposureInfo, r: string, target: string) => {
 		const t = levelOf(cat, x, r, target);
-		if (t === undefined || (x.model.one.has(r) && masked(x, r)))
-			throw refuse(`'${x.path}.${r}' is not a relation this caller reads`);
+		if (t === undefined) throw refuse(`'${x.path}.${r}' is not a relation this caller reads`);
 		return t;
 	};
 	const walk = (p: Pred, x: ExposureInfo): void => {
@@ -2044,7 +2034,7 @@ export function decodeDescribed(
 				return field(rel(x, p.rel, p.target), p.of);
 			case 'cmp':
 				field(x, p.field);
-				if (typeof p.arg === 'object' && p.arg !== null && 'field' in p.arg) field(x, p.arg.field);
+				if (p.arg._tag === 'Field') field(x, p.arg.field);
 				return;
 			default:
 				return field(x, p.field);

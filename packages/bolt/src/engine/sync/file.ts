@@ -1,6 +1,6 @@
 // A model's file syncs (spec §3.2, §3.3): the view toolbar's Import, Download template and Export. Each is a platform
 // run `<model>.sync.<sync>` started by a member (its `starter`), so RunStatus shows it and a template's or export's
-// FileRef is the run's output: `{ mode: 'import', file, accept?, context? }` | `{ mode: 'template' | 'export', format?,
+// FileRef is the run's output: `{ mode: 'import', file, context? }` | `{ mode: 'template' | 'export', format?,
 // to?, context?, where? }`.
 //
 // Import: the member's own upload (`<model>.$import.<sync>`) is read by the parser its name or media type picks (a
@@ -8,7 +8,7 @@
 // against it. The sync's `read` (guest) turns them into rows, a `scope`, findings and `related` rows; without `read` the
 // records are the rows, matched by the model's `key`. Every row, the scope's deletes, the `$deleted` rows and the related
 // rows are ONE act as the member, through the model's write callbacks and grants: one refusal refuses the file. Nothing is
-// written while a `refuse` finding stands or a `warn` is unaccepted.
+// written while a `refuse` finding stands; `warn` findings are reported with the applied counts.
 //
 // Template and export: the sync's `write` (guest) returns records, written in one of the sync's tabular formats, or one
 // document, converted to a declared target (`convertDocument`); without `write` they are the rows in view (the page's
@@ -45,7 +45,7 @@ import {
 	type InvocationKind
 } from '../contracts.ts';
 import type { EngineManifest } from '../manifest.ts';
-import type { Holder } from '../access/authority.ts';
+import { grantedArms, type Holder } from '../access/authority.ts';
 import type { EngineError } from '../errors.ts';
 import { BoltError, fromStore } from '../../protocol/errors.ts';
 import { catalogOf } from '../access/pred.ts';
@@ -83,7 +83,6 @@ type FileSyncServices =
 export const FILE_SYNC_INPUT: InputSpec = {
 	mode: { kind: 'enum', values: ['import', 'template', 'export'] },
 	file: { kind: 'text', optional: true },
-	accept: { kind: 'bool', optional: true },
 	context: { kind: 'json', optional: true },
 	format: { kind: 'enum', values: FORMATS, optional: true },
 	to: { kind: 'enum', values: [...CONVERT_TARGETS, ...FORMATS], optional: true },
@@ -93,7 +92,6 @@ const RunInput = Schema.Union([
 	Schema.Struct({
 		mode: Schema.Literal('import'),
 		file: Schema.String,
-		accept: Schema.optionalKey(Schema.Boolean),
 		context: Schema.optionalKey(Schema.Json)
 	}),
 	Schema.Struct({
@@ -108,7 +106,7 @@ type ExportInput = Extract<typeof RunInput.Type, { mode: 'template' | 'export' }
 
 /**
  * Who may start file sync `<model>.sync.<sync>` (its rows enter and leave as the member; the act judges each row
- * again): an import needs a create or update grant on the model, a template or export its read grant.
+ * again): an import needs a create or update grant on the model, a template or export its `default` output.
  */
 export function fileSyncAdmits(auth: Authority, model: string, input: Json): boolean {
 	if (auth.actor.kind !== 'member') return false;
@@ -116,7 +114,7 @@ export function fileSyncAdmits(auth: Authority, model: string, input: Json): boo
 	const g = auth.models[model];
 	return Predicate.isObject(input) && input['mode'] === 'import'
 		? (g?.create.length ?? 0) + (g?.update.length ?? 0) > 0
-		: (g?.read[model]?.length ?? 0) > 0;
+		: grantedArms(auth, model) !== undefined;
 }
 
 const TEXT: InputKind = { kind: 'text' };
@@ -374,7 +372,7 @@ function decodeRecords(
 /** Import: parse, decode, `read` (or the default rows), then one act as the member. */
 const importFile = Effect.fn('FileSyncs.import')(function* (
 	s: Sync,
-	input: { readonly file: string; readonly accept?: boolean; readonly context?: Json },
+	input: { readonly file: string; readonly context?: Json },
 	caller: Caller
 ): Effect.fn.Return<Json, EngineError, FileSyncServices> {
 	const m = yield* Manifest,
@@ -443,8 +441,7 @@ const importFile = Effect.fn('FileSyncs.import')(function* (
 				)
 			: { rows: records.map((r) => ({ ...rowOf(m, s.model, r), $at: r['$at'] ?? 0 })) };
 	const found = [...decoded.findings, ...(read.findings ?? [])];
-	if (found.some((x) => x.severity === 'refuse') || (found.length > 0 && input.accept !== true))
-		return { applied: false, findings: found };
+	if (found.some((x) => x.severity === 'refuse')) return { applied: false, findings: found };
 
 	const key = modelKey(m, s.model);
 	// a row's `$at` (its record's) places a refusal; `$deleted` rows are deleted by key, as the scope's are
@@ -605,7 +602,7 @@ const exportFile = Effect.fn('FileSyncs.export')(function* (
 	const records: readonly Obj[] =
 		written === null
 			? yield* Effect.gen(function* () {
-					// the rows in view: the page's `where`, read as the member (scoped and masked), the model's columns only
+					// the rows in view: the page's `where`, read as the member (scoped), the model's columns only
 					const fields = Object.keys(columns).filter(
 						(f) =>
 							m.models[s.model]?.fields[f] !== undefined ||

@@ -21,7 +21,7 @@ import {
 import type { Json } from '../src/decl/values.ts';
 import { mcpServers, mcpSessions } from '../src/engine/agent/mcp.ts';
 import type { AiRequest, AiResponse } from '../src/engine/contracts.ts';
-import { FIXED } from '../src/engine/agent/index.ts';
+import { callKey, FIXED, rest } from '../src/engine/agent/index.ts';
 import { COMPACT_FORMAT } from '../src/engine/agent/context.ts';
 import type { MessageRow } from '../src/engine/agent/schema.ts';
 import { Authorities } from '../src/engine/identity/actor.ts';
@@ -30,9 +30,15 @@ import { Port, type PortFailure } from '../src/engine/port.ts';
 import { Ai, Mcp, type AiEvent } from '../src/engine/ports.ts';
 import { mcpPort } from '../src/node/mcp.ts';
 import { Agents, Live } from '../src/engine/services.ts';
+import { TenantDb } from '../src/engine/db/tenant-db.ts';
 import { AgentConversation, AgentRow, type Frame } from '../src/protocol/schema.ts';
-import { KitInvalid, TestWorkspace, respondSystem1, type Kit } from '../src/test/effect.ts';
-import { program } from '../src/test/guest.ts';
+import {
+	KitInvalid,
+	TestWorkspace,
+	respondSystem1,
+	type Kit
+} from '../../bolt-cli/src/test/effect.ts';
+import { program } from '../../bolt-cli/src/test/guest.ts';
 
 const manifest: EngineManifest = {
 	needs: [],
@@ -51,6 +57,7 @@ const manifest: EngineManifest = {
 	exposures: {
 		quotes: {
 			read: { quotes: { fields: 'all' } },
+			outputs: { titles: { quotes: { fields: ['title'] } } },
 			create: { columns: { quotes: ['title', 'region'] } },
 			update: { columns: { quotes: ['title', 'region'] } },
 			delete: {}
@@ -59,7 +66,7 @@ const manifest: EngineManifest = {
 	policies: {
 		narrow: {
 			description: 'Titles only',
-			grants: { quotes: { read: { quotes: { fields: ['title'] } } } }
+			grants: { quotes: { outputs: { titles: true } } }
 		},
 		rep: {
 			description: 'Rep',
@@ -111,7 +118,7 @@ const manifest: EngineManifest = {
 			description: 'Mark a quote',
 			input: { title: { kind: 'text' } },
 			output: { kind: 'text' },
-			runAs: 'trigger',
+			policies: ['rep'],
 			agent: 'confirm'
 		}
 	},
@@ -673,6 +680,217 @@ describe('durable turns (rule 48)', () => {
 				})
 			)
 	);
+	it.live(
+		'a turn interrupted in a live process (a cutover) lapses its lease and makes its takeover due now',
+		() =>
+			Effect.scoped(
+				Effect.gen(function* () {
+					const started = yield* Deferred.make<void>();
+					const fixture = yield* setup([]);
+					return yield* Effect.gen(function* () {
+						const { t, user } = fixture;
+						const root = yield* user('root', { admin: true });
+						// a second engine over the same database, its scope closed mid-turn as a cutover closes the old one
+						const engine = yield* Scope.make();
+						const old = yield* Layer.build(
+							TestWorkspace.layer({
+								manifest,
+								guest: yield* guest,
+								ports: cassette([
+									() =>
+										Stream.unwrap(
+											Deferred.succeed(started, undefined).pipe(Effect.andThen(Effect.never))
+										)
+								]).layer,
+								now: new Date().toISOString(),
+								db: Layer.succeed(TenantDb, Context.get(fixture.context, TenantDb))
+							})
+						).pipe(Scope.provide(engine));
+						const agent = Context.get(old, Agents);
+						const c = yield* agent.start({ owner: root });
+						yield* agent.post({ conversation: c, as: { member: root }, text: 'Slow question' });
+						yield* Effect.forkChild(agent.drain(c));
+						yield* Deferred.await(started);
+						yield* Scope.close(engine, Exit.void);
+						const [state] = yield* t.db.rows(
+							Schema.Struct({ lease: Schema.Boolean, due: Schema.Boolean }),
+							{
+								// without the release both stand a lease (60 s) ahead
+								text: `SELECT c.lease_until <= $2::timestamptz + interval '5 seconds' AS lease,
+									(SELECT bool_and(due_at <= $2::timestamptz + interval '5 seconds') FROM sys_run WHERE automation = 'agent.turn' AND state = 'queued' AND input->>'conversation' = $1) AS due
+									FROM sys_conversation c WHERE c.id = $1`,
+								params: [c, new Date().toISOString()]
+							}
+						);
+						expect(state).toEqual({ lease: true, due: true });
+						yield* fixture.agent.stop(c);
+					}).pipe(Effect.provide(fixture.context));
+				})
+			)
+	);
+	it.live(
+		'a turn cut mid-work is resumed with the open request named last, and ends with the answer',
+		() =>
+			Effect.scoped(
+				Effect.gen(function* () {
+					const fixture = yield* setup([
+						use('read', { quotes: {} }),
+						say('interim'),
+						say('Two quotes.')
+					]);
+					return yield* Effect.gen(function* () {
+						const { t, ai, agent, user } = fixture;
+						const root = yield* user('root', { admin: true });
+						const c = yield* agent.start({ owner: root });
+						yield* agent.post({ conversation: c, as: { member: root }, text: 'How many quotes?' });
+						yield* agent.drain(c);
+						// the process died while its step was still streaming: the reply row is left as a cut
+						yield* t.db.write({
+							text: `WITH m AS (UPDATE sys_message SET text = '', content = '{"text":"","toolCalls":[]}'::jsonb, meta = '{"tag":"cut"}'::jsonb
+								WHERE id = (SELECT id FROM sys_message WHERE conversation = $1 ORDER BY seq DESC LIMIT 1) RETURNING id),
+							c AS (UPDATE sys_conversation SET status = 'running', lease_until = $2::timestamptz - interval '1 second' WHERE id = $1 RETURNING id)
+							INSERT INTO sys_run (id, automation, input, due_at, cause, depth) VALUES (gen_random_uuid()::text, 'agent.turn', jsonb_build_object('conversation', $1::text), $2::timestamptz, 'schedule', 0)`,
+							params: [c, t.clock.now()]
+						});
+						yield* t.runDue();
+						expect(ai.requests).toHaveLength(3);
+						const closing = ai.requests[2]!.messages.filter(
+							(message) => message.role === 'user'
+						).map((message) => JSON.stringify(message.content));
+						// the resumed step's last word before the state note is the open request, not the model's own cut row
+						expect(closing.at(-2)).toContain('has resumed');
+						expect(closing.at(-2)).toContain('How many quotes?');
+						expect(ai.requests[2]!.messages.at(-1)?.role).toBe('user');
+						expect((yield* agent.transcript(c)).at(-1)).toMatchObject({
+							role: 'assistant',
+							text: 'Two quotes.'
+						});
+					}).pipe(Effect.provide(fixture.context));
+				})
+			)
+	);
+});
+
+// The colour-ingest probe (2026-10-29): an administrator in no team; the form names a person. Before, the agent described
+// each model (one call each), could not read sys_user and spent 17 calls over three turns searching the source for a
+// name, then copied another record's owner. Now the schema is in the prompt and the directory is one read away.
+describe('a replayed ingest takes its fewest calls', () => {
+	it.live(
+		"an administrator's first step reads the people and records it needs in one call, from the schema in its prompt",
+		() =>
+			Effect.scoped(
+				Effect.gen(function* () {
+					const fixture = yield* setup([
+						use('read', {
+							sys_user: { where: { name: { like: '%Poa%' } }, fields: ['id', 'name', 'team'] },
+							quotes: { where: { title: { like: 'Dyson%' } }, fields: ['id', 'title', 'region'] }
+						}),
+						use('act', { callable: 'quotes.create', input: [{ title: 'Dyson P8-321-NH' }] }),
+						say('Opened the Dyson enquiry; Poa is the sales person on the form.')
+					]);
+					return yield* Effect.gen(function* () {
+						const { ai, agent, user } = fixture;
+						const root = yield* user('root', { admin: true }),
+							poa = yield* user('Poa', { team: 'rep' });
+						const c = yield* agent.start({ owner: root });
+						yield* agent.post({
+							conversation: c,
+							as: { member: root },
+							text: 'Set up the Dyson form; the sales person is Poa.'
+						});
+						yield* agent.drain(c);
+						expect(ai.requests).toHaveLength(3);
+						const prompt = ai.requests[0]!.system ?? '';
+						expect(prompt).toContain('# Models you read');
+						expect(prompt).toContain('- quotes (A quote): title text, region enum north | south');
+						expect(prompt).toContain('- sys_user');
+						expect(prompt).toContain('ask: never copy a person from another record');
+						expect(toolResults(ai.requests[1]!)[0]).toMatchObject({
+							sys_user: { rows: [{ id: poa, name: 'Poa', team: 'rep' }] },
+							quotes: { rows: [] }
+						});
+						expect(toolResults(ai.requests[2]!).at(-1)).toMatchObject({ kind: 'committed' });
+					}).pipe(Effect.provide(fixture.context));
+				})
+			)
+	);
+});
+describe('a tool answer that stops short says where the rest is', () => {
+	const notes = (request: AiRequest | undefined) =>
+		JSON.stringify((request?.messages ?? []).filter((message) => message.role === 'user'));
+	it.live("a read page with a next cursor: the step's note names read again with after", () =>
+		Effect.scoped(
+			Effect.gen(function* () {
+				const titles = ['Paged one', 'Paged two', 'Paged three'];
+				const fixture = yield* setup([
+					use('act', { callable: 'quotes.create', input: titles.map((title) => ({ title })) }),
+					use('read', { quotes: { where: { title: { like: 'Paged %' } }, limit: 2 } }),
+					say('Three.')
+				]);
+				return yield* Effect.gen(function* () {
+					const { ai, agent, user } = fixture;
+					const root = yield* user('root', { admin: true });
+					const c = yield* agent.start({ owner: root });
+					yield* agent.post({ conversation: c, as: { member: root }, text: 'Paged quotes?' });
+					yield* agent.drain(c);
+					expect(notes(ai.requests[1])).not.toContain('stopped short');
+					expect(notes(ai.requests[2])).toContain(
+						'more \\"quotes\\" rows follow the 2 shown of 3; the rest: call read again with the same \\"quotes\\" options and \\"after\\":'
+					);
+				}).pipe(Effect.provide(fixture.context));
+			})
+		)
+	);
+	it.live("a result past the bound: the step's note names read_output with its call id", () =>
+		Effect.scoped(
+			Effect.gen(function* () {
+				const fixture = yield* setup([
+					use('act', { callable: 'quotes.create', input: [{ title: `Long ${'x'.repeat(9000)}` }] }),
+					use('read', { quotes: { where: { title: { like: 'Long %' } } } }, 'long-read'),
+					say('One.')
+				]);
+				return yield* Effect.gen(function* () {
+					const { ai, agent, user } = fixture;
+					const root = yield* user('root', { admin: true });
+					const c = yield* agent.start({ owner: root });
+					yield* agent.post({ conversation: c, as: { member: root }, text: 'Long quotes?' });
+					yield* agent.drain(c);
+					expect(notes(ai.requests[2])).toContain("read (call 'long-read')");
+					expect(notes(ai.requests[2])).toContain('call read_output with that call id');
+				}).pipe(Effect.provide(fixture.context));
+			})
+		)
+	);
+	it('paged tools and a tool that cut its own answer: one line each naming the call that reads on', () => {
+		expect(rest('runs', 'r1', { runs: [], next: '["t","id"]' })).toEqual([
+			`runs (call 'r1'): more follows; the rest: call runs again with the same arguments and cursor: "[\\"t\\",\\"id\\"]"`
+		]);
+		expect(rest('logs', 'l1', { entries: [], next: 'e9' })[0]).toContain('cursor: "e9"');
+		expect(rest('read_output', 'o1', { text: '…', next: 1200 })[0]).toContain('offset: 1200');
+		expect(rest('workspace_search', 'w1', { lines: [], next: 41 })[0]).toContain('from: 41');
+		expect(rest('browser_snapshot', 'b1', { text: '…', next: 300 })[0]).toContain('from: 300');
+		expect(
+			rest('read_file', 'f1', {
+				text: '…',
+				truncated: 'only the first 65536 of 70000 characters are shown'
+			})
+		).toEqual([`read_file (call 'f1'): only the first 65536 of 70000 characters are shown`]);
+		expect(rest('runs', 'r2', { runs: [] })).toEqual([]);
+		expect(rest('read', 'q1', { quotes: { rows: [] } })).toEqual([]);
+		expect(
+			rest('read', 'q2', { quotes: { rows: [{ id: 'a' }], next: 'c', total: 1284 } })[0]
+		).toContain('more "quotes" rows follow the 1 shown of 1284');
+	});
+	it('the repeat guards compare the normalised call: invisible characters, compatibility forms and key order aside', () => {
+		const call = callKey('read', { quotes: { fields: ['title'], limit: 5 } });
+		expect(callKey('read', { quotes: { limit: 5, fields: ['ti\u200btle'] } })).toBe(call);
+		expect(callKey('read', { 'quo\u2060tes': { fields: ['\ufeffti\u00adtle'], limit: 5 } })).toBe(
+			call
+		);
+		expect(callKey('read', { quotes: { fields: ['ｔｉｔｌｅ'], limit: 5 } })).toBe(call);
+		expect(callKey('read', { quotes: { fields: ['title'], limit: 6 } })).not.toBe(call);
+		expect(callKey('act', { quotes: { fields: ['title'], limit: 5 } })).not.toBe(call);
+	});
 });
 
 describe('a turn never settles silently', () => {

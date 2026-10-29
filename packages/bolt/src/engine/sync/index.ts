@@ -302,16 +302,18 @@ export const SyncsLive = Layer.effect(
 						BoltError.make('notFound', 'decode', `No integration instance '${instance}'.`)
 					);
 				if (manifest.integrations[inst.integration]?.test !== true) return;
-				const id = yield* e.crypto.randomUUIDv4().pipe(
-					Effect.mapError((error) =>
-						BoltError.make(
-							'unavailable',
-							'facility',
-							'Secure random UUID generation failed.',
-							error
+				const id = yield* e.crypto
+					.randomUUIDv4()
+					.pipe(
+						Effect.mapError((error) =>
+							BoltError.make(
+								'unavailable',
+								'facility',
+								'Secure random UUID generation failed.',
+								error
+							)
 						)
-					)
-				);
+					);
 				yield* integrationBody(e, {
 					id,
 					actor: { kind: 'system', run: id, by: { platform: `${inst.integration}.test` } },

@@ -71,14 +71,15 @@ needed: they observe different defects, not duplicate coverage.
 
 ## Drive current authoring contracts
 
-Template behaviour uses `@norbital-ai/bolt/test`: `TestWorkspace.layer({ root })`, `yield* t.as(actor).act(...)` inside `it.effect`,
-reads and queued runs through the existing test kit. Use the owning template's kit and synthetic
+Template behaviour uses `@norbital-ai/bolt-cli/test` (the template's bolt-cli devDependency):
+`TestWorkspace.layer({ root })`, `yield* t.as(actor).act(...)` inside `it.effect`, reads and queued runs through the
+existing test kit, which runs guest code on its own `node:vm` runner. Use the owning template's kit and synthetic
 fixtures. Template suites run standalone without Colony; Colony suites test host behavior without
 depending on template suites. One runner shares one worker budget across every suite.
 Template tests seed from the template's own `test` pack, `seed/test/` ([worked example](references/worked-examples.md#the-test-seed-pack)):
 small synthetic rows written for its mechanisms. `TestWorkspace.layer({ root })` loads it by default when the
-directory exists; `seed: 'none'` or inline rows replace it. Tests never load the public `base` pack or the bank's
-`sample`, and no bank or customer row is copied into `seed/test/`.
+directory exists; `seed: 'none'` or inline rows replace it. Tests never load the public `base` pack or bank rows,
+and no bank or customer row is copied into `seed/test/`.
 Seed mode restores rows without write callbacks or automations. Create synthetic executable
 configuration through guarded create/update, including publication, rather than assuming restored
 seed rows passed those guards.
@@ -118,7 +119,7 @@ slower, never red: a test whose result depends on timing is a defect, not someth
 - Pair denial with an admitted case. A handler that throws or refuses everyone must fail the suite.
 - Include beyond-page data for full counts, unread state, child edits and continuation. An unloaded
   child must survive an edit to a visible sibling.
-- Use real readable/masked and writable/locked distinctions in shared UI tests (ui package only).
+- Use real readable/outside-the-output and writable/locked distinctions in shared UI tests (ui package only).
   Assert interaction and outcome, never wrapper counts, CSS classes or markup.
 - Keep tests of public schema/decoder boundaries when runtime callers can supply malformed data;
   do not confuse them with redundant tests of a TypeScript type alone.

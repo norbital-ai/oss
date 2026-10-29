@@ -117,7 +117,7 @@
 							<span class="grid size-9 shrink-0 place-items-center rounded-lg bg-muted"
 								><Icon name={COPY[r].icon} class="size-4" /></span
 							>
-							<Stack gap="xs" grow>
+							<Stack gap="xs" size="fill">
 								<Inline gap="xs" justify="between">
 									<p class="text-sm font-medium">{t(COPY[r].label)}</p>
 									{#if s?.state === 'granted'}<Badge variant="success">{t('Allowed')}</Badge>

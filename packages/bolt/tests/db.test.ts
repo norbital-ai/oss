@@ -179,7 +179,7 @@ describe('typed reads', () => {
 	expectTypeOf<Row<'sys_run'>['attempts']>().toEqualTypeOf<number>();
 	expectTypeOf<Row<'sys_message'>['integration']>().toEqualTypeOf<string | null>();
 	expectTypeOf<Row<'sys_session'>['via']>().toEqualTypeOf<
-		'code' | 'invitation' | 'signup' | 'host'
+		'code' | 'invitation' | 'signup' | 'host' | 'anonymous'
 	>();
 	expectTypeOf<Row<'sys_user'>['phone_key']>().toEqualTypeOf<string | null>();
 	expectTypeOf<'id' extends keyof Row<'sys_config'> ? true : false>().toEqualTypeOf<false>();

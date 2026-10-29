@@ -2,7 +2,7 @@ import { formatValue as show, currencyOf, minorDigits, shownKind } from '../kind
 import type { Kind } from '../kinds/kind.js';
 import { Decimal } from '@norbital-ai/std/decimal';
 import type { Values } from '../model/types.js';
-import { isMasked, valueAt } from '../cell/value.js';
+import { valueAt } from '../cell/value.js';
 import { refOf } from '../relations/select.js';
 const INSTANT = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z$/;
 /** Excel reads a CSV as UTF-8 (Chinese included) only behind this byte-order mark. */
@@ -22,7 +22,6 @@ export function csvCell(
 	if (
 		v !== undefined &&
 		v !== null &&
-		!isMasked(v) &&
 		(numericKind?.kind === 'decimal' || numericKind?.kind === 'money')
 	) {
 		const currency = numericKind.kind === 'money' ? currencyOf(numericKind, row) : undefined;

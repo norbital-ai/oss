@@ -1,18 +1,18 @@
 // A model's own-field lock, evaluated in the browser exactly as the host's `evaluate` does for the predicates the
 // declaration language allows. Only the record's own scalar fields: a lock never reaches through a relation.
-import type { Json, Where } from '@norbital-ai/std/kind';
+import { Array as Arr } from 'effect';
+import type { Json, Value, Where } from '@norbital-ai/std/kind';
+import { valueObject } from '../kinds/kind.js';
+import type { Values } from '../model/types.js';
 
-type Row = Readonly<Record<string, unknown>>;
-const value = (row: Row, field: string): Json => {
-	const found = field
+const value = (row: Values, field: string): Value =>
+	field
 		.split('.')
-		.reduce<unknown>(
-			(at, key) => (typeof at === 'object' && at !== null ? (at as Row)[key] : undefined),
-			row
-		);
-	return (found ?? null) as Json;
-};
-const compare = (left: Json, op: string, right: Json): boolean => {
+		.reduce<Value | undefined>((at, key) => (valueObject(at) ? at[key] : undefined), row) ?? null;
+/** A `Where`'s members are JSON: a nested condition is its one object arm. */
+const isWhere = (j: Json): j is Where =>
+	typeof j === 'object' && j !== null && !Arr.isArray<Json>(j);
+const compare = (left: Value, op: string, right: Json): boolean => {
 	switch (op) {
 		case 'eq':
 			return JSON.stringify(left) === JSON.stringify(right);
@@ -43,18 +43,16 @@ const compare = (left: Json, op: string, right: Json): boolean => {
 	}
 };
 /** Whether `row` matches a declared own-field lock (`{}` locks nothing). */
-export function matchesLock(row: Row, where: Where | undefined): boolean {
+export function matchesLock(row: Values, where: Where | undefined): boolean {
 	if (where === undefined) return false;
-	const any = where as Readonly<Record<string, Json>>;
-	if (Array.isArray(any['and']))
-		return (any['and'] as readonly Where[]).every((one) => matchesLock(row, one));
-	if (Array.isArray(any['or']))
-		return (any['or'] as readonly Where[]).some((one) => matchesLock(row, one));
-	if (any['not'] !== undefined) return !matchesLock(row, any['not'] as Where);
-	return Object.entries(any).every(([field, condition]) => {
+	const { and, or, not } = where;
+	if (Arr.isArray<Json>(and)) return and.every((one) => isWhere(one) && matchesLock(row, one));
+	if (Arr.isArray<Json>(or)) return or.some((one) => isWhere(one) && matchesLock(row, one));
+	if (not !== undefined) return !(isWhere(not) && matchesLock(row, not));
+	return Object.entries(where).every(([field, condition]) => {
 		const left = value(row, field);
-		if (condition === null || typeof condition !== 'object' || Array.isArray(condition))
-			return compare(left, 'eq', condition);
-		return Object.entries(condition).every(([op, right]) => compare(left, op, right as Json));
+		return isWhere(condition)
+			? Object.entries(condition).every(([op, right]) => compare(left, op, right))
+			: compare(left, 'eq', condition);
 	});
 }

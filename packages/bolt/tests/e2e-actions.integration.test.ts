@@ -8,9 +8,9 @@ import { PgliteDb } from '../src/node/db/pglite.ts';
 import { TenantDb } from '../src/engine/db/tenant-db.ts';
 import { Live } from '../src/engine/services.ts';
 import { ActReply } from '../src/protocol/schema.ts';
-import { KitInvalid, TestWorkspace } from '../src/test/index.ts';
+import { KitInvalid, TestWorkspace } from '../../bolt-cli/src/test/index.ts';
 import { actReply, qReply, routeFixture } from './support/route-fixture.ts';
-import { program } from '../src/test/guest.ts';
+import { program } from '../../bolt-cli/src/test/guest.ts';
 import { uuidv7 } from '../src/protocol/wire.ts';
 
 const manifest = {
@@ -46,7 +46,7 @@ const manifest = {
 			description: 'Place an order with its note',
 			input: { title: { kind: 'text' } },
 			output: { kind: 'text' },
-			runAs: 'trigger'
+			policies: ['rep']
 		}
 	},
 	connections: {},

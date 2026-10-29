@@ -16,8 +16,7 @@
 	import Carry from './Carry.svelte';
 	import { currentBolt } from './runtime.ts';
 
-	let { model, id, onClose }: { model: string; id: string; onClose: () => void } =
-		$props();
+	let { model, id, onClose }: { model: string; id: string; onClose: () => void } = $props();
 	// the opener's contexts; else the page's (a reload or a link), which may mount after this sheet: it remounts once then
 	// svelte-ignore state_referenced_locally
 	const carried = carriedContexts(model, id);

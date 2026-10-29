@@ -1,13 +1,13 @@
 <!--
 @component
-A bar, line, area or donut chart over an aggregate, a query, a declared query or rows, live while shown: `x` names the category, `y` the
+A bar, line, area or donut chart over an aggregate's buckets, a declared query's rows or rows, live while shown: `x` names the category, `y` the
 numbers (`count`, `sum.amount`).
 @example
 <Chart of={bolt.aggregate('jobs', { count: true, by: 'status', limit: 20 })} x="status" y="count" kind="bar" />
 -->
 <script lang="ts" module>
 	import type { ViewSource } from '../read/source.js';
-	/** `of` is an aggregate, a query, a declared query or rows; `y` names numbers (`count`, `sum.amount`). */
+	/** `of` is an aggregate's page of buckets, a declared query's rows or page, or rows; `y` names numbers (`count`, `sum.amount`). */
 	export type ChartProps = {
 		of: ViewSource;
 		x: string;

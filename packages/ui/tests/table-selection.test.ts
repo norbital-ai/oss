@@ -8,7 +8,6 @@ import { vi } from 'vitest';
 import { viewFixture, browser, type ReadOptions } from './view-fixture.ts';
 import type { TableProps, TableSource } from '../src/table/Table.svelte';
 import type { Value } from '@norbital-ai/std/kind';
-import type { KindsHost } from '../src/kinds/context.ts';
 const { createRawSnippet, flushSync, mount, tick, unmount } = await import('svelte');
 const { default: Harness } = await import('./view-harness.svelte');
 const { default: Table } = await import('../src/table/Table.svelte');

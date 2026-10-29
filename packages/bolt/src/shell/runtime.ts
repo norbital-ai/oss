@@ -10,7 +10,6 @@ import {
 	Option,
 	Queue,
 	Schema,
-	Schedule,
 	Stream
 } from 'effect';
 import { encodeWire, type Wired } from '@norbital-ai/std/wire';
@@ -26,7 +25,8 @@ import { integrationClients, integrationOffers } from '../page/integrations.ts';
 import type { IntegrationSetupEntry } from '../page/integration.ts';
 import { resolveDevice, type DeviceApi } from '../page/device.ts';
 import type { ActOutcome } from '../engine/contracts.ts';
-import { BOLT, HEADERS, PATHS, uuidv7, type PushBody } from '../protocol/wire.ts';
+import type { RunView } from '../engine/runs/index.ts';
+import { BOLT, HEADERS, PATHS, RATE_LIMITED, uuidv7, type PushBody } from '../protocol/wire.ts';
 import {
 	AgentModels,
 	InboxAnswer,
@@ -66,7 +66,7 @@ const requestFailure = (status: number): ShellError =>
 		code: status === 429 ? 'busy' : status >= 500 ? 'unavailable' : 'refused',
 		message:
 			status === 429
-				? 'Too many requests. Wait a moment and try again.'
+				? RATE_LIMITED
 				: status === 503
 					? 'The workspace is temporarily unavailable. Wait a moment and try again.'
 					: status === 502 || status === 504
@@ -113,7 +113,9 @@ export function shellApi(
 		const refused = Schema.decodeUnknownOption(failureSchema)(body);
 		return Option.isNone(refused) || (status >= 500 && refused.value.error.code === 'internal')
 			? requestFailure(status)
-			: new ShellError({ ...refused.value.error, status });
+			: refused.value.error.code === 'rateLimited'
+				? new ShellError({ code: 'rateLimited', message: RATE_LIMITED, status })
+				: new ShellError({ ...refused.value.error, status });
 	};
 	/** A route's `{ value }` (`null` on a 204), decoded once by its answer's Schema. */
 	const call = <A>(
@@ -552,17 +554,18 @@ export function shellBolt(
 		const visitor = boot.visitor;
 		const scoped =
 			options.kiosk === undefined ? options.fetch : kioskFetch(options.kiosk, options.fetch);
+		// a member page's stream is shared with the browser's other tabs (createBolt's default); a kiosk or visitor page,
+		// whose stream answers another audience, opens its own (a kiosk boots again when it changes)
+		const own = (u: string) =>
+			options.openStream?.(u) ?? new EventSource(u, { withCredentials: true });
+		const kiosk = options.kiosk?.() ?? null;
 		const openStream =
-			options.kiosk === undefined
-				? options.openStream
-				: (url: string) => {
-						const k = options.kiosk?.() ?? null;
-						const u =
-							k === null
-								? url
-								: `${url}${url.includes('?') ? '&' : '?'}kiosk=${encodeURIComponent(k)}`;
-						return options.openStream?.(u) ?? new EventSource(u, { withCredentials: true });
-					};
+			kiosk !== null
+				? (url: string) =>
+						own(`${url}${url.includes('?') ? '&' : '?'}kiosk=${encodeURIComponent(kiosk)}`)
+				: visitor !== null
+					? own
+					: options.openStream;
 		const f =
 			visitor === null
 				? scoped
@@ -613,45 +616,45 @@ export function shellBolt(
 			org: { name: boot.workspace.name, logo: boot.workspace.logo ?? null },
 			runs: Object.assign(
 				(automation: string, options: { where?: Json; limit: number }) =>
-					Stream.fromEffectSchedule(
-						Effect.gen(function* () {
-							const conditions = yield* Schema.decodeUnknownEffect(
-								Schema.Record(Schema.String, Schema.Struct({ eq: Schema.Json }))
-							)(options.where ?? {}).pipe(
-								Effect.mapError(
-									() =>
-										new ShellError({
-											code: 'invalid',
-											message: 'runs: where takes { <field>: { eq } } conditions.',
-											status: 400
-										})
-								)
+					Effect.gen(function* () {
+						const conditions = yield* Schema.decodeUnknownEffect(
+							Schema.Record(Schema.String, Schema.Struct({ eq: Schema.Json }))
+						)(options.where ?? {}).pipe(
+							Effect.mapError(
+								() =>
+									new ShellError({
+										code: 'invalid',
+										message: 'runs: where takes { <field>: { eq } } conditions.',
+										status: 400
+									})
+							)
+						);
+						// one run by id is read as itself: the latest `limit` runs need not hold an earlier run (RunStatus)
+						const one = conditions['id']?.eq;
+						// the live `runs` read: a `sys_run` change re-answers it, as the caller may see it (rule 56)
+						return client
+							.observe<{ rows: readonly RunView[] }>({
+								read: {
+									m: 'runs',
+									a: [
+										typeof one === 'string'
+											? { automation, id: one, limit: 1 }
+											: { automation, limit: options.limit }
+									]
+								}
+							})
+							.pipe(
+								Stream.map((answer) => ({
+									rows: answer.rows.filter((row) => {
+										const values: Readonly<Record<string, Wired>> = row;
+										return Object.entries(conditions).every(([field, condition]) =>
+											Equal.equals(encodeWire(values[field] ?? null), encodeWire(condition.eq))
+										);
+									}),
+									next: null
+								}))
 							);
-							// one run by id is read as itself: the latest `limit` runs need not hold an earlier run (RunStatus)
-							const one = conditions['id']?.eq;
-							const rows =
-								typeof one === 'string'
-									? yield* api.run(one).pipe(
-											Effect.map((row) => [row]),
-											Effect.catch((error) =>
-												error.status === 404 || error.status === 403
-													? Effect.succeed([])
-													: Effect.fail(error)
-											)
-										)
-									: yield* api.runs({ automation, limit: options.limit });
-							return {
-								rows: rows.filter((row) => {
-									const values: Readonly<Record<string, Wired>> = row;
-									return Object.entries(conditions).every(([field, condition]) =>
-										Equal.equals(encodeWire(values[field] ?? null), encodeWire(condition.eq))
-									);
-								}),
-								next: null
-							};
-						}),
-						Schedule.spaced('2 seconds')
-					),
+					}).pipe(Stream.unwrap),
 				{ stop: (id: string) => api.stopRun(id) }
 			),
 			/** The agent panel: `open` it (optionally with a request), and the model classes the host offers. */

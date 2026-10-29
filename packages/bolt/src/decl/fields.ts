@@ -47,7 +47,7 @@ type StateSpec = { to?: readonly string[]; edit?: 'all' | 'none' | readonly stri
 /** Options every field kind takes: `optional`, `default`, `unique`, a `label` and `help` message, and `hidden`. */
 export type FieldCommon = {
 	optional?: true;
-	default?: unknown;
+	default?: Json;
 	unique?: true;
 	label?: Msg;
 	help?: Msg;
@@ -357,9 +357,7 @@ type InputOptions<T, Stored> = T extends { kind: 'object'; fields: infer F }
 				: T extends { kind: 'json'; shape: infer S }
 					? { kind: 'json'; shape: ValidInput<S, Stored> } & Common<Json>
 					: T extends { kind: 'id'; of: infer C }
-						? { kind: 'id'; of: ModelName } & (Stored extends true
-								? {}
-								: { where?: IdWhere<C> }) &
+						? { kind: 'id'; of: ModelName } & (Stored extends true ? {} : { where?: IdWhere<C> }) &
 								Common<never>
 						: T extends { kind: 'custom' }
 							? { kind: 'custom'; of: CustomFieldName; many?: true } & Common<DefaultOf<T>>

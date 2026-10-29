@@ -6,7 +6,7 @@ import { Context, Effect, Layer, Result, Schema } from 'effect';
 import type { Json } from '../src/decl/values.ts';
 import { compileAuthority } from '../src/engine/access/authority.ts';
 import type { Authority, GuestOutcome, Invocation } from '../src/engine/contracts.ts';
-import { TestDb } from '../src/test/database.ts';
+import { TestDb } from '../../bolt-cli/src/test/database.ts';
 import { TenantDb } from '../src/engine/db/tenant-db.ts';
 import { decodeProjectedManifest } from '../src/engine/manifest.ts';
 import { act, type WriteEngine } from '../src/engine/write/act.ts';

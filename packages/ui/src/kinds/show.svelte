@@ -6,7 +6,7 @@ Shows any stored or input value by its kind; readonly form values stay copyable.
 	import { Array as Arr } from 'effect';
 	import type { Value, Kind } from './kind.js';
 
-	/** A value and its declared kind, with optional row/relation context for labels and currency; readonly output remains copyable and masked values stay hidden. */
+	/** A value and its declared kind, with optional row/relation context for labels and currency; readonly output remains copyable. */
 	export type ShowProps = {
 		kind: Kind;
 		value: Value | undefined;
@@ -21,7 +21,6 @@ Shows any stored or input value by its kind; readonly form values stay copyable.
 </script>
 
 <script lang="ts">
-	import { Decimal } from '@norbital-ai/std/decimal';
 	import { Schema } from 'effect';
 	import { inputSchema } from '@norbital-ai/std/kind';
 	import { useEnumText } from '../model/context.js';
@@ -33,7 +32,7 @@ Shows any stored or input value by its kind; readonly form values stay copyable.
 	import { cn, uiText } from '../primitives/utils.js';
 	import { fieldEntry } from './builtin/index.js';
 	import { useKinds } from './context.js';
-	import { arcOf, currencyOf, format, isMasked, shownKind } from './kind.js';
+	import { arcOf, currencyOf, format, shownKind, valueObject } from './kind.js';
 	import { KINDS } from './registry.js';
 	import Self from './show.svelte';
 	import StateBadge from './state-badge.svelte';
@@ -74,11 +73,7 @@ Shows any stored or input value by its kind; readonly form values stay copyable.
 					? kind.of.find((arm) => Schema.is(inputSchema(arm))(value))
 					: undefined
 	);
-	const object = $derived(
-		typeof v === 'object' && v !== null && !Arr.isArray<Value>(v) && !(v instanceof Decimal)
-			? v
-			: null
-	);
+	const object = $derived(valueObject(v) ? v : null);
 	const numeric = $derived(KINDS[kind.kind].numeric);
 </script>
 
@@ -98,8 +93,8 @@ Shows any stored or input value by its kind; readonly form values stay copyable.
 	{/if}
 {/snippet}
 
-{#if v === null || isMasked(v) || (readonly && Arr.isArray<Value>(v) && v.length === 0)}
-	<span {id} class={cn('text-muted-foreground', className)}>{isMasked(v) ? '•••' : t('none')}</span>
+{#if v === null || (readonly && Arr.isArray<Value>(v) && v.length === 0)}
+	<span {id} class={cn('text-muted-foreground', className)}>{t('none')}</span>
 {:else if readonly && (relation !== undefined || kind.kind === 'id')}
 	{@const arc = arcOf(v)}
 	<Picker

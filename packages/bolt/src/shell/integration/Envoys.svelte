@@ -3,7 +3,8 @@
 	that channel with the provider credentials. A toast/table row opens the same pairing card for an unpaired channel.
 -->
 <script lang="ts">
-	import { Effect } from 'effect';
+	import { Effect, Option, Schema } from 'effect';
+	import type { Json } from '../../decl/values.ts';
 	import { fork, observeOnce } from '@norbital-ai/ui/effect';
 	import {
 		Button,
@@ -51,13 +52,10 @@
 		provider: string;
 		state: string;
 	};
-	const statusState = (status: unknown) =>
-		typeof status === 'object' &&
-		status !== null &&
-		'state' in status &&
-		typeof status.state === 'string'
-			? status.state
-			: undefined;
+	// `sys_integration.status` is the host's stored JSON: only its `state` is read, decoded here
+	const decodeState = Schema.decodeUnknownOption(Schema.Struct({ state: Schema.String }));
+	const statusState = (status: Json) =>
+		Option.getOrUndefined(Option.map(decodeState(status), (held) => held.state));
 	const offers = observeOnce(() =>
 		api.integrationOffers().pipe(Effect.map((all) => all.filter((o) => o.conversation)))
 	);
@@ -99,9 +97,11 @@
 	});
 	let creating = $state(false);
 	let newName = $state('');
-	let wiring = $state<{ envoy: Pick<Envoy, 'id' | 'name'>; offer: WireOffer; instance: string } | null>(
-		null
-	);
+	let wiring = $state<{
+		envoy: Pick<Envoy, 'id' | 'name'>;
+		offer: WireOffer;
+		instance: string;
+	} | null>(null);
 
 	const created = (envoy: Pick<Envoy, 'id' | 'name'>, integration: string) =>
 		bolt
@@ -112,7 +112,9 @@
 					envoy: envoy.id
 				}
 			])
-			.pipe(Effect.flatMap((outcome) => instanceMade(outcome, t('This connection could not be made.'))));
+			.pipe(
+				Effect.flatMap((outcome) => instanceMade(outcome, t('This connection could not be made.')))
+			);
 
 	const wire = (envoy: Pick<Envoy, 'id' | 'name'>, offer: WireOffer) => {
 		fork(

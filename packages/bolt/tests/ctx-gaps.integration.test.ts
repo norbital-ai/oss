@@ -3,8 +3,8 @@ import { describe, expect, it } from '@effect/vitest';
 import { Context, Effect, Layer, Option, Result, Schema } from 'effect';
 import { actFailure } from '../src/decl/errors.ts';
 import { decodeProjectedManifest } from '../src/engine/manifest.ts';
-import { TestWorkspace } from '../src/test/index.ts';
-import { program } from '../src/test/guest.ts';
+import { TestWorkspace } from '../../bolt-cli/src/test/index.ts';
+import { program } from '../../bolt-cli/src/test/guest.ts';
 import { actReply, qReply, routeFixture } from './support/route-fixture.ts';
 import { uuidv7 } from '../src/protocol/wire.ts';
 const manifest = Result.getOrThrow(
@@ -46,7 +46,7 @@ const manifest = Result.getOrThrow(
 					v: { kind: 'union', of: [{ kind: 'bool' }, { kind: 'number' }, { kind: 'text' }] }
 				},
 				output: { kind: 'text' },
-				runAs: 'trigger'
+				policies: ['rep']
 			}
 		},
 		connections: {},

@@ -4,7 +4,7 @@ Edits date, instant or clock ranges, singly or as an array, at the requested pre
 -->
 <script lang="ts" module>
 	import { Array as Arr } from 'effect';
-	import type { Value } from './kind.js';
+	import { valueObject, type Value } from './kind.js';
 	import type { PeriodInputProps } from './period-input.svelte';
 	/** The datatype, precision and controlled scalar or array ranges of TimeRangeInput. */
 	export type TimeRangeInputProps = Omit<PeriodInputProps, 'of' | 'value' | 'onChange'> & {
@@ -16,7 +16,6 @@ Edits date, instant or clock ranges, singly or as an array, at the requested pre
 </script>
 
 <script lang="ts">
-	import { Decimal } from '@norbital-ai/std/decimal';
 	import PeriodInput from './period-input.svelte';
 	import TimeOfDayRangeInput from './time-of-day-range-input.svelte';
 	import Button from '../primitives/button/button.svelte';
@@ -28,10 +27,7 @@ Edits date, instant or clock ranges, singly or as an array, at the requested pre
 	const disabled = $derived(props.disabled ?? controls.disabled);
 	const list = $derived(Arr.isArray<Value>(value) ? value : null);
 	const clock = (v: Value) => {
-		const r =
-			typeof v === 'object' && v !== null && !Arr.isArray<Value>(v) && !(v instanceof Decimal)
-				? v
-				: {};
+		const r = valueObject(v) ? v : {};
 		return {
 			start: typeof r.start === 'string' ? r.start : null,
 			end: typeof r.end === 'string' ? r.end : null

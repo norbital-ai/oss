@@ -173,6 +173,31 @@ it.live('a section that does not opt in, or opts out of collapsing, stays open',
 	})
 );
 
+it.live('Field readonly keeps one field read-only while its form edits', () =>
+	Effect.gen(function* () {
+		const { target } = yield* browser(() => show());
+		assert.ok(element<HTMLElement>(target, '[data-field=title] input'), 'its neighbour edits');
+		const kind = element<HTMLElement>(target, '[data-field=kind]');
+		assert.ok(kind.hasAttribute('data-readonly'));
+		assert.equal(kind.querySelector('input, [role=combobox], select'), null);
+	})
+);
+
+it.live(
+	'a content section takes its whole height; a fill section keeps its floor while open, never closed',
+	() =>
+		Effect.gen(function* () {
+			const { target } = yield* browser(() => show());
+			assert.equal(section(target, 'Job').style.minHeight, '', 'content: no floor, never shrinks');
+			assert.match(section(target, 'Job').className, /flex-none/);
+			assert.equal(section(target, 'Fixed').style.minHeight, '8rem');
+			assert.equal(section(target, 'Notes').style.minHeight, '', 'collapsed: no floor');
+			header(target, 'Notes').click();
+			flushSync();
+			assert.equal(section(target, 'Notes').style.minHeight, '8rem');
+		})
+);
+
 it.live('a collapsed section with a field error opens itself', () =>
 	Effect.gen(function* () {
 		const { target } = yield* browser(() =>

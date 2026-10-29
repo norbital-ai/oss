@@ -37,7 +37,7 @@ async function show(
 	const { bolt } = await viewFixture({
 		read: () => ({ rows: [JOB], next: null }),
 		get: (_c, id) => (id === 'j1' ? JOB : null),
-		aggregate: () => [{ count: 1 }],
+		aggregate: () => ({ count: 1 }),
 		history: () => []
 	});
 	const target = document.createElement('div');

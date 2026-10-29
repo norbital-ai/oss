@@ -8,7 +8,7 @@ import {
 	type GuestProgram
 } from '../../src/engine/guest/runner.ts';
 import { GuestIsolates } from '../../src/engine/ports.ts';
-import { nodePorts } from '../../src/node/ports.ts';
+import { guests } from './guests.ts';
 import {
 	Activation,
 	Manifest,
@@ -33,8 +33,8 @@ export const fixtureManifest = Result.getOrThrow(
 		},
 		policies: {},
 		automations: {
-			a: { description: 'a', runAs: 'trigger' },
-			b: { description: 'b', runAs: 'trigger' }
+			a: { description: 'a', policies: [] },
+			b: { description: 'b', policies: [] }
 		},
 		integrations: {},
 		teams: {},
@@ -53,9 +53,7 @@ export const guestLayer = (
 	guest: GuestProgram,
 	options: GuestOptions = {},
 	events?: (ids: EventIds) => Effect.Effect<InvocationEvents>,
-	isolates: Layer.Layer<GuestIsolates> = Layer.unwrap(
-		Effect.map(nodePorts(), (ports) => GuestIsolates.fromAbi(ports.guestIsolates))
-	)
+	isolates: Layer.Layer<GuestIsolates> = GuestIsolates.fromAbi(guests)
 ) =>
 	GuestLive.pipe(
 		Layer.provideMerge(isolates),
@@ -68,8 +66,7 @@ export const guestLayer = (
 					epoch: '',
 					release: 'test',
 					publicUrl: 'http://localhost',
-					guest: Option.some(guest),
-					start: []
+					guest: Option.some(guest)
 				}),
 				Layer.succeed(Telemetry, {
 					open: events ?? (() => Effect.succeed({ emit: () => Effect.void }))

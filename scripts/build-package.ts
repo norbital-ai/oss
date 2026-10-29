@@ -19,7 +19,8 @@
  * exit, and only then removes the staging directory, so no `build.staging-*` outlives its build.
  *
  * Steps that read the swapped-in `build/` (bolt's docs corpus and cell bundle) follow `--then`. The whole build holds
- * `.building` (this process's pid), so the realm's overlay never packs a build missing their output.
+ * `.building` (this process's pid, created exclusively: a second build of the package waits for it), so the realm's
+ * overlay never packs a build missing their output and two builds never swap over each other.
  *
  * Usage: `node build-package.ts <command> [...args] [--then <command> [...args]]…`; `{}` in an argument expands to
  * the staging directory.
@@ -31,6 +32,34 @@ import * as NodeServices from '@effect/platform-node/NodeServices';
 import { Console, Effect, FileSystem, Runtime, Schema } from 'effect';
 import { ChildProcess } from 'effect/process';
 import { assertDeclarationEmit } from './lib/declaration-emit.ts';
+
+/** Whether `pid` names a running process. */
+const alive = (pid: number) => {
+	try {
+		process.kill(pid, 0);
+		return true;
+	} catch {
+		return false;
+	}
+};
+/**
+ * `.building` created for this process alone (exclusive create); while another live build holds it, this one waits.
+ * A dead holder's file is taken over.
+ */
+const holdBuilding = Effect.fn('buildPackage.holdBuilding')(function* (file: string) {
+	const fs = yield* FileSystem.FileSystem;
+	for (;;) {
+		const held = yield* fs.writeFileString(file, String(process.pid), { flag: 'wx' }).pipe(
+			Effect.as(true),
+			Effect.orElseSucceed(() => false)
+		);
+		if (held) return;
+		const holder = Number(yield* fs.readFileString(file).pipe(Effect.orElseSucceed(() => '')));
+		if (!Number.isSafeInteger(holder) || holder <= 0 || !alive(holder))
+			yield* fs.remove(file, { force: true }).pipe(Effect.orElseSucceed(() => undefined));
+		else yield* Effect.sleep('250 millis');
+	}
+});
 
 /** A refusal this program reports itself, as one `[build]` message. */
 class BuildFailed extends Schema.TaggedError<BuildFailed>()('BuildFailed', {
@@ -121,7 +150,8 @@ const program = Effect.gen(function* () {
 	const fs = yield* FileSystem.FileSystem;
 	const packageRoot = process.cwd();
 	const building = path.join(packageRoot, '.building');
-	yield* Effect.acquireRelease(fs.writeFileString(building, String(process.pid)), () =>
+	// one build of a package at a time: two concurrent swaps (a watch's and a manual link's) remove each other's output
+	yield* Effect.acquireRelease(holdBuilding(building), () =>
 		Effect.orDie(fs.remove(building, { force: true }))
 	);
 	const output = path.join(packageRoot, 'build');

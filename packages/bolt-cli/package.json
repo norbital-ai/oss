@@ -1,0 +1,69 @@
+{
+	"name": "@norbital-ai/bolt-cli",
+	"version": "0.0.6",
+	"description": "Bolt's tooling: the compiler, the `bolt` command (check, build, test, dev, seed, templates) and the test kit.",
+	"type": "module",
+	"sideEffects": false,
+	"license": "AGPL-3.0-only",
+	"exports": {
+		"./test": {
+			"types": "./build/test/index.d.ts",
+			"default": "./build/test/index.js"
+		},
+		"./test/browser": {
+			"types": "./build/test/browser.d.ts",
+			"default": "./build/test/browser.js"
+		},
+		"./guests": {
+			"types": "./build/guests.d.ts",
+			"default": "./build/guests.js"
+		}
+	},
+	"bin": {
+		"bolt": "./build/cli/main.js"
+	},
+	"files": [
+		"build",
+		"package.json"
+	],
+	"scripts": {
+		"build": "node ../../scripts/build-package.ts tsc -p tsconfig.json --outDir {}",
+		"lint": "tsc -p tsconfig.json --noEmit && tsgo -p tests/tsconfig.json --noEmit",
+		"prepack": "pnpm exec turbo run build --filter=@norbital-ai/bolt-cli"
+	},
+	"dependencies": {
+		"@effect/platform-node": "catalog:",
+		"@effect/vitest": "catalog:",
+		"@electric-sql/pglite": "^0.5.12",
+		"@iconify-json/lucide": "1.2.147",
+		"@iconify/svelte": "catalog:",
+		"@norbital-ai/bolt": "workspace:*",
+		"@norbital-ai/std": "workspace:*",
+		"@norbital-ai/store": "workspace:*",
+		"@norbital-ai/ui": "workspace:*",
+		"@sveltejs/vite-plugin-svelte": "^7.3.1",
+		"@tailwindcss/vite": "4.3.3",
+		"tailwindcss": "4.3.3",
+		"terser": "5.51.2",
+		"typescript": "catalog:",
+		"vite": "catalog:"
+	},
+	"peerDependencies": {
+		"effect": "catalog:",
+		"svelte": "^5.0.0"
+	},
+	"devDependencies": {
+		"@types/node": "^26.6.5",
+		"effect": "catalog:",
+		"svelte": "catalog:"
+	},
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/norbital-ai/oss.git",
+		"directory": "packages/bolt-cli"
+	},
+	"publishConfig": {
+		"access": "public",
+		"provenance": true
+	}
+}

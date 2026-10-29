@@ -27,6 +27,13 @@ export default model('orders', {
 		'orders.lines': { fields: ['product', 'quantity', 'net'] },
 		'orders.lines.product': { fields: ['code', 'name'] }
 	},
+	// a named output beside `default`: what the warehouse reads
+	outputs: {
+		logistics: {
+			orders: { fields: ['number', 'status'] },
+			'orders.lines': { fields: ['product', 'quantity'] }
+		}
+	},
 	create: {
 		columns: { orders: ['customer', 'notes'], 'orders.lines': ['product', 'quantity', 'net'] },
 		transform: function* (rows, ctx) {
@@ -35,7 +42,8 @@ export default model('orders', {
 			});
 			const blocked = new Set(customers.rows.filter((c) => c.blocked).map((c) => c.id));
 			const at = rows.findIndex((r) => blocked.has(r.customer));
-			if (at >= 0) return yield* ctx.refuse('This customer is blocked.', { field: 'customer', row: at });
+			if (at >= 0)
+				return yield* ctx.refuse('This customer is blocked.', { field: 'customer', row: at });
 			return rows;
 		}
 	},
@@ -59,14 +67,17 @@ they need and transform them with a pure `src/lib` helper on their own side.
 
 ## Layer maps
 
-`read`, `create` and `update` are layer maps: a flat object keyed by path in the read or write
+`read`, each output, `create` and `update` are layer maps: a flat object keyed by path in the read or write
 tree. `'orders'` is the root layer, `'orders.customer'` and `'orders.lines'` the layers under it,
 `'orders.lines.product'` one deeper; at most five levels. Each segment is a relation of the layer
 above (a ref, an inverse many-relation or an owned child), and each layer's parent is declared too
 (`bolt check`: `model/layer`). `read: 'all'` is `{ <model>: { fields: 'all' } }`.
 
-- `read` declares what a read may return. Without `read` a model is no read root; it can still
-  store data and be a layer of another model's `read`.
+- `read` declares the `default` output; `outputs` declares named ones (never `default`), each a fixed
+  layer map (`'all'` allowed). Every read names one output (`output`, `default` when absent) and its
+  layer keys are that output's layers. Policies grant outputs and filter their rows; they never change
+  a shape. Without `read` a model is no read root; it can still store data and be a layer of another
+  model's `read`.
 - `create.columns` / `update.columns` declare the writable columns per layer. A write layer is a
   many-relation (the child rows); it never lists the key that ties a child to its parent.
   `create.filled` names columns the transform fills when the writer omits them.
@@ -94,8 +105,23 @@ Declare application-layer immutability once, on the model or the field:
 Do not reimplement either rule in `update.transform`, a delete check, or a template form: the host
 and the generated record UI already enforce them.
 
-A business operation is a separately declared automation with explicit input. This started-only
-run preserves the starter's authority:
+Work that follows a committed write is the model's `effect`, one generator per verb:
+
+```ts
+effect: {
+	created: function* (rows, ctx) {},              // the committed rows
+	updated: function* (changes, ctx) {},           // [{ before, after }], a stored field changed
+	deleted: function* (rows, ctx) {}               // the stored rows
+}
+```
+
+Each runs after the commit, once per committed batch, as the durable run `<model>.effect.<verb>`
+(retried, shown in the Command center's runs). It runs as the writer and holds no policy; its rows
+are the root fields of the writer's output of the model (`default` when it holds it, else the first
+named output it holds). See [APIs](./apis.md) for depth and authority.
+
+A business operation is a separately declared automation with explicit input. The system identity
+runs it with its declared `policies`; `ctx.run.trigger` records who started it:
 
 ```ts
 // src/automation/+orders_duplicate.automation.ts
@@ -106,19 +132,30 @@ import { Refusal } from '@norbital-ai/bolt/errors';
 export default automation('orders_duplicate', {
 	description: 'Copy an order as a new draft.',
 	input: { order: { kind: 'id', of: 'orders' } },
-	runAs: 'trigger',
+	policies: ['order_duplicating'],
 	run: function* ({ order: id }, ctx) {
 		const { orders } = yield* ctx.query({ orders: { where: { id: { eq: id } }, limit: 1 } });
 		const order = orders.rows[0];
-		if (order === undefined)
+		const by = ctx.run.trigger;
+		// only the starter's own orders: the run's authority is its policies, so the body checks the starter
+		if (
+			order === undefined ||
+			by.kind !== 'person' ||
+			by.actor.kind !== 'member' ||
+			order.owner !== by.actor.id
+		)
 			return yield* Effect.fail(new Refusal({ message: 'This order is unavailable.' }));
-		yield* ctx.act('orders.create', [{ customer: order.customer, notes: order.notes }]);
+		yield* ctx.act('orders.create', [
+			{ customer: order.customer, notes: order.notes, owner: order.owner }
+		]);
 	}
 });
 ```
 
-The starter's policy needs `automations: ['orders_duplicate']` plus the order read and create
-grants the run uses. A page starts it with `bolt.start('orders_duplicate', { order: id })` and
+`order_duplicating` grants the order read and create the run uses. Its `requestor.*` operands name
+the system identity, so a rule about the starter is code over `ctx.run.trigger`, and a ref the run
+writes is set explicitly (a `requestor.id` default does not apply). A person or the agent starts it by hand
+only through a held policy's `automations: ['orders_duplicate']`; code that schedules it needs none. A page starts it with `bolt.start('orders_duplicate', { order: id })` and
 shows its run status. Several independent writes belong in one `ctx.act.many(...)` call when
 they must commit atomically; dependent parent/child creates nest the child rows in the parent's
 write layers. For dependent reads and writes, `ctx.transaction(function* (tx) { ... })` uses one
@@ -177,6 +214,6 @@ read budget.
 | SQL statements | O(N / 1000), set-based writes              |
 | Transactions   | 1                                          |
 
-An import is chunked at 1000 rows with a fresh 2 s CPU budget per invocation; every chunk remains
+An import is chunked at 1000 rows with a fresh 3 s CPU budget per invocation; every chunk remains
 inside the import's one transaction. A refusal rolls back the whole file. History, approvals,
 roll-ups and live invalidation follow those same statements.

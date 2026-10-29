@@ -15,7 +15,7 @@ import { actorRef } from '../src/engine/write/commit.ts';
 import { filesRoutes } from '../src/protocol/files.ts';
 import { ImagePreviewsLive } from '../src/protocol/image-previews.ts';
 import { RateLimits } from '../src/protocol/http.ts';
-import { KitInvalid, TestWorkspace } from '../src/test/index.ts';
+import { KitInvalid, TestWorkspace } from '../../bolt-cli/src/test/index.ts';
 import { filesOf } from '../src/engine/conversations/store.ts';
 
 const present = <A>(value: A | null | undefined): A => {
@@ -41,187 +41,185 @@ const manifest = {
 	needs: []
 } satisfies EngineManifest;
 
-it.live(
-	'message attachments download for the conversation, not for every member',
-	() =>
-		Effect.scoped(
-			Effect.gen(function* () {
-				const context = yield* Layer.build(TestWorkspace.layer({ manifest }));
-				const t = Context.get(context, TestWorkspace),
-					agents = Context.get(context, Agents),
-					route = yield* routeFixture(context);
-				yield* t.db.write({
-					text: `INSERT INTO sys_user (id, email, name, kind, admin) VALUES ('root', 'r@x.test', 'Root', 'staff', true), ('ann', 'a@x.test', 'Ann', 'staff', false),
+it.live('message attachments download for the conversation, not for every member', () =>
+	Effect.scoped(
+		Effect.gen(function* () {
+			const context = yield* Layer.build(TestWorkspace.layer({ manifest }));
+			const t = Context.get(context, TestWorkspace),
+				agents = Context.get(context, Agents),
+				route = yield* routeFixture(context);
+			yield* t.db.write({
+				text: `INSERT INTO sys_user (id, email, name, kind, admin) VALUES ('root', 'r@x.test', 'Root', 'staff', true), ('ann', 'a@x.test', 'Ann', 'staff', false),
 		('bob', 'b@x.test', 'Bob', 'staff', false), ('eve', 'e@x.test', 'Eve', 'external', false)`,
-					params: []
-				});
-				const who: { [id: string]: Authority } = {};
-				for (const id of ['root', 'ann', 'bob', 'eve']) {
-					const authority = yield* new Authorities(manifest, 'test').member(t.db, id);
-					if (authority === null) throw new Error(`Missing ${id}`);
-					who[id] = authority;
-				}
-				const call = (
-					as: string,
-					method: string,
-					rest: string,
-					body?: Uint8Array<ArrayBuffer>,
-					mime = 'image/png',
-					name = 'pump.png'
-				) =>
-					route.handle(
-						who[as] ?? null,
-						new Request(`http://cell/__bolt/files/${rest}`, {
-							method,
-							headers: {
-								'x-as': as,
-								'content-type': mime,
-								'Idempotency-Key': randomUUID(),
-								'content-disposition': `attachment; filename*=UTF-8''${name}`
-							},
-							...(body === undefined ? {} : { body })
-						})
-					);
-				const File = Schema.Struct({
-					id: Schema.String,
-					name: Schema.String,
-					mime: Schema.String,
-					bytes: Schema.Number
-				});
-				const up = (as: string) =>
-					call(as, 'PUT', 'sys_conversation.inputs', new Uint8Array([1, 2, 3])).pipe(
-						Effect.flatMap(json),
-						Effect.flatMap(Schema.decodeUnknownEffect(File))
-					);
-				const status = (as: string, id: string) =>
-					call(as, 'GET', id).pipe(Effect.map((response) => response.status));
-
-				expect(
-					Option.isNone(
-						yield* filesRoutes(HttpServerRequest.fromWeb(new Request('http://cell/__bolt/q'))).pipe(
-							Effect.provide(ImagePreviewsLive),
-							Effect.provide(RateLimits.layer),
-							Effect.provide(context)
-						)
-					)
-				).toBe(true);
-				expect(yield* status('nobody', randomUUID())).toBe(401);
-				const panel = yield* up('ann');
-				expect(panel).toMatchObject({ name: 'pump.png', mime: 'image/png', bytes: 3 });
-				const down = yield* call('ann', 'GET', panel.id);
-				expect(down.status).toBe(200); // the uploader, before the message is sent
-				expect([
-					...new Uint8Array(
-						yield* Effect.tryPromise({
-							try: () => down.arrayBuffer(),
-							catch: (error) => new KitInvalid({ message: String(error) })
-						})
-					)
-				]).toEqual([1, 2, 3]);
-				expect(yield* status('bob', panel.id)).toBe(404);
-				const heic = yield* Schema.decodeUnknownEffect(File)(
-					yield* json(
-						yield* call(
-							'ann',
-							'PUT',
-							'sys_conversation.inputs',
-							new Uint8Array(readFileSync(new URL('./fixtures/files/photo.heic', import.meta.url))),
-							'image/heic',
-							'photo.heic'
-						)
-					)
+				params: []
+			});
+			const who: { [id: string]: Authority } = {};
+			for (const id of ['root', 'ann', 'bob', 'eve']) {
+				const authority = yield* new Authorities(manifest, 'test').member(t.db, id);
+				if (authority === null) throw new Error(`Missing ${id}`);
+				who[id] = authority;
+			}
+			const call = (
+				as: string,
+				method: string,
+				rest: string,
+				body?: Uint8Array<ArrayBuffer>,
+				mime = 'image/png',
+				name = 'pump.png'
+			) =>
+				route.handle(
+					who[as] ?? null,
+					new Request(`http://cell/__bolt/files/${rest}`, {
+						method,
+						headers: {
+							'x-as': as,
+							'content-type': mime,
+							'Idempotency-Key': randomUUID(),
+							'content-disposition': `attachment; filename*=UTF-8''${name}`
+						},
+						...(body === undefined ? {} : { body })
+					})
 				);
-				const files: Effect.Success<typeof Files> = Context.get(context, Files);
-				const get = vi.spyOn(files, 'get');
-				yield* Effect.addFinalizer(() => Effect.sync(() => get.mockRestore()));
-				const preview = yield* call('ann', 'GET', `${heic.id}?preview=512`);
-				expect(preview.headers.get('content-type')).toBe('image/jpeg');
-				expect(preview.headers.get('cache-control')).toBe('private, max-age=3600');
-				expect(get).toHaveBeenCalledTimes(1);
-				expect([
-					...new Uint8Array(
-						yield* Effect.tryPromise({
-							try: () => preview.arrayBuffer(),
-							catch: (error) => new KitInvalid({ message: String(error) })
-						})
-					).subarray(0, 3)
-				]).toEqual([0xff, 0xd8, 0xff]);
-				expect(yield* status('bob', `${heic.id}?preview=512`)).toBe(404);
-				expect(get).toHaveBeenCalledTimes(1);
-				expect(yield* status('ann', `${heic.id}?preview=512`)).toBe(200);
-				expect(get).toHaveBeenCalledTimes(1);
-				expect(yield* status('ann', `${heic.id}?preview=65`)).toBe(400);
-				expect(yield* status('bob', `${heic.id}?preview=65`)).toBe(404);
-				expect(get).toHaveBeenCalledTimes(1);
-				const original = yield* call('ann', 'GET', heic.id);
-				expect(original.headers.get('content-type')).toBe('image/heic');
-				expect(
-					new Uint8Array(
-						yield* Effect.tryPromise({
-							try: () => original.arrayBuffer(),
-							catch: (error) => new KitInvalid({ message: String(error) })
-						})
-					)
-				).toEqual(
-					new Uint8Array(readFileSync(new URL('./fixtures/files/photo.heic', import.meta.url)))
+			const File = Schema.Struct({
+				id: Schema.String,
+				name: Schema.String,
+				mime: Schema.String,
+				bytes: Schema.Number
+			});
+			const up = (as: string) =>
+				call(as, 'PUT', 'sys_conversation.inputs', new Uint8Array([1, 2, 3])).pipe(
+					Effect.flatMap(json),
+					Effect.flatMap(Schema.decodeUnknownEffect(File))
 				);
-				expect(get).toHaveBeenCalledTimes(2);
+			const status = (as: string, id: string) =>
+				call(as, 'GET', id).pipe(Effect.map((response) => response.status));
 
-				// an in-app conversation: its owner, a member who posted in it, and an administrator
-				const conversation = yield* agents.start({ owner: 'ann' });
-				yield* agents.post({
-					conversation,
-					as: { member: 'ann' },
-					text: 'see this',
-					files: [panel]
-				});
-				const [row] = present(
-					(yield* t.db.read([
-						{
-							text: `SELECT content, ${filesOf('m')} AS files FROM sys_message m WHERE conversation = $1`,
-							params: [conversation]
-						}
-					]))[0]
-				).rows;
-				expect(row).toMatchObject({ content: { text: 'see this' }, files: [{ id: panel.id }] }); // one copy: the files column
-				expect(
-					(yield* Schema.decodeUnknownEffect(Schema.Record(Schema.String, Schema.Json))(
-						row?.['content']
-					))['files']
-				).toBeUndefined();
-				expect(yield* status('bob', panel.id)).toBe(404);
-				expect(yield* status('root', panel.id)).toBe(200);
-				yield* agents.post({ conversation, as: { member: 'bob' }, text: 'on it' });
-				expect(yield* status('bob', panel.id)).toBe(200);
+			expect(
+				Option.isNone(
+					yield* filesRoutes(HttpServerRequest.fromWeb(new Request('http://cell/__bolt/q'))).pipe(
+						Effect.provide(ImagePreviewsLive),
+						Effect.provide(RateLimits.layer),
+						Effect.provide(context)
+					)
+				)
+			).toBe(true);
+			expect(yield* status('nobody', randomUUID())).toBe(401);
+			const panel = yield* up('ann');
+			expect(panel).toMatchObject({ name: 'pump.png', mime: 'image/png', bytes: 3 });
+			const down = yield* call('ann', 'GET', panel.id);
+			expect(down.status).toBe(200); // the uploader, before the message is sent
+			expect([
+				...new Uint8Array(
+					yield* Effect.tryPromise({
+						try: () => down.arrayBuffer(),
+						catch: (error) => new KitInvalid({ message: String(error) })
+					})
+				)
+			]).toEqual([1, 2, 3]);
+			expect(yield* status('bob', panel.id)).toBe(404);
+			const heic = yield* Schema.decodeUnknownEffect(File)(
+				yield* json(
+					yield* call(
+						'ann',
+						'PUT',
+						'sys_conversation.inputs',
+						new Uint8Array(readFileSync(new URL('./fixtures/files/photo.heic', import.meta.url))),
+						'image/heic',
+						'photo.heic'
+					)
+				)
+			);
+			const files: Effect.Success<typeof Files> = Context.get(context, Files);
+			const get = vi.spyOn(files, 'get');
+			yield* Effect.addFinalizer(() => Effect.sync(() => get.mockRestore()));
+			const preview = yield* call('ann', 'GET', `${heic.id}?preview=512`);
+			expect(preview.headers.get('content-type')).toBe('image/jpeg');
+			expect(preview.headers.get('cache-control')).toBe('private, max-age=3600');
+			expect(get).toHaveBeenCalledTimes(1);
+			expect([
+				...new Uint8Array(
+					yield* Effect.tryPromise({
+						try: () => preview.arrayBuffer(),
+						catch: (error) => new KitInvalid({ message: String(error) })
+					})
+				).subarray(0, 3)
+			]).toEqual([0xff, 0xd8, 0xff]);
+			expect(yield* status('bob', `${heic.id}?preview=512`)).toBe(404);
+			expect(get).toHaveBeenCalledTimes(1);
+			expect(yield* status('ann', `${heic.id}?preview=512`)).toBe(200);
+			expect(get).toHaveBeenCalledTimes(1);
+			expect(yield* status('ann', `${heic.id}?preview=65`)).toBe(400);
+			expect(yield* status('bob', `${heic.id}?preview=65`)).toBe(404);
+			expect(get).toHaveBeenCalledTimes(1);
+			const original = yield* call('ann', 'GET', heic.id);
+			expect(original.headers.get('content-type')).toBe('image/heic');
+			expect(
+				new Uint8Array(
+					yield* Effect.tryPromise({
+						try: () => original.arrayBuffer(),
+						catch: (error) => new KitInvalid({ message: String(error) })
+					})
+				)
+			).toEqual(
+				new Uint8Array(readFileSync(new URL('./fixtures/files/photo.heic', import.meta.url)))
+			);
+			expect(get).toHaveBeenCalledTimes(2);
 
-				// an instance's thread of no public envoy: only a participant reads it (a staff member too is refused), an external member as its linked sender
-				const inbound = yield* up('root');
-				yield* t.db.write({
-					// as an ingest stores it: among the conversation's inputs, naming its message
-					text: `INSERT INTO sys_conversation (id, integration, inputs) VALUES ('wa-1', 'whatsapp', $1::jsonb)`,
-					params: [
-						JSON.stringify([
-							{ id: inbound.id, name: 'pump.png', mime: 'image/png', bytes: 3, message: 'm-1' }
-						])
-					]
-				});
-				yield* t.db.write({
-					text: `INSERT INTO sys_message (id, conversation, integration, text) VALUES ('m-1', 'wa-1', 'whatsapp', 'photo')`,
-					params: []
-				});
-				expect(yield* status('ann', inbound.id)).toBe(404);
-				expect(yield* status('eve', inbound.id)).toBe(404);
-				yield* t.db.write({
-					text: `INSERT INTO sys_message (id, conversation, integration, text, "as") VALUES ('m-2', 'wa-1', 'whatsapp', 'mine', $1::jsonb)`,
-					params: [
-						JSON.stringify({
-							envoy: { name: 'desk', instance: 'whatsapp', sender: '+65', member: 'eve', dm: true }
-						})
-					]
-				});
-				expect(yield* status('eve', inbound.id)).toBe(200);
-			})
-		)
+			// an in-app conversation: its owner, a member who posted in it, and an administrator
+			const conversation = yield* agents.start({ owner: 'ann' });
+			yield* agents.post({
+				conversation,
+				as: { member: 'ann' },
+				text: 'see this',
+				files: [panel]
+			});
+			const [row] = present(
+				(yield* t.db.read([
+					{
+						text: `SELECT content, ${filesOf('m')} AS files FROM sys_message m WHERE conversation = $1`,
+						params: [conversation]
+					}
+				]))[0]
+			).rows;
+			expect(row).toMatchObject({ content: { text: 'see this' }, files: [{ id: panel.id }] }); // one copy: the files column
+			expect(
+				(yield* Schema.decodeUnknownEffect(Schema.Record(Schema.String, Schema.Json))(
+					row?.['content']
+				))['files']
+			).toBeUndefined();
+			expect(yield* status('bob', panel.id)).toBe(404);
+			expect(yield* status('root', panel.id)).toBe(200);
+			yield* agents.post({ conversation, as: { member: 'bob' }, text: 'on it' });
+			expect(yield* status('bob', panel.id)).toBe(200);
+
+			// an instance's thread of no public envoy: only a participant reads it (a staff member too is refused), an external member as its linked sender
+			const inbound = yield* up('root');
+			yield* t.db.write({
+				// as an ingest stores it: among the conversation's inputs, naming its message
+				text: `INSERT INTO sys_conversation (id, integration, inputs) VALUES ('wa-1', 'whatsapp', $1::jsonb)`,
+				params: [
+					JSON.stringify([
+						{ id: inbound.id, name: 'pump.png', mime: 'image/png', bytes: 3, message: 'm-1' }
+					])
+				]
+			});
+			yield* t.db.write({
+				text: `INSERT INTO sys_message (id, conversation, integration, text) VALUES ('m-1', 'wa-1', 'whatsapp', 'photo')`,
+				params: []
+			});
+			expect(yield* status('ann', inbound.id)).toBe(404);
+			expect(yield* status('eve', inbound.id)).toBe(404);
+			yield* t.db.write({
+				text: `INSERT INTO sys_message (id, conversation, integration, text, "as") VALUES ('m-2', 'wa-1', 'whatsapp', 'mine', $1::jsonb)`,
+				params: [
+					JSON.stringify({
+						envoy: { name: 'desk', instance: 'whatsapp', sender: '+65', member: 'eve', dm: true }
+					})
+				]
+			});
+			expect(yield* status('eve', inbound.id)).toBe(200);
+		})
+	)
 );
 
 it.live(
@@ -242,7 +240,10 @@ it.live(
 						}
 					},
 					exposures: {
-						photos: { read: { photos: { fields: 'all' } }, create: { columns: { photos: ['name', 'photo'] } } }
+						photos: {
+							read: { photos: { fields: 'all' } },
+							create: { columns: { photos: ['name', 'photo'] } }
+						}
 					},
 					needs: []
 				} satisfies EngineManifest;
@@ -312,7 +313,7 @@ it.live(
 					automations: {
 						handover: {
 							description: 'Produces handover files',
-							runAs: 'trigger',
+							policies: ['controller'],
 							output: {
 								kind: 'object',
 								fields: {
@@ -325,7 +326,11 @@ it.live(
 								}
 							}
 						},
-						other_handover: { description: 'Another file owner', runAs: 'trigger', output: file }
+						other_handover: {
+							description: 'Another file owner',
+							policies: ['controller'],
+							output: file
+						}
 					},
 					needs: []
 				} satisfies EngineManifest;
@@ -407,4 +412,57 @@ it.live(
 				}
 			})
 		)
+);
+
+it.live("a file sync's upload keeps its dotted field: `<model>.$import.<sync>`", () =>
+	Effect.scoped(
+		Effect.gen(function* () {
+			const synced = {
+				...manifest,
+				models: {
+					documents: {
+						description: 'Documents',
+						label: 'title',
+						fields: { title: { kind: 'text' } }
+					}
+				},
+				exposures: {
+					documents: {
+						read: { documents: { fields: 'all' } },
+						syncs: { sheet: { with: 'file', parser: ['csv'], schema: { title: { kind: 'text' } } } }
+					}
+				}
+			} satisfies EngineManifest;
+			const context = yield* Layer.build(TestWorkspace.layer({ manifest: synced }));
+			const t = Context.get(context, TestWorkspace),
+				route = yield* routeFixture(context);
+			yield* t.db.write({
+				text: `INSERT INTO sys_user (id, email, name, kind, admin) VALUES ('root', 'r@x.test', 'Root', 'staff', true)`,
+				params: []
+			});
+			const root = present(yield* new Authorities(synced, 'test').member(t.db, 'root'));
+			const response = yield* route.handle(
+				root,
+				new Request('http://cell/__bolt/files/documents.%24import.sheet', {
+					method: 'PUT',
+					headers: {
+						'content-type': 'text/csv',
+						'Idempotency-Key': randomUUID(),
+						'content-disposition': "attachment; filename*=UTF-8''rows.csv"
+					},
+					body: new TextEncoder().encode('title\nA\n')
+				})
+			);
+			expect(response.status).toBe(200);
+			const { id } = yield* Schema.decodeUnknownEffect(Schema.Struct({ id: Schema.String }))(
+				yield* json(response)
+			);
+			expect(
+				yield* t.db.value(Schema.String, {
+					text: 'SELECT field FROM sys_file WHERE id = $1',
+					params: [id]
+				})
+			).toBe('documents.$import.sheet');
+		})
+	)
 );

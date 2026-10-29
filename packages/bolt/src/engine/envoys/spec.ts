@@ -41,11 +41,7 @@ export const runtimeEnvoy = Effect.fn('Envoys.runtimeSpec')(function* (
 });
 
 /** An envoy's spec as admission, triage and turns read it: the release's source default, else its tenant `sys_envoy` row. */
-export const envoySpec = (
-	m: Pick<EngineManifest, 'envoys'>,
-	db: TenantDbShape,
-	id: string
-) =>
+export const envoySpec = (m: Pick<EngineManifest, 'envoys'>, db: TenantDbShape, id: string) =>
 	Object.hasOwn(m.envoys, id)
 		? Effect.succeed<EnvoySpec | undefined>(m.envoys[id])
 		: runtimeEnvoy(db, id);

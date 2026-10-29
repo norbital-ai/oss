@@ -3,8 +3,6 @@
 Edits a date period (inclusive) or an instant period (closed-open), both ends picked in `precision`.
 -->
 <script lang="ts" module>
-	import { Decimal } from '@norbital-ai/std/decimal';
-	import { Array as Arr } from 'effect';
 	import type { Value } from './kind.js';
 	import type { Precision } from './precision.js';
 
@@ -41,7 +39,7 @@ Edits a date period (inclusive) or an instant period (closed-open), both ends pi
 	import { dateText, dateValue, fromDay, localDay, snapHour } from './date-input.svelte';
 	import * as Popover from '../primitives/popover/index.js';
 	import { CONTROL } from './classes.js';
-	import { format } from './kind.js';
+	import { format, valueObject } from './kind.js';
 	import { datePrecision, unitEnd, unitNext, unitStart, type DatePrecision } from './precision.js';
 	import Show from './show.svelte';
 	import UnitPicker from './unit-picker.svelte';
@@ -72,9 +70,7 @@ Edits a date period (inclusive) or an instant period (closed-open), both ends pi
 	const [a, b] = $derived(of === 'date' ? ['from', 'to'] : ['start', 'end']);
 	const v = $derived.by(() => {
 		const x = value;
-		return typeof x === 'object' && x !== null && !Arr.isArray<Value>(x) && !(x instanceof Decimal)
-			? x
-			: {};
+		return valueObject(x) ? x : {};
 	});
 	const str = (x: Value | undefined) => (typeof x === 'string' ? x : null);
 	const unit = $derived(

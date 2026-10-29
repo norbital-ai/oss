@@ -435,7 +435,9 @@ const guarded = (
 			body = request.body;
 		for (let hop = 0; hop <= limits.redirects; hop++) {
 			if (options.loopbackOnly === true && !isLoopbackName(target.hostname.replace(/^\[|\]$/g, '')))
-				return yield* Effect.fail(invalid(`This host reaches loopback only, not ${target.hostname}.`));
+				return yield* Effect.fail(
+					invalid(`This host reaches loopback only, not ${target.hostname}.`)
+				);
 			const addresses = yield* publicAddresses(target, options.resolve, options.allowLoopback);
 			const response = yield* send(
 				target,
@@ -482,10 +484,9 @@ export const httpPort: HttpPort = {
 /** Outbound HTTP to this machine only (the test kit): every hop to another host is refused. */
 export const loopbackHttpPort: HttpPort = {
 	fetch: (request, limits, signal) =>
-		Effect.runPromise(
-			guarded(request, limits, { allowLoopback: true, loopbackOnly: true }),
-			{ signal }
-		)
+		Effect.runPromise(guarded(request, limits, { allowLoopback: true, loopbackOnly: true }), {
+			signal
+		})
 };
 
 /** The provider's fetch ABI runs guarded work on its already supplied scoped host runner. */

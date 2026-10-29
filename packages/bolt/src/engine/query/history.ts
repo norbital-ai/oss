@@ -1,5 +1,6 @@
 import { Effect } from 'effect';
-// Committed history is scoped and masked by current reader authority; pending proposals append no revisions.
+// Committed history is scoped by current reader authority and shows the fields of the output the read names; pending
+// proposals append no revisions.
 import type { Json } from '../../decl/values.ts';
 import type { Bindings, Reader, Sql } from '../contracts.ts';
 import type { Pred } from '@norbital-ai/store';
@@ -7,14 +8,13 @@ import type { ReadIR } from '../../protocol/reads.ts';
 import type { EngineManifest } from '../manifest.ts';
 import type { TenantDbShape as TenantDb } from '../db/tenant-db.ts';
 import { catalogOf } from '../access/pred.ts';
-import { readScope } from '../access/authority.ts';
-import { exposureOf, exposedField, q } from '@norbital-ai/store';
+import { grantedArms, readScope } from '../access/authority.ts';
+import { catalogFor, exposureOf, exposedField, q } from '@norbital-ai/store';
 import { grantSql } from '@norbital-ai/store';
 import { resolverOf } from './reader.ts';
 import { fromStore } from '../../protocol/errors.ts';
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const ISO = `'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'`;
-const MASKED: Json = { $masked: true };
 const isTrue = (p: Pred) => p.t === 'const' && p.value;
 export const readHistory = Effect.fn('Bolt.readHistory')(function* (
 	db: TenantDb,
@@ -29,7 +29,11 @@ export const readHistory = Effect.fn('Bolt.readHistory')(function* (
 	bindings: Bindings
 ) {
 	const cat = catalogOf(m),
-		c = yield* exposureOf(cat, read.model).pipe(Effect.mapError(fromStore)),
+		output = read.output ?? 'default',
+		c = yield* catalogFor(cat, read.model, output).pipe(
+			Effect.flatMap((view) => exposureOf(view, read.model)),
+			Effect.mapError(fromStore)
+		),
 		id = read.id;
 	if (!UUID.test(id)) return read.full === true ? null : [];
 	const at = read.at;
@@ -61,7 +65,8 @@ export const readHistory = Effect.fn('Bolt.readHistory')(function* (
 	];
 	const auth = reader.as === 'caller' && !reader.authority.admin ? reader.authority : null;
 	const self: Pred = { t: 'cmp', field: 'id', op: 'eq', arg: { _tag: 'Lit', value: id } };
-	const masks = Object.entries(auth?.models[read.model]?.masks[read.model] ?? {});
+	// the revisions show the output the read names: the caller must hold it, and its history scope bounds the rows
+	const granted = auth === null ? undefined : grantedArms(auth, read.model, output);
 	const scope = auth === null ? undefined : readScope(auth, read.model, 'history');
 	if (auth !== null) {
 		// grant predicates, so compiled raw; a requestor variable in them resolves against the caller
@@ -72,34 +77,17 @@ export const readHistory = Effect.fn('Bolt.readHistory')(function* (
 				read.model,
 				{ t: 'and', of: [scope ?? { t: 'const', value: false }, self] },
 				{ resolve: resolverOf(bindings, auth), tz: bindings.tz }
-			).pipe(Effect.mapError(fromStore)),
-			...(yield* Effect.forEach(masks, ([, p]) =>
-				grantSql(
-					cat,
-					read.model,
-					{ t: 'and', of: [p, self] },
-					{
-						resolve: resolverOf(bindings, auth),
-						tz: bindings.tz
-					}
-				).pipe(Effect.mapError(fromStore))
-			))
+			).pipe(Effect.mapError(fromStore))
 		);
 	}
 	const res = yield* db.read(statements);
-	let hidden = new Set<string>();
 	if (auth !== null) {
 		const exists = res[1]!.rows.length > 0;
-		// a live row needs the history scope; a deleted one, an unconditional read grant (rule 17)
-		const visible = exists
-			? res[2]!.rows.length > 0
-			: (auth.models[read.model]?.read[read.model] ?? []).some((a) =>
-					isTrue(a.where)
-				);
+		// a live row needs the history scope; a deleted one, an unconditional grant of the output (rule 17)
+		const visible =
+			granted !== undefined &&
+			(exists ? res[2]!.rows.length > 0 : granted.some((a) => isTrue(a.where)));
 		if (!visible) return read.full === true ? null : [];
-		hidden = new Set(
-			masks.filter((_, i) => !exists || res[3 + i]!.rows.length === 0).map(([f]) => f)
-		);
 	}
 	const revisions = res[0]!.rows.map((row) => {
 		const actor = typeof row['actor'] === 'string' ? row['actor'] : null;
@@ -111,7 +99,6 @@ export const readHistory = Effect.fn('Bolt.readHistory')(function* (
 				}
 			)
 				.filter(([f]) => reader.as === 'workspace' || exposedField(c, f))
-				.map(([f, v]) => [f, hidden.has(f) ? MASKED : v])
 		);
 		return {
 			revision: row['revision'] ?? null,

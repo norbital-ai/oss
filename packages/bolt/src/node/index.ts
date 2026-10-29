@@ -1,22 +1,27 @@
-// `@norbital-ai/bolt/node`: the Node side of a Bolt host — cells, the same-graph hosts' ports and their cron clock.
+// `@norbital-ai/bolt/node`: the Node side of a Bolt host — the same-graph hosts' ports, their cron clock, and what a
+// kernel's own cells and isolates reuse.
 // Node-only; nothing here enters the cell bundle.
-export { bootCell, currentUnit, type Cell, type CellOptions } from './cell-host.ts';
+// a kernel's own cells speak the membrane; every guest runner serves the prelude's hooks
+export { Answer, CELL_ABI_VERSION, membrane, type Message } from '../protocol/membrane.ts';
+export {
+	assetHook,
+	digest,
+	moduleScript,
+	randomStream,
+	type GuestHooks,
+	type ImportDeclaration
+} from './guest-hooks.ts';
 export { nodePorts, type NodePorts, type NodePortsOptions } from './ports.ts';
 export { cronClock } from './cron-clock.ts';
 export {
 	call,
+	HOST_FILE,
 	hostFileOf,
 	loadHost,
 	serveRelease,
 	type Generation,
 	type ServeOptions
 } from './host.ts';
-export {
-	guestIsolates,
-	type GuestIsolateCounts,
-	type GuestIsolatesOptions,
-	type NodeGuestIsolates
-} from './guest-isolates.ts';
 export {
 	bundler,
 	BUNDLER,
@@ -59,8 +64,6 @@ export {
 } from './net.ts';
 export { loopbackTcpPort, tcpPort } from './tcp.ts';
 
-export { prepareMigrations } from '../compiler/migrations.ts';
-export { HOST_FILE } from '../compiler/artifact/index.ts';
 export {
 	checkWorkspace,
 	filesystem,

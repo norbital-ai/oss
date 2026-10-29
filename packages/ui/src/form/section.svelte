@@ -4,6 +4,12 @@ One titled section of a form or record body: a heading row (title, an optional â
 A titled section collapses from its heading; the body is hidden, never unmounted, so every field in it still saves.
 Closed, the heading shows `summary` so nothing important is out of sight. The viewer's open state is remembered per
 model and section; a section holding a field with an error opens itself.
+A closed section is its heading alone. Open, `size` says how it takes height in a bounded column (a record body, a
+`Stack` in a sheet): `content` (the default) is always its whole content, and the column scrolls when they do not
+fit; `fill` (a table, a long list) shares the height left, scrolling inside itself, never below `minHeight` (default
+its content or 16rem, whichever is less). Nothing scrolls sideways.
+@example
+<Section name="basis" title="Evidence basis" size="fill"><Table of="evidence" /></Section>
 -->
 <script lang="ts" module>
 	import { getContext, type Snippet } from 'svelte';
@@ -28,6 +34,10 @@ model and section; a section holding a field with an error opens itself.
 		trailing?: Snippet;
 		/** Controls that act on the section, at the end of the title row. */
 		actions?: Snippet;
+		/** `content` (default): its whole content; `fill`: shares the column's height left and scrolls inside itself. */
+		size?: 'content' | 'fill';
+		/** A `fill` section's floor (a CSS length; default its content or 16rem, whichever is less). */
+		minHeight?: string;
 		class?: string;
 		children: Snippet;
 	};
@@ -70,7 +80,7 @@ model and section; a section holding a field with an error opens itself.
 	import { fork } from '../effect/index.js';
 	import { contentMotion } from './content-motion.js';
 	import Icon from '@iconify/svelte';
-	import { setContext, tick } from 'svelte';
+	import { flushSync, setContext } from 'svelte';
 	import Tooltip from '../primitives/tooltip/tooltip.svelte';
 	import { cn, useControls } from '../primitives/utils.js';
 	import { useModelKey } from '../model/context.js';
@@ -86,6 +96,8 @@ model and section; a section holding a field with an error opens itself.
 		summary,
 		trailing,
 		actions,
+		size = 'content',
+		minHeight,
 		class: className,
 		children
 	}: SectionProps = $props();
@@ -120,6 +132,13 @@ model and section; a section holding a field with an error opens itself.
 	);
 	const shown = $derived(!canCollapse || open || invalid);
 	let body = $state<HTMLElement | null>(null);
+	// the natural height an open `fill` section shrinks no further than (with the default floor)
+	let headingHeight = $state(0),
+		contentHeight = $state(0);
+	const fill = $derived(size === 'fill' && shown);
+	const floor = $derived(
+		minHeight ?? `min(${headingHeight + contentHeight + (title === undefined ? 0 : 16)}px, 16rem)`
+	);
 	/** The body still showing while it shrinks closed: `aria-expanded` follows the click, `hidden` the motion's end. */
 	let closing = $state(false);
 	const moving = (target: HTMLElement | null): target is HTMLElement =>
@@ -130,29 +149,37 @@ model and section; a section holding a field with an error opens itself.
 		!window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 	/** The body's height and opacity from one end to the other; a paused timeline ends on time regardless. */
 	function slide(target: HTMLElement, opening: boolean, done: () => void) {
+		// closing starts from the height shown, which a bounded column may hold below the content's
+		const full = opening ? target.scrollHeight : target.offsetHeight;
+		// the body's own resize motion (`contentMotion`) sits out the toggle: two height animations fight
+		target.dataset['moving'] = '';
 		const ends = [
 			{ height: '0px', opacity: 0, overflow: 'clip' },
-			{ height: `${target.scrollHeight}px`, opacity: 1, overflow: 'clip' }
+			{ height: `${full}px`, opacity: 1, overflow: 'clip' }
 		];
 		const motion = target.animate(opening ? ends : [...ends].reverse(), {
-			duration: 180,
+			duration: 200,
 			easing: 'cubic-bezier(.2,.8,.2,1)'
 		});
+		let ended = false;
 		const end = () => {
+			if (ended) return;
+			ended = true;
+			delete target.dataset['moving'];
 			motion.cancel();
 			done();
 		};
 		motion.onfinish = end;
-		setTimeout(end, 240);
+		setTimeout(end, 260);
 	}
 	function toggle() {
 		const opening = !shown;
 		open = opening;
 		if (opening) {
 			closing = false;
-			void tick().then(() => {
-				if (moving(body)) slide(body, true, () => {});
-			});
+			// shown and animated in the same frame: the body never paints at full height before growing
+			flushSync();
+			if (moving(body)) slide(body, true, () => {});
 		} else if (moving(body)) {
 			closing = true;
 			slide(body, false, () => (closing = false));
@@ -167,19 +194,21 @@ model and section; a section holding a field with an error opens itself.
 	}
 </script>
 
+<!-- in a bounded column: closed or `content`, its own height; open `fill`, the height left, down to `floor` -->
 <section
 	class={cn(
-		'grid min-w-0',
-		editing ? 'gap-4' : 'gap-3',
+		'flex min-w-0 flex-col',
+		fill ? 'min-h-0 flex-[1_1_0%]' : 'flex-none',
 		!first && (editing ? 'border-t pt-4' : 'border-t pt-6'),
 		className
 	)}
+	style:min-height={fill ? floor : undefined}
 	data-section={name ?? title}
 	data-open={shown}
 >
 	{#if title !== undefined}
-		<div class="flex min-w-0 items-center gap-1.5">
-			<h3 class="min-w-0 flex-1 text-base font-semibold">
+		<div class="flex min-w-0 shrink-0 items-center gap-1.5" bind:clientHeight={headingHeight}>
+			<h3 class="min-w-0 flex-1 text-sm font-bold">
 				{#if canCollapse}
 					<button
 						type="button"
@@ -233,8 +262,28 @@ model and section; a section holding a field with an error opens itself.
 		</div>
 	{/if}
 	<!-- hidden, never unmounted: a collapsed field still belongs to the form's draft and its save -->
-	<div bind:this={body} id={`${id}-body`} hidden={!shown && !closing} use:contentMotion>
-		<div class={cn('grid min-w-0', editing ? 'gap-4' : 'gap-3')}>
+	<!-- the body scrolls inside the section's share; the inset keeps focus rings clear of its edge; under a chevron it
+	     starts where the title does (the chevron's size-4 and gap-1.5) -->
+	<div
+		bind:this={body}
+		id={`${id}-body`}
+		hidden={!shown && !closing}
+		class={cn(
+			'-m-1 min-h-0 min-w-0 overflow-x-clip p-1',
+			fill && 'overflow-y-auto',
+			canCollapse && title !== undefined && 'pl-[calc(1.375rem+0.25rem)]'
+		)}
+		use:contentMotion
+	>
+		<div
+			class={cn(
+				'grid min-w-0 [overflow-wrap:anywhere]',
+				editing ? 'gap-4' : 'gap-3',
+				// the space under the heading moves with the body, so closing ends without a jump
+				title !== undefined && (editing ? 'pt-4' : 'pt-3')
+			)}
+			bind:clientHeight={contentHeight}
+		>
 			{@render children()}
 		</div>
 	</div>

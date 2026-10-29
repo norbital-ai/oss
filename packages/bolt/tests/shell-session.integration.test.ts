@@ -11,7 +11,7 @@ import { authorityOf, HostIdentity } from '../src/shell/host.ts';
 import * as HttpServerRequest from 'effect/http/HttpServerRequest';
 import { COOKIES, SHELL } from '../src/shell/nav.ts';
 import { RateLimits } from '../src/protocol/http.ts';
-import { TestWorkspace } from '../src/test/index.ts';
+import { TestWorkspace } from '../../bolt-cli/src/test/index.ts';
 import { storedFileUrl } from '../src/page/file-ref.ts';
 
 const manifest = Result.getOrThrow(

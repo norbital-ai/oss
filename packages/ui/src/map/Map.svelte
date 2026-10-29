@@ -1,11 +1,5 @@
 <script lang="ts" module>
-	import type {
-		ModelKey,
-		FieldOf,
-		RecordFieldOf,
-		RowOf,
-		WhereOf
-	} from '../model/types.js';
+	import type { ModelKey, FieldOf, RecordFieldOf, RowOf, WhereOf } from '../model/types.js';
 	import type { Toolbar } from '../model/ViewToolbar.svelte';
 	/** Extra marks drawn over the rows: a labelled point, and optionally a dashed line to it from `from`. */
 	export type MapOverlay = {
@@ -35,14 +29,13 @@
 <script lang="ts" generics="C extends ModelKey">
 	import { Effect } from 'effect';
 	import { attach } from '../effect/index.js';
-	import { formatValue as show } from '../kinds/kind.js';
+	import { formatValue as show, isPoint } from '../kinds/kind.js';
 	// Needs no provider (P19): OpenStreetMap tiles unless the host overrides them; a tile failure still lists the rows.
 	import type { Map as LeafletMap, LayerGroup } from 'leaflet';
 	import { DEFAULT_BASEMAP, useKinds } from '../kinds/context.js';
 	import { openRecord } from '../record/navigation.js';
 	import { useBolt } from '../client/context.js';
 	import { and } from '../filter/scope.js';
-	import { isRow, nextOf, rowsOf } from '../read/results.js';
 	import { label as labelOf, msg } from '../text/messages.js';
 	import { listRequest, refOf, unref } from '../relations/select.js';
 	import { pageOf, requestJson } from '../read/request.js';
@@ -102,15 +95,15 @@
 	);
 	const points = $derived(
 		page.kind === 'ready'
-			? unref(host.catalog, of, label === undefined ? [] : [label], rowsOf(page.value)).flatMap(
+			? unref(host.catalog, of, label === undefined ? [] : [label], page.value.rows).flatMap(
 					(r) => {
 						const p = r[at];
-						return isRow(p) && typeof p['lat'] === 'number' && typeof p['lng'] === 'number'
+						return isPoint(p)
 							? [
 									{
 										id: r.id,
-										lat: p['lat'],
-										lng: p['lng'],
+										lat: p.lat,
+										lng: p.lng,
 										text: label ? (refOf(r, label)?.text ?? show(r[label] ?? null)) : ''
 									}
 								]
@@ -240,7 +233,7 @@
 			{#if failed}<ul class="text-sm">
 					{#each points as p (p.id)}<li>{p.text || p.id}: {p.lat}, {p.lng}</li>{/each}
 				</ul>{/if}
-			{#if nextOf(value) !== null}<p class="text-muted-foreground text-xs">
+			{#if value.next !== null}<p class="text-muted-foreground text-xs">
 					{msg(bolt, 'map.limit', 'Showing the first {n}', { n: limit })}
 				</p>{/if}
 		</div>

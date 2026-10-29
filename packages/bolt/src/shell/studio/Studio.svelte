@@ -1,20 +1,20 @@
 <!--
-	Workspace Studio (§5.10, §7) over the host's Studio port: a title, the Workbench / Changes / Live segmented tabs, and
+	Workspace Studio (§5.10, §7) over the host's Studio port: a title, the Workbench / Changes / Versions segmented tabs, and
 	under each a navigator rail (a bottom sheet on a phone) beside the main pane. The viewer works on one change at a
 	time: a named set of edits from live with its own preview on a copy-on-write fork of live's data. Workbench is the
 	source tree, a toolbar (the change, how far behind live, status and actions) and the editor over the last build's
 	diagnosis; it edits source as drafts and saves them over the head it read (the first save with no change open opens
 	one). A save commits; Preview builds and serves the latest commit. Changes lists every change and reviews one: files before and
 	after (L-BOLT-528), manifest and logs, with Merge — the only way to ship, run in the background: git's 3-way merge, a
-	build of the merged tree with its checks, then the cutover, recorded as a Version. Live lists the Versions and rolls
-	live back to one, source and data together (the confirm names what is lost when its schema differs); the state it
-	leaves is kept as an undo Version, so a rollback is undone the same way. That is neither the operator's database
-	restore nor a record's restore. Each build's stored log and diagnostics open from the rail. Under it are the runtime
-	log (held by the host's log store) and Operations, the environments the host routes. Build log lines, a moved head, a
-	changed change and phase frames (diagnose → copy → preview → merge, L-BOLT-530) arrive pushed. Each tab is a deep link
-	(`/studio/<tab>`: `mrs` opens Changes, `runtime`, `operations` and `usage` open Live's views). Audit rules
-	(`/studio/rules`) is the organization's rule set, saved over its revision, and an audit of the head under it. Studio
-	is an administrator's (`admin`); the host refuses anyone else regardless.
+	build of the merged tree with its checks, then the cutover, recorded as a Version. Versions is the build and release
+	timeline and rolls live back to one, source and data together (the confirm names what is lost when its schema
+	differs); the state it leaves is kept as an undo Version, so a rollback is undone the same way. That is neither the
+	operator's database restore nor a record's restore. What happens across the workspace (resource use, runtime logs,
+	the audit trail, runs) is the command center's. Build log lines, a moved head, a changed change and phase frames
+	(diagnose → copy → preview → merge, L-BOLT-530) arrive pushed. Each tab is a deep link (`/studio/<tab>`; `/studio` is
+	the workbench). Audit rules (`/studio/rules`) is the organization's rule set, saved over its revision, and an audit of the
+	head under it. Studio is a Studio host's only (Colony); an administrator's (`admin`), and the host refuses anyone else
+	regardless.
 -->
 <script lang="ts">
 	import { attach, fork, observeOnce } from '@norbital-ai/ui/effect';
@@ -27,17 +27,16 @@
 		Dialog,
 		Icon,
 		Input,
+		ReleaseTimeline,
 		Sheet,
 		Spinner,
 		Tabs,
-		type ConfirmOptions,
-		type WorkspaceOperation
+		type ConfirmOptions
 	} from '@norbital-ai/ui';
 	import { Inline, AppHeader, INSET_X_CLASS, Scroll, Stack } from '@norbital-ai/ui/layout';
 	import type { Snippet } from 'svelte';
 	import DiagnosisPane from './DiagnosisPane.svelte';
 	import AuditRules from './AuditRules.svelte';
-	import LivePane from './LivePane.svelte';
 	import ChangePane from './ChangePane.svelte';
 	import SourceEditor from './SourceEditor.svelte';
 	import SourceTree from './SourceTree.svelte';
@@ -99,13 +98,7 @@
 		onTab?.(next);
 	}
 	const root = $derived(
-		active === 'changes' || active === 'mrs'
-			? 'changes'
-			: active === 'live' || active === 'runtime' || active === 'operations' || active === 'usage'
-				? 'live'
-				: active === 'rules'
-					? 'rules'
-					: 'workbench'
+		active === 'changes' || active === 'versions' || active === 'rules' ? active : 'workbench'
 	);
 	// Audit rules: read when the tab opens; a save answers the stored set, Try and Audit the head's findings
 	const readRules = observeOnce(() => (root === 'rules' && admin ? api.studioAuditRules() : null));
@@ -249,22 +242,6 @@
 				)
 			)
 	);
-	const monitorRun = (operation: WorkspaceOperation) =>
-		Effect.suspend(() => {
-			const own = 'id' in operation && operation.id === view?.change;
-			if (
-				Object.keys(drafts).length > 0 &&
-				((own &&
-					(operation.op === 'preview' ||
-						operation.op === 'change.merge' ||
-						operation.op === 'change.close')) ||
-					operation.op === 'change.open')
-			)
-				return Effect.fail(
-					new Error(t('Save or discard your unsaved source changes before changing this workflow.'))
-				);
-			return run(operation);
-		});
 	/** The save dialog: asks what the change does, prefilled with a suggestion; `null` when cancelled. */
 	// the field starts empty: the suggestion is its placeholder and what an empty answer saves
 	let describing = $state<{
@@ -562,9 +539,24 @@
 		if (value === text) delete drafts[file];
 		else drafts[file] = value;
 	}
+	/** The new-change dialog: asks what the change is for; `null` when cancelled. */
+	let naming = $state<{ title: string; answer: (title: string | null) => void } | null>(null);
+	const askTitle = () =>
+		Effect.callback<string | null>((resume) => {
+			naming = {
+				title: '',
+				answer: (title) => {
+					naming = null;
+					resume(Effect.succeed(title));
+				}
+			};
+			return Effect.sync(() => {
+				naming = null;
+			});
+		});
 	/** A new change: unsaved drafts go to the change they were made on, or, with none open, into the new one. */
 	const newChange = Effect.fn('Studio.newChange')(function* () {
-		const title = prompt(t('What is this change for?'))?.trim();
+		const title = (yield* askTitle())?.trim();
 		if (!title) return;
 		if (view?.change !== undefined && !(yield* save())) return;
 		if (!(yield* run({ op: 'change.open', title }))) return;
@@ -684,24 +676,28 @@
 
 <!-- the navigator rail beside the pane (a bottom sheet on a phone) and the pane -->
 {#snippet frame(navigator: Snippet, main: Snippet, top?: Snippet)}
-	<Stack gap="none" fill class="min-h-0 {INSET_X_CLASS}">
-		{@render top?.()}
-		<Inline align="stretch" gap="none" grow class="min-h-0 min-w-0">
-			<aside
-				class="hidden w-72 shrink-0 border-r border-border/60 bg-card md:block"
-				aria-label={t('Workspace navigator')}
-			>
-				<Stack gap="none" fill class="min-h-0">{@render navigator()}</Stack>
-			</aside>
-			<div class="relative h-full min-h-0 min-w-0 flex-1 overflow-hidden bg-background">
-				{@render main()}
-			</div>
-		</Inline>
+	<Stack gap="none" size="fill" class="pb-4 sm:pb-6 {INSET_X_CLASS}">
+		<div
+			class="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-lg border border-border/60"
+		>
+			{@render top?.()}
+			<Inline align="stretch" gap="none" size="fill" class="min-w-0">
+				<aside
+					class="hidden w-72 shrink-0 border-r border-border/60 bg-card md:block"
+					aria-label={t('Workspace navigator')}
+				>
+					<Stack gap="none" size="fill">{@render navigator()}</Stack>
+				</aside>
+				<div class="relative h-full min-h-0 min-w-0 flex-1 overflow-hidden bg-background">
+					{@render main()}
+				</div>
+			</Inline>
+		</div>
 	</Stack>
 {/snippet}
 
 {#snippet railHeading(icon: string, label: string)}
-	<Inline gap="xs" shrink={false} class="border-b border-border/60 px-3 py-1.5">
+	<Inline gap="xs" class="border-b border-border/60 px-3 py-1.5">
 		<Icon name={icon} class="size-3.5 text-muted-foreground" /><span
 			class="text-overline text-foreground">{label}</span
 		>
@@ -716,7 +712,7 @@
 
 {#snippet changesNav()}
 	{@render railHeading('lucide:git-pull-request', t('Changes'))}
-	<Scroll name={t('Changes')} layout="stack" gap="xs" grow class="min-h-0 p-2">
+	<Scroll name={t('Changes')} layout="stack" gap="xs" size="fill" class="p-2">
 		<Button
 			size="sm"
 			variant="ghost"
@@ -787,7 +783,6 @@
 		{#if (view.conflicts?.length ?? 0) > 0}
 			<Inline
 				gap="xs"
-				shrink={false}
 				role="alert"
 				class="border-b border-destructive/30 bg-destructive/10 px-2 py-1 text-destructive"
 			>
@@ -803,7 +798,7 @@
 	{#if view !== null}
 		{#if showPreview}
 			{@const p = view.previewOf}
-			<Stack gap="none" fill class="min-h-0">
+			<Stack gap="none" size="fill">
 				{#if view.preview === null || p?.stale === true}
 					{@const waiting = building}
 					{@const failed =
@@ -811,7 +806,7 @@
 						view?.builds?.some(
 							(build) => build.commit === view?.commit && build.status === 'failed'
 						)}
-					<Stack gap="sm" align="center" justify="center" fill class="text-muted-foreground">
+					<Stack gap="sm" align="center" justify="center" size="fill" class="text-muted-foreground">
 						<Icon
 							name={waiting
 								? 'lucide:loader-2'
@@ -891,7 +886,7 @@
 				{/if}
 			</Stack>
 		{:else}
-			<Stack gap="none" fill class="min-h-0">
+			<Stack gap="none" size="fill">
 				<div class="min-h-0 flex-1">
 					<SourceEditor
 						path={file}
@@ -934,7 +929,6 @@
 					openFile(p);
 					diff = true;
 				}}
-				onnew={() => fork(newChange())}
 				onmerge={(c) => fork(merge(c))}
 				run={(op) => (op.op === 'change.open' && 'id' in op ? workOn(op.id) : run(op))}
 				{t}
@@ -943,23 +937,25 @@
 	{/if}
 {/snippet}
 
-{#snippet liveMain()}
+{#snippet versionsMain()}
 	{#if view !== null}
-		<LivePane
-			{api}
-			{view}
-			{admin}
-			busy={locked}
-			sub={active === 'usage' ? 'usage' : active === 'runtime' ? 'runtime' : 'operations'}
-			onsub={go}
-			onoperate={monitorRun}
-			{t}
-		/>
+		<Scroll name={t('Versions')} class="h-full">
+			<div class="max-w-3xl py-4">
+				<ReleaseTimeline
+					builds={view.builds ?? []}
+					releases={view.releases}
+					changes={changeSets}
+					onRestore={admin ? (commit) => fork(rollback(commit)) : undefined}
+					busy={locked}
+					{t}
+				/>
+			</div>
+		</Scroll>
 	{/if}
 {/snippet}
 
 {#snippet loadingPane()}
-	<Stack gap="sm" align="center" justify="center" fill class="text-muted-foreground">
+	<Stack gap="sm" align="center" justify="center" size="fill" class="text-muted-foreground">
 		{#if error === null}<Icon name="lucide:loader-2" class="size-6 animate-spin opacity-40" />
 			<p class="text-xs">{t('Loading…')}</p>
 		{:else}<p role="alert" class="text-sm text-destructive">{error}</p>{/if}
@@ -974,7 +970,11 @@
 			changesNav,
 			changesMain
 		)}{/if}{/snippet}
-{#snippet liveTab()}{#if view === null}{@render loadingPane()}{:else}{@render liveMain()}{/if}{/snippet}
+{#snippet versionsTab()}{#if view === null}{@render loadingPane()}{:else}<div
+			class="h-full min-h-0 {INSET_X_CLASS}"
+		>
+			{@render versionsMain()}
+		</div>{/if}{/snippet}
 {#snippet rulesTab()}
 	{#if view === null}{@render loadingPane()}{:else}<AuditRules
 			rules={shownRules}
@@ -994,7 +994,7 @@
 {/snippet}
 
 {#snippet browse()}
-	{#if root !== 'live'}
+	{#if root === 'workbench' || root === 'changes'}
 		<Button
 			variant="ghost"
 			size="sm"
@@ -1007,7 +1007,7 @@
 	{/if}
 {/snippet}
 
-<Stack gap="none" grow class="min-h-0 bg-background">
+<Stack gap="none" size="fill" class="bg-background">
 	<AppHeader
 		src={studioBanner}
 		icon="lucide:code-xml"
@@ -1094,13 +1094,14 @@
 	{/if}
 	<Tabs
 		value={root}
-		onValueChange={(v) => go(v === 'changes' || v === 'live' || v === 'rules' ? v : 'workbench')}
+		onValueChange={(v) =>
+			go(v === 'changes' || v === 'versions' || v === 'rules' ? v : 'workbench')}
 		trailing={browse}
 		class="mt-4 min-h-0 flex-1 gap-3 [&>div:first-child]:px-4 sm:[&>div:first-child]:px-6"
 		tabs={[
 			{ name: 'workbench', title: t('Workbench'), body: workbenchTab, keepAlive: true as const },
 			{ name: 'changes', title: t('Changes'), body: changesTab },
-			{ name: 'live', title: t('Live'), body: liveTab },
+			{ name: 'versions', title: t('Versions'), body: versionsTab },
 			...(admin ? [{ name: 'rules', title: t('Audit rules'), body: rulesTab }] : [])
 		]}
 	/>
@@ -1108,7 +1109,7 @@
 
 {#if view !== null}
 	<Sheet bind:open={browsing} title={t('Workspace navigator')}>
-		<Stack gap="none" fill class="min-h-0">
+		<Stack gap="none" size="fill">
 			{#if root === 'workbench'}{@render sourceNav()}{:else if root === 'changes'}{@render changesNav()}{/if}
 		</Stack>
 	</Sheet>
@@ -1193,6 +1194,46 @@
 						>{t('Cancel')}</Button
 					>
 					<Button type="submit">{t('Save')}</Button>
+				</Dialog.Footer>
+			</form>
+		{/if}
+	</Dialog.Content>
+</Dialog.Root>
+
+<Dialog.Root
+	open={naming !== null}
+	onOpenChange={(open) => {
+		if (!open) naming?.answer(null);
+	}}
+>
+	<Dialog.Content class="max-w-md">
+		{#if naming !== null}
+			{@const asking = naming}
+			<Dialog.Header>
+				<Dialog.Title>{t('New change')}</Dialog.Title>
+				<Dialog.Description
+					>{t(
+						'A change is a named set of edits from live, with its own preview on a copy of live’s data.'
+					)}</Dialog.Description
+				>
+			</Dialog.Header>
+			<form
+				class="flex flex-col gap-3"
+				onsubmit={(event) => {
+					event.preventDefault();
+					asking.answer(asking.title.trim() || null);
+				}}
+			>
+				<div class="flex flex-col gap-1.5">
+					<label for="studio-change-title" class="text-label">{t('What is this change for?')}</label
+					>
+					<Input id="studio-change-title" maxlength={200} required bind:value={asking.title} />
+				</div>
+				<Dialog.Footer>
+					<Button type="button" variant="ghost" onclick={() => asking.answer(null)}
+						>{t('Cancel')}</Button
+					>
+					<Button type="submit" disabled={asking.title.trim() === ''}>{t('Create')}</Button>
 				</Dialog.Footer>
 			</form>
 		{/if}

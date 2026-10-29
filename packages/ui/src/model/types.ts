@@ -3,7 +3,8 @@ import type { Json } from '@norbital-ai/std/wire';
 import type { OrderBy } from '../filter/filter.js';
 export type Values = { readonly [field: string]: Value };
 export type Row = Values & { readonly id: string };
-export type Page<T = Row> = { rows: readonly T[]; next: string | null };
+/** A page of rows and its cursor; a read request root's page also counts every row it matches (`total`). */
+export type Page<T = Row> = { rows: readonly T[]; next: string | null; total?: number };
 /**
  * The workspace's names as its views see them. Empty here, so ui stays workspace-agnostic: `@norbital-ai/bolt` fills
  * `names` from the workspace's generated index, and `of`, `columns`, `values`, `record` and ids are then checked per

@@ -1,20 +1,26 @@
 <!--
 @component
-A full-height region with optional `top` and `bottom` chrome and a body between them, optionally centred: an empty state, a sign-in card, a page with a footer bar.
+A region with optional `top` and `bottom` chrome and a body between them, optionally centred: an empty state, a sign-in card, a page with a footer bar. `size="fill"` takes the space left in its parent, pinning `top` and `bottom` and handing the body the height between (a `fill` child of the body takes it).
 -->
 <script lang="ts" module>
 	import type { Snippet } from 'svelte';
-	import type { LayoutAttributes, LayoutElement, LayoutGap, LayoutPad } from './layout.shared.js';
+	import type {
+		LayoutAttributes,
+		LayoutElement,
+		LayoutGap,
+		LayoutPad,
+		LayoutSize
+	} from './layout.shared.js';
 
 	/** The props of `Cover`. */
 	export interface CoverProps extends LayoutAttributes {
 		as?: LayoutElement;
 		gap?: LayoutGap;
 		pad?: LayoutPad;
-		/** Take the remaining space along the parent's main axis. */
-		grow?: boolean;
-		/** Allow this region to shrink when its parent is constrained. */
-		shrink?: boolean;
+		/** `content` (default): its own height; `fill`: the space left in its parent, down to `minHeight`. */
+		size?: LayoutSize;
+		/** A `fill` cover's floor (a CSS length; default 0). */
+		minHeight?: string;
 		/**
 		 * Centre the body's content in the space between `top` and `bottom` — Every Layout's Cover
 		 * principal: an empty state, a sign-in card, a splash. Without it the body is a scroll owner's
@@ -29,15 +35,15 @@ A full-height region with optional `top` and `bottom` chrome and a body between 
 
 <script lang="ts">
 	import { cn } from '../primitives/utils.js';
-	import { GAP_CLASSES, PAD_CLASSES } from './layout.shared.js';
+	import { GAP_CLASSES, PAD_CLASSES, SIZE_CLASSES } from './layout.shared.js';
 
 	let {
 		as = 'div',
 		ref = $bindable(null),
 		gap = 'md',
 		pad = 'none',
-		grow = false,
-		shrink = true,
+		size = 'content',
+		minHeight,
 		center = false,
 		top,
 		bottom,
@@ -69,15 +75,15 @@ A full-height region with optional `top` and `bottom` chrome and a body between 
 	this={as}
 	bind:this={ref}
 	class={cn(
-		'grid h-full max-h-full min-h-0 min-w-0 overflow-clip',
+		'grid min-w-0 overflow-clip',
 		GAP_CLASSES[gap],
 		PAD_CLASSES[pad],
-		grow && 'flex-1',
-		!shrink && 'shrink-0',
+		SIZE_CLASSES[size],
 		// The caller's class last: floors, layers and colours it names win; layout itself is props (doctor-enforced).
 		className
 	)}
 	style={`grid-template-rows: ${rowTemplate};${styleProp ? ` ${styleProp}` : ''}`}
+	style:min-height={size === 'fill' ? minHeight : undefined}
 	data-layout="cover"
 	{...attributes}
 >

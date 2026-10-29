@@ -11,7 +11,7 @@ export {
 export { drivers, type DriversOptions } from './drivers.ts';
 export { sqlServerDatabase } from './database.ts';
 export { publicWeb, readPublicPage, type PublicPage } from './web.ts';
-export { extractDocumentText } from './documents.ts';
+export { extractDocumentText, renderDocumentPages } from './documents.ts';
 export { apns, push } from './push.ts';
 // this host's own facility adapters, for another host to reuse
 export { resendMail, type ResendMail } from './resend.ts';

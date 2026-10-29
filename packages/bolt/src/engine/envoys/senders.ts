@@ -1,7 +1,7 @@
 import { Effect } from 'effect';
 // Who an envoy sender is (rule 57, §4.4): the active member whose registered handle is the sender's, by the handle the
 // definition's conversation carries — `sys_user.email` for `email`, `sys_user.phone` for `phone` (WhatsApp, a custom chat
-// that names phones), `sys_user.telegram` for `telegram`. An administrator sets them (Settings → People). A conversation
+// that names phones), `sys_user.telegram` for `telegram`. An administrator sets them (the command center's People). A conversation
 // with no handle (Slack, Discord, WeChat) names no member: every sender is unknown.
 import type { HandleKind } from '../../decl/runtime/integration.ts';
 import type { TenantDbShape as TenantDb } from '../db/tenant-db.ts';

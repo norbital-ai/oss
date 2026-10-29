@@ -6,7 +6,7 @@ import { STUDIO_PHASES, STUDIO_ROLES } from '../../protocol/schema.ts';
 import type { Authority } from '../../engine/contracts.ts';
 import type { MigrationImpact } from '../../protocol/migration-impact.ts';
 import type { EngineManifest } from '../../engine/manifest.ts';
-import type { CheckDiagnostic } from '../../compiler/check/index.ts';
+import type { CheckDiagnostic } from '../../protocol/diagnostic.ts';
 import type { StudioAuditPort } from './audit.ts';
 import type { StudioInspectInput, StudioInspection } from './inspection.ts';
 import { href, kioskHref } from '../nav.ts';

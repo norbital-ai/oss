@@ -32,7 +32,11 @@ Readonly, it is a label over the value as copyable text (or a `view` snippet): n
 		view?: Snippet<[Pick<FieldEditor, 'value' | 'kind' | 'name' | 'id'>]>;
 		address?: string;
 		class?: string;
-		/** Overrides the enclosing `Form`/`Fieldset`; a field the viewer cannot write (no update grant, a state lock) is readonly whatever this says. */
+		/**
+		 * `true` keeps this field read-only while its `Form` edits (shown as its value, never saved from here):
+		 * `<Field name="reference" readonly />`. It only adds: `false` never lifts an enclosing readonly form, and a field
+		 * the viewer cannot write (no update grant, a state lock) is readonly whatever this says.
+		 */
 		readonly?: boolean;
 		/** Overrides the enclosing `Form`/`Fieldset`: the editor stays, muted and inert. */
 		disabled?: boolean;

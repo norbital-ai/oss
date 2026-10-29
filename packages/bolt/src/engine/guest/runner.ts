@@ -294,6 +294,15 @@ export function bodyPath(kind: InvocationKind, target: string): string[] {
 			return ['policy', model, 'grants', member, ...rest, 'check'];
 		case 'automation':
 			return ['automation', target, 'body'];
+		// `<model>.effect.<verb>`
+		case 'effect':
+			return [
+				'model',
+				target.slice(0, target.lastIndexOf('.effect.')),
+				'bodies',
+				'effect',
+				target.slice(target.lastIndexOf('.') + 1)
+			];
 		case 'page':
 			return ['page', target, 'body'];
 		case 'validation':
@@ -344,7 +353,7 @@ const run = (
 		// is only this runtime's own log line
 		const kept = { lines: 0, bytes: 0, dropped: false };
 		const tag =
-			invocation.kind === 'automation'
+			invocation.kind === 'automation' || invocation.kind === 'effect'
 				? { automation: invocation.target }
 				: { callable: invocation.target, kind: invocation.kind };
 		const dropped = Effect.gen(function* () {
@@ -671,12 +680,11 @@ const run = (
 											? `read '${big.read.model}'`
 											: 'read data'
 									: big._tag === 'act'
-											? `run '${big.callable._tag === 'Verb' ? `${big.callable.model}.${big.callable.verb}` : big.callable._tag === 'Automation' ? big.callable.automation : `${big.callable.model}.sync.${big.callable.sync}`}'`
-											: `complete ctx.${big._tag}`;
-						const hint =
-							read
-								? 'page it with `limit` and the returned cursor, or `select` fewer fields'
-								: 'return less from it';
+										? `run '${big.callable._tag === 'Verb' ? `${big.callable.model}.${big.callable.verb}` : big.callable._tag === 'Automation' ? big.callable.automation : `${big.callable.model}.sync.${big.callable.sync}`}'`
+										: `complete ctx.${big._tag}`;
+						const hint = read
+							? 'page it with `limit` and the returned cursor, or `select` fewer fields'
+							: 'return less from it';
 						return failed(
 							'tooLarge',
 							`Could not ${what}: too much data returned at once (${(bytes / 1024 / 1024).toFixed(1)} MB total, over the ${limits.crossingBytes / 1024 / 1024} MB limit). Largest response: ${(biggest / 1024 / 1024).toFixed(1)} MB${member === undefined ? '' : `; '${member[0]}': ${(member[1] / 1024 / 1024).toFixed(1)} MB`}. At ${where(answer.calls[biggestAt]?.[2] ?? at)}; ${hint}.`

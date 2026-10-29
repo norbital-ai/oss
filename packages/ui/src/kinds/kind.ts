@@ -20,14 +20,12 @@ export function fieldName(kind: Kind): string | undefined {
 		? 'phone'
 		: undefined;
 }
-export const isFile = (v: unknown): v is FileRef =>
-	Predicate.isObject(v) &&
-	typeof v['id'] === 'string' &&
-	typeof v['name'] === 'string' &&
-	typeof v['mime'] === 'string';
-export const isPoint = (v: unknown): v is Point =>
-	Predicate.isObject(v) && typeof v['lat'] === 'number' && typeof v['lng'] === 'number';
-export const isMasked = (v: unknown) => Predicate.isObject(v) && v['$masked'] === true;
+export const isFile: (v: unknown) => v is FileRef = Schema.is(
+	Schema.Struct({ id: Schema.String, name: Schema.String, mime: Schema.String })
+);
+export const isPoint: (v: unknown) => v is Point = Schema.is(
+	Schema.Struct({ lat: Schema.Number, lng: Schema.Number })
+);
 
 // ── money ──
 /** ISO 4217 minor digits from the platform's own table (JPY 0, SGD 2, BHD 3). */
@@ -163,8 +161,8 @@ export const shownKind = (kind: Kind): Kind =>
 				...(kind.money.currency === undefined ? {} : { currency: kind.money.currency })
 			}
 		: kind;
-/** A plain object value (not a list, not a `Decimal`). */
-const plainObject = (v: Value): v is { readonly [k: string]: Value } =>
+/** A `Value` that is a plain object (not a list, not a `Decimal`): the one narrowing of the union's object arm. */
+export const valueObject = (v: Value | undefined): v is { readonly [k: string]: Value } =>
 	typeof v === 'object' && v !== null && !Arr.isArray<Value>(v) && !(v instanceof Decimal);
 /**
  * The kind an undeclared JSON value shows as: scalars by their type, objects field by field, and a list of objects as
@@ -175,14 +173,14 @@ export function inferKind(v: Value): Kind {
 	if (typeof v === 'number') return { kind: 'number' };
 	if (typeof v === 'boolean') return { kind: 'bool' };
 	if (Arr.isArray<Value>(v)) {
-		if (v.length === 0 || !v.every(plainObject)) return { kind: 'list', of: { kind: 'json' } };
+		if (v.length === 0 || !v.every(valueObject)) return { kind: 'list', of: { kind: 'json' } };
 		const fields: { [k: string]: Kind } = {};
 		for (const item of v)
 			for (const [k, held] of Object.entries(item))
 				if (fields[k] === undefined || held !== null) fields[k] = inferKind(held);
 		return { kind: 'list', of: { kind: 'object', fields } };
 	}
-	if (plainObject(v))
+	if (valueObject(v))
 		return {
 			kind: 'object',
 			fields: Object.fromEntries(Object.entries(v).map(([k, held]) => [k, inferKind(held)]))
@@ -198,7 +196,7 @@ export const wideKind = (kind: Kind): boolean =>
 /** Named fields of a row as one line by kind (a record's title, a subtitle): `Q-1 · Jan 2, 2026 · On hold`; empties left out. */
 export function fieldsText(
 	fields: Fields,
-	row: { readonly [f: string]: unknown },
+	row: { readonly [f: string]: Value | undefined },
 	names: readonly string[],
 	o: ShowOptions = {}
 ): string {
@@ -216,11 +214,10 @@ export function fieldsText(
 		.join(' · ');
 }
 /** One value as text in the viewer's locale; '' for none. Structured values render through `Show`, this is their summary. */
-export function format(kind: Kind, value: unknown, o: ShowOptions = {}): string {
+export function format(kind: Kind, value: Value | undefined, o: ShowOptions = {}): string {
 	const v = value ?? null;
 	const locale = o.locale ?? 'en';
 	if (v === null) return '';
-	if (isMasked(value)) return '•••';
 	switch (kind.kind) {
 		case 'int':
 		case 'number':
@@ -254,7 +251,7 @@ export function format(kind: Kind, value: unknown, o: ShowOptions = {}): string 
 		case 'duration':
 			return typeof v === 'number' ? formatDuration(v) : String(v);
 		case 'period': {
-			if (!Predicate.isObject(v)) return '';
+			if (!valueObject(v)) return '';
 			const temporal: Kind =
 				kind.of === 'date'
 					? { kind: 'date', ...(kind.precision === undefined ? {} : { precision: kind.precision }) }
@@ -262,7 +259,8 @@ export function format(kind: Kind, value: unknown, o: ShowOptions = {}): string 
 							kind: 'instant',
 							...(kind.precision === undefined ? {} : { precision: kind.precision })
 						};
-			const at = (x: unknown) => (x === null || x === undefined ? '…' : format(temporal, x, o));
+			const at = (x: Value | undefined) =>
+				x === null || x === undefined ? '…' : format(temporal, x, o);
 			const end = v[kind.of === 'date' ? 'to' : 'end'];
 			// Instant periods exclude their end; coarse labels name the last covered unit.
 			const last =
@@ -295,23 +293,20 @@ export function format(kind: Kind, value: unknown, o: ShowOptions = {}): string 
 		case 'vector':
 			return Arr.isArray(v) ? `[${v.length}]` : '';
 		case 'list':
-			return Arr.isArray(v) ? v.map((x) => format(kind.of, x, o)).join(', ') : '';
+			return Arr.isArray<Value>(v) ? v.map((x) => format(kind.of, x, o)).join(', ') : '';
 		case 'json':
 		case 'custom':
 		case 'object':
 		case 'union':
 		case 'record':
-			return Predicate.isObject(v) && typeof v['label'] === 'string'
-				? v['label']
-				: JSON.stringify(v);
+			return valueObject(v) && typeof v['label'] === 'string' ? v['label'] : JSON.stringify(v);
 		default:
 			return String(v);
 	}
 }
 /** One native value as text, shared by views and kind renderers. */
-export function formatValue(value: unknown, locale = 'en'): string {
+export function formatValue(value: Value | undefined, locale = 'en'): string {
 	if (value === null || value === undefined) return '';
-	if (isMasked(value)) return '•••';
 	if (value instanceof Decimal) return decimalText(String(value), locale);
 	if (typeof value === 'boolean') return value ? '✓' : '✗';
 	if (typeof value === 'number') return new Intl.NumberFormat(locale).format(value);
@@ -319,8 +314,8 @@ export function formatValue(value: unknown, locale = 'en'): string {
 		return /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z$/.test(value)
 			? new Date(value).toLocaleString(locale, AT)
 			: value;
-	if (Arr.isArray(value)) return value.map((item) => formatValue(item, locale)).join(', ');
-	if (!Predicate.isObject(value)) return String(value);
+	if (Arr.isArray<Value>(value)) return value.map((item) => formatValue(item, locale)).join(', ');
+	if (!valueObject(value)) return String(value);
 	if ('from' in value || 'start' in value)
 		return `${formatValue(value['from'] ?? value['start'], locale)} – ${formatValue(value['to'] ?? value['end'], locale) || '…'}`;
 	if (isPoint(value)) return `${value.lat}, ${value.lng}`;
@@ -460,7 +455,7 @@ export function problem(kind: Kind, value: Value | undefined): string | null {
 				: `expected one of ${kind.values.join(', ')}`;
 		}
 		case 'period': {
-			if (!Predicate.isObject(v)) return 'expected a period';
+			if (!valueObject(v)) return 'expected a period';
 			const [a, b] = kind.of === 'date' ? [v['from'], v['to']] : [v['start'], v['end']];
 			if (a === null || a === undefined) return 'needs a start';
 			// empty or inverted periods are refused (rule 68): a date period is inclusive, an instant one closed-open
@@ -501,8 +496,7 @@ export function problems(kind: Kind, value: Value | undefined, at = ''): Map<str
 		}
 		const x = v ?? null;
 		if (x === null) return;
-		const object =
-			typeof x === 'object' && !Arr.isArray<Value>(x) && !(x instanceof Decimal) ? x : null;
+		const object = valueObject(x) ? x : null;
 		const join = (key: string | number) => (path === '' ? String(key) : `${path}.${key}`);
 		if (k.kind === 'object' && object !== null)
 			for (const [f, fk] of Object.entries(k.fields)) walk(fk, object[f], join(f));
@@ -522,10 +516,10 @@ export function problems(kind: Kind, value: Value | undefined, at = ''): Map<str
 	return out;
 }
 
-/** The value a new form starts from: the literal default, else empty (`{ var }` defaults stay to the host). */
+/** The value a new form starts from: the literal default, else empty (a clock `{ var }` default fails its kind's decode and stays to the host). */
 export function initial(kind: Kind): Value {
 	const d = kind.default;
-	if (d !== undefined && !(Predicate.isObject(d) && Object.keys(d).length === 1 && 'var' in d)) {
+	if (d !== undefined) {
 		const schema = inputSchema(kind);
 		if (Schema.is(schema)(d)) return d;
 		const result = Schema.decodeUnknownResult(schema)(d);
@@ -562,12 +556,7 @@ export function armValue(kind: Extract<KindOf<'union'>, { by: string }>, tag: st
 
 /** An arc's value (a polymorphic relation): `{ model, id }`, as the engine reads and writes it. */
 export const arcOf = (x: Value | undefined): { model: string; id: string } | null =>
-	typeof x === 'object' &&
-	x !== null &&
-	!Arr.isArray<Value>(x) &&
-	!(x instanceof Decimal) &&
-	typeof x['model'] === 'string' &&
-	typeof x['id'] === 'string'
+	valueObject(x) && typeof x['model'] === 'string' && typeof x['id'] === 'string'
 		? { model: x['model'], id: x['id'] }
 		: null;
 /** State edges out of `from` (the state machine's `to`), for a badge's move menu. */

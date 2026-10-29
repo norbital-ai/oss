@@ -7,9 +7,10 @@ Starter workspaces live in their own repository:
 
 ## Packages
 
-- [`@norbital-ai/bolt`](./packages/bolt) — tenant workspace authoring SDK, compiler, runtime, and
-  client
-- [`@norbital-ai/bolt-server`](./packages/bolt-server) — self-host server around the Bolt bundle
+- [`@norbital-ai/bolt`](./packages/bolt) — tenant workspace authoring SDK, runtime, and client
+- [`@norbital-ai/bolt-cli`](./packages/bolt-cli) — the compiler, the `bolt` command and the test kit (a workspace
+  devDependency)
+- [`@norbital-ai/bolt-server`](./packages/bolt-server) — an example untethered host: one workspace's release from one process
 - [`@norbital-ai/store`](./packages/store) — typed schema, query, SQL and migration layer shared by workspaces and hosts
 - [`@norbital-ai/ui`](./packages/ui) — Svelte component library and design tokens
 - [`@norbital-ai/std`](./packages/std) — common schema, field kinds, date, CEL, finance, and
@@ -55,8 +56,9 @@ the workflow publishes missing immutable versions and skips versions already on 
 Consumers commit their matching manifest and lockfile updates after publication. See
 [`RELEASING.md`](./RELEASING.md) for the release workflow.
 
-Template source is published as deterministic root-projected Git refs, each carrying its own
-`norbital.template.json` and its own committed `pnpm-lock.yaml`. There is no platform release, no
+Each template repository's CI builds every template once and uploads its release (bundle, source and
+seed, by digest; `bolt templates publish`); each template pins its own dependencies with its committed
+lockfile. There is no platform release, no
 builder image, and no tenant-runtime image; the Convert service publishes its own OCI image. The
 provider-neutral distribution contract is documented in
 [`release/README.md`](./release/README.md).

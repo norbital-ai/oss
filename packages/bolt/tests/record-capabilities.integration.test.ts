@@ -1,6 +1,6 @@
 import { expect, it } from '@effect/vitest';
 import { Effect, Predicate } from 'effect';
-import { TestDb } from '../src/test/database.ts';
+import { TestDb } from '../../bolt-cli/src/test/database.ts';
 import { PgliteDb } from '../src/node/db/pglite.ts';
 import type { TenantDbShape } from '../src/engine/db/tenant-db.ts';
 import type { Json } from '../src/decl/values.ts';
@@ -78,7 +78,8 @@ const withDb = (db: TenantDbShape) =>
 			id: string,
 			auth: Authority = admin,
 			options: Partial<WriteEngine> = {},
-			parent?: RecordParentContext
+			parent?: RecordParentContext,
+			output?: string
 		) => {
 			const engine: WriteEngine = { manifest, db, ...options };
 			const reads = readEngine({ manifest: engine.manifest, db });
@@ -91,7 +92,15 @@ const withDb = (db: TenantDbShape) =>
 				(model, id) =>
 					Effect.gen(function* () {
 						const [row] = yield* reads.run(
-							[{ kind: 'get', model, id, select: { fields: null, relations: {} } }],
+							[
+								{
+									kind: 'get',
+									model,
+									id,
+									select: { fields: null, relations: {} },
+									...(output === undefined ? {} : { output })
+								}
+							],
 							{ as: 'caller', authority: auth },
 							bindings
 						);
@@ -164,14 +173,14 @@ it.live(
 					?.fields['amount']
 			).toMatchObject({ writable: false, proposal: true });
 			// the root's `orders.lines` layer scope hides the child: no capability through that parent
-			const masked = authority({
+			const hidden = authority({
 				orders: grants('orders', {
-					read: { orders: [arm()], 'orders.lines': [arm(FALSE)] },
+					read: { default: { orders: [arm()], 'orders.lines': [arm(FALSE)] } },
 					update: [writeArm(layer)]
 				}),
 				lines: readOnly
 			});
-			expect(yield* capabilities('lines', child, masked, { manifest: source }, context)).toBeNull();
+			expect(yield* capabilities('lines', child, hidden, { manifest: source }, context)).toBeNull();
 			const other = yield* write('orders', 'create', [{ title: 'Other' }]);
 			const otherParent = other.find((row) => row.model === 'orders');
 			if (otherParent === undefined) throw new Error('missing parent');
@@ -261,19 +270,32 @@ it.live('free links and declared unlinks gain only their nested foreign-key capa
 	})
 );
 
-it.live('publishes scoped ordinary grants while omitting unreadable and masked field names', () =>
+it.live('publishes the fields of the output the caller reads; an output it lacks hides them', () =>
 	Effect.gen(function* () {
 		const { create, capabilities } = yield* setup();
 		const { parent } = yield* create();
+		const orders = required(manifest.exposures['orders']);
+		const source: EngineManifest = {
+			...manifest,
+			exposures: {
+				...manifest.exposures,
+				orders: { ...orders, outputs: { brief: { orders: { fields: ['note', 'status'] } } } }
+			}
+		};
 		const auth = authority({
 			orders: grants('orders', {
-				read: { orders: [arm(undefined, ['title', 'note', 'status'])] },
-				update: [writeArm({ orders: ['note'] })],
-				// the compiled form of the arm's field list (fields it omits mask to false), plus the title mask
-				masks: { orders: { title: FALSE, number: FALSE, total: FALSE, big_lines: FALSE } }
+				read: { brief: { orders: [arm()] } },
+				update: [writeArm({ orders: ['note'] })]
 			})
 		});
-		const caps = yield* capabilities('orders', parent, auth);
+		const caps = yield* capabilities(
+			'orders',
+			parent,
+			auth,
+			{ manifest: source },
+			undefined,
+			'brief'
+		);
 		expect(caps?.fields).toEqual({
 			note: { writable: true, proposal: false, reasons: [] },
 			status: { writable: false, proposal: false, reasons: ['noGrant'] },
@@ -284,7 +306,13 @@ it.live('publishes scoped ordinary grants while omitting unreadable and masked f
 		expect(caps?.update.allowed).toBe(true);
 		expect(JSON.stringify(caps)).not.toContain('number');
 		expect(JSON.stringify(caps)).not.toContain('title');
-		const unreadable = authority({ orders: grants('orders', { read: { orders: [arm(FALSE)] } }) });
+		// the default output is not granted: reading it is refused
+		expect(
+			yield* Effect.flip(capabilities('orders', parent, auth, { manifest: source }))
+		).toMatchObject({ code: 'forbidden' });
+		const unreadable = authority({
+			orders: grants('orders', { read: { default: { orders: [arm(FALSE)] } } })
+		});
 		expect(yield* capabilities('orders', parent, unreadable)).toBeNull();
 	})
 );
@@ -337,7 +365,9 @@ it.live(
 			const { parent } = yield* create();
 			const auth = authority({
 				orders: grants('orders', {
-					read: { orders: [arm(toPred(manifest, 'orders', { title: { eq: 'Desk' } }))] }
+					read: {
+						default: { orders: [arm(toPred(manifest, 'orders', { title: { eq: 'Desk' } }))] }
+					}
 				})
 			});
 			const reads = readEngine({ manifest, db });
@@ -369,7 +399,7 @@ it.live('rechecks a many-relation read scope before exposing record capabilities
 		const predicate = toPred(manifest, 'orders', { lines: { some: { amount: { gte: 1 } } } });
 		const auth = authority({
 			orders: grants('orders', {
-				read: { orders: [arm(predicate)] },
+				read: { default: { orders: [arm(predicate)] } },
 				update: [writeArm({ orders: ['note'] })]
 			})
 		});
@@ -489,4 +519,3 @@ it.live('sync-owned fields stay readable and local fields remain writable', () =
 		).toEqual({ erp: { kind: 'remote', with: 'erp' } });
 	})
 );
-

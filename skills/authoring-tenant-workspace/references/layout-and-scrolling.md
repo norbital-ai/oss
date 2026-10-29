@@ -18,7 +18,12 @@ Do not add a second banner, title or empty icon block. Model scope and operation
 remain on the model toolbar.
 
 ```svelte
-<AppShell icon="lucide:kanban" title={t('jobs.title')} description={t('jobs.description')} variant="full">
+<AppShell
+	icon="lucide:kanban"
+	title={t('jobs.title')}
+	description={t('jobs.description')}
+	variant="full"
+>
 	<Tabs
 		variant="underline"
 		config={[{ name: 'board', label: t('jobs.board'), icon: 'lucide:kanban', content: board }]}
@@ -26,11 +31,37 @@ remain on the model toolbar.
 </AppShell>
 ```
 
-| Body                                        | Variant          | Scroll owner          | Inset (see padding-and-spacing.md) |
-| ------------------------------------------- | ---------------- | --------------------- | ---------------------------------- |
-| one model surface                      | `page` (default) | the surface           | the shell's `Bound inset`          |
-| `<Tabs …/>`                                 | `full`           | each panel's one body | the panel, or its `Scroll inset`   |
-| `<Scroll name="…" inset>` — flowing content | `full`           | the `Scroll`          | the `Scroll`                       |
+| Body                                                    | Variant          | Scroll owner          | Inset (see padding-and-spacing.md) |
+| ------------------------------------------------------- | ---------------- | --------------------- | ---------------------------------- |
+| one model surface                                       | `page` (default) | the surface           | the shell's `Bound inset`          |
+| `<Tabs …/>`                                             | `full`           | each panel's one body | the panel, or its `Scroll inset`   |
+| `<Scroll name="…" size="fill" inset>` — flowing content | `full`           | the `Scroll`          | the `Scroll`                       |
+
+## Sizing: a box is `content` or `fill`
+
+One rule for how every box takes its parent's main axis — `Stack`, `Inline`, `Cluster`, `Split`,
+`Cover`, `Scroll`, `Bound` and a form `Section` all take the same `size`:
+
+- **`content`** (the default): its own size, never squeezed. When the boxes of a column do not fit,
+  the nearest scroll owner scrolls — never a box in the middle.
+- **`fill`**: the space left (shared with its `fill` siblings), shrinking down to its floor,
+  `minHeight` (default 0; a `Section`'s default is its content or 16rem, whichever is less). A
+  `Scroll` or a self-scrolling view there scrolls inside it. In a parent that is not a flex column or
+  row but has a definite height (a `Bound`, a `Cover` body, a `Split` pane) it takes that height.
+
+Nothing scrolls sideways: content wraps; only a `Scroll axis="x"` (a wide table, a reel) scrolls
+horizontally. `Bound` adds one more height, `viewport` — `min(42rem, 100dvh − 14rem)`, floored at
+28rem — for a view inside content that already scrolls. There is no `grow`, `shrink` or `h-full`:
+a box that should take the rest is `fill`; a box that must not be squeezed is already `content`.
+
+```svelte
+<Stack gap="md" size="fill">
+	<Summary />
+	<!-- content: its own height -->
+	<Scroll name="Lines" size="fill">…</Scroll>
+	<!-- fill: the rest, scrolling inside -->
+</Stack>
+```
 
 ## Scroll priority (last-resort scrolling)
 
@@ -49,20 +80,20 @@ Priority 2–4 activate.
 
 ## Who owns scroll
 
-| Component                   | Owns scroll | Notes                                                     |
-| --------------------------- | ----------- | --------------------------------------------------------- |
-| `Table`                     | Yes         | Vertical: header sticky, body scrolls                     |
-| `Board`                     | Yes         | Horizontal lanes; each lane scrolls vertically            |
-| `Matrix`                    | Yes         | Rows page 50 at a time; header row and label column fixed |
-| `Form`                      | Yes         | Vertical: field area scrolls, footer pinned               |
-| `Tabs`                      | No          | Bounded, clipped, inset; the tab body owns scrolling      |
-| `Sheet`                     | Yes         | Scrollable body inside a clipped boundary                 |
-| `Scroll` (inside a `Bound`) | Yes         | Custom content that needs local scrolling                 |
-| `Chart`, `Pivot`, cards     | No          | Content flows to the parent scrollport                    |
+| Component               | Owns scroll | Notes                                                     |
+| ----------------------- | ----------- | --------------------------------------------------------- |
+| `Table`                 | Yes         | Vertical: header sticky, body scrolls                     |
+| `Board`                 | Yes         | Horizontal lanes; each lane scrolls vertically            |
+| `Matrix`                | Yes         | Rows page 50 at a time; header row and label column fixed |
+| `Form`                  | Yes         | Vertical: field area scrolls, footer pinned               |
+| `Tabs`                  | No          | Bounded, clipped, inset; the tab body owns scrolling      |
+| `Sheet`                 | Yes         | Scrollable body inside a clipped boundary                 |
+| `Scroll size="fill"`    | Yes         | Custom content that needs local scrolling                 |
+| `Chart`, `Pivot`, cards | No          | Content flows to the parent scrollport                    |
 
 **Tab panels never own scrolling.** `TabsContent` is bounded and clipped so wheel input cannot be trapped
 by a root tab panel. Every tab snippet renders exactly one body owner: a self-scrolling model surface,
-`Bound` around one self-scrolling component, or a named `Scroll inset` for custom flowing content — the
+a self-scrolling component, or a named `Scroll size="fill" inset` for custom flowing content — the
 `Scroll` claims the panel's inset, so the padding lands inside the scrollport.
 
 ## The scroll contract
@@ -97,7 +128,7 @@ loading state.
 | Anti-pattern                                                                        | Fix                                                                |
 | ----------------------------------------------------------------------------------- | ------------------------------------------------------------------ |
 | `<Scroll>` wrapping `Form`, `Table`, `Board`, `Matrix`, `Tabs`, or another `Scroll` | Remove the outer `Scroll`; the child already owns vertical scroll  |
-| `Field class="min-h-64 flex-1"` / `Stack fill` around a matrix inside `Form`        | Drop the nested height fight; let content flow and the form scroll |
+| `Field class="min-h-64 flex-1"` / `Stack size="fill"` around a matrix inside `Form` | Drop the nested height fight; let content flow and the form scroll |
 
 ```svelte
 <!-- WRONG: Scroll around a form that already scrolls -->
@@ -109,23 +140,20 @@ loading state.
 <Form of="jobs" mode="create" />
 ```
 
-**Explicit scroll regions** use `<Bound size="...">` to establish a height contract, with
-`<Scroll name="...">` as the single scroll owner inside:
+**Explicit scroll regions** are one `<Scroll name="..." size="fill">`: it takes the space left in
+its pane and is the single scroll owner inside. No wrapper passes the height down:
 
 ```svelte
-<Bound size="full">
-	<Scroll name="Quote lines">
-		<!-- content -->
-	</Scroll>
-</Bound>
+<Scroll name="Quote lines" size="fill">
+	<!-- content -->
+</Scroll>
 ```
 
-**Clip regions** (no scrolling): `<Bound size="full" clip>` for maps, boards, video that fill a pane.
+**Clip regions** (no scrolling): `<Bound size="fill" clip>` for maps, boards, video that fill a pane.
 
-**`Bound` sizes:** `compact` h-72, `standard` h-[28rem], `tall` h-[40rem], `fit`
-`h-[min(42rem,calc(100dvh-14rem))]` floored at `standard`, `full` h-full. `fit` is the viewer-aware
-contract: a scrollport that claims the space below a ~14rem chrome band, capped at `tall` — for a
-table/kanban/form that should track the viewport instead of guessing a pane size.
+**`Bound` sizes:** `content` (default) — a clip, pad or inset boundary of its own height; `fill` —
+the space left, floored by `minHeight`; `viewport` — `min(42rem, 100dvh − 14rem)` floored at 28rem,
+the space below a ~14rem chrome band, for a table/kanban/map inside content that already scrolls.
 
 Do not use generic `overflow` wrappers, flex/min-size chains, or raw layout flex/grid wrappers.
 Clipping is valid only for text truncation, `Frame` media, or an audited popup/sheet boundary.
@@ -146,25 +174,23 @@ Each tab snippet is ONE of:
 
 ```svelte
 {#snippet overview()}
-	<Bound size="full">
-		<Scroll name="Overview" inset>
-			<Grid minimum="panel"><!-- charts, cards, tables --></Grid>
-		</Scroll>
-	</Bound>
+	<Scroll name="Overview" size="fill" inset>
+		<Grid minimum="panel"><!-- charts, cards, tables --></Grid>
+	</Scroll>
 {/snippet}
 ```
 
-**Split panes** — each pane gets its own height contract:
+**Split panes** — a `fill` split hands its height to both panes; each pane's box fills it:
 
 ```svelte
-<Split ratio="wide" collapse="switch" switchLabels={['Board', 'Map']} gap="md">
+<Split ratio="wide" collapse="switch" switchLabels={['Board', 'Map']} gap="md" size="fill">
 	{#snippet start()}
-		<Bound size="tall" pad="sm" class="rounded-lg border bg-card">
+		<Bound size="fill" minHeight="28rem" pad="sm" class="rounded-lg border bg-card">
 			<Board of="jobs" by="status" card={['title', 'site', 'due']} />
 		</Bound>
 	{/snippet}
 	{#snippet end()}
-		<Bound size="tall" clip class="rounded-lg">
+		<Bound size="fill" minHeight="28rem" clip class="rounded-lg">
 			<Map of="sites" interactive={false} />
 		</Bound>
 	{/snippet}
@@ -214,7 +240,7 @@ When multiple components stack vertically inside a custom tab body:
 ## Form layout
 
 ```svelte
-<Form of="items" mode="update" id={id}>
+<Form of="items" mode="update" {id}>
 	<Stack gap="md">
 		<Stack gap="xs">
 			<Label>{bolt.t('items.section.general')}</Label>
@@ -239,7 +265,7 @@ A `+representation.svelte` renders inside `RecordShell` and takes `{ view: Recor
 With no stored row (`RecordShell mode="create"`) it is the create form; with one it is the record.
 Split a detail view into `RecordShell` `tabs` — one `Form` for editable fields, one `Table` per related
 model — and none needs an extra `Scroll`, because each view owns its own scrolling. A custom tab
-uses one explicit `Bound` + named `Scroll` body. A stepper keeps every `Field` mounted and hides steps.
+uses one named `Scroll size="fill"` body. A stepper keeps every `Field` mounted and hides steps.
 
 ## The primitive catalogue
 
@@ -253,13 +279,13 @@ something not in this table, you are almost certainly about to write a layout by
 | `Inline`           | Inline                  | One row that never wraps                                                                                            |
 | `Cluster`          | Cluster / InlineCluster | One row that wraps                                                                                                  |
 | `Center`           | Center                  | A measure: `max-inline-size` + auto margins                                                                         |
-| `Cover`            | Cover (app frame)       | Chrome, body, chrome; `center` centres the body's principal                                                         |
-| `Bound`            | Box / PadBox            | A named height contract (`size`), the page `inset`, or `pad`                                                        |
+| `Cover`            | Cover (app frame)       | Chrome, body, chrome; `center` centres the body's principal (`size="fill"` for a frame)                             |
+| `Bound`            | Box / PadBox            | A height contract (`size`: `content`, `fill`, `viewport`), the page `inset`, or `pad`                               |
 | `Frame`            | Frame / Ratio           | Aspect-ratio media (img, video) or a centred placeholder                                                            |
 | `Grid`             | Grid                    | `auto-fit` tracks with a `minimum`, or `tracks` for known columns                                                   |
 | `Columns`/`Column` | Columns                 | Exact counts and spans; collapses to one column below `collapse`                                                    |
 | `Split`            | Sidebar                 | Two panes with a named `ratio`; collapses (stack or switch) when it is narrow                                       |
-| `Scroll`           | Reel / scroll container | A named scrollport; `snap` for reels, `max` for a capped region                                                     |
+| `Scroll`           | Reel / scroll container | A named scrollport: `size="fill"`, or `content` capped by `max`; `snap` for reels                                   |
 | `Imposter`         | Imposter                | The one sanctioned overlap: centre, fill, a bar or strip, a corner, an edge; `layer`, `offset`, `position="sticky"` |
 
 Details that remove the old escape hatches:
@@ -275,8 +301,8 @@ Details that remove the old escape hatches:
   header, column or rail). Children are optional for a decorative layer.
 - **`Stack`** `divided`, `reverse`; **`Inline`/`Cluster`** `divided` (a segmented strip);
   **`Grid`** `align`, `rowGap`; **`Columns`** 1–7 and `collapse="none"` (no self-measurement, safe
-  in a shrink-to-fit popover); **`Bound size="auto"`** (content height: a clip or inset boundary);
-  **`Scroll max`** caps are viewport-aware.
+  in a shrink-to-fit popover); **`Bound`** is content height by default (a clip or inset
+  boundary); **`Scroll max`** caps a `content` scroll and is viewport-aware.
 
 `Split` and `Columns` measure **themselves** (each is its own inline-size container), so a split in
 a narrow grid cell collapses even inside a wide page.
@@ -344,7 +370,8 @@ intent, and the element is no longer full-width below the measure.
 Height is the one measurement you never actually know. `h-[32rem]` is a guess about content, and it
 is wrong at the first long label or empty state — either clipping or leaving a void. Let content size
 itself, and where a definite height is genuinely required (a scrollport, a map, a board) name it
-through `Bound size=` so the deliberate cases are countable.
+through `size="fill"` (the space left, `minHeight` its floor) or `Bound size="viewport"` so the
+deliberate cases are countable.
 
 ```svelte
 <!-- WRONG -->
@@ -353,7 +380,7 @@ through `Bound size=` so the deliberate cases are countable.
 
 <!-- RIGHT -->
 <Cover class="min-h-dvh">…</Cover>
-<Bound size="tall"><Scroll name="Lines">…</Scroll></Bound>
+<Scroll name="Lines" size="fill" minHeight="18rem">…</Scroll>
 ```
 
 `UI15` fails on `h-[…]`, `w-[…]`, `h-screen` and `h-dvh` applied to a primitive. `min-h-*` on the
@@ -402,8 +429,8 @@ its middle row is `minmax(0,1fr)`, which is a definite track.
 	<Stack as="main" class="flex-1 justify-center">{@render children()}</Stack>
 </Stack>
 
-<!-- RIGHT: Cover's body is a definite track, and `center` centres its principal in it -->
-<Cover top={header} center>
+<!-- RIGHT: a fill Cover's body is a definite track, and `center` centres its principal in it -->
+<Cover size="fill" top={header} center>
 	{@render children()}
 </Cover>
 ```
@@ -420,7 +447,7 @@ A layout primitive owns its algorithm. The moment you write the algorithm again 
 primitive, two sources describe the same thing and the class silently wins — so the prop is a lie and
 the next reader cannot tell which one is load-bearing.
 
-Alignment, distribution, growth and fill are **props**, not classes:
+Alignment, distribution and size are **props**, not classes:
 
 ```svelte
 <!-- WRONG -->
@@ -428,18 +455,18 @@ Alignment, distribution, growth and fill are **props**, not classes:
 <Bound class="h-full">…</Bound>
 
 <!-- RIGHT -->
-<Stack grow align="center" justify="center">…</Stack>
-<Bound size="full">…</Bound>
+<Stack size="fill" align="center" justify="center">…</Stack>
+<Bound size="fill">…</Bound>
 ```
 
-| Intent                   | Prop                                    |
-| ------------------------ | --------------------------------------- |
-| Cross-axis placement     | `align="start\|center\|end\|stretch"`   |
-| Main-axis distribution   | `justify="start\|center\|end\|between"` |
-| Take the remaining space | `grow`                                  |
-| Fill the parent's height | `fill` (`Bound size="full"`)            |
-| Space between siblings   | `gap`                                   |
-| Page padding             | `inset`                                 |
+| Intent                 | Prop                                    |
+| ---------------------- | --------------------------------------- |
+| Cross-axis placement   | `align="start\|center\|end\|stretch"`   |
+| Main-axis distribution | `justify="start\|center\|end\|between"` |
+| Take the space left    | `size="fill"` (floor: `minHeight`)      |
+| Keep its own size      | `size="content"` (the default)          |
+| Space between siblings | `gap`                                   |
+| Page padding           | `inset`                                 |
 
 `UI10` fails on `items-*`, `justify-*`, `self-*`, `place-*`, `flex-1`, `grow`, `shrink-0` and
 `h-full` applied to a primitive that has the equivalent prop.
@@ -447,6 +474,6 @@ Alignment, distribution, growth and fill are **props**, not classes:
 `class` on a primitive is for what layout does not own — colour, border, radius, typography,
 `position: relative`, a background. If you find yourself reaching for a layout class, the primitive
 is either the wrong one or is missing a prop; add the prop rather than the class. `Stack` gained
-`align`/`justify`/`grow`/`fill` for exactly this reason — without them there was no way to say
+`align`/`justify`/`size` for exactly this reason — without them there was no way to say
 "centre this vertically", so every caller wrote `flex-1 justify-center`, and on a `min-h-*` parent
 that silently does nothing at all.

@@ -3,7 +3,7 @@ import { Effect, Layer } from 'effect';
 import { Live, Links, Wake } from '../src/engine/services.ts';
 import { committed, executeCommit, type Commit } from '../src/engine/write/commit.ts';
 import { PgliteDb } from '../src/node/db/pglite.ts';
-import { TestDb } from '../src/test/database.ts';
+import { TestDb } from '../../bolt-cli/src/test/database.ts';
 import { catalogOf } from '../src/engine/access/pred.ts';
 import { manifest as base, NOW, TODAY } from './write-fixture.ts';
 import type { EngineManifest } from '../src/engine/manifest.ts';
@@ -46,85 +46,104 @@ it.effect(
 		})
 );
 
-it.effect('a mixed commit purges only erased history and triggers only ordinary changes', () =>
-	Effect.gen(function* () {
-		const manifest: EngineManifest = {
-			...base,
-			automations: {
-				changed: { description: 'Changed orders', on: { updated: 'orders' }, runAs: 'trigger' }
-			}
-		};
-		const pg = yield* TestDb.open(manifest),
-			db = PgliteDb.make(pg);
-		const first = '0199a000-0000-4000-8000-000000000071',
-			second = '0199a000-0000-4000-8000-000000000072';
-		const common: Omit<Commit, 'writes'> = {
-			key: 'seed',
-			digest: 'seed',
-			issuedAt: NOW,
-			now: NOW,
-			today: TODAY,
-			actor: { kind: 'system', run: 'test', by: { automation: 'changed' } },
-			owned: [],
-			rate: [],
-			runs: [],
-			notices: [],
-			output: null
-		};
-		yield* executeCommit(db, manifest, catalogOf(manifest), {
-			...common,
-			writes: [
-				{
-					model: 'orders',
-					id: first,
-					op: 'create',
-					values: { title: 'erase', note: 'personal' }
+it.effect(
+	'a mixed commit purges only erased history and runs effects for ordinary changes only',
+	() =>
+		Effect.gen(function* () {
+			const orders = base.exposures['orders'];
+			if (orders === undefined) throw new Error('the fixture exposes orders');
+			const manifest: EngineManifest = {
+				...base,
+				exposures: { ...base.exposures, orders: { ...orders, effect: { updated: true } } }
+			};
+			const pg = yield* TestDb.open(manifest),
+				db = PgliteDb.make(pg);
+			const first = '0199a000-0000-4000-8000-000000000071',
+				second = '0199a000-0000-4000-8000-000000000072';
+			const common: Omit<Commit, 'writes'> = {
+				key: 'seed',
+				digest: 'seed',
+				issuedAt: NOW,
+				now: NOW,
+				today: TODAY,
+				actor: { kind: 'system', run: 'test', by: { platform: 'test' } },
+				writer: {
+					starter: {
+						actor: { kind: 'system', run: 'test', by: { platform: 'test' } },
+						policies: [],
+						admin: false,
+						platform: true
+					},
+					actor: 'system:test',
+					depth: 0
 				},
+				owned: [],
+				rate: [],
+				runs: [],
+				notices: [],
+				output: null
+			};
+			yield* executeCommit(db, manifest, catalogOf(manifest), {
+				...common,
+				writes: [
+					{
+						model: 'orders',
+						id: first,
+						op: 'create',
+						values: { title: 'erase', note: 'personal' }
+					},
+					{
+						model: 'orders',
+						id: second,
+						op: 'create',
+						values: { title: 'ordinary', note: 'retained' }
+					}
+				]
+			});
+			const [answer] = yield* executeCommit(db, manifest, catalogOf(manifest), {
+				...common,
+				key: 'mixed',
+				digest: 'mixed',
+				writes: [
+					{
+						model: 'orders',
+						id: first,
+						op: 'update',
+						revision: 1,
+						set: { note: null },
+						erased: true
+					},
+					{
+						model: 'orders',
+						id: second,
+						op: 'update',
+						revision: 1,
+						set: { title: 'ordinary changed' },
+						erased: false
+					}
+				],
+				erasures: [{ mode: 'anonymise', model: 'orders', ids: [first], purge: ['note'] }]
+			});
+			expect(answer?.captured.map((row) => ({ id: row.id, cause: row.cause }))).toEqual([
+				{ id: first, cause: 'erased' },
+				{ id: second, cause: 'direct' }
+			]);
+			const runs = yield* db.read([
 				{
-					model: 'orders',
-					id: second,
-					op: 'create',
-					values: { title: 'ordinary', note: 'retained' }
+					text: `SELECT automation, cause, input->'ids' AS ids FROM sys_run ORDER BY id`,
+					params: []
 				}
-			]
-		});
-		const [answer] = yield* executeCommit(db, manifest, catalogOf(manifest), {
-			...common,
-			key: 'mixed',
-			digest: 'mixed',
-			writes: [
+			]);
+			expect(runs[0]?.rows).toEqual([
+				{ automation: 'orders.effect.updated', cause: 'effect', ids: [second] }
+			]);
+			const history = yield* db.read([
 				{
-					model: 'orders',
-					id: first,
-					op: 'update',
-					revision: 1,
-					set: { note: null },
-					erased: true
-				},
-				{
-					model: 'orders',
-					id: second,
-					op: 'update',
-					revision: 1,
-					set: { title: 'ordinary changed' },
-					erased: false
+					text: 'SELECT record::text AS id, changes FROM bolt_history WHERE revision = 1 ORDER BY record',
+					params: []
 				}
-			],
-			erasures: [{ mode: 'anonymise', model: 'orders', ids: [first], purge: ['note'] }]
-		});
-		expect(answer?.captured.map((row) => ({ id: row.id, cause: row.cause }))).toEqual([
-			{ id: first, cause: 'erased' },
-			{ id: second, cause: 'direct' }
-		]);
-		const runs = yield* db.read([{ text: 'SELECT input FROM sys_run ORDER BY id', params: [] }]);
-		expect(runs[0]?.rows).toEqual([{ input: { model: 'orders', ids: [second] } }]);
-		const history = yield* db.read([
-			{
-				text: 'SELECT record::text AS id, changes FROM bolt_history WHERE revision = 1 ORDER BY record',
-				params: []
-			}
-		]);
-		expect(history[0]?.rows[0]?.['changes']).not.toHaveProperty('note');
-		expect(history[0]?.rows[1]?.['changes']).toHaveProperty('note', 'retained');
-	})
+			]);
+			expect(history[0]?.rows[0]?.['changes']).not.toHaveProperty('note');
+			expect(history[0]?.rows[1]?.['changes']).toHaveProperty('note', 'retained');
+		})
 );

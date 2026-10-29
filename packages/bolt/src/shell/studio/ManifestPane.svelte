@@ -58,7 +58,7 @@
 				<Stack as="ul" gap="none" divided class="border-y border-border/50">
 					{#each entries as e (`${e.name} ${e.path}`)}
 						<Cluster as="li" gap="sm" align="start" justify="between" class="py-3">
-							<Inline gap="sm" align="start" grow class="min-w-0">
+							<Inline gap="sm" align="start" size="fill" class="min-w-0">
 								<Icon name={ICONS[s]} class="mt-0.5 size-4 shrink-0 text-muted-foreground" />
 								<Stack gap="xs" class="min-w-0">
 									<h3
@@ -71,7 +71,7 @@
 									<p class="truncate font-mono text-micro text-muted-foreground">{e.path}</p>
 								</Stack>
 							</Inline>
-							<Cluster gap="sm" justify="end" shrink={false}>
+							<Cluster gap="sm" justify="end">
 								{#if e.href !== undefined}
 									<Button size="sm" variant="outline" class="px-2 text-micro" href={based(e.href)}
 										><Icon name="lucide:external-link" class="size-3" />{t('Open')}</Button

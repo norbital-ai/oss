@@ -59,7 +59,7 @@ The editor of one value by its field kind: every kind's input in one component (
 	import { fieldEntry } from './builtin/index.js';
 	import TimeInput from './time-input.svelte';
 	import { presentation } from './registry.js';
-	import { arcOf, isMasked } from './kind.js';
+	import { arcOf } from './kind.js';
 	import { humanize } from '../text/messages.js';
 	import TimeRangeInput from './time-range-input.svelte';
 	import Picker from './picker.svelte';
@@ -140,9 +140,7 @@ The editor of one value by its field kind: every kind's input in one component (
 	});
 </script>
 
-{#if isMasked(v)}
-	<Show {kind} {value} {name} {row} {id} readonly />
-{:else if controls.readonly && kind.kind === 'json' && jsonSchema !== undefined}
+{#if controls.readonly && kind.kind === 'json' && jsonSchema !== undefined}
 	<StructuredData schema={jsonSchema} {value} mode="view" {name} {id} {errors} {row} />
 {:else if controls.readonly}
 	<Show {kind} {value} {name} {row} {relation} {address} {id} readonly />

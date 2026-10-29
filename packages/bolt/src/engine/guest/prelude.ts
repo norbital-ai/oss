@@ -11,6 +11,8 @@ const hostLog = $0, hostRandom = $1, hostDigest = $2, hostAsset = $3;
 const G = globalThis;
 const define = (name, value) => Object.defineProperty(G, name, { value, writable: true, configurable: true, enumerable: false });
 const named = (name, message) => { const e = new Error(message); e.name = name; return e; };
+// guest values arrive as anything: the prelude's one object guard
+const isObject = (v) => v !== null && typeof v === 'object';
 
 // ── console: guest lines are the host's to label (never impersonate host logs) ──
 const show = (p) => { if (typeof p === 'string') return p; try { const j = JSON.stringify(p); return j === undefined ? String(p) : j; } catch { return String(p); } };
@@ -142,7 +144,7 @@ class URLSearchParams {
 			}
 		} else if (init instanceof URLSearchParams) for (const [k, v] of init) this.#pairs.push([k, v]);
 		else if (Array.isArray(init)) for (const entry of init) this.#pairs.push([String(entry[0]), String(entry[1])]);
-		else if (init && typeof init === 'object') for (const key of Object.keys(init)) this.#pairs.push([key, String(init[key])]);
+		else if (isObject(init)) for (const key of Object.keys(init)) this.#pairs.push([key, String(init[key])]);
 	}
 	get size() { return this.#pairs.length; }
 	append(k, v) { this.#pairs.push([String(k), String(v)]); }
@@ -220,7 +222,7 @@ define('structuredClone', function structuredClone(value) {
 	const seen = new Map();
 	const clone = (v) => {
 		if (typeof v === 'function' || typeof v === 'symbol') throw named('DataCloneError', String(typeof v) + ' could not be cloned');
-		if (v === null || typeof v !== 'object') return v;
+		if (!isObject(v)) return v;
 		if (seen.has(v)) return seen.get(v);
 		let out;
 		if (Array.isArray(v)) { out = new Array(v.length); seen.set(v, out); for (let i = 0; i < v.length; i++) if (i in v) out[i] = clone(v[i]); return out; }
@@ -276,7 +278,7 @@ class AbortSignal {
 	throwIfAborted() { if (this.#aborted) throw this.#reason; }
 	addEventListener(type, listener, options) {
 		if (type !== 'abort' || typeof listener !== 'function' || this.#listeners.some((l) => l.listener === listener)) return;
-		this.#listeners.push({ listener, once: !!(options && typeof options === 'object' && options.once) });
+		this.#listeners.push({ listener, once: !!(isObject(options) && options.once) });
 	}
 	removeEventListener(type, listener) { if (type === 'abort') this.#listeners = this.#listeners.filter((l) => l.listener !== listener); }
 	static abort(reason) { const c = new AbortController(); c.abort(reason); return c.signal; }
@@ -356,8 +358,8 @@ const settle = (c, answer) => answer.ok ? c.resolve(answer.value) : c.reject(ans
 
 // an error's 'kind' (a facility failure's) rides the tuple for the host's transient judgement
 const failure = (e) => {
-	if (e && typeof e === 'object' && e.kind === 'refused') return ['refused', String(e.message), e.field === undefined ? null : String(e.field), typeof e.row === 'number' ? e.row : null, JSON.stringify({ code: typeof e.code === 'string' ? e.code : 'refused', rows: e.rows, rule: e.rule, data: e.data, records: e.records, invocation: e.invocation })];
-	const kind = e && typeof e === 'object' && typeof e.kind === 'string' ? [e.kind] : [];
+	if (isObject(e) && e.kind === 'refused') return ['refused', String(e.message), e.field === undefined ? null : String(e.field), typeof e.row === 'number' ? e.row : null, JSON.stringify({ code: typeof e.code === 'string' ? e.code : 'refused', rows: e.rows, rule: e.rule, data: e.data, records: e.records, invocation: e.invocation })];
+	const kind = isObject(e) && typeof e.kind === 'string' ? [e.kind] : [];
 	if (e instanceof Error) return ['error', e.name, e.message, String(e.stack || ''), ...kind];
 	return ['error', 'Error', show(e), '', ...kind];
 };
@@ -368,18 +370,18 @@ const reviveWire = ${String(reviveWire)};
 function start(kind, path, inputJson, ctxJson, invocationId) {
 	const ns = G.__boltGuest; delete G.__boltGuest;
 	let body = ns && ns.default;
-	for (const p of path) body = body !== null && typeof body === 'object' && Object.hasOwn(body, p) ? body[p] : undefined;
+	for (const p of path) body = isObject(body) && Object.hasOwn(body, p) ? body[p] : undefined;
 	if (typeof body !== 'function') { state = ['missing', path.join('.')]; return; }
 	const input = JSON.parse(inputJson, reviveWire);
 	let ctx;
-	if (['create', 'update', 'delete', 'policy', 'notify', 'syncRead', 'syncWrite', 'parse', 'tool', 'automation', 'integration', 'page'].includes(kind)) {
+	if (['create', 'update', 'delete', 'policy', 'notify', 'syncRead', 'syncWrite', 'parse', 'tool', 'automation', 'effect', 'integration', 'page'].includes(kind)) {
 		const raw = JSON.parse(ctxJson, reviveWire);
 		ctx = Object.defineProperty(kind === 'page'
 			? { actor: raw.actor, now: raw.now, today: raw.today, tz: raw.tz, invocationId }
 			: { ...raw, invocationId }, Symbol.for('norbital.bolt.ctx'), { value: kind });
 	}
 	const args = kind === 'tool' || kind === 'integration'
-		? (Array.isArray(input) ? input : [input]).map((a) => a !== null && typeof a === 'object' && a.$ctx === true ? ctx : a)
+		? (Array.isArray(input) ? input : [input]).map((a) => isObject(a) && a.$ctx === true ? ctx : a)
 		: ctx === undefined ? [input] : [input, ctx];
 	// pure bodies run once per element of one invocation's batch: a rerank over the candidate page (input [query, rows],
 	// one score per row); a validation over every value of its kind (one message or undefined each); an index's vector
@@ -411,7 +413,7 @@ function give(callIds, texts, bins) {
 	callIds.forEach((id, i) => {
 		const c = inflight.get(id);
 		inflight.delete(id);
-		settle(c, JSON.parse(texts[i], (k, v) => v !== null && typeof v === 'object' && typeof v.$bin === 'number' ? bins[i][v.$bin] : reviveWire(k, v)));
+		settle(c, JSON.parse(texts[i], (k, v) => isObject(v) && typeof v.$bin === 'number' ? bins[i][v.$bin] : reviveWire(k, v)));
 	});
 }
 return { start, take, give };

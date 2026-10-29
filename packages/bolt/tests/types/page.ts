@@ -7,7 +7,6 @@ import type {
 	Committed,
 	Decimal,
 	Id,
-	Masked,
 	Outcome,
 	PendingApproval,
 	PlainDate,
@@ -21,8 +20,6 @@ type Eq<A, B> = (<T>() => T extends A ? 1 : 2) extends <T>() => T extends B ? 1 
 const is = <T extends true>(..._proof: T extends true ? [] : never): void => {};
 declare const order: Id<'orders'>, customer: Id<'customers'>, since: PlainDate;
 
-/** One object type with each member's fields, as the read's own row type is. */
-type Flat<T> = { [K in keyof T]: T[K] };
 // ── reads: one read request (a layer map) per read ──
 bolt.query({ orders: { where: { status: { eq: 'draft' } }, orderBy: { due: 'asc' }, limit: 10 } });
 // @ts-expect-error P1 an unknown field in where
@@ -43,21 +40,20 @@ bolt.query({ orders: { fields: ['note'], limit: 1 } }).pipe(
 		void orders.rows[0]?.due;
 	})
 );
-// one root, all its exposed fields: a policy's grant masks the fields it leaves out (`| Masked`), as a template's
-// contractor grant does
+// one root, all its output's fields: a policy filters rows, never masks a field
 bolt.query({ sites: { limit: 10 } }).pipe(
 	Effect.map(({ sites }) => {
 		for (const row of sites.rows) {
 			is<
 				Eq<
 					typeof row.rating,
-					{ readonly score: number; readonly note?: string | null } | null | Masked
+					{ readonly score: number; readonly note?: string | null } | null
 				>
 			>();
 			is<
 				Eq<
 					typeof row.checklist,
-					readonly { readonly item: string; readonly done: boolean }[] | Masked
+					readonly { readonly item: string; readonly done: boolean }[]
 				>
 			>();
 			is<Eq<typeof row.$approval, RowApproval | undefined>>();
@@ -73,7 +69,10 @@ bolt.query({ orders: { where: { id: { eq: order } }, limit: 1 } }).pipe(
 );
 // a read request: roots and their declared layers, answered per root in one read
 bolt
-	.query({ orders: { where: { due: { gte: since } }, fields: ['total'] }, 'orders.lines': { fields: ['qty'] } })
+	.query({
+		orders: { where: { due: { gte: since } }, fields: ['total'] },
+		'orders.lines': { fields: ['qty'] }
+	})
 	.pipe(
 		Effect.map((answer) => {
 			const row = answer.orders.rows[0];

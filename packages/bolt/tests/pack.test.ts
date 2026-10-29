@@ -15,7 +15,7 @@ it.effect('a malformed rows line fails the pack read as a seed decode', () =>
 				join(dir, 'pack.json'),
 				JSON.stringify({
 					format: 1,
-					name: 'sample',
+					name: 'base',
 					hash: 'hash',
 					start: [],
 					rows: { orders: 1 },

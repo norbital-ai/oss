@@ -7,60 +7,17 @@ import type { EngineManifest } from '../../engine/manifest.ts';
 import type { Authority } from '../../engine/contracts.ts';
 import type { Json } from '../../decl/values.ts';
 import { DRIVERS, type DriverName } from '../../decl/runtime/integration.ts';
-import type { InputFields } from '../../decl/fields.ts';
+import type { Fields } from '@norbital-ai/std/kind';
 import { SYSTEM } from '../../system/index.ts';
 import { conversational } from '../../engine/integrations/instances.ts';
 import * as members from '../../engine/identity/members.ts';
 import { requireAdmin, SIGNUP_KEY, type IdentityHost } from '../../engine/identity/session.ts';
 import { AgentSettings, saveAgentSettings } from '../../engine/agent/settings.ts';
+import { AuditRow, InvitationRow, KeyRow, Member } from '../api-types.ts';
 
 const q = (text: string, ...params: Json[]) => ({ text, params });
 
 const nullableText = Schema.NullOr(Schema.String);
-export const Member = Schema.Struct({
-	id: Schema.String,
-	email: nullableText,
-	phone: nullableText,
-	telegram: nullableText,
-	name: nullableText,
-	kind: Schema.Literals(['staff', 'external']),
-	active: Schema.Boolean,
-	admin: Schema.Boolean,
-	team: nullableText,
-	last_seen: nullableText
-});
-export type Member = typeof Member.Type;
-const InvitationRow = Schema.Struct({
-	id: Schema.String,
-	email: nullableText,
-	phone: nullableText,
-	team: nullableText,
-	external: Schema.Boolean,
-	status: Schema.Literals(['accepted', 'revoked', 'expired', 'open']),
-	expires_at: Schema.String
-});
-type InvitationRow = typeof InvitationRow.Type;
-export const KeyRow = Schema.Struct({
-	id: Schema.String,
-	name: Schema.String,
-	prefix: Schema.String,
-	team: nullableText,
-	created_by: nullableText,
-	created_at: Schema.String,
-	revoked_at: nullableText,
-	last_used_at: nullableText
-});
-export type KeyRow = typeof KeyRow.Type;
-const AuditRow = Schema.Struct({
-	model: Schema.String,
-	record: Schema.String,
-	revision: Schema.Number,
-	at: Schema.String,
-	actor: nullableText,
-	op: Schema.String,
-	changes: Schema.Json
-});
-type AuditRow = typeof AuditRow.Type;
 const DeliveryRow = Schema.Struct({
 	integration: Schema.String,
 	sent: Schema.Number,
@@ -151,7 +108,7 @@ export type Settings = {
 		personal: boolean;
 		sends: boolean;
 		syncs: boolean;
-		configuration: InputFields;
+		configuration: Fields;
 	}[];
 	/** The workspace's self sign-up: the means it declares and whether an administrator left it open; `null` when it declares none. */
 	signup: { via: readonly ('email' | 'phone')[]; open: boolean } | null;
@@ -183,36 +140,38 @@ export const settings = Effect.fn('shell.settings')(function* (
 	const now = yield* h.now;
 	const refusal = requireAdmin(auth);
 	if (refusal !== null) return yield* Effect.fail(refusal);
-	const [users, invitations, keys, audit, deliveries, signup, instances, envoys] = yield* h.db.read([
-		// administrators first, then staff, then external members; by name, else address (L-BOLT-516)
-		q(`SELECT u.id, u.email, u.phone, u.telegram, u.name, u.kind, u.active, u.admin, u.team, (SELECT max(s.refreshed_at)::text FROM sys_session s WHERE s."user" = u.id) AS last_seen
-			FROM sys_user u ORDER BY u.admin DESC, u.kind = 'external', lower(coalesce(nullif(u.name, ''), u.email, u.phone, '')), u.id`),
-		q(
-			`SELECT id, email, phone, team, external, CASE WHEN accepted_at IS NOT NULL THEN 'accepted' WHEN revoked_at IS NOT NULL THEN 'revoked'
+	const [users, invitations, keys, audit, deliveries, signup, instances, envoys] = yield* h.db.read(
+		[
+			// administrators first, then staff, then external members; by name, else address (L-BOLT-516). Anonymous visitors are no members.
+			q(`SELECT u.id, u.email, u.phone, u.telegram, u.name, u.kind, u.active, u.admin, u.team, (SELECT max(s.refreshed_at)::text FROM sys_session s WHERE s."user" = u.id) AS last_seen
+			FROM sys_user u WHERE u.kind <> 'anonymous' ORDER BY u.admin DESC, u.kind = 'external', lower(coalesce(nullif(u.name, ''), u.email, u.phone, '')), u.id`),
+			q(
+				`SELECT id, email, phone, team, external, CASE WHEN accepted_at IS NOT NULL THEN 'accepted' WHEN revoked_at IS NOT NULL THEN 'revoked'
 			WHEN expires_at <= $1::timestamptz THEN 'expired' ELSE 'open' END AS status, expires_at::text AS expires_at FROM sys_invitation ORDER BY expires_at DESC`,
-			now.toISOString()
-		),
-		q(
-			'SELECT id, name, prefix, team, created_by, created_at::text AS created_at, revoked_at::text AS revoked_at, last_used_at::text AS last_used_at FROM sys_api_key ORDER BY name, id'
-		),
-		q(`SELECT collection AS model, record::text AS record, revision, at::text AS at, actor, op, changes FROM bolt_history
+				now.toISOString()
+			),
+			q(
+				'SELECT id, name, prefix, team, created_by, created_at::text AS created_at, revoked_at::text AS revoked_at, last_used_at::text AS last_used_at FROM sys_api_key ORDER BY name, id'
+			),
+			q(`SELECT collection AS model, record::text AS record, revision, at::text AS at, actor, op, changes FROM bolt_history
 			WHERE collection IN ('sys_user', 'sys_invitation') ORDER BY at DESC, revision DESC LIMIT ${AUDIT_LIMIT}`),
-		q(
-			`SELECT integration, count(*) FILTER (WHERE status IN ('sent', 'deferred', 'delivered', 'read', 'opened', 'replied'))::int AS sent, count(*) FILTER (WHERE status IN ('queued', 'sending') AND attempts = 0)::int AS pending,
+			q(
+				`SELECT integration, count(*) FILTER (WHERE status IN ('sent', 'deferred', 'delivered', 'read', 'opened', 'replied'))::int AS sent, count(*) FILTER (WHERE status IN ('queued', 'sending') AND attempts = 0)::int AS pending,
 			count(*) FILTER (WHERE status IN ('queued', 'sending') AND attempts > 0)::int AS retrying, count(*) FILTER (WHERE status IN ('failed', 'uncertain', 'bounced', 'complained'))::int AS failed, count(*) FILTER (WHERE status = 'skipped')::int AS skipped,
 			min(next_attempt_at) FILTER (WHERE status = 'queued' AND attempts > 0)::text AS next_retry,
 			(array_agg(error ORDER BY created_at DESC) FILTER (WHERE status IN ('failed', 'uncertain', 'bounced', 'complained') AND error IS NOT NULL))[1] AS last_error
 			FROM sys_message WHERE direction = 'outbound' AND created_at > $1::timestamptz - interval '1 day' GROUP BY integration`,
-			now.toISOString()
-		),
-		q(`SELECT value FROM sys_config WHERE key = '${SIGNUP_KEY}'`),
-		q(
-			'SELECT id, name, integration, owner, named, envoy, active, status, configuration FROM sys_integration ORDER BY name, id'
-		),
-		q(
-			'SELECT id, name, audience, task, policies, group_messages, delegation, triage, dm, active FROM sys_envoy ORDER BY name, id'
-		)
-	]);
+				now.toISOString()
+			),
+			q(`SELECT value FROM sys_config WHERE key = '${SIGNUP_KEY}'`),
+			q(
+				'SELECT id, name, integration, owner, named, envoy, active, status, configuration FROM sys_integration ORDER BY name, id'
+			),
+			q(
+				'SELECT id, name, audience, task, policies, group_messages, delegation, triage, dm, active FROM sys_envoy ORDER BY name, id'
+			)
+		]
+	);
 	const idle: Delivery = {
 		sent: 0,
 		pending: 0,

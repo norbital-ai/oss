@@ -32,13 +32,9 @@
 	});
 </script>
 
-<Stack
-	gap="sm"
-	shrink={false}
-	class="border-t border-border/60 bg-card/40 p-3 sm:p-4 {stale ? 'opacity-70' : ''}"
->
+<Stack gap="sm" class="border-t border-border/60 bg-card/40 p-3 sm:p-4 {stale ? 'opacity-70' : ''}">
 	<Cluster gap="sm" align="start">
-		<Stack gap="xs" grow class="min-w-0">
+		<Stack gap="xs" size="fill" class="min-w-0">
 			<h2 class="text-xs font-semibold text-foreground">{t('Diagnosis')}</h2>
 			{#if progress !== undefined}
 				<p class="inline-flex items-center gap-1.5 text-meta text-foreground" role="status">

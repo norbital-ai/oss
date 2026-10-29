@@ -1,5 +1,5 @@
 // A host's reading of the artifact (rule 69), without the build toolchain: `@norbital-ai/bolt/artifact`. `bolt build`
-// writes what this reads (compiler/artifact/index.ts); `artifact.json` and `manifest.json` are decoded here, once (A.4).
+// writes what this reads (bolt-cli's compiler/artifact/index.ts); `artifact.json` and `manifest.json` are decoded here, once (A.4).
 // Every read goes through Effect's `FileSystem` and `Path`: in a cell they are the host's artifact port, which resolves
 // symlinks and refuses a path outside the release, so containment here is a check of the path's shape.
 import { sha256Hex } from '@norbital-ai/store';
@@ -421,7 +421,6 @@ export const packAssetLoader = Effect.fn('bolt.packAssetLoader')(function* (
 	files: Files['Service'],
 	now: string
 ) {
-	const fs = yield* FileSystem.FileSystem;
 	const pathService = yield* Path.Path;
 	const seeded = seedFiles(m, pack.meta);
 	const rows = yield* packLoader(
@@ -440,7 +439,7 @@ export const packAssetLoader = Effect.fn('bolt.packAssetLoader')(function* (
 	let answer: 'loaded' | 'hadRows' | undefined;
 	const store = (path: string, asset: SeedAsset) =>
 		Effect.gen(function* () {
-			const bytes = yield* fs.readFile(pathService.join(pack.dir, 'assets', path));
+			const bytes = yield* pack.asset(path);
 			return (yield* files
 				.put(bytes, { name: pathService.basename(path), mime: asset.contentType })
 				.pipe(

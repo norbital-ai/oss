@@ -6,10 +6,9 @@ import type { Json } from '../src/decl/values.ts';
 import type { AiRequest, ActOutcome as Outcome } from '../src/engine/contracts.ts';
 import type { EngineManifest } from '../src/engine/manifest.ts';
 import { Port } from '../src/engine/port.ts';
-import { uuidv7 } from '../src/protocol/wire.ts';
 import { Ai } from '../src/engine/ports.ts';
-import { TestWorkspace, respondSystem1, type Kit } from '../src/test/index.ts';
-import { program } from '../src/test/guest.ts';
+import { TestWorkspace, respondSystem1, type Kit } from '../../bolt-cli/src/test/index.ts';
+import { program } from '../../bolt-cli/src/test/guest.ts';
 import { actReply, qReply, routeFixture, type FixtureRoute } from './support/route-fixture.ts';
 
 const manifest = {
@@ -46,7 +45,8 @@ const manifest = {
 		invoices: {
 			read: { invoices: { fields: 'all' } },
 			create: { columns: { invoices: ['number', 'supplier', 'amount'] } },
-			update: { columns: { invoices: ['note'] } }
+			update: { columns: { invoices: ['note'] } },
+			effect: { created: true }
 		},
 		purchase_orders: {
 			read: { purchase_orders: { fields: 'all' } },
@@ -59,7 +59,7 @@ const manifest = {
 			description: 'Matches invoices',
 			grants: {
 				invoices: { read: true, update: true },
-				purchase_orders: { read: { purchase_orders: { fields: ['number', 'supplier', 'amount'] } } }
+				purchase_orders: { read: true }
 			},
 			capabilities: { tools: ['web_search'] }
 		},
@@ -69,13 +69,15 @@ const manifest = {
 				invoices: { read: true, create: true, update: true },
 				purchase_orders: { read: true, create: true },
 				ledgers: { read: true, create: true }
-			},
-			automations: ['relay']
+			}
 		}
 	},
 	automations: {
-		match: { description: 'Match a new invoice', on: { created: 'invoices' }, runAs: ['matcher'] },
-		relay: { description: 'Relay as the clerk', input: { id: { kind: 'text' } }, runAs: 'trigger' }
+		match: {
+			description: 'Match new invoices',
+			input: { ids: { kind: 'list', of: { kind: 'id', of: 'invoices' } } },
+			policies: ['matcher']
+		}
 	},
 	integrations: {},
 	teams: {},
@@ -90,18 +92,17 @@ const manifest = {
 const guest = program(`import { Effect, Result } from 'effect';
 const output = { kind: 'object', fields: { matched: { kind: 'bool' }, po: { kind: 'text' } } };
 const infer = (ctx, inv) => Effect.result(ctx.ai.sys_2.infer({ prompt: 'Match invoice ' + inv.number, output, tools: ['web_search'], steps: 2, label: inv.number }));
-export default { automation: {
+export default {
+model: { invoices: { bodies: { effect: { created: function* (rows, ctx) {
+	yield* ctx.schedule('match', { ids: rows.map((row) => row.id) });
+} } } } },
+automation: {
 	match: { body: function* (input, ctx) {
 		for (const id of input.ids) {
 			const inv = (yield* ctx.query({ invoices: { where: { id: { eq: id } } } })).invoices.rows[0];
 			const r = yield* infer(ctx, inv);
 			yield* ctx.act('invoices.update', [{ target: id, set: { note: Result.isFailure(r) ? 'failed' : JSON.stringify(r.success) } }]);
 		}
-	} },
-	relay: { body: function* (input, ctx) {
-		const inv = (yield* ctx.query({ invoices: { where: { id: { eq: input.id } } } })).invoices.rows[0];
-		const r = yield* infer(ctx, inv);
-		yield* ctx.act('invoices.update', [{ target: input.id, set: { note: Result.isFailure(r) ? r.failure._tag + ': ' + r.failure.reason : 'answered' } }]);
 	} }
 } };`);
 
@@ -213,11 +214,13 @@ describe('sys_2.infer host tools', () => {
 							{ id: 's', name: 'submit', input: {} }
 						])
 					]);
-					yield* create(t, route, 'invoices.create', [{
-						number: 'INV-1',
-						supplier: 'Acme',
-						amount: 1
-					}]);
+					yield* create(t, route, 'invoices.create', [
+						{
+							number: 'INV-1',
+							supplier: 'Acme',
+							amount: 1
+						}
+					]);
 					yield* t.runDue();
 					const rows = t.fakes.logs
 						.filter((r) => r.event === 'infer.tool')

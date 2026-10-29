@@ -41,7 +41,7 @@ import {
 	storedOutcome,
 	type ReadGuards
 } from './write/sql.ts';
-import { nextDue } from './runs/queue.ts';
+import { nextDue, writerOf } from './runs/queue.ts';
 import { prepareAudit, auditActor, settleAudit } from './audit-operation.ts';
 import { Audit, type AuditShape } from './audit.ts';
 import { auditContextSql, auditReceiptSql, type AuditMutation } from './audit-context.ts';
@@ -604,6 +604,7 @@ export const makeTransactions = (
 								c,
 								config.bindings.now,
 								config.authority.actor,
+								writerOf(config.authority),
 								captures,
 								state.held !== undefined
 							);

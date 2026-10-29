@@ -8,7 +8,7 @@ import type { ImagePreviewMime, ImagePreviewSize } from '../src/engine/contracts
 import { Files, Images } from '../src/engine/ports.ts';
 import { imagesPort } from '../src/node/images.ts';
 import { ImagePreviews, ImagePreviewsLive } from '../src/protocol/image-previews.ts';
-import { TestWorkspace } from '../src/test/index.ts';
+import { TestWorkspace } from '../../bolt-cli/src/test/index.ts';
 import type { EngineManifest } from '../src/engine/manifest.ts';
 
 const manifest = {

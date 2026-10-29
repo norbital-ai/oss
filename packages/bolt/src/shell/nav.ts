@@ -42,6 +42,10 @@ export type NavNode =
 			children: NavNode[];
 	  };
 
+/** The apps a nav tree opens, groups flattened: the shell renders no other app's page. */
+export const navApps = (nodes: readonly NavNode[]): string[] =>
+	nodes.flatMap((node) => (node.kind === 'app' ? [node.name] : navApps(node.children)));
+
 const APP_PREFIX = '/app/';
 const KIOSK_PREFIX = '/kiosk/';
 /** The session cookie (§5.11.2), the admin's preview-as target (rule 39) and the visitor's idempotency id (§5.10). */
@@ -133,7 +137,7 @@ export type ShellBoot = {
 		readonly icon?: string;
 		readonly href: string;
 	}[];
-	/** The automations this member may start by hand from Settings → Automations (`startableAutomations`). */
+	/** The automations this member may start by hand from the command center's Automations (`startableAutomations`). */
 	startable?: readonly { readonly name: string; readonly description: string }[];
 	/** Each envoy's display name by key (its declared `name`), for the agent panel's conversation groups. */
 	envoys?: { readonly [envoy: string]: string };
@@ -219,17 +223,18 @@ export function framePolicy(m: ShellManifest, path: string): string {
 export const holdsPublic = (auth: Authority, app: string): boolean =>
 	auth.actor.kind === 'member' && !auth.admin && auth.capabilities.apps.includes(app);
 
-/** `bolt.href(app, page?, record?)`: `/app/<app>[/<page>][?record=<model>/<id>]`. */
-export function href(
-	app: string,
-	page?: string,
-	record?: { model: string; id: string }
-): string {
-	const path = `${APP_PREFIX}${app}${page === undefined ? '' : `/${page}`}`;
+/**
+ * `bolt.href(app, page?, record?)`: a page's one canonical address. Pages are named (`/app/<app>/<page>`), except the
+ * page named as its app folder's own leaf, whose address is the folder (`/app/hr/entities` for `hr/entities`' page
+ * `entities`; `page` omitted names that one). `route` refuses every other spelling.
+ */
+export function href(app: string, page?: string, record?: { model: string; id: string }): string {
+	const path = `${APP_PREFIX}${app}${page === undefined || page === leafOf(app) ? '' : `/${page}`}`;
 	return record === undefined
 		? path
 		: `${path}?record=${encodeURIComponent(record.model)}/${encodeURIComponent(record.id)}`;
 }
+const leafOf = (app: string) => app.split('/').at(-1);
 /** `bolt.kioskHref(kiosk, page?)`: `/kiosk/<kiosk>[/<page>]`. Kiosks take no record stack. */
 export function kioskHref(kiosk: string, page?: string): string {
 	return `${KIOSK_PREFIX}${kiosk}${page === undefined ? '' : `/${page}`}`;
@@ -288,7 +293,7 @@ export function automationInputs(
 	);
 }
 
-/** The automations `authority` may start from Settings → Automations with no input: every input field optional. */
+/** The automations `authority` may start from the command center's Automations with no input: every input field optional. */
 export function startableAutomations(
 	m: EngineManifest,
 	authority: Authority
@@ -327,13 +332,10 @@ export function nav(m: ShellManifest, auth: Authority): NavNode[] {
 		}
 		const a = appOf(m, name);
 		if (a === undefined || !canOpen(m, auth, name)) return null;
-		const first = Object.keys(a.pages)[0];
-		const leaf = name.split('/').at(-1);
 		const pages = Object.entries<AppSpec['pages'][string]>(a.pages).map(([p, s]): NavPage => ({
 			name: p,
 			...s,
-			// an app folder and its one page may share a name: the folder path is already the canonical address
-			href: p === first && p === leaf ? href(name) : href(name, p)
+			href: href(name, p)
 		}));
 		return {
 			kind: 'app',
@@ -368,10 +370,11 @@ export function nav(m: ShellManifest, auth: Authority): NavNode[] {
 /**
  * The shell's own surfaces an actor gets (§3.9, P1): externals never see settings, automation runs, the staff inbox or Studio.
  * Settings and logs are an administrator's; Studio is every staff member's (their own draft; the host decides what a
- * non-administrator may do) on a host that serves it (`studio`). A preview environment (`preview`) drops the meta
- * tools, Norbius and Studio; everything else stays (Settings loses its People and Integrations tabs, `previewRoute`).
+ * non-administrator may do) on a host that serves it (`studio`: Colony; an untethered workspace has none). The command
+ * center is every staff member's (`runs`); its tabs follow the rest. A preview environment (`preview`) drops the meta
+ * tools, Norbius and Studio; everything else stays (Settings loses Integrations and the command center People, `previewRoute`).
  */
-type Surfaces = {
+export type Surfaces = {
 	inbox: boolean;
 	runs: boolean;
 	settings: boolean;
@@ -403,51 +406,77 @@ export type Route =
 	| { kind: 'home' }
 	| { kind: 'inbox' }
 	| { kind: 'settings'; tab: SettingsTab }
+	| { kind: 'commandCenter'; tab?: CommandCenterTab }
 	| { kind: 'studio'; tab?: StudioTab }
 	| { kind: 'signIn'; next?: string }
 	| { kind: 'invite'; id: string }
 	| { kind: 'notFound' };
-/** Settings proper (people, organization, audit, automation runs), then the System pages (integrations, secrets). */
-const SETTINGS_TABS = [
-	'people',
-	'organization',
+/** Settings proper (organization), then the System pages (integrations, secrets). */
+const SETTINGS_TABS = ['organization', 'integrations', 'secrets'] as const;
+export type SettingsTab = (typeof SETTINGS_TABS)[number];
+/**
+ * The command center's tabs, each a deep link `/command-center/<tab>`: what happens across the workspace (builds and
+ * releases, resource use, runtime logs, the audit trail, automation runs, inference transcripts) and who has access.
+ */
+const COMMAND_CENTER_TABS = [
+	'activity',
+	'resources',
+	'logs',
 	'audit',
 	'automations',
-	'integrations',
-	'secrets'
+	'inference',
+	'people'
 ] as const;
-export type SettingsTab = (typeof SETTINGS_TABS)[number];
+export type CommandCenterTab = (typeof COMMAND_CENTER_TABS)[number];
 /** Studio's tabs, each a stable deep link `/studio/<tab>` (L-BOLT-528); `/studio` is the workbench. */
-const STUDIO_TABS = [
-	'workbench',
-	'changes',
-	'live',
-	'mrs',
-	'runtime',
-	'operations',
-	'usage',
-	'rules'
-] as const;
+const STUDIO_TABS = ['workbench', 'changes', 'versions', 'rules'] as const;
 export type StudioTab = (typeof STUDIO_TABS)[number];
 const named = <T extends string>(tabs: readonly T[], value: string | undefined): T | undefined =>
 	tabs.find((t) => t === value);
-
 /**
- * A preview environment drops the meta tools: Studio and who-has-access management (Settings → People) open the apps
- * launcher, and so does Settings → Integrations, whose integration endpoints only the live workspace serves.
+ * A preview environment drops the meta tools: Studio and who-has-access management (the command center's People) open
+ * the apps launcher, and so does Settings → Integrations, whose integration endpoints only the live workspace serves.
  */
 export function previewRoute(r: Route, preview: boolean): Route {
 	return preview &&
 		(r.kind === 'studio' ||
-			(r.kind === 'settings' && (r.tab === 'people' || r.tab === 'integrations')))
+			(r.kind === 'commandCenter' && r.tab === 'people') ||
+			(r.kind === 'settings' && r.tab === 'integrations'))
 		? { kind: 'home' }
 		: r;
 }
 
-/** The route a URL names. An app name is a folder path, so the longest declared app prefix wins. */
+/**
+ * The command center tabs a viewer gets, in order: the host's inspection (activity, resources, logs) needs a Studio
+ * host and an administrator; the audit trail, inference transcripts (with Norbius) and People are an administrator's,
+ * People never in a preview environment; automation runs are every staff member's. Empty: no command center.
+ */
+export function commandCenterTabs(
+	s: Surfaces,
+	admin: boolean,
+	preview: boolean
+): readonly CommandCenterTab[] {
+	if (!s.runs) return [];
+	const lead = admin && s.settings;
+	return COMMAND_CENTER_TABS.filter((tab) =>
+		tab === 'automations'
+			? true
+			: tab === 'activity' || tab === 'resources' || tab === 'logs'
+				? lead && s.studio
+				: tab === 'inference'
+					? lead && s.agent
+					: tab === 'people'
+						? lead && !preview
+						: lead
+	);
+}
+
+/**
+ * The route a URL names, at its one canonical spelling only: any other is `notFound` (the server already redirects
+ * doubled and trailing slashes). An app name is a folder path, so the longest declared app prefix wins.
+ */
 export function route(m: ShellManifest, url: URL): Route {
-	const path = url.pathname.replace(/\/+$/, '') || '/';
-	const seg = path.split('/').slice(1).map(decodeURIComponent);
+	const seg = url.pathname.split('/').slice(1).map(decodeURIComponent);
 	if (seg[0] === 'kiosk') {
 		const kiosk = seg[1] ?? '',
 			spec = m.kiosks?.[kiosk];
@@ -462,14 +491,29 @@ export function route(m: ShellManifest, url: URL): Route {
 			return { kind: 'home' };
 		case 'inbox':
 			return seg.length === 1 ? { kind: 'inbox' } : { kind: 'notFound' };
-		case 'settings':
-			return { kind: 'settings', tab: named(SETTINGS_TABS, seg[1]) ?? 'people' };
+		case 'settings': {
+			const tab = named(SETTINGS_TABS, seg[1]);
+			return seg.length === 2 && tab !== undefined
+				? { kind: 'settings', tab }
+				: { kind: 'notFound' };
+		}
+		case 'command-center': {
+			if (seg.length === 1) return { kind: 'commandCenter' };
+			const tab = named(COMMAND_CENTER_TABS, seg[1]);
+			return seg.length === 2 && tab !== undefined
+				? { kind: 'commandCenter', tab }
+				: { kind: 'notFound' };
+		}
 		case 'studio': {
+			// `/studio` is the workbench; `/studio/workbench` is not another spelling of it
 			if (seg.length === 1) return { kind: 'studio' };
 			const tab = named(STUDIO_TABS, seg[1]);
-			return seg.length === 2 && tab !== undefined ? { kind: 'studio', tab } : { kind: 'notFound' };
+			return seg.length === 2 && tab !== undefined && tab !== 'workbench'
+				? { kind: 'studio', tab }
+				: { kind: 'notFound' };
 		}
 		case 'sign-in': {
+			if (seg.length > 1) return { kind: 'notFound' };
 			const next = url.searchParams.get('next');
 			return {
 				kind: 'signIn',
@@ -477,7 +521,7 @@ export function route(m: ShellManifest, url: URL): Route {
 			};
 		}
 		case 'invite':
-			return seg[1] ? { kind: 'invite', id: seg[1] } : { kind: 'notFound' };
+			return seg.length === 2 && seg[1] ? { kind: 'invite', id: seg[1] } : { kind: 'notFound' };
 		case 'app':
 			break;
 		default:
@@ -488,9 +532,14 @@ export function route(m: ShellManifest, url: URL): Route {
 			a = appOf(m, app);
 		if (a === undefined) continue;
 		const rest = seg.slice(n),
-			pages = Object.keys(a.pages);
-		const page = rest[0] ?? pages[0];
-		if (rest.length > 1 || page === undefined || !pages.includes(page)) return { kind: 'notFound' };
+			page = rest[0] ?? leafOf(app);
+		if (
+			rest.length > 1 ||
+			page === undefined ||
+			!Object.hasOwn(a.pages, page) ||
+			href(app, page) !== `${APP_PREFIX}${seg.slice(1).join('/')}`
+		)
+			return { kind: 'notFound' };
 		const record = recordOf(url);
 		return { kind: 'page', app, page, ...(record === null ? {} : { record }) };
 	}

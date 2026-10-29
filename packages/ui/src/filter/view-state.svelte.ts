@@ -218,46 +218,37 @@ export function viewState(
 		/** Rule 16a: the description's `Where` and `OrderBy` replace the rows (and the sort, when it asks for one). */
 		describe(text: string): Effect.Effect<boolean> {
 			return Effect.suspend(() => {
-				const fail = (why?: unknown) => {
+				const fail = (why?: Error) => {
 					notice =
-						typeof why === 'object' &&
-						why !== null &&
-						'message' in why &&
-						String(why.message) !== ''
-							? String(why.message)
+						why !== undefined && why.message !== ''
+							? why.message
 							: msg(words, 'view.describeFailed', 'Could not build a filter from that description');
 					return false;
 				};
 				if (bolt?.describe === undefined || text.trim() === '') return Effect.succeed(false);
 				const model = o.model();
-				return bolt
-					.describe(model, text.trim(), localFilterFields(model, o.catalog()[model]))
-					.pipe(
-						Effect.map((result) => {
-							const parts = clauses(result.where).map((clause) =>
-								fromWhere(o.catalog(), o.model(), clause)
-							);
-							const keys =
-								result.orderBy === undefined
-									? null
-									: parseOrder(
-											orderText(orderKeys(result.orderBy)),
-											sortable(
-												o.catalog()[o.model()],
-												!o.model().startsWith('$'),
-												o.catalog()
-											)
-										);
-							if (parts.some((part) => part === null) || (keys !== null && keys.dropped > 0))
-								return fail();
-							rows = parts.flatMap((part) => part ?? []);
-							touched = true;
-							notice = null;
-							if (keys !== null) order = keys.keys;
-							return true;
-						}),
-						Effect.catch((error) => Effect.succeed(fail(error)))
-					);
+				return bolt.describe(model, text.trim(), localFilterFields(model, o.catalog()[model])).pipe(
+					Effect.map((result) => {
+						const parts = clauses(result.where).map((clause) =>
+							fromWhere(o.catalog(), o.model(), clause)
+						);
+						const keys =
+							result.orderBy === undefined
+								? null
+								: parseOrder(
+										orderText(orderKeys(result.orderBy)),
+										sortable(o.catalog()[o.model()], !o.model().startsWith('$'), o.catalog())
+									);
+						if (parts.some((part) => part === null) || (keys !== null && keys.dropped > 0))
+							return fail();
+						rows = parts.flatMap((part) => part ?? []);
+						touched = true;
+						notice = null;
+						if (keys !== null) order = keys.keys;
+						return true;
+					}),
+					Effect.catch((error) => Effect.succeed(fail(error)))
+				);
 			});
 		}
 	};

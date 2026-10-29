@@ -1,11 +1,10 @@
-<!-- The same build, preview and publication history in Studio and the operator's tenant view. -->
+<!-- The same build, preview and publication history in Studio and the command centers; the version live serves is marked Live. -->
 <script lang="ts" module>
-	import type { ReleaseBuild, ReleaseChange, ReleaseEnvironment, ReleaseVersion } from './model.js';
+	import type { ReleaseBuild, ReleaseChange, ReleaseVersion } from './model.js';
 
 	export type ReleaseTimelineProps = {
 		builds: readonly ReleaseBuild[];
 		releases: readonly ReleaseVersion[];
-		environments?: readonly ReleaseEnvironment[] | undefined;
 		changes?: readonly ReleaseChange[] | undefined;
 		selected?: string | null | undefined;
 		onSelect?: ((commit: string) => void) | undefined;
@@ -26,7 +25,6 @@
 	let {
 		builds,
 		releases,
-		environments = [],
 		changes = [],
 		selected = null,
 		onSelect,
@@ -41,23 +39,6 @@
 </script>
 
 <div class={cn('grid min-w-0 gap-3 text-xs', className)} data-release-timeline>
-	{#if environments.length > 0}
-		<div class="flex flex-wrap gap-1.5" aria-label={t('Environment releases')}>
-			{#each environments as environment (environment.name)}
-				<span
-					class="inline-flex min-w-0 items-center gap-1.5 rounded-md border border-border px-2 py-1 text-micro text-muted-foreground"
-					title={environment.release || t('Unrouted')}
-				>
-					<Icon
-						name={environment.name === 'live' ? 'lucide:radio-tower' : 'lucide:flask-conical'}
-						class="size-3"
-					/>
-					<span class="font-medium text-foreground">{environment.name}</span>
-					<span>{t(environment.release === '' ? 'Unrouted' : 'Serving')}</span>
-				</span>
-			{/each}
-		</div>
-	{/if}
 	<ol
 		class="relative grid min-w-0 before:absolute before:inset-y-3 before:left-1.5 before:w-px before:bg-border"
 		aria-label={t('Build and release timeline')}
@@ -99,7 +80,7 @@
 						</button>
 						{#if current}<span
 								class="rounded bg-foreground px-1.5 py-0.5 text-micro text-background"
-								>{t('Live')}</span
+								title={t('Serving live')}>{t('Live')}</span
 							>
 						{/if}
 						{#if entry.build && (!current || entry.build.status === 'failed')}<span

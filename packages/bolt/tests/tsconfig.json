@@ -1,6 +1,23 @@
 {
 	"extends": "../tsconfig.json",
-	"compilerOptions": { "noEmit": true, "types": ["node", "vitest/globals", "vite/client"] },
+	"compilerOptions": {
+		"noEmit": true,
+		"types": ["node", "vitest/globals", "vite/client"],
+		// bolt-cli's test kit and guest runner, which the suite imports from source, read this source
+		"paths": {
+			"@norbital-ai/bolt": ["../src/index.ts"],
+			"@norbital-ai/bolt/artifact": ["../src/engine/artifact/read.ts"],
+			"@norbital-ai/bolt/engine": ["../src/engine/index.ts"],
+			"@norbital-ai/bolt/errors": ["../src/decl/errors.ts"],
+			"@norbital-ai/bolt/facilities": ["../src/facilities/index.ts"],
+			"@norbital-ai/bolt/guest-hooks": ["../src/node/guest-hooks.ts"],
+			"@norbital-ai/bolt/host-api": ["../src/protocol/host-api.ts"],
+			"@norbital-ai/bolt/node": ["../src/node/index.ts"],
+			"@norbital-ai/bolt/protocol": ["../src/protocol/index.ts"],
+			"@norbital-ai/bolt/tooling": ["../src/tooling/index.ts"],
+			"@norbital-ai/bolt/tooling/browser": ["../src/tooling/browser.ts"]
+		}
+	},
 	"include": ["./**/*.ts"],
 	"exclude": ["fixtures/**"]
 }

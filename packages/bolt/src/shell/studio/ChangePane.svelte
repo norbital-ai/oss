@@ -27,7 +27,6 @@
 		admin,
 		busy,
 		onopen,
-		onnew,
 		onmerge,
 		run,
 		t
@@ -37,7 +36,6 @@
 		admin: boolean;
 		busy: boolean;
 		onopen: (path: string) => void;
-		onnew: () => void;
 		onmerge: (change: StudioChangeSet) => void;
 		run: (op: StudioOp) => Effect.Effect<boolean>;
 		t: (key: string) => string;
@@ -65,7 +63,7 @@
 {/snippet}
 
 {#snippet files()}
-	<Scroll name={t('Files')} class="h-full">
+	<Scroll name={t('Files')} size="fill">
 		<Stack gap="sm" class="py-4">
 			{#if !mine && change !== null}
 				{@const c = change}
@@ -146,7 +144,7 @@
 {/snippet}
 
 {#snippet logs()}
-	<Scroll name={t('Logs')} class="h-full">
+	<Scroll name={t('Logs')} size="fill">
 		<Stack gap="lg" class="py-4">
 			{#if change?.diagnostics !== undefined}
 				<div class="overflow-hidden rounded-md border border-border/70">
@@ -161,23 +159,18 @@
 	</Scroll>
 {/snippet}
 
-<Stack gap="none" fill class="min-h-0">
-	<Stack gap="sm" shrink={false} class="border-b border-border/60 py-3">
+<Stack gap="none" size="fill">
+	<Stack gap="sm" class="border-b border-border/60 py-3">
 		{#if change === null}
-			<Cluster align="start" gap="sm">
-				<p class="grow text-xs text-muted-foreground">
-					{t(
-						'A change is a named set of edits from live, with its own preview on a copy of live’s data.'
-					)}
-				</p>
-				<Button size="sm" variant="outline" disabled={busy} onclick={onnew}>
-					<Icon name="lucide:git-branch-plus" class="size-3.5" />{t('New change')}
-				</Button>
-			</Cluster>
+			<p class="text-xs text-muted-foreground">
+				{t(
+					'A change is a named set of edits from live, with its own preview on a copy of live’s data.'
+				)}
+			</p>
 		{:else}
 			{@const c = change}
 			<Cluster align="start" gap="sm">
-				<Stack gap="xs" grow class="min-w-0">
+				<Stack gap="xs" size="fill" class="min-w-0">
 					<Cluster gap="xs">
 						<h2 class="text-sm font-semibold text-foreground">!{c.id} {c.title}</h2>
 						{@render pill(t(STATE[c.state]))}
@@ -194,7 +187,7 @@
 					</p>
 				</Stack>
 				{#if open}
-					<Cluster gap="xs" shrink={false}>
+					<Cluster gap="xs">
 						{#if !mine}<Button
 								size="sm"
 								disabled={busy}

@@ -32,13 +32,17 @@ policy grant scopes. Compute a boundary in ordinary typed code and pass it as in
 ```ts
 // page: the query changes when the workspace day changes
 const day = bolt.clock('day');
-const active = $derived(bolt.query({
-  contracts: { where: { effective: { contains: day.today } } }
-}));
+const active = $derived(
+	bolt.query({
+		contracts: { where: { effective: { contains: day.today } } }
+	})
+);
 // server body: ctx.today is fixed for this invocation
-const { tasks: due } = yield* ctx.query({
-  tasks: { where: { due_on: { lte: ctx.today } } }
-});
+const { tasks: due } =
+	yield *
+	ctx.query({
+		tasks: { where: { due_on: { lte: ctx.today } } }
+	});
 ```
 
 `bolt.clock('day').today` updates at midnight in the workspace zone.

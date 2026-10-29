@@ -22,7 +22,7 @@
 		Values,
 		WhereOf
 	} from '../model/types.js';
-	import type { Json, Query } from '../client/contract.js';
+	import type { Json, Query, QueryAnswer } from '../client/contract.js';
 	import type { OrderBy, Where } from '../filter/filter.js';
 	import type { Toolbar, ToolbarItem } from '../model/ViewToolbar.svelte';
 	import type { Kind } from '../kinds/kind.js';
@@ -124,7 +124,6 @@
 
 <script lang="ts" generics="S extends TableSource">
 	import { formatValue as show } from '../kinds/kind.js';
-	import { Schedule, Stream } from 'effect';
 	import { fork } from '../effect/index.js';
 	import { getAllContexts, onDestroy, untrack } from 'svelte';
 	import { SvelteSet } from 'svelte/reactivity';
@@ -144,12 +143,10 @@
 	import type { ViewBolt } from '../client/contract.js';
 	import EmptyState from '../primitives/empty-state/EmptyState.svelte';
 	import Glyph, { type GlyphName } from '../primitives/icon/Glyph.svelte';
-	import { watch } from '../read/live.svelte.js';
 	import { toast } from '../toast/toast.svelte.js';
 	import { localExposure, matches, orderOf, sortable, sortRows } from '../filter/filter.js';
 	import { and, compact } from '../filter/scope.js';
-	import { COUNT_EVERY_MS, pageRead } from '../read/paging.js';
-	import { countOf, nextOf, rowsOf } from '../read/results.js';
+	import { pageRead } from '../read/paging.js';
 	import { like, valueAt } from '../cell/value.js';
 	import { humanize, label, lowerLead, msg } from '../text/messages.js';
 	import { listRequest, refOf, unref } from '../relations/select.js';
@@ -246,8 +243,7 @@
 	const kindOf = (f: string) => {
 		const column = columns.find((c) => colOf(c).field === f);
 		return (
-			(column === undefined ? undefined : colOf(column).kind) ??
-			kinds.catalog?.[model]?.fields[f]
+			(column === undefined ? undefined : colOf(column).kind) ?? kinds.catalog?.[model]?.fields[f]
 		);
 	};
 	const columnKinds = $derived.by(() => {
@@ -269,9 +265,7 @@
 	};
 	const colLabel = (c: Column) => colOf(c).label ?? fieldLabel(colOf(c).field);
 	const fieldLabel = (f: string) =>
-		model === ''
-			? (kindOf(f)?.label ?? humanize(f))
-			: label(text, model, f, kindOf(f)?.label);
+		model === '' ? (kindOf(f)?.label ?? humanize(f)) : label(text, model, f, kindOf(f)?.label);
 	// the cells' enum and state words read this model's catalog keys
 	provideModel(() => model);
 	const canFilter = $derived(!controlled && (kind === 'model' || kind === 'local'));
@@ -406,7 +400,7 @@
 		const after = st.after ?? undefined;
 		if (kind === 'model' && probe !== null)
 			return mapped(
-				host().query(
+				host().query<QueryAnswer<ReadRow>>(
 					requestJson(
 						listRequest(
 							kinds.catalog,
@@ -417,14 +411,14 @@
 						)
 					)
 				),
-				(answer) => pageOf(answer, name) as Page<ReadRow>
+				(answer) => pageOf(answer, name)
 			);
 		// hook:agent-ui — a later page stays live (its index is the pages behind it; a cursor restored from the URL has none)
 		if (kind === 'model')
-			return pageRead<Page<ReadRow>>(
+			return pageRead(
 				name,
 				(limit, at) =>
-					host().query(
+					host().query<QueryAnswer<ReadRow>>(
 						requestJson(
 							listRequest(
 								kinds.catalog,
@@ -480,7 +474,9 @@
 					}
 				: pageState
 	);
-	const next = $derived(pageState.kind === 'ready' ? nextOf(pageState.value) : null);
+	const next = $derived(
+		pageState.kind === 'ready' && 'next' in pageState.value ? pageState.value.next : null
+	);
 	// a long page (pageSize 100/200, a local grid) renders a window of rows, one per layout, measured and keyed by id
 	const shownRows = $derived(view.kind === 'ready' ? view.value : []);
 	const presented = $derived(
@@ -488,7 +484,7 @@
 			shownRows.map<[ReadRow, Values]>((row) => [
 				row,
 				typeof row['id'] === 'string'
-					? (unref(kinds.catalog, model, refs, rowsOf([row]), client?.locale)[0] ?? row)
+					? (unref(kinds.catalog, model, refs, [row], client?.locale)[0] ?? row)
 					: row
 			])
 		)
@@ -500,44 +496,16 @@
 	const wide = virtualList({ count: () => shownRows.length, key: rowKey, estimate: 37 });
 	const narrow = virtualList({ count: () => shownRows.length, key: rowKey, estimate: 64 });
 
-	// ── one-shot count (rule 7): on scope change, then at most every 30 s while the page changes ──
-	let countInvalid = $state(false);
-	let countRevision = 0;
-	const countRead = watch(() => {
-		if (kind !== 'model' || st.q !== '' || probe !== null) return null;
-		const model = name,
-			where = scope;
-		let cached: unknown,
-			first = true;
-		const read = Effect.suspend(() => {
-			if (!first && !countInvalid) return Effect.succeed(cached);
-			const revision = countRevision;
-			return host()
-				.aggregate(model, compact({ count: true, where }))
-				.pipe(
-					Effect.tap((answer) =>
-						Effect.sync(() => {
-							cached = answer;
-							first = false;
-							countInvalid = revision !== countRevision;
-						})
-					)
-				);
-		});
-		return Stream.fromEffectSchedule(read, Schedule.spaced(COUNT_EVERY_MS));
+	// ── the count: the page read's `total` (every row the scope and search match); an index search has none ──
+	let lastTotal: number | null = null;
+	const count = $derived.by(() => {
+		if (kind !== 'model' || probe !== null) return null;
+		if (pageState.kind !== 'ready') return pageState.kind === 'loading' ? lastTotal : null;
+		const value = pageState.value;
+		const total = 'next' in value ? value.total : undefined;
+		lastTotal = total ?? null;
+		return lastTotal;
 	});
-	const count = $derived(
-		countInvalid || countRead.error !== undefined ? null : countOf(countRead.value)
-	);
-	onChange_(
-		() => page?.current,
-		(current, previous) => {
-			if (previous !== undefined && current !== undefined && current !== previous) {
-				countRevision++;
-				countInvalid = true;
-			}
-		}
-	);
 
 	// ── selection and row actions (the toolbar runs its own) ──
 	type SelectedId = Parameters<ToolbarItem<RowIn<S>>['run']>[0][number];
@@ -560,7 +528,7 @@
 		selecting = true;
 		fork(
 			host()
-				.query<{ readonly [root: string]: Page<RowIn<S>> }>(
+				.query<QueryAnswer<RowIn<S>>>(
 					requestJson({ [name]: { ...searched, fields: [], limit: READ_LIMIT } })
 				)
 				.pipe(
@@ -625,7 +593,7 @@
 									)
 								)
 							)
-							.pipe(Effect.map((answer) => pageOf(answer, name)))
+							.pipe(Effect.map((answer) => pageOf(answer, name)?.rows ?? []))
 				}
 			: kind === 'local' && tb.export === true
 				? {
@@ -724,6 +692,42 @@
 		addEventListener('pointermove', move);
 		addEventListener('pointerup', up);
 	}
+	/** A native scroll bar mirroring the port on one axis. The port's own bars are hidden, so the vertical one starts
+	 * under the sticky header in every engine (a scrollbar-track margin is Chrome's alone). */
+	const rail = (axis: 'x' | 'y') => (bar: HTMLElement) => {
+		const port = bar.parentElement?.querySelector<HTMLElement>('[data-table-wide]');
+		const fill = bar.firstElementChild;
+		if (!port || !(fill instanceof HTMLElement)) return;
+		const at = axis === 'y' ? 'scrollTop' : 'scrollLeft';
+		const fit = () => {
+			if (axis === 'y') {
+				const head = port.querySelector('thead')?.offsetHeight ?? 0;
+				bar.style.top = `${head}px`;
+				fill.style.height = `${port.scrollHeight - head}px`;
+				bar.hidden = port.scrollHeight <= port.clientHeight;
+			} else {
+				fill.style.width = `${port.scrollWidth}px`;
+				bar.hidden = port.scrollWidth <= port.clientWidth;
+			}
+			bar[at] = port[at];
+		};
+		const follow = () => {
+			if (bar[at] !== port[at]) bar[at] = port[at];
+		};
+		const lead = () => {
+			if (port[at] !== bar[at]) port[at] = bar[at];
+		};
+		const ro = new ResizeObserver(fit);
+		ro.observe(port);
+		if (port.firstElementChild) ro.observe(port.firstElementChild);
+		port.addEventListener('scroll', follow, { passive: true });
+		bar.addEventListener('scroll', lead, { passive: true });
+		return () => {
+			ro.disconnect();
+			port.removeEventListener('scroll', follow);
+			bar.removeEventListener('scroll', lead);
+		};
+	};
 	const PIN_EDGE = 'shadow-[inset_-1px_0_0_0_var(--color-border)]';
 	// the row actions stay at the right edge while wide rows scroll sideways (else a many-column table hides them past it)
 	const ACTS_EDGE = 'sticky right-0 shadow-[inset_1px_0_0_0_var(--color-border)]';
@@ -813,7 +817,9 @@
 			row,
 			value: columnValue(row, col.field),
 			field: col.field
-		})}{:else if plainText(row, col.field)}<Overflow text={fullText(row, col.field)}
+		})}{:else if plainText(row, col.field)}<Overflow
+			text={fullText(row, col.field)}
+			expand={title ? 'never' : 'row'}
 			><Value
 				value={valueAt(displayed, col.field)}
 				kind={kindOf(col.field)}
@@ -1070,9 +1076,7 @@
 							{#if canNew}<Button
 									size="sm"
 									onclick={() =>
-										typeof tb.new === 'function'
-											? tb.new()
-											: openRecord(model, 'new', contexts)}
+										typeof tb.new === 'function' ? tb.new() : openRecord(model, 'new', contexts)}
 									><Glyph name="plus" />{msg(text, 'table.new', 'New')}</Button
 								>{/if}
 						</EmptyState>
@@ -1092,263 +1096,300 @@
 					     the nowrap row actions never squeeze a truncating column down to its first letters -->
 				<div
 					class={[
-						embedded ? 'min-w-0 overflow-x-auto' : 'min-h-0 flex-1 overflow-auto rounded-t-md',
-						!embedded && layout !== 'grid' && !(kind === 'local' && onChange) && 'hidden md:block'
+						embedded ? 'min-w-0' : 'relative flex min-h-0 flex-1 flex-col',
+						!embedded && layout !== 'grid' && !(kind === 'local' && onChange) && 'max-md:hidden'
 					]}
-					data-table-wide
 				>
-					<table
-						class="w-max min-w-full border-separate border-spacing-0 text-xs [&_td]:h-9 [&_td]:border-b [&_td]:px-3 [&_td]:py-0 [&_td]:whitespace-nowrap [&_td:not(:last-child)]:border-r [&_th]:h-9 [&_th]:border-b [&_th]:px-3 [&_th]:text-left [&_th]:text-[13px] [&_th]:font-medium [&_th:not(:last-child)]:border-r"
+					<div
+						class={embedded
+							? 'min-w-0 overflow-x-auto'
+							: 'min-h-0 flex-1 overflow-auto rounded-t-md [scrollbar-width:none] [&::-webkit-scrollbar]:hidden'}
+						data-table-wide
 					>
-						<thead class="bg-muted sticky top-0 z-20">
-							<tr>
-								{#if selectable}
-									<th class="bg-muted sticky left-0 z-10 w-8 px-2!"
-										><input
-											type="checkbox"
-											aria-label={msg(text, 'table.selectAll', 'Select all')}
-											checked={pageAll(rows)}
-											onchange={(e) => togglePage(rows, e.currentTarget.checked)}
-										/></th
-									>
-								{/if}
-								{#each ordered as c, ci (colOf(c).field)}
-									{@const f = colOf(c).field}
-									{@const isPinned = ci < pinCount}
-									<!-- drag a header onto another to move it (the column menu moves it by keyboard); sorting is the toolbar's -->
-									<th
-										class={[
-											'group bg-muted relative',
-											isPinned && 'sticky z-10',
-											isPinned && ci === pinCount - 1 && PIN_EDGE,
-											numeric(f) && 'text-right'
-										]}
-										style={[sized(widthOf(c)), isPinned ? `left:${leftOf(ci)}px` : '']
-											.filter(Boolean)
-											.join(';') || undefined}
-										draggable="true"
-										data-column={f}
-										ondragstart={(e) => {
-											dragging = f;
-											e.dataTransfer?.setData('text/x-bolt-column', f);
-										}}
-										ondragend={() => (dragging = null)}
-										ondragover={(e) => {
-											if (dragging !== null) e.preventDefault();
-										}}
-										ondrop={(e) => {
-											e.preventDefault();
-											if (dragging !== null) moveColumn(dragging, f);
-											dragging = null;
-										}}
-										{@attach measure(f)}
-									>
-										<span class={['flex min-w-0 items-center gap-1', numeric(f) && 'justify-end']}>
-											<span class="truncate whitespace-nowrap">{colLabel(c)}</span>
-											{@render columnInfo(c)}
-											{#if isPinned}<Glyph
-													name="pin"
-													class="text-muted-foreground size-3 shrink-0"
-												/>{/if}
-											<Popover.Root>
-												<Popover.Trigger
-													class={[
-														'text-muted-foreground hover:bg-background hover:text-foreground ml-auto grid size-6 shrink-0 place-items-center rounded-sm transition-opacity focus-visible:opacity-100 data-[state=open]:opacity-100',
-														'opacity-0 group-hover:opacity-100'
-													]}
-													aria-label={msg(text, 'table.columnMenu', 'Column options for {column}', {
-														column: colLabel(c)
-													})}
-													data-column-menu={f}
-													><Glyph name="more" class="size-3.5" /></Popover.Trigger
-												>
-												<Popover.Content
-													align="start"
-													class="flex w-52 flex-col gap-0.5 p-1.5 text-xs font-normal"
-												>
-													{@render colItem(
-														isPinned
-															? msg(text, 'table.unpin', 'Unpin column')
-															: msg(text, 'table.pin', 'Pin column'),
-														'pin',
-														() => togglePin(f)
-													)}
-													{@render colItem(
-														msg(text, 'table.hideColumn', 'Hide column'),
-														'eyeOff',
-														() => toggleHidden(f),
-														ordered.length === 1
-													)}
-													{@render colItem(
-														msg(text, 'table.moveLeft', 'Move left'),
-														'left',
-														() => moveColumn(f, -1),
-														ci === 0
-													)}
-													{@render colItem(
-														msg(text, 'table.moveRight', 'Move right'),
-														'right',
-														() => moveColumn(f, 1),
-														ci === ordered.length - 1
-													)}
-													{#if widths[f] !== undefined}{@render colItem(
-															msg(text, 'table.resetWidth', 'Reset width'),
-															'sync',
-															() => {
-																const { [f]: _, ...rest } = widths;
-																widths = rest;
-																keep();
-															}
-														)}{/if}
-													{#if hiddenCols.length > 0}
-														<p
-															class="text-muted-foreground mt-1 border-t px-2 pt-2 pb-1 font-medium"
-														>
-															{msg(text, 'table.hiddenColumns', 'Hidden columns')}
-														</p>
-														{#each hiddenCols as h (colOf(h).field)}{@render colItem(
-																colLabel(h),
-																'eye',
-																() => toggleHidden(colOf(h).field)
-															)}{/each}
-													{/if}
-												</Popover.Content>
-											</Popover.Root>
-										</span>
-										<!-- the resize handle: drag the column's right edge -->
-										<span
-											role="separator"
-											aria-orientation="vertical"
-											aria-label={msg(text, 'table.resize', 'Resize column')}
-											data-column-resize
-											class="group/resize absolute inset-y-0 -right-1 z-10 flex w-2 cursor-col-resize touch-none justify-center select-none"
-											onpointerdown={(e) => resize(e, f)}
-										>
-											<span
-												class="bg-muted-foreground/40 group-hover/resize:bg-brand my-auto h-5 w-px opacity-0 transition-opacity group-hover:opacity-100 group-hover/resize:w-0.5"
-											></span>
-										</span>
-									</th>
-								{/each}
-								{#if actions.length > 0 || (kind === 'local' && onChange && remove)}<th
-										class={['bg-muted z-10', ACTS_EDGE]}
-									></th>{/if}
-							</tr>
-						</thead>
-						<tbody>
-							{#if wide.on}<tr aria-hidden="true" {@attach wide.anchor}
-									><td colspan={span} style="height:{wide.before}px;padding:0;border:0"></td></tr
-								>{/if}
-							{#each wide.slice(rows) as row, j (row['id'] ?? wide.start + j)}
-								{@const i = wide.start + j}
-								<!-- svelte-ignore a11y_no_noninteractive_tabindex -->
-								{@const held = approvalOf(row)}
-								<tr
-									class={[
-										'group/row hover:[&>td]:bg-[color-mix(in_oklab,var(--color-muted)_50%,var(--color-card))]',
-										opens && 'focus-visible:[&>td]:bg-accent cursor-pointer outline-none',
-										rowClass?.(row),
-										held !== null &&
-											(held.state === 'Pending'
-												? '[&>td:last-child]:shadow-[inset_-3px_0_0_var(--color-warning)]'
-												: '[&>td:last-child]:shadow-[inset_-3px_0_0_var(--color-primary)]')
-									]}
-									data-approval={held?.state}
-									title={held === null ? undefined : approvalText(text, held)}
-									{@attach wide.measure(rowKey(i))}
-									tabindex={opens ? 0 : undefined}
-									onclick={(e) => rowClick(e, row)}
-									onkeydown={(e) => {
-										if (opens && e.target === e.currentTarget && e.key === 'Enter') {
-											e.preventDefault();
-											open(row);
-										}
-									}}
-								>
-									{#if selectable && recordRow(row)}
-										<td class="bg-card sticky left-0 z-[1] px-2!">
-											<input
+						<table
+							class="w-max min-w-full border-separate border-spacing-0 text-xs [&_td]:h-9 [&_td]:border-b [&_td]:px-3 [&_td]:py-0 [&_td]:whitespace-nowrap [&_td:not(:last-child)]:border-r [&_th]:h-9 [&_th]:border-b [&_th]:px-3 [&_th]:text-left [&_th]:text-[13px] [&_th]:font-medium [&_th:not(:last-child)]:border-r"
+						>
+							<thead class="bg-muted sticky top-0 z-20">
+								<tr>
+									{#if selectable}
+										<th class="bg-muted sticky left-0 z-10 w-8 px-2!"
+											><input
 												type="checkbox"
-												aria-label={msg(text, 'table.select', 'Select')}
-												checked={selected.has(row.id)}
-												onchange={(e) =>
-													e.currentTarget.checked ? selected.add(row.id) : selected.delete(row.id)}
-											/>
-										</td>
+												aria-label={msg(text, 'table.selectAll', 'Select all')}
+												checked={pageAll(rows)}
+												onchange={(e) => togglePage(rows, e.currentTarget.checked)}
+											/></th
+										>
 									{/if}
 									{#each ordered as c, ci (colOf(c).field)}
-										{@const col = colOf(c)}
-										{@const w = widthOf(c)}
+										{@const f = colOf(c).field}
 										{@const isPinned = ci < pinCount}
-										<td
+										<!-- drag a header onto another to move it (the column menu moves it by keyboard); sorting is the toolbar's -->
+										<th
 											class={[
-												'bg-card',
-												isPinned
-													? 'sticky z-[1]'
-													: (ci === 0 || (rowTrailing && ci === ordered.length - 1)) && 'relative',
+												'group bg-muted relative',
+												isPinned && 'sticky z-10',
 												isPinned && ci === pinCount - 1 && PIN_EDGE,
-												numeric(col.field) && 'text-right tabular-nums',
-												embedded && 'align-middle',
-												rowTrailing && ci === ordered.length - 1 && 'pr-9!'
+												numeric(f) && 'text-right'
 											]}
-											style={[sized(w), isPinned ? `left:${leftOf(ci)}px` : '']
+											style={[sized(widthOf(c)), isPinned ? `left:${leftOf(ci)}px` : '']
 												.filter(Boolean)
 												.join(';') || undefined}
+											draggable="true"
+											data-column={f}
+											ondragstart={(e) => {
+												dragging = f;
+												e.dataTransfer?.setData('text/x-bolt-column', f);
+											}}
+											ondragend={() => (dragging = null)}
+											ondragover={(e) => {
+												if (dragging !== null) e.preventDefault();
+											}}
+											ondrop={(e) => {
+												e.preventDefault();
+												if (dragging !== null) moveColumn(dragging, f);
+												dragging = null;
+											}}
+											{@attach measure(f)}
 										>
-											{#if kind === 'local' && onChange && col.edit && !col.cell}
-												{@const value = valueAt(row, col.field)}
-												<input
-													class="border-input h-7 w-full rounded-sm border px-1"
-													type={typeof value === 'number' ? 'number' : 'text'}
-													value={String(value ?? '')}
-													onchange={(e) => edit(row, col.field, e.currentTarget.value)}
-												/>
-											{:else}
-												<!-- one line: every row keeps its height, a long value truncates, its full text is the tooltip -->
-												<div
-													class={[
-														'truncate [&_[data-enum-list]]:flex-nowrap',
-														!embedded && w === undefined && 'max-w-80',
-														ci === 0 && opens && 'pr-7'
-													]}
-													title={fullText(row, col.field) || undefined}
-												>
-													{@render cell(row, col, ci === 0 && opens)}
-												</div>
-											{/if}
-											{#if rowTrailing && ci === ordered.length - 1}
-												<div
-													class="absolute top-1/2 right-1 -translate-y-1/2 opacity-0 pointer-events-none group-hover/row:opacity-100 group-hover/row:pointer-events-auto group-focus-within/row:opacity-100 group-focus-within/row:pointer-events-auto [@media(hover:none)]:opacity-100 [@media(hover:none)]:pointer-events-auto"
-													data-row-trailing
-												>
-													{@render rowTrailing(row)}
-												</div>
-											{/if}
-											{#if ci === 0 && opens}
-												<!-- the open button : shown on hover or focus, beside the row's own click -->
-												<button
-													type="button"
-													class="bg-card text-muted-foreground hover:text-foreground hover:bg-accent focus-visible:ring-ring absolute top-1/2 right-1 grid size-6 -translate-y-1/2 place-items-center rounded-sm border opacity-0 shadow-xs outline-none group-hover/row:opacity-100 group-focus-within/row:opacity-100 focus-visible:opacity-100 focus-visible:ring-2 [@media(hover:none)]:opacity-100"
-													aria-label={msg(text, 'table.openRow', 'Open')}
-													title={msg(text, 'table.openRow', 'Open')}
-													onclick={() => open(row)}
-													data-row-open><Glyph name="expand" class="size-3.5" /></button
-												>
-											{/if}
-										</td>
+											<span
+												class={['flex min-w-0 items-center gap-1', numeric(f) && 'justify-end']}
+											>
+												<span class="truncate whitespace-nowrap">{colLabel(c)}</span>
+												{@render columnInfo(c)}
+												{#if isPinned}<Glyph
+														name="pin"
+														class="text-muted-foreground size-3 shrink-0"
+													/>{/if}
+												<Popover.Root>
+													<Popover.Trigger
+														class={[
+															'text-muted-foreground hover:bg-background hover:text-foreground ml-auto grid size-6 shrink-0 place-items-center rounded-sm transition-opacity focus-visible:opacity-100 data-[state=open]:opacity-100',
+															'opacity-0 group-hover:opacity-100'
+														]}
+														aria-label={msg(
+															text,
+															'table.columnMenu',
+															'Column options for {column}',
+															{
+																column: colLabel(c)
+															}
+														)}
+														data-column-menu={f}
+														><Glyph name="more" class="size-3.5" /></Popover.Trigger
+													>
+													<Popover.Content
+														align="start"
+														class="flex w-52 flex-col gap-0.5 p-1.5 text-xs font-normal"
+													>
+														{@render colItem(
+															isPinned
+																? msg(text, 'table.unpin', 'Unpin column')
+																: msg(text, 'table.pin', 'Pin column'),
+															'pin',
+															() => togglePin(f)
+														)}
+														{@render colItem(
+															msg(text, 'table.hideColumn', 'Hide column'),
+															'eyeOff',
+															() => toggleHidden(f),
+															ordered.length === 1
+														)}
+														{@render colItem(
+															msg(text, 'table.moveLeft', 'Move left'),
+															'left',
+															() => moveColumn(f, -1),
+															ci === 0
+														)}
+														{@render colItem(
+															msg(text, 'table.moveRight', 'Move right'),
+															'right',
+															() => moveColumn(f, 1),
+															ci === ordered.length - 1
+														)}
+														{#if widths[f] !== undefined}{@render colItem(
+																msg(text, 'table.resetWidth', 'Reset width'),
+																'sync',
+																() => {
+																	const { [f]: _, ...rest } = widths;
+																	widths = rest;
+																	keep();
+																}
+															)}{/if}
+														{#if hiddenCols.length > 0}
+															<p
+																class="text-muted-foreground mt-1 border-t px-2 pt-2 pb-1 font-medium"
+															>
+																{msg(text, 'table.hiddenColumns', 'Hidden columns')}
+															</p>
+															{#each hiddenCols as h (colOf(h).field)}{@render colItem(
+																	colLabel(h),
+																	'eye',
+																	() => toggleHidden(colOf(h).field)
+																)}{/each}
+														{/if}
+													</Popover.Content>
+												</Popover.Root>
+											</span>
+											<!-- the resize handle: drag the column's right edge -->
+											<span
+												role="separator"
+												aria-orientation="vertical"
+												aria-label={msg(text, 'table.resize', 'Resize column')}
+												data-column-resize
+												class={[
+													'group/resize absolute inset-y-0 z-10 flex w-2 cursor-col-resize touch-none justify-center select-none',
+													ci === ordered.length - 1 ? 'right-0' : '-right-1'
+												]}
+												onpointerdown={(e) => resize(e, f)}
+											>
+												<span
+													class="bg-muted-foreground/40 group-hover/resize:bg-brand my-auto h-5 w-px opacity-0 transition-opacity group-hover:opacity-100 group-hover/resize:w-0.5"
+												></span>
+											</span>
+										</th>
 									{/each}
-									{#if actions.length > 0 || (kind === 'local' && onChange && remove)}
-										<td class={['bg-card z-[1]', ACTS_EDGE]} data-row-actions
-											>{@render rowMenu(row)}</td
-										>
-									{/if}
+									{#if actions.length > 0 || (kind === 'local' && onChange && remove)}<th
+											class={['bg-muted z-10', ACTS_EDGE]}
+										></th>{/if}
 								</tr>
-							{/each}
-							{#if wide.after > 0}<tr aria-hidden="true"
-									><td colspan={span} style="height:{wide.after}px;padding:0;border:0"></td></tr
-								>{/if}
-						</tbody>
-					</table>
+							</thead>
+							<tbody>
+								{#if wide.on}<tr aria-hidden="true" {@attach wide.anchor}
+										><td colspan={span} style="height:{wide.before}px;padding:0;border:0"></td></tr
+									>{/if}
+								{#each wide.slice(rows) as row, j (row['id'] ?? wide.start + j)}
+									{@const i = wide.start + j}
+									<!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+									{@const held = approvalOf(row)}
+									<tr
+										class={[
+											'group/row hover:[&>td]:bg-[color-mix(in_oklab,var(--color-muted)_50%,var(--color-card))]',
+											opens && 'focus-visible:[&>td]:bg-accent cursor-pointer outline-none',
+											rowClass?.(row),
+											held !== null &&
+												(held.state === 'Pending'
+													? '[&>td:last-child]:shadow-[inset_-3px_0_0_var(--color-warning)]'
+													: '[&>td:last-child]:shadow-[inset_-3px_0_0_var(--color-primary)]')
+										]}
+										data-approval={held?.state}
+										title={held === null ? undefined : approvalText(text, held)}
+										{@attach wide.measure(rowKey(i))}
+										tabindex={opens ? 0 : undefined}
+										onclick={(e) => rowClick(e, row)}
+										onkeydown={(e) => {
+											if (opens && e.target === e.currentTarget && e.key === 'Enter') {
+												e.preventDefault();
+												open(row);
+											}
+										}}
+									>
+										{#if selectable}
+											<!-- every row holds the checkbox column's cell, so its data cells stay under their headings -->
+											<td class="bg-card sticky left-0 z-[1] px-2!">
+												{#if recordRow(row)}<input
+														type="checkbox"
+														aria-label={msg(text, 'table.select', 'Select')}
+														checked={selected.has(row.id)}
+														onchange={(e) =>
+															e.currentTarget.checked
+																? selected.add(row.id)
+																: selected.delete(row.id)}
+													/>{/if}
+											</td>
+										{/if}
+										{#each ordered as c, ci (colOf(c).field)}
+											{@const col = colOf(c)}
+											{@const w = widthOf(c)}
+											{@const isPinned = ci < pinCount}
+											<td
+												class={[
+													'bg-card',
+													isPinned
+														? 'sticky z-[1]'
+														: (ci === 0 || (rowTrailing && ci === ordered.length - 1)) &&
+															'relative',
+													isPinned && ci === pinCount - 1 && PIN_EDGE,
+													numeric(col.field) && 'text-right tabular-nums',
+													embedded && 'align-middle',
+													rowTrailing && ci === ordered.length - 1 && 'pr-9!'
+												]}
+												style={[sized(w), isPinned ? `left:${leftOf(ci)}px` : '']
+													.filter(Boolean)
+													.join(';') || undefined}
+											>
+												{#if kind === 'local' && onChange && col.edit && !col.cell}
+													{@const value = valueAt(row, col.field)}
+													<input
+														class="border-input h-7 w-full rounded-sm border px-1"
+														type={typeof value === 'number' ? 'number' : 'text'}
+														value={String(value ?? '')}
+														onchange={(e) => edit(row, col.field, e.currentTarget.value)}
+													/>
+												{:else}
+													<!-- one line: every row keeps its height, a long value truncates, its full text is the tooltip -->
+													<div
+														class={[
+															'truncate [&_[data-enum-list]]:flex-nowrap',
+															!embedded && w === undefined && 'max-w-80'
+														]}
+														title={fullText(row, col.field) || undefined}
+													>
+														{@render cell(row, col, ci === 0 && opens)}
+													</div>
+												{/if}
+												{#if rowTrailing && ci === ordered.length - 1}
+													<div
+														class="absolute top-1/2 right-1 -translate-y-1/2 opacity-0 pointer-events-none group-hover/row:opacity-100 group-hover/row:pointer-events-auto group-focus-within/row:opacity-100 group-focus-within/row:pointer-events-auto [@media(hover:none)]:opacity-100 [@media(hover:none)]:pointer-events-auto"
+														data-row-trailing
+													>
+														{@render rowTrailing(row)}
+													</div>
+												{/if}
+												{#if ci === 0 && opens}
+													<!-- the row's one open control (its record opens in the side panel), over the cell's end while the row is hovered or holds focus -->
+													<button
+														type="button"
+														class="bg-[color-mix(in_oklab,var(--color-muted)_50%,var(--color-card))] text-muted-foreground hover:text-foreground hover:bg-accent focus-visible:ring-ring absolute top-1/2 right-1 grid size-6 -translate-y-1/2 place-items-center rounded-sm opacity-0 outline-none group-hover/row:opacity-100 group-focus-within/row:opacity-100 focus-visible:opacity-100 focus-visible:ring-2 [@media(hover:none)]:opacity-100"
+														aria-label={msg(text, 'table.openRow', 'Open')}
+														title={msg(text, 'table.openRow', 'Open')}
+														onclick={() => open(row)}
+														data-row-open><Glyph name="panel" class="size-3.5" /></button
+													>
+												{/if}
+											</td>
+										{/each}
+										{#if actions.length > 0 || (kind === 'local' && onChange && remove)}
+											<td class={['bg-card z-[1]', ACTS_EDGE]} data-row-actions
+												>{@render rowMenu(row)}</td
+											>
+										{/if}
+									</tr>
+								{/each}
+								{#if wide.after > 0}<tr aria-hidden="true"
+										><td colspan={span} style="height:{wide.after}px;padding:0;border:0"></td></tr
+									>{/if}
+							</tbody>
+						</table>
+					</div>
+					{#if !embedded}
+						<div
+							class="absolute right-0 bottom-0 z-30 w-3 overflow-x-hidden overflow-y-auto"
+							aria-hidden="true"
+							hidden
+							{@attach rail('y')}
+						>
+							<div class="w-px"></div>
+						</div>
+						<div
+							class="absolute inset-x-0 bottom-0 z-30 h-3 overflow-x-auto overflow-y-hidden"
+							aria-hidden="true"
+							hidden
+							{@attach rail('x')}
+						>
+							<div class="h-px"></div>
+						</div>
+					{/if}
 				</div>
 				{#if !embedded && layout !== 'grid' && !(kind === 'local' && onChange)}
 					<ul class="min-h-0 flex-1 divide-y overflow-auto rounded-t-md md:hidden" data-table-list>

@@ -30,7 +30,6 @@
 			<Frame
 				as="span"
 				ratio="square"
-				shrink={false}
 				data-slot="accordion-chevron"
 				class="pointer-events-none size-4"
 				aria-hidden="true"

@@ -4,7 +4,6 @@ import {
 	catalogOf,
 	compile,
 	isOperand,
-	isTaggedOperand,
 	semantic,
 	similar,
 	where,
@@ -45,9 +44,6 @@ describe('read contract', () => {
 				);
 				expect(isOperand(clock)).toBe(false);
 			}
-			expect(isTaggedOperand({ _tag: 'Today', offset: '' })).toBe(false);
-			expect(isTaggedOperand({ _tag: 'Now', offset: '' })).toBe(false);
-			expect(isTaggedOperand({ _tag: 'StartOf', unit: 'month' })).toBe(false);
 			expect(
 				(yield* Effect.flip(
 					where(cat, 'document', {
@@ -74,9 +70,9 @@ describe('read contract', () => {
 					.code
 			).toBe('invalid');
 			for (const old of [{ param: 'from' }, { actor: 'id' }, { clock: 'today' }])
-				expect(
-					(yield* Effect.flip(where(cat, 'document', { title: { eq: old } }))).code
-				).toBe('invalid');
+				expect((yield* Effect.flip(where(cat, 'document', { title: { eq: old } }))).code).toBe(
+					'invalid'
+				);
 			expect(yield* where(cat, 'document', { title: { eq: { var: 'requestor.id' } } })).toEqual({
 				t: 'cmp',
 				field: 'title',
@@ -90,18 +86,14 @@ describe('read contract', () => {
 		Effect.gen(function* () {
 			const stored = yield* similar(cat, 'document', 'stored', {}, { limit: 3 });
 			expect(stored).toMatchObject({ kind: 'similar', index: 'stored' });
-			const scope: Scope = {
-				rows: () => undefined,
-				mask: (_model, field) =>
-					field === 'vector' ? { t: 'const', value: false } : undefined
-			};
+			const scope: Scope = { rows: () => undefined };
 			const storedSql = yield* compile(
 				cat,
 				stored,
 				{ scope },
 				{ field: 'vector', vector: [1, 2], take: 3 }
 			);
-			expect(storedSql.sql.text).toContain('CASE WHEN false THEN a0."vector" END');
+			expect(storedSql.sql.text).toContain('a0."vector"');
 			expect(storedSql.sql.text).toContain('<->');
 			const derived = yield* similar(cat, 'document', 'derived', {}, { limit: 3 });
 			const derivedSql = yield* compile(

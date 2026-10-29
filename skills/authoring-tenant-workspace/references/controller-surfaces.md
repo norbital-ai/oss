@@ -39,13 +39,21 @@ Check current/error/loading before choosing empty, denied or pending presentatio
 
 ```svelte
 <script lang="ts">
-  import { bolt } from '$bolt';
-  const companyRecord = $derived(company === null ? null : bolt.query({
-    companies: { where: { id: { eq: company } }, limit: 1 }
-  }));
-  const employments = $derived(company === null ? null : bolt.query({
-    employments: { where: { company: { eq: company } }, limit: 1000 }
-  }));
+	import { bolt } from '$bolt';
+	const companyRecord = $derived(
+		company === null
+			? null
+			: bolt.query({
+					companies: { where: { id: { eq: company } }, limit: 1 }
+				})
+	);
+	const employments = $derived(
+		company === null
+			? null
+			: bolt.query({
+					employments: { where: { company: { eq: company } }, limit: 1000 }
+				})
+	);
 </script>
 ```
 
@@ -82,7 +90,14 @@ picker option labels, as a model `label`, or as fallbacks when a map misses.
 
 <!-- RIGHT -->
 <Table of="roster_entries" columns={['company', 'shift', 'work_date']} />
-<Picker of="companies" label={['code', 'name']} orderBy="name" limit={500} value={company} onChange={(id) => (company = id)} />
+<Picker
+	of="companies"
+	label={['code', 'name']}
+	orderBy="name"
+	limit={500}
+	value={company}
+	onChange={(id) => (company = id)}
+/>
 ```
 
 Doctor rejects a system field (`id`, `revision`, …) as a column or field. Pass a stored
@@ -147,11 +162,11 @@ A controller **group** that spans more than one legal entity, project, site, or 
 make that entity the primary scope of every sibling page — not a column mixed into an unfiltered
 list.
 
-| Pattern                                                   | When to use                                                             |
-| --------------------------------------------------------- | ----------------------------------------------------------------------- |
-| **One group-owned live read** + the page's header `Picker` (`AppShell` `actions`) | Shared legal-entity / project / site scope across sibling pages |
-| **Entities as a `Table`**                                 | Catalogue of legal entities; not the scope picker                       |
-| **Entity breakdown** on a dashboard                       | Cross-entity overview only (counts per entity), never mixed time series |
+| Pattern                                                                           | When to use                                                             |
+| --------------------------------------------------------------------------------- | ----------------------------------------------------------------------- |
+| **One group-owned live read** + the page's header `Picker` (`AppShell` `actions`) | Shared legal-entity / project / site scope across sibling pages         |
+| **Entities as a `Table`**                                                         | Catalogue of legal entities; not the scope picker                       |
+| **Entity breakdown** on a dashboard                                               | Cross-entity overview only (counts per entity), never mixed time series |
 
 The live read lives in one `*.svelte.ts` module. Default is the first **in-force** row, resolved in a
 `$derived`, never copied into shared state. Each page keeps its own chosen id in `$state` and reads
@@ -161,14 +176,25 @@ no in-force row — tell the operator to choose one in the header picker.
 Declare `const day = bolt.clock('day')` during component initialization.
 
 ```svelte
-<AppShell icon="lucide:calendar" title={bolt.t('roster.title')} description={bolt.t('roster.description')}>
+<AppShell
+	icon="lucide:calendar"
+	title={bolt.t('roster.title')}
+	description={bolt.t('roster.description')}
+>
 	{#snippet actions()}
-		<Picker of="companies" where={{ effective: { contains: day.today } }} value={chosen} onChange={(id) => (chosen = id)} />
+		<Picker
+			of="companies"
+			where={{ effective: { contains: day.today } }}
+			value={chosen}
+			onChange={(id) => (chosen = id)}
+		/>
 	{/snippet}
-	<Table of="roster_entries"
+	<Table
+		of="roster_entries"
 		where={company === null ? { id: { in: [] } } : { company: { eq: company } }}
 		columns={['employee', 'shift', 'work_date']}
-		toolbar={{ description: company === null ? bolt.t('roster.choose_company') : undefined }} />
+		toolbar={{ description: company === null ? bolt.t('roster.choose_company') : undefined }}
+	/>
 </AppShell>
 ```
 

@@ -1,10 +1,17 @@
 // The boot as the sidebar's navigation model (`Nav.svelte`),  Operations (Norbius, the agent, opened
 // by `NORBIUS` or ⌘K; Approvals) above Applications, one row per app (or a group of apps); an app's pages
 // are the tab strip under its banner (`pages`), not sidebar rows. Everything else sits in the account row's ellipsis
-// popover: Settings (People, Organization, Audit, Automations), System (Integrations, Secrets,
-// Workspace Studio, whose runtime log is the workspace log), Portals (every `portal: true` page the viewer may open — kiosks and customer-facing pages, never a sidebar row or tab). Host plugins and the organisation list are the host's, so this model carries only the current workspace.
+// popover: Settings (Organization, Integrations, Secrets), System (the command center: builds and releases, the
+// audit trail, automation runs, inference and people; and Workspace Studio on a host that serves it), Portals (every `portal: true` page the viewer may open — kiosks and customer-facing pages, never a sidebar row or tab). Host plugins and the organisation list are the host's, so this model carries only the current workspace.
 import type { FeatureColorKey } from '@norbital-ai/ui/brand';
-import { based, type NavNode, type NavPage, type ShellBoot, type WorkspaceLink } from './nav.ts';
+import {
+	based,
+	commandCenterTabs,
+	type NavNode,
+	type NavPage,
+	type ShellBoot,
+	type WorkspaceLink
+} from './nav.ts';
 
 /** Norbius's row is no page: the shell opens the agent when the navigator is handed this href. */
 export const NORBIUS = '#norbius';
@@ -162,30 +169,25 @@ export function navigationModel(boot: ShellBoot, path: string, t: Translate): Na
 						children
 					}
 				];
+	const preview = boot.workspace.live !== undefined;
 	const utilities = [
 		...group(
 			'settings',
 			'Settings',
 			s.settings
 				? [
-						// a preview manages no people: who has access is the live workspace's (`previewRoute`)
-						...(boot.workspace.live === undefined
-							? [leaf('people', 'People', 'lucide:users', '/settings/people')]
-							: []),
 						leaf('organization', 'Organization', 'lucide:building-2', '/settings/organization'),
-						leaf('audit', 'Audit', 'lucide:history', '/settings/audit'),
-						leaf('automations', 'Automations', 'lucide:refresh-cw', '/settings/automations')
+						// a preview serves no integration endpoints: they are the live workspace's (`previewRoute`)
+						...(preview
+							? []
+							: [leaf('integrations', 'Integrations', 'lucide:plug', '/settings/integrations')]),
+						leaf('secrets', 'Secrets', 'lucide:key-round', '/settings/secrets')
 					]
 				: []
 		),
 		...group('system', 'System', [
-			...(s.settings
-				? [
-						...(boot.workspace.live === undefined
-							? [leaf('integrations', 'Integrations', 'lucide:plug', '/settings/integrations')]
-							: []),
-						leaf('secrets', 'Secrets', 'lucide:key-round', '/settings/secrets')
-					]
+			...(commandCenterTabs(s, boot.admin, preview).length > 0
+				? [leaf('command-center', 'Command center', 'lucide:radar', '/command-center')]
 				: []),
 			...(s.studio ? [leaf('studio', 'Workspace Studio', 'lucide:code-xml', '/studio')] : [])
 		]),

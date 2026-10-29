@@ -41,7 +41,7 @@ async function show(props: PackagingPart & { customFields?: KindsHost['customFie
 	const client = await viewFixture({
 		read: () => ({ rows: [JOB], next: null }),
 		get: () => JOB,
-		aggregate: () => [{ count: 1 }]
+		aggregate: () => ({ count: 1 })
 	});
 	const target = document.createElement('div');
 	document.body.append(target);

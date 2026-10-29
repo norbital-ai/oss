@@ -1,6 +1,6 @@
 // `$search` and `$similar` as predicates (rule 16): a row's search document holds every word of the text (prefixes and
 // slipped spellings), or it is among the `top` nearest in meaning. Both nest under a relation like any condition, and
-// a caller matches only the values it reads unmasked (rule 14).
+// a caller matches only the values its read output holds (rule 14).
 import { expect, layer } from '@effect/vitest';
 import { Context, Effect, Layer, Result, Schema, Stream } from 'effect';
 import type { ActOutcome as Outcome } from '../src/engine/contracts.ts';
@@ -10,7 +10,11 @@ import { Port } from '../src/engine/port.ts';
 import { decodeProjectedManifest } from '../src/engine/manifest.ts';
 import { actReply, qReply, routeFixture } from './support/route-fixture.ts';
 import { embedRun } from '../src/engine/integrations/embed.ts';
-import { respondSystem1, TestWorkspace, type WorkspaceServices } from '../src/test/index.ts';
+import {
+	respondSystem1,
+	TestWorkspace,
+	type WorkspaceServices
+} from '../../bolt-cli/src/test/index.ts';
 
 const manifest = Result.getOrThrow(
 	decodeProjectedManifest({
@@ -40,17 +44,17 @@ const manifest = Result.getOrThrow(
 			},
 			jobs: {
 				read: { jobs: { fields: 'all' }, 'jobs.site': { fields: 'all' } },
+				outputs: {
+					dispatch: { jobs: { fields: ['title', 'site'] }, 'jobs.site': { fields: 'all' } }
+				},
 				create: { columns: { jobs: ['title', 'notes', 'site'] } }
 			}
 		},
-		// `notes` is masked to the dispatcher: its one jobs arm lists the fields it reads
+		// the dispatcher reads jobs' `dispatch` output, which omits `notes`
 		policies: {
 			dispatch: {
 				description: 'Dispatch',
-				grants: {
-					sites: { read: true },
-					jobs: { read: { jobs: { fields: ['id', 'title', 'site', 'created_at', 'updated_at'] } } }
-				}
+				grants: { sites: { read: true }, jobs: { outputs: { dispatch: true } } }
 			}
 		},
 		integrations: {},
@@ -101,10 +105,10 @@ const workspace = () =>
 			actReply(route, a, { callable, input, issuedAt: t.clock.now() }).pipe(
 				Effect.map((reply) => reply.outcome)
 			);
-		const titles = (where: Json, who = a) =>
+		const titles = (where: Json, who = a, output = 'default') =>
 			Effect.gen(function* () {
 				const reply = yield* qReply(route, who, {
-					reads: [{ m: 'query', a: [{ jobs: { where, fields: ['title'] } }] }]
+					reads: [{ m: 'query', a: [{ jobs: { where, output, fields: ['title'] } }] }]
 				});
 				return (yield* Schema.decodeUnknownEffect(Schema.Struct({ jobs: Page }))(
 					reply.answers[0]
@@ -144,7 +148,9 @@ const seeded = Layer.effectDiscard(
 			] as const)
 				yield* act('jobs.create', [{ title, site, ...(notes === null ? {} : { notes }) }]);
 			const embedRows = yield* embedRun.pipe(Effect.provide(context));
-			yield* embedRows({}, { id: crypto.randomUUID(), starter: null }).pipe(Effect.provide(context));
+			yield* embedRows({}, { id: crypto.randomUUID(), starter: null }).pipe(
+				Effect.provide(context)
+			);
 		})
 	)
 ).pipe(Layer.provideMerge(TestWorkspace.layer({ manifest, ports })));
@@ -225,16 +231,21 @@ layer(seeded, { excludeTestServices: true })('$search and $similar (rule 16)', (
 						/declares no search.semantic/
 					);
 					expect((yield* Effect.flip(titles({ $search: '' }))).message).toMatch(/1–500 characters/);
-					// `notes` is in jobs' search document: a caller it is masked to matches only what it reads, never "secret code"
-					expect(yield* titles({ $search: 'secret' }, dispatcher)).toEqual([]);
-					expect(yield* titles({ $search: 'pipe' }, dispatcher)).toEqual(['burst pipe']);
-					expect(yield* titles({ $similar: { to: 'water leak', top: 1 } }, dispatcher)).toEqual([
+					// `notes` is in jobs' search document: a caller whose output omits it matches only what it reads, never "secret code"
+					expect(yield* titles({ $search: 'secret' }, dispatcher, 'dispatch')).toEqual([]);
+					expect(yield* titles({ $search: 'pipe' }, dispatcher, 'dispatch')).toEqual([
 						'burst pipe'
-					]); // the embedding covers title only
-					expect(yield* titles({ site: { is: { $search: 'pine' } } }, dispatcher)).toEqual([
-						'burst pipe',
-						'paint wall'
 					]);
+					expect(
+						yield* titles({ $similar: { to: 'water leak', top: 1 } }, dispatcher, 'dispatch')
+					).toEqual(['burst pipe']); // the embedding covers title only
+					expect(
+						yield* titles({ site: { is: { $search: 'pine' } } }, dispatcher, 'dispatch')
+					).toEqual(['burst pipe', 'paint wall']);
+					// the dispatcher holds no `default` output of jobs
+					expect((yield* Effect.flip(titles({ $search: 'pipe' }, dispatcher))).message).toMatch(
+						/no held policy grants reading 'jobs'/
+					);
 				})
 			)
 	);

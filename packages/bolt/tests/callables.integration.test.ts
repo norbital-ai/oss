@@ -3,11 +3,11 @@ import { describe, expect, it, layer } from '@effect/vitest';
 import { vi } from 'vitest';
 import { Context, Effect, Layer, Option, Result, Schema } from 'effect';
 import { decodeProjectedManifest } from '../src/engine/manifest.ts';
-import { TestDb } from '../src/test/database.ts';
+import { TestDb } from '../../bolt-cli/src/test/database.ts';
 import { TenantDb, type DbBatch } from '../src/engine/db/tenant-db.ts';
 import { Callables } from '../src/engine/services.ts';
 import { row } from '../src/engine/system/rows.ts';
-import { program } from '../src/test/guest.ts';
+import { program } from '../../bolt-cli/src/test/guest.ts';
 import { actReply, qReply, routeFixture } from './support/route-fixture.ts';
 import { HEADERS, uuidv7 } from '../src/protocol/wire.ts';
 import type { Json } from '../src/decl/values.ts';
@@ -16,7 +16,7 @@ import { DbError } from '../src/engine/errors.ts';
 import type { ActOutcome as Outcome } from '../src/engine/contracts.ts';
 import { ActConflict, actFailure } from '../src/decl/errors.ts';
 import { forActor } from '../src/engine/callables/index.ts';
-import { TestWorkspace, type ActOptions, type TestOptions } from '../src/test/index.ts';
+import { TestWorkspace, type ActOptions, type TestOptions } from '../../bolt-cli/src/test/index.ts';
 
 const ACME = '0199a000-0000-4000-8000-0000000000c1';
 const manifest = Result.getOrThrow(
@@ -75,7 +75,10 @@ const manifest = Result.getOrThrow(
 				read: { notes: { fields: 'all' } },
 				create: { columns: { notes: ['text', 'order'] } }
 			},
-			openings: { read: { openings: { fields: 'all' } } },
+			openings: {
+				read: { openings: { fields: 'all' } },
+				outputs: { listing: { openings: { fields: ['title', 'location', 'description'] } } }
+			},
 			applications: {
 				read: { applications: { fields: 'all' } },
 				create: { columns: { applications: ['opening', 'name', 'email', 'cv'] } }
@@ -97,21 +100,28 @@ const manifest = Result.getOrThrow(
 					notes: { read: true, create: true }
 				}
 			},
+			// the runs' own: a run is the system identity, so the rep's own-orders scope would match nothing there
+			ordering: {
+				description: 'Place and revise orders',
+				grants: {
+					customers: { read: true },
+					orders: {
+						read: true,
+						create: true,
+						update: true,
+						moves: { status: ['draft->submitted'] }
+					},
+					notes: { read: true, create: true }
+				}
+			},
 			applicant: {
 				description: 'Apply',
 				grants: {
-					openings: {
-						read: {
-							openings: {
-								where: { status: { eq: 'open' } },
-								fields: ['title', 'location', 'description']
-							}
-						}
-					},
+					openings: { outputs: { listing: { openings: { where: { status: { eq: 'open' } } } } } },
 					// a closed opening is no ref this visitor reads, so no write `where` is needed
 					applications: { create: true }
 				},
-				limits: { register: { rate: '3/h', per: 'ip' } }
+				limits: { act: { rate: '3/h', per: 'ip' } }
 			}
 		},
 		teams: { Rep: ['rep'] },
@@ -120,18 +130,18 @@ const manifest = Result.getOrThrow(
 				description: 'Place an order',
 				input: { title: { kind: 'text' }, customer: { kind: 'id', of: 'customers' } },
 				output: { kind: 'text' },
-				runAs: 'trigger'
+				policies: ['ordering']
 			},
 			revise: {
 				description: 'Apply an observed extraction',
 				input: { order: { kind: 'id', of: 'orders' }, revision: { kind: 'int' } },
 				output: { kind: 'text' },
-				runAs: 'trigger'
+				policies: ['ordering']
 			},
 			followup: {
 				description: 'Follow up',
 				input: { order: { kind: 'id', of: 'orders' } },
-				runAs: ['rep']
+				policies: ['ordering']
 			}
 		},
 		connections: {},
@@ -255,8 +265,8 @@ const pages = (f: Fixture, authority: Authority, request: Json) =>
 		Effect.flatMap((value) => Schema.decodeUnknownEffect(Pages)(value).pipe(Effect.orDie))
 	);
 /** Every row of one model the caller reads: a read request naming it alone. */
-const read = (f: Fixture, authority: Authority, model: string) =>
-	pages(f, authority, { [model]: {} }).pipe(
+const read = (f: Fixture, authority: Authority, model: string, output?: string) =>
+	pages(f, authority, { [model]: output === undefined ? {} : { output } }).pipe(
 		Effect.map((answer) => answer[model] ?? { rows: [], next: null })
 	);
 /** One record the caller reads, or `null`. */
@@ -548,19 +558,22 @@ layer(Layer.effect(Fx, fixture({ db: interceptedDb })), { excludeTestServices: t
 
 		// rule 38d on the same workspace: a public visitor of the careers app
 		it.effect(
-			'lists open roles masked to the granted fields, applies to an open role, and nothing else',
+			'lists open roles through its narrow output only, applies to an open role, and nothing else',
 			() =>
 				Effect.gen(function* () {
 					const f = yield* Fx,
 						me = f.t.visitor('careers');
-					const open = (yield* read(f, me.authority, 'openings')).rows;
+					const open = (yield* read(f, me.authority, 'openings', 'listing')).rows;
 					expect(open).toHaveLength(1);
 					expect(open[0]).toMatchObject({
 						id: OPEN,
 						title: 'Engineer',
 						location: 'SG',
-						description: 'Build',
-						status: { $masked: true }
+						description: 'Build'
+					});
+					expect(open[0]).not.toHaveProperty('status');
+					expect(yield* Effect.flip(read(f, me.authority, 'openings'))).toMatchObject({
+						code: 'forbidden'
 					});
 					ok(
 						yield* act(f, me.authority, 'applications.create', [

@@ -6,7 +6,6 @@ import type {
 	Committed,
 	FileRef,
 	Id,
-	Masked,
 	PendingApproval,
 	TxApplied,
 	TxCtx,
@@ -41,11 +40,13 @@ automation('orders_submit', {
 				void order.customer;
 			}
 			const page = yield* tx.query({ orders: { fields: ['note'], limit: 2 } });
-			// the caller's masks hold in the session: sales_rep reads customers' name and tier only
-			const masked = yield* tx.query({
-				customers: { where: { id: { eq: customer } }, fields: ['email'], limit: 1 }
+			// a named output reads in the session as outside it: its fixed fields only
+			const directory = yield* tx.query({
+				customers: { output: 'directory', where: { id: { eq: customer } }, limit: 1 }
 			});
-			is<Eq<(typeof masked.customers.rows)[number]['email'], string | null | Masked>>();
+			is<Eq<(typeof directory.customers.rows)[number]['tier'], 'basic' | 'gold'>>();
+			// @ts-expect-error a field outside the named output
+			yield* tx.query({ customers: { output: 'directory', fields: ['email'], limit: 1 } });
 			// a ref layer replaces its FK with the row or null; a many-layer lists its rows
 			const related = yield* tx.query({
 				orders: { where: { id: { eq: target } }, fields: ['customer'], limit: 1 },
@@ -98,7 +99,7 @@ automation('orders_submit', {
 			yield* tx.act('orders.upsert', [{ id: target, note: 'kept' }], { onConflict: 'keep' });
 			yield* tx.act('orders.delete', [{ target }]);
 			const after = yield* tx.query({ orders: { where: { id: { eq: target } }, limit: 1 } });
-			return { after: after.orders.rows[0] ?? null, masked, rows: page.orders.rows, amount: Decimal.of(1), file };
+			return { after: after.orders.rows[0] ?? null, directory, rows: page.orders.rows, amount: Decimal.of(1), file };
 		});
 		is<Eq<Effect.Error<typeof transaction>, ActRefused | ActConflict | ActUnknown>>();
 		const result = yield* transaction;

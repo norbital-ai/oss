@@ -1,7 +1,7 @@
 import { Context, Effect, Layer } from 'effect';
 // Rule 25a on PGlite: a prune pass that selects rows and deletes none stops `noProgress` and queues nothing.
 import { describe, expect, it } from '@effect/vitest';
-import { TestWorkspace, type Kit } from '../src/test/index.ts';
+import { TestWorkspace, type Kit } from '../../bolt-cli/src/test/index.ts';
 import { manifest } from './catalogue-fixture.ts';
 
 const NOW = '2026-09-25T10:00:00.000Z';

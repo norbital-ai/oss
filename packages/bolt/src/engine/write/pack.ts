@@ -1,7 +1,8 @@
 // Seed packs as hosts read them (rule 70, §7.2): `pack.json` plus `rows/<model>.jsonl`, written by `bolt build`
-// (compiler/artifact/seed.ts). Loading one is a restore into a database with no workspace rows. Here, not in the
+// (bolt-cli's compiler/artifact/seed.ts). Loading one is a restore into a database with no workspace rows. Here, not in the
 // compiler, so any host (tethered or untethered) loads packs through `@norbital-ai/bolt/engine` without the build toolchain.
 import { EMBED } from '../integrations/embed.ts';
+import { INDEX } from './index-run.ts';
 import { SYSTEM } from '../../system/index.ts';
 import { Effect, FileSystem, Schema, Stream } from 'effect';
 import { enqueue } from '../runs/queue.ts';
@@ -128,14 +129,42 @@ function* linesOf(bytes: Uint8Array) {
 }
 /** A pack as a loader takes it: its `pack.json` and each model's rows from row `from`, streamed when restored. */
 export type PackSource = {
-	readonly dir: string;
 	readonly meta: PackJson;
 	readonly rows: (model: string, from: number) => Stream.Stream<RowData, BoltError>;
+	/** One of `meta.assets`' bytes, by its path. */
+	readonly asset: (path: string) => Effect.Effect<Uint8Array, BoltError, FileSystem.FileSystem>;
 };
+/** A pack directory's `assets/<path>`. */
+const assetAt = (dir: string) => (path: string) =>
+	Effect.flatMap(FileSystem.FileSystem, (fs) => fs.readFile(`${dir}/assets/${path}`)).pipe(
+		Effect.mapError((cause) => BoltError.make('seedDecode', 'decode', cause.message, cause))
+	);
 export const sourceOf = (pack: Pack): PackSource => ({
-	dir: pack.dir,
 	meta: pack.meta,
-	rows: (model, from) => Stream.fromIterable((pack.rows[model] ?? []).slice(from))
+	rows: (model, from) => Stream.fromIterable((pack.rows[model] ?? []).slice(from)),
+	asset: assetAt(pack.dir)
+});
+/**
+ * Rows a host holds in memory (`bolt seed`'s, never written to its disk) as a pack named `name`; each asset's bytes come
+ * from `asset`, the host's store of what the seeding run uploaded.
+ */
+export const memorySource = (
+	name: string,
+	rows: Pack['rows'],
+	start: readonly string[],
+	assets: readonly SeedAsset[],
+	asset: (path: string) => Effect.Effect<Uint8Array, BoltError>
+): PackSource => ({
+	meta: {
+		format: 1,
+		name,
+		hash: '',
+		start,
+		rows: Object.fromEntries(Object.entries(rows).map(([c, r]) => [c, r.length])),
+		assets
+	},
+	rows: (model, from) => Stream.fromIterable((rows[model] ?? []).slice(from)),
+	asset
 });
 /** A pack whose rows stay on disk until each model is restored, a line at a time (a cell holds 128 MiB). */
 export const readPackSource = Effect.fn('Bolt.readPackSource')(function* (dir: string) {
@@ -157,8 +186,8 @@ export const readPackSource = Effect.fn('Bolt.readPackSource')(function* (dir: s
 				);
 	const text = new TextDecoder();
 	return {
-		dir,
 		meta,
+		asset: assetAt(dir),
 		rows: (model: string, from: number) =>
 			Object.hasOwn(meta.rows, model)
 				? Stream.unwrap(
@@ -264,11 +293,30 @@ export const packLoader = Effect.fn('Bolt.packLoader')(function* (
 			);
 	});
 	const restore = yield* restorer(m, db, { models: tenant, rows: pack.rows }, now);
-	// a pack writes past the acts that queue `bolt.embed`: seeded rows of a semantic model would never get a vector
+	// a pack writes past the acts that queue `bolt.embed`: seeded rows of a semantic model would never get a vector; its
+	// `start` automations are queued with the rows, so no host carries them to a later admission
 	const embed = Effect.suspend(() => {
-		if (!tenant.some((c) => m.models[c]?.search?.semantic !== undefined)) return Effect.void;
+		const runs = [
+			...(tenant.some((c) => m.models[c]?.search?.semantic !== undefined)
+				? [{ automation: EMBED, input: {}, dueAt: now, cause: 'schedule', depth: 0 }]
+				: []),
+			// nor would a pure search index's vector, which only an act evaluates
+			...(tenant.some((c) =>
+				Object.values(m.models[c]?.search?.indexes ?? {}).some((index) => index.field === undefined)
+			)
+				? [{ automation: INDEX, input: {}, dueAt: now, cause: 'schedule', depth: 0 }]
+				: []),
+			...pack.meta.start.map((automation) => ({
+				automation,
+				input: {},
+				dueAt: now,
+				cause: 'start',
+				depth: 0
+			}))
+		];
+		if (runs.length === 0) return Effect.void;
 		const chain = new Chain();
-		enqueue(chain, [{ automation: EMBED, input: {}, dueAt: now, cause: 'updated', depth: 0 }]);
+		enqueue(chain, runs);
 		return db.write(chain.sql('1')).pipe(Effect.asVoid);
 	});
 	let identified = false,

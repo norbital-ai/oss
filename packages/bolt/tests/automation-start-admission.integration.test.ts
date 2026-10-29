@@ -3,9 +3,9 @@ import { expect, it } from '@effect/vitest';
 import { Context, Effect, Layer, Schema } from 'effect';
 import type { EngineManifest } from '../src/engine/manifest.ts';
 import { Callables } from '../src/engine/services.ts';
-import { TestWorkspace } from '../src/test/index.ts';
+import { TestWorkspace } from '../../bolt-cli/src/test/index.ts';
 import { manifest as base } from './write-fixture.ts';
-import { program } from '../src/test/guest.ts';
+import { program } from '../../bolt-cli/src/test/guest.ts';
 
 const READABLE = '0199a000-0000-7000-8000-000000000001';
 const HIDDEN = '0199a000-0000-7000-8000-000000000002';
@@ -34,7 +34,7 @@ const manifest: EngineManifest = {
 		inspect: {
 			description: 'Inspect the admitted document after dequeue',
 			input: { document: { kind: 'id', of: 'documents', where: { ready: { eq: true } } } },
-			runAs: 'trigger'
+			policies: ['starter']
 		}
 	}
 };

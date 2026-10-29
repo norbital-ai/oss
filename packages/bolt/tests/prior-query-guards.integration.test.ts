@@ -5,10 +5,10 @@ import type { EngineManifest } from '../src/engine/manifest.ts';
 import { TenantDb } from '../src/engine/db/tenant-db.ts';
 import { DbError } from '../src/engine/errors.ts';
 import { Callables } from '../src/engine/services.ts';
-import { TestDb } from '../src/test/database.ts';
-import { TestWorkspace } from '../src/test/index.ts';
+import { TestDb } from '../../bolt-cli/src/test/database.ts';
+import { TestWorkspace } from '../../bolt-cli/src/test/index.ts';
 import { manifest as base } from './write-fixture.ts';
-import { program } from '../src/test/guest.ts';
+import { program } from '../../bolt-cli/src/test/guest.ts';
 
 const ACCOUNT = '0199a000-0000-7000-8000-000000000001';
 const input = {
@@ -59,14 +59,14 @@ const manifest: EngineManifest = {
 		}
 	},
 	automations: {
-		debitA: { description: 'First concurrent debit', input, runAs: 'trigger' },
-		debitB: { description: 'Second concurrent debit', input, runAs: 'trigger' },
+		debitA: { description: 'First concurrent debit', input, policies: ['debit'] },
+		debitB: { description: 'Second concurrent debit', input, policies: ['debit'] },
 		reread: {
 			description: 'A changed repeated read poisons later writes',
 			input,
-			runAs: 'trigger'
+			policies: ['debit']
 		},
-		fanout: { description: 'Independent writes after one shared read', input, runAs: 'trigger' }
+		fanout: { description: 'Independent writes after one shared read', input, policies: ['debit'] }
 	}
 };
 const guest = program(`import { Effect } from 'effect';

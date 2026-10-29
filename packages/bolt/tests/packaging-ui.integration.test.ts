@@ -6,8 +6,8 @@ import { describe, expect, it } from '@effect/vitest';
 import { Context, Effect, Layer, Result } from 'effect';
 import type { Authority } from '../src/engine/contracts.ts';
 import { decodeProjectedManifest } from '../src/engine/manifest.ts';
-import { runList } from '../src/shell/runs/data.ts';
-import { TestWorkspace } from '../src/test/index.ts';
+import { runList } from '../src/engine/runs/index.ts';
+import { TestWorkspace } from '../../bolt-cli/src/test/index.ts';
 
 const manifest = Result.getOrThrow(
 	decodeProjectedManifest({

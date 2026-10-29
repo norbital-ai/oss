@@ -6,7 +6,7 @@ import { HOOKS, OAUTH_CALLBACK, type LinkManager } from '../engine/integrations/
 import { Runs } from '../engine/services.ts';
 import { requestBody, requestUrl, responseError, SessionAuthority } from './http.ts';
 import { sseResponse } from './sse.ts';
-import { INTEGRATIONS } from './wire.ts';
+import { INTEGRATION_LIST, INTEGRATIONS } from './wire.ts';
 import { ImportStartInput } from './schema.ts';
 
 /** No manager is needed by hosts that offer no integration providers (the test kit). */
@@ -18,7 +18,8 @@ export const integrationRoutes = (request: HttpServerRequest.HttpServerRequest) 
 	Effect.gen(function* () {
 		const url = requestUrl(request),
 			path = url.pathname;
-		if (!path.startsWith(INTEGRATIONS)) return Option.none<HttpServerResponse.HttpServerResponse>();
+		if (path !== INTEGRATION_LIST && !path.startsWith(INTEGRATIONS))
+			return Option.none<HttpServerResponse.HttpServerResponse>();
 		const manager = yield* IntegrationManager;
 		if (Option.isNone(manager)) return Option.none<HttpServerResponse.HttpServerResponse>();
 		const session = yield* (yield* SessionAuthority).of(request);
@@ -38,7 +39,11 @@ export const integrationRoutes = (request: HttpServerRequest.HttpServerRequest) 
 					'Sign in as an internal workspace member to manage integrations.'
 				)
 			);
-		if (request.method === 'GET' && path === INTEGRATIONS && url.searchParams.get('stream') === '1')
+		if (
+			request.method === 'GET' &&
+			path === INTEGRATION_LIST &&
+			url.searchParams.get('stream') === '1'
+		)
 			return Option.some(
 				sseResponse(
 					manager.value
@@ -52,7 +57,7 @@ export const integrationRoutes = (request: HttpServerRequest.HttpServerRequest) 
 						)
 				)
 			);
-		if (request.method === 'GET' && path === INTEGRATIONS)
+		if (request.method === 'GET' && path === INTEGRATION_LIST)
 			return Option.some(HttpServerResponse.jsonUnsafe({ value: yield* manager.value.offers }));
 		const [raw = '', verb = '', ...rest] = path.slice(INTEGRATIONS.length).split('/');
 		const instance = yield* Effect.try({

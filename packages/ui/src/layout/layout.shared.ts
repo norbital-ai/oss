@@ -47,6 +47,18 @@ export type LayoutElement =
 	| 'button'
 	| 'a'
 	| 'label';
+/**
+ * How a box takes its parent's main axis — the one sizing rule of every layout primitive.
+ * `content` (the default): its own size, never squeezed; the nearest scroll owner scrolls when boxes do not fit.
+ * `fill`: the space left (shared with other `fill` siblings), down to `minHeight` (default 0); a `Scroll` scrolls inside
+ * it. A `fill` box also takes the whole height of a definite-height parent that is not a flex row or column (a `Bound`,
+ * a `Cover` body, a `Split` pane). Nothing scrolls sideways unless it is a `Scroll axis="x"`.
+ */
+export type LayoutSize = 'content' | 'fill';
+export const SIZE_CLASSES: Record<LayoutSize, string> = {
+	content: 'flex-none',
+	fill: 'h-full min-h-0 flex-[1_1_0%]'
+};
 /** The spacing scale layout primitives take for `gap`. */
 export type LayoutGap = 'none' | 'xs' | 'sm' | 'md' | 'lg' | 'xl';
 /** The spacing scale for `pad`: `LayoutGap` without `xl`. */

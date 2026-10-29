@@ -3,27 +3,27 @@
 ## The workspace (`src/+workspace.ts`)
 
 ```ts
-import { workspace } from "@norbital-ai/bolt";
+import { workspace } from '@norbital-ai/bolt';
 export default workspace({
-  tz: "Asia/Singapore",
-  locale: "en-SG",
-  currency: "SGD",
-  apps: ["sales", "hr/kiosk"], // launcher order
-  ai: {
-    models: ["default", "fast"],
-    default: "default",
-    embeddings: ["photos"],
-  },
-  agent: { triage: false }, // optional: opt the in-app agent out of triage
-  csp: { connect: ["https://models.example"] }, // origins pages may fetch
-  connections: {
-    // named integration instances: the slot is the sys_integration id source addresses
-    mail: { integration: "email" },
-    field_ops_whatsapp: {
-      integration: "whatsapp",
-      envoy: "field_ops_whatsapp",
-    },
-  },
+	tz: 'Asia/Singapore',
+	locale: 'en-SG',
+	currency: 'SGD',
+	apps: ['sales', 'hr/kiosk'], // launcher order
+	ai: {
+		models: ['default', 'fast'],
+		default: 'default',
+		embeddings: ['photos']
+	},
+	agent: { triage: false }, // optional: opt the in-app agent out of triage
+	csp: { connect: ['https://models.example'] }, // origins pages may fetch
+	connections: {
+		// named integration instances: the slot is the sys_integration id source addresses
+		mail: { integration: 'email' },
+		field_ops_whatsapp: {
+			integration: 'whatsapp',
+			envoy: 'field_ops_whatsapp'
+		}
+	}
 });
 ```
 
@@ -38,11 +38,11 @@ use the workspace's own. Names are `UPPER_SNAKE`.
 
 ```ts
 // src/+secrets.ts
-import { secrets } from "@norbital-ai/bolt";
+import { secrets } from '@norbital-ai/bolt';
 export default secrets({
-  ROUTES_CLIENT_ID: { label: "Routes API OAuth client ID" },
-  ROUTES_CLIENT_SECRET: { label: "Routes API OAuth client secret" },
-  HQ_URL: { label: "HQ MCP server", description: "The streamable-HTTP endpoint." },
+	ROUTES_CLIENT_ID: { label: 'Routes API OAuth client ID' },
+	ROUTES_CLIENT_SECRET: { label: 'Routes API OAuth client secret' },
+	HQ_URL: { label: 'HQ MCP server', description: 'The streamable-HTTP endpoint.' }
 });
 ```
 
@@ -54,17 +54,17 @@ An app is a folder under `src/app/` with `+app.ts` and one `+<page>.page.svelte`
 
 ```ts
 // src/app/sales/+app.ts
-import { app } from "@norbital-ai/bolt";
-export default app("sales", {
-  title: "app.sales.title",
-  description: "app.sales.description",
-  icon: "lucide:briefcase",
-  banner: "assets/app-media/sales.webp", // optional card and hero art
-  audience: "members", // | 'external' | 'all' | { public: ['careers_visitor'], challenge?: 'turnstile' }
-  pages: {
-    board: { title: "Board" },
-    list: { title: "List", section: "Reports" },
-  }, // key order is nav order
+import { app } from '@norbital-ai/bolt';
+export default app('sales', {
+	title: 'app.sales.title',
+	description: 'app.sales.description',
+	icon: 'lucide:briefcase',
+	banner: 'assets/app-media/sales.webp', // optional card and hero art
+	audience: 'members', // | 'external' | 'all' | { public: ['careers_visitor'], challenge?: 'turnstile' }
+	pages: {
+		board: { title: 'Board' },
+		list: { title: 'List', section: 'Reports' }
+	} // key order is nav order
 });
 ```
 
@@ -75,12 +75,12 @@ app (`+app.ts`) or a group (`+group.ts`), never both; an app's name is its folde
 
 ```ts
 // src/app/hr_controller/+group.ts
-import { group } from "@norbital-ai/bolt";
-export default group("hr_controller", {
-  label: "HR",
-  description: "People and payroll.",
-  icon: "lucide:users",
-  defaultChild: "payroll",
+import { group } from '@norbital-ai/bolt';
+export default group('hr_controller', {
+	label: 'HR',
+	description: 'People and payroll.',
+	icon: 'lucide:users',
+	defaultChild: 'payroll'
 });
 ```
 
@@ -99,10 +99,34 @@ wide image (about 1600×800) for card and hero: the card crops it 2:1 and the he
 `object-center`, so keep the subject clear in the centred crop. The template's marketing
 `assets/thumbnail.svg` is a separate file ([template-repository.md](template-repository.md)).
 
-**Public apps.** `audience: { public: [...] }` pages run as a signed-out visitor holding exactly those
-policies: `create` on a submission model and field-listed `read` on published catalogue rows,
-nothing else (the build refuses the rest). Contact forms, job applications and registrations live
-here.
+**Large dependencies.** `assets/` holds small workspace-specific files only. A page that runs a model in the
+browser fetches its weights and runtime (ONNX, wasm) from their public host or a CDN at a pinned version or commit
+(`https://cdn.jsdelivr.net/npm/<package>@<version>/…`); they never ship in the artifact. LLMs and other large models
+are reached through an integration with a hosted provider, never run on the host, whose memory and CPU are capped.
+
+**Public apps.** `audience: { public: [...] }` pages run as an anonymous visitor (below) holding exactly
+those policies: `create` on a submission model and field-listed `read` on published catalogue rows or
+its own rows, nothing else (the build refuses the rest, and a name that is no policy). Contact forms, job
+applications and registrations live here.
+
+**Portals carry their policies.** Build a public-facing surface people use without a workspace
+login as a kiosk (below): its `policies` are everything a caller holds on its pages.
+
+```ts
+// (a) no sign-in: a visitor holds exactly `site_visitor` as its anonymous user (visitor-shaped)
+export default kiosk('site', { ...card, auth: 'none', policies: ['site_visitor'], pages });
+// (b) sign-in: every external who signs in holds exactly `account_holder` here, as themselves
+export default kiosk('account', { ...card, auth: 'external', policies: ['account_holder'], pages });
+```
+
+For (b) a signed-out visitor is sent to `/sign-in?next=…` and comes back signed in (an anonymous user
+they held from a public page links to that account, below). Newcomers join by
+the workspace's `signup` (its `policies` are what they hold _outside_ portals — keep that an empty
+`grants: {}` policy for portal-only customers) or by invitation as external members. Scope their rows
+with `{ var: 'requestor.id' }` or `{ var: 'requestor.party' }`. They open no members app; staff open
+the portal only by a held `capabilities.kiosks`; administrators run inside as its policies too. An
+external portal's policies list their fields, never delete, and hold no `capabilities` (build
+`access/kiosk-grant`).
 
 **Portals.** A page with `portal: true` renders alone (no sidebar, banner, tabs or agent) and may be
 embedded in an allowed website's `<iframe>` when its `embed` origins admit it. The default has
@@ -128,28 +152,28 @@ page whose caller policy admits the selected order numbers:
 
 ```ts
 // src/app/sales/list.page.data.ts
-import { Schema } from "effect";
+import { Schema } from 'effect';
 export default Schema.Struct({ numbers: Schema.Array(Schema.String) });
 
 // src/app/sales/+list.page.server.ts
-import { pageServer } from "@norbital-ai/bolt";
-import data from "./list.page.data.js";
+import { pageServer } from '@norbital-ai/bolt';
+import data from './list.page.data.js';
 export default pageServer({
-  data,
-  load: function* (_request, ctx) {
-    const { orders } = yield* ctx.query({
-      orders: { fields: ["number"], limit: 20 },
-    });
-    return { numbers: orders.rows.map((row) => row.number) };
-  },
+	data,
+	load: function* (_request, ctx) {
+		const { orders } = yield* ctx.query({
+			orders: { fields: ['number'], limit: 20 }
+		});
+		return { numbers: orders.rows.map((row) => row.number) };
+	}
 });
 ```
 
 ```svelte
 <!-- src/app/sales/+list.page.svelte -->
 <script lang="ts">
-  import type Data from './list.page.data.js';
-  let { data }: { data: typeof Data.Type } = $props();
+	import type Data from './list.page.data.js';
+	let { data }: { data: typeof Data.Type } = $props();
 </script>
 
 {#each data.numbers as number}<p>{number}</p>{/each}
@@ -194,15 +218,15 @@ A kiosk is a standalone chromeless surface, rooted at `src/kiosk/<name>/` — ne
 
 ```ts
 // src/kiosk/clock/+kiosk.ts
-import { kiosk } from "@norbital-ai/bolt";
-export default kiosk("clock", {
-  title: "app.kiosk.title",
-  description: "app.kiosk.description",
-  icon: "lucide:clock",
-  auth: "none", // who may open it: 'members' | 'external' | 'all' | 'none' (no sign-in)
-  policies: ["kiosk_clock"], // assigned policies, with no administrator bypass
-  embed: ["https://partner.example"], // omit for no cross-origin embedding
-  pages: { clock: { title: "app.kiosk.clock", icon: "lucide:clock" } },
+import { kiosk } from '@norbital-ai/bolt';
+export default kiosk('clock', {
+	title: 'app.kiosk.title',
+	description: 'app.kiosk.description',
+	icon: 'lucide:clock',
+	auth: 'none', // who may open it: 'members' | 'external' | 'all' | 'none' (no sign-in)
+	policies: ['kiosk_clock'], // assigned policies, with no administrator bypass
+	embed: ['https://partner.example'], // omit for no cross-origin embedding
+	pages: { clock: { title: 'app.kiosk.clock', icon: 'lucide:clock' } }
 });
 ```
 
@@ -210,30 +234,46 @@ Each `+<page>.page.svelte` in the folder needs a `pages` entry (key order is nav
 are always chromeless and served at `/kiosk/<name>/<page>`, so they take no `portal` flag and kiosks
 list under the account menu's Kiosks.
 
-`auth` answers "required authentication or not": a signed-in audience opens by a held policy's
-`capabilities.kiosks` naming it; `'none'` opens for anyone with no sign-in. `policies` answers what it
+`auth` answers "required authentication or not": staff open by a held policy's
+`capabilities.kiosks` naming it, every signed-in external opens one whose `auth` admits externals,
+and `'none'` opens for anyone with no sign-in. `policies` answers what it
 may do inside: every read and standard write on kiosk pages runs as those assigned policies, overriding
 the requestor's own rights — a public kiosk whose requestor holds no policy still reads and writes
-through them. Keep a `'none'` kiosk's policies visitor-shaped (field-listed reads, creates only);
-the build refuses the rest.
+through them. A kiosk's policies read narrow named outputs (the root lists its fields, the label
+included), list their create/update columns and never delete; a `'none'` kiosk's are visitor-shaped
+(creates only). The build refuses the rest.
 
 Requests name the kiosk (`Bolt-Kiosk` header, `?kiosk=` on the live stream, which sends no headers);
 the host substitutes the assigned-policies authority per request — members and administrators alike run
 inside as the kiosk, never themselves. An unknown kiosk or one not open to the caller is refused outright,
 never run as the caller.
 
-## Anonymous identity (`{ var: 'requestor.visitor' }`)
+## Anonymous users (`{ var: 'requestor.id' }`)
 
-Every signed-out caller carries a stable anonymous id: the `__bolt_v` cookie (30 days, minted on first
-visitor/kiosk boot). It is shared across tabs, survives restarts, and scopes guest-owned rows through
-`{ var: 'requestor.visitor' }` on a text field (a guest cart, a draft booking) — resolving to the id for visitors
-and to `null` for anyone signed in. Limits:
+A visitor of a public app or an `auth: 'none'` kiosk is an anonymous user, as in Firebase anonymous
+auth: opening the page mints a `sys_user` of kind `anonymous` held by the visitor cookie (30 days
+unused, then pruned). It is never a member (no People row, no members app) and holds exactly the
+surface's policies; its `requestor.id` is that user, so it owns what it creates:
 
-- One browser, one id. A cleared cookie is a new id; rows keyed to the old one are orphaned, never merged.
-- Never cross-browser. Portability needs verification: the phone/email signup promotes the guest to an
-  external member bound to their party record (`{ var: 'requestor.party' }`), which follows them everywhere.
-- Embedded kiosks get one id per embedding site (partitioned cookies over https) — a guest booking on
-  your site and the same guest in another site's frame are two strangers, by design.
+```ts
+// orders.owner: a sys_user ref filled from the writer
+relationships: { owner: { to: 'sys_user', optional: true, default: { var: 'requestor.id' } } }
+// orders' narrow output for visitors: its root lists its fields, the label included
+outputs: { visitor: { orders: { fields: ['number', 'note'] } } }
+// the shop's policy: the visitor adds orders (owner left to its default) and reads back only its own
+orders: {
+	outputs: { visitor: { orders: { where: { owner: { eq: { var: 'requestor.id' } } } } } },
+	create: { columns: { orders: ['note'] } }
+}
+```
+
+The build lets a public policy read a model it creates only through such an owner ref. Its acts are
+limited per IP like every visitor limit (`act 120/h`); minting is capped per IP (`register 20/h`), past which the page
+opens with no identity and owns nothing. Signing in or up from that browser links it: a newcomer's
+account keeps the same id and rows; an existing account takes over every owner ref (unless the row's
+state locks it) and the anonymous user retires. Text copies of the id (`requestor.visitor`) and
+`created_by` are not moved: scope ownership with a `sys_user` ref. One browser, one anonymous user; an
+embedded kiosk gets one per embedding site (partitioned cookies).
 
 **Customers who sign up on a site.** Declare `signup` in `+workspace.ts` (`via: ['phone']`, the
 `policies` a newcomer holds, and the `party` model whose `match` field holds their number). A site
@@ -244,7 +284,7 @@ the app (`capabilities.apps: ['portal']`) shows that member their own data; ever
 included, stays the app's visitor. Scope a customer's rows with `{ eq: { var: 'requestor.party' } }`, and a
 row they file under their own number with `{ phone: { eq: { var: 'requestor.phone' } } }`. The member is
 bound to their `party` record as soon as one holds their number. Sign-up texts cost money: they are
-capped per workspace per hour, and an administrator can close sign-up in Settings → People.
+capped per workspace per hour, and an administrator can close sign-up in the command center's People.
 
 ## Record views
 
@@ -257,35 +297,97 @@ keepAlive? }`). Without `title` the sheet is titled by the record's label; `subt
 field names, each rendered by its kind — never a hand-built string. `CustomView` shows the kit's empty
 state; pass `empty` to replace it. `RunsFor` names runs by `title`, else `automations.<key>.label`.
 
+## Model effects (`effect` in `+model.ts`)
+
+Work that follows a committed write lives on the model:
+
+```ts
+model('leave_entries', {
+	// fields, read, create, update, delete, notify …
+	effect: {
+		created: function* (rows, ctx) {
+			yield* ctx.notify(
+				rows.map((row) => ({
+					to: [{ team: 'hr_managers' }],
+					title: 'Time off recorded',
+					once: row.id
+				}))
+			);
+		},
+		updated: function* (changes, ctx) {
+			const approved = changes.filter(({ before, after }) => before.state !== after.state);
+			// …
+		},
+		deleted: function* (rows, ctx) {}
+	}
+});
+```
+
+- Each verb runs after the commit, once per committed batch, as a durable run named
+  `<model>.effect.<verb>`: queued in `sys_run`, retried 3 times on a transient failure, listed in
+  the Command center's runs, never rate limited. Its ctx is an automation's (`EffectCtx`).
+- `created` receives the new rows, `deleted` the stored rows, `updated` `[{ before, after }]` for
+  writes that changed a stored field. Filter in code; re-read only fields the images lack.
+- It runs as the **writer**: the member, envoy, portal visitor, or automation run (its `policies`)
+  whose write committed. It holds no policy of its own: the rows are the root fields of the writer's
+  output of the model (`default` when it holds it, else the first named output it holds), and every
+  read and write needs the writer's own grants. Work that needs other authority is an automation
+  the effect schedules (`ctx.schedule` needs no start grant); that run holds its own `policies` with
+  the writer as its `requestor`.
+- Writes it makes run effects in turn, one level deeper; past 8 levels the effect run is recorded
+  failed (`depth`) instead of running, which ends a loop.
+- Effects follow every commit, including provisional approval writes and their rollback (run as the
+  approver). When work must wait for approval, use the approval lifecycle or the native outbox.
+- A delayed follow-up is `ctx.schedule(name, input, { at, key })` from the effect.
+- Bodies are safe to run twice: key acts with `once`, schedules with `key`, notices with `once`.
+
 ## Automations (`src/automation/+<name>.automation.ts`)
 
 ```ts
 import { automation } from '@norbital-ai/bolt';
 export default automation('time_off_digest', {
-  description: 'Summarizes committed time off entries for HR.',
-  on: { created: 'leave_entries', delay: '1d' },
-  runAs: ['hr_automation'],
-  retry: { attempts: 3, backoff: '5min' }, concurrency: { max: 1 },
-  run: function* ({ ids }, ctx) {
-    const { leave_entries: entries } = yield* ctx.query({
-      leave_entries: { where: { id: { in: ids ?? [] } } }
-    });
-    yield* ctx.progress({ ratio: 0, text: `${entries.rows.length} committed entries` });
-    yield* ctx.notify(entries.rows.map((row) => ({
-      to: [{ team: 'hr_managers' }], title: 'Time off recorded',
-      link: { model: 'leave_entries', id: row.id }, once: row.id
-    })));
-  }
+	description: 'Summarizes the last day of committed time off entries for HR.',
+	on: { cron: '0 18 * * *' },
+	policies: ['hr_automation'],
+	retry: { attempts: 3, backoff: '5min' },
+	concurrency: { max: 1 },
+	run: function* (_, ctx) {
+		const { leave_entries: entries } = yield* ctx.query({
+			leave_entries: { where: { created_at: { gte: { var: 'now - days(1)' } } } }
+		});
+		yield* ctx.progress({ ratio: 0, text: `${entries.rows.length} committed entries` });
+		yield* ctx.notify(
+			entries.rows.map((row) => ({
+				to: [{ team: 'hr_managers' }],
+				title: 'Time off recorded',
+				link: { model: 'leave_entries', id: row.id },
+				once: row.id
+			}))
+		);
+	}
 });
 ```
 
-Declare the example's team and policy in source. Data triggers follow commits, including
-provisional approval writes and rollback; when work must wait for approval, use the approval
-lifecycle or the native outbox rather than treating a trigger as final approval. An automation
-holds exactly its runAs policies; started-only runs may use trigger authority. Policy automations
-grants decide who may start it, and delegations lend explicit generated verbs without widening unrelated access.
-Automations cannot approve. A run has 10,000 crossings and a progress-refreshed idle deadline.
+Declare the example's team and policy in source. An automation is a job the reserved system
+identity runs with its declared `policies` (required, non-empty): it runs on `cron`, on a `webhook`,
+when started, or when code schedules it, and every run holds exactly those policies whoever started
+it. The run records its trigger (`sys_run.trigger`, `ctx.run.trigger`): `{ kind: 'person', actor,
+agent? }` for a manual start (`agent` when Norbius started it in a conversation for them), else
+`{ kind: 'system', cause }` with `cron`, `webhook`, `effect` (`model`, `verb`, `records`) or
+`schedule` (`by`: the scheduling run). The trigger is never authority: `requestor.*` in a run names
+the system identity, so a requestor-scoped grant matches nothing and a `requestor.id` ref default
+does not apply. "A customer may cancel their own booking" is a check in the body: read the booking
+under the run's policies and refuse unless `trigger.kind === 'person'` and its customer is
+`trigger.actor.party`. `policy.automations` grants manual starts only (a person in the UI or the
+agent); `ctx.schedule` needs none. Delegations lend
+explicit generated verbs without widening unrelated access. Automations cannot approve. A run has 10,000 crossings and a progress-refreshed idle deadline.
 Test with native TestWorkspace.
+
+Rate limits apply to manual starts only: the `start` callable, Run now and the agent. Declare the
+automation's own `limit` (`limit: '10/min'`, counted per starter; default `'30/min'`); a start beyond it
+answers `429 rateLimited` with `Retry-After`. Cron, webhook and model effect runs, and every act a run's
+body performs, are never rate limited: run budgets bound them. A start over HTTP is also an act, so the
+starter's policy `act` limit applies to that request too.
 
 ### Reruns
 
@@ -317,9 +419,8 @@ the batch changes business behavior. Test priming, duplicate lookups, shared fai
 of concurrent work before returning the first refusal in input order. HR's entity reader and
 payroll batch adapter exercise these contracts.
 
-- Triggers are literals: `{ cron, tz? }`, `{ webhook: '/path', verify: { scheme, secret } }`,
-  `{ created | updated | deleted: '<c>', where?, fields?, delay? }`. An event run receives `{ ids }`
-  (and `rows`, the masked pre-images, for `deleted`) and re-checks state itself; nothing is cancelled.
+- Triggers are literals: `{ cron, tz? }`, `{ webhook: '/path', verify: { scheme, secret } }`. A row
+  write runs its model's `effect` (below), never an automation.
 - **Business I/O runs in automations**: `ctx.request(<connection or instance>, op)`, `ctx.web.read`,
   `ctx.files.*`, `ctx.convert.document` (Markdown/HTML to a target the workspace declares in
   `workspace({ convert: { to: ['pdf', 'docx'] } })`; optional, so recover `Unavailable` with `Effect.catchTag`), `ctx.ai.sys_1.decide`, `ctx.ai.sys_2.infer`, `ctx.ai.embed`,
@@ -333,8 +434,8 @@ payroll batch adapter exercise these contracts.
 - `ctx.ai.sys_1.decide({ state, questions })` asks keyed `noul` / `choice` / `score` questions over
   text-only state and returns typed answers; `ctx.ai.sys_2.infer` is the LLM. Neither falls back to
   the other. For structured research, `sys_2.infer({ initial, output, ... })` starts with a complete answer in memory and exposes draft tools `read`, `find`, `edit`, `diff` and `submit`. Paths are JSON Pointers in which an item of a keyed list (`{ kind: 'list', key: 'code', ... }`) is addressed by its key, never its index. Supply a concise presentation in the prompt; tool paths address the original answer. Large reads are bounded, so read child paths. Request `rules` (CEL over the output's top-level properties) make an unfinished draft fail `invalid` instead of returning the initial answer. `jsonDiff(before, after, output)` gives the same keyed change list host-side. Transient provider failures retry within the same infer invocation and preserve the transcript and edited answer.
-  With `runAs` policies, `tools: ['read', ...hostTools]` lets the model read workspace records as
-  those policies across turns before it answers (e.g. three-way matching: pull the supplier's open
+  `tools: ['read', ...hostTools]` lets the model read workspace records as the run's policies
+  (their granted outputs) across turns before it answers (e.g. three-way matching: pull the supplier's open
   `purchase_orders` and `goods_receipts`, then validate the invoice's figures); bound it with `steps`.
   The draft reader is then `read_answer`.
 
@@ -342,43 +443,43 @@ payroll batch adapter exercise these contracts.
 
 ```ts
 // src/access_control/policy/+sales_rep.policy.ts
-import { policy } from "@norbital-ai/bolt";
+import { policy } from '@norbital-ai/bolt';
 export default policy({
-  description: "Sales representatives: their own accounts and orders.",
-  grants: {
-    accounts: {
-      read: { accounts: { where: { owner: { eq: { var: "requestor.id" } } } } },
-      update: {
-        check: function* (changes, ctx) {
-          const me = ctx.actor.kind === "member" ? ctx.actor.id : null;
-          return changes.every((c) => c.before.owner === me)
-            ? ctx.allow()
-            : ctx.deny("Only your own accounts can change.");
-        },
-      },
-    },
-    orders: {
-      read: true,
-      create: {
-        columns: { orders: ["account", "notes"] },
-        check: function* (rows, ctx) {
-          // a relation-hop scope is one keyed read over the whole batch
-          const { accounts } = yield* ctx.db.query({
-            accounts: { where: { id: { in: rows.map((r) => r.account) } }, fields: ["owner"] },
-          });
-          const me = ctx.actor.kind === "member" ? ctx.actor.id : null;
-          const mine = new Set(accounts.rows.filter((a) => a.owner === me).map((a) => a.id));
-          const at = rows.findIndex((r) => !mine.has(r.account));
-          return at < 0
-            ? ctx.allow()
-            : ctx.deny("Orders go on your own accounts.", { row: at, field: "account" });
-        },
-      },
-    },
-  },
-  automations: ["orders_duplicate", "quote_pdf"],
-  capabilities: { apps: ["sales"] },
-  limits: { act: "600/min" },
+	description: 'Sales representatives: their own accounts and orders.',
+	grants: {
+		accounts: {
+			read: { accounts: { where: { owner: { eq: { var: 'requestor.id' } } } } },
+			update: {
+				check: function* (changes, ctx) {
+					const me = ctx.actor.kind === 'member' ? ctx.actor.id : null;
+					return changes.every((c) => c.before.owner === me)
+						? ctx.allow()
+						: ctx.deny('Only your own accounts can change.');
+				}
+			}
+		},
+		orders: {
+			read: true,
+			create: {
+				columns: { orders: ['account', 'notes'] },
+				check: function* (rows, ctx) {
+					// a relation-hop scope is one keyed read over the whole batch
+					const { accounts } = yield* ctx.db.query({
+						accounts: { where: { id: { in: rows.map((r) => r.account) } }, fields: ['owner'] }
+					});
+					const me = ctx.actor.kind === 'member' ? ctx.actor.id : null;
+					const mine = new Set(accounts.rows.filter((a) => a.owner === me).map((a) => a.id));
+					const at = rows.findIndex((r) => !mine.has(r.account));
+					return at < 0
+						? ctx.allow()
+						: ctx.deny('Orders go on your own accounts.', { row: at, field: 'account' });
+				}
+			}
+		}
+	},
+	automations: ['orders_duplicate', 'quote_pdf'],
+	capabilities: { apps: ['sales'] },
+	limits: { act: '600/min' }
 });
 ```
 
@@ -386,11 +487,11 @@ A policy is named by its file under `src/access_control/policy/`. Teams use
 `src/access_control/team/+team.ts` and link exact handles to authored policies:
 
 ```ts
-import { team } from "@norbital-ai/bolt";
+import { team } from '@norbital-ai/bolt';
 export default team({
-  sales: ["sales_rep"],
-  managers: { name: "Managers", parent: null, policies: ["manager"] },
-  branch: { name: "Branch", parent: "managers", policies: [] },
+	sales: ['sales_rep'],
+	managers: { name: 'Managers', parent: null, policies: ['manager'] },
+	branch: { name: 'Branch', parent: 'managers', policies: [] }
 });
 ```
 
@@ -400,9 +501,23 @@ identities select existing source handles. Teams and policies have no runtime ed
 `sys_team` is only a read-only generated source catalogue for native FK/query compatibility, with
 no authored seed rows or authority from mutable records. Do not author `sys_assignment` objects.
 
-Grants are layer maps typed from the model's declaration. A `read` grant names per path a `where`
-and `fields` (`true` reads every declared layer in full); a deeper layer's `where` filters that
-layer only. The root's policy alone guards the access point and every layer under it. A write
+`limits` throttle requests per holder: `act`, `read` (`/q`, live registrations and page loaders),
+`upload`, `convert`, `agent` (posts to Norbius and filter descriptions), visitor `register`, and envoy
+traffic. A bare rate counts per member, and per IP for visitors; `{ rate, per: 'ip' }` only on a public
+audience's policy.
+Undeclared, members get `act 600/min`, `read 3000/min`, `upload 120/min`, `convert 30/min`, `agent 100/h`;
+visitors, all per IP: `act 120/h`, `read 600/min`, `upload 20/h`, `register 20/h` (minting
+anonymous users). Every refusal is `429 rateLimited` with
+`Retry-After` and one message the shell translates. Limits never apply to automation bodies; an
+automation's manual starts use its own `limit` (above).
+
+Grants are layer maps typed from the model's declaration. `read` grants the `default` output and
+`outputs: { <name>: … }` named ones; each names per path of that output a `where` (`true` reads the
+output unfiltered); a deeper layer's `where` filters that layer only. The model fixes each output's
+fields: a policy filters rows and never changes a shape, so a narrower audience gets a narrower
+named output. Every member reads `sys_user` output `directory` (id, name); a read of `sys_user`
+without a `default` grant names `output: 'directory'`. A holder that only lists stored files grants
+`sys_file: { outputs: { meta: … } }` (id, name, mime) instead of its `default`. The root's policy alone guards the access point and every layer under it. A write
 grant is `true` or `{ columns?, check? }`: `columns` per path is checked before any guest code,
 then `check` judges the batch and returns a verdict. Approval is its `approve` verdict:
 
@@ -440,7 +555,7 @@ the native timeline, request selector and record controls. Teams/policies/routes
 - A workspace skill is a folder, `src/agent/skill/<name>/`: `+skill.md` (`description:` frontmatter
   and `##` sections) plus any scripts and vendored pure-JavaScript packages (`node_modules/…`), at
   most 10 MiB and no links. The agent runs a script as written with `run_js { file: '<name>/<path>',
-  args, files }`: its tree is read-only at `/app`, named conversation files at `/in/<name>`, and
+args, files }`: its tree is read-only at `/app`, named conversation files at `/in/<name>`, and
   `/out` becomes the person's files; Node built-ins other than `fs`, `path`, `buffer`, `process` and
   `util` fail by name, and `fetch` exists only for a run granted `http`. MCP declarations live in
   `src/agent/mcp/+<name>.mcp.ts`. Policies grant skills, MCP servers and host tools (including
@@ -450,16 +565,16 @@ the native timeline, request selector and record controls. Teams/policies/routes
 
 ```ts
 // src/agent/envoy/+field_ops_whatsapp.envoy.ts
-import { envoy } from "@norbital-ai/bolt";
+import { envoy } from '@norbital-ai/bolt';
 export default envoy({
-  name: "Norbital", // what people call it: a message naming it is addressed to it
-  audience: "private", // 'private': members matched by handle | 'public': anyone
-  policies: ["field_ops_whatsapp"], // non-empty: a group turn's whole authority
-  groupMessages: "mention_or_reply", // default; 'disabled' | 'all'
-  delegation: "disabled",
-  triage: {}, // System 1 triage where the host binds it; false answers every addressed message
-  dm: "union", // default; 'envoy' holds a DM to the envoy's policies alone
-  task: "Answer questions about job assignments and keep them up to date from what people report.",
+	name: 'Norbital', // what people call it: a message naming it is addressed to it
+	audience: 'private', // 'private': members matched by handle | 'public': anyone
+	policies: ['field_ops_whatsapp'], // non-empty: a group turn's whole authority
+	groupMessages: 'mention_or_reply', // default; 'disabled' | 'all'
+	delegation: 'disabled',
+	triage: {}, // System 1 triage where the host binds it; false answers every addressed message
+	dm: 'union', // default; 'envoy' holds a DM to the envoy's policies alone
+	task: 'Answer questions about job assignments and keep them up to date from what people report.'
 });
 ```
 
@@ -486,9 +601,11 @@ export default envoy({
 ```ts
 // src/data/model/entity/+model.ts, inside fields
 hotline: { kind: 'ref', to: "sys_integration", optional: true, onDelete: "setNull", where: { integration: { eq: "whatsapp" } } },
+// src/data/model/payslip/+model.ts: the payslip fields a hotline reads, as a named output
+outputs: { hotline: { payslip: { fields: ["salary_from", "salary_to", "status", "currency", "gross", "total_deductions", "net", "paid_at"] } } },
 // src/access_control/policy/+payroll_hotline.policy.ts, with the envoy's dm: 'envoy'
 payslip: {
-  read: { payslip: {
+  outputs: { hotline: { payslip: {
     where: {
       employment_id: {
         is: {
@@ -497,8 +614,7 @@ payslip: {
         },
       },
     },
-    fields: ["id", "salary_from", "salary_to", "status", "currency", "gross", "total_deductions", "net", "paid_at"],
-  } },
+  } } },
 },
 ```
 
@@ -519,14 +635,15 @@ Provider code owns custom conversation codecs and authentication protocols.
 
 ```ts
 export default integration('crm', {
-  description: 'The CRM account.', driver: 'http',
-  credential: { apiKey: { kind: 'text' }, signingSecret: { kind: 'text' } },
-  http: { baseUrl: 'https://api.crm.example', auth: { bearer: 'apiKey' } },
-  webhook: { verify: { scheme: 'standard', secret: 'signingSecret' } },
-  rate: '10/s',
-  test: function* (ctx) {
-    yield* ctx.request({ path: '/health' });
-  }
+	description: 'The CRM account.',
+	driver: 'http',
+	credential: { apiKey: { kind: 'text' }, signingSecret: { kind: 'text' } },
+	http: { baseUrl: 'https://api.crm.example', auth: { bearer: 'apiKey' } },
+	webhook: { verify: { scheme: 'standard', secret: 'signingSecret' } },
+	rate: '10/s',
+	test: function* (ctx) {
+		yield* ctx.request({ path: '/health' });
+	}
 });
 ```
 
@@ -573,9 +690,10 @@ Neither provider code nor platform code should encode a template's domain rules.
 
 ## Seeds (`seed/`)
 
-`seed/**/<model>.json[.gz]` (basename = model), `seed/assets.json` + `seed/assets/**`, and
-the optional reader `seed/seed.ts` (`satisfies SeedSource`) for a template whose bank needs shaping.
-Seed rows restore through the model engine: no write callback, automation or approval. `bolt build` writes the `base` pack from `seed/` (outside `seed/test/`),
-the `test` pack from `seed/test/**/<model>.json[.gz]` (+ `seed/test/assets.json`, `seed/test/assets/**`; no `seed.ts`,
-no bank) and, with `--bank`, the private `sample` pack. Only `base` and `sample` are ever provisioned; `test` is the
-template's own test fixture. Keep `seed/` invented and synthetic; never copy seed-bank or customer rows into it.
+Contract: Bolt `docs/seeding.md`. Public rows: `seed/public/**/<model>.json[.gz]` (basename = model),
+`seed/public/assets.json` + `seed/public/assets/**`, the `base` pack every release carries. Test rows:
+`seed/test/**` in the same shape, the `test` pack the template's own tests seed from. The optional
+`seed/+seeder.ts` (`seeder({ bank?: { tree, start? } })`) names the private bank tree; only
+`bolt seed --bank=<checkout>` reads its `rows/**`, as stored, in memory, into one demo. Seed rows restore through the model engine: no write callback or approval; a
+pack's `start` automations queue with its rows. Keep `seed/` invented and synthetic; never copy
+seed-bank or customer rows into it.

@@ -20,7 +20,7 @@ import type {
 import type { System1Request } from '../src/engine/decisions/index.ts';
 import { upload } from '../src/engine/callables/upload.ts';
 import { Authorities } from '../src/engine/identity/actor.ts';
-import { KitInvalid, TestWorkspace, type Kit } from '../src/test/index.ts';
+import { KitInvalid, TestWorkspace, type Kit } from '../../bolt-cli/src/test/index.ts';
 import { actReply, routeFixture } from './support/route-fixture.ts';
 import { filesOf } from '../src/engine/conversations/store.ts';
 
@@ -106,120 +106,118 @@ const conversation = (effect: Effect.Effect<Outcome, unknown>) =>
 /** The record file `read_file` is asked for when a message carries no attachment of its own. */
 let recordFile = '';
 const setup = Effect.gen(function* () {
-		const requests: AiRequest[] = [],
-			states: System1Request['state'][] = [];
-		const ports = Layer.succeed(Ai, {
-			maxChoices: undefined,
-			models: ['default'],
-			catalog: Port.unavailable('ai.catalog'),
-			embed: () => Port.unavailable('ai.embed'),
-			ask: (r) =>
-				Effect.sync(() => {
-					states.push(r.state);
-					return {
-						answers: {
-							action: {
-								type: 'choice' as const,
-								choice: 'respond',
-								confidence: 1,
-								probabilities: { respond: 1 }
-							},
-							wait: {
-								type: 'score' as const,
-								score: 0,
-								level: 0,
-								confidence: 1,
-								probabilities: {},
-								legend: {}
-							}
+	const requests: AiRequest[] = [],
+		states: System1Request['state'][] = [];
+	const ports = Layer.succeed(Ai, {
+		maxChoices: undefined,
+		models: ['default'],
+		catalog: Port.unavailable('ai.catalog'),
+		embed: () => Port.unavailable('ai.embed'),
+		ask: (r) =>
+			Effect.sync(() => {
+				states.push(r.state);
+				return {
+					answers: {
+						action: {
+							type: 'choice' as const,
+							choice: 'respond',
+							confidence: 1,
+							probabilities: { respond: 1 }
 						},
-						costUsd: 0,
-						provider: 'scripted'
-					};
-				}),
-			infer: (r) =>
-				Stream.fromEffect(
-					Effect.sync(() => {
-						requests.push(r);
-						const last = r.messages.findLast(
-							(m) => !(typeof m.content === 'string' && m.content.startsWith('[conversation state'))
-						);
-						// a posted attachment is read by its id; else the record's file
-						const id =
-							/\[attachment: [^\]]*\] file reference \{\\"id\\":\\"([^\\]+)\\"/.exec(
-								JSON.stringify(r.messages)
-							)?.[1] ?? recordFile;
-						const response: AiResponse =
-							last?.role !== 'tool' && id !== ''
-								? {
-										content: '',
-										toolCalls: [
-											{
-												id: 'r1',
-												name: 'read_file',
-												input: { id, as: 'image' }
-											}
-										],
-										finish: 'tool',
-										usage: { input: 1, output: 1 }
-									}
-								: {
-										content: 'A pump.',
-										toolCalls: [],
-										finish: 'stop',
-										usage: { input: 1, output: 1 }
-									};
-						return { _tag: 'Response' as const, response };
-					})
-				)
-		});
-		const context = yield* Layer.build(TestWorkspace.layer({ manifest, ports }));
-		const t = Context.get(context, TestWorkspace);
-		yield* t.db.write({
-			text: `INSERT INTO sys_user (id, email, name, team) VALUES ('ann', 'ann@x.test', 'Ann', 'Inspectors'), ('bob', 'bob@x.test', 'Bob', NULL)`,
-			params: []
-		});
-		const authorities = new Authorities(t.manifest, 'test');
-		const who = (id: string) =>
-			authorities
-				.member(t.db, id)
-				.pipe(
-					Effect.flatMap((a) =>
-						a === null ? Effect.die(new Error('no member')) : Effect.succeed(a)
-					)
-				);
-		const put = (authority: Authority, name: string, mime: string, bytes: Uint8Array) =>
-			upload({
-				id: randomUUID(),
-				model: 'sys_conversation',
-				field: 'inputs',
-				name,
-				mime,
-				bytes,
-				authority,
-				now: t.clock.now()
-			}).pipe(Effect.provide(context));
-		/** A post is held for the sender's pause (P40), then decided and answered. */
-		const post = (as: string, input: Json) =>
-			Effect.gen(function* () {
-				const outcome = yield* act(t, as, 'sys_message.post', input);
-				t.clock.advance('2s');
-				yield* t.runDue();
-				yield* t.settled();
-				return outcome;
-			});
-		return {
-			t,
-			context,
-			act: (as: string, name: string, input: Json) => act(t, as, name, input),
-			post,
-			put,
-			who,
-			requests,
-			states,
-			conversation: (as = 'ann') => conversation(act(t, as, 'sys_conversation.start', {}))
-		};
+						wait: {
+							type: 'score' as const,
+							score: 0,
+							level: 0,
+							confidence: 1,
+							probabilities: {},
+							legend: {}
+						}
+					},
+					costUsd: 0,
+					provider: 'scripted'
+				};
+			}),
+		infer: (r) =>
+			Stream.fromEffect(
+				Effect.sync(() => {
+					requests.push(r);
+					const last = r.messages.findLast(
+						(m) => !(typeof m.content === 'string' && m.content.startsWith('[conversation state'))
+					);
+					// a posted attachment is read by its id; else the record's file
+					const id =
+						/\[attachment: [^\]]*\] file reference \{\\"id\\":\\"([^\\]+)\\"/.exec(
+							JSON.stringify(r.messages)
+						)?.[1] ?? recordFile;
+					const response: AiResponse =
+						last?.role !== 'tool' && id !== ''
+							? {
+									content: '',
+									toolCalls: [
+										{
+											id: 'r1',
+											name: 'read_file',
+											input: { id, as: 'image' }
+										}
+									],
+									finish: 'tool',
+									usage: { input: 1, output: 1 }
+								}
+							: {
+									content: 'A pump.',
+									toolCalls: [],
+									finish: 'stop',
+									usage: { input: 1, output: 1 }
+								};
+					return { _tag: 'Response' as const, response };
+				})
+			)
 	});
+	const context = yield* Layer.build(TestWorkspace.layer({ manifest, ports }));
+	const t = Context.get(context, TestWorkspace);
+	yield* t.db.write({
+		text: `INSERT INTO sys_user (id, email, name, team) VALUES ('ann', 'ann@x.test', 'Ann', 'Inspectors'), ('bob', 'bob@x.test', 'Bob', NULL)`,
+		params: []
+	});
+	const authorities = new Authorities(t.manifest, 'test');
+	const who = (id: string) =>
+		authorities
+			.member(t.db, id)
+			.pipe(
+				Effect.flatMap((a) => (a === null ? Effect.die(new Error('no member')) : Effect.succeed(a)))
+			);
+	const put = (authority: Authority, name: string, mime: string, bytes: Uint8Array) =>
+		upload({
+			id: randomUUID(),
+			model: 'sys_conversation',
+			field: 'inputs',
+			name,
+			mime,
+			bytes,
+			authority,
+			now: t.clock.now()
+		}).pipe(Effect.provide(context));
+	/** A post is held for the sender's pause (P40), then decided and answered. */
+	const post = (as: string, input: Json) =>
+		Effect.gen(function* () {
+			const outcome = yield* act(t, as, 'sys_message.post', input);
+			t.clock.advance('2s');
+			yield* t.runDue();
+			yield* t.settled();
+			return outcome;
+		});
+	return {
+		t,
+		context,
+		act: (as: string, name: string, input: Json) => act(t, as, name, input),
+		post,
+		put,
+		who,
+		requests,
+		states,
+		conversation: (as = 'ann') => conversation(act(t, as, 'sys_conversation.start', {}))
+	};
+});
 
 const fileScope = Effect.runSync(Scope.make());
 afterAll(() => Effect.runPromise(Scope.close(fileScope, Exit.void)));
@@ -345,7 +343,10 @@ describe('read_file', () => {
 					});
 					const ask = (who: string) =>
 						Effect.gen(function* () {
-							yield* post(who, { conversation: yield* conversation(who), text: 'what does the sheet show?' });
+							yield* post(who, {
+								conversation: yield* conversation(who),
+								text: 'what does the sheet show?'
+							});
 							const request = requests.at(-1);
 							if (request === undefined) throw new Error('no model request');
 							return request;

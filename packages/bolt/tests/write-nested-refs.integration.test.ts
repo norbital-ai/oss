@@ -7,7 +7,7 @@ import type { TenantDbShape as TenantDb } from '../src/engine/db/tenant-db.ts';
 import type { Json } from '../src/decl/values.ts';
 import { toPred } from '../src/engine/access/pred.ts';
 import { PgliteDb } from '../src/node/db/pglite.ts';
-import { TestDb } from '../src/test/database.ts';
+import { TestDb } from '../../bolt-cli/src/test/database.ts';
 import { act } from '../src/engine/write/act.ts';
 import { admin, arm, authority, grants, manifest, NOW, TODAY, writeArm } from './write-fixture.ts';
 const orderModel = manifest.models.orders,
@@ -66,7 +66,9 @@ const visible = authority({
 		create: [writeArm({ orders: ['title', 'preferences', 'metadata'] })],
 		update: [writeArm({ orders: ['preferences', 'metadata'] })]
 	}),
-	tags: grants('tags', { read: { tags: [arm(toPred(m, 'tags', { name: { eq: 'visible' } }))] } })
+	tags: grants('tags', {
+		read: { default: { tags: [arm(toPred(m, 'tags', { name: { eq: 'visible' } }))] } }
+	})
 });
 const run = (input: Json, verb: 'create' | 'update' = 'create', caller = visible) =>
 	act(

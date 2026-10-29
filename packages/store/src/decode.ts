@@ -4,7 +4,6 @@
 import { Array as EffectArray, Effect, Predicate, Result } from 'effect';
 import { KIND } from '@norbital-ai/std/kind';
 import { Decimal } from '@norbital-ai/std/decimal';
-import { encodeWire } from '@norbital-ai/std/wire';
 import { ELEMENT } from './ir.ts';
 import { compileVar, memberAdmits } from '@norbital-ai/std/vars';
 import type {
@@ -195,12 +194,6 @@ const val = (
 				value
 			}));
 };
-/** Tagged operands embedded in a period literal keep their validated discriminator. */
-export const isTaggedOperand = (value: unknown): value is Operand =>
-	Predicate.isObject(value) &&
-	(value._tag === 'Field'
-		? typeof value.field === 'string'
-		: value._tag === 'Var' && typeof value.text === 'string');
 export const argumentList = (value: Extract<Pred, { t: 'in' }>['args']): value is readonly Json[] =>
 	EffectArray.isArray(value);
 
@@ -220,20 +213,20 @@ const periodArg = Effect.fnUntraced(function* (
 		hi = f.periodOf === 'date' ? 'to' : 'end';
 	if (!Predicate.isObject(v) || !(lo in v) || !(hi in v) || Object.keys(v).length !== 2)
 		return yield* invalid(`${path}: takes a period { ${lo}, ${hi} }`);
-	const end = Effect.fnUntraced(function* (x: unknown, p: string) {
-		const a = yield* val(info, f, x, p, f.periodOf);
-		return a._tag === 'Lit' ? a.value : encodeWire(a);
-	});
-	const a = yield* end(v[lo], `${path}.${lo}`);
-	const b = v[hi] === null ? null : yield* end(v[hi], `${path}.${hi}`);
+	const a = yield* val(info, f, v[lo], `${path}.${lo}`, f.periodOf);
+	const b: Arg =
+		v[hi] === null
+			? { _tag: 'Lit', value: null }
+			: yield* val(info, f, v[hi], `${path}.${hi}`, f.periodOf);
 	if (
-		typeof a === 'string' &&
-		typeof b === 'string' &&
-		(f.periodOf === 'date' ? a > b : Date.parse(a) > Date.parse(b))
+		a._tag === 'Lit' &&
+		b._tag === 'Lit' &&
+		typeof a.value === 'string' &&
+		typeof b.value === 'string' &&
+		(f.periodOf === 'date' ? a.value > b.value : Date.parse(a.value) > Date.parse(b.value))
 	)
 		return yield* invalid(`${path}: '${lo}' is after '${hi}'`);
-	const arg: Arg = { _tag: 'Lit', value: { [lo]: a, [hi]: b } };
-	return arg;
+	return { lo: a, hi: b };
 });
 
 /** `{ field: value }` is `eq` (a list `in`, null `isNull`); `{ $dec }` is the wire's only tagged literal. */
@@ -283,7 +276,7 @@ const fieldOp = Effect.fnUntraced(function* (
 				t: 'period',
 				field: f.name,
 				op,
-				arg: yield* periodArg(info, f, v, at)
+				...(yield* periodArg(info, f, v, at))
 			} satisfies Pred;
 	} else if (f.kind === 'point') {
 		if (op === 'near') {
@@ -638,7 +631,9 @@ export const where: (
 		} else {
 			const f = info.fields.get(key);
 			if (f === undefined || key.includes('.'))
-				return yield* invalid(`${at}: unknown field '${key}' on '${m}'`);
+				return yield* invalid(
+					`${at}: unknown field '${key}' on '${m}'${/\p{Cf}/u.test(key) ? ' (the name holds invisible characters)' : ''}; its fields: ${[...info.fields.keys()].join(', ')}`
+				);
 			of.push(...(yield* fieldOps(info, f, v, at)));
 		}
 	}
@@ -1028,7 +1023,8 @@ export const aggregate = Effect.fn('Store.decode.aggregate')(function* (
 		kind: 'aggregate',
 		model,
 		by: buckets,
-		...(count === true ? { count: true } : {}),
+		// a grouped aggregate always counts its buckets' rows
+		...(count === true || buckets.length > 0 ? { count: true } : {}),
 		...(s === undefined ? {} : { sum: s }),
 		...(a === undefined ? {} : { avg: a }),
 		...(lo === undefined ? {} : { min: lo }),

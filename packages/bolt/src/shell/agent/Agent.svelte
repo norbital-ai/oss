@@ -9,8 +9,8 @@
 	shown, and consecutive ones not for the agent fold into one quiet block, collapsed to its count and last message; on a
 	channel thread each reply names the messages it answers ("Replying to"). Files are attached with the paperclip, by paste
 	or by drop (at most 8 files, 20 MiB); each uploads to `/__bolt/files/sys_conversation.inputs` when the message is sent.
-	The selector's tabs split the conversations by where they happen (newest first): the member's own (Web UI), one per envoy
-	whose channel conversations they may read, and, for an administrator, automation transcripts; each tab counts its rows, and
+	The selector's tabs split the conversations by where they happen (newest first): the member's own (Web UI) and one per envoy
+	whose channel conversations they may read (automations' inference transcripts are the command center's); each tab counts its rows, and
 	search filters every tab at once (each count follows its matches). Only Web UI conversations are writable; delegated sub-agents live in the session rail (their tasks, live steps and answers),
 	several working at once, one level deep; messages sent while a turn runs wait in the queue (edit, move up, remove); the context meter reads the
 	last reply's usage; the transcript follows its tail unless the reader scrolled up ("Latest" returns); a running turn
@@ -294,13 +294,9 @@
 	const status = $derived(current?.status ?? 'idle');
 	/** An instance or envoy name in words: `field_ops` → `Field ops`. */
 	const human = (s: string) => s.replaceAll('_', ' ').replace(/^./, (c) => c.toUpperCase());
-	/** The selector tab a conversation sits in: the member's own (Web UI), its envoy's, or automation transcripts. */
+	/** The selector tab a conversation sits in: the member's own (Web UI) or its envoy's. */
 	const tabOf = (c: AgentConversation) =>
-		c.run != null
-			? 'automations'
-			: c.integration === null
-				? 'web'
-				: `envoy:${c.envoy ?? c.integration}`;
+		c.integration === null ? 'web' : `envoy:${c.envoy ?? c.integration}`;
 	const envoyName = (c: AgentConversation) =>
 		envoys[c.envoy ?? ''] ?? human(c.envoy ?? c.integration ?? '');
 	/** A conversation's own line: its title, else a DM's peer (the provider's address) or the group's thread. */
@@ -628,17 +624,18 @@
 	/** The selector's search, across every tab, and its open tab. */
 	let query = $state(''),
 		tab = $state('web');
+	// an automation's inference transcript opens here from the command center, never from the selector
 	const matches = $derived.by(() => {
 		const q = query.trim().toLowerCase();
-		return q === ''
-			? list
-			: list.filter((c) =>
-					`${nameOf(c)} ${c.thread ?? ''} ${c.peer ?? ''}`.toLowerCase().includes(q)
-				);
+		return list.filter(
+			(c) =>
+				c.run == null &&
+				(q === '' || `${nameOf(c)} ${c.thread ?? ''} ${c.peer ?? ''}`.toLowerCase().includes(q))
+		);
 	});
 	/**
-	 * The tabs the list holds (Web UI always, then each envoy by name, then automations): the server lists only the envoy
-	 * threads and automation transcripts this member may read, so a tab is here exactly when it has rows to show.
+	 * The tabs the list holds (Web UI always, then each envoy by name): the server lists only the envoy threads this member
+	 * may read, so a tab is here exactly when it has rows to show.
 	 */
 	const tabs = $derived.by(() => {
 		const envoyTabs = new Map<string, string>();
@@ -655,10 +652,7 @@
 			counted('web', t('Web UI'), 'lucide:message-square'),
 			...[...envoyTabs]
 				.sort((a, b) => a[1].localeCompare(b[1]))
-				.map(([name, title]) => counted(name, title, 'lucide:bot')),
-			...(list.some((c) => c.run != null)
-				? [counted('automations', t('Automations'), 'lucide:workflow')]
-				: [])
+				.map(([name, title]) => counted(name, title, 'lucide:bot'))
 		];
 	});
 	const shownTab = $derived(tabs.some((x) => x.name === tab) ? tab : 'web');
@@ -1187,7 +1181,7 @@
 			.map((w) => w.id)
 			.join(' ')
 	);
-	/** Each run's status, re-read every few seconds while the rail shows them (as Settings → Automations does). */
+	/** Each run's status, re-read every few seconds while the rail shows them (as the command center's Automations does). */
 	const runs = liveEdge(() =>
 		!rail || runIds === ''
 			? null
@@ -1450,7 +1444,7 @@
 		>{/each}{/snippet}
 {#snippet noPanel()}{/snippet}
 {#snippet selectorTabs()}
-	<!-- the selector's tabs: each counts its search matches; an envoy's and the automations' tab are read-only -->
+	<!-- the selector's tabs: each counts its search matches; an envoy's tab is read-only -->
 	<div class="min-w-0 pt-1" data-agent-tabs>
 		<Tabs {tabs} value={shownTab} onValueChange={(v) => (tab = v)} class="h-auto gap-0" />
 		{#if shownTab !== 'web'}<p

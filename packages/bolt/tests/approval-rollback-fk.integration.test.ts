@@ -6,7 +6,7 @@ import type { EngineManifest } from '../src/engine/manifest.ts';
 import { Writes } from '../src/engine/services.ts';
 import { rollbackPlan } from '../src/engine/approvals/rollback.ts';
 import { restorePreview } from '../src/engine/write/restore.ts';
-import { TestWorkspace } from '../src/test/index.ts';
+import { TestWorkspace } from '../../bolt-cli/src/test/index.ts';
 
 const manifest: EngineManifest = {
 	needs: [],

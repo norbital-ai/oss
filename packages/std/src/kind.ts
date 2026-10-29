@@ -17,7 +17,7 @@ export type Precision = DatePrecision | TimePrecision;
 
 type Common = {
 	readonly optional?: true;
-	readonly default?: unknown;
+	readonly default?: Json;
 	readonly unique?: true;
 	readonly label?: string;
 	readonly help?: string;

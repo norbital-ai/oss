@@ -48,8 +48,8 @@ export type ModelExposure = {
 	many?: readonly string[];
 	/** Read-side inverse identities; each child is read independently through its own policy. */
 	children?: Readonly<Record<string, Pick<ChildInput, 'model' | 'parent' | 'owned'>>>;
-	/** Fields masked to this caller (rule 14): shown locked, never offered to filter or sort. */
-	masked?: readonly string[];
+	/** The named read output the caller's views read (absent: `default`); its fields, relations and layers are these. */
+	output?: string;
 	create?: {
 		columns: readonly string[];
 		filled?: readonly string[];

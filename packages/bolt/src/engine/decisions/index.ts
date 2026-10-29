@@ -28,6 +28,7 @@ import { Ai, Logs, type AiEvent } from '../ports.ts';
 import { Decisions, type DecisionUse, type ReadsShape, type ShapeOf } from '../services.ts';
 import { BoltError } from '../../protocol/errors.ts';
 import { catalogOf } from '../access/pred.ts';
+import { exposed, grantedArms, outputsOf } from '../access/authority.ts';
 import { q } from '@norbital-ai/store';
 import { clip } from '../agent/schema.ts';
 import { provideHttp, type HttpOptions, type OpenAiChat } from '../agent/openai-chat.ts';
@@ -306,11 +307,13 @@ export const DecisionsLive = Layer.effect(
 				const result = yield* Effect.result(ask(ai, request));
 				const event = Result.isSuccess(result) ? result.success : wireFailure(result.failure);
 				const now = new Date(yield* Clock.currentTimeMillis).toISOString();
-				const call = yield* crypto.randomUUIDv4().pipe(
-					Effect.mapError(
-						(error) => new FacilityFailure({ kind: 'upstream', message: error.message })
-					)
-				);
+				const call = yield* crypto
+					.randomUUIDv4()
+					.pipe(
+						Effect.mapError(
+							(error) => new FacilityFailure({ kind: 'upstream', message: error.message })
+						)
+					);
 				yield* logs.write({
 					at: now,
 					severity: Result.isSuccess(result) ? 'info' : 'warn',
@@ -540,7 +543,7 @@ export const storedFiles = Effect.fn('Decisions.storedFiles')(function* (
 });
 /**
  * Whether `authority` may read a stored file, as `GET /__bolt/files/<id>` checks: an administrator, or a row holding it in
- * its model's file field that the caller reads with that field unmasked.
+ * its model's file field that an output the caller holds reads.
  * A conversation's file (`sys_conversation.inputs` / `outputs`) is its uploader's, and then the conversation's: its owner, a member who
  * posted in it (in the app or as a linked envoy sender), and staff for an instance's conversation. Filed into a record (an
  * envoy's photo), it is also that record's: whoever reads it there, as for any file field.
@@ -563,7 +566,7 @@ export const readableFile = Effect.fn('Decisions.readableFile')(function* (
 		});
 		if (Option.isSome(notified)) return true;
 	}
-	/** A row of `model` holding the file in `field` that the caller reads with that field unmasked. ponytail: ≤ 20 holders are tried. */
+	/** A row of `model` holding the file in `field` that an output the caller holds reads. ponytail: ≤ 20 holders are tried. */
 	const held = Effect.fn('Decisions.body')(function* (model: string, field: string) {
 		if (o.authority.models[model] === undefined) return false;
 		const holders = yield* o.db.rows(Schema.Struct({ id: Schema.String }), {
@@ -571,15 +574,22 @@ export const readableFile = Effect.fn('Decisions.readableFile')(function* (
 			params: [JSON.stringify({ id }), JSON.stringify([{ id }])]
 		});
 		const cat = catalogOf(o.manifest);
-		for (const h of holders) {
-			const [got] = yield* o.read(
-				[ir.get(cat, model, h.id, { select: { [field]: true } })],
-				{ as: 'caller', authority: o.authority },
-				o.bindings
-			);
-			if (JSON.stringify((Predicate.isObject(got) ? got[field] : null) ?? null).includes(id))
-				return true;
-		}
+		const outputs = outputsOf(o.manifest, model).filter(
+			(output) =>
+				(o.authority.admin || grantedArms(o.authority, model, output) !== undefined) &&
+				exposed(o.manifest, model, model, model, output).includes(field)
+		);
+		for (const output of outputs)
+			for (const h of holders) {
+				const read = ir.get(cat, model, h.id, { select: { [field]: true } });
+				const [got] = yield* o.read(
+					[read.kind === 'get' ? { ...read, output } : read],
+					{ as: 'caller', authority: o.authority },
+					o.bindings
+				);
+				if (JSON.stringify((Predicate.isObject(got) ? got[field] : null) ?? null).includes(id))
+					return true;
+			}
 		return false;
 	});
 	if (owner === 'sys_conversation.inputs' || owner === 'sys_conversation.outputs') {

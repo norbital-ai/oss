@@ -15,7 +15,7 @@
 	import { openRecord } from '../record/navigation.js';
 	import { useOptionalBolt } from '../client/context.js';
 	import Glyph from '../primitives/icon/Glyph.svelte';
-	import { filesOf, isMasked } from './value.js';
+	import { filesOf } from './value.js';
 	import { msg } from '../text/messages.js';
 	import { type Ref } from '../relations/select.js';
 
@@ -62,7 +62,6 @@
 		dense &&
 			value !== null &&
 			value !== undefined &&
-			!isMasked(value) &&
 			field?.entry.renderer === undefined &&
 			((inspectKind !== undefined && structured(inspectKind)) ||
 				((kind === undefined ||
@@ -78,7 +77,6 @@
 	): string {
 		if (held === undefined) return 'Not set';
 		if (held === null) return 'Null';
-		if (isMasked(held)) return '•••';
 		let shape = declared;
 		const seen = new Set<Kind>();
 		for (let level = 0; shape !== undefined; level++) {
@@ -238,8 +236,6 @@
 		{...row === undefined ? {} : { row }}
 		{...name === undefined ? {} : { name }}
 	/>
-{:else if isMasked(value)}
-	<span class="text-muted-foreground" title="restricted" aria-label="restricted">•••</span>
 {:else if files.length > 0}
 	{#each files as f (f.id)}
 		{#if bolt === undefined}<span>{f.name}</span>{:else}<a

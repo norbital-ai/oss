@@ -3,7 +3,7 @@
 // publishes — the provider choice, a form whose refusal is shown verbatim, a QR and a code — and a definition drawn by
 // the workspace's own `+integration.svelte` when it has one. Connect and disconnect in a real browser:
 // integration-setup.browser.test.ts.
-import '../src/test/dom.ts';
+import '../../bolt-cli/src/test/dom.ts';
 import { Deferred, Effect, Layer, ManagedRuntime } from 'effect';
 import { mountEdge, run } from '@norbital-ai/ui/effect';
 import { flushSync, mount, tick, unmount } from 'svelte';

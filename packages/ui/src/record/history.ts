@@ -1,7 +1,5 @@
 import type { Json } from '@norbital-ai/std/wire';
-import { isRow, objectsOf } from '../read/results.js';
-import { isMasked } from '../cell/value.js';
-import type { ViewBolt } from '../client/contract.js';
+import type { HistoryEntry, ViewBolt } from '../client/contract.js';
 import { humanize, msg } from '../text/messages.js';
 /** A related model's records whose history joins the record's: those `where` selects, read through the viewer's scope. */
 export type RecordHistorySource = { of: string; where?: Json; fields?: readonly string[] };
@@ -31,35 +29,18 @@ export type Checkpoint = {
 	approval: { request: string; state: string | null } | null;
 };
 /** `bolt.history`'s answer as checkpoints, oldest first; bookkeeping fields are not changes. Revision 1 is the create. */
-export function checkpoints(history: unknown): Checkpoint[] {
-	return objectsOf(history)
-		.flatMap((row): Checkpoint[] => {
-			const revision = row['revision'];
-			if (typeof revision !== 'number') return [];
-			const actor = row['actor'];
-			return [
-				{
-					revision,
-					at: typeof row['at'] === 'string' ? row['at'] : null,
-					actor:
-						isRow(actor) && typeof actor['kind'] === 'string' && typeof actor['id'] === 'string'
-							? { kind: actor['kind'], id: actor['id'] }
-							: null,
-					restoredFrom: typeof row['restoredFrom'] === 'number' ? row['restoredFrom'] : null,
-					approval:
-						isRow(row['approval']) && typeof row['approval']['request'] === 'string'
-							? {
-									request: row['approval']['request'],
-									state:
-										typeof row['approval']['state'] === 'string' ? row['approval']['state'] : null
-								}
-							: null,
-					fields: Object.entries(isRow(row['changed']) ? row['changed'] : {})
-						.filter(([field, value]) => !BOOKKEEPING.has(field) && !isMasked(value))
-						.map(([field]) => field)
-				}
-			];
-		})
+export function checkpoints(history: readonly HistoryEntry[]): Checkpoint[] {
+	return history
+		.map((entry): Checkpoint => ({
+			revision: entry.revision,
+			at: entry.at,
+			actor: entry.actor,
+			restoredFrom: entry.restoredFrom,
+			approval: entry.approval,
+			fields: Object.entries(entry.changed)
+				.filter(([field]) => !BOOKKEEPING.has(field))
+				.map(([field]) => field)
+		}))
 		.sort((a, b) => a.revision - b.revision);
 }
 /** A revision's place on a `1..latest` ruler, in percent; one revision sits at the end. */
@@ -89,8 +70,6 @@ export function skipText(bolt: Pick<ViewBolt, 't'>, reason: string): string {
 			return msg(bolt, 'record.restoreSkip.noGrant', 'You may not change this field');
 		case 'stateLocked':
 			return msg(bolt, 'record.restoreSkip.stateLocked', 'This state change is not allowed');
-		case 'masked':
-			return msg(bolt, 'record.restoreSkip.masked', 'Hidden from you');
 		case 'definitionChanged':
 			return msg(
 				bolt,

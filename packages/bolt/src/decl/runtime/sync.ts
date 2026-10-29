@@ -70,7 +70,7 @@ type SendOn<D> = [ConversationOf<D>] extends [never]
 			send(message: SendInput<D>): Eff<Id<'sys_message'>, Failure>;
 		};
 /**
- * What a remote sync body sees: the clock and `db` reads as the workspace (unmasked, unscoped), the instance's
+ * What a remote sync body sees: the clock and `db` reads as the workspace (unscoped), the instance's
  * configuration, `request` (request drivers) and `send` (conversation drivers). A sync body writes nothing itself: what
  * it returns is written in one act.
  */
@@ -79,7 +79,7 @@ export type SyncCtx<D = never> = Clock & { readonly db: WorkspaceQuery } & ([D] 
 		: { readonly configuration: ConfigurationOf<D> } & RequestOn<D> & SendOn<D>);
 /**
  * What a file sync body sees: the clock and `db` reads as the member who started the import or export — each root's
- * policies filter and mask it and its layers (`ReadAnswer` masked), so a document shows only what that member may read.
+ * granting policies filter its output and layers, so a document shows only what that member may read.
  */
 export type FileSyncCtx = Clock & { readonly db: Pick<CallerQuery, 'query' | 'aggregate'> };
 
@@ -96,7 +96,7 @@ type ParseCtx = FileSyncCtx & { readonly files: Pick<Files, 'get' | 'text'> };
 type FileWriteCtx = FileSyncCtx & { readonly files: Pick<Files, 'get' | 'image'> };
 /**
  * A parser of the workspace's own for one registered media type: the upload must carry one of `extensions`. `parse`
- * runs in the guest under the 2 s CPU budget and returns each record with its `$at`.
+ * runs in the guest under the 3 s CPU budget and returns each record with its `$at`.
  */
 export type CustomParser<R = { readonly [field: string]: Json }> = {
 	type: MediaType;
@@ -105,7 +105,7 @@ export type CustomParser<R = { readonly [field: string]: Json }> = {
 };
 /**
  * A problem a file's `read` found: `at` is the record's `$at` (0: the file as a whole), `field` the column. Any `refuse`
- * blocks the file; a `warn` waits for the member to accept it.
+ * blocks the file (nothing is written); a `warn` is reported with what was imported.
  */
 export type Finding = {
 	readonly at: number;

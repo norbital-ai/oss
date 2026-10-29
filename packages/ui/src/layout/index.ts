@@ -31,5 +31,6 @@ export {
 	INSET_X_CLASS,
 	SCROLL_AXIS_CLASSES,
 	type LayoutGap,
-	type LayoutPad
+	type LayoutPad,
+	type LayoutSize
 } from './layout.shared.js';

@@ -12,7 +12,7 @@ declare module '../../src/index.ts' {
 				spec: {
 					description: 'Submit this order';
 					input: { target: { kind: 'id'; of: 'orders' } };
-					runAs: 'trigger';
+					policies: readonly ['sales_rep'];
 				};
 			};
 			orders_renote: {
@@ -23,7 +23,7 @@ declare module '../../src/index.ts' {
 						note: { kind: 'text' };
 					};
 					output: { kind: 'int' };
-					runAs: 'trigger';
+					policies: readonly ['sales_rep'];
 				};
 			};
 			order_lines_pay: {
@@ -38,14 +38,14 @@ declare module '../../src/index.ts' {
 						split: { kind: 'record'; of: { kind: 'decimal'; scale: 2 } };
 					};
 					output: { kind: 'text' };
-					runAs: 'trigger';
+					policies: readonly ['sales_rep'];
 				};
 			};
 			order_lines_chase: {
 				spec: {
 					description: 'Chase the lines';
 					input: {};
-					runAs: 'trigger';
+					policies: readonly ['sales_rep'];
 				};
 			};
 			customers_return_row: {
@@ -53,14 +53,14 @@ declare module '../../src/index.ts' {
 					description: 'One native row';
 					input: {};
 					output: { kind: 'row'; of: 'customers' };
-					runAs: 'trigger';
+					policies: readonly ['sales_rep'];
 				};
 			};
-			sweep: { spec: { description: 'x'; runAs: readonly ['sales_rep'] } };
+			sweep: { spec: { description: 'x'; policies: readonly ['sales_rep'] } };
 			nightly: {
 				spec: {
 					description: 'Nightly order digest';
-					runAs: readonly ['sales_rep'];
+					policies: readonly ['sales_rep'];
 					on: {
 						cron: '0 2 * * *';
 					};
@@ -72,22 +72,13 @@ declare module '../../src/index.ts' {
 			follow_up: {
 				spec: {
 					description: 'Chase an order three days after it is placed';
-					runAs: readonly ['sales_rep'];
-					on: readonly [
-						{
-							created: 'orders';
-							delay: '3d';
-							where: {
-								status: {
-									eq: 'draft';
-								};
-							};
-						},
-						{
-							updated: 'orders';
-							fields: readonly ['status', 'total'];
-						}
-					];
+					policies: readonly ['sales_rep'];
+					input: {
+						ids: {
+							kind: 'list';
+							of: { kind: 'id'; of: 'orders' };
+						};
+					};
 					retry: {
 						attempts: 3;
 						backoff: '1min';
@@ -100,7 +91,7 @@ declare module '../../src/index.ts' {
 			render: {
 				spec: {
 					description: 'Render an order confirmation';
-					runAs: 'trigger';
+					policies: readonly ['sales_rep'];
 					input: {
 						order: {
 							kind: 'id';
@@ -117,7 +108,7 @@ declare module '../../src/index.ts' {
 			inbound_hook: {
 				spec: {
 					description: 'Payment provider callback';
-					runAs: readonly ['sales_rep'];
+					policies: readonly ['sales_rep'];
 					on: {
 						webhook: '/payments';
 						verify: {
@@ -135,7 +126,7 @@ declare module '../../src/index.ts' {
 			body: {
 				spec: {
 					description: 'x';
-					runAs: readonly ['sales_rep'];
+					policies: readonly ['sales_rep'];
 					input: {
 						n: {
 							kind: 'int';
@@ -149,7 +140,7 @@ declare module '../../src/index.ts' {
 			trig: {
 				spec: {
 					description: 'x';
-					runAs: 'trigger';
+					policies: readonly ['sales_rep'];
 				};
 			};
 		};
@@ -157,6 +148,9 @@ declare module '../../src/index.ts' {
 			customers: {
 				read: {
 					customers: { fields: 'all' };
+				};
+				outputs: {
+					directory: { customers: { fields: readonly ['name', 'tier'] } };
 				};
 				create: {
 					columns: { customers: readonly ['name', 'email', 'tier'] };
@@ -181,6 +175,12 @@ declare module '../../src/index.ts' {
 					orders: { fields: 'all' };
 					'orders.customer': { fields: readonly ['name', 'tier'] };
 					'orders.lines': { fields: 'all' };
+				};
+				outputs: {
+					logistics: {
+						orders: { fields: readonly ['number', 'status', 'customer'] };
+						'orders.lines': { fields: readonly ['item', 'qty'] };
+					};
 				};
 				create: {
 					columns: {
@@ -290,6 +290,9 @@ declare module '../../src/index.ts' {
 					sites: {
 						fields: readonly ['name', 'location', 'customer', 'open', 'rating', 'checklist'];
 					};
+				};
+				outputs: {
+					summary: { sites: { fields: readonly ['name', 'open'] } };
 				};
 				update: {
 					columns: { sites: readonly ['name', 'location'] };
@@ -895,13 +898,7 @@ declare module '../../src/index.ts' {
 				description: 'Sell to our customers';
 				grants: {
 					orders: {
-						read: {
-							orders: {
-								where: { owner: { eq: { var: 'requestor.id' } } };
-								fields: readonly ['number', 'status', 'customer', 'note', 'due', 'total', 'owner'];
-							};
-							'orders.customer': { fields: readonly ['name'] };
-						};
+						read: { orders: { where: { owner: { eq: { var: 'requestor.id' } } } } };
 						history: true;
 						create: {
 							columns: {
@@ -917,11 +914,8 @@ declare module '../../src/index.ts' {
 						};
 					};
 					customers: {
-						read: {
-							customers: {
-								where: { orders: { some: { owner: { eq: { var: 'requestor.id' } } } } };
-								fields: readonly ['name', 'tier'];
-							};
+						outputs: {
+							directory: { customers: { where: { orders: { some: { owner: { eq: { var: 'requestor.id' } } } } } } };
 						};
 						update: true;
 					};
@@ -929,22 +923,12 @@ declare module '../../src/index.ts' {
 						read: true;
 					};
 					sites: {
-						read: {
-							sites: {
-								where: { customer: { in: { var: 'requestor.scopes.sales_rep' } } };
-								fields: readonly ['name', 'open'];
-							};
+						outputs: {
+							summary: { sites: { where: { customer: { in: { var: 'requestor.scopes.sales_rep' } } } } };
 						};
 					};
 					sys_user: {
-						read: {
-							team: {
-								in: {
-									var: 'requestor.teamTree';
-								};
-							};
-						};
-						fields: readonly ['name', 'email'];
+						outputs: { directory: { team: { in: { var: 'requestor.teamTree' } } } };
 					};
 				};
 				automations: readonly ['nightly', 'products.sync.ledger', 'orders_submit', 'orders_renote'];
@@ -984,19 +968,11 @@ declare module '../../src/index.ts' {
 					'envoys.unrecognised': '1/15min';
 				};
 			};
-			// reads orders as sales_rep does, and narrows `orders.lines`, which sales_rep reads in full by not naming it
+			// reads the narrow logistics output of every order
 			auditor: {
 				description: 'Audit orders';
 				grants: {
-					orders: {
-						read: {
-							orders: {
-								fields: readonly ['number', 'status', 'customer', 'note', 'due', 'total', 'owner'];
-							};
-							'orders.customer': { fields: readonly ['name'] };
-							'orders.lines': { fields: readonly ['item'] };
-						};
-					};
+					orders: { outputs: { logistics: true } };
 				};
 			};
 		};

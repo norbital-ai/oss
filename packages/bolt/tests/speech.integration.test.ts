@@ -7,11 +7,11 @@ import { Speech, Files } from '../src/engine/ports.ts';
 import { Port } from '../src/engine/port.ts';
 import { decodeProjectedManifest } from '../src/engine/manifest.ts';
 import { actReply, routeFixture, type FixtureRoute } from './support/route-fixture.ts';
-import { program } from '../src/test/guest.ts';
+import { program } from '../../bolt-cli/src/test/guest.ts';
 import type { Transcript } from '../src/decl/runtime/facilities.ts';
 import { expect } from '@effect/vitest';
 import type { Json } from '../src/decl/values.ts';
-import { layer, TestWorkspace, type WorkspaceServices } from '../src/test/index.ts';
+import { layer, TestWorkspace, type WorkspaceServices } from '../../bolt-cli/src/test/index.ts';
 
 const manifest = Result.getOrThrow(
 	decodeProjectedManifest({
@@ -44,10 +44,10 @@ const manifest = Result.getOrThrow(
 		automations: {
 			listen: {
 				description: 'Transcribes a call',
-				runAs: ['ops'],
+				policies: ['ops'],
 				input: { file: { kind: 'json' }, options: { kind: 'json' } }
 			},
-			say: { description: 'Speaks a line', runAs: ['ops'], input: { options: { kind: 'json' } } }
+			say: { description: 'Speaks a line', policies: ['ops'], input: { options: { kind: 'json' } } }
 		}
 	})
 );
@@ -92,7 +92,11 @@ const prepared = Effect.gen(function* () {
 			Scope.provide(fileScope)
 		),
 		admin = t.as(t.admin);
-	const up = yield* admin.upload('calls.audio', { name: 'call.mp3', mime: 'audio/mpeg', bytes: audio });
+	const up = yield* admin.upload('calls.audio', {
+		name: 'call.mp3',
+		mime: 'audio/mpeg',
+		bytes: audio
+	});
 	if (up.kind !== 'committed') throw new Error('upload failed');
 	const file: Json = { id: up.output.id, name: up.output.name, mime: up.output.mime };
 	yield* actReply(route, admin.authority, {
@@ -134,45 +138,48 @@ const run = (
 
 /** The suite's workspace runs on the real clock, as `it.live` would. */
 const LIVE = { excludeTestServices: true };
-layer(Layer.unwrap(Effect.map(guest, (g) => TestWorkspace.layer({ manifest, guest: g, ports }))), LIVE)(
-	'ctx.ai speech',
-	(it) => {
-		it.effect(
-			'transcribe hands the port the stored bytes and options; a bad shape, a missing file and an absent port are refused',
-			() =>
-				Effect.gen(function* () {
-					const seen: Parameters<Speech['Service']['transcribe']>[] = [];
-					const { row, output } = yield* run(
-						'listen',
-						(file) => ({ file, options: { diarize: true, speakers: 2, language: 'en' } }),
-						{ transcribe: (...args) => Effect.sync(() => (seen.push(args), transcript)) }
-					);
-					expect(row).toMatchObject({ state: 'succeeded', error: null });
-					expect(output).toEqual(transcript);
-					const [file, options] = seen[0] ?? [];
-					expect(file).toMatchObject({ name: 'call.mp3', mime: 'audio/mpeg' });
-					expect([...(file?.bytes ?? [])]).toEqual([...audio]);
-					expect(options).toEqual({ diarize: true, speakers: 2, language: 'en' });
-					seen.length = 0;
-					expect(
-						(yield* run('listen', (file) => ({ file, options: { speakers: 'two' } }), {
-							transcribe: (...args) => Effect.sync(() => (seen.push(args), transcript))
-						})).output
-					).toMatchObject({ kind: 'invalid' });
-					expect(seen).toEqual([]);
-					expect(
-						(yield* run('listen', () => ({ file: { id: crypto.randomUUID() }, options: {} }), {
-							transcribe: () => Effect.succeed(transcript)
-						})).output
-					).toMatchObject({ kind: 'invalid', message: expect.stringContaining('cannot read file') });
-					expect((yield* run('listen', (file) => ({ file, options: {} }))).output).toMatchObject({
-						kind: 'unavailable',
-						facility: 'ai.transcribe'
-					});
-				})
-		);
+layer(
+	Layer.unwrap(Effect.map(guest, (g) => TestWorkspace.layer({ manifest, guest: g, ports }))),
+	LIVE
+)('ctx.ai speech', (it) => {
+	it.effect(
+		'transcribe hands the port the stored bytes and options; a bad shape, a missing file and an absent port are refused',
+		() =>
+			Effect.gen(function* () {
+				const seen: Parameters<Speech['Service']['transcribe']>[] = [];
+				const { row, output } = yield* run(
+					'listen',
+					(file) => ({ file, options: { diarize: true, speakers: 2, language: 'en' } }),
+					{ transcribe: (...args) => Effect.sync(() => (seen.push(args), transcript)) }
+				);
+				expect(row).toMatchObject({ state: 'succeeded', error: null });
+				expect(output).toEqual(transcript);
+				const [file, options] = seen[0] ?? [];
+				expect(file).toMatchObject({ name: 'call.mp3', mime: 'audio/mpeg' });
+				expect([...(file?.bytes ?? [])]).toEqual([...audio]);
+				expect(options).toEqual({ diarize: true, speakers: 2, language: 'en' });
+				seen.length = 0;
+				expect(
+					(yield* run('listen', (file) => ({ file, options: { speakers: 'two' } }), {
+						transcribe: (...args) => Effect.sync(() => (seen.push(args), transcript))
+					})).output
+				).toMatchObject({ kind: 'invalid' });
+				expect(seen).toEqual([]);
+				expect(
+					(yield* run('listen', () => ({ file: { id: crypto.randomUUID() }, options: {} }), {
+						transcribe: () => Effect.succeed(transcript)
+					})).output
+				).toMatchObject({ kind: 'invalid', message: expect.stringContaining('cannot read file') });
+				expect((yield* run('listen', (file) => ({ file, options: {} }))).output).toMatchObject({
+					kind: 'unavailable',
+					facility: 'ai.transcribe'
+				});
+			})
+	);
 
-		it.effect("speak stores the port's audio as a FileRef, defaults to mp3 and refuses another format", () =>
+	it.effect(
+		"speak stores the port's audio as a FileRef, defaults to mp3 and refuses another format",
+		() =>
 			Effect.gen(function* () {
 				const files = yield* Files;
 				const seen: unknown[] = [];
@@ -185,11 +192,18 @@ layer(Layer.unwrap(Effect.map(guest, (g) => TestWorkspace.layer({ manifest, gues
 				);
 				expect(row).toMatchObject({ state: 'succeeded', error: null });
 				expect(seen).toEqual([['Hello there', { voice: 'Kore', format: 'wav' }]]);
-				expect(output).toMatchObject({ name: 'speech.wav', mime: 'audio/wav', bytes: audio.byteLength });
-				const [file] = yield* t.db.rows(Schema.Struct({ key: Schema.String, field: Schema.String }), {
-					text: `SELECT key, field FROM sys_file WHERE id = $1`,
-					params: [String(output['id'])]
+				expect(output).toMatchObject({
+					name: 'speech.wav',
+					mime: 'audio/wav',
+					bytes: audio.byteLength
 				});
+				const [file] = yield* t.db.rows(
+					Schema.Struct({ key: Schema.String, field: Schema.String }),
+					{
+						text: `SELECT key, field FROM sys_file WHERE id = $1`,
+						params: [String(output['id'])]
+					}
+				);
 				expect(file?.field).toBe('say');
 				expect([...(yield* files.get(file?.key ?? '', 1024))]).toEqual([...audio]);
 				seen.length = 0;
@@ -199,6 +213,5 @@ layer(Layer.unwrap(Effect.map(guest, (g) => TestWorkspace.layer({ manifest, gues
 					(yield* run('say', () => ({ options: { format: 'flac' } }), { speak })).output
 				).toMatchObject({ kind: 'invalid' });
 			})
-		);
-	}
-);
+	);
+});

@@ -37,21 +37,22 @@ import type {
 import { PgliteDb, Pristine, type PgliteClient } from '../src/node/db/pglite.ts';
 import { BoltError } from '../src/protocol/errors.ts';
 import { DbError, Interrupted } from '../src/engine/errors.ts';
-import { program } from '../src/test/guest.ts';
+import { program } from '../../bolt-cli/src/test/guest.ts';
 import { fingerprint, schemaSlice } from '../src/engine/schema/plan.ts';
 import { sha256Hex } from '@norbital-ai/store';
 import { HOST_API, HostFailure, type HostPorts } from '../src/protocol/host-api.ts';
 import { off, type Facilities } from '../src/facilities/index.ts';
-import { memoryAudit } from '../src/test/audit.ts';
+import { memoryAudit } from '../../bolt-cli/src/test/audit.ts';
 import { responseError } from '../src/protocol/http.ts';
 import type { EngineManifest } from '../src/engine/manifest.ts';
-import { prepareMigrations } from '../src/compiler/migrations.ts';
+import { prepareMigrations } from '../../bolt-cli/src/compiler/migrations.ts';
 import { artifactPort } from '../src/node/artifact.ts';
 import { tenantDbPort } from '../src/node/db/port.ts';
 import { keysPort } from '../src/node/keys.ts';
 import { nodePorts, type NodePorts } from '../src/node/ports.ts';
+import { guests } from './support/guests.ts';
 import { callbacks, guest } from './engine-fixture.ts';
-import { CHECKPOINTS } from '../src/test/checkpoint.ts';
+import { CHECKPOINTS } from '../../bolt-cli/src/test/checkpoint.ts';
 import { moduleHash } from '../src/node/module-hash.ts';
 
 const ORIGIN = 'https://acme.example',
@@ -111,8 +112,8 @@ const sliceManifest = {
 		ops: { description: 'Ops', grants: { customers: { read: true, create: true } } }
 	},
 	automations: {
-		stamp: { description: 'Files a customer', on: { cron: '*/15 * * * *' }, runAs: ['ops'] },
-		peek: { description: 'Counts customers', on: { cron: '0 6 * * *' }, runAs: ['ops'] }
+		stamp: { description: 'Files a customer', on: { cron: '*/15 * * * *' }, policies: ['ops'] },
+		peek: { description: 'Counts customers', on: { cron: '0 6 * * *' }, policies: ['ops'] }
 	}
 } satisfies EngineManifest;
 const sliceSource = guest.source.replace(
@@ -131,7 +132,9 @@ const history = async (m: EngineManifest): Promise<string> => {
 		sha256Hex(
 			JSON.stringify([
 				await native.runPromise(
-					moduleHash(fileURLToPath(new URL('../src/compiler/migrations.ts', import.meta.url)))
+					moduleHash(
+						fileURLToPath(new URL('../../bolt-cli/src/compiler/migrations.ts', import.meta.url))
+					)
 				),
 				schemaSlice(m)
 			])
@@ -227,7 +230,7 @@ const portsOf = (
 	scope: SCOPE,
 	release,
 	publicUrl: PUBLIC_URL,
-	guestIsolates: host.guestIsolates,
+	guests,
 	deadlines: deadlines(calls),
 	images: host.images,
 	docs: host.docs,
@@ -498,7 +501,8 @@ describe('HOST_API conformance (D10a)', () => {
 
 				// the needs check refuses a bundle whose need the host leaves off, before it reads the database
 				await built(needsDir, { ...sliceManifest, needs: ['outbound'] }, dir);
-				const release = { id: RELEASE_ID, artifact: artifactPort(needsDir) };
+				// a release id names its contents: this bundle differs, so it is its own release
+				const release = { id: `${RELEASE_ID}-needs`, artifact: artifactPort(needsDir) };
 				const database = tenantDbPort(PgliteDb.make(client));
 				const refused = await HOST_API.activate(
 					portsOf(facilitiesOf(database, []), release, await hostPorts(), []),
@@ -513,6 +517,27 @@ describe('HOST_API conformance (D10a)', () => {
 					phase: 'admission',
 					message: 'the bundle needs outbound, which this host leaves off'
 				});
+
+				// a cell reads a release once, however many static calls arrive together (each page load makes one)
+				const files = artifactPort(needsDir);
+				let reads = 0;
+				const counted = {
+					id: `${RELEASE_ID}-counted`,
+					artifact: {
+						...files,
+						read: (path: string, signal: AbortSignal) => {
+							if (path === 'artifact.json') reads++;
+							return files.read(path, signal);
+						}
+					}
+				};
+				await Promise.all([
+					HOST_API.framePolicy(counted, '/', { signal }),
+					HOST_API.framePolicy(counted, '/app', { signal }),
+					HOST_API.schema.slice(counted, { signal })
+				]);
+				await HOST_API.verify(counted, { signal });
+				expect(reads).toBe(1);
 
 				// failures cross as encoded data, never this release's class
 				const missing = await HOST_API.verify(
