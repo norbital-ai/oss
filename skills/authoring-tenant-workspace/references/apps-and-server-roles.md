@@ -424,7 +424,8 @@ payroll batch adapter exercise these contracts.
 - **Business I/O runs in automations**: `ctx.request(<connection or instance>, op)`, `ctx.web.read`,
   `ctx.files.*`, `ctx.convert.document` (Markdown/HTML to a target the workspace declares in
   `workspace({ convert: { to: ['pdf', 'docx'] } })`; optional, so recover `Unavailable` with `Effect.catchTag`), `ctx.ai.sys_1.decide`, `ctx.ai.sys_2.infer`, `ctx.ai.embed`,
-  `ctx.ai.transcribe` / `ctx.ai.speak` (diarized speech to text, text to speech stored as a file; optional, so recover `Unavailable` with `Effect.catchTag`),
+  `ctx.convert.ingest` (a stored file as `{ kind: 'document', html, index }`, audio adding a diarized `transcript` with
+  speakers and timed segments, or a spreadsheet, CSV or JSON as `{ kind: 'data', json }`) / `ctx.ai.speak` (text to speech stored as a file); both optional, so recover `Unavailable` with `Effect.catchTag`,
   `ctx.geo.*`, `ctx.send(<connection or instance>, message)`. Integration bodies call
   `ctx.request(op)` on their own instance. Recover `Unavailable` explicitly when absence is allowed; other typed facility failures
   propagate unless the workflow has a specific recovery.
@@ -558,8 +559,15 @@ the native timeline, request selector and record controls. Teams/policies/routes
 args, files }`: its tree is read-only at `/app`, named conversation files at `/in/<name>`, and
   `/out` becomes the person's files; Node built-ins other than `fs`, `path`, `buffer`, `process` and
   `util` fail by name, and `fetch` exists only for a run granted `http`. MCP declarations live in
-  `src/agent/mcp/+<name>.mcp.ts`. Policies grant skills, MCP servers and host tools (including
-  `http` for scripts) through `capabilities`.
+  `src/agent/mcp/+<name>.mcp.ts`. Policies grant MCP servers and host tools (including `http` for
+  scripts) through `capabilities`; every agent skill is open to every actor.
+- Files reach the agent one way: `ingest { id }` (a job) turns a PDF, office document, sheet, html, csv, json, rtf,
+  image, text or recording into sanitised HTML plus its images, filed in the conversation's outputs (one entry per
+  source file; a file field takes its reference), and `read_file { output, from | text | image }` reads it in windows.
+  Parsing only, never OCR; the host's Norbital Convert does it, so a workspace ships no document parser for the agent.
+  A brief or skill that handles documents says which part to read (the outline's line ranges), never "read the whole
+  file". A format with no parser (video, CAD) is the workspace's to parse: a skill script over the bytes
+  (`run_js { files: [{ id }] }`) or an integration. Record imports (CSV/xlsx syncs) stay on the sync pipeline.
 - An envoy is the workspace agent as it answers senders on a conversation instance. One role per
   `src/agent/envoy/+<id>.envoy.ts`; the id is the file name:
 

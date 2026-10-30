@@ -66,6 +66,7 @@ import type {
 	GeocoderPort,
 	GuestIsolatesPort,
 	ImagesPort,
+	IngestPort,
 	KeysPort,
 	LinksPort,
 	Lock,
@@ -162,7 +163,7 @@ export { MigrationImpact, impactLines } from './migration-impact.ts';
 import { IntegrationManager, integrationRoutes } from './integrations.ts';
 
 /** Bumped on any change a host on an older copy could misread; the host refuses a release whose `version` differs. */
-export const HOST_API_VERSION = 15;
+export const HOST_API_VERSION = 16;
 
 // ── failures (D10a) ──
 /** A `BoltError` this release raised: an engine answer. `code` stays a string on the wire (the copies' code sets may differ). */
@@ -263,11 +264,13 @@ export type ShellPorts = Pick<
 	| 'organization'
 	| 'ai'
 >;
-/** The agent's host parts (§5.9); the release's source (`workspace_search`) and attachments are this release's own. */
-export type AgentPorts = Pick<
-	AgentConfig,
-	'draft' | 'hostTools' | 'skills' | 'documentText' | 'documentPages'
->;
+/**
+ * The agent's host parts (§5.9); the release's source (`workspace_search`) and attachments are this release's own. `ingest`
+ * (Norbital Convert's `documentIngester`) serves the agent's `ingest` and `ctx.convert.ingest`; absent, neither ingests.
+ */
+export type AgentPorts = Pick<AgentConfig, 'draft' | 'hostTools' | 'skills'> & {
+	readonly ingest?: IngestPort['ingest'];
+};
 /**
  * One serving generation of an environment: the host's `facilities` (`@norbital-ai/bolt/facilities`) and what it serves
  * around them. Every member is required; one the host may leave out takes `off`.
@@ -670,7 +673,7 @@ const portLayers = ({ units, ...ports }: HostPorts) =>
 	Layer.mergeAll(
 		facilityLayers(ports.facilities),
 		GuestIsolates.fromAbi(ports.guests),
-		Convert.fromAbi(ports.convert),
+		Convert.fromAbi(ports.convert, ports.agent.ingest),
 		WebRead.fromAbi(ports.web),
 		Browser.fromAbi(ports.browser),
 		Geo.fromAbi(ports.geocoder),

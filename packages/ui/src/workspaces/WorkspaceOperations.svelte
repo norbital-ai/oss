@@ -1,4 +1,5 @@
 <script lang="ts" module>
+	import type { Snippet } from 'svelte';
 	import type { Effect as EffectType } from 'effect';
 	import type {
 		WorkspaceOperationsData,
@@ -19,6 +20,13 @@
 		onChange: (next: WorkspaceScope) => void;
 		onOperate?: (operation: WorkspaceOperation) => EffectType.Effect<unknown, Error>;
 		t?: (key: string) => string;
+		/**
+		 * The release whose logs Logs shows, by its publication instant (`at`): omitted, the serving release; `null`, every
+		 * release. Bind it to read the selection (the owner scopes its own log read to `releaseWindow`).
+		 */
+		release?: string | null | undefined;
+		/** Trailing controls on the Logs header line (an Auto-refresh toggle). */
+		actions?: Snippet;
 	};
 </script>
 
@@ -37,7 +45,7 @@
 	import ReleaseTimeline from '../releases/ReleaseTimeline.svelte';
 	import { rollbackReason } from '../releases/model.js';
 	import { confirmAction, type ConfirmOptions } from '../primitives/dialog/confirm.js';
-	import { filterMembers, filterBuilds } from './filters.js';
+	import { filterMembers, filterBuilds, newestReleases, releaseWindow } from './filters.js';
 	import type { WorkspaceChange } from './types.js';
 	let {
 		data,
@@ -48,7 +56,9 @@
 		scopeKey = '',
 		onChange,
 		onOperate,
-		t = (key) => key
+		t = (key) => key,
+		release = $bindable(),
+		actions
 	}: WorkspaceOperationsProps = $props();
 	let userSearch = $state(''),
 		userStatus = $state('all'),
@@ -124,15 +134,34 @@
 			...Array.from(ids, (id) => ({ value: id, label: id, keywords: id }))
 		];
 	});
-	const runtimeLines = $derived(
-		[...(data.logs ?? [])].reverse().map((row) => ({
-			id: row.id,
-			at: row.at,
-			level: row.severity,
-			message: `${row.event} ${JSON.stringify(row.attributes)}`,
-			...(row.run === null ? {} : { source: `run ${row.run}` })
-		}))
+	// Logs reads one release: the serving one unless another (or every one, `null`) is chosen
+	const releases = $derived(newestReleases(studio?.releases ?? []));
+	const releaseAt = $derived(
+		release === undefined ? (releases.find((r) => r.current)?.at ?? null) : release
 	);
+	const releaseOptions = $derived([
+		{ value: '', label: t('All releases') },
+		...releases.map((r) => ({
+			value: r.at,
+			label: `${(r.rollback ?? r.commit).slice(0, 8)} · ${when(r.at)}${r.current ? ` · ${t('serving')}` : ''}`,
+			keywords: `${r.commit} ${r.message}`
+		}))
+	]);
+	const runtimeLines = $derived.by(() => {
+		const { since, until } = releaseWindow(releases, releaseAt);
+		return [...(data.logs ?? [])]
+			.filter(
+				(row) => (since === undefined || row.at >= since) && (until === undefined || row.at < until)
+			)
+			.reverse()
+			.map((row) => ({
+				id: row.id,
+				at: row.at,
+				level: row.severity,
+				message: `${row.event} ${JSON.stringify(row.attributes)}`,
+				...(row.run === null ? {} : { source: `run ${row.run}` })
+			}));
+	});
 	const buildLines = $derived(
 		(studio?.build?.log ?? []).map((row, index) => ({
 			id: `${index}:${row.at}`,
@@ -634,27 +663,43 @@
 {/snippet}
 {#snippet runtime()}
 	{#if !canInspect}{@render restricted()}{:else}<div class="flex min-h-0 flex-1 flex-col gap-3">
-			<div class="flex flex-wrap items-center justify-between gap-3">
-				<div>
-					<h2 class="text-sm font-semibold">{t('Runtime & run logs')}</h2>
-					<p class="text-meta mt-1">{t('Live environment · newest 200 records')}</p>
-				</div>
-				<Combobox
-					size="sm"
-					class="w-64"
-					aria-label={t('Automation run')}
-					searchable
-					value={data.filters.run}
-					options={runOptions}
-					onSearch={(query) => {
-						runSearch = query;
-					}}
-					onChange={(run) => run !== null && onChange({ run: run || null })}
-				/>
-			</div>
 			{#if data.errors?.logs}<p role="alert" class="text-destructive">
 					{data.errors.logs}
-				</p>{/if}<LogView rows={runtimeLines} follow={false} class="min-h-80 flex-1" />
+				</p>{/if}<LogView
+				rows={runtimeLines}
+				follow={false}
+				class="min-h-80 flex-1"
+				filterCount={data.filters.run ? 1 : 0}
+				trailing={actions}
+			>
+				{#snippet leading()}
+					<h2 class="px-1 text-sm font-semibold">{t('Runtime & run logs')}</h2>
+					<Combobox
+						size="sm"
+						class="w-80"
+						aria-label={t('Release')}
+						searchable
+						value={releaseAt ?? ''}
+						options={releaseOptions}
+						onChange={(at) => at !== null && (release = at || null)}
+					/>
+				{/snippet}
+				{#snippet filters()}
+					<label class="grid gap-2"
+						><span class="text-label">{t('Automation run')}</span><Combobox
+							size="sm"
+							aria-label={t('Automation run')}
+							searchable
+							value={data.filters.run}
+							options={runOptions}
+							onSearch={(query) => {
+								runSearch = query;
+							}}
+							onChange={(run) => run !== null && onChange({ run: run || null })}
+						/></label
+					>
+				{/snippet}
+			</LogView>
 		</div>{/if}
 {/snippet}
 {#snippet users()}

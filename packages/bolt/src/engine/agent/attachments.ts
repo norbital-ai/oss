@@ -7,15 +7,12 @@ import { imageJpeg } from '../files/image.ts';
 import { row } from '../system/rows.ts';
 import { MODEL_FILES } from './ai.ts';
 import type { AttachmentPort } from './tools.ts';
-import { xlsxCells, xlsxSheets } from '../files/xlsx.ts';
 
 const Ref = Schema.Struct({ id: Schema.String, name: Schema.optionalKey(Schema.String) });
 const Stored = row('sys_file', ['id', 'name', 'mime', 'size']);
 const Content = row('sys_file', ['key', 'mime']);
 const TEXT = /^(text\/|application\/(json|xml|csv))/;
 const MODEL_IMAGE = /^image\/(jpeg|png|webp|gif)$/;
-const XLSX = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
-const SHEET_ROWS = 2000;
 const TEXT_CHARS = 64 * 1024;
 const refused = (message: string) => Effect.fail(BoltError.make('invalidInput', 'decode', message));
 
@@ -48,18 +45,17 @@ export const attachmentsFor = Effect.fn('Agents.attachments')(function* (
 	});
 });
 
-/** The host-independent attachment reader; model-compatible images and documents remain bytes. */
+/**
+ * The host-independent attachment reader: an image as model-compatible bytes, a text file as its text. Every other file
+ * is read through `ingest` (plan 12), never here.
+ */
 export function fileAttachments(
 	db: TenantDbShape,
 	files: Files['Service'],
 	images: Images['Service']
 ): AttachmentPort {
 	return {
-		read: Effect.fn('Agents.readAttachment')(function* (
-			file: Json,
-			as: 'text' | 'image' | 'sheet' | 'document',
-			sheet = 0
-		) {
+		read: Effect.fn('Agents.readAttachment')(function* (file: Json) {
 			const ref = yield* Schema.decodeUnknownEffect(Ref)(file).pipe(
 				Effect.mapError((error) => BoltError.make('invalidInput', 'decode', error.message, error))
 			);
@@ -69,59 +65,20 @@ export function fileAttachments(
 			});
 			if (Option.isNone(stored)) return yield* refused('the file is not stored');
 			const mime = stored.value.mime,
-				name = ref.name ?? '',
-				kind = /^(video|audio)\//.exec(mime)?.[1];
-			// a model views no video or audio: a plain answer, never bytes a provider would refuse
-			if (kind !== undefined)
-				return {
-					name,
-					mime,
-					unreadable: `${kind} attachment — cannot view; ask the sender to describe it or send a photo`
-				};
+				name = ref.name ?? '';
+			if (!mime.startsWith('image/') && !TEXT.test(mime))
+				return yield* refused(
+					`${name || 'this file'} (${mime}) is read through ingest: call ingest { id: '${ref.id}' }, then read_file { output } windows it`
+				);
 			const bytes = yield* files.get(stored.value.key, MODEL_FILES.bytes);
 			// MIME owns visual reads: a model's format guess must not hide the original evidence.
-			if (mime.startsWith('image/')) {
+			if (mime.startsWith('image/'))
 				return MODEL_IMAGE.test(mime)
 					? { mime, bytes }
 					: {
 							mime: 'image/jpeg',
 							bytes: yield* imageJpeg(bytes, 2048).pipe(Effect.provideService(Images, images))
 						};
-			}
-			if (mime === 'application/pdf') return { mime, bytes };
-			if (as === 'image') return yield* refused(`a ${mime} file is not an image`);
-			if (as === 'document') return yield* refused(`a ${mime} file is not a PDF`);
-			if (mime === XLSX || name.toLowerCase().endsWith('.xlsx')) {
-				const workbook = yield* Effect.try({
-					try: () => ({ sheets: xlsxSheets(bytes), cells: xlsxCells(bytes, sheet) }),
-					catch: (error) =>
-						BoltError.make(
-							'invalidInput',
-							'decode',
-							error instanceof Error ? error.message : String(error),
-							error
-						)
-				});
-				const title = workbook.sheets[sheet];
-				if (title === undefined) return yield* refused(`worksheet ${sheet} does not exist`);
-				return {
-					name,
-					mime,
-					sheets: workbook.sheets,
-					sheet: title,
-					rows: workbook.cells.length,
-					cells: workbook.cells.slice(0, SHEET_ROWS),
-					...(workbook.cells.length > SHEET_ROWS
-						? {
-								truncated: `only the first ${SHEET_ROWS} of ${workbook.cells.length} rows are shown; the rest: run_js with files: [{ id: '${ref.id}' }] reads every row`
-							}
-						: {})
-				};
-			}
-			if (!TEXT.test(mime))
-				return yield* refused(
-					`${name || 'this file'} (${mime}) cannot be read here: tell the person and ask for a PDF, a photo or a text version`
-				);
 			const text = new TextDecoder().decode(bytes);
 			return {
 				name,
@@ -129,7 +86,7 @@ export function fileAttachments(
 				text: text.slice(0, TEXT_CHARS),
 				...(text.length > TEXT_CHARS
 					? {
-							truncated: `only the first ${TEXT_CHARS} of ${text.length} characters are shown; the rest: run_js with files: [{ id: '${ref.id}' }] reads it whole`
+							truncated: `only the first ${TEXT_CHARS} of ${text.length} characters are shown; the rest: ingest { id: '${ref.id}' } and read_file windows`
 						}
 					: {})
 			};

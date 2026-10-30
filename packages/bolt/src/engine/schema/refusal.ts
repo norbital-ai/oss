@@ -46,7 +46,10 @@ export function refusalOf(
 					(meta?.rule === undefined
 						? rule === undefined
 							? 'a native rule refused the record'
-							: `the record breaks the rules of ${rule}`
+							: meta?.fields.length === 1
+								? // a field's own kind check: its value is not that kind (a list, an enum value, a format)
+									`${meta.model}.${meta.fields[0]} is not a valid value for its kind: describe the model for its shape (a multiple file field takes a list)`
+								: `the record breaks the rules of ${rule}`
 						: `the record breaks the rule '${meta.rule}'`)
 			);
 		}

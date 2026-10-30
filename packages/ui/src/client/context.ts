@@ -30,12 +30,15 @@ export const useOptionalBolt = (): ViewBolt | undefined => {
 	const bolt = getContext<ViewBolt | undefined>(BOLT),
 		catalog = useKinds().catalog;
 	if (bolt === undefined) return undefined;
-	// every member reads through the host's own client; only `query` gains the views' outputs
+	// every member reads through the host's own client; `query` and `aggregate` gain the views' outputs
 	return new Proxy(bolt, {
 		get: (target, key) => {
 			if (key === 'query')
 				return (request: { readonly [path: string]: Json }) =>
 					target.query(withOutputs(request, catalog));
+			if (key === 'aggregate')
+				return (model: string, args: Json) =>
+					target.aggregate(model, withOutputs({ [model]: args }, catalog)[model]);
 			const value: unknown = Reflect.get(target, key);
 			return typeof value === 'function' ? value.bind(target) : value;
 		}

@@ -1,5 +1,5 @@
 import type { WorkspaceMember } from './types.js';
-import type { ReleaseBuild } from '../releases/model.js';
+import type { ReleaseBuild, ReleaseVersion } from '../releases/model.js';
 
 export const filterMembers = (
 	members: ReadonlyArray<WorkspaceMember>,
@@ -45,4 +45,24 @@ export const filterBuilds = (
 					? build.status === status
 					: true)
 	);
+};
+
+/** Releases newest first. */
+export const newestReleases = (releases: ReadonlyArray<ReleaseVersion>) =>
+	[...releases].sort((a, b) => b.at.localeCompare(a.at));
+
+/**
+ * The time a release served, named by its publication instant (`at`): from it until the next publication. `null` is
+ * every release (no bound).
+ */
+export const releaseWindow = (
+	releases: ReadonlyArray<ReleaseVersion>,
+	at: string | null
+): { readonly since?: string; readonly until?: string } => {
+	if (at === null) return {};
+	const next = releases
+		.map((release) => release.at)
+		.filter((other) => other > at)
+		.sort()[0];
+	return next === undefined ? { since: at } : { since: at, until: next };
 };

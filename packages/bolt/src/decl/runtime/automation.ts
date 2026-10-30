@@ -121,7 +121,10 @@ export type RunOutput<S> = S extends { output: infer O } ? ValueOf<O> : void;
  * the reserved system identity; `run.trigger` records who or what started the run. Code acting for a starter checks it
  * explicitly (`trigger.kind === 'person'`, then their id, party or teams against the rows it touches).
  */
-export type AutomationCtx<_S = AutomationSpec> = RunCtx<Extract<Actor, { kind: 'system' }>, true> & {
+export type AutomationCtx<_S = AutomationSpec> = RunCtx<
+	Extract<Actor, { kind: 'system' }>,
+	true
+> & {
 	readonly run: { readonly id: Id<'sys_run'>; readonly trigger: RunTrigger };
 };
 type RunCtx<A, Tools extends boolean> = Omit<Clock, 'actor'> &

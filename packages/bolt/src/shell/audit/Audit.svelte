@@ -9,9 +9,11 @@ once (Refresh, or the opt-in Auto-refresh). -->
 		Popover,
 		StructuredData,
 		Table,
+		ToolbarSearch,
 		useKinds,
 		type Kind
 	} from '@norbital-ai/ui';
+	import { Cluster } from '@norbital-ai/ui/layout';
 	import { fork, observeOnce } from '@norbital-ai/ui/effect';
 	import { Effect, Result, Schema } from 'effect';
 	import { Debounced } from 'runed';
@@ -454,20 +456,8 @@ once (Refresh, or the opt-in Auto-refresh). -->
 		</p>{/if}
 	{#if admin}
 		<div class="flex flex-col gap-2" data-audit-toolbar>
-			<div class="flex flex-wrap items-center gap-2">
-				<label class="relative min-w-44 flex-1 basis-56">
-					<span class="sr-only">{t('Search audit events and payloads')}</span>
-					<Icon
-						name="lucide:search"
-						class="pointer-events-none absolute top-1/2 left-2.5 z-10 size-4 -translate-y-1/2 text-muted-foreground"
-					/>
-					<Input
-						type="search"
-						bind:value={text}
-						class="pl-8"
-						placeholder={t('Search events and payloads…')}
-					/>
-				</label>
+			<Cluster>
+				<ToolbarSearch bind:value={text} label={t('Search audit events and payloads')} />
 				<Combobox
 					size="sm"
 					class="w-36"
@@ -594,7 +584,7 @@ once (Refresh, or the opt-in Auto-refresh). -->
 				>
 					<Icon name="lucide:refresh-cw" class="size-4" />
 				</Button>
-			</div>
+			</Cluster>
 			{#if window === 'custom'}
 				<div class="flex flex-wrap items-end gap-2">
 					<label class="flex flex-col gap-1 text-xs"

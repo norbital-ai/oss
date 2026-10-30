@@ -5,7 +5,7 @@
 //
 // Exported helper types define the shared signatures implemented by their owning modules.
 import { Context } from 'effect';
-import type { Effect, Option, Result, Schema, Scope, Stream } from 'effect';
+import type { Effect, Option, PubSub, Result, Schema, Scope, Stream } from 'effect';
 import type { Json } from '../decl/values.ts';
 import type { FacilityFailure, Unavailable } from '../decl/errors.ts';
 import type { Frame, ImportStart } from '../protocol/schema.ts';
@@ -381,6 +381,13 @@ export class Deadlines extends Context.Service<Deadlines, DeadlinesShape>()('bol
 /** The bottom service every area wakes the queue through: the host's deadline and the open tick's nudge. */
 export type WakeShape = { readonly at: (at: string) => Effect.Effect<void> };
 export class Wake extends Context.Service<Wake, WakeShape>()('bolt/Wake') {}
+/**
+ * The ids of runs that reached an end (succeeded, failed, stopped), published as each end is written: what an agent's run
+ * job waits on instead of polling the ledger.
+ */
+export class RunEnds extends Context.Service<RunEnds, PubSub.PubSub<readonly string[]>>()(
+	'bolt/RunEnds'
+) {}
 
 // ── conversations, envoys, turns (E11) ──
 export type ConversationsShape = {
@@ -580,10 +587,10 @@ export type FacilityCall =
 	| FacilityArm<'files.image'>
 	| FacilityArm<'files.put'>
 	| FacilityArm<'convert.document'>
+	| FacilityArm<'convert.ingest'>
 	| FacilityArm<'ai.sys_1.decide'>
 	| FacilityArm<'ai.sys_2.infer'>
 	| FacilityArm<'ai.embed'>
-	| FacilityArm<'ai.transcribe'>
 	| FacilityArm<'ai.speak'>
 	| FacilityArm<'geo.search'>
 	| FacilityArm<'geo.reverse'>;

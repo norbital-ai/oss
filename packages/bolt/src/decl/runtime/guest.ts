@@ -351,12 +351,14 @@ const lift = (call: Call, raw: unknown): unknown => {
 						cross(`files.${name}`, 'facility')
 					])
 				),
-				convert: { document: cross('convert.document', 'facility') },
+				convert: {
+					document: cross('convert.document', 'facility'),
+					ingest: cross('convert.ingest', 'facility')
+				},
 				ai: {
 					sys_1: { decide: cross('ai.sys_1.decide', 'facility') },
 					sys_2: { infer: cross('ai.sys_2.infer', 'facility') },
 					embed: cross('ai.embed', 'facility'),
-					transcribe: cross('ai.transcribe', 'facility'),
 					speak: cross('ai.speak', 'facility')
 				},
 				geo: { search: cross('geo.search', 'facility'), reverse: cross('geo.reverse', 'facility') }

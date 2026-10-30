@@ -182,7 +182,7 @@ export const serveRelease = Effect.fn('bolt.serveRelease')(function* (options: S
 					browser: off,
 					links: links.port,
 					shell: { workspace: () => options.workspace, ...serving.shell },
-					agent: {}
+					agent: serving.ingest === undefined ? {} : { ingest: serving.ingest }
 				},
 				facilities,
 				{ signal }

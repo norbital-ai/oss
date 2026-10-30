@@ -295,10 +295,17 @@ describe("sys_2.infer tools: ['read']", () => {
 					expect(ledgers).toEqual({
 						error: expect.stringMatching(/excess property[\s\S]*"ledgers"/)
 					});
-					// purchase orders' `default` output is not granted: reading it is refused
-					expect(defaults).toEqual({
-						error: expect.stringContaining("no held policy grants reading 'purchase_orders'")
-					});
+					// purchase orders' `default` output is not granted: a read naming none reads an output the run holds,
+					// never the default's fields
+					const held = Schema.decodeUnknownSync(
+						Schema.Struct({
+							purchase_orders: Schema.Struct({
+								rows: Schema.Array(Schema.Record(Schema.String, Schema.Json))
+							})
+						})
+					)(defaults).purchase_orders.rows;
+					expect(held.length).toBeGreaterThan(0);
+					expect(held.every((row) => !('margin' in row))).toBe(true);
 					// steps: 2 spent on the two reads; the final turn offers only the draft tools
 					expect(ai.requests[2]!.tools!.map((tool) => tool.name)).toEqual([
 						'edit',

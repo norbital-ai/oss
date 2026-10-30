@@ -7,7 +7,8 @@ Checks every template page passes. Each links to the rule's home; this page only
    [app-structure](app-structure.md#appshell-and-the-header)
 2. An app's name never repeats the workspace name; the app icon is the header icon.
 3. One concern per tab; tab title = view title; the shell's page strip is level 1; a child-only
-   model belongs within its parent record; compact inline values need no extra tab.
+   model belongs within its parent record; compact inline values need no extra tab. Every tab is
+   ui's one compact size (`Tabs` or `TabStrip`; no size prop, no restyled triggers).
    [app-structure](app-structure.md#tabs-break-the-view)
 4. The toolbar is fixed, one row: title, ⓘ, then every widget (scope `controls`, search, filter, ⚡)
    flush left in that order; New alone flush right. At phone width the row wraps in the same order,

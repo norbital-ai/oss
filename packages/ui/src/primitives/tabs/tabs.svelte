@@ -4,7 +4,8 @@ A tab strip with the selected tab's body; `keepAlive` tabs stay mounted while hi
 -->
 <script lang="ts" module>
 	import type { Snippet } from 'svelte';
-	import { TAB_LEVEL, tabLevel, tabVariant, type TabLevel, type TabVariant } from './level.js';
+	import { TAB_LEVEL, tabLevel, tabVariant, type TabLevel } from './level.js';
+	import { TAB_ICON, TAB_LIST, TAB_TRIGGER, TAB_TYPE } from './style.js';
 
 	/** One tab (§3.6 `RecordTab`): a `keepAlive` tab stays mounted while hidden, so a form inside keeps its state. */
 	export type TabItem = {
@@ -39,27 +40,11 @@ A tab strip with the selected tab's body; `keepAlive` tabs stay mounted while hi
 		orientation?: 'horizontal' | 'vertical';
 	};
 
-	// every level spaces its triggers alike (gap-1, a 0.25rem inset); only the container's surface differs
-	const LIST: Record<TabVariant, string> = {
-		segmented: 'gap-1 rounded-lg bg-muted p-1',
-		underline: 'gap-1 border-b px-1',
-		chips: 'gap-1 px-1'
-	};
 	// the vertical rail: chips on a narrow container, a column of full-width rows on a wide one (`@2xl`)
 	const RAIL_LIST =
 		'gap-1.5 @2xl:flex-col @2xl:items-stretch @2xl:gap-0.5 @2xl:overflow-x-clip @2xl:overflow-y-auto';
 	const RAIL_TRIGGER =
-		'h-8 rounded-full border px-3 data-[state=active]:border-foreground @2xl:justify-start @2xl:rounded-md @2xl:border-transparent @2xl:data-[state=active]:border-transparent @2xl:data-[state=active]:bg-muted';
-	// every level's trigger is the same size (h-8, px-3, text-sm, its icon size-3.5); only roundness, fill and border
-	// mark the level
-	const TRIGGER: Record<TabVariant, string> = {
-		segmented: 'rounded-md data-[state=active]:bg-background data-[state=active]:shadow-sm',
-		// the bar spans the whole trigger, as wide as a segmented tab's fill
-		underline:
-			"relative after:absolute after:inset-x-0 after:bottom-0 after:h-0.5 after:rounded-full after:content-[''] data-[state=active]:after:bg-foreground",
-		chips:
-			'rounded-full border data-[state=active]:border-foreground data-[state=active]:bg-foreground data-[state=active]:text-background'
-	};
+		'rounded-full border data-[state=active]:border-foreground @2xl:justify-start @2xl:rounded-md @2xl:border-transparent @2xl:data-[state=active]:border-transparent @2xl:data-[state=active]:bg-muted';
 </script>
 
 <script lang="ts">
@@ -99,7 +84,7 @@ A tab strip with the selected tab's body; `keepAlive` tabs stay mounted while hi
 		value = next;
 		onValueChange?.(next);
 	};
-	// a horizontal strip never scrolls: the triggers that fit stay in it (the active one always), the rest go under More
+	// a horizontal strip never scrolls: the triggers that fit stay in it, the rest go under More (marked active when one is)
 	let list = $state<HTMLElement | null>(null),
 		measure = $state<HTMLElement | null>(null),
 		fit = $state(Infinity),
@@ -134,21 +119,10 @@ A tab strip with the selected tab's body; `keepAlive` tabs stay mounted while hi
 		observer.observe(measure);
 		return () => observer.disconnect();
 	});
-	const activeIndex = $derived(tabs.findIndex((t) => t.name === active));
-	const shownTabs = $derived(
-		vertical || fit >= tabs.length
-			? tabs
-			: activeIndex < fit
-				? tabs.slice(0, fit)
-				: [...tabs.slice(0, fit - 1), tabs[activeIndex]!]
-	);
+	const shownTabs = $derived(vertical || fit >= tabs.length ? tabs : tabs.slice(0, fit));
 	const overflow = $derived(tabs.filter((t) => !shownTabs.includes(t)));
-	const triggerClass = $derived(
-		cn(
-			'[--hit-target:2rem] inline-flex h-8 shrink-0 items-center gap-1.5 px-3 text-sm font-medium text-muted-foreground transition-colors hover:text-foreground disabled:opacity-50 data-[state=active]:text-foreground',
-			vertical ? RAIL_TRIGGER : TRIGGER[variant]
-		)
-	);
+	const activeInMore = $derived(overflow.some((t) => t.name === active));
+	const triggerClass = $derived(cn(TAB_TRIGGER, vertical ? RAIL_TRIGGER : TAB_TYPE[variant]));
 	// a tab is mounted once visited and, unless keepAlive, dropped when left
 	let visited = $state<Record<string, true>>({});
 	$effect.pre(() => {
@@ -157,7 +131,7 @@ A tab strip with the selected tab's body; `keepAlive` tabs stay mounted while hi
 </script>
 
 {#snippet label(tab: TabsProps['tabs'][number])}
-	{#if tab.icon}<Icon name={tab.icon} class="size-3.5 shrink-0" />{/if}
+	{#if tab.icon}<Icon name={tab.icon} class={TAB_ICON} />{/if}
 	<span class="truncate">{tab.title}</span>
 	{#if tab.count !== undefined}<span class="text-muted-foreground tabular-nums" data-tab-count
 			>{tab.count}</span
@@ -193,7 +167,7 @@ A tab strip with the selected tab's body; `keepAlive` tabs stay mounted while hi
 				class={cn(
 					'relative flex min-w-0 flex-nowrap items-center',
 					leading ? 'ml-auto flex-none' : 'flex-1',
-					vertical ? RAIL_LIST : LIST[variant],
+					vertical ? RAIL_LIST : TAB_LIST[variant],
 					vertical ? SCROLL_AXIS_CLASSES.x : 'overflow-x-clip'
 				)}
 			>
@@ -204,15 +178,27 @@ A tab strip with the selected tab's body; `keepAlive` tabs stay mounted while hi
 				{/each}
 				{#if overflow.length > 0}
 					<Popover.Root bind:open={moreOpen}>
-						<Popover.Trigger type="button" class={cn(triggerClass, 'ml-auto')} data-tabs-more>
-							<Icon name="lucide:ellipsis" class="size-3.5 shrink-0" /><span>More</span>
+						<!-- `data-state` after the popover's own: More wears the active style while it holds the selected tab -->
+						<Popover.Trigger>
+							{#snippet child({ props })}
+								<button
+									{...props}
+									type="button"
+									class={cn(triggerClass, 'ml-auto')}
+									data-tabs-more
+									data-state={activeInMore ? 'active' : 'inactive'}
+								>
+									<Icon name="lucide:ellipsis" class={TAB_ICON} /><span>More</span>
+								</button>
+							{/snippet}
 						</Popover.Trigger>
 						<Popover.Content align="end" class="flex w-56 flex-col gap-0.5 p-1">
 							{#each overflow as tab (tab.name)}
 								<button
 									type="button"
 									disabled={tab.disabled}
-									class="flex h-8 items-center gap-1.5 rounded-sm px-2 text-left text-sm font-medium hover:bg-muted disabled:opacity-50"
+									aria-current={tab.name === active ? 'page' : undefined}
+									class="flex h-7 items-center gap-1.5 rounded-sm px-2 text-left text-xs font-medium hover:bg-muted disabled:opacity-50 aria-[current=page]:bg-muted"
 									onclick={() => {
 										select(tab.name);
 										moreOpen = false;
@@ -232,7 +218,7 @@ A tab strip with the selected tab's body; `keepAlive` tabs stay mounted while hi
 						{#each tabs as tab (tab.name)}<span class={triggerClass}>{@render label(tab)}</span
 							>{/each}
 						<span class={triggerClass}
-							><Icon name="lucide:ellipsis" class="size-3.5 shrink-0" /><span>More</span></span
+							><Icon name="lucide:ellipsis" class={TAB_ICON} /><span>More</span></span
 						>
 					</div>
 				{/if}

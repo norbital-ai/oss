@@ -36,6 +36,8 @@ leaf values retain the workspace's native kinds, custom renderers and inherited 
 		path?: string;
 		depth?: number;
 		heading?: string;
+		/** `false`: one border only, the outer one: a first-level section lies flat inside it instead of being its own card. */
+		frame?: boolean;
 	};
 	type DataRow = { readonly [key: string]: Value; readonly id: string; readonly at: number };
 	type SchemaRow = {
@@ -171,7 +173,8 @@ leaf values retain the workspace's native kinds, custom renderers and inherited 
 		root,
 		path = '',
 		depth = 0,
-		heading
+		heading,
+		frame = true
 	}: StructuredDataProps = $props();
 	const uid = $props.id();
 	const form = useForm();
@@ -666,6 +669,7 @@ leaf values retain the workspace's native kinds, custom renderers and inherited 
 		root={document}
 		path={recordList ? pointer(pointer(path, index), field) : pointer(path, index)}
 		depth={depth + 1}
+		{frame}
 	/>
 {/snippet}
 
@@ -852,6 +856,7 @@ leaf values retain the workspace's native kinds, custom renderers and inherited 
 				root={document}
 				path={pointer(path, field.key)}
 				depth={depth + 1}
+				{frame}
 				heading={title(field.key, field.schema, field.kind)}
 			/>
 		{:else}
@@ -887,6 +892,7 @@ leaf values retain the workspace's native kinds, custom renderers and inherited 
 						root={document}
 						path={pointer(path, field.key)}
 						depth={depth + 1}
+						{frame}
 					/>
 					{#if !locked && !spec.required?.includes(field.key) && Object.hasOwn(object, field.key) && child.readOnly !== true}<button
 							class="structured-remove-field"
@@ -1036,6 +1042,7 @@ leaf values retain the workspace's native kinds, custom renderers and inherited 
 				create={newRecord}
 				root={document}
 				depth={depth + 1}
+				{frame}
 			/>{/if}
 	{:else}<Show
 			kind={['json', 'custom', 'object', 'list', 'record', 'union'].includes(nativeKind.kind)
@@ -1065,6 +1072,7 @@ leaf values retain the workspace's native kinds, custom renderers and inherited 
 			disabled={controls.disabled}
 			{errors}
 			depth={depth + 1}
+			{frame}
 		/>
 	{:else if currentMode === 'schema'}
 		<Table
@@ -1104,6 +1112,7 @@ leaf values retain the workspace's native kinds, custom renderers and inherited 
 						root={document}
 						path={pointer(path, index)}
 						depth={depth + 1}
+						{frame}
 					/></span
 				>
 			{/each}
@@ -1112,6 +1121,7 @@ leaf values retain the workspace's native kinds, custom renderers and inherited 
 		{#if heading}<details
 				class="structured-section structured-nested"
 				class:structured-deep={depth > 1}
+				class:structured-flat={depth === 1 && !frame}
 				open
 			>
 				<summary
@@ -1286,6 +1296,13 @@ leaf values retain the workspace's native kinds, custom renderers and inherited 
 	.structured-nested > summary {
 		padding-inline: 8px;
 		background: color-mix(in oklab, var(--color-muted) 60%, var(--color-card));
+	}
+	/* Inside another frame (a step's input or output), the first section is the frame's own content: no card. */
+	.structured-nested.structured-flat {
+		margin: 0;
+		border: 0;
+		border-radius: 0;
+		background: transparent;
 	}
 	/* Past the first inset, another card only squeezes the rows: keep one guide line and flat fields. */
 	.structured-nested.structured-deep {

@@ -12,9 +12,9 @@
 //   `BOLT_TRANSACTIONAL_PHONE` `twilio` (`BOLT_TWILIO_ACC_SID`, `BOLT_TWILIO_AUTH_TOKEN`), `log` or `none` (default).
 // - `BOLT_<F>_PROVIDER` / `_ENDPOINT` / `_CREDENTIAL` for `AI_SYS_1` (`openai`, `decisions`), `AI_SYS_2`, `AI_EMBED`
 //   (`openai`), `GEO` (`nominatim`), `CONVERT` (`norbital`) and `WEB` (`public`), with `BOLT_AI_SYS_1_MODEL`,
-//   `BOLT_AI_SYS_2_MODELS` and `BOLT_AI_EMBED_MODELS` (JSON maps); speech is
-//   `BOLT_AI_SPEECH_ENDPOINT` + `_CREDENTIAL` with `BOLT_AI_TRANSCRIBE_MODEL`, `BOLT_AI_SPEAK_MODEL`, `BOLT_AI_SPEAK_VOICE`
-//   (speech is off unless both models are set).
+//   `BOLT_AI_SYS_2_MODELS` and `BOLT_AI_EMBED_MODELS` (JSON maps); text to speech is
+//   `BOLT_AI_SPEECH_ENDPOINT` + `_CREDENTIAL` with `BOLT_AI_SPEAK_MODEL`, `BOLT_AI_SPEAK_VOICE` (off without the model).
+//   Transcription is Norbital Convert's (`CONVERT`).
 // - Optional pairs: `BOLT_GOOGLE_OAUTH_CLIENT_ID`/`_SECRET`, `BOLT_VAPID_PUBLIC_KEY`/`_PRIVATE_KEY`,
 //   `BOLT_TURNSTILE_SITE_KEY`/`_SECRET`; `BOLT_APNS_KEYS` (JSON by team id); `BOLT_ENVIRONMENT` (the shell's badge).
 import { Effect, Exit, Layer, ManagedRuntime, Option, Schema, Scope } from 'effect';
@@ -38,7 +38,8 @@ const required = (name: string): string => {
 const both = (a: string, b: string): [string, string] | null => {
 	const x = env(a),
 		y = env(b);
-	if ((x === undefined) !== (y === undefined)) throw new Error(`set both ${a} and ${b}, or neither`);
+	if ((x === undefined) !== (y === undefined))
+		throw new Error(`set both ${a} and ${b}, or neither`);
 	return x === undefined || y === undefined ? null : [x, y];
 };
 const json = <A>(name: string, schema: Schema.Decoder<A>, empty: string): A => {
@@ -50,7 +51,8 @@ const json = <A>(name: string, schema: Schema.Decoder<A>, empty: string): A => {
 const masterKey = (() => {
 	const v = required('BOLT_MASTER_KEY');
 	const b = /^[0-9a-f]{64}$/i.test(v) ? Buffer.from(v, 'hex') : Buffer.from(v, 'base64');
-	if (b.length !== 32) throw new Error('BOLT_MASTER_KEY is not a 32-byte key (64 hex digits or base64)');
+	if (b.length !== 32)
+		throw new Error('BOLT_MASTER_KEY is not a 32-byte key (64 hex digits or base64)');
 	return b;
 })();
 const publicUrl = new URL(required('BOLT_PUBLIC_URL'));
@@ -119,7 +121,6 @@ const transactional: HostSettings['transactional'] = {
 };
 
 const speechKey = both('BOLT_AI_SPEECH_ENDPOINT', 'BOLT_AI_SPEECH_CREDENTIAL'),
-	transcribeModel = env('BOLT_AI_TRANSCRIBE_MODEL'),
 	speakModel = env('BOLT_AI_SPEAK_MODEL');
 const google = both('BOLT_GOOGLE_OAUTH_CLIENT_ID', 'BOLT_GOOGLE_OAUTH_CLIENT_SECRET');
 const vapid = both('BOLT_VAPID_PUBLIC_KEY', 'BOLT_VAPID_PRIVATE_KEY');
@@ -152,20 +153,21 @@ const settings: HostSettings = {
 		)
 	},
 	speech:
-		// the speech facility is both calls: one model alone leaves it off
-		speechKey === null || transcribeModel === undefined || speakModel === undefined
+		speechKey === null || speakModel === undefined
 			? null
 			: {
 					endpoint: speechKey[0],
 					credential: speechKey[1],
-					transcribe: transcribeModel,
 					speak: speakModel,
 					voice: env('BOLT_AI_SPEAK_VOICE') ?? null
 				},
 	vapid: vapid === null ? null : { publicKey: vapid[0], privateKey: vapid[1] },
 	apns: json(
 		'BOLT_APNS_KEYS',
-		Schema.Record(Schema.String, Schema.Struct({ keyId: Schema.NonEmptyString, key: Schema.NonEmptyString })),
+		Schema.Record(
+			Schema.String,
+			Schema.Struct({ keyId: Schema.NonEmptyString, key: Schema.NonEmptyString })
+		),
 		'{}'
 	),
 	turnstile: turnstile === null ? null : { siteKey: turnstile[0], secret: turnstile[1] },

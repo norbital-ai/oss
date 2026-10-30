@@ -38,6 +38,7 @@ export default model('sys_user', {
 			{ on: ['phone_key'], unique: true }
 		]
 	},
+	search: { text: ['name', 'email'] },
 	read: 'all',
 	/** The kernel directory (rule 35a): who a member is, by name. Staff read staff; externals themselves and their party. */
 	outputs: { directory: { sys_user: { fields: ['name'] } } }

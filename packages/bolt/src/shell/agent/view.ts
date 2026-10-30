@@ -402,6 +402,17 @@ export function resultLine(result: unknown): string {
 
 const parsed = (text: string | undefined): unknown =>
 	Option.getOrNull(Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Json))(text ?? ''));
+/**
+ * A step's arguments for its line: the parsed JSON, else (a long call's input is stored clipped and does not parse) its
+ * plain string fields recovered from the text, so `act`'s line still names its callable.
+ */
+export const stepArgs = (text: string | undefined): unknown =>
+	parsed(text) ??
+	Object.fromEntries(
+		[...(text ?? '').matchAll(/"(\w+)":"((?:[^"\\]|\\.)*)"/g)]
+			.reverse()
+			.map((m) => [m[1], m[2]])
+	);
 /** Why a failed step failed: its error, else its result as it came (a clipped one does not parse); '' for any other step. */
 export function failureOf(tool: AgentRow['tool']): string {
 	if (tool?.failed !== true) return '';
@@ -411,7 +422,7 @@ export function failureOf(tool: AgentRow['tool']): string {
 /** What each failed step did, in words (`stepView`'s verb): the run's failure mark names them. */
 export const failedVerbs = (steps: readonly AgentRow[]): string[] =>
 	steps.flatMap((s) =>
-		s.tool?.failed === true ? [stepView(s.tool.name, parsed(s.tool.args)).verb] : []
+		s.tool?.failed === true ? [stepView(s.tool.name, stepArgs(s.tool.args)).verb] : []
 	);
 
 /** What a running Studio step is doing, in the person's words: the group's line while it runs. */

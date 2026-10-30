@@ -4,6 +4,7 @@ A dense, filterable log: one fixed-height line per event (a JSON payload preview
 -->
 <script lang="ts" module>
 	import { Effect } from 'effect';
+	import type { Snippet } from 'svelte';
 	import type { LogLine } from './logs.js';
 
 	/** The props of `LogView`. */
@@ -17,6 +18,13 @@ A dense, filterable log: one fixed-height line per event (a JSON payload preview
 		follow?: boolean;
 		locale?: string;
 		class?: string;
+		/** At the toolbar line's start (a title, a scope picker): the log's header is this one line. */
+		leading?: Snippet;
+		/** More filter controls in the filter popover (a run picker), and how many of them are active. */
+		filters?: Snippet;
+		filterCount?: number;
+		/** Before Follow (an Auto-refresh toggle). */
+		trailing?: Snippet | undefined;
 	};
 </script>
 
@@ -44,7 +52,11 @@ A dense, filterable log: one fixed-height line per event (a JSON payload preview
 		hasOlder = false,
 		follow = $bindable(true),
 		locale,
-		class: className
+		class: className,
+		leading,
+		filters,
+		filterCount = 0,
+		trailing
 	}: LogViewProps = $props();
 
 	let hidden = $state<Partial<Record<LogLevel, boolean>>>({});
@@ -117,12 +129,14 @@ A dense, filterable log: one fixed-height line per event (a JSON payload preview
 	data-log-view
 >
 	<div class="flex flex-wrap items-center gap-1.5 border-b px-2 py-1.5">
+		{@render leading?.()}
 		<ToolbarSearch bind:value={q} label="Search log messages" />
 		<ToolbarFilter
-			count={LOG_LEVELS.filter((level) => hidden[level]).length}
+			count={LOG_LEVELS.filter((level) => hidden[level]).length + filterCount}
 			label="Filter log levels"
 			panelClass="w-64"
 		>
+			{@render filters?.()}
 			<h3 class="text-sm font-medium">Log levels</h3>
 			<div class="flex flex-wrap gap-1.5">
 				{#each LOG_LEVELS as level (level)}
@@ -141,6 +155,7 @@ A dense, filterable log: one fixed-height line per event (a JSON payload preview
 		{#if loading}<span class="text-muted-foreground text-xs">Loading older…</span>{/if}
 		{#if notice}<span role="alert" class="text-destructive text-xs">{notice}</span>{/if}
 		<span class="flex-1"></span>
+		{@render trailing?.()}
 		<button
 			type="button"
 			aria-pressed={follow}

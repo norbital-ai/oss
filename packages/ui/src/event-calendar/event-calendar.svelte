@@ -42,6 +42,7 @@ Events on a day, week or month grid: timed boxes, all-day bars, month pills; dra
 <script lang="ts">
 	import Icon from '@iconify/svelte';
 	import { Button } from '../primitives/button/index.js';
+	import TabStrip from '../primitives/tabs/tab-strip.svelte';
 	import { useKinds } from '../kinds/context.js';
 	import { cn, uiText } from '../primitives/utils.js';
 	import {
@@ -298,22 +299,15 @@ Events on a day, week or month grid: timed boxes, all-day bars, month pills; dra
 			{#if actions}<div class="ml-2">{@render actions()}</div>{/if}
 		</div>
 		{#if views.length > 1}
-			<div class="flex h-8 max-sm:h-11 rounded-sm border bg-muted/40 p-0.5" role="tablist">
-				{#each views as v (v)}
-					<button
-						type="button"
-						role="tab"
-						aria-selected={v === shown}
-						onclick={() => pick(v)}
-						class={cn(
-							'rounded-sm px-3 text-xs font-medium',
-							v === shown
-								? 'bg-background text-foreground shadow-xs'
-								: 'text-muted-foreground hover:text-foreground'
-						)}>{t(v)}</button
-					>
-				{/each}
-			</div>
+			<TabStrip
+				label="View"
+				value={shown}
+				items={views.map((v) => ({ name: v, title: t(v) }))}
+				onValueChange={(v) => {
+					const next = views.find((x) => x === v);
+					if (next !== undefined) pick(next);
+				}}
+			/>
 		{/if}
 	</header>
 

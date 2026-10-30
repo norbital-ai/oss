@@ -157,7 +157,7 @@ const setup = Effect.gen(function* () {
 										{
 											id: 'r1',
 											name: 'read_file',
-											input: { id, as: 'image' }
+											input: { id }
 										}
 									],
 									finish: 'tool',

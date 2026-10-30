@@ -58,6 +58,7 @@ import {
 	Live,
 	Manifest,
 	Reads,
+	RunEnds,
 	RunHandlers,
 	Runs,
 	Wake,
@@ -358,8 +359,18 @@ function factsOf(call: FacilityCall): CallFacts {
 		case 'files.text':
 		case 'files.table':
 		case 'files.sheet':
-		case 'ai.transcribe':
 			return { reads: ids(Option.toArray(referenceOf(first))), stores: false, tools: undefined };
+		case 'convert.ingest':
+			return {
+				reads: ids(Option.toArray(referenceOf(first))),
+				stores: Option.exists(
+					Schema.decodeUnknownOption(Schema.Struct({ for: Schema.optionalKey(Schema.String) }))(
+						options ?? {}
+					),
+					(o) => o.for !== undefined
+				),
+				tools: undefined
+			};
 		case 'convert.document':
 			return {
 				reads: ids(
@@ -418,7 +429,14 @@ export const WakeLive = Layer.effect(
 					.pipe(Effect.andThen(PubSub.publish(nudges, Date.parse(at))), Effect.asVoid)
 		};
 	})
-).pipe(Layer.provideMerge(Layer.effect(Nudges, PubSub.unbounded<number>())));
+).pipe(
+	Layer.provideMerge(
+		Layer.merge(
+			Layer.effect(Nudges, PubSub.unbounded<number>()),
+			Layer.effect(RunEnds, PubSub.unbounded<readonly string[]>())
+		)
+	)
+);
 export const RunHandlersLive = Layer.sync(RunHandlers, () => {
 	const handlers = new Map<string, RunHandler>(),
 		retries = new Map<string, RetrySpec>();
@@ -469,6 +487,7 @@ export const RunsLive = Layer.effect(
 			registry = yield* RunHandlers,
 			deadlines = yield* Deadlines,
 			nudges = yield* Nudges,
+			ends = yield* RunEnds,
 			drivers = yield* Drivers;
 		const ai = yield* Ai,
 			logs = yield* Logs,
@@ -532,11 +551,16 @@ export const RunsLive = Layer.effect(
 					`UPDATE sys_run SET leases = leases + 1, due_at = ${at}::timestamptz, state = CASE WHEN ${fails} THEN 'failed' ELSE 'queued' END, finished_at = CASE WHEN ${fails} THEN ${at}::timestamptz END, error = CASE WHEN ${over}::text IS NOT NULL THEN jsonb_build_object('code', 'cpuBudget', 'message', ${over}::text) WHEN cause = 'handoff' THEN '{"code":"lostLease","message":"The host was lost before the request answered."}'::jsonb WHEN leases < 3 THEN error ELSE '{"code":"lostLease","message":"The run lost its lease 3 times."}'::jsonb END WHERE state = 'running' RETURNING id, state, due_at`
 				);
 				const rows = yield* db.returning(
-					Schema.Struct({ next: Schema.NullOr(Schema.String) }),
+					Schema.Struct({
+						next: Schema.NullOr(Schema.String),
+						failed: Schema.Array(Schema.String)
+					}),
 					c.sql(
-						`least((SELECT min(due_at) FROM sys_run WHERE state = 'queued'), (SELECT min(due_at) FROM lost WHERE state = 'queued'), ${nextDue(c)})::text AS next`
+						`least((SELECT min(due_at) FROM sys_run WHERE state = 'queued'), (SELECT min(due_at) FROM lost WHERE state = 'queued'), ${nextDue(c)})::text AS next,
+						(SELECT coalesce(jsonb_agg(id), '[]'::jsonb) FROM lost WHERE state = 'failed') AS failed`
 					)
 				);
+				if ((rows[0]?.failed.length ?? 0) > 0) yield* PubSub.publish(ends, rows[0]!.failed);
 				yield* deadlines.settle(rows[0]?.next ?? null);
 			});
 		const claim = (now: number, pruned = false, custom = false) =>
@@ -779,12 +803,16 @@ export const RunsLive = Layer.effect(
 				const rememberFile = (facts: CallFacts, answer: CrossAnswer) =>
 					Effect.gen(function* () {
 						if (!answer.ok || !facts.stores) return;
-						const file = yield* Schema.decodeUnknownEffect(CreatedFile)(answer.value).pipe(
+						// a FileRef, or an ingest's stored images
+						const created = yield* Schema.decodeUnknownEffect(
+							Schema.Union([CreatedFile, Schema.Struct({ images: Schema.Array(CreatedFile) })])
+						)(answer.value).pipe(
 							Effect.mapError(() =>
 								BoltError.make('corrupt', 'guest', 'a file creation answered an invalid FileRef')
 							)
 						);
-						createdFiles.add(file.id);
+						for (const file of 'images' in created ? created.images : [created])
+							createdFiles.add(file.id);
 					});
 				const checkFiles = (facts: CallFacts) =>
 					Effect.gen(function* () {
@@ -1313,7 +1341,8 @@ export const RunsLive = Layer.effect(
 								tz: b.tz,
 								seed: run.id,
 								cause,
-								...(effectOf(m, run.automation) === undefined && m.automations[run.automation] !== undefined
+								...(effectOf(m, run.automation) === undefined &&
+								m.automations[run.automation] !== undefined
 									? {
 											run: {
 												id: run.id,
@@ -1620,6 +1649,11 @@ export const RunsLive = Layer.effect(
 					'sys_run',
 					rows.map((row) => row.id)
 				);
+				if (state !== 'queued')
+					yield* PubSub.publish(
+						ends,
+						rows.map((row) => row.id)
+					);
 				return dues;
 			}).pipe(
 				Effect.onInterrupt(() =>
@@ -1764,7 +1798,10 @@ export const RunsLive = Layer.effect(
 					text: `UPDATE sys_run SET state = 'stopped', key = NULL, finished_at = $2::timestamptz, error = jsonb_build_object('code', 'stopped', 'message', 'The run was stopped.') WHERE id = $1 AND state IN ('queued', 'running') RETURNING ${RUN_VIEW_COLUMNS}`,
 					params: [id, iso(yield* Clock.currentTimeMillis)]
 				});
-				if (rows.length > 0) live.syncChanged('sys_run', [id]);
+				if (rows.length > 0) {
+					live.syncChanged('sys_run', [id]);
+					yield* PubSub.publish(ends, [id]);
+				}
 				if (rows.length > 0 && found.value.state === 'running') stopping.add(id);
 				const halt = halts.get(id);
 				if (rows.length > 0 && halt !== undefined) yield* Deferred.succeed(halt, undefined);

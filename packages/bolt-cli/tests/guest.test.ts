@@ -1041,16 +1041,16 @@ describe('next guest runner', () => {
 	);
 
 	it.effect(
-		'lets a transcription outlast the per-call wall and the CPU budget: the guest only awaits it',
+		'lets an ingest outlast the per-call wall and the CPU budget: the guest only awaits it',
 		() =>
 			Effect.gen(function* () {
 				const { crossings, bridge, started } = yield* slow(60, (c) =>
-					c._tag === 'ai.transcribe' ? 'transcribe' : c._tag === 'ai.speak' ? 'speak' : null
+					c._tag === 'convert.ingest' ? 'ingest' : c._tag === 'ai.speak' ? 'speak' : null
 				);
 				const o = yield* answeredLate(
 					runIn(
 						automation(
-							'function* (_, ctx) { return [yield* ctx.ai.transcribe({ id: "f" }), yield* ctx.ai.speak("hi", { for: "a" })]; }'
+							'function* (_, ctx) { return [yield* ctx.convert.ingest({ id: "f" }), yield* ctx.ai.speak("hi", { for: "a" })]; }'
 						),
 						invocation(),
 						bridge,
@@ -1062,8 +1062,8 @@ describe('next guest runner', () => {
 					2,
 					60
 				);
-				expect(ok(o)).toEqual(['transcribe', 'speak']);
-				expect(crossings.flat()).toMatchObject([{ _tag: 'ai.transcribe' }, { _tag: 'ai.speak' }]);
+				expect(ok(o)).toEqual(['ingest', 'speak']);
+				expect(crossings.flat()).toMatchObject([{ _tag: 'convert.ingest' }, { _tag: 'ai.speak' }]);
 			})
 	);
 

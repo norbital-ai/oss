@@ -9,6 +9,7 @@ import { toDrivers } from '@norbital-ai/providers';
 import {
 	BoltError,
 	documentConverter,
+	documentIngester,
 	Port,
 	type FilesPort,
 	type LogPort,
@@ -58,11 +59,10 @@ export type HostSettings = {
 		sys2: { readonly [modelClass: string]: string };
 		embed: { readonly [embedding: string]: AiModel };
 	};
-	/** `ctx.ai.transcribe` and `ctx.ai.speak` over OpenRouter; null when off. */
+	/** `ctx.ai.speak` over OpenRouter; null when off. Transcription is Norbital Convert's (`ctx.convert.ingest`). */
 	speech: {
 		endpoint: string;
 		credential: string;
-		transcribe: string;
 		speak: string;
 		voice: string | null;
 	} | null;
@@ -217,12 +217,10 @@ export const host = Effect.fn('server.host')(function* (
 			: openRouterSpeech({
 					baseUrl: config.speech.endpoint,
 					apiKey: config.speech.credential,
-					transcribeModel: config.speech.transcribe,
 					speakModel: config.speech.speak,
 					...(config.speech.voice === null ? {} : { speakVoice: config.speech.voice })
 				});
-	const transcribe = speech?.transcribe,
-		speak = speech?.speak;
+	const speak = speech?.speak;
 	const fs = yield* FileSystem.FileSystem;
 	yield* fs.makeDirectory(config.auditDir, { recursive: true });
 	const auditDir = yield* fs.realPath(config.auditDir);
@@ -278,11 +276,9 @@ export const host = Effect.fn('server.host')(function* (
 		intelligence: {
 			...intelligence,
 			speech:
-				transcribe === undefined || speak === undefined
+				speak === undefined
 					? off
 					: {
-							transcribe: (audio, o, signal) =>
-								run(transcribe(audio, o).pipe(Effect.provide(speechContext)), { signal }),
 							speak: (text, o, signal) =>
 								run(speak(text, o).pipe(Effect.provide(speechContext)), { signal })
 						}
@@ -311,9 +307,12 @@ export const host = Effect.fn('server.host')(function* (
 	const serving: Serving = {
 		providers: yield* toDrivers(drivers(), run),
 		...(config.googleOAuth === null ? {} : { oauth: { google: config.googleOAuth } }),
-		...(documents === undefined
+		...(documents === undefined ||
+		converter?.endpoint === undefined ||
+		converter.credential === undefined
 			? {}
 			: {
+					ingest: documentIngester({ url: converter.endpoint, key: converter.credential }).ingest,
 					convert: {
 						targets: documents.targets,
 						convert: (source, to, o, signal) => run(documents.convert(source, to, o), { signal })

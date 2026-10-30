@@ -101,7 +101,7 @@ export const upload = Effect.fn('Callables.upload')(function* (u: Upload) {
 		return refuse(
 			'invalidInput',
 			panel
-				? 'Attach a nonempty image, PDF, DOCX, XLSX or text document.'
+				? 'Attach a nonempty image, document, spreadsheet, slides, recording or text file.'
 				: `${u.field} accepts ${parsers !== null ? acceptOf(parsers) : kind.accept.join(', ')}.`
 		);
 	if (u.bytes.byteLength > Math.min(sizeBytes(kind.max), LIMITS.storedFileBytes))

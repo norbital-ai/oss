@@ -1,5 +1,10 @@
 import { describe, expect, it } from '@effect/vitest';
-import { filterBuilds, filterMembers } from '../src/workspaces/filters.js';
+import {
+	filterBuilds,
+	filterMembers,
+	newestReleases,
+	releaseWindow
+} from '../src/workspaces/filters.js';
 
 const now = '2026-10-26T00:10:00.000Z';
 const members = [
@@ -130,5 +135,30 @@ describe('workspace build filters', () => {
 		expect(buildCommits('all')).toEqual(['aaa111', 'bbb222', 'ccc333']);
 		expect(filterBuilds([], '', 'all')).toEqual([]);
 		expect(filterBuilds(builds, 'missing', 'all')).toEqual([]);
+	});
+});
+
+describe('release log windows', () => {
+	const release = (commit: string, at: string, current = false) => ({
+		commit,
+		at,
+		message: '',
+		current
+	});
+	const releases = [
+		release('aaa', '2026-10-01T00:00:00.000Z'),
+		release('ccc', '2026-10-03T00:00:00.000Z', true),
+		release('bbb', '2026-10-02T00:00:00.000Z')
+	];
+	it('a release serves from its publication until the next one; the newest is open-ended', () => {
+		expect(newestReleases(releases).map((r) => r.commit)).toEqual(['ccc', 'bbb', 'aaa']);
+		expect(releaseWindow(releases, '2026-10-01T00:00:00.000Z')).toEqual({
+			since: '2026-10-01T00:00:00.000Z',
+			until: '2026-10-02T00:00:00.000Z'
+		});
+		expect(releaseWindow(releases, '2026-10-03T00:00:00.000Z')).toEqual({
+			since: '2026-10-03T00:00:00.000Z'
+		});
+		expect(releaseWindow(releases, null)).toEqual({});
 	});
 });

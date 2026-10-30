@@ -8,6 +8,7 @@
 	import { fork, observe } from '@norbital-ai/ui/effect';
 	import { Effect, Stream } from 'effect';
 	import { Button, Combobox, EmptyState, Show, Table, useKinds } from '@norbital-ai/ui';
+	import { Cluster } from '@norbital-ai/ui/layout';
 	import type { RunView } from '../../engine/runs/index.ts';
 	import type { Act } from '../Acts.svelte';
 	import Acts from '../Acts.svelte';
@@ -129,6 +130,28 @@
 	>{/snippet}
 {#snippet actions({ row }: { row: RunRow; value: unknown })}<Acts acts={acts(row)} />{/snippet}
 
+{#snippet runNowControls()}
+	<Cluster gap="xs" data-run-now>
+		<Combobox
+			size="sm"
+			class="w-56"
+			options={startable.map((a) => ({
+				value: a.name,
+				label: a.name,
+				description: a.description
+			}))}
+			value={chosen}
+			placeholder={t('Choose an automation')}
+			onChange={(next) => (chosen = next)}
+		/>
+		<Button
+			size="sm"
+			disabled={chosen === null}
+			onclick={() => chosen !== null && fork(runNow(chosen))}>{t('Run now')}</Button
+		>
+	</Cluster>
+{/snippet}
+
 <div class="flex flex-col gap-3">
 	{#if error !== null}<p
 			role="alert"
@@ -136,26 +159,6 @@
 		>
 			{error}
 		</p>{/if}
-	{#if startable.length > 0}
-		<div class="flex flex-wrap items-center gap-2" data-run-now>
-			<Combobox
-				class="w-72"
-				options={startable.map((a) => ({
-					value: a.name,
-					label: a.name,
-					description: a.description
-				}))}
-				value={chosen}
-				placeholder={t('Choose an automation')}
-				onChange={(next) => (chosen = next)}
-			/>
-			<Button
-				size="sm"
-				disabled={chosen === null}
-				onclick={() => chosen !== null && fork(runNow(chosen))}>{t('Run now')}</Button
-			>
-		</div>
-	{/if}
 	{#if rows === null}
 		<p class="text-sm text-muted-foreground">{t('Loading…')}</p>
 	{:else}
@@ -163,7 +166,7 @@
 			of={rows}
 			key="runs"
 			onOpen={(r) => onRun(r.id)}
-			toolbar={{ export: true }}
+			toolbar={{ export: true, ...(startable.length > 0 ? { trailing: runNowControls } : {}) }}
 			columns={[
 				{ field: 'automation', label: t('Automation') },
 				{ field: 'status', label: t('Status'), cell: status },

@@ -34,7 +34,13 @@ export type WorkspaceChange = Readonly<{
 	createdAt: string;
 	updatedAt: string;
 	behind?: number;
-	merge?: Readonly<{ state: 'scheduled' | 'running' | 'failed'; at: string; head: string; error?: string; runAt?: string }>;
+	merge?: Readonly<{
+		state: 'scheduled' | 'running' | 'failed';
+		at: string;
+		head: string;
+		error?: string;
+		runAt?: string;
+	}>;
 	preview: Readonly<{
 		url: string | null;
 		commit: string;

@@ -51,38 +51,6 @@ const inWorker = (kind: 'office' | 'pdf', workerData: unknown) =>
 			});
 		});
 	});
-const Rendered = Schema.Struct({ pages: Schema.Array(Schema.Uint8Array), pageCount: Schema.Int });
-/**
- * A PDF's first `pages` pages as JPEG images at 200 DPI (at most 2400 px on the long edge): what a model reads a scan
- * or handwriting from. A provider's own PDF handling may OCR it to text the model never checks against the page.
- */
-export const renderDocumentPages = Effect.fn('server.renderDocumentPages')(function* (
-	bytes: Uint8Array,
-	pages: number
-) {
-	if (bytes.byteLength === 0 || bytes.byteLength > 20 * 1024 * 1024)
-		return yield* Effect.fail(
-			failure(new Error('Documents must contain between 1 byte and 20 MiB.'))
-		);
-	return yield* Effect.scoped(
-		inWorker('pdf', { bytes, render: pages }).pipe(
-			Effect.flatMap((result) =>
-				Schema.decodeUnknownEffect(Rendered)(result).pipe(Effect.mapError(failure))
-			)
-		)
-	).pipe(
-		Effect.timeoutOrElse({
-			duration: '30 seconds',
-			orElse: () =>
-				Effect.fail(
-					new FacilityFailure({
-						kind: 'timeout',
-						message: 'Rendering the pages exceeded 30 seconds.'
-					})
-				)
-		})
-	);
-});
 /** Parser CPU and memory are bounded in a scoped worker; cancelling a request terminates it. */
 export const extractDocumentText = Effect.fn('server.extractDocumentText')(function* (
 	bytes: Uint8Array,

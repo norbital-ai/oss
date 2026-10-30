@@ -127,7 +127,6 @@ export type InstanceId<D extends string = IntegrationName> = Id<'sys_integration
 /** The MCP server names (`src/agent/mcp/+<n>.mcp.ts`). */
 export type McpName = keyof NamesPart<'mcp'> & string;
 /** The agent skill names (`src/agent/skill/<n>/+skill.md`). */
-export type SkillName = keyof NamesPart<'skills'> & string;
 /** The host tools a policy's `capabilities.tools` may name (the host's Studio and browser tools). */
 export type HostToolName = keyof NamesPart<'hostTools'> & string;
 export type CustomShape<F> = F extends keyof CustomFields

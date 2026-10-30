@@ -184,7 +184,7 @@ export const rep: Authority = {
 		notes: arm({ notes: TRUE })
 	},
 	automations: [],
-	capabilities: { apps: [], tools: [], mcp: [], skills: [] },
+	capabilities: { apps: [], tools: [], mcp: [] },
 	limits: [],
 	teamTree: ['t1', 't2'],
 	scopes: {}

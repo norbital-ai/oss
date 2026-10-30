@@ -7,9 +7,9 @@
 <script lang="ts">
 	import { Option, Schema } from 'effect';
 	import { SvelteMap, SvelteSet } from 'svelte/reactivity';
-	import { CodeEditor, Icon, StructuredData } from '@norbital-ai/ui';
+	import { CodeEditor, Icon, StructuredData, TabStrip } from '@norbital-ai/ui';
 	import type { AgentRow } from '../../protocol/wire.ts';
-	import { failureOf, reportView, resultLine, stepView, type StepView } from './view.ts';
+	import { failureOf, reportView, resultLine, stepArgs, stepView, type StepView } from './view.ts';
 
 	let {
 		steps,
@@ -30,7 +30,7 @@
 	const viewOf = (s: AgentRow): StepView =>
 		s.tool === undefined
 			? { icon: 'lucide:brain', verb: 'Thought', target: '' }
-			: stepView(s.tool.name, json(s.tool.args));
+			: stepView(s.tool.name, stepArgs(s.tool.args));
 	/** A page read as its text, pretty JSON when it parses, else a clipped result with its escapes undone. */
 	const pretty = (text: string) => {
 		const v = json(text);
@@ -127,21 +127,18 @@
 							]}
 							{#if tabs.length > 0}
 								{@const shown = tabs.find((k) => k === pane.get(s.id)) ?? tabs[0]!}
-								<div role="tablist" class="flex gap-1">
-									{#each tabs as k (k)}
-										<button
-											type="button"
-											role="tab"
-											data-pane={k}
-											aria-selected={shown === k}
-											onclick={() => pane.set(s.id, k)}
-											class="rounded px-1.5 py-0.5 text-[0.7rem] {shown === k
-												? 'bg-muted font-medium text-foreground'
-												: 'text-muted-foreground hover:text-foreground'}"
-											>{t(k === 'code' ? 'Code' : k === 'input' ? 'Input' : 'Output')}</button
-										>
-									{/each}
-								</div>
+								<TabStrip
+									label={t('Step')}
+									value={shown}
+									items={tabs.map((k) => ({
+										name: k,
+										title: t(k === 'code' ? 'Code' : k === 'input' ? 'Input' : 'Output')
+									}))}
+									onValueChange={(k) => {
+										const picked = tabs.find((x) => x === k);
+										if (picked !== undefined) pane.set(s.id, picked);
+									}}
+								/>
 								{@const data = json((shown === 'input' ? tool.args : tool.result) ?? '')}
 								{@const text =
 									shown === 'code'
@@ -157,6 +154,7 @@
 											<StructuredData
 												value={data}
 												name={t(shown === 'input' ? 'Input' : 'Output')}
+												frame={false}
 											/>
 										{:else}
 											<CodeEditor

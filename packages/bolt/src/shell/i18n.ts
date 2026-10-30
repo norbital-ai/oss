@@ -374,8 +374,8 @@ export const SHELL_ZH: { readonly [key: string]: string } = {
 	'Ask Norbius': '询问 Norbius',
 	Assign: '分配',
 	Attach: '附加',
-	'Attach a nonempty image, PDF, DOCX, XLSX or text document.':
-		'请附加非空的图片、PDF、DOCX、XLSX 或文本文件。',
+	'Attach a nonempty image, document, spreadsheet, slides, recording or text file.':
+		'请附加非空的图片、文档、电子表格、演示文稿、录音或文本文件。',
 	'Attach at most 8 files totaling 20 MiB.': '最多附加 8 个文件，总计不超过 20 MiB。',
 	Attached: '已附加',
 	'Attached message': '附加的消息',
@@ -654,6 +654,8 @@ export const SHELL_ZH: { readonly [key: string]: string } = {
 	Preview: '预览',
 	'Preview as': '预览身份',
 	Output: '输出',
+	'from cache': '其中来自缓存',
+	reasoning: '其中推理',
 	'Previewing as a team. Its grants apply; you are recorded as the previewer.':
 		'正在以团队身份预览。适用该团队的权限；系统记录您为预览者。',
 	'Previewing as another member. Their grants apply; you are recorded as the previewer.':

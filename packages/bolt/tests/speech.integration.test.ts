@@ -1,14 +1,15 @@
-// `ctx.ai.transcribe` and `ctx.ai.speak` (optional host capabilities): the engine reads the FileRef and hands the host's
-// SpeechPort its bytes; `speak`'s audio is stored like `files.put`. A host without the port answers `unavailable`.
+// `ctx.convert.ingest` and `ctx.ai.speak` (optional host capabilities): the engine reads the FileRef and hands the host's
+// ingest port its bytes (Norbital Convert transcribes audio); `speak`'s audio and an ingest's images are stored like
+// `files.put`. A host without the port answers `unavailable`.
 import { uuidv7 } from '../src/protocol/wire.ts';
 import { Effect, Exit, Layer, Result, Schema, Scope } from 'effect';
 import { afterAll } from 'vitest';
-import { Speech, Files } from '../src/engine/ports.ts';
+import { Convert, Speech, Files } from '../src/engine/ports.ts';
 import { Port } from '../src/engine/port.ts';
 import { decodeProjectedManifest } from '../src/engine/manifest.ts';
 import { actReply, routeFixture, type FixtureRoute } from './support/route-fixture.ts';
 import { program } from '../../bolt-cli/src/test/guest.ts';
-import type { Transcript } from '../src/decl/runtime/facilities.ts';
+import type { Ingested } from '../src/engine/contracts.ts';
 import { expect } from '@effect/vitest';
 import type { Json } from '../src/decl/values.ts';
 import { layer, TestWorkspace, type WorkspaceServices } from '../../bolt-cli/src/test/index.ts';
@@ -43,7 +44,7 @@ const manifest = Result.getOrThrow(
 		},
 		automations: {
 			listen: {
-				description: 'Transcribes a call',
+				description: 'Reads a call',
 				policies: ['ops'],
 				input: { file: { kind: 'json' }, options: { kind: 'json' } }
 			},
@@ -57,30 +58,40 @@ const caught = (effect) => effect.pipe(Effect.catch((error) => Effect.succeed(er
 	? { kind: 'unavailable', facility: error.facility, reason: error.reason }
 	: { kind: error.kind, message: error.message, ...(error.status === undefined ? {} : { status: error.status }) })));
 export default { automation: {
-	listen: { body: function* ({ file, options }, ctx) { return yield* caught(ctx.ai.transcribe(file, options)); } },
+	listen: { body: function* ({ file, options }, ctx) { return yield* caught(ctx.convert.ingest(file, options)); } },
 	say: { body: function* ({ options }, ctx) { return yield* caught(ctx.ai.speak('Hello there', { for: 'say', ...options })); } }
 } };`);
 
-const transcript: Transcript = {
-	segments: [
-		{ speaker: 'S1', start: 0, end: 1.5, text: 'Hello.' },
-		{ speaker: 'S2', start: 1.6, end: 3, text: 'Hi.' }
-	],
-	language: 'en',
-	durationMs: 3000
+const PNG = new Uint8Array([0x89, 0x50, 0x4e, 0x47]);
+const ingested: Ingested = {
+	kind: 'document',
+	html: [
+		'<section data-speaker="S1" data-start="0" data-end="1.5"><time>00:00:00</time> Hello.</section>',
+		'<section data-speaker="S2" data-start="1.6" data-end="3"><time>00:00:01</time> Hi.</section>',
+		'<p><img src="image-1.png"></p>'
+	].join('\n'),
+	images: [{ name: 'image-1.png', mime: 'image/png', bytes: PNG }],
+	meta: {
+		usage: { calls: ['gen-1'], model: 'gemini-x', input: 9, output: 4, cost: 0.001 },
+		stats: { pages: null, bytes: 5, cpuMs: 0, wallMs: 10 }
+	}
 };
 const audio = new Uint8Array([0xff, 0xf3, 1, 2, 3]);
 
-const unavailable: Speech['Service'] = {
-	transcribe: () => Port.unavailable('ai.transcribe'),
-	speak: () => Port.unavailable('ai.speak')
-};
-// One workspace; each run swaps the port the host answers with.
-let speech = unavailable;
-const ports = Layer.succeed(Speech, {
-	transcribe: (...args) => Effect.suspend(() => speech.transcribe(...args)),
-	speak: (...args) => Effect.suspend(() => speech.speak(...args))
-});
+type Ingest = NonNullable<Convert['Service']['ingest']>;
+const unavailable: Speech['Service'] = { speak: () => Port.unavailable('ai.speak') };
+const noIngest: Ingest = () => Port.unavailable('convert.ingest');
+// One workspace; each run swaps the ports the host answers with.
+let speech = unavailable,
+	ingest = noIngest;
+const ports = Layer.merge(
+	Layer.succeed(Speech, { speak: (...args) => Effect.suspend(() => speech.speak(...args)) }),
+	Layer.succeed(Convert, {
+		targets: [],
+		convert: () => Port.unavailable('convert'),
+		ingest: (...args) => Effect.suspend(() => ingest(...args))
+	})
+);
 // one route and one stored call for the file; each run swaps the port and starts the automation
 let fixture: { route: FixtureRoute; file: Json } | undefined;
 const fileScope = Effect.runSync(Scope.make());
@@ -109,10 +120,11 @@ const prepared = Effect.gen(function* () {
 const run = (
 	automation: 'listen' | 'say',
 	input: (file: Json) => Json,
-	port: Partial<Speech['Service']> = {}
+	port: Partial<Speech['Service']> & { ingest?: Ingest } = {}
 ) =>
 	Effect.gen(function* () {
 		speech = { ...unavailable, ...port };
+		ingest = port.ingest ?? noIngest;
 		const t = yield* TestWorkspace,
 			{ route, file } = yield* prepared;
 		const id = uuidv7(Date.parse(t.clock.now()));
@@ -141,38 +153,86 @@ const LIVE = { excludeTestServices: true };
 layer(
 	Layer.unwrap(Effect.map(guest, (g) => TestWorkspace.layer({ manifest, guest: g, ports }))),
 	LIVE
-)('ctx.ai speech', (it) => {
+)('ctx.convert.ingest and ctx.ai.speak', (it) => {
 	it.effect(
-		'transcribe hands the port the stored bytes and options; a bad shape, a missing file and an absent port are refused',
+		'ingest hands the port the stored bytes and options, stores images only for an owner; unsupported, a bad shape, a missing file and an absent port are refused',
 		() =>
 			Effect.gen(function* () {
-				const seen: Parameters<Speech['Service']['transcribe']>[] = [];
+				const seen: Parameters<Ingest>[] = [];
+				const port: Ingest = (...args) => Effect.sync(() => (seen.push(args), ingested));
 				const { row, output } = yield* run(
 					'listen',
 					(file) => ({ file, options: { diarize: true, speakers: 2, language: 'en' } }),
-					{ transcribe: (...args) => Effect.sync(() => (seen.push(args), transcript)) }
+					{ ingest: port }
 				);
 				expect(row).toMatchObject({ state: 'succeeded', error: null });
-				expect(output).toEqual(transcript);
+				expect(output).toEqual({
+					kind: 'document',
+					html: ingested.html,
+					index: {
+						lines: 3,
+						pages: 0,
+						slides: 0,
+						outline: [
+							{ title: 'S1 00:00:00', level: 7, from: 1, to: 1 },
+							{ title: 'S2 00:00:01', level: 7, from: 2, to: 2 }
+						],
+						tables: 0,
+						images: ['image-1.png']
+					},
+					transcript: {
+						durationMs: 3000,
+						speakers: ['S1', 'S2'],
+						segments: [
+							{ speaker: 'S1', start: 0, end: 1.5, text: 'Hello.' },
+							{ speaker: 'S2', start: 1.6, end: 3, text: 'Hi.' }
+						]
+					}
+				});
 				const [file, options] = seen[0] ?? [];
 				expect(file).toMatchObject({ name: 'call.mp3', mime: 'audio/mpeg' });
 				expect([...(file?.bytes ?? [])]).toEqual([...audio]);
 				expect(options).toEqual({ diarize: true, speakers: 2, language: 'en' });
 				seen.length = 0;
+				const owned = yield* run('listen', (file) => ({ file, options: { for: 'listen' } }), {
+					ingest: port
+				});
+				expect(seen[0]?.[1]).toEqual({});
+				expect(owned.output['images']).toEqual([
+					expect.objectContaining({ name: 'image-1.png', mime: 'image/png', bytes: PNG.byteLength })
+				]);
+				expect(
+					(yield* run('listen', (file) => ({ file, options: {} }), {
+						ingest: () => Effect.succeed({ unsupported: 'no parser for CAD drawings' })
+					})).output
+				).toEqual({ kind: 'unsupported', message: 'no parser for CAD drawings' });
+				const json = { sheets: [{ name: 'Rates', columns: ['Item'], rows: [['Labour']] }] };
+				expect(
+					(yield* run('listen', (file) => ({ file, options: {} }), {
+						ingest: () =>
+							Effect.succeed({
+								kind: 'data',
+								json,
+								images: [],
+								meta: { stats: { pages: null, bytes: 5, cpuMs: 0, wallMs: 1 } }
+							})
+					})).output
+				).toEqual({ kind: 'data', json });
+				seen.length = 0;
 				expect(
 					(yield* run('listen', (file) => ({ file, options: { speakers: 'two' } }), {
-						transcribe: (...args) => Effect.sync(() => (seen.push(args), transcript))
+						ingest: port
 					})).output
 				).toMatchObject({ kind: 'invalid' });
 				expect(seen).toEqual([]);
 				expect(
 					(yield* run('listen', () => ({ file: { id: crypto.randomUUID() }, options: {} }), {
-						transcribe: () => Effect.succeed(transcript)
+						ingest: port
 					})).output
 				).toMatchObject({ kind: 'invalid', message: expect.stringContaining('cannot read file') });
 				expect((yield* run('listen', (file) => ({ file, options: {} }))).output).toMatchObject({
 					kind: 'unavailable',
-					facility: 'ai.transcribe'
+					facility: 'convert.ingest'
 				});
 			})
 	);

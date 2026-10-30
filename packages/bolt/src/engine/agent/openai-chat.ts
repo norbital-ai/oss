@@ -26,8 +26,6 @@ export type OpenAiChatConfig = {
 	strict?: boolean;
 	/** The provider's charge for one call (`usage.cost`, USD) under its generation id, awaited before `infer` resolves. */
 	meter?: (costUsd: number, generationId: string) => Promise<void> | void;
-	/** A provider model's input modalities (OpenRouter `architecture.input_modalities`); a PDF goes whole only to `pdf`. */
-	inputs?: (model: string) => Effect.Effect<readonly string[] | undefined>;
 };
 
 type Wire = { [k: string]: unknown };
@@ -58,11 +56,11 @@ const stepOf = Schema.decodeUnknownOption(StepContent),
  * opened follows that call's results as a user message, in the same place on every later step of the turn (providers
  * cache the prefix); one whose call is no longer in the history rides the last user message.
  */
-function messagesOf(r: AiRequest, inputs: readonly string[] | undefined): Wire[] {
+function messagesOf(r: AiRequest): Wire[] {
 	const out: Wire[] = r.system === undefined ? [] : [{ role: 'system', content: r.system }];
-	// only the latest step's reasoning goes back (the tool calls it made are what a provider may need it for): earlier
-	// steps' would bloat every call, and a mistaken belief in one ("I have not seen that file") would be read again
-	// on every later step and acted on; an earlier turn's teaches a model to think inside its replies
+	// this turn's steps keep their reasoning on every later call (a message never changes once sent, so the provider's
+	// cached prefix holds: dropping a step's reasoning on the next call re-bills everything after it); an earlier turn's
+	// is dropped (it teaches a model to think inside its replies, and the turn boundary is where the prefix moves anyway)
 	const turn = r.messages.findLastIndex(
 			(m) =>
 				m.role === 'user' && !(typeof m.content === 'string' && m.content.startsWith(STATE_NOTE))
@@ -70,7 +68,7 @@ function messagesOf(r: AiRequest, inputs: readonly string[] | undefined): Wire[]
 		latest = r.messages.findLastIndex((m) => m.role === 'assistant');
 	const files = (r.files ?? []).map((f, n) => ({
 		call: f.call,
-		part: filePart(f, `attachment-${n + 1}`, inputs)
+		part: filePart(f, `attachment-${n + 1}`)
 	}));
 	const calls = new Set(
 		r.messages.flatMap((m) =>
@@ -104,7 +102,7 @@ function messagesOf(r: AiRequest, inputs: readonly string[] | undefined): Wire[]
 			out.push({
 				role: 'assistant',
 				content: textOf(m.content),
-				...(n < turn || n !== latest || reply?.reasoning === undefined || reply.reasoning === ''
+				...(n < turn || reply?.reasoning === undefined || reply.reasoning === ''
 					? {}
 					: { reasoning: reply.reasoning }),
 				...(calls.length === 0
@@ -195,16 +193,12 @@ export function openAiChat(config: OpenAiChatConfig, options: HttpOptions = {}):
 					id = '';
 				let usage: NonNullable<Schema.Schema.Type<typeof Chunk>['usage']> = {};
 				const calls: Call[] = [];
-				const model = config.models[request.model] ?? request.model,
-					inputs =
-						config.inputs === undefined || (request.files ?? []).length === 0
-							? undefined
-							: yield* config.inputs(model);
+				const model = config.models[request.model] ?? request.model;
 				const body = yield* Effect.try({
 					try: () => ({
 						...config.body,
 						model,
-						messages: messagesOf(request, inputs),
+						messages: messagesOf(request),
 						stream: true,
 						stream_options: { include_usage: true },
 						...(request.effort === undefined ? {} : { reasoning_effort: request.effort }),

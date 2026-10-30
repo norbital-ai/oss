@@ -395,8 +395,13 @@ export function decodeRead(
 				return read(cat, model, object(a));
 			case 'get':
 				return get(cat, model, String(a), object(b));
-			case 'aggregate':
-				return storeSync(aggregate(cat, model, object(a)));
+			case 'aggregate': {
+				// `output` names the reader's view, as a request root's does
+				const { output, ...options } = object(a);
+				return typeof output === 'string'
+					? { ...storeSync(aggregate(storeSync(catalogFor(cat, model, output)), model, options)), output }
+					: storeSync(aggregate(cat, model, options));
+			}
 			case 'similar':
 				return storeSync(
 					a !== null && typeof a === 'object'

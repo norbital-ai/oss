@@ -29,6 +29,7 @@ Two panes side by side at a ratio (`rail`, `sidebar`, `third`, `half`, `wide`) t
 
 <script lang="ts">
 	import { cn } from '../primitives/utils.js';
+	import TabStrip from '../primitives/tabs/tab-strip.svelte';
 	import { GAP_CLASSES, SIZE_CLASSES } from './layout.shared.js';
 
 	let {
@@ -75,18 +76,16 @@ Two panes side by side at a ratio (`rail`, `sidebar`, `third`, `half`, `wide`) t
 	{...restProps}
 >
 	{#if collapse === 'switch'}
-		<div class="split__switch" role="tablist" aria-label={switchLabels?.join(' or ') ?? 'Views'}>
-			{#each switchLabels ?? ['First', 'Second'] as label, index}
-				<button
-					type="button"
-					role="tab"
-					aria-selected={active === index}
-					class:split__switch_active={active === index}
-					onclick={() => (active = index as 0 | 1)}
-				>
-					{label}
-				</button>
-			{/each}
+		<div class="split__switch">
+			<TabStrip
+				label={switchLabels?.join(' or ') ?? 'Views'}
+				value={String(active)}
+				items={(switchLabels ?? ['First', 'Second']).map((title, index) => ({
+					name: String(index),
+					title
+				}))}
+				onValueChange={(next) => (active = next === '1' ? 1 : 0)}
+			/>
 		</div>
 	{/if}
 	<div class:split__pane_inactive={collapse === 'switch' && active !== 0} class="split__pane">
@@ -128,23 +127,6 @@ Two panes side by side at a ratio (`rail`, `sidebar`, `third`, `half`, `wide`) t
 	.split__switch {
 		display: none;
 		grid-column: 1 / -1;
-		width: fit-content;
-		padding: 0.125rem;
-		border: 1px solid var(--border);
-		border-radius: var(--radius-md);
-		background: var(--muted);
-	}
-	.split__switch button {
-		padding: 0.25rem 0.75rem;
-		border-radius: calc(var(--radius-md) - 2px);
-		font-size: 0.875rem;
-		font-weight: 500;
-		color: var(--muted-foreground);
-	}
-	.split__switch button.split__switch_active {
-		background: var(--background);
-		color: var(--foreground);
-		box-shadow: var(--shadow-xs);
 	}
 	/*
 		A Split measures itself: it is its own inline-size container, and the collapse rules move its

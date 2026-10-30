@@ -192,7 +192,7 @@ const discoveryAuthority: Authority = {
 	limits: [],
 	teamTree: [],
 	scopes: {},
-	capabilities: { apps: [], tools: [], mcp: [], skills: [] }
+	capabilities: { apps: [], tools: [], mcp: [] }
 };
 const info = (name: string): McpToolInfo => ({
 	name,

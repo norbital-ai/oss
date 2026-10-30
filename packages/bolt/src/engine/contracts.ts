@@ -21,9 +21,8 @@ import type {
 	ConvertTarget,
 	GeoHit,
 	RunCause,
+	IngestOptions,
 	SpeechFormat,
-	TranscribeOptions,
-	Transcript,
 	WebPage
 } from '../decl/runtime/facilities.ts';
 import type { Json, Point } from '../decl/values.ts';
@@ -56,6 +55,8 @@ export const LIMITS = {
 		image: 20_000,
 		other: 20_000,
 		speech: 20_000,
+		/** One Convert job (`ctx.convert.ingest`): a long recording's transcription takes minutes. */
+		ingest: 600_000,
 		attachment: 20_000
 	},
 	/** Read crossings per invocation: `write` for one write-callback call (`create.transform`, `update.transform`,
@@ -285,7 +286,6 @@ export type Authority = {
 		kiosks?: readonly string[];
 		tools: readonly string[];
 		mcp: readonly string[];
-		skills: readonly string[];
 	};
 	limits: readonly LimitRule[];
 	/** Requestor variables: `requestor.teamTree`, `requestor.scopes.<policy>`. */
@@ -425,22 +425,69 @@ export interface ConvertPort {
 	): Promise<Uint8Array>;
 }
 /**
- * Speech behind `ctx.ai.transcribe` and `ctx.ai.speak` (optional; each member absent → `unavailable`). `transcribe` gets a
- * stored file's bytes and answers segments in seconds from the audio's start, speaker labels `S1`, `S2`, … consistent across
- * the file; `speak` answers the audio in `format`. A throw carrying a FacilityError `kind` (`rateLimited`, `tooLarge`,
- * `invalid`, `unsupported`, `timeout`) is answered as that kind; any other throw is `upstream`.
+ * Text to speech behind `ctx.ai.speak` (optional; absent → `unavailable`): the audio in `format`. A throw carrying a
+ * FacilityError `kind` (`rateLimited`, `tooLarge`, `invalid`, `unsupported`, `timeout`) is answered as that kind; any
+ * other throw is `upstream`.
  */
 export interface SpeechPort {
-	transcribe?(
-		audio: { name: string; mime: string; bytes: Uint8Array },
-		options: TranscribeOptions,
-		signal: AbortSignal
-	): Promise<Transcript>;
 	speak?(
 		text: string,
 		options: { voice?: string; format: SpeechFormat; language?: string },
 		signal: AbortSignal
 	): Promise<{ bytes: Uint8Array; mime: string }>;
+}
+/** An ingest's model calls as Convert reports them (audio): their call ids (the metering keys), model, tokens and charge. */
+export type IngestUsage = {
+	readonly calls: readonly string[];
+	readonly model: string;
+	readonly input: number;
+	readonly output: number;
+	readonly cost: number;
+};
+/** An ingest's metering: audio's model calls (`usage`) and the conversion's compute (`stats`). */
+export type IngestMeta = {
+	readonly usage?: IngestUsage;
+	readonly stats: {
+		readonly pages: number | null;
+		readonly bytes: number;
+		readonly cpuMs: number;
+		readonly wallMs: number;
+	};
+};
+export type IngestImage = {
+	readonly name: string;
+	readonly mime: string;
+	readonly bytes: Uint8Array;
+};
+/**
+ * Plan 12, Norbital Convert's ingest: parsing only, never OCR. A `document` (pdf, office, html, text, images, audio) is
+ * sanitised HTML, one block element per line (audio: one `<section data-speaker data-start data-end>` per segment); `data`
+ * (a spreadsheet, CSV or JSON) is its cells as `{ sheets }`, or a JSON file's own value. `images` are referenced by name.
+ */
+export type Ingested =
+	| {
+			readonly kind: 'document';
+			readonly html: string;
+			readonly images: readonly IngestImage[];
+			readonly meta: IngestMeta;
+	  }
+	| {
+			readonly kind: 'data';
+			readonly json: Json;
+			readonly images: readonly IngestImage[];
+			readonly meta: IngestMeta;
+	  };
+/**
+ * File ingestion (plan 12) behind the agent's `ingest` and `ctx.convert.ingest`: one file to `Ingested`, or
+ * `unsupported` (the format has no parser: video, CAD). `documentIngester` implements it over Norbital Convert's
+ * `/v1/ingest`; a converter without a transcription model rejects audio as `unavailable`.
+ */
+export interface IngestPort {
+	ingest(
+		file: { sha256: string; name: string; mime: string; bytes: Uint8Array },
+		options: Omit<IngestOptions, 'for'>,
+		signal: AbortSignal
+	): Promise<Ingested | { readonly unsupported: string }>;
 }
 export interface SecretsPort {
 	get(name: string, signal: AbortSignal): Promise<string | null>;
@@ -454,8 +501,8 @@ export type AiRequest = {
 	messages: readonly AiMessage[];
 	tools?: readonly { name: string; description: string; input: Json }[];
 	output?: Json;
-	/** A utility call's reasoning effort (a document's transcription); the agent's own steps never set it. */
-	effort?: 'low';
+	/** The call's reasoning effort: the agent's steps run at `medium`, a utility call may ask `low`. */
+	effort?: 'low' | 'medium';
 	/** Images and documents for the model to see; `call` is the tool call that opened one, which it follows. */
 	files?: readonly { mime: string; bytes: Uint8Array; call?: string }[];
 	continuation?: string;

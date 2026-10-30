@@ -305,7 +305,7 @@ one narrow state and look at them — compilation cannot prove visual correctnes
 
 A policy (`src/access_control/policy/+<name>.policy.ts`, named by its file) holds `grants` per model
 (`read outputs history create update delete moves`), `automations` a person or the agent may start
-by hand, `capabilities` (`apps tools mcp skills`) and `limits`. Grants are layer maps typed from the
+by hand, `capabilities` (`apps tools mcp`) and `limits`. Grants are layer maps typed from the
 model's own declaration: `read` grants the `default` output and `outputs: { <name>: … }` named ones,
 each `true` or `{ orders: { where? }, 'orders.lines': { where? } }` over that output's layers (a
 deeper `where` filters that layer only; an unnamed layer is unfiltered). The model fixes each

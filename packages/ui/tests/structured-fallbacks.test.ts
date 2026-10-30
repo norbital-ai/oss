@@ -173,3 +173,16 @@ it.live('a registered boolean shape uses the unified read-only checkbox fallback
 		assert.ok(target.querySelector('[role=checkbox][aria-checked=false]'));
 	})
 );
+
+it.live('a dense expression is one highlighted line', () =>
+	browser(async () => {
+		const { target } = await show({
+			cell: true,
+			kind: { kind: 'text', format: 'cel' },
+			initial: 'terms.base_salary\n  / 21.75 > "x"'
+		});
+		const code = target.querySelector('[data-cel]');
+		assert.equal(code?.textContent?.includes('\n'), false);
+		assert.ok(code?.querySelector('.text-success'));
+	})
+);

@@ -18,7 +18,6 @@ import type {
 	PathModel,
 	ReadPath,
 	ReadableName,
-	SkillName,
 	SyncCallable,
 	TeamName,
 	WritePath
@@ -288,7 +287,6 @@ interface PolicyFor<C extends Grantable> {
 		/* hook:access — a group covers its apps */ kiosks?: readonly KioskName[];
 		tools?: readonly HostToolName[];
 		mcp?: readonly McpName[];
-		skills?: readonly SkillName[];
 	};
 	limits?: { [K in LimitKey]?: K extends EnvoyKey ? EnvoyLimit : Limit };
 }
@@ -299,7 +297,7 @@ type PolicyBase = {
 	grants: { readonly [model: string]: object } & CheckSlots;
 	/** The automations (and `'<model>.sync.<sync>'` reads) holders may start by hand (a person or the agent); code needs none. */
 	automations?: readonly string[];
-	/** The apps (or groups), host tools, MCP servers and agent skills holders may use. */
+	/** The apps (or groups), host tools and MCP servers holders may use; every agent skill is open to all. */
 	capabilities?: { readonly [k: string]: readonly string[] };
 	/** Rate limits per limit key. */
 	limits?: { readonly [key: string]: unknown };
@@ -309,7 +307,7 @@ type PolicyBase = {
  * `src/access_control/policy/+<name>.policy.ts`: what holders may do: per-model `grants` (the read outputs they read —
  * `read` for `default`, `outputs` for named ones — and a row filter per layer of each; `create`, `update` and `delete`
  * with their `columns` per layer and a `check` returning `allow`, `deny` or `approve`; `history`; state `moves`), the
- * automations and syncs they may start by hand, capabilities (apps, host tools, MCP servers, skills) and rate `limits`.
+ * automations and syncs they may start by hand, capabilities (apps, host tools, MCP servers) and rate `limits`.
  * A model's policy alone guards its access points and every layer under them. Teams and automations hold policies.
  * Returns the literal.
  * @example

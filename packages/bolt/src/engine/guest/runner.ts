@@ -99,10 +99,10 @@ const Facilities = [
 	'files.image',
 	'files.put',
 	'convert.document',
+	'convert.ingest',
 	'ai.sys_1.decide',
 	'ai.sys_2.infer',
 	'ai.embed',
-	'ai.transcribe',
 	'ai.speak',
 	'geo.search',
 	'geo.reverse'
@@ -539,11 +539,11 @@ const run = (
 							const duration =
 								only !== undefined && isCall(only) && only._tag === 'ai.sys_2.infer'
 									? undefined
-									: only !== undefined &&
-										  isCall(only) &&
-										  (only._tag === 'ai.transcribe' || only._tag === 'ai.speak')
-										? LIMITS.callMs.speech
-										: wallMs;
+									: only !== undefined && isCall(only) && only._tag === 'convert.ingest'
+										? LIMITS.callMs.ingest
+										: only !== undefined && isCall(only) && only._tag === 'ai.speak'
+											? LIMITS.callMs.speech
+											: wallMs;
 							pending++;
 							const hostAnswers = (
 								sending.length === 0 ? Effect.succeed([]) : bridge.cross(sending)

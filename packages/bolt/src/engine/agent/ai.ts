@@ -58,9 +58,9 @@ import { compile, context, evaluate } from '@norbital-ai/std/formula';
 
 /** Rule 72: a platform budget checked before the provider's own limit. */
 export const MODEL_FILES = { count: 8, bytes: 20 * 1024 * 1024 } as const;
-/** What a message may carry (envoy and panel alike): images, text, and the documents `read_file` reads; 8 files / 20 MiB a message. */
+/** What a message may carry (envoy and panel alike): images, text, recordings and the documents `ingest` reads; 8 files / 20 MiB a message. */
 export const ATTACHMENT_MIME =
-	/^(image\/[\w.+-]+|text\/[\w.+-]+|application\/(pdf|json|(?:[\w.-]+\+)?xml|vnd\.openxmlformats-officedocument\.(?:wordprocessingml\.document|spreadsheetml\.sheet)))$/;
+	/^(image\/[\w.+-]+|text\/[\w.+-]+|audio\/[\w.+-]+|application\/(pdf|json|rtf|msword|vnd\.ms-(?:excel|powerpoint)|(?:[\w.-]+\+)?xml|vnd\.openxmlformats-officedocument\.(?:wordprocessingml\.document|spreadsheetml\.sheet|presentationml\.presentation)|vnd\.oasis\.opendocument\.(?:text|spreadsheet|presentation)))$/;
 class ModelIdle extends FacilityFailure {
 	declare readonly cutTool?: true;
 	constructor(message: string, cutTool?: true) {

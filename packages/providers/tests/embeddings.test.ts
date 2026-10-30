@@ -70,49 +70,6 @@ it.effect(
 		})
 );
 
-it.effect(
-	"chat reads each model's input modalities once: a PDF goes whole only to a model that takes pdf",
-	() =>
-		Effect.gen(function* () {
-			const http = fake((s) =>
-				s.url.endsWith('/models')
-					? json({
-							data: [
-								{ id: 'deepseek/fixture', architecture: { input_modalities: ['text', 'image'] } },
-								{
-									id: 'vendor/reader',
-									architecture: { input_modalities: ['text', 'image', 'file'] }
-								},
-								{ id: 'vendor/pdf', architecture: { input_modalities: ['text', 'image', 'pdf'] } }
-							]
-						})
-					: s.url.endsWith('/embeddings/models')
-						? json({ data: [] })
-						: json({ choices: [{ message: { content: 'ok' } }] })
-			);
-			const chat = openRouterChat(
-				{ endpoint: 'https://openrouter.ai/api/v1', models: {} },
-				{ httpClient: http.client }
-			);
-			const ask = (model: string) =>
-				Stream.runDrain(
-					chat({
-						model,
-						messages: [{ role: 'user', content: 'read' }],
-						files: [{ mime: 'application/pdf', bytes: new Uint8Array([2]) }]
-					})
-				);
-			yield* ask('deepseek/fixture');
-			yield* ask('vendor/reader');
-			yield* ask('vendor/pdf');
-			const completions = http.seen.filter((s) => s.url.endsWith('/chat/completions'));
-			expect(http.seen.filter((s) => s.url.endsWith('/api/v1/models'))).toHaveLength(1);
-			expect(JSON.stringify(completions[0]?.body)).not.toContain('file_data');
-			expect(JSON.stringify(completions[1]?.body)).not.toContain('file_data');
-			expect(JSON.stringify(completions[2]?.body)).toContain('data:application/pdf;base64,Ag==');
-		})
-);
-
 describe('openAiEmbeddings', () => {
 	it.effect(
 		'batches by the model, sends a file as a content part, answers in input order and meters the charge',

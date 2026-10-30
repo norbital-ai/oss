@@ -26,7 +26,14 @@ export { default as Label } from './label/label.svelte';
 export { default as Progress } from './progress/progress.svelte';
 export { default as Qr } from './qr/qr.svelte';
 export { default as Spinner } from './spinner/spinner.svelte';
-export { TAB_LEVEL, Tabs, type TabItem, type TabsProps } from './tabs/index.js';
+export {
+	TAB_LEVEL,
+	Tabs,
+	TabStrip,
+	type TabItem,
+	type TabsProps,
+	type TabStripItem
+} from './tabs/index.js';
 export { default as Textarea } from './textarea/textarea.svelte';
 /**
  * Public tooltip API is the single Provider-backed wrapper only.

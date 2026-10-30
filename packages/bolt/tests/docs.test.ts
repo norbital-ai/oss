@@ -173,7 +173,7 @@ const docsTool = (external = false) =>
 				policies: [],
 				models: {},
 				automations: [],
-				capabilities: { apps: [], tools: [], mcp: [], skills: [] },
+				capabilities: { apps: [], tools: [], mcp: [] },
 				limits: [],
 				teamTree: [],
 				scopes: {}

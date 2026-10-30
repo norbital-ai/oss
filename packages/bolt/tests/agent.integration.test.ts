@@ -20,14 +20,15 @@ import {
 } from 'effect';
 import type { Json } from '../src/decl/values.ts';
 import { mcpServers, mcpSessions } from '../src/engine/agent/mcp.ts';
-import type { AiRequest, AiResponse } from '../src/engine/contracts.ts';
+import type { AiRequest, AiResponse, Ingested } from '../src/engine/contracts.ts';
 import { callKey, FIXED, rest } from '../src/engine/agent/index.ts';
 import { COMPACT_FORMAT } from '../src/engine/agent/context.ts';
 import type { MessageRow } from '../src/engine/agent/schema.ts';
 import { Authorities } from '../src/engine/identity/actor.ts';
 import type { EngineManifest } from '../src/engine/manifest.ts';
 import { Port, type PortFailure } from '../src/engine/port.ts';
-import { Ai, Files, Mcp, type AiEvent } from '../src/engine/ports.ts';
+import { Ai, Convert, Files, Mcp, type AiEvent } from '../src/engine/ports.ts';
+import { off } from '../src/facilities/off.ts';
 import { openAiChat } from '../src/engine/agent/openai-chat.ts';
 import { mcpPort } from '../src/node/mcp.ts';
 import { Agents, Live } from '../src/engine/services.ts';
@@ -73,7 +74,7 @@ const manifest: EngineManifest = {
 			description: 'Rep',
 			grants: { quotes: { read: true, create: true, update: true } },
 			automations: ['quotes_mark'],
-			capabilities: { mcp: ['hq'], skills: ['pricing'] }
+			capabilities: { mcp: ['hq'] }
 		},
 		reader: { description: 'Reads quotes', grants: { quotes: { read: true } } }
 	},
@@ -121,6 +122,12 @@ const manifest: EngineManifest = {
 			output: { kind: 'text' },
 			policies: ['rep'],
 			agent: 'confirm'
+		},
+		quotes_tally: {
+			description: 'Tally quotes by title',
+			input: { title: { kind: 'text' }, fail: { kind: 'bool', optional: true } },
+			output: { kind: 'text' },
+			policies: ['rep']
 		}
 	},
 	connections: {
@@ -132,6 +139,9 @@ const manifest: EngineManifest = {
 };
 const guest = program(`export default { automation: { quotes_mark: { body: function* (input, ctx) {
 	return (yield* ctx.act('quotes.create', [{ title: input.title }])).records[0].id;
+} }, quotes_tally: { body: function* (input) {
+	if (input.fail) throw new Error('no tally for ' + input.title);
+	return input.title;
 } } } };`);
 
 // Each cassette step is a native provider stream, pulled once by the real Ai service.
@@ -319,7 +329,24 @@ it.live('SDK close aborts an already-running MCP request without a second drain 
 	)
 );
 
-const SCANNED_PAGE = new Uint8Array([0xff, 0xd8, 0xff, 0xe0]);
+/** What the fake ingest port answers for every document, once `ingestGate` opens. */
+let ingestGate: Promise<void> = Promise.resolve();
+const TENDER: Ingested = {
+	kind: 'document',
+	html: [
+		'<h1>Cover</h1>',
+		'<p>Tender for site works</p>',
+		'<h2>Pricing</h2>',
+		'<table>',
+		'<tr><td>Lot</td><td>Rate</td></tr>',
+		'<tr><td>7</td><td>12.50</td></tr>',
+		'</table>',
+		'<p><img src="image-1.png" alt="site plan"></p>',
+		'<p>End</p>'
+	].join('\n'),
+	images: [{ name: 'image-1.png', mime: 'image/png', bytes: new Uint8Array([0x89, 0x50]) }],
+	meta: { stats: { pages: 2, bytes: 100, cpuMs: 40, wallMs: 90 } }
+};
 const build = (ai: ReturnType<typeof cassette>) =>
 	Effect.gen(function* () {
 		const hq = yield* mcpFixture;
@@ -332,17 +359,17 @@ const build = (ai: ReturnType<typeof cassette>) =>
 			TestWorkspace.layer({
 				manifest,
 				guest: yield* guest,
-				ports: ai.layer,
+				ports: Layer.merge(
+					ai.layer,
+					// the host's ingest port (Norbital Convert): every document here is the tender
+					Convert.fromAbi(off, async () => {
+						await ingestGate;
+						return TENDER;
+					})
+				),
 				// the host clock starts at the wall clock, as a turn drained from a live test reads it
 				now: new Date().toISOString(),
-				host: {
-					agent: {
-						mcp: { secret: (name) => Effect.succeed(values[name]) },
-						// the host's extractor and renderer: every PDF here is a one-page scan
-						documentText: async () => '[Page 1]\n(no extractable text: a scanned page)',
-						documentPages: async () => [SCANNED_PAGE]
-					}
-				}
+				host: { agent: { mcp: { secret: (name) => Effect.succeed(values[name]) } } }
 			})
 		);
 		const t = Context.get(context, TestWorkspace),
@@ -493,7 +520,7 @@ describe('in-app turns', () => {
 	);
 
 	it.live(
-		"lists only the skills and MCP servers the actor's capabilities name, and calls the MCP tool (rules 58, 63b)",
+		"lists only the MCP servers the actor's capabilities name, every skill to everyone, and calls the MCP tool (rules 58, 63b)",
 		() =>
 			Effect.scoped(
 				Effect.gen(function* () {
@@ -522,9 +549,9 @@ describe('in-app turns', () => {
 						yield* agent.post({ conversation: d, as: { member: bob }, text: 'anything?' });
 						yield* agent.drain(d);
 						const names = toolNames(ai.requests[2]);
-						// platform skills keep the skill tool for every actor; a workspace skill outside the actor's capabilities is never listed
+						// a skill is procedure, not authority: every actor may load every workspace skill
 						const skill = ai.requests[2]?.tools?.find((tool) => tool.name === 'skill');
-						expect(skill?.description).not.toContain('pricing');
+						expect(JSON.stringify(skill)).toContain('pricing');
 						expect(names.some((n) => n.startsWith('mcp__'))).toBe(false);
 						expect(names).not.toContain('act');
 						expect({ mcp: mcpServers(manifest, yield* authority(ann)) }).toMatchObject({
@@ -820,11 +847,222 @@ describe('a replayed ingest takes its fewest calls', () => {
 			)
 	);
 });
-// The colour-matching probe (2026-10-30): deepseek-v4.1-flash takes text and images, not PDFs. The attached scan went to
-// OpenRouter whole and came back as its silent OCR. Now the scan's page goes as the model's own pixels.
-describe('a replayed scan ingest sends no raw PDF', () => {
+// An automation the agent starts is a job, like an ingest: `act` answers at once with { job, run }; the run's end steers
+// the next step once (`RunEnds`, never a poll), wakes the conversation after the turn, and `wait` collects it instead.
+describe('an agent-started automation run is a job', () => {
+	/** The conversation's turn replies, read between macrotasks until there are `n` (the kit's clock does not run). */
+	const replies = (t: Kit, c: string, n: number) =>
+		Effect.gen(function* () {
+			const read = t.db.rows(Schema.Struct({ text: Schema.NullOr(Schema.String) }), {
+				text: `SELECT text FROM sys_message WHERE conversation = $1 AND role = 'assistant' AND meta->>'tag' = 'reply' ORDER BY seq`,
+				params: [c]
+			});
+			let got = yield* read;
+			for (let i = 0; got.length < n && i < 20_000; i++) {
+				yield* Effect.promise(() => new Promise((resolve) => setTimeout(resolve, 0)));
+				got = yield* read;
+			}
+			return got;
+		});
+	const notes = (r: AiRequest | undefined) =>
+		(r?.messages ?? []).flatMap((m) =>
+			typeof m.content === 'string' && m.content.includes('[job ') ? [m.content] : []
+		);
+	const started = (fail: boolean) =>
+		Effect.gen(function* () {
+			const fixture = yield* setup([
+				use('act', { callable: 'automation.quotes_tally', input: { title: 'Desk', fail } }),
+				say('Started the tally.')
+			]);
+			const { agent, user, ai } = fixture;
+			const root = yield* user('root', { admin: true });
+			const c = yield* agent.start({ owner: root });
+			yield* agent.post({ conversation: c, as: { member: root }, text: 'Tally the desk quotes.' });
+			const { reply } = yield* agent.drain(c);
+			expect(reply?.text).toBe('Started the tally.');
+			const answer = toolResults(ai.requests[1]!)[0];
+			expect(answer).toMatchObject({
+				job: expect.any(String),
+				run: expect.any(String),
+				note: expect.stringContaining('[job … done]')
+			});
+			const { job, run } = Schema.decodeUnknownSync(
+				Schema.Struct({ job: Schema.String, run: Schema.String })
+			)(answer);
+			return { fixture, c, job, run };
+		});
 	it.live(
-		'read_file shows the scanned page as an image; the provider request for deepseek has no file part',
+		'returns a job at once; its end after the turn wakes the conversation with one line',
+		() =>
+			Effect.scoped(
+				Effect.gen(function* () {
+					const { fixture, c, job, run } = yield* started(false);
+					return yield* Effect.gen(function* () {
+						const { t, ai } = fixture;
+						// the run has not run: the turn ended with it queued
+						expect(notes(ai.requests[1])).toEqual([]);
+						sharedAi.arm([say('The tally is in.')]);
+						// the act stamped its run at the wall clock; the shared kit's clock started with the file
+						t.clock.set(new Date().toISOString());
+						yield* t.runDue();
+						const got = yield* replies(t, c, 2);
+						expect(got.at(-1)?.text).toBe('The tally is in.');
+						expect(ai.requests).toHaveLength(1);
+						expect(notes(ai.requests[0])).toEqual([
+							`[note]\n[job ${job} done] automation quotes_tally run ${run} → succeeded: "Desk"`
+						]);
+					}).pipe(Effect.provide(fixture.context));
+				})
+			)
+	);
+	it.live('a failed run reports failed', () =>
+		Effect.scoped(
+			Effect.gen(function* () {
+				const { fixture, c, job } = yield* started(true);
+				return yield* Effect.gen(function* () {
+					const { t, ai } = fixture;
+					sharedAi.arm([say('The tally failed.')]);
+					// the act stamped its run at the wall clock; the shared kit's clock started with the file
+					t.clock.set(new Date().toISOString());
+					yield* t.runDue();
+					yield* replies(t, c, 2);
+					expect(notes(ai.requests[0])).toEqual([
+						expect.stringMatching(
+							new RegExp(
+								`^\\[note\\]\\n\\[job ${job} failed\\] automation quotes_tally: .*no tally for Desk.*; tell the person$`
+							)
+						)
+					]);
+				}).pipe(Effect.provide(fixture.context));
+			})
+		)
+	);
+	it.live('its end during the turn steers the next step with one line', () =>
+		Effect.scoped(
+			Effect.gen(function* () {
+				let open = () => {};
+				const gate = new Promise<void>((resolve) => (open = resolve));
+				// the second step answers once the run has ended, so the third step's input carries its line
+				const held: Step = (request) =>
+					Stream.unwrap(
+						Effect.promise(() => gate).pipe(
+							Effect.as(use('read', { quotes: { where: { title: { eq: 'Lamp' } } } })(request))
+						)
+					);
+				const fixture = yield* setup([
+					use('act', { callable: 'automation.quotes_tally', input: { title: 'Lamp' } }),
+					held,
+					say('Lamp tallied.')
+				]);
+				return yield* Effect.gen(function* () {
+					const { t, ai, agent, user } = fixture;
+					const root = yield* user('root', { admin: true });
+					const c = yield* agent.start({ owner: root });
+					yield* agent.post({ conversation: c, as: { member: root }, text: 'Tally the lamps.' });
+					const turn = yield* Effect.forkChild(agent.drain(c));
+					const queued = t.db.rows(Schema.Struct({ id: Schema.String }), {
+						text: `SELECT id FROM sys_run WHERE automation = 'quotes_tally' AND input->>'title' = 'Lamp'`,
+						params: []
+					});
+					let rows = yield* queued;
+					for (let i = 0; rows.length === 0 && i < 20_000; i++) {
+						yield* Effect.promise(() => new Promise((resolve) => setTimeout(resolve, 0)));
+						rows = yield* queued;
+					}
+					t.clock.set(new Date().toISOString());
+					yield* t.runDue();
+					open();
+					expect((yield* Fiber.join(turn)).reply?.text).toBe('Lamp tallied.');
+					const { job } = Schema.decodeUnknownSync(Schema.Struct({ job: Schema.String }))(
+						toolResults(ai.requests[1]!)[0]
+					);
+					expect(ai.requests.map(notes)).toEqual([
+						[],
+						[],
+						[
+							`[note]\n[job ${job} done] automation quotes_tally run ${rows[0]!.id} → succeeded: "Lamp"`
+						]
+					]);
+					// the line is the step's transcript note, never also queued to wake the conversation
+					const [line] = (yield* t.db.read([
+						{
+							text: `SELECT count(*)::int AS n, count(*) FILTER (WHERE state = 'queued')::int AS queued FROM sys_message WHERE conversation = $1 AND text LIKE '[job %'`,
+							params: [c]
+						}
+					]))[0]!.rows;
+					expect(line).toEqual({ n: 1, queued: 0 });
+				}).pipe(Effect.provide(fixture.context));
+			})
+		)
+	);
+	it.live('wait collects the job: no line follows', () =>
+		Effect.scoped(
+			Effect.gen(function* () {
+				const waitOnJob: Step = (request) =>
+					answer({
+						content: '',
+						toolCalls: [
+							{
+								id: randomUUID(),
+								name: 'wait',
+								input: {
+									jobs: [
+										Schema.decodeUnknownSync(Schema.Struct({ job: Schema.String }))(
+											toolResults(request).at(-1)
+										).job
+									]
+								}
+							}
+						],
+						finish: 'tool',
+						usage: { input: 10, output: 5 }
+					});
+				const fixture = yield* setup([
+					use('act', { callable: 'automation.quotes_tally', input: { title: 'Chair' } }),
+					waitOnJob,
+					say('Chair tallied.')
+				]);
+				return yield* Effect.gen(function* () {
+					const { t, ai, agent, user } = fixture;
+					const root = yield* user('root', { admin: true });
+					const c = yield* agent.start({ owner: root });
+					yield* agent.post({ conversation: c, as: { member: root }, text: 'Tally the chairs.' });
+					const turn = yield* Effect.forkChild(agent.drain(c));
+					// the run is queued once act answered: run it while the turn waits on its job
+					const queued = t.db.rows(Schema.Struct({ id: Schema.String }), {
+						text: `SELECT id FROM sys_run WHERE automation = 'quotes_tally' AND input->>'title' = 'Chair'`,
+						params: []
+					});
+					let rows = yield* queued;
+					for (let i = 0; rows.length === 0 && i < 20_000; i++) {
+						yield* Effect.promise(() => new Promise((resolve) => setTimeout(resolve, 0)));
+						rows = yield* queued;
+					}
+					// the act stamped its run at the wall clock; the shared kit's clock started with the file
+					t.clock.set(new Date().toISOString());
+					yield* t.runDue();
+					expect((yield* Fiber.join(turn)).reply?.text).toBe('Chair tallied.');
+					expect(toolResults(ai.requests[2]!).at(-1)).toMatchObject({
+						settled: { result: { status: 'succeeded', result: 'Chair' } }
+					});
+					expect(ai.requests.flatMap(notes)).toEqual([]);
+					const [queuedNotes] = (yield* t.db.read([
+						{
+							text: `SELECT count(*)::int AS n FROM sys_message WHERE conversation = $1 AND text LIKE '[job %'`,
+							params: [c]
+						}
+					]))[0]!.rows;
+					expect(queuedNotes).toEqual({ n: 0 });
+				}).pipe(Effect.provide(fixture.context));
+			})
+		)
+	);
+});
+// Plan 12's replay of the tender ingest: the file is ingested as a job, the turn ends, the job's end wakes the
+// conversation with its steering message once, and the agent reads a window, files the line and reads it back.
+describe('a replayed ingest: job, steering message, windows, act, read-back', () => {
+	it.live(
+		'the finished job wakes the conversation once; the model reads windows, never a raw PDF',
 		() =>
 			Effect.scoped(
 				Effect.gen(function* () {
@@ -833,56 +1071,81 @@ describe('a replayed scan ingest sends no raw PDF', () => {
 						const { ai, agent, user, t } = fixture;
 						const root = yield* user('root', { admin: true });
 						const files = yield* Files;
-						const bytes = new TextEncoder().encode('%PDF-1.7 scan');
-						const blob = yield* files.put(bytes, { name: 'trials.pdf', mime: 'application/pdf' });
-						const file = { id: randomUUID(), name: 'trials.pdf', mime: 'application/pdf' };
+						const bytes = new TextEncoder().encode(`%PDF-1.7 tender ${randomUUID()}`);
+						const blob = yield* files.put(bytes, { name: 'tender.pdf', mime: 'application/pdf' });
+						const file = { id: randomUUID(), name: 'tender.pdf', mime: 'application/pdf' };
 						yield* t.db.write({
 							text: `INSERT INTO sys_file (id, name, mime, size, key, sha256, field, created_by, created_at) VALUES ($1,$2,$3,$4,$5,$6,'sys_conversation.inputs',$7,now())`,
 							params: [file.id, file.name, file.mime, bytes.byteLength, blob.key, blob.sha256, root]
 						});
+						let open = () => {};
+						ingestGate = new Promise<void>((resolve) => (open = resolve));
 						sharedAi.arm([
-							use('describe_workspace', {}),
-							use('read_file', { id: file.id }),
-							say('Read the trial sheet from its page.')
+							use('ingest', { id: file.id }),
+							say('Ingesting the tender; I file its lines when it is read.'),
+							// the wake-up turn, opened by the job's message
+							use('read_file', { output: 'o1', from: 5, to: 6 }),
+							use('act', { callable: 'quotes.create', input: [{ title: 'Lot 7 at 12.50' }] }),
+							use('read', { quotes: { where: { title: { eq: 'Lot 7 at 12.50' } } } }),
+							say('Filed Lot 7 at 12.50 and read it back against the table.')
 						]);
 						const c = yield* agent.start({ owner: root });
 						yield* agent.post({
 							conversation: c,
 							as: { member: root },
-							text: 'File these trials.',
+							text: 'File the pricing lines of this tender.',
 							files: [file]
 						});
-						yield* agent.drain(c);
-						expect(ai.requests).toHaveLength(3);
-						expect(toolResults(ai.requests[1]!)[0]).toEqual(expect.stringContaining('quotes'));
-						const after = ai.requests[2]!;
-						expect(toolResults(after).at(-1)).toMatchObject({
-							attached: expect.stringContaining('shown to you'),
-							note: expect.stringContaining('verified')
+						const { reply } = yield* agent.drain(c);
+						expect(reply?.text).toBe('Ingesting the tender; I file its lines when it is read.');
+						expect(toolResults(ai.requests[1]!)[0]).toMatchObject({
+							job: expect.any(String),
+							output: 'o1'
 						});
-						expect(after.files?.map((f) => f.mime)).toEqual(['image/jpeg']);
-						// the same request on the wire to deepseek: the page as an image part, no file part
-						const sent: string[] = [];
-						yield* Stream.runDrain(
-							openAiChat(
-								{
-									endpoint: 'https://openrouter.test/api/v1',
-									models: {},
-									inputs: () => Effect.succeed(['text', 'image'])
-								},
-								{
-									fetch: async (_url, init) => {
-										sent.push(String(init?.body));
-										return Response.json({ choices: [{ message: { content: 'ok' } }], usage: {} });
-									}
-								}
-							)({ ...after, model: 'deepseek/deepseek-v4.1-flash-1017' })
+						open();
+						// the job's end queues its message and kicks the conversation: a turn runs on it
+						// the kit's clock does not run: the woken turn's reply row is the event, read between macrotasks
+						const replies = t.db.rows(Schema.Struct({ text: Schema.NullOr(Schema.String) }), {
+							text: `SELECT text FROM sys_message WHERE conversation = $1 AND role = 'assistant' AND meta->>'tag' = 'reply' ORDER BY seq`,
+							params: [c]
+						});
+						let got = yield* replies;
+						for (let n = 0; got.length < 2 && n < 20_000; n++) {
+							yield* Effect.promise(() => new Promise((resolve) => setTimeout(resolve, 0)));
+							got = yield* replies;
+						}
+						expect(got.at(-1)?.text).toBe(
+							'Filed Lot 7 at 12.50 and read it back against the table.'
 						);
-						expect(sent).toHaveLength(1);
-						expect(sent[0]).not.toContain('file_data');
-						expect(sent[0]).not.toContain('"type":"file"');
-						expect(sent[0]).not.toContain('data:application/pdf');
-						expect(sent[0]).toContain('data:image/jpeg;base64,');
+						expect(ai.requests).toHaveLength(6);
+						const steering = (r: AiRequest) =>
+							r.messages.filter(
+								(m) => typeof m.content === 'string' && m.content.includes('] ingest of tender.pdf')
+							);
+						expect(steering(ai.requests[2]!)).toEqual([
+							{
+								role: 'user',
+								content: expect.stringMatching(
+									/^\[note\]\n\[job \w+ done\] ingest of tender\.pdf → output o1 "tender\.pdf \(ingested\)"\n {2}9 lines · 1 images · 1 tables\n {2}Map: L1–9 Cover \(Pricing L3–9\)\n {2}Read it with read_file \{ output: o1, from: … \}$/
+								)
+							}
+						]);
+						// sent exactly once: later steps carry it as history, never a second copy
+						expect(steering(ai.requests[5]!)).toHaveLength(1);
+						expect(toolResults(ai.requests[3]!).at(-1)).toMatchObject({
+							lines: [
+								'4: <table>',
+								'5: <tr><td>Lot</td><td>Rate</td></tr>',
+								'6: <tr><td>7</td><td>12.50</td></tr>',
+								'7: </table>'
+							]
+						});
+						expect(yield* quotes(t, 'Lot 7 at 12.50')).toEqual([
+							{ title: 'Lot 7 at 12.50', created_by: root }
+						]);
+						expect(JSON.stringify(toolResults(ai.requests[5]!).at(-1))).toContain('Lot 7 at 12.50');
+						for (const r of ai.requests)
+							expect((r.files ?? []).every((f) => f.mime !== 'application/pdf')).toBe(true);
 					}).pipe(Effect.provide(fixture.context));
 				})
 			)

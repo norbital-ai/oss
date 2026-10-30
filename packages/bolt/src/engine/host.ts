@@ -19,6 +19,7 @@ import {
 	Manifest,
 	Outbound,
 	Reads,
+	RunEnds,
 	RunHandlers,
 	Runs,
 	Telemetry,
@@ -94,6 +95,7 @@ export type EngineServices =
 	| Guest
 	| Telemetry
 	| Nudges
+	| RunEnds
 	| TurnHandlers
 	| TriageService
 	| AgentDrains;

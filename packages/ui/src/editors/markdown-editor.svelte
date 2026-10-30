@@ -39,6 +39,7 @@ Markdown as plain text with the `/` block menu and `@` mentions, and an optional
 <script lang="ts">
 	import { Effect } from 'effect';
 	import Textarea from '../primitives/textarea/textarea.svelte';
+	import TabStrip from '../primitives/tabs/tab-strip.svelte';
 	import { cn } from '../primitives/utils.js';
 	import CommandMenu from './command-menu.svelte';
 	import { filterItems, type CommandTrigger } from './command-menu.js';
@@ -84,23 +85,15 @@ Markdown as plain text with the `/` block menu and `@` mentions, and an optional
 {:else}
 	<div class={cn('flex min-w-0 flex-col gap-1.5', className)} data-markdown-editor>
 		{#if preview}
-			<div
-				class="flex gap-1 self-start rounded-sm border bg-muted/40 p-0.5 text-xs font-medium"
-				role="tablist"
-			>
-				{#each ['write', 'preview'] as const as t (t)}
-					<button
-						type="button"
-						role="tab"
-						aria-selected={tab === t}
-						onclick={() => (tab = t)}
-						class={cn(
-							'rounded-sm px-2.5 py-1 capitalize',
-							tab === t ? 'bg-background shadow-xs' : 'text-muted-foreground hover:text-foreground'
-						)}>{t}</button
-					>
-				{/each}
-			</div>
+			<TabStrip
+				label="Markdown"
+				value={tab}
+				items={[
+					{ name: 'write', title: 'Write' },
+					{ name: 'preview', title: 'Preview' }
+				]}
+				onValueChange={(next) => (tab = next === 'preview' ? 'preview' : 'write')}
+			/>
 		{/if}
 		{#if tab === 'preview' && preview}
 			<ReadonlyMarkdown {value} class="min-h-16 rounded-sm border px-3 py-2" />

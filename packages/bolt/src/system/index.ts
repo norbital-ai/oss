@@ -1310,6 +1310,9 @@ export type SystemNames = {
 					};
 				};
 			};
+			search: {
+				text: readonly ['name', 'email'];
+			};
 		};
 	};
 	relationships: {

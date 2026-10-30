@@ -3,9 +3,9 @@
 A CodeMirror code editor for JavaScript (also CEL and TypeScript expressions), JSON or plain text.
 -->
 <script lang="ts" module>
-	import { HighlightStyle, syntaxHighlighting } from '@codemirror/language';
+	import { syntaxHighlighting } from '@codemirror/language';
 	import { EditorView } from '@codemirror/view';
-	import { tags as t } from '@lezer/highlight';
+	import { codeHighlighter } from './highlight.js';
 	/** Code in CodeMirror: `javascript` (also CEL and TypeScript expressions), `json`, or `plaintext`. */
 	export type CodeEditorLanguage = 'javascript' | 'json' | 'plaintext';
 	/**
@@ -61,35 +61,7 @@ A CodeMirror code editor for JavaScript (also CEL and TypeScript expressions), J
 			color: 'var(--accent-foreground)'
 		}
 	});
-	const highlight = syntaxHighlighting(
-		HighlightStyle.define([
-			{
-				tag: [t.comment, t.lineComment, t.blockComment],
-				color: 'var(--muted-foreground)',
-				fontStyle: 'italic'
-			},
-			{ tag: [t.string, t.special(t.string)], color: 'var(--success)' },
-			{ tag: [t.number, t.integer, t.float], color: 'var(--brand-600)' },
-			{
-				tag: [t.bool, t.null, t.atom, t.keyword, t.operatorKeyword, t.typeName, t.propertyName],
-				color: 'var(--info)'
-			},
-			{
-				tag: [
-					t.controlKeyword,
-					t.moduleKeyword,
-					t.function(t.variableName),
-					t.function(t.propertyName)
-				],
-				color: 'var(--brand-700)'
-			},
-			{
-				tag: [t.operator, t.punctuation, t.bracket, t.paren, t.brace, t.squareBracket],
-				color: 'var(--muted-foreground)'
-			},
-			{ tag: t.invalid, color: 'var(--destructive)' }
-		])
-	);
+	const highlight = syntaxHighlighting(codeHighlighter);
 </script>
 
 <script lang="ts">

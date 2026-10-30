@@ -11,6 +11,7 @@ import {
 	Effect,
 	Exit,
 	Fiber,
+	FiberSet,
 	Layer,
 	Predicate,
 	Schema,
@@ -26,6 +27,7 @@ import type {
 	LogRow
 } from '../src/engine/contracts.ts';
 import { DbError } from '../src/engine/errors.ts';
+import { BoltError } from '../src/protocol/errors.ts';
 import type { AgentEngine } from '../src/engine/agent/index.ts';
 import {
 	catalogue,
@@ -51,6 +53,10 @@ import { treeDigest } from '../src/engine/artifact/read.ts';
 import { Approvals, Callables, Live, Reads, Writes } from '../src/engine/services.ts';
 import { TestWorkspace } from '../../bolt-cli/src/test/effect.ts';
 import { toolSchema } from '../src/engine/agent/ai.ts';
+import type { Ingested } from '../src/engine/contracts.ts';
+import { FacilityFailure } from '../src/decl/errors.ts';
+import type { ToolAnswer } from '../src/engine/agent/ai.ts';
+import { randomUUID } from 'node:crypto';
 import { actorRef } from '../src/engine/write/commit.ts';
 
 const member = (
@@ -84,7 +90,7 @@ const member = (
 				).models
 			: {},
 	automations: [],
-	capabilities: { apps: [], tools: o.tools ?? [], mcp: [], skills: [] },
+	capabilities: { apps: [], tools: o.tools ?? [], mcp: [] },
 	limits: [],
 	teamTree: [],
 	scopes: {}
@@ -292,6 +298,62 @@ describe('job waits', () => {
 			);
 			expect(yield* Deferred.isDone(released)).toBe(true);
 		})
+	);
+});
+describe('job steering lines', () => {
+	it.effect('a finished job leaves one line for the next step; wait collects it instead', () =>
+		Effect.scoped(
+			Effect.gen(function* () {
+				const list = yield* jobs();
+				const a = yield* list.add('first', Effect.succeed({ ok: true }));
+				const b = yield* list.add(
+					'second',
+					Effect.fail(BoltError.make('invalidInput', 'decode', 'bad input'))
+				);
+				const c = yield* list.add('third', Effect.succeed(3), {
+					done: (id) => `[job ${id} done] custom`
+				});
+				expect(yield* list.settled(10_000)).toBe(true);
+				expect(yield* list.wait([c], 1000)).toMatchObject({ job: c, result: 3 });
+				expect(list.take()).toEqual([
+					`[job ${a} done] first: {"ok":true}`,
+					`[job ${b} failed] second: bad input; tell the person`
+				]);
+				expect(list.take()).toEqual([]);
+				expect(list.pending()).toEqual([]);
+			})
+		)
+	);
+	it.effect('a detached job outlives the turn: its line, and any left untaken, go to late', () =>
+		Effect.gen(function* () {
+			const late: string[] = [];
+			const detached = yield* FiberSet.make<unknown, never>();
+			const gate = yield* Deferred.make<void>();
+			let id = '',
+				untaken = '';
+			yield* Effect.scoped(
+				Effect.gen(function* () {
+					const list = yield* jobs({
+						detached,
+						late: (lines) => Effect.sync(() => late.push(...lines))
+					});
+					id = yield* list.add('ingest of a.pdf', Deferred.await(gate).pipe(Effect.as('ok')), {
+						detach: true
+					});
+					untaken = yield* list.add('quick', Effect.succeed(1));
+					yield* list.settled(10_000);
+					// a detached job does not hold the turn open
+					expect(list.running()).toBe(0);
+				})
+			);
+			expect(late).toEqual([`[job ${untaken} done] quick: 1`]);
+			yield* Deferred.succeed(gate, undefined);
+			yield* FiberSet.awaitEmpty(detached);
+			expect(late).toEqual([
+				`[job ${untaken} done] quick: 1`,
+				`[job ${id} done] ingest of a.pdf: "ok"`
+			]);
+		}).pipe(Effect.scoped)
 	);
 });
 describe('spending caps', () => {
@@ -513,10 +575,21 @@ describe('fewer calls for the common paths', () => {
 				expect(schema).not.toContain('cost');
 				// describe of a named output: its fields alone
 				expect(yield* result(x, 'read', { tasks: { describe: true, output: 'brief' } })).toEqual({
-					result: { tasks: { model: 'tasks', output: 'brief', fields: { title: 'text' } } }
+					result: {
+						tasks: {
+							model: 'tasks',
+							output: 'brief',
+							fields: { title: 'text' },
+							search: { text: { fields: ['title'], use: expect.any(String) } }
+						}
+					}
 				});
 				// the read names its output; the engine reads it
 				yield* result(x, 'read', { tasks: { output: 'brief' } });
+				expect(JSON.stringify(reads)).toContain('"output":"brief"');
+				// a root that names none reads the first output the caller holds, never a refused default
+				reads.length = 0;
+				expect(yield* result(x, 'read', { tasks: {} })).toHaveProperty('result');
 				expect(JSON.stringify(reads)).toContain('"output":"brief"');
 				// an administrator reads every output: describe of default names both
 				const admin = compileAuthority(
@@ -529,6 +602,108 @@ describe('fewer calls for the common paths', () => {
 					result: {
 						tasks: { outputs: ['default', 'brief'], fields: { title: 'text', cost: 'int' } }
 					}
+				});
+			})
+	);
+	it.effect("describe lists only the columns the caller's policies let it write", () =>
+		Effect.gen(function* () {
+			const narrow: EngineManifest = {
+				...manifest,
+				models: {
+					tasks: {
+						...manifest.models.tasks!,
+						fields: { title: { kind: 'text' }, status: { kind: 'text', optional: true } }
+					}
+				},
+				exposures: {
+					tasks: {
+						read: { tasks: { fields: 'all' } },
+						create: { columns: { tasks: ['title', 'status'] } }
+					}
+				},
+				policies: {
+					clerk: {
+						description: '',
+						grants: { tasks: { read: true, create: { columns: { tasks: ['title'] } } } }
+					}
+				}
+			};
+			const clerk = compileAuthority(
+				narrow,
+				{ actor: member().actor, admin: false, policies: ['clerk'] },
+				'k'
+			);
+			const x = yield* ctx({ authority: clerk }, { manifest: narrow });
+			expect(yield* result(x, 'read', { tasks: { describe: true } })).toMatchObject({
+				result: { tasks: { writes: { 'tasks.create': { columns: { tasks: ['title'] } } } } }
+			});
+		})
+	);
+	it.effect("describe names the columns each write takes and a create's required ones", () =>
+		Effect.gen(function* () {
+			const x = yield* ctx({});
+			expect(yield* result(x, 'read', { tasks: { describe: true } })).toMatchObject({
+				result: {
+					tasks: {
+						writes: {
+							'tasks.create': { columns: { tasks: expect.any(Array) }, required: ['title'] }
+						}
+					}
+				}
+			});
+		})
+	);
+	it.effect(
+		'describe names how a root is searched: its readable text fields and each index with its input format',
+		() =>
+			Effect.gen(function* () {
+				const searched: EngineManifest = {
+					...manifest,
+					models: {
+						tasks: {
+							...manifest.models.tasks!,
+							fields: { title: { kind: 'text' }, note: { kind: 'text' } },
+							search: {
+								text: ['title', 'note'],
+								indexes: {
+									colour: {
+										description: 'Colour',
+										dim: 3,
+										metric: 'l2',
+										input: {
+											light: { kind: 'enum', values: ['D65', 'A'] },
+											lab: { kind: 'custom', of: 'lab' }
+										}
+									}
+								}
+							}
+						}
+					},
+					exposures: { tasks: { read: { tasks: { fields: ['title'] } } } },
+					customFields: {
+						lab: {
+							description: 'L*a*b*',
+							shape: { kind: 'object', fields: { l: { kind: 'number', min: 0, max: 100 } } }
+						}
+					}
+				};
+				const x = yield* ctx({}, { manifest: searched });
+				expect(yield* result(x, 'read', { tasks: { describe: true } })).toMatchObject({
+					result: {
+						tasks: {
+							// `note` is outside the output read, so a search never matches it
+							search: {
+								text: { fields: ['title'] },
+								colour: { input: { light: 'enum D65 | A', lab: { l: 'number 0..100' } } }
+							}
+						}
+					}
+				});
+				// a model without an index says so: it is narrowed with where alone
+				const { search: _search, ...unsearched } = manifest.models.tasks!;
+				const y = yield* ctx({}, { manifest: { ...manifest, models: { tasks: unsearched } } });
+				expect(yield* result(y, 'read', { tasks: { describe: true } })).toMatchObject({
+					result: { tasks: { search: null } }
 				});
 			})
 	);
@@ -993,96 +1168,448 @@ describe('describe_workspace', () => {
 		})
 	);
 });
-describe('read_file on a PDF', () => {
-	const pdf = new TextEncoder().encode('%PDF-1.7 doc'),
-		typed =
-			'Trial 42: colour matched to the master within tolerance, approved by the lab on the second run.';
-	const reading = (ports: Parameters<typeof ctx>[0]) =>
-		ctx(
-			{
-				attachments: { read: () => Effect.succeed({ mime: 'application/pdf', bytes: pdf }) },
-				...ports
-			},
-			{
-				db: {
-					read: () =>
-						Effect.succeed([
-							{
-								rows: [{ file: { id: 'f1', name: 'form.pdf', mime: 'application/pdf' } }],
-								affected: 0
-							}
-						])
-				}
-			}
+describe('ingest: a job per file, filed in the outputs, read in windows', () => {
+	const HTML = [
+		'<h1>Cover</h1>',
+		'<p>Tender for site works</p>',
+		'<h2>Pricing</h2>',
+		'<table>',
+		'<tr><td>Lot</td><td>Rate</td></tr>',
+		'<tr><td>7</td><td>12.50</td></tr>',
+		'</table>',
+		'<p><img src="image-1.png" alt="site plan"></p>',
+		'<p>End</p>'
+	].join('\n');
+	const PNG = new Uint8Array([0x89, 0x50, 0x4e, 0x47]);
+	const tender: Ingested = {
+		kind: 'document',
+		html: HTML,
+		images: [{ name: 'image-1.png', mime: 'image/png', bytes: PNG }],
+		meta: { stats: { pages: 2, bytes: 100, cpuMs: 40, wallMs: 90 } }
+	};
+	/** A conversation `conversation` holding one uploaded file as its input; its context reads it. */
+	const holding = (
+		conversation: string,
+		file: { name: string; mime: string; bytes: Uint8Array },
+		over: Parameters<typeof ctx>[0] = {}
+	) =>
+		Effect.gen(function* () {
+			const x = yield* ctx({
+				attachments: { read: () => Effect.die('read through ingest') },
+				...over
+			});
+			x.conv = { ...x.conv, id: conversation };
+			const files = x.engine.files!;
+			const blob = yield* files.put(file.bytes, file);
+			const id = randomUUID();
+			yield* x.engine.db.write({
+				text: `INSERT INTO sys_file (id, name, mime, size, key, sha256, field, created_at, created_by) VALUES ($1,$2,$3,$4,$5,$6,'sys_conversation.inputs',now(),'ann')`,
+				params: [id, file.name, file.mime, file.bytes.length, blob.key, blob.sha256]
+			});
+			yield* x.engine.db.write({
+				text: `INSERT INTO sys_conversation (id, owner, inputs) VALUES ($1, 'ann', $2::jsonb)`,
+				params: [conversation, JSON.stringify([{ id, name: file.name, mime: file.mime }])]
+			});
+			return { x, id };
+		});
+	const outputs = (x: ToolContext) =>
+		Effect.map(
+			x.engine.db.read([
+				{ text: 'SELECT outputs FROM sys_conversation WHERE id = $1', params: [x.conv.id] }
+			]),
+			([r]) => r?.rows[0]?.['outputs']
 		);
-	it.effect('a text PDF answers its own text; nothing is shown', () =>
-		Effect.gen(function* () {
-			const x = yield* reading({
-				documentText: () => Effect.succeed(`[Page 1]\n${typed}`),
-				documentPages: () => Effect.die('a text PDF renders nothing')
-			});
-			expect(yield* result(x, 'read_file', { id: 'f1' })).toMatchObject({
-				result: { text: `[Page 1]\n${typed}` }
-			});
-			expect(x.files).toEqual([]);
-		})
+	const job = (answer: ToolAnswer): string => {
+		const r = 'result' in answer ? answer.result : null;
+		if (!Predicate.isObject(r) || Array.isArray(r) || typeof r['job'] !== 'string')
+			throw new Error(`no job in ${JSON.stringify(r)}`);
+		return r['job'];
+	};
+	it.effect(
+		'a data ingest stores data.json and its images, no HTML; read_file answers its summary',
+		() =>
+			Effect.gen(function* () {
+				const bytes = new TextEncoder().encode(`rates ${randomUUID()}`);
+				const json = {
+					sheets: [
+						{
+							name: 'Rates',
+							columns: ['Item', 'Rate'],
+							rows: [
+								['Labour', 42.5],
+								['Plant', 80]
+							],
+							images: [{ name: 'image-1.png', row: 0, col: 1 }]
+						}
+					]
+				};
+				const { x, id } = yield* holding(
+					`c-${randomUUID()}`,
+					{
+						name: 'rates.xlsx',
+						mime: `application/vnd.openxmlformats-officedocument.spreadsheetml.sheet`,
+						bytes
+					},
+					{
+						ingest: () =>
+							Effect.succeed({
+								kind: 'data',
+								json,
+								images: [{ name: 'image-1.png', mime: 'image/png', bytes: PNG }],
+								meta: { stats: { pages: null, bytes: 50, cpuMs: 2, wallMs: 3 } }
+							})
+					}
+				);
+				const j = job(yield* result(x, 'ingest', { id }));
+				expect(yield* x.jobs.settled(10_000)).toBe(true);
+				const listed = yield* outputs(x);
+				const entry = Array.isArray(listed) ? listed[0] : undefined;
+				const data =
+					Predicate.isObject(entry) && Array.isArray(entry['files'])
+						? entry['files'].find((f) => Predicate.isObject(f) && f['name'] === 'data.json')
+						: undefined;
+				const dataId = Predicate.isObject(data) ? String(data['id']) : '';
+				expect(entry).toEqual({
+					id: dataId,
+					name: 'rates.xlsx (data)',
+					mime: 'application/json',
+					size: JSON.stringify(json).length,
+					files: [
+						expect.objectContaining({ name: 'images/image-1.png', mime: 'image/png' }),
+						expect.objectContaining({ name: 'data.json', mime: 'application/json' })
+					],
+					ingest: expect.objectContaining({ output: 'o1', source: id, status: 'ready', job: j })
+				});
+				expect(x.jobs.take()).toEqual([
+					[
+						`[job ${j} done] ingest of rates.xlsx → output o1 "rates.xlsx (data)"`,
+						'  Rates (2 rows)',
+						`  Compute from it with run_js, never retype: data.json ${dataId} — run_js { files: [{ id }] }`,
+						'  Read its summary with read_file { output: o1 }'
+					].join('\n')
+				]);
+				expect(yield* result(x, 'read_file', { output: 'o1' })).toEqual({
+					result: {
+						output: 'o1',
+						file: 'rates.xlsx (data)',
+						data: [
+							{
+								name: 'Rates',
+								columns: ['Item', 'Rate'],
+								rows: 2,
+								first: json.sheets[0]!.rows,
+								images: [{ name: 'image-1.png', row: 0, col: 1 }]
+							}
+						],
+						note: `compute from data.json, never retype: run_js { files: [{ id: '${dataId}' }] }; its images: read_file { output: o1, image: n }`
+					}
+				});
+				expect(yield* result(x, 'read_file', { output: 'o1', text: 'Labour' })).toEqual({
+					result: {
+						error: expect.stringContaining('o1 is data, not lines: there is no text search')
+					}
+				});
+				expect(yield* result(x, 'read_file', { output: 'o1', image: 1 })).toMatchObject({
+					result: { image: 'image-1.png' }
+				});
+				expect(x.files.map((f) => f.mime)).toEqual(['image/png']);
+				expect(
+					kitLogs
+						.get(x)
+						?.filter((r) => r.event === 'ingest.convert' && r.conversation === x.conv.id)
+						.map((r) => r.attributes)
+				).toEqual([
+					expect.objectContaining({ kind: 'data', cached: false, bytes: 50, cpuMs: 2, wallMs: 3 })
+				]);
+			})
 	);
-	it.effect('a scan: its pages are shown as images with the scan note, never the PDF', () =>
-		Effect.gen(function* () {
-			const pages = [new Uint8Array([1]), new Uint8Array([2])];
-			const x = yield* reading({
-				documentText: () =>
-					Effect.succeed('[Page 1]\n(no extractable text: a scanned page)\n\n[Page 2]\nstamp'),
-				documentPages: (_file, count) => Effect.succeed(pages.slice(0, count))
-			});
-			expect(yield* result(x, 'read_file', { id: 'f1' })).toMatchObject({
-				result: {
-					attached: expect.stringContaining('its 2 pages are shown to you'),
-					note: expect.stringContaining('verified')
-				}
-			});
-			expect(x.files).toEqual([
-				{ mime: 'image/jpeg', bytes: pages[0], id: 'f1#page1' },
-				{ mime: 'image/jpeg', bytes: pages[1], id: 'f1#page2' }
-			]);
-			// asked for again as an image: the same pages, already in view, and no PDF part
-			expect(yield* result(x, 'read_file', { id: 'f1', as: 'image' })).toMatchObject({
-				result: { attached: expect.stringContaining('already shown') }
-			});
-			expect(x.files.map((f) => f.mime)).toEqual(['image/jpeg', 'image/jpeg']);
-		})
-	);
-	it.effect('a mixed PDF splits per page: text pages as text, the scanned page as its image', () =>
-		Effect.gen(function* () {
-			const rendered: number[] = [];
-			const x = yield* reading({
-				documentText: () =>
-					Effect.succeed(
-						`[Page 1]\n${typed}\n\n[Page 2]\n(image-only page: the text below is an OCR layer, not the page's own text)\n${typed}\n\n[Page 3]\n${typed}`
-					),
-				documentPages: (_file, count) =>
-					Effect.sync(() => {
-						rendered.push(count);
-						return [new Uint8Array([1]), new Uint8Array([2])];
+	it.effect(
+		'answers at once with a job; its end steers the next step once; the entry is grouped; windows read it',
+		() =>
+			Effect.gen(function* () {
+				const bytes = new TextEncoder().encode(`%PDF tender ${randomUUID()}`);
+				let calls = 0;
+				const { x, id } = yield* holding(
+					`c-${randomUUID()}`,
+					{ name: 'tender.pdf', mime: 'application/pdf', bytes },
+					{ ingest: () => Effect.sync(() => (calls++, tender)) }
+				);
+				const answer = yield* result(x, 'ingest', { id });
+				const j = job(answer);
+				expect(answer).toEqual({
+					result: { job: j, output: 'o1', note: expect.stringContaining('ingesting tender.pdf') }
+				});
+				expect(yield* x.jobs.settled(10_000)).toBe(true);
+				expect(x.jobs.take()).toEqual([
+					[
+						`[job ${j} done] ingest of tender.pdf → output o1 "tender.pdf (ingested)"`,
+						'  9 lines · 1 images · 1 tables',
+						'  Map: L1–9 Cover (Pricing L3–9)',
+						'  Read it with read_file { output: o1, from: … }'
+					].join('\n')
+				]);
+				expect(x.jobs.take()).toEqual([]);
+				expect(calls).toBe(1);
+				// one grouped entry: the HTML is its file; the index and images ride under it
+				expect(yield* outputs(x)).toEqual([
+					{
+						id: expect.any(String),
+						name: 'tender.pdf (ingested)',
+						mime: 'text/html',
+						size: HTML.length,
+						files: [
+							expect.objectContaining({ name: 'tender.html', mime: 'text/html' }),
+							expect.objectContaining({ name: 'images/image-1.png', mime: 'image/png' }),
+							expect.objectContaining({ name: 'index.json', mime: 'application/json' })
+						],
+						ingest: expect.objectContaining({
+							output: 'o1',
+							source: id,
+							status: 'ready',
+							job: j,
+							lines: 9
+						})
+					}
+				]);
+				expect(
+					kitLogs
+						.get(x)
+						?.filter((r) => r.event === 'ingest.convert' && r.conversation === x.conv.id)
+				).toEqual([
+					expect.objectContaining({
+						turn: 't1',
+						attributes: expect.objectContaining({
+							kind: 'document',
+							cached: false,
+							pages: 2,
+							bytes: 100,
+							cpuMs: 40,
+							wallMs: 90
+						})
 					})
-			});
-			const answer = yield* result(x, 'read_file', { id: 'f1' });
-			expect(answer).toMatchObject({
-				result: {
-					text: `[Page 1]\n${typed}\n\n[Page 2]\n(scanned: read it from its page image)\n\n[Page 3]\n${typed}`
+				]);
+				// a window inside the table reads the table whole, and none of its images
+				expect(yield* result(x, 'read_file', { output: 'o1', from: 5, to: 5 })).toEqual({
+					result: {
+						output: 'o1',
+						file: 'tender.pdf (ingested)',
+						lines: [
+							'4: <table>',
+							'5: <tr><td>Lot</td><td>Rate</td></tr>',
+							'6: <tr><td>7</td><td>12.50</td></tr>',
+							'7: </table>'
+						],
+						at: 'lines 4–7 of 9 · read_file { output: o1, from: 8 }'
+					},
+					bounded: true
+				});
+				expect(x.files).toEqual([]);
+				expect(yield* result(x, 'read_file', { output: 'o1', from: 4, to: 7 })).toMatchObject({
+					result: { note: expect.stringContaining('already above') }
+				});
+				expect(yield* result(x, 'read_file', { id, from: 8 })).toMatchObject({
+					result: {
+						lines: ['8: <p><img src="image-1.png" alt="site plan"></p>', '9: <p>End</p>'],
+						images: ['image-1.png'],
+						at: 'lines 8–9 of 9 · the end'
+					}
+				});
+				expect(x.files.map((f) => f.mime)).toEqual(['image/png']);
+				expect(yield* result(x, 'read_file', { output: 'o1', text: '12.50' })).toMatchObject({
+					result: {
+						total: 1,
+						hits: [{ from: 4, to: 7, text: '<tr><td>7</td><td>12.50</td></tr>' }]
+					}
+				});
+				expect(yield* result(x, 'read_file', { output: 'o1', image: 1 })).toMatchObject({
+					result: { image: 'image-1.png' }
+				});
+				// the same file again is the same output
+				expect(yield* result(x, 'ingest', { id })).toMatchObject({
+					result: { output: 'o1', note: expect.stringContaining('is ingested') }
+				});
+			})
+	);
+	it.effect(
+		'a cache hit in another conversation converts nothing and still finishes as a job',
+		() =>
+			Effect.gen(function* () {
+				const bytes = new TextEncoder().encode(`%PDF shared ${randomUUID()}`);
+				let calls = 0;
+				const port = { ingest: () => Effect.sync(() => (calls++, tender)) };
+				const first = yield* holding(
+					`c-${randomUUID()}`,
+					{ name: 'a.pdf', mime: 'application/pdf', bytes },
+					port
+				);
+				yield* result(first.x, 'ingest', { id: first.id });
+				yield* first.x.jobs.settled(10_000);
+				const other = yield* holding(
+					`c-${randomUUID()}`,
+					{ name: 'b.pdf', mime: 'application/pdf', bytes },
+					port
+				);
+				const j = job(yield* result(other.x, 'ingest', { id: other.id }));
+				yield* other.x.jobs.settled(10_000);
+				expect(other.x.jobs.take()[0]).toContain(`[job ${j} done] ingest of b.pdf → output o1`);
+				expect(calls).toBe(1);
+				expect(
+					kitLogs
+						.get(other.x)
+						?.filter((r) => r.event === 'ingest.convert' && r.conversation === other.x.conv.id)
+						.map((r) => r.attributes)
+				).toEqual([expect.objectContaining({ cached: true })]);
+				expect(yield* result(other.x, 'read_file', { output: 'o1', from: 1, to: 2 })).toMatchObject(
+					{
+						result: { lines: ['1: <h1>Cover</h1>', '2: <p>Tender for site works</p>'] }
+					}
+				);
+			})
+	);
+	it.effect('a failed job says so once; reading it while it runs says it is still ingesting', () =>
+		Effect.gen(function* () {
+			const gate = yield* Deferred.make<void>();
+			const { x, id } = yield* holding(
+				`c-${randomUUID()}`,
+				{ name: 'bad.pdf', mime: 'application/pdf', bytes: new TextEncoder().encode(randomUUID()) },
+				{
+					ingest: () =>
+						Deferred.await(gate).pipe(
+							Effect.andThen(
+								Effect.fail(
+									new FacilityFailure({ kind: 'upstream', message: 'the PDF is encrypted' })
+								)
+							)
+						)
 				}
+			);
+			const j = job(yield* result(x, 'ingest', { id }));
+			expect(yield* result(x, 'read_file', { output: 'o1' })).toEqual({
+				result: { note: `still ingesting: ${j}` }
 			});
-			expect(rendered).toEqual([2]);
-			expect(x.files).toEqual([{ mime: 'image/jpeg', bytes: new Uint8Array([2]), id: 'f1#page2' }]);
+			yield* Deferred.succeed(gate, undefined);
+			yield* x.jobs.settled(10_000);
+			expect(x.jobs.take()).toEqual([
+				`[job ${j} failed] ingest of bad.pdf: the PDF is encrypted; tell the person`
+			]);
+			expect(yield* result(x, 'read_file', { output: 'o1' })).toMatchObject({
+				result: { error: expect.stringContaining('the PDF is encrypted') }
+			});
 		})
 	);
-	it.effect('a scan on a host that renders no pages is an explicit answer, never the raw PDF', () =>
+	it.effect(
+		"audio is Convert's speaker sections, its transcript derived, its model calls an ai.call observation",
+		() =>
+			Effect.gen(function* () {
+				const html = [
+					'<section data-speaker="S1" data-start="1" data-end="3"><time>00:00:01</time> Pour on Friday?</section>',
+					'<section data-speaker="S2" data-start="4" data-end="65"><time>00:00:04</time> Agreed.</section>'
+				].join('\n');
+				const { x, id } = yield* holding(
+					`c-${randomUUID()}`,
+					{
+						name: 'site-meeting.m4a',
+						mime: 'audio/mp4',
+						bytes: new TextEncoder().encode(randomUUID())
+					},
+					{
+						ingest: () =>
+							Effect.succeed({
+								kind: 'document',
+								html,
+								images: [],
+								meta: {
+									usage: {
+										calls: ['gen-1'],
+										model: 'gemini-x',
+										input: 900,
+										output: 40,
+										cost: 0.002
+									},
+									stats: { pages: null, bytes: 36, cpuMs: 0, wallMs: 900 }
+								}
+							})
+					}
+				);
+				const j = job(yield* result(x, 'ingest', { id }));
+				yield* x.jobs.settled(10_000);
+				const [line] = x.jobs.take();
+				expect(line?.split('\n')).toEqual([
+					`[job ${j} done] ingest of site-meeting.m4a → output o1 "site-meeting.m4a (transcript)"`,
+					'  00:01:05 · 2 speakers · 2 lines',
+					'  Map: L1–1 S1 00:00:01 · L2–2 S2 00:00:04',
+					'  Read it with read_file { output: o1, from: … }',
+					expect.stringMatching(/^ {2}Typed JSON for run_js .*: transcript\.json \S+ — run_js/)
+				]);
+				const listed = yield* outputs(x);
+				const entry = Array.isArray(listed) ? listed[0] : undefined;
+				const stored =
+					Predicate.isObject(entry) && Array.isArray(entry['files'])
+						? entry['files'].find((f) => Predicate.isObject(f) && f['name'] === 'transcript.json')
+						: undefined;
+				const [read] = yield* x.engine.db.read([
+					{
+						text: 'SELECT key, size FROM sys_file WHERE id = $1',
+						params: [Predicate.isObject(stored) ? String(stored['id']) : '']
+					}
+				]);
+				const key = read?.rows[0]?.['key'],
+					size = read?.rows[0]?.['size'];
+				if (typeof key !== 'string' || typeof size !== 'number')
+					throw new Error('no transcript.json');
+				expect(JSON.parse(new TextDecoder().decode(yield* x.engine.files!.get(key, size)))).toEqual(
+					{
+						durationMs: 65_000,
+						speakers: ['S1', 'S2'],
+						segments: [
+							{ speaker: 'S1', start: 1, end: 3, text: 'Pour on Friday?' },
+							{ speaker: 'S2', start: 4, end: 65, text: 'Agreed.' }
+						]
+					}
+				);
+				expect(yield* result(x, 'read_file', { output: 'o1' })).toMatchObject({
+					result: { lines: html.split('\n').map((l, i) => `${i + 1}: ${l}`) }
+				});
+				expect(
+					kitLogs.get(x)?.find((r) => r.event === 'ai.call' && r.conversation === x.conv.id)
+				).toMatchObject({
+					turn: 't1',
+					attributes: {
+						calls: ['gen-1'],
+						model: 'gemini-x',
+						cost: 0.002,
+						facility: 'convert.ingest',
+						settlement: 'pending'
+					}
+				});
+			})
+	);
+	it.effect('no parser, and no converter, are immediate answers', () =>
 		Effect.gen(function* () {
-			const x = yield* reading({});
-			expect(yield* result(x, 'read_file', { id: 'f1' })).toMatchObject({
-				result: { error: expect.stringContaining('cannot be read here') }
+			const video = yield* holding(`c-${randomUUID()}`, {
+				name: 'site.mp4',
+				mime: 'video/mp4',
+				bytes: new Uint8Array([1])
 			});
-			expect(x.files).toEqual([]);
+			expect(yield* result(video.x, 'ingest', { id: video.id })).toEqual({
+				result: {
+					error: expect.stringContaining('no parser: build a tool for it with your workspace tools')
+				}
+			});
+			const pdf = yield* holding(`c-${randomUUID()}`, {
+				name: 'a.pdf',
+				mime: 'application/pdf',
+				bytes: new Uint8Array([2])
+			});
+			expect(yield* result(pdf.x, 'ingest', { id: pdf.id })).toEqual({
+				result: { error: 'This host cannot ingest files.' }
+			});
+			// a document is never read whole: read_file names ingest
+			expect(yield* result(pdf.x, 'read_file', { id: pdf.id, from: 1 })).toEqual({
+				result: {
+					error: `Lines, text and images read an ingest: call ingest { id: '${pdf.id}' } first.`
+				}
+			});
 		})
 	);
 });
@@ -1236,7 +1763,15 @@ describe('act starts automations', () => {
 			active = 'run-1';
 			expect(
 				yield* result(x, 'act', { callable: 'automation.tidy', input: { day: '2026-09-01' } })
-			).toEqual({ result: { run: 'run-1', alreadyActive: true } });
+				// the active run is still the one whose end the agent hears: a job
+			).toEqual({
+				result: {
+					job: expect.any(String),
+					run: 'run-1',
+					alreadyActive: true,
+					note: expect.any(String)
+				}
+			});
 			expect(started).toHaveLength(2);
 		})
 	);

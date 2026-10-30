@@ -99,21 +99,54 @@ describe('fromAbi', () => {
 	it.effect('Speech: a provider refusal keeps its kind; an `off` group is unavailable', () =>
 		Effect.gen(function* () {
 			const speech = Speech.fromAbi({
-				transcribe: async () =>
-					Promise.reject({ kind: 'tooLarge', message: 'the audio is over 2 hours' }),
-				speak: async () => Promise.reject({ kind: 'invalid', message: 'not here' })
+				speak: async () =>
+					Promise.reject({ kind: 'tooLarge', message: 'the text is over 5,000 characters' })
 			});
 			const refused = yield* Effect.flip(
-				using(Speech, speech, (s) =>
-					s.transcribe({ name: 'a.mp3', mime: 'audio/mpeg', bytes: new Uint8Array() }, {})
-				)
+				using(Speech, speech, (s) => s.speak('hi', { format: 'mp3' }))
 			);
 			expect(refused).toBeInstanceOf(FacilityFailure);
-			expect(refused).toMatchObject({ kind: 'tooLarge', message: 'the audio is over 2 hours' });
+			expect(refused).toMatchObject({
+				kind: 'tooLarge',
+				message: 'the text is over 5,000 characters'
+			});
 			expect(
-				yield* Effect.flip(using(Speech, Speech.fromAbi(off), (s) => s.speak('hi', { format: 'mp3' })))
+				yield* Effect.flip(
+					using(Speech, Speech.fromAbi(off), (s) => s.speak('hi', { format: 'mp3' }))
+				)
 			).toBeInstanceOf(Unavailable);
 		})
+	);
+
+	it.effect(
+		'Convert.ingest: an answer is decoded; a thrown unavailable keeps its kind; no port, no ingest',
+		() =>
+			Effect.gen(function* () {
+				const file = { sha256: 'a', name: 'a.mp3', mime: 'audio/mpeg', bytes: new Uint8Array() };
+				const unsupported = Convert.fromAbi(off, async () => ({ unsupported: 'no parser' }));
+				expect(
+					yield* using(Convert, unsupported, (c) => c.ingest?.(file, {}) ?? Effect.die('no ingest'))
+				).toEqual({ unsupported: 'no parser' });
+				const mute = Convert.fromAbi(off, async () =>
+					Promise.reject({
+						kind: 'unavailable',
+						facility: 'convert.ingest',
+						reason: 'no transcription model'
+					})
+				);
+				expect(
+					yield* Effect.flip(
+						using(Convert, mute, (c) => c.ingest?.(file, {}) ?? Effect.die('no ingest'))
+					)
+				).toMatchObject({
+					_tag: 'Unavailable',
+					facility: 'convert.ingest',
+					reason: 'no transcription model'
+				});
+				expect(
+					yield* using(Convert, Convert.fromAbi(off), (c) => Effect.succeed(c.ingest))
+				).toBeUndefined();
+			})
 	);
 
 	it.live('Geo: past its wall a call times out and the provider signal is aborted', () =>

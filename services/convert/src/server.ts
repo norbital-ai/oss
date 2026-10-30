@@ -7,6 +7,10 @@
 //   GET  /v1/jobs/:id/events    the job's events, closed once it settles; `?result` streams the result too (a
 //                               /v1/convert whose connection dropped resumes here: the job lives on in the queue)
 //   GET  /v1/jobs/:id/result    the converted bytes
+//   POST /v1/ingest             { name, mime, bytes (base64), options? } → the same stream; `event: result` is the
+//                               parse ({ kind: 'document', html, images } or { kind: 'data', json, images })
+//                               with the job's own meta: { usage?, stats }; also
+//                               POST /v1/jobs { op: 'ingest', … } → 202 job
 //   GET  /healthz               unauthenticated liveness and queue depth
 //
 // Every replica serves every route and pulls from the shared queue, so any load balancer in front spreads the HTTP and
@@ -37,15 +41,21 @@ import {
 	type Request,
 	type Target
 } from './convert.ts';
+import { ingester, route, type Ingester } from './ingest.ts';
+import { hasVideo, transcriber } from './transcribe.ts';
 import { openQueue, type Job } from './queue.ts';
 
 export type Options = {
 	keys: readonly string[];
 	database: string;
 	convert: Converter;
+	ingest?: Ingester;
+	/** The ingester transcribes audio; without it audio answers 503. */
+	transcribes?: boolean;
 	concurrency?: number;
 	maxQueued?: number;
 	maxBytes?: number;
+	maxIngestBytes?: number;
 	retainMs?: number;
 	pollMs?: number;
 };
@@ -76,6 +86,28 @@ const StoredRequest = Schema.fromJsonString(
 		)
 	)
 );
+const AudioOptions = Schema.Struct({
+	diarize: Schema.optionalKey(Schema.Boolean),
+	language: Schema.optionalKey(Schema.String),
+	speakers: Schema.optionalKey(Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 50 }))),
+	prompt: Schema.optionalKey(Schema.String.check(Schema.isMaxLength(4000)))
+});
+const StoredIngest = Schema.fromJsonString(
+	Schema.Struct({
+		op: Schema.Literal('ingest'),
+		name: Schema.String,
+		mime: Schema.String,
+		options: Schema.optionalKey(AudioOptions)
+	})
+);
+const IngestBody = Schema.Struct({
+	op: Schema.optionalKey(Schema.Literal('ingest')),
+	name: Schema.NonEmptyString,
+	mime: Schema.String,
+	bytes: Schema.String.check(Schema.isPattern(/^[A-Za-z0-9+/=\s]*$/)),
+	options: Schema.optionalKey(AudioOptions)
+});
+const isIngest = Schema.is(Schema.Struct({ op: Schema.Literal('ingest') }));
 class HttpFailed extends Schema.TaggedError<HttpFailed>()('HttpFailed', {
 	status: Schema.Literals([400, 413, 500]),
 	message: Schema.String
@@ -98,6 +130,7 @@ export function service(o: Options) {
 		concurrency = availableParallelism(),
 		maxQueued = 1000,
 		maxBytes = 20 * 1024 * 1024,
+		maxIngestBytes = 200 * 1024 * 1024,
 		retainMs = 3_600_000,
 		pollMs = 500
 	} = o;
@@ -141,6 +174,12 @@ export function service(o: Options) {
 			active++;
 			changed();
 			const conversion = Effect.gen(function* () {
+				const ingest = Schema.decodeUnknownResult(StoredIngest)(claimed.request);
+				if (Result.isSuccess(ingest)) {
+					if (!o.ingest) return yield* Effect.fail(new Error('This replica does not ingest.'));
+					const out = yield* o.ingest({ ...ingest.success, bytes: claimed.reference ?? new Uint8Array() });
+					return { result: new TextEncoder().encode(JSON.stringify(out)), mime: 'application/json' };
+				}
 				const request = yield* Schema.decodeUnknownEffect(StoredRequest)(claimed.request);
 				const result = yield* o.convert(request, claimed.reference);
 				return { result, mime: TARGETS[request.to] };
@@ -204,7 +243,7 @@ export function service(o: Options) {
 			.writeHead(status, { 'content-type': 'application/json', ...headers })
 			.end(JSON.stringify(body));
 
-	const body = (req: IncomingMessage) =>
+	const body = (req: IncomingMessage, limit: number) =>
 		Effect.callback<Buffer, HttpFailed>((resume) => {
 			const chunks: Buffer[] = [];
 			let size = 0;
@@ -224,14 +263,14 @@ export function service(o: Options) {
 			};
 			const data = (chunk: Buffer) => {
 				size += chunk.length;
-				if (size > maxBytes) {
+				if (size > limit) {
 					cleanup();
 					req.resume();
 					resume(
 						Effect.fail(
 							new HttpFailed({
 								status: 413,
-								message: `The request is larger than ${maxBytes} bytes.`
+								message: `The request is larger than ${limit} bytes.`
 							})
 						)
 					);
@@ -313,7 +352,7 @@ export function service(o: Options) {
 			const out = withResult ? queue.result(who, id) : undefined;
 			if (out)
 				res.write(
-					`event: result\ndata: ${JSON.stringify({ mime: out.mime, to: out.target, bytes: Buffer.from(out.result).toString('base64') })}\n\n`
+					`event: result\ndata: ${out.target === 'ingest' ? Buffer.from(out.result).toString('utf8') : JSON.stringify({ mime: out.mime, to: out.target, bytes: Buffer.from(out.result).toString('base64') })}\n\n`
 				);
 			close();
 		};
@@ -344,12 +383,33 @@ export function service(o: Options) {
 					);
 				if (
 					req.method === 'POST' &&
-					(url.pathname === '/v1/jobs' || url.pathname === '/v1/convert')
+					(url.pathname === '/v1/jobs' || url.pathname === '/v1/convert' || url.pathname === '/v1/ingest')
 				) {
 					if (stopping) return send(res, 503, { error: 'This replica is shutting down.' });
 					if (queue.depth() >= maxQueued)
 						return send(res, 429, { error: 'The queue is full.' }, { 'retry-after': '5' });
-					const parsed = parse(yield* body(req));
+					const raw = yield* body(req, url.pathname === '/v1/convert' ? maxBytes : maxIngestBytes);
+					if (url.pathname === '/v1/ingest' || isIngest(raw)) {
+						const r = Schema.decodeUnknownResult(IngestBody)(raw);
+						if (Result.isFailure(r))
+							return send(res, 400, { error: 'The body is { name, mime, bytes (base64) }.' });
+						const { bytes: base64, op: _, ...stored } = r.success;
+						const where = route(stored.name, stored.mime);
+						if (!where.ok) return send(res, 415, { error: 'unsupported', message: where.message });
+						const bytes = Buffer.from(base64, 'base64');
+						if (where.probe && (yield* hasVideo(bytes)))
+							return send(res, 415, { error: 'unsupported', message: 'no parser: build a tool for it with your workspace tools' });
+						if (where.kind === 'audio' && !o.transcribes)
+							return send(res, 503, { error: 'unavailable', message: 'this converter has no transcription model' });
+						const job = queue.submit(who, 'ingest', JSON.stringify({ op: 'ingest', ...stored }), bytes);
+						pump();
+						if (url.pathname === '/v1/ingest') return watch(req, res, who, job.id, true);
+						return send(res, 202, job, { location: `/v1/jobs/${job.id}` });
+					}
+					if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return send(res, 400, { error: 'The body is a JSON object.' });
+					if (Buffer.byteLength(JSON.stringify(raw)) > maxBytes)
+						return send(res, 413, { error: `The request is larger than ${maxBytes} bytes.` });
+					const parsed = parse(raw);
 					if (typeof parsed === 'string') return send(res, 400, { error: parsed });
 					const job = queue.submit(
 						who,
@@ -375,7 +435,7 @@ export function service(o: Options) {
 					.writeHead(200, {
 						'content-type': out.mime,
 						'content-length': String(out.result.byteLength),
-						'content-disposition': `attachment; filename="${id}.${out.target}"`
+						'content-disposition': `attachment; filename="${id}.${out.target === 'ingest' ? 'json' : out.target}"`
 					})
 					.end(out.result);
 			}).pipe(
@@ -435,6 +495,11 @@ if (import.meta.main) {
 	const env = process.env;
 	const int = (name: string) => (env[name] ? Number(env[name]) : undefined);
 	const timeoutMs = (int('CONVERT_TIMEOUT_S') ?? 60) * 1000;
+	const ai = { key: env['CONVERT_AI_API_KEY'], model: env['CONVERT_TRANSCRIBE_MODEL'] };
+	const transcribe =
+		ai.key && ai.model
+			? transcriber({ baseUrl: env['CONVERT_AI_BASE_URL'] ?? 'https://openrouter.ai/api/v1', apiKey: ai.key, model: ai.model })
+			: undefined;
 	const svc = service({
 		keys: (env['CONVERT_API_KEYS'] ?? '')
 			.split(',')
@@ -442,11 +507,19 @@ if (import.meta.main) {
 			.filter(Boolean),
 		database: join(env['CONVERT_DATA'] ?? '/var/lib/convert', 'jobs.db'),
 		convert: pandoc({ timeoutMs, heap: env['CONVERT_PANDOC_HEAP'] ?? '512m' }),
+		ingest: ingester({
+			lanes: int('CONVERT_KREUZBERG_LANES') ?? 2,
+			...(transcribe ? { transcribe } : {})
+		}),
+		transcribes: transcribe !== undefined,
 		...(int('CONVERT_CONCURRENCY') === undefined
 			? {}
 			: { concurrency: int('CONVERT_CONCURRENCY')! }),
 		...(int('CONVERT_MAX_QUEUED') === undefined ? {} : { maxQueued: int('CONVERT_MAX_QUEUED')! }),
 		...(int('CONVERT_MAX_BYTES') === undefined ? {} : { maxBytes: int('CONVERT_MAX_BYTES')! }),
+		...(int('CONVERT_INGEST_MAX_BYTES') === undefined
+			? {}
+			: { maxIngestBytes: int('CONVERT_INGEST_MAX_BYTES')! }),
 		...(int('CONVERT_RETAIN_S') === undefined ? {} : { retainMs: int('CONVERT_RETAIN_S')! * 1000 })
 	});
 	const port = int('PORT') ?? 8080;

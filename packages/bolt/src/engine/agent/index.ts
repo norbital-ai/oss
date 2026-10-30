@@ -17,6 +17,7 @@ import {
 	FiberSet,
 	Layer,
 	Option,
+	PubSub,
 	Queue,
 	Schedule,
 	Schema,
@@ -45,6 +46,7 @@ import {
 	Live,
 	Manifest,
 	Reads,
+	RunEnds,
 	RunHandlers,
 	Wake,
 	Writes,
@@ -121,6 +123,7 @@ import {
 	JOBS,
 	jobs,
 	perform,
+	runJob,
 	turnFacts,
 	workspaceSchema,
 	WriteInput,
@@ -145,8 +148,10 @@ export type AgentEngine = {
 	act: WritesShape['act'];
 	approvals: ApprovalsShape;
 	files?: Files['Service'] | undefined;
-	/** The host's document converter: the `document` tool. */
+	/** The host's document converter: the `document` tool, and its ingest port the `ingest` tool. */
 	convert?: Convert['Service'] | undefined;
+	/** Run ends as they are written (`RunEnds`): a run the agent started is a job that ends with it. */
+	runEnds?: PubSub.PubSub<readonly string[]> | undefined;
 	/** Fresh guest isolates for `run_js`, and the outbound HTTP a granted script's `http` makes. */
 	guest?: GuestIsolates['Service'] | undefined;
 	http?: Http['Service'] | undefined;
@@ -177,23 +182,6 @@ export type AgentConfig = {
 	resolve?: (as: As) => Effect.Effect<Authority | null, EngineError>;
 	mcp?: McpHost;
 	attachments?: AttachmentPort;
-	/**
-	 * A document's own text, page by page, where it has a text layer (the host's extractor; a scanned page is marked
-	 * `(no extractable text: …)`): `read_file` answers it, exact and at once.
-	 */
-	documentText?: (
-		file: { mime: string; bytes: Uint8Array },
-		signal: AbortSignal
-	) => Promise<string>;
-	/**
-	 * A PDF's first `pages` pages as JPEG images (the host's renderer): `read_file` shows a scanned page as pixels.
-	 * Without it a scanned page is reported unreadable; the raw PDF never goes to a model that does not take `pdf`.
-	 */
-	documentPages?: (
-		file: { mime: string; bytes: Uint8Array },
-		pages: number,
-		signal: AbortSignal
-	) => Promise<readonly Uint8Array[]>;
 	geocoder?: Geo['Service'];
 	docs?: Docs['Service'];
 	/** The released source (`workspace_search`); a host reads it from the artifact (`workspaceFiles`). */
@@ -758,6 +746,25 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 			Effect.catchTag('Unusable', (error) => Effect.logWarning(error).pipe(Effect.as(null)))
 		);
 	});
+	/**
+	 * Job lines no running turn takes (a job that ended after its turn, or one the turn left untaken): queued in the
+	 * conversation as notes from the starter, and the conversation is kicked, so a turn runs on them.
+	 */
+	const steer = (conversation: string, as: As | null, lines: readonly string[]) =>
+		Effect.gen(function* () {
+			for (const line of lines)
+				yield* insert({
+					conversation,
+					role: 'system',
+					content: { text: line },
+					text: line,
+					state: 'queued',
+					mode: 'agent',
+					as,
+					meta: { tag: 'note' }
+				});
+			yield* FiberSet.run(detached, kick(conversation));
+		}).pipe(Effect.tapCause(Effect.logWarning), Effect.ignore);
 	const drainTurn = Effect.fn('Agents.drain')(function* (
 		id: string,
 		options: DrainOptions = {}
@@ -786,7 +793,8 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 		const receipts: Receipt[] = [...(options.receipts ?? [])],
 			read: ToolContext['read'] = new Map(),
 			files: ToolContext['files'] = [],
-			work = yield* jobs(),
+			// a job that finishes after the turn closed (an ingest), or one the turn left untaken, is queued here and wakes it
+			work = yield* jobs({ detached, late: (lines) => steer(id, as, lines) }),
 			failures = new Map<string, number>();
 		// a pure tool's call just made, as its key, when it succeeded: the same call again straight after answers nothing new
 		let previous = '';
@@ -1105,6 +1113,16 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 					continue;
 				}
 				force = false;
+				// plan 12: each job that finished since the last step says so once, at the end of the context (the cached
+				// prefix is unchanged)
+				for (const line of work.take())
+					yield* write({
+						conversation: id,
+						role: 'system',
+						content: { text: line },
+						text: line,
+						meta: { tag: 'note' }
+					});
 				if (as === null) {
 					const prior = (yield* transcript(id)).findLast((r) => r.as !== null);
 					as = prior?.as ?? null;
@@ -1196,7 +1214,8 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 				const who = rows.findLast((r) => r.as !== null && r.role === 'user');
 				const said = who === undefined || who.role === 'tool' ? null : who.content,
 					tz = typeof said === 'object' ? said?.tz : undefined;
-				const b = yield* config.bindings;
+				const b = yield* config.bindings,
+					ingester = e.convert?.ingest;
 				const ctx: ToolContext = {
 					engine: e,
 					conv,
@@ -1215,25 +1234,11 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 					mcpTools,
 					hostTools,
 					attachments: config.attachments,
-					...(config.documentText === undefined
+					...(ingester === undefined
 						? {}
 						: {
-								documentText: (file: { mime: string; bytes: Uint8Array }) =>
-									Port.attempt('documents', (signal) => config.documentText!(file, signal)).pipe(
-										Port.call('documents', 30000),
-										Effect.mapError((e) => BoltError.make('unavailable', 'facility', e.message, e))
-									)
-							}),
-					...(config.documentPages === undefined
-						? {}
-						: {
-								documentPages: (file: { mime: string; bytes: Uint8Array }, pages: number) =>
-									Port.attempt('documents', (signal) =>
-										config.documentPages!(file, pages, signal)
-									).pipe(
-										Port.call('documents', 60000),
-										Effect.mapError((e) => BoltError.make('unavailable', 'facility', e.message, e))
-									)
+								ingest: (file: { sha256: string; name: string; mime: string; bytes: Uint8Array }) =>
+									ingester(file, {}).pipe(Port.call('ingest', JOBS.hostMs))
 							}),
 					// every inward agent reads the source (models, policies) for exact shapes; a public envoy's or external member's turn does not
 					workspace: external ? undefined : config.workspace,
@@ -1471,6 +1476,8 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 					});
 				const request: Omit<AiRequest, 'tools'> = {
 					model: conv.model,
+					// reasoning tokens are most of a step's time and cost: medium keeps the judgement, not the essays
+					effort: 'medium',
 					system: system({
 						envoy: envoy === undefined ? undefined : envoyName(envoy.name),
 						brief,
@@ -1553,7 +1560,8 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 					...(c.invalid === undefined ? {} : { invalid: c.invalid })
 				}));
 				// a reply while background work runs is interim: the turn collects the work and goes on (today's child report-back)
-				const collecting = r.finish !== 'cut' && calls.length === 0 && work.pending().length > 0;
+				const collecting =
+					r.finish !== 'cut' && calls.length === 0 && (work.running() > 0 || work.ready() > 0);
 				const done = r.finish !== 'cut' && calls.length === 0 && !collecting;
 				// a turn never settles on silence: an empty reply is asked for once more, then answered visibly
 				if (done && text.trim() === '' && cut === null) {
@@ -1625,26 +1633,15 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 				}
 				cut = null;
 				if (collecting) {
-					const settled: string[] = [];
-					for (
-						let got = yield* work.wait([], JOBS.waitMs);
-						got !== null;
-						got = yield* work.wait([], JOBS.waitMs)
-					)
-						settled.push(
-							`- ${got.label} (job ${got.job}): ${JSON.stringify(bounded(got.result).value)}`
-						);
-					const note =
-						settled.length === 0
-							? 'Background work did not finish in time.'
-							: `Background work finished:\n${settled.join('\n')}`;
-					yield* write({
-						conversation: id,
-						role: 'system',
-						content: { text: note },
-						text: note,
-						meta: { tag: 'note' }
-					});
+					// the finished jobs' messages open the next step
+					if (!(yield* work.settled(JOBS.waitMs)))
+						yield* write({
+							conversation: id,
+							role: 'system',
+							content: { text: 'Background work did not finish in time.' },
+							text: 'Background work did not finish in time.',
+							meta: { tag: 'note' }
+						});
 					continue;
 				}
 				if (done) {
@@ -2298,7 +2295,7 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 								BoltError.make('invalidInput', 'decode', error.message, error)
 							)
 						);
-						result = yield* perform(
+						const started = yield* perform(
 							{
 								engine: e,
 								authority,
@@ -2311,6 +2308,13 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 							write.callable,
 							write.input ?? null,
 							call.id
+						);
+						// a confirmed start is a job too: no turn holds it, so its end is queued and wakes the conversation
+						result = yield* Effect.scoped(
+							Effect.flatMap(
+								jobs({ detached, late: (lines) => steer(r.conversation, as, lines) }),
+								(once) => runJob(once, e, authority, write.callable, started)
+							)
 						);
 					}
 				}
@@ -2398,6 +2402,7 @@ export const AgentsLive = Layer.effectContext(
 			files = yield* Files,
 			images = yield* Images,
 			convert = yield* Convert,
+			runEnds = yield* RunEnds,
 			guest = yield* GuestIsolates,
 			http = yield* Http,
 			bundler = yield* Effect.serviceOption(Bundler),
@@ -2432,6 +2437,7 @@ export const AgentsLive = Layer.effectContext(
 				approvals,
 				files,
 				convert,
+				runEnds,
 				guest,
 				http,
 				...Option.match(bundler, { onNone: () => ({}), onSome: (b) => ({ bundler: b }) })

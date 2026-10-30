@@ -196,7 +196,7 @@ export {
 } from './facilities.ts';
 export { Syncs, SyncsLive, SyncHealth } from './sync/index.ts';
 export { OutboundLive, sendInputSchema } from './integrations/outbound.ts';
-export { documentConverter, type DocumentConverterConfig } from './convert.ts'; // the open-source ConvertPort (Norbital Convert, oss/services/convert)
+export { documentConverter, documentIngester, type DocumentConverterConfig } from './convert.ts'; // the open-source ConvertPort (Norbital Convert, oss/services/convert)
 export {
 	httpOAuth,
 	httpRequest,
@@ -338,8 +338,9 @@ export type {
 // ── exports: decl ──
 export type {
 	GeoHit,
+	IngestIndex,
+	IngestOptions,
 	SpeechFormat,
-	TranscribeOptions,
 	Transcript,
 	TranscriptSegment
 } from '../decl/runtime/facilities.ts';

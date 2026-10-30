@@ -23,20 +23,13 @@ const pdf = (content: string) => {
 	return new TextEncoder().encode(out);
 };
 const text = 'BT /F1 12 Tf 10 100 Td (Colour match trial 42 approved by the lab) Tj ET';
-const image = 'q 200 0 0 200 0 0 cm BI /W 1 /H 1 /CS /G /BPC 8 ID \x80 EI Q';
 
 describe('extractDocumentText', () => {
-	it.live('flags a scan under an invisible OCR layer as an image-only page', () =>
+	it.live("answers a page's text layer as it is, with no flags", () =>
 		Effect.gen(function* () {
-			const scan = yield* extractDocumentText(
-				pdf(`${image}\nBT 3 Tr ET\n${text.replace('BT', 'BT 3 Tr')}`),
-				'application/pdf'
-			);
-			expect(scan.body).toContain('(image-only page');
-			expect(scan.body).toContain('Colour match trial 42');
 			const typed = yield* extractDocumentText(pdf(text), 'application/pdf');
-			expect(typed.body).not.toContain('(image-only page');
 			expect(typed.body).toContain('Colour match trial 42');
+			expect(typed.body).not.toContain('(page has images)');
 		})
 	);
 });

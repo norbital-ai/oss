@@ -21,6 +21,7 @@ import { xlsxCells, xlsxSheets } from './files/xlsx.ts';
 import { sha256Hex } from '@norbital-ai/store';
 import { DecisionRequestSchema } from './decisions/index.ts';
 import { inferFacility } from './agent/ai.ts';
+import { indexOf, transcriptOf } from './agent/ingest.ts';
 import { PATHS } from '../protocol/wire.ts';
 
 const FileRow = Schema.Struct({
@@ -447,23 +448,6 @@ export function facilityDispatch(ports: FacilityPorts): Facilities['Service']['d
 						yield* ports.ai.embed(resolved, embedding.model ?? 'default', embedding.dimensions)
 					);
 				}
-				case 'ai.transcribe': {
-					const row = yield* rowOf(first);
-					const bytes = yield* ports.files.get(row.key, LIMITS.storedFileBytes);
-					const spec = yield* decode(
-						Schema.Struct({
-							diarize: Schema.optionalKey(Schema.Boolean),
-							language: Schema.optionalKey(Schema.String),
-							speakers: Schema.optionalKey(Schema.Int.check(Schema.isGreaterThan(0))),
-							prompt: Schema.optionalKey(Schema.String)
-						}),
-						given ?? {},
-						'transcribe options are invalid'
-					);
-					return answered(
-						yield* ports.speech.transcribe({ name: row.name, mime: row.mime, bytes }, spec)
-					);
-				}
 				case 'ai.speak': {
 					const text = yield* decode(Schema.String, first, 'speak takes text');
 					const spec = yield* decode(
@@ -503,6 +487,51 @@ export function facilityDispatch(ports: FacilityPorts): Facilities['Service']['d
 					);
 					return answered(yield* convertWith(ports)(source, request));
 				}
+				case 'convert.ingest': {
+					const row = yield* rowOf(first);
+					const { for: owner, ...options } = yield* decode(
+						Schema.Struct({
+							for: Schema.optionalKey(Schema.String),
+							diarize: Schema.optionalKey(Schema.Boolean),
+							language: Schema.optionalKey(Schema.String),
+							speakers: Schema.optionalKey(Schema.Int.check(Schema.isGreaterThan(0))),
+							prompt: Schema.optionalKey(Schema.String)
+						}),
+						given ?? {},
+						'convert.ingest takes { for?, diarize?, language?, speakers?, prompt? }'
+					);
+					if (ports.convert.ingest === undefined)
+						return yield* Port.unavailable('convert.ingest', 'the host provides no ingest');
+					const bytes = yield* ports.files.get(row.key, LIMITS.storedFileBytes);
+					const got = yield* ports.convert.ingest(
+						{ sha256: row.sha256, name: row.name, mime: row.mime, bytes },
+						options
+					);
+					if ('unsupported' in got)
+						return yield* Effect.fail(
+							new FacilityFailure({ kind: 'unsupported', message: got.unsupported })
+						);
+					const images =
+						owner === undefined
+							? undefined
+							: yield* Effect.forEach(got.images, (image) =>
+									storeFile(ports)(
+										image.bytes,
+										{ name: image.name, mime: image.mime, for: owner },
+										'convert.ingest'
+									)
+								);
+					const stored = images === undefined ? {} : { images };
+					if (got.kind === 'data') return answered({ kind: 'data', json: got.json, ...stored });
+					const transcript = transcriptOf(got.html);
+					return answered({
+						kind: 'document',
+						html: got.html,
+						index: indexOf(got.html),
+						...stored,
+						...(transcript === undefined ? {} : { transcript })
+					});
+				}
 			}
 		}).pipe(
 			Effect.provideService(Images, ports.images),
@@ -512,15 +541,17 @@ export function facilityDispatch(ports: FacilityPorts): Facilities['Service']['d
 					? self
 					: Port.call(
 							call._tag,
-							call._tag === 'ai.transcribe' || call._tag === 'ai.speak'
-								? LIMITS.callMs.speech
-								: call._tag === 'files.image'
-									? LIMITS.callMs.image
-									: call._tag.startsWith('ai.')
-										? LIMITS.callMs.ai
-										: call._tag === 'convert.document'
-											? LIMITS.callMs.database
-											: LIMITS.callMs.other
+							call._tag === 'convert.ingest'
+								? LIMITS.callMs.ingest
+								: call._tag === 'ai.speak'
+									? LIMITS.callMs.speech
+									: call._tag === 'files.image'
+										? LIMITS.callMs.image
+										: call._tag.startsWith('ai.')
+											? LIMITS.callMs.ai
+											: call._tag === 'convert.document'
+												? LIMITS.callMs.database
+												: LIMITS.callMs.other
 						)(self),
 			Effect.mapError((error): PortFailure =>
 				error._tag === 'FacilityFailure' || error._tag === 'Unavailable'

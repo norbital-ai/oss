@@ -174,6 +174,18 @@
 		pdf: 'application/pdf',
 		docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
 		xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+		pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+		doc: 'application/msword',
+		xls: 'application/vnd.ms-excel',
+		ppt: 'application/vnd.ms-powerpoint',
+		odt: 'application/vnd.oasis.opendocument.text',
+		ods: 'application/vnd.oasis.opendocument.spreadsheet',
+		odp: 'application/vnd.oasis.opendocument.presentation',
+		rtf: 'application/rtf',
+		mp3: 'audio/mpeg',
+		m4a: 'audio/mp4',
+		wav: 'audio/wav',
+		ogg: 'audio/ogg',
 		...Object.fromEntries(
 			['txt', 'md', 'csv', 'tsv', 'json', 'xml', 'log', 'yaml', 'yml'].map((e) => [e, 'text/plain'])
 		)
@@ -188,7 +200,7 @@
 		);
 		const all = [...attached, ...typed];
 		if (typed.some((f) => f.type === '' || f.size === 0))
-			return void (error = t('Attach a nonempty image, PDF, DOCX, XLSX or text document.'));
+			return void (error = t('Attach a nonempty image, document, spreadsheet, slides, recording or text file.'));
 		if (all.length > 8 || all.reduce((n, f) => n + f.size, 0) > 20 * 1024 * 1024)
 			return void (error = t('Attach at most 8 files totaling 20 MiB.'));
 		error = null;
@@ -693,6 +705,8 @@
 	let log = $state<LogRow[]>([]);
 	/** The decisions (by event) and steps (by row) a reader opened. */
 	const expanded = new SvelteSet<string>();
+	/** Step groups (by item key) the reader opened or closed: their choice outlasts the next step's re-render. */
+	const folded = new SvelteMap<string, boolean>();
 	/** The transcript's rows, not their streaming text: a decision lands with a new row, so a streamed token reads no log. */
 	const moved = $derived(
 		$transcript === undefined
@@ -911,7 +925,9 @@
 			context: last?.context,
 			window: last?.window,
 			input: usages.reduce((n, u) => n + u.input, 0),
+			cached: usages.reduce((n, u) => n + (u.cached ?? 0), 0),
 			output: usages.reduce((n, u) => n + u.output, 0),
+			reasoning: usages.reduce((n, u) => n + (u.reasoning ?? 0), 0),
 			cost: costs.length === 0 ? null : costs.reduce((n, u) => n + (u.cost ?? 0), 0)
 		};
 	});
@@ -1778,9 +1794,17 @@
 								<dt class="text-muted-foreground">{t('Input')}</dt>
 								<dd>{k(meter.input)}</dd>
 							</div>
+							<div class="flex justify-between gap-2 pl-3" data-context-cached>
+								<dt class="text-muted-foreground">{t('from cache')}</dt>
+								<dd>{k(meter.cached)}</dd>
+							</div>
 							<div class="flex justify-between gap-2">
 								<dt class="text-muted-foreground">{t('Output')}</dt>
 								<dd>{k(meter.output)}</dd>
+							</div>
+							<div class="flex justify-between gap-2 pl-3" data-context-reasoning>
+								<dt class="text-muted-foreground">{t('reasoning')}</dt>
+								<dd>{k(meter.reasoning)}</dd>
 							</div>
 							{#if meter.cost !== null}<div class="flex justify-between gap-2">
 									<dt class="text-muted-foreground">{t('Cost')}</dt>
@@ -1965,13 +1989,22 @@
 										status === 'running' && (at === items.length - 1 || item.steps.some(active))}
 									{@const secs = worked(item.steps)}
 									{@const failures = failedVerbs(item.steps)}
+									{@const key = itemKey(at)}
+									{@const open = folded.get(key) ?? working}
 									<li
 										{@attach turns.measure(itemKey(at))}
 										data-role="steps"
 										data-outside-context={item.steps.every(outside) || undefined}
 										data-failed={failures.length > 0 || undefined}
 									>
-										<details class="group/work" open={working}>
+										<details
+											class="group/work"
+											{open}
+											ontoggle={(event) => {
+												if (event.currentTarget.open !== open)
+													folded.set(key, event.currentTarget.open);
+											}}
+										>
 											<summary
 												class="flex w-fit cursor-pointer list-none items-center gap-1.5 rounded-md py-0.5 text-xs text-muted-foreground hover:text-foreground [&::-webkit-details-marker]:hidden"
 												data-working={working || undefined}
@@ -2540,7 +2573,7 @@
 								class="sr-only"
 								aria-hidden="true"
 								tabindex="-1"
-								accept="image/*,text/*,application/pdf,application/json,application/xml,.docx,.xlsx,.md,.csv,.tsv,.log,.yaml,.yml"
+								accept="image/*,audio/*,text/*,application/pdf,application/json,application/xml,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.odt,.ods,.odp,.rtf,.md,.csv,.tsv,.log,.yaml,.yml"
 								onchange={(e) => {
 									attach([...(e.currentTarget.files ?? [])]);
 									e.currentTarget.value = '';

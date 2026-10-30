@@ -130,7 +130,7 @@ export const authority = (models: Authority['models'], admin = false): Authority
 	policies: ['p'],
 	models,
 	automations: [],
-	capabilities: { apps: [], tools: [], mcp: [], skills: [] },
+	capabilities: { apps: [], tools: [], mcp: [] },
 	limits: [],
 	teamTree: [],
 	scopes: {}

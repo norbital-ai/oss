@@ -1,11 +1,5 @@
-import {
-	openAiChat,
-	provideHttp,
-	type OpenAiChat,
-	type OpenAiChatConfig
-} from '@norbital-ai/bolt/engine';
-import { Array as EffectArray, Effect } from 'effect';
-import { models } from './models.ts';
+import { openAiChat, type OpenAiChat, type OpenAiChatConfig } from '@norbital-ai/bolt/engine';
+import { Array as EffectArray } from 'effect';
 
 type DeepSeekRouting = {
 	readonly provider?: {
@@ -25,30 +19,9 @@ export const deepSeekRouting = (endpoint: string, model: string): DeepSeekRoutin
 		: {};
 
 /** Provider routing uses the resolved model, including a catalog id chosen instead of a configured class. */
-export const openRouterChat = (
-	config: OpenAiChatConfig,
-	options: Parameters<typeof openAiChat>[1] = {}
-): OpenAiChat => {
-	// each model's input modalities from `/models`, read once the listing answers
-	let listed: ReadonlyMap<string, readonly string[]> | undefined;
-	const inputs = (model: string) =>
-		listed !== undefined
-			? Effect.succeed(listed.get(model))
-			: models({ baseUrl: config.endpoint, apiKey: config.credential }).pipe(
-					provideHttp(options),
-					Effect.map((catalogue) => {
-						const known = new Map(
-							catalogue.chat.flatMap((m) =>
-								m.architecture?.input_modalities === undefined
-									? []
-									: [[m.id, m.architecture.input_modalities] as const]
-							)
-						);
-						if (!catalogue.unread) listed = known;
-						return known.get(model);
-					})
-				);
-	return (request) => {
+export const openRouterChat =
+	(config: OpenAiChatConfig, options: Parameters<typeof openAiChat>[1] = {}): OpenAiChat =>
+	(request) => {
 		const model = config.models[request.model] ?? request.model;
 		const routing = deepSeekRouting(config.endpoint, model);
 		const configured = config.body?.['provider'];
@@ -62,7 +35,6 @@ export const openRouterChat = (
 			{
 				...config,
 				models: {},
-				inputs: config.inputs ?? inputs,
 				body: {
 					...config.body,
 					...(routing.provider === undefined
@@ -73,4 +45,3 @@ export const openRouterChat = (
 			options
 		)({ ...request, model });
 	};
-};

@@ -213,6 +213,11 @@ layer(workspace, { excludeTestServices: true })('engine', (it) => {
 				})).rows;
 				expect(audited.map((r) => r['title'])).toEqual(['a-order', 'b-order']);
 				expect(audited.every((r) => !('note' in r))).toBe(true);
+				// an aggregate names its output too: the auditor counts every row
+				const counted = yield* qReply(route, t.as(b).authority, {
+					reads: [{ m: 'aggregate', a: ['orders', { count: true, output: 'audit' }] }]
+				});
+				expect(counted.answers[0]).toMatchObject({ count: 2 });
 
 				expect(
 					yield* act(route, t, t.as(a).authority, 'orders.update', [

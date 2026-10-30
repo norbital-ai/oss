@@ -29,6 +29,7 @@
 		Sheet,
 		Spinner,
 		TAB_LEVEL,
+		TabStrip,
 		TableSkeleton,
 		Toaster,
 		cn,
@@ -663,22 +664,19 @@
 			<AppHeader {...hero} compact={narrow.current} actionsLabel={t('Page scope')} />
 		{/if}
 		{#if strip !== null}
-			<nav aria-label={t('Pages')} class={cn(INSET_X_CLASS, 'shrink-0 pt-3')}>
-				<Inline
-					gap="none"
-					class="gap-0.5 overflow-x-auto rounded-lg bg-muted p-0.5 [scrollbar-width:none]"
-				>
-					{#each strip as p (p.key)}
-						<a
-							href={based(p.href)}
-							aria-current={p.active ? 'page' : undefined}
-							class="inline-flex h-7 shrink-0 items-center gap-1.5 rounded-md px-3 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground aria-[current=page]:bg-background aria-[current=page]:text-foreground aria-[current=page]:shadow-sm"
-						>
-							{#if p.icon}<Icon name={p.icon} class="size-3.5" />{/if}{p.label}
-						</a>
-					{/each}
-				</Inline>
-			</nav>
+			<div class={cn(INSET_X_CLASS, 'shrink-0 pt-3')}>
+				<TabStrip
+					label={t('Pages')}
+					level={1}
+					value={strip.find((p) => p.active)?.key}
+					items={strip.map((p) => ({
+						name: p.key,
+						title: p.label,
+						href: based(p.href),
+						...(p.icon ? { icon: p.icon } : {})
+					}))}
+				/>
+			</div>
 		{/if}
 		{#if pageKey === null || config.pages[pageKey] === undefined}
 			<Center><p>{t('Not found or no access')}</p></Center>

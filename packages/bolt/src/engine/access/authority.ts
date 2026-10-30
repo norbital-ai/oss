@@ -294,14 +294,13 @@ export function compileAuthority(m: EngineManifest, holder: Holder, key: string)
 		apps: new Set<string>(),
 		kiosks: new Set<string>(),
 		tools: new Set<string>(),
-		mcp: new Set<string>(),
-		skills: new Set<string>()
+		mcp: new Set<string>()
 	};
 	const automations = new Set<string>();
 	const declared: LimitRule[] = [];
 	for (const p of policies) {
 		const spec = m.policies[p]!;
-		for (const k of ['apps', 'kiosks', 'tools', 'mcp', 'skills'] as const)
+		for (const k of ['apps', 'kiosks', 'tools', 'mcp'] as const)
 			for (const x of spec.capabilities?.[k] ?? []) caps[k].add(x);
 		for (const x of spec.automations ?? []) automations.add(x);
 		for (const [k, v] of Object.entries(spec.limits ?? {})) declared.push(...limitRules(k, v));
@@ -320,8 +319,7 @@ export function compileAuthority(m: EngineManifest, holder: Holder, key: string)
 			apps: list(caps.apps),
 			kiosks: list(caps.kiosks),
 			tools: list(caps.tools),
-			mcp: list(caps.mcp),
-			skills: list(caps.skills)
+			mcp: list(caps.mcp)
 		},
 		limits,
 		teamTree: holder.teamTree ?? [],

@@ -164,6 +164,10 @@ and never two model views stacked on one scroll. A tab body renders **one** thin
 - A model that exists only under one parent belongs inside that record, never a standalone
   app page. Put it in the relevant section or tab; a short inline value list needs no separate tab.
 - Nested `Tabs` step down a level on their own (segmented → underline → chips) and never add padding.
+- **One tab size everywhere.** Every strip is ui's compact size (a 1.75rem trigger, `text-xs`); the
+  three types (segmented, underline, chips) differ in look only. Use `Tabs`, or `TabStrip` for a
+  strip without bodies (a view switch); never hand-roll a `role="tab"` strip, pass a size, or
+  restyle a tab's height, padding, font or icon through `class`.
 - A nested strip (level 2 or deeper) of more than two tabs is **vertical** on its own: a rail on the
   left, the body on the right, a compact scroller on a phone. Two tabs stay horizontal. Pass
   `orientation` only to override.

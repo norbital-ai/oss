@@ -1,6 +1,6 @@
 <!--
 @component
-A one-time code in separate cells (bits-ui PinInput): the sign-in code step.
+A one-time code in separate cells (bits-ui PinInput): the sign-in code step. Focused on mount: the code step appears only once a code is sent.
 -->
 <script lang="ts">
 	import { Inline } from '../layout/index.js';
@@ -20,6 +20,7 @@ A one-time code in separate cells (bits-ui PinInput): the sign-in code step.
 		value = $bindable(''),
 		maxlength = 6,
 		disabled = false,
+		autofocus = true,
 		class: className,
 		cellClass,
 		'aria-invalid': ariaInvalid,
@@ -39,6 +40,7 @@ A one-time code in separate cells (bits-ui PinInput): the sign-in code step.
 	bind:value
 	{maxlength}
 	{disabled}
+	{autofocus}
 	pattern={REGEXP_ONLY_DIGITS}
 	inputmode="numeric"
 	autocomplete="one-time-code"

@@ -1,4 +1,4 @@
-// The example host file `env serve` runs: Colony's settings with transcription and no speak model still load it.
+// The example host file `env serve` runs: Colony's speech settings without a speak model still load it.
 import { describe, expect, it } from '@effect/vitest';
 import * as NodeServices from '@effect/platform-node/NodeServices';
 import { Effect, FileSystem, Path } from 'effect';
@@ -10,7 +10,7 @@ import { loadHost } from '@norbital-ai/bolt/node';
 const example = fileURLToPath(new URL('../example/norbital.host.ts', import.meta.url));
 
 describe('example/norbital.host.ts', () => {
-	it.live('loads with a transcribe model and no speak model, speech off', () =>
+	it.live('loads with a speech key and no speak model, speech off', () =>
 		Effect.gen(function* () {
 			const fs = yield* FileSystem.FileSystem,
 				path = yield* Path.Path;
@@ -30,8 +30,7 @@ describe('example/norbital.host.ts', () => {
 				BOLT_FILES_ENDPOINT: path.join(dir, 'files'),
 				BOLT_TRANSACTIONAL_EMAIL: 'log',
 				BOLT_AI_SPEECH_ENDPOINT: 'https://openrouter.ai/api/v1',
-				BOLT_AI_SPEECH_CREDENTIAL: 'test',
-				BOLT_AI_TRANSCRIBE_MODEL: 'google/gemini-3.8-flash'
+				BOLT_AI_SPEECH_CREDENTIAL: 'test'
 			});
 			const { facilities } = yield* loadHost(example);
 			expect(isOff(facilities.intelligence.speech)).toBe(true);

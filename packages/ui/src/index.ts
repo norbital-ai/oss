@@ -45,13 +45,7 @@ export type {
 	RecordHistorySource
 } from './record/RecordShell.svelte';
 export type { ApprovalView } from './client/contract.js';
-export type {
-	AutomationInputOf,
-	AutomationKey,
-	InsertOf,
-	RecordOf,
-	RowOf
-} from './model/types.js';
+export type { AutomationInputOf, AutomationKey, InsertOf, RecordOf, RowOf } from './model/types.js';
 /** An approval request: its timeline of steps and the decisions the host allows the viewer. */
 export { default as ApprovalPanel } from './approval/ApprovalPanel.svelte';
 export { default as Rows, type RowsProps } from './relations/Rows.svelte';
@@ -141,6 +135,7 @@ export {
 	default as WorkspaceOperations,
 	type WorkspaceOperationsProps
 } from './workspaces/WorkspaceOperations.svelte';
+export { releaseWindow } from './workspaces/filters.js';
 export type {
 	WorkspaceOperationsData,
 	WorkspaceOperation,

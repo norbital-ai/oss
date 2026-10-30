@@ -346,7 +346,71 @@ export type ConvertOptions = ConvertRequest & { for: FileOwner };
  * `ctx.convert` (optional host capability): only the targets `+workspace.ts` declares under `convert.to` type-check, and
  * the host confirms at start that it serves them. The output is stored like `files.put`'s, owned by `for`.
  */
-export type Convert = { document: Call<[source: ConvertSource, options: ConvertOptions], FileRef> };
+export type Convert = {
+	document: Call<[source: ConvertSource, options: ConvertOptions], FileRef>;
+	/**
+	 * Reads a stored file (optional host capability: Norbital Convert): a document as sanitised HTML, one block element per
+	 * line, and its index (audio also its diarised `transcript`); a spreadsheet, CSV or JSON as `data`. A format with no
+	 * parser fails `unsupported`.
+	 */
+	ingest: Call<[file: FileRef, options?: IngestOptions], Ingest>;
+};
+/**
+ * How `ctx.convert.ingest` reads: `for` stores the images the HTML references (`<img src>` is the index's image name),
+ * owned like `files.put`'s output. For audio, `diarize` tells speakers apart (default true), `language` a BCP 47 hint,
+ * `speakers` how many there are when known, `prompt` context such as names and vocabulary.
+ */
+export type IngestOptions = {
+	for?: FileOwner;
+	diarize?: boolean;
+	language?: string;
+	speakers?: number;
+	prompt?: string;
+};
+/**
+ * A document ingest's index, derived from its HTML: 1-based lines, the `<section data-page>` and `data-slide` counts, the
+ * outline (headings, then page, slide and speaker sections at level 7) with line ranges, the table count and image names.
+ */
+export type IngestIndex = {
+	readonly lines: number;
+	readonly pages: number;
+	readonly slides: number;
+	readonly outline: readonly {
+		readonly title: string;
+		readonly level: number;
+		readonly from: number;
+		readonly to: number;
+	}[];
+	readonly tables: number;
+	readonly images: readonly string[];
+};
+/** One stretch of speech: its speaker (`S1`, `S2`, … across the whole file), start and end in seconds, and the words. */
+export type TranscriptSegment = {
+	readonly speaker: string;
+	readonly start: number;
+	readonly end: number;
+	readonly text: string;
+};
+/** An audio ingest's transcript, read from its speaker sections: its length (the last end), speakers and segments. */
+export type Transcript = {
+	readonly durationMs: number;
+	readonly speakers: readonly string[];
+	readonly segments: readonly TranscriptSegment[];
+};
+/**
+ * `ctx.convert.ingest`'s answer; `images` only when `for` stored them. A `document` is HTML with its index (audio adds
+ * its `transcript`); `data` (a spreadsheet, CSV, JSON) is `{ sheets: [{ name, columns, rows, merges?, images? }] }`, or a
+ * JSON file's own value.
+ */
+export type Ingest =
+	| {
+			readonly kind: 'document';
+			readonly html: string;
+			readonly index: IngestIndex;
+			readonly images?: readonly FileRef[];
+			readonly transcript?: Transcript;
+	  }
+	| { readonly kind: 'data'; readonly json: Json; readonly images?: readonly FileRef[] };
 
 // ── ai, geo ──
 /**
@@ -490,33 +554,8 @@ export type Ai<Tools> = {
 		],
 		readonly Vector[]
 	>;
-	/** Speech to text (optional host capability, P19): long audio is transcribed in parts the host joins. */
-	transcribe: Call<[file: FileRef, options?: TranscribeOptions], Transcript>;
 	/** Text to speech (optional host capability, P19), stored like `files.put`'s output and owned by `for`. */
 	speak: Call<[text: string, options: SpeakOptions], FileRef>;
-};
-/**
- * How `ctx.ai.transcribe` listens: `diarize` tells speakers apart (default true), `language` a BCP 47 hint, `speakers`
- * how many there are when known, `prompt` context such as names and vocabulary.
- */
-export type TranscribeOptions = {
-	diarize?: boolean;
-	language?: string;
-	speakers?: number;
-	prompt?: string;
-};
-/** One stretch of speech: its speaker (`S1`, `S2`, … across the whole file), start and end in seconds, and the words. */
-export type TranscriptSegment = {
-	readonly speaker: string;
-	readonly start: number;
-	readonly end: number;
-	readonly text: string;
-};
-/** `ctx.ai.transcribe`'s answer: segments in order, the language heard (BCP 47, or null) and the audio's length. */
-export type Transcript = {
-	readonly segments: readonly TranscriptSegment[];
-	readonly language: string | null;
-	readonly durationMs: number;
 };
 /** An audio format `ctx.ai.speak` writes. */
 export type SpeechFormat = 'mp3' | 'wav' | 'ogg';

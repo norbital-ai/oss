@@ -4,7 +4,7 @@ import { Effect } from 'effect';
 import { rowsOf, transcriptRow } from '../src/engine/agent/schema.ts';
 import type { Json } from '../src/decl/values.ts';
 import type { AgentRow } from '../src/protocol/wire.ts';
-import { background, checkpointSections, childStatus, contextView, failedVerbs, failureOf, modelDividers, orbState, captionOf, logsOf, previewsOf, reportView, resultLine, revisable, runState } from '../src/shell/agent/view.ts';
+import { background, checkpointSections, childStatus, contextView, failedVerbs, failureOf, modelDividers, orbState, captionOf, logsOf, previewsOf, reportView, resultLine, revisable, runState, stepArgs, stepView } from '../src/shell/agent/view.ts';
 
 const row = (seq: number, o: Partial<AgentRow> = {}): AgentRow => ({
 	id: `m${seq}`,
@@ -314,4 +314,10 @@ describe('Studio outcomes outside the folded steps', () => {
 			expect(run && transcriptRow(run, true, false)?.tool?.failed).toBe(false);
 		})
 	);
+});
+
+it('a clipped act still names its callable', () => {
+	const clipped = '{"callable":"trials.create","input":[{"project_id":"p1","sample_label":"8A","compo';
+	expect(stepView('act', stepArgs(clipped)).verb).toBe('Create trials');
+	expect(stepView('act', stepArgs('{"callable":"projects.update","input":[]}')).verb).toBe('Update projects');
 });

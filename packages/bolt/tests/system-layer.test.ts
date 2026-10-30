@@ -85,7 +85,7 @@ function rendered(): { [table: string]: Shape } {
 				t.key = bare(m[1]!);
 				continue;
 			}
-			m = /^alter table "\w+" add column "(\w+)" (.*)$/.exec(sql);
+			m = /^alter table "\w+" add column "?(\w+)"? (.*)$/.exec(sql);
 			if (m) {
 				const d = / default (.*)$/.exec(m[2]!);
 				t.columns[m[1]!] =
@@ -635,8 +635,11 @@ const EXPECTED: { [table: string]: Shape } = {
 			revision: 'int not null default 1',
 			created_at: 'timestamptz not null default now()',
 			party_id: "text generated always as (((party ->> 'id'))::text) stored",
-			phone_key: "text generated always as ((regexp_replace(phone, '\\D', '', 'g'))::text) stored"
+			phone_key: "text generated always as ((regexp_replace(phone, '\\D', '', 'g'))::text) stored",
+			bolt_search:
+				"tsvector generated always as (bolt_search_document(coalesce(name::text, '') || ' ' || coalesce(email::text, ''))) stored"
 		},
+		indexes: ['using gin (bolt_search)'],
 		unique: ['(lower(email))', '(phone_key)'],
 		checks: [
 			"((coalesce(admin = false, false) or coalesce(kind = 'staff'::text, false)))",

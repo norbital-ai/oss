@@ -22,9 +22,8 @@ import { Unavailable } from '../decl/errors.ts';
 import type {
 	ConvertTarget,
 	GeoHit,
+	IngestOptions,
 	SpeechFormat,
-	TranscribeOptions,
-	Transcript,
 	WebPage
 } from '../decl/runtime/facilities.ts';
 import type { Json, Point } from '../decl/values.ts';
@@ -65,6 +64,8 @@ import type {
 	ImagePreviewMime,
 	ImagePreviewSize,
 	ImagesPort,
+	Ingested,
+	IngestPort,
 	KeysPort,
 	LinksPort,
 	LogEvent,
@@ -89,7 +90,8 @@ import { Port, type PortFailure } from './port.ts';
 import { corpus, skillFile, type DocsCorpus } from './docs-corpus.ts';
 import { isOff, type Off } from '../facilities/off.ts';
 
-const turnedOff = (facility: string) => Port.unavailable(facility, 'the host turned this facility off');
+const turnedOff = (facility: string) =>
+	Port.unavailable(facility, 'the host turned this facility off');
 
 // ── files ──
 /** Stored blobs; the `sys_file` row is the engine's (rule 18). `get` answers at most `max` bytes (more is `invalid`). */
@@ -109,13 +111,13 @@ export class Files extends Context.Service<
 >()('bolt/Files') {
 	static fromAbi(port: FilesPort): Layer.Layer<Files> {
 		return Layer.succeed(Files, {
-					put: (bytes, meta) => Port.attempt('files', (signal) => port.put(bytes, meta, signal)),
-					get: (key, max) => Port.attempt('files', (signal) => port.get(key, max, signal)),
-					url: (key, expiresInS) =>
-						Port.attempt('files', (signal) => port.url(key, expiresInS, signal)),
-					remove: (key) => Port.attempt('files', (signal) => port.remove(key, signal)),
-					download: (url) => Port.attempt('files', (signal) => port.download(url, signal))
-				});
+			put: (bytes, meta) => Port.attempt('files', (signal) => port.put(bytes, meta, signal)),
+			get: (key, max) => Port.attempt('files', (signal) => port.get(key, max, signal)),
+			url: (key, expiresInS) =>
+				Port.attempt('files', (signal) => port.url(key, expiresInS, signal)),
+			remove: (key) => Port.attempt('files', (signal) => port.remove(key, signal)),
+			download: (url) => Port.attempt('files', (signal) => port.download(url, signal))
+		});
 	}
 }
 
@@ -126,7 +128,41 @@ export type ConvertOptions = {
 	readonly page?: 'A4' | 'A3' | 'Letter';
 	readonly landscape?: boolean;
 };
-/** The document converter behind `ctx.convert.document`; `targets` is what this host serves (none when unavailable). */
+/** What an ingest answers (plan 12) with its image bytes decoded by `bytes`: Convert's wire (base64) or the port's ABI. */
+export const ingestAnswer = <B extends Schema.Codec<Uint8Array, unknown>>(bytes: B) => {
+	const fields = {
+		images: Schema.Array(Schema.Struct({ name: Schema.String, mime: Schema.String, bytes })),
+		meta: Schema.Struct({
+			usage: Schema.optionalKey(
+				Schema.Struct({
+					calls: Schema.Array(Schema.String),
+					model: Schema.String,
+					input: Schema.Number,
+					output: Schema.Number,
+					cost: Schema.Number
+				})
+			),
+			stats: Schema.Struct({
+				pages: Schema.NullOr(Schema.Number),
+				bytes: Schema.Number,
+				cpuMs: Schema.Number,
+				wallMs: Schema.Number
+			})
+		})
+	};
+	return Schema.Union([
+		Schema.Struct({ kind: Schema.Literal('document'), html: Schema.String, ...fields }),
+		Schema.Struct({ kind: Schema.Literal('data'), json: Schema.Json, ...fields })
+	]);
+};
+const IngestAnswered = Schema.Union([
+	ingestAnswer(Schema.Uint8Array),
+	Schema.Struct({ unsupported: Schema.String })
+]);
+/**
+ * The document converter behind `ctx.convert.document`; `targets` is what this host serves (none when unavailable).
+ * `ingest` (the agent's `ingest`, `ctx.convert.ingest`) is absent when the host has no ingest port.
+ */
 export class Convert extends Context.Service<
 	Convert,
 	{
@@ -136,41 +172,46 @@ export class Convert extends Context.Service<
 			to: ConvertTarget,
 			options: ConvertOptions
 		) => Effect.Effect<Uint8Array, PortFailure>;
+		readonly ingest?: (
+			file: {
+				readonly sha256: string;
+				readonly name: string;
+				readonly mime: string;
+				readonly bytes: Uint8Array;
+			},
+			options: Omit<IngestOptions, 'for'>
+		) => Effect.Effect<Ingested | { readonly unsupported: string }, PortFailure>;
 	}
 >()('bolt/Convert') {
-	static fromAbi(port: ConvertPort | Off): Layer.Layer<Convert> {
-		return isOff(port)
-			? Layer.succeed(Convert, { targets: [], convert: () => turnedOff('convert') })
-			: Layer.succeed(Convert, {
-					targets: port.targets,
-					convert: (source, to, options) =>
-						Port.attempt('convert', (signal) => port.convert(source, to, options, signal))
-				});
+	static fromAbi(port: ConvertPort | Off, ingester?: IngestPort['ingest']): Layer.Layer<Convert> {
+		return Layer.succeed(Convert, {
+			...(isOff(port)
+				? { targets: [], convert: () => turnedOff('convert') }
+				: {
+						targets: port.targets,
+						convert: (source, to, options) =>
+							Port.attempt('convert', (signal) => port.convert(source, to, options, signal))
+					}),
+			...(ingester === undefined
+				? {}
+				: {
+						ingest: (file, options) =>
+							Port.fromPromise(
+								(signal) => ingester(file, options, signal),
+								IngestAnswered,
+								'convert.ingest'
+							)
+					})
+		});
 	}
 }
 
 // ── speech ──
-const TranscriptAnswer = Schema.Struct({
-	segments: Schema.Array(
-		Schema.Struct({
-			speaker: Schema.String,
-			start: Schema.Number,
-			end: Schema.Number,
-			text: Schema.String
-		})
-	),
-	language: Schema.NullOr(Schema.String),
-	durationMs: Schema.Number
-});
 const SpeechAnswer = Schema.Struct({ bytes: Schema.Uint8Array, mime: Schema.String });
-/** Speech behind `ctx.ai.transcribe` and `ctx.ai.speak`; a provider refusal keeps its kind (`rateLimited`, `tooLarge`, …). */
+/** Text to speech behind `ctx.ai.speak`; a provider refusal keeps its kind (`rateLimited`, `tooLarge`, …). */
 export class Speech extends Context.Service<
 	Speech,
 	{
-		readonly transcribe: (
-			audio: { readonly name: string; readonly mime: string; readonly bytes: Uint8Array },
-			options: TranscribeOptions
-		) => Effect.Effect<Transcript, PortFailure>;
 		readonly speak: (
 			text: string,
 			options: {
@@ -185,14 +226,8 @@ export class Speech extends Context.Service<
 		return Layer.succeed(
 			Speech,
 			isOff(port)
-				? { transcribe: () => turnedOff('ai.transcribe'), speak: () => turnedOff('ai.speak') }
+				? { speak: () => turnedOff('ai.speak') }
 				: {
-						transcribe: (audio, options) =>
-							Port.fromPromise(
-								(signal) => port.transcribe(audio, options, signal),
-								TranscriptAnswer,
-								'ai.transcribe'
-							),
 						speak: (text, options) =>
 							Port.fromPromise(
 								(signal) => port.speak(text, options, signal),
@@ -258,19 +293,19 @@ export class Browser extends Context.Service<
 			});
 		}
 		return Layer.succeed(Browser, {
-					navigate: (profile, to, find) =>
-						Port.attempt('browser', (signal) => port.navigate(profile, to, find, signal)),
-					snapshot: (profile, options) =>
-						Port.attempt('browser', (signal) => port.snapshot(profile, options, signal)),
-					act: (profile, steps) =>
-						Port.attempt('browser', (signal) => port.act(profile, steps, signal)),
-					evaluate: (profile, expression) =>
-						Port.attempt('browser', (signal) => port.evaluate(profile, expression, signal)),
-					screenshot: (profile) =>
-						Port.attempt('browser', (signal) => port.screenshot(profile, signal)),
-					download: (profile, url) =>
-						Port.attempt('browser', (signal) => port.download(profile, url, signal))
-				});
+			navigate: (profile, to, find) =>
+				Port.attempt('browser', (signal) => port.navigate(profile, to, find, signal)),
+			snapshot: (profile, options) =>
+				Port.attempt('browser', (signal) => port.snapshot(profile, options, signal)),
+			act: (profile, steps) =>
+				Port.attempt('browser', (signal) => port.act(profile, steps, signal)),
+			evaluate: (profile, expression) =>
+				Port.attempt('browser', (signal) => port.evaluate(profile, expression, signal)),
+			screenshot: (profile) =>
+				Port.attempt('browser', (signal) => port.screenshot(profile, signal)),
+			download: (profile, url) =>
+				Port.attempt('browser', (signal) => port.download(profile, url, signal))
+		});
 	}
 }
 export class Geo extends Context.Service<
@@ -401,10 +436,10 @@ export class DeadlinePort extends Context.Service<
 >()('bolt/DeadlinePort') {
 	static fromAbi(port: DeadlinesPort): Layer.Layer<DeadlinePort> {
 		return Layer.succeed(DeadlinePort, {
-					announce: (scope, notLaterThan) => Effect.sync(() => port.announce(scope, notLaterThan)),
-					settle: (scope, nextDue) => Effect.sync(() => port.settle(scope, nextDue)),
-					teardown: (scope) => Effect.sync(() => port.teardown(scope))
-				});
+			announce: (scope, notLaterThan) => Effect.sync(() => port.announce(scope, notLaterThan)),
+			settle: (scope, nextDue) => Effect.sync(() => port.settle(scope, nextDue)),
+			teardown: (scope) => Effect.sync(() => port.teardown(scope))
+		});
 	}
 }
 
@@ -732,12 +767,12 @@ export class Keys extends Context.Service<
 >()('bolt/Keys') {
 	static fromAbi(port: KeysPort): Layer.Layer<Keys> {
 		return Layer.succeed(Keys, {
-					seal: (plain, aad) => Port.attempt('keys', (signal) => port.seal(plain, aad, signal)),
-					open: (sealed, aad) =>
-						Port.attempt('keys', (signal) => port.open(sealed, aad, signal)).pipe(
-							Effect.map(Option.fromNullOr)
-						)
-				});
+			seal: (plain, aad) => Port.attempt('keys', (signal) => port.seal(plain, aad, signal)),
+			open: (sealed, aad) =>
+				Port.attempt('keys', (signal) => port.open(sealed, aad, signal)).pipe(
+					Effect.map(Option.fromNullOr)
+				)
+		});
 	}
 }
 
@@ -886,12 +921,12 @@ export class Images extends Context.Service<
 >()('bolt/Images') {
 	static fromAbi(port: ImagesPort): Layer.Layer<Images> {
 		return Layer.succeed(Images, {
-					facts: (bytes) => Port.attempt('files.image', (signal) => port.facts(bytes, signal)),
-					jpeg: (bytes, maxEdge) =>
-						Port.attempt('files.image', (signal) => port.jpeg(bytes, maxEdge, signal)),
-					preview: (bytes, mime, maxEdge) =>
-						Port.attempt('files.image', (signal) => port.preview(bytes, mime, maxEdge, signal))
-				});
+			facts: (bytes) => Port.attempt('files.image', (signal) => port.facts(bytes, signal)),
+			jpeg: (bytes, maxEdge) =>
+				Port.attempt('files.image', (signal) => port.jpeg(bytes, maxEdge, signal)),
+			preview: (bytes, mime, maxEdge) =>
+				Port.attempt('files.image', (signal) => port.preview(bytes, mime, maxEdge, signal))
+		});
 	}
 }
 

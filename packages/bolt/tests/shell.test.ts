@@ -151,7 +151,7 @@ const member = (
 		party: null,
 		...over
 	},
-	capabilities: { apps, kiosks, tools: [], mcp: [], skills: [] }
+	capabilities: { apps, kiosks, tools: [], mcp: [] }
 });
 const names = (ns: ReturnType<typeof nav>): unknown[] =>
 	ns.map((n) => (n.kind === 'group' ? { [n.name]: names(n.children) } : n.name));
@@ -1334,7 +1334,7 @@ describe('Studio port boundary', () => {
 });
 
 describe('reading files over the files port', () => {
-	it.live('reads images and PDFs by MIME even with a wrong mode; refuses unsupported bytes', () =>
+	it.live('reads images and text; every other file is ingested', () =>
 		Effect.gen(function* () {
 			const stored: Record<string, { key: string; mime: string }> = {
 				f1: { key: 'k1', mime: 'text/csv' },
@@ -1373,33 +1373,21 @@ describe('reading files over the files port', () => {
 				download: () => Effect.die('unused download')
 			});
 			const a = fileAttachments(db, files, yield* hostImages);
-			expect(yield* a.read({ id: 'f1', name: 'a.csv' }, 'sheet')).toEqual({
+			expect(yield* a.read({ id: 'f1', name: 'a.csv' })).toEqual({
 				name: 'a.csv',
 				mime: 'text/csv',
 				text: 'bytes of k1'
 			});
-			for (const as of ['text', 'image', 'document', 'sheet'] as const) {
-				expect(yield* a.read({ id: 'f2' }, as)).toEqual({
-					mime: 'image/png',
-					bytes: new TextEncoder().encode('bytes of k2')
-				});
-				expect(yield* a.read({ id: 'f3' }, as)).toEqual({
-					mime: 'application/pdf',
-					bytes: new TextEncoder().encode('bytes of k3')
-				});
-			}
-			expect(yield* a.read({ id: 'f5', name: 'items.xlsx' }, 'text')).toMatchObject({
-				sheets: ['Stock'],
-				sheet: 'Stock',
-				cells: [
-					['name', 'qty', 'ok'],
-					['Bolt, M8', 4, true],
-					['Nut', 2.5, false]
-				]
+			expect(yield* a.read({ id: 'f2' })).toEqual({
+				mime: 'image/png',
+				bytes: new TextEncoder().encode('bytes of k2')
 			});
-			const binary = yield* Effect.flip(a.read({ id: 'f4' }, 'text'));
-			expect(binary.message).toMatch(/cannot be read/);
-			const missing = yield* Effect.flip(a.read({ id: 'nope' }, 'text'));
+			// a document, a workbook or any other binary is ingested, never read here
+			for (const id of ['f3', 'f4', 'f5'])
+				expect((yield* Effect.flip(a.read({ id }))).message).toMatch(
+					new RegExp(`is read through ingest: call ingest \\{ id: '${id}' \\}`)
+				);
+			const missing = yield* Effect.flip(a.read({ id: 'nope' }));
 			expect(missing.message).toMatch(/not stored/);
 		})
 	);
@@ -1422,7 +1410,7 @@ describe('reading files over the files port', () => {
 				remove: () => Effect.die('unused remove'),
 				download: () => Effect.die('unused download')
 			});
-			const got = yield* fileAttachments(db, files, yield* hostImages).read({ id: 'f' }, 'image');
+			const got = yield* fileAttachments(db, files, yield* hostImages).read({ id: 'f' });
 			if (
 				typeof got !== 'object' ||
 				got === null ||

@@ -22,6 +22,7 @@ import type { AuditPort } from '../protocol/audit.ts';
 import {
 	HOST_API,
 	type ActiveWorkspace,
+	type AgentPorts,
 	type HostPorts,
 	type HostTenantDb,
 	type LinkHost,
@@ -72,7 +73,7 @@ export type System1 = AiPort['sys_1'];
 export type System2 = AiPort['sys_2'];
 /** Multimodal embeddings (`ctx.ai.embed`). */
 export type Embed = EmbeddingsPort;
-/** Diarized transcription and text to speech (`ctx.ai.transcribe`, `ctx.ai.speak`). */
+/** Text to speech (`ctx.ai.speak`); transcription is Norbital Convert's ingest (`ctx.convert.ingest`). */
 export type Speech = Required<SpeechPort>;
 
 // ── 5. ports: how Bolt reaches the outside ──
@@ -159,6 +160,8 @@ export type Serving = {
 	readonly providers?: readonly Provider[];
 	readonly oauth?: LinkHost['oauth'];
 	readonly convert?: ConvertPort;
+	/** Norbital Convert's `documentIngester`: a file as sanitised HTML and its images, for the agent and `ctx.convert.ingest`. */
+	readonly ingest?: AgentPorts['ingest'];
 	readonly geocoder?: GeocoderPort;
 	readonly web?: WebReadPort;
 	readonly shell?: Pick<ShellPorts, 'environment' | 'push'>;

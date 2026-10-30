@@ -153,7 +153,7 @@ const caller = (
 	limits: [],
 	teamTree: [],
 	scopes: {},
-	capabilities: { apps: [], tools: [], mcp: [], skills: [] },
+	capabilities: { apps: [], tools: [], mcp: [] },
 	actor: {
 		kind: 'member',
 		id: 'u1',

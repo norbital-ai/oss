@@ -387,14 +387,7 @@ describe('openAiChat', () => {
 								'data: {"choices":[{"delta":{"content":"true}"}}]}\n\ndata: [DONE]\n\n'
 							])
 				);
-				const infer = openAiChat(
-					{
-						...config,
-						strict: true,
-						inputs: () => Effect.succeed(['text', 'image', 'file', 'pdf'])
-					},
-					{ fetch: f }
-				);
+				const infer = openAiChat({ ...config, strict: true }, { fetch: f });
 				const { response } = yield* collect(infer, {
 					model: 'default',
 					output: { type: 'object' },
@@ -419,8 +412,8 @@ describe('openAiChat', () => {
 					{ type: 'text', text: 'again' },
 					{ type: 'image_url', image_url: { url: 'data:image/png;base64,AQ==' } },
 					{
-						type: 'file',
-						file: { filename: 'attachment-2', file_data: 'data:application/pdf;base64,Ag==' }
+						type: 'text',
+						text: 'attachment-2 (application/pdf): read it with ingest, then read_file windows'
 					}
 				]);
 				expect(
@@ -438,10 +431,7 @@ describe('openAiChat', () => {
 				const { f, seen } = capture(() =>
 					Response.json({ choices: [{ message: { content: 'ok' } }], usage: {} })
 				);
-				const infer = openAiChat(
-					{ ...config, inputs: () => Effect.succeed(['text', 'image', 'pdf']) },
-					{ fetch: f }
-				);
+				const infer = openAiChat(config, { fetch: f });
 				const step = (id: string) => ({
 					role: 'tool' as const,
 					content: { id, name: 'read_file', result: { attached: 'shown' } }
@@ -466,7 +456,7 @@ describe('openAiChat', () => {
 						{ role: 'user', content: '[conversation state: …]' }
 					],
 					files: [
-						{ mime: 'application/pdf', bytes: new Uint8Array([2]), call: 'c1' },
+						{ mime: 'image/jpeg', bytes: new Uint8Array([2]), call: 'c1' },
 						{ mime: 'image/png', bytes: new Uint8Array([1]), call: 'gone' }
 					],
 					effort: 'low'
@@ -483,10 +473,7 @@ describe('openAiChat', () => {
 					'user'
 				]);
 				expect(sent.messages[4]?.content).toEqual([
-					{
-						type: 'file',
-						file: { filename: 'attachment-1', file_data: 'data:application/pdf;base64,Ag==' }
-					}
+					{ type: 'image_url', image_url: { url: 'data:image/jpeg;base64,Ag==' } }
 				]);
 				expect(sent.messages[6]?.content).toEqual([
 					{ type: 'text', text: '[conversation state: …]' },
@@ -495,7 +482,7 @@ describe('openAiChat', () => {
 			})
 	);
 	it.effect(
-		'sends text and an xlsx as text parts, never as file parts providers refuse; an unreadable type is described, not sent, and the call goes on',
+		'sends text as text parts, never as file parts providers refuse; any other type is named for ingest, not sent, and the call goes on',
 		() =>
 			Effect.gen(function* () {
 				const { f, seen } = capture(() =>
@@ -525,7 +512,9 @@ describe('openAiChat', () => {
 				expect(parts.map((part) => part.type)).toEqual(['text', 'text', 'text', 'text']);
 				expect(parts[1]?.text).toBe('attachment-1 (text/plain):\nhello');
 				expect(parts[2]?.text).toBe('attachment-2 (application/json):\n{"a":1}');
-				expect(parts[3]?.text).toMatch(/^attachment-3 sheet 0 ".+" \(CSV\):\n.+,/);
+				expect(parts[3]?.text).toBe(
+					'attachment-3 (application/vnd.openxmlformats-officedocument.spreadsheetml.sheet): read it with ingest, then read_file windows'
+				);
 				yield* collect(infer, {
 					...request,
 					messages: [{ role: 'user', content: 'read' }],
@@ -540,59 +529,23 @@ describe('openAiChat', () => {
 					{ type: 'text', text: 'read' },
 					{
 						type: 'text',
-						text: 'attachment-1: a application/vnd.openxmlformats-officedocument.wordprocessingml.document file cannot be shown to you; tell the person and ask for a photo, a PDF or a text version'
+						text: 'attachment-1 (application/vnd.openxmlformats-officedocument.wordprocessingml.document): read it with ingest, then read_file windows'
 					}
 				]);
 				expect(seen).toHaveLength(2);
 			})
 	);
-	it('ingest: a pptx (no converter takes it to PDF) and a zip are explicit answers, never file parts', () => {
+	it('a PDF, an office document or a zip is never a file part: it is read through ingest', () => {
 		for (const mime of [
+			'application/pdf',
 			'application/vnd.openxmlformats-officedocument.presentationml.presentation',
 			'application/zip'
 		])
-			expect(
-				filePart({ mime, bytes: new Uint8Array([1]) }, 'a', ['text', 'image', 'file', 'pdf'])
-			).toEqual({
+			expect(filePart({ mime, bytes: new Uint8Array([1]) }, 'a')).toEqual({
 				type: 'text',
-				text: `a: a ${mime} file cannot be shown to you; tell the person and ask for a photo, a PDF or a text version`
+				text: `a (${mime}): read it with ingest, then read_file windows`
 			});
 	});
-	it.effect('a PDF goes whole only to a model that takes pdf; unknown inputs take none', () =>
-		Effect.gen(function* () {
-			const { f, seen } = capture(() =>
-				Response.json({ choices: [{ message: { content: 'ok' } }], usage: {} })
-			);
-			const asked: string[] = [];
-			const files = [{ mime: 'application/pdf', bytes: new Uint8Array([2]) }];
-			yield* collect(
-				openAiChat(
-					{
-						...config,
-						inputs: (model) =>
-							Effect.sync(() => {
-								asked.push(model);
-								return ['text', 'image'];
-							})
-					},
-					{ fetch: f }
-				),
-				{ ...request, files }
-			);
-			yield* collect(openAiChat(config, { fetch: f }), { ...request, files });
-			expect(asked).toEqual(['gpt-x']);
-			for (const { sent } of seen) {
-				expect(JSON.stringify(sent)).not.toContain('file_data');
-				expect(sent.messages[0]?.content).toEqual([
-					{ type: 'text', text: 'hi' },
-					{
-						type: 'text',
-						text: 'attachment-1: a PDF this model cannot take whole; read_file sends its own text and its scanned pages as images'
-					}
-				]);
-			}
-		})
-	);
 	it.effect(
 		"reasoning streams and comes back verbatim; an earlier turn's reasoning is not sent back; a switched call id is refused (L-BOLT-412, L-BOLT-432)",
 		() =>
@@ -618,7 +571,7 @@ describe('openAiChat', () => {
 					usage: { call: 'gen-2' }
 				});
 				expect(first(seen).sent.messages[1]).toEqual({ role: 'assistant', content: 'a' });
-				// within a turn only the latest step's reasoning goes back: an earlier step's belief is not reread
+				// within a turn every step keeps its reasoning: a sent message never changes, so the cached prefix holds
 				const steps = capture(() =>
 					stream([
 						'data: {"id":"gen-5","choices":[{"delta":{"content":"ok"}}]}\n\ndata: [DONE]\n\n'
@@ -643,7 +596,7 @@ describe('openAiChat', () => {
 				});
 				expect(first(steps.seen).sent.messages.map((m) => m.reasoning ?? null)).toEqual([
 					null,
-					null,
+					'First.',
 					null,
 					'Second.',
 					null

@@ -1,8 +1,9 @@
 <!--
 	The workspace's command center: what happens across it, one tab each (a deep link `/command-center/<tab>`). Activity,
-	Resources and Logs are the host's inspection (`studioInspect`, a Studio host's, read once for all three; Logs reads it
-	again only while its opt-in Auto-refresh is on): the build and release timeline (the serving version marked in it),
-	resource use and the runtime log. Audit is the audit trail,
+	Resources and Logs are the host's inspection (`studioInspect`, a Studio host's, read once for all three): the build and
+	release timeline (the serving version marked in it), resource use and the runtime log. Logs reads the log itself
+	(`logs`), scoped to one release's serving window (the serving release by default) and optionally a run; its opt-in
+	Auto-refresh re-reads only that. Audit is the audit trail,
 	Automations every run, Inference the automations' inference transcripts (opened read-only in Norbius), People the
 	members and invitations. `tabs` is what this viewer gets (`commandCenterTabs`); rollbacks are Studio's, not here.
 -->
@@ -12,6 +13,7 @@
 		Tabs,
 		WorkspaceOperations,
 		EmptyState,
+		releaseWindow,
 		type WorkspaceOperationsData,
 		type WorkspaceRange,
 		type WorkspaceScope,
@@ -71,11 +73,11 @@
 	// one inspection serves Activity, Resources and Logs: switching between them is a local render
 	let range = $state<WorkspaceRange>('7d');
 	let build = $state<string | null>(null),
-		runFilter = $state<string | null>(null);
+		runFilter = $state<string | null>(null),
+		// the release Logs reads (its publication instant): the serving one until chosen, `null` every release
+		release = $state<string | null | undefined>();
 	const inspecting = $derived(view !== undefined);
-	const inspection = observeOnce(() =>
-		inspecting ? api.studioInspect({ range, build, run: runFilter }) : null
-	);
+	const inspection = observeOnce(() => (inspecting ? api.studioInspect({ range, build }) : null));
 	// a new scope reads while the last answer stays on screen
 	let shown = $state<WorkspaceOperationsData | null>(null);
 	watch(
@@ -83,6 +85,42 @@
 		(next) => {
 			if (next !== undefined) shown = next;
 		}
+	);
+	// Logs reads the log itself, scoped to the chosen release's serving window and run: Auto-refresh re-reads only this
+	const releases = $derived(shown?.studio?.releases ?? []);
+	const releaseAt = $derived(
+		release === undefined ? (releases.find((r) => r.current)?.at ?? null) : release
+	);
+	const logs = observeOnce(() =>
+		view === 'logs' && shown !== null
+			? api.logs({
+					...releaseWindow(releases, releaseAt),
+					...(runFilter === null ? {} : { run: runFilter })
+				})
+			: null
+	);
+	const data = $derived(
+		shown === null
+			? null
+			: view === 'logs'
+				? {
+						...shown,
+						logs: logs.current ?? shown.logs,
+						filters: { ...shown.filters, run: runFilter ?? '' },
+						errors:
+							logs.error === undefined
+								? shown.errors
+								: {
+										access: null,
+										studio: null,
+										bundles: null,
+										cache: null,
+										build: null,
+										...shown.errors,
+										logs: logs.error.message
+									}
+					}
+				: shown
 	);
 	function scope(next: WorkspaceScope): void {
 		if (next.range !== undefined) range = next.range;
@@ -131,18 +169,20 @@
 	{#if inspection.error !== undefined}<p role="alert" class="text-xs text-destructive">
 			{inspection.error.message}
 		</p>{/if}
-	{#if view === 'logs'}<AutoRefresh {t} onRefresh={() => fork(inspection.refetch())} />{/if}
-	{#if view !== undefined && shown !== null}
+	{#if view !== undefined && data !== null}
 		<WorkspaceOperations
-			data={shown}
+			{data}
 			scopeKey={based('')}
 			{range}
 			{view}
 			views={[view]}
-			busy={inspection.loading}
+			busy={inspection.loading || (view === 'logs' && logs.loading)}
 			onChange={scope}
+			bind:release
 			{t}
-		/>
+		>
+			{#snippet actions()}<AutoRefresh {t} onRefresh={() => fork(logs.refetch())} />{/snippet}
+		</WorkspaceOperations>
 	{:else if inspection.error === undefined}
 		<p class="text-meta" role="status">{t('Loading…')}</p>
 	{/if}

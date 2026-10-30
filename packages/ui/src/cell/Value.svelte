@@ -16,6 +16,9 @@
 	import { useOptionalBolt } from '../client/context.js';
 	import Glyph from '../primitives/icon/Glyph.svelte';
 	import { filesOf } from './value.js';
+	import Overflow from './Overflow.svelte';
+	import CodeEditor from '../editors/code-editor.svelte';
+	import { highlightedLine } from '../editors/highlight.js';
 	import { msg } from '../text/messages.js';
 	import { type Ref } from '../relations/select.js';
 
@@ -202,6 +205,23 @@
 	</span>
 {:else if kind === undefined && (value === null || value === undefined)}
 	<span class="text-muted-foreground">—</span>
+{:else if kind?.kind === 'text' && kind.format === 'cel' && dense && typeof value === 'string'}
+	<!-- one highlighted line of an expression; expand shows it whole -->
+	<Overflow>
+		<code class="bg-muted rounded-sm px-1.5 py-0.5 font-mono text-xs" data-cel
+			>{#each highlightedLine(value) as token, i (i)}<span class={token.class || undefined}
+					>{token.text}</span
+				>{/each}</code
+		>
+		{#snippet full()}<CodeEditor
+				language="javascript"
+				wrap
+				readonly
+				minHeight="2.25rem"
+				{value}
+				aria-label={name}
+			/>{/snippet}
+	</Overflow>
 {:else if kind?.kind === 'text' && kind.format === 'markdown' && dense && typeof value === 'string'}
 	<!-- one line of a stored document: its text, the prose is the record's -->
 	{value}

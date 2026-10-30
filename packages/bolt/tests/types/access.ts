@@ -91,7 +91,7 @@ export const salesRep = policy({
 		sys_user: { outputs: { directory: { team: { in: { var: 'requestor.teamTree' } } } } }
 	},
 	automations: ['nightly', 'products.sync.ledger', 'orders_submit', 'orders_renote'],
-	capabilities: { apps: ['sales'], tools: ['browser'], mcp: ['erp'], skills: ['quoting'] },
+	capabilities: { apps: ['sales'], tools: ['browser'], mcp: ['erp'] },
 	limits: {
 		act: '600/min',
 		agent: { rate: '100/h', per: 'actor' },
