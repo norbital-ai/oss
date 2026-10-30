@@ -153,14 +153,6 @@ export type AgentEngine = {
 	/** The host's confined bundler: `run_js` runs a skill's file only where there is one. */
 	bundler?: Bundler['Service'] | undefined;
 };
-/** How a document is read for the agent: once, as text it keeps (`read_file` on a PDF). */
-const TRANSCRIBE = `Transcribe the attached document completely and faithfully as Markdown, page by page, in reading order. Keep every printed and handwritten field with its value; mark a handwritten value (handwritten). Tables as Markdown tables: every row and column, an unlabelled row or column kept empty, numbers exactly as written. A printed box as [x] when ticked and [ ] when empty; text that has no printed box is never a box. Struck-out text as ~~text~~, followed by what was written in its place. Copy names, product names and codes letter by letter as written: never change them to a word you know. Write a value you cannot read with certainty as [unclear: your best reading], and text that runs off the page as [cut off: what is visible]. Do not summarise, interpret, correct or add anything.`;
-/** A cheap content key (FNV-1a over the bytes). */
-const fingerprint = (bytes: Uint8Array): string => {
-	let h = 0x811c9dc5;
-	for (const byte of bytes) h = Math.imul(h ^ byte, 0x01000193);
-	return (h >>> 0).toString(16);
-};
 /** A host skill (the platform authoring skill, a person's own): its tree's listing and each file's bytes by path. */
 export type HostSkill = SkillSpec & { read(path: string): Promise<Uint8Array> };
 export type DrainOptions = {
@@ -187,15 +179,15 @@ export type AgentConfig = {
 	attachments?: AttachmentPort;
 	/**
 	 * A document's own text, page by page, where it has a text layer (the host's extractor; a scanned page is marked
-	 * `(no extractable text: …)`): `read_file` answers it instead of a model's transcription, exact and at once.
+	 * `(no extractable text: …)`): `read_file` answers it, exact and at once.
 	 */
 	documentText?: (
 		file: { mime: string; bytes: Uint8Array },
 		signal: AbortSignal
 	) => Promise<string>;
 	/**
-	 * A PDF's first `pages` pages as JPEG images (the host's renderer): `read_file` shows a scan as pixels and
-	 * transcribes it from them. Without it the PDF goes to the provider as a file, whose own handling may OCR it to text.
+	 * A PDF's first `pages` pages as JPEG images (the host's renderer): `read_file` shows a scanned page as pixels.
+	 * Without it a scanned page is reported unreadable; the raw PDF never goes to a model that does not take `pdf`.
 	 */
 	documentPages?: (
 		file: { mime: string; bytes: Uint8Array },
@@ -793,7 +785,6 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 			mcpFor = '';
 		const receipts: Receipt[] = [...(options.receipts ?? [])],
 			read: ToolContext['read'] = new Map(),
-			transcripts = new Map<string, string>(),
 			files: ToolContext['files'] = [],
 			work = yield* jobs(),
 			failures = new Map<string, number>();
@@ -1256,48 +1247,6 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 					agents: ['workspace', ...Object.keys(m.envoys)],
 					receipts,
 					read,
-					...(config.ai === undefined
-						? {}
-						: {
-								transcribe: Effect.fn('Agents.transcribe')(function* (
-									files: readonly { mime: string; bytes: Uint8Array }[]
-								) {
-									// one transcription per document a turn, however often it is read
-									const key = files
-											.map((f) => `${f.bytes.byteLength}:${fingerprint(f.bytes)}`)
-											.join(','),
-										known = transcripts.get(key);
-									if (known !== undefined) return known;
-									const r = yield* modelCall(
-										config.ai,
-										{
-											model: conv.model,
-											system: TRANSCRIBE,
-											messages: [
-												{
-													role: 'user',
-													content:
-														files.length === 1 && files[0]?.mime === 'application/pdf'
-															? 'Transcribe the attached document.'
-															: `Transcribe the attached document: its ${files.length} page image(s), in order.`
-												}
-											],
-											files: [...files],
-											// a transcription copies what is there: it needs no long deliberation
-											effort: 'low'
-										},
-										wall
-									).pipe(
-										Effect.mapError((e) =>
-											BoltError.make('unavailable', 'facility', `transcription: ${e.message}`, e)
-										)
-									);
-									yield* used(r);
-									const text = textOf(r.content);
-									transcripts.set(key, text);
-									return text;
-								})
-							}),
 					files,
 					jobs: work,
 					inlineMs: config.hostInlineMs,

@@ -244,7 +244,12 @@ export {
 } from './conversations/status.ts'; // the delivery status model (§5.9)
 // ── exports: agents ──
 export { inferFacility } from './agent/ai.ts';
-export { openAiChat, type OpenAiChat, type OpenAiChatConfig } from './agent/openai-chat.ts';
+export {
+	openAiChat,
+	provideHttp,
+	type OpenAiChat,
+	type OpenAiChatConfig
+} from './agent/openai-chat.ts';
 export type {
 	AttachmentPort,
 	HostSkill,

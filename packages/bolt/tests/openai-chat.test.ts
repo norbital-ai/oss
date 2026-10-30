@@ -5,6 +5,7 @@ import { Deferred, Effect, Exit, Fiber, FiberSet, Schema, Stream } from 'effect'
 import { TestClock } from 'effect/testing';
 import type { AiRequest } from '../src/engine/contracts.ts';
 import { Port } from '../src/engine/port.ts';
+import { filePart } from '../src/engine/agent/ingest.ts';
 import { openAiChat, type OpenAiChat } from '../src/engine/agent/openai-chat.ts';
 
 const Sent = Schema.Struct({
@@ -386,7 +387,14 @@ describe('openAiChat', () => {
 								'data: {"choices":[{"delta":{"content":"true}"}}]}\n\ndata: [DONE]\n\n'
 							])
 				);
-				const infer = openAiChat({ ...config, strict: true }, { fetch: f });
+				const infer = openAiChat(
+					{
+						...config,
+						strict: true,
+						inputs: () => Effect.succeed(['text', 'image', 'file', 'pdf'])
+					},
+					{ fetch: f }
+				);
 				const { response } = yield* collect(infer, {
 					model: 'default',
 					output: { type: 'object' },
@@ -430,7 +438,10 @@ describe('openAiChat', () => {
 				const { f, seen } = capture(() =>
 					Response.json({ choices: [{ message: { content: 'ok' } }], usage: {} })
 				);
-				const infer = openAiChat(config, { fetch: f });
+				const infer = openAiChat(
+					{ ...config, inputs: () => Effect.succeed(['text', 'image', 'pdf']) },
+					{ fetch: f }
+				);
 				const step = (id: string) => ({
 					role: 'tool' as const,
 					content: { id, name: 'read_file', result: { attached: 'shown' } }
@@ -529,11 +540,58 @@ describe('openAiChat', () => {
 					{ type: 'text', text: 'read' },
 					{
 						type: 'text',
-						text: 'attachment-1: a application/vnd.openxmlformats-officedocument.wordprocessingml.document file cannot be shown to you; ask for a photo, a PDF or a text version'
+						text: 'attachment-1: a application/vnd.openxmlformats-officedocument.wordprocessingml.document file cannot be shown to you; tell the person and ask for a photo, a PDF or a text version'
 					}
 				]);
 				expect(seen).toHaveLength(2);
 			})
+	);
+	it('ingest: a pptx (no converter takes it to PDF) and a zip are explicit answers, never file parts', () => {
+		for (const mime of [
+			'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+			'application/zip'
+		])
+			expect(
+				filePart({ mime, bytes: new Uint8Array([1]) }, 'a', ['text', 'image', 'file', 'pdf'])
+			).toEqual({
+				type: 'text',
+				text: `a: a ${mime} file cannot be shown to you; tell the person and ask for a photo, a PDF or a text version`
+			});
+	});
+	it.effect('a PDF goes whole only to a model that takes pdf; unknown inputs take none', () =>
+		Effect.gen(function* () {
+			const { f, seen } = capture(() =>
+				Response.json({ choices: [{ message: { content: 'ok' } }], usage: {} })
+			);
+			const asked: string[] = [];
+			const files = [{ mime: 'application/pdf', bytes: new Uint8Array([2]) }];
+			yield* collect(
+				openAiChat(
+					{
+						...config,
+						inputs: (model) =>
+							Effect.sync(() => {
+								asked.push(model);
+								return ['text', 'image'];
+							})
+					},
+					{ fetch: f }
+				),
+				{ ...request, files }
+			);
+			yield* collect(openAiChat(config, { fetch: f }), { ...request, files });
+			expect(asked).toEqual(['gpt-x']);
+			for (const { sent } of seen) {
+				expect(JSON.stringify(sent)).not.toContain('file_data');
+				expect(sent.messages[0]?.content).toEqual([
+					{ type: 'text', text: 'hi' },
+					{
+						type: 'text',
+						text: 'attachment-1: a PDF this model cannot take whole; read_file sends its own text and its scanned pages as images'
+					}
+				]);
+			}
+		})
 	);
 	it.effect(
 		"reasoning streams and comes back verbatim; an earlier turn's reasoning is not sent back; a switched call id is refused (L-BOLT-412, L-BOLT-432)",

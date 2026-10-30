@@ -27,7 +27,8 @@ import type { MessageRow } from '../src/engine/agent/schema.ts';
 import { Authorities } from '../src/engine/identity/actor.ts';
 import type { EngineManifest } from '../src/engine/manifest.ts';
 import { Port, type PortFailure } from '../src/engine/port.ts';
-import { Ai, Mcp, type AiEvent } from '../src/engine/ports.ts';
+import { Ai, Files, Mcp, type AiEvent } from '../src/engine/ports.ts';
+import { openAiChat } from '../src/engine/agent/openai-chat.ts';
 import { mcpPort } from '../src/node/mcp.ts';
 import { Agents, Live } from '../src/engine/services.ts';
 import { TenantDb } from '../src/engine/db/tenant-db.ts';
@@ -318,6 +319,7 @@ it.live('SDK close aborts an already-running MCP request without a second drain 
 	)
 );
 
+const SCANNED_PAGE = new Uint8Array([0xff, 0xd8, 0xff, 0xe0]);
 const build = (ai: ReturnType<typeof cassette>) =>
 	Effect.gen(function* () {
 		const hq = yield* mcpFixture;
@@ -335,7 +337,10 @@ const build = (ai: ReturnType<typeof cassette>) =>
 				now: new Date().toISOString(),
 				host: {
 					agent: {
-						mcp: { secret: (name) => Effect.succeed(values[name]) }
+						mcp: { secret: (name) => Effect.succeed(values[name]) },
+						// the host's extractor and renderer: every PDF here is a one-page scan
+						documentText: async () => '[Page 1]\n(no extractable text: a scanned page)',
+						documentPages: async () => [SCANNED_PAGE]
 					}
 				}
 			})
@@ -802,7 +807,7 @@ describe('a replayed ingest takes its fewest calls', () => {
 						expect(ai.requests).toHaveLength(3);
 						const prompt = ai.requests[0]!.system ?? '';
 						expect(prompt).toContain('# Models you read');
-						expect(prompt).toContain('- quotes (A quote): title text, region enum north | south');
+						expect(prompt).toContain('- quotes (A quote)');
 						expect(prompt).toContain('- sys_user');
 						expect(prompt).toContain('ask: never copy a person from another record');
 						expect(toolResults(ai.requests[1]!)[0]).toMatchObject({
@@ -810,6 +815,74 @@ describe('a replayed ingest takes its fewest calls', () => {
 							quotes: { rows: [] }
 						});
 						expect(toolResults(ai.requests[2]!).at(-1)).toMatchObject({ kind: 'committed' });
+					}).pipe(Effect.provide(fixture.context));
+				})
+			)
+	);
+});
+// The colour-matching probe (2026-10-30): deepseek-v4.1-flash takes text and images, not PDFs. The attached scan went to
+// OpenRouter whole and came back as its silent OCR. Now the scan's page goes as the model's own pixels.
+describe('a replayed scan ingest sends no raw PDF', () => {
+	it.live(
+		'read_file shows the scanned page as an image; the provider request for deepseek has no file part',
+		() =>
+			Effect.scoped(
+				Effect.gen(function* () {
+					const fixture = yield* setup([]);
+					return yield* Effect.gen(function* () {
+						const { ai, agent, user, t } = fixture;
+						const root = yield* user('root', { admin: true });
+						const files = yield* Files;
+						const bytes = new TextEncoder().encode('%PDF-1.7 scan');
+						const blob = yield* files.put(bytes, { name: 'trials.pdf', mime: 'application/pdf' });
+						const file = { id: randomUUID(), name: 'trials.pdf', mime: 'application/pdf' };
+						yield* t.db.write({
+							text: `INSERT INTO sys_file (id, name, mime, size, key, sha256, field, created_by, created_at) VALUES ($1,$2,$3,$4,$5,$6,'sys_conversation.inputs',$7,now())`,
+							params: [file.id, file.name, file.mime, bytes.byteLength, blob.key, blob.sha256, root]
+						});
+						sharedAi.arm([
+							use('describe_workspace', {}),
+							use('read_file', { id: file.id }),
+							say('Read the trial sheet from its page.')
+						]);
+						const c = yield* agent.start({ owner: root });
+						yield* agent.post({
+							conversation: c,
+							as: { member: root },
+							text: 'File these trials.',
+							files: [file]
+						});
+						yield* agent.drain(c);
+						expect(ai.requests).toHaveLength(3);
+						expect(toolResults(ai.requests[1]!)[0]).toEqual(expect.stringContaining('quotes'));
+						const after = ai.requests[2]!;
+						expect(toolResults(after).at(-1)).toMatchObject({
+							attached: expect.stringContaining('shown to you'),
+							note: expect.stringContaining('verified')
+						});
+						expect(after.files?.map((f) => f.mime)).toEqual(['image/jpeg']);
+						// the same request on the wire to deepseek: the page as an image part, no file part
+						const sent: string[] = [];
+						yield* Stream.runDrain(
+							openAiChat(
+								{
+									endpoint: 'https://openrouter.test/api/v1',
+									models: {},
+									inputs: () => Effect.succeed(['text', 'image'])
+								},
+								{
+									fetch: async (_url, init) => {
+										sent.push(String(init?.body));
+										return Response.json({ choices: [{ message: { content: 'ok' } }], usage: {} });
+									}
+								}
+							)({ ...after, model: 'deepseek/deepseek-v4.1-flash-1017' })
+						);
+						expect(sent).toHaveLength(1);
+						expect(sent[0]).not.toContain('file_data');
+						expect(sent[0]).not.toContain('"type":"file"');
+						expect(sent[0]).not.toContain('data:application/pdf');
+						expect(sent[0]).toContain('data:image/jpeg;base64,');
 					}).pipe(Effect.provide(fixture.context));
 				})
 			)

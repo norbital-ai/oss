@@ -118,7 +118,10 @@ export function fileAttachments(
 						: {})
 				};
 			}
-			if (!TEXT.test(mime)) return yield* refused(`a ${mime} file cannot be read as ${as} here`);
+			if (!TEXT.test(mime))
+				return yield* refused(
+					`${name || 'this file'} (${mime}) cannot be read here: tell the person and ask for a PDF, a photo or a text version`
+				);
 			const text = new TextDecoder().decode(bytes);
 			return {
 				name,

@@ -34,7 +34,10 @@ import {
 	type HostToolContext,
 	type ToolContext,
 	type WorkspacePort,
-	workspaceSchema
+	workspaceSchema,
+	describeWorkspace,
+	messageCatalogue,
+	OVERVIEW_BYTES
 } from '../src/engine/agent/tools.ts';
 import { compileAuthority } from '../src/engine/access/authority.ts';
 import { TenantDb, type RawDb } from '../src/engine/db/tenant-db.ts';
@@ -504,9 +507,9 @@ describe('fewer calls for the common paths', () => {
 							})
 					}
 				);
-				// the schema lists the one output held, by name, with only its fields
+				// the schema names the model and its description only; fields are describe's
 				const schema = workspaceSchema(outputs, viewer) ?? '';
-				expect(schema).toContain('- tasks output "brief" (A task): title text');
+				expect(schema).toContain('- tasks (A task)');
 				expect(schema).not.toContain('cost');
 				// describe of a named output: its fields alone
 				expect(yield* result(x, 'read', { tasks: { describe: true, output: 'brief' } })).toEqual({
@@ -837,56 +840,250 @@ describe('reading the source is every staff member’s; changing it is an admini
 			})
 	);
 });
-describe('read_file on a scanned PDF', () => {
-	it.effect(
-		'one call: the pages are shown as images and the transcription is made from them, never from the PDF file',
-		() =>
-			Effect.gen(function* () {
-				const pdf = new TextEncoder().encode('%PDF-1.7 scan'),
-					pages = [new Uint8Array([1]), new Uint8Array([2])];
-				const transcribed: (readonly { mime: string }[])[] = [];
-				const x = yield* ctx(
-					{
-						attachments: { read: () => Effect.succeed({ mime: 'application/pdf', bytes: pdf }) },
-						documentText: () => Effect.succeed('[Page 1]\n(no extractable text: a scanned page)'),
-						documentPages: (_file, count) => Effect.succeed(pages.slice(0, count)),
-						transcribe: (files) =>
-							Effect.sync(() => {
-								transcribed.push(files);
-								return 'Raw Mat: Makrolon 2807 (handwritten)';
-							})
-					},
-					{
-						db: {
-							read: () =>
-								Effect.succeed([
-									{
-										rows: [{ file: { id: 'f1', name: 'form.pdf', mime: 'application/pdf' } }],
-										affected: 0
-									}
-								])
-						}
+describe('describe_workspace', () => {
+	const lab: EngineManifest = {
+		...manifest,
+		workspace: { tz: 'Asia/Singapore', locale: 'en-SG', currency: 'SGD', apps: ['lab/trials'] },
+		models: {
+			trial: {
+				description: 'a colour-matching attempt',
+				label: 'code',
+				fields: {
+					code: { kind: 'text' },
+					status: {
+						kind: 'state',
+						initial: 'draft',
+						states: { draft: { to: ['approved'] }, approved: { edit: 'none' } }
 					}
-				);
-				expect(yield* result(x, 'read_file', { id: 'f1' })).toMatchObject({
-					result: {
-						transcript: 'Raw Mat: Makrolon 2807 (handwritten)',
-						attached: expect.stringContaining('its 2 pages are shown to you')
-					}
-				});
-				expect(transcribed).toEqual([
-					[
-						{ mime: 'image/jpeg', bytes: pages[0], id: 'f1#page1' },
-						{ mime: 'image/jpeg', bytes: pages[1], id: 'f1#page2' }
-					]
-				]);
-				expect(x.files.map((f) => f.mime)).toEqual(['image/jpeg', 'image/jpeg']);
-				// asked for again as an image: the same pages, already in view, and no PDF part
-				expect(yield* result(x, 'read_file', { id: 'f1', as: 'image' })).toMatchObject({
-					result: { attached: expect.stringContaining('already shown') }
-				});
-				expect(x.files).toHaveLength(2);
-			})
+				}
+			},
+			trial_line: {
+				description: 'one measured value',
+				label: 'value',
+				fields: { value: { kind: 'text' } }
+			},
+			secret: { description: 'hidden', label: 'x', fields: { x: { kind: 'text' } } }
+		},
+		relationships: { 'trial_line.trial': { to: 'trial', inverse: 'lines', owned: true } },
+		exposures: {
+			trial: {
+				read: { trial: { fields: 'all' }, 'trial.lines': { fields: 'all' } },
+				create: { columns: { trial: ['code'] } },
+				effect: { created: true },
+				notify: true,
+				syncs: { import_csv: { with: 'file', parser: ['csv'] } }
+			},
+			secret: { read: { secret: { fields: 'all' } }, delete: {} }
+		},
+		policies: {
+			matcher: {
+				description: '',
+				grants: { trial: { read: true, create: true } },
+				automations: ['close_month'],
+				capabilities: { apps: ['lab/trials'] }
+			}
+		},
+		automations: {
+			close_month: {
+				description: 'closes the month',
+				policies: ['matcher'],
+				input: { month: { kind: 'date' } },
+				on: { cron: '0 2 1 * *' },
+				agent: 'confirm'
+			},
+			purge: { description: 'deletes everything', policies: ['matcher'] }
+		},
+		groups: { lab: { label: 'nav.lab', icon: 'lucide:flask', defaultChild: 'trials' } },
+		apps: {
+			'lab/trials': {
+				title: 'app.trials.title',
+				description: 'app.trials.description',
+				icon: 'lucide:flask',
+				pages: { list: { title: 'page.list' }, kiosk: { title: 'page.kiosk', portal: true } }
+			}
+		}
+	};
+	const messages = messageCatalogue(
+		"export default messages({\n\t'app.trials.title': 'Trials',\n\t'app.trials.description': 'Colour matching',\n\t'nav.lab': 'Lab',\n\t'page.list': 'All trials'\n});"
+	);
+	const matcher = compileAuthority(
+		lab,
+		{ actor: member().actor, admin: false, policies: ['matcher'] },
+		'm'
+	);
+	it('maps what the caller reaches, and nothing it cannot', () => {
+		const map = describeWorkspace(lab, matcher, messages);
+		expect(map).toContain('# Workspace tz Asia/Singapore · locale en-SG · currency SGD');
+		expect(map).toContain('lab "Lab" ▸ lab/trials "Trials": Colour matching');
+		expect(map).toContain('  ├ list "All trials"');
+		expect(map).toContain('  ├ kiosk "page.kiosk" portal');
+		expect(map).toContain('trial "a colour-matching attempt"');
+		expect(map).toContain('  writes create');
+		expect(map).toContain('  links lines (many trial_line)');
+		expect(map).toContain('  state status: draft | approved');
+		expect(map).toContain('  effects created');
+		expect(map).toContain('  syncs import_csv (file)');
+		expect(map).toContain(
+			'close_month(month: date) "closes the month" · cron 0 2 1 * * · agent confirm'
+		);
+		expect(map).not.toContain('secret');
+		expect(map).not.toContain('purge');
+		// an administrator sees the model the matcher cannot
+		const admin = compileAuthority(
+			lab,
+			{ actor: member({ admin: true }).actor, admin: true, policies: [] },
+			'a'
+		);
+		expect(describeWorkspace(lab, admin, messages)).toContain('secret "hidden"');
+	});
+	it('stays within the cap, naming the rest for a focused call', () => {
+		const many = Object.fromEntries(
+			Array.from({ length: 400 }, (_, n) => [
+				`model_${n}`,
+				{
+					description: `the ${n}th model of a large workspace`,
+					label: 'x',
+					fields: { x: { kind: 'text' as const } }
+				}
+			])
+		);
+		const big: EngineManifest = {
+			...lab,
+			models: { ...lab.models, ...many },
+			exposures: {
+				...lab.exposures,
+				...Object.fromEntries(
+					Object.keys(many).map((n) => [n, { read: { [n]: { fields: 'all' as const } } }])
+				)
+			}
+		};
+		const admin = compileAuthority(
+			big,
+			{ actor: member({ admin: true }).actor, admin: true, policies: [] },
+			'a'
+		);
+		const map = describeWorkspace(big, admin, messages);
+		expect(new TextEncoder().encode(map).byteLength).toBeLessThanOrEqual(OVERVIEW_BYTES);
+		expect(map).toMatch(
+			/Also \(describe_workspace \{ "focus": "model", "name": … \}\): .*model_\d+.* more/
+		);
+	});
+	it.effect('focus answers one item exactly, through the tool', () =>
+		Effect.gen(function* () {
+			const x = yield* ctx({ authority: matcher, inApp: false }, { manifest: lab });
+			expect(yield* result(x, 'describe_workspace', { focus: 'model', name: 'trial' })).toEqual({
+				result: [
+					'trial "a colour-matching attempt"',
+					'  reads default',
+					'  writes create',
+					'  links lines (many trial_line)',
+					'  state status: draft | approved',
+					'  effects created',
+					'  syncs import_csv (file)',
+					'  notices on its write and approval events'
+				].join('\n')
+			});
+			expect(yield* result(x, 'describe_workspace', { focus: 'model', name: 'secret' })).toEqual({
+				result: 'No model named secret that you can reach.'
+			});
+			expect(yield* result(x, 'describe_workspace', { focus: 'automation' })).toEqual({
+				result:
+					'# Automations (start as automation.<name> with act)\nclose_month(month: date) "closes the month" · cron 0 2 1 * * · agent confirm'
+			});
+		})
+	);
+});
+describe('read_file on a PDF', () => {
+	const pdf = new TextEncoder().encode('%PDF-1.7 doc'),
+		typed =
+			'Trial 42: colour matched to the master within tolerance, approved by the lab on the second run.';
+	const reading = (ports: Parameters<typeof ctx>[0]) =>
+		ctx(
+			{
+				attachments: { read: () => Effect.succeed({ mime: 'application/pdf', bytes: pdf }) },
+				...ports
+			},
+			{
+				db: {
+					read: () =>
+						Effect.succeed([
+							{
+								rows: [{ file: { id: 'f1', name: 'form.pdf', mime: 'application/pdf' } }],
+								affected: 0
+							}
+						])
+				}
+			}
+		);
+	it.effect('a text PDF answers its own text; nothing is shown', () =>
+		Effect.gen(function* () {
+			const x = yield* reading({
+				documentText: () => Effect.succeed(`[Page 1]\n${typed}`),
+				documentPages: () => Effect.die('a text PDF renders nothing')
+			});
+			expect(yield* result(x, 'read_file', { id: 'f1' })).toMatchObject({
+				result: { text: `[Page 1]\n${typed}` }
+			});
+			expect(x.files).toEqual([]);
+		})
+	);
+	it.effect('a scan: its pages are shown as images with the scan note, never the PDF', () =>
+		Effect.gen(function* () {
+			const pages = [new Uint8Array([1]), new Uint8Array([2])];
+			const x = yield* reading({
+				documentText: () =>
+					Effect.succeed('[Page 1]\n(no extractable text: a scanned page)\n\n[Page 2]\nstamp'),
+				documentPages: (_file, count) => Effect.succeed(pages.slice(0, count))
+			});
+			expect(yield* result(x, 'read_file', { id: 'f1' })).toMatchObject({
+				result: {
+					attached: expect.stringContaining('its 2 pages are shown to you'),
+					note: expect.stringContaining('verified')
+				}
+			});
+			expect(x.files).toEqual([
+				{ mime: 'image/jpeg', bytes: pages[0], id: 'f1#page1' },
+				{ mime: 'image/jpeg', bytes: pages[1], id: 'f1#page2' }
+			]);
+			// asked for again as an image: the same pages, already in view, and no PDF part
+			expect(yield* result(x, 'read_file', { id: 'f1', as: 'image' })).toMatchObject({
+				result: { attached: expect.stringContaining('already shown') }
+			});
+			expect(x.files.map((f) => f.mime)).toEqual(['image/jpeg', 'image/jpeg']);
+		})
+	);
+	it.effect('a mixed PDF splits per page: text pages as text, the scanned page as its image', () =>
+		Effect.gen(function* () {
+			const rendered: number[] = [];
+			const x = yield* reading({
+				documentText: () =>
+					Effect.succeed(
+						`[Page 1]\n${typed}\n\n[Page 2]\n(image-only page: the text below is an OCR layer, not the page's own text)\n${typed}\n\n[Page 3]\n${typed}`
+					),
+				documentPages: (_file, count) =>
+					Effect.sync(() => {
+						rendered.push(count);
+						return [new Uint8Array([1]), new Uint8Array([2])];
+					})
+			});
+			const answer = yield* result(x, 'read_file', { id: 'f1' });
+			expect(answer).toMatchObject({
+				result: {
+					text: `[Page 1]\n${typed}\n\n[Page 2]\n(scanned: read it from its page image)\n\n[Page 3]\n${typed}`
+				}
+			});
+			expect(rendered).toEqual([2]);
+			expect(x.files).toEqual([{ mime: 'image/jpeg', bytes: new Uint8Array([2]), id: 'f1#page2' }]);
+		})
+	);
+	it.effect('a scan on a host that renders no pages is an explicit answer, never the raw PDF', () =>
+		Effect.gen(function* () {
+			const x = yield* reading({});
+			expect(yield* result(x, 'read_file', { id: 'f1' })).toMatchObject({
+				result: { error: expect.stringContaining('cannot be read here') }
+			});
+			expect(x.files).toEqual([]);
+		})
 	);
 });
 describe('act starts automations', () => {

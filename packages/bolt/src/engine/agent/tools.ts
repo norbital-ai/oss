@@ -54,6 +54,8 @@ import { lowerRead } from '../query/engine.ts';
 import { materializeEach } from '../runs/time.ts';
 import { BOUNDS, bound, bounded, filesOf, localTime, outputText, page, size } from './context.ts';
 import { MODEL_FILES, ToolAnswer, toolSchema, type AnyTool, type InferTool } from './ai.ts';
+import { ingestPdf } from './ingest.ts';
+import { canOpen } from '../../shell/nav.ts';
 export { ToolAnswer, type AnyTool } from './ai.ts';
 import { REFERENCE, ReferenceIndex, RUN_JS, runFile, runJs } from './run-js.ts';
 import { layered, layers, SKILL_FILE, type EngineManifest, type SkillSpec } from '../manifest.ts';
@@ -211,13 +213,6 @@ export type ToolContext = {
 	receipts: Receipt[];
 	/** What this turn has read (skills, sections, files), each with how the closing note names it: already above. */
 	read: Map<string, string>;
-	/**
-	 * A document's faithful Markdown transcription by the conversation's model (one call, metered with the turn), so it
-	 * stays in the conversation as text instead of a document re-sent on every step; absent where no model is bound.
-	 */
-	transcribe?: (
-		files: readonly { mime: string; bytes: Uint8Array }[]
-	) => Effect.Effect<string, EngineError>;
 	/** A document's text layer, page by page (the host's extractor); a scanned page is marked as having none. */
 	documentText?: (file: { mime: string; bytes: Uint8Array }) => Effect.Effect<string, EngineError>;
 	/** A PDF's first `pages` pages as JPEG images (the host's renderer): what the model reads a scan from. */
@@ -306,6 +301,9 @@ const ok = (result: Json): ToolAnswer => ({ result });
  * A document's text as one answer, whole up to the result bound (never clipped cell-wise like a row's field): past it,
  * the start and a pointer, the whole kept for `read_output`.
  */
+/** A scan is read by eye: the guard against values made up or slipped between columns. */
+const SCAN_NOTE =
+	'scanned pages are shown to you as images: read each value from the page itself, column by column. Ask the person about any value you cannot read for certain. Before you say a write is verified, read each written value back against its page image.';
 const documentAnswer = (answer: { readonly [key: string]: Json }, key: string): ToolAnswer => {
 	const value = answer[key],
 		text = typeof value === 'string' ? value : '',
@@ -768,54 +766,197 @@ function shapeOf(m: EngineManifest, a: Authority, path: string, output = 'defaul
 				})
 	};
 }
-/** The system prompt's schema section is at most this many bytes; the models past it are named, for describe. */
-const SCHEMA_BYTES = 16_000;
 /**
- * Every root the actor reads, one line per output it may read: its description, the output's fields with their kinds
- * (a link names its model, an enum or state its values) and its layers. The schema `describe` answers, up front, so a
- * task starts with its first real read instead of a describe per model. `undefined` when nothing is readable.
+ * Every root the actor reads, by name with its description's first line: the prompt's map. Fields are `read`'s describe
+ * and `describe_workspace`'s. `undefined` when nothing is readable.
  */
 export function workspaceSchema(m: EngineManifest, a: Authority): string | undefined {
 	const roots = readPaths(m, a).filter((path) => !path.includes('.'));
 	if (roots.length === 0) return undefined;
-	const lines: string[] = [],
-		rest: string[] = [];
-	let used = 0;
-	for (const [root, output] of roots.flatMap((root) =>
-		readOutputs(m, a, root).map((output) => [root, output] as const)
-	)) {
-		const shape = shapeOf(m, a, root, output),
-			fields = Predicate.isObject(shape) ? shape['fields'] : undefined,
-			layers = Predicate.isObject(shape) ? shape['layers'] : undefined,
-			about = layered(m).models[root]?.description ?? '';
-		const line =
-			`- ${root}${output === 'default' ? '' : ` output "${output}"`}${about === '' ? '' : ` (${about})`}: ` +
-			(Predicate.isObject(fields)
-				? Object.entries(fields)
-						.filter(([, kind]) => kind !== 'system')
-						.map(([f, kind]) => `${f} ${String(kind)}`)
-						.join(', ')
-				: '') +
-			(Predicate.isObject(layers) && Object.keys(layers).length > 0
-				? `; layers ${Object.entries(layers)
-						.map(([path, model]) => `${path} (${String(model)})`)
-						.join(', ')}`
-				: '');
-		if (used + size(line) > SCHEMA_BYTES) {
-			if (!rest.includes(root)) rest.push(root);
-		}
-		else {
-			lines.push(line);
-			used += size(line);
-		}
-	}
 	return (
-		'# Models you read (fields and kinds per output; a line naming an output is read with that "output" option, the others are "default"; every row also has id, created_at, created_by, updated_at, updated_by; read describe answers the same, with your writes and their columns)\n' +
-		lines.join('\n') +
-		(rest.length === 0
-			? ''
-			: `\nAlso (read { "<model>": { "describe": true } } first): ${rest.join(', ')}`)
+		'# Models you read (describe_workspace maps them with your writes, links and states; read { "<model>": { "describe": true } } answers their fields)\n' +
+		roots
+			.map((root) => {
+				const about = (layered(m).models[root]?.description ?? '').split('\n')[0]!.trim();
+				return `- ${root}${about === '' ? '' : ` (${about})`}`;
+			})
+			.join('\n')
 	);
+}
+/** An automation with its input, so the first start is the right one (an omitted input runs it over everything). */
+const automationSignature = (m: EngineManifest, name: string) => {
+	const input =
+		(
+			m.automations[name] as
+				| {
+						input?: {
+							[k: string]: {
+								kind: string;
+								of?: unknown;
+								optional?: boolean;
+							};
+						};
+				  }
+				| undefined
+		)?.input ?? {};
+	const kind = (v: { kind: string; of?: unknown }) =>
+		v.of === undefined
+			? v.kind
+			: `${v.kind}<${
+					typeof v.of === 'string'
+						? v.of
+						: ((
+								v.of as {
+									kind: string;
+									of?: unknown;
+								}
+							).of ??
+							(
+								v.of as {
+									kind: string;
+								}
+							).kind)
+				}>`;
+	return `${name}(${Object.entries(input)
+		.map(([k, v]) => `${k}${v.optional ? '?' : ''}: ${kind(v)}`)
+		.join(', ')})`;
+};
+/** `describe_workspace`'s whole map is at most this many bytes; past it, items are named for a focused call. */
+export const OVERVIEW_BYTES = 12_000;
+/** The base message catalogue's `'key': 'text'` pairs, read from its source. */
+// ponytail: a regex over the source, not a TS parse; a key or text with a quote inside is skipped
+export const messageCatalogue = (source: string | null): ReadonlyMap<string, string> =>
+	new Map(
+		[...(source ?? '').matchAll(/'([^'\n]+)':\s*'((?:[^'\\\n]|\\.)*)'/g)].map(
+			(match) => [match[1]!, match[2]!] as const
+		)
+	);
+/**
+ * The workspace as a map, scoped to the caller: its basics, the apps they open (group ▸ app ▸ pages), the models they
+ * read or write (description, outputs, writes, links, states, effects, syncs, search, notices) and the automations they
+ * start (signature, description, trigger, agent use). `focus` answers one section, or with `name` one item, in full.
+ */
+export function describeWorkspace(
+	m: EngineManifest,
+	a: Authority,
+	messages: ReadonlyMap<string, string>,
+	ask: { readonly focus?: 'app' | 'model' | 'automation'; readonly name?: string } = {}
+): string {
+	const all = layered(m),
+		t = (key: string) => messages.get(key) ?? key,
+		acts = [...callablesFor(m, a).keys()];
+	const roots = new Set(readPaths(m, a).filter((path) => !path.includes('.')));
+	const apps = [...new Set([...(m.workspace.apps ?? []), ...Object.keys(m.apps)])].filter(
+		(name) => m.apps[name] !== undefined && canOpen(m, a, name)
+	);
+	const models = Object.keys(all.models).filter(
+		(name) => roots.has(name) || acts.some((c) => c.startsWith(`${name}.`))
+	);
+	const automations = a.automations.filter((name) => m.automations[name] !== undefined);
+	const app = (name: string) => {
+		const spec = m.apps[name]!,
+			group = name.includes('/') ? name.slice(0, name.indexOf('/')) : undefined,
+			label = group === undefined ? undefined : m.groups?.[group]?.label;
+		return [
+			`${group === undefined ? '' : `${group}${label === undefined ? '' : ` "${t(label)}"`} ▸ `}${name} "${t(spec.title)}": ${t(spec.description)}`,
+			...Object.entries(spec.pages).map(
+				([page, p]) =>
+					`  ├ ${page} "${t(p.title)}"${p.section === undefined ? '' : ` section "${t(p.section)}"`}${p.portal === true ? ' portal' : ''}`
+			)
+		].join('\n');
+	};
+	const model = (name: string) => {
+		const spec = all.models[name]!,
+			ex = all.exposures[name];
+		const links = Object.entries(all.relationships).flatMap(([key, r]) => [
+			...(key.startsWith(`${name}.`)
+				? [`${key.slice(name.length + 1)} → ${[r.to].flat().join(' | ')}`]
+				: []),
+			...([r.to].flat().includes(name) && r.inverse !== undefined
+				? [`${r.inverse} (many ${key.slice(0, key.indexOf('.'))})`]
+				: [])
+		]);
+		const states = Object.entries(spec.fields).flatMap(([f, d]) =>
+			d.kind === 'state' ? [`${f}: ${Object.keys(d.states).join(' | ')}`] : []
+		);
+		const writes = acts
+			.filter((c) => c.startsWith(`${name}.`))
+			.map((c) => c.slice(name.length + 1));
+		const line = (label: string, items: readonly string[]) =>
+			items.length === 0 ? [] : [`  ${label} ${items.join(' · ')}`];
+		return [
+			`${name} "${spec.description.split('\n')[0]!.trim()}"`,
+			...line('reads', roots.has(name) ? readOutputs(m, a, name) : []),
+			...line('writes', writes),
+			...line('links', links),
+			...line('state', states),
+			...line('effects', Object.keys(ex?.effect ?? {})),
+			...line(
+				'syncs',
+				Object.entries(ex?.syncs ?? {}).map(([sync, x]) => `${sync} (${x.with})`)
+			),
+			...line('search', Object.keys(spec.search?.indexes ?? {})),
+			...line('notices', ex?.notify === true ? ['on its write and approval events'] : [])
+		].join('\n');
+	};
+	const automation = (name: string) => {
+		const spec = m.automations[name]!,
+			on = [spec.on ?? []]
+				.flat()
+				.map((x) => ('cron' in x ? `cron ${x.cron}` : `webhook ${x.webhook}`));
+		return `${automationSignature(m, name)} "${spec.description}"${on.length === 0 ? '' : ` · ${on.join(', ')}`}${spec.agent === undefined ? '' : ` · agent ${spec.agent}`}`;
+	};
+	const sections = {
+		app: { title: '# Apps (group ▸ app ▸ pages, nav order)', names: apps, render: app },
+		model: {
+			title:
+				'# Models (the API, not the source: read { "<model>": { "describe": true } } for fields, workspace_search or src/data/model/<model>/+model.ts for anything finer)',
+			names: models,
+			render: model
+		},
+		automation: {
+			title: '# Automations (start as automation.<name> with act)',
+			names: automations,
+			render: automation
+		}
+	};
+	if (ask.focus !== undefined) {
+		const section = sections[ask.focus];
+		if (ask.name === undefined)
+			return [section.title, ...section.names.map(section.render)].join('\n');
+		return section.names.includes(ask.name)
+			? section.render(ask.name)
+			: `No ${ask.focus} named ${ask.name} that you can reach.`;
+	}
+	const out = [
+		`# Workspace tz ${m.workspace.tz} · locale ${m.workspace.locale}${m.workspace.currency === undefined ? '' : ` · currency ${m.workspace.currency}`}`
+	];
+	let used = size(out[0]!);
+	for (const [focus, section] of Object.entries(sections)) {
+		if (section.names.length === 0) continue;
+		out.push('', section.title);
+		const rest: string[] = [];
+		for (const name of section.names) {
+			const text = rest.length > 0 ? undefined : section.render(name);
+			if (text !== undefined && used + size(text) <= OVERVIEW_BYTES - 1_000) {
+				out.push(text);
+				used += size(text);
+			} else rest.push(name);
+		}
+		if (rest.length === 0) continue;
+		// the names past the cap, as many as still fit
+		let also = `Also (describe_workspace { "focus": "${focus}", "name": … }):`,
+			named = 0;
+		for (const name of rest) {
+			if (used + size(also) + size(name) + 200 > OVERVIEW_BYTES) break;
+			also += `${named === 0 ? ' ' : ', '}${name}`;
+			named++;
+		}
+		if (named < rest.length) also += ` … and ${rest.length - named} more`;
+		out.push(also);
+		used += size(also);
+	}
+	return out.join('\n');
 }
 /**
  * This turn's `read` input: the one read request a page's `bolt.query` and `/__bolt/q` send (`LayerRequestSchema`, the
@@ -1077,44 +1218,35 @@ export const catalogue = Effect.fn('AgentTool.catalogue')(function* (x: ToolCont
 			read.tool,
 			Toolkit.make(read.tool).toHandlers({ read: (request) => read.run(request) })
 		);
-	// each with its input, so the first start is the right one (an omitted input runs the automation over everything)
-	const signature = (name: string) => {
-		const input =
-			(
-				e.manifest.automations[name] as
-					| {
-							input?: {
-								[k: string]: {
-									kind: string;
-									of?: unknown;
-									optional?: boolean;
-								};
-							};
-					  }
-					| undefined
-			)?.input ?? {};
-		const kind = (v: { kind: string; of?: unknown }) =>
-			v.of === undefined
-				? v.kind
-				: `${v.kind}<${
-						typeof v.of === 'string'
-							? v.of
-							: ((
-									v.of as {
-										kind: string;
-										of?: unknown;
-									}
-								).of ??
-								(
-									v.of as {
-										kind: string;
-									}
-								).kind)
-					}>`;
-		return `${name}(${Object.entries(input)
-			.map(([k, v]) => `${k}${v.optional ? '?' : ''}: ${kind(v)}`)
-			.join(', ')})`;
-	};
+	const describeTool = Tool.make('describe_workspace', {
+		description:
+			"A map of the workspace as you may use it: its apps and pages, each model's outputs, your writes, links, states, effects and syncs, and the automations you start with their input. Call it once before a task's first read or write instead of describing models one by one; focus (with name) answers one section or item in full.",
+		parameters: Schema.Struct({
+			focus: Schema.optionalKey(Schema.Literals(['app', 'model', 'automation'])),
+			name: Schema.optionalKey(
+				Schema.String.annotate({ description: 'an app, model or automation name' })
+			)
+		}),
+		success: ToolAnswer
+	});
+	yield* add(
+		describeTool,
+		Toolkit.make(describeTool).toHandlers({
+			describe_workspace: (i) =>
+				guard(
+					Effect.gen(function* () {
+						const source =
+							x.workspace === undefined
+								? null
+								: yield* Port.attempt('workspace', () =>
+										x.workspace!.read('src/i18n/+messages.ts')
+									).pipe(Effect.orElseSucceed(() => null));
+						return ok(describeWorkspace(e.manifest, a, messageCatalogue(source), i));
+					})
+				)
+		})
+	);
+	const signature = (name: string) => automationSignature(e.manifest, name);
 	// a sync starts as its caller: a file sync's import gated by their create or update grants on the model, its
 	// export by their reads (the engine judges both); a remote sync's read is granted by name among the policy's automations
 	const allSyncs = syncsOf(e.manifest);
@@ -1570,9 +1702,6 @@ Related rows go inside their root row in the same call, never in a separate writ
 				: mime === 'application/pdf'
 					? 'document'
 					: (i.as ?? 'text');
-		// a PDF is read as its transcription (text the rest of the turn keeps, cheaply); asked for as an image, it is shown
-		const transcribing =
-			mime === 'application/pdf' && i.as !== 'image' && x.transcribe !== undefined;
 		const fileId =
 				Predicate.isObject(file) && typeof file['id'] === 'string' ? file['id'] : undefined,
 			fileName =
@@ -1582,27 +1711,10 @@ Related rows go inside their root row in the same call, never in a separate writ
 		const seen =
 			fileId === undefined
 				? undefined
-				: `file:${fileId}#${transcribing ? 'transcript' : as}:${i.sheet ?? 0}`;
+				: `file:${fileId}#${i.as === 'image' ? 'image' : as}:${i.sheet ?? 0}`;
 		if (seen !== undefined && x.read.has(seen))
 			return ok({ note: `You read ${fileName} earlier in this turn; its answer is above.` });
 		const got = yield* port.read(file, as, i.sheet).pipe(Port.call('files', 30000));
-		const bytes =
-			Predicate.isObject(got) && got['bytes'] instanceof Uint8Array ? got['bytes'] : undefined;
-		// a PDF's pages as images where the host renders them: the model reads a scan's pixels, never a provider's OCR of it
-		const pages =
-			mime !== 'application/pdf' || bytes === undefined || x.documentPages === undefined
-				? undefined
-				: yield* x.documentPages({ mime, bytes }, MODEL_FILES.count).pipe(
-						Effect.tapCause(Effect.logWarning),
-						Effect.option,
-						Effect.map((o) =>
-							Option.getOrUndefined(o)?.map((page, n) => ({
-								mime: 'image/jpeg',
-								bytes: page,
-								...(fileId === undefined ? {} : { id: `${fileId}#page${n + 1}` })
-							}))
-						)
-					);
 		const show = (images: readonly { mime: string; bytes: Uint8Array; id?: string }[]) => {
 			const outcomes = images.map((image) => attach(x.files, image)),
 				dropped = outcomes.reduce<number>((n, o) => n + (o === 'shown' ? 0 : o), 0);
@@ -1617,52 +1729,41 @@ Related rows go inside their root row in the same call, never in a separate writ
 					: {})
 			};
 		};
-		if (transcribing && x.transcribe !== undefined && bytes !== undefined) {
-			const doc = { mime, bytes };
-			// its own text where every page has a text layer: exact and at once; a scanned page needs the model's eyes
-			const layer =
-				x.documentText === undefined
-					? undefined
-					: yield* x
-							.documentText(doc)
-							.pipe(
-								Effect.tapCause(Effect.logWarning),
-								Effect.option,
-								Effect.map(Option.getOrUndefined)
-							);
-			// a page with next to no text (a scan with a stamp or a printed footer) is read by eye
-			const texts = layer?.split(/\[Page \d+\]\n?/).slice(1) ?? [];
-			const scanned =
-				texts.length === 0 ||
-				texts.some((page) => page.trim().length < 80 || page.includes('(no extractable text'));
-			const answer = scanned
-				? documentAnswer(
-						{
-							file: fileName,
-							transcript: yield* x.transcribe(pages ?? [doc]),
-							...(pages === undefined
-								? {
-										note: "a model's transcription of the document; read_file with as: 'image' shows the original"
-									}
-								: {
-										...show(pages),
-										note: "a model's transcription of the pages shown to you: names, codes, handwriting, ticks and crossings-out may be misread. Check each value you use against the page; ask the person about one you cannot read for certain."
-									})
-						},
-						'transcript'
-					)
-				: documentAnswer(
-						{
-							file: fileName,
-							text: layer ?? '',
-							note: "the document's own text, page by page; read_file with as: 'image' shows its pages"
-						},
-						'text'
-					);
+		// a PDF per page: its own text where it has a real layer, its own pixels where it is a scan; never the raw PDF
+		if (
+			Predicate.isObject(got) &&
+			got['mime'] === 'application/pdf' &&
+			got['bytes'] instanceof Uint8Array
+		) {
+			const read = yield* ingestPdf(
+				{ mime: got['mime'], bytes: got['bytes'] },
+				i.as === 'image' ? { documentPages: x.documentPages } : x
+			);
+			const images = read.images.map(({ page, bytes }) => ({
+				mime: 'image/jpeg',
+				bytes,
+				...(fileId === undefined ? {} : { id: `${fileId}#page${page}` })
+			}));
+			if (images.length === 0 && read.text === '')
+				return err(
+					`${fileName} cannot be read here: this host renders no page images. Tell the person and ask for photos or a text version.`
+				);
 			if (seen !== undefined) x.read.set(seen, `file ${fileName}`);
-			return answer;
+			return documentAnswer(
+				{
+					file: fileName,
+					...(read.text === '' ? {} : { text: read.text }),
+					...(images.length === 0 ? {} : show(images)),
+					...(read.unread.length === 0
+						? {}
+						: {
+								unread: `scanned page(s) ${read.unread.join(', ')} cannot be shown to you: tell the person and ask for photos of them`
+							}),
+					note: images.length === 0 ? "the document's own text, page by page" : SCAN_NOTE
+				},
+				'text'
+			);
 		}
-		if (pages !== undefined) return ok(show(pages));
 		if (
 			Predicate.isObject(got) &&
 			'bytes' in got &&
@@ -1704,7 +1805,7 @@ Related rows go inside their root row in the same call, never in a separate writ
 		as: Schema.optionalKey(
 			Schema.Literals(['text', 'image', 'sheet', 'document']).annotate({
 				description:
-					"Optional. A PDF answers its text (a scan: a transcription, with its pages shown to you); 'image' shows its pages only. An image is always shown."
+					"Optional. A PDF answers its own text page by page, its scanned pages shown to you as images; 'image' shows its pages only. An image is always shown."
 			})
 		),
 		sheet: Schema.optionalKey(
@@ -1717,7 +1818,7 @@ Related rows go inside their root row in the same call, never in a separate writ
 	if (x.attachments !== undefined) {
 		const readFileTool = Tool.make('read_file', {
 			description:
-				"Read any stored file by its file reference ({ id }): a record's file field, any of this conversation's inputs (every [file: … id:…] line, filtered messages' files included) or outputs, or a message attachment. An image (or a PDF read with as: 'image') is shown to you from your next step until this turn ends: read each once. A PDF answers its own text, or for a scan a transcription with its pages shown to you in the same call; text answers directly; an XLSX answers one sheet (sheet, 0-based) and lists the sheet names. Video and audio cannot be viewed: the answer says so.",
+				"Read any stored file by its file reference ({ id }): a record's file field, any of this conversation's inputs (every [file: … id:…] line, filtered messages' files included) or outputs, or a message attachment. An image (or a PDF read with as: 'image') is shown to you from your next step until this turn ends: read each once. A PDF answers its own text page by page, and its scanned pages are shown to you as images in the same call (read their values by eye); text answers directly; an XLSX answers one sheet (sheet, 0-based) and lists the sheet names. Video and audio cannot be viewed: the answer says so.",
 			parameters: Schema.Struct({
 				id: Schema.String.annotate({ description: 'the file id' }),
 				...readAs

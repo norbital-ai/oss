@@ -3,7 +3,7 @@ import { Effect, Schema } from 'effect';
 import * as NodeRuntime from '@effect/platform-node/NodeRuntime';
 import { parentPort, workerData } from 'node:worker_threads';
 import { fileURLToPath } from 'node:url';
-import { getDocument } from 'pdfjs-dist/legacy/build/pdf.mjs';
+import { getDocument, OPS } from 'pdfjs-dist/legacy/build/pdf.mjs';
 class PdfFailure extends Schema.TaggedError<PdfFailure>()('PdfFailure', {
 	message: Schema.String,
 	cause: Schema.optionalKey(Schema.Defect())
@@ -110,13 +110,27 @@ const parse = Effect.scoped(
 			const text = yield* Effect.acquireUseRelease(
 				Effect.tryPromise({ try: () => document.getPage(number), catch: failed }),
 				(page) =>
-					Effect.tryPromise({ try: () => page.getTextContent(), catch: failed }).pipe(
-						Effect.map((content) =>
-							content.items
+					Effect.tryPromise({
+						try: () => Promise.all([page.getTextContent(), page.getOperatorList()]),
+						catch: failed
+					}).pipe(
+						Effect.map(([content, ops]) => {
+							const text = content.items
 								.map((item) => ('str' in item ? `${item.str}${item.hasEOL ? '\n' : ' '}` : ''))
 								.join('')
-								.trim()
-						)
+								.trim();
+							// a scan under an OCR layer: one image, every text run invisible (render mode 3)
+							// ponytail: the image's page coverage is not measured; add the paint transform if partial scans show up
+							const images = ops.fnArray.filter(
+									(op) => op === OPS.paintImageXObject || op === OPS.paintInlineImageXObject
+								).length,
+								modes = ops.fnArray.flatMap((op, n) =>
+									op === OPS.setTextRenderingMode ? [ops.argsArray[n]?.[0]] : []
+								);
+							return text !== '' && images === 1 && modes.length > 0 && modes.every((m) => m === 3)
+								? `(image-only page: the text below is an OCR layer, not the page's own text)\n${text}`
+								: text;
+						})
 					),
 				(page) =>
 					Effect.sync(() => {

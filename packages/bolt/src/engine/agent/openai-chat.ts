@@ -5,14 +5,12 @@
 // overflow by it). An endpoint that ignores `stream` and answers `application/json` is read whole.
 import { Clock, Effect, Option, Predicate, Queue, Schema, Stream } from 'effect';
 import { FetchHttpClient, HttpClient, HttpClientRequest } from 'effect/http';
-import { csvOf } from '@norbital-ai/std/csv';
 import { FacilityFailure } from '../../decl/errors.ts';
 import { Port, type PortFailure } from '../port.ts';
 import type { AiEvent } from '../ports.ts';
 import type { Json } from '../../decl/values.ts';
 import { LIMITS, type AiRequest, type AiResponse } from '../contracts.ts';
-import { xlsxCells, xlsxSheets } from '../files/xlsx.ts';
-import { toBase64 } from '../crypto.ts';
+import { filePart } from './ingest.ts';
 import { SaidContent, StepContent } from './schema.ts';
 import { STATE_NOTE } from './context.ts';
 
@@ -28,6 +26,8 @@ export type OpenAiChatConfig = {
 	strict?: boolean;
 	/** The provider's charge for one call (`usage.cost`, USD) under its generation id, awaited before `infer` resolves. */
 	meter?: (costUsd: number, generationId: string) => Promise<void> | void;
+	/** A provider model's input modalities (OpenRouter `architecture.input_modalities`); a PDF goes whole only to `pdf`. */
+	inputs?: (model: string) => Effect.Effect<readonly string[] | undefined>;
 };
 
 type Wire = { [k: string]: unknown };
@@ -49,10 +49,6 @@ const textOf = (c: Json): string =>
 		: Predicate.isObject(c) && typeof c['text'] === 'string'
 			? c['text']
 			: JSON.stringify(c);
-const TEXT = /^(text\/|application\/(json|csv|xml|[\w.-]+\+(json|xml))$)/;
-const XLSX = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
-const dataUrl = (f: { mime: string; bytes: Uint8Array }) =>
-	`data:${f.mime};base64,${toBase64(f.bytes)}`;
 
 /** The engine's messages decoded as its transcript rows hold them, by role. */
 const stepOf = Schema.decodeUnknownOption(StepContent),
@@ -62,7 +58,7 @@ const stepOf = Schema.decodeUnknownOption(StepContent),
  * opened follows that call's results as a user message, in the same place on every later step of the turn (providers
  * cache the prefix); one whose call is no longer in the history rides the last user message.
  */
-function messagesOf(r: AiRequest): Wire[] {
+function messagesOf(r: AiRequest, inputs: readonly string[] | undefined): Wire[] {
 	const out: Wire[] = r.system === undefined ? [] : [{ role: 'system', content: r.system }];
 	// only the latest step's reasoning goes back (the tool calls it made are what a provider may need it for): earlier
 	// steps' would bloat every call, and a mistaken belief in one ("I have not seen that file") would be read again
@@ -74,7 +70,7 @@ function messagesOf(r: AiRequest): Wire[] {
 		latest = r.messages.findLastIndex((m) => m.role === 'assistant');
 	const files = (r.files ?? []).map((f, n) => ({
 		call: f.call,
-		part: filePart(f, `attachment-${n + 1}`)
+		part: filePart(f, `attachment-${n + 1}`, inputs)
 	}));
 	const calls = new Set(
 		r.messages.flatMap((m) =>
@@ -132,28 +128,6 @@ function messagesOf(r: AiRequest): Wire[] {
 	}
 	return out;
 }
-/** One file as a chat part: an image as an image part, a PDF as a file part, text and an xlsx's sheets (as CSV) as text
- * (providers refuse other file parts); a type no provider takes is described, never sent, so one odd file cannot fail the
- * whole request. */
-function filePart(f: { mime: string; bytes: Uint8Array }, name: string): Json {
-	if (f.mime.startsWith('image/')) return { type: 'image_url', image_url: { url: dataUrl(f) } };
-	if (f.mime === 'application/pdf')
-		return { type: 'file', file: { filename: name, file_data: dataUrl(f) } };
-	if (TEXT.test(f.mime))
-		return { type: 'text', text: `${name} (${f.mime}):\n${new TextDecoder().decode(f.bytes)}` };
-	if (f.mime === XLSX)
-		return {
-			type: 'text',
-			text: xlsxSheets(f.bytes)
-				.map((sheet, i) => `${name} sheet ${i} "${sheet}" (CSV):\n${csvOf(xlsxCells(f.bytes, i))}`)
-				.join('\n')
-		};
-	return {
-		type: 'text',
-		text: `${name}: a ${f.mime} file cannot be shown to you; ask for a photo, a PDF or a text version`
-	};
-}
-
 type Call = { id: string; name: string; args: string };
 const WireCall = Schema.Struct({
 	index: Schema.optional(Schema.Number),
@@ -221,11 +195,16 @@ export function openAiChat(config: OpenAiChatConfig, options: HttpOptions = {}):
 					id = '';
 				let usage: NonNullable<Schema.Schema.Type<typeof Chunk>['usage']> = {};
 				const calls: Call[] = [];
+				const model = config.models[request.model] ?? request.model,
+					inputs =
+						config.inputs === undefined || (request.files ?? []).length === 0
+							? undefined
+							: yield* config.inputs(model);
 				const body = yield* Effect.try({
 					try: () => ({
 						...config.body,
-						model: config.models[request.model] ?? request.model,
-						messages: messagesOf(request),
+						model,
+						messages: messagesOf(request, inputs),
 						stream: true,
 						stream_options: { include_usage: true },
 						...(request.effort === undefined ? {} : { reasoning_effort: request.effort }),
