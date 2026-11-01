@@ -36,6 +36,10 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile --ignore-scripts
 
+      # Bolt's HTTP contract test starts Convert in process; it owns a separate frozen dependency graph.
+      - name: Install Convert test dependencies
+        run: pnpm --dir services/convert install --ignore-workspace --frozen-lockfile --ignore-scripts
+
       # Bolt's Vitest browser project (https://vitest.dev/guide/browser/) needs Playwright Chromium.
       # Without the browser those tests fail as "Executable doesn't exist", which is a runner
       # gap rather than a driver verdict; a skip would make the suite green without the proof.
