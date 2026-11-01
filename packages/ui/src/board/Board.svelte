@@ -334,6 +334,7 @@
 		);
 	// the lane expanded in the dialog, by its key; the button that opened it takes the focus back
 	let expanded = $state<string | null>(null);
+	let laneDialog = $state<HTMLDivElement | null>(null);
 	let opener: HTMLElement | null = null;
 	const expandedLane = $derived(
 		found.kind === 'ready'
@@ -437,10 +438,10 @@
 	/>
 	{#if selectable}
 		<div
-			class="bg-muted/40 flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 rounded-sm px-3 py-1.5 text-xs"
+			class="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 rounded-sm px-1 text-xs text-muted-foreground dark:bg-muted/40 dark:px-3 dark:py-1.5 dark:text-foreground"
 			data-selection
 		>
-			<label class="inline-flex min-h-8 items-center gap-2">
+			<label class="inline-flex min-h-7 items-center gap-2 dark:min-h-8">
 				<Checkbox
 					checked={loadedAll}
 					indeterminate={loadedSome && !loadedAll}
@@ -452,13 +453,12 @@
 				{msg(bolt, 'table.selectPage', 'Select this page')}
 			</label>
 			{#if selected.size > 0}
-				<span class="font-medium" aria-live="polite" data-selected-count
+				<span class="font-medium text-foreground" aria-live="polite" data-selected-count
 					>{msg(bolt, 'table.selected', '{n} selected', { n: selected.size })}</span
 				>
 				{#if loadedAll && (matching === null || matching > selected.size)}
 					<Button
 						variant="link"
-						size="sm"
 						class="h-auto px-0 text-xs"
 						disabled={selecting}
 						aria-busy={selecting}
@@ -472,7 +472,6 @@
 				{/if}
 				<Button
 					variant="link"
-					size="sm"
 					class="h-auto px-0 text-xs"
 					onclick={clearSelection}
 					data-select-clear>{msg(bolt, 'table.clearSelection', 'Clear selection')}</Button
@@ -488,7 +487,9 @@
 			{#snippet skeleton()}
 				<div class="flex gap-3 overflow-hidden pb-2">
 					{#each [3, 2, 4] as n, i (i)}
-						<div class="bg-muted/40 flex w-72 shrink-0 flex-col gap-2 rounded-sm p-3">
+						<div
+							class="flex w-72 shrink-0 flex-col gap-2 rounded-sm border bg-muted/70 p-3 dark:border-transparent dark:bg-muted/40"
+						>
 							<div class="bg-muted h-4 w-24 animate-pulse rounded motion-reduce:animate-none"></div>
 							{#each { length: n } as _, j (j)}<div
 									class="bg-card h-20 animate-pulse rounded-sm border motion-reduce:animate-none"
@@ -508,10 +509,10 @@
 					<div
 						class={columns === undefined
 							? 'flex max-h-[calc(100dvh-8rem)] min-h-72 flex-1 snap-x gap-3 overflow-x-auto pb-2'
-							: 'grid max-h-[calc(100dvh-8rem)] min-h-72 flex-1 auto-rows-fr gap-3 overflow-y-auto pb-2'}
+							: 'grid max-h-[calc(100dvh-8rem)] min-h-72 flex-1 auto-rows-fr gap-3 overflow-auto pb-2'}
 						style={columns === undefined
 							? undefined
-							: `grid-template-columns: repeat(${columns}, minmax(0, 1fr))`}
+							: `grid-template-columns: repeat(${columns}, minmax(min(100%, 16rem), 1fr))`}
 						ondragover={edgeScroll}
 						ondragstart={dragStart}
 						ondragend={dragEnd}
@@ -523,8 +524,8 @@
 							<div
 								role="list"
 								class={[
-									'flex min-h-0 flex-col gap-2 rounded-sm p-3 ring-inset transition-colors motion-reduce:transition-none',
-									target ? 'bg-primary/10 ring-primary/50 ring-2' : 'bg-muted/40',
+									'flex min-h-0 flex-col gap-2 rounded-sm border p-3 ring-inset transition-colors motion-reduce:transition-none dark:border-transparent',
+									target ? 'bg-primary/10 ring-primary/50 ring-2' : 'bg-muted/70 dark:bg-muted/40',
 									columns === undefined ? 'w-72 shrink-0 snap-start' : 'min-w-0'
 								]}
 								data-lane={laneKey}
@@ -539,7 +540,9 @@
 								}}
 								ondrop={(e) => drop(e, lane.value)}
 							>
-								<header class="flex items-center justify-between gap-2 text-sm font-medium">
+								<header
+									class="flex items-center justify-between gap-2 border-b pb-2 text-sm font-medium dark:border-b-0 dark:pb-0"
+								>
 									<span class="flex min-w-0 items-center gap-1.5"
 										>{#if dot}<span class={['size-2 shrink-0 rounded-full', dot]} aria-hidden="true"
 											></span>{/if}<span class="truncate">{lane.label}</span></span
@@ -550,7 +553,7 @@
 												data-lane-count>{lane.count}</span
 											>{/if}
 										<Button
-											size="icon-sm"
+											size="icon"
 											variant="ghost"
 											class="-my-1.5 -mr-1.5"
 											hint={msg(bolt, 'board.expand', 'Expand {lane}', { lane: lane.label })}
@@ -603,7 +606,12 @@
 		}}
 	>
 		<Dialog.Content
-			class="flex h-[min(90dvh,56rem)] max-w-[min(72rem,calc(100vw-2rem))] flex-col gap-3 p-4"
+			bind:ref={laneDialog}
+			class="flex h-[min(90dvh,56rem)] max-w-[min(72rem,calc(100vw-2rem))] flex-col gap-0 overflow-hidden bg-background p-0 outline-none"
+			onOpenAutoFocus={(e) => {
+				e.preventDefault();
+				laneDialog?.focus({ preventScroll: true });
+			}}
 			onCloseAutoFocus={(e) => {
 				e.preventDefault();
 				opener?.focus();

@@ -5,7 +5,9 @@
 // `node_modules` mapped onto the host's package store at its canonical paths, so workspaces on the same packages share
 // parsed dependency files. Bolt owns this mapping and the whole-program check; the host owns processes and answers.
 import { existsSync, readdirSync, readFileSync, realpathSync, statSync } from 'node:fs';
-import { join } from 'node:path';
+import { createRequire } from 'node:module';
+import { dirname, join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import {
 	API,
 	DiagnosticCategory,
@@ -140,8 +142,53 @@ export function refresh(
 	return { changed, created, deleted };
 }
 
-/** The server's filesystem callbacks: the held roots, their `node_modules` on the package store, disk elsewhere. */
+/** Only virtual source, admitted package graphs and the compiler's standard library are readable. */
 export function filesystem(roots: ReadonlyMap<string, Held>) {
+	const packages = new Set<string>();
+	const canonical = new Map<string, string>();
+	const native = import.meta.resolve('@typescript/native/package.json');
+	const compiler = [
+		dirname(fileURLToPath(native)),
+		// TypeScript ships its standard library alongside the platform binary.
+		dirname(
+			createRequire(native).resolve(
+				`@typescript/typescript-${process.platform}-${process.arch}/package.json`
+			)
+		)
+	];
+	const inside = (path: string, root: string) => path === root || path.startsWith(`${root}/`);
+	/** Canonical pnpm dependencies remain readable; a package symlink cannot grant access outside node_modules. */
+	const disk = (path: string): string | undefined => {
+		path = resolve(path);
+		const cached = canonical.get(path);
+		if (cached !== undefined) return cached;
+		for (const held of roots.values())
+			if (held.modules !== undefined) packages.add(resolve(held.modules));
+		if (![...compiler, ...packages].some((root) => inside(path, root))) return;
+		try {
+			const real = realpathSync(path);
+			if (compiler.some((root) => inside(real, root))) {
+				canonical.set(path, real);
+				return real;
+			}
+			const end = real.lastIndexOf('/node_modules/');
+			if (end === -1) return [...packages].some((root) => inside(real, root)) ? real : undefined;
+			packages.add(real.slice(0, end + '/node_modules'.length));
+			canonical.set(path, real);
+			return real;
+		} catch {
+			return undefined;
+		}
+	};
+	const read = (path: string) => {
+		const real = disk(path);
+		if (real === undefined) return null;
+		try {
+			return readFileSync(real, 'utf8');
+		} catch {
+			return null;
+		}
+	};
 	const locate = (path: string) => {
 		if (!path.startsWith(`${ROOTS}/`)) return undefined;
 		const end = path.indexOf('/', ROOTS.length + 1);
@@ -158,7 +205,8 @@ export function filesystem(roots: ReadonlyMap<string, Held>) {
 			: undefined;
 	const stat = (path: string) => {
 		try {
-			return statSync(path);
+			const real = disk(path);
+			return real === undefined ? undefined : statSync(real);
 		} catch {
 			return undefined;
 		}
@@ -168,21 +216,18 @@ export function filesystem(roots: ReadonlyMap<string, Held>) {
 			// Svelte's ambient `declare module '*.svelte'` would shadow every component's shadow
 			if (path.endsWith('/svelte/types/ambient.d.ts')) return '';
 			const at = locate(path);
-			if (at === undefined) return undefined;
+			// Trusted disk paths use the native reader; everything outside the allowlist fails closed.
+			if (at === undefined) return disk(path) === undefined ? null : undefined;
 			if (at.held === undefined) return null;
 			const text = at.held.virtual.get(path) ?? at.held.files.get(at.rel);
 			if (text !== undefined) return text;
 			const real = store(at.held, at.rel);
 			if (real === undefined) return null;
-			try {
-				return readFileSync(real, 'utf8');
-			} catch {
-				return null;
-			}
+			return read(real);
 		},
 		fileExists(path: string): boolean | undefined {
 			const at = locate(path);
-			if (at === undefined) return undefined;
+			if (at === undefined) return disk(path) === undefined ? false : undefined;
 			if (at.held === undefined) return false;
 			if (at.held.virtual.has(path) || at.held.files.has(at.rel)) return true;
 			const real = store(at.held, at.rel);
@@ -190,7 +235,7 @@ export function filesystem(roots: ReadonlyMap<string, Held>) {
 		},
 		directoryExists(path: string): boolean | undefined {
 			const at = locate(path);
-			if (at === undefined) return undefined;
+			if (at === undefined) return disk(path) === undefined ? false : undefined;
 			if (at.held === undefined) return path === ROOTS;
 			if (at.held.entries.has(at.rel)) return true;
 			const real = store(at.held, at.rel);
@@ -198,14 +243,15 @@ export function filesystem(roots: ReadonlyMap<string, Held>) {
 		},
 		getAccessibleEntries(path: string): { files: string[]; directories: string[] } | undefined {
 			const at = locate(path);
-			if (at === undefined) return undefined;
+			if (at === undefined)
+				return disk(path) === undefined ? { files: [], directories: [] } : undefined;
 			if (at.held === undefined) return { files: [], directories: [] };
 			const own = at.held.entries.get(at.rel);
 			const real =
 				store(at.held, at.rel) ?? (at.rel === 'node_modules' ? at.held.modules : undefined);
 			const files = new Set(own?.files),
 				directories = new Set(own?.directories);
-			if (real !== undefined)
+			if (real !== undefined && disk(real) !== undefined)
 				try {
 					for (const e of readdirSync(real, { withFileTypes: true })) {
 						const kind = e.isSymbolicLink() ? stat(join(real, e.name)) : e;
@@ -219,15 +265,10 @@ export function filesystem(roots: ReadonlyMap<string, Held>) {
 		},
 		realpath(path: string): string | undefined {
 			const at = locate(path);
-			if (at?.held === undefined) return at === undefined ? undefined : path;
+			if (at?.held === undefined) return at === undefined ? (disk(path) ?? path) : path;
 			const real = store(at.held, at.rel);
 			if (real === undefined) return path;
-			try {
-				// the package store's canonical path: tenants on the same packages share parsed files
-				return realpathSync(real);
-			} catch {
-				return path;
-			}
+			return disk(real) ?? path;
 		}
 	};
 }

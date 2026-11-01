@@ -653,6 +653,11 @@ interface IndexFor<F, X> {
 type Inputs<X, K extends string> = X extends { [P in K]: infer F } ? ValidInputs<F> : never;
 type Parser =
 	BuiltinParser | { type: MediaType; extensions: readonly `.${string}`[]; parse: unknown };
+/**
+ * One model sync. `with: 'file'` adds the native Import, Download template and Export toolbar actions from its
+ * `parser`/`read`/`write`; a remote sync names an integration and runs on `every`. `context` is input, never authority;
+ * only returned source fields change. Declared here, run by `ctx.sync` or the sync's schedule, never by a page script.
+ */
 interface SyncFor<X> {
 	with: 'file' | IntegrationName;
 	parser?: readonly Parser[];
@@ -677,7 +682,9 @@ interface ModelFor<
 	description: string;
 	was?: string;
 	icon?: IconName;
-	label: string | readonly string[];
+	/** Optional pure CEL identifier over `record`; shared by record views, live approval references and automatic text search. */
+	record_label?: string;
+	label?: string | readonly string[];
 	fields: {
 		[P in keyof F]: P extends ReservedKeys
 			? `error: '${P & string}' is a system column`
@@ -823,8 +830,18 @@ export type ModelLiteral = {
 	was?: string;
 	/** The model's icon (an Iconify name). */
 	icon?: IconName;
-	/** The field path (or paths, joined) that names a record: `'name'`, `['code', 'name']`. */
-	label: string | readonly string[];
+	/** Optional CEL over `record` returning its human-readable identifier, e.g. `record.code + ' · ' + record.name`.
+	 * Reused implicitly by RecordShell titles, table/list titles, pickers, references and scoped search results.
+	 * The engine materializes it as generated text and includes it in the model's GIN text index automatically;
+	 * `search.text` adds other searchable fields. It recalculates on writes, including sequence and computed values.
+	 * Approval requests search and display it through their existing target reference, without copying the value. Use own stored/computed fields
+	 * or nested inline values; cross-record lookups, clocks and authority are excluded so the index remains correct.
+	 * Use conditionals for optional fields. Explicit authored title/cell overrides still win.
+	 * If omitted, consumers use the record id (UUID); text search still needs explicit `search.text`.
+	 */
+	record_label?: string;
+	/** @deprecated Use `record_label`. Existing field names/lists remain readable; field captions still use `label`. */
+	label?: string | readonly string[];
 	/** The stored fields, `ref` fields included. Every row also carries the system columns (see `ModelSpec.fields`). */
 	fields: { readonly [name: string]: FieldKind | RefField };
 	key?: readonly string[];
@@ -938,8 +955,10 @@ export type ModelSpec = {
 	was?: string;
 	/** The model's icon (an Iconify name). */
 	icon?: IconName;
-	/** The field path (or paths, joined) that names a record: `'name'`, `['code', 'name']`. */
-	label: string | readonly string[];
+	/** Optional pure CEL identifier over `record`, shared by clients and live approval references; automatically indexed when declared. */
+	record_label?: string;
+	/** @deprecated The former record label fields; `record_label` takes precedence. */
+	label?: string | readonly string[];
 	/**
 	 * The stored fields. Every row also carries the system columns `id revision created_at created_by
 	 * updated_at updated_by`, which are not field names: `revision` is the row version every update checks (rule 25), so a
@@ -1092,10 +1111,18 @@ function bodiesOf(m: ModelLiteral): ModelBodies {
  * layers and write callbacks), `notify`, `effect` and `syncs`. Every callback sits on what triggers it, inside the literal, and is
  * typed from the generated names by `name` (`bolt sync`; `bolt check` refuses a name that is not the folder's): until the
  * next sync a body does not see a field just added. Returns the name, the literal and the bodies.
+ * Declaring an exposure makes the operation available; policies still decide which callers and rows may use it.
+ * Native surfaces derive from this one declaration: `Table` and `Form` render the permitted columns and defaults, a
+ * declared file sync adds Import/Export/Template to the toolbar, record history is automatic, `notify` receives every
+ * write and approval event, and a policy check returning `ctx.approve` holds the write for its flow. Pages and agents
+ * must not wire those again.
+ * @param name The model folder's name, also used by generated row and write types.
+ * @param spec Storage, read outputs, guarded write layers and their callbacks; omit operations the model must not expose.
+ * @returns Declaration metadata and attached callback bodies. Calling model does not read or write records.
  * @example
  * export default model('orders', {
  * 	description: 'Customer orders.',
- * 	label: 'number',
+ * 	record_label: 'record.number',
  * 	fields: {
  * 		number: { kind: 'seq', pattern: 'SO-{yyyy}-{0000}' },
  * 		customer: { kind: 'ref', to: 'customers', inverse: 'orders' },
@@ -1105,7 +1132,7 @@ function bodiesOf(m: ModelLiteral): ModelBodies {
  * 	create: {
  * 		columns: { orders: ['customer', 'notes'] },
  * 		transform: function* (rows, ctx) {
- * 			const customers = yield* ctx.db.query('customers', { where: { id: { in: rows.map((r) => r.customer) } }, all: true });
+ * 			const { customers } = yield* ctx.db.query({ customers: { where: { id: { in: rows.map((r) => r.customer) } }, fields: ['id', 'blocked'], all: true } });
  * 			const blocked = new Set(customers.rows.filter((c) => c.blocked).map((c) => c.id));
  * 			const at = rows.findIndex((r) => blocked.has(r.customer));
  * 			if (at >= 0) return yield* ctx.refuse('This customer is blocked.', { field: 'customer', row: at });

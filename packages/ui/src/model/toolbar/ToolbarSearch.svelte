@@ -42,7 +42,7 @@ A toolbar search trigger and popover with a bound text value or a custom indexed
 		{#snippet child({ props })}
 			<Button
 				{...props}
-				size="icon-sm"
+				size="icon"
 				variant="ghost"
 				class={searching ? 'bg-accent' : ''}
 				hint={label}
@@ -74,7 +74,7 @@ A toolbar search trigger and popover with a bound text value or a custom indexed
 				<input
 					bind:this={box}
 					bind:value
-					class="h-8 min-w-0 flex-1 bg-transparent text-base outline-none @xl:text-sm"
+					class="h-8 min-w-0 flex-1 bg-transparent text-xs outline-none"
 					type="search"
 					placeholder={label}
 					aria-label={label}

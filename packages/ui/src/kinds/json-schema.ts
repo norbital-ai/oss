@@ -1,4 +1,5 @@
 import { Array as Arr, Predicate, Schema } from 'effect';
+import { DATATYPE_SHAPES } from '@norbital-ai/std/kind';
 import type { Json, Kind } from './kind.js';
 
 /**
@@ -196,13 +197,68 @@ export function resolveJsonSchema(schema: JsonSchema, root: JsonSchema = schema)
 }
 
 const isTextFormat = Schema.is(Schema.Literals(['email', 'url', 'phone', 'zone', 'markdown']));
-/** A conservative rendering plan. Validation remains the caller/server's JSON Schema validator. */
+
+const sameSet = (a: readonly string[], b: readonly string[]) =>
+	a.length === b.length && a.every((item) => b.includes(item));
+const typesOf = (schema: JsonSchemaObject): readonly string[] => {
+	const type = schema.type;
+	return type === undefined ? [] : typeof type === 'string' ? [type] : type;
+};
+/**
+ * The datatype an object schema's shape is exactly, if any (implicit: no metadata names it): the same keys, value
+ * types and required keys as one of std's `DATATYPE_SHAPES`. Anything extra or different stays a plain object.
+ */
+function shapedKind(schema: JsonSchemaObject): Kind | undefined {
+	if (!sameSet(typesOf(schema), ['object'])) return undefined;
+	if (schema.additionalProperties !== undefined && schema.additionalProperties !== false)
+		return undefined;
+	const properties = schema.properties ?? {};
+	return DATATYPE_SHAPES.find(
+		(shape) =>
+			'properties' in shape &&
+			sameSet(Object.keys(properties), Object.keys(shape.properties)) &&
+			sameSet(schema.required ?? [], shape.required) &&
+			Object.entries(shape.properties).every(([key, expected]) => {
+				const actual = properties[key];
+				return (
+					actual !== undefined &&
+					typeof actual !== 'boolean' &&
+					sameSet(typesOf(actual), expected.type) &&
+					actual.format === expected.format &&
+					actual.properties === undefined &&
+					actual.items === undefined &&
+					actual.enum === undefined
+				);
+			})
+	)?.kind;
+}
+/**
+ * The datatype a schema names explicitly: `format: '<datatype>'` on any schema (JSON Schema's own annotation for a
+ * value's semantic type). A period's end names pick its kind (`start`/`end`: an instant period); on a string,
+ * `format: 'duration'` stays JSON Schema's ISO 8601 duration. `bolt check` holds a named shape to the datatype's.
+ */
+function namedKind(schema: JsonSchemaObject): Kind | undefined {
+	const string = typesOf(schema).every((t) => t === 'string' || t === 'null');
+	const named = DATATYPE_SHAPES.filter(
+		(shape) => shape.name === schema.format && !(string && shape.name === 'duration')
+	);
+	if (named.length > 1)
+		return schema.properties?.['start'] === undefined ? named[0]?.kind : named[1]?.kind;
+	return named[0]?.kind;
+}
+/**
+ * A conservative rendering plan. Validation remains the caller/server's JSON Schema validator. A datatype is chosen
+ * explicitly (`format: '<datatype>'`, or `x-norbital.datatype` for a custom one) or implicitly by an exact shape
+ * (`DATATYPE_SHAPES`); explicit wins.
+ */
 export function jsonSchemaKind(schema: JsonSchema): Kind {
 	if (typeof schema === 'boolean') return { kind: 'json' };
 	const common = { label: schema.title, help: schema.description };
 	if (composesJsonSchema(schema)) return { ...common, kind: 'json' };
 	if (schema['x-norbital']?.datatype)
 		return { ...common, kind: 'custom', of: schema['x-norbital'].datatype };
+	const datatype = namedKind(schema) ?? shapedKind(schema);
+	if (datatype !== undefined) return { ...common, ...datatype };
 	const values = schema.enum;
 	if (values?.every(Predicate.isString)) return { ...common, kind: 'enum', values };
 	const type = Arr.isArray(schema.type) ? schema.type.filter((t) => t !== 'null') : [schema.type];

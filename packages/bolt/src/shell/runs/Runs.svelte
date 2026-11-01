@@ -5,9 +5,19 @@
 	changes.
 -->
 <script lang="ts">
+	import { watch } from 'runed';
 	import { fork, observe } from '@norbital-ai/ui/effect';
 	import { Effect, Stream } from 'effect';
-	import { Button, Combobox, EmptyState, Show, Table, useKinds } from '@norbital-ai/ui';
+	import {
+		Button,
+		Combobox,
+		Dialog,
+		EmptyState,
+		Form,
+		Show,
+		Table,
+		useKinds
+	} from '@norbital-ai/ui';
 	import { Cluster } from '@norbital-ai/ui/layout';
 	import type { RunView } from '../../engine/runs/index.ts';
 	import type { Act } from '../Acts.svelte';
@@ -22,14 +32,22 @@
 		t,
 		startable = [],
 		run = null,
-		onRun
+		onRun,
+		initialAutomation = null,
+		onAutomationClose
 	}: {
 		api: ShellApi;
 		bolt: ShellBolt;
 		t: (key: string) => string;
-		startable?: readonly { readonly name: string; readonly description: string }[];
+		startable?: readonly {
+			readonly name: string;
+			readonly description: string;
+			readonly needsInput?: boolean;
+		}[];
 		run?: string | null;
 		onRun: (id: string | null) => void;
+		initialAutomation?: string | null;
+		onAutomationClose?: () => void;
 	} = $props();
 
 	const kinds = useKinds();
@@ -94,8 +112,24 @@
 		if (o.kind === 'refused') mutationError = o.message;
 	});
 	let chosen = $state<string | null>(null);
+	/** The automation whose native input form is open (one that needs a required input). */
+	let entering = $state<string | null>(null);
+	function closeAutomation(): void {
+		entering = null;
+		onAutomationClose?.();
+	}
+	watch(
+		() => initialAutomation,
+		(name) => {
+			if (name !== null && startable.some((item) => item.name === name)) entering = name;
+		}
+	);
 	const runNow = Effect.fn('Runs.runNow')(function* (automation: string) {
 		mutationError = null;
+		if (startable.find((a) => a.name === automation)?.needsInput === true) {
+			entering = automation;
+			return;
+		}
 		const o = yield* bolt.start(automation, {});
 		if (o.kind === 'refused') mutationError = o.message;
 	});
@@ -133,7 +167,6 @@
 {#snippet runNowControls()}
 	<Cluster gap="xs" data-run-now>
 		<Combobox
-			size="sm"
 			class="w-56"
 			options={startable.map((a) => ({
 				value: a.name,
@@ -144,10 +177,8 @@
 			placeholder={t('Choose an automation')}
 			onChange={(next) => (chosen = next)}
 		/>
-		<Button
-			size="sm"
-			disabled={chosen === null}
-			onclick={() => chosen !== null && fork(runNow(chosen))}>{t('Run now')}</Button
+		<Button disabled={chosen === null} onclick={() => chosen !== null && fork(runNow(chosen))}
+			>{t('Run now')}</Button
 		>
 	</Cluster>
 {/snippet}
@@ -234,4 +265,23 @@
 			{/if}
 		{/snippet}
 	</DetailSheet>
+{/if}
+
+{#if entering !== null}
+	<Dialog.Root
+		open
+		onOpenChange={(next) => {
+			if (!next) closeAutomation();
+		}}
+	>
+		<Dialog.Content class="max-w-xl" data-run-automation-form>
+			<Dialog.Header>
+				<Dialog.Title>{t('Run')} {entering}</Dialog.Title>
+				<Dialog.Description
+					>{t('Fill in this automation’s input before it runs.')}</Dialog.Description
+				>
+			</Dialog.Header>
+			<Form of={{ automation: entering }} submit={t('Run')} onOutcome={closeAutomation} />
+		</Dialog.Content>
+	</Dialog.Root>
 {/if}

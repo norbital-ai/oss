@@ -4,6 +4,7 @@ import { afterEach, it } from '@effect/vitest';
 import { Decimal } from '@norbital-ai/std/decimal';
 import type { ComponentProps } from 'svelte';
 import type { Kind, Value } from '../src/kinds/kind.ts';
+import type { JsonSchema } from '../src/kinds/json-schema.ts';
 import { dataEntries } from '../src/kinds/structured-data.ts';
 import { browser, required, textOf } from './view-fixture.ts';
 import { element } from './elements.ts';
@@ -48,6 +49,53 @@ async function pick(trigger: HTMLElement, value: string) {
 	await settle();
 }
 
+it.live(
+	'structured fields share form descriptions and one accessible field error in view and edit',
+	() =>
+		browser(async () => {
+			for (const mode of ['view', 'edit'] as const) {
+				const { target } = await show({
+					mode,
+					schema: {
+						type: 'object',
+						required: ['email'],
+						additionalProperties: false,
+						properties: {
+							email: { type: 'string', title: 'Email', description: 'Your work email' },
+							name: { type: 'string', title: 'Name', description: 'Your full name' }
+						}
+					},
+					initial: { email: 'invalid', name: 'Alex Tan' },
+					errors: new Map([['input.email', 'Enter a valid email']])
+				});
+				const email = element<HTMLElement>(target, '[data-schema-field="input.email"]');
+				const hint = element<HTMLButtonElement>(email, '[data-field-description]');
+				assert.equal(hint.getAttribute('aria-label'), 'Enter a valid email');
+				assert.equal(email.querySelectorAll('[role="alert"]').length, 1);
+				const alert = element<HTMLElement>(email, '[role="alert"]');
+				assert.equal(textOf(alert), 'Enter a valid email');
+				const name = element<HTMLElement>(target, '[data-schema-field="input.name"]');
+				assert.equal(
+					element<HTMLButtonElement>(name, '[data-field-description]').getAttribute('aria-label'),
+					'Your full name'
+				);
+				if (mode === 'edit') {
+					const input = element<HTMLInputElement>(email, 'input');
+					assert.equal(input.getAttribute('aria-required'), 'true');
+					assert.equal(input.getAttribute('aria-invalid'), 'true');
+					assert.equal(input.getAttribute('aria-errormessage'), alert.id);
+				} else {
+					const group = element<HTMLElement>(email, '[role="group"]');
+					const label = required(
+						document.getElementById(required(group.getAttribute('aria-labelledby')))
+					);
+					assert.equal(textOf(label), 'Email');
+					assert.equal(email.querySelectorAll('input').length, 0);
+				}
+			}
+		})
+);
+
 it.live('the depth cap terminates structured viewing and preserves the remaining value', () =>
 	browser(async () => {
 		const { target } = await show({ initial: { deep: { text: 'kept at the limit' } }, depth: 24 });
@@ -80,6 +128,89 @@ it.live(
 		})
 );
 
+it.live(
+	'a period column in a list of objects edits and shows as a period, not an expandable object',
+	() =>
+		browser(async () => {
+			const kind: Kind = {
+				kind: 'list',
+				of: {
+					kind: 'object',
+					fields: { name: { kind: 'text' }, range: { kind: 'period', of: 'date' } }
+				}
+			};
+			const initial = [{ name: 'A', range: { from: '2018-04-09', to: null } }];
+			const { target } = await show({ kind, initial, mode: 'edit' });
+			assert.equal(target.querySelectorAll('[data-period-input]').length, 1);
+			assert.equal(target.querySelectorAll('[data-structured-expand]').length, 0);
+			const view = await show({ kind, initial });
+			assert.equal(view.target.querySelectorAll('[data-structured-expand]').length, 0);
+			assert.ok(!textOf(view.target).includes('From:'));
+			assert.ok(textOf(view.target).includes('2018'));
+		})
+);
+
+const rangeTable = (range: JsonSchema): JsonSchema => ({
+	type: 'array',
+	items: {
+		type: 'object',
+		properties: { name: { type: 'string' }, range },
+		required: ['name', 'range']
+	}
+});
+const periodShape = {
+	type: 'object',
+	properties: {
+		from: { type: 'string', format: 'date' },
+		to: { type: ['string', 'null'], format: 'date' }
+	},
+	required: ['from', 'to']
+} as const;
+const periodCells = async (schema: JsonSchema, range: Value) => {
+	const { target } = await show({ schema, initial: [{ name: 'A', range }], mode: 'edit' });
+	return {
+		periods: target.querySelectorAll('[data-period-input]').length,
+		expands: target.querySelectorAll('[data-structured-expand]').length
+	};
+};
+
+it.live('a schema field naming a datatype by format renders that datatype (explicit)', () =>
+	browser(async () => {
+		// `format: 'period'` names the datatype even though the shape alone would not match (no `required`)
+		const named = rangeTable({
+			type: 'object',
+			format: 'period',
+			properties: { from: { type: 'string', format: 'date' }, to: { type: 'string' } }
+		});
+		assert.deepEqual(await periodCells(named, { from: '2018-04-09', to: null }), {
+			periods: 1,
+			expands: 0
+		});
+	})
+);
+
+it.live('an object schema exactly a datatype shape renders that datatype (implicit)', () =>
+	browser(async () => {
+		assert.deepEqual(await periodCells(rangeTable(periodShape), { from: '2018-04-09', to: null }), {
+			periods: 1,
+			expands: 0
+		});
+	})
+);
+
+it.live('an object schema near a datatype shape stays a plain object', () =>
+	browser(async () => {
+		const extra = rangeTable({
+			...periodShape,
+			properties: { ...periodShape.properties, note: { type: 'string' } }
+		});
+		assert.deepEqual(await periodCells(extra, { from: '2018-04-09', to: null, note: 'x' }), {
+			periods: 0,
+			expands: 1
+		});
+	})
+);
+
 it.live('lists of native date ranges retain one native Value column and editor', () =>
 	browser(async () => {
 		const { target } = await show({
@@ -89,7 +220,7 @@ it.live('lists of native date ranges retain one native Value column and editor',
 		});
 		const table = element(target, '[data-view=table] table');
 		assert.deepEqual(
-			[...table.querySelectorAll('thead th')].map((cell) => textOf(cell).trim()),
+			[...table.querySelectorAll('thead th[data-column]')].map((cell) => textOf(cell).trim()),
 			['Value']
 		);
 		assert.equal(table.querySelectorAll('[data-period-input]').length, 1);
@@ -266,7 +397,7 @@ it.live(
 			const { target, changes } = await show({ schema, mode: 'schema', author: true });
 			const table = element(target, '[data-view=table][data-source=local] table');
 			assert.deepEqual(
-				[...table.querySelectorAll('thead th')].map((cell) => textOf(cell).trim()),
+				[...table.querySelectorAll('thead th[data-column]')].map((cell) => textOf(cell).trim()),
 				['Key*', 'Type*', 'Label', 'Required', 'Allowed values', 'Description']
 			);
 			const label = required(
@@ -376,7 +507,9 @@ it.live(
 			});
 			const unionTable = element(union.target, '[data-view=table] table');
 			assert.deepEqual(
-				[...unionTable.querySelectorAll('thead th')].map((cell) => textOf(cell).trim()),
+				[...unionTable.querySelectorAll('thead th[data-column]')].map((cell) =>
+					textOf(cell).trim()
+				),
 				['Value']
 			);
 			assert.ok(textOf(union.target).includes('Visible union item'));
@@ -402,7 +535,7 @@ it.live(
 				});
 				const table = element(custom.target, '[data-view=table] table');
 				assert.deepEqual(
-					[...table.querySelectorAll('thead th')].map((cell) => textOf(cell).trim()),
+					[...table.querySelectorAll('thead th[data-column]')].map((cell) => textOf(cell).trim()),
 					['Value']
 				);
 				assert.equal(textOf(custom.target).includes('private schema item'), false);

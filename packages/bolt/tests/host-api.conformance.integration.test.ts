@@ -258,10 +258,11 @@ const viaHostApi = async (client: PgliteClient, at: string): Promise<Side> => {
 		{ signal }
 	);
 	await branch.schema.migrate({ signal });
-	expect(
-		await branch.identity.founder(EMAIL, { at: new Date().toISOString(), signal })
-	).toMatchObject({ _tag: 'Founded' });
+	const founder = await branch.identity.founder(EMAIL, { at: new Date().toISOString(), signal });
+	if (founder._tag !== 'Founded') throw new Error('The fixture founder was not created.');
 	const workspace = await HOST_API.activate(portsOf(facilities, release, host, calls), { signal });
+	// Preview handoffs use the activated host's identity, outside the shell's sign-in handler.
+	expect((await workspace.identity.mint(founder.user, { signal }))?.user).toBe(founder.user);
 	return {
 		calls,
 		sent,

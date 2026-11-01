@@ -25,11 +25,11 @@ const BUILD = join(ROOT, 'build');
 const ENTRY = 'bolt-cell-entry';
 const BUDGET = 2 * 1024 * 1024;
 const BUILTINS = new Set(builtinModules);
-/** Packages a cell never loads: Node, the native drivers, the MCP client, Node's Effect services, doctor, TypeScript. */
+/** Packages a cell never loads: Node, the native drivers, the MCP client, Node's Effect services, TypeScript. */
 const PACKAGES =
-	/^(?:@electric-sql\/pglite|pg|@norbital-ai\/doctor|typescript|@modelcontextprotocol\/[^/]+|@effect\/platform-node(?:-[^/]+)?)(?:\/|$)/;
+	/^(?:@electric-sql\/pglite|pg|typescript|@modelcontextprotocol\/[^/]+|@effect\/platform-node(?:-[^/]+)?)(?:\/|$)/;
 const PACKAGE_PATHS =
-	/\/node_modules\/(?:@electric-sql\/pglite|pg|@norbital-ai\/doctor|typescript|@modelcontextprotocol\/[^/]+|@effect\/platform-node[^/]*)\/|\/packages\/doctor\//;
+	/\/node_modules\/(?:@electric-sql\/pglite|pg|typescript|@modelcontextprotocol\/[^/]+|@effect\/platform-node[^/]*)\//;
 /**
  * Guest source the cell hands its isolates as strings (the guest prelude, a file run's virtual Node): the bundler never
  * minifies a string, so whitespace and comments are removed, names and code untouched. Raw DEFLATE packs those exact

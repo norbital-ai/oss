@@ -13,7 +13,7 @@ import {
 	type ArtifactJson
 } from '../../bolt/src/engine/artifact/read.ts';
 import { Port } from '../../bolt/src/engine/port.ts';
-import { sha256Hex } from '@norbital-ai/store';
+import { readLock, readSnapshot, sha256Hex, snapshotOf } from '@norbital-ai/store';
 import { artifactPort } from '../../bolt/src/node/artifact.ts';
 import { prepareMigrations } from '../src/compiler/migrations.ts';
 import { writeSource } from '../src/compiler/artifact/index.ts';
@@ -402,6 +402,28 @@ it.live(
 			expect((yield* readArtifact(dir, [older])).manifest).toEqual(manifest);
 			yield* write(CONTRACT);
 			expect(yield* readArtifact(dir).pipe(Effect.flip)).toMatchObject({ code: 'schemaMismatch' });
+			const snapshotPath = path.join(dir, 'migrations', 'snapshot.json');
+			const lockPath = path.join(dir, 'migrations', 'migrations.lock.json');
+			const snapshot = yield* readSnapshot(yield* fs.readFileString(snapshotPath));
+			const user = snapshot.tables['sys_user'];
+			if (user === undefined) throw new Error('fixture has no sys_user');
+			// The older system layer did not declare the user search index.
+			const olderUser = { ...user };
+			delete olderUser.search;
+			const olderSnapshot = snapshotOf({
+				...snapshot,
+				tables: { ...snapshot.tables, sys_user: olderUser }
+			});
+			const lock = yield* readLock(yield* fs.readFileString(lockPath));
+			yield* fs.writeFileString(snapshotPath, olderSnapshot);
+			yield* fs.writeFileString(
+				lockPath,
+				JSON.stringify({ ...lock, snapshot: sha256Hex(olderSnapshot) })
+			);
+			yield* write(older);
+			expect((yield* readArtifact(dir, [older])).manifest).toEqual(manifest);
+			yield* write(CONTRACT);
+			expect(yield* readArtifact(dir).pipe(Effect.flip)).toMatchObject({ code: 'schemaMoved' });
 		}).pipe(Effect.provide(NodeServices.layer))
 );
 

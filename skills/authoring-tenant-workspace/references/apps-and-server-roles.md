@@ -46,6 +46,15 @@ export default secrets({
 });
 ```
 
+Every server Effect body and the helpers it calls can read declared values with native Effect
+configuration: `yield* Config.Redacted('ROUTES_CLIENT_SECRET')` (`Config` from `effect`). Use
+`Redacted.value` only where a server operation needs the plaintext. Optional values use
+`Config.option`; a required unset value fails. The guest receives only the current workspace's
+declared configuration for that invocation; rotation is visible on the next invocation. This
+works in automations, model callbacks and server page loaders without an integration-specific
+secret accessor. Keep values out of returned page data, logs, chat and source. Client code and
+build-time declaration evaluation receive no runtime secret values.
+
 `ai` names model classes and embedding names; the host maps them to provider models.
 
 ## Apps, pages and groups
@@ -180,8 +189,9 @@ export default pageServer({
 ```
 
 The loader receives workspace-relative `request.pathname`/`search`, the admitted actor, clock and
-read-only caller methods. It cannot write, call facilities, read credentials or import Node
-modules. Public-app visitor policies and kiosk assigned policies remain the authority; SSR does
+read-only caller methods. It cannot write, call facilities, read per-instance integration credentials or
+import Node modules. Declared workspace secrets are available through server Effect configuration;
+never return their values in loader data. Public-app visitor policies and kiosk assigned policies remain the authority; SSR does
 not elevate them. Return only information the admitted caller may receive: data enters the HTML.
 
 Render the initial content synchronously from `data`. The server `$bolt` supports display
@@ -439,6 +449,31 @@ payroll batch adapter exercise these contracts.
   (their granted outputs) across turns before it answers (e.g. three-way matching: pull the supplier's open
   `purchase_orders` and `goods_receipts`, then validate the invoice's figures); bound it with `steps`.
   The draft reader is then `read_answer`.
+
+For a small typed extraction inside an automation, the request is an object and the answer is returned directly:
+
+```ts
+const proposed =
+	yield *
+	ctx.ai.sys_2.infer({
+		prompt: 'Extract only what this advice states. Omit unknown values; do not guess.',
+		files: [file], // a stored { id, name, mime } FileRef
+		output: {
+			kind: 'object',
+			fields: {
+				reference: { kind: 'text', optional: true },
+				principal: { kind: 'money', optional: true },
+				currency: { kind: 'currency', optional: true }
+			}
+		},
+		steps: 4
+	});
+```
+
+Store the proposal for native form review before a separate confirmed apply operation. `Infer` / `InferRequest` are
+internal aliases; use the public `Ai` signature and infer the result. An automation's identifier input includes its
+target, e.g. `{ kind: 'id', of: 'documents' }`. Host documentation and workspace tools are separate calls, not globals
+available inside the agent's plain-JavaScript `run_js` isolate.
 
 ## Policies (`src/access_control/policy/`)
 

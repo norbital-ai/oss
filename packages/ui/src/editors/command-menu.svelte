@@ -22,7 +22,7 @@ A keyboard-driven menu at a textarea's caret, opened by trigger characters (`/` 
 	import Icon from '@iconify/svelte';
 	import { tick } from 'svelte';
 	import { Popover as P } from 'bits-ui';
-	import { cn } from '../primitives/utils.js';
+	import { cn, uiText } from '../primitives/utils.js';
 	import { virtualList } from '../primitives/virtual/virtual.svelte.js';
 	import {
 		applyItem,
@@ -33,15 +33,18 @@ A keyboard-driven menu at a textarea's caret, opened by trigger characters (`/` 
 	} from './command-menu.js';
 
 	let { textarea, triggers }: CommandMenuProps = $props();
+	const t = uiText();
 	// raw: the trigger is compared by identity
 	let found = $state.raw<Found | null>(null),
 		items = $state.raw<readonly CommandItem[]>([]),
 		active = $state(0),
 		anchor = $state.raw<DOMRect | null>(null);
 	let list = $state<HTMLElement | null>(null);
+	let pending = $state(false);
+	let requestId = 0;
 	/** Esc closes the menu for this trigger until the writer types a new one. */
 	let dismissed = -1;
-	const open = $derived(found !== null && items.length > 0 && anchor !== null);
+	const open = $derived(found !== null && anchor !== null);
 	// a group heading is its own entry, so a long list windows over measured entries (as `Combobox`)
 	const entries = $derived(
 		items.flatMap((item, i): ({ head: string; i: number } | { i: number })[] =>
@@ -92,12 +95,18 @@ A keyboard-driven menu at a textarea's caret, opened by trigger characters (`/` 
 		if (ta === null) return;
 		anchor = caretRect(ta, f.start);
 		if (same) return;
+		const current = ++requestId;
+		pending = true;
+		items = [];
 		const work = f.trigger.items(f.query).pipe(
 			Effect.tap((next) =>
 				Effect.sync(() => {
-					if (found?.trigger === f.trigger && found.query === f.query) {
+					if (current === requestId && found?.trigger === f.trigger && found.query === f.query) {
 						items = [...next];
-						active = 0;
+						active = Math.max(
+							-1,
+							next.findIndex((item) => !item.disabled && !item.back)
+						);
 					}
 				})
 			),
@@ -105,15 +114,22 @@ A keyboard-driven menu at a textarea's caret, opened by trigger characters (`/` 
 				Effect.logWarning(error).pipe(
 					Effect.tap(() =>
 						Effect.sync(() => {
-							items = [];
+							if (current === requestId)
+								items = [{ id: 'error', label: error.message, disabled: true }];
 						})
 					)
 				)
+			),
+			Effect.ensuring(
+				Effect.sync(() => {
+					if (current === requestId) pending = false;
+				})
 			)
 		);
 		if (request !== undefined) fork(FiberHandle.run(request, work));
 	}
 	function pick(item: CommandItem) {
+		if (item.disabled) return;
 		const ta = textarea;
 		if (ta === null || found === null) return;
 		const r = applyItem(ta.value, found, ta.selectionStart, item);
@@ -127,14 +143,32 @@ A keyboard-driven menu at a textarea's caret, opened by trigger characters (`/` 
 	}
 	function keydown(e: KeyboardEvent) {
 		if (!open || e.isComposing) return;
-		if (e.key === 'ArrowDown' || e.key === 'ArrowUp')
-			active = (active + (e.key === 'ArrowDown' ? 1 : -1) + items.length) % items.length;
-		else if (e.key === 'Enter' || e.key === 'Tab') {
+		if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+			for (let step = 0; step < items.length; step++) {
+				active = (active + (e.key === 'ArrowDown' ? 1 : -1) + items.length) % items.length;
+				if (!items[active]?.disabled) break;
+			}
+		} else if (e.key === 'Enter' || e.key === 'Tab' || e.key === 'ArrowRight') {
 			const item = items[active];
-			if (item !== undefined) pick(item);
-		} else if (e.key === 'Escape') {
-			dismissed = found?.start ?? -1;
-			found = null;
+			if (e.key === 'ArrowRight' && item?.drill === undefined) return;
+			if (item !== undefined)
+				pick(
+					e.key !== 'Enter' && item.drill
+						? { ...item, insert: item.drill.insert, keep: true }
+						: item
+				);
+		} else if (
+			e.key === 'Escape' ||
+			((e.key === 'Backspace' || e.key === 'ArrowLeft') &&
+				/^\S+\s$/.test(found?.query ?? '') &&
+				items.some((item) => item.back))
+		) {
+			const back = items.find((item) => item.back);
+			if (back) pick(back);
+			else {
+				dismissed = found?.start ?? -1;
+				found = null;
+			}
 		} else return;
 		// the owner's own Enter (send, submit) must not also fire
 		e.preventDefault();
@@ -179,13 +213,29 @@ A keyboard-driven menu at a textarea's caret, opened by trigger characters (`/` 
 					trapFocus={false}
 					onOpenAutoFocus={(e) => e.preventDefault()}
 					onCloseAutoFocus={(e) => e.preventDefault()}
+					onEscapeKeydown={(e) => {
+						const back = items.find((item) => item.back);
+						if (back) {
+							e.preventDefault();
+							e.stopPropagation();
+							pick(back);
+						}
+					}}
 					onInteractOutside={(e) => {
 						if (e.target === textarea) e.preventDefault();
 					}}
-					class="z-50 w-72 rounded-md border bg-popover p-1 text-popover-foreground shadow-md"
+					class="z-50 w-80 max-w-[calc(100vw-2rem)] rounded-md border bg-popover p-1 text-popover-foreground shadow-deep"
 					data-command-menu={found?.trigger.char}
 				>
 					<ul bind:this={list} role="listbox" class="max-h-72 overflow-auto">
+						{#if pending}<li role="status" class="px-2 py-2 text-sm text-muted-foreground">
+								{t('searching')}
+							</li>{:else if items.length === 0}<li
+								role="status"
+								class="px-2 py-2 text-sm text-muted-foreground"
+							>
+								{t('noResults')}
+							</li>{/if}
 						{#if win.on}<li
 								role="presentation"
 								style="height:{win.before}px"
@@ -205,20 +255,27 @@ A keyboard-driven menu at a textarea's caret, opened by trigger characters (`/` 
 							{:else}
 								<li
 									role="option"
-									aria-selected={i === active}
+									aria-selected={i === active && !item.disabled}
+									aria-disabled={item.disabled || undefined}
 									data-index={i}
 									data-item={item.id}
+									class={cn('relative', item.depth && 'ml-3 border-l border-border pl-2')}
 									{@attach win.measure(entryKey(win.start + j))}
 								>
 									<button
 										type="button"
+										disabled={item.disabled}
+										aria-expanded={item.back ? true : undefined}
 										tabindex="-1"
 										class={cn(
 											'flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left text-sm',
-											i === active && 'bg-accent text-accent-foreground'
+											item.drill && 'pr-9',
+											i === active && !item.disabled && 'bg-accent text-accent-foreground'
 										)}
 										onmousedown={(e) => e.preventDefault()}
-										onmousemove={() => (active = i)}
+										onmousemove={() => {
+											if (!item.disabled) active = i;
+										}}
 										onclick={() => pick(item)}
 									>
 										{#if item.icon}<Icon
@@ -227,21 +284,42 @@ A keyboard-driven menu at a textarea's caret, opened by trigger characters (`/` 
 											/>{/if}
 										<span class="min-w-0 flex-1">
 											<span class="block truncate">{item.label}</span>
-											{#if item.description}<span
-													class="block truncate text-xs text-muted-foreground"
+											{#if item.description}<span class="block text-xs text-muted-foreground"
 													>{item.description}</span
 												>{/if}
 										</span>
-										{#if item.keep}<Icon
+										{#if item.back}<Icon
+												icon="lucide:chevron-down"
+												class="size-3.5 shrink-0 text-muted-foreground"
+											/>{:else if item.keep && !item.drill}<Icon
 												icon="lucide:chevron-right"
 												class="size-3.5 shrink-0 text-muted-foreground"
 											/>{/if}
 									</button>
+									{#if item.drill}<button
+											type="button"
+											tabindex="-1"
+											aria-label={item.drill.label}
+											title={item.drill.label}
+											class="absolute inset-y-0 right-0 grid w-8 place-items-center rounded-sm text-muted-foreground hover:bg-accent"
+											onmousedown={(e) => e.preventDefault()}
+											onclick={() => pick({ ...item, insert: item.drill!.insert, keep: true })}
+											><Icon icon="lucide:chevron-right" class="size-3.5" /></button
+										>{/if}
 								</li>
 							{/if}
 						{/each}
 						{#if win.after > 0}<li role="presentation" style="height:{win.after}px"></li>{/if}
 					</ul>
+					{#if items.some((item) => item.drill || item.back)}<div
+							class="mt-1 flex gap-3 border-t px-2 pt-2 pb-1 text-xs text-muted-foreground"
+						>
+							<span><kbd>Enter</kbd> {t('selectItem')}</span>{#if items[active]?.drill}<span
+									><kbd>Tab</kbd> {t('explore')}</span
+								>{/if}{#if items.some((item) => item.back)}<span class="ml-auto"
+									><kbd>Esc</kbd> {t('back')}</span
+								>{/if}
+						</div>{/if}
 				</P.Content>
 			</P.Portal>
 		</P.Root>

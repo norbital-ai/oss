@@ -38,6 +38,7 @@
 	import { idsOf } from '../form/form-state.svelte.js';
 	import { currencyOf, format, pickerRead } from './kind.js';
 	import { byId } from '../read/request.js';
+	import { labelRead } from '../relations/select.js';
 	import { withOutputs } from '../client/context.js';
 
 	let {
@@ -59,9 +60,9 @@
 	const labels = $derived(label ?? target?.label ?? []);
 	type Hit = { id: string; text: string };
 	const t = uiText();
-	// the record's title per kind (std/label): never its uuid; a row that cannot name itself reads as `none`
+	// The shared record identifier: declared label, otherwise its stable id.
 	const textOf = (row: { readonly [f: string]: Value }) =>
-		title(row, labels, (f, v) => {
+		title(row, label === undefined ? (target?.record_label ?? labels) : labels, (f, v) => {
 			const kind = target?.fields[f];
 			return kind === undefined
 				? String(v)
@@ -80,7 +81,16 @@
 		return Effect.sleep(q === '' ? 0 : 250).pipe(
 			Effect.flatMap(() =>
 				read(
-					withOutputs({ [of]: pickerRead(target, labels, { where, orderBy, limit }, q) }, host.catalog)
+					withOutputs(
+						target?.record_label !== undefined
+							? labelRead(
+									host.catalog,
+									of,
+									pickerRead(target, labels, { where, orderBy, limit }, q)
+								)
+							: { [of]: pickerRead(target, labels, { where, orderBy, limit }, q) },
+						host.catalog
+					)
 				)
 			),
 			Effect.map((answer) =>
@@ -92,7 +102,14 @@
 		const read = host.query,
 			id = value;
 		if (read === undefined || id === null) return null;
-		return read(withOutputs(byId(of, id, labels), host.catalog)).pipe(
+		return read(
+			withOutputs(
+				target?.record_label !== undefined
+					? labelRead(host.catalog, of, { where: { id: { eq: id } }, limit: 1 })
+					: byId(of, id, labels),
+				host.catalog
+			)
+		).pipe(
 			Effect.map((answer): Hit => {
 				const row = answer[of]?.rows[0];
 				return { id, text: row === undefined ? t('notFound') : textOf(row) };
@@ -122,7 +139,7 @@
 </script>
 
 {#if readonly ?? controls.readonly}
-	<!-- the row's label, never its id; nothing while the label loads -->
+	<!-- The declared label or id fallback; nothing while the label loads. -->
 	<CopyText {id} text={value === null ? '' : (current?.text ?? '')}>
 		{#if value === null}<span class="text-muted-foreground">{t('none')}</span
 			>{:else}{current?.text ?? (host.query === undefined ? value : '')}{/if}

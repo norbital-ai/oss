@@ -164,7 +164,6 @@
 					{#if (entry.build !== null && onBuild !== undefined) || (version !== undefined && onRestore !== undefined)}
 						<div class="flex flex-wrap gap-1">
 							{#if entry.build !== null && onBuild !== undefined}<Button
-									size="sm"
 									variant="ghost"
 									class="h-7 px-2 text-micro"
 									disabled={busy}
@@ -172,7 +171,6 @@
 									><Icon name="lucide:scroll-text" class="size-3" />{t('Build log')}</Button
 								>{/if}
 							{#if version !== undefined && onRestore !== undefined}<Button
-									size="sm"
 									variant="outline"
 									class="h-7 px-2 text-micro"
 									disabled={busy || reason !== null}

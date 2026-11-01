@@ -473,3 +473,72 @@ describe('next compiler: seed packs', () => {
 			}).pipe(Effect.provide(NodeServices.layer))
 	);
 });
+describe('next compiler: datatypes named in a seeded JSON Schema', () => {
+	const period = {
+		type: 'object',
+		format: 'period',
+		properties: {
+			from: { type: 'string', format: 'date' },
+			to: { type: ['string', 'null'], format: 'date' }
+		},
+		required: ['from', 'to']
+	};
+	const schemaOf = (range: object) => ({
+		$schema: 'https://json-schema.org/draft/2020-12/schema',
+		type: 'object',
+		properties: { range }
+	});
+	const packErrors = (schema: object) =>
+		Effect.gen(function* () {
+			const root = yield* scratchPath(`compiler-datatype-${randomUUID()}`);
+			const write = (path: string, text: string) => {
+				mkdirSync(dirname(join(root, path)), { recursive: true });
+				writeFileSync(join(root, path), text);
+			};
+			try {
+				write('src/+workspace.ts', "export default { tz: 'UTC', locale: 'en' };");
+				write(
+					'src/data/model/forms/+model.ts',
+					"export default { name: 'forms', spec: { description: 'Forms', label: 'name', fields: { name: { kind: 'text' }, schema: { kind: 'json' } }, read: 'all' } };"
+				);
+				write('seed/public/forms.json', JSON.stringify([{ id: 'f1', name: 'one', schema }]));
+				const found = yield* discover(root),
+					loaded = yield* load(root, found.files);
+				expect([...found.errors, ...loaded.errors]).toEqual([]);
+				const errors: CheckDiagnostic[] = [];
+				yield* buildPacks(root, engineManifest(loaded.manifest), join(root, '.norbital/seed'), errors);
+				return errors.map((e) => `${e.code} ${e.message}`);
+			} finally {
+				rmSync(root, { recursive: true, force: true });
+			}
+		}).pipe(Effect.provide(NodeServices.layer));
+	it.live('a field naming a datatype in its exact shape builds', () =>
+		Effect.gen(function* () {
+			expect(yield* packErrors(schemaOf(period))).toEqual([]);
+		})
+	);
+	it.live('a format naming no datatype fails the build with its path', () =>
+		Effect.gen(function* () {
+			const [error, ...rest] = yield* packErrors(schemaOf({ ...period, format: 'periodd' }));
+			expect(rest).toEqual([]);
+			expect(error).toContain('seed/datatype');
+			expect(error).toContain("forms[0].schema /properties/range: format 'periodd' names no datatype");
+		})
+	);
+	it.live('a field naming a datatype in another shape fails the build with the difference', () =>
+		Effect.gen(function* () {
+			const [error, ...rest] = yield* packErrors(
+				schemaOf({
+					...period,
+					properties: { from: { type: 'number' }, note: { type: 'string' } },
+					required: ['from']
+				})
+			);
+			expect(rest).toEqual([]);
+			expect(error).toContain("/properties/range: 'period' does not match its shape");
+			expect(error).toContain("missing 'to'");
+			expect(error).toContain("extra 'note'");
+			expect(error).toContain("'from' is number, not string (date)");
+		})
+	);
+});

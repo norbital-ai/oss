@@ -23,13 +23,16 @@ import {
 	PLATFORM,
 	platformConfig,
 	platformLayer,
+	cachedPlatformLayer,
 	shellRuntime,
 	SHELL,
-	type PlatformLayer
+	type PlatformLayer,
+	type PlatformChunk
 } from './platform.ts';
 import { publicWrapper } from './public-wrapper.ts';
 import { cachedSvelte } from './svelte-cache.ts';
 import { BOLT, BOLT_PACKAGE, EXT } from '../bolt.ts';
+import { sha256Hex } from '@norbital-ai/store';
 
 const BOLT_INDEX = join(BOLT, `index${EXT}`);
 /** The modules the SPA's entry and pages reach Bolt by path: `bolt dev` pre-bundles each (`bolt:prebundled-platform`). */
@@ -472,7 +475,7 @@ export const buildClient = Effect.fn('bolt.buildClient')(function* (
 		if (sources !== undefined)
 			for (const item of chunks.values())
 				graphSources(sourceRoot, item.moduleIds, publicPage ? sources.pages : sources.spa);
-		const graph = new Map([...(layer?.chunks ?? []), ...chunks]);
+		const graph = new Map<string, PlatformChunk>([...(layer?.chunks ?? []), ...chunks]);
 		/** Every chunk `entry` reaches through static and dynamic imports, itself and the layer's included. */
 		const reach = (entry: string) => {
 			const reached = new Set<string>();
@@ -557,12 +560,34 @@ export const buildClient = Effect.fn('bolt.buildClient')(function* (
 	});
 	// the layer first: it empties `out`, and the workspace's own chunks are written beside it. It is a function of this
 	// Bolt install alone, so a rebuild into the same `out` (which `writeArtifact` left holding it) reuses it
+	const specifiers = new Map<string, string>();
+	const buildLayer = Effect.gen(function* () {
+		return platformLayer(
+			yield* bundle(
+				yield* platformConfig(out, join(root, '.norbital', 'cache', 'platform'), specifiers)
+			),
+			specifiers
+		);
+	});
+	// Published graphs are immutable; local overlays write a new stamp. Source-mode builds stay uncached.
+	const lock =
+		EXT === '.js' && (yield* fs.exists(join(root, 'bun.lock')))
+			? yield* fs.readFileString(join(root, 'bun.lock'))
+			: undefined;
+	const overlay = yield* fs
+		.readFileString(join(root, '.norbital', 'overlay.stamp'))
+		.pipe(Effect.orElseSucceed(() => ''));
 	const layer =
 		platform?.out === out && (yield* fs.exists(join(out, PLATFORM)))
 			? platform.layer
-			: platformLayer(
-					yield* bundle(yield* platformConfig(out, join(root, '.norbital', 'cache', 'platform')))
-				);
+			: lock === undefined
+				? yield* buildLayer
+				: yield* cachedPlatformLayer(
+						join(root, '.norbital', 'cache', 'platform-layer'),
+						sha256Hex(JSON.stringify([1, import.meta.url, lock, overlay])),
+						out,
+						buildLayer
+					);
 	platform = { out, layer };
 	const internal = yield* compile(entry, out, false, layer);
 	const css = [...layer.css, ...internal.css];

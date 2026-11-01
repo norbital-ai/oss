@@ -22,7 +22,7 @@ import {
 	decodeSeed,
 	type SeedPack
 } from '@norbital-ai/bolt/engine';
-import { PRELUDE } from '@norbital-ai/bolt/tooling';
+import { FieldsSchema, PRELUDE } from '@norbital-ai/bolt/tooling';
 import { moduleScript, type ImportDeclaration } from '@norbital-ai/bolt/guest-hooks';
 import type { GuestProgram } from '@norbital-ai/bolt/engine';
 import type { EvaluateInput } from './evaluate-worker.ts';
@@ -70,7 +70,7 @@ export class BundleError extends Schema.TaggedError<BundleError>()('BundleError'
 export class EvalError extends Schema.TaggedError<EvalError>()('EvalError', {
 	cause: Schema.Defect()
 }) {}
-const Minified = Schema.Struct({ code: Schema.String, map: Schema.String });
+const Minified = Schema.Struct({ key: Schema.String, code: Schema.String, map: Schema.String });
 const Evaluated = Schema.Struct({
 	roles: Schema.Record(Schema.String, Schema.Record(Schema.String, Schema.Unknown)),
 	bodies: Schema.Struct({
@@ -152,6 +152,8 @@ type CompilerOptions = {
 	squash?: string;
 	/** Rule 6's evaluation CPU budget is a gate for `bolt check` and CI; a test run on a busy machine measures load, not the workspace. */
 	timing?: boolean;
+	/** Run the whole-program type check here (default) or leave it to a warm host type service. */
+	types?: boolean;
 	/** The runtime guest's second compression pass (seconds per changed guest); a watch's rebuild ships rolldown's minified output. */
 	compress?: boolean;
 };
@@ -165,7 +167,15 @@ const workspace = Effect.fn('bolt.workspace')(function* (
 	const root = yield* fs.realPath(dir); // importers arrive resolved; relative paths need the same spelling
 	const stages: Stage[] = [],
 		errors: CheckDiagnostic[] = [];
-	const stage = (s: Stage) => stages.push(s);
+	let lastStage = performance.now();
+	const stage = (s: Stage) => {
+		if (process.env.BOLT_CHECK_TIMING === '1') {
+			const now = performance.now();
+			console.error(`CHECK-STAGE ${s} ${Math.round(now - lastStage)}ms`);
+			lastStage = now;
+		}
+		stages.push(s);
+	};
 	const out: CheckResult = { stages, errors, transforms: [] };
 
 	const evaluated = yield* front(root, stage, errors, options.bolt, options.timing ?? true);
@@ -184,6 +194,19 @@ const workspace = Effect.fn('bolt.workspace')(function* (
 	const m = decoded.success;
 	out.manifest = m;
 	out.transforms = [...bodies.transforms];
+	// Shell boot hydrates these inputs too: even a build without authoring diagnostics must refuse invalid metadata.
+	if (!diagnostics)
+		for (const [name, automation] of Object.entries(m.automations)) {
+			const input = Schema.decodeUnknownResult(FieldsSchema)(automation.input ?? {});
+			if (Result.isFailure(input))
+				errors.push({
+					code: 'automation/input',
+					path:
+						files.find((file) => file.role === 'automation' && file.name === name)?.path ??
+						`src/automation/+${name}.automation.ts`,
+					message: `input: ${input.failure.message}`
+				});
+		}
 
 	if (diagnostics) {
 		stage('seed');
@@ -237,18 +260,13 @@ const workspace = Effect.fn('bolt.workspace')(function* (
 
 	if (diagnostics) {
 		stage('rules');
-		const { checkRules, sourceRules } = yield* Effect.tryPromise({
+		const { checkRules } = yield* Effect.tryPromise({
 			try: () => import('./rules.ts'),
 			catch: (cause) => new EvalError({ cause })
 		});
 		const where = (role: string, name: string) =>
 			files.find((f) => f.role === role && f.name === name)?.path ?? `src (${role} ${name})`;
 		errors.push(...checkRules(m, bodies, where));
-		const models = files.filter((f) => f.role === 'model');
-		const sources = yield* Effect.forEach(models, (f) =>
-			fs.readFileString(join(root, f.path)).pipe(Effect.map((text) => ({ path: f.path, text })))
-		);
-		errors.push(...sourceRules(m, sources));
 	}
 	if (errors.length === 0) {
 		const runtime = yield* bundle(
@@ -264,8 +282,9 @@ const workspace = Effect.fn('bolt.workspace')(function* (
 	return out;
 });
 
-/** Checks the workspace at `root`; `bolt` is the module specifier the names index augments. */
-export const check = (dir: string, options: CompilerOptions = {}) => workspace(dir, options, true);
+/** Checks retain runtime bundle validation; the release build owns the second compression pass. */
+export const check = (dir: string, options: CompilerOptions = {}) =>
+	workspace(dir, { compress: false, ...options }, true);
 /** Compiles the artifact inputs and migrations without running the authoring diagnostics. */
 export const compile = (dir: string, options: CompilerOptions = {}) =>
 	workspace(dir, options, false);
@@ -465,7 +484,8 @@ const bundle = Effect.fn('bolt.bundle')(function* (
 		);
 	let source = chunk.code;
 	let sourceMap = chunk.map?.toString();
-	if (runtime && compress) {
+	// A check near the release byte limit must judge the same compressed bytes as a build.
+	if (runtime && (compress || Buffer.byteLength(source) > GUEST_BYTES)) {
 		// Compress the native output with its map; declaration validation and module ordering stay upstream.
 		const inputMap = chunk.map?.toString();
 		const options: MinifyOptions = {
@@ -484,7 +504,8 @@ const bundle = Effect.fn('bolt.bundle')(function* (
 		};
 		// Terser is deterministic and costs seconds per check: its output is reused by content (input, map and options).
 		const dir = join(root, '.norbital', 'cache', 'guest');
-		const file = join(dir, `${sha256Hex(JSON.stringify([chunk.code, options]))}.json`);
+		const key = sha256Hex(JSON.stringify([chunk.code, options]));
+		const file = join(dir, 'latest.json');
 		const cached = yield* fs
 			.readFileString(file)
 			.pipe(
@@ -492,7 +513,7 @@ const bundle = Effect.fn('bolt.bundle')(function* (
 				Effect.option
 			);
 		let compact: typeof Minified.Type;
-		if (Option.isSome(cached)) compact = cached.value;
+		if (Option.isSome(cached) && cached.value.key === key) compact = cached.value;
 		else {
 			const output = yield* Effect.tryPromise({
 				try: () => minify(chunk.code, options),
@@ -502,9 +523,10 @@ const bundle = Effect.fn('bolt.bundle')(function* (
 				return yield* new BundleError({
 					cause: new Error('the minifier emitted no guest code or map')
 				});
-			compact = { code: output.code, map: output.map };
+			// One recent guest is enough; retaining every edited guest would fill a persistent cache.
+			compact = { key, code: output.code, map: output.map };
 			// A rename publishes the whole entry; a concurrent check writes the same bytes.
-			const temporary = `${file}.${process.pid}`;
+			const temporary = `${file}.${key}.${process.pid}`;
 			yield* fs.makeDirectory(dir, { recursive: true });
 			yield* fs.writeFileString(temporary, JSON.stringify(compact));
 			yield* fs.rename(temporary, file);

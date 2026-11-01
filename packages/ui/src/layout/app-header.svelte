@@ -91,9 +91,7 @@
 			ratio="square"
 			class={cn(
 				compact ? 'size-8 rounded-lg' : 'size-11 rounded-xl',
-				scrim
-					? 'bg-background text-foreground shadow-md ring-1 ring-white/25'
-					: 'bg-muted text-foreground'
+				scrim ? 'bg-background text-foreground ring-1 ring-border' : 'bg-muted text-foreground'
 			)}
 		>
 			<Icon name={icon} class={compact ? 'size-4' : 'size-5'} />

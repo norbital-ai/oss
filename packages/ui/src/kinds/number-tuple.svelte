@@ -23,7 +23,6 @@ Several named numbers typed in one segmented field (feet and inches, a blood pre
 		readonly?: boolean;
 		disabled?: boolean;
 		invalid?: boolean;
-		size?: 'sm' | 'md';
 		class?: string;
 		/** The first cell's id, so a `<label for>` reaches the field. */
 		id?: string;
@@ -55,7 +54,6 @@ Several named numbers typed in one segmented field (feet and inches, a blood pre
 		readonly,
 		disabled: ownDisabled,
 		invalid = false,
-		size = 'md',
 		class: className,
 		id
 	}: NumberTupleProps = $props();
@@ -136,7 +134,7 @@ Several named numbers typed in one segmented field (feet and inches, a blood pre
 			'w-full rounded-md border border-input bg-background shadow-xs transition-[border-color,box-shadow] focus-within:border-ring focus-within:ring-[3px] focus-within:ring-ring/50 dark:bg-input/30',
 			invalid && 'border-destructive ring-destructive/20 dark:ring-destructive/40',
 			disabled && 'cursor-not-allowed bg-muted opacity-50 shadow-none',
-			size === 'sm' ? 'h-8 text-xs' : 'h-9 text-sm',
+			'[--hit-target:2rem] h-8 text-xs',
 			className
 		)}
 	>

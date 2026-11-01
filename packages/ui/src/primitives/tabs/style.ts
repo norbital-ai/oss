@@ -9,16 +9,17 @@ export const TAB_TRIGGER =
 export const TAB_ICON = 'size-3.5 shrink-0';
 // every strip is 2rem tall: a 0.125rem inset around the 1.75rem triggers (the underline's border takes one pixel of it)
 export const TAB_LIST: Record<TabVariant, string> = {
-	segmented: 'gap-0.5 rounded-lg bg-muted p-0.5',
+	segmented: 'gap-0.5 rounded-[calc(var(--radius-md)+0.125rem)] bg-muted p-0.5',
 	underline: 'gap-0.5 border-b px-0.5 pt-0.5 pb-px',
 	chips: 'gap-0.5 p-0.5'
 };
 /** Each type's appearance: roundness, fill and border only. */
 export const TAB_TYPE: Record<TabVariant, string> = {
-	segmented: 'rounded-md data-[state=active]:bg-background data-[state=active]:shadow-sm',
+	segmented:
+		'rounded-md data-[state=active]:bg-popover data-[state=active]:ring-1 data-[state=active]:ring-border dark:data-[state=active]:bg-background dark:data-[state=active]:shadow-sm dark:data-[state=active]:ring-0',
 	// the bar spans the whole trigger, as wide as a segmented tab's fill
 	underline:
-		"relative after:absolute after:inset-x-0 after:-bottom-0.5 after:h-0.5 after:rounded-full after:content-[''] data-[state=active]:after:bg-foreground",
+		"relative after:absolute after:inset-x-0 after:-bottom-0.5 after:h-px after:rounded-full after:content-[''] data-[state=active]:after:bg-foreground dark:after:h-0.5",
 	chips:
 		'rounded-full border data-[state=active]:border-foreground data-[state=active]:bg-foreground data-[state=active]:text-background'
 };

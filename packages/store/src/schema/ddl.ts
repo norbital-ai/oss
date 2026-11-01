@@ -7,10 +7,10 @@
 // IMMEDIATE (a natural key is not: it is an `on conflict` arbiter). Legacy snapshots retain their original DDL.
 import { Effect, Predicate, Schema } from 'effect';
 import * as ReadonlyArray from 'effect/Array';
-import { sha256, toHex, canonical } from '../hash.ts';
+import { sha256, toHex, canonical } from '@norbital-ai/std/hash';
 import type { Json } from '../values.ts';
 import type { Catalog } from '../catalog.ts';
-import { catalogOf, indexColumn } from '../catalog.ts';
+import { catalogOf, indexColumn, RECORD_LABEL_COLUMN } from '../catalog.ts';
 import { where } from '../decode.ts';
 import { ownPredSql } from '../write/predicate.ts';
 import { jsonPath } from '../read/values.ts';
@@ -20,6 +20,8 @@ import { searchFunctions } from './search.ts';
 import { ROW_RULES_V1, ROW_RULES_V2 } from './rules.ts';
 import { JSON_VALID } from './json.ts';
 import { SchemaSpec, type Expr, type FieldSpec, type RefSpec, type TableSpec } from './spec.ts';
+import { labelExpression } from '@norbital-ai/std/label';
+import { wire } from '../read/sql.ts';
 
 type Fx<A> = Effect.Effect<A, StoreError>;
 /** How a constraint name maps back to its declaration, for a writer's SQLSTATE → refusal map. */
@@ -966,7 +968,23 @@ const objectsWithSearch = (searchDefinitions: typeof searchFunctions) =>
 					drop: `alter table ${T} drop column if exists ${q(name)} cascade`
 				});
 			}
-			const search = t.spec.search;
+			const identifier = yield* recordLabelObjects(t, s.tz);
+			if (identifier !== undefined) {
+				push(identifier.function);
+				push({
+					id: `column:${t.model}.${RECORD_LABEL_COLUMN}`,
+					rank: 'column',
+					table: t.model,
+					deps: [RECORD_LABEL_COLUMN, ...identifier.deps],
+					derived: true,
+					create: [
+						`alter table ${T} add column ${q(RECORD_LABEL_COLUMN)} text generated always as (${identifier.call}) stored`
+					],
+					drop: `alter table ${T} drop column if exists ${q(RECORD_LABEL_COLUMN)} cascade`
+				});
+			}
+			const search: TableSpec['search'] =
+				t.spec.search ?? (identifier === undefined ? undefined : { text: [] });
 			if (search !== undefined) {
 				// the multilingual document: folded, tokenized and romanized when the row is written. A link in `text` is
 				// matched through the linked row's own document when read, never copied into this one.
@@ -985,6 +1003,10 @@ const objectsWithSearch = (searchDefinitions: typeof searchFunctions) =>
 					const computed = t.spec.computed?.[f];
 					return computed === undefined ? Effect.succeed([f]) : exprDeps(computed.expr, t);
 				})).flat();
+				if (identifier !== undefined) {
+					doc.unshift(identifier.call);
+					deps.push(...identifier.deps);
+				}
 				for (const fn of searchDefinitions())
 					push({
 						id: `function:${fn.id}`,
@@ -1601,6 +1623,73 @@ const rollupBackfill = Effect.fnUntraced(function* (
 		]
 	};
 	return o;
+});
+
+/** A pure SQL wrapper keeps CEL subqueries legal inside a generated column; its versioned name rebuilds stored values on edits. */
+const recordLabelObjects = Effect.fnUntraced(function* (t: Table, tz: string) {
+	if (t.spec.recordLabel === undefined) return undefined;
+	const program = labelExpression(t.spec.recordLabel);
+	if ('error' in program) return yield* fail(`${t.model}.record_label: ${program.error}`);
+	const roots = [...new Set(program.paths.map((path) => path.split('.')[0] ?? path))];
+	const dependencies: string[] = [];
+	for (const path of program.paths) {
+		const field = path.split('.')[0] ?? path;
+		if (path.includes('.') && t.spec.fields[field]?.kind === 'ref')
+			return yield* fail(
+				`${t.model}.record_label: indexed labels read the record's own fields, not related records ('${path}')`
+			);
+		const computed = t.spec.computed?.[field];
+		if (computed !== undefined) dependencies.push(...(yield* exprDeps(computed.expr, t)));
+		else if (t.cols.has(field)) dependencies.push(...(t.fieldCols.get(field) ?? [field]));
+		else return yield* fail(`${t.model}.record_label: unknown field '${field}'`);
+	}
+	const deps = [...new Set(dependencies)].sort();
+	const args = deps.map((field, index) => `$${index + 1} AS ${q(field)}`);
+	const types = deps.map((field) => t.cols.get(field)?.type ?? 'text');
+	const values = yield* Effect.forEach(roots, (field) =>
+		Effect.gen(function* () {
+			const computed = t.spec.computed?.[field];
+			const column = t.cols.get(field);
+			if (column === undefined)
+				return yield* fail(`${t.model}.record_label: unknown field '${field}'`);
+			const value = computed === undefined ? q(field) : (yield* exprSql(computed.expr, t, tz)).sql;
+			const encoded =
+				column.type === 'numeric'
+					? `to_jsonb((${value})::text)`
+					: wire(
+							{ name: field, column: field, kind: column.kind, pg: column.type },
+							value,
+							'label_inputs'
+						);
+			return `${lit(field)}, ${encoded}`;
+		})
+	);
+	const input = `SELECT jsonb_build_object(${values.join(', ')}) AS j FROM (SELECT ${args.length === 0 ? '1 AS unused' : args.join(', ')}) label_inputs`;
+	const expression = program.sql(
+		(path) => `(label_row.j #> ARRAY[${path.split('.').map(lit).join(', ')}])`
+	);
+	const body = `SELECT CASE
+		WHEN value ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' THEN NULL
+		WHEN left(value, 1) IN ('{', '[') AND pg_input_is_valid(value, 'jsonb') THEN NULL
+		WHEN value ~ '^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}(:\\d{2}([.]\\d+)?)?(Z|[+-]\\d{2}:\\d{2})$' THEN
+			CASE WHEN (value::timestamptz AT TIME ZONE 'UTC')::time = '00:00:00'::time THEN to_char(value::timestamptz AT TIME ZONE 'UTC', 'YYYY-MM-DD')
+			ELSE to_char(value::timestamptz AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI') END
+		ELSE nullif(btrim(value), '') END
+		FROM (SELECT (${expression} #>> '{}') AS value FROM (${input}) label_row) label_value`;
+	const name = `bolt_record_label_${t.model.slice(0, 22)}_${hash8(canonical([body, types]))}`;
+	let delimiter = '$record_label$';
+	while (body.includes(delimiter)) delimiter = `${delimiter.slice(0, -1)}_$`;
+	const definition: SchemaObject = {
+		id: `function:${name}`,
+		rank: 'function',
+		table: t.model,
+		deps,
+		create: [
+			`create function ${q(name)}(${types.join(', ')}) returns text language sql immutable parallel safe set timezone = 'UTC' as ${delimiter}${body}${delimiter}`
+		],
+		drop: `drop function if exists ${q(name)}(${types.join(', ')}) cascade`
+	};
+	return { function: definition, deps, call: `${q(name)}(${deps.map(q).join(', ')})` };
 });
 
 /** Constraint name → its declaration, for a writer's SQLSTATE map. */

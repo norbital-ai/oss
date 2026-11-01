@@ -6,7 +6,7 @@ const boundedText = Schema.String.check(Schema.isMaxLength(200));
 export const StudioInspectInput = Schema.Struct({
 	range: Schema.Literals(['24h', '7d', '30d']),
 	/** The pane the reader is looking at; the host answers the shared snapshot all four read. */
-	view: Schema.optionalKey(Schema.Literals(['resources', 'logs', 'activity', 'users'])),
+	view: Schema.optionalKey(Schema.Literals(['bundle', 'telemetry', 'logs', 'users'])),
 	build: Schema.optionalKey(Schema.NullOr(Schema.String.check(Schema.isMaxLength(64)))),
 	run: Schema.optionalKey(Schema.NullOr(boundedText)),
 	level: Schema.optionalKey(Schema.NullOr(Schema.Literals(['info', 'warn', 'error']))),

@@ -1,6 +1,6 @@
 import { expect } from '@effect/vitest';
 import { Effect } from 'effect';
-import { HostIdentity } from '../src/shell/host.ts';
+import { HostIdentity } from '../src/engine/services.ts';
 import { layer, TestWorkspace } from '../../bolt-cli/src/test/index.ts';
 import { Authorities } from '../src/engine/identity/actor.ts';
 import { assignTeam, invite, issueKey } from '../src/engine/identity/members.ts';

@@ -87,7 +87,7 @@ import { copiedBatch, dbError } from '../engine/db/wire.ts';
 import { sha1 } from '../engine/crypto.ts';
 import { sha256 } from '@norbital-ai/store';
 import { EngineLive, type EngineServices, type EngineHost } from '../engine/host.ts';
-import { Activation, Live, Manifest, Runs } from '../engine/services.ts';
+import { Activation, HostIdentity, Live, Manifest, Runs } from '../engine/services.ts';
 import {
 	Ai,
 	ArtifactFiles,
@@ -140,7 +140,6 @@ import { decodeSeed } from '../engine/write/seed.ts';
 import { Port } from '../engine/port.ts';
 import {
 	authorityOf,
-	HostIdentity,
 	ShellConfig,
 	ShellRoutes,
 	Turnstile,
@@ -268,7 +267,7 @@ export type ShellPorts = Pick<
  * The agent's host parts (§5.9); the release's source (`workspace_search`) and attachments are this release's own. `ingest`
  * (Norbital Convert's `documentIngester`) serves the agent's `ingest` and `ctx.convert.ingest`; absent, neither ingests.
  */
-export type AgentPorts = Pick<AgentConfig, 'draft' | 'hostTools' | 'skills'> & {
+export type AgentPorts = Pick<AgentConfig, 'draft' | 'hostTools' | 'skills' | 'onTurnStart'> & {
 	readonly ingest?: IngestPort['ingest'];
 };
 /**
@@ -738,7 +737,23 @@ const activate = async (ports: HostPorts, options: Signal): Promise<ActiveWorksp
 			`the environment's database is at schema ${at.from ?? '(none)'}, its release expects ${at.to}`
 		);
 	const files = ArtifactFiles.fileSystem(ports.release.artifact);
+	const identity = identityLayer(ports.publicUrl, {
+		mail: f.transactional.mail,
+		devSink: f.transactional.fixedCodes,
+		...(isOff(f.transactional.sms) ? {} : { sms: f.transactional.sms }),
+		...(isOff(f.transactional.phone) ? {} : { phone: f.transactional.phone })
+	}).pipe(
+		Layer.provide(
+			Layer.mergeAll(
+				Layer.succeed(TenantDb, db),
+				Layer.succeed(Manifest, artifact.manifest),
+				auditFromAbi(f.logs.audit).pipe(Layer.provide(cryptoLayer)),
+				cryptoLayer
+			)
+		)
+	);
 	const host = Layer.mergeAll(
+		identity,
 		Layer.succeed(TenantDb, db),
 		activation(ports, artifact),
 		portLayers(ports),
@@ -759,12 +774,6 @@ const activate = async (ports: HostPorts, options: Signal): Promise<ActiveWorksp
 	const shell = ShellRoutes.pipe(
 		Layer.provideMerge(
 			Layer.mergeAll(
-				identityLayer(ports.publicUrl, {
-					mail: f.transactional.mail,
-					devSink: f.transactional.fixedCodes,
-					...(isOff(f.transactional.sms) ? {} : { sms: f.transactional.sms }),
-					...(isOff(f.transactional.phone) ? {} : { phone: f.transactional.phone })
-				}),
 				Layer.succeed(ShellConfig, {
 					...ports.shell,
 					publicUrl: ports.publicUrl,

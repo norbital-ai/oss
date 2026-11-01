@@ -595,6 +595,7 @@ const nativeAnswers = (manifest: EngineManifest) => {
 		throw new KitInvalid({ message: `unknown field '${model}.${name}'` });
 	};
 	const rowState = {
+		$label: Schema.optionalKey(Schema.NullOr(Schema.String)),
 		$sync: Schema.optionalKey(
 			Schema.Record(
 				Schema.String,
@@ -726,7 +727,8 @@ const nativeAnswers = (manifest: EngineManifest) => {
 	const page = (member: Schema.Decoder<unknown>) =>
 		Schema.Struct({
 			rows: Schema.Array(member),
-			next: Schema.optionalKey(Schema.NullOr(Schema.String))
+			next: Schema.optionalKey(Schema.NullOr(Schema.String)),
+			total: Schema.optionalKey(Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)))
 		});
 	const records = Schema.Array(
 		Schema.Union(
@@ -1541,7 +1543,26 @@ export class TestWorkspace extends Context.Service<TestWorkspace, Kit>()(
 				);
 				const hostPorts =
 					overrides === undefined ? ports : Layer.merge(ports, Layer.succeedContext(overrides));
+				// Identity loads its keys from native tables, including on an injected database.
+				if (options.db !== undefined) {
+					const p = yield* plan(yield* readApplied(db), m);
+					if (p.from !== p.to) yield* applyPlan(db, p, { accept: true });
+				}
+				const identityHost: IdentityHost = yield* makeIdentityHost({
+					audit: yield* auditShape(auditStore.port).pipe(Effect.provide(NodeCrypto.layer)),
+					db,
+					now: Effect.sync(() => new Date(now)),
+					windows: new RateWindows(),
+					keys: yield* loadKeys(db),
+					mail,
+					sms,
+					phone,
+					devSink: true,
+					publicUrl,
+					...(signupOf(m) === undefined ? {} : { signup: signupOf(m) })
+				}).pipe(Effect.provide(NodeCrypto.layer));
 				const base = Layer.mergeAll(
+					Layer.succeed(HostIdentity, identityHost),
 					node,
 					Layer.succeed(EnvoyConfig, envoyConfig ?? {}),
 					Layer.effect(AgentHost, withBrowser(agentConfig ?? {})).pipe(Layer.provide(hostPorts)),
@@ -1556,11 +1577,6 @@ export class TestWorkspace extends Context.Service<TestWorkspace, Kit>()(
 						guest: Option.fromNullishOr(guest)
 					})
 				);
-				// A kit database is at this exact slice's checkpoint; an injected one is planned unless it already is.
-				if (options.db !== undefined) {
-					const p = yield* plan(yield* readApplied(db), m);
-					if (p.from !== p.to) yield* applyPlan(db, p, { accept: true });
-				}
 				const pack =
 					options.pack ?? (testRoot === undefined ? undefined : yield* testPack(testRoot, m));
 				if (pack !== undefined) {
@@ -1596,22 +1612,9 @@ export class TestWorkspace extends Context.Service<TestWorkspace, Kit>()(
 					runHandlers = Context.get(engineContext, RunHandlers),
 					envoys = Context.get(engineContext, Envoys),
 					integration = Context.get(engineContext, Conversations);
-				const identityHost: IdentityHost = yield* makeIdentityHost({
-					audit: yield* auditShape(auditStore.port).pipe(Effect.provide(NodeCrypto.layer)),
-					db,
-					now: Effect.sync(() => new Date(now)),
-					windows: new RateWindows(),
-					keys: yield* loadKeys(db),
-					mail,
-					sms,
-					phone,
-					devSink: true,
-					publicUrl,
-					...(signupOf(m) === undefined ? {} : { signup: signupOf(m) })
-				}).pipe(Effect.provide(NodeCrypto.layer));
+
 				const shellBase = Layer.mergeAll(
 					RateLimits.layer.pipe(Layer.provide(Layer.succeed(TenantDb, db))),
-					Layer.succeed(HostIdentity, identityHost),
 					Layer.succeed(ShellConfig, {
 						publicUrl,
 						workspace: () => ({ name: 'Test', handle: 'test' }),

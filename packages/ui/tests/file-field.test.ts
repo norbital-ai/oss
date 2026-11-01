@@ -95,8 +95,15 @@ async function field({
 	kind = PDF,
 	value = null,
 	mode = 'edit',
-	h = host()
-}: { kind?: Kind; value?: Value; mode?: 'edit' | 'show'; h?: KindsHost } = {}) {
+	h = host(),
+	pending
+}: {
+	kind?: Kind;
+	value?: Value;
+	mode?: 'edit' | 'show';
+	h?: KindsHost;
+	pending?: (busy: boolean) => void;
+} = {}) {
 	const changes: Value[] = [];
 	const view: KindView =
 		mode === 'edit'
@@ -112,7 +119,7 @@ async function field({
 			: { mode, kind, value, name: 'documents' };
 	const target = document.createElement('div');
 	document.body.append(target);
-	const app = mount(Harness, { target, props: { host: h, view } });
+	const app = mount(Harness, { target, props: { host: h, view, pending } });
 	await settle();
 	mounted.push(async () => {
 		await unmount(app);
@@ -216,5 +223,29 @@ it.live('read-only shows the same chips and popover, without Remove or "+"', () 
 		assert.equal(document.querySelector('[data-file-preview]'), null, 'Esc closes the popover');
 		const empty = yield* browser(() => field({ mode: 'show', value: null }));
 		assert.equal(textOf(empty.target).trim(), '—');
+	})
+);
+
+// Standalone request forms must not save while evidence bytes are still being uploaded.
+it.live('standalone evidence reports pending until the uploaded reference is delivered', () =>
+	browser(async () => {
+		const states: boolean[] = [];
+		let finish: ((file: FileRef) => void) | undefined;
+		const waiting = new Promise<FileRef>((resolve) => (finish = resolve));
+		const { target, changes } = await field({
+			kind: PHOTO,
+			pending: (busy) => states.push(busy),
+			h: host({ upload: () => Effect.promise(() => waiting) })
+		});
+		await drop(target, [
+			new File(['MOCKED evidence'], 'MOCKED-evidence.png', { type: 'image/png' })
+		]);
+		assert.equal(states.at(-1), true);
+		assert.equal(changes.length, 0);
+		assert.ok(finish);
+		finish(ref(9, 'image/png'));
+		await settle();
+		assert.equal(states.at(-1), false);
+		assert.deepEqual(changes.at(-1), ref(9, 'image/png'));
 	})
 );

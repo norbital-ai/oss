@@ -54,6 +54,7 @@ A tab strip with the selected tab's body; `keepAlive` tabs stay mounted while hi
 	import Icon from '../icon/icon-wrapper.svelte';
 	import { cn } from '../utils.js';
 	import { SCROLL_AXIS_CLASSES } from '../../layout/layout.shared.js';
+	import { observeTabOverflow } from './overflow.js';
 
 	let {
 		tabs,
@@ -89,35 +90,9 @@ A tab strip with the selected tab's body; `keepAlive` tabs stay mounted while hi
 		measure = $state<HTMLElement | null>(null),
 		fit = $state(Infinity),
 		moreOpen = $state(false);
-	function layout() {
-		if (list === null || measure === null) return;
-		const items = [...measure.children].filter((e): e is HTMLElement => e instanceof HTMLElement);
-		const more = items.pop()?.offsetWidth ?? 0;
-		const style = getComputedStyle(list);
-		const gap = parseFloat(style.columnGap) || 0;
-		const room = list.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight);
-		const widths = items.map((e) => e.offsetWidth);
-		if (widths.reduce((sum, w) => sum + w, 0) + gap * (widths.length - 1) <= room) {
-			fit = widths.length;
-			return;
-		}
-		let used = more,
-			count = 0;
-		for (const width of widths) {
-			if (used + gap + width > room) break;
-			used += gap + width;
-			count++;
-		}
-		fit = Math.max(1, count);
-	}
 	$effect(() => {
 		if (vertical || list === null || measure === null) return;
-		// measured now, and again on every resize (a hidden page delivers its first observation late)
-		layout();
-		const observer = new ResizeObserver(layout);
-		observer.observe(list);
-		observer.observe(measure);
-		return () => observer.disconnect();
+		return observeTabOverflow(list, measure, (count) => (fit = count));
 	});
 	const shownTabs = $derived(vertical || fit >= tabs.length ? tabs : tabs.slice(0, fit));
 	const overflow = $derived(tabs.filter((t) => !shownTabs.includes(t)));

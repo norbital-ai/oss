@@ -400,7 +400,9 @@ export function kindJsonSchema(kind: Kind): JsonSchema {
 		case 'count':
 			return { ...common, type: 'integer' };
 		case 'duration':
+			return { ...common, type: 'integer', format: 'duration' };
 		case 'money':
+			return { ...common, type: 'number', format: 'money' };
 		case 'sum':
 			return { ...common, type: 'number' };
 		case 'bool':
@@ -414,20 +416,25 @@ export function kindJsonSchema(kind: Kind): JsonSchema {
 		case 'period': {
 			const date = kind.of === 'date';
 			const format = date ? 'date' : 'date-time';
+			const [from, to] = date ? ['from', 'to'] : ['start', 'end'];
 			return {
 				...common,
 				type: 'object',
+				format: 'period',
 				properties: {
-					[date ? 'from' : 'start']: { type: 'string', format },
-					[date ? 'to' : 'end']: { type: ['string', 'null'], format }
-				}
+					[from]: { type: 'string', format },
+					[to]: { type: ['string', 'null'], format }
+				},
+				required: [from, to]
 			};
 		}
 		case 'point':
 			return {
 				...common,
 				type: 'object',
-				properties: { lat: { type: 'number' }, lng: { type: 'number' } }
+				format: 'point',
+				properties: { lat: { type: 'number' }, lng: { type: 'number' } },
+				required: ['lat', 'lng']
 			};
 		case 'file':
 			return kind.multiple
@@ -450,6 +457,7 @@ export function kindJsonSchema(kind: Kind): JsonSchema {
 				? { ...common, type: 'string' }
 				: { ...common, type: 'object' };
 		case 'currency':
+			return { ...common, type: 'string', format: 'currency' };
 		case 'seq':
 		case 'id':
 			return { ...common, type: 'string' };

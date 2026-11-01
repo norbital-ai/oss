@@ -48,6 +48,7 @@
 		isOpenRoute,
 		logical,
 		navApps,
+		navigationPaths,
 		previewRoute,
 		recordsOf,
 		route,
@@ -73,8 +74,12 @@
 	import SignIn from './auth/SignIn.svelte';
 	import Invite from './auth/Invite.svelte';
 	import AgentPanel from './agent/Agent.svelte';
+	import Attention from './agent/Attention.svelte';
+	import { createChime, NORBIUS_CHIME } from './agent/chime.ts';
+	import { CLIENT_NAVIGATION, type ClientNavigation } from './agent/navigation.ts';
 	import Inbox from './inbox/Inbox.svelte';
 	import Settings from './settings/Settings.svelte';
+	import { clientNavigationPath, systemUiIntent } from '../protocol/system-ui.ts';
 	import CommandCenter from './command-center/CommandCenter.svelte';
 	import Studio from './studio/Studio.svelte';
 	import RecordSheet from './RecordSheet.svelte';
@@ -87,6 +92,7 @@
 	import { deviceAccess } from './device-access.ts';
 	import { resolveDevice } from '../page/device.ts';
 	import { deviceSession, openExternal } from './device-session.ts';
+	import { commandKey } from './keyboard.ts';
 
 	let { config }: { config: ShellMountConfig } = $props();
 
@@ -153,6 +159,7 @@
 	const here = () => logical(location.href) ?? new URL(location.href);
 	let url = $state(here());
 	let boot = $state<ShellBoot | null>(null);
+	const configuration = $derived(boot?.admin === true ? systemUiIntent(url) : null);
 	// a signed-out caller's boot is refused, but names the workspace the access pages show
 	let guest = $state<ShellBoot['workspace'] | null>(null);
 	const workspace = $derived(boot?.workspace ?? guest);
@@ -162,6 +169,41 @@
 			? `bolt.agent.conversation:${boot.workspace.handle ?? boot.workspace.name}:${boot.actor.id}`
 			: undefined
 	);
+	let chimes = $state(true);
+	const chimeKey = $derived(
+		boot?.actor?.kind === 'member' ? `bolt.norbius.sounds:${boot.actor.id}` : null
+	);
+	watch(
+		() => chimeKey,
+		(key) => {
+			try {
+				chimes = key !== null && localStorage.getItem(key) !== 'off';
+			} catch {
+				chimes = true;
+			}
+		}
+	);
+	const chime = createChime(() => chimes);
+	setContext(NORBIUS_CHIME, chime);
+	const chooseChimes = (enabled: boolean) => {
+		chimes = enabled;
+		try {
+			if (chimeKey !== null) localStorage.setItem(chimeKey, enabled ? 'on' : 'off');
+		} catch {
+			/* Device storage may be disabled. */
+		}
+		if (enabled) chime.unlock();
+	};
+	$effect(() => {
+		const unlock = () => chime.unlock();
+		window.addEventListener('pointerdown', unlock);
+		window.addEventListener('keydown', unlock);
+		return () => {
+			window.removeEventListener('pointerdown', unlock);
+			window.removeEventListener('keydown', unlock);
+			chime.close();
+		};
+	});
 	let bolt = $state.raw<ShellBolt | null>(null);
 	let failure = $state<{ code: string; message: string; status: number } | null>(null);
 	let agentRequest = $state<AgentRequest | null>(null);
@@ -528,8 +570,14 @@
 	});
 	// ⌘K (Ctrl+K) opens Norbius, or closes it when open; ⌘/ (Ctrl+/) opens the finder; ⌘B (Ctrl+B) folds the sidebar
 	let finding = $state(false);
+	watch(
+		() => url.searchParams.get('find'),
+		(scope) => {
+			if (scope !== null) finding = true;
+		}
+	);
 	function shortcut(event: KeyboardEvent): void {
-		if (!(event.metaKey || event.ctrlKey) || boot === null || boot.visitor !== null) return;
+		if (!commandKey(event) || boot === null || boot.visitor !== null) return;
 		if (event.key === '/') {
 			event.preventDefault();
 			finding = !finding;
@@ -624,9 +672,33 @@
 		navOpen = false;
 		agent.open();
 	};
+	setContext<ClientNavigation>(CLIENT_NAVIGATION, {
+		open(path, conversation) {
+			if (
+				boot === null ||
+				boot.actor?.kind !== 'member' ||
+				boot.actor.external ||
+				previewEnv ||
+				!clientNavigationPath(path, navigationPaths(boot.nav, boot.admin), boot.admin)
+			)
+				return;
+			const next = new URL(path, url);
+			next.searchParams.set('agent', conversation);
+			if (next.searchParams.has('setup')) {
+				next.searchParams.set('setupRequest', crypto.randomUUID());
+				// a native form is the point: the panel would sit exactly over its sheet
+				next.searchParams.delete('agent');
+			}
+			navigate(next.href);
+		}
+	});
 	// closing a sheet closes every sheet stacked on it
 	const closeRecord = (depth: number) => navigate(withRecords(url, depth).href);
 </script>
+
+<svelte:head
+	>{#if workspace !== null}<title>{workspace.name}</title>{/if}</svelte:head
+>
 
 {#if bolt !== null}
 	{#key bolt}
@@ -725,6 +797,7 @@
 		<Inbox {bolt} {t} onCount={(n) => (waiting = n)} />
 	{:else if current.kind === 'settings' && boot?.surfaces.settings && bolt}
 		<Settings
+			{configuration}
 			{api}
 			{bolt}
 			{t}
@@ -734,6 +807,15 @@
 		/>
 	{:else if current.kind === 'commandCenter' && commandTabs.length > 0 && boot !== null && bolt}
 		<CommandCenter
+			automation={url.searchParams.get('automation')}
+			onAutomationClose={() => {
+				if (url.searchParams.has('automation')) {
+					const next = new URL(url);
+					next.searchParams.delete('automation');
+					navigate(next.href, true);
+				}
+			}}
+			{configuration}
 			{api}
 			{bolt}
 			{t}
@@ -748,6 +830,13 @@
 		/>
 	{:else if current.kind === 'studio' && boot?.surfaces.studio}
 		<Studio
+			initialFile={url.searchParams.get('file')}
+			onFile={(path) => {
+				const next = new URL(url);
+				next.pathname = '/studio';
+				next.searchParams.set('file', path);
+				navigate(next.href);
+			}}
 			{api}
 			{t}
 			admin={boot.admin}
@@ -858,6 +947,8 @@
 				onLocale={(locale) => fork(setLocale(locale))}
 				{theme}
 				onTheme={chooseTheme}
+				{chimes}
+				onChimes={chooseChimes}
 				{sync}
 				previewing={boot?.preview !== null}
 				onEndPreview={() => fork(endPreview())}
@@ -968,9 +1059,7 @@
 							<span
 								>{t('This workspace was updated. Reload to continue with the new version.')}</span
 							>
-							<Button size="sm" variant="outline" onclick={() => location.reload()}
-								>{t('Reload')}</Button
-							>
+							<Button variant="outline" onclick={() => location.reload()}>{t('Reload')}</Button>
 						</Inline>
 					{/if}
 					{#if boot.preview !== null}
@@ -982,7 +1071,7 @@
 											'Previewing as another member. Their grants apply; you are recorded as the previewer.'
 										)}</span
 							>
-							<Button size="sm" variant="outline" onclick={() => fork(endPreview())}
+							<Button variant="outline" onclick={() => fork(endPreview())}
 								>{t('End preview')}</Button
 							>
 						</Inline>
@@ -999,6 +1088,15 @@
 		{#if bolt !== null}
 			<Finder
 				bind:open={finding}
+				entries={boot.search ?? []}
+				initialScope={url.searchParams.get('find')}
+				onClose={() => {
+					if (url.searchParams.has('find')) {
+						const next = new URL(url);
+						next.searchParams.delete('find');
+						navigate(next.href);
+					}
+				}}
 				nav={boot.nav}
 				catalog={boot.catalog}
 				read={(request) => bolt!.query<FinderAnswer>(request)}
@@ -1009,6 +1107,7 @@
 			/>
 		{/if}
 		{#if boot.surfaces.agent && bolt !== null}
+			{#if chimes}<Attention {bolt} active={agentRequest?.conversation ?? null} />{/if}
 			<!-- non-modal, as every side sheet: the page stays usable; only Esc or × closes it -->
 			<Sheet
 				open={agentRequest !== null}
@@ -1025,6 +1124,8 @@
 						{api}
 						{bolt}
 						{t}
+						nav={boot.nav}
+						entries={boot.search ?? []}
 						request={agentRequest}
 						unconfigured={boot.aiUnconfigured === true}
 						admin={boot.admin}

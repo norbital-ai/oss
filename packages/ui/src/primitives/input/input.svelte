@@ -5,6 +5,7 @@ input's value is not writable. `readonly` (or an enclosing readonly form) shows 
 copyable text, no field chrome; `disabled` (or an enclosing disabled form) keeps the box, muted.
 -->
 <script lang="ts">
+	import { CONTROL_SIZE } from '../../kinds/classes.js';
 	import { cn, useControls, uiText, type WithElementRef } from '../utils.js';
 	import type { HTMLInputAttributes, HTMLInputTypeAttribute } from 'svelte/elements';
 
@@ -79,7 +80,8 @@ copyable text, no field chrome; `disabled` (or an enclosing disabled form) keeps
 		bind:this={ref}
 		data-slot={dataSlot}
 		class={cn(
-			'block h-9 max-sm:min-h-11 w-full min-w-0 rounded-sm border border-input bg-background px-3 pt-1.5 text-base font-medium shadow-xs md:text-sm transition-[color,box-shadow] outline-none selection:bg-primary selection:text-primary-foreground placeholder:text-muted-foreground disabled:cursor-not-allowed disabled:opacity-50 dark:bg-input/30',
+			CONTROL_SIZE,
+			'block w-full rounded-sm border border-input bg-background pt-1.5 font-medium shadow-xs transition-[color,box-shadow] outline-none selection:bg-primary selection:text-primary-foreground placeholder:text-muted-foreground disabled:cursor-not-allowed disabled:opacity-50 dark:bg-input/30',
 			'focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:ring-inset',
 			'aria-invalid:border-destructive aria-invalid:ring-destructive/20 aria-invalid:ring-inset dark:aria-invalid:ring-destructive/40',
 			'disabled:bg-muted disabled:shadow-none',
@@ -97,7 +99,8 @@ copyable text, no field chrome; `disabled` (or an enclosing disabled form) keeps
 		bind:this={ref}
 		data-slot={dataSlot}
 		class={cn(
-			'block h-9 max-sm:min-h-11 w-full min-w-0 rounded-sm border border-input bg-background px-3 py-1 text-base shadow-xs transition-[color,box-shadow] outline-none selection:bg-primary selection:text-primary-foreground placeholder:text-muted-foreground disabled:cursor-not-allowed disabled:opacity-50 md:text-sm dark:bg-input/30',
+			CONTROL_SIZE,
+			'block w-full rounded-sm border border-input bg-background py-1 shadow-xs transition-[color,box-shadow] outline-none selection:bg-primary selection:text-primary-foreground placeholder:text-muted-foreground disabled:cursor-not-allowed disabled:opacity-50 dark:bg-input/30',
 			'focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:ring-inset',
 			'aria-invalid:border-destructive aria-invalid:ring-destructive/20 aria-invalid:ring-inset dark:aria-invalid:ring-destructive/40',
 			'disabled:bg-muted disabled:shadow-none',

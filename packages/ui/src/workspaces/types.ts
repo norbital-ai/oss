@@ -4,7 +4,7 @@ import type { ReleaseBuild, ReleaseEnvironment, ReleaseVersion } from '../releas
 /** The time window shown by workspace monitoring. */
 export type WorkspaceRange = '24h' | '7d' | '30d';
 /** The selected workspace monitoring view. */
-export type WorkspaceView = 'activity' | 'resources' | 'logs' | 'users';
+export type WorkspaceView = 'bundle' | 'telemetry' | 'logs' | 'users';
 /** The monitoring view, time window and optional build or run selection. */
 export type WorkspaceScope = Readonly<{
 	view?: WorkspaceView;
@@ -12,13 +12,6 @@ export type WorkspaceScope = Readonly<{
 	build?: string | null;
 	run?: string | null;
 }>;
-/** The monitoring controls are a subset of native Studio operations; source and approval writes stay in Studio. */
-export type WorkspaceOperation =
-	| Readonly<{ op: 'preview'; id: string }>
-	| Readonly<{ op: 'change.open'; id: string }>
-	| Readonly<{ op: 'change.merge'; id: string; accept?: readonly string[] }>
-	| Readonly<{ op: 'change.close'; id: string }>
-	| Readonly<{ op: 'rollback'; commit: string; discardDataSince?: string }>;
 export type WorkspaceMember = Readonly<{
 	id: string;
 	name: string;

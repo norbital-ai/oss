@@ -9,6 +9,8 @@ The kit's select: a field-like trigger and a searchable option list in a popover
 	export type ComboboxOption<V extends string = string> = {
 		value: V;
 		label: string;
+		/** Fixed trailing information, kept visible while a long label truncates (e.g. an available balance). */
+		suffix?: string;
 		description?: string;
 		icon?: string;
 		group?: string;
@@ -31,8 +33,7 @@ The kit's select: a field-like trigger and a searchable option list in a popover
 		onOpenChange?(open: boolean): void;
 		loading?: boolean;
 		failed?: boolean;
-		size?: 'sm' | 'default';
-		/** `ghost`: no border, fill or shadow, small text; for a combobox in chrome or a toolbar, not a form. */
+		/** `ghost`: no border, fill or shadow; for a combobox in chrome or a toolbar, not a form. Same size either way. */
 		variant?: 'default' | 'ghost';
 		id?: string;
 		/** Shows the chosen label as copyable text, no trigger; an enclosing readonly form sets it. */
@@ -44,6 +45,12 @@ The kit's select: a field-like trigger and a searchable option list in a popover
 		'aria-label'?: string;
 		/** Rendered between the search box and the list (tabs that scope `options`, with `onSearch`). */
 		header?: Snippet;
+		/** Rendered below the scrollable option list. */
+		footer?: Snippet;
+		/** A caller's empty state; loading and failed states keep the standard messages. */
+		empty?: Snippet;
+		/** Handle scope shortcuts before list navigation; preventing default resets the active option. */
+		onkeydown?(event: KeyboardEvent): void;
 	};
 	/** A searchable choice field; `multiple: true` toggles an array of choices while keeping the list open. */
 	export type ComboboxProps<
@@ -58,14 +65,13 @@ The kit's select: a field-like trigger and a searchable option list in a popover
 <script lang="ts" generics="V extends string = string, M extends boolean = false">
 	import Icon from '@iconify/svelte';
 	import { tick } from 'svelte';
-	import { CONTROL } from '../../kinds/classes.js';
+	import { CONTROL_ICON, CONTROL_SIZE, SELECT_TRIGGER } from '../../kinds/classes.js';
 	import CopyText from '../copy-text/copy-text.svelte';
 	import * as Popover from '../popover/index.js';
 	import { claimFieldControl, cn, uiText, useControls } from '../utils.js';
 	import { virtualList } from '../virtual/virtual.svelte.js';
 
-	const GHOST =
-		'max-sm:min-h-11 max-sm:min-w-11 h-8 min-w-0 rounded-md bg-transparent px-1.5 text-xs outline-none hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-50 aria-invalid:text-destructive';
+	const GHOST = `${CONTROL_SIZE} flex items-center justify-between rounded-md bg-transparent text-left font-normal outline-none hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-50 aria-invalid:text-destructive`;
 
 	const props: ComboboxProps<V, M> = $props();
 	function isMultiple(p: ComboboxProps<V, M>): p is ComboboxProps<V, M> & ComboboxProps<V, true> {
@@ -85,7 +91,6 @@ The kit's select: a field-like trigger and a searchable option list in a popover
 		onOpenChange,
 		loading = false,
 		failed = false,
-		size = 'default',
 		variant = 'default',
 		id: ownId,
 		readonly: ownReadonly,
@@ -93,7 +98,9 @@ The kit's select: a field-like trigger and a searchable option list in a popover
 		invalid = false,
 		class: className,
 		'aria-label': ariaLabel,
-		header
+		header,
+		footer,
+		empty
 	} = $derived(props);
 	// svelte-ignore state_referenced_locally -- the id is fixed at mount
 	const id = ownId ?? claimFieldControl();
@@ -191,6 +198,18 @@ The kit's select: a field-like trigger and a searchable option list in a popover
 		}
 	}
 	function keydown(e: KeyboardEvent) {
+		props.onkeydown?.(e);
+		if (e.defaultPrevented) {
+			active = 0;
+			return;
+		}
+		// Header and footer controls keep their native keyboard activation.
+		if (
+			e.target !== search &&
+			e.target !== list &&
+			!(e.target instanceof Element && e.target.closest('[role="option"]'))
+		)
+			return;
 		if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
 			e.preventDefault();
 			active =
@@ -224,35 +243,29 @@ The kit's select: a field-like trigger and a searchable option list in a popover
 				: ariaLabel}
 			title={props.multiple ? selectionText : undefined}
 			aria-invalid={invalid ? 'true' : undefined}
-			class={cn(
-				variant === 'ghost' ? GHOST : cn(CONTROL, size === 'sm' && 'h-8 px-2 text-xs'),
-				'flex items-center justify-between gap-2 text-left font-normal',
-				className
-			)}
+			class={cn(variant === 'ghost' ? GHOST : SELECT_TRIGGER, className)}
 		>
 			<span
 				class={cn(
-					'flex min-w-0 items-center gap-2',
+					'flex min-w-0 flex-1 items-center gap-1.5',
 					(props.multiple ? selectedValues.length === 0 : current === undefined) &&
 						display === undefined &&
 						'text-muted-foreground'
 				)}
 			>
-				{#if current?.icon}<Icon
-						icon={current.icon}
-						class="size-4 shrink-0 text-muted-foreground"
-					/>{/if}
-				<span class="truncate"
+				{#if current?.icon}<Icon icon={current.icon} class={CONTROL_ICON} />{/if}
+				<span class="min-w-0 flex-1 truncate"
 					>{(props.multiple ? multiLabel || undefined : current?.label) ??
 						display ??
 						placeholder ??
 						t('select')}</span
 				>
+				{#if !props.multiple && current?.suffix}<span
+						class="shrink-0 whitespace-nowrap text-xs tabular-nums text-muted-foreground"
+						>{current.suffix}</span
+					>{/if}
 			</span>
-			<Icon
-				icon="lucide:chevrons-up-down"
-				class={cn('shrink-0 text-muted-foreground', variant === 'ghost' ? 'size-3' : 'size-3.5')}
-			/>
+			<Icon icon="lucide:chevrons-up-down" class={CONTROL_ICON} />
 		</Popover.Trigger>
 		<Popover.Content
 			align="start"
@@ -335,6 +348,10 @@ The kit's select: a field-like trigger and a searchable option list in a popover
 												>{row.description}</span
 											>{/if}
 									</span>
+									{#if row.suffix}<span
+											class="shrink-0 whitespace-nowrap text-xs tabular-nums text-muted-foreground"
+											>{row.suffix}</span
+										>{/if}
 									{#if props.multiple}<span
 											aria-hidden="true"
 											class={cn(
@@ -342,18 +359,29 @@ The kit's select: a field-like trigger and a searchable option list in a popover
 												selected && 'border-primary bg-primary text-primary-foreground'
 											)}
 											>{#if selected}<Icon icon="lucide:check" class="size-3" />{/if}</span
-										>{:else if selected}<Icon icon="lucide:check" class="size-3.5 shrink-0" />{/if}
+										>{:else if selected || row.suffix}<span
+											class="flex size-3.5 shrink-0 items-center justify-center"
+											aria-hidden="true"
+											>{#if selected}<Icon icon="lucide:check" class="size-3.5" />{/if}</span
+										>{/if}
 								{/if}
 							</button>
 						</li>
 					{/if}
 				{:else}
-					<li class="p-2 text-xs text-muted-foreground">
-						{loading ? t('search') : failed ? t('optionsUnavailable') : t('noResults')}
+					<li
+						class={!loading && !failed && empty ? undefined : 'p-2 text-xs text-muted-foreground'}
+					>
+						{#if !loading && !failed && empty}{@render empty()}{:else}{loading
+								? t('search')
+								: failed
+									? t('optionsUnavailable')
+									: t('noResults')}{/if}
 					</li>
 				{/each}
 				{#if win.after > 0}<li role="presentation" style="height:{win.after}px"></li>{/if}
 			</ul>
+			{@render footer?.()}
 		</Popover.Content>
 	</Popover.Root>
 {/if}

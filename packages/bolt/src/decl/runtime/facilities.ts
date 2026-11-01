@@ -488,8 +488,8 @@ interface Infer<Tools> {
 }
 /** `Tools`: host tools exist only in an automation, which holds its policies (rule 58); an effect has none. */
 /**
- * A `sys_1` state (P37 (3)): structured text, never a file. A `FileRef` anywhere in it is a tsc error here and `invalid`
- * at run time; describe a file in text (name, mime, size, caption) instead.
+ * A `sys_1` state: JSON evidence and resolved inline JPEG/PNG image parts. A stored `FileRef` is invalid;
+ * resolve its authorized bytes or extracted text before deciding. Voice recordings use their transcript.
  */
 type DecisionValue =
 	| string
@@ -498,21 +498,31 @@ type DecisionValue =
 	| null
 	| readonly DecisionValue[]
 	| ({ readonly [key: string]: DecisionValue } & { readonly [brand]?: never });
-/** A System 1 state: structured text keyed by name (P37); never a file. */
-export type DecisionState = { readonly [key: string]: DecisionValue };
+/** Structured text used in questions and criteria; scalar numbers and booleans belong inside a container. */
+export type DecisionEntry =
+	| string
+	| null
+	| readonly DecisionValue[]
+	| ({ readonly [key: string]: DecisionValue } & { readonly [brand]?: never });
+/** Shared JSON or inline image evidence; never an unresolved stored file. */
+export type DecisionState = Exclude<DecisionEntry, null>;
 /** One typed question in the provider's shape (P37): a noul's criteria say what true and false mean; score levels run lowest first. */
 export type DecisionQuestion =
 	| {
 			readonly type: 'noul';
-			readonly instructions: string;
-			readonly criteria: { readonly true: string; readonly false: string };
+			readonly instructions?: DecisionEntry;
+			readonly criteria?: { readonly true?: DecisionEntry; readonly false?: DecisionEntry } | null;
 	  }
 	| {
 			readonly type: 'choice';
-			readonly instructions: string;
-			readonly criteria: { readonly [option: string]: string };
+			readonly instructions?: DecisionEntry;
+			readonly criteria: { readonly [option: string]: DecisionEntry };
 	  }
-	| { readonly type: 'score'; readonly instructions: string; readonly criteria: readonly string[] };
+	| {
+			readonly type: 'score';
+			readonly instructions?: DecisionEntry;
+			readonly criteria: readonly DecisionEntry[];
+	  };
 /**
  * `ctx.ai.sys_1.decide`'s answers, each typed from its question literal (P36, P37): a choice's option key; a score's
  * continuous `score`, its most probable `level` (the level itself), and `probabilities`/`legend` keyed by level index.
@@ -542,7 +552,11 @@ interface Decide {
 		questions: Q;
 	}): Eff<{ answers: DecisionAnswers<Q>; costUsd: number }, Failure>;
 }
-/** `sys_1` decides (P36, text only); `sys_2` is the LLM (multimodal); `embed` takes text and files (P39). */
+/**
+ * `sys_1` decides from text/images; `sys_2` is the LLM; `embed` takes text and files. A result is a proposal: a write
+ * still runs through the caller's grants, checks and approvals, and a person confirms anything that changes money or
+ * access. The host does not run an LLM itself; the provider is a declared integration with sealed credentials.
+ */
 export type Ai<Tools> = {
 	sys_1: { decide: Decide };
 	sys_2: { infer: Infer<Tools> };

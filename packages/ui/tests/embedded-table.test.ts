@@ -14,7 +14,7 @@ it.live('embedded controlled rows reuse the model grid without a shell or runtim
 			flushSync();
 			await tick();
 			assert.ok(target.querySelector('[data-view="table"][data-embedded="true"]'));
-			assert.equal(target.querySelectorAll('thead th').length, 2);
+			assert.equal(target.querySelectorAll('thead th[data-column]').length, 2);
 			assert.equal(target.querySelectorAll('[data-column-resize]').length, 2);
 			assert.equal(target.querySelectorAll('th[draggable="true"]').length, 2);
 			assert.equal(target.querySelectorAll('[data-table-footer],[data-row-actions]').length, 0);
@@ -27,7 +27,7 @@ it.live('embedded controlled rows reuse the model grid without a shell or runtim
 			flushSync();
 			await tick();
 			assert.deepEqual(
-				[...target.querySelectorAll<HTMLElement>('thead th')].map(
+				[...target.querySelectorAll<HTMLElement>('thead th[data-column]')].map(
 					(column) => column.dataset.column
 				),
 				['paid', 'name']

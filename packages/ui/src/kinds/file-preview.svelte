@@ -142,7 +142,6 @@ when the host reads), Download, and Remove when `onRemove` is given.
 			{#if url !== undefined}
 				<Button
 					variant="outline"
-					size="sm"
 					href={url}
 					download={file.name}
 					target="_blank"
@@ -152,7 +151,6 @@ when the host reads), Download, and Remove when `onRemove` is given.
 			{#if onRemove}
 				<Button
 					variant="ghost"
-					size="sm"
 					class="ml-auto text-destructive hover:bg-destructive/10 hover:text-destructive"
 					onclick={onRemove}><Icon icon="lucide:trash-2" class="size-3.5" />{t('remove')}</Button
 				>

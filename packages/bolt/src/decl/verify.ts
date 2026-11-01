@@ -71,7 +71,7 @@ type RollUp<M, P extends string, K> = K extends { kind: 'sum' | 'count' | 'state
 	: never;
 
 type ModelErrors<M, D = Models[M & keyof Models]> =
-	| Unknown<M, Listed<D extends { label: infer L } ? L : never>, FieldName<M>, 'label'>
+	| Unknown<M, D extends { label: readonly (infer L)[] } ? L : never, FieldName<M>, 'label'>
 	| Unknown<M, Listed<D extends { key: infer L } ? L : never>, FieldName<M>, 'key'>
 	| Unknown<M, Each<D extends { unique: infer L } ? L : never, 'fields'>, FieldName<M>, 'unique'>
 	| Unknown<M, Listed<D extends { index: infer L } ? L : never>, FieldName<M>, 'index'>

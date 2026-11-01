@@ -167,8 +167,11 @@ export function readTargets(cat: Catalog, ir: ReadIR, authority?: Authority): Re
 	function add(model: string): void {
 		if (out.has(model)) return;
 		out.add(model);
+		for (const target of cat.models.get(model)?.labelLink?.targets ?? []) add(target);
 		const grant = authority === undefined || authority.admin ? undefined : authority.models[model];
-		for (const arm of Object.values(grant?.read ?? {}).flatMap((paths) => Object.values(paths).flat()))
+		for (const arm of Object.values(grant?.read ?? {}).flatMap((paths) =>
+			Object.values(paths).flat()
+		))
 			pred(arm.where);
 	}
 	add(ir.model);

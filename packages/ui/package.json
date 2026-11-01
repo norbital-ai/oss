@@ -49,6 +49,10 @@
 			"svelte": "./build/effect/index.js",
 			"default": "./build/effect/index.js"
 		},
+		"./read": {
+			"types": "./build/read/index.d.ts",
+			"default": "./build/read/index.js"
+		},
 		"./base.css": "./build/base.css",
 		"./brand/access.css": "./build/brand/access.css",
 		"./assets/*": "./assets/*"

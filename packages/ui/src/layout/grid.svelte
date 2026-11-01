@@ -72,7 +72,7 @@ An auto-fitting grid of cards at a minimum cell width (`compact`, `card`, `panel
 		rowGap && ROW_GAP_CLASSES[rowGap],
 		ALIGN_CLASSES[align],
 		tracks ? null : minimumClasses[minimum],
-		// The caller's class last: floors, layers and colours it names win; layout itself is props (doctor-enforced).
+		// The caller's class last: floors, layers and colours it names win; layout itself is props.
 		className
 	)}
 	style={tracks

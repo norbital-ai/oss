@@ -10,6 +10,7 @@ import type {} from 'vitest/config';
 import { EDITOR_SINGLETONS } from '../compiler/editor-dependencies.ts';
 import { BOLT, EXT } from '../compiler/bolt.ts';
 import { lintTests } from '../test/lint.ts';
+import { writeTypeSetup } from '../compiler/names.ts';
 import { AuthorErrors, ToolFailure } from './build.ts';
 
 /** This copy of the kit (src or build), so `/test` and `/test/browser` share one shell and one page SDK with `$bolt`. */
@@ -140,6 +141,8 @@ export const testWorkspace = Effect.fn('bolt.test')(function* (
 		try: () => realpathSync(dir),
 		catch: (cause) => new ToolFailure({ message: 'The workspace directory could not open.', cause })
 	});
+	// A sandbox snapshot contains authored files, not the generated config their tsconfig extends.
+	yield* writeTypeSetup(root);
 	const { runner, svelte } = yield* load(join(root, 'package.json'));
 	process.chdir(root);
 	const { filter, options } = runner.parseCLI(['vitest', 'run', ...args]);

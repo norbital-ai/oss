@@ -84,7 +84,7 @@ scroll owner scrolls when boxes do not fit) or `size="fill"` (the space left in 
 		justifyClasses[justify],
 		SIZE_CLASSES[size],
 		divided && 'divide-y divide-border',
-		// The caller's class last: floors, layers and colours it names win; layout itself is props (doctor-enforced).
+		// The caller's class last: floors, layers and colours it names win; layout itself is props.
 		className
 	)}
 	style:min-height={size === 'fill' ? minHeight : undefined}

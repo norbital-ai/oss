@@ -439,37 +439,35 @@ it.effect(
 		})
 );
 
-it.effect(
-	"a condition's operators are never an empty choice: the catalogue's, else the grammar's for its kind",
-	() =>
-		Effect.sync(() => {
-			const ops = (path: string) =>
-				operatorsFor([], [], path, required(resolve(catalog, 'jobs', path))).map((o) => o.op);
-			assert.deepEqual(ops('assignee'), ['eq', 'ne', 'in', 'nin', 'isNull', 'notNull']);
-			assert.deepEqual(ops('window'), [
-				'contains',
-				'overlaps',
-				'within',
-				'startsWithin',
-				'endsWithin',
-				'isNull',
-				'notNull'
-			]);
-			assert.deepEqual(ops('tags'), ['has', 'hasAny', 'hasAll', 'isEmpty', 'notEmpty']);
-			assert.equal(
-				operatorsFor([], [], 'scheduled_on', required(resolve(catalog, 'jobs', 'scheduled_on')))[2]
-					?.label,
-				'after'
-			);
-			// the catalogue's own words win where it offers the path
-			assert.deepEqual(
-				operatorsFor(offers('jobs'), [], 'hours', required(resolve(catalog, 'jobs', 'hours'))),
-				[
-					{ op: 'eq', label: 'is' },
-					{ op: 'gt', label: 'more than' }
-				]
-			);
-		})
+it.effect("a condition's operators are the catalogue's, else its kind's", () =>
+	Effect.sync(() => {
+		const ops = (path: string) =>
+			operatorsFor([], [], path, required(resolve(catalog, 'jobs', path))).map((o) => o.op);
+		assert.deepEqual(ops('assignee'), ['eq', 'ne', 'in', 'nin', 'isNull', 'notNull']);
+		assert.deepEqual(ops('window'), [
+			'contains',
+			'overlaps',
+			'within',
+			'startsWithin',
+			'endsWithin',
+			'isNull',
+			'notNull'
+		]);
+		assert.deepEqual(ops('tags'), ['has', 'hasAny', 'hasAll', 'isEmpty', 'notEmpty']);
+		assert.equal(
+			operatorsFor([], [], 'scheduled_on', required(resolve(catalog, 'jobs', 'scheduled_on')))[2]
+				?.label,
+			'after'
+		);
+		// the catalogue's own words win where it offers the path
+		assert.deepEqual(
+			operatorsFor(offers('jobs'), [], 'hours', required(resolve(catalog, 'jobs', 'hours'))),
+			[
+				{ op: 'eq', label: 'is' },
+				{ op: 'gt', label: 'more than' }
+			]
+		);
+	})
 );
 
 // ── mounted views over a scripted bolt ──
@@ -819,19 +817,33 @@ it.live(
 				'every'
 			]);
 			assert.ok(element<HTMLElement>(many, '[data-many-heading]'));
+			assert.equal(many.getAttribute('aria-label'), 'Related records');
+			assert.match(
+				textOf(element<HTMLElement>(many, '[data-cond=qty]')),
+				/Field.*Operator.*Value/s
+			);
+			assert.equal(
+				element<HTMLElement>(document, '[data-group]').getAttribute('aria-label'),
+				'Condition group'
+			);
 			assert.deepEqual(
 				options(element<HTMLElement>(many, '[data-cond=qty] [aria-label=Operator]')),
-				['eq', 'ne', 'gt', 'gte', 'lt', 'lte']
+				['eq', 'ne', 'gt', 'gte', 'lt', 'lte', 'in', 'nin']
 			);
-			// the group's combinator sits between its conditions and switches it
-			const toggle = element<HTMLButtonElement>(document, '[data-group] [data-join-toggle]');
-			assert.equal(toggle.dataset['joinToggle'], 'or');
-			toggle.click();
+			element<HTMLButtonElement>(many, '[data-add-filter]').click();
 			yield* browser(settle);
-			assert.equal(
-				element<HTMLElement>(document, '[data-group] [data-join-toggle]').dataset['joinToggle'],
-				'and'
-			);
+			element<HTMLButtonElement>(document, '[data-add-nested-group]').click();
+			yield* browser(settle);
+			const innerGroup = element<HTMLElement>(many, '[data-group]');
+			assert.equal(innerGroup.dataset['group'], 'or');
+			element<HTMLButtonElement>(innerGroup, '[data-remove]').click();
+			yield* browser(settle);
+			// Changing the scope's match mode updates every child condition together.
+			element<HTMLElement>(document, '[data-group] [aria-label=Match]').click();
+			flushSync();
+			element<HTMLElement>(document, '[role=option][data-value=and] button').click();
+			yield* browser(settle);
+			assert.equal(element<HTMLElement>(document, '[data-group]').dataset['group'], 'and');
 			assert.match(JSON.stringify(s.last().where), /"hours":\{"gt":1\}/);
 			assert.doesNotMatch(JSON.stringify(s.last().where), /"or"/);
 			yield* browser(v.done);
@@ -876,6 +888,7 @@ it.live(
 			assert.match(bounds, /"status":\{"eq":"done"\}/);
 			assert.doesNotMatch(bounds, /bogus|abc/);
 			assert.deepEqual(s.last().orderBy, [{ hours: 'desc' }]);
+
 			assert.equal(document.querySelectorAll<HTMLElement>('[data-view-notice]').length, 1);
 			assert.equal(document.querySelector('[data-read=error]'), null);
 			assert.match(bounds, /2025-12-27/);
@@ -886,6 +899,37 @@ it.live(
 			const next = JSON.stringify(s.last().where);
 			assert.match(next, /2025-12-28/);
 			assert.match(next, /2026-01-04/);
+			yield* browser(v.done);
+		})
+);
+
+it.live(
+	'Table: a decoder that throws drops the clause instead of sending an unchecked predicate',
+	() =>
+		Effect.gen(function* () {
+			const s = yield* browser(() => scripted());
+			const throwing = {
+				...s.bolt,
+				decode: () => {
+					throw new Error('decode failed');
+				}
+			};
+			const w = encodeURIComponent(JSON.stringify({ title: { eq: 'One' } }));
+			const v = yield* browser(() =>
+				show(
+					{
+						part: 'table',
+						view: Table,
+						props: { of: 'jobs', columns: ['title'] },
+						bolt: throwing,
+						catalog
+					},
+					`/?jobs.where=${w}`
+				)
+			);
+			assert.equal(s.last().where, undefined);
+			assert.equal(document.querySelectorAll<HTMLElement>('[data-view-notice]').length, 1);
+			assert.equal(document.querySelector('[data-read=error]'), null);
 			yield* browser(v.done);
 		})
 );
@@ -1292,12 +1336,14 @@ it.live(
 			const input = element<HTMLInputElement>(document, '[data-describe] input');
 			input.value = 'acme jobs with more than 2 of a line, most hours first';
 			input.dispatchEvent(new Event('input', { bubbles: true }));
+			flushSync();
 			const form = element<HTMLElement>(document, '[data-describe]');
-			form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+			const apply = element<HTMLButtonElement>(form, 'button[type="button"]');
+			apply.click();
 			yield* browser(() => settle());
 			assert.ok(element<HTMLElement>(document, '[data-view-loading]'));
-			assert.equal(element<HTMLButtonElement>(form, 'button[type="submit"]').disabled, true);
-			form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+			assert.equal(apply.disabled, true);
+			apply.click();
 			yield* browser(() => settle());
 			assert.equal(attempts, 1, 'the pending request owns the submission');
 			reject(
@@ -1310,8 +1356,8 @@ it.live(
 			assert.equal(document.querySelector('[data-view-loading]'), null);
 			assert.deepEqual(s.last().where, { status: { eq: 'done' } });
 			assert.ok(element<HTMLElement>(document, '[data-view-error]'));
-			assert.equal(element<HTMLButtonElement>(form, 'button[type="submit"]').disabled, false);
-			form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+			assert.equal(apply.disabled, false);
+			apply.click();
 			yield* browser(() => settle());
 			assert.equal(document.querySelector('[data-view-error]'), null);
 			assert.deepEqual(s.last().where, {
@@ -1326,11 +1372,36 @@ it.live(
 				]
 			});
 			assert.deepEqual(s.last().orderBy, [{ hours: 'desc' }]);
+			const prefilter = element<HTMLElement>(document, '[data-author-where]');
+			assert.match(textOf(prefilter), /Prefilter · read only/);
+			assert.equal(prefilter.querySelector('button, input, select, textarea'), null);
 			assert.ok(
 				element<HTMLElement>(document, '[data-filter-rows] [data-many=lines]'),
 				'the relation group is a row the viewer edits'
 			);
+			element<HTMLElement>(document, '[data-clear]').click();
+			yield* browser(settle);
+			assert.equal(document.querySelector('[data-filter-rows] [data-many]'), null);
+			assert.equal(document.querySelector('[data-clear]'), null);
+			assert.match(textOf(element<HTMLElement>(document, '[data-author-where]')), /done/i);
+			const clearedUrl = location.pathname + location.search;
 			yield* browser(v.done);
+			// A fresh client proves the cleared URL still reads under the author's scope without reusing a cached answer.
+			const fresh = yield* browser(() => scripted());
+			const reopened = yield* browser(() =>
+				show(
+					{
+						part: 'table',
+						view: Table,
+						props: { of: 'jobs', columns: ['title', 'hours'], where: { status: { eq: 'done' } } },
+						bolt: fresh.bolt,
+						catalog
+					},
+					clearedUrl
+				)
+			);
+			assert.deepEqual(fresh.last().where, { status: { eq: 'done' } });
+			yield* browser(reopened.done);
 		})
 );
 
@@ -1559,6 +1630,14 @@ it.live(
 			assert.equal(chip(), before, 'one wording before and after the catalogue loads');
 			element<HTMLDetailsElement>(document, '[data-view-details]').open = true;
 			const where = s.last().where;
+			assert.equal(document.querySelector('[role=combobox][aria-label="Compare with"]'), null);
+			element<HTMLElement>(document, '[data-compare-with]').click();
+			yield* browser(settle);
+			assert.ok(element<HTMLElement>(document, '[role=combobox][aria-label="Compare with"]'));
+			element<HTMLElement>(document, '[data-compare-with]').click();
+			yield* browser(settle);
+			element<HTMLElement>(document, '[data-filter-rows] > [data-add-filter]').click();
+			yield* browser(settle);
 			element<HTMLElement>(document, '[data-add-condition]').click();
 			yield* browser(settle);
 			const pickers = document.querySelectorAll<HTMLElement>('[data-field-picker]');
@@ -1572,7 +1651,7 @@ it.live(
 			for (const hidden of ['meta', 'facts', 'face', '$search', '$similar'])
 				assert.ok(!paths.includes(hidden), `${hidden} is not offered: ${paths.join()}`);
 			assert.match(
-				textOf(element<HTMLElement>(list, '[data-path=lines]')),
+				textOf(element<HTMLElement>(list, '[data-path=lines]')).trim(),
 				/^lines related records$/i
 			);
 			element<HTMLElement>(list, '[data-path=title]').click();

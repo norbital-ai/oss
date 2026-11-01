@@ -26,6 +26,13 @@ import type {
 	Vector
 } from './values.ts';
 
+/**
+ * The field kinds: built-in stored kinds (`text`, `int`, `decimal`, `money`, `bool`, `date`, `instant`, `enum`,
+ * `state`, `ref`, `file`, `point`, `json`) and the input kinds. Use a built-in kind first; a reusable structured
+ * value is a `customField`; a parent-owned value is typed `json` with a `shape`; a separate model is only for
+ * independent identity, lifecycle, permissions, history or relational queries. Every kind renders and edits itself in
+ * cells, forms and history, so a page never maps labels or builds an editor by hand.
+ */
 /** A `file` field's cap: at most 20 MiB (the stored-file cap; `bolt check` bounds the KiB form). */
 type FileSize =
 	| `${bigint}KiB`
@@ -46,6 +53,8 @@ type SeqPattern = `${string}{${string}}${string}`;
 type StateSpec = { to?: readonly string[]; edit?: 'all' | 'none' | readonly string[] };
 /** Options every field kind takes: `optional`, `default`, `unique`, a `label` and `help` message, and `hidden`. */
 export type FieldCommon = {
+	/** Previous stored field name, preserved by a schema rename. */
+	was?: string;
 	optional?: true;
 	default?: Json;
 	unique?: true;
@@ -223,7 +232,13 @@ type PlainFieldValue<K> = K extends { kind: 'text'; many: true }
 																								: K extends { kind: 'custom'; of: infer F }
 																									? ValueOf<CustomShape<F>>
 																									: never;
-/** The TypeScript type of a value of kind `K`; `optional: true` admits null. */
+/**
+ * The runtime value type of a field-kind declaration. `optional: true` adds `null`; it does not make an object key
+ * optional. Numeric, date and id kinds retain their Bolt value types rather than accepting arbitrary wire strings.
+ * @example
+ * type Notes = ValueOf<{ kind: 'text'; optional: true }>; // string | null
+ * @see InputOf
+ */
 export type ValueOf<K> = K extends { optional: true } ? Base<K> | null : Base<K>;
 type OptionalKeys<F> = {
 	[P in keyof F]-?: F[P] extends { optional: true }
@@ -232,7 +247,14 @@ type OptionalKeys<F> = {
 			? P
 			: never;
 }[keyof F];
-/** An object of kinds as a value: absent-or-null for `optional`, absent for a default. */
+/**
+ * An input object derived from a map of field kinds. Required keys must be present; optional or defaulted keys may
+ * be omitted. An optional key also accepts `null`; a default does not itself add `null` to the value type.
+ * This derives a shape only: runtime decoding, defaults and business validation still execute at their boundary.
+ * @example
+ * type Input = InputOf<{ title: { kind: 'text' }; notes: { kind: 'text'; optional: true } }>;
+ * @see ValueOf
+ */
 export type InputOf<F> = InputOfFields<F>;
 type InputOfFields<F, Optional extends keyof F = OptionalKeys<F>> = Simplify<
 	{ readonly [P in Exclude<keyof F, Optional>]: ValueOf<F[P]> } & {
@@ -307,6 +329,7 @@ interface ExactResult<T, S> {
 }
 
 type Common<D> = {
+	was?: string;
 	optional?: true;
 	default?: D;
 	unique?: true;

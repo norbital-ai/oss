@@ -335,7 +335,6 @@ may decide now, a two-step form: pick Approve, Reject or Request changes, then g
 					<div class="flex flex-wrap gap-2">
 						{#each decisions(v) as move (move.decision)}
 							<Button
-								size="sm"
 								variant={move.decision === 'approve' ? 'default' : 'outline'}
 								class={move.decision === 'reject' ? 'text-destructive' : undefined}
 								disabled={busy}
@@ -372,7 +371,6 @@ may decide now, a two-step form: pick Approve, Reject or Request changes, then g
 						<div class="flex flex-wrap justify-between gap-2">
 							<Button
 								type="button"
-								size="sm"
 								variant="ghost"
 								disabled={busy}
 								data-back
@@ -382,7 +380,6 @@ may decide now, a two-step form: pick Approve, Reject or Request changes, then g
 							>
 							<Button
 								type="submit"
-								size="sm"
 								variant={decision.decision === 'reject' ? 'destructive' : 'default'}
 								disabled={busy || (decision.reason === 'required' && reason.trim() === '')}
 								data-confirm>{decisionText(decision.decision)}</Button

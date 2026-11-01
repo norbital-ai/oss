@@ -1,17 +1,8 @@
 // The API reference (§7.3): `scripts/docs.ts` writes it into `build/docs/` at the end of bolt's build, so this reads
 // the corpus the last build produced (`pnpm --dir oss build` first). Every symbol a workspace imports has a summary;
-// declaration functions carry their option shapes; the agent's `docs` tool reads the same corpus.
+// declaration functions carry their option shapes; `workspace_lang` reads the same source JSDoc through the compiler.
 import { expect, it } from '@effect/vitest';
-import { Effect, Stream } from 'effect';
 import { docs } from '../src/docs/index.ts';
-import { catalogue, jobs, type ToolContext } from '../src/engine/agent/tools.ts';
-import { mcpSessions } from '../src/engine/agent/mcp.ts';
-import type { AgentEngine } from '../src/engine/agent/index.ts';
-import { TenantDb } from '../src/engine/db/tenant-db.ts';
-import { DbError } from '../src/engine/errors.ts';
-import { Docs, Mcp } from '../src/engine/ports.ts';
-import { docsPort } from '../src/node/docs.ts';
-import { off } from '../src/facilities/index.ts';
 
 it('one namespace per public entry, with its module and the entry summary', () => {
 	const names = docs.index().namespaces.map((n) => n.namespace);
@@ -72,6 +63,27 @@ it('the declaration functions are documented, and spec parameters list their fie
 	]);
 });
 
+it('keeps implementation guidance and parameter documentation on the core public contracts', () => {
+	for (const name of ['model', 'workspace', 'automation', 'secrets']) {
+		const contract = docs.symbol('bolt', name);
+		expect(
+			contract?.params?.every((param) => Boolean(param.summary)),
+			name
+		).toBe(true);
+		expect(contract?.examples?.length, name).toBeGreaterThan(0);
+		expect(contract?.docs, name).toContain('@returns');
+	}
+	expect(docs.symbol('bolt', 'ActInput')?.summary).toContain('write exposure');
+	expect(docs.symbol('bolt', 'ActOutput')?.summary).toContain('records');
+	expect(docs.symbol('bolt', 'Row')?.summary).toContain('runtime');
+	expect(docs.symbol('bolt', 'InputOf')?.examples?.[0]).toContain('optional: true');
+	const query = docs
+		.symbol('bolt/page', 'PageBolt')
+		?.members?.find((member) => member.name === 'query');
+	expect(query?.docs).toContain('@returns');
+	expect(query?.examples?.[0]).toContain('bolt.query');
+});
+
 it('svelte components list their props with the props docs', () => {
 	const stack = docs.symbol('ui/layout', 'Stack')!;
 	expect(stack.kind).toBe('component');
@@ -99,190 +111,35 @@ it('search ranks an exact name first and narrows by namespace', () => {
 	expect(docs.search('enum field kind values options')[0]?.name).toBe('FieldKind');
 });
 
-// A complete native context with unrelated capabilities that fail if the docs tool calls them.
-const unexpected = () => Effect.die(new Error('The docs tool called an unrelated capability.'));
-const unexpectedSync = (): never => {
-	throw new Error('The docs tool called an unrelated capability.');
-};
-const manifest: AgentEngine['manifest'] = {
-	needs: [],
-	workspace: { tz: 'UTC', locale: 'en' },
-	models: {},
-	exposures: {},
-	relationships: {},
-	integrations: {},
-	connections: {},
-	policies: {},
-	automations: {},
-	teams: {},
-	envoys: {},
-	mcp: {},
-	apps: {},
-	customFields: {},
-	agent: { skills: {} }
-};
-const engine: AgentEngine = {
-	manifest,
-	db: TenantDb.typed({
-		read: unexpected,
-		write: unexpected,
-		transaction: unexpected,
-		session: () =>
-			Effect.fail(DbError.make('0A000', 'this fixture does not support leased sessions'))
-	}),
-	live: {
-		publish: unexpectedSync,
-		syncChanged: unexpectedSync,
-		v: unexpected(),
-		connect: () => Stream.die(new Error('The docs tool opened a live connection.')),
-		register: unexpected,
-		drop: unexpected,
-		authorize: unexpected,
-		authorityOf: unexpected,
-		close: unexpected,
-		settled: unexpected(),
-		sweep: unexpected(),
-		retained: unexpected()
-	},
-	calls: {
-		acts: unexpected,
-		start: unexpected
-	},
-	read: unexpected,
-	act: unexpected,
-	approvals: { decide: unexpected, view: unexpected, list: unexpected }
-};
-const docsTool = (external = false) =>
-	Effect.gen(function* () {
-		const context: ToolContext = {
-			engine,
-			authority: {
-				key: 'staff',
-				actor: {
-					kind: 'member',
-					id: 'ann',
-					email: null,
-					phone: null,
-					external,
-					teams: [],
-					teamPath: [],
-					admin: false,
-					party: null
-				},
-				admin: false,
-				policies: [],
-				models: {},
-				automations: [],
-				capabilities: { apps: [], tools: [], mcp: [] },
-				limits: [],
-				teamTree: [],
-				scopes: {}
-			},
-			conv: {
-				id: 'c',
-				title: null,
-				owner: 'ann',
-				envoy: null,
-				integration: null,
-				thread: null,
-				parent: null,
-				status: 'idle',
-				model: 'default',
-				plan: null,
-				goals: []
-			},
-			bindings: { now: '2026-10-13T00:00:00.000Z', today: '2026-10-13', tz: 'UTC' },
-			turn: 't',
-			mode: 'agent',
-			inApp: true,
-			delegation: false,
-			child: false,
-			skills: {},
-			agents: [],
-			mcp: yield* mcpSessions(manifest).pipe(Effect.provide(Mcp.fromAbi(off))),
-			logs: { write: () => Effect.void, query: () => Effect.succeed([]) },
-			mcpTools: [],
-			docs: yield* Docs.pipe(Effect.provide(Docs.fromAbi(docsPort()))),
-			hostTools: [],
-			receipts: [],
-			read: new Map(),
-			files: [],
-			jobs: yield* jobs(),
-			setPlan: unexpected,
-			setGoals: unexpected,
-			compact: unexpectedSync,
-			ask: unexpectedSync,
-			messages: unexpected,
-			output: unexpected,
-			history: unexpected,
-			subagent: {
-				spawn: unexpected,
-				list: unexpected,
-				read: unexpected,
-				message: unexpected,
-				stop: unexpected,
-				running: unexpected,
-				report: unexpected
-			}
-		};
-		const offered = yield* catalogue(context);
-		return offered.tools.some((tool) => tool.name === 'docs')
-			? { run: (input: unknown, id: string) => offered.run('docs', input, id) }
-			: undefined;
+it('documents native Effect service implementations needed by test layers', () => {
+	const convert = docs.symbol('bolt/engine', 'Convert');
+	expect(convert?.members?.map((member) => member.name)).toEqual(
+		expect.arrayContaining(['targets', 'convert', 'ingest'])
+	);
+	expect(convert?.members?.find((member) => member.name === 'ingest')).toMatchObject({
+		optional: true,
+		type: expect.stringContaining('Effect')
 	});
+	expect(docs.symbol('bolt/engine', 'Files')?.members?.map((member) => member.name)).toEqual(
+		expect.arrayContaining(['put', 'get', 'url', 'remove', 'download'])
+	);
+	expect(docs.symbol('bolt/engine', 'Sql')?.signature).toContain('readonly params');
+});
 
-it.effect(
-	'the agent reads the reference through docs: namespaces, a search, one symbol; host namespaces are not offered',
-	() =>
-		Effect.gen(function* () {
-			const tool = yield* docsTool();
-			if (tool === undefined) return yield* Effect.die('Staff has no docs tool.');
-			const list = yield* tool.run({}, 'c1');
-			expect(list).toMatchObject({
-				result: {
-					namespaces: expect.arrayContaining([
-						{
-							namespace: 'bolt',
-							import: '@norbital-ai/bolt',
-							summary: expect.any(String),
-							symbols: expect.any(Number)
-						},
-						{
-							namespace: 'ui',
-							import: '@norbital-ai/ui',
-							summary: expect.any(String),
-							symbols: expect.any(Number)
-						},
-						{
-							namespace: 'std/date',
-							import: '@norbital-ai/std/date',
-							summary: expect.any(String),
-							symbols: expect.any(Number)
-						}
-					])
-				}
-			});
-			expect(list).not.toMatchObject({
-				result: {
-					namespaces: expect.arrayContaining([
-						expect.objectContaining({ namespace: 'bolt/engine' })
-					])
-				}
-			});
-			expect(yield* tool.run({ symbol: 'model', namespace: 'bolt' }, 'c2')).toMatchObject({
-				result: [{ import: '@norbital-ai/bolt', name: 'model' }]
-			});
-			expect(yield* tool.run({ namespace: 'bolt/engine' }, 'c3')).toMatchObject({
-				result: { error: expect.stringMatching(/No namespace/) }
-			});
-			expect(yield* tool.run({ query: 'stack' }, 'c4')).toMatchObject({
-				result: expect.arrayContaining([expect.objectContaining({ name: 'Stack' })])
-			});
-		})
-);
-
-it.effect('an external member gets no docs tool', () =>
-	Effect.gen(function* () {
-		expect(yield* docsTool(true)).toBeUndefined();
-	})
-);
+it('ships every maintained mechanism guide with source and complete text', () => {
+	const guides = docs.index().guides;
+	expect(guides.map((guide) => guide.slug)).toEqual(
+		expect.arrayContaining([
+			'overview',
+			'mechanisms',
+			'models',
+			'apis',
+			'documents',
+			'hosts',
+			'seeding'
+		])
+	);
+	expect(docs.guide('mechanisms')?.text).toContain('reserved system identity');
+	expect(docs.guide('models')?.source).toBe('packages/bolt/docs/models.md');
+	expect(docs.guide('not-a-guide')).toBeNull();
+});

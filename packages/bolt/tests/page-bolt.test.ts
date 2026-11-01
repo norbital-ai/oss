@@ -85,9 +85,9 @@ describe('reads', () => {
 					throw new TypeError('offline');
 				}
 			});
-			expect(yield* Effect.flip(offline.query({ jobs: { where: { id: { eq: 'j1' } } } }))).toBeInstanceOf(
-				TransportFailed
-			);
+			expect(
+				yield* Effect.flip(offline.query({ jobs: { where: { id: { eq: 'j1' } } } }))
+			).toBeInstanceOf(TransportFailed);
 		})
 	);
 	it.effect('live revives answers and a refusal ends the Stream', () =>
@@ -147,6 +147,69 @@ describe('reads', () => {
 			expect(Exit.isFailure(exit) && Cause.squash(exit.cause)).toEqual(
 				new ReadFailed({ code: 'tooLarge', message: 'too big' })
 			);
+		})
+	);
+	it.effect('an optimistic money update keeps the Decimal contract of a live row', () =>
+		Effect.gen(function* () {
+			let source: EventSourceLike | undefined;
+			const opened = yield* Deferred.make<void>();
+			const registered = yield* Deferred.make<void>();
+			const reply = yield* Deferred.make<Response>();
+			type Jobs = { jobs: { rows: { id: string; amount: Decimal }[] } };
+			const answered = yield* Queue.unbounded<Jobs>();
+			const bolt = yield* createBolt({
+				actor: null,
+				locale: 'en',
+				base: 'https://workspace.test',
+				fetch: async (url) => {
+					if (String(url).endsWith(PATHS.act)) return Effect.runPromise(Deferred.await(reply));
+					Deferred.doneUnsafe(registered, Effect.void);
+					return Response.json({ errors: [] });
+				},
+				openStream: () => {
+					let handler: EventSourceLike['onmessage'] = null;
+					source = {
+						get onmessage() {
+							return handler;
+						},
+						set onmessage(next) {
+							handler = next;
+							if (next !== null) Deferred.doneUnsafe(opened, Effect.void);
+						},
+						onerror: null,
+						close() {}
+					};
+					return source;
+				}
+			});
+			yield* Stream.runForEach(bolt.observe<Jobs>(bolt.query({ jobs: {} })), (answer) =>
+				Queue.offer(answered, answer)
+			).pipe(Effect.forkScoped);
+			yield* Deferred.await(opened);
+			const push = (frame: Frame) =>
+				source?.onmessage?.(new MessageEvent('message', { data: JSON.stringify(frame) }));
+			push({ t: 'hello', conn: 'c1', v: 0 });
+			yield* Deferred.await(registered);
+			push({
+				t: 'answer',
+				view: 'v1',
+				v: 1,
+				value: {
+					jobs: { rows: [{ id: 'a', amount: { $dec: '1.50' } }], next: null }
+				}
+			});
+			yield* Queue.take(answered);
+			const act = yield* bolt
+				.act('jobs.update', { target: 'a', set: { amount: Decimal.of('0') } })
+				.pipe(Effect.forkScoped);
+			const painted = yield* Queue.take(answered);
+			expect(painted.jobs.rows[0]?.amount).toBeInstanceOf(Decimal);
+			expect(painted.jobs.rows[0]?.amount.toNumber()).toBe(0);
+			yield* Deferred.succeed(
+				reply,
+				Response.json({ outcome: { kind: 'committed', output: null, records: [] }, v: 1 })
+			);
+			yield* Fiber.join(act);
 		})
 	);
 	/** A client over one hand-driven stream; `fetch` answers every request. */

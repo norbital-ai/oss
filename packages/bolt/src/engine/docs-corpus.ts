@@ -2,8 +2,15 @@
 // `index.json`, written by `scripts/docs.ts`): `docs/index.ts` reads them from `build/docs/`; a cell's host serves them
 // through `Docs`.
 
-/** A property, prop or parameter field: its declared type as written, and its doc's first paragraph. */
-export type DocMember = { name: string; type: string; optional?: true; summary?: string };
+/** A property, prop or parameter field: its declared type, summary and optional complete guidance and examples. */
+export type DocMember = {
+	name: string;
+	type: string;
+	optional?: true;
+	summary?: string;
+	docs?: string;
+	examples?: string[];
+};
 /** A parameter; `fields` are the properties of an options object (a declaration function's spec). */
 export type DocParam = DocMember & { fields?: DocMember[] };
 /** What an exported symbol is. */
@@ -29,6 +36,8 @@ export type DocNamespace = {
 	summary: string;
 	symbols: DocSymbol[];
 };
+/** A maintained mechanism guide shipped from the package's docs directory. */
+export type DocGuide = { slug: string; title: string; source: string; text: string };
 /** One authoring skill compiled from `oss/skills/<name>/`: its `SKILL.md` and references, by relative path. */
 export type DocSkill = {
 	name: string;
@@ -48,6 +57,8 @@ export type DocIndex = {
 		reference: boolean;
 	}[];
 	missing: string[];
+	/** Maintained mechanism guides, with their source path and complete Markdown. */
+	guides: DocGuide[];
 	/** Every authoring skill: its name, description and file paths (`SKILL.md` first). */
 	skills: { name: string; description: string; files: string[] }[];
 };
@@ -60,7 +71,7 @@ const docFile = (namespace: string) => `${namespace.replaceAll('/', '.')}.json`;
 export const skillFile = (name: string) => `skill.${name}.json`;
 
 /**
- * The API reference corpus: `index()`, `namespace(ns)`, `symbol(ns, name)` and `search(text)`.
+ * The API reference corpus: `index()`, `namespace(ns)`, `symbol(ns, name)`, `search(text)` and `guide(slug)`.
  * @example
  * docs.symbol('bolt', 'model')?.signature
  */
@@ -68,6 +79,10 @@ export const corpus = (load: <T>(file: string) => T) => {
 	const docs = {
 		/** Every namespace with its module specifier, summary and symbol count. */
 		index: (): DocIndex => load<DocIndex>('index.json'),
+		/** One mechanism guide, or null for an unknown slug. */
+		guide(slug: string): DocGuide | null {
+			return docs.index().guides.find((guide) => guide.slug === slug) ?? null;
+		},
 		/** One namespace's symbols, or `null` for an unknown one. */
 		namespace(namespace: string): DocNamespace | null {
 			return docs.index().namespaces.some((n) => n.namespace === namespace)

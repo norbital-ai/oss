@@ -5,7 +5,7 @@ import { Context, Effect, FiberSet, Layer, Result, Schema } from 'effect';
 import { decodeProjectedManifest } from '../src/engine/manifest.ts';
 import { shellApi } from '../src/shell/runtime.ts';
 import { founderBootstrap } from '../src/engine/identity/session.ts';
-import { HostIdentity } from '../src/shell/host.ts';
+import { HostIdentity } from '../src/engine/services.ts';
 import { KitInvalid, TestWorkspace } from '../../bolt-cli/src/test/index.ts';
 
 const manifest = Result.getOrThrow(

@@ -104,6 +104,10 @@ export interface PageBolt {
 	/**
 	 * A read request, as server code's `ctx.query`: roots (models with `read`) and their declared layers in one read, the
 	 * answer typed from the named layers; live by every row it read, layers included.
+	 * Read `.current`, `.loading` and `.error` reactively to render all states. Awaiting in an event handler reads once.
+	 * @param request Declared roots and layers with caller-scoped filters and pagination; it never bypasses policies.
+	 * @returns A Query whose current value is initially undefined; each root contains its own page or aggregate.
+	 * @see Query
 	 * @example
 	 * const orders = bolt.query({
 	 * 	orders: { where: { status: { eq: 'issued' } }, fields: ['number', 'total', 'party'], orderBy: 'due_on', limit: 100 },
@@ -139,7 +143,18 @@ export interface PageBolt {
 		id: NoInfer<Id<C>>,
 		parent?: RecordParentContext
 	): PageCall<RecordCapabilities | null, TransportFailed | ProtocolFailed>;
-	/** Runs a callable with its typed input; a held write is a success. */
+	/**
+	 * Runs a generated model write as the viewer. Input is a batch derived from that verb's exposure.
+	 * Execute the returned Effect through the mounted page runtime (`run`, `fork` or `attach` from `$bolt`).
+	 * A `pendingApproval` receipt is successful submission, not final approval; `running` is followed through the run ledger.
+	 * Refusal, conflict and uncertain settlement fail with `ActRefused`, `ActConflict` and `ActUnknown` respectively.
+	 * @param callable A generated model verb, such as `orders.create`; automations use start instead.
+	 * @param input The verb's ActInput batch, with branded target ids for updates and deletes.
+	 * @param options Optional idempotency keys and observed revisions.
+	 * @returns A PageAct Effect with the committed, pendingApproval or running receipt.
+	 * @see ActInput
+	 * @see PageAct
+	 */
 	act<const N extends string>(
 		callable: Is<N, Callable>,
 		input: NoInfer<ActInput<N>>,

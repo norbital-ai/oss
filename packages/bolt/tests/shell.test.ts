@@ -214,6 +214,35 @@ describe('app visibility (§3.9, capabilities.apps)', () => {
 });
 
 describe('exposure (the boot catalog ui reads)', () => {
+	it('accepts an unlabelled model and preserves an explicit text index without inventing an identifier', () => {
+		const source: EngineManifest = {
+			...em,
+			models: {
+				...em.models,
+				jobs: {
+					description: 'Jobs',
+					fields: { title: { kind: 'text' } },
+					search: { text: ['title'] }
+				}
+			}
+		};
+		const model = exposure(source, { ...member([]), admin: true }).jobs;
+		expect(model?.label).toEqual([]);
+		expect(model?.record_label).toBeUndefined();
+		expect(model?.search).toEqual(['title']);
+		expect(
+			exposure(
+				{
+					...source,
+					models: {
+						...source.models,
+						jobs: { description: 'Jobs', fields: { title: { kind: 'text' } } }
+					}
+				},
+				{ ...member([]), admin: true }
+			).jobs?.search
+		).toBeUndefined();
+	});
 	const TRUE = { t: 'const', value: true } as const;
 	/** One policy `p`'s access points on a model: none unless named (decision 3: reads and write columns per path). */
 	const access = (over: Partial<ModelAuthority> = {}): ModelAuthority => ({
@@ -431,7 +460,9 @@ describe('exposure (the boot catalog ui reads)', () => {
 		expect(exposure(em, auth)).toEqual({
 			jobs: {
 				label: ['title'],
-				search: ['title'],
+				labelPaths: ['title'],
+				record_label: 'record.title',
+				search: ['$label', 'title'],
 				fields: { title: { kind: 'text' }, pay: { kind: 'money' } },
 				relations: { site: { targets: ['sites'], optional: true } },
 				layers: ['site'],
@@ -456,7 +487,9 @@ describe('exposure (the boot catalog ui reads)', () => {
 		};
 		expect(exposure(source, auth)['jobs']).toEqual({
 			label: ['title'],
-			search: ['title'],
+			labelPaths: ['title'],
+			record_label: 'record.title',
+			search: ['$label', 'title'],
 			fields: { title: { kind: 'text' } },
 			output: 'brief',
 			description: 'Work orders on site'
@@ -646,6 +679,9 @@ describe('exposure (the boot catalog ui reads)', () => {
 		};
 		expect(exposure(em, auth)['sys_user']).toEqual({
 			label: ['name'],
+			labelPaths: ['name'],
+			record_label: 'record.name',
+			search: ['$label', 'name'],
 			fields: { name: { kind: 'text' } },
 			output: 'directory'
 		});
@@ -761,8 +797,8 @@ describe('preview environments drop the meta tools', () => {
 			staff = member([]).actor;
 		// tethered (Colony serves Studio): every tab
 		expect(commandCenterTabs(surfaces(m, admin, true, true), true, false)).toEqual([
-			'activity',
-			'resources',
+			'bundle',
+			'telemetry',
 			'logs',
 			'audit',
 			'automations',
@@ -979,7 +1015,7 @@ describe('visitor fetch (§5.10, GAPS r5 11)', () => {
 });
 
 describe('startable automations', () => {
-	it('Settings → Automations offers only automations the member may start and that need no input', () => {
+	it('Settings → Automations offers every automation the member may start, marking the ones needing a form', () => {
 		const spec = (input?: EngineManifest['automations'][string]['input']) => ({
 			description: 'd',
 			policies: ['p'] as const,
@@ -995,9 +1031,13 @@ describe('startable automations', () => {
 		};
 		expect(
 			startableAutomations(withRuns, { ...member([]), automations: ['drift', 'lineage'] })
-		).toEqual([{ name: 'drift', description: 'd' }]);
+		).toEqual([
+			{ name: 'drift', description: 'd', needsInput: false },
+			{ name: 'lineage', description: 'd', needsInput: true }
+		]);
 		expect(startableAutomations(withRuns, member([], {}, true)).map((a) => a.name)).toEqual([
 			'drift',
+			'lineage',
 			'tick'
 		]);
 	});
@@ -1211,16 +1251,22 @@ describe('Studio port boundary', () => {
 			releases: []
 		};
 		const v = studioView(state);
+		// Released shells still require this retired section in their wire decoder.
+		expect(
+			Schema.decodeUnknownSync(
+				Schema.Struct({ sections: Schema.Struct({ remotes: Schema.Array(Schema.Unknown) }) })
+			)(v).sections.remotes
+		).toEqual([]);
 		const names = Object.fromEntries(
 			Object.entries(v.sections!).map(([s, es]) => [s, es.map((e) => e.name)])
 		);
 		expect(names).toEqual({
+			remotes: [],
 			models: ['a', 'b'],
 			apps: ['x'],
 			kiosks: [],
 			policies: ['rep'],
 			automations: ['nightly'],
-			remotes: ['docs', 'mail', 'stripe'],
 			secrets: ['API']
 		});
 		expect(v.sections!.models).toEqual([
@@ -1231,11 +1277,6 @@ describe('Studio port boundary', () => {
 			{ name: 'rep', path: 'src/access_control/policy/+rep.policy.ts' }
 		]);
 		expect(v.sections!.apps).toEqual([{ name: 'x', path: 'src/app/x/+app.ts', href: '/app/x' }]);
-		expect(v.sections!.remotes.map((e) => e.path)).toEqual([
-			'src/agent/mcp/+docs.mcp.ts',
-			'src/integration/mail/+integration.ts',
-			'src/integration/stripe/+integration.ts'
-		]);
 		expect('manifest' in v).toBe(false);
 		expect(v.stale).toBeUndefined();
 	});

@@ -40,15 +40,7 @@ sort popover over the page's own rows, the actions menu and the page's scope con
 	import { viewState } from '../filter/view-state.svelte.js';
 	import ViewToolbar from './ViewToolbar.svelte';
 
-	let {
-		of,
-		fields,
-		key,
-		toolbar = {},
-		children,
-		empty,
-		model = ''
-	}: CustomViewProps<R> = $props();
+	let { of, fields, key, toolbar = {}, children, empty, model = '' }: CustomViewProps<R> = $props();
 	const bolt = useBolt();
 	const LOCAL = '$local';
 	const names = $derived(fields.map((f) => (typeof f === 'string' ? f : f.field)));
@@ -67,7 +59,7 @@ sort popover over the page's own rows, the actions menu and the page's scope con
 	const shown = $derived(
 		sortRows(
 			searchRows(rows, q, names).filter((r) =>
-				matches(r, { t: 'group', join: 'and', of: view.rows })
+				matches(r, { t: 'group', join: 'and', of: view.rows }, view.clock)
 			),
 			view.order
 		)
@@ -93,7 +85,7 @@ sort popover over the page's own rows, the actions menu and the page's scope con
 	/>
 {/snippet}
 
-<Cover gap="sm" top={bar}>
+<Cover gap="sm" top={bar} size="fill">
 	{#if shown.length > 0 || empty === false}{@render children(shown)}
 	{:else if empty}{@render empty()}
 	{:else if rows.length > 0}
@@ -104,7 +96,6 @@ sort popover over the page's own rows, the actions menu and the page's scope con
 			hint={msg(bolt, 'table.noMatchHint', 'Try a different search, or clear the filters.')}
 		>
 			<Button
-				size="sm"
 				variant="outline"
 				onclick={() => {
 					view.clear();

@@ -426,3 +426,186 @@ export function inputSchema(spec: Kind): KindCodec {
 	memo.set(spec, codec);
 	return codec;
 }
+
+/**
+ * The datatypes a JSON Schema may name in `format` (JSON Schema's own annotation for a value's semantic type), each with
+ * its exact JSON shape: the keys, value types (`type` and `format` of each key) and required keys a value of it has.
+ * A renderer reads a schema naming one as that datatype; one matching a shape exactly, unnamed, is read as it too.
+ * `duration` is the datatype only on a number: on a string, `format: 'duration'` is JSON Schema's ISO 8601 duration.
+ */
+export type DatatypeShape =
+	| {
+			readonly name: 'period' | 'point';
+			readonly kind: Kind;
+			readonly properties: Readonly<
+				Record<string, { readonly type: readonly string[]; readonly format?: string }>
+			>;
+			readonly required: readonly string[];
+	  }
+	| {
+			readonly name: 'money' | 'duration' | 'currency';
+			readonly kind: Kind;
+			readonly type: readonly string[];
+	  };
+/** Canonical native datatype shapes used to validate semantic JSON Schema formats. */
+export const DATATYPE_SHAPES: readonly DatatypeShape[] = [
+	{
+		name: 'period',
+		kind: { kind: 'period', of: 'date' },
+		properties: {
+			from: { type: ['string'], format: 'date' },
+			to: { type: ['null', 'string'], format: 'date' }
+		},
+		required: ['from', 'to']
+	},
+	{
+		name: 'period',
+		kind: { kind: 'period', of: 'instant' },
+		properties: {
+			start: { type: ['string'], format: 'date-time' },
+			end: { type: ['null', 'string'], format: 'date-time' }
+		},
+		required: ['start', 'end']
+	},
+	{
+		name: 'point',
+		kind: { kind: 'point' },
+		properties: { lat: { type: ['number'] }, lng: { type: ['number'] } },
+		required: ['lat', 'lng']
+	},
+	{ name: 'money', kind: { kind: 'money' }, type: ['number'] },
+	{ name: 'duration', kind: { kind: 'duration' }, type: ['integer'] },
+	{ name: 'currency', kind: { kind: 'currency' }, type: ['string'] }
+];
+/** JSON Schema's own string formats and the text formats a renderer reads; any other `format` must name a datatype. */
+const STRING_FORMATS = new Set([
+	'date',
+	'date-time',
+	'time',
+	'duration',
+	'email',
+	'idn-email',
+	'hostname',
+	'idn-hostname',
+	'ipv4',
+	'ipv6',
+	'uri',
+	'uri-reference',
+	'iri',
+	'iri-reference',
+	'uuid',
+	'uri-template',
+	'json-pointer',
+	'relative-json-pointer',
+	'regex',
+	'url',
+	'phone',
+	'zone',
+	'markdown',
+	'cel'
+]);
+type SchemaNode = { readonly [key: string]: unknown };
+const isNode = (value: unknown): value is SchemaNode =>
+	typeof value === 'object' && value !== null && !Array.isArray(value);
+const typesOf = (node: SchemaNode): string[] => {
+	const type = node['type'];
+	return typeof type === 'string'
+		? [type]
+		: Array.isArray(type)
+			? type.filter((t): t is string => typeof t === 'string')
+			: [];
+};
+const sameSet = (a: readonly string[], b: readonly string[]) =>
+	a.length === b.length && a.every((item) => b.includes(item));
+const listed = (values: readonly string[]) => values.map((v) => `'${v}'`).join(', ');
+const describe = (types: readonly string[], format: unknown) =>
+	`${types.length === 0 ? 'untyped' : types.join('|')}${typeof format === 'string' ? ` (${format})` : ''}`;
+
+/** How a node naming an object datatype differs from its shape: missing, extra and mistyped keys, required keys. */
+function shapeDifferences(
+	node: SchemaNode,
+	shape: Extract<DatatypeShape, { properties: unknown }>
+): string[] {
+	const properties = isNode(node['properties']) ? node['properties'] : {};
+	const required = Array.isArray(node['required'])
+		? node['required'].filter((r): r is string => typeof r === 'string')
+		: [];
+	const differences: string[] = [];
+	if (!sameSet(typesOf(node), ['object']))
+		differences.push(`type is ${describe(typesOf(node), undefined)}, not object`);
+	const missing = Object.keys(shape.properties).filter((key) => !(key in properties));
+	const extra = Object.keys(properties).filter((key) => !(key in shape.properties));
+	if (missing.length) differences.push(`missing ${listed(missing)}`);
+	if (extra.length) differences.push(`extra ${listed(extra)}`);
+	for (const [key, expected] of Object.entries(shape.properties)) {
+		const actual = properties[key];
+		if (!isNode(actual)) continue;
+		if (!sameSet(typesOf(actual), expected.type) || actual['format'] !== expected.format)
+			differences.push(
+				`'${key}' is ${describe(typesOf(actual), actual['format'])}, not ${describe(expected.type, expected.format)}`
+			);
+	}
+	if (!sameSet(required, shape.required))
+		differences.push(`required is [${listed(required)}], not [${listed(shape.required)}]`);
+	if (node['additionalProperties'] !== undefined && node['additionalProperties'] !== false)
+		differences.push('admits additional properties');
+	return differences;
+}
+
+/**
+ * Every datatype naming error in a JSON Schema document, by JSON Pointer from its root: a `format` naming no datatype
+ * (on a string, none of JSON Schema's or the text formats either), and a node naming a datatype whose shape is not
+ * exactly that datatype's. Matching a shape without naming it is not checked here: a renderer reads it at run time.
+ */
+export function datatypeIssues(schema: unknown, at = ''): string[] {
+	if (!isNode(schema)) return [];
+	const issues: string[] = [];
+	const format = schema['format'];
+	if (typeof format === 'string') {
+		const types = typesOf(schema);
+		const string = types.length > 0 && types.every((t) => t === 'string' || t === 'null');
+		const named = DATATYPE_SHAPES.filter(
+			(shape) => shape.name === format && !(string && format === 'duration')
+		);
+		if (named.length === 0) {
+			if (!(string && STRING_FORMATS.has(format)))
+				issues.push(
+					`${at || '/'}: format '${format}' names no datatype (${[...new Set(DATATYPE_SHAPES.map((s) => s.name))].join(', ')})`
+				);
+		} else {
+			// a period's end names pick which period it means (`start`/`end`: an instant period), as a renderer reads it
+			const properties = isNode(schema['properties']) ? schema['properties'] : {};
+			const instant = 'start' in properties || 'end' in properties;
+			const shape =
+				named.find(
+					(candidate) =>
+						candidate.name !== 'period' ||
+						(candidate.kind.kind === 'period' && (candidate.kind.of === 'instant') === instant)
+				) ?? named[0]!;
+			const differences =
+				'properties' in shape
+					? shapeDifferences(schema, shape)
+					: sameSet(types, shape.type)
+						? []
+						: [`type is ${describe(types, undefined)}, not ${shape.type.join('|')}`];
+			if (differences.length > 0)
+				issues.push(
+					`${at || '/'}: '${format}' does not match its shape: ${differences.join('; ')}`
+				);
+		}
+	}
+	const child = (key: string, value: unknown) =>
+		issues.push(...datatypeIssues(value, `${at}/${key}`));
+	for (const key of ['properties', '$defs', 'definitions', 'patternProperties']) {
+		const map = schema[key];
+		if (isNode(map))
+			for (const [name, value] of Object.entries(map)) child(`${key}/${name}`, value);
+	}
+	for (const key of ['items', 'additionalProperties', 'not', 'if', 'then', 'else', 'contains'])
+		child(key, schema[key]);
+	for (const key of ['allOf', 'anyOf', 'oneOf', 'prefixItems']) {
+		const list = schema[key];
+		if (Array.isArray(list)) list.forEach((value, index) => child(`${key}/${index}`, value));
+	}
+	return issues;
+}

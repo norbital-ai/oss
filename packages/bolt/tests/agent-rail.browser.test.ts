@@ -3,6 +3,7 @@ import { expect, it } from '@effect/vitest';
 import { Effect, Layer, ManagedRuntime, Schema } from 'effect';
 import { mountEdge } from '@norbital-ai/ui/effect';
 import { page, userEvent } from 'vitest/browser';
+import { vi } from 'vitest';
 import { mount, tick, unmount } from 'svelte';
 import Agent from '../src/shell/agent/Agent.svelte';
 import { createBolt } from '../src/page/bolt.ts';
@@ -35,7 +36,7 @@ const row = (id: string, seq: number, text: string): AgentRow => ({
 	state: null,
 	tag: null
 });
-const fixture = () => {
+const fixture = (preview = false) => {
 	const at = new Date(Date.now() - 178_000).toISOString();
 	const conversation: AgentConversation = {
 		id: 'rail-root',
@@ -44,13 +45,26 @@ const fixture = () => {
 		status: 'idle',
 		model: 'default',
 		plan: null,
-		goals: null,
+		goals: [{ id: 'visual', text: 'Inspect the preview', status: 'doing' }],
 		envoy: null,
 		integration: null,
 		kind: null,
 		thread: null,
 		peer: null
 	};
+	const conversations: AgentConversation[] = [
+		conversation,
+		...['alpha', 'zulu'].map((envoy) => ({
+			...conversation,
+			id: `envoy-${envoy}`,
+			title: `${envoy} updates`,
+			envoy,
+			integration: 'chat',
+			kind: 'dm' as const,
+			thread: envoy,
+			peer: envoy
+		}))
+	];
 	const children = taskNames.map((name, index) => {
 		const id = `rail-child-${index}`;
 		const rows: AgentRow[] = [{ ...row(`${id}-task`, 1, name), at }];
@@ -105,6 +119,18 @@ const fixture = () => {
 		tag: 'report',
 		report: { conversation: 'rail-child-3' }
 	});
+	if (preview)
+		rows.push({
+			...row('preview-ready', 14, ''),
+			role: 'tool',
+			tool: {
+				name: 'workspace_preview',
+				studio: 'preview',
+				failed: false,
+				preview: 'about:blank',
+				about: { commit: 'preview-version' }
+			}
+		});
 	const fetch: typeof globalThis.fetch = async (input, init) => {
 		const request = new Request(input, init);
 		if (new URL(request.url).pathname.endsWith('/models'))
@@ -113,7 +139,7 @@ const fixture = () => {
 			});
 		const { reads } = Schema.decodeUnknownSync(QBody)(await request.json());
 		const read = reads[0];
-		if (read?.m === 'conversations') return Response.json({ answers: [{ rows: [conversation] }] });
+		if (read?.m === 'conversations') return Response.json({ answers: [{ rows: conversations }] });
 		const id = read?.a[0];
 		if (id === conversation.id)
 			return Response.json({
@@ -177,7 +203,11 @@ const settleMotion = async (target: HTMLElement) => {
 		}
 	}
 };
-const withComposer = async (sheet: boolean, check: (target: HTMLElement) => Promise<void>) => {
+const withComposer = async (
+	sheet: boolean,
+	check: (target: HTMLElement) => Promise<void>,
+	preview = false
+) => {
 	const previous = {
 		width: innerWidth,
 		height: innerHeight
@@ -193,7 +223,7 @@ const withComposer = async (sheet: boolean, check: (target: HTMLElement) => Prom
 		await runtime.runPromise(
 			Effect.scoped(
 				Effect.gen(function* () {
-					const fetch = fixture();
+					const fetch = fixture(preview);
 					const client = yield* createBolt({
 						actor: null,
 						locale: 'en',
@@ -241,6 +271,77 @@ const withComposer = async (sheet: boolean, check: (target: HTMLElement) => Prom
 		await page.viewport(previous.width, previous.height);
 	}
 };
+
+it.each(['MacIntel', 'Win32'])(
+	'conversation footer cycles views and preserves search on %s',
+	async (platform) => {
+		const platformMock = vi.spyOn(navigator, 'platform', 'get').mockReturnValue(platform);
+		try {
+			await withComposer(false, async (target) => {
+				const picker = page.getByRole('combobox', { name: 'Conversations', exact: true });
+				await picker.click();
+				const footer = () => element(document.body, '[data-agent-views]');
+				const currentView = () => element(footer(), '[data-agent-view]').textContent;
+				const search = element<HTMLInputElement>(
+					document.body,
+					'[data-slot="popover-content"] input'
+				);
+				expect(footer().textContent).toContain(platform === 'Win32' ? 'Ctrl+→' : '⌘→');
+				const cycle = async (key = 'ArrowRight', primary = true, from: Element = search) => {
+					const apple = platform === 'MacIntel';
+					const event = new KeyboardEvent('keydown', {
+						key,
+						bubbles: true,
+						cancelable: true,
+						metaKey: primary ? apple : !apple,
+						ctrlKey: primary ? !apple : apple
+					});
+					from.dispatchEvent(event);
+					await tick();
+					return event.defaultPrevented;
+				};
+				expect(document.activeElement).toBe(search);
+				expect(currentView()).toContain('Web UI');
+				expect(await cycle('ArrowRight', false)).toBe(false);
+				expect(currentView()).toContain('Web UI');
+				for (const key of ['ArrowLeft', '<', '>', ',', '.']) {
+					expect(await cycle(key)).toBe(false);
+					expect(currentView()).toContain('Web UI');
+				}
+				expect(await cycle()).toBe(true);
+				expect(currentView()).toContain('Alpha');
+				expect(await cycle()).toBe(true);
+				expect(currentView()).toContain('Zulu');
+				expect(currentView()).toContain('Read only');
+				expect(await cycle()).toBe(true);
+				expect(currentView()).toContain('Web UI');
+				expect(await cycle()).toBe(true);
+				expect(currentView()).toContain('Alpha');
+				await page.getByPlaceholder(/^Search/).fill('zulu');
+				expect(currentView()).toMatch(/Alpha\s*0/);
+				expect(await cycle()).toBe(true);
+				expect(currentView()).toMatch(/Zulu\s*1/);
+				expect(search.value).toBe('zulu');
+				const web = page.getByRole('button', { name: 'Switch to Web UI', exact: true });
+				web.element().focus();
+				expect(await cycle('ArrowRight', true, web.element())).toBe(false);
+				expect(await cycle()).toBe(false);
+				expect(currentView()).toContain('Zulu');
+				await userEvent.keyboard('{Enter}');
+				await expect.element(web).toHaveAttribute('aria-pressed', 'true');
+				await expect.element(picker).toHaveAttribute('aria-expanded', 'true');
+				expect(currentView()).toContain('Web UI');
+				expect(search.value).toBe('zulu');
+
+				await userEvent.keyboard('{Escape}');
+				await expect.element(picker).toHaveAttribute('aria-expanded', 'false');
+				expect(element(target, '[data-agent-head]').textContent).toContain('Workspace migration');
+			});
+		} finally {
+			platformMock.mockRestore();
+		}
+	}
+);
 
 it.each([
 	{ name: 'full composer', sheet: false },
@@ -314,4 +415,33 @@ it.each([
 		await rail.getByRole('button', { name: 'Close', exact: true }).click();
 		await expect.poll(() => target.querySelector('[data-agent-rail]')).toBeNull();
 	});
+});
+
+it('Preview opens as a separate panel, Session stays separate, and Escape restores focus', async () => {
+	await withComposer(
+		false,
+		async (target) => {
+			expect(target.querySelector('[data-goals] [data-goal="doing"]')).not.toBeNull();
+			expect(target.querySelector('[data-goals] [role="status"]')).toBeNull();
+			await page.getByRole('button', { name: 'New preview', exact: true }).click();
+			await expect
+				.element(page.getByRole('complementary', { name: 'Preview', exact: true }))
+				.toBeVisible();
+			expect(target.querySelector('[data-agent-rail]')).toBeNull();
+			await expect
+				.element(page.getByRole('button', { name: 'Close preview', exact: true }))
+				.toHaveFocus();
+			await userEvent.keyboard('{Escape}');
+			await expect.poll(() => target.querySelector('[data-agent-preview]')).toBeNull();
+			await expect
+				.element(page.getByRole('button', { name: 'Preview', exact: true }))
+				.toHaveFocus();
+			await page.getByRole('button', { name: 'Session', exact: true }).click();
+			await expect
+				.element(page.getByRole('complementary', { name: 'Session', exact: true }))
+				.toBeVisible();
+			expect(target.querySelector('[data-agent-preview]')).toBeNull();
+		},
+		true
+	);
 });

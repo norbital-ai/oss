@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { describe, it } from '@effect/vitest';
 import { facts, validateFacts, type FactSpec } from '../src/facts.ts';
 import { Decimal } from '../src/decimal.ts';
-import { label } from '../src/label.ts';
+import { label, labelExpression, labelPaths } from '../src/label.ts';
 
 describe('std/facts', () => {
 	const specs: FactSpec[] = [
@@ -51,6 +51,31 @@ describe('std/facts', () => {
 });
 
 describe('std/label', () => {
+	it('evaluates CEL from the record and reports the fields needed to read it', () => {
+		const expression = "record.code + ' · ' + (record.name != null ? record.name : 'Unnamed')";
+		assert.deepEqual(labelPaths(expression), ['code', 'name']);
+		assert.equal(label({ code: 'Q-7', name: 'Acme' }, expression), 'Q-7 · Acme');
+		assert.equal(label({ code: 'Q-7', name: null }, expression), 'Q-7 · Unnamed');
+		assert.equal(label({ customer: { name: 'Acme' } }, 'record.customer.name'), 'Acme');
+		assert.equal(
+			label({ amount: Decimal.of('10.50') }, "'Total ' + string(record.amount)"),
+			'Total 10.50'
+		);
+		assert.equal(
+			label(
+				{ code: 'Q-7', name: 'Acme' },
+				"[record.code, record.name].filter(x, x != null).join(' · ')"
+			),
+			'Q-7 · Acme'
+		);
+		assert.deepEqual(labelPaths("[record.code].map(x, x + record.name).join('')"), [
+			'code',
+			'name'
+		]);
+		assert.ok('error' in labelExpression('record.name +'));
+		assert.ok('error' in labelExpression('42'));
+		assert.equal(label({}, 'record.missing'), null);
+	});
 	it('joins the label paths per kind, dropping empty terms, uuids and blobs', () => {
 		const row = {
 			code: 'Q-7',
@@ -67,8 +92,15 @@ describe('std/label', () => {
 		assert.equal(label({ at: '2026-03-01T09:30:00Z' }, ['at']), '2026-03-01 09:30');
 		assert.equal(label({ customer: { name: 'Acme' } }, ['customer.name']), 'Acme');
 	});
-	it('is null, never the id, when nothing names the record', () => {
-		assert.equal(label({ id: '0190f1e2-3c4d-7e8f-9a0b-1c2d3e4f5a6b', name: '  ' }, ['name']), null);
+	it('uses the id when no label is declared or usable', () => {
+		assert.equal(
+			label({ id: '0190f1e2-3c4d-7e8f-9a0b-1c2d3e4f5a6b', name: '  ' }, ['name']),
+			'0190f1e2-3c4d-7e8f-9a0b-1c2d3e4f5a6b'
+		);
+		assert.equal(
+			label({ id: '0190f1e2-3c4d-7e8f-9a0b-1c2d3e4f5a6b' }, []),
+			'0190f1e2-3c4d-7e8f-9a0b-1c2d3e4f5a6b'
+		);
 	});
 	it("formats through the caller's per-kind `show`", () => {
 		assert.equal(

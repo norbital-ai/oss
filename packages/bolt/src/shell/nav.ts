@@ -7,6 +7,7 @@ import { BOLT } from '../protocol/wire.ts';
 import type { AutomationExposure, ModelExposure } from '@norbital-ai/ui';
 import { Schema } from 'effect';
 import { FieldsSchema } from '../protocol/public-page.ts';
+import type { ManifestItem } from './finder/manifest.ts';
 
 type AppSpec = EngineManifest['apps'][string];
 /** Browser route metadata; agent availability comes from the authorized boot surfaces. */
@@ -45,6 +46,28 @@ export type NavNode =
 /** The apps a nav tree opens, groups flattened: the shell renders no other app's page. */
 export const navApps = (nodes: readonly NavNode[]): string[] =>
 	nodes.flatMap((node) => (node.kind === 'app' ? [node.name] : navApps(node.children)));
+
+/** Exact workspace pages the in-app assistant may request; never URLs, API routes or sign-in actions. */
+export function navigationPaths(nodes: readonly NavNode[], admin: boolean): string[] {
+	const pages = (items: readonly NavNode[]): string[] =>
+		items.flatMap((node) =>
+			node.kind === 'group' ? pages(node.children) : node.pages.map((page) => page.href)
+		);
+	return [
+		'/',
+		'/inbox',
+		...pages(nodes),
+		...(admin
+			? [
+					'/settings/organization',
+					'/settings/integrations',
+					'/settings/secrets',
+					'/command-center',
+					...COMMAND_CENTER_TABS.map((tab) => `/command-center/${tab}`)
+				]
+			: [])
+	];
+}
 
 const APP_PREFIX = '/app/';
 const KIOSK_PREFIX = '/kiosk/';
@@ -138,7 +161,11 @@ export type ShellBoot = {
 		readonly href: string;
 	}[];
 	/** The automations this member may start by hand from the command center's Automations (`startableAutomations`). */
-	startable?: readonly { readonly name: string; readonly description: string }[];
+	startable?: readonly {
+		readonly name: string;
+		readonly description: string;
+		readonly needsInput?: boolean;
+	}[];
 	/** Each envoy's display name by key (its declared `name`), for the agent panel's conversation groups. */
 	envoys?: { readonly [envoy: string]: string };
 	/** The VAPID public key to subscribe this device to notices with (§5.7), or `null` when the host sends no push. */
@@ -149,6 +176,8 @@ export type ShellBoot = {
 	catalog: { readonly [model: string]: ModelExposure };
 	/** Inputs of the automations this caller may start; the host still validates every start. */
 	automations: Readonly<Record<string, AutomationExposure>>;
+	/** Authorized manifest metadata for the shared search picker. */
+	search?: readonly ManifestItem[];
 	/** The agent surface is on but the host binds no AI provider (P19): the panel says so instead of failing each turn. */
 	aiUnconfigured?: true;
 	/** The schema fingerprint the page boots against: `$bolt` sends it as `Bolt-Contract` (L-BOLT-171). */
@@ -293,19 +322,27 @@ export function automationInputs(
 	);
 }
 
-/** The automations `authority` may start from the command center's Automations with no input: every input field optional. */
+/**
+ * The automations `authority` may start from the command center's Automations. One with a required input opens its
+ * native form first (`needsInput`), so a new automation is runnable without a bespoke page.
+ */
 export function startableAutomations(
 	m: EngineManifest,
 	authority: Authority
-): { name: string; description: string }[] {
+): { name: string; description: string; needsInput: boolean }[] {
 	return (authority.admin ? Object.keys(m.automations) : authority.automations)
 		.toSorted()
 		.flatMap((name) => {
 			const spec = m.automations[name];
-			return spec === undefined ||
-				Object.values(spec.input ?? {}).some((field) => field.optional !== true)
+			return spec === undefined
 				? []
-				: [{ name, description: spec.description }];
+				: [
+						{
+							name,
+							description: spec.description,
+							needsInput: Object.values(spec.input ?? {}).some((field) => field.optional !== true)
+						}
+					];
 		});
 }
 
@@ -415,12 +452,12 @@ export type Route =
 const SETTINGS_TABS = ['organization', 'integrations', 'secrets'] as const;
 export type SettingsTab = (typeof SETTINGS_TABS)[number];
 /**
- * The command center's tabs, each a deep link `/command-center/<tab>`: what happens across the workspace (builds and
- * releases, resource use, runtime logs, the audit trail, automation runs, inference transcripts) and who has access.
+ * The command center's tabs, each a deep link `/command-center/<tab>`: what happens across the workspace (bundle
+ * analysis, resource telemetry, runtime logs, the audit trail, automation runs, inference transcripts) and who has access.
  */
 const COMMAND_CENTER_TABS = [
-	'activity',
-	'resources',
+	'bundle',
+	'telemetry',
 	'logs',
 	'audit',
 	'automations',
@@ -428,8 +465,13 @@ const COMMAND_CENTER_TABS = [
 	'people'
 ] as const;
 export type CommandCenterTab = (typeof COMMAND_CENTER_TABS)[number];
+/** Tabs the command center used to offer; their deep links still open the tab that absorbed them. */
+const COMMAND_CENTER_ALIASES: Readonly<Record<string, CommandCenterTab>> = {
+	activity: 'bundle',
+	resources: 'telemetry'
+};
 /** Studio's tabs, each a stable deep link `/studio/<tab>` (L-BOLT-528); `/studio` is the workbench. */
-const STUDIO_TABS = ['workbench', 'changes', 'versions', 'rules'] as const;
+const STUDIO_TABS = ['workbench', 'changes', 'versions'] as const;
 export type StudioTab = (typeof STUDIO_TABS)[number];
 const named = <T extends string>(tabs: readonly T[], value: string | undefined): T | undefined =>
 	tabs.find((t) => t === value);
@@ -447,7 +489,7 @@ export function previewRoute(r: Route, preview: boolean): Route {
 }
 
 /**
- * The command center tabs a viewer gets, in order: the host's inspection (activity, resources, logs) needs a Studio
+ * The command center tabs a viewer gets, in order: the host's inspection (bundle, telemetry, logs) needs a Studio
  * host and an administrator; the audit trail, inference transcripts (with Norbius) and People are an administrator's,
  * People never in a preview environment; automation runs are every staff member's. Empty: no command center.
  */
@@ -461,7 +503,7 @@ export function commandCenterTabs(
 	return COMMAND_CENTER_TABS.filter((tab) =>
 		tab === 'automations'
 			? true
-			: tab === 'activity' || tab === 'resources' || tab === 'logs'
+			: tab === 'bundle' || tab === 'telemetry' || tab === 'logs'
 				? lead && s.studio
 				: tab === 'inference'
 					? lead && s.agent
@@ -499,7 +541,7 @@ export function route(m: ShellManifest, url: URL): Route {
 		}
 		case 'command-center': {
 			if (seg.length === 1) return { kind: 'commandCenter' };
-			const tab = named(COMMAND_CENTER_TABS, seg[1]);
+			const tab = named(COMMAND_CENTER_TABS, seg[1]) ?? COMMAND_CENTER_ALIASES[seg[1] ?? ''];
 			return seg.length === 2 && tab !== undefined
 				? { kind: 'commandCenter', tab }
 				: { kind: 'notFound' };

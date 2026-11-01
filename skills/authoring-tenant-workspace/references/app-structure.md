@@ -168,6 +168,15 @@ and never two model views stacked on one scroll. A tab body renders **one** thin
   three types (segmented, underline, chips) differ in look only. Use `Tabs`, or `TabStrip` for a
   strip without bodies (a view switch); never hand-roll a `role="tab"` strip, pass a size, or
   restyle a tab's height, padding, font or icon through `class`.
+- **One control size everywhere.** Inputs, selects (`Combobox` and every picker), date and period
+  fields, textareas' first line, filter chips and buttons in forms and toolbars are all the tab
+  strip's compact size (a 2rem control, `text-xs`). `Button` has `default` and `icon` (and `lg`
+  only for a lone call to action outside forms); no other control takes a size. Pass a width
+  through `class`, never a height, padding or font.
+- **A section groups at least two controls, or one large control** (a structure, a list of
+  objects, a map, code, long text or a custom datatype's editor). Do not declare a section around one small field: merge it
+  into the neighbouring section it belongs with. A lone small field folds its section away on its
+  own; a lone large field keeps the section without repeating its title.
 - A nested strip (level 2 or deeper) of more than two tabs is **vertical** on its own: a rail on the
   left, the body on the right, a compact scroller on a phone. Two tabs stay horizontal. Pass
   `orientation` only to override.

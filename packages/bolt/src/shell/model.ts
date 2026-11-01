@@ -142,8 +142,7 @@ export function navigationModel(boot: ShellBoot, path: string, t: Translate): Na
 						label: t('Norbius'),
 						icon: 'lucide:sparkles',
 						href: NORBIUS,
-						active: false,
-						badge: '⌘K'
+						active: false
 					}
 				]
 			: []),

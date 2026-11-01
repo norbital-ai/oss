@@ -4,12 +4,15 @@ One titled section of a form or record body: a heading row (title, an optional â
 A titled section collapses from its heading; the body is hidden, never unmounted, so every field in it still saves.
 Closed, the heading shows `summary` so nothing important is out of sight. The viewer's open state is remembered per
 model and section; a section holding a field with an error opens itself.
+A section groups at least two controls, or one large control (a structure, a list of objects, a map, code, long text
+or a custom datatype's editor: a field that spans its row): content that is a single other field folds the section away, and that field joins the flow
+under its own label. A large field alone keeps the section, and does not repeat the section's title as its own heading.
 A closed section is its heading alone. Open, `size` says how it takes height in a bounded column (a record body, a
 `Stack` in a sheet): `content` (the default) is always its whole content, and the column scrolls when they do not
 fit; `fill` (a table, a long list) shares the height left, scrolling inside itself, never below `minHeight` (default
 its content or 16rem, whichever is less). Nothing scrolls sideways.
 @example
-<Section name="basis" title="Evidence basis" size="fill"><Table of="evidence" /></Section>
+<Section name="basis" title="Evidence basis" icon="lucide:list-checks" size="fill"><Table of="evidence" /></Section>
 -->
 <script lang="ts" module>
 	import { getContext, type Snippet } from 'svelte';
@@ -18,6 +21,8 @@ its content or 16rem, whichever is less). Nothing scrolls sideways.
 	export type SectionProps = {
 		/** The heading. Without one the section is plain content, always open. */
 		title?: string;
+		/** An Iconify id shown in a box before the title; the toggle shows a chevron while it is hovered. */
+		icon?: string;
 		/** One sentence saying what the section decides, behind an info icon beside the title. */
 		hint?: string;
 		/** The stable key the open state is remembered under (default `title`, which changes with the locale). */
@@ -49,6 +54,7 @@ its content or 16rem, whichever is less). Nothing scrolls sideways.
 		/** The stable key the open state is remembered under. */
 		name: string;
 		title?: string;
+		icon?: string;
 		hint?: string;
 		fields: readonly string[];
 		defaultOpen?: boolean;
@@ -70,6 +76,29 @@ its content or 16rem, whichever is less). Nothing scrolls sideways.
 		);
 	}
 	const SECTION = Symbol.for('norbital.ui.section');
+	const SECTION_TITLE = Symbol.for('norbital.ui.section.title');
+	/** The enclosing section's shown title: a lone structured field under it does not repeat it as its own heading. */
+	export const useSectionTitle = () =>
+		getContext<{ readonly title: string | undefined } | undefined>(SECTION_TITLE)?.title;
+	/**
+	 * A section groups at least two controls, or one large control (`data-field-large`, a field spanning its row): its content is a
+	 * single other field, through single-child wrappers, it folds away and the field joins the flow under its own label.
+	 */
+	function loneSmallField(content: HTMLElement): boolean {
+		const fields = [...content.querySelectorAll<HTMLElement>('[data-field]')].filter(
+			(field) => field.parentElement?.closest('[data-field]') == null
+		);
+		const [only] = fields;
+		if (fields.length !== 1 || only === undefined || only.hasAttribute('data-field-large'))
+			return false;
+		let at: HTMLElement = only;
+		while (at.parentElement !== content) {
+			const parent = at.parentElement;
+			if (parent === null || parent.children.length !== 1) return false;
+			at = parent;
+		}
+		return content.children.length === 1;
+	}
 	/** A `Field` names itself to its section, so an error on it opens the section. */
 	export const claimSectionField = (name: string) =>
 		getContext<Set<string> | undefined>(SECTION)?.add(name);
@@ -88,6 +117,7 @@ its content or 16rem, whichever is less). Nothing scrolls sideways.
 
 	let {
 		title,
+		icon,
 		hint,
 		name,
 		first = false,
@@ -108,7 +138,25 @@ its content or 16rem, whichever is less). Nothing scrolls sideways.
 		form !== undefined && !controls.readonly && (form.mode === 'edit' || form.mode === 'create')
 	);
 	const fields = setContext(SECTION, new Set<string>());
-	const canCollapse = $derived(title !== undefined && collapsible);
+	// a lone small field: no heading, no rule, never collapsed (measured from the rendered content, before it paints)
+	let content = $state<HTMLElement | null>(null),
+		lone = $state(false);
+	$effect(() => {
+		const node = content;
+		if (node === null || title === undefined) return void (lone = false);
+		const check = () => (lone = loneSmallField(node));
+		check();
+		const observer = new MutationObserver(check);
+		observer.observe(node, { childList: true, subtree: true });
+		return () => observer.disconnect();
+	});
+	setContext(SECTION_TITLE, {
+		get title() {
+			return lone ? undefined : title;
+		}
+	});
+	const titled = $derived(title !== undefined && !lone);
+	const canCollapse = $derived(titled && collapsible);
 	// svelte-ignore state_referenced_locally -- the key is fixed for the section's life
 	const key = `norbital.section:${useModelKey() ?? ''}:${name ?? title ?? ''}`;
 	function stored(): boolean | null {
@@ -137,7 +185,7 @@ its content or 16rem, whichever is less). Nothing scrolls sideways.
 		contentHeight = $state(0);
 	const fill = $derived(size === 'fill' && shown);
 	const floor = $derived(
-		minHeight ?? `min(${headingHeight + contentHeight + (title === undefined ? 0 : 16)}px, 16rem)`
+		minHeight ?? `min(${headingHeight + contentHeight + (titled ? 16 : 0)}px, 16rem)`
 	);
 	/** The body still showing while it shrinks closed: `aria-expanded` follows the click, `hidden` the motion's end. */
 	let closing = $state(false);
@@ -169,7 +217,7 @@ its content or 16rem, whichever is less). Nothing scrolls sideways.
 			motion.cancel();
 			done();
 		};
-		motion.onfinish = end;
+		void motion.finished.then(end, end);
 		setTimeout(end, 260);
 	}
 	function toggle() {
@@ -199,32 +247,49 @@ its content or 16rem, whichever is less). Nothing scrolls sideways.
 	class={cn(
 		'flex min-w-0 flex-col',
 		fill ? 'min-h-0 flex-[1_1_0%]' : 'flex-none',
-		!first && (editing ? 'border-t pt-4' : 'border-t pt-6'),
+		!first && !lone && (editing ? 'border-t pt-4' : 'border-t pt-6'),
 		className
 	)}
 	style:min-height={fill ? floor : undefined}
 	data-section={name ?? title}
 	data-open={shown}
 >
-	{#if title !== undefined}
+	{#if titled}
 		<div class="flex min-w-0 shrink-0 items-center gap-1.5" bind:clientHeight={headingHeight}>
-			<h3 class="min-w-0 flex-1 text-sm font-bold">
+			<h3 class="min-w-0 flex-1 text-sm font-semibold">
 				{#if canCollapse}
 					<button
 						type="button"
-						class="max-sm:min-h-11 flex w-full min-w-0 items-center gap-1.5 rounded-sm text-left outline-none focus-visible:ring-2 focus-visible:ring-ring"
+						class="group/section max-sm:min-h-11 flex w-full min-w-0 items-center gap-1.5 rounded-sm text-left outline-none focus-visible:ring-2 focus-visible:ring-ring"
 						aria-expanded={shown}
 						aria-controls={`${id}-body`}
 						onclick={toggle}
 					>
-						<Icon
-							icon="lucide:chevron-right"
-							class={cn(
-								'size-4 shrink-0 text-muted-foreground transition-transform',
-								shown && 'rotate-90'
-							)}
-							aria-hidden="true"
-						/>
+						{#if icon}
+							<span
+								class="border-border bg-muted/40 text-muted-foreground grid size-5 shrink-0 place-items-center rounded-sm border"
+								data-section-icon
+							>
+								<Icon {icon} class="size-3 group-hover/section:hidden" aria-hidden="true" />
+								<Icon
+									icon="lucide:chevron-right"
+									class={cn(
+										'hidden size-3.5 transition-transform group-hover/section:block',
+										shown && 'rotate-90'
+									)}
+									aria-hidden="true"
+								/>
+							</span>
+						{:else}
+							<Icon
+								icon="lucide:chevron-right"
+								class={cn(
+									'size-4 shrink-0 text-muted-foreground transition-transform',
+									shown && 'rotate-90'
+								)}
+								aria-hidden="true"
+							/>
+						{/if}
 						<span class="truncate">{title}</span>
 						{#if !shown && summary !== undefined}
 							<span class="text-meta truncate font-normal" data-section-summary
@@ -262,16 +327,18 @@ its content or 16rem, whichever is less). Nothing scrolls sideways.
 		</div>
 	{/if}
 	<!-- hidden, never unmounted: a collapsed field still belongs to the form's draft and its save -->
-	<!-- the body scrolls inside the section's share; the inset keeps focus rings clear of its edge; under a chevron it
-	     starts where the title does (the chevron's size-4 and gap-1.5) -->
+	<!-- the body scrolls inside the section's share; a vertical inset keeps focus rings clear of its top and bottom
+	     (controls ring inside their own box sideways); under the toggle's box it starts where the title does (the
+	     icon's size-5 or the chevron's size-4, and gap-1.5). Nothing overhangs sideways: a negative side margin would
+	     give the column a sideways scroll. -->
 	<div
 		bind:this={body}
 		id={`${id}-body`}
 		hidden={!shown && !closing}
 		class={cn(
-			'-m-1 min-h-0 min-w-0 overflow-x-clip p-1',
+			'-my-1 min-h-0 min-w-0 overflow-x-clip py-1',
 			fill && 'overflow-y-auto',
-			canCollapse && title !== undefined && 'pl-[calc(1.375rem+0.25rem)]'
+			canCollapse && (icon ? 'pl-[1.625rem]' : 'pl-[1.375rem]')
 		)}
 		use:contentMotion
 	>
@@ -280,8 +347,9 @@ its content or 16rem, whichever is less). Nothing scrolls sideways.
 				'grid min-w-0 [overflow-wrap:anywhere]',
 				editing ? 'gap-4' : 'gap-3',
 				// the space under the heading moves with the body, so closing ends without a jump
-				title !== undefined && (editing ? 'pt-4' : 'pt-3')
+				titled && (editing ? 'pt-4' : 'pt-3')
 			)}
+			bind:this={content}
 			bind:clientHeight={contentHeight}
 		>
 			{@render children()}

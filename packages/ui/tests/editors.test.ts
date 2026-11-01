@@ -60,6 +60,26 @@ test('picking rewrites the trigger and its query, keeping the text after the car
 	);
 });
 
+test('scoped searches keep spaces, stop at newlines and use the nearest mention', () => {
+	const search = { ...at, spaces: true };
+	const text = 'Compare @customers Acme & Sons';
+	assert.deepEqual(findTrigger(text, text.length, [search]), {
+		trigger: search,
+		start: 8,
+		query: 'customers Acme & Sons'
+	});
+	const command = { ...agent, spaces: true };
+	assert.deepEqual(findTrigger('/customers Acme & Sons', 22, [command]), {
+		trigger: command,
+		start: 0,
+		query: 'customers Acme & Sons'
+	});
+	assert.equal(findTrigger('@customers Acme\nnext', 20, [search]), null);
+	const nearest = '@customers Acme and @sales';
+	assert.equal(findTrigger(nearest, nearest.length, [search])?.query, 'sales');
+	assert.equal(findTrigger('name@example.com', 16, [search]), null);
+});
+
 test('overlapping events share lanes by cluster; a month is whole Monday-first weeks', () => {
 	const e = (id: string, h0: number, h1: number) => ({
 		id,

@@ -249,8 +249,10 @@ layer(PhoneFixtureLive)((it) => {
 					});
 					expect(yield* setSignup(h, admin, false)).toBeNull();
 					const before = texts.length;
-					expect(yield* sendCode(h, '+6597776666', ip)).toBeNull(); // the same answer…
-					expect(texts.length).toBe(before); // …and no text paid for
+					expect(yield* Effect.flip(sendCode(h, '+6597776666', ip))).toMatchObject({
+						code: 'notMember'
+					});
+					expect(texts.length).toBe(before);
 					expect(yield* Effect.flip(verifyCode(h, '+6597776666', '000000', ip))).toMatchObject({
 						_tag: 'IdentityRefusal',
 						code: 'invalidCode'
@@ -293,7 +295,9 @@ layer(PhoneFixtureLive)((it) => {
 					const { h, texts } = yield* PhoneFixture;
 					const { signup: _declared, ...closed } = h;
 					const before = texts.length;
-					expect(yield* sendCode(closed, '+6593334444', ip)).toBeNull();
+					expect(yield* Effect.flip(sendCode(closed, '+6593334444', ip))).toMatchObject({
+						code: 'notMember'
+					});
 					expect(texts.length).toBe(before);
 				})
 		);
@@ -505,7 +509,9 @@ layer(VerifierFixtureLive)((it) => {
 					const { vh, phone } = yield* VerifierFixture;
 					const { signup: _declared, ...closed } = vh;
 					const before = phone.started.length;
-					expect(yield* sendCode(closed, '+6581110003', ip)).toBeNull();
+					expect(yield* Effect.flip(sendCode(closed, '+6581110003', ip))).toMatchObject({
+						code: 'notMember'
+					});
 					expect(phone.started.length).toBe(before);
 					const capped = { ...vh, windows: new RateWindows() };
 					let refused: unknown = null;

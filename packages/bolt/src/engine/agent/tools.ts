@@ -1,11 +1,12 @@
 // The fixed tool set (rule 58): `read` (a layer map over the models and layers the actor may read: records, aggregates,
 // search indexes), `act` (guarded writes, approval decisions, automation and sync starts), the plan, goal and compaction
 // tools, skills, `history`, `runs` (members), `logs` (administrators), `geocode`, `read_messages` on envoy turns,
-// `read_output`, `docs` and `workspace_search` for staff, `document` when it binds a converter,
+// `read_output` and `workspace_search` for staff, `document` when it binds a converter,
 // `download` for staff in the app when files are stored, `run_js` (HTTP when a policy names `http`), `subagent` and `wait`
 // under delegation, MCP tools a held policy's capabilities name (a sub-agent has no plan or sub-agents, and asks its
 // delegating agent with `ask_parent`), and host tools (Workspace Studio, browser, personal skills) only on in-app turns of
-// staff members. Built-in tools are `Tool.make` definitions, MCP and host tools `Tool.dynamic` ones over their raw JSON
+// staff members; optional host tools ride named packs and appear only after `tools` enables one. Built-in tools are
+// `Tool.make` definitions, MCP and host tools `Tool.dynamic` ones over their raw JSON
 // Schema, all in one per-turn `Toolkit` (P7). The agent has no authority of its own (decision 10): the catalogue lists
 // only what the actor may invoke and every call runs as the actor, so a refusal is the engine's answer, never the agent's.
 import { Validator } from '@cfworker/json-schema';
@@ -27,7 +28,8 @@ import {
 } from 'effect';
 import { Tool, Toolkit } from 'effect/ai';
 import * as EffectArray from 'effect/Array';
-import type { Docs, Geo, LogsShape } from '../ports.ts';
+import { Images, type Geo, type LogsShape } from '../ports.ts';
+import { imageCrop } from '../files/image.ts';
 import { Port, type PortFailure } from '../port.ts';
 import type { EngineError } from '../errors.ts';
 import { RUN_VIEW_COLUMNS, RunViewRow, runView } from '../runs/index.ts';
@@ -43,9 +45,11 @@ import {
 	type Bindings,
 	type Downloaded,
 	type Ingested,
+	type ImageCrop,
 	type Outcome
 } from '../contracts.ts';
 import { BoltError } from '../../protocol/errors.ts';
+import { SYSTEM_UI, SystemUiRequest, systemUiPath } from '../../protocol/system-ui.ts';
 import { exposed, outputsOf, readsAny, requestorOf, writableColumns } from '../access/authority.ts';
 import {
 	LayerRequestSchema,
@@ -79,7 +83,8 @@ import {
 	type Stash,
 	type StoredFile
 } from './ingest.ts';
-import { canOpen } from '../../shell/nav.ts';
+import { canOpen, nav, navigationPaths } from '../../shell/nav.ts';
+import { InvitationInput, inviteMany } from '../identity/members.ts';
 export { ToolAnswer, type AnyTool } from './ai.ts';
 import { REFERENCE, ReferenceIndex, RUN_JS, runFile, runJs } from './run-js.ts';
 import { layered, layers, SKILL_FILE, type EngineManifest, type SkillSpec } from '../manifest.ts';
@@ -124,6 +129,8 @@ export type HostTool = {
 	readOnly?: boolean;
 	source?: true;
 	studio?: StudioRole;
+	/** An optional pack: offered only after `tools { enable: '<pack>' }`, never in the empty turn. */
+	pack?: string;
 	call(input: Json, ctx: HostToolContext, signal: AbortSignal): Promise<Json>;
 };
 /** A skill the agent may read and whose scripts it may run: its tree's listing, and each file's bytes by its path. */
@@ -147,7 +154,7 @@ export type WorkspacePort = {
 	read(path: string): Promise<string | null>;
 };
 /** Long work: a host call past 30 s (at most 10 minutes), an ingest. */
-export const JOBS = { inlineMs: 30000, hostMs: 600000, waitMs: 600000 } as const;
+export const JOBS = { inlineMs: 30000, hostMs: 600000, waitMs: 120000 } as const;
 type Jobs = Effect.Success<ReturnType<typeof jobs>>;
 const jobFailed = (result: Json): string | undefined =>
 	Predicate.isObject(result) && !Array.isArray(result) && typeof result['error'] === 'string'
@@ -175,6 +182,7 @@ export const jobs = Effect.fn('AgentTool.jobs')(function* (
 			done: boolean;
 			detached: boolean;
 			alias: string | undefined;
+			studio: StudioRole | undefined;
 		}
 	>();
 	/** Finished jobs' steering lines, by job, not yet taken. */
@@ -197,12 +205,13 @@ export const jobs = Effect.fn('AgentTool.jobs')(function* (
 				readonly done?: (job: string, result: Json) => string;
 				/** Another id `wait` and `has` know the job by (a run's id). */
 				readonly alias?: string;
+				readonly studio?: StudioRole;
 			} = {}
 		) {
 			const id = globalThis.crypto.randomUUID().slice(0, 8),
 				result = yield* Deferred.make<Json>();
 			const detached = o.detach === true && options.detached !== undefined;
-			const item = { label, result, done: false, detached, alias: o.alias };
+			const item = { label, result, done: false, detached, alias: o.alias, studio: o.studio };
 			all.set(id, item);
 			const run = work.pipe(
 				Effect.catch((error) => Effect.succeed<Json>({ error: error.message })),
@@ -247,7 +256,12 @@ export const jobs = Effect.fn('AgentTool.jobs')(function* (
 			const result = yield* Deferred.await(item.result);
 			all.delete(got.value);
 			lines.delete(got.value);
-			return { job: got.value, label: item.label, result };
+			return {
+				job: got.value,
+				label: item.label,
+				result,
+				...(item.studio === undefined ? {} : { studio: item.studio })
+			};
 		}),
 		/** The finished jobs' steering lines, each once: the next step's input. */
 		take: () => {
@@ -295,13 +309,13 @@ export type ToolContext = {
 	logs: LogsShape;
 	mcpTools: readonly McpTool[];
 	hostTools: readonly HostTool[];
+	/** Optional host-tool packs enabled this turn; the host tools carry their pack. */
+	packs?: Set<string>;
 	attachments?: AttachmentPort | undefined;
 	workspace?: WorkspacePort | undefined;
-	/** The author's Studio draft (`workspace_search { draft: true }`); absent when this person authors nothing here. */
+	/** The author's current working source; absent when this person authors nothing here. */
 	draft?: WorkspacePort | undefined;
 	geocoder?: Geo['Service'] | undefined;
-	/** This release's API reference (the host's `Docs`). */
-	docs?: Docs['Service'] | undefined;
 	skills: { readonly [name: string]: Skill };
 	agents: readonly string[];
 	receipts: Receipt[];
@@ -341,7 +355,12 @@ export type ToolContext = {
 	output(callId: string | null): Effect.Effect<Json | undefined, EngineError>;
 	history(query: string, scope: 'this' | 'mine', limit: number): Effect.Effect<Json, EngineError>;
 	subagent: {
-		spawn(task: string, agent: string | null): Effect.Effect<Json, EngineError>;
+		spawn(
+			task: string,
+			agent: string | null,
+			done?: string,
+			format?: string
+		): Effect.Effect<Json, EngineError>;
 		list(): Effect.Effect<Json, EngineError>;
 		read(conversation: string): Effect.Effect<Json, EngineError>;
 		message(conversation: string, text: string): Effect.Effect<Json, EngineError>;
@@ -357,6 +376,8 @@ export type AgentTool = {
 	readonly name: string;
 	readonly studio?: StudioRole;
 	readonly pure?: true;
+	/** A built-in's optional pack: offered only after `tools { enable: '<pack>' }`. */
+	readonly pack?: string;
 };
 /** Any tool's handler context (`Tool.Any` names no tool in particular), merged into the step's toolkit. */
 type Handlers = Tool.HandlersFor<Record<string, Tool.Any>>;
@@ -519,7 +540,7 @@ export function readPaths(m: EngineManifest, a: Authority): string[] {
 	]);
 }
 /** What the actor may write, by model: the generated verbs its write arms admit (rules 33a, 58), and approval decisions. */
-function callablesFor(m: EngineManifest, a: Authority): Map<string, Spec> {
+function callablesFor(m: EngineManifest, a: Authority, identity = false): Map<string, Spec> {
 	const acts = new Map<string, Spec>();
 	for (const [c, spec] of Object.entries(m.exposures)) {
 		const ca = a.models[c];
@@ -532,9 +553,16 @@ function callablesFor(m: EngineManifest, a: Authority): Map<string, Spec> {
 				v === 'upsert'
 					? spec.create !== undefined && spec.update !== undefined
 					: spec[v] !== undefined;
-			if (declared && (a.admin || arms > 0)) acts.set(`${c}.${v}`, {});
+			if (declared && (a.admin || arms > 0))
+				acts.set(`${c}.${v}`, Object.hasOwn(SYSTEM.models, c) ? { confirm: true } : {});
 		}
 	}
+	if (identity && a.admin && a.actor.kind === 'member' && !a.actor.external)
+		acts.set('sys_invitation.create', {
+			confirm: true,
+			description:
+				'Invite workspace members: an array of { email?, phone?, team?, external?, party?: { model, id } }; each needs email or phone. team is optional: if supplied it must name an existing source team; omitted assigns no team or policies. Sends native invitation links after person approval. Never accepts policy assignments.'
+		});
 	// a decision on a pending approval: the approvals engine admits only the step's approvers; the person confirms in the app
 	if (mayDecide(m, a))
 		acts.set(APPROVE, {
@@ -681,6 +709,28 @@ export const perform = Effect.fn('AgentTool.perform')(function* (
 	input: Json,
 	callId: string
 ) {
+	if (callable === 'sys_invitation.create') {
+		if (
+			x.engine.identity === undefined ||
+			!x.authority.admin ||
+			x.authority.actor.kind !== 'member' ||
+			x.authority.actor.external
+		)
+			return { error: 'Only an active workspace administrator may invite members.' };
+		const decoded = Schema.decodeUnknownResult(
+			Schema.Array(InvitationInput).check(Schema.isMinLength(1), Schema.isMaxLength(1000))
+		)(input);
+		if (Result.isFailure(decoded)) return { error: decoded.failure.message };
+		const result = yield* inviteMany(
+			x.engine.identity,
+			x.engine.manifest,
+			x.authority,
+			decoded.success
+		);
+		const records = result.ids.map((id) => ({ model: 'sys_invitation', id }));
+		x.receipts.push({ outcome: 'committed', callable, records });
+		return { kind: 'committed', records, output: result };
+	}
 	if (callable === APPROVE) {
 		const d = Option.getOrUndefined(Schema.decodeUnknownOption(Decide)(input));
 		if (d === undefined)
@@ -794,6 +844,10 @@ export const perform = Effect.fn('AgentTool.perform')(function* (
 		return { own: [...own], lists };
 	};
 	const wrote = written(rowsIn);
+	const references = (model: string) =>
+		Object.entries(x.engine.manifest.relationships)
+			.filter(([key]) => key.startsWith(`${model}.`))
+			.map(([key, relation]) => ({ field: key.slice(model.length + 1), to: relation.to }));
 	const layersOf = (root: string, output: string) =>
 		Object.keys(outputLayers(x.engine.manifest, root, output)).filter(
 			(path) =>
@@ -819,7 +873,9 @@ export const perform = Effect.fn('AgentTool.perform')(function* (
 												// the read-back is what was written, not the whole record
 												...(c === model && wrote.own.length > 0
 													? {
-															fields: wrote.own.filter((f) =>
+															fields: [
+																...new Set([...wrote.own, ...references(c).map((r) => r.field)])
+															].filter((f) =>
 																exposed(x.engine.manifest, c, c, c, output).includes(f)
 															)
 														}
@@ -829,7 +885,14 @@ export const perform = Effect.fn('AgentTool.perform')(function* (
 										...layersOf(c, output).map((path) => [
 											path,
 											{
-												fields: [...(wrote.lists.get(path.slice(c.length + 1)) ?? [])].filter((f) =>
+												fields: [
+													...new Set([
+														...(wrote.lists.get(path.slice(c.length + 1)) ?? []),
+														...references(layers(x.engine.manifest)[c]?.[path] ?? c).map(
+															(r) => r.field
+														)
+													])
+												].filter((f) =>
 													exposed(
 														x.engine.manifest,
 														c,
@@ -854,6 +917,27 @@ export const perform = Effect.fn('AgentTool.perform')(function* (
 					Effect.tapCause(Effect.logWarning),
 					Effect.catch(() => Effect.succeed({}))
 				);
+	const writtenById = new Map(r.outcome.records.map((row) => [`${row.model}:${row.id}`, row]));
+	const fieldMap = new Map<string, Json>();
+	for (const [path, layer] of Object.entries(stored)) {
+		const root = path.split('.')[0] ?? path;
+		const model = layers(x.engine.manifest)[root]?.[path] ?? root;
+		for (const row of layer.rows)
+			for (const reference of references(model)) {
+				const value = row[reference.field];
+				if (typeof value !== 'string') continue;
+				const target = writtenById.get(`${reference.to}:${value}`);
+				const field = `${model}.${reference.field}`;
+				fieldMap.set(`${row.id}:${field}`, {
+					model,
+					row: row.id,
+					field,
+					targetModel: reference.to,
+					value,
+					decision: target === undefined ? 'LINK' : target.revision === 1 ? 'CREATE' : 'UPDATE'
+				});
+			}
+	}
 	// the effect runs this write queued carry its record ids (`queueEffects`): answer them, so the model can `wait` on one
 	const ids = r.outcome.records.map((c) => c.id);
 	const [queued] =
@@ -878,6 +962,7 @@ export const perform = Effect.fn('AgentTool.perform')(function* (
 	}));
 	return {
 		...r.outcome,
+		...(fieldMap.size === 0 ? {} : { fieldMap: [...fieldMap.values()] }),
 		stored: uncursored(encodeWire(stored)),
 		...(runs.length === 0 ? {} : { runs }),
 		...(r.outcome.unchanged === undefined
@@ -1009,7 +1094,7 @@ function searchOf(m: EngineManifest, model: string, readable: readonly string[])
 			: {
 					text: {
 						fields: text,
-						use: '{ "search": "<words>" }: every word must start a word of these fields (or of the records a link field names), case- and accent-insensitive'
+						use: '{ "search": "<words>" } on a root ranks text matches: rows matching all words first, but partial matches may follow. It is not exact identity or a category filter. Use where on the actual field for exact values; where: { "$search": "<words>" } requires every word in the search document.'
 					}
 				}),
 		...Object.fromEntries(
@@ -1264,9 +1349,13 @@ export function describeWorkspace(
 		const section = sections[ask.focus];
 		if (ask.name === undefined)
 			return [section.title, ...section.names.map(section.render)].join('\n');
-		return section.names.includes(ask.name)
-			? section.render(ask.name)
-			: `No ${ask.focus} named ${ask.name} that you can reach.`;
+		if (!section.names.includes(ask.name))
+			return `No ${ask.focus} named ${ask.name} that you can reach.`;
+		const summary = section.render(ask.name);
+		// Native settings can be writable without exposing their stored rows to the agent.
+		return ask.focus === 'model' && a.admin
+			? `${summary}\n${JSON.stringify(shapeOf(m, a, ask.name))}`
+			: summary;
 	}
 	const out = [
 		`# Workspace tz ${m.workspace.tz} · locale ${m.workspace.locale}${m.workspace.currency === undefined ? '' : ` · currency ${m.workspace.currency}`}`
@@ -1452,7 +1541,7 @@ Options (all optional)
   Related rows filter too, through a relation the output declares as a layer (a "<model>.<relation>" key here; any other relation is refused):
   a one-relation: { "<relation>": { "is": { <where on its fields> } } }, or its link's operators
   a many-relation: { "<relation>": { "some" | "none" | "every": { <where on its fields> } } }, { "<relation>": { "count": { "gte": 2 } } }, { "<relation>": { "sum" | "avg" | "min" | "max": { "of": "<field>", "gt": 100 } } }
-- search: a text: rows whose searchable text (the fields the model declares for search, and the search text of the records those link to) holds every word of it, each word matched case- and accent-insensitively, also as the start of a longer word. It narrows rows like a where condition and combines with one. On a root it may instead be { "<index>": input } (a search index the model declares) or { "semantic": text } (when the model declares semantic search): the rows nearest to the input, nearest first, each with $distance. Search a model only by what its describe lists under search, in the input format shown there; a model whose search is null is narrowed with where alone.
+- search: on a root, text ranks matching rows over the model's declared searchable text and linked search documents. Rows matching every word rank first; partial matches may follow, so a returned row is not proof of exact identity. Use where on the source identifier for identity, where on an enum/category for a category, or where: { "$search": "<words>" } to require every word (case- and accent-insensitive prefixes, including fuzzy matches). A text-search result's total counts that search's matches, not the whole catalogue or category. On a nested layer, text search requires every word. A root may instead use { "<index>": input } (a declared search index) or { "semantic": text } (when declared): nearest rows first, each with $distance. Use only the declared inputs; a model with no search is narrowed with where alone.
 - orderBy: "<field>", { "<field>": "asc" | "desc" }, or a list of these; then id.
 - limit: how many rows, at most ${READ_LIMIT} (the default) for a root and for a many-layer per root row.
 - after (a root): the next cursor a page answered: the page after it.
@@ -1544,9 +1633,14 @@ export function readInferTool(x: ReadToolContext): InferTool | undefined {
 export const catalogue = Effect.fn('AgentTool.catalogue')(function* (x: ToolContext) {
 	const e = x.engine,
 		a = x.authority,
-		acts = callablesFor(e.manifest, a),
+		acts = callablesFor(e.manifest, a, x.inApp && !x.child && e.identity !== undefined),
 		paths = readPaths(e.manifest, a),
-		agent = x.mode === 'agent';
+		agent = x.mode === 'agent',
+		enabledPacks = x.packs ?? new Set<string>(),
+		availablePacks = [
+			...new Set(x.hostTools.flatMap((t) => (t.pack === undefined ? [] : [t.pack])))
+		].sort(),
+		hosted = x.hostTools.filter((t) => t.pack === undefined || enabledPacks.has(t.pack));
 	const entries: (AgentTool & {
 		readonly tool: AnyTool;
 		readonly handlers: Context.Context<Handlers>;
@@ -1567,9 +1661,9 @@ export const catalogue = Effect.fn('AgentTool.catalogue')(function* (x: ToolCont
 		);
 	const describeTool = Tool.make('describe_workspace', {
 		description:
-			"A map of the workspace as you may use it: its apps and pages, each model's outputs, your writes, links, states, effects and syncs, and the automations you start with their input. Call it once before a task's first read or write instead of describing models one by one; focus (with name) answers one section or item in full.",
+			"A map of the workspace as you may use it: apps, models, automations and system configuration. Call once before finding your way. focus (with name) answers an item in full. An administrator's named model focus includes field kinds and permitted write columns/required fields, including native system models; it does not read stored records. focus system lists the exact capability-to-native-UI mappings for navigate.configure, declared secret names and MCP names; no secret values.",
 		parameters: Schema.Struct({
-			focus: Schema.optionalKey(Schema.Literals(['app', 'model', 'automation'])),
+			focus: Schema.optionalKey(Schema.Literals(['app', 'model', 'automation', 'system'])),
 			name: Schema.optionalKey(
 				Schema.String.annotate({ description: 'an app, model or automation name' })
 			)
@@ -1582,18 +1676,73 @@ export const catalogue = Effect.fn('AgentTool.catalogue')(function* (x: ToolCont
 			describe_workspace: (i) =>
 				guard(
 					Effect.gen(function* () {
+						const focus = i.focus;
+						if (focus === 'system') {
+							if (!x.inApp || x.child || !a.admin || a.actor.kind !== 'member' || a.actor.external)
+								return ok({ capabilities: [] });
+							return ok({
+								capabilities: Object.entries(SYSTEM_UI)
+									.filter(([name]) => i.name === undefined || name === i.name)
+									.map(([capability, ui]) => ({ capability, ...ui })),
+								secretNames: Object.keys(e.manifest.workspace.secrets ?? {}),
+								mcp: Object.keys(e.manifest.mcp),
+								note: 'Use navigate with path and configure to open this exact native UI. Opening never submits. New integration/MCP definitions are source declarations; create their source through Studio, then configure declared instances here. Secret values and issued API keys stay in the native client.'
+							});
+						}
 						const source =
 							x.workspace === undefined
 								? null
 								: yield* Port.attempt('workspace', () =>
 										x.workspace!.read('src/i18n/+messages.ts')
 									).pipe(Effect.orElseSucceed(() => null));
-						return ok(describeWorkspace(e.manifest, a, messageCatalogue(source), i));
+						return ok(
+							describeWorkspace(e.manifest, a, messageCatalogue(source), {
+								...(focus === undefined ? {} : { focus }),
+								...(i.name === undefined ? {} : { name: i.name })
+							})
+						);
 					})
 				)
 		})
 	);
 	const signature = (name: string) => automationSignature(e.manifest, name);
+	if (agent && x.inApp && !x.child && a.actor.kind === 'member' && !a.actor.external) {
+		const navigate = Tool.make('navigate', {
+			description:
+				'Request navigation in the person’s active Norbital workspace client. Choose an exact authorized page path. Administrators may add configure { capability, record? } from describe_workspace focus system to open that native form, pairing card or detail sheet. It never submits, enters a secret or returns an issued key. Do not claim the page opened or the setup completed from this request alone. No other workspace or website.',
+			parameters: Schema.Struct({
+				path: Schema.Literals(navigationPaths(nav(e.manifest, a), a.admin)),
+				configure: Schema.optionalKey(SystemUiRequest)
+			}),
+			success: ToolAnswer
+		});
+		yield* add(
+			navigate,
+			Toolkit.make(navigate).toHandlers({
+				navigate: ({ path, configure }) => {
+					if (
+						configure?.capability === 'secret.set' &&
+						e.manifest.workspace.secrets?.[configure.record] === undefined
+					)
+						return Effect.succeed(ok({ error: 'That secret is not declared in this workspace.' }));
+					if (
+						configure?.capability === 'mcp.configure' &&
+						e.manifest.mcp[configure.record] === undefined
+					)
+						return Effect.succeed(
+							ok({ error: 'That MCP server is not declared in this workspace.' })
+						);
+					const target =
+						configure === undefined ? path : a.admin ? systemUiPath(path, configure) : null;
+					return Effect.succeed(
+						target === null
+							? ok({ error: 'This configuration does not belong to that page or your authority.' })
+							: ok({ navigation: target, requested: true })
+					);
+				}
+			})
+		);
+	}
 	// a sync starts as its caller: a file sync's import gated by their create or update grants on the model, its
 	// export by their reads (the engine judges both); a remote sync's read is granted by name among the policy's automations
 	const allSyncs = syncsOf(e.manifest);
@@ -1665,6 +1814,9 @@ Model writes: the callable is "<model>.<verb>" and its input is always an array 
 Related rows go inside their root row in the same call, never in a separate write. A link column takes the linked row's id; a file column takes the file reference { "id", "name", "mime" } a message or tool gave. The model's +model.ts names each write's columns and their kinds.
 ` +
 				`Callables: ${[...acts.keys()].join(', ')}. ` +
+				(acts.has('sys_invitation.create')
+					? `${acts.get('sys_invitation.create')?.description} `
+					: '') +
 				(automations.length > 0
 					? `Automations start as automation.<name> with their declared input: ${automations.map(signature).join('; ')}. A start (a sync's too) is a job: act answers at once with { job, run }, and when the run ends a [job … done] or [job … failed] message with its outcome arrives at your next step, or wakes this conversation after your reply; carry on or end your reply meanwhile. `
 					: '') +
@@ -1773,7 +1925,7 @@ Related rows go inside their root row in the same call, never in a separate writ
 	{
 		const goalsTool = Tool.make('goals', {
 			description:
-				"Set this conversation's checklist: the whole ordered list, each { id, text, status: pending | doing | done }. Ids are unique, at most one is doing, and a done goal stays done with its text unchanged.",
+				"Set this conversation's checklist: the whole ordered list, each { id, text, status: pending | doing | done }. Ids are unique and at most one is doing. A done goal is history: omitting it from the list keeps it, and its text and status never change.",
 			parameters: Schema.Struct({
 				items: Schema.Array(
 					Schema.Struct({
@@ -1797,14 +1949,18 @@ Related rows go inside their root row in the same call, never in a separate writ
 								return err('Goal ids must be unique.');
 							if (items.filter((g) => g.status === 'doing').length > 1)
 								return err('At most one goal is doing.');
+							// a done goal is history: resending the live list without it keeps it rather than refusing
 							for (const old of x.conv.goals ?? [])
 								if (old.status === 'done') {
 									const now = items.find((g) => g.id === old.id);
-									if (now === undefined || now.status !== 'done' || now.text !== old.text)
-										return err(`Goal '${old.id}' is done; it stays done with its text.`);
+									if (now === undefined) items.push({ ...old });
+									else if (now.status !== 'done' || now.text !== old.text) {
+										now.status = 'done';
+										now.text = old.text;
+									}
 								}
 							yield* x.setGoals(items);
-							return ok({ saved: true });
+							return ok({ saved: true, goals: items });
 						})
 					)
 			})
@@ -1839,10 +1995,17 @@ Related rows go inside their root row in the same call, never in a separate writ
 		const skillTool = Tool.make('skill', {
 			// the system prompt lists each skill with its description: the tool names them only
 			description:
-				"Read one of your skills (the system prompt lists them) whole, or one ## section. Its scripts run as written with run_js { file: '<skill>/<path>' }.",
+				"Read one of your skills (the system prompt lists them) whole, one ## section, or one of its files (a path from the file list). Its scripts run as written with run_js { file: '<skill>/<path>' }.",
 			parameters: Schema.Struct({
 				name: Schema.Literals(skills.map(([n]) => n)),
-				section: Schema.optionalKey(Schema.String.annotate({ description: 'a ## section' }))
+				section: Schema.optionalKey(
+					Schema.String.annotate({ description: 'a ## section of SKILL.md' })
+				),
+				file: Schema.optionalKey(
+					Schema.String.annotate({
+						description: "a path from the skill's file list, e.g. references/…"
+					})
+				)
 			}),
 			success: ToolAnswer
 		});
@@ -1854,11 +2017,27 @@ Related rows go inside their root row in the same call, never in a separate writ
 						Effect.gen(function* () {
 							const t = skills.find(([n]) => n === i.name)?.[1];
 							if (t === undefined) return err(`No skill '${i.name}' is available.`);
-							const key = `${i.name}#${i.section ?? ''}`;
+							if (i.file !== undefined && i.section !== undefined)
+								return err('Read a section or a file, not both.');
+							const key = `${i.name}#${i.section ?? ''}#${i.file ?? ''}`;
 							if (x.read.has(key))
 								return ok({ note: `You read ${i.name} earlier in this turn; its text is above.` });
-							x.read.set(key, `skill ${i.name}${i.section === undefined ? '' : ` (${i.section})`}`);
+							x.read.set(
+								key,
+								`skill ${i.name}${i.section === undefined ? '' : ` (${i.section})`}${i.file === undefined ? '' : ` file ${i.file}`}`
+							);
 							const s = skillOf(t.text);
+							if (i.file !== undefined) {
+								if (!t.files.includes(i.file) || i.file === SKILL_FILE)
+									return err(
+										`No file '${i.file}' in ${i.name}. Files: ${t.files
+											.filter((f) => f !== SKILL_FILE)
+											.slice(0, 50)
+											.join(', ')}`
+									);
+								const bytes = yield* t.read(i.file);
+								return ok({ file: i.file, text: bound(new TextDecoder().decode(bytes)) });
+							}
 							// its own files, never the packages it vendors
 							const own = t.files.filter(
 								(f) => f !== SKILL_FILE && !f.split('/').includes('node_modules')
@@ -1955,13 +2134,11 @@ Related rows go inside their root row in the same call, never in a separate writ
 				read_output: (i) =>
 					guard(
 						Effect.gen(function* () {
-							const full = yield* x.output(i.call ?? null);
-							if (full === undefined)
-								return err(
-									i.call === undefined
-										? 'No result was clipped in this conversation.'
-										: 'No saved output for that call; omit call to read the latest clipped result.'
-								);
+							const named = yield* x.output(i.call ?? null),
+								latest =
+									named === undefined && i.call !== undefined ? yield* x.output(null) : undefined,
+								full = named ?? latest;
+							if (full === undefined) return err('No result was clipped in this conversation.');
 							const text = outputText(full),
 								from = Math.max(0, i.offset ?? 0),
 								parts: string[] = [];
@@ -1978,6 +2155,11 @@ Related rows go inside their root row in the same call, never in a separate writ
 									offset: from,
 									total: text.length,
 									parts,
+									...(latest === undefined
+										? {}
+										: {
+												note: `No saved output for call '${i.call ?? ''}'; this is the latest clipped result.`
+											}),
 									...(at < text.length ? { next: at } : {})
 								},
 								bounded: true
@@ -2146,7 +2328,7 @@ Related rows go inside their root row in the same call, never in a separate writ
 	/** `read_file` over an ingest: a window of its lines with the images they reference, the lines holding a text, or one image. */
 	const readIngest = Effect.fn('AgentTool.readIngest')(function* (
 		entry: typeof IngestEntry.Type,
-		i: { from?: number; to?: number; text?: string; image?: number }
+		i: { from?: number; to?: number; text?: string; image?: number; crop?: ImageCrop }
 	) {
 		const o = entry.ingest.output,
 			files = e.files;
@@ -2185,13 +2367,29 @@ Related rows go inside their root row in the same call, never in a separate writ
 					});
 			}
 		});
+		if (i.crop !== undefined && i.image === undefined)
+			return err('A crop needs a 1-based image number as well as the ingest output.');
 		if (i.image !== undefined) {
 			const name = [...images.keys()][i.image - 1];
 			if (name === undefined) return err(`${o} has ${images.size} images; image is 1-based.`);
-			yield* show([name]);
+			if (i.crop === undefined) yield* show([name]);
+			else {
+				const image = images.get(name);
+				if (image === undefined) return err('The image is no longer stored.');
+				if (x.engine.images === undefined) return err('The host provides no image cropping.');
+				const bytes = yield* imageCrop(yield* files.get(image.key, image.size), i.crop).pipe(
+					Effect.provideService(Images, x.engine.images)
+				);
+				attach(x.files, {
+					mime: 'image/png',
+					bytes,
+					id: `${entry.id}#${name}#crop:${i.crop.left},${i.crop.top},${i.crop.right},${i.crop.bottom}`
+				});
+			}
 			return ok({
 				output: o,
 				image: name,
+				...(i.crop === undefined ? {} : { crop: i.crop, mime: 'image/png' }),
 				attached: 'shown to you from your next step until this turn ends',
 				note: SCAN_NOTE
 			});
@@ -2260,7 +2458,7 @@ Related rows go inside their root row in the same call, never in a separate writ
 		const readFileTool = Tool.make('read_file', {
 			description:
 				"Read a stored file or an ingest. { id }: a record's file field, any of this conversation's inputs (every [file: … id:…] line, filtered messages' files included) or outputs, or a message attachment: an image is shown to you from your next step until this turn ends, text answers directly; any other file (PDF, office, audio, …) is read through ingest first. " +
-				"{ output } (or the ingested file's id): its sanitised HTML lines, numbered, from to to (default from line 1, about 64 KB; a table or section is never cut), with the images those lines reference shown to you (at most 8); { output, text } the lines holding a text; { output, image: n } its n-th image. Each answer ends with where to read on. A data ingest (a spreadsheet, CSV, JSON) has no lines: { output } answers its sheets, columns, row counts and first rows; compute over its data.json with run_js.",
+				"{ output } (or the ingested file's id): its sanitised HTML lines, numbered, from to to (default from line 1, about 64 KB; a table or section is never cut), with the images those lines reference shown to you (at most 8); { output, text } the lines holding a text; { output, image: n } its n-th image. Add crop: { left, top, right, bottom } to focus that image: coordinates run from 0 to 1 in the oriented image; the lossless crop does not change its source. Use this for small printed fields and handwriting, never guess from a whole-page thumbnail. Each answer ends with where to read on. A data ingest (a spreadsheet, CSV, JSON) has no lines: { output } answers its sheets, columns, row counts and first rows; compute over its data.json with run_js.",
 			parameters: Schema.Struct({
 				id: Schema.optionalKey(Schema.String.annotate({ description: 'the file id' })),
 				output: Schema.optionalKey(
@@ -2275,6 +2473,17 @@ Related rows go inside their root row in the same call, never in a separate writ
 				text: Schema.optionalKey(Schema.String.annotate({ description: 'text a line holds' })),
 				image: Schema.optionalKey(
 					Schema.Number.check(Schema.isInt()).annotate({ description: '1-based image number' })
+				),
+				crop: Schema.optionalKey(
+					Schema.Struct({
+						left: Schema.Number,
+						top: Schema.Number,
+						right: Schema.Number,
+						bottom: Schema.Number
+					}).annotate({
+						description:
+							'A focused rectangle in image n; coordinates from 0 to 1, left < right and top < bottom.'
+					})
 				)
 			}),
 			success: ToolAnswer
@@ -2299,7 +2508,8 @@ Related rows go inside their root row in the same call, never in a separate writ
 								i.from !== undefined ||
 								i.to !== undefined ||
 								i.text !== undefined ||
-								i.image !== undefined
+								i.image !== undefined ||
+								i.crop !== undefined
 							)
 								return err(
 									`Lines, text and images read an ingest: call ingest { id: '${id}' } first.`
@@ -2576,282 +2786,142 @@ Related rows go inside their root row in the same call, never in a separate writ
 					files: () => ws.files().then((files) => files.filter((f) => !unseen(f))),
 					read: (path) => (unseen(path) ? Promise.resolve(null) : ws.read(path))
 				};
-	const released = visible(x.workspace),
-		drafted = visible(x.draft);
-	// one tool over the source: a text, a path to read, or nothing (the file list); the released source or the author's draft
-	if (
-		(x.workspace !== undefined || x.draft !== undefined) &&
-		!(a.actor.kind === 'member' && a.actor.external)
-	) {
-		const workspaceSearchTool = Tool.make('workspace_search', {
+	// An author's current Studio tree; without authoring, the workspace's released source.
+	const source = visible(x.draft ?? x.workspace);
+	if (source !== undefined && !(a.actor.kind === 'member' && a.actor.external)) {
+		const readSource = Tool.make('workspace_read', {
 			description:
-				'Read or search the workspace source (src/: models, policies, teams, automations, apps, lib), as released or, with draft: true, your Studio draft. ' +
-				'path reads one file as numbered lines (from and to a range); text finds the lines containing it (case-insensitive) in any file, paths narrowing it to path prefixes. ' +
-				'workspace_list shows what a folder holds.',
+				'Read a file in your current working source as numbered lines. path is required; from/to page large files. workspace_list discovers paths; workspace_search finds content. No draft flag is needed.',
 			parameters: Schema.Struct({
-				text: Schema.optionalKey(Schema.String.annotate({ description: 'text a line contains' })),
-				path: Schema.optionalKey(Schema.String.annotate({ description: 'a file to read' })),
-				from: Schema.optionalKey(
-					Schema.Number.check(Schema.isInt()).annotate({ description: 'first line, default 1' })
-				),
-				to: Schema.optionalKey(
-					Schema.Number.check(Schema.isInt()).annotate({ description: 'last line' })
-				),
-				paths: Schema.optionalKey(
-					Schema.Array(Schema.String).annotate({ description: 'path prefixes, e.g. src/lib/' })
-				),
-				draft: Schema.optionalKey(
-					Schema.Boolean.annotate({ description: 'your Studio draft instead of the release' })
-				),
-				limit: Schema.optionalKey(
-					Schema.Number.check(Schema.isInt()).annotate({
-						description: 'at most 100 matches, default 30'
-					})
-				)
+				path: Schema.NonEmptyString.annotate({ description: 'workspace-relative file path' }),
+				from: Schema.optionalKey(Schema.Int.annotate({ description: 'first line, default 1' })),
+				to: Schema.optionalKey(Schema.Int.annotate({ description: 'last line' }))
 			}),
 			success: ToolAnswer
 		});
 		yield* add(
-			workspaceSearchTool,
-			Toolkit.make(workspaceSearchTool).toHandlers({
-				workspace_search: (i) =>
+			readSource,
+			Toolkit.make(readSource).toHandlers({
+				workspace_read: (i) =>
 					guard(
 						Effect.gen(function* () {
-							const ws = i.draft === true ? drafted : released;
-							if (ws === undefined)
-								return err(
-									i.draft === true
-										? 'You have no Studio draft in this workspace.'
-										: 'This workspace was built without its source; search your draft.'
-								);
-							const prefixes = i.paths ?? [];
-							const files = (yield* Port.attempt('workspace.files', () => ws.files())).filter(
-								(f) => prefixes.length === 0 || prefixes.some((p) => f.startsWith(p))
-							);
-							const limit = Math.max(1, Math.min(i.limit ?? 30, 100));
-							const path = i.path;
-							if (typeof path === 'string') {
-								const text = yield* Port.attempt('workspace.read', () => ws.read(path));
-								if (text === null) {
-									const base = path.split('/').pop()!;
-									return err(
-										`No file '${path}'.${((near) => (near.length > 0 ? ` Did you mean ${near.join(', ')}?` : ''))(files.filter((f) => f.endsWith(base)).slice(0, 5))}`
-									);
-								}
-								return ok({
-									path,
-									...page(text, i.from ?? 1, i.to ?? Number.MAX_SAFE_INTEGER)
-								});
-							}
-							if (typeof i.text === 'string' && i.text !== '') {
-								const want = i.text.toLowerCase(),
-									hits: Json[] = [];
-								let total = 0;
-								for (const path of files)
-									for (const [n, line] of (
-										(yield* Port.attempt('workspace.read', () => ws.read(path))) ?? ''
-									)
-										.split('\n')
-										.entries())
-										if (line.toLowerCase().includes(want) && ++total <= limit)
-											hits.push({ path, line: n + 1, text: line.trim().slice(0, 200) });
-								// the source names no such thing: neither does the data, so the next step is the answer, not another search
-								return ok(
-									total === 0
-										? {
-												total,
-												hits,
-												note: `Nothing in the source mentions '${i.text}': no model holds it. Answer from the fields the models do have, and say what is missing.`
-											}
-										: { total, hits }
-								);
-							}
-							return err(
-								'Give path to read a file or text to search; workspace_list shows a folder.'
-							);
-						})
-					)
-			}),
-			{ pure: true }
-		);
-		const workspaceListTool = Tool.make('workspace_list', {
-			description:
-				'List a folder of the workspace source: its subfolders (ending in /) and files, as released or, with draft: true, your Studio draft. ' +
-				'Start at src/ and go down; read a file with workspace_search { path }.',
-			parameters: Schema.Struct({
-				path: Schema.optionalKey(
-					Schema.String.annotate({ description: 'a folder, e.g. src/data/model/; default src/' })
-				),
-				draft: Schema.optionalKey(
-					Schema.Boolean.annotate({ description: 'your Studio draft instead of the release' })
-				)
-			}),
-			success: ToolAnswer
-		});
-		yield* add(
-			workspaceListTool,
-			Toolkit.make(workspaceListTool).toHandlers({
-				workspace_list: (i) =>
-					guard(
-						Effect.gen(function* () {
-							const ws = i.draft === true ? drafted : released;
-							if (ws === undefined)
-								return err(
-									i.draft === true
-										? 'You have no Studio draft in this workspace.'
-										: 'This workspace was built without its source.'
-								);
-							// '', '.' and '/' are the workspace root; every other folder ends in one '/'
-							const at = (i.path ?? 'src/').replace(/^(?:\.\/|\/)+/, '').replace(/^\.$/, ''),
-								dir = at === '' ? '' : at.replace(/\/?$/, '/');
-							const entries = new Set<string>();
-							for (const f of yield* Port.attempt('workspace.files', () => ws.files()))
-								if (f.startsWith(dir)) {
-									const rest = f.slice(dir.length),
-										cut = rest.indexOf('/');
-									entries.add(cut < 0 ? rest : rest.slice(0, cut + 1));
-								}
-							return entries.size === 0
-								? err(`Nothing is under '${dir}'; workspace_list { path: '' } shows the root.`)
-								: ok({ path: dir, entries: [...entries].sort() });
-						})
-					)
-			}),
-			{ pure: true }
-		);
-	}
-	// the platform's docs corpus (`@norbital-ai/bolt/docs`): the API reference narrowed to what a workspace imports, and the
-	// authoring skills; authoring is the staff's
-	const reference = x.docs;
-	if (staff && reference !== undefined) {
-		const docsTool = Tool.make('docs', {
-			description:
-				'The API reference of what a workspace can import: bolt (the declaration functions and their types), bolt/page ($bolt in pages), ' +
-				'bolt/test (the test kit), ui and ui/layout (views, field kinds, inputs, Form, primitives, layout), ui/capture and the std value libraries (std/date, std/decimal, …). ' +
-				'Nothing given lists the namespaces; query searches names, summaries and signatures; namespace lists one; symbols (up to 8, with or without namespace) ' +
-				'reads each: its signature, parameters or props, docs, examples and source. skill reads an authoring skill (SKILL.md, or one of its ' +
-				'files with file); nothing given also lists the skills. Read what you need in one call.',
-			parameters: Schema.Struct({
-				query: Schema.optionalKey(Schema.String.annotate({ description: 'words to find' })),
-				namespace: Schema.optionalKey(
-					Schema.String.annotate({ description: 'a namespace, e.g. bolt, ui/layout, std/date' })
-				),
-				symbol: Schema.optionalKey(Schema.String.annotate({ description: 'an exported name' })),
-				symbols: Schema.optionalKey(
-					Schema.Array(Schema.String)
-						.check(Schema.isMaxLength(8))
-						.annotate({ description: 'exported names to read together' })
-				),
-				skill: Schema.optionalKey(
-					Schema.String.annotate({
-						description: 'an authoring skill, e.g. authoring-tenant-workspace'
-					})
-				),
-				file: Schema.optionalKey(
-					Schema.String.annotate({ description: "a skill's file, e.g. references/studio.md" })
-				)
-			}),
-			success: ToolAnswer
-		});
-		yield* add(
-			docsTool,
-			Toolkit.make(docsTool).toHandlers({
-				docs: (i) =>
-					guard(
-						Effect.gen(function* () {
-							const docs = yield* reference.corpus;
-							if (i.skill !== undefined) {
-								const skill = docs.skill(i.skill),
-									path = i.file ?? 'SKILL.md';
-								const file = skill?.files.find((f) => f.path === path);
-								return skill === null
-									? err(
-											`No skill '${i.skill}'. Skills: ${docs
-												.index()
-												.skills.map((k) => k.name)
-												.join(', ')}.`
-										)
-									: file === undefined
-										? err(
-												`No file '${path}' in ${i.skill}. Files: ${skill.files.map((f) => f.path).join(', ')}.`
-											)
-										: ok({ skill: i.skill, path, text: file.text });
-							}
-							const all = docs.index().namespaces.filter((n) => n.reference),
-								names = all.map((n) => n.namespace);
-							const ns = i.namespace === undefined ? undefined : i.namespace;
-							if (ns !== undefined && !names.includes(ns))
-								return err(`No namespace '${ns}'. Namespaces: ${names.join(', ')}.`);
-							const within = ns === undefined ? names : [ns];
-							if (i.query !== undefined)
-								return ok(encodeWire(docs.search(i.query, { namespaces: within, limit: 20 })));
-							const wanted = [
-								...(i.symbols?.slice(0, 8) ?? []),
-								...(i.symbol === undefined ? [] : [i.symbol])
-							];
-							if (wanted.length > 0) {
-								const read = (name: string) =>
-									within.flatMap((n) => {
-										const s = docs.symbol(n, name);
-										return s === null
-											? []
-											: [
-													{ namespace: n, import: all.find((x) => x.namespace === n)!.module, ...s }
-												];
-									});
-								const found = wanted.map((name) => ({ name, found: read(name) }));
-								if (found.every((f) => f.found.length === 0))
-									return err(
-										`No symbol ${wanted.map((w) => `'${w}'`).join(', ')}${ns === undefined ? '' : ` in ${ns}`}; search with query.`
-									);
-								return ok(
-									encodeWire(
-										wanted.length === 1
-											? (found[0]?.found ?? [])
-											: found.map((f) =>
-													f.found.length > 0
-														? f.found
-														: { name: f.name, error: 'not found; search with query' }
-												)
-									)
-								);
-							}
-							if (ns !== undefined) {
-								const n = docs.namespace(ns)!;
-								return ok({
-									namespace: ns,
-									import: n.module,
-									summary: n.summary,
-									symbols: n.symbols.map((s) => ({
-										name: s.name,
-										kind: s.kind,
-										summary: s.summary
-									}))
-								});
-							}
+							// the same normalisation workspace_list and workspace_search use: `./src/a.ts` is `src/a.ts`
+							const path = i.path.replace(/^(?:\.\/|\/)+/, '').replace(/^\.$/, ''),
+								files = yield* Port.attempt('workspace.files', () => source.files()),
+								missing = () =>
+									path.startsWith('node_modules/')
+										? `No file '${i.path}': installed packages are outside the workspace. Read declarations with workspace_lang hover or definition, or the package docs.`
+										: `No file '${i.path}'. Use workspace_list to find its path.`;
+							if (!files.includes(path)) return err(missing());
+							const text = yield* Port.attempt('workspace.read', () => source.read(path));
+							if (text === null) return err(missing());
 							return ok({
-								namespaces: all.map((n) => ({
-									namespace: n.namespace,
-									import: n.module,
-									summary: n.summary,
-									symbols: n.symbols
-								})),
-								skills: docs.index().skills.map((k) => ({
-									name: k.name,
-									description: k.description,
-									files: k.files
-								}))
+								path,
+								...page(text, i.from ?? 1, i.to ?? Number.MAX_SAFE_INTEGER)
 							});
 						})
 					)
-			})
+			}),
+			{ pure: true }
+		);
+		const searchSource = Tool.make('workspace_search', {
+			description:
+				'Grep your current working source. pattern is required: a regular expression, or exact text with literal:true. path optionally narrows to a file or folder. Returns matching paths, line numbers and previews, capped by limit (default/max 100). Case-sensitive by default. Use workspace_read to read a result. No draft flag is needed.',
+			parameters: Schema.Struct({
+				pattern: Schema.NonEmptyString.annotate({
+					description: 'regular expression, or literal text when literal:true'
+				}),
+				path: Schema.optionalKey(
+					Schema.String.annotate({
+						description: 'workspace-relative file or directory; default the workspace root'
+					})
+				),
+				literal: Schema.optionalKey(Schema.Boolean),
+				caseSensitive: Schema.optionalKey(Schema.Boolean),
+				limit: Schema.optionalKey(Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 100 })))
+			}),
+			success: ToolAnswer
+		});
+		yield* add(
+			searchSource,
+			Toolkit.make(searchSource).toHandlers({
+				workspace_search: (i) =>
+					guard(
+						Effect.gen(function* () {
+							const regex =
+								i.literal === true
+									? null
+									: yield* Effect.try({
+											try: () => new RegExp(i.pattern, i.caseSensitive === false ? 'i' : ''),
+											catch: () =>
+												BoltError.make(
+													'invalidInput',
+													'decode',
+													'Invalid regular expression; fix pattern or use literal:true.'
+												)
+										});
+							const wanted = i.caseSensitive === false ? i.pattern.toLowerCase() : i.pattern;
+							const within = (i.path ?? '')
+								.replace(/^\.\//, '')
+								.replace(/^\.$/, '')
+								.replace(/\/$/, '');
+							const files = (yield* Port.attempt('workspace.files', () => source.files())).filter(
+								(file) => within === '' || file === within || file.startsWith(`${within}/`)
+							);
+							const limit = i.limit ?? 100,
+								hits: Json[] = [];
+							for (const path of files) {
+								const text = (yield* Port.attempt('workspace.read', () => source.read(path))) ?? '';
+								for (const [line, value] of text.split('\n').entries()) {
+									if (
+										regex === null
+											? (i.caseSensitive === false ? value.toLowerCase() : value).includes(wanted)
+											: regex.test(value)
+									) {
+										if (hits.length === limit) return ok({ hits, truncated: true });
+										hits.push({ path, line: line + 1, text: value.slice(0, 2000) });
+									}
+								}
+							}
+							return ok({ hits, truncated: false });
+						})
+					)
+			}),
+			{ pure: true }
+		);
+		const listSource = Tool.make('workspace_list', {
+			description:
+				'List files and immediate subfolders of your current working source. path is a workspace-relative directory, default the root. Read files with workspace_read; grep contents with workspace_search.',
+			parameters: Schema.Struct({ path: Schema.optionalKey(Schema.String) }),
+			success: ToolAnswer
+		});
+		yield* add(
+			listSource,
+			Toolkit.make(listSource).toHandlers({
+				workspace_list: (i) =>
+					guard(
+						Effect.gen(function* () {
+							const at = (i.path ?? '').replace(/^(?:\.\/|\/)+/, '').replace(/^\.$/, '');
+							const dir = at === '' ? '' : at.replace(/\/?$/, '/');
+							const entries = new Set<string>();
+							for (const file of yield* Port.attempt('workspace.files', () => source.files())) {
+								if (!file.startsWith(dir)) continue;
+								const rest = file.slice(dir.length),
+									slash = rest.indexOf('/');
+								entries.add(slash < 0 ? rest : rest.slice(0, slash + 1));
+							}
+							return ok({ path: dir, entries: [...entries].sort() });
+						})
+					)
+			}),
+			{ pure: true }
 		);
 	}
 	if (agent && x.delegation) {
 		{
 			const subagentTool = Tool.make('subagent', {
 				description:
-					`Delegate to sub-agents working with your authority, in the background: spawn { task, agent? } (agents: ${x.agents.join(', ')}) answers its conversation at once and it works on its own, several at once. ` +
+					`Delegate to sub-agents working with your authority, in the background: spawn { task, done?, format?, agent? } (agents: ${x.agents.join(', ')}) answers its conversation at once and it works on its own, at most 4 at once. done is what must be true; format is what it must return. ` +
 					'Its report (its answer, a question for you, a failure) arrives as a message in this conversation: carry on with other work or end your reply, and you are prompted again when it arrives; wait pauses this turn for one instead. ' +
 					'list shows your sub-agents and their status; read { conversation } shows one in detail: its checklist, last messages, the tool calls it made and what it changed or produced. ' +
 					'message { conversation, text } answers or steers it (it carries on), stop { conversation } ends it. When it asks you something, answer with message, or ask the person if only they know.',
@@ -2861,6 +2931,12 @@ Related rows go inside their root row in the same call, never in a separate writ
 						Schema.String.annotate({
 							description: 'spawn: the task, with everything the sub-agent needs'
 						})
+					),
+					done: Schema.optionalKey(
+						Schema.String.annotate({ description: 'spawn: what must be true when it is done' })
+					),
+					format: Schema.optionalKey(
+						Schema.String.annotate({ description: 'spawn: what the report must contain' })
 					),
 					agent: Schema.optionalKey(Schema.String.annotate({ description: 'spawn: which agent' })),
 					conversation: Schema.optionalKey(
@@ -2884,7 +2960,7 @@ Related rows go inside their root row in the same call, never in a separate writ
 										const which = i.agent ?? null;
 										if (which !== null && !x.agents.includes(which))
 											return err(`No agent '${which}'.`);
-										return ok(yield* x.subagent.spawn(i.task ?? '', which));
+										return ok(yield* x.subagent.spawn(i.task ?? '', which, i.done, i.format));
 									}
 									case 'list':
 										return ok(yield* x.subagent.list());
@@ -3149,11 +3225,11 @@ Related rows go inside their root row in the same call, never in a separate writ
 	{
 		const waitTool = Tool.make('wait', {
 			description:
-				"Wait for background work to finish now: a sub-agent's report, jobs (ingests, long host calls, automation runs you started: the job or run id act answered) or other automation runs by id: the first of the given ones (every job when none) to settle, or nothing at the bound (at most 600 s). Optional: a finished job announces itself at your next step; a job collected here is not announced again. A settled run's file (an export, a template) is offered to the person under your reply.",
+				"Wait for background work to finish now: a sub-agent's report, jobs (ingests, long host calls, automation runs you started: the job or run id act answered) or other automation runs by id: the first of the given ones (every job when none) to settle, or nothing at the bound (at most 120 s). Optional: a finished job announces itself at your next step; a job collected here is not announced again. A settled run's file (an export, a template) is offered to the person under your reply.",
 			parameters: Schema.Struct({
 				jobs: Schema.optionalKey(Schema.Array(Schema.String)),
 				seconds: Schema.optionalKey(
-					Schema.Number.check(Schema.isInt()).annotate({ description: 'at most 600, default 120' })
+					Schema.Number.check(Schema.isInt()).annotate({ description: 'at most 120, default 120' })
 				)
 			}),
 			success: ToolAnswer
@@ -3165,7 +3241,7 @@ Related rows go inside their root row in the same call, never in a separate writ
 					guard(
 						Effect.gen(function* () {
 							const ids = i.jobs ?? [];
-							const ms = Math.min(Math.max(1, i.seconds ?? 120), 600) * 1000;
+							const ms = Math.min(Math.max(1, i.seconds ?? 120), 120) * 1000;
 							// automation runs are sys_run rows, not this turn's jobs: follow them until one ends (a probe waited on a
 							// statutory research run for ten minutes and never heard it finish)
 							if (ids.length > 0 && ids.every((id) => !x.jobs.has(id))) {
@@ -3484,6 +3560,67 @@ Related rows go inside their root row in the same call, never in a separate writ
 				meta
 			);
 		});
+	// optional host-tool packs are not in the empty turn: one small catalog tool loads the one a task needs
+	if (agent && x.inApp && staff && availablePacks.length > 0) {
+		const packsTool = Tool.make('tools', {
+			description:
+				"Optional tool packs are not loaded by default. list (or query) shows each pack and its tools; enable adds a pack to your next step; disable removes it. Base tools are always present. MCP tools are not packs: a declared server's tools are direct tools named mcp__<server>__<tool>. Load only the pack the task needs.",
+			parameters: Schema.Struct({
+				query: Schema.optionalKey(
+					Schema.String.annotate({ description: 'match a pack or tool name' })
+				),
+				enable: Schema.optionalKey(
+					Schema.Array(Schema.String)
+						.check(Schema.isMaxLength(8))
+						.annotate({ description: 'pack names to load' })
+				),
+				disable: Schema.optionalKey(
+					Schema.Array(Schema.String)
+						.check(Schema.isMaxLength(8))
+						.annotate({ description: 'pack names to unload' })
+				)
+			}),
+			success: ToolAnswer
+		});
+		yield* add(
+			packsTool,
+			Toolkit.make(packsTool).toHandlers({
+				tools: (i) =>
+					guard(
+						Effect.gen(function* () {
+							for (const name of i.enable ?? [])
+								if (!availablePacks.includes(name))
+									return err(`No tool pack '${name}'. Packs: ${availablePacks.join(', ')}.`);
+							for (const name of i.enable ?? []) enabledPacks.add(name);
+							for (const name of i.disable ?? []) enabledPacks.delete(name);
+							const needle = i.query?.toLowerCase(),
+								shown = availablePacks.filter(
+									(pack) =>
+										needle === undefined ||
+										pack.includes(needle) ||
+										x.hostTools.some(
+											(t) =>
+												t.pack === pack &&
+												(t.name.includes(needle) || t.description.toLowerCase().includes(needle))
+										)
+								);
+							return ok({
+								packs: shown.map((pack) => ({
+									name: pack,
+									enabled: enabledPacks.has(pack),
+									tools: x.hostTools.filter((t) => t.pack === pack).map((t) => t.name)
+								})),
+								...(shown.length === 0 && i.query !== undefined
+									? {
+											note: `No optional pack or tool matches '${i.query}'. MCP tools are direct tools named mcp__<server>__<tool>; check describe_workspace or the current tool list.`
+										}
+									: {})
+							});
+						})
+					)
+			})
+		);
+	}
 	if (agent)
 		for (const t of x.mcpTools)
 			yield* dynamic(
@@ -3495,7 +3632,7 @@ Related rows go inside their root row in the same call, never in a separate writ
 	// the workspace's own search wins: an MCP tool named like a host search tool hides the host's
 	const own = new Set(x.mcpTools.map((t) => t.name));
 	if (x.inApp && staff)
-		for (const host of x.hostTools)
+		for (const host of hosted)
 			if (
 				!(WORKSPACE_OVERRIDES.has(host.name) && own.has(host.name)) &&
 				(agent || host.readOnly === true) &&
@@ -3531,7 +3668,8 @@ Related rows go inside their root row in the same call, never in a separate writ
 								host.name,
 								Port.attempt(host.name, (signal) => host.call(input, context, signal)).pipe(
 									Port.call(host.name, JOBS.hostMs)
-								)
+								),
+								host.studio === undefined ? {} : { studio: host.studio }
 							);
 							const inline = yield* x.jobs.wait([job], x.inlineMs ?? JOBS.inlineMs);
 							if (inline === null) return ok({ job, note: 'still running; collect it with wait' });

@@ -99,7 +99,6 @@ record, existing children to link, unlink or delete. Explicit commands only (rul
 			{/each}
 			<Button
 				type="button"
-				size="sm"
 				variant="ghost"
 				class="justify-self-start"
 				{disabled}
@@ -112,7 +111,6 @@ record, existing children to link, unlink or delete. Explicit commands only (rul
 	{#if fields.length > 0}
 		<Button
 			type="button"
-			size="sm"
 			variant="outline"
 			class="justify-self-start"
 			{disabled}
@@ -148,7 +146,6 @@ record, existing children to link, unlink or delete. Explicit commands only (rul
 						<Show kind={{ kind: 'id', of: child.model }} value={chosen} readonly />
 						<Button
 							type="button"
-							size="sm"
 							variant="ghost"
 							{disabled}
 							onclick={() => onChange({ ...value, [op]: value[op].filter((x) => x !== chosen) })}

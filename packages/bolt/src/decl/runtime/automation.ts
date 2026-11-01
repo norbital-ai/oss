@@ -168,13 +168,21 @@ export type Automation<N extends string, S> = {
 /**
  * `src/automation/+<a>.automation.ts`: a job that runs on a trigger (`on`: cron or webhook) or when started, executed by
  * the reserved system identity with the declared `policies` (`ctx.run.trigger` records who started it), with typed `input` and `output`, retries and concurrency. `run` is a generator in the literal; `ctx` carries reads (`ctx.query`), `act`, files, AI and the other facilities.
+ * A person's permission to start a job does not grant the job that person's authority. Check `ctx.run.trigger`
+ * explicitly when business rules depend on the starter. External calls can repeat when a failed run retries.
+ * Every declared automation the caller may start appears in the native Command Center Automations, with this typed
+ * input rendered by `Form`; a page form is optional, not required. A start queues a run and is followed by the native
+ * run status — the page does not poll or reimplement the queue.
+ * @param name The automation name discovered from its source file.
+ * @param spec Input/output contracts, execution policies, trigger and generator body.
+ * @returns Declaration metadata with an attached run body; declaring it does not start a job.
  * @example
  * export default automation('sweep_quotes', {
  * 	description: 'Daily sweep of lapsed quotes.',
  * 	on: { cron: '0 6 * * *' },
  * 	policies: ['quote_watch'],
  * 	run: function* (_, ctx) {
- * 		const lapsed = yield* ctx.query('quotes', { where: { valid_until: { lt: ctx.today } }, limit: 50 });
+ * 		const { quotes: lapsed } = yield* ctx.query({ quotes: { where: { valid_until: { lt: ctx.today } }, limit: 50 } });
  * 		yield* ctx.progress({ text: `${lapsed.rows.length} lapsed` });
  * 	}
  * });

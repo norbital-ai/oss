@@ -2,7 +2,7 @@
 import { expect, it } from '@effect/vitest';
 import { Context, Effect, Layer } from 'effect';
 import { LIMITS, type Invocation } from '../src/engine/contracts.ts';
-import { Guest, type Bridge } from '../src/engine/services.ts';
+import { Guest, GuestLimits, type Bridge } from '../src/engine/services.ts';
 import { guestLayer } from './support/guest-fixture.ts';
 import vm from 'node:vm';
 import { moduleScript } from '../src/node/guest-hooks.ts';
@@ -24,6 +24,45 @@ const invocation: Invocation = {
 	}
 };
 const noCalls: Bridge = { cross: () => Effect.succeed([]) };
+it.live(
+	'write transforms can return a change set larger than call arguments, within its own bound',
+	() =>
+		Effect.gen(function* () {
+			const invoke = (kind: 'create' | 'automation', changeSetBytes: number) =>
+				Effect.gen(function* () {
+					const context = yield* Layer.build(
+						guestLayer({
+							source:
+								'export default { model: { a: { bodies: { create: () => [{ note: "x".repeat(128) }] } } }, automation: { a: { body: () => "x".repeat(128) } } };'
+						}).pipe(
+							Layer.provide(
+								Layer.succeed(GuestLimits, {
+									memoryMiB: LIMITS.guestMemoryMiB,
+									crossings: LIMITS.crossings,
+									readBytes: LIMITS.readBytes,
+									crossingBytes: LIMITS.crossingBytes,
+									argsBytes: 64,
+									changeSetBytes
+								})
+							)
+						)
+					);
+					return yield* Context.get(context, Guest).invoke({ ...invocation, kind }, noCalls);
+				});
+			expect(yield* invoke('create', 256)).toMatchObject({
+				kind: 'ok',
+				output: [{ note: 'x'.repeat(128) }]
+			});
+			expect(yield* invoke('create', 64)).toMatchObject({
+				kind: 'failed',
+				error: { code: 'tooLarge' }
+			});
+			expect(yield* invoke('automation', 256)).toMatchObject({
+				kind: 'failed',
+				error: { code: 'tooLarge' }
+			});
+		})
+);
 it.live('copies facility failure kind onto the guest error cause', () =>
 	Effect.gen(function* () {
 		const context = yield* Layer.build(

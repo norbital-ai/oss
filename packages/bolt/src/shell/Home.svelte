@@ -33,7 +33,7 @@
 			e.preventDefault();
 			onNavigate(app.href);
 		}}
-		class="group w-68 max-w-[calc(100vw-3rem)] shrink-0 snap-start overflow-hidden rounded-xl border bg-card shadow-card outline-none transition-colors duration-150 hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring"
+		class="group w-68 max-w-[calc(100vw-3rem)] shrink-0 snap-start overflow-hidden rounded-xl border bg-card outline-none transition-colors duration-150 hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring"
 	>
 		<Stack gap="none">
 			<Frame ratio="banner" class="relative bg-linear-to-br from-muted via-background to-brand/10">
@@ -92,7 +92,6 @@
 								class="max-w-72 pt-1 text-center text-micro text-muted-foreground"
 								>{t('Add an application to this workspace to see it here.')}</span
 							>{:else}<Button
-								size="sm"
 								class="mt-2"
 								onclick={() => onAsk(t('Build my first app: '))}
 								data-home-ask

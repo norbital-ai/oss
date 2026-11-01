@@ -346,7 +346,7 @@ describe('engine/write: erase (rule 38e, §5.13)', () => {
 				expect(required(history[1], 'erased people history').changes).toEqual(
 					(yield* one(
 						Schema.Struct({ row: Changes }),
-						`select to_jsonb(people) - array['bolt_search','bolt_embedding'] as row from people`
+						`select to_jsonb(people) - array['bolt_search','bolt_embedding','bolt_record_label'] as row from people`
 					)).row
 				);
 				expect(

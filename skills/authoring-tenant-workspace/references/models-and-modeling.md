@@ -159,6 +159,14 @@ write path: pages, agent, automations, syncs, imports, upserts, bulk edits, resu
 restore and nested owned children. Children run their own callback after the parent. Seed restores
 and derived roll-ups bypass callbacks. Share pure business helpers between verbs when needed.
 
+Keep semantic validators in browser-safe `src/lib` modules, separate from network reads and writes.
+Return field-addressed issues (`{ field, message }`) from pure functions over the draft and a supplied
+data snapshot. Forms use the same functions through `Form validate={...}` (or
+`form.addValidation` for rules spanning owned children); the server loads fresh authoritative data
+and runs those functions again inside the guarded write. Never make client validation call a write
+or a validation endpoint. The field label and its information icon show semantic errors; fixing the
+draft clears them and re-enables Save. Normal permissions and state locks remain authoritative.
+
 Prefetch the whole batch through `ctx.db.query` as the workspace, with at most two reads. One read
 request may gather several roots and their declared layers in one statement. Never read per
 row. The engine prefetches `before`, delete rows and upsert matches. Each 1000-row chunk has its

@@ -13,6 +13,7 @@ import { hostFileOf } from '@norbital-ai/bolt/tooling';
 import { templatesCommand } from './templates.ts';
 import {
 	AuthorErrors,
+	authorErrors,
 	buildWorkspace,
 	ToolFailure,
 	watchWorkspace,
@@ -34,6 +35,10 @@ const json = Flag.Boolean('json').pipe(
 	Flag.withDescription('a job: the errors also as one JSON line on stderr'),
 	Flag.withDefault(false)
 );
+const noTypes = Flag.Boolean('no-types').pipe(
+	Flag.withDescription('skip the whole-program type check; a warm host type service answers it instead'),
+	Flag.withDefault(false)
+);
 /** A job reads a failed run's errors from the last stderr line, `{"errors":[…]}`. */
 const reported = (json: boolean) => (error: AuthorErrors) =>
 	json
@@ -42,18 +47,20 @@ const reported = (json: boolean) => (error: AuthorErrors) =>
 				Effect.andThen(Effect.fail(error))
 			)
 		: Effect.fail(error);
-const checkCommand = Command.make('check', { dir, json }, ({ dir, json }) =>
+const checkCommand = Command.make('check', { dir, json, noTypes }, ({ dir, json, noTypes }) =>
 	Effect.gen(function* () {
 		const { diagnose } = yield* Effect.tryPromise({
 			try: () => import('./check.ts'),
 			catch: (cause) => new ToolFailure({ message: 'The workspace checker could not load.', cause })
 		});
-		const result = yield* diagnose(resolve(dir));
+		const result = yield* diagnose(resolve(dir), { types: !noTypes });
 		if (result.errors.length > 0)
 			return yield* Effect.fail(
-				new AuthorErrors({ errors: result.errors, message: `${result.errors.length} errors` })
+				authorErrors(result.errors)
 			);
-		yield* Console.log(`ok (${result.stages.join(' → ')} → types)`);
+		yield* Console.log(
+			`ok (${result.stages.join(' → ')}${noTypes ? '' : ' → types'})`
+		);
 	}).pipe(Effect.catchTag('AuthorErrors', reported(json)))
 );
 /** `bolt sync`: the declarations evaluated, `.norbital/names.ts` written; `bolt dev` and `bolt check` run it first. */
@@ -67,7 +74,7 @@ const syncCommand = Command.make('sync', { dir, json }, ({ dir, json }) =>
 		const result = yield* sync(resolve(dir));
 		if (result.errors.length > 0)
 			return yield* Effect.fail(
-				new AuthorErrors({ errors: result.errors, message: `${result.errors.length} errors` })
+				authorErrors(result.errors)
 			);
 		yield* Console.log(`synced (${result.stages.join(' → ')})`);
 	}).pipe(Effect.catchTag('AuthorErrors', reported(json)))

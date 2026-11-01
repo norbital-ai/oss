@@ -236,6 +236,8 @@ layer(workspace)('rate limits over HTTP (rule 38)', (it) => {
 
 		it.effect('sign-in: the sixth code for one address in an hour is a 429 with Retry-After', () =>
 			Effect.gen(function* () {
+				const t = yield* TestWorkspace;
+				t.member([], { email: 'flood@acme.example' });
 				const answers: Answer[] = [];
 				for (let i = 0; i < 6; i++)
 					answers.push(

@@ -13,6 +13,8 @@ the limits are the trigger's hint); files dropped anywhere on the field upload t
 		kind: KindOf<'file'>;
 		value: Value;
 		onChange(next: Value): void;
+		/** Standalone request forms keep submit disabled while bytes are uploading. */
+		onPendingChange?(pending: boolean): void;
 		/** The field name the upload is checked against. */
 		name: string;
 		id?: string;
@@ -24,6 +26,7 @@ the limits are the trigger's hint); files dropped anywhere on the field upload t
 <script lang="ts">
 	import Icon from '@iconify/svelte';
 	import { Effect, FiberSet } from 'effect';
+	import { watch } from 'runed';
 	import { attach, fork } from '../effect/index.js';
 	import { cn, uiText } from '../primitives/utils.js';
 	import { useKinds } from './context.js';
@@ -35,6 +38,7 @@ the limits are the trigger's hint); files dropped anywhere on the field upload t
 		kind,
 		value,
 		onChange,
+		onPendingChange,
 		name,
 		id,
 		disabled = false,
@@ -51,6 +55,10 @@ the limits are the trigger's hint); files dropped anywhere on the field upload t
 	const max = $derived(kind.multiple ? MAX_FILES : 1);
 	let pending = $state<PendingFile[]>([]);
 	let problems = $state<string[]>([]);
+	watch(
+		() => pending.some((file) => file.error === undefined),
+		(busy) => onPendingChange?.(busy)
+	);
 	let over = $state(false),
 		seq = 0;
 	const can = $derived(host.upload !== undefined && !disabled);
@@ -155,8 +163,8 @@ the limits are the trigger's hint); files dropped anywhere on the field upload t
 <div class="grid min-w-0 gap-1" {@attach lifetime}>
 	<div
 		class={cn(
-			'flex min-h-9 min-w-0 flex-wrap items-center gap-1 rounded-sm border border-input bg-background p-1 shadow-xs transition-colors dark:bg-input/30',
-			over && 'border-brand-400 bg-brand-muted/30',
+			'flex min-h-8 min-w-0 flex-wrap items-center gap-1 rounded-sm border border-input bg-background p-1 shadow-xs transition-colors dark:bg-input/30',
+			over && 'border-brand bg-brand-muted/30',
 			invalid && 'border-destructive',
 			disabled && 'opacity-50'
 		)}

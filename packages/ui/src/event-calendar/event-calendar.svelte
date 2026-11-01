@@ -276,21 +276,26 @@ Events on a day, week or month grid: timed boxes, all-day bars, month pills; dra
 	class={cn('flex h-full min-h-0 flex-col overflow-hidden rounded-lg border bg-card', className)}
 	data-event-calendar={shown}
 >
-	<header class="flex flex-wrap items-center justify-between gap-2 border-b px-4 py-2.5">
+	<header
+		class={cn(
+			'flex flex-wrap items-center justify-between gap-2 border-b px-4',
+			views.length > 1 ? 'pt-2.5' : 'py-2.5'
+		)}
+	>
 		<div class="flex min-w-0 flex-wrap items-center gap-1">
 			<Button
 				variant="ghost"
-				size="icon-sm"
+				size="icon"
 				aria-label={t('previous')}
 				onclick={() => go(step(shown, at, -1))}
 				><Icon icon="lucide:chevron-left" class="size-4" /></Button
 			>
-			<Button variant="ghost" size="sm" class="px-2.5 text-xs" onclick={() => go(new Date())}
+			<Button variant="ghost" class="px-2.5 text-xs" onclick={() => go(new Date())}
 				>{t('today')}</Button
 			>
 			<Button
 				variant="ghost"
-				size="icon-sm"
+				size="icon"
 				aria-label={t('next')}
 				onclick={() => go(step(shown, at, 1))}
 				><Icon icon="lucide:chevron-right" class="size-4" /></Button
@@ -300,6 +305,7 @@ Events on a day, week or month grid: timed boxes, all-day bars, month pills; dra
 		</div>
 		{#if views.length > 1}
 			<TabStrip
+				class="border-b-0"
 				label="View"
 				value={shown}
 				items={views.map((v) => ({ name: v, title: t(v) }))}
@@ -312,21 +318,21 @@ Events on a day, week or month grid: timed boxes, all-day bars, month pills; dra
 	</header>
 
 	{#if shown === 'month'}
-		<div class="grid grid-cols-7 border-b text-center">
+		<div class="mx-4 grid grid-cols-7 border-b text-center">
 			{#each weekdays as w (w)}<span class="py-1.5 text-overline text-muted-foreground">{w}</span
 				>{/each}
 		</div>
 		<div
-			class="grid min-h-0 flex-1 grid-cols-7 gap-px overflow-auto bg-border/60 p-px"
+			class="mx-4 mb-4 grid min-h-0 flex-1 grid-cols-7 gap-px overflow-auto bg-border p-px"
 			style:grid-template-rows="repeat({cells.length / 7}, minmax(6rem, 1fr))"
 		>
 			{#each cells as d (d.getTime())}
 				{@const list = onDay(events, d)}
 				<div
 					class={cn(
-						'flex min-w-0 flex-col gap-0.5 overflow-hidden bg-background p-1',
-						d.getMonth() !== at.getMonth() && 'opacity-40',
-						isWeekend(d) && 'bg-muted/20'
+						'flex min-w-0 flex-col gap-0.5 overflow-hidden bg-popover p-1 dark:bg-background',
+						isWeekend(d) && 'bg-muted dark:bg-muted/20',
+						d.getMonth() !== at.getMonth() && 'bg-background text-muted-foreground dark:bg-muted'
 					)}
 					data-day={d.getDate()}
 				>
@@ -344,7 +350,7 @@ Events on a day, week or month grid: timed boxes, all-day bars, month pills; dra
 					{#each list.slice(0, MAX_PILLS) as e (e.id)}
 						<button
 							type="button"
-							class="flex min-w-0 items-center gap-1 rounded-full bg-muted/60 px-1.5 py-0.5 text-left hover:brightness-95"
+							class="flex min-w-0 items-center gap-1 rounded-full bg-secondary px-1.5 py-0.5 text-left text-secondary-foreground hover:brightness-95 dark:bg-muted/60 dark:text-foreground"
 							onclick={() => onEventClick?.(e)}
 							data-event={e.id}
 						>
@@ -367,7 +373,7 @@ Events on a day, week or month grid: timed boxes, all-day bars, month pills; dra
 			{/each}
 		</div>
 	{:else}
-		<div bind:this={scroller} class="min-h-0 flex-1 overflow-auto" data-calendar-scroll>
+		<div bind:this={scroller} class="mx-4 mb-4 min-h-0 flex-1 overflow-auto" data-calendar-scroll>
 			<div class="relative" style:min-width="calc(3.5rem + {n * colWidth}px)">
 				<!-- the day headings and the all-day band stay pinned above the scrolling grid -->
 				<div class="sticky top-0 z-20 border-b bg-card">
@@ -377,13 +383,13 @@ Events on a day, week or month grid: timed boxes, all-day bars, month pills; dra
 							<div
 								class={cn(
 									'flex flex-1 flex-col items-center py-1.5',
-									isWeekend(d) && 'bg-muted/25'
+									isWeekend(d) && 'bg-muted dark:bg-muted/25'
 								)}
 							>
 								<span
 									class={cn(
 										'text-xs font-medium',
-										sameDay(d, now) ? 'text-brand-700' : 'text-muted-foreground'
+										sameDay(d, now) ? 'text-brand-text' : 'text-muted-foreground'
 									)}>{d.toLocaleDateString(locale, { weekday: 'short' })}</span
 								>
 								<span
@@ -400,7 +406,7 @@ Events on a day, week or month grid: timed boxes, all-day bars, month pills; dra
 							{#each bars.filter((b) => b.row < barRows) as b (b.e.id)}
 								<button
 									type="button"
-									class="absolute flex h-5 items-center gap-1 rounded-full bg-muted/60 px-2 text-left"
+									class="absolute flex h-5 items-center gap-1 rounded-full bg-secondary px-2 text-left text-secondary-foreground dark:bg-muted/60 dark:text-foreground"
 									data-event={b.e.id}
 									style:left="calc({b.from} * 100% / {n} + 2px)"
 									style:width="calc({b.span} * 100% / {n} - 4px)"
@@ -437,21 +443,24 @@ Events on a day, week or month grid: timed boxes, all-day bars, month pills; dra
 					<!-- svelte-ignore a11y_no_static_element_interactions -->
 					<div
 						bind:this={grid}
-						class={cn('relative flex-1 select-none', !readonly && 'touch-none cursor-crosshair')}
+						class={cn(
+							'relative flex-1 bg-popover select-none dark:bg-background',
+							!readonly && 'touch-none cursor-crosshair'
+						)}
 						style:height="{height}px"
-						style:background-image="repeating-linear-gradient(to bottom, var(--color-border) 0 1px,
-						transparent 1px {hourHeight}px)"
 						onpointerdown={(e) => !readonly && begin(e, 'create')}
 					>
 						{#each days as d, col (d.getTime())}
 							<div
 								class={cn(
-									'pointer-events-none absolute inset-y-0 border-l border-border/60',
-									isWeekend(d) && 'bg-muted/25',
-									sameDay(d, now) && !isWeekend(d) && 'bg-brand-50/15'
+									'pointer-events-none absolute inset-y-0 border-l border-border',
+									isWeekend(d) && 'bg-muted dark:bg-muted/25',
+									sameDay(d, now) && !isWeekend(d) && 'bg-brand/10'
 								)}
 								style:left="calc({col} * 100% / {n})"
 								style:width="calc(100% / {n})"
+								style:background-image="repeating-linear-gradient(to bottom, var(--color-border) 0
+								1px, transparent 1px {hourHeight}px)"
 							></div>
 							{#each timed[col] as e (e.id)}
 								{@const l = laneOf[col]!.get(e.id) ?? { lane: 0, of: 1 }}
@@ -459,8 +468,8 @@ Events on a day, week or month grid: timed boxes, all-day bars, month pills; dra
 								{@const editable = !readonly && e.editable !== false}
 								<div
 									class={cn(
-										'absolute overflow-hidden rounded-md border bg-card text-left shadow-xs transition-shadow hover:shadow-sm',
-										editable ? 'cursor-grab active:cursor-grabbing' : 'cursor-default opacity-70',
+										'absolute overflow-hidden rounded-md border bg-card text-left transition-colors hover:border-input',
+										editable ? 'cursor-grab active:cursor-grabbing' : 'cursor-default',
 										drag?.event?.id === e.id && drag.moved && 'opacity-40'
 									)}
 									style:top="{top}px"
@@ -509,7 +518,7 @@ Events on a day, week or month grid: timed boxes, all-day bars, month pills; dra
 						{/each}
 						{#if preview && drag}
 							<div
-								class="pointer-events-none absolute z-30 rounded-md border-2 border-dashed border-brand bg-brand-50 opacity-50"
+								class="pointer-events-none absolute z-30 rounded-md border-2 border-dashed border-brand bg-brand/15 opacity-50"
 								style:top="{preview.top}px"
 								style:height="{preview.h}px"
 								style:left="calc({drag.col} * 100% / {n} + 2px)"

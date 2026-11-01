@@ -48,7 +48,7 @@ Readonly, it is a label over the value as copyable text (or a `view` snippet): n
 <script lang="ts">
 	import { cn, provideControls, provideFieldControl, uiText } from '../primitives/utils.js';
 	import Editor from '../kinds/editor.svelte';
-	import DescriptionHint from './description-hint.svelte';
+	import FieldControl from './field-control.svelte';
 	import Show from '../kinds/show.svelte';
 	import { useForm } from './form-state.svelte.js';
 	import { claimSectionField } from './section.svelte';
@@ -73,16 +73,18 @@ Readonly, it is a label over the value as copyable text (or a `view` snippet): n
 	const t = uiText();
 	const bolt = useBolt();
 	const fieldLabel = useFieldLabel();
-	const labelClass = $derived(dense ? 'sr-only' : 'text-xs font-medium text-muted-foreground');
+	const errors = $derived(form?.fieldErrors);
+	const rawError = $derived(errors?.get(name));
+	const error = $derived(rawError === undefined ? undefined : bolt.t(rawError));
 	const field = $derived(form?.spec.fields.find((f) => f.name === name));
-	const description = $derived(help ?? field?.kind.help);
 	// derived from the field's kind as this write mode exposes it (a relation's `optional`, a host-filled create column):
 	// a box always holds a value
 	const mandatory = $derived(
 		field !== undefined && required(field.kind) && field.kind.kind !== 'bool'
 	);
 	const id = $props.id();
-	// a structure, code or long text takes its grid's whole row; short fields flow beside each other
+	// a structure, a map, code, long text or a custom datatype's editor takes its grid's whole row (short fields flow
+	// beside each other), and is a large control: it may hold a section alone
 	const wide = $derived(field !== undefined && wideKind(field.kind));
 	// svelte-ignore state_referenced_locally -- a field's editor snippet is fixed for its life
 	if (editor) provideFieldControl(() => `${id}-${name}`);
@@ -96,14 +98,6 @@ Readonly, it is a label over the value as copyable text (or a `view` snippet): n
 				: readonly,
 		disabled: form?.pending === true ? true : disabled
 	}));
-	// a broken invariant shows like a field error; a check or refusal error on the same key wins
-	const errors = $derived.by(() => {
-		if (form === undefined || form.semanticErrors.length === 0) return form?.errors;
-		const all = new Map(form.errors);
-		for (const issue of form.semanticErrors)
-			if (!all.has(issue.field)) all.set(issue.field, issue.message);
-		return all;
-	});
 </script>
 
 {#if form === undefined}
@@ -113,19 +107,17 @@ Readonly, it is a label over the value as copyable text (or a `view` snippet): n
 {:else if field.kind.hidden}
 	<!-- hidden: the host fills it -->
 {:else if controls.readonly}
-	<div
-		class={cn('grid min-w-0 content-start gap-1', wide && 'col-span-full', className)}
+	<FieldControl
+		id={`${id}-${name}`}
+		label={label ?? fieldLabel(name, field.kind.label)}
+		help={help ?? field.kind.help}
+		{error}
+		{dense}
+		readonly
+		class={cn(wide && 'col-span-full', className)}
 		data-field={name}
-		data-readonly
-		role="group"
-		aria-labelledby={`${id}-${name}-label`}
+		data-field-large={wide || undefined}
 	>
-		<div class="flex min-w-0 items-center gap-1">
-			<span id={`${id}-${name}-label`} class={cn(labelClass, 'min-w-0')}
-				>{label ?? fieldLabel(name, field.kind.label)}</span
-			>
-			{#if description && !dense}<DescriptionHint text={description} />{/if}
-		</div>
 		{#if view}
 			{@render view({ value: form.get(name), kind: field.kind, name, id: `${id}-${name}` })}
 		{:else}
@@ -147,28 +139,20 @@ Readonly, it is a label over the value as copyable text (or a `view` snippet): n
 					{t(reason)}
 				</p>{/each}
 		{/if}
-	</div>
+	</FieldControl>
 {:else}
 	{@const disabled = controls.disabled}
-	{@const rawError = errors?.get(name)}
-	{@const error = rawError === undefined ? undefined : bolt.t(rawError)}
-	<!-- the control the label names says it is required, whether the kind's editor or an `editor` snippet renders it -->
-	<div
-		class={cn('grid min-w-0 content-start gap-2', wide && 'col-span-full', className)}
+	<FieldControl
+		id={`${id}-${name}`}
+		label={label ?? fieldLabel(name, field.kind.label)}
+		help={help ?? field.kind.help}
+		{error}
+		{dense}
+		required={mandatory}
+		class={cn(wide && 'col-span-full', className)}
 		data-field={name}
-		{@attach (node) => {
-			const control = node.querySelector(`#${CSS.escape(`${id}-${name}`)}`);
-			if (mandatory) control?.setAttribute('aria-required', 'true');
-			else control?.removeAttribute('aria-required');
-		}}
+		data-field-large={wide || undefined}
 	>
-		<div class="flex min-w-0 items-center gap-1">
-			<label id={`${id}-${name}-label`} for={`${id}-${name}`} class={cn(labelClass, 'min-w-0')}>
-				{label ?? fieldLabel(name, field.kind.label)}
-				{#if mandatory}<span class="text-destructive" aria-label={t('required')}>*</span>{/if}
-			</label>
-			{#if description && !dense}<DescriptionHint text={description} />{/if}
-		</div>
 		{#if editor}
 			{@render editor({
 				value: form.get(name),
@@ -195,6 +179,5 @@ Readonly, it is a label over the value as copyable text (or a `view` snippet): n
 				onAddress={address === undefined ? undefined : (a) => form.set(address, a)}
 			/>
 		{/if}
-		{#if error}<p class="text-xs text-destructive" role="alert">{error}</p>{/if}
-	</div>
+	</FieldControl>
 {/if}

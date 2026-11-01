@@ -1,54 +1,104 @@
 ---
 name: bolt-primer
-description: How a Bolt workspace works and everything the platform already renders, so a change reuses it instead of rebuilding it.
+description: How a Bolt workspace works, what the platform already renders, and which native mechanism owns each job, so a change reuses it instead of rebuilding it.
 ---
+## Start with the compiler
+`workspace_lang` is the source of truth for the installed version: `diagnostics` (one file, or the whole program
+without `path`), `hover`, `type`, `completions` on an import, `definition`, `references` and `signature`. A type
+expression names a type with `import('@norbital-ai/bolt').X` and a value with `typeof import('@norbital-ai/bolt').x`;
+completions enumerate exports you cannot name yet; hover and type show the compiler's JSDoc, examples and deprecation
+guidance. After every edit run `diagnostics`; `workspace_validate` is the build and preview; `workspace_test` runs the
+test kit; `workspace_diagnose` is the full check. There is no separate docs tool.
+
+Before writing, read the authoring skill's reference for the thing you are about to author; its routing table names
+each. A clean build is not a test, and a compatible type is not proof of runtime authority.
+
 ## The workspace
-Everything is source under src/; a `+` file is a compiler role and its path is its name. +workspace.ts (zone, locale,
-connections); data/model/<name>/+model.ts with +representation.svelte (that model's record sheet);
-data/custom_field/<name>/+definition.ts (+renderer.svelte); access_control/policy/+<name>.policy.ts and team/+team.ts;
-integration/<name>/+integration.ts (+integration.svelte); agent/+agent.md, envoy/+<id>.envoy.ts, skill/<name>/+skill.md;
-automation/+<name>.automation.ts; app/<app>/+app.ts with +<page>.page.svelte (`import { bolt } from '$bolt'`);
-kiosk/<k>/+kiosk.ts; i18n/+messages.ts and +<locale>.messages.ts. Anything without `+` is an ordinary module
-(src/lib). .norbital/ is generated. The preview build writes the next migration into the change: never hand-write one.
-Before writing, read a sibling that already does the same thing, and the docs tool for the exact API.
+Everything is source under src/; a `+` file is a compiler role and its path is its name. `+workspace.ts` (zone, locale,
+connections); `data/model/<name>/+model.ts` with an optional `+representation.svelte`; `data/custom_field/<name>/`
+(`+definition.ts`, optional `+renderer.svelte`); `access_control/policy/+<name>.policy.ts` and `team/+team.ts`;
+`integration/<name>/+integration.ts` (+ optional `.svelte`); `agent/+agent.md`, `envoy/+<id>.envoy.ts`,
+`skill/<name>/+skill.md`; `automation/+<name>.automation.ts`; `app/<app>/+app.ts` with `+<page>.page.svelte`
+(`import { bolt } from '$bolt'`); `kiosk/<k>/+kiosk.ts`; `i18n/+messages.ts` and `+<locale>.messages.ts`. Anything
+without `+` is an ordinary module (`src/lib`). `.norbital/` is generated. The preview build writes the next migration
+into the change: never hand-write one.
 
-## What the platform renders: never rebuild it
-- Table `of` a model: the toolbar (title, ⓘ description, search, filter and sort, column menu, CSV export, the ⚡
-  actions menu, New), selection with bulk update and delete, cursor paging with its footer, empty states, approval
-  accents, and the record sheet when a row opens. Search appears when the model declares search.text: never add a
-  search box. `where` is the fixed scope, `initialFilter` a filter the viewer can clear. Columns render by kind, a
-  link column shows the linked row's label; a `cell` snippet only for a value computed for display.
-- The ⚡ menu offers the model's file syncs (Import, Download template, Export), Sync now, Update and Delete selected;
-  `toolbar.actions` adds page operations (`{ icon, name, description, run, requiresSelection? }`): the menu shows
-  their spinner, outcome and run. Never add buttons around a view.
-- CustomView draws any other body over rows with the same toolbar (`model` adds that model's syncs and New); Board,
-  Map, Pivot, Matrix, EventCalendar and Chart take the same toolbar.
-- AppShell: icon, title, description render the page hero once; its `actions` snippet is the page scope (company,
-  site, period, month): one set of pickers in the header that every view of the page reads. Never put a scope picker
-  in a toolbar or above a view. The app's pages come from +app.ts `pages`; Tabs only split one page's sub-views.
-- Record sheet: RecordShell renders the representation (Form, Section, Field) with the state pill, lock banner,
-  approval panel (approve, reject, request changes; Resubmit), history with restore, and runs. Grants, state edges,
-  enum transitions, locked, check and noOverlap are enforced and shown: never re-check them in a form. readonly shows
-  a value as text; disabled keeps the editor visible but inert.
-- Every field kind renders and edits itself in cells, forms and history: text formats (email, phone, url, markdown,
-  zone), money, numbers, dates and periods, enum and state words (i18n `models.<m>.fields.<f>.<value>`), files with
-  previews, points with maps, links as pickers of readable rows, typed json. Never map labels by hand, never show an id.
-- The shell owns the inbox (approvals), notifications (a model's notify), Settings (people, organisation, audit,
-  automation runs, integrations, secrets), the finder (models with search.text), Studio and kiosks.
-- An integration's +integration.ts is its driver; the generic setup renders pairing, test, reconnect and disconnect,
-  so +integration.svelte only when setup truly differs. Instances are sys_integration rows.
+## The model is the contract
+A model is the entity and its exposed contract, not a screen. Declare what it stores (`fields`, `ref` fields with
+`inverse`, keys, checks, computed fields, `search`) and what callers may do (`read` outputs and layers, `create`,
+`update`, `delete`, state/enum `transitions`, write callbacks, `notify`, `effect`, `syncs`). A `read` is the `default`
+output; `outputs` are narrower named audiences. A policy decides which outputs and rows a caller reads and which
+columns and state moves they write; a model declaration alone never grants access.
 
-## A capability the workspace lacks
-An outside API (transcription, translation, a vendor's catalogue) is source, never a pasted key: an http integration
-(integration/<name>/+integration.ts, driver 'http', its base URL and auth) holds the credential the person enters when
-they set its instance up in Settings → Integrations, and an automation with typed inputs calls it through ctx.request;
-agents then start that automation. A key the code itself needs (an OAuth client, an MCP token) is declared in
-src/+secrets.ts and its value entered in Settings → Secrets. Never ask for, accept or write a key in chat or source.
-A procedure worth repeating is a skill (agent/skill/<name>/+skill.md, with scripts run_js runs as written).
+Prefer fewer, richer entities. Use a built-in field kind first; a `customField` for a reusable stored structure with
+its own validation/renderer; typed `json` with a `shape` for a value that belongs to its parent; a separate model only
+when the thing needs independent identity, lifecycle, permissions, history or relational queries. Store configuration
+in authorized runtime records, not in source constants. Never put a credential, token or secret value in a model field.
 
-## A page, always the same shape
-AppShell (identity; page scope in `actions`) → one view of the subject model scoped by `where` from that scope,
-toolbar title of 1–3 words and its purpose in description → page operations in toolbar.actions, row operations in
-row actions, record operations in the record sheet. No heading that repeats the hero, no paragraph or button row
-above a view, no hand-made search, filter, paging, export or empty state. Data: one bolt.query per view with its
-layers (never a read per row, never $effect to fetch); materialise time with bolt.clock before it enters a query.
+## Access, approvals and state
+A `policy` grants per model: read outputs and row filters, write columns, state moves, capabilities (apps, host tools,
+MCP), automations it may start and limits. Teams hold policies; the policy graph scopes data without inheriting
+authority. Direct permission executes; without it, a policy's `check` may return `ctx.approve(flow)` and the write is
+held as a native approval request. The flow's named steps and approvers are snapshotted; decisions are `approve`,
+`reject` and `requestChanges`; rejection restores the checkpoint, and the requester's next Save resubmits requested
+changes. Use the record sheet's native approval panel; never add a second approval control or re-check grants in a page.
+State locks, enum transitions, `check`, `noOverlap` and required fields are enforced by the engine and shown by the
+native form. A `requestor` variable is the acting member; an automation's `requestor` is not the person who started it.
+
+## Automations
+An `automation` is a job the reserved system identity runs with its declared `policies` (required), typed `input` and
+`output`, an optional `on` (cron or webhook), retries and concurrency. `ctx.run.trigger` records `system` and its cause
+(cron, webhook, effect, schedule) or the `person`, plus the agent conversation when Norbius started it; check it
+explicitly when business rules depend on the starter. A person who may start a job does not lend it their authority.
+Every startable automation appears in the native Command Center Automations with its typed form; a page form is
+optional. Use an automation for external I/O, a scheduled or webhook job, and a business operation that needs its own
+authority and run history. A model `effect` is the work that follows a committed write, runs as the writer and holds no
+policy of its own. `ctx.schedule` queues a follow-up; `bolt.start` starts one from a page.
+
+## Infer and decide
+`ctx.ai.sys_1.decide` answers typed choice/score questions from text and images; `ctx.ai.sys_2.infer` returns a typed
+structure (or calls declared host tools); `ctx.ai.embed` fills a vector field. These are proposals: a write still runs
+through the model's grants, checks and approvals, and a person confirms anything that changes money or access. Hosts do
+not run an LLM themselves; an integration names the hosted provider and its sealed credential. Use scripted provider
+output in tests, never a live model.
+
+## Sync engine
+A model's `syncs` declares exchange. A file sync uses `with: 'file'`, `parser` (built-in or typed `parse`), optional
+`context`, and inline `read`/`write` bodies; the native toolbar then owns Import, Download template and Export. A
+remote sync names an integration `with`, an optional `every`, and typed `read`/`write`; it runs as a job, and only
+returned source fields change. Workbook importers, CSV feeds and repeated exports belong here, not in a page script or
+an ad-hoc automation. `ctx.sync` starts a named sync.
+
+## The UI is already there
+`Table` of a model renders the toolbar (title, description, search, filter/sort, column menu, CSV export, ⚡ actions,
+New), selection, paging, empty states, approvals and the record sheet. `CustomView` draws any other body over rows with
+the same toolbar; `Board`, `Map`, `Pivot`, `Matrix`, `EventCalendar` and `Chart` take the same toolbar. `AppShell`
+renders the page hero and the page scope in `actions`; pages come from `+app.ts`. `RecordShell` renders a model's
+representation (or generated fields) with the state pill, lock banner, approval panel, history and runs. A
+`+representation.svelte` receives `{ view }` or reads `useRecordView()`; it edits the record's own facts and uses
+`ChildGrid` for related rows. `Form` renders authorized fields, defaults, required checks, state moves and approval
+routing. Every built-in kind renders and edits itself in cells, forms and history: text formats, money, numbers, dates,
+periods, enum/state words, files, points, links and typed JSON. Never hand-build search, filters, paging, import/export,
+history, approvals or a label map. Use a chart only when it answers a question a table cannot; read `ui-standard.md`.
+
+## Implicit mechanisms: never rebuild
+The shell owns the approval inbox, notifications (`notify`), history/restore, audit, runs, the finder (models with
+`search.text`), Settings (people, organisation, audit, automation runs, integrations, secrets) and Studio. A declared
+file sync adds Import/Export/Template. A model's `notify` receives every write and approval event. A page opens a
+record through `RecordShell`; it never imports a role module or writes its own sheet. Permissions, locks, transitions
+and required fields are enforced, not advisory.
+
+## A rebuild or a new capability? Do the pass
+For a repository rebuild read the `authoring-tenant-workspace` skill's `references/repository-rebuild.md`.
+Before authoring, list every source capability and choose its Bolt mechanism: model/relationship; read output/layer;
+guarded write/check/approval; page and task flow; representation/record sheet; automation; file or remote sync;
+custom field vs built-in kind vs typed JSON vs child model; chart/summary; team/policy; test. A skipped category is a
+recorded decision with a reason, never a silent omission. A rebuild with no automations, syncs, charts or
+representations should say why for each.
+
+## References
+The `authoring-tenant-workspace` skill's routing table is the index. Read only the reference the task needs: model boundaries,
+models-and-modeling, data-access, apps-and-server-roles, built-ins, app-structure, ui-standard,
+controller-surfaces, layout-and-scrolling, padding-and-spacing, typography, generated-and-build,
+hosts-and-facilities, internationalization, template-repository, studio, repository-rebuild. Policy and approval
+behaviour is in `norbital-platform`; tests are in `authoring-test-suites`.

@@ -27,6 +27,8 @@
 		values?: FormProps<C>['values'];
 		/** Generated view: create offers these beyond `values`' keys; update shows only these, in this order (else every field). */
 		fields?: FormProps<C>['fields'];
+		/** Pure draft rules, shared with the model's guarded write. */
+		validate?: FormProps<C>['validate'];
 		/**
 		 * Generated view (read, edit, create): the fields grouped into collapsible `Section`s, in order; fields no section
 		 * lists follow in one untitled, always-open group. Titles and summaries arrive translated.
@@ -34,6 +36,8 @@
 		sections?: readonly RecordSection[];
 		/** The heading; default the record's label fields by kind (a create: "New <singular>"). */
 		title?: string;
+		/** Hide the model noun when the authored heading already identifies the record. */
+		eyebrow?: boolean;
 		/** A line under the heading: text, or field names shown by kind (`['customer', 'due_on']` → `Acme · Jan 2, 2026`). */
 		subtitle?: string | readonly string[];
 		/** Iconify id inside the state pill. */
@@ -58,7 +62,8 @@
 		runs?: readonly RunsForProps[];
 		/**
 		 * The representation's body; absent → the representation registered for `of`, else the generated view. It receives
-		 * the record shown — the scrubbed revision while one is picked — as `useRecordView()` also does beneath.
+		 * the record shown — the scrubbed revision while one is picked — as `useRecordView()` also does beneath. A model's
+		 * `+representation.svelte` takes `{ view: RecordView<C> }` or reads `useRecordView()`, never `$props().row`/`record`.
 		 */
 		children?: Snippet<[RecordView<C>]>;
 		onDone?: (outcome: Outcome) => void;
@@ -88,7 +93,7 @@
 	import ChildGrid from '../relations/ChildGrid.svelte';
 	import Alert from '../primitives/alert/alert.svelte';
 	import { useKinds } from '../kinds/context.js';
-	import { fieldsText, format } from '../kinds/kind.js';
+	import { fieldsText, format, recordText } from '../kinds/kind.js';
 	import { openRecord } from './navigation.js';
 	import { provideModel } from '../model/context.js';
 	import { provideRecordView, representations } from './context.js';
@@ -125,8 +130,10 @@
 		mode = 'view',
 		values,
 		fields = [],
+		validate,
 		sections = [],
 		title,
+		eyebrow = true,
 		subtitle,
 		icon,
 		badge,
@@ -140,6 +147,11 @@
 		children,
 		onDone
 	}: RecordShellProps<C> = $props();
+	// `of` and `id` are re-read whenever the parent updates (the shell's sheet list builds fresh entries on every URL
+	// change); what loads (the read, the representation, the approvals) keys on their values, so an unchanged record
+	// never drops to its skeleton and back
+	const readOf = $derived(of),
+		readId = $derived(id);
 	const bolt = useBolt();
 	const kinds = useKinds();
 	const formText = uiText();
@@ -201,13 +213,17 @@
 	const registry = representations();
 	// the representation's module loads on first use, so importing it (and `$bolt`) waits for a record to show
 	const Representation = $derived(
-		inside === of || children !== undefined ? undefined : registry?.[of]?.().then((m) => m.default)
+		inside === readOf || children !== undefined
+			? undefined
+			: registry?.[readOf]?.().then((m) => m.default)
 	);
 
 	// read in this component, the query is live: it follows the record's revisions until the shell unmounts
 	const record = $derived(
-		mode !== 'create' && id !== undefined
-			? mapped(bolt.query<QueryAnswer<StoredRecord>>(byId(of, id)), (answer) => firstOf(answer, of))
+		mode !== 'create' && readId !== undefined
+			? mapped(bolt.query<QueryAnswer<StoredRecord>>(byId(readOf, readId)), (answer) =>
+					firstOf(answer, readOf)
+				)
 			: null
 	);
 	const loaded = $derived(queryState(record));
@@ -333,9 +349,9 @@
 				.get(submittedId)
 				.pipe(Effect.map((request) => (request === null ? [] : [request])));
 		if (mode !== 'create' && loaded.kind !== 'ready') return null;
-		return id === undefined
+		return readId === undefined
 			? Effect.succeed([])
-			: bolt.approvals.list({ model: of, records: [id], all: true });
+			: bolt.approvals.list({ model: readOf, records: [readId], all: true });
 	});
 	const openRequest = $derived(
 		(requests.current ?? []).find(
@@ -405,7 +421,7 @@
 	});
 	$effect(() => {
 		if (toEyebrow === undefined || !framed) return;
-		toEyebrow(heading ? singular(bolt, of) : null);
+		toEyebrow(eyebrow && heading ? singular(bolt, of) : null);
 		return () => toEyebrow(null);
 	});
 	setContext(CHROME, undefined);
@@ -555,8 +571,7 @@
 		else if (mode === 'create' && mine !== undefined) openRecord(of, mine.id);
 	}
 
-	// the heading: the author's title, else the record's label fields by kind, else (a create, an unlabelled record) the
-	// model's label; above a record's own heading, the singular model label
+	// the heading: the author's title, else the record's label fields by kind, else the record id (a create keeps the model's label); above a record's own heading, the singular model label
 	// a relation in the heading or subtitle reads as its target's label (a table cell's rule): one read of the record with
 	// those targets' labels nested, never its id (blank until it arrives)
 	const labelled = $derived(
@@ -604,7 +619,16 @@
 						model: of
 					}
 				);
-	const heading = $derived(title ?? (mode !== 'create' ? shownAs(exposure?.label ?? []) : ''));
+	const heading = $derived(
+		title ??
+			(mode !== 'create'
+				? row !== null && typeof row['$label'] === 'string' && row['$label'].trim() !== ''
+					? row['$label']
+					: exposure?.record_label !== undefined && row !== null
+						? recordText(exposure, { ...row, ...related?.current })
+						: shownAs(exposure?.label ?? []) || row?.id || id || ''
+				: '')
+	);
 	const subline = $derived(
 		typeof subtitle === 'string' ? subtitle : subtitle === undefined ? '' : shownAs(subtitle)
 	);
@@ -641,7 +665,7 @@
 
 {#snippet head()}
 	<div class="flex min-w-0 flex-col" data-record-head>
-		{#if heading && toEyebrow === undefined}<span
+		{#if eyebrow && heading && toEyebrow === undefined}<span
 				class="text-micro text-muted-foreground truncate leading-4">{singular(bolt, of)}</span
 			>{/if}
 		<div class="flex min-w-0 flex-wrap items-center gap-2 sm:flex-nowrap">
@@ -704,21 +728,13 @@
 			{#if lockedHere}
 				<Tooltip text={lockReason}>
 					{#snippet trigger({ props })}
-						<Button
-							{...props}
-							size="sm"
-							variant="outline"
-							disabled
-							aria-label={lockReason}
-							data-record-lock
-						>
+						<Button {...props} variant="outline" disabled aria-label={lockReason} data-record-lock>
 							<Icon icon="lucide:lock" class="size-3.5" />
 						</Button>
 					{/snippet}
 				</Tooltip>
 			{:else if canEdit}
 				<Button
-					size="sm"
 					variant="outline"
 					class="min-w-[4.25rem] justify-center"
 					onclick={() => controller?.edit()}>{msg(bolt, 'record.edit', 'Edit')}</Button
@@ -737,7 +753,6 @@
 					aria-label={msg(bolt, 'record.editing', 'Editing')}
 				>
 					<Button
-						size="sm"
 						variant="ghost"
 						disabled={controller.pending}
 						onclick={() => {
@@ -761,7 +776,6 @@
 						<Icon icon="lucide:undo-2" class="size-3.5" />{msg(bolt, 'record.cancel', 'Cancel')}
 					</Button>
 					<Button
-						size="sm"
 						disabled={!controller.canSave || !controller.dirty}
 						onclick={() => (controller === null ? undefined : fork(controller.submit()))}
 						data-record-save
@@ -784,6 +798,7 @@
 			{of}
 			mode="create"
 			{values}
+			{validate}
 			{...fields.length > 0 ? { fields } : {}}
 			{sections}
 			class="shrink-0"
@@ -793,6 +808,7 @@
 			{of}
 			mode="update"
 			{id}
+			{validate}
 			record={row}
 			{...fields.length > 0 ? { fields } : {}}
 			{sections}
@@ -804,6 +820,7 @@
 					{of}
 					mode="update"
 					{id}
+					{validate}
 					record={row}
 					{...fields.length > 0 ? { fields } : {}}
 					{sections}
@@ -892,7 +909,7 @@
 {#snippet pastPill(p: Row)}
 	<!-- a past revision is read-only; back to current is the live, editable record -->
 	<div
-		class="border-brand/25 bg-brand/10 text-brand-700 dark:text-brand-400 flex w-fit max-w-full items-center gap-2 rounded-full border py-0.5 pr-1 pl-2.5 text-xs"
+		class="border-brand/25 bg-brand/10 text-brand-text flex w-fit max-w-full items-center gap-2 rounded-full border py-0.5 pr-1 pl-2.5 text-xs"
 		role="status"
 		data-record-past={viewing}
 	>

@@ -118,6 +118,22 @@ type InviteInput = {
 		id: string;
 	};
 };
+/** The same invitation input for native forms and confirmed `act` batches. Never accepts policy assignments. */
+export const InvitationInput = Schema.Record(Schema.String, Schema.Json)
+	.check(Schema.makeFilter((input) => !('assignments' in input) && !('policies' in input)))
+	.pipe(
+		Schema.decodeTo(
+			Schema.Struct({
+				email: Schema.optionalKey(Schema.NonEmptyString),
+				phone: Schema.optionalKey(Schema.NonEmptyString),
+				team: Schema.optionalKey(Schema.NonEmptyString),
+				external: Schema.Boolean.pipe(Schema.withDecodingDefaultKey(Effect.succeed(false))),
+				party: Schema.optionalKey(
+					Schema.Struct({ model: Schema.NonEmptyString, id: Schema.NonEmptyString })
+				)
+			}).check(Schema.makeFilter((input) => input.email !== undefined || input.phone !== undefined))
+		)
+	);
 const deliver = Effect.fn('Bolt.deliver')(function* (
 	h: IdentityHost,
 	to: readonly Address[],

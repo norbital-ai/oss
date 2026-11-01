@@ -5,7 +5,7 @@ description: Modelling a workspace's data in Bolt - models, field kinds, links, 
 
 ## Decide the models
 
-A model is a table people work on: model('<name>', { description, icon, label, fields, … }). Prefer fewer models: a
+A model is a table people work on: model('<name>', { description, icon, record_label, fields, … }). Prefer fewer models: a
 value its parent owns, with no identity, lifecycle, permissions, history or relational query of its own, is an inline
 typed value (json with a shape, or a custom field type). Business variation that people configure (rates, catalogues,
 rules) is records; source defines the language and the rules that run them.
@@ -17,8 +17,14 @@ bool, date, instant, time, duration, period (an effective range), enum (values; 
 states, each { to, edit }: the record's lifecycle; it moves only along its edges and edit says what stays editable),
 seq (a patterned number per scope), file (many), point, json with shape (object, list, record, union), and custom
 field types (data/custom_field/<name>/+definition.ts, a shape and validation, optional renderer). Each takes optional,
-default, unique, label, help, hidden; `was` keeps data through a rename. label names the fields a row reads as
-(never an id or a link).
+default, unique, label, help, hidden; `was` keeps data through a rename. Declare a model's human-readable identifier
+once, optionally, as `record_label: "record.code + ' · ' + record.name"`: pure CEL over own stored/computed fields or nested inline
+values. Use conditionals for optional values and `string(value)` for numbers; no cross-record lookups or clocks.
+The engine materializes and indexes it automatically, recalculates it on writes, and rebuilds it on expression changes.
+`search.text` adds other terms. RecordShell, table/list titles, default board headings, pickers, references and search
+results reuse it; explicit authored titles/cells may override display. Approvals resolve and search the same current value through their model + record id reference;
+never duplicate a target label on approval_request. Outputs must expose its dependencies. Legacy model `label` fields/lists remain compatible;
+field `label` captions stay ordinary text. Omitting `record_label` is valid: consumers use the record UUID, including approval targets, and record search needs explicit `search.text`. Do not create a duplicate title/calculated field. When record_label is omitted, use the UUID directly as the display fallback; this does not create a text index.
 A link is a ref field { kind: 'ref', to, inverse, optional?, onDelete?: restrict | cascade | setNull, owned? }: the
 other model reads the inverse as a many-relation. An owned child is created and deleted through its parent.
 

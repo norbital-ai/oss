@@ -497,6 +497,8 @@ export interface SecretsPort {
 export type AiMessage = { role: 'user' | 'assistant' | 'tool'; content: Json };
 export type AiRequest = {
 	model: string;
+	/** Host usage attribution; omitted for utility inference, set by the conversation engine for chat work. */
+	purpose?: 'chat';
 	system?: string;
 	messages: readonly AiMessage[];
 	tools?: readonly { name: string; description: string; input: Json }[];
@@ -613,12 +615,19 @@ export type BrowserStep =
  * site data kept between calls: a person's id, or `BROWSER_RUN_PROFILE` + `<run id>:<inference id>` for one inference of a run.
  * Pages answer as text with a ref on every control; a PDF answers its extracted text, page by page.
  */
+/** The page's own CSS size and pixel density: what the person's browser would lay out at. */
+export type BrowserViewport = {
+	width: number;
+	height: number;
+	deviceScaleFactor?: number;
+};
 export interface BrowserPort {
 	navigate(
 		profile: string,
 		to: BrowserTarget,
 		find: string | undefined,
-		signal: AbortSignal
+		signal: AbortSignal,
+		viewport?: BrowserViewport
 	): Promise<Json>;
 	snapshot(
 		profile: string,
@@ -954,6 +963,8 @@ export type ImageFacts = {
 };
 export type ImagePreviewSize = 64 | 512 | 1024;
 export type ImagePreviewMime = 'image/jpeg' | 'image/png' | 'image/heic' | 'image/heif';
+/** A rectangle in the oriented image, with coordinates from zero to one. */
+export type ImageCrop = { left: number; top: number; right: number; bottom: number };
 /** A preview at most `maxEdge` on its long side, EXIF-oriented; `derived: false` is the original (an APNG, a HEIC sequence). */
 export type ImagePreview = {
 	readonly bytes: Uint8Array;
@@ -967,6 +978,8 @@ export type ImagePreview = {
 export interface ImagesPort {
 	facts(bytes: Uint8Array, signal: AbortSignal): Promise<ImageFacts>;
 	jpeg(bytes: Uint8Array, maxEdge: number, signal: AbortSignal): Promise<Uint8Array>;
+	/** Lossless PNG of the selected oriented pixels, at most 5 MiB; the source stays unchanged. */
+	crop(bytes: Uint8Array, box: ImageCrop, signal: AbortSignal): Promise<Uint8Array>;
 	preview(
 		bytes: Uint8Array,
 		mime: ImagePreviewMime,

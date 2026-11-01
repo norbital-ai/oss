@@ -11,6 +11,8 @@
 	import Form from '../src/form/form.svelte';
 	import Field from '../src/form/field.svelte';
 	import type { FormState } from '../src/form/form-state.svelte.js';
+	const validate = (values: Readonly<Record<string, unknown>>) =>
+		values['title'] === 'bad' ? [{ field: 'title', message: 'Title cannot be bad' }] : [];
 	let {
 		bolt,
 		catalog,
@@ -34,7 +36,7 @@
 {#if part === 'record'}
 	<RecordShell of="jobs" id="j1">
 		{#snippet children()}
-			<Form of="jobs" id="j1">
+			<Form of="jobs" id="j1" {validate}>
 				{#snippet children(form)}<div {@attach () => onForm(form)}>
 						<Field name="title" />
 					</div>{/snippet}
@@ -42,7 +44,7 @@
 		{/snippet}
 	</RecordShell>
 {:else}
-	<Form of="jobs" mode="create">
+	<Form of="jobs" mode="create" {validate}>
 		{#snippet children(form)}<div {@attach () => onForm(form)}>
 				<Field name="title" />
 			</div>{/snippet}

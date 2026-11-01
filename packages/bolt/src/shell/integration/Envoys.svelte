@@ -4,6 +4,8 @@
 -->
 <script lang="ts">
 	import { Effect, Option, Schema } from 'effect';
+	import { watch } from 'runed';
+	import type { SystemUiIntent } from '../../protocol/system-ui.ts';
 	import type { Json } from '../../decl/values.ts';
 	import { fork, observeOnce } from '@norbital-ai/ui/effect';
 	import {
@@ -31,7 +33,8 @@
 		t,
 		locale,
 		onManage,
-		reload
+		reload,
+		configuration = null
 	}: {
 		api: ShellApi;
 		bolt: ShellBolt;
@@ -40,6 +43,7 @@
 		locale: string;
 		onManage: (instance: string) => void;
 		reload: () => Effect.Effect<void>;
+		configuration?: SystemUiIntent | null;
 	} = $props();
 
 	type Envoy = Settings['envoys'][number];
@@ -97,6 +101,14 @@
 	});
 	let creating = $state(false);
 	let newName = $state('');
+	watch(
+		() => configuration?.key,
+		() => {
+			if (configuration?.request.capability !== 'envoy.create') return;
+			newName = '';
+			creating = true;
+		}
+	);
 	let wiring = $state<{
 		envoy: Pick<Envoy, 'id' | 'name'>;
 		offer: WireOffer;
@@ -196,7 +208,6 @@
 			onclick={(event: MouseEvent) => event.stopPropagation()}
 		>
 			<Combobox
-				size="sm"
 				aria-label={t('Provider')}
 				placeholder={t('Choose provider')}
 				options={providers.map((offer) => ({

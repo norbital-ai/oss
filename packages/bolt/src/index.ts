@@ -6,7 +6,7 @@ export { policy } from './decl/access/policy.ts';
 export { team } from './decl/access/team.ts';
 export type { SourceTeam, TeamData, TeamEntries, TeamEntry, TeamSpec } from './decl/access/team.ts';
 export { envoy, mcp } from './decl/runtime/agent.ts';
-export type { EnvoySpec } from './decl/runtime/agent.ts';
+export type { EnvoySpec, McpBase, McpSpec } from './decl/runtime/agent.ts';
 export { app, group, messages, secrets, workspace } from './decl/runtime/app.ts';
 export type { AppSpec, DeviceRequirement, EmbedOrigin, GroupSpec } from './decl/runtime/app.ts';
 export { kiosk } from './decl/runtime/kiosk.ts';
@@ -182,6 +182,7 @@ export type {
 	SyncCallable,
 	SyncName,
 	SyncState,
+	TargetName,
 	TeamName,
 	WritePath
 } from './decl/names.ts';
@@ -233,6 +234,7 @@ export type {
 	ConvertTarget,
 	ConvertTargets,
 	DecisionAnswers,
+	DecisionEntry,
 	DecisionQuestion,
 	DecisionState,
 	FileMeta,

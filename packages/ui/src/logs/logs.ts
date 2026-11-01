@@ -22,9 +22,9 @@ export const ROW_HEIGHT = 22;
 /** A preview never highlights more than this many characters: the line truncates long before. */
 const PREVIEW = 400;
 const TOKENS = tagHighlighter([
-	{ tag: t.propertyName, class: 'text-[var(--info)]' },
-	{ tag: t.string, class: 'text-[var(--success)]' },
-	{ tag: [t.number, t.bool, t.null], class: 'text-[var(--brand-600)]' },
+	{ tag: t.propertyName, class: 'text-info' },
+	{ tag: t.string, class: 'text-success' },
+	{ tag: [t.number, t.bool, t.null], class: 'text-brand' },
 	{ tag: [t.punctuation, t.separator, t.brace, t.squareBracket], class: 'text-muted-foreground' }
 ]);
 /** One highlighted run of a preview; `cls` is empty for unstyled text. */

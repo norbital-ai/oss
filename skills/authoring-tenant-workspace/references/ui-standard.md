@@ -14,12 +14,12 @@ Checks every template page passes. Each links to the rule's home; this page only
    flush left in that order; New alone flush right. At phone width the row wraps in the same order,
    New still last and right. No button above, beside or in a view header.
    [app-structure](app-structure.md#the-page-is-its-subject)
-5. Record sheet: title = the record's label, overline = the singular model label, subtitle = fields;
+5. Record sheet: title = the model's optional `record_label` CEL identifier (otherwise the record UUID), overline = the singular model label, subtitle = fields;
    one primary action, the rest in overflow.
 6. A row click opens the record; one-row operations are the view's row `actions`, never loose buttons in cells.
 7. Every label comes from the catalog (model, field, enum value), never a humanized key.
    [internationalization](internationalization.md#key-conventions)
-8. Never an id on screen. [controller-surfaces](controller-surfaces.md#6-never-show-system-uuids--even-for-relationships)
+8. Use the record UUID when no record_label is declared. [controller-surfaces](controller-surfaces.md#6-record-identifiers-and-uuid-fallback)
 9. Kinds carry meaning: `date`, `money`, `currency`, markdown text; no hand-written formatting.
    [models-and-modeling](models-and-modeling.md#field-kinds)
 10. The kit formats: a date medium; an instant medium with short time; money `CODE 1,234.00`;
@@ -52,3 +52,9 @@ Checks every template page passes. Each links to the rule's home; this page only
     table read; supply create values explicitly. Reuse the model representation and native
     controller, and close the create sheet on a committed or `pendingApproval` outcome. Verify
     the resulting foreign key and persisted record through the actual UI.
+20. One chromatic action per view: `Button variant="brand"` at most once. Every other action is
+    neutral (`default`, `outline`, `secondary` or `ghost`). Never paint a second button with
+    `bg-brand`, and never use brand orange for decoration.
+21. Surfaces separate with hairlines, not shadows: `border border-border` on `bg-card`. Cards are
+    12px maximum, controls 6px, badges 4px, pills fully round. Do not add `shadow-card`, a glow,
+    or a 16px+ panel radius.

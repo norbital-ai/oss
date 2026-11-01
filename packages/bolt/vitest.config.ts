@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 import type { Plugin } from 'vite';
 import { defineConfig } from 'vitest/config';
 
-/** Same-origin SSE for Chromium `EventSource` tests — not a second live server. */
+/** Same-origin SSE for browser `EventSource` tests — not a second live server. */
 function liveFixture(): Plugin {
 	const hello = JSON.stringify({ t: 'hello', conn: 'browser', v: 0 });
 	const patch = JSON.stringify({ t: 'patch', view: 'orders', v: 1, ops: [] });
@@ -64,7 +64,8 @@ const SOURCE = Object.entries({
 }));
 
 // One Node project (unit and PGlite files alike, a minute's hang guard) and the browser project
-// (https://vitest.dev/guide/browser/): one headless Chromium shared by its files. Each project is self-contained
+// (https://vitest.dev/guide/browser/): one headless Chromium browser shared by its files.
+// Agent web browsing uses its separate Obscura fleet. Each project is self-contained
 // (`extends: false`): none inherits the root's plugins or test options.
 
 export default defineConfig({

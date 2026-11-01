@@ -14,7 +14,7 @@ import {
 	where as decodeWhere
 } from './decode.ts';
 import { StoreError } from './errors.ts';
-import { sha256Hex } from './hash.ts';
+import { sha256Hex } from '@norbital-ai/std/hash';
 import type { ListRead, Pred, SelectIR } from './ir.ts';
 import { budgeted, Build, compile, items, OVER, pred, RAW, wire, type Sql } from './read/sql.ts';
 import { STORE_LIMITS } from './limits.ts';

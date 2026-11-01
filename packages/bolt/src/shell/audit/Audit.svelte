@@ -409,7 +409,6 @@ once (Refresh, or the opt-in Auto-refresh). -->
 		</span>
 		<div class="flex items-center gap-1">
 			<Combobox
-				size="sm"
 				variant="ghost"
 				class="w-28"
 				searchable={false}
@@ -424,7 +423,7 @@ once (Refresh, or the opt-in Auto-refresh). -->
 				}}
 			/>
 			<Button
-				size="icon-sm"
+				size="icon"
 				variant="ghost"
 				aria-label={t('Previous page')}
 				hint={t('Previous page')}
@@ -434,7 +433,7 @@ once (Refresh, or the opt-in Auto-refresh). -->
 				<Icon name="lucide:chevron-left" class="size-4" />
 			</Button>
 			<Button
-				size="icon-sm"
+				size="icon"
 				variant="ghost"
 				aria-label={t('Next page')}
 				hint={t('Next page')}
@@ -459,7 +458,6 @@ once (Refresh, or the opt-in Auto-refresh). -->
 			<Cluster>
 				<ToolbarSearch bind:value={text} label={t('Search audit events and payloads')} />
 				<Combobox
-					size="sm"
 					class="w-36"
 					searchable={false}
 					aria-label={t('Date range')}
@@ -476,7 +474,6 @@ once (Refresh, or the opt-in Auto-refresh). -->
 					}}
 				/>
 				<Combobox
-					size="sm"
 					class="w-36"
 					searchable={false}
 					clearable
@@ -489,7 +486,6 @@ once (Refresh, or the opt-in Auto-refresh). -->
 					}}
 				/>
 				<Combobox
-					size="sm"
 					class="w-36"
 					searchable={false}
 					clearable
@@ -504,7 +500,7 @@ once (Refresh, or the opt-in Auto-refresh). -->
 				<Popover.Root bind:open={filtersOpen}>
 					<Popover.Trigger>
 						{#snippet child({ props })}
-							<Button {...props} size="sm" variant="outline" data-audit-filters>
+							<Button {...props} variant="outline" data-audit-filters>
 								<Icon name="lucide:list-filter" class="size-4" />{t('Filters')}{activeFilters > 0
 									? ` (${activeFilters})`
 									: ''}
@@ -521,7 +517,6 @@ once (Refresh, or the opt-in Auto-refresh). -->
 								<label class="flex flex-col gap-1 text-xs"
 									>{t('Actor type')}
 									<Combobox
-										size="sm"
 										searchable={false}
 										clearable
 										placeholder={t('All actors')}
@@ -551,14 +546,13 @@ once (Refresh, or the opt-in Auto-refresh). -->
 									>{t('Run ID')}<Input bind:value={run} /></label
 								>
 							</div>
-							<Button size="sm" variant="ghost" class="self-start" onclick={clear}
+							<Button variant="ghost" class="self-start" onclick={clear}
 								>{t('Clear filters and search')}</Button
 							>
 						</div>
 					</Popover.Content>
 				</Popover.Root>
 				<Combobox
-					size="sm"
 					variant="ghost"
 					class="w-32"
 					searchable={false}
@@ -574,7 +568,7 @@ once (Refresh, or the opt-in Auto-refresh). -->
 				/>
 				<AutoRefresh {t} onRefresh={refresh} />
 				<Button
-					size="icon-sm"
+					size="icon"
 					variant="ghost"
 					aria-label={t('Refresh audit events')}
 					hint={t('Refresh audit events')}
@@ -647,7 +641,6 @@ once (Refresh, or the opt-in Auto-refresh). -->
 			<h2 class="text-sm font-medium">{t('Changes')}</h2>
 			{#if opened.error}<p role="alert" class="text-sm text-destructive">{opened.error.message}</p>
 				<Button
-					size="sm"
 					variant="outline"
 					class="self-start"
 					onclick={() => fork(opened.refetch())}>{t('Retry')}</Button
@@ -699,7 +692,7 @@ once (Refresh, or the opt-in Auto-refresh). -->
 						</dl>
 						<div class="flex items-center justify-between gap-2">
 							<span class="text-meta">{t('Payload')}</span>
-							<Button size="sm" variant="outline" onclick={() => fork(copy())}>
+							<Button variant="outline" onclick={() => fork(copy())}>
 								<Icon name={copied ? 'lucide:check' : 'lucide:copy'} class="size-3.5" />{copied
 									? t('Copied')
 									: t('Copy event JSON')}

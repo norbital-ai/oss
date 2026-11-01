@@ -113,7 +113,8 @@ SELECT (SELECT (n->>'revision')::int FROM bound) AS revision`
 					external: u.kind === 'external',
 					teams: team === null ? [] : [team],
 					teamPath: team === null ? [] : path(graph, team),
-					admin: u.admin && u.kind === 'staff' && !preview,
+					// an administrator has the workspace's full authority; a rule 39 preview clears it
+					admin: !preview && u.admin && u.kind === 'staff',
 					party: u.party
 				};
 				const policies = [

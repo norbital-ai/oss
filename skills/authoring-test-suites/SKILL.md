@@ -15,6 +15,8 @@ metadata:
 
 A test should fail for a named production defect. Choose the smallest level that can observe the
 behaviour, and assert its result. A green test that measures only its own fixture is not coverage.
+Follow the exact run/record/file identity in its receipt. Searching shared fake state for a matching
+value can select an earlier operation and manufacture either a pass or a failure.
 For a simple reversible presentation edit, compilation and inspection may be enough; do not add
 ceremonial tests that mirror the implementation.
 
@@ -55,15 +57,16 @@ owns it. Templates do not re-test Bolt (envoy admission, search, approvals); Bol
 
 ## Choose the observable boundary
 
-| Behaviour                                                              | Evidence                                                                                                                                                        |
-| ---------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Pure calculation, parser, decision or projection                       | unit test of the real function                                                                                                                                  |
-| Service behaviour with injected facilities                             | real service with narrow ports or its existing Effect layers                                                                                                    |
-| Grants, constraints, state/approval locks, relations and atomic writes | native engine or `TestWorkspace.layer` against PGlite                                                                                                           |
-| HTTP/SSE/WebSocket framing, authorization and cancellation             | the actual handler or real host transport, according to the claim                                                                                               |
-| Model syncs, queued writes and envoy turns                             | `TestWorkspace.layer` with `t.receive`, `t.fakes.links` and the stored rows ([worked-examples.md](references/worked-examples.md#integrations-syncs-and-envoys)) |
-| Shared form/view behaviour                                             | mounted generic controls in the ui package, actual draft/outcome/capability behaviour                                                                           |
-| Visual layout and an end-to-end task                                   | an uncommitted probe in `.tmp/`, never a test                                                                                                                   |
+| Behaviour                                                              | Evidence                                                                                                                                                                 |
+| ---------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Pure calculation, parser, decision or projection                       | unit test of the real function                                                                                                                                           |
+| Service behaviour with injected facilities                             | real service with narrow ports or its existing Effect layers                                                                                                             |
+| Grants, constraints, state/approval locks, relations and atomic writes | native engine or `TestWorkspace.layer` against PGlite                                                                                                                    |
+| HTTP/SSE/WebSocket framing, authorization and cancellation             | the actual handler or real host transport, according to the claim                                                                                                        |
+| Model syncs, queued writes and envoy turns                             | `TestWorkspace.layer` with `t.receive`, `t.fakes.links` and the stored rows ([worked-examples.md](references/worked-examples.md#integrations-syncs-and-envoys))          |
+| Inference and document-dependent business logic                        | Real automation with native AI cassettes and an injected `Convert` layer ([worked-examples.md](references/worked-examples.md#scripted-inference-and-document-ingestion)) |
+| Shared form/view behaviour                                             | mounted generic controls in the ui package, actual draft/outcome/capability behaviour                                                                                    |
+| Visual layout and an end-to-end task                                   | an uncommitted probe in `.tmp/`, never a test                                                                                                                            |
 
 Do not boot the entire platform to test a parser. Do not replace the database with a double when
 claiming database enforcement. A pure calculation test and a native write-path test can both be

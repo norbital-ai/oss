@@ -122,7 +122,7 @@
 
 {#snippet stopButton()}
 	{#if control !== undefined && reported === 'running'}<Button
-			size="icon-sm"
+			size="icon"
 			variant="ghost"
 			class="shrink-0 text-muted-foreground"
 			aria-label={t('Stop sub-agent')}
@@ -171,7 +171,7 @@
 			class="sticky top-0 z-10 flex min-h-16 min-w-0 items-center gap-3 rounded-t-2xl border-b border-border bg-background p-4"
 		>
 			{#if onBack !== undefined}<Button
-					size="icon-sm"
+					size="icon"
 					variant="ghost"
 					class="-ml-1 shrink-0 text-muted-foreground"
 					aria-label={t('Back to subagents')}
@@ -187,7 +187,6 @@
 				>{/if}
 			{@render stopButton()}
 			{#if control !== undefined && reported === 'stopped'}<Button
-					size="sm"
 					variant="ghost"
 					class="shrink-0 px-2"
 					onclick={() => toggle(false)}

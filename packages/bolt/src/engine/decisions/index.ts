@@ -14,7 +14,11 @@ import {
 import * as EffectArray from 'effect/Array';
 import { HttpClient, HttpClientRequest, HttpClientResponse } from 'effect/http';
 import type { Json } from '../../decl/values.ts';
-import type { DecisionQuestion, DecisionState } from '../../decl/runtime/facilities.ts';
+import type {
+	DecisionEntry,
+	DecisionQuestion,
+	DecisionState
+} from '../../decl/runtime/facilities.ts';
 import { FacilityFailure, Unavailable } from '../../decl/errors.ts';
 import {
 	type Authority,
@@ -37,29 +41,77 @@ import { RunOutputRow, readsRunResult } from '../runs/index.ts';
 import { outputFiles } from '../runs/output-files.ts';
 import * as ir from '../../protocol/reads.ts';
 
-export type { DecisionQuestion, DecisionState };
+export type { DecisionEntry, DecisionQuestion, DecisionState };
 const Probability = Schema.Finite.check(Schema.isBetween({ minimum: 0, maximum: 1 }));
+const Entry = Schema.Union([
+	Schema.String,
+	Schema.Null,
+	Schema.Array(Schema.Json),
+	Schema.Record(Schema.String, Schema.Json)
+]);
+const DecisionImage = Schema.Struct({
+	type: Schema.Literal('image_url'),
+	image_url: Schema.Struct({
+		url: Schema.String.check(
+			Schema.isPattern(/^data:image\/(png|jpeg);base64,[A-Za-z0-9+/]+={0,2}$/)
+		)
+	})
+});
+/** Inline images only: stored references are resolved by their owner, never by a provider fetching an arbitrary URL. */
+const imageState = (state: DecisionRequest['state']) => {
+	const images: (typeof DecisionImage.Type)[] = [];
+	const text = Schema.decodeUnknownSync(Schema.Json)(
+		walk(state, (value) => {
+			if (!Predicate.isObject(value) || value['type'] !== 'image_url') return undefined;
+			const image = Schema.decodeUnknownSync(DecisionImage)(value);
+			images.push(image);
+			return `image-${images.length}`;
+		})
+	);
+	if (
+		images.length > 16 ||
+		images.reduce((n, image) => {
+			const data = image.image_url.url.split(',')[1]!;
+			return (
+				n +
+				Math.floor((data.length * 3) / 4) -
+				(data.endsWith('==') ? 2 : data.endsWith('=') ? 1 : 0)
+			);
+		}, 0) >
+			20 * 1024 * 1024
+	)
+		throw new Error('System 1 images exceed the 16-image / 20 MiB budget');
+	return { text, images };
+};
 const Question = Schema.Union([
 	Schema.Struct({
 		type: Schema.Literal('noul'),
-		instructions: Schema.String,
-		criteria: Schema.Struct({ true: Schema.String, false: Schema.String })
+		instructions: Schema.optionalKey(Entry),
+		criteria: Schema.optionalKey(
+			Schema.NullOr(
+				Schema.Struct({ true: Schema.optionalKey(Entry), false: Schema.optionalKey(Entry) })
+			)
+		)
 	}),
 	Schema.Struct({
 		type: Schema.Literal('choice'),
-		instructions: Schema.String,
-		criteria: Schema.Record(Schema.String, Schema.String).check(
+		instructions: Schema.optionalKey(Entry),
+		criteria: Schema.Record(Schema.String, Entry).check(
 			Schema.makeFilter((value) => Object.keys(value).length > 0)
 		)
 	}),
 	Schema.Struct({
 		type: Schema.Literal('score'),
-		instructions: Schema.String,
-		criteria: Schema.Array(Schema.String).check(Schema.isMinLength(1))
+		instructions: Schema.optionalKey(Entry),
+		criteria: Schema.Array(Entry).check(Schema.isMinLength(1), Schema.isMaxLength(10))
 	})
 ]);
 export const DecisionRequestSchema = Schema.Struct({
-	state: Schema.Record(Schema.String, Schema.Json),
+	state: Schema.Union([
+		Schema.String,
+		Schema.Array(Schema.Json),
+		Schema.Record(Schema.String, Schema.Json)
+	]),
 	questions: Schema.Record(Schema.String, Question).check(
 		Schema.makeFilter((value) => Object.keys(value).length > 0)
 	)
@@ -79,7 +131,7 @@ export const DecisionAnswerSchema = Schema.Union([
 		level: Schema.Int,
 		confidence: Schema.Finite,
 		probabilities: Schema.Record(Schema.String, Schema.Finite),
-		legend: Schema.Record(Schema.String, Schema.String)
+		legend: Schema.Record(Schema.String, Entry)
 	})
 ]);
 export type DecisionAnswer = typeof DecisionAnswerSchema.Type;
@@ -87,6 +139,8 @@ export const DecisionResultSchema = Schema.Struct({
 	answers: Schema.Record(Schema.String, DecisionAnswerSchema),
 	costUsd: Schema.Finite,
 	provider: Schema.String,
+	model: Schema.optionalKey(Schema.String),
+	call: Schema.optionalKey(Schema.String),
 	tokens: Schema.optionalKey(Schema.Struct({ input: Schema.Number, output: Schema.Number }))
 });
 export type DecisionResult = typeof DecisionResultSchema.Type;
@@ -227,14 +281,15 @@ export const ask = Effect.fn('Decisions.ask')(function* (
 	request: DecisionRequest,
 	ms: number = DECISION_CALL_MS
 ) {
-	if (fileIds(request.state).length > 0)
+	if (fileIds(request).length > 0)
 		return yield* Effect.fail(
 			new FacilityFailure({
 				kind: 'invalid',
 				message:
-					'a sys_1 state is text only: describe a file (name, mime, size, caption), never pass it'
+					'sys_1 requires resolved content: pass inline images or extracted text, never a stored FileRef'
 			})
 		);
+	yield* Effect.try({ try: () => imageState(request.state), catch: Port.failure('sys_1') });
 	const result = yield* ai.ask(request).pipe(
 		Effect.timeoutOrElse({
 			duration: Math.min(ms, DECISION_CALL_MS),
@@ -267,7 +322,9 @@ const clipState = (value: Json): Json =>
 		: Array.isArray(value)
 			? value.map(clipState)
 			: value !== null && typeof value === 'object'
-				? Object.fromEntries(Object.entries(value).map(([key, item]) => [key, clipState(item)]))
+				? Predicate.isObject(value) && 'type' in value && value['type'] === 'image_url'
+					? { type: 'image_url', image_url: { url: '[image bytes omitted]' } }
+					: Object.fromEntries(Object.entries(value).map(([key, item]) => [key, clipState(item)]))
 				: value;
 export const decisionEvent = (
 	use: DecisionUse,
@@ -286,11 +343,53 @@ export const decisionEvent = (
 					: { status: result.status })
 			}
 		: {
-				answers: result.answers,
+				answers: clipState(result.answers),
 				costUsd: result.costUsd,
 				provider: result.provider,
+				...(result.model === undefined ? {} : { model: result.model }),
+				...(result.call === undefined ? {} : { call: result.call }),
 				...(result.tokens === undefined ? {} : { tokens: result.tokens })
 			})
+});
+/** Same retained AI resource observation as inference; decision.made remains the detailed decision trace. */
+export const decisionUsage = Effect.fn('Decisions.usage')(function* (
+	logs: Logs['Service'],
+	use: DecisionUse,
+	request: DecisionRequest,
+	result: DecisionResult | FacilityError,
+	context: Pick<
+		Parameters<Logs['Service']['write']>[0],
+		'invocation' | 'run' | 'conversation' | 'turn'
+	> & { durationMs: number }
+) {
+	const bad = failed(result);
+	yield* logs.write({
+		at: new Date(yield* Clock.currentTimeMillis).toISOString(),
+		severity: bad ? 'warn' : 'info',
+		event: 'ai.call',
+		invocation: context.invocation,
+		run: context.run,
+		conversation: context.conversation,
+		turn: context.turn,
+		attributes: {
+			system: 1,
+			category: 'decisions',
+			use,
+			durationMs: context.durationMs,
+			questionCount: Object.keys(request.questions).length,
+			requestBytes: new TextEncoder().encode(JSON.stringify(request)).byteLength,
+			call: bad ? null : (result.call ?? null),
+			model: bad ? null : (result.model ?? result.provider),
+			provider: bad ? null : result.provider,
+			input: bad ? null : (result.tokens?.input ?? null),
+			output: bad ? null : (result.tokens?.output ?? null),
+			cached: null,
+			reasoning: null,
+			cost: bad ? null : result.costUsd,
+			settlement: bad || result.call === undefined ? 'attention' : 'pending',
+			...(bad ? { error: result.kind } : {})
+		}
+	});
 });
 export const DecisionTrace = Context.Reference<
 	{ readonly invocation: string; readonly run: string; readonly automation: string } | undefined
@@ -303,6 +402,7 @@ export const DecisionsLive = Layer.effect(
 			logs = yield* Logs;
 		return Decisions.of({
 			decide: Effect.fn('Decisions.decide')(function* (use, request) {
+				const started = yield* Clock.currentTimeMillis;
 				const trace = yield* DecisionTrace;
 				const result = yield* Effect.result(ask(ai, request));
 				const event = Result.isSuccess(result) ? result.success : wireFailure(result.failure);
@@ -314,6 +414,13 @@ export const DecisionsLive = Layer.effect(
 							(error) => new FacilityFailure({ kind: 'upstream', message: error.message })
 						)
 					);
+				yield* decisionUsage(logs, use, request, event, {
+					invocation: trace?.invocation ?? call,
+					run: trace?.run ?? null,
+					conversation: null,
+					turn: null,
+					durationMs: (yield* Clock.currentTimeMillis) - started
+				});
 				yield* logs.write({
 					at: now,
 					severity: Result.isSuccess(result) ? 'info' : 'warn',
@@ -335,13 +442,137 @@ export const DecisionsLive = Layer.effect(
 );
 
 export type DecisionsApiConfig = {
+	/** Jev/OpenRouter by default; OpenAI native `/v1/decisions` uses its own wire format. */
+	format?: 'jev' | 'openai';
 	url: string;
 	model: string;
 	apiKey: string;
 	timeoutMillis?: number | undefined;
 };
+const OpenAiDecisionResponse = Schema.Struct({
+	model: Schema.String,
+	answers: Schema.Array(
+		Schema.Union([
+			Schema.Struct({
+				name: Schema.String,
+				type: Schema.Literal('predicate'),
+				probability: Probability
+			}),
+			Schema.Struct({
+				name: Schema.String,
+				type: Schema.Literal('choice'),
+				choice: Schema.String,
+				confidence: Probability,
+				probabilities: Schema.Array(
+					Schema.Struct({ value: Schema.String, probability: Probability })
+				)
+			}),
+			Schema.Struct({
+				name: Schema.String,
+				type: Schema.Literal('score'),
+				score: Schema.Finite,
+				confidence: Probability,
+				probabilities: Schema.Array(
+					Schema.Struct({ value: Schema.Int, label: Schema.String, probability: Probability })
+				)
+			}),
+			Schema.Struct({ name: Schema.String, type: Schema.Literal('refusal') })
+		])
+	),
+	usage: Schema.Struct({ input_tokens: Schema.Number, output_tokens: Schema.Number })
+});
+const entryText = (entry: DecisionEntry | undefined): string =>
+	typeof entry === 'string' ? entry : JSON.stringify(entry ?? null);
+/** Only the adapter knows OpenAI's predicate/choices/levels spelling. */
+function openAiDecisionRequest(request: DecisionRequest, model: string): Json {
+	const media = imageState(request.state);
+	return {
+		model,
+		input:
+			media.images.length === 0
+				? typeof request.state === 'string'
+					? request.state
+					: JSON.stringify(request.state)
+				: [
+						{
+							role: 'user',
+							content: [
+								{ type: 'input_text', text: JSON.stringify(media.text) },
+								...media.images.flatMap((image, n) => [
+									{ type: 'input_text', text: `image-${n + 1}` },
+									{ type: 'input_image', image_url: image.image_url.url }
+								])
+							]
+						}
+					],
+		questions: Object.entries(request.questions).map(([name, question]) => {
+			const instructions = entryText(question.instructions);
+			switch (question.type) {
+				case 'noul':
+					return {
+						name,
+						type: 'predicate',
+						instructions:
+							question.criteria == null
+								? instructions
+								: JSON.stringify({
+										instructions: question.instructions ?? null,
+										criteria: question.criteria
+									})
+					};
+				case 'choice':
+					return {
+						name,
+						type: 'choice',
+						instructions,
+						choices: Object.entries(question.criteria).map(([value, description]) => ({
+							value,
+							description: entryText(description)
+						}))
+					};
+				case 'score':
+					return {
+						name,
+						type: 'score',
+						instructions,
+						levels: question.criteria.map((description, index) => ({
+							label: String(index),
+							description: entryText(description)
+						}))
+					};
+			}
+		})
+	};
+}
+function openAiDecisionWire(response: typeof OpenAiDecisionResponse.Type) {
+	return {
+		provider: response.model,
+		usage: response.usage,
+		answers: Object.fromEntries(
+			response.answers.map((answer) => {
+				if (answer.type === 'refusal')
+					throw new FacilityFailure({
+						kind: 'invalid',
+						message: `System 1 refused question '${answer.name}'`
+					});
+				if (answer.type === 'predicate') return [answer.name, { noul: answer.probability }];
+				const probabilities = Object.fromEntries(
+					answer.probabilities.map(({ value, probability }) => [String(value), probability])
+				);
+				return [
+					answer.name,
+					answer.type === 'choice'
+						? { choice: answer.choice, confidence: answer.confidence, probabilities }
+						: { score: answer.score, confidence: answer.confidence, probabilities }
+				];
+			})
+		)
+	};
+}
 export function decisionsSystem1(config: DecisionsApiConfig, options: HttpOptions = {}): System1 {
 	const Response = Schema.Struct({
+		id: Schema.optionalKey(Schema.String),
+		model: Schema.optionalKey(Schema.String),
 		answers: Schema.Record(Schema.String, Schema.Json),
 		usage: Schema.optionalKey(
 			Schema.Struct({
@@ -356,14 +587,63 @@ export function decisionsSystem1(config: DecisionsApiConfig, options: HttpOption
 		maxChoices: 255,
 		ask: Effect.fn('Decisions.httpAsk')(
 			function* (request) {
+				const media = yield* Effect.try({
+					try: () => imageState(request.state),
+					catch: Port.failure('sys_1')
+				});
+				const assets = Object.fromEntries(
+					media.images.map((image, n) => {
+						const ref = `bolt-image-${n + 1}-${globalThis.crypto.randomUUID()}`;
+						return [
+							ref,
+							{
+								type: 'image',
+								format: image.image_url.url.startsWith('data:image/png;') ? 'png' : 'jpeg',
+								data_base64: image.image_url.url.split(',')[1]!
+							}
+						];
+					})
+				);
+				let imageIndex = 0;
+				const state = Schema.decodeUnknownSync(Schema.Json)(
+					walk(request.state, (value) =>
+						Predicate.isObject(value) && value['type'] === 'image_url'
+							? Object.keys(assets)[imageIndex++]
+							: undefined
+					)
+				);
+				if (
+					config.format === 'openai' &&
+					(Object.keys(request.questions).length > 400 ||
+						Object.values(request.questions).some((question) =>
+							question.type === 'choice'
+								? Object.keys(question.criteria).length < 2
+								: question.type === 'score' && question.criteria.length < 2
+						))
+				)
+					return yield* Effect.fail(
+						new FacilityFailure({
+							kind: 'invalid',
+							message:
+								'OpenAI Decisions accepts at most 400 questions, at least two choices, and at least two score levels'
+						})
+					);
 				const body = yield* HttpClientRequest.bodyJson(
 					HttpClientRequest.post(config.url, {
 						headers: {
 							authorization: `Bearer ${config.apiKey}`,
-							'content-type': 'application/json'
+							'content-type': 'application/json',
+							...(media.images.length === 0 ? {} : { 'TypeSafe-Danger-Zone-Images': 'true' })
 						}
 					}),
-					{ model: config.model, state: request.state, questions: request.questions }
+					config.format === 'openai'
+						? openAiDecisionRequest(request, config.model)
+						: {
+								model: config.model,
+								state,
+								questions: request.questions,
+								...(media.images.length === 0 ? {} : { assets })
+							}
 				).pipe(Effect.mapError(Port.failure('sys_1')));
 				const response = yield* HttpClient.execute(body).pipe(
 					Effect.mapError(Port.failure('sys_1'))
@@ -384,9 +664,19 @@ export function decisionsSystem1(config: DecisionsApiConfig, options: HttpOption
 								})
 					);
 				}
-				const wire = yield* HttpClientResponse.schemaBodyJson(Response)(response).pipe(
-					Effect.mapError(Port.failure('sys_1'))
-				);
+				const wire = yield* (
+					config.format === 'openai'
+						? HttpClientResponse.schemaBodyJson(OpenAiDecisionResponse)(response).pipe(
+								Effect.flatMap((native) =>
+									Effect.try({
+										try: () => openAiDecisionWire(native),
+										catch: Port.failure('sys_1')
+									})
+								),
+								Effect.flatMap(Schema.decodeUnknownEffect(Response))
+							)
+						: HttpClientResponse.schemaBodyJson(Response)(response)
+				).pipe(Effect.mapError(Port.failure('sys_1')));
 				const answers: Record<string, DecisionAnswer> = {};
 				for (const [id, question] of Object.entries(request.questions)) {
 					const raw = wire.answers[id];
@@ -403,7 +693,7 @@ export function decisionsSystem1(config: DecisionsApiConfig, options: HttpOption
 										score: Schema.Number,
 										confidence: Schema.Number,
 										probabilities: Schema.Record(Schema.String, Schema.Number),
-										legend: Schema.optionalKey(Schema.Record(Schema.String, Schema.String))
+										legend: Schema.optionalKey(Schema.Record(Schema.String, Entry))
 									})
 					)(raw).pipe(Effect.mapError(Port.failure('sys_1')));
 					if ('noul' in decoded) answers[id] = { type: 'noul', noul: decoded.noul };
@@ -422,7 +712,9 @@ export function decisionsSystem1(config: DecisionsApiConfig, options: HttpOption
 							confidence: decoded.confidence,
 							probabilities: decoded.probabilities,
 							level,
-							legend: decoded.legend ?? {}
+							legend: Object.fromEntries(
+								question.criteria.map((entry, index) => [String(index), entry])
+							)
 						};
 					}
 				}
@@ -430,6 +722,8 @@ export function decisionsSystem1(config: DecisionsApiConfig, options: HttpOption
 					answers,
 					costUsd: wire.usage?.cost ?? 0,
 					provider: wire.provider ?? config.model,
+					model: wire.model ?? config.model,
+					...(wire.id === undefined ? {} : { call: wire.id }),
 					tokens: { input: wire.usage?.input_tokens ?? 0, output: wire.usage?.output_tokens ?? 0 }
 				}).pipe(Effect.mapError(Port.failure('sys_1')));
 			},
@@ -453,6 +747,10 @@ export function decisionsSystem1(config: DecisionsApiConfig, options: HttpOption
 export function structuredSystem1(infer: OpenAiChat, model: string): System1 {
 	return {
 		ask: Effect.fn('Decisions.structuredAsk')(function* (request) {
+			const media = yield* Effect.try({
+				try: () => imageState(request.state),
+				catch: Port.failure('sys_1')
+			});
 			const entries = Object.entries(request.questions);
 			const fields = Object.fromEntries(
 				entries.map(([id, question]) => [
@@ -482,7 +780,21 @@ export function structuredSystem1(infer: OpenAiChat, model: string): System1 {
 					model,
 					system:
 						'Answer each question independently from the state alone. Return JSON probabilities for every option or level.',
-					messages: [{ role: 'user', content: JSON.stringify(request) }],
+					messages: [
+						{
+							role: 'user',
+							content:
+								media.images.length === 0
+									? JSON.stringify(request)
+									: [
+											{ type: 'text', text: JSON.stringify({ ...request, state: media.text }) },
+											...media.images.flatMap((image, n) => [
+												{ type: 'text', text: `image-${n + 1}` },
+												image
+											])
+										]
+						}
+					],
 					output
 				})
 			);

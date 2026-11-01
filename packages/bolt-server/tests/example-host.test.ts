@@ -10,7 +10,7 @@ import { loadHost } from '@norbital-ai/bolt/node';
 const example = fileURLToPath(new URL('../example/norbital.host.ts', import.meta.url));
 
 describe('example/norbital.host.ts', () => {
-	it.live('loads with a speech key and no speak model, speech off', () =>
+	it.live('loads a persistent localhost workspace with a speech key and no speak model', () =>
 		Effect.gen(function* () {
 			const fs = yield* FileSystem.FileSystem,
 				path = yield* Path.Path;
@@ -22,7 +22,7 @@ describe('example/norbital.host.ts', () => {
 				})
 			);
 			Object.assign(process.env, {
-				BOLT_PUBLIC_URL: 'http://127.0.0.1:3100',
+				BOLT_PUBLIC_URL: 'http://localhost:3100',
 				BOLT_PGLITE_DIR: path.join(dir, 'db'),
 				BOLT_AUDIT_DIR: path.join(dir, 'audit'),
 				BOLT_MASTER_KEY: randomBytes(32).toString('hex'),

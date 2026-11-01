@@ -93,6 +93,10 @@
 		"./zone": {
 			"types": "./build/zone.d.ts",
 			"default": "./build/zone.js"
+		},
+		"./hash": {
+			"types": "./build/hash.d.ts",
+			"default": "./build/hash.js"
 		}
 	},
 	"scripts": {

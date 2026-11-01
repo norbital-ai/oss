@@ -82,7 +82,7 @@
 	<div class="flex items-center justify-between gap-2">
 		<button
 			type="button"
-			class="grid size-8 max-sm:size-11 place-items-center rounded-sm border border-input text-muted-foreground hover:bg-accent hover:text-foreground"
+			class="grid size-8 [--hit-target:2rem] place-items-center rounded-sm border border-input text-muted-foreground hover:bg-accent hover:text-foreground"
 			aria-label={t('previous')}
 			onclick={() => (anchor = pageStep(anchor, unit, -1))}
 			><Icon icon="lucide:chevron-left" class="size-4" /></button
@@ -90,7 +90,7 @@
 		<span class="text-sm font-medium tabular-nums">{heading}</span>
 		<button
 			type="button"
-			class="grid size-8 max-sm:size-11 place-items-center rounded-sm border border-input text-muted-foreground hover:bg-accent hover:text-foreground"
+			class="grid size-8 [--hit-target:2rem] place-items-center rounded-sm border border-input text-muted-foreground hover:bg-accent hover:text-foreground"
 			aria-label={t('next')}
 			onclick={() => (anchor = pageStep(anchor, unit, 1))}
 			><Icon icon="lucide:chevron-right" class="size-4" /></button
@@ -114,7 +114,7 @@
 				data-unit={d}
 				disabled={disabled || off(d)}
 				class={cn(
-					'h-9 max-sm:h-11 min-w-14 rounded-md px-2 text-sm hover:bg-accent disabled:pointer-events-none disabled:opacity-40',
+					'[--hit-target:2rem] h-8 min-w-14 rounded-md px-2 text-xs hover:bg-accent disabled:pointer-events-none disabled:opacity-40',
 					unit === 'week' && 'text-left tabular-nums',
 					included(d) && 'rounded-none bg-accent',
 					included(d) && d === range?.from && 'rounded-l-md',

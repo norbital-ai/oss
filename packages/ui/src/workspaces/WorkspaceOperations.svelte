@@ -1,9 +1,7 @@
 <script lang="ts" module>
 	import type { Snippet } from 'svelte';
-	import type { Effect as EffectType } from 'effect';
 	import type {
 		WorkspaceOperationsData,
-		WorkspaceOperation,
 		WorkspaceScope,
 		WorkspaceRange,
 		WorkspaceView
@@ -15,10 +13,7 @@
 		/** The views to offer, in order (all four by default); with one, it renders without its own tab strip. */
 		views?: readonly WorkspaceView[];
 		busy?: boolean;
-		/** Stable workspace identity: a pending confirmation cannot cross a scope change. */
-		scopeKey?: string;
 		onChange: (next: WorkspaceScope) => void;
-		onOperate?: (operation: WorkspaceOperation) => EffectType.Effect<unknown, Error>;
 		t?: (key: string) => string;
 		/**
 		 * The release whose logs Logs shows, by its publication instant (`at`): omitted, the serving release; `null`, every
@@ -31,9 +26,6 @@
 </script>
 
 <script lang="ts">
-	import { Effect } from 'effect';
-	import { onDestroy } from 'svelte';
-	import { fork } from '../effect/index.js';
 	import Button from '../primitives/button/button.svelte';
 	import Combobox from '../primitives/combobox/combobox.svelte';
 	import Icon from '../primitives/icon/icon-wrapper.svelte';
@@ -42,71 +34,30 @@
 	import ToolbarFilter from '../model/toolbar/ToolbarFilter.svelte';
 	import LogView from '../logs/LogView.svelte';
 	import UsageChart, { formatMetricValue } from '../chart/UsageChart.svelte';
-	import ReleaseTimeline from '../releases/ReleaseTimeline.svelte';
-	import { rollbackReason } from '../releases/model.js';
-	import { confirmAction, type ConfirmOptions } from '../primitives/dialog/confirm.js';
-	import { filterMembers, filterBuilds, newestReleases, releaseWindow } from './filters.js';
-	import type { WorkspaceChange } from './types.js';
+	import { filterMembers, newestReleases, releaseWindow } from './filters.js';
 	let {
 		data,
 		range,
 		view,
-		views = ['activity', 'resources', 'logs', 'users'],
+		views = ['bundle', 'telemetry', 'logs', 'users'],
 		busy = false,
-		scopeKey = '',
 		onChange,
-		onOperate,
 		t = (key) => key,
 		release = $bindable(),
 		actions
 	}: WorkspaceOperationsProps = $props();
 	let userSearch = $state(''),
-		userStatus = $state('all'),
-		buildSearch = $state(''),
-		buildStatus = $state('all');
+		userStatus = $state('all');
 	let assetSearch = $state(''),
 		assetStatus = $state('all'),
 		runSearch = $state(''),
 		packageSearch = $state('');
-	let selectedChange = $state<string | null>(null);
-	let acting = $state(false),
-		notice = $state('');
-	let disposed = false;
-	onDestroy(() => {
-		disposed = true;
-	});
-	const locked = $derived(busy || acting);
 	const canInspect = $derived(data.canInspect);
 	const studio = $derived(data.studio),
 		members = $derived(data.members),
 		bundles = $derived(data.bundles),
 		cache = $derived(data.cache);
 	const shownMembers = $derived(filterMembers(members ?? [], userSearch, userStatus, data.asOf));
-	const shownBuilds = $derived(filterBuilds(studio?.builds ?? [], buildSearch, buildStatus));
-	const change = $derived(
-		studio?.changes.find((item) => item.id === selectedChange) ??
-			studio?.changes.find((item) => item.head === studio.build?.build.commit) ??
-			studio?.changes.find((item) => item.state === 'open') ??
-			studio?.changes[0] ??
-			null
-	);
-	const query = $derived(buildSearch.trim().toLowerCase());
-	const shownReleases = $derived(
-		(studio?.releases ?? []).filter(
-			(release) =>
-				`${release.commit} ${release.at} ${release.message}`.toLowerCase().includes(query) &&
-				(buildStatus === 'all' ||
-					(buildStatus === 'live' && release.current) ||
-					(buildStatus === 'built' && shownBuilds.some((build) => build.commit === release.commit)))
-		)
-	);
-	const shownChanges = $derived(
-		(studio?.changes ?? []).filter(
-			(change) =>
-				`${change.id} ${change.title} ${change.head}`.toLowerCase().includes(query) &&
-				(buildStatus === 'all' || shownBuilds.some((build) => build.commit === change.head))
-		)
-	);
 	const cacheByPath = $derived(new Map((cache?.assets ?? []).map((asset) => [asset.path, asset])));
 	const shownAssets = $derived(
 		(bundles?.assets ?? []).filter(
@@ -162,105 +113,27 @@
 				...(row.run === null ? {} : { source: `run ${row.run}` })
 			}));
 	});
-	const buildLines = $derived(
-		(studio?.build?.log ?? []).map((row, index) => ({
-			id: `${index}:${row.at}`,
-			at: row.at,
-			level: row.level,
-			message: row.message
-		}))
-	);
 	const when = (value: string | null) =>
 		value === null ? t('Not recorded') : new Date(value).toLocaleString();
 	const online = (value: string | null) =>
 		value !== null && Date.parse(value) > Date.parse(data.asOf) - 300000;
 	const bytes = (value: number | null) => formatMetricValue('bytes', value);
-	function perform(operation: WorkspaceOperation, ask?: ConfirmOptions) {
-		if (locked || !canInspect || onOperate === undefined) return;
-		const run = onOperate;
-		const ownScope = scopeKey;
-		acting = true;
-		notice = '';
-		fork(
-			Effect.gen(function* () {
-				if (ask !== undefined && !(yield* confirmAction(ask))) return;
-				if (disposed || ownScope !== scopeKey) return;
-				yield* run(operation);
-			}).pipe(
-				Effect.ensuring(
-					Effect.sync(() => {
-						acting = false;
-					})
-				)
-			),
-			(error) => {
-				notice = error.message;
-			}
-		);
-	}
 	const TABS = {
-		activity: { title: 'Activity', icon: 'lucide:history' },
-		resources: { title: 'Resources', icon: 'lucide:activity' },
+		bundle: { title: 'Bundle', icon: 'lucide:package' },
+		telemetry: { title: 'Telemetry', icon: 'lucide:activity' },
 		logs: { title: 'Runtime & runs', icon: 'lucide:scroll-text' },
 		users: { title: 'Users', icon: 'lucide:users' }
 	} as const;
-	const BODIES = { activity, resources, logs: runtime, users };
-	function restore(commit: string) {
-		const target = studio?.releases.find((release) => release.commit === commit);
-		if (target === undefined || rollbackReason(target) !== null) return;
-		const lost = target.discards;
-		perform(
-			{ op: 'rollback', commit, ...(lost === undefined ? {} : { discardDataSince: lost }) },
-			{
-				title: t(target.undo ? 'Undo the rollback?' : 'Roll back live to this version?'),
-				body: `${when(target.checkpoint ?? target.at)} — ${target.message || commit.slice(0, 8)}. ${lost === undefined ? t('Its source comes back and live keeps all its data.') : `${t('Its schema differs from live’s, so the data written after')} ${when(lost)} ${t('will be lost.')}`} ${t('Live as it is now is kept, so this can be undone. Everyone stays signed in.')}`,
-				confirmLabel: t(target.undo ? 'Undo' : 'Roll back'),
-				cancelLabel: t('Cancel'),
-				destructive: lost !== undefined
-			}
-		);
-	}
-	function merge(change: WorkspaceChange) {
-		if (
-			change.preview === null ||
-			change.preview.url === null ||
-			change.preview.stale ||
-			change.preview.shelved
-		)
-			return;
-		const accept = change.preview.destructive ?? [];
-		perform(
-			{ op: 'change.merge', id: change.id, ...(accept.length === 0 ? {} : { accept }) },
-			{
-				title: `${t('Merge')} !${change.id} ${t('into live?')}`,
-				body: `${change.title}. ${accept.length > 0 ? `${t('This applies destructive schema steps:')} ${accept.join(', ')}. ` : ''}${t('It merges with live, builds and checks the result, then everyone using the workspace gets it.')}`,
-				confirmLabel: t('Merge'),
-				cancelLabel: t('Cancel'),
-				destructive: accept.length > 0
-			}
-		);
-	}
-	function close(change: WorkspaceChange) {
-		perform(
-			{ op: 'change.close', id: change.id },
-			{
-				title: t('Close this change?'),
-				body: `${change.title}. ${t('Its preview environment and preview data are removed. Saved builds remain subject to retention.')}`,
-				confirmLabel: t('Close change'),
-				cancelLabel: t('Cancel'),
-				destructive: true
-			}
-		);
-	}
+	const BODIES = { bundle, telemetry, logs: runtime, users };
 </script>
 
-<!-- fills a bounded parent: on a wide container Activity's timeline and details each scroll in place -->
+<!-- fills a bounded parent: on a wide container Bundle's details scroll in place -->
 <div
 	class="@container flex min-h-0 min-w-0 flex-1 flex-col gap-3 text-xs"
-	aria-busy={locked}
+	aria-busy={busy}
 	data-workspace-operations
 >
-	{#if notice}<p role="alert" class="text-destructive">{notice}</p>{/if}
+	{#if data.errors?.studio}<p role="alert" class="text-destructive">{data.errors.studio}</p>{/if}
 	{#if views.length === 1}
 		{@render BODIES[view]()}
 	{:else}
@@ -291,13 +164,12 @@
 		</p>
 	</div>
 {/snippet}
-{#snippet resources()}
+{#snippet telemetry()}
 	<div class="grid gap-3">
 		<div class="flex flex-wrap items-center justify-between gap-3">
-			<h2 class="text-sm font-semibold">{t('Resource use')}</h2>
+			<h2 class="text-sm font-semibold">{t('Telemetry')}</h2>
 			<nav aria-label={t('Trend range')} class="flex gap-1">
 				{#each ['24h', '7d', '30d'] as item (item)}<Button
-						size="sm"
 						variant={range === item ? 'secondary' : 'ghost'}
 						class="h-8 px-2.5 text-xs"
 						onclick={() => onChange({ range: item === '24h' || item === '30d' ? item : '7d' })}
@@ -310,200 +182,10 @@
 		</div>
 	</div>
 {/snippet}
-{#snippet activity()}
-	{#if !canInspect}{@render restricted()}{:else}
-		<div class="flex min-w-0 flex-col gap-5 @4xl:min-h-0 @4xl:flex-1">
-			<div class="flex min-w-0 flex-wrap items-center gap-1" data-view-toolbar>
-				<h2 class="mr-1 text-sm font-semibold">{t('Build and release activity')}</h2>
-				<ToolbarSearch
-					bind:value={buildSearch}
-					label={t('Search commits, changes and builds')}
-				/><ToolbarFilter
-					count={buildStatus === 'all' ? 0 : 1}
-					label={t('Filter activity')}
-					panelClass="w-72"
-					><label class="grid gap-2"
-						><span class="text-label">{t('Status')}</span><Combobox
-							size="sm"
-							aria-label={t('Activity status')}
-							value={buildStatus}
-							options={[
-								{ value: 'all', label: t('All activity') },
-								{ value: 'live', label: t('Live') },
-								{ value: 'built', label: t('Built') },
-								{ value: 'failed', label: t('Failed') }
-							]}
-							onChange={(status) => {
-								buildStatus = status ?? 'all';
-							}}
-						/></label
-					></ToolbarFilter
-				>
-			</div>
-			{#if data.errors?.studio}<p role="alert" class="text-destructive">
-					{data.errors.studio}
-				</p>{/if}
-			<div
-				class="grid min-w-0 gap-5 @4xl:min-h-0 @4xl:flex-1 @4xl:grid-cols-[minmax(16rem,22rem)_minmax(0,1fr)]"
-			>
-				<section class="min-w-0 @4xl:overflow-y-auto" aria-label={t('Commit timeline')}>
-					<ReleaseTimeline
-						builds={shownBuilds}
-						releases={shownReleases}
-						changes={shownChanges}
-						selected={studio?.build?.build.commit ?? data.filters.build}
-						onSelect={(commit) => onChange({ build: commit })}
-						onBuild={(commit) => onChange({ build: commit })}
-						onRestore={onOperate === undefined ? undefined : restore}
-						busy={locked}
-						{t}
-					/>
-				</section>
-				<div class="grid min-w-0 content-start gap-4 @4xl:overflow-y-auto">
-					{#if studio?.build}
-						<section class="grid min-w-0 gap-3" aria-label={t('Selected build')}>
-							<div class="flex flex-wrap items-start justify-between gap-3">
-								<div class="grid min-w-0 gap-1">
-									<h3 class="text-sm font-semibold">
-										{studio.build.build.message || t('Build output')}
-									</h3>
-									<p class="text-meta">
-										<code>{studio.build.build.commit.slice(0, 12)}</code> · {when(
-											studio.build.build.at
-										)} · {studio.build.build.lines}
-										{t('log lines')} · {studio.build.build.diagnostics}
-										{t('diagnostics')}
-									</p>
-								</div>
-								<span class="rounded bg-muted px-2 py-1 text-micro"
-									>{t(
-										studio.build.build.live
-											? 'Serving live'
-											: studio.build.build.status === 'failed'
-												? 'Failed'
-												: 'Built'
-									)}</span
-								>
-							</div>
-							<LogView
-								rows={buildLines}
-								follow={false}
-								class="h-80"
-							/>{#if studio.build.diagnostics.length > 0}<details
-									class="rounded-md border border-border p-3"
-								>
-									<summary class="cursor-pointer font-medium">{t('Build diagnostics')}</summary>
-									<ul class="mt-2 grid gap-2 font-mono text-xs">
-										{#each studio.build.diagnostics as diagnostic, index (index)}<li
-												class="break-words"
-											>
-												{JSON.stringify(diagnostic)}
-											</li>{/each}
-									</ul>
-								</details>{/if}
-						</section>
-					{:else if data.errors?.build}<p class="text-meta">{data.errors.build}</p>{/if}
-					{#if (studio?.changes.length ?? 0) > 0}
-						<section class="grid gap-2" aria-label={t('Change controls')}>
-							<div class="flex flex-wrap items-center justify-between gap-2">
-								<h3 class="font-medium">{t('Change and preview')}</h3>
-								<Combobox
-									class="w-64"
-									size="sm"
-									aria-label={t('Change scope')}
-									searchable
-									value={change?.id ?? null}
-									options={(studio?.changes ?? []).map((item) => ({
-										value: item.id,
-										label: `!${item.id} · ${item.title}`,
-										description: t(item.state)
-									}))}
-									onChange={(id) => {
-										selectedChange = id;
-									}}
-								/>
-							</div>
-							{#if change}
-								<div class="grid gap-2 rounded-md border border-border p-3">
-									<div class="flex flex-wrap items-center justify-between gap-2">
-										<span class="font-medium">{change.title}</span><span class="text-meta"
-											>{t(change.merge?.state === 'running' ? 'Merging' : change.state)}</span
-										>
-									</div>
-									<p class="text-meta">
-										<code>{change.head.slice(0, 12)}</code> · {when(
-											change.updatedAt
-										)}{#if (change.behind ?? 0) > 0}
-											· {change.behind} {t('behind live')}{/if}
-									</p>
-									{#if change.merge?.error}<p class="text-destructive">{change.merge.error}</p>{/if}
-									{#if change.state === 'open'}
-										<div class="flex flex-wrap gap-1.5">
-											{#if change.preview?.url}<Button
-													size="sm"
-													variant="outline"
-													class="text-xs"
-													href={change.preview.url}>{t('Open preview')}</Button
-												>{/if}
-											{#if onOperate}
-												<Button
-													size="sm"
-													variant="outline"
-													class="text-xs"
-													disabled={locked || change.merge?.state === 'running'}
-													disabledMessage={t('A workflow operation is already running.')}
-													onclick={() => perform({ op: 'change.open', id: change.id })}
-													>{t(change.preview?.shelved ? 'Resume preview' : 'Select change')}</Button
-												>
-												<Button
-													size="sm"
-													variant="outline"
-													class="text-xs"
-													disabled={locked || change.merge?.state === 'running'}
-													disabledMessage={t('A workflow operation is already running.')}
-													onclick={() => perform({ op: 'preview', id: change.id })}
-													>{t('Build preview')}</Button
-												>
-												<Button
-													size="sm"
-													variant="outline"
-													class="text-xs"
-													disabled={locked ||
-														change.merge?.state === 'running' ||
-														change.preview === null ||
-														change.preview.url === null ||
-														change.preview.stale ||
-														change.preview.shelved === true}
-													disabledMessage={t(
-														'Build and route a preview of the latest commit before merging.'
-													)}
-													onclick={() => merge(change)}>{t('Merge')}</Button
-												>
-												<Button
-													size="sm"
-													variant="ghost"
-													class="text-xs"
-													disabled={locked || change.merge?.state === 'running'}
-													disabledMessage={t('A running merge cannot be closed.')}
-													onclick={() => close(change)}>{t('Close')}</Button
-												>
-											{/if}
-										</div>
-									{/if}
-								</div>
-							{/if}
-						</section>
-					{/if}
-					{@render artifactDetails()}
-				</div>
-			</div>
-		</div>
-	{/if}
-{/snippet}
-{#snippet artifactDetails()}
+{#snippet bundle()}
 	<section class="grid min-w-0 gap-3" aria-labelledby="workspace-bundle-health">
 		<h3 id="workspace-bundle-health" class="text-sm font-semibold">
-			{t('Artifact and cleanup')}
+			{t('Bundle')}
 		</h3>
 		{#if bundles}<p class="text-meta">
 				{bundles.commit
@@ -551,30 +233,6 @@
 				{t('entries referenced by this release')}
 			</p>{/if}
 		{#if data.errors?.cache}<p role="alert" class="text-destructive">{data.errors.cache}</p>{/if}
-		{#if (data.health?.cleanup.length ?? 0) > 0}<div class="overflow-x-auto">
-				<table class="w-full text-left">
-					<caption class="sr-only">{t('Preview cleanup status')}</caption><thead
-						><tr
-							><th scope="col">{t('Change')}</th><th scope="col">{t('Preview')}</th><th scope="col"
-								>{t('Cleanup')}</th
-							></tr
-						></thead
-					><tbody
-						>{#each data.health?.cleanup ?? [] as item (item.changeId)}<tr
-								><th scope="row" class="font-medium">{item.title}</th><td class="font-mono"
-									>{item.environment}</td
-								><td
-									><span
-										class={item.status === 'leftover'
-											? 'font-medium text-destructive'
-											: 'text-foreground'}>{t(item.status)}</span
-									>
-									<p class="text-meta mt-1">{item.reason}</p></td
-								></tr
-							>{/each}</tbody
-					>
-				</table>
-			</div>{/if}
 		<details class="rounded-md border border-border p-3">
 			<summary class="cursor-pointer font-medium"
 				>{t('Recorded package versions')} · {data.health?.packages.length ?? 0}</summary
@@ -615,7 +273,6 @@
 					panelClass="w-72"
 					><label class="grid gap-2"
 						><span class="text-label">{t('Cache residency')}</span><Combobox
-							size="sm"
 							aria-label={t('Cache residency')}
 							value={assetStatus}
 							options={[
@@ -675,7 +332,6 @@
 				{#snippet leading()}
 					<h2 class="px-1 text-sm font-semibold">{t('Runtime & run logs')}</h2>
 					<Combobox
-						size="sm"
 						class="w-80"
 						aria-label={t('Release')}
 						searchable
@@ -687,7 +343,6 @@
 				{#snippet filters()}
 					<label class="grid gap-2"
 						><span class="text-label">{t('Automation run')}</span><Combobox
-							size="sm"
 							aria-label={t('Automation run')}
 							searchable
 							value={data.filters.run}
@@ -717,7 +372,6 @@
 					panelClass="w-72"
 					><label class="grid gap-2"
 						><span class="text-label">{t('Status')}</span><Combobox
-							size="sm"
 							aria-label={t('User status')}
 							value={userStatus}
 							options={[

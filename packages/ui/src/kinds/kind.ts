@@ -9,6 +9,7 @@ import type { Fields, FileRef, Json, Kind, KindOf, Point, Value } from '@norbita
 import { inputSchema } from '@norbital-ai/std/kind';
 import { Schema, Result } from 'effect';
 import { KINDS, sortable } from './registry.js';
+import { label as title } from '@norbital-ai/std/label';
 export type { Fields, FileRef, Json, Kind, KindOf, Point, Value };
 
 /** The custom renderer registered for a built-in or tenant field. */
@@ -212,6 +213,22 @@ export function fieldsText(
 		})
 		.filter(Boolean)
 		.join(' · ');
+}
+
+/** The model's shared record label, evaluated against the row; legacy field lists retain per-kind formatting. */
+export function recordText(
+	exposure: { fields: Fields; label: readonly string[]; record_label?: string } | undefined,
+	row: { readonly [field: string]: Value },
+	o: ShowOptions = {}
+): string {
+	if (exposure === undefined) return typeof row['id'] === 'string' ? row['id'] : '';
+	// Native live references (approval targets) carry the authorized target identifier, never a stored copy.
+	if (typeof row['$label'] === 'string' && row['$label'].trim() !== '') return row['$label'];
+	return (
+		title(row, exposure.record_label ?? exposure.label, (field, value) =>
+			format(exposure.fields[field] ?? { kind: 'text' }, value, o)
+		) ?? ''
+	);
 }
 /** One value as text in the viewer's locale; '' for none. Structured values render through `Show`, this is their summary. */
 export function format(kind: Kind, value: Value | undefined, o: ShowOptions = {}): string {

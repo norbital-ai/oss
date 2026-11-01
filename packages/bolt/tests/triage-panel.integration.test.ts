@@ -119,6 +119,10 @@ const panel = () =>
 			inputs,
 			turns,
 			post,
+			stop: act('sys_conversation.stop', { conversation: id }).pipe(Effect.andThen(route.settled)),
+			resume: act('sys_conversation.resume', { conversation: id }).pipe(
+				Effect.andThen(route.settled)
+			),
 			respondNow: act('sys_conversation.respondNow', { conversation: id }).pipe(
 				Effect.andThen(route.settled)
 			)
@@ -126,6 +130,20 @@ const panel = () =>
 	});
 
 describe('in-app triage (G5, rule 60a)', () => {
+	it.live('Resume admits a follow-up still held by in-app triage', () =>
+		Effect.scoped(
+			Effect.gen(function* () {
+				const p = yield* panel();
+				yield* p.stop;
+				yield* p.post('Continue with this follow-up.');
+				expect(p.turns).toHaveLength(0);
+				yield* p.resume;
+				expect(p.turns).toHaveLength(1);
+				expect(p.turns[0]).toContain('Continue with this follow-up.');
+				expect(p.inputs).toHaveLength(0);
+			})
+		)
+	);
 	it.live(
 		'plain parts wait; respond-now and a `now` post answer every pending part as one turn, never asking the decider',
 		() =>

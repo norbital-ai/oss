@@ -192,7 +192,6 @@ const makeFakeRequest = (
 		});
 		const req = new StubRequest({
 			host: 'example.test',
-			agent: false,
 			createConnection: () => socket
 		});
 		let returned = false;

@@ -146,7 +146,6 @@
 				<Button
 					type="button"
 					variant="ghost"
-					size="sm"
 					class="px-2 text-tiny"
 					onclick={() => fork(api.markAllNoticesRead(), () => {})}>{t('Mark all read')}</Button
 				>

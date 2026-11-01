@@ -43,29 +43,36 @@ describe('Studio operational inspection boundary', () => {
 		expect(
 			Schema.decodeUnknownSync(StudioInspectInput)({
 				range: '24h',
-				view: 'activity',
+				view: 'bundle',
 				build: 'a'.repeat(40),
 				run: 'run-1',
 				level: 'warn',
 				text: 'timeout'
 			})
-		).toMatchObject({ range: '24h', view: 'activity', run: 'run-1', level: 'warn' });
+		).toMatchObject({ range: '24h', view: 'bundle', run: 'run-1', level: 'warn' });
 	});
 	it.each([
-		{ range: 'forever', view: 'resources' },
+		{ range: 'forever', view: 'telemetry' },
 		{ range: '7d', view: 'source' },
 		{ range: '7d', view: 'logs', level: 'debug' },
 		{ range: '7d', view: 'logs', run: 'x'.repeat(201) },
 		{ range: '7d', view: 'logs', text: 'x'.repeat(201) },
-		{ range: '7d', view: 'activity', build: 'a'.repeat(65) }
+		{ range: '7d', view: 'bundle', build: 'a'.repeat(65) }
 	])('refuses unsupported or oversized scopes: %o', (input) => {
 		expect(() => Schema.decodeUnknownSync(StudioInspectInput)(input)).toThrow();
 	});
 	it('does not infer an administrator capability from member inventory', () => {
-		const native = Schema.decodeUnknownSync(StudioInspection)({ ...inspection, canInspect: true, members: null, errors: null });
+		const native = Schema.decodeUnknownSync(StudioInspection)({
+			...inspection,
+			canInspect: true,
+			members: null,
+			errors: null
+		});
 		expect(native.canInspect).toBe(true);
 		expect(native.members).toBeNull();
-		expect(() => Schema.decodeUnknownSync(StudioInspection)({ ...inspection, canInspect: undefined })).toThrow();
+		expect(() =>
+			Schema.decodeUnknownSync(StudioInspection)({ ...inspection, canInspect: undefined })
+		).toThrow();
 	});
 	it('keeps unknown gauges distinct from measured zero', () => {
 		const decoded = Schema.decodeUnknownSync(StudioInspection)(inspection);

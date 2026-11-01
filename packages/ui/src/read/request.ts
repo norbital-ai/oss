@@ -18,7 +18,9 @@ export type Layer = {
 /** A read request as views build it: root and layer paths to their layers. */
 export type Request = { readonly [path: string]: Layer };
 /** A request as the wire JSON `bolt.query` takes, unset options dropped. */
-export const requestJson = (request: Request): { readonly [path: string]: Json } =>
+export const requestJson = (
+	request: Request
+): { readonly [path: string]: { readonly [key: string]: Json } } =>
 	Object.fromEntries(
 		Object.entries(request).map(([path, layer]) => [
 			path,

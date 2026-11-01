@@ -92,6 +92,33 @@ const mixed = automation('follow_up', {
 			state: { photo: ref0 },
 			questions: { q: { type: 'noul', instructions: 'x', criteria: { true: 'a', false: 'b' } } }
 		});
+		const structured = yield* ctx.ai.sys_1.decide({
+			state: ['Refund the duplicate charge'],
+			questions: {
+				route: {
+					type: 'choice',
+					instructions: { question: 'Which queue?' },
+					criteria: { billing: { reason: 'money', examples: ['duplicate charge'] }, other: null }
+				},
+				urgency: { type: 'score', criteria: [{ priority: 'low' }, { priority: 'high' }] },
+				refund: { type: 'noul', instructions: ['Refund requested?'] }
+			}
+		});
+		is<Eq<typeof structured.answers.route.choice, 'billing' | 'other'>>();
+		is<
+			Eq<
+				typeof structured.answers.urgency.level,
+				{ readonly priority: 'low' } | { readonly priority: 'high' }
+			>
+		>();
+		is<
+			Eq<(typeof structured.answers.urgency.legend)['0'], typeof structured.answers.urgency.level>
+		>();
+		yield* ctx.ai.sys_1.decide({
+			state: 'text',
+			// @ts-expect-error — structured question entries cannot contain stored FileRefs either
+			questions: { q: { type: 'noul', instructions: { photo: ref0 } } }
+		});
 		// ctx.ai.embed takes text and files (P39)
 		void ((yield* ctx.ai.embed(['a caption', ref0])) satisfies readonly (readonly number[])[]);
 		const hits = yield* ctx.geo.search('Kismis');
@@ -168,7 +195,13 @@ automation('nightly', {
 	on: { cron: '@daily' }
 });
 // @ts-expect-error A8b policies are required
-automation('nightly', { description: 'x', on: { cron: '@daily' }, run: function* () { return 0; } });
+automation('nightly', {
+	description: 'x',
+	on: { cron: '@daily' },
+	run: function* () {
+		return 0;
+	}
+});
 automation('nightly', {
 	...rt.nightly.spec,
 	description: 'x',

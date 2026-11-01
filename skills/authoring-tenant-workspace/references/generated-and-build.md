@@ -16,7 +16,7 @@ bolt dev   [dir] [--tethered | --host=<file> [--port=<n>]]  # tethered: rebuild 
 
 Exit 0 ok, 1 author error, 2 tool failure. `bolt check` runs discover → names → bundle → evaluate →
 manifest → seed decode → schema → the type check (one TypeScript type service over the workspace's own `node_modules`, plus Svelte compiler warnings),
-and reports every error at once. The audit runs only in Colony (Studio's Audit rules, Norbius's `workspace_diagnose`), never as part of
+and reports every error at once.
 a check; its allowance must name a rule that fires on its line. Inspect reported type/Svelte warnings
 separately rather than assuming an exit code proves every presentation concern resolved.
 `bolt build` is the only gate a host runs.

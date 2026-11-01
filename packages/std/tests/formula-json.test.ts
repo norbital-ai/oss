@@ -1,6 +1,17 @@
 import { describe, expect, it } from '@effect/vitest';
 import { compile, context, evaluate } from '../src/formula.ts';
 
+it('checks a declared object member against the requested result kind', () => {
+	const site = context(
+		{ ctx: { kind: 'object', fields: { amount: { kind: 'number' }, enabled: { kind: 'bool' } } } },
+		{ numbers: 'float' }
+	);
+	expect(compile(site, 'ctx.amount', 'money')).not.toHaveProperty('error');
+	expect(compile(site, 'ctx.enabled', 'bool')).not.toHaveProperty('error');
+	expect(compile(site, 'ctx.amount', 'bool')).toHaveProperty('error');
+	expect(compile(site, 'ctx.enabled', 'money')).toHaveProperty('error');
+});
+
 describe('formula JSON results', () => {
 	it('normalizes nested CEL lists, maps and integer literals', () => {
 		const site = context({ amount: { kind: 'number' } }, { numbers: 'float' });

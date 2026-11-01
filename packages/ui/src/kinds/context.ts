@@ -23,6 +23,9 @@ export type ChildInput = {
 export type ModelExposure = {
 	/** The model's `label` fields: a record's title and the picker's search fallback. */
 	label: readonly string[];
+	/** CEL over the record; `label` contains its read dependencies for projections and picker fallback. */
+	record_label?: string;
+	labelPaths?: readonly string[];
 	/** Search fields when the model declares `search.text`; else the picker searches `label`'s text fields. */
 	search?: readonly string[];
 	/** The model declares `search.semantic` (text or file fields on an embedding model): the toolbar offers `/semantic`. */

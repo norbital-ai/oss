@@ -66,7 +66,7 @@ Two panes side by side at a ratio (`rail`, `sidebar`, `third`, `half`, `wide`) t
 		GAP_CLASSES[gap],
 		ratioClasses[ratio],
 		SIZE_CLASSES[size],
-		// The caller's class last: floors, layers and colours it names win; layout itself is props (doctor-enforced).
+		// The caller's class last: floors, layers and colours it names win; layout itself is props.
 		className
 	)}
 	style:min-height={size === 'fill' ? minHeight : undefined}

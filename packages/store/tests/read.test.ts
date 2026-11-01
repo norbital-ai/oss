@@ -13,6 +13,84 @@ const first = <A>(rows: readonly A[]): A => {
 };
 
 describe('typed read projections', () => {
+	it.effect(
+		'pages filtered inline values through tied and null sort keys without losing rows',
+		() =>
+			Effect.gen(function* () {
+				const declarations = schema({
+					entry: table({
+						key: 'identity',
+						fields: {
+							active: { kind: 'bool' },
+							profile: {
+								kind: 'object',
+								optional: true,
+								fields: {
+									rank: { kind: 'int', optional: true },
+									tags: { kind: 'list', of: { kind: 'text' } }
+								}
+							}
+						}
+					})
+				});
+				const pg = yield* database;
+				yield* script(pg, (yield* build(declarations)).join(';\n'));
+				const db = store(declarations),
+					execute = run(pg);
+				yield* execute(
+					yield* db.create('entry', [
+						{ active: true, profile: { rank: 2, tags: ['keep'] } },
+						{ active: true, profile: { rank: 2, tags: ['keep'] } },
+						{ active: true, profile: { rank: 10, tags: ['keep'] } },
+						{ active: true, profile: { tags: ['keep'] } },
+						{ active: true, profile: null },
+						{ active: false, profile: { rank: 1, tags: ['keep'] } },
+						{ active: true, profile: { rank: 3, tags: ['drop'] } }
+					])
+				);
+				const where = {
+					active: { eq: true },
+					or: [{ profile: { tags: { some: { eq: 'keep' } } } }, { profile: { isNull: true } }]
+				};
+				for (const direction of ['asc', 'desc'] as const) {
+					const orderBy = { 'profile.rank': direction };
+					const all = yield* execute(yield* db.read('entry', { where, orderBy, all: true }));
+					expect(all.rows.map((row) => row.id)).toEqual(
+						direction === 'asc' ? [1, 2, 3, 4, 5] : [4, 5, 3, 1, 2]
+					);
+					const seen: number[] = [];
+					let after: string | undefined;
+					for (let page = 0; page < 4; page++) {
+						const result = yield* execute(
+							yield* db.read('entry', {
+								where,
+								orderBy,
+								limit: 2,
+								...(after === undefined ? {} : { after })
+							})
+						);
+						seen.push(...result.rows.map((row) => row.id));
+						after = result.next ?? undefined;
+						if (after === undefined) break;
+					}
+					expect(after).toBeUndefined();
+					expect(seen).toEqual(all.rows.map((row) => row.id));
+					const first = yield* execute(yield* db.read('entry', { where, orderBy, limit: 2 }));
+					expect(first.next).not.toBeNull();
+					expect(
+						(yield* Effect.flip(
+							db.read('entry', {
+								where: { active: { eq: false } },
+								orderBy,
+								limit: 2,
+								after: first.next ?? ''
+							})
+						)).code
+					).toBe('badCursor');
+				}
+			})
+	);
+
 	it.effect('creates multiple identity rows using only declared defaults', () =>
 		Effect.gen(function* () {
 			const declarations = schema({
@@ -145,9 +223,7 @@ describe('typed read projections', () => {
 					const target = note.about;
 					if (target?.model === 'customer') {
 						expectTypeOf(target.code).toEqualTypeOf<string>();
-						expectTypeOf<keyof typeof target>().toEqualTypeOf<
-							'id' | 'model' | 'code' | 'orders'
-						>();
+						expectTypeOf<keyof typeof target>().toEqualTypeOf<'id' | 'model' | 'code' | 'orders'>();
 						expect(target.code).toBe('ACME');
 						expect(target.orders.map((row) => row.number)).toEqual(['SO-1']);
 						expect(target).not.toHaveProperty('name');
@@ -221,6 +297,102 @@ describe('typed read projections', () => {
 					['SO-2', [['B-SO-2', 'SO-2']]],
 					['SO-3', []]
 				]);
+			})
+	);
+
+	it.effect(
+		'correlates relation and inline conditions on the same child under Boolean groups',
+		() =>
+			Effect.gen(function* () {
+				const pg = yield* database;
+				yield* script(pg, `${(yield* build(shop)).join(';\n')};`);
+				const db = store(shop),
+					execute = run(pg);
+				const customers = yield* execute(
+					yield* db.create('customer', [
+						{ code: 'split', name: 'Split matches' },
+						{ code: 'same', name: 'Same match' },
+						{ code: 'empty', name: 'No orders' }
+					])
+				);
+				const split = first(customers),
+					same = first(customers.slice(1));
+				yield* execute(
+					yield* db.create('order', [
+						{
+							number: 'A',
+							customer: split.id,
+							status: 'open',
+							placed_on: '2026-10-01',
+							total: 1,
+							address: { city: 'Penang' }
+						},
+						{
+							number: 'B',
+							customer: split.id,
+							status: 'shipped',
+							placed_on: '2026-10-01',
+							total: 2,
+							address: { city: 'Singapore' }
+						},
+						{
+							number: 'C',
+							customer: same.id,
+							status: 'open',
+							placed_on: '2026-10-01',
+							total: 3,
+							address: { city: 'Singapore' }
+						}
+					])
+				);
+				const together = yield* execute(
+					yield* db.read('customer', {
+						where: {
+							orders: {
+								some: {
+									and: [{ status: { eq: 'open' } }, { address: { city: { eq: 'Singapore' } } }]
+								}
+							}
+						},
+						orderBy: 'code',
+						all: true,
+						with: {
+							orders: {
+								where: { address: { city: { eq: 'Singapore' } } },
+								all: true,
+								select: { number: true }
+							}
+						}
+					})
+				);
+				expect(
+					together.rows.map((row) => [row.code, row.orders.map((order) => order.number)])
+				).toEqual([['same', ['C']]]);
+				const separate = yield* execute(
+					yield* db.read('customer', {
+						where: {
+							and: [
+								{ orders: { some: { status: { eq: 'open' } } } },
+								{ orders: { some: { address: { city: { eq: 'Singapore' } } } } }
+							]
+						},
+						orderBy: 'code',
+						all: true
+					})
+				);
+				expect(separate.rows.map((row) => row.code)).toEqual(['same', 'split']);
+				const complement = yield* execute(
+					yield* db.read('customer', {
+						where: {
+							not: {
+								orders: { some: { status: { eq: 'open' }, address: { city: { eq: 'Singapore' } } } }
+							}
+						},
+						orderBy: 'code',
+						all: true
+					})
+				);
+				expect(complement.rows.map((row) => row.code)).toEqual(['empty', 'split']);
 			})
 	);
 

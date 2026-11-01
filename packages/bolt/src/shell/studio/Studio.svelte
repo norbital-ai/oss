@@ -1,53 +1,42 @@
 <!--
-	Workspace Studio (§5.10, §7) over the host's Studio port: a title, the Workbench / Changes / Versions segmented tabs, and
-	under each a navigator rail (a bottom sheet on a phone) beside the main pane. The viewer works on one change at a
-	time: a named set of edits from live with its own preview on a copy-on-write fork of live's data. Workbench is the
-	source tree, a toolbar (the change, how far behind live, status and actions) and the editor over the last build's
-	diagnosis; it edits source as drafts and saves them over the head it read (the first save with no change open opens
-	one). A save commits; Preview builds and serves the latest commit. Changes lists every change and reviews one: files before and
-	after (L-BOLT-528), manifest and logs, with Merge — the only way to ship, run in the background: git's 3-way merge, a
-	build of the merged tree with its checks, then the cutover, recorded as a Version. Versions is the build and release
-	timeline and rolls live back to one, source and data together (the confirm names what is lost when its schema
-	differs); the state it leaves is kept as an undo Version, so a rollback is undone the same way. That is neither the
-	operator's database restore nor a record's restore. What happens across the workspace (resource use, runtime logs,
-	the audit trail, runs) is the command center's. Build log lines, a moved head, a changed change and phase frames
-	(diagnose → copy → preview → merge, L-BOLT-530) arrive pushed. Each tab is a deep link (`/studio/<tab>`; `/studio` is
-	the workbench). Audit rules (`/studio/rules`) is the organization's rule set, saved over its revision, and an audit of the
-	head under it. Studio is a Studio host's only (Colony); an administrator's (`admin`), and the host refuses anyone else
-	regardless.
+	Workspace Studio (§5.10, §7) over the host's Studio port: a title, one toolbar (the change and its actions), and
+	under it a navigator rail (a bottom sheet on a phone) beside the main pane. The rail's two icon tabs switch between
+	the source tree and the change list; the pane follows — the editor and diagnosis, or the selected change's files,
+	preview, manifest and logs. The change's behind/status badges sit in the app header. The viewer works on one change at
+	a time: a named set of edits from live with its own preview on a copy-on-write fork of live's data. Source is the
+	tree and the editor over the last build's diagnosis; it edits source as drafts and saves them over the head it read
+	(the first save with no change open opens one). A save commits. Changes lists every change and reviews one: its
+	files before and after (L-BOLT-528), its preview with its tests (built from a commit, never a draft), its manifest
+	and logs — and the change's own actions: Preview builds and serves the change's latest commit, Merge is the only way
+	to ship, run in the background: git's 3-way merge, a build of the merged tree with its checks, then the cutover,
+	recorded as a Version. Versions is the build and release timeline and rolls live back to one, source and data
+	together (the confirm names what is lost when its schema differs); the state it leaves is kept as an undo Version, so
+	a rollback is undone the same way. That is neither the operator's database restore nor a record's restore. What
+	happens across the workspace (resource use, runtime logs, the audit trail, runs) is the command center's. Build log
+	lines, a moved head, a changed change and phase frames (diagnose → copy → preview → merge, L-BOLT-530) arrive pushed.
+	Each mode is a deep link (`/studio/<mode>`; `/studio` is source). Studio is a Studio host's only (Colony); an
+	administrator's (`admin`), and the host refuses anyone else regardless.
 -->
 <script lang="ts">
 	import { attach, fork, observeOnce } from '@norbital-ai/ui/effect';
-	import { Cause, Effect, Queue, Schema, Stream } from 'effect';
+	import { Effect, Stream } from 'effect';
+	import { studioEvents } from './events.ts';
 	import { watch } from 'runed';
 	import { MediaQuery } from 'svelte/reactivity';
-	import {
-		Button,
-		confirmAction,
-		Dialog,
-		Icon,
-		Input,
-		ReleaseTimeline,
-		Sheet,
-		Spinner,
-		Tabs,
-		type ConfirmOptions
-	} from '@norbital-ai/ui';
+	import { Button, confirmAction, Dialog, Icon, Input, Sheet, Spinner } from '@norbital-ai/ui';
 	import { Inline, AppHeader, INSET_X_CLASS, Scroll, Stack } from '@norbital-ai/ui/layout';
-	import type { Snippet } from 'svelte';
+	import { tick, type Snippet } from 'svelte';
 	import DiagnosisPane from './DiagnosisPane.svelte';
-	import AuditRules from './AuditRules.svelte';
 	import ChangePane from './ChangePane.svelte';
 	import SourceEditor from './SourceEditor.svelte';
 	import SourceTree from './SourceTree.svelte';
+	import StudioStatus from './StudioStatus.svelte';
 	import WorkbenchToolbar from './WorkbenchToolbar.svelte';
 	import { impactLines } from '../../protocol/migration-impact.ts';
-	import PreviewFrame from '../preview/PreviewFrame.svelte';
 	import studioBanner from '../assets/banners/studio.jpg';
 	import {
 		foldLog,
 		foldPhase,
-		PHASES,
 		type PhaseState,
 		reach,
 		ageText,
@@ -59,14 +48,12 @@
 		type StudioApproval,
 		type StudioFile,
 		type StudioChangeSet,
-		type StudioFrame,
 		type StudioOp,
 		type StudioPhase,
 		type StudioView
 	} from './model.ts';
-	import type { StudioAudit, StudioAuditRules } from './audit.ts';
-	import { based, SHELL, type StudioTab } from '../nav.ts';
-	import type { ShellApi, ShellError } from '../api-types.ts';
+	import type { StudioTab } from '../nav.ts';
+	import type { ShellApi } from '../api-types.ts';
 
 	// ponytail: `admin` defaults to true until the shell passes `boot.admin`; the host refuses a non-administrator's admin ops either way
 	let {
@@ -74,57 +61,42 @@
 		t,
 		tab = 'workbench',
 		onTab,
-		admin = true
+		admin = true,
+		eventsUrl,
+		initialFile = null,
+		onFile
 	}: {
 		api: ShellApi;
 		t: (key: string) => string;
 		tab?: StudioTab;
 		onTab?: (tab: StudioTab) => void;
 		admin?: boolean;
+		/** A host can mount the same Studio outside a tenant engine, including its authenticated event stream. */
+		eventsUrl?: string;
+		initialFile?: string | null;
+		onFile?: (path: string) => void;
 	} = $props();
 	const narrow = new MediaQuery('max-width: 47.999rem');
 
 	let view = $state<StudioView | null>(null);
 	const changeSets = $derived(view?.changeSets ?? []);
+	/** The builds made while a change was open, newest first: its commits in the Changes tree. */
+	const commitsOf = (c: StudioChangeSet) =>
+		(view?.builds ?? [])
+			.filter((build) => build.at >= c.createdAt && build.at <= c.updatedAt)
+			.toSorted((a, b) => b.at.localeCompare(a.at));
 	let error = $state<string | null>(null);
 	let busy = $state(false);
 	let file = $state('');
 	let drafts = $state<{ [path: string]: string | null }>({});
-	let showPreview = $state(false);
 	// the URL's tab; a click shows it at once and asks the shell to move the URL (a back navigation moves it again)
 	let active = $derived(tab);
 	function go(next: StudioTab): void {
 		active = next;
 		onTab?.(next);
+		if (narrow.current) browsing = false;
 	}
-	const root = $derived(
-		active === 'changes' || active === 'versions' || active === 'rules' ? active : 'workbench'
-	);
-	// Audit rules: read when the tab opens; a save answers the stored set, Try and Audit the head's findings
-	const readRules = observeOnce(() => (root === 'rules' && admin ? api.studioAuditRules() : null));
-	let savedRules = $state<StudioAuditRules | undefined>(undefined);
-	let audited = $state<StudioAudit | undefined>(undefined);
-	let auditError = $state<string | null>(null);
-	let auditing = $state(false);
-	const shownRules = $derived(savedRules ?? readRules.current ?? undefined);
-	const auditCall = <A,>(call: Effect.Effect<A, ShellError>, done: (answer: A) => void) =>
-		Effect.sync(() => {
-			auditing = true;
-			auditError = null;
-		}).pipe(
-			Effect.andThen(call),
-			Effect.tap((answer) => Effect.sync(() => done(answer))),
-			Effect.catch((cause) =>
-				Effect.sync(() => {
-					auditError = cause.message;
-				})
-			),
-			Effect.ensuring(
-				Effect.sync(() => {
-					auditing = false;
-				})
-			)
-		);
+	const root = $derived(active === 'changes' || active === 'versions' ? active : 'workbench');
 	let phases = $state<{ [p in StudioPhase]?: PhaseState }>({});
 	// the furthest phase the current run reached (`reach`: never back), when it started, and whether it builds a preview
 	let step = $state(-1);
@@ -133,6 +105,67 @@
 	let diff = $state(false);
 	let selected = $state<string | null>(null);
 	let browsing = $state(false);
+	let sourceCollapsed = $state(false);
+	let sourceQuery = $state('');
+	let openedInitialFile: string | null = null;
+	watch(
+		() => [initialFile, view?.files] as const,
+		([path, files]) => {
+			if (path === null) {
+				openedInitialFile = null;
+				return;
+			}
+			if (files === undefined || path === openedInitialFile) return;
+			openedInitialFile = path;
+			if (Object.hasOwn(files, path)) openFile(path);
+			else sourceQuery = path.slice(0, path.lastIndexOf('/'));
+		}
+	);
+	let sourceFolds = $state<{ [dir: string]: boolean }>({});
+	let sourceToggle = $state<HTMLButtonElement | null>(null);
+	const id = $props.id();
+	const sourceId = `${id}-source`;
+	const sourceSheetId = `${id}-source-sheet`;
+	const sourceOpen = $derived(narrow.current ? browsing : !sourceCollapsed);
+	async function toggleSource(): Promise<void> {
+		if (!narrow.current) {
+			sourceCollapsed = !sourceCollapsed;
+			return;
+		}
+		if (browsing) {
+			browsing = false;
+			sourceToggle?.focus();
+			return;
+		}
+		browsing = true;
+		await tick();
+		document.getElementById(sourceSheetId)?.querySelector<HTMLInputElement>('input')?.focus();
+	}
+	watch(
+		() => narrow.current,
+		(isNarrow) => {
+			if (!isNarrow) {
+				if (document.getElementById(sourceSheetId)?.contains(document.activeElement))
+					sourceToggle?.focus();
+				browsing = false;
+			}
+		}
+	);
+	function sourceKeydown(event: KeyboardEvent): void {
+		if (
+			event.key !== 'Escape' ||
+			event.defaultPrevented ||
+			narrow.current ||
+			root !== 'workbench' ||
+			sourceCollapsed ||
+			!(event.target instanceof Node) ||
+			!document.getElementById(sourceId)?.contains(event.target)
+		)
+			return;
+		event.preventDefault();
+		sourceCollapsed = true;
+		sourceToggle?.focus();
+	}
 
 	const load = () =>
 		api.studio().pipe(
@@ -147,59 +180,15 @@
 				})
 			)
 		);
-	class StudioStreamFailed extends Schema.TaggedError<StudioStreamFailed>()('StudioStreamFailed', {
-		message: Schema.String
-	}) {}
-	const FrameSchema = Schema.Union([
-		Schema.Struct({
-			kind: Schema.Literal('log'),
-			line: Schema.Struct({
-				at: Schema.String,
-				level: Schema.Literals(['info', 'warn', 'error']),
-				message: Schema.String
-			})
-		}),
-		Schema.Struct({ kind: Schema.Literal('source'), commit: Schema.String }),
-		Schema.Struct({ kind: Schema.Literal('change'), id: Schema.String }),
-		Schema.Struct({
-			kind: Schema.Literal('phase'),
-			phase: Schema.Literals(PHASES),
-			state: Schema.Literals(['running', 'done', 'failed'])
-		})
-	]);
-	const events = Stream.callback<StudioFrame, StudioStreamFailed>((queue) =>
-		Effect.acquireRelease(
-			Effect.try({
-				try: () => new EventSource(based(`${SHELL}/studio/events`), { withCredentials: true }),
-				catch: () => new StudioStreamFailed({ message: 'Studio events could not be opened.' })
-			}),
-			(source) => Effect.sync(() => source.close())
-		).pipe(
-			Effect.tap((source) =>
-				Effect.sync(() => {
-					source.onmessage = (event: MessageEvent<unknown>) => {
-						const decoded = Schema.decodeUnknownResult(Schema.fromJsonString(FrameSchema))(
-							event.data
-						);
-						if (decoded._tag === 'Success') Queue.offerUnsafe(queue, decoded.success);
-						else
-							Queue.failCauseUnsafe(
-								queue,
-								Cause.fail(new StudioStreamFailed({ message: 'Studio returned an invalid event.' }))
-							);
-					};
-				})
-			)
-		)
-	);
 	const observe = attach(() =>
 		load().pipe(
 			Effect.andThen(
 				typeof EventSource === 'undefined'
 					? Effect.void
-					: events.pipe(
+					: studioEvents(eventsUrl).pipe(
 							Stream.runForEach((frame) => {
 								if (view === null) return Effect.void;
+								if (frame.kind === 'tests') return load();
 								if (
 									((frame.kind === 'source' && frame.commit !== view.commit) ||
 										frame.kind === 'change') &&
@@ -263,41 +252,36 @@
 				describing = null;
 			});
 		});
-	/** When to merge, asked in a dialog: a local date and time, an hour from now by default. */
-	let scheduling = $state<{ when: string; answer: (at: string | null) => void } | null>(null);
+	/**
+	 * A merge's confirmation and when, asked in one dialog: now, or at a local date and time. The answer is `null` when
+	 * dismissed; `at` is `null` for now.
+	 */
+	type MergePlan = { at: string | null };
+	let planning = $state<{
+		id: string;
+		body: string;
+		when: string;
+		mode: 'now' | 'later';
+		answer: (plan: MergePlan | null) => void;
+	} | null>(null);
 	const localInput = (at: Date) =>
 		new Date(at.getTime() - at.getTimezoneOffset() * 60_000).toISOString().slice(0, 16);
-	const askWhen = () =>
-		Effect.callback<string | null>((resume) => {
-			scheduling = {
+	const askMerge = (id: string, body: string) =>
+		Effect.callback<MergePlan | null>((resume) => {
+			planning = {
+				id,
+				body,
 				when: localInput(new Date(Date.now() + 3_600_000)),
-				answer: (at) => {
-					scheduling = null;
-					resume(Effect.succeed(at));
+				mode: 'now',
+				answer: (plan) => {
+					planning = null;
+					resume(Effect.succeed(plan));
 				}
 			};
 			return Effect.sync(() => {
-				scheduling = null;
+				planning = null;
 			});
 		});
-	/** A merge at a later instant: saved and previewed as a merge is, then run at that time as the viewer. */
-	const schedule = Effect.fn('Studio.schedule')(function* (c: StudioChangeSet) {
-		if (locked || (c.id === view?.change && !(yield* save()))) return;
-		const current = changeSets.find((x) => x.id === c.id) ?? c;
-		if (current.preview === null || current.preview.url === null || current.preview.stale) {
-			error = t('Preview the latest commit before promoting it.');
-			return;
-		}
-		const when = yield* askWhen();
-		if (when === null) return;
-		const accept = current.preview.destructive ?? [];
-		yield* run({
-			op: 'change.merge',
-			id: current.id,
-			at: new Date(when).toISOString(),
-			...(accept.length > 0 ? { accept } : {})
-		});
-	});
 	const save = Effect.fn('Studio.save')(function* () {
 		if (view === null || Object.keys(drafts).length === 0) return true;
 		const saved = $state.snapshot(drafts),
@@ -335,13 +319,13 @@
 	);
 	const locked = $derived(busy || outcome === 'asking' || outcome === 'running');
 	const approved = Effect.fn('Studio.approved')(function* (
-		ask: ConfirmOptions,
+		ask: Effect.Effect<boolean>,
 		work: Effect.Effect<boolean>,
 		follow: { change?: string } = {}
 	) {
 		if (locked) return false;
 		cutover = { outcome: 'asking' };
-		if (!(yield* confirmAction(ask))) return ((cutover = null), false);
+		if (!(yield* ask)) return ((cutover = null), false);
 		cutover = { outcome: 'running', ...follow };
 		phases = {};
 		step = -1;
@@ -355,10 +339,6 @@
 		return ok;
 	});
 	const changedFiles = (n: number) => `${n} ${t(n === 1 ? 'changed file' : 'changed files')}`;
-	/**
-	 * Merges a change into live. The viewer's own unsaved drafts are saved (with their description) first; the
-	 * destructive steps its current preview names are what the confirmation accepts.
-	 */
 	/** The person takes the preview: the tenant shell steers Norbius's conversation with the fact. */
 	const takeControl = (id: string) =>
 		run({ op: 'preview.release', id }).pipe(
@@ -373,6 +353,10 @@
 				})
 			)
 		);
+	/**
+	 * Merges a change into live. The viewer's own unsaved drafts are saved (with their description) first; the dialog
+	 * confirms and chooses now or a later instant; the destructive steps its current preview names are what it accepts.
+	 */
 	const merge = Effect.fn('Studio.merge')(function* (c: StudioChangeSet) {
 		if (locked || (c.id === view?.change && !(yield* save()))) return;
 		const current = changeSets.find((x) => x.id === c.id) ?? c;
@@ -387,29 +371,49 @@
 			return;
 		}
 		const accept = current.preview.destructive ?? [];
+		const body = `${current.title}${current.id === view?.change ? ` · ${changedFiles(view.changes.length)}` : ''}. ${
+			accept.length > 0
+				? `${t('This applies destructive schema steps:')} ${accept.join(', ')}. `
+				: ''
+		}${
+			current.preview.impact === undefined
+				? ''
+				: `${impactLines(current.preview.impact, t).join('. ')}. `
+		}${t('It merges with live, builds and checks the result, then everyone using the workspace gets it.')}`;
+		let at: string | null = null;
 		yield* approved(
-			{
-				title: `${t('Merge')} !${current.id} ${t('into live?')}`,
-				body: `${current.title}${current.id === view?.change ? ` · ${changedFiles(view.changes.length)}` : ''}. ${
-					accept.length > 0
-						? `${t('This applies destructive schema steps:')} ${accept.join(', ')}. `
-						: ''
-				}${
-					current.preview.impact === undefined
-						? ''
-						: `${impactLines(current.preview.impact, t).join('. ')}. `
-				}${t('It merges with live, builds and checks the result, then everyone using the workspace gets it.')}`,
-				confirmLabel: t('Merge'),
-				cancelLabel: t('Cancel'),
-				destructive: accept.length > 0
-			},
-			run(
-				accept.length > 0
-					? { op: 'change.merge', id: current.id, accept }
-					: { op: 'change.merge', id: current.id }
+			askMerge(current.id, body).pipe(
+				Effect.map((plan) => {
+					if (plan === null) return false;
+					at = plan.at;
+					return true;
+				})
+			),
+			Effect.suspend(() =>
+				run(
+					at === null
+						? {
+								op: 'change.merge',
+								id: current.id,
+								...(accept.length > 0 ? { accept } : {})
+							}
+						: { op: 'change.merge', id: current.id, at, ...(accept.length > 0 ? { accept } : {}) }
+				)
 			),
 			{ change: current.id }
 		);
+	});
+	/** Close a change: its preview and its copy of the data go; its edits stay in history. */
+	const close = Effect.fn('Studio.close')(function* (c: StudioChangeSet) {
+		if (locked) return;
+		const ok = yield* confirmAction({
+			title: t('Close this change?'),
+			body: t('Its edits stay in history; its preview and its copy of the data are deleted.'),
+			confirmLabel: t('Close change'),
+			cancelLabel: t('Cancel'),
+			destructive: true
+		});
+		if (ok) yield* run({ op: 'change.close', id: c.id });
 	});
 	/** A rollback: the Version's source and data come back together; a schema change loses later data. */
 	const rollback = Effect.fn('Studio.rollback')(function* (commit: string) {
@@ -419,7 +423,7 @@
 		const lost = target.discards;
 		const when = new Date(target.checkpoint ?? target.at).toLocaleString();
 		const ok = yield* approved(
-			{
+			confirmAction({
 				title: t(target.undo ? 'Undo the rollback?' : 'Roll back live to this version?'),
 				body: `${when} — ${target.message || commit.slice(0, 8)}. ${
 					lost === undefined
@@ -429,7 +433,7 @@
 				confirmLabel: t(target.undo ? 'Undo' : 'Roll back'),
 				cancelLabel: t('Cancel'),
 				destructive: lost !== undefined
-			},
+			}),
 			run({
 				op: 'rollback',
 				commit,
@@ -443,7 +447,7 @@
 	/** What Norbius asked to change on live, held for the viewer: approved here, it runs as them; rejected, it is dropped. */
 	const asked = (held: StudioApproval) =>
 		held.op.op === 'change.merge'
-			? `${t('Merge')} !${held.op.id}`
+			? `${t('Merge')} ${t('Change')} ${held.op.id}`
 			: held.op.op === 'rollback'
 				? `${t('Roll back live to')} ${short(held.op.commit)}`
 				: held.op.op;
@@ -460,7 +464,7 @@
 		kind === 'rejected'
 			? run({ op: 'approval.decide', id: held.id, kind })
 			: approved(
-					{
+					confirmAction({
 						title: `${asked(held)}?`,
 						body: `${
 							(held.destructive?.length ?? 0) > 0
@@ -470,7 +474,7 @@
 						confirmLabel: t('Approve'),
 						cancelLabel: t('Cancel'),
 						destructive: (held.destructive?.length ?? 0) > 0
-					},
+					}),
 					run({ op: 'approval.decide', id: held.id, kind }),
 					held.op.op === 'change.merge' ? { change: held.op.id } : {}
 				);
@@ -512,7 +516,7 @@
 		return () => clearTimeout(timer);
 	});
 	const banner = $derived(bannerHidden ? null : progress);
-	/** A preview build: its progress (the furthest step and the time it took so far) shows in the preview pane. */
+	/** A preview build of the change's latest commit (never a draft), served as the change's preview. */
 	const buildPreview = () =>
 		Effect.suspend(() => {
 			// the preview builds the latest commit: unsaved drafts are not in it, so they are saved first or not previewed
@@ -580,6 +584,16 @@
 		if (ok) go('workbench');
 		return ok;
 	});
+	function create(dir = ''): void {
+		const prefix = dir === '' ? '' : `${dir}/`;
+		const path = prompt(t('New file path'), prefix)?.trim();
+		if (!path) return;
+		// an existing path opens; a deleted one is restored; a new one starts empty
+		if (drafts[path] === null) delete drafts[path];
+		else if (drafts[path] === undefined && !(view !== null && path in view.files))
+			drafts[path] = '';
+		file = path;
+	}
 	function installPackage(): void {
 		const answer = prompt(t('Package name and exact version (name@1.2.3)'))?.trim();
 		if (!answer) return;
@@ -596,29 +610,37 @@
 			})
 		);
 	}
-	function create(): void {
-		const path = prompt(t('New file path'))?.trim();
-		if (!path) return;
-		// an existing path opens; a deleted one is restored; a new one starts empty
-		if (drafts[path] === null) delete drafts[path];
-		else if (drafts[path] === undefined && !(view !== null && path in view.files))
-			drafts[path] = '';
-		file = path;
-	}
 	function openFile(path: string): void {
 		file = path;
-		showPreview = false;
+		const changed = view?.changes.find((change) => change.path === path);
+		diff = changed !== undefined && changed.baseline !== undefined;
+		if (browsing && narrow.current) sourceToggle?.focus();
 		browsing = false;
-		go('workbench');
+		if (onFile !== undefined && path !== initialFile) onFile(path);
+		else if (active !== 'workbench') go('workbench');
 	}
-	function togglePreview(): void {
-		showPreview = !showPreview;
-		// the preview may already exist from live's build: opening it builds the change's head when that moved on
-		if (showPreview && (view?.preview === null || view?.previewOf?.stale === true))
-			fork(buildPreview());
-	}
+	/** Generated, installed and VCS files are not authoring source. */
+	const isSource = (path: string) =>
+		path !== '.norbital' &&
+		!path.startsWith('.norbital/') &&
+		path !== 'node_modules' &&
+		!path.startsWith('node_modules/') &&
+		path !== '.git' &&
+		!path.startsWith('.git/');
 	const files = $derived(
-		view === null ? [] : [...new Set([...Object.keys(view.files), ...Object.keys(drafts)])].sort()
+		view === null
+			? []
+			: [
+					...new Set([
+						...Object.keys(view.files),
+						...Object.keys(drafts),
+						...view.changes
+							.filter((change) => change.change === 'deleted')
+							.map((change) => change.path)
+					])
+				]
+					.filter(isSource)
+					.sort()
 	);
 	// the open file's text is read from the host when it opens (a state carries only the tree); what was read is kept for
 	// the head it was read at, and a moved head (a save, a switch, someone else's save) reads again
@@ -662,6 +684,10 @@
 			: `${t('Shown up to')} ${sizeText(answer.truncated.limit)} ${t('of')} ${sizeText(answer.truncated.bytes)} · ${t('read-only here')}`;
 	});
 	const source = $derived(drafts[file] ?? text ?? '');
+	const deleted = $derived(
+		drafts[file] === null ||
+			(view?.changes.some((change) => change.path === file && change.change === 'deleted') ?? false)
+	);
 	const mine = $derived(changeSets.find((c) => c.id === view?.change));
 	const current = $derived(changeSets.find((c) => c.id === (selected ?? view?.change)) ?? null);
 	const releases = $derived(view?.releases ?? []);
@@ -673,20 +699,27 @@
 </script>
 
 <span hidden {@attach observe}></span>
+<svelte:document onkeydown={sourceKeydown} />
 
 <!-- the navigator rail beside the pane (a bottom sheet on a phone) and the pane -->
-{#snippet frame(navigator: Snippet, main: Snippet, top?: Snippet)}
+{#snippet frame(navigator: Snippet, main: Snippet, top: Snippet)}
 	<Stack gap="none" size="fill" class="pb-4 sm:pb-6 {INSET_X_CLASS}">
 		<div
 			class="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-lg border border-border/60"
 		>
-			{@render top?.()}
+			{@render top()}
 			<Inline align="stretch" gap="none" size="fill" class="min-w-0">
 				<aside
-					class="hidden w-72 shrink-0 border-r border-border/60 bg-card md:block"
+					id={sourceId}
+					class="hidden shrink-0 overflow-hidden bg-card transition-[width] duration-200 ease-linear md:block"
+					style:width={sourceCollapsed ? '0rem' : '18rem'}
+					inert={sourceCollapsed}
+					aria-hidden={sourceCollapsed ? true : undefined}
 					aria-label={t('Workspace navigator')}
 				>
-					<Stack gap="none" size="fill">{@render navigator()}</Stack>
+					<Stack gap="none" size="fill" class="w-72 border-r border-border/60"
+						>{@render navigator()}</Stack
+					>
 				</aside>
 				<div class="relative h-full min-h-0 min-w-0 flex-1 overflow-hidden bg-background">
 					{@render main()}
@@ -696,31 +729,127 @@
 	</Stack>
 {/snippet}
 
-{#snippet railHeading(icon: string, label: string)}
-	<Inline gap="xs" class="border-b border-border/60 px-3 py-1.5">
-		<Icon name={icon} class="size-3.5 text-muted-foreground" /><span
-			class="text-overline text-foreground">{label}</span
-		>
+{#snippet railHeader()}
+	<Inline gap="xs" class="border-b border-border/60 px-2 py-1 text-muted-foreground">
+		<Inline gap="none" role="group" aria-label={t('Workspace navigator')} class="shrink-0">
+			<Button
+				variant={root === 'workbench' ? 'secondary' : 'ghost'}
+				size="icon"
+				class="shrink-0"
+				aria-label={t('Source')}
+				title={t('Source')}
+				aria-pressed={root === 'workbench'}
+				onclick={() => go('workbench')}
+			>
+				<Icon name="lucide:file-code-2" class="size-4" />
+			</Button>
+			<Button
+				variant={root === 'changes' ? 'secondary' : 'ghost'}
+				size="icon"
+				class="shrink-0"
+				aria-label={t('Changes')}
+				title={t('Changes')}
+				aria-pressed={root === 'changes'}
+				onclick={() => go('changes')}
+			>
+				<Icon name="lucide:git-branch" class="size-4" />
+			</Button>
+		</Inline>
+		{#if root === 'workbench'}
+			{#if files.length > 0}<span
+					class="shrink-0 rounded-full bg-muted px-1.5 py-px text-tiny font-semibold tabular-nums"
+					>{files.length}</span
+				>{/if}
+			<label class="relative ml-auto min-w-0 flex-1">
+				<Icon
+					name="lucide:search"
+					class="pointer-events-none absolute top-1/2 left-1.5 size-3 -translate-y-1/2 opacity-70"
+				/>
+				<input
+					type="search"
+					bind:value={sourceQuery}
+					aria-label={t('Filter source files')}
+					placeholder={t('Filter')}
+					class="block h-8 w-full min-w-0 rounded-sm border border-border/60 bg-background py-0 pr-2 pl-6 text-xs text-foreground placeholder:text-muted-foreground"
+				/>
+			</label>
+			<Button
+				variant="ghost"
+				size="icon"
+				class="shrink-0"
+				aria-label={t('New file')}
+				title={t('New file')}
+				disabled={locked}
+				onclick={() => create('')}
+			>
+				<Icon name="lucide:file-plus" class="size-4" />
+			</Button>
+		{:else}
+			<span class="ml-auto shrink-0 px-1.5 text-tiny font-semibold tabular-nums"
+				>{changeSets.length}</span
+			>
+			{#if mine !== undefined}
+				<Button
+					variant="ghost"
+					size="icon"
+					class="shrink-0"
+					aria-label={t('New change')}
+					title={t('New change')}
+					disabled={locked}
+					onclick={() => fork(newChange())}
+				>
+					<Icon name="lucide:git-branch-plus" class="size-4" />
+				</Button>
+			{/if}
+		{/if}
 	</Inline>
 {/snippet}
 
 {#snippet sourceNav()}
 	{#if view !== null}
-		<SourceTree {files} base={view.files} {drafts} selected={file} onselect={openFile} {t} />
+		<Stack gap="none" size="fill">
+			<SourceTree
+				{files}
+				base={view.files}
+				changes={view.changes}
+				{drafts}
+				selected={file}
+				bind:query={sourceQuery}
+				bind:folds={sourceFolds}
+				onselect={openFile}
+				oncreate={create}
+				{t}
+			/>
+			<div class="border-t border-border/60 bg-card/40 p-3 min-h-16">
+				<Inline gap="xs" class="rounded-md border border-border/60 bg-muted/20 px-2 py-1.5">
+					<Icon name="lucide:package" class="size-3.5 shrink-0 text-muted-foreground" />
+					<Stack gap="none" size="fill" class="min-w-0">
+						<span class="text-overline text-foreground">{t('Dependencies')}</span>
+						<span class="truncate text-tiny text-muted-foreground">
+							{view.files['package.json'] === undefined
+								? t('No package.json')
+								: `package.json · ${sizeText(view.files['package.json'].bytes)}`}
+						</span>
+					</Stack>
+					<Button
+						variant="ghost"
+						size="icon"
+						class="shrink-0"
+						aria-label={t('Install package')}
+						title={t('Install package')}
+						disabled={locked}
+						onclick={installPackage}
+					>
+						<Icon name="lucide:package-plus" class="size-4" />
+					</Button>
+				</Inline>
+			</div>
+		</Stack>
 	{/if}
 {/snippet}
 
 {#snippet changesNav()}
-	{@render railHeading('lucide:git-pull-request', t('Changes'))}
 	<Scroll name={t('Changes')} layout="stack" gap="xs" size="fill" class="p-2">
-		<Button
-			size="sm"
-			variant="ghost"
-			class="justify-start px-2 text-micro"
-			disabled={locked}
-			onclick={() => fork(newChange())}
-			><Icon name="lucide:git-branch-plus" class="size-3.5" />{t('New change')}</Button
-		>
 		{#each [...changeSets].reverse() as c (c.id)}
 			<button
 				type="button"
@@ -732,7 +861,9 @@
 					browsing = false;
 				}}
 			>
-				<span class="block truncate text-xs font-medium text-foreground">!{c.id} {c.title}</span>
+				<span class="block truncate text-xs font-medium text-foreground"
+					>{t('Change')} {c.id} · {c.title}</span
+				>
 				<span class="block truncate text-micro text-muted-foreground"
 					>{c.openedBy}{#if c.id === view?.change}
 						· {t('yours')}{/if}</span
@@ -744,176 +875,103 @@
 						· {c.behind} {t('behind live')}{/if} · {ageText(c.updatedAt, Date.now())}</span
 				>
 			</button>
+			{#if commitsOf(c).length > 0}
+				<ul class="mb-2 ml-4 border-l border-border/70 pl-2" data-change-commits={c.id}>
+					{#each commitsOf(c) as build (build.commit)}
+						<li class="flex min-w-0 items-center gap-1.5 py-0.5 text-micro text-muted-foreground">
+							<span
+								class="size-1.5 shrink-0 rounded-full {build.status === 'failed'
+									? 'bg-destructive'
+									: 'bg-muted-foreground/50'}"
+							></span>
+							<code class="shrink-0" title={build.commit}>{build.commit.slice(0, 7)}</code>
+							<span class="min-w-0 flex-1 truncate" title={build.message}>{build.message}</span>
+							<span class="shrink-0 {build.status === 'failed' ? 'text-destructive' : ''}"
+								>{t(build.status === 'failed' ? 'Failed' : 'Built')}</span
+							>
+						</li>
+					{/each}
+				</ul>
+			{/if}
 		{:else}
 			<p class="px-2 py-2 text-micro text-muted-foreground">{t('No changes yet.')}</p>
 		{/each}
 	</Scroll>
 {/snippet}
 
+{#snippet navigatorButton()}
+	<Button
+		bind:ref={sourceToggle}
+		variant="ghost"
+		size="icon"
+		class="shrink-0"
+		aria-label={t(sourceOpen ? 'Hide navigator' : 'Show navigator')}
+		title={t(sourceOpen ? 'Hide navigator' : 'Show navigator')}
+		aria-expanded={sourceOpen}
+		aria-controls={narrow.current ? (browsing ? sourceSheetId : undefined) : sourceId}
+		onclick={toggleSource}
+	>
+		<Icon name="lucide:panel-left" class="size-4" />
+	</Button>
+{/snippet}
+
 {#snippet toolbar()}
 	{#if view !== null}
 		<WorkbenchToolbar
 			{view}
+			navigator={navigatorButton}
 			{admin}
 			busy={locked}
 			drafts={draftCount}
-			{phases}
-			{error}
-			previewing={showPreview}
 			{t}
-			onnew={create}
 			onsave={() => fork(save())}
-			onpreview={togglePreview}
 			onopen={() => fork(newChange())}
 			onmerge={() => {
 				if (mine !== undefined) fork(merge(mine));
 			}}
-			onschedule={() => {
-				if (mine !== undefined) fork(schedule(mine));
+			onclose={() => {
+				if (mine !== undefined) fork(close(mine));
 			}}
 			onunschedule={() => {
 				if (mine !== undefined) fork(run({ op: 'change.unschedule', id: mine.id }));
 			}}
-			oninstall={installPackage}
 			onreview={() => {
 				selected = view?.change ?? null;
 				go('changes');
 			}}
 		/>
-		{#if (view.conflicts?.length ?? 0) > 0}
-			<Inline
-				gap="xs"
-				role="alert"
-				class="border-b border-destructive/30 bg-destructive/10 px-2 py-1 text-destructive"
-			>
-				<Icon name="lucide:triangle-alert" class="size-3 shrink-0" /><span class="truncate text-xs"
-					>{t('Resolve the conflict markers in')} {view.conflicts?.join(', ')}</span
-				>
-			</Inline>
-		{/if}
 	{/if}
 {/snippet}
 
 {#snippet workbenchMain()}
 	{#if view !== null}
-		{#if showPreview}
-			{@const p = view.previewOf}
-			<Stack gap="none" size="fill">
-				{#if view.preview === null || p?.stale === true}
-					{@const waiting = building}
-					{@const failed =
-						!waiting &&
-						view?.builds?.some(
-							(build) => build.commit === view?.commit && build.status === 'failed'
-						)}
-					<Stack gap="sm" align="center" justify="center" size="fill" class="text-muted-foreground">
-						<Icon
-							name={waiting
-								? 'lucide:loader-2'
-								: failed
-									? 'lucide:triangle-alert'
-									: 'lucide:scan-eye'}
-							class="size-8 opacity-30 {waiting ? 'animate-spin' : ''}"
-						/>
-						<p class="text-xs" role={waiting ? 'status' : failed ? 'alert' : undefined}>
-							{waiting
-								? running
-								: failed
-									? t('Preview build failed. Try again.')
-									: p?.stale
-										? t('Preview is out of date.')
-										: t('No preview yet.')}
-						</p>
-						{#if !waiting && view.change !== undefined}
-							<Button size="sm" disabled={locked} onclick={() => fork(buildPreview())}
-								>{t('Preview')}</Button
-							>
-						{/if}
-					</Stack>
-				{:else}
-					<div class="relative flex min-h-0 flex-1 flex-col">
-						<PreviewFrame
-							src={view.preview}
-							version={p?.artifact}
-							title={t('Workbench preview')}
-							label={mine === undefined ? t('Live') : `!${mine.id} ${mine.title}`}
-							status={building ? running : undefined}
-							{t}
-						>
-							{#snippet details()}
-								{#if p !== undefined}
-									<div class="space-y-2 text-xs leading-relaxed">
-										<p class="font-medium text-foreground">{t('Preview of this change')}</p>
-										<p>
-											{t('It runs on its own copy of live data and closes after two idle hours.')}
-										</p>
-									</div>
-								{/if}
-							{/snippet}
-							{#snippet menu(close: () => void)}
-								<Button
-									size="sm"
-									variant="ghost"
-									class="justify-start"
-									disabled={locked}
-									onclick={() => (close(), fork(buildPreview()))}
-								>
-									<Icon name="lucide:refresh-cw" class="size-3.5" />{t('Rebuild preview')}
-								</Button>
-							{/snippet}
-						</PreviewFrame>
-						{#if view.previewControl?.holder === 'norbius'}
-							<div
-								class="bg-background/70 absolute inset-0 z-10 flex items-center justify-center backdrop-blur-[1px]"
-							>
-								<div
-									class="border-border bg-card flex max-w-sm flex-col items-center gap-2 rounded-lg border p-4 text-center shadow-lg"
-								>
-									<Icon name="lucide:bot" class="size-5" />
-									<p class="text-sm font-medium">{t('Norbius is using this preview')}</p>
-									<p class="text-muted-foreground text-xs">
-										{t('Take control to use it yourself; Norbius is told you did.')}
-									</p>
-									<Button
-										size="sm"
-										onclick={() => (mine !== undefined ? fork(takeControl(mine.id)) : undefined)}
-										>{t('Take control')}</Button
-									>
-								</div>
-							</div>
-						{/if}
-					</div>
-				{/if}
-			</Stack>
-		{:else}
-			<Stack gap="none" size="fill">
-				<div class="min-h-0 flex-1">
-					<SourceEditor
-						path={file}
-						value={source ?? ''}
-						baseline={view.changes.find((c) => c.path === file)?.baseline}
-						{diff}
-						deleted={drafts[file] === null}
-						{note}
-						fileCount={files.length}
-						against={t('against Live')}
-						onChange={edit}
-						onDiff={() => (diff = !diff)}
-						onDelete={() => (drafts[file] = null)}
-						{t}
-					/>
-				</div>
-				<DiagnosisPane
-					diagnostics={view.diagnostics}
-					stale={draftCount > 0}
-					busy={locked}
-					progress={building ? running : undefined}
-					onopen={openFile}
-					onrerun={() => fork(diagnose())}
+		<Stack gap="none" size="fill">
+			<div class="min-h-0 flex-1">
+				<SourceEditor
+					path={file}
+					value={source ?? ''}
+					baseline={view.changes.find((c) => c.path === file)?.baseline}
+					{diff}
+					deleted
+					{note}
+					fileCount={files.length}
+					against={t('against Live')}
+					onChange={edit}
+					onDiff={() => (diff = !diff)}
+					onDelete={() => (drafts[file] = null)}
 					{t}
 				/>
-			</Stack>
-		{/if}
+			</div>
+			<DiagnosisPane
+				diagnostics={view.diagnostics}
+				stale={draftCount > 0}
+				busy={locked}
+				progress={building ? running : undefined}
+				onopen={openFile}
+				onrerun={() => fork(diagnose())}
+				{t}
+			/>
+		</Stack>
 	{/if}
 {/snippet}
 
@@ -923,34 +981,20 @@
 			<ChangePane
 				{view}
 				change={current}
-				{admin}
 				busy={locked}
 				onopen={(p) => {
 					openFile(p);
 					diff = true;
 				}}
-				onmerge={(c) => fork(merge(c))}
+				onpreview={() => fork(buildPreview())}
+				onrelease={() => {
+					if (mine !== undefined) fork(takeControl(mine.id));
+				}}
+				progress={building ? running : undefined}
 				run={(op) => (op.op === 'change.open' && 'id' in op ? workOn(op.id) : run(op))}
 				{t}
 			/>
 		{/key}
-	{/if}
-{/snippet}
-
-{#snippet versionsMain()}
-	{#if view !== null}
-		<Scroll name={t('Versions')} class="h-full">
-			<div class="max-w-3xl py-4">
-				<ReleaseTimeline
-					builds={view.builds ?? []}
-					releases={view.releases}
-					changes={changeSets}
-					onRestore={admin ? (commit) => fork(rollback(commit)) : undefined}
-					busy={locked}
-					{t}
-				/>
-			</div>
-		</Scroll>
 	{/if}
 {/snippet}
 
@@ -961,72 +1005,48 @@
 		{:else}<p role="alert" class="text-sm text-destructive">{error}</p>{/if}
 	</Stack>
 {/snippet}
-{#snippet workbenchTab()}{#if view === null}{@render loadingPane()}{:else}{@render frame(
-			sourceNav,
-			workbenchMain,
-			toolbar
-		)}{/if}{/snippet}
-{#snippet changesTab()}{#if view === null}{@render loadingPane()}{:else}{@render frame(
-			changesNav,
-			changesMain
-		)}{/if}{/snippet}
-{#snippet versionsTab()}{#if view === null}{@render loadingPane()}{:else}<div
-			class="h-full min-h-0 {INSET_X_CLASS}"
+{#snippet frameTop()}
+	{@render toolbar()}
+	{#if root === 'workbench' && view !== null && (view.conflicts?.length ?? 0) > 0}
+		<Inline
+			gap="xs"
+			role="alert"
+			class="border-b border-destructive/30 bg-destructive/10 px-2 py-1 text-destructive"
 		>
-			{@render versionsMain()}
-		</div>{/if}{/snippet}
-{#snippet rulesTab()}
-	{#if view === null}{@render loadingPane()}{:else}<AuditRules
-			rules={shownRules}
-			audit={audited}
-			busy={auditing}
-			error={auditError ?? readRules.error?.message ?? null}
-			onsave={(revision, ruleSet) =>
-				fork(auditCall(api.studioAuditSave(revision, ruleSet), (saved) => (savedRules = saved)))}
-			ontry={(ruleSet) => fork(auditCall(api.studioAudit(ruleSet), (found) => (audited = found)))}
-			onaudit={() => fork(auditCall(api.studioAudit(), (found) => (audited = found)))}
-			onopen={(path) => {
-				go('workbench');
-				openFile(path);
-			}}
-			{t}
-		/>{/if}
-{/snippet}
-
-{#snippet browse()}
-	{#if root === 'workbench' || root === 'changes'}
-		<Button
-			variant="ghost"
-			size="sm"
-			class="shrink-0 md:hidden"
-			aria-label={t('Open the navigator')}
-			onclick={() => (browsing = true)}
-		>
-			<Icon name="lucide:panel-bottom" class="size-4" />{t('Browse')}
-		</Button>
+			<Icon name="lucide:triangle-alert" class="size-3 shrink-0" /><span class="truncate text-xs"
+				>{t('Resolve the conflict markers in')} {view.conflicts?.join(', ')}</span
+			>
+		</Inline>
 	{/if}
 {/snippet}
+{#snippet rail()}
+	{@render railHeader()}
+	{#if root === 'changes'}{@render changesNav()}{:else}{@render sourceNav()}{/if}
+{/snippet}
+{#snippet activeMain()}
+	{#if root === 'changes'}{@render changesMain()}{:else}{@render workbenchMain()}{/if}
+{/snippet}
 
-<Stack gap="none" size="fill" class="bg-background">
-	<AppHeader
-		src={studioBanner}
-		icon="lucide:code-xml"
-		title={t('Workspace Studio')}
-		description={t(
-			'Edit in a change, preview the exact result on a copy of live’s data, then merge.'
-		)}
-		compact={narrow.current}
-	/>
+{#snippet headerActions()}
+	{#if error !== null && outcome !== 'failed'}
+		<Inline
+			role="alert"
+			gap="xs"
+			class="min-w-0 max-w-[26rem] rounded-md border border-destructive/40 bg-background/90 px-2.5 py-1 text-xs text-destructive shadow-xs"
+		>
+			<Icon name="lucide:circle-alert" class="size-3.5 shrink-0" />
+			<span class="min-w-0 truncate" title={error}>{error}</span>
+		</Inline>
+	{/if}
+	{#if view !== null}<StudioStatus {view} busy={locked} {phases} {t} />{/if}
 	{#if banner !== null}
 		<Inline
 			role="status"
 			gap="sm"
-			class="mx-4 mt-3 min-w-0 max-w-full shrink-0 rounded-md px-3 py-2 text-xs sm:mx-6 sm:max-w-[32rem] {outcome ===
+			class="min-w-0 max-w-[32rem] rounded-md border border-border/60 bg-background/90 px-2.5 py-1 text-xs shadow-xs {outcome ===
 			'failed'
-				? 'bg-destructive/10 text-destructive'
-				: outcome === 'done'
-					? 'bg-success/10 text-foreground'
-					: 'bg-info/10 text-foreground'}"
+				? 'text-destructive'
+				: 'text-foreground'}"
 		>
 			{#if outcome === 'running' || outcome === 'asking'}<Spinner class="size-3.5 shrink-0" />
 			{:else}<Icon
@@ -1039,7 +1059,6 @@
 					{#if outcome === 'done' && cutover?.undo !== undefined}
 						{@const undo = cutover.undo}
 						<Button
-							size="sm"
 							variant="outline"
 							onclick={() => {
 								cutover = null;
@@ -1047,20 +1066,26 @@
 							}}><Icon name="lucide:undo-2" class="size-3.5" />{t('Undo')}</Button
 						>
 					{/if}
-					<Button size="sm" variant="ghost" onclick={() => (cutover = null)}>{t('Dismiss')}</Button>
+					<Button variant="ghost" onclick={() => (cutover = null)}>{t('Dismiss')}</Button>
 				</Inline>
 			{/if}
 		</Inline>
 	{/if}
+{/snippet}
+
+<Stack gap="none" size="fill" class="bg-background">
+	<AppHeader
+		src={studioBanner}
+		icon="lucide:code-xml"
+		title={t('Workspace Studio')}
+		description={t(
+			'Edit in a change, preview the exact result on a copy of live’s data, then merge.'
+		)}
+		compact={narrow.current}
+		actions={headerActions}
+		class="md:h-24"
+	/>
 	{#if view !== null}
-		{#if error !== null && root !== 'workbench' && outcome !== 'failed'}
-			<p
-				role="alert"
-				class="mx-4 mt-3 shrink-0 rounded-md bg-destructive/10 px-3 py-2 text-xs text-destructive sm:mx-6"
-			>
-				{error}
-			</p>
-		{/if}
 		{#each view.approvals ?? [] as held (held.id)}
 			<Inline
 				role="group"
@@ -1079,75 +1104,83 @@
 					>
 				</span>
 				<Inline gap="xs" class="shrink-0">
-					<Button size="sm" disabled={locked} onclick={() => fork(decide(held, 'approved'))}
+					<Button disabled={locked} onclick={() => fork(decide(held, 'approved'))}
 						>{t('Approve')}</Button
 					>
-					<Button
-						size="sm"
-						variant="outline"
-						disabled={locked}
-						onclick={() => fork(decide(held, 'rejected'))}>{t('Reject')}</Button
+					<Button variant="outline" disabled={locked} onclick={() => fork(decide(held, 'rejected'))}
+						>{t('Reject')}</Button
 					>
 				</Inline>
 			</Inline>
 		{/each}
 	{/if}
-	<Tabs
-		value={root}
-		onValueChange={(v) =>
-			go(v === 'changes' || v === 'versions' || v === 'rules' ? v : 'workbench')}
-		trailing={browse}
-		class="mt-4 min-h-0 flex-1 gap-3 [&>div:first-child]:px-4 sm:[&>div:first-child]:px-6"
-		tabs={[
-			{ name: 'workbench', title: t('Workbench'), body: workbenchTab, keepAlive: true as const },
-			{ name: 'changes', title: t('Changes'), body: changesTab },
-			{ name: 'versions', title: t('Versions'), body: versionsTab },
-			...(admin ? [{ name: 'rules', title: t('Audit rules'), body: rulesTab }] : [])
-		]}
-	/>
+	<div class="mt-3 flex min-h-0 flex-1 flex-col">
+		{#if view === null}{@render loadingPane()}{:else}{@render frame(
+				rail,
+				activeMain,
+				frameTop
+			)}{/if}
+	</div>
 </Stack>
 
 {#if view !== null}
-	<Sheet bind:open={browsing} title={t('Workspace navigator')}>
-		<Stack gap="none" size="fill">
-			{#if root === 'workbench'}{@render sourceNav()}{:else if root === 'changes'}{@render changesNav()}{/if}
+	<Sheet
+		bind:open={browsing}
+		title={t('Workspace navigator')}
+		onOpenChange={(open) => {
+			if (!open) sourceToggle?.focus();
+		}}
+	>
+		<Stack gap="none" size="fill" id={sourceSheetId} data-studio-source-sheet>
+			{@render rail()}
 		</Stack>
 	</Sheet>
 {/if}
 
 <Dialog.Root
-	open={scheduling !== null}
+	open={planning !== null}
 	onOpenChange={(open) => {
-		if (!open) scheduling?.answer(null);
+		if (!open) planning?.answer(null);
 	}}
 >
 	<Dialog.Content class="max-w-md">
-		{#if scheduling !== null}
-			{@const asking = scheduling}
+		{#if planning !== null}
+			{@const asking = planning}
 			<Dialog.Header>
-				<Dialog.Title>{t('Schedule the merge')}</Dialog.Title>
-				<Dialog.Description
-					>{t(
-						'It merges at that time. The workspace is down only while it switches over: open pages show that it is updating, then reload.'
-					)}</Dialog.Description
-				>
+				<Dialog.Title>{t('Merge')} {t('Change')} {asking.id} {t('into live?')}</Dialog.Title>
+				<Dialog.Description>{asking.body}</Dialog.Description>
 			</Dialog.Header>
 			<form
-				class="flex flex-col gap-3"
+				class="flex flex-col gap-3 pb-6 md:pb-0"
 				onsubmit={(event) => {
 					event.preventDefault();
-					asking.answer(asking.when === '' ? null : asking.when);
+					asking.answer({ at: asking.mode === 'later' ? asking.when : null });
 				}}
 			>
-				<div class="flex flex-col gap-1.5">
-					<label for="studio-merge-at" class="text-label">{t('Merge at')}</label>
-					<Input id="studio-merge-at" type="datetime-local" bind:value={asking.when} />
-				</div>
+				<fieldset class="grid gap-2">
+					<legend class="text-label">{t('When')}</legend>
+					<label class="flex items-center gap-2">
+						<input type="radio" class="accent-primary" bind:group={asking.mode} value="now" />
+						{t('Now')}
+					</label>
+					<label class="flex items-center gap-2">
+						<input type="radio" class="accent-primary" bind:group={asking.mode} value="later" />
+						{t('At a time')}
+					</label>
+				</fieldset>
+				{#if asking.mode === 'later'}
+					<div class="flex flex-col gap-1.5">
+						<label for="studio-merge-at" class="text-label">{t('Merge at')}</label>
+						<Input id="studio-merge-at" type="datetime-local" required bind:value={asking.when} />
+					</div>
+				{/if}
 				<Dialog.Footer>
 					<Button type="button" variant="ghost" onclick={() => asking.answer(null)}
 						>{t('Cancel')}</Button
 					>
-					<Button type="submit">{t('Schedule')}</Button>
+					<Button type="submit" disabled={asking.mode === 'later' && asking.when === ''}
+						>{asking.mode === 'later' ? t('Schedule merge') : t('Merge now')}</Button
+					>
 				</Dialog.Footer>
 			</form>
 		{/if}
@@ -1172,7 +1205,7 @@
 				>
 			</Dialog.Header>
 			<form
-				class="flex flex-col gap-3"
+				class="flex flex-col gap-3 pb-6 md:pb-0"
 				onsubmit={(event) => {
 					event.preventDefault();
 					asking.answer(asking.text.trim() || asking.suggestion);
@@ -1218,7 +1251,7 @@
 				>
 			</Dialog.Header>
 			<form
-				class="flex flex-col gap-3"
+				class="flex flex-col gap-3 pb-6 md:pb-0"
 				onsubmit={(event) => {
 					event.preventDefault();
 					asking.answer(asking.title.trim() || null);

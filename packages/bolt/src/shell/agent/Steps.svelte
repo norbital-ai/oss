@@ -9,6 +9,8 @@
 	import { SvelteMap, SvelteSet } from 'svelte/reactivity';
 	import { CodeEditor, Icon, StructuredData, TabStrip } from '@norbital-ai/ui';
 	import type { AgentRow } from '../../protocol/wire.ts';
+	import DiffView from './DiffView.svelte';
+	import ReadTable from './ReadTable.svelte';
 	import { failureOf, reportView, resultLine, stepArgs, stepView, type StepView } from './view.ts';
 
 	let {
@@ -41,10 +43,53 @@
 		if (read !== null) return [read.url ?? '', read.page].filter(Boolean).join('\n\n');
 		return JSON.stringify(v, null, 2);
 	};
+	/** A first-cut diff for an older step whose result predates the host's compact diff. */
+	const lineDiff = (before: string, after: string) =>
+		[...before.split('\n').map((line) => `-${line}`), ...after.split('\n').map((line) => `+${line}`)].join('\n');
+	const object = (v: unknown): v is Readonly<Record<string, unknown>> =>
+		typeof v === 'object' && v !== null && !Array.isArray(v);
+	/** The source edit's diff, from the host result or, for an older step, its input. */
+	const diffsOf = (tool: AgentRow['tool']) => {
+		if (tool === undefined || (tool.name !== 'workspace_edit' && tool.name !== 'workspace_write')) return null;
+		// the row carries the compact diffs whole; its result may be clipped, and its args are only 600 characters
+		if (tool.changes !== undefined && tool.changes.length > 0) return tool.changes;
+		const result = json(tool.result);
+		if (object(result) && Array.isArray(result.changes)) {
+			const files = result.changes.flatMap((change) =>
+				object(change) && typeof change.path === 'string' && typeof change.diff === 'string'
+					? [{ path: change.path, ...(typeof change.change === 'string' ? { change: change.change } : {}), diff: change.diff }]
+					: []
+			);
+			if (files.length > 0) return files;
+		}
+		const args = json(tool.args);
+		if (!object(args)) return null;
+		if (tool.name === 'workspace_edit' && typeof args.path === 'string')
+			return [{
+				path: args.path,
+				diff: lineDiff(typeof args.oldString === 'string' ? args.oldString : '', typeof args.newString === 'string' ? args.newString : '')
+			}];
+		if (tool.name === 'workspace_write' && Array.isArray(args.changes)) {
+			const files = args.changes.flatMap((change) => {
+				if (!object(change) || typeof change.path !== 'string') return [];
+				if (typeof change.find === 'string' && typeof change.replace === 'string')
+					return [{ path: change.path, diff: lineDiff(change.find, change.replace) }];
+				if (typeof change.text === 'string')
+					return [{ path: change.path, diff: change.text.split('\n').map((line) => `+${line}`).join('\n') }];
+				return [];
+			});
+			if (files.length > 0) return files;
+		}
+		return null;
+	};
+	const readOf = (tool: AgentRow['tool'], data: unknown) => {
+		if (tool?.name !== 'read' || !object(data)) return null;
+		return 'result' in data ? data.result : data;
+	};
 	const active = (s: AgentRow) => s.tool?.running === true || s.state === 'streaming';
 	const seconds = (ms: number) =>
 		ms < 1000 ? `${(ms / 1000).toFixed(1)}s` : `${Math.round(ms / 1000)}s`;
-	const pane = new SvelteMap<string, 'code' | 'input' | 'output'>();
+	const pane = new SvelteMap<string, 'code' | 'input' | 'output' | 'diff'>();
 </script>
 
 <ol class={activity ? 'space-y-1' : 'mt-1 space-y-0.5 border-l border-border/70 pl-3'}>
@@ -80,12 +125,16 @@
 							? 'animate-spin motion-reduce:animate-none'
 							: ''}"
 					/>
-					<span class="shrink-0 {activity ? '' : 'font-medium'} {active(s) ? 'agent-shimmer' : ''}"
-						>{t(v.verb)}</span
-					>
-					{#if v.target !== ''}<span class="min-w-0 truncate opacity-80" title={v.target}
-							>{v.target}</span
-						>{/if}
+					{#if failed}
+						<span class="min-w-0 truncate font-medium" title={reason}>{reason}</span>
+					{:else}
+						<span class="shrink-0 {activity ? '' : 'font-medium'} {active(s) ? 'agent-shimmer' : ''}"
+							>{t(v.verb)}</span
+						>
+						{#if v.target !== ''}<span class="min-w-0 truncate opacity-80" title={v.target}
+								>{v.target}</span
+							>{/if}
+					{/if}
 					{#if tool?.ms !== undefined && tool.ms >= 100}<span
 							class="ml-auto shrink-0 tabular-nums opacity-70">{seconds(tool.ms)}</span
 						>{:else}<span class="ml-auto"></span>{/if}
@@ -103,7 +152,7 @@
 									readonly
 									wrap
 									minHeight="0"
-									class="text-[0.7rem]"
+									class="text-micro"
 									language="plaintext"
 									aria-label={t('Output')}
 								/>
@@ -114,79 +163,93 @@
 							</p>
 						{:else}
 							{@const line = resultLine(json(tool.result))}
-							{#if line !== ''}<p
-									class={failed ? 'text-destructive' : 'text-muted-foreground'}
-									data-step-result
-								>
+							{#if !failed && line !== ''}<p class="text-muted-foreground" data-step-result>
 									{line}
 								</p>{/if}
-							{@const tabs = [
-								...(v.code !== undefined && v.code.text !== '' ? (['code'] as const) : []),
-								...(tool.args !== undefined ? (['input'] as const) : []),
-								...(tool.result !== undefined ? (['output'] as const) : [])
-							]}
-							{#if tabs.length > 0}
-								{@const shown = tabs.find((k) => k === pane.get(s.id)) ?? tabs[0]!}
-								<TabStrip
-									label={t('Step')}
-									value={shown}
-									items={tabs.map((k) => ({
-										name: k,
-										title: t(k === 'code' ? 'Code' : k === 'input' ? 'Input' : 'Output')
-									}))}
-									onValueChange={(k) => {
-										const picked = tabs.find((x) => x === k);
-										if (picked !== undefined) pane.set(s.id, picked);
-									}}
-								/>
-								{@const data = json((shown === 'input' ? tool.args : tool.result) ?? '')}
-								{@const text =
-									shown === 'code'
-										? (v.code?.text ?? '')
-										: pretty((shown === 'input' ? tool.args : tool.result) ?? '')}
-								<div
-									role="tabpanel"
-									class="max-h-56 overflow-auto rounded-md"
-									data-step-pane={shown}
-								>
-									{#key `${s.id}:${shown}`}
-										{#if shown !== 'code' && data !== null && typeof data === 'object' && !Schema.is(PageRead)(data)}
-											<StructuredData
-												value={data}
-												name={t(shown === 'input' ? 'Input' : 'Output')}
-												frame={false}
-											/>
-										{:else}
-											<CodeEditor
-												value={text}
-												readonly
-												wrap
-												minHeight="0"
-												class="text-[0.7rem]"
-												language={shown === 'code'
-													? (v.code?.language ?? 'plaintext')
-													: /^\s*[[{]/.test(text)
-														? 'json'
-														: 'plaintext'}
-												aria-label={t(
-													shown === 'code' ? 'Code' : shown === 'input' ? 'Input' : 'Output'
-												)}
-											/>
-										{/if}
-									{/key}
+							{@const diffs = diffsOf(tool)}
+							{@const data = json(tool.result ?? '')}
+							{@const read = readOf(tool, data)}
+							{@const dynamic =
+								['create', 'update', 'delete', 'upsert'].includes(tool.name) &&
+								data !== null &&
+								typeof data === 'object' &&
+								!Schema.is(PageRead)(data)}
+							{#if diffs !== null}
+								<div class="max-h-56 overflow-auto rounded-md" data-step-pane="diff">
+									<DiffView files={diffs} {t} />
 								</div>
+							{:else if read !== null}
+								<div class="max-h-56 overflow-auto rounded-md" data-step-pane="output">
+									<ReadTable value={read} {t} />
+								</div>
+							{:else if dynamic}
+								<div class="max-h-56 overflow-auto rounded-md" data-step-pane="output">
+									<StructuredData value={data} name={t('Output')} frame={false} />
+								</div>
+							{:else}
+								{@const tabs = [
+									...(v.code !== undefined && v.code.text !== '' ? (['code'] as const) : []),
+									...(tool.args !== undefined ? (['input'] as const) : []),
+									...(tool.result !== undefined ? (['output'] as const) : [])
+								]}
+								{#if tabs.length > 0}
+									{@const preferred = tabs[0]!}
+									{@const shown = tabs.find((k) => k === pane.get(s.id)) ?? preferred}
+									{@const paneData = json((shown === 'input' ? tool.args : tool.result) ?? '')}
+									<TabStrip
+										label={t('Step')}
+										value={shown}
+										items={tabs.map((k) => ({
+											name: k,
+											title: t(k === 'code' ? 'Code' : k === 'input' ? 'Input' : 'Output')
+										}))}
+										onValueChange={(k) => {
+											const picked = tabs.find((x) => x === k);
+											if (picked !== undefined) pane.set(s.id, picked);
+										}}
+									/>
+									{@const text =
+										shown === 'code'
+											? (v.code?.text ?? '')
+											: pretty((shown === 'input' ? tool.args : tool.result) ?? '')}
+									<div
+										role="tabpanel"
+										class="max-h-56 overflow-auto rounded-md"
+										data-step-pane={shown}
+									>
+										{#key `${s.id}:${shown}`}
+											{#if shown !== 'code' && paneData !== null && typeof paneData === 'object' && !Schema.is(PageRead)(paneData)}
+												<StructuredData
+													value={paneData}
+													name={t(shown === 'input' ? 'Input' : 'Output')}
+													frame={false}
+												/>
+											{:else}
+												<CodeEditor
+													value={text}
+													readonly
+													wrap
+													minHeight="0"
+													class="text-micro"
+													language={shown === 'code'
+														? (v.code?.language ?? 'plaintext')
+														: /^\s*[[{]/.test(text)
+															? 'json'
+															: 'plaintext'}
+													aria-label={t(
+														shown === 'code' ? 'Code' : shown === 'input' ? 'Input' : 'Output'
+													)}
+												/>
+											{/if}
+										{/key}
+									</div>
+								{/if}
 							{/if}
 						{/if}
 					</div>
 				{/if}
 			</details>
-			{#if reason !== ''}<p
-					class="truncate pb-0.5 pl-5.5 text-xs text-destructive/80"
-					title={reason}
-					data-step-failure
-				>
-					{reason}
-				</p>{/if}
+
 		</li>
 	{/each}
 </ol>

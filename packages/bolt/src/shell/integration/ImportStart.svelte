@@ -49,7 +49,6 @@
 		<legend class="mb-2 text-sm font-medium">{t('Import start')}</legend>
 		{#if provider.importStart.kind === 'timestamp'}
 			<Combobox
-				size="sm"
 				aria-label={t('Import start')}
 				disabled={busy}
 				value={value.kind}
@@ -109,7 +108,6 @@
 					<span class="text-label">{say(field.label)}</span>
 					{#if field.options !== undefined}
 						<Combobox
-							size="sm"
 							disabled={busy}
 							aria-label={say(field.label)}
 							value={value.values[field.name] ?? field.options[0]?.value ?? null}

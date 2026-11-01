@@ -77,7 +77,7 @@
 	/** Typed by the source `of` names, including the native row and authored column field types. */
 	export type TableProps<S = TableSource, R extends Values = RowIn<S>, K = ColumnsIn<S>> = {
 		of: S & TableSource<R & Partial<K>>;
-		columns: readonly Col<R, K>[];
+		columns?: readonly Col<R, K>[];
 		/** The author's fixed scope: ANDed under every viewer filter, shown read-only in the view popover, never clearable. */
 		where?: S extends string ? WhereOf<S> : Where;
 		/** Seed rows of the view popover the viewer may edit or clear; a cleared choice is kept in the URL. */
@@ -97,7 +97,7 @@
 		embedded?: boolean;
 		/** Semantic row treatment, shared by the grid and narrow layout. */
 		rowClass?: (row: R) => string | undefined;
-		/** An action revealed on row hover or keyboard focus, inside the final displayed cell. */
+		/** An overlay at the row's right edge, sticky while scrolling; revealed on hover or keyboard focus. */
 		rowTrailing?: Snippet<[R]>;
 		actions?: readonly RowAction<R>[];
 		/** The URL parameter prefix; defaults to the source's name. */
@@ -123,7 +123,7 @@
 </script>
 
 <script lang="ts" generics="S extends TableSource">
-	import { formatValue as show } from '../kinds/kind.js';
+	import { formatValue as show, recordText } from '../kinds/kind.js';
 	import { fork } from '../effect/index.js';
 	import { getAllContexts, onDestroy, untrack } from 'svelte';
 	import { SvelteSet } from 'svelte/reactivity';
@@ -169,7 +169,7 @@
 
 	let {
 		of,
-		columns,
+		columns: authoredColumns = [],
 		where,
 		initialFilter,
 		orderBy,
@@ -210,9 +210,24 @@
 				? (rootsOf(tableSource.read.read)[0] ?? '')
 				: ''
 	);
+	/** The columns as authored; a page may name only `of`, and every field the model exposes becomes a column. */
+	const columns = $derived<readonly Col<RowIn<S>, ColumnsIn<S>>[]>(
+		authoredColumns.length > 0
+			? authoredColumns
+			: (Object.keys(kinds.catalog?.[model]?.fields ?? {}) as (keyof ColumnsIn<S> & string)[]).map(
+					(field) => ({ field })
+				)
+	);
 
 	const urlKey = $derived(key ?? (name || model || 'rows'));
-	const fields = $derived(columns.map((c) => (typeof c === 'string' ? c : c.field)));
+	const fields = $derived([
+		...new Set([
+			...columns.map((c) => (typeof c === 'string' ? c : c.field)),
+			...(kinds.catalog?.[model]?.record_label === undefined
+				? []
+				: (kinds.catalog?.[model]?.label ?? []))
+		])
+	]);
 	type Column = Col<RowIn<S>, ColumnsIn<S>>;
 	const colOf = <F extends keyof ColumnsIn<S> & string>(
 		c: F | ColumnDefinition<RowIn<S>, ColumnsIn<S>, F>
@@ -458,7 +473,7 @@
 					: []
 				: sortRows(
 						searchRows(tableSource._tag === 'local' ? tableSource.rows : [], st.q, fields).filter(
-							(r) => matches(r, { t: 'group', join: 'and', of: vs.rows })
+							(r) => matches(r, { t: 'group', join: 'and', of: vs.rows }, vs.clock)
 						),
 						vs.order
 					)
@@ -646,6 +661,7 @@
 	const span = $derived(
 		ordered.length +
 			(selectable ? 1 : 0) +
+			(rowTrailing ? 1 : 0) +
 			(actions.length > 0 || (kind === 'local' && onChange && remove) ? 1 : 0)
 	);
 	/** Moves column `f` to `to`'s place (a drag onto a header), or one step (`±1`, the column menu's keyboard way). */
@@ -752,8 +768,23 @@
 		open(row);
 	};
 	/** A cell's full text, its tooltip when the single line truncates. */
+	const identifierColumn = (f: string, row: ReadRow) => {
+		const first = columns[0];
+		const field = typeof first === 'string' ? first : first?.field;
+		const kind = kindOf(f);
+		const unlabelled =
+			exposed !== undefined && exposed.record_label === undefined && exposed.label.length === 0;
+		return (
+			(exposed?.record_label !== undefined || typeof row['$label'] === 'string' || unlabelled) &&
+			f === field &&
+			((exposed?.label.includes(f) ?? false) || unlabelled) &&
+			(kind?.kind === 'text' || kind?.kind === 'seq')
+		);
+	};
 	const fullText = (row: ReadRow, f: string) =>
-		refOf(presentRow(row), f)?.text ?? show(valueAt(presentRow(row), f), client?.locale);
+		identifierColumn(f, row)
+			? recordText(exposed, row) || show(valueAt(presentRow(row), f), client?.locale)
+			: (refOf(presentRow(row), f)?.text ?? show(valueAt(presentRow(row), f), client?.locale));
 	/** Plain cell text: its overflow can open a popover without swallowing a link or a control. */
 	const plainText = (row: ReadRow, f: string) => {
 		const displayed = presentRow(row),
@@ -817,7 +848,11 @@
 			row,
 			value: columnValue(row, col.field),
 			field: col.field
-		})}{:else if plainText(row, col.field)}<Overflow
+		})}{:else if identifierColumn(col.field, row) && recordText(exposed, row)}<Overflow
+			text={recordText(exposed, row)}
+			expand="never"><span data-record-label>{recordText(exposed, row)}</span></Overflow
+		>
+	{:else if plainText(row, col.field)}<Overflow
 			text={fullText(row, col.field)}
 			expand={title ? 'never' : 'row'}
 			><Value
@@ -857,7 +892,6 @@
 					<Combobox
 						variant="ghost"
 						class="w-24"
-						size="sm"
 						aria-label={msg(text, 'table.pageSize', 'Rows per page')}
 						searchable={false}
 						options={SIZES.map((n) => ({
@@ -868,7 +902,7 @@
 						onChange={(v) => v !== null && setSize(Number(v))}
 					/>
 					<Button
-						size="icon-sm"
+						size="icon"
 						variant="ghost"
 						hint={msg(text, 'table.prev', 'Previous')}
 						aria-label={msg(text, 'table.prev', 'Previous')}
@@ -887,7 +921,7 @@
 								})}</span
 					>
 					<Button
-						size="icon-sm"
+						size="icon"
 						variant="ghost"
 						hint={msg(text, 'table.next', 'Next')}
 						aria-label={msg(text, 'table.next', 'Next')}
@@ -922,7 +956,7 @@
 	{#if actions.length + (kind === 'local' && onChange && remove ? 1 : 0) > 1}
 		<Popover.Root>
 			<Popover.Trigger
-				class="text-muted-foreground hover:bg-accent hover:text-foreground grid size-8 max-sm:size-11 place-items-center rounded-sm"
+				class="text-muted-foreground hover:bg-accent hover:text-foreground grid size-8 [--hit-target:2rem] place-items-center rounded-sm"
 				aria-label={msg(text, 'table.rowActions', 'Row actions')}
 				data-row-menu><Glyph name="more" class="size-4" /></Popover.Trigger
 			>
@@ -938,7 +972,6 @@
 {#snippet rowActions(row: ReadRow)}
 	{#each actions as a (a)}
 		<Button
-			size="sm"
 			variant="ghost"
 			onclick={(e: MouseEvent) => {
 				e.stopPropagation();
@@ -948,7 +981,6 @@
 	{/each}
 	{#if kind === 'local' && onChange && remove}
 		<Button
-			size="sm"
 			variant="ghost"
 			onclick={() => {
 				if (tableSource._tag !== 'local') return;
@@ -981,7 +1013,6 @@
 			{#if all && matching !== null && matching > selected.size}
 				<Button
 					variant="link"
-					size="sm"
 					class="h-auto px-0 text-xs"
 					disabled={selecting}
 					onclick={selectMatching}
@@ -992,7 +1023,6 @@
 			{/if}
 			<Button
 				variant="link"
-				size="sm"
 				class="h-auto px-0 text-xs"
 				onclick={() => selected.clear()}
 				data-select-clear>{msg(text, 'table.clearSelection', 'Clear selection')}</Button
@@ -1057,7 +1087,6 @@
 							hint={msg(text, 'table.noMatchHint', 'Try a different search, or clear the filters.')}
 						>
 							<Button
-								size="sm"
 								variant="outline"
 								onclick={() => {
 									vs.clear();
@@ -1074,7 +1103,6 @@
 								: msg(text, 'table.emptyHint', 'Nothing has been added here yet.')}
 						>
 							{#if canNew}<Button
-									size="sm"
 									onclick={() =>
 										typeof tb.new === 'function' ? tb.new() : openRecord(model, 'new', contexts)}
 									><Glyph name="plus" />{msg(text, 'table.new', 'New')}</Button
@@ -1107,12 +1135,12 @@
 						data-table-wide
 					>
 						<table
-							class="w-max min-w-full border-separate border-spacing-0 text-xs [&_td]:h-9 [&_td]:border-b [&_td]:px-3 [&_td]:py-0 [&_td]:whitespace-nowrap [&_td:not(:last-child)]:border-r [&_th]:h-9 [&_th]:border-b [&_th]:px-3 [&_th]:text-left [&_th]:text-[13px] [&_th]:font-medium [&_th:not(:last-child)]:border-r"
+							class="w-max min-w-full border-separate border-spacing-0 text-xs [&_td]:h-9 [&_td]:border-b [&_tbody>tr:last-child>td]:border-b-0 dark:[&_tbody>tr:last-child>td]:border-b [&_td]:px-3 [&_td]:py-0 [&_td]:whitespace-nowrap dark:[&_td:not(:last-child)]:border-r [&_th]:h-9 [&_th]:border-b [&_th]:px-3 [&_th]:text-left [&_th]:text-xs [&_th]:text-muted-foreground dark:[&_th]:text-[13px] dark:[&_th]:text-foreground [&_th]:font-medium dark:[&_th:not(:last-child)]:border-r"
 						>
-							<thead class="bg-muted sticky top-0 z-20">
+							<thead class="bg-card sticky top-0 z-20 dark:bg-muted">
 								<tr>
 									{#if selectable}
-										<th class="bg-muted sticky left-0 z-10 w-8 px-2!"
+										<th class="bg-card sticky left-0 z-10 w-8 dark:bg-muted px-2!"
 											><input
 												type="checkbox"
 												aria-label={msg(text, 'table.selectAll', 'Select all')}
@@ -1127,7 +1155,7 @@
 										<!-- drag a header onto another to move it (the column menu moves it by keyboard); sorting is the toolbar's -->
 										<th
 											class={[
-												'group bg-muted relative',
+												'group bg-card relative dark:bg-muted',
 												isPinned && 'sticky z-10',
 												isPinned && ci === pinCount - 1 && PIN_EDGE,
 												numeric(f) && 'text-right'
@@ -1249,8 +1277,9 @@
 											</span>
 										</th>
 									{/each}
+									{#if rowTrailing}<th class="w-0 p-0!"></th>{/if}
 									{#if actions.length > 0 || (kind === 'local' && onChange && remove)}<th
-											class={['bg-muted z-10', ACTS_EDGE]}
+											class={['bg-card z-10 dark:bg-muted', ACTS_EDGE]}
 										></th>{/if}
 								</tr>
 							</thead>
@@ -1305,10 +1334,7 @@
 											<td
 												class={[
 													'bg-card',
-													isPinned
-														? 'sticky z-[1]'
-														: (ci === 0 || (rowTrailing && ci === ordered.length - 1)) &&
-															'relative',
+													isPinned ? 'sticky z-[1]' : ci === 0 && 'relative',
 													isPinned && ci === pinCount - 1 && PIN_EDGE,
 													numeric(col.field) && 'text-right tabular-nums',
 													embedded && 'align-middle',
@@ -1338,14 +1364,6 @@
 														{@render cell(row, col, ci === 0 && opens)}
 													</div>
 												{/if}
-												{#if rowTrailing && ci === ordered.length - 1}
-													<div
-														class="absolute top-1/2 right-1 -translate-y-1/2 opacity-0 pointer-events-none group-hover/row:opacity-100 group-hover/row:pointer-events-auto group-focus-within/row:opacity-100 group-focus-within/row:pointer-events-auto [@media(hover:none)]:opacity-100 [@media(hover:none)]:pointer-events-auto"
-														data-row-trailing
-													>
-														{@render rowTrailing(row)}
-													</div>
-												{/if}
 												{#if ci === 0 && opens}
 													<!-- the row's one open control (its record opens in the side panel), over the cell's end while the row is hovered or holds focus -->
 													<button
@@ -1359,6 +1377,16 @@
 												{/if}
 											</td>
 										{/each}
+										{#if rowTrailing}
+											<td class="sticky right-0 z-[2] w-0 p-0!">
+												<div
+													class="absolute top-1/2 right-0 -translate-y-1/2 bg-card opacity-0 pointer-events-none group-hover/row:opacity-100 group-hover/row:pointer-events-auto group-focus-within/row:opacity-100 group-focus-within/row:pointer-events-auto [@media(hover:none)]:opacity-100 [@media(hover:none)]:pointer-events-auto"
+													data-row-trailing
+												>
+													{@render rowTrailing(row)}
+												</div>
+											</td>
+										{/if}
 										{#if actions.length > 0 || (kind === 'local' && onChange && remove)}
 											<td class={['bg-card z-[1]', ACTS_EDGE]} data-row-actions
 												>{@render rowMenu(row)}</td
@@ -1441,7 +1469,9 @@
 									}}
 								>
 									{#if lead}<span class="truncate text-sm font-medium"
-											>{@render cell(row, lead, opens)}</span
+											>{#if (exposed?.record_label !== undefined || typeof row['$label'] === 'string' || exposed?.label.length === 0) && lead.cell === undefined && recordText(exposed, row)}<span
+													data-record-label>{recordText(exposed, row)}</span
+												>{:else}{@render cell(row, lead, opens)}{/if}</span
 										>{/if}
 									{#if rest.length > 0}
 										<div class="text-muted-foreground flex flex-wrap gap-x-3 gap-y-0.5 text-xs">

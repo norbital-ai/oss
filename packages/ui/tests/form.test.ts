@@ -45,6 +45,38 @@ const text = {
 	running: 'running'
 };
 
+it.live('a custom create form applies explicit presets over defaults once, preserving edits', () =>
+	Effect.gen(function* () {
+		const { bolt } = yield* browser(() => viewFixture());
+		const spec = specOf(
+			'movements',
+			{
+				label: ['activity'],
+				fields: {
+					activity: {
+						kind: 'enum',
+						values: ['TIME_OFF', 'REVERSAL', 'ADJUSTMENT'],
+						default: 'TIME_OFF'
+					},
+					original: { kind: 'text', optional: true }
+				},
+				create: { columns: ['activity', 'original'] }
+			},
+			'create'
+		);
+		const form = new FormState(spec, null, {}, bolt.act, text);
+		form.prefill({ activity: 'REVERSAL', original: 'original-1' });
+		assert.equal(form.get('activity'), 'REVERSAL');
+		assert.equal(form.get('original'), 'original-1');
+		form.prefill({ activity: 'ADJUSTMENT' });
+		assert.equal(form.get('activity'), 'REVERSAL');
+		const edited = new FormState(spec, null, {}, bolt.act, text);
+		edited.set('activity', 'ADJUSTMENT');
+		edited.prefill({ activity: 'REVERSAL' });
+		assert.equal(edited.get('activity'), 'ADJUSTMENT');
+	})
+);
+
 it.effect(
 	'transform-filled create fields may be omitted while supplied values remain validated',
 	() =>

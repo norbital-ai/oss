@@ -1,7 +1,8 @@
 <!--
-	The workspace's command center: what happens across it, one tab each (a deep link `/command-center/<tab>`). Activity,
-	Resources and Logs are the host's inspection (`studioInspect`, a Studio host's, read once for all three): the build and
-	release timeline (the serving version marked in it), resource use and the runtime log. Logs reads the log itself
+	The workspace's command center: what happens across it, one tab each (a deep link `/command-center/<tab>`). Bundle,
+	Telemetry and Logs are the host's inspection (`studioInspect`, a Studio host's, read once for all three): the
+	bundle analyzer (artifact digest, client bytes, package pins, bundle files and cache), resource telemetry and the
+	runtime log. Logs reads the log itself
 	(`logs`), scoped to one release's serving window (the serving release by default) and optionally a run; its opt-in
 	Auto-refresh re-reads only that. Audit is the audit trail,
 	Automations every run, Inference the automations' inference transcripts (opened read-only in Norbius), People the
@@ -26,11 +27,12 @@
 	import type { AgentConversation } from '../../protocol/wire.ts';
 	import type { ShellApi } from '../api-types.ts';
 	import type { ShellBolt } from '../runtime.ts';
-	import { based, type CommandCenterTab, type ShellBoot } from '../nav.ts';
+	import type { CommandCenterTab, ShellBoot } from '../nav.ts';
 	import Audit from '../audit/Audit.svelte';
 	import AutoRefresh from '../AutoRefresh.svelte';
 	import Runs from '../runs/Runs.svelte';
 	import People from '../people/People.svelte';
+	import type { SystemUiIntent } from '../../protocol/system-ui.ts';
 	import banner from '../assets/banners/command-center.jpg';
 
 	let {
@@ -44,7 +46,10 @@
 		startable,
 		run = null,
 		onRun,
-		onConversation
+		onConversation,
+		configuration = null,
+		automation = null,
+		onAutomationClose = () => {}
 	}: {
 		api: ShellApi;
 		bolt: ShellBolt;
@@ -58,26 +63,28 @@
 		onRun: (id: string | null) => void;
 		/** Opens an inference transcript in Norbius; `null` without Norbius. */
 		onConversation: ((id: string) => void) | null;
+		configuration?: SystemUiIntent | null;
+		automation?: string | null;
+		onAutomationClose?: () => void;
 	} = $props();
 	const narrow = new MediaQuery('max-width: 47.999rem');
 	const active = $derived(
 		tab !== undefined && tabs.includes(tab) ? tab : (tabs[0] ?? 'automations')
 	);
 	const VIEWS: { readonly [k in CommandCenterTab]?: WorkspaceView } = {
-		activity: 'activity',
-		resources: 'resources',
+		bundle: 'bundle',
+		telemetry: 'telemetry',
 		logs: 'logs'
 	};
 	const view = $derived(VIEWS[active]);
 
-	// one inspection serves Activity, Resources and Logs: switching between them is a local render
+	// one inspection serves Bundle, Telemetry and Logs: switching between them is a local render
 	let range = $state<WorkspaceRange>('7d');
-	let build = $state<string | null>(null),
-		runFilter = $state<string | null>(null),
+	let runFilter = $state<string | null>(null),
 		// the release Logs reads (its publication instant): the serving one until chosen, `null` every release
 		release = $state<string | null | undefined>();
 	const inspecting = $derived(view !== undefined);
-	const inspection = observeOnce(() => (inspecting ? api.studioInspect({ range, build }) : null));
+	const inspection = observeOnce(() => (inspecting ? api.studioInspect({ range }) : null));
 	// a new scope reads while the last answer stays on screen
 	let shown = $state<WorkspaceOperationsData | null>(null);
 	watch(
@@ -124,7 +131,6 @@
 	);
 	function scope(next: WorkspaceScope): void {
 		if (next.range !== undefined) range = next.range;
-		if (next.build !== undefined) build = next.build;
 		if (next.run !== undefined) runFilter = next.run;
 	}
 
@@ -146,8 +152,8 @@
 			}))
 	);
 	const TITLES: { readonly [k in CommandCenterTab]: string } = {
-		activity: 'Activity',
-		resources: 'Resources',
+		bundle: 'Bundle',
+		telemetry: 'Telemetry',
 		logs: 'Logs',
 		audit: 'Audit',
 		automations: 'Automations',
@@ -155,8 +161,8 @@
 		people: 'People'
 	};
 	const ICONS: { readonly [k in CommandCenterTab]: string } = {
-		activity: 'lucide:history',
-		resources: 'lucide:activity',
+		bundle: 'lucide:package',
+		telemetry: 'lucide:activity',
 		logs: 'lucide:scroll-text',
 		audit: 'lucide:shield-check',
 		automations: 'lucide:refresh-cw',
@@ -172,7 +178,6 @@
 	{#if view !== undefined && data !== null}
 		<WorkspaceOperations
 			{data}
-			scopeKey={based('')}
 			{range}
 			{view}
 			views={[view]}
@@ -219,11 +224,20 @@
 		{#if active === 'audit'}
 			<Audit {api} {t} locale={bolt.locale} {admin} />
 		{:else if active === 'automations'}
-			<Runs {api} {bolt} {t} {startable} {run} {onRun} />
+			<Runs
+				{api}
+				{bolt}
+				{t}
+				{startable}
+				{run}
+				{onRun}
+				initialAutomation={automation}
+				{onAutomationClose}
+			/>
 		{:else if active === 'inference'}
 			{@render inference()}
 		{:else if active === 'people'}
-			<People {api} {t} locale={bolt.locale} />
+			<People {api} {t} locale={bolt.locale} {configuration} />
 		{:else}
 			{@render operations()}
 		{/if}
@@ -235,7 +249,7 @@
 		src={banner}
 		icon="lucide:radar"
 		title={t('Command center')}
-		description={t('Builds, logs, audit, runs and people across the workspace.')}
+		description={t('Bundles, telemetry, logs, audit, runs and people across the workspace.')}
 		compact={narrow.current}
 	/>
 	<Tabs

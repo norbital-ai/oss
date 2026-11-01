@@ -42,7 +42,7 @@ Crops media to a named aspect ratio (`square`, `portrait`, `landscape`, `widescr
 	class={cn(
 		'flex min-w-0 flex-none items-center justify-center overflow-clip [&>img]:size-full [&>img]:object-cover [&>video]:size-full [&>video]:object-cover',
 		ratioClasses[ratio],
-		// The caller's class last: floors, layers and colours it names win; layout itself is props (doctor-enforced).
+		// The caller's class last: floors, layers and colours it names win; layout itself is props.
 		className
 	)}
 	data-layout="frame"

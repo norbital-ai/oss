@@ -5,7 +5,7 @@ export * from './cursor.ts';
 export * from './decode.ts';
 export * from './database.ts';
 export * from './errors.ts';
-export * from './hash.ts';
+export * from '@norbital-ai/std/hash';
 export * from './ir.ts';
 export * from './limits.ts';
 export * from './values.ts';

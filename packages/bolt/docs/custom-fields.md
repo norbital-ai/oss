@@ -26,3 +26,15 @@ The renderer is used automatically in Table cells (dense), Board cards, Form and
 fields, history diffs, Matrix labels and bulk relation pickers. Built-in money, file, point and
 phone renderers follow the same lookup and reserve their names. Renderers are statically bundled
 because cells render synchronously; keep them light and import heavier tools only on demand.
+
+## Structured JSON Schema values
+
+A seeded JSON Schema names a native datatype through `format` (`period`, `point`, `money`,
+`duration`, `currency`). Explicit names take precedence. Exact `{from,to}` date, `{start,end}`
+instant and `{lat,lng}` number shapes also dispatch to native controls. Required keys, key sets
+and types must match exactly; extra keys stay ordinary objects. A string duration retains JSON
+Schema's ISO meaning; numeric duration is native. Custom workspace values use `x-norbital.datatype`.
+
+Check/build validate explicit names and shapes in seeded schema rows and report the row, field
+and schema path on a mismatch. Implicit near-misses are not errors. Source: `DATATYPE_SHAPES` in
+std and `jsonSchemaKind` in UI.

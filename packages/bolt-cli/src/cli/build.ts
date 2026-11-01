@@ -30,6 +30,16 @@ export class AuthorErrors extends Schema.TaggedError<AuthorErrors>()('AuthorErro
 	message: Schema.String,
 	errors: Schema.Array(Diagnostic)
 }) {}
+/** A failed build's error names its first cause, so a host tool shows a diagnostic instead of "1 errors". */
+export const authorErrors = (errors: readonly CheckDiagnostic[], message?: string) =>
+	new AuthorErrors({
+		errors,
+		message:
+			message ??
+			(errors[0] === undefined
+				? 'The workspace could not be built.'
+				: `${errors.length} ${errors.length === 1 ? 'error' : 'errors'}: ${errors[0].message}`)
+	});
 export class ToolFailure extends Schema.TaggedError<ToolFailure>()('ToolFailure', {
 	message: Schema.String,
 	cause: Schema.optionalKey(Schema.Defect())
@@ -61,7 +71,7 @@ const seedInputs = Effect.fn('bolt.seedInputs')(function* (root: string, schema:
 });
 /**
  * Every build is a full build (a Studio preview's is the one its merge reuses) through declaration compilation; the
- * authoring diagnostics and type check are `bolt check`, and the audit is doctor's. Any build reuses an unchanged
+ * authoring diagnostics and type check are `bolt check`. Any build reuses an unchanged
  * base pack, and an unchanged migration history skips its replay. A watch's rebuild (`changed`) skips the guest's
  * terser pass and takes from its last good build what its edits leave unchanged: the compiled declarations, the
  * platform layer, the seed packs and every unrewritten file's digest.
@@ -158,7 +168,7 @@ const buildOnce = Effect.fn('bolt.buildWorkspace')(function* (
 				}).pipe(
 					Effect.flatMap(({ errors, manifest, guest }) =>
 						errors.length > 0 || manifest === undefined || guest === undefined
-							? Effect.fail(new AuthorErrors({ errors, message: `${errors.length} errors` }))
+							? Effect.fail(authorErrors(errors))
 							: Effect.succeed({ manifest, guest })
 					)
 				);
@@ -273,7 +283,7 @@ const seedWorkspace = Effect.fn('bolt.seedWorkspace')(function* (
 	const packs = yield* buildPacks(root, manifest, seedOut, packErrors);
 	if (packErrors.length > 0)
 		return yield* Effect.fail(
-			new AuthorErrors({ errors: packErrors, message: `${packErrors.length} seed errors` })
+			authorErrors(packErrors, `${packErrors.length} seed errors`)
 		);
 	yield* fs.makeDirectory(seedOut, { recursive: true });
 	yield* fs.writeFileString(stampFile, stamp);

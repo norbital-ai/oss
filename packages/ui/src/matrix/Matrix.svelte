@@ -220,7 +220,6 @@ A grid of `rows` records by `cols` values (dates or a relation) whose cells hold
 	{#if selection.length > 0}
 		<div class="flex items-center gap-2">
 			{#each selection as s (s.label)}<Button
-					size="sm"
 					variant="outline"
 					disabled={picked.size === 0}
 					onclick={() => {
@@ -335,7 +334,6 @@ A grid of `rows` records by `cols` values (dates or a relation) whose cells hold
 				data-matrix-footer
 			>
 				<Button
-					size="sm"
 					variant="outline"
 					disabled={back.length === 0}
 					onclick={() => {
@@ -344,7 +342,6 @@ A grid of `rows` records by `cols` values (dates or a relation) whose cells hold
 					}}>{msg(bolt, 'table.prev', 'Previous')}</Button
 				>
 				<Button
-					size="sm"
 					variant="outline"
 					disabled={rowPage.kind !== 'ready' || rowPage.value.next === null}
 					onclick={() => {
@@ -360,10 +357,10 @@ A grid of `rows` records by `cols` values (dates or a relation) whose cells hold
 	{#if creating !== null}
 		<dialog
 			open
-			class="bg-background fixed inset-0 z-50 m-auto w-[min(40rem,95vw)] rounded-md border p-4 shadow-lg"
+			class="bg-background fixed inset-0 z-50 m-auto w-[min(40rem,95vw)] rounded-md border p-4 shadow-deep"
 		>
 			<RecordShell {of} mode="create" values={creating} onDone={() => (creating = null)} />
-			<Button size="sm" variant="ghost" onclick={() => (creating = null)}
+			<Button variant="ghost" onclick={() => (creating = null)}
 				>{msg(bolt, 'record.close', 'Close')}</Button
 			>
 		</dialog>

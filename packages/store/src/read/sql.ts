@@ -22,6 +22,7 @@ import type { Catalog, ExposureInfo, FieldInfo } from '../catalog.ts';
 import {
 	EMBEDDING_COLUMN,
 	SEARCH_COLUMN,
+	RECORD_LABEL_COLUMN,
 	SEMANTIC,
 	exposureOf,
 	defaultFields,
@@ -268,15 +269,15 @@ const relation = Effect.fnUntraced(function* (
  * The links `search.text` names: a row matches when a row it links to matches that model's own `$search`. Scoped
  * as any `is` through the link; a model already on the way is not searched again.
  */
-const searchLinks = (
+const searchLinks = Effect.fnUntraced(function* (
 	b: Build,
 	c: ExposureInfo,
 	a: string,
 	text: string,
 	via: readonly string[],
 	lv: Level
-): Fx<readonly string[]> =>
-	Effect.forEach(
+) {
+	const relations = yield* Effect.forEach(
 		c.model.search.flatMap((f) => {
 			const rel = c.model.one.get(f);
 			return rel === undefined ? [] : rel.targets.map((target) => ({ rel: f, target }));
@@ -291,7 +292,70 @@ const searchLinks = (
 						{ t: 'one', rel, target, pred: { t: 'search', text, via: [...via, c.model.name] } },
 						lv
 					)
-	).pipe(Effect.map((parts) => parts.filter((x) => x !== 'false')));
+	);
+	const references = yield* labelReferences(b, c, a, lv);
+	const query = references.length === 0 ? '' : `bolt_search_filter(${b.bind(text, 'text')})`;
+	return [
+		...relations.filter((x) => x !== 'false'),
+		...references.map(
+			(ref) =>
+				`EXISTS (SELECT 1 FROM ${ref.from} WHERE ${ref.where} AND ${ref.document} @@ ${query} AND bolt_search_document(${ref.label}) @@ ${query})`
+		)
+	];
+});
+
+/** Resolve live label references under the target's own readable outputs and row grants, including named-only outputs. */
+const labelReferences = Effect.fnUntraced(function* (
+	b: Build,
+	c: ExposureInfo,
+	a: string,
+	lv: Level
+) {
+	const link = c.model.labelLink;
+	const out: { from: string; where: string; label: string; document: string }[] = [];
+	if (
+		link === undefined ||
+		(lv.exposed && ![link.model, link.record].every((f) => exposedField(c, f)))
+	)
+		return out;
+	for (const target of link.targets) {
+		const model = b.cat.models.get(target);
+		if (model?.recordLabel === undefined || model.key.length !== 1) continue;
+		const outputs = [
+			[DEFAULT_OUTPUT, b.cat.exposures.get(target)] as const,
+			...[...(b.cat.outputs.get(target) ?? [])].map(
+				([name, output]) => [name, output.root] as const
+			)
+		];
+		for (const [output, t] of outputs) {
+			if (
+				t === undefined ||
+				(lv.exposed && !model.recordLabel.fields.every((f) => exposedField(t, f)))
+			)
+				continue;
+			const arms = lv.scoped ? b.scope?.rows(target, output) : undefined;
+			if (arms?.length === 0) continue;
+			const x = b.alias();
+			const rowScope =
+				arms === undefined
+					? null
+					: `(${(yield* Effect.forEach(arms, (p) => pred(b, t, x, p, RAW))).join(' OR ')})`;
+			const pg = model.fields.get(model.key[0]!)?.pg ?? 'text';
+			const id = `${a}.${q(link.record)}`;
+			const key =
+				pg === 'text'
+					? id
+					: `(CASE WHEN pg_input_is_valid(${id}, ${lit(pg)}) THEN ${id}::${pg} END)`;
+			out.push({
+				from: `${b.from(target)} ${x}`,
+				where: conj(`${a}.${q(link.model)} = ${lit(target)}`, `${keyAt(t, x)} = ${key}`, rowScope),
+				label: `${x}.${q(RECORD_LABEL_COLUMN)}`,
+				document: `${x}.${q(SEARCH_COLUMN)}`
+			});
+		}
+	}
+	return out;
+});
 /** A reader may search only fields its read exposure names (rule 14). */
 const exposedAll = (
 	c: ExposureInfo,
@@ -311,22 +375,24 @@ const exposedAll = (
  * built from only the values it reads, so a match never reveals a field outside its output.
  */
 const searchDoc = Effect.fnUntraced(function* (b: Build, c: ExposureInfo, a: string, lv: Level) {
-	const own = c.model.search.filter((f) => !c.model.one.has(f)),
+	const own = c.model.search.filter((f) => f !== RECORD_LABEL_COLUMN && !c.model.one.has(f)),
 		// a field outside the reader's exposure is in no document it matches, on any row
 		hidden = own.filter((f) => lv.exposed && !exposedField(c, f)),
 		readable = own.filter((f) => !hidden.includes(f));
 	const stored = `${a}.${q(SEARCH_COLUMN)}`;
-	if (hidden.length === 0) return stored;
+	const label = c.model.recordLabel;
+	const readableLabel =
+		label !== undefined && label.fields.every((field) => !lv.exposed || exposedField(c, field));
+	if (hidden.length === 0 && (label === undefined || readableLabel)) return stored;
 	const parts: string[] = [];
+	if (readableLabel) parts.push(`coalesce(${a}.${q(RECORD_LABEL_COLUMN)}, '')`);
 	for (const f of readable) {
 		const value = yield* col(b, c, a, f, lv);
 		parts.push(
 			`coalesce(${c.model.fields.get(f)?.pg.endsWith('[]') === true ? `bolt_search_join((${value})::text[])` : `(${value})::text`}, '')`
 		);
 	}
-	return parts.length === 0
-		? "''::tsvector"
-		: `bolt_search_document(${parts.join(" || ' ' || ")})`;
+	return parts.length === 0 ? "''::tsvector" : `bolt_search_document(${parts.join(" || ' ' || ")})`;
 });
 const OPS = { eq: '=', ne: 'IS DISTINCT FROM', lt: '<', lte: '<=', gt: '>', gte: '>=' } as const;
 /** `Pred` → a boolean SQL expression over alias `a` of model `c`. */
@@ -610,7 +676,16 @@ const root = Effect.fnUntraced(function* (
 	lv: Level,
 	one: boolean = false
 ) {
-	return [...(yield* items(b, c, a, s, lv, one)), ...(b.root?.(c.name, a) ?? [])];
+	const references = yield* labelReferences(b, c, a, lv);
+	const link = c.model.labelLink;
+	const label =
+		link === undefined ||
+		(lv.exposed && ![link.model, link.record].every((f) => exposedField(c, f)))
+			? []
+			: [
+					`coalesce(${[...references.map((ref) => `(SELECT ${ref.label} FROM ${ref.from} WHERE ${ref.where} LIMIT 1)`), `${a}.${q(link.record)}::text`].join(', ')}) AS "$label"`
+				];
+	return [...(yield* items(b, c, a, s, lv, one)), ...label, ...(b.root?.(c.name, a) ?? [])];
 });
 const arm = Effect.fnUntraced(function* (
 	b: Build,
@@ -744,11 +819,7 @@ const readable = Effect.fnUntraced(function* (b: Build, c: ExposureInfo, p: stri
 	for (const s of steps.slice(0, -1)) {
 		const rel = x.model.one.get(s);
 		const [target] = rel?.targets ?? [];
-		if (
-			rel === undefined ||
-			target === undefined ||
-			rel.targets.length > 1
-		)
+		if (rel === undefined || target === undefined || rel.targets.length > 1)
 			return yield* bad(`'${x.path}.${s}' is not a relation this caller reads`);
 		const t = yield* level(b, x, s, target, lv).pipe(
 			Effect.catch(() => bad(`'${target}' is not a model`))

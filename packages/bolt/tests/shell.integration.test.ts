@@ -7,10 +7,9 @@ import { decodeProjectedManifest } from '../src/engine/manifest.ts';
 import { shellApi } from '../src/shell/runtime.ts';
 import { program } from '../../bolt-cli/src/test/guest.ts';
 import { founderBootstrap } from '../src/engine/identity/session.ts';
-import { HostIdentity } from '../src/shell/host.ts';
+import { HostIdentity } from '../src/engine/services.ts';
 import type { StudioOp, StudioPort, StudioState } from '../src/shell/studio/model.ts';
 import type { StudioInspectInput } from '../src/shell/studio/inspection.ts';
-import type { AuditRuleSet, StudioAuditRules } from '../src/shell/studio/audit.ts';
 import { BoltError } from '../src/protocol/errors.ts';
 import { HEADERS, PATHS } from '../src/protocol/wire.ts';
 import { SHELL, type ShellBoot } from '../src/shell/nav.ts';
@@ -149,15 +148,6 @@ const studioState: StudioState = {
 };
 const studioOps: StudioOp[] = [];
 const inspectionScopes: StudioInspectInput[] = [];
-const auditRules: StudioAuditRules = {
-	revision: 0,
-	ruleSet: { states: {}, ignore: [], rules: [] },
-	rules: [],
-	errors: [],
-	digest: 'd0',
-	version: '0.0.1'
-};
-const auditSaves: { revision: number; ruleSet: AuditRuleSet }[] = [];
 // the host's branding port (L-COL-199): what an administrator wrote
 const branded: { name: string; logo: string | null }[] = [];
 const studio: StudioPort = {
@@ -211,23 +201,6 @@ const studio: StudioPort = {
 				build: input.build ?? null
 			}
 		};
-	},
-	// the host's audit: a save compiles the rule set first and refuses one that does not compile
-	audit: {
-		rules: async () => auditRules,
-		save: async (_auth, revision, ruleSet) => {
-			if (ruleSet.rules.some((rule) => rule['id'] === 'Broken'))
-				throw BoltError.make('invalid', 'decode', 'Broken: "rule" is required');
-			auditSaves.push({ revision, ruleSet });
-			return { ...auditRules, revision: revision + 1, ruleSet };
-		},
-		run: async (_auth, ruleSet) => ({
-			commit: 'c2',
-			findings: [],
-			errors: [],
-			digest: ruleSet === undefined ? 'saved' : 'tried',
-			version: '0.0.1'
-		})
 	}
 };
 const ORIGIN = 'https://acme.example';
@@ -399,6 +372,21 @@ layer(workspace)('shell routes', (it) => {
 		rep: Jar = jar(),
 		repId = '';
 	describe('shell host (§5.10)', () => {
+		it.effect('refuses unknown workspace emails before sending a sign-in code', () =>
+			Effect.gen(function* () {
+				const t = yield* TestWorkspace;
+				const before = t.fakes.sent.length;
+				const reply = yield* call(jar(), 'POST', '/__bolt/session/code', {
+					address: 'stranger@acme.example'
+				});
+				expect(reply).toMatchObject({
+					status: 403,
+					body: { error: { code: 'notMember' } }
+				});
+				expect(t.fakes.sent.length).toBe(before);
+			})
+		);
+
 		it.effect(
 			'signs the founder in with an emailed code; the boot shows every app and the settings',
 			() =>
@@ -420,6 +408,9 @@ layer(workspace)('shell routes', (it) => {
 					// ui's forms read the caller's exposure from the boot
 					expect(b.catalog['applications']).toEqual({
 						label: ['name'],
+						record_label: 'record.name',
+						labelPaths: ['name'],
+						search: ['$label'],
 						description: 'Applications',
 						fields: { name: { kind: 'text' } },
 						relations: { opening: { targets: ['openings'], inverse: 'applications' } },

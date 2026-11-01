@@ -73,7 +73,7 @@
 		});
 </script>
 
-<div class="mt-2 rounded-xl border border-border/70 bg-background p-3 shadow-sm" data-approval={id}>
+<div class="mt-2 rounded-xl border border-border/70 bg-background p-3" data-approval={id}>
 	<p class="text-sm font-medium text-foreground">
 		{t(
 			step.tool?.studio === 'rollback'
@@ -119,12 +119,8 @@
 			<span class="min-w-0 whitespace-normal"
 				>{t('Applied — the workspace is now on the new version.')}</span
 			>
-			<Button
-				size="sm"
-				variant="outline"
-				class="shrink-0"
-				onclick={() => location.reload()}
-				data-view-live>{t('View live')}</Button
+			<Button variant="outline" class="shrink-0" onclick={() => location.reload()} data-view-live
+				>{t('View live')}</Button
 			>
 		</Inline>
 	{:else if decided === 'rejected'}
@@ -136,10 +132,8 @@
 			)}
 		</p>
 		<Inline gap="xs" class="mt-2" align="center">
-			<Button size="sm" disabled={busy} onclick={() => fork(decide('approved'))}
-				>{t('Approve')}</Button
-			>
-			<Button size="sm" variant="outline" disabled={busy} onclick={() => fork(decide('rejected'))}
+			<Button disabled={busy} onclick={() => fork(decide('approved'))}>{t('Approve')}</Button>
+			<Button variant="outline" disabled={busy} onclick={() => fork(decide('rejected'))}
 				>{t('Reject')}</Button
 			>
 			{#if busy}<span class="text-xs text-muted-foreground" role="status"

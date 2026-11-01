@@ -7,7 +7,7 @@ import { signOp } from '@norbital-ai/std/host-op';
 import { compile } from '../compiler/check/index.ts';
 import { seedRows, type Seeding } from '../compiler/artifact/seed.ts';
 import type { CheckDiagnostic } from '@norbital-ai/bolt/tooling';
-import { AuthorErrors, ToolFailure, type Log } from './build.ts';
+import { authorErrors, ToolFailure, type Log } from './build.ts';
 
 /** The host and the signing key its operations verify: `scope` is the host's deployment environment. */
 export type SeedTarget = {
@@ -88,10 +88,7 @@ export const seedWorkspace = Effect.fn('bolt.seedWorkspace')(function* (
 	const root = yield* fs.realPath(dir);
 	const compiled = yield* compile(root);
 	if (compiled.errors.length > 0 || compiled.manifest === undefined)
-		return yield* new AuthorErrors({
-			errors: compiled.errors,
-			message: `${compiled.errors.length} errors`
-		});
+		return yield* Effect.fail(authorErrors(compiled.errors));
 	const errors: CheckDiagnostic[] = [];
 	const seeding = yield* seedRows(
 		root,
@@ -103,7 +100,7 @@ export const seedWorkspace = Effect.fn('bolt.seedWorkspace')(function* (
 	if (seeding === null)
 		return yield* Effect.sync(() => log('the seeder names no bank tree: nothing to seed'));
 	if (seeding === undefined)
-		return yield* new AuthorErrors({ errors, message: `${errors.length} seed errors` });
+		return yield* Effect.fail(authorErrors(errors, `${errors.length} seed errors`));
 	const counted = Object.values(seeding.rows).reduce((n, rows) => n + rows.length, 0);
 	const summary = `${counted} rows of ${Object.keys(seeding.rows).length} models and ${seeding.assets.length} assets from '${seeding.tree}'`;
 	if (target === undefined) return yield* Effect.sync(() => log(`${summary}: decoded`));

@@ -60,13 +60,16 @@
 	};
 	/**
 	 * A view's whole chrome, one shape on `Table`, `Board`, `Map` and `Pivot`. Every key defaults from the model's
-	 * declaration and the viewer's grants; `toolbar={false}` renders none.
+	 * declaration and the viewer's grants; `toolbar={false}` renders none. A model with a declared file sync gets
+	 * Import, Export and Template automatically (the sync's parsers and `context`); do not wire file buttons again.
 	 */
 	export type Toolbar<R = Row> =
 		| false
 		| {
 				/** Default: the model's label. */
 				title?: string | false;
+				/** A form group's semantic error: marks its title and replaces its info text until corrected. */
+				error?: string;
 				/** Behind the info icon. Default: the model's declared description, else its model's. */
 				description?: string | false;
 				/** Default on where the model declares search fields. */
@@ -213,7 +216,7 @@
 		cfg?.title === false ? '' : (cfg?.title ?? (model === '' ? '' : label(bolt, model)))
 	);
 	const about = $derived(
-		cfg?.description === false ? '' : (cfg?.description ?? x?.description ?? '')
+		cfg?.error ?? (cfg?.description === false ? '' : (cfg?.description ?? x?.description ?? ''))
 	);
 	const offered = $derived(searchable && cfg?.search !== false);
 	// L-BOLT-495: `/` at the start of the box lists the model's search modes; the picked one is a chip. `semantic` keeps
@@ -1021,7 +1024,6 @@
 				>{/if}
 		</span>
 		<Button
-			size="sm"
 			variant={e.danger ? 'destructive' : open ? 'secondary' : 'outline'}
 			class="shrink-0 px-2.5"
 			aria-label={e.text}
@@ -1078,14 +1080,20 @@
 				onchange={(e) => importFile(f.name, e.currentTarget.files?.[0])}
 			/>{/each}
 		<div class="flex min-w-0 flex-wrap items-center gap-1">
-			{#if title}<h2 class="min-w-0 truncate text-sm font-semibold" data-view-title>
+			{#if title}<h2
+					class={['min-w-0 truncate text-sm font-semibold', cfg.error && 'text-destructive']}
+					data-view-title
+				>
 					{title}
 				</h2>{/if}
 			{#if about}
 				<!-- a popover, not a hover tooltip: a tap on a phone opens it too -->
 				<Popover.Root>
 					<Popover.Trigger
-						class="text-muted-foreground hover:bg-accent hover:text-foreground grid size-9 max-sm:size-11 shrink-0 place-items-center rounded-sm"
+						class={[
+							'hover:bg-accent hover:text-foreground grid size-8 [--hit-target:2rem] shrink-0 place-items-center rounded-sm',
+							cfg.error ? 'text-destructive' : 'text-muted-foreground'
+						]}
 						aria-label={msg(bolt, 'view.about', 'About {what}', {
 							what: title || label(bolt, model)
 						})}
@@ -1163,7 +1171,6 @@
 								{/each}
 								<Button
 									type="submit"
-									size="sm"
 									class="col-span-full justify-self-end"
 									disabled={!ready}
 									data-similar-run><Glyph name="search" />{t('searchRun')}</Button
@@ -1172,7 +1179,7 @@
 						{:else}
 							<input
 								bind:this={box}
-								class="h-8 min-w-0 flex-1 bg-transparent text-base outline-none @xl:text-sm"
+								class="h-8 min-w-0 flex-1 bg-transparent text-xs outline-none"
 								type="search"
 								placeholder={index === 'semantic'
 									? t('searchMeaning')
@@ -1261,7 +1268,7 @@
 						{#snippet child({ props })}
 							<Button
 								{...props}
-								size="icon-sm"
+								size="icon"
 								variant="ghost"
 								hint={msg(bolt, 'view.actions', 'Actions')}
 								aria-label={msg(bolt, 'view.actions', 'Actions')}
@@ -1349,7 +1356,6 @@
 														{#if field.kind.optional}
 															<Button
 																type="button"
-																size="sm"
 																variant="ghost"
 																class="justify-self-start"
 																disabled={status['update']?.state === 'pending'}
@@ -1402,7 +1408,6 @@
 											{/each}
 											<Button
 												type="submit"
-												size="sm"
 												class="justify-self-end"
 												disabled={!editReady || status['update']?.state === 'pending'}
 												aria-busy={status['update']?.state === 'pending'}

@@ -1,10 +1,12 @@
 /// <reference types="node" />
 import { createHash } from 'node:crypto';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import vm from 'node:vm';
 import { describe, expect, it } from '@effect/vitest';
+import { vi } from 'vitest';
+import * as vite from 'vite';
 import { Context, Deferred, Effect, Fiber, Layer, Queue, Schema } from 'effect';
 import { TestClock } from 'effect/testing';
 import type { Json } from '../../bolt/src/decl/values.ts';
@@ -26,9 +28,15 @@ import {
 } from '../../bolt/src/engine/services.ts';
 import { GuestIsolates } from '../../bolt/src/engine/ports.ts';
 import { nodeGuests, type NodeGuestsOptions } from '../src/guests.ts';
-import { check } from '../src/test/effect.ts';
+import { check as compilerCheck } from '../src/compiler/check/index.ts';
+import * as NodeServices from '@effect/platform-node/NodeServices';
 import { program } from '../src/test/guest.ts';
 import { guestLayer } from '../../bolt/tests/support/guest-fixture.ts';
+
+vi.mock('vite', async (original) => {
+	const actual = await original<typeof import('vite')>();
+	return { ...actual, build: vi.fn(actual.build) };
+});
 
 // Generator fixtures carry the declaration edge. Pure global-shim programs exercise the raw prelude ABI.
 const automation = (body: string, prefix = '') =>
@@ -881,10 +889,11 @@ describe('next guest runner', () => {
 		Effect.gen(function* () {
 			const spin =
 				'const spin = (ms) => { const end = Date.now() + ms; while (Date.now() < end); };';
+			// Elapsed-time slices can be preempted; continue until the cumulative CPU limit actually stops the guest.
 			let metered = 0n;
 			const o = yield* runIn(
 				automation(
-					'function* (_, ctx) { for (let i = 0; i < 3; i++) { spin(25); yield* ctx.query({ t: { where: { id: { eq: "x" } } } }); } return "done"; }',
+					'function* (_, ctx) { for (;;) { spin(10); yield* ctx.query({ t: { where: { id: { eq: "x" } } } }); } }',
 					spin
 				),
 				invocation(),
@@ -1352,8 +1361,13 @@ function* sourceBody(input) {
 }
 export default automation('a', { description, on: { cron: '0 0 * * *' }, policies: ['runner'], run: sourceBody });`
 					);
-					// the kit's checkpointed compile: the compiler's output, built once per source
-					const built = yield* check(root);
+					// Exercise release compression explicitly; ordinary checks use the faster native minifier.
+					const compile = () =>
+						compilerCheck(root, { compress: true, timing: false }).pipe(
+							Effect.provide(NodeServices.layer)
+						);
+					const built = yield* compile();
+					expect((yield* compile()).guest?.source).toBe(built.guest?.source);
 					expect(built.errors).toEqual([]);
 					const program = built.guest;
 					if (program === undefined) throw new Error('the compiler produced no guest');
@@ -1373,6 +1387,57 @@ export default automation('a', { description, on: { cron: '0 0 * * *' }, policie
 						message: 'mapped source failure',
 						at: expect.stringContaining('src/automation/+a.automation.ts:6')
 					});
+					const file = join(root, 'src/automation/+a.automation.ts');
+					writeFileSync(
+						file,
+						readFileSync(file, 'utf8').replace('value: input.value,', 'value: input.value + 1,')
+					);
+					const changed = yield* compile();
+					expect(changed.errors).toEqual([]);
+					if (changed.guest === undefined) throw new Error('the compiler produced no guest');
+					expect(ok(yield* runProgram(changed.guest, invocation({ value: 42 })))).toMatchObject({
+						value: 43
+					});
+					expect(readdirSync(join(root, '.norbital/cache/guest'))).toEqual(['latest.json']);
+					const build = vi.mocked(vite.build).getMockImplementation();
+					if (build === undefined) throw new Error('the bundler mock has no implementation');
+					const inflated = vi.mocked(vite.build).mockImplementation(async (config) => {
+						const result = await build(config);
+						if (
+							config?.build?.rolldownOptions?.optimization?.pifeForModuleWrappers === true &&
+							!Array.isArray(result) &&
+							'output' in result
+						) {
+							const [chunk, ...rest] = result.output;
+							const code = `${chunk.code}/*${'x'.repeat(8 * 1024 * 1024)}*/`;
+							return {
+								...result,
+								output: [
+									new Proxy(chunk, {
+										get: (target, key) => (key === 'code' ? code : Reflect.get(target, key, target))
+									}),
+									...rest
+								] satisfies typeof result.output
+							};
+						}
+						return result;
+					});
+					try {
+						// A large intermediate bundle that fits after compression remains valid in an ordinary check.
+						const large = yield* compilerCheck(root, { timing: false }).pipe(
+							Effect.provide(NodeServices.layer)
+						);
+						expect(large.errors).toEqual([]);
+						if (large.guest === undefined) throw new Error('the compiler produced no guest');
+						// Different intermediate bytes may choose different minified identifiers; preserve runtime behavior.
+						expect(ok(yield* runProgram(large.guest, invocation({ value: 42 })))).toEqual({
+							value: 43,
+							bodyName: 'sourceBody',
+							className: 'SourceMarker'
+						});
+					} finally {
+						inflated.mockImplementation(build);
+					}
 				} finally {
 					rmSync(root, { recursive: true, force: true });
 				}

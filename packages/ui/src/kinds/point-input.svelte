@@ -31,7 +31,7 @@ and the browser's location also set the point.
 	import { attach, fork } from '../effect/index.js';
 	import Input from '../primitives/input/input.svelte';
 	import * as Popover from '../primitives/popover/index.js';
-	import { CONTROL } from './classes.js';
+	import { CONTROL_ICON, SELECT_TRIGGER } from './classes.js';
 	import { cn, uiText } from '../primitives/utils.js';
 	import { photonGeocoder, regionOf, useKinds, type Geocoder } from './context.js';
 	import { formatPoint, isPoint, parsePoint } from './kind.js';
@@ -257,15 +257,11 @@ and the browser's location also set the point.
 				text = shown;
 				hits = [];
 			}}
-			class={cn(
-				CONTROL,
-				'flex w-full min-w-0 items-center gap-2 text-left font-normal',
-				!shown && 'text-muted-foreground'
-			)}
+			class={cn(SELECT_TRIGGER, !shown && 'text-muted-foreground')}
 		>
-			<Icon icon="lucide:map-pin" class="size-4 shrink-0 text-muted-foreground" />
+			<Icon icon="lucide:map-pin" class={CONTROL_ICON} />
 			<span class="min-w-0 flex-1 truncate">{shown || t('searchAddress')}</span>
-			<Icon icon="lucide:chevrons-up-down" class="size-4 shrink-0 text-muted-foreground" />
+			<Icon icon="lucide:chevrons-up-down" class={CONTROL_ICON} />
 		</Popover.Trigger>
 		<Popover.Content
 			align="start"
@@ -297,7 +293,7 @@ and the browser's location also set the point.
 				{#if canLocate}
 					<button
 						type="button"
-						class="border-input hover:bg-accent grid size-9 shrink-0 place-items-center rounded-md border"
+						class="border-input hover:bg-accent grid size-8 shrink-0 place-items-center rounded-md border"
 						onclick={locate}
 						disabled={disabled || locating}
 						aria-label={t('useMyLocation')}

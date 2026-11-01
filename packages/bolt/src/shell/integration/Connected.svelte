@@ -113,7 +113,6 @@
 			</p>
 			<Cluster gap="sm">
 				<Button
-					size="sm"
 					variant="outline"
 					type="submit"
 					disabled={busy ||
@@ -137,17 +136,16 @@
 			</label>
 		{/if}
 		<Cluster gap="sm">
-			{#if testable}<Button size="sm" variant="outline" type="submit" disabled={busy}
+			{#if testable}<Button variant="outline" type="submit" disabled={busy}
 					>{t('Test connection')}</Button
 				>{/if}
 			{#if paired}
-				<Button size="sm" variant="ghost" disabled={busy} onclick={reconnect} data-reconnect
+				<Button variant="ghost" disabled={busy} onclick={reconnect} data-reconnect
 					>{t('Reconnect')}</Button
 				>
 			{/if}
 			{#if paired && controls}
 				<Button
-					size="sm"
 					variant="ghost"
 					class="text-destructive"
 					disabled={busy}

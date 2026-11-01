@@ -9,8 +9,7 @@ catalog:
   '@iconify/svelte': ^5.2.3
   runed: ^0.38.0
   svelte: ^5.57.3
-  # TS 7 breaks svelte2tsx / @sveltejs/package (fileExists), and doctor uses the compiler API that the
-  # Go port's JS surface does not carry. Stay on latest 6.x; the override below holds the same pin.
+  # TS 7 breaks svelte2tsx / @sveltejs/package (fileExists), so stay on latest 6.x; the override below holds the same pin.
   typescript: 6.0.3
   vite: ^8.3.5
 

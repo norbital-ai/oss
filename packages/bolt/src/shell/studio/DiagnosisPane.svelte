@@ -32,7 +32,10 @@
 	});
 </script>
 
-<Stack gap="sm" class="border-t border-border/60 bg-card/40 p-3 sm:p-4 {stale ? 'opacity-70' : ''}">
+<Stack
+	gap="sm"
+	class="border-t border-border/60 bg-card/40 p-3 min-h-16 {stale ? 'opacity-70' : ''}"
+>
 	<Cluster gap="sm" align="start">
 		<Stack gap="xs" size="fill" class="min-w-0">
 			<h2 class="text-xs font-semibold text-foreground">{t('Diagnosis')}</h2>
@@ -49,7 +52,7 @@
 			{/if}
 		</Stack>
 		{#if onrerun}
-			<Button size="sm" variant="outline" class="px-2 text-micro" disabled={busy} onclick={onrerun}>
+			<Button variant="outline" class="px-2 text-xs" disabled={busy} onclick={onrerun}>
 				<Icon name="lucide:stethoscope" class="size-3.5" />{t('Run diagnosis')}
 			</Button>
 		{/if}
@@ -66,7 +69,7 @@
 								<li
 									data-severity={d.severity ?? 'error'}
 									class="border-l-2 py-1.5 pl-2 {warn
-										? 'border-l-amber-600 text-amber-800 dark:text-amber-300'
+										? 'border-l-warning text-warning-foreground dark:text-warning'
 										: 'border-l-destructive text-destructive'}"
 								>
 									<button type="button" class="w-full text-left" onclick={() => onopen(d.path)}>

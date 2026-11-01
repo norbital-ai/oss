@@ -266,3 +266,49 @@ it.live(
 			})
 		)
 );
+
+it.live(
+	'crops the requested oriented pixels losslessly without changing its source, and refuses invalid bounds',
+	() =>
+		Effect.gen(function* () {
+			const pixels = rgba(2, 1, 128);
+			pixels.data.set([255, 0, 0, 128, 0, 0, 255, 255]);
+			const source = encodePng({ ...pixels, channels: 4, depth: 8 }),
+				before = source.slice();
+			const cropped = yield* Effect.tryPromise(() =>
+				imagesPort.crop(
+					source,
+					{ left: 0, top: 0, right: 0.5, bottom: 1 },
+					new AbortController().signal
+				)
+			);
+			const image = decodePng(cropped);
+			expect([image.width, image.height, image.channels]).toEqual([1, 1, 4]);
+			expect([...image.data]).toEqual([255, 0, 0, 128]);
+			expect(source).toEqual(before);
+			const rotated = decodePng(
+				yield* Effect.tryPromise(() =>
+					imagesPort.crop(
+						orientedJpeg(6),
+						{ left: 0, top: 0, right: 1, bottom: 0.5 },
+						new AbortController().signal
+					)
+				)
+			);
+			expect([rotated.width, rotated.height]).toEqual([8, 8]);
+			expect(rotated.data[0]).toBeGreaterThan(200);
+			expect(rotated.data[2]).toBeLessThan(40);
+			for (const box of [
+				{ left: -0.1, top: 0, right: 1, bottom: 1 },
+				{ left: 0.8, top: 0, right: 0.2, bottom: 1 }
+			])
+				expect(
+					yield* Effect.flip(
+						Effect.tryPromise({
+							try: () => imagesPort.crop(source, box, new AbortController().signal),
+							catch: (error) => error
+						})
+					)
+				).toMatchObject({ message: expect.stringContaining('crop bounds') });
+		})
+);

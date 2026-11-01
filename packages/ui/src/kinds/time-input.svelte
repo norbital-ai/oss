@@ -50,7 +50,6 @@
 		{/each}
 		{#if !readonly}<Button
 				class="w-fit"
-				size="sm"
 				variant="outline"
 				{disabled}
 				onclick={() => array?.onChange([...array.value, null])}>{t('add')}</Button

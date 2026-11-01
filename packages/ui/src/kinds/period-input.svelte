@@ -226,7 +226,7 @@ Edits a date period (inclusive) or an instant period (closed-open), both ends pi
 						>{/if}
 				{/each}
 				<DateRangePicker.Trigger
-					class="ml-auto grid size-7 max-sm:size-11 place-items-center rounded-sm text-muted-foreground hover:bg-accent hover:text-foreground"
+					class="ml-auto grid size-6 [--hit-target:1.5rem] place-items-center rounded-sm text-muted-foreground hover:bg-accent hover:text-foreground"
 					aria-label={t('openCalendar')}
 				>
 					<Icon icon="lucide:calendar-range" class="size-4" />
@@ -240,7 +240,7 @@ Edits a date period (inclusive) or an instant period (closed-open), both ends pi
 				sideOffset={4}
 				collisionPadding={narrowViewport.current ? 0 : 8}
 				align={calendarAlignment.current}
-				class="z-50 max-w-[calc(100vw-1rem)] rounded-md border bg-popover p-3 text-popover-foreground shadow-md max-sm:max-w-[100vw] max-sm:p-0"
+				class="z-50 max-w-[calc(100vw-1rem)] rounded-md border bg-popover p-3 text-popover-foreground shadow-deep max-sm:max-w-[100vw] max-sm:p-0"
 			>
 				<DateRangePicker.Calendar>
 					{#snippet children({ months, weekdays })}

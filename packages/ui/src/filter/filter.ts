@@ -216,7 +216,7 @@ export type Node =
 			of: readonly Node[];
 			field?: string;
 			op?: Cmp;
-			n?: number | null;
+			n?: number | string | null;
 	  };
 
 /** A many-relation's child model: the one whose relation to its owner declares it as `inverse`; `rel` may be
@@ -371,6 +371,7 @@ function kindOps(r: Resolved): readonly Op[] {
 	const k = r.kind;
 	if ((k.kind === 'text' || k.kind === 'enum') && k.many)
 		return ['has', 'hasAny', 'hasAll', 'isEmpty', 'notEmpty'];
+	if (k.kind === 'seq') return [...EQUALITY_OPS, ...nulls];
 	const own: readonly Op[] = Match.value(k.kind).pipe(
 		Match.when('text', (): readonly Op[] => ['like', ...EQUALITY_OPS]),
 		Match.whenOr('enum', 'state', 'id', 'currency', (): readonly Op[] => EQUALITY_OPS),
@@ -383,11 +384,9 @@ function kindOps(r: Resolved): readonly Op[] {
 			'count',
 			'sum',
 			'duration',
-			'time',
-			'date',
-			'instant',
-			(): readonly Op[] => CMP_OPS
+			(): readonly Op[] => [...CMP_OPS, 'in', 'nin']
 		),
+		Match.whenOr('time', 'date', 'instant', (): readonly Op[] => CMP_OPS),
 		Match.when('period', (): readonly Op[] => [
 			'contains',
 			'overlaps',
@@ -400,19 +399,32 @@ function kindOps(r: Resolved): readonly Op[] {
 	);
 	return [...own, ...nulls];
 }
-/** The operators a condition on `path` offers: the catalogue's, else (still loading, or a path it does not walk, such as
- * a related record's own relation) the grammar's for its kind, so the operator is never an empty choice. */
+/** Every operator a condition may lower to: its kind's, plus a date's span and a described point's radius. */
+function grammarOps(r: Resolved): readonly Op[] {
+	const own = kindOps(r);
+	if (r.leaf === 'rel') return own;
+	const kind = r.kind.kind;
+	return [
+		...own,
+		...(kind === 'date' || kind === 'instant' ? (['during'] as const) : []),
+		...(kind === 'point' ? (['near'] as const) : [])
+	];
+}
+/** The operators a condition on `path` offers: the catalogue's; else (still loading, or a path the catalogue does not
+ * walk) its kind's scalar operators. A described near or date span is never invented by the fallback. */
 export function operatorsFor(
 	offers: readonly Offer[],
 	prefix: readonly FilterStep[],
 	path: string,
 	r: Resolved
 ): readonly { op: Op; label: string }[] {
-	const offered = offersFor(offers, prefix, path).flatMap((o) =>
-		Schema.is(OpSchema)(o.op) ? [{ op: o.op, label: o.opLabel }] : []
-	);
-	if (offered.length > 0) return offered;
 	const index = INDEX[path.split('.').at(-1) ?? ''];
+	const allowed: readonly Op[] = index !== undefined ? [index.op] : grammarOps(r);
+	const offered = offersFor(offers, prefix, path).flatMap((o) =>
+		Schema.is(OpSchema)(o.op) && allowed.includes(o.op) ? [{ op: o.op, label: o.opLabel }] : []
+	);
+	if (offered.length > 0)
+		return offered.filter((o, i) => offered.findIndex((x) => x.op === o.op) === i);
 	return (index === undefined ? kindOps(r) : [index.op]).map((op) => ({
 		op,
 		label: opWord(op, r)
@@ -437,9 +449,42 @@ const varField = (r: Resolved) =>
 				phone: r.kind.kind === 'text' && r.kind.format === 'phone',
 				team: r.kind.kind === 'text' && r.kind.format === 'team'
 			};
+/** A rule-owned expression scope for a saved filter. The owner checks and resolves these variables before querying;
+ * ordinary toolbar filters continue to use the requestor and clock scope. */
+export type FilterVariables = {
+	readonly presets: readonly string[];
+	validate(text: string, position: Resolved, op: Op): string | undefined;
+};
+const VARIABLE_OPS: readonly Op[] = [
+	'eq',
+	'ne',
+	'lt',
+	'lte',
+	'gt',
+	'gte',
+	'in',
+	'nin',
+	'has',
+	'hasAny',
+	'hasAll',
+	'contains',
+	'overlaps',
+	'within',
+	'startsWithin',
+	'endsWithin'
+];
 /** Why `text` is not a variable this position takes, or `undefined` when it is. An instant position takes a date too
  * (that day's midnight in the workspace zone). */
-export function varError(r: Resolved, op: Op, text: string): string | undefined {
+export function varError(
+	r: Resolved,
+	op: Op,
+	text: string,
+	variables?: FilterVariables
+): string | undefined {
+	if (variables !== undefined)
+		return VARIABLE_OPS.includes(op)
+			? variables.validate(text, r, op)
+			: 'this condition takes no variable';
 	const want = varResult(r, op);
 	if (want === null) return 'this condition takes no variable';
 	let c = compileVar(text, want);
@@ -469,24 +514,38 @@ const PRESETS = [
 	'now',
 	'now - hours(1)'
 ];
-export const variablesFor = (r: Resolved, op: Op): readonly { name: string; arg: Arg }[] =>
+export const variablesFor = (
+	r: Resolved,
+	op: Op,
+	variables?: FilterVariables
+): readonly { name: string; arg: Arg }[] =>
 	// the requestor's id names a member record: offered on a link, though a ported text column may compare with it
-	PRESETS.filter(
-		(text) => varError(r, op, text) === undefined && (text !== 'requestor.id' || r.leaf === 'rel')
-	).map((text) => ({
-		name: variableName(text),
-		arg: { _tag: 'var', var: text }
-	}));
+	(variables?.presets ?? PRESETS)
+		.filter(
+			(text) =>
+				varError(r, op, text, variables) === undefined &&
+				(text !== 'requestor.id' || r.leaf === 'rel')
+		)
+		.map((text) => ({
+			name: variableName(text),
+			arg: { _tag: 'var', var: text }
+		}));
 /** A variable's chip text: `requestor` for the requestor's id, else the expression itself. */
 const variableName = (text: string): string => (text === 'requestor.id' ? 'requestor' : text);
 /** The variable a value is (`requestor`, `today - days(7)`), or `undefined` for a literal or another operand. */
 export const variableOf = (arg: Arg | null): string | undefined =>
 	arg !== null && arg._tag === 'var' ? variableName(arg.var) : undefined;
 /** The operand choices of a value position: a literal, a variable, a same-row field. */
-export function operandsFor(r: Resolved, op: Op): ('lit' | 'var' | 'field')[] {
+export function operandsFor(
+	r: Resolved,
+	op: Op,
+	variables?: FilterVariables
+): ('lit' | 'var' | 'field')[] {
 	return [
 		'lit',
-		...(variablesFor(r, op).length > 0 ? ['var' as const] : []),
+		...((variables === undefined ? variablesFor(r, op).length > 0 : VARIABLE_OPS.includes(op))
+			? ['var' as const]
+			: []),
 		...(r.leaf === 'field' && ['eq', 'ne', 'lt', 'lte', 'gt', 'gte'].includes(op)
 			? ['field' as const]
 			: [])
@@ -562,9 +621,14 @@ export function complete(n: Node): boolean {
 		return ['some', 'none', 'every'].includes(n.q)
 			? true
 			: n.op !== undefined &&
-					typeof n.n === 'number' &&
-					Number.isFinite(n.n) &&
-					(n.q === 'count' ? Number.isInteger(n.n) && n.n >= 0 : n.field !== undefined);
+					(n.q === 'count'
+						? typeof n.n === 'number' && Number.isInteger(n.n) && n.n >= 0
+						: n.field !== undefined &&
+							((typeof n.n === 'number' && Number.isFinite(n.n)) ||
+								((n.q === 'min' || n.q === 'max') &&
+									typeof n.n === 'string' &&
+									/^\d{4}-\d{2}-\d{2}(T.*)?$/.test(n.n) &&
+									Number.isFinite(Date.parse(n.n)))));
 	if (['isNull', 'notNull', 'isEmpty', 'notEmpty'].includes(n.op)) return true;
 	const a = n.arg;
 	if (a === null) return false;
@@ -604,11 +668,11 @@ function leafOps(
  * A viewer node as a `Where` over `model`; incomplete rows lower to nothing. With `clock`, a relative value is the
  * literal it stands for now (what a read sends); without, it stays relative (the URL).
  */
-export function toWhere(cat: Catalog, model: string, n: Node, clock?: FilterClock): Where | null {
+function lowerWhere(cat: Catalog, model: string, n: Node, clock?: FilterClock): Where | null {
 	if (!complete(n)) return null;
 	if (n.t === 'group') {
 		const parts = n.of
-			.map((x) => toWhere(cat, model, x, clock))
+			.map((x) => lowerWhere(cat, model, x, clock))
 			.filter((x): x is Where => x !== null);
 		if (parts.length === 0) return null;
 		const body: Where =
@@ -621,7 +685,7 @@ export function toWhere(cat: Catalog, model: string, n: Node, clock?: FilterCloc
 		if (n.q === 'some' || n.q === 'none' || n.q === 'every') {
 			const child = childOf(cat, model, n.rel) ?? '';
 			const inner = n.of
-				.map((x) => toWhere(cat, child, x, clock))
+				.map((x) => lowerWhere(cat, child, x, clock))
 				.filter((x): x is Where => x !== null);
 			return wrap(steps, {
 				[name]: {
@@ -656,6 +720,19 @@ export function toWhere(cat: Catalog, model: string, n: Node, clock?: FilterCloc
 		body = { is: { id: body } };
 	return wrap(steps, { [name]: arm === undefined ? body : { [arm]: body } });
 }
+/** A `Where` the builder can read back is the only one a read may receive. */
+export function toWhere(
+	cat: Catalog,
+	model: string,
+	n: Node,
+	clock?: FilterClock,
+	variables?: FilterVariables
+): Where | null {
+	const where = lowerWhere(cat, model, n, clock);
+	return where === null || fromWhere(cat, model, where, model, '', variables) === null
+		? null
+		: where;
+}
 function wrap(steps: readonly string[], inner: Where): Where {
 	return steps.reduceRight<Where>((acc, s) => {
 		const [name = '', arm] = s.split(':');
@@ -667,18 +744,20 @@ export function rowsWhere(
 	cat: Catalog,
 	model: string,
 	rows: readonly Node[],
-	clock?: FilterClock
+	clock?: FilterClock,
+	variables?: FilterVariables
 ): Where | null {
 	const parts = rows
-		.map((r) => toWhere(cat, model, r, clock))
+		.map((r) => toWhere(cat, model, r, clock, variables))
 		.filter((x): x is Where => x !== null);
 	return parts.length === 0 ? null : parts.length === 1 ? (parts[0] ?? {}) : { and: parts };
 }
 
 // ── parsing: Where → Node (the popover shows `initialFilter`, a URL and an AI answer as rows) ──
-function argOf(r: Resolved, op: Op, v: Json): Arg | null {
+function argOf(r: Resolved, op: Op, v: Json, variables?: FilterVariables): Arg | null {
 	const text = varOf(v);
-	if (text !== null) return varError(r, op, text) === undefined ? { _tag: 'var', var: text } : null;
+	if (text !== null)
+		return varError(r, op, text, variables) === undefined ? { _tag: 'var', var: text } : null;
 	if (
 		jsonObject(v) &&
 		keysOf(v).length === 1 &&
@@ -702,9 +781,179 @@ function argOf(r: Resolved, op: Op, v: Json): Arg | null {
 	const decoded = Schema.decodeUnknownResult(inputSchema(litKind(r, op)))(v);
 	return decoded._tag === 'Success' ? { _tag: 'lit', lit: decoded.success } : null;
 }
-function fieldNodes(cat: Catalog, model: string, path: string, ops: Json): Node[] | null {
+
+const valueFamily = (r: Resolved, op: Op): string => {
+	if (r.leaf === 'rel') return `rel:${[...r.targets].sort().join(',')}`;
+	const k = litKind(r, op).kind;
+	if (['text', 'enum', 'state'].includes(k)) return 'text';
+	return ['int', 'number', 'decimal', 'money', 'sum', 'count'].includes(k) ? 'number' : k;
+};
+
+/** Keep an input only when the destination can represent all of it. */
+function retainedArg(
+	cat: Catalog,
+	model: string,
+	before: Extract<Node, { t: 'cond' }>,
+	path: string,
+	op: Op,
+	variables?: FilterVariables
+): Arg | null {
+	const from = resolve(cat, model, before.path),
+		to = resolve(cat, model, path),
+		arg = before.arg;
+	if (
+		from === null ||
+		to === null ||
+		arg === null ||
+		['isNull', 'notNull', 'isEmpty', 'notEmpty'].includes(op)
+	)
+		return null;
+	if (arg._tag === 'var') return varError(to, op, arg.var, variables) === undefined ? arg : null;
+	if (arg._tag === 'field')
+		return operandsFor(to, op).includes('field') && fieldsFor(cat, model, path).includes(arg.field)
+			? arg
+			: null;
+	if (valueFamily(from, before.op) !== valueFamily(to, op)) return null;
+	if (arg._tag === 'range')
+		return op === 'during' && arg.range.every((v) => argOf(to, 'eq', v, variables) !== null)
+			? arg
+			: null;
+	if (op === 'during') return null;
+	if (op === 'near' && arg._tag === 'lit') {
+		const n = fieldNodes(cat, model, path, { near: encodeWire(arg.lit) })?.[0];
+		return n?.t === 'cond' ? n.arg : null;
+	}
+	const list = ['in', 'nin', 'hasAny', 'hasAll'].includes(op);
+	if (list) return argOf(to, op, encodeWire(arg._tag === 'list' ? arg.list : [arg.lit]));
+	if (arg._tag === 'list')
+		return arg.list.length === 1 ? argOf(to, op, encodeWire(arg.list[0] ?? null)) : null;
+	return argOf(to, op, encodeWire(arg.lit));
+}
+
+/** Field, operator and value move together; unrelated rows are never changed. */
+export function selectField(
+	cat: Catalog,
+	model: string,
+	node: Node,
+	path: string,
+	many: boolean,
+	offers: readonly Offer[],
+	prefix: readonly FilterStep[] = [],
+	variables?: FilterVariables
+): Node {
+	if (many && childOf(cat, model, path) === undefined) return node;
+	if (many)
+		return node.t === 'many' && node.rel === path
+			? node
+			: { t: 'many', rel: path, q: 'some', of: [] };
+	const r = resolve(cat, model, path);
+	if (r === null) return node;
+	const ops = operatorsFor(offers, prefix, path, r);
+	const op = node.t === 'cond' && ops.some((o) => o.op === node.op) ? node.op : ops[0]?.op;
+	if (op === undefined) return node;
+	if (node.t === 'cond' && node.path === path && node.op === op) return node;
+	return {
+		t: 'cond',
+		path,
+		op,
+		arg: node.t === 'cond' ? retainedArg(cat, model, node, path, op, variables) : null
+	};
+}
+
+export function selectOperator(
+	cat: Catalog,
+	model: string,
+	node: Extract<Node, { t: 'cond' }>,
+	op: Op,
+	offers: readonly Offer[],
+	prefix: readonly FilterStep[] = [],
+	variables?: FilterVariables
+): Extract<Node, { t: 'cond' }> {
+	const r = resolve(cat, model, node.path);
+	if (
+		r === null ||
+		op === node.op ||
+		!operatorsFor(offers, prefix, node.path, r).some((o) => o.op === op)
+	)
+		return node;
+	return { ...node, op, arg: retainedArg(cat, model, node, node.path, op, variables) };
+}
+
+export function aggregateValue(
+	cat: Catalog,
+	child: string,
+	q: Quant,
+	field: string | undefined,
+	value: number | string | null | undefined
+): number | string | null {
+	if (value === undefined || value === null) return null;
+	if (q === 'count')
+		return typeof value === 'number' && Number.isInteger(value) && value >= 0 ? value : null;
+	const kind = field === undefined ? undefined : cat[child]?.fields[field];
+	if (kind === undefined) return null;
+	if (
+		['date', 'instant'].includes(kind.kind)
+			? typeof value !== 'string'
+			: typeof value !== 'number' || !Number.isFinite(value)
+	)
+		return null;
+	return Result.isSuccess(Schema.decodeUnknownResult(inputSchema(valueKind(kind)))(value))
+		? value
+		: null;
+}
+const endStep = (o: Offer): FilterStep | undefined => o.path.at(-1);
+/** The aggregate function an offer names, or null for a field/count offer. */
+export const aggFn = (o: Offer): Quant | null => {
+	const step = endStep(o);
+	return step?.k === 'agg' ? step.fn : null;
+};
+/** The child field an aggregate offer summarises. */
+export const aggOf = (o: Offer): string | null => {
+	const step = endStep(o);
+	return step?.k === 'agg' ? step.of : null;
+};
+/** Move a many-relation scope to another quantifier, keeping only values the new quantifier can carry. */
+export function selectQuantifier(
+	cat: Catalog,
+	model: string,
+	offers: readonly Offer[],
+	prefix: readonly FilterStep[],
+	m: Extract<Node, { t: 'many' }>,
+	q: Quant
+): Extract<Node, { t: 'many' }> {
+	if (q === m.q) return m;
+	if (q === 'some' || q === 'none' || q === 'every') return { t: 'many', rel: m.rel, q, of: m.of };
+	const mo = manyOffers(offers, prefix, m.rel);
+	const at = q === 'count' ? mo.count : mo.aggs.filter((o) => aggFn(o) === q);
+	if (at.length === 0) return m;
+	const field =
+		q === 'count'
+			? undefined
+			: at.some((o) => aggOf(o) === m.field)
+				? m.field
+				: (aggOf(at[0]!) ?? undefined);
+	const fieldOffers = q === 'count' ? at : at.filter((o) => aggOf(o) === field);
+	return {
+		t: 'many',
+		rel: m.rel,
+		q,
+		of: [],
+		op: (fieldOffers.some((o) => o.op === m.op) ? m.op : (fieldOffers[0]?.op ?? 'gte')) as Cmp,
+		n: aggregateValue(cat, childOf(cat, model, m.rel) ?? '', q, field, m.n),
+		...(field === undefined ? {} : { field })
+	};
+}
+
+function fieldNodes(
+	cat: Catalog,
+	model: string,
+	path: string,
+	ops: Json,
+	variables?: FilterVariables
+): Node[] | null {
 	const r = resolve(cat, model, path);
 	if (r === null || !jsonObject(ops) || keysOf(ops).length === 0) return null;
+	const allowed = grammarOps(r);
 	const out: Node[] = [];
 	let rest: { [k: string]: Json } = { ...ops };
 	// a `{ gte, lt }` pair on a date or instant is one relative span (`during`); anything else is its own row
@@ -714,6 +963,9 @@ function fieldNodes(cat: Catalog, model: string, path: string, ops: Json): Node[
 		'gte' in rest &&
 		'lt' in rest
 	) {
+		const from = argOf(r, 'gte', rest['gte'] ?? null, variables),
+			to = argOf(r, 'lt', rest['lt'] ?? null, variables);
+		if (from === null || to === null) return null;
 		out.push({
 			t: 'cond',
 			path,
@@ -725,6 +977,8 @@ function fieldNodes(cat: Catalog, model: string, path: string, ops: Json): Node[
 	}
 	for (const [k, v] of Object.entries(rest)) {
 		if (!Schema.is(OpSchema)(k)) return null;
+		// the read's own spellings: null tests are booleans, and a span is the gte/lt pair above
+		if (k === 'notNull' || k === 'notEmpty' || k === 'during') return null;
 		let op: Op = k,
 			arg: Arg | null = null;
 		if (k === 'isNull' || k === 'isEmpty') {
@@ -736,20 +990,27 @@ function fieldNodes(cat: Catalog, model: string, path: string, ops: Json): Node[
 			arg = { _tag: 'lit', lit: text };
 		} else if (k === 'near') {
 			// within metres of a point (a described "near <place>"): shown, its radius editable
+			const pair = Array.isArray(v) && v.length === 2 ? v : null,
+				point = pair?.[0] ?? null,
+				metres = pair?.[1];
 			if (
 				r.leaf !== 'field' ||
 				r.kind.kind !== 'point' ||
-				!Array.isArray(v) ||
-				v.length !== 2 ||
-				!isPoint(v[0] ?? null) ||
-				typeof v[1] !== 'number'
+				!isPoint(point) ||
+				!Number.isFinite(point.lat) ||
+				!Number.isFinite(point.lng) ||
+				typeof metres !== 'number' ||
+				!Number.isFinite(metres) ||
+				metres < 0 ||
+				pair === null
 			)
 				return null;
-			arg = { _tag: 'lit', lit: v };
+			arg = { _tag: 'lit', lit: pair };
 		} else {
-			arg = argOf(r, op, v);
+			arg = argOf(r, op, v, variables);
 			if (arg === null) return null;
 		}
+		if (!allowed.includes(op)) return null;
 		out.push({ t: 'cond', path, op, arg });
 	}
 	return out;
@@ -761,7 +1022,8 @@ export function fromWhere(
 	root: string,
 	w: Json,
 	at = root,
-	prefix = ''
+	prefix = '',
+	variables?: FilterVariables
 ): Node[] | null {
 	const x = cat[at];
 	if (!jsonObject(w) || x === undefined) return null;
@@ -769,7 +1031,7 @@ export function fromWhere(
 	for (const [key, v] of Object.entries(w)) {
 		if (key === 'and' || key === 'or') {
 			if (!Array.isArray(v) || v.length === 0) return null;
-			const of = v.map((p) => fromWhere(cat, root, p, at, prefix));
+			const of = v.map((p) => fromWhere(cat, root, p, at, prefix, variables));
 			if (of.some((p) => p === null || p.length === 0)) return null;
 			const flat: Node[] = of.flatMap((part): Node[] =>
 				part === null ? [] : part.length === 1 ? part : [{ t: 'group', join: 'and', of: part }]
@@ -779,7 +1041,7 @@ export function fromWhere(
 		} else if (key === 'not') {
 			// `is: { not }` differs from `not: { is }` on a null relation: only the root form is a row
 			if (prefix !== '' || !jsonObject(v) || keysOf(v).length === 0) return null;
-			const of = fromWhere(cat, root, v);
+			const of = fromWhere(cat, root, v, root, '', variables);
 			if (of === null) return null;
 			out.push({ t: 'group', join: 'and', not: true, of });
 		} else if (INDEX[key] !== undefined) {
@@ -800,30 +1062,39 @@ export function fromWhere(
 				return null;
 			for (const [q, body] of Object.entries(v)) {
 				if (q === 'some' || q === 'none' || q === 'every') {
-					const of = fromWhere(cat, child, body);
+					const of = fromWhere(cat, child, body, child, '', variables);
 					if (of === null) return null;
 					out.push({ t: 'many', rel, q, of });
 				} else if (Schema.is(AggSchema)(q)) {
 					if (!jsonObject(body)) return null;
 					const { of: field, ...cmp } = body;
-					const [op, n] = Object.entries(cmp)[0] ?? [];
-					if (keysOf(cmp).length !== 1 || !Schema.is(CmpSchema)(op) || typeof n !== 'number')
-						return null;
-					if (
-						q === 'count'
-							? field !== undefined || !Number.isInteger(n) || n < 0
-							: typeof field !== 'string' || !aggregable(cat, child, q).includes(field)
-					)
-						return null;
-					out.push({
-						t: 'many',
-						rel,
-						q,
-						of: [],
-						op,
-						n,
-						...(q === 'count' ? {} : { field: typeof field === 'string' ? field : '' })
-					});
+					if (keysOf(cmp).length === 0) return null;
+					for (const [op, n] of Object.entries(cmp)) {
+						if (!Schema.is(CmpSchema)(op) || (typeof n !== 'number' && typeof n !== 'string'))
+							return null;
+						const kind = typeof field === 'string' ? cat[child]?.fields[field] : undefined;
+						const date = kind?.kind === 'date' || kind?.kind === 'instant';
+						const valid =
+							q === 'count'
+								? field === undefined && typeof n === 'number' && Number.isInteger(n) && n >= 0
+								: typeof field === 'string' &&
+									aggregable(cat, child, q).includes(field) &&
+									(date
+										? typeof n === 'string' &&
+											kind !== undefined &&
+											Result.isSuccess(Schema.decodeUnknownResult(inputSchema(kind))(n))
+										: typeof n === 'number' && Number.isFinite(n));
+						if (!valid) return null;
+						out.push({
+							t: 'many',
+							rel,
+							q,
+							of: [],
+							op,
+							n,
+							...(q === 'count' ? {} : { field: typeof field === 'string' ? field : '' })
+						});
+					}
 				} else return null;
 			}
 		} else if (x.relations?.[key] !== undefined) {
@@ -840,19 +1111,20 @@ export function fromWhere(
 				if ('is' in body) {
 					const is = body['is'];
 					if (keysOf(body).length !== 1 || !jsonObject(is) || keysOf(is).length === 0) return null;
+					if ('id' in is && keysOf(is).length !== 1) return null;
 					const idOps = keysOf(is).length === 1 && jsonObject(is['id']) ? is['id'] : null;
 					nodes =
 						idOps !== null && keysOf(idOps).every((k) => ['eq', 'ne', 'in', 'nin'].includes(k))
-							? fieldNodes(cat, root, path, idOps)
+							? fieldNodes(cat, root, path, idOps, variables)
 							: path.split('.').length > 2
 								? null
-								: fromWhere(cat, root, is, arm ?? rel.targets[0] ?? '', `${path}.`);
-				} else nodes = fieldNodes(cat, root, path, body);
+								: fromWhere(cat, root, is, arm ?? rel.targets[0] ?? '', `${path}.`, variables);
+				} else nodes = fieldNodes(cat, root, path, body, variables);
 				if (nodes === null) return null;
 				out.push(...nodes);
 			}
 		} else {
-			const nodes = fieldNodes(cat, root, prefix + key, v);
+			const nodes = fieldNodes(cat, root, prefix + key, v, variables);
 			if (nodes === null) return null;
 			out.push(...nodes);
 		}
@@ -1009,19 +1281,72 @@ export function writeViewUrl(
 // ── a local array's rows, evaluated in the browser ──
 const cmpVal = (a: Value, b: Value): number =>
 	a instanceof Decimal &&
-	(b instanceof Decimal || (typeof b === 'string' && /^-?\d+(\.\d+)?$/.test(b)))
-		? a.cmp(b)
-		: typeof a === 'number' && typeof b === 'number'
-			? a - b
-			: String(a).localeCompare(String(b));
-export function matches(row: { readonly [f: string]: Value }, n: Node): boolean {
+	(b instanceof Decimal ||
+		typeof b === 'number' ||
+		(typeof b === 'string' && /^-?\d+(\.\d+)?$/.test(b)))
+		? a.cmp(b instanceof Decimal ? b : String(b))
+		: typeof a === 'string' &&
+			  typeof b === 'string' &&
+			  /^\d{4}-\d{2}-\d{2}T/.test(a) &&
+			  /^\d{4}-\d{2}-\d{2}T/.test(b)
+			? Date.parse(a) - Date.parse(b)
+			: typeof a === 'number' && typeof b === 'number'
+				? a - b
+				: String(a).localeCompare(String(b));
+export function matches(
+	row: { readonly [f: string]: Value },
+	n: Node,
+	clock?: FilterClock
+): boolean {
 	if (!complete(n)) return true;
 	if (n.t === 'group') {
 		const of = n.of.filter(complete),
-			r = n.join === 'and' ? of.every((x) => matches(row, x)) : of.some((x) => matches(row, x));
+			r =
+				n.join === 'and'
+					? of.every((x) => matches(row, x, clock))
+					: of.some((x) => matches(row, x, clock));
 		return n.not ? !r : r;
 	}
-	if (n.t === 'many') return true;
+	if (n.t === 'many') {
+		const related = n.rel
+			.split('.')
+			.reduce<Value | undefined>(
+				(value, key) => (valueObject(value) ? value[key] : undefined),
+				row
+			);
+		if (!Array.isArray(related) || !related.every(valueObject))
+			throw new Error('Related data must be loaded before applying this filter.');
+		const children = related.filter(valueObject);
+		const hit = (child: { readonly [key: string]: Value }) =>
+			n.of.every((node) => matches(child, node, clock));
+		if (n.q === 'some') return children.some(hit);
+		if (n.q === 'none') return !children.some(hit);
+		if (n.q === 'every') return children.every(hit);
+		if (n.op === undefined || n.n === undefined || n.n === null) return false;
+		let value: Value = children.length,
+			target: Value = n.n;
+		if (n.q !== 'count') {
+			const values = children
+				.map((child) => (n.field === undefined ? null : (child[n.field] ?? null)))
+				.filter((v) => v !== null);
+			if (n.q === 'sum' || n.q === 'avg') {
+				if (n.q === 'avg' && values.length === 0) return false;
+				value = values.reduce<Decimal>(
+					(sum, v) => sum.plus(Decimal.of(String(v))),
+					Decimal.of('0')
+				);
+				if (n.q === 'avg') target = Decimal.of(String(target)).times(String(values.length));
+			} else {
+				if (values.length === 0) return false;
+				value = values.reduce((a, b) => (cmpVal(a, b) < 0 === (n.q === 'min') ? a : b));
+			}
+		}
+		return matches(
+			{ value },
+			{ t: 'cond', path: 'value', op: n.op, arg: taggedArg({ lit: target }) },
+			clock
+		);
+	}
 	const v =
 		n.path
 			.split('.')
@@ -1029,8 +1354,17 @@ export function matches(row: { readonly [f: string]: Value }, n: Node): boolean 
 				(object, key) => (valueObject(object) ? object[key] : undefined),
 				row
 			) ?? null;
-	const a = n.arg !== null && 'lit' in n.arg ? n.arg.lit : null,
+	const a =
+			n.arg !== null && 'lit' in n.arg
+				? n.arg.lit
+				: n.arg !== null && 'field' in n.arg
+					? (row[n.arg.field] ?? null)
+					: n.arg !== null && 'var' in n.arg
+						? evaluated(n.arg.var, clock, typeof v === 'string' && v.includes('T'))
+						: null,
 		list = n.arg !== null && 'list' in n.arg ? n.arg.list : [];
+	if (n.arg !== null && 'var' in n.arg && valueObject(a) && 'var' in a)
+		throw new Error('Resolve variables before applying this local filter.');
 	switch (n.op) {
 		case 'isNull':
 			return v === null;
@@ -1052,9 +1386,9 @@ export function matches(row: { readonly [f: string]: Value }, n: Node): boolean 
 				});
 		}
 		case 'eq':
-			return v !== null && String(v) === String(a);
+			return v !== null && (v instanceof Decimal ? cmpVal(v, a) === 0 : String(v) === String(a));
 		case 'ne':
-			return v === null || String(v) !== String(a);
+			return v === null || (v instanceof Decimal ? cmpVal(v, a) !== 0 : String(v) !== String(a));
 		case 'in':
 			return list.some((x) => String(x) === String(v));
 		case 'nin':
@@ -1067,8 +1401,29 @@ export function matches(row: { readonly [f: string]: Value }, n: Node): boolean 
 			return v !== null && cmpVal(v, a) < 0;
 		case 'lte':
 			return v !== null && cmpVal(v, a) <= 0;
+		case 'during': {
+			if (n.arg === null || !('range' in n.arg)) return false;
+			const range = n.arg.range.map((value) =>
+				bound(value, clock, typeof v === 'string' && v.includes('T'))
+			);
+			if (range.some((x) => typeof x !== 'string' && typeof x !== 'number'))
+				throw new Error('Resolve relative time before applying this local filter.');
+			return v !== null && cmpVal(v, range[0] ?? null) >= 0 && cmpVal(v, range[1] ?? null) < 0;
+		}
+		case 'has':
+			return Array.isArray(v) && v.some((x) => String(x) === String(a));
+		case 'hasAny':
+			return Array.isArray(v) && list.some((x) => v.some((y) => String(x) === String(y)));
+		case 'hasAll':
+			return Array.isArray(v) && list.every((x) => v.some((y) => String(x) === String(y)));
+		case 'isEmpty':
+			return v === null || v === '' || (Array.isArray(v) && v.length === 0);
+		case 'notEmpty':
+			return !(v === null || v === '' || (Array.isArray(v) && v.length === 0));
+		case 'contains':
+			return typeof v === 'string' && typeof a === 'string' && v.includes(a);
 		default:
-			return true;
+			throw new Error('This filter requires the query engine.');
 	}
 }
 /** Nulls last ascending and first descending (rule 11). */
@@ -1243,7 +1598,13 @@ function partsOf(cat: Catalog, model: string, n: Node, w: Words): Part[] {
 				'value',
 				n.n === undefined || n.n === null
 					? ''
-					: format({ kind: 'number' }, n.n, { locale: w.locale })
+					: format(
+							n.field === undefined
+								? { kind: 'number' }
+								: (cat[child]?.fields[n.field] ?? { kind: 'number' }),
+							n.n,
+							{ locale: w.locale }
+						)
 			)
 		];
 	}

@@ -231,7 +231,7 @@ it.live(
 			});
 			const table = element(target, 'table');
 			assert.deepEqual(
-				[...table.querySelectorAll('thead th')].map((th) => textOf(th).trim()),
+				[...table.querySelectorAll('thead th[data-column]')].map((th) => textOf(th).trim()),
 				['Code*', 'Note', 'Until', 'Kept']
 			);
 			assert.equal(table.querySelectorAll('tbody tr').length, 1);

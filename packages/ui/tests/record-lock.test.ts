@@ -2,6 +2,14 @@ import { describe, expect, it } from 'vitest';
 import { matchesLock } from '../src/record/lock.js';
 
 describe('a record lock declared on a model', () => {
+	it('locks a settled reference and keeps an unset reference editable', () => {
+		const lock = { payslip_id: { isNull: false } };
+		expect(matchesLock({ payslip_id: null }, lock)).toBe(false);
+		expect(matchesLock({}, lock)).toBe(false);
+		expect(matchesLock({ payslip_id: 'settlement' }, lock)).toBe(true);
+		expect(matchesLock({ payslip_id: null }, { payslip_id: { isNull: true } })).toBe(true);
+		expect(matchesLock({ payslip_id: 'settlement' }, { payslip_id: { isNull: true } })).toBe(false);
+	});
 	it('matches own fields and the boolean combinations the declaration language allows', () => {
 		expect(matchesLock({ status: 'paid', settled: true }, { status: { eq: 'paid' } })).toBe(true);
 		expect(matchesLock({ status: 'open' }, { status: { eq: 'paid' } })).toBe(false);

@@ -165,6 +165,43 @@ const declineDiscard = async () => {
 	await settle();
 };
 const mounted: (() => Promise<void>)[] = [];
+
+it.live('the record heading evaluates the shared model CEL label', () =>
+	Effect.gen(function* () {
+		const { bolt } = yield* browser(() => fake(LIVE));
+		const target = document.body.appendChild(document.createElement('div'));
+		const app = mount(Harness, {
+			target,
+			props: {
+				bolt,
+				catalog: {
+					jobs: {
+						...catalog.jobs,
+						label: ['title', 'crew'],
+						record_label: "record.title + ' · Crew ' + record.crew"
+					}
+				},
+				part: 'record',
+				view: RecordShell,
+				props: { of: 'jobs', id: 'j1' }
+			}
+		});
+		mounted.push(async () => {
+			await unmount(app);
+			target.remove();
+		});
+		yield* browser(async () => {
+			await settle();
+			assert.match(target.textContent ?? '', /Paint v3 · Crew B/);
+		});
+	})
+);
+it.live('the record heading uses its id when no label is declared', () =>
+	browser(async () => {
+		const { target } = await show(LIVE, { jobs: { ...catalog.jobs, label: [] } });
+		assert.match(target.textContent ?? '', /j1/);
+	})
+);
 afterEach(async () => {
 	for (const close of mounted.splice(0).reverse()) await close();
 });
@@ -471,68 +508,66 @@ it.live(
 		})
 );
 
-it.live(
-	'native history merges scoped related records and keeps its scrubber',
-	() =>
-		Effect.gen(function* () {
-			const { bolt, script, setCapabilities, calls } = yield* browser(() => fake(LIVE));
-			let query: import('./view-fixture.ts').ReadOptions | undefined;
-			script.read = (c, o) => {
-				query = o;
-				return { rows: [{ id: 'a1', title: 'Customer call' }], next: null };
-			};
-			script.history = (c, id) =>
-				c === 'jobs'
-					? HISTORY
-					: [
-							{
-								revision: 2,
-								at: '2026-09-04T00:00:00.000Z',
-								actor: { kind: 'member', id: 'u1' },
-								restoredFrom: null,
-								approval: null,
-								changed: { title: 'Customer call' }
-							}
-						];
-			const target = document.body.appendChild(document.createElement('div'));
-			const app = mount(Harness, {
-				target,
+it.live('native history merges scoped related records and keeps its scrubber', () =>
+	Effect.gen(function* () {
+		const { bolt, script, setCapabilities, calls } = yield* browser(() => fake(LIVE));
+		let query: import('./view-fixture.ts').ReadOptions | undefined;
+		script.read = (c, o) => {
+			query = o;
+			return { rows: [{ id: 'a1', title: 'Customer call' }], next: null };
+		};
+		script.history = (c, id) =>
+			c === 'jobs'
+				? HISTORY
+				: [
+						{
+							revision: 2,
+							at: '2026-09-04T00:00:00.000Z',
+							actor: { kind: 'member', id: 'u1' },
+							restoredFrom: null,
+							approval: null,
+							changed: { title: 'Customer call' }
+						}
+					];
+		const target = document.body.appendChild(document.createElement('div'));
+		const app = mount(Harness, {
+			target,
+			props: {
+				bolt,
+				catalog: {
+					...catalog,
+					activities: {
+						label: ['title'],
+						fields: { title: { kind: 'text' } }
+					}
+				},
+				part: 'record',
+				view: RecordShell,
 				props: {
-					bolt,
-					catalog: {
-						...catalog,
-						activities: {
-							label: ['title'],
-							fields: { title: { kind: 'text' } }
-						}
-					},
-					part: 'record',
-					view: RecordShell,
-					props: {
-						of: 'jobs',
-						id: 'j1',
-						history: {
-							sources: [{ of: 'activities', where: { job: { eq: 'j1' } } }]
-						}
+					of: 'jobs',
+					id: 'j1',
+					history: {
+						sources: [{ of: 'activities', where: { job: { eq: 'j1' } } }]
 					}
 				}
-			});
-			mounted.push(async () => {
-				await unmount(app);
-				target.remove();
-			});
-			yield* browser(() => settle());
-			element<HTMLElement>(target, '[data-timeline-trigger]').click();
-			yield* browser(() => settle());
-			assert.deepEqual(query, { where: { job: { eq: 'j1' } }, limit: READ_LIMIT });
-			const events = element<HTMLElement>(document, '[data-record-history-events]');
-			assert.match(textOf(events), /Customer call/);
-			assert.match(textOf(events), /Ada/);
-			const firstEvent = required(events.firstElementChild);
-			assert.ok(firstEvent instanceof HTMLElement);
-			assert.equal(firstEvent.dataset.historyModel, 'activities');
-			assert.ok(element<HTMLElement>(document, '[data-record-timeline] [role=slider]'));
-		})
+			}
+		});
+		mounted.push(async () => {
+			await unmount(app);
+			target.remove();
+		});
+		yield* browser(() => settle());
+		element<HTMLElement>(target, '[data-timeline-trigger]').click();
+		yield* browser(() => settle());
+		assert.deepEqual(query, { where: { job: { eq: 'j1' } }, limit: READ_LIMIT });
+		const events = element<HTMLElement>(document, '[data-record-history-events]');
+		assert.match(textOf(events), /Customer call/);
+		assert.match(textOf(events), /Ada/);
+		const firstEvent = required(events.firstElementChild);
+		assert.ok(firstEvent instanceof HTMLElement);
+		assert.equal(firstEvent.dataset.historyModel, 'activities');
+		assert.ok(element<HTMLElement>(document, '[data-record-timeline] [role=slider]'));
+	})
 );
 
 it.live(

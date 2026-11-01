@@ -32,10 +32,10 @@ const Navigate = Schema.Struct({
 	find: OptionalString
 });
 
-/** One browser session per agent conversation; an automation run keeps its own profile too. */
+/** One browser identity per person; each conversation gets its own session (tab) inside it. */
 const profileOf = (context: HostToolContext): string | undefined =>
 	context.actor.kind === 'member'
-		? `person:${context.actor.id}:${context.conversation}`
+		? `person:${context.actor.id}\u0000${context.conversation}`
 		: context.actor.kind === 'system'
 			? `${BROWSER_RUN_PROFILE}${context.conversation}`
 			: undefined;
@@ -77,7 +77,7 @@ const tool = <A, I>(
 		)
 });
 
-export const browserTools = (browser: Browser['Service']): readonly HostTool[] => [
+export const browserTools = (browser: Browser['Service']): readonly HostTool[] => ([
 	tool({
 		name: 'browser_navigate',
 		description:
@@ -144,7 +144,7 @@ export const browserTools = (browser: Browser['Service']): readonly HostTool[] =
 						})
 					)
 	})
-];
+] as const).map((tool) => ({ ...tool, pack: 'browser' }));
 
 /** The agent host's tools after the built-in browser tools. */
 export const withBrowser = Effect.fnUntraced(function* (agent: AgentHostConfig) {

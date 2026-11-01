@@ -2,7 +2,7 @@
 @component
 A button (or a link, with `href`) in a variant and size.
 @example
-<Button variant="outline" size="sm" onclick={save}>Save</Button>
+<Button variant="outline" onclick={save}>Save</Button>
 -->
 <script lang="ts" module>
 	import { cn } from '../utils.js';
@@ -13,22 +13,25 @@ A button (or a link, with `href`) in a variant and size.
 	import { type VariantProps, tv } from 'tailwind-variants';
 
 	export const buttonVariants = tv({
-		base: 'max-sm:min-h-11 max-sm:min-w-11 focus-visible:ring-ring inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-sm text-sm font-medium transition-colors focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-inset disabled:pointer-events-none disabled:opacity-50',
+		base: '[--hit-target:2rem] focus-visible:ring-ring inline-flex items-center justify-center gap-1.5 whitespace-nowrap rounded-sm text-xs font-medium transition-colors focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-inset disabled:pointer-events-none disabled:opacity-50',
 		variants: {
 			variant: {
 				default: 'bg-primary text-primary-foreground hover:bg-primary/90',
+				/** The one chromatic action per view; every other action stays neutral. */
+				brand:
+					'bg-brand text-brand-foreground hover:bg-brand/90 focus-visible:ring-brand-foreground',
 				destructive: 'bg-destructive text-destructive-foreground hover:bg-destructive/90',
 				outline: 'border-input bg-background hover:bg-accent hover:text-accent-foreground border',
 				secondary: 'bg-secondary text-secondary-foreground hover:bg-secondary/80',
 				ghost: 'hover:bg-accent hover:text-accent-foreground',
 				link: 'text-primary underline-offset-4 hover:underline focus-visible:ring-0 focus-visible:outline-none focus-visible:underline focus-visible:decoration-ring focus-visible:decoration-2 focus-visible:underline-offset-4'
 			},
+			// the one control size (`CONTROL_SIZE`): a text button and an icon button stand as tall as the fields beside them;
+			// `lg` is only for a lone call to action outside forms and toolbars (a kiosk, a landing page)
 			size: {
-				default: 'h-9 px-4 py-2',
-				sm: 'h-8 rounded-md px-3',
-				lg: 'h-10 rounded-md px-8',
-				icon: 'h-9 w-9',
-				'icon-sm': 'size-8'
+				default: 'h-8 px-3',
+				icon: 'size-8',
+				lg: 'h-10 rounded-md px-8 text-sm'
 			}
 		},
 		defaultVariants: {

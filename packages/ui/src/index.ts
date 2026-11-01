@@ -49,6 +49,7 @@ export type { AutomationInputOf, AutomationKey, InsertOf, RecordOf, RowOf } from
 /** An approval request: its timeline of steps and the decisions the host allows the viewer. */
 export { default as ApprovalPanel } from './approval/ApprovalPanel.svelte';
 export { default as Rows, type RowsProps } from './relations/Rows.svelte';
+export { labelRead } from './relations/select.js';
 export { default as RunsFor, type RunsForProps } from './runs/RunsFor.svelte';
 export { default as RunStatus, type RunStatusProps } from './runs/RunStatus.svelte';
 export type {
@@ -68,6 +69,13 @@ export {
 	default as ToolbarFilter,
 	type ToolbarFilterProps
 } from './model/toolbar/ToolbarFilter.svelte';
+/** The toolbar's condition, description and sort controls for a saved model filter. */
+export {
+	default as FilterEditor,
+	type FilterEditorProps,
+	type FilterValue
+} from './filter/FilterEditor.svelte';
+export type { FilterVariables } from './filter/filter.js';
 export { carriedContexts, onPageContexts, openRecord, pageContexts } from './record/navigation.js';
 export { provideBolt, useBolt } from './client/context.js';
 export { provideModel, useEnumText } from './model/context.js';
@@ -138,7 +146,6 @@ export {
 export { releaseWindow } from './workspaces/filters.js';
 export type {
 	WorkspaceOperationsData,
-	WorkspaceOperation,
 	WorkspaceScope,
 	WorkspaceRange,
 	WorkspaceView

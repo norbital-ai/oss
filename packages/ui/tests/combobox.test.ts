@@ -76,6 +76,38 @@ it('single selection answers a scalar and closes', async () => {
 	await unmount(view);
 });
 
+it('keeps option suffixes separate from truncating labels and in the selected trigger', async () => {
+	const target = document.body.appendChild(document.createElement('div'));
+	const view = mount(Combobox, {
+		target,
+		props: {
+			options: [
+				{
+					value: 'annual',
+					label: 'Annual leave with a long descriptive name',
+					suffix: '14 days available'
+				}
+			],
+			value: 'annual',
+			onChange: () => {}
+		}
+	});
+	flushSync();
+	const trigger = target.querySelector<HTMLButtonElement>('[role=combobox]')!;
+	expect(trigger.textContent).toContain('14 days available');
+	expect(trigger.querySelector('.truncate')?.textContent).not.toContain('available');
+	trigger.click();
+	await settle();
+	const row = option('annual');
+	expect(row.querySelector('.truncate')?.textContent).toBe(
+		'Annual leave with a long descriptive name'
+	);
+	expect(
+		[...row.querySelectorAll('.shrink-0')].some((node) => node.textContent === '14 days available')
+	).toBe(true);
+	await unmount(view);
+});
+
 it('readonly has no trigger and disabled cannot open, single or multiple', async () => {
 	for (const multiple of [false, true])
 		for (const restriction of [{ readonly: true }, { disabled: true }]) {

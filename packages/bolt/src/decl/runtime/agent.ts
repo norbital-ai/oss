@@ -49,7 +49,8 @@ export function envoy<const S extends EnvoySpec>(
 	return spec;
 }
 
-type McpBase = {
+/** The authoring shape of an MCP server: `url` is a secret name, so a string until the names are checked. */
+export type McpBase = {
 	description: string;
 	/** The secret name holding the server's streamable-HTTP URL. */
 	url: string;
@@ -60,7 +61,8 @@ type McpBase = {
 	/** An allowlist of the server's tools; absent = every tool it lists. */
 	tools?: readonly string[];
 };
-type McpSpec = {
+/** The checked MCP spec: every secret is a `SecretName` declared in `+secrets.ts`. */
+export type McpSpec = {
 	description: string;
 	/** Streamable HTTP, the current MCP revision; the URL and credentials are workspace secrets. */
 	url: SecretName;
@@ -73,7 +75,9 @@ type McpSpec = {
 
 /**
  * `src/agent/mcp/+<n>.mcp.ts`: an MCP server the agent may call, its `url` and credentials named from `+secrets.ts`, and an
- * optional tool allowlist. Reachable only through a policy's `capabilities.mcp`.
+ * optional tool allowlist. Reachable only through a policy's `capabilities.mcp`. Declare the names, merge the change
+ * to live, then `navigate { configure: { capability: 'mcp.configure', record: '<n>' } }` opens the native pairing
+ * sheet; each secret opens the write-only form. Its tools appear on the next turn as `mcp__<n>__<tool>`.
  * @example
  * export default mcp({ description: 'HQ tools', url: 'HQ_URL', auth: { bearer: 'HQ_TOKEN' } });
  */

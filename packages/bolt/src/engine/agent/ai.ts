@@ -113,8 +113,10 @@ export const modelCall = Effect.fn('Ai.modelCall')(function* (
 		wallMs?: number | undefined;
 		onDelta?: ((text: string) => void) | undefined;
 		onReasoning?: ((text: string) => void) | undefined;
+		onRequest?: (request: AiRequest) => Effect.Effect<void>;
 	} = {}
 ) {
+	if (options.onRequest !== undefined) yield* options.onRequest(request);
 	if (ai === undefined)
 		return yield* Effect.fail(
 			new Unavailable({ facility: 'ai', reason: 'the host provides no ai' })
@@ -422,11 +424,8 @@ export const generate = Effect.fn('Ai.generate')(function* (
 					input: toolSchema(tool)
 				}));
 				const messages = portMessages(provider.prompt);
-				const reply = yield* modelCall(
-					ai,
-					{ ...request, messages, ...(tools.length === 0 ? {} : { tools }) },
-					options
-				);
+				const outbound = { ...request, messages, ...(tools.length === 0 ? {} : { tools }) };
+				const reply = yield* modelCall(ai, outbound, options);
 				const prompt = {
 					system: request.system?.length ?? 0,
 					messages: JSON.stringify(messages).length,

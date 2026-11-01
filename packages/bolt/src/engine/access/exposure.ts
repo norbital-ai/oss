@@ -8,6 +8,29 @@ import { nullableOfExpr, type LayerColumns } from '../../decl/model.ts';
 import { FieldsSchema } from '../../protocol/public-page.ts';
 import { SYSTEM } from '../../system/index.ts';
 import { viewOutput } from './authority.ts';
+import { labelPaths, recordLabelSpec, recordLabelExpression } from '@norbital-ai/std/label';
+
+const labelMetadata = (
+	model: {
+		record_label?: string;
+		label?: string | readonly string[];
+		table?: unknown;
+		search?: { text: readonly string[] };
+	},
+	readable: (field: string) => boolean
+) => {
+	const expression = recordLabelExpression(model);
+	const label = expression ?? recordLabelSpec(model);
+	const paths = labelPaths(label);
+	const fields = [...new Set(paths.map((path) => path.split('.')[0] ?? path))];
+	const visible = expression !== undefined && fields.every(readable);
+	const search = [...(visible ? ['$label'] : []), ...(model.search?.text.filter(readable) ?? [])];
+	return {
+		label: visible ? fields : expression === undefined ? fields.filter(readable) : [],
+		...(visible ? { record_label: expression, labelPaths: paths } : {}),
+		...(search.length === 0 ? {} : { search })
+	};
+};
 
 /** A relationship's static `where` is JSON by construction; decoded once for the browser's picker. */
 const pickerWhere = Schema.decodeUnknownSync(Schema.Record(Schema.String, Schema.Json));
@@ -92,7 +115,7 @@ function childInputs(
 const fieldsOf = (entries: readonly (readonly [string, unknown])[]): Fields =>
 	Schema.decodeUnknownSync(FieldsSchema)(Object.fromEntries(entries));
 /** The system models the browser resolves as targets: the directory (pickers, `actor` operands) and stored files. */
-const TARGETS = ['sys_user', 'sys_file', 'sys_invitation'] as const;
+const TARGETS = ['sys_user', 'sys_file', 'sys_invitation', 'approval_request'] as const;
 /**
  * The caller's syncs on `c` for the view toolbar: a file sync's upload accept list (its parsers' extensions; default
  * xlsx and csv), whether the caller may import (create or update the model) and export (read it), and its required
@@ -198,7 +221,8 @@ export function exposure(
 			model = m.models[c];
 		const output = viewOutput(m, a, c);
 		const reads = output !== undefined;
-		const read = (output === undefined || output === 'default' ? spec.read : spec.outputs?.[output]) ?? {};
+		const read =
+			(output === undefined || output === 'default' ? spec.read : spec.outputs?.[output]) ?? {};
 		const writes = (['create', 'update'] as const).filter(
 			(v) => spec[v] !== undefined && (a.admin || (ca?.[v].length ?? 0) > 0)
 		);
@@ -282,9 +306,8 @@ export function exposure(
 				.map((field) => [field, 'ownedParent'] as const)
 		]);
 		out[c] = {
-			label: [model.label].flat(),
+			...labelMetadata(model, readable),
 			...(output === undefined || output === 'default' ? {} : { output }),
-			...(model.search === undefined ? {} : { search: model.search.text }),
 			...(model.search?.semantic === undefined ? {} : { semantic: true as const }),
 			fields: fieldsOf(fields),
 			...(reads && Object.keys(model.search?.indexes ?? {}).length > 0
@@ -350,7 +373,10 @@ export function exposure(
 				: [];
 		});
 		out[c] = {
-			label: [model.label].flat(),
+			...labelMetadata(model, shown),
+			...(c === 'approval_request' && shown('collection_name') && shown('record_id')
+				? { search: ['$label', 'collection_name'] }
+				: {}),
 			...(output === 'default' ? {} : { output }),
 			fields: fieldsOf(readable),
 			...(relations.length > 0 ? { relations: Object.fromEntries(relations) } : {})

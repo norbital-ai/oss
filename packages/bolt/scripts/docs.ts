@@ -152,14 +152,25 @@ export const generateDocs = Effect.try({
 				ts.displayPartsToString(alias.getDocumentationComment(checker)).trim() ||
 				nsText.trim() ||
 				exportText.trim();
-			const examples = [
+			const tags = [
 				...sym.getJsDocTags(checker),
 				...(sym === alias ? [] : alias.getJsDocTags(checker))
-			]
+			];
+			const examples = tags
 				.filter((t) => t.name === 'example')
 				.map((t) => ts.displayPartsToString(t.text).trim())
 				.filter(Boolean);
-			return { text, examples: [...new Set(examples)] };
+			const guidance = [
+				...new Set(
+					tags
+						.filter((tag) => !['param', 'example'].includes(tag.name))
+						.map((tag) => `@${tag.name} ${ts.displayPartsToString(tag.text).trim()}`)
+				)
+			];
+			return {
+				text: [text, ...guidance].filter(Boolean).join('\n\n'),
+				examples: [...new Set(examples)]
+			};
 		}
 		const first = (text: string) =>
 			(text.split(/\n\s*\n/)[0] ?? '').replace(/\s*\n\s*/g, ' ').trim();
@@ -191,12 +202,15 @@ export const generateDocs = Effect.try({
 				)
 				.slice(0, 80)
 				.map((p) => {
-					const summary = first(ts.displayPartsToString(p.getDocumentationComment(checker)));
+					const { text, examples } = comment(p, p);
+					const summary = first(text);
 					return {
 						name: p.name,
 						type: typeText(p, at),
 						...(p.flags & ts.SymbolFlags.Optional ? { optional: true as const } : {}),
-						...(summary === '' ? {} : { summary })
+						...(summary === '' ? {} : { summary }),
+						...(text.replace(/\s+/g, ' ').trim() === summary ? {} : { docs: text }),
+						...(examples.length === 0 ? {} : { examples })
 					};
 				});
 		}
@@ -318,7 +332,19 @@ export const generateDocs = Effect.try({
 			} else if (f & ts.SymbolFlags.Class) {
 				kind = 'class';
 				signature = declarationText(d);
-				members = membersOf(checker.getDeclaredTypeOfSymbol(sym), d);
+				const key = checker.getTypeOfSymbolAtLocation(sym, d);
+				const service =
+					key.getProperty('~effect/Context/Service') === undefined
+						? undefined
+						: key.getProperty('Service');
+				// Effect keys carry their implementation on the static Service type,
+				// not the class instance. Authors need that shape to supply a test layer.
+				members = membersOf(
+					service === undefined
+						? checker.getDeclaredTypeOfSymbol(sym)
+						: checker.getTypeOfSymbolAtLocation(service, d),
+					d
+				);
 			} else if (f & ts.SymbolFlags.Interface) {
 				kind = 'interface';
 				signature = declarationText(d);
@@ -369,7 +395,7 @@ export const generateDocs = Effect.try({
 		}
 
 		mkdirSync(out, { recursive: true });
-		const index: DocIndex = { namespaces: [], missing: [], skills: [] };
+		const index: DocIndex = { namespaces: [], missing: [], skills: [], guides: [] };
 		const corpusSymbols: DocSymbol[] = [];
 		for (const name of readdirSync(SKILLS)
 			.filter((n) => existsSync(join(SKILLS, n, 'SKILL.md')))
@@ -438,7 +464,6 @@ export const generateDocs = Effect.try({
 					...symbols.filter((s) => s.summary === '').map((s) => `${e.namespace}#${s.name}`)
 				);
 		}
-		writeFileSync(join(out, 'index.json'), `${JSON.stringify(index, null, '\t')}\n`);
 
 		// every call a docs page names (`` `ctx.allow()` ``, `` `model(name, spec)` ``) names something the corpus declares:
 		// a symbol, a member, a parameter or an identifier of their types
@@ -545,6 +570,18 @@ export const generateDocs = Effect.try({
 				''
 			].join('\n')
 		);
+		for (const file of readdirSync(pages)
+			.filter((file) => file.endsWith('.md'))
+			.sort(byCode)) {
+			const text = readFileSync(join(pages, file), 'utf8');
+			index.guides.push({
+				slug: file === 'README.md' ? 'overview' : file.slice(0, -3),
+				title: /^# (.+)$/m.exec(text)?.[1] ?? file,
+				source: `packages/bolt/docs/${file}`,
+				text
+			});
+		}
+		writeFileSync(join(out, 'index.json'), `${JSON.stringify(index, null, '\t')}\n`);
 		console.log(
 			`[docs] ${index.namespaces.map((n) => `${n.namespace} ${n.symbols}`).join(', ')}; ${index.missing.length} reference symbols without a summary; skills ${index.skills.map((k) => k.name).join(', ')}`
 		);

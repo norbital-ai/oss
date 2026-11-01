@@ -3,6 +3,8 @@
 import { originalPositionFor, TraceMap } from '@jridgewell/trace-mapping';
 import {
 	Cause,
+	Config,
+	ConfigProvider,
 	Context,
 	Effect,
 	Exit,
@@ -343,7 +345,8 @@ const run = (
 	limits: GuestLimitsShape,
 	events: InvocationEvents,
 	invocation: Invocation,
-	bridge: Bridge
+	bridge: Bridge,
+	secrets: Readonly<Record<string, string>>
 ) =>
 	Effect.gen(function* () {
 		const where = stackLocation(program),
@@ -410,7 +413,7 @@ const run = (
 						kind: invocation.kind,
 						path: bodyPath(invocation.kind, invocation.target),
 						input: JSON.stringify(invocation.input),
-						ctx: JSON.stringify(ctx),
+						ctx: JSON.stringify({ ...ctx, $secrets: secrets }),
 						invocation: invocation.id
 					})
 				);
@@ -434,8 +437,14 @@ const run = (
 							);
 						switch (final[0]) {
 							case 'ok':
-								if (byteLength(final[1]) > limits.argsBytes)
-									return failed('tooLarge', `the result is over ${limits.argsBytes} bytes`);
+								// A write transform returns the expanded change set, including owned rows. Its
+								// existing change-set bound applies; ordinary results and call arguments stay bounded.
+								const resultBytes =
+									invocation.kind === 'create' || invocation.kind === 'update'
+										? limits.changeSetBytes
+										: limits.argsBytes;
+								if (byteLength(final[1]) > resultBytes)
+									return failed('tooLarge', `the result is over ${resultBytes} bytes`);
 								return {
 									kind: 'ok',
 									output: yield* Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.Json))(
@@ -726,6 +735,7 @@ export const GuestLive = Layer.effect(
 			options = yield* GuestConfig,
 			telemetry = yield* Telemetry,
 			generation = yield* Scope.Scope;
+		const configuration = yield* ConfigProvider.ConfigProvider;
 		if (
 			options.callWallMs !== undefined &&
 			(!Number.isInteger(options.callWallMs) ||
@@ -767,6 +777,24 @@ export const GuestLive = Layer.effect(
 							invocation: invocation.id,
 							run: invocation.run
 						});
+						// Only tenant-declared values cross into server code; never an ambient environment dump.
+						const secrets = Object.fromEntries(
+							(yield* Effect.forEach(Object.keys(manifest.workspace.secrets ?? {}), (name) =>
+								Config.option(Config.String(name)).pipe(
+									Effect.provideService(ConfigProvider.ConfigProvider, configuration),
+									Effect.mapError(() =>
+										BoltError.make(
+											'unavailable',
+											'facility',
+											'Workspace secrets could not be loaded.'
+										)
+									),
+									Effect.map((value) =>
+										Option.isSome(value) ? [[name, value.value] as const] : []
+									)
+								)
+							)).flat()
+						);
 						return yield* run(
 							isolates.open(program, {
 								prelude: PRELUDE,
@@ -779,7 +807,8 @@ export const GuestLive = Layer.effect(
 							limits,
 							events,
 							invocation,
-							bridge
+							bridge,
+							secrets
 						);
 					})
 				);

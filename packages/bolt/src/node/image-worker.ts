@@ -8,8 +8,8 @@ import { inflateSync } from 'node:zlib';
 import exifr from 'exifr';
 import { convertIndexedToRgb, decode as decodePng, encode as encodePng } from 'fast-png';
 import jpeg from 'jpeg-js';
-import type { ImagePreview } from '../engine/contracts.ts';
-import { ImagePreviewMime, ImagePreviewSize } from './images.ts';
+import type { ImagePreview, ImageCrop as CropBox } from '../engine/contracts.ts';
+import { ImageCrop, ImagePreviewMime, ImagePreviewSize } from './images.ts';
 class ImageError extends Schema.TaggedError<ImageError>()('ImageError', {
 	message: Schema.String
 }) {}
@@ -537,9 +537,56 @@ const preview = Effect.fn('Image.preview')(function* (
 		return yield* Effect.fail(failed(new Error('the image preview exceeds 5 MiB')));
 	return { bytes: result, mime: png ? 'image/png' : 'image/jpeg', derived: true };
 });
+const crop = Effect.fn('Image.crop')(function* (bytes: Uint8Array, box: CropBox) {
+	if (
+		!Object.values(box).every((v) => Number.isFinite(v) && v >= 0 && v <= 1) ||
+		box.left >= box.right ||
+		box.top >= box.bottom
+	)
+		return yield* Effect.fail(
+			failed(new Error('crop bounds must form a rectangle within zero and one'))
+		);
+	const raster = yield* decode(bytes);
+	const containerOriented =
+		raster.format === 'heic' &&
+		(yield* Effect.try({ try: () => heifTransform(bytes), catch: failed }));
+	const orientation = containerOriented
+		? 1
+		: ((yield* Effect.tryPromise({ try: () => exifr.orientation(bytes), catch: failed })) ?? 1);
+	if (!Number.isInteger(orientation) || orientation < 1 || orientation > 8)
+		return yield* Effect.fail(failed(new Error('the EXIF orientation is invalid')));
+	let rgba = raster.data;
+	if (raster.channels === 3) {
+		rgba = new Uint8Array(raster.width * raster.height * 4);
+		for (let pixel = 0; pixel < raster.width * raster.height; pixel++) {
+			rgba.set(raster.data.subarray(pixel * 3, pixel * 3 + 3), pixel * 4);
+			rgba[pixel * 4 + 3] = 255;
+		}
+	}
+	const source = orient({ data: rgba, width: raster.width, height: raster.height }, orientation);
+	const left = Math.floor(box.left * source.width),
+		top = Math.floor(box.top * source.height);
+	const width = Math.ceil(box.right * source.width) - left;
+	const height = Math.ceil(box.bottom * source.height) - top;
+	const data = new Uint8Array(width * height * 4);
+	for (let y = 0; y < height; y++) {
+		const at = ((top + y) * source.width + left) * 4;
+		data.set(source.data.subarray(at, at + width * 4), y * width * 4);
+	}
+	const output = yield* Effect.try({
+		try: () => encodePng({ data, width, height, channels: 4, depth: 8 }),
+		catch: failed
+	});
+	if (output.byteLength > 5 * 1024 * 1024)
+		return yield* Effect.fail(
+			failed(new Error('the image crop exceeds 5 MiB; choose a smaller region'))
+		);
+	return output;
+});
 const Job = Schema.Struct({
 	bytes: Schema.declare((value: unknown): value is Uint8Array => value instanceof Uint8Array),
 	maxEdge: Schema.optionalKey(Schema.Number),
+	crop: Schema.optionalKey(ImageCrop),
 	preview: Schema.optionalKey(Schema.Struct({ maxEdge: ImagePreviewSize, mime: ImagePreviewMime }))
 });
 const job = Schema.decodeUnknownSync(Job)(workerData);
@@ -547,11 +594,13 @@ const outcome: Exit.Exit<
 	Effect.Success<ReturnType<typeof facts>> | Uint8Array | ImagePreview,
 	ImageError
 > =
-	job.preview !== undefined
-		? await Effect.runPromiseExit(preview(job.bytes, job.preview.mime, job.preview.maxEdge))
-		: job.maxEdge === undefined
-			? await Effect.runPromiseExit(facts(job.bytes))
-			: await Effect.runPromiseExit(derive(job.bytes, job.maxEdge));
+	job.crop !== undefined
+		? await Effect.runPromiseExit(crop(job.bytes, job.crop))
+		: job.preview !== undefined
+			? await Effect.runPromiseExit(preview(job.bytes, job.preview.mime, job.preview.maxEdge))
+			: job.maxEdge === undefined
+				? await Effect.runPromiseExit(facts(job.bytes))
+				: await Effect.runPromiseExit(derive(job.bytes, job.maxEdge));
 if (Exit.isFailure(outcome)) {
 	const error = Cause.squash(outcome.cause);
 	throw new Error(error instanceof Error ? error.message : Cause.pretty(outcome.cause));

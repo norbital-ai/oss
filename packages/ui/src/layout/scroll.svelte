@@ -142,7 +142,7 @@ A vertical scroll owner is `size="fill"` (the space left in its parent, scrollin
 			(axis === 'x'
 				? 'snap-x snap-mandatory [&>*]:snap-start'
 				: 'snap-y snap-mandatory [&>*]:snap-start'),
-		// The caller's class last: floors, layers and colours it names win; layout itself is props (doctor-enforced).
+		// The caller's class last: floors, layers and colours it names win; layout itself is props.
 		className
 	)}
 	style:min-height={size === 'fill' ? minHeight : undefined}

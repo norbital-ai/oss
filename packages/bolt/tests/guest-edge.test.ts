@@ -10,6 +10,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it } from '@effect/vitest';
 import { Effect, Schema } from 'effect';
+import { eachMapping, TraceMap } from '@jridgewell/trace-mapping';
 import { Guest, type Bridge, type CrossCall } from '../src/engine/services.ts';
 import { GuestIsolates } from '../src/engine/ports.ts';
 import { guests } from './support/guests.ts';
@@ -362,10 +363,14 @@ describe('crossings', () => {
 });
 
 describe('the bundle', () => {
-	const sources = (program: GuestProgram): readonly string[] =>
-		Schema.decodeUnknownSync(
-			Schema.fromJsonString(Schema.Struct({ sources: Schema.Array(Schema.String) }))
-		)(program.sourceMap ?? '{"sources":[]}').sources;
+	const sources = (program: GuestProgram): readonly string[] => {
+		const mapped = new Set<string>();
+		if (program.sourceMap !== undefined)
+			eachMapping(new TraceMap(program.sourceMap), (mapping) => {
+				if (mapping.source !== null) mapped.add(mapping.source);
+			});
+		return [...mapped];
+	};
 	it('carries the edge and Effect beside a generator body, and neither without one (blank)', () => {
 		expect(sources(edge).some((s) => s.endsWith('decl/runtime/guest.ts'))).toBe(true);
 		expect(sources(edge).some((s) => s.includes('/effect/dist/'))).toBe(true);

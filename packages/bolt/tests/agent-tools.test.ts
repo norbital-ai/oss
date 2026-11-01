@@ -1,6 +1,7 @@
 // The agent catalogue over typed native ports: one-write act, approvals, workspace search and run waits.
 import { memberCap } from '../src/engine/agent/settings.ts';
 import { createHash } from 'node:crypto';
+import { encode as encodePng } from 'fast-png';
 import { getEventListeners } from 'node:events';
 import { describe, expect, it } from '@effect/vitest';
 import { afterAll } from 'vitest';
@@ -43,9 +44,9 @@ import {
 } from '../src/engine/agent/tools.ts';
 import { compileAuthority } from '../src/engine/access/authority.ts';
 import { TenantDb, type RawDb } from '../src/engine/db/tenant-db.ts';
-import type { EngineManifest } from '../src/engine/manifest.ts';
+import { layered, type EngineManifest } from '../src/engine/manifest.ts';
 import { Port } from '../src/engine/port.ts';
-import { Bundler, Files, GuestIsolates, Http, Logs } from '../src/engine/ports.ts';
+import { Bundler, Files, GuestIsolates, Http, Images, Logs } from '../src/engine/ports.ts';
 import { filesOf, skillOf } from './support/run-file-trees.ts';
 import { REFERENCE } from '../src/engine/agent/run-js.ts';
 import { BOUNDS } from '../src/engine/agent/context.ts';
@@ -163,6 +164,7 @@ const ctx = (
 				act: Context.get(native, Writes).act,
 				approvals: { ...approvals, ...engine.approvals },
 				files: { ...files, ...engine.files },
+				images: engine.images ?? Context.get(native, Images),
 				...(engine.read === undefined ? {} : { read: engine.read }),
 				...(engine.act === undefined ? {} : { act: engine.act }),
 				...(engine.convert === undefined ? {} : { convert: engine.convert }),
@@ -196,6 +198,7 @@ const ctx = (
 			logs: Context.get(native, Logs),
 			mcpTools: [],
 			hostTools: [],
+			packs: new Set<string>(),
 			receipts: [],
 			read: new Map(),
 			files: [],
@@ -252,6 +255,23 @@ const first = <A>(items: readonly A[]): A => {
 	return item;
 };
 describe('job waits', () => {
+	it.effect('retains a host preview role when its job is collected later', () =>
+		Effect.scoped(
+			Effect.gen(function* () {
+				const list = yield* jobs();
+				const id = yield* list.add(
+					'workspace_validate',
+					Effect.succeed({ preview: 'https://preview.test/' }),
+					{ studio: 'preview' }
+				);
+				expect(yield* list.wait([id], 1000)).toMatchObject({
+					job: id,
+					studio: 'preview',
+					result: { preview: 'https://preview.test/' }
+				});
+			})
+		)
+	);
 	it.effect('releases abort listeners after completed waits and retains uncollected jobs', () =>
 		Effect.gen(function* () {
 			const list = yield* jobs();
@@ -413,6 +433,120 @@ describe('tool schemas', () => {
 	);
 });
 describe('fewer calls for the common paths', () => {
+	it.effect(
+		'act reports native relational fields, including writer-filled and owned-parent links',
+		() =>
+			Effect.gen(function* () {
+				const model: EngineManifest = {
+					...manifest,
+					models: {
+						...manifest.models,
+						task_lines: {
+							description: 'An owned line',
+							label: 'value',
+							fields: { value: { kind: 'text' } }
+						}
+					},
+					relationships: {
+						'tasks.owner': { to: 'sys_user' },
+						'task_lines.task': { to: 'tasks', inverse: 'lines', owned: true },
+						'task_lines.member': { to: 'sys_user' }
+					},
+					exposures: {
+						tasks: {
+							read: { tasks: { fields: 'all' }, 'tasks.lines': { fields: 'all' } },
+							create: { columns: { tasks: ['title'], 'tasks.lines': ['value', 'member'] } }
+						},
+						task_lines: { read: { task_lines: { fields: 'all' } } }
+					}
+				};
+				const task = '01950000-0000-7000-8000-000000000001',
+					line = '01950000-0000-7000-8000-000000000002';
+				const child = { id: line, value: 'Known source', task, member: 'ann' };
+				const x = yield* ctx(
+					{},
+					{
+						manifest: model,
+						act: () =>
+							Effect.succeed({
+								v: 1,
+								captured: [
+									{
+										model: 'tasks',
+										id: task,
+										op: 'create',
+										revision: 1,
+										old: null,
+										new: { id: task, title: 'Source', owner: 'ann' },
+										cause: 'direct'
+									},
+									{
+										model: 'task_lines',
+										id: line,
+										op: 'create',
+										revision: 1,
+										old: null,
+										new: child,
+										cause: 'direct'
+									}
+								],
+								outcome: {
+									kind: 'committed',
+									output: null,
+									records: [
+										{ model: 'tasks', id: task, revision: 1 },
+										{ model: 'task_lines', id: line, revision: 1 }
+									]
+								}
+							}),
+						read: () =>
+							Effect.succeed([
+								{
+									tasks: { rows: [{ id: task, title: 'Source', owner: 'ann' }] },
+									'tasks.lines': { rows: [child] },
+									task_lines: { rows: [child] }
+								}
+							])
+					}
+				);
+				expect(
+					yield* result(x, 'act', {
+						callable: 'tasks.create',
+						input: [{ title: 'Source', lines: [{ value: 'Known source', member: 'ann' }] }]
+					})
+				).toMatchObject({
+					result: {
+						fieldMap: [
+							{
+								model: 'tasks',
+								row: task,
+								field: 'tasks.owner',
+								targetModel: 'sys_user',
+								decision: 'LINK',
+								value: 'ann'
+							},
+							{
+								model: 'task_lines',
+								row: line,
+								field: 'task_lines.task',
+								targetModel: 'tasks',
+								decision: 'CREATE',
+								value: task
+							},
+							{
+								model: 'task_lines',
+								row: line,
+								field: 'task_lines.member',
+								targetModel: 'sys_user',
+								decision: 'LINK',
+								value: 'ann'
+							}
+						]
+					}
+				});
+			})
+	);
+
 	it.effect(
 		'read takes one layer map: every root in one crossing; an unreadable root refuses the call',
 		() =>
@@ -866,10 +1000,33 @@ describe('skill', () => {
 				expect(r.more).toMatch(/^read each with section: .*Part 5$/);
 			})
 	);
+	it.effect('a reference stays readable by its path in the skill file list', () =>
+		Effect.gen(function* () {
+			const x = yield* ctx({
+				skills: {
+					authoring: skillOf({
+						'SKILL.md': '---\ndescription: How to author\n---\n## Start\nRead the reference.\n',
+						'references/repository-rebuild.md': '# Rebuild\nTrack every requirement.\n'
+					})
+				}
+			});
+			expect(
+				yield* result(x, 'skill', { name: 'authoring', file: 'references/repository-rebuild.md' })
+			).toMatchObject({
+				result: {
+					file: 'references/repository-rebuild.md',
+					text: '# Rebuild\nTrack every requirement.\n'
+				}
+			});
+			expect(yield* result(x, 'skill', { name: 'authoring', file: 'missing.md' })).toMatchObject({
+				result: { error: expect.stringContaining('No file') }
+			});
+		})
+	);
 });
-describe('workspace_search', () => {
+describe('working-source tools', () => {
 	const source: { [path: string]: string } = {
-		'src/a.ts': 'x\nbolt.read(tasks)\nexport function total(a: number) {\n\treturn a;\n}\n',
+		'src/a.ts': 'x\nbolt.read(tasks)\nexport function total(a: number) {\nreturn a;\n}\n',
 		'src/app/b.svelte': '<p>{bolt.READ}</p>'
 	};
 	const workspace: WorkspacePort = {
@@ -877,52 +1034,100 @@ describe('workspace_search', () => {
 		read: async (path) => source[path] ?? null
 	};
 	it.effect(
-		'finds lines by text, reads a file by path, and searches a draft; external members get no tool',
+		'grep has a required pattern, regex/literal matching, a path scope and bounded results',
 		() =>
 			Effect.gen(function* () {
 				const x = yield* ctx({ workspace, authority: member() });
-				expect(yield* result(x, 'workspace_search', { text: 'bolt.read' })).toEqual({
+				const search = yield* requiredTool(x, 'workspace_search');
+				expect(toolSchema(search)).toMatchObject({ required: ['pattern'] });
+				expect(Schema.is(search.parametersSchema)({})).toBe(false);
+				expect(
+					yield* result(x, 'workspace_search', { pattern: 'bolt\\.(read|READ)' })
+				).toMatchObject({
 					result: {
-						total: 2,
 						hits: [
-							{ path: 'src/a.ts', line: 2, text: 'bolt.read(tasks)' },
-							{ path: 'src/app/b.svelte', line: 1, text: '<p>{bolt.READ}</p>' }
-						]
+							{ path: 'src/a.ts', line: 2 },
+							{ path: 'src/app/b.svelte', line: 1 }
+						],
+						truncated: false
 					}
 				});
 				expect(
-					yield* result(x, 'workspace_search', { text: 'bolt.read', paths: ['src/app/'] })
-				).toMatchObject({ result: { total: 1 } });
+					yield* result(x, 'workspace_search', { pattern: 'bolt.read', literal: true })
+				).toMatchObject({ result: { hits: [{ path: 'src/a.ts' }], truncated: false } });
 				expect(
-					yield* result(x, 'workspace_search', { path: 'src/a.ts', from: 2, to: 2 })
-				).toMatchObject({ result: { path: 'src/a.ts', lines: ['2: bolt.read(tasks)'] } });
-				expect(yield* result(x, 'workspace_search', { path: 'a.ts' })).toEqual({
-					result: { error: "No file 'a.ts'. Did you mean src/a.ts?" }
-				});
-				expect(yield* result(x, 'workspace_search', { draft: true })).toEqual({
-					result: { error: 'You have no Studio draft in this workspace.' }
-				});
-				const draft: WorkspacePort = {
-					files: async () => ['src/new.ts'],
-					read: async () => 'draft'
-				};
-				expect(
-					yield* result(yield* ctx({ workspace, draft, authority: member() }), 'workspace_list', {
-						draft: true
+					yield* result(x, 'workspace_search', {
+						pattern: 'BOLT.READ',
+						literal: true,
+						caseSensitive: false,
+						path: 'src/app'
 					})
-				).toEqual({ result: { path: 'src/', entries: ['new.ts'] } });
-				// '', '.' and '/' list the workspace root
-				for (const path of ['', '.', '/'])
-					expect(
-						yield* result(yield* ctx({ workspace, draft, authority: member() }), 'workspace_list', {
-							draft: true,
-							path
-						})
-					).toEqual({ result: { path: '', entries: ['src/'] } });
+				).toMatchObject({ result: { hits: [{ path: 'src/app/b.svelte' }] } });
+				expect(yield* result(x, 'workspace_search', { pattern: '.', limit: 1 })).toMatchObject({
+					result: { hits: [{ path: 'src/a.ts', line: 1 }], truncated: true }
+				});
+				expect(
+					yield* result(x, 'workspace_search', { pattern: 'bolt.read', literal: true, path: '.' })
+				).toMatchObject({ result: { hits: [{ path: 'src/a.ts' }], truncated: false } });
+				expect(yield* result(x, 'workspace_search', { pattern: '[' })).toMatchObject({
+					result: { error: expect.stringContaining('Invalid regular expression') }
+				});
+			})
+	);
+	it.effect(
+		'read and list default to the current author tree without a draft flag; other staff read published source',
+		() =>
+			Effect.gen(function* () {
+				let revision = 'first';
+				const draft: WorkspacePort = {
+					files: async () => ['src/current.ts'],
+					read: async (path) => (path === 'src/current.ts' ? revision : null)
+				};
+				const x = yield* ctx({ workspace, draft, authority: member() });
+				expect(yield* result(x, 'workspace_list', {})).toEqual({
+					result: { path: '', entries: ['src/'] }
+				});
+				expect(yield* result(x, 'workspace_list', { path: 'src' })).toEqual({
+					result: { path: 'src/', entries: ['current.ts'] }
+				});
+				expect(yield* result(x, 'workspace_read', { path: 'src/current.ts' })).toMatchObject({
+					result: { lines: ['1: first'] }
+				});
+				// the same path spelling workspace_list and workspace_search accept
+				expect(yield* result(x, 'workspace_read', { path: './src/current.ts' })).toMatchObject({
+					result: { path: 'src/current.ts', lines: ['1: first'] }
+				});
+				expect(yield* result(x, 'workspace_read', { path: '/src/current.ts' })).toMatchObject({
+					result: { path: 'src/current.ts', lines: ['1: first'] }
+				});
+				revision = 'saved replacement';
+				expect(yield* result(x, 'workspace_read', { path: 'src/current.ts' })).toMatchObject({
+					result: { lines: ['1: saved replacement'] }
+				});
+				expect(
+					yield* result(x, 'workspace_search', { pattern: 'saved replacement', literal: true })
+				).toMatchObject({ result: { hits: [{ path: 'src/current.ts', line: 1 }] } });
+				expect(
+					yield* result(yield* ctx({ workspace, authority: member() }), 'workspace_read', {
+						path: 'src/a.ts',
+						from: 2,
+						to: 2
+					})
+				).toMatchObject({ result: { lines: ['2: bolt.read(tasks)'] } });
+				expect(yield* result(x, 'workspace_read', { path: '../elsewhere' })).toMatchObject({
+					result: { error: expect.stringContaining('No file') }
+				});
+				expect(
+					yield* result(x, 'workspace_read', {
+						path: 'node_modules/@norbital-ai/bolt/build/decl/runtime/agent.d.ts'
+					})
+				).toMatchObject({
+					result: { error: expect.stringContaining('installed packages are outside the workspace') }
+				});
 				expect(
 					yield* tool(
 						yield* ctx({ workspace, authority: member({ external: true }) }),
-						'workspace_search'
+						'workspace_read'
 					)
 				).toBeUndefined();
 			})
@@ -978,18 +1183,28 @@ describe('reading the source is every staff member’s; changing it is an admini
 					result: { path: 'src/data/model/', entries: ['tasks/'] }
 				});
 				expect(
-					yield* result(x, 'workspace_search', { path: 'src/data/model/payroll/+model.ts' })
+					yield* result(x, 'workspace_read', { path: 'src/data/model/payroll/+model.ts' })
 				).toMatchObject({ result: { error: expect.stringContaining('No file') } });
-				expect(yield* result(x, 'workspace_search', { text: 'model(' })).toMatchObject({
-					result: { total: 1, hits: [{ path: 'src/data/model/tasks/+model.ts' }] }
+				expect(
+					yield* result(x, 'workspace_search', { pattern: 'model(', literal: true })
+				).toMatchObject({
+					result: { hits: [{ path: 'src/data/model/tasks/+model.ts' }], truncated: false }
 				});
 				// an administrator holds every host tool and reads all of the source
 				const admin = yield* ctx({ workspace, hostTools, authority: member({ admin: true }) });
 				expect(yield* names(admin)).toEqual(
 					expect.arrayContaining(['workspace_lang', 'workspace_write', 'workspace_build'])
 				);
-				expect(yield* result(admin, 'workspace_search', { text: 'model(' })).toMatchObject({
-					result: { total: 2 }
+				expect(
+					yield* result(admin, 'workspace_search', { pattern: 'model(', literal: true })
+				).toMatchObject({
+					result: {
+						hits: [
+							{ path: 'src/data/model/tasks/+model.ts' },
+							{ path: 'src/data/model/payroll/+model.ts' }
+						],
+						truncated: false
+					}
 				});
 				// a host tool that changes something is never a source tool, whatever it claims
 				const claims = yield* ctx({
@@ -1111,6 +1326,35 @@ describe('describe_workspace', () => {
 		);
 		expect(describeWorkspace(lab, admin, messages)).toContain('secret "hidden"');
 	});
+	it('gives an administrator the native write schema without granting a system data read', () => {
+		const all = layered(lab);
+		const admin = compileAuthority(
+			all,
+			{ actor: member({ admin: true }).actor, admin: true, policies: [] },
+			'a'
+		);
+		const text = describeWorkspace(all, admin, messages, { focus: 'model', name: 'sys_envoy' });
+		const shape = Schema.decodeUnknownSync(
+			Schema.fromJsonString(
+				Schema.Struct({
+					fields: Schema.Record(Schema.String, Schema.String),
+					writes: Schema.Struct({
+						'sys_envoy.create': Schema.Struct({
+							columns: Schema.Record(Schema.String, Schema.Array(Schema.String))
+						})
+					})
+				})
+			)
+		)(text.split('\n').at(-1) ?? '');
+		expect(shape.fields['audience']).toContain('enum');
+		expect(shape.writes['sys_envoy.create'].columns['sys_envoy']).toEqual(
+			expect.arrayContaining(['name', 'policies', 'audience'])
+		);
+		expect(workspaceSchema(all, admin)).not.toContain('- sys_envoy');
+		expect(describeWorkspace(all, matcher, messages, { focus: 'model', name: 'sys_envoy' })).toBe(
+			'No model named sys_envoy that you can reach.'
+		);
+	});
 	it('stays within the cap, naming the rest for a focused call', () => {
 		const many = Object.fromEntries(
 			Array.from({ length: 400 }, (_, n) => [
@@ -1168,6 +1412,50 @@ describe('describe_workspace', () => {
 		})
 	);
 });
+it.effect(
+	'system discovery maps native setup targets and restricts them to an in-app administrator',
+	() =>
+		Effect.gen(function* () {
+			const x = yield* ctx();
+			expect(yield* result(x, 'describe_workspace', { focus: 'system' })).toMatchObject({
+				result: {
+					capabilities: expect.arrayContaining([
+						{
+							capability: 'api_key.create',
+							path: '/settings/integrations',
+							tab: 'keys',
+							followUp: expect.any(String)
+						}
+					])
+				}
+			});
+			expect(
+				yield* result(x, 'navigate', {
+					path: '/settings/integrations',
+					configure: { capability: 'api_key.create' }
+				})
+			).toEqual({
+				result: { navigation: '/settings/integrations?setup=api_key.create', requested: true }
+			});
+			expect(
+				yield* result(x, 'navigate', {
+					path: '/settings/secrets',
+					configure: { capability: 'secret.set', record: 'UNKNOWN' }
+				})
+			).toMatchObject({ result: { error: expect.any(String) } });
+			const ordinary = yield* ctx({ authority: member() });
+			expect(yield* result(ordinary, 'describe_workspace', { focus: 'system' })).toEqual({
+				result: { capabilities: [] }
+			});
+			expect(
+				yield* result(ordinary, 'navigate', {
+					path: '/',
+					configure: { capability: 'api_key.create' }
+				})
+			).toMatchObject({ result: { error: expect.any(String) } });
+		})
+);
+
 describe('ingest: a job per file, filed in the outputs, read in windows', () => {
 	const HTML = [
 		'<h1>Cover</h1>',
@@ -1180,7 +1468,13 @@ describe('ingest: a job per file, filed in the outputs, read in windows', () => 
 		'<p><img src="image-1.png" alt="site plan"></p>',
 		'<p>End</p>'
 	].join('\n');
-	const PNG = new Uint8Array([0x89, 0x50, 0x4e, 0x47]);
+	const PNG = encodePng({
+		width: 2,
+		height: 1,
+		channels: 4,
+		depth: 8,
+		data: new Uint8Array([255, 0, 0, 255, 0, 0, 255, 255])
+	});
 	const tender: Ingested = {
 		kind: 'document',
 		html: HTML,
@@ -1313,6 +1607,15 @@ describe('ingest: a job per file, filed in the outputs, read in windows', () => 
 					result: { image: 'image-1.png' }
 				});
 				expect(x.files.map((f) => f.mime)).toEqual(['image/png']);
+				const crop = { left: 0, top: 0, right: 0.5, bottom: 1 };
+				expect(yield* result(x, 'read_file', { output: 'o1', image: 1, crop })).toMatchObject({
+					result: { image: 'image-1.png', crop, mime: 'image/png' }
+				});
+				expect(x.files).toHaveLength(2);
+				expect(x.files[1]?.id).toContain('#crop:');
+				expect(yield* result(x, 'read_file', { output: 'o1', crop })).toMatchObject({
+					result: { error: expect.stringContaining('image number') }
+				});
 				expect(
 					kitLogs
 						.get(x)
@@ -2519,6 +2822,81 @@ describe('host web search', () => {
 			seen.length = 0;
 			yield* result(yield* ctx({ hostTools, question: 'who won?' }), 'web_search', {});
 			expect(seen.map((c) => c.question)).toEqual(['who won?']);
+		})
+	);
+});
+
+describe('the checklist', () => {
+	it.effect('keeps a done goal omitted from the next list, and never rewrites it', () =>
+		Effect.gen(function* () {
+			let captured: Parameters<ToolContext['setGoals']>[0] | undefined;
+			const base = yield* ctx();
+			const x = yield* ctx({
+				conv: {
+					...base.conv,
+					goals: [{ id: 'read', text: 'Read the source', status: 'done' }]
+				},
+				setGoals: (goals) => Effect.sync(() => void (captured = goals))
+			});
+			const answer = yield* result(x, 'goals', {
+				items: [
+					{ id: 'build', text: 'Build the change', status: 'doing' },
+					{ id: 'read', text: 'Something else', status: 'pending' }
+				]
+			});
+			expect(answer).toMatchObject({
+				result: {
+					saved: true,
+					goals: [
+						{ id: 'build', status: 'doing' },
+						{ id: 'read', text: 'Read the source', status: 'done' }
+					]
+				}
+			});
+			expect(captured).toEqual([
+				{ id: 'build', text: 'Build the change', status: 'doing' },
+				{ id: 'read', text: 'Read the source', status: 'done' }
+			]);
+		})
+	);
+});
+
+describe('optional tool packs', () => {
+	const packed = (name: string, pack?: string): HostTool => ({
+		name,
+		description: name,
+		input: { type: 'object', properties: {} },
+		...(pack === undefined ? {} : { pack }),
+		readOnly: true,
+		call: async () => ({ ok: name })
+	});
+	const names = (x: ToolContext) =>
+		catalogue(x).pipe(Effect.map((c) => c.tools.map((tool) => tool.name)));
+	it.effect('hides packed host tools until tools enables the pack for the next step', () =>
+		Effect.gen(function* () {
+			const x = yield* ctx({
+				hostTools: [
+					packed('browser_navigate', 'browser'),
+					packed('workspace_merge', 'deploy'),
+					packed('workspace_write')
+				]
+			});
+			expect(yield* names(x)).toEqual(expect.arrayContaining(['tools', 'workspace_write']));
+			expect(yield* names(x)).not.toContain('browser_navigate');
+			expect(yield* result(x, 'tools', { enable: ['browser'] })).toMatchObject({
+				result: {
+					packs: expect.arrayContaining([
+						expect.objectContaining({ name: 'browser', enabled: true })
+					])
+				}
+			});
+			expect(yield* names(x)).toEqual(
+				expect.arrayContaining(['browser_navigate', 'workspace_write'])
+			);
+			expect(yield* names(x)).not.toContain('workspace_merge');
+			expect(yield* result(x, 'tools', { enable: ['nope'] })).toMatchObject({
+				result: { error: expect.stringContaining("No tool pack 'nope'") }
+			});
 		})
 	);
 });

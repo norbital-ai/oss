@@ -3,6 +3,22 @@ import { Effect } from 'effect';
 import { catalogOf, read } from '@norbital-ai/store';
 import { readTargets, selectTargets } from '../src/engine/query/engine.ts';
 
+it.effect('tracks a live label reference so target edits refresh approval results', () =>
+	Effect.gen(function* () {
+		const cat = catalogOf({
+			tables: {
+				people: { fields: { name: { kind: 'text' } }, recordLabel: 'record.name' },
+				requests: {
+					fields: { model: { kind: 'text' }, record: { kind: 'text' } },
+					labelLink: { model: 'model', record: 'record', targets: ['people'] }
+				}
+			}
+		});
+		const query = yield* read(cat, 'requests', { select: { model: true }, limit: 1 });
+		expect([...readTargets(cat, query)].sort()).toEqual(['people', 'requests']);
+	})
+);
+
 it.effect('tracks every polymorphic projection arm and its nested relations', () =>
 	Effect.gen(function* () {
 		const cat = catalogOf({

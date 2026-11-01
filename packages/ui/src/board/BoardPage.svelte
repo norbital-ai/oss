@@ -17,6 +17,7 @@
 	import ReadGate from '../read/ReadGate.svelte';
 	import { queryState } from '../read/state.js';
 	import Value from '../cell/Value.svelte';
+	import { recordText } from '../kinds/kind.js';
 	import ApprovalAccent from '../approval/ApprovalAccent.svelte';
 	import { approvalOf, approvalText } from '../approval/row.js';
 
@@ -64,6 +65,12 @@
 	};
 	const kinds = useKinds();
 	const fields = $derived(typeof card === 'function' ? [] : card);
+	const readFields = $derived([
+		...new Set([
+			...fields,
+			...(kinds.catalog?.[of]?.record_label === undefined ? [] : (kinds.catalog?.[of]?.label ?? []))
+		])
+	]);
 	const query = $derived(
 		JSON.stringify({ of, where, orderBy, search, fields, pageSize, index, after })
 	);
@@ -81,7 +88,7 @@
 								kinds.catalog,
 								of,
 								{ where, orderBy, search: search || undefined, limit, after: at },
-								fields
+								readFields
 							)
 						)
 					),
@@ -142,17 +149,19 @@
 	{/snippet}
 	{#snippet children()}
 		{#if index === 0 && cards.length === 0}
-			<!-- an empty lane is still a drop target: the placeholder keeps a card's height so one can land here -->
+			<!-- an empty lane remains a drop target -->
 			<div
 				class={[
-					'border-border bg-background/50 flex min-h-28 flex-col items-center justify-center gap-1 rounded-sm border border-dashed p-4 text-center',
+					'flex min-h-28 flex-col items-center justify-center gap-1 rounded-sm border border-transparent p-4 text-center dark:border-border dark:border-dashed dark:bg-background/50',
 					grid && 'col-span-full'
 				]}
 				data-lane-empty
 			>
-				<Glyph name="inbox" class="text-muted-foreground size-5" />
-				<p class="text-sm font-medium">{msg(bolt, 'board.laneEmpty', 'Nothing here')}</p>
-				<p class="text-meta">{msg(bolt, 'board.laneClear', 'Lane clear')}</p>
+				<Glyph name="inbox" class="text-muted-foreground mb-1 size-5 dark:mb-0" />
+				<p class="text-sm text-muted-foreground dark:font-medium dark:text-foreground">
+					{msg(bolt, 'board.laneEmpty', 'Nothing here')}
+				</p>
+				<p class="text-meta hidden dark:block">{msg(bolt, 'board.laneClear', 'Lane clear')}</p>
 			</div>
 		{/if}
 		<!-- the cards' spacing is their margin (measured with them); the page gives the last one back to the lane's gap -->
@@ -172,7 +181,7 @@
 					draggable={grid ? undefined : 'true'}
 					{@attach lane.measure(row.id)}
 					class={[
-						'group bg-card shadow-card hover:border-input data-[dragging]:opacity-40 relative flex w-full cursor-pointer flex-col gap-1 overflow-clip rounded-sm border text-left text-sm transition-colors focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none',
+						'group bg-popover text-popover-foreground hover:border-input data-[dragging]:opacity-40 relative flex w-full cursor-pointer flex-col gap-1 overflow-clip rounded-sm border text-left text-sm transition-colors focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none dark:bg-card dark:text-card-foreground',
 						grid ? 'min-h-24 p-3' : 'mb-2 p-2.5',
 						selectable && 'pl-12',
 						selected?.has(row.id) && 'border-primary bg-accent/40'
@@ -238,15 +247,17 @@
 					{:else}
 						{#each fields as f, i (f)}<span
 								class={i === 0 ? 'font-medium' : 'text-muted-foreground text-xs'}
-								><Value
-									value={displayed[f]}
-									kind={kinds.catalog?.[of]?.fields[f]}
-									row={displayed}
-									ref={refOf(displayed, f)}
-									name={f}
-									dense
-									link={i !== 0}
-								/></span
+								>{#if i === 0 && (kinds.catalog?.[of]?.record_label !== undefined || typeof row['$label'] === 'string' || kinds.catalog?.[of]?.label.length === 0) && recordText(kinds.catalog?.[of], row)}<span
+										data-record-label>{recordText(kinds.catalog?.[of], row)}</span
+									>{:else}<Value
+										value={displayed[f]}
+										kind={kinds.catalog?.[of]?.fields[f]}
+										row={displayed}
+										ref={refOf(displayed, f)}
+										name={f}
+										dense
+										link={i !== 0}
+									/>{/if}</span
 							>{/each}
 					{/if}
 				</div>

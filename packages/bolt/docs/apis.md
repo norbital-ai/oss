@@ -148,6 +148,50 @@ host links. Remote syncs request through their own instance. Decode provider ans
 `ai.sys_2.infer`, `ai.sys_1.decide` and `ai.embed` are automation facilities; inference progress is
 described in [the runtime overview](./README.md#authoring-and-pages).
 
+`ctx.ai.sys_1.decide({ state, questions })` batches independent questions into one call.
+State accepts text, an object, or an array. Question instructions, Choice descriptions,
+Score levels, and Noul true/false descriptions accept strings, objects, arrays, or null;
+Noul criteria and question instructions may be omitted. Structured entries preserve
+nested JSON values. Stored FileRefs must be resolved before calling System 1. Inline PNG/JPEG
+evidence uses `{ type: 'image_url', image_url: { url: 'data:image/jpeg;base64,...' } }`
+in state; remote URLs are rejected. The adapter sends actual image parts/assets, never base64 as text.
+Envoy/Norbius triage prepares bounded images, voice transcripts, and extracted document/text content
+before its one decision call, reusing the ingestion cache. Unreadable or truncated attachments cannot
+be discarded as noise. Native audio is not a Jev input. Decision images are omitted from retained logs.
+
+```ts
+function* chooseFilter(ctx: AutomationCtx) {
+	const { answers } = yield* ctx.ai.sys_1.decide({
+		state: { description: 'Show open jobs' },
+		questions: {
+			filter: {
+				type: 'choice',
+				instructions: { question: 'Which filter does `description` request?' },
+				criteria: {
+					open: { where: { status: { eq: 'open' } } },
+					none: { where: null }
+				}
+			}
+		}
+	});
+	return answers.filter.choice; // 'open' | 'none'; code selects that entry's where.
+}
+```
+
+Choice returns the supplied option key and probabilities. Score returns its numeric
+expected score, probabilities, and the selected structured level; Noul returns the
+probability of true. Code composes the selected entries and validates the resulting
+read filter. Structured criteria do not request arbitrary JSON Schema generation.
+The `decisionsSystem1` adapter uses Jev/OpenRouter's Decisions wire format;
+`structuredSystem1` implements the same contract over structured-output chat completions.
+For OpenAI's native `/v1/decisions`, set `decisionsSystem1`'s `format: 'openai'`
+(or the Bolt server's System 1 provider to `openai-decisions`, with its full endpoint URL).
+The adapter translates structured question entries to JSON text and normalizes native
+predicate, choice and score answers back to this same Bolt contract.
+Each decision also emits the retained `ai.call` resource record (`category: 'decisions'`): model,
+provider call identity, input/output tokens, provider cost, elapsed time, request bytes and question count.
+The detailed `decision.made` record remains separate. The host meters the provider call once as AI usage.
+
 `ctx.notify` accepts the same notices returned by [model notify callbacks](./notifications.md).
 [Documents](./documents.md) covers conversion, [Device](./device.md) covers browser resources.
 `bolt.approvals.decide` and `bolt.restore.preview/run` apply current authority and approval locks;

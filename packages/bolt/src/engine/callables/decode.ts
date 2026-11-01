@@ -347,6 +347,7 @@ export function outputSchema(
 			}
 			codec = Schema.Struct({
 				...columns,
+				$label: Schema.optionalKey(Schema.NullOr(Schema.String)),
 				$sync: Schema.optionalKey(Schema.Json),
 				$approval: Schema.optionalKey(Schema.Json)
 			});

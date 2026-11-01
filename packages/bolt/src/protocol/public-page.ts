@@ -204,6 +204,8 @@ const relation = {
 /** A model's presentation metadata both catalogs share. */
 const exposure = {
 	label: strings,
+	record_label: optionalString,
+	labelPaths: Schema.optionalKey(strings),
 	search: Schema.optionalKey(strings),
 	semantic: trueKey,
 	indexes: Schema.optionalKey(

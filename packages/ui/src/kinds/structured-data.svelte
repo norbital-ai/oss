@@ -131,7 +131,7 @@ leaf values retain the workspace's native kinds, custom renderers and inherited 
 	import * as Popover from '../primitives/popover/index.js';
 	import { fieldEntry } from './builtin/index.js';
 	import { useKinds } from './context.js';
-	import { armValue, formatValue, inferKind, initial } from './kind.js';
+	import { armValue, formatValue, inferKind, initial, wideKind } from './kind.js';
 	import { FIELD_TYPES, jsonSchemaFromRows, jsonSchemaRows } from './json-schema-rows.js';
 	import { provideControls, uiText } from '../primitives/utils.js';
 	import { humanize } from '../text/messages.js';
@@ -152,6 +152,9 @@ leaf values retain the workspace's native kinds, custom renderers and inherited 
 		structuredSchema
 	} from './structured-data.js';
 	import { useForm } from '../form/form-state.svelte.js';
+	import FieldControl, { useFieldPresentation } from '../form/field-control.svelte';
+	import { useOptionalBolt } from '../client/context.js';
+	import { useSectionTitle } from '../form/section.svelte';
 
 	let {
 		schema,
@@ -164,7 +167,7 @@ leaf values retain the workspace's native kinds, custom renderers and inherited 
 		id,
 		readonly,
 		disabled,
-		errors,
+		errors: ownErrors,
 		row = {},
 		beforeRow,
 		arrayKeys,
@@ -178,6 +181,13 @@ leaf values retain the workspace's native kinds, custom renderers and inherited 
 	}: StructuredDataProps = $props();
 	const uid = $props.id();
 	const form = useForm();
+	const bolt = useOptionalBolt();
+	const presentation = useFieldPresentation();
+	const errors = $derived(ownErrors ?? form?.fieldErrors);
+	const errorFor = (name: string) => {
+		const error = errors?.get(name);
+		return error === undefined ? undefined : (bolt?.t(error) ?? error);
+	};
 	const newRecord = $derived(create ?? form?.mode === 'create');
 	const controlId = $derived(id ?? uid);
 	const controls = provideControls(() => ({ readonly, disabled }));
@@ -323,6 +333,13 @@ leaf values retain the workspace's native kinds, custom renderers and inherited 
 	const objectKind = $derived(kind?.kind === 'object' ? kind : undefined);
 	const fieldKind = (key: string) =>
 		objectKind?.fields[key] ?? (kind?.kind === 'record' ? kind.of : undefined);
+	// the enclosing section's title, read once: a root object whose only field repeats it shows that field headless
+	// svelte-ignore state_referenced_locally -- a structure's depth is fixed for its life
+	const sectionTitle = depth === 0 ? useSectionTitle() : undefined;
+	const repeatsSection = (heading: string) =>
+		sectionTitle !== undefined &&
+		fields.length === 1 &&
+		heading.trim().toLowerCase() === sectionTitle.trim().toLowerCase();
 	const fields = $derived.by(() => {
 		const keys = objectKind
 			? Object.keys(objectKind.fields).filter((key) => !objectKind.fields[key]?.hidden)
@@ -702,11 +719,16 @@ leaf values retain the workspace's native kinds, custom renderers and inherited 
 			: schemaAt(index)}
 		{@const held = dataEntries(pair.value) ?? row}
 		{@const heldBefore = dataEntries(pair.before) ?? beforeRow}
+		<!-- a value of a native kind (a period, a money, a point) keeps its own editor and renderer in the cell; only a
+		     structure opens the popover -->
+		{@const cellKind = nativeKind ?? jsonSchemaKind(child)}
 		{@const complex =
 			recordList &&
+			(['object', 'list', 'record', 'union', 'json'].includes(cellKind.kind) ||
+				(cellKind.kind === 'custom' && !fieldEntry(cellKind, host))) &&
 			(dataEntries(next) !== undefined ||
 				(Array.isArray(next) && !(currentMode === 'view' && scalarList(next))))}
-		<div class="relative w-full min-w-0">
+		<div class="group/cell relative w-full min-w-0">
 			{#if !complex}<label class="sr-only" for={`${controlId}-${entry.at}-${field}`}
 					>{recordList ? title(field, child, nativeKind) : 'Item'} {index + 1}</label
 				>{/if}
@@ -718,11 +740,15 @@ leaf values retain the workspace's native kinds, custom renderers and inherited 
 						data-structured-expand
 					>
 						<span class="truncate">{summaryOf(next)}</span>
-						<Icon icon="lucide:maximize-2" class="size-3 shrink-0" />
+						<!-- the expand mark shows on its cell's hover or focus (always on touch) -->
+						<Icon
+							icon="lucide:maximize-2"
+							class="size-3 shrink-0 opacity-0 group-focus-within/cell:opacity-100 group-hover/cell:opacity-100"
+						/>
 					</Popover.Trigger>
 					<Popover.Content
 						align="start"
-						class="max-h-[min(32rem,80vh)] w-[min(44rem,calc(100vw-2rem))] overflow-auto p-3"
+						class="max-h-[min(32rem,var(--bits-popover-content-available-height,80vh))] w-[min(44rem,calc(100vw-2rem))] overflow-auto p-3"
 						data-structured-editor
 					>
 						{@render dataSelf(
@@ -827,87 +853,96 @@ leaf values retain the workspace's native kinds, custom renderers and inherited 
 {/snippet}
 
 {#snippet fieldRows(members: typeof fields)}
-	{#each members as field (field.key)}
-		{@const child = node(field.schema)}
-		{@const nested = structure(
-			field.schema,
-			field.kind,
-			object[field.key],
-			currentMode === 'diff' ? previousObject[field.key] : undefined
-		)}
-		{#if nested && !(locked && currentMode === 'view' && scalarList(object[field.key]))}
-			<Self
-				schema={field.schema}
-				kind={field.kind}
-				value={object[field.key]}
-				before={previousObject[field.key]}
-				mode={currentMode}
-				onChange={locked ? undefined : (next) => assign(field.key, next)}
-				name={childName(field.key)}
-				id={`${controlId}-${field.key}`}
-				disabled={controls.disabled}
-				readonly={locked}
-				{errors}
-				row={object}
-				beforeRow={previousObject}
-				{arrayKeys}
-				{changesOnly}
-				create={newRecord}
-				root={document}
-				path={pointer(path, field.key)}
-				depth={depth + 1}
-				{frame}
-				heading={title(field.key, field.schema, field.kind)}
-			/>
-		{:else}
-			<div class="structured-field" data-schema-field={childName(field.key)}>
-				<label class="text-sm text-muted-foreground" for={`${controlId}-${field.key}`}
-					>{title(
-						field.key,
-						field.schema,
-						field.kind
-					)}{#if !locked && spec.required?.includes(field.key)}<span
-							class="ml-0.5 text-destructive"
-							aria-label={t('required')}>*</span
-						>{/if}</label
+	<div class="structured-fields" class:structured-fields-compact={currentMode === 'view'}>
+		{#each members as field (field.key)}
+			{@const child = node(field.schema)}
+			{@const nested = structure(
+				field.schema,
+				field.kind,
+				object[field.key],
+				currentMode === 'diff' ? previousObject[field.key] : undefined
+			)}
+			{#if nested && !(locked && currentMode === 'view' && scalarList(object[field.key]))}
+				<Self
+					schema={field.schema}
+					kind={field.kind}
+					value={object[field.key]}
+					before={previousObject[field.key]}
+					mode={currentMode}
+					onChange={locked ? undefined : (next) => assign(field.key, next)}
+					name={childName(field.key)}
+					id={`${controlId}-${field.key}`}
+					disabled={controls.disabled}
+					readonly={locked}
+					{errors}
+					row={object}
+					beforeRow={previousObject}
+					{arrayKeys}
+					{changesOnly}
+					create={newRecord}
+					root={document}
+					path={pointer(path, field.key)}
+					depth={depth + 1}
+					{frame}
+					heading={repeatsSection(title(field.key, field.schema, field.kind))
+						? undefined
+						: title(field.key, field.schema, field.kind)}
+				/>
+			{:else}
+				<div
+					class="structured-field"
+					class:structured-field-wide={wideKind(field.kind ?? jsonSchemaKind(field.schema))}
+					data-schema-field={childName(field.key)}
 				>
-				<div class="structured-field-value">
-					<Self
-						schema={field.schema}
-						kind={field.kind}
-						value={object[field.key]}
-						before={previousObject[field.key]}
-						mode={currentMode}
-						onChange={locked ? undefined : (next) => assign(field.key, next)}
-						name={childName(field.key)}
+					<FieldControl
 						id={`${controlId}-${field.key}`}
-						disabled={controls.disabled}
+						label={title(field.key, field.schema, field.kind)}
+						help={field.kind?.help ?? child.description}
+						error={errorFor(childName(field.key))}
 						readonly={locked}
-						{errors}
-						row={object}
-						beforeRow={previousObject}
-						{arrayKeys}
-						{changesOnly}
-						create={newRecord}
-						root={document}
-						path={pointer(path, field.key)}
-						depth={depth + 1}
-						{frame}
-					/>
-					{#if !locked && !spec.required?.includes(field.key) && Object.hasOwn(object, field.key) && child.readOnly !== true}<button
-							class="structured-remove-field"
-							type="button"
-							aria-label={`${t('remove')} ${title(field.key, field.schema, field.kind)}`}
-							disabled={controls.disabled}
-							onclick={() =>
-								onChange?.(
-									Object.fromEntries(Object.entries(object).filter(([key]) => key !== field.key))
-								)}><Icon icon="lucide:x" class="size-3.5" /></button
-						>{/if}
+						required={spec.required?.includes(field.key)}
+					>
+						<div class="structured-field-value">
+							<Self
+								schema={field.schema}
+								kind={field.kind}
+								value={object[field.key]}
+								before={previousObject[field.key]}
+								mode={currentMode}
+								onChange={locked ? undefined : (next) => assign(field.key, next)}
+								name={childName(field.key)}
+								id={`${controlId}-${field.key}`}
+								disabled={controls.disabled}
+								readonly={locked}
+								{errors}
+								row={object}
+								beforeRow={previousObject}
+								{arrayKeys}
+								{changesOnly}
+								create={newRecord}
+								root={document}
+								path={pointer(path, field.key)}
+								depth={depth + 1}
+								{frame}
+							/>
+							{#if !locked && !spec.required?.includes(field.key) && Object.hasOwn(object, field.key) && child.readOnly !== true}<button
+									class="structured-remove-field"
+									type="button"
+									aria-label={`${t('remove')} ${title(field.key, field.schema, field.kind)}`}
+									disabled={controls.disabled}
+									onclick={() =>
+										onChange?.(
+											Object.fromEntries(
+												Object.entries(object).filter(([key]) => key !== field.key)
+											)
+										)}><Icon icon="lucide:x" class="size-3.5" /></button
+								>{/if}
+						</div>
+					</FieldControl>
 				</div>
-			</div>
-		{/if}
-	{/each}
+			{/if}
+		{/each}
+	</div>
 {/snippet}
 
 {#snippet fieldsBody()}
@@ -952,7 +987,6 @@ leaf values retain the workspace's native kinds, custom renderers and inherited 
 					bind:value={extraKey}
 					disabled={controls.disabled}
 				/><Button
-					size="sm"
 					variant="ghost"
 					disabled={controls.disabled || !extraKey.trim() || Object.hasOwn(object, extraKey.trim())}
 					onclick={() => {
@@ -992,7 +1026,6 @@ leaf values retain the workspace's native kinds, custom renderers and inherited 
 	{#if !locked}<Button
 			class="m-1 justify-self-start text-muted-foreground"
 			variant="ghost"
-			size="sm"
 			disabled={controls.disabled || (bounds.max !== undefined && list.length >= bounds.max)}
 			onclick={() =>
 				onChange?.([
@@ -1087,7 +1120,6 @@ leaf values retain the workspace's native kinds, custom renderers and inherited 
 		/>
 	{:else if !locked && kind?.kind === 'object' && kind.optional && (value === null || value === undefined)}<Button
 			variant="ghost"
-			size="sm"
 			disabled={controls.disabled}
 			onclick={() =>
 				onChange?.(
@@ -1120,7 +1152,6 @@ leaf values retain the workspace's native kinds, custom renderers and inherited 
 	{:else if layout}
 		{#if heading}<details
 				class="structured-section structured-nested"
-				class:structured-deep={depth > 1}
 				class:structured-flat={depth === 1 && !frame}
 				open
 			>
@@ -1145,7 +1176,6 @@ leaf values retain the workspace's native kinds, custom renderers and inherited 
 	{:else if spec.const !== undefined}
 		{@render shown(value)}{#if !dataEqual(spec.const, value)}<Button
 				variant="ghost"
-				size="sm"
 				disabled={controls.disabled}
 				onclick={() => onChange?.(spec.const!)}>Use fixed value</Button
 			>{/if}
@@ -1194,16 +1224,18 @@ leaf values retain the workspace's native kinds, custom renderers and inherited 
 	{/if}
 	{#if !locked && nullableJsonSchema(resolved) && value !== null}<Button
 			variant="ghost"
-			size="sm"
-			class="justify-self-start text-muted-foreground"
+			size="icon"
+			class="structured-trailing"
+			hint="Clear value"
+			aria-label="Clear value"
 			disabled={controls.disabled}
-			onclick={() => onChange?.(null)}>Clear value</Button
+			onclick={() => onChange?.(null)}><Icon icon="lucide:x" class="size-3.5" /></Button
 		>{/if}
 	{#if !locked && !newRecord && layout === undefined && spec.default !== undefined && (value === undefined || value === null)}
 		<Button
 			variant="ghost"
-			size="icon-sm"
-			class="structured-default text-muted-foreground hover:text-foreground shrink-0"
+			size="icon"
+			class="structured-trailing"
 			hint={t('useDefault')}
 			aria-label={t('useDefault')}
 			disabled={controls.disabled}
@@ -1212,8 +1244,11 @@ leaf values retain the workspace's native kinds, custom renderers and inherited 
 			<Icon icon="lucide:rotate-ccw" class="size-3.5" />
 		</Button>
 	{/if}
-	{#if errors?.get(name)}<p class="text-sm text-destructive" role="alert">
-			{errors.get(name)}
+	{#if presentation?.id !== controlId && errorFor(name)}<p
+			class="text-sm text-destructive"
+			role="alert"
+		>
+			{errorFor(name)}
 		</p>{/if}
 </div>
 
@@ -1223,21 +1258,30 @@ leaf values retain the workspace's native kinds, custom renderers and inherited 
 		font-size: var(--text-sm);
 		line-height: var(--text-sm--line-height, 1.5);
 	}
+	/* a leaf is one control high: its reset or clear button is an adornment at the control's end, over the control
+	   (shown on hover or focus), never a line or a column of its own; only an error message takes a line below */
 	.structured-leaf {
-		display: flex;
-		flex-wrap: wrap;
+		display: grid;
+		grid-template-columns: minmax(0, 1fr);
 		align-items: center;
-		gap: 8px;
+		row-gap: 4px;
 	}
-	.structured-leaf > :global(:first-child) {
-		flex: 1 1 auto;
+	.structured-leaf > :global(:first-child),
+	.structured-leaf > :global(.structured-trailing) {
+		grid-area: 1 / 1;
 		min-width: 0;
 	}
-	.structured-leaf > :global(.structured-default) {
-		margin-left: auto;
+	.structured-leaf > :global(.structured-trailing) {
+		z-index: 1;
+		justify-self: end;
+		margin-inline-end: 2px;
+		color: var(--color-muted-foreground);
+		background: var(--color-background);
+		opacity: 0;
 	}
-	.structured-leaf > :global(p[role='alert']) {
-		flex-basis: 100%;
+	.structured-leaf:hover > :global(.structured-trailing),
+	.structured-leaf:focus-within > :global(.structured-trailing) {
+		opacity: 1;
 	}
 	/* clip, not hidden: a hidden box is a scroll container and would pin the sticky labels to itself */
 	.structured-root {
@@ -1245,18 +1289,25 @@ leaf values retain the workspace's native kinds, custom renderers and inherited 
 		border: 1px solid var(--color-border);
 		border-radius: var(--radius-md);
 	}
-	.structured-field {
+	/* Pair columns follow the pane's width; editors keep their full-width rows. */
+	.structured-fields-compact {
 		display: grid;
-		grid-template-columns: minmax(8rem, 32%) minmax(0, 1fr);
-		align-items: baseline;
-		gap: 10px;
-		padding: 6px 12px;
-		border-bottom: 1px solid var(--color-border);
+		grid-template-columns: repeat(auto-fit, minmax(min(100%, 16rem), 1fr));
+		gap: 8px 16px;
+		padding-block: 4px;
 	}
-	/* the label sits on the value's first line and stays in view while a tall value (code, a long list) scrolls */
-	.structured-field > label {
-		position: sticky;
-		top: 0;
+	.structured-fields-compact > :global(.structured-data),
+	.structured-fields-compact > .structured-field-wide {
+		grid-column: 1 / -1;
+	}
+	.structured-fields-compact > .structured-field {
+		border-bottom: 0;
+		overflow-wrap: anywhere;
+	}
+	.structured-field {
+		min-width: 0;
+		padding: 8px 12px;
+		border-bottom: 1px solid var(--color-border);
 	}
 	.structured-field:last-child {
 		border-bottom: 0;
@@ -1285,36 +1336,26 @@ leaf values retain the workspace's native kinds, custom renderers and inherited 
 	.structured-section[open] > summary :global(svg) {
 		transform: rotate(90deg);
 	}
-	/* A nested object or list is its own small card, inset on both sides: its border no longer runs into the parent's. */
+	/* closed, the heading's rule would double the line under the section: it keeps its width (no shift), not its colour */
+	.structured-section:not([open]) > summary {
+		border-bottom-color: transparent;
+	}
+	/* One border per visual container: the root's frame is the box. A nested object or list is a band of it, ruled off
+	   like a field row, never a second card inside the frame (a list's table draws only its row lines). */
 	.structured-nested {
-		margin: 6px 8px;
 		overflow: clip;
-		border: 1px solid var(--color-border);
-		border-radius: var(--radius-sm);
-		background: var(--color-card);
+		border-bottom: 1px solid var(--color-border);
+	}
+	:global(.structured-data:last-child) > .structured-nested {
+		border-bottom-width: 0;
 	}
 	.structured-nested > summary {
-		padding-inline: 8px;
+		padding-inline: 12px;
 		background: color-mix(in oklab, var(--color-muted) 60%, var(--color-card));
 	}
-	/* Inside another frame (a step's input or output), the first section is the frame's own content: no card. */
+	/* Inside another frame (a step's input or output), the first section is the frame's own content: no rule. */
 	.structured-nested.structured-flat {
-		margin: 0;
 		border: 0;
-		border-radius: 0;
-		background: transparent;
-	}
-	/* Past the first inset, another card only squeezes the rows: keep one guide line and flat fields. */
-	.structured-nested.structured-deep {
-		margin: 4px 0 4px 8px;
-		overflow: visible;
-		border-width: 0 0 0 1px;
-		border-radius: 0;
-		background: transparent;
-	}
-	.structured-nested.structured-deep > summary {
-		padding-inline: 6px;
-		background: transparent;
 	}
 	.structured-data :global(input:not([type='checkbox'])),
 	.structured-data :global(textarea),
@@ -1405,8 +1446,6 @@ leaf values retain the workspace's native kinds, custom renderers and inherited 
 	}
 	@media (max-width: 600px) {
 		.structured-field {
-			grid-template-columns: minmax(6rem, 37%) minmax(0, 1fr);
-			gap: 8px;
 			padding: 7px 10px;
 		}
 		.structured-section > summary {
@@ -1414,7 +1453,8 @@ leaf values retain the workspace's native kinds, custom renderers and inherited 
 		}
 	}
 	@media (hover: none) {
-		.structured-remove-field {
+		.structured-remove-field,
+		.structured-leaf > :global(.structured-trailing) {
 			opacity: 1;
 		}
 	}

@@ -16,7 +16,9 @@ type Answer = ReadAnswer<{
 	readonly notices: { readonly limit: 1 };
 }>;
 type Order = Answer['orders']['rows'][number];
-is<Eq<Exclude<keyof Order, '$sync' | '$approval'>, 'id' | 'number' | 'customer' | 'lines'>>();
+is<
+	Eq<Exclude<keyof Order, '$sync' | '$approval' | '$label'>, 'id' | 'number' | 'customer' | 'lines'>
+>();
 is<Eq<NonNullable<Order['customer']>['id'], Id<'customers'>>>();
 is<Eq<NonNullable<Order['customer']>['name'], string>>();
 is<Eq<Order['lines'][number]['id'], Id<'order_lines'>>>();
@@ -37,7 +39,12 @@ type Logistics = ReadAnswer<{
 	readonly 'orders.lines': {};
 }>['orders']['rows'][number];
 type System = 'id' | 'revision' | 'created_at' | 'updated_at' | 'created_by' | 'updated_by';
-is<Eq<Exclude<keyof Logistics, System | '$sync' | '$approval'>, 'number' | 'status' | 'customer' | 'lines'>>();
+is<
+	Eq<
+		Exclude<keyof Logistics, System | '$sync' | '$approval' | '$label'>,
+		'number' | 'status' | 'customer' | 'lines'
+	>
+>();
 is<Eq<Exclude<keyof Logistics['lines'][number], System>, 'item' | 'qty'>>();
 // a grouped aggregate always carries each bucket's row count; an ungrouped one only when asked
 type Grouped = ReadAnswer<{ readonly orders: { readonly aggregate: { readonly by: 'status' } } }>;

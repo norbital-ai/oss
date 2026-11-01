@@ -124,10 +124,10 @@ begin
 		end if;
 	end if;
 	history_reason := case when source_revision is null then reason else 'restored' end;
-	changes := case when operation='create' or (erased_row and operation='update') then new_row - array['bolt_search','bolt_embedding']
+	changes := case when operation='create' or (erased_row and operation='update') then new_row - array['bolt_search','bolt_embedding','bolt_record_label']
 		when operation='delete' then '{}'::jsonb else (
 			select coalesce(jsonb_object_agg(k,v),'{}'::jsonb) from jsonb_each(new_row) entry(k,v)
-			where k not in ('revision','updated_at','updated_by','bolt_search','bolt_embedding') and old_row->k is distinct from v
+			where k not in ('revision','updated_at','updated_by','bolt_search','bolt_embedding','bolt_record_label') and old_row->k is distinct from v
 		) end;
 	if row_id ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' then
 		insert into bolt_history(collection,record,revision,at,actor,op,cause,changes,restored_from,request,operation,meta)

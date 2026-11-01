@@ -1,9 +1,9 @@
 <!--
-	The target's manifest : a chip per section, then the section's heading and count and its
+	The target's manifest : a tab per section, then the section's heading and count and its
 	declarations as a divided list — each opens its source file, and an app also opens itself.
 -->
 <script lang="ts">
-	import { Button, Icon, Tabs } from '@norbital-ai/ui';
+	import { Button, Icon, TabStrip } from '@norbital-ai/ui';
 	import { based } from '../nav.ts';
 	import { Cluster, Inline, Scroll, Stack } from '@norbital-ai/ui/layout';
 	import { SECTIONS, type Section, type StudioView } from './model.ts';
@@ -19,7 +19,6 @@
 		kiosks: 'Kiosks',
 		policies: 'Policies',
 		automations: 'Automations',
-		remotes: 'Remotes',
 		secrets: 'Secrets'
 	};
 	const ICONS: { readonly [s in Section]: string } = {
@@ -28,15 +27,14 @@
 		kiosks: 'lucide:monitor',
 		policies: 'lucide:shield-check',
 		automations: 'lucide:zap',
-		remotes: 'lucide:plug',
 		secrets: 'lucide:key-round'
 	};
 	let section = $state<string>('models');
 </script>
 
 {#snippet empty(icon: string, text: string)}
-	<Stack gap="sm" align="center" justify="center" class="py-12 text-center text-muted-foreground">
-		<Icon name={icon} class="size-8 opacity-30" />
+	<Stack gap="sm" align="center" justify="center" class="py-6 text-center text-muted-foreground">
+		<Icon name={icon} class="size-6 opacity-30" />
 		<p class="text-xs">{text}</p>
 	</Stack>
 {/snippet}
@@ -45,10 +43,10 @@
 	{@const s = section as Section}
 	{@const entries = view.sections?.[s] ?? []}
 	<Scroll name={t(SECTION_TITLES[s])} class="h-full">
-		<Stack gap="md" class="py-4">
+		<Stack gap="sm" class="py-3">
 			<Inline gap="sm" align="start">
 				<Icon name={ICONS[s]} class="mt-0.5 size-4 shrink-0 text-muted-foreground" />
-				<h2 class="text-sm font-medium text-foreground">
+				<h2 class="text-xs font-semibold text-foreground">
 					{t(SECTION_TITLES[s])} ({entries.length})
 				</h2>
 			</Inline>
@@ -73,7 +71,7 @@
 							</Inline>
 							<Cluster gap="sm" justify="end">
 								{#if e.href !== undefined}
-									<Button size="sm" variant="outline" class="px-2 text-micro" href={based(e.href)}
+									<Button variant="outline" class="px-2 text-micro" href={based(e.href)}
 										><Icon name="lucide:external-link" class="size-3" />{t('Open')}</Button
 									>
 								{/if}
@@ -104,10 +102,16 @@
 {:else if view.sections === null}
 	{@render empty('lucide:package', t('The workbench has not built yet.'))}
 {:else}
-	<Tabs
-		bind:value={section}
-		orientation="horizontal"
-		class="pt-3"
-		tabs={SECTIONS.map((s) => ({ name: s, title: t(SECTION_TITLES[s]), body }))}
-	/>
+	<Stack gap="none" size="fill" class="pt-3">
+		<TabStrip
+			items={SECTIONS.map((s) => ({ name: s, title: t(SECTION_TITLES[s]) }))}
+			value={section}
+			onValueChange={(next) => (section = next)}
+			label={t('Manifest sections')}
+			level={3}
+		/>
+		<div class="min-h-0 flex-1" role="tabpanel" aria-label={t('Manifest section')}>
+			{@render body()}
+		</div>
+	</Stack>
 {/if}

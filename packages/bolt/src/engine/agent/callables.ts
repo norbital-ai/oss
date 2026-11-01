@@ -169,7 +169,9 @@ export const agentCallables = Effect.gen(function* () {
 			turns.release(id).pipe(Effect.andThen(background(agents.drain(id))))
 		),
 		'sys_conversation.stop': control(agents.stop),
-		'sys_conversation.resume': control((id) => background(agents.resume(id))),
+		'sys_conversation.resume': control((id) =>
+			turns.release(id).pipe(Effect.andThen(background(agents.resume(id))))
+		),
 		'sys_conversation.setModel': entry(
 			Schema.Struct({ conversation: Schema.String, model: Schema.String }),
 			Effect.fn('Agents.modelCallable')(function* (input, authority) {

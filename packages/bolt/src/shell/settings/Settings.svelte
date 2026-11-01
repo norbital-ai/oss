@@ -25,6 +25,7 @@
 	import Acts from '../Acts.svelte';
 	import { chosenLocale } from '../i18n.ts';
 	import type { IntegrationSetupEntry } from '../integration/setup.ts';
+	import { SYSTEM_UI, type SystemUiIntent } from '../../protocol/system-ui.ts';
 	import DetailSheet from '../DetailSheet.svelte';
 	import Integrations from '../integration/Integrations.svelte';
 	import SystemPage from '../SystemPage.svelte';
@@ -38,7 +39,8 @@
 		t,
 		tab,
 		workspace,
-		integrationSetups
+		integrationSetups,
+		configuration = null
 	}: {
 		api: ShellApi;
 		bolt: ShellBolt;
@@ -47,6 +49,7 @@
 		workspace: ShellBoot['workspace'];
 		/** The definitions' own setup components (`integration/<name>/+integration.svelte`); the generic setup otherwise. */
 		integrationSetups?: { readonly [integration: string]: IntegrationSetupEntry } | undefined;
+		configuration?: SystemUiIntent | null;
 	} = $props();
 
 	const TITLES: { readonly [k in SettingsTab]: string } = {
@@ -140,7 +143,12 @@
 		}))
 	);
 	const remotes = $derived(
-		(s?.mcp ?? []).map((remote) => ({ id: remote.name, name: remote.name, url: str(remote.url) }))
+		(s?.mcp ?? []).map((remote) => ({
+			id: remote.name,
+			name: remote.name,
+			url: str(remote.url),
+			secrets: remote.secrets ?? []
+		}))
 	);
 	const secrets = $derived(
 		(s?.secrets ?? []).map((x) => ({
@@ -258,6 +266,24 @@
 		else mutationError = r.failure.message;
 	});
 	let secretValue = $state('');
+	let integrationTab = $state('envoys');
+	let configured = $state<string | null>(null);
+	watch([() => configuration, () => s], ([intent, settings]) => {
+		if (intent === null || settings === null || configured === intent.key) return;
+		configured = intent.key;
+		const request = intent.request;
+		integrationTab = SYSTEM_UI[request.capability].tab;
+		if (request.capability === 'api_key.create') {
+			form = { keyName: '', keyTeam: '' };
+			issued = null;
+			creating = true;
+		} else if (request.capability === 'api_key.manage') open = { kind: 'key', id: request.record };
+		else if (request.capability === 'mcp.configure') open = { kind: 'remote', id: request.record };
+		else if (request.capability === 'secret.set') {
+			open = { kind: 'secret', id: request.record };
+			secretValue = '';
+		}
+	});
 	// the assistant's runtime settings (Organization): read with the model catalogue, saved as one settings verb
 	let assistant = $state<{
 			monthly: string;
@@ -364,10 +390,8 @@
 							class="text-xs"
 							onchange={(e) => pickLogo(e.currentTarget.files?.[0])}
 						/>
-						{#if brand.logo !== null}<Button
-								size="sm"
-								variant="ghost"
-								onclick={() => (brand.logo = null)}>{t('Remove logo')}</Button
+						{#if brand.logo !== null}<Button variant="ghost" onclick={() => (brand.logo = null)}
+								>{t('Remove logo')}</Button
 							>{/if}
 					</div>
 					<Cluster gap="sm"
@@ -515,6 +539,7 @@
 	{:else if tab === 'integrations'}
 		{#snippet envoysTab()}
 			<Integrations
+				{configuration}
 				{api}
 				{bolt}
 				{t}
@@ -581,6 +606,7 @@
 			</Table>
 		{/snippet}
 		<Tabs
+			bind:value={integrationTab}
 			orientation="horizontal"
 			tabs={[
 				{ name: 'envoys', title: t('Envoys'), icon: 'lucide:bot', body: envoysTab },
@@ -641,7 +667,18 @@
 	{:else if open.kind === 'remote'}
 		{@const r = remotes.find((x) => x.id === open?.id)}
 		{#if r !== undefined}
-			<DetailSheet title={r.name} onClose={close} fields={[{ label: t('URL'), value: r.url }]} />
+			<DetailSheet
+				title={r.name}
+				onClose={close}
+				fields={[{ label: t('URL secret'), value: r.url }]}
+				acts={r.secrets.map((name) => ({
+					label: t('Set {name}').replace('{name}', name),
+					run: () => {
+						open = { kind: 'secret', id: name };
+						secretValue = '';
+					}
+				}))}
+			/>
 		{/if}
 	{:else if open.kind === 'secret'}
 		{@const x = secrets.find((y) => y.id === open?.id)}
@@ -680,7 +717,7 @@
 							bind:value={secretValue}
 						/></label
 					>
-					<Button size="sm" type="submit" disabled={secretValue === ''}>{t('Set')}</Button>
+					<Button type="submit" disabled={secretValue === ''}>{t('Set')}</Button>
 				</form>
 			</DetailSheet>
 		{/if}
@@ -719,7 +756,6 @@
 					bind:value={form.keyName}
 				/>
 				<Combobox
-					size="sm"
 					clearable
 					placeholder={t('No team')}
 					aria-label={t('Team')}

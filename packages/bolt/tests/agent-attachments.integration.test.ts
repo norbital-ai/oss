@@ -1,7 +1,7 @@
 // In-app Norbius attachments (§5.9, rule 58): a panel upload to `sys_conversation.inputs` rides `sys_message.post` as a
 // stored FileRef on the row; the agent reads it with `read_file`; triage's state carries it (P37); only the
 // member's own uploads attach, 8 files / 20 MiB, the envoy's media types.
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { describe, expect, it } from '@effect/vitest';
 import { afterAll } from 'vitest';
 import { Context, Effect, Exit, Layer, Option, Result, Schema, Scope, Stream } from 'effect';
@@ -225,7 +225,7 @@ const plain = Effect.runSync(Effect.cached(setup.pipe(Scope.provide(fileScope)))
 
 describe('in-app attachments', () => {
 	it.live(
-		'an image posted from the panel is stored on the row, reaches sys_1 as metadata only (P37 (3)) and is read by read_file',
+		'an invalid image retains its reference, is marked unread in triage, and remains readable by read_file',
 		() =>
 			Effect.scoped(
 				Effect.gen(function* () {
@@ -239,8 +239,14 @@ describe('in-app attachments', () => {
 					});
 					const file = fileOf(ref),
 						asked = requests.length;
+					const digest = createHash('sha256').update(PNG).digest('hex');
+					const reference = Schema.decodeUnknownSync(Schema.Struct({ id: Schema.String }))(file);
 					expect(
-						yield* post('ann', { conversation: c, text: 'what is this?', attachments: [file] })
+						yield* post('ann', {
+							conversation: c,
+							text: 'what is this?',
+							attachments: [{ ...reference, sha256: 'MOCKED untrusted digest' }]
+						})
 					).toMatchObject({ kind: 'committed' });
 					const state = yield* Schema.decodeUnknownEffect(
 						Schema.Struct({
@@ -252,7 +258,8 @@ describe('in-app attachments', () => {
 					expect(state.pending[0]?.attachments?.[0]).toEqual({
 						name: 'pump.png',
 						mime: 'image/png',
-						size: PNG.length
+						size: PNG.length,
+						unread: true
 					});
 					const [row] = (yield* t.db.read([
 						{
@@ -262,12 +269,12 @@ describe('in-app attachments', () => {
 					]))[0]!.rows;
 					const id = Schema.decodeUnknownSync(Schema.Struct({ id: Schema.String }))(file).id;
 					expect(row!['files']).toEqual([
-						{ id, name: 'pump.png', mime: 'image/png', bytes: PNG.length }
+						{ id, name: 'pump.png', mime: 'image/png', bytes: PNG.length, sha256: digest }
 					]);
 					// the message names it by the id read_file takes
 					const [first, second] = requests.slice(asked);
 					expect(String(first!.messages[0]!.content)).toContain(
-						`file reference ${JSON.stringify({ id, name: 'pump.png', mime: 'image/png' })}`
+						`file reference ${JSON.stringify({ id, name: 'pump.png', mime: 'image/png', sha256: digest })}`
 					);
 					expect([...second!.files![0]!.bytes]).toEqual([...PNG]);
 					expect(second!.files![0]!.mime).toBe('image/png');

@@ -15,7 +15,6 @@ Starter workspaces live in their own repository:
 - [`@norbital-ai/ui`](./packages/ui) — Svelte component library and design tokens
 - [`@norbital-ai/std`](./packages/std) — common schema, field kinds, date, CEL, finance, and
   utility modules
-- [`@norbital-ai/doctor`](./packages/doctor) — fixed static rule packs; the host's workspace audit
 - [`@norbital-ai/providers`](./packages/providers) — host-registered integration and inference providers
 - [`@norbital-ai/app-shell`](./packages/app-shell) — native iOS and Android shell and the `norbital-app` CLI
 

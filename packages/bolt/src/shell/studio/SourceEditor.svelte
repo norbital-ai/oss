@@ -79,7 +79,6 @@
 			<span class="hidden shrink-0 text-micro text-muted-foreground sm:inline">{against}</span>
 			{#if baseline !== undefined}
 				<Button
-					size="sm"
 					variant="ghost"
 					class="px-2 text-micro"
 					aria-pressed={diff}
@@ -89,7 +88,6 @@
 				</Button>
 			{/if}
 			<Button
-				size="sm"
 				variant="ghost"
 				class="px-2 text-micro hover:text-destructive"
 				disabled={deleted}

@@ -31,7 +31,8 @@ field chrome; `disabled` keeps the box, muted.
 		bind:this={ref}
 		data-slot={dataSlot}
 		class={cn(
-			'block field-sizing-content min-h-16 w-full rounded-sm border border-input bg-background px-3 py-2 text-base shadow-xs transition-[color,box-shadow] outline-none placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:ring-inset disabled:cursor-not-allowed disabled:bg-muted disabled:opacity-50 aria-invalid:border-destructive aria-invalid:ring-destructive/20 aria-invalid:ring-inset md:text-sm dark:bg-input/30 dark:aria-invalid:ring-destructive/40',
+			// one control high when empty (the control size), growing with its lines
+			'block field-sizing-content min-h-8 w-full rounded-sm border border-input bg-background px-2.5 py-1.5 text-xs shadow-xs transition-[color,box-shadow] outline-none placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:ring-inset disabled:cursor-not-allowed disabled:bg-muted disabled:opacity-50 aria-invalid:border-destructive aria-invalid:ring-destructive/20 aria-invalid:ring-inset dark:bg-input/30 dark:aria-invalid:ring-destructive/40',
 			className
 		)}
 		bind:value

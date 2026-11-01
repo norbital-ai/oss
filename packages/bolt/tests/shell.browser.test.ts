@@ -19,6 +19,51 @@ const api = shellApi(async (url) =>
 	})
 );
 
+it('keeps an unknown email on the address step and accepts a corrected email', async () => {
+	const dispose = mountEdge(ManagedRuntime.make(Layer.empty));
+	const target = document.createElement('div');
+	document.body.replaceChildren(target);
+	const view = mount(AccessCard, {
+		target,
+		props: {
+			api: {
+				...api,
+				sendCode: (address: string) =>
+					address === 'stranger@x.test'
+						? Effect.fail(
+								new ShellError({
+									code: 'notMember',
+									message: 'This address has no invitation to this workspace.',
+									status: 403
+								})
+							)
+						: Effect.void
+			}
+		}
+	});
+	try {
+		await page.getByLabelText('Email address').fill('stranger@x.test');
+		await page.getByRole('button', { name: 'Send sign-in code' }).click();
+		await expect
+			.element(page.getByRole('alert'))
+			.toHaveTextContent('This address has no invitation to this workspace.');
+		await expect.element(page.getByLabelText('Email address')).toBeEnabled();
+		await expect
+			.element(page.getByRole('heading', { name: 'Enter your code' }))
+			.not.toBeInTheDocument();
+		await page.getByLabelText('Email address').fill('ada@x.test');
+		await page.getByRole('button', { name: 'Send sign-in code' }).click();
+		await expect
+			.element(page.getByRole('heading', { name: 'Enter your code' }))
+			.toBeInTheDocument();
+		await expect.element(page.getByRole('alert')).toHaveTextContent('');
+	} finally {
+		await unmount(view);
+		await dispose();
+		target.remove();
+	}
+});
+
 it.each(['ready', 'failed'] as const)(
 	'sign-in enables its form and recovers from a send failure while methods are %s',
 	async (result) => {

@@ -102,9 +102,9 @@
 	{@render children()}
 {:else if checked}
 	<Center class="min-h-full p-6" data-device-wall>
-		<Stack gap="lg" class="w-full max-w-md rounded-2xl border bg-card p-6 shadow-sm">
+		<Stack gap="lg" class="w-full max-w-md rounded-2xl border bg-card p-6">
 			<Stack gap="xs">
-				<h2 class="text-xl font-semibold">{t('Allow access to continue')}</h2>
+				<h2 class="text-subhead">{t('Allow access to continue')}</h2>
 				<p class="text-sm text-muted-foreground">
 					{t('This app needs the following on this device. It opens as soon as each is allowed.')}
 				</p>
@@ -128,12 +128,7 @@
 								</Inline>
 								<p class="text-xs text-muted-foreground">{t(COPY[r].why)}</p>
 								{#if s?.state === 'prompt' || (s?.state === 'denied' && s.settings)}
-									<Button
-										size="sm"
-										class="self-start"
-										disabled={busy !== null}
-										onclick={() => allow(r)}
-									>
+									<Button class="self-start" disabled={busy !== null} onclick={() => allow(r)}>
 										{t(s.state === 'denied' ? 'Open settings' : 'Allow')}
 									</Button>
 								{:else if s?.state === 'denied'}

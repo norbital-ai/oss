@@ -11,7 +11,7 @@ export default defineConfig({
 		hookTimeout: 60_000,
 		projects: [
 			'packages/{bolt,bolt-cli,bolt-server,store,ui}/vitest.config.ts',
-			...['app-shell', 'doctor', 'providers', 'std'].map((name) => ({
+			...['app-shell', 'providers', 'std'].map((name) => ({
 				extends: true,
 				test: { name, root: `packages/${name}`, include: ['tests/**/*.test.ts'] }
 			})),

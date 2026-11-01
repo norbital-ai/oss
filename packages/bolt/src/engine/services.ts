@@ -63,6 +63,7 @@ export type GuestLimitsShape = {
 	readonly readBytes: number;
 	readonly crossingBytes: number;
 	readonly argsBytes: number;
+	readonly changeSetBytes: number;
 };
 export const GuestLimits = Context.Reference<GuestLimitsShape>('bolt/GuestLimits', {
 	defaultValue: () => ({
@@ -70,7 +71,8 @@ export const GuestLimits = Context.Reference<GuestLimitsShape>('bolt/GuestLimits
 		crossings: LIMITS.crossings,
 		readBytes: LIMITS.readBytes,
 		crossingBytes: LIMITS.crossingBytes,
-		argsBytes: LIMITS.argsBytes
+		argsBytes: LIMITS.argsBytes,
+		changeSetBytes: LIMITS.changeSetBytes
 	})
 });
 
@@ -283,6 +285,11 @@ export type IdentityShape = {
 	readonly authority: (holder: Holder, key?: string | undefined) => Effect.Effect<Authority>;
 };
 export class Identity extends Context.Service<Identity, IdentityShape>()('bolt/Identity') {}
+/** The host's transactional identity operations, shared by shell forms and confirmed agent actions. */
+export class HostIdentity extends Context.Service<
+	HostIdentity,
+	import('./identity/session.ts').IdentityHost
+>()('bolt/HostIdentity') {}
 
 // ── live (E8) ──
 /** One registered view: its read (re-answered when a commit touches what it read). */
@@ -457,6 +464,12 @@ export type AgentsShape = {
 		readonly supersedes?: string | undefined;
 		readonly tz?: string | undefined;
 	}) => Effect.Effect<MessageRow, EngineError>;
+	/** Append a system note (an approved or rejected request) and wake the conversation's turn. */
+	readonly notify: (o: {
+		readonly conversation: string;
+		readonly text: string;
+		readonly as?: As | null | undefined;
+	}) => Effect.Effect<void, EngineError>;
 	readonly drain: (conversation: string) => Effect.Effect<TurnResult, EngineError>;
 	readonly conversation: (id: string) => Effect.Effect<ConversationRow, EngineError>;
 	readonly transcript: (

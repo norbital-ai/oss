@@ -189,15 +189,17 @@ export const readArtifact = Effect.fn('bolt.readArtifact')(function* (
 		)
 	);
 	const migrations = yield* readMigrations(join(dir, 'migrations'));
-	yield* current(migrations.snapshot, migrationSchema(manifest)).pipe(Effect.mapError(fromStore));
 	// The fingerprint folds in this engine's system layer: only an artifact of this contract can be re-derived here.
 	// A pinned older release's schema is verified by its own graph's HOST_API; its digest still binds the manifest.
-	if (artifact.contract === CONTRACT && fingerprint(schemaSlice(manifest)) !== artifact.schema)
-		return yield* BoltError.make(
-			'schemaMismatch',
-			'admission',
-			'manifest.json does not match the artifact schema hash'
-		);
+	if (artifact.contract === CONTRACT) {
+		yield* current(migrations.snapshot, migrationSchema(manifest)).pipe(Effect.mapError(fromStore));
+		if (fingerprint(schemaSlice(manifest)) !== artifact.schema)
+			return yield* BoltError.make(
+				'schemaMismatch',
+				'admission',
+				'manifest.json does not match the artifact schema hash'
+			);
+	}
 	const map = join(dir, 'guest.mjs.map');
 	const guest: GuestProgram = {
 		source: yield* text(join(dir, 'guest.mjs')),

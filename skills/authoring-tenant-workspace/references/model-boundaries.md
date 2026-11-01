@@ -100,6 +100,25 @@ Remote references are not fetched. Rendering is not validation: keep server JSON
 checks authoritative. Use the shared native datatype registry rather than template-specific
 property renderers.
 
+**Datatypes in a JSON Schema.** A schema property chooses one of Bolt's datatypes for its control in
+two ways; explicit wins:
+
+- *Explicit*: `format: '<datatype>'` (`period`, `point`, `money`, `duration`, `currency`; a
+  workspace custom datatype keeps `"x-norbital": { "datatype": "<name>" }`). `format` is JSON
+  Schema's own annotation for a value's semantic type and validators ignore it on objects and
+  numbers, so it needs no vendor keyword; on a string, JSON Schema's own formats (`date`,
+  `date-time`, `email`, ISO `duration`, …) keep their meaning.
+- *Implicit*: an object property whose shape is exactly a datatype's renders as it: a date
+  period `{ from: string(date), to: string(date)|null }`, an instant period
+  `{ start: string(date-time), end: string(date-time)|null }`, a point
+  `{ lat: number, lng: number }`, each with both keys required. The same keys, value types and
+  required keys; anything extra or different stays a plain object.
+
+`bolt check` and `bolt build` hold every JSON Schema a seed row carries (a value declaring
+`$schema`) to it: a `format` naming no datatype, or a property naming a datatype in another
+shape, fails with the property's path and the missing, extra or mistyped keys. Implicit matching
+is a rendering rule only and is never reported.
+
 A `text` field with `format: 'cel'` supplies the shared formula editor; it does not evaluate the
 expression. Source must explicitly compile and evaluate the supported formula scope with
 `@norbital-ai/std/formula`, including result type and failure handling. The runtime configuration

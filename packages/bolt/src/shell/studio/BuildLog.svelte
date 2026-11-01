@@ -11,7 +11,7 @@
 		level === 'error'
 			? 'text-destructive'
 			: level === 'warn'
-				? 'text-amber-800 dark:text-amber-300'
+				? 'text-warning-foreground dark:text-warning'
 				: 'text-foreground';
 </script>
 

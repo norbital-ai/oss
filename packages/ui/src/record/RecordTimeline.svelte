@@ -4,7 +4,7 @@ The record header's history trigger opens a popover with the revision ruler and 
 keys pick a revision; `End`/`Escape` return to the current one.
 -->
 <script lang="ts">
-	import { formatValue as show } from '../kinds/kind.js';
+	import { recordText } from '../kinds/kind.js';
 	import { Effect } from 'effect';
 	import { observeOnce, run } from '../effect/index.js';
 	import { format } from '../kinds/kind.js';
@@ -16,6 +16,7 @@ keys pick a revision; `End`/`Escape` return to the current one.
 	import { checkpoints, drawnTicks, tickAt, tickOf, type Checkpoint } from './history.js';
 	import { byId, firstOf, pageOf, READ_LIMIT, requestJson } from '../read/request.js';
 	import { label, msg } from '../text/messages.js';
+	import { labelRead } from '../relations/select.js';
 
 	let {
 		of,
@@ -191,7 +192,12 @@ keys pick a revision; `End`/`Escape` return to the current one.
 							const records =
 								pageOf(
 									yield* bolt.query(
-										requestJson({ [source.of]: { where: source.where, limit: READ_LIMIT } })
+										kinds.catalog?.[source.of]?.record_label !== undefined
+											? labelRead(kinds.catalog, source.of, {
+													where: source.where,
+													limit: READ_LIMIT
+												})
+											: requestJson({ [source.of]: { where: source.where, limit: READ_LIMIT } })
 									),
 									source.of
 								)?.rows ?? [];
@@ -201,10 +207,8 @@ keys pick a revision; `End`/`Escape` return to the current one.
 									bolt.history(source.of, row.id).pipe(
 										Effect.map((answer) => {
 											const subject =
-												(kinds.catalog?.[source.of]?.label ?? [])
-													.map((field) => show(row[field], bolt.locale))
-													.filter(Boolean)
-													.join(' · ') || label(bolt, source.of);
+												recordText(kinds.catalog?.[source.of], row, { locale: bolt.locale }) ||
+												label(bolt, source.of);
 											return checkpoints(answer).map((checkpoint) => ({
 												key: `${source.of}:${row.id}:${checkpoint.revision}`,
 												of: source.of,

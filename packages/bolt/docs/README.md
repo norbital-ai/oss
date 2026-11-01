@@ -1,5 +1,7 @@
 # Bolt
 
+Start with the [behavior and mechanism map](./mechanisms.md). The website publishes every maintained guide in the [mechanism handbook](https://norbital.ai/docs/handbook), from the same pinned package as its generated API reference.
+
 Bolt declares, compiles and runs a workspace. Authors write typed declarations and generator
 bodies; the compiler produces one artifact, and a host activates that artifact in a scoped service
 graph. The manifest defines the schema; committed `migrations/` files describe how stored data reaches it.
@@ -91,6 +93,33 @@ Each word names one thing:
 
 ## Authoring and pages
 
+### Discovering a contract
+
+The installed package's exported declarations are the API authority for that version. Start from its package
+entries or the generated API reference, then use TypeScript completions on an imported namespace to discover its
+exported values or types. Inspect the chosen symbol's hover documentation and call signature; follow its definition
+when a nested option needs detail. This also works through re-exports and for UI component prop contracts.
+
+In Studio, `workspace_lang` reads the workspace's locked dependencies and saved source (or supplied editor buffers).
+Its completions are paged; follow `next` or narrow by `prefix`. A temporary buffer containing a namespace import
+can explore an API without saving a probe into the workspace. A `type` query accepts TypeScript import types, for
+example `typeof import('@norbital-ai/bolt').model` or `import('@norbital-ai/bolt/page').PageBolt['act']`.
+Invalid probes return compiler diagnostics; a type that is too large asks for a narrower query rather than pretending
+a clipped answer is complete. Hover an actual member or query its value to read that member's documentation.
+
+Workspace-specific model, page and automation names come from the latest generated registry. Run the normal check
+after adding or renaming declarations before relying on those names. A resolved type proves the expression is valid
+in that program; it does not prove runtime permission, validation, provider availability or business behavior. Use
+the full workspace check and tests for those separate obligations.
+
+Public API documentation belongs on the owning exported declaration, so the LSP and generated reference read the
+same source. Explain the operation, authority and lifecycle, required options and defaults, result and failure behavior,
+and any important distinction from a related contract. Use `@param`, `@returns`, `@example` and `@see` where they help;
+examples should show the supported path and retain types. A private design-rule number alone is not API guidance.
+Keep examples next to their contract and cover important examples with compiler or runtime tests when behavior changes.
+
+### Server and page execution
+
 Import declarations from `@norbital-ai/bolt`. Transforms, policy checks, automation runs and
 effectful sync bodies use `function*` and `yield* ctx.…`. Pure validators,
 search callbacks and row mapping remain plain functions. Guest helpers
@@ -105,7 +134,7 @@ start (up to 3 times), asking its AI, infer and HTTP calls again. Only chat sess
 
 `ctx.ai.embed` resolves each FileRef against the workspace's stored file record and sends its
 metadata to the host. The provider reads the media through the host's scoped file facility after
-forming each batch; image bytes stay outside the Cell. Hosts serving these releases use Host API 11.
+forming each batch; image bytes stay outside the Cell. Hosts serving these releases use Host API 16.
 
 A structured `output` is built on a draft (`initial`, else empty) with draft tools: `edit` (`{ ops: [{ path, set | remove: true | append }] }`,
 each op applied and checked on its own), `read` (`{ path, fields? }`), `find` (`{ text, path? }`), `diff` (`{ path? }`:
@@ -357,6 +386,10 @@ receives write and approval events and returns notices after commit; see [notifi
 
 ## Hosts and tests
 
+Sign-in codes are issued only for active workspace members, unexpired open invitations, or newcomers
+allowed by the workspace's open `signup`. An ineligible address returns `notMember` before a challenge
+is stored or a code is sent, so the sign-in form stays on the address step.
+
 `@norbital-ai/bolt/engine` exposes native service tags and Layers. `EngineLive(manifest)` composes
 the engine areas over `TenantDb`, `Activation` and the host port services. `PgliteDb.layer(from?)`
 owns its PGlite resource; `PostgresDb.layer(pool)` uses a pool owned by the host. `BoltHostLive`
@@ -410,7 +443,10 @@ host and provider resources. With a `root`, the layer seeds from the template's 
 (`seed/test/`, built once per source hash; `bolt build` also writes it to `.norbital/seed/test`, and no
 host provisions it). It never loads the public `base` pack or bank rows; `seed: 'none'` or
 inline rows replace the test pack. Use the browser test entry to mount actual controls and exercise
-current interactions. Edge case tests cover core behavior with synthetic fixtures; automated
+current interactions. The realm browser project uses Vitest's Playwright provider with one headless
+Chromium browser shared by its test files. Agent web browsing continues to use the separate Obscura
+fleet. Tests do not connect to that fleet or change its network policy.
+Edge case tests cover core behavior with synthetic fixtures; automated
 layout/markup/CSS/pixel assertions, surface sweeps, seeded legal/catalogue correctness matrices and
 retired-API absence checks do not belong in these suites. Templates run standalone without a host;
 hosts test their own behavior independently of template suites.

@@ -16,33 +16,33 @@ or a new role is missing.
 
 | Class           | Renders as                               | Use                                                                                 |
 | --------------- | ---------------------------------------- | ----------------------------------------------------------------------------------- |
-| `text-overline` | 11px / 600 / +0.08em / uppercase / muted | Heading over a group of things — a section of a list, a filter group, a column band |
-| `text-label`    | 14px / 500 / leading 1                   | The name of a control: field, switch, filter                                        |
+| `text-overline` | 11px / 590 / +0.08em / uppercase / muted | Heading over a group of things — a section of a list, a filter group, a column band |
+| `text-label`    | 14px / 510 / leading 1                   | The name of a control: field, switch, filter                                        |
 | `text-meta`     | 12px / 400 / muted                       | Secondary metadata: timestamps, counts, statuses, helper text                       |
 | `text-caption`  | 14px / 400 / muted                       | A note attached to something else                                                   |
-| `text-body`     | 16px / 400 / 1.75                        | Long-form reading text                                                              |
-| `text-eyebrow`  | 14px / 500 / muted                       | The line above a marketing heading                                                  |
-| `text-lede`     | 18px / 400 / 1.75 / muted                | Intro paragraph under a heading                                                     |
+| `text-body`     | 16px / 400 / 1.60                        | Long-form reading text                                                              |
+| `text-eyebrow`  | 14px / 510 / muted                       | The line above a marketing heading                                                  |
+| `text-lede`     | 18px / 400 / 1.60 / muted                | Intro paragraph under a heading                                                     |
 
 ## The sizes
 
 Headings and dense text that carry no role beyond their size. Each token already sets its own
 weight, leading and tracking, so the utility is the full recipe here too.
 
-| Token          | Size               | Use                                              |
-| -------------- | ------------------ | ------------------------------------------------ |
-| `text-display` | clamp(30px → 48px) | Marketing hero only, once per page               |
-| `text-title`   | clamp(28px → 36px) | Page titles, prose `h1`                          |
-| `text-section` | clamp(22px → 30px) | Section headings, prose `h2`, empty-state titles |
-| `text-subhead` | 20px               | Sub-sections, prose `h3`                         |
-| `text-heading` | 18px               | Pane, dialog and card titles, prose `h4`         |
-| `text-base`    | 16px               | Default reading text                             |
-| `text-sm`      | 14px               | Default product UI text                          |
-| `text-xs`      | 12px               | Secondary metadata with no role                  |
-| `text-micro`   | 11px               | Dense labels in studio and agent surfaces        |
-| `text-tiny`    | 10px               | Compact indicators                               |
+| Token          | Size               | Weight | Tracking | Use                                              |
+| -------------- | ------------------ | ------ | -------- | ------------------------------------------------ |
+| `text-display` | clamp(30px → 48px) | 510    | -0.022em | Marketing hero only, once per page               |
+| `text-title`   | clamp(28px → 36px) | 510    | -0.022em | Page titles, prose `h1`                          |
+| `text-section` | clamp(22px → 30px) | 510    | -0.022em | Section headings, prose `h2`, empty-state titles |
+| `text-subhead` | 20px               | 400    | -0.012em | Sub-sections, prose `h3`                         |
+| `text-heading` | 18px               | 510    | -0.012em | Pane, dialog and card titles, prose `h4`         |
+| `text-base`    | 16px               | 400    | normal   | Default reading text                             |
+| `text-sm`      | 14px               | 400    | normal   | Default product UI text                          |
+| `text-xs`      | 12px               | 400    | normal   | Secondary metadata with no role                  |
+| `text-micro`   | 11px               | —      | normal   | Dense labels in studio and agent surfaces        |
+| `text-tiny`    | 10px               | —      | normal   | Compact indicators                               |
 
-Three weights exist: 400 reading, 500 UI, 600 headings. `font-bold` never appears — hierarchy comes
+Three weights exist: 400 reading, 510 UI, 590 headings. `font-bold` never appears — hierarchy comes
 from size, colour and tracking. Nothing renders below 10px. There are no arbitrary sizes:
 `text-[13px]` in an app file is always wrong.
 
@@ -96,6 +96,10 @@ Colour does the muting; size does not. To de-emphasise text, shift colour and ke
 Never write an arbitrary opacity for text (`text-foreground/70`, `text-white/60`). If a role needs a
 softened colour, the role class owns that value — that is the point of `text-body`, which carries
 the one softened reading colour in the system so no page has to pick an opacity.
+
+Use `text-brand-text` for accent text on a tinted surface and `bg-brand-muted` for that surface;
+`text-brand` is the raw accent for artwork and focus. Never write `text-brand-700` or `bg-brand-100`
+in a component: those are light-only scale steps and disappear in the midnight theme.
 
 ## Monospace
 

@@ -11,7 +11,7 @@
 // compare what the two hold (`introspect`); and the snapshot must be the schema the code declares.
 import { Effect, Schema } from 'effect';
 import { StoreError } from './errors.ts';
-import { canonical, sha256Hex } from './hash.ts';
+import { canonical, sha256Hex } from '@norbital-ai/std/hash';
 import { plan, statements, type Plan } from './schema/plan.ts';
 import { SchemaSpec } from './schema/spec.ts';
 import { INTROSPECT } from './migration-introspect.ts';

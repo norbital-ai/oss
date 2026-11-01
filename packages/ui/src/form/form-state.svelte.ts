@@ -79,6 +79,14 @@ export class FormState {
 	readonly semanticErrors: readonly SemanticIssue[] = $derived(
 		this.#rules.flatMap((rule) => rule())
 	);
+	/** Explicit check/refusal errors take precedence over semantic issues on the same field. */
+	readonly fieldErrors: ReadonlyMap<string, string> = $derived.by(() => {
+		if (this.semanticErrors.length === 0) return this.errors;
+		const all = new Map(this.errors);
+		for (const issue of this.semanticErrors)
+			if (!all.has(issue.field)) all.set(issue.field, issue.message);
+		return all;
+	});
 
 	constructor(
 		spec: FormSpec,
@@ -118,13 +126,17 @@ export class FormState {
 		this.values = { ...this.base };
 		this.#revision = typeof record['revision'] === 'number' ? record['revision'] : undefined;
 	}
+	/** A custom create body's presets fill untouched defaults once. */
 	prefill(values: Row): void {
 		if (this.mode !== 'create') return;
+		const edited = changed(this.base, this.values);
 		for (const [field, value] of Object.entries(values))
 			if (
-				this.values[field] == null &&
+				!(field in this.#around) &&
+				!(field in edited) &&
 				this.spec.fields.some((f) => f.name === field && !f.readonly)
 			) {
+				this.#around = { ...this.#around, [field]: value };
 				this.base[field] = value;
 				this.values[field] = value;
 			}

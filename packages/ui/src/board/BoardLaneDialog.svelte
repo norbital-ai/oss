@@ -83,48 +83,50 @@
 	const order = $derived(view.order.length > 0 ? orderOf(view.order) : orderBy);
 </script>
 
-<Dialog.Header class="pr-8">
-	<Dialog.Title class="flex min-w-0 items-center gap-1.5">
-		{#if dot}<span class={['size-2 shrink-0 rounded-full', dot]} aria-hidden="true"></span>{/if}
-		<span class="truncate">{label}</span>
-		{#if count !== null && searched === '' && view.where === undefined}<span
-				class="text-muted-foreground text-sm tabular-nums">{count}</span
-			>{/if}
-	</Dialog.Title>
-</Dialog.Header>
-<div class="flex min-w-0 flex-wrap items-center gap-1" data-lane-toolbar>
-	{#if (catalog[of]?.search?.length ?? 0) > 0}<ToolbarSearch
-			bind:value={q}
-			label={msg(bolt, 'table.search', 'Search')}
-		/>{/if}
-	<ViewPopover
-		{view}
-		{catalog}
-		model={of}
-		author={where}
-		sortable={sortable(catalog[of], true, catalog)}
-	/>
-</div>
-<div class="-mx-1 min-h-0 flex-1 overflow-y-auto px-1 pb-1" data-lane-scroll>
-	<div
-		role="list"
-		class="grid grid-cols-[repeat(auto-fill,minmax(min(16rem,100%),1fr))] content-start gap-3"
-		data-lane-grid
-	>
-		<BoardLane
-			{of}
-			{card}
-			lane={label}
-			where={scope}
-			orderBy={order}
-			search={searched || undefined}
-			{pageSize}
-			{selectable}
-			{selected}
-			{onSelect}
-			{onChange}
-			{onOpen}
-			grid
-		/>
+<div class="flex min-h-0 flex-1 flex-col bg-muted/70 dark:bg-muted/40">
+	<Dialog.Header class="flex-row items-center gap-3 border-b px-4 py-2 pr-12">
+		<Dialog.Title class="flex min-w-0 items-center gap-1.5">
+			{#if dot}<span class={['size-2 shrink-0 rounded-full', dot]} aria-hidden="true"></span>{/if}
+			<span class="truncate">{label}</span>
+			{#if count !== null && searched === '' && view.where === undefined}<span
+					class="text-muted-foreground text-sm tabular-nums">{count}</span
+				>{/if}
+		</Dialog.Title>
+		<div class="flex shrink-0 items-center gap-1" data-lane-toolbar>
+			{#if (catalog[of]?.search?.length ?? 0) > 0}<ToolbarSearch
+					bind:value={q}
+					label={msg(bolt, 'table.search', 'Search')}
+				/>{/if}
+			<ViewPopover
+				{view}
+				{catalog}
+				model={of}
+				author={where}
+				sortable={sortable(catalog[of], true, catalog)}
+			/>
+		</div>
+	</Dialog.Header>
+	<div class="min-h-0 flex-1 overflow-y-auto p-4" data-lane-scroll>
+		<div
+			role="list"
+			class="grid grid-cols-[repeat(auto-fill,minmax(min(16rem,100%),1fr))] content-start gap-3"
+			data-lane-grid
+		>
+			<BoardLane
+				{of}
+				{card}
+				lane={label}
+				where={scope}
+				orderBy={order}
+				search={searched || undefined}
+				{pageSize}
+				{selectable}
+				{selected}
+				{onSelect}
+				{onChange}
+				{onOpen}
+				grid
+			/>
+		</div>
 	</div>
 </div>

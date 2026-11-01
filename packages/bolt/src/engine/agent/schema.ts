@@ -154,6 +154,7 @@ export const FileRef = Schema.StructWithRest(
 		name: Schema.optionalKey(Schema.String),
 		mime: Schema.optionalKey(Schema.String),
 		bytes: Schema.optionalKey(Schema.Number),
+		sha256: Schema.optionalKey(Schema.String),
 		caption: Schema.optionalKey(Schema.String),
 		text: Schema.optionalKey(Schema.String)
 	}),
@@ -363,6 +364,30 @@ function aboutOf(result: { readonly [k: string]: unknown }): Record<string, stri
 	return Object.keys(out).length === 0 ? undefined : out;
 }
 
+/** A source edit's files and compact diffs, kept out of the 600-character result clip the panel's Changes tab needs. */
+function changesOf(
+	step: { readonly name: string } | null,
+	result: Json | undefined
+): ReadonlyArray<{ path: string; diff: string; change?: string }> | undefined {
+	if (step === null || (step.name !== 'workspace_write' && step.name !== 'workspace_edit'))
+		return undefined;
+	if (!Predicate.isObject(result) || !Array.isArray(result['changes'])) return undefined;
+	const files = result['changes'].flatMap((change) =>
+		Predicate.isObject(change) &&
+		typeof change['path'] === 'string' &&
+		typeof change['diff'] === 'string'
+			? [
+					{
+						path: change['path'],
+						diff: change['diff'].slice(0, 8000),
+						...(typeof change['change'] === 'string' ? { change: change['change'] } : {})
+					}
+				]
+			: []
+	);
+	return files.length === 0 ? undefined : files.slice(0, 60);
+}
+
 const isStudio = Schema.is(StudioRoleSchema);
 const isFileRef = Schema.is(FileRef);
 /** The runs one `act` write started (`run`) and queued (`runs`); a write of another shape started none. */
@@ -384,10 +409,16 @@ const Outcome = Schema.Struct({
 	error: Schema.optionalKey(Schema.Json),
 	files: Schema.optionalKey(Schema.Array(Schema.Json)),
 	settled: Schema.optionalKey(
-		Schema.NullOr(Schema.Struct({ result: Schema.optionalKey(Schema.Json) }))
+		Schema.NullOr(
+			Schema.Struct({
+				result: Schema.optionalKey(Schema.Json),
+				studio: Schema.optionalKey(StudioRoleSchema)
+			})
+		)
 	),
 	conversation: Schema.optionalKey(Schema.String),
 	preview: Schema.optionalKey(Schema.String),
+	navigation: Schema.optionalKey(Schema.String),
 	approval: Schema.optionalKey(Schema.Struct({ id: Schema.String }))
 });
 const outcomeOf = Schema.decodeUnknownOption(Outcome);
@@ -432,14 +463,23 @@ export function transcriptRow(r: MessageRow, staff: boolean, thread: boolean): A
 					)
 				]
 			: [];
-	const role = step?.studio,
+	// Only `wait` can relay a host job's trusted role; an ordinary tool's data cannot create a preview.
+	const collected = step?.name === 'wait' ? outcome.settled : undefined,
+		payload = collected?.studio === undefined ? step?.result : collected.result,
+		completed =
+			collected?.studio === undefined
+				? outcome
+				: Option.getOrElse(outcomeOf(payload), () => NO_OUTCOME),
+		role = step?.studio ?? collected?.studio,
 		studio = isStudio(role) ? role : undefined,
 		about =
 			step !== null && (studio !== undefined || step.name === 'preview_show')
-				? aboutOf(Predicate.isObject(step.result) ? step.result : {})
+				? aboutOf(Predicate.isObject(payload) ? payload : {})
 				: undefined,
 		// a live change the host holds for the person (`approval.decide`): its id, never clipped
-		approval = outcome.approval?.id;
+		approval = outcome.approval?.id,
+		// a source edit's compact diffs, kept whole for the panel while the result itself may be clipped
+		changes = changesOf(step, payload);
 	return {
 		id: r.id,
 		seq: Number(r.seq),
@@ -473,17 +513,23 @@ export function transcriptRow(r: MessageRow, staff: boolean, thread: boolean): A
 			? {
 					tool: {
 						name: step.name,
-						failed: outcome.error !== undefined && outcome.error !== null,
+						failed: completed.error !== undefined && completed.error !== null,
 						...(child === undefined ? {} : { child }),
 						...(runs.length === 0 ? {} : { runs }),
 						...(r.state === 'running' ? { running: true } : {}),
 						...(step.args === undefined ? {} : { args: step.args }),
 						...(step.result === undefined
 							? {}
-							: { result: clip(step.result, studio === 'logs' ? 20000 : 600) }),
-						...(outcome.preview === undefined ? {} : { preview: outcome.preview }),
+							: {
+									result: clip(step.result, studio === 'logs' || step.name === 'read' ? 20000 : 600)
+								}),
+						...(completed.preview === undefined ? {} : { preview: completed.preview }),
 						...(approval === undefined ? {} : { approval }),
+						...(step.name === 'navigate' && outcome.navigation !== undefined
+							? { navigation: outcome.navigation }
+							: {}),
 						...(about === undefined ? {} : { about }),
+						...(changes === undefined ? {} : { changes }),
 						...(studio === undefined ? {} : { studio }),
 						...(step.ms === undefined ? {} : { ms: step.ms })
 					}

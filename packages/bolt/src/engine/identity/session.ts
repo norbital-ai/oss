@@ -281,11 +281,10 @@ const invitationsTo = (a: Address, now: Date) => ({
 	params: [memberValue(a), now.toISOString()]
 });
 /**
- * Rule 38a(a–c): persists the challenge (replacing any earlier one) and only then hands the code to the mail port (an
- * email) or has the phone verifier send its own by `via` (a mobile number; SMS unless WhatsApp is chosen), whether or
- * not the address is a member. The challenge still carries our attempts and expiry for the verifier's code. A text costs money and a stranger's
- * number is anyone's to type, so a number that is no member's, invited nor free to sign up is answered the same and
- * sent nothing. A port refusal is returned; a fresh `sendCode` is allowed at once.
+ * Rule 38a(a–c): checks membership, an open invitation or self sign-up before persisting the challenge and sending
+ * an email or asking the phone verifier to send by `via` (SMS unless WhatsApp is chosen). Ineligible addresses are
+ * refused before the code step. The challenge carries our attempts and expiry for the verifier's code too.
+ * A port refusal is returned; a fresh `sendCode` is allowed at once.
  */
 export const sendCode = Effect.fn('Bolt.sendCode')(function* (
 	h: IdentityHost,
@@ -305,18 +304,27 @@ export const sendCode = Effect.fn('Bolt.sendCode')(function* (
 	const charges = preSignIn(h, 'session.sendCode', a, ip);
 	const limited = admitMemory(h, charges, (yield* h.now).getTime());
 	if (limited) return yield* Effect.fail(limited);
-	if (a.kind === 'phone') {
-		const now = yield* h.now;
-		const [users, invitations, config] = yield* h.db.read([
-			{
-				text: `SELECT 1 FROM sys_user WHERE ${memberColumn(a, '$1')} AND active`,
-				params: [memberValue(a)]
-			},
-			invitationsTo(a, now),
-			SIGNUP_CONFIG
-		]);
-		if (users!.rows.length === 0 && invitations!.rows.length === 0) {
-			if (!signupOpen(h, a, config!.rows[0])) return null;
+	const now = yield* h.now;
+	const [users, invitations, config] = yield* h.db.read([
+		{
+			text: `SELECT active FROM sys_user WHERE ${memberColumn(a, '$1')}`,
+			params: [memberValue(a)]
+		},
+		invitationsTo(a, now),
+		SIGNUP_CONFIG
+	]);
+	const user = yield* identityRow(
+		Schema.UndefinedOr(Schema.Struct({ active: Schema.Boolean })),
+		users!.rows[0]
+	);
+	if (user !== undefined && !user.active)
+		return yield* Effect.fail(refuse('notMember', 'This member is deactivated.'));
+	if (user === undefined && invitations!.rows.length === 0) {
+		if (!signupOpen(h, a, config!.rows[0]))
+			return yield* Effect.fail(
+				refuse('notMember', 'This address has no invitation to this workspace.')
+			);
+		if (a.kind === 'phone') {
 			// a text to a stranger is paid for: sign-up texts are capped for the whole workspace (SMS pumping)
 			const signup: Charge = {
 				rule: 'session.signup',
@@ -330,7 +338,6 @@ export const sendCode = Effect.fn('Bolt.sendCode')(function* (
 		}
 	}
 	const code = h.devSink === true ? '123456' : sixDigits();
-	const now = yield* h.now;
 	const s = new IdentityStatement(h);
 	const rate = ratePiece(charges, now.getTime(), (value) => s.p(value));
 	const saved = yield* h.db.write({
@@ -1024,7 +1031,7 @@ export const defaultName = (a: Address): string =>
 /**
  * `founder.bootstrap { address, name? }` (§5.11.3): host only; creates the first admin and a session for the proven
  * address (an email or a mobile number); idempotent per address (a second call mints a session for the same member);
- * refused once another admin exists.
+ * refused once another admin exists. A seeded active staff member keeps their identity when adopted as founder.
  */
 export const founderBootstrap = Effect.fn('Bolt.founderBootstrap')(function* (
 	h: IdentityHost,
@@ -1076,7 +1083,11 @@ export const founderBootstrap = Effect.fn('Bolt.founderBootstrap')(function* (
 						text: `WITH ${admission}, existing AS (SELECT id FROM sys_user WHERE ${memberColumn(a, s.p(memberValue(a)))} AND admin AND active),
 ins AS (INSERT INTO sys_user (id, email, phone, name, kind, admin)
 	SELECT ${s.p(id)}, ${s.p(a.kind === 'email' ? a.value : null)}, ${s.p(a.kind === 'phone' ? a.value : null)}, ${s.p(name ?? defaultName(a))}, 'staff', true
-	WHERE NOT EXISTS (SELECT 1 FROM sys_user WHERE admin) AND ${GATED} ${IMAGES}),
+	WHERE NOT EXISTS (SELECT 1 FROM sys_user WHERE admin) AND ${GATED}
+	ON CONFLICT (${a.kind === 'email' ? 'lower(email)' : 'phone_key'}) DO UPDATE
+	SET admin = true, revision = sys_user.revision + 1
+	WHERE sys_user.kind = 'staff' AND sys_user.active AND NOT EXISTS (SELECT 1 FROM sys_user WHERE admin)
+	${IMAGES}),
 ${history},
 u AS (SELECT id FROM existing UNION ALL SELECT id FROM ins),
 sess AS (INSERT INTO sys_session ${SESSION_COLUMNS} SELECT v.id, u.id, v.h, v.via, v.c, v.e, v.r

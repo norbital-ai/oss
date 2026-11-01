@@ -22,9 +22,11 @@ import type { Challenge } from '../facilities/index.ts';
 import { isOff, type Off } from '../facilities/off.ts';
 import {
 	Activation,
+	Agents,
 	Guest,
 	Manifest,
 	Identity,
+	HostIdentity,
 	Runs,
 	type Authenticated
 } from '../engine/services.ts';
@@ -82,9 +84,9 @@ import { runList } from '../engine/runs/index.ts';
 import { outputFiles } from '../engine/runs/output-files.ts';
 import { settings, SettingsOp, applySettings } from './settings/data.ts';
 import { exposure } from '../engine/access/exposure.ts';
+import { manifestItems } from './finder/manifest.ts';
 import { StudioOp, studioView, type StudioPort } from './studio/model.ts';
 import { StudioInspectInput } from './studio/inspection.ts';
-import { AuditRuleSet } from './studio/audit.ts';
 import {
 	audienceOf,
 	canOpen,
@@ -198,9 +200,6 @@ export type ShellHostConfig = {
 export class ShellConfig extends Context.Service<ShellConfig, ShellHostConfig>()(
 	'bolt/ShellConfig'
 ) {}
-export class HostIdentity extends Context.Service<HostIdentity, IdentityHost>()(
-	'bolt/HostIdentity'
-) {}
 export type PublicPageRoute =
 	| { readonly kind: 'app'; readonly app: string }
 	| { readonly kind: 'kiosk'; readonly kiosk: string };
@@ -237,9 +236,6 @@ const SyncReplay = Schema.Struct({
 	instance: Schema.NonEmptyString,
 	ids: Schema.optionalKey(Schema.Array(Schema.NonEmptyString))
 });
-/** Studio's Audit rules: a save over the revision read, and a Try's unsaved set (absent: the saved one). */
-const AuditSave = Schema.Struct({ revision: Schema.Int, ruleSet: AuditRuleSet });
-const AuditTry = Schema.Struct({ ruleSet: Schema.optionalKey(AuditRuleSet) });
 const RunId = Schema.Struct({ id: Schema.String });
 /** L-COL-199: the workspace's name and logo (`null`, an `https:` URL or a `data:image/…` URL). */
 const Branding = Schema.Struct({
@@ -351,6 +347,7 @@ const bootFor = (
 	visitor: null,
 	catalog: exposure(manifest, authority),
 	automations: automationInputs(manifest, authority),
+	search: manifestItems(manifest, authority, studio),
 	contract: fingerprint(schemaSlice(manifest))
 });
 const makeShell = Effect.gen(function* () {
@@ -717,7 +714,8 @@ const makeShell = Effect.gen(function* () {
 						)?.name ?? null,
 					preview: x.preview,
 					catalog: exposure(m, kioskAuth),
-					automations: automationInputs(m, kioskAuth)
+					automations: automationInputs(m, kioskAuth),
+					search: manifestItems(m, kioskAuth, false)
 				};
 				return ready(b, kioskAuth);
 			}
@@ -1204,7 +1202,40 @@ const makeShell = Effect.gen(function* () {
 					(yield* requestBody(request, Body))['op'] ?? null
 				);
 				if (Option.isNone(op)) return refused('check', 'The Studio operation is malformed.', 422);
-				return json({ value: studioView(yield* hostCall(() => studio.run(auth, op.value))) });
+				// a decision ends Norbius's held request: tell its conversation and wake the turn that asked
+				const chosen = op.value,
+					decided =
+						chosen.op === 'approval.decide'
+							? Option.getOrUndefined(
+									yield* Effect.option(hostCall(() => studio.state(auth)))
+								)?.approvals?.find((held) => held.id === chosen.id)
+							: undefined;
+				const value = yield* hostCall(() => studio.run(auth, op.value));
+				const agents = yield* Effect.serviceOption(Agents);
+				if (decided !== undefined && auth.actor.kind === 'member' && Option.isSome(agents)) {
+					const action =
+						decided.op.op === 'change.merge'
+							? 'merge'
+							: decided.op.op === 'rollback'
+								? 'rollback'
+								: 'request';
+					const text =
+						chosen.op === 'approval.decide' && chosen.kind === 'approved'
+							? `The person approved your ${action}. It is running; workspace_review shows its progress.`
+							: `The person rejected your ${action}; it did not run. Do not ask again unless something changed.`;
+					yield* agents.value
+						.notify({
+							conversation: decided.conversation,
+							text,
+							as: { member: auth.actor.id }
+						})
+						.pipe(
+							Effect.catch((cause) =>
+								Effect.logWarning('The approval could not wake its conversation', cause)
+							)
+						);
+				}
+				return json({ value: studioView(value) });
 			}
 			case 'GET /studio/file': {
 				// one file's text on its own: a state carries the tree's sizes, never its contents
@@ -1245,28 +1276,6 @@ const makeShell = Effect.gen(function* () {
 				if (!s.studio || read === undefined || !auth.admin)
 					return refused('forbidden', 'Usage is for administrators on a host that meters it.', 403);
 				return json({ value: yield* hostCall(() => read(auth)) });
-			}
-			case 'GET /studio/audit':
-			case 'POST /studio/audit':
-			case 'POST /studio/audit/run': {
-				// the organization's audit rules (§5): the host compiles, stores and runs them; this route only decodes
-				const audit = c.studio?.audit;
-				if (!s.studio || audit === undefined || !auth.admin)
-					return refused(
-						'forbidden',
-						'Audit rules are for administrators on a host that audits.',
-						403
-					);
-				if (request.method === 'GET')
-					return json({ value: yield* hostCall(() => audit.rules(auth)) });
-				if (path.slice(SHELL.length) === '/studio/audit') {
-					const body = yield* requestBody(request, AuditSave);
-					return json({
-						value: yield* hostCall(() => audit.save(auth, body.revision, body.ruleSet))
-					});
-				}
-				const body = yield* requestBody(request, AuditTry);
-				return json({ value: yield* hostCall(() => audit.run(auth, body.ruleSet)) });
 			}
 			case 'GET /studio/events': {
 				// pushed authoring frames (build log lines, a moved head); nothing is polled

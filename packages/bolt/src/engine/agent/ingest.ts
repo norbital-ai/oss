@@ -114,7 +114,7 @@ export function imageIngest(file: { name: string; mime: string; bytes: Uint8Arra
 
 // ── what the HTML holds ──
 const attr = (line: string, name: string) => new RegExp(`\\b${name}="([^"]*)"`).exec(line)?.[1];
-const plain = (html: string) =>
+export const plain = (html: string) =>
 	html
 		.replace(/<[^>]+>/g, '')
 		.replace(

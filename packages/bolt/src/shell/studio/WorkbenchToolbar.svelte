@@ -1,162 +1,82 @@
 <!--
-	The workbench's toolbar : the change the viewer works on (or Live, with no change open), how far behind live it is,
-	a status badge (working, the running phase, a failure, conflicts) and the unsaved count; then Save, Preview and the
-	primary action last (Merge for an administrator with a change open, else New change). Everything else — a new file,
-	the branch and the commit it is on — is behind "…".
+	Studio's toolbar above the navigator and pane: the change the viewer works on (or Live, with no change open) and the
+	unsaved count; then Save, Review, unscheduling a scheduled merge, closing the change, and the primary action last
+	(Merge for an administrator with a change open, else New change). New files are + buttons in the source tree. The
+	change's behind/status badges are in the app header. A change's preview is its Preview tab on Changes: selecting it
+	builds the latest commit, never a draft.
 -->
 <script lang="ts">
-	import { Badge, Button, Icon, Popover, type BadgeVariant } from '@norbital-ai/ui';
+	import { Button, Icon } from '@norbital-ai/ui';
 	import { Inline, Scroll } from '@norbital-ai/ui/layout';
-	import { PHASES, type PhaseState, type StudioPhase, type StudioView } from './model.ts';
+	import type { Snippet } from 'svelte';
+	import type { StudioView } from './model.ts';
 
 	let {
 		view,
+		navigator,
 		admin,
 		busy,
 		drafts,
-		phases,
-		error,
-		previewing,
-		onnew,
 		onsave,
-		onpreview,
 		onopen,
 		onmerge,
-		onschedule,
+		onclose,
 		onunschedule,
 		onreview,
-		oninstall,
 		t
 	}: {
 		view: StudioView;
+		navigator: Snippet;
 		admin: boolean;
 		busy: boolean;
 		drafts: number;
-		phases: { readonly [p in StudioPhase]?: PhaseState };
-		error: string | null;
-		previewing: boolean;
-		onnew: () => void;
 		onsave: () => void;
-		onpreview: () => void;
 		onopen: () => void;
 		onmerge: () => void;
-		/** A merge at a later instant: the tenant's downtime is its cutover, at that time. */
-		onschedule: () => void;
+		/** Close the change the viewer works on: its preview and its copy of the data go; its edits stay in history. */
+		onclose: () => void;
 		onunschedule: () => void;
 		onreview: () => void;
-		oninstall: () => void;
 		t: (key: string) => string;
 	} = $props();
 
 	const change = $derived(view.changeSets?.find((c) => c.id === view.change));
-	const behind = $derived(view.behind ?? 0);
+	const label = $derived(
+		change === undefined ? t('Live') : `${t('Change')} ${change.id} · ${change.title}`
+	);
 	const merging = $derived(change?.merge?.state === 'running');
 	const scheduled = $derived(
 		change?.merge?.state === 'scheduled' && change.merge.runAt !== undefined
 			? new Date(change.merge.runAt).toLocaleString()
 			: null
 	);
-	const phaseTitle = (p: StudioPhase) =>
-		t(
-			p === 'diagnose'
-				? 'Building'
-				: p === 'copy'
-					? 'Copying data'
-					: p === 'preview'
-						? 'Preview'
-						: 'Merge'
-		);
-	/** The workbench status badge: working, a failure, conflicts to resolve; nothing when idle. */
-	const status = $derived.by(
-		(): {
-			label: string;
-			detail?: string;
-			icon: string;
-			variant: BadgeVariant;
-			loading?: true;
-		} | null => {
-			const running = PHASES.find((p) => phases[p] === 'running');
-			const failed = PHASES.find((p) => phases[p] === 'failed');
-			if (busy || running !== undefined || merging)
-				return {
-					label:
-						running === undefined
-							? t(merging ? 'Merging…' : 'Working…')
-							: `${phaseTitle(running)}…`,
-					icon: 'lucide:loader-2',
-					variant: 'outline',
-					loading: true
-				};
-			if (error !== null)
-				return {
-					label: t('Action failed'),
-					detail: error,
-					icon: 'lucide:circle-alert',
-					variant: 'destructive'
-				};
-			if (scheduled !== null)
-				return {
-					label: `${t('Merges at')} ${scheduled}`,
-					icon: 'lucide:clock',
-					variant: 'outline'
-				};
-			if (change?.merge?.state === 'failed')
-				return {
-					label: t('Merge failed'),
-					...(change.merge.error === undefined ? {} : { detail: change.merge.error }),
-					icon: 'lucide:circle-alert',
-					variant: 'destructive'
-				};
-			if (failed !== undefined)
-				return {
-					label: `${phaseTitle(failed)} · ${t('failed')}`,
-					icon: 'lucide:circle-alert',
-					variant: 'destructive'
-				};
-			if ((view.conflicts?.length ?? 0) > 0)
-				return {
-					label: t('Action required'),
-					detail: `${t('Resolve the conflict markers in')} ${view.conflicts?.join(', ')}`,
-					icon: 'lucide:triangle-alert',
-					variant: 'warning'
-				};
-			if (phases.preview === 'done' || phases.merge === 'done')
-				return { label: t('Updated'), icon: 'lucide:circle-check', variant: 'success' };
-			return null;
-		}
-	);
-	const ACTION = 'px-2 text-xs sm:text-micro';
-	let more = $state(false);
-	const pick = (run: () => void) => () => {
-		more = false;
-		run();
-	};
+	const ACTION = 'px-2 text-xs';
 </script>
 
-{#snippet action(
-	icon: string,
-	label: string,
-	onclick: () => void,
-	disabled: boolean,
-	pressed?: boolean
-)}
-	<Button
-		variant="ghost"
-		size="sm"
-		class={ACTION}
-		{disabled}
-		aria-label={label}
-		title={label}
-		aria-pressed={pressed}
-		{onclick}
-	>
+{#snippet action(icon: string, label: string, onclick: () => void, disabled: boolean)}
+	<Button variant="ghost" class={ACTION} {disabled} aria-label={label} title={label} {onclick}>
 		<Icon name={icon} class="size-3.5" /><span class="hidden sm:inline">{label}</span>
 	</Button>
 {/snippet}
 
-<Inline gap="xs" class="h-10 min-w-0 border-b border-border/60 sm:h-9">
+{#snippet iconAction(icon: string, label: string, onclick: () => void, disabled: boolean)}
+	<Button
+		variant="ghost"
+		size="icon"
+		class="shrink-0"
+		{disabled}
+		aria-label={label}
+		title={label}
+		{onclick}
+	>
+		<Icon name={icon} class="size-4" />
+	</Button>
+{/snippet}
+
+<Inline gap="sm" class="min-h-10 min-w-0 border-b border-border/60 px-3 py-1">
+	{@render navigator()}
 	<Scroll
-		name={t('Workbench')}
+		name={t('Studio')}
 		axis="x"
 		layout="inline"
 		gap="xs"
@@ -165,27 +85,9 @@
 	>
 		<span
 			class="max-w-64 shrink-0 truncate text-xs font-medium text-foreground"
-			data-change={change?.id}
-			>{change === undefined ? t('Live') : `!${change.id} ${change.title}`}</span
+			title={label}
+			data-change={change?.id}>{label}</span
 		>
-		{#if behind > 0}
-			<Badge variant="warning" class="h-5 max-w-48 shrink-0 px-2 py-0 text-micro"
-				>{behind} {t('behind live')}</Badge
-			>
-		{/if}
-		{#if status !== null}
-			<Badge
-				variant={status.variant}
-				class="h-5 max-w-48 shrink-0 gap-1 px-2 py-0 text-micro"
-				title={status.detail}
-				aria-busy={status.loading}
-			>
-				<Icon
-					name={status.icon}
-					class="size-3 shrink-0 {status.loading ? 'animate-spin' : ''}"
-				/><span class="truncate">{status.label}</span>
-			</Badge>
-		{/if}
 		{#if drafts > 0}
 			<span class="max-w-44 shrink-0 truncate text-micro text-muted-foreground"
 				>{drafts} {t('unsaved')}</span
@@ -195,81 +97,30 @@
 	<Inline gap="xs">
 		{@render action('lucide:save', t('Save'), onsave, busy || drafts === 0)}
 		{#if change !== undefined}
-			{@render action('lucide:scan-eye', t('Preview'), onpreview, busy || drafts > 0, previewing)}
 			{@render action('lucide:git-compare', t('Review'), onreview, busy)}
-		{/if}
-		<Popover.Root bind:open={more}>
-			<Popover.Trigger
-				class="inline-flex size-8 items-center justify-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground max-sm:size-10"
-				aria-label={t('More')}
-				title={t('More')}
-			>
-				<Icon name="lucide:ellipsis" class="size-4" />
-			</Popover.Trigger>
-			<Popover.Content align="end" class="grid w-64 gap-0.5 p-1">
-				<Button
-					size="sm"
-					variant="ghost"
-					class="justify-start"
-					disabled={busy}
-					onclick={pick(onnew)}
-				>
-					<Icon name="lucide:file-plus" class="size-3.5" />{t('New file')}
-				</Button>
-				{#if change !== undefined}
-					<Button
-						size="sm"
-						variant="ghost"
-						class="justify-start"
-						disabled={busy}
-						onclick={pick(onopen)}
-					>
-						<Icon name="lucide:git-branch-plus" class="size-3.5" />{t('New change')}
-					</Button>
-					<Button
-						size="sm"
-						variant="ghost"
-						class="justify-start"
-						disabled={busy}
-						onclick={pick(oninstall)}
-					>
-						<Icon name="lucide:package-plus" class="size-3.5" />{t('Install package')}
-					</Button>
-					{#if admin}
-						<Button
-							size="sm"
-							variant="ghost"
-							class="justify-start"
-							disabled={busy || merging || (scheduled === null && view.changes.length === 0)}
-							onclick={pick(scheduled === null ? onschedule : onunschedule)}
-						>
-							<Icon
-								name={scheduled === null ? 'lucide:calendar-clock' : 'lucide:calendar-x'}
-								class="size-3.5"
-							/>{t(scheduled === null ? 'Schedule merge…' : 'Unschedule merge')}
-						</Button>
-					{/if}
+			{#if admin}
+				{#if scheduled !== null}
+					{@render iconAction(
+						'lucide:calendar-x',
+						t('Unschedule merge'),
+						onunschedule,
+						busy || merging
+					)}
 				{/if}
-				<p class="border-t border-border/60 px-2 pt-1.5 pb-1 text-micro text-muted-foreground">
-					{#if view.branch !== undefined}<code class="block truncate font-mono">{view.branch}</code
-						>{/if}
-					{t(change === undefined ? 'Live' : 'against Live')} ·
-					<code class="font-mono">{view.commit.slice(0, 8)}</code>
-				</p>
-			</Popover.Content>
-		</Popover.Root>
-		{#if change === undefined}
-			<Button size="sm" class="{ACTION} font-semibold" disabled={busy} onclick={onopen}>
+				{@render iconAction('lucide:x', t('Close change'), onclose, busy || merging)}
+			{/if}
+			{#if admin}
+				<Button
+					class="{ACTION} font-semibold"
+					disabled={busy || merging || view.changes.length === 0}
+					onclick={onmerge}
+				>
+					<Icon name="lucide:git-merge" class="size-3.5" />{t('Merge')}
+				</Button>
+			{/if}
+		{:else}
+			<Button class="{ACTION} font-semibold" disabled={busy} onclick={onopen}>
 				<Icon name="lucide:git-branch-plus" class="size-3.5" />{t('New change')}
-			</Button>
-		{:else if admin}
-			<Button
-				size="sm"
-				class="{ACTION} font-semibold"
-				disabled={busy || merging || view.changes.length === 0}
-				onclick={onmerge}
-			>
-				<Icon name="lucide:git-merge" class="size-3.5" />{t('Merge')}
 			</Button>
 		{/if}
 	</Inline>

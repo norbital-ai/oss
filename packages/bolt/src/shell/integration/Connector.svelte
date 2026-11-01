@@ -250,7 +250,6 @@
 			<div class="flex shrink-0 items-center gap-1">
 				{#if connected && source !== null}
 					<Button
-						size="sm"
 						variant="ghost"
 						aria-expanded={open}
 						onclick={() => (open = !open)}
@@ -259,7 +258,6 @@
 				{/if}
 				{#if id !== null && onManage !== undefined}
 					<Button
-						size="sm"
 						variant="ghost"
 						aria-label={t('Settings')}
 						title={t('Settings')}
@@ -269,7 +267,6 @@
 				{/if}
 				{#if !connected && !waiting && !open && (id === null || status !== null)}
 					<Button
-						size="sm"
 						disabled={working ||
 							primary === undefined ||
 							(draft !== undefined && primary !== undefined && !validImportStart(draft, primary))}
@@ -284,7 +281,6 @@
 				{/if}
 				{#if id !== null && status !== null}
 					<Button
-						size="sm"
 						variant="ghost"
 						class="text-destructive"
 						disabled={working}

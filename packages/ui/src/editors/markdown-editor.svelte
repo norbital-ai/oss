@@ -17,10 +17,12 @@ Markdown as plain text with the `/` block menu and `@` mentions, and an optional
 		onChange?(next: string): void;
 		readonly?: boolean;
 		preview?: boolean;
-		/** The `/` rows; `[]` turns `/` off. */
-		commands?: readonly CommandItem[];
+		/** The `/` rows, or a scoped search provider; `[]` turns `/` off. */
+		commands?:
+			| readonly CommandItem[]
+			| ((query: string) => EffectType.Effect<readonly CommandItem[], ReadError | Error>);
 		/** Where `/` counts: a line's start (Markdown blocks), or only as the text's first character (an agent command). */
-		commandStart?: 'line' | 'text';
+		commandStart?: 'line' | 'text' | 'word';
 		mentions?(query: string): EffectType.Effect<readonly CommandItem[], ReadError | Error>;
 		placeholder?: string;
 		rows?: number;
@@ -66,17 +68,22 @@ Markdown as plain text with the `/` block menu and `@` mentions, and an optional
 		textarea: ta = $bindable(null)
 	}: MarkdownEditorProps = $props();
 	let tab = $state<'write' | 'preview'>('write');
+	const commandItems = (query: string) =>
+		typeof commands === 'function' ? commands(query) : Effect.succeed(filterItems(commands, query));
 	const triggers = $derived<CommandTrigger[]>([
-		...(commands.length === 0
+		...(typeof commands !== 'function' && commands.length === 0
 			? []
 			: [
 					{
 						char: '/',
 						start: commandStart,
-						items: (q: string) => Effect.succeed(filterItems(commands, q))
+						spaces: typeof commands === 'function',
+						items: commandItems
 					}
 				]),
-		...(mentions === undefined ? [] : [{ char: '@', start: 'word' as const, items: mentions }])
+		...(mentions === undefined
+			? []
+			: [{ char: '@', start: 'word' as const, spaces: true, items: mentions }])
 	]);
 </script>
 

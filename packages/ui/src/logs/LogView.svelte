@@ -101,9 +101,9 @@ A dense, filterable log: one fixed-height line per event (a JSON payload preview
 	);
 	const BADGE: Record<LogLevel, string> = {
 		debug: 'text-muted-foreground',
-		info: 'text-sky-600 dark:text-sky-400',
-		warn: 'bg-amber-500/15 text-amber-700 dark:text-amber-400',
-		error: 'bg-red-500/15 text-red-700 dark:text-red-400'
+		info: 'text-info',
+		warn: 'bg-warning/15 text-warning-foreground dark:text-warning',
+		error: 'bg-destructive/15 text-destructive'
 	};
 
 	const toBottom = () => port && (port.scrollTop = port.scrollHeight);
@@ -185,7 +185,7 @@ A dense, filterable log: one fixed-height line per event (a JSON payload preview
 							class="text-muted-foreground whitespace-nowrap tabular-nums"
 							datetime={new Date(row.at).toISOString()}>{time.format(new Date(row.at))}</time
 						>
-						<span class={cn('rounded px-1 text-center text-[10px] uppercase', BADGE[row.level])}
+						<span class={cn('rounded px-1 text-center text-tiny uppercase', BADGE[row.level])}
 							>{row.level}</span
 						>
 						<code class="truncate whitespace-pre"

@@ -488,10 +488,22 @@ export type OmittableOnInsert<M, P> = P extends keyof OneRels<M>
 type ColumnValues<M, P extends PropertyKey, Rels = OneRels<M>> = {
 	readonly [K in P & keyof Columns<M>]: ValueOf<Columns<M>[K]>;
 } & { readonly [K in P & keyof Rels]: FkValue<Rels[K]> };
-/** A caller's row of model `C` as output `O` reads it: that output's root fields, FK ids and system columns (rule 10). */
+/**
+ * A model's root row for read output `O` (`default` when omitted): its declared fields, foreign-key ids and system
+ * columns. This is a read shape, not an insert/update input and not the complete stored row. Relationship layers
+ * and a query's selected fields are reflected by `ReadAnswer` instead. The type does not grant access: runtime
+ * policies still filter the rows a caller can read. Names and outputs come from the workspace's generated registry.
+ * @example
+ * type Order = Row<'orders'>;
+ * type PublicOrder = Row<'orders', 'public'>;
+ * @see ReadAnswer
+ * @see ActInput
+ */
 export type Row<C, O = 'default'> = RowOf<C, O> & RowState;
 /** What a read, the caller's or the workspace's, attaches to each root row beside its fields, whatever it selects (§4.2, rule 46b). */
 export type RowState = {
+	/** A live reference's authorized target record_label (e.g. an approval's target); derived at read time, never copied to a field. */
+	readonly $label?: string | null;
 	readonly $sync?: { readonly [sync: string]: SyncState };
 	readonly $approval?: RowApproval;
 };

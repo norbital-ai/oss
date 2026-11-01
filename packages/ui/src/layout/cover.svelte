@@ -79,7 +79,7 @@ A region with optional `top` and `bottom` chrome and a body between them, option
 		GAP_CLASSES[gap],
 		PAD_CLASSES[pad],
 		SIZE_CLASSES[size],
-		// The caller's class last: floors, layers and colours it names win; layout itself is props (doctor-enforced).
+		// The caller's class last: floors, layers and colours it names win; layout itself is props.
 		className
 	)}
 	style={`grid-template-rows: ${rowTemplate};${styleProp ? ` ${styleProp}` : ''}`}

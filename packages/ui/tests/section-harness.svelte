@@ -27,11 +27,16 @@
 </script>
 
 <Form of="jobs" mode="create">
-	<Section first title="Job"><Field name="title" /></Section>
+	<Section first title="Job" icon="lucide:briefcase"
+		><Field name="title" /><Field name="code" /></Section
+	>
 	<Section title="Notes" defaultOpen={false} summary="Not set" size="fill" minHeight="8rem"
-		><Field name="notes" /></Section
+		><Field name="notes" /><Field name="remarks" /></Section
 	>
 	<Section title="Fixed" collapsible={false} size="fill" minHeight="8rem"
-		><Field name="kind" readonly /></Section
+		><Field name="kind" readonly /><Field name="tier" /></Section
 	>
+	<Section title="Lone"><Field name="tags" /></Section>
+	<Section title="Meta"><Field name="meta" /></Section>
+	<Section title="Rates"><Field name="rates" label="" /></Section>
 </Form>

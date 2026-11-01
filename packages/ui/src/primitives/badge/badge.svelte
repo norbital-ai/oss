@@ -1,18 +1,18 @@
 <!--
 @component
-A small label pill in a colour variant.
+A small label tag in a colour variant.
 -->
 <script lang="ts" module>
 	import { type VariantProps, tv } from 'tailwind-variants';
 
 	// Extended badge variants with additional options.
 	export const badgeVariants = tv({
-		base: 'focus:ring-ring inline-flex items-center rounded-full border px-2 py-0.5 text-xs leading-4 font-semibold transition-colors focus:outline-none focus:ring-2 focus:ring-offset-2',
+		base: 'focus:ring-ring focus:ring-offset-background inline-flex items-center rounded-badge border px-2 py-0.5 text-xs leading-4 font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-offset-2',
 		variants: {
 			variant: {
-				default: 'bg-brand-100 text-brand-700 hover:bg-brand-200 border-brand-100',
-				brand: 'bg-brand-100 text-brand-700 hover:bg-brand-200 border-brand-100',
-				outline: 'text-secondary-foreground hover:bg-secondary/80 border-secondary',
+				default: 'bg-brand-muted text-brand-text hover:bg-brand/15 border-brand/20',
+				brand: 'bg-brand-muted text-brand-text hover:bg-brand/15 border-brand/20',
+				outline: 'border-border text-muted-foreground hover:bg-accent hover:text-accent-foreground',
 				destructive:
 					'bg-destructive text-destructive-foreground hover:bg-destructive/80 border-destructive',
 				info: 'bg-info text-info-foreground hover:bg-info/80 border-info',

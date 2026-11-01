@@ -23,15 +23,18 @@
 	import type { Act } from '../Acts.svelte';
 	import Acts from '../Acts.svelte';
 	import DetailSheet from '../DetailSheet.svelte';
+	import type { SystemUiIntent } from '../../protocol/system-ui.ts';
 
 	let {
 		api,
 		t,
-		locale
+		locale,
+		configuration = null
 	}: {
 		api: Pick<ShellApi, 'settings' | 'settingsOp' | 'preview' | 'explain'>;
 		t: (key: string) => string;
 		locale: string;
+		configuration?: SystemUiIntent | null;
 	} = $props();
 
 	const read = observeOnce(() => api.settings());
@@ -137,6 +140,18 @@
 	let submitting = $state(false);
 	let bulk = $state('');
 	let form = $state({ email: '', phone: null as string | null, team: '', external: false });
+	let configured = $state<string | null>(null);
+	watch([() => configuration, () => s], ([intent, settings]) => {
+		if (intent === null || settings === null || configured === intent.key) return;
+		configured = intent.key;
+		if (intent.request.capability === 'member.invite') {
+			tab = 'invitations';
+			inviting = true;
+		} else if (intent.request.capability === 'member.manage') {
+			tab = 'members';
+			open = { kind: 'member', id: intent.request.record };
+		}
+	});
 	/** `inviteMany` answers the invitations whose delivery failed (`invite` refuses instead). */
 	const Invited = Schema.Struct({ failed: Schema.Array(Schema.String) });
 	function closeDialog(): void {
@@ -309,7 +324,6 @@
 					<label class="flex flex-col gap-1"
 						><span class="text-meta">{t('Team')}</span>
 						<Combobox
-							size="sm"
 							clearable
 							placeholder={t('No team')}
 							options={teams}
@@ -352,7 +366,6 @@
 					>
 					<Cluster
 						><Button
-							size="sm"
 							disabled={Object.keys(handles).length === 0}
 							onclick={() => fork(saveHandles(u.id))}>{t('Save')}</Button
 						></Cluster
@@ -425,7 +438,6 @@
 					onChange={(v) => (form.phone = typeof v === 'string' ? v : null)}
 				/>
 				<Combobox
-					size="sm"
 					clearable
 					placeholder={t('No team')}
 					aria-label={t('Team')}

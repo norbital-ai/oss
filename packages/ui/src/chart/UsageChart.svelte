@@ -34,9 +34,11 @@
 			return `${scaled.toLocaleString(undefined, { maximumFractionDigits: 1 })} ${BYTES[step]}`;
 		}
 		if (unit === 'micro-SGD')
-			return new Intl.NumberFormat('en-SG', { style: 'currency', currency: 'SGD' }).format(
-				value / 1_000_000
-			);
+			return new Intl.NumberFormat('en-SG', {
+				style: 'currency',
+				currency: 'SGD',
+				maximumFractionDigits: value > 0 && value < 10_000 ? 6 : 2
+			}).format(value / 1_000_000);
 		if (unit === 'seconds')
 			return value >= 3600
 				? `${(value / 3600).toLocaleString(undefined, { maximumFractionDigits: 1 })} h`

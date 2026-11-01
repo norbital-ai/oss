@@ -1,7 +1,7 @@
 # Distribution contracts
 
 Norbital OSS publishes two immutable resource types: exact public package archives for
-`@norbital-ai/app-shell`, `bolt`, `bolt-cli`, `bolt-server`, `doctor`, `providers`, `std`, `store`, and `ui`, plus the
+`@norbital-ai/app-shell`, `bolt`, `bolt-cli`, `bolt-server`, `providers`, `std`, `store`, and `ui`, plus the
 Norbital Convert service image at `ghcr.io/norbital-ai/convert`.
 
 Template source is the other half of the distribution story, and it is published from the template

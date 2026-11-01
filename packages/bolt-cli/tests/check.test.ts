@@ -2,13 +2,14 @@
 // `bolt check`'s build rules over a manifest (§3.3.9): model/label, model/instant-date, model/default, model/range,
 // sync/*, kiosk/embed, app/embed, write/read-in-loop, notify/via, automation/cron. The full compile pipeline is not run
 // here: templates' `bolt check` gate runs it.
-import { Effect } from 'effect';
+import { Effect, Result } from 'effect';
 import * as NodeServices from '@effect/platform-node/NodeServices';
 import { describe, expect } from 'vitest';
 import { it } from '@effect/vitest';
-import { checkRules, cronValid, sourceRules } from '../src/compiler/check/rules.ts';
+import { checkRules, cronValid } from '../src/compiler/check/rules.ts';
 import { evaluationCpuMs } from '../src/compiler/check/index.ts';
 import type { EngineManifest } from '../../bolt/src/engine/manifest.ts';
+import { decodeProjectedManifest } from '../../bolt/src/engine/manifest.ts';
 const emptyManifest: EngineManifest = {
 	needs: [],
 	workspace: { tz: 'UTC', locale: 'en' },
@@ -27,6 +28,57 @@ const emptyManifest: EngineManifest = {
 	agent: { skills: {} }
 };
 describe('bolt check', () => {
+	it('checks CEL label syntax and record field references', () => {
+		const inspect = (record_label?: string) =>
+			checkRules(
+				{
+					...emptyManifest,
+					models: {
+						orders: {
+							description: 'Orders',
+							...(record_label === undefined ? {} : { record_label }),
+							fields: { code: { kind: 'text' }, name: { kind: 'text', optional: true } }
+						}
+					}
+				},
+				{ automations: [] },
+				(_role, name) => name
+			).filter((finding) => finding.code === 'model/label');
+		expect(
+			inspect("record.code + ' · ' + (record.name != null ? record.name : 'Unnamed')")
+		).toEqual([]);
+		expect(inspect('record.missing')).toEqual([
+			expect.objectContaining({ message: expect.stringContaining('unknown field') })
+		]);
+		expect(inspect('record.code +')).not.toEqual([]);
+		expect(inspect()).toEqual([]);
+	});
+	it('rejects invalid automation input metadata before it can break shell boot', () => {
+		const valid = {
+			description: 'Read a document',
+			policies: ['treasury'],
+			input: { document: { kind: 'id', of: 'documents' } }
+		};
+		const inspect = (input: unknown) =>
+			checkRules(
+				Result.getOrThrow(
+					decodeProjectedManifest({
+						...Object.fromEntries(Object.entries(emptyManifest).filter(([key]) => key !== 'needs')),
+						policies: { treasury: { description: 'Treasury', grants: {} } },
+						automations: { read_advice: { ...valid, input } }
+					})
+				),
+				{ automations: ['read_advice'] },
+				(_role, name) => name
+			).filter((finding) => finding.code === 'automation/input');
+		expect(inspect({ document: { kind: 'id' } })).toEqual([
+			expect.objectContaining({
+				path: 'read_advice',
+				message: expect.stringContaining('["document"]["of"]')
+			})
+		]);
+		expect(inspect(valid.input)).toEqual([]);
+	});
 	it.live(
 		'refuses a label naming an id or a foreign key, and an instant named as a calendar day (model/label, model/instant-date)',
 		() =>
@@ -284,45 +336,6 @@ describe('bolt check', () => {
 			"access/kiosk-grant desk: kiosk 'lobby': items.create lists its columns explicitly; a kiosk takes no open grant",
 			"access/kiosk-grant desk: kiosk 'lobby': items: a kiosk never deletes"
 		]);
-	});
-	it('reads the model sources: a write callback reading inside a loop, a notice through a non-conversation connection (write/read-in-loop, notify/via)', () => {
-		const m: EngineManifest = {
-			...emptyManifest,
-			integrations: { crm: { description: 'CRM', driver: 'http' } },
-			connections: { support: { integration: 'whatsapp' }, books: { integration: 'crm' } }
-		};
-		const text = `import { model } from '@norbital-ai/bolt';
-export default model('orders', {
-	description: 'o', label: 'title', fields: { title: { kind: 'text' } }, read: 'all',
-	create: {
-		columns: { orders: ['title'] },
-		transform: function* (rows, ctx) {
-			const known = yield* ctx.db.query({ orders: { where: { title: { in: rows.map((r) => r.title) } } } });
-			for (const row of rows) yield* ctx.db.query({ orders: { where: { title: { eq: row.title } }, limit: 1 } });
-			return rows;
-		}
-	},
-	update: {
-		columns: { orders: ['title'] },
-		*transform(changes, ctx) {
-			yield* Effect.all(changes.map(function* (c) { return yield* ctx.db.after('orders', { id: { eq: c.before.id } }); }));
-			return changes.map((c) => c.set);
-		}
-	},
-	notify: function* (event, ctx) { for (const x of [1, 2]) yield* ctx.db.query({ orders: { limit: 1 } });
-		return [{ title: 'New', to: [{ team: 'sales' }], via: ['support', 'books', 'nowhere'] }];
-	}
-});`;
-		const found = sourceRules(m, [{ path: 'src/data/model/orders/+model.ts', text }]);
-		expect(found.map((f) => `${f.code} ${f.line}`)).toEqual([
-			'write/read-in-loop 8',
-			'write/read-in-loop 15',
-			'notify/via 20',
-			'notify/via 20'
-		]);
-		expect(found[0]!.message).toContain('a write callback reads inside a loop over its rows');
-		expect(found[2]!.message).toContain("'books' is not one");
-		expect(found[3]!.message).toContain("'nowhere' is not one");
 	});
 	it.live('parses cron strings at build (rule 52)', () =>
 		Effect.gen(function* () {

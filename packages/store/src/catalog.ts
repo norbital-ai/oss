@@ -8,6 +8,7 @@
 import { Effect } from 'effect';
 import * as ReadonlyArray from 'effect/Array';
 import { StoreError } from './errors.ts';
+import { labelPaths } from '@norbital-ai/std/label';
 
 export type FieldInfo = {
 	name: string;
@@ -62,9 +63,18 @@ export type ModelInfo = {
 	/** The primary key's columns: `id`, or the declared key fields. */
 	key: readonly string[];
 	search: readonly string[];
+	recordLabel?: { readonly fields: readonly string[] };
+	/** A live polymorphic reference to another row's indexed identifier; never a copied label. */
+	labelLink?: LabelLink;
 	/** `search.semantic`: the platform embedding `bolt_embedding`, the model class that fills it, and its width. */
 	semantic?: { model: string; dim: number; fields: readonly string[] };
 	indexes: { readonly [name: string]: IndexInfo };
+};
+/** A polymorphic model/id link whose target supplies the current label and its existing text index. */
+export type LabelLink = {
+	readonly model: string;
+	readonly record: string;
+	readonly targets: readonly string[];
 };
 export type IndexInfo = {
 	readonly dim: number;
@@ -100,6 +110,7 @@ export type Catalog = {
 };
 
 export const SEARCH_COLUMN = 'bolt_search';
+export const RECORD_LABEL_COLUMN = 'bolt_record_label';
 /** The platform embedding `search.semantic` keeps, and the probe name that reads it. */
 export const EMBEDDING_COLUMN = 'bolt_embedding',
 	SEMANTIC = '$semantic';
@@ -146,6 +157,8 @@ const INLINE = new Set(['json', 'list', 'object', 'record']);
 /** What the catalog reads of a table: its fields and computed fields, its key and audit columns, and its search. */
 export type CatalogTable = {
 	readonly fields: { readonly [name: string]: KindSpec };
+	readonly recordLabel?: string | undefined;
+	readonly labelLink?: LabelLink | undefined;
 	readonly computed?: { readonly [name: string]: { readonly kind: string } } | undefined;
 	readonly key?: 'uuid' | 'text' | 'identity' | readonly [string, ...string[]] | undefined;
 	readonly audit?: true | undefined;
@@ -345,7 +358,22 @@ export function catalogOf(
 					one: one.get(name) ?? new Map(),
 					many: many.get(name) ?? new Map(),
 					key: ReadonlyArray.isArray<CatalogTable['key']>(spec?.key) ? spec.key : ['id'],
-					search: spec?.search?.text ?? [],
+					search: [
+						...(spec?.search?.text ?? []),
+						...(spec?.recordLabel === undefined ? [] : [RECORD_LABEL_COLUMN])
+					],
+					...(spec?.labelLink === undefined ? {} : { labelLink: spec.labelLink }),
+					...(spec?.recordLabel === undefined
+						? {}
+						: {
+								recordLabel: {
+									fields: [
+										...new Set(
+											labelPaths(spec.recordLabel).map((path) => path.split('.')[0] ?? path)
+										)
+									]
+								}
+							}),
 					indexes: spec?.search?.indexes ?? {},
 					...(semantic === undefined
 						? {}
@@ -376,7 +404,8 @@ export function catalogOf(
 		for (const [path, info] of declared.layers) layers.set(path, info);
 		for (const [name, read] of Object.entries(spec.outputs ?? {})) {
 			const output = levels(byName, root, read);
-			if (output !== undefined) outputs.set(root, (outputs.get(root) ?? new Map()).set(name, output));
+			if (output !== undefined)
+				outputs.set(root, (outputs.get(root) ?? new Map()).set(name, output));
 		}
 	}
 	return { models: byName, exposures: exposed, layers, outputs };
@@ -466,10 +495,7 @@ export function family(f: FieldInfo): string {
 export const q = (name: string): string => `"${name.replaceAll('"', '""')}"`;
 
 /** The model a read names; an unknown name is `invalid`. */
-export const exposureOf = (
-	cat: Catalog,
-	name: string
-): Effect.Effect<ExposureInfo, StoreError> => {
+export const exposureOf = (cat: Catalog, name: string): Effect.Effect<ExposureInfo, StoreError> => {
 	const c = cat.exposures.get(name);
 	return c === undefined
 		? Effect.fail(StoreError.of('invalid', 'decode', `unknown model '${name}'`))

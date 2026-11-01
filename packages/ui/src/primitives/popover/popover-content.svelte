@@ -28,6 +28,31 @@
 	// An overlay is a new page edge: it does not inherit the page's inset owner.
 	resetInset(true);
 
+	// `start`/`end` is a preference: content that does not fit on that side of its trigger takes the other edge when
+	// that side has more room, so it stays attached to the trigger instead of being shifted loose across the screen
+	let flipped = $state(false);
+	const placed = $derived(
+		align === 'center' || !flipped ? align : align === 'start' ? 'end' : 'start'
+	);
+	$effect(() => {
+		const content = ref,
+			preferred = align;
+		flipped = false;
+		if (content === null || preferred === 'center') return;
+		// measured once laid out (before it paints), and again as its content resizes
+		const observer = new ResizeObserver(() => {
+			const trigger = document.querySelector(`[aria-controls="${CSS.escape(content.id)}"]`);
+			if (trigger === null) return;
+			const { left, right } = trigger.getBoundingClientRect();
+			const width = content.offsetWidth;
+			const room = { start: window.innerWidth - left, end: right };
+			const other = preferred === 'start' ? 'end' : 'start';
+			flipped = room[preferred] < width && room[other] > room[preferred];
+		});
+		observer.observe(content);
+		return () => observer.disconnect();
+	});
+
 	/* ═══════════════════════════════════════════════════════════════════ */
 	/* WIDTH CONSTRAINT LOGIC                                               */
 	/* ═══════════════════════════════════════════════════════════════════ */
@@ -64,11 +89,12 @@
 		bind:ref
 		data-slot="popover-content"
 		{sideOffset}
-		{align}
+		align={placed}
 		{onCloseAutoFocus}
 		style={combinedStyle}
 		class={cn(
-			'z-50 origin-(--bits-popover-content-transform-origin) rounded-md border bg-popover text-popover-foreground shadow-md outline-hidden data-[side=bottom]:slide-in-from-top-2 data-[side=left]:slide-in-from-right-2 data-[side=right]:slide-in-from-left-2 data-[side=top]:slide-in-from-bottom-2 data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95 data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95',
+			// never taller than the room on its side: a long popover scrolls rather than covering its own trigger
+			'z-50 max-h-(--bits-popover-content-available-height) overflow-y-auto origin-(--bits-popover-content-transform-origin) rounded-md border bg-popover text-popover-foreground shadow-deep outline-hidden data-[side=bottom]:slide-in-from-top-2 data-[side=left]:slide-in-from-right-2 data-[side=right]:slide-in-from-left-2 data-[side=top]:slide-in-from-bottom-2 data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95 data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95',
 			// Apply padding and className based on whether we have constraints
 			needsWidthConstraints ? '' : 'p-4',
 			needsWidthConstraints ? '' : className

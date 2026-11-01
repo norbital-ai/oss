@@ -11,10 +11,18 @@ export type CommandItem = {
 	description?: string;
 	icon?: string;
 	group?: string;
+	/** A visible scope hint or unavailable capability; cannot be picked. */
+	disabled?: boolean;
 	/** The text that replaces `<char><query>`; default `<char><label> `. `run` alone removes the trigger text. */
 	insert?: string;
-	/** Keep the menu open after inserting: a drill-down (`@employees/` then its records). */
+	/** Keep the menu open after inserting a scope, then search its records. */
 	keep?: boolean;
+	/** Optional deeper search, selected with Tab, → or the row's explore button. Enter picks the item itself. */
+	drill?: { insert: string; label: string };
+	/** Return from an explicit search scope; Escape or Backspace in its empty query uses this row. */
+	back?: boolean;
+	/** Children revealed beneath their expanded manifest entity. */
+	depth?: 1;
 	run?(): void;
 };
 /**
@@ -24,14 +32,16 @@ export type CommandItem = {
 export type CommandTrigger = {
 	char: string;
 	start: 'text' | 'line' | 'word';
+	/** Scoped searches keep a space-separated query; ordinary commands remain one word. */
+	spaces?: boolean;
 	items(query: string): Effect.Effect<readonly CommandItem[], ReadError | Error>;
 };
 export type Found = { trigger: CommandTrigger; start: number; query: string };
 
 /** Longest query still read as a search; past it the character is prose. */
-const LIMIT = 60;
+const LIMIT = 256;
 
-/** The trigger owning the caret: the nearest trigger character before it whose query has no whitespace. */
+/** The nearest valid trigger on this line; only search triggers keep a multiword query. */
 export function findTrigger(
 	text: string,
 	caret: number,
@@ -39,7 +49,7 @@ export function findTrigger(
 ): Found | null {
 	for (let i = caret - 1; i >= 0 && caret - i <= LIMIT + 1; i -= 1) {
 		const c = text[i]!;
-		if (/\s/.test(c)) return null;
+		if (c === '\n' || c === '\r') return null;
 		const trigger = triggers.find((t) => t.char === c);
 		if (trigger === undefined) continue;
 		const before = text.slice(0, i);
@@ -50,7 +60,10 @@ export function findTrigger(
 					? /(^|\n)[ \t]*$/.test(before)
 					: i === 0 || /\s$/.test(before);
 		// a trigger character that does not count here is part of the query (`@employees/Ali` under a line-start `/`)
-		if (ok) return { trigger, start: i, query: text.slice(i + 1, caret) };
+		if (ok) {
+			const query = text.slice(i + 1, caret);
+			return !trigger.spaces && /\s/.test(query) ? null : { trigger, start: i, query };
+		}
 	}
 	return null;
 }

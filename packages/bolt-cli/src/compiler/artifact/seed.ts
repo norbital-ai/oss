@@ -16,6 +16,7 @@ import { assetPath } from '@norbital-ai/bolt/artifact';
 import { rowsIn, seedPack } from '../seed.ts';
 import { BOLT, EXT } from '../bolt.ts';
 import { sha256Hex } from '@norbital-ai/store';
+import { datatypeIssues } from '@norbital-ai/std/kind';
 
 /** Rows per model, the identity rows (`sys_user`, run-time `sys_integration` instances) included, as JSON. */
 export type SeedRows = {
@@ -255,6 +256,18 @@ function checkPack(
 				path,
 				message: `${path}: only ${IDENTITY.join(', ')} are seeded among system exposures, not '${c}'`
 			});
+	// a JSON Schema a row carries (a value declaring `$schema`) names datatypes in `format` only by their exact shapes
+	for (const [c, list] of Object.entries(rows))
+		list.forEach((row, index) => {
+			for (const [field, value] of Object.entries(row))
+				if (Predicate.isObject(value) && Predicate.hasProperty(value, '$schema'))
+					for (const issue of datatypeIssues(value))
+						errors.push({
+							code: 'seed/datatype',
+							path,
+							message: `${path}: ${c}[${index}].${field} ${issue}`
+						});
+		});
 	for (const p of assetRefs(m, rows))
 		if (!assets.some((a) => a.path === p))
 			errors.push({

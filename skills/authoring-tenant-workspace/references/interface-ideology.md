@@ -41,7 +41,7 @@ nest the two primitives instead.
 | Sanctioned overlap            | `Imposter`           |
 
 The catalogue with its Every Layout / Bedrock names is in
-[layout-and-scrolling.md](layout-and-scrolling.md#the-primitive-catalogue). The doctor `layoutPack`
+[layout-and-scrolling.md](layout-and-scrolling.md#the-primitive-catalogue). The layout primitives
 enforces it in every template, Colony and `oss`.
 
 ### 3. Intrinsic over breakpoints
@@ -113,9 +113,10 @@ Keep axis layout in the shared Chart rather than patching each template's chart 
 
 ## Records are summaries, not database rows
 
-Narrow `Table` layouts are record summaries, not database inspectors. Give every model a
-human-readable `label`, and choose `columns` / `Board` `card` fields that say what the record is.
+Narrow `Table` layouts are record summaries, not database inspectors. A model may declare a
+human-readable `record_label` CEL expression over its own fields; its materialized, indexed value is the shared
+identifier in record headers, primary table/list titles, board headings, references and search. Choose `columns` /
+`Board` `card` fields for supporting detail; without a label use the record UUID; do not reconstruct the identifier in each view.
 
-Never expose `id`, UUID fields, or `*_id` relationship keys as a list title or description.
-Use the named record or relationship label; IDs remain internal keys for links, mutations, and
-diagnostics.
+Prefer the declared record or relationship `record_label`; when it is omitted, the record UUID is the standard identifier.
+Use this same fallback in record headers, lists, pickers and references instead of inventing another name.

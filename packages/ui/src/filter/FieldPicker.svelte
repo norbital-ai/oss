@@ -1,6 +1,8 @@
 <script lang="ts">
 	// The view popover's field tree with search (rule 16b): own fields, one-relations (a record condition, or expanded to
 	// the target's fields, two hops) and, at the top, many-relations — exactly the paths the engine's catalogue offers.
+	import FieldIndicator from './FieldIndicator.svelte';
+	import * as Popover from '../primitives/popover/index.js';
 	import { SvelteSet } from 'svelte/reactivity';
 	import type { ModelExposure } from '../kinds/context.js';
 	import { cn } from '../primitives/utils.js';
@@ -12,6 +14,7 @@
 		offeredPaths,
 		pathLabel,
 		resolve,
+		childOf,
 		type FilterStep,
 		type Offer
 	} from './filter.js';
@@ -123,6 +126,8 @@
 			}))
 			.filter((e) => e.label.toLowerCase().includes(q));
 	});
+	const selected = $derived(value === '' ? null : resolve(catalog, model, value));
+	const selectedMany = $derived(childOf(catalog, model, value) !== undefined);
 	const shown = $derived(value === '' ? '' : pathLabel(catalog, model, value, humanize));
 	const pick = (e: Entry) => {
 		onPick(e.path, e.many === true);
@@ -131,100 +136,111 @@
 	};
 </script>
 
-<div
-	class="relative"
-	onfocusout={(e) => {
-		if (!e.currentTarget.contains(e.relatedTarget as Node | null)) open = false;
-	}}
-	onkeydown={(e) => {
-		if (e.key === 'Escape' && open) {
-			e.stopPropagation();
-			open = false;
-		}
-	}}
-	role="presentation"
->
-	<button
-		type="button"
-		class={cn(CONTROL, 'flex w-40 items-center justify-between gap-1 px-2 text-left')}
-		aria-haspopup="listbox"
-		aria-expanded={open}
-		data-field-picker
-		onclick={() => (open = !open)}
+<Popover.Root bind:open>
+	<Popover.Trigger>
+		{#snippet child({ props })}
+			<button
+				{...props}
+				type="button"
+				class={cn(
+					CONTROL,
+					'flex h-auto min-h-8 w-36 max-w-full items-center justify-between gap-2 px-2 py-1 text-left'
+				)}
+				aria-label={shown
+					? `${msg(bolt, 'view.field', 'Field')}: ${shown}`
+					: msg(bolt, 'view.field', 'Field')}
+				data-field-picker
+			>
+				<FieldIndicator resolved={selected} many={selectedMany} nested={value.includes('.')} />
+				<span
+					class={cn(
+						'min-w-0 flex-1 whitespace-normal break-words',
+						value === '' && 'text-muted-foreground font-normal'
+					)}>{shown || msg(bolt, 'view.field', 'Field')}</span
+				>
+				<svg
+					viewBox="0 0 24 24"
+					class="text-muted-foreground size-3.5 shrink-0"
+					fill="none"
+					stroke="currentColor"
+					stroke-width="2"
+					aria-hidden="true"><path d="m7 15 5 5 5-5M7 9l5-5 5 5" /></svg
+				>
+			</button>
+		{/snippet}
+	</Popover.Trigger>
+	<Popover.Content
+		align="start"
+		class="flex w-64 flex-col gap-1 p-1"
+		aria-label={msg(bolt, 'view.field', 'Field')}
+		data-field-list
 	>
-		<span class={cn('min-w-0 truncate', value === '' && 'text-muted-foreground font-normal')}
-			>{shown || msg(bolt, 'view.field', 'Field')}</span
-		>
-		<svg
-			viewBox="0 0 24 24"
-			class="text-muted-foreground size-3.5 shrink-0"
-			fill="none"
-			stroke="currentColor"
-			stroke-width="2"
-			aria-hidden="true"><path d="m7 15 5 5 5-5M7 9l5-5 5 5" /></svg
-		>
-	</button>
-	{#if open}
-		<div
-			class="bg-popover absolute top-full left-0 z-40 mt-1 flex w-64 flex-col gap-1 rounded-md border p-1 shadow-md"
-			data-field-list
-		>
-			<!-- svelte-ignore a11y_autofocus -->
-			<input
-				class="border-input bg-background h-8 w-full rounded-sm border px-2 text-sm outline-none"
-				type="search"
-				autofocus
-				placeholder={msg(bolt, 'view.searchFields', 'Search fields')}
-				bind:value={query}
-			/>
-			<ul class="max-h-64 overflow-auto" role="listbox">
-				{#each entries as e (e.path)}
-					<li
-						class="flex items-center"
-						role="option"
-						aria-selected={e.path === value}
-						style={e.depth > 0 ? `padding-left:${e.depth * 0.75}rem` : undefined}
+		<input
+			class="border-input bg-background h-8 w-full rounded-sm border px-2 text-sm outline-none"
+			type="search"
+			placeholder={msg(bolt, 'view.searchFields', 'Search fields')}
+			bind:value={query}
+		/>
+		<p class="text-muted-foreground px-2 py-1 text-xs">
+			{msg(
+				bolt,
+				'view.fieldHelp',
+				'Icons show field types. Expand a linked record to see its fields.'
+			)}
+		</p>
+		<ul class="max-h-64 overflow-auto" role="listbox">
+			{#each entries as e (e.path)}
+				<li
+					class="flex items-center"
+					role="option"
+					aria-selected={e.path === value}
+					style={e.depth > 0 ? `padding-left:${e.depth * 0.75}rem` : undefined}
+				>
+					<button
+						type="button"
+						class={cn(
+							'hover:bg-muted flex min-w-0 flex-1 items-center gap-2 rounded-sm px-2 py-1.5 text-left text-sm',
+							e.path === value && 'bg-muted'
+						)}
+						data-path={e.path}
+						onclick={() => pick(e)}
 					>
+						<FieldIndicator
+							resolved={resolve(catalog, model, e.path)}
+							many={e.many === true}
+							nested={e.path.includes('.')}
+						/>
+						<span class="min-w-0 flex-1 truncate">{e.label}</span>{#if e.many}{' '}<span
+								class="text-muted-foreground text-xs"
+								>{msg(bolt, 'view.related', 'related records')}</span
+							>{/if}
+					</button>
+					{#if e.open !== undefined}
 						<button
 							type="button"
-							class={cn(
-								'hover:bg-muted min-w-0 flex-1 truncate rounded-sm px-2 py-1.5 text-left text-sm',
-								e.path === value && 'bg-muted'
-							)}
-							data-path={e.path}
-							onclick={() => pick(e)}
+							class="text-muted-foreground hover:bg-muted grid size-8 shrink-0 place-items-center rounded-sm"
+							data-expand={e.path}
+							aria-label={msg(bolt, 'view.expand', 'Fields of {field}', { field: e.label })}
+							aria-expanded={e.open}
+							onclick={() =>
+								expanded.has(e.path) ? expanded.delete(e.path) : expanded.add(e.path)}
 						>
-							{e.label}{#if e.many}{' '}<span class="text-muted-foreground text-xs"
-									>{msg(bolt, 'view.related', 'related records')}</span
-								>{/if}
-						</button>
-						{#if e.open !== undefined}
-							<button
-								type="button"
-								class="text-muted-foreground hover:bg-muted grid size-8 shrink-0 place-items-center rounded-sm"
-								data-expand={e.path}
-								aria-label={msg(bolt, 'view.expand', 'Fields of {field}', { field: e.label })}
-								aria-expanded={e.open}
-								onclick={() =>
-									expanded.has(e.path) ? expanded.delete(e.path) : expanded.add(e.path)}
+							<svg
+								viewBox="0 0 24 24"
+								class={cn('size-3.5 transition-transform', e.open && 'rotate-90')}
+								fill="none"
+								stroke="currentColor"
+								stroke-width="2"
+								aria-hidden="true"><path d="m9 18 6-6-6-6" /></svg
 							>
-								<svg
-									viewBox="0 0 24 24"
-									class={cn('size-3.5 transition-transform', e.open && 'rotate-90')}
-									fill="none"
-									stroke="currentColor"
-									stroke-width="2"
-									aria-hidden="true"><path d="m9 18 6-6-6-6" /></svg
-								>
-							</button>
-						{/if}
-					</li>
-				{:else}
-					<li class="text-muted-foreground px-2 py-1.5 text-xs">
-						{msg(bolt, 'view.noFields', 'No matching fields')}
-					</li>
-				{/each}
-			</ul>
-		</div>
-	{/if}
-</div>
+						</button>
+					{/if}
+				</li>
+			{:else}
+				<li class="text-muted-foreground px-2 py-1.5 text-xs">
+					{msg(bolt, 'view.noFields', 'No matching fields')}
+				</li>
+			{/each}
+		</ul>
+	</Popover.Content>
+</Popover.Root>

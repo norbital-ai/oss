@@ -22,7 +22,7 @@ export const manifest: EngineManifest = {
 		},
 		orders: {
 			...sys,
-			label: 'status',
+			label: [],
 			fields: {
 				status: { kind: 'enum', values: ['open', 'closed', 'held'] },
 				total: { kind: 'decimal', scale: 2 },

@@ -106,8 +106,7 @@ export type IndexSearch<C> =
 type Unit = 'day' | 'week' | 'month' | 'quarter' | 'year';
 /** What `aggregate` buckets by: a readable field, or a date or instant field truncated to a calendar unit. */
 export type Bucket<C, O = 'default'> =
-	| ReadField<C, O>
-	| { [U in Unit]: { readonly [P in U]: ReadField<C, O> } }[Unit];
+	ReadField<C, O> | { [U in Unit]: { readonly [P in U]: ReadField<C, O> } }[Unit];
 type BucketOf<B> = B extends string
 	? B
 	: B extends { readonly [unit: string]: infer F }
@@ -307,6 +306,10 @@ export interface CallerQuery<E = never> {
 	 * A read request: a layer map of roots (models with `read`) and the layers of the output each names, in one crossing
 	 * and ONE statement, under the caller's authority: each root's policies granting that output alone filter it and
 	 * its layers.
+	 * @param request Roots and declared relationship layers, with output, fields, filters, ordering and pagination per layer.
+	 * @returns An Effect containing each root's typed page or aggregate. A page's rows are only that page; follow its cursor for more.
+	 * @see ReadRequest
+	 * @see ReadAnswer
 	 * @example
 	 * const { orders, commercial_settings } = yield* ctx.query({
 	 *   orders: { where: { status: { eq: 'issued' } }, fields: ['number', 'total'], limit: 100 },
@@ -469,8 +472,16 @@ export type Callable = {
 	[C in ModelName]: `${C}.${Verbs<C>}`;
 }[ModelName];
 /**
- * The input a generated write takes (`'<c>.create'`, `'<c>.update'`, …): always an array of rows (inserts, `{ target, set }`
- * or `{ target }`), so the model's write callback sees the whole batch.
+ * The input of a generated model write. Always a batch: create/import take insert trees, update takes
+ * `{ target, set }` entries, delete takes `{ target }`, and upsert takes inserts or patches carrying an `id`.
+ * Fields and child layers come from the model's write exposure, not its read output or complete storage schema.
+ * Optional/defaulted insert fields may be omitted; update patches contain only the fields being changed.
+ * An unknown verb resolves to `never`. Regenerate workspace names after changing declarations before inspecting this type.
+ * @example
+ * type CreateOrders = ActInput<'orders.create'>;
+ * type UpdateOrders = ActInput<'orders.update'>;
+ * @see Callable
+ * @see ActOutput
  */
 export type ActInput<N> = N extends `${infer C}.${infer V}`
 	? V extends 'create'
@@ -493,7 +504,16 @@ export type ImportReport<C> = {
 		readonly action: 'created' | 'updated' | 'kept' | 'skipped' | 'deleted';
 	}[];
 };
-/** The output returned by a generated write; upserts and imports report their row resolutions. */
+/**
+ * The output inside a successful generated write receipt: create/update/delete return `null`, upsert returns
+ * ids (or `null`) in input order, and import returns a per-row resolution report. Written ids and revisions are
+ * on the receipt's `records`; this type is not the whole receipt and does not imply that approval has completed.
+ * @example
+ * type ImportResult = ActOutput<'orders.import'>;
+ * @see ActInput
+ * @see Committed
+ * @see PendingApproval
+ */
 export type ActOutput<N> = N extends `${infer C}.${infer V}`
 	? V extends 'upsert'
 		? readonly (Id<C> | null)[]

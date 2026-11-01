@@ -73,16 +73,17 @@ Do not mount a lookup read per row. A view column that names a relation shows th
 `label` on its own; a custom page names the relation as a declared layer in the one read request
 it already makes. See [data-access.md](data-access.md#one-read-request-never-n1).
 
-### 6. Never show system UUIDs — even for relationships
+### 6. Record identifiers and UUID fallback
 
-`id` and relation id values are system keys. They must not appear as text, as "… Id" labels, as
-picker option labels, as a model `label`, or as fallbacks when a map misses.
+Use the model’s optional `record_label` CEL identifier consistently. When no label is declared or usable,
+use its record id (UUID), including in pickers, relationships, list headings and approval references.
+Do not duplicate the identifier into another field or create a UUID text-search index merely for display.
 
 | Surface                           | Required                                                                                |
 | --------------------------------- | --------------------------------------------------------------------------------------- |
 | `Table` / `Board` relation column | name the relation (a FK or a many-relation); the target's `label` renders automatically |
 | `Form` relation `Field`, `Picker` | the picker shows the target's `label`; `label`, `orderBy`, `limit`, `where` narrow it   |
-| Charts / summaries                | keys are labels, never ids                                                              |
+| Charts / summaries                | keys use record labels, falling back to UUIDs                                           |
 
 ```svelte
 <!-- WRONG -->
@@ -100,7 +101,7 @@ picker option labels, as a model `label`, or as fallbacks when a map misses.
 />
 ```
 
-Doctor rejects a system field (`id`, `revision`, …) as a column or field. Pass a stored
+The compiler rejects a system field (`id`, `revision`, …) as a column or field. Pass a stored
 record's identity through the component's `id` prop, never through an editable field.
 An update `Form` needs `id={record.id}` even when it also receives `{record}`. The `record`
 prop supplies values; the `id` selects the native update target and lets the form share the

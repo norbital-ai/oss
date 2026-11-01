@@ -21,8 +21,10 @@ import {
 import type { Json } from '../src/decl/values.ts';
 import { mcpServers, mcpSessions } from '../src/engine/agent/mcp.ts';
 import type { AiRequest, AiResponse, Ingested } from '../src/engine/contracts.ts';
-import { callKey, FIXED, rest } from '../src/engine/agent/index.ts';
+import { callKey, FIXED, rest, type AgentHostConfig } from '../src/engine/agent/index.ts';
+import { transcriptRow } from '../src/engine/agent/schema.ts';
 import { COMPACT_FORMAT } from '../src/engine/agent/context.ts';
+import { requestEvidence } from '../src/engine/agent/request.ts';
 import type { MessageRow } from '../src/engine/agent/schema.ts';
 import { Authorities } from '../src/engine/identity/actor.ts';
 import type { EngineManifest } from '../src/engine/manifest.ts';
@@ -347,7 +349,10 @@ const TENDER: Ingested = {
 	images: [{ name: 'image-1.png', mime: 'image/png', bytes: new Uint8Array([0x89, 0x50]) }],
 	meta: { stats: { pages: 2, bytes: 100, cpuMs: 40, wallMs: 90 } }
 };
-const build = (ai: ReturnType<typeof cassette>) =>
+const build = (
+	ai: ReturnType<typeof cassette>,
+	host: Pick<AgentHostConfig, 'hostTools' | 'onTurnStart'> = {}
+) =>
 	Effect.gen(function* () {
 		const hq = yield* mcpFixture;
 		const values: Record<string, string> = {
@@ -369,7 +374,7 @@ const build = (ai: ReturnType<typeof cassette>) =>
 				),
 				// the host clock starts at the wall clock, as a turn drained from a live test reads it
 				now: new Date().toISOString(),
-				host: { agent: { mcp: { secret: (name) => Effect.succeed(values[name]) } } }
+				host: { agent: { ...host, mcp: { secret: (name) => Effect.succeed(values[name]) } } }
 			})
 		);
 		const t = Context.get(context, TestWorkspace),
@@ -462,6 +467,177 @@ const quotes = (t: Kit, title: string) =>
 	});
 
 describe('in-app turns', () => {
+	it.live(
+		'the atomic act tool holds native invitations for the administrator and confirms once',
+		() =>
+			Effect.scoped(
+				Effect.gen(function* () {
+					const { agent, user, authority, t } = yield* setup([
+						use('act', {
+							callable: 'sys_invitation.create',
+							input: [{ email: 'invited-by-norbius@example.test', team: 'rep' }]
+						}),
+						say('Invitation created.')
+					]);
+					const ann = yield* user('invite-admin', { admin: true });
+					const bob = yield* user('invite-other', { admin: true });
+					const c = yield* agent.start({ owner: ann });
+					yield* agent.post({
+						conversation: c,
+						as: { member: ann },
+						text: 'Invite this member to the rep team'
+					});
+					yield* agent.drain(c);
+					const held = (yield* agent.transcript(c)).find((row) => row.state === 'confirm');
+					if (held === undefined) throw new Error('Expected invitation approval');
+					const invitations = t.db.rows(
+						Schema.Struct({ email: Schema.String, invited_by: Schema.String }),
+						{
+							text: 'SELECT email, invited_by FROM sys_invitation WHERE email = $1',
+							params: ['invited-by-norbius@example.test']
+						}
+					);
+					expect(yield* invitations).toEqual([]);
+					expect(
+						yield* agent
+							.confirm(held.id, true, { ...(yield* authority(ann)), agent: { conversation: c } })
+							.pipe(Effect.flip)
+					).toMatchObject({ _tag: 'AgentRefusal' });
+					expect(
+						yield* agent.confirm(held.id, true, yield* authority(bob)).pipe(Effect.flip)
+					).toMatchObject({ _tag: 'AgentRefusal' });
+					yield* agent.confirm(held.id, true, yield* authority(ann));
+					expect(yield* invitations).toEqual([
+						{ email: 'invited-by-norbius@example.test', invited_by: ann }
+					]);
+					expect(
+						yield* agent.confirm(held.id, true, yield* authority(ann)).pipe(Effect.flip)
+					).toMatchObject({ _tag: 'AgentRefusal' });
+					expect(yield* invitations).toHaveLength(1);
+				})
+			)
+	);
+	it.live('optional host packs survive model steps, disable, and reset for a new turn', () =>
+		Effect.scoped(
+			Effect.gen(function* () {
+				const ai = cassette([
+					use('tools', { enable: ['browser'] }),
+					use('browser_snapshot', {}),
+					use('tools', { disable: ['browser'] }),
+					use('tools', { enable: ['browser'] }),
+					say('MOCKED inspection complete.')
+				]);
+				let snapshots = 0;
+				const { agent, user } = yield* build(ai, {
+					hostTools: [
+						{
+							name: 'browser_snapshot',
+							pack: 'browser',
+							description: 'MOCKED browser snapshot',
+							input: { type: 'object', properties: {}, additionalProperties: false },
+							readOnly: true,
+							call: async () => {
+								snapshots++;
+								return { text: 'MOCKED page' };
+							}
+						}
+					]
+				});
+				const ann = yield* user('MOCKED-tool-packs', { admin: true });
+				const c = yield* agent.start({ owner: ann });
+				yield* agent.post({ conversation: c, as: { member: ann }, text: 'Inspect the page' });
+				yield* agent.drain(c);
+				expect(toolNames(ai.requests[0])).not.toContain('browser_snapshot');
+				expect(toolNames(ai.requests[1])).toContain('browser_snapshot');
+				expect(toolNames(ai.requests[2])).toContain('browser_snapshot');
+				expect(toolNames(ai.requests[3])).not.toContain('browser_snapshot');
+				expect(toolNames(ai.requests[4])).toContain('browser_snapshot');
+				expect(snapshots).toBe(1);
+				ai.arm([say('MOCKED new turn.')]);
+				yield* agent.post({ conversation: c, as: { member: ann }, text: 'A different task' });
+				yield* agent.drain(c);
+				expect(toolNames(ai.requests[0])).not.toContain('browser_snapshot');
+			})
+		)
+	);
+	it.live(
+		'host approvals expire once at the next turn and disappear from the live transcript',
+		() =>
+			Effect.scoped(
+				Effect.gen(function* () {
+					const ai = cassette();
+					ai.arm([
+						use('request_publish', {}),
+						say('Waiting for approval.'),
+						say('Previous request rejected.')
+					]);
+					const pending = new Set<string>();
+					let starts = 0;
+					const { agent, user } = yield* build(ai, {
+						onTurnStart: async () => {
+							starts++;
+							const ids = [...pending];
+							pending.clear();
+							return ids;
+						},
+						hostTools: [
+							{
+								name: 'request_publish',
+								description: 'Fixture publish request',
+								input: { type: 'object', properties: {}, additionalProperties: false },
+								readOnly: true,
+								call: async () => {
+									pending.add('request');
+									return { approval: { id: 'request' } };
+								}
+							}
+						]
+					});
+					const ann = yield* user('host-approval', { admin: true });
+					const c = yield* agent.start({ owner: ann });
+					yield* agent.post({ conversation: c, as: { member: ann }, text: 'Publish' });
+					yield* agent.drain(c);
+					const held = (yield* agent.transcript(c)).find(
+						(row) => transcriptRow(row, true, false)?.tool?.approval === 'request'
+					);
+					if (held === undefined) throw new Error('Expected a host approval');
+					yield* agent.post({ conversation: c, as: { member: ann }, text: 'Start a new turn' });
+					yield* agent.drain(c);
+					expect(starts).toBe(2);
+					expect(pending.size).toBe(0);
+					const settled = (yield* agent.transcript(c)).find((row) => row.id === held.id);
+					if (settled === undefined) throw new Error('Missing settled tool');
+					expect(settled).toMatchObject({ content: { result: { declined: true } } });
+					expect(transcriptRow(settled, true, false)?.tool?.approval).toBeUndefined();
+				})
+			)
+	);
+	it.live('a new turn rejects an unanswered tool confirmation and refuses a late approval', () =>
+		Effect.scoped(
+			Effect.gen(function* () {
+				const { agent, user, authority, t } = yield* setup([
+					use('act', { callable: 'automation.quotes_mark', input: { title: 'Never created' } }),
+					say('Understood, cancelled.')
+				]);
+				const ann = yield* user('new-turn', { team: 'rep' });
+				const c = yield* agent.start({ owner: ann });
+				yield* agent.post({ conversation: c, as: { member: ann }, text: 'Mark this quote' });
+				yield* agent.drain(c);
+				const held = (yield* agent.transcript(c)).find((row) => row.state === 'confirm');
+				if (held === undefined) throw new Error('Expected a confirmation');
+				yield* agent.post({ conversation: c, as: { member: ann }, text: 'Start over' });
+				yield* agent.drain(c);
+				expect((yield* agent.transcript(c)).find((row) => row.id === held.id)).toMatchObject({
+					state: null,
+					content: { result: { declined: true, reason: 'A new turn started before approval.' } }
+				});
+				expect(
+					yield* agent.confirm(held.id, true, yield* authority(ann)).pipe(Effect.flip)
+				).toMatchObject({ _tag: 'AgentRefusal' });
+				expect(yield* quotes(t, 'Never created')).toEqual([]);
+			})
+		)
+	);
 	it.live(
 		'acts as the member, records tool rows, and ends on a reply carrying its receipts (rule 59)',
 		() =>
@@ -594,6 +770,35 @@ describe('in-app turns', () => {
 			)
 	);
 
+	it.live('a large model window is used as the model provides it, without a smaller host cap', () =>
+		Effect.scoped(
+			Effect.gen(function* () {
+				const fixture = yield* setup(
+					[
+						use('history', { query: 'x' }, 'd1', 200_000),
+						say('| Section | Summary |\n|---|---|\n| Goal | g |'),
+						say('Done.')
+					],
+					{
+						models: [{ id: 'vendor/large', label: 'Large', context: 1_000_000 }],
+						default: 'vendor/large'
+					}
+				);
+				return yield* Effect.gen(function* () {
+					const { ai, agent, user } = fixture;
+					const root = yield* user('root', { admin: true });
+					const c = yield* agent.start({ owner: root });
+					yield* agent.post({ conversation: c, as: { member: root }, text: 'go' });
+					yield* agent.drain(c);
+					// 200k is 20% of a 1M window: no checkpoint is forced
+					expect(ai.requests[1]!.system).not.toBe(COMPACT_FORMAT);
+					const after = ai.requests[1]!.messages.map((x) => JSON.stringify(x.content));
+					expect(after.some((x) => x.includes('context checkpoint'))).toBe(false);
+				}).pipe(Effect.provide(fixture.context));
+			})
+		)
+	);
+
 	it.live(
 		'an external member without an external brief has no agent; a staff brief never reaches them',
 		() =>
@@ -647,9 +852,17 @@ describe('envoy conversations', () => {
 						const { reply } = yield* agent.drain(c);
 						expect(reply?.text).toBe(FIXED.failed);
 						expect(JSON.stringify(reply)).not.toContain('sk-123');
-						expect(t.fakes.logs.filter((r) => r.conversation === c).map((r) => r.severity)).toEqual(
-							['error']
+						expect(
+							t.fakes.logs
+								.filter((r) => r.conversation === c && r.event === 'agent.failed')
+								.map((r) => r.severity)
+						).toEqual(['error']);
+						const trace = t.fakes.logs.filter(
+							(r) => r.conversation === c && r.event.startsWith('ai.request')
 						);
+						expect(trace.map((r) => r.event)).toEqual(['ai.request', 'ai.request.finished']);
+						expect(trace[1]?.attributes).toMatchObject({ status: 'failed', finish: null });
+						expect(JSON.stringify(trace)).not.toContain('sk-123');
 					}).pipe(Effect.provide(fixture.context));
 				})
 			)
@@ -669,6 +882,36 @@ describe('envoy conversations', () => {
 					expect((yield* agent.transcript(c))[0]!.state).toBe('cancelled');
 					yield* agent.post({ conversation: c, as: { member: root }, text: 'two' });
 					expect((yield* agent.resume(c)).reply?.text).toBe('late');
+					expect(ai.requests).toHaveLength(1);
+				}).pipe(Effect.provide(fixture.context));
+			})
+		)
+	);
+	it.live('a stale Resume cannot reset a turn already restarted by a follow-up', () =>
+		Effect.scoped(
+			Effect.gen(function* () {
+				const started = yield* Deferred.make<void>();
+				const release = yield* Deferred.make<void>();
+				const fixture = yield* setup([
+					(request) =>
+						Stream.unwrap(
+							Deferred.succeed(started, undefined).pipe(
+								Effect.andThen(Deferred.await(release)),
+								Effect.as(say('Continued.')(request))
+							)
+						)
+				]);
+				return yield* Effect.gen(function* () {
+					const { agent, user, ai } = fixture;
+					const root = yield* user('root', { admin: true });
+					const c = yield* agent.start({ owner: root });
+					yield* agent.post({ conversation: c, as: { member: root }, text: 'Continue.' });
+					const turn = yield* Effect.forkChild(agent.drain(c));
+					yield* Deferred.await(started);
+					expect((yield* agent.resume(c)).ran).toBe(false);
+					expect((yield* agent.conversation(c)).status).toBe('running');
+					yield* Deferred.succeed(release, undefined);
+					expect((yield* Fiber.join(turn)).reply?.text).toBe('Continued.');
 					expect(ai.requests).toHaveLength(1);
 				}).pipe(Effect.provide(fixture.context));
 			})
@@ -1197,13 +1440,65 @@ describe('a tool answer that stops short says where the rest is', () => {
 			})
 		)
 	);
+	it.live(
+		'read_output with an unknown call falls back to the latest clipped result, with a note',
+		() =>
+			Effect.scoped(
+				Effect.gen(function* () {
+					const fixture = yield* setup([
+						use('act', {
+							callable: 'quotes.create',
+							input: [{ title: `Long ${'x'.repeat(9000)}` }]
+						}),
+						use('read', { quotes: { where: { title: { like: 'Long %' } } } }, 'long-read'),
+						use('read_output', { call: 'not-a-call', offset: 0 }, 'read-more'),
+						say('One.')
+					]);
+					return yield* Effect.gen(function* () {
+						const { ai, agent, user } = fixture;
+						const root = yield* user('root', { admin: true });
+						const c = yield* agent.start({ owner: root });
+						yield* agent.post({ conversation: c, as: { member: root }, text: 'Long quotes?' });
+						yield* agent.drain(c);
+						expect(toolResults(ai.requests[3]!).at(-1)).toMatchObject({
+							note: expect.stringContaining('this is the latest clipped result')
+						});
+					}).pipe(Effect.provide(fixture.context));
+				})
+			)
+	);
+	it.live('a call that failed repeatedly runs again after another call worked', () =>
+		Effect.scoped(
+			Effect.gen(function* () {
+				const bad = { nope: { limit: 1 } };
+				const fixture = yield* setup([
+					use('read', bad, 'bad-1'),
+					use('read', bad, 'bad-2'),
+					use('read', bad, 'bad-3'),
+					use('read', { quotes: { limit: 1 } }, 'good'),
+					use('read', bad, 'bad-4'),
+					say('One.')
+				]);
+				return yield* Effect.gen(function* () {
+					const { ai, agent, user } = fixture;
+					const root = yield* user('root', { admin: true });
+					const c = yield* agent.start({ owner: root });
+					yield* agent.post({ conversation: c, as: { member: root }, text: 'Quotes?' });
+					yield* agent.drain(c);
+					const last = toolResults(ai.requests[5]!).at(-1) as { error?: string };
+					expect(last.error).toBeDefined();
+					expect(last.error).not.toContain('Not run');
+				}).pipe(Effect.provide(fixture.context));
+			})
+		)
+	);
 	it('paged tools and a tool that cut its own answer: one line each naming the call that reads on', () => {
 		expect(rest('runs', 'r1', { runs: [], next: '["t","id"]' })).toEqual([
 			`runs (call 'r1'): more follows; the rest: call runs again with the same arguments and cursor: "[\\"t\\",\\"id\\"]"`
 		]);
 		expect(rest('logs', 'l1', { entries: [], next: 'e9' })[0]).toContain('cursor: "e9"');
 		expect(rest('read_output', 'o1', { text: '…', next: 1200 })[0]).toContain('offset: 1200');
-		expect(rest('workspace_search', 'w1', { lines: [], next: 41 })[0]).toContain('from: 41');
+		expect(rest('workspace_read', 'w1', { lines: [], next: 41 })[0]).toContain('from: 41');
 		expect(rest('browser_snapshot', 'b1', { text: '…', next: 300 })[0]).toContain('from: 300');
 		expect(
 			rest('read_file', 'f1', {
@@ -1291,13 +1586,15 @@ describe('metering (L-BOLT-432, L-BOLT-547)', () => {
 		() =>
 			Effect.scoped(
 				Effect.gen(function* () {
-					const pricey: Step = () =>
-						answer({
+					const pricey: Step = () => {
+						expect(fixture.t.fakes.logs.some((row) => row.event === 'ai.request')).toBe(true);
+						return answer({
 							content: '',
 							toolCalls: [{ id: 'd1', name: 'history', input: { query: 'x' } }],
 							finish: 'tool',
 							usage: { input: 3, output: 1, cost: 6, call: 'gen-1' }
 						});
+					};
 					const unpriced: Step = () =>
 						answer({
 							content: 'Done.',
@@ -1307,23 +1604,61 @@ describe('metering (L-BOLT-432, L-BOLT-547)', () => {
 						});
 					const fixture = yield* setup([pricey, unpriced]);
 					return yield* Effect.gen(function* () {
-						const { t, agent, user } = fixture;
+						const { t, agent, user, ai } = fixture;
 						const root = yield* user('root', { admin: true });
 						const c = yield* agent.start({ owner: root });
 						yield* agent.post({ conversation: c, as: { member: root }, text: 'go' });
 						const { reply } = yield* agent.drain(c);
 						expect(reply?.text).toBe('Done.');
+						expect(ai.requests).toHaveLength(2);
+						expect(ai.requests.every((request) => request.purpose === 'chat')).toBe(true);
 						expect(reply?.meta).toMatchObject({ usage: { calls: 2, cost: 6, model: 'default' } });
+						const trace = t.fakes.logs.filter(
+							(row) => row.conversation === c && row.event.startsWith('ai.request')
+						);
+						expect(trace.map((row) => row.event)).toEqual([
+							'ai.request',
+							'ai.request.finished',
+							'ai.request',
+							'ai.request.finished'
+						]);
+						const calls = yield* events(t, c);
+						const requestOf = Schema.decodeUnknownSync(Schema.Struct({ request: Schema.String }));
+						for (const [index, request] of ai.requests.entries()) {
+							const prepared = trace[index * 2]?.attributes;
+							expect(prepared).toMatchObject({
+								phase: 'prepared',
+								evidence: requestEvidence(request)
+							});
+							expect(trace[index * 2 + 1]?.attributes).toMatchObject({
+								request: requestOf(prepared).request,
+								status: 'answered',
+								finish: index === 0 ? 'tool' : 'stop'
+							});
+							expect(requestOf(calls[index]?.attributes).request).toBe(requestOf(prepared).request);
+						}
+						expect(requestOf(trace[0]?.attributes).request).not.toBe(
+							requestOf(trace[2]?.attributes).request
+						);
+						expect(JSON.stringify(trace)).not.toContain('Staff brief.');
 						// the request's size in characters, per part
 						const prompt = {
 							system: expect.any(Number),
 							messages: expect.any(Number),
 							tools: expect.any(Number)
 						};
+						const memory = {
+							rssMiB: expect.any(Number),
+							heapUsedMiB: expect.any(Number),
+							heapTotalMiB: expect.any(Number),
+							externalMiB: expect.any(Number)
+						};
 						expect(yield* events(t, c)).toEqual([
 							{
 								severity: 'warn',
 								attributes: {
+									category: 'chat',
+									request: expect.any(String),
 									call: 'gen-1',
 									model: 'default',
 									input: 3,
@@ -1333,12 +1668,15 @@ describe('metering (L-BOLT-432, L-BOLT-547)', () => {
 									reasoning: null,
 									prompt,
 									settlement: 'pending',
-									gauge: 5
+									gauge: 5,
+									...memory
 								}
 							},
 							{
 								severity: 'warn',
 								attributes: {
+									category: 'chat',
+									request: expect.any(String),
 									call: null,
 									model: 'default',
 									input: 3,
@@ -1347,7 +1685,8 @@ describe('metering (L-BOLT-432, L-BOLT-547)', () => {
 									cached: null,
 									reasoning: null,
 									prompt,
-									settlement: 'attention'
+									settlement: 'attention',
+									...memory
 								}
 							}
 						]);

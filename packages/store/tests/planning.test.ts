@@ -15,6 +15,90 @@ import {
 import { database, script } from './support.ts';
 
 describe('lossless schema planning', () => {
+	it.live('adds, recalculates and removes an optional indexed record label on existing rows', () =>
+		Effect.scoped(
+			Effect.gen(function* () {
+				const source = (recordLabel?: string) =>
+					schema({
+						people: table({
+							key: 'text',
+							fields: { name: { kind: 'text' } },
+							...(recordLabel === undefined ? {} : { recordLabel })
+						})
+					});
+				const pg = yield* database;
+				let current = source();
+				yield* script(pg, `${(yield* build(current)).join(';\n')};`);
+				yield* script(pg, "insert into people (id, name) values ('person', 'Ada')");
+				let number = 2;
+				for (const [expression, expected] of [
+					["'First ' + record.name", 'First Ada'],
+					["'Second ' + record.name", 'Second Ada']
+				] as const) {
+					const next = source(expression);
+					const migration = yield* generate(current, next, {
+						number: number++,
+						name: 'identifier'
+					});
+					yield* script(pg, migration.file.sql);
+					const result = yield* Effect.promise(() =>
+						pg.query<{ bolt_record_label: string }>(
+							`select bolt_record_label from people where bolt_search @@ plainto_tsquery('simple', '${expected}')`
+						)
+					);
+					expect(result.rows).toEqual([{ bolt_record_label: expected }]);
+					current = next;
+				}
+				const removal = yield* generate(current, source(), { number, name: 'remove_identifier' });
+				yield* script(pg, removal.file.sql);
+				const remaining = yield* Effect.promise(() =>
+					pg.query<{ name: string }>('select name from people')
+				);
+				expect(remaining.rows).toEqual([{ name: 'Ada' }]);
+				const hidden = yield* Effect.promise(() =>
+					pg.query<{ column_name: string }>(
+						"select column_name from information_schema.columns where table_name='people' and column_name in ('bolt_record_label', 'bolt_search')"
+					)
+				);
+				expect(hidden.rows).toEqual([]);
+			})
+		)
+	);
+	it.live('adds search fields before rebuilding the generated document on populated tables', () =>
+		Effect.scoped(
+			Effect.gen(function* () {
+				const old = schema({
+					requests: table({
+						key: 'text',
+						fields: { title: { kind: 'text' } },
+						search: { text: ['title'] }
+					})
+				});
+				const next = schema({
+					requests: table({
+						key: 'text',
+						fields: { title: { kind: 'text' }, record_label: { kind: 'text', optional: true } },
+						search: { text: ['record_label'] }
+					})
+				});
+				const pg = yield* database;
+				yield* script(pg, `${(yield* build(old)).join(';\n')};`);
+				yield* script(pg, "insert into requests (id, title) values ('request', 'Original')");
+				const migration = yield* generate(old, next, { number: 2, name: 'labels' });
+				yield* script(pg, migration.file.sql);
+				yield* script(
+					pg,
+					"update requests set record_label = 'Overnight travel' where id = 'request'"
+				);
+				const result = yield* Effect.promise(() =>
+					pg.query<{ title: string; record_label: string }>(
+						"select title, record_label from requests where bolt_search @@ plainto_tsquery('simple', 'travel')"
+					)
+				);
+				expect(result.rows).toEqual([{ title: 'Original', record_label: 'Overnight travel' }]);
+			})
+		)
+	);
 	it.effect('preserves distinct host-owned table identities in an unchanged plan', () =>
 		Effect.gen(function* () {
 			const empty = schema({});

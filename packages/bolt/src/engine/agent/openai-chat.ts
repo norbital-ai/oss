@@ -75,6 +75,8 @@ function messagesOf(r: AiRequest): Wire[] {
 			m.role === 'tool' ? Option.toArray(Option.map(stepOf(m.content), (step) => step.id)) : []
 		)
 	);
+	/** Assistant tool-call ids still awaiting their result, in the order the provider sent them. */
+	const pending: string[] = [];
 	// the files the run of tool results just written opened, as one user message after it
 	let ran: string[] = [];
 	const opened = () => {
@@ -87,17 +89,25 @@ function messagesOf(r: AiRequest): Wire[] {
 	for (const [n, m] of r.messages.entries()) {
 		if (m.role !== 'tool') opened();
 		if (m.role === 'tool') {
-			const step = Option.getOrUndefined(stepOf(m.content));
-			if (step?.id !== undefined) ran.push(step.id);
-			out.push({
-				role: 'tool',
-				tool_call_id: step?.id ?? '',
-				content: JSON.stringify(step?.result ?? null)
-			});
+			const step = Option.getOrUndefined(stepOf(m.content)),
+				claimed = step?.id === undefined || step.id === '' ? undefined : step.id,
+				held = claimed === undefined ? -1 : pending.indexOf(claimed);
+			if (held >= 0) pending.splice(held, 1);
+			const id = claimed ?? pending.shift();
+			if (claimed !== undefined) ran.push(claimed);
+			// a result the transcript can no longer decode still answers the call before it; an orphan is user text
+			if (id === undefined) out.push({ role: 'user', content: textOf(m.content) });
+			else
+				out.push({
+					role: 'tool',
+					tool_call_id: id,
+					content: JSON.stringify(step?.result ?? null)
+				});
 		} else if (m.role === 'assistant') {
 			const said = Option.getOrUndefined(saidOf(m.content)),
 				reply = typeof said === 'object' ? said : null,
 				calls = reply?.toolCalls ?? [];
+			pending.push(...calls.map((t) => t.id).filter((id) => id !== ''));
 			// L-BOLT-412: the stored reasoning goes back with its reply (OpenRouter's `reasoning` on an assistant message)
 			out.push({
 				role: 'assistant',
@@ -163,7 +173,13 @@ const Chunk = Schema.Struct({
 		)
 	),
 	choices: Schema.optional(
-		Schema.Array(Schema.Struct({ delta: Schema.optional(Part), message: Schema.optional(Part) }))
+		Schema.Array(
+			Schema.Struct({
+				delta: Schema.optional(Part),
+				message: Schema.optional(Part),
+				finish_reason: Schema.optional(Schema.NullOr(Schema.String))
+			})
+		)
 	)
 });
 const decodeChunk = Schema.decodeUnknownEffect(Schema.fromJsonString(Chunk));
@@ -191,6 +207,8 @@ export function openAiChat(config: OpenAiChatConfig, options: HttpOptions = {}):
 				let text = '',
 					reasoning = '',
 					id = '';
+				// the provider's own last choice: `length` means the reply was cut, not that the model stopped
+				let finishReason: string | null = null;
 				let usage: NonNullable<Schema.Schema.Type<typeof Chunk>['usage']> = {};
 				const calls: Call[] = [];
 				const model = config.models[request.model] ?? request.model;
@@ -296,6 +314,7 @@ export function openAiChat(config: OpenAiChatConfig, options: HttpOptions = {}):
 						id = chunk.id;
 					}
 					if (chunk.usage != null) usage = chunk.usage;
+					finishReason = chunk.choices?.[0]?.finish_reason ?? finishReason;
 					const part = whole ? chunk.choices?.[0]?.message : chunk.choices?.[0]?.delta;
 					if (part?.content != null && part.content !== '') {
 						text += part.content;
@@ -353,9 +372,13 @@ export function openAiChat(config: OpenAiChatConfig, options: HttpOptions = {}):
 					).pipe(Port.call('ai.meter', LIMITS.callMs.ai));
 				const toolCalls = calls.map((c) =>
 					Option.match(parseJson(c.args === '' ? '{}' : c.args), {
-						onSome: (input) => ({ id: c.id, name: c.name, input }),
+						onSome: (input) => ({
+							id: c.id === '' ? `call_${crypto.randomUUID()}` : c.id,
+							name: c.name,
+							input
+						}),
 						onNone: () => ({
-							id: c.id,
+							id: c.id === '' ? `call_${crypto.randomUUID()}` : c.id,
 							name: c.name,
 							input: {},
 							invalid: 'the tool arguments are not valid JSON'
@@ -369,7 +392,7 @@ export function openAiChat(config: OpenAiChatConfig, options: HttpOptions = {}):
 				const response: AiResponse = {
 					content,
 					toolCalls,
-					finish: toolCalls.length > 0 ? 'tool' : 'stop',
+					finish: finishReason === 'length' ? 'cut' : toolCalls.length > 0 ? 'tool' : 'stop',
 					...(reasoning === '' ? {} : { reasoning }),
 					usage: {
 						input: usage.prompt_tokens ?? 0,

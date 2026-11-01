@@ -4,13 +4,25 @@
 // (a model's read and write layers, a policy's grant layers), syncs (their connection, parsers, cadence and instance), embedding
 // origins; and, over the model sources, a write callback reading inside a loop and a notice sent through a connection that
 // carries no conversation. Each finding names the declaring file.
-import { Array, Predicate, Result } from 'effect';
-import ts from 'typescript';
+import { Array, Predicate, Result, Schema } from 'effect';
 import { LIMITS, sizeBytes } from '@norbital-ai/bolt/engine';
 import type { EngineManifest, GrantData } from '@norbital-ai/bolt/engine';
-import { layerModels, scopeObject, parseRate, DRIVERS, SYSTEM } from '@norbital-ai/bolt/tooling';
+import {
+	FieldsSchema,
+	layerModels,
+	scopeObject,
+	parseRate,
+	DRIVERS,
+	SYSTEM
+} from '@norbital-ai/bolt/tooling';
 import { type IntegrationSpec } from '@norbital-ai/bolt';
 import { clockDefault } from '@norbital-ai/std/vars';
+import {
+	labelExpression,
+	labelPaths,
+	recordLabelSpec,
+	recordLabelExpression
+} from '@norbital-ai/std/label';
 
 export type Finding = { code: string; path: string; message: string; line?: number };
 const isList = <T>(v: T | readonly T[]): v is readonly T[] => Array.isArray(v);
@@ -56,7 +68,9 @@ export function cronValid(s: string): boolean {
 }
 
 /** The read grants a model grant holds, by output: `read` is `default`'s, `outputs` the named ones'. */
-const grantedOutputs = (g: GrantData): readonly (readonly [string, NonNullable<GrantData['read']>])[] => [
+const grantedOutputs = (
+	g: GrantData
+): readonly (readonly [string, NonNullable<GrantData['read']>])[] => [
 	...(g.read === undefined ? [] : [['default', g.read] as const]),
 	...Object.entries(g.outputs ?? {})
 ];
@@ -66,7 +80,11 @@ const outputLayers = (m: EngineManifest, c: string, output: string) => {
 	return output === 'default' ? spec?.read : spec?.outputs?.[output];
 };
 /** The root fields output `output` of `c` lists; `undefined`: every field (`'all'`) or no such output. */
-const outputFields = (m: EngineManifest, c: string, output: string): readonly string[] | undefined => {
+const outputFields = (
+	m: EngineManifest,
+	c: string,
+	output: string
+): readonly string[] | undefined => {
 	const fields = outputLayers(m, c, output)?.[c]?.fields;
 	return fields === undefined || fields === 'all' ? undefined : fields;
 };
@@ -269,7 +287,35 @@ function modelRules({ m, bodies, at }: RuleContext): void {
 				);
 		}
 		// a label is what a person reads for the row: an id or a foreign key would show as a uuid
-		for (const l of list(spec.label))
+		const identifier = recordLabelExpression(spec) ?? recordLabelSpec(spec);
+		if (typeof identifier === 'string') {
+			const program = labelExpression(identifier);
+			if ('error' in program) at('model/label', 'model', model, program.error);
+		}
+		for (const l of labelPaths(identifier)) {
+			if (l.includes('.') && m.relationships[`${model}.${l.split('.')[0]}`] !== undefined)
+				at(
+					'model/label',
+					'model',
+					model,
+					`record_label must read the record's own stored or computed fields; '${l}' crosses a relationship.`
+				);
+			let owner = model;
+			for (const [index, field] of l.split('.').entries()) {
+				const relation = m.relationships[`${owner}.${field}`];
+				if (relation !== undefined) {
+					owner = list(relation.to)[0] ?? owner;
+					continue;
+				}
+				const own = m.models[owner] ?? SYSTEM.models[owner];
+				if (
+					own?.fields[field] === undefined &&
+					own?.computed?.[field] === undefined &&
+					field !== 'id'
+				)
+					at('model/label', 'model', model, `label reads unknown field '${l}'`);
+				if (index < l.split('.').length - 1) break;
+			}
 			if (l === 'id' || m.relationships[`${model}.${l}`] !== undefined)
 				at(
 					'model/label',
@@ -277,10 +323,17 @@ function modelRules({ m, bodies, at }: RuleContext): void {
 					model,
 					`label '${l}' is ${l === 'id' ? 'the row id' : 'a foreign key'}; label with the row's own text fields (a computed field may join them)`
 				);
+		}
 		// a link in search.text searches the linked row's own search text, so the model it links to must declare one
 		for (const f of spec.search?.text ?? []) {
 			const rel = m.relationships[`${model}.${f}`];
-			const silent = list(rel?.to ?? []).find((to) => !(m.models[to]?.search?.text.length ?? 0));
+			const silent = list(rel?.to ?? []).find((to) => {
+				const target = m.models[to] ?? SYSTEM.models[to];
+				return (
+					target === undefined ||
+					(recordLabelExpression(target) === undefined && !(target.search?.text.length ?? 0))
+				);
+			});
 			if (silent !== undefined)
 				at(
 					'model/search',
@@ -409,7 +462,12 @@ function layerRules({ m, at }: RuleContext): void {
 				if (models[path] !== undefined && layer.fields !== 'all')
 					unknown('read', path, layer.fields, fieldsOf(models[path]));
 		if (Object.hasOwn(c.outputs ?? {}, 'default'))
-			at('model/layer', 'model', model, "outputs: 'default' is the model's read; name another output");
+			at(
+				'model/layer',
+				'model',
+				model,
+				"outputs: 'default' is the model's read; name another output"
+			);
 		for (const [verb, map] of [
 			['create', c.create?.columns],
 			['update', c.update?.columns]
@@ -492,6 +550,9 @@ const validRate = (rate: string): boolean => {
 
 function automationRules({ m, bodies, at }: RuleContext): void {
 	for (const [name, a] of Object.entries(m.automations)) {
+		const input = Schema.decodeUnknownResult(FieldsSchema)(a.input ?? {});
+		if (Result.isFailure(input))
+			at('automation/input', 'automation', name, `input: ${input.failure.message}`);
 		if (a.limit !== undefined && !validRate(a.limit))
 			at(
 				'automation/limit',
@@ -502,10 +563,20 @@ function automationRules({ m, bodies, at }: RuleContext): void {
 		// a run holds exactly its declared policies: at least one, each declared
 		const policies: readonly unknown[] = Array.isArray(a.policies) ? a.policies : [];
 		if (policies.length === 0)
-			at('automation/policies', 'automation', name, 'policies: name at least one policy the run holds');
+			at(
+				'automation/policies',
+				'automation',
+				name,
+				'policies: name at least one policy the run holds'
+			);
 		for (const p of policies)
 			if (typeof p !== 'string' || m.policies[p] === undefined)
-				at('automation/policies', 'automation', name, `policies: there is no policy '${String(p)}'`);
+				at(
+					'automation/policies',
+					'automation',
+					name,
+					`policies: there is no policy '${String(p)}'`
+				);
 		const delegated = new Set<string>();
 		for (const declaration of a.delegations ?? []) {
 			const dot = declaration.verb.lastIndexOf('.'),
@@ -847,7 +918,9 @@ function visitorShape(
 					bad(`${c}: a ${options.title} may only read or create, never ${k}`);
 			for (const [output, read] of grantedOutputs(g)) {
 				const fields = outputFields(m, c, output);
-				const label = list(m.models[c]?.label);
+				const label = labelPaths(recordLabelSpec(m.models[c] ?? {})).map(
+					(path) => path.split('.')[0] ?? path
+				);
 				if (fields === undefined)
 					bad(
 						`${c}: output '${output}' reads every field; a ${options.title} reads a named output that lists its fields`
@@ -869,133 +942,4 @@ function visitorShape(
 				}
 		}
 	}
-}
-
-const LOOPS = new Set([
-	ts.SyntaxKind.ForStatement,
-	ts.SyntaxKind.ForOfStatement,
-	ts.SyntaxKind.ForInStatement,
-	ts.SyntaxKind.WhileStatement,
-	ts.SyntaxKind.DoStatement
-]);
-const ITERATORS = new Set([
-	'map',
-	'flatMap',
-	'forEach',
-	'filter',
-	'reduce',
-	'some',
-	'every',
-	'find'
-]);
-/** The property a function literal is the value of (`transform: function* …`, `*transform(…)`), and its object. */
-function slot(fn: ts.Node): { name: string; object: ts.Node } | undefined {
-	const at = ts.isMethodDeclaration(fn) ? fn : fn.parent;
-	if (at === undefined || !(ts.isPropertyAssignment(at) || ts.isMethodDeclaration(at)))
-		return undefined;
-	return ts.isIdentifier(at.name) || ts.isStringLiteral(at.name)
-		? { name: at.name.text, object: at.parent }
-		: undefined;
-}
-/** The property an object literal is the value of (`create: { … }`). */
-const owner = (object: ts.Node): string | undefined =>
-	ts.isObjectLiteralExpression(object) &&
-	ts.isPropertyAssignment(object.parent) &&
-	(ts.isIdentifier(object.parent.name) || ts.isStringLiteral(object.parent.name))
-		? object.parent.name.text
-		: undefined;
-/** `create.transform`, `update.transform` or `delete.check`. */
-const writeCallback = (fn: ts.Node): boolean => {
-	const s = slot(fn);
-	if (s === undefined) return false;
-	const verb = owner(s.object);
-	return s.name === 'check'
-		? verb === 'delete'
-		: s.name === 'transform' && (verb === 'create' || verb === 'update');
-};
-/** `ctx.db.query(…)` or `ctx.db.after(…)`. */
-const workspaceRead = (node: ts.Expression): boolean => {
-	while (ts.isParenthesizedExpression(node)) node = node.expression;
-	if (!ts.isCallExpression(node)) return false;
-	const callee = node.expression;
-	return (
-		ts.isPropertyAccessExpression(callee) &&
-		(callee.name.text === 'query' || callee.name.text === 'after') &&
-		ts.isPropertyAccessExpression(callee.expression) &&
-		callee.expression.name.text === 'db'
-	);
-};
-/** A function passed to an array iteration (`rows.map(…)`, `forEach`, …). */
-const iteration = (fn: ts.Node): boolean =>
-	ts.isCallExpression(fn.parent) &&
-	fn.parent.arguments.some((a) => a === fn) &&
-	ts.isPropertyAccessExpression(fn.parent.expression) &&
-	ITERATORS.has(fn.parent.expression.name.text);
-
-/**
- * The checks over the model sources (`src/data/model/<m>/+model.ts`), which see what the evaluated literal cannot:
- * `write/read-in-loop`, a `yield*` of `ctx.db.query`/`ctx.db.after` inside a loop or an array iteration in a write callback
- * (a write callback reads at most twice per call, whatever the batch: read once with `{ in }` or a keyed batch, then map);
- * and `notify/via`, a notice's `via` naming anything but a connection of a conversation definition.
- */
-export function sourceRules(
-	m: EngineManifest,
-	sources: readonly { path: string; text: string }[]
-): Finding[] {
-	const out: Finding[] = [];
-	for (const { path, text } of sources) {
-		const file = ts.createSourceFile(path, text, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
-		const report = (code: string, node: ts.Node, message: string) => {
-			const line = file.getLineAndCharacterOfPosition(node.getStart(file)).line + 1;
-			out.push({ code, path, line, message: `${path}:${line}: ${message}` });
-		};
-		const visit = (node: ts.Node): void => {
-			if (
-				ts.isYieldExpression(node) &&
-				node.asteriskToken !== undefined &&
-				node.expression !== undefined &&
-				workspaceRead(node.expression)
-			) {
-				let looped = false;
-				for (let at: ts.Node | undefined = node.parent; at !== undefined; at = at.parent) {
-					if (LOOPS.has(at.kind)) looped = true;
-					if (!ts.isFunctionLike(at)) continue;
-					if (writeCallback(at)) {
-						if (looped)
-							report(
-								'write/read-in-loop',
-								node,
-								"a write callback reads inside a loop over its rows, and a call reads at most twice: read every row's data once (`{ in }` or a keyed batch), then map"
-							);
-						break;
-					}
-					if (iteration(at)) looped = true;
-				}
-			}
-			if (
-				ts.isPropertyAssignment(node) &&
-				ts.isIdentifier(node.name) &&
-				node.name.text === 'via' &&
-				ts.isArrayLiteralExpression(node.initializer)
-			) {
-				let notify = false;
-				for (let at: ts.Node | undefined = node.parent; at !== undefined && !notify; at = at.parent)
-					notify = ts.isFunctionLike(at) && slot(at)?.name === 'notify';
-				if (notify)
-					for (const e of node.initializer.elements)
-						if (
-							ts.isStringLiteralLike(e) &&
-							!conversational(definition(m, m.connections[e.text]?.integration ?? ''))
-						)
-							report(
-								'notify/via',
-								e,
-								`a notice goes through a connection of a conversation definition (the inbox always gets it); '${e.text}' is not one`
-							);
-			}
-			ts.forEachChild(node, visit);
-		};
-		visit(file);
-	}
-	return out;
 }

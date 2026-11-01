@@ -68,7 +68,23 @@ is<Eq<Row<'orders'>['owner'], Id<'sys_user'> | null>>();
 is<Eq<Row<'customers'>['tier'], 'basic' | 'gold'>>();
 is<Eq<Row<'customers'>['tags'], readonly string[] | null>>();
 // a named output's row holds that output's root fields only (no masks: a narrower shape is its own output)
-is<Eq<Exclude<keyof Row<'customers', 'directory'>, 'id' | 'revision' | 'created_at' | 'updated_at' | 'created_by' | 'updated_by' | '$sync' | '$approval'>, 'name' | 'tier'>>();
+is<
+	Eq<
+		Exclude<
+			keyof Row<'customers', 'directory'>,
+			| 'id'
+			| 'revision'
+			| 'created_at'
+			| 'updated_at'
+			| 'created_by'
+			| 'updated_by'
+			| '$sync'
+			| '$approval'
+			| '$label'
+		>,
+		'name' | 'tier'
+	>
+>();
 is<Eq<Row<'sites'>['open'], { readonly from: PlainDate; readonly to: PlainDate | null }>>();
 is<Eq<Row<'sites'>['location'], { readonly lat: number; readonly lng: number } | null>>();
 is<
@@ -88,6 +104,7 @@ is<
 		| 'updated_by'
 		| '$sync'
 		| '$approval'
+		| '$label'
 	>
 >();
 is<

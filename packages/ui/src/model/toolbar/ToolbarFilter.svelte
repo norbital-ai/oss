@@ -37,7 +37,7 @@ A toolbar filter trigger with an active-condition count and a popover for custom
 				{...props}
 				type="button"
 				class={cn(
-					'hover:bg-accent hover:text-accent-foreground focus-visible:ring-ring relative inline-flex h-8 min-w-8 max-sm:h-11 max-sm:min-w-11 items-center justify-center gap-1 rounded-sm px-2 focus-visible:ring-2 focus-visible:outline-none',
+					'hover:bg-accent hover:text-accent-foreground focus-visible:ring-ring relative inline-flex h-8 min-w-8 [--hit-target:2rem] items-center justify-center gap-1 rounded-sm px-2 focus-visible:ring-2 focus-visible:outline-none',
 					count > 0 && 'bg-accent'
 				)}
 				aria-label={label}
@@ -66,6 +66,7 @@ A toolbar filter trigger with an active-condition count and a popover for custom
 	</Popover.Trigger>
 	<Popover.Content
 		align="start"
+		role="dialog"
 		aria-label={label}
 		class={cn(
 			'flex w-[min(22rem,calc(100vw-2rem))] flex-col gap-3 p-3',

@@ -19,7 +19,6 @@ Edits a date, instant, time of day or month as typed segments with a calendar or
 		precision?: Precision;
 		id?: string;
 		/** `sm` matches a compact toolbar or tab strip; default is the form control height. */
-		size?: 'sm' | 'default';
 		/** Shows the value as copyable text; an enclosing readonly form sets it. */
 		readonly?: boolean;
 		disabled?: boolean;
@@ -97,7 +96,6 @@ Edits a date, instant, time of day or month as typed segments with a calendar or
 		of = 'date',
 		precision,
 		id,
-		size = 'default',
 		readonly,
 		disabled: ownDisabled,
 		invalid = false,
@@ -204,7 +202,7 @@ Edits a date, instant, time of day or month as typed segments with a calendar or
 		<TimeField.Input
 			{id}
 			onfocusout={flush}
-			class={cn(SEGMENTS, size === 'sm' && 'h-8 text-xs', 'w-auto')}
+			class={cn(SEGMENTS, 'w-auto')}
 			aria-invalid={invalid ? 'true' : undefined}
 			data-date-input="time"
 			data-precision={precision}
@@ -252,7 +250,7 @@ Edits a date, instant, time of day or month as typed segments with a calendar or
 			bind:ref={fieldAnchor}
 			{id}
 			onfocusout={flush}
-			class={cn(SEGMENTS, size === 'sm' && 'h-8 text-xs', 'pr-1')}
+			class={cn(SEGMENTS, 'pr-1')}
 			aria-invalid={invalid ? 'true' : undefined}
 			data-date-input={of}
 			data-precision={precision}
@@ -263,10 +261,10 @@ Edits a date, instant, time of day or month as typed segments with a calendar or
 							class={SEGMENT}>{text}</DatePicker.Segment
 						>{/if}{/each}
 				<DatePicker.Trigger
-					class="ml-auto grid size-7 max-sm:size-11 place-items-center rounded-sm text-muted-foreground hover:bg-accent hover:text-foreground"
+					class="ml-auto grid size-6 [--hit-target:1.5rem] place-items-center rounded-sm text-muted-foreground hover:bg-accent hover:text-foreground"
 					aria-label={t('openCalendar')}
 				>
-					<Icon icon="lucide:calendar" class="size-4" />
+					<Icon icon="lucide:calendar" class="size-3.5" />
 				</DatePicker.Trigger>
 			{/snippet}
 		</DatePicker.Input>
@@ -277,7 +275,7 @@ Edits a date, instant, time of day or month as typed segments with a calendar or
 				align={calendarAlignment.current}
 				sideOffset={4}
 				collisionPadding={narrowViewport.current ? 0 : 8}
-				class="z-50 rounded-md border bg-popover p-3 max-sm:p-0 text-popover-foreground shadow-md"
+				class="z-50 rounded-md border bg-popover p-3 max-sm:p-0 text-popover-foreground shadow-deep"
 			>
 				<DatePicker.Calendar>
 					{#snippet children({ months, weekdays })}

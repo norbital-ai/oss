@@ -432,8 +432,19 @@ export const AgentRow = Schema.Struct({
 			preview: Schema.optionalKey(Schema.String),
 			/** The held request the result names (a `publish` or `rollback` role's): the person approves it on the card. */
 			approval: Schema.optionalKey(Schema.String),
+			navigation: Schema.optionalKey(Schema.String),
 			/** What a Studio result says it shows (environment, release, commit, message, branch, url, viewport, capturedAt), for its caption. */
 			about: Schema.optionalKey(Schema.Record(Schema.String, Schema.String)),
+			/** A source edit's files and compact diffs, kept whole beside a clipped result for the panel's Changes tab. */
+			changes: Schema.optionalKey(
+				Schema.Array(
+					Schema.Struct({
+						path: Schema.String,
+						diff: Schema.String,
+						change: Schema.optionalKey(Schema.String)
+					})
+				)
+			),
 			/** The tool's declared Studio role (`HostTool.studio`). */
 			studio: Schema.optionalKey(Schema.Literals(STUDIO_ROLES)),
 			ms: Schema.optionalKey(Schema.Number)

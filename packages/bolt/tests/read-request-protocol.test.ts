@@ -141,6 +141,29 @@ describe('native /q read requests', () => {
 });
 
 describe('decodeReadRequest and planReadRequest', () => {
+	it('refuses search with aggregate rather than silently counting every row', () => {
+		for (const search of ['missing-catalogue-value', { semantic: 'missing-catalogue-value' }]) {
+			const plan = Result.flatMap(
+				decodeReadRequest({ accounts: { search, aggregate: { count: true } } }),
+				(json) => planReadRequest(json, manifest.exposures)
+			);
+			expect(plan).toEqual(
+				Result.fail(
+					"'accounts': search cannot be combined with aggregate; use a where filter for the aggregate or read the search results"
+				)
+			);
+		}
+		expect(
+			Result.isSuccess(
+				Result.flatMap(
+					decodeReadRequest({
+						accounts: { where: { name: { eq: 'North' } }, aggregate: { count: true } }
+					}),
+					(json) => planReadRequest(json, manifest.exposures)
+				)
+			)
+		).toBe(true);
+	});
 	it('refuses a function value: a read request is JSON only', () => {
 		expect(Result.isFailure(decodeReadRequest({ accounts: { where: { name: () => 'x' } } }))).toBe(
 			true

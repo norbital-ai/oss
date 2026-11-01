@@ -168,7 +168,12 @@ it.live(
 			const outputs = {
 				...manifest,
 				automations: {
-					return_row: { description: 'One recorded row', input: {}, output: row, policies: ['reader'] }
+					return_row: {
+						description: 'One recorded row',
+						input: {},
+						output: row,
+						policies: ['reader']
+					}
 				}
 			} satisfies EngineManifest;
 			const guest = yield* program(
@@ -194,6 +199,8 @@ it.live(
 			const request = { customers: { limit: 1 } } as const;
 			expect(Schema.is(page)((yield* caller.query(request)).customers)).toBe(true);
 			expect(Schema.is(page)((yield* t.storedQuery(request)).customers)).toBe(true);
+			expect((yield* caller.query(request)).customers.total).toBe(1);
+			expect((yield* t.storedQuery(request)).customers.total).toBe(1);
 			// computed NULL values decode without widening required computed strings, for every exposed field
 			const selected = { customers: {} } as const;
 			expect((yield* caller.query(selected)).customers.rows[0]).toMatchObject({

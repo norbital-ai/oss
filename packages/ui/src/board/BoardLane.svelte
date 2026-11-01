@@ -96,7 +96,6 @@
 {/each}
 {#if more !== null}
 	<Button
-		size="sm"
 		variant="ghost"
 		class={grid ? 'col-span-full' : undefined}
 		onclick={load}

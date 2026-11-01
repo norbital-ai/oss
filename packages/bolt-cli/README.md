@@ -23,3 +23,8 @@ bunx bolt test
 The compiler bundles Bolt's own modules (the shell, the page SDK, the declaration edge) from the `@norbital-ai/bolt` it
 resolves; in the oss checkout, running from source, it bundles Bolt's source beside it. Its view of Bolt's internals is
 `@norbital-ai/bolt/tooling`, which is not an API.
+
+`bolt check` still bundles and validates the runtime, but omits the release build's second compression pass.
+Builds cache the SDK browser layer under `.norbital/cache/platform-layer`, keyed by the exact lockfile,
+compiler location and local overlay stamp; workspace pages and import boundaries are rebuilt and validated.
+Source-mode compiler development bypasses this cache.

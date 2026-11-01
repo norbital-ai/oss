@@ -38,6 +38,7 @@ export { nodePorts } from '../node/ports.ts';
 export { loopbackTcpPort } from '../node/tcp.ts';
 export { fileRef } from '../page/file-ref.ts';
 export { catalog } from '../protocol/catalog.ts';
+export { FieldsSchema } from '../protocol/public-page.ts';
 export { Diagnostic, type CheckDiagnostic } from '../protocol/diagnostic.ts';
 export { fromStore, storeSync } from '../protocol/errors.ts';
 export { bindings, responseError } from '../protocol/http.ts';

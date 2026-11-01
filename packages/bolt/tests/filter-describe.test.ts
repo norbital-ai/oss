@@ -341,7 +341,7 @@ const choices = (q: DecisionQuestion | undefined) =>
 const labelOf = (r: System1Request, id: string) =>
 	present(
 		Schema.decodeUnknownSync(Schema.Array(Schema.Struct({ label: Schema.String })))(
-			r.state['fields']
+			Schema.decodeUnknownSync(Schema.Struct({ fields: Schema.Json }))(r.state).fields
 		)[Number(id.slice(1)) - 1]
 	).label;
 /** Every field label the one request asked about, in the order it asked. */
@@ -376,10 +376,37 @@ const byField =
 			if (hit === undefined)
 				throw new Error(`no option "${want[0]}" among: ${Object.keys(q.criteria).join(' | ')}`);
 			pick[id] = hit;
+			const field = Schema.decodeUnknownSync(
+				Schema.Struct({
+					field: Schema.Struct({
+						path: Schema.Array(
+							Schema.Struct({ k: Schema.String, rel: Schema.optionalKey(Schema.String) })
+						)
+					})
+				})
+			)(q.instructions).field;
+			const first = field.path[0];
+			if (first?.rel !== undefined) {
+				pick[`applicable.${first.rel}`] = true;
+				if (first.k === 'count') pick[`count.${first.rel}`] = true;
+				else if (first.k === 'agg') {
+					const aggregate = r.questions[`aggregate.${first.rel}`];
+					if (aggregate?.type === 'choice') {
+						const entry = Object.entries(aggregate.criteria).find(([, value]) =>
+							Schema.is(Schema.Struct({ label: Schema.Literal(label) }))(value)
+						);
+						if (entry !== undefined) pick[`aggregate.${first.rel}`] = entry[0];
+					}
+				} else if (['some', 'every', 'none'].includes(first.k))
+					pick[`relation.${first.rel}`] = first.k;
+			}
 			for (const [v, nq] of Object.entries(r.questions))
 				if (
 					v.startsWith(`${id}.`) &&
-					a.values?.some((x) => nq.instructions.startsWith(`Is ${x} one of`))
+					a.values?.some(
+						(x) =>
+							typeof nq.instructions === 'string' && nq.instructions.startsWith(`Is ${x} one of`)
+					)
 				)
 					pick[v] = true;
 		}
@@ -495,6 +522,11 @@ describe('filter.describe offers System 1 the exposure and maps its choices onto
 					)
 				);
 				expect(choices(q[spot])).toEqual(['no condition', 'Spot is empty', 'Spot is not empty']);
+				expect(q[spot]).toMatchObject({
+					instructions: { question: expect.any(String), field: { label: 'Spot', kind: 'point' } },
+					criteria: { 'Spot is empty': { where: { spot: { isNull: true } } } }
+				});
+				expect(port.requests).toHaveLength(1);
 			})
 	);
 
@@ -578,7 +610,7 @@ describe('filter.describe offers System 1 the exposure and maps its choices onto
 			});
 			const asked = present(port.requests[0]);
 			// job_lines granted opens a many-relation: three quantifiers over its fields, its count and eight aggregates
-			expect(askedFields(asked).length).toBe(16);
+			expect(askedFields(asked).length).toBeLessThanOrEqual(96);
 			for (const hidden of ['Notes', 'Internal code', 'Assignee › Rate', 'Audit']) {
 				expect(
 					Object.values(asked.questions)

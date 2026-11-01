@@ -116,7 +116,12 @@ it.live('expand opens the lane in a modal, search narrows within it, closing ret
 				assert.ok(open, 'the lane dialog is open');
 				assert.equal(open.getAttribute('role'), 'dialog');
 				assert.deepEqual(cardsIn(open), ['d1', 'd2', 'd3'], "that lane's cards, in scope");
-				assert.ok(open.contains(document.activeElement), 'focus is inside the dialog');
+				assert.equal(
+					document.activeElement,
+					open,
+					'opening focuses the dialog, not a toolbar hint'
+				);
+				assert.equal(document.querySelector('[data-slot="tooltip-content"]'), null);
 			})
 		);
 

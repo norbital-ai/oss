@@ -92,7 +92,7 @@ export type Settings = {
 		configuration: Json;
 		delivery: Delivery;
 	}[];
-	mcp: { name: string; url: Json }[];
+	mcp: { name: string; url: Json; secrets?: readonly string[] }[];
 	/** Identity changes (`bolt_history` of the identity tables), newest first (L-BOLT-518). */
 	audit: readonly AuditRow[];
 	/**
@@ -250,7 +250,23 @@ export const settings = Effect.fn('shell.settings')(function* (
 			delivery: delivery.get(i.id) ?? idle
 		})),
 		audit: yield* decode(AuditRow, audit?.rows ?? []),
-		mcp: Object.entries(m.mcp).map(([name, s]) => ({ name, url: s.url ?? null })),
+		mcp: Object.entries(m.mcp).map(([name, s]) => ({
+			name,
+			url: s.url ?? null,
+			secrets: [
+				...new Set([
+					s.url,
+					...(s.auth === undefined
+						? []
+						: 'bearer' in s.auth
+							? [s.auth.bearer]
+							: [
+									s.auth.oauth.clientId,
+									...(s.auth.oauth.clientSecret === undefined ? [] : [s.auth.oauth.clientSecret])
+								])
+				])
+			]
+		})),
 		// a workspace definition never takes a built-in's name (discover/reserved-name), so the spread loses none
 		integrations: Object.entries({ ...SYSTEM.integrations, ...m.integrations })
 			.sort(([a], [b]) => a.localeCompare(b))
@@ -279,17 +295,7 @@ export const settings = Effect.fn('shell.settings')(function* (
 	};
 });
 
-const ref = Schema.Struct({ model: Schema.NonEmptyString, id: Schema.NonEmptyString });
-const inviteData = Schema.Struct({
-	email: Schema.optionalKey(Schema.NonEmptyString),
-	phone: Schema.optionalKey(Schema.NonEmptyString),
-	team: Schema.optionalKey(Schema.NonEmptyString),
-	external: Schema.Boolean.pipe(Schema.withDecodingDefaultKey(Effect.succeed(false))),
-	party: Schema.optionalKey(ref)
-}).check(Schema.makeFilter((x) => x.email !== undefined || x.phone !== undefined));
-const invite = Schema.Record(Schema.String, Schema.Json)
-	.check(Schema.makeFilter((input) => !('assignments' in input) && !('policies' in input)))
-	.pipe(Schema.decodeTo(inviteData));
+const invite = members.InvitationInput;
 const id = { id: Schema.NonEmptyString };
 export const SettingsOp = Schema.Union([
 	Schema.Struct({

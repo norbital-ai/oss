@@ -19,8 +19,9 @@ src/data/model/<name>/+model.ts, holds what a description leaves out (callbacks,
 ## Steps
 1. Find: one read for everything the request needs; several unrelated models are several roots of one call.
 2. Resolve: every record a write references with one bounded read. A missing one is created inline only where the
-   write's input declares that nested create, else ask first; an optional link still missing after one exact and one
-   focused lookup is left out.
+   write's input declares that nested create, else ask first. An optional link may be left out only when the source
+   does not state a value. If a stated value remains unresolved after one exact and one focused lookup, name the field
+   and ask before writing; optional storage does not permit dropping source data.
 3. Change once: one act carrying the whole change as a batch, related rows inside their root row.
 4. Report from the result: a committed write answers its stored rows; read again only for what they lack.
 An empty read earns one different key, then a question to the person, never the same read again. When no described
@@ -41,6 +42,9 @@ lookup: a value may be a variable, a typed CEL expression: { "var": "requestor.i
 with a limit.
 Count, total, rank or group with aggregate, never by paging rows or adding them up yourself; what aggregate cannot give
 is run_js over the rows. search is only for words the person asked to find: filter by values with where. Several unrelated models are several roots of one call.
+A root's text search ranks partial matches too; it is not an exact identifier or a category filter. A search total
+counts that search's matches only. To count a category, filter its actual enum field with where and aggregate; never
+call a word search's matches the whole category or catalogue. Use where: { "$search": "<words>" } for an all-word filter.
 
 ## Writing
 A write is "<model>.<verb>" with an array of rows, committed together (a large or computed batch is a JSON file run_js
@@ -63,7 +67,7 @@ A committed write answers its stored rows and the automation runs it started; re
 background: wait on one only when its result is needed now.
 `),
 	ingest: skill(`---
-description: Turning unstructured material - documents, sheets, photos, handwriting, messages - into records faithfully.
+description: Reading supplied material faithfully, including read-only contracts and summaries, and resolving every field before ingesting documents, sheets, photos, handwriting or messages into records.
 ---
 ## Explore first
 Inventory every supplied source before mapping any of it: file names and types, sheets, pages, labels, dates, repeats.
@@ -74,18 +78,46 @@ an image). Learn the target models from their +model.ts: required columns, kinds
 Build one candidate per target record from the sources, every value traced to where it was read. Cross-check identity
 across sources (labels, dates, order); a shared label alone is not identity when there are repeats. Never merge two
 items to satisfy a required field. Check numbers, units and dates against the original.
+For small text or an uncertain value on a parsed page, use read_file { output, image: n, crop: { left, top, right, bottom } } for one focused improved read. Coordinates are fractions of the oriented image from 0 to 1. If it
+remains uncertain, name the field and ask before writing. Re-reading the same image or writing a new PDF parser/OCR
+script does not resolve an uncertain stroke; do not spend the turn reverse-engineering an already parsed document.
 
 ## Resolve
-Find every linked record with one bounded read. A missing one is created inline only where the write's input declares
-that nested create; otherwise ask before creating it. Never substitute free text for a link or invent an id.
+Name every relational field, its target model and source value. Resolve it against accessible rows using exact source
+identifiers in where filters, then one focused lookup if needed. Search rank, a count or an inaccessible row is not
+proof of identity or absence. Before writing, report each field's decision: link (an existing row), create (a new row
+in a named model), or update (a changed existing row), with the matched value and source evidence. Name the root model
+being written too. Include writer-filled people, assignments, reviewers and nested component links; a writer-filled
+person is not evidence that they are the person on the source. If they differ, name the conflict and refuse that field.
+"Writer-filled" is an explanation, never a decision: report LINK to that existing person only when they match the
+source. Name the owned row's model and parent link as well as its other links; CREATE its new row or UPDATE its changed
+existing row. Reconcile every stated relation on a repeat too, even when the file hash and recipe already match.
+Never pick a closest name, substitute the current user, or erase a stated value to make a write succeed. When missing,
+ambiguous or unreadable, name the field and refuse the write until resolved; do not disclose a guess only after saving.
+A missing catalogue row may be created in a named model only when its required values are stated and the task and
+permissions allow it; say what you created and link it. Otherwise ask. Never invent a value or an id.
+
+## Identity and repeats
+Find an existing root by its exact customer reference or other declared source identity before creating. Reconcile all
+matching rows; never assume absence because a policy hides a row. An unchanged repeat writes nothing: compare values
+and the source file's content hash, not its upload id or name. Use the authoritative sha256 on its conversation file reference when present; do not recompute a digest from parsed text or page images. Do not replace a stored source document on a repeat.
+For changed content, update the existing root and owned rows by their source identity; retain existing child ids and
+let their native effects adjust stock or other derived ledgers. Never create another row merely because an upload is new.
+
+## Read-only material
+A summary, plain contract or other read-only task writes no records or catalogue rows. Still describe the relevant
+accessible models, cross-reference the source's named parties and identifiers, and report matches, unresolved fields
+and the confidence gained from those checks, with reasons. Distinguish source extraction confidence from model-match
+confidence. If no model is relevant or accessible, say so; do not imply a match you could not verify.
 
 ## Write and confirm
 Never copy numbers by hand. Anything derived from a source (averages, a curve, a table of rows) is computed in run_js
 from the source file itself (files: [{ id }] hands the code its sheets or text as input.files), and returned as a JSON
 file of the write's whole input ({ files: [{ name: 'input.json', text }] });
 act then takes that file's id as inputFile. One write per record (or one batch for many), its related rows nested. Read back what matters and confirm against the
-source. If a value is illegible, ambiguous or absent, ask for it or leave it empty and say so: never invent a
-measurement, quantity, name or date.
+source, including every relational field's model, decision and value. Record every non-customer test value as MOCKED
+and carry MOCKED in the stored reference beside it. Missing optional facts may stay empty when the source is empty;
+an ambiguous stated value needs clarification before writing. Never invent a measurement, quantity, name or date.
 `),
 	research: skill(`---
 description: Finding, reading and extracting information and media from the web - search, browse, scrape tables and lists, download files, cite every source.

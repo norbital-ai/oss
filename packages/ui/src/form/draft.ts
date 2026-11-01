@@ -120,7 +120,7 @@ export function formSpec(
 	};
 }
 
-/** A draft's starting values: the stored row (decoded) in update mode, else each field's default over `prefill`. */
+/** A draft's starting values: the stored row in update mode, else explicit prefills over field defaults. */
 export function startValues(
 	spec: FormSpec,
 	record: Row | null,

@@ -67,3 +67,14 @@ way, checks `start` names automations (`seed/start`) and that every named asset 
 
 `bun run env -- reset` and `env deploy reset` call `bolt seed` for each template whose seeder names a bank tree, so a
 demo environment gets its private rows after every reset. A template without one stays at its public rows.
+
+## Datatypes in seeded JSON Schemas
+
+A seed row value that declares `$schema` is a JSON Schema document (an input schema a renderer
+reads). `bolt check` (public rows) and `bolt build` (every pack) check the datatypes it names:
+`format` on a non-string must name one of `DATATYPE_SHAPES` (`@norbital-ai/std/kind`: `period`,
+`point`, `money`, `duration`, `currency`), a string `format` must be JSON Schema's or a text format,
+and a property naming a datatype must have exactly its shape (keys, value types, required keys).
+Errors are `seed/datatype`, naming the row, field and JSON Pointer and the missing, extra or
+mistyped keys. An unnamed exact shape is read as the datatype at run time only
+(`jsonSchemaKind` in `@norbital-ai/ui`); no near miss is reported.

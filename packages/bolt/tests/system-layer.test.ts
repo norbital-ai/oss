@@ -65,7 +65,8 @@ function rendered(): { [table: string]: Shape } {
 			checks: string[];
 		};
 	} = {};
-	const bare = (s: string) => s.replaceAll('"', '');
+	const bare = (s: string) =>
+		s.replaceAll('"', '').replace(/(bolt_record_label_\w+)_([0-9a-f]{8})/g, '$1_HASH');
 	const lit = (d: string) => d.replace(/^'(.*)'::\w+$/, '$1').replace(/^\((.*)\)$/, '$1');
 	for (const o of storeSync(schemaObjects(schemaSlice(EMPTY))).sort(
 		(a, b) => RANK[a.rank] - RANK[b.rank]
@@ -110,6 +111,8 @@ function rendered(): { [table: string]: Shape } {
 			}
 			// native row guards are their own contract (the trigger test below); this shape covers tables, columns and constraints
 			if (/^(?:create|drop) trigger /.test(sql)) continue;
+			// The label function's body is exercised by native label/search integration tests.
+			if (/^create function "bolt_record_label_/.test(sql)) continue;
 			m = /^create (unique )?index "\w+" on "\w+" (.*)$/.exec(sql);
 			if (m) {
 				(m[1] === undefined ? t.indexes : t.unique).push(bare(m[2]!));
@@ -138,6 +141,8 @@ const EXPECTED: { [table: string]: Shape } = {
 	approval_request: {
 		key: 'id uuid primary key',
 		columns: {
+			bolt_search:
+				"tsvector generated always as (bolt_search_document(coalesce(collection_name::text, ''))) stored",
 			collection_name: 'text not null',
 			record_id: 'text not null',
 			action: 'text not null',
@@ -154,6 +159,7 @@ const EXPECTED: { [table: string]: Shape } = {
 			created_at: 'timestamptz not null'
 		},
 		unique: ["(collection_name, record_id) where (status = 'ONGOING'::text)"],
+		indexes: ['using gin (bolt_search)'],
 		checks: [
 			"((approver_teams is null or store_json_valid(approver_teams, '{kind:json,shape:{kind:list,of:{kind:text}}}'::jsonb) is true))",
 			"((approver_users is null or store_json_valid(approver_users, '{kind:json,shape:{kind:list,of:{kind:text}}}'::jsonb) is true))",
@@ -636,8 +642,9 @@ const EXPECTED: { [table: string]: Shape } = {
 			created_at: 'timestamptz not null default now()',
 			party_id: "text generated always as (((party ->> 'id'))::text) stored",
 			phone_key: "text generated always as ((regexp_replace(phone, '\\D', '', 'g'))::text) stored",
+			bolt_record_label: 'text generated always as (bolt_record_label_sys_user_HASH(name)) stored',
 			bolt_search:
-				"tsvector generated always as (bolt_search_document(coalesce(name::text, '') || ' ' || coalesce(email::text, ''))) stored"
+				"tsvector generated always as (bolt_search_document(coalesce(bolt_record_label_sys_user_HASH(name), '') || ' ' || coalesce(name::text, '') || ' ' || coalesce(email::text, ''))) stored"
 		},
 		indexes: ['using gin (bolt_search)'],
 		unique: ['(lower(email))', '(phone_key)'],
@@ -652,6 +659,17 @@ const EXPECTED: { [table: string]: Shape } = {
 };
 
 describe('the built-in layer is compiled as a workspace is', () => {
+	it('approval requests and users declare text search and install their native GIN indexes', () => {
+		expect(SYSTEM.models.approval_request?.search?.text).toEqual(['collection_name']);
+		expect(SYSTEM.models.sys_user?.search?.text).toEqual(['name', 'email']);
+		const objects = storeSync(schemaObjects(schemaSlice(EMPTY)));
+		for (const table of ['approval_request', 'sys_user'])
+			expect(
+				objects.some(
+					(object) => object.table === table && object.create.some((sql) => /USING gin/i.test(sql))
+				)
+			).toBe(true);
+	});
 	it.effect(
 		'src/system/index.ts is the systemIndex of the discovered paths, and loading them gives SYSTEM',
 		() =>

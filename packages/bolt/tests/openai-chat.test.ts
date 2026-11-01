@@ -278,6 +278,53 @@ describe('openAiChat', () => {
 				]);
 			})
 	);
+	it.effect('a length finish is a cut reply, not a stop', () =>
+		Effect.gen(function* () {
+			const sse = [
+				'data: {"id":"gen-1","choices":[{"delta":{"content":"Half"}}]}',
+				'data: {"id":"gen-1","choices":[{"delta":{},"finish_reason":"length"}]}',
+				'data: [DONE]',
+				''
+			].join('\n\n');
+			const { f } = capture(() => stream([sse]));
+			const { response, deltas } = yield* collect(openAiChat(config, { fetch: f }));
+			expect(deltas).toEqual(['Half']);
+			expect(response.finish).toBe('cut');
+		})
+	);
+	it.effect(
+		'an empty tool-call id is bound to the assistant call before it, and a missing stream id is replaced',
+		() =>
+			Effect.gen(function* () {
+				const { f, seen } = capture(() =>
+					stream([
+						[
+							'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"name":"x","arguments":"{}"}}]}}]}',
+							'data: {"choices":[{"delta":{},"finish_reason":"tool_calls"}]}',
+							'data: [DONE]',
+							''
+						].join('\n\n')
+					])
+				);
+				const { response } = yield* collect(openAiChat(config, { fetch: f }), {
+					model: 'default',
+					messages: [
+						{ role: 'user', content: 'hi' },
+						{
+							role: 'assistant',
+							content: { text: '', toolCalls: [{ id: 't9', name: 'x', input: {} }] }
+						},
+						{ role: 'tool', content: { id: '', name: 'x', result: { ok: true } } }
+					]
+				});
+				expect(first(response.toolCalls).id).toMatch(/^call_/);
+				expect(first(seen).sent.messages.at(-1)).toMatchObject({
+					role: 'tool',
+					tool_call_id: 't9',
+					content: '{"ok":true}'
+				});
+			})
+	);
 	it.effect(
 		'streams: text deltas arrive, tool calls assemble from their pieces, usage and cost from the last chunk',
 		() =>

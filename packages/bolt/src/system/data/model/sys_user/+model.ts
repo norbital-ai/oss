@@ -8,7 +8,7 @@ import { model } from '../../../../decl/model.ts';
 
 export default model('sys_user', {
 	description: 'A member of the workspace: staff or an external party contact.',
-	label: 'name',
+	record_label: 'record.name',
 	fields: {
 		email: { kind: 'text', format: 'email', optional: true },
 		name: { kind: 'text' },

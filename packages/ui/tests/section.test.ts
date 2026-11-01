@@ -20,9 +20,31 @@ const catalog = {
 		fields: {
 			title: { kind: 'text', help: 'The role’s public name.' },
 			notes: { kind: 'text', optional: true },
-			kind: { kind: 'enum', values: ['a', 'b'], optional: true }
+			kind: { kind: 'enum', values: ['a', 'b'], optional: true },
+			code: { kind: 'text', optional: true },
+			remarks: { kind: 'text', optional: true },
+			tier: { kind: 'enum', values: ['x', 'y'], optional: true },
+			tags: { kind: 'text', optional: true },
+			meta: {
+				kind: 'object',
+				fields: { a: { kind: 'text' }, b: { kind: 'text' } },
+				optional: true
+			},
+			rates: {
+				kind: 'object',
+				optional: true,
+				fields: {
+					rules: {
+						kind: 'list',
+						label: 'Rates',
+						of: { kind: 'object', fields: { a: { kind: 'text' }, b: { kind: 'text' } } }
+					}
+				}
+			}
 		},
-		create: { columns: ['title', 'notes', 'kind'] }
+		create: {
+			columns: ['title', 'notes', 'kind', 'code', 'remarks', 'tier', 'tags', 'meta', 'rates']
+		}
 	}
 } satisfies NonNullable<KindsHost['catalog']>;
 const settle = async () => {
@@ -97,6 +119,19 @@ it.live(
 				'collapsed, the field stays mounted'
 			);
 		})
+);
+
+it.live('an icon replaces the heading chevron; a section without one keeps the chevron', () =>
+	Effect.gen(function* () {
+		const { target } = yield* browser(() => show());
+		const icon = element<HTMLElement>(section(target, 'Job'), '[data-section-icon]');
+		assert.equal(icon.querySelectorAll('svg').length, 2, 'the icon and the hover chevron');
+		assert.equal(
+			section(target, 'Notes').querySelector('[data-section-icon]'),
+			null,
+			'no icon: the plain chevron'
+		);
+	})
 );
 
 it.live(
@@ -273,8 +308,29 @@ it.live(
 				[...target.querySelectorAll<HTMLElement>('[data-field]')]
 					.map((f) => f.dataset.field)
 					.sort(),
-				['kind', 'notes', 'title']
+				['code', 'kind', 'meta', 'notes', 'rates', 'remarks', 'tags', 'tier', 'title']
 			);
 			assert.ok(warn.mock.calls.some(([message]) => /nope/.test(String(message))));
+		})
+);
+
+it.live(
+	'a section groups two controls or one large one: a lone small field folds its section away',
+	() =>
+		Effect.gen(function* () {
+			const { target } = yield* browser(() => show());
+			// one small field: no heading, no rule, its own label
+			const lone = section(target, 'Lone');
+			assert.equal(lone.querySelector('h3'), null);
+			assert.equal(lone.dataset['open'], 'true');
+			assert.ok(lone.querySelector('[data-field=tags] label'));
+			// one large structured field keeps its section and heading
+			assert.ok(header(target, 'Meta'));
+			// two fields keep theirs
+			assert.ok(header(target, 'Job'));
+			// a lone structure whose only field repeats the section's title shows that field without its own heading
+			assert.ok(header(target, 'Rates'));
+			assert.equal(section(target, 'Rates').querySelector('summary'), null);
+			assert.ok(section(target, 'Rates').querySelector('[data-view=table], button'));
 		})
 );

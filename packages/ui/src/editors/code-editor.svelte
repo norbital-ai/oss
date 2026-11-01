@@ -38,6 +38,9 @@ A CodeMirror code editor for JavaScript (also CEL and TypeScript expressions), J
 		'&.cm-focused': { outline: 'none' },
 		'.cm-scroller': { fontFamily: 'var(--font-mono)', lineHeight: '1.5', minHeight: 'inherit' },
 		'.cm-content': { caretColor: 'var(--foreground)', paddingRight: '10px' },
+		'.cm-scroller .cm-cursor, .cm-scroller .cm-dropCursor': {
+			borderLeftColor: 'var(--foreground)'
+		},
 		'.cm-gutters': {
 			backgroundColor: 'transparent',
 			color: 'var(--muted-foreground)',
@@ -45,10 +48,15 @@ A CodeMirror code editor for JavaScript (also CEL and TypeScript expressions), J
 		},
 		'.cm-activeLine, .cm-activeLineGutter': { backgroundColor: 'transparent' },
 		'&.cm-focused .cm-activeLine': {
-			backgroundColor: 'color-mix(in oklab, var(--brand-500) 10%, transparent)'
+			backgroundColor: 'color-mix(in oklab, var(--brand) 10%, transparent)'
 		},
-		'&.cm-focused .cm-selectionBackground, .cm-selectionBackground': {
-			backgroundColor: 'color-mix(in oklab, var(--brand-500) 24%, transparent)'
+		'&.cm-focused > .cm-scroller > .cm-selectionLayer .cm-selectionBackground, .cm-selectionBackground':
+			{
+				backgroundColor: 'var(--accent)'
+			},
+		'.cm-content ::selection, .cm-content::selection': {
+			backgroundColor: 'var(--accent)',
+			color: 'var(--accent-foreground)'
 		},
 		'.cm-tooltip': {
 			backgroundColor: 'var(--popover)',

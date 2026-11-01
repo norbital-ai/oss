@@ -8,10 +8,9 @@ const names = { kind: 'json', shape: { kind: 'list', of: { kind: 'text' } } } as
 export default model('approval_request', {
 	description:
 		'An approval request on a record: its status, its steps, and the teams and members that approve or supersede.',
-	label: ['collection_name', 'record_id'],
 	fields: {
-		collection_name: { kind: 'text' },
-		record_id: { kind: 'text' },
+		collection_name: { kind: 'text', label: 'Model' },
+		record_id: { kind: 'text', label: 'Record ID' },
 		action: { kind: 'enum', values: ['create', 'update', 'delete'] },
 		status: {
 			kind: 'enum',
@@ -34,5 +33,7 @@ export default model('approval_request', {
 	},
 	unique: [{ fields: ['collection_name', 'record_id'], where: { status: { eq: 'ONGOING' } } }],
 	table: { primary: 'uuid' },
+	// Target labels are searched through the existing model/id reference by the query catalogue.
+	search: { text: ['collection_name'] },
 	read: 'all'
 });

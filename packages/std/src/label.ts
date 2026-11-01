@@ -1,10 +1,41 @@
-// std/label (§3.7): a record's title from its model's `label` paths. Each path's value is shown per kind (`show`, the
+// std/label (§3.7): a record's title from its model's optional CEL `record_label`, or legacy field paths. Each legacy path is shown per kind (`show`, the
 // ui's formatter where one is at hand; else a locale-free default for dates, instants, decimals and relations), empty
-// terms are dropped and the rest joined with ' · '. Never a uuid and never a JSON blob: a record that cannot name
-// itself is `null`, and the caller shows its own placeholder.
+// terms are dropped and the rest joined with ' · '. Without a usable label, the record's id is its identifier.
 import { parseJsonResult } from './json.ts';
 import { Decimal } from './decimal.ts';
 import type { Value } from './kind.ts';
+import { Result } from 'effect';
+import { labelExpression } from './label-expression.ts';
+export { labelExpression } from './label-expression.ts';
+
+/** The canonical CEL identifier on a model; `label` is the pre-record_label declaration retained for compatibility. */
+export const recordLabelSpec = (model: {
+	record_label?: string;
+	label?: string | readonly string[];
+}): string | readonly string[] => model.record_label ?? model.label ?? [];
+
+/** Normalize workspace declarations to CEL. Kernel tables opt in explicitly; legacy workspace labels remain compatible. */
+export function recordLabelExpression(model: {
+	record_label?: string;
+	label?: string | readonly string[];
+	table?: unknown;
+}): string | undefined {
+	if (model.record_label !== undefined) return model.record_label;
+	if (model.table !== undefined || model.label === undefined) return undefined;
+	if (typeof model.label === 'string')
+		return /^[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*$/.test(model.label)
+			? `record.${model.label}`
+			: model.label;
+	if (model.label.length === 0) return undefined;
+	return `[${model.label.map((field) => `record.${field} != null ? string(record.${field}) : ''`).join(', ')}].filter(part, part != '').join(' · ')`;
+}
+
+/** The record fields a CEL label reads; legacy field lists keep their existing projection. */
+export function labelPaths(spec: string | readonly string[]): readonly string[] {
+	if (typeof spec !== 'string') return spec;
+	const compiled = labelExpression(spec);
+	return 'error' in compiled ? [] : compiled.paths;
+}
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const INSTANT = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:\d{2})$/;
@@ -45,21 +76,35 @@ const at = (row: Value, path: string): Value | undefined =>
 	path.split('.').reduce<Value | undefined>((v, k) => members(v)?.[k], row);
 
 /**
- * A record's title from its model's `label` paths: each value shown per kind (through `show` when given), empty terms dropped,
- * the rest joined with ` · `; `null` when nothing names the record (never a uuid or JSON).
+ * A record's title from its model's CEL label, or legacy paths shown per kind (through `show` when given), empty terms dropped,
+ * the rest joined with ` · `; the record's id is the fallback when no usable label is declared.
  * @example
  * label({ name: 'Ann', team: { name: 'Ops' } }, ['name', 'team.name']) // 'Ann · Ops'
  */
 export function label(
 	row: { readonly [field: string]: Value },
-	paths: readonly string[],
+	paths: string | readonly string[],
 	show?: (path: string, value: Value) => string
 ): string | null {
+	const fallback = typeof row['id'] === 'string' ? row['id'] : null;
+	if (typeof paths === 'string') {
+		const compiled = labelExpression(paths);
+		if ('error' in compiled) return fallback;
+		const result = Result.try(() => compiled.evaluate(row));
+		if (Result.isFailure(result)) return fallback;
+		const value = result.success;
+		return typeof value === 'string' ||
+			typeof value === 'number' ||
+			typeof value === 'boolean' ||
+			typeof value === 'bigint'
+			? (text(String(value)) ?? fallback)
+			: fallback;
+	}
 	const terms = paths
 		.map((p) => {
 			const v = at(row, p);
 			return text(show === undefined || v === null || v === undefined ? v : show(p, v));
 		})
 		.filter((t): t is string => t !== null);
-	return terms.length === 0 ? null : terms.join(' · ');
+	return terms.length === 0 ? fallback : terms.join(' · ');
 }

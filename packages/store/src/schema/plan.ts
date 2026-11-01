@@ -4,7 +4,7 @@
 // destructive (a table or stored column dropped, or rebuilt; it needs acceptance). Rename hints (`was`) turn a drop plus
 // an add into a RENAME. Pure: the host reads what it applied, passes it in, and executes what comes back.
 import { Effect } from 'effect';
-import { canonical, sha256Hex } from '../hash.ts';
+import { canonical, sha256Hex } from '@norbital-ai/std/hash';
 import { StoreError } from '../errors.ts';
 import { RANK, schemaObjects, schemaObjectsForClassification, type SchemaObject } from './ddl.ts';
 import type { SchemaSpec } from './spec.ts';
@@ -388,6 +388,25 @@ export function statements(p: Plan, reassert: readonly SchemaObject[] = []): Pla
 			.filter((o) => !planned.some((x) => x.o.id === o.id))
 			.map((o) => ({ step: `assert:${o.id}`, o }))
 	].sort((a, b) => RANK[a.o.rank] - RANK[b.o.rank]);
+	// A rebuilt generated column can read a newly added stored column in the same migration.
+	const columns = new Map(
+		creates
+			.filter(({ o }) => o.rank === 'column')
+			.map((item) => [colKey(item.o, item.o.deps[0] ?? ''), item])
+	);
+	const scheduled = new Set<string>();
+	const ordered: typeof creates = [];
+	const schedule = (item: (typeof creates)[number]) => {
+		if (scheduled.has(item.o.id)) return;
+		scheduled.add(item.o.id);
+		if (item.o.rank === 'column')
+			for (const field of item.o.deps.slice(1)) {
+				const dependency = columns.get(colKey(item.o, field));
+				if (dependency !== undefined) schedule(dependency);
+			}
+		ordered.push(item);
+	};
+	for (const item of creates) schedule(item);
 	const out: PlannedStatement[] = [
 		...drops.flatMap(({ step, o }) => (o.drop === null ? [] : [{ step, sql: o.drop }])),
 		...p.steps.flatMap((s) => (s.rename === undefined ? [] : [{ step: s.id, sql: s.rename }])),
@@ -402,7 +421,7 @@ export function statements(p: Plan, reassert: readonly SchemaObject[] = []): Pla
 						}
 					]
 		),
-		...creates.flatMap(({ step, o }) =>
+		...ordered.flatMap(({ step, o }) =>
 			o.create.map((sql, i): PlannedStatement => ({
 				step,
 				sql,

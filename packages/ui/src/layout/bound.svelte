@@ -62,7 +62,7 @@ A region with a height contract (`content`, `fill`, `viewport`), optional paddin
 		sizeClasses[size],
 		padsInset ? INSET_CLASS : PAD_CLASSES[pad],
 		clip && 'overflow-clip',
-		// The caller's class last: floors, layers and colours it names win; layout itself is props (doctor-enforced).
+		// The caller's class last: floors, layers and colours it names win; layout itself is props.
 		className
 	)}
 	style:min-height={size === 'fill' ? minHeight : undefined}

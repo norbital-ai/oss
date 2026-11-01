@@ -376,6 +376,8 @@ function start(kind, path, inputJson, ctxJson, invocationId) {
 	let ctx;
 	if (['create', 'update', 'delete', 'policy', 'notify', 'syncRead', 'syncWrite', 'parse', 'tool', 'automation', 'effect', 'integration', 'page'].includes(kind)) {
 		const raw = JSON.parse(ctxJson, reviveWire);
+		Object.defineProperty(G, Symbol.for('norbital.bolt.secrets'), { value: Object.freeze(raw.$secrets ?? {}), configurable: true });
+		delete raw.$secrets;
 		ctx = Object.defineProperty(kind === 'page'
 			? { actor: raw.actor, now: raw.now, today: raw.today, tz: raw.tz, invocationId }
 			: { ...raw, invocationId }, Symbol.for('norbital.bolt.ctx'), { value: kind });

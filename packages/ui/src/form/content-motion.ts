@@ -64,19 +64,43 @@ export function contentMotion(node: HTMLElement) {
 			);
 	});
 	changes.observe(node, { childList: true, characterData: true, subtree: true });
+	// Height moves only in answer to the viewer (a disclosure toggled, a row added): content that arrives or grows on its
+	// own (the first load, a late editor, a new revision) takes its height at once, never rolling out.
+	let asked = -Infinity;
+	const ask = () => (asked = performance.now());
+	node.addEventListener('click', ask, true);
+	node.addEventListener('toggle', ask, true);
+	// the content's border box (its own padding included) plus the node's padding and border: the node's own height
+	const outer = () => {
+		const style = getComputedStyle(node);
+		return (
+			parseFloat(style.paddingTop) +
+			parseFloat(style.paddingBottom) +
+			parseFloat(style.borderTopWidth) +
+			parseFloat(style.borderBottomWidth)
+		);
+	};
 	let height = node.firstElementChild?.getBoundingClientRect().height ?? 0;
 	const resize =
 		typeof ResizeObserver === 'undefined' || node.matches('[data-view=record]')
 			? null
 			: new ResizeObserver(([entry]) => {
 					if (!entry) return;
-					const next = entry.contentRect.height;
+					const next = entry.borderBoxSize[0]?.blockSize ?? entry.target.getBoundingClientRect().height;
 					// a section's own open or close animates the body; this one would fight it
-					if (height > 0 && next > 0 && Math.abs(next - height) > 1 && !('moving' in node.dataset))
+					if (
+						performance.now() - asked < 400 &&
+						height > 0 &&
+						next > 0 &&
+						Math.abs(next - height) > 1 &&
+						!('moving' in node.dataset)
+					) {
+						const edge = outer();
 						play(node, [
-							{ height: `${height}px`, overflow: 'clip' },
-							{ height: `${next}px`, overflow: 'clip' }
+							{ height: `${height + edge}px`, overflow: 'clip' },
+							{ height: `${next + edge}px`, overflow: 'clip' }
 						]);
+					}
 					height = next;
 				});
 	if (observed) resize?.observe(observed);
@@ -87,6 +111,8 @@ export function contentMotion(node: HTMLElement) {
 	return {
 		destroy() {
 			changes.disconnect();
+			node.removeEventListener('click', ask, true);
+			node.removeEventListener('toggle', ask, true);
 			resize?.disconnect();
 			reduced.removeEventListener('change', cancel);
 			for (const animation of active) animation.cancel();

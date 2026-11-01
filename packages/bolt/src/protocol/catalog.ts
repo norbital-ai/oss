@@ -14,13 +14,23 @@ import type { ModelSpec } from '../decl/model.ts';
 import type { RelationshipSpec } from '../decl/names.ts';
 import type { EngineManifest } from '../engine/manifest.ts';
 import { SYSTEM } from '../system/index.ts';
+import { recordLabelExpression } from '@norbital-ai/std/label';
 
 /**
  * A model as the store's table: a workspace model is audited (its `id`, `revision` and created/updated columns) with
  * its `key` as the natural key; a system model (`table`) is keyed as its `table.primary` says, and audits nothing.
  */
 export function tableOf(model: ModelSpec): TableSpec {
-	const { description: _d, icon: _i, label: _l, table, key, locked: _lock, ...storage } = model;
+	const {
+		description: _d,
+		icon: _i,
+		label: _l,
+		record_label: _rl,
+		table,
+		key,
+		locked: _lock,
+		...storage
+	} = model;
 	// application-only metadata is not schema: enum transitions and the record lock never generate DDL
 	const fields = Object.fromEntries(
 		Object.entries(storage.fields).map(([name, kind]) => {
@@ -30,12 +40,16 @@ export function tableOf(model: ModelSpec): TableSpec {
 		})
 	);
 	const natural = key === undefined ? {} : { natural: key };
-	if (table === undefined) return { ...storage, fields, ...natural, audit: true, nativeRules: 2 };
+	const label = recordLabelExpression(model);
+	const recordLabel = label === undefined ? {} : { recordLabel: label };
+	if (table === undefined)
+		return { ...storage, fields, ...natural, ...recordLabel, audit: true, nativeRules: 2 };
 	const p = table.primary;
 	return {
 		...storage,
 		fields,
 		...natural,
+		...recordLabel,
 		nativeRules: 2,
 		key: typeof p === 'object' ? [p.field] : p,
 		...(table.identity === undefined ? {} : { identity: table.identity }),
@@ -70,8 +84,24 @@ export function tablesOf(
 
 /** The query model of a workspace and the built-in layer, whose models and models are declared alike. */
 export function catalog(m: EngineManifest): Catalog {
+	const tables = tablesOf(m.models, m.relationships);
+	// Approval references already carry model + record id. Resolve/search the target label live, without a snapshot field.
+	const requests = tables.approval_request;
+	const labelled = Object.keys(m.models).filter((name) => tables[name]?.recordLabel !== undefined);
 	return storeCatalogOf(
-		{ tables: tablesOf(m.models, m.relationships) },
+		{
+			tables: {
+				...tables,
+				...(requests === undefined
+					? {}
+					: {
+							approval_request: {
+								...requests,
+								labelLink: { model: 'collection_name', record: 'record_id', targets: labelled }
+							}
+						})
+			}
+		},
 		{ ...SYSTEM.exposures, ...m.exposures }
 	);
 }
@@ -85,6 +115,7 @@ export type BrowserCatalog = {
 		many?: readonly string[];
 		/** `search.text`'s fields and whether `search.semantic` is declared: where `$search` and `$similar` decode. */
 		search?: readonly string[];
+		record_label?: string;
 		semantic?: true;
 	};
 };
@@ -116,12 +147,13 @@ export function browserCatalog(b: BrowserCatalog): Catalog {
 									])
 								)
 							},
+							...(x.record_label === undefined ? {} : { recordLabel: x.record_label }),
 							audit: true,
 							search:
 								x.search === undefined
 									? undefined
 									: {
-											text: x.search,
+											text: x.search.filter((field) => field !== '$label'),
 											semantic: x.semantic === true ? { fields: [], model: '', dim: 0 } : undefined
 										}
 						}

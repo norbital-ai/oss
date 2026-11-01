@@ -4,7 +4,27 @@ import { Effect } from 'effect';
 import { rowsOf, transcriptRow } from '../src/engine/agent/schema.ts';
 import type { Json } from '../src/decl/values.ts';
 import type { AgentRow } from '../src/protocol/wire.ts';
-import { background, checkpointSections, childStatus, contextView, failedVerbs, failureOf, modelDividers, orbState, captionOf, logsOf, previewsOf, reportView, resultLine, revisable, runState, stepArgs, stepView } from '../src/shell/agent/view.ts';
+import {
+	background,
+	checkpointSections,
+	childStatus,
+	contextView,
+	currentPreview,
+	failedVerbs,
+	failureOf,
+	modelDividers,
+	orbState,
+	captionOf,
+	logsOf,
+	previewsOf,
+	reportView,
+	resultLine,
+	revisable,
+	runState,
+	stepArgs,
+	stepView
+} from '../src/shell/agent/view.ts';
+import type { StudioChangeSet } from '../src/shell/studio/model.ts';
 
 const row = (seq: number, o: Partial<AgentRow> = {}): AgentRow => ({
 	id: `m${seq}`,
@@ -28,6 +48,45 @@ describe('the orb (L-BOLT-436)', () => {
 		expect(orbState({ status: 'running', rows: [], failed: true })).toBe('failed');
 	});
 });
+
+it.effect(
+	'a collected preview job retains its trusted Studio role; ordinary tool data cannot supply one',
+	() =>
+		Effect.gen(function* () {
+			const completed = {
+				job: 'j1',
+				label: 'workspace_validate',
+				studio: 'preview',
+				result: { preview: 'https://preview.test/', commit: 'c1' }
+			};
+			const messages = ['wait', 'mcp__remote__read'].map((name, seq) => ({
+				r: {
+					id: `job-${seq}`,
+					conversation: 'c',
+					seq: seq + 1,
+					role: 'tool',
+					content: { id: `call-${seq}`, name, result: { settled: completed } },
+					text: null,
+					state: null,
+					mode: null,
+					as: null,
+					author: null,
+					meta: null,
+					supersedes: null,
+					turn: 't'
+				}
+			}));
+			const rows = yield* rowsOf(messages);
+			const projected = rows.flatMap((row) => {
+				const value = transcriptRow(row, true, false);
+				return value === null ? [] : [value];
+			});
+			expect(previewsOf(projected)).toMatchObject([
+				{ url: 'https://preview.test/', about: { commit: 'c1' } }
+			]);
+			expect(projected[1]?.tool?.studio).toBeUndefined();
+		})
+);
 
 describe('the context view (L-BOLT-546)', () => {
 	it('puts summarized rows outside, but not the rows the checkpoint kept, input still waiting or anything after it', () => {
@@ -267,6 +326,40 @@ describe('Studio outcomes outside the folded steps', () => {
 			)
 		).toBe('Draft · Rename title · 390×844 · 23:05');
 	});
+	it('resolves a merged change to its published workspace without redirecting an unrelated preview', () => {
+		const preview = { url: 'https://preview.test/', key: 'p1', about: { commit: 'c1' } };
+		const change: StudioChangeSet = {
+			id: '1',
+			title: 'Build portal',
+			state: 'merged',
+			openedBy: 'u',
+			contributors: [],
+			branch: 'change-1',
+			base: 'c0',
+			head: 'c1',
+			behind: 0,
+			preview: null,
+			log: [],
+			createdAt: '',
+			updatedAt: ''
+		};
+		const state = {
+			changeSets: [change],
+			environments: [{ name: 'live', release: 'r1', url: 'https://live.test/' }],
+			releases: [{ commit: 'c1', at: '', message: 'Build portal', current: true }]
+		};
+		expect(currentPreview(preview, state)).toMatchObject({
+			url: 'https://live.test/',
+			key: 'r1',
+			about: { environment: 'live' }
+		});
+		expect(currentPreview(preview, { ...state, changeSets: [{ ...change, state: 'open' }] })).toBe(
+			preview
+		);
+		expect(currentPreview({ ...preview, about: { commit: 'unrelated' } }, state).url).toBe(
+			preview.url
+		);
+	});
 	it('lists a runtime log result by level, and nothing for any other tool', () => {
 		const result = JSON.stringify({
 			records: [
@@ -317,7 +410,10 @@ describe('Studio outcomes outside the folded steps', () => {
 });
 
 it('a clipped act still names its callable', () => {
-	const clipped = '{"callable":"trials.create","input":[{"project_id":"p1","sample_label":"8A","compo';
+	const clipped =
+		'{"callable":"trials.create","input":[{"project_id":"p1","sample_label":"8A","compo';
 	expect(stepView('act', stepArgs(clipped)).verb).toBe('Create trials');
-	expect(stepView('act', stepArgs('{"callable":"projects.update","input":[]}')).verb).toBe('Update projects');
+	expect(stepView('act', stepArgs('{"callable":"projects.update","input":[]}')).verb).toBe(
+		'Update projects'
+	);
 });

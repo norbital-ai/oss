@@ -78,16 +78,14 @@
 	>
 	<div class="flex gap-1">
 		<Combobox
-			size="sm"
-			class="w-28 max-sm:min-h-11"
+			class="w-28"
 			aria-label={t('month')}
 			options={monthNames}
 			value={String(shown.month)}
 			onChange={(m) => m !== null && onPlaceholder(shown.set({ month: Number(m) }))}
 		/>
 		<Combobox
-			size="sm"
-			class="w-20 max-sm:min-h-11"
+			class="w-20"
 			aria-label={t('year')}
 			options={years}
 			value={String(shown.year)}
@@ -111,7 +109,7 @@
 				<P.GridHead>
 					<P.GridRow class="flex">
 						{#each weekdays as day, i (i)}<P.HeadCell
-								class="w-9 max-sm:w-11 text-[0.8rem] font-normal text-muted-foreground"
+								class="w-9 max-sm:w-11 text-xs font-normal text-muted-foreground"
 								>{day.slice(0, 2)}</P.HeadCell
 							>{/each}
 					</P.GridRow>

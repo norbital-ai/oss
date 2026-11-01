@@ -291,7 +291,7 @@ something not in this table, you are almost certainly about to write a layout by
 Details that remove the old escape hatches:
 
 - **`class` is applied last on every primitive.** Layout (gap, align, justify, direction, wrap) is
-  props only — the doctor enforces it — so what a class can still say is a floor (`min-h-24`), a
+  props only — the primitives enforce it — so what a class can still say is a floor (`min-h-24`), a
   layer (`z-20`), a colour (`divide-border/40`), a size, or responsive visibility, and it wins.
 - **Every primitive takes `bind:ref`** and can render `as="button" | "a" | "label"`: a clickable
   row or chip IS the primitive, with no inner layout span.
@@ -307,7 +307,7 @@ Details that remove the old escape hatches:
 `Split` and `Columns` measure **themselves** (each is its own inline-size container), so a split in
 a narrow grid cell collapses even inside a wide page.
 
-Every primitive is enforced: the doctor `layoutPack` (UI5–UI27) fails on raw `flex`/`grid`,
+Every primitive is deliberate: the primitives do not accept raw `flex`/`grid`,
 `gap-*`, `items-*`, `justify-*`, `flex-col`/`-wrap`, `grid-cols-*`, `divide-*`, `space-*`,
 `overflow-*` scroll, `absolute`/`fixed`/`sticky`, arbitrary heights and literal insets — including
 inside `class={cn(…)}` literals and behind `sm:`-style variants. It runs in `oss`, every template,

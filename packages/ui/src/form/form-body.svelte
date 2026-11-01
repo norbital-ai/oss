@@ -19,7 +19,7 @@
 	import { msg } from '../text/messages.js';
 	import { FormState, provideForm, useRecordController, type Act } from './form-state.svelte.js';
 	import { confirmAction } from '../primitives/dialog/confirm.js';
-	import type { FormConfirm } from './form.svelte';
+	import type { FormConfirm, FormProps } from './form.svelte';
 
 	let {
 		spec,
@@ -34,6 +34,7 @@
 		disabled: askedDisabled,
 		onOutcome,
 		confirm,
+		validate,
 		children,
 		actions,
 		class: className
@@ -50,6 +51,7 @@
 		disabled?: boolean;
 		onOutcome?(outcome: Outcome): void;
 		confirm?: FormConfirm;
+		validate?: FormProps['validate'];
 		children?: Snippet<[FormState]>;
 		actions?: Snippet<[FormState]>;
 		class?: string;
@@ -97,6 +99,7 @@
 	if (matching) untrack(() => form.prefill(values));
 	if (scope?.historical) form.mode = 'view';
 	provideForm(form);
+	onDestroy(form.addValidation(() => (readonly ? [] : (validate?.(form.row) ?? []))));
 	const capabilities = observeOnce(() =>
 		matching ||
 		asked === true ||
@@ -190,7 +193,8 @@
 	{#if !matching && asked !== true && !scope?.historical && update && bolt.recordCapabilities !== undefined && form.capabilities === undefined && form.notice === null}
 		<div role="status" aria-busy="true"><Spinner /></div>
 	{:else}
-		<div class="min-h-0 flex-1 overflow-auto pb-4" data-form-body>
+		<!-- the gutter is kept: a section opening past the fold never narrows the body under a classic scrollbar -->
+		<div class="min-h-0 flex-1 overflow-auto pb-4 [scrollbar-gutter:stable]" data-form-body>
 			<!-- a column the body's height bounds: open sections share it and scroll inside themselves -->
 			<div class="flex h-full flex-col gap-4">
 				{#if form.capabilities === null}<Alert variant="secondary">{t('notFound')}</Alert>{/if}
@@ -202,6 +206,7 @@
 						<Section
 							first={i === 0}
 							title={s?.title}
+							icon={s?.icon}
 							hint={s?.hint}
 							name={s?.name}
 							defaultOpen={s?.defaultOpen}

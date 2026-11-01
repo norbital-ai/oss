@@ -142,7 +142,7 @@ function decider() {
 	const port: Pick<Ai['Service'], 'ask'> & {
 		inputs: Seen[];
 		answers: string[];
-		script: (Action | { action: Action; wait: number; p?: number })[];
+		script: (Action | { action: Action; wait: number; p?: number; durationConfidence?: number })[];
 		throws: boolean;
 	} = {
 		inputs: [],
@@ -173,7 +173,7 @@ function decider() {
 					type: 'score',
 					score: d.wait,
 					level: Math.round(d.wait),
-					confidence: p,
+					confidence: 'durationConfidence' in d ? (d.durationConfidence ?? p) : p,
 					probabilities: {},
 					legend: {}
 				};
@@ -332,7 +332,8 @@ describe('envoy triage (G12 (10))', () => {
 			yield* t.settled();
 
 			fresh();
-			port.script = [{ action: 'wait', wait: 2 }];
+			// A confident wait must hold even when the exact duration is uncertain.
+			port.script = [{ action: 'wait', wait: 2, p: 0.85, durationConfidence: 0.48 }];
 			yield* say(CAL_WA, 'part one');
 			yield* debounce();
 			expect(Date.parse(String((yield* queued())[0]?.['due'])) - Date.parse(t.clock.now())).toBe(

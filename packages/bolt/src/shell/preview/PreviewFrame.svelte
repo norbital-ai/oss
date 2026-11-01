@@ -8,15 +8,18 @@
 	page around it; the last size is remembered on this device. Studio's preview pane and the agent panel both use it.
 -->
 <script lang="ts">
-	import { Button, Icon, Popover, Spinner } from '@norbital-ai/ui';
+	import { Button, Icon, Popover, Spinner, TabStrip } from '@norbital-ai/ui';
 	import { Inline, Stack } from '@norbital-ai/ui/layout';
 	import { Option, Schema } from 'effect';
 	import { watch } from 'runed';
 	import type { Snippet } from 'svelte';
 	import { elapsedText } from '../studio/model.ts';
+	import type { StudioTestRun } from '../studio/test-results.ts';
+	import TestResults from '../studio/TestResults.svelte';
 
 	let {
 		src,
+		tests,
 		title = 'Preview',
 		label,
 		version,
@@ -26,7 +29,8 @@
 		onClose,
 		t = (key: string) => key
 	}: {
-		src: string;
+		src: string | null;
+		tests?: StudioTestRun | undefined;
 		title?: string;
 		/** What it previews (a draft, a commit): the header reads "Preview · <label>". */
 		label?: string | undefined;
@@ -42,6 +46,19 @@
 		t?: (key: string) => string;
 	} = $props();
 
+	let pane = $state('preview');
+	$effect(() => {
+		if (src === null) pane = 'tests';
+	});
+	const testColor = $derived(
+		tests?.state === 'running'
+			? 'text-info'
+			: tests?.state === 'passed'
+				? 'text-success'
+				: tests?.state === 'failed'
+					? 'text-destructive'
+					: 'text-muted-foreground'
+	);
 	const Size = Schema.Struct({ width: Schema.Number, height: Schema.Number });
 	type Size = typeof Size.Type;
 	const KEY = 'norbital.preview.size';
@@ -90,6 +107,7 @@
 		(key) => {
 			since = now = Date.now();
 			failure = null;
+			if (src === null) return;
 			const timer = setInterval(() => (now = Date.now()), 1_000);
 			let retry: ReturnType<typeof setTimeout> | undefined;
 			// the address itself: an error status is a reason to show, except a busy host (503), which is waited out
@@ -166,7 +184,7 @@
 		handle.addEventListener('pointercancel', up);
 	}
 	// the room's padding and the bezel around the page: what the scaled page cannot use
-	const BEZEL = 32 + 14;
+	const BEZEL = 24 + 14;
 	// Svelte Flow's dotted canvas: a 1px dot every 20px on the page's own background
 	const GRID =
 		'radial-gradient(circle, color-mix(in oklab, var(--color-muted-foreground) 45%, transparent) 1px, transparent 1px)';
@@ -174,178 +192,212 @@
 </script>
 
 <Stack gap="none" size="fill">
+	<TabStrip
+		label={t('Preview panels')}
+		value={pane}
+		onValueChange={(value) => (pane = value)}
+		items={[
+			{ name: 'preview', title: t('Preview'), icon: 'lucide:monitor' },
+			{
+				name: 'tests',
+				title:
+					tests === undefined
+						? t('Tests')
+						: `${t('Tests')} · ${t(tests.state === 'running' ? 'Running' : tests.state === 'passed' ? 'Passed' : tests.state === 'failed' ? 'Failed' : 'Empty')}`,
+				icon: 'lucide:flask-conical',
+				iconClass: testColor
+			}
+		]}
+	/>
 	<Inline gap="xs" class="h-9 border-b border-border/60 px-2 text-micro text-muted-foreground">
 		<strong class="min-w-0 truncate px-1 text-xs font-medium text-foreground"
 			>{label ?? t('Preview')}</strong
 		>
-		{#if status !== undefined}
-			<span role="status" class="inline-flex shrink-0 items-center gap-1 text-foreground"
-				><Spinner class="size-3" />{status}</span
+		{#if pane === 'preview'}
+			{#if status !== undefined}
+				<span role="status" class="inline-flex shrink-0 items-center gap-1 text-foreground"
+					><Spinner class="size-3" />{status}</span
+				>
+			{/if}
+			<span class="flex-1"></span>
+			<span
+				class="inline-flex shrink-0 rounded-md bg-muted/60 p-0.5"
+				role="group"
+				aria-label={t('Device')}
 			>
-		{/if}
-		<span class="flex-1"></span>
-		<span
-			class="inline-flex shrink-0 rounded-md bg-muted/60 p-0.5"
-			role="group"
-			aria-label={t('Device')}
-		>
-			{#each PRESETS as preset (preset.name)}
-				{@const on = size.width === preset.size.width && size.height === preset.size.height}
-				<button
-					type="button"
-					class="grid size-6 place-items-center rounded {on
-						? 'bg-background text-foreground shadow-xs'
-						: 'hover:text-foreground'}"
-					aria-pressed={on}
-					aria-label={t(preset.name)}
-					title={t(preset.name)}
-					onclick={() => choose({ ...preset.size })}
-				>
-					<Icon name={preset.icon} class="size-3.5" />
-				</button>
-			{/each}
-		</span>
-		{#if details !== undefined}
-			<Popover.Root>
-				<Popover.Trigger
-					class="grid size-7 shrink-0 place-items-center rounded-md hover:bg-accent hover:text-foreground"
-					aria-label={t('Details')}
-					title={t('Details')}
-				>
-					<Icon name="lucide:info" class="size-3.5" />
-				</Popover.Trigger>
-				<Popover.Content align="end" class="w-72 p-3 text-micro text-muted-foreground"
-					>{@render details()}</Popover.Content
-				>
-			</Popover.Root>
-		{/if}
-		{#if menu !== undefined}
-			<Popover.Root bind:open={menuOpen}>
-				<Popover.Trigger
-					class="grid size-7 shrink-0 place-items-center rounded-md hover:bg-accent hover:text-foreground"
-					aria-label={t('More')}
-					title={t('More')}
-				>
-					<Icon name="lucide:ellipsis" class="size-3.5" />
-				</Popover.Trigger>
-				<Popover.Content align="end" class="grid w-56 gap-0.5 p-1"
-					>{@render menu(() => (menuOpen = false))}</Popover.Content
-				>
-			</Popover.Root>
-		{/if}
-		<Button
-			size="sm"
-			variant="ghost"
-			class="size-7 shrink-0 p-0"
-			aria-label={t('Reload')}
-			title={t('Reload')}
-			onclick={() => reloads++}
-		>
-			<Icon name="lucide:rotate-cw" class="size-3.5" />
-		</Button>
+				{#each PRESETS as preset (preset.name)}
+					{@const on = size.width === preset.size.width && size.height === preset.size.height}
+					<button
+						type="button"
+						class="grid size-6 place-items-center rounded {on
+							? 'bg-background text-foreground shadow-xs'
+							: 'hover:text-foreground'}"
+						aria-pressed={on}
+						aria-label={t(preset.name)}
+						title={t(preset.name)}
+						onclick={() => choose({ ...preset.size })}
+					>
+						<Icon name={preset.icon} class="size-3.5" />
+					</button>
+				{/each}
+			</span>
+			{#if details !== undefined}
+				<Popover.Root>
+					<Popover.Trigger
+						class="grid size-7 shrink-0 place-items-center rounded-md hover:bg-accent hover:text-foreground"
+						aria-label={t('Details')}
+						title={t('Details')}
+					>
+						<Icon name="lucide:info" class="size-3.5" />
+					</Popover.Trigger>
+					<Popover.Content align="end" class="w-72 p-3 text-micro text-muted-foreground"
+						>{@render details()}</Popover.Content
+					>
+				</Popover.Root>
+			{/if}
+			{#if menu !== undefined}
+				<Popover.Root bind:open={menuOpen}>
+					<Popover.Trigger
+						class="grid size-7 shrink-0 place-items-center rounded-md hover:bg-accent hover:text-foreground"
+						aria-label={t('More')}
+						title={t('More')}
+					>
+						<Icon name="lucide:ellipsis" class="size-3.5" />
+					</Popover.Trigger>
+					<Popover.Content align="end" class="grid w-56 gap-0.5 p-1"
+						>{@render menu(() => (menuOpen = false))}</Popover.Content
+					>
+				</Popover.Root>
+			{/if}
+			<Button
+				variant="ghost"
+				class="size-7 shrink-0 p-0"
+				aria-label={t('Reload')}
+				title={t('Reload')}
+				onclick={() => reloads++}
+			>
+				<Icon name="lucide:rotate-cw" class="size-3.5" />
+			</Button>
+		{:else}<span class="flex-1"></span>{/if}
 		{#if onClose !== undefined}
 			<Button
-				size="sm"
 				variant="ghost"
 				class="size-7 shrink-0 p-0"
 				aria-label={t('Close preview')}
 				title={t('Close preview')}
 				onclick={onClose}
+				data-preview-close
 			>
 				<Icon name="lucide:x" class="size-3.5" />
 			</Button>
 		{/if}
 	</Inline>
-	<!-- a canvas: the page is a device on a dotted canvas, never part of the app around it -->
+	{#if pane === 'tests'}<TestResults run={tests} {t} />{/if}
 	<div
-		class="relative min-h-0 flex-1 overflow-hidden bg-background p-4"
-		style:background-image={GRID}
-		style:background-size="20px 20px"
-		bind:clientWidth={
-			null, (w: number | null | undefined) => (roomWidth = Math.max(0, (w ?? 0) - BEZEL))
-		}
-		bind:clientHeight={
-			null, (h: number | null | undefined) => (roomHeight = Math.max(0, (h ?? 0) - BEZEL))
-		}
+		class={pane === 'preview' ? 'flex min-h-0 flex-1 flex-col' : 'hidden'}
+		aria-hidden={pane !== 'preview'}
 	>
-		<!-- the bezel; inside it the box is the scaled size, the page laid out at the full size and drawn at `zoom` -->
-		<div
-			class="relative mx-auto w-fit rounded-2xl border border-border bg-card p-1.5 shadow-[0_12px_40px_-12px_rgb(0_0_0/0.35)]"
-		>
+		{#if src === null}
+			<p class="grid min-h-40 flex-1 place-items-center p-4 text-xs text-muted-foreground">
+				{t('Build a preview to view the app.')}
+			</p>
+		{:else}
+			<!-- a canvas: the page is a device on a dotted canvas, never part of the app around it -->
 			<div
-				bind:this={frame}
-				class="relative overflow-hidden rounded-xl bg-background ring-1 ring-border/60"
-				style:width={`${size.width * zoom}px`}
-				style:height={`${size.height * zoom}px`}
+				class="relative grid min-h-0 flex-1 place-items-center overflow-hidden bg-background p-3"
+				style:background-image={GRID}
+				style:background-size="20px 20px"
+				bind:clientWidth={
+					null, (w: number | null | undefined) => (roomWidth = Math.max(0, (w ?? 0) - BEZEL))
+				}
+				bind:clientHeight={
+					null, (h: number | null | undefined) => (roomHeight = Math.max(0, (h ?? 0) - BEZEL))
+				}
 			>
-				{#key loading}
-					<iframe
-						{title}
-						{src}
-						onload={() => (loaded = loading)}
-						sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-modals allow-downloads"
-						class="origin-top-left border-0 bg-background {dragging ? 'pointer-events-none' : ''}"
-						style:width={`${size.width}px`}
-						style:height={`${size.height}px`}
-						style:transform={zoom < 1 ? `scale(${zoom})` : undefined}
-					></iframe>
-				{/key}
-				{#if waiting || failure !== null}
-					<!-- never a blank frame: a calm card over the canvas says what is happening, or why it failed -->
+				<!-- the bezel; inside it the box is the scaled size, the page laid out at the full size and drawn at `zoom` -->
+				<div
+					class="relative mx-auto w-fit rounded-2xl border border-border bg-card p-1.5 shadow-deep"
+				>
 					<div
-						class="absolute inset-0 grid place-items-center bg-background p-4"
-						style:background-image={GRID}
-						style:background-size="20px 20px"
-						role="status"
-						data-preview-loading={failure === null || undefined}
-						data-preview-failed={failure !== null || undefined}
+						bind:this={frame}
+						class="relative overflow-hidden rounded-xl bg-background ring-1 ring-border/60"
+						style:width={`${size.width * zoom}px`}
+						style:height={`${size.height * zoom}px`}
 					>
-						<Stack
-							gap="xs"
-							align="center"
-							class="max-w-64 rounded-lg border border-border bg-card px-4 py-3 text-center shadow-xs"
-						>
-							{#if failure === null}
-								<Spinner class="size-4" />
-								<p class="text-sm font-medium text-foreground">{t('Starting the preview…')}</p>
-								<p class="text-meta">
-									{label ?? t('Preview')} · {elapsedText(now - since)}
-								</p>
-							{:else}
-								<Icon name="lucide:circle-alert" class="size-4 text-destructive" />
-								<p class="text-sm font-medium text-foreground">{t('The preview could not load')}</p>
-								<p class="text-meta">{failure}</p>
-								<Button size="sm" variant="outline" onclick={() => reloads++}>{t('Retry')}</Button>
-							{/if}
-						</Stack>
+						{#key loading}
+							<iframe
+								{title}
+								{src}
+								onload={() => (loaded = loading)}
+								sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-modals allow-downloads"
+								class="origin-top-left border-0 bg-background {dragging
+									? 'pointer-events-none'
+									: ''}"
+								style:width={`${size.width}px`}
+								style:height={`${size.height}px`}
+								style:transform={zoom < 1 ? `scale(${zoom})` : undefined}
+							></iframe>
+						{/key}
+						{#if waiting || failure !== null}
+							<!-- never a blank frame: a calm card over the canvas says what is happening, or why it failed -->
+							<div
+								class="absolute inset-0 grid place-items-center bg-background p-4"
+								style:background-image={GRID}
+								style:background-size="20px 20px"
+								role="status"
+								data-preview-loading={failure === null || undefined}
+								data-preview-failed={failure !== null || undefined}
+							>
+								<Stack
+									gap="xs"
+									align="center"
+									class="max-w-64 rounded-lg border border-border bg-card px-4 py-3 text-center shadow-xs"
+								>
+									{#if failure === null}
+										<Spinner class="size-4" />
+										<p class="text-sm font-medium text-foreground">{t('Starting the preview…')}</p>
+										<p class="text-meta">
+											{label ?? t('Preview')} · {elapsedText(now - since)}
+										</p>
+									{:else}
+										<Icon name="lucide:circle-alert" class="size-4 text-destructive" />
+										<p class="text-sm font-medium text-foreground">
+											{t('The preview could not load')}
+										</p>
+										<p class="text-meta">{failure}</p>
+										<Button variant="outline" onclick={() => reloads++}>{t('Retry')}</Button>
+									{/if}
+								</Stack>
+							</div>
+						{/if}
 					</div>
-				{/if}
+					<!-- the bezel's edges drag with a pointer; the device buttons above are the keyboard path -->
+					<!-- svelte-ignore a11y_no_static_element_interactions -->
+					<span
+						aria-hidden="true"
+						class="{HANDLE} top-0 -right-1 h-full w-2 cursor-ew-resize"
+						onpointerdown={(event) => resize('x', event)}
+					></span>
+					<!-- svelte-ignore a11y_no_static_element_interactions -->
+					<span
+						aria-hidden="true"
+						class="{HANDLE} -bottom-1 left-0 h-2 w-full cursor-ns-resize"
+						onpointerdown={(event) => resize('y', event)}
+					></span>
+					<!-- svelte-ignore a11y_no_static_element_interactions -->
+					<span
+						aria-hidden="true"
+						class="{HANDLE} -right-1 -bottom-1 size-3 cursor-nwse-resize"
+						onpointerdown={(event) => resize('xy', event)}
+					></span>
+				</div>
+				<span
+					class="absolute right-2 bottom-1 font-mono text-micro text-muted-foreground tabular-nums"
+					aria-live="polite"
+					>{size.width} × {size.height}{#if zoom < 1}
+						· {Math.round(zoom * 100)}%{/if}</span
+				>
 			</div>
-			<!-- the bezel's edges drag with a pointer; the device buttons above are the keyboard path -->
-			<!-- svelte-ignore a11y_no_static_element_interactions -->
-			<span
-				aria-hidden="true"
-				class="{HANDLE} top-0 -right-1 h-full w-2 cursor-ew-resize"
-				onpointerdown={(event) => resize('x', event)}
-			></span>
-			<!-- svelte-ignore a11y_no_static_element_interactions -->
-			<span
-				aria-hidden="true"
-				class="{HANDLE} -bottom-1 left-0 h-2 w-full cursor-ns-resize"
-				onpointerdown={(event) => resize('y', event)}
-			></span>
-			<!-- svelte-ignore a11y_no_static_element_interactions -->
-			<span
-				aria-hidden="true"
-				class="{HANDLE} -right-1 -bottom-1 size-3 cursor-nwse-resize"
-				onpointerdown={(event) => resize('xy', event)}
-			></span>
-		</div>
-		<span
-			class="absolute right-2 bottom-1 font-mono text-micro text-muted-foreground tabular-nums"
-			aria-live="polite"
-			>{size.width} × {size.height}{#if zoom < 1}
-				· {Math.round(zoom * 100)}%{/if}</span
-		>
+		{/if}
 	</div>
 </Stack>

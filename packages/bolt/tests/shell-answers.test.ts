@@ -5,8 +5,6 @@ import { Effect, Schema } from 'effect';
 import {
 	SettingsAnswer,
 	ShellBootAnswer,
-	StudioAuditAnswer,
-	StudioAuditRulesAnswer,
 	StudioBuildAnswer,
 	StudioFileAnswer,
 	StudioViewAnswer
@@ -15,7 +13,6 @@ import { shellApi } from '../src/shell/runtime.ts';
 import type { ShellBoot } from '../src/shell/nav.ts';
 import type { Settings } from '../src/shell/settings/data.ts';
 import type { StudioBuildRecord, StudioFile, StudioView } from '../src/shell/studio/model.ts';
-import type { StudioAudit, StudioAuditRules } from '../src/shell/studio/audit.ts';
 
 const strict = <A>(schema: Schema.Decoder<A>, value: A) =>
 	expect(Schema.decodeUnknownSync(schema)(value, { onExcessProperty: 'error' })).toEqual(value);
@@ -77,6 +74,14 @@ const boot = {
 	kiosks: [{ name: 'desk', title: 'Desk', icon: 'tablet', href: '/kiosk/desk' }],
 	startable: [{ name: 'sync', description: 'Sync now' }],
 	envoys: { helper: 'Helper' },
+	search: [
+		{
+			kind: 'automation',
+			name: 'sync',
+			description: 'Sync data',
+			href: '/command-center/automations?automation=sync'
+		}
+	],
 	push: 'vapid',
 	visitor: { app: 'shop', siteKey: 'site' },
 	catalog: {
@@ -338,12 +343,12 @@ const studio = {
 		}
 	],
 	sections: {
+		remotes: [],
 		models: [],
 		apps: entries,
 		kiosks: [],
 		policies: [],
 		automations: [],
-		remotes: [],
 		secrets: []
 	},
 	stale: true
@@ -353,35 +358,6 @@ const files = [
 	{ text: 'x', truncated: { limit: 1, bytes: 2 } },
 	{ binary: true, bytes: 4 }
 ] satisfies StudioFile[];
-const rules = {
-	revision: 1,
-	ruleSet: { states: { r1: 'off' }, ignore: ['dist'], rules: [{ id: 'own' }] },
-	rules: [
-		{
-			id: 'r1',
-			pack: 'platform',
-			summary: 'Rule',
-			severity: 'hint',
-			state: 'off',
-			principles: ['p'],
-			files: ['src/**'],
-			rationale: 'Why',
-			examples: { bad: ['a'], good: ['b'] }
-		}
-	],
-	errors: [{ id: 'own', message: 'Bad rule' }],
-	digest: 'd',
-	version: 'v'
-} satisfies StudioAuditRules;
-const audit = {
-	commit: 'c1',
-	findings: [
-		{ rule: 'r1', severity: 'error', summary: 'Rule', location: 'a.ts:1: x', principles: [] }
-	],
-	errors: [],
-	digest: 'd',
-	version: 'v'
-} satisfies StudioAudit;
 
 describe('shell answers', () => {
 	it('decode every key their types carry', () => {
@@ -391,8 +367,6 @@ describe('shell answers', () => {
 		strict(StudioBuildAnswer, record);
 		strict(StudioBuildAnswer, null);
 		for (const file of files) strict(StudioFileAnswer, file);
-		strict(StudioAuditRulesAnswer, rules);
-		strict(StudioAuditAnswer, audit);
 	});
 	it.effect('refuse a malformed answer as a protocol failure', () =>
 		Effect.gen(function* () {
@@ -411,9 +385,6 @@ describe('shell answers', () => {
 				yield* Effect.flip(answering({ binary: false }).studioFile('c1', 'src/a.ts'))
 			).toMatchObject(protocol);
 			expect(yield* Effect.flip(answering({ build }).studioBuild('c1'))).toMatchObject(protocol);
-			expect(
-				yield* Effect.flip(answering({ ...rules, rules: {} }).studioAuditRules())
-			).toMatchObject(protocol);
 		})
 	);
 });

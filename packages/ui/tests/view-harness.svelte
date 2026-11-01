@@ -111,7 +111,7 @@
 	{#snippet trailing()}
 		<Button
 			variant="ghost"
-			size="icon-sm"
+			size="icon"
 			aria-label="Schedule details"
 			onclick={fixture.onTrailing}><Icon name="lucide:info" /></Button
 		>
@@ -123,7 +123,7 @@
 		col: import('../src/client/contract.js').Json;
 		label: string;
 	})}
-		<Button variant="ghost" size="sm" onclick={() => fixture.onColumn?.(col)}>{label}</Button>
+		<Button variant="ghost" onclick={() => fixture.onColumn?.(col)}>{label}</Button>
 	{/snippet}
 	<fixture.view
 		{...fixture.props}

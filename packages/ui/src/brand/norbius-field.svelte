@@ -174,7 +174,7 @@
 >
 	<canvas></canvas>
 	<span data-swatch class="text-foreground"></span>
-	<span data-swatch class="text-brand dark:text-brand-400"></span>
+	<span data-swatch class="text-brand"></span>
 	<span data-swatch class="text-background"></span>
 </span>
 

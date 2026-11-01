@@ -3,12 +3,13 @@
 // ("this month") stays relative in the rows and the URL; the read gets its literal at the page's day clock, so it rolls
 // over at midnight in the workspace zone. The condition catalogue (`filter.options`) is the same one a description is
 // offered; the builder renders it, never an operator table of its own.
-import { Effect, Result } from 'effect';
+import { Effect } from 'effect';
 import { untrack } from 'svelte';
 import { useKinds, type ModelExposure } from '../kinds/context.js';
 import type { Json, ViewBolt } from '../client/contract.js';
 import {
 	clauses,
+	complete,
 	fromWhere,
 	localFilterFields,
 	orderKeys,
@@ -46,7 +47,7 @@ export function viewState(
 		typeof location === 'undefined' ? new URLSearchParams() : new URL(location.href).searchParams;
 	const words: Pick<ViewBolt, 't'> = bolt ?? { t: (key) => key };
 	const DROPPED = () =>
-		msg(words, 'view.dropped', 'A filter or sort from the link no longer applies and was removed');
+		msg(words, 'view.dropped', 'A filter or sort no longer applies and was removed');
 	const day = $derived(o.enabled?.() === false ? undefined : bolt?.clock('day'));
 	const zone = useKinds().zone ?? 'UTC';
 	const clock = (): FilterClock => {
@@ -55,16 +56,28 @@ export function viewState(
 	};
 
 	/** `bolt.decode` per top-level clause (it keeps or drops each top-level key; an `and` list is one key), or null when the
-	 * client has none (a local array, a test host): the typed rows then are the check. */
-	function decode(c: string, q: { where?: Json; orderBy?: Json }) {
+	 * client has none (a local array, a test host): the typed rows then are the check. A decoder that fails drops the
+	 * clause instead of letting an unchecked predicate reach the read. */
+	function decode(
+		c: string,
+		q: { where?: Json; orderBy?: Json }
+	): {
+		readonly orderBy?: Json;
+		readonly dropped: readonly { path: string; message: string }[];
+	} | null {
 		if (bolt?.decode === undefined || c.startsWith('$')) return null;
-		return Result.getOrElse(
-			Result.try({
-				try: () => bolt.decode?.(c, q) ?? null,
-				catch: (cause) => ({ _tag: 'FilterDecodeFailed' as const, cause })
-			}),
-			() => null
-		);
+		try {
+			return bolt.decode(c, q) ?? null;
+		} catch (cause) {
+			return {
+				dropped: [
+					{
+						path: '',
+						message: cause instanceof Error ? cause.message : 'The filter could not be decoded.'
+					}
+				]
+			};
+		}
 	}
 	/** URL → rows and keys: each top-level clause and key decoded alone; the bad ones dropped with one notice. */
 	function load() {
@@ -111,8 +124,8 @@ export function viewState(
 		model: o.model(),
 		fields: localFilterFields(o.model(), o.catalog()[o.model()])
 	});
-	let loaded: typeof offerSpec | null = null,
-		loading: typeof offerSpec | null = null,
+	let loaded = $state.raw<typeof offerSpec | null>(null);
+	let loading: typeof offerSpec | null = null,
 		generation = 0;
 	const offerKey = () => offerSpec;
 	function loadOffers(): Effect.Effect<void> {
@@ -156,7 +169,10 @@ export function viewState(
 		let dropped = 0;
 		for (const n of rows) {
 			const w = toWhere(o.catalog(), c, n, at);
-			if (w === null) continue;
+			if (w === null) {
+				if (complete(n)) dropped++;
+				continue;
+			}
 			const d = decode(c, { where: w });
 			if (d !== null && d.dropped.length > 0) dropped++;
 			else parts.push(w);
@@ -182,6 +198,9 @@ export function viewState(
 	});
 
 	return {
+		get clock() {
+			return clock();
+		},
 		get rows() {
 			return rows;
 		},

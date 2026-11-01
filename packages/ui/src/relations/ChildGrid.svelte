@@ -24,7 +24,7 @@ A related-record grid with explicit child operations, original revisions and par
 	import { SvelteMap } from 'svelte/reactivity';
 	import { watch as changes } from 'runed';
 	import { useKinds } from '../kinds/context.js';
-	import { fieldsText } from '../kinds/kind.js';
+	import { fieldsText, recordText } from '../kinds/kind.js';
 	import { FormState, useRecordController } from '../form/form-state.svelte.js';
 	import { changed, formSpec, locked } from '../form/draft.js';
 	import type { ChildOperation } from '../form/child-operations.js';
@@ -524,15 +524,17 @@ A related-record grid with explicit child operations, original revisions and par
 				if (save === 'parent' && owner !== null && owner !== undefined) {
 					linkedLabels.set(
 						selected,
-						fieldsText(
-							exposure?.fields ?? {},
-							row,
-							(exposure?.label ?? []).filter(
-								(name) =>
-									capabilities === undefined ||
-									(capabilities !== null && Object.hasOwn(capabilities.fields, name))
-							)
-						) || msg(bolt, 'child.record', 'Record')
+						(exposure?.record_label !== undefined
+							? recordText(exposure, row)
+							: fieldsText(
+									exposure?.fields ?? {},
+									row,
+									(exposure?.label ?? []).filter(
+										(name) =>
+											capabilities === undefined ||
+											(capabilities !== null && Object.hasOwn(capabilities.fields, name))
+									)
+								)) || selected
 					);
 					links = [
 						...links.filter(
@@ -605,12 +607,11 @@ A related-record grid with explicit child operations, original revisions and par
 	{@const entry = drafts.get(key)}
 	{#if entry !== undefined}
 		<div class="flex flex-wrap gap-1">
-			{#if !entry.created}<Button size="sm" variant="ghost" onclick={() => openRecord(model, key)}
+			{#if !entry.created}<Button variant="ghost" onclick={() => openRecord(model, key)}
 					>{msg(bolt, 'child.open', 'Open')}</Button
 				>{/if}
 			{#if editing}
 				{#if save === 'independent' && (entry.created || entry.form.dirty)}<Button
-						size="sm"
 						disabled={!entry.form.canSave}
 						onclick={() => fork(entry.form.submit())}
 						>{entry.form.resubmitting
@@ -620,13 +621,11 @@ A related-record grid with explicit child operations, original revisions and par
 								: msg(bolt, 'record.save', 'Save')}</Button
 					>{/if}
 				{#if entry.created || (strategy.delete && permits(entry.form.capabilities?.delete))}<Button
-						size="sm"
 						variant="ghost"
 						disabled={entry.form.pending || (save === 'parent' && owner?.pending === true)}
 						onclick={() => remove(key, 'delete')}>{msg(bolt, 'child.delete', 'Delete row')}</Button
 					>{/if}
 				{#if !identity?.owned && strategy.unlink && permits(entry.form.capabilities?.fields[identity?.parent ?? ''])}<Button
-						size="sm"
 						variant="ghost"
 						disabled={entry.form.pending || (save === 'parent' && owner?.pending === true)}
 						onclick={() => remove(key, 'unlink')}>{msg(bolt, 'child.unlink', 'Unlink')}</Button
@@ -667,7 +666,6 @@ A related-record grid with explicit child operations, original revisions and par
 			</p>
 		</div>
 		{#if save === 'independent' && !scope?.historical}<Button
-				size="sm"
 				variant="outline"
 				disabled={linkBusy || [...drafts.values()].some((entry) => entry.form.pending)}
 				onclick={() => {
@@ -697,7 +695,6 @@ A related-record grid with explicit child operations, original revisions and par
 					: msg(bolt, 'record.edit', 'Edit')}</Button
 			>{/if}
 		{#if editing && strategy.create !== undefined}<Button
-				size="sm"
 				variant="outline"
 				disabled={save === 'parent' && owner?.pending === true}
 				onclick={add}>{msg(bolt, 'child.add', 'Add row')}</Button
@@ -710,7 +707,6 @@ A related-record grid with explicit child operations, original revisions and par
 		{#if id !== undefined}<ReadGate state={loaded} what={model}>{@render table()}</ReadGate
 			>{:else}{@render table()}{/if}
 		{#if loaded.kind === 'ready' && loaded.value.next !== null}<Button
-				size="sm"
 				variant="outline"
 				onclick={() => {
 					if (loaded.kind === 'ready' && loaded.value.next !== null) after = loaded.value.next;
@@ -727,7 +723,6 @@ A related-record grid with explicit child operations, original revisions and par
 						link = value;
 					}}
 				/><Button
-					size="sm"
 					variant="outline"
 					disabled={typeof link !== 'string' || linkBusy || owner?.pending === true}
 					onclick={linkRow}>{msg(bolt, 'child.link', 'Link existing')}</Button

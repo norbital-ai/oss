@@ -1,6 +1,6 @@
 import { Effect } from 'effect';
 import { StoreError } from '../errors.ts';
-import { canonical } from '../hash.ts';
+import { canonical } from '@norbital-ai/std/hash';
 import {
 	APPLIED,
 	MIGRATION_GUARD_CODES,

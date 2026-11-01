@@ -252,7 +252,13 @@ export function compile<R extends Roots, M extends Mode, T extends FormulaResult
 	if (path !== null) return { error: `unknown path ${path}` };
 	const checked = own.env.check(text);
 	if (!checked.valid) return { error: first(checked.error) };
-	const type = checked.type ?? 'dyn';
+	// CEL object roots are maps of dyn; a declared member still has its own result type.
+	const declared = chain(program.ast)?.reduce<Kind | undefined>(
+		(kind, part, i) =>
+			i === 0 ? ctx.roots[part] : kind?.kind === 'object' ? kind.fields[part] : undefined,
+		undefined
+	);
+	const type = declared === undefined ? (checked.type ?? 'dyn') : celType(declared, ctx.numbers);
 	if (result !== 'json' && type !== 'dyn' && !ACCEPTS[result][ctx.numbers].includes(type))
 		return {
 			error: `expected ${result === 'bool' ? 'a yes/no' : `a ${result}`} result, got ${type}`

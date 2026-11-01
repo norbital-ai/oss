@@ -58,7 +58,6 @@ Edits date, instant or clock ranges, singly or as an array, at the requested pre
 			</div>{/each}
 		{#if !readonly}<Button
 				class="w-fit"
-				size="sm"
 				variant="outline"
 				{disabled}
 				onclick={() => onChange([...list, null])}>{t('add')}</Button

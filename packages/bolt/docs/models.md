@@ -8,7 +8,7 @@ import { model } from '@norbital-ai/bolt';
 
 export default model('orders', {
 	description: 'Customer orders.',
-	label: 'number',
+	record_label: 'record.number',
 	fields: {
 		number: { kind: 'seq', pattern: 'SO-{yyyy}-{0000}' },
 		customer: { kind: 'ref', to: 'customers', inverse: 'orders' },
@@ -64,6 +64,53 @@ The example assumes `customers` (with `code`, `blocked`), `order_lines` (`order`
 `lines`) and `products`. Model writes are the standard guarded `create`, `update`, `delete` and, on
 a model with a key, `upsert` verbs. A model declares no named queries: callers read the layers
 they need and transform them with a pure `src/lib` helper on their own side.
+
+## One record identifier
+
+Optionally declare `record_label` as a pure CEL expression over `record`:
+
+```ts
+record_label: "record.code + ' · ' + record.name",
+search: { text: ['email'] } // additional search terms; the identifier is indexed automatically
+```
+
+This is the default identifier for `RecordShell` titles, the primary text column and compact
+list headings produced by `Table`, default board card headings, pickers, relationship references,
+and record results in Find and Norbius. Explicit authored titles or cell/card snippets override
+the default. Declare the identifier once instead of reconstructing it in each representation.
+Field captions continue to use ordinary `label` text.
+
+Omitting it is valid: no identifier column or automatic label index is created. Record views, lists, pickers and references use the record id (UUID) as their identifier;
+approvals use the target record UUID from the existing reference. Explicit `search.text` indexes still work
+without a label. With neither a label nor a text index, record search is unavailable and Find
+explains that no search index is declared. Model discovery itself remains available.
+
+Use own stored fields, sequences, computed fields, or nested values inside an inline field.
+For optional values use a conditional, such as `record.name != null ? record.name : 'Unnamed'`;
+use `string(record.quantity)` to include a number. Cross-record lookups, clocks and requestor
+variables are excluded: a persisted identifier must depend only on its record. Related records
+render their own identifiers through the normal relation controls. `bolt check` reports invalid
+CEL, unsupported operators and unknown fields at the declaring model.
+
+The compiler creates an engine-owned generated text column, `bolt_record_label`, and includes
+its value in the GIN-backed `bolt_search` document. No duplicate field or explicit label search
+index is needed. Sequence and computed values are available before it is calculated; inserts,
+updates, imports and restores recalculate it. Changing the expression generates a migration that
+rebuilds stored identifiers and their search document for existing rows. `search.text` adds other
+fields, while semantic and custom indexes keep their existing roles.
+
+Approval requests reuse their existing `collection_name` and `record_id` reference. Search joins
+the target's indexed label and resolves its current identifier at read time; no target label is
+stored on `approval_request`. A label edit is reflected immediately, including on closed requests.
+Only the target label is matched through this reference, not its other text-search fields or ID.
+The target's row grants and readable label dependencies apply, including named-only outputs.
+A missing, inaccessible or unlabelled target uses its existing record UUID as the fallback. The approval
+model has its own text index for that model name.
+
+Read outputs must expose the fields used by the expression. A restricted output neither receives
+an identifier derived from hidden fields nor matches their terms in search. Legacy model `label`
+field names/lists remain compatible and normalize to the same calculation for workspace models;
+new declarations should use `record_label`. This is model metadata, not a writable data field.
 
 ## Layer maps
 

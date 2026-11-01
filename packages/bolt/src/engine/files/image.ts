@@ -7,6 +7,7 @@ import {
 	type ImagePreviewMime as PreviewMime,
 	type ImagePreviewSize
 } from '../contracts.ts';
+import type { ImageCrop } from '../contracts.ts';
 import { Images } from '../ports.ts';
 import { Port, type PortFailure } from '../port.ts';
 
@@ -34,5 +35,7 @@ const image = <A>(
 export const imageFacts = (bytes: Uint8Array) => image(bytes, (images) => images.facts(bytes));
 export const imageJpeg = (bytes: Uint8Array, maxEdge: number) =>
 	image(bytes, (images) => images.jpeg(bytes, maxEdge));
+export const imageCrop = (bytes: Uint8Array, box: ImageCrop) =>
+	image(bytes, (images) => images.crop(bytes, box));
 export const imagePreview = (bytes: Uint8Array, mime: PreviewMime, maxEdge: ImagePreviewSize) =>
 	image(bytes, (images) => images.preview(bytes, mime, maxEdge));

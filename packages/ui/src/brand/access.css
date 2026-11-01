@@ -7,8 +7,8 @@
 	font-family: var(--font-sans, Geist, system-ui, sans-serif);
 }
 .dark .access-frame {
-	background: var(--background, #191815);
-	color: var(--foreground, #f7f7f4);
+	background: var(--background, #08090a);
+	color: var(--foreground, #f7f8f8);
 }
 .access-content {
 	--access-space-before: calc(max(1.5rem, env(safe-area-inset-top)) + 3.5rem);
@@ -49,7 +49,7 @@
 }
 .access-brand {
 	font-size: 0.875rem;
-	font-weight: 600;
+	font-weight: 590;
 	letter-spacing: -0.025em;
 }
 .access-mark {
@@ -75,7 +75,7 @@
 	overflow: auto;
 	overflow-wrap: anywhere;
 	border: 1px solid color-mix(in srgb, var(--border, #deddd6) 80%, transparent);
-	border-radius: var(--radius, 0.5rem);
+	border-radius: var(--radius, 0.75rem);
 	background: color-mix(in srgb, var(--card, #f7f7f4) 95%, transparent);
 	box-shadow: 0 1px 2px rgb(0 0 0 / 5%);
 	backdrop-filter: blur(8px);
@@ -85,7 +85,7 @@
 	padding: 1.25rem;
 }
 .dark .access-panel {
-	background: color-mix(in srgb, var(--card, #22211d) 95%, transparent);
+	background: color-mix(in srgb, var(--card, #0f1011) 95%, transparent);
 }
 .access-identity {
 	display: flex;
@@ -129,7 +129,7 @@
 	margin: 0;
 	font-size: 0.875rem;
 	line-height: 1.25rem;
-	font-weight: 600;
+	font-weight: 590;
 	overflow-wrap: anywhere;
 }
 .access-loading-status {
@@ -149,7 +149,7 @@
 	display: block;
 	width: 40%;
 	height: 100%;
-	background: var(--brand-500, #e87432);
+	background: var(--brand, #f6701b);
 	animation: access-opening 1.3s ease-in-out infinite alternate;
 }
 .access-loading-cluster .access-loading-track {

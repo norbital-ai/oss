@@ -193,6 +193,8 @@ const PathIndex = Schema.Union([
 ]);
 export const TableSpec = Schema.Struct({
 	fields: Fields,
+	/** Pure CEL over this row's own fields; materialized as bolt_record_label and included in the text index. */
+	recordLabel: Str,
 	/**
 	 * The primary key: these fields (composite or natural), or an `id` column of this type (`identity`: a bigint the
 	 * database numbers). Absent: an `id` uuid.

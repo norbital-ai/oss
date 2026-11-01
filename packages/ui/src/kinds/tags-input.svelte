@@ -30,7 +30,7 @@
 </script>
 
 <div
-	class={cn(CONTROL, 'flex h-auto min-h-9 flex-wrap items-center gap-1 py-1')}
+	class={cn(CONTROL, 'flex h-auto min-h-8 flex-wrap items-center gap-1 py-1')}
 	aria-invalid={invalid ? 'true' : undefined}
 >
 	{#each value as item (item)}

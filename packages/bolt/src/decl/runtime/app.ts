@@ -10,7 +10,17 @@ import type { AudienceAdmits } from '../../engine/services.ts';
 
 /** One secret: the label and help Settings shows; its value is supplied at runtime and sealed in the tenant store. */
 type SecretDecl = { label: string; description?: string };
-/** `src/+secrets.ts`: the workspace's secret names; values stay in the encrypted tenant store. */
+/**
+ * Declares secret names and their Settings labels in `src/+secrets.ts`. This is metadata, never a place for values.
+ * Administrators supply values at runtime; the host seals them in the tenant store. Refer to a declared name when
+ * configuring an integration or MCP connection rather than copying its value into source or browser code. Once the
+ * declaration is live, `navigate { configure: { capability: 'secret.set', record: '<NAME>' } }` opens the native
+ * write-only form; the value is never read back or sent through chat.
+ * @param spec UPPER_SNAKE names with labels and optional help text.
+ * @returns The declaration unchanged; declaring a name neither supplies nor verifies its runtime value.
+ * @example
+ * export default secrets({ SERVICE_TOKEN: { label: 'Service token', description: 'Pair in Settings.' } });
+ */
 export function secrets<const E extends Record<string, SecretDecl>>(
 	spec: E &
 		Exact<
@@ -99,6 +109,8 @@ type Part<S, K extends string> = S extends { [P in K]: infer V } ? V : {};
 /**
  * `src/+workspace.ts`, exactly one: the workspace's timezone and locale, the app order in the nav, AI settings, and
  * `connections` (named integration instances).
+ * @param spec Workspace settings and named connection slots; credentials are supplied separately at runtime.
+ * @returns The typed declaration unchanged. Compilation validates its references against this workspace's names.
  * @example
  * export default workspace({ tz: 'Asia/Singapore', locale: 'en-SG', apps: ['crm'] });
  */

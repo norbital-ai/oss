@@ -146,7 +146,11 @@ it.effect(
 				evidence: {
 					type: 'score',
 					instructions: 'How direct is the evidence?',
-					criteria: ['No evidence', 'Indirect evidence', 'Clear direct evidence']
+					criteria: [
+						'No evidence',
+						{ description: 'Indirect evidence' },
+						{ description: 'Clear direct evidence' }
+					]
 				},
 				action: { type: 'choice', instructions: 'What next?', criteria: { accept: 'Accept it' } },
 				signed: {
@@ -164,7 +168,11 @@ it.effect(
 					level: 2,
 					confidence: 0.9,
 					probabilities: { 0: 0, 1: 0.1, 2: 0.9 },
-					legend: { 0: 'No evidence', 1: 'Indirect evidence', 2: 'Clear direct evidence' }
+					legend: {
+						0: 'No evidence',
+						1: { description: 'Indirect evidence' },
+						2: { description: 'Clear direct evidence' }
+					}
 				},
 				action: { type: 'choice', choice: 'accept', confidence: 1, probabilities: { accept: 1 } },
 				signed: { type: 'noul', noul: 1 }
@@ -254,19 +262,24 @@ it.effect(
 					value: {
 						answers: {
 							...result.answers,
-							evidence: { ...result.answers.evidence, level: 'Clear direct evidence' }
+							evidence: {
+								...result.answers.evidence,
+								level: { description: 'Clear direct evidence' }
+							}
 						},
 						costUsd: result.costUsd
 					}
 				});
 			expect(result.answers.evidence).toMatchObject({ level: 2 });
-			expect(written[0]).toMatchObject({
+			expect(written.filter((event) => event.event === 'ai.call')).toHaveLength(3);
+			const traces = () => written.filter((event) => event.event === 'decision.made');
+			expect(traces()[0]).toMatchObject({
 				severity: 'info',
 				invocation: expect.any(String),
 				run: null,
 				attributes: { use: 'filter', answers: result.answers }
 			});
-			for (const event of written.slice(1))
+			for (const event of traces().slice(1))
 				expect(event).toMatchObject({
 					severity: 'info',
 					invocation: 'run-1:1',
@@ -278,7 +291,7 @@ it.effect(
 				ok: false,
 				error: { kind: 'tooLarge', message: 'State exceeds context', status: 413 }
 			});
-			expect(written[3]).toMatchObject({
+			expect(traces()[3]).toMatchObject({
 				severity: 'warn',
 				invocation: 'run-1:1',
 				run: 'run-1',
@@ -292,7 +305,7 @@ it.effect(
 			});
 			mode = 'offlist';
 			expect(yield* dispatch).toMatchObject({ ok: false, error: { kind: 'invalid' } });
-			expect(written[4]).toMatchObject({
+			expect(traces()[4]).toMatchObject({
 				severity: 'warn',
 				invocation: 'run-1:1',
 				run: 'run-1',
@@ -304,8 +317,23 @@ it.effect(
 					args: [{ state: {}, questions: {} }]
 				})
 			).toMatchObject({ ok: false, error: { kind: 'invalid' } });
+			for (const question of [
+				{
+					type: 'noul',
+					instructions: { photo: { id: 'f1', name: 'photo.png', mime: 'image/png' } }
+				},
+				{ type: 'choice', criteria: { photo: { id: 'f1', name: 'photo.png', mime: 'image/png' } } }
+			]) {
+				expect(
+					yield* facilities.dispatch({
+						_tag: 'ai.sys_1.decide',
+						args: [{ state: {}, questions: { q: question } }]
+					})
+				).toMatchObject({ ok: false, error: { kind: 'invalid' } });
+			}
 			expect(requests).toEqual([request, request, request, request, request]);
-			expect(written).toHaveLength(5);
+			expect(traces()).toHaveLength(7);
+			expect(written.filter((event) => event.event === 'ai.call')).toHaveLength(7);
 		}).pipe(
 			Effect.provide(FacilitiesLive.pipe(Layer.provideMerge(services))),
 			Effect.provideService(Logs, {

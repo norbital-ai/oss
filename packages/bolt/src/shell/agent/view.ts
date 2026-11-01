@@ -2,7 +2,7 @@
 // and the model-change dividers (L-BOLT-547). Each is a function of the rows alone, so a reload shows the same thing.
 import { Array as Arr, Option, Predicate, Schema } from 'effect';
 import type { AgentConversation, AgentRow } from '../../protocol/wire.ts';
-import type { StudioLogLine } from '../studio/model.ts';
+import type { StudioLogLine, StudioView } from '../studio/model.ts';
 
 /** One mark per state: waiting on a person is not failing, and a finished or stopped turn is not idle. */
 export type Orb = 'ready' | 'working' | 'waiting' | 'failed' | 'done' | 'stopped';
@@ -269,8 +269,27 @@ const VIEWS: { readonly [tool: string]: (a: Args) => StepView } = {
 	}),
 	workspace_search: (a) => ({
 		icon: 'lucide:folder-search',
-		verb: a['path'] === undefined ? 'Searched the source' : 'Read source',
-		target: str(a['path']) || str(a['text']) || (typeof a['rule'] === 'string' ? a['rule'] : '')
+		verb:
+			a['pattern'] !== undefined || a['path'] === undefined ? 'Searched the source' : 'Read source',
+		target:
+			str(a['pattern']) ||
+			str(a['path']) ||
+			str(a['text']) ||
+			(typeof a['rule'] === 'string' ? a['rule'] : '')
+	}),
+	workspace_read: (a) => ({
+		icon: 'lucide:file-code',
+		verb: 'Read source',
+		target: str(a['path'])
+	}),
+	workspace_edit: (a) => ({
+		icon: 'lucide:file-pen-line',
+		verb: 'Edited the source',
+		target: str(a['path']),
+		code: {
+			text: `// before\n${str(a['oldString'])}\n// after\n${str(a['newString'])}`,
+			language: languageOf(str(a['path']))
+		}
 	}),
 	docs: (a) => ({
 		icon: 'lucide:library',
@@ -328,6 +347,12 @@ const VIEWS: { readonly [tool: string]: (a: Args) => StepView } = {
 		icon: 'lucide:shield-check',
 		verb: 'Checked the source',
 		target: ''
+	}),
+	workspace_test: () => ({ icon: 'lucide:flask-conical', verb: 'Ran the tests', target: '' }),
+	navigate: (a) => ({
+		icon: 'lucide:arrow-up-right',
+		verb: 'Requested navigation',
+		target: str(a['path'])
 	}),
 	workspace_review: () => ({
 		icon: 'lucide:git-compare',
@@ -396,6 +421,8 @@ export function stepView(name: string, args: unknown): StepView {
 export function resultLine(result: unknown): string {
 	const r = obj(result);
 	if (typeof r['error'] === 'string') return r['error'];
+	if (r['declined'] === true)
+		return typeof r['reason'] === 'string' ? `Rejected · ${r['reason']}` : 'Rejected';
 	const rows = Arr.isArray(r['rows']) ? r['rows'] : Arr.isArray(r['data']) ? r['data'] : null;
 	return rows === null ? '' : `${rows.length} ${rows.length === 1 ? 'row' : 'rows'}`;
 }
@@ -409,9 +436,7 @@ const parsed = (text: string | undefined): unknown =>
 export const stepArgs = (text: string | undefined): unknown =>
 	parsed(text) ??
 	Object.fromEntries(
-		[...(text ?? '').matchAll(/"(\w+)":"((?:[^"\\]|\\.)*)"/g)]
-			.reverse()
-			.map((m) => [m[1], m[2]])
+		[...(text ?? '').matchAll(/"(\w+)":"((?:[^"\\]|\\.)*)"/g)].reverse().map((m) => [m[1], m[2]])
 	);
 /** Why a failed step failed: its error, else its result as it came (a clipped one does not parse); '' for any other step. */
 export function failureOf(tool: AgentRow['tool']): string {
@@ -428,7 +453,9 @@ export const failedVerbs = (steps: readonly AgentRow[]): string[] =>
 /** What a running Studio step is doing, in the person's words: the group's line while it runs. */
 const DOING: { readonly [tool: string]: string } = {
 	workspace_write: 'Editing the source…',
+	workspace_edit: 'Editing the source…',
 	workspace_validate: 'Building the preview…',
+	workspace_test: 'Running the tests…',
 	workspace_review: 'Reviewing the changes…'
 };
 export const doingOf = (steps: readonly AgentRow[]): string =>
@@ -487,6 +514,29 @@ export function previewsOf(
 		}
 		return tool.name === 'preview_show' && built.has(origin) ? [shown] : [];
 	});
+}
+
+/** A merged change no longer has a preview environment; show the published workspace instead. */
+export function currentPreview(
+	preview: ReturnType<typeof previewsOf>[number],
+	studio: Pick<StudioView, 'changeSets' | 'environments' | 'releases'>
+): ReturnType<typeof previewsOf>[number] {
+	const commit = preview.about?.['commit'];
+	const change = studio.changeSets?.find(
+		(one) => commit !== undefined && (one.head === commit || one.preview?.commit === commit)
+	);
+	if (change?.state !== 'merged') return preview;
+	const live = studio.environments?.find((one) => one.name === 'live');
+	if (live?.url == null || live.release === '') return preview;
+	const release = studio.releases.find((one) => one.current);
+	return {
+		url: live.url,
+		key: live.release,
+		about: {
+			environment: 'live',
+			...(release === undefined ? {} : { commit: release.commit, message: release.message })
+		}
+	};
 }
 
 /** The records of a `logs` role's result (`{ records: StudioLogLine[] }`); `null` for any other step. */

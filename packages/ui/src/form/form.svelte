@@ -12,7 +12,7 @@
 		RecordFieldOf,
 		RecordOf
 	} from '../model/types.js';
-	import type { FormState } from './form-state.svelte.js';
+	import type { FormState, SemanticIssue } from './form-state.svelte.js';
 	import type { RecordSection } from './section.svelte';
 	import type { ConfirmOptions } from '../primitives/dialog/confirm.js';
 
@@ -20,6 +20,9 @@
 	 * `Form of="<c>" mode="create" | "update"` edits a model's allowlisted fields; `Form of={{ automation: '<a>' }}`
 	 * renders an automation's input and queues a run. Generated from authorized metadata: without
 	 * `children` every allowlisted field renders in order; with `children` the page lays out its own `Field`s.
+	 * Defaults, required checks, state moves and approval routing come from the declaration. A save routed to
+	 * approval answers a held outcome and the native approval panel decides it; do not add a second approval
+	 * control or repeat the declaration's defaults in the page.
 	 */
 	/** What a form edits: a model's row, or a declared automation's input. */
 	export type FormSource = ModelKey | { [A in AutomationKey]: { automation: A } }[AutomationKey];
@@ -62,6 +65,8 @@
 		onOutcome?(outcome: Outcome): void;
 		/** Asks before a valid draft saves: the dialog to show for this change, or `null` to save without asking. */
 		confirm?: FormConfirm;
+		/** Pure semantic checks over the draft. Reuse this validator in the server's guarded write. */
+		validate?: (values: Readonly<Record<string, Value>>) => readonly SemanticIssue[];
 		children?: Snippet<[FormState]>;
 		/** Extra buttons beside submit. */
 		actions?: Snippet<[FormState]>;
@@ -94,6 +99,7 @@
 		disabled,
 		onOutcome,
 		confirm,
+		validate,
 		children,
 		actions,
 		class: className
@@ -244,6 +250,7 @@
 						{disabled}
 						{onOutcome}
 						{confirm}
+						{validate}
 						{children}
 						{actions}
 						class={className}

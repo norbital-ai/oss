@@ -10,6 +10,8 @@ import { Approvals, RunHandlers, Writes } from '../src/engine/services.ts';
 import { TestWorkspace } from '../../bolt-cli/src/test/index.ts';
 import { program } from '../../bolt-cli/src/test/guest.ts';
 import { manifest as base } from './write-fixture.ts';
+import { dynamicRead } from '../src/protocol/read-request.ts';
+import { label, labelExpression } from '@norbital-ai/std/label';
 
 const requesterId = '0199a000-0000-7000-8000-000000000001',
 	managerId = '0199a000-0000-7000-8000-000000000002',
@@ -19,12 +21,22 @@ const manifest: EngineManifest = {
 	models: {
 		expenses: {
 			description: 'Expenses',
-			label: 'name',
-			fields: { name: { kind: 'text' }, amount: { kind: 'money' }, manager: { kind: 'text' } }
+			record_label: "record.display_name + ' · ' + record.manager_name",
+			search: { text: ['amount'] },
+			fields: {
+				name: { kind: 'text' },
+				amount: { kind: 'money' },
+				manager: { kind: 'text' },
+				manager_name: { kind: 'text', default: 'Manager' }
+			},
+			computed: { display_name: { kind: 'text', expr: { upper: { field: 'name' } } } }
 		},
 		lines: { description: 'Expense lines', label: 'name', fields: { name: { kind: 'text' } } }
 	},
-	relationships: { 'lines.expense': { to: 'expenses', inverse: 'lines', owned: true } },
+	relationships: {
+		'lines.expense': { to: 'expenses', inverse: 'lines', owned: true },
+		'expenses.manager': { to: 'sys_user' }
+	},
 	exposures: {
 		expenses: {
 			read: { expenses: { fields: 'all' } },
@@ -51,7 +63,10 @@ const manifest: EngineManifest = {
 			description: 'Requests',
 			grants: { expenses: { read: true, create: { check: true }, update: { check: true } } }
 		},
-		reviewer: { description: 'Reviews', grants: { expenses: { read: true } } }
+		reviewer: {
+			description: 'Reviews',
+			grants: { expenses: { read: true }, approval_request: { read: true } }
+		}
 	},
 	teams: { requesters: ['requester'], managers: ['reviewer'], finance: ['reviewer'] }
 };
@@ -139,6 +154,15 @@ const fixture = Effect.gen(function* () {
 			text: "SELECT jsonb_build_object('state',state,'step',step,'route',route,'log',log) FROM bolt_approvals WHERE id=$1::uuid",
 			params: [id]
 		});
+	const search = (query: string, authority = manager) =>
+		t
+			.as(authority)
+			.query(
+				dynamicRead({
+					approval_request: { search: query, fields: ['collection_name'], limit: 20 }
+				})
+			)
+			.pipe(Effect.map((answer) => answer.approval_request?.rows ?? []));
 	const notices = () =>
 		Effect.gen(function* () {
 			const run = yield* handlers.handler('bolt.notify');
@@ -159,10 +183,46 @@ const fixture = Effect.gen(function* () {
 				params: []
 			});
 		});
-	return { t, requester, manager, finance, act, decide, row, request, notices };
+	return { t, requester, manager, finance, act, decide, row, request, search, notices };
 });
 
 layer(workspace, { excludeTestServices: true })('approval snapshots and saves', (it) => {
+	it.effect('CEL labels agree between the client and native approval snapshot expressions', () =>
+		Effect.gen(function* () {
+			const f = yield* fixture;
+			const row = { code: 'Q7', name: 'Acme', missing: null, count: 3 };
+			for (const expression of [
+				"record.code + ' · ' + record.name",
+				'record.missing != null ? record.missing : record.name',
+				"has(record.missing) ? 'present' : 'absent'",
+				"has(record.absent) ? 'present' : 'absent'",
+				"has(record.missing.child) ? 'present' : 'absent'",
+				"record.missing ? 'Yes' : 'No'",
+				"[record.code, record.missing, record.name].filter(x, x != null).map(x, x.upperAscii()).join(' · ')",
+				"{'Q7': 'Quote seven'}[record.code]",
+				"record.code in ['Q7', 'Q8'] ? 'Quote' : 'Other'",
+				'string(3 / 2)',
+				'string((3 + 1) / 3)',
+				'string([record.code, record.name].size())',
+				'string(1 / 0)'
+			]) {
+				const program = labelExpression(expression);
+				if ('error' in program) throw new Error(program.error);
+				const sql = program.sql(
+					(path) =>
+						`($1::jsonb #> ARRAY[${path
+							.split('.')
+							.map((part) => `'${part.replaceAll("'", "''")}'`)
+							.join(', ')}])`
+				);
+				const snapshot = yield* f.t.db.value(Schema.NullOr(Schema.String), {
+					text: `SELECT (${sql} #>> '{}')`,
+					params: program.paths.length === 0 ? [] : [JSON.stringify(row)]
+				});
+				expect(snapshot, expression).toBe(label(row, expression));
+			}
+		})
+	);
 	it.effect(
 		'preserves open checkpoints during history pruning and refuses rollback without its checkpoint',
 		() =>
@@ -232,6 +292,15 @@ layer(workspace, { excludeTestServices: true })('approval snapshots and saves', 
 					const id = result.outcome.records[0]?.id;
 					if (id === undefined) throw new Error('Missing expense');
 					expect(Option.getOrThrow(yield* f.row(id)).name).toBe('Travel');
+					expect(yield* f.search('Travel Manager')).toContainEqual({
+						id: result.outcome.requestId,
+						collection_name: 'expenses',
+						$label: 'TRAVEL · Manager'
+					});
+					expect(yield* f.search(id)).toEqual([]);
+					expect(yield* f.search('150')).not.toContainEqual(
+						expect.objectContaining({ id: result.outcome.requestId })
+					);
 					expect(yield* f.request(result.outcome.requestId)).toMatchObject({
 						state: 'Pending',
 						step: 0,
@@ -283,6 +352,11 @@ layer(workspace, { excludeTestServices: true })('approval snapshots and saves', 
 						(yield* f.act('update', [{ target: id, set: { name: '  Clarified  ' } }])).outcome
 					).toMatchObject({ kind: 'pendingApproval', requestId });
 					expect(Option.getOrThrow(yield* f.row(id)).name).toBe('Clarified');
+					expect(yield* f.search('Clarified Manager')).toContainEqual({
+						id: requestId,
+						collection_name: 'expenses',
+						$label: 'CLARIFIED · Manager'
+					});
 					expect(yield* f.request(requestId)).toMatchObject({ state: 'Pending', step: 1 });
 					yield* f.decide(requestId, 'requestChanges', f.finance, 'Reduce');
 					yield* f.act('update', [{ target: id, set: { amount: 50 } }]);
@@ -352,5 +426,31 @@ layer(workspace, { excludeTestServices: true })('approval snapshots and saves', 
 				).toBe('First');
 			})
 		)
+	);
+});
+
+const { record_label: _recordLabel, ...unlabelledExpenses } = manifest.models.expenses!;
+const unlabelled = { ...manifest, models: { ...manifest.models, expenses: unlabelledExpenses } };
+layer(
+	Layer.unwrap(
+		program(source).pipe(
+			Effect.map((guest) => TestWorkspace.layer({ manifest: unlabelled, guest }))
+		)
+	),
+	{ excludeTestServices: true }
+)('approvals without a record label', (it) => {
+	it.effect('uses model-name search without creating a copied label field', () =>
+		Effect.gen(function* () {
+			const f = yield* fixture;
+			const result = (yield* f.act('create', [{ name: 'Travel', amount: 150, manager: managerId }]))
+				.outcome;
+			if (result.kind !== 'pendingApproval') throw new Error(JSON.stringify(result));
+			expect(yield* f.search('expenses')).toContainEqual({
+				id: result.requestId,
+				collection_name: 'expenses',
+				$label: result.records[0]?.id
+			});
+			expect(yield* f.search('Travel')).toEqual([]);
+		})
 	);
 });

@@ -60,6 +60,7 @@ import type {
 	HttpRequest,
 	HttpResponse,
 	ImageFacts,
+	ImageCrop,
 	ImagePreview,
 	ImagePreviewMime,
 	ImagePreviewSize,
@@ -565,7 +566,7 @@ export type AiEvent =
 	| { readonly _tag: 'Progress'; readonly reasoning: string | undefined }
 	| { readonly _tag: 'Response'; readonly response: AiResponse };
 /**
- * The AI facility (P35, P39): `ask` is `sys_1` (fast structured decisions, text only), `infer` the `sys_2` LLM
+ * The AI facility (P35, P39): `ask` is `sys_1` (structured decisions from text and resolved images), `infer` the `sys_2` LLM
  * (multimodal; the 20 s idle wall cuts a stream into a `cut` step, rule 63), `embed` the embedding model. `models` are the
  * classes the host maps; `catalog` the concrete models a person may pick and the one a conversation starts on.
  */
@@ -912,6 +913,7 @@ export class Images extends Context.Service<
 	{
 		readonly facts: (bytes: Uint8Array) => Effect.Effect<ImageFacts, PortFailure>;
 		readonly jpeg: (bytes: Uint8Array, maxEdge: number) => Effect.Effect<Uint8Array, PortFailure>;
+		readonly crop: (bytes: Uint8Array, box: ImageCrop) => Effect.Effect<Uint8Array, PortFailure>;
 		readonly preview: (
 			bytes: Uint8Array,
 			mime: ImagePreviewMime,
@@ -924,6 +926,7 @@ export class Images extends Context.Service<
 			facts: (bytes) => Port.attempt('files.image', (signal) => port.facts(bytes, signal)),
 			jpeg: (bytes, maxEdge) =>
 				Port.attempt('files.image', (signal) => port.jpeg(bytes, maxEdge, signal)),
+			crop: (bytes, box) => Port.attempt('files.image', (signal) => port.crop(bytes, box, signal)),
 			preview: (bytes, mime, maxEdge) =>
 				Port.attempt('files.image', (signal) => port.preview(bytes, mime, maxEdge, signal))
 		});

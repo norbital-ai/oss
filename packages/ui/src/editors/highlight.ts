@@ -5,14 +5,19 @@ import { highlightCode, tagHighlighter, tags as t } from '@lezer/highlight';
 export const codeHighlighter = tagHighlighter([
 	{ tag: [t.comment, t.lineComment, t.blockComment], class: 'text-muted-foreground italic' },
 	{ tag: [t.string, t.special(t.string)], class: 'text-success' },
-	{ tag: [t.number, t.integer, t.float], class: 'text-brand-600' },
+	{ tag: [t.number, t.integer, t.float], class: 'text-brand' },
 	{
 		tag: [t.bool, t.null, t.atom, t.keyword, t.operatorKeyword, t.typeName, t.propertyName],
 		class: 'text-info'
 	},
 	{
-		tag: [t.controlKeyword, t.moduleKeyword, t.function(t.variableName), t.function(t.propertyName)],
-		class: 'text-brand-700'
+		tag: [
+			t.controlKeyword,
+			t.moduleKeyword,
+			t.function(t.variableName),
+			t.function(t.propertyName)
+		],
+		class: 'text-brand-text'
 	},
 	{
 		tag: [t.operator, t.punctuation, t.bracket, t.paren, t.brace, t.squareBracket],

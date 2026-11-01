@@ -54,7 +54,7 @@ One value for the whole system, owned by `@norbital-ai/ui/layout`. You never wri
 | inset       | `px-4 py-2 sm:px-6` | `Bound inset`, `Scroll inset`, a tab body (provisionally) |
 | strip inset | `mx-4 sm:mx-6`      | the tab strip, only when nothing above it already pads    |
 
-A literal `px-4 sm:px-6` in an app file is a doctor error (UI8).
+A literal `px-4 sm:px-6` in an app file bypasses the shell inset; use the primitive spacing.
 
 ### The rule: the scrollport owns the inset
 

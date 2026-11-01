@@ -25,6 +25,11 @@
 			"svelte": "./build/page/integration.js",
 			"default": "./build/page/integration.js"
 		},
+		"./page/studio": {
+			"types": "./build/page/studio.d.ts",
+			"svelte": "./build/page/studio.js",
+			"default": "./build/page/studio.js"
+		},
 		"./engine": {
 			"types": "./build/engine/index.d.ts",
 			"default": "./build/engine/index.js"

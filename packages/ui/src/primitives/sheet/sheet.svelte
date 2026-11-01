@@ -280,14 +280,15 @@ screen from its header.
 		].join(';') || undefined}
 		class={cn(
 			// a phone: one bottom drawer for every side, its top corners a squircle, never above the shell's top bar
-			'bg-popover text-popover-foreground fixed inset-x-0 bottom-0 z-40 flex max-h-[calc(100dvh-var(--shell-header-height,env(safe-area-inset-top)))] min-w-0 animate-in flex-col rounded-t-[1.25rem] border-t pb-[env(safe-area-inset-bottom)] shadow-lg fade-in-0 slide-in-from-bottom-4 animation-duration-200 ease-out motion-reduce:animate-none [corner-shape:squircle]',
+			'bg-popover text-popover-foreground fixed inset-x-0 bottom-0 z-40 flex max-h-[calc(100dvh-var(--shell-header-height,env(safe-area-inset-top)))] min-w-0 animate-in flex-col rounded-t-xl border-t pb-[env(safe-area-inset-bottom)] shadow-deep fade-in-0 slide-in-from-bottom-4 animation-duration-200 ease-out motion-reduce:animate-none [corner-shape:squircle]',
 			full
 				? 'h-[calc(100dvh-var(--shell-header-height,env(safe-area-inset-top)))] rounded-none'
 				: 'h-[var(--sheet-h,min(90dvh,48rem))]',
 			'md:max-h-full md:rounded-none md:border-t-0 md:pb-0 md:inset-y-0 md:h-full md:slide-in-from-bottom-0',
 			right
 				? full
-					? 'md:right-0 md:left-[var(--shell-sidebar-width,0px)] md:w-auto'
+					// a full sheet is the page in the layout: it keeps the sidebar and tracks its width with the same transition
+					? 'md:right-0 md:left-[var(--shell-sidebar-width,0px)] md:w-auto md:transition-[left] md:duration-200 md:ease-linear'
 					: 'md:right-0 md:left-auto md:w-[var(--sheet-w,min(40rem,90vw))] md:max-w-[min(90vw,calc(100vw-var(--shell-sidebar-width,0px)))] md:border-l md:slide-in-from-right-4'
 				: 'md:right-auto md:left-0 md:w-[min(40rem,90vw)] md:border-r md:slide-in-from-left-4',
 			className

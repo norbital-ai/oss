@@ -1,36 +1,52 @@
 <!--
-	Studio's source navigator : a header with the file count and a filter, then the
-	workspace as a tree — folders fold (closed unless they hold the open file), each row an icon, the name, and a draft mark
-	(A added, M modified, D deleted; a folder holding a draft shows a dot) or the file's size. A filter lists matching paths.
+	Studio's source navigator : the workspace as a tree — folders fold (closed unless they hold the open file), each row an
+	icon, the name and a change mark (A added, M modified, D deleted; a folder holding a change shows a dot) or the file's
+	size. Names wear the change's colour (green added, yellow modified, red deleted) over saves and unsaved drafts. A
+	filter lists matching paths; the rail above owns it and the source/changes switch.
 -->
 <script lang="ts">
 	import { Icon } from '@norbital-ai/ui';
-	import { Inline, Scroll, Stack } from '@norbital-ai/ui/layout';
+	import { Scroll, Stack } from '@norbital-ai/ui/layout';
 	import { dirtyFolders, sizeText, type StudioState } from './model.ts';
 
 	let {
 		files,
 		base,
+		changes,
 		drafts,
 		selected,
+		query = $bindable(''),
+		folds = $bindable({}),
 		onselect,
+		oncreate,
 		t
 	}: {
 		files: readonly string[];
 		base: StudioState['files'];
+		changes: StudioState['changes'];
 		drafts: { readonly [path: string]: string | null };
 		selected: string;
+		query?: string;
+		folds?: { [dir: string]: boolean };
 		onselect: (path: string) => void;
+		/** Create a file in `dir` (`''` is the workspace root). */
+		oncreate: (dir: string) => void;
 		t: (key: string) => string;
 	} = $props();
 
 	type Node = { name: string; path: string; dir: boolean };
-	let query = $state('');
-	let folds = $state<{ [dir: string]: boolean }>({});
+	type Status = 'added' | 'modified' | 'deleted';
+	const TONE: { readonly [s in Status]: string } = {
+		added: 'text-success',
+		modified: 'text-warning-foreground dark:text-warning',
+		deleted: 'text-destructive'
+	};
+	const MARK: { readonly [s in Status]: string } = { added: 'A', modified: 'M', deleted: 'D' };
 	const needle = $derived(query.trim().toLowerCase());
 	const matches = $derived(
 		needle === '' ? [] : files.filter((p) => p.toLowerCase().includes(needle))
 	);
+	const committed = $derived(new Map(changes.map((change) => [change.path, change.change])));
 
 	/** The entries directly under `dir` (`''`: the root): folders first, then files, each by name. */
 	function children(dir: string): Node[] {
@@ -48,16 +64,17 @@
 		);
 	}
 	const isOpen = (dir: string) => folds[dir] ?? selected.startsWith(`${dir}/`);
-	const mark = (path: string): { label: string; tone: string } | null => {
-		if (!(path in drafts)) return null;
-		if (drafts[path] === null) return { label: 'D', tone: 'text-destructive' };
-		return path in base
-			? { label: 'M', tone: 'text-amber-700 dark:text-amber-300' }
-			: { label: 'A', tone: 'text-emerald-700 dark:text-emerald-300' };
+	/** A draft wins over the committed change: it is newer than the tree on disk. */
+	const statusOf = (path: string): Status | null => {
+		if (path in drafts)
+			return drafts[path] === null ? 'deleted' : path in base ? 'modified' : 'added';
+		return committed.get(path) ?? null;
 	};
-	const dirtyDirs = $derived(dirtyFolders(Object.keys(drafts)));
+	const dirtyDirs = $derived(
+		dirtyFolders([...new Set([...Object.keys(drafts), ...changes.map((change) => change.path)])])
+	);
 	const dirty = (dir: string) => dirtyDirs.has(`${dir}/`);
-	// a drafted file shows its mark instead, so a size is always the saved file's
+	// a changed file shows its mark instead, so a size is always the saved file's
 	const size = (path: string) => sizeText(base[path]?.bytes ?? 0);
 	const FILE_ICONS: readonly [RegExp, string][] = [
 		[/^package\.json$/, 'npm'],
@@ -83,13 +100,21 @@
 </script>
 
 {#snippet row(node: Node, depth: number, label: string)}
-	{@const m = node.dir ? (dirty(node.path) ? { label: '·', tone: '' } : null) : mark(node.path)}
+	{@const state = node.dir ? null : statusOf(node.path)}
+	{@const m = node.dir
+		? dirty(node.path)
+			? { label: '·', tone: '' }
+			: null
+		: state === null
+			? null
+			: { label: MARK[state], tone: TONE[state] }}
 	{@const current = !node.dir && node.path === selected}
 	<div
-		class="relative min-w-0"
+		class="group relative min-w-0"
 		role="treeitem"
 		aria-selected={current}
 		aria-expanded={node.dir ? isOpen(node.path) : undefined}
+		data-status={state ?? undefined}
 	>
 		{#each { length: depth } as _, i (i)}
 			<span
@@ -102,9 +127,9 @@
 			type="button"
 			title={node.path}
 			aria-current={current}
-			class="relative flex w-full min-w-0 items-center gap-1 rounded-md py-1.5 pr-1.5 text-left text-xs leading-none transition-colors hover:bg-muted/50 {current
-				? 'bg-accent text-accent-foreground'
-				: ''}"
+			class="relative flex w-full min-w-0 items-center gap-1 rounded-md py-1.5 text-left text-xs leading-snug transition-colors hover:bg-muted/50 {node.dir
+				? 'pr-8'
+				: 'pr-1.5'} {current ? 'bg-accent text-accent-foreground' : ''}"
 			style="padding-left: {0.625 + depth * 0.625}rem"
 			onclick={() => (node.dir ? (folds[node.path] = !isOpen(node.path)) : onselect(node.path))}
 		>
@@ -120,21 +145,32 @@
 			</span>
 			<Icon name={icon(node)} class="size-3.5 shrink-0" />
 			<span
-				class="min-w-0 flex-1 truncate text-sm text-foreground {drafts[node.path] === null
-					? 'line-through'
-					: ''} {m?.tone ?? ''}">{label}</span
+				class="min-w-0 flex-1 truncate {state === 'deleted' ? 'line-through' : ''} {state === null
+					? 'text-foreground'
+					: TONE[state]}">{label}</span
 			>
 			{#if m !== null}
 				<span
 					class="shrink-0 text-tiny font-semibold tabular-nums {m.tone || 'text-muted-foreground'}"
 					>{m.label}</span
 				>
-			{:else if !node.dir}
+			{:else if !node.dir && state !== 'deleted'}
 				<span class="shrink-0 font-mono text-xs tabular-nums text-muted-foreground"
 					>{size(node.path)}</span
 				>
 			{/if}
 		</button>
+		{#if node.dir}
+			<button
+				type="button"
+				class="absolute top-1/2 right-1 grid size-6 -translate-y-1/2 place-items-center rounded-sm text-muted-foreground opacity-100 transition-opacity hover:bg-muted hover:text-foreground focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none md:opacity-0 md:group-hover:opacity-100"
+				aria-label={`${t('New file in')} ${node.path}`}
+				title={t('New file')}
+				onclick={() => oncreate(node.path)}
+			>
+				<Icon name="lucide:plus" class="size-3.5" />
+			</button>
+		{/if}
 	</div>
 	{#if node.dir && isOpen(node.path)}
 		{#each children(node.path) as child (child.path)}{@render row(
@@ -146,27 +182,6 @@
 {/snippet}
 
 <Stack as="nav" gap="none" size="fill" aria-label={t('Source')}>
-	<Inline gap="xs" class="border-b border-border/60 px-3 py-0.5 text-muted-foreground">
-		<Icon name="lucide:file-code-2" class="size-3.5 shrink-0" />
-		<span class="shrink-0 truncate text-sm">{t('Source')}</span>
-		{#if files.length > 0}<span
-				class="shrink-0 rounded-full bg-muted px-1.5 py-px text-tiny font-semibold tabular-nums"
-				>{files.length}</span
-			>{/if}
-		<label class="relative ml-auto min-w-0 flex-1">
-			<Icon
-				name="lucide:search"
-				class="pointer-events-none absolute top-1/2 left-1.5 size-3 -translate-y-1/2 opacity-70"
-			/>
-			<input
-				type="search"
-				bind:value={query}
-				aria-label={t('Filter source files')}
-				placeholder={t('Filter')}
-				class="block h-8 w-full min-w-0 rounded-sm border border-border/60 bg-background py-0 pr-2 pl-6 text-tiny text-foreground placeholder:text-muted-foreground"
-			/>
-		</label>
-	</Inline>
 	<Scroll name={t('Source')} size="fill" class="py-1">
 		<div role="tree" data-file-tree class="relative w-full min-w-0 px-1">
 			{#if needle !== ''}
@@ -175,10 +190,10 @@
 						0,
 						path
 					)}{:else}
-					<p class="px-3 py-2 text-sm text-muted-foreground">{t('No matches.')}</p>{/each}
+					<p class="px-3 py-2 text-meta">{t('No matches.')}</p>{/each}
 			{:else}
 				{#each children('') as node (node.path)}{@render row(node, 0, node.name)}{:else}
-					<p class="px-3 py-2 text-sm text-muted-foreground">{t('No source files')}</p>{/each}
+					<p class="px-3 py-2 text-meta">{t('No source files')}</p>{/each}
 			{/if}
 		</div>
 	</Scroll>

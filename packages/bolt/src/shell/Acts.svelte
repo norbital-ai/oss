@@ -25,14 +25,14 @@
 
 {#if all && acts.length > 0}
 	<span class="flex flex-wrap items-center gap-1">
-		{#each acts as a (a.label)}<Button size="sm" variant={a.variant ?? 'ghost'} onclick={run(a)}
+		{#each acts as a (a.label)}<Button variant={a.variant ?? 'ghost'} onclick={run(a)}
 				>{a.label}</Button
 			>{/each}
 	</span>
 	<!-- one line in a table row: the first action as a button, the others behind "…" -->
 {:else if first !== undefined}
 	<span class="flex flex-nowrap items-center gap-1 whitespace-nowrap">
-		<Button size="sm" variant={first.variant ?? 'ghost'} onclick={run(first)}>{first.label}</Button>
+		<Button variant={first.variant ?? 'ghost'} onclick={run(first)}>{first.label}</Button>
 		{#if rest.length > 0}
 			<Popover.Root>
 				<Popover.Trigger
@@ -45,7 +45,7 @@
 				</Popover.Trigger>
 				<Popover.Content align="end" class="grid w-auto min-w-40 gap-0.5 p-1">
 					{#each rest as a (a.label)}
-						<Button size="sm" variant={a.variant ?? 'ghost'} class="justify-start" onclick={run(a)}
+						<Button variant={a.variant ?? 'ghost'} class="justify-start" onclick={run(a)}
 							>{a.label}</Button
 						>
 					{/each}

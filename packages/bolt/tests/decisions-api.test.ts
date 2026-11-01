@@ -3,8 +3,14 @@
 // score's `level` added and `usage.cost` as `costUsd`; a context refusal is `tooLarge`; a slow, failing or malformed
 // answer rejects (the client never falls back).
 import { describe, expect, it } from '@effect/vitest';
-import { Effect, Schema } from 'effect';
-import { decisionsSystem1, type System1Request } from '../src/engine/decisions/index.ts';
+import { Effect, Schema, Stream } from 'effect';
+import {
+	DecisionRequestSchema,
+	decisionsSystem1,
+	structuredSystem1,
+	decisionEvent,
+	type System1Request
+} from '../src/engine/decisions/index.ts';
 
 type Mode = 'ok' | 'slow' | 'down' | 'context' | 'malformed';
 const answerBody = (mode: Mode) => ({
@@ -102,6 +108,90 @@ const ask = (transport: typeof fetch) =>
 	).ask(request);
 
 describe('the Decisions API sys_1 client', () => {
+	it.live('sends actual inline image assets once and keeps their bytes out of decision logs', () =>
+		Effect.gen(function* () {
+			const { seen, transport } = fake('ok');
+			const image = { type: 'image_url', image_url: { url: 'data:image/png;base64,AQID' } };
+			const input = { ...request, state: ['message m0: attached image', image] };
+			const result = yield* decisionsSystem1(
+				{ url: 'https://decisions.test', model: 'jev', apiKey: 'k' },
+				{ fetch: transport }
+			).ask(input);
+			const body = Schema.decodeUnknownSync(
+				Schema.Struct({
+					state: Schema.Array(Schema.Json),
+					assets: Schema.Record(
+						Schema.String,
+						Schema.Struct({
+							type: Schema.String,
+							format: Schema.String,
+							data_base64: Schema.String
+						})
+					)
+				})
+			)(seen[0]?.body);
+			const [ref] = Object.keys(body.assets);
+			expect(body.state).toEqual(['message m0: attached image', ref]);
+			expect(Object.values(body.assets)).toEqual([
+				{ type: 'image', format: 'png', data_base64: 'AQID' }
+			]);
+			expect(seen[0]?.headers['typesafe-danger-zone-images']).toBe('true');
+			expect(JSON.stringify(decisionEvent('triage', input, result))).not.toContain('AQID');
+			expect(seen).toHaveLength(1);
+		})
+	);
+	it.live('rejects remote and oversized image inputs before sending a provider request', () =>
+		Effect.gen(function* () {
+			const { seen, transport } = fake('ok');
+			const adapter = decisionsSystem1(
+				{ url: 'https://decisions.test', model: 'jev', apiKey: 'k' },
+				{ fetch: transport }
+			);
+			for (const url of [
+				'https://private.invalid/picture.png',
+				'data:image/png;base64,' + 'A'.repeat(29 * 1024 * 1024)
+			])
+				expect(
+					yield* Effect.flip(
+						adapter.ask({ ...request, state: [{ type: 'image_url', image_url: { url } }] })
+					)
+				).toBeInstanceOf(Error);
+			expect(seen).toHaveLength(0);
+		})
+	);
+	it.live('maps image evidence to native OpenAI image parts, never base64 text', () =>
+		Effect.gen(function* () {
+			let body: unknown;
+			const transport: typeof fetch = async (input, init) => {
+				body = await new Request(input, init).json();
+				return Response.json({
+					model: 'luna',
+					answers: [{ name: 'visual', type: 'predicate', probability: 0.9 }],
+					usage: { input_tokens: 1, output_tokens: 0 }
+				});
+			};
+			const adapter = decisionsSystem1(
+				{ format: 'openai', url: 'https://openai.test/v1/decisions', model: 'luna', apiKey: 'k' },
+				{ fetch: transport }
+			);
+			yield* adapter.ask({
+				state: ['m0', { type: 'image_url', image_url: { url: 'data:image/jpeg;base64,AQID' } }],
+				questions: { visual: { type: 'noul', instructions: 'Does the image show a table?' } }
+			});
+			expect(body).toMatchObject({
+				input: [
+					{
+						role: 'user',
+						content: [
+							{ type: 'input_text', text: JSON.stringify(['m0', 'image-1']) },
+							{ type: 'input_text', text: 'image-1' },
+							{ type: 'input_image', image_url: 'data:image/jpeg;base64,AQID' }
+						]
+					}
+				]
+			});
+		})
+	);
 	it.live(
 		'sends { model, state, questions } field for field and maps the answers back, a score gaining its level',
 		() =>
@@ -127,6 +217,7 @@ describe('the Decisions API sys_1 client', () => {
 					},
 					costUsd: 0.00004,
 					provider: 'typesafe',
+					model: 'vendor/model',
 					tokens: { input: 120, output: 0 }
 				});
 				expect(seen).toEqual([
@@ -156,6 +247,226 @@ describe('the Decisions API sys_1 client', () => {
 				{ fetch: transport }
 			).ask(request);
 			expect(r.provider).toBe('vendor/model');
+		})
+	);
+
+	it.live(
+		'preserves structured questions in one HTTP call and restores a structured score legend',
+		() =>
+			Effect.gen(function* () {
+				const structured: System1Request = {
+					state: [{ message: 'Refund the duplicate payment' }],
+					questions: {
+						action: {
+							type: 'choice',
+							instructions: { question: 'What next?', inspect: ['message'] },
+							criteria: {
+								wait: { description: 'Wait for evidence', where: { status: { eq: 'pending' } } },
+								respond: ['Reply now'],
+								ignore: null
+							}
+						},
+						wait: { type: 'score', criteria: [{ delay: 0 }, { delay: 1 }, { delay: 2 }] },
+						sorted: { type: 'noul', instructions: ['Does it ask for sorting?'] }
+					}
+				};
+				const { seen, transport } = fake('ok');
+				const result = yield* decisionsSystem1(
+					{ url: 'https://decisions.test/', model: 'jev', apiKey: 'k' },
+					{ fetch: transport }
+				).ask(structured);
+				expect(seen).toHaveLength(1);
+				expect(seen[0]?.body).toEqual({ model: 'jev', ...structured });
+				expect(result.answers.wait).toMatchObject({
+					level: 2,
+					legend: { 0: { delay: 0 }, 1: { delay: 1 }, 2: { delay: 2 } }
+				});
+			})
+	);
+
+	it.effect(
+		'the structured chat adapter preserves JSON questions and structured rubrics in one call',
+		() =>
+			Effect.gen(function* () {
+				const structured: System1Request = {
+					state: 'A duplicate charge',
+					questions: {
+						route: {
+							type: 'choice',
+							instructions: { question: 'Which route?' },
+							criteria: { billing: { reason: 'money' }, other: null }
+						},
+						urgency: { type: 'score', criteria: [{ priority: 'low' }, { priority: 'high' }] },
+						refund: { type: 'noul' }
+					}
+				};
+				let calls = 0;
+				const adapter = structuredSystem1((request) => {
+					calls++;
+					expect(request.messages).toEqual([{ role: 'user', content: JSON.stringify(structured) }]);
+					expect(request.output).toMatchObject({ type: 'object' });
+					return Stream.make({
+						_tag: 'Response',
+						response: {
+							content: {
+								route: { probabilities: { billing: 1, other: 0 } },
+								urgency: { probabilities: { 0: 0.1, 1: 0.9 } },
+								refund: { noul: 0.8 }
+							},
+							toolCalls: [],
+							finish: 'stop',
+							usage: { input: 30, output: 10 }
+						}
+					});
+				}, 'model');
+				const result = yield* adapter.ask(structured);
+				expect(calls).toBe(1);
+				expect(result.answers.route).toMatchObject({ choice: 'billing' });
+				expect(result.answers.urgency).toMatchObject({
+					level: 1,
+					legend: { 0: { priority: 'low' }, 1: { priority: 'high' } }
+				});
+			})
+	);
+
+	it('decodes the documented structured entry shapes and optional Noul criteria', () => {
+		for (const state of ['text', [{ text: 'evidence' }], { text: 'evidence' }]) {
+			const request = {
+				state,
+				questions: {
+					q: { type: 'noul', instructions: null },
+					partial: { type: 'noul', criteria: { true: { reason: 'yes' } } },
+					absent: { type: 'noul' },
+					nullCriteria: { type: 'noul', criteria: null }
+				}
+			};
+			expect(Schema.decodeUnknownSync(DecisionRequestSchema)(request)).toEqual(request);
+		}
+		for (const instructions of [true, 42])
+			expect(() =>
+				Schema.decodeUnknownSync(DecisionRequestSchema)({
+					state: {},
+					questions: { q: { type: 'noul', instructions } }
+				})
+			).toThrow();
+	});
+
+	it.live('maps the unified contract to native OpenAI Decisions in one call', () =>
+		Effect.gen(function* () {
+			const structured: System1Request = {
+				state: { description: 'Open jobs' },
+				questions: {
+					filter: {
+						type: 'choice',
+						instructions: { question: 'Which filter?' },
+						criteria: { open: { where: { status: { eq: 'open' } } }, none: null }
+					},
+					ready: {
+						type: 'noul',
+						instructions: 'Ready?',
+						criteria: { true: { status: 'ready' }, false: ['pending'] }
+					},
+					urgency: {
+						type: 'score',
+						instructions: ['How urgent?'],
+						criteria: [{ priority: 'low' }, { priority: 'high' }]
+					}
+				}
+			};
+			const seen: unknown[] = [];
+			let refuse = false;
+			const transport: typeof fetch = async (input, init) => {
+				seen.push(await new Request(input, init).json());
+				return Response.json({
+					model: 'decision-model',
+					answers: [
+						refuse
+							? { type: 'refusal', name: 'filter' }
+							: {
+									type: 'choice',
+									name: 'filter',
+									choice: 'open',
+									confidence: 0.9,
+									probabilities: [
+										{ value: 'open', probability: 0.9 },
+										{ value: 'none', probability: 0.1 }
+									]
+								},
+						{ type: 'predicate', name: 'ready', probability: 0.8 },
+						{
+							type: 'score',
+							name: 'urgency',
+							score: 0.9,
+							confidence: 0.9,
+							probabilities: [
+								{ value: 0, label: '0', probability: 0.1 },
+								{ value: 1, label: '1', probability: 0.9 }
+							]
+						}
+					],
+					usage: { input_tokens: 80, output_tokens: 0 }
+				});
+			};
+			const adapter = decisionsSystem1(
+				{
+					format: 'openai',
+					url: 'https://openai.test/v1/decisions',
+					model: 'decision-model',
+					apiKey: 'k'
+				},
+				{ fetch: transport }
+			);
+			const result = yield* adapter.ask(structured);
+			expect(seen).toEqual([
+				{
+					model: 'decision-model',
+					input: JSON.stringify(structured.state),
+					questions: [
+						{
+							name: 'filter',
+							type: 'choice',
+							instructions: JSON.stringify({ question: 'Which filter?' }),
+							choices: [
+								{
+									value: 'open',
+									description: JSON.stringify({ where: { status: { eq: 'open' } } })
+								},
+								{ value: 'none', description: 'null' }
+							]
+						},
+						{
+							name: 'ready',
+							type: 'predicate',
+							instructions: JSON.stringify({
+								instructions: 'Ready?',
+								criteria: { true: { status: 'ready' }, false: ['pending'] }
+							})
+						},
+						{
+							name: 'urgency',
+							type: 'score',
+							instructions: JSON.stringify(['How urgent?']),
+							levels: [
+								{ label: '0', description: JSON.stringify({ priority: 'low' }) },
+								{ label: '1', description: JSON.stringify({ priority: 'high' }) }
+							]
+						}
+					]
+				}
+			]);
+			expect(result.answers).toMatchObject({
+				filter: { type: 'choice', choice: 'open', probabilities: { open: 0.9, none: 0.1 } },
+				ready: { type: 'noul', noul: 0.8 },
+				urgency: {
+					type: 'score',
+					score: 0.9,
+					level: 1,
+					legend: { 0: { priority: 'low' }, 1: { priority: 'high' } }
+				}
+			});
+			refuse = true;
+			expect(yield* Effect.flip(adapter.ask(structured))).toMatchObject({ kind: 'invalid' });
+			expect(seen).toHaveLength(2); // one call per invocation, including a refusal
 		})
 	);
 

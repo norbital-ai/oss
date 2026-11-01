@@ -108,6 +108,8 @@ export const clientImportBoundary = (
 		// repository-health:allow EFF3 -- Vite resolves and loads through its Promise plugin ABI.
 		async resolveId(id, importer, options) {
 			await guard(id, importer);
+			const entry = platform.get(id);
+			if (entry !== undefined) return { id: entry, external: true };
 			const resolved = await this.resolve(id, importer, { ...options, skipSelf: true });
 			if (resolved === null) return resolved;
 			await guard(resolved.id);

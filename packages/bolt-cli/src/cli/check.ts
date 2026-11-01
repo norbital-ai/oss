@@ -150,7 +150,10 @@ const typeKey = Effect.fn('bolt.typeKey')(function* (
 	return hash.digest('hex');
 });
 /** The type stage: unchanged sources and judging packages answer from the cache. */
-export const types = Effect.fn('bolt.types')(function* (root: string) {
+export const types = Effect.fn('bolt.types')(function* (
+	root: string,
+	options: { readonly types?: boolean } = {}
+) {
 	const fs = yield* FileSystem.FileSystem,
 		path = yield* Path.Path,
 		dir = path.join(root, '.norbital', 'cache'),
@@ -158,6 +161,8 @@ export const types = Effect.fn('bolt.types')(function* (root: string) {
 	if (!(yield* fs.exists(path.join(root, 'tsconfig.json')))) return [];
 	yield* writeTypeSetup(root);
 	const files = yield* workspaceFiles(root);
+	// the host LSP owns the whole-program TS and Svelte type pass; the sandbox checks the compiler and seed/schema
+	if (options.types === false) return [];
 	const key = yield* typeKey(root, files);
 	const hit = yield* fs
 		.readFileString(file)
@@ -176,10 +181,16 @@ export const types = Effect.fn('bolt.types')(function* (root: string) {
 	return diagnostics;
 });
 /** Every diagnostic of `root`: the compiler's checks, then (once they pass far enough to read a manifest) the types. */
-export const diagnose = Effect.fn('bolt.diagnose')(function* (root: string) {
-	const result = yield* check(root);
+export const diagnose = Effect.fn('bolt.diagnose')(function* (
+	root: string,
+	options: { readonly types?: boolean } = {}
+) {
+	const result = yield* check(root, options);
 	return {
 		stages: result.stages,
-		errors: [...result.errors, ...(result.manifest === undefined ? [] : yield* types(root))]
+		errors: [
+			...result.errors,
+			...(result.manifest === undefined ? [] : yield* types(root, options))
+		]
 	};
 });

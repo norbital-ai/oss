@@ -91,6 +91,10 @@ export function planReadRequest(
 ): Result.Result<ReadPlan, string> {
 	const plan: { [root: string]: { [path: string]: LayerRequestJson } } = {};
 	for (const [path, layer] of Object.entries(request)) {
+		if (layer.search !== undefined && layer.aggregate !== undefined)
+			return Result.fail(
+				`'${path}': search cannot be combined with aggregate; use a where filter for the aggregate or read the search results`
+			);
 		const segments = path.split('.'),
 			root = segments[0]!;
 		const spec = exposures[root];

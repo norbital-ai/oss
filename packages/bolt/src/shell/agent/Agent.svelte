@@ -9,9 +9,9 @@
 	shown, and consecutive ones not for the agent fold into one quiet block, collapsed to its count and last message; on a
 	channel thread each reply names the messages it answers ("Replying to"). Files are attached with the paperclip, by paste
 	or by drop (at most 8 files, 20 MiB); each uploads to `/__bolt/files/sys_conversation.inputs` when the message is sent.
-	The selector's tabs split the conversations by where they happen (newest first): the member's own (Web UI) and one per envoy
-	whose channel conversations they may read (automations' inference transcripts are the command center's); each tab counts its rows, and
-	search filters every tab at once (each count follows its matches). Only Web UI conversations are writable; delegated sub-agents live in the session rail (their tasks, live steps and answers),
+	The selector's footer switches conversation views (newest first): the member's own (Web UI) and one per envoy
+	whose channel conversations they may read (automations' inference transcripts are the command center's); dots switch views, and Cmd/Ctrl+Right Arrow advances while search is focused;
+	search filters every view at once (each count follows its matches). Only Web UI conversations are writable; delegated sub-agents live in the session rail (their tasks, live steps and answers),
 	several working at once, one level deep; messages sent while a turn runs wait in the queue (edit, move up, remove); the context meter reads the
 	last reply's usage; the transcript follows its tail unless the reader scrolled up ("Latest" returns); a running turn
 	stops (asked first) and a stopped one resumes; a draft plan is a collapsed card above the prompt (execute, delete), an
@@ -51,8 +51,6 @@
 		ReadonlyMarkdown,
 		Spinner,
 		StructuredData,
-		Tabs,
-		pickerRead,
 		useKinds,
 		virtualList,
 		type CommandItem
@@ -63,6 +61,7 @@
 	import type { AgentConversation, AgentRow } from '../../protocol/wire.ts';
 	import type { AgentRequest, ShellBolt } from '../runtime.ts';
 	import type { ShellApi } from '../api-types.ts';
+	import type { StudioView } from '../studio/model.ts';
 	import type { LogRow } from '../../engine/contracts.ts';
 	import AgentChild from './AgentChild.svelte';
 	import Steps from './Steps.svelte';
@@ -70,6 +69,13 @@
 	import StudioResult from './StudioResult.svelte';
 	import MadeFiles from './MadeFiles.svelte';
 	import PreviewFrame from '../preview/PreviewFrame.svelte';
+	import { attention, NORBIUS_CHIME, type Chime } from './chime.ts';
+	import { CLIENT_NAVIGATION, navigationEvents, type ClientNavigation } from './navigation.ts';
+	import { studioEvents } from '../studio/events.ts';
+	import { commandKey, shortcutLabel } from '../keyboard.ts';
+	import { recordMentions } from '../finder/model.ts';
+	import type { NavNode } from '../nav.ts';
+	import type { ManifestItem } from '../finder/manifest.ts';
 	import {
 		background,
 		captionOf,
@@ -82,6 +88,7 @@
 		ORB,
 		orbState,
 		previewsOf,
+		currentPreview,
 		callableWords,
 		revisable,
 		runState,
@@ -96,6 +103,8 @@
 		unconfigured = false,
 		admin = false,
 		envoys = {},
+		nav = [],
+		entries = [],
 		onConversation,
 		storageKey
 	}: {
@@ -106,6 +115,9 @@
 		onClose: () => void;
 		/** The host binds no AI provider: say so plainly (a send still fails with the fixed reply and an `agent.failed` event). */ unconfigured?: boolean;
 		/** The viewer is an administrator: each triaged batch shows its `decision.made` events (the log refuses anyone else). */ admin?: boolean;
+		/** The same authorized apps offered by Find. */
+		nav?: readonly NavNode[];
+		entries?: readonly ManifestItem[];
 		/** Each envoy's display name (`ShellBoot.envoys`), for the picker's groups. */ envoys?: {
 			readonly [envoy: string]: string;
 		};
@@ -150,6 +162,8 @@
 	 * turn runs), each until the stored row it became arrives. A failed send leaves the outbox and returns to the composer.
 	 */
 	let outbox = $state<(AgentRow & { stored?: string })[]>([]);
+	/** Local outbox rows the person cancelled before their post answered: dequeue the stored row when it does. */
+	const cancelled = new Set<string>();
 	const rows = $derived([...older, ...live, ...outbox]);
 	const before = $derived(
 		from === null ? null : edge === null ? from : edge.more ? edge.first : null
@@ -200,7 +214,9 @@
 		);
 		const all = [...attached, ...typed];
 		if (typed.some((f) => f.type === '' || f.size === 0))
-			return void (error = t('Attach a nonempty image, document, spreadsheet, slides, recording or text file.'));
+			return void (error = t(
+				'Attach a nonempty image, document, spreadsheet, slides, recording or text file.'
+			));
 		if (all.length > 8 || all.reduce((n, f) => n + f.size, 0) > 20 * 1024 * 1024)
 			return void (error = t('Attach at most 8 files totaling 20 MiB.'));
 		error = null;
@@ -238,6 +254,8 @@
 	let rail = $state(false);
 	let railEl = $state<HTMLElement | null>(null);
 	let railToggle = $state<HTMLButtonElement | null>(null);
+	let previewToggle = $state<HTMLButtonElement | null>(null);
+	let previewEl = $state<HTMLElement | null>(null);
 	let chatEl = $state<HTMLDivElement | null>(null);
 	let panelRemWidth = $state(0);
 	let navigating = $state(false);
@@ -289,8 +307,24 @@
 		child?.querySelector<HTMLButtonElement>('button')?.focus({ preventScroll: true });
 	}
 	function railKeydown(event: KeyboardEvent): void {
-		if (!rail || event.key !== 'Escape' || event.defaultPrevented || event.isComposing) return;
+		if (
+			(!rail && !showingPreview) ||
+			event.key !== 'Escape' ||
+			event.defaultPrevented ||
+			event.isComposing
+		)
+			return;
 		const target = event.target;
+		if (
+			showingPreview &&
+			target instanceof Node &&
+			(previewEl?.contains(target) || previewToggle?.contains(target))
+		) {
+			event.preventDefault();
+			event.stopPropagation();
+			closePreview();
+			return;
+		}
 		if (
 			!(target instanceof Node) ||
 			(!railEl?.contains(target) && !chatEl?.contains(target) && !railToggle?.contains(target))
@@ -304,6 +338,20 @@
 	let focus = $state<string | null>(null);
 	const current = $derived(list.find((c) => c.id === conversation));
 	const status = $derived(current?.status ?? 'idle');
+	const chime = getContext<Chime | undefined>(NORBIUS_CHIME);
+	const attentionOf = attention();
+	const clientNavigation = getContext<ClientNavigation | undefined>(CLIENT_NAVIGATION);
+	const navigationsOf = navigationEvents();
+	watch(
+		[() => conversation, () => status, () => live, () => edge !== null],
+		([id, state, transcript, ready]) => {
+			const kind = attentionOf(ready ? id : null, state, transcript);
+			if (kind !== null) chime?.play(kind);
+			for (const path of navigationsOf(ready ? id : null, transcript)) {
+				if (id !== null) clientNavigation?.open(path, id);
+			}
+		}
+	);
 	/** An instance or envoy name in words: `field_ops` → `Field ops`. */
 	const human = (s: string) => s.replaceAll('_', ' ').replace(/^./, (c) => c.toUpperCase());
 	/** The selector tab a conversation sits in: the member's own (Web UI) or its envoy's. */
@@ -545,6 +593,18 @@
 						stored === null || stored === '' || live.some((row) => row.id === stored)
 							? outbox.filter((item) => item.id !== local)
 							: outbox.map((item) => (item.id === local ? { ...item, stored } : item));
+					// cancelled while posting: the stored row exists now, so take it back out of the queue
+					if (cancelled.delete(local) && stored !== null && stored !== '')
+						dispatch(
+							Effect.result(api.agent.dequeue(stored)).pipe(
+								Effect.tap((answer) =>
+									Effect.sync(() => {
+										error = refused(answer);
+									})
+								),
+								Effect.asVoid
+							)
+						);
 				});
 			})
 		);
@@ -609,7 +669,7 @@
 			return;
 		}
 		if (event.key !== 'Enter' || event.shiftKey || event.isComposing) return;
-		send(event, event.metaKey || event.ctrlKey);
+		send(event, commandKey(event));
 	}
 	function fresh(): void {
 		conversation = null;
@@ -633,7 +693,7 @@
 	}
 	const when = (at: string) =>
 		new Date(at).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
-	/** The selector's search, across every tab, and its open tab. */
+	/** The selector's search, across every view, and its open view. */
 	let query = $state(''),
 		tab = $state('web');
 	// an automation's inference transcript opens here from the command center, never from the selector
@@ -657,8 +717,7 @@
 			name,
 			title,
 			icon,
-			count: matches.filter((c) => tabOf(c) === name).length,
-			body: noPanel
+			count: matches.filter((c) => tabOf(c) === name).length
 		});
 		return [
 			counted('web', t('Web UI'), 'lucide:message-square'),
@@ -668,6 +727,23 @@
 		];
 	});
 	const shownTab = $derived(tabs.some((x) => x.name === tab) ? tab : 'web');
+	const viewIndex = $derived(tabs.findIndex((x) => x.name === shownTab));
+	const currentView = $derived(tabs[viewIndex]!);
+	function viewShortcut(event: KeyboardEvent): void {
+		if (
+			!(event.target instanceof HTMLInputElement) ||
+			event.target !== document.activeElement ||
+			!commandKey(event) ||
+			event.altKey ||
+			event.shiftKey ||
+			event.isComposing ||
+			event.key !== 'ArrowRight'
+		)
+			return;
+		event.preventDefault();
+		event.stopPropagation();
+		tab = tabs[(viewIndex + 1) % tabs.length]!.name;
+	}
 	/** The open tab's matches; in an envoy's tab its direct messages first, then each group chat under its name. */
 	const options = $derived(
 		matches
@@ -872,6 +948,8 @@
 		rows.filter((r) => r.role === 'user' && r.state === 'queued' && r.report === undefined)
 	);
 	let revising = $state<AgentRow | null>(null);
+	/** The queue row being dragged, by index (null: no drag). */
+	let dragFrom = $state<number | null>(null);
 	function revise(row: AgentRow): void {
 		revising = row;
 		draft = row.text ?? '';
@@ -893,13 +971,15 @@
 			)
 		);
 	}
-	function moveUp(i: number): void {
-		if (conversation === null) return;
+	/** Moves one queued message to `to` (0 is next): a reorder, never a new post. */
+	function moveTo(i: number, to: number): void {
+		if (conversation === null || to < 0 || to >= queued.length || to === i) return;
 		const ids = queued.map((r) => r.id);
-		const previous = ids[i - 1],
-			selected = ids[i];
-		if (previous === undefined || selected === undefined) return;
-		[ids[i - 1], ids[i]] = [selected, previous];
+		// a message still posting has no stored id yet; it takes its place once the post answers
+		if (ids.some((id) => id.startsWith('local:'))) return;
+		const [selected] = ids.splice(i, 1);
+		if (selected === undefined) return;
+		ids.splice(to, 0, selected);
 		dispatch(
 			Effect.result(api.agent.reorder(conversation, ids)).pipe(
 				Effect.tap((answer) =>
@@ -910,6 +990,12 @@
 				Effect.asVoid
 			)
 		);
+	}
+	/** A local message still posting: hide it now, and dequeue its stored row when the post answers. */
+	function cancelLocal(row: AgentRow & { stored?: string }): void {
+		cancelled.add(row.id);
+		outbox = outbox.filter((item) => item.id !== row.id);
+		if (row.stored !== undefined) dequeue({ ...row, id: row.stored });
 	}
 
 	// the context meter: the last reply's context against its model's window, and what the conversation's turns cost
@@ -1214,7 +1300,7 @@
 				)
 	);
 	const stopRun = (id: string) => dispatch(api.stopRun(id).pipe(Effect.asVoid));
-	// a turn under way that has written nothing yet: "Thinking…" with its seconds
+	// Between steps show the whole run's elapsed time, not a claim about the current model wait.
 	const quiet = $derived(
 		status === 'running' && !rows.some((r) => r.state === 'streaming' || r.state === 'running')
 	);
@@ -1263,8 +1349,8 @@
 		watcher.observe(el, { childList: true, subtree: true });
 		return () => watcher.disconnect();
 	}
-	// `/` commands (only as the draft's first character) and `@` mentions: a model, then one of its records
-	const commands = $derived<readonly CommandItem[]>([
+	// Slash commands and @ mentions share the same app/model search grammar.
+	const agentCommands = $derived<readonly CommandItem[]>([
 		{
 			id: 'plan',
 			label: '/plan',
@@ -1302,69 +1388,105 @@
 	const kinds = useKinds();
 	/** A stored file's link (a made file's card, a workspace screenshot). */
 	const fileHref = (id: string) => bolt.fileUrl({ id });
-	// the previewer: the latest bundle built (or chosen by the agent with `preview_show`), in the session rail's Preview
-	// section; the header's Preview button is the one way to open it (a dot while it shows a bundle not yet seen), and its
-	// frame mounts only while open
+	// Preview and Session are independent panels, opened by their own header controls.
 	let previewing = $state(false),
 		seenPreview = $state<string | null>(null);
-	const shownPreview = $derived(previewsOf(rows).at(-1) ?? null);
-	const previewInRail = $derived(previewing && shownPreview !== null && !thread);
-	const showingPreview = $derived(rail && previewInRail);
+	const recordedPreview = $derived(previewsOf(rows).at(-1) ?? null);
+	const hasTestStep = $derived(rows.some((row) => row.tool?.name === 'workspace_test'));
+	let previewStudio = $state<StudioView | null>(null);
+	const shownPreview = $derived(
+		recordedPreview === null
+			? null
+			: previewStudio === null
+				? recordedPreview
+				: currentPreview(recordedPreview, previewStudio)
+	);
+	const showingPreview = $derived(previewing && (shownPreview !== null || hasTestStep) && !thread);
 	// The host is usually a 40rem sheet; keep the transcript intact beneath its session view.
-	const railOverlay = $derived(panelRemWidth < (previewInRail ? 88 : 64));
+	const railOverlay = $derived(panelRemWidth < 64);
+	const previewOverlay = $derived(panelRemWidth < 88);
+	watch(
+		() => (showingPreview ? (recordedPreview?.key ?? 'tests') : undefined),
+		(key) => {
+			previewStudio = null;
+			if (key === undefined) return;
+			dispatch(
+				api.studio().pipe(
+					Effect.tap((state) =>
+						Effect.sync(() => {
+							if ((recordedPreview?.key ?? 'tests') === key && showingPreview)
+								previewStudio = state;
+						})
+					),
+					// Hosts without Studio keep the recorded preview.
+					Effect.catch(() => Effect.void),
+					Effect.asVoid
+				)
+			);
+		}
+	);
+	const previewEvents = attachEffect(() =>
+		typeof EventSource === 'undefined'
+			? Effect.void
+			: studioEvents().pipe(
+					Stream.runForEach((frame) =>
+						frame.kind === 'tests' || frame.kind === 'source' || frame.kind === 'change'
+							? api.studio().pipe(
+									Effect.tap((state) =>
+										Effect.sync(() => {
+											previewStudio = state;
+										})
+									),
+									Effect.asVoid
+								)
+							: Effect.void
+					),
+					Effect.catch(() => Effect.void)
+				)
+	);
 	watch(
 		() => (showingPreview ? (shownPreview?.key ?? null) : null),
 		(key) => {
 			if (key !== null) seenPreview = key;
 		}
 	);
-	function togglePreview(): void {
-		if (showingPreview) return void (previewing = false);
+	function closePreview(): void {
+		previewing = false;
+		previewToggle?.focus({ preventScroll: true });
+	}
+	async function togglePreview(): Promise<void> {
+		if (showingPreview) return closePreview();
 		previewing = true;
 		focus = null;
-		rail = true;
+		rail = false;
+		await tick();
+		previewEl
+			?.querySelector<HTMLButtonElement>('[data-preview-close]')
+			?.focus({ preventScroll: true });
 	}
-	function mentions(q: string): Effect.Effect<CommandItem[], Error> {
-		return Effect.suspend(() => {
-			const slash = q.indexOf('/');
-			if (slash === -1)
-				return Effect.succeed(
-					Object.keys(kinds.catalog ?? {})
-						.filter((c) => !c.startsWith('sys_') && c.toLowerCase().includes(q.toLowerCase()))
-						.slice(0, 20)
-						.map((c) => ({
-							id: c,
-							label: c.replace(/_/g, ' '),
-							icon: 'lucide:database',
-							group: t('Models'),
-							insert: `@${c}/`,
-							keep: true as const
-						}))
-				);
-			const c = q.slice(0, slash),
-				target = kinds.catalog?.[c];
-			if (target === undefined || kinds.query === undefined) return Effect.succeed([]);
-			return kinds
-				.query({ [c]: pickerRead(target, target.label, { limit: 8 }, q.slice(slash + 1)) })
-				.pipe(
-					Effect.map((answer) =>
-						(answer[c]?.rows ?? []).map((r) => {
-							const label =
-								target.label
-									.map((f) => r[f])
-									.filter((x) => x !== null && x !== undefined && x !== '')
-									.join(' · ') || String(r['id']);
-							return {
-								id: String(r['id']),
-								label,
-								group: c.replace(/_/g, ' '),
-								insert: `[@${label}](${c}/${r.id}) `
-							};
-						})
-					)
-				);
+	function mentions(q: string) {
+		return recordMentions(kinds.catalog ?? {}, kinds.query ?? (() => Effect.succeed({})), q, t, {
+			nav,
+			entries
 		});
 	}
+	function commands(q: string) {
+		return recordMentions(kinds.catalog ?? {}, kinds.query ?? (() => Effect.succeed({})), q, t, {
+			nav,
+			entries,
+			prefix: '/'
+		}).pipe(
+			Effect.map((scopes) => [
+				...(!/\s/.test(q)
+					? agentCommands.filter((command) =>
+							`${command.label} ${command.description}`.toLowerCase().includes(q.toLowerCase())
+						)
+					: []),
+				...scopes
+			])
+		);
+	}
+
 	// hook:view-ui — inside the shell's sheet the panel's header is the sheet's (one header: mark, title, conversations); the
 	// sheet adds full screen and close, and its left edge resizes it
 	const toSheet = getContext<((s: Snippet | null) => void) | undefined>(
@@ -1458,17 +1580,64 @@
 					class="underline">{f.name}</a
 				>{:else}{f.name}{/if}</span
 		>{/each}{/snippet}
-{#snippet noPanel()}{/snippet}
-{#snippet selectorTabs()}
-	<!-- the selector's tabs: each counts its search matches; an envoy's tab is read-only -->
-	<div class="min-w-0 pt-1" data-agent-tabs>
-		<Tabs {tabs} value={shownTab} onValueChange={(v) => (tab = v)} class="h-auto gap-0" />
-		{#if shownTab !== 'web'}<p
-				class="flex items-center gap-1.5 px-2 pt-1.5 text-xs text-muted-foreground"
-				data-agent-tab-read-only
+{#snippet selectorFooter()}
+	<div
+		class="flex min-w-0 items-center gap-2 border-t border-border px-2 py-1 text-tiny text-muted-foreground"
+		data-agent-views
+	>
+		<span class="shrink-0 whitespace-nowrap" title={t('Switch views')}>{shortcutLabel('→')}</span>
+		<div
+			class="flex min-w-0 max-w-[40%] items-center overflow-x-auto"
+			role="group"
+			aria-label={t('Conversation views')}
+		>
+			{#each tabs as view (view.name)}
+				<button
+					type="button"
+					class="grid size-6 shrink-0 place-items-center rounded-sm hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+					aria-label={t('Switch to {view}').replace('{view}', view.title)}
+					title={`${view.title} · ${view.count}`}
+					aria-pressed={view.name === shownTab}
+					onclick={() => (tab = view.name)}
+				>
+					<span
+						class="rounded-full {view.name === shownTab
+							? 'size-1.5 bg-muted-foreground'
+							: 'size-1 bg-muted-foreground/40'}"
+					></span>
+				</button>
+			{/each}
+		</div>
+		<div
+			class="ml-auto flex min-w-0 max-w-[35%] items-center justify-end gap-1.5 whitespace-nowrap"
+			aria-live="polite"
+			data-agent-view
+		>
+			{#if shownTab !== 'web'}<span class="flex shrink-0 items-center" data-agent-tab-read-only
+					><Icon name="lucide:lock" class="size-3" /><span class="sr-only">{t('Read only')}</span
+					></span
+				>{/if}
+			<span class="truncate">{currentView.title}</span><span class="sr-only"
+				>{currentView.count}</span
 			>
-				<Icon name="lucide:lock" class="size-3 shrink-0" />{t('Read only')}
-			</p>{/if}
+		</div>
+	</div>
+{/snippet}
+{#snippet selectorEmpty()}
+	<div
+		class="flex min-h-20 items-center justify-center gap-3 px-3 py-4 text-muted-foreground"
+		role="status"
+		data-agent-empty
+	>
+		<Icon name="lucide:message-square" class="size-5 shrink-0 opacity-60" />
+		<div class="space-y-1">
+			<p class="text-xs">
+				{query.trim() ? t('No conversations found') : t('No conversations yet')}
+			</p>
+			<p class="text-tiny">
+				{query.trim() ? t('Try another search.') : t('Start a conversation to see it here.')}
+			</p>
+		</div>
 	</div>
 {/snippet}
 {#snippet head()}
@@ -1504,26 +1673,44 @@
 			onOpenChange={(open) => {
 				if (open) tab = current === undefined ? 'web' : tabOf(current);
 			}}
-			header={selectorTabs}
+			footer={selectorFooter}
+			empty={selectorEmpty}
+			onkeydown={viewShortcut}
 			onChange={(id) => (id === null ? fresh() : select(id))}
 		/>
-		{#if shownPreview !== null && !thread}<Button
-				size="icon-sm"
+		{#if (shownPreview !== null || hasTestStep) && !thread}<Button
+				bind:ref={previewToggle}
+				size="icon"
 				variant="ghost"
 				class="relative shrink-0"
-				aria-label={t(shownPreview.key === seenPreview ? 'Preview' : 'New preview')}
-				title={t(shownPreview.key === seenPreview ? 'Preview' : 'New preview')}
+				aria-label={t(
+					shownPreview === null
+						? 'Tests'
+						: shownPreview.key === seenPreview
+							? 'Preview'
+							: 'New preview'
+				)}
+				title={t(
+					shownPreview === null
+						? 'Tests'
+						: shownPreview.key === seenPreview
+							? 'Preview'
+							: 'New preview'
+				)}
 				aria-pressed={showingPreview}
 				onclick={togglePreview}
 				data-open-preview
-				><Icon name="lucide:eye" class="size-4" />{#if shownPreview.key !== seenPreview}<span
+				><Icon
+					name={shownPreview === null ? 'lucide:flask-conical' : 'lucide:eye'}
+					class="size-4"
+				/>{#if shownPreview !== null && shownPreview.key !== seenPreview}<span
 						class="absolute top-1 right-1 size-1.5 rounded-full bg-primary"
 						data-preview-unseen
 					></span>{/if}</Button
 			>{/if}
 		<Button
 			bind:ref={railToggle}
-			size="icon-sm"
+			size="icon"
 			variant="ghost"
 			class="shrink-0"
 			aria-label={t('Session')}
@@ -1533,7 +1720,7 @@
 			data-rail-toggle><Icon name="lucide:sliders-horizontal" class="size-4" /></Button
 		>
 		<Button
-			size="icon-sm"
+			size="icon"
 			variant="ghost"
 			class="shrink-0"
 			aria-label={t('New conversation')}
@@ -1561,17 +1748,43 @@
 	</details>
 {/snippet}
 
+{#snippet preview()}
+	<aside
+		bind:this={previewEl}
+		transition:sessionMotion={{ x: 6, duration: 160 }}
+		class="absolute inset-y-0 right-0 z-30 flex w-full min-w-0 flex-col overflow-hidden border-l border-border bg-background @min-[88rem]:relative @min-[88rem]:w-[56rem] @min-[88rem]:shrink-0"
+		aria-label={t('Preview')}
+		data-agent-preview={shownPreview?.url ?? 'tests'}
+		{@attach previewEvents}
+	>
+		<!-- the bundle is the frame's version: another bundle (or a rebuild) reloads it, the same one never does -->
+		<PreviewFrame
+			src={shownPreview?.url ?? null}
+			tests={previewStudio?.tests}
+			version={shownPreview?.key}
+			title={t('Preview')}
+			label={shownPreview?.about?.['message']}
+			{t}
+			onClose={closePreview}
+		>
+			{#snippet details()}
+				{#if shownPreview?.about !== undefined}<p data-preview-caption>
+						{captionOf(shownPreview.about, kinds.zone)}
+					</p>{:else}<p>{shownPreview?.url ?? t('No preview yet.')}</p>{/if}
+			{/snippet}
+		</PreviewFrame>
+	</aside>
+{/snippet}
+
 {#snippet session()}
 	<!-- One session frame: files and helpers stay visible; secondary session metadata opens in place. -->
 	<aside
 		bind:this={railEl}
 		transition:sessionMotion={{ x: 6, duration: 160 }}
 		inert={!rail}
-		class="absolute inset-y-0 right-0 z-30 flex w-full shrink-0 {previewInRail
-			? '@min-[88rem]:relative @min-[88rem]:w-[56rem] @min-[88rem]:border-l-0'
-			: focus === null
-				? '@5xl:relative @5xl:w-[21rem] @5xl:border-l-0'
-				: '@5xl:relative @5xl:w-[30rem] @5xl:border-l-0'} max-w-full flex-col overflow-hidden border-l border-border bg-card p-3 {!rail
+		class="absolute inset-y-0 right-0 z-30 flex w-full shrink-0 {focus === null
+			? '@5xl:relative @5xl:w-[21rem] @5xl:border-l-0'
+			: '@5xl:relative @5xl:w-[30rem] @5xl:border-l-0'} max-w-full flex-col overflow-hidden border-l border-border bg-card p-3 {!rail
 			? 'pointer-events-none'
 			: ''}"
 		aria-label={t('Session')}
@@ -1581,7 +1794,7 @@
 			<p class="text-sm text-muted-foreground">{t(focus === null ? 'Session' : 'Subagents')}</p>
 			<span class="flex-1"></span>
 			<Button
-				size="icon-sm"
+				size="icon"
 				variant="ghost"
 				class="shrink-0 text-muted-foreground hover:text-foreground"
 				aria-label={t('Close')}
@@ -1607,38 +1820,16 @@
 			</div>
 		{:else}
 			<div
-				class="grid min-h-0 content-start divide-y divide-border overflow-auto rounded-2xl border border-border bg-background px-5 [&>section]:py-4"
+				class="grid min-h-0 flex-1 content-start auto-rows-max divide-y divide-border overflow-auto rounded-2xl border border-border bg-background px-5 [&>section]:py-4"
 				in:sessionMotion={{ x: -4, duration: navigating ? 120 : 0 }}
 				data-rail-view="overview"
 			>
-				{#if previewing && shownPreview !== null && !thread}
-					<!-- the one previewer: the latest bundle; open (the header's Preview button), it fills the widened rail -->
-					<section class="min-w-0 overflow-hidden" data-rail="preview">
-						<div class="flex h-[70vh] min-h-80 flex-col" data-agent-preview={shownPreview.url}>
-							<!-- the bundle is the frame's version: another bundle (or a rebuild) reloads it, the same one never does -->
-							<PreviewFrame
-								src={shownPreview.url}
-								version={shownPreview.key}
-								title={t('Preview')}
-								label={shownPreview.about?.['message']}
-								{t}
-								onClose={() => (previewing = false)}
-							>
-								{#snippet details()}
-									{#if shownPreview.about !== undefined}<p data-preview-caption>
-											{captionOf(shownPreview.about, kinds.zone)}
-										</p>{:else}<p>{shownPreview.url}</p>{/if}
-								{/snippet}
-							</PreviewFrame>
-						</div>
-					</section>
-				{/if}
 				{#each [['Input', inputs], ['Outputs', outputs]] as const as [title, files] (title)}
 					<section class="min-w-0" data-rail={title === 'Input' ? 'inputs' : 'outputs'}>
 						<div class="mb-2 flex min-h-8 items-center justify-between gap-2">
 							<h3 class="text-sm text-muted-foreground">{t(title)}</h3>
 							{#if !thread && !automation}<Button
-									size="icon-sm"
+									size="icon"
 									variant="ghost"
 									class="text-muted-foreground hover:text-foreground"
 									aria-label={t(title === 'Input' ? 'Attach files' : 'Create a file')}
@@ -1753,7 +1944,7 @@
 											: t(ORB[state === 'running' ? 'working' : state].label)}</span
 									>
 									{#if state === 'running'}<Button
-											size="icon-sm"
+											size="icon"
 											variant="ghost"
 											class="shrink-0 text-muted-foreground"
 											aria-label={t('Stop run')}
@@ -1891,7 +2082,7 @@
 		<div
 			bind:this={chatEl}
 			class="flex min-w-0 flex-1 flex-col"
-			inert={rail && railOverlay}
+			inert={(rail && railOverlay) || (showingPreview && previewOverlay)}
 			data-agent-chat
 		>
 			<div class="relative flex min-h-0 w-full flex-1 flex-col">
@@ -1902,7 +2093,7 @@
 			over the transcript, not into it -->
 							<div class="relative z-20 mx-auto w-full max-w-3xl shrink-0 px-4 pt-3" data-now-strip>
 								<div
-									class="grid gap-1 rounded-xl border border-border/70 bg-background/95 px-3 py-2 shadow-sm backdrop-blur"
+									class="grid gap-1 rounded-xl border border-border/70 bg-background/95 px-3 py-2 backdrop-blur"
 								>
 									<details class="group/plan" data-plan={settled.status}>
 										<summary
@@ -1922,18 +2113,16 @@
 											>
 										</summary>
 										<div
-											class="absolute inset-x-4 top-full mt-1 max-h-[50dvh] overflow-auto rounded-xl border border-border/70 bg-background px-3 py-2 text-xs shadow-lg"
+											class="absolute inset-x-4 top-full mt-1 max-h-[50dvh] overflow-auto rounded-xl border border-border/70 bg-background px-3 py-2 text-xs shadow-deep"
 										>
 											<ReadonlyMarkdown value={settled.body} />
 											<div class="mt-2 flex justify-end gap-1 border-t border-border/60 pt-2">
 												{#if settled.status === 'active'}<Button
-														size="sm"
 														variant="ghost"
 														disabled={!empty}
 														onclick={() => (mode = 'plan')}>{t('Revise plan')}</Button
 													>{/if}
 												<Button
-													size="sm"
 													variant="ghost"
 													onclick={() =>
 														status === 'running' ? (confirming = 'plan') : plan(false)}
@@ -1963,6 +2152,20 @@
 											'Start a conversation. Ask for help or switch to Plan to work through an approach.'
 										)}
 									</p>
+								</li>
+							{/if}
+							{#if conversation !== null && rows.length === 0 && transcript.error !== undefined}
+								<li
+									class="flex min-h-56 flex-col items-center justify-center gap-3 text-center"
+									data-agent-error
+									role="alert"
+								>
+									<p class="max-w-sm text-sm text-destructive">
+										{t('The conversation could not load.')}
+									</p>
+									<Button variant="outline" onclick={() => fork(transcript.refetch())}
+										>{t('Retry')}</Button
+									>
 								</li>
 							{/if}
 							{#if before !== null}
@@ -2034,6 +2237,20 @@
 										</details>
 										{#each item.steps as st (st.id)}
 											<StudioResult step={st} {t} zone={kinds.zone} />
+											{#if !thread && st.tool?.navigation !== undefined && clientNavigation !== undefined && conversation !== null}
+												{@const path = st.tool.navigation}
+												{@const id = conversation}
+												<Button
+													variant="outline"
+													class="my-2 w-full justify-start gap-2"
+													onclick={() => clientNavigation.open(path, id)}
+												>
+													<Icon name="lucide:arrow-up-right" class="size-4" />
+													<span>{t('Open page')}</span><span
+														class="ml-auto truncate text-xs text-muted-foreground">{path}</span
+													>
+												</Button>
+											{/if}
 											{#if !thread && st.tool?.approval !== undefined}
 												<!-- a live change the host holds for the person: approved here, it runs as them -->
 												<StudioApproval {api} step={st} {t} />
@@ -2116,7 +2333,7 @@
 										{@const label = triageLabel(row, index)}
 										<li
 											{@attach turns.measure(itemKey(at))}
-											class="ml-auto w-fit max-w-[85%] rounded-[1.25rem] bg-muted px-4 py-2.5 break-words whitespace-pre-wrap"
+											class="ml-auto w-fit max-w-[85%] rounded-xl bg-muted px-4 py-2.5 break-words whitespace-pre-wrap"
 											class:opacity-60={row.state === 'pending' || row.tag === 'ambient'}
 											data-role="user"
 											data-outside-context={outside(row) || undefined}
@@ -2136,7 +2353,6 @@
 												row
 											)}
 											{#if !thread && row.state === 'consumed' && revisable(row)}<Button
-													size="sm"
 													variant="ghost"
 													class="mt-1 h-6 px-1 text-xs"
 													onclick={() => revise(row)}>{t('Revise')}</Button
@@ -2149,7 +2365,6 @@
 												>
 													<span>{label}</span>
 													{#if !thread && row.id === lastPending}<Button
-															size="sm"
 															variant="ghost"
 															onclick={respondNow}>{t('Respond now')}</Button
 														>{/if}
@@ -2161,13 +2376,16 @@
 										{@const busy = answering.has(row.id) || row.state === 'approved'}
 										<li
 											{@attach turns.measure(itemKey(at))}
-											class="rounded-xl border border-border/70 bg-background p-3 shadow-sm"
+											class="rounded-xl border border-border/70 bg-background p-3"
 											data-role="confirm"
 										>
 											<p class="text-sm font-medium text-foreground">
 												{t('Allow Norbius to do this?')}
 											</p>
-											<details class="mt-1 text-xs text-muted-foreground">
+											<details
+												open={call.name === 'act'}
+												class="mt-1 text-xs text-muted-foreground"
+											>
 												<summary class="cursor-pointer">{t('Details')}</summary>
 												<div class="mt-1 max-h-48 min-w-0 overflow-auto">
 													<StructuredData value={call.input} name={t('Input')} />
@@ -2175,12 +2393,10 @@
 											</details>
 											<Inline gap="xs" class="mt-2" align="center">
 												{#if row.state === 'confirm'}<Button
-														size="sm"
 														disabled={busy}
 														onclick={() => confirm(row, true)}>{t('Approve')}</Button
 													>
 													<Button
-														size="sm"
 														variant="outline"
 														disabled={busy}
 														onclick={() => confirm(row, false)}>{t('Decline')}</Button
@@ -2278,44 +2494,55 @@
 							{#if turns.after > 0}<li aria-hidden="true" style="height:{turns.after}px"></li>{/if}
 							{#if quiet}
 								<li class="text-xs text-muted-foreground" data-role="thinking" data-thinking>
-									<span class="agent-shimmer">{t('Thinking…')}</span>
+									<span class="agent-shimmer">{t('Working…')}</span>
 									<span class="tabular-nums">{thinking}s</span>
 								</li>
 							{/if}
 							{#if current?.goals?.length}
-								<!-- the goals: one checklist under the latest message, each step's state at a glance -->
+								<!-- the goals: one checklist under the latest message, each step's state at a glance; collapsible -->
 								<li data-goals>
-									<ol
-										class="grid gap-1.5 rounded-xl border border-border/70 px-4 py-3"
-										aria-label={t('Goal steps')}
-									>
-										{#each current.goals as g (g.id)}
-											<li class="flex min-w-0 items-start gap-2" data-goal={g.status}>
-												{#if g.status === 'done'}<Icon
-														name="lucide:circle-check"
-														class="mt-1 size-4 shrink-0 text-muted-foreground"
-													/>
-												{:else if g.status === 'doing'}<Spinner
-														class="mt-1 size-4 shrink-0"
-														label={t('In progress')}
-													/>
-												{:else}<Icon
-														name="lucide:circle-dashed"
-														class="mt-1 size-4 shrink-0 text-muted-foreground"
-													/>{/if}
-												<span
-													class="min-w-0 {g.status === 'pending' ? 'text-muted-foreground' : ''}"
-													>{g.text}</span
-												>
-											</li>
-										{/each}
-									</ol>
+									<details class="group/goals rounded-xl border border-border/70 px-4 py-3" open>
+										<summary
+											class="flex cursor-pointer list-none items-center gap-2 text-xs text-muted-foreground focus-visible:ring-ring/40 rounded focus-visible:ring-2 focus-visible:outline-none [&::-webkit-details-marker]:hidden"
+										>
+											<Icon
+												name="lucide:chevron-right"
+												class="size-3.5 shrink-0 transition-transform group-open/goals:rotate-90"
+											/>
+											<span class="font-medium">{t('Goals')}</span>
+											<span class="tabular-nums"
+												>{current.goals.filter((g) => g.status === 'done').length}/{current.goals
+													.length}</span
+											>
+										</summary>
+										<ol class="mt-2 grid gap-1.5" aria-label={t('Goal steps')}>
+											{#each current.goals as g (g.id)}
+												<li class="flex min-w-0 items-start gap-2" data-goal={g.status}>
+													{#if g.status === 'done'}<Icon
+															name="lucide:circle-check"
+															class="mt-1 size-4 shrink-0 text-muted-foreground"
+														/>
+													{:else if g.status === 'doing' && status === 'running'}<Spinner
+															class="mt-1 size-4 shrink-0"
+															label={t('In progress')}
+														/>
+													{:else}<Icon
+															name="lucide:circle-dashed"
+															class="mt-1 size-4 shrink-0 text-muted-foreground"
+														/>{/if}
+													<span
+														class="min-w-0 {g.status === 'pending' ? 'text-muted-foreground' : ''}"
+														>{g.text}</span
+													>
+												</li>
+											{/each}
+										</ol>
+									</details>
 								</li>
 							{/if}
 						</ol>
 						{#if !pinned}
 							<Button
-								size="sm"
 								variant="secondary"
 								class="absolute bottom-3 left-1/2 -translate-x-1/2 rounded-full border shadow-md"
 								aria-label={t('Jump to latest')}
@@ -2355,7 +2582,6 @@
 							<div class="flex items-center gap-1 px-2 py-1.5">
 								<Button
 									variant="ghost"
-									size="sm"
 									class="min-w-0 px-1"
 									aria-expanded={draftOpen}
 									onclick={() => (draftOpen = !draftOpen)}
@@ -2373,7 +2599,7 @@
 									title={`${t('Revision')} ${p.revision}`}>r{p.revision}</span
 								>
 								<Button
-									size="icon-sm"
+									size="icon"
 									variant="ghost"
 									class="shrink-0"
 									aria-label={t('Delete plan')}
@@ -2384,7 +2610,6 @@
 									<Icon name="lucide:trash-2" class="size-3.5" />
 								</Button>
 								<Button
-									size="sm"
 									class="shrink-0 px-2"
 									aria-label={starting ? t('Starting…') : t('Execute plan')}
 									disabled={starting || status === 'running' || !empty}
@@ -2443,29 +2668,63 @@
 							</p>
 						{/if}
 						{#if queued.length > 0}
-							<!-- the queue: a thin rail behind the composer -->
+							<!-- the queue: messages waiting for the next step, steerable, reorderable and removable -->
 							<div class="grid w-full gap-1 text-xs" data-agent-queue>
 								<span class="text-muted-foreground">{t('Queued')} · {queued.length}</span>
-								<ol class="max-h-32 divide-y overflow-auto rounded-lg border border-border/70">
+								<ol class="max-h-40 divide-y overflow-auto rounded-lg border border-border/70">
 									{#each queued as q, i (q.id)}
-										<li class="flex items-center gap-1 px-2 py-0.5" data-queued={q.id}>
+										{@const local = q.id.startsWith('local:')}
+										<li
+											class="flex items-center gap-1 px-1.5 py-1 {local
+												? 'opacity-70'
+												: 'cursor-grab active:cursor-grabbing'}"
+											data-queued={q.id}
+											draggable={!local}
+											ondragstart={() => (dragFrom = i)}
+											ondragover={(e) => e.preventDefault()}
+											ondrop={(e) => {
+												e.preventDefault();
+												if (dragFrom !== null) moveTo(dragFrom, i);
+												dragFrom = null;
+											}}
+											ondragend={() => (dragFrom = null)}
+										>
+											<Icon
+												name="lucide:grip-vertical"
+												class="size-3.5 shrink-0 text-muted-foreground/60"
+											/>
 											<span class="min-w-0 flex-1 truncate" title={q.text ?? ''}
 												>{q.text || t('Attached message')}</span
 											>
-											{#if i > 0}<Button
-													size="icon-sm"
+											{#if local}
+												<span class="shrink-0 text-muted-foreground">{t('Sending…')}</span>
+												<Button
+													size="icon"
 													variant="ghost"
-													aria-label={t('Move up')}
-													onclick={() => moveUp(i)}
-													><Icon name="lucide:arrow-up" class="size-3.5" /></Button
-												>{/if}
-											{#if !q.id.startsWith('local:')}<!-- still posting: nothing to edit or remove yet -->
-												<Button size="sm" variant="ghost" class="px-1" onclick={() => revise(q)}
-													>{t('Edit')}</Button
+													class="size-6"
+													aria-label={t('Remove')}
+													onclick={() => cancelLocal(q)}
+													><Icon name="lucide:x" class="size-3.5" /></Button
+												>
+											{:else}
+												{#if i > 0}<Button
+														variant="ghost"
+														class="h-6 shrink-0 px-1.5 text-xs"
+														title={t('Send at the next step')}
+														onclick={() => moveTo(i, 0)}
+														><Icon name="lucide:corner-up-right" class="size-3.5" />{t(
+															'Steer'
+														)}</Button
+													>{/if}
+												<Button
+													variant="ghost"
+													class="h-6 shrink-0 px-1.5 text-xs"
+													onclick={() => revise(q)}>{t('Edit')}</Button
 												>
 												<Button
-													size="icon-sm"
+													size="icon"
 													variant="ghost"
+													class="size-6 shrink-0"
 													aria-label={t('Remove')}
 													onclick={() => dequeue(q)}
 													><Icon name="lucide:x" class="size-3.5" /></Button
@@ -2490,7 +2749,6 @@
 								>
 								<Button
 									type="button"
-									size="sm"
 									variant="ghost"
 									class="-my-1 shrink-0 px-2 text-xs hover:bg-background"
 									onclick={() => {
@@ -2536,11 +2794,11 @@
 								onChange={(v) => (draft = v)}
 								rows={2}
 								{commands}
-								commandStart="text"
+								commandStart="word"
 								{mentions}
 								aria-label={t('Message')}
 								class="[&_textarea]:max-h-40 [&_textarea]:min-h-14 [&_textarea]:resize-none [&_textarea]:border-0 [&_textarea]:bg-transparent [&_textarea]:px-0 [&_textarea]:py-3 [&_textarea]:text-sm [&_textarea]:leading-relaxed [&_textarea]:shadow-none [&_textarea]:focus-visible:ring-0 dark:[&_textarea]:bg-transparent"
-								placeholder={t('Ask anything · / for commands')}
+								placeholder={t('Ask anything · @ to reference anything')}
 								onkeydown={keydown}
 								onpaste={paste}
 							/>
@@ -2583,7 +2841,7 @@
 								<!-- the attach glyph lines up with the text above it -->
 								<Button
 									type="button"
-									size="icon-sm"
+									size="icon"
 									variant="ghost"
 									class="-ml-2 shrink-0 text-muted-foreground"
 									aria-label={t('Attach media or files')}
@@ -2616,7 +2874,7 @@
 								{/if}
 								{#if status === 'running' && empty}<Button
 										type="button"
-										size="icon-sm"
+										size="icon"
 										class="shrink-0 rounded-full"
 										aria-label={t('Stop')}
 										title={t('Stop')}
@@ -2626,7 +2884,7 @@
 									>
 								{:else if status === 'stopped' && empty}<Button
 										type="button"
-										size="icon-sm"
+										size="icon"
 										class="shrink-0 rounded-full"
 										aria-label={t('Resume')}
 										title={t('Resume')}
@@ -2635,7 +2893,7 @@
 									>
 								{:else}<Button
 										type="submit"
-										size="icon-sm"
+										size="icon"
 										class="shrink-0 rounded-full"
 										aria-label={status === 'running' ? t('Queue message') : t('Send')}
 										title={status === 'running' ? t('Queue message') : t('Send')}
@@ -2653,6 +2911,7 @@
 			{/if}
 		</div>
 		{#if rail}{@render session()}{/if}
+		{#if showingPreview}{@render preview()}{/if}
 	</div>
 </div>
 

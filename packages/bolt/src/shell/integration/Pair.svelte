@@ -166,7 +166,6 @@
 				{#if f.options !== undefined}
 					<!-- a choice: the first option is the default, so an untouched control sends nothing -->
 					<Combobox
-						size="sm"
 						aria-label={say(f.label)}
 						value={values[f.name] ?? f.options[0]?.value ?? null}
 						onChange={(v) => {
@@ -188,14 +187,10 @@
 			</label>
 		{/each}
 		<Cluster gap="sm">
-			<Button
-				size="sm"
-				type="submit"
-				disabled={busy || !valid}
-				data-connect={retry ? '' : undefined}
+			<Button type="submit" disabled={busy || !valid} data-connect={retry ? '' : undefined}
 				>{busy ? t('Connecting…') : retry ? t('Try again') : t('Connect')}</Button
 			>
-			{#if cancel !== undefined}<Button size="sm" variant="ghost" disabled={busy} onclick={cancel}
+			{#if cancel !== undefined}<Button variant="ghost" disabled={busy} onclick={cancel}
 					>{t('Cancel')}</Button
 				>{/if}
 		</Cluster>
@@ -238,11 +233,8 @@
 		{#if providers.length > 1}
 			<Cluster gap="sm" justify="between" align="center">
 				<p class="text-sm font-medium">{say(choice.label)}</p>
-				<Button
-					size="sm"
-					variant="ghost"
-					disabled={busy || c?.stored === true}
-					onclick={() => (picked = '')}>{t('Choose another provider')}</Button
+				<Button variant="ghost" disabled={busy || c?.stored === true} onclick={() => (picked = '')}
+					>{t('Choose another provider')}</Button
 				>
 			</Cluster>
 		{/if}
@@ -282,6 +274,7 @@
 				{#if left === 0}
 					<p class="text-sm" role="status" data-pairing-expired>{t('This code expired.')}</p>
 				{:else if shown.kind === 'qr'}
+					<!-- Scanners need a white quiet zone, so the code stays on paper in both themes. -->
 					<Qr
 						value={shown.value ?? ''}
 						alt={t('Scannable code for {instance}').replace('{instance}', c?.instance ?? '')}
@@ -303,7 +296,6 @@
 						{t('Expires in {n}s').replace('{n}', String(left))}
 					</p>{/if}
 				<Button
-					size="sm"
 					variant={left === 0 ? 'default' : 'ghost'}
 					disabled={busy}
 					onclick={start}
@@ -320,7 +312,6 @@
 		{:else if signIn !== null}
 			<Stack gap="xs" align="start" data-pairing="oauth">
 				<Button
-					size="sm"
 					href={signIn}
 					target="_blank"
 					rel="noopener noreferrer"
@@ -343,13 +334,12 @@
 		{:else if choice.setup.kind === 'oauth'}
 			<Cluster gap="sm">
 				<Button
-					size="sm"
 					disabled={busy || !valid}
 					onclick={start}
 					data-sign-in
 					data-connect={retry ? '' : undefined}>{retry ? t('Try again') : say(choice.label)}</Button
 				>
-				{#if cancel !== undefined}<Button size="sm" variant="ghost" disabled={busy} onclick={cancel}
+				{#if cancel !== undefined}<Button variant="ghost" disabled={busy} onclick={cancel}
 						>{t('Cancel')}</Button
 					>{/if}
 			</Cluster>
@@ -360,7 +350,6 @@
 	{#if controls && c?.stored === true && cancel === undefined}
 		<Cluster gap="sm">
 			<Button
-				size="sm"
 				variant="ghost"
 				class="text-destructive"
 				disabled={busy}

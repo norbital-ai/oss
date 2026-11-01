@@ -57,6 +57,6 @@ export function carriedContexts(
 	id: string
 ): ReadonlyMap<unknown, unknown> | undefined {
 	const c = carried?.record === `${model}/${id}` ? carried.contexts : undefined;
-	carried = null;
+	if (c !== undefined) carried = null;
 	return c;
 }

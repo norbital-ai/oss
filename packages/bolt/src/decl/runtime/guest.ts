@@ -3,6 +3,7 @@
 // each member an uninterruptible Effect that crosses through the prelude's `call` with the author's call site, captured
 // when the member is called. Avoid module-scope workflow construction in the guest prelude.
 import * as Effect from 'effect/Effect';
+import * as ConfigProvider from 'effect/ConfigProvider';
 import { isArray } from 'effect/Array';
 import * as Exit from 'effect/Exit';
 import * as Option from 'effect/Option';
@@ -374,7 +375,19 @@ const lift = (call: Call, raw: unknown): unknown => {
 const scheduler = new Scheduler.MixedScheduler('sync');
 /** The one edge per invocation: one `runPromiseExit`, the body's output or its `finalOf` as the prelude's answer. */
 export const runBody = <O>(body: () => Effect.fn.Return<O, BodyError>): Promise<O> =>
-	Effect.runPromiseExit(Effect.gen(body), { scheduler }).then((exit) => {
+	Effect.runPromiseExit(
+		Effect.gen(body).pipe(
+			Effect.provideService(
+				ConfigProvider.ConfigProvider,
+				ConfigProvider.fromUnknown(
+					(globalThis as { readonly [key: symbol]: unknown })[
+						Symbol.for('norbital.bolt.secrets')
+					] ?? {}
+				)
+			)
+		),
+		{ scheduler }
+	).then((exit) => {
 		if (Exit.isSuccess(exit)) return exit.value;
 		return import('./guest-failure.ts').then(({ finalOf }) => {
 			throw finalOf(exit.cause);

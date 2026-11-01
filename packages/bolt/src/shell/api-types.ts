@@ -34,6 +34,8 @@ import type { AuditPage, AuditQuery, AuditRecord } from '../protocol/audit.ts';
 import type { Settings } from './settings/data.ts';
 import type { SignInMethods } from './host.ts';
 import type { NavNode, ShellBoot } from './nav.ts';
+import { ManifestItemSchema } from './finder/manifest.ts';
+import { StudioTestRun } from './studio/test-results.ts';
 import {
 	StudioOp,
 	type StudioBuildRecord,
@@ -41,12 +43,6 @@ import {
 	type StudioUsage,
 	type StudioView
 } from './studio/model.ts';
-import {
-	AuditRuleSet,
-	AuditRuleState,
-	type StudioAudit,
-	type StudioAuditRules
-} from './studio/audit.ts';
 import { StudioInspection, type StudioInspectInput } from './studio/inspection.ts';
 
 const Optional = Schema.optionalKey(Schema.String);
@@ -253,13 +249,20 @@ export const ShellBootAnswer: Schema.Decoder<ShellBoot> = Schema.Struct({
 		)
 	),
 	startable: Schema.optionalKey(
-		Schema.Array(Schema.Struct({ name: Schema.String, description: Schema.String }))
+		Schema.Array(
+			Schema.Struct({
+				name: Schema.String,
+				description: Schema.String,
+				needsInput: Schema.optionalKey(Schema.Boolean)
+			})
+		)
 	),
 	envoys: Schema.optionalKey(Schema.Record(Schema.String, Schema.String)),
 	push: NullableString,
 	visitor: Schema.NullOr(Schema.Struct({ app: Schema.String, siteKey: Optional })),
 	catalog: Schema.Record(Schema.String, ModelExposureSchema),
 	automations: Schema.Record(Schema.String, AutomationExposureSchema),
+	search: Schema.optionalKey(Schema.Array(ManifestItemSchema)),
 	aiUnconfigured: True,
 	contract: Optional
 });
@@ -319,7 +322,15 @@ export const SettingsAnswer: Schema.Decoder<Settings> = Schema.Struct({
 			})
 		)
 	),
-	mcp: Schema.mutable(Schema.Array(Schema.Struct({ name: Schema.String, url: Schema.Json }))),
+	mcp: Schema.mutable(
+		Schema.Array(
+			Schema.Struct({
+				name: Schema.String,
+				url: Schema.Json,
+				secrets: Schema.optionalKey(Schema.mutable(Schema.Array(Schema.String)))
+			})
+		)
+	),
 	audit: Schema.Array(AuditRow),
 	integrations: Schema.mutable(
 		Schema.Array(
@@ -372,6 +383,7 @@ const StudioEntryAnswer = Schema.Array(
 );
 export const StudioViewAnswer: Schema.Decoder<StudioView> = Schema.Struct({
 	commit: Schema.String,
+	tests: Schema.optionalKey(StudioTestRun),
 	message: Optional,
 	zone: Optional,
 	files: Schema.Record(Schema.String, Schema.Struct({ bytes: Schema.Number })),
@@ -467,7 +479,7 @@ export const StudioViewAnswer: Schema.Decoder<StudioView> = Schema.Struct({
 			kiosks: StudioEntryAnswer,
 			policies: StudioEntryAnswer,
 			automations: StudioEntryAnswer,
-			remotes: StudioEntryAnswer,
+			remotes: Schema.optionalKey(StudioEntryAnswer),
 			secrets: StudioEntryAnswer
 		})
 	),
@@ -489,45 +501,6 @@ export const StudioFileAnswer: Schema.Decoder<StudioFile | null> = Schema.NullOr
 		Schema.Struct({ binary: Schema.Literal(true), bytes: Schema.Number })
 	])
 );
-const Severity = Schema.Literals(['error', 'hint']);
-const StudioAuditRuleErrors = Schema.Array(
-	Schema.Struct({ id: Schema.String, message: Schema.String })
-);
-export const StudioAuditRulesAnswer: Schema.Decoder<StudioAuditRules> = Schema.Struct({
-	revision: Schema.Number,
-	ruleSet: AuditRuleSet,
-	rules: Schema.Array(
-		Schema.Struct({
-			id: Schema.String,
-			pack: Schema.String,
-			summary: Schema.String,
-			severity: Severity,
-			state: AuditRuleState,
-			principles: Strings,
-			files: Schema.optionalKey(Strings),
-			rationale: Optional,
-			examples: Schema.Struct({ bad: Strings, good: Strings })
-		})
-	),
-	errors: StudioAuditRuleErrors,
-	digest: Schema.String,
-	version: Schema.String
-});
-export const StudioAuditAnswer: Schema.Decoder<StudioAudit> = Schema.Struct({
-	commit: Schema.String,
-	findings: Schema.Array(
-		Schema.Struct({
-			rule: Schema.String,
-			severity: Severity,
-			summary: Schema.String,
-			location: Schema.String,
-			principles: Strings
-		})
-	),
-	errors: StudioAuditRuleErrors,
-	digest: Schema.String,
-	version: Schema.String
-});
 export const SignInMethodsAnswer: Schema.Decoder<SignInMethods> = Schema.Struct({
 	email: Schema.Boolean,
 	phone: Schema.Boolean,
@@ -693,10 +666,6 @@ export type ShellApi = {
 	studioBuild(commit: string): Call<StudioBuildRecord | null>;
 	studioUsage(): Call<StudioUsage>;
 	studioInspect(input: StudioInspectInput): Call<StudioInspection>;
-	/** The organization's audit rules: read, saved over `revision`, and an audit of the head (Try: an unsaved set). */
-	studioAuditRules(): Call<StudioAuditRules>;
-	studioAuditSave(revision: number, ruleSet: AuditRuleSet): Call<StudioAuditRules>;
-	studioAudit(ruleSet?: AuditRuleSet): Call<StudioAudit>;
 	/** Rule 39: a member id, `{ team }`, or `null` to end the preview. */
 	preview(target: string | { team: string } | null): Call<void>;
 	/** `access.explain` (L-BOLT-234): the caller's own Authority, or (administrators) a member's or team's. */

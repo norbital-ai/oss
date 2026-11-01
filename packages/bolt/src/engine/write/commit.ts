@@ -747,7 +747,7 @@ export function compileOutcomeRecord(
 }
 
 /** Columns history never keeps: the generated search document and the platform embedding. */
-const UNHISTORIED = `ARRAY['bolt_search', 'bolt_embedding']`;
+const UNHISTORIED = `ARRAY['bolt_search', 'bolt_embedding', 'bolt_record_label']`;
 /** Rule 38e(a–c): purge prior history and notices while retaining the direct erasure's own receipt. */
 function erasePieces(c: Chain, erasures: readonly NonNullable<Commit['erase']>[]): void {
 	const operation = "nullif(current_setting('bolt.audit',true),'')";

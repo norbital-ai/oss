@@ -34,7 +34,6 @@ export type SystemNames = {
 	models: {
 		approval_request: {
 			description: 'An approval request on a record: its status, its steps, and the teams and members that approve or supersede.';
-			label: readonly ['collection_name', 'record_id'];
 			unique: readonly [
 				{
 					fields: readonly ['collection_name', 'record_id'];
@@ -51,9 +50,11 @@ export type SystemNames = {
 			fields: {
 				collection_name: {
 					kind: 'text';
+					label: 'Model';
 				};
 				record_id: {
 					kind: 'text';
+					label: 'Record ID';
 				};
 				action: {
 					kind: 'enum';
@@ -120,6 +121,9 @@ export type SystemNames = {
 				created_at: {
 					kind: 'instant';
 				};
+			};
+			search: {
+				text: readonly ['collection_name'];
 			};
 		};
 		requestor: {
@@ -1197,7 +1201,7 @@ export type SystemNames = {
 		};
 		sys_user: {
 			description: 'A member of the workspace: staff or an external party contact.';
-			label: 'name';
+			record_label: 'record.name';
 			computed: {
 				party_id: {
 					kind: 'text';

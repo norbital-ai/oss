@@ -261,7 +261,9 @@ export const LiveHubLive = Layer.effect(
 			row: RowData,
 			b: Bindings
 		): boolean {
-			const arms = a.admin ? null : (a.models[r.model]?.read[r.output ?? 'default']?.[r.model] ?? []);
+			const arms = a.admin
+				? null
+				: (a.models[r.model]?.read[r.output ?? 'default']?.[r.model] ?? []);
 			const env: EvalEnv = { cat, bindings: b, authority: a, scoped: true };
 			return (
 				(arms === null ||
@@ -288,7 +290,9 @@ export const LiveHubLive = Layer.effect(
 					: 'skip';
 			if (r.kind === 'get' || r.kind === 'history') return c.id === r.id ? 'hit' : 'skip';
 			if (r.kind !== 'read' && r.kind !== 'aggregate' && r.kind !== 'similar') return 'unknown';
-			const arms = a.admin ? null : (a.models[c.model]?.read[r.output ?? 'default']?.[c.model] ?? []);
+			const arms = a.admin
+				? null
+				: (a.models[c.model]?.read[r.output ?? 'default']?.[c.model] ?? []);
 			if ((r.where !== undefined && !decidable(r.where)) || arms?.some((x) => !decidable(x.where)))
 				return 'unknown';
 			const hit = (row: RowData | null) => row !== null && member(a, r, image(c.model, row), b);
@@ -309,10 +313,11 @@ export const LiveHubLive = Layer.effect(
 		): Row | undefined {
 			if (
 				Object.keys(select.relations).length > 0 ||
+				cat.models.get(model)?.labelLink !== undefined ||
 				[...syncsOf(manifest).values()].some((sync) => sync.model === model && sync.write) ||
 				approvable(manifest, cat).has(model)
 			)
-				return undefined; // `$sync` and `$approval` are read, never in an image
+				return undefined; // `$label`, `$sync` and `$approval` are read, never in an image
 			const c = storeSync(exposureOf(storeSync(catalogFor(cat, model, output)), model));
 			const out: { [k: string]: Json } = { id: row['id']! };
 			for (const name of select.fields ?? defaultFields(c, one)) {
@@ -396,11 +401,7 @@ export const LiveHubLive = Layer.effect(
 				// a related key (`account.name`) holds while its relation does; a commit to the target re-reads (`decide`)
 				const head = field.split('.')[0]!,
 					col = fields.get(head)?.column ?? head;
-				return (
-					c.old !== null &&
-					c.new !== null &&
-					same(c.old[col], c.new[col] ?? null)
-				);
+				return c.old !== null && c.new !== null && same(c.old[col], c.new[col] ?? null);
 			});
 		}
 

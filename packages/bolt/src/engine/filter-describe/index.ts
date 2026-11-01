@@ -14,12 +14,14 @@
 //   4. One call: per field one choice, "no condition" or one of its conditions (a list operator's values are a yes / no
 //      each, as several can hold); one sort choice of (key, direction) or none; how the conditions combine; and whether
 //      the ask needs a selection the grammar cannot express.
-//   5. The chosen conditions compose under one top-level group and decode once more, held to the caller's exposure.
+//   5. Relation predicates compose inside a shared quantifier (same-record AND); counts and aggregates stay separate.
+//      Empty-list alternatives nest inside that relation group. The complete result decodes against the caller's exposure.
 //
 // No fallback (owner): a System 1 failure, or nothing chosen, applies nothing. The whole answers within
 // `FILTER_DEADLINE_MS`. Sorting is by an own sortable field or, one hop through an exposed one-relation, a target field.
 import { Clock, Effect, Equal, Predicate, Result, Schema } from 'effect';
 import { encodeWire } from '@norbital-ai/std/wire';
+import { labelPaths, recordLabelSpec } from '@norbital-ai/std/label';
 import { Ai } from '../ports.ts';
 import { Decisions, Manifest, Reads, type DecisionsShape, type ReadsShape } from '../services.ts';
 import { FacilityFailure, Unavailable } from '../../decl/errors.ts';
@@ -53,12 +55,12 @@ import { order, where as decodeWhere } from '@norbital-ai/store';
 /** A stored point (`{ lat, lng }`) among a row's values. */
 const isPoint = Schema.is(Schema.Struct({ lat: Schema.Number, lng: Schema.Number }));
 /** The stated conditions a description may produce. */
-const FILTER_MAX_CONDITIONS = 4;
+const FILTER_MAX_CONDITIONS = 12;
 /** Fields asked about in the one request: the ones the description most plausibly names. */
-const FILTER_MAX_FIELDS = 16;
+const FILTER_MAX_FIELDS = 96;
 const FILTER_MAX_TEXT = 500;
 /** A description answers within this: its one read and its one `sys_1` call together. */
-const FILTER_DEADLINE_MS = 1000;
+const FILTER_DEADLINE_MS = 3000;
 /** Relation hops a condition path may take (a many-relation's quantifier is a hop). */
 const FILTER_MAX_HOPS = 2;
 const CANDIDATES = 5,
@@ -70,13 +72,10 @@ const NO = 'no condition',
 	NO_ORDER = 'no particular order';
 /** The likeness at which a typed token matches a label's token. */
 const MATCH = 0.5;
-/** A hedged answer (no condition under 0.7) still counts when its likeliest condition is evidence at this or more. */
-const CLOSE = 0.2,
-	HEDGED = 0.3;
 /** A disjunction or a negation the text never states is System 1 misreading the composition. */
-const DISJUNCTION = /\b(or|nor|either|neither|any of|whichever)\b/i;
+const DISJUNCTION = /\b(or|nor|either|neither|any of|whichever|ou|atau)\b|或者|或是|或|不是.*就是/i;
 const NEGATION =
-	/\b(not|no|without|except|excluding|neither|nor|none|never|isn['’]?t|aren['’]?t|other than|outside)\b/i;
+	/\b(neither|not all|none of (these|those|the conditions))\b|并非全部|並非全部|都不满足|都不滿足/i;
 /** Words that put a day on a condition: only then are named days looked for. */
 const DAY_WORDS =
 	/\b(after|before|since|until|till|from|on|by|between|during|around|following|prior)\b/i;
@@ -119,7 +118,7 @@ type FilterStep =
 			of: string;
 	  };
 /** A value offered for an operator: a literal, a list, a span (`[lo, hi)`) or a requestor variable. */
-type FilterArg =
+type FilterArg = { echoed?: true } & (
 	| {
 			lit: Json;
 	  }
@@ -148,7 +147,9 @@ type FilterArg =
 				},
 				number
 			];
-	  };
+	  }
+);
+
 type FilterValue = {
 	label: string;
 	arg: FilterArg;
@@ -372,6 +373,41 @@ export function literals(
 	numbers: number[];
 	dates: string[];
 } {
+	// Normalize numeral tokens, not surrounding words: the AI still sees the original description.
+	const digits: Readonly<Record<string, number>> = {
+		零: 0,
+		〇: 0,
+		一: 1,
+		二: 2,
+		两: 2,
+		兩: 2,
+		三: 3,
+		四: 4,
+		五: 5,
+		六: 6,
+		七: 7,
+		八: 8,
+		九: 9
+	};
+	text = text.replace(/[零〇一二两兩三四五六七八九十百千万萬]+/g, (token) => {
+		if (![...token].some((ch) => digits[ch] === undefined))
+			return [...token].map((ch) => digits[ch]).join('');
+		let total = 0,
+			section = 0,
+			digit = 0;
+		for (const ch of token) {
+			if (digits[ch] !== undefined) digit = digits[ch];
+			else if (ch === '万' || ch === '萬') {
+				total += (section + digit) * 10000;
+				section = 0;
+				digit = 0;
+			} else {
+				section += (digit || 1) * ({ 十: 10, 百: 100, 千: 1000 }[ch] ?? 1);
+				digit = 0;
+			}
+		}
+		return String(total + section + digit);
+	});
 	const dates: string[] = [];
 	const push = (y: string, m: string, d: string) => {
 		const iso = `${y}-${m.padStart(2, '0')}-${d.padStart(2, '0')}`;
@@ -386,7 +422,14 @@ export function literals(
 	const month = (name: string) =>
 		String(MONTHS.findIndex((x) => x.startsWith(name.toLowerCase().slice(0, 3))) + 1);
 	const rest = text
-		.replace(/\b(\d{4})-(\d{2})-(\d{2})\b/g, (d) => (dates.push(d), ' '))
+		.replace(/(?<!\d)(\d{4})-(\d{2})-(\d{2})(?!\d)/g, (d) => (dates.push(d), ' '))
+		.replace(
+			/(\d{4})年\s*(\d{1,2})月(?:\s*(\d{1,2})[日号號]?)?/g,
+			(_, y: string, m: string, d: string | undefined) => push(y, m, d ?? '1')
+		)
+		.replace(/(\d{1,2})月\s*(\d{1,2})[日号號]/g, (_, m: string, d: string) =>
+			push(dates.at(-1)?.slice(0, 4) ?? today.slice(0, 4), m, d)
+		)
 		.replace(/\b(\d{1,2})\/(\d{1,2})\/(\d{4})\b/g, (_, a: string, b: string, y: string) =>
 			locale === 'en-US' ? push(y, a, b) : push(y, b, a)
 		)
@@ -557,12 +600,7 @@ const esc = (s: string) => s.replace(/[\\%_]/g, (c) => `\\${c}`);
 const loose = (s: string) => `%${s.trim().split(/\s+/).map(esc).join('%')}%`;
 /** The operators and values a field is offered with, or `undefined` when no option can express it. */
 /** The values copied from the description (its words, quoted strings, numbers, dates): offered, but never evidence. */
-const ECHOES = new WeakSet<FilterArg>();
-const echoed = (x: Json): FilterArg => {
-	const a = { lit: x };
-	ECHOES.add(a);
-	return a;
-};
+const echoed = (x: Json): FilterArg => ({ lit: x, echoed: true });
 const fieldOps = (items: readonly (readonly [Operator, string])[]): readonly Op[] =>
 	items.map(([op, label]) => ({ op, label }));
 const EQUALITY_OPS = fieldOps([
@@ -700,7 +738,7 @@ function options(
 						)
 					]
 				};
-				ECHOES.add(arg);
+				arg.echoed = true;
 				add(d, arg);
 			}
 	} else if (k === 'period' && f.periodOf === 'date') {
@@ -948,7 +986,12 @@ export function makeFilterDescribe(cfg: FilterDescribeConfig) {
 					out.push({
 						label,
 						...(system
-							? { hint: 'when this record was entered in the workspace, not a business date' }
+							? {
+									hint:
+										f.name === 'created_at'
+											? 'when this top-level record was entered in the workspace, not a related record or a business date'
+											: 'when this top-level record was last edited in the workspace, not a related record or a business date'
+								}
 							: s?.help === undefined
 								? {}
 								: { hint: s.help }),
@@ -1037,11 +1080,13 @@ export function makeFilterDescribe(cfg: FilterDescribeConfig) {
 						path: [...steps, { k: 'count', rel: r }],
 						kind: 'count',
 						ops: cmp,
-						values: [
-							{ label: '0', arg: { lit: 0 } },
-							{ label: '1', arg: { lit: 1 } },
-							...numbers().filter((v) => v.label !== '0' && v.label !== '1')
-						]
+						values:
+							lit.numbers.length > 0
+								? numbers()
+								: [
+										{ label: '0', arg: { lit: 0 } },
+										{ label: '1', arg: { lit: 1 } }
+									]
 					});
 					for (const f of child.model.fields.values()) {
 						const s = spec(rel.child, f.name);
@@ -1052,11 +1097,13 @@ export function makeFilterDescribe(cfg: FilterDescribeConfig) {
 								((fn === 'min' || fn === 'max') && (f.kind === 'date' || f.kind === 'instant'))
 							)
 								out.push({
-									label: `${rl} › ${word} ${(s.label ?? human(f.name)).toLowerCase()}`,
+									label: `${rl} › ${DAY_KINDS.has(f.kind) ? (fn === 'max' ? 'latest' : 'earliest') : word} ${(s.label ?? human(f.name)).toLowerCase()}`,
 									path: [...steps, { k: 'agg', rel: r, fn, of: f.name }],
 									kind: f.kind,
-									ops: cmp,
-									values: numbers()
+									ops: DAY_KINDS.has(f.kind) ? [...DATE_OPS] : cmp,
+									values: DAY_KINDS.has(f.kind)
+										? options(f, s, false, lit, ws, b.tz, b.today)!.values
+										: numbers()
 								});
 					}
 				}
@@ -1094,7 +1141,7 @@ export function makeFilterDescribe(cfg: FilterDescribeConfig) {
 	const found = (f: Field, label: string, arg: FilterArg) => {
 		const at = f.values.findIndex((v) => v.label === label);
 		if (at < 0) f.values.push({ label, arg });
-		else if (ECHOES.has(f.values[at]!.arg)) f.values[at] = { label, arg };
+		else if (f.values[at]!.arg.echoed === true) f.values[at] = { label, arg };
 	};
 	const lookup = Effect.fn('Agents.lookup')(function* (
 		model: string,
@@ -1126,7 +1173,7 @@ export function makeFilterDescribe(cfg: FilterDescribeConfig) {
 			const target = c.model.one.get(s.name)!.targets[0]!,
 				x = viewOf(a, target).cat.exposures.get(target)!,
 				layer = levelOf(view, c, s.name, target);
-			const tl = [m.models[target]?.label ?? 'name'].flat()[0]!;
+			const tl = labelPaths(recordLabelSpec(m.models[target] ?? {}))[0] ?? 'name';
 			// the phrase is matched through the layer: read the target, then filter across the layer's label
 			if (
 				layer === undefined ||
@@ -1316,7 +1363,7 @@ export function makeFilterDescribe(cfg: FilterDescribeConfig) {
 					x.model.fields.get(f)?.kind === kind &&
 					!x.model.fields.get(f)!.many &&
 					exposedField(x, f);
-				const label = [m.models[name]?.label ?? 'name'].flat()[0]!;
+				const label = labelPaths(recordLabelSpec(m.models[name] ?? {}))[0] ?? 'name';
 				const title = [label, ...x.model.search, 'name', 'title'].find((f) => readable(f, 'text'));
 				const when = [label, ...x.model.fields.keys()].find((f) => readable(f, 'date'));
 				if (title === undefined || when === undefined) continue;
@@ -1402,7 +1449,8 @@ export function makeFilterDescribe(cfg: FilterDescribeConfig) {
 		// a list operator's candidates: what the description names (its words, a declared value it says) or a read found
 		const said = text.toLowerCase();
 		const named = lits.filter(
-			(v) => ECHOES.has(v.arg) || f.found?.includes(v.label) || said.includes(v.label.toLowerCase())
+			(v) =>
+				v.arg.echoed === true || f.found?.includes(v.label) || said.includes(v.label.toLowerCase())
 		);
 		const listy =
 			f.kind === 'enum' ||
@@ -1432,7 +1480,7 @@ export function makeFilterDescribe(cfg: FilterDescribeConfig) {
 				label,
 				op,
 				...(arg === undefined ? {} : { arg }),
-				evidence: arg !== undefined && !ECHOES.has(arg),
+				evidence: arg !== undefined && arg.echoed !== true,
 				where,
 				...extra
 			});
@@ -1462,11 +1510,27 @@ export function makeFilterDescribe(cfg: FilterDescribeConfig) {
 									).lit
 							)
 						},
-						{ list: named, evidence: named.some((v) => !ECHOES.has(v.arg)) }
+						{ list: named, evidence: named.some((v) => v.arg.echoed !== true) }
 					);
 				continue;
 			}
 			for (const v of f.values) {
+				const relative: Readonly<Record<string, RegExp>> = {
+					today: /today|今天|今日/i,
+					yesterday: /yesterday|昨天|昨日/i,
+					'last month': /last month|上个?月|上個月/i,
+					'this month': /this month|本月|这个月|這個月/i,
+					'last week': /last week|上周|上週|上星期/i,
+					'this week': /this week|本周|本週|这周|這週/i
+				};
+				if (
+					v.label !== 'today' &&
+					'range' in v.arg &&
+					v.arg.echoed !== true &&
+					!f.found?.includes(v.label) &&
+					!(relative[v.label]?.test(text) ?? text.toLowerCase().includes(v.label.toLowerCase()))
+				)
+					continue;
 				// "is within" takes a span; a span's "is" is "is within"
 				if (
 					(x.op === 'during' && !('range' in v.arg)) ||
@@ -1485,7 +1549,7 @@ export function makeFilterDescribe(cfg: FilterDescribeConfig) {
 		// between two of the description's own numbers or days, both ends included
 		if (f.ops.some((y) => y.op === 'gte')) {
 			const ends = lits
-				.filter((v) => ECHOES.has(v.arg))
+				.filter((v) => v.arg.echoed === true)
 				.map(
 					(v) =>
 						(
@@ -1542,7 +1606,7 @@ export function makeFilterDescribe(cfg: FilterDescribeConfig) {
 					.filter((x) => x.length > 2);
 				const declared = f.values.some(
 					(v) =>
-						!ECHOES.has(v.arg) &&
+						v.arg.echoed !== true &&
 						new RegExp(`\\b${v.label.toLowerCase().replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`).test(
 							said
 						)
@@ -1552,7 +1616,7 @@ export function makeFilterDescribe(cfg: FilterDescribeConfig) {
 					f.kind !== 'semantic' &&
 					f.values.some(
 						(v) =>
-							ECHOES.has(v.arg) && !ws.includes(v.label) && said.includes(v.label.toLowerCase())
+							v.arg.echoed === true && !ws.includes(v.label) && said.includes(v.label.toLowerCase())
 					);
 				// the model's own search index and meaning stand just behind any named field: no label names them
 				const index =
@@ -1739,9 +1803,15 @@ export function makeFilterDescribe(cfg: FilterDescribeConfig) {
 			f: Field;
 			conds: Cond[];
 		}[] = [];
-		for (const f of rank(fields, o.text, o.model)) {
-			if (asked.length >= FILTER_MAX_FIELDS) break;
-			const conds = condsOf(f, local ? undefined : o.model, o.text, o.bindings).slice(0, max - 1);
+		for (const offered of rank(fields, o.text, o.model)) {
+			const f = offered;
+			// Quantification belongs to a relation group, not to each of its fields independently.
+
+			const conds = condsOf(f, local ? undefined : o.model, o.text, o.bindings);
+			if (conds.length > max - 1 || (conds.length > 0 && asked.length >= FILTER_MAX_FIELDS))
+				return fail(
+					'This description needs too many alternatives. Use the condition editor to express it exactly.'
+				);
 			if (conds.length > 0) asked.push({ f, conds });
 		}
 		const orders = [...nears, ...fields.filter((f) => f.sort !== undefined).flatMap(orderOf)].slice(
@@ -1754,13 +1824,184 @@ export function makeFilterDescribe(cfg: FilterDescribeConfig) {
 		const questions: {
 			[id: string]: DecisionQuestion;
 		} = {};
+		questions['textSearch'] = {
+			type: 'noul',
+			instructions:
+				'Does the description request matching words or a topic in record CONTENT? A structured condition on count, date, status, activity, or an aggregate is NOT a text-search request. Do not search for incidental words such as zero, all, active or order.',
+			criteria: {
+				true: 'A text-content or topic match is requested.',
+				false: 'Only structured predicates are requested.'
+			}
+		};
+		questions['ownership'] = {
+			type: 'noul',
+			instructions:
+				'Does the description explicitly restrict records by caller identity: owned by me, assigned to me, my team, 我的 records? "Show me", "give me", 给我 and 给我啦 are requests to display results, NOT ownership restrictions.',
+			criteria: {
+				true: 'Caller ownership or affiliation is an explicit filter.',
+				false: 'The caller only asks to see results, or identity is not mentioned.'
+			}
+		};
+		const relations = [
+			...new Set(
+				asked.flatMap(({ f }) =>
+					f.path[0] !== undefined &&
+					'rel' in f.path[0] &&
+					['some', 'count', 'agg'].includes(f.path[0].k)
+						? [f.path[0].rel]
+						: []
+				)
+			)
+		];
+		const modes = {
+			ignore:
+				'Only a count or aggregate (total, average, earliest/latest date) is constrained, or this relation is not mentioned. No additional individual-record predicate. A latest-record date boundary belongs here, NOT some.',
+			some: 'At least one related record satisfies ALL stated child conditions, on the SAME record.',
+			every:
+				'The description explicitly says ALL/EVERY related record must satisfy the child conditions; empty lists also qualify. SAME record only joins predicates and does not mean ALL records.',
+			nonempty_every:
+				'The description explicitly requires BOTH a nonempty list AND ALL/EVERY related record to satisfy the conditions. Merely having one matching record is some, even when it must be the SAME record.',
+			none: 'NO related record satisfies the child conditions. Empty lists qualify. This does NOT mean the entire list is empty.',
+			empty_or_some:
+				'Either the related list is empty OR at least one related record satisfies the child conditions.'
+		};
+		for (const rel of relations) {
+			questions[`applicable.${rel}`] = {
+				type: 'noul',
+				instructions: {
+					question: `Does the description explicitly constrain ${human(rel)} records, their count, or an aggregate? Do not substitute this relation for another relation that shares a status word. A shared status word alone does not name this relation.`,
+					relation: human(rel),
+					otherRelations: relations.filter((name) => name !== rel).map(human)
+				},
+				criteria: {
+					true: `This exact relation ${human(rel)} is requested.`,
+					false: 'Only another relation is mentioned, or no relation constraint is requested.'
+				}
+			};
+			questions[`relation.${rel}`] = {
+				type: 'choice',
+				instructions: {
+					question:
+						'Select the quantifier on this named relation only. Examples: no records before D => none; all records done and at least one => nonempty_every; zero records OR an open record => empty_or_some; zero records OR all done => every (empty lists satisfy every). SAME record means some with joined predicates, not every. Only select every/nonempty_every when the description explicitly requires all related records. Ignore counts and aggregates.',
+					relation: rel
+				},
+				criteria: Object.fromEntries(
+					Object.entries(modes).map(([key, description]) => [
+						key,
+						{
+							relation: rel,
+							meaning: description,
+							...(key === 'ignore'
+								? {
+										rule: `Choose this if the description does not explicitly constrain individual ${rel} records. Do not substitute this relation for a different named relation.`
+									}
+								: {})
+						}
+					])
+				)
+			};
+			questions[`count.${rel}`] = {
+				type: 'noul',
+				instructions: {
+					question:
+						'Does the description explicitly constrain the NUMBER of related records, including zero records, that EVERY returned root must satisfy? An empty-list alternative inside OR is NOT a separate count constraint. Do not count "at least one matching record", "none before a date", or "all fulfilled" as a separate total-count constraint.',
+					relation: rel
+				},
+				criteria: {
+					true: `An explicit TOTAL number of ${rel} is requested, such as >2, 1 to 3, exactly one, or zero.`,
+					false: `No TOTAL count of ${rel} is requested. "Got one matching record", "same one", "at least one open record", and "none before a date" describe child existence, NOT a total count.`
+				}
+			};
+			questions[`exclude.${rel}`] = {
+				type: 'noul',
+				instructions: `Does the description reject roots having a ${rel} record matching its stated child status/date predicate? Examples: "no bounced emails", "email bounced dont wan", "none before a date", "不能有退信". Only answer true for this named relation. Do not apply negation about a different field or relation.`,
+				criteria: {
+					true: `Matching ${rel} records must NOT exist.`,
+					false: `Matching ${rel} records are allowed, required, or not discussed.`
+				}
+			};
+			questions[`emptyAlternative.${rel}`] = {
+				type: 'noul',
+				instructions: `Does the description allow EITHER zero ${rel} OR a condition on ${rel}, as alternatives? Include nested alternatives such as "active AND (no orders OR all fulfilled)". Do not answer true for "no records before a date" or "at least one record and all fulfilled".`,
+				criteria: {
+					true: `An empty ${rel} list is an ALTERNATIVE to a child condition.`,
+					false: 'There is no empty-list OR alternative on this relation.'
+				}
+			};
+			questions[`individual.${rel}`] = {
+				type: 'noul',
+				instructions: `Does the description constrain INDIVIDUAL ${rel} records in addition to any count/aggregate? A date/status predicate on individual records is true. An average amount, including "each repayment avg", only constrains AVG, NOT every individual amount. A total or latest date alone is false.`,
+				criteria: {
+					true: 'A separate child-record predicate is requested.',
+					false: 'Only counts or aggregates of the whole relation are requested.'
+				}
+			};
+			const aggs = asked.filter(({ f }) => f.path[0]?.k === 'agg' && f.path[0].rel === rel);
+			if (aggs.length > 0)
+				questions[`aggregate.${rel}`] = {
+					type: 'choice',
+					instructions: {
+						question: `Which measure of ${rel} does the description request? "Latest record", "last record", "most recent record", 最近一笔 and 最后一笔 mean MAX(date); "last month" is a date interval, NEVER a max aggregate; "earliest" means MIN(date). "Total", 累计, 累加 mean SUM; 平均 means AVG. Select none for a date boundary on individual records, including no records before a date.`,
+						relation: rel
+					},
+					criteria: {
+						none: `No explicit aggregate of ${rel} is requested, or the description only tests individual records or their count`,
+						...Object.fromEntries(
+							aggs.map(({ f }, n) => [
+								`a${n}`,
+								{
+									label: f.label,
+									path: f.path,
+									requires: `The description explicitly names this measure of ${rel}`
+								}
+							])
+						)
+					}
+				};
+		}
 		asked.forEach(({ f, conds }, n) => {
+			if (f.path.length === 1 && f.ops.some((op) => NO_VALUE.has(op.op)))
+				questions[`presence.f${n + 1}`] = {
+					type: 'noul',
+					instructions: `Does the description explicitly ask whether the root property ${f.label} is filled, empty, missing, present or absent? A predicate on RELATED records does not require this root property to be filled.`,
+					criteria: {
+						true: `Presence or absence of ${f.label} itself is requested.`,
+						false:
+							'This property is not presence-tested; a different property or related record is constrained.'
+					}
+				};
+			const scoped = f.path[0] !== undefined && ['count', 'agg'].includes(f.path[0].k);
+			const descriptionOf = (c: Cond) =>
+				c.label
+					.replace(/^(.*?) \(none\) › /, 'No $1 have ')
+					.replace(/^(.*?) \(all\) › /, 'Every $1 has ')
+					.replace(/^(.*?) \(any\) › /, 'At least one $1 has ');
 			questions[`f${n + 1}`] = {
 				type: 'choice',
-				instructions: `Which condition does the description state on ${f.label}?${f.hint === undefined ? '' : ` (${f.label}: ${f.hint})`}${f.found === undefined ? '' : f.kind === 'record' ? ` Its words match these ${f.label} records: ${f.found.join('; ')}.` : ` Records hold its words: ${f.found.join('; ')}.`}`,
+				instructions: {
+					question: scoped
+						? 'If this exact count or aggregate property is requested, select its exact comparison and value, preserving BOTH range boundaries. If it is not requested, choose no condition. Do not substitute an individual-record predicate or another measure.'
+						: f.path.length === 1 && DAY_KINDS.has(f.kind)
+							? 'Does the description explicitly constrain this TOP-LEVEL date property? A date on a related record (such as when an order was placed) is NOT a constraint on the root record creation or update time: choose no condition for this property. Only select a comparison when this exact root date is requested; preserve both range boundaries.'
+							: ['enum', 'state'].includes(f.kind)
+								? 'First check whether the description explicitly constrains this STATUS. Excluding empty lists (no orders do not show) is existence, NOT status: choose no condition when no status is requested. When status IS requested, unfinished/pending work (未完成) means work still open/in progress and excludes cancellation. Prefer that positive business state over negating completion, which also admits cancelled records. Explicit logical negation including cancelled records still selects the negated state.'
+								: 'Which option states a condition requested by the description? Match the complete meaning, including the relation quantifier. Preserve BOTH range boundaries. Choose no condition when none of these conditions is requested.',
+					field: {
+						label: f.label,
+						kind: f.kind,
+						path: f.path,
+						...(f.hint === undefined ? {} : { hint: f.hint }),
+						...(f.found === undefined ? {} : { matchingRecords: f.found })
+					}
+				},
 				criteria: {
-					[NO]: `it states no condition on ${f.label}`,
-					...own(conds.map((c) => c.label))
+					[NO]: {
+						description: `No explicit constraint on this exact property ${f.label}; do not add redundant or incidental matches`,
+						where: null
+					},
+					...Object.fromEntries(
+						conds.map((c) => [c.label, { description: descriptionOf(c), where: c.where }])
+					)
 				}
 			};
 			conds
@@ -1775,7 +2016,8 @@ export function makeFilterDescribe(cfg: FilterDescribeConfig) {
 		});
 		questions['combine'] = {
 			type: 'choice',
-			instructions: 'How do the stated conditions combine?',
+			instructions:
+				'How do ROOT conditions combine, treating each relation condition as one complete group? For "active AND (no orders OR all fulfilled)" choose all of them hold: the OR is INSIDE the relation, not between active and the relation. For "no orders OR open orders" the entire OR is likewise inside the relation group. Negation of individual predicates is already handled by their operators and relation quantifiers; do not negate them again.',
 			criteria: Object.fromEntries(Object.entries(COMBINE).map(([k, v]) => [k, v.because]))
 		};
 		if (orders.length > 0)
@@ -1795,8 +2037,19 @@ export function makeFilterDescribe(cfg: FilterDescribeConfig) {
 				false: 'the requested selection is represented by the offered conditions and ordering'
 			}
 		};
+		questions['selection.filteredAggregate'] = {
+			type: 'noul',
+			instructions:
+				'Does an explicitly requested count greater than one, sum or average apply ONLY to a filtered subset of related records? Examples: "count only open orders, require at least 2" or "sum only September repayments". A TOTAL count plus an independent status/date condition is false. A grand total between two bounds has NO filtered subset. "Not each payment", "bukan setiap bayaran", or "不是每笔" rejects a per-item interpretation; it does not restrict which payments contribute to the total. Only answer true when a stated child property (such as status or date) excludes some children from the aggregate. Some/every/none, one matching child, zero matching children, and same-child date/status predicates are supported and false here.',
+			criteria: {
+				true: 'A numeric aggregate of a filtered child subset is explicitly required.',
+				false:
+					'No filtered-subset aggregate: ordinary whole-list aggregates or child quantifiers suffice.'
+			}
+		};
 		const state = {
 			description: o.text,
+			literals: literals(o.text, m.workspace.locale, o.bindings.today),
 			model: human(o.model),
 			fields: asked.map(({ f }) => ({ label: f.label, kind: f.kind })),
 			today: o.bindings.today,
@@ -1809,12 +2062,54 @@ export function makeFilterDescribe(cfg: FilterDescribeConfig) {
 			Math.max(1, Math.round(FILTER_DEADLINE_MS - ((yield* Clock.currentTimeMillis) - started)))
 		);
 		if ('ok' in r) return r;
-		if (noulOf(r, 'selection.unsupported') > 0.5)
+		// A literal "last/first <relation> before D" has a fixed aggregate meaning; calendar spans are not records.
+		const statedExtremum = (rel: string) => {
+			const parts = tokens(o.text),
+				nouns = tokens(human(rel)).map((x) => x.replace(/s$/, ''));
+			for (const [i, part] of parts.entries())
+				if (
+					['last', 'latest', 'first', 'earliest'].includes(part) &&
+					![
+						'day',
+						'days',
+						'week',
+						'weeks',
+						'month',
+						'months',
+						'quarter',
+						'quarters',
+						'year',
+						'years',
+						...MONTHS
+					].includes(parts[i + 1] ?? '') &&
+					parts.slice(i + 1, i + 4).some((word) => nouns.some((noun) => alike(word, noun) >= MATCH))
+				)
+					return part === 'last' || part === 'latest' ? 'max' : 'min';
+			return undefined;
+		};
+		const sourceDates = literals(o.text, m.workspace.locale, o.bindings.today).dates;
+		const dateAt = sourceDates.length === 1 ? o.text.indexOf(sourceDates[0]!) : -1;
+		const prefix = dateAt < 0 ? '' : o.text.slice(0, dateAt);
+		const suffix = dateAt < 0 ? '' : o.text.slice(dateAt + sourceDates[0]!.length);
+		const dateComparison = /(?:<=|on or before|不晚于|不晚於)\s*$/i.test(prefix)
+			? 'lte'
+			: /(?:>=|on or after|not before|不早于|不早於)\s*$/i.test(prefix)
+				? 'gte'
+				: /(?:\bbefore|\bb4|anterior (?:a|al)|avant (?:le)?|sebelum|早于|早於|<)\s*$/i.test(prefix)
+					? 'lt'
+					: /(?:\bafter|之后|之後|>)\s*$/i.test(prefix)
+						? 'gt'
+						: /^\s*(?:之前|以前)/u.test(suffix)
+							? 'lt'
+							: /^\s*(?:之后|之後|以后|以後)/u.test(suffix)
+								? 'gt'
+								: undefined;
+		if (noulOf(r, 'selection.unsupported') > 0.5 || noulOf(r, 'selection.filteredAggregate') > 0.5)
 			return {
 				ok: false,
 				code: 'invalid',
 				message:
-					'This selection requires comparing or ranking records across groups, which the available filters cannot express. Choose a field condition or sort instead.'
+					'This description requires cross-record ranking or an aggregate of a filtered subset that the natural-language planner does not offer. Use an explicit supported condition instead.'
 			};
 		// 5. the chosen conditions: past even odds a condition holds; from HEDGED when its likeliest is evidence at CLOSE
 		const picks: {
@@ -1824,15 +2119,69 @@ export function makeFilterDescribe(cfg: FilterDescribeConfig) {
 			where: Json;
 		}[] = [];
 		asked.forEach(({ f, conds }, n) => {
+			if ((f.kind === 'search' || f.kind === 'semantic') && noulOf(r, 'textSearch') <= 0.5) return;
 			const a = r.answers[`f${n + 1}`];
 			if (a?.type !== 'choice') return;
 			const yes = 1 - (a.probabilities[NO] ?? 0);
 			const ranked = conds
 				.map((c) => ({ c, p: a.probabilities[c.label] ?? 0 }))
 				.sort((l, r2) => r2.p - l.p);
-			const evidence = ranked.find((x) => x.c.evidence && x.p >= CLOSE);
-			const pick = yes > 0.5 ? ranked[0] : yes >= HEDGED ? evidence : undefined;
+			const explicit =
+				f.path[0] !== undefined &&
+				['some', 'every', 'none'].includes(f.path[0].k) &&
+				(f.kind === 'enum' || f.kind === 'state') &&
+				f.values.some(
+					(v) =>
+						'lit' in v.arg &&
+						typeof v.arg.lit === 'string' &&
+						o.text.toLowerCase().includes(v.arg.lit.toLowerCase())
+				);
+			const first = f.path[0];
+			const childDate =
+				first !== undefined &&
+				['some', 'none', 'every'].includes(first.k) &&
+				'rel' in first &&
+				DAY_KINDS.has(f.kind) &&
+				fields.filter(
+					(field) =>
+						field.path[0]?.k === 'some' &&
+						field.path[0].rel === first.rel &&
+						DAY_KINDS.has(field.kind)
+				).length === 1;
+			const literalAggregate =
+				first?.k === 'agg' &&
+				DAY_KINDS.has(f.kind) &&
+				statedExtremum(first.rel) === first.fn &&
+				sourceDates.length === 1
+					? conds.find(
+							(c) =>
+								c.op === dateComparison &&
+								c.arg !== undefined &&
+								'lit' in c.arg &&
+								c.arg.lit === sourceDates[0]
+						)
+					: undefined;
+			const literal =
+				literalAggregate ??
+				(childDate && sourceDates.length === 1
+					? conds.find(
+							(c) =>
+								c.op === dateComparison &&
+								c.arg !== undefined &&
+								'lit' in c.arg &&
+								c.arg.lit === sourceDates[0]
+						)
+					: undefined);
+			const pick =
+				literal === undefined
+					? (yes > 0.5 && a.choice !== NO) || explicit
+						? ranked[0]
+						: undefined
+					: { c: literal, p: a.probabilities[literal.label] ?? 0 };
 			if (pick === undefined) return;
+			if (f.path.length === 1 && NO_VALUE.has(pick.c.op) && noulOf(r, `presence.f${n + 1}`) <= 0.5)
+				return;
+			if (pick.c.arg !== undefined && 'var' in pick.c.arg && noulOf(r, 'ownership') <= 0.5) return;
 			const named = pick.c.list?.filter((_, k) => noulOf(r, `f${n + 1}.${k}`) > 0.5);
 			if (named !== undefined && named.length === 0) return;
 			const where =
@@ -1850,79 +2199,126 @@ export function makeFilterDescribe(cfg: FilterDescribeConfig) {
 						})!;
 			picks.push({ f, c: pick.c, p: pick.p, where });
 		});
-		// a word the description merely contains yields to what a read found: under a relation a found record pins, inside a
-		// phrase a found condition already reads ("pine" beside "1f pine grove"), or as a field's own name ("site")
-		const strong = picks.filter((x) => x.c.evidence);
-		const rootRel = (p: readonly FilterStep[]) =>
-			p.length > 1 && 'rel' in p[0]!
-				? p[0].rel
-				: p[0]?.k === 'count' || p[0]?.k === 'agg'
-					? p[0].rel
-					: undefined;
-		const under = (x: readonly FilterStep[], y: readonly FilterStep[]) =>
-			x[0]?.k === 'is' &&
-			(y[0]?.k === 'is' || y[0]?.k === 'field') &&
-			('rel' in y[0] ? y[0].rel : y[0].name) === x[0].rel;
-		// a word is read when a found condition holds it, as its value or in its field's name ("unpaid invoice" beside
-		// "Customer › Invoices (any) › Status is unpaid"); a lone word that names a field is that field, not a value
-		const read = (w: string) =>
-			strong.some(
-				(s) =>
-					tokens(s.c.value ?? '').includes(w) ||
-					tokens(s.f.label).some(
-						(t) => t === w || t.startsWith(w) || w.startsWith(t.replace(/s$/, ''))
-					)
+		const kept: Json[] = [];
+		const strong = picks.filter((p) => p.c.evidence);
+		const rootRelation = (f: Field) => {
+			const first = f.path[0];
+			return first !== undefined &&
+				'rel' in first &&
+				['some', 'every', 'none', 'count', 'agg'].includes(first.k)
+				? first.rel
+				: undefined;
+		};
+		for (const pick of picks)
+			if (
+				rootRelation(pick.f) === undefined &&
+				(pick.c.evidence ||
+					pick.c.value === undefined ||
+					!strong.some(
+						(p) =>
+							p !== pick &&
+							tokens(p.c.value ?? '').some((word) => tokens(pick.c.value ?? '').includes(word))
+					))
+			)
+				kept.push(pick.where);
+		for (const rel of relations) {
+			const selected = picks.filter((p) => rootRelation(p.f) === rel);
+			if (noulOf(r, `applicable.${rel}`) <= 0.5) continue;
+			const relAggs = asked.filter(({ f }) => f.path[0]?.k === 'agg' && f.path[0].rel === rel);
+			const literalAggs = relAggs.filter(
+				({ f }) =>
+					f.path[0]?.k === 'agg' && f.path[0].fn === statedExtremum(rel) && DAY_KINDS.has(f.kind)
 			);
-		const kept = picks
-			.filter(
-				(x) =>
-					x.c.evidence ||
-					!(
-						strong.some((s) => under(x.f.path, s.f.path)) ||
-						(x.c.value !== undefined && tokens(x.c.value).every(read)) ||
-						(x.c.value !== undefined &&
-							/^\p{L}{3,}$/u.test(x.c.value) &&
-							asked.some(({ f }) => tokens(f.label).includes(x.c.value!.toLowerCase())))
-					)
-			)
-			.sort((l, r2) => r2.p - l.p || r2.f.path.length - l.f.path.length)
-			// one of the text's own numbers or words reads once per related list: "any line quantity over 5" is not also "more
-			// than 5 lines" (the likelier, then the more specific, reading keeps it)
-			.filter(
-				(x, i, all) =>
-					x.c.evidence ||
-					x.c.value === undefined ||
-					!all
-						.slice(0, i)
-						.some(
-							(y) =>
-								!y.c.evidence && y.c.value === x.c.value && rootRel(y.f.path) === rootRel(x.f.path)
-						)
-			)
-			// a day reads once: "scheduled after National Day" is not also "created after" it
-			.filter(
-				(x, i, all) =>
-					!DAY_KINDS.has(x.f.kind) ||
-					x.c.value === undefined ||
-					!all.slice(0, i).some((y) => DAY_KINDS.has(y.f.kind) && y.c.value === x.c.value)
-			)
-			// "at least one" beside "any of them …" on the same related list is implied by it
-			.filter(
-				(x, _, all) =>
-					!(
-						x.f.kind === 'count' &&
-						(x.c.label.endsWith(' at least 1') || x.c.label.endsWith(' more than 0')) &&
-						all.some((y) => y.f.path.some((p) => p.k === 'some' && p.rel === rootRel(x.f.path)))
-					)
-			)
-			.slice(0, FILTER_MAX_CONDITIONS)
-			.map((x) => x.where);
+			const aggregateChoice =
+				literalAggs.length === 1 && sourceDates.length === 1 && dateComparison !== undefined
+					? `a${relAggs.indexOf(literalAggs[0]!)}`
+					: choiceOf(r, `aggregate.${rel}`);
+			const explicitCount = noulOf(r, `count.${rel}`) > 0.5;
+			const modeAnswer = r.answers[`relation.${rel}`];
+			const support = (quantifier: string) =>
+				Math.max(0, ...selected.filter((p) => p.f.path[0]?.k === quantifier).map((p) => p.p));
+			const rankedModes =
+				modeAnswer?.type === 'choice'
+					? Object.entries(modeAnswer.probabilities)
+							.map(([mode, probability]) => ({
+								mode,
+								score:
+									probability *
+									(mode === 'ignore'
+										? explicitCount || (aggregateChoice !== undefined && aggregateChoice !== 'none')
+											? 1
+											: 1 - support('some')
+										: support(
+												mode === 'none'
+													? 'none'
+													: mode === 'every' || mode === 'nonempty_every'
+														? 'every'
+														: 'some'
+											))
+							}))
+							.sort((a, b) => b.score - a.score)
+					: [];
+			const mode =
+				aggregateChoice !== undefined &&
+				aggregateChoice !== 'none' &&
+				(noulOf(r, `individual.${rel}`) <= 0.5 ||
+					(statedExtremum(rel) !== undefined &&
+						!selected.some((p) => ['enum', 'state'].includes(p.f.kind))))
+					? 'ignore'
+					: noulOf(r, `exclude.${rel}`) > 0.5
+						? 'none'
+						: rankedModes[0]?.mode;
+			const emptyAlternative =
+				(mode !== 'nonempty_every' || DISJUNCTION.test(o.text)) &&
+				noulOf(r, `emptyAlternative.${rel}`) > 0.5;
+			if (
+				explicitCount &&
+				!emptyAlternative &&
+				mode !== 'empty_or_some' &&
+				mode !== 'empty_or_every'
+			) {
+				const count = selected.find((p) => p.f.path[0]?.k === 'count');
+				if (count === undefined) return fail(`Could not resolve the requested count of ${rel}.`);
+				kept.push(count.where);
+			}
+			const aggs = asked.filter(({ f }) => f.path[0]?.k === 'agg' && f.path[0].rel === rel);
+			const aggChoice = aggregateChoice;
+			if (aggChoice !== undefined && aggChoice !== 'none') {
+				const field = aggs[Number(aggChoice.slice(1))]?.f;
+				const aggregate = selected.find((p) => p.f === field);
+				if (aggregate === undefined)
+					return fail(`Could not resolve the requested aggregate of ${rel}.`);
+				kept.push(aggregate.where);
+			}
+			if (mode === undefined || mode === 'ignore') continue;
+			const quantifier =
+				mode === 'none'
+					? 'none'
+					: mode === 'every' || mode === 'nonempty_every' || mode === 'empty_or_every'
+						? 'every'
+						: 'some';
+			const children = selected
+				.filter((p) => p.f.path[0]?.k === quantifier)
+				.map((p) => condition(p.f.path.slice(1), p.c.op, p.c.arg));
+			if (children.length === 0 || children.some((p) => p === undefined))
+				return fail(`Could not resolve the requested conditions on ${rel}.`);
+			const predicates = children.filter((p): p is Json => p !== undefined);
+			const child: Json = predicates.length === 1 ? predicates[0]! : { and: predicates };
+			const group: Json = { [rel]: { [quantifier]: child } };
+			kept.push(
+				mode === 'nonempty_every' && !emptyAlternative
+					? { and: [{ [rel]: { count: { gt: 0 } } }, group] }
+					: emptyAlternative || mode === 'empty_or_some' || mode === 'empty_or_every'
+						? { or: [{ [rel]: { count: { eq: 0 } } }, group] }
+						: group
+			);
+		}
+		if (kept.length > FILTER_MAX_CONDITIONS) return fail('Too many conditions in one description.');
 		const chosen = COMBINE[choiceOf(r, 'combine') ?? ''] ?? COMBINE['all of them hold']!;
-		// an OR or a negation the text never states is a misreading; one condition negates through its own operator
 		const join = chosen.join === 'or' && !DISJUNCTION.test(o.text) ? 'and' : chosen.join;
 		const group = kept.length === 0 ? undefined : kept.length === 1 ? kept[0]! : { [join]: kept };
 		const where: Json | undefined =
-			group !== undefined && chosen.not && kept.length > 1 && NEGATION.test(o.text)
+			group !== undefined && kept.length > 1 && chosen.not && NEGATION.test(o.text)
 				? { not: group }
 				: group;
 		const sort = orders.find((x) => x.label === choiceOf(r, 'sort'));

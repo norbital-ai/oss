@@ -309,6 +309,9 @@ type PolicyBase = {
  * with their `columns` per layer and a `check` returning `allow`, `deny` or `approve`; `history`; state `moves`), the
  * automations and syncs they may start by hand, capabilities (apps, host tools, MCP servers) and rate `limits`.
  * A model's policy alone guards its access points and every layer under them. Teams and automations hold policies.
+ * `approve(flow)` is the whole approval mechanism: the write is held as a native approval request, the named step
+ * approvers decide it in the record's approval panel, and a rejection restores the checkpoint. A page needs no
+ * separate approval control. `notify` on the model receives the write and approval events.
  * Returns the literal.
  * @example
  * export default policy({

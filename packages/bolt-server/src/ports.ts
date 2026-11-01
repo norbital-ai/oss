@@ -248,10 +248,13 @@ export const openAi = Effect.fn('server.openAi')(function* (
 	const context = yield* Effect.context<HttpClient.HttpClient | Crypto.Crypto>();
 	const client = yield* HttpClient.HttpClient;
 	const system1 =
-		endpoints.sys1.provider === 'decisions'
+		endpoints.sys1.provider === 'decisions' || endpoints.sys1.provider === 'openai-decisions'
 			? decisionsSystem1(
 					{
 						url: endpoints.sys1.endpoint,
+						...(endpoints.sys1.provider === 'openai-decisions'
+							? { format: 'openai' as const }
+							: {}),
 						model: config.sys1 ?? '',
 						apiKey: endpoints.sys1.credential ?? ''
 					},

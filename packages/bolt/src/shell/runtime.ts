@@ -43,8 +43,6 @@ import {
 	ShellError,
 	ShellWorkspace,
 	SignInMethodsAnswer,
-	StudioAuditAnswer,
-	StudioAuditRulesAnswer,
 	StudioBuildAnswer,
 	StudioFileAnswer,
 	StudioUsageAnswer,
@@ -290,16 +288,6 @@ export function shellApi(
 				StudioInspectionAnswer,
 				'GET',
 				`${SHELL}/studio/inspect?${new URLSearchParams(Object.entries(input).filter((entry): entry is [string, string] => typeof entry[1] === 'string'))}`
-			),
-		studioAuditRules: () => call(StudioAuditRulesAnswer, 'GET', `${SHELL}/studio/audit`),
-		studioAuditSave: (revision: number, ruleSet: import('./studio/audit.ts').AuditRuleSet) =>
-			call(StudioAuditRulesAnswer, 'POST', `${SHELL}/studio/audit`, { revision, ruleSet }),
-		studioAudit: (ruleSet?: import('./studio/audit.ts').AuditRuleSet) =>
-			call(
-				StudioAuditAnswer,
-				'POST',
-				`${SHELL}/studio/audit/run`,
-				ruleSet === undefined ? {} : { ruleSet }
 			),
 		/** Rule 39: a member id, `{ team }`, or `null` to end the preview. */
 		preview: (target: string | { team: string } | null) =>

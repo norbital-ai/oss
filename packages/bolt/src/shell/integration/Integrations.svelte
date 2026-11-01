@@ -31,6 +31,7 @@
 	import type { ShellApi } from '../api-types.ts';
 	import DetailSheet from '../DetailSheet.svelte';
 	import Envoys from './Envoys.svelte';
+	import type { SystemUiIntent } from '../../protocol/system-ui.ts';
 
 	let {
 		api,
@@ -39,7 +40,8 @@
 		settings,
 		locale,
 		integrationSetups,
-		reload
+		reload,
+		configuration = null
 	}: {
 		api: ShellApi;
 		bolt: ShellBolt;
@@ -50,6 +52,7 @@
 		integrationSetups?: { readonly [integration: string]: IntegrationSetupEntry } | undefined;
 		/** Re-reads the settings after a write. */
 		reload: () => Effect.Effect<void>;
+		configuration?: SystemUiIntent | null;
 	} = $props();
 
 	type Instance = Settings['instances'][number];
@@ -68,6 +71,18 @@
 	};
 	// ── the open instance: its sheet, and its client (one per instance, so its stream is held while the sheet is open) ──
 	let open = $state<string | null>(null);
+	let configured = $state<string | null>(null);
+	watch([() => configuration, () => settings], ([intent, current]) => {
+		if (
+			intent === null ||
+			configured === intent.key ||
+			intent.request.capability !== 'integration.manage'
+		)
+			return;
+		configured = intent.key;
+		const record = intent.request.record;
+		if (current.instances.some((instance) => instance.id === record)) open = record;
+	});
 	const current = $derived(settings.instances.find((i) => i.id === open));
 	const client = $derived(open === null ? null : api.integration(open));
 	let error = $state<string | null>(null);
@@ -178,7 +193,7 @@
 </script>
 
 <!-- `configuration` by its definition's fields, each by its kind's editor: the stored value, which starts as the definition's defaults -->
-{#snippet configuration(fields: Fields, { value, onChange, id }: FieldEditor)}
+{#snippet configurationFields(fields: Fields, { value, onChange, id }: FieldEditor)}
 	<div class="flex flex-col gap-3" {id}>
 		{#each Object.entries(fields) as [name, f] (name)}
 			<div class="flex flex-col gap-1 text-sm">
@@ -201,7 +216,16 @@
 	</div>
 {/snippet}
 
-<Envoys {api} {bolt} {settings} {t} {locale} onManage={(instance) => (open = instance)} {reload} />
+<Envoys
+	{api}
+	{bolt}
+	{settings}
+	{t}
+	{locale}
+	{configuration}
+	onManage={(instance) => (open = instance)}
+	{reload}
+/>
 
 {#if current !== undefined}
 	{@const i = current}
@@ -258,7 +282,6 @@
 					<div class="flex items-center justify-between gap-3">
 						<h3 class="font-medium">{t('Sync health')}</h3>
 						<Button
-							size="sm"
 							variant="ghost"
 							disabled={syncHealth.loading}
 							onclick={() => fork(syncHealth.refetch())}>{t('Refresh')}</Button
@@ -313,11 +336,7 @@
 								<p class="text-meta">
 									{t('Retry deliveries that stopped after repeated failures.')}
 								</p>
-								<Button
-									size="sm"
-									variant="outline"
-									disabled={replaying === i.id}
-									onclick={replayDead}
+								<Button variant="outline" disabled={replaying === i.id} onclick={replayDead}
 									>{t(replaying === i.id ? 'Replaying…' : 'Replay dead letters')}</Button
 								>
 							</div>{/if}
@@ -328,7 +347,6 @@
 				{#snippet envoyEditor({ value, onChange, id }: FieldEditor)}
 					<Combobox
 						{id}
-						size="sm"
 						clearable
 						placeholder={t('No envoy answers here')}
 						aria-label={t('Envoy')}
@@ -341,7 +359,7 @@
 						{onChange}
 					/>
 				{/snippet}
-				{#snippet configurationEditor(e: FieldEditor)}{@render configuration(
+				{#snippet configurationEditor(e: FieldEditor)}{@render configurationFields(
 						d?.configuration ?? {},
 						e
 					)}{/snippet}
@@ -372,11 +390,8 @@
 						<p class="text-xs text-muted-foreground">
 							{t('Messages on this instance, newest first.')}
 						</p>
-						<Button
-							size="sm"
-							variant="ghost"
-							disabled={messages.loading}
-							onclick={() => fork(readLog())}>{t('Refresh')}</Button
+						<Button variant="ghost" disabled={messages.loading} onclick={() => fork(readLog())}
+							>{t('Refresh')}</Button
 						>
 					</div>
 					{#if messages.error !== undefined}<p role="alert" class="text-xs text-destructive">
@@ -456,7 +471,6 @@
 							{/each}
 						</ol>
 						{#if log.more}<Button
-								size="sm"
 								variant="ghost"
 								disabled={messages.loading}
 								onclick={() => fork(readLog(true))}>{t('Older')}</Button

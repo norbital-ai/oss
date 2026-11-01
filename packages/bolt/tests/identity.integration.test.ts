@@ -182,6 +182,89 @@ it.live(
 		)
 );
 
+it.effect(
+	'founder bootstrap adopts the seeded active staff identity when there is no administrator',
+	() =>
+		Effect.gen(function* () {
+			const { db, h, as, one } = yield* fixture;
+			yield* db.write({
+				text: "INSERT INTO sys_user(id,name,email,team,admin) VALUES ('seeded-founder','Seeded Founder','seeded@acme.example','Sales',false)",
+				params: []
+			});
+			const founded = yield* founderBootstrap(h, 'Seeded@Acme.example');
+			expect(founded.user).toBe('seeded-founder');
+			expect((yield* as(founded.user)).admin).toBe(true);
+			expect(yield* one('SELECT id,name,team,admin FROM sys_user')).toEqual([
+				{ id: 'seeded-founder', name: 'Seeded Founder', team: 'Sales', admin: true }
+			]);
+			expect((yield* founderBootstrap(h, 'seeded@acme.example')).user).toBe(founded.user);
+			expect(yield* Effect.flip(founderBootstrap(h, 'other@acme.example'))).toMatchObject({
+				_tag: 'IdentityRefusal',
+				code: 'forbidden'
+			});
+		}).pipe(Effect.provide(Layer.mergeAll(TestDb.layer(m), NodeCrypto.layer, memoryAuditLayer)))
+);
+
+it.effect('founder bootstrap does not promote an inactive or external seeded identity', () =>
+	Effect.gen(function* () {
+		const { db, h, one } = yield* fixture;
+		yield* db.write({
+			text: "INSERT INTO sys_user(id,name,email,kind,active) VALUES ('external','External','external@acme.example','external',true),('inactive','Inactive','inactive@acme.example','staff',false)",
+			params: []
+		});
+		for (const address of ['external@acme.example', 'inactive@acme.example'])
+			expect(yield* Effect.flip(founderBootstrap(h, address))).toMatchObject({
+				_tag: 'IdentityRefusal',
+				code: 'forbidden'
+			});
+		expect(yield* one('SELECT count(*)::int AS n FROM sys_user WHERE admin')).toEqual([{ n: 0 }]);
+	}).pipe(Effect.provide(Layer.mergeAll(TestDb.layer(m), NodeCrypto.layer, memoryAuditLayer)))
+);
+
+it.effect(
+	'email sign-up admits newcomers only while open and never admits deactivated members',
+	() =>
+		Effect.gen(function* () {
+			const { db, h, one, outbox, lastCode } = yield* fixture;
+			const open = { ...h, signup: { via: ['email'] as const, policies: [] } };
+			expect(
+				yield* Effect.flip(
+					sendCode(
+						{ ...h, signup: { via: ['phone'], policies: [] } },
+						'new@acme.example',
+						'2.2.2.2'
+					)
+				)
+			).toMatchObject({ code: 'notMember' });
+			expect(outbox).toHaveLength(0);
+			yield* sendCode(open, 'new@acme.example', '2.2.2.2');
+			const session = yield* verifyCode(open, 'new@acme.example', lastCode(), '2.2.2.2');
+			expect(session.user).toEqual(expect.any(String));
+			yield* db.write({
+				text: `INSERT INTO sys_config (key, value) VALUES ('signup', 'closed')`,
+				params: []
+			});
+			expect(yield* Effect.flip(sendCode(open, 'closed@acme.example', '2.2.2.2'))).toMatchObject({
+				code: 'notMember'
+			});
+			yield* sendCode(open, 'new@acme.example', '2.2.2.2');
+			expect(yield* verifyCode(open, 'new@acme.example', lastCode(), '2.2.2.2')).toMatchObject({
+				user: session.user
+			});
+			yield* db.write({
+				text: `UPDATE sys_user SET active = false WHERE id = $1`,
+				params: [session.user]
+			});
+			yield* db.write({ text: `DELETE FROM sys_config WHERE key = 'signup'`, params: [] });
+			expect(yield* Effect.flip(sendCode(open, 'new@acme.example', '2.2.2.2'))).toMatchObject({
+				code: 'notMember',
+				message: 'This member is deactivated.'
+			});
+			expect(outbox).toHaveLength(2);
+			expect(yield* one('SELECT count(*)::int AS n FROM sys_challenge')).toEqual([{ n: 0 }]);
+		}).pipe(Effect.provide(Layer.mergeAll(TestDb.layer(m), NodeCrypto.layer, memoryAuditLayer)))
+);
+
 layer(IdentityFixtureLive)((it) => {
 	describe('engine/identity (§5.11, rules 37–39)', () => {
 		let founder = '',
@@ -227,15 +310,18 @@ layer(IdentityFixtureLive)((it) => {
 		);
 
 		it.effect(
-			'sign-in: same answer for a stranger, 3 attempts per code, single use, session authenticates (rule 38a)',
+			'sign-in: strangers are refused before sending, 3 attempts per code, single use, session authenticates (rule 38a)',
 			() =>
 				Effect.gen(function* () {
-					const { h, one, lastCode } = yield* IdentityFixture;
-					expect(yield* sendCode(h, 'stranger@x.example', '1.1.1.1')).toBeNull();
-					expect(
-						yield* Effect.flip(verifyCode(h, 'stranger@x.example', lastCode(), '1.1.1.1'))
-					).toMatchObject({ _tag: 'IdentityRefusal', code: 'notMember' });
-					yield* sendCode(h, 'boss@acme.example', '1.1.1.1');
+					const { h, one, outbox, lastCode } = yield* IdentityFixture;
+					const before = outbox.length;
+					expect(yield* Effect.flip(sendCode(h, 'stranger@x.example', '1.1.1.1'))).toMatchObject({
+						_tag: 'IdentityRefusal',
+						code: 'notMember'
+					});
+					expect(outbox.length).toBe(before);
+					expect(yield* one('SELECT count(*)::int AS n FROM sys_challenge')).toEqual([{ n: 0 }]);
+					yield* sendCode(h, ' Boss@Acme.example ', '1.1.1.1');
 					const code = lastCode(),
 						wrong = code === '000000' ? '000001' : '000000';
 					expect(
@@ -267,7 +353,8 @@ layer(IdentityFixtureLive)((it) => {
 			'a mail refusal is returned and nothing is claimed sent (38a(c)); the dev sink uses 123456 (38a(f))',
 			() =>
 				Effect.gen(function* () {
-					const { h, outbox } = yield* IdentityFixture;
+					const { h, as, outbox } = yield* IdentityFixture;
+					yield* invite(h, m, yield* as(founder), { email: 'mailfail@acme.example' });
 					const failing: TransportPort = {
 						async send() {
 							throw new Error('smtp down');
@@ -293,7 +380,8 @@ layer(IdentityFixtureLive)((it) => {
 			'the 6th sendCode for an address in an hour is refused; a fresh cell still refuses it; no plain address is stored (rule 38)',
 			() =>
 				Effect.gen(function* () {
-					const { db, h, one } = yield* IdentityFixture;
+					const { db, h, as, one } = yield* IdentityFixture;
+					yield* invite(h, m, yield* as(founder), { email: 'flood@acme.example' });
 					for (let i = 0; i < 5; i++)
 						expect(yield* sendCode(h, 'flood@acme.example', `3.3.3.${i}`)).toBeNull();
 					expect(yield* Effect.flip(sendCode(h, 'flood@acme.example', '3.3.3.9'))).toMatchObject({
@@ -359,6 +447,9 @@ layer(IdentityFixtureLive)((it) => {
 					});
 					yield* TestClock.adjust('8 days');
 					const before = yield* one('SELECT * FROM sys_invitation WHERE id = $1', id);
+					expect(yield* Effect.flip(sendCode(h, 'late@acme.example', '4.4.4.4'))).toMatchObject({
+						code: 'notMember'
+					});
 					expect(yield* Effect.flip(acceptInvitation(h, { user: founder }, id))).toMatchObject({
 						code: 'forbidden'
 					});

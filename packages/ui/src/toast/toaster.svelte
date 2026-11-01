@@ -35,7 +35,7 @@ The page's toasts, bottom right (bottom centre on a phone, above the safe area).
 				role={toast.tone === 'error' ? 'alert' : 'status'}
 				data-toast={toast.tone}
 				class={cn(
-					'toast pointer-events-auto flex w-full items-start gap-2.5 rounded-md border px-3.5 py-3 text-sm shadow-lg',
+					'toast pointer-events-auto flex w-full items-start gap-2.5 rounded-md border px-3.5 py-3 text-sm shadow-deep',
 					TONE[toast.tone]
 				)}
 			>

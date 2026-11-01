@@ -6,7 +6,7 @@
 // from there, and bundles only its own code and the packages it added.
 import { createRequire } from 'node:module';
 import { dirname, join, posix } from 'node:path';
-import { Effect, FileSystem } from 'effect';
+import { Effect, FileSystem, Option, Schema } from 'effect';
 import type { InlineConfig, Plugin, Rolldown } from 'vite';
 import { EDITOR_SINGLETONS } from '../editor-dependencies.ts';
 import { cachedSvelte } from './svelte-cache.ts';
@@ -78,13 +78,69 @@ export const shellRuntime = (id: string, importer: string | undefined) =>
 	importer !== undefined &&
 	!importer.startsWith(SHELL);
 
+const PlatformChunk = Schema.Struct({
+	fileName: Schema.String,
+	imports: Schema.Array(Schema.String),
+	dynamicImports: Schema.Array(Schema.String)
+});
+export type PlatformChunk = typeof PlatformChunk.Type;
 export type PlatformLayer = {
 	/** A module the layer exposes, by its resolved id → the import a workspace chunk under `assets/` writes for it. */
 	readonly modules: ReadonlyMap<string, string>;
 	/** Every chunk of the layer by file name, for the workspace's initial module graph. */
-	readonly chunks: ReadonlyMap<string, Rolldown.OutputChunk>;
+	readonly chunks: ReadonlyMap<string, PlatformChunk>;
 	readonly css: readonly string[];
 };
+
+const CachedPlatform = Schema.fromJsonString(
+	Schema.Struct({
+		key: Schema.String,
+		modules: Schema.Array(Schema.Tuple([Schema.String, Schema.String])),
+		chunks: Schema.Array(PlatformChunk),
+		css: Schema.Array(Schema.String)
+	})
+);
+
+/** Private to the workspace: pages always build through their import boundary. */
+export const cachedPlatformLayer = Effect.fn('bolt.cachedPlatformLayer')(function* <E, R>(
+	cache: string,
+	key: string,
+	out: string,
+	build: Effect.Effect<PlatformLayer, E, R>
+) {
+	const fs = yield* FileSystem.FileSystem;
+	const metadata = join(cache, 'layer.json'),
+		files = join(cache, 'files');
+	const held = yield* fs
+		.readFileString(metadata)
+		.pipe(Effect.flatMap(Schema.decodeUnknownEffect(CachedPlatform)), Effect.option);
+	if (Option.isSome(held) && held.value.key === key && (yield* fs.exists(files))) {
+		yield* fs.copy(files, join(out, PLATFORM), { overwrite: true });
+		return {
+			modules: new Map(held.value.modules),
+			chunks: new Map(held.value.chunks.map((chunk) => [chunk.fileName, chunk])),
+			css: held.value.css
+		};
+	}
+	const layer = yield* build;
+	yield* fs.makeDirectory(cache, { recursive: true });
+	// An interrupted refresh must not leave old metadata describing a partial copy.
+	yield* fs.remove(metadata, { force: true });
+	yield* fs.remove(files, { recursive: true, force: true });
+	yield* fs.copy(join(out, PLATFORM), files);
+	const temporary = `${metadata}.${process.pid}`;
+	yield* fs.writeFileString(
+		temporary,
+		Schema.encodeSync(CachedPlatform)({
+			key,
+			modules: [...layer.modules],
+			chunks: [...layer.chunks.values()],
+			css: [...layer.css]
+		})
+	);
+	yield* fs.rename(temporary, metadata);
+	return layer;
+});
 
 /**
  * The layer's build into `out` (emptied first): rooted at Bolt's own package, with no workspace env, PostCSS or
@@ -92,7 +148,8 @@ export type PlatformLayer = {
  */
 export const platformConfig = Effect.fn('bolt.platformConfig')(function* (
 	out: string,
-	cache: string
+	cache: string,
+	specifiers: Map<string, string>
 ) {
 	const fs = yield* FileSystem.FileSystem;
 	// every core effect module is an entry: a module a workspace bundles itself (an `effect/http` or other
@@ -102,6 +159,10 @@ export const platformConfig = Effect.fn('bolt.platformConfig')(function* (
 		.filter((file) => file.endsWith('.js') && !/^(?!internal\/)[^/]+\//.test(file))
 		.sort()
 		.map((file) => join(effect, file));
+	for (const id of modules) {
+		const sub = posix.relative(effect, id).replace(/\.js$/, '');
+		specifiers.set(sub === 'index' ? 'effect' : `effect/${sub}`, id);
+	}
 	const entries: Plugin = {
 		name: 'bolt:platform',
 		enforce: 'pre',
@@ -118,7 +179,10 @@ export const platformConfig = Effect.fn('bolt.platformConfig')(function* (
 			for (const specifier of SPECIFIERS) {
 				const resolved =
 					(await find(specifier, MOUNT)) ?? (ui === null ? null : await find(specifier, ui.id));
-				if (resolved !== null && !resolved.external) ids.add(resolved.id);
+				if (resolved !== null && !resolved.external) {
+					ids.add(resolved.id);
+					specifiers.set(specifier, resolved.id);
+				}
 			}
 			for (const id of [...ids].sort()) this.emitFile({ type: 'chunk', id });
 		}
@@ -171,16 +235,25 @@ export const platformConfig = Effect.fn('bolt.platformConfig')(function* (
 });
 
 /** What a workspace build reads of the layer's output. */
-export const platformLayer = (built: Rolldown.RolldownOutput): PlatformLayer => {
+export const platformLayer = (
+	built: Rolldown.RolldownOutput,
+	specifiers: ReadonlyMap<string, string>
+): PlatformLayer => {
 	const chunks = built.output.filter((o): o is Rolldown.OutputChunk => o.type === 'chunk');
+	const modules = new Map(
+		chunks.flatMap((chunk) =>
+			chunk.isEntry && chunk.facadeModuleId !== null
+				? [[chunk.facadeModuleId, `./${posix.relative('assets', chunk.fileName)}`] as const]
+				: []
+		)
+	);
+	// Resolve bare imports before Vite's workspace-root dedupe can select a second runtime.
+	for (const [specifier, resolved] of specifiers) {
+		const shared = modules.get(resolved);
+		if (shared !== undefined) modules.set(specifier, shared);
+	}
 	return {
-		modules: new Map(
-			chunks.flatMap((chunk) =>
-				chunk.isEntry && chunk.facadeModuleId !== null
-					? [[chunk.facadeModuleId, `./${posix.relative('assets', chunk.fileName)}`] as const]
-					: []
-			)
-		),
+		modules,
 		chunks: new Map(chunks.map((chunk) => [chunk.fileName, chunk])),
 		css: built.output
 			.filter((o) => o.type === 'asset' && o.fileName.endsWith('.css'))

@@ -29,6 +29,7 @@
 	import { based, type ShellNotice } from './nav.ts';
 	import { LANGUAGE, LOCALES } from './i18n.ts';
 	import { THEMES, type Theme } from './theme.ts';
+	import { shortcutLabel } from './keyboard.ts';
 
 	let {
 		model,
@@ -41,6 +42,8 @@
 		onLocale,
 		theme = 'system',
 		onTheme,
+		chimes = true,
+		onChimes,
 		sync = 'idle',
 		previewing = false,
 		loadTeams,
@@ -68,6 +71,8 @@
 		onLocale?: (locale: string) => void;
 		theme?: Theme;
 		onTheme?: (theme: Theme) => void;
+		chimes?: boolean;
+		onChimes?: (enabled: boolean) => void;
 		sync?: SyncStatus;
 		/** A preview runs: the menu offers its end. `loadTeams` is an administrator's: the teams a preview may take. */
 		previewing?: boolean;
@@ -96,8 +101,7 @@
 	const nextLocale = $derived(LOCALES[(LOCALES.indexOf(base) + 1) % LOCALES.length]!);
 	// the versions `bolt build` bakes into the client (L-BOLT-073); absent when the shell is mounted unbuilt (tests)
 	const build = typeof __BOLT_BUILD__ === 'undefined' ? null : __BOLT_BUILD__;
-	const mod =
-		typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform) ? '⌘' : 'Ctrl+';
+	const mod = shortcutLabel('');
 	const withKey = (label: string, key: string) => `${label} · ${mod}${key}`;
 	const THEME_ICON: { readonly [x in Theme]: string } = {
 		light: 'lucide:sun',
@@ -227,7 +231,7 @@
 					disclosure ? (open[item.key] = !open[item.key]) : follow(e, item.href)}
 			>
 				{#if item.active}<span
-						class="absolute top-1/4 left-0.5 h-1/2 w-[3px] rounded-lg bg-brand"
+						class="absolute top-1/4 left-0.5 h-1/2 w-0.5 rounded-lg bg-brand"
 						aria-hidden="true"
 					></span>{/if}
 				{@render tile(item)}
@@ -300,7 +304,7 @@
 				{...props}
 				type="button"
 				variant="ghost"
-				size="icon-sm"
+				size="icon"
 				class={cn('shrink-0', extra)}
 				aria-label={`${t('Find')} (${mod}/)`}
 				onclick={onSearch}
@@ -320,7 +324,7 @@
 				{...props}
 				type="button"
 				variant="ghost"
-				size="icon-sm"
+				size="icon"
 				{tabindex}
 				class={cn('shrink-0', extra)}
 				data-sidebar="trigger"
@@ -621,7 +625,8 @@
 			side={expanded ? 'top' : 'right'}
 			align={expanded ? 'center' : 'start'}
 			sideOffset={8}
-			class="w-72 max-w-[calc(100vw-1rem)] p-1"
+			sameWidth={expanded}
+			class={expanded ? 'p-1' : 'w-60 p-1'}
 		>
 			<div class="px-2 py-1.5">
 				<p class="text-xs font-medium">{model.user.name}</p>
@@ -681,6 +686,22 @@
 						{/each}
 					</Inline>
 				</Inline>
+			{/if}
+			{#if onChimes !== undefined}
+				<Button
+					type="button"
+					variant="ghost"
+					class="h-9 w-full justify-start px-2 text-xs font-normal"
+					role="switch"
+					aria-checked={chimes}
+					aria-label={t('Norbius sounds')}
+					onclick={() => onChimes(!chimes)}
+				>
+					<Icon name={chimes ? 'lucide:volume-1' : 'lucide:volume-x'} class="size-3.5" />
+					<span>{t('Norbius sounds')}</span><span class="ml-auto text-muted-foreground"
+						>{t(chimes ? 'On' : 'Off')}</span
+					>
+				</Button>
 			{/if}
 			{#if push !== null && canPush}
 				{#if pushed === 'off'}

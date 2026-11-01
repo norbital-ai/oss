@@ -16,7 +16,8 @@ import { series } from '../src/chart/series.ts';
 import { withOutputs } from '../src/client/context.ts';
 import type { HistoryEntry, Query, QueryAnswer } from '../src/client/contract.ts';
 import { reactive } from './kit-state.svelte.js';
-import { listRequest, unref, refOf } from '../src/relations/select.ts';
+import { listRequest, unref, refOf, labelRead } from '../src/relations/select.ts';
+import { recordText } from '../src/kinds/kind.ts';
 import { Deferred, Effect, Queue } from 'effect';
 import { Decimal } from '@norbital-ai/std/decimal';
 import { formatValue as show } from '../src/kinds/kind.ts';
@@ -27,6 +28,39 @@ import type { Clip } from '../src/capture/capture.ts';
 import { audioClip, guided, narrator, observe, HOLD_MS, target } from '../src/capture/capture.ts';
 
 const bolt = { t: (k: string) => k };
+
+it('reads own nested CEL label dependencies and uses each target’s own label for references', () => {
+	const cat: NonNullable<KindsHost['catalog']> = {
+		orders: {
+			label: ['code', 'details'],
+			record_label: "record.code + ' · ' + record.details.name",
+			labelPaths: ['code', 'details.name'],
+			fields: { code: { kind: 'text' }, details: { kind: 'json' } },
+			relations: { customer: { targets: ['customers'] } },
+			layers: ['customer']
+		},
+		customers: {
+			label: ['code', 'name'],
+			record_label: "record.code + ' — ' + record.name",
+			fields: { code: { kind: 'text' }, name: { kind: 'text' } }
+		}
+	};
+	assert.deepEqual(labelRead(cat, 'orders', { limit: 1 }), {
+		orders: { limit: 1, fields: ['code', 'details'] }
+	});
+	const row = {
+		id: 'o1',
+		code: 'Q7',
+		details: { name: 'Acme' },
+		customer: { id: 'c1', code: 'C1', name: 'Acme' }
+	};
+	assert.equal(recordText(cat.orders, row), 'Q7 · Acme');
+	assert.equal(recordText({ fields: {}, label: [] }, row), 'o1');
+	assert.equal(
+		refOf(required(unref(cat, 'orders', ['customer'], [row])[0]), 'customer')?.text,
+		'C1 — Acme'
+	);
+});
 
 it.effect('no grant is a state of its own, never an empty page', () =>
 	Effect.sync(() => {
@@ -244,6 +278,7 @@ it.effect('a list read names its light fields and FKs, plus any heavy column', (
 			label: ['name'],
 			fields: {
 				name: { kind: 'text' },
+				fingerprint: { kind: 'text', hidden: true },
 				doc: { kind: 'file', accept: ['*/*'], max: '20MiB' },
 				raw: { kind: 'json' },
 				'a.b': { kind: 'int' }
@@ -256,6 +291,9 @@ it.effect('a list read names its light fields and FKs, plus any heavy column', (
 		assert.deepEqual(listRequest(undefined, 'docs', {}, ['doc']), { docs: {} });
 		assert.deepEqual(listRequest({ docs: ex }, 'docs', {}, ['created_at', 'doc']), {
 			docs: { fields: ['name', 'owner', 'created_at', 'doc'] }
+		});
+		assert.deepEqual(listRequest({ docs: ex }, 'docs', {}, ['name', 'fingerprint']), {
+			docs: { fields: ['name', 'owner', 'fingerprint'] }
 		});
 	})
 );

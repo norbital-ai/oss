@@ -52,7 +52,8 @@ export type HostSettings = {
 	providers: { readonly [F in Facility]?: Provider };
 	/**
 	 * The AI facility (P35, P39): `sys1` the sys_1 model id (`openai`: a structured-output chat model; `decisions`:
-	 * OpenRouter's Decisions API); `sys2` each model class → model id; `embed` each embedding name → model.
+	 * Jev/OpenRouter's Decisions API; `openai-decisions`: OpenAI's native Decisions API).
+	 * `sys2` maps model classes to model ids; `embed` maps embedding names to models.
 	 */
 	ai: {
 		sys1: string | null;

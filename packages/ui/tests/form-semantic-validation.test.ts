@@ -81,11 +81,17 @@ const type = async (root: ParentNode, value: string) => {
 it.live('a broken invariant disables the create footer Save until the value is fixed', () =>
 	Effect.gen(function* () {
 		const v = yield* browser(() => show('create'));
-		v.form().addValidation(notBad(v.form()));
 		yield* browser(() => type(v.target, 'bad'));
 		assert.equal(button(v.target, 'Create').disabled, true);
 		const input = element<HTMLInputElement>(v.target, '[data-field=title] input');
 		assert.equal(input.getAttribute('aria-invalid'), 'true');
+		const issue = element<HTMLButtonElement>(
+			v.target,
+			'[data-field=title] [data-field-description]'
+		);
+		assert.equal(issue.getAttribute('title'), 'Title cannot be bad');
+		assert.equal(issue.getAttribute('aria-label'), 'Title cannot be bad');
+		assert.ok(input.getAttribute('aria-errormessage'));
 		assert.match(
 			textOf(element(v.target, '[data-field=title] [role=alert]')),
 			/Title cannot be bad/
@@ -94,6 +100,7 @@ it.live('a broken invariant disables the create footer Save until the value is f
 		yield* browser(() => type(v.target, 'good'));
 		assert.equal(button(v.target, 'Create').disabled, false);
 		assert.equal(v.target.querySelector('[data-field=title] [role=alert]'), null);
+		assert.equal(v.target.querySelector('[data-field=title] [data-field-description]'), null);
 	})
 );
 
@@ -102,7 +109,6 @@ it.live('a broken invariant disables the record header Save until the value is f
 		const v = yield* browser(() => show('record'));
 		button(v.target, 'Edit').click();
 		yield* browser(() => settle());
-		v.form().addValidation(notBad(v.form()));
 		yield* browser(() => type(v.target, 'bad'));
 		assert.equal(button(v.target, 'Save').disabled, true);
 		yield* browser(() => type(v.target, 'Paint v2'));
@@ -128,6 +134,10 @@ it.live('submit sends nothing while an issue exists; unregister removes the rule
 		const unregister = form.addValidation(notBad(form));
 		form.set('title', 'bad');
 		assert.deepEqual(form.semanticErrors, [{ field: 'title', message: 'Title cannot be bad' }]);
+		assert.equal(form.fieldErrors.get('title'), 'Title cannot be bad');
+		form.errors = new Map([['title', 'The server refused this title']]);
+		assert.equal(form.fieldErrors.get('title'), 'The server refused this title');
+		form.errors = new Map();
 		assert.equal(form.semanticError('title'), 'Title cannot be bad');
 		assert.equal(form.semanticError('other'), undefined);
 		assert.equal(form.canSubmit, true, 'permission is unaffected');

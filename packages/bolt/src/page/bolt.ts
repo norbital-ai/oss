@@ -496,7 +496,9 @@ export const createBolt = (config: BoltConfig) =>
 		};
 		if (shared) {
 			window.addEventListener('pagehide', leave);
-			yield* Effect.addFinalizer(() => Effect.sync(() => window.removeEventListener('pagehide', leave)));
+			yield* Effect.addFinalizer(() =>
+				Effect.sync(() => window.removeEventListener('pagehide', leave))
+			);
 		}
 		const frames = yield* liveStream(
 			() => config.openStream?.(live) ?? (shared ? sharedSource(live, open) : open()),
@@ -712,7 +714,7 @@ export const createBolt = (config: BoltConfig) =>
 							const revision = revisions.get(String(id));
 							if (revision !== undefined) (observed ??= {})[String(id)] = revision;
 						}
-				const paint = PAINTED.has(verb) ? paintOf(model, verb, wireInput, key) : null;
+				const paint = PAINTED.has(verb) ? paintOf(model, verb, typed(wireInput), key) : null;
 				if (paint !== null) paints.add(paint);
 				const request = Effect.gen(function* () {
 					if (paint !== null) yield* repaint(model, initiatingFiber);
@@ -765,8 +767,11 @@ export const createBolt = (config: BoltConfig) =>
 			);
 		return {
 			aggregate: <T = Row[]>(model: string, options: Wired) => q<T>('aggregate', [model, options]),
-			history: <T = Json>(model: string, id: string, options: { at?: Json; output?: string } = {}) =>
-				q<T>('history', [model, id, options]),
+			history: <T = Json>(
+				model: string,
+				id: string,
+				options: { at?: Json; output?: string } = {}
+			) => q<T>('history', [model, id, options]),
 			/** One read request: `query({ <root>: { … }, '<root>.<layer>': { … } })`, answered as a page per root. */
 			query: <T = Json>(request: Readonly<Record<string, Wired>>) => q<T>('query', [request]),
 			/** Internal stream edge for shell surfaces. Pages read Query properties directly. */

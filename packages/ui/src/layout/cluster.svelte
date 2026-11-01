@@ -64,7 +64,7 @@ A wrapping row of items with a gap: tags, buttons, metadata. Children wrap to th
 		justifyClasses[justify],
 		SIZE_CLASSES[size],
 		divided && 'divide-x divide-border',
-		// The caller's class last: floors, layers and colours it names win; layout itself is props (doctor-enforced).
+		// The caller's class last: floors, layers and colours it names win; layout itself is props.
 		className
 	)}
 	style:min-height={size === 'fill' ? minHeight : undefined}

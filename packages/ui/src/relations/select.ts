@@ -1,8 +1,8 @@
 import { Predicate } from 'effect';
-import { formatValue as show } from '../kinds/kind.js';
+import { formatValue as show, recordText } from '../kinds/kind.js';
 import type { ModelExposure } from '../kinds/context.js';
 import type { Row, Values } from '../model/types.js';
-import { READ_LIMIT, type Layer, type Request } from '../read/request.js';
+import { READ_LIMIT, requestJson, type Layer, type Request } from '../read/request.js';
 const HEAVY = new Set(['json', 'custom', 'file']);
 type Catalog = { readonly [model: string]: ModelExposure } | undefined;
 /** A many-relation's child: the model whose one-relation names `rel` as its inverse onto `of`. */
@@ -25,15 +25,17 @@ export function refLabel(cat: Catalog, of: string, rel: string): readonly string
 				? one.targets[0]
 				: undefined;
 	const t = target === undefined ? undefined : cat?.[target];
-	return t === undefined
-		? []
-		: [one?.label ?? t.label].flat().filter((l) => t.fields[l] !== undefined);
+	if (t === undefined) return [];
+	const fields = [one?.label ?? t.label].flat();
+	return fields.length === 0
+		? ['id']
+		: fields.filter((l) => t.fields[l] !== undefined || t.relations?.[l] !== undefined);
 }
 /** A many-relation cell's labels read with the row: the first `MANY_SHOWN`, one more to know there are more. */
 export const MANY_SHOWN = 20;
 /**
- * A list read of `of` as one read request: the root's `root` options and its fields (the light ones and the FKs,
- * plus any json, custom or file field `named`, X-33), and each relation
+ * A list read of `of` as one read request: the root's `root` options and its fields (visible light ones and the FKs,
+ * plus any hidden, json, custom or file field `named`, X-33), and each relation
  * in `refs` its root declares as a read layer read with its target's label in the same statement (no read per row,
  * rule 12): a one-relation as a nested row, a named many-relation as its first `MANY_SHOWN + 1` rows, or every row when
  * `all` (an export).
@@ -64,20 +66,30 @@ export function listRequest(
 	]);
 	const own = named.filter((f) => !many(f));
 	const x = cat?.[of];
-	// a list names its fields: the light ones and the FKs, plus any heavy one a column names (X-33)
+	// Hidden captures can be large even when stored as text; read one only when a column names it.
 	const fields =
 		x === undefined
 			? undefined
 			: [
 					...new Set([
 						...Object.keys(x.fields).filter(
-							(field) => !field.includes('.') && !HEAVY.has(x.fields[field]?.kind ?? '')
+							(field) =>
+								!field.includes('.') &&
+								x.fields[field]?.hidden !== true &&
+								!HEAVY.has(x.fields[field]?.kind ?? '')
 						),
 						...Object.keys(x.relations ?? {}),
 						...own
 					])
 				];
 	return { [of]: { ...root, ...(fields === undefined ? {} : { fields }) }, ...layers };
+}
+
+/** Read only the optional record label's own-field dependencies; missing labels read no extra fields. */
+export function labelRead(cat: Catalog, of: string, options: Layer & { output?: string } = {}) {
+	const fields = cat?.[of]?.label ?? [];
+	const request = listRequest(cat, of, options, fields);
+	return requestJson({ ...request, [of]: { ...options, fields } });
 }
 /** A relation cell's link: the target model and its label text; a many-relation also lists each record (`more`: past `MANY_SHOWN`). */
 export type Ref = {
@@ -116,11 +128,18 @@ export function unref(
 		(r) => refLabel(cat, of, r).length > 0 || manyTarget(cat, of, r) !== undefined
 	);
 	if (rels.length === 0) return rows;
-	const text = (rel: string, t: Values) =>
-		refLabel(cat, of, rel)
-			.map((l) => show(t[l] ?? null, locale))
-			.filter(Boolean)
-			.join(' · ') || '—';
+	const text = (rel: string, t: Values) => {
+		const target = cat?.[of]?.relations?.[rel]?.targets[0] ?? manyTarget(cat, of, rel);
+		const exposure = target === undefined ? undefined : cat?.[target];
+		return (
+			(exposure?.record_label !== undefined
+				? recordText(exposure, t, { locale })
+				: refLabel(cat, of, rel)
+						.map((l) => show(t[l] ?? null, locale))
+						.filter(Boolean)
+						.join(' · ')) || '—'
+		);
+	};
 	return rows.map((r) => {
 		const refs: { [rel: string]: Ref } = {};
 		const out: { [f: string]: import('@norbital-ai/std/kind').Value } = { ...r };

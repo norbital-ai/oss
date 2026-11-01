@@ -73,6 +73,7 @@ export {
 	refusalOf,
 	structuredSystem1,
 	type DecisionAnswer,
+	type DecisionEntry,
 	type DecisionsApiConfig,
 	type DecisionFile,
 	type DecisionQuestion,
@@ -108,6 +109,8 @@ export {
 } from './identity/session.ts';
 export { assignTeam, membershipRun } from './identity/members.ts'; // Source-team affiliation; hosts bind membershipRun as runs.platform['bolt.membership'].
 export { MEMBERSHIP } from './identity/session.ts';
+/** Host control-plane identity reads use the system table contract without loading a tenant artifact or guest. */
+export { directory as memberDirectory } from './identity/maintenance.ts';
 export { applyPlan, plan, readApplied } from './schema/plan.ts'; // hook:hosting — Appendix D values (rule 69 activation)
 export {
 	applyMigrations,
@@ -304,15 +307,16 @@ export { TemplateManifest } from '../protocol/schema.ts';
 export {
 	ShellRoutes,
 	ShellHandler,
-	HostIdentity,
 	ShellConfig,
 	Turnstile,
 	authorityOf,
 	type ShellHostConfig,
 	type TurnstileShape
 } from '../shell/host.ts';
+export { HostIdentity } from './services.ts';
 export { COOKIES, cookieSite, framePolicy } from '../shell/nav.ts';
 export { StudioInspectInput, StudioInspection } from '../shell/studio/inspection.ts';
+export { StudioTestRun } from '../shell/studio/test-results.ts';
 export {
 	StudioOp,
 	studioView,
@@ -325,16 +329,6 @@ export {
 	type StudioPort,
 	type StudioState
 } from '../shell/studio/model.ts';
-export type {
-	AuditRuleSet,
-	AuditRuleState,
-	StudioAudit,
-	StudioAuditFinding,
-	StudioAuditPort,
-	StudioAuditRule,
-	StudioAuditRuleError,
-	StudioAuditRules
-} from '../shell/studio/audit.ts';
 // ── exports: decl ──
 export type {
 	GeoHit,

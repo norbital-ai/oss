@@ -7,9 +7,9 @@ import type { Authority } from '../../engine/contracts.ts';
 import type { MigrationImpact } from '../../protocol/migration-impact.ts';
 import type { EngineManifest } from '../../engine/manifest.ts';
 import type { CheckDiagnostic } from '../../protocol/diagnostic.ts';
-import type { StudioAuditPort } from './audit.ts';
 import type { StudioInspectInput, StudioInspection } from './inspection.ts';
 import { href, kioskHref } from '../nav.ts';
+import type { StudioTestRun } from './test-results.ts';
 
 /** A changed file and what its diff needs: the head's `text` (absent: deleted, or not text) and the base's `baseline` (absent: added, or not text), each cut at the host's one-file text bound. */
 type StudioFileChange = {
@@ -126,6 +126,8 @@ export type PreviewControl = {
 };
 export type StudioState = {
 	commit: string;
+	/** The latest test job for this exact head; absent when it has not been tested. */
+	tests?: StudioTestRun;
 	/** The head commit's description (its message's first line). */
 	message?: string;
 	/** The live workspace's IANA timezone. */
@@ -201,7 +203,9 @@ export const StudioOp = Schema.Union([
 		/** The explicit change; absent uses the viewer's selected change. */
 		id: Schema.optionalKey(nonempty),
 		/** Also squash the migration history's schema prefix into a baseline named this (`bolt build --squash`). */
-		squash: Schema.optionalKey(Schema.String.check(Schema.isPattern(/^[a-z0-9_]{1,40}$/)))
+		squash: Schema.optionalKey(Schema.String.check(Schema.isPattern(/^[a-z0-9_]{1,40}$/))),
+		/** Rebuild even when the preview already serves this head (a host package changed under it). */
+		force: Schema.optionalKey(Schema.Boolean)
 	}),
 	Schema.Struct({ op: Schema.Literal('preview.claim'), id: nonempty }),
 	Schema.Struct({ op: Schema.Literal('preview.release'), id: nonempty }),
@@ -255,6 +259,7 @@ export type StudioRole = (typeof STUDIO_ROLES)[number];
 export { STUDIO_ROLES };
 /** A pushed authoring frame: a build log line, a head moved (someone else saved), a change changed, a phase or task moved. */
 export type StudioFrame =
+	| { kind: 'tests'; commit: string }
 	| { kind: 'log'; line: StudioLogLine }
 	| { kind: 'source'; commit: string }
 	| { kind: 'change'; id: string }
@@ -273,8 +278,6 @@ export type StudioPort = {
 	usage?(auth: Authority): Promise<StudioUsage>;
 	/** Curated operational diagnostics shared with Realm across the current HOST_API contract. */
 	inspect(auth: Authority, input: StudioInspectInput): Promise<StudioInspection>;
-	/** The organization's audit rules and audits (an administrator's). Absent → no Audit rules view. */
-	audit?: StudioAuditPort;
 };
 /**
  * The host's metering of this workspace: one chart per measure, each point a time (epoch milliseconds) and the peak or
@@ -288,15 +291,7 @@ export type StudioUsage = {
 	}[];
 };
 
-export const SECTIONS = [
-	'models',
-	'apps',
-	'kiosks',
-	'policies',
-	'automations',
-	'remotes',
-	'secrets'
-] as const;
+export const SECTIONS = ['models', 'apps', 'kiosks', 'policies', 'automations', 'secrets'] as const;
 export type Section = (typeof SECTIONS)[number];
 /** A declaration: its path-derived name, the source file it comes from (rule 1), and where it opens (an app). */
 type StudioEntry = { name: string; path: string; href?: string };
@@ -306,7 +301,12 @@ type StudioEntry = { name: string; path: string; href?: string };
  * whole projection closed, so the pane never links into files that are gone.
  */
 export type StudioView = Omit<StudioState, 'manifest'> & {
-	sections: { readonly [s in Section]: readonly StudioEntry[] } | null;
+	sections:
+		| ({ readonly [s in Section]: readonly StudioEntry[] } & {
+				/** Empty compatibility section required by already released shell decoders. */
+				readonly remotes?: readonly StudioEntry[];
+		  })
+		| null;
 	stale?: true;
 };
 
@@ -317,6 +317,9 @@ export function studioView({ manifest: m, ...rest }: StudioState): StudioView {
 			.sort()
 			.map((name) => ({ name, path: path(name) }));
 	const sections = {
+		// A workspace retains its bundled shell after an engine upgrade. Older shells require
+		// this key even though integrations no longer appear as Studio declarations.
+		remotes: [],
 		models: at(m.models, (n) => `src/data/model/${n}/+model.ts`),
 		apps: at(m.apps, (n) => `src/app/${n}/+app.ts`).map((e) => ({ ...e, href: href(e.name) })),
 		kiosks: at(m.kiosks, (n) => `src/kiosk/${n}/+kiosk.ts`).map((e) => ({
@@ -325,10 +328,6 @@ export function studioView({ manifest: m, ...rest }: StudioState): StudioView {
 		})),
 		policies: at(m.policies, (n) => `src/access_control/policy/+${n}.policy.ts`),
 		automations: at(m.automations, (n) => `src/automation/+${n}.automation.ts`),
-		remotes: [
-			...at(m.mcp, (n) => `src/agent/mcp/+${n}.mcp.ts`),
-			...at(m.integrations, (n) => `src/integration/${n}/+integration.ts`)
-		],
 		secrets: at(m.workspace.secrets, () => 'src/+secrets.ts')
 	};
 	const stale = Object.values(sections).some((es) => es.some((e) => !(e.path in rest.files)));
