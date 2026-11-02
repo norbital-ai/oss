@@ -163,8 +163,8 @@ export const shownKind = (kind: Kind): Kind =>
 			}
 		: kind;
 /** A `Value` that is a plain object (not a list, not a `Decimal`): the one narrowing of the union's object arm. */
-export const valueObject = (v: Value | undefined): v is { readonly [k: string]: Value } =>
-	typeof v === 'object' && v !== null && !Arr.isArray<Value>(v) && !(v instanceof Decimal);
+export const valueObject = (v: unknown): v is { readonly [k: string]: Value } =>
+	typeof v === 'object' && v !== null && !Array.isArray(v) && !(v instanceof Decimal);
 /**
  * The kind an undeclared JSON value shows as: scalars by their type, objects field by field, and a list of objects as
  * one object kind over every key its items hold (so it shows as a table).
@@ -388,7 +388,8 @@ export function parse(kind: Kind, text: string): Parsed {
 			return Number.isFinite(Number(t)) ? { value: Number(t) } : { error: 'expected a number' };
 		case 'decimal':
 		case 'money': {
-			const s = t.replace(/[,\s_]/g, '');
+			// a typed leading point is the same number ('.56' → '0.56'): correct it rather than refusing the entry
+			const s = t.replace(/[,\s_]/g, '').replace(/^(-?)\./, '$10.');
 			if (!/^-?\d+(\.\d+)?$/.test(s)) return { error: 'expected a decimal' };
 			const scale = kind.kind === 'decimal' ? kind.scale : undefined;
 			if (scale !== undefined && (s.split('.')[1]?.length ?? 0) > scale)

@@ -114,6 +114,7 @@ Readonly, it is a label over the value as copyable text (or a `view` snippet): n
 		{error}
 		{dense}
 		readonly
+		dirty={false}
 		class={cn(wide && 'col-span-full', className)}
 		data-field={name}
 		data-field-large={wide || undefined}
@@ -149,6 +150,7 @@ Readonly, it is a label over the value as copyable text (or a `view` snippet): n
 		{error}
 		{dense}
 		required={mandatory}
+		dirty={form.fieldDirty(name)}
 		class={cn(wide && 'col-span-full', className)}
 		data-field={name}
 		data-field-large={wide || undefined}

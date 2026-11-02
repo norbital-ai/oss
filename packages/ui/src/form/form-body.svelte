@@ -9,7 +9,7 @@
 	import Button from '../primitives/button/button.svelte';
 	import Spinner from '../primitives/spinner/spinner.svelte';
 	import { provideControls, uiText } from '../primitives/utils.js';
-	import type { Fields } from '../kinds/kind.js';
+	import { valueObject, type Fields } from '../kinds/kind.js';
 	import { locked, type FormSpec, type Outcome, type Row } from './draft.js';
 	import Field from './field.svelte';
 	import Grid from '../layout/grid.svelte';
@@ -78,6 +78,16 @@
 	const readonly = $derived(controls.readonly);
 	const t = uiText();
 	const bolt = useBolt();
+	const actor = bolt.actor;
+	const member =
+		valueObject(actor) && typeof actor['id'] === 'string' ? actor['id'] : 'anonymous';
+	// svelte-ignore state_referenced_locally -- the key belongs to this mounted form
+	const storageKey =
+		typeof location === 'undefined'
+			? undefined
+			: `norbital.form:${location.pathname}:${member}:${spec.callable}:${
+					spec.target.of === 'model' ? (spec.target.id ?? 'new') : 'new'
+				}`;
 	// svelte-ignore state_referenced_locally -- a draft is built once per mount; a new row is a new form
 	const form =
 		matching && shared != null
@@ -94,7 +104,8 @@
 						running: t('running')
 					},
 					(field) => locked(modelFields, record)(field),
-					(automation, input) => bolt.start(automation, input)
+					(automation, input) => bolt.start(automation, input),
+					storageKey
 				);
 	if (matching) untrack(() => form.prefill(values));
 	if (scope?.historical) form.mode = 'view';

@@ -87,6 +87,11 @@ test('typed text parses per kind with decode wording', () => {
 	assert.deepEqual(k.parse({ kind: 'decimal', scale: 2 }, '1,234.50'), {
 		value: Decimal.of('1234.50')
 	});
+	// a typed leading point is corrected, not refused
+	assert.deepEqual(k.parse({ kind: 'decimal', scale: 2 }, '.56'), { value: Decimal.of('0.56') });
+	assert.deepEqual(k.parse({ kind: 'money', currency: 'SGD' }, '-.5'), {
+		value: Decimal.of('-0.5')
+	});
 	assert.deepEqual(k.parse({ kind: 'decimal', scale: 2 }, '1.234'), {
 		error: 'at most 2 decimal places'
 	});

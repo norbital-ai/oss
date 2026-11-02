@@ -46,12 +46,17 @@
 			onChange(p.value);
 		}
 	}
+	/** A parsed number leaves the box in its canonical spelling ('.56' becomes '0.56') once typing pauses. */
+	function settle() {
+		if (problem === null && last !== undefined) text = shown(last);
+	}
 </script>
 
 <Input
 	{id}
 	value={text}
 	oninput={(e) => input(e.currentTarget.value)}
+	onblur={settle}
 	inputmode={kind.kind === 'int' ? 'numeric' : numeric ? 'decimal' : undefined}
 	type={kind.kind === 'text' && kind.format === 'email'
 		? 'email'

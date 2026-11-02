@@ -544,3 +544,23 @@ it.live(
 			})
 		)
 );
+
+it.live('a draft survives a reload keyed to the form, and each changed field says so', () =>
+	Effect.gen(function* () {
+		const { bolt } = yield* browser(() => viewFixture());
+		localStorage.clear();
+		const spec = specOf('quotes', exposure, 'create');
+		const key = 'norbital.form:test:quotes:new';
+		const form = new FormState(spec, null, {}, bolt.act, text, undefined, undefined, key);
+		assert.equal(form.dirty, false);
+		form.set('title', 'Paint');
+		assert.equal(form.fieldDirty('title'), true);
+		assert.equal(form.fieldDirty('total'), false);
+		const restored = new FormState(spec, null, {}, bolt.act, text, undefined, undefined, key);
+		assert.equal(restored.get('title'), 'Paint');
+		assert.equal(restored.fieldDirty('title'), true);
+		restored.reset();
+		assert.equal(localStorage.getItem(key), null);
+		localStorage.clear();
+	})
+);

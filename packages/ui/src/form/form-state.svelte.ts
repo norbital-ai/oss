@@ -2,7 +2,7 @@
 // a field (a lazy tab, a collapsed section) never drops its value, because the value lives here (§5.10).
 import { Effect, Fiber, FiberSet } from 'effect';
 import { getContext, setContext } from 'svelte';
-import { encodeWire } from '@norbital-ai/std/wire';
+import { encodeWire, reviveWire } from '@norbital-ai/std/wire';
 import { valueObject, type Value } from '../kinds/kind.js';
 import type { IdOf } from '../model/types.js';
 import type { RecordCapabilities, RecordRestriction } from '../record/types.js';
@@ -49,6 +49,10 @@ export class FormState {
 	children = $state<Record<string, readonly ChildOperation[]>>({});
 	/** Native child controllers survive a custom body or historical snapshot unmounting. */
 	childForms = new Map<string, FormState>();
+	/** A draft restored from this browser's storage, so a page does not replace it with fresh defaults. */
+	restored = false;
+	readonly #childSeeds: Readonly<Record<string, readonly Row[]>>;
+	readonly #storageKey: string | undefined;
 	#capabilitiesRequired = false;
 	/** Fields the row's state lock leaves read-only (advice; the host enforces). */
 	locked: (field: string) => boolean;
@@ -95,7 +99,8 @@ export class FormState {
 		act: Act,
 		text: NoticeText,
 		locked: (field: string) => boolean = () => false,
-		start?: ViewBolt['start']
+		start?: ViewBolt['start'],
+		storageKey?: string
 	) {
 		this.spec = spec;
 		this.mode =
@@ -107,6 +112,19 @@ export class FormState {
 		this.#act = act;
 		this.#start = start;
 		this.#text = text;
+		this.#storageKey = storageKey;
+		// a create form's child rows can be seeded from values (`components`), the same way its scalar fields are
+		this.#childSeeds =
+			spec.target.of === 'model' && spec.target.mode === 'create'
+				? Object.fromEntries(
+						Object.entries(spec.children ?? {}).flatMap(([relation]) => {
+							const seeded = prefill[relation];
+							return Array.isArray(seeded)
+								? [[relation, seeded.filter(valueObject)] as const]
+								: [];
+						})
+					)
+				: {};
 		this.locked = (field) =>
 			locked(field) ||
 			(this.#capabilitiesRequired &&
@@ -116,6 +134,88 @@ export class FormState {
 						this.capabilities.fields[field]?.writable || this.capabilities.fields[field]?.proposal
 					)));
 		this.#key = crypto.randomUUID();
+		this.#restore();
+	}
+
+	/** The storage key for one child row's draft: the parent form's key, the relation and the row id. */
+	childStorageKey(relation: string, key: string): string | undefined {
+		return this.#storageKey === undefined ? undefined : `${this.#storageKey}/${relation}/${key}`;
+	}
+
+	/** The child rows a create form was opened with (the previous trial's pigments, say). */
+	childSeeds(relation: string): readonly Row[] {
+		return this.#childSeeds[relation] ?? [];
+	}
+
+	#storage(): Storage | null {
+		try {
+			return typeof localStorage === 'undefined' ? null : localStorage;
+		} catch {
+			return null;
+		}
+	}
+
+	#restore(): void {
+		if (this.#storageKey === undefined || this.spec.readonly === true || this.mode === 'view')
+			return;
+		const raw = this.#storage()?.getItem(this.#storageKey);
+		if (raw == null) return;
+		try {
+			const saved: unknown = JSON.parse(raw, reviveWire);
+			if (!valueObject(saved)) return;
+			const values = valueObject(saved['values']) ? saved['values'] : {};
+			this.values = {
+				...this.values,
+				...Object.fromEntries(
+					Object.entries(values).filter(([name]) =>
+						this.spec.fields.some((field) => field.name === name && !field.readonly)
+					)
+				)
+			};
+			const children = saved['children'];
+			if (valueObject(children))
+				this.children = Object.fromEntries(
+					Object.entries(children).filter(([relation, operations]) => {
+						return (
+							this.spec.children?.[relation] !== undefined &&
+							Array.isArray(operations) &&
+							operations.every(
+								(operation) => valueObject(operation) && typeof operation['action'] === 'string'
+							)
+						);
+					})
+				) as Record<string, readonly ChildOperation[]>;
+			this.restored = true;
+		} catch {
+			// a draft from an older build or another origin: ignore it rather than break the form
+		}
+	}
+
+	#persist(): void {
+		if (this.#storageKey === undefined || this.spec.readonly === true || this.mode === 'view')
+			return;
+		const storage = this.#storage();
+		if (storage === null) return;
+		try {
+			const values = changed(this.base, this.values);
+			const children = Object.fromEntries(
+				Object.entries(this.children).filter(([, operations]) => operations.length > 0)
+			);
+			if (
+				Object.keys(values).length === 0 &&
+				Object.keys(children).length === 0 &&
+				Object.keys(this.#childSeeds).length === 0
+			) {
+				storage.removeItem(this.#storageKey);
+				return;
+			}
+			storage.setItem(
+				this.#storageKey,
+				JSON.stringify({ values: encodeWire(values), children: encodeWire(children) })
+			);
+		} catch {
+			// storage full or denied: the form still works, the draft is simply not remembered
+		}
 	}
 
 	/** A view refreshes from the current row; editing keeps its original revision and draft. */
@@ -149,6 +249,14 @@ export class FormState {
 		this.mode = 'view';
 		if (this.spec.target.of === 'model' && this.spec.target.mode === 'update')
 			this.refresh(this.#around);
+	}
+	/** Whether this one field differs from what the form opened with (the row, else the defaults). */
+	fieldDirty(name: string): boolean {
+		return (
+			this.mode !== 'view' &&
+			Object.keys(changed({ [name]: this.base[name] ?? null }, { [name]: this.values[name] ?? null }))
+				.length > 0
+		);
 	}
 	expectCapabilities(): void {
 		this.#capabilitiesRequired = true;
@@ -235,6 +343,7 @@ export class FormState {
 			this.errors = new Map(
 				[...this.errors].filter(([k]) => k !== name && !k.startsWith(`${name}.`))
 			);
+		this.#persist();
 	}
 	/** Holds a submit until `work` (an upload writing its ref into the draft) settles. */
 	track<A, E extends Error>(work: Effect.Effect<A, E>): Effect.Effect<A, E> {
@@ -295,6 +404,7 @@ export class FormState {
 		)
 			throw new Error('This child operation is not declared by the parent input.');
 		this.children = { ...this.children, [relation]: operations };
+		this.#persist();
 	}
 	validate(): boolean {
 		this.errors = check(this.spec, this.values);
@@ -337,6 +447,7 @@ export class FormState {
 		this.notice = settled.notice;
 		if (settled.newKey) this.#key = crypto.randomUUID();
 		if (outcome.kind === 'committed' || outcome.kind === 'pendingApproval') this.children = {};
+		this.#persist();
 		for (const receive of this.#beforeOutcomes) receive(outcome);
 		for (const receive of this.#outcomes) receive(outcome);
 	}
@@ -438,9 +549,20 @@ export class FormState {
 		this.run = null;
 		this.#startAttempt = undefined;
 		this.children = {};
+		this.restored = false;
 		for (const form of this.childForms.values()) form.reset();
 		this.childForms.clear();
+		this.#clearStorage();
 		for (const reset of this.#resets) reset();
+	}
+
+	#clearStorage(): void {
+		if (this.#storageKey === undefined) return;
+		try {
+			this.#storage()?.removeItem(this.#storageKey);
+		} catch {
+			// storage denied: nothing to clear
+		}
 	}
 }
 

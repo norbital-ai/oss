@@ -19,6 +19,7 @@
 		error,
 		readonly = false,
 		required = false,
+		dirty = false,
 		dense = false,
 		class: className,
 		children,
@@ -30,6 +31,8 @@
 		error?: string;
 		readonly?: boolean;
 		required?: boolean;
+		/** The draft differs from what the form opened with (the row, else the defaults). */
+		dirty?: boolean;
 		dense?: boolean;
 		children: Snippet;
 	} = $props();
@@ -47,6 +50,7 @@
 	class={cn('grid min-w-0 content-start', readonly ? 'gap-1' : 'gap-2', className)}
 	data-readonly={readonly || undefined}
 	data-invalid={error ? true : undefined}
+	data-field-dirty={dirty || undefined}
 	role={readonly ? 'group' : undefined}
 	aria-labelledby={readonly ? `${id}-label` : undefined}
 	{@attach (node) => {
@@ -79,6 +83,12 @@
 					>*</span
 				>{/if}
 		</svelte:element>
+		{#if !readonly && dirty}<span
+				class="size-1.5 shrink-0 rounded-full bg-amber-500"
+				title={t('unsaved')}
+				aria-label={t('unsaved')}
+				data-field-dirty-mark
+			></span>{/if}
 		{#if description && !dense}<DescriptionHint
 				text={description}
 				class={error ? 'text-destructive' : undefined}

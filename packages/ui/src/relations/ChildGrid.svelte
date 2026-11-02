@@ -19,6 +19,7 @@ A related-record grid with explicit child operations, original revisions and par
 
 <script lang="ts">
 	import { Effect } from 'effect';
+	import Icon from '@iconify/svelte';
 	import { fork } from '../effect/index.js';
 	import { getContext, onDestroy, untrack } from 'svelte';
 	import { SvelteMap } from 'svelte/reactivity';
@@ -32,7 +33,6 @@ A related-record grid with explicit child operations, original revisions and par
 	import { confirmAction } from '../primitives/dialog/confirm.js';
 	import { SHEET_GUARD, type SheetGuard } from '../primitives/sheet/dismiss.js';
 	import Picker from '../kinds/picker.svelte';
-	import { openRecord } from '../record/navigation.js';
 	import { useBolt } from '../client/context.js';
 	import { type Outcome } from '../client/contract.js';
 	import { actOutcome } from '../actions/outcome.js';
@@ -136,6 +136,12 @@ A related-record grid with explicit child operations, original revisions and par
 	const linkedLabels = new SvelteMap<string, string>();
 	let linkBusy = $state(false);
 	let active = true;
+	const text = {
+		pendingApproval: msg(bolt, 'form.pendingApproval', 'Pending approval'),
+		conflict: msg(bolt, 'form.conflict', 'The record changed. Review your draft and try again.'),
+		unknown: msg(bolt, 'form.unknown', 'The outcome is unknown. Retry to check the same request.'),
+		running: msg(bolt, 'form.running', 'Still working: this continues in the background.')
+	};
 	onDestroy(() => {
 		active = false;
 	});
@@ -158,6 +164,32 @@ A related-record grid with explicit child operations, original revisions and par
 					: {})
 			});
 		}
+		// a restored draft's created rows come back with it; otherwise a create form's values seed the first rows
+		const already = [...owner.childForms].some(
+			([key, form]) =>
+				key.startsWith(`${relation}:`) &&
+				form.spec.target.of === 'model' &&
+				form.spec.target.mode === 'create'
+		);
+		if (already) return;
+		const persisted = owner.restored
+			? (owner.children[relation] ?? []).flatMap((operation) =>
+					operation.action === 'create' ? [operation.values] : []
+				)
+			: owner.childSeeds(relation);
+		for (const [index, values] of persisted.entries()) {
+			const key = `draft:restored:${index}`;
+			const entry = make(
+				{
+					id: key,
+					...(id === undefined || identity === undefined ? {} : { [identity.parent]: id }),
+					...values
+				},
+				true,
+				key
+			);
+			if (entry !== null) drafts.set(key, entry);
+		}
 	});
 	onDestroy(() => {
 		for (const entry of drafts.values()) entry.request++;
@@ -174,12 +206,6 @@ A related-record grid with explicit child operations, original revisions and par
 		getContext<SheetGuard | undefined>(SHEET_GUARD)?.(() => save === 'independent' && dirty) ??
 			(() => {})
 	);
-	const text = {
-		pendingApproval: msg(bolt, 'form.pendingApproval', 'Pending approval'),
-		conflict: msg(bolt, 'form.conflict', 'The record changed. Review your draft and try again.'),
-		unknown: msg(bolt, 'form.unknown', 'The outcome is unknown. Retry to check the same request.'),
-		running: msg(bolt, 'form.running', 'Still working: this continues in the background.')
-	};
 	function make(row: Row, created: boolean, key = row.id): Draft | null {
 		const target = created ? 'create' : 'update';
 		const selected = strategy[target];
@@ -219,7 +245,9 @@ A related-record grid with explicit child operations, original revisions and par
 						created ? { ...inherited, ...row } : {},
 						(callable, input, options) => bolt.act(callable, input, options),
 						text,
-						(field) => locked(exposure?.fields ?? {}, row)(field)
+						(field) => locked(exposure?.fields ?? {}, row)(field),
+						undefined,
+						created ? undefined : owner?.childStorageKey(relation, key)
 					))
 				: new FormState(
 						spec,
@@ -289,7 +317,16 @@ A related-record grid with explicit child operations, original revisions and par
 				entry = drafts.get(key) ?? make(row, false);
 			if (entry === null) continue;
 			entry.form.refresh(row);
-			drafts.set(key, entry);
+			const removal = owner?.children[relation]?.find(
+				(operation) =>
+					(operation.action === 'delete' || operation.action === 'unlink') && operation.id === key
+			);
+			drafts.set(
+				key,
+				removal?.action === 'delete' || removal?.action === 'unlink'
+					? { ...entry, removed: removal.action }
+					: entry
+			);
 			void permissions(entry, row);
 		}
 	});
@@ -607,11 +644,8 @@ A related-record grid with explicit child operations, original revisions and par
 	{@const entry = drafts.get(key)}
 	{#if entry !== undefined}
 		<div class="flex flex-wrap gap-1">
-			{#if !entry.created}<Button variant="ghost" onclick={() => openRecord(model, key)}
-					>{msg(bolt, 'child.open', 'Open')}</Button
-				>{/if}
 			{#if editing}
-				{#if save === 'independent' && (entry.created || entry.form.dirty)}<Button
+				{#if entry.created || entry.form.dirty}<Button
 						disabled={!entry.form.canSave}
 						onclick={() => fork(entry.form.submit())}
 						>{entry.form.resubmitting
@@ -622,16 +656,49 @@ A related-record grid with explicit child operations, original revisions and par
 					>{/if}
 				{#if entry.created || (strategy.delete && permits(entry.form.capabilities?.delete))}<Button
 						variant="ghost"
-						disabled={entry.form.pending || (save === 'parent' && owner?.pending === true)}
+						disabled={entry.form.pending || owner?.pending === true}
 						onclick={() => remove(key, 'delete')}>{msg(bolt, 'child.delete', 'Delete row')}</Button
 					>{/if}
 				{#if !identity?.owned && strategy.unlink && permits(entry.form.capabilities?.fields[identity?.parent ?? ''])}<Button
 						variant="ghost"
-						disabled={entry.form.pending || (save === 'parent' && owner?.pending === true)}
+						disabled={entry.form.pending || owner?.pending === true}
 						onclick={() => remove(key, 'unlink')}>{msg(bolt, 'child.unlink', 'Unlink')}</Button
 					>{/if}
 			{/if}
 		</div>
+	{/if}
+{/snippet}
+{#snippet removeControl(row: Row)}
+	{@const entry = drafts.get(row.id)}
+	{@const action: 'delete' | 'unlink' | null =
+		entry === undefined
+			? null
+			: entry.created
+				? 'delete'
+				: !identity?.owned &&
+					  strategy.unlink &&
+					  permits(entry.form.capabilities?.fields[identity?.parent ?? ''])
+					? 'unlink'
+					: strategy.delete && permits(entry.form.capabilities?.delete)
+						? 'delete'
+						: null}
+	{#if editing && entry !== undefined && action !== null}
+		<Button
+			variant="ghost"
+			size="icon"
+			aria-label={action === 'delete'
+				? msg(bolt, 'child.delete', 'Delete row')
+				: msg(bolt, 'child.unlink', 'Unlink')}
+			disabled={entry.form.pending || owner?.pending === true}
+			onclick={() => remove(row.id, action)}
+		>
+			<Icon icon="lucide:x" class="size-3.5" aria-hidden="true" />
+			<span class="sr-only"
+				>{action === 'delete'
+					? msg(bolt, 'child.delete', 'Delete row')
+					: msg(bolt, 'child.unlink', 'Unlink')}</span
+			>
+		</Button>
 	{/if}
 {/snippet}
 
@@ -639,32 +706,26 @@ A related-record grid with explicit child operations, original revisions and par
 	<Table
 		of={displayed}
 		layout="grid"
+		toolbar={false}
+		rowTrailing={save === 'parent' ? removeControl : undefined}
 		columns={[
 			...(columns ?? fields).map((column) =>
 				typeof column === 'string'
 					? { field: column, cell }
 					: { ...column, cell: column.cell ?? cell }
 			),
-			{ field: '__operations', label: msg(bolt, 'child.actions', 'Actions'), cell: operations }
+			...(save === 'independent'
+				? [{ field: '__operations', label: msg(bolt, 'child.actions', 'Actions'), cell: operations }]
+				: [])
 		]}
-		onOpen={(row) => {
-			if (!row.id.startsWith('draft:')) openRecord(model, row.id);
-		}}
 	/>
 {/snippet}
 
 <section class="grid min-w-0 gap-3" data-child-grid={relation} data-save-scope={save}>
 	<div class="flex flex-wrap items-center justify-between gap-2">
-		<div>
-			<h3 class="font-medium">
-				{msg(bolt, `field.${of}.${relation}`, relation.replaceAll('_', ' '))}
-			</h3>
-			<p class="text-meta">
-				{save === 'parent'
-					? msg(bolt, 'child.parentSave', 'Changes save with the parent.')
-					: msg(bolt, 'child.independentSave', 'Each row saves independently.')}
-			</p>
-		</div>
+		<h3 class="font-medium">
+			{msg(bolt, `field.${of}.${relation}`, relation.replaceAll('_', ' '))}
+		</h3>
 		{#if save === 'independent' && !scope?.historical}<Button
 				variant="outline"
 				disabled={linkBusy || [...drafts.values()].some((entry) => entry.form.pending)}
@@ -694,11 +755,6 @@ A related-record grid with explicit child operations, original revisions and par
 					? msg(bolt, 'record.cancel', 'Cancel')
 					: msg(bolt, 'record.edit', 'Edit')}</Button
 			>{/if}
-		{#if editing && strategy.create !== undefined}<Button
-				variant="outline"
-				disabled={save === 'parent' && owner?.pending === true}
-				onclick={add}>{msg(bolt, 'child.add', 'Add row')}</Button
-			>{/if}
 	</div>
 	{#if identity === undefined}<p class="text-meta">
 			{msg(bolt, 'child.unavailable', 'This relationship is not exposed.')}
@@ -706,6 +762,16 @@ A related-record grid with explicit child operations, original revisions and par
 	{:else}
 		{#if id !== undefined}<ReadGate state={loaded} what={model}>{@render table()}</ReadGate
 			>{:else}{@render table()}{/if}
+		{#if editing && strategy.create !== undefined}<div>
+				<Button
+					variant="ghost"
+					disabled={save === 'parent' && owner?.pending === true}
+					onclick={add}
+				>
+					<Icon icon="lucide:plus" class="size-3.5" aria-hidden="true" />
+					{msg(bolt, 'child.add', 'Add row')}
+				</Button>
+			</div>{/if}
 		{#if loaded.kind === 'ready' && loaded.value.next !== null}<Button
 				variant="outline"
 				onclick={() => {
@@ -730,9 +796,6 @@ A related-record grid with explicit child operations, original revisions and par
 			</div>{/if}
 	{/if}
 	{#if save === 'parent'}
-		{#if contract?.update === undefined}<p class="text-meta">
-				{msg(bolt, 'child.reviewActions', 'Open a child record to review its available actions.')}
-			</p>{/if}
 		{#each links as operation}{#if operation.action !== 'create'}<p class="text-meta" role="status">
 					{msg(bolt, 'child.linkPending', 'Will link {record}.', {
 						record: linkedLabels.get(operation.id) ?? msg(bolt, 'child.record', 'Record')
