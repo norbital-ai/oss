@@ -138,7 +138,7 @@ function syncsOf(
 					s.schema === undefined && s.write === true
 						? (m.workspace.convert?.to ?? [])
 						: parsers.flatMap((parser) =>
-								['xlsx', 'csv', 'tsv', 'json'].filter((format) => format === parser)
+								['xlsx', 'csv', 'tsv', 'json', 'txt'].filter((format) => format === parser)
 							);
 				const context = Object.entries(s.context ?? {})
 					.filter(([, k]) => k.optional !== true && k.default === undefined)

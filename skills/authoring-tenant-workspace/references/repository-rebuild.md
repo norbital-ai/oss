@@ -101,7 +101,7 @@ them or replace them with helper-only tests. A financial workflow needs evidence
 automation inputs, including ownership, locked parents and child/reparenting paths. A read filter does not establish
 write ownership. A state-looking enum or boolean does not establish an enforced lock. Verify currency conversion on
 the values the chart actually queries, including missing FX and loading/error states, not only a helper's fixtures.
-Then validate and inspect the actual preview at normal and narrow widths using workspace_view when available:
+Then validate and inspect the actual preview at normal and narrow widths using `browser_navigate` to the preview when available:
 charts and table views, all navigation destinations, long forms, scroll reachability, empty/loading/error states,
 and workspace naming. No invented operational data to make a dashboard look populated; use preview fixtures only.
 When a browser refuses a local/private address, retain its protection and report the blocked check for an operator.

@@ -45,6 +45,7 @@ const UI_TEXT = {
 	saving: 'Saving…',
 	requestApproval: 'Request approval',
 	cancel: 'Cancel',
+	clear: 'Clear',
 	create: 'Create',
 	add: 'Add',
 	remove: 'Remove',

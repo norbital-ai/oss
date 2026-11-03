@@ -3,13 +3,13 @@
 import './dom.ts';
 import assert from 'node:assert/strict';
 import { Effect } from 'effect';
-import { it, afterEach } from '@effect/vitest';
+import { it, afterEach, vi } from '@effect/vitest';
 import type { Json } from '@norbital-ai/std/wire';
 import type { KindsHost } from '../src/kinds/context.ts';
 import type { FormSpec } from '../src/form/draft.ts';
 import type { FormState as Form, SemanticIssue } from '../src/form/form-state.svelte.ts';
 import { browser, required, textOf, viewFixture } from './view-fixture.ts';
-import { element } from './elements.ts';
+import { confirmDialog, element } from './elements.ts';
 const { flushSync, mount, tick, unmount } = await import('svelte');
 const d = await import('../src/form/draft.ts');
 const { FormState } = await import('../src/form/form-state.svelte.ts');
@@ -36,6 +36,7 @@ const specOf = (...args: Parameters<typeof d.formSpec>): FormSpec => required(d.
 const mounted: (() => Promise<void>)[] = [];
 afterEach(async () => {
 	for (const close of mounted.splice(0).reverse()) await close();
+	localStorage.clear();
 });
 const settle = async () => {
 	flushSync();
@@ -44,7 +45,7 @@ const settle = async () => {
 		await new Promise((r) => setTimeout(r, 0));
 	}
 };
-async function show(part: 'record' | 'create') {
+async function show(part: 'record' | 'create' | 'sheet') {
 	const acts: Json[] = [];
 	const { bolt } = await viewFixture({
 		get: (c, id) =>
@@ -78,6 +79,62 @@ const type = async (root: ParentNode, value: string) => {
 	await settle();
 };
 
+it.live('Discard on leaving clears the stored create draft; Cancel keeps it', () =>
+	Effect.gen(function* () {
+		const v = yield* browser(() => show('sheet'));
+		yield* browser(() => type(v.target, 'Paint'));
+		const stored = localStorage.length;
+		assert.ok(stored > 0);
+		const leave = async (confirmed: boolean) => {
+			element<HTMLButtonElement>(v.target, '[data-sheet-close]').click();
+			await vi.waitFor(() => assert.ok(confirmDialog()));
+			required(confirmDialog()).answer(confirmed);
+			await settle();
+			await Promise.allSettled(
+				Array.from(v.target.querySelectorAll('*'), (node) => node.getAnimations())
+					.flat()
+					.map((animation) => animation.finished)
+			);
+			await settle();
+		};
+		yield* browser(() => leave(false));
+		assert.equal(v.form().get('title'), 'Paint');
+		assert.equal(localStorage.length, stored);
+		yield* browser(() => leave(true));
+		assert.equal(v.target.querySelector('[role=dialog]'), null);
+		button(v.target, 'Reopen').click();
+		yield* browser(() => settle());
+		assert.equal(v.form().get('title'), null);
+		assert.equal(v.form().restored, false);
+		assert.equal(localStorage.length, stored - 1);
+		assert.deepEqual(v.acts, []);
+	})
+);
+
+it.live('Clear resets a create form and its saved draft without submitting or closing', () =>
+	Effect.gen(function* () {
+		const v = yield* browser(() => show('sheet'));
+		yield* browser(() => type(v.target, 'bad'));
+		assert.equal(button(v.target, 'Create').disabled, true);
+		const clear = button(v.target, 'Clear');
+		assert.equal(clear.type, 'button');
+		assert.equal(clear.disabled, false, 'invalid drafts can still be cleared');
+		v.form().pending = true;
+		yield* browser(() => settle());
+		assert.equal(clear.disabled, true);
+		v.form().pending = false;
+		yield* browser(() => settle());
+		clear.click();
+		yield* browser(() => settle());
+		assert.ok(v.target.querySelector('[role=dialog]'));
+		assert.equal(v.form().get('title'), null);
+		assert.equal(v.form().dirty, false);
+		assert.equal(v.form().fieldErrors.size, 0);
+		assert.equal(localStorage.length, 0);
+		assert.deepEqual(v.acts, []);
+	})
+);
+
 it.live('a broken invariant disables the create footer Save until the value is fixed', () =>
 	Effect.gen(function* () {
 		const v = yield* browser(() => show('create'));
@@ -107,6 +164,10 @@ it.live('a broken invariant disables the create footer Save until the value is f
 it.live('a broken invariant disables the record header Save until the value is fixed', () =>
 	Effect.gen(function* () {
 		const v = yield* browser(() => show('record'));
+		assert.equal(
+			[...v.target.querySelectorAll('button')].some((b) => textOf(b).trim() === 'Clear'),
+			false
+		);
 		button(v.target, 'Edit').click();
 		yield* browser(() => settle());
 		yield* browser(() => type(v.target, 'bad'));

@@ -1,5 +1,5 @@
 import { expect, it } from 'vitest';
-import { navigationEvents } from '../src/shell/agent/navigation.ts';
+import { navigationEvents, pageActions, pageConversationStarted } from '../src/shell/agent/navigation.ts';
 import { navigationPaths, type NavNode } from '../src/shell/nav.ts';
 import type { AgentRow } from '../src/protocol/schema.ts';
 import { clientNavigationPath, systemUiIntent, systemUiPath } from '../src/protocol/system-ui.ts';
@@ -25,6 +25,96 @@ it('never replays history, another tool’s output or a repeated live result', (
 		])
 	).toEqual([]);
 	expect(events('two', [row('other', '/inbox')])).toEqual([]);
+});
+it('never replays history, another tool’s output or a repeated live page action', () => {
+	const pageRow = (id: string, page: { click?: string; scroll?: number; go?: 'back' | 'forward' }) => ({
+		id,
+		seq: 1,
+		role: 'tool' as const,
+		text: null,
+		state: null,
+		tag: null,
+		tool: { name: 'page_act', failed: false, page }
+	});
+	const actions = pageActions();
+	expect(actions('one', [pageRow('old', { click: 'Old' })])).toEqual([]);
+	expect(
+		actions('one', [
+			pageRow('old', { click: 'Old' }),
+			pageRow('new', { click: 'GREY_RUBBER_0001' })
+		])
+	).toEqual([
+		{
+			key: 'new:{"click":"GREY_RUBBER_0001"}',
+			id: 'new',
+			action: { click: 'GREY_RUBBER_0001' }
+		}
+	]);
+	expect(actions('one', [pageRow('new', { click: 'GREY_RUBBER_0001' })])).toEqual([]);
+	expect(actions('two', [pageRow('other', { go: 'back' })])).toEqual([]);
+});
+it('shares one page-action ledger across Agent instances, so a confirmation is never repeated', () => {
+	const pageRow = (id: string, click: string, at?: string) => ({
+		id,
+		seq: 2,
+		role: 'tool' as const,
+		text: null,
+		state: null,
+		tag: null,
+		...(at === undefined ? {} : { at }),
+		tool: { name: 'page_act', failed: false, page: { click } }
+	});
+	const userRow = {
+		id: 'shared-input',
+		seq: 1,
+		role: 'user' as const,
+		text: 'open it',
+		state: null,
+		tag: null
+	};
+	const first = pageActions();
+	const second = pageActions();
+	const row = pageRow('shared-action', 'Open', new Date().toISOString());
+	expect(first('shared-ledger', [userRow])).toHaveLength(0);
+	expect(first('shared-ledger', [userRow, row])).toHaveLength(1);
+	expect(second('shared-ledger', [userRow, row])).toHaveLength(0);
+});
+it('runs the first action of a conversation this panel started', () => {
+	const actions = pageActions();
+	const row = {
+		id: 'started-action',
+		seq: 1,
+		role: 'tool' as const,
+		text: null,
+		state: null,
+		tag: null,
+		tool: { name: 'page_act' as const, failed: false, page: { click: 'Open' } }
+	};
+	pageConversationStarted('started-here');
+	expect(actions('started-here', [row])).toHaveLength(1);
+	expect(actions('started-here', [row])).toHaveLength(0);
+});
+it('never replays an opened conversation’s history', () => {
+	const actions = pageActions();
+	const user = {
+		id: 'history-input',
+		seq: 1,
+		role: 'user' as const,
+		text: 'open it',
+		state: null,
+		tag: null
+	};
+	const old = {
+		id: 'old-action',
+		seq: 2,
+		role: 'tool' as const,
+		text: null,
+		state: null,
+		tag: null,
+		tool: { name: 'page_act' as const, failed: false, page: { click: 'Old' } }
+	};
+	expect(actions('history', [user, old])).toEqual([]);
+	expect(actions('history', [user, old])).toEqual([]);
 });
 it('the navigation allowlist contains authorized pages and no API, external, secret-bearing or cross-workspace URLs', () => {
 	const nodes: NavNode[] = [

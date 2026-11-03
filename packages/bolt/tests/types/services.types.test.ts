@@ -293,7 +293,7 @@ is<
 >();
 is<
 	Eq<
-		FacilityCall['_tag'] extends `${'web' | 'files' | 'convert' | 'ai' | 'geo'}.${string}`
+		FacilityCall['_tag'] extends `${'web' | 'files' | 'convert' | 'ai' | 'geo' | 'browser'}.${string}`
 			? true
 			: false,
 		true

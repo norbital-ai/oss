@@ -19,16 +19,28 @@ export type Request = {
 	state: ApprovalState;
 	step: number;
 	requestor: string;
+	user: string | null;
 	route: Snapshot;
 };
 
 /** A member's own team (`teams[0]`): eligibility never walks the team tree; static identities have none. */
 const member = (a: EngineActor) =>
 	a.kind === 'member' ? { id: a.id, team: a.teams[0] } : undefined;
+const requestedBy = (r: Request, id: string): boolean =>
+	r.requestor === `member:${id}` || r.user === id;
+/** The requester cannot review their own request, including through a member preview or an override. */
+const reviewer = (r: Request, auth: Authority) => {
+	const m = member(auth.actor);
+	return m === undefined ||
+		requestedBy(r, m.id) ||
+		(auth.preview !== undefined && requestedBy(r, auth.preview.by))
+		? undefined
+		: m;
+};
 /** Rule 46: an approver of the current step: a member of one of its teams, or one of its users. */
-export const canApprove = (r: Request, a: EngineActor): boolean => {
+export const canApprove = (r: Request, auth: Authority): boolean => {
 	const step = r.route.steps[r.step],
-		m = member(a);
+		m = reviewer(r, auth);
 	return (
 		step !== undefined &&
 		m !== undefined &&
@@ -37,16 +49,16 @@ export const canApprove = (r: Request, a: EngineActor): boolean => {
 };
 /** An administrator or a member of a `supersededBy` team decides in any step's place. */
 export const canSupersede = (r: Request, auth: Authority): boolean => {
-	const team = member(auth.actor)?.team;
+	const m = reviewer(r, auth);
 	return (
-		auth.actor.kind === 'member' &&
-		(auth.admin || (team !== undefined && r.route.superseded_by.includes(team)))
+		m !== undefined &&
+		(auth.admin || (m.team !== undefined && r.route.superseded_by.includes(m.team)))
 	);
 };
 /** The caller's roles on a request (machine.ts): the current step's approver, the requester, a superseder. */
 export const rolesOf = (r: Request, auth: Authority): ReadonlySet<ApprovalRole> =>
 	new Set<ApprovalRole>([
-		...(canApprove(r, auth.actor) ? (['approver'] as const) : []),
+		...(canApprove(r, auth) ? (['approver'] as const) : []),
 		...(r.requestor === actorRef(auth.actor) ? (['requester'] as const) : []),
 		...(canSupersede(r, auth) ? (['superseder'] as const) : [])
 	]);

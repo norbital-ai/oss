@@ -132,7 +132,7 @@ export const actualCounts = Effect.fn('bolt.templateCounts')(function* (director
 	});
 	const [models, apps, automations] = yield* Effect.all(
 		[
-			count('src/data/model', /^[^/]+\/\+model\.ts$/),
+			count('src/data/model', /^(?:[^/]+\/)+\+model\.ts$/),
 			count('src/app', /(?:^|\/)\+app\.ts$/),
 			count('src/automation', /^\+[^/]+\.automation\.ts$/)
 		],

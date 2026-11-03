@@ -9,7 +9,9 @@
 //
 // Verify makes an edited file safe: replay every file on a scratch database, build the schema itself on another, and
 // compare what the two hold (`introspect`); and the snapshot must be the schema the code declares.
-import { Effect, Schema } from 'effect';
+import { Effect, Result, Schema } from 'effect';
+import * as Base64 from 'effect/encoding/Base64';
+import { deflateSync, inflateSync } from 'fflate';
 import { StoreError } from './errors.ts';
 import { canonical, sha256Hex } from '@norbital-ai/std/hash';
 import { plan, statements, type Plan } from './schema/plan.ts';
@@ -308,8 +310,7 @@ export function migrationStatements(file: MigrationFile): readonly MigrationStat
 			hazard: marker?.[2] ?? 'data',
 			text: sql.slice(at, end),
 			writes:
-				WRITES.has(first ?? '') ||
-				(first === 'with' && words.some((word) => WRITES.has(word.text)))
+				WRITES.has(first ?? '') || (first === 'with' && words.some((word) => WRITES.has(word.text)))
 		});
 		start = undefined;
 		words = [];
@@ -475,13 +476,23 @@ const IndexedDefinitions = /*#__PURE__*/ (() =>
 		lines: Schema.Array(Schema.String),
 		prefixes: Schema.Record(Schema.String, Schema.Array(Schema.Int))
 	}))();
+const PackedDefinitions = /*#__PURE__*/ (() =>
+	Schema.Struct({
+		format: Schema.Literal(2),
+		lines: Schema.Array(Schema.Union([Schema.String, Schema.Struct({ deflate: Schema.String })])),
+		prefixes: Schema.Record(Schema.String, Schema.Array(Schema.Int))
+	}))();
 const decodeDefinitions = /*#__PURE__*/ (() =>
 	Schema.decodeUnknownEffect(
-		Schema.fromJsonString(Schema.Union([IndexedDefinitions, PhysicalDefinitions]))
+		Schema.fromJsonString(
+			Schema.Union([IndexedDefinitions, PackedDefinitions, PhysicalDefinitions])
+		)
 	))();
 const indexedDefinitions = (
-	file: typeof IndexedDefinitions.Type | typeof PhysicalDefinitions.Type
-): file is typeof IndexedDefinitions.Type => file['format'] === 1;
+	file:
+		typeof IndexedDefinitions.Type | typeof PackedDefinitions.Type | typeof PhysicalDefinitions.Type
+): file is typeof IndexedDefinitions.Type | typeof PackedDefinitions.Type =>
+	file['format'] === 1 || file['format'] === 2;
 
 /** Every exact native definition is stored once, even when many historical prefixes share it. */
 export function physicalDefinitionsOf(definitions: PhysicalDefinitions): string {
@@ -503,7 +514,14 @@ export function physicalDefinitionsOf(definitions: PhysicalDefinitions): string 
 				})
 			])
 	);
-	return `${JSON.stringify({ format: 1, lines, prefixes }, null, '\t')}\n`;
+	// Keep ordinary definitions readable; large lookup/function bodies otherwise dominate every proof file.
+	const packed = lines.map((line) => {
+		if (line.length < 4096) return line;
+		const deflate = Base64.encode(deflateSync(new TextEncoder().encode(line)));
+		return deflate.length < line.length ? { deflate } : line;
+	});
+	const format = packed.some((line) => typeof line !== 'string') ? 2 : 1;
+	return `${JSON.stringify({ format, lines: packed, prefixes }, null, '\t')}\n`;
 }
 
 /** Decode committed proofs, including existing unindexed histories; hashes still cover the expanded definitions. */
@@ -513,11 +531,23 @@ export const readPhysicalDefinitions = (text: string): Fx<PhysicalDefinitions> =
 			Effect.mapError((cause) => StoreError.of('migrationChanged', 'decode', cause.message))
 		);
 		if (!indexedDefinitions(file)) return file;
+		const expanded = yield* Effect.forEach(file.lines, (line) =>
+			typeof line === 'string'
+				? Effect.succeed(line)
+				: Effect.try({
+						try: () =>
+							new TextDecoder('utf-8', { fatal: true }).decode(
+								inflateSync(Result.getOrThrow(Base64.decode(line.deflate)))
+							),
+						catch: () =>
+							StoreError.of('migrationChanged', 'decode', 'invalid compressed physical definition')
+					})
+		);
 		const definitions: Record<string, string[]> = {};
 		for (const [name, indexes] of Object.entries(file.prefixes)) {
 			const lines: string[] = [];
 			for (const index of indexes) {
-				const line = file.lines[index];
+				const line = expanded[index];
 				if (line === undefined)
 					return yield* refuse(
 						'migrationChanged',

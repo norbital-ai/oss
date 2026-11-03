@@ -7,11 +7,13 @@ it('the installed search SQL romanizes multilingual text through its packed look
 	const sql = searchFunctions().find((fn) => fn.id === 'bolt:function-search-2-romanize')?.sql;
 	if (sql === undefined) throw new Error('Romanization function is missing');
 	const lookup =
-		/select decode\('([0-9a-f]+)', 'hex'\) as codes, '([^']+)'::jsonb as readings/.exec(sql);
+		/select decode\('([A-Za-z0-9+/=]+)', 'base64'\) as codes, '([^']+)'::jsonb as readings/.exec(
+			sql
+		);
 	const lower = /ascii\(glyph\) - (\d+) as code/.exec(sql);
 	if (lookup?.[1] === undefined || lookup[2] === undefined || lower?.[1] === undefined)
 		throw new Error('Romanization lookup is missing');
-	const codes = Buffer.from(lookup[1], 'hex');
+	const codes = Buffer.from(lookup[1], 'base64');
 	const readings = Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Array(Schema.String)))(
 		lookup[2]
 	);

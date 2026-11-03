@@ -31,6 +31,7 @@ import {
 	type StepsSnapshot
 } from '../write/act.ts';
 import {
+	actorId,
 	actorRef,
 	affectedTables,
 	compileCommit,
@@ -228,8 +229,6 @@ const face = (route: StepsSnapshot, next: Step) => {
 		superseders: open ? route.superseded_by : []
 	};
 };
-const own = (actor: EngineActor) => (actor.kind === 'member' ? actor.id : null);
-
 function makeApprovals(m: EngineManifest, db: TenantDbShape, options: ApprovalsOptions) {
 	const cat = catalogOf(m);
 	const sourceAuthorities = new Authorities(m, 'approval');
@@ -346,7 +345,7 @@ function makeApprovals(m: EngineManifest, db: TenantDbShape, options: ApprovalsO
 			// retry-stable (L-BOLT-201): minted from the invocation and its key
 			const requestId = minter(`approval:${act.seed}:${act.model}:${act.record}`, b.now)();
 			const requestor = actorRef(auth.actor),
-				user = own(auth.actor);
+				user = auth.preview?.by ?? actorId(auth.actor);
 			const entry: LogEntry = {
 				move: 'request',
 				by: requestor,
@@ -412,7 +411,6 @@ function makeApprovals(m: EngineManifest, db: TenantDbShape, options: ApprovalsO
 						'This request depends on earlier reads. Reject it and start a fresh request.'
 					)
 				);
-			const allowed = act.snapshot.kind === 'allow';
 			const route = act.snapshot.kind === 'allow' ? a.route : act.snapshot;
 			const unknown = unknownTeam(m, route);
 			if (unknown !== undefined)
@@ -424,9 +422,7 @@ function makeApprovals(m: EngineManifest, db: TenantDbShape, options: ApprovalsO
 					)
 				);
 			// the same steps resume where changes were requested; changed steps restart at the first
-			const next: Step = allowed
-				? { state: 'Approved', step: a.step }
-				: { state: 'Pending', step: sameFlow(a.route, route) ? a.step : 0 };
+			const next: Step = { state: 'Pending', step: sameFlow(a.route, route) ? a.step : 0 };
 			const b = act.bindings,
 				by = actorRef(act.authority.actor);
 			const entry: LogEntry = {
@@ -458,12 +454,12 @@ function makeApprovals(m: EngineManifest, db: TenantDbShape, options: ApprovalsO
 			);
 			return {
 				request: a.id,
-				pending: !allowed,
+				pending: true,
 				pieces: (c: Chain) => {
 					c.cte(
 						'ap_resubmit',
 						`UPDATE bolt_approvals SET state = ${c.p(next.state)}, step = ${next.step}, route = ${c.p(route)}::jsonb,
-		log = log || jsonb_build_array(${c.p(entry)}::jsonb), closed_at = ${c.p(allowed ? b.now : null)}::timestamptz
+		log = log || jsonb_build_array(${c.p(entry)}::jsonb), closed_at = NULL
 	WHERE id::text = ${c.p(a.id)} AND state = 'ChangesRequested' AND requestor = ${c.p(by)} AND ${GATED} RETURNING id`
 					);
 					c.assert(
@@ -475,10 +471,9 @@ function makeApprovals(m: EngineManifest, db: TenantDbShape, options: ApprovalsO
 						'ap_resubmit_face',
 						`UPDATE approval_request SET status = ${c.p(STATUS[next.state])}, step = ${next.step}, steps = ${shown.steps},
 		step_names = ${c.p(shown.names)}::jsonb, approver_teams = ${c.p(shown.teams)}::jsonb, approver_users = ${c.p(shown.users)}::jsonb,
-		superseder_teams = ${c.p(shown.superseders)}::jsonb, closed_at = ${c.p(allowed ? b.now : null)}::timestamptz,
-		closed_by = ${c.p(allowed ? by : null)}, revision = revision + 1 WHERE id IN (SELECT id FROM ap_resubmit)`
+		superseder_teams = ${c.p(shown.superseders)}::jsonb, closed_at = NULL,
+		closed_by = NULL, revision = revision + 1 WHERE id IN (SELECT id FROM ap_resubmit)`
 					);
-					if (allowed) standing(c, a, act.authority.actor, b.now);
 					if (runs.length > 0) enqueue(c, runs, { when: 'EXISTS (SELECT 1 FROM ap_resubmit)' });
 				}
 			};

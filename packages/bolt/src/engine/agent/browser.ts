@@ -2,9 +2,10 @@
 // still offers them; each call answers that the browser facility is missing.
 import { Effect, Schema, type SchemaAST } from 'effect';
 import type { Json } from '../../decl/values.ts';
+import type { EngineActor } from '../contracts.ts';
 import { Browser } from '../ports.ts';
 import type { AgentHostConfig } from './index.ts';
-import { CLOSED, type HostTool, type HostToolContext } from './tools.ts';
+import { CLOSED, type HostTool, type HostToolContext, type StudioRole } from './tools.ts';
 
 /** An automation run's browser profile: this prefix and the run id. The host discards it when the run's session ends. */
 export const BROWSER_RUN_PROFILE = '\u0001run:';
@@ -26,19 +27,37 @@ const Step = Schema.Union([
 	Schema.Struct({ scroll: Schema.Struct({ ref: OptionalString, y: OptionalNumber }) }),
 	Schema.Struct({ wait: Schema.Struct({ text: OptionalString, ms: OptionalNumber }) })
 ]);
+const Workspace = Schema.Struct({
+	environment: Schema.String.annotate({
+		description: "'live', or a preview environment by its name"
+	}),
+	path: Schema.optionalKey(
+		Schema.String.check(
+			Schema.makeFilter((path: string) => path.startsWith('/') && !path.startsWith('//'))
+		).annotate({ description: 'a page of the workspace, e.g. /app/color_matching/board (default /)' })
+	),
+	device: Schema.optionalKey(Schema.Literals(['desktop', 'tablet', 'phone']))
+});
 const Navigate = Schema.Struct({
 	url: OptionalString,
+	workspace: Schema.optionalKey(Workspace),
 	go: Schema.optionalKey(Schema.Literals(['back', 'forward', 'reload'])),
 	find: OptionalString
 });
 
+/** An automation's browser identity: stable per automation (its sealed sign-ins), one tab per run. */
+export const automationBrowserProfile = (automation: string, run: string): string =>
+	`${BROWSER_RUN_PROFILE}${automation}\u0000${run}`;
+
 /** One browser identity per person; each conversation gets its own session (tab) inside it. */
-const profileOf = (context: HostToolContext): string | undefined =>
-	context.actor.kind === 'member'
-		? `person:${context.actor.id}\u0000${context.conversation}`
-		: context.actor.kind === 'system'
-			? `${BROWSER_RUN_PROFILE}${context.conversation}`
+export const browserProfile = (actor: EngineActor, conversation: string): string | undefined =>
+	actor.kind === 'member'
+		? `person:${actor.id}\u0000${conversation}`
+		: actor.kind === 'system'
+			? `${BROWSER_RUN_PROFILE}${conversation}`
 			: undefined;
+const profileOf = (context: HostToolContext): string | undefined =>
+	browserProfile(context.actor, context.conversation);
 
 /** Input refusals and facility failures are answers the model can act on, never thrown. */
 const tool = <A, I>(
@@ -48,6 +67,7 @@ const tool = <A, I>(
 		input: Schema.Codec<A, I>;
 		parseOptions?: SchemaAST.ParseOptions;
 		readOnly?: boolean;
+		studio?: StudioRole;
 		call: (
 			input: A,
 			profile: string,
@@ -61,6 +81,7 @@ const tool = <A, I>(
 		Schema.toJsonSchemaDocument(options.input, { onExcessProperty: 'error' }).schema
 	),
 	...(options.readOnly === undefined ? {} : { readOnly: options.readOnly }),
+	...(options.studio === undefined ? {} : { studio: options.studio }),
 	call: (input, context, signal) =>
 		Effect.runPromise(
 			Effect.gen(function* () {
@@ -77,74 +98,122 @@ const tool = <A, I>(
 		)
 });
 
-export const browserTools = (browser: Browser['Service']): readonly HostTool[] => ([
-	tool({
-		name: 'browser_navigate',
-		description:
-			'Open an http(s) page in your own browser (it keeps your sign-ins and site data), or go back, forward or reload. Answers the page as text with a ref on every control; a PDF answers its text, page by page. find keeps only lines with any of its words.',
-		input: Navigate,
-		call: ({ url, go, find }, profile) =>
-			url !== undefined
-				? browser.navigate(profile, { url }, find)
-				: go !== undefined
-					? browser.navigate(profile, { go }, find)
-					: Effect.succeed({ error: 'give url, or go: back | forward | reload' })
-	}),
-	tool({
-		name: 'browser_snapshot',
-		description:
-			'The open page as text: headings, text, and each control as [ref role] label = value. A long page answers next, the line to read on from; find keeps only lines with any of its words (numbered).',
-		readOnly: true,
-		input: Schema.Struct({ find: OptionalString, from: OptionalNumber }),
-		call: (options, profile) => browser.snapshot(profile, options)
-	}),
-	tool({
-		name: 'browser_act',
-		description:
-			'Act on the open page, steps in order: click, type, select, press, hover, scroll or wait. Each step waits for the page load it starts. Answers the page after, or the step that failed and the page as it stands.',
-		input: Schema.Struct({
-			steps: Schema.Array(Step).check(Schema.isMinLength(1), Schema.isMaxLength(20))
-		}),
-		parseOptions: CLOSED,
-		call: ({ steps }, profile) => browser.act(profile, steps)
-	}),
-	tool({
-		name: 'browser_evaluate',
-		description:
-			'Run a script in the open page and answer its value as JSON: an expression, or a function that is called; async is awaited.',
-		input: Schema.Struct({ expression: Schema.String }),
-		call: ({ expression }, profile) => browser.evaluate(profile, expression)
-	}),
-	tool({
-		name: 'browser_screenshot',
-		description:
-			'See the open page: a screenshot shown to you from your next step until this turn ends.',
-		readOnly: true,
-		input: Schema.Struct({}),
-		call: (_input, profile, context) =>
-			browser.screenshot(profile).pipe(
+/** A workspace page also arrives as an image: the person can see and the model can read it on its next step. */
+const capture = (
+	browser: Browser['Service'],
+	profile: string,
+	context: HostToolContext,
+	answer: Json
+): Effect.Effect<void> =>
+	Schema.is(Schema.Struct({ error: Schema.String }))(answer)
+		? Effect.void
+		: browser.screenshot(profile).pipe(
 				Effect.tap((bytes) => Effect.sync(() => context.attach({ mime: 'image/png', bytes }))),
-				Effect.as({
-					attached: 'the screenshot is shown to you from your next step until this turn ends'
-				})
-			)
-	}),
-	tool({
-		name: 'browser_download',
-		description:
-			"Save a file the web shows (an image, audio, video, a PDF, or a CAD model or drawing: STEP, IGES, STL, DWG, DXF, glTF) at its http(s) URL as the person's file, loaded by your own browser as the open page would load it (its sign-ins, the page as referrer): it is kept only if its bytes are one of those, at most 100 MiB, and offered on this step; a file field or a post takes its reference.",
-		input: Schema.Struct({ url: Schema.String }),
-		call: ({ url }, profile, context) =>
-			context.keep === undefined
-				? Effect.succeed({ error: 'files are kept only in a conversation with a person' })
-				: browser.download(profile, url).pipe(
-						Effect.map((file) => {
-							context.keep?.(file);
-							return { saved: file.name, mime: file.mime, bytes: file.bytes };
+				Effect.asVoid,
+				Effect.catch(() => Effect.void)
+			);
+
+export const browserTools = (browser: Browser['Service']): readonly HostTool[] => {
+	const opensWorkspace = browser.openWorkspace !== undefined;
+	return (
+		[
+			tool({
+				name: 'browser_navigate',
+				studio: 'view',
+				description: `Open a page in your own browser (it keeps your sign-ins and site data): an http(s) URL, or a page of the workspace by environment (live or a preview) and path. A workspace page opens signed in as the person and also attaches its screenshot. Answers the page as text with a ref on every control; a PDF answers its text, page by page. find keeps only lines with any of its words.${opensWorkspace ? '' : ' This host cannot open workspace pages.'}`,
+				input: Navigate,
+				call: ({ url, workspace, go, find }, profile, context) => {
+					if (workspace !== undefined) {
+						if (browser.openWorkspace === undefined)
+							return Effect.succeed({ error: 'This host cannot open workspace pages.' });
+						return browser
+							.openWorkspace(profile, workspace, {
+								actor: context.actor,
+								conversation: context.conversation,
+								...(context.agent === undefined ? {} : { agent: context.agent })
+							})
+							.pipe(
+								Effect.tap((answer) =>
+									capture(browser, profile, context, answer)
+								)
+							);
+					}
+					return url !== undefined
+						? browser.navigate(profile, { url }, find)
+						: go !== undefined
+							? browser.navigate(profile, { go }, find)
+							: Effect.succeed({
+									error: 'give url, workspace, or go: back | forward | reload'
+								});
+				}
+			}),
+			tool({
+				name: 'browser_snapshot',
+				description:
+					'The open page as text: headings, text, and each control as [ref role] label = value. A long page answers next, the line to read on from; find keeps only lines with any of its words (numbered).',
+				readOnly: true,
+				input: Schema.Struct({ find: OptionalString, from: OptionalNumber }),
+				call: (options, profile) => browser.snapshot(profile, options)
+			}),
+			tool({
+				name: 'browser_act',
+				description:
+					'Act on the open page, steps in order: click, type, select, press, hover, scroll or wait. Each step waits for the page load it starts. Answers the page after, or the step that failed and the page as it stands.',
+				input: Schema.Struct({
+					steps: Schema.Array(Step).check(Schema.isMinLength(1), Schema.isMaxLength(20))
+				}),
+				parseOptions: CLOSED,
+				call: ({ steps }, profile) => browser.act(profile, steps)
+			}),
+			tool({
+				name: 'browser_evaluate',
+				description:
+					"Run a script in your own browser's open page and answer its value as JSON: an expression, or a function that is called; async is awaited. Use CSS selectors here and return only the data you need. This runs in your browser, never in the person's tab.",
+				input: Schema.Struct({ expression: Schema.String }),
+				call: ({ expression }, profile) => browser.evaluate(profile, expression)
+			}),
+			tool({
+				name: 'browser_screenshot',
+				description:
+					'See the open page (an external site or a workspace page): a screenshot shown to you from your next step until this turn ends.',
+				readOnly: true,
+				input: Schema.Struct({}),
+				call: (_input, profile, context) =>
+					browser.screenshot(profile).pipe(
+						Effect.tap((bytes) => Effect.sync(() => context.attach({ mime: 'image/png', bytes }))),
+						Effect.as({
+							attached: 'the screenshot is shown to you from your next step until this turn ends'
 						})
 					)
-	})
-] as const).map((tool) => ({ ...tool, pack: 'browser' }));
+			}),
+			tool({
+				name: 'browser_close',
+				description:
+					'Close your browser tab for this conversation. Its sealed sign-ins stay for the next page you open; this frees the tab and its page memory now.',
+				input: Schema.Struct({}),
+				call: (_input, profile) =>
+					browser.close === undefined
+						? Effect.succeed({ error: 'This host cannot close a browser tab.' })
+						: browser.close(profile).pipe(Effect.as({ closed: true }))
+			}),
+			tool({
+				name: 'browser_download',
+				description:
+					"Save a file the web shows (an image, audio, video, a PDF, or a CAD model or drawing: STEP, IGES, STL, DWG, DXF, glTF) at its http(s) URL as the person's file, loaded by your own browser as the open page would load it (its sign-ins, the page as referrer): it is kept only if its bytes are one of those, at most 100 MiB, and offered on this step; a file field or a post takes its reference.",
+				input: Schema.Struct({ url: Schema.String }),
+				call: ({ url }, profile, context) =>
+					context.keep === undefined
+						? Effect.succeed({ error: 'files are kept only in a conversation with a person' })
+						: browser.download(profile, url).pipe(
+								Effect.map((file) => {
+									context.keep?.(file);
+									return { saved: file.name, mime: file.mime, bytes: file.bytes };
+								})
+							)
+			})
+		] as const
+	).map((tool) => ({ ...tool, pack: 'browser' }));
+};
 
 /** The agent host's tools after the built-in browser tools. */
 export const withBrowser = Effect.fnUntraced(function* (agent: AgentHostConfig) {

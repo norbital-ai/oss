@@ -15,6 +15,13 @@ export { PRELUDE } from '../engine/guest/prelude.ts';
 export { memberColumn, memberValue, parseAddress } from '../engine/identity/address.ts';
 export { type LoadedManifest } from '../engine/manifest.ts';
 export { auditTriggers } from '../engine/schema/audit.ts';
+export {
+	historySchemaObjects,
+	HISTORY_SCHEMA_TABLES,
+	HISTORY_SCHEMA_REGISTER,
+	HISTORY_SCHEMA_MATCH,
+	HISTORY_SCHEMA_PURGE
+} from '../engine/schema/history.ts';
 export { sourceObjects } from '../engine/schema/engine.ts';
 export { migrationLines, readMigrationSources } from '../engine/schema/migrations.ts';
 export {

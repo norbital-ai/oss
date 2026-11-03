@@ -23,6 +23,10 @@ verb. Approval events carry `{ kind: 'approval', move, step, steps, done, reques
 records, requester, approvers }`; moves include request, approve, reject, requestChanges, resubmit
 and supersede. Ordinary code decides wording, grouping, plurals and which events should notify.
 
+Use `to: ['approvers']` in the request event to notify reviewers. Delivery resolves the active
+request's current step against active staff members, excludes its requester, and sends nothing
+after the request closes. The same hook can handle the other approval moves.
+
 A notice has `title`, optional `description`, `to`, optional `via`, `attachments`, `link` and `once`.
 Recipients are `{ team }`, `{ user }` or `{ policy }`; model approval notices may also name
 `'requester'` and `'approvers'`. Inbox delivery is automatic. `via` names declared conversation

@@ -73,7 +73,7 @@ describe('bolt templates', () => {
 			const { root, directory } = yield* fixture;
 			for (const file of [
 				'src/data/model/agreements/+model.ts',
-				'src/data/model/fees/+model.ts',
+				'src/data/model/agreements/fees/+model.ts',
 				'src/data/model/helpers.ts',
 				'src/data/model/fees/README.md',
 				'src/app/service/+app.ts',

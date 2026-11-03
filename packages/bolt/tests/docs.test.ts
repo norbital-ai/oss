@@ -34,6 +34,7 @@ it('the declaration functions are documented, and spec parameters list their fie
 	expect(fns).toEqual([
 		'app',
 		'automation',
+		'browserStart',
 		'customField',
 		'envoy',
 		'group',

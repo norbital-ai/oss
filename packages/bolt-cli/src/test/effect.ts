@@ -375,6 +375,10 @@ export type TestOptions<P extends TestPorts = never> = {
 	pack?: Pack;
 	now?: string;
 	secretsKey?: Redacted.Redacted<Uint8Array>;
+	/** The workspace guest CPU budget; the kit default is the host's 3000 ms. */
+	guestCpuMs?: number;
+	/** Optional meter for each guest run's CPU, for profiling a workspace. */
+	guestMeter?: (session: string, nanos: bigint) => void;
 	db?: Layer.Layer<TenantDb, KitFailure>;
 	ports?: Layer.Layer<P, KitFailure>;
 	fakes?: { ai?: CassetteOptions };
@@ -1523,7 +1527,10 @@ export class TestWorkspace extends Context.Service<TestWorkspace, Kit>()(
 				const ports = Layer.mergeAll(
 					facilityLayers(facilities),
 					// the kit's own runner: guest code runs in this process's `node:vm` contexts
-					GuestIsolates.fromAbi(nodeGuests()),
+					GuestIsolates.fromAbi(nodeGuests({
+						...(options.guestCpuMs == null ? {} : { cpuMs: options.guestCpuMs }),
+						...(options.guestMeter == null ? {} : { meter: options.guestMeter })
+					})),
 					links,
 					Images.fromAbi(native.images),
 					Docs.fromAbi(native.docs),

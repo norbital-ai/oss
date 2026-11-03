@@ -29,7 +29,8 @@ export const BUILTIN: {
 	csv: { mime: 'text/csv', extension: '.csv' },
 	tsv: { mime: 'text/tab-separated-values', extension: '.tsv' },
 	json: { mime: 'application/json', extension: '.json' },
-	ics: { mime: 'text/calendar', extension: '.ics' }
+	ics: { mime: 'text/calendar', extension: '.ics' },
+	txt: { mime: 'text/plain', extension: '.txt' }
 };
 export const isBuiltin = (p: Parser): p is BuiltinParser =>
 	typeof p === 'string' && Object.hasOwn(BUILTIN, p);
@@ -306,6 +307,13 @@ export function parseBuiltin(
 				return fromJson(csvText(bytes), columns);
 			case 'ics':
 				return fromIcs(csvText(bytes), columns, options.tz);
+			case 'txt': {
+				const field = Object.keys(columns)[0] ?? 'line';
+				const lines = csvText(bytes)
+					.split(/\r?\n/)
+					.filter((line) => line !== '');
+				return { records: lines.map((line, index) => ({ [field]: line, $at: index + 1 })), findings: [] };
+			}
 		}
 	});
 	return Result.isSuccess(parsed)

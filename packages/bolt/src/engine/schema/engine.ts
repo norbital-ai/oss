@@ -7,6 +7,12 @@ import { NOTIFY } from '../conversations/store.ts';
 import { NOTICE_PUSH } from '../runs/push.ts';
 import { MINOR_FN, type SchemaObject } from '@norbital-ai/store';
 import { AUDIT_FUNCTIONS } from './audit.ts';
+import {
+	HISTORY_SCHEMA_TABLES,
+	HISTORY_SCHEMA_REGISTER,
+	HISTORY_SCHEMA_MATCH,
+	HISTORY_SCHEMA_PURGE
+} from './history.ts';
 
 type Private = {
 	name: string;
@@ -43,6 +49,18 @@ const noticeTrigger = (
 });
 
 const REGISTRY = (): readonly Private[] => [
+	{
+		name: 'bolt_history_register',
+		rank: 'function',
+		source: true,
+		functions: [
+			'bolt_history_register(model_name text, definition jsonb)',
+			'bolt_history_matches(history_model text, metadata jsonb, model_name text)',
+			'bolt_history_purge_fields(version_id text, model_name text, columns text[])'
+		],
+		why: 'Schema application registers definitions and preserves identities through declared renames.',
+		sql: [HISTORY_SCHEMA_REGISTER, HISTORY_SCHEMA_MATCH, HISTORY_SCHEMA_PURGE]
+	},
 	{
 		name: 'bolt_audit',
 		source: true,
@@ -96,6 +114,14 @@ const REGISTRY = (): readonly Private[] => [
 			'create index if not exists bolt_history__operation on bolt_history(operation) where operation is not null',
 			'create index if not exists bolt_history__record on bolt_history (collection, record, revision)'
 		]
+	},
+	{
+		name: 'bolt_history_schemas',
+		rank: 'table',
+		source: true,
+		tables: ['bolt_history_schema', 'bolt_history_current'],
+		why: 'Immutable schema definitions and field identities let old revisions survive schema changes.',
+		sql: HISTORY_SCHEMA_TABLES
 	},
 	{
 		name: 'bolt_audit_receipt',

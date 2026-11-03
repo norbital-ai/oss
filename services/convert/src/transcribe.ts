@@ -1,7 +1,7 @@
 // Audio to a diarised transcript through an audio-input chat model (OpenRouter's chat completions, `input_audio`), ported
 // from bolt-server's speech facility. ffmpeg normalises the recording to mono 16 kHz 32 kbps mp3; it is heard in 300 s
 // chunks overlapping by 15 s, one JSON-schema request each, the speakers so far in the prompt so labels carry, and the
-// overlaps merged. ffprobe tells an audio-only container from one with a video track.
+// overlaps merged. A video container is heard from its audio track.
 import { execFile } from 'node:child_process';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -228,26 +228,6 @@ const run = (binary: string, args: string[], signal: AbortSignal) =>
 			error ? reject(new Error(`${binary} could not read the audio: ${stderr.trim() || error.message}`)) : resolve(stdout)
 		)
 	);
-
-/** Whether a file holds a video stream (ffprobe); a file ffprobe cannot read has none it could report. */
-export const hasVideo = (bytes: Uint8Array, ffprobe = 'ffprobe') =>
-	Effect.tryPromise({
-		try: async (signal) => {
-			const dir = await mkdtemp(join(tmpdir(), 'convert-probe-'));
-			try {
-				await writeFile(join(dir, 'in'), bytes);
-				const out = await run(
-					ffprobe,
-					['-v', 'error', '-select_streams', 'v', '-show_entries', 'stream=codec_type', '-of', 'csv=p=0', join(dir, 'in')],
-					signal
-				);
-				return out.trim() !== '';
-			} finally {
-				await rm(dir, { recursive: true, force: true });
-			}
-		},
-		catch: () => false
-	}).pipe(Effect.orElseSucceed(() => false));
 
 export type TranscriberConfig = {
 	baseUrl: string;

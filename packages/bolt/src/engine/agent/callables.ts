@@ -2,6 +2,7 @@ import { bindingsAt } from '../query/reader.ts';
 import { Clock, Context, Effect, Option, Schema } from 'effect';
 import type { Json } from '../../decl/values.ts';
 import type { Authority } from '../contracts.ts';
+import { PageResult } from '../../protocol/schema.ts';
 import { TenantDb } from '../db/tenant-db.ts';
 import { type EngineError } from '../errors.ts';
 import { BoltError } from '../../protocol/errors.ts';
@@ -245,6 +246,21 @@ export const agentCallables = Effect.gen(function* () {
 					);
 				yield* agents.markRead(input.conversation, authority.actor.id);
 				return committed({ id: input.conversation });
+			})
+		),
+		'sys_message.pageResult': entry(
+			Schema.Struct({ message: Schema.String, result: PageResult }),
+			Effect.fn('Agents.pageResultCallable')(function* (input, authority) {
+				yield* message(authority, input.message);
+				yield* agents.pageResult(input.message, input.result);
+				return committed({ id: input.message });
+			})
+		),
+		'sys_message.claimPageAction': entry(
+			Schema.Struct({ message: Schema.String }),
+			Effect.fn('Agents.claimPageActionCallable')(function* (input, authority) {
+				yield* message(authority, input.message);
+				return committed({ claimed: yield* agents.claimPageAction(input.message) });
 			})
 		),
 		'sys_message.file': entry(

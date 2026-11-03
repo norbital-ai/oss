@@ -13,6 +13,9 @@ import { lowerRead, readEngine } from '../query/engine.ts';
 import { readHistory } from '../query/history.ts';
 import { decodeValue } from './flatten.ts';
 import type { RestorePreview, RestoreSkip } from '../../protocol/record-contracts.ts';
+import { HistorySnapshotSchema } from '../../protocol/record-contracts.ts';
+import { historyColumns } from '../query/history-schema.ts';
+import { tablesOf } from '../../protocol/catalog.ts';
 import { k, readRows, recordCapabilities, stateField, type WriteEngine } from './act.ts';
 
 export type RestoreTarget = { model: string; record: string; revision: number };
@@ -92,23 +95,40 @@ export const restorePreview = Effect.fn('Bolt.restorePreview')(function* (
 		Number((yield* readRows(e.db, cat, [[model, id]])).get(k(model, id))?.['revision']);
 	if (!Number.isSafeInteger(revision) || revision < 1 || revision >= liveRevision)
 		return refused('invalidInput', `Revision ${revision} is not a past revision of this record.`);
-	const history = (reader: { as: 'workspace' } | typeof caller) =>
+	const history = (reader: { as: 'workspace' } | typeof caller, view = false) =>
 		readHistory(
 			e.db,
 			m,
-			{ kind: 'history', model, id, at: { _tag: 'Revision', revision }, full: true },
+			{
+				kind: 'history',
+				model,
+				id,
+				at: { _tag: 'Revision', revision },
+				...(view ? { view: true as const } : { full: true as const })
+			},
 			reader,
 			bindings
 		);
 	// the caller's fold authorizes (the history grant); the workspace's is the stored past to compare
-	const seen = yield* history(caller);
-	const raw = yield* history({ as: 'workspace' });
+	const seen = yield* history(caller, true);
+	const raw = yield* history({ as: 'workspace' }, true);
 	if (!Predicate.isObject(seen) || !Predicate.isObject(raw) || Array.isArray(raw))
 		return refused(
 			'notFound',
 			`Revision ${revision} cannot be rebuilt from this record's history.`
 		);
-	const past = Object.fromEntries(Object.entries(raw).map(([f, v]) => [f, stored(v)]));
+	const snapshot = yield* Schema.decodeUnknownEffect(HistorySnapshotSchema)(raw).pipe(
+		Effect.mapError((error) => BoltError.make('invalidInput', 'decode', error.message))
+	);
+	const visibleSnapshot = yield* Schema.decodeUnknownEffect(HistorySnapshotSchema)(seen).pipe(
+		Effect.mapError((error) => BoltError.make('invalidInput', 'decode', error.message))
+	);
+	const currentKinds = tablesOf(m.models, m.relationships)[model]?.fields ?? {};
+	const past = Object.fromEntries(
+		Object.entries(snapshot.compatible).flatMap(([f, v]) =>
+			Object.entries(historyColumns(currentKinds[f], f, stored(v)))
+		)
+	);
 	const table = c.model.name;
 	// the stored values that still cast to their column (a jsonb column takes any value), and those that differ from live
 	const probe = yield* e.db.one(Probe, {
@@ -150,6 +170,16 @@ FROM kept, ${q(table)} t WHERE t.id::text = $3`,
 	if (then === null) return refused('notFound', `Revision ${revision} is not readable to you.`);
 	const changes: RestorePreview['changes'][number][] = [],
 		skipped: RestorePreview['skipped'][number][] = [];
+	for (const field of snapshot.uncompatible) {
+		// A current narrow output must not reveal an old value the caller cannot read.
+		if (authority !== null && !Object.hasOwn(visibleSnapshot.values, field)) continue;
+		skipped.push({
+			field,
+			reason: 'uncompatible',
+			current: live[field] ?? null,
+			restored: snapshot.values[field] ?? null
+		});
+	}
 	const columns = new Set([...c.model.fields.values()].map((f) => f.column));
 	for (const [key, value] of Object.entries(past))
 		if (!columns.has(key) && !key.startsWith('bolt_') && value !== null)

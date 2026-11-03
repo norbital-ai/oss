@@ -107,6 +107,8 @@ export type { StudioRole };
 export type HostToolContext = {
 	actor: Authority['actor'];
 	conversation: string;
+	/** The agent's mark when this turn runs as one (`Authority.agent`): a browser page opened for it is the agent's. */
+	agent?: Authority['agent'];
 	turn: string;
 	callId: string;
 	/** The person's latest message, when the turn has one (a search host ranks by it). */
@@ -1742,6 +1744,45 @@ export const catalogue = Effect.fn('AgentTool.catalogue')(function* (x: ToolCont
 				}
 			})
 		);
+		const pageAct = Tool.make('page_act', {
+			description:
+				"Move the person’s active workspace tab: click a link, card or button by its visible text (click), scroll by CSS pixels (scroll), go back/forward (go), or fill a visible text field (type { label, text, submit? }). It never reads or scripts the page; a button, an external link or a field fill waits for the person’s in-app confirmation and only a same-origin workspace link navigates. It never fills a password or file field, and it never presses an approval decision (approve, reject or request changes): the person decides those. The answer is a request, not proof: do not claim the action happened.",
+			parameters: Schema.Struct({
+				click: Schema.optionalKey(Schema.NonEmptyString),
+				scroll: Schema.optionalKey(Schema.Finite),
+				go: Schema.optionalKey(Schema.Literals(['back', 'forward'])),
+				type: Schema.optionalKey(
+					Schema.Struct({
+						label: Schema.NonEmptyString,
+						text: Schema.String,
+						submit: Schema.optionalKey(Schema.Boolean)
+					})
+				)
+			}),
+			success: ToolAnswer
+		});
+		yield* add(
+			pageAct,
+			Toolkit.make(pageAct).toHandlers({
+				page_act: ({ click, scroll, go, type }) =>
+					click === undefined &&
+					scroll === undefined &&
+					go === undefined &&
+					type === undefined
+						? Effect.succeed(ok({ error: 'give click, scroll, go or type' }))
+						: Effect.succeed(
+								ok({
+									page: {
+										...(click === undefined ? {} : { click }),
+										...(scroll === undefined ? {} : { scroll }),
+										...(go === undefined ? {} : { go }),
+										...(type === undefined ? {} : { type })
+									},
+									requested: true
+								})
+							)
+			})
+		);
 	}
 	// a sync starts as its caller: a file sync's import gated by their create or update grants on the model, its
 	// export by their reads (the engine judges both); a remote sync's read is granted by name among the policy's automations
@@ -2534,8 +2575,8 @@ Related rows go inside their root row in the same call, never in a separate writ
 	if (fileStore !== undefined) {
 		const ingestTool = Tool.make('ingest', {
 			description:
-				"Ingest a stored file ({ id }: any file read_file takes) into sanitised HTML lines and its images, filed in this conversation's outputs: a PDF, image, html, txt, doc, docx, ppt, pptx, odt, odp, rtf, or audio (mp3, m4a, wav, ogg) as a transcript with speakers and times; a spreadsheet or data file (csv, json, xls, xlsx, ods) as typed data (data.json, for run_js). " +
-				'It answers at once with { job, output } and works in the background: when it finishes, a [job … done] message with the outline and its line ranges arrives at your next step (or wakes this conversation); carry on or end your reply meanwhile. Then read it with read_file { output, from }. A file ingested before answers at once. A type with no parser (video, CAD, …) is an immediate error: build a tool for it.',
+				"Ingest a stored file ({ id }: any file read_file takes) into sanitised HTML lines and its images, filed in this conversation's outputs: a PDF, image, html, txt, doc, docx, ppt, pptx, odt, odp, rtf, or audio/video (mp3, m4a, wav, ogg, mp4, webm; a video is heard from its audio track) as a transcript with speakers and times; a spreadsheet or data file (csv, json, xls, xlsx, ods) as typed data (data.json, for run_js). " +
+				'It answers at once with { job, output } and works in the background: when it finishes, a [job … done] message with the outline and its line ranges arrives at your next step (or wakes this conversation); carry on or end your reply meanwhile. Then read it with read_file { output, from }. A file ingested before answers at once. A type with no parser (CAD, an unknown container) is an immediate error: build a tool for it.',
 			parameters: Schema.Struct({ id: Schema.String.annotate({ description: 'the file id' }) }),
 			success: ToolAnswer
 		});
@@ -3649,6 +3690,7 @@ Related rows go inside their root row in the same call, never in a separate writ
 							const context: HostToolContext = {
 								actor: a.actor,
 								conversation: x.conv.id,
+								...(a.agent === undefined ? {} : { agent: a.agent }),
 								turn: x.turn,
 								callId: id,
 								...(x.question === undefined ? {} : { question: x.question }),

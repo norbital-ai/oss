@@ -161,7 +161,8 @@
 	// the sheet this form sits in asks before closing over its unsaved draft
 	onDestroy(
 		getContext<SheetGuard | undefined>(SHEET_GUARD)?.(
-			() => !controls.readonly && (form.dirty || form.pending)
+			() => !controls.readonly && (form.dirty || form.pending),
+			() => form.reset()
 		) ?? (() => {})
 	);
 	const update = $derived(spec.target.of === 'model' && spec.target.mode === 'update');
@@ -261,6 +262,11 @@
 						role="status">{t('unsaved')}</span
 					>{/if}
 				{@render actions?.(form)}
+				{#if !readonly && !update && ownSubmit}<Button
+						variant="outline"
+						disabled={form.pending || controls.disabled}
+						onclick={() => form.reset()}>{t('clear')}</Button
+					>{/if}
 				{#if !readonly && !settled && ownSubmit}<Button
 						type="submit"
 						disabled={!form.canSave || controls.disabled || (update && !form.dirty)}

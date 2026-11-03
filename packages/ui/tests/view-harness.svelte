@@ -133,7 +133,7 @@
 			: { toolbar: { ...(fixture.props.toolbar || {}), trailing } }}
 	/>
 {:else if fixture.part === 'record'}
-	<Sheet open title="jobs"><fixture.view {...fixture.props} /></Sheet>
+	<Sheet open><fixture.view {...fixture.props} /></Sheet>
 {:else if fixture.part === 'point'}
 	<fixture.view {...fixture.props} />
 {:else if fixture.part === 'picker'}

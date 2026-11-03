@@ -13,6 +13,7 @@ import {
 	plan,
 	statements,
 	type PlannedStatement,
+	type Plan,
 	type Step,
 	type StepRisk
 } from './schema/plan.ts';
@@ -249,6 +250,73 @@ const validated = (s: PlannedStatement): string =>
 	s.violations === undefined
 		? `${s.sql};`
 		: [validation(s.name ?? s.step, s.violations), `${s.sql};`].join('\n');
+
+/** Keep diff objects independent; a newly created table can declare its columns and constraints together. */
+function compactStatements(p: Plan): PlannedStatement[] {
+	const sql = statements(p);
+	const objects = new Map(
+		p.steps.flatMap((s) => (s.create === null ? [] : [[s.id, s.create] as const]))
+	);
+	const fresh = new Map(
+		p.steps.flatMap((s) =>
+			s.create?.rank === 'table' && s.drop === null ? [[s.create.table, s.id] as const] : []
+		)
+	);
+	const definitions = new Map<string, string[]>();
+	const consumed = new Set<PlannedStatement>();
+	const columns = new Map<string, PlannedStatement>();
+	for (const s of sql) {
+		const o = objects.get(s.step);
+		if (o?.rank !== 'column') continue;
+		const prefix = `alter table ${q(o.table)} add column `;
+		if (!s.sql.startsWith(prefix)) continue;
+		columns.set(`${o.table}.${o.deps[0]}`, s);
+		if (!fresh.has(o.table)) continue;
+		const list = definitions.get(o.table) ?? [];
+		list.push(s.sql.slice(prefix.length));
+		definitions.set(o.table, list);
+		consumed.add(s);
+	}
+	for (const s of sql) {
+		const o = objects.get(s.step);
+		if (o === undefined) continue;
+		const column = columns.get(`${o.table}.${o.deps[0]}`);
+		const prefix = `alter table ${q(o.table)} alter column ${q(o.deps[0] ?? '')} set `;
+		if (o.rank === 'default' && column !== undefined && s.sql.startsWith(prefix)) {
+			const value = s.sql.slice(prefix.length);
+			if (column.sql.endsWith(` ${value}`)) consumed.add(s);
+		}
+		if (!fresh.has(o.table)) continue;
+		if (o.rank === 'notNull' && column !== undefined && s.sql === `${prefix}not null`) {
+			const list = definitions.get(o.table);
+			const name = `alter table ${q(o.table)} add column `;
+			const definition = column.sql.slice(name.length);
+			const at = list?.indexOf(definition) ?? -1;
+			if (list !== undefined && at >= 0) {
+				list[at] = `${definition} not null`;
+				consumed.add(s);
+			}
+		}
+		const constraint = `alter table ${q(o.table)} add constraint `;
+		if (o.rank === 'constraint' && s.sql.startsWith(constraint)) {
+			const list = definitions.get(o.table) ?? [];
+			list.push(`constraint ${s.sql.slice(constraint.length)}`);
+			definitions.set(o.table, list);
+			consumed.add(s);
+		}
+		if (o.rank === 'backfill') consumed.add(s);
+	}
+	return sql
+		.filter((s) => !consumed.has(s))
+		.map((s) => {
+			const o = objects.get(s.step);
+			const fields = o?.rank === 'table' ? definitions.get(o.table) : undefined;
+			if (fields !== undefined && s.sql.endsWith(')'))
+				return { step: s.step, sql: `${s.sql.slice(0, -1)},\n\t${fields.join(',\n\t')}\n)` };
+			if (o !== undefined && fresh.has(o.table)) return { step: s.step, sql: s.sql };
+			return s;
+		});
+}
 /**
  * The next migration file from the last snapshot (`null`: none yet) to `next`, and the snapshot it leaves. `accept`
  * names the destructive steps already accepted; any other destructive step is written without its accept line, so
@@ -275,7 +343,7 @@ export const generate = /*#__PURE__*/ (() =>
 		const name = `${String(file.number).padStart(4, '0')}_${slug}.sql`;
 		// A replacement's drop and create belong at different ranks; grouping all of a step's statements reorders them.
 		const groups: { id: string; list: PlannedStatement[] }[] = [];
-		for (const s of statements(p)) {
+		for (const s of compactStatements(p)) {
 			const last = groups.at(-1);
 			if (last?.id === s.step) last.list.push(s);
 			else groups.push({ id: s.step, list: [s] });
@@ -295,10 +363,11 @@ export const generate = /*#__PURE__*/ (() =>
 			const klass = step?.class ?? 'additive';
 			const block = [
 				`-- step ${marker(id)} (${klass})`,
-				`-- hazard: ${HAZARD[klass]}`,
-				...[...new Set(list.flatMap((statement) => statement.risks ?? []))].map(
-					(risk) => `-- operational risk: ${risk}: ${RISK[risk]}.`
-				),
+				...(list.some((statement) => (statement.risks?.length ?? 0) > 0)
+					? [
+							`-- operational risk: ${[...new Set(list.flatMap((statement) => statement.risks ?? []))].join(', ')}`
+						]
+					: []),
 				...(klass === 'destructive' && file.accept?.includes(id) === true
 					? [`-- accept: ${marker(id)}`]
 					: []),
@@ -307,8 +376,16 @@ export const generate = /*#__PURE__*/ (() =>
 			return [...(index === dataAt ? data : []), block];
 		});
 		const text = [
-			`-- ${name}: ${p.steps.length} step(s), from ${p.from ?? 'an empty database'} to ${p.to}.`,
+			`-- ${name}: ${groups.length} step(s), from ${p.from ?? 'an empty database'} to ${p.to}.`,
 			'-- Edit freely: `verify` replays every file on a scratch database and compares it with the schema.',
+			...[
+				...new Set(
+					groups.map(({ id }) => p.steps.find((step) => step.id === id)?.class ?? 'additive')
+				)
+			].map((klass) => `-- hazard: ${HAZARD[klass]}`),
+			...[...new Set(groups.flatMap(({ list }) => list.flatMap((s) => s.risks ?? [])))].map(
+				(risk) => `-- operational risk: ${risk}: ${RISK[risk]}.`
+			),
 			'',
 			[...blocks, ...(dataAt < 0 ? data : [])].join('\n\n'),
 			''

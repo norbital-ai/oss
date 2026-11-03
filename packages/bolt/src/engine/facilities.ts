@@ -12,7 +12,7 @@ import {
 } from './contracts.ts';
 import type { EngineManifest } from './manifest.ts';
 import { TenantDb, type TenantDbShape } from './db/tenant-db.ts';
-import { Ai, Convert, Files, Geo, Images, Speech, Transport, WebRead } from './ports.ts';
+import { Ai, Browser, Convert, Files, Geo, Images, Speech, Transport, WebRead } from './ports.ts';
 import { Port, type PortFailure } from './port.ts';
 import { Decisions, Facilities, Manifest, type FacilityCall } from './services.ts';
 import { imageFacts, imageJpeg } from './files/image.ts';
@@ -23,6 +23,34 @@ import { DecisionRequestSchema } from './decisions/index.ts';
 import { inferFacility } from './agent/ai.ts';
 import { indexOf, transcriptOf } from './agent/ingest.ts';
 import { PATHS } from '../protocol/wire.ts';
+
+const BrowserSteps = Schema.Array(
+	Schema.Union([
+		Schema.Struct({ click: Schema.String }),
+		Schema.Struct({
+			type: Schema.Struct({
+				ref: Schema.String,
+				text: Schema.String,
+				submit: Schema.optionalKey(Schema.Boolean)
+			})
+		}),
+		Schema.Struct({ select: Schema.Struct({ ref: Schema.String, value: Schema.String }) }),
+		Schema.Struct({ press: Schema.String }),
+		Schema.Struct({ hover: Schema.String }),
+		Schema.Struct({
+			scroll: Schema.Struct({
+				ref: Schema.optionalKey(Schema.String),
+				y: Schema.optionalKey(Schema.Finite)
+			})
+		}),
+		Schema.Struct({
+			wait: Schema.Struct({
+				text: Schema.optionalKey(Schema.String),
+				ms: Schema.optionalKey(Schema.Finite)
+			})
+		})
+	])
+);
 
 const FileRow = Schema.Struct({
 	id: Schema.String,
@@ -242,6 +270,7 @@ export type FacilityPorts = {
 	readonly web: WebRead['Service'];
 	readonly ai: Ai['Service'];
 	readonly geo: Geo['Service'];
+	readonly browser: Browser['Service'];
 	readonly decisions: Decisions['Service'];
 };
 
@@ -365,6 +394,49 @@ export function facilityDispatch(ports: FacilityPorts): Facilities['Service']['d
 		Effect.gen(function* () {
 			const [first, given] = call.args;
 			switch (call._tag) {
+				case 'browser.navigate': {
+					const profile = yield* decode(Schema.String, first, 'browser.navigate takes a profile');
+					const url = yield* decode(Schema.String, given, 'browser.navigate takes a URL');
+					const { find } = yield* decode(
+						Schema.Struct({ find: Schema.optionalKey(Schema.String) }),
+						call.args[2] ?? {},
+						'browser.navigate takes { find? }'
+					);
+					return answered(yield* ports.browser.navigate(profile, { url }, find));
+				}
+				case 'browser.snapshot': {
+					const profile = yield* decode(Schema.String, first, 'browser.snapshot takes a profile');
+					const options = yield* decode(
+						Schema.Struct({
+							find: Schema.optionalKey(Schema.String),
+							from: Schema.optionalKey(Schema.Finite)
+						}),
+						given ?? {},
+						'browser.snapshot takes { find?, from? }'
+					);
+					return answered(yield* ports.browser.snapshot(profile, options));
+				}
+				case 'browser.act': {
+					const profile = yield* decode(Schema.String, first, 'browser.act takes a profile');
+					const steps = yield* decode(BrowserSteps, given, 'browser.act takes steps');
+					return answered(yield* ports.browser.act(profile, steps));
+				}
+				case 'browser.evaluate': {
+					const profile = yield* decode(Schema.String, first, 'browser.evaluate takes a profile');
+					const expression = yield* decode(
+						Schema.String,
+						given,
+						'browser.evaluate takes an expression'
+					);
+					return answered(yield* ports.browser.evaluate(profile, expression));
+				}
+				case 'browser.close': {
+					const profile = yield* decode(Schema.String, first, 'browser.close takes a profile');
+					if (ports.browser.close === undefined)
+						return yield* Port.unavailable('browser.close', 'the host cannot close a tab');
+					yield* ports.browser.close(profile);
+					return answered(null);
+				}
 				case 'web.read': {
 					const url = yield* decode(Schema.String, first, 'web.read takes a URL');
 					const { raw } = yield* decode(
@@ -574,6 +646,7 @@ export const FacilitiesLive = Layer.effect(
 			web = yield* WebRead,
 			ai = yield* Ai,
 			geo = yield* Geo,
+			browser = yield* Browser,
 			decisions = yield* Decisions;
 		return {
 			dispatch: facilityDispatch({
@@ -586,6 +659,7 @@ export const FacilitiesLive = Layer.effect(
 				web,
 				ai,
 				geo,
+				browser,
 				decisions
 			}),
 			fileLoader: fileLoader(db, files),

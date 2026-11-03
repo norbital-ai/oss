@@ -671,13 +671,13 @@ export interface Act {
 	checked(
 		acts: readonly (
 			| {
-					readonly callable: Extract<ManyCallable, `${string}.upsert`>;
+					readonly callable: string;
 					readonly input: Json;
 					readonly observed?: Readonly<Record<string, number>>;
 					readonly onConflict: 'update' | 'keep';
 			  }
 			| {
-					readonly callable: Exclude<ManyCallable, `${string}.upsert`>;
+					readonly callable: string;
 					readonly input: Json;
 					readonly observed?: Readonly<Record<string, number>>;
 					readonly onConflict?: never;

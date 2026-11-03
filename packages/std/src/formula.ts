@@ -95,6 +95,8 @@ const DIV_SCALE = 12; // ponytail: `/` on decimals rounds to 12 places half-up; 
 const NUMERIC = new Set<string>(['int', 'decimal', 'money', 'number', 'duration', 'count', 'sum']);
 const EXACT = new Set<string>(['decimal', 'money', 'sum']);
 const internals = new WeakMap<object, { env: Environment; cache: Map<string, ParseResult> }>();
+/** A null literal is a dyn value for checking, then evaluates to null; cel-js 8 rejects it beside a concrete branch. */
+const NULL_ROOT = '__cel_null';
 
 function celType(k: Kind, mode: Mode): string {
 	if (k.kind === 'list') return 'list<dyn>';
@@ -183,7 +185,8 @@ export function context<
 	const numbers = (opts.numbers ?? 'decimal') as M;
 	const env = new Environment({ homogeneousAggregateLiterals: false });
 	arithmetic(env, numbers);
-	for (const [name, k] of Object.entries(roots)) env.registerVariable(name, celType(k, numbers));
+	const allRoots = { ...roots, [NULL_ROOT]: { kind: 'json' as const } } as R & { readonly __cel_null: Kind };
+	for (const [name, k] of Object.entries(allRoots)) env.registerVariable(name, celType(k, numbers));
 	for (const { signature, fn } of Object.values(opts.functions ?? {}))
 		env.registerFunction(signature, (...args: unknown[]) =>
 			(fn as (...a: unknown[]) => unknown)(...args.map(plain))
@@ -203,6 +206,7 @@ function chain(n: ASTNode): string[] | null {
 function unknownPath(n: ASTNode, roots: Roots): string | null {
 	const c = chain(n);
 	if (c !== null) {
+		if (c[0] === NULL_ROOT) return null;
 		let k: Kind | undefined = roots[c[0]!];
 		for (let i = 1; i < c.length && k?.kind === 'object'; i++) {
 			k = k.fields[c[i]!];
@@ -233,6 +237,17 @@ const ACCEPTS: { readonly [T in FormulaResult]: { readonly [M in Mode]: readonly
 const fromDouble = (x: number) =>
 	/e/i.test(String(x)) ? Decimal.fromNumber(x, 15) : Decimal.of(String(x));
 const first = (e: unknown) => (e instanceof Error ? e.message : String(e)).split('\n')[0]!;
+/** Replace every null literal with the hidden dyn root so optional branches keep one checkable type. */
+function rewriteNull(node: unknown, nullNode: ASTNode): unknown {
+	if (Array.isArray(node)) return node.map((child) => rewriteNull(child, nullNode));
+	if (node == null || typeof node !== 'object') return node;
+	const held = node as { op?: unknown; args?: unknown };
+	if (held.op === 'value' && held.args === null) return nullNode;
+	for (const [key, value] of Object.entries(node))
+		if (value != null && typeof value === 'object')
+			(node as Record<string, unknown>)[key] = rewriteNull(value, nullNode);
+	return node;
+}
 
 /** Compiles `text` for a result kind; `{ error }` names the syntax fault, the unknown path or the wrong type. Cached per (context, text, result). */
 export function compile<R extends Roots, M extends Mode, T extends FormulaResult>(
@@ -248,9 +263,11 @@ export function compile<R extends Roots, M extends Mode, T extends FormulaResult
 	const parsed = Result.try(() => own.env.parse(text));
 	if (Result.isFailure(parsed)) return { error: first(parsed.failure) };
 	const program = parsed.success;
+	const nullNode = own.env.parse(NULL_ROOT).ast;
+	rewriteNull(program.ast, nullNode);
 	const path = unknownPath(program.ast, ctx.roots);
 	if (path !== null) return { error: `unknown path ${path}` };
-	const checked = own.env.check(text);
+	const checked = program.check();
 	if (!checked.valid) return { error: first(checked.error) };
 	// CEL object roots are maps of dyn; a declared member still has its own result type.
 	const declared = chain(program.ast)?.reduce<Kind | undefined>(
@@ -328,7 +345,7 @@ export function evaluate<R extends Roots, M extends Mode, T extends FormulaResul
 ): Out<T, M> {
 	const { context: ctx, result } = compiled,
 		mode = ctx.numbers;
-	const scope: Record<string, unknown> = {};
+	const scope: Record<string, unknown> = { [NULL_ROOT]: null };
 	for (const [name, k] of Object.entries(ctx.roots))
 		scope[name] = input(k, (values as Record<string, unknown>)[name], mode);
 	const v: unknown = compiled.program(scope);

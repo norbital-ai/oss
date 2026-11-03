@@ -29,6 +29,7 @@ import {
 } from './services.ts';
 import {
 	Ai,
+	Browser,
 	Convert,
 	DeadlinePort,
 	Drivers,
@@ -107,6 +108,7 @@ export type EngineHost =
 	| Convert
 	| Speech
 	| WebRead
+	| Browser
 	| Geo
 	| Docs
 	| Transport

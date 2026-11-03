@@ -72,8 +72,8 @@ the text it shows. A `.json` file is its parsed value, as is.
 | doc ppt rtf                  | Kreuzberg's structured result                                                             |
 | html                         | parse5, then only the allowed elements; `data:` images become image files, remote ones go |
 | txt md · png jpeg gif webp   | `<pre>` · one `<img>`                                                                     |
-| mp3 m4a wav ogg opus flac aac webm, audio-only mp4 | the transcription model (below); `503` when none is configured           |
-| a video track, CAD, anything else | `415` `{ error: 'unsupported', message: 'no parser: build a tool for it with your workspace tools' }` |
+| mp3 m4a wav ogg opus flac aac webm, mp4 (its audio track) | the transcription model (below); `503` when none is configured |
+| CAD, any other video container (mov, mkv), anything else | `415` `{ error: 'unsupported', message: 'no parser: build a tool for it with your workspace tools' }` |
 
 **PDF** is read from its own structure by one reader, pdf.js 6.4.299 (Apache-2.0): never pixels, never a model, never
 OCR. Each page is read as shown (its `/Rotate` and every matrix applied): positioned text runs, vector paths and painted
@@ -90,11 +90,11 @@ edge hold), bold and italic kept inline. Every word of the text layer lands exac
 mode 3, is text like any other). Pictures stand in reading order, turned as the page shows them: an upright JPEG is
 returned as stored, any other picture as a PNG of its pixels (a scanned page is its picture, upright).
 
-**Audio** is transcribed: ffmpeg normalises it to mono 16 kHz 32 kbps mp3, and an audio-input chat model
+**Audio and video** are transcribed: ffmpeg normalises the audio track to mono 16 kHz 32 kbps mp3, and an audio-input chat model
 (`CONVERT_TRANSCRIBE_MODEL` at `CONVERT_AI_BASE_URL`'s chat completions, JSON-schema answers) hears it in 300 s chunks
 overlapping by 15 s; the speakers heard so far go into each chunk's prompt so labels carry, overlaps are merged once, and
-a 429 or 5xx is retried twice. A container (mp4, m4a, webm, ogg, or any `video/*` type) is probed first: with a video
-track it is `415`. `options` is `{ diarize?, language?, speakers?, prompt? }`. The `html` is one
+a 429 or 5xx is retried twice. A container (mp4, m4a, webm, ogg or an `audio/*` type) is read from its audio track; a
+video's picture is ignored. `options` is `{ diarize?, language?, speakers?, prompt? }`. The `html` is one
 `<section data-speaker="S1" data-start="12.3" data-end="15"><time>00:00:12</time> text</section>` per segment (seconds,
 one decimal); the model's usage, summed over the chunks as the provider reports it, is `meta.usage`.
 

@@ -8,6 +8,9 @@ import { audited, auditActor } from '../audit-operation.ts';
 import { Audit } from '../audit.ts';
 import type { ApprovalSnapshot } from '../../decl/access/policy.ts';
 import { WriteOutcome as OutcomeSchema } from '../../protocol/schema.ts';
+import { HistorySnapshotSchema } from '../../protocol/record-contracts.ts';
+import { tablesOf } from '../../protocol/catalog.ts';
+import { historyColumns } from '../query/history-schema.ts';
 import type {
 	RecordCapabilities,
 	RecordRestriction,
@@ -1739,14 +1742,26 @@ const plan = Effect.fn('Bolt.plan')(function* (
 				model: request.model,
 				id: request.record,
 				at: { _tag: 'Before', before: request.id },
-				full: true
+				view: true
 			},
 			{ as: 'workspace' },
 			b
 		);
-		const before = Schema.is(Schema.Record(Schema.String, Schema.Json))(checkpoint)
-			? checkpoint
-			: null;
+		const historical =
+			checkpoint === null
+				? null
+				: yield* Schema.decodeUnknownEffect(HistorySnapshotSchema)(checkpoint).pipe(
+						Effect.mapError((error) => BoltError.make('schema', 'decode', error.message))
+					);
+		const kinds = tablesOf(m.models, m.relationships)[request.model]?.fields ?? {};
+		const before =
+			historical === null
+				? null
+				: Object.fromEntries(
+						Object.entries(historical.compatible).flatMap(([field, value]) =>
+							Object.entries(historyColumns(kinds[field], field, value))
+						)
+					);
 		if (before === null && request.action !== 'create')
 			return stop({
 				kind: 'conflict',
@@ -1810,8 +1825,8 @@ const plan = Effect.fn('Bolt.plan')(function* (
 						verb === 'create'
 							? values
 							: verb === 'update'
-								? { before: { ...tree, ...before }, set: pending }
-								: before
+								? { before: { ...tree, ...historical?.compatible }, set: pending }
+								: (historical?.compatible ?? null)
 					],
 					{ tables: readTables, fingerprints }
 				);
@@ -2608,7 +2623,9 @@ export const pureVectors = Effect.fn('Bolt.pureVectors')(function* (
 	);
 	if (g.kind === 'failed') return { failed: g.error };
 	if (g.kind === 'refused')
-		return { failed: BoltError.make('internal', 'guest', 'A pure search vector cannot refuse a write.') };
+		return {
+			failed: BoltError.make('internal', 'guest', 'A pure search vector cannot refuse a write.')
+		};
 	const vectors = yield* Schema.decodeUnknownEffect(
 		Schema.Array(Schema.NullOr(Schema.Array(Schema.Number)))
 	)(g.output).pipe(
@@ -2618,7 +2635,8 @@ export const pureVectors = Effect.fn('Bolt.pureVectors')(function* (
 		vectors.length !== rows.length ||
 		vectors.some(
 			(vector) =>
-				vector !== null && (vector.length !== dim || vector.some((value) => !Number.isFinite(value)))
+				vector !== null &&
+				(vector.length !== dim || vector.some((value) => !Number.isFinite(value)))
 		)
 	)
 		return yield* BoltError.make(

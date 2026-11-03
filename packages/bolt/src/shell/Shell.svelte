@@ -33,6 +33,7 @@
 		TableSkeleton,
 		Toaster,
 		cn,
+		confirmAction,
 		openRecord,
 		provideBolt,
 		provideKinds,
@@ -75,11 +76,15 @@
 	import Invite from './auth/Invite.svelte';
 	import AgentPanel from './agent/Agent.svelte';
 	import Attention from './agent/Attention.svelte';
-	import { createChime, NORBIUS_CHIME } from './agent/chime.ts';
+	import { createSounds, SOUNDS, type SoundStatus } from './sounds.ts';
+	import SoundSettings from './settings/Sounds.svelte';
 	import { CLIENT_NAVIGATION, type ClientNavigation } from './agent/navigation.ts';
+	import { CLIENT_PAGE_ACTION, type ClientPageAction } from './agent/navigation.ts';
+	import { fillField, pageClickable, pageField, pageFieldLabel, pageLabel } from './agent/page.ts';
 	import Inbox from './inbox/Inbox.svelte';
 	import Settings from './settings/Settings.svelte';
 	import { clientNavigationPath, systemUiIntent } from '../protocol/system-ui.ts';
+	import type { PageResult } from '../protocol/schema.ts';
 	import CommandCenter from './command-center/CommandCenter.svelte';
 	import Studio from './studio/Studio.svelte';
 	import RecordSheet from './RecordSheet.svelte';
@@ -116,7 +121,7 @@
 				api.agent
 					.post(
 						conversation,
-						`I took control of the Studio preview${typeof data.id === 'string' ? ` !${data.id}` : ''}. You no longer control it; call workspace_view to take it back when I ask.`,
+						`I took control of the Studio preview${typeof data.id === 'string' ? ` !${data.id}` : ''}. You no longer control it; call browser_navigate with the preview to take it back when I ask.`,
 						true
 					)
 					.pipe(
@@ -170,21 +175,31 @@
 			: undefined
 	);
 	let chimes = $state(true);
-	const chimeKey = $derived(
-		boot?.actor?.kind === 'member' ? `bolt.norbius.sounds:${boot.actor.id}` : null
+	let soundsOpen = $state(false);
+	let soundStatus = $state<SoundStatus>(
+		typeof AudioContext === 'undefined' ? 'unavailable' : 'needs-gesture'
 	);
+	const chimeKey = $derived(boot?.actor?.kind === 'member' ? `bolt.sounds:${boot.actor.id}` : null);
 	watch(
 		() => chimeKey,
 		(key) => {
 			try {
-				chimes = key !== null && localStorage.getItem(key) !== 'off';
+				chimes =
+					key !== null &&
+					(localStorage.getItem(key) ??
+						localStorage.getItem(key.replace('bolt.sounds:', 'bolt.norbius.sounds:'))) !== 'off';
 			} catch {
 				chimes = true;
 			}
 		}
 	);
-	const chime = createChime(() => chimes);
-	setContext(NORBIUS_CHIME, chime);
+	const sounds = createSounds(
+		() => chimes,
+		(status) => {
+			soundStatus = status;
+		}
+	);
+	setContext(SOUNDS, sounds);
 	const chooseChimes = (enabled: boolean) => {
 		chimes = enabled;
 		try {
@@ -192,16 +207,18 @@
 		} catch {
 			/* Device storage may be disabled. */
 		}
-		if (enabled) chime.unlock();
+		if (enabled) void sounds.test();
 	};
 	$effect(() => {
-		const unlock = () => chime.unlock();
-		window.addEventListener('pointerdown', unlock);
-		window.addEventListener('keydown', unlock);
+		const unlock = () => {
+			void sounds.unlock();
+		};
+		window.addEventListener('click', unlock, true);
+		window.addEventListener('keydown', unlock, true);
 		return () => {
-			window.removeEventListener('pointerdown', unlock);
-			window.removeEventListener('keydown', unlock);
-			chime.close();
+			window.removeEventListener('click', unlock, true);
+			window.removeEventListener('keydown', unlock, true);
+			sounds.close();
 		};
 	});
 	let bolt = $state.raw<ShellBolt | null>(null);
@@ -694,6 +711,142 @@
 	});
 	// closing a sheet closes every sheet stacked on it
 	const closeRecord = (depth: number) => navigate(withRecords(url, depth).href);
+
+	/** The active tab's claim on a page action: the server lets exactly one tab own it, across windows and devices. */
+	const claimedBy = (output: unknown): boolean =>
+		typeof output === 'object' && output !== null && 'claimed' in output && output.claimed === true;
+
+	setContext<ClientPageAction>(CLIENT_PAGE_ACTION, {
+		run(action, _conversation, step) {
+			const ack = (result: PageResult) => {
+				void run(api.agent.pageResult(step, result)).catch(() => {});
+			};
+			// a hidden or ineligible tab stays silent: a second tab must never overwrite the acting tab's result
+			if (
+				boot === null ||
+				boot.actor?.kind !== 'member' ||
+				boot.actor.external ||
+				previewEnv ||
+				document.visibilityState !== 'visible'
+			)
+				return;
+			const act = () => {
+				if (action.scroll !== undefined) {
+					let scroller: HTMLElement | null = document.querySelector<HTMLElement>('main');
+					while (scroller !== null && scroller.scrollHeight <= scroller.clientHeight + 1)
+						scroller = scroller.parentElement;
+					(scroller ?? document.scrollingElement ?? window).scrollBy({
+						top: action.scroll,
+						behavior: 'smooth'
+					});
+					ack({ ok: true, note: `Scrolled ${action.scroll}px.` });
+					return;
+				}
+				if (action.go !== undefined) {
+					if (action.go === 'back') history.back();
+					else history.forward();
+					ack({ ok: true, note: `Went ${action.go}.` });
+					return;
+				}
+				if (action.type !== undefined) {
+					const fill = action.type;
+					const field = pageField(fill.label);
+					if (field === null) {
+						ack({ ok: false, note: `No visible field “${fill.label}”.` });
+						return;
+					}
+					const shown = fill.text.length > 120 ? `${fill.text.slice(0, 120)}…` : fill.text;
+					fork(
+						confirmAction({
+							title: t('Norbius wants to type into this page'),
+							body: t('Fill “{field}” with “{value}”? It can change your workspace.')
+								.replace('{field}', pageFieldLabel(field) || fill.label)
+								.replace('{value}', shown),
+							confirmLabel: t('Fill it'),
+							destructive: true
+						}).pipe(
+							Effect.tap((yes) =>
+								Effect.sync(() => {
+									if (yes) {
+										fillField(field, fill.text, fill.submit === true);
+										ack({ ok: true, note: `Filled “${pageFieldLabel(field) || fill.label}”.` });
+									} else ack({ ok: false, note: 'The person declined.' });
+								})
+							)
+						)
+					);
+					return;
+				}
+				if (action.click === undefined) return;
+				const control = pageClickable(action.click);
+				if (control === null) {
+					ack({ ok: false, note: `No visible control “${action.click}”.` });
+					return;
+				}
+				// a board card is a record opener, not a mutation: it is the card the person sees.
+				if (control.matches('[data-board-card]')) {
+					control.click();
+					ack({ ok: true, note: `Opened “${pageLabel(control)}”.` });
+					return;
+				}
+				const link = control.closest<HTMLAnchorElement>('a[href]');
+				if (link !== null && !link.hasAttribute('download')) {
+					const next = logical(link.href);
+					if (next !== null && !next.pathname.startsWith('/__bolt/')) {
+						navigate(next.href);
+						ack({ ok: true, url: next.href });
+						return;
+					}
+					if (new URL(link.href, location.href).origin !== location.origin) {
+						fork(
+							confirmAction({
+								title: t('Norbius wants to open a link'),
+								body: t('Open “{link}” in your browser?').replace('{link}', link.href),
+								confirmLabel: t('Open it')
+							}).pipe(
+								Effect.tap((yes) =>
+									Effect.sync(() => {
+										if (yes) {
+											fork(openExternal(device, link.href));
+											ack({ ok: true, note: 'Opened the external link.' });
+										} else ack({ ok: false, note: 'The person declined.' });
+									})
+								)
+							)
+						);
+						return;
+					}
+					ack({ ok: false, note: 'That link is outside the workspace.' });
+					return;
+				}
+				fork(
+					confirmAction({
+						title: t('Norbius wants to use this page'),
+						body: t('Press “{control}”? It can change your workspace.').replace(
+							'{control}',
+							pageLabel(control) || action.click
+						),
+						confirmLabel: t('Press it'),
+						destructive: true
+					}).pipe(
+						Effect.tap((yes) =>
+							Effect.sync(() => {
+								if (yes) {
+									control.click();
+									ack({ ok: true, note: `Pressed “${pageLabel(control)}”.` });
+								} else ack({ ok: false, note: 'The person declined.' });
+							})
+						)
+					)
+				);
+			};
+			void run(api.agent.claimPageAction(step))
+				.then((answer) => {
+					if (answer.kind === 'committed' && claimedBy(answer.output)) act();
+				})
+				.catch(() => {});
+		}
+	});
 </script>
 
 <svelte:head
@@ -948,7 +1101,10 @@
 				{theme}
 				onTheme={chooseTheme}
 				{chimes}
-				onChimes={chooseChimes}
+				onSounds={() => {
+					navOpen = false;
+					soundsOpen = true;
+				}}
 				{sync}
 				previewing={boot?.preview !== null}
 				onEndPreview={() => fork(endPreview())}
@@ -1137,5 +1293,16 @@
 				{/if}
 			</Sheet>
 		{/if}
+		<Sheet open={soundsOpen} title={t('Sounds')} onOpenChange={(open) => (soundsOpen = open)}>
+			<SoundSettings
+				enabled={chimes}
+				status={soundStatus}
+				onChange={chooseChimes}
+				onTest={() => {
+					void sounds.test();
+				}}
+				{t}
+			/>
+		</Sheet>
 	{/if}
 </div>

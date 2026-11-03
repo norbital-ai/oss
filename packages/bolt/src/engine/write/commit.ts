@@ -775,15 +775,16 @@ function erasePieces(c: Chain, erasures: readonly NonNullable<Commit['erase']>[]
 		);
 		c.cte(
 			'purge_removed',
-			`DELETE FROM bolt_history h USING allp x WHERE x.erased AND x.op = 'delete' AND h.collection = x.c AND h.record::text = x.id
+			`DELETE FROM bolt_history h USING allp x WHERE x.erased AND x.op = 'delete' AND bolt_history_matches(h.collection,h.meta,x.c) AND h.record::text = x.id
 			AND NOT (x.cause='erased' AND h.revision=x.revision) AND ${immediate} AND ${GATED}`
 		);
 	}
 	for (const [index, e] of erasures.entries()) {
 		if (e.mode === 'remove') continue;
 		const fields = `ARRAY(SELECT jsonb_array_elements_text(${c.p(e.purge)}::jsonb))`;
-		const at = `h.collection = ${c.p(e.model)} AND h.record::text IN (SELECT jsonb_array_elements_text(${c.p(e.ids)}::jsonb)) AND h.changes ?| ${fields}
-		AND h.revision < (SELECT min(x.revision) FROM allp x WHERE x.c=h.collection AND x.id=h.record::text)`;
+		const historicalFields = `bolt_history_purge_fields(h.meta->>'schema',${c.p(e.model)},${fields})`;
+		const at = `bolt_history_matches(h.collection,h.meta,${c.p(e.model)}) AND h.record::text IN (SELECT jsonb_array_elements_text(${c.p(e.ids)}::jsonb)) AND h.changes ?| ${historicalFields}
+		AND h.revision < (SELECT min(x.revision) FROM allp x WHERE x.c=${c.p(e.model)} AND x.id=h.record::text)`;
 		c.cte(
 			`defer_anonymised${index}`,
 			`INSERT INTO bolt_audit_erase(operation,collection,record,revision,mode,purge,keep_marker)
@@ -794,11 +795,11 @@ function erasePieces(c: Chain, erasures: readonly NonNullable<Commit['erase']>[]
 		);
 		c.cte(
 			`purge${index}`,
-			`UPDATE bolt_history h SET changes = h.changes - ${fields} WHERE ${at} AND (h.changes - ${fields} <> '{}'::jsonb OR h.cause='erased') AND ${immediate} AND ${GATED}`
+			`UPDATE bolt_history h SET changes = h.changes - ${historicalFields} WHERE ${at} AND (h.changes - ${historicalFields} <> '{}'::jsonb OR h.cause='erased') AND ${immediate} AND ${GATED}`
 		);
 		c.cte(
 			`purge_empty${index}`,
-			`DELETE FROM bolt_history h WHERE ${at} AND h.cause<>'erased' AND h.changes - ${fields} = '{}'::jsonb AND ${immediate} AND ${GATED}`
+			`DELETE FROM bolt_history h WHERE ${at} AND h.cause<>'erased' AND h.changes - ${historicalFields} = '{}'::jsonb AND ${immediate} AND ${GATED}`
 		);
 	}
 }
@@ -821,12 +822,17 @@ export function historyPiece(
 		`history_${source}`,
 		`INSERT INTO bolt_history (collection, record, revision, at, actor, op, cause, changes, restored_from, request, operation, meta)
 	SELECT x.c, x.id::uuid, x.revision, x.at, x.actor, x.op, CASE WHEN ${mark} THEN 'restored' ELSE x.cause END,
-		CASE WHEN x.op='create' OR (x.erased AND x.op='update') THEN x.n - ${UNHISTORIED} WHEN x.op='delete' THEN '{}'::jsonb
+		CASE WHEN x.op='create' OR (x.erased AND x.op='update') OR version.full THEN x.n - ${UNHISTORIED} WHEN x.op='delete' THEN '{}'::jsonb
 		ELSE (SELECT coalesce(jsonb_object_agg(k, v), '{}'::jsonb) FROM jsonb_each(x.n) AS e(k, v)
 			WHERE k NOT IN ('revision', 'updated_at', 'updated_by') AND k <> ALL (${UNHISTORIED}) AND x.o->k IS DISTINCT FROM v) END,
 		CASE WHEN ${mark} THEN ${from} END, ${request}, nullif(current_setting('bolt.audit',true),''),
-		jsonb_build_object('id',x.id,'revision',coalesce(x.n,x.o)->'revision','updated_at',coalesce(x.n,x.o)->'updated_at','updated_by',coalesce(x.n,x.o)->'updated_by','created_at',coalesce(x.n,x.o)->'created_at','created_by',coalesce(x.n,x.o)->'created_by')
-	FROM ${source} x WHERE x.id::text ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'`
+		jsonb_build_object('id',x.id,'revision',coalesce(x.n,x.o)->'revision','updated_at',coalesce(x.n,x.o)->'updated_at','updated_by',coalesce(x.n,x.o)->'updated_by','created_at',coalesce(x.n,x.o)->'created_at','created_by',coalesce(x.n,x.o)->'created_by','schema',version.schema,'full',version.full)
+	FROM ${source} x CROSS JOIN LATERAL (SELECT current.schema::text AS schema,
+		x.op='update' AND current.schema IS NOT NULL AND NOT EXISTS (SELECT 1 FROM bolt_history h
+		WHERE h.collection=x.c AND h.record::text=x.id AND h.meta->>'schema'=current.schema::text
+		AND coalesce(h.meta->>'legacy','false')<>'true') AS full
+		FROM (SELECT (SELECT schema FROM bolt_history_current WHERE model=x.c AND active) AS schema) current) version
+	WHERE x.id::text ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'`
 	);
 }
 export const CommitAnswer = Schema.Struct({

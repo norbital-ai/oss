@@ -356,6 +356,13 @@ const lift = (call: Call, raw: unknown): unknown => {
 					document: cross('convert.document', 'facility'),
 					ingest: cross('convert.ingest', 'facility')
 				},
+				browser: {
+					navigate: cross('browser.navigate', 'facility'),
+					snapshot: cross('browser.snapshot', 'facility'),
+					act: cross('browser.act', 'facility'),
+					evaluate: cross('browser.evaluate', 'facility'),
+					close: cross('browser.close', 'facility')
+				},
 				ai: {
 					sys_1: { decide: cross('ai.sys_1.decide', 'facility') },
 					sys_2: { infer: cross('ai.sys_2.infer', 'facility') },

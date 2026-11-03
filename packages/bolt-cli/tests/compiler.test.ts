@@ -8,7 +8,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect } from 'vitest';
 import { it } from '@effect/vitest';
-import { discover } from '../src/compiler/discover.ts';
+import { discover, sourcePath } from '../src/compiler/discover.ts';
 import { LAYOUT_HELP } from '../../bolt/src/decl/layout.ts';
 import { buildPacks, seedRows } from '../src/compiler/artifact/seed.ts';
 import type { CheckDiagnostic } from '../src/compiler/check/index.ts';
@@ -22,6 +22,103 @@ const fixture = (name: string) =>
 	fileURLToPath(new URL(`../../bolt/tests/fixtures/${name}`, import.meta.url));
 const BOLT = '../../../../src/index.ts'; // src as seen from a fixture's .norbital/
 describe('next compiler: discover', () => {
+	it.live(
+		'loads nested model folders by leaf identity, with parent models and sibling representations',
+		() =>
+			Effect.gen(function* () {
+				const root = yield* scratchPath(`compiler-nested-models-${randomUUID()}`);
+				const write = (path: string, text: string) => {
+					mkdirSync(dirname(join(root, path)), { recursive: true });
+					writeFileSync(join(root, path), text);
+				};
+				const folders = [
+					'jurisdiction_settings',
+					'jurisdiction_settings/leave_catalog',
+					'jurisdiction_settings/leave_catalog/leave_catalog_entry',
+					'payroll/payroll_run'
+				];
+				try {
+					write('src/+workspace.ts', "export default { tz: 'UTC', locale: 'en' };");
+					for (const folder of folders)
+						write(
+							`src/data/model/${folder}/+model.ts`,
+							`export default { name: '${folder.split('/').at(-1)}', spec: {
+							description: 'Nested model', label: 'name', fields: { name: { kind: 'text' } }, read: 'all'
+						} };`
+						);
+					const representation =
+						'src/data/model/jurisdiction_settings/leave_catalog/leave_catalog_entry/+representation.svelte';
+					write(representation, '<p>entry</p>');
+					write('seed/public/catalogue/leave_catalog_entry.json', '[]');
+					const { files, errors } = yield* discover(root);
+					expect(errors).toEqual([]);
+					expect(files.filter((file) => file.role === 'model')).toEqual(
+						folders.map((folder) => ({
+							role: 'model',
+							name: folder.split('/').at(-1),
+							path: `src/data/model/${folder}/+model.ts`
+						}))
+					);
+					expect(sourcePath('model', 'payroll_run', files)).toBe(
+						'src/data/model/payroll/payroll_run/+model.ts'
+					);
+					expect(sourcePath('model', 'payroll_run')).toBe('src/data/model/payroll_run/+model.ts');
+					const loaded = yield* load(root, files);
+					expect(loaded.errors).toEqual([]);
+					expect(manifestErrors(loaded.manifest, 'workspace', files)).toEqual([]);
+					expect(loaded.manifest.representation.leave_catalog_entry).toBe(representation);
+					expect(Object.keys(engineManifest(loaded.manifest).models).sort()).toEqual(
+						folders.map((folder) => folder.split('/').at(-1)).sort()
+					);
+					const index = namesIndex(files, loaded.manifest);
+					expect(index).toContain('"leave_catalog_entry": {');
+					expect(index).not.toContain('"jurisdiction_settings/leave_catalog');
+					write('src/automation/+payroll_run.automation.ts', 'export default {};');
+					expect((yield* discover(root)).errors.map((error) => error.code)).toEqual([
+						'discover/name-clash'
+					]);
+				} finally {
+					rmSync(root, { recursive: true, force: true });
+				}
+			}).pipe(Effect.provide(NodeServices.layer))
+	);
+	it.live('preserves model layout guards across grouping folders', () =>
+		Effect.gen(function* () {
+			for (const { paths, codes } of [
+				{
+					paths: [
+						'payroll/entries/+model.ts',
+						'payroll/entries/+representation.svelte',
+						'rules/entries/+model.ts',
+						'rules/entries/+representation.svelte'
+					],
+					codes: ['discover/duplicate-declaration', 'discover/name-clash']
+				},
+				{
+					paths: ['payroll/entries/+model.ts', 'rules/entries/+representation.svelte'],
+					codes: ['discover/representation-without-model']
+				},
+				{ paths: ['payroll/sys_thing/+model.ts'], codes: ['discover/reserved-name'] },
+				{ paths: ['payroll/bolt_thing/+model.ts'], codes: ['discover/reserved-name'] },
+				{ paths: ['Bad/entries/+model.ts'], codes: ['discover/bad-name'] },
+				{ paths: ['payroll/Entries/+model.ts'], codes: ['discover/bad-name'] }
+			]) {
+				const root = yield* scratchPath(`compiler-nested-guards-${randomUUID()}`);
+				try {
+					mkdirSync(join(root, 'src'), { recursive: true });
+					writeFileSync(join(root, 'src/+workspace.ts'), 'export default {};');
+					for (const path of paths) {
+						const file = join(root, 'src/data/model', path);
+						mkdirSync(dirname(file), { recursive: true });
+						writeFileSync(file, 'export default {};');
+					}
+					expect((yield* discover(root)).errors.map((error) => error.code)).toEqual(codes);
+				} finally {
+					rmSync(root, { recursive: true, force: true });
+				}
+			}
+		}).pipe(Effect.provide(NodeServices.layer))
+	);
 	it.live('discovers model folders and policies', () =>
 		Effect.gen(function* () {
 			const root = yield* scratchPath(`compiler-layout-${randomUUID()}`);
@@ -198,6 +295,36 @@ describe('next compiler: discover', () => {
 	);
 });
 describe('next compiler: load', () => {
+	it.live('reports nested model name and reserved-field failures at their actual source path', () =>
+		Effect.gen(function* () {
+			const root = yield* scratchPath(`compiler-nested-load-${randomUUID()}`);
+			const file = 'src/data/model/payroll/entries/+model.ts';
+			try {
+				mkdirSync(dirname(join(root, file)), { recursive: true });
+				writeFileSync(join(root, 'src/+workspace.ts'), 'export default {};');
+				writeFileSync(
+					join(root, file),
+					"export default { name: 'payroll_entries', spec: { fields: { revision: { kind: 'number' } }, table: 'entries' } };"
+				);
+				const { files, errors } = yield* discover(root);
+				expect(errors).toEqual([]);
+				const loaded = yield* load(root, files);
+				expect(loaded.errors).toEqual([]);
+				expect(
+					manifestErrors(loaded.manifest, 'workspace', files).map(({ code, path }) => ({
+						code,
+						path
+					}))
+				).toEqual([
+					{ code: 'load/name-path', path: file },
+					{ code: 'load/reserved-field', path: file },
+					{ code: 'load/system-only', path: file }
+				]);
+			} finally {
+				rmSync(root, { recursive: true, force: true });
+			}
+		}).pipe(Effect.provide(NodeServices.layer))
+	);
 	it.live('validates source team composition and hierarchy independently of display labels', () =>
 		Effect.gen(function* () {
 			const root = yield* scratchPath(`compiler-source-access-${randomUUID()}`);
@@ -506,7 +633,12 @@ describe('next compiler: datatypes named in a seeded JSON Schema', () => {
 					loaded = yield* load(root, found.files);
 				expect([...found.errors, ...loaded.errors]).toEqual([]);
 				const errors: CheckDiagnostic[] = [];
-				yield* buildPacks(root, engineManifest(loaded.manifest), join(root, '.norbital/seed'), errors);
+				yield* buildPacks(
+					root,
+					engineManifest(loaded.manifest),
+					join(root, '.norbital/seed'),
+					errors
+				);
 				return errors.map((e) => `${e.code} ${e.message}`);
 			} finally {
 				rmSync(root, { recursive: true, force: true });
@@ -522,7 +654,9 @@ describe('next compiler: datatypes named in a seeded JSON Schema', () => {
 			const [error, ...rest] = yield* packErrors(schemaOf({ ...period, format: 'periodd' }));
 			expect(rest).toEqual([]);
 			expect(error).toContain('seed/datatype');
-			expect(error).toContain("forms[0].schema /properties/range: format 'periodd' names no datatype");
+			expect(error).toContain(
+				"forms[0].schema /properties/range: format 'periodd' names no datatype"
+			);
 		})
 	);
 	it.live('a field naming a datatype in another shape fails the build with the difference', () =>

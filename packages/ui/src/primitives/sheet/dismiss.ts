@@ -2,11 +2,11 @@
 // topmost open sheet) or its close button. A drawer also closes once its user navigates.
 
 /**
- * A sheet's close guard: a form inside registers whether it holds unsaved changes (`register(dirty)` returns the
- * unregister). Closing a sheet with any registered form dirty asks first, so one Esc never drops a draft.
+ * A sheet's close guard: a form registers whether it holds unsaved changes and how to discard them. Closing a
+ * sheet with any registered form dirty asks first; confirming discards those drafts before closing.
  */
 export const SHEET_GUARD = Symbol.for('ui.sheet.guard');
-export type SheetGuard = (dirty: () => boolean) => () => void;
+export type SheetGuard = (dirty: () => boolean, discard: () => void) => () => void;
 
 /** Open sheets, innermost last; Esc closes only the last. */
 export const openSheets: object[] = [];

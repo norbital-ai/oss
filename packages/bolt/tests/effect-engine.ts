@@ -9,6 +9,7 @@ import { off } from '../src/facilities/index.ts';
 import type { EngineManifest } from '../src/engine/manifest.ts';
 import { Activation } from '../src/engine/services.ts';
 import {
+	Browser,
 	Convert,
 	DeadlinePort,
 	Drivers,
@@ -29,6 +30,10 @@ import { EngineLive } from '../src/engine/host.ts';
 import { memoryAudit } from '../../bolt-cli/src/test/index.ts';
 import type { GuestProgram } from '../src/engine/guest/runner.ts';
 
+export const browserProbe = {
+	calls: [] as { profile: string; url: string }[],
+	closes: [] as string[]
+};
 /**
  * A bare engine's host: the shared facility adapters over an in-memory audit and refusing members, everything optional
  * `off`. Merge a service after it to replace one (`Layer.merge(bareHost(db), Layer.succeed(Ai, ai))`).
@@ -61,6 +66,27 @@ export const bareHost = (db: TenantDbShape, options: { readonly guest?: GuestPro
 				Docs.fromAbi(ports.docs),
 				Mcp.fromAbi(ports.mcp),
 				Convert.fromAbi(off),
+				Browser.fromAbi({
+					navigate: async (profile, to) => {
+						const url = 'url' in to ? to.url : to.go;
+						browserProbe.calls.push({ profile, url });
+						return { url };
+					},
+					snapshot: async () => null,
+					act: async () => null,
+					evaluate: async () => null,
+					screenshot: async () => new Uint8Array(),
+					download: async () => ({
+						key: 'k',
+						sha256: 's',
+						name: 'file',
+						mime: 'image/png',
+						bytes: 1
+					}),
+					close: async (profile) => {
+						browserProbe.closes.push(profile);
+					}
+				}),
 				WebRead.fromAbi(off),
 				Geo.fromAbi(off),
 				Drivers.fromAbi(off),

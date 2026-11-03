@@ -49,6 +49,7 @@ export type ReadIR =
 			readonly id: string;
 			readonly at?: HistoryAt | undefined;
 			readonly full?: true | undefined;
+			readonly view?: true | undefined;
 	  }
 	/** A read request: each root's read, answered together in one crossing, the answer keyed by root. */
 	| { readonly kind: 'request'; readonly roots: readonly RequestRoot[] }
@@ -399,7 +400,10 @@ export function decodeRead(
 				// `output` names the reader's view, as a request root's does
 				const { output, ...options } = object(a);
 				return typeof output === 'string'
-					? { ...storeSync(aggregate(storeSync(catalogFor(cat, model, output)), model, options)), output }
+					? {
+							...storeSync(aggregate(storeSync(catalogFor(cat, model, output)), model, options)),
+							output
+						}
 					: storeSync(aggregate(cat, model, options));
 			}
 			case 'similar':
@@ -419,12 +423,16 @@ export function decodeRead(
 			}
 			case 'history': {
 				// the third argument is `{ at?, output? }`, or (from older pages) the `at` value itself
-				const options: { readonly at?: Json | undefined; readonly output?: Json | undefined } =
-					Predicate.isObject(b) && ('at' in b || 'output' in b) ? b : { at: b };
+				const options: {
+					readonly at?: Json | undefined;
+					readonly output?: Json | undefined;
+					readonly view?: Json | undefined;
+				} = Predicate.isObject(b) && ('at' in b || 'output' in b || 'view' in b) ? b : { at: b };
 				return {
 					kind: 'history',
 					model,
 					id: String(a),
+					...(options.view === true ? { view: true } : {}),
 					...(options.at == null ? {} : { at: historyAt(options.at) }),
 					...(typeof options.output === 'string' ? { output: options.output } : {})
 				};

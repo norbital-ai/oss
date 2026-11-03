@@ -15,7 +15,7 @@ import {
 } from '../src/engine/decisions/index.ts';
 import { Facilities, Manifest, Decisions } from '../src/engine/services.ts';
 import { TenantDb } from '../src/engine/db/tenant-db.ts';
-import { Ai, Convert, Files, Geo, Images, Logs, Speech, WebRead } from '../src/engine/ports.ts';
+import { Ai, Browser, Convert, Files, Geo, Images, Logs, Speech, WebRead } from '../src/engine/ports.ts';
 import { off } from '../src/facilities/index.ts';
 import { imagesPort } from '../src/node/images.ts';
 import { refusedFiles } from './support/refused.ts';
@@ -66,6 +66,7 @@ it.effect(
 			Files.fromAbi(refusedFiles),
 			Images.fromAbi(imagesPort),
 			Convert.fromAbi(off),
+			Browser.fromAbi(off),
 			Speech.fromAbi(off),
 			Geo.fromAbi(off),
 			WebRead.fromAbi(off)
@@ -114,6 +115,7 @@ it.effect('web.read keeps raw options across the facility dispatch boundary', ()
 		Files.fromAbi(refusedFiles),
 		Images.fromAbi(imagesPort),
 		Convert.fromAbi(off),
+		Browser.fromAbi(off),
 		Speech.fromAbi(off),
 		Ai.fromAbi({ system1: off, system2: off, embed: off }),
 		Geo.fromAbi(off),
@@ -240,6 +242,7 @@ it.effect(
 			Files.fromAbi(refusedFiles),
 			Images.fromAbi(imagesPort),
 			Convert.fromAbi(off),
+			Browser.fromAbi(off),
 			Speech.fromAbi(off),
 			Geo.fromAbi(off),
 			WebRead.fromAbi(off)

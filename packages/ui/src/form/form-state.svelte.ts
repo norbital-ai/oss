@@ -543,6 +543,7 @@ export class FormState {
 		);
 	}
 	reset(): void {
+		this.#key = crypto.randomUUID();
 		this.values = { ...this.base };
 		this.errors = new Map();
 		this.notice = null;
@@ -559,7 +560,13 @@ export class FormState {
 	#clearStorage(): void {
 		if (this.#storageKey === undefined) return;
 		try {
-			this.#storage()?.removeItem(this.#storageKey);
+			const storage = this.#storage();
+			if (storage === null) return;
+			storage.removeItem(this.#storageKey);
+			for (let i = storage.length - 1; i >= 0; i--) {
+				const key = storage.key(i);
+				if (key?.startsWith(`${this.#storageKey}/`)) storage.removeItem(key);
+			}
 		} catch {
 			// storage denied: nothing to clear
 		}

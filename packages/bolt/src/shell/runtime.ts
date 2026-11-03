@@ -54,7 +54,7 @@ import {
 } from './api-types.ts';
 import { browserTransport } from '../protocol/client.ts';
 import { ProtocolFailed, TransportFailed } from '../decl/errors.ts';
-import { ActReply, WireError } from '../protocol/schema.ts';
+import { ActReply, WireError, type PageResult } from '../protocol/schema.ts';
 import { AuditPage, AuditRecord } from '../protocol/audit.ts';
 import { based, base, href, SHELL, VISITOR_APP, type ShellBoot } from './nav.ts';
 
@@ -327,6 +327,10 @@ export function shellApi(
 					...(attachments.length === 0 ? {} : { attachments: [...attachments] }),
 					...(mode === undefined ? {} : { mode })
 				}),
+			pageResult: (message: string, result: PageResult) =>
+				act('sys_message.pageResult', { message, result }),
+			claimPageAction: (message: string) =>
+				act('sys_message.claimPageAction', { message }),
 			/** hook:attachments — one panel attachment to `/__bolt/files/sys_conversation.inputs`: its `FileRef`, or the refusal. */
 			upload: (file: File) =>
 				transport

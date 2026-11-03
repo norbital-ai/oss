@@ -24,6 +24,13 @@ import { configurationDefaults } from '../../decl/runtime/integration.ts';
 import { definitionOf } from '../integrations/instances.ts';
 import { engineObjects } from './engine.ts';
 import { auditTriggers } from './audit.ts';
+import {
+	historySchemaObjects,
+	HISTORY_SCHEMA_TABLES,
+	HISTORY_SCHEMA_REGISTER,
+	HISTORY_SCHEMA_MATCH,
+	HISTORY_SCHEMA_PURGE
+} from './history.ts';
 
 /** What the database depends on: the fingerprint is over exactly this (rule 69). */
 export const SchemaSliceSchema = Schema.Struct({
@@ -114,6 +121,7 @@ function connectionsObject(s: SchemaSlice): readonly SchemaObject[] {
 export const engineBeside = (s: SchemaSlice): readonly SchemaObject[] => [
 	...connectionsObject(s),
 	...engineObjects(),
+	...historySchemaObjects(s.tables, s.currency),
 	...auditTriggers(s.tables)
 ];
 
@@ -132,7 +140,10 @@ export const readApplied = Effect.fn('Bolt.readApplied')(function* (db: TenantDb
 export const plan = (
 	applied: SchemaSlice | null,
 	next: EngineManifest | SchemaSlice
-): Effect.Effect<Plan & { readonly slice: SchemaSlice }, BoltError> => {
+): Effect.Effect<
+	Plan & { readonly slice: SchemaSlice; readonly historyBefore: SchemaSlice | null },
+	BoltError
+> => {
 	const slice = 'workspace' in next ? schemaSlice(next) : next;
 	return storePlan(
 		applied === null ? null : { ...applied, tables: managedTables(applied.tables) },
@@ -143,7 +154,8 @@ export const plan = (
 			...p,
 			from: applied === null ? null : fingerprint(applied),
 			to: fingerprint(slice),
-			slice
+			slice,
+			historyBefore: applied
 		})),
 		Effect.mapError(fromStore)
 	);
@@ -171,7 +183,7 @@ type ApplyOptions = {
 export const applyPlan = /*#__PURE__*/ (() =>
 	Effect.fn('Bolt.applyPlan')(function* (
 		db: TenantDbShape,
-		p: Plan & { readonly slice: SchemaSlice },
+		p: Plan & { readonly slice: SchemaSlice; readonly historyBefore?: SchemaSlice | null },
 		options: ApplyOptions = {}
 	) {
 		const refused = unaccepted(p, options.accept);
@@ -195,7 +207,23 @@ export const applyPlan = /*#__PURE__*/ (() =>
 			end if;
 		end`)
 		];
-		for (const s of statements(p, [...engineObjects(), ...auditTriggers(p.slice.tables)])) {
+		if (p.historyBefore !== undefined && p.historyBefore !== null) {
+			for (const text of [
+				...HISTORY_SCHEMA_TABLES,
+				HISTORY_SCHEMA_REGISTER,
+				HISTORY_SCHEMA_MATCH,
+				HISTORY_SCHEMA_PURGE,
+				...historySchemaObjects(p.historyBefore.tables, p.historyBefore.currency).flatMap(
+					(o) => o.create
+				)
+			])
+				sql.push({ text, params: [] });
+		}
+		for (const s of statements(p, [
+			...engineObjects(),
+			...historySchemaObjects(p.slice.tables, p.slice.currency),
+			...auditTriggers(p.slice.tables)
+		])) {
 			if (s.violations !== undefined)
 				sql.push(
 					block(`declare n bigint; begin

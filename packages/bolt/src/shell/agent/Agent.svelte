@@ -69,12 +69,19 @@
 	import StudioResult from './StudioResult.svelte';
 	import MadeFiles from './MadeFiles.svelte';
 	import PreviewFrame from '../preview/PreviewFrame.svelte';
-	import { attention, NORBIUS_CHIME, type Chime } from './chime.ts';
+	import { attention } from './chime.ts';
+	import { SOUNDS, type Sounds } from '../sounds.ts';
 	import { CLIENT_NAVIGATION, navigationEvents, type ClientNavigation } from './navigation.ts';
+	import {
+		CLIENT_PAGE_ACTION,
+		pageActions,
+		pageConversationStarted,
+		type ClientPageAction
+	} from './navigation.ts';
 	import { studioEvents } from '../studio/events.ts';
 	import { commandKey, shortcutLabel } from '../keyboard.ts';
 	import { recordMentions } from '../finder/model.ts';
-	import type { NavNode } from '../nav.ts';
+	import { based, type NavNode } from '../nav.ts';
 	import type { ManifestItem } from '../finder/manifest.ts';
 	import {
 		background,
@@ -338,10 +345,12 @@
 	let focus = $state<string | null>(null);
 	const current = $derived(list.find((c) => c.id === conversation));
 	const status = $derived(current?.status ?? 'idle');
-	const chime = getContext<Chime | undefined>(NORBIUS_CHIME);
+	const chime = getContext<Sounds | undefined>(SOUNDS);
 	const attentionOf = attention();
 	const clientNavigation = getContext<ClientNavigation | undefined>(CLIENT_NAVIGATION);
+	const clientPageAction = getContext<ClientPageAction | undefined>(CLIENT_PAGE_ACTION);
 	const navigationsOf = navigationEvents();
+	const pageActionsOf = pageActions();
 	watch(
 		[() => conversation, () => status, () => live, () => edge !== null],
 		([id, state, transcript, ready]) => {
@@ -349,6 +358,9 @@
 			if (kind !== null) chime?.play(kind);
 			for (const path of navigationsOf(ready ? id : null, transcript)) {
 				if (id !== null) clientNavigation?.open(path, id);
+			}
+			for (const item of pageActionsOf(id, transcript)) {
+				if (id !== null && !thread) clientPageAction?.run(item.action, id, item.id);
 			}
 		}
 	);
@@ -568,6 +580,7 @@
 					id = decoded.success.id;
 					const startedId = id;
 					yield* Effect.sync(() => {
+						pageConversationStarted(startedId);
 						conversation = startedId;
 						picked = null;
 					});
@@ -1304,6 +1317,32 @@
 	const quiet = $derived(
 		status === 'running' && !rows.some((r) => r.state === 'streaming' || r.state === 'running')
 	);
+	/** The "Open page" row's link is the URL the person shares, not the logical path it shows. */
+	let copiedNavigation = $state<string | null>(null);
+	function copyNavigation(path: string): void {
+		const clipboard = navigator.clipboard;
+		if (clipboard === undefined) return;
+		const url = new URL(based(path), location.href).href;
+		dispatch(
+			Effect.tryPromise({
+				try: () => clipboard.writeText(url),
+				catch: (cause) =>
+					new AgentPanelFailed({ message: t('The link could not be copied.'), cause })
+			}).pipe(
+				Effect.tap(() =>
+					Effect.sync(() => {
+						copiedNavigation = path;
+					})
+				),
+				Effect.andThen(Effect.sleep('1500 millis')),
+				Effect.ensuring(
+					Effect.sync(() => {
+						if (copiedNavigation === path) copiedNavigation = null;
+					})
+				)
+			)
+		);
+	}
 	/** Each code block of a reply gets a copy button (the Markdown renders plain `pre`; this re-adds it after each render). */
 	function copyable(el: HTMLElement): () => void {
 		const add = () => {
@@ -2240,16 +2279,30 @@
 											{#if !thread && st.tool?.navigation !== undefined && clientNavigation !== undefined && conversation !== null}
 												{@const path = st.tool.navigation}
 												{@const id = conversation}
-												<Button
-													variant="outline"
-													class="my-2 w-full justify-start gap-2"
-													onclick={() => clientNavigation.open(path, id)}
-												>
-													<Icon name="lucide:arrow-up-right" class="size-4" />
-													<span>{t('Open page')}</span><span
-														class="ml-auto truncate text-xs text-muted-foreground">{path}</span
+												<div class="group/nav relative my-2">
+													<Button
+														variant="outline"
+														class="w-full justify-start gap-2 pr-10"
+														onclick={() => clientNavigation.open(path, id)}
 													>
-												</Button>
+														<Icon name="lucide:arrow-up-right" class="size-4" />
+														<span>{t('Open page')}</span><span
+															class="ml-auto truncate text-xs text-muted-foreground">{path}</span
+														>
+													</Button>
+													<button
+														type="button"
+														class="absolute top-1/2 right-2 grid size-6 -translate-y-1/2 place-items-center rounded-sm text-muted-foreground opacity-0 transition-opacity group-hover/nav:opacity-100 hover:bg-muted hover:text-foreground focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none [@media(hover:none)]:opacity-100"
+														aria-label={t('Copy')}
+														title={t('Copy')}
+														onclick={() => copyNavigation(path)}
+													>
+														<Icon
+															name={copiedNavigation === path ? 'lucide:check' : 'lucide:copy'}
+															class="size-3.5"
+														/>
+													</button>
+												</div>
 											{/if}
 											{#if !thread && st.tool?.approval !== undefined}
 												<!-- a live change the host holds for the person: approved here, it runs as them -->

@@ -479,8 +479,8 @@ export type Ingested =
 	  };
 /**
  * File ingestion (plan 12) behind the agent's `ingest` and `ctx.convert.ingest`: one file to `Ingested`, or
- * `unsupported` (the format has no parser: video, CAD). `documentIngester` implements it over Norbital Convert's
- * `/v1/ingest`; a converter without a transcription model rejects audio as `unavailable`.
+ * `unsupported` (the format has no parser: CAD). A video container is heard from its audio track.
+ * `documentIngester` implements it over Norbital Convert's `/v1/ingest`; a converter without a transcription model rejects audio as `unavailable`.
  */
 export interface IngestPort {
 	ingest(
@@ -621,6 +621,18 @@ export type BrowserViewport = {
 	height: number;
 	deviceScaleFactor?: number;
 };
+/** A workspace page the agent's browser opens: `live`, or a preview environment by its name. */
+export type BrowserWorkspaceTarget = {
+	readonly environment: string;
+	readonly path?: string;
+	readonly device?: 'desktop' | 'tablet' | 'phone';
+};
+/** Who a workspace page is opened for: the person, the conversation, and the agent's mark when it has one. */
+export type BrowserCaller = {
+	readonly actor: EngineActor;
+	readonly conversation: string;
+	readonly agent?: { readonly conversation: string };
+};
 export interface BrowserPort {
 	navigate(
 		profile: string,
@@ -629,6 +641,18 @@ export interface BrowserPort {
 		signal: AbortSignal,
 		viewport?: BrowserViewport
 	): Promise<Json>;
+	/**
+	 * Open a page of the workspace as the person, signed in by the host's hand-off: the internal twin of `navigate`.
+	 * A host that cannot sign its browser in omits it, and the agent is not offered workspace pages.
+	 */
+	openWorkspace?(
+		profile: string,
+		target: BrowserWorkspaceTarget,
+		caller: BrowserCaller,
+		signal: AbortSignal
+	): Promise<Json>;
+	/** Close this profile's tab and release its page resources; its sealed sign-ins stay for the next open. */
+	close?(profile: string, signal: AbortSignal): Promise<void>;
 	snapshot(
 		profile: string,
 		options: { find?: string; from?: number },

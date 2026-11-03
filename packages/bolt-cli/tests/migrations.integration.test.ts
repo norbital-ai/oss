@@ -3,16 +3,32 @@ import { join } from 'node:path';
 import * as NodeServices from '@effect/platform-node/NodeServices';
 import { describe, expect, it } from '@effect/vitest';
 import { Effect, FileSystem, Schema } from 'effect';
-import { APPLIED, AppliedRow, checksumOf } from '@norbital-ai/store';
+import {
+	APPLIED,
+	AppliedRow,
+	checksumOf,
+	generate,
+	executable,
+	MIGRATIONS_TABLE,
+	recordApplied
+} from '@norbital-ai/store';
 import { Decimal } from '@norbital-ai/std/decimal';
 import { scratchPath } from '../../../scripts/lib/scratch.ts';
 import { prepareMigrations } from '../src/compiler/migrations.ts';
-import { applyMigrations, readMigrations } from '../../bolt/src/engine/schema/migrations.ts';
+import {
+	applyMigrations,
+	readMigrations,
+	migrationSchema
+} from '../../bolt/src/engine/schema/migrations.ts';
+import { sourceObjects } from '../../bolt/src/engine/schema/engine.ts';
+import { auditTriggers } from '../../bolt/src/engine/schema/audit.ts';
 import { PgliteDb } from '../../bolt/src/node/db/pglite.ts';
 import { TestDb } from '../src/test/database.ts';
 import type { TenantDbShape } from '../../bolt/src/engine/db/tenant-db.ts';
 import type { EngineManifest } from '../../bolt/src/engine/manifest.ts';
 import { manifest } from '../../bolt/tests/engine-fixture.ts';
+import { readHistory } from '../../bolt/src/engine/query/history.ts';
+import { HistorySnapshotSchema } from '../../bolt/src/protocol/record-contracts.ts';
 
 const initial: EngineManifest = {
 	...manifest,
@@ -51,6 +67,130 @@ const receipts = (db: TenantDbShape) =>
 // Squash history, `was` renames, drift, snapshot and checksum refusals are Store's (store/tests/migration-history,
 // migrate); this file owns Bolt's edge: generated editable source and its application to a live database.
 describe('committed workspace migrations', () => {
+	it.live('upgrades the legacy audit body before schema backfills write history', () =>
+		Effect.scoped(
+			Effect.gen(function* () {
+				const fs = yield* FileSystem.FileSystem;
+				const db = PgliteDb.make(yield* TestDb.open());
+				const directory = yield* root;
+				const source = join(directory, 'migrations');
+				const legacy = yield* generate(
+					null,
+					migrationSchema(initial),
+					{ number: 1, name: 'initial' },
+					(schema) => [
+						...sourceObjects()
+							.filter(
+								(object) =>
+									!['engine:bolt_history_register', 'engine:bolt_history_schemas'].includes(
+										object.id
+									)
+							)
+							.map((object) => ({
+								...object,
+								create: object.create.map((sql) =>
+									sql
+										.replace(
+											/\t\tif to_regclass\('bolt_history_current'\)[\s\S]*?\t\tend if;\n/,
+											''
+										)
+										.replace(
+											/\t\tif operation='update' and schema_version[\s\S]*?\t\tend if;\n/,
+											''
+										)
+								)
+							})),
+						...auditTriggers(schema.tables)
+					]
+				);
+				yield* fs.makeDirectory(source, { recursive: true });
+				yield* fs.writeFileString(join(source, legacy.file.name), legacy.file.sql);
+				yield* fs.writeFileString(join(source, 'snapshot.json'), legacy.snapshot);
+				yield* db.transaction({
+					statements: [
+						{ text: MIGRATIONS_TABLE, params: [] },
+						{ text: executable(legacy.file), params: [] },
+						recordApplied(legacy.file)
+					]
+				});
+				yield* db.write({ text: "insert into entry(id,name) values($1,'Before')", params: [ID] });
+				yield* prepareMigrations(directory, extended, 'generate');
+				const next = (yield* readMigrations(source)).files[1];
+				if (next === undefined) return yield* Effect.die('schema migration missing');
+				yield* fs.writeFileString(
+					join(source, next.name),
+					`${next.sql}\nupdate entry set name='Backfilled';\n`
+				);
+				yield* prepareMigrations(directory, extended, 'generate');
+				yield* applyMigrations(db, extended, yield* readMigrations(source));
+				expect(
+					yield* db.rows(Schema.Struct({ version: Schema.String, full: Schema.Boolean }), {
+						text: "select meta->>'schema' as version,(meta->>'full')::boolean as full from bolt_history where collection='entry' and revision=2",
+						params: []
+					})
+				).toEqual([{ version: expect.any(String), full: true }]);
+				expect(yield* fs.readFileString(join(source, legacy.file.name))).toBe(legacy.file.sql);
+			})
+		).pipe(Effect.provide(NodeServices.layer))
+	);
+	it.live(
+		'appends schema versions in sequential SQL without changing applied migration files',
+		() =>
+			Effect.scoped(
+				Effect.gen(function* () {
+					const fs = yield* FileSystem.FileSystem;
+					const db = PgliteDb.make(yield* TestDb.open());
+					const directory = yield* root;
+					const source = join(directory, 'migrations');
+					yield* prepareMigrations(directory, initial, 'generate');
+					const original = (yield* readMigrations(source)).files[0];
+					if (original === undefined) return yield* Effect.die('initial migration missing');
+					yield* applyMigrations(db, initial, yield* readMigrations(source));
+					yield* db.write({
+						text: 'insert into entry(id,name) values($1,$2)',
+						params: [ID, 'Before migration']
+					});
+					const next: EngineManifest = {
+						...initial,
+						models: {
+							entry: {
+								description: 'Entry',
+								label: 'title',
+								fields: { title: { kind: 'text', was: 'name', label: 'Renamed title' } }
+							}
+						},
+						exposures: { entry: { read: { entry: { fields: 'all' } } } }
+					};
+					yield* prepareMigrations(directory, next, 'generate');
+					expect(yield* fs.readFileString(join(source, original.name))).toBe(original.sql);
+					const bundle = yield* readMigrations(source);
+					expect(bundle.files.map((file) => file.name)).toEqual([
+						'0001_initial.sql',
+						'0002_schema.sql'
+					]);
+					yield* applyMigrations(db, next, bundle);
+					const snapshot = yield* Schema.decodeUnknownEffect(HistorySnapshotSchema)(
+						yield* readHistory(
+							db,
+							next,
+							{
+								kind: 'history',
+								model: 'entry',
+								id: ID,
+								at: { _tag: 'Revision', revision: 1 },
+								view: true
+							},
+							{ as: 'workspace' },
+							{ now: '2026-11-03T00:00:00.000Z', today: '2026-11-03', tz: 'UTC' }
+						)
+					);
+					expect(snapshot.values.name).toBe('Before migration');
+					expect(snapshot.compatible.title).toBe('Before migration');
+					expect(snapshot.legacy).toBe(false);
+					yield* prepareMigrations(directory, next, 'verify');
+				})
+			).pipe(Effect.provide(NodeServices.layer))
+	);
 	it.live('a live-data check rolls back a split and backfill; corrected data retries once', () =>
 		Effect.scoped(
 			Effect.gen(function* () {

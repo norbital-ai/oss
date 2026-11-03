@@ -65,6 +65,7 @@ import {
 import { Unavailable, type FacilityFailure } from '../../decl/errors.ts';
 import { type EngineError } from '../errors.ts';
 import { BoltError } from '../../protocol/errors.ts';
+import type { PageResult } from '../../protocol/schema.ts';
 import { TurnHandlers } from './turns.ts';
 import { attachmentsFor, fileAttachments } from './attachments.ts';
 import { Chain } from '../write/sql.ts';
@@ -2489,6 +2490,34 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 					member
 				)
 			);
+		}),
+		claimPageAction: Effect.fn('Agents.claimPageAction')(function* (messageId: string) {
+			const rows = yield* db.returning(
+				Schema.Struct({ id: Schema.String }).annotate({ identifier: 'sys_message' }),
+				q(
+					`UPDATE sys_message SET content = jsonb_set(content, '{result,pageClaim}', 'true'::jsonb, true)
+					WHERE id = $1 AND role = 'tool' AND content->'result'->'pageClaim' IS NULL
+					RETURNING id`,
+					messageId
+				)
+			);
+			const claimed = rows.length > 0;
+			if (claimed) e.live.syncChanged('sys_message', [messageId]);
+			return claimed;
+		}),
+		pageResult: Effect.fn('Agents.pageResult')(function* (
+			messageId: string,
+			result: PageResult
+		) {
+			yield* db.write(
+				q(
+					`UPDATE sys_message m SET content = jsonb_set(content, '{result,pageResult}', $2::jsonb, true)
+					WHERE m.id = $1 AND m.role = 'tool' AND jsonb_typeof(m.content->'result') = 'object'`,
+					messageId,
+					JSON.stringify(result)
+				)
+			);
+			e.live.syncChanged('sys_message', [messageId]);
 		}),
 		confirm: Effect.fn('Agents.confirm')(function* (
 			messageId: string,

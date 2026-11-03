@@ -66,7 +66,7 @@ import { xlsxOf, type Cell } from '../files/xlsx.ts';
 type Obj = { readonly [field: string]: Json };
 /** The tabular formats an export or template is written in (a calendar is read, never written). */
 type Format = Exclude<BuiltinParser, 'ics'>;
-const FORMATS: readonly Format[] = ['xlsx', 'csv', 'tsv', 'json'];
+const FORMATS: readonly Format[] = ['xlsx', 'csv', 'tsv', 'json', 'txt'];
 /** One file sync: its model, its name and its manifest entry. */
 type Sync = { readonly model: string; readonly sync: string; readonly entry: SyncEntry };
 /** The member running a file sync, and the run's id (the act's key). */
@@ -541,6 +541,8 @@ const cellOf = (v: Json): Cell =>
 		? v
 		: JSON.stringify(v);
 /** Records in one tabular format: a header of the columns' labels (what an import reads back), JSON keyed by name. */
+const scalarText = (value: Json): string => (value == null ? '' : String(databaseValue(value)));
+
 function encode(format: Format, columns: InputFields, records: readonly Obj[]): Uint8Array {
 	const fields = Object.keys(columns);
 	if (format === 'json')
@@ -548,6 +550,12 @@ function encode(format: Format, columns: InputFields, records: readonly Obj[]): 
 			JSON.stringify(
 				records.map((r) => Object.fromEntries(fields.map((f) => [f, databaseValue(r[f] ?? null)])))
 			)
+		);
+	if (format === 'txt')
+		return new TextEncoder().encode(
+			records
+				.map((record) => fields.map((field) => scalarText(record[field] ?? null)).join(''))
+				.join('\n')
 		);
 	const table: Cell[][] = [
 		Object.entries(columns).map(([f, k]) => headerOf(f, k)),

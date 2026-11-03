@@ -261,7 +261,7 @@ describe('Studio outcomes outside the folded steps', () => {
 	// a host's Studio tools by the roles they declare
 	const ROLE = {
 		workspace_validate: 'preview',
-		workspace_view: 'view',
+		browser_navigate: 'view',
 		workspace_logs: 'logs',
 		workspace_publish: 'publish',
 		workspace_rollback: 'rollback'
@@ -304,7 +304,7 @@ describe('Studio outcomes outside the folded steps', () => {
 				step(3, 'workspace_validate', { preview: 'https://b.test/', failed: true }),
 				step(4, 'preview_show', { preview: 'https://evil.test/' }),
 				step(5, 'preview_show', { preview: 'https://a.test/page' }),
-				step(6, 'workspace_view', { about: { ...about, url: 'https://c.test/' } })
+				step(6, 'browser_navigate', { about: { ...about, url: 'https://c.test/' } })
 			]).map((p) => p.url)
 		).toEqual(['https://a.test/', 'https://a.test/page', 'https://c.test/']);
 		// a bundle is its release when the step names one, else the step: the same bundle never reloads the frame

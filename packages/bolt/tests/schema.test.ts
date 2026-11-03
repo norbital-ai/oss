@@ -106,6 +106,7 @@ describe('next schema: fingerprint and plan', () => {
 			)
 		).toEqual({
 			'create:column:signings.nickname': 'additive',
+			'replace:history:schema:signings': 'additive',
 			'replace:trigger:signings.store_row_rules': 'additive'
 		});
 		// the refusal map names what the plan created
@@ -156,6 +157,7 @@ describe('next schema: fingerprint and plan', () => {
 			)
 		).toEqual({
 			'create:column:notes.tag': 'additive',
+			'replace:history:schema:notes': 'additive',
 			'replace:trigger:notes.store_row_rules': 'additive'
 		});
 		expect(
@@ -166,6 +168,7 @@ describe('next schema: fingerprint and plan', () => {
 		).toEqual({
 			'create:column:notes.tag': 'additive',
 			'create:notNull:notes.tag': 'validating',
+			'replace:history:schema:notes': 'additive',
 			'replace:trigger:notes.store_row_rules': 'additive'
 		});
 		expect(
@@ -176,7 +179,10 @@ describe('next schema: fingerprint and plan', () => {
 					fields: { ...notes.fields, body: { kind: 'text', optional: true } }
 				})
 			)
-		).toEqual({ 'drop:notNull:notes.body': 'additive' });
+		).toEqual({
+			'drop:notNull:notes.body': 'additive',
+			'replace:history:schema:notes': 'additive'
+		});
 		expect(
 			classes(
 				s,
@@ -197,7 +203,10 @@ describe('next schema: fingerprint and plan', () => {
 					}
 				})
 			)
-		).toEqual({ 'replace:column:orders.big': 'backfill' });
+		).toEqual({
+			'replace:column:orders.big': 'backfill',
+			'replace:history:schema:orders': 'additive'
+		});
 		// enum → state keeps the text column: only its CHECK and default change
 		const st = classes(
 			s,

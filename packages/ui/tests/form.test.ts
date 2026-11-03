@@ -74,6 +74,43 @@ it.live('a custom create form applies explicit presets over defaults once, prese
 		edited.set('activity', 'ADJUSTMENT');
 		edited.prefill({ activity: 'REVERSAL' });
 		assert.equal(edited.get('activity'), 'ADJUSTMENT');
+		form.set('activity', 'ADJUSTMENT');
+		form.set('original', 'changed');
+		form.reset();
+		assert.equal(form.get('activity'), 'REVERSAL');
+		assert.equal(form.get('original'), 'original-1');
+		assert.equal(form.dirty, false);
+	})
+);
+
+it.live('reset starts a new create request after an unknown outcome', () =>
+	Effect.gen(function* () {
+		const keys: string[] = [];
+		const { bolt } = yield* browser(() =>
+			viewFixture({
+				act: (_callable, _input, options) => {
+					keys.push(options.key);
+					return { kind: 'unknown', invocation: options.key };
+				}
+			})
+		);
+		const form = new FormState(
+			specOf('quotes', exposure, 'create'),
+			null,
+			{ account: 'a1' },
+			bolt.act,
+			text
+		);
+		form.set('title', 'Paint');
+		form.set('total', Decimal.of('10'));
+		assert.equal((yield* form.submit())?.kind, 'unknown');
+		assert.equal((yield* form.submit())?.kind, 'unknown');
+		assert.equal(keys[0], keys[1], 'retry checks the same request');
+		form.reset();
+		form.set('title', 'Paint');
+		form.set('total', Decimal.of('10'));
+		assert.equal((yield* form.submit())?.kind, 'unknown');
+		assert.notEqual(keys[2], keys[0], 'a cleared draft starts a fresh request');
 	})
 );
 
@@ -559,8 +596,26 @@ it.live('a draft survives a reload keyed to the form, and each changed field say
 		const restored = new FormState(spec, null, {}, bolt.act, text, undefined, undefined, key);
 		assert.equal(restored.get('title'), 'Paint');
 		assert.equal(restored.fieldDirty('title'), true);
+		const childKey = form.childStorageKey('lines', 'l1');
+		assert.ok(childKey);
+		const child = new FormState(spec, null, {}, bolt.act, text, undefined, undefined, childKey);
+		child.set('title', 'Unmounted child');
+		const unrelatedKey = `${key}-other`;
+		const unrelated = new FormState(
+			spec,
+			null,
+			{},
+			bolt.act,
+			text,
+			undefined,
+			undefined,
+			unrelatedKey
+		);
+		unrelated.set('title', 'Other draft');
 		restored.reset();
 		assert.equal(localStorage.getItem(key), null);
+		assert.equal(localStorage.getItem(childKey), null, 'unmounted child drafts are cleared too');
+		assert.notEqual(localStorage.getItem(unrelatedKey), null, 'other forms keep their drafts');
 		localStorage.clear();
 	})
 );

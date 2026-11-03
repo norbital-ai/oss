@@ -92,6 +92,11 @@ const callable = (name: string, manifest: EngineManifest) => {
 };
 const Facilities = [
 	'web.read',
+	'browser.navigate',
+	'browser.snapshot',
+	'browser.act',
+	'browser.evaluate',
+	'browser.close',
 	'files.meta',
 	'files.get',
 	'files.url',

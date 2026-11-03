@@ -16,7 +16,7 @@ files with checksums and one transaction per file before activating the release.
 Replay compares the physical columns, constraints, indexes and functions with an independent build of the declared
 schema. Removing an `ADD COLUMN` from edited SQL fails that comparison. The verified lock also binds each migration
 prefix's physical schema; activation refuses live schema drift even when every applied SQL checksum still matches.
-The generated proof stores shared native definitions once and expands each prefix before checking its hash;
+The generated proof stores shared native definitions once, compresses large function bodies, and expands each prefix before checking its hash;
 this reduces artifact reads without changing the verified schema or migration ledger.
 
 Review the operational hazards in each SQL step as well as its data acceptance. Adding a column or constraint takes
@@ -240,8 +240,28 @@ limited; run budgets bound them.
 ## Record history and restore
 
 Every committed write appends to `bolt_history`: one revision per record, with who, when, its
-cause and the fields it changed. `bolt.history(c, id)` lists them; `bolt.history(c, id, { at: { revision } })` lists from one, and a root's `asOf` reads the record as it stood at an instant. Pruning keeps the newest 256 revisions per record and
+cause and the fields it changed. `bolt.history(c, id)` lists them; `bolt.history(c, id, { at: { revision } })` lists through that revision, and a root's `asOf` reads the record as it stood at an instant. Pruning keeps the newest 256 revisions per record and
 folds the rest into a full-row anchor, so every kept revision still rebuilds.
+
+Schema migrations register immutable definitions in `bolt_history_schema`, with an active pointer in
+`bolt_history_current`. Revisions reference their definition in `meta.schema`. Model and field `was`
+hints preserve their identities through renames; removing and later reintroducing a field creates a
+new identity. Original revision payloads retain their old field names. The first update under a new
+definition records a full post-image, so migrated values cannot inherit a stale value from the prior schema.
+
+`bolt.history(c, id, { at: { revision }, view: true })` returns the original field definitions and values,
+the compatible projection into the current schema, and `uncompatible` field names. Built-in record
+history uses that exact revision and displays its original labels and kinds. Removed fields, invalid
+values and unsupported conversions have an **uncompatible** indicator; compatible scalar conversions
+and declared renames restore automatically. Reference retargeting and changed custom field identities
+require manual resolution. Current outputs, history scope and field visibility still apply. Removed
+fields are visible only to administrators reading the default all-fields output.
+
+History captured before this feature has no saved historical definitions. Its earliest known schema
+is attached as a baseline and the UI identifies that limitation; earlier deleted definitions cannot
+be recovered automatically. Current validation still decides which values can be restored. Metadata
+registration is a data step: preserve sequential migration files rather than squashing it into DDL.
+Schema changes wait for affected open approvals and pending erasures to settle.
 
 Three restores, never the same thing:
 
@@ -255,7 +275,7 @@ Per-record restore is two own callables, `history.preview` and `history.restore`
 `{ model, record, revision }` (`bolt.restore.preview` / `bolt.restore.run` in pages). The
 preview lists each field that would change (current and restored value) and each one left alone,
 with its reason: a link whose target was deleted, read-only (integration-owned or the owned
-parent's key), no grant, a locked state move, or a definition that changed. Only the
+parent's key), no grant, a locked state move, or an uncompatible historical value. Only the
 record's own stored columns are restored; computed fields, roll-ups, `seq`, system columns, owned
 children and many-relations are never touched, and a link's target is never written. The restore
 is one ordinary `update` observed at the previewed revision, so a concurrent change is a conflict

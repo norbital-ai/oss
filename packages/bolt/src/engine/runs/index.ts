@@ -47,7 +47,8 @@ import { isTransient, type EngineError } from '../errors.ts';
 import { BoltError } from '../../protocol/errors.ts';
 import { SqlReadCapture, TenantDb, type TenantDbShape } from '../db/tenant-db.ts';
 import { ReadDeps } from '../query/engine.ts';
-import { Ai, Drivers, Logs, RunUnits } from '../ports.ts';
+import { Ai, Browser, Drivers, Logs, RunUnits } from '../ports.ts';
+import { automationBrowserProfile } from '../agent/browser.ts';
 import {
 	Activation,
 	Callables,
@@ -484,6 +485,7 @@ export const RunsLive = Layer.effect(
 			identity = yield* Identity,
 			live = yield* Live,
 			facilities = yield* Facilities,
+			browser = yield* Browser,
 			registry = yield* RunHandlers,
 			deadlines = yield* Deadlines,
 			nudges = yield* Nudges,
@@ -708,6 +710,9 @@ export const RunsLive = Layer.effect(
 			record: Ledger['record']
 		) =>
 			Effect.gen(function* () {
+				// A run's browser tab is its own: closed by this scope on success, failure or interruption.
+				const browseProfile = automationBrowserProfile(run.automation, run.id);
+				yield* browser.scoped(browseProfile).pipe(Effect.catch(() => Effect.void));
 				const cause = yield* Schema.decodeUnknownEffect(
 					Schema.Literals(['cron', 'webhook', 'effect', 'schedule', 'start', 'retry'])
 				)(run.cause).pipe(
@@ -840,6 +845,9 @@ export const RunsLive = Layer.effect(
 				/** A facility call, gated by its `facts`; `key` names an infer's session. */
 				const facility = (call: FacilityCall, facts: CallFacts, key: string) =>
 					Effect.gen(function* (): Effect.fn.Return<CrossAnswer, PortFailure> {
+						const withProfile = call._tag.startsWith('browser.')
+							? { ...call, args: [browseProfile, ...call.args] }
+							: call;
 						if (call._tag === 'ai.sys_1.decide')
 							return yield* facilities.dispatch(call).pipe(
 								Effect.provideService(DecisionTrace, {
@@ -848,7 +856,7 @@ export const RunsLive = Layer.effect(
 									automation: run.automation
 								})
 							);
-						if (call._tag !== 'ai.sys_2.infer') return yield* facilities.dispatch(call);
+						if (call._tag !== 'ai.sys_2.infer') return yield* facilities.dispatch(withProfile);
 						const names = [...new Set(facts.tools ?? [])];
 						const hostTools = agentHost.hostTools;
 						const hosted =

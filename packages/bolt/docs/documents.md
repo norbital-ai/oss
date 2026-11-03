@@ -38,9 +38,9 @@ port, which answers one of two kinds. A `document` (pdf, office, html, text, ima
 element per line; tables keep `colspan`, `rowspan` and nesting; `<section data-page|data-slide>` per page or slide) plus
 its images. `data` (xlsx, xls, ods, csv, tsv, json) is its typed cells, `{ sheets: [{ name, columns, rows, merges?,
 images? }] }` (a `.json` file: its own parsed value), plus its images. Parsing only, never OCR: a scan is its page images.
-Images and plain text are ingested in the engine as themselves; audio goes to the same port, whose diarised transcript is
-one `<section data-speaker data-start data-end><time>…</time> …</section>` per segment. A format with no parser (video,
-CAD) is refused at once. The engine derives a document's index (lines, page and slide counts, the outline with line
+Images and plain text are ingested in the engine as themselves; audio (and a video's audio track) goes to the same port, whose diarised transcript is
+one `<section data-speaker data-start data-end><time>…</time> …</section>` per segment. A format with no parser (CAD)
+is refused at once. The engine derives a document's index (lines, page and slide counts, the outline with line
 ranges — headings, then page, slide and speaker sections —, table count, image names) and a recording's transcript
 (speakers, segments, `durationMs` from the last end) from the HTML.
 

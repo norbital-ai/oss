@@ -40,6 +40,7 @@ const request: Request = {
 	state: 'Pending',
 	step: 0,
 	requestor: 'member:requester',
+	user: 'requester',
 	route: {
 		kind: 'steps',
 		steps: [
@@ -59,6 +60,7 @@ describe('approval flows', () => {
 			record: 'order',
 			action: 'update',
 			requestor: 'member:requester',
+			user: 'requester',
 			step: 0,
 			route: request.route,
 			at: '2026-10-25T00:00:00.000Z',
@@ -119,19 +121,83 @@ describe('approval flows', () => {
 		});
 	});
 	it('allows the named user or current step team, without inheriting parent authority', () => {
-		expect(canApprove(request, actor('manager', 'staff'))).toBe(true);
-		expect(canApprove(request, actor('other', 'finance'))).toBe(false);
-		expect(canApprove({ ...request, step: 1 }, actor('other', 'finance'))).toBe(true);
+		expect(canApprove(request, as('manager', 'staff'))).toBe(true);
+		expect(canApprove(request, as('other', 'finance'))).toBe(false);
+		expect(canApprove({ ...request, step: 1 }, as('other', 'finance'))).toBe(true);
 		expect(
-			canApprove(request, { ...actor('other', 'staff'), teamPath: ['leadership', 'staff'] })
+			canApprove(request, {
+				...as('other', 'staff'),
+				actor: { ...actor('other', 'staff'), teamPath: ['leadership', 'staff'] }
+			})
 		).toBe(false);
 	});
 	it('restricts approval to members and lets an administrator supersede', () => {
-		expect(canApprove(request, { kind: 'system', run: 'run', by: { automation: 'job' } })).toBe(
-			false
-		);
+		expect(
+			canApprove(request, {
+				...as('system', 'staff'),
+				actor: { kind: 'system', run: 'run', by: { automation: 'job' } }
+			})
+		).toBe(false);
 		expect(canSupersede(request, as('leader', 'leadership'))).toBe(true);
 		expect(canSupersede(request, as('admin', 'staff', true))).toBe(true);
+	});
+	it('excludes the requester even when named, in the reviewing team, or allowed to supersede', () => {
+		const mine: Request = {
+			...request,
+			route: {
+				...request.route,
+				steps: [{ name: 'Peer review', teams: ['finance'], users: ['requester', 'manager'] }]
+			}
+		};
+		for (const auth of [
+			as('requester', 'staff'),
+			as('requester', 'finance'),
+			as('requester', 'leadership'),
+			as('requester', 'staff', true)
+		]) {
+			expect(canApprove(mine, auth)).toBe(false);
+			expect(canSupersede(mine, auth)).toBe(false);
+			const roles = rolesOf(mine, auth);
+			expect(decisionsFor('Pending', roles)).toEqual([]);
+			expect(transition(mine, 1, moveOf('approve', roles), roles, 'Override')).toMatchObject({
+				refused: 'forbidden'
+			});
+			expect(participant(mine, auth)).toBe(true);
+		}
+		expect(canApprove(mine, as('manager', 'staff'))).toBe(true);
+	});
+	it('keeps linked senders and previewing requesters out of review and inbox decisions', () => {
+		for (const r of [request, { ...request, requestor: 'envoy:sender' }]) {
+			for (const auth of [
+				as('requester', 'leadership', true),
+				{ ...as('manager', 'staff'), preview: { by: 'requester', team: null } }
+			]) {
+				expect(canApprove(r, auth)).toBe(false);
+				expect(canSupersede(r, auth)).toBe(false);
+				expect(decisionsFor('Pending', rolesOf(r, auth))).toEqual([]);
+			}
+		}
+		const rows = [
+			{
+				id: 'request',
+				state: 'Pending',
+				model: 'orders',
+				record: 'order',
+				action: 'update',
+				requestor: request.requestor,
+				user: request.user,
+				step: 0,
+				route: {
+					...request.route,
+					steps: [{ name: 'Peers', teams: ['finance'], users: ['requester'] }]
+				},
+				at: '2026-10-25T00:00:00.000Z',
+				by: 'Requester'
+			}
+		];
+		expect(inboxRequests(rows, as('requester', 'finance', true))).toMatchObject([
+			{ mine: true, canDecide: false, canSupersede: false, moves: [] }
+		]);
 	});
 	it('uses supersede for a superseder’s approve and requires its reason', () => {
 		const roles = rolesOf(request, as('leader', 'leadership'));

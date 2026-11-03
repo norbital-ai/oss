@@ -43,4 +43,4 @@ counts and failure details in Preview → Tests; it accepts no commands or flags
 a build does not execute the suite. Source tools never expose shell or Git commands.
 Before a merge, `workspace_diagnose` for the type check. Every merge repeats the full check: type
 errors block. Inspect the preview's tasks at normal and narrow
-widths with `workspace_view` when available. Say which checks ran and which did not; building is not visual proof.
+widths with `browser_navigate` to the preview when available. Say which checks ran and which did not; building is not visual proof.

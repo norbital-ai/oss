@@ -168,6 +168,7 @@ export const noticeRows = Effect.fn('Bolt.noticeRows')(function* (
 					`a notice names ${JSON.stringify(unknown)}: no such team or policy in this workspace`
 				)
 			);
+		if (to.length === 0) continue;
 		for (const channel of notice.via ?? []) {
 			const slot = ctx.manifest.connections[channel],
 				definition = slot === undefined ? undefined : definitionOf(ctx.manifest, slot.integration);
@@ -288,6 +289,17 @@ export const runNotify = Effect.gen(function* () {
 			if (result.kind === 'failed') return yield* Effect.fail(result.error);
 			if (result.kind === 'refused')
 				return yield* Effect.fail(BoltError.make('guestError', 'guest', result.message));
+			const approvers =
+				event.kind === 'approval'
+					? yield* db.rows(Schema.Struct({ id: Schema.String }), {
+							text: `SELECT u.id FROM bolt_approvals a JOIN sys_user u ON
+						(a.route -> 'steps' -> a.step -> 'users' ? u.id OR
+						(a.route -> 'steps' -> a.step -> 'teams' ? u.team AND u.team IN (SELECT jsonb_array_elements_text($2::jsonb))))
+					WHERE a.id = $1::uuid AND a.state = 'Pending' AND u.active AND u.kind = 'staff'
+						AND a.requestor <> 'member:' || u.id AND a.requestor_user IS DISTINCT FROM u.id`,
+							params: [event.request, JSON.stringify(Object.keys(m.teams))]
+						})
+					: [];
 			const first = event.records[0];
 			const record = !Array.isArray(first) && Predicate.hasProperty(first, 'id') ? first.id : null;
 			const rows = yield* noticeRows(result.output, {
@@ -299,7 +311,10 @@ export const runNotify = Effect.gen(function* () {
 						: undefined,
 				approval:
 					event.kind === 'approval'
-						? { requester: event.requester, approvers: event.approvers }
+						? {
+								requester: event.requester,
+								approvers: { teams: [], users: approvers.map((user) => user.id) }
+							}
 						: undefined
 			});
 			if (rows.length === 0) return { notices: 0 };

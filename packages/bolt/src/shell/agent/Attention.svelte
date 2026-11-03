@@ -5,10 +5,11 @@
 	import { watch } from 'runed';
 	import type { AgentConversation, AgentRow } from '../../protocol/schema.ts';
 	import type { ShellBolt } from '../runtime.ts';
-	import { NORBIUS_CHIME, runTransitions, type Chime } from './chime.ts';
+	import { runTransitions } from './chime.ts';
+	import { SOUNDS, type Sounds } from '../sounds.ts';
 
 	let { bolt, active }: { bolt: ShellBolt; active: string | null } = $props();
-	const chime = getContext<Chime>(NORBIUS_CHIME);
+	const chime = getContext<Sounds>(SOUNDS);
 	const ended = runTransitions();
 	const conversations = observe(() =>
 		bolt.observe<{ rows: AgentConversation[] }>({ read: { m: 'conversations', a: [] } })

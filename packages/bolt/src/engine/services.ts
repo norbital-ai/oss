@@ -8,7 +8,7 @@ import { Context } from 'effect';
 import type { Effect, Option, PubSub, Result, Schema, Scope, Stream } from 'effect';
 import type { Json } from '../decl/values.ts';
 import type { FacilityFailure, Unavailable } from '../decl/errors.ts';
-import type { Frame, ImportStart } from '../protocol/schema.ts';
+import type { Frame, ImportStart, PageResult } from '../protocol/schema.ts';
 import type { Pred, Var } from '@norbital-ai/store';
 import type { ReadIR } from '../protocol/reads.ts';
 import { LIMITS } from './contracts.ts';
@@ -510,6 +510,13 @@ export type AgentsShape = {
 		about: { readonly model: string; readonly id: string } | null
 	) => Effect.Effect<void, EngineError>;
 	readonly markRead: (id: string, member: string) => Effect.Effect<void, EngineError>;
+	/** The active tab wrote back whether it performed a page action: the tool step's durable result. */
+	readonly pageResult: (
+		messageId: string,
+		result: PageResult
+	) => Effect.Effect<void, EngineError>;
+	/** The first tab to claim a page action owns it; every other tab sees false and stays silent. */
+	readonly claimPageAction: (messageId: string) => Effect.Effect<boolean, EngineError>;
 	readonly confirm: (
 		messageId: string,
 		approve: boolean,
@@ -591,6 +598,11 @@ type Bins = { readonly bins?: readonly Uint8Array[] | undefined };
 type FacilityArm<T extends string> = { readonly _tag: T; readonly args: readonly Json[] } & Bins;
 export type FacilityCall =
 	| FacilityArm<'web.read'>
+	| FacilityArm<'browser.navigate'>
+	| FacilityArm<'browser.snapshot'>
+	| FacilityArm<'browser.act'>
+	| FacilityArm<'browser.evaluate'>
+	| FacilityArm<'browser.close'>
 	| FacilityArm<'files.meta'>
 	| FacilityArm<'files.get'>
 	| FacilityArm<'files.url'>

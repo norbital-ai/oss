@@ -42,7 +42,7 @@ import {
 	type Target
 } from './convert.ts';
 import { ingester, route, type Ingester } from './ingest.ts';
-import { hasVideo, transcriber } from './transcribe.ts';
+import { transcriber } from './transcribe.ts';
 import { openQueue, type Job } from './queue.ts';
 
 export type Options = {
@@ -397,8 +397,6 @@ export function service(o: Options) {
 						const where = route(stored.name, stored.mime);
 						if (!where.ok) return send(res, 415, { error: 'unsupported', message: where.message });
 						const bytes = Buffer.from(base64, 'base64');
-						if (where.probe && (yield* hasVideo(bytes)))
-							return send(res, 415, { error: 'unsupported', message: 'no parser: build a tool for it with your workspace tools' });
 						if (where.kind === 'audio' && !o.transcribes)
 							return send(res, 503, { error: 'unavailable', message: 'this converter has no transcription model' });
 						const job = queue.submit(who, 'ingest', JSON.stringify({ op: 'ingest', ...stored }), bytes);

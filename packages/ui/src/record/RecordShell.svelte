@@ -101,6 +101,8 @@
 	import { type RestorePreview } from './types.js';
 	import * as Dialog from '../primitives/dialog/index.js';
 	import Value from '../cell/Value.svelte';
+	import type { HistorySnapshot } from '../client/contract.js';
+	import { humanize } from '../text/messages.js';
 	import { actOutcome, notify } from '../actions/outcome.js';
 	import ApprovalPanel from '../approval/ApprovalPanel.svelte';
 	import { approvalOf, lockText } from '../approval/row.js';
@@ -116,7 +118,7 @@
 	} from '../form/form-state.svelte.js';
 	import { formSpec, locked } from '../form/draft.js';
 	import { mapped, queryState } from '../read/state.js';
-	import { checkpoints, skipText, type Checkpoint } from './history.js';
+	import { checkpoints, historicalFields, skipText, type Checkpoint } from './history.js';
 	import { label, lowerLead, msg, singular } from '../text/messages.js';
 	import { listRequest, refLabel, refOf, unref, type Refs } from '../relations/select.js';
 	import { byId, firstOf, requestJson } from '../read/request.js';
@@ -162,7 +164,7 @@
 	const INSIDE = 'ui.views.record';
 	// The native read feeds both the record view and Form's model-specific record contract.
 	type StoredRecord = RecordOf<C> & Row & NonNullable<FormProps<C>['record']>;
-	type Scrub = { readonly past: StoredRecord | null };
+	type Scrub = { readonly past: Row | null };
 	const parent = getContext<
 		| {
 				of: string;
@@ -230,14 +232,18 @@
 	const live = $derived(loaded.kind === 'ready' ? loaded.value : null);
 	// ── the scrubber (owner only): the revision the body shows, read as of that revision (L-BOLT-181); null is live ──
 	let viewing = $state<number | null>(null);
-	let past = $state<StoredRecord | null>(null);
+	let past = $state<Row | null>(null);
+	let historical = $state<HistorySnapshot | null>(null);
+	let historyError = $state<string | null>(null);
 	let asked = 0;
 	const latest = $derived(typeof live?.['revision'] === 'number' ? live['revision'] : 0);
-	function pick(r: number | null, at: string | null = null) {
+	function pick(r: number | null) {
 		const n = ++asked;
+		historyError = null;
 		if (r === null || r >= latest || id === undefined) {
 			viewing = null;
 			past = null;
+			historical = null;
 			return;
 		}
 		viewing = r;
@@ -245,24 +251,31 @@
 			if (n === asked) {
 				viewing = null;
 				past = null;
+				historical = null;
 			}
 		};
-		// the revision is read as of the instant it was written (`at`, from the timeline's loaded history); without one
-		// (history not loaded, a pruned create) or a null answer there is nothing to show, so the live record stays
-		// ponytail: two revisions in one millisecond fold to the later; an asOf revision would pin it exactly
-		if (at === null) return back();
 		fork(
-			bolt.query<QueryAnswer<StoredRecord>>({ [of]: { where: { id: { eq: id } }, asOf: at } }).pipe(
-				Effect.map((answer) => firstOf(answer, of)),
+			bolt.history<HistorySnapshot | null>(of, id, { at: { revision: r }, view: true }).pipe(
 				Effect.tap((value) =>
 					Effect.sync(() => {
 						if (n !== asked) return;
 						if (value === null) back();
-						else past = value;
+						else {
+							historical = value;
+							past = { ...value.compatible, id: value.record, revision: value.revision };
+						}
 					})
 				)
 			),
-			back
+			() => {
+				if (n !== asked) return;
+				back();
+				historyError = msg(
+					bolt,
+					'record.historyFailed',
+					'This historical revision could not be loaded.'
+				);
+			}
 		);
 	}
 	// ── per-record restore (rule 17): the viewed revision's own fields as a new latest revision, never a rollback ──
@@ -319,7 +332,8 @@
 		return bolt.history(of, id).pipe(Effect.map(checkpoints));
 	});
 	const shownPast = $derived(owner ? past : (scrub?.past ?? null));
-	const row = $derived(shownPast ?? live);
+	// Old schemas render separately; a partial compatibility projection is never a current typed record.
+	const row = $derived(live);
 	const view = $derived.by<RecordView<C> | null>(() =>
 		mode === 'create'
 			? { model: of, mode: 'create', values: (values ?? {}) as Partial<InsertOf<C>> }
@@ -386,11 +400,13 @@
 	);
 	const SHEET = Symbol.for('ui.sheet.header');
 	const EYEBROW = Symbol.for('ui.sheet.eyebrow');
+	const NAME = Symbol.for('ui.sheet.name');
 	// the owner's toggle and scrubber sit in the sheet's title bar beside full screen and close; no shell below claims them
 	const CHROME = Symbol.for('ui.sheet.chrome');
 	const toChrome = getContext<((c: { tools: Snippet } | null) => void) | undefined>(CHROME);
 	const aroundSheet = getContext<((s: Snippet | null) => void) | undefined>(SHEET);
 	const aroundEyebrow = getContext<((text: string | null) => void) | undefined>(EYEBROW);
+	const aroundName = getContext<((text: string | null) => void) | undefined>(NAME);
 	// a page-level record (no sheet around it) frames itself the way a sheet does: an eyebrow row, then the heading the
 	// framed shell claims beside the owner's toggles
 	const page = owner && aroundSheet === undefined && toChrome === undefined;
@@ -472,7 +488,8 @@
 	let permissionError = $state<string | null>(null);
 	onDestroy(
 		getContext<SheetGuard | undefined>(SHEET_GUARD)?.(
-			() => localController !== null && (localController.dirty || localController.pending)
+			() => localController !== null && (localController.dirty || localController.pending),
+			() => localController?.reset()
 		) ?? (() => {})
 	);
 	provideRecordController({
@@ -632,6 +649,23 @@
 	const subline = $derived(
 		typeof subtitle === 'string' ? subtitle : subtitle === undefined ? '' : shownAs(subtitle)
 	);
+	// the heading the header shows: the author's title, else the record's label, else the model noun
+	const titled = $derived(
+		heading ||
+			(mode === 'create'
+				? msg(bolt, 'record.new', 'New {what}', { what: lowerLead(singular(bolt, of)) })
+				: label(bolt, of))
+	);
+	// the sheet's accessible name is the heading this frame claims; while the record loads, or before its representation
+	// claims the header, the owner names it with the model noun
+	const sheetName = $derived(
+		mode === 'create' || loaded.kind === 'ready' ? titled : singular(bolt, of)
+	);
+	$effect(() => {
+		if (aroundName === undefined || nested || !(framed || owner)) return;
+		aroundName(sheetName);
+		return () => aroundName(null);
+	});
 	// a Runs tab says "No runs yet" once, when none of its automations has a run
 	let runCounts = $state<{ [automation: string]: number }>({});
 	setContext(RUNS_GROUP, (automation: string, n: number) => {
@@ -672,10 +706,7 @@
 			<div class="mr-auto flex min-w-0 flex-col gap-0.5">
 				<div class="flex min-w-0 items-center gap-2">
 					<h2 class="min-w-0 truncate text-sm leading-5 font-semibold">
-						{heading ||
-							(mode === 'create'
-								? msg(bolt, 'record.new', 'New {what}', { what: lowerLead(singular(bolt, of)) })
-								: label(bolt, of))}
+						{titled}
 					</h2>
 					{#if badge || icon}<Badge variant="outline" title={hint}
 							>{#if icon}<Icon {icon} class="size-3" />{/if}{badge ?? ''}</Badge
@@ -917,10 +948,14 @@
 		<span class="truncate"
 			>{msg(bolt, 'record.viewingRevision', 'Viewing revision {n} · {when}', {
 				n: String(p['revision'] ?? viewing ?? ''),
-				when: format({ kind: 'instant' }, String(p['updated_at'] ?? p['created_at'] ?? ''), {
-					locale: bolt.locale,
-					zone: kinds.zone
-				})
+				when: format(
+					{ kind: 'instant' },
+					String(historical?.at ?? p['updated_at'] ?? p['created_at'] ?? ''),
+					{
+						locale: bolt.locale,
+						zone: kinds.zone
+					}
+				)
 			})}</span
 		>
 		<button
@@ -940,6 +975,45 @@
 			>{/if}
 	</div>
 	{#if restoring !== null}{@render restoreDialog(restoring)}{/if}
+{/snippet}
+
+{#snippet historicalRecord(snapshot: HistorySnapshot)}
+	{#if snapshot.legacy}<Alert
+			>{msg(
+				bolt,
+				'record.historyLegacySchema',
+				'This revision predates schema versioning. Field definitions use the earliest saved schema.'
+			)}</Alert
+		>{/if}
+	<section
+		class="grid min-w-0 grid-cols-1 gap-4 sm:grid-cols-2"
+		aria-label={msg(bolt, 'record.historicalRecord', 'Historical record')}
+		data-history-schema={snapshot.schemaVersion ?? 'unknown'}
+	>
+		{#each historicalFields(snapshot) as [field, value] (field)}
+			<div class="flex min-w-0 flex-col gap-1" data-history-field={field} data-field={field}>
+				<div class="flex flex-wrap items-center gap-2">
+					<span class="text-muted-foreground text-xs"
+						>{snapshot.fields[field]?.label ?? humanize(field)}</span
+					>
+					{#if snapshot.uncompatible.includes(field)}<Badge
+							variant="warning"
+							data-history-uncompatible={field}
+							>{msg(bolt, 'record.historyUncompatible', 'uncompatible')}</Badge
+						>{/if}
+				</div>
+				<Value
+					{value}
+					kind={snapshot.fields[field]?.kind === 'custom'
+						? { kind: 'json' }
+						: snapshot.fields[field]}
+					row={snapshot.values}
+					name={field}
+					link={false}
+				/>
+			</div>
+		{/each}
+	</section>
 {/snippet}
 
 {#snippet restoreDialog(p: RestorePreview)}
@@ -1001,7 +1075,12 @@
 							data-reason={c.reason}
 						>
 							<span class="text-muted-foreground truncate">{label(bolt, of, c.field)}</span>
-							<span>{skipText(bolt, c.reason)}</span>
+							<span class="flex min-w-0 flex-wrap items-center gap-2">
+								{#if c.reason === 'uncompatible' || c.reason === 'definitionChanged'}<Badge
+										variant="warning">{skipText(bolt, c.reason)}</Badge
+									><Value value={c.restored} dense />
+								{:else}{skipText(bolt, c.reason)}{/if}
+							</span>
 						</li>{/each}
 				</ul>
 			{/if}
@@ -1132,10 +1211,11 @@
 		</header>
 	{/if}
 	{#if past !== null}<div class="mb-3">{@render pastPill(past)}</div>{/if}
+	{#if historyError !== null}<Alert variant="destructive" role="alert">{historyError}</Alert>{/if}
 	{#if onApproval}{@render approval()}{/if}
 	<!-- a past revision is read-only: every control beneath is disabled (a representation remounts per revision, so its forms start from it) -->
 	<fieldset disabled={past !== null} class={onApproval ? 'hidden' : 'contents'}>
-		{@render content()}
+		{#if historical !== null}{@render historicalRecord(historical)}{:else}{@render content()}{/if}
 	</fieldset>
 {:else if onApproval}{@render approval()}
 {:else}{@render content()}{/if}

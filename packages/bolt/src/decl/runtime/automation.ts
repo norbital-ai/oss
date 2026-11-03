@@ -19,6 +19,7 @@ import type { AutomationName, ModelName, PolicyName } from '../names.ts';
 import type { Duration, IanaZone, Id, NonEmpty, Rate } from '../values.ts';
 import type {
 	Ai,
+	Browser,
 	Convert,
 	Files,
 	Geo,
@@ -143,6 +144,8 @@ type RunCtx<A, Tools extends boolean> = Omit<Clock, 'actor'> &
 		request: Request;
 		web: Web;
 		files: Files;
+		/** This run's own browser tab; it closes when the run's scope ends. */
+		browser: Browser;
 		/** Markdown or HTML to a declared document format (optional host capability; absent → `unavailable`). */
 		convert: Convert;
 		ai: Ai<Tools>;

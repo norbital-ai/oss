@@ -12,6 +12,7 @@ export type { AppSpec, DeviceRequirement, EmbedOrigin, GroupSpec } from './decl/
 export { kiosk } from './decl/runtime/kiosk.ts';
 export type { KioskSpec } from './decl/runtime/kiosk.ts';
 export { automation } from './decl/runtime/automation.ts';
+export { browserStart } from './decl/runtime/facilities.ts';
 export { seeder, type Seeder } from './decl/seeder.ts';
 export { idOf } from './decl/id.ts';
 export { integration, instanceId, isInstance } from './decl/runtime/integration.ts';
@@ -227,6 +228,7 @@ export type {
 } from './decl/runtime/automation.ts';
 export type {
 	Ai,
+	Browser,
 	Convert,
 	ConvertOptions,
 	ConvertRequest,

@@ -26,6 +26,28 @@ export const STUDIO_PHASES = ['diagnose', 'copy', 'preview', 'merge'] as const;
  */
 export const STUDIO_ROLES = ['preview', 'view', 'logs', 'merge', 'rollback'] as const;
 
+/** A closed action in the person's active tab: click visible text, scroll CSS pixels, or go back/forward. */
+export const PageAction = Schema.Struct({
+	click: Schema.optionalKey(Schema.String),
+	scroll: Schema.optionalKey(Schema.Finite),
+	go: Schema.optionalKey(Schema.Literals(['back', 'forward'])),
+	type: Schema.optionalKey(
+		Schema.Struct({
+			label: Schema.String,
+			text: Schema.String,
+			submit: Schema.optionalKey(Schema.Boolean)
+		})
+	)
+});
+export type PageAction = typeof PageAction.Type;
+/** The active tab's answer to a page action: whether the client found and performed it. */
+export const PageResult = Schema.Struct({
+	ok: Schema.Boolean,
+	note: Schema.optionalKey(Schema.String),
+	url: Schema.optionalKey(Schema.String)
+});
+export type PageResult = typeof PageResult.Type;
+
 const Member = Schema.Struct({
 	kind: Schema.Literal('member'),
 	id: Schema.String,
@@ -433,6 +455,10 @@ export const AgentRow = Schema.Struct({
 			/** The held request the result names (a `publish` or `rollback` role's): the person approves it on the card. */
 			approval: Schema.optionalKey(Schema.String),
 			navigation: Schema.optionalKey(Schema.String),
+			/** A current-tab action this step requested (a closed vocabulary: click, scroll, back/forward). */
+			page: Schema.optionalKey(PageAction),
+			/** The active tab's answer to that request, written by the client after it acts. */
+			pageResult: Schema.optionalKey(PageResult),
 			/** What a Studio result says it shows (environment, release, commit, message, branch, url, viewport, capturedAt), for its caption. */
 			about: Schema.optionalKey(Schema.Record(Schema.String, Schema.String)),
 			/** A source edit's files and compact diffs, kept whole beside a clipped result for the panel's Changes tab. */

@@ -13,7 +13,7 @@ screen from its header.
 		open?: boolean;
 		onOpenChange?: (open: boolean) => void;
 		side?: 'left' | 'right';
-		/** The heading and accessible name. */
+		/** The heading and accessible name; a record view inside that claims the header names the dialog when this is absent. */
 		title?: string;
 		/** Replaces the heading (a record label with badges); the close button stays. */
 		header?: Snippet;
@@ -67,6 +67,9 @@ screen from its header.
 	// centre on the title, not on the two lines
 	let eyebrow = $state<string | null>(null);
 	setContext(Symbol.for('ui.sheet.eyebrow'), (text: string | null) => (eyebrow = text));
+	// hook:view-ui — a record view inside names the dialog for screen readers: its own heading, never the model noun alone
+	let name = $state<string | null>(null);
+	setContext(Symbol.for('ui.sheet.name'), (text: string | null) => (name = text));
 	// hook:view-ui — the record's actions beside full screen
 	let chrome = $state<{ tools: Snippet } | null>(null);
 	setContext(Symbol.for('ui.sheet.chrome'), (c: { tools: Snippet } | null) => (chrome = c));
@@ -76,10 +79,11 @@ screen from its header.
 	setContext('ui.views.record', undefined);
 
 	// the forms inside: closing over an unsaved draft asks first (Esc, ×, and a phone's scrim alike)
-	const drafts = new Set<() => boolean>();
-	setContext<SheetGuard>(SHEET_GUARD, (dirty) => {
-		drafts.add(dirty);
-		return () => void drafts.delete(dirty);
+	const drafts = new Set<{ dirty: () => boolean; discard: () => void }>();
+	setContext<SheetGuard>(SHEET_GUARD, (dirty, discard) => {
+		const draft = { dirty, discard };
+		drafts.add(draft);
+		return () => void drafts.delete(draft);
 	});
 	const shut = () => {
 		asked = true;
@@ -89,7 +93,7 @@ screen from its header.
 	let asking = false;
 	const close = () => {
 		if (asking) return;
-		if (![...drafts].some((dirty) => dirty())) return shut();
+		if (![...drafts].some((draft) => draft.dirty())) return shut();
 		asking = true;
 		fork(
 			confirmAction({
@@ -100,7 +104,10 @@ screen from its header.
 			}).pipe(
 				Effect.tap((confirmed) =>
 					Effect.sync(() => {
-						if (confirmed) shut();
+						if (confirmed) {
+							for (const draft of drafts) if (draft.dirty()) draft.discard();
+							shut();
+						}
 					})
 				),
 				Effect.ensuring(
@@ -271,7 +278,7 @@ screen from its header.
 		bind:this={panel}
 		role="dialog"
 		aria-modal="false"
-		aria-label={title}
+		aria-label={title ?? name}
 		data-sheet-side={side}
 		data-fullscreen={full || undefined}
 		style={[

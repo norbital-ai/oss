@@ -203,8 +203,10 @@ A related-record grid with explicit child operations, original revisions and par
 			)
 	);
 	onDestroy(
-		getContext<SheetGuard | undefined>(SHEET_GUARD)?.(() => save === 'independent' && dirty) ??
-			(() => {})
+		getContext<SheetGuard | undefined>(SHEET_GUARD)?.(
+			() => save === 'independent' && dirty,
+			reset
+		) ?? (() => {})
 	);
 	function make(row: Row, created: boolean, key = row.id): Draft | null {
 		const target = created ? 'create' : 'update';

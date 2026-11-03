@@ -117,7 +117,19 @@ export class Build {
 		this.tz = options.tz ?? 'UTC';
 		this.options = options;
 	}
+	private readonly reads = new Map<string, Set<string>>();
+	/** Conservative native dependencies, including fields used only to filter, sort or label. */
+	touch(model: string, field?: string): void {
+		let fields = this.reads.get(model);
+		if (fields === undefined) this.reads.set(model, (fields = new Set()));
+		if (field !== undefined) fields.add(field);
+	}
+	dependencies(): Compiled['dependencies'] {
+		// A caller-supplied SQL extension cannot be proven by this compiler.
+		return { models: this.reads, complete: this.root === undefined };
+	}
 	from(model: string): string {
+		this.touch(model);
 		return q(this.options.sources?.get(model) ?? model);
 	}
 	/** The output a level at `path` reads: the statement's own for its root, else `default`. */
@@ -159,9 +171,12 @@ export class Build {
 export type Level = { scoped: boolean; exposed: boolean };
 export const RAW: Level = { scoped: false, exposed: false };
 
-const fieldOf = (c: ExposureInfo, name: string, lv: Level): Fx<FieldInfo> => {
+const fieldOf = (b: Build, c: ExposureInfo, name: string, lv: Level): Fx<FieldInfo> => {
 	const f = c.model.fields.get(name);
-	if (f !== undefined && !(lv.exposed && !exposedField(c, name))) return Effect.succeed(f);
+	if (f !== undefined && !(lv.exposed && !exposedField(c, name))) {
+		b.touch(c.model.name, name);
+		return Effect.succeed(f);
+	}
 	// name what the layer does expose, so a caller (often a model) can correct the read in one step
 	const readable = [...c.model.fields.keys()].filter((k) => !lv.exposed || exposedField(c, k));
 	return invalid(
@@ -169,16 +184,20 @@ const fieldOf = (c: ExposureInfo, name: string, lv: Level): Fx<FieldInfo> => {
 	);
 };
 /** A row's key column at alias `a` (a single-column key: an FK points at it). */
-const keyAt = (c: ExposureInfo, a: string) => `${a}.${q(c.model.key[0] ?? 'id')}`;
+const keyAt = (b: Build, c: ExposureInfo, a: string) => {
+	const key = c.model.key[0] ?? 'id';
+	b.touch(c.model.name, key);
+	return `${a}.${q(key)}`;
+};
 /** A field as a query touches it: its column. */
 const col = Effect.fnUntraced(function* (
-	_b: Build,
+	b: Build,
 	c: ExposureInfo,
 	a: string,
 	name: string,
 	lv: Level
 ) {
-	const f = yield* fieldOf(c, name, lv);
+	const f = yield* fieldOf(b, c, name, lv);
 	return `${a}.${q(f.column)}`;
 });
 /** The reader's row filter on `c` at alias `a`, or null when unscoped; a reader with no arm sees nothing. */
@@ -248,21 +267,25 @@ const relation = Effect.fnUntraced(function* (
 	const one = c.model.one.get(rel);
 	const many = c.model.many.get(rel);
 	if (one !== undefined) {
+		b.touch(c.model.name, rel);
 		const fk = one.targets.length > 1 ? `${rel}__${target}` : rel;
-		const link: Link['link'] = (a, x) => Effect.succeed(`${keyAt(t, x)} = ${a}.${q(fk)}`);
+		const link: Link['link'] = (a, x) => Effect.succeed(`${keyAt(b, t, x)} = ${a}.${q(fk)}`);
 		return { t, link };
 	}
 	if (many === undefined) return yield* invalid(`'${c.name}' has no relation '${rel}'`);
 	const through = many.through;
 	if (through !== undefined) {
+		b.touch(through.table, through.from);
+		b.touch(through.table, through.to);
 		const link: Link['link'] = (a, x) =>
 			Effect.succeed(
-				`EXISTS (SELECT 1 FROM ${q(through.table)} j WHERE j.${q(through.from)} = ${keyAt(c, a)} AND j.${q(through.to)} = ${keyAt(t, x)})`
+				`EXISTS (SELECT 1 FROM ${b.from(through.table)} j WHERE j.${q(through.from)} = ${keyAt(b, c, a)} AND j.${q(through.to)} = ${keyAt(b, t, x)})`
 			);
 		return { t, link };
 	}
 	const fk = many.column;
-	const link: Link['link'] = (a, x) => Effect.succeed(`${x}.${q(fk)} = ${keyAt(c, a)}`);
+	b.touch(t.model.name, fk);
+	const link: Link['link'] = (a, x) => Effect.succeed(`${x}.${q(fk)} = ${keyAt(b, c, a)}`);
 	return { t, link };
 });
 /**
@@ -346,9 +369,17 @@ const labelReferences = Effect.fnUntraced(function* (
 				pg === 'text'
 					? id
 					: `(CASE WHEN pg_input_is_valid(${id}, ${lit(pg)}) THEN ${id}::${pg} END)`;
+			b.touch(c.model.name, link.model);
+			b.touch(c.model.name, link.record);
+			b.touch(target, RECORD_LABEL_COLUMN);
+			b.touch(target, SEARCH_COLUMN);
 			out.push({
 				from: `${b.from(target)} ${x}`,
-				where: conj(`${a}.${q(link.model)} = ${lit(target)}`, `${keyAt(t, x)} = ${key}`, rowScope),
+				where: conj(
+					`${a}.${q(link.model)} = ${lit(target)}`,
+					`${keyAt(b, t, x)} = ${key}`,
+					rowScope
+				),
 				label: `${x}.${q(RECORD_LABEL_COLUMN)}`,
 				document: `${x}.${q(SEARCH_COLUMN)}`
 			});
@@ -383,9 +414,15 @@ const searchDoc = Effect.fnUntraced(function* (b: Build, c: ExposureInfo, a: str
 	const label = c.model.recordLabel;
 	const readableLabel =
 		label !== undefined && label.fields.every((field) => !lv.exposed || exposedField(c, field));
-	if (hidden.length === 0 && (label === undefined || readableLabel)) return stored;
+	if (hidden.length === 0 && (label === undefined || readableLabel)) {
+		b.touch(c.model.name, SEARCH_COLUMN);
+		return stored;
+	}
 	const parts: string[] = [];
-	if (readableLabel) parts.push(`coalesce(${a}.${q(RECORD_LABEL_COLUMN)}, '')`);
+	if (readableLabel) {
+		b.touch(c.model.name, RECORD_LABEL_COLUMN);
+		parts.push(`coalesce(${a}.${q(RECORD_LABEL_COLUMN)}, '')`);
+	}
 	for (const f of readable) {
 		const value = yield* col(b, c, a, f, lv);
 		parts.push(
@@ -413,7 +450,7 @@ export const pred: (b: Build, c: ExposureInfo, a: string, p: Pred, lv: Level) =>
 			case 'null':
 				return `(${yield* col(b, c, a, p.field, lv)} IS ${p.is ? '' : 'NOT '}NULL)`;
 			case 'cmp': {
-				const f = yield* fieldOf(c, p.field, lv);
+				const f = yield* fieldOf(b, c, p.field, lv);
 				const fold = (x: string) => (f.email === true ? `lower(${x})` : x);
 				return `(${fold(yield* col(b, c, a, p.field, lv))} ${OPS[p.op]} ${fold(yield* rhs(b, c, a, f, p.arg, lv))})`;
 			}
@@ -427,7 +464,7 @@ export const pred: (b: Build, c: ExposureInfo, a: string, p: Pred, lv: Level) =>
 			case 'age':
 				return `(${yield* col(b, c, a, p.field, lv)} < now() - ${b.bind(p.seconds, 'float8')} * interval '1 second')`;
 			case 'in': {
-				const f = yield* fieldOf(c, p.field, lv);
+				const f = yield* fieldOf(b, c, p.field, lv);
 				const args = p.args;
 				if (!argumentList(args) && args._tag === 'Member') {
 					// the earlier member's rows are the composed statement's CTE `"m:<member>"`, already under its own scope;
@@ -466,7 +503,7 @@ export const pred: (b: Build, c: ExposureInfo, a: string, p: Pred, lv: Level) =>
 				return p.op === 'hasAny' ? `(${x} && ${arr})` : `(${x} @> ${arr})`;
 			}
 			case 'period': {
-				const f = yield* fieldOf(c, p.field, lv);
+				const f = yield* fieldOf(b, c, p.field, lv);
 				const x = yield* col(b, c, a, p.field, lv);
 				const date = f.periodOf === 'date';
 				if (p.op === 'contains') {
@@ -518,6 +555,7 @@ export const pred: (b: Build, c: ExposureInfo, a: string, p: Pred, lv: Level) =>
 					d = `(${x} <=> ${b.bind(`[${p.vector.join(',')}]`, 'vector')})`;
 				// an embedding cannot be rebuilt from what a reader sees: only rows it reads every embedded field of are near
 				const semantic = c.model.semantic?.fields ?? [];
+				b.touch(c.model.name, EMBEDDING_COLUMN);
 				yield* exposedAll(c, semantic, lv, '$similar');
 				return `(${a}."id" IN (SELECT ${n}."id" FROM (SELECT ${t}."id", ${d} AS d, min(${d}) OVER () AS best FROM ${b.from(c.model.name)} ${t} WHERE ${conj(yield* scope(b, c, t, lv), `${x} IS NOT NULL`)} ORDER BY ${d}, ${t}."id" LIMIT ${b.bind(p.top, 'int8')}) ${n} WHERE ${n}.d <= ${n}.best + ${SIMILAR_BAND}))`;
 			}
@@ -556,7 +594,7 @@ export const pred: (b: Build, c: ExposureInfo, a: string, p: Pred, lv: Level) =>
 				const t = b.alias();
 				const from = `FROM ${b.from(r.t.model.name)} ${t} WHERE ${conj(yield* r.link(a, t), yield* scope(b, r.t, t, lv))}`;
 				if (p.t === 'agg') {
-					const f = yield* fieldOf(r.t, p.of, lv);
+					const f = yield* fieldOf(b, r.t, p.of, lv);
 					const x =
 						p.fn === 'sum'
 							? `COALESCE(sum(${t}.${q(f.column)}), 0)`
@@ -627,13 +665,13 @@ export function wire(f: FieldInfo, x: string, a: string): string {
 	return `to_jsonb(${x})`;
 }
 const item = Effect.fnUntraced(function* (
-	_b: Build,
+	b: Build,
 	c: ExposureInfo,
 	a: string,
 	name: string,
 	lv: Level
 ) {
-	const f = yield* fieldOf(c, name, lv);
+	const f = yield* fieldOf(b, c, name, lv);
 	return `${wire(f, `${a}.${q(f.column)}`, a)} AS ${q(name)}`;
 });
 /** The select list of one level: the key, the fields, and each selected relation as a correlated subquery. */
@@ -653,6 +691,7 @@ export const items: (
 	one: boolean = false
 ) {
 	const key = c.model.key;
+	for (const field of key) b.touch(c.model.name, field);
 	const fields =
 		s.fields ??
 		(b.scope !== undefined ? defaultFields(c, one || s.whole === true) : storedFields(c.model));
@@ -782,7 +821,7 @@ const orderBy = Effect.fnUntraced(function* (
 			if (!own && leaf === undefined && lv.exposed) yield* readable(b, c, field, lv);
 			// a related key is a scalar subselect over the same joins and scopes as a filter; a missing or unseen target is null
 			const { expr, f } = own
-				? { expr: yield* col(b, c, a, field, lv), f: yield* fieldOf(c, field, lv) }
+				? { expr: yield* col(b, c, a, field, lv), f: yield* fieldOf(b, c, field, lv) }
 				: leaf !== undefined
 					? {
 							expr: `((${yield* col(b, c, a, head, lv)} #>> ${jsonPath(rest)})${leaf.pg === 'text' ? '' : `::${leaf.pg}`})`,
@@ -802,6 +841,7 @@ const orderBy = Effect.fnUntraced(function* (
 			return k;
 		})
 	);
+	for (const field of c.model.key) b.touch(c.model.name, field);
 	const tail: Key[] = c.model.key.map((k) => ({
 		expr: `${a}.${q(k)}`,
 		pg: c.model.fields.get(k)?.pg ?? 'text',
@@ -883,6 +923,11 @@ export type Compiled = {
 	limit: number | 'all' | null;
 	hash: string;
 	keys: number;
+	/** Compiler-produced proof; opaque root SQL makes it incomplete and unusable for prospective safety. */
+	dependencies: {
+		readonly models: ReadonlyMap<string, ReadonlySet<string>>;
+		readonly complete: boolean;
+	};
 };
 const start = Effect.fnUntraced(function* (
 	base: Catalog,
@@ -926,7 +971,8 @@ export const compile = Effect.fn('Store.compile')(function* (
 			kind: 'one',
 			limit: null,
 			hash: '',
-			keys: 0
+			keys: 0,
+			dependencies: b.dependencies()
 		}));
 	const nearest = (text: string, take: number): Fx<Compiled> =>
 		Effect.map(b.sql(text), (sql): Compiled => ({
@@ -934,7 +980,8 @@ export const compile = Effect.fn('Store.compile')(function* (
 			kind: 'rows',
 			limit: take,
 			hash: '',
-			keys: 0
+			keys: 0,
+			dependencies: b.dependencies()
 		}));
 	if (ir.kind === 'get') {
 		const id = c.model.fields.get('id');
@@ -950,6 +997,7 @@ export const compile = Effect.fn('Store.compile')(function* (
 		// `search.semantic`'s platform embedding, cosine, probed by an embedded text or by a readable record's own vector
 		if (c.model.semantic === undefined)
 			return yield* invalid(`'${c.name}' declares no search.semantic (rule 16)`);
+		b.touch(c.model.name, EMBEDDING_COLUMN);
 		const x = `${a}.${q(EMBEDDING_COLUMN)}`,
 			s = b.alias();
 		const to =
@@ -976,6 +1024,7 @@ export const compile = Effect.fn('Store.compile')(function* (
 			return yield* invalid(`'${c.name}' declares no search index '${ir.index}'`);
 		if (probe.vector.length !== index.dim || !probe.vector.every(Number.isFinite))
 			return yield* invalid(`the probe is not ${index.dim} finite numbers`);
+		if (index.field === undefined) b.touch(c.model.name, indexColumn(ir.index));
 		const x =
 			index.field === undefined
 				? `${a}.${q(indexColumn(ir.index))}`
@@ -1019,6 +1068,7 @@ export const compile = Effect.fn('Store.compile')(function* (
 				return yield* invalid(`'${c.name}' declares no search.semantic (rule 16)`);
 			if (ir.page._tag === 'Limit' && ir.page.after !== undefined)
 				return yield* invalid('a /semantic search reads one page');
+			b.touch(c.model.name, EMBEDDING_COLUMN);
 			const x = `${a}.${q(EMBEDDING_COLUMN)}`,
 				dist = `(${x} <=> ${b.bind(`[${probe.vector.join(',')}]`, 'vector')})`;
 			search = `(${match} OR ${x} IS NOT NULL)`;
@@ -1046,7 +1096,14 @@ export const compile = Effect.fn('Store.compile')(function* (
 					where
 				)
 			);
-			const compiled: Compiled = { sql, kind: 'rows', limit: 'all', hash: '', keys: 0 };
+			const compiled: Compiled = {
+				sql,
+				kind: 'rows',
+				limit: 'all',
+				hash: '',
+				keys: 0,
+				dependencies: b.dependencies()
+			};
 			return compiled;
 		}
 		if (ir.order === undefined || ir.order.length === 0)
@@ -1108,7 +1165,14 @@ export const compile = Effect.fn('Store.compile')(function* (
 			groups.length === 0 ? filter : 'true'
 		)
 	);
-	const compiled: Compiled = { sql, kind: 'rows', limit, hash: h, keys: keys.length };
+	const compiled: Compiled = {
+		sql,
+		kind: 'rows',
+		limit,
+		hash: h,
+		keys: keys.length,
+		dependencies: b.dependencies()
+	};
 	return compiled;
 });
 
@@ -1155,7 +1219,7 @@ const path: (
 ) {
 	const [head = '', ...tail] = p.split('.');
 	if (tail.length === 0 || c.model.fields.get(p) !== undefined) {
-		const f = yield* fieldOf(c, p, lv);
+		const f = yield* fieldOf(b, c, p, lv);
 		return { expr: yield* col(b, c, a, p, lv), f };
 	}
 	const rel = c.model.one.get(head);
@@ -1238,7 +1302,14 @@ const aggregate = Effect.fnUntraced(function* (
 		const sql = yield* b.sql(
 			`SELECT to_jsonb(r) AS j FROM (SELECT ${cols.join(', ')} FROM ${b.from(c.model.name)} ${a} WHERE ${where}) r`
 		);
-		const compiled: Compiled = { sql, kind: 'agg', limit: null, hash: '', keys: 0 };
+		const compiled: Compiled = {
+			sql,
+			kind: 'agg',
+			limit: null,
+			hash: '',
+			keys: 0,
+			dependencies: b.dependencies()
+		};
 		return compiled;
 	}
 	const { page: _, ...rest } = ir;
@@ -1256,7 +1327,14 @@ const aggregate = Effect.fnUntraced(function* (
 	const sql = yield* b.sql(
 		`SELECT to_jsonb(r) AS j FROM (SELECT ${cols.join(', ')}${cursor} FROM ${b.from(c.model.name)} ${a} WHERE ${where} GROUP BY ${groups.map((g) => g.expr).join(', ')}${having} ORDER BY ${groups.map((g) => g.expr).join(', ')} LIMIT ${take}) r`
 	);
-	const compiled: Compiled = { sql, kind: 'rows', limit, hash: h, keys: groups.length };
+	const compiled: Compiled = {
+		sql,
+		kind: 'rows',
+		limit,
+		hash: h,
+		keys: groups.length,
+		dependencies: b.dependencies()
+	};
 	return compiled;
 });
 

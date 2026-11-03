@@ -36,6 +36,8 @@ import {
 	managedTables,
 	sourceObjects,
 	auditTriggers,
+	historySchemaObjects,
+	HISTORY_SCHEMA_TABLES,
 	fromStore,
 	PgliteDb,
 	Pristine
@@ -47,7 +49,11 @@ const auditSource = (schema: SchemaSpec): readonly SchemaObject[] =>
 	Object.values(schema.tables).some(
 		(table) => table.nativeRules !== undefined && table.audit === true
 	)
-		? [...sourceObjects(), ...auditTriggers(schema.tables)]
+		? [
+				...sourceObjects(),
+				...historySchemaObjects(schema.tables, schema.currency),
+				...auditTriggers(schema.tables)
+			]
 		: [];
 
 /** `function <name> <definition>` lines by name: what a body comparison reads off an introspection. */
@@ -162,6 +168,8 @@ export const prepareMigrations = Effect.fn('Bolt.prepareMigrations')(function* (
 			? null
 			: yield* readSnapshot(snapshotText).pipe(Effect.mapError(fromStore));
 	const next = migrationSchema(manifest);
+	const declared = yield* build(next).pipe(Effect.mapError(fromStore));
+	const native = auditSource(next);
 	const heldLines =
 		physicalText === undefined
 			? undefined
@@ -188,16 +196,46 @@ export const prepareMigrations = Effect.fn('Bolt.prepareMigrations')(function* (
 			auditSource
 		).pipe(Effect.mapError(fromStore));
 		yield* fs.makeDirectory(directory, { recursive: true });
-		const file = path.join(directory, generated.file.name);
+		const prologue: string[] = [];
+		if (previous !== null) {
+			// Backfills must use the new audit body, not append unversioned diffs before a later runtime upgrade.
+			const expected = yield* definitionsOf(
+				[...declared, ...native.flatMap((object) => object.create)]
+					.map((sql) => `${sql.trim().replace(/;$/, '')};`)
+					.join('\n')
+			).pipe(Effect.provide(Pristine.layer));
+			const missing = !heldLines?.some((line) => line.startsWith('column bolt_history_schema.id '));
+			if (missing) prologue.push(...HISTORY_SCHEMA_TABLES);
+			prologue.push(
+				...runtimeFunctions(heldLines ?? [], heldLines ?? [], expected, [
+					...declared,
+					...native.flatMap((object) => object.create)
+				])
+			);
+			if (missing)
+				prologue.push(
+					...historySchemaObjects(previous.tables, previous.currency).flatMap(
+						(object) => object.create
+					)
+				);
+		}
+		const upgraded =
+			prologue.length === 0
+				? generated.file
+				: {
+						...generated.file,
+						sql: `-- step history:schema:upgrade (backfill)\n${prologue.map((sql) => `${sql};`).join('\n')}\n\n${generated.file.sql}`
+					};
+		const file = path.join(directory, upgraded.name);
 		if (yield* fs.exists(file))
 			return yield* BoltError.make(
 				'migrationChanged',
 				'admission',
 				`${generated.file.name} already exists; existing migrations are never overwritten`
 			);
-		yield* fs.writeFileString(file, generated.file.sql);
+		yield* fs.writeFileString(file, upgraded.sql);
 		yield* fs.writeFileString(snapshotFile, generated.snapshot);
-		files.push(generated.file);
+		files.push(upgraded);
 		snapshotText = generated.snapshot;
 	}
 	if (snapshotText === undefined)
@@ -218,8 +256,6 @@ export const prepareMigrations = Effect.fn('Bolt.prepareMigrations')(function* (
 		yield* pending(files, oldLock, [], snapshot, squashes).pipe(Effect.mapError(fromStore));
 		heldPhysical = yield* readPhysicalDefinitions(physicalText).pipe(Effect.mapError(fromStore));
 	}
-	const declared = yield* build(next).pipe(Effect.mapError(fromStore));
-	const native = auditSource(next);
 	const key = sha256Hex(
 		canonical({
 			proofVersion: 7,
@@ -302,13 +338,24 @@ export const prepareMigrations = Effect.fn('Bolt.prepareMigrations')(function* (
 					.join('\n')
 			);
 			let actual = prefixes.get(files.length) ?? [];
-			const bodies =
-				mode === 'generate' && heldLines !== undefined
+			const bodies = [
+				...(mode === 'generate' && heldLines !== undefined
 					? runtimeFunctions(heldLines, actual, expected, [
 							...declared,
 							...native.flatMap((object) => object.create)
 						])
-					: [];
+					: [])
+			];
+			if (
+				mode === 'generate' &&
+				heldLines !== undefined &&
+				!actual.some((line) => line.startsWith('column bolt_history_schema.id '))
+			)
+				bodies.unshift(...HISTORY_SCHEMA_TABLES);
+			if (bodies.length > 0)
+				bodies.push(
+					...historySchemaObjects(next.tables, next.currency).flatMap((object) => object.create)
+				);
 			if (bodies.length > 0) {
 				const name = `${String(files.length + 1).padStart(4, '0')}_runtime_functions.sql`;
 				if (yield* fs.exists(path.join(directory, name)))

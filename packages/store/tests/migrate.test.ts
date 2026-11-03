@@ -54,6 +54,63 @@ const introspect = (pg: Effect.Success<typeof database>) =>
 	);
 
 describe('editable migration files', () => {
+	it.live('new tables inline columns and constraints while existing rows still validate', () =>
+		Effect.scoped(
+			Effect.gen(function* () {
+				const first = schema({
+					entry: table({
+						key: 'text',
+						fields: {
+							name: { kind: 'text', default: 'initial', unique: true },
+							parent: { kind: 'ref', to: 'entry', optional: true },
+							score: { kind: 'int', default: 2 }
+						},
+						computed: { twice: { kind: 'int', expr: { times: [{ field: 'score' }, 2] } } },
+						search: { text: ['name'] }
+					})
+				});
+				const initial = yield* generate(null, first, { number: 1, name: 'initial' });
+				expect(initial.file.sql).not.toContain('add column');
+				expect(initial.file.sql).not.toContain('set not null');
+				expect(initial.file.sql).not.toContain('set default');
+				expect(initial.file.sql).not.toContain('declare n bigint');
+				expect(initial.file.sql).toContain('add constraint'); // Foreign keys follow all tables.
+				const pg = yield* database;
+				const fresh = yield* database;
+				yield* script(pg, initial.file.sql);
+				yield* script(fresh, `${(yield* build(first)).join(';\n')};`);
+				expect(yield* introspect(pg)).toEqual(yield* introspect(fresh));
+				yield* script(pg, "insert into entry (id) values ('kept')");
+				expect(
+					(yield* Effect.promise(() => pg.query('select name, score, twice from entry'))).rows
+				).toEqual([{ name: 'initial', score: 2, twice: 4 }]);
+				const next = schema({
+					entry: table({
+						...first.tables.entry,
+						fields: {
+							...first.tables.entry.fields,
+							extra: { kind: 'text', default: 'new' },
+							required: { kind: 'text' }
+						}
+					}),
+					another: table({ fields: { title: { kind: 'text' } } })
+				});
+				const update = yield* generate(first, next, { number: 2, name: 'extend' });
+				expect(update.file.sql).toContain('add column "extra"');
+				expect(update.file.sql).not.toContain('alter column "extra" set default');
+				expect(update.file.sql).not.toContain('alter table "another" add column');
+				expect(update.file.sql).toContain('declare n bigint');
+				const refused = yield* Effect.promise(() =>
+					pg.exec(update.file.sql).then(
+						() => 'ok',
+						(error: unknown) => (error instanceof Error ? error.message : String(error))
+					)
+				);
+				expect(refused).toContain('refuses 1 existing row(s)');
+			})
+		)
+	);
+
 	it.live('factory reset clears the whole owned namespace and leaves other namespaces usable', () =>
 		Effect.scoped(
 			Effect.gen(function* () {

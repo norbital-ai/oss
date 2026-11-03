@@ -116,7 +116,7 @@ const front = Effect.fn('bolt.front')(function* (
 	);
 	errors.push(...text);
 	for (const f of code) manifest[f.role][f.name] = roles[f.role]?.[f.name];
-	errors.push(...manifestErrors(manifest));
+	errors.push(...manifestErrors(manifest, 'workspace', files));
 
 	stage('names');
 	const names = Result.try({

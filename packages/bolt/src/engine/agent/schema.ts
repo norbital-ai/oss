@@ -3,7 +3,7 @@
 import { Effect, Option, Predicate, Schema, type Types } from 'effect';
 import { BoltError } from '../../protocol/errors.ts';
 import { STUDIO_ROLES } from '../../protocol/schema.ts';
-import { Usage as UsageSchema } from '../../protocol/schema.ts';
+import { PageAction, PageResult, Usage as UsageSchema } from '../../protocol/schema.ts';
 import type { Json } from '../../decl/values.ts';
 import type { AgentRow } from '../../protocol/wire.ts';
 import type { Authority, Captured, RowData } from '../contracts.ts';
@@ -419,6 +419,8 @@ const Outcome = Schema.Struct({
 	conversation: Schema.optionalKey(Schema.String),
 	preview: Schema.optionalKey(Schema.String),
 	navigation: Schema.optionalKey(Schema.String),
+	page: Schema.optionalKey(PageAction),
+	pageResult: Schema.optionalKey(PageResult),
 	approval: Schema.optionalKey(Schema.Struct({ id: Schema.String }))
 });
 const outcomeOf = Schema.decodeUnknownOption(Outcome);
@@ -527,6 +529,12 @@ export function transcriptRow(r: MessageRow, staff: boolean, thread: boolean): A
 						...(approval === undefined ? {} : { approval }),
 						...(step.name === 'navigate' && outcome.navigation !== undefined
 							? { navigation: outcome.navigation }
+							: {}),
+						...(step.name === 'page_act' && outcome.page !== undefined
+							? { page: outcome.page }
+							: {}),
+						...(step.name === 'page_act' && outcome.pageResult !== undefined
+							? { pageResult: outcome.pageResult }
 							: {}),
 						...(about === undefined ? {} : { about }),
 						...(changes === undefined ? {} : { changes }),

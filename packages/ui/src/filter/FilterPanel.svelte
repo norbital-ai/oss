@@ -194,7 +194,7 @@
 					>{msg(bolt, 'view.prefilter', 'Prefilter · read only')}</span
 				></span
 			>
-			<FilterSummary parts={authorParts} class="whitespace-normal break-words overflow-visible" />
+			<FilterSummary parts={authorParts} class="whitespace-normal break-words overflow-visible [&_[data-part=field]]:font-normal" />
 		</p>
 	{/if}
 
@@ -215,7 +215,7 @@
 					{#if readonly}
 						<FilterSummary
 							parts={nodeParts(catalog, model, n, humanize, named, opWords, bolt.locale)}
-							class="whitespace-normal break-words overflow-visible text-sm"
+							class="whitespace-normal break-words overflow-visible text-xs text-muted-foreground [&_[data-part=field]]:font-normal [&_[data-part=value]]:text-muted-foreground"
 						/>
 					{:else}
 						<FilterNode

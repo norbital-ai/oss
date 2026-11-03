@@ -749,7 +749,7 @@ const definition = (m: EngineManifest, name: string): IntegrationSpec | undefine
 	m.integrations[name] ?? SYSTEM.integrations[name];
 const conversational = (d: IntegrationSpec | undefined): boolean =>
 	d !== undefined && 'conversation' in DRIVERS[d.driver];
-const BUILTIN_PARSERS = ['xlsx', 'csv', 'tsv', 'json', 'ics'];
+const BUILTIN_PARSERS = ['xlsx', 'csv', 'tsv', 'json', 'ics', 'txt'];
 const MEDIA_TOPS = [
 	'application',
 	'audio',

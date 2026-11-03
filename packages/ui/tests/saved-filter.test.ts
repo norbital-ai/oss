@@ -5,6 +5,7 @@ import {
 	operandsFor,
 	resolve,
 	rowsWhere,
+	savedFilterCatalog,
 	selectField,
 	selectOperator,
 	variablesFor,
@@ -71,6 +72,46 @@ it('saved filters retain caller-owned numeric, boolean, list and date expression
 		expect(rowsWhere(catalog, 'items', rows ?? [], undefined, variables)).toEqual(where);
 		expect(fromWhere(catalog, 'items', where)).toBeNull();
 	}
+});
+
+it('saved rule fields retain hidden readable bindings and nullable record conditions', () => {
+	const original: Record<string, ModelExposure> = {
+		...catalog,
+		obligation: {
+			label: [],
+			fields: {
+				state: { kind: 'enum', values: ['OPEN', 'FULFILLED'] },
+				subject_id: { kind: 'text', optional: true, hidden: true }
+			}
+		},
+		entry: {
+			label: [],
+			fields: {},
+			relations: {
+				payslip_id: { targets: ['items'], optional: true },
+				employment_id: { targets: ['items'], optional: true }
+			}
+		}
+	};
+	const captured: FilterVariables = {
+		presets: ['ctx.event.row.id'],
+		validate: (text) => (text === 'ctx.event.row.id' ? undefined : 'Unknown captured binding.')
+	};
+	const editable = savedFilterCatalog(original);
+	for (const [model, where] of [
+		['obligation', { state: { eq: 'OPEN' }, subject_id: { eq: { var: 'ctx.event.row.id' } } }],
+		['entry', { payslip_id: { isNull: true }, employment_id: { eq: { var: 'ctx.event.row.id' } } }]
+	] as const) {
+		const rows = fromWhere(editable, model, where, model, '', captured);
+		expect(rows).not.toBeNull();
+		expect(rows).toHaveLength(2);
+		expect(rowsWhere(editable, model, rows ?? [], undefined, captured)).toEqual({
+			and: Object.entries(where).map(([field, condition]) => ({ [field]: condition }))
+		});
+	}
+	expect(fromWhere(original, 'obligation', { subject_id: { eq: 'subject' } })).toBeNull();
+	expect(original.obligation?.fields.subject_id?.hidden).toBe(true);
+	expect(fromWhere(editable, 'obligation', { unreadable_field: { eq: 'secret' } })).toBeNull();
 });
 
 it('the same field and operator transitions recheck saved expressions against the destination', () => {

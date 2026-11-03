@@ -141,6 +141,12 @@ comments name additive, rename, backfill, validating and destructive changes. A 
 explicit `-- accept: <step>` line. `was` on a table or field emits a rename and preserves data. Inline shape changes
 leave a data step for an authored transform followed by a row-count validation.
 
+New tables declare their columns, defaults, NOT NULL rules and ordinary constraints in one `CREATE TABLE`.
+Foreign keys, indexes and triggers follow their dependencies. Empty new tables need no row-count preflight or
+rollup backfill; changes to existing tables keep those checks. The planner still diffs each object independently.
+Hazard and operational-risk explanations appear once in the file header; individual steps retain their class,
+applicable risk names and destructive acceptance markers.
+
 The host replays all files on a scratch database, builds the declared schema on another, and passes the two
 `INTROSPECT` results to `verify`. The resulting `migrations.lock.json` records every SQL checksum and the snapshot
 checksum. Commit the SQL files, snapshot and lock together. Editing a file requires replay verification again.
@@ -171,8 +177,9 @@ and physical-definition checks for the host's prepared atomic batch. Concurrent 
 the host's migration lock; filtering malformed catalog rows would conceal drift. `INTROSPECT` includes noninternal triggers
 and function overload identities; extension-owned implementation definitions are excluded, with extension names
 retained. These proofs assume the same schema namespace used by scratch replay (Bolt uses `public`).
-`physicalDefinitionsOf` serializes shared native definitions once across prefixes;
-`readPhysicalDefinitions` expands the indexed file or an existing unindexed proof. Prefix hashes still cover the
+`physicalDefinitionsOf` serializes shared native definitions once across prefixes, compressing large definitions
+in the version 2 format while leaving ordinary definitions readable. `readPhysicalDefinitions` expands packed,
+version 1 indexed and existing unindexed proofs. Prefix hashes still cover the
 exact expanded definitions. Invalid references and changed definitions are refused before migration execution.
 
 A safe widening from integer to bigint or numeric uses `ALTER COLUMN TYPE` and preserves rows. Other unsupported

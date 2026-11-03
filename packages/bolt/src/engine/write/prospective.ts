@@ -7,7 +7,15 @@ import { TenantDb } from '../db/tenant-db.ts';
 import { BoltError, fromStore } from '../../protocol/errors.ts';
 import { readOptions } from '../query/reader.ts';
 import { LIMITS } from '../contracts.ts';
-import { nullRowSql, q, type Catalog } from '@norbital-ai/store';
+import {
+	nullRowSql,
+	q,
+	RECORD_LABEL_COLUMN,
+	SEARCH_COLUMN,
+	EMBEDDING_COLUMN,
+	indexColumn,
+	type Catalog
+} from '@norbital-ai/store';
 import { readEngine } from '../query/engine.ts';
 import { compile } from '@norbital-ai/store';
 import { withDefaults, type Item } from './flatten.ts';
@@ -68,15 +76,39 @@ export function prospectiveBridge(
 						const sources = new Map(
 							[...groups.keys()].map((model, index) => [model, `__bolt_prepared_${index}`])
 						);
+						const compiled = yield* compile(
+							cat,
+							nativeRead,
+							readOptions({ as: 'workspace' }, b, { sources })
+						).pipe(Effect.mapError(fromStore));
+						if (!compiled.dependencies.complete)
+							return yield* Effect.fail(
+								BoltError.make(
+									'preparedRead',
+									'guest',
+									'prospective reads require complete native compiler dependency proof'
+								)
+							);
 						const nativeRows = new Map<string, RowData[]>();
 						for (const [model, group] of groups) {
+							// Only compiler-proven native dependencies enter the overlay, never SQL text matching.
+							const fields = compiled.dependencies.models.get(model);
+							if (fields === undefined) {
+								sources.delete(model);
+								continue;
+							}
 							const spec = m.models[model]!;
-							if (
-								Object.keys(spec.computed ?? {}).length ||
-								Object.values(spec.fields).some((field) =>
-									['seq', 'sum', 'count'].includes(field.kind)
-								)
-							)
+							const generated = new Set([
+								...Object.keys(spec.computed ?? {}),
+								...Object.entries(spec.fields).flatMap(([field, definition]) =>
+									['seq', 'sum', 'count'].includes(definition.kind) ? [field] : []
+								),
+								RECORD_LABEL_COLUMN,
+								SEARCH_COLUMN,
+								EMBEDDING_COLUMN,
+								...Object.keys(cat.models.get(model)?.indexes ?? {}).map(indexColumn)
+							]);
+							if ([...fields].some((field) => generated.has(field)))
 								return yield* Effect.fail(
 									BoltError.make(
 										'preparedComputed',
@@ -145,19 +177,14 @@ export function prospectiveBridge(
 						// The native read is isolated, so its complete SQL can be checked before the raw driver boundary.
 						// The reader compiles the same query and retains its ordinary decoding and row delivery.
 						if (nativeRead.page._tag !== 'Limit' || nativeRead.page.limit !== 0) {
-							const compiled = (yield* compile(
-								cat,
-								nativeRead,
-								readOptions({ as: 'workspace' }, b, { sources })
-							).pipe(Effect.mapError(fromStore))).sql;
 							const statement = yield* Effect.try({
 								try: () => {
 									return withSources(
 										nativeRead.cte === undefined
-											? compiled
+											? compiled.sql
 											: {
-													text: `WITH ${q(nativeRead.cte)} AS (${compiled.text}) SELECT 0 AS m, (SELECT coalesce(jsonb_agg(to_jsonb(s)), '[]'::jsonb) FROM ${q(nativeRead.cte)} s) AS j`,
-													params: compiled.params
+													text: `WITH ${q(nativeRead.cte)} AS (${compiled.sql.text}) SELECT 0 AS m, (SELECT coalesce(jsonb_agg(to_jsonb(s)), '[]'::jsonb) FROM ${q(nativeRead.cte)} s) AS j`,
+													params: compiled.sql.params
 												}
 									);
 								},

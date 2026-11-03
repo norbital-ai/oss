@@ -40,8 +40,10 @@ import type {
 	BundlerPort,
 	BundleRequest,
 	BrowserPort,
+	BrowserCaller,
 	BrowserStep,
 	BrowserTarget,
+	BrowserWorkspaceTarget,
 	ConvertPort,
 	DeadlinesPort,
 	Downloaded,
@@ -259,6 +261,21 @@ export class WebRead extends Context.Service<
 				});
 	}
 }
+/** A browser tab as a scoped resource: close it when the scope ends, never leave it to an idle timer alone. */
+export type BrowserSession = {
+	readonly navigate: (
+		to: BrowserTarget,
+		find?: string
+	) => Effect.Effect<Json, PortFailure>;
+	readonly snapshot: (options: { readonly find?: string; readonly from?: number }) => Effect.Effect<
+		Json,
+		PortFailure
+	>;
+	readonly act: (steps: readonly BrowserStep[]) => Effect.Effect<Json, PortFailure>;
+	readonly evaluate: (expression: string) => Effect.Effect<Json, PortFailure>;
+	readonly screenshot: () => Effect.Effect<Uint8Array, PortFailure>;
+	readonly download: (url: string) => Effect.Effect<Downloaded, PortFailure>;
+};
 /** The browsing facility (`BrowserPort`); a host that turns it off fails each call as unavailable. */
 export class Browser extends Context.Service<
 	Browser,
@@ -268,6 +285,18 @@ export class Browser extends Context.Service<
 			to: BrowserTarget,
 			find?: string
 		) => Effect.Effect<Json, PortFailure>;
+		/** A page of the workspace as the person, signed in by the host's hand-off; absent when the host cannot sign in. */
+		readonly openWorkspace?: (
+			profile: string,
+			target: BrowserWorkspaceTarget,
+			caller: BrowserCaller
+		) => Effect.Effect<Json, PortFailure>;
+		/** Close this tab now; the profile's sealed sign-ins stay for its next open. Absent when the host cannot close. */
+		readonly close?: (profile: string) => Effect.Effect<void, PortFailure>;
+		/** A tab whose finalizer closes it: the one way a run or a caller keeps browser hygiene. */
+		readonly scoped: (
+			profile: string
+		) => Effect.Effect<BrowserSession, PortFailure, Scope.Scope>;
 		readonly snapshot: (
 			profile: string,
 			options: { readonly find?: string; readonly from?: number }
@@ -290,22 +319,68 @@ export class Browser extends Context.Service<
 				act: none,
 				evaluate: none,
 				screenshot: none,
-				download: none
+				download: none,
+				scoped: () =>
+					Effect.acquireRelease(
+						Effect.succeed({
+							navigate: none,
+							snapshot: none,
+							act: none,
+							evaluate: none,
+							screenshot: none,
+							download: none
+						}),
+						() => Effect.void
+					)
 			});
 		}
+		const open = port.openWorkspace,
+			close = port.close,
+			shape = {
+				navigate: (profile: string, to: BrowserTarget, find?: string) =>
+					Port.attempt('browser', (signal) => port.navigate(profile, to, find, signal)),
+				snapshot: (profile: string, options: { find?: string; from?: number }) =>
+					Port.attempt('browser', (signal) => port.snapshot(profile, options, signal)),
+				act: (profile: string, steps: readonly BrowserStep[]) =>
+					Port.attempt('browser', (signal) => port.act(profile, steps, signal)),
+				evaluate: (profile: string, expression: string) =>
+					Port.attempt('browser', (signal) => port.evaluate(profile, expression, signal)),
+				screenshot: (profile: string) =>
+					Port.attempt('browser', (signal) => port.screenshot(profile, signal)),
+				download: (profile: string, url: string) =>
+					Port.attempt('browser', (signal) => port.download(profile, url, signal))
+			};
 		return Layer.succeed(Browser, {
-			navigate: (profile, to, find) =>
-				Port.attempt('browser', (signal) => port.navigate(profile, to, find, signal)),
-			snapshot: (profile, options) =>
-				Port.attempt('browser', (signal) => port.snapshot(profile, options, signal)),
-			act: (profile, steps) =>
-				Port.attempt('browser', (signal) => port.act(profile, steps, signal)),
-			evaluate: (profile, expression) =>
-				Port.attempt('browser', (signal) => port.evaluate(profile, expression, signal)),
-			screenshot: (profile) =>
-				Port.attempt('browser', (signal) => port.screenshot(profile, signal)),
-			download: (profile, url) =>
-				Port.attempt('browser', (signal) => port.download(profile, url, signal))
+			...shape,
+			...(open === undefined
+				? {}
+				: {
+						openWorkspace: (profile, target, caller) =>
+							Port.attempt('browser', (signal) => open(profile, target, caller, signal))
+					}),
+			...(close === undefined
+				? {}
+				: {
+						close: (profile: string) =>
+							Port.attempt('browser', (signal) => close(profile, signal)).pipe(Effect.asVoid)
+					}),
+			scoped: (profile) =>
+				Effect.acquireRelease(
+					Effect.succeed({
+						navigate: (to, find) => shape.navigate(profile, to, find),
+						snapshot: (options) => shape.snapshot(profile, options),
+						act: (steps) => shape.act(profile, steps),
+						evaluate: (expression) => shape.evaluate(profile, expression),
+						screenshot: () => shape.screenshot(profile),
+						download: (url) => shape.download(profile, url)
+					}),
+					() =>
+						close === undefined
+							? Effect.void
+							: Port.attempt('browser', (signal) => close(profile, signal)).pipe(
+									Effect.ignore
+								)
+				)
 		});
 	}
 }

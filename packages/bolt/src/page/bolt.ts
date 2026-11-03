@@ -770,7 +770,7 @@ export const createBolt = (config: BoltConfig) =>
 			history: <T = Json>(
 				model: string,
 				id: string,
-				options: { at?: Json; output?: string } = {}
+				options: { at?: Json; output?: string; view?: true } = {}
 			) => q<T>('history', [model, id, options]),
 			/** One read request: `query({ <root>: { … }, '<root>.<layer>': { … } })`, answered as a page per root. */
 			query: <T = Json>(request: Readonly<Record<string, Wired>>) => q<T>('query', [request]),

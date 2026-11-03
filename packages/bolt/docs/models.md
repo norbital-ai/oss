@@ -2,6 +2,10 @@
 
 Declare the entity in `src/data/model/<name>/+model.ts`. Reads, policies, views, the agent and
 seeds all name that model. Its optional `+representation.svelte` receives `RecordView<'name'>`.
+Model folders may nest under other models or ordinary grouping folders. For example,
+`src/data/model/payroll/payroll_run/payslip/+model.ts` declares `model('payslip', …)`;
+the leaf name remains unique across the workspace. Grouping folders need no declaration, and a
+representation stays beside its own `+model.ts`.
 
 ```ts
 import { model } from '@norbital-ai/bolt';

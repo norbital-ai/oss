@@ -268,7 +268,7 @@ export {
 	type AgentConfig,
 	type DrainOptions
 } from './agent/index.ts';
-export { BROWSER_RUN_PROFILE } from './agent/browser.ts'; // hook:wiring — the profile a host discards after a run
+export { BROWSER_RUN_PROFILE, browserProfile } from './agent/browser.ts'; // hook:wiring — the profile a host discards after a run
 export { fileAttachments } from './agent/attachments.ts'; // hook:wiring — `read_attachment` over the files port
 export { REFERENCE, ReferenceIndex } from './agent/run-js.ts'; // hook:wiring — a host's `reference` tool writes the index `run_js { file }` reads
 // ── exports: protocol ──

@@ -12,6 +12,7 @@ import { program } from '../../bolt-cli/src/test/guest.ts';
 import { manifest as base } from './write-fixture.ts';
 import { dynamicRead } from '../src/protocol/read-request.ts';
 import { label, labelExpression } from '@norbital-ai/std/label';
+import { inboxRequests, openRequests } from '../src/engine/approvals/inbox.ts';
 
 const requesterId = '0199a000-0000-7000-8000-000000000001',
 	managerId = '0199a000-0000-7000-8000-000000000002',
@@ -61,7 +62,10 @@ const manifest: EngineManifest = {
 	policies: {
 		requester: {
 			description: 'Requests',
-			grants: { expenses: { read: true, create: { check: true }, update: { check: true } } }
+			grants: {
+				sys_user: { read: true },
+				expenses: { read: true, create: { check: true }, update: { check: true } }
+			}
 		},
 		reviewer: {
 			description: 'Reviews',
@@ -187,6 +191,231 @@ const fixture = Effect.gen(function* () {
 });
 
 layer(workspace, { excludeTestServices: true })('approval snapshots and saves', (it) => {
+	it.effect(
+		'prevents self-review through a named user, administrator override, or member preview',
+		() =>
+			Effect.gen(function* () {
+				const f = yield* fixture;
+				const id = randomUUID();
+				yield* f.t.db.write({
+					text: "INSERT INTO sys_user (id,name,kind,team) VALUES ($1,'Self review requester','staff','requesters')",
+					params: [id]
+				});
+				const requester = compileAuthority(
+					manifest,
+					{
+						actor: member(id, 'requesters'),
+						policies: ['requester'],
+						admin: false
+					},
+					id
+				);
+				const submitted = (yield* f.act(
+					'create',
+					[
+						{ name: 'Self review', amount: 50, manager: id },
+						{ name: 'Peer review', amount: 50, manager: managerId }
+					],
+					requester
+				)).outcome;
+				if (submitted.kind !== 'pendingApproval') throw new Error(JSON.stringify(submitted));
+				const requestId = submitted.requestId;
+				expect(yield* f.decide(requestId, 'approve', requester)).toMatchObject({
+					kind: 'refused',
+					code: 'forbidden'
+				});
+				expect(
+					(yield* f.act(
+						'update',
+						[
+							{
+								target: submitted.records[0]!.id,
+								set: { name: 'Self edit while pending' }
+							}
+						],
+						requester
+					)).outcome
+				).toMatchObject({ kind: 'refused', code: 'locked' });
+				yield* f.t.db.write({
+					text: 'UPDATE sys_user SET admin=true WHERE id=$1',
+					params: [id]
+				});
+				const admin = compileAuthority(
+					manifest,
+					{
+						actor: { ...member(id, 'requesters'), admin: true },
+						policies: ['requester'],
+						admin: true
+					},
+					`${id}:admin`
+				);
+				const preview = { ...f.manager, preview: { by: id, team: null } };
+				const approvals = yield* Approvals;
+				for (const auth of [admin, preview]) {
+					expect(yield* f.decide(requestId, 'approve', auth, 'Override')).toMatchObject({
+						kind: 'refused',
+						code: 'forbidden'
+					});
+					expect(
+						Option.getOrThrow(yield* approvals.view(requestId, auth, () => Effect.succeed(true)))
+							.moves
+					).toEqual([]);
+				}
+				const [open] = yield* f.t.db.read([openRequests]);
+				expect(inboxRequests(open?.rows ?? [], admin)).toContainEqual(
+					expect.objectContaining({
+						id: requestId,
+						mine: true,
+						canDecide: false,
+						canSupersede: false,
+						moves: []
+					})
+				);
+				expect(yield* f.request(requestId)).toMatchObject({ state: 'Pending', step: 0 });
+				for (const record of submitted.records)
+					expect(Option.getOrThrow(yield* f.row(record.id)).amount).toBe(50);
+				expect(yield* f.decide(requestId, 'approve')).toMatchObject({
+					kind: 'decided',
+					status: 'Approved'
+				});
+				const updated = (yield* f.act(
+					'update',
+					submitted.records.map((record) => ({
+						target: record.id,
+						set: { amount: 60 }
+					})),
+					requester
+				)).outcome;
+				if (updated.kind !== 'pendingApproval') throw new Error(JSON.stringify(updated));
+				expect(yield* f.decide(updated.requestId, 'approve', admin, 'Self override')).toMatchObject(
+					{
+						kind: 'refused',
+						code: 'forbidden'
+					}
+				);
+				for (const record of updated.records)
+					expect(Option.getOrThrow(yield* f.row(record.id)).amount).toBe(60);
+				expect(yield* f.decide(updated.requestId, 'approve')).toMatchObject({
+					kind: 'decided',
+					status: 'Approved'
+				});
+			})
+	);
+	it.effect('prevents self-review after the requester joins a later reviewing team', () =>
+		Effect.gen(function* () {
+			const f = yield* fixture;
+			const id = randomUUID();
+			yield* f.t.db.write({
+				text: "INSERT INTO sys_user (id,name,kind,team) VALUES ($1,'Team requester','staff','requesters')",
+				params: [id]
+			});
+			const requester = compileAuthority(
+				manifest,
+				{
+					actor: member(id, 'requesters'),
+					policies: ['requester'],
+					admin: false
+				},
+				id
+			);
+			const submitted = (yield* f.act(
+				'create',
+				[{ name: 'Team review', amount: 150, manager: managerId }],
+				requester
+			)).outcome;
+			if (submitted.kind !== 'pendingApproval') throw new Error(JSON.stringify(submitted));
+			yield* f.decide(submitted.requestId, 'approve');
+			yield* f.t.db.write({
+				text: "UPDATE sys_user SET team='finance' WHERE id=$1",
+				params: [id]
+			});
+			expect(yield* f.decide(submitted.requestId, 'approve', requester)).toMatchObject({
+				kind: 'refused',
+				code: 'forbidden'
+			});
+			expect(yield* f.request(submitted.requestId)).toMatchObject({ state: 'Pending', step: 1 });
+			expect(yield* f.decide(submitted.requestId, 'approve', f.finance)).toMatchObject({
+				kind: 'decided',
+				status: 'Approved'
+			});
+		})
+	);
+	it.effect('prevents self-review by a member who submitted through a linked envoy', () =>
+		Effect.gen(function* () {
+			const f = yield* fixture;
+			const envoy = compileAuthority(
+				manifest,
+				{
+					actor: {
+						kind: 'envoy',
+						envoy: 'desk',
+						instance: 'chat',
+						sender: randomUUID(),
+						member: managerId
+					},
+					policies: ['requester'],
+					admin: false
+				},
+				randomUUID()
+			);
+			const submitted = (yield* f.act(
+				'create',
+				[
+					{ name: 'Envoy review', amount: 50, manager: managerId },
+					{ name: 'Other reviewer', amount: 50, manager: financeId }
+				],
+				envoy
+			)).outcome;
+			if (submitted.kind !== 'pendingApproval') throw new Error(JSON.stringify(submitted));
+			expect(yield* f.decide(submitted.requestId, 'approve', f.manager)).toMatchObject({
+				kind: 'refused',
+				code: 'forbidden'
+			});
+			expect(yield* f.request(submitted.requestId)).toMatchObject({ state: 'Pending' });
+			expect(yield* f.decide(submitted.requestId, 'approve', f.finance)).toMatchObject({
+				kind: 'decided',
+				status: 'Approved'
+			});
+		})
+	);
+	it.effect('keeps resubmission pending even when the requester now has direct permission', () =>
+		Effect.gen(function* () {
+			const f = yield* fixture;
+			const created = (yield* f.act(
+				'create',
+				[{ name: 'Revised expense', amount: 50, manager: managerId }],
+				f.t.as(f.t.admin).authority
+			)).outcome;
+			if (created.kind !== 'committed') throw new Error(JSON.stringify(created));
+			const id = created.records[0]?.id;
+			if (id === undefined) throw new Error('Missing expense');
+			const proposed = (yield* f.act('update', [{ target: id, set: { amount: 150 } }])).outcome;
+			if (proposed.kind !== 'pendingApproval') throw new Error(JSON.stringify(proposed));
+			yield* f.decide(
+				proposed.requestId,
+				'requestChanges',
+				f.manager,
+				'Restore the original amount'
+			);
+			const resubmitted = (yield* f.act('update', [{ target: id, set: { amount: 50 } }])).outcome;
+			if (resubmitted.kind !== 'pendingApproval') throw new Error(JSON.stringify(resubmitted));
+			expect(resubmitted).toMatchObject({ kind: 'pendingApproval', requestId: proposed.requestId });
+			expect(Option.getOrThrow(yield* f.row(id)).amount).toBe(50);
+			expect(yield* f.request(proposed.requestId)).toMatchObject({ state: 'Pending', step: 0 });
+			expect(yield* f.decide(proposed.requestId, 'approve', f.requester)).toMatchObject({
+				kind: 'refused',
+				code: 'forbidden'
+			});
+			expect(yield* f.decide(proposed.requestId, 'approve')).toMatchObject({
+				kind: 'decided',
+				status: 'Pending'
+			});
+			expect(yield* f.decide(proposed.requestId, 'approve', f.finance)).toMatchObject({
+				kind: 'decided',
+				status: 'Approved'
+			});
+		})
+	);
 	it.effect('CEL labels agree between the client and native approval snapshot expressions', () =>
 		Effect.gen(function* () {
 			const f = yield* fixture;

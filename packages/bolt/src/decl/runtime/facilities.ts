@@ -216,7 +216,28 @@ type Call<A extends unknown[], R> = {
 };
 type Out<O> = O & Checked<InputKind, O, Exact<O, ValidInput<O>>>;
 
-// ── send, request, web ──
+// ── browser: a run-scoped tab, closed when the run's scope ends ──
+/**
+ * `ctx.browser`: the automation run's own browser tab. It has no person's cookies: its profile is
+ * `BROWSER_RUN_PROFILE + run.id`, sealed under the tenant's browser key and closed when the run ends.
+ * `navigate` opens an http(s) URL; `snapshot`, `act` and `evaluate` read and act on it; `close` closes it now.
+ */
+export type Browser = {
+	navigate: Call<[url: string, options?: { readonly find?: string }], Json>;
+	snapshot: Call<[options?: { readonly find?: string; readonly from?: number }], Json>;
+	act: Call<[steps: readonly Json[]], Json>;
+	evaluate: Call<[expression: string], Json>;
+	close: Call<[], void>;
+};
+/**
+ * `browserStart(ctx, use)`: runs `use` with the run's browser; the tab closes when the run's scope exits,
+ * including on failure or interruption. This is the only browser a run gets.
+ */
+export const browserStart = <A>(
+	ctx: { readonly browser: Browser },
+	use: (browser: Browser) => Eff<A>
+): Eff<A> => use(ctx.browser);
+
 /** Where a send or request goes: a connection, or an instance id pinned to a definition. */
 export type InstanceTarget = ConnectionName | InstanceId;
 type SendPayload<N> =

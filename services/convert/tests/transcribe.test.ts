@@ -119,7 +119,7 @@ async function start(transcribes: boolean) {
 		});
 }
 
-test('audio without a transcription model is 503; a video track is 415; audio-only mp4 is transcribed', async () => {
+test('audio without a transcription model is 503; audio-only and video mp4 are transcribed', async () => {
 	const off = await start(false);
 	const unavailable = await off('call.mp3', 'audio/mpeg', new Uint8Array([1]));
 	assert.equal(unavailable.status, 503);
@@ -127,8 +127,8 @@ test('audio without a transcription model is 503; a video track is 415; audio-on
 
 	const on = await start(true);
 	const video = await on('clip.mp4', 'video/mp4', media('clip.mp4', 1, true));
-	assert.equal(video.status, 415);
-	assert.deepEqual(await video.json(), { error: 'unsupported', message: 'no parser: build a tool for it with your workspace tools' });
+	assert.equal(video.status, 200);
+	assert.match(await video.text(), /"kind":"document","html":"<section data-speaker=\\"S1\\" data-start=\\"0\\" data-end=\\"2\\"><time>00:00:00<\/time> hello<\/section>","images":\[\],"meta":\{"usage":/);
 	const audio = await on('call.mp4', 'video/mp4', media('call.mp4', 1));
 	assert.equal(audio.status, 200);
 	assert.match(await audio.text(), /"kind":"document","html":"<section data-speaker=\\"S1\\" data-start=\\"0\\" data-end=\\"2\\"><time>00:00:00<\/time> hello<\/section>","images":\[\],"meta":\{"usage":/);

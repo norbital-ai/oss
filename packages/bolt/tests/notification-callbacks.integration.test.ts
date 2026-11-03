@@ -5,7 +5,7 @@ import { Callables, RunHandlers, Writes, Reads } from '../src/engine/services.ts
 import { Convert } from '../src/engine/ports.ts';
 import { compileAuthority } from '../src/engine/access/authority.ts';
 import { readableFile } from '../src/engine/decisions/index.ts';
-import { noticeRows } from '../src/engine/notifications/notify.ts';
+import { noticeRows, notifyRun, type NotifyWire } from '../src/engine/notifications/notify.ts';
 import { TestWorkspace } from '../../bolt-cli/src/test/index.ts';
 import type { EngineManifest } from '../src/engine/manifest.ts';
 import { admin, manifest as base } from './write-fixture.ts';
@@ -85,6 +85,69 @@ export default {model:{orders:{bodies:{notify:${notify}}}},automation:{ping:{bod
 		return { t, context, writes, calls, request, pending, notifyRun, notes };
 	});
 describe('model notification callbacks', () => {
+	it.effect(
+		'notifies only active current approvers, excludes the requester, and dedupes delivery',
+		() =>
+			Effect.scoped(
+				Effect.gen(function* () {
+					const f = yield* setup(
+						"function*(event){return [{title:'Review requested',to:['approvers']}];}"
+					);
+					const saved = (yield* f.writes.act(f.request('approval-notification'))).outcome;
+					if (saved.kind !== 'committed') throw new Error(JSON.stringify(saved));
+					const record = saved.records[0]?.id;
+					if (record === undefined) throw new Error('Missing order');
+					const requester = randomUUID(),
+						inactive = randomUUID(),
+						later = randomUUID(),
+						request = randomUUID();
+					yield* f.t.db.write({
+						text: "INSERT INTO sys_user(id,name,kind,team,active) VALUES ($1,'Requester','staff','reviewers',true),($2,'Inactive','staff','reviewers',false),($3,'Later reviewer','staff',null,true)",
+						params: [requester, inactive, later]
+					});
+					const approvers = { teams: ['reviewers'], users: [requester, recipient, inactive] };
+					const steps = [
+						{ name: 'Peer review', ...approvers },
+						{ name: 'Later review', teams: [], users: [later] }
+					];
+					yield* f.t.db.write({
+						text: "INSERT INTO bolt_approvals(id,state,step,collection,record,action,requestor,requestor_user,route,records,log,at) VALUES ($1::uuid,'Pending',0,'orders',$2,'create',$3,$4,$5::jsonb,'[]'::jsonb,'[]'::jsonb,$6::timestamptz)",
+						params: [
+							request,
+							record,
+							`member:${requester}`,
+							requester,
+							JSON.stringify({ kind: 'steps', steps, superseded_by: [] }),
+							f.t.clock.now()
+						]
+					});
+					const event: NotifyWire = {
+						kind: 'approval',
+						move: 'request',
+						step: 0,
+						steps,
+						done: false,
+						request,
+						records: [{ id: record }],
+						requester,
+						approvers
+					};
+					const run = {
+						id: randomUUID(),
+						input: notifyRun({ model: 'orders', event }, f.t.clock.now()).input
+					};
+					yield* f.notifyRun(run);
+					yield* f.notifyRun(run);
+					expect(yield* f.notes()).toEqual([{ title: 'Review requested', member: recipient }]);
+					yield* f.t.db.write({
+						text: "UPDATE bolt_approvals SET state='Approved' WHERE id=$1::uuid",
+						params: [request]
+					});
+					yield* f.notifyRun({ ...run, id: randomUUID() });
+					expect(yield* f.notes()).toEqual([{ title: 'Review requested', member: recipient }]);
+				})
+			)
+	);
 	it.live(
 		'runs after commit on committed row images, dedupes recipients and retried delivery',
 		() =>

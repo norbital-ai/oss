@@ -69,7 +69,7 @@ end;
 $bolt_audit$`,
 	`create or replace function bolt_audit() returns trigger language plpgsql volatile as $bolt_audit$
 declare context jsonb; old_row jsonb; new_row jsonb; row_id text; key text; revision_number int;
-	operation text; reason text; history_reason text; source_revision int; erased_row boolean := false;
+	operation text; reason text; history_reason text; source_revision int; erased_row boolean := false; schema_version text; schema_snapshot boolean := false;
 	explicit_reason text; explicit_erased boolean; ref_edge jsonb; parent_live boolean;
 	held_request uuid; changes jsonb; native_at timestamptz; native_actor text; native_request uuid;
 begin
@@ -130,9 +130,18 @@ begin
 			where k not in ('revision','updated_at','updated_by','bolt_search','bolt_embedding','bolt_record_label') and old_row->k is distinct from v
 		) end;
 	if row_id ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' then
+		if to_regclass('bolt_history_current') is not null then
+			select schema::text into schema_version from bolt_history_current where model=TG_TABLE_NAME and active;
+		end if;
+		if operation='update' and schema_version is not null and not exists(
+			select 1 from bolt_history where collection=TG_TABLE_NAME and record=row_id::uuid and meta->>'schema'=schema_version
+			and coalesce(meta->>'legacy','false')<>'true') then
+			changes := new_row - array['bolt_search','bolt_embedding','bolt_record_label'];
+			schema_snapshot := true;
+		end if;
 		insert into bolt_history(collection,record,revision,at,actor,op,cause,changes,restored_from,request,operation,meta)
 		values(TG_TABLE_NAME,row_id::uuid,revision_number,native_at,native_actor,operation,history_reason,changes,source_revision,native_request,nullif(current_setting('bolt.audit',true),''),
-		jsonb_build_object('id',row_id,'revision',coalesce(new_row,old_row)->'revision','updated_at',coalesce(new_row,old_row)->'updated_at','updated_by',coalesce(new_row,old_row)->'updated_by','created_at',coalesce(new_row,old_row)->'created_at','created_by',coalesce(new_row,old_row)->'created_by'));
+		jsonb_build_object('id',row_id,'revision',coalesce(new_row,old_row)->'revision','updated_at',coalesce(new_row,old_row)->'updated_at','updated_by',coalesce(new_row,old_row)->'updated_by','created_at',coalesce(new_row,old_row)->'created_at','created_by',coalesce(new_row,old_row)->'created_by','schema',schema_version,'full',schema_snapshot));
 	end if;
 	if context is not null and to_regclass('pg_temp.bolt_changes') is not null then
 		insert into pg_temp.bolt_changes(token,c,id,revision,op,cause,erased,o,n)

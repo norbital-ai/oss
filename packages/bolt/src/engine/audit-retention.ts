@@ -7,7 +7,7 @@ export const acknowledgeAudit = (db: TenantDbShape, operation: string) =>
 		.returning(Schema.Struct({ erase: Schema.Boolean }), {
 			text: `UPDATE bolt_audit_receipt SET acknowledged_at=clock_timestamp() WHERE operation=$1 AND acknowledged_at IS NULL AND expired_at IS NULL
 		RETURNING EXISTS (SELECT 1 FROM bolt_audit_erase p WHERE p.operation=$1 OR EXISTS (
-			SELECT 1 FROM bolt_history h WHERE h.operation=$1 AND h.collection=p.collection AND h.record=p.record)) AS erase`,
+			SELECT 1 FROM bolt_history h WHERE h.operation=$1 AND bolt_history_matches(h.collection,h.meta,p.collection) AND h.record=p.record)) AS erase`,
 			params: [operation]
 		})
 		.pipe(Effect.map((rows) => rows.some((row) => row.erase)));
@@ -44,18 +44,18 @@ export const drainAuditErases = Effect.fn('Audit.eraseHistory')(function* (db: T
 	JOIN bolt_audit_receipt r ON r.operation=p.operation
 	WHERE (r.acknowledged_at IS NOT NULL OR r.expired_at IS NOT NULL) AND NOT EXISTS (
 		SELECT 1 FROM bolt_history h LEFT JOIN bolt_audit_receipt pending ON pending.operation=h.operation
-		WHERE h.collection=p.collection AND h.record=p.record AND h.operation IS NOT NULL
+		WHERE bolt_history_matches(h.collection,h.meta,p.collection) AND h.record=p.record AND h.operation IS NOT NULL
 		AND pending.acknowledged_at IS NULL AND pending.expired_at IS NULL)
 	ORDER BY p.collection,p.record,p.revision,p.operation,p.mode LIMIT 200),
 removed AS (DELETE FROM bolt_history h USING ready p
-	WHERE p.mode='remove' AND h.collection=p.collection AND h.record=p.record AND h.revision<=p.revision
+	WHERE p.mode='remove' AND bolt_history_matches(h.collection,h.meta,p.collection) AND h.record=p.record AND h.revision<=p.revision
 	AND NOT (p.keep_marker AND h.revision=p.revision) RETURNING h.record),
-sanitised AS (UPDATE bolt_history h SET changes=h.changes-p.purge FROM ready p
-	WHERE p.mode='anonymise' AND h.collection=p.collection AND h.record=p.record AND h.revision<p.revision
-	AND h.changes ?| p.purge AND (h.changes-p.purge<>'{}'::jsonb OR h.cause='erased') RETURNING h.record),
+sanitised AS (UPDATE bolt_history h SET changes=h.changes-bolt_history_purge_fields(h.meta->>'schema',p.collection,p.purge) FROM ready p
+	WHERE p.mode='anonymise' AND bolt_history_matches(h.collection,h.meta,p.collection) AND h.record=p.record AND h.revision<p.revision
+	AND h.changes ?| bolt_history_purge_fields(h.meta->>'schema',p.collection,p.purge) AND (h.changes-bolt_history_purge_fields(h.meta->>'schema',p.collection,p.purge)<>'{}'::jsonb OR h.cause='erased') RETURNING h.record),
 empty AS (DELETE FROM bolt_history h USING ready p
-	WHERE p.mode='anonymise' AND h.collection=p.collection AND h.record=p.record AND h.revision<p.revision
-	AND h.cause<>'erased' AND h.changes ?| p.purge AND h.changes-p.purge='{}'::jsonb RETURNING h.record),
+	WHERE p.mode='anonymise' AND bolt_history_matches(h.collection,h.meta,p.collection) AND h.record=p.record AND h.revision<p.revision
+	AND h.cause<>'erased' AND h.changes ?| bolt_history_purge_fields(h.meta->>'schema',p.collection,p.purge) AND h.changes-bolt_history_purge_fields(h.meta->>'schema',p.collection,p.purge)='{}'::jsonb RETURNING h.record),
 finished AS (DELETE FROM bolt_audit_erase p USING ready r
 	WHERE p.operation=r.operation AND p.collection=r.collection AND p.record=r.record AND p.mode=r.mode RETURNING p.record)
 SELECT count(*)::int AS n FROM finished`,

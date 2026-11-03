@@ -98,8 +98,9 @@ async function fake(
 	const calls: {
 		gets: { c: string; id: string; revision?: number; layers?: Readonly<Record<string, Json>> }[];
 		history: number;
+		historyViews: number[];
 		acts: { callable: string; input: Json; options: ActOptions }[];
-	} = { gets: [], history: 0, acts: [] };
+	} = { gets: [], history: 0, acts: [], historyViews: [] };
 	const fixture = await viewFixture({
 		get: (c, id, layers, options) => {
 			// a past revision is read as of the instant its history entry was written
@@ -116,7 +117,32 @@ async function fake(
 					? (PAST[revision] ?? null)
 					: live;
 		},
-		history: () => {
+		history: (model, id, options) => {
+			const at = options?.at;
+			if (
+				options?.view === true &&
+				at !== null &&
+				typeof at === 'object' &&
+				'revision' in at &&
+				typeof at?.revision === 'number'
+			) {
+				const revision = at.revision;
+				calls.historyViews.push(revision);
+				const values = PAST[revision];
+				return values === undefined
+					? null
+					: {
+							model,
+							record: id,
+							revision,
+							at: HISTORY.find((h) => h.revision === revision)?.at ?? null,
+							schemaVersion: 'schema-1',
+							fields: { title: { kind: 'text' }, crew: { kind: 'text', optional: true } },
+							values,
+							compatible: values,
+							uncompatible: []
+						};
+			}
 			calls.history++;
 			return HISTORY;
 		},
@@ -193,6 +219,34 @@ it.live('the record heading evaluates the shared model CEL label', () =>
 		yield* browser(async () => {
 			await settle();
 			assert.match(target.textContent ?? '', /Paint v3 · Crew B/);
+			assert.equal(
+				target.querySelector('[role=dialog]')?.getAttribute('aria-label'),
+				'Paint v3 · Crew B'
+			);
+		});
+	})
+);
+it.live("an authored title names the sheet instead of the record's label", () =>
+	Effect.gen(function* () {
+		const { bolt } = yield* browser(() => fake(LIVE));
+		const target = document.body.appendChild(document.createElement('div'));
+		const app = mount(Harness, {
+			target,
+			props: {
+				bolt,
+				catalog,
+				part: 'record',
+				view: RecordShell,
+				props: { of: 'jobs', id: 'j1', title: 'Custom' }
+			}
+		});
+		mounted.push(async () => {
+			await unmount(app);
+			target.remove();
+		});
+		yield* browser(async () => {
+			await settle();
+			assert.equal(target.querySelector('[role=dialog]')?.getAttribute('aria-label'), 'Custom');
 		});
 	})
 );
@@ -210,10 +264,12 @@ async function show(
 	shownCatalog: NonNullable<KindsHost['catalog']> = catalog,
 	act?: ViewScript['act'],
 	capabilities?: NonNullable<ViewScript['capabilities']>,
-	requests: readonly (Partial<ApprovalView> & { id: string })[] = []
+	requests: readonly (Partial<ApprovalView> & { id: string })[] = [],
+	history?: ViewScript['history']
 ) {
 	const { bolt, script, setCapabilities, calls } = await fake(live, requests);
 	if (act !== undefined) script.act = act;
+	if (history !== undefined) script.history = history;
 	if (capabilities !== undefined) setCapabilities(capabilities);
 	const target = document.createElement('div');
 	document.body.append(target);
@@ -250,6 +306,43 @@ const key = async (el: Element | null, k: string) => {
 const edit = (t: ParentNode) =>
 	[...t.querySelectorAll<HTMLButtonElement>('button')].find((b) => textOf(b).trim() === 'Edit');
 
+it.live('history renders old field labels and values with an uncompatible indicator', () =>
+	Effect.gen(function* () {
+		const v = yield* browser(() =>
+			show(LIVE, catalog, undefined, undefined, [], (_model, _id, options) =>
+				options?.view === true
+					? {
+							model: 'jobs',
+							record: 'j1',
+							revision: 2,
+							at: HISTORY[1]?.at ?? null,
+							schemaVersion: 'old-schema',
+							fields: {
+								old_title: { kind: 'text', label: 'Original title' },
+								retired: { kind: 'text', label: 'Retired field' }
+							},
+							values: { old_title: 'Old paint', retired: 'Original value' },
+							compatible: { title: 'Old paint' },
+							uncompatible: ['retired']
+						}
+					: HISTORY
+			)
+		);
+		yield* browser(() => v.openHistory());
+		yield* browser(() => key(v.slider(), 'ArrowLeft'));
+		const old = element<HTMLElement>(v.target, '[data-history-field=old_title]');
+		assert.match(textOf(old), /Original title/);
+		assert.match(textOf(old), /Old paint/);
+		const retired = element<HTMLElement>(v.target, '[data-history-field=retired]');
+		assert.match(textOf(retired), /Original value/);
+		assert.equal(
+			textOf(element<HTMLElement>(retired, '[data-history-uncompatible]')).trim(),
+			'uncompatible'
+		);
+		assert.equal(v.target.querySelector('[data-field=title]'), null);
+	})
+);
+
 it.live(
 	'history loads lazily; a past revision shows read-only, then End returns to the live, editable record',
 	() =>
@@ -265,10 +358,7 @@ it.live(
 			yield* browser(() => v.openHistory());
 			assert.equal(required(v.slider()).getAttribute('aria-valuemax'), '3');
 			yield* browser(() => key(v.slider(), 'ArrowLeft'));
-			assert.ok(
-				v.calls.gets.some((g) => g.c === 'jobs' && g.revision === 2),
-				'read as of revision 2'
-			);
+			assert.ok(v.calls.historyViews.includes(2), 'read exact revision 2 with its original schema');
 			assert.ok(element<HTMLElement>(v.target, '[data-record-past]'));
 			assert.doesNotMatch(
 				textOf(element<HTMLElement>(v.target, '[data-record-past]')),

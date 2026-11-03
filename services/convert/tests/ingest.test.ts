@@ -53,7 +53,7 @@ function allowed(html: string) {
 	}
 }
 
-test('routes by mime type, then by extension; audio, video, CAD and unknown formats get an explicit answer', () => {
+test('routes by mime type, then by extension; audio, video containers, CAD and unknown formats get an explicit answer', () => {
 	const ext = (name: string, mime: string) => {
 		const r = route(name, mime);
 		return r.ok ? `${r.ext}:${r.kind}` : r.message;
@@ -80,7 +80,7 @@ test('routes by mime type, then by extension; audio, video, CAD and unknown form
 	assert.equal(ext('a.mp3', 'audio/mpeg'), 'mp3:audio');
 	assert.equal(ext('meeting.m4a', 'application/octet-stream'), 'm4a:audio');
 	assert.equal(ext('note.webm', 'audio/webm'), 'webm:audio');
-	assert.equal(ext('a.mp4', 'video/mp4'), 'mp4:audio'); // probed for a video track before it is queued
+	assert.equal(ext('a.mp4', 'video/mp4'), 'mp4:audio'); // its audio track is transcribed
 	const none = 'no parser: build a tool for it with your workspace tools';
 	assert.equal(ext('a.mov', 'video/quicktime'), none);
 	assert.equal(ext('a.mkv', 'video/x-matroska'), none);

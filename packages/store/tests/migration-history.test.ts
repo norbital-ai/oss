@@ -297,13 +297,26 @@ describe('replay proofs and planning status', () => {
 				).toContain('numbered at the end');
 				expect(physicalHash(prefix2)).toBe(physicalHash([...prefix2].reverse()));
 				const definitions = { '': [], [first.name]: prefix2, [second.name]: prefix3 };
-				expect(yield* readPhysicalDefinitions(physicalDefinitionsOf(definitions))).toEqual(definitions);
+				expect(yield* readPhysicalDefinitions(physicalDefinitionsOf(definitions))).toEqual(
+					definitions
+				);
 				expect(yield* readPhysicalDefinitions(JSON.stringify(definitions))).toEqual(definitions);
 				expect(
 					yield* failure(
 						readPhysicalDefinitions(JSON.stringify({ format: 1, lines: [], prefixes: { '': [0] } }))
 					)
 				).toContain('physical definition 0 is missing');
+				const large = `function lookup() ${'multilingual lookup '.repeat(1000)}`;
+				const packed = physicalDefinitionsOf({ '0001_initial.sql': [large] });
+				expect(packed.length).toBeLessThan(large.length / 10);
+				expect(yield* readPhysicalDefinitions(packed)).toEqual({ '0001_initial.sql': [large] });
+				expect(
+					yield* failure(
+						readPhysicalDefinitions(
+							JSON.stringify({ format: 2, lines: [{ deflate: 'broken' }], prefixes: { '': [0] } })
+						)
+					)
+				).toContain('invalid compressed physical definition');
 				expect(yield* failure(comparePhysical(prefix2.slice(1), physicalHash(prefix2)))).toContain(
 					'live schema differs'
 				);

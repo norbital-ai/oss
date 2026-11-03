@@ -19,6 +19,7 @@ import {
 	NoticeRow,
 	RunTriggerViewSchema
 } from '../protocol/schema.ts';
+import type { PageResult } from '../protocol/schema.ts';
 import { Diagnostic } from '../protocol/diagnostic.ts';
 import { MigrationImpact } from '../protocol/migration-impact.ts';
 import {
@@ -682,6 +683,10 @@ export type ShellApi = {
 			attachments?: readonly Attachment[],
 			mode?: 'plan' | 'compact'
 		): AgentAct;
+		/** The active tab writes back whether it performed a page action. */
+		pageResult(message: string, result: PageResult): AgentAct;
+		/** The first tab to claim a page action owns it; the others stay silent. */
+		claimPageAction(message: string): AgentAct;
 		/** One panel attachment stored to `/__bolt/files/sys_conversation.inputs`. */
 		upload(file: File): Call<Required<Attachment>>;
 		respondNow(conversation: string): AgentAct;

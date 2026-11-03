@@ -50,7 +50,8 @@ const held = (records: string, c: string, id: string) =>
 
 /** The current step's approvers (`team` among its teams, member `id` among its users) in Pending, the requester in ChangesRequested (alias `a`). */
 const eligible = (team: string, id: string, ref: string) =>
-	`coalesce((a.state = 'Pending' AND (a.route -> 'steps' -> a.step -> 'teams' ? ${team}::text
+	`coalesce((a.state = 'Pending' AND a.requestor <> ${ref} AND a.requestor_user IS DISTINCT FROM ${id}::text
+			AND (a.route -> 'steps' -> a.step -> 'teams' ? ${team}::text
 			OR a.route -> 'steps' -> a.step -> 'users' ? ${id}::text))
 			OR (a.state = 'ChangesRequested' AND a.requestor = ${ref}), false)`;
 /** The actor's own team and member id, as `eligible` compares them (static identities have neither). */

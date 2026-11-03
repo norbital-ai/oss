@@ -1,7 +1,7 @@
 // The structural client boundary supplied by a host; UI has no Bolt package dependency.
 import type { Effect, Stream } from 'effect';
 import type { Json } from '@norbital-ai/std/wire';
-import type { Value, FileRef, FileUrlOptions } from '@norbital-ai/std/kind';
+import type { Value, FileRef, FileUrlOptions, Kind } from '@norbital-ai/std/kind';
 import type { Page, Row, Values } from '../model/types.js';
 import type { RecordCapabilities, RecordParentContext, RestorePreview } from '../record/types.js';
 import type { Offer } from '../filter/filter.js';
@@ -27,6 +27,23 @@ export type HistoryEntry = {
 	readonly approval: { readonly request: string; readonly state: string | null } | null;
 	/** The fields this revision wrote, as the read's output shows them. */
 	readonly changed: Values;
+	readonly schemaVersion?: string | null;
+	readonly legacy?: boolean;
+	readonly uncompatible?: readonly string[];
+};
+/** One revision rendered with its own definition, and the values safe to project into today's schema. */
+export type HistorySnapshot = {
+	readonly model: string;
+	readonly record: string;
+	readonly revision: number;
+	readonly at: string | null;
+	readonly schemaVersion: string | null;
+	/** Definitions written before schema versioning are inferred from the first known schema. */
+	readonly legacy?: boolean;
+	readonly fields: Readonly<Record<string, Kind>>;
+	readonly values: Values;
+	readonly compatible: Values;
+	readonly uncompatible: readonly string[];
 };
 /**
  * A read (`query`, `aggregate`, `history`), as bolt's `Query<T>`: read in a component (`.current`, `.loading`, `.error`)
@@ -180,7 +197,7 @@ export type ViewBolt = {
 	history<T = readonly HistoryEntry[]>(
 		model: string,
 		id: string,
-		options?: { at?: Json; output?: string }
+		options?: { at?: Json; output?: string; view?: true }
 	): Query<T>;
 	/** With a unit, reactive (it changes at each minute, hour or day in the workspace zone); without, the page's open. */
 	clock(unit?: 'minute' | 'hour' | 'day'): Clock;

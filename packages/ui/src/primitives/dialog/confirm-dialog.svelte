@@ -48,9 +48,11 @@
 >
 	<!-- the alert-dialog root makes the same content an `alertdialog` -->
 	<!-- no focus restore on close: over an open sheet the two traps would hand focus back and forth -->
+	<!-- a confirmation is a centred decision, never a page-edge sheet -->
 	<Content
-		class="max-w-md"
+		class="max-w-md rounded-lg"
 		data-confirm-dialog
+		data-mobile-bottom-sheet="false"
 		onCloseAutoFocus={(event: Event) => event.preventDefault()}
 	>
 		<Header>

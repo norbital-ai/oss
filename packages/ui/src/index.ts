@@ -44,7 +44,7 @@ export type {
 	RecordHistoryConfig,
 	RecordHistorySource
 } from './record/RecordShell.svelte';
-export type { ApprovalView } from './client/contract.js';
+export type { ApprovalView, HistorySnapshot } from './client/contract.js';
 export type { AutomationInputOf, AutomationKey, InsertOf, RecordOf, RowOf } from './model/types.js';
 /** An approval request: its timeline of steps and the decisions the host allows the viewer. */
 export { default as ApprovalPanel } from './approval/ApprovalPanel.svelte';

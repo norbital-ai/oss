@@ -5,7 +5,12 @@
 
 	let { dirty }: { dirty: () => boolean } = $props();
 	// svelte-ignore state_referenced_locally -- the probe's getter is fixed for its life
-	onDestroy(getContext<SheetGuard>(SHEET_GUARD)(() => dirty()));
+	onDestroy(
+		getContext<SheetGuard>(SHEET_GUARD)(
+			() => dirty(),
+			() => {}
+		)
+	);
 </script>
 
 <p>draft</p>

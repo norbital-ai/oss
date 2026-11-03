@@ -117,7 +117,8 @@
 		csv: ['.csv', 'text/csv'],
 		tsv: ['.tsv', 'text/tab-separated-values'],
 		json: ['.json', 'application/json'],
-		ics: ['.ics', 'text/calendar']
+		ics: ['.ics', 'text/calendar'],
+		txt: ['.txt', 'text/plain']
 	};
 	/** A file sync's picker `accept`: exactly its parsers' extensions and media types (default `xlsx`, `csv`). */
 	export const acceptOf = (parser: readonly ParserExposure[] = ['xlsx', 'csv']): string =>

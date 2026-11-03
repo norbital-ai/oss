@@ -53,7 +53,8 @@ export type WriteField<C, O extends 'create' | 'update', P = C> = LayerColumn<C,
  * The approval flow a check's `ctx.approve(build)` holds the write for, built fluently from the `flow` it is given.
  * Steps run in order and anyone listed on a step may decide it; `if` adds steps only when its condition holds (`else`
  * otherwise); `supersededBy` names teams that may decide in any step's place; `allow()` writes directly and
- * `deny(message)` refuses the write. After `allow()` or `deny()` nothing more may be added.
+ * `deny(message)` refuses the write. The requester cannot approve or supersede their own request, even if listed or
+ * an administrator. After `allow()` or `deny()` nothing more may be added.
  * @example
  * return ctx.approve((flow) =>
  * 	flow

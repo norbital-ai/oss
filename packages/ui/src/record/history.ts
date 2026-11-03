@@ -1,5 +1,5 @@
 import type { Json } from '@norbital-ai/std/wire';
-import type { HistoryEntry, ViewBolt } from '../client/contract.js';
+import type { HistoryEntry, HistorySnapshot, ViewBolt } from '../client/contract.js';
 import { humanize, msg } from '../text/messages.js';
 /** A related model's records whose history joins the record's: those `where` selects, read through the viewer's scope. */
 export type RecordHistorySource = { of: string; where?: Json; fields?: readonly string[] };
@@ -17,6 +17,8 @@ const BOOKKEEPING = new Set([
 	'updated_at',
 	'updated_by'
 ]);
+export const historicalFields = (snapshot: HistorySnapshot) =>
+	Object.entries(snapshot.values).filter(([field]) => !BOOKKEEPING.has(field));
 /** One revision on the record header's timeline: when, by whom (`kind:id` split) and which visible fields it changed. */
 export type Checkpoint = {
 	revision: number;
@@ -71,11 +73,8 @@ export function skipText(bolt: Pick<ViewBolt, 't'>, reason: string): string {
 		case 'stateLocked':
 			return msg(bolt, 'record.restoreSkip.stateLocked', 'This state change is not allowed');
 		case 'definitionChanged':
-			return msg(
-				bolt,
-				'record.restoreSkip.definitionChanged',
-				'The field has changed since this version'
-			);
+		case 'uncompatible':
+			return msg(bolt, 'record.restoreSkip.uncompatible', 'uncompatible');
 		default:
 			return humanize(reason);
 	}

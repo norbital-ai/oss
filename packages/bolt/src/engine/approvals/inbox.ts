@@ -30,7 +30,7 @@ export type InboxRequest = {
 
 // Eligibility filters the bounded candidate set; these are private rows, never a caller's model read.
 export const openRequests: Sql = {
-	text: `SELECT a.id::text AS id, a.state, a.collection AS model, a.record, a.action, a.requestor, a.step, a.route, a.at::text AS at,
+	text: `SELECT a.id::text AS id, a.state, a.collection AS model, a.record, a.action, a.requestor, a.requestor_user AS "user", a.step, a.route, a.at::text AS at,
 	coalesce(u.name, u.email, a.requestor) AS by FROM bolt_approvals a LEFT JOIN sys_user u ON a.requestor = 'member:' || u.id
 	WHERE a.state IN ('Pending', 'ChangesRequested') ORDER BY a.at DESC LIMIT 2000`,
 	params: []
@@ -42,6 +42,7 @@ const Open = Schema.Struct({
 	record: Schema.String,
 	action: Schema.String,
 	requestor: Schema.String,
+	user: Schema.NullOr(Schema.String),
 	step: Schema.Number,
 	route: Snapshot,
 	at: Schema.String,
@@ -72,7 +73,7 @@ export function inboxRequests(rows: readonly RowData[], auth: Authority): InboxR
 			requestor: row.requestor,
 			by: row.by,
 			mine,
-			canDecide: row.state === 'Pending' && canApprove(row, actor),
+			canDecide: row.state === 'Pending' && canApprove(row, auth),
 			canSupersede: row.state === 'Pending' && canSupersede(row, auth),
 			moves
 		});

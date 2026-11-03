@@ -87,7 +87,7 @@ export type FileSyncCtx = Clock & { readonly db: Pick<CallerQuery, 'query' | 'ag
 /** A built-in parser, run on the host: `xlsx` (row 1 headers match a field's name or `label`, any case; Excel date and
  * time serials become dates and times), `csv` (RFC 4180, encoding and delimiter detected), `tsv` (as csv, with tabs),
  * `json` (an array of records, or `{ "records": [...] }`), `ics` (iCalendar `VEVENT`s). */
-export type BuiltinParser = 'xlsx' | 'csv' | 'tsv' | 'json' | 'ics';
+export type BuiltinParser = 'xlsx' | 'csv' | 'tsv' | 'json' | 'ics' | 'txt';
 /** One parsed record and where it came from: `$at` is its sheet row or line, so findings and refusals point at it. */
 export type FileRecord<R = { readonly [field: string]: Json }> = R & { readonly $at: number };
 /** What a custom `parse` sees: a file sync's ctx and the uploaded file's bytes or text. */

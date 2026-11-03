@@ -137,7 +137,8 @@ export const load = Effect.fn('bolt.load')(function* (root: string, files: reado
  */
 export function manifestErrors(
 	manifest: Manifest,
-	layer: 'workspace' | 'system' = 'workspace'
+	layer: 'workspace' | 'system' = 'workspace',
+	files: readonly Discovered[] = []
 ): Diagnostic[] {
 	const errors: Diagnostic[] = [];
 	const fail = (code: Diagnostic['code'], path: string, message: string) =>
@@ -149,7 +150,7 @@ export function manifestErrors(
 			if (declared !== name)
 				fail(
 					'load/name-path',
-					sourcePath(role, name),
+					sourcePath(role, name, files),
 					`declares ${CALLS[role]}('${String(declared)}'); its path names it '${name}'`
 				);
 		}
@@ -236,13 +237,13 @@ export function manifestErrors(
 				if (SYSTEM_COLUMNS.some((column) => column === f))
 					fail(
 						'load/reserved-field',
-						sourcePath('model', name),
+						sourcePath('model', name, files),
 						`'${f}' is a system column on every row (${SYSTEM_COLUMNS.join(', ')}); name the field for what it holds, e.g. '${name.replace(/s$/, '')}_${f}'`
 					);
 			if (literal['table'] !== undefined)
 				fail(
 					'load/system-only',
-					sourcePath('model', name),
+					sourcePath('model', name, files),
 					'`table` describes a built-in system table; a workspace model takes the engine columns'
 				);
 		}

@@ -33,8 +33,7 @@ const romanizeFunction = (): string => {
 		codes[offset * 2] = index >> 8;
 		codes[offset * 2 + 1] = index & 255;
 	}
-	const hex = Array.from(codes, (byte) => byte.toString(16).padStart(2, '0')).join('');
-	return `create or replace function bolt_search_romanize(run text) returns text[] language plpgsql immutable strict parallel safe as $bolt_search$ begin return array(select coalesce(case when code between 0 and ${codes.length / 2 - 1} then readings ->> (nullif(get_byte(codes, 2 * code) * 256 + get_byte(codes, 2 * code + 1), 0) - 1) end, glyph) from (select decode('${hex}', 'hex') as codes, '${JSON.stringify(readings)}'::jsonb as readings) as lookup, regexp_split_to_table(run, '') with ordinality as t(glyph, position), lateral (select ascii(glyph) - ${first} as code) as offsets order by position); end $bolt_search$`;
+	return `create or replace function bolt_search_romanize(run text) returns text[] language plpgsql immutable strict parallel safe as $bolt_search$ begin return array(select coalesce(case when code between 0 and ${codes.length / 2 - 1} then readings ->> (nullif(get_byte(codes, 2 * code) * 256 + get_byte(codes, 2 * code + 1), 0) - 1) end, glyph) from (select decode('${Base64.encode(codes)}', 'base64') as codes, '${JSON.stringify(readings)}'::jsonb as readings) as lookup, regexp_split_to_table(run, '') with ordinality as t(glyph, position), lateral (select ascii(glyph) - ${first} as code) as offsets order by position); end $bolt_search$`;
 };
 
 /**

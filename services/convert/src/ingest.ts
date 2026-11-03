@@ -75,12 +75,12 @@ const ALIAS: Record<string, string> = {
 };
 const BY_MIME = new Map(Object.entries(FORMATS).map(([ext, f]) => [f.mime, ext]));
 const AUDIO = /^(mp3|m4a|wav|ogg|oga|opus|flac|aac|weba|webm|mp4)$/;
-/** Containers that may carry a video track: the server probes them before queueing. */
+/** Containers whose audio track the transcriber can read (mp4, m4a, webm, ogg); other video containers are refused. */
 const CONTAINER = /^(mp4|m4a|webm|ogg)$/;
 const NO_PARSER = 'no parser: build a tool for it with your workspace tools';
 
 export type Route =
-	| { ok: true; ext: string; kind: Kind; reader: Reader; mime: string; probe?: boolean }
+	| { ok: true; ext: string; kind: Kind; reader: Reader; mime: string }
 	| { ok: false; message: string };
 /** The format of a file by its mime type, then its name's extension; never a guess at contents. */
 export function route(name: string, mime: string): Route {
@@ -91,7 +91,7 @@ export function route(name: string, mime: string): Route {
 	if (type.startsWith('audio/') || (AUDIO.test(ext) && (type === '' || type === 'application/octet-stream' || media)))
 		return media?.[1] === 'video' && !CONTAINER.test(media[2] === 'quicktime' ? 'mov' : media[2]!)
 			? { ok: false, message: NO_PARSER }
-			: { ok: true, ext, kind: 'audio', reader: 'audio', mime: type, probe: media?.[1] === 'video' || CONTAINER.test(ext) };
+			: { ok: true, ext, kind: 'audio', reader: 'audio', mime: type };
 	const found =
 		BY_MIME.get(type) ??
 		ALIAS[type] ??

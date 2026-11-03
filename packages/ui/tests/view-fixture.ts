@@ -68,7 +68,7 @@ export type ViewScript = {
 		options?: { asOf?: string; fields?: readonly string[] }
 	): ReadReply;
 	aggregate(model: string, options: ReadOptions): ReadReply;
-	history(model: string, id: string): ReadReply;
+	history(model: string, id: string, options?: Readonly<Record<string, Json>>): ReadReply;
 	act(
 		callable: string,
 		input: ActBody['input'],
@@ -152,7 +152,7 @@ export async function viewFixture(extra: Partial<ViewScript> = {}) {
 				case 'aggregate':
 					return script.aggregate(strings(target), options(arg));
 				case 'history':
-					return script.history(strings(target), strings(arg));
+					return script.history(strings(target), strings(arg), jsonRecord(read.a[2] ?? {}));
 				default:
 					throw new Error(`Unexpected ${read.m} in view fixture`);
 			}

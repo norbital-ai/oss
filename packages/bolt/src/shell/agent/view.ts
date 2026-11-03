@@ -354,6 +354,11 @@ const VIEWS: { readonly [tool: string]: (a: Args) => StepView } = {
 		verb: 'Requested navigation',
 		target: str(a['path'])
 	}),
+	page_act: (a) => ({
+		icon: 'lucide:mouse-pointer-click',
+		verb: 'Asked the page',
+		target: str(a['click']) || str(a['scroll']) || str(a['go'])
+	}),
 	workspace_review: () => ({
 		icon: 'lucide:git-compare',
 		verb: 'Reviewed the changes',
@@ -381,6 +386,7 @@ const VIEWS: { readonly [tool: string]: (a: Args) => StepView } = {
 		code: { text: str(a['expression']), language: 'javascript' }
 	}),
 	browser_screenshot: () => ({ icon: 'lucide:camera', verb: 'Took a screenshot', target: '' }),
+	browser_close: () => ({ icon: 'lucide:x', verb: 'Closed the page', target: '' }),
 	browser_download: (a) => ({ icon: 'lucide:download', verb: 'Downloaded', target: str(a['url']) }),
 	download: (a) => ({ icon: 'lucide:download', verb: 'Downloaded', target: str(a['url']) }),
 	run_js: (a) =>
@@ -499,7 +505,11 @@ export function previewsOf(
 	const built = new Set<string>();
 	return rows.flatMap((r) => {
 		const tool = r.tool,
-			url = tool?.preview ?? (tool?.studio === 'view' ? tool.about?.['url'] : undefined);
+			url =
+				tool?.preview ??
+				(tool?.studio === 'view' && tool.about?.['commit'] !== undefined
+					? tool.about['url']
+					: undefined);
 		if (tool === undefined || tool.failed || url === undefined || !URL.canParse(url)) return [];
 		// the bundle: its release when the step names one, else the step itself (a rebuild at the same address)
 		const origin = new URL(url).origin,

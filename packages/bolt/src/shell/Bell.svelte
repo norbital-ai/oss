@@ -6,6 +6,9 @@
 <script lang="ts">
 	import { attach, observe, fork } from '@norbital-ai/ui/effect';
 	import { Effect, Queue, Schema } from 'effect';
+	import { getContext } from 'svelte';
+	import { watch } from 'runed';
+	import { SOUNDS, noticeArrivals, type Sounds } from './sounds.ts';
 	import { Button, Icon, Popover, cn } from '@norbital-ai/ui';
 	import { Imposter, Inline, Scroll, Stack } from '@norbital-ai/ui/layout';
 	import { noticePath } from '../protocol/wire.ts';
@@ -37,6 +40,14 @@
 	const rows = $derived($notices?.rows ?? []);
 	const unread = $derived($notices?.unread ?? 0);
 	let open = $state(false);
+	const sounds = getContext<Sounds | undefined>(SOUNDS);
+	const arrivals = noticeArrivals();
+	watch(
+		() => $notices,
+		(answer) => {
+			if (answer !== undefined && arrivals(answer.rows)) sounds?.play('notification');
+		}
+	);
 
 	const markRead = (ids: readonly string[]) => {
 		if (ids.length > 0) fork(api.markNoticesRead(ids), () => {});

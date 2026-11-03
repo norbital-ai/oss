@@ -117,6 +117,13 @@ re-created. Skipped fields are reported in the log entry, never failing the deci
 roll-ups are not restored. Finished requests stay. A record's approval history is all its
 requests in order, each with its full log (`bolt.approvals.list({ model, records, all: true })`).
 
+The person who submits the provisional create or update cannot review their own request. This
+exclusion applies even when the source flow names them, they belong to a reviewing or superseding
+team, or they are an administrator. A linked envoy sender and an administrator previewing another
+member retain that exclusion. Other members of the same team can review; separate teams are unnecessary.
+Resubmitting requested changes keeps the request pending even if the current policy would allow
+the write directly; only a different eligible reviewer can finish the existing request.
+
 **The lock.** While a request is Pending or ChangesRequested, its held records and their owned
 children change only through it: by the current approvers in Pending, and by the requester in
 ChangesRequested. Every other writer is refused `locked` ("Under approval: <who> may change it"):

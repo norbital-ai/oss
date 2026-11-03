@@ -28,8 +28,9 @@ import { PgliteDb } from '../src/node/db/pglite.ts';
 import { TestDb } from '../../bolt-cli/src/test/database.ts';
 import { TenantDb, type TenantDbShape } from '../src/engine/db/tenant-db.ts';
 import { EngineLive, type EngineHost, type EngineServices } from '../src/engine/host.ts';
-import { bareHost } from './effect-engine.ts';
+import { bareHost, browserProbe } from './effect-engine.ts';
 import {
+	Agents,
 	Callables,
 	Guest,
 	Identity,
@@ -194,6 +195,13 @@ type Body = (
 			}
 		): Effect.Effect<Json, BoltError>;
 		notify(notices: Json): Effect.Effect<Json, BoltError>;
+		browser: {
+			navigate(url: string): Effect.Effect<Json, BoltError>;
+			snapshot(options?: Json): Effect.Effect<Json, BoltError>;
+			act(steps: readonly Json[]): Effect.Effect<Json, BoltError>;
+			evaluate(expression: string): Effect.Effect<Json, BoltError>;
+			close(): Effect.Effect<Json, BoltError>;
+		};
 	}
 ) => Effect.Effect<Json | void, EngineError>;
 /** The fake guest shares the decoded crossing contract with the isolate runner. */
@@ -273,7 +281,16 @@ function fakeGuest(
 						}),
 					schedule: (automation, input, options = {}) =>
 						cross({ _tag: 'schedule', automation, input, ...options }),
-					notify: (notices) => cross({ _tag: 'notify', notices })
+					notify: (notices) => cross({ _tag: 'notify', notices }),
+					browser: {
+						navigate: (url: string) => cross({ _tag: 'browser.navigate', args: [url] }),
+						snapshot: (options?: Json) =>
+							cross({ _tag: 'browser.snapshot', args: options === undefined ? [] : [options] }),
+						act: (steps: readonly Json[]) => cross({ _tag: 'browser.act', args: [steps] }),
+						evaluate: (expression: string) =>
+							cross({ _tag: 'browser.evaluate', args: [expression] }),
+						close: () => cross({ _tag: 'browser.close', args: [] })
+					}
 				}).pipe(
 					Effect.map((output) => ({ kind: 'ok' as const, output: output ?? null })),
 					Effect.catch((error) =>
@@ -513,6 +530,61 @@ const member = (policies: string[]): Holder => ({
 	},
 	policies,
 	admin: false
+});
+
+describe('run browser scope', () => {
+	it.effect('gives a run its own browser profile and closes it when the run ends', () =>
+		Effect.gen(function* () {
+			browserProbe.calls.length = 0;
+			browserProbe.closes.length = 0;
+			const w = yield* world(base, {
+				classify: (_input, ctx) => ctx.browser.navigate('https://a.test/')
+			});
+			yield* queue(w, 'browse', 'classify', T0);
+			yield* w.r.tick;
+			expect(browserProbe.calls).toEqual([
+				{ profile: '\u0001run:classify\u0000browse', url: 'https://a.test/' }
+			]);
+			expect(browserProbe.closes).toEqual(['\u0001run:classify\u0000browse']);
+			expect(yield* w.sql(`SELECT state FROM sys_run WHERE id = 'browse'`)).toEqual([
+				{ state: 'succeeded' }
+			]);
+		})
+	);
+	it.effect('lets exactly one tab claim a page action', () =>
+		Effect.gen(function* () {
+			const w = yield* world(base);
+			const agents = Context.get(w.context, Agents),
+				owner = randomUUID(),
+				conversation = yield* agents.start({ owner });
+			yield* w.sql(
+				`INSERT INTO sys_message (id, conversation, role, content, text, seq)
+				VALUES ('claim-step', $1, 'tool', '{"result":{"page":{"click":"Open"}}}'::jsonb, 'Open', 1)`,
+				[conversation]
+			);
+			expect(yield* agents.claimPageAction('claim-step')).toBe(true);
+			expect(yield* agents.claimPageAction('claim-step')).toBe(false);
+		})
+	);
+	it.effect('stores the active tab’s answer on the page_act step', () =>
+		Effect.gen(function* () {
+			const w = yield* world(base);
+			const agents = Context.get(w.context, Agents),
+				owner = randomUUID(),
+				conversation = yield* agents.start({ owner });
+			yield* w.sql(
+				`INSERT INTO sys_message (id, conversation, role, content, text, seq)
+				VALUES ('page-step', $1, 'tool', '{"result":{"page":{"click":"Open"}}}'::jsonb, 'Open', 1)`,
+				[conversation]
+			);
+			yield* agents.pageResult('page-step', { ok: true, note: 'Pressed “Open”.' });
+			expect(
+				yield* w.sql(
+					`SELECT content->'result'->'pageResult' AS result FROM sys_message WHERE id = 'page-step'`
+				)
+			).toEqual([{ result: { ok: true, note: 'Pressed “Open”.' } }]);
+		})
+	);
 });
 
 describe('lost leases (rules 52a, 70)', () => {

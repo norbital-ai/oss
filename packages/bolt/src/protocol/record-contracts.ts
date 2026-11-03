@@ -1,4 +1,5 @@
 import { Schema } from 'effect';
+import { FieldSpec } from '@norbital-ai/store';
 import type { RecordCapabilities, RestorePreview } from '@norbital-ai/ui';
 
 export type {
@@ -40,6 +41,18 @@ export const RecordCapabilitiesSchema: Schema.Codec<RecordCapabilities> = Schema
 	proposalMoves: Schema.Record(Schema.String, Schema.Array(Schema.String))
 });
 const Change = { field: Schema.String, current: Schema.Json, restored: Schema.Json };
+export const HistorySnapshotSchema = Schema.Struct({
+	model: Schema.String,
+	record: Schema.String,
+	revision: Schema.Int,
+	at: Schema.NullOr(Schema.String),
+	schemaVersion: Schema.NullOr(Schema.String),
+	legacy: Schema.optionalKey(Schema.Boolean),
+	fields: Schema.Record(Schema.String, FieldSpec),
+	values: Schema.Record(Schema.String, Schema.Json),
+	compatible: Schema.Record(Schema.String, Schema.Json),
+	uncompatible: Schema.Array(Schema.String)
+});
 /** `history.preview`'s answer (rule 17): advice for one restore; `history.restore` recomputes it before writing. */
 export const RestorePreviewSchema: Schema.Codec<RestorePreview> = Schema.Struct({
 	model: Schema.String,
@@ -55,7 +68,8 @@ export const RestorePreviewSchema: Schema.Codec<RestorePreview> = Schema.Struct(
 				'readOnly',
 				'noGrant',
 				'stateLocked',
-				'definitionChanged'
+				'definitionChanged',
+				'uncompatible'
 			])
 		})
 	)

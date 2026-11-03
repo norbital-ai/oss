@@ -119,6 +119,7 @@ const PARTS: { part: string; role: Role; shape: 'each' | 'spec' | 'one' }[] = [
  */
 const HOST_TOOLS = [
 	'browser_act',
+	'browser_close',
 	'browser_download',
 	'browser_evaluate',
 	'browser_navigate',

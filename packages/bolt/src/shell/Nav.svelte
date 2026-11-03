@@ -43,7 +43,7 @@
 		theme = 'system',
 		onTheme,
 		chimes = true,
-		onChimes,
+		onSounds,
 		sync = 'idle',
 		previewing = false,
 		loadTeams,
@@ -72,7 +72,7 @@
 		theme?: Theme;
 		onTheme?: (theme: Theme) => void;
 		chimes?: boolean;
-		onChimes?: (enabled: boolean) => void;
+		onSounds?: () => void;
 		sync?: SyncStatus;
 		/** A preview runs: the menu offers its end. `loadTeams` is an administrator's: the teams a preview may take. */
 		previewing?: boolean;
@@ -687,18 +687,19 @@
 					</Inline>
 				</Inline>
 			{/if}
-			{#if onChimes !== undefined}
+			{#if onSounds !== undefined}
 				<Button
 					type="button"
 					variant="ghost"
 					class="h-9 w-full justify-start px-2 text-xs font-normal"
-					role="switch"
-					aria-checked={chimes}
-					aria-label={t('Norbius sounds')}
-					onclick={() => onChimes(!chimes)}
+					aria-label={t('Sounds')}
+					onclick={() => {
+						menuOpen = false;
+						onSounds();
+					}}
 				>
 					<Icon name={chimes ? 'lucide:volume-1' : 'lucide:volume-x'} class="size-3.5" />
-					<span>{t('Norbius sounds')}</span><span class="ml-auto text-muted-foreground"
+					<span>{t('Sounds')}</span><span class="ml-auto text-muted-foreground"
 						>{t(chimes ? 'On' : 'Off')}</span
 					>
 				</Button>

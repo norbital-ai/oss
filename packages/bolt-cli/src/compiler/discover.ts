@@ -140,7 +140,9 @@ export const discover = Effect.fn('bolt.discover')(function* (
 			r.role === 'kiosk_page' ||
 			r.role === 'kiosk_page_server'
 				? `${folder}/${fileName}`
-				: (fileName ?? folder!);
+				: r.role === 'model' || r.role === 'representation'
+					? folder!.split('/').at(-1)!
+					: (fileName ?? folder!);
 		files.push({ role: r.role, name, path });
 	}
 
@@ -163,7 +165,14 @@ export const discover = Effect.fn('bolt.discover')(function* (
 	if (!system && !has('workspace', ''))
 		fail('workspace-missing', 'src/+workspace.ts', 'a workspace has exactly one src/+workspace.ts');
 	for (const f of files) {
-		if (f.role === 'representation' && !has('model', f.name))
+		if (
+			f.role === 'representation' &&
+			!files.some(
+				(model) =>
+					model.role === 'model' &&
+					model.path === f.path.replace(/\+representation\.svelte$/, '+model.ts')
+			)
+		)
 			fail('representation-without-model', f.path, 'no +model.ts beside it');
 		if (f.role === 'renderer' && !has('custom_field', f.name))
 			fail('custom-field-without-definition', f.path, `no +definition.ts beside it`);
@@ -272,8 +281,10 @@ export const discover = Effect.fn('bolt.discover')(function* (
 	return { files, errors };
 });
 
-/** Canonical compiler role path derived from the role table. */
-export function sourcePath(role: Role, name: string): string {
+/** Actual discovered path, or the canonical flat path when no source inventory is supplied. */
+export function sourcePath(role: Role, name: string, files: readonly Discovered[] = []): string {
+	const found = files.find((file) => file.role === role && file.name === name);
+	if (found !== undefined) return found.path;
 	const entry = ROLES.find((entry) => entry.role === role);
 	if (entry === undefined) throw new Error(`unknown compiler role ${role}`);
 	const page =

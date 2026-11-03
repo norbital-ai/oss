@@ -21,6 +21,24 @@ type SortObject = { readonly [field: string]: 'asc' | 'desc' | SortObject };
 export type OrderBy = string | SortObject | readonly (string | SortObject)[];
 type Catalog = { readonly [model: string]: ModelExposure };
 
+/** Saved rules may use readable machine fields that normal tables hide from their field picker. */
+export function savedFilterCatalog(catalog: Catalog): Catalog {
+	return Object.fromEntries(
+		Object.entries(catalog).map(([model, exposure]) => [
+			model,
+			{
+				...exposure,
+				fields: Object.fromEntries(
+					Object.entries(exposure.fields).map(([name, field]) => {
+						const { hidden: _hidden, ...visible } = field;
+						return [name, visible];
+					})
+				)
+			}
+		])
+	);
+}
+
 export type Cmp = 'eq' | 'ne' | 'lt' | 'lte' | 'gt' | 'gte';
 export type Op =
 	| Cmp
