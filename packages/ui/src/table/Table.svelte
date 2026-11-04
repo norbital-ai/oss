@@ -511,6 +511,36 @@
 	const wide = virtualList({ count: () => shownRows.length, key: rowKey, estimate: 37 });
 	const narrow = virtualList({ count: () => shownRows.length, key: rowKey, estimate: 64 });
 
+	// A phone has no hover: a leftward row swipe reveals the trailing control; the next tap elsewhere hides it.
+	let touchStart: { key: string; x: number; y: number } | null = null;
+	let revealed = $state<string | null>(null);
+	let swipedAt = 0;
+	const swipeStart = (event: TouchEvent, key: string) => {
+		const touch = event.touches[0];
+		if (touch !== undefined) touchStart = { key, x: touch.clientX, y: touch.clientY };
+	};
+	const swipeEnd = (event: TouchEvent, key: string) => {
+		const start = touchStart;
+		touchStart = null;
+		const touch = event.changedTouches[0];
+		if (start === null || start.key !== key || touch === undefined) return;
+		const dx = touch.clientX - start.x;
+		const dy = touch.clientY - start.y;
+		if (dx < -36 && Math.abs(dx) > Math.abs(dy) * 1.5) {
+			revealed = key;
+			swipedAt = Date.now();
+		} else if (Math.abs(dx) < 10 && Math.abs(dy) < 10 && revealed === key) revealed = null;
+	};
+	const rowPress = (event: MouseEvent, row: ReadRow) => {
+		if (Date.now() - swipedAt < 350) {
+			swipedAt = 0;
+			event.stopPropagation();
+			return;
+		}
+		if (revealed !== null) revealed = null;
+		rowClick(event, row);
+	};
+
 	// ── the count: the page read's `total` (every row the scope and search match); an index search has none ──
 	let lastTotal: number | null = null;
 	const count = $derived.by(() => {
@@ -1289,6 +1319,7 @@
 									>{/if}
 								{#each wide.slice(rows) as row, j (row['id'] ?? wide.start + j)}
 									{@const i = wide.start + j}
+									{@const key = rowKey(i)}
 									<!-- svelte-ignore a11y_no_noninteractive_tabindex -->
 									{@const held = approvalOf(row)}
 									<tr
@@ -1305,7 +1336,9 @@
 										title={held === null ? undefined : approvalText(text, held)}
 										{@attach wide.measure(rowKey(i))}
 										tabindex={opens ? 0 : undefined}
-										onclick={(e) => rowClick(e, row)}
+										ontouchstart={(e) => swipeStart(e, key)}
+										ontouchend={(e) => swipeEnd(e, key)}
+										onclick={(e) => rowPress(e, row)}
 										onkeydown={(e) => {
 											if (opens && e.target === e.currentTarget && e.key === 'Enter') {
 												e.preventDefault();
@@ -1380,8 +1413,14 @@
 										{#if rowTrailing}
 											<td class="sticky right-0 z-[2] w-0 p-0!">
 												<div
-													class="absolute top-1/2 right-0 -translate-y-1/2 bg-card opacity-0 pointer-events-none group-hover/row:opacity-100 group-hover/row:pointer-events-auto group-focus-within/row:opacity-100 group-focus-within/row:pointer-events-auto [@media(hover:none)]:opacity-100 [@media(hover:none)]:pointer-events-auto"
+													class={[
+														'absolute top-1/2 right-0 -translate-y-1/2 bg-card transition-opacity',
+														revealed === key
+															? 'pointer-events-auto opacity-100'
+															: 'pointer-events-none opacity-0 group-hover/row:pointer-events-auto group-hover/row:opacity-100 group-focus-within/row:pointer-events-auto group-focus-within/row:opacity-100'
+													]}
 													data-row-trailing
+													data-revealed={revealed === key || undefined}
 												>
 													{@render rowTrailing(row)}
 												</div>
@@ -1428,6 +1467,7 @@
 							></li>{/if}
 						{#each narrow.slice(rows) as row, j (row['id'] ?? narrow.start + j)}
 							{@const i = narrow.start + j}
+							{@const key = rowKey(i)}
 							{@const [lead, ...rest] = ordered.map(colOf).filter((c) => c.hide !== 'narrow')}
 							<li
 								class={[
@@ -1435,6 +1475,8 @@
 									recordRow(row) && selected.has(row.id) ? 'bg-accent/40' : 'hover:bg-muted/40',
 									rowClass?.(row)
 								]}
+								ontouchstart={(e) => swipeStart(e, key)}
+								ontouchend={(e) => swipeEnd(e, key)}
 								{@attach narrow.measure(rowKey(i))}
 							>
 								<ApprovalAccent {row} />
@@ -1456,7 +1498,7 @@
 									tabindex={opens ? 0 : undefined}
 									class="flex min-w-0 flex-1 cursor-pointer flex-col gap-0.5 text-left"
 									data-row-card
-									onclick={(e) => rowClick(e, row)}
+									onclick={(e) => rowPress(e, row)}
 									onkeydown={(e) => {
 										if (
 											opens &&
@@ -1505,6 +1547,20 @@
 										</div>
 									{/if}
 								</div>
+								{#if rowTrailing}
+									<div
+										class={[
+											'absolute top-1/2 right-2 -translate-y-1/2 transition-opacity',
+											revealed === key
+												? 'pointer-events-auto opacity-100'
+												: 'pointer-events-none opacity-0'
+										]}
+										data-row-trailing
+										data-revealed={revealed === key || undefined}
+									>
+										{@render rowTrailing(row)}
+									</div>
+								{/if}
 								{#if actions.length > 0}<div class="flex shrink-0 flex-wrap justify-end">
 										{@render rowActions(row)}
 									</div>{/if}

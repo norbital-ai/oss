@@ -1,6 +1,6 @@
 # Schema and public type inference
 
-Bolt's authored `data/model/<name>/+model.ts` and policy declarations are the authority for its public row, input and query-result types. No table schema is authored alongside them. The names Bolt generates from the declarations type rows, inputs, selections and outcomes, including what a table schema cannot express: named read outputs, model exposure, owned relationship inputs, actor-provided defaults, approval metadata and the distinct decimal literal and write values.
+Bolt's authored `data/model/<name>/+model.ts` (the folder may nest; the leaf folder names the model) and policy declarations are the authority for its public row, input and query-result types. No table schema is authored alongside them. The names Bolt generates from the declarations type rows, inputs, selections and outcomes, including what a table schema cannot express: named read outputs, model exposure, owned relationship inputs, actor-provided defaults, approval metadata and the distinct decimal literal and write values.
 
 Runtime decoders come from the same declarations, once per boundary:
 

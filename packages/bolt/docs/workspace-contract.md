@@ -9,7 +9,7 @@ src/
 ├── +workspace.ts
 ├── +secrets.ts
 ├── data/
-│   ├── model/<name>/+model.ts
+│   ├── model/<name>/+model.ts          # folders may nest; the leaf folder names the model
 │   ├── model/<name>/+representation.svelte
 │   └── custom_field/<name>/+definition.ts, +renderer.svelte
 ├── access_control/team/+team.ts
@@ -23,19 +23,25 @@ src/
 └── lib/
 ```
 
-| Declaration               | Owning file                               | Callbacks                                                                                                        |
-| ------------------------- | ----------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
-| `model(name, spec)`       | `data/model/<name>/+model.ts`             | `create.transform`, `update.transform`, `delete.check`, `search.indexes.*`, `notify`, `syncs.*`                  |
-| `customField(name, spec)` | `data/custom_field/<name>/+definition.ts` | `validate`                                                                                                       |
-| `policy(spec)`            | `access_control/policy/+<name>.policy.ts` | `check` on each `create`, `update` and `delete` grant                                                            |
-| `team(spec)`              | `access_control/team/+team.ts`            | none                                                                                                             |
-| `integration(name, spec)` | `integration/<name>/+integration.ts`      | `test`                                                                                                           |
-| `automation(name, spec)`  | `automation/+<name>.automation.ts`        | `run`                                                                                                            |
+| Declaration               | Owning file                               | Callbacks                                                                                       |
+| ------------------------- | ----------------------------------------- | ----------------------------------------------------------------------------------------------- |
+| `model(name, spec)`       | `data/model/**/<name>/+model.ts`          | `create.transform`, `update.transform`, `delete.check`, `search.indexes.*`, `notify`, `syncs.*` |
+| `customField(name, spec)` | `data/custom_field/<name>/+definition.ts` | `validate`                                                                                      |
+| `policy(spec)`            | `access_control/policy/+<name>.policy.ts` | `check` on each `create`, `update` and `delete` grant                                           |
+| `team(spec)`              | `access_control/team/+team.ts`            | none                                                                                            |
+| `integration(name, spec)` | `integration/<name>/+integration.ts`      | `test`                                                                                          |
+| `automation(name, spec)`  | `automation/+<name>.automation.ts`        | `run`                                                                                           |
 
 Names come from paths. Declarations with bodies repeat that name as their first argument;
 `bolt check` refuses a mismatch. Models always use named folders so their representation can
-live beside them. Relations are `kind: 'ref'` fields on the model holding the foreign key.
+live beside them. Model folders may nest under another model or an ordinary grouping folder: the
+leaf folder names the model and the name stays unique across the workspace. Relations are
+`kind: 'ref'` fields on the model holding the foreign key.
 Apps, groups, kiosks, envoys, MCP servers and message catalogues keep their own file roles.
+`src/agent/+agent.md` is the in-app agent's brief for staff and `+agent.external.md` the brief for
+external members; `envoy/+<id>.envoy.ts` declares an envoy default, `skill/<name>/+skill.md` a
+workspace skill and `mcp/+<name>.mcp.ts` a remote MCP server. An envoy's deployed instance,
+credentials and pause state are runtime `sys_integration` data, never source.
 Ordinary helpers live in `lib/` or beside their owning component. A computed answer that was once a
 declared query is a read request (a root and its layers) plus a pure `lib/` helper, called by the
 page and, over `ctx.query`, by server code.

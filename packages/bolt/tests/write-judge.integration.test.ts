@@ -232,6 +232,14 @@ describe('engine/write: columns, then one check over the stored and the written 
 					kind: 'refused',
 					code: 'notFound'
 				});
+				// a whole verb refused names the policies weighed, so the caller knows what it holds
+				expect(
+					yield* run('orders', 'create', [{ region: 'north', amount: '1' }], as([]))
+				).toMatchObject({
+					kind: 'refused',
+					code: 'forbidden',
+					message: 'You may not create orders: you hold no policy.'
+				});
 				// the check sees the stored row outside the north, and the written row leaving it
 				const denied = {
 					kind: 'refused',

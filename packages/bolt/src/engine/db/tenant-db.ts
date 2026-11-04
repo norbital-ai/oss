@@ -2,7 +2,7 @@
 // driver's `DbError` (the SQLSTATE the write compiler maps to a refusal, rule 20) and, for a typed read, `BoltError`
 // naming the table of a row that does not decode. Completed batches release their connection before answering;
 // interactive automation transactions own a native, absolutely bounded lease. Adapters: `postgres.ts`, `pglite.ts`.
-import { Context, Effect, type Option, type Schema, type Scope } from 'effect';
+import { Clock, Context, Effect, Semaphore, type Option, type Schema, type Scope } from 'effect';
 import type { Lock, Rows, Sql } from '../contracts.ts';
 import type { DbError } from '../errors.ts';
 import type { BoltError } from '../../protocol/errors.ts';
@@ -41,6 +41,10 @@ export type SqlReadCaptureService = {
 		execute: RawDb['read']
 	) => Effect.Effect<readonly Rows[], DbError>;
 };
+/** Set on the work a generation owes its database, so its own statements do not wait for it. */
+const SqlOwed = Context.Reference<boolean>('bolt/SqlOwed', { defaultValue: () => false });
+/** Neon's default: a database touched this recently is still awake, so one more read costs no wake. */
+const AWAKE_MILLIS = 5 * 60_000;
 /** Native transaction routing. Captured services retain their contracts while every SQL call uses this lease. */
 export const SqlSessionDb = Context.Reference<Omit<RawDb, 'session'> | undefined>(
 	'bolt/SqlSessionDb',
@@ -51,6 +55,17 @@ export const SqlReadCapture = Context.Reference<SqlReadCaptureService | undefine
 	{ defaultValue: () => undefined }
 );
 export type TenantDbShape = RawDb & {
+	/**
+	 * Work this generation owes its database, run once just before its first statement. A cold start owes it rather
+	 * than doing it, so a request or a cron slot that needs no data leaves a database billed by the second asleep.
+	 */
+	readonly owe: (work: Effect.Effect<void, DbError>) => void;
+	/** Settles what is owed, for work that must know its outcome before it composes a statement. */
+	readonly ready: Effect.Effect<void, DbError>;
+	/** Whether this generation used the database so lately that it is still awake. */
+	readonly awake: Effect.Effect<boolean>;
+	/** Work that only checks for work: unless it writes, it does not count as the database being in use. */
+	readonly quietly: <A, E, R>(work: Effect.Effect<A, E, R>) => Effect.Effect<A, E, R>;
 	/** One read's rows, each decoded by `schema`. */
 	readonly rows: <A>(
 		schema: Schema.Decoder<A>,
@@ -77,7 +92,43 @@ export type TenantDbShape = RawDb & {
 const NONE: Rows = { rows: [], affected: 0 };
 export class TenantDb extends Context.Service<TenantDb, TenantDbShape>()('bolt/TenantDb') {
 	/** An adapter's calls with the decoding reads over them. */
-	static readonly typed = (raw: RawDb): TenantDbShape => {
+	static readonly typed = (adapter: RawDb): TenantDbShape => {
+		let owed: Effect.Effect<void, DbError> | undefined,
+			touched = Number.NEGATIVE_INFINITY,
+			writes = 0;
+		const turn = Semaphore.makeUnsafe(1);
+		const pay = Effect.gen(function* () {
+			if (owed === undefined || (yield* SqlOwed)) return;
+			yield* turn.withPermit(
+				Effect.suspend(() =>
+					owed === undefined
+						? Effect.void
+						: owed.pipe(
+								Effect.provideService(SqlOwed, true),
+								Effect.provideService(SqlSessionDb, undefined),
+								Effect.provideService(SqlReadCapture, undefined),
+								Effect.provideService(AuditMutation, undefined),
+								Effect.tap(() =>
+									Effect.sync(() => {
+										owed = undefined;
+									})
+								)
+							)
+				)
+			);
+		});
+		const settled = Effect.fnUntraced(function* (writing: boolean) {
+			if (yield* SqlOwed) return;
+			if (writing) writes++;
+			touched = yield* Clock.currentTimeMillis;
+			yield* pay;
+		});
+		const raw: RawDb = {
+			read: (statements) => Effect.andThen(settled(false), adapter.read(statements)),
+			write: (statement, lock) => Effect.andThen(settled(true), adapter.write(statement, lock)),
+			transaction: (batch) => Effect.andThen(settled(true), adapter.transaction(batch)),
+			session: () => Effect.andThen(settled(true), adapter.session())
+		};
 		const read = Effect.fn('Bolt.tenantRead')(function* (statements: readonly Sql[]) {
 			const session = yield* SqlSessionDb;
 			if (session !== undefined) return yield* session.read(statements);
@@ -111,6 +162,22 @@ export class TenantDb extends Context.Service<TenantDb, TenantDbShape>()('bolt/T
 		});
 		return {
 			...raw,
+			owe: (work) => {
+				owed = owed === undefined ? work : Effect.andThen(owed, work);
+			},
+			ready: pay,
+			awake: Effect.map(Clock.currentTimeMillis, (now) => now - touched < AWAKE_MILLIS),
+			quietly: (work) =>
+				Effect.suspend(() => {
+					const before = touched,
+						written = writes;
+					return Effect.ensuring(
+						work,
+						Effect.sync(() => {
+							if (writes === written) touched = before;
+						})
+					);
+				}),
 			read,
 			write,
 			transaction,

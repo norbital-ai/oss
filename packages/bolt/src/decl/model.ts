@@ -587,6 +587,16 @@ type OwnedRef<F> = OfKind<F, { kind: 'ref'; owned: true }>;
 type Exposed<S, X> = S extends { read: unknown }
 	? X
 	: 'error: a model without read is not exposed: declare read first';
+/** One `attaches` target: an optional ref of another model that points back at this model. */
+type AttachTarget<K> = {
+	[M in TargetName]: {
+		[F in keyof OneRels<M>]: OneRels<M>[F] extends { optional: true }
+			? K extends TargetsOf<OneRels<M>[F]>
+				? { readonly model: M; readonly field: F }
+				: never
+			: never;
+	}[keyof OneRels<M>];
+}[TargetName];
 /** The literal's layer paths below its root `K`. */
 type Below<K, L> = { [P in keyof L]: P extends `${K & string}.${string}` ? P : never }[keyof L];
 /** A layer map over the literal `L`: the root `K` takes `Root`, each deeper path `Deep`; any other key is refused. */
@@ -732,6 +742,8 @@ interface ModelFor<
 	outputs?: Exposed<S, OutputsFor<K, Part<S, 'outputs'>, F, C>>;
 	create?: Exposed<S, CreateFor<K, S, F>>;
 	update?: Exposed<S, UpdateFor<K, S, F>>;
+	/** Create-payload layers that set an existing row's optional ref to the new row, in the same commit. */
+	attaches?: Exposed<S, { readonly [A in keyof Part<S, 'attaches'>]: AttachTarget<K> }>;
 	delete?: Exposed<S, { check?: unknown }>;
 	notify?: Exposed<S, unknown>;
 	effect?: Exposed<S, { created?: unknown; updated?: unknown; deleted?: unknown }>;
@@ -798,7 +810,9 @@ interface BodiesFor<K> {
 	 * retried on a transient failure, shown in the Command center's runs). It holds no policy of its own: it runs with the
 	 * writer's authority — the member, envoy, visitor, or automation run (its declared policies) whose write committed —
 	 * and its rows are the root fields of the writer's output of the model (`default` when it holds it, else the first
-	 * named output it holds). Writes it makes run effects in turn, at most 8 deep. Never rate limited.
+	 * named output it holds). Writes it makes run effects in turn, at most 8 deep. Never rate limited. It also runs for a
+	 * write an approval only holds, and again, as the approver, for the restore when that approval is rejected: nothing
+	 * irreversible (a mail, a payment) belongs here unless it checks the row's state first.
 	 */
 	effect?: {
 		/** The created rows. */
@@ -894,6 +908,14 @@ export type ModelLiteral = {
 	update?: { columns: LayerColumns; transform?: unknown };
 	/** The generated `delete`, with an optional `check`. */
 	delete?: { check?: unknown };
+	/**
+	 * Write-only attach layers: the parent's create payload names existing rows of another model by id, and the engine sets
+	 * the named foreign key in the same commit. Each row's ref must be optional and still empty, or the write is refused.
+	 * No inverse is declared on the child model and no read layer is exposed.
+	 */
+	attaches?: {
+		readonly [layer: string]: { readonly model: string; readonly field: string };
+	};
 	/** The notices each write and approval event sends. */
 	notify?: unknown;
 	/** The work each committed create, update and delete runs afterwards, as the writer. */
@@ -1018,7 +1040,13 @@ export type ExposureSpec = {
 	read: ReadLayers;
 	/** The named outputs. */
 	outputs?: { readonly [output: string]: ReadLayers };
-	create?: { columns: LayerColumns; filled?: LayerColumns; transform?: true };
+	create?: {
+		columns: LayerColumns;
+		filled?: LayerColumns;
+		transform?: true;
+		/** Write-only layers the create payload may attach by id, setting the target's named ref to the new row. */
+		attaches?: { readonly [layer: string]: { readonly model: string; readonly field: string } };
+	};
 	update?: { columns: LayerColumns; transform?: true };
 	delete?: { check?: true };
 	notify?: true;
@@ -1171,6 +1199,7 @@ export function splitModel(name: string, literal: ModelLiteral): ModelParts {
 		create,
 		update,
 		delete: del,
+		attaches,
 		notify,
 		effect,
 		syncs,
@@ -1222,7 +1251,8 @@ export function splitModel(name: string, literal: ModelLiteral): ModelParts {
 					create: {
 						columns: create.columns,
 						...(create.filled === undefined ? {} : { filled: create.filled }),
-						...(create.transform === undefined ? {} : { transform: true })
+						...(create.transform === undefined ? {} : { transform: true }),
+						...(attaches === undefined ? {} : { attaches })
 					}
 				}),
 		...(update === undefined

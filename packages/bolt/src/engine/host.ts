@@ -1,5 +1,5 @@
 // One immutable activation graph. Every shared bottom service is built once in this generation's layer scope.
-import { ConfigProvider, Crypto, Effect, FileSystem, Layer, Path, PubSub } from 'effect';
+import { ConfigProvider, Crypto, Deferred, Effect, FileSystem, Layer, Path, PubSub } from 'effect';
 import { declaredSecrets, layered, type EngineManifest } from './manifest.ts';
 import type { EngineError } from './errors.ts';
 import {
@@ -143,22 +143,34 @@ export function EngineLive(
 				const recover = recoverAudit(db).pipe(
 					Effect.catch((error) => Effect.logWarning(error).pipe(Effect.as(true)))
 				);
-				// Startup failures remain retryable, including a tenant whose schema is not installed yet.
-				let unresolved = yield* recover;
+				// Startup failures remain retryable, including a tenant whose schema is not installed yet. The scan waits for
+				// the generation's first statement, so a cold start makes no trip to the database.
+				const scanned = yield* Deferred.make<void>();
+				let unresolved = false;
+				db.owe(
+					Effect.flatMap(recover, (open) =>
+						Effect.sync(() => {
+							unresolved = open;
+						}).pipe(Effect.andThen(Deferred.succeed(scanned, undefined)), Effect.asVoid)
+					)
+				);
 				yield* Effect.forkScoped(
-					Effect.forever(
-						Effect.suspend(() =>
-							unresolved
-								? PubSub.take(changes).pipe(
-										Effect.raceFirst(Effect.void.pipe(Effect.delay('5 seconds')))
-									)
-								: PubSub.take(changes)
-						).pipe(
-							Effect.andThen(recover),
-							Effect.tap((pending) =>
-								Effect.sync(() => {
-									unresolved = pending;
-								})
+					Effect.andThen(
+						Deferred.await(scanned),
+						Effect.forever(
+							Effect.suspend(() =>
+								unresolved
+									? PubSub.take(changes).pipe(
+											Effect.raceFirst(Effect.void.pipe(Effect.delay('5 seconds')))
+										)
+									: PubSub.take(changes)
+							).pipe(
+								Effect.andThen(recover),
+								Effect.tap((pending) =>
+									Effect.sync(() => {
+										unresolved = pending;
+									})
+								)
 							)
 						)
 					)

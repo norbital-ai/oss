@@ -3,7 +3,7 @@
 // byte for byte, in every build of every workspace on this Bolt. Each compile result is kept on disk under its inputs,
 // so a rebuild compiles only what changed. A hit returns the very object the compiler returned (its code, map and the
 // component CSS the virtual style module reads from `meta`), so the output is unchanged.
-import { svelte, type Options } from '@sveltejs/vite-plugin-svelte';
+import type { Options } from '@sveltejs/vite-plugin-svelte';
 import { createHash } from 'node:crypto';
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -19,8 +19,10 @@ const TOOLCHAIN = [
 /** `svelte(options)` with its compile step cached in `dir`. */
 // ponytail: entries are never pruned (~14 KB each; an edited component adds one), so a long-lived checkout grows; prune
 // by age when that matters. A sandbox build only hits when its `.norbital/cache` outlives the build.
-export function cachedSvelte(options: Partial<Options>, dir: string): Plugin[] {
+// repository-health:allow EFF3 -- Vite resolves a Promise plugin option; the compiler loads only when a build needs it.
+export async function cachedSvelte(options: Partial<Options>, dir: string): Promise<Plugin[]> {
 	mkdirSync(dir, { recursive: true });
+	const { svelte } = await import('@sveltejs/vite-plugin-svelte');
 	const plugins = svelte(options);
 	for (const plugin of plugins) {
 		const transform = plugin.transform;

@@ -149,6 +149,61 @@ describe('reads', () => {
 			);
 		})
 	);
+	it.live('a live link a release closed comes back on the next generation', () =>
+		Effect.gen(function* () {
+			const opened = yield* Queue.unbounded<EventSourceLike>();
+			const registers: Deferred.Deferred<void>[] = [
+				yield* Deferred.make<void>(),
+				yield* Deferred.make<void>()
+			];
+			type Jobs = { jobs: { rows: { id: string }[] } };
+			const bolt = yield* createBolt({
+				actor: null,
+				locale: 'en',
+				base: 'https://workspace.test',
+				fetch: async () => {
+					const next = registers.find((one) => !Deferred.isDoneUnsafe(one));
+					if (next !== undefined) Deferred.doneUnsafe(next, Effect.void);
+					return Response.json({ errors: [] });
+				},
+				openStream: () => {
+					let handler: EventSourceLike['onmessage'] = null;
+					const source: EventSourceLike = {
+						get onmessage() {
+							return handler;
+						},
+						set onmessage(next) {
+							handler = next;
+							if (next !== null) Queue.offerUnsafe(opened, source);
+						},
+						onerror: null,
+						close() {}
+					};
+					return source;
+				}
+			});
+			const states: string[] = [];
+			yield* Stream.runForEach(bolt.sync, (state) =>
+				Effect.sync(() => void states.push(state))
+			).pipe(Effect.forkScoped);
+			yield* Stream.runDrain(bolt.observe<Jobs>(bolt.query({ jobs: {} }))).pipe(Effect.forkScoped);
+			const push = (source: EventSourceLike, frame: Frame) =>
+				source.onmessage?.(new MessageEvent('message', { data: JSON.stringify(frame) }));
+			const first = yield* Queue.take(opened);
+			push(first, { t: 'hello', conn: 'c1', v: 0 });
+			yield* Deferred.await(registers[0]!);
+			push(first, { t: 'close', release: 'r1' });
+			first.onerror?.(new Event('error'));
+			const second = yield* Queue.take(opened);
+			expect(bolt.closed).toBe('r1');
+			push(second, { t: 'hello', conn: 'c2', v: 0 });
+			// the views register again on the new connection
+			yield* Deferred.await(registers[1]!);
+			expect(bolt.closed).toBeNull();
+			expect(states).toContain('closed');
+			expect(states.at(-1)).toBe('live');
+		})
+	);
 	it.effect('an optimistic money update keeps the Decimal contract of a live row', () =>
 		Effect.gen(function* () {
 			let source: EventSourceLike | undefined;

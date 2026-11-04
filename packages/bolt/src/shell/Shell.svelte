@@ -5,7 +5,7 @@
 -->
 <script lang="ts">
 	import { attach, fork, run } from '@norbital-ai/ui/effect';
-	import { Effect, Exit, FiberHandle, Scope, Stream, SubscriptionRef } from 'effect';
+	import { Effect, Exit, FiberHandle, Option, Scope, Stream, SubscriptionRef } from 'effect';
 	import { updating } from '../protocol/client.ts';
 	import { setContext, tick, type Component } from 'svelte';
 	import { watch } from 'runed';
@@ -76,7 +76,10 @@
 	import Invite from './auth/Invite.svelte';
 	import AgentPanel from './agent/Agent.svelte';
 	import Attention from './agent/Attention.svelte';
-	import { createSounds, SOUNDS, type SoundStatus } from './sounds.ts';
+	import Awaiting from './agent/Awaiting.svelte';
+	import Waiting from './inbox/Waiting.svelte';
+	import { awaitingAfter, type Awaiting as AwaitingKind } from './agent/chime.ts';
+	import { createSounds, SOUNDS, type SoundKind, type SoundStatus } from './sounds.ts';
 	import SoundSettings from './settings/Sounds.svelte';
 	import { CLIENT_NAVIGATION, type ClientNavigation } from './agent/navigation.ts';
 	import { CLIENT_PAGE_ACTION, type ClientPageAction } from './agent/navigation.ts';
@@ -164,6 +167,8 @@
 	const here = () => logical(location.href) ?? new URL(location.href);
 	let url = $state(here());
 	let boot = $state<ShellBoot | null>(null);
+	/** A later boot's answer for the host's sidebar notice, read again as a notice arrives (a maintenance scheduled). */
+	let refreshed = $state<Pick<ShellBoot, 'notice'> | null>(null);
 	const configuration = $derived(boot?.admin === true ? systemUiIntent(url) : null);
 	// a signed-out caller's boot is refused, but names the workspace the access pages show
 	let guest = $state<ShellBoot['workspace'] | null>(null);
@@ -240,6 +245,17 @@
 		if (r === null && open !== null) agentUrl(null);
 		else if (r !== null && open === null) agentUrl(r.conversation ?? 'new');
 	});
+	/** What Norbius left for the person while its panel was closed: the dot on its icon, cleared on opening it. */
+	let awaiting = $state<AwaitingKind | null>(null);
+	const ended = (kind: SoundKind) => {
+		if (agentRequest === null) awaiting = awaitingAfter(awaiting, kind);
+	};
+	watch(
+		() => agentRequest !== null,
+		(open) => {
+			if (open) awaiting = null;
+		}
+	);
 	const agentParam = $derived(url.searchParams.get('agent'));
 	watch(
 		() => agentParam,
@@ -467,6 +483,7 @@
 				return void location.replace(`${live.replace(/\/$/, '')}/studio`);
 			failure = null;
 			boot = result.success;
+			refreshed = null;
 			bolt = client;
 			setCurrentBolt(client);
 			environment = result.success.surfaces.inbox
@@ -477,12 +494,24 @@
 						store: (body) => api.push(body)
 					}).pipe(Effect.provideService(Scope.Scope, scope))
 				: null;
+			let lapsed = false;
 			yield* client.sync.pipe(
 				Stream.runForEach((state) =>
-					Effect.sync(() => {
-						const wasClosed = sync === 'closed';
+					Effect.gen(function* () {
 						sync = state;
-						if (wasClosed || state !== 'closed') return;
+						if (state === 'closed') lapsed = true;
+						if (state !== 'live' || !lapsed) return;
+						lapsed = false;
+						// a release closed the link and it is back: only another client needs a reload
+						const next = yield* api
+							.boot(publicApp, kioskRoute ?? undefined)
+							.pipe(Effect.option);
+						if (
+							Option.isSome(next) &&
+							next.value.client !== undefined &&
+							next.value.client === boot?.client
+						)
+							return;
 						const leaving = new Event('beforeunload', { cancelable: true });
 						window.dispatchEvent(leaving);
 						if (!leaving.defaultPrevented) location.reload();
@@ -526,6 +555,16 @@
 		([app, kiosk]) => requestLoad?.(app, kiosk),
 		{ lazy: true }
 	);
+
+	const refreshNotice = () =>
+		fork(
+			api.boot(publicApp, kioskRoute ?? undefined).pipe(
+				Effect.map((next) => {
+					refreshed = next;
+				})
+			),
+			() => {}
+		);
 
 	function pageOf(key: string): Promise<Component> | null {
 		const chunk = config.pages[key];
@@ -610,7 +649,7 @@
 		if (agentRequest === null) agent.open();
 		else agent.close();
 	}
-	// L-BOLT-499: the live link's state; `closed` means a new release closed it, and only a reload continues
+	// L-BOLT-499: the live link's state; `closed` means a release closed it: it comes back, and another client reloads
 	let sync = $state<SyncStatus>('idle');
 	// a release cutover holds the host closed for seconds: requests wait it out, and one notice says why
 	let waitingOutUpdate = $state(false);
@@ -1101,6 +1140,7 @@
 				{theme}
 				onTheme={chooseTheme}
 				{chimes}
+				{awaiting}
 				onSounds={() => {
 					navOpen = false;
 					soundsOpen = true;
@@ -1120,7 +1160,7 @@
 				}}
 				onNavigate={go}
 				onSignOut={signOut}
-				notice={boot?.notice}
+				notice={(refreshed ?? boot)?.notice}
 				{...narrow.current ? {} : { onToggle: () => (expanded.current = !expanded.current) }}
 			>
 				{#snippet bell(wide)}{#if bolt !== null && !narrow.current}<Bell
@@ -1128,6 +1168,7 @@
 							{bolt}
 							{t}
 							expanded={wide}
+							onArrival={refreshNotice}
 							onNavigate={(href) => {
 								navOpen = false;
 								navigate(href);
@@ -1191,18 +1232,20 @@
 										{t}
 										expanded={false}
 										header
+										onArrival={refreshNotice}
 										onNavigate={navigate}
 									/>{/if}
 								{#if boot?.surfaces.agent}
 									<Button
 										variant="ghost"
 										size="icon"
-										class="size-11"
+										class="relative size-11"
 										aria-label={t('Norbius')}
 										aria-haspopup="dialog"
 										onclick={() => agent.open()}
 									>
 										<NorbiusStrip size={20} />
+										<Awaiting kind={awaiting} {t} />
 									</Button>
 								{/if}
 							{/snippet}
@@ -1262,8 +1305,11 @@
 				onAsk={boot.surfaces.agent ? (prompt) => agent.open({ prompt }) : null}
 			/>
 		{/if}
+		{#if boot.surfaces.inbox && bolt !== null}
+			<Waiting {bolt} onCount={(n) => (waiting = n)} />
+		{/if}
 		{#if boot.surfaces.agent && bolt !== null}
-			{#if chimes}<Attention {bolt} active={agentRequest?.conversation ?? null} />{/if}
+			<Attention {bolt} active={agentRequest?.conversation ?? null} onEnded={ended} />
 			<!-- non-modal, as every side sheet: the page stays usable; only Esc or × closes it -->
 			<Sheet
 				open={agentRequest !== null}

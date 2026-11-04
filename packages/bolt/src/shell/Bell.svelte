@@ -1,62 +1,97 @@
 <!--
 	The sidebar's notification bell: the unread count on the bell and the installed
-	app's badge, and a popover of the member's notices. The live inbox refreshes the full unread count independently
-	of the displayed page. Opening one marks it read and follows its link.
+	app's badge, and a popover of the member's notices, sorted so the reader need not (`notices.ts`). The live inbox
+	refreshes the full unread count independently of the displayed page. Opening a line marks it read and follows its
+	link. In the list, j/k or the arrows move and u marks the line read.
 -->
 <script lang="ts">
 	import { attach, observe, fork } from '@norbital-ai/ui/effect';
-	import { Effect, Queue, Schema } from 'effect';
+	import { Effect, Queue, Schema, type Stream } from 'effect';
 	import { getContext } from 'svelte';
 	import { watch } from 'runed';
 	import { SOUNDS, noticeArrivals, type Sounds } from './sounds.ts';
 	import { Button, Icon, Popover, cn } from '@norbital-ai/ui';
 	import { Imposter, Inline, Scroll, Stack } from '@norbital-ai/ui/layout';
 	import { noticePath } from '../protocol/wire.ts';
+	import { noticeAge, sortNotices, type NoticeGroup } from './notices.ts';
 	import type { NoticeRow } from '../protocol/schema.ts';
-	import type { ShellBolt } from './runtime.ts';
 	import type { ShellApi } from './api-types.ts';
 
+	type InboxAnswer = { rows: NoticeRow[]; unread: number };
 	let {
 		api,
 		bolt,
 		t,
 		expanded = true,
 		header = false,
+		onArrival,
 		onNavigate
 	}: {
-		api: ShellApi;
-		bolt: ShellBolt;
+		api: Pick<ShellApi, 'markNoticesRead' | 'markAllNoticesRead'>;
+		bolt: {
+			readonly observe: (query: {
+				readonly read: { readonly m: 'inbox'; readonly a: readonly [] };
+			}) => Stream.Stream<InboxAnswer, { readonly message: string }>;
+		};
 		t: (key: string) => string;
 		expanded?: boolean;
 		/** In a phone's top bar: the list drops below the bell, kept inside the screen. */
 		header?: boolean;
+		/** A notice arrived (the chime's moment). */
+		onArrival?: () => void;
 		onNavigate: (href: string) => void;
 	} = $props();
 
 	// svelte-ignore state_referenced_locally
-	const notices = observe(() =>
-		bolt.observe<{ rows: NoticeRow[]; unread: number }>({ read: { m: 'inbox', a: [] } })
-	);
-	const rows = $derived($notices?.rows ?? []);
+	const notices = observe(() => bolt.observe({ read: { m: 'inbox', a: [] } }));
+	const sorted = $derived(sortNotices($notices?.rows ?? []));
 	const unread = $derived($notices?.unread ?? 0);
-	let open = $state(false);
+	let open = $state(false),
+		showWorkspace = $state(false),
+		list = $state<HTMLElement | null>(null);
+	// everything else is said first; with nothing else to say, the workspace's own news is the list
+	const workspaceShown = $derived(showWorkspace || sorted.forYou.length === 0);
+	const now = $derived(open ? Date.now() : 0);
+	const workspaceUnread = $derived(
+		sorted.workspace.reduce((count, group) => count + group.unread.length, 0)
+	);
 	const sounds = getContext<Sounds | undefined>(SOUNDS);
 	const arrivals = noticeArrivals();
 	watch(
 		() => $notices,
 		(answer) => {
-			if (answer !== undefined && arrivals(answer.rows)) sounds?.play('notification');
+			if (answer === undefined || !arrivals(answer.rows)) return;
+			sounds?.play('notification');
+			onArrival?.();
 		}
 	);
 
 	const markRead = (ids: readonly string[]) => {
 		if (ids.length > 0) fork(api.markNoticesRead(ids), () => {});
 	};
-	function openNotice(n: NoticeRow): void {
-		if (!n.read) markRead([n.id]);
-		if (n.link === null) return;
+	function openGroup(group: NoticeGroup, newest: NoticeRow): void {
+		markRead(group.unread);
+		if (newest.link === null) return;
 		open = false;
-		onNavigate(noticePath(n.link));
+		onNavigate(noticePath(newest.link));
+	}
+	const lines = () => [...(list?.querySelectorAll<HTMLElement>('[data-notice]') ?? [])];
+	function onListKey(event: KeyboardEvent): void {
+		if (event.metaKey || event.ctrlKey || event.altKey) return;
+		const all = lines();
+		const at = all.findIndex((line) => line === document.activeElement);
+		const move = (by: number) => {
+			event.preventDefault();
+			all[Math.max(0, Math.min(all.length - 1, at + by))]?.focus();
+		};
+		if (event.key === 'ArrowDown' || event.key === 'j') move(1);
+		else if (event.key === 'ArrowUp' || event.key === 'k') move(-1);
+		else if (event.key === 'u' && at >= 0) {
+			const key = all[at]?.dataset['notice'];
+			markRead(
+				[...sorted.forYou, ...sorted.workspace].find((group) => group.key === key)?.unread ?? []
+			);
+		}
 	}
 	class AppBadgeFailed extends Schema.TaggedError<AppBadgeFailed>()('AppBadgeFailed', {
 		operation: Schema.Literals(['set', 'clear']),
@@ -113,6 +148,50 @@
 	);
 </script>
 
+{#snippet section(groups: readonly NoticeGroup[])}
+	<Stack as="ul" gap="none" divided>
+		{#each groups as group (group.key)}
+			{@const newest = group.rows[0]}
+			{#if newest !== undefined}
+				{@const fresh = group.unread.length > 0}
+				{@const updates =
+					group.rows.length > 1
+						? t('{count} updates').replace('{count}', String(group.rows.length))
+						: null}
+				{@const detail = [updates, newest.body].filter(Boolean).join(' · ')}
+				<li>
+					<button
+						type="button"
+						data-notice={group.key}
+						data-read={!fresh}
+						onclick={() => openGroup(group, newest)}
+						class="w-full px-3 py-2 text-left outline-none hover:bg-accent focus-visible:bg-accent"
+					>
+						<Inline as="span" gap="xs">
+							<span
+								class={cn('size-1.5 shrink-0 rounded-full', fresh && 'bg-primary')}
+								aria-hidden="true"
+							></span>
+							<span
+								class={cn(
+									'min-w-0 flex-1 truncate text-xs',
+									fresh ? 'font-medium' : 'text-muted-foreground'
+								)}>{newest.title}</span
+							>
+							<time class="shrink-0 text-tiny text-muted-foreground tabular-nums" datetime={newest.at}
+								>{noticeAge(newest.at, now)}</time
+							>
+						</Inline>
+						{#if detail !== ''}<span class="block truncate pl-2.5 text-tiny text-muted-foreground"
+								>{detail}</span
+							>{/if}
+					</button>
+				</li>
+			{/if}
+		{/each}
+	</Stack>
+{/snippet}
+
 <Popover.Root bind:open>
 	<Popover.Trigger>
 		{#snippet child({ props })}
@@ -149,10 +228,20 @@
 		align={header || expanded ? 'end' : 'start'}
 		sideOffset={8}
 		collisionPadding={8}
-		class="w-80 max-w-[calc(100vw-1rem)] p-0"
+		class="w-96 max-w-[calc(100vw-1rem)] p-0"
+		onOpenAutoFocus={(event) => {
+			const first = lines()[0];
+			if (first === undefined) return;
+			event.preventDefault();
+			first.focus();
+		}}
 	>
 		<Inline justify="between" gap="sm" class="border-b px-3 py-2">
-			<p class="text-xs font-medium">{t('Notifications')}</p>
+			<p class="text-xs font-medium">
+				{t('Notifications')}{#if unread > 0}<span class="ml-1.5 font-normal text-muted-foreground"
+						>{unread}</span
+					>{/if}
+			</p>
 			{#if unread > 0}
 				<Button
 					type="button"
@@ -173,38 +262,44 @@
 				<p role="status" class="px-3 py-8 text-center text-tiny text-muted-foreground">
 					{t('Loading…')}
 				</p>
-			{:else if rows.length === 0}
+			{:else if sorted.forYou.length + sorted.workspace.length === 0}
 				<Stack align="center" gap="xs" class="px-3 py-8 text-center">
 					<Icon name="lucide:bell-off" class="size-6 text-muted-foreground" />
 					<span class="text-tiny text-muted-foreground">{t('Nothing here yet')}</span>
 				</Stack>
 			{:else}
-				<Stack as="ul" gap="none" divided>
-					{#each rows as n (n.id)}
-						<li>
+				<!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+				<div bind:this={list} role="group" aria-keyshortcuts="j k u" onkeydown={onListKey}>
+					{#if sorted.forYou.length > 0}
+						{@render section(sorted.forYou)}
+					{/if}
+					{#if sorted.workspace.length > 0}
+						{#if sorted.forYou.length > 0}
 							<button
 								type="button"
-								onclick={() => openNotice(n)}
-								data-read={n.read}
-								class={cn(
-									'w-full px-3 py-2 text-left outline-none hover:bg-accent focus-visible:bg-accent',
-									!n.read && 'bg-accent/40'
-								)}
+								aria-expanded={workspaceShown}
+								onclick={() => (showWorkspace = !showWorkspace)}
+								class="w-full border-t px-3 py-1.5 text-left outline-none hover:bg-accent focus-visible:bg-accent"
 							>
 								<Inline as="span" gap="xs">
-									{#if !n.read}<span
-											class="size-1.5 shrink-0 rounded-full bg-primary"
-											aria-hidden="true"
-										></span>{/if}
-									<span class="min-w-0 flex-1 truncate text-xs font-medium">{n.title}</span>
+									<Icon
+										name={workspaceShown ? 'lucide:chevron-down' : 'lucide:chevron-right'}
+										class="size-3 shrink-0 text-muted-foreground"
+									/>
+									<span class="min-w-0 flex-1 truncate text-tiny text-muted-foreground"
+										>{t('Workspace updates')}</span
+									>
+									{#if workspaceUnread > 0}<span class="text-tiny text-muted-foreground tabular-nums"
+											>{workspaceUnread}</span
+										>{/if}
 								</Inline>
-								{#if n.body}<span class="block truncate text-tiny text-muted-foreground"
-										>{n.body}</span
-									>{/if}
 							</button>
-						</li>
-					{/each}
-				</Stack>
+						{/if}
+						{#if workspaceShown}
+							{@render section(sorted.workspace)}
+						{/if}
+					{/if}
+				</div>
 			{/if}
 		</Scroll>
 	</Popover.Content>

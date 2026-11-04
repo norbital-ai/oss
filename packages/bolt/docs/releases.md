@@ -45,7 +45,8 @@ env deploy promote --target=staging --template=<directory> --release=<b>
   -> cuts the template's demo workspaces over
        same schema: flip, no pause
        changed schema: pause, migrate, flip
-  -> open pages reload
+  -> running automations get 60 s, then turns stop at a step, at most 90 s
+  -> open pages reconnect, and reload for a new client
 
 production: promote the SAME <b>
 ```

@@ -332,15 +332,25 @@ export type RetrySpec = { readonly attempts: number; readonly backoff: string };
 /** A platform run's handler (`bolt.notify`, `bolt.embed`, a sync's read, …), run as the workspace's own work. */
 export type RunHandler = (
 	input: Json,
-	run: { readonly id: string; readonly starter: Holder | null }
+	run: {
+		readonly id: string;
+		readonly starter: Holder | null;
+		readonly cause?: string;
+		readonly attempts?: number;
+	}
 ) => Effect.Effect<Json, EngineError>;
+/** When a platform cron with nothing to do at `now` next has something; `undefined`: its slot runs. */
+export type RunRest = (now: number) => Effect.Effect<number | undefined, EngineError>;
+type RunRestOf = (name: string, now: number) => Effect.Effect<number | undefined, EngineError>;
 export type RunHandlersShape = {
 	/** Areas register their platform runs once, at layer build. */
 	readonly register: (
 		handlers: { readonly [name: string]: RunHandler },
-		retries?: { readonly [name: string]: RetrySpec } | undefined
+		retries?: { readonly [name: string]: RetrySpec } | undefined,
+		rests?: { readonly [name: string]: RunRest } | undefined
 	) => Effect.Effect<void>;
 	readonly handler: (name: string) => Effect.Effect<Option.Option<RunHandler>>;
+	readonly resting: RunRestOf;
 	readonly retry: (name: string) => Effect.Effect<Option.Option<RetrySpec>>;
 };
 /** The bottom service that breaks the runs ↔ areas cycle (D4). */
@@ -356,6 +366,8 @@ export type RunsShape = {
 	readonly boot: (overran?: string) => Effect.Effect<void, EngineError>;
 	/** One wake: claim every due run, run them, settle with the next due time. */
 	readonly tick: Effect.Effect<void, EngineError>;
+	/** A planned close: no run starts from now on; answers once the running automations ended. */
+	readonly park: Effect.Effect<void>;
 	/** A run queued for `at`: an open wake claims it when due. */
 	readonly nudge: (at: string) => Effect.Effect<void>;
 	readonly view: (
@@ -446,6 +458,8 @@ export class Turns extends Context.Service<Turns, TurnsShape>()('bolt/Turns') {}
 /** One turn's drain: whether it ran, and the reply it settled. */
 export type TurnResult = { readonly ran: boolean; readonly reply: MessageRow | null };
 export type AgentsShape = {
+	/** A planned close: every turn holds at its next step; answers once none is inside one. */
+	readonly park: Effect.Effect<void>;
 	readonly start: (o: {
 		readonly owner?: string | null | undefined;
 		readonly envoy?: string | null | undefined;
@@ -511,10 +525,7 @@ export type AgentsShape = {
 	) => Effect.Effect<void, EngineError>;
 	readonly markRead: (id: string, member: string) => Effect.Effect<void, EngineError>;
 	/** The active tab wrote back whether it performed a page action: the tool step's durable result. */
-	readonly pageResult: (
-		messageId: string,
-		result: PageResult
-	) => Effect.Effect<void, EngineError>;
+	readonly pageResult: (messageId: string, result: PageResult) => Effect.Effect<void, EngineError>;
 	/** The first tab to claim a page action owns it; every other tab sees false and stays silent. */
 	readonly claimPageAction: (messageId: string) => Effect.Effect<boolean, EngineError>;
 	readonly confirm: (
@@ -602,6 +613,7 @@ export type FacilityCall =
 	| FacilityArm<'browser.snapshot'>
 	| FacilityArm<'browser.act'>
 	| FacilityArm<'browser.evaluate'>
+	| FacilityArm<'browser.download'>
 	| FacilityArm<'browser.close'>
 	| FacilityArm<'files.meta'>
 	| FacilityArm<'files.get'>

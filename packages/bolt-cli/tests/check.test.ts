@@ -230,7 +230,7 @@ describe('bolt check', () => {
 			checkRules(m, { automations: [] }, (_r, n) => n).map((f) => `${f.code} ${f.message}`)
 		).toEqual([
 			"sync/file customers: syncs.ofx: a file sync runs on upload and export; every and partitions are a remote sync's",
-			"sync/parser customers: syncs.ofx: 'numbers' is no built-in parser (xlsx, csv, tsv, json, ics)",
+			"sync/parser customers: syncs.ofx: 'numbers' is no built-in parser (xlsx, csv, tsv, json, ics, txt)",
 			"sync/parser customers: syncs.ofx: a custom parser lists its file extensions ('.ofx')",
 			"sync/every customers: syncs.crm: 'often' is not a duration ('15min', '1h')",
 			expect.stringContaining(

@@ -89,7 +89,12 @@ export type TxValue<T> = T extends void ? T : TxData<T>;
 
 type TxBody<R> = (tx: TxCtx) => Generator<TxInstruction, R, unknown>;
 
-/** A fixed five-second native transaction: only its outer answer can be committed or held for approval. */
+/**
+ * A fixed five-second native transaction on PostgreSQL 17 or later; PGlite refuses it (`unsupported`). Its body yields
+ * only `tx.query` and `tx.act`: no external I/O, no captured Effects, no nesting. Reads see its own writes. A `throw` or a
+ * failed `tx.act` rolls it all back, and it is never replayed. Only its outer answer can be committed or held for
+ * approval, so an inner answer is provisional.
+ */
 export interface Transaction {
 	<R>(
 		body: TxBody<R> & NoInfer<TxBody<TxValue<R>>>

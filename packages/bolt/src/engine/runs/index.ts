@@ -28,6 +28,7 @@ import { EngineActorSchema, RunTriggerSchema } from '../../protocol/schema.ts';
 import { exposed, viewOutput, type Holder } from '../access/authority.ts';
 import { issueAutomationDelegation, delegatedVerbAuthority } from '../access/delegation.ts';
 import { Port, type PortFailure } from '../port.ts';
+import { makeParking } from '../parking.ts';
 import { AgentHost } from '../agent/index.ts';
 import { inferArgsOf, inferFacility, type InferTool } from '../agent/ai.ts';
 import { EmbedInputs, ImageOptions, Reference } from '../facilities.ts';
@@ -68,7 +69,8 @@ import {
 	type ActsRequest,
 	type FacilityCall,
 	type RetrySpec,
-	type RunHandler
+	type RunHandler,
+	type RunRest
 } from '../services.ts';
 import { actorRef } from '../write/commit.ts';
 import {
@@ -343,6 +345,7 @@ function factsOf(call: FacilityCall): CallFacts {
 		refs.flatMap((ref) => (typeof ref === 'string' ? [] : [ref.id]));
 	switch (call._tag) {
 		case 'files.put':
+		case 'browser.download':
 		case 'ai.speak':
 			return { reads: [], stores: true, tools: undefined };
 		case 'files.image':
@@ -406,7 +409,9 @@ const MAX_IDS = 10000,
 	EFFECT_RETRY: RetrySpec = { attempts: 3, backoff: '10s' },
 	DAY = 86400000,
 	/** Workspace automations that may run side by side; one automation's own runs stay one at a time. */
-	LANES = 4;
+	LANES = 12,
+	/** How soon a parked generation's wake asks again. */
+	PARKED_WAKE_MS = 5_000;
 const PRUNE = 'bolt.prune';
 /**
  * Where a run's row stands. A queued run has its row; a fired cron's run writes it only with its first effect:
@@ -441,6 +446,7 @@ export const WakeLive = Layer.effect(
 export const RunHandlersLive = Layer.sync(RunHandlers, () => {
 	const handlers = new Map<string, RunHandler>(),
 		retries = new Map<string, RetrySpec>();
+	const rests = new Map<string, RunRest>();
 	return {
 		register: (
 			next: {
@@ -448,13 +454,18 @@ export const RunHandlersLive = Layer.sync(RunHandlers, () => {
 			},
 			policy: {
 				readonly [name: string]: RetrySpec;
+			} = {},
+			resting: {
+				readonly [name: string]: RunRest;
 			} = {}
 		) =>
 			Effect.sync(() => {
 				for (const [name, handler] of Object.entries(next)) handlers.set(name, handler);
 				for (const [name, retry] of Object.entries(policy)) retries.set(name, retry);
+				for (const [name, rest] of Object.entries(resting)) rests.set(name, rest);
 			}),
 		handler: (name: string) => Effect.sync(() => Option.fromNullishOr(handlers.get(name))),
+		resting: (name: string, now: number) => rests.get(name)?.(now) ?? Effect.succeed(undefined),
 		retry: (name: string) => Effect.sync(() => Option.fromNullishOr(retries.get(name)))
 	};
 });
@@ -510,12 +521,16 @@ export const RunsLive = Layer.effect(
 		// A lane's claim commits before the next one checks the automation's remaining capacity.
 		const lanes = yield* Semaphore.make(LANES),
 			claims = yield* Semaphore.make(1),
-			tickPermit = yield* Semaphore.make(1);
+			tickPermit = yield* Semaphore.make(1),
+			/** The running automations: a planned close waits for them, and no run starts after it. */
+			parking = makeParking();
 		const capacities: Record<string, number> = {};
 		for (const [name, automation] of Object.entries(m.automations))
 			capacities[name] = automation.concurrency?.max ?? 1;
 		// Local permits match native admission; undeclared platform handlers keep one permit.
 		const locks = new Map<string, Semaphore.Semaphore>();
+		/** Each resting cron's end, as this generation learned it. */
+		const restEnds = new Map<string, number>();
 		const lock = (automation: string) => {
 			let held = locks.get(automation);
 			if (held === undefined)
@@ -546,11 +561,13 @@ export const RunsLive = Layer.effect(
 					at = c.p(iso(now)),
 					over = c.p(overran ?? null),
 					// a handed-off request's work lived in its generation's memory: it is not run again (the person asks again);
-					// a run its generation stopped past the CPU budget would only overrun again
-					fails = `(${over}::text IS NOT NULL OR cause = 'handoff' OR leases >= 3)`;
+					// a run its generation stopped past the CPU budget would only overrun again. A close that interrupted a run is
+					// no lost lease (only a crash writes no `interrupted`): restarts cannot use up a run's three
+					closed = `error->>'code' = 'interrupted'`,
+					fails = `(${over}::text IS NOT NULL OR cause = 'handoff' OR (leases >= 3 AND ${closed} IS NOT TRUE))`;
 				c.cte(
 					'lost',
-					`UPDATE sys_run SET leases = leases + 1, due_at = ${at}::timestamptz, state = CASE WHEN ${fails} THEN 'failed' ELSE 'queued' END, finished_at = CASE WHEN ${fails} THEN ${at}::timestamptz END, error = CASE WHEN ${over}::text IS NOT NULL THEN jsonb_build_object('code', 'cpuBudget', 'message', ${over}::text) WHEN cause = 'handoff' THEN '{"code":"lostLease","message":"The host was lost before the request answered."}'::jsonb WHEN leases < 3 THEN error ELSE '{"code":"lostLease","message":"The run lost its lease 3 times."}'::jsonb END WHERE state = 'running' RETURNING id, state, due_at`
+					`UPDATE sys_run SET leases = leases + CASE WHEN ${closed} THEN 0 ELSE 1 END, due_at = ${at}::timestamptz, state = CASE WHEN ${fails} THEN 'failed' ELSE 'queued' END, finished_at = CASE WHEN ${fails} THEN ${at}::timestamptz END, error = CASE WHEN ${over}::text IS NOT NULL THEN jsonb_build_object('code', 'cpuBudget', 'message', ${over}::text) WHEN cause = 'handoff' THEN '{"code":"lostLease","message":"The host was lost before the request answered."}'::jsonb WHEN ${closed} THEN NULL WHEN leases < 3 THEN error ELSE '{"code":"lostLease","message":"The run lost its lease 3 times."}'::jsonb END WHERE state = 'running' RETURNING id, state, due_at`
 				);
 				const rows = yield* db.returning(
 					Schema.Struct({
@@ -567,6 +584,7 @@ export const RunsLive = Layer.effect(
 			});
 		const claim = (now: number, pruned = false, custom = false) =>
 			Effect.gen(function* () {
+				if (parking.parked) return { runs: [], next: null };
 				const c = new Chain(),
 					automations = c.p(Object.keys(m.automations)),
 					capacity = c.p(capacities),
@@ -669,12 +687,13 @@ export const RunsLive = Layer.effect(
 			call._tag.startsWith('ai.') ||
 			call._tag === 'convert.document' ||
 			call._tag === 'files.put' ||
+			call._tag === 'browser.download' ||
 			(call._tag === 'files.image' &&
 				Option.exists(
 					Schema.decodeUnknownOption(ImageOptions)(call.args[1] ?? {}),
 					(o) => o.jpeg !== undefined
 				));
-		/** The first wake or fire of a day prunes (rule 56); `undefined` once it ran today, or when it made no progress. */
+		/** The first wake or written fire of a day prunes (rule 56); `undefined` once it ran today, or when it made no progress. */
 		const daily = (now: number) =>
 			Effect.suspend(
 				(): Effect.Effect<{ deleted: number; continued?: number } | undefined, EngineError> => {
@@ -1493,6 +1512,7 @@ export const RunsLive = Layer.effect(
 					spec = m.automations[head.automation] ?? (effect === undefined ? undefined : EFFECT),
 					dues: number[] = [],
 					warnings: string[] = [];
+				if (spec !== undefined) parking.enter(head.id);
 				let input: Json = head.input;
 				const decoded = spec?.input === undefined ? undefined : decodeInput(spec.input, input);
 				let outcome: GuestOutcome;
@@ -1666,13 +1686,16 @@ export const RunsLive = Layer.effect(
 			}).pipe(
 				Effect.onInterrupt(() =>
 					interrupted(rows, 'The run was interrupted while its generation was draining (rule 71a).')
-				)
+				),
+				Effect.ensuring(Effect.sync(() => parking.leave(rows[0]?.id ?? '')))
 			);
 		const tick = tickPermit.withPermit(
 			Effect.scoped(
 				Effect.gen(function* () {
-					const now = yield* Clock.currentTimeMillis,
-						inflight = yield* FiberSet.make<void, never>(),
+					const now = yield* Clock.currentTimeMillis;
+					// parked, this generation is closing: the wake comes back soon and lands on the next one
+					if (parking.parked) return yield* deadlines.settle(iso(now + PARKED_WAKE_MS));
+					const inflight = yield* FiberSet.make<void, never>(),
 						timer = yield* FiberHandle.make<void, never>(),
 						subscription = yield* PubSub.subscribe(nudges);
 					let errors: Cause.Cause<EngineError> = Cause.empty,
@@ -1863,8 +1886,13 @@ export const RunsLive = Layer.effect(
 					BoltError.make('invalidInput', 'admission', `no cron '${id}' fires at '${slot}'`)
 				);
 			const now = yield* Clock.currentTimeMillis;
-			const pass = yield* daily(now);
-			if (pass?.continued !== undefined) yield* announce(iso(pass.continued));
+			const until = yield* registry.resting(id, now);
+			if (until !== undefined) return { ran: false, until: iso(until) };
+			// a cron that rests depends on the data alone: while nothing touched the database, its last read still stands
+			const rest = triggersOf(m).rests.get(id),
+				rested = restEnds.get(id);
+			if (rested !== undefined && rested > now && !(yield* db.awake))
+				return { ran: false, until: iso(rested) };
 			const run: Row = {
 				id: sha256Hex(canonical(['cron', id, iso(at)])).slice(0, 32),
 				automation: id,
@@ -1898,15 +1926,28 @@ export const RunsLive = Layer.effect(
 					return written;
 				})
 			);
-			const dues = yield* lock(run.automation).withPermit(
+			const running = lock(run.automation).withPermit(
 				execute([run], { record, written: () => written })
 			);
+			const dues = yield* rest === undefined ? running : db.quietly(running);
 			if (dues.length > 0) yield* announce(iso(Math.min(...dues)));
-			return { ran: written };
+			// only a slot that used the database prunes it: a pass is no reason to wake it
+			if (written) {
+				restEnds.delete(id);
+				const pass = yield* daily(now);
+				if (pass?.continued !== undefined) yield* announce(iso(pass.continued));
+				return { ran: true };
+			}
+			if (rest === undefined) return { ran: false };
+			// on a whole multiple, so a workspace's resting crons wake its database together
+			const end = (Math.floor(now / rest) + 1) * rest;
+			restEnds.set(id, end);
+			return { ran: false, until: iso(end) };
 		});
 		return {
 			boot,
 			tick,
+			park: parking.park,
 			nudge: (at: string) => PubSub.publish(nudges, Date.parse(at)).pipe(Effect.asVoid),
 			view,
 			stop,

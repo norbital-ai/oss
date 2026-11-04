@@ -63,24 +63,35 @@ export class Secrets extends Context.Service<Secrets, SecretsShape>()('bolt/Secr
 							Effect.map(Option.map((plain) => new TextDecoder().decode(plain))),
 							Effect.mapError(failed('the secret could not be opened'))
 						);
-				const rows = yield* db.rows(stored.annotate({ identifier: 'sys_config' }), {
-					text: 'SELECT key, value FROM sys_config WHERE key LIKE $1',
-					params: [`${prefix('workspace')}%`]
-				});
-				for (const row of rows) {
-					const name = row.key.slice(prefix('workspace').length);
-					const value = yield* open('workspace', name, row.value);
-					if (Option.isSome(value)) workspace.set(name, value.value);
-				}
+				// read when a declaration first asks: a cold start makes no trip to the database for them
+				let loaded = declared.length === 0;
+				const load = Effect.gen(function* () {
+					if (loaded) return;
+					const rows = yield* db.rows(stored.annotate({ identifier: 'sys_config' }), {
+						text: 'SELECT key, value FROM sys_config WHERE key LIKE $1',
+						params: [`${prefix('workspace')}%`]
+					});
+					for (const row of rows) {
+						const name = row.key.slice(prefix('workspace').length);
+						const value = yield* open('workspace', name, row.value);
+						if (Option.isSome(value)) workspace.set(name, value.value);
+					}
+					loaded = true;
+				}).pipe(Effect.orDie);
 				const config = ConfigProvider.make((path) =>
-					ConfigProvider.fromUnknown(
-						Object.fromEntries(
-							declared.flatMap((name) => {
-								const value = workspace.get(name);
-								return value === undefined ? [] : [[name, value]];
-							})
+					Effect.andThen(
+						load,
+						Effect.suspend(() =>
+							ConfigProvider.fromUnknown(
+								Object.fromEntries(
+									declared.flatMap((name) => {
+										const value = workspace.get(name);
+										return value === undefined ? [] : [[name, value]];
+									})
+								)
+							).load(path)
 						)
-					).load(path)
+					)
 				);
 				return Secrets.of({
 					seal,

@@ -11,6 +11,7 @@ import {
 	writeSource
 } from '../compiler/artifact/index.ts';
 import { buildPacks } from '../compiler/artifact/seed.ts';
+import { layerLines, preparedLayer } from '../compiler/artifact/platform.ts';
 import { CONTRACT, readArtifact, type Artifact } from '@norbital-ai/bolt/artifact';
 import { readPackSource, type PackJson } from '@norbital-ai/bolt/engine';
 import type {
@@ -71,10 +72,11 @@ const seedInputs = Effect.fn('bolt.seedInputs')(function* (root: string, schema:
 });
 /**
  * Every build is a full build (a Studio preview's is the one its merge reuses) through declaration compilation; the
- * authoring diagnostics and type check are `bolt check`. Any build reuses an unchanged
- * base pack, and an unchanged migration history skips its replay. A watch's rebuild (`changed`) skips the guest's
- * terser pass and takes from its last good build what its edits leave unchanged: the compiled declarations, the
- * platform layer, the seed packs and every unrewritten file's digest.
+ * authoring diagnostics and type check are `bolt check`. Any build reuses an unchanged base pack and the public pages'
+ * output while their inputs hold (their digests are in `.norbital/cache/pages`), and an unchanged migration history
+ * skips its replay. A watch's rebuild (`changed`) takes from its last
+ * good build what its edits leave unchanged: the compiled declarations, the platform layer, the seed packs and every
+ * unrewritten file's digest.
  *
  * A build is published atomically: each part (`bundle`, `source`, `seed`) is assembled under `.norbital/.next/` (a
  * watch's rebuild starts from clones of the live parts) and renamed into place, then `release.json` names their digests,
@@ -131,6 +133,8 @@ export type BuildOptions = {
 	previous?: Built;
 	/** `bolt dev` serves the internal SPA from source: an edit in its graph alone keeps the browser build. */
 	spaServed?: boolean;
+	/** A layer `bolt platform` wrote: read here, its files left for the host to add to the bundle. */
+	platform?: string;
 };
 export type BuildFailure =
 	| AuthorErrors
@@ -163,7 +167,6 @@ const buildOnce = Effect.fn('bolt.buildWorkspace')(function* (
 			? previous.compiled
 			: yield* compile(root, {
 					migrations: 'generate',
-					compress: changed === undefined,
 					...(options.squash === undefined ? {} : { squash: options.squash })
 				}).pipe(
 					Effect.flatMap(({ errors, manifest, guest }) =>
@@ -172,11 +175,14 @@ const buildOnce = Effect.fn('bolt.buildWorkspace')(function* (
 							: Effect.succeed({ manifest, guest })
 					)
 				);
+	const prepared =
+		options.platform === undefined ? undefined : yield* preparedLayer(options.platform);
 	yield* fs.remove(next, { recursive: true, force: true });
 	if (changed !== undefined) yield* cloneTree(path.join(norbital, 'bundle'), out);
 	const artifact = yield* writeArtifact(root, compiled, files, out, {
 		...(changed === undefined ? {} : { changed }),
-		...(options.spaServed === undefined ? {} : { spaServed: options.spaServed })
+		...(options.spaServed === undefined ? {} : { spaServed: options.spaServed }),
+		...(prepared === undefined ? {} : { prepared })
 	});
 	const seedOut = path.join(next, 'seed');
 	// the packs are a function of the seed tree, the schema and the lockfile (which a watch does not see change)
@@ -191,7 +197,7 @@ const buildOnce = Effect.fn('bolt.buildWorkspace')(function* (
 	const release: ReleaseJson = {
 		format: 1,
 		handle: artifact.handle,
-		bundle: yield* memoTreeHash(out),
+		bundle: yield* memoTreeHash(out, layerLines(prepared, 'client')),
 		source: yield* writeSource(root, path.join(next, 'source')),
 		seed:
 			seeded === previous
@@ -299,8 +305,8 @@ export type Built = {
 };
 /**
  * `bolt dev` (tethered and untethered): one rebuild per settled burst of edits under `src/`, `seed/` and the editable
- * `migrations/*.sql`, handed to `built`. A rebuild skips the type check, an unchanged migration replay and the guest's
- * terser pass (`bolt check`, `bolt build` and CI own those), and the browser and SSR builds are kept while no edited file is in their module graphs. Each
+ * `migrations/*.sql`, handed to `built`. A rebuild skips the type check and an unchanged migration replay (`bolt check`,
+ * `bolt build` and CI own those), and the browser and SSR builds are kept while no edited file is in their module graphs. Each
  * rebuild starts from the last good one (`first`, the build before the watch, if it succeeded). A failed rebuild is
  * logged; the loop goes on, and the next rebuild starts from nothing.
  */

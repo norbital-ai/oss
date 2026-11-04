@@ -10,6 +10,7 @@ import { fileURLToPath } from 'node:url';
 import type { CheckDiagnostic } from '@norbital-ai/bolt/tooling';
 import { dev, tethered } from './dev.ts';
 import { hostFileOf } from '@norbital-ai/bolt/tooling';
+import { platformCommand } from './platform.ts';
 import { templatesCommand } from './templates.ts';
 import {
 	AuthorErrors,
@@ -114,12 +115,19 @@ const buildCommand = Command.make(
 			Flag.withDescription(
 				'verify a fresh-database schema prefix baseline, retaining original archives and any procedural/data suffix'
 			)
+		),
+		platform: Flag.String('platform').pipe(
+			Flag.optional,
+			Flag.withDescription(
+				'a directory `bolt platform` wrote: its layer is read, and its files are left for the host to add to the bundle'
+			)
 		)
 	},
-	({ dir, json, squash }) =>
+	({ dir, json, squash, platform }) =>
 		Effect.gen(function* () {
 			yield* buildWorkspace(resolve(dir), {
 				...(Option.isNone(squash) ? {} : { squash: squash.value }),
+				...(Option.isNone(platform) ? {} : { platform: platform.value }),
 				log
 			}).pipe(Effect.catchTag('AuthorErrors', reported(json)));
 		})
@@ -241,6 +249,7 @@ export const boltCommand = Command.make('bolt').pipe(
 		syncCommand,
 		checkCommand,
 		buildCommand,
+		platformCommand,
 		testCommand,
 		seedCommand,
 		templatesCommand

@@ -11,11 +11,12 @@ type DeepSeekRouting = {
 
 /**
  * OpenRouter selects a compatible DeepSeek provider by price, subject to the account's privacy policy. A provider whose
- * prompt cache serves a stale context (the model cannot see the tool results it was just sent) is never chosen.
+ * prompt cache serves a stale context (the model cannot see the tool results it was just sent), or whose tool-call parser
+ * drops string arguments (Morph answers `run_js { code, http: true }` as `{ "http": true }`), is never chosen.
  */
 export const deepSeekRouting = (endpoint: string, model: string): DeepSeekRouting =>
 	model.startsWith('deepseek/') && new URL(endpoint).hostname === 'openrouter.ai'
-		? { provider: { sort: 'price', require_parameters: true, ignore: ['open-inference'] } }
+		? { provider: { sort: 'price', require_parameters: true, ignore: ['open-inference', 'morph'] } }
 		: {};
 
 /** Provider routing uses the resolved model, including a catalog id chosen instead of a configured class. */

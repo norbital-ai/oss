@@ -136,6 +136,9 @@ Download saves an image, video, audio, PDF or CAD file at its own URL as the per
 the page loads it; a file field takes its reference. For media embedded in a page, find its source URL in the page (a
 video or source element's src, og:video or og:image, a download link's href), never the page URL. Segmented streams
 (HLS, DASH) and DRM-protected media cannot be saved: say so.
+What a video or recording says comes only from its transcript (its captions, or the ingest of its downloaded file),
+never from its title, description or what such videos usually say. Without a transcript, say you could not get one
+and attribute nothing to it.
 
 ## Compare and write back
 Compare what you found with the workspace's records in one read and report each difference with its source. Change

@@ -148,6 +148,7 @@ const base: EngineManifest = {
 			policies: ['limited']
 		},
 		pair: { description: 'Two independent reviews', policies: ['ops'], concurrency: { max: 2 } },
+		wide: { description: 'A research batch', policies: ['ops'], concurrency: { max: 16 } },
 		classify: { description: 'Re-queues itself while work is left', policies: ['ops'] },
 		flaky: {
 			description: 'Fails transiently twice',
@@ -200,6 +201,7 @@ type Body = (
 			snapshot(options?: Json): Effect.Effect<Json, BoltError>;
 			act(steps: readonly Json[]): Effect.Effect<Json, BoltError>;
 			evaluate(expression: string): Effect.Effect<Json, BoltError>;
+			download(url: string, options: Json): Effect.Effect<Json, BoltError>;
 			close(): Effect.Effect<Json, BoltError>;
 		};
 	}
@@ -289,6 +291,8 @@ function fakeGuest(
 						act: (steps: readonly Json[]) => cross({ _tag: 'browser.act', args: [steps] }),
 						evaluate: (expression: string) =>
 							cross({ _tag: 'browser.evaluate', args: [expression] }),
+						download: (url: string, options: Json) =>
+							cross({ _tag: 'browser.download', args: [url, options] }),
 						close: () => cross({ _tag: 'browser.close', args: [] })
 					}
 				}).pipe(
@@ -551,6 +555,41 @@ describe('run browser scope', () => {
 			]);
 		})
 	);
+	it.effect(
+		'a run downloads into a stored file its automation owns, the bytes never crossing',
+		() =>
+			Effect.gen(function* () {
+				const w = yield* world(base, {
+					classify: (_input, ctx) =>
+						ctx.browser.download('https://a.test/clip.png', { for: 'classify' })
+				});
+				yield* queue(w, 'download', 'classify', T0);
+				yield* w.r.tick;
+				const [file] = yield* w.sql(`SELECT name, mime, size, key, field FROM sys_file`);
+				expect(file).toEqual({
+					name: 'file',
+					mime: 'image/png',
+					size: 1,
+					key: 'k',
+					field: 'classify'
+				});
+				const [run] = yield* w.sql(
+					`SELECT state, output->>'mime' AS mime FROM sys_run WHERE id = 'download'`
+				);
+				expect(run).toEqual({ state: 'succeeded', mime: 'image/png' });
+			})
+	);
+	it.effect('a download names who owns it', () =>
+		Effect.gen(function* () {
+			const w = yield* world(base, {
+				classify: (_input, ctx) =>
+					ctx.browser.download('https://a.test/clip.png', { for: 'nobody' })
+			});
+			yield* queue(w, 'unowned', 'classify', T0);
+			yield* w.r.tick;
+			expect(yield* w.sql(`SELECT count(*)::int AS files FROM sys_file`)).toEqual([{ files: 0 }]);
+		})
+	);
 	it.effect('lets exactly one tab claim a page action', () =>
 		Effect.gen(function* () {
 			const w = yield* world(base);
@@ -605,8 +644,9 @@ describe('lost leases (rules 52a, 70)', () => {
 				const ticking = yield* Effect.forkChild(w.r.tick);
 				yield* Deferred.await(entered);
 				entered = yield* Deferred.make<void>();
-				// the process drops the run: its fiber ends, and the next boot finds it still running
+				// the process dies: its fiber ends, it writes nothing, and the next boot finds the run still running
 				yield* Fiber.interrupt(ticking);
+				yield* w.sql(`UPDATE sys_run SET error = NULL WHERE id = 'dropped'`);
 				yield* w.r.boot();
 				expect(starts).toBe(drop);
 			}
@@ -615,6 +655,54 @@ describe('lost leases (rules 52a, 70)', () => {
 					`SELECT state, attempts, leases, error->>'code' AS code FROM sys_run WHERE id = 'dropped'`
 				)
 			).toEqual([{ state: 'failed', attempts: 4, leases: 4, code: 'lostLease' }]);
+		})
+	);
+	it.effect('a close that interrupts a run costs it no lease, however often it comes', () =>
+		Effect.gen(function* () {
+			let entered = yield* Deferred.make<void>();
+			const w = yield* world(base, {
+				classify: () => Deferred.succeed(entered, undefined).pipe(Effect.andThen(Effect.never))
+			});
+			yield* queue(w, 'closed', 'classify', T0);
+			for (let close = 1; close <= 5; close++) {
+				const ticking = yield* Effect.forkChild(w.r.tick);
+				yield* Deferred.await(entered);
+				entered = yield* Deferred.make<void>();
+				yield* Fiber.interrupt(ticking);
+				yield* w.r.boot();
+			}
+			expect(
+				yield* w.sql(`SELECT state, attempts, leases, error FROM sys_run WHERE id = 'closed'`)
+			).toEqual([{ state: 'queued', attempts: 5, leases: 0, error: null }]);
+		})
+	);
+	it.effect('a parked generation starts no run and waits for the one running', () =>
+		Effect.gen(function* () {
+			const entered = yield* Deferred.make<void>(),
+				release = yield* Deferred.make<void>();
+			const w = yield* world(base, {
+				classify: () =>
+					Deferred.succeed(entered, undefined).pipe(
+						Effect.andThen(Deferred.await(release)),
+						Effect.as({ ok: true })
+					)
+			});
+			yield* queue(w, 'running', 'classify', T0);
+			yield* Effect.forkChild(w.r.tick);
+			yield* Deferred.await(entered);
+			const parked = yield* Deferred.make<void>();
+			yield* w.r.park.pipe(Effect.andThen(Deferred.succeed(parked, undefined)), Effect.forkChild);
+			yield* Effect.yieldNow;
+			expect(yield* Deferred.isDone(parked)).toBe(false);
+			yield* Deferred.succeed(release, undefined);
+			yield* Deferred.await(parked);
+			yield* queue(w, 'held', 'classify', T0);
+			yield* w.r.tick;
+			expect(yield* w.sql(`SELECT state FROM sys_run WHERE id = 'held'`)).toEqual([
+				{ state: 'queued' }
+			]);
+			// the wake comes back soon, to land on the next generation
+			expect(shared.next).toBe(T0 + 5_000);
 		})
 	);
 });
@@ -995,15 +1083,16 @@ describe('webhooks and visibility (rules 56, 56a)', () => {
 						Effect.fail(BoltError.make('guestError', 'guest', 'secret detail'))
 				});
 				yield* w.secrets.set('workspace', 'HOOK', 'tok');
-				w.statements.length = 0;
 				const body = new TextEncoder().encode('{"order":1}');
-				expect(
-					yield* w.r.webhook('/in', {
-						method: 'POST',
-						headers: { authorization: 'Bearer nope' },
-						body
-					})
-				).toEqual({ status: 401 });
+				const refused = {
+					method: 'POST',
+					headers: { authorization: 'Bearer nope' },
+					body
+				};
+				// a generation's first webhook reads the secret it verifies with, and nothing more
+				expect(yield* w.r.webhook('/in', refused)).toEqual({ status: 401 });
+				w.statements.length = 0;
+				expect(yield* w.r.webhook('/in', refused)).toEqual({ status: 401 });
 				expect(w.statements).toEqual([]);
 				const ok = { method: 'POST', headers: { authorization: 'Bearer tok' }, body };
 				expect(yield* w.r.webhook('/in', ok)).toEqual({ status: 200 });
@@ -1071,6 +1160,38 @@ describe('webhooks and visibility (rules 56, 56a)', () => {
 });
 
 describe('lanes (rules 48, 51)', () => {
+	it.effect('twelve automations run side by side in one workspace; the thirteenth waits', () =>
+		Effect.gen(function* () {
+			const full = yield* Deferred.make<void>(),
+				release = yield* Deferred.make<void>();
+			let running = 0,
+				most = 0;
+			const w = yield* world(base, {
+				wide: () =>
+					Effect.gen(function* () {
+						most = Math.max(most, ++running);
+						if (running === 12) yield* Deferred.succeed(full, undefined);
+						yield* Deferred.await(release);
+						running -= 1;
+						return { done: true };
+					})
+			});
+			for (let at = 0; at < 14; at++) yield* queue(w, `run-${at}`, 'wide', T0 - 20_000 + at);
+			const ticking = yield* Effect.forkChild(w.r.tick);
+			yield* Deferred.await(full);
+			expect(
+				yield* w.sql(
+					`SELECT state, count(*)::int AS n FROM sys_run WHERE automation = 'wide' GROUP BY state ORDER BY state`
+				)
+			).toEqual([
+				{ state: 'queued', n: 2 },
+				{ state: 'running', n: 12 }
+			]);
+			yield* Deferred.succeed(release, undefined);
+			yield* Fiber.join(ticking);
+			expect(most).toBe(12);
+		})
+	);
 	it.effect(
 		'a long automation never holds a triage or another automation, while its own runs stay one at a time; declared concurrency admits two and drains the rest',
 		() =>

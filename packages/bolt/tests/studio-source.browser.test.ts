@@ -38,6 +38,7 @@ const fixture: StudioView = {
 			branch: 'change/1',
 			base: 'studio-source-base',
 			head: 'studio-source-head',
+			commits: [],
 			behind: 0,
 			preview: null,
 			log: [],

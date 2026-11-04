@@ -1,0 +1,74 @@
+// What a generation owes its database: a cold start makes no trip, and the work runs once before the first statement.
+import { describe, expect, it } from '@effect/vitest';
+import { Effect } from 'effect';
+import { TenantDb, type RawDb } from '../src/engine/db/tenant-db.ts';
+import { DbError } from '../src/engine/errors.ts';
+
+const world = () => {
+	const trips: string[] = [];
+	const raw: RawDb = {
+		read: () =>
+			Effect.sync(() => {
+				trips.push('read');
+				return [];
+			}),
+		write: () =>
+			Effect.sync(() => {
+				trips.push('write');
+				return { rows: [], affected: 0 };
+			}),
+		transaction: () => Effect.sync(() => [] as const),
+		session: () => Effect.die('no session here')
+	};
+	return { trips, db: TenantDb.typed(raw) };
+};
+
+describe('what a generation owes its database', () => {
+	it.effect('nothing is owed until the first statement, which waits for it, once', () =>
+		Effect.gen(function* () {
+			const { trips, db } = world();
+			let paid = 0;
+			db.owe(
+				Effect.gen(function* () {
+					paid++;
+					yield* db.write({ text: 'recover', params: [] });
+				})
+			);
+			expect(trips).toEqual([]);
+			yield* Effect.all(
+				[db.read([{ text: 'a', params: [] }]), db.read([{ text: 'b', params: [] }])],
+				{ concurrency: 'unbounded' }
+			);
+			expect(paid).toBe(1);
+			expect(trips).toEqual(['write', 'read', 'read']);
+		})
+	);
+	it.effect('a statement behind owed work that fails fails, and the next one tries again', () =>
+		Effect.gen(function* () {
+			const { trips, db } = world();
+			let attempts = 0;
+			db.owe(
+				Effect.suspend(() =>
+					++attempts === 1
+						? Effect.fail(DbError.make('08006', 'the database is not answering'))
+						: Effect.void
+				)
+			);
+			expect(yield* Effect.flip(db.read([{ text: 'a', params: [] }]))).toBeInstanceOf(DbError);
+			expect(trips).toEqual([]);
+			yield* db.read([{ text: 'b', params: [] }]);
+			expect(attempts).toBe(2);
+			expect(trips).toEqual(['read']);
+		})
+	);
+	it.effect('quiet work counts as the database in use only if it writes', () =>
+		Effect.gen(function* () {
+			const { db } = world();
+			expect(yield* db.awake).toBe(false);
+			yield* db.quietly(db.read([{ text: 'any work?', params: [] }]));
+			expect(yield* db.awake).toBe(false);
+			yield* db.quietly(db.write({ text: 'some work', params: [] }));
+			expect(yield* db.awake).toBe(true);
+		})
+	);
+});

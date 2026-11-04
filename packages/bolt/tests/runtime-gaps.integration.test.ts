@@ -75,7 +75,7 @@ const manifest = Result.getOrThrow(
 );
 
 const source = `import { Effect } from 'effect'; export default { automation: {
-	report: { body: function* (_, ctx) { yield* ctx.progress({ ratio: 0.5, text: 'half' }); return 'done'; } },
+	report: { body: function* (_, ctx) { console.log('half way'); yield* ctx.progress({ ratio: 0.5, text: 'half' }); return 'done'; } },
 	long: { body: function* (input, ctx) {
 		yield* ctx.progress({ ratio: 0.1, text: 'start' });
 		yield* ctx.web.read('https://hq.example/pause');
@@ -246,6 +246,31 @@ layer(workspace, { excludeTestServices: true })('runtime gaps', (it) => {
 					).toEqual([{ state: 'stopped', code: 'stopped' }]);
 					expect(yield* sql(t, `SELECT title FROM notes`)).toEqual([]);
 				})
+		);
+
+		it.effect("a run's detail carries what it printed", () =>
+			Effect.gen(function* () {
+				const { t, start } = yield* setup();
+				const user = randomUUID();
+				yield* t.db.write({
+					text: `INSERT INTO sys_user (id, email, name, kind, admin, team) VALUES ($1, 'logs@acme.example', 'Logs', 'staff', true, 'ops')`,
+					params: [user]
+				});
+				const cookie = yield* t.session(user);
+				const id = randomUUID();
+				yield* start('report', {}, id);
+				yield* t.runDue();
+				const answer = yield* t.handle(
+					new Request(`https://acme.example/__bolt/shell/runs?id=${id}`, { headers: { cookie } })
+				);
+				expect(answer.status).toBe(200);
+				expect(yield* Effect.promise(() => answer.json())).toMatchObject({
+					value: {
+						id,
+						logs: [{ severity: 'info', event: 'console', attributes: { line: 'half way' } }]
+					}
+				});
+			})
 		);
 
 		it.effect('the shell route stops a run for its holder', () =>

@@ -84,6 +84,7 @@ import type {
 	RunHandler,
 	RunHandlers,
 	RunHandlersShape,
+	RunRest,
 	Runs,
 	RunsShape,
 	RunTime,
@@ -219,7 +220,12 @@ is<
 		RunHandler,
 		(
 			input: Json,
-			run: { readonly id: string; readonly starter: Holder | null }
+			run: {
+				readonly id: string;
+				readonly starter: Holder | null;
+				readonly cause?: string;
+				readonly attempts?: number;
+			}
 		) => Effect.Effect<Json, EngineError>
 	>
 >();
@@ -228,7 +234,8 @@ is<
 		Args<RunHandlersShape['register']>,
 		[
 			handlers: { readonly [name: string]: RunHandler },
-			retries?: { readonly [name: string]: RetrySpec } | undefined
+			retries?: { readonly [name: string]: RetrySpec } | undefined,
+			rests?: { readonly [name: string]: RunRest } | undefined
 		]
 	>
 >();

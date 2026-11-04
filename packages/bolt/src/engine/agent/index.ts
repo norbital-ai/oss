@@ -42,6 +42,8 @@ import {
 	Mcp
 } from '../ports.ts';
 import { TenantDb, type TenantDbShape } from '../db/tenant-db.ts';
+import type { WorkspaceNote } from '../notifications/notify.ts';
+import { makeParking } from '../parking.ts';
 import {
 	Agents as AgentsTag,
 	Callables,
@@ -198,6 +200,11 @@ export type AgentConfig = {
 	draft?: (a: Authority) => Promise<WorkspacePort | undefined>;
 	/** Reject pending host tool approvals from the previous turn; return only IDs actually rejected. */
 	onTurnStart?: (conversation: string) => Promise<readonly string[]>;
+	/**
+	 * Workspace events after `since` (ISO), oldest first: an in-app conversation hears each one once, at its next step.
+	 * The release's wake also delivers them to the inbox (`announce`).
+	 */
+	events?: (since: string) => Promise<readonly WorkspaceNote[]>;
 	/** Host tools (Workspace Studio authoring, browser, personal skills): a fixed list, or the person's catalogue per turn. */
 	hostTools?:
 		readonly HostTool[] | ((a: Authority, conversation: string) => Promise<readonly HostTool[]>);
@@ -240,8 +247,10 @@ export const AGENT_LIMITS = {
 	discoveryNudge: 5,
 	discoveryPause: 12,
 	failingSteps: 4,
-	leaseMs: 60000,
-	heartbeatMs: 20000
+	leaseMs: 180000,
+	heartbeatMs: 60000,
+	/** The newest workspace events one step hears; older unheard ones are dropped. */
+	eventsHeard: 10
 } as const;
 /** The platform run that takes over a turn whose lease lapsed (rule 48). */
 export const TURN_RUN = 'agent.turn';
@@ -472,6 +481,8 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 	>();
 	/** Sub-agent runs and the parent turns their reports start: detached from any one turn, ended with the service. */
 	const detached = yield* FiberSet.make<unknown, never>();
+	/** The conversations inside a step: a planned close waits for none, and holds each turn at its next step. */
+	const stepping = makeParking();
 	/** A shared message piece: the rows reach live transcripts as written, with no re-read (rule 65). */
 	const changed = Effect.fn('Agents.changed')(function* (
 		statement: { text: string; params: readonly Json[] },
@@ -832,6 +843,27 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 				});
 			yield* FiberSet.run(detached, kick(conversation));
 		}).pipe(Effect.tapCause(Effect.logWarning), Effect.ignore);
+	/** The workspace events a conversation has not heard: after its newest event row, else after its first row. */
+	const unheard = (conversation: string) =>
+		Effect.gen(function* () {
+			const events = config.events;
+			if (events === undefined) return [];
+			const since = yield* db.value(
+				Schema.NullOr(Schema.String),
+				q(
+					`SELECT to_json(coalesce(max((meta->>'at')::timestamptz) FILTER (WHERE meta->>'tag' = 'event'), min(created_at)))#>>'{}'
+					 FROM sys_message WHERE conversation = $1`,
+					conversation
+				)
+			);
+			if (since === null) return [];
+			return (yield* Port.attempt('agent.events', () => events(since))).slice(
+				-AGENT_LIMITS.eventsHeard
+			);
+		}).pipe(
+			Effect.tapCause(Effect.logWarning),
+			Effect.orElseSucceed((): readonly WorkspaceNote[] => [])
+		);
 	const drainTurn = Effect.fn('Agents.drain')(function* (
 		id: string,
 		options: DrainOptions = {}
@@ -1243,7 +1275,6 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 		});
 		yield* Effect.gen(function* () {
 			let inputs: string[] = [];
-			const packs = new Set<string>();
 			// rule 48: a turn taken over mid-work (its generation closed, its process died) goes on from its transcript and
 			// answers; its input was already consumed, so only a turn that had replied or was waiting on a card settles
 			if (admitted === 'takeover') {
@@ -1265,6 +1296,11 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 					});
 			}
 			for (;;) {
+				// a planned close: the turn holds here, between steps, until its generation closes; its interruption hands it to
+				// the next generation (`release`, rule 48). ponytail: a parent in `wait` on a held sub-agent only ends at the host's cap
+				stepping.leave(id);
+				if (stepping.parked) yield* Effect.never;
+				stepping.enter(id);
 				// an administrator's runtime settings narrow the model and cap the month's spend (settings.ts)
 				const settings = yield* agentSettings(db);
 				const stored = yield* conversation(id);
@@ -1302,6 +1338,18 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 						text: line,
 						meta: { tag: 'note' }
 					});
+				// workspace events since the conversation last heard one (or began): each once, never a turn of their own
+				if (inApp(conv))
+					for (const event of yield* unheard(id)) {
+						const text = `Workspace event (${event.at}): ${event.title}${event.body === undefined ? '' : `\n${event.body}`}`;
+						yield* write({
+							conversation: id,
+							role: 'system',
+							content: { text },
+							text,
+							meta: { tag: 'event', at: event.at }
+						});
+					}
 				if (as === null) {
 					const prior = (yield* transcript(id)).findLast((r) => r.as !== null);
 					as = prior?.as ?? null;
@@ -1413,7 +1461,6 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 					logs,
 					mcpTools,
 					hostTools,
-					packs,
 					attachments: config.attachments,
 					...(ingester === undefined
 						? {}
@@ -1644,7 +1691,14 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 								.pipe(Effect.map(([r]) => (r?.rows.length ?? 0) > 0));
 							return Option.isSome(
 								yield* arrived.pipe(
-									Effect.repeat({ schedule: Schedule.spaced('2 seconds'), until: (yes) => yes }),
+									// each ask is a trip to the database: quick at first, then seldom
+									Effect.repeat({
+										schedule: Schedule.min([
+											Schedule.exponential('2 seconds'),
+											Schedule.spaced('15 seconds')
+										]),
+										until: (yes) => yes
+									}),
 									Effect.timeoutOption(ms)
 								)
 							);
@@ -2117,6 +2171,7 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 			),
 			Effect.onExit((exit) =>
 				Effect.gen(function* () {
+					stepping.leave(id);
 					// no reply followed the typing it showed: the chat stops showing it
 					yield* stopTyping(true);
 					// a reply or a call the turn left unfinished (a stop, a crash) is finished as interrupted before the turn reads idle
@@ -2249,6 +2304,7 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 		ambient,
 		notify: (o: { conversation: string; text: string; as?: As | null | undefined }) =>
 			steer(o.conversation, o.as ?? null, [o.text]),
+		park: stepping.park,
 		drain,
 		conversation,
 		transcript,
@@ -2505,10 +2561,7 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 			if (claimed) e.live.syncChanged('sys_message', [messageId]);
 			return claimed;
 		}),
-		pageResult: Effect.fn('Agents.pageResult')(function* (
-			messageId: string,
-			result: PageResult
-		) {
+		pageResult: Effect.fn('Agents.pageResult')(function* (messageId: string, result: PageResult) {
 			yield* db.write(
 				q(
 					`UPDATE sys_message m SET content = jsonb_set(content, '{result,pageResult}', $2::jsonb, true)
@@ -2673,7 +2726,7 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 			return out.join('\n') + '\n';
 		})
 	};
-	yield* resumeSettled;
+	e.db.owe(resumeSettled);
 	return api;
 });
 export type Agents = Effect.Success<ReturnType<typeof agents>>;

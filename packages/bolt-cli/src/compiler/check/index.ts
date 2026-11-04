@@ -13,7 +13,6 @@ import { fileURLToPath } from 'node:url';
 import { Effect, FileSystem, Option, Result, Schema } from 'effect';
 import { Worker } from 'node:worker_threads';
 import { build, type Rolldown } from 'vite';
-import { minify, type MinifyOptions } from 'terser';
 import {
 	decodeProjectedManifest,
 	projectManifest,
@@ -70,7 +69,6 @@ export class BundleError extends Schema.TaggedError<BundleError>()('BundleError'
 export class EvalError extends Schema.TaggedError<EvalError>()('EvalError', {
 	cause: Schema.Defect()
 }) {}
-const Minified = Schema.Struct({ key: Schema.String, code: Schema.String, map: Schema.String });
 const Evaluated = Schema.Struct({
 	roles: Schema.Record(Schema.String, Schema.Record(Schema.String, Schema.Unknown)),
 	bodies: Schema.Struct({
@@ -154,8 +152,6 @@ type CompilerOptions = {
 	timing?: boolean;
 	/** Run the whole-program type check here (default) or leave it to a warm host type service. */
 	types?: boolean;
-	/** The runtime guest's second compression pass (seconds per changed guest); a watch's rebuild ships rolldown's minified output. */
-	compress?: boolean;
 };
 /** Shared declaration compilation; the diagnostic pass belongs to `bolt check`. */
 const workspace = Effect.fn('bolt.workspace')(function* (
@@ -274,17 +270,16 @@ const workspace = Effect.fn('bolt.workspace')(function* (
 			code,
 			errors,
 			true,
-			bodies.models,
-			options.compress ?? true
+			bodies.models
 		);
 		if (runtime !== undefined) out.guest = runtime;
 	}
 	return out;
 });
 
-/** Checks retain runtime bundle validation; the release build owns the second compression pass. */
+/** Every authoring diagnostic, runtime bundle validation included. */
 export const check = (dir: string, options: CompilerOptions = {}) =>
-	workspace(dir, { compress: false, ...options }, true);
+	workspace(dir, options, true);
 /** Compiles the artifact inputs and migrations without running the authoring diagnostics. */
 export const compile = (dir: string, options: CompilerOptions = {}) =>
 	workspace(dir, options, false);
@@ -353,10 +348,8 @@ const bundle = Effect.fn('bolt.bundle')(function* (
 	code: readonly Discovered[],
 	errors: CheckDiagnostic[],
 	runtime: boolean = false,
-	models: readonly string[] = [],
-	compress = false
+	models: readonly string[] = []
 ) {
-	const fs = yield* FileSystem.FileSystem;
 	const byRole = Map.groupBy(code, (f) => f.role);
 	const servers = code.filter((f) => f.role === 'page_server' || f.role === 'kiosk_page_server');
 	const entry = runtime
@@ -482,58 +475,8 @@ const bundle = Effect.fn('bolt.bundle')(function* (
 		return yield* Effect.fail(
 			new BundleError({ cause: new Error('the bundler emitted no guest chunk') })
 		);
-	let source = chunk.code;
-	let sourceMap = chunk.map?.toString();
-	// A check near the release byte limit must judge the same compressed bytes as a build.
-	if (runtime && (compress || Buffer.byteLength(source) > GUEST_BYTES)) {
-		// Compress the native output with its map; declaration validation and module ordering stay upstream.
-		const inputMap = chunk.map?.toString();
-		const options: MinifyOptions = {
-			module: true,
-			keep_fnames: true,
-			keep_classnames: true,
-			compress: { passes: 2, keep_fargs: true, pure_getters: false },
-			mangle: { toplevel: true },
-			format: { comments: 'some', wrap_func_args: true },
-			sourceMap: {
-				// A metadata-only runtime has no mapped source modules.
-				...(inputMap === undefined ? {} : { content: inputMap }),
-				filename: 'guest.mjs',
-				url: 'guest.mjs.map'
-			}
-		};
-		// Terser is deterministic and costs seconds per check: its output is reused by content (input, map and options).
-		const dir = join(root, '.norbital', 'cache', 'guest');
-		const key = sha256Hex(JSON.stringify([chunk.code, options]));
-		const file = join(dir, 'latest.json');
-		const cached = yield* fs
-			.readFileString(file)
-			.pipe(
-				Effect.flatMap(Schema.decodeUnknownEffect(Schema.fromJsonString(Minified))),
-				Effect.option
-			);
-		let compact: typeof Minified.Type;
-		if (Option.isSome(cached) && cached.value.key === key) compact = cached.value;
-		else {
-			const output = yield* Effect.tryPromise({
-				try: () => minify(chunk.code, options),
-				catch: (cause) => new BundleError({ cause })
-			});
-			if (output.code === undefined || typeof output.map !== 'string')
-				return yield* new BundleError({
-					cause: new Error('the minifier emitted no guest code or map')
-				});
-			// One recent guest is enough; retaining every edited guest would fill a persistent cache.
-			compact = { key, code: output.code, map: output.map };
-			// A rename publishes the whole entry; a concurrent check writes the same bytes.
-			const temporary = `${file}.${key}.${process.pid}`;
-			yield* fs.makeDirectory(dir, { recursive: true });
-			yield* fs.writeFileString(temporary, JSON.stringify(compact));
-			yield* fs.rename(temporary, file);
-		}
-		source = compact.code;
-		sourceMap = compact.map;
-	}
+	const source = chunk.code,
+		sourceMap = chunk.map?.toString();
 	if (Buffer.byteLength(source) > GUEST_BYTES)
 		errors.push({
 			code: 'guest/size',

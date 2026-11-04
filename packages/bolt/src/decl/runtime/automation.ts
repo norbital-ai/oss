@@ -51,10 +51,18 @@ export type Cron<S> = S extends Macro
 export type WebhookScheme = 'standard' | 'hmac-sha256' | 'stripe' | 'slack' | 'meta' | 'bearer';
 /** When an automation runs (its `on`): a `cron` schedule or a `webhook` path. Row writes run a model's `effect`. */
 export type Trigger =
-	| { cron: string; tz?: IanaZone }
+	| {
+			cron: string;
+			tz?: IanaZone;
+			/**
+			 * For a safety-net cron whose work depends only on workspace data, never on the time: when a run writes nothing,
+			 * no slot fires until the workspace is used again or this long has passed, so its database can sleep.
+			 */
+			rest?: Duration;
+	  }
 	| { webhook: `/${string}`; verify: { scheme: WebhookScheme; secret: string } };
 type ValidTrigger<T> = T extends { cron: infer S }
-	? { cron: Cron<S>; tz?: IanaZone }
+	? { cron: Cron<S>; tz?: IanaZone; rest?: Duration }
 	: T extends { webhook: unknown }
 		? { webhook: `/${string}`; verify: { scheme: WebhookScheme; secret: SecretName } }
 		: Trigger;
@@ -77,9 +85,12 @@ export type AutomationSpec = {
 	policies: NonEmpty<string>;
 	/** Native generated verbs delegated to this authenticated run and its child action lineage only. */
 	delegations?: readonly { verb: `${string}.${'create' | 'update' | 'delete'}`; policy: string }[];
-	/** Retries of a failed run, with backoff. */
+	/**
+	 * Retries of a failed run, only for a transient failure: a refusal or a bug is final. `attempts` counts every run,
+	 * the first included, so `1` never retries. `backoff` (default `10s`) doubles each attempt, up to an hour, with jitter.
+	 */
 	retry?: { attempts: Attempts; backoff?: Duration };
-	/** At most `max` runs at once. */
+	/** At most `max` runs of this automation at once; absent, one. The rest wait queued. */
 	concurrency?: { max: Max };
 	/** How the agent may start it (`direct`, `confirm`, `never`). */
 	agent?: AgentUse;
@@ -118,7 +129,9 @@ export type RunInput<S> = Simplify<S extends { input: infer I } ? InputOf<I> : {
 export type RunOutput<S> = S extends { output: infer O } ? ValueOf<O> : void;
 
 /**
- * `run`'s ctx (§3.4): reads (`ctx.query`), writes and schedules as its `policies`; the only place for I/O. `actor` is
+ * `run`'s ctx (§3.4): reads (`ctx.query`), writes and schedules as its `policies`; the only place for I/O. A failed
+ * `yield*` ends the body: `try`/`catch` never sees it, so recover with `Effect.catch` or `Effect.catchTag` on the yielded
+ * Effect (`yield* ctx.browser.download(url, options).pipe(Effect.catch(...))`). `actor` is
  * the reserved system identity; `run.trigger` records who or what started the run. Code acting for a starter checks it
  * explicitly (`trigger.kind === 'person'`, then their id, party or teams against the rows it touches).
  */

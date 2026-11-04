@@ -78,8 +78,9 @@ will be discarded. After Approve the card reports "Getting ready…", then "Swit
 ## What everyone else sees
 
 While the workspace switches over (a few seconds), pages keep working: requests wait and a small "Updating to a new
-version…" notice shows at the bottom. When the new version is live, open pages reload on their own, or show "This
-workspace was updated. Reload to continue with the new version." when a form is unsaved. Nobody is signed out.
+version…" notice shows at the bottom. When the new version is live, open pages reconnect; a version with new pages
+reloads them on its own, or shows "This workspace was updated. Reload to continue with the new version." when a form
+is unsaved. Nobody is signed out.
 
 The same path without Norbius is [Workspace Studio](./studio-changes.md).
 

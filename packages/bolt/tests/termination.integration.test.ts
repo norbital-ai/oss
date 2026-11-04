@@ -285,8 +285,9 @@ describe('P38: every run ends, drains interrupt, loops prove progress', () => {
 						{ state: 'running', code: 'interrupted' }
 					]);
 					yield* runs.boot().pipe(Effect.provide(context));
-					expect(yield* sql(t, `SELECT state, leases FROM sys_run`)).toEqual([
-						{ state: 'queued', leases: 1 }
+					// the close interrupted it: no lost lease, however often a host restarts
+					expect(yield* sql(t, `SELECT state, leases, error FROM sys_run`)).toEqual([
+						{ state: 'queued', leases: 0, error: null }
 					]);
 					// a generation the kernel stopped past a unit's CPU budget: its run fails at once, never reruns
 					yield* t.db.write({ text: `UPDATE sys_run SET state = 'running'`, params: [] });

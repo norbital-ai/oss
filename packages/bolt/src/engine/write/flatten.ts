@@ -84,6 +84,8 @@ export type Item = {
 	parent?: { model: string; id: string; rel: string; fk: string };
 	/** `link`/`unlink`/nested `update`/`delete` name an existing child that must belong to (or be free for) the parent. */
 	belongs?: 'parent' | 'free';
+	/** An `attaches` write: the target row's declared ref must still be null. */
+	attach?: true;
 };
 type Problem = { path: InputPath; message: string };
 
@@ -251,7 +253,15 @@ export class Flattener {
 		upsert?: { on: readonly string[]; onConflict: 'update' | 'keep' },
 		named?: string
 	): void {
-		const d = this.columns(model, sel, value, path);
+		const attachLayers = parent === undefined ? this.m.exposures[model]?.create?.attaches : undefined;
+		let input = value;
+		let attached: Json | undefined;
+		if (attachLayers !== undefined && Predicate.isObject(value)) {
+			const { attaches: raw, ...rest } = value;
+			attached = raw;
+			input = rest;
+		}
+		const d = this.columns(model, sel, input, path);
 		if (d === null) return;
 		if (named !== undefined && upsert !== undefined) d.values['id'] = named; // an upsert by id: resolution reads it, and it is never written
 		// the parent key a relation action implies is not a caller-supplied ref (rule 36)
@@ -280,6 +290,61 @@ export class Flattener {
 			...(parent === undefined ? {} : { parent })
 		});
 		this.relations(model, sel, id, d.rels, path);
+		if (attached !== undefined && attachLayers !== undefined)
+			this.attaches(model, attachLayers, attached, id, path);
+	}
+
+	/** `attaches`: each id is an existing row whose declared optional ref is still null; the commit sets it to the new row. */
+	private attaches(
+		model: string,
+		layers: { readonly [layer: string]: { readonly model: string; readonly field: string } },
+		value: Json,
+		parentId: string,
+		path: InputPath
+	): void {
+		if (!Predicate.isObject(value)) {
+			this.bad([...path, 'attaches'], 'expected an object of layer → ids');
+			return;
+		}
+		for (const [layer, ids] of Object.entries(value)) {
+			const target = layers[layer];
+			const at = [...path, 'attaches', layer];
+			if (target === undefined) {
+				this.bad(at, `'${layer}' is not an attach layer of ${model}`);
+				continue;
+			}
+			if (!isList(ids)) {
+				this.bad(at, 'expected a list of ids');
+				continue;
+			}
+			const seen = new Set<string>();
+			for (const [index, id] of ids.entries()) {
+				if (typeof id !== 'string') {
+					this.bad([...at, index], 'expected an id');
+					continue;
+				}
+				if (seen.has(id)) {
+					this.bad([...at, index], 'duplicate id');
+					continue;
+				}
+				seen.add(id);
+				this.items.push({
+					change: {
+						model: target.model,
+						id,
+						path: [...at, 'link', index],
+						op: 'update',
+						set: { [target.field]: parentId },
+						revision: null
+					},
+					supplied: [target.field],
+					refs: [],
+					parent: { model, id: parentId, rel: layer, fk: target.field },
+					belongs: 'free',
+					attach: true
+				});
+			}
+		}
 	}
 
 	update(

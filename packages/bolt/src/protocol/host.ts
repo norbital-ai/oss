@@ -1,6 +1,7 @@
 import { Context, Effect, Fiber, FiberSet, Layer, Option, Record, Ref } from 'effect';
 import type * as HttpServerRequest from 'effect/http/HttpServerRequest';
 import * as HttpServerResponse from 'effect/http/HttpServerResponse';
+import { TenantDb } from '../engine/db/tenant-db.ts';
 import { Activation, Outbound, Runs } from '../engine/services.ts';
 import { NOT_IN_PREVIEW, ShellConfig, ShellHandler } from '../shell/host.ts';
 import { BoltError } from './errors.ts';
@@ -47,8 +48,15 @@ export const BoltHostLive = Layer.effect(
 		const context = yield* Effect.context<RouteRequirements>();
 		const open = yield* Ref.make(true);
 		yield* Effect.addFinalizer(() => Ref.set(open, false));
-		yield* (yield* Outbound).activate;
-		yield* (yield* Runs).boot((yield* Activation).overran);
+		const outbound = yield* Outbound,
+			runs = yield* Runs,
+			{ overran } = yield* Activation;
+		// a cold start makes no trip to the database: this waits for the first thing that needs it
+		(yield* TenantDb).owe(
+			Effect.andThen(outbound.activate, runs.boot(overran)).pipe(
+				Effect.catch((error) => (error._tag === 'DbError' ? Effect.fail(error) : Effect.die(error)))
+			)
+		);
 		const handlers: readonly Handler<RouteRequirements>[] = [
 			hookRoutes,
 			shell.handle,

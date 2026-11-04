@@ -13,6 +13,7 @@ import { SYSTEM_COLUMNS } from '@norbital-ai/store';
 import { EFFECT_VERBS } from '../../decl/model.ts';
 import { type Chain } from '../write/sql.ts';
 import { actorRef } from '../write/commit.ts';
+import { duration } from './time.ts';
 
 /** Every run INSERT belongs to this builder; the registry also supplies the commit's exact wake time. */
 const pieces = new WeakMap<Chain, string[]>();
@@ -63,7 +64,11 @@ export function nextDue(c: Chain): string {
 }
 
 const TriggerSpec = Schema.Union([
-	Schema.Struct({ cron: Schema.String, tz: Schema.optionalKey(Schema.String) }),
+	Schema.Struct({
+		cron: Schema.String,
+		tz: Schema.optionalKey(Schema.String),
+		rest: Schema.optionalKey(Schema.String)
+	}),
 	Schema.Struct({
 		webhook: Schema.String,
 		verify: Schema.Struct({ scheme: Schema.String, secret: Schema.String })
@@ -73,6 +78,8 @@ export type WebhookTrigger = { automation: string; path: string; scheme: string;
 export type Triggers = {
 	crons: readonly CronEntry[];
 	webhooks: readonly WebhookTrigger[];
+	/** How long each cron that declares `rest` may rest, in ms. */
+	rests: ReadonlyMap<string, number>;
 };
 
 // Effect's `Cron` takes fields only: a declared macro is its five fields
@@ -91,7 +98,8 @@ export function triggersOf(m: EngineManifest): Triggers {
 	const cached = cache.get(m);
 	if (cached !== undefined) return cached;
 	const crons: CronEntry[] = [],
-		webhooks: WebhookTrigger[] = [];
+		webhooks: WebhookTrigger[] = [],
+		rests = new Map<string, number>();
 	for (const [automation, spec] of Object.entries(m.automations)) {
 		const decoded = Schema.decodeUnknownResult(Schema.Array(TriggerSpec))(
 			spec.on === undefined ? [] : Array.isArray(spec.on) ? spec.on : [spec.on]
@@ -106,13 +114,14 @@ export function triggersOf(m: EngineManifest): Triggers {
 		for (const x of on) {
 			if ('cron' in x) {
 				crons.push({ id: automation, cron: fields(x.cron), zone: x.tz ?? m.workspace.tz });
+				if (x.rest !== undefined) rests.set(automation, duration(x.rest));
 				continue;
 			}
 			const v = x.verify;
 			webhooks.push({ automation, path: x.webhook, scheme: v.scheme, secret: v.secret });
 		}
 	}
-	const triggers = { crons, webhooks };
+	const triggers = { crons, webhooks, rests };
 	cache.set(m, triggers);
 	return triggers;
 }

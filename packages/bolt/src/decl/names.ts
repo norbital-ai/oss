@@ -391,6 +391,15 @@ export type ReadPath<C, O = 'default'> = keyof ReadSpec<C, O> & string;
 type WriteLayers<C, V> = SpecOf<C> extends { [P in V & string]: { columns: infer L } } ? L : {};
 /** The write paths `C`'s `create` or `update` declares: `'<C>'` and each child layer of its `columns`. */
 export type WritePath<C, V extends 'create' | 'update'> = keyof WriteLayers<C, V> & string;
+type AttachesOf<C> = SpecOf<C> extends { create: { attaches: infer A } } ? A : {};
+/** The attach layers `C`'s create payload accepts. */
+export type AttachName<C> = keyof AttachesOf<C> & string;
+/** The existing model an attach layer of `C` names. */
+export type AttachModel<C, A> = A extends keyof AttachesOf<C>
+	? AttachesOf<C>[A] extends { model: infer M extends TargetName }
+		? M
+		: never
+	: never;
 /** The root of a path: the model before its first dot. */
 export type RootOf<P> = P extends `${infer C}.${string}` ? C : P;
 /** The model behind path `P` of `C`'s declaration (`'orders.lines'` → `'order_lines'`). */

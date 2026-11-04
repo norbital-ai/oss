@@ -44,6 +44,8 @@
 		sizeText,
 		stepLabel,
 		elapsedText,
+		MERGE_SUMMARY,
+		mergeDraft,
 		suggestMessage,
 		type StudioApproval,
 		type StudioFile,
@@ -256,21 +258,23 @@
 	 * A merge's confirmation and when, asked in one dialog: now, or at a local date and time. The answer is `null` when
 	 * dismissed; `at` is `null` for now.
 	 */
-	type MergePlan = { at: string | null };
+	type MergePlan = { at: string | null; summary: string };
 	let planning = $state<{
 		id: string;
 		body: string;
+		summary: string;
 		when: string;
 		mode: 'now' | 'later';
 		answer: (plan: MergePlan | null) => void;
 	} | null>(null);
 	const localInput = (at: Date) =>
 		new Date(at.getTime() - at.getTimezoneOffset() * 60_000).toISOString().slice(0, 16);
-	const askMerge = (id: string, body: string) =>
+	const askMerge = (id: string, body: string, summary: string) =>
 		Effect.callback<MergePlan | null>((resume) => {
 			planning = {
 				id,
 				body,
+				summary,
 				when: localInput(new Date(Date.now() + 3_600_000)),
 				mode: 'now',
 				answer: (plan) => {
@@ -381,11 +385,13 @@
 				: `${impactLines(current.preview.impact, t).join('. ')}. `
 		}${t('It merges with live, builds and checks the result, then everyone using the workspace gets it.')}`;
 		let at: string | null = null;
+		let summary = '';
 		yield* approved(
-			askMerge(current.id, body).pipe(
+			askMerge(current.id, body, mergeDraft(current)).pipe(
 				Effect.map((plan) => {
 					if (plan === null) return false;
 					at = plan.at;
+					summary = plan.summary;
 					return true;
 				})
 			),
@@ -395,9 +401,16 @@
 						? {
 								op: 'change.merge',
 								id: current.id,
+								summary,
 								...(accept.length > 0 ? { accept } : {})
 							}
-						: { op: 'change.merge', id: current.id, at, ...(accept.length > 0 ? { accept } : {}) }
+						: {
+								op: 'change.merge',
+								id: current.id,
+								at,
+								summary,
+								...(accept.length > 0 ? { accept } : {})
+							}
 				)
 			),
 			{ change: current.id }
@@ -460,13 +473,18 @@
 				: undefined;
 		return impact === undefined ? '' : `${impactLines(impact, t).join('. ')}. `;
 	};
+	/** What the agent said this changes, first: the facts Studio holds follow it. */
+	const heldSummary = ({ op }: StudioApproval) =>
+		(op.op === 'change.merge' || op.op === 'rollback') && op.summary !== undefined
+			? `${op.summary.replace(/[.\s]+$/, '')}. `
+			: '';
 	const decide = (held: StudioApproval, kind: 'approved' | 'rejected') =>
 		kind === 'rejected'
 			? run({ op: 'approval.decide', id: held.id, kind })
 			: approved(
 					confirmAction({
 						title: `${asked(held)}?`,
-						body: `${
+						body: `${heldSummary(held)}${
 							(held.destructive?.length ?? 0) > 0
 								? `${t('This applies destructive schema steps:')} ${held.destructive?.join(', ')}. `
 								: ''
@@ -1154,9 +1172,22 @@
 				class="flex flex-col gap-3 pb-6 md:pb-0"
 				onsubmit={(event) => {
 					event.preventDefault();
-					asking.answer({ at: asking.mode === 'later' ? asking.when : null });
+					asking.answer({
+						at: asking.mode === 'later' ? asking.when : null,
+						summary: asking.summary.trim()
+					});
 				}}
 			>
+				<div class="flex flex-col gap-1.5">
+					<label for="studio-merge-summary" class="text-label">{t('Summary')}</label>
+					<Input
+						id="studio-merge-summary"
+						required
+						maxlength={MERGE_SUMMARY}
+						placeholder={t('What these changes do, together')}
+						bind:value={asking.summary}
+					/>
+				</div>
 				<fieldset class="grid gap-2">
 					<legend class="text-label">{t('When')}</legend>
 					<label class="flex items-center gap-2">
@@ -1178,7 +1209,9 @@
 					<Button type="button" variant="ghost" onclick={() => asking.answer(null)}
 						>{t('Cancel')}</Button
 					>
-					<Button type="submit" disabled={asking.mode === 'later' && asking.when === ''}
+					<Button
+						type="submit"
+						disabled={asking.summary.trim() === '' || (asking.mode === 'later' && asking.when === '')}
 						>{asking.mode === 'later' ? t('Schedule merge') : t('Merge now')}</Button
 					>
 				</Dialog.Footer>

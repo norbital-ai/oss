@@ -1,6 +1,6 @@
 // Port calls (L-BOLT-288, 289): every host port call runs under its wall, and a port's throw or bad answer is a typed
 // facility failure, never a throw. `Port.fromPromise` is for Promise ports across an ABI (providers and host services).
-import { Duration, Effect, Option, Schema } from 'effect';
+import { Duration, Effect, Option, Predicate, Schema } from 'effect';
 import { FACILITY_KINDS, FacilityFailure, Unavailable } from '../decl/errors.ts';
 
 /** What a port call fails with: the facility's own failure, or the host providing none. */
@@ -22,7 +22,10 @@ const Thrown = Schema.Union([
 ]);
 const thrown = Schema.decodeUnknownOption(Thrown);
 
-/** A port's throw or rejection as its failure: a thrown `FacilityError` keeps its kind; anything else is `upstream`. */
+/**
+ * A port's throw or rejection as its failure: a thrown `FacilityError` keeps its kind; anything else is `upstream`, keeping
+ * its message (an `Error`'s, or an encoded host refusal's such as Studio's `HostFailure`).
+ */
 const failureOf =
 	(facility: string) =>
 	(e: unknown): PortFailure =>
@@ -30,7 +33,10 @@ const failureOf =
 			onNone: () =>
 				new FacilityFailure({
 					kind: 'upstream',
-					message: e instanceof Error && e.message !== '' ? e.message : `${facility} failed`
+					message:
+						Predicate.hasProperty(e, 'message') && Predicate.isString(e.message) && e.message !== ''
+							? e.message
+							: `${facility} failed`
 				}),
 			onSome: (f) =>
 				f.kind === 'unavailable'

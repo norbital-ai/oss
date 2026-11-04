@@ -361,6 +361,7 @@ const lift = (call: Call, raw: unknown): unknown => {
 					snapshot: cross('browser.snapshot', 'facility'),
 					act: cross('browser.act', 'facility'),
 					evaluate: cross('browser.evaluate', 'facility'),
+					download: cross('browser.download', 'facility'),
 					close: cross('browser.close', 'facility')
 				},
 				ai: {

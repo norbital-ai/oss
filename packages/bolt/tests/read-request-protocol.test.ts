@@ -36,7 +36,7 @@ const run = (body: QBody, reads: ReadsShape) =>
 		Effect.provideService(TenantDb, db),
 		// rate limits are rate-limits.integration.test.ts's: every read here is admitted
 		Effect.provideService(RateLimits, {
-			ipBucket: (address) => address,
+			ipBucket: (address) => Effect.succeed(address),
 			charge: () => Effect.succeed({ ok: true })
 		})
 	);

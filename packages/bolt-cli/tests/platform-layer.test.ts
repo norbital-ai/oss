@@ -6,9 +6,12 @@ import {
 	SHELL,
 	PLATFORM,
 	cachedPlatformLayer,
+	layerLines,
+	preparedLayer,
 	shellRuntime,
 	type PlatformLayer
 } from '../src/compiler/artifact/platform.ts';
+import { memoTreeHash, pagesKey } from '../src/compiler/artifact/index.ts';
 import { it as effectIt } from '@effect/vitest';
 import { Effect, FileSystem } from 'effect';
 import * as NodeServices from '@effect/platform-node/NodeServices';
@@ -16,6 +19,25 @@ import { randomUUID } from 'node:crypto';
 import { scratchPath } from '../../../scripts/lib/scratch.ts';
 
 const page = '/workspace/src/app/main/+home.page.svelte';
+
+effectIt.live('keys the public pages by the bytes of their graph, and nothing else', () =>
+	Effect.scoped(
+		Effect.gen(function* () {
+			const fs = yield* FileSystem.FileSystem;
+			const root = yield* fs.makeTempDirectoryScoped();
+			yield* fs.writeFileString(join(root, 'page.svelte'), 'one');
+			yield* fs.writeFileString(join(root, 'model.ts'), 'outside the graph');
+			const key = () => pagesKey(root, 'client', ['page.svelte', 'gone.svelte']);
+			const first = yield* key();
+			yield* fs.writeFileString(join(root, 'model.ts'), 'edited');
+			expect(yield* key()).toBe(first);
+			yield* fs.writeFileString(join(root, 'page.svelte'), 'two');
+			expect(yield* key()).not.toBe(first);
+			yield* fs.writeFileString(join(root, 'page.svelte'), 'one');
+			expect(yield* pagesKey(root, 'other', ['page.svelte', 'gone.svelte'])).not.toBe(first);
+		})
+	).pipe(Effect.provide(NodeServices.layer))
+);
 
 effectIt.live(
 	'reuses only a workspace’s SDK layer and invalidates changed or incomplete toolchains',
@@ -66,6 +88,16 @@ effectIt.live(
 				yield* fs.remove(join(cache, 'files'), { recursive: true });
 				yield* cachedPlatformLayer(cache, 'sdk-v2', next, build(next, 'repaired'));
 				expect(builds).toBe(4);
+				// a build over a prepared layer leaves its files out and hashes as if they were there
+				const prepared = yield* preparedLayer(cache);
+				expect(prepared.layer.modules.get('svelte')).toBe('./platform/sdk.js');
+				const whole = join(root, 'whole');
+				yield* fs.makeDirectory(join(whole, 'client', PLATFORM), { recursive: true });
+				yield* fs.writeFileString(join(whole, 'client', 'entry.js'), 'entry');
+				yield* fs.writeFileString(join(whole, 'client', PLATFORM, 'sdk.js'), 'repaired');
+				const expected = yield* memoTreeHash(whole);
+				yield* fs.remove(join(whole, 'client', PLATFORM), { recursive: true });
+				expect(yield* memoTreeHash(whole, layerLines(prepared, 'client'))).toBe(expected);
 			})
 		).pipe(Effect.provide(NodeServices.layer))
 );

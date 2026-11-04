@@ -43,6 +43,7 @@ import {
 	stepLabel,
 	StudioOp,
 	studioView,
+	mergeDraft,
 	suggestMessage,
 	type StudioState
 } from '../src/shell/studio/model.ts';
@@ -1360,6 +1361,15 @@ describe('Studio port boundary', () => {
 			'Remove payroll model, Add notes'
 		);
 		expect(suggestMessage({ a: '1', b: '2', c: '3' }, {})).toBe('Add a and 2 more files');
+		// a merge request's draft: what its commits say, the host's own left out
+		expect(mergeDraft({ title: 'Leave', commits: ['Add accrual'] })).toBe('Add accrual');
+		expect(
+			mergeDraft({
+				title: 'Leave',
+				commits: ['Add accrual', 'Merge live into Leave', 'Fix rounding']
+			})
+		).toBe('Leave: Add accrual; Fix rounding');
+		expect(mergeDraft({ title: 'Leave', commits: ['generate the next migration'] })).toBe('Leave');
 		expect(
 			decodeOp({ op: 'save', expected: 'c', files: {}, message: 'Fix the label' })
 		).toMatchObject({ message: 'Fix the label' });

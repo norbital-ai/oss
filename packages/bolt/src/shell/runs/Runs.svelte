@@ -1,13 +1,13 @@
 <!--
 	The command center's Automations (rule 48): every run, newest first, with who or what triggered it, in ui's `Table` (search, filter and sort, CSV), the live
-	`runs` read (a `sys_run` change re-answers it; nothing polls). A queued or running run has Stop (rule 56); a failed or stopped one has Retry, a new run
+	`runs` read (a `sys_run` change re-answers it; only an open running run's log polls). A queued or running run has Stop (rule 56); a failed or stopped one has Retry, a new run
 	of its automation with the same input. Run now starts any automation the member may start that needs no input. Opening a row shows the run as `runs.view` redacts it (`?run=<id>`), read once again whenever that run's live row
 	changes.
 -->
 <script lang="ts">
 	import { watch } from 'runed';
 	import { fork, observe } from '@norbital-ai/ui/effect';
-	import { Effect, Stream } from 'effect';
+	import { Effect, Schedule, Stream } from 'effect';
 	import {
 		Button,
 		Combobox,
@@ -19,6 +19,7 @@
 		useKinds
 	} from '@norbital-ai/ui';
 	import { Cluster } from '@norbital-ai/ui/layout';
+	import type { LogRow } from '../../engine/contracts.ts';
 	import type { RunView } from '../../engine/runs/index.ts';
 	import type { Act } from '../Acts.svelte';
 	import Acts from '../Acts.svelte';
@@ -54,16 +55,20 @@
 	const runs = observe(() =>
 		bolt.observe<{ rows: RunView[] }>({ read: { m: 'runs', a: [{ limit: 500, brief: true }] } })
 	);
-	// the open run's detail (attempts, output files) is the shell's one-off read, asked again when its live row changes
+	// the open run's detail (attempts, output files, log) is the shell's one-off read, asked again when its live row
+	// changes; a log grows with no row change, so it is read again for as long as the run runs
 	const detail = observe(() => {
 		if (run === null) return null;
 		const id = run;
 		return bolt
 			.observe<{ rows: RunView[] }>({ read: { m: 'runs', a: [{ id, limit: 1, brief: true }] } })
 			.pipe(
-				Stream.map((answer) => JSON.stringify(answer.rows)),
-				Stream.changes,
-				Stream.mapEffect(() => api.run(id))
+				Stream.changesWith((a, b) => JSON.stringify(a.rows) === JSON.stringify(b.rows)),
+				Stream.switchMap((answer) =>
+					answer.rows.some((row) => row.status === 'running')
+						? Stream.fromEffectSchedule(api.run(id), Schedule.spaced('2 seconds'))
+						: Stream.fromEffect(api.run(id))
+				)
 			);
 	});
 	// who or what started a run: a person (and Norbius when it started it for them), else the system and why
@@ -137,6 +142,14 @@
 		...(stoppable(r.status) ? [{ label: t('Stop'), run: () => fork(stop(r.id)) }] : []),
 		...(retryable(r.status) ? [{ label: t('Retry'), run: () => fork(retry(r.id)) }] : [])
 	];
+	/** What a log line says: a console line's own text, else its event's name. */
+	const lineOf = (row: LogRow) =>
+		typeof row.attributes === 'object' &&
+		row.attributes !== null &&
+		'line' in row.attributes &&
+		typeof row.attributes.line === 'string'
+			? row.attributes.line
+			: row.event;
 	const when = (v: string | null | undefined) =>
 		v ? new Date(v).toLocaleString(bolt.locale) : '—';
 	const warnings = (r: RunView) => (r.attempts ?? []).flatMap((attempt) => attempt.warnings ?? []);
@@ -264,6 +277,25 @@
 				</div>
 			{/if}
 		{/snippet}
+		{#if one.logs !== undefined}
+			<div class="grid gap-2" data-run-logs>
+				<p class="text-meta">{t('Logs')}</p>
+				{#if typeof one.logs === 'string'}
+					<p class="text-meta text-destructive">{one.logs}</p>
+				{:else if one.logs.length === 0}
+					<p class="text-meta">{t('No log lines')}</p>
+				{:else}
+					<ol class="max-h-72 overflow-auto rounded-md border p-2 font-mono text-micro">
+						{#each one.logs as row (row.id)}
+							<li class="whitespace-pre-wrap" data-severity={row.severity}>
+								<span class="text-muted-foreground">{when(row.at)}</span>
+								<span class={row.severity === 'info' ? '' : 'text-destructive'}>{lineOf(row)}</span>
+							</li>
+						{/each}
+					</ol>
+				{/if}
+			</div>
+		{/if}
 	</DetailSheet>
 {/if}
 

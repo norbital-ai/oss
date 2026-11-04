@@ -10,7 +10,7 @@
 // or a page marked `snapshot: 'begin'`; after the page marked `'end'` the records of older cycles are deleted, 1000 at a
 // time, resumably. One failing instance never holds the others back; its health lands on `sys_integration.status.health`
 // only when it changes.
-import { Clock, Effect, Predicate, Schema } from 'effect';
+import { Clock, Effect, Predicate, Schema, Struct } from 'effect';
 import { dec } from '@norbital-ai/std/decimal';
 import { canonical, databaseValue, q, sha256Hex } from '@norbital-ai/store';
 import { DRIVERS } from '../../decl/runtime/integration.ts';
@@ -40,10 +40,25 @@ export const PAGES = 1000;
 const HealthSchema = Schema.Struct({
 	state: Schema.Literals(['ready', 'attention']),
 	code: Schema.optionalKey(Schema.String),
-	message: Schema.optionalKey(Schema.String)
+	message: Schema.optionalKey(Schema.String),
+	/** On `sys_sync` alone: the slots this read has failed in a row, and when the next one may read again. */
+	failures: Schema.optionalKey(Schema.Number),
+	retryAt: Schema.optionalKey(Schema.String)
 });
 type Health = typeof HealthSchema.Type;
 const READY: Health = { state: 'ready' };
+const MINUTE = 60_000,
+	DAY = 1_440 * MINUTE;
+/**
+ * When a read rests to after `failures` failed slots: a minute, doubling, an hour at most, on a whole multiple of its
+ * length, so a workspace's failing syncs wake its database together rather than one after another.
+ */
+const restEnd = (failures: number, now: number) => {
+	const length = Math.min(60, 2 ** Math.min(failures - 1, 6)) * MINUTE;
+	return Math.ceil((now + length) / length) * length;
+};
+const restOf = (health: Health | null | undefined) =>
+	health?.retryAt === undefined ? 0 : Date.parse(health.retryAt);
 const SyncRowSchema = Schema.Record(Schema.String, Schema.Json).check(
 	Schema.makeFilter((row) =>
 		(row['$id'] === undefined || typeof row['$id'] === 'string') &&
@@ -100,7 +115,7 @@ type Effects = {
 };
 const NONE: Effects = { marks: [], gone: [], consumed: [], changed: false };
 const worst = (all: Iterable<Health | null>): Health => {
-	for (const h of all) if (h?.state === 'attention') return h;
+	for (const h of all) if (h?.state === 'attention') return Struct.omit(h, ['failures', 'retryAt']);
 	return READY;
 };
 /** Whether remote version `a` is newer than `b`: numbers and ISO instants compare by value; any other change is newer. */
@@ -614,10 +629,60 @@ export function makeRead(e: SyncEngine) {
 		// a notice on a health change is an ordinary automation on `sys_integration` updates
 		yield* e.status(inst.id, { health: next });
 	});
-	const run = Effect.fn('Syncs.run')(function* (s: RemoteSync, input: Json, runId: string) {
+	/** The partitions a sync reads of an instance: its configured ones, else the instance whole. */
+	const partitionsOf = (s: RemoteSync, inst: Instance): readonly string[] => {
+		const field = s.partitions,
+			value =
+				field === undefined || !Predicate.isObject(inst.configuration)
+					? undefined
+					: inst.configuration[field];
+		return field === undefined ? [''] : Array.isArray(value) ? [...new Set(value.map(String))] : [];
+	};
+	/** What this generation last learned: each resting sync's end, so a slot in its rest asks no database. */
+	const known = new Map<string, number>();
+	/**
+	 * When a sync with nothing to read next has something: the first of its connections' rests ending, or tomorrow with
+	 * no connection at all. `undefined` while one can read. Asks the database only when it is awake or the rest is over.
+	 */
+	const rests = Effect.fn('Syncs.rests')(function* (s: RemoteSync, now: number) {
+		if (!e.links.available) return undefined;
+		const held = known.get(s.name);
+		if (held !== undefined && held > now && !(yield* db.awake)) return held;
+		const stored = yield* db.quietly(
+			Effect.gen(function* () {
+				const instances = (yield* instancesOf(m, db, { integration: s.definition })).filter(
+					(i) => i.active && i.integration === s.definition
+				);
+				const rows = yield* db.rows(StoredState, {
+					text: `SELECT sync, instance, partition, cursor, cycle, phase, health, digest, version FROM sys_sync WHERE sync = $1`,
+					params: [s.name]
+				});
+				return { instances, rows };
+			})
+		);
+		const ends = stored.instances.flatMap((inst) =>
+			partitionsOf(s, inst).map((partition) =>
+				restOf(
+					stored.rows.find((row) => row.instance === inst.id && row.partition === partition)?.health
+				)
+			)
+		);
+		const until = ends.length === 0 ? now + DAY : Math.min(...ends);
+		if (until > now) known.set(s.name, until);
+		else known.delete(s.name);
+		return until > now ? until : undefined;
+	});
+	const run = Effect.fn('Syncs.run')(function* (
+		s: RemoteSync,
+		input: Json,
+		start: { readonly id: string; readonly cause?: string; readonly attempts?: number }
+	) {
 		// live environments only: a host binds links there and nowhere else, so a preview or a fork reads nothing, records
 		// no health and wakes no automation on its instances
 		if (!e.links.available) return { pages: 0 };
+		const runId = start.id,
+			// only a slot rests: its own retries, and a person's start, read
+			slot = start.cause === 'cron' && start.attempts === 1;
 		const args = Predicate.isObject(input) ? input : {};
 		const only = typeof args['instance'] === 'string' ? args['instance'] : undefined;
 		const instances = (yield* instancesOf(
@@ -654,13 +719,7 @@ export function makeRead(e: SyncEngine) {
 			);
 			let partition = '';
 			yield* Effect.gen(function* () {
-				const field = s.partitions,
-					value =
-						field === undefined || !Predicate.isObject(inst.configuration)
-							? undefined
-							: inst.configuration[field];
-				const partitions =
-					field === undefined ? [''] : Array.isArray(value) ? [...new Set(value.map(String))] : [];
+				const partitions = partitionsOf(s, inst);
 				// a partition the configuration dropped releases its cursor and id map; its rows stay as they are
 				const dropped = [...states.keys()].filter((p) => !partitions.includes(p));
 				if (dropped.length > 0) {
@@ -674,6 +733,8 @@ export function makeRead(e: SyncEngine) {
 				for (partition of typeof args['partition'] === 'string'
 					? partitions.filter((p) => p === args['partition'])
 					: partitions) {
+					if (slot && restOf(states.get(partition)?.health) > (yield* Clock.currentTimeMillis))
+						continue;
 					const done = yield* partitionRun(work, partition, states.get(partition), digest);
 					pages += done.pages;
 					healths.set(`${s.name}\u0000${partition}`, done.state.health);
@@ -682,12 +743,15 @@ export function makeRead(e: SyncEngine) {
 				Effect.catch((error) =>
 					Effect.gen(function* () {
 						failures.push(error);
+						const prior = states.get(partition),
+							slots = Math.max(1, (prior?.health?.failures ?? 0) + (start.attempts === 1 ? 1 : 0));
 						const failed: Health = {
 							state: 'attention',
 							code: error instanceof BoltError ? error.code : 'processingFailure',
-							message: error instanceof Error ? error.message.slice(0, 500) : String(error)
+							message: error instanceof Error ? error.message.slice(0, 500) : String(error),
+							failures: slots,
+							retryAt: iso(restEnd(slots, yield* Clock.currentTimeMillis))
 						};
-						const prior = states.get(partition);
 						healths.set(`${s.name}\u0000${partition}`, failed);
 						yield* db
 							.write({
@@ -718,6 +782,7 @@ export function makeRead(e: SyncEngine) {
 	});
 	return {
 		run,
+		rests,
 		/** A pushing driver's `invalidate`: one read of that instance and partition, unless one is queued already. */
 		invalidate: Effect.fn('Syncs.invalidate')(function* (
 			instance: string,

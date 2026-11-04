@@ -29,9 +29,9 @@ model before proposing a source release or a runtime edit.
 
 | Change                                                                                                   | Lives in                                                                                                     |
 | -------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
-| Add a field, change an enum's values, add a constraint or index                                          | `src/data/model/<name>/+model.ts`                                                                            |
+| Add a field, change an enum's values, add a constraint or index                                          | `src/data/model/<name>/+model.ts` (folders may nest; the leaf folder names the model)                        |
 | References between models, ownership, delete rules                                                       | `fields.<name>: { kind: 'ref', to, inverse?, owned?, onDelete? }` in that model                              |
-| Read and write layers, per-verb write callbacks and `notify`                                             | the same `src/data/model/<name>/+model.ts` literal                                                           |
+| Read and write layers, per-verb write callbacks and `notify`                                             | the same `src/data/model/**/<name>/+model.ts` literal                                                        |
 | An external connection: driver, configuration, credentials, webhook verification, rate and inline `test` | `src/integration/<name>/+integration.ts` (whatsapp, email, telegram, slack, discord and wechat are built in) |
 | File imports/exports and remote data exchange                                                            | the model's inline `syncs.<name>` (`with: 'file'` or an integration name)                                    |
 | A structured value the built-in kinds cannot express                                                     | `src/data/custom_field/<name>/+definition.ts`                                                                |

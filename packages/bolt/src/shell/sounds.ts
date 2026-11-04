@@ -1,5 +1,6 @@
 export const SOUNDS = Symbol('sounds');
-export type SoundKind = 'approval' | 'complete' | 'notification';
+/** Norbius finished, needs the person (a question or an approval), or failed; or a notice arrived. */
+export type SoundKind = 'complete' | 'input' | 'error' | 'notification';
 export type SoundStatus = 'needs-gesture' | 'ready' | 'blocked' | 'unavailable';
 export type Sounds = { play(kind: SoundKind): void };
 
@@ -52,25 +53,29 @@ export function createSounds(enabled: () => boolean, changed: (status: SoundStat
 		const now = performance.now();
 		if (!test && now - (last.get(kind) ?? -Infinity) < 10_000) return;
 		if (!test) last.set(kind, now);
+		// quiet sine pairs, told apart by their shape: an open fifth settles (finished), a minor third lifts (a
+		// question), a low fall (an error), a high light pair (a notice)
 		const notes =
-			kind === 'approval'
-				? [440, 554.37]
-				: kind === 'notification'
-					? [659.25, 880]
-					: [554.37, 659.25];
+			kind === 'input'
+				? [587.33, 698.46]
+				: kind === 'error'
+					? [329.63, 261.63]
+					: kind === 'notification'
+						? [880, 1046.5]
+						: [523.25, 783.99];
 		for (const [index, frequency] of notes.entries()) {
-			const at = audio.currentTime + index * 0.13;
+			const at = audio.currentTime + index * 0.12;
 			const oscillator = audio.createOscillator(),
 				gain = audio.createGain();
 			oscillator.type = 'sine';
 			oscillator.frequency.value = frequency;
 			gain.gain.setValueAtTime(0, at);
-			gain.gain.linearRampToValueAtTime(0.06, at + 0.015);
-			gain.gain.exponentialRampToValueAtTime(0.0001, at + 0.28);
+			gain.gain.linearRampToValueAtTime(0.025, at + 0.03);
+			gain.gain.exponentialRampToValueAtTime(0.0001, at + 0.5);
 			oscillator.connect(gain);
 			gain.connect(audio.destination);
 			oscillator.start(at);
-			oscillator.stop(at + 0.3);
+			oscillator.stop(at + 0.52);
 			oscillator.onended = () => {
 				oscillator.disconnect();
 				gain.disconnect();

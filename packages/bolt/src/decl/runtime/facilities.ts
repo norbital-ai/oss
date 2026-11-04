@@ -221,12 +221,16 @@ type Out<O> = O & Checked<InputKind, O, Exact<O, ValidInput<O>>>;
  * `ctx.browser`: the automation run's own browser tab. It has no person's cookies: its profile is
  * `BROWSER_RUN_PROFILE + run.id`, sealed under the tenant's browser key and closed when the run ends.
  * `navigate` opens an http(s) URL; `snapshot`, `act` and `evaluate` read and act on it; `close` closes it now.
+ * `download` keeps the media file at a URL (an image, audio, video, a PDF, or a CAD model or drawing, at most 100 MiB,
+ * judged by its bytes) as a stored file owned by `for`: it streams into the store, so no bytes reach the run, and it
+ * uses the tab's sign-ins only where the site needs them. Fails `invalid` for anything else.
  */
 export type Browser = {
 	navigate: Call<[url: string, options?: { readonly find?: string }], Json>;
 	snapshot: Call<[options?: { readonly find?: string; readonly from?: number }], Json>;
 	act: Call<[steps: readonly Json[]], Json>;
 	evaluate: Call<[expression: string], Json>;
+	download: Call<[url: string, options: { readonly for: FileOwner }], FileRef>;
 	close: Call<[], void>;
 };
 /**

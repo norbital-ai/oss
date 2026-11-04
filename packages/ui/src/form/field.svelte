@@ -17,6 +17,8 @@ Readonly, it is a label over the value as copyable text (or a `view` snippet): n
 		onChange(next: Value): void;
 		/** The id the field's label points at: give it to the control the snippet renders, so it is named by the label. */
 		id: string;
+		/** The enclosing form: a custom editor reads sibling fields (a schema version, a currency) through it. */
+		form: FormState;
 	};
 	/**
 	 * One field of the enclosing `Form`, by its exposed name (§3.6). Without an `editor` it renders the kind's editor;
@@ -50,7 +52,7 @@ Readonly, it is a label over the value as copyable text (or a `view` snippet): n
 	import Editor from '../kinds/editor.svelte';
 	import FieldControl from './field-control.svelte';
 	import Show from '../kinds/show.svelte';
-	import { useForm } from './form-state.svelte.js';
+	import { useForm, type FormState } from './form-state.svelte.js';
 	import { claimSectionField } from './section.svelte';
 	import { useBolt } from '../client/context.js';
 	import { useFieldLabel } from '../model/context.js';
@@ -163,7 +165,8 @@ Readonly, it is a label over the value as copyable text (or a `view` snippet): n
 				id: `${id}-${name}`,
 				disabled,
 				error,
-				onChange: (v) => form.set(name, v)
+				onChange: (v) => form.set(name, v),
+				form
 			})}
 		{:else}
 			<Editor

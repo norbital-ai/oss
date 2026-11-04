@@ -1,7 +1,9 @@
 # Models and modeling
 
 A model is an entity's stored and exposed contract. Declare it as `model('orders', spec)` in
-`src/data/model/orders/+model.ts`; its optional `+representation.svelte` lives beside it. Policies,
+`src/data/model/orders/+model.ts`; its optional `+representation.svelte` lives beside it. Folders may
+nest under another model or an ordinary grouping folder — `src/data/model/payroll/payroll_run/payslip/+model.ts`
+declares `payslip`, and the leaf folder name must be unique across the workspace. Policies,
 reads, pages, automations, agents and seeds name the model. Prefer inline shaped values unless
 identity, lifecycle, authority, history or relational queries justify another model; see
 [model boundaries](model-boundaries.md).
@@ -249,7 +251,9 @@ Place file and integration exchange under `syncs.<name>`. Remote syncs name `wit
 requests through its own instance, and returns rows (`$id`, `$version`, `$deleted`), cursor and
 more. Only returned source fields are synced; other fields stay local. Page progress commits
 atomically. A write receives op, row, changed fields and remote id/version; return the acknowledged
-id/version, or null for local changes. The engine owns no-echo, ordering, idempotency, retries,
+id/version, or null for local changes. A read that keeps failing rests between slots, per connection,
+from a minute doubling to an hour; starting the sync by hand, changing its connection or a good read
+ends the rest. The engine owns no-echo, ordering, idempotency, retries,
 approval timing, conflict rollback and dead letters.
 
 A file sync uses `with: 'file'`, `parser: ['xlsx', 'csv']`, optional schema/context and inline read
@@ -257,9 +261,11 @@ or write. File callback reads retain the importing/exporting caller's scope and 
 syncs read as trusted workspace. Context is input and cannot elevate authority.
 Read receives parsed records with `$at` source positions and returns rows plus optional
 findings/snapshot scope. Write returns export records, or `{ document: { html }, name }`. The
-toolbar supplies Import, Export and Download template. Built-ins are xlsx/csv/tsv/json/ics; custom
-parsers declare registered IANA `type`, extensions and an inline parse generator. Remote data
-never uses a parser. File writes run the same per-verb callbacks; one refusal rolls back the file.
+toolbar supplies Import, Export and Download template. Built-ins are xlsx/csv/tsv/json/ics/txt; a
+`txt` export writes one line per record with its columns concatenated in order and no separator, so
+the write body owns fixed-width padding. Custom parsers declare registered IANA `type`, extensions
+and an inline parse generator. Remote data never uses a parser. File writes run the same per-verb
+callbacks; one refusal rolls back the file.
 
 ## Notices and documents
 

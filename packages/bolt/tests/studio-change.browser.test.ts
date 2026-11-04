@@ -34,6 +34,7 @@ const change = (stale: boolean): StudioChangeSet => ({
 	branch: 'change/1',
 	base: 'base1111',
 	head: 'head2222',
+	commits: [],
 	behind: 0,
 	preview: preview(stale),
 	log: [],

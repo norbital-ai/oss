@@ -96,6 +96,8 @@ export type StudioChangeSet = {
 	branch: string;
 	base: string;
 	head: string;
+	/** What it holds beyond live: each commit's message, oldest first. */
+	commits: readonly string[];
 	behind: number;
 	preview: StudioPreview | null;
 	merge?: {
@@ -174,6 +176,8 @@ export type StudioState = {
  * one of the viewer's held requests (`StudioState.approvals`).
  */
 const nonempty = Schema.NonEmptyString;
+/** Room for a whole change set in a sentence or two. */
+export const MERGE_SUMMARY = 500;
 const truncated = (max: number) =>
 	nonempty.pipe(
 		Schema.decodeTo(
@@ -192,7 +196,7 @@ export const StudioOp = Schema.Union([
 	Schema.Struct({
 		op: Schema.Literal('save'),
 		expected: Schema.String,
-		/** What the change does, in the author's words: the commit message (absent: the host names the changed paths). */
+		/** What the save does, in the author's words: its commit message (absent: the host's `suggestMessage`). */
 		message: Schema.optionalKey(truncated(200)),
 		files: Schema.Record(Schema.String, Schema.NullOr(Schema.String)).check(
 			Schema.makeFilter((files) => Object.keys(files).every(Schema.is(safePath)))
@@ -221,14 +225,18 @@ export const StudioOp = Schema.Union([
 		id: nonempty,
 		accept: Schema.optionalKey(Schema.Array(nonempty)),
 		/** An instant to merge at instead of now: the tenant is down only for the cutover, at that time. */
-		at: Schema.optionalKey(nonempty)
+		at: Schema.optionalKey(nonempty),
+		/** What the whole change set does, across its commits: required of a merge, and the Version's name. */
+		summary: Schema.optionalKey(truncated(MERGE_SUMMARY))
 	}),
 	Schema.Struct({ op: Schema.Literal('change.unschedule'), id: nonempty }),
 	Schema.Struct({ op: Schema.Literal('change.close'), id: nonempty }),
 	Schema.Struct({
 		op: Schema.Literal('rollback'),
 		commit: nonempty,
-		discardDataSince: Schema.optionalKey(nonempty)
+		discardDataSince: Schema.optionalKey(nonempty),
+		/** Why, for the person approving it. */
+		summary: Schema.optionalKey(truncated(200))
 	}),
 	Schema.Struct({
 		op: Schema.Literal('approval.decide'),
@@ -401,10 +409,10 @@ export const elapsedText = (ms: number) => {
 	return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`;
 };
 
-/** A plain suggestion for a save's description from the drafts (`null`: deleted) over the saved tree. */
+/** What a save changes, in plain words, from its drafts (`null`: deleted) over the tree they change. */
 export function suggestMessage(
-	drafts: { readonly [path: string]: string | null },
-	files: StudioState['files']
+	drafts: { readonly [path: string]: unknown },
+	files: { readonly [path: string]: unknown }
 ): string {
 	const words = Object.entries(drafts).map(([path, text]) => {
 		const segments = path.split('/'),
@@ -420,6 +428,15 @@ export function suggestMessage(
 		return `${text === null ? 'Remove' : path in files ? 'Update' : 'Add'} ${name}`;
 	});
 	return words.length <= 2 ? words.join(', ') : `${words[0]} and ${words.length - 1} more files`;
+}
+/** The commits the host itself makes: nothing a person would say about the change. */
+const HOST_COMMIT = /^(Merge live into |generate the next migration|squash migrations: )/;
+/** A merge request's starting summary: a lone commit's message, else the change and what its commits say. */
+export function mergeDraft({ title, commits }: Pick<StudioChangeSet, 'title' | 'commits'>): string {
+	const said = commits.filter((commit) => !HOST_COMMIT.test(commit));
+	const [only] = said;
+	const draft = said.length === 1 && only !== undefined ? only : [title, said.join('; ')].filter(Boolean).join(': ');
+	return draft.slice(0, MERGE_SUMMARY);
 }
 
 /** The environment the Operations pane summarizes: `live` when routed, else the first routed one; none routed → undefined. */

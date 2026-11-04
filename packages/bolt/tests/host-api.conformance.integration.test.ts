@@ -193,6 +193,7 @@ const built = async (at: string, m: EngineManifest, migrations?: string): Promis
 type Side = {
 	handle(r: Request): Promise<Response>;
 	wake(): Promise<void>;
+	park(automationsMs: number): Promise<void> | undefined;
 	crons(): Promise<readonly CronEntry[]>;
 	fire(id: string, slot: string): Promise<CronFired>;
 	close(): Promise<void>;
@@ -281,6 +282,7 @@ const viaHostApi = async (client: PgliteClient, at: string): Promise<Side> => {
 			return response ?? new Response(null, { status: 404 });
 		},
 		wake: () => workspace.wake({ signal }),
+		park: (automationsMs: number) => workspace.park?.({ signal, automationsMs }),
 		crons: () => workspace.crons(),
 		fire: (id, slot) => workspace.fire(id, slot, { signal }),
 		close: () => workspace.close()
@@ -487,6 +489,12 @@ describe('HOST_API conformance (D10a)', () => {
 					await side.fire('stamp', slot),
 					await side.fire('peek', slot)
 				]).toEqual([{ ran: true }, { ran: false }, { ran: false }]);
+
+				// a planned close: nothing runs, so it answers at once, and a wake only asks again for the next generation
+				await side.park(0);
+				const parked = side.calls.length;
+				await side.wake();
+				expect(side.calls.slice(parked).filter((c) => c.startsWith(`settle ${SCOPE}`))).toHaveLength(1);
 
 				// close: the generation's guest bodies are interrupted (an order's transform runs one)
 				await side.close();

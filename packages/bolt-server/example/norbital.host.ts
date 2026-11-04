@@ -11,7 +11,8 @@
 // - `BOLT_TRANSACTIONAL_EMAIL` (required) `resend` (`BOLT_RESEND_API_KEY`, optional `BOLT_RESEND_FROM`) or `log`;
 //   `BOLT_TRANSACTIONAL_PHONE` `twilio` (`BOLT_TWILIO_ACC_SID`, `BOLT_TWILIO_AUTH_TOKEN`), `log` or `none` (default).
 // - `BOLT_<F>_PROVIDER` / `_ENDPOINT` / `_CREDENTIAL` for `AI_SYS_1` (`openai`, `decisions`), `AI_SYS_2`, `AI_EMBED`
-//   (`openai`), `GEO` (`nominatim`), `CONVERT` (`norbital`) and `WEB` (`public`), with `BOLT_AI_SYS_1_MODEL`,
+//   (`openai`), `GEO` (`nominatim`), `CONVERT` (`norbital`), `WEB` (`public`) and `SEARCH` (`deepseek`, the agent's
+//   and `ctx.ai.sys_2.infer`'s `web_search`), with `BOLT_AI_SYS_1_MODEL`,
 //   `BOLT_AI_SYS_2_MODELS` and `BOLT_AI_EMBED_MODELS` (JSON maps); text to speech is
 //   `BOLT_AI_SPEECH_ENDPOINT` + `_CREDENTIAL` with `BOLT_AI_SPEAK_MODEL`, `BOLT_AI_SPEAK_VOICE` (off without the model).
 //   Transcription is Norbital Convert's (`CONVERT`).
@@ -61,7 +62,7 @@ if (publicUrl.protocol !== 'https:' && !(publicUrl.protocol === 'http:' && loopb
 	throw new Error('BOLT_PUBLIC_URL must be https:// unless its host is loopback');
 
 const providers: { [F in Facility]?: Provider } = {};
-for (const f of ['AI_SYS_1', 'AI_SYS_2', 'AI_EMBED', 'GEO', 'CONVERT', 'WEB'] as const) {
+for (const f of ['AI_SYS_1', 'AI_SYS_2', 'AI_EMBED', 'GEO', 'CONVERT', 'WEB', 'SEARCH'] as const) {
 	const provider = env(`BOLT_${f}_PROVIDER`),
 		endpoint = env(`BOLT_${f}_ENDPOINT`),
 		credential = env(`BOLT_${f}_CREDENTIAL`);

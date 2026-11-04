@@ -11,7 +11,6 @@
 import { Effect, FileSystem, Schema, Result } from 'effect';
 import { createRequire } from 'node:module';
 import { dirname, isAbsolute, join, posix } from 'node:path';
-import tailwindcss from '@tailwindcss/vite';
 import type { Server } from 'node:http';
 import { build, createServer, type Connect, type InlineConfig, type Rolldown } from 'vite';
 import type { EngineManifest } from '@norbital-ai/bolt/engine';
@@ -87,6 +86,21 @@ const version = Effect.fnUntraced(function* (pkg: string) {
 			Effect.result
 		);
 	return Result.isSuccess(decoded) ? (decoded.success.version ?? null) : null;
+});
+
+/** The layer's build into `out`, emptied first: a function of this Bolt install alone. */
+const buildLayer = (out: string, cache: string) =>
+	Effect.gen(function* () {
+		const specifiers = new Map<string, string>();
+		return platformLayer(yield* bundle(yield* platformConfig(out, cache, specifiers)), specifiers);
+	});
+/** `bolt platform`: this install's layer under `dir`, for every build on it to read (`preparedLayer`). */
+export const prepareLayer = Effect.fn('bolt.prepareLayer')(function* (dir: string) {
+	const fs = yield* FileSystem.FileSystem;
+	const out = join(dir, '.out'),
+		cache = join(dir, '.cache');
+	yield* cachedPlatformLayer(dir, 'prepared', out, buildLayer(out, cache));
+	for (const scratch of [out, cache]) yield* fs.remove(scratch, { recursive: true, force: true });
 });
 
 /** ui's brand icons, copied beside the client's chunks under names a workspace's own `assets/` does not take. */
@@ -417,7 +431,7 @@ const graphConfig = (
 				{ configFile: false, compilerOptions: { experimental: { async: !publicPage } } },
 				join(root, '.norbital', 'cache', 'svelte')
 			),
-			tailwindcss()
+			import('@tailwindcss/vite').then(({ default: tailwindcss }) => tailwindcss())
 		]
 	}) satisfies InlineConfig;
 
@@ -430,7 +444,13 @@ export const buildClient = Effect.fn('bolt.buildClient')(function* (
 	out: string,
 	title: string,
 	/** Collects every workspace file each graph bundles (root-relative): the build is reused while none changes. */
-	sources?: Graphs
+	sources?: Graphs,
+	/** The layer this graph's host prepared: read, never built. */
+	prepared?: PlatformLayer,
+	/** The public pages' output is the caller's: only the internal SPA is built. */
+	internalOnly: boolean = false,
+	/** Each public route's stylesheet sources in the last build. */
+	publicSources?: Readonly<Record<string, readonly string[]>>
 ) {
 	const fs = yield* FileSystem.FileSystem;
 	const sourceRoot = yield* fs.realPath(root);
@@ -560,15 +580,7 @@ export const buildClient = Effect.fn('bolt.buildClient')(function* (
 	});
 	// the layer first: it empties `out`, and the workspace's own chunks are written beside it. It is a function of this
 	// Bolt install alone, so a rebuild into the same `out` (which `writeArtifact` left holding it) reuses it
-	const specifiers = new Map<string, string>();
-	const buildLayer = Effect.gen(function* () {
-		return platformLayer(
-			yield* bundle(
-				yield* platformConfig(out, join(root, '.norbital', 'cache', 'platform'), specifiers)
-			),
-			specifiers
-		);
-	});
+	const layerBuild = buildLayer(out, join(root, '.norbital', 'cache', 'platform'));
 	// Published graphs are immutable; local overlays write a new stamp. Source-mode builds stay uncached.
 	const lock =
 		EXT === '.js' && (yield* fs.exists(join(root, 'bun.lock')))
@@ -578,16 +590,17 @@ export const buildClient = Effect.fn('bolt.buildClient')(function* (
 		.readFileString(join(root, '.norbital', 'overlay.stamp'))
 		.pipe(Effect.orElseSucceed(() => ''));
 	const layer =
-		platform?.out === out && (yield* fs.exists(join(out, PLATFORM)))
+		prepared ??
+		(platform?.out === out && (yield* fs.exists(join(out, PLATFORM)))
 			? platform.layer
 			: lock === undefined
-				? yield* buildLayer
+				? yield* layerBuild
 				: yield* cachedPlatformLayer(
 						join(root, '.norbital', 'cache', 'platform-layer'),
 						sha256Hex(JSON.stringify([1, import.meta.url, lock, overlay])),
 						out,
-						buildLayer
-					);
+						layerBuild
+					));
 	platform = { out, layer };
 	const internal = yield* compile(entry, out, false, layer);
 	const css = [...layer.css, ...internal.css];
@@ -611,9 +624,10 @@ export const buildClient = Effect.fn('bolt.buildClient')(function* (
 		)
 	);
 	const publicPages: Record<string, { entry: string; css: string[] }> = {};
+	let discoveredSources: Readonly<Record<string, readonly string[]>> = {};
 	const publicEntries: Record<string, string> = {};
 	const publicStylesheets = new Map<string, string>();
-	for (const file of publicFiles) {
+	for (const file of internalOnly ? [] : publicFiles) {
 		const role = file.role === 'page' ? 'page_server' : 'kiosk_page_server';
 		if (!files.some((candidate) => candidate.role === role && candidate.name === file.name))
 			return yield* new BuildError({
@@ -644,12 +658,11 @@ Effect.runPromise(hydratePublicPage(Page, codec, ${key(route)})).catch((cause) =
 		publicEntries[route] = browser;
 		publicStylesheets.set(route, publicStyles);
 	}
-	if (publicFiles.length > 0) {
-		// Two whole-public-graph passes retain transitive Tailwind discovery without rebuilding each route separately.
+	if (!internalOnly && publicFiles.length > 0) {
+		// Tailwind's sources are transitive, and a whole-public-graph pass finds them without rebuilding each route. The
+		// last build's list starts the first pass, so an edit that leaves the graph as it was needs only that one pass.
 		const destination = join(out, 'public');
-		const discovered = yield* compile(publicEntries, destination, true);
-		for (const route of Object.keys(publicEntries)) {
-			const { chunk } = yield* publicEntry(discovered, route);
+		const styled = Effect.fnUntraced(function* (route: string, sources: readonly string[]) {
 			const styles = publicStylesheets.get(route);
 			if (styles === undefined)
 				return yield* new BuildError({
@@ -657,13 +670,22 @@ Effect.runPromise(hydratePublicPage(Page, codec, ${key(route)})).catch((cause) =
 				});
 			yield* fs.writeFileString(
 				styles,
-				`@import ${key(require.resolve('@norbital-ai/ui/base.css'))};\n${discovered
-					.sourcesFor(chunk.fileName)
+				`@import ${key(require.resolve('@norbital-ai/ui/base.css'))};\n${sources
 					.map((path) => `@source ${key(path)};`)
 					.join('\n')}\n`
 			);
+		});
+		for (const [route, sources] of Object.entries(publicSources ?? {}))
+			if (publicStylesheets.has(route)) yield* styled(route, sources);
+		let built = yield* compile(publicEntries, destination, true);
+		const found: Record<string, readonly string[]> = {};
+		for (const route of Object.keys(publicEntries))
+			found[route] = built.sourcesFor((yield* publicEntry(built, route)).chunk.fileName);
+		if (key(found) !== key(publicSources ?? {})) {
+			for (const [route, sources] of Object.entries(found)) yield* styled(route, sources);
+			built = yield* compile(publicEntries, destination, true);
 		}
-		const built = yield* compile(publicEntries, destination, true);
+		discoveredSources = found;
 		for (const route of Object.keys(publicEntries)) {
 			const { name, page } = yield* publicEntry(built, route);
 			const seen = new Set<string>(),
@@ -699,5 +721,5 @@ ${assets.css.map((css) => `<link rel="stylesheet" href="/${css}">`).join('\n')}
 			);
 		}
 	}
-	return { entry: internal.entry, css, pages: publicPages };
+	return { entry: internal.entry, css, pages: publicPages, publicSources: discoveredSources };
 });

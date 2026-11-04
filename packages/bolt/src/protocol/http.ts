@@ -36,7 +36,7 @@ import {
 	resetAfter,
 	type Charge
 } from '../engine/access/rate.ts';
-import { loadKeys } from '../engine/identity/session.ts';
+import { lazyKeys } from '../engine/identity/session.ts';
 import { admitVisitor, parseCallable, startCharge } from '../engine/callables/index.ts';
 import { AgentBackground, agentCallables, conversationFor } from '../engine/agent/callables.ts';
 import { isStaff, transcriptRow } from '../engine/agent/schema.ts';
@@ -132,7 +132,7 @@ export class AgentCallTable extends Context.Service<AgentCallTable, AgentCallabl
 export class RateLimits extends Context.Service<
 	RateLimits,
 	{
-		readonly ipBucket: (address: string) => string;
+		readonly ipBucket: (address: string) => Effect.Effect<string, DbError>;
 		readonly charge: (
 			charges: Parameters<RateWindows['charge']>[0],
 			now: number
@@ -143,16 +143,22 @@ export class RateLimits extends Context.Service<
 		RateLimits,
 		Effect.gen(function* () {
 			const db = yield* TenantDb;
-			// a cell taking a tenant restores its persisted open windows, so a restart does not reset the acts' buckets
-			const loaded = new RateWindows();
-			loaded.load(
-				yield* db.rows(OpenWindow, { text: OPEN_WINDOWS_SQL, params: [] }),
-				yield* Clock.currentTimeMillis
+			// a cell taking a tenant restores its persisted open windows, so a restart does not reset the acts' budgets; a
+			// cold start owes this rather than doing it, and the keys wait for the first caller who needs them
+			const loaded = new RateWindows(),
+				keys = lazyKeys(db);
+			db.owe(
+				Effect.gen(function* () {
+					loaded.load(
+						yield* db.rows(OpenWindow, { text: OPEN_WINDOWS_SQL, params: [] }),
+						yield* Clock.currentTimeMillis
+					);
+				}).pipe(Effect.catchTag('BoltError', Effect.die))
 			);
 			const windows = yield* Ref.make(loaded);
-			const keys = yield* loadKeys(db);
 			return {
-				ipBucket: (address: string) => macKey(keys.ipMac, addressBucket(address)),
+				ipBucket: (address: string) =>
+					Effect.map(keys, ({ ipMac }) => macKey(ipMac, addressBucket(address))),
 				charge: (charges: Parameters<RateWindows['charge']>[0], now: number) =>
 					Ref.modify(windows, (w) => [w.charge(charges, now), w])
 			};
@@ -263,12 +269,21 @@ const actAdmissions = new WeakMap<
  * Whom a `per: 'actor'` limit counts: a member, else a visitor's IP. An anonymous user is an identity for ownership and
  * linking, never a rate bucket: one client could mint many, and its IP is what it cannot change cheaply.
  */
-const individual = (authority: Authority, ip: () => string): string | undefined =>
+const individual = (authority: Authority, ip: string | undefined): string | undefined =>
 	authority.actor.kind === 'member'
 		? authority.actor.id
 		: authority.actor.kind === 'visitor'
-			? ip()
+			? ip
 			: undefined;
+/** The caller's address bucket, only when its limits name one: a member's call asks nothing of the database for it. */
+const ipFor = (
+	limits: RateLimits['Service'],
+	request: HttpServerRequest.HttpServerRequest,
+	authority: Authority
+) =>
+	authority.actor.kind === 'visitor' || authority.limits.some((rule) => rule.per === 'ip')
+		? limits.ipBucket(Option.getOrElse(request.remoteAddress, () => '0.0.0.0'))
+		: Effect.succeed(undefined);
 /** Shell admission and dispatch share one charge; direct protocol hosts use the same native peer address. */
 export const requestActRate = Effect.fn('protocol.requestActRate')(function* (
 	request: HttpServerRequest.HttpServerRequest,
@@ -280,10 +295,9 @@ export const requestActRate = Effect.fn('protocol.requestActRate')(function* (
 		Effect.gen(function* () {
 			const now = yield* Clock.currentTimeMillis;
 			const limits = yield* RateLimits;
-			const address = () =>
-				limits.ipBucket(Option.getOrElse(request.remoteAddress, () => '0.0.0.0'));
-			const ip = authority.limits.some((rule) => rule.per === 'ip') ? address() : undefined;
-			const actor = individual(authority, address);
+			const bucket = yield* ipFor(limits, request, authority);
+			const ip = authority.limits.some((rule) => rule.per === 'ip') ? bucket : undefined;
+			const actor = individual(authority, bucket);
 			const who = {
 				...(actor === undefined ? {} : { actor }),
 				...(ip === undefined ? {} : { ip })
@@ -346,7 +360,7 @@ export const readAdmitted = (
 				admitVisitor(authority, { read: read.model }) === null));
 const readAdmissions = new WeakMap<
 	HttpServerRequest.HttpServerRequest,
-	Effect.Effect<ReturnType<RateWindows['charge']>, never, RateLimits>
+	Effect.Effect<ReturnType<RateWindows['charge']>, DbError, RateLimits>
 >();
 /** Charge one read request (`/q`, a live registration, a page loader) once, before decoding or running it. */
 export const requestReadRate = Effect.fn('protocol.requestReadRate')(function* (
@@ -358,13 +372,8 @@ export const requestReadRate = Effect.fn('protocol.requestReadRate')(function* (
 	const admission = yield* Effect.cached(
 		Effect.gen(function* () {
 			const limits = yield* RateLimits;
-			const address = () =>
-				limits.ipBucket(Option.getOrElse(request.remoteAddress, () => '0.0.0.0'));
-			const ip =
-				authority.actor.kind === 'visitor' || authority.limits.some((rule) => rule.per === 'ip')
-					? address()
-					: undefined;
-			const actor = individual(authority, address);
+			const ip = yield* ipFor(limits, request, authority);
+			const actor = individual(authority, ip);
 			return yield* limits.charge(
 				chargesFor(authority, ['read'], {
 					...(actor === undefined ? {} : { actor }),
@@ -698,7 +707,9 @@ const lower = Effect.fn('protocol.lowerRead')(function* (
 				id === undefined &&
 				(automation === undefined || !authority.automations.includes(automation)))
 		)
-			return yield* Effect.fail(BoltError.make('forbidden', 'admission', 'No runs for this member.'));
+			return yield* Effect.fail(
+				BoltError.make('forbidden', 'admission', 'No runs for this member.')
+			);
 		const limit = typeof options['limit'] === 'number' ? options['limit'] : 100;
 		return {
 			kind: 'runs',

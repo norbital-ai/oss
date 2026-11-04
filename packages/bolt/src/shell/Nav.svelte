@@ -26,6 +26,8 @@
 	import type { ShellApi } from './api-types.ts';
 	import type { SyncStatus } from '../page/bolt.ts';
 	import { NORBIUS, type NavItem, type NavModel, type Translate } from './model.ts';
+	import Awaiting from './agent/Awaiting.svelte';
+	import type { Awaiting as AwaitingKind } from './agent/chime.ts';
 	import { based, type ShellNotice } from './nav.ts';
 	import { LANGUAGE, LOCALES } from './i18n.ts';
 	import { THEMES, type Theme } from './theme.ts';
@@ -43,6 +45,7 @@
 		theme = 'system',
 		onTheme,
 		chimes = true,
+		awaiting = null,
 		onSounds,
 		sync = 'idle',
 		previewing = false,
@@ -72,6 +75,8 @@
 		theme?: Theme;
 		onTheme?: (theme: Theme) => void;
 		chimes?: boolean;
+		/** What Norbius left unseen: a dot on its icon. */
+		awaiting?: AwaitingKind | null;
 		onSounds?: () => void;
 		sync?: SyncStatus;
 		/** A preview runs: the menu offers its end. `loadTeams` is an administrator's: the teams a preview may take. */
@@ -188,19 +193,34 @@
 
 {#snippet tile(item: NavItem)}
 	{@const color = item.featureColor === undefined ? null : FEATURE_COLORS[item.featureColor]}
-	<Frame
-		ratio="square"
-		class={cn(
-			'size-6 rounded-md border shadow-xs',
-			color?.iconWrapperClass ?? 'border-input bg-background text-foreground'
-		)}
-	>
-		{#if item.href === NORBIUS}<NorbiusStrip size={20} />
-		{:else}<Icon
-				name={item.icon ?? 'lucide:layout-grid'}
-				class={cn('size-3.5', color?.iconClass)}
-			/>{/if}
-	</Frame>
+	<!-- relative: a Frame fits its children, so the pill sits on this wrapper, over the tile's corner -->
+	<span class="relative inline-flex shrink-0">
+		<Frame
+			ratio="square"
+			class={cn(
+				'size-6 rounded-md border shadow-xs',
+				color?.iconWrapperClass ?? 'border-input bg-background text-foreground'
+			)}
+		>
+			{#if item.href === NORBIUS}<span class="relative inline-flex"
+					><NorbiusStrip size={20} /><Awaiting kind={awaiting} {t} /></span
+				>
+			{:else}<Icon
+					name={item.icon ?? 'lucide:layout-grid'}
+					class={cn('size-3.5', color?.iconClass)}
+				/>{/if}
+		</Frame>
+		{#if item.badge}
+			<!-- the bell's count pill: the same badge for approvals as for notifications -->
+			<Imposter
+				as="span"
+				placement="top-end"
+				data-testid="nav-count-badge"
+				class="-top-1 -right-1 z-auto min-w-3.5 rounded-full bg-primary px-1 text-center text-[8px] leading-3.5 font-medium text-primary-foreground"
+				aria-hidden="true">{Number(item.badge) > 99 ? '99+' : item.badge}</Imposter
+			>
+		{/if}
+	</span>
 {/snippet}
 
 {#snippet tip(
@@ -250,12 +270,6 @@
 								open[item.key] && 'rotate-90'
 							)}
 						/>
-					{:else if item.badge}
-						<Badge
-							variant="outline"
-							class="absolute top-1/2 right-1.5 -translate-y-1/2 px-1.5 py-0 text-tiny leading-4 font-medium"
-							aria-hidden="true">{item.badge}</Badge
-						>
 					{/if}
 				{/if}
 			</svelte:element>

@@ -260,6 +260,7 @@ export type {
 	HostToolContext,
 	WorkspacePort
 } from './agent/index.ts'; // hook:wiring — hosts bind the agent's options
+export type { WorkspaceNote } from './notifications/notify.ts'; // hook:wiring — a host's workspace events (`AgentConfig.events`)
 export { page } from './agent/context.ts'; // hook:wiring — a host's file-reading tool pages like `workspace_search` (rule 62)
 export {
 	AgentsLive,
@@ -318,8 +319,10 @@ export { COOKIES, cookieSite, framePolicy } from '../shell/nav.ts';
 export { StudioInspectInput, StudioInspection } from '../shell/studio/inspection.ts';
 export { StudioTestRun } from '../shell/studio/test-results.ts';
 export {
+	MERGE_SUMMARY,
 	StudioOp,
 	studioView,
+	suggestMessage,
 	type StudioApproval,
 	type StudioBuild,
 	type StudioBuildRecord,

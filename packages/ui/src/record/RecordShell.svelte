@@ -44,12 +44,16 @@
 		icon?: string;
 		/** The state pill's text. */
 		badge?: string;
+		/** A UI-only lock reason: the footer shows a lock instead of Edit while the record is not in edit mode. */
+		lock?: string;
 		/** One sentence behind the pill. */
 		hint?: string;
 		/** Placed in the record header (serial-pcn's "Approve as FAE"). */
 		actions?: Snippet;
 		/** Beside the label in the chrome (color-matching's timeline trigger). */
 		trailing?: Snippet;
+		/** Beside Edit / Save in the footer (lifecycle actions: promote, transfer, terminate). */
+		footerActions?: Snippet;
 		/**
 		 * A short line at the start of the footer, opposite Edit / Save (a status, what saving does). While a draft has
 		 * unsaved changes the footer says so instead.
@@ -139,10 +143,12 @@
 		subtitle,
 		icon,
 		badge,
+		lock,
 		hint,
 		actions,
 		trailing,
 		footer,
+		footerActions,
 		tabs = [],
 		history: historyOptions,
 		runs = [],
@@ -479,9 +485,10 @@
 	// a model's own-field lock is the declaration's, not a per-template callback: the page shows a lock, never Edit
 	const modelLocked = $derived(live !== null && matchesLock(live, exposure?.locked));
 	const lockReason = $derived(
-		modelLocked
-			? msg(bolt, 'record.locked', 'This record is locked.')
-			: lockText(bolt, approvalOf(row))
+		lock ??
+			(modelLocked
+				? msg(bolt, 'record.locked', 'This record is locked.')
+				: lockText(bolt, approvalOf(row)))
 	);
 
 	let capabilityRequest = 0;
@@ -743,10 +750,10 @@
 {#snippet foot()}
 	<!-- the record's footer: its note, then Edit (or the lock, or Cancel + Save while editing) flush bottom-right -->
 	{@const current = shownPast === null && exposure?.update !== undefined && controller !== null}
-	{@const lockedHere = current && controller?.mode === 'view' && (modelLocked || underApproval)}
+	{@const lockedHere = current && controller?.mode === 'view' && (lock !== undefined || modelLocked || underApproval)}
 	{@const canEdit = current && controller?.mode === 'view' && !lockedHere && controller.canSubmit}
 	{@const inEdit = current && controller?.mode === 'edit'}
-	{#if footer !== undefined || lockedHere || canEdit || inEdit}
+	{#if footer !== undefined || footerActions !== undefined || lockedHere || canEdit || inEdit}
 		<footer
 			class="flex shrink-0 flex-wrap items-center justify-end gap-2 border-t pt-3"
 			data-record-foot
@@ -756,6 +763,7 @@
 						'unsaved'
 					)}{:else if typeof footer === 'string'}{footer}{:else}{@render footer?.()}{/if}</span
 			>
+			{#if footerActions}{@render footerActions()}{/if}
 			{#if lockedHere}
 				<Tooltip text={lockReason}>
 					{#snippet trigger({ props })}

@@ -8,6 +8,8 @@ import type { ApprovalStep, Flow, Verdict } from './access/policy.ts';
 import type { ActConflict, ActRefused, ActUnknown, ReadFailed, Refusal } from './errors.ts';
 import type { Checked, DateLiteral, Exact, InputOf, Simplify } from './fields.ts';
 import type {
+	AttachModel,
+	AttachName,
 	AutomationName,
 	ModelName,
 	ExposureSpecOf,
@@ -404,7 +406,16 @@ type CreateLayer<
 		// an existing row of a non-owned child relation is linked by its id
 		| (S extends OwnedInverse<T> ? never : ChildId<T, S>)
 	)[];
-};
+} & (P extends C ? AttachInput<C> : {});
+/** The `attaches` field of `C`'s create tree, absent when the model declares no attach layer. */
+type AttachInput<C> = [AttachName<C>] extends [never]
+	? {}
+	: {
+			/** Existing rows this new row attaches: each layer sets its declared ref to this row's id, in the same commit. */
+			readonly attaches?: {
+				readonly [A in AttachName<C>]?: readonly Id<AttachModel<C, A>>[];
+			};
+		};
 /**
  * One created row of `M` as a writer sends it and the policy's `check` judges it: the root's `create.columns` (required ones
  * required, `filled` ones optional) and each declared child layer as a list of child rows (or, for a non-owned relation,
@@ -523,9 +534,12 @@ export type ActOutput<N> = N extends `${infer C}.${infer V}`
 	: never;
 /** `onConflict` is required on `upsert` (rule 28): `update` merges into the row its `id` names, `keep` leaves it. */
 export type ActOptions = {
+	/** An idempotency key: the same key from the same caller within 24 hours answers the first outcome, writing nothing. */
 	key?: string;
+	/** Writes once for this key across every rerun of the body: a retried run does not repeat the write. */
 	once?: string;
 	onConflict?: 'update' | 'keep';
+	/** Each row's revision as the body read it: a row edited since fails `ActConflict` instead of being overwritten. */
 	observed?: Readonly<Record<string, number>>;
 };
 type OptionsOf<N> = N extends `${string}.upsert`
@@ -617,13 +631,6 @@ export type Running = { kind: 'running'; run: Id<'sys_run'> };
  */
 export type Outcome<O, N = string> =
 	Committed<O, N> | PendingApproval<N> | Refused | Conflict | Unknown | Running;
-/**
- * `ctx.act` in an automation: runs a callable with its typed input. It succeeds with a committed or held write
- * and fails with `ActRefused`, `ActConflict` or `ActUnknown`; `Effect.catchTag` recovers the one a body handles. It is
- * never `running`: the body already runs as server work, so its act waits for its own answer and never hands off.
- * @example
- * const { records } = yield* ctx.act('orders.create', [{ customer, lines: { create: [{ sku, qty: 1 }] } }]);
- */
 type ManyCallable = Extract<Callable, `${string}.${'create' | 'update' | 'upsert' | 'delete'}`>;
 /** The literal shape inferred for a batch before each callable validates its own input. */
 export type ActBatch = readonly {
@@ -647,6 +654,13 @@ export type ActManyOutput<A extends ActBatch> = {
 	readonly [K in keyof A]: ActOutput<A[K]['callable']>;
 };
 /** Calls a typed workspace callable, or commits several generated verbs together with `many`. */
+/**
+ * `ctx.act` in an automation: runs a callable with its typed input. It succeeds with a committed or held write
+ * and fails with `ActRefused`, `ActConflict` or `ActUnknown`; `Effect.catchTag` recovers the one a body handles. It is
+ * never `running`: the body already runs as server work, so its act waits for its own answer and never hands off.
+ * @example
+ * const { records } = yield* ctx.act('orders.create', [{ customer, lines: [{ sku, qty: 1 }] }]);
+ */
 export interface Act {
 	/** A held write is a success. */
 	<const N extends string>(
@@ -788,10 +802,9 @@ interface WriteReads extends WorkspaceQuery {
 }
 /**
  * What a write callback sees: the clock, the writer's policies, the workspace's reads in `db` (unmasked; `db.after` sees
- * this act's rows) and `refuse`. A callback reads at most twice per call, whatever the batch size: read for the whole
- * batch at once (`yield* ctx.db.query({ customers: …, prices: … })` is one read), never inside a loop over the rows
- * (`bolt check`: `write/read-in-loop`). It writes nothing itself: what it returns is written in the writer's one
- * transaction.
+ * this act's rows) and `refuse`. A callback reads at most 10 times per call, whatever the batch size: read for the whole
+ * batch at once (`yield* ctx.db.query({ customers: …, prices: … })` is one read), never inside a loop over the rows.
+ * It writes nothing itself: what it returns is written in the writer's one transaction.
  */
 export interface WriteCtx<in out M> extends Clock {
 	readonly invocationId: string;

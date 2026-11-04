@@ -4,11 +4,11 @@ In a hosted workspace, the agent edits source through Studio's tools, one **chan
 edits from live, with its own preview on a fork of live's data.
 
 - `workspace_review` lists the changes, their builds and the Versions live ran.
-- Source tools work on your current Studio tree automatically. `workspace_list { path: "src/" }` lists files,
+- Source tools work on your current Studio tree automatically. `workspace_list` lists files,
   `workspace_search { pattern: "syncs", literal: true }` greps content, and
   `workspace_read { path: "src/+workspace.ts" }` reads numbered lines. Search requires `pattern`; read requires
   `path`. There is no draft flag to remember. Normal source tools never require selecting a release.
-- `workspace_edit { path, oldString, newString }` performs a focused replacement; the match must be unique unless
+- `workspace_edit { path, oldString, newString, summary? }` performs a focused replacement; the match must be unique unless
   `replaceAll: true`. Read the file first; omit displayed line-number prefixes from replacement text.
   `workspace_write` saves whole files or a batch of creates, edits, moves and deletes. `{ path, text }` replaces the
   entire file; it never appends. Use `workspace_edit` for a partial change and preserve the rest of the file.

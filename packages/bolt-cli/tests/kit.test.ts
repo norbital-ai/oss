@@ -65,6 +65,8 @@ it.effect(
 	() =>
 		Effect.gen(function* () {
 			const t = yield* TestWorkspace;
+			// what the cold start owed the database runs before its first statement
+			yield* t.db.read([{ text: 'SELECT 1', params: [] }]);
 			const users = Array.from({ length: 4 }, () => t.member(['reader']));
 			t.count.reset();
 			const results = yield* Effect.all(

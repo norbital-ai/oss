@@ -615,6 +615,8 @@ const pipeline = Effect.fn('Bolt.pipeline')(function* (
 				return none(refused('notFound', 'The record does not exist.', c.path));
 			if (it.belongs === 'parent' && row[it.parent!.fk] !== it.parent!.id)
 				return none(refused('notFound', 'The record does not belong here.', c.path));
+			if (it.attach === true && row[it.parent!.fk] != null)
+				return none(refused('invalidInput', 'The record is already attached.', c.path));
 		}
 		for (const ref of it.refs) {
 			const target = pre.get(k(ref.to, ref.id));
@@ -810,6 +812,11 @@ type CheckArm = { readonly policy: string; readonly check: boolean };
 /** Per verb, the arms that admit the act's whole batch there; each one's `check`, when declared, judges it. */
 export type Admitted = { readonly [verb in Judged]?: readonly CheckArm[] };
 type Need = { readonly path: string; readonly field?: string; readonly row?: number };
+/** Which of the actor's policies a refusal of a whole verb weighed: none of them grants it, or there were none. */
+const held = (auth: Authority) =>
+	auth.policies.length === 0
+		? 'you hold no policy'
+		: `none of your policies (${auth.policies.join(', ')}) grants it`;
 const forbidden = (need: Need | undefined, message: string): Outcome => ({
 	kind: 'refused',
 	code: 'forbidden',
@@ -836,6 +843,20 @@ function admit(
 	for (const item of items) {
 		const c = item.change,
 			at = c.path[0] ?? null;
+		if (item.attach === true) {
+			const field = item.parent!.fk,
+				arms = auth.models[c.model]?.update ?? [];
+			if (!arms.some((arm) => arm.columns[c.model]?.includes(field)))
+				return forbidden(
+					{
+						path: layerPath(root, c.path),
+						field,
+						...(typeof at === 'number' ? { row: at } : {})
+					},
+					`You may not write ${field} of ${c.model}.`
+				);
+			continue;
+		}
 		const verb = verbs.get(at) ?? actionOf(c, pre);
 		const list = needs.get(verb) ?? [];
 		needs.set(verb, list);
@@ -853,12 +874,12 @@ function admit(
 	for (const [verb, list] of needs) {
 		if (verb === 'delete') {
 			const arms = auth.models[root]?.delete ?? [];
-			if (arms.length === 0) return forbidden(list[0], `You may not delete ${root}.`);
+			if (arms.length === 0) return forbidden(list[0], `You may not delete ${root}: ${held(auth)}.`);
 			out.delete = arms;
 			continue;
 		}
 		const arms = auth.models[root]?.[verb] ?? [];
-		if (arms.length === 0) return forbidden(list[0], `You may not ${verb} ${root}.`);
+		if (arms.length === 0) return forbidden(list[0], `You may not ${verb} ${root}: ${held(auth)}.`);
 		const covers = (arm: WriteArm, need: Need) =>
 			need.field === undefined
 				? Object.hasOwn(arm.columns, need.path)
@@ -1497,13 +1518,14 @@ const plan = Effect.fn('Bolt.plan')(function* (
 							.join('; ')
 					);
 				// one lookup per replacement: a find over the chunk is quadratic in a 1,000-row transform chunk
-				const owners = new Map(chunk.toReversed().map((root) => [token(root), root.belongs]));
+				const owners = new Map(chunk.toReversed().map((root) => [token(root), root]));
 				const replacements: Item[] = again.items.map((item) => {
-					const belongs = owners.get(token(item));
+					const owner = owners.get(token(item));
 					return {
 						...item,
 						supplied: supplied.get(token(item)) ?? [],
-						...(belongs === undefined ? {} : { belongs })
+						...(owner?.belongs === undefined ? {} : { belongs: owner.belongs }),
+						...(owner?.attach === undefined ? {} : { attach: owner.attach })
 					};
 				});
 				const replacedPaths = new Set(chunk.map((item) => canonical(item.change.path)));

@@ -1046,8 +1046,11 @@ export interface DocsPort {
 }
 /** One cron the manifest declares: an automation's (`id` its name) or a remote sync's periodic read (the runs area's id). */
 export type CronEntry = { readonly id: string; readonly cron: string; readonly zone: string };
-/** `ran: false`: a repeat of `(id, slot)`, or a run that only read and wrote nothing. */
-export type CronFired = { readonly ran: boolean };
+/**
+ * `ran: false`: a repeat of `(id, slot)`, a run that only read and wrote nothing, or a resting cron. `until`: the cron
+ * rests, and while the workspace is not in use the host need not fire it before this instant.
+ */
+export type CronFired = { readonly ran: boolean; readonly until?: string };
 
 export type HostPorts = {
 	/** Durable administrator audit; no runtime-log fallback is permitted. */

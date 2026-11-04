@@ -1,3 +1,5 @@
+import { writable } from 'svelte/store';
+
 // The one sheet behaviour (owner rule): non-modal, no backdrop, the page stays usable; dismissed only by Esc (the
 // topmost open sheet) or its close button. A drawer also closes once its user navigates.
 
@@ -10,6 +12,25 @@ export type SheetGuard = (dirty: () => boolean, discard: () => void) => () => vo
 
 /** Open sheets, innermost last; Esc closes only the last. */
 export const openSheets: object[] = [];
+
+/** Bumped on every push and pop so a sheet's depth and topmost state stay reactive. */
+export const sheetRevision = writable(0);
+
+/** Push a sheet without ever leaving a duplicate in the stack. */
+export const pushSheet = (sheet: object): void => {
+	const index = openSheets.indexOf(sheet);
+	if (index >= 0) openSheets.splice(index, 1);
+	openSheets.push(sheet);
+	sheetRevision.update((value) => value + 1);
+};
+
+/** Remove a sheet by identity; an absent sheet never removes the topmost other one. */
+export const popSheet = (sheet: object): void => {
+	const index = openSheets.indexOf(sheet);
+	if (index < 0) return;
+	openSheets.splice(index, 1);
+	sheetRevision.update((value) => value + 1);
+};
 
 /** Whether this keydown dismisses `sheet`: an unhandled Esc, outside IME composition, while `sheet` is the topmost. */
 export const escapes = (

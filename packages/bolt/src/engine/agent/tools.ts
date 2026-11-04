@@ -5,7 +5,7 @@
 // `download` for staff in the app when files are stored, `run_js` (HTTP when a policy names `http`), `subagent` and `wait`
 // under delegation, MCP tools a held policy's capabilities name (a sub-agent has no plan or sub-agents, and asks its
 // delegating agent with `ask_parent`), and host tools (Workspace Studio, browser, personal skills) only on in-app turns of
-// staff members; optional host tools ride named packs and appear only after `tools` enables one. Built-in tools are
+// staff members. Built-in tools are
 // `Tool.make` definitions, MCP and host tools `Tool.dynamic` ones over their raw JSON
 // Schema, all in one per-turn `Toolkit` (P7). The agent has no authority of its own (decision 10): the catalogue lists
 // only what the actor may invoke and every call runs as the actor, so a refusal is the engine's answer, never the agent's.
@@ -34,9 +34,10 @@ import { Port, type PortFailure } from '../port.ts';
 import type { EngineError } from '../errors.ts';
 import { RUN_VIEW_COLUMNS, RunViewRow, runView } from '../runs/index.ts';
 import { actorRef } from '../write/commit.ts';
-import { readLog } from '../guest/telemetry.ts';
+import { readLog, runLog } from '../guest/telemetry.ts';
 import { readableFile } from '../decisions/index.ts';
 import { toBase64 } from '../crypto.ts';
+import { FOLDER_NOTES, roleAt } from '../../decl/layout.ts';
 import type { Json } from '../../decl/values.ts';
 import { encodeWire } from '@norbital-ai/std/wire';
 import {
@@ -131,8 +132,6 @@ export type HostTool = {
 	readOnly?: boolean;
 	source?: true;
 	studio?: StudioRole;
-	/** An optional pack: offered only after `tools { enable: '<pack>' }`, never in the empty turn. */
-	pack?: string;
 	call(input: Json, ctx: HostToolContext, signal: AbortSignal): Promise<Json>;
 };
 /** A skill the agent may read and whose scripts it may run: its tree's listing, and each file's bytes by its path. */
@@ -156,7 +155,7 @@ export type WorkspacePort = {
 	read(path: string): Promise<string | null>;
 };
 /** Long work: a host call past 30 s (at most 10 minutes), an ingest. */
-export const JOBS = { inlineMs: 30000, hostMs: 600000, waitMs: 120000 } as const;
+export const JOBS = { inlineMs: 30000, hostMs: 60000, waitMs: 120000 } as const;
 type Jobs = Effect.Success<ReturnType<typeof jobs>>;
 const jobFailed = (result: Json): string | undefined =>
 	Predicate.isObject(result) && !Array.isArray(result) && typeof result['error'] === 'string'
@@ -311,8 +310,6 @@ export type ToolContext = {
 	logs: LogsShape;
 	mcpTools: readonly McpTool[];
 	hostTools: readonly HostTool[];
-	/** Optional host-tool packs enabled this turn; the host tools carry their pack. */
-	packs?: Set<string>;
 	attachments?: AttachmentPort | undefined;
 	workspace?: WorkspacePort | undefined;
 	/** The author's current working source; absent when this person authors nothing here. */
@@ -378,8 +375,6 @@ export type AgentTool = {
 	readonly name: string;
 	readonly studio?: StudioRole;
 	readonly pure?: true;
-	/** A built-in's optional pack: offered only after `tools { enable: '<pack>' }`. */
-	readonly pack?: string;
 };
 /** Any tool's handler context (`Tool.Any` names no tool in particular), merged into the step's toolkit. */
 type Handlers = Tool.HandlersFor<Record<string, Tool.Any>>;
@@ -449,8 +444,47 @@ const clippedView = (view: (clip: Clip) => Json, call: string): ToolAnswer => ({
 	full: view((v) => v),
 	bounded: true
 });
-/** `runs { id }`: the run's latest log lines. */
-const RUN_LOG_LINES = 100;
+/** Text as one answer, whole up to the result bound. */
+const textAnswer = (text: string): ToolAnswer => {
+	const room = BOUNDS.resultBytes - 2_000;
+	return size(text) <= room
+		? { result: text, bounded: true }
+		: { result: text.slice(0, room), full: text, bounded: true };
+};
+/** The source as an ASCII tree from the workspace root: a folder's note on the folder, a role's on its first file. */
+const sourceTree = (files: readonly string[]): string => {
+	type Folder = Map<string, Folder | null>;
+	const root: Folder = new Map(),
+		noted = new Set<string>(),
+		lines = ['/  <- cwd'];
+	for (const file of files) {
+		const folders = file.split('/'),
+			name = folders.pop() ?? '';
+		let at = root;
+		for (const folder of folders) {
+			const next: Folder = at.get(folder) ?? new Map();
+			at.set(folder, next);
+			at = next;
+		}
+		at.set(name, null);
+	}
+	const walk = (folder: Folder, path: string, indent: string) => {
+		const names = [...folder.keys()].sort();
+		for (const [i, name] of names.entries()) {
+			const last = i === names.length - 1,
+				inner = folder.get(name),
+				shown = inner == null ? name : `${name}/`,
+				role = inner == null ? roleAt(`${path}${name}`) : undefined,
+				note =
+					role === undefined || noted.has(role.role) ? FOLDER_NOTES[`${path}${shown}`] : role.note;
+			if (role !== undefined) noted.add(role.role);
+			lines.push(`${indent}${last ? '└── ' : '├── '}${shown}${note ? `  ${note}` : ''}`);
+			if (inner != null) walk(inner, `${path}${name}/`, `${indent}${last ? '    ' : '│   '}`);
+		}
+	};
+	walk(root, '', '');
+	return lines.join('\n');
+};
 const err = (
 	message: string
 ): {
@@ -1177,8 +1211,22 @@ function shapeOf(m: EngineManifest, a: Authority, path: string, output = 'defaul
 					writes: Object.fromEntries(
 						writes.map((c) => {
 							const verb = c.slice(root.length + 1);
+							// the held policies whose check judges this write (it may allow, refuse or hold it for approval); an
+							// arm without a check allows, so with one held (an administrator's) no check holds a batch
+							const arms = (
+								verb === 'upsert'
+									? (['create', 'update'] as const)
+									: verb === 'create' || verb === 'update' || verb === 'delete'
+										? ([verb] as const)
+										: []
+							).flatMap((v) => a.models[root]?.[v] ?? []);
+							const judges =
+								arms.length > 0 && arms.every((arm) => arm.check)
+									? [...new Set(arms.map((arm) => arm.policy))]
+									: [];
+							const checks = judges.length === 0 ? {} : { checks: judges };
 							const cols = verb === 'create' || verb === 'update' ? columns(verb) : undefined;
-							if (cols === undefined) return [c, true];
+							if (cols === undefined) return [c, judges.length === 0 ? true : checks];
 							// the caller's own columns: the model's, narrowed to what its policies let it write
 							const allowed = writableColumns(a, root, verb === 'create' ? 'create' : 'update');
 							const own =
@@ -1187,7 +1235,10 @@ function shapeOf(m: EngineManifest, a: Authority, path: string, output = 'defaul
 									: { ...cols, [root]: (cols[root] ?? []).filter((f) => allowed.has(f)) };
 							// a create's columns that have no default and are not optional: leaving one out is refused
 							const required = verb === 'create' ? (cols[root] ?? []).filter(requiredOf(root)) : [];
-							return [c, { columns: own, ...(required.length === 0 ? {} : { required }) }];
+							return [
+								c,
+								{ columns: own, ...(required.length === 0 ? {} : { required }), ...checks }
+							];
 						})
 					)
 				})
@@ -1531,7 +1582,7 @@ A model declares named read outputs: "default" and any others its schema lists. 
 
 Options (all optional)
 - output (a root): the output to read.
-- describe: true, alone in a key (or with output): instead of rows, the key's fields and their kinds (a link names its model, an enum its values), its layers, how it is searched, the outputs you read and your writes: { columns } per layer, the only columns you may set, and on a create the required ones you must set. It is already narrowed to your own policies (what you may read, write and start): never read policy or model source to check your access. Describe every model a task needs in one call before you first filter or write them, and write exactly those columns.
+- describe: true, alone in a key (or with output): instead of rows, the key's fields and their kinds (a link names its model, an enum its values), its layers, how it is searched, the outputs you read and your writes: { columns } per layer, the only columns you may set, on a create the required ones you must set, and checks: the policies whose check judges each batch of that write (it may allow it, refuse it or hold it for approval). It is already narrowed to your own policies (what you may read, write and start).
 - fields: ["<field>", …]: only these fields of each row (id is always returned). Without it a row has every field the output declares.
 - where: exact conditions on field values: { "<field>": { "<operator>": value } }; several fields must all hold; combine with { "and": [...] }, { "or": [...] }, { "not": {...} }. On a root it chooses which rows return; on a layer it narrows that layer's rows inside each root row, using the layer's own fields, never its link to the root.
   Operators by field kind:
@@ -1543,14 +1594,12 @@ Options (all optional)
   Related rows filter too, through a relation the output declares as a layer (a "<model>.<relation>" key here; any other relation is refused):
   a one-relation: { "<relation>": { "is": { <where on its fields> } } }, or its link's operators
   a many-relation: { "<relation>": { "some" | "none" | "every": { <where on its fields> } } }, { "<relation>": { "count": { "gte": 2 } } }, { "<relation>": { "sum" | "avg" | "min" | "max": { "of": "<field>", "gt": 100 } } }
-- search: on a root, text ranks matching rows over the model's declared searchable text and linked search documents. Rows matching every word rank first; partial matches may follow, so a returned row is not proof of exact identity. Use where on the source identifier for identity, where on an enum/category for a category, or where: { "$search": "<words>" } to require every word (case- and accent-insensitive prefixes, including fuzzy matches). A text-search result's total counts that search's matches, not the whole catalogue or category. On a nested layer, text search requires every word. A root may instead use { "<index>": input } (a declared search index) or { "semantic": text } (when declared): nearest rows first, each with $distance. Use only the declared inputs; a model with no search is narrowed with where alone.
+- search: on a root, text ranks matching rows over the model's declared searchable text and linked search documents. Rows matching every word rank first; partial matches may follow, so a returned row is not proof of exact identity. where: { "$search": "<words>" } requires every word (case- and accent-insensitive prefixes, including fuzzy matches). A text-search result's total counts that search's matches, not the whole catalogue or category. On a nested layer, text search requires every word. A root may instead use { "<index>": input } (a declared search index) or { "semantic": text } (when declared): nearest rows first, each with $distance. Use only the declared inputs; a model with no search is narrowed with where alone.
 - orderBy: "<field>", { "<field>": "asc" | "desc" }, or a list of these; then id.
 - limit: how many rows, at most ${READ_LIMIT} (the default) for a root and for a many-layer per root row.
 - after (a root): the next cursor a page answered: the page after it.
 - asOf (a root): an ISO instant: the rows as they stood then.
 - aggregate: { "count": true, "sum" | "avg" | "min" | "max": ["<field>"], "by": "<field>" | { "day" | "week" | "month" | "quarter" | "year": "<date field>" } | a list of these }: totals over the matched rows instead of rows; with by, one answer per group, each carrying its key and its row count.
-
-Totals, counts, rankings and the largest or smallest over many rows are computed, never added up or compared by you: aggregate with the where and by that give the answer directly (aggregate again, narrower, when its groups still need adding), or run_js over the rows you read.
 
 A root's page answers rows, next (the cursor for after, null on the last page) and total (how many rows the read matches in all, beyond this page).
 
@@ -1638,11 +1687,7 @@ export const catalogue = Effect.fn('AgentTool.catalogue')(function* (x: ToolCont
 		acts = callablesFor(e.manifest, a, x.inApp && !x.child && e.identity !== undefined),
 		paths = readPaths(e.manifest, a),
 		agent = x.mode === 'agent',
-		enabledPacks = x.packs ?? new Set<string>(),
-		availablePacks = [
-			...new Set(x.hostTools.flatMap((t) => (t.pack === undefined ? [] : [t.pack])))
-		].sort(),
-		hosted = x.hostTools.filter((t) => t.pack === undefined || enabledPacks.has(t.pack));
+		hosted = x.hostTools;
 	const entries: (AgentTool & {
 		readonly tool: AnyTool;
 		readonly handlers: Context.Context<Handlers>;
@@ -1663,7 +1708,7 @@ export const catalogue = Effect.fn('AgentTool.catalogue')(function* (x: ToolCont
 		);
 	const describeTool = Tool.make('describe_workspace', {
 		description:
-			"A map of the workspace as you may use it: apps, models, automations and system configuration. Call once before finding your way. focus (with name) answers an item in full. An administrator's named model focus includes field kinds and permitted write columns/required fields, including native system models; it does not read stored records. focus system lists the exact capability-to-native-UI mappings for navigate.configure, declared secret names and MCP names; no secret values.",
+			"A map of the workspace as you may use it: apps, models, automations and system configuration. focus (with name) answers an item in full. An administrator's named model focus includes field kinds and permitted write columns/required fields, including native system models; it does not read stored records. focus system lists the exact capability-to-native-UI mappings for navigate.configure, declared secret names and MCP names; no secret values.",
 		parameters: Schema.Struct({
 			focus: Schema.optionalKey(Schema.Literals(['app', 'model', 'automation', 'system'])),
 			name: Schema.optionalKey(
@@ -1711,7 +1756,7 @@ export const catalogue = Effect.fn('AgentTool.catalogue')(function* (x: ToolCont
 	if (agent && x.inApp && !x.child && a.actor.kind === 'member' && !a.actor.external) {
 		const navigate = Tool.make('navigate', {
 			description:
-				'Request navigation in the person’s active Norbital workspace client. Choose an exact authorized page path. Administrators may add configure { capability, record? } from describe_workspace focus system to open that native form, pairing card or detail sheet. It never submits, enters a secret or returns an issued key. Do not claim the page opened or the setup completed from this request alone. No other workspace or website.',
+				'Request navigation in the person’s active Norbital workspace client. Choose an exact authorized page path. Administrators may add configure { capability, record? } from describe_workspace focus system to open that native form, pairing card or detail sheet. It never submits, enters a secret or returns an issued key. Its answer confirms the request, not that the page opened or a setup completed. No other workspace or website.',
 			parameters: Schema.Struct({
 				path: Schema.Literals(navigationPaths(nav(e.manifest, a), a.admin)),
 				configure: Schema.optionalKey(SystemUiRequest)
@@ -1746,7 +1791,7 @@ export const catalogue = Effect.fn('AgentTool.catalogue')(function* (x: ToolCont
 		);
 		const pageAct = Tool.make('page_act', {
 			description:
-				"Move the person’s active workspace tab: click a link, card or button by its visible text (click), scroll by CSS pixels (scroll), go back/forward (go), or fill a visible text field (type { label, text, submit? }). It never reads or scripts the page; a button, an external link or a field fill waits for the person’s in-app confirmation and only a same-origin workspace link navigates. It never fills a password or file field, and it never presses an approval decision (approve, reject or request changes): the person decides those. The answer is a request, not proof: do not claim the action happened.",
+				'Move the person’s active workspace tab: click a link, card or button by its visible text (click), scroll by CSS pixels (scroll), go back/forward (go), or fill a visible text field (type { label, text, submit? }). It never reads or scripts the page; a button, an external link or a field fill waits for the person’s in-app confirmation and only a same-origin workspace link navigates. It never fills a password or file field, and it never presses an approval decision (approve, reject or request changes): the person decides those. The answer is a request, not proof that it happened.',
 			parameters: Schema.Struct({
 				click: Schema.optionalKey(Schema.NonEmptyString),
 				scroll: Schema.optionalKey(Schema.Finite),
@@ -1765,10 +1810,7 @@ export const catalogue = Effect.fn('AgentTool.catalogue')(function* (x: ToolCont
 			pageAct,
 			Toolkit.make(pageAct).toHandlers({
 				page_act: ({ click, scroll, go, type }) =>
-					click === undefined &&
-					scroll === undefined &&
-					go === undefined &&
-					type === undefined
+					click === undefined && scroll === undefined && go === undefined && type === undefined
 						? Effect.succeed(ok({ error: 'give click, scroll, go or type' }))
 						: Effect.succeed(
 								ok({
@@ -1859,7 +1901,7 @@ Related rows go inside their root row in the same call, never in a separate writ
 					? `${acts.get('sys_invitation.create')?.description} `
 					: '') +
 				(automations.length > 0
-					? `Automations start as automation.<name> with their declared input: ${automations.map(signature).join('; ')}. A start (a sync's too) is a job: act answers at once with { job, run }, and when the run ends a [job … done] or [job … failed] message with its outcome arrives at your next step, or wakes this conversation after your reply; carry on or end your reply meanwhile. `
+					? `Automations start as automation.<name> with their declared input: ${automations.map(signature).join('; ')}. A start (a sync's too) is a job: act answers at once with { job, run }, and when the run ends a [job … done] or [job … failed] message with its outcome arrives at your next step, or wakes this conversation after your reply. `
 					: '') +
 				(syncs.length > 0
 					? `A remote sync reads its source now as <model>.sync.<sync> with {}: ${syncs.join(', ')}. `
@@ -1873,8 +1915,8 @@ Related rows go inside their root row in the same call, never in a separate writ
 				(acts.has(APPROVE)
 					? `${APPROVE} decides a pending approval request you are an approver of. `
 					: '') +
-				'Your policies decide these callables and check each batch when it commits: a denial names its reason (do not retry it); a write routed to approval waits for its approvers (say so, not that it is done). ' +
-				'A committed write answers the stored rows, and as `runs` any automation runs it started (they run in the background; wait on a run id only when its result is needed now).',
+				'Your policies decide these callables and check each batch when it commits: a denial names its reason; a write routed to approval waits for its approvers and is not done yet. ' +
+				'A committed write answers the stored rows, and as `runs` any automation runs it started (they run in the background).',
 			parameters: WriteInput,
 			success: ToolAnswer
 		});
@@ -1891,6 +1933,8 @@ Related rows go inside their root row in the same call, never in a separate writ
 							}
 							if (!acts.has(i.callable) && !mayStart(i.callable))
 								return err(`You may not run '${i.callable}'.`);
+							if (Array.isArray(i.input) && i.input.length === 0)
+								return err(`'${i.callable}' was given no rows: there is nothing to write.`);
 							if (
 								x.inApp &&
 								(acts.get(i.callable)?.confirm === true ||
@@ -2010,7 +2054,7 @@ Related rows go inside their root row in the same call, never in a separate writ
 	if (agent) {
 		const compactTool = Tool.make('compact', {
 			description:
-				'Checkpoint the conversation before your next step: a summary replaces the history (at most 3 per turn). Use it when the context is long and the work goes on.',
+				'Checkpoint the conversation before your next step: a summary replaces the history (at most 3 per turn).',
 			parameters: Schema.Struct({
 				reason: Schema.String.annotate({ description: 'why now' })
 			}),
@@ -2077,7 +2121,10 @@ Related rows go inside their root row in the same call, never in a separate writ
 											.join(', ')}`
 									);
 								const bytes = yield* t.read(i.file);
-								return ok({ file: i.file, text: bound(new TextDecoder().decode(bytes)) });
+								return documentAnswer(
+									{ file: i.file, text: new TextDecoder().decode(bytes) },
+									'text'
+								);
 							}
 							// its own files, never the packages it vendors
 							const own = t.files.filter(
@@ -2099,22 +2146,23 @@ Related rows go inside their root row in the same call, never in a separate writ
 									.slice(shown)
 									.map((p) => /^##\s+(.+)$/m.exec(p)?.[1]?.trim())
 									.filter((name): name is string => name !== undefined);
-								return ok({
-									description: s.description,
-									sections: s.sections,
-									body: shown === 1 && parts.length === 1 ? bound(body) : body,
-									...files,
-									...(rest.length === 0
-										? {}
-										: { more: `read each with section: ${rest.join(', ')}` })
-								});
+								return documentAnswer(
+									{
+										description: s.description,
+										sections: s.sections,
+										body,
+										...files,
+										...(rest.length === 0
+											? {}
+											: { more: `read each with section: ${rest.join(', ')}` })
+									},
+									'body'
+								);
 							}
-							return ok(
-								section(s.body, i.section) ?? {
-									error: `No section '${i.section}'.`,
-									sections: s.sections
-								}
-							);
+							const part = section(s.body, i.section);
+							return part === undefined
+								? ok({ error: `No section '${i.section}'.`, sections: s.sections })
+								: textAnswer(part);
 						})
 					)
 			})
@@ -2499,7 +2547,7 @@ Related rows go inside their root row in the same call, never in a separate writ
 		const readFileTool = Tool.make('read_file', {
 			description:
 				"Read a stored file or an ingest. { id }: a record's file field, any of this conversation's inputs (every [file: … id:…] line, filtered messages' files included) or outputs, or a message attachment: an image is shown to you from your next step until this turn ends, text answers directly; any other file (PDF, office, audio, …) is read through ingest first. " +
-				"{ output } (or the ingested file's id): its sanitised HTML lines, numbered, from to to (default from line 1, about 64 KB; a table or section is never cut), with the images those lines reference shown to you (at most 8); { output, text } the lines holding a text; { output, image: n } its n-th image. Add crop: { left, top, right, bottom } to focus that image: coordinates run from 0 to 1 in the oriented image; the lossless crop does not change its source. Use this for small printed fields and handwriting, never guess from a whole-page thumbnail. Each answer ends with where to read on. A data ingest (a spreadsheet, CSV, JSON) has no lines: { output } answers its sheets, columns, row counts and first rows; compute over its data.json with run_js.",
+				"{ output } (or the ingested file's id): its sanitised HTML lines, numbered, from to to (default from line 1, about 64 KB; a table or section is never cut), with the images those lines reference shown to you (at most 8); { output, text } the lines holding a text; { output, image: n } its n-th image. Add crop: { left, top, right, bottom } to focus that image: coordinates run from 0 to 1 in the oriented image; the lossless crop does not change its source. Each answer ends with where to read on. A data ingest (a spreadsheet, CSV, JSON) has no lines: { output } answers its sheets, columns, row counts and first rows; its rows are its data.json.",
 			parameters: Schema.Struct({
 				id: Schema.optionalKey(Schema.String.annotate({ description: 'the file id' })),
 				output: Schema.optionalKey(
@@ -2576,7 +2624,7 @@ Related rows go inside their root row in the same call, never in a separate writ
 		const ingestTool = Tool.make('ingest', {
 			description:
 				"Ingest a stored file ({ id }: any file read_file takes) into sanitised HTML lines and its images, filed in this conversation's outputs: a PDF, image, html, txt, doc, docx, ppt, pptx, odt, odp, rtf, or audio/video (mp3, m4a, wav, ogg, mp4, webm; a video is heard from its audio track) as a transcript with speakers and times; a spreadsheet or data file (csv, json, xls, xlsx, ods) as typed data (data.json, for run_js). " +
-				'It answers at once with { job, output } and works in the background: when it finishes, a [job … done] message with the outline and its line ranges arrives at your next step (or wakes this conversation); carry on or end your reply meanwhile. Then read it with read_file { output, from }. A file ingested before answers at once. A type with no parser (CAD, an unknown container) is an immediate error: build a tool for it.',
+				'It answers at once with { job, output } and works in the background: when it finishes, a [job … done] message with the outline and its line ranges arrives at your next step (or wakes this conversation); read_file { output, from } reads it. A file ingested before answers at once. A type with no parser (CAD, an unknown container) is an immediate error.',
 			parameters: Schema.Struct({ id: Schema.String.annotate({ description: 'the file id' }) }),
 			success: ToolAnswer
 		});
@@ -2832,7 +2880,7 @@ Related rows go inside their root row in the same call, never in a separate writ
 	if (source !== undefined && !(a.actor.kind === 'member' && a.actor.external)) {
 		const readSource = Tool.make('workspace_read', {
 			description:
-				'Read a file in your current working source as numbered lines. path is required; from/to page large files. workspace_list discovers paths; workspace_search finds content. No draft flag is needed.',
+				'Read a file in your current working source as numbered lines. path is required; from/to page large files. No draft flag is needed.',
 			parameters: Schema.Struct({
 				path: Schema.NonEmptyString.annotate({ description: 'workspace-relative file path' }),
 				from: Schema.optionalKey(Schema.Int.annotate({ description: 'first line, default 1' })),
@@ -2846,7 +2894,7 @@ Related rows go inside their root row in the same call, never in a separate writ
 				workspace_read: (i) =>
 					guard(
 						Effect.gen(function* () {
-							// the same normalisation workspace_list and workspace_search use: `./src/a.ts` is `src/a.ts`
+							// the same normalisation workspace_search uses: `./src/a.ts` is `src/a.ts`
 							const path = i.path.replace(/^(?:\.\/|\/)+/, '').replace(/^\.$/, ''),
 								files = yield* Port.attempt('workspace.files', () => source.files()),
 								missing = () =>
@@ -2867,7 +2915,7 @@ Related rows go inside their root row in the same call, never in a separate writ
 		);
 		const searchSource = Tool.make('workspace_search', {
 			description:
-				'Grep your current working source. pattern is required: a regular expression, or exact text with literal:true. path optionally narrows to a file or folder. Returns matching paths, line numbers and previews, capped by limit (default/max 100). Case-sensitive by default. Use workspace_read to read a result. No draft flag is needed.',
+				'Grep your current working source. pattern is required: a regular expression, or exact text with literal:true. path optionally narrows to a file or folder. Returns matching paths, line numbers and previews, capped by limit (default/max 100). Case-sensitive by default. No draft flag is needed.',
 			parameters: Schema.Struct({
 				pattern: Schema.NonEmptyString.annotate({
 					description: 'regular expression, or literal text when literal:true'
@@ -2932,27 +2980,17 @@ Related rows go inside their root row in the same call, never in a separate writ
 		);
 		const listSource = Tool.make('workspace_list', {
 			description:
-				'List files and immediate subfolders of your current working source. path is a workspace-relative directory, default the root. Read files with workspace_read; grep contents with workspace_search.',
-			parameters: Schema.Struct({ path: Schema.optionalKey(Schema.String) }),
+				'The whole folder structure of your current working source, every folder and file, as an ASCII tree from the workspace root, with short notes.',
 			success: ToolAnswer
 		});
 		yield* add(
 			listSource,
 			Toolkit.make(listSource).toHandlers({
-				workspace_list: (i) =>
+				workspace_list: () =>
 					guard(
-						Effect.gen(function* () {
-							const at = (i.path ?? '').replace(/^(?:\.\/|\/)+/, '').replace(/^\.$/, '');
-							const dir = at === '' ? '' : at.replace(/\/?$/, '/');
-							const entries = new Set<string>();
-							for (const file of yield* Port.attempt('workspace.files', () => source.files())) {
-								if (!file.startsWith(dir)) continue;
-								const rest = file.slice(dir.length),
-									slash = rest.indexOf('/');
-								entries.add(slash < 0 ? rest : rest.slice(0, slash + 1));
-							}
-							return ok({ path: dir, entries: [...entries].sort() });
-						})
+						Port.attempt('workspace.files', () => source.files()).pipe(
+							Effect.map((files) => textAnswer(sourceTree(files)))
+						)
 					)
 			}),
 			{ pure: true }
@@ -2963,9 +3001,9 @@ Related rows go inside their root row in the same call, never in a separate writ
 			const subagentTool = Tool.make('subagent', {
 				description:
 					`Delegate to sub-agents working with your authority, in the background: spawn { task, done?, format?, agent? } (agents: ${x.agents.join(', ')}) answers its conversation at once and it works on its own, at most 4 at once. done is what must be true; format is what it must return. ` +
-					'Its report (its answer, a question for you, a failure) arrives as a message in this conversation: carry on with other work or end your reply, and you are prompted again when it arrives; wait pauses this turn for one instead. ' +
+					'Its report (its answer, a question for you, a failure) arrives as a message in this conversation, and you are prompted again when it arrives; wait pauses this turn for one. ' +
 					'list shows your sub-agents and their status; read { conversation } shows one in detail: its checklist, last messages, the tool calls it made and what it changed or produced. ' +
-					'message { conversation, text } answers or steers it (it carries on), stop { conversation } ends it. When it asks you something, answer with message, or ask the person if only they know.',
+					'message { conversation, text } answers or steers it (it carries on), stop { conversation } ends it.',
 				parameters: Schema.Struct({
 					action: Schema.Literals(['spawn', 'list', 'read', 'message', 'stop']),
 					task: Schema.optionalKey(
@@ -3103,9 +3141,10 @@ Related rows go inside their root row in the same call, never in a separate writ
 	if (agent && guest !== undefined) {
 		const runJsTool = Tool.make('run_js', {
 			description:
-				'Run JavaScript in a fresh isolate to parse, transform, aggregate or compute. code is the body of an async function of input (return the answer; await works): ' +
+				'Runs JavaScript in a guest isolate of its own per call, metered and billed to the workspace: inline code, or a script file. A run lasts until it answers or reaches its walls (below); nothing keeps running after it. ' +
+				'code is the body of an async function of input (return the answer; await works): ' +
 				'plain JavaScript, no require, process, fetch or timers; console lines come back with the answer. ' +
-				'The conversation files you name in files arrive as input.files, each name → its content (text as text, other bytes as base64): compute from them, never retype their values. ' +
+				'The conversation files you name in files arrive as input.files, each name → its content (text as text, other bytes as base64). ' +
 				'With http: true (when your policies grant it), await http({ method?, url, headers?, body? }) answers { status, headers, text }: public https only, no redirects, at most 4 MiB. ' +
 				'Return { files: [{ name, text } | { name, base64 }] } to give the person files (text, CSV, JSON, Markdown, media, PDF, office documents, archives; never programs): each is kept as their file and its reference replaces it. ' +
 				(bundler === undefined
@@ -3238,7 +3277,7 @@ Related rows go inside their root row in the same call, never in a separate writ
 	if (x.child) {
 		const askParentTool = Tool.make('ask_parent', {
 			description:
-				'Ask the agent that delegated this task a question you cannot answer yourself (a choice, a missing fact, a confirmation). Your turn ends on it; its answer arrives as your next message and you carry on from there. Finish what you can first.',
+				'Ask the agent that delegated this task a question. Your turn ends on it; its answer arrives as your next message.',
 			parameters: Schema.Struct({
 				question: Schema.String.annotate({
 					description: 'one clear question, with what you need to know'
@@ -3266,7 +3305,7 @@ Related rows go inside their root row in the same call, never in a separate writ
 	{
 		const waitTool = Tool.make('wait', {
 			description:
-				"Wait for background work to finish now: a sub-agent's report, jobs (ingests, long host calls, automation runs you started: the job or run id act answered) or other automation runs by id: the first of the given ones (every job when none) to settle, or nothing at the bound (at most 120 s). Optional: a finished job announces itself at your next step; a job collected here is not announced again. A settled run's file (an export, a template) is offered to the person under your reply.",
+				"Wait for background work to finish now: a sub-agent's report, jobs (ingests, long host calls, automation runs you started: the job or run id act answered) or other automation runs by id: the first of the given ones (every job when none) to settle, or nothing at the bound (at most 120 s). A finished job also announces itself at your next step; a job collected here is not announced again. A settled run's file (an export, a template) is offered to the person under your reply.",
 			parameters: Schema.Struct({
 				jobs: Schema.optionalKey(Schema.Array(Schema.String)),
 				seconds: Schema.optionalKey(
@@ -3300,13 +3339,26 @@ Related rows go inside their root row in the same call, never in a separate writ
 									);
 									return ended === undefined ? null : ok({ settled: encodeWire(ended) });
 								});
-								const result = yield* poll.pipe(
-									Effect.repeat({
-										schedule: Schedule.spaced('3 seconds'),
-										until: (result) => result !== null
-									}),
-									Effect.timeoutOption(ms)
-								);
+								// a run's end arrives as an event, so waiting makes no trips to the database; the slower check
+								// covers a run that ended in another generation
+								const { runEnds } = x.engine;
+								const result = yield* Effect.scoped(
+									Effect.gen(function* () {
+										const heard = runEnds === undefined ? null : yield* PubSub.subscribe(runEnds);
+										for (;;) {
+											const answer = yield* poll;
+											if (answer !== null) return answer;
+											yield* heard === null
+												? Effect.sleep('3 seconds')
+												: PubSub.take(heard).pipe(
+														Effect.repeat({
+															until: (ended) => ended.some((id) => ids.includes(id))
+														}),
+														Effect.timeoutOption('30 seconds')
+													);
+										}
+									})
+								).pipe(Effect.timeoutOption(ms));
 								return Option.isSome(result) && result.value !== null
 									? result.value
 									: ok({ settled: null, running });
@@ -3439,19 +3491,18 @@ Related rows go inside their root row in the same call, never in a separate writ
 									const lines =
 										view.input === undefined
 											? []
-											: yield* readLog(x.logs, { run: view.id, limit: RUN_LOG_LINES }).pipe(
+											: yield* runLog(x.logs, view.id).pipe(
 													Effect.map((lines) =>
-														lines
-															.toReversed()
-															.map(({ id, at, severity, event, attributes }): Json => ({
-																id,
-																at,
-																severity,
-																event,
-																attributes
-															}))
-													),
-													Effect.catch((error) => Effect.succeed(error.message))
+														typeof lines === 'string'
+															? lines
+															: lines.map(({ id, at, severity, event, attributes }): Json => ({
+																	id,
+																	at,
+																	severity,
+																	event,
+																	attributes
+																}))
+													)
 												);
 									return clippedView((clip) => {
 										const logs =
@@ -3601,67 +3652,6 @@ Related rows go inside their root row in the same call, never in a separate writ
 				meta
 			);
 		});
-	// optional host-tool packs are not in the empty turn: one small catalog tool loads the one a task needs
-	if (agent && x.inApp && staff && availablePacks.length > 0) {
-		const packsTool = Tool.make('tools', {
-			description:
-				"Optional tool packs are not loaded by default. list (or query) shows each pack and its tools; enable adds a pack to your next step; disable removes it. Base tools are always present. MCP tools are not packs: a declared server's tools are direct tools named mcp__<server>__<tool>. Load only the pack the task needs.",
-			parameters: Schema.Struct({
-				query: Schema.optionalKey(
-					Schema.String.annotate({ description: 'match a pack or tool name' })
-				),
-				enable: Schema.optionalKey(
-					Schema.Array(Schema.String)
-						.check(Schema.isMaxLength(8))
-						.annotate({ description: 'pack names to load' })
-				),
-				disable: Schema.optionalKey(
-					Schema.Array(Schema.String)
-						.check(Schema.isMaxLength(8))
-						.annotate({ description: 'pack names to unload' })
-				)
-			}),
-			success: ToolAnswer
-		});
-		yield* add(
-			packsTool,
-			Toolkit.make(packsTool).toHandlers({
-				tools: (i) =>
-					guard(
-						Effect.gen(function* () {
-							for (const name of i.enable ?? [])
-								if (!availablePacks.includes(name))
-									return err(`No tool pack '${name}'. Packs: ${availablePacks.join(', ')}.`);
-							for (const name of i.enable ?? []) enabledPacks.add(name);
-							for (const name of i.disable ?? []) enabledPacks.delete(name);
-							const needle = i.query?.toLowerCase(),
-								shown = availablePacks.filter(
-									(pack) =>
-										needle === undefined ||
-										pack.includes(needle) ||
-										x.hostTools.some(
-											(t) =>
-												t.pack === pack &&
-												(t.name.includes(needle) || t.description.toLowerCase().includes(needle))
-										)
-								);
-							return ok({
-								packs: shown.map((pack) => ({
-									name: pack,
-									enabled: enabledPacks.has(pack),
-									tools: x.hostTools.filter((t) => t.pack === pack).map((t) => t.name)
-								})),
-								...(shown.length === 0 && i.query !== undefined
-									? {
-											note: `No optional pack or tool matches '${i.query}'. MCP tools are direct tools named mcp__<server>__<tool>; check describe_workspace or the current tool list.`
-										}
-									: {})
-							});
-						})
-					)
-			})
-		);
-	}
 	if (agent)
 		for (const t of x.mcpTools)
 			yield* dynamic(

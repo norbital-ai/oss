@@ -314,6 +314,7 @@ const studio = {
 			branch: 'change/ch1',
 			base: 'c0',
 			head: 'c1',
+			commits: [],
 			behind: 0,
 			preview,
 			merge: {

@@ -71,10 +71,16 @@ export function syncOutboxPiece(
 			when: `EXISTS (SELECT 1 FROM ${inserted})`
 		});
 	}
-	if (written.has('sys_integration'))
+	if (written.has('sys_integration')) {
 		enqueue(c, [{ automation: SYNC_DELIVER, input: {}, dueAt: now, cause: 'schedule', depth: 0 }], {
 			when: `EXISTS (SELECT 1 FROM ${source} x WHERE x.c = 'sys_integration' AND x.n ->> 'active' = 'true' AND x.o ->> 'active' IS DISTINCT FROM 'true')`
 		});
+		// a connection changed by hand is worth reading now: its syncs' rest ends
+		c.cte(
+			`rested_${index}`,
+			`UPDATE sys_sync SET health = health - 'failures' - 'retryAt' WHERE instance IN (SELECT x.id::text FROM ${source} x WHERE x.c = 'sys_integration' AND (x.n -> 'configuration' IS DISTINCT FROM x.o -> 'configuration' OR x.n -> 'active' IS DISTINCT FROM x.o -> 'active'))`
+		);
+	}
 }
 
 const Outbox = Schema.Struct({

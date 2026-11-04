@@ -5,12 +5,16 @@
 	import { watch } from 'runed';
 	import type { AgentConversation, AgentRow } from '../../protocol/schema.ts';
 	import type { ShellBolt } from '../runtime.ts';
-	import { runTransitions } from './chime.ts';
-	import { SOUNDS, type Sounds } from '../sounds.ts';
+	import { endingSound, settled } from './chime.ts';
+	import { SOUNDS, type SoundKind, type Sounds } from '../sounds.ts';
 
-	let { bolt, active }: { bolt: ShellBolt; active: string | null } = $props();
+	let {
+		bolt,
+		active,
+		onEnded
+	}: { bolt: ShellBolt; active: string | null; onEnded: (kind: SoundKind) => void } = $props();
 	const chime = getContext<Sounds>(SOUNDS);
-	const ended = runTransitions();
+	const ended = settled();
 	const conversations = observe(() =>
 		bolt.observe<{ rows: AgentConversation[] }>({ read: { m: 'conversations', a: [] } })
 	);
@@ -18,7 +22,7 @@
 		() => $conversations,
 		(answer) => {
 			if (answer === undefined) return;
-			for (const id of ended(answer.rows)) {
+			for (const { id, since } of ended(answer.rows)) {
 				if (id === active) continue;
 				fork(
 					bolt
@@ -29,14 +33,10 @@
 							Effect.tap((answer) =>
 								Effect.sync(() => {
 									if (Option.isNone(answer)) return;
-									const rows = answer.value.rows;
-									const turn = rows.findLast((row) => row.turn !== undefined)?.turn;
-									const approval = rows.some(
-										(row) =>
-											row.turn === turn &&
-											(row.state === 'confirm' || row.tool?.approval !== undefined)
-									);
-									chime.play(approval ? 'approval' : 'complete');
+									const kind = endingSound(answer.value.rows, since);
+									if (kind === null) return;
+									chime.play(kind);
+									onEnded(kind);
 								})
 							),
 							Effect.asVoid

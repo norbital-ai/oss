@@ -359,6 +359,36 @@ layer(Layer.effect(Fixture, open(manifest, calDrivers)), LIVE)('integration link
 				)
 		);
 
+		it.effect("a new credential ends a resting sync's wait and keeps its health", () =>
+			Effect.scoped(
+				Effect.gen(function* () {
+					const { t, store } = yield* Fixture;
+					yield* t.db.write({
+						text: `INSERT INTO sys_sync (id, sync, instance, partition, health, digest, cycle, version)
+						VALUES (gen_random_uuid(), 'resting', 'a4', '', $1::jsonb, 'd', 0, 0)`,
+						params: [
+							JSON.stringify({
+								state: 'attention',
+								failures: 3,
+								retryAt: '2999-01-01T00:00:00.000Z'
+							})
+						]
+					});
+					const opened = yield* store.open('a4');
+					yield* store.write(
+						'a4',
+						opened.epoch,
+						new Map<string, Json>([['credential', { key: 'new' }]])
+					);
+					const [read] = yield* t.db.read([
+						{ text: `SELECT health FROM sys_sync WHERE sync = 'resting'`, params: [] }
+					]);
+					expect(read?.rows).toEqual([{ health: { state: 'attention' } }]);
+					yield* t.db.write({ text: `DELETE FROM sys_sync WHERE sync = 'resting'`, params: [] });
+				})
+			)
+		);
+
 		it.effect(
 			'resume opens only instances that store a registered provider; the webhook routes by instance and resolves after the engine committed',
 			() =>

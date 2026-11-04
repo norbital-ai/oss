@@ -17,6 +17,14 @@ export const readLog = (logs: LogsShape, query: LogQuery) =>
 				)
 			)
 		);
+/** How many of a run's latest lines its readers get. */
+const RUN_LOG_LINES = 100;
+/** A run's latest log lines, oldest first; a store that cannot answer says so in place of the lines, never as an empty log. */
+export const runLog = (logs: LogsShape, run: string) =>
+	readLog(logs, { run, limit: RUN_LOG_LINES }).pipe(
+		Effect.map((lines) => lines.toReversed()),
+		Effect.catch((error) => Effect.succeed(error.message))
+	);
 export const TelemetryLive = Layer.effect(
 	Telemetry,
 	Effect.gen(function* () {

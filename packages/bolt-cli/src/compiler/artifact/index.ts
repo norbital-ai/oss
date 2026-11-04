@@ -7,7 +7,7 @@
 import { Effect, FileSystem, Option, Path, Schema } from 'effect';
 import { TemplateManifest, SKILL_FILE, type EngineManifest, plan } from '@norbital-ai/bolt/engine';
 import { HOST_FILE, fingerprint, schemaSlice, storeSync } from '@norbital-ai/bolt/tooling';
-import { constants } from 'node:fs';
+import { constants, cpSync } from 'node:fs';
 import { cp } from 'node:fs/promises';
 import { dirname, join, relative, sep } from 'node:path';
 import type { GuestProgram } from '@norbital-ai/bolt/engine';
@@ -15,7 +15,7 @@ import { statements } from '@norbital-ai/store';
 import type { Discovered } from '../discover.ts';
 import { buildClient, BuildError, type Graphs } from './client.ts';
 import { buildServerPages } from './server.ts';
-import { PLATFORM } from './platform.ts';
+import { layerLines, PLATFORM, type PreparedLayer } from './platform.ts';
 import {
 	artifactHash,
 	ArtifactJsonSchema,
@@ -59,9 +59,13 @@ export const cloneTree = Effect.fn('bolt.cloneTree')(function* (
 // writes a file once); entries for deleted files stay until the process exits
 const digests = new Map<string, { size: bigint; mtime: number; hex: string }>();
 /** `treeHash` (the same `<path>\0<sha256>` lines, `*.map` left out) that reads only the files changed since this process hashed them. */
-export const memoTreeHash = Effect.fn('bolt.memoTreeHash')(function* (dir: string) {
+export const memoTreeHash = Effect.fn('bolt.memoTreeHash')(function* (
+	dir: string,
+	/** Lines of files the tree holds only once its host adds them. */
+	held: readonly string[] = []
+) {
 	const fs = yield* FileSystem.FileSystem;
-	const lines: string[] = [];
+	const lines = [...held];
 	for (const file of yield* tree(dir)) {
 		if (file.endsWith('.map')) continue;
 		const at = join(dir, file),
@@ -107,6 +111,40 @@ const Graph = Schema.Struct({
 	spa: Schema.Array(Schema.String),
 	pages: Schema.Array(Schema.String)
 });
+const PageEntry = Schema.Struct({
+	entry: Schema.String,
+	css: Schema.Array(Schema.String),
+	server: Schema.Struct({ file: Schema.String, sha256: Schema.String })
+});
+const HeldPages = Schema.fromJsonString(
+	Schema.Struct({
+		key: Schema.String,
+		sources: Schema.Array(Schema.String),
+		pages: Schema.Record(Schema.String, PageEntry),
+		/** Each route's stylesheet sources: the next build's first public pass starts from them. */
+		styles: Schema.Record(Schema.String, Schema.Array(Schema.String))
+	})
+);
+/** The public pages' browser and SSR builds are a function of the workspace files in their graphs and what `clientKey` covers. */
+export const pagesKey = Effect.fn('bolt.pagesKey')(function* (
+	root: string,
+	clientKey: string,
+	sources: readonly string[]
+) {
+	const fs = yield* FileSystem.FileSystem;
+	const lines = [clientKey];
+	for (const source of sources) {
+		const at = join(root, source);
+		lines.push(`${source}\0${(yield* fs.exists(at)) ? sha256Hex(yield* fs.readFile(at)) : ''}`);
+	}
+	return sha256Hex(lines.join('\n'));
+});
+/** The parts of a bundle the public pages' builds write, each with its name in the held copy. */
+const heldParts = (out: string) =>
+	[
+		[join(out, 'client', 'public'), 'public'],
+		[join(out, 'server'), 'server']
+	] as const;
 /** Writes the compiled bundle into `out`: empty for a full build, a clone of the last bundle for a watch's rebuild. */
 export const writeArtifact = Effect.fn('bolt.writeArtifact')(function* (
 	root: string,
@@ -118,6 +156,8 @@ export const writeArtifact = Effect.fn('bolt.writeArtifact')(function* (
 		readonly changed?: readonly string[];
 		/** A dev server serves the internal SPA from source: its graph never forces a rebuild. */
 		readonly spaServed?: boolean;
+		/** The layer its host prepared (`bolt build --platform`): its files are the host's to add to the bundle. */
+		readonly prepared?: PreparedLayer;
 	} = {}
 ) {
 	const fs = yield* FileSystem.FileSystem;
@@ -125,7 +165,8 @@ export const writeArtifact = Effect.fn('bolt.writeArtifact')(function* (
 	const cache = join(root, '.norbital', 'cache'),
 		keyFile = join(cache, 'client.key'),
 		graphFile = join(cache, 'client-graph.json'),
-		kept = join(cache, 'client-kept');
+		kept = join(cache, 'client-kept'),
+		heldDir = join(cache, 'pages');
 	// what the generated entries are made of: the manifest parts they read and every discovered file's path
 	const clientKey = sha256Hex(
 		JSON.stringify([
@@ -210,22 +251,58 @@ export const writeArtifact = Effect.fn('bolt.writeArtifact')(function* (
 		client = previous.client;
 	} else {
 		const sources: Graphs = { spa: new Set(), pages: new Set() };
+		// most edits reach no public page: the last build of these exact inputs is the build
+		const held = yield* fs.readFileString(join(heldDir, 'pages.json')).pipe(
+			Effect.flatMap(Schema.decodeUnknownEffect(HeldPages)),
+			Effect.option,
+			Effect.map(Option.getOrUndefined)
+		);
+		const kept =
+			held !== undefined && held.key === (yield* pagesKey(root, clientKey, held.sources))
+				? held
+				: undefined;
 		const builtClient = yield* buildClient(
 			root,
 			files,
 			c.manifest,
 			join(out, 'client'),
 			meta.name,
-			sources
+			sources,
+			options.prepared?.layer,
+			kept !== undefined,
+			held?.styles
 		);
-		const serverPages = yield* buildServerPages(root, files, c.manifest, out, sources.pages);
-		for (const [route, server] of Object.entries(serverPages)) {
-			const page = builtClient.pages[route];
-			if (page === undefined)
-				return yield* new BuildError({
-					cause: new Error(`Public page ${route} has no browser entry`)
-				});
-			pages[route] = { ...page, server };
+		if (kept === undefined) {
+			const serverPages = yield* buildServerPages(root, files, c.manifest, out, sources.pages);
+			for (const [route, server] of Object.entries(serverPages)) {
+				const page = builtClient.pages[route];
+				if (page === undefined)
+					return yield* new BuildError({
+						cause: new Error(`Public page ${route} has no browser entry`)
+					});
+				pages[route] = { ...page, server };
+			}
+			const graphed = [...sources.pages].sort();
+			yield* fs.remove(heldDir, { recursive: true, force: true });
+			yield* fs.makeDirectory(heldDir, { recursive: true });
+			for (const [from, to] of heldParts(out))
+				if (yield* fs.exists(from))
+					yield* Effect.sync(() => cpSync(from, join(heldDir, to), { recursive: true }));
+			yield* fs.writeFileString(
+				join(heldDir, 'pages.json'),
+				JSON.stringify({
+					key: yield* pagesKey(root, clientKey, graphed),
+					sources: graphed,
+					pages,
+					styles: builtClient.publicSources
+				})
+			);
+		} else {
+			Object.assign(pages, kept.pages);
+			for (const source of kept.sources) sources.pages.add(source);
+			for (const [to, from] of heldParts(out))
+				if (yield* fs.exists(join(heldDir, from)))
+					yield* Effect.sync(() => cpSync(join(heldDir, from), to, { recursive: true }));
 		}
 		client = { entry: builtClient.entry, css: builtClient.css };
 		yield* fs.makeDirectory(dirname(keyFile), { recursive: true });
@@ -256,7 +333,7 @@ export const writeArtifact = Effect.fn('bolt.writeArtifact')(function* (
 	const hashes = {
 		manifest: sha256Hex(manifestText),
 		guest: sha256Hex(c.guest.source),
-		client: yield* memoTreeHash(join(out, 'client')),
+		client: yield* memoTreeHash(join(out, 'client'), layerLines(options.prepared, '')),
 		server: yield* memoTreeHash(join(out, 'server'))
 	};
 	const body = {

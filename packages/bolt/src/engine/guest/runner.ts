@@ -96,6 +96,7 @@ const Facilities = [
 	'browser.snapshot',
 	'browser.act',
 	'browser.evaluate',
+	'browser.download',
 	'browser.close',
 	'files.meta',
 	'files.get',

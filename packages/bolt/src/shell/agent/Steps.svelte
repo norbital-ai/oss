@@ -45,19 +45,29 @@
 	};
 	/** A first-cut diff for an older step whose result predates the host's compact diff. */
 	const lineDiff = (before: string, after: string) =>
-		[...before.split('\n').map((line) => `-${line}`), ...after.split('\n').map((line) => `+${line}`)].join('\n');
+		[
+			...before.split('\n').map((line) => `-${line}`),
+			...after.split('\n').map((line) => `+${line}`)
+		].join('\n');
 	const object = (v: unknown): v is Readonly<Record<string, unknown>> =>
 		typeof v === 'object' && v !== null && !Array.isArray(v);
 	/** The source edit's diff, from the host result or, for an older step, its input. */
 	const diffsOf = (tool: AgentRow['tool']) => {
-		if (tool === undefined || (tool.name !== 'workspace_edit' && tool.name !== 'workspace_write')) return null;
+		if (tool === undefined || (tool.name !== 'workspace_edit' && tool.name !== 'workspace_write'))
+			return null;
 		// the row carries the compact diffs whole; its result may be clipped, and its args are only 600 characters
 		if (tool.changes !== undefined && tool.changes.length > 0) return tool.changes;
 		const result = json(tool.result);
 		if (object(result) && Array.isArray(result.changes)) {
 			const files = result.changes.flatMap((change) =>
 				object(change) && typeof change.path === 'string' && typeof change.diff === 'string'
-					? [{ path: change.path, ...(typeof change.change === 'string' ? { change: change.change } : {}), diff: change.diff }]
+					? [
+							{
+								path: change.path,
+								...(typeof change.change === 'string' ? { change: change.change } : {}),
+								diff: change.diff
+							}
+						]
 					: []
 			);
 			if (files.length > 0) return files;
@@ -65,17 +75,30 @@
 		const args = json(tool.args);
 		if (!object(args)) return null;
 		if (tool.name === 'workspace_edit' && typeof args.path === 'string')
-			return [{
-				path: args.path,
-				diff: lineDiff(typeof args.oldString === 'string' ? args.oldString : '', typeof args.newString === 'string' ? args.newString : '')
-			}];
+			return [
+				{
+					path: args.path,
+					diff: lineDiff(
+						typeof args.oldString === 'string' ? args.oldString : '',
+						typeof args.newString === 'string' ? args.newString : ''
+					)
+				}
+			];
 		if (tool.name === 'workspace_write' && Array.isArray(args.changes)) {
 			const files = args.changes.flatMap((change) => {
 				if (!object(change) || typeof change.path !== 'string') return [];
 				if (typeof change.find === 'string' && typeof change.replace === 'string')
 					return [{ path: change.path, diff: lineDiff(change.find, change.replace) }];
 				if (typeof change.text === 'string')
-					return [{ path: change.path, diff: change.text.split('\n').map((line) => `+${line}`).join('\n') }];
+					return [
+						{
+							path: change.path,
+							diff: change.text
+								.split('\n')
+								.map((line) => `+${line}`)
+								.join('\n')
+						}
+					];
 				return [];
 			});
 			if (files.length > 0) return files;
@@ -128,7 +151,8 @@
 					{#if failed}
 						<span class="min-w-0 truncate font-medium" title={reason}>{reason}</span>
 					{:else}
-						<span class="shrink-0 {activity ? '' : 'font-medium'} {active(s) ? 'agent-shimmer' : ''}"
+						<span
+							class="shrink-0 {activity ? '' : 'font-medium'} {active(s) ? 'agent-shimmer' : ''}"
 							>{t(v.verb)}</span
 						>
 						{#if v.target !== ''}<span class="min-w-0 truncate opacity-80" title={v.target}
@@ -182,6 +206,10 @@
 								<div class="max-h-56 overflow-auto rounded-md" data-step-pane="output">
 									<ReadTable value={read} {t} />
 								</div>
+							{:else if tool.name === 'workspace_list' && !failed && tool.result !== undefined}
+								<pre
+									class="max-h-96 overflow-auto font-mono text-micro"
+									data-step-pane="tree">{tool.result}</pre>
 							{:else if dynamic}
 								<div class="max-h-56 overflow-auto rounded-md" data-step-pane="output">
 									<StructuredData value={data} name={t('Output')} frame={false} />
@@ -249,7 +277,6 @@
 					</div>
 				{/if}
 			</details>
-
 		</li>
 	{/each}
 </ol>

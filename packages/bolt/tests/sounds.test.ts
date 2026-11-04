@@ -56,7 +56,7 @@ it('never creates audio when disabled, and never replays events dropped before u
 	sounds.play('notification');
 	expect(audio.createOscillator).toHaveBeenCalledTimes(2);
 	enabled = false;
-	sounds.play('approval');
+	sounds.play('input');
 	expect(audio.createOscillator).toHaveBeenCalledTimes(2);
 	sounds.close();
 	expect(audio.close).toHaveBeenCalledOnce();
@@ -112,8 +112,29 @@ it('coalesces repeated events without letting Norbius suppress notifications or 
 	expect(BrowserAudio.instances[0]!.createOscillator).toHaveBeenCalledTimes(8);
 	sounds.close();
 	await sounds.test();
-	sounds.play('approval');
+	sounds.play('input');
 	expect(BrowserAudio.instances[0]!.createOscillator).toHaveBeenCalledTimes(8);
+});
+
+it('plays a distinct quiet pair for each event: finished, needs input, error, notification', async () => {
+	vi.stubGlobal('AudioContext', BrowserAudio);
+	const sounds = createSounds(() => true, vi.fn());
+	const pairs: number[][] = [];
+	await sounds.unlock();
+	for (const kind of ['complete', 'input', 'error', 'notification'] as const) {
+		sounds.play(kind);
+		const audio = BrowserAudio.instances[0]!;
+		pairs.push(audio.createOscillator.mock.results.slice(-2).map((r) => r.value.frequency.value));
+	}
+	expect(new Set(pairs.map((pair) => pair.join())).size).toBe(4);
+	// the error falls; the others rise
+	expect(pairs[2]![0]!).toBeGreaterThan(pairs[2]![1]!);
+	for (const index of [0, 1, 3]) expect(pairs[index]![0]!).toBeLessThan(pairs[index]![1]!);
+	const peaks = BrowserAudio.instances[0]!.createGain.mock.results.map(
+		(r) => r.value.gain.linearRampToValueAtTime.mock.calls[0]![0]
+	);
+	expect(Math.max(...peaks)).toBeLessThanOrEqual(0.03);
+	sounds.close();
 });
 
 it('only chimes for newly arriving unread notices, never initial history or read-state changes', () => {

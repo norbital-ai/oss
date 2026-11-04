@@ -198,7 +198,6 @@ const ctx = (
 			logs: Context.get(native, Logs),
 			mcpTools: [],
 			hostTools: [],
-			packs: new Set<string>(),
 			receipts: [],
 			read: new Map(),
 			files: [],
@@ -773,6 +772,43 @@ describe('fewer calls for the common paths', () => {
 			});
 		})
 	);
+	it.effect(
+		'describe names the policies whose check judges a write, never with an allowing arm held',
+		() =>
+			Effect.gen(function* () {
+				const checked: EngineManifest = {
+					...manifest,
+					policies: {
+						clerk: {
+							description: '',
+							grants: {
+								tasks: { read: true, create: { columns: { tasks: ['title'] }, check: true } }
+							}
+						}
+					}
+				};
+				const clerk = compileAuthority(
+					checked,
+					{ actor: member().actor, admin: false, policies: ['clerk'] },
+					'k'
+				);
+				const x = yield* ctx({ authority: clerk }, { manifest: checked });
+				expect(yield* result(x, 'read', { tasks: { describe: true } })).toMatchObject({
+					result: { tasks: { writes: { 'tasks.create': { checks: ['clerk'] } } } }
+				});
+				const admin = compileAuthority(
+					checked,
+					{ actor: member().actor, admin: true, policies: ['clerk'] },
+					'k'
+				);
+				const y = yield* ctx({ authority: admin }, { manifest: checked });
+				expect(
+					yield* result(y, 'read', { tasks: { describe: true } }).pipe(
+						Effect.map((answer) => JSON.stringify(answer))
+					)
+				).not.toContain('"checks"');
+			})
+	);
 	it.effect("describe names the columns each write takes and a create's required ones", () =>
 		Effect.gen(function* () {
 			const x = yield* ctx({});
@@ -998,6 +1034,8 @@ describe('skill', () => {
 				expect(r.body.startsWith('## Part 1')).toBe(true);
 				expect(r.body).not.toContain('## Part 5');
 				expect(r.more).toMatch(/^read each with section: .*Part 5$/);
+				// the loop clips an answer the tool has not bounded itself
+				expect(answer).toMatchObject({ bounded: true });
 			})
 	);
 	it.effect('a reference stays readable by its path in the skill file list', () =>
@@ -1016,7 +1054,8 @@ describe('skill', () => {
 				result: {
 					file: 'references/repository-rebuild.md',
 					text: '# Rebuild\nTrack every requirement.\n'
-				}
+				},
+				bounded: true
 			});
 			expect(yield* result(x, 'skill', { name: 'authoring', file: 'missing.md' })).toMatchObject({
 				result: { error: expect.stringContaining('No file') }
@@ -1074,6 +1113,46 @@ describe('working-source tools', () => {
 				});
 			})
 	);
+	it.effect('list is one string: the whole ASCII tree, noting each kind of file once', () =>
+		Effect.gen(function* () {
+			const files = [
+				'README.md',
+				'migrations/0001_initial.sql',
+				'src/+workspace.ts',
+				'src/automation/+a.automation.ts',
+				'src/automation/+b.automation.ts',
+				'src/data/model/orders/+model.ts',
+				'src/data/model/orders/helpers.ts',
+				'src/data/model/orders/lines/+model.ts',
+				'src/lib/dates.ts'
+			];
+			const draft: WorkspacePort = { files: async () => files, read: async () => null };
+			const x = yield* ctx({ workspace, draft, authority: member({ admin: true }) });
+			expect(yield* result(x, 'workspace_list', {})).toMatchObject({
+				result: [
+					'/  <- cwd',
+					'├── README.md',
+					'├── migrations/  generated SQL history',
+					'│   └── 0001_initial.sql',
+					'└── src/  compiled source: + files are compiler roles, the rest ordinary modules',
+					'    ├── +workspace.ts  zone, locale, connections',
+					'    ├── automation/',
+					'    │   ├── +a.automation.ts  job run with its own policies',
+					'    │   └── +b.automation.ts',
+					'    ├── data/',
+					'    │   └── model/  one folder per model; a child model is a folder inside its owner',
+					'    │       └── orders/',
+					'    │           ├── +model.ts  fields, state, reads, writes',
+					'    │           ├── helpers.ts',
+					'    │           └── lines/',
+					'    │               └── +model.ts',
+					'    └── lib/',
+					'        └── dates.ts'
+				].join('\n'),
+				bounded: true
+			});
+		})
+	);
 	it.effect(
 		'read and list default to the current author tree without a draft flag; other staff read published source',
 		() =>
@@ -1084,16 +1163,13 @@ describe('working-source tools', () => {
 					read: async (path) => (path === 'src/current.ts' ? revision : null)
 				};
 				const x = yield* ctx({ workspace, draft, authority: member() });
-				expect(yield* result(x, 'workspace_list', {})).toEqual({
-					result: { path: '', entries: ['src/'] }
-				});
-				expect(yield* result(x, 'workspace_list', { path: 'src' })).toEqual({
-					result: { path: 'src/', entries: ['current.ts'] }
+				expect(yield* result(x, 'workspace_list', {})).toMatchObject({
+					result: expect.stringContaining('current.ts')
 				});
 				expect(yield* result(x, 'workspace_read', { path: 'src/current.ts' })).toMatchObject({
 					result: { lines: ['1: first'] }
 				});
-				// the same path spelling workspace_list and workspace_search accept
+				// the same path spelling workspace_search accepts
 				expect(yield* result(x, 'workspace_read', { path: './src/current.ts' })).toMatchObject({
 					result: { path: 'src/current.ts', lines: ['1: first'] }
 				});
@@ -1156,6 +1232,25 @@ describe('reading the source is every staff member’s; changing it is an admini
 		host('workspace_build', { readOnly: true, studio: 'logs' }),
 		host('web_search', { readOnly: true })
 	];
+	it.effect(
+		'a tool that starts a sandbox job reaches an administrator or a policy naming it, never anyone else',
+		() =>
+			Effect.gen(function* () {
+				const offered = (authority: Authority) =>
+					ctx({ workspace, hostTools: [host('reference')], authority }).pipe(Effect.flatMap(names));
+				expect(yield* offered(member({ admin: true }))).toContain('reference');
+				expect(yield* offered(member({ tools: ['reference'] }))).toContain('reference');
+				expect(yield* offered(member())).not.toContain('reference');
+				expect(yield* offered(member({ external: true, tools: ['reference'] }))).not.toContain(
+					'reference'
+				);
+				const envoy: Authority = {
+					...member({ admin: true, tools: ['reference'] }),
+					actor: { kind: 'envoy', envoy: 'desk', instance: 'wa', sender: '+65', member: null }
+				};
+				expect(yield* offered(envoy)).not.toContain('reference');
+			})
+	);
 	// a member whose policy reads tasks and nothing else
 	const reader = compileAuthority(
 		{
@@ -1179,9 +1274,11 @@ describe('reading the source is every staff member’s; changing it is an admini
 				expect(yield* result(x, 'workspace_lang', {})).toMatchObject({
 					result: { ok: 'workspace_lang' }
 				});
-				expect(yield* result(x, 'workspace_list', { path: 'src/data/model/' })).toEqual({
-					result: { path: 'src/data/model/', entries: ['tasks/'] }
-				});
+				const listed = Schema.decodeUnknownSync(Schema.Struct({ result: Schema.String }))(
+					yield* result(x, 'workspace_list', {})
+				).result;
+				expect(listed).toContain('tasks/');
+				expect(listed).not.toContain('payroll/');
 				expect(
 					yield* result(x, 'workspace_read', { path: 'src/data/model/payroll/+model.ts' })
 				).toMatchObject({ result: { error: expect.stringContaining('No file') } });
@@ -2799,6 +2896,8 @@ describe('host web search', () => {
 		Effect.gen(function* () {
 			const plain = yield* names(yield* ctx({ hostTools }));
 			expect(plain).toEqual(expect.arrayContaining(['web_search', 'browser_navigate']));
+			// every tool is offered directly: there is no tool for discovering or loading tools
+			expect(plain).not.toContain('tools');
 			const own = yield* names(
 				yield* ctx({
 					hostTools,
@@ -2857,46 +2956,6 @@ describe('the checklist', () => {
 				{ id: 'build', text: 'Build the change', status: 'doing' },
 				{ id: 'read', text: 'Read the source', status: 'done' }
 			]);
-		})
-	);
-});
-
-describe('optional tool packs', () => {
-	const packed = (name: string, pack?: string): HostTool => ({
-		name,
-		description: name,
-		input: { type: 'object', properties: {} },
-		...(pack === undefined ? {} : { pack }),
-		readOnly: true,
-		call: async () => ({ ok: name })
-	});
-	const names = (x: ToolContext) =>
-		catalogue(x).pipe(Effect.map((c) => c.tools.map((tool) => tool.name)));
-	it.effect('hides packed host tools until tools enables the pack for the next step', () =>
-		Effect.gen(function* () {
-			const x = yield* ctx({
-				hostTools: [
-					packed('browser_navigate', 'browser'),
-					packed('workspace_merge', 'deploy'),
-					packed('workspace_write')
-				]
-			});
-			expect(yield* names(x)).toEqual(expect.arrayContaining(['tools', 'workspace_write']));
-			expect(yield* names(x)).not.toContain('browser_navigate');
-			expect(yield* result(x, 'tools', { enable: ['browser'] })).toMatchObject({
-				result: {
-					packs: expect.arrayContaining([
-						expect.objectContaining({ name: 'browser', enabled: true })
-					])
-				}
-			});
-			expect(yield* names(x)).toEqual(
-				expect.arrayContaining(['browser_navigate', 'workspace_write'])
-			);
-			expect(yield* names(x)).not.toContain('workspace_merge');
-			expect(yield* result(x, 'tools', { enable: ['nope'] })).toMatchObject({
-				result: { error: expect.stringContaining("No tool pack 'nope'") }
-			});
 		})
 	);
 });

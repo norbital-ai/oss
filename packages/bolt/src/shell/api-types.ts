@@ -69,7 +69,11 @@ export class ShellError extends Schema.TaggedError<ShellError>()('ShellError', {
 
 type Call<A> = Effect.Effect<A, ShellError>;
 /** Declared file outputs on a run whose result the caller may read in full. */
-export type RunDetail = RunView & { readonly files?: readonly FileRef[] };
+export type RunDetail = RunView & {
+	readonly files?: readonly FileRef[];
+	/** The run's latest log lines, oldest first, or why the store could not answer; only for a reader of its input. */
+	readonly logs?: string | readonly LogRow[];
+};
 /** One agent act: its outcome (a refusal included), or the route's refusal. */
 type AgentAct = Call<ActOutcome>;
 /** An invitation as its link shows it. */
@@ -219,6 +223,7 @@ export const ShellBootAnswer: Schema.Decoder<ShellBoot> = Schema.Struct({
 			Schema.Struct({ team: Schema.String, by: Schema.String })
 		])
 	),
+	client: Schema.optionalKey(Schema.String),
 	notice: Schema.optionalKey(
 		Schema.Struct({
 			text: Schema.String,
@@ -440,6 +445,7 @@ export const StudioViewAnswer: Schema.Decoder<StudioView> = Schema.Struct({
 				branch: Schema.String,
 				base: Schema.String,
 				head: Schema.String,
+				commits: Schema.Array(Schema.String),
 				behind: Schema.Number,
 				preview: Schema.NullOr(StudioPreviewAnswer),
 				merge: Schema.optionalKey(
@@ -560,19 +566,6 @@ const RunViewFields = {
 	attempts: Schema.optionalKey(Schema.Array(RunAttempt))
 };
 export const RunViewAnswer: Schema.Decoder<RunView> = Schema.Struct(RunViewFields);
-export const RunDetailAnswer: Schema.Decoder<RunDetail> = Schema.Struct({
-	...RunViewFields,
-	files: Schema.optionalKey(
-		Schema.Array(
-			Schema.Struct({
-				id: Schema.String,
-				name: Schema.String,
-				mime: Schema.String,
-				size: Schema.optionalKey(Schema.Number)
-			})
-		)
-	)
-});
 export const LogRowAnswer: Schema.Decoder<LogRow> = Schema.Struct({
 	id: Schema.String,
 	at: Schema.String,
@@ -583,6 +576,20 @@ export const LogRowAnswer: Schema.Decoder<LogRow> = Schema.Struct({
 	conversation: Schema.NullOr(Schema.String),
 	turn: Schema.NullOr(Schema.String),
 	attributes: Schema.Json
+});
+export const RunDetailAnswer: Schema.Decoder<RunDetail> = Schema.Struct({
+	...RunViewFields,
+	logs: Schema.optionalKey(Schema.Union([Schema.String, Schema.Array(LogRowAnswer)])),
+	files: Schema.optionalKey(
+		Schema.Array(
+			Schema.Struct({
+				id: Schema.String,
+				name: Schema.String,
+				mime: Schema.String,
+				size: Schema.optionalKey(Schema.Number)
+			})
+		)
+	)
 });
 export const StudioInspectionAnswer = StudioInspection;
 export const StudioUsageAnswer: Schema.Decoder<StudioUsage> = Schema.Struct({

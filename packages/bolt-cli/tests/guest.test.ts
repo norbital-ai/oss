@@ -1,6 +1,6 @@
 /// <reference types="node" />
 import { createHash } from 'node:crypto';
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import vm from 'node:vm';
@@ -1361,9 +1361,8 @@ function* sourceBody(input) {
 }
 export default automation('a', { description, on: { cron: '0 0 * * *' }, policies: ['runner'], run: sourceBody });`
 					);
-					// Exercise release compression explicitly; ordinary checks use the faster native minifier.
 					const compile = () =>
-						compilerCheck(root, { compress: true, timing: false }).pipe(
+						compilerCheck(root, { timing: false }).pipe(
 							Effect.provide(NodeServices.layer)
 						);
 					const built = yield* compile();
@@ -1398,7 +1397,6 @@ export default automation('a', { description, on: { cron: '0 0 * * *' }, policie
 					expect(ok(yield* runProgram(changed.guest, invocation({ value: 42 })))).toMatchObject({
 						value: 43
 					});
-					expect(readdirSync(join(root, '.norbital/cache/guest'))).toEqual(['latest.json']);
 					const build = vi.mocked(vite.build).getMockImplementation();
 					if (build === undefined) throw new Error('the bundler mock has no implementation');
 					const inflated = vi.mocked(vite.build).mockImplementation(async (config) => {
@@ -1423,18 +1421,11 @@ export default automation('a', { description, on: { cron: '0 0 * * *' }, policie
 						return result;
 					});
 					try {
-						// A large intermediate bundle that fits after compression remains valid in an ordinary check.
+						// the release limit judges the bundler's own bytes
 						const large = yield* compilerCheck(root, { timing: false }).pipe(
 							Effect.provide(NodeServices.layer)
 						);
-						expect(large.errors).toEqual([]);
-						if (large.guest === undefined) throw new Error('the compiler produced no guest');
-						// Different intermediate bytes may choose different minified identifiers; preserve runtime behavior.
-						expect(ok(yield* runProgram(large.guest, invocation({ value: 42 })))).toEqual({
-							value: 43,
-							bodyName: 'sourceBody',
-							className: 'SourceMarker'
-						});
+						expect(large.errors.map((error) => error.code)).toEqual(['guest/size']);
 					} finally {
 						inflated.mockImplementation(build);
 					}

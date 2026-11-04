@@ -117,8 +117,11 @@ without it, the view's rows are exported through the schema. A document export i
 `bolt.start('model.sync.name', { mode: 'import', file, context })` or
 `{ mode: 'export', context, format? }` (documents use `to`).
 
-Built-in parsers are `xlsx`, `csv`, `tsv`, `json` and `ics`. The parser list is exactly what uploads
-accept. XLSX handles date/time serials; CSV/TSV handle encoding and delimiters; JSON accepts rows
-or `{ records }`; ICS reads VEVENTs. A custom parser is
+Built-in parsers are `xlsx`, `csv`, `tsv`, `json`, `ics` and `txt`. The parser list is exactly what
+uploads accept. XLSX handles date/time serials; CSV/TSV handle encoding and delimiters; JSON accepts
+rows or `{ records }`; ICS reads VEVENTs. `txt` is the line-oriented format for bank and fixed-width
+files: export concatenates each record's declared columns in order with no separator, one line per
+record, so the `write` body owns the field padding and fixed layout; import reads each non-empty
+line into the first declared column. A custom parser is
 `{ type: '<registered IANA media type>', extensions: ['.ext'], parse: function* (file, ctx) { … } }`.
 Its body has the same 3 s CPU budget. Remote syncs map their data directly and do not use parsers.

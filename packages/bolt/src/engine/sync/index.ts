@@ -20,6 +20,7 @@ import {
 	Manifest,
 	Reads,
 	RunHandlers,
+	type RunHandler,
 	Wake,
 	Writes,
 	type GuestShape,
@@ -235,13 +236,16 @@ export const SyncsLive = Layer.effect(
 						.filter((s) => s.read)
 						.map((s) => [
 							s.name,
-							(input: Json, run: { readonly id: string }) => reading.run(s, input, run.id)
+							(input: Json, run: Parameters<RunHandler>[1]) => reading.run(s, input, run)
 						])
 				),
 				[SYNC_DELIVER]: () => delivering.deliver
 			},
 			Object.fromEntries(
 				syncs.filter((s) => s.read).map((s) => [s.name, { attempts: 3, backoff: '10s' }])
+			),
+			Object.fromEntries(
+				syncs.filter((s) => s.read).map((s) => [s.name, (now: number) => reading.rests(s, now)])
 			)
 		);
 		return {

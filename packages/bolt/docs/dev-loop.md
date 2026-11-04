@@ -79,10 +79,17 @@ mechanisms; see the `authoring-test-suites` skill.
 ## `bolt build`
 
 ```bash
-bolt build [dir] [--squash=<name>]
+bolt build [dir] [--squash=<name>] [--platform=<dir>]
+bolt platform <dir>
 ```
 
 Writes `.norbital/bundle/` (what a host runs), `.norbital/source/` (the authored tree without tests),
 `.norbital/seed/<pack>/` (`base` from `seed/public/`, `test` from `seed/test/`; see [seeding](./seeding.md)) and,
 last, `.norbital/release.json` naming each part's digest. It generates the next migration when the schema changed
-and replays the history. An unchanged seed input reuses the built packs. See [releases](./releases.md).
+and replays the history. An unchanged seed input reuses the built packs, and public pages whose module graphs are
+unchanged reuse their last output from `.norbital/cache/pages`. See [releases](./releases.md).
+
+`bolt platform <dir>` writes the install's platform layer (the browser code of Bolt's shell, ui, svelte and effect,
+which holds nothing of a workspace) to `<dir>`. A host keeps one per package graph and mounts it read-only into every
+build on that graph: `--platform=<dir>` reads it instead of building it and leaves `client/assets/platform/**` out of
+the bundle for the host to add, its digests already counted. The release is byte for byte the one a plain build writes.

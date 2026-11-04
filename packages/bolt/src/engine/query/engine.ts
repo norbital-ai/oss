@@ -71,6 +71,8 @@ type ReadEngineConfig = {
 	manifest: EngineManifest;
 	/** Models open approval requests held when the engine started (`$approval` beyond today's grants). */
 	held?: ReadonlySet<string>;
+	/** What must settle before a read reads `held`. */
+	ready?: Effect.Effect<void, DbError>;
 	index?: (model: string, name: string, bindings: Bindings) => IndexBodies | undefined;
 	/** Reads another area answers: `history` (§5.2), `after` (the write compiler), `transcript` (the agent). */
 	delegate?: Partial<
@@ -212,7 +214,7 @@ export function readEngine(config: ReadEngineConfig): ReadEngine & {
 		);
 	const cat = catalogOf(config.manifest);
 	// a request opens only on a model today's grants route, or one an earlier release's request still holds
-	const approvals = new Set([...approvable(config.manifest, cat), ...(config.held ?? [])]);
+	const approvals = new Set(approvable(config.manifest, cat));
 	const allBytes = config.allBytes ?? LIMITS.page.allBytes;
 	const plan = Effect.fn('Bolt.plan')(function* (
 		ir: ReadIR,
@@ -220,6 +222,8 @@ export function readEngine(config: ReadEngineConfig): ReadEngine & {
 		bindings: Bindings,
 		from: Entry
 	) {
+		if (config.ready !== undefined) yield* config.ready;
+		for (const model of config.held ?? []) approvals.add(model);
 		if (ir.kind === 'request')
 			return yield* Effect.fail(
 				BoltError.make('internal', 'decode', 'a read request is answered by its roots')
@@ -907,7 +911,12 @@ export const ReadsLive = Layer.effect(
 					BoltError.make('unavailable', 'facility', 'Secure random UUID generation failed.', error)
 				)
 			);
-		const held = yield* heldModels(db);
+		const held = new Set<string>();
+		db.owe(
+			Effect.map(heldModels(db), (models) => {
+				for (const model of models) held.add(model);
+			})
+		);
 		/** A pure search body (`probe`, `rerank`): 0 crossings, run as the platform. */
 		const invoke = Effect.fn('Bolt.searchBody')(function* (
 			kind: 'probe' | 'rerank' | 'validation',
@@ -955,6 +964,7 @@ export const ReadsLive = Layer.effect(
 				db: over,
 				manifest,
 				held,
+				ready: db.ready,
 				delegate: {
 					history,
 					transcript: (read, who) => agentRead(over, manifest, read, who),

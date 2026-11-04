@@ -100,6 +100,10 @@ Carry the observed revision when I/O separates a read from a write.
 Model writes expose only `create`, `update`, `delete` and keyed `upsert`. Use `ctx.act.many(...)`
 for independent writes that must commit together, and the model's write layers (nested child rows)
 for dependent creates.
+For a batch assembled at runtime (a rule engine's operations), `ctx.act.checked(...)` takes
+`{ callable, input, observed?, onConflict }` rows and runs the same native input decoding, guarded
+writes and atomic batch as `many`; its outputs remain JSON. Prefer `many` when the inputs are
+statically typed.
 Business operations live in named automations with explicit typed inputs.
 
 For a read followed by dependent writes, use `ctx.transaction(function* (tx) { ... })`.

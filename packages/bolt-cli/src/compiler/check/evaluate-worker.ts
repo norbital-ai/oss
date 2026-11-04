@@ -3,7 +3,7 @@
 // globals a guest starts from, then the guest prelude, the frozen clock and the module. It answers the serialized
 // declarations and the evaluation's CPU. Compile-time only: guests at run time take the host's `guests` facility.
 import { parentPort, workerData } from 'node:worker_threads';
-import { Schema } from 'effect';
+import * as Schema from 'effect/Schema';
 // the hooks alone: this worker starts per evaluation
 import { assetHook, digest, randomStream } from '@norbital-ai/bolt/guest-hooks';
 import type { EvaluateOutput } from './index.ts';

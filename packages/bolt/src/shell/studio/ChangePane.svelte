@@ -281,7 +281,10 @@
 						: 'text-muted-foreground'}"
 					role={c.merge.state === 'failed' ? 'alert' : 'status'}
 				>
-					{#if c.merge.state === 'running'}{t('Merging into live…')}{:else}{t(
+					{#if c.merge.state === 'running'}{t(
+							'Merging into live…'
+						)}{:else if c.merge.state === 'scheduled'}{t('Merges at')}
+						{new Date(c.merge.runAt ?? c.merge.at).toLocaleString()}{:else}{t(
 							'The merge failed'
 						)}{#if c.merge.error !== undefined}:
 							{c.merge.error}{/if}{/if}

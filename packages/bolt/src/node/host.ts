@@ -179,10 +179,13 @@ export const serveRelease = Effect.fn('bolt.serveRelease')(function* (options: S
 					convert: serving.convert ?? off,
 					geocoder: serving.geocoder ?? off,
 					web: serving.web ?? off,
-					browser: off,
+					browser: serving.browser ?? off,
 					links: links.port,
 					shell: { workspace: () => options.workspace, ...serving.shell },
-					agent: serving.ingest === undefined ? {} : { ingest: serving.ingest }
+					agent: {
+						...(serving.ingest === undefined ? {} : { ingest: serving.ingest }),
+						...(serving.hostTools === undefined ? {} : { hostTools: serving.hostTools })
+					}
 				},
 				facilities,
 				{ signal }

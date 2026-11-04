@@ -50,16 +50,27 @@ export type {
 	Precision as InstantPrecision
 } from '@norbital-ai/std/kind';
 type SeqPattern = `${string}{${string}}${string}`;
-type StateSpec = { to?: readonly string[]; edit?: 'all' | 'none' | readonly string[] };
+/** One state of a `state` field: where a write may move it, and what a write may change while the row is in it. */
+type StateSpec = {
+	/** The states a write may move to from this one. Absent, this state is terminal: any move out is refused. */
+	to?: readonly string[];
+	/** The other fields a write may change in this state: `'all'` (the default), `'none'`, or these fields. */
+	edit?: 'all' | 'none' | readonly string[];
+};
 /** Options every field kind takes: `optional`, `default`, `unique`, a `label` and `help` message, and `hidden`. */
 export type FieldCommon = {
-	/** Previous stored field name, preserved by a schema rename. */
+	/** Previous stored field name, preserved by a schema rename. Not on `state`, `seq`, `sum` or `count`, which cannot rename. */
 	was?: string;
+	/** The field may be left empty; without it a create must fill it, unless `default` does. */
 	optional?: true;
+	/** The value a create that omits the field stores. */
 	default?: Json;
+	/** No two rows hold the same value: a native constraint, so a duplicate write is refused. */
 	unique?: true;
 	label?: Msg;
+	/** Guidance shown under the field in a form. */
 	help?: Msg;
+	/** Left out of generated forms; the value is still stored and read. */
 	hidden?: true;
 };
 

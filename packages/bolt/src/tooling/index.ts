@@ -1,7 +1,7 @@
 // `@norbital-ai/bolt/tooling`: the internals bolt-cli (the compiler, the `bolt` command and the test kit) builds on beside
 // Bolt's public entries. First-party tooling only: no workspace or host imports it, and nothing here is a stable API.
 export { BUILTIN_FIELDS } from '../decl/builtin-fields.ts';
-export { LAYOUT_HELP, NAME, ROLES, type Role } from '../decl/layout.ts';
+export { LAYOUT_HELP, NAME, ROLES, fileRe, matchDir, type Role } from '../decl/layout.ts';
 export { layerModels, nullableOfExpr, splitModel } from '../decl/model.ts';
 export { type Is } from '../decl/names.ts';
 export { DRIVERS } from '../decl/runtime/integration.ts';

@@ -378,6 +378,12 @@ export default automation('time_off_digest', {
 });
 ```
 
+The database is billed while it is awake, so a cron should not read on every slot for nothing. A safety-net cron
+whose work depends only on workspace data, never on the time, declares `on: { cron: '* * * * *', rest: '1d' }`: when a
+run writes nothing, no slot fires until the workspace is used again or the rest has passed. Do not declare it on a
+cron that finds work by time (a reminder, a due date), or on one that reads what a connected link writes, since a link
+can write while nobody is in the workspace.
+
 Declare the example's team and policy in source. An automation is a job the reserved system
 identity runs with its declared `policies` (required, non-empty): it runs on `cron`, on a `webhook`,
 when started, or when code schedules it, and every run holds exactly those policies whoever started
@@ -415,7 +421,8 @@ A long wait holds its isolate until the answer arrives.
 
 Every body receiving `ctx` is a generator. Its members already return Effects: yield them
 directly, recover the specific typed failure with `Effect.catchTag`, and return the declared
-output. Do not wrap them in `tryPromise` or run an Effect inside the body; Bolt owns the one
+output. A failed `yield*` ends the body and `try`/`catch` never sees it, so one bad item in a loop
+ends the run unless that call carries its own `Effect.catch`. Do not wrap them in `tryPromise` or run an Effect inside the body; Bolt owns the one
 invocation edge. Pure helpers stay plain. Guest helpers use `Effect.fnUntraced` or
 `Effect.fnUntracedEager`; avoid constructing traced workflows at module scope. Use explicit
 concurrency for batched crossings. Keep the host's finite decoders and scoped finalizers at their

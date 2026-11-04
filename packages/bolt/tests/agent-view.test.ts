@@ -337,6 +337,7 @@ describe('Studio outcomes outside the folded steps', () => {
 			branch: 'change-1',
 			base: 'c0',
 			head: 'c1',
+			commits: [],
 			behind: 0,
 			preview: null,
 			log: [],

@@ -277,6 +277,7 @@ const VIEWS: { readonly [tool: string]: (a: Args) => StepView } = {
 			str(a['text']) ||
 			(typeof a['rule'] === 'string' ? a['rule'] : '')
 	}),
+	workspace_list: () => ({ icon: 'lucide:folder-tree', verb: 'Listed the source', target: '' }),
 	workspace_read: (a) => ({
 		icon: 'lucide:file-code',
 		verb: 'Read source',

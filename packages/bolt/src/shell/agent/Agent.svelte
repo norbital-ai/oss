@@ -351,15 +351,18 @@
 	const clientPageAction = getContext<ClientPageAction | undefined>(CLIENT_PAGE_ACTION);
 	const navigationsOf = navigationEvents();
 	const pageActionsOf = pageActions();
+	// the open conversation's rows once its transcript has answered: what it held on opening is history, never an event
 	watch(
-		[() => conversation, () => status, () => live, () => edge !== null],
-		([id, state, transcript, ready]) => {
-			const kind = attentionOf(ready ? id : null, state, transcript);
+		[() => conversation, () => $transcript],
+		([id, loaded]) => {
+			const ready = loaded === undefined ? null : id,
+				rows = loaded?.rows ?? [];
+			const kind = attentionOf(ready, rows);
 			if (kind !== null) chime?.play(kind);
-			for (const path of navigationsOf(ready ? id : null, transcript)) {
+			for (const path of navigationsOf(ready, rows)) {
 				if (id !== null) clientNavigation?.open(path, id);
 			}
-			for (const item of pageActionsOf(id, transcript)) {
+			for (const item of pageActionsOf(id, rows)) {
 				if (id !== null && !thread) clientPageAction?.run(item.action, id, item.id);
 			}
 		}

@@ -21,12 +21,13 @@ import { drivers } from './drivers.ts';
 import { messaging } from './mail.ts';
 import { nominatim, openAi, s3Files } from './ports.ts';
 import { apns, push } from './push.ts';
+import { webSearch } from './search.ts';
 import { openRouterSpeech, type SpeechServices } from './speech.ts';
 import { publicWeb } from './web.ts';
 
 /** One optional facility's selection: the provider name, its endpoint and credential. */
 export type Provider = { provider: string; endpoint?: string; credential?: string };
-export type Facility = 'AI_SYS_1' | 'AI_SYS_2' | 'AI_EMBED' | 'GEO' | 'CONVERT' | 'WEB';
+export type Facility = 'AI_SYS_1' | 'AI_SYS_2' | 'AI_EMBED' | 'GEO' | 'CONVERT' | 'WEB' | 'SEARCH';
 /**
  * The host's transactional messaging, every part explicit: `email` is mandatory (`resend`, or `log`: each message is a
  * log line); `phone` is `twilio`, `log` (codes printed to the log) or absent (off).
@@ -305,6 +306,7 @@ export const host = Effect.fn('server.host')(function* (
 			? undefined
 			: yield* nominatim(config.providers.GEO.endpoint);
 	const web = config.providers.WEB === undefined ? undefined : publicWeb();
+	const search = config.providers.SEARCH;
 	const serving: Serving = {
 		providers: yield* toDrivers(drivers(), run),
 		...(config.googleOAuth === null ? {} : { oauth: { google: config.googleOAuth } }),
@@ -330,6 +332,13 @@ export const host = Effect.fn('server.host')(function* (
 		...(web === undefined
 			? {}
 			: { web: { read: (url, signal, o) => run(web.read(url, o), { signal }) } }),
+		...(search?.endpoint === undefined || search.credential === undefined
+			? {}
+			: {
+					hostTools: [
+						webSearch({ endpoint: search.endpoint, credential: search.credential })
+					]
+				}),
 		shell: {
 			...(config.environment === null ? {} : { environment: config.environment }),
 			...(vapid === null ? {} : { push: { publicKey: vapid.publicKey } })

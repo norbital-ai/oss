@@ -55,7 +55,19 @@ leaf values retain the workspace's native kinds, custom renderers and inherited 
 		const unit = node(schema).unit;
 		return unit?.trim() && !label.trim().endsWith(`(${unit})`) ? `${label} (${unit})` : label;
 	};
-	const pointer = (path: string, key: string | number) =>
+	const enumLike = (value: unknown): value is string =>
+	typeof value === 'string' && /^[A-Z][A-Z0-9_]*$/.test(value);
+const enumList = (value: unknown): readonly string[] | null =>
+	Array.isArray(value) && value.length > 0 && value.every(enumLike) ? value : null;
+/** A JSON leaf fits a compact column unless it is a nested object or a list of objects. */
+const compactJson = (kind: Kind, value: Value | undefined): boolean => {
+	if (kind.kind !== 'json') return !wideKind(kind);
+	if (Array.isArray(value))
+		return !value.some((item) => item !== null && typeof item === 'object');
+	return value === null || value === undefined || typeof value !== 'object';
+};
+
+const pointer = (path: string, key: string | number) =>
 		`${path}/${String(key).replace(/~/g, '~0').replace(/\//g, '~1')}`;
 	const shape = (kind: Kind | undefined, value: Value | undefined): Kind | undefined => {
 		if (kind?.kind === 'json') return kind.shape ? shape(kind.shape, value) : undefined;
@@ -122,6 +134,7 @@ leaf values retain the workspace's native kinds, custom renderers and inherited 
 	import Self from './structured-data.svelte';
 	import Editor from './editor.svelte';
 	import Show from './show.svelte';
+	import Badge from '../primitives/badge/badge.svelte';
 	import CodeEditor from '../editors/code-editor.svelte';
 	import Checkbox from '../primitives/checkbox/checkbox.svelte';
 	import Combobox from '../primitives/combobox/combobox.svelte';
@@ -891,7 +904,7 @@ leaf values retain the workspace's native kinds, custom renderers and inherited 
 			{:else}
 				<div
 					class="structured-field"
-					class:structured-field-wide={wideKind(field.kind ?? jsonSchemaKind(field.schema))}
+					class:structured-field-wide={!compactJson(field.kind ?? jsonSchemaKind(field.schema), object[field.key])}
 					data-schema-field={childName(field.key)}
 				>
 					<FieldControl
@@ -1057,6 +1070,14 @@ leaf values retain the workspace's native kinds, custom renderers and inherited 
 	{:else if typeof held === 'boolean'}<span class="structured-boolean"
 			><Checkbox checked={held} readonly={false} disabled aria-label={name || 'Value'} /></span
 		>
+	{:else if enumList(held) !== null}
+		<span class="inline-flex flex-wrap gap-1" data-enum-list
+			>{#each enumList(held)! as item (item)}<Badge variant="outline" class="font-medium" data-enum-value={item}
+					>{item}</Badge
+				>{/each}</span
+		>
+	{:else if enumLike(held)}
+		<Badge variant="outline" class="font-medium" data-enum-value={held}>{held}</Badge>
 	{:else if (dataEntries(held) || Array.isArray(held)) && ['json', 'custom', 'object', 'list', 'record', 'union'].includes(declared.kind)}
 		{#if depth >= 24}<CodeEditor
 				language="json"

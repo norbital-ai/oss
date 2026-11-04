@@ -2,34 +2,147 @@
 // agent's prompt both read this table, so the layout a model is told is the layout the compiler enforces.
 /** The file roles of §3.2. `dir` is under `src/`: `*` is one name segment, `**` one or more; `*` in `file` is the name. */
 export const ROLES = [
-	{ role: 'workspace', dir: '', file: '+workspace.ts' },
-	{ role: 'secrets', dir: '', file: '+secrets.ts' },
-	{ role: 'model', dir: 'data/model/**', file: '+model.ts' },
-	{ role: 'representation', dir: 'data/model/**', file: '+representation.svelte' },
-	{ role: 'custom_field', dir: 'data/custom_field/*', file: '+definition.ts' },
-	{ role: 'renderer', dir: 'data/custom_field/*', file: '+renderer.svelte' },
-	{ role: 'integration_definition', dir: 'integration/*', file: '+integration.ts' },
-	{ role: 'integration_setup', dir: 'integration/*', file: '+integration.svelte' },
-	{ role: 'policy', dir: 'access_control/policy', file: '+*.policy.ts' },
-	{ role: 'team', dir: 'access_control/team', file: '+team.ts' },
-	{ role: 'agent', dir: 'agent', file: '+agent.md' },
-	{ role: 'agent_external', dir: 'agent', file: '+agent.external.md' },
-	{ role: 'envoy', dir: 'agent/envoy', file: '+*.envoy.ts' },
-	{ role: 'skill', dir: 'agent/skill/*', file: '+skill.md' },
-	{ role: 'mcp', dir: 'agent/mcp', file: '+*.mcp.ts' },
-	{ role: 'automation', dir: 'automation', file: '+*.automation.ts' },
-	{ role: 'app', dir: 'app/**', file: '+app.ts' },
-	{ role: 'kiosk', dir: 'kiosk/**', file: '+kiosk.ts' },
-	{ role: 'kiosk_page', dir: 'kiosk/**', file: '+*.page.svelte' },
-	{ role: 'kiosk_page_server', dir: 'kiosk/**', file: '+*.page.server.ts' },
-	{ role: 'session', dir: 'app/**', file: '+session.svelte' },
-	{ role: 'page', dir: 'app/**', file: '+*.page.svelte' },
-	{ role: 'page_server', dir: 'app/**', file: '+*.page.server.ts' },
-	{ role: 'messages', dir: 'i18n', file: '+messages.ts' },
-	{ role: 'locale', dir: 'i18n', file: '+*.messages.ts' },
-	{ role: 'group', dir: 'app/**', file: '+group.ts' }
+	{
+		role: 'workspace',
+		dir: '',
+		file: '+workspace.ts',
+		note: 'zone, locale, connections'
+	},
+	{ role: 'secrets', dir: '', file: '+secrets.ts', note: '' },
+	{
+		role: 'model',
+		dir: 'data/model/**',
+		file: '+model.ts',
+		note: 'fields, state, reads, writes'
+	},
+	{
+		role: 'representation',
+		dir: 'data/model/**',
+		file: '+representation.svelte',
+		note: 'record view'
+	},
+	{
+		role: 'custom_field',
+		dir: 'data/custom_field/*',
+		file: '+definition.ts',
+		note: 'custom field type'
+	},
+	{
+		role: 'renderer',
+		dir: 'data/custom_field/*',
+		file: '+renderer.svelte',
+		note: 'field renderer'
+	},
+	{
+		role: 'integration_definition',
+		dir: 'integration/*',
+		file: '+integration.ts',
+		note: ''
+	},
+	{
+		role: 'integration_setup',
+		dir: 'integration/*',
+		file: '+integration.svelte',
+		note: 'setup screen'
+	},
+	{
+		role: 'policy',
+		dir: 'access_control/policy',
+		file: '+*.policy.ts',
+		note: 'what holders may do'
+	},
+	{
+		role: 'team',
+		dir: 'access_control/team',
+		file: '+team.ts',
+		note: 'teams and their policies'
+	},
+	{ role: 'agent', dir: 'agent', file: '+agent.md', note: 'agent brief for staff' },
+	{
+		role: 'agent_external',
+		dir: 'agent',
+		file: '+agent.external.md',
+		note: 'agent brief for external members'
+	},
+	{ role: 'envoy', dir: 'agent/envoy', file: '+*.envoy.ts', note: 'envoy default' },
+	{
+		role: 'skill',
+		dir: 'agent/skill/*',
+		file: '+skill.md',
+		note: 'agent skill'
+	},
+	{ role: 'mcp', dir: 'agent/mcp', file: '+*.mcp.ts', note: 'MCP server' },
+	{
+		role: 'automation',
+		dir: 'automation',
+		file: '+*.automation.ts',
+		note: 'job run with its own policies'
+	},
+	{ role: 'app', dir: 'app/**', file: '+app.ts', note: 'app label and pages' },
+	{
+		role: 'kiosk',
+		dir: 'kiosk/**',
+		file: '+kiosk.ts',
+		note: 'standalone surface'
+	},
+	{ role: 'kiosk_page', dir: 'kiosk/**', file: '+*.page.svelte', note: '' },
+	{
+		role: 'kiosk_page_server',
+		dir: 'kiosk/**',
+		file: '+*.page.server.ts',
+		note: 'server side of the page'
+	},
+	{
+		role: 'session',
+		dir: 'app/**',
+		file: '+session.svelte',
+		note: 'device work for the whole session'
+	},
+	{ role: 'page', dir: 'app/**', file: '+*.page.svelte', note: '' },
+	{
+		role: 'page_server',
+		dir: 'app/**',
+		file: '+*.page.server.ts',
+		note: 'server side of the page'
+	},
+	{ role: 'messages', dir: 'i18n', file: '+messages.ts', note: 'base text' },
+	{ role: 'locale', dir: 'i18n', file: '+*.messages.ts', note: 'translation' },
+	{ role: 'group', dir: 'app/**', file: '+group.ts', note: 'app group' }
 ] as const;
 export type Role = (typeof ROLES)[number]['role'];
+
+const escape = (s: string) => s.replace(/[.+]/g, '\\$&');
+export const fileRe = (file: string) => new RegExp(`^${escape(file).replace('*', '([^.]+)')}$`);
+/** Matches a dir pattern; returns the folder name (`''` when the pattern has none) or undefined. */
+export function matchDir(pattern: string, segs: string[]): string | undefined {
+	const p = pattern === '' ? [] : pattern.split('/');
+	if (p.at(-1) === '**') {
+		const fixed = p.slice(0, -1);
+		return segs.length > fixed.length && fixed.every((s, i) => s === segs[i])
+			? segs.slice(fixed.length).join('/')
+			: undefined;
+	}
+	if (p.length !== segs.length) return undefined;
+	let name = '';
+	for (const [i, s] of p.entries()) {
+		if (s === '*') name = segs[i]!;
+		else if (s !== segs[i]) return undefined;
+	}
+	return name;
+}
+/** The role a workspace-relative path holds, if any. */
+export function roleAt(path: string) {
+	const segs = path.split('/').slice(1),
+		base = segs.pop() ?? '';
+	if (!path.startsWith('src/') || !base.startsWith('+')) return undefined;
+	return ROLES.find((r) => fileRe(r.file).test(base) && matchDir(r.dir, segs) !== undefined);
+}
+/** What a folder holds, where its name does not say. */
+export const FOLDER_NOTES: { readonly [dir: string]: string } = {
+	'src/': 'compiled source: + files are compiler roles, the rest ordinary modules',
+	'src/data/model/': 'one folder per model; a child model is a folder inside its owner',
+	'migrations/': 'generated SQL history'
+};
 
 export const NAME = /^[a-z][a-z0-9_]*$/;
 /** A folder pattern as the author reads it: an app's or kiosk's folder names it, any other folder names its thing. */

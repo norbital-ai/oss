@@ -67,8 +67,8 @@ a rollback restores business data while retaining current identity state.
 ## What everyone else sees
 
 During the few seconds of a switch-over, other people's pages wait instead of failing; a small "Updating to a new
-version…" notice shows at the bottom. Afterwards their pages reload into the new version, or offer **Reload** when they
-have unsaved work.
+version…" notice shows at the bottom. Afterwards their pages reconnect; a version with new pages reloads them, or
+offers **Reload** when they have unsaved work.
 
 ## Screenshots to capture
 

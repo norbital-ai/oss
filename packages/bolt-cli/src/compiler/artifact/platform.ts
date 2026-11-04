@@ -9,6 +9,8 @@ import { dirname, join, posix } from 'node:path';
 import { Effect, FileSystem, Option, Schema } from 'effect';
 import type { InlineConfig, Plugin, Rolldown } from 'vite';
 import { EDITOR_SINGLETONS } from '../editor-dependencies.ts';
+import { tree } from '@norbital-ai/bolt/artifact';
+import { sha256Hex } from '@norbital-ai/store';
 import { cachedSvelte } from './svelte-cache.ts';
 import { BOLT, BOLT_PACKAGE, EXT } from '../bolt.ts';
 
@@ -97,9 +99,35 @@ const CachedPlatform = Schema.fromJsonString(
 		key: Schema.String,
 		modules: Schema.Array(Schema.Tuple([Schema.String, Schema.String])),
 		chunks: Schema.Array(PlatformChunk),
-		css: Schema.Array(Schema.String)
+		css: Schema.Array(Schema.String),
+		/** Each file by its digest (`*.map` left out, as a tree's hash leaves it): a build hashes the layer unread. */
+		digests: Schema.Array(Schema.Tuple([Schema.String, Schema.String]))
 	})
 );
+const heldLayer = (held: typeof CachedPlatform.Type): PlatformLayer => ({
+	modules: new Map(held.modules),
+	chunks: new Map(held.chunks.map((chunk) => [chunk.fileName, chunk])),
+	css: held.css
+});
+export type PreparedLayer = Readonly<{
+	layer: PlatformLayer;
+	digests: readonly (readonly [file: string, hex: string])[];
+}>;
+/**
+ * A layer `bolt platform` wrote. A host holds one per package graph and mounts it read-only into every build on that
+ * graph, so no build builds, copies or hashes it: the bundle a build leaves lacks `assets/platform/**` until its host
+ * adds those files, and every digest already covers them (`layerLines`).
+ */
+export const preparedLayer = Effect.fn('bolt.preparedLayer')(function* (dir: string) {
+	const fs = yield* FileSystem.FileSystem;
+	const held = yield* fs
+		.readFileString(join(dir, 'layer.json'))
+		.pipe(Effect.flatMap(Schema.decodeUnknownEffect(CachedPlatform)));
+	return { layer: heldLayer(held), digests: held.digests } satisfies PreparedLayer;
+});
+/** The prepared layer's `memoTreeHash` lines, for a tree holding the client at `at`. */
+export const layerLines = (prepared: PreparedLayer | undefined, at: string) =>
+	prepared?.digests.map(([file, hex]) => `${join(at, PLATFORM, file)}\0${hex}`) ?? [];
 
 /** Private to the workspace: pages always build through their import boundary. */
 export const cachedPlatformLayer = Effect.fn('bolt.cachedPlatformLayer')(function* <E, R>(
@@ -116,11 +144,7 @@ export const cachedPlatformLayer = Effect.fn('bolt.cachedPlatformLayer')(functio
 		.pipe(Effect.flatMap(Schema.decodeUnknownEffect(CachedPlatform)), Effect.option);
 	if (Option.isSome(held) && held.value.key === key && (yield* fs.exists(files))) {
 		yield* fs.copy(files, join(out, PLATFORM), { overwrite: true });
-		return {
-			modules: new Map(held.value.modules),
-			chunks: new Map(held.value.chunks.map((chunk) => [chunk.fileName, chunk])),
-			css: held.value.css
-		};
+		return heldLayer(held.value);
 	}
 	const layer = yield* build;
 	yield* fs.makeDirectory(cache, { recursive: true });
@@ -128,6 +152,9 @@ export const cachedPlatformLayer = Effect.fn('bolt.cachedPlatformLayer')(functio
 	yield* fs.remove(metadata, { force: true });
 	yield* fs.remove(files, { recursive: true, force: true });
 	yield* fs.copy(join(out, PLATFORM), files);
+	const digests: [string, string][] = [];
+	for (const file of yield* tree(files))
+		if (!file.endsWith('.map')) digests.push([file, sha256Hex(yield* fs.readFile(join(files, file)))]);
 	const temporary = `${metadata}.${process.pid}`;
 	yield* fs.writeFileString(
 		temporary,
@@ -135,7 +162,8 @@ export const cachedPlatformLayer = Effect.fn('bolt.cachedPlatformLayer')(functio
 			key,
 			modules: [...layer.modules],
 			chunks: [...layer.chunks.values()],
-			css: [...layer.css]
+			css: [...layer.css],
+			digests
 		})
 	);
 	yield* fs.rename(temporary, metadata);

@@ -32,7 +32,9 @@ guarded write verbs, views and integration lifecycle rather than rebuilding them
 
 Use the workspace's installed declarations as the authority for its version. `workspace_lang` is the contract
 discovery tool: completions on an import enumerate exports without knowing their names; hover and checked types show
-the compiler's signature, JSDoc, examples and deprecation guidance; definition and references locate the owning source.
+the compiler's signature, JSDoc, examples and deprecation guidance; definition and references locate workspace source
+(Bolt's own is not readable: its contracts are in the comments). `workspace_api` answers a type's comment and every
+member's type and comment in one call, so read a contract there before guessing a field or a default.
 Follow completion pages or narrow the prefix rather than assuming the first page is complete. Use an unsaved probe
 buffer when discovery does not require a source edit. There is no separate docs tool.
 

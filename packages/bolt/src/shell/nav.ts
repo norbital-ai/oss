@@ -148,6 +148,8 @@ export type ShellBoot = {
 	preview: { user: string; by: string } | { team: string; by: string } | null;
 	/** The host's banner for this member (`ShellHost.notice`: a billing notice). */
 	notice?: ShellNotice;
+	/** The release's client hash: a live link that comes back under another reloads the page. */
+	client?: string;
 	/** The member's other workspaces (`ShellHost.workspaces`): the switcher's options. */
 	workspaces?: readonly WorkspaceLink[];
 	nav: NavNode[];

@@ -4,6 +4,7 @@
 // missing one into a type error, `off` is the only way to leave a member out, and `mail` has no `off`.
 import type {
 	AiPort,
+	BrowserPort,
 	ConvertPort,
 	EmbeddingsPort,
 	GeocoderPort,
@@ -162,8 +163,11 @@ export type Serving = {
 	readonly convert?: ConvertPort;
 	/** Norbital Convert's `documentIngester`: a file as sanitised HTML and its images, for the agent and `ctx.convert.ingest`. */
 	readonly ingest?: AgentPorts['ingest'];
+	/** Capabilities the host supplies to agent turns and `ctx.ai.sys_2.infer` (`web_search`); a policy still has to name each. */
+	readonly hostTools?: AgentPorts['hostTools'];
 	readonly geocoder?: GeocoderPort;
 	readonly web?: WebReadPort;
+	readonly browser?: BrowserPort;
 	readonly shell?: Pick<ShellPorts, 'environment' | 'push'>;
 	close?(): Promise<void>;
 };

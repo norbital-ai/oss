@@ -102,7 +102,8 @@ export type IdentityHost = {
 	now: Effect.Effect<Date>;
 	sessions: Cache.Cache<string, Authenticated, DbError | IdentityRefusal>;
 	windows: RateWindows;
-	keys: Keys;
+	/** Read when a sign-in needs them (`lazyKeys`), never at a cold start: most starts of a cell sign nobody in. */
+	keys: Keys | Effect.Effect<Keys, DbError>;
 	mail?: TransportPort | undefined;
 	sms?: TransportPort | undefined;
 	phone?: PhoneVerifier | undefined;
@@ -209,8 +210,23 @@ export const loadKeys = Effect.fn('Bolt.loadKeys')(function* (db: TenantDb) {
 	return { session: fromHex(session.value), ipMac: fromHex(ipMac.value) };
 });
 // ── pre-sign-in limits (rule 38): constants, per address MAC and per IP MAC ──
+/** The keys, read once on first need; a failed read is tried again by the next. */
+export const lazyKeys = (db: TenantDb) => {
+	let loaded: Keys | undefined;
+	return Effect.suspend(() =>
+		loaded === undefined
+			? Effect.tap(loadKeys(db), (keys) =>
+					Effect.sync(() => {
+						loaded = keys;
+					})
+				)
+			: Effect.succeed(loaded)
+	);
+};
+export const keysOf = (h: Pick<IdentityHost, 'keys'>) =>
+	Effect.isEffect(h.keys) ? h.keys : Effect.succeed(h.keys);
 function preSignIn(
-	h: IdentityHost,
+	keys: Keys,
 	rule: 'session.sendCode' | 'session.verifyCode',
 	a: Address,
 	ip: string
@@ -218,13 +234,13 @@ function preSignIn(
 	return [
 		{
 			rule,
-			bucket: macKey(h.keys.ipMac, addressKey(a)),
+			bucket: macKey(keys.ipMac, addressKey(a)),
 			limit: rule === 'session.sendCode' ? 5 : 20,
 			windowMs: HOUR
 		},
 		{
 			rule: 'session.ip',
-			bucket: macKey(h.keys.ipMac, addressBucket(ip)),
+			bucket: macKey(keys.ipMac, addressBucket(ip)),
 			limit: 60,
 			windowMs: HOUR
 		}
@@ -239,8 +255,8 @@ function admitMemory(
 	return v.ok ? null : refuse('rateLimited', RATE_LIMITED, v.retryAfter);
 }
 const retryAfter = (now: Date) => Math.ceil((HOUR - (now.getTime() % HOUR)) / 1000);
-const codeMac = (h: IdentityHost, a: Address, code: string) =>
-	toHex(hmacSha256(h.keys.session, `${addressKey(a)}\u0000${code}`));
+const codeMac = (keys: Keys, a: Address, code: string) =>
+	toHex(hmacSha256(keys.session, `${addressKey(a)}\u0000${code}`));
 /** Six digits from the host's CSPRNG (38a(d)), unbiased by rejection. */
 function sixDigits(): string {
 	for (;;) {
@@ -301,7 +317,8 @@ export const sendCode = Effect.fn('Bolt.sendCode')(function* (
 				`This workspace cannot send a code by ${via === 'sms' ? 'text' : 'WhatsApp'}.`
 			)
 		);
-	const charges = preSignIn(h, 'session.sendCode', a, ip);
+	const keys = yield* keysOf(h);
+	const charges = preSignIn(keys, 'session.sendCode', a, ip);
 	const limited = admitMemory(h, charges, (yield* h.now).getTime());
 	if (limited) return yield* Effect.fail(limited);
 	const now = yield* h.now;
@@ -344,7 +361,7 @@ export const sendCode = Effect.fn('Bolt.sendCode')(function* (
 		params: s.params,
 		text: `WITH ${rate.cte},
 ch AS (INSERT INTO sys_challenge (address_mac, code_mac, attempts, expires_at)
-	SELECT ${s.p(macKey(h.keys.ipMac, addressKey(a)))}, ${s.p(codeMac(h, a, code))}, 0, ${s.p(new Date(now.getTime() + CODE_MS).toISOString())}::timestamptz
+	SELECT ${s.p(macKey(keys.ipMac, addressKey(a)))}, ${s.p(codeMac(keys, a, code))}, 0, ${s.p(new Date(now.getTime() + CODE_MS).toISOString())}::timestamptz
 	WHERE ${rate.admitted}
 	ON CONFLICT (address_mac) DO UPDATE SET code_mac = excluded.code_mac, attempts = 0, expires_at = excluded.expires_at RETURNING 1)
 SELECT count(*)::int AS saved FROM ch`
@@ -552,11 +569,12 @@ export const verifyCode = Effect.fn('Bolt.verifyCode')(function* (
 ) {
 	const a = parseAddress(typed);
 	if (a === null) return yield* Effect.fail(refuse('check', ADDRESS_HINT));
-	const charges = preSignIn(h, 'session.verifyCode', a, ip);
+	const keys = yield* keysOf(h);
+	const charges = preSignIn(keys, 'session.verifyCode', a, ip);
 	const limited = admitMemory(h, charges, (yield* h.now).getTime());
 	if (limited) return yield* Effect.fail(limited);
 	const now = yield* h.now,
-		address = macKey(h.keys.ipMac, addressKey(a));
+		address = macKey(keys.ipMac, addressKey(a));
 	const [challenges, users, invitations, config, parties] = yield* h.db.read([
 		{
 			text: 'SELECT code_mac, attempts, expires_at FROM sys_challenge WHERE address_mac = $1',
@@ -584,7 +602,7 @@ export const verifyCode = Effect.fn('Bolt.verifyCode')(function* (
 	const checked =
 		a.kind === 'email'
 			? timingSafeEqual(
-					fromHex(codeMac(h, a, /^\d{6}$/.test(code) ? code : 'x')),
+					fromHex(codeMac(keys, a, /^\d{6}$/.test(code) ? code : 'x')),
 					fromHex(ch.code_mac)
 				)
 			: /^\d{6}$/.test(code) &&
@@ -1135,10 +1153,9 @@ export const IdentityLive = Layer.effect(
 		const manifest = yield* Manifest,
 			db = yield* TenantDbService,
 			activation = yield* Activation;
-		const keys = yield* loadKeys(db);
 		const host = yield* makeIdentityHost({
 			db,
-			keys,
+			keys: lazyKeys(db),
 			now: Clock.currentTimeMillis.pipe(Effect.map((ms) => new Date(ms))),
 			windows: new Windows(),
 			publicUrl: activation.publicUrl,

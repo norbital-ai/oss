@@ -168,7 +168,7 @@ export const browserTools = (browser: Browser['Service']): readonly HostTool[] =
 			tool({
 				name: 'browser_evaluate',
 				description:
-					"Run a script in your own browser's open page and answer its value as JSON: an expression, or a function that is called; async is awaited. Use CSS selectors here and return only the data you need. This runs in your browser, never in the person's tab.",
+					"Run a script in your own browser's open page and answer its value as JSON: an expression, or a function that is called; async is awaited. This runs in your browser, never in the person's tab.",
 				input: Schema.Struct({ expression: Schema.String }),
 				call: ({ expression }, profile) => browser.evaluate(profile, expression)
 			}),
@@ -212,7 +212,7 @@ export const browserTools = (browser: Browser['Service']): readonly HostTool[] =
 							)
 			})
 		] as const
-	).map((tool) => ({ ...tool, pack: 'browser' }));
+	);
 };
 
 /** The agent host's tools after the built-in browser tools. */

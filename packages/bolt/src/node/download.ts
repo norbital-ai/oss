@@ -26,6 +26,8 @@ export type DownloadOptions = {
 	allowLoopback?: boolean;
 	maxBytes?: number;
 	idleMs?: number;
+	/** The `cookie` header a request to this URL carries: asked per redirect hop, so each host gets only its own. */
+	cookie?: (url: URL) => string;
 };
 /** A part is sent once it reaches this size (S3's smallest part but the last). */
 const DOWNLOAD_PART_BYTES = 5 * 1024 * 1024;
@@ -70,14 +72,18 @@ const addressesOf = (
 				).pipe(Effect.map((destination) => destination.addresses));
 
 /** One hop: the response, destroyed when the download's scope closes. Interruptible, so the stall limit ends a hung connect. */
-const open = (url: URL, addresses: readonly Address[]) =>
+const open = (url: URL, addresses: readonly Address[], cookie: string) =>
 	Effect.callback<IncomingMessage, FacilityFailure>((resume) => {
 		const req = (url.protocol === 'https:' ? httpsRequest : httpRequest)(
 			url,
 			{
 				agent: false,
 				lookup: pinnedLookup(addresses),
-				headers: { 'user-agent': 'norbital-download/1', 'accept-encoding': 'identity' }
+				headers: {
+					'user-agent': 'norbital-download/1',
+					'accept-encoding': 'identity',
+					...(cookie === '' ? {} : { cookie })
+				}
 			},
 			(response) => resume(Effect.succeed(response))
 		);
@@ -127,7 +133,8 @@ export const downloadMedia = <U>(
 						);
 					const response = yield* open(
 						target,
-						yield* addressesOf(target, options.allowLoopback ?? false)
+						yield* addressesOf(target, options.allowLoopback ?? false),
+						options.cookie?.(target) ?? ''
 					).pipe(Effect.timeoutOrElse(stalled));
 					const status = response.statusCode ?? 0,
 						location = response.headers.location;

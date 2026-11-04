@@ -9,3 +9,4 @@ export type { CommandItem, CommandTrigger } from './command-menu.js';
 export { default as MarkdownEditor, type MarkdownEditorProps } from './markdown-editor.svelte';
 export { default as ReadonlyMarkdown } from './readonly-markdown.svelte';
 export { markdownHtml } from './markdown.js';
+export { highlightedLine } from './highlight.js';

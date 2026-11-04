@@ -135,6 +135,42 @@ export type StoredFile = {
 	readonly bytes: number;
 	readonly sha256: string;
 };
+const ownerOf = (owner: string, ports: Pick<FacilityPorts, 'manifest'>, via: string) =>
+	owner in ports.manifest.automations || owner.includes('.')
+		? Effect.void
+		: Effect.fail(invalid(`${via}: for names a field or automation`));
+/** A blob already in the store as a `sys_file`. */
+const recordFile = (
+	ports: Pick<FacilityPorts, 'db'>,
+	blob: { readonly key: string; readonly sha256: string; readonly bytes: number },
+	file: {
+		readonly name: string;
+		readonly mime: string;
+		readonly for: string;
+		readonly by?: string | undefined;
+	}
+) =>
+	Effect.gen(function* () {
+		const now = new Date(yield* Clock.currentTimeMillis).toISOString(),
+			id = globalThis.crypto.randomUUID();
+		yield* ports.db
+			.write({
+				text: `INSERT INTO sys_file (id, name, mime, size, key, sha256, field, created_at, created_by) VALUES ($1, $2, $3, $4, $5, $6, $7, $8::timestamptz, $9)`,
+				params: [
+					id,
+					file.name,
+					file.mime,
+					blob.bytes,
+					blob.key,
+					blob.sha256,
+					file.for,
+					now,
+					file.by ?? null
+				]
+			})
+			.pipe(Effect.mapError(databaseFailure));
+		return { id, name: file.name, mime: file.mime, bytes: blob.bytes, sha256: blob.sha256 };
+	});
 /**
  * Stores `bytes` as a `sys_file` of at most `max` bytes, owned by `for`: a model's file field (`<model>.<field>`), an
  * automation, or a member's own file (`<model>.$export.<sync>`, `bolt.$export`), which only `by` downloads.
@@ -157,31 +193,15 @@ export const storeFile =
 				return yield* Effect.fail(
 					new FacilityFailure({ kind: 'tooLarge', message: `${via} wrote over ${max} bytes` })
 				);
-			if (!(file.for in ports.manifest.automations) && !file.for.includes('.'))
-				return yield* Effect.fail(invalid(`${via}: for names a field or automation`));
+			yield* ownerOf(file.for, ports, via);
 			const blob = yield* ports.files
 				.put(bytes, { name: file.name, mime: file.mime })
 				.pipe(Port.call('files', LIMITS.callMs.other));
-			const now = new Date(yield* Clock.currentTimeMillis).toISOString(),
-				id = globalThis.crypto.randomUUID();
-			const sha256 = sha256Hex(bytes);
-			yield* ports.db
-				.write({
-					text: `INSERT INTO sys_file (id, name, mime, size, key, sha256, field, created_at, created_by) VALUES ($1, $2, $3, $4, $5, $6, $7, $8::timestamptz, $9)`,
-					params: [
-						id,
-						file.name,
-						file.mime,
-						bytes.byteLength,
-						blob.key,
-						sha256,
-						file.for,
-						now,
-						file.by ?? null
-					]
-				})
-				.pipe(Effect.mapError(databaseFailure));
-			return { id, name: file.name, mime: file.mime, bytes: bytes.byteLength, sha256 };
+			return yield* recordFile(
+				ports,
+				{ key: blob.key, sha256: sha256Hex(bytes), bytes: bytes.byteLength },
+				file
+			);
 		});
 
 /** `convert.document`'s options as a guest sends them (a guest never names `by`). */
@@ -429,6 +449,20 @@ export function facilityDispatch(ports: FacilityPorts): Facilities['Service']['d
 						'browser.evaluate takes an expression'
 					);
 					return answered(yield* ports.browser.evaluate(profile, expression));
+				}
+				case 'browser.download': {
+					const profile = yield* decode(Schema.String, first, 'browser.download takes a profile');
+					const url = yield* decode(Schema.String, given, 'browser.download takes a URL');
+					const { for: owner } = yield* decode(
+						Schema.Struct({ for: Schema.String }),
+						call.args[2],
+						'browser.download takes { for }'
+					);
+					yield* ownerOf(owner, ports, 'browser.download');
+					const kept = yield* ports.browser.download(profile, url);
+					return answered(
+						yield* recordFile(ports, kept, { name: kept.name, mime: kept.mime, for: owner })
+					);
 				}
 				case 'browser.close': {
 					const profile = yield* decode(Schema.String, first, 'browser.close takes a profile');

@@ -415,6 +415,7 @@ export const createBolt = (config: BoltConfig) =>
 						noticeIds.clear();
 						conn = frame.conn;
 						applied = frame.v;
+						closed = null;
 						yield* SubscriptionRef.set(status, 'live');
 						for (const item of views.values()) {
 							item.registered = false;
@@ -517,7 +518,6 @@ export const createBolt = (config: BoltConfig) =>
 			Queue.take(reconnects)
 		).pipe(
 			Stream.tap(onFrame),
-			Stream.takeUntil((frame) => frame.t === 'close'),
 			Stream.share({ capacity: 'unbounded', idleTimeToLive: '30 seconds' })
 		);
 		yield* Effect.addFinalizer(() =>

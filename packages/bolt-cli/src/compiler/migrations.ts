@@ -339,7 +339,7 @@ export const prepareMigrations = Effect.fn('Bolt.prepareMigrations')(function* (
 			);
 			let actual = prefixes.get(files.length) ?? [];
 			const bodies = [
-				...(mode === 'generate' && heldLines !== undefined
+				...(heldLines !== undefined
 					? runtimeFunctions(heldLines, actual, expected, [
 							...declared,
 							...native.flatMap((object) => object.create)
@@ -347,11 +347,17 @@ export const prepareMigrations = Effect.fn('Bolt.prepareMigrations')(function* (
 					: [])
 			];
 			if (
-				mode === 'generate' &&
 				heldLines !== undefined &&
 				!actual.some((line) => line.startsWith('column bolt_history_schema.id '))
 			)
 				bodies.unshift(...HISTORY_SCHEMA_TABLES);
+			// a check passing here would cache this proof, and the next build would skip generating what the runtime needs
+			if (mode === 'verify' && bodies.length > 0)
+				return yield* BoltError.make(
+					'migrationChanged',
+					'admission',
+					'this Bolt release changed runtime functions the migrations do not hold yet; run bolt build to generate the next migration'
+				);
 			if (bodies.length > 0)
 				bodies.push(
 					...historySchemaObjects(next.tables, next.currency).flatMap((object) => object.create)

@@ -45,6 +45,7 @@ import {
 } from '../engine/identity/maintenance.ts';
 import {
 	founderBootstrap,
+	lazyKeys,
 	loadKeys,
 	makeIdentityHost,
 	mint,
@@ -87,7 +88,7 @@ import { copiedBatch, dbError } from '../engine/db/wire.ts';
 import { sha1 } from '../engine/crypto.ts';
 import { sha256 } from '@norbital-ai/store';
 import { EngineLive, type EngineServices, type EngineHost } from '../engine/host.ts';
-import { Activation, HostIdentity, Live, Manifest, Runs } from '../engine/services.ts';
+import { Activation, Agents, HostIdentity, Live, Manifest, Runs } from '../engine/services.ts';
 import {
 	Ai,
 	ArtifactFiles,
@@ -138,6 +139,7 @@ import {
 } from '../engine/write/pack.ts';
 import { decodeSeed } from '../engine/write/seed.ts';
 import { Port } from '../engine/port.ts';
+import { announce } from '../engine/notifications/notify.ts';
 import {
 	authorityOf,
 	ShellConfig,
@@ -267,7 +269,10 @@ export type ShellPorts = Pick<
  * The agent's host parts (§5.9); the release's source (`workspace_search`) and attachments are this release's own. `ingest`
  * (Norbital Convert's `documentIngester`) serves the agent's `ingest` and `ctx.convert.ingest`; absent, neither ingests.
  */
-export type AgentPorts = Pick<AgentConfig, 'draft' | 'hostTools' | 'skills' | 'onTurnStart'> & {
+export type AgentPorts = Pick<
+	AgentConfig,
+	'draft' | 'hostTools' | 'skills' | 'onTurnStart' | 'events'
+> & {
 	readonly ingest?: IngestPort['ingest'];
 };
 /**
@@ -358,6 +363,12 @@ export type ActiveWorkspace = {
 	crons(): Promise<readonly CronEntry[]>;
 	/** Runs cron `id` for `slot` (an ISO minute), once per `(id, slot)`; `ran: false` for a repeat or a run that wrote nothing. */
 	fire(id: string, slot: string, options: Signal): Promise<CronFired>;
+	/**
+	 * A planned close: pages and requests go on and no run starts. Running automations get `automationsMs` to end, while
+	 * turns work on; then every turn holds at its next step. Answers once no step is running; the host then closes the
+	 * generation and the next one takes the turns over. A host bounds the wait; a release from before this method has none.
+	 */
+	park?(options: Signal & { readonly automationsMs: number }): Promise<void>;
 	/** Rule 71a: interrupts every guest invocation and in-flight crossing of this generation; the host then ends its pool. */
 	close(): Promise<void>;
 	readonly identity: {
@@ -702,7 +713,7 @@ const identityLayer = (
 				db,
 				now: Clock.currentTimeMillis.pipe(Effect.map((at) => new Date(at))),
 				windows: new RateWindows(),
-				keys: yield* loadKeys(db),
+				keys: lazyKeys(db),
 				publicUrl,
 				...(signupOf(manifest) === undefined ? {} : { signup: signupOf(manifest) })
 			});
@@ -720,22 +731,25 @@ const activate = async (ports: HostPorts, options: Signal): Promise<ActiveWorksp
 			'admission',
 			`the bundle needs ${missing.join(', ')}, which this host leaves off`
 		);
-	const at = await inRelease(
-		ports.release,
+	// checked before the first statement rather than at the start: a cold start makes no trip to the database
+	const expected = fingerprint(schemaSlice(artifact.manifest));
+	db.owe(
 		readApplied(db).pipe(
-			Effect.map((applied) => ({
-				from: applied === null ? null : fingerprint(applied),
-				to: fingerprint(schemaSlice(artifact.manifest))
-			}))
-		),
-		options.signal
+			Effect.flatMap((applied) => {
+				const from = applied === null ? null : fingerprint(applied);
+				return from === expected
+					? Effect.void
+					: Effect.fail(
+							BoltError.make(
+								'schemaMismatch',
+								'admission',
+								`the environment's database is at schema ${from ?? '(none)'}, its release expects ${expected}`
+							)
+						);
+			}),
+			Effect.catchTag('BoltError', (error) => Effect.fail(DbError.make('XX000', error.message)))
+		)
 	);
-	if (at.from !== at.to)
-		throw BoltError.make(
-			'schemaMismatch',
-			'admission',
-			`the environment's database is at schema ${at.from ?? '(none)'}, its release expects ${at.to}`
-		);
 	const files = ArtifactFiles.fileSystem(ports.release.artifact);
 	const identity = identityLayer(ports.publicUrl, {
 		mail: f.transactional.mail,
@@ -776,6 +790,7 @@ const activate = async (ports: HostPorts, options: Signal): Promise<ActiveWorksp
 			Layer.mergeAll(
 				Layer.succeed(ShellConfig, {
 					...ports.shell,
+					client: artifact.artifact.hashes.client,
 					publicUrl: ports.publicUrl,
 					secure: ports.publicUrl.startsWith('https:')
 				}),
@@ -836,6 +851,14 @@ const activate = async (ports: HostPorts, options: Signal): Promise<ActiveWorksp
 					),
 					signal
 				);
+	const events = ports.agent.events;
+	const announced =
+		events === undefined
+			? Effect.void
+			: Effect.gen(function* () {
+					const since = new Date((yield* Clock.currentTimeMillis) - 86_400_000).toISOString();
+					yield* announce(yield* Port.attempt('agent.events', () => events(since)));
+				}).pipe(Effect.tapCause(Effect.logWarning), Effect.ignore);
 	const served: ActiveWorkspace = {
 		handle: (request, { address }) =>
 			respond(
@@ -847,9 +870,15 @@ const activate = async (ports: HostPorts, options: Signal): Promise<ActiveWorksp
 				Effect.flatMap(PublicPages, (pages) => pages.render(incoming(request, address))),
 				signal
 			),
+		// a wake also delivers the last day's workspace events to the inbox, so a host announces one by waking
 		wake: ({ signal }) =>
+			run(Effect.flatMap(Runs, (runs) => runs.tick).pipe(Effect.andThen(announced)), signal),
+		park: ({ signal, automationsMs }) =>
 			run(
-				Effect.flatMap(Runs, (runs) => runs.tick),
+				Effect.flatMap(Runs, (runs) => runs.park).pipe(
+					Effect.timeoutOption(automationsMs),
+					Effect.andThen(Effect.flatMap(Agents, (agents) => agents.park))
+				),
 				signal
 			),
 		crons: () => run(Effect.flatMap(Runs, (runs) => runs.crons)),

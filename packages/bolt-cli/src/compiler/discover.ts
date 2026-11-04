@@ -8,6 +8,8 @@ import {
 	LAYOUT_HELP,
 	NAME,
 	ROLES,
+	fileRe,
+	matchDir,
 	type Role
 } from '@norbital-ai/bolt/tooling';
 
@@ -27,29 +29,9 @@ export type Diagnostic = {
 const reserved = (name: string): boolean =>
 	/^(sys_|bolt_)/.test(name) || Object.hasOwn(SYSTEM.models, name);
 
-const escape = (s: string) => s.replace(/[.+]/g, '\\$&');
-const fileRe = (file: string) => new RegExp(`^${escape(file).replace('*', '([^.]+)')}$`);
 const FOLDERS = new Set(
 	ROLES.flatMap((r) => r.dir.split('/')).filter((s) => s !== '' && !s.includes('*'))
 );
-
-/** Matches a dir pattern; returns the folder name (`''` when the pattern has none) or undefined. */
-function matchDir(pattern: string, segs: string[]): string | undefined {
-	const p = pattern === '' ? [] : pattern.split('/');
-	if (p.at(-1) === '**') {
-		const fixed = p.slice(0, -1);
-		return segs.length > fixed.length && fixed.every((s, i) => s === segs[i])
-			? segs.slice(fixed.length).join('/')
-			: undefined;
-	}
-	if (p.length !== segs.length) return undefined;
-	let name = '';
-	for (const [i, s] of p.entries()) {
-		if (s === '*') name = segs[i]!;
-		else if (s !== segs[i]) return undefined;
-	}
-	return name;
-}
 
 /**
  * Walks `<root>/src` (and `<root>/seed` for seed names) and classifies every `+` file; every layout mistake is a diagnostic.

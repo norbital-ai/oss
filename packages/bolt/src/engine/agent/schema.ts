@@ -71,6 +71,8 @@ export type Meta =
 	/** A tool row whose result was clipped keeps the whole output for `read_output` (rule 62). */
 	| { tag: 'output'; full: Json }
 	| { tag: 'note' }
+	/** A workspace event the host published (a merge landed, maintenance scheduled), heard at a turn step; `at` is its time. */
+	| { tag: 'event'; at: string }
 	/** A sub-agent's report to its parent (its answer, its question, a failure or a stop), queued as the parent's input. */
 	| { tag: 'report'; conversation: string; asked?: true };
 /** Every model call of a turn summed (turn steps, compaction, verifier, awaited children): the cost disclosure's data. */
@@ -143,7 +145,8 @@ const MetaSchema = Schema.Union([
 		usage: Schema.optionalKey(UsageSchema)
 	}),
 	Schema.Struct({ tag: Schema.Literal('output'), full: Schema.Json }),
-	Schema.Struct({ tag: Schema.Literal('note') })
+	Schema.Struct({ tag: Schema.Literal('note') }),
+	Schema.Struct({ tag: Schema.Literal('event'), at: Schema.String })
 ]);
 /** Unnamed keys a content or file object carries stay as written. */
 const Rest = [Schema.Record(Schema.String, Schema.Json)] as const;
@@ -523,7 +526,12 @@ export function transcriptRow(r: MessageRow, staff: boolean, thread: boolean): A
 						...(step.result === undefined
 							? {}
 							: {
-									result: clip(step.result, studio === 'logs' || step.name === 'read' ? 20000 : 600)
+									result: clip(
+										step.result,
+										studio === 'logs' || step.name === 'read' || step.name === 'workspace_list'
+											? 20000
+											: 600
+									)
 								}),
 						...(completed.preview === undefined ? {} : { preview: completed.preview }),
 						...(approval === undefined ? {} : { approval }),

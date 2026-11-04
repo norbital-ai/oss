@@ -81,6 +81,18 @@ const done =
 const elapsed = clockProbe;
 
 describe('tool results are bounded (rule 62)', () => {
+	it('a stored result rides the transcript whole up to the result bound, its start past it', () => {
+		const stored = (bytes: number) =>
+			messages([
+				{
+					...row(1),
+					role: 'tool',
+					content: { id: 'c', name: 'skill', result: 'x'.repeat(bytes) }
+				}
+			])[0];
+		expect(JSON.stringify(stored(BOUNDS.resultBytes - 1_000))).not.toContain('truncated');
+		expect(JSON.stringify(stored(BOUNDS.resultBytes + 1_000))).toContain('truncated');
+	});
 	it('clips long cells and drops trailing rows with a note, within the result bound', () => {
 		const rows = Array.from({ length: 200 }, (_, i) => ({
 			id: String(i),
@@ -169,7 +181,7 @@ describe('the context projection (rule 60)', () => {
 		});
 		// what every conversation shares first (brief, skills), then the envoy's channel guidance and its task
 		expect(s).toContain(
-			"# Brief (the workspace's +agent.md, already here: never read it again)\nBrief.\n\n# Your skills (load one with the skill tool before a task it covers)\n- pricing: How we price\n\nYou are Norbius"
+			"# Brief (the workspace's +agent.md, already loaded)\nBrief.\n\n# Your skills (the skill tool reads one)\n- pricing: How we price\n\nYou are Norbius"
 		);
 		expect(s.endsWith('\n\nTask.')).toBe(true);
 		expect(s).not.toMatch(/20\d\d|clock|timezone/i);
@@ -182,7 +194,7 @@ describe('the context projection (rule 60)', () => {
 		const layout = system({ skills: {}, tools: [{ name: 'workspace_search' }] });
 		expect(layout).toContain('# Workspace source');
 		expect(layout).toContain('src/data/model/<name>/+model.ts');
-		expect(layout).toMatch(/workspace_list[\s\S]*workspace_search/);
+		expect(layout).toContain('Source tools work on your current working tree');
 	});
 });
 

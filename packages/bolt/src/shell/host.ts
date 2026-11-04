@@ -74,7 +74,8 @@ import {
 	sendCode,
 	SIGNUP_KEY,
 	verifyCode,
-	type IdentityHost
+	type IdentityHost,
+	keysOf
 } from '../engine/identity/session.ts';
 import { BOLT, HEADERS, PATHS, SW, basePath, canonicalPath, under } from '../protocol/wire.ts';
 import { fingerprint, schemaSlice } from '../engine/schema/plan.ts';
@@ -108,7 +109,7 @@ import {
 	type ShellNotice,
 	type WorkspaceLink
 } from './nav.ts';
-import { readLog } from '../engine/guest/telemetry.ts';
+import { readLog, runLog } from '../engine/guest/telemetry.ts';
 import { Audit } from '../engine/audit.ts';
 import { AuditQuery } from '../protocol/audit.ts';
 import { audited, auditActor } from '../engine/audit-operation.ts';
@@ -188,6 +189,8 @@ export type ShellHostConfig = {
 	readonly secure?: boolean;
 	readonly ai?: boolean;
 	readonly environment?: string;
+	/** The release's client hash (`ShellBoot.client`). */
+	readonly client?: string;
 	readonly notice?: (auth: Authority) => Promise<ShellNotice | null>;
 	readonly organization?: {
 		write(auth: Authority, branding: { name: string; logo: string | null }): Promise<void>;
@@ -472,7 +475,7 @@ const makeShell = Effect.gen(function* () {
 		request: HttpServerRequest.HttpServerRequest,
 		auth: Authority
 	) {
-		const ip = rateLimits.ipBucket(Option.getOrElse(request.remoteAddress, () => '0.0.0.0'));
+		const ip = yield* rateLimits.ipBucket(Option.getOrElse(request.remoteAddress, () => '0.0.0.0'));
 		const verdict = yield* rateLimits.charge(
 			chargesFor(auth, ['register'], { ip }),
 			yield* Clock.currentTimeMillis
@@ -590,7 +593,7 @@ const makeShell = Effect.gen(function* () {
 			app = auth.actor.app;
 		const charge = Effect.fn('shell.visitorCharge')(function* (kind: RateKind) {
 			const verdict = yield* rateLimits.charge(
-				chargesFor(auth, [kind], { ip: macKey(h.keys.ipMac, addressBucket(ip)) }),
+				chargesFor(auth, [kind], { ip: macKey((yield* keysOf(h)).ipMac, addressBucket(ip)) }),
 				yield* Clock.currentTimeMillis
 			);
 			return verdict.ok ? null : rateLimitedResponse(verdict.retryAfter);
@@ -767,10 +770,11 @@ const makeShell = Effect.gen(function* () {
 			name: Option.getOrNull(user)?.name ?? null,
 			preview: x.preview,
 			surfaces: s,
-			inbox: box === null ? 0 : box.requests.filter((r) => r.canDecide).length + box.unread,
+			inbox: box === null ? 0 : box.requests.filter((r) => r.canDecide).length,
 			push: s.inbox ? (c.push?.publicKey ?? null) : null,
 			...(c.ai === false ? { aiUnconfigured: true as const } : {}),
 			...(notice === null ? {} : { notice }),
+			...(c.client === undefined ? {} : { client: c.client }),
 			...(workspaces.length === 0 ? {} : { workspaces }),
 			envoys: Object.fromEntries([
 				...Object.entries(m.envoys).map(([key, envoy]) => [key, envoy.name] as const),
@@ -1067,7 +1071,9 @@ const makeShell = Effect.gen(function* () {
 												m.customFields,
 												m.models
 											)
-										})
+										}),
+								// who reads the run's input reads its log: what it printed can hold no less
+								...(run.input === undefined ? {} : { logs: yield* runLog(logs, run.id) })
 							}
 						});
 			}

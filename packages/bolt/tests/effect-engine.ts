@@ -78,7 +78,7 @@ export const bareHost = (db: TenantDbShape, options: { readonly guest?: GuestPro
 					screenshot: async () => new Uint8Array(),
 					download: async () => ({
 						key: 'k',
-						sha256: 's',
+						sha256: 'a'.repeat(64),
 						name: 'file',
 						mime: 'image/png',
 						bytes: 1

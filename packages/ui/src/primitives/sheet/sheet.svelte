@@ -45,7 +45,15 @@ screen from its header.
 	import { resetInset } from '../../layout/inset.svelte.js';
 	import { TAB_LEVEL } from '../tabs/level.js';
 	import { cn, uiText } from '../utils.js';
-	import { escapes, openSheets, SHEET_GUARD, type SheetGuard } from './dismiss.js';
+	import {
+		escapes,
+		openSheets,
+		popSheet,
+		pushSheet,
+		sheetRevision,
+		SHEET_GUARD,
+		type SheetGuard
+	} from './dismiss.js';
 
 	let {
 		open = $bindable(false),
@@ -58,6 +66,7 @@ screen from its header.
 		class: className
 	}: SheetProps = $props();
 	let shown = $state(open);
+	let depth = $state(0);
 	const t = uiText();
 	const me = {};
 	// hook:view-ui — a record view inside claims this header for its label, pills and actions: one header, not two
@@ -123,12 +132,14 @@ screen from its header.
 		(isOpen) => {
 			if (!isOpen) return void leave();
 			shown = true;
-			openSheets.push(me);
-			return () => void openSheets.splice(openSheets.indexOf(me), 1);
+			pushSheet(me);
+			depth = openSheets.length - 1;
+			return () => popSheet(me);
 		}
 	);
 
 	const right = $derived(side === 'right');
+	const top = $derived($sheetRevision >= 0 && openSheets.at(-1) === me);
 	const wide = new MediaQuery('min-width: 48rem');
 	const still = new MediaQuery('(prefers-reduced-motion: reduce)');
 	/** A phone's sheet rises from the bottom; a wide screen's slides in from its edge. */
@@ -268,20 +279,27 @@ screen from its header.
 	<!-- non-modal on a wide screen: no backdrop, no focus trap, no scroll lock; the page behind stays clickable and typeable.
 	     A phone's drawer has no ×: a tap outside it (this scrim) or a swipe down on its grabber dismisses it -->
 	<!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
-	<div
-		bind:this={scrim}
-		data-sheet-scrim
-		class="fixed inset-0 z-40 animate-in bg-black/40 fade-in-0 animation-duration-200 motion-reduce:animate-none md:hidden"
-		onclick={close}
-	></div>
+	{#if top || !open}
+		<div
+			bind:this={scrim}
+			data-sheet-scrim
+			data-sheet-top={top || undefined}
+			style="z-index:{40 + depth}"
+			class="fixed inset-0 animate-in bg-black/40 fade-in-0 animation-duration-200 motion-reduce:animate-none md:hidden"
+			onclick={close}
+		></div>
+	{/if}
 	<div
 		bind:this={panel}
 		role="dialog"
 		aria-modal="false"
 		aria-label={title ?? name}
 		data-sheet-side={side}
+		data-sheet-top={top || undefined}
+		data-sheet-depth={depth}
 		data-fullscreen={full || undefined}
 		style={[
+			`z-index:${40 + depth}`,
 			right && !full && width !== null ? `--sheet-w:${width}px` : '',
 			!full && height !== null ? `--sheet-h:${height}px` : ''
 		].join(';') || undefined}

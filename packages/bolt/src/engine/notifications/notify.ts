@@ -20,6 +20,34 @@ import { conversationOf, definitionOf } from '../integrations/instances.ts';
 
 export const NOTIFY = 'bolt.notify';
 
+/** A workspace event as the host publishes it (a change merged, maintenance scheduled, a payment due): `at` is ISO. */
+export type WorkspaceNote = {
+	readonly id: string;
+	readonly at: string;
+	readonly title: string;
+	readonly body?: string | undefined;
+};
+/** Workspace events as inbox notices to every active staff member, each once per member (a re-announce adds nothing). */
+export const announce = Effect.fn('Bolt.announce')(function* (notes: readonly WorkspaceNote[]) {
+	if (notes.length === 0) return;
+	const db = yield* TenantDb,
+		live = yield* Live;
+	const inserted = yield* db.returning(Schema.Struct({ id: Schema.String }), {
+		text: `INSERT INTO sys_notification (id, recipient, member, title, body, link, once, attachments, at)
+	SELECT 'event:' || e.id || ':' || u.id, '{"channel":"inbox","recipients":[]}'::jsonb, u.id, e.title, e.body, NULL,
+		'event:' || e.id || ':' || u.id, '[]'::jsonb, e.at::timestamptz
+	FROM jsonb_to_recordset($1::jsonb) AS e(id text, at text, title text, body text)
+	CROSS JOIN sys_user u WHERE u.active AND u.kind = 'staff'
+	ON CONFLICT (once) DO NOTHING RETURNING id`,
+		params: [JSON.stringify(notes)]
+	});
+	if (inserted.length > 0)
+		live.syncChanged(
+			'sys_notification',
+			inserted.map((row) => row.id)
+		);
+});
+
 const Approvers = Schema.Struct({
 	teams: Schema.Array(Schema.String),
 	users: Schema.Array(Schema.String)

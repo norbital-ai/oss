@@ -7,7 +7,7 @@ import { Effect } from 'effect';
 import { browser, required } from './view-fixture.ts';
 import { confirmDialog, element } from './elements.ts';
 import type { ComponentProps } from 'svelte';
-import { escapes, navigates } from '../src/primitives/sheet/dismiss.ts';
+import { escapes, navigates, openSheets, popSheet, pushSheet } from '../src/primitives/sheet/dismiss.ts';
 import { filterLogs, logPreview, wantsOlder, type LogLine } from '../src/logs/logs.ts';
 import { offsets, windowOf } from '../src/primitives/virtual/virtual.ts';
 
@@ -184,6 +184,25 @@ it.live('sheet: Esc closes only the topmost, never a handled or composing key', 
 			escapes({ key: 'Enter', defaultPrevented: false, isComposing: false }, b, [a, b]),
 			false
 		);
+	})
+);
+
+it.live('sheet: pushes are unique and popping an absent sheet leaves the top', () =>
+	browser(async () => {
+		const a = {};
+		const b = {};
+		openSheets.length = 0;
+		pushSheet(a);
+		pushSheet(b);
+		assert.equal(openSheets.at(-1), b);
+		popSheet(b);
+		assert.equal(openSheets.at(-1), a);
+		popSheet({});
+		assert.equal(openSheets.at(-1), a);
+		pushSheet(a);
+		assert.equal(openSheets.filter((sheet) => sheet === a).length, 1);
+		assert.equal(openSheets.at(-1), a);
+		openSheets.length = 0;
 	})
 );
 
