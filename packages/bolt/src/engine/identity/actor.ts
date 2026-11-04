@@ -27,15 +27,28 @@ type TeamGraph = {
 	readonly [handle: string]: SourceTeam;
 };
 const q = (text: string, ...params: Json[]) => ({ text, params });
+/** How long a caller's row or session is trusted unread; a statement on either ends it at once. */
+export const MEMO_MS = 900_000;
 export class Authorities {
 	private readonly cache = new Map<string, Authority>();
+	/** With `remember`: each active member's row, and the identity writes when it was read. */
+	private readonly rows = new Map<
+		string,
+		{ readonly row: UserRow; readonly stamp: number; readonly at: number }
+	>();
 	private readonly m: EngineManifest;
 	private readonly release: string;
 	private readonly max: number;
-	constructor(m: EngineManifest, release: string, max = 1000) {
+	private readonly remember: boolean;
+	constructor(
+		m: EngineManifest,
+		release: string,
+		options: { readonly max?: number; readonly remember?: boolean } = {}
+	) {
 		this.m = m;
 		this.release = release;
-		this.max = max;
+		this.max = options.max ?? 1000;
+		this.remember = options.remember ?? false;
 	}
 	/** Compiled once per key; the key carries every revision it depends on, so a change is a miss, never a stale hit. */
 	compile(holder: Holder, key: string): Authority {
@@ -48,6 +61,10 @@ export class Authorities {
 		}
 		return a;
 	}
+	/** A member who may yet be bound to a record, which any write to that record can do: never remembered unbound. */
+	private bindable(u: UserRow) {
+		return u.kind === 'external' && u.party === null && signupOf(this.m)?.party !== undefined;
+	}
 	/**
 	 * A member who signed up before the record that is them existed is bound to it as soon as exactly one record holds their
 	 * number (or email) — the booking that files a newcomer's customer record shows them that booking at once.
@@ -56,7 +73,7 @@ export class Authorities {
 		return Effect.gen(
 			function* (this: Authorities) {
 				const signup = signupOf(this.m);
-				if (u.kind !== 'external' || u.party !== null || signup?.party === undefined) return u;
+				if (!this.bindable(u) || signup?.party === undefined) return u;
 				// ponytail: one read per request while a member stays unbound; bounded by how long they have no record
 				const address =
 					u.phone !== null && signup.party.match.phone !== undefined
@@ -82,13 +99,15 @@ SELECT (SELECT (n->>'revision')::int FROM bound) AS revision`
 			}.bind(this)
 		);
 	}
-	/**
-	 * A member's authority, or `null` for an unknown or deactivated user. One pipelined read. `preview` (rule 39) clears
-	 * the administrator flag, so the previewed member's grants and approval eligibility apply.
-	 */
-	member(db: TenantDb, userId: string, preview = false) {
+	/** An active member's row, from memory while no statement on people or sessions has finished since it was read. */
+	private row(db: TenantDb, userId: string) {
 		return Effect.gen(
 			function* (this: Authorities) {
+				const now = yield* Clock.currentTimeMillis,
+					stamp = db.identityWrites(),
+					held = this.rows.get(userId);
+				if (held !== undefined && held.stamp === stamp && now - held.at < MEMO_MS) return held.row;
+				this.rows.delete(userId);
 				const [users] = yield* db.read([
 					q(
 						'SELECT id, email, phone, kind, active, admin, team, party, signup, revision FROM sys_user WHERE id = $1',
@@ -103,6 +122,23 @@ SELECT (SELECT (n->>'revision')::int FROM bound) AS revision`
 				// an anonymous user is a visitor's identity (a cookie, never a session): it is no member
 				if (found === undefined || !found.active || found.kind === 'anonymous') return null;
 				const u = yield* this.bind(db, found);
+				if (this.remember && !this.bindable(u)) {
+					this.rows.set(userId, { row: u, stamp, at: now });
+					if (this.rows.size > this.max) this.rows.delete(this.rows.keys().next().value!);
+				}
+				return u;
+			}.bind(this)
+		);
+	}
+	/**
+	 * A member's authority, or `null` for an unknown or deactivated user. One pipelined read. `preview` (rule 39) clears
+	 * the administrator flag, so the previewed member's grants and approval eligibility apply.
+	 */
+	member(db: TenantDb, userId: string, preview = false) {
+		return Effect.gen(
+			function* (this: Authorities) {
+				const u = yield* this.row(db, userId);
+				if (u === null) return null;
 				const graph = teams(this.m),
 					team = u.team !== null && Object.hasOwn(graph, u.team) ? u.team : null;
 				const actor: EngineActor = {
@@ -320,10 +356,7 @@ SELECT (SELECT (n->>'revision')::int FROM bound) AS revision`
 		const policies = this.m.automations[by.automation]?.policies;
 		if (policies === undefined)
 			throw BoltError.make('unknownAutomation', 'admission', `no automation '${by.automation}'`);
-		return this.compile(
-			{ actor, admin: false, policies },
-			`automation:${by.automation}:${run}`
-		);
+		return this.compile({ actor, admin: false, policies }, `automation:${by.automation}:${run}`);
 	}
 }
 /** Rule 39: admin-only; the Authority becomes the previewed member's (or team's, `{ team }`), administrator flag cleared. */

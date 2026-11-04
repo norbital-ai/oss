@@ -80,7 +80,7 @@ import {
 	ShellConfig,
 	ShellRoutes,
 	Turnstile,
-	authorityOf,
+	sessionAuthority,
 	type ShellHostConfig
 } from '@norbital-ai/bolt/engine';
 import { memoryAudit } from './audit.ts';
@@ -1630,14 +1630,19 @@ export class TestWorkspace extends Context.Service<TestWorkspace, Kit>()(
 					}),
 					Layer.succeedContext(engineContext)
 				);
+				// built once, as a host does: what it holds lives as long as the workspace
+				const shellContext = yield* Layer.build(shellBase);
 				const authorities = new Map<string, Authority>();
+				const resolve = yield* sessionAuthority.pipe(
+					Effect.provide(shellContext),
+					Effect.provideService(TenantDb, db)
+				);
 				const session = Layer.succeed(SessionAuthority, {
 					of: (request) => {
 						const authority = authorities.get(request.headers['bolt-test-authority'] ?? '');
 						return authority === undefined
-							? authorityOf(request).pipe(
-									Effect.map(Option.fromNullishOr),
-									Effect.provide(shellBase),
+							? resolve(request).pipe(
+									Effect.provide(shellContext),
 									Effect.provideService(TenantDb, db)
 								)
 							: Effect.succeed(Option.some(authority));
@@ -1647,7 +1652,7 @@ export class TestWorkspace extends Context.Service<TestWorkspace, Kit>()(
 					BoltHostLive.pipe(
 						Layer.provideMerge(session),
 						Layer.provideMerge(ShellRoutes),
-						Layer.provideMerge(shellBase)
+						Layer.provideMerge(Layer.succeedContext(shellContext))
 					)
 				);
 				const host = Context.get(hostContext, BoltHost);

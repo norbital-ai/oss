@@ -56,7 +56,7 @@ const row = {
 };
 
 describe('session memo (L-COL-034)', () => {
-	it.effect('reads once per token for 30 s, single-flight, and re-reads after', () =>
+	it.effect('reads once per token for fifteen minutes, single-flight, and re-reads after', () =>
 		Effect.gen(function* () {
 			const t = yield* host(() => Effect.succeed([row]));
 			const [a, b] = yield* Effect.all([authenticate(t.h, 'tok'), authenticate(t.h, 'tok')], {
@@ -72,8 +72,8 @@ describe('session memo (L-COL-034)', () => {
 			expect(b).toEqual(a);
 			expect(yield* authenticate(t.h, 'tok')).toEqual(a);
 			expect(t.reads()).toBe(1);
-			t.tick(30_001);
-			yield* TestClock.adjust(30_001);
+			t.tick(900_001);
+			yield* TestClock.adjust(900_001);
 			yield* authenticate(t.h, 'tok');
 			expect(t.reads()).toBe(2);
 		})

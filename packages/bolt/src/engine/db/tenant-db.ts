@@ -43,6 +43,8 @@ export type SqlReadCaptureService = {
 };
 /** Set on the work a generation owes its database, so its own statements do not wait for it. */
 const SqlOwed = Context.Reference<boolean>('bolt/SqlOwed', { defaultValue: () => false });
+/** A statement that can change who is signed in or what they may do. */
+const IDENTITY = /\bsys_(?:user|session)\b/;
 /** Neon's default: a database touched this recently is still awake, so one more read costs no wake. */
 const AWAKE_MILLIS = 5 * 60_000;
 /** Native transaction routing. Captured services retain their contracts while every SQL call uses this lease. */
@@ -64,6 +66,11 @@ export type TenantDbShape = RawDb & {
 	readonly ready: Effect.Effect<void, DbError>;
 	/** Whether this generation used the database so lately that it is still awake. */
 	readonly awake: Effect.Effect<boolean>;
+	/**
+	 * How many statements on people or sessions have finished: what a memo of either keeps beside its answer, read
+	 * before the read, so a write that lands at any point after makes the answer stale at once.
+	 */
+	readonly identityWrites: () => number;
 	/** Work that only checks for work: unless it writes, it does not count as the database being in use. */
 	readonly quietly: <A, E, R>(work: Effect.Effect<A, E, R>) => Effect.Effect<A, E, R>;
 	/** One read's rows, each decoded by `schema`. */
@@ -95,7 +102,8 @@ export class TenantDb extends Context.Service<TenantDb, TenantDbShape>()('bolt/T
 	static readonly typed = (adapter: RawDb): TenantDbShape => {
 		let owed: Effect.Effect<void, DbError> | undefined,
 			touched = Number.NEGATIVE_INFINITY,
-			writes = 0;
+			writes = 0,
+			identity = 0;
 		const turn = Semaphore.makeUnsafe(1);
 		const pay = Effect.gen(function* () {
 			if (owed === undefined || (yield* SqlOwed)) return;
@@ -117,17 +125,33 @@ export class TenantDb extends Context.Service<TenantDb, TenantDbShape>()('bolt/T
 				)
 			);
 		});
-		const settled = Effect.fnUntraced(function* (writing: boolean) {
+		const settled = Effect.gen(function* () {
 			if (yield* SqlOwed) return;
-			if (writing) writes++;
 			touched = yield* Clock.currentTimeMillis;
 			yield* pay;
 		});
+		/** Counted once the statements end, so a read that overlapped them can never be kept as current. */
+		const wrote = (texts: readonly string[]) =>
+			Effect.sync(() => {
+				writes++;
+				if (texts.some((text) => IDENTITY.test(text))) identity++;
+			});
 		const raw: RawDb = {
-			read: (statements) => Effect.andThen(settled(false), adapter.read(statements)),
-			write: (statement, lock) => Effect.andThen(settled(true), adapter.write(statement, lock)),
-			transaction: (batch) => Effect.andThen(settled(true), adapter.transaction(batch)),
-			session: () => Effect.andThen(settled(true), adapter.session())
+			read: (statements) => Effect.andThen(settled, adapter.read(statements)),
+			write: (statement, lock) =>
+				Effect.andThen(settled, adapter.write(statement, lock)).pipe(
+					Effect.ensuring(wrote([statement.text]))
+				),
+			transaction: (batch) =>
+				Effect.andThen(settled, adapter.transaction(batch)).pipe(
+					Effect.ensuring(wrote(batch.statements.map((statement) => statement.text)))
+				),
+			// what an interactive transaction ran is not seen here: its commit counts as touching everything
+			session: () =>
+				Effect.map(Effect.andThen(settled, adapter.session()), (session) => ({
+					...session,
+					commit: Effect.ensuring(session.commit, wrote(['sys_user']))
+				}))
 		};
 		const read = Effect.fn('Bolt.tenantRead')(function* (statements: readonly Sql[]) {
 			const session = yield* SqlSessionDb;
@@ -167,6 +191,7 @@ export class TenantDb extends Context.Service<TenantDb, TenantDbShape>()('bolt/T
 			},
 			ready: pay,
 			awake: Effect.map(Clock.currentTimeMillis, (now) => now - touched < AWAKE_MILLIS),
+			identityWrites: () => identity,
 			quietly: (work) =>
 				Effect.suspend(() => {
 					const before = touched,

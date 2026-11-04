@@ -1,6 +1,6 @@
 // What a generation owes its database: a cold start makes no trip, and the work runs once before the first statement.
 import { describe, expect, it } from '@effect/vitest';
-import { Effect } from 'effect';
+import { Deferred, Effect } from 'effect';
 import { TenantDb, type RawDb } from '../src/engine/db/tenant-db.ts';
 import { DbError } from '../src/engine/errors.ts';
 
@@ -60,6 +60,45 @@ describe('what a generation owes its database', () => {
 			expect(attempts).toBe(2);
 			expect(trips).toEqual(['read']);
 		})
+	);
+	it.effect('only a finished statement on people or sessions counts as an identity write', () =>
+		Effect.gen(function* () {
+			const { db } = world();
+			yield* db.write({ text: 'INSERT INTO sys_config VALUES (1)', params: [] });
+			expect(db.identityWrites()).toBe(0);
+			yield* db.write({ text: 'UPDATE "sys_user" SET admin = false', params: [] });
+			expect(db.identityWrites()).toBe(1);
+			yield* db.transaction({ statements: [{ text: 'DELETE FROM sys_session', params: [] }] });
+			expect(db.identityWrites()).toBe(2);
+		})
+	);
+	it.effect('a transaction counts when it commits, not before', () =>
+		Effect.scoped(
+			Effect.gen(function* () {
+				const commit = yield* Deferred.make<void>();
+				const raw: RawDb = {
+					read: () => Effect.succeed([]),
+					write: () => Effect.succeed({ rows: [], affected: 0 }),
+					transaction: () => Effect.succeed([]),
+					session: () =>
+						Effect.succeed({
+							db: {
+								read: () => Effect.succeed([]),
+								write: () => Effect.succeed({ rows: [], affected: 0 }),
+								transaction: () => Effect.succeed([])
+							},
+							commit: Deferred.await(commit),
+							rollback: Effect.void
+						})
+				};
+				const db = TenantDb.typed(raw);
+				const session = yield* db.session();
+				expect(db.identityWrites()).toBe(0);
+				yield* Deferred.succeed(commit, undefined);
+				yield* session.commit;
+				expect(db.identityWrites()).toBe(1);
+			})
+		)
 	);
 	it.effect('quiet work counts as the database in use only if it writes', () =>
 		Effect.gen(function* () {

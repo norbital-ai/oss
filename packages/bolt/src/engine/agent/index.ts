@@ -428,7 +428,7 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 		mcpPort = yield* Mcp,
 		logs = yield* Logs;
 	const manifestHash = sha256Hex(JSON.stringify(m));
-	const authorities = new Authorities(m, 'agent');
+	const authorities = new Authorities(m, 'agent', { remember: true });
 	// the workspace's skills, their files read from the release where the host binds them
 	const skillFiles = config.skillFiles;
 	// the platform's skills first, so a workspace skill of the same name replaces one

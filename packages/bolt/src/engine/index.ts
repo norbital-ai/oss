@@ -311,6 +311,7 @@ export {
 	ShellConfig,
 	Turnstile,
 	authorityOf,
+	sessionAuthority,
 	type ShellHostConfig,
 	type TurnstileShape
 } from '../shell/host.ts';

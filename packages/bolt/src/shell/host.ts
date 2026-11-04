@@ -367,7 +367,7 @@ const makeShell = Effect.gen(function* () {
 		rateLimits = yield* RateLimits,
 		logs = yield* Logs,
 		audit = yield* Audit;
-	const authorities = new Authorities(m, (yield* Activation).release);
+	const authorities = new Authorities(m, (yield* Activation).release, { remember: true });
 
 	h.events = {
 		announce: h.now.pipe(Effect.flatMap((now) => runs.nudge(now.toISOString())))
@@ -1442,9 +1442,10 @@ const makeShell = Effect.gen(function* () {
 		);
 	return { authority, handle, publicPage };
 });
+/** The one shell's way to resolve a caller: what it remembers of them lives as long as the shell does. */
+export const sessionAuthority = Effect.map(makeShell, (shell) => shell.authority);
 export const authorityOf = (request: HttpServerRequest.HttpServerRequest) =>
-	makeShell.pipe(
-		Effect.flatMap((shell) => shell.authority(request)),
+	Effect.flatMap(SessionAuthority, (session) => session.of(request)).pipe(
 		Effect.map(Option.getOrNull)
 	);
 export const ShellRoutes = Layer.unwrap(
