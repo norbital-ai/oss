@@ -21,6 +21,7 @@ import {
 	makeIdentityHost,
 	sendCode,
 	SIGNUP_TEXTS,
+	SIGNUP_TEXTS_PER_IP,
 	verifyCode,
 	type IdentityHost,
 	type PhoneVerifier
@@ -326,6 +327,46 @@ layer(PhoneFixtureLive)((it) => {
 					expect(yield* verifyCode(h, '+6581234567', lastCode(), ip)).toMatchObject({ user: ada });
 					expect(yield* setSignup(h, admin, true)).toBeNull();
 				})
+		);
+
+		it.effect('one caller cannot spend the hour’s sign-up texts for everyone', () =>
+			Effect.gen(function* () {
+				const { h } = yield* PhoneFixture;
+				const capped = { ...h, windows: new RateWindows() };
+				let sent = 0,
+					refused: unknown = null;
+				for (let i = 0; i <= SIGNUP_TEXTS_PER_IP && refused === null; i++) {
+					const r = yield* Effect.result(
+						sendCode(capped, `+6571000${String(i).padStart(3, '0')}`, '7.7.7.7')
+					);
+					if (Result.isSuccess(r)) sent += 1;
+					else refused = r.failure;
+				}
+				expect(refused).toMatchObject({ code: 'rateLimited' });
+				expect(sent).toBe(SIGNUP_TEXTS_PER_IP);
+				expect(yield* sendCode(capped, '+6571001000', '7.7.7.8')).toBeNull();
+			})
+		);
+
+		it.effect('where sign-up is challenged, a stranger is texted only after passing; a member never needs to', () =>
+			Effect.gen(function* () {
+				const { h, texts } = yield* PhoneFixture;
+				const capped = { ...h, windows: new RateWindows() };
+				const before = texts.length;
+				expect(
+					yield* Effect.flip(
+						sendCode(capped, '+6572000001', '6.6.6.6', 'sms', Effect.succeed(false))
+					)
+				).toMatchObject({ code: 'forbidden' });
+				expect(texts.length).toBe(before);
+				expect(
+					yield* sendCode(capped, '+6572000001', '6.6.6.6', 'sms', Effect.succeed(true))
+				).toBeNull();
+				// what passed is asked of strangers only: Ada signs in on any page
+				expect(
+					yield* sendCode(capped, '+6581234567', '6.6.6.6', 'sms', Effect.succeed(false))
+				).toBeNull();
+			})
 		);
 
 		it.effect(

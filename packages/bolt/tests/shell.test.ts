@@ -934,6 +934,11 @@ describe('visitor fetch (§5.10, GAPS r5 11)', () => {
 					try: () => vf('/__bolt/files/applications.cv', { method: 'PUT' }),
 					catch: (cause) => new Error(String(cause))
 				});
+				queue.put('t3');
+				yield* Effect.tryPromise({
+					try: () => vf('/__bolt/session/code', { method: 'POST' }),
+					catch: (cause) => new Error(String(cause))
+				});
 				yield* Effect.tryPromise({
 					try: () => vf('/assets/x.png'),
 					catch: (cause) => new Error(String(cause))
@@ -942,9 +947,10 @@ describe('visitor fetch (§5.10, GAPS r5 11)', () => {
 					{ url: '/__bolt/q', app: 'careers', token: null },
 					{ url: '/__bolt/act', app: 'careers', token: 't1' },
 					{ url: '/__bolt/files/applications.cv', app: 'careers', token: 't2' },
+					{ url: '/__bolt/session/code', app: 'careers', token: 't3' },
 					{ url: '/assets/x.png', app: null, token: null }
 				]);
-				expect(resets).toBe(2);
+				expect(resets).toBe(3);
 			})
 	);
 	it.live(

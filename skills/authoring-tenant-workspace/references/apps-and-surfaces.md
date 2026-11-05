@@ -53,7 +53,7 @@ Exact shapes: `Parameters<typeof import('@norbital-ai/bolt').workspace>[0]`, `Ap
 - A public policy reads a model it creates only through an owner ref defaulting to `{ var: 'requestor.id' }`.
 - Limits per IP: `act 120/h`, `register 20/h`; past that the page opens with no identity.
 - Signing in links the user: a newcomer keeps id and rows; an existing account takes over owner refs unless state locks them. `requestor.visitor` text copies and `created_by` do not move: scope ownership with a `sys_user` ref.
-- Phone sign-up: declare `signup` (`via`, `policies`, `party` and its `match` field); the kit's phone verify control is the whole UI. A proven newcomer becomes an external member. Scope rows with `requestor.party` or `requestor.phone`. The link lasts only while the record holds that number: changing it moves access to the new holder at once, so the match field is authority, and only staff may write it. Sends are capped per workspace per hour.
+- Phone sign-up: declare `signup` (`via`, `policies`, `party` and its `match` field, and `challenge: 'turnstile'`, since each stranger's code is paid for); the kit's phone verify control is the whole UI. A challenged sign-up happens on a public app or kiosk page, never the workspace sign-in page. A proven newcomer becomes an external member. Scope rows with `requestor.party` or `requestor.phone`. The link lasts only while the record holds that number: changing it moves access to the new holder at once, so the match field is authority, and only staff may write it. Sends are capped per workspace per hour.
 
 ## Record views
 

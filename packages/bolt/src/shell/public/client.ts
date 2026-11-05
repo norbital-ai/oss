@@ -106,7 +106,7 @@ const scopedFetch =
 		if (boot.kiosk !== null) headers.set(HEADERS.kiosk, boot.kiosk);
 		const challenged =
 			challenge !== null &&
-			((request.method === 'POST' && path === PATHS.act) ||
+			((request.method === 'POST' && (path === PATHS.act || path === PATHS.session.code)) ||
 				(request.method === 'PUT' && path.startsWith(PATHS.files)));
 		return (
 			challenged

@@ -445,7 +445,7 @@ export function visitorFetch(
 		const method = (init.method ?? 'GET').toUpperCase();
 		if (
 			challenge !== null &&
-			((method === 'POST' && path === PATHS.act) ||
+			((method === 'POST' && (path === PATHS.act || path === PATHS.session.code)) ||
 				(method === 'PUT' && path.startsWith(PATHS.files)))
 		)
 			headers.set(HEADERS.challenge, await run(challenge.take));

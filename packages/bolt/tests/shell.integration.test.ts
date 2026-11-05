@@ -18,7 +18,12 @@ import { KitInvalid, TestWorkspace } from '../../bolt-cli/src/test/index.ts';
 const OPEN = '0199a000-0000-4000-8000-00000000000a';
 const manifest = Result.getOrThrow(
 	decodeProjectedManifest({
-		workspace: { tz: 'UTC', locale: 'en', apps: ['sales'] },
+		workspace: {
+			tz: 'UTC',
+			locale: 'en',
+			apps: ['sales'],
+			signup: { via: ['email'], policies: ['applicant'], challenge: 'turnstile' }
+		},
 		models: {
 			openings: {
 				description: 'Roles',
@@ -372,17 +377,14 @@ layer(workspace)('shell routes', (it) => {
 		rep: Jar = jar(),
 		repId = '';
 	describe('shell host (§5.10)', () => {
-		it.effect('refuses unknown workspace emails before sending a sign-in code', () =>
+		it.effect('refuses a stranger who has not passed the check before sending a sign-in code', () =>
 			Effect.gen(function* () {
 				const t = yield* TestWorkspace;
 				const before = t.fakes.sent.length;
 				const reply = yield* call(jar(), 'POST', '/__bolt/session/code', {
 					address: 'stranger@acme.example'
 				});
-				expect(reply).toMatchObject({
-					status: 403,
-					body: { error: { code: 'notMember' } }
-				});
+				expect(reply).toMatchObject({ status: 403, body: { error: { code: 'forbidden' } } });
 				expect(t.fakes.sent.length).toBe(before);
 			})
 		);
@@ -739,6 +741,27 @@ layer(workspace)('shell routes', (it) => {
 		);
 
 		it.effect(
+			'a stranger’s code needs the check, wherever the request claims to come from; a member’s does not',
+			() =>
+				Effect.gen(function* () {
+					const code = (address: string, token?: string) =>
+						call(
+							jar(),
+							'POST',
+							'/__bolt/session/code',
+							{ address },
+							token === undefined ? {} : { 'Bolt-Challenge': token }
+						);
+					expect((yield* code('stranger@acme.example')).status).toBe(403);
+					expect((yield* code('stranger@acme.example', 'forged')).status).toBe(403);
+					expect((yield* code('stranger@acme.example', 'dev-pass')).status).toBe(200);
+					expect((yield* code('boss@acme.example')).status).toBe(200);
+					expect(
+						(yield* call(jar(), 'GET', '/__bolt/session/methods')).body?.['value']
+					).toMatchObject({ signup: [] });
+				})
+		);
+		it.effect(
 			'applies with a fresh Turnstile token; without one, or with a bad one, the act is refused before decode',
 			() =>
 				Effect.gen(function* () {
@@ -817,7 +840,7 @@ layer(workspace)('shell routes', (it) => {
 					expect(b).toMatchObject({
 						actor: { kind: 'visitor', app: 'lobby' },
 						admin: false,
-						visitor: { app: 'lobby' }
+						visitor: { app: 'lobby', siteKey: 'dev' }
 					});
 					expect(b.catalog['openings']?.fields).toEqual({ title: { kind: 'text' } });
 					expect(b.kiosks.map((k) => k.name)).toContain('lobby');

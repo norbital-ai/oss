@@ -18,6 +18,12 @@ export function parseAddress(raw: string): Address | null {
 	return /^\+[1-9]\d{7,14}$/.test(phone) ? { kind: 'phone', value: phone } : null;
 }
 
+/** One number, one spelling, wherever it is stored: an international number in the form a sign-in proves; anything else as typed. */
+export const canonicalPhone = (typed: string): string => {
+	const a = parseAddress(typed);
+	return a?.kind === 'phone' ? a.value : typed;
+};
+
 /** The comparable form: a case-folded email, or `tel:` and the number's digits. Keys a challenge and its rate bucket. */
 export const addressKey = (a: Address): string =>
 	a.kind === 'email' ? a.value.toLowerCase() : `tel:${digits(a.value)}`;

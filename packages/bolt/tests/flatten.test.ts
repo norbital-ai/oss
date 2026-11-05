@@ -43,3 +43,28 @@ it.effect('an unknown field names the fields that may be written, and an invisib
 		]);
 	})
 );
+
+it.effect('a phone field stores one spelling of a number, so uniqueness and matching see the same one', () =>
+	Effect.gen(function* () {
+		const orders = manifest.models['orders'];
+		if (orders === undefined) throw new Error('No orders model');
+		const phones = {
+			...manifest,
+			models: {
+				...manifest.models,
+				orders: {
+					...orders,
+					fields: { ...orders.fields, note: { kind: 'text' as const, format: 'phone' as const } }
+				}
+			}
+		};
+		const flat = new Flattener(phones, catalogOf(phones), () => 'five');
+		for (const note of ['+65 9200 0002', '+65-9200-0002', '+6592000002', '9200 0002'])
+			flat.create('orders', { columns: ['note'] }, { note }, []);
+		assert.strictEqual(flat.problems.length, 0);
+		assert.deepStrictEqual(
+			flat.items.map(({ change }) => (change.op === 'create' ? change.values['note'] : null)),
+			['+6592000002', '+6592000002', '+6592000002', '9200 0002']
+		);
+	})
+);

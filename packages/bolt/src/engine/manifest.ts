@@ -134,7 +134,8 @@ const Signup = Schema.Struct({
 				phone: Schema.optionalKey(Schema.String)
 			})
 		})
-	)
+	),
+	challenge: Schema.optionalKey(Schema.Literal('turnstile'))
 });
 /** `+workspace.ts` with `+secrets.ts` joined into `secrets`; its `connections` are their own part. */
 const Workspace = Schema.Struct({

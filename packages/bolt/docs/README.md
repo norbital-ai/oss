@@ -213,6 +213,14 @@ record's number changes or the record goes, the old holder sees nothing from the
 holder takes it. So the record's address is authority: a mistyped number hands that record to whoever holds
 it. A party a person named on an invitation is never rechecked.
 
+A stranger's code is a paid text. Sign-up texts are capped at 50 an hour for the workspace and 10 for one
+address, and `signup.challenge: 'turnstile'` also asks a public page's bot check before a stranger is texted.
+Members sign in without it. The check runs on public apps and kiosks; the workspace's own sign-in page has no
+widget, so it stops offering sign-up. A host with no check configured refuses strangers, except a local one.
+
+A field with `format: 'phone'` stores an international number in one spelling (`+6592000002`), whatever was
+typed, so `unique` and the digit match see the same value. Rows written before this keep their spelling.
+
 ## Teams
 
 Teams exist only in source: `src/access_control/team/+team.ts` maps each handle to a policy list

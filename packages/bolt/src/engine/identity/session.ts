@@ -171,6 +171,8 @@ const CODE_MS = 10 * 60000,
 	ATTEMPTS = 3;
 /** Texts to numbers that are not yet members, per workspace per hour: what open sign-up can cost at most. */
 export const SIGNUP_TEXTS = 50;
+/** What one address may spend of them, so no single caller can close sign-up for the hour. */
+export const SIGNUP_TEXTS_PER_IP = 10;
 export const requireAdmin = (auth: Authority): IdentityRefusal | null =>
 	auth.admin && auth.actor.kind === 'member'
 		? null
@@ -305,13 +307,15 @@ const invitationsTo = (a: Address, now: Date) => ({
  * Rule 38a(a–c): checks membership, an open invitation or self sign-up before persisting the challenge and sending
  * an email or asking the phone verifier to send by `via` (SMS unless WhatsApp is chosen). Ineligible addresses are
  * refused before the code step. The challenge carries our attempts and expiry for the verifier's code too.
- * A port refusal is returned; a fresh `sendCode` is allowed at once.
+ * A port refusal is returned; a fresh `sendCode` is allowed at once. `human` is asked only for a stranger: where the
+ * workspace challenges sign-up, it answers whether the caller passed.
  */
 export const sendCode = Effect.fn('Bolt.sendCode')(function* (
 	h: IdentityHost,
 	typed: string,
 	ip: string,
-	via: 'sms' | 'whatsapp' = 'sms'
+	via: 'sms' | 'whatsapp' = 'sms',
+	human: Effect.Effect<boolean> = Effect.succeed(true)
 ) {
 	const a = parseAddress(typed);
 	if (a === null) return yield* Effect.fail(refuse('check', ADDRESS_HINT));
@@ -346,17 +350,25 @@ export const sendCode = Effect.fn('Bolt.sendCode')(function* (
 			return yield* Effect.fail(
 				refuse('notMember', 'This address has no invitation to this workspace.')
 			);
+		if (!(yield* human))
+			return yield* Effect.fail(
+				refuse('forbidden', 'Complete the security check on this page, then try again.')
+			);
 		if (a.kind === 'phone') {
-			// a text to a stranger is paid for: sign-up texts are capped for the whole workspace (SMS pumping)
-			const signup: Charge = {
-				rule: 'session.signup',
-				bucket: 'workspace',
-				limit: SIGNUP_TEXTS,
-				windowMs: HOUR
-			};
-			const capped = admitMemory(h, [signup], (yield* h.now).getTime());
+			// a text to a stranger is paid for: sign-up texts are capped for the whole workspace (SMS pumping), and per
+			// address so that one caller cannot use up the hour for everyone
+			const signup: Charge[] = [
+				{ rule: 'session.signup', bucket: 'workspace', limit: SIGNUP_TEXTS, windowMs: HOUR },
+				{
+					rule: 'session.signup',
+					bucket: macKey(keys.ipMac, addressBucket(ip)),
+					limit: SIGNUP_TEXTS_PER_IP,
+					windowMs: HOUR
+				}
+			];
+			const capped = admitMemory(h, signup, (yield* h.now).getTime());
 			if (capped) return yield* Effect.fail(capped);
-			charges.push(signup);
+			charges.push(...signup);
 		}
 	}
 	const code = h.devSink === true ? '123456' : sixDigits();

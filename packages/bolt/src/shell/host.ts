@@ -723,7 +723,13 @@ const makeShell = Effect.gen(function* () {
 				return ready(b, kioskAuth);
 			}
 			const auth = opened.authority;
-			const b = { ...bootFor(m, ws, auth), nav: [], visitor: { app: kioskName } };
+			const siteKey =
+				m.workspace.signup?.challenge === undefined ? undefined : turnstile?.siteKey;
+			const b = {
+				...bootFor(m, ws, auth),
+				nav: [],
+				visitor: { app: kioskName, ...(siteKey === undefined ? {} : { siteKey }) }
+			};
 			return ready(b, auth, visitorCookie(v));
 		}
 		// a visitor page (unless the member signed in holds it): an anonymous user is minted when absent, and the page sees
@@ -735,7 +741,10 @@ const makeShell = Effect.gen(function* () {
 				const minted = yield* mintVisitor(request, auth);
 				if (minted !== null) auth = authorities.visitor(app, (v = minted).id, true);
 			}
-			const siteKey = challengeOf(m, app) === undefined ? undefined : turnstile?.siteKey;
+			const siteKey =
+				(challengeOf(m, app) ?? m.workspace.signup?.challenge) === undefined
+					? undefined
+					: turnstile?.siteKey;
 			const b = {
 				...bootFor(m, ws, auth),
 				visitor: { app, ...(siteKey === undefined ? {} : { siteKey }) }
@@ -863,8 +872,12 @@ const makeShell = Effect.gen(function* () {
 					phone,
 					whatsapp: h.phone?.via.includes('whatsapp') === true,
 					locale: m.workspace.locale,
+					// a challenged sign-up happens on a public page, which carries the check: this one does not
 					signup:
-						open && h.signup !== undefined
+						open &&
+						h.signup !== undefined &&
+						(m.workspace.signup?.challenge === undefined ||
+							(turnstile.siteKey === undefined && h.devSink === true))
 							? h.signup.via.filter((via) => (via === 'email' ? h.mail !== undefined : phone))
 							: []
 				};
@@ -873,11 +886,20 @@ const makeShell = Effect.gen(function* () {
 		[`POST ${PATHS.session.code}`]: (request) =>
 			Effect.gen(function* () {
 				const body = yield* requestBody(request, SessionCode);
+				const ip = Option.getOrElse(request.remoteAddress, () => '0.0.0.0'),
+					token = getHeader(request, HEADERS.challenge);
 				yield* sendCode(
 					h,
 					body.address,
-					Option.getOrElse(request.remoteAddress, () => '0.0.0.0'),
-					body.via === 'whatsapp' ? 'whatsapp' : 'sms'
+					ip,
+					body.via === 'whatsapp' ? 'whatsapp' : 'sms',
+					// a local host sends nothing real and has no check to run
+					m.workspace.signup?.challenge === undefined ||
+						(turnstile.siteKey === undefined && h.devSink === true)
+						? Effect.succeed(true)
+						: token === null || token === ''
+							? Effect.succeed(false)
+							: turnstile.verify(token, ip).pipe(Effect.orElseSucceed(() => false))
 				);
 				return json({ value: null });
 			}),

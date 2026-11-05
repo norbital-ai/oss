@@ -70,11 +70,14 @@ type Signup = {
 	via: NonEmpty<'email' | 'phone'>;
 	policies: NonEmpty<string>;
 	party?: { model: string; match: { email?: string; phone?: string } };
+	/** A stranger's code is paid for: the page they join on must pass this first. Members sign in without it. */
+	challenge?: 'turnstile';
 };
 type SignupFor = {
 	via: NonEmpty<'email' | 'phone'>;
 	policies: NonEmpty<PolicyName>;
 	party?: { model: ModelName; match: { email?: string; phone?: string } };
+	challenge?: 'turnstile';
 };
 type WorkspaceFor<S> = {
 	tz: IanaZone;

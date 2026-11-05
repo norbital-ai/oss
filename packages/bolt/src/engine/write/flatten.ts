@@ -14,6 +14,7 @@ import type { Catalog, FieldInfo, ModelInfo } from '@norbital-ai/store';
 import { clockDefault, compileVar, evaluateVar } from '@norbital-ai/std/vars';
 import { canonical } from '@norbital-ai/store';
 import { decodeInput, type InputSpec } from '../callables/decode.ts';
+import { canonicalPhone } from '../identity/address.ts';
 
 /** An input allowlist (`SelectionBase`), or `'any'` for a callback payload: every stored field and relation action. */
 export type Sel =
@@ -194,7 +195,11 @@ export class Flattener {
 			} else
 				values[k] =
 					// a number for a decimal is the decimal its digits spell, exact to every callback and the store
-					typeof v === 'number' && (f.kind === 'decimal' || f.kind === 'money') ? spelled(v) : v;
+					typeof v === 'number' && (f.kind === 'decimal' || f.kind === 'money')
+						? spelled(v)
+						: typeof v === 'string' && isPhone(this.m.models[model]?.fields[k])
+							? canonicalPhone(v)
+							: v;
 			supplied.push(k);
 		}
 		return { values, rels, supplied };
@@ -517,6 +522,8 @@ const spelled = (v: number): Json => {
 		exponent = Number(/e-(\d+)$/.exec(text)?.[1] ?? 0);
 	return encodeWire(Decimal.fromNumber(v, fraction + exponent));
 };
+const isPhone = (spec: EngineManifest['models'][string]['fields'][string] | undefined) =>
+	spec?.kind === 'text' && spec.format === 'phone' && spec.many !== true;
 const isInputKind = (v: unknown): v is InputSpec[string] =>
 	v !== null && typeof v === 'object' && 'kind' in v && typeof v.kind === 'string';
 /** One stored value against its kind; `null` is left to NOT NULL and the required check. */
