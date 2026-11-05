@@ -1,84 +1,61 @@
-# Runners, clocks and harnesses
+# Runners and harnesses
 
-Read the owning package's scripts and test configuration. A filename outside its include pattern
-is not a run, and a skipped infrastructure case is not a passing proof.
+Read the owning package's scripts and config. A filename outside its include pattern is not a run. Kit contract: `@norbital-ai/bolt-cli/test`; engine types: `@norbital-ai/bolt/engine`.
 
-## Current runners
+## Runners
 
-| Area                         | Entry point                                                                         |
-| ---------------------------- | ----------------------------------------------------------------------------------- |
-| Everything                   | `bun run test [paths...]` from the realm root: one pool of `cores - 1`, every suite |
-| Inside a template            | `bolt test`                                                                         |
-| Shared control behavior      | the owning ui package's mounted interaction tests in happy-dom                      |
-| Real Chromium platform tests | `oss/packages/bolt` Vitest browser mode, one shared headless browser                |
+| Area | Entry |
+| --- | --- |
+| Everything | `bun run test [paths…]` from the realm root, one worker pool |
+| Inside a template | `bolt test` |
+| Shared controls | the ui package's mounted tests in happy-dom |
+| Real Chromium platform tests | `oss/packages/bolt` Vitest browser mode |
 
-Do not add a browser launcher or `.svelte` mounts to templates. Happy-dom verifies mounted
-interactions, not layout pixels. Visual and task checks are probes in `.tmp/`. Keep each file
-cheap (about 2 s of CPU) and the realm about 60 s; the runner prints each suite's wall and CPU. Never
-give one suite its own pool or a longer timeout.
+Add no browser launcher or `.svelte` mounts to templates. Never give a suite its own pool.
 
 ## Effect time
 
-`it.effect` from `@effect/vitest` uses TestClock. Advance it explicitly with `TestClock.adjust`
-from `effect/testing` when elapsed time is part of the behaviour. Use `it.live` if the actual path
-must await native timers or another real host signal. Mixing wall-clock waiting with an unadvanced
-TestClock produces a failure unrelated to the claimed rule.
+- `it.effect` uses TestClock: advance with `TestClock.adjust`. `it.live` only when the path awaits real host signals.
+- Use deterministic signals or an injected clock. Add a seam if time cannot be driven. Check installed Effect names: v3 names do not apply.
 
-`norbital/apps/colony/tests/billing-gate.test.ts` demonstrates a cache deadline with explicit
-TestClock advancement. Check the installed Effect version before copying testing APIs; v3 names
-are not interchangeable with the current v4 API.
+## The kit
 
-Use deterministic signals or an injected clock; never sleep and never set a `timeout:` option. Do not
-fix races, cold module acquisition or resource contention with time.
+- `TestWorkspace.layer({ root })` compiles real source and supplies the engine, fake facilities, clock and a `node:vm` guest runner; it owns database cleanup.
+- `t.storedRead` supplies the native whole-row reader; `t.bodyActs(holder)` the native `many` writer. Keep declared types; never cast a fake `ctx`.
+- Native engine tests use PGlite and maintained migration fixtures. Dispose resources.
 
-## Native and template data paths
+## Test seed pack
 
-Use `TestWorkspace.layer({ root })` from `@norbital-ai/bolt-cli/test` for authored workspace behaviour. It compiles
-the real source and supplies the existing engine, fake facilities and clock, and runs guest code on its own `node:vm`
-runner. Reuse the
-owning template's kit rather than reconstructing a second runtime.
+- `seed/test/` mirrors public seeds: `<model>.json[.gz]`, identity rows as `sys_user.json`, optional assets. No seeder or bank.
+- `bolt check` decodes it; the kit loads it by default, built once per source hash, never layering on `base`. `seed: 'none'` or inline rows replace it.
+- Keep the few rows mechanisms need. No bank or customer row. Catalogue rows a test needs are synthetic here.
 
-For domain helpers that normally receive transform reads, `t.storedRead` supplies the workspace's
-native whole-row stored reader. `t.bodyActs(holderOrAuthority)` supplies an automation's
-native `many` writer under that authority. Both use the real engine and its codecs; preserve the
-helper's declared reader/writer types instead of casting a fake `ctx` or reimplementing queries.
-Checked `mode: 'declared'` reads expose `ReadFailed`; ordinary stored reads retain the transform
-contract in which engine and decode faults are defects.
+## Syncs and envoys
 
-```ts
-import { Effect } from 'effect';
-import { TestWorkspace, expect, layer } from '@norbital-ai/bolt-cli/test';
+- Named instances are `connections`; seed unnamed ones as `sys_integration` rows or create them.
+- Inbound conversation: `t.receive('<slot>', message)` ingests and waits for queued work.
+- Remote reads: `t.syncs.read('<model>.sync.<sync>', { instance })`; set `t.fakes.links.answer` or `.page`. Assert rows, cursor and a repeated read.
+- Queued writes: `t.syncs.deliver()` drains the outbox; sends appear in `t.fakes.links.sent`. Read the row's `$sync['<sync>']` status.
+- File syncs: `t.as(member).start('<model>.sync.<sync>', input)` after `upload('<model>.$import.<sync>', file)`; `t.runDue()` executes. Decode the `sys_run` output; resolve that run's exact file through `sys_file` and `t.fakes.files.blobs`.
+- Read a run through `t.db.rows`; `Sql` is a plain `{ text, params }` value.
+- Templates do not retest envoy admission or transport.
 
-layer(TestWorkspace.layer({ root }))('authored rules', (it) => {
-	it.effect('creates an allowed record', () =>
-		Effect.gen(function* () {
-			const t = yield* TestWorkspace;
-			const answer = yield* t.as(t.admin).act('orders.create', [{ notes: 'Example' }]);
-			expect(answer.kind).toBe('committed');
-		})
-	);
-});
-```
+## Inference and documents
 
-Native engine tests use the existing PGlite adapter and maintained migration fixtures when
-proving grants, constraints, cascades or atomic writes. Reuse current manifests such as
-`oss/packages/bolt/tests/write-fixture.ts`. Dispose the database and all provider resources.
-Templates maintain numbered SQL, `snapshot.json`, `migrations.lock.json` and `physical.json` under
-`migrations/`. Normal `bolt build` independently compares complete SQL replay with the declared
-source; host tests apply that verified history and check its physical prefix under the SQL lock.
-Keep applied files immutable and add forward migrations for native definition upgrades. Regenerate
-host fixtures through their maintained build/capture command rather than editing artifact hashes;
-the command runs outside the test, which only reads the committed fixture.
+- `fakes: { ai: { cassette } }` scripts ordered `AiResponse`s. Inspect `t.fakes.ai.requests` and `remaining()`: an unspent cassette proves inference never ran.
+- Supply a complete `Convert` layer through `ports`. Upload through the real caller, drive the automation, and inspect its proposal and unchanged rows. Pair with malformed, unreadable and refusal paths.
+- `Effect.catch` recovers typed failures; `try/catch` around `yield*` does not. Never cast a fixture.
 
-Use the owning template's current authored cases, such as roster import and source-team
-values. Tests use synthetic data; private bank content does not belong in committed fixtures
-or transcripts.
+## Migrations
+
+- `bolt build` compares replay with source; hosts apply the verified history. Regenerate fixtures with their maintained command, outside tests.
+- Empty replay does not prove a data transformation: include a valid and an ambiguous row so a `-- check:` query reports a violation; the refusal must keep rows and write no receipt. Retry the identical SQL. Compare IDs, references and exact totals.
+
+## Stored queries
+
+Include rows that match and do not, and more than a page. Assert exact ordered IDs and termination. Verify policy through the native caller path with distinct holders, every page, and a no-grant refusal.
 
 ## Completion
 
-Live dependencies (Postgres, vendor OAuth, SQL Server, live models) are probes, never committed and
-never described as proven by a fake. Retest when source changes, a real failure or an unresolved
-concern justifies it; do not repeat successful broad runs mechanically.
-
-Trust the process exit code. If output is piped, preserve the command's status; a final console
-message alone does not prove the gate passed.
+- Live dependencies are probes, never described as proven by a fake.
+- Retest when source changes or a real failure justifies it. Preserve the command's status through pipes.

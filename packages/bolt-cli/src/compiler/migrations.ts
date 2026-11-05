@@ -226,6 +226,12 @@ export const prepareMigrations = Effect.fn('Bolt.prepareMigrations')(function* (
 						...generated.file,
 						sql: `-- step history:schema:upgrade (backfill)\n${prologue.map((sql) => `${sql};`).join('\n')}\n\n${generated.file.sql}`
 					};
+		// a Studio build runs on a copy of live's data, and its merge approval accepts these steps: a generated file a failed
+		// build would discard could never carry its accept lines otherwise
+		const accepted =
+			process.env['BOLT_ACCEPT_DESTRUCTIVE'] === '1'
+				? upgraded.sql.replace(/^-- step (\S+) \(destructive\)\s*$/gm, '$&\n-- accept: $1')
+				: upgraded.sql;
 		const file = path.join(directory, upgraded.name);
 		if (yield* fs.exists(file))
 			return yield* BoltError.make(
@@ -233,9 +239,9 @@ export const prepareMigrations = Effect.fn('Bolt.prepareMigrations')(function* (
 				'admission',
 				`${generated.file.name} already exists; existing migrations are never overwritten`
 			);
-		yield* fs.writeFileString(file, upgraded.sql);
+		yield* fs.writeFileString(file, accepted);
 		yield* fs.writeFileString(snapshotFile, generated.snapshot);
-		files.push(upgraded);
+		files.push({ ...upgraded, sql: accepted });
 		snapshotText = generated.snapshot;
 	}
 	if (snapshotText === undefined)

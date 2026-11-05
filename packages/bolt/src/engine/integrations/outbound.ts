@@ -1,5 +1,5 @@
 // Outbound conversation messages: queued once, delivered in order, and reported through the sync inbox.
-import { Clock, Effect, Layer, Option, Predicate, Schema } from 'effect';
+import { Clock, Effect, Layer, Option, Predicate, Result, Schema } from 'effect';
 import * as EffectArray from 'effect/Array';
 import { TenantDb, type TenantDbShape } from '../db/tenant-db.ts';
 import { Files } from '../ports.ts';
@@ -19,7 +19,7 @@ import { enqueue } from '../runs/queue.ts';
 import type { EngineManifest } from '../manifest.ts';
 import type { Sql, Outcome } from '../contracts.ts';
 import type { Json } from '../../decl/values.ts';
-import { Unavailable } from '../../decl/errors.ts';
+import { FacilityFailure, Unavailable } from '../../decl/errors.ts';
 import { LIMITS } from '../contracts.ts';
 import { Fenced, type EngineError } from '../errors.ts';
 import { BoltError } from '../../protocol/errors.ts';
@@ -35,6 +35,7 @@ import {
 } from '../conversations/status.ts';
 import { conversationOf, definitionOf } from './instances.ts';
 import { reportRowsPiece } from '../sync/hint.ts';
+import { LINK_DOWN } from './abi.ts';
 /** The messages a conversation carries: chat (`{ to, text }`) or email. */
 type ConversationKind = 'chat' | 'email';
 /** The platform run that delivers every queued outbound row. */
@@ -138,6 +139,8 @@ const TERMINALS = JSON.stringify([...TERMINAL]),
 	RANKS = JSON.stringify(RANK);
 const MAX_ATTEMPTS = 8;
 const LEASE = `interval '10 minutes'`;
+/** How long a row waits for a link that is down before it asks again; the link's connect (`resume`) comes first. */
+const PARKED_MS = 86_400_000;
 /** A sync's queued sends wait until its id map and acknowledgement commit, so their reports have a destination. */
 const RELEASED = (row: string) =>
 	`(${row}.meta ->> 'sync_write' IS NULL OR EXISTS (SELECT 1 FROM sys_outbox o WHERE o.key = ${row}.meta ->> 'sync_write' AND o.status = 'acked'))`;
@@ -254,21 +257,30 @@ function makeOutbound(cfg: OutboundConfig) {
 		]);
 		const references = (refs?.rows ?? []).map((x) => String(x['provider_id'])).reverse();
 		const thread = String(r['conv_thread']),
-			to = email ? {} : { to: thread };
+			to = email ? {} : { to: thread },
+			idempotent = inst['idempotent'] === true;
 		const wire: Obj = {
 			...body,
 			id: String(r['id']),
 			...to,
 			...(references.length === 0 ? {} : { inReplyTo: references.at(-1) ?? '', references })
 		};
-		const got = yield* Effect.gen(function* () {
-			const attachments = body['attachments'];
-			const attachmentRefs = EffectArray.isArray<typeof attachments>(attachments)
-				? attachments
-				: [];
-			const files = yield* attachmentsOf(attachmentRefs);
-			return yield* cfg.send(instance, wire, files);
-		}).pipe(Port.call('link', LIMITS.callMs.http), Effect.result);
+		// a lease that ran out left no answer, so this row's send may have gone, as one that timed out may have
+		let handed = r['was'] === 'sending';
+		const got =
+			handed && !idempotent
+				? Result.fail(
+						new FacilityFailure({ kind: 'timeout', message: 'the send ended without an answer' })
+					)
+				: yield* Effect.gen(function* () {
+						const attachments = body['attachments'];
+						const attachmentRefs = EffectArray.isArray<typeof attachments>(attachments)
+							? attachments
+							: [];
+						const files = yield* attachmentsOf(attachmentRefs);
+						handed = true;
+						return yield* cfg.send(instance, wire, files);
+					}).pipe(Port.call('link', LIMITS.callMs.http), Effect.result);
 		const attempts = Number(r['attempts']);
 		if (got._tag === 'Success') {
 			const receipt = got.success;
@@ -296,6 +308,18 @@ function makeOutbound(cfg: OutboundConfig) {
 		}
 		const cause = got.failure,
 			refusal = sendRefusal(cause);
+		// a link that is down spends no attempt: the row waits for its connect
+		if (cause instanceof Unavailable && cause.facility === LINK_DOWN) {
+			yield* mutateMessage(
+				sql(
+					`UPDATE sys_message SET status = 'queued', attempts = attempts - 1, next_attempt_at = $2::timestamptz WHERE id = $1`,
+					r['id'] ?? null,
+					iso(Date.parse(now) + PARKED_MS)
+				),
+				'id, integration, NULL::text AS before, status'
+			);
+			return 'retry';
+		}
 		const error = cause instanceof Error ? cause.message : String(cause);
 		const fenced =
 			cause instanceof Fenced || (cause instanceof BoltError && cause.code === 'fenced');
@@ -308,14 +332,17 @@ function makeOutbound(cfg: OutboundConfig) {
 					: cause instanceof BoltError
 						? cause.code
 						: 'upstream';
+		// a timeout may have reached the customer: only a provider that dedupes on `id` is asked to send it again
+		const unsure = kind === 'timeout' && handed;
 		const final =
 			fenced ||
 			refusal?.permanent === true ||
 			kind === 'invalid' ||
 			kind === 'unavailable' ||
+			(unsure && !idempotent) ||
 			attempts >= MAX_ATTEMPTS;
-		const status = !final ? 'queued' : kind === 'timeout' ? 'uncertain' : 'failed';
-		// a retry is `deferred` on the timeline while the queue keeps the row `queued`; a timeout may have sent, so it records nothing
+		const status = !final ? 'queued' : unsure ? 'uncertain' : 'failed';
+		// a retry is `deferred` on the timeline while the queue keeps the row `queued`; `uncertain` may have sent, so it records nothing
 		const e: DeliveryEntry | null =
 			status === 'uncertain'
 				? null
@@ -381,16 +408,16 @@ function makeOutbound(cfg: OutboundConfig) {
 				sql(
 					`UPDATE sys_message s SET status = 'sending', attempts = s.attempts + 1, claimed_at = $1::timestamptz
 				WHERE s.direction = 'outbound' AND s.integration IS NOT NULL AND s.message IS NOT NULL AND s.conversation IS NOT NULL
-					AND ((s.status = 'queued' AND s.next_attempt_at <= $1::timestamptz) OR (s.status = 'sending' AND s.claimed_at < $1::timestamptz - ${LEASE}))
+					AND ((s.status = 'queued' AND s.next_attempt_at <= $1::timestamptz) OR (s.status = 'sending' AND s.claimed_at <= $1::timestamptz - ${LEASE}))
 					AND EXISTS (SELECT 1 FROM sys_integration i WHERE i.id = s.integration AND i.active)
 					AND ${RELEASED('s')}
 					AND NOT EXISTS (SELECT 1 FROM sys_message p WHERE p.integration = s.integration AND p.direction = 'outbound' AND p.status IN ('queued', 'sending') AND p.seq < s.seq
 						AND p.conversation = s.conversation)`,
 					now
 				),
-				`s.id, s.integration, s.conversation, s.message, s.attempts,
+				`s.id, s.integration, s.conversation, s.message, s.attempts, old.status AS was,
 					(SELECT thread FROM sys_conversation c WHERE c.id = s.conversation) AS conv_thread,
-					(SELECT jsonb_build_object('integration', i.integration, 'configuration', i.configuration) FROM sys_integration i WHERE i.id = s.integration) AS inst`
+					(SELECT jsonb_build_object('integration', i.integration, 'configuration', i.configuration, 'idempotent', i.status -> 'idempotentSends') FROM sys_integration i WHERE i.id = s.integration) AS inst`
 			);
 			if (claimed.length === 0) break;
 			for (const r of claimed) {
@@ -416,9 +443,15 @@ function makeOutbound(cfg: OutboundConfig) {
 				provider: 'bolt',
 				presumed: true
 			});
+		// a due row left here waits behind an earlier one, and that one's retry or lease decides; a run lost with its fiber
+		// comes back at boot and reaches this, so a send that never answered gets its wake without one queued before each send
 		const [next] = yield* db.read([
-			sql(`SELECT least(min(next_attempt_at) FILTER (WHERE status = 'queued'), min(presume_at) FILTER (WHERE status IN ('sent', 'deferred')))::text AS due
-			FROM sys_message s WHERE direction = 'outbound' AND (status = 'queued' OR presume_at IS NOT NULL) AND ${RELEASED('s')}`)
+			sql(
+				`SELECT least(min(next_attempt_at) FILTER (WHERE status = 'queued' AND next_attempt_at > $1::timestamptz), min(claimed_at + ${LEASE}) FILTER (WHERE status = 'sending'),
+				min(presume_at) FILTER (WHERE status IN ('sent', 'deferred')))::text AS due
+			FROM sys_message s WHERE direction = 'outbound' AND (status IN ('queued', 'sending') OR presume_at IS NOT NULL) AND ${RELEASED('s')}`,
+				now
+			)
 		]);
 		const due = next?.rows[0]?.['due'];
 		if (
@@ -482,6 +515,21 @@ function makeOutbound(cfg: OutboundConfig) {
 
 	return {
 		deliver,
+		resume: Effect.fn('Outbound.resume')(function* (instance: string) {
+			const now = iso(yield* Clock.currentTimeMillis),
+				c = new Chain();
+			const due = c.cte(
+				'resumed',
+				`UPDATE sys_message SET next_attempt_at = ${c.p(now)}::timestamptz WHERE integration = ${c.p(instance)}
+				AND direction = 'outbound' AND status = 'queued' AND next_attempt_at > ${c.p(now)}::timestamptz RETURNING id`
+			);
+			deliverRun(c, due, now);
+			const [row] = yield* db.returning(
+				Schema.Struct({ n: Schema.Number }),
+				c.sql(`(SELECT count(*) FROM ${due})::int AS n`)
+			);
+			if ((row?.n ?? 0) > 0) yield* cfg.announce(now);
+		}),
 		activate: Effect.fn('Outbound.activate')(function* () {
 			const current = yield* db.value(Schema.String, sql(`SELECT ${EPOCH} AS epoch`));
 			if (current === epoch) return;

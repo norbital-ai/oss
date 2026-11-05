@@ -109,6 +109,17 @@ const assetList = Effect.fn('bolt.seedAssets')(function* (
 	if (!(yield* fs.exists(file))) return [];
 	const list = yield* Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.Array(Asset)))(
 		yield* fs.readFileString(file)
+	).pipe(
+		Effect.catchTag('SchemaError', (failure) =>
+			Effect.sync((): readonly (typeof Asset.Type)[] => {
+				errors.push({
+					code: 'seed/asset',
+					path: `${dir}/assets.json`,
+					message: `${dir}/assets.json is the seed's asset list, each { path, sha256, bytes, contentType }, never a model's rows: ${failure.message}`
+				});
+				return [];
+			})
+		)
 	);
 	const ok: SeedAsset[] = [];
 	for (const a of list) {

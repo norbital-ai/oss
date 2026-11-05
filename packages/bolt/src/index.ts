@@ -135,6 +135,7 @@ export type {
 export type {
 	FieldCommon,
 	FieldKind,
+	StoredArm,
 	InputFields,
 	InputKind,
 	OutputKind,

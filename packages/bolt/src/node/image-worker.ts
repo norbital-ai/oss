@@ -537,9 +537,37 @@ const preview = Effect.fn('Image.preview')(function* (
 		return yield* Effect.fail(failed(new Error('the image preview exceeds 5 MiB')));
 	return { bytes: result, mime: png ? 'image/png' : 'image/jpeg', derived: true };
 });
+/** A small region enlarged by a whole factor, at most 4×, bilinearly: a model reads strokes it is shown at a size. */
+const enlarged = (image: { data: Uint8Array; width: number; height: number }, minEdge: number) => {
+	const { data, width, height } = image,
+		scale = Math.min(4, Math.ceil(minEdge / Math.max(width, height)));
+	if (scale <= 1) return image;
+	const out = new Uint8Array(width * scale * height * scale * 4);
+	for (let y = 0; y < height * scale; y++) {
+		const fy = Math.min(y / scale, height - 1),
+			y0 = Math.floor(fy),
+			y1 = Math.min(y0 + 1, height - 1),
+			dy = fy - y0;
+		for (let x = 0; x < width * scale; x++) {
+			const fx = Math.min(x / scale, width - 1),
+				x0 = Math.floor(fx),
+				x1 = Math.min(x0 + 1, width - 1),
+				dx = fx - x0;
+			for (let c = 0; c < 4; c++) {
+				const at = (px: number, py: number) => data[(py * width + px) * 4 + c] ?? 0;
+				out[(y * width * scale + x) * 4 + c] =
+					(at(x0, y0) * (1 - dx) + at(x1, y0) * dx) * (1 - dy) +
+					(at(x0, y1) * (1 - dx) + at(x1, y1) * dx) * dy;
+			}
+		}
+	}
+	return { data: out, width: width * scale, height: height * scale };
+};
 const crop = Effect.fn('Image.crop')(function* (bytes: Uint8Array, box: CropBox) {
 	if (
-		!Object.values(box).every((v) => Number.isFinite(v) && v >= 0 && v <= 1) ||
+		![box.left, box.top, box.right, box.bottom].every(
+			(v) => Number.isFinite(v) && v >= 0 && v <= 1
+		) ||
 		box.left >= box.right ||
 		box.top >= box.bottom
 	)
@@ -574,7 +602,12 @@ const crop = Effect.fn('Image.crop')(function* (bytes: Uint8Array, box: CropBox)
 		data.set(source.data.subarray(at, at + width * 4), y * width * 4);
 	}
 	const output = yield* Effect.try({
-		try: () => encodePng({ data, width, height, channels: 4, depth: 8 }),
+		try: () =>
+			encodePng({
+				...enlarged({ data, width, height }, box.minEdge ?? 0),
+				channels: 4,
+				depth: 8
+			}),
 		catch: failed
 	});
 	if (output.byteLength > 5 * 1024 * 1024)

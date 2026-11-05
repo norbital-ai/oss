@@ -31,7 +31,8 @@ const File = Schema.Struct({ file_path: Schema.String });
 const Message = Schema.Struct({ to: Schema.NonEmptyString, text: Schema.String });
 type Bot = { id?: number; username?: string };
 
-export function telegram(): ProviderDef {
+export function telegram(o: { readonly api?: string } = {}): ProviderDef {
+	const api = o.api ?? API;
 	return {
 		_tag: 'ProviderDef',
 		driver: 'telegram',
@@ -94,7 +95,7 @@ export function telegram(): ProviderDef {
 				withFetch(
 					ctx,
 					Effect.gen(function* () {
-						const request = HttpClientRequest.post(`${API}/bot${value}/${method}`);
+						const request = HttpClientRequest.post(`${api}/bot${value}/${method}`);
 						const response = yield* HttpClient.execute(
 							body instanceof FormData
 								? request.pipe(HttpClientRequest.bodyFormData(body))
@@ -231,7 +232,7 @@ export function telegram(): ProviderDef {
 							Effect.gen(function* () {
 								const file = yield* call(File, value, 'getFile', { file_id: media.fileId });
 								const response = yield* HttpClient.get(
-									`${API}/file/bot${value}/${file.file_path}`
+									`${api}/file/bot${value}/${file.file_path}`
 								).pipe(
 									Effect.mapError(
 										() => new ProviderUnavailable({ message: 'Telegram media request failed' })
@@ -271,7 +272,7 @@ export function telegram(): ProviderDef {
 }
 
 /** Media the link downloads through the Bot API before it emits the event (its bytes become a `bin`). */
-export type TelegramMedia = { fileId: string; name: string; mime: string };
+export type TelegramMedia = { fileId: string; name: string; mime: string; bytes?: number };
 /** One Bot API update → the wire message (`message` or `edited_message`), or `null` for updates the link ignores. */
 export function telegramUpdate(
 	update: unknown,
@@ -306,18 +307,7 @@ export function telegramUpdate(
 			: chatId;
 	const reply = Predicate.isObject(msg['reply_to_message']) ? msg['reply_to_message'] : null;
 	const sentAt = new Date(msg['date'] * 1000).toISOString();
-	const doc = [msg['document'], msg['video'], msg['audio'], msg['voice']].find(Predicate.isObject);
-	const photo = Array.isArray(msg['photo']) ? msg['photo'].at(-1) : undefined;
-	const media: TelegramMedia | null =
-		doc !== undefined && typeof doc['file_id'] === 'string'
-			? {
-					fileId: doc['file_id'],
-					name: str(doc['file_name']) ?? `file-${doc['file_id']}`,
-					mime: str(doc['mime_type']) ?? 'application/octet-stream'
-				}
-			: Predicate.isObject(photo) && typeof photo['file_id'] === 'string'
-				? { fileId: photo['file_id'], name: `photo-${photo['file_id']}.jpg`, mime: 'image/jpeg' }
-				: null;
+	const media = mediaOf(msg);
 	return {
 		media,
 		message: {
@@ -325,7 +315,7 @@ export function telegramUpdate(
 			id: `${chatId}:${msg['message_id']}`,
 			thread,
 			sentAt,
-			text,
+			text: text === '' ? said(msg) : text,
 			group,
 			...(group && str(chat['title']) !== null ? { title: str(chat['title']) } : {}),
 			from: { handle: String(from['id'] ?? ''), name: name === '' ? null : name },
@@ -341,9 +331,74 @@ export function telegramUpdate(
 						).toISOString()
 					}
 				: {}),
-			attachments: []
+			// named before its bytes: a file getFile refuses (over 20 MB) or a failed download stays on the message
+			attachments:
+				media === null ? [] : [{ name: media.name, mime: media.mime, bytes: media.bytes ?? 0 }]
 		}
 	};
+}
+/** A message's one file. `animation` also fills `document`, so the older field is enough for the same file. */
+function mediaOf(msg: Readonly<Record<string, unknown>>): TelegramMedia | null {
+	const sticker = Predicate.isObject(msg['sticker']) ? msg['sticker'] : {};
+	const [mime, extension] =
+		sticker['is_video'] === true
+			? ['video/webm', '.webm']
+			: sticker['is_animated'] === true
+				? ['application/x-tgsticker', '.tgs']
+				: ['image/webp', '.webp'];
+	const photo = Array.isArray(msg['photo']) ? msg['photo'].at(-1) : undefined;
+	for (const [file, fallback, suffix] of [
+		[msg['document'], 'application/octet-stream', ''],
+		[msg['animation'], 'video/mp4', '.mp4'],
+		[msg['video'], 'video/mp4', '.mp4'],
+		[msg['audio'], 'audio/mpeg', '.mp3'],
+		[msg['voice'], 'audio/ogg', '.ogg'],
+		[msg['video_note'], 'video/mp4', '.mp4'],
+		[msg['live_photo'], 'video/mp4', '.mp4'],
+		[msg['sticker'], mime, extension],
+		[photo, 'image/jpeg', '.jpg']
+	] as const) {
+		if (!Predicate.isObject(file) || typeof file['file_id'] !== 'string') continue;
+		const id = file['file_id'],
+			bytes = file['file_size'];
+		return {
+			fileId: id,
+			name: str(file['file_name']) ?? `${file === photo ? 'photo' : 'file'}-${id}${suffix}`,
+			mime: str(file['mime_type']) ?? fallback,
+			...(typeof bytes === 'number' ? { bytes } : {})
+		};
+	}
+	return null;
+}
+/** What a message with no text says: the kinds the Bot API carries as fields, and a marker for what holds no content a bot can read. */
+function said(msg: Readonly<Record<string, unknown>>): string {
+	const field = (key: string) => (Predicate.isObject(msg[key]) ? msg[key] : null);
+	const contact = field('contact'),
+		venue = field('venue'),
+		location = field('location'),
+		poll = field('poll'),
+		dice = field('dice'),
+		titled = field('game') ?? field('invoice') ?? field('checklist');
+	if (contact !== null)
+		return [contact['first_name'], contact['last_name'], contact['phone_number']]
+			.filter((part) => typeof part === 'string' && part !== '')
+			.join(' ');
+	// a venue also fills `location`
+	if (venue !== null) return `${venue['title']}, ${venue['address']}`;
+	if (location !== null) return `${location['latitude']}, ${location['longitude']}`;
+	if (poll !== null)
+		return [
+			poll['question'],
+			...(Array.isArray(poll['options']) ? poll['options'] : [])
+				.filter(Predicate.isObject)
+				.map((option) => `- ${option['text']}`)
+		].join('\n');
+	if (dice !== null) return `${dice['emoji']} ${dice['value']}`;
+	if (titled !== null) return String(titled['title']);
+	if (field('story') !== null) return '[story]';
+	if (field('paid_media') !== null) return '[paid media]';
+	if (field('rich_message') !== null) return '[rich message]';
+	return str(field('sticker')?.['emoji']) ?? '';
 }
 function invocationOf(
 	msg: Readonly<Record<string, unknown>>,

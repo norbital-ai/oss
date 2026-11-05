@@ -189,6 +189,11 @@ export const callableWords = (callable: string) => {
 			? `Run the ${scope.replace(/_/g, ' ')} pipeline`
 			: `${words(act || scope)} ${act ? scope.replace(/_/g, ' ') : ''}`.trim();
 };
+/** A read's keys with their options: `reads`, or a transcript from before it, its keys themselves. */
+export const readsOf = (a: Args): readonly (readonly [string, unknown])[] =>
+	Arr.isArray(a['reads'])
+		? a['reads'].map((one: unknown) => [str(obj(one)['of']), one] as const)
+		: Object.entries(a);
 /** A draft path in words: `/snapshot/rule_set/EPF_MONTHLY` → `rule_set/EPF_MONTHLY`. */
 const draftPath = (path: string) => path.replace(/^\/snapshot\//, '').replace(/^\//, '');
 const VIEWS: { readonly [tool: string]: (a: Args) => StepView } = {
@@ -198,10 +203,11 @@ const VIEWS: { readonly [tool: string]: (a: Args) => StepView } = {
 			? { icon: 'lucide:file-search', verb: 'Read the draft', target: draftPath(a['path']) }
 			: {
 					icon: 'lucide:database',
-					verb: Object.values(a).some((layer) => obj(layer)['aggregate'] !== undefined)
+					verb: readsOf(a).some(([, layer]) => obj(layer)['aggregate'] !== undefined)
 						? 'Counted'
 						: 'Read',
-					target: Object.keys(a)
+					target: readsOf(a)
+						.map(([key]) => key)
 						.filter((key) => !key.includes('.'))
 						.map((key) => key.replace(/_/g, ' '))
 						.join(', ')
@@ -245,18 +251,15 @@ const VIEWS: { readonly [tool: string]: (a: Args) => StepView } = {
 		verb: 'Searched past messages',
 		target: str(a['query'])
 	}),
-	read_output: () => ({ icon: 'lucide:file-output', verb: 'Read the full result', target: '' }),
 	read_messages: () => ({ icon: 'lucide:messages-square', verb: 'Read messages', target: '' }),
-	read_attachment: (a) => ({
-		icon: 'lucide:paperclip',
-		verb: 'Read attachment',
-		target: str(a['name']) || str(a['file'])
-	}),
-	read_file: (a) => ({
-		icon: 'lucide:file-text',
-		verb: 'Read file',
-		target: str(a['name']) || str(a['id'])
-	}),
+	read_file: (a) =>
+		typeof a['call'] === 'string'
+			? { icon: 'lucide:file-output', verb: 'Read the full result', target: '' }
+			: {
+					icon: 'lucide:file-text',
+					verb: Arr.isArray(a['crops']) ? 'Zoomed into a page' : 'Read file',
+					target: Arr.isArray(a['crops']) ? `${a['crops'].length} regions` : str(a['text'])
+				},
 	geocode: (a) => ({
 		icon: 'lucide:map-pin',
 		verb: 'Looked up a place',
@@ -281,24 +284,7 @@ const VIEWS: { readonly [tool: string]: (a: Args) => StepView } = {
 	workspace_read: (a) => ({
 		icon: 'lucide:file-code',
 		verb: 'Read source',
-		target: str(a['path'])
-	}),
-	workspace_edit: (a) => ({
-		icon: 'lucide:file-pen-line',
-		verb: 'Edited the source',
-		target: str(a['path']),
-		code: {
-			text: `// before\n${str(a['oldString'])}\n// after\n${str(a['newString'])}`,
-			language: languageOf(str(a['path']))
-		}
-	}),
-	docs: (a) => ({
-		icon: 'lucide:library',
-		verb: 'Read the docs',
-		target:
-			str(a['query']) ||
-			str(a['namespace']) ||
-			(Arr.isArray(a['symbols']) ? a['symbols'].join(', ') : '')
+		target: Arr.isArray(a['paths']) ? `${a['paths'].length} files` : str(a['path'])
 	}),
 	subagent: (a) => ({
 		...(a['action'] === 'message'
@@ -344,51 +330,56 @@ const VIEWS: { readonly [tool: string]: (a: Args) => StepView } = {
 			...(text === '' ? {} : { code: { text, language: languageOf(str(first['path'])) } })
 		};
 	},
-	workspace_validate: () => ({
+	workspace_validate: (a) => ({
 		icon: 'lucide:shield-check',
-		verb: 'Checked the source',
+		verb:
+			a['only'] === 'types'
+				? 'Checked the types'
+				: a['only'] === 'tests'
+					? 'Ran the tests'
+					: 'Checked the change',
 		target: ''
 	}),
-	workspace_test: () => ({ icon: 'lucide:flask-conical', verb: 'Ran the tests', target: '' }),
-	navigate: (a) => ({
-		icon: 'lucide:arrow-up-right',
-		verb: 'Requested navigation',
-		target: str(a['path'])
+	workspace_try: () => ({ icon: 'lucide:play', verb: 'Tried it on the preview', target: '' }),
+	channel_check: () => ({ icon: 'lucide:radio-tower', verb: 'Checked the connection', target: '' }),
+	page: (a) => ({
+		icon: typeof a['path'] === 'string' ? 'lucide:arrow-up-right' : 'lucide:mouse-pointer-click',
+		verb:
+			typeof a['path'] === 'string'
+				? 'Opened a page'
+				: typeof a['highlight'] === 'string'
+					? 'Pointed at'
+					: 'Used your page',
+		target:
+			str(a['path']) ||
+			str(a['click']) ||
+			str(a['highlight']) ||
+			str(obj(a['type'])['label']) ||
+			str(a['preview'])
 	}),
-	page_act: (a) => ({
-		icon: 'lucide:mouse-pointer-click',
-		verb: 'Asked the page',
-		target: str(a['click']) || str(a['scroll']) || str(a['go'])
+	describe_workspace: (a) => ({
+		icon: 'lucide:map',
+		verb: 'Looked up the workspace',
+		target: Arr.isArray(a['names']) ? a['names'].map(str).join(', ') : ''
 	}),
 	workspace_review: () => ({
 		icon: 'lucide:git-compare',
 		verb: 'Reviewed the changes',
 		target: ''
 	}),
-	browser_navigate: (a) => ({
+	browser: (a) => ({
 		icon: 'lucide:globe',
-		verb: 'Opened a page',
-		target: str(a['url']) || str(a['go'])
+		verb: typeof a['download'] === 'string' ? 'Downloaded' : 'Used the browser',
+		target:
+			str(a['url']) ||
+			str(a['download']) ||
+			str(obj(a['workspace'])['path']) ||
+			(Arr.isArray(a['steps']) ? `${a['steps'].length} steps` : '') ||
+			str(a['find']),
+		...(typeof a['evaluate'] === 'string'
+			? { code: { text: a['evaluate'], language: 'javascript' as const } }
+			: {})
 	}),
-	browser_snapshot: (a) => ({
-		icon: 'lucide:scan-text',
-		verb: 'Read the page',
-		target: str(a['find'])
-	}),
-	browser_act: (a) => ({
-		icon: 'lucide:mouse-pointer-click',
-		verb: 'Used the page',
-		target: Arr.isArray(a['steps']) ? `${a['steps'].length} steps` : ''
-	}),
-	browser_evaluate: (a) => ({
-		icon: 'lucide:code',
-		verb: 'Ran a script on the page',
-		target: '',
-		code: { text: str(a['expression']), language: 'javascript' }
-	}),
-	browser_screenshot: () => ({ icon: 'lucide:camera', verb: 'Took a screenshot', target: '' }),
-	browser_close: () => ({ icon: 'lucide:x', verb: 'Closed the page', target: '' }),
-	browser_download: (a) => ({ icon: 'lucide:download', verb: 'Downloaded', target: str(a['url']) }),
 	download: (a) => ({ icon: 'lucide:download', verb: 'Downloaded', target: str(a['url']) }),
 	run_js: (a) =>
 		typeof a['file'] === 'string'
@@ -411,6 +402,67 @@ const VIEWS: { readonly [tool: string]: (a: Args) => StepView } = {
 		target: words(str(a['name']))
 	})
 };
+const WHERE_OPS: { readonly [op: string]: string } = {
+	eq: '=',
+	ne: '≠',
+	lt: '<',
+	lte: '≤',
+	gt: '>',
+	gte: '≥',
+	in: 'in',
+	nin: 'not in',
+	like: '~'
+};
+const operand = (v: unknown): string =>
+	Arr.isArray(v)
+		? v.map(operand).join(', ')
+		: typeof v === 'string'
+			? v
+			: typeof obj(v)['var'] === 'string'
+				? str(obj(v)['var'])
+				: JSON.stringify(v);
+/** One where's conditions in words: `status = pending`, `any of (…)`, a relation's `lines some (…)`. */
+const whereChips = (where: unknown): string[] =>
+	Object.entries(obj(where)).flatMap(([key, value]) => {
+		if (key === 'and') return Arr.isArray(value) ? value.flatMap(whereChips) : [];
+		if (key === 'or')
+			return Arr.isArray(value) ? [`any of (${value.flatMap(whereChips).join(', ')})`] : [];
+		if (key === 'not') return [`not (${whereChips(value).join(', ')})`];
+		if (key === '$search') return [`"${operand(value)}"`];
+		return Object.entries(obj(value)).map(([op, given]) =>
+			op === 'isNull'
+				? `${key} ${given === true ? 'is empty' : 'is set'}`
+				: Object.hasOwn(WHERE_OPS, op)
+					? `${key} ${WHERE_OPS[op]} ${operand(given)}`
+					: `${key} ${op} (${whereChips(given).join(', ') || operand(given)})`
+		);
+	});
+/** A read key's options as a person reads them: its filters, order, search, grouping and bounds, one chip each. */
+export function readChips(layer: unknown): string[] {
+	const o = obj(layer),
+		aggregate = obj(o['aggregate']);
+	return [
+		...whereChips(o['where']),
+		...(typeof o['search'] === 'string' ? [`"${o['search']}"`] : []),
+		...[o['orderBy']]
+			.flat()
+			.flatMap((by) =>
+				typeof by === 'string'
+					? [`↑ ${by}`]
+					: Object.entries(obj(by)).map(([f, dir]) => `${dir === 'desc' ? '↓' : '↑'} ${f}`)
+			),
+		...(o['aggregate'] === undefined
+			? []
+			: [
+					Object.keys(aggregate)
+						.filter((k) => k !== 'by')
+						.join(', ') + (aggregate['by'] === undefined ? '' : ` by ${operand(aggregate['by'])}`)
+				]),
+		...(Arr.isArray(o['fields']) ? [`${o['fields'].length} fields`] : []),
+		...(typeof o['limit'] === 'number' ? [`limit ${o['limit']}`] : [])
+	].filter((chip) => chip !== '');
+}
+
 /** A tool step's view (its arguments decoded once); an MCP tool names its server, anything else its own name. */
 export function stepView(name: string, args: unknown): StepView {
 	const a = obj(args);
@@ -460,9 +512,8 @@ export const failedVerbs = (steps: readonly AgentRow[]): string[] =>
 /** What a running Studio step is doing, in the person's words: the group's line while it runs. */
 const DOING: { readonly [tool: string]: string } = {
 	workspace_write: 'Editing the source…',
-	workspace_edit: 'Editing the source…',
-	workspace_validate: 'Building the preview…',
-	workspace_test: 'Running the tests…',
+	workspace_validate: 'Checking the change…',
+	workspace_try: 'Trying it on the preview…',
 	workspace_review: 'Reviewing the changes…'
 };
 export const doingOf = (steps: readonly AgentRow[]): string =>
@@ -497,8 +548,8 @@ export function captionOf(
 
 /**
  * What the previewer may show (one at a time), oldest first: each preview a host built or captured (a `preview` or `view` role's
- * step), and each one the agent chose with `preview_show` on one of those previews' origins — the agent picks among built
- * previews, never an arbitrary page.
+ * step), and each one the agent chose with `page { preview }` on one of those previews' origins — the agent picks among
+ * built previews, never an arbitrary page.
  */
 export function previewsOf(
 	rows: readonly AgentRow[]
@@ -523,7 +574,7 @@ export function previewsOf(
 			built.add(origin);
 			return [shown];
 		}
-		return tool.name === 'preview_show' && built.has(origin) ? [shown] : [];
+		return tool.name === 'page' && built.has(origin) ? [shown] : [];
 	});
 }
 

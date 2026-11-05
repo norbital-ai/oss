@@ -243,6 +243,40 @@ describe('durable model sync', () => {
 			)
 	);
 	it.live(
+		'a page with no rows and an unchanged cursor commits nothing, and health still shows the read',
+		() =>
+			Effect.scoped(
+				Effect.gen(function* () {
+					const f = yield* setup,
+						t = f.t;
+					yield* f.fresh();
+					const state = () =>
+						t.db.rows(
+							Schema.Struct({ version: Schema.Number, read: Schema.NullOr(Schema.String) }),
+							{
+								text: `SELECT version, last_read_at::text AS read FROM sys_sync WHERE sync = 'contacts.sync.crm'`,
+								params: []
+							}
+						);
+					f.page({ rows: [], cursor: 'quiet-1', more: false });
+					yield* t.syncs.read('contacts.sync.crm');
+					const before = yield* state();
+					t.clock.advance('1h');
+					t.count.reset();
+					yield* t.syncs.read('contacts.sync.crm');
+					expect(t.count.writes).toBe(0);
+					expect(yield* state()).toEqual(before);
+					expect(yield* f.syncs.health('crm').pipe(Effect.provide(f.context))).toMatchObject({
+						last_read_at: t.clock.now(),
+						lag_seconds: 0
+					});
+					f.page({ rows: [], cursor: 'quiet-2', more: false });
+					yield* t.syncs.read('contacts.sync.crm');
+					expect((yield* state())[0]?.version).toBe((before[0]?.version ?? 0) + 1);
+				})
+			)
+	);
+	it.live(
 		'coalesces unattempted edits, bounds retries in dead letter, and replays the frozen write',
 		() =>
 			Effect.scoped(

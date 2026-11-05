@@ -100,7 +100,9 @@ import {
 	projection,
 	state,
 	system,
-	modelTranscript
+	modelTranscript,
+	pageNote,
+	pageWaiting
 } from './context.ts';
 import { mcpServers, mcpSessions, type McpHost } from './mcp.ts';
 import { agentSettings, allowedModel, overLimit } from './settings.ts';
@@ -159,7 +161,7 @@ export type AgentEngine = {
 	approvals: ApprovalsShape;
 	files?: Files['Service'] | undefined;
 	images?: Images['Service'] | undefined;
-	/** The host's document converter: the `document` tool, and its ingest port the `ingest` tool. */
+	/** The host's document converter: the `document` tool, and its ingest port `read_file`. */
 	convert?: Convert['Service'] | undefined;
 	/** Run ends as they are written (`RunEnds`): a run the agent started is a job that ends with it. */
 	runEnds?: PubSub.PubSub<readonly string[]> | undefined;
@@ -337,9 +339,9 @@ const RESUME: { readonly [tool: string]: string } = {
 	read: 'after',
 	runs: 'cursor',
 	logs: 'cursor',
-	read_output: 'offset',
+	read_file: 'offset',
 	workspace_read: 'from',
-	browser_snapshot: 'from'
+	browser: 'from'
 };
 /**
  * Where the rest of a tool answer is, when the tool itself stopped short: a page's `next` (read's per root key) or the
@@ -383,11 +385,11 @@ export const NUDGE = {
 		`Some answers stopped short; the rest is not above:\n${lines.map((l) => `- ${l}`).join('\n')}`,
 	truncated: (calls: readonly string[]) =>
 		`Some results were too large and you saw only part of them: ${calls.join(', ')}. Do not treat them as complete. ` +
-		'To see the rest, call read_output with that call id and the offset to continue from; or narrow the read (a tighter where, a smaller limit, fewer layers).',
+		'read_file { call, offset } reads the rest; or narrow the read.',
 	discovery:
-		'Your API-discovery queries keep failing. Stop guessing shapes: read one exported type with workspace_api, or ask the person the one blocking question, before another query.',
+		'Your API-discovery queries keep failing. Stop guessing shapes: read one exported type with workspace_lang { op: "type" }, or ask the one blocking question.',
 	discoveryPaused:
-		'API discovery is paused for this turn after repeated failed queries. Answer the person now: say what you tried and ask the one question that unblocks you. Do not call workspace_lang or workspace_api again this turn.'
+		'API discovery is paused for this turn after repeated failed queries. Answer the person now: say what you tried and ask the one question that unblocks you. Do not call workspace_lang again this turn.'
 } as const;
 /** Rule 59: fixed replies; internal error text never reaches a sender. */
 export const FIXED = {
@@ -920,7 +922,9 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 		);
 		const mcp = yield* mcpSessions(m, config.mcp).pipe(Effect.provideService(Mcp, mcpPort));
 		let mcpTools: Effect.Success<ReturnType<typeof mcp.tools>> | null = null,
-			mcpFor = '';
+			mcpFor = '',
+			hostFor = '',
+			hostTools: readonly HostTool[] = [];
 		const receipts: Receipt[] = [...(options.receipts ?? [])],
 			read: ToolContext['read'] = new Map(),
 			files: ToolContext['files'] = [],
@@ -1055,7 +1059,6 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 			as: As | null = null,
 			mode: 'agent' | 'plan' | 'compact' = 'agent',
 			force = options.force === true,
-			asked = false,
 			/** A sub-agent's question for its delegating agent (`ask_parent`): its turn ends on it. */
 			question: string | null = null;
 		let cut: {
@@ -1217,7 +1220,7 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 			});
 		});
 		/** L-BOLT-425: the four-row table; an empty summary is asked for once more before the checkpoint is skipped. */
-		/** L-BOLT-546: `origin` says who asked (`/compact`, the agent's own `compact` tool, or the window); input still waiting stays after the boundary. */
+		/** L-BOLT-546: `origin` says who asked (`/compact` or the window); input still waiting stays after the boundary. */
 		const compact = Effect.fn('Agents.work17')(function* (
 			conv: ConversationRow,
 			rows: readonly MessageRow[],
@@ -1367,7 +1370,11 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 					if (yield* settle(id)) break;
 					continue;
 				}
-				const rows = yield* transcript(id);
+				const seen = yield* transcript(id);
+				// the tab answers a page step in a moment: what it then shows closes this step's context
+				const rows = pageWaiting(seen)
+					? yield* Effect.sleep('1500 millis').pipe(Effect.andThen(transcript(id)))
+					: seen;
 				if (mode === 'compact') {
 					// `/compact`: a checkpoint now, then the turn ends
 					if (compactions < AGENT_LIMITS.compactions) yield* compact(conv, rows, [], 'manual');
@@ -1397,13 +1404,11 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 					catalog?.models.find((x) => x.id === concrete)?.context ??
 					AGENT_LIMITS.window;
 				if (
-					(asked || lastInput > AGENT_LIMITS.compactAt * window) &&
+					lastInput > AGENT_LIMITS.compactAt * window &&
 					compactions < AGENT_LIMITS.compactions &&
 					cut === null
 				) {
-					const origin = asked ? 'requested' : 'automatic';
-					asked = false;
-					yield* compact(conv, rows, inputs, origin);
+					yield* compact(conv, rows, inputs, 'automatic');
 					continue;
 				}
 				if (mcpTools === null || mcpFor !== authority.key) {
@@ -1413,16 +1418,20 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 				const envoy = conv.envoy === null ? undefined : yield* envoySpec(m, db, conv.envoy);
 				const staff = authority.actor.kind === 'member' && !authority.actor.external;
 				const hostSide = inApp(conv) && staff;
-				const hostTools =
-					!hostSide || config.hostTools === undefined
-						? []
-						: typeof config.hostTools === 'function'
-							? yield* Port.attempt('agent.hostTools', () =>
-									typeof config.hostTools === 'function'
-										? config.hostTools(authority, id)
-										: Promise.resolve([])
-								)
-							: config.hostTools;
+				// once a turn for an actor: a tool's own call reads the state it depends on
+				if (hostFor !== authority.key) {
+					hostTools =
+						!hostSide || config.hostTools === undefined
+							? []
+							: typeof config.hostTools === 'function'
+								? yield* Port.attempt('agent.hostTools', () =>
+										typeof config.hostTools === 'function'
+											? config.hostTools(authority, id)
+											: Promise.resolve([])
+									)
+								: config.hostTools;
+					hostFor = authority.key;
+				}
 				const skills: ToolContext['skills'] = {
 					...workspaceSkills,
 					...(hostSide && config.skills !== undefined
@@ -1498,7 +1507,6 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 					setGoals: Effect.fn('Agents.work19')(function* (goals: Goal[]) {
 						return yield* setConv(id, 'goals = $2::jsonb', j(goals)).pipe(Effect.map(() => {}));
 					}),
-					compact: () => (compactions < AGENT_LIMITS.compactions ? (asked = true) : false),
 					ask: (text) => {
 						question = text;
 					},
@@ -1714,6 +1722,7 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 					mode === 'plan' ? 'plan' : 'agent',
 					[
 						turnFacts(e, authority, b, ctx.tz),
+						pageNote(rows),
 						// what this turn already holds: read again it answers only a pointer, so the model works from above
 						read.size === 0
 							? undefined
@@ -1953,7 +1962,7 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 				for (const call of calls) {
 					// the call is a `running` row while it runs, finished in place when it answers
 					const started = yield* Clock.currentTimeMillis,
-						args = clip(call.input);
+						args = clip(call.input, 8000);
 					const step = yield* insert({
 						conversation: id,
 						role: 'tool',
@@ -1968,7 +1977,7 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 						role = tool?.studio === undefined ? {} : { studio: tool.studio };
 					// the same call that already failed this often is not run again; nor is a call identical to the one
 					// just made (beside it or the step before), whose answer the model already has
-					const discoveryCall = call.name === 'workspace_lang' || call.name === 'workspace_api';
+					const discoveryCall = call.name === 'workspace_lang';
 					const repeated = key === previous;
 					const skip =
 						tool === undefined ||
@@ -2066,13 +2075,13 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 								});
 							}
 						}
-						// rule 62: the model sees a bounded result; a clipped one keeps the whole output for `read_output`
+						// rule 62: the model sees a bounded result; a clipped one keeps the whole output for `read_file { call }`
 						const own = 'bounded' in answer && answer.bounded === true,
 							whole = own && answer.full !== undefined ? answer.full : result,
 							shown = own ? result : bounded(result).value,
 							clipped = JSON.stringify(shown) !== JSON.stringify(whole);
-						// the model does not see its own call ids, so the note names the one read_output takes
-						const more = `TRUNCATED: this shows part of the ${new TextEncoder().encode(outputText(whole)).length}-byte result. read_output { call: '${call.id}', offset } reads the rest from where it was cut`;
+						// the model does not see its own call ids, so the note names the one read_file takes
+						const more = `TRUNCATED: this shows part of the ${new TextEncoder().encode(outputText(whole)).length}-byte result. read_file { call: '${call.id}', offset } reads the rest`;
 						if (clipped) truncated.push(`${call.name} (call '${call.id}')`);
 						rests.push(...rest(call.name, call.id, shown));
 						yield* wrote(

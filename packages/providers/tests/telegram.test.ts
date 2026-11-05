@@ -104,6 +104,72 @@ describe('Telegram updates', () => {
 	});
 });
 
+describe('Telegram kinds', () => {
+	const of = (message: object) =>
+		telegramUpdate(tg({ chat: { id: 5, type: 'private' }, ...message }), bot)!;
+	it('every file a bot receives is named for the link to fetch, with what it says of itself', () => {
+		expect(of({ voice: { file_id: 'v', duration: 2, file_size: 900 } }).media).toEqual({
+			fileId: 'v',
+			name: 'file-v.ogg',
+			mime: 'audio/ogg',
+			bytes: 900
+		});
+		expect(of({ video_note: { file_id: 'n', length: 240, duration: 3 } }).media).toEqual({
+			fileId: 'n',
+			name: 'file-n.mp4',
+			mime: 'video/mp4'
+		});
+		expect(
+			of({
+				live_photo: { file_id: 'l', width: 1, height: 1, duration: 1, mime_type: 'video/quicktime' }
+			}).media
+		).toEqual({ fileId: 'l', name: 'file-l.mp4', mime: 'video/quicktime' });
+		expect(
+			of({ animation: { file_id: 'a', file_name: 'a.mp4', mime_type: 'video/mp4' } }).media
+		).toMatchObject({ fileId: 'a', name: 'a.mp4' });
+		const sticker = { file_id: 's', width: 1, height: 1, emoji: '👍' };
+		expect(of({ sticker: { ...sticker, is_animated: false, is_video: false } })).toMatchObject({
+			media: { name: 'file-s.webp', mime: 'image/webp' },
+			message: { text: '👍' }
+		});
+		expect(of({ sticker: { ...sticker, is_animated: true, is_video: false } }).media).toMatchObject(
+			{ name: 'file-s.tgs', mime: 'application/x-tgsticker' }
+		);
+		expect(of({ sticker: { ...sticker, is_animated: false, is_video: true } }).media).toMatchObject(
+			{ name: 'file-s.webm', mime: 'video/webm' }
+		);
+	});
+	it('a kind with no file and no text says what it holds', () => {
+		const text = (message: object) => of(message).message['text'];
+		expect(text({ contact: { phone_number: '+65', first_name: 'Ana', last_name: 'Tan' } })).toBe(
+			'Ana Tan +65'
+		);
+		expect(text({ location: { latitude: 1.29, longitude: 103.85 } })).toBe('1.29, 103.85');
+		expect(
+			text({
+				venue: { title: 'Office', address: '1 Road', location: {} },
+				location: { latitude: 1, longitude: 2 }
+			})
+		).toBe('Office, 1 Road');
+		expect(text({ poll: { question: 'Lunch?', options: [{ text: 'Yes' }, { text: 'No' }] } })).toBe(
+			'Lunch?\n- Yes\n- No'
+		);
+		expect(text({ dice: { emoji: '🎲', value: 4 } })).toBe('🎲 4');
+		expect(text({ game: { title: 'Snake', description: 'x', photo: [] } })).toBe('Snake');
+		expect(text({ invoice: { title: 'Order 9', description: 'x' } })).toBe('Order 9');
+		expect(text({ checklist: { title: 'Open up', tasks: [] } })).toBe('Open up');
+		expect(text({ story: { chat: {}, id: 1 } })).toBe('[story]');
+		expect(text({ paid_media: { star_count: 1, paid_media: [] } })).toBe('[paid media]');
+		expect(text({ rich_message: { blocks: [] } })).toBe('[rich message]');
+		expect(text({ caption: 'mine', location: { latitude: 1, longitude: 2 } })).toBe('mine');
+	});
+	it.effect('claims no history: the link has no reconcile', () =>
+		Effect.gen(function* () {
+			expect((yield* host(telegram(), fakeFetch([]))).link.reconcile).toBeUndefined();
+		})
+	);
+});
+
 describe('the Telegram link', () => {
 	const api = (calls: { url: string }[]) => calls.map((c) => c.url.replace(/bot[^/]+/, 'bot…'));
 	const bot = () =>
@@ -215,6 +281,43 @@ describe('the Telegram link', () => {
 					}
 				]);
 			})
+	);
+	it.effect('a file Telegram will not hand over stays named on the message with its size', () =>
+		Effect.gen(function* () {
+			const f = fakeFetch([
+				(c) =>
+					c.url.endsWith('/getMe')
+						? json({ ok: true, result: { id: 42, username: 'DeskBot' } })
+						: undefined,
+				(c) => (c.url.endsWith('/setWebhook') ? json({ ok: true, result: true }) : undefined),
+				(c) =>
+					c.url.endsWith('/getFile')
+						? json({ ok: false, error_code: 400, description: 'Bad Request: file is too big' }, 400)
+						: undefined
+			]);
+			const h = yield* host(telegram(), f, { credential: { token: '123:abc' } });
+			const secret = JSON.parse(f.calls[1]!.body).secret_token as string;
+			yield* h.link.webhook!(
+				new Request('https://internal/hook', {
+					method: 'POST',
+					headers: { 'x-telegram-bot-api-secret-token': secret },
+					body: JSON.stringify({
+						update_id: 1,
+						message: {
+							message_id: 7,
+							date: 1_790_000_000,
+							chat: { id: 5, type: 'private' },
+							from: { id: 5 },
+							video: { file_id: 'big', file_name: 'site.mp4', file_size: 50_000_000 }
+						}
+					})
+				})
+			);
+			expect(h.events).toMatchObject([
+				{ messages: [{ attachments: [{ name: 'site.mp4', bytes: 50_000_000 }] }] }
+			]);
+			expect(h.events[0]).not.toHaveProperty('bins');
+		})
 	);
 	it.effect('an update the engine did not store is a 500, so Telegram redelivers it', () =>
 		Effect.gen(function* () {

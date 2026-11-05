@@ -74,7 +74,8 @@ export type FieldCommon = {
 	hidden?: true;
 };
 
-type StoredArm =
+/** Each stored field kind with its own options, beside the options every field shares (`label`, `optional`, …). */
+export type StoredArm =
 	| { kind: 'text'; format?: TextFormat; max?: number; many?: true }
 	| { kind: 'int'; min?: number; max?: number }
 	| { kind: 'decimal'; scale: number; precision?: number; min?: number; max?: number }

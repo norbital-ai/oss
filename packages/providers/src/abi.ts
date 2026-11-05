@@ -11,7 +11,8 @@ import {
 	type Link,
 	type LocalText,
 	type OutboundAttachment,
-	type Provider
+	type Provider,
+	type ReconcilePage
 } from '@norbital-ai/bolt/engine';
 import type { ProviderFailure } from './errors.ts';
 
@@ -52,6 +53,9 @@ export type LinkDef = {
 				cursor: Json | null
 		  ) => Effect.Effect<DriverPage, ProviderFailure>)
 		| undefined;
+	/** Absent where the platform keeps no history. */
+	readonly reconcile?:
+		((thread: string, since: string) => Effect.Effect<ReconcilePage, ProviderFailure>) | undefined;
 	readonly discover?:
 		(() => Effect.Effect<readonly { id: string; label: string }[], ProviderFailure>) | undefined;
 	readonly renew?: (() => Effect.Effect<string | null, ProviderFailure>) | undefined;
@@ -95,7 +99,8 @@ function link(def: LinkDef, scope: Scope.Closeable, run: Run): Link {
 	const out: Link = {
 		close: () => run(Effect.ensuring(def.close ?? Effect.void, Scope.close(scope, Exit.void)))
 	};
-	const { pair, unpair, test, send, typing, request, read, discover, renew, webhook } = def;
+	const { pair, unpair, test, send, typing, request, read, reconcile, discover, renew, webhook } =
+		def;
 	if (pair !== undefined) out.pair = (input) => call(pair(input));
 	if (unpair !== undefined) out.unpair = () => call(unpair());
 	if (test !== undefined) out.test = (input) => call(test(input));
@@ -105,6 +110,8 @@ function link(def: LinkDef, scope: Scope.Closeable, run: Run): Link {
 	if (request !== undefined) out.request = (op, signal) => call(request(op), signal);
 	if (read !== undefined)
 		out.read = (sync, partition, cursor, signal) => call(read(sync, partition, cursor), signal);
+	if (reconcile !== undefined)
+		out.reconcile = (thread, since, signal) => call(reconcile(thread, since), signal);
 	if (discover !== undefined) out.discover = () => call(discover());
 	if (renew !== undefined) out.renew = () => call(renew());
 	if (webhook !== undefined) out.webhook = (r) => call(webhook(r));

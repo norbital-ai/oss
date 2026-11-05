@@ -10,7 +10,7 @@ const cred = {
 	token: 'tok123',
 	encodingAesKey: 'abcdefghijklmnopqrstuvwxyz0123456789ABCDEFG'
 };
-const message = { to: 'openid', text: 'hello' };
+const message = { id: 'm-1', to: 'openid', text: 'hello' };
 
 it.effect('an old token completing after re-pair does not become the new account token', () =>
 	Effect.gen(function* () {

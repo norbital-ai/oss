@@ -224,13 +224,15 @@ describe("sys_2.infer tools: ['read']", () => {
 								id: 'r1',
 								name: 'read',
 								input: {
-									purchase_orders: { output: 'matching', where: { supplier: { eq: 'Acme' } } }
+									reads: [
+										{ of: 'purchase_orders', output: 'matching', where: { supplier: { eq: 'Acme' } } }
+									]
 								}
 							}
 						]),
 						use([
-							{ id: 'r2', name: 'read', input: { ledgers: {} } },
-							{ id: 'r3', name: 'read', input: { purchase_orders: {} } }
+							{ id: 'r2', name: 'read', input: { reads: [{ of: 'ledgers' }] } },
+							{ id: 'r3', name: 'read', input: { reads: [{ of: 'purchase_orders' }] } }
 						]),
 						use([
 							{
@@ -271,14 +273,14 @@ describe("sys_2.infer tools: ['read']", () => {
 						'find',
 						'diff'
 					]);
-					// the keys the run's policies may read, and no other
+					// the schema is static: what the run reads is the refusal's list
 					expect(
 						Object.keys(
 							Schema.decodeUnknownSync(
 								Schema.Struct({ properties: Schema.Record(Schema.String, Schema.Json) })
 							)(offered[0]!.input).properties
-						).sort()
-					).toEqual(['invoices', 'purchase_orders']);
+						)
+					).toEqual(['reads']);
 					// one bounded page of the matcher's `matching` output: the Acme order only, no margin
 					const [page] = toolResults(ai.requests[1]!);
 					const rows = Schema.decodeUnknownSync(
@@ -291,9 +293,9 @@ describe("sys_2.infer tools: ['read']", () => {
 					expect(rows.map((row) => row['number'])).toEqual(['PO-1']);
 					expect(rows[0]).not.toHaveProperty('margin');
 					const [, ledgers, defaults] = toolResults(ai.requests[2]!);
-					// a root the run's policies cannot read is not in the tool's schema at all
+					// a root the run's policies cannot read is refused, and the refusal lists the keys it may read and no other
 					expect(ledgers).toEqual({
-						error: expect.stringMatching(/excess property[\s\S]*"ledgers"/)
+						error: "You read no 'ledgers'. Models: invoices, purchase_orders"
 					});
 					// purchase orders' `default` output is not granted: a read naming none reads an output the run holds,
 					// never the default's fields

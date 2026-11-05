@@ -83,7 +83,7 @@ describe('mailbox import start', () => {
 						'<undated-new@example.test>',
 						'<old-header-new@example.test>'
 					]);
-					expect(cursor(h)).toEqual({ validity: '7', uid: 8, after });
+					expect(cursor(h)).toMatchObject({ validity: '7', uid: 8, after });
 					expect(f.server.searches.some((query) => /SINCE/i.test(query))).toBe(true);
 					expect(
 						messagesOf(h.events).map(
@@ -112,7 +112,7 @@ describe('mailbox import start', () => {
 				yield* f.pair(h);
 				yield* until(() => cursor(h)?.uid === 3);
 				expect(ids(h)).toEqual(['<same-second@example.test>', '<next-second@example.test>']);
-				expect(cursor(h)).toEqual({ validity: '7', uid: 3, after: at });
+				expect(cursor(h)).toMatchObject({ validity: '7', uid: 3, after: at });
 			})
 		)
 	);

@@ -49,6 +49,7 @@ const STATUS: { readonly [s: string]: DeliveryReport['kind'] } = {
 	failed: 'failed',
 	undelivered: 'bounced'
 };
+const PAGE = 100;
 const TWIML = () => new Response('<Response/>', { headers: { 'content-type': 'text/xml' } });
 const Credential = Schema.Struct({
 	accountSid: Schema.NonEmptyString,
@@ -60,6 +61,23 @@ const Account = Schema.Struct({ friendly_name: Schema.optionalKey(Schema.String)
 const Sent = Schema.Struct({ sid: Schema.NonEmptyString });
 const Message = Schema.Struct({ to: Schema.NonEmptyString, text: Schema.String });
 const Webhook = Schema.Record(Schema.String, Schema.String);
+const Fetched = Schema.Struct({ date_sent: Schema.NullOr(Schema.String) });
+/** A page of the Messages list; `next_page_uri` carries Twilio's page token. */
+const Listing = Schema.Struct({
+	messages: Schema.Array(
+		Schema.Struct({
+			sid: Schema.NonEmptyString,
+			body: Schema.NullOr(Schema.String),
+			num_media: Schema.String,
+			date_sent: Schema.NullOr(Schema.String),
+			date_created: Schema.NullOr(Schema.String)
+		})
+	),
+	next_page_uri: Schema.NullOr(Schema.String)
+});
+const MediaList = Schema.Struct({
+	media_list: Schema.Array(Schema.Struct({ content_type: Schema.String }))
+});
 type Cred = typeof Credential.Type;
 
 export function twilioWhatsapp(): ProviderDef {
@@ -187,6 +205,56 @@ export function twilioWhatsapp(): ProviderDef {
 					for (const MediaUrl of links) yield* post({ MediaUrl });
 					return { providerId: sent.sid };
 				}),
+				// Twilio does not retry a 5xx by default, so a delivery it failed to make is read back here. `complete` stays
+				// false: a WhatsApp revoke never leaves this list, and a row can be absent for reasons of Twilio's own.
+				reconcile: Effect.fn('TwilioWhatsApp.reconcile')(function* (thread: string, since: string) {
+					if (cred === null)
+						return yield* Effect.fail(
+							new ProviderUnavailable({ message: 'the WhatsApp (Twilio) account is not connected' })
+						);
+					const value = cred,
+						account = `${API}/Accounts/${value.accountSid}`,
+						from = Date.parse(since),
+						messages: Json[] = [];
+					// the filter takes a GMT date, so the instant is applied here
+					const query = new URLSearchParams({
+						From: thread,
+						To: `whatsapp:${value.from}`,
+						'DateSent>': since.slice(0, 10),
+						PageSize: String(PAGE)
+					});
+					let next: string | null = `${account}/Messages.json?${query}`;
+					while (next !== null) {
+						const page: typeof Listing.Type = yield* withFetch(ctx, twilio(value, Listing, next));
+						for (const row of page.messages) {
+							const at = Date.parse(row.date_sent ?? row.date_created ?? '');
+							if (!(at >= from)) continue;
+							const message = twilioInbound(
+								{ MessageSid: row.sid, From: thread, Body: row.body ?? '' },
+								at
+							);
+							if (message === null) continue;
+							// no bytes, and the Media resource states no size
+							const files =
+								Number(row.num_media) === 0
+									? []
+									: (yield* withFetch(
+											ctx,
+											twilio(value, MediaList, `${account}/Messages/${row.sid}/Media.json`)
+										)).media_list;
+							messages.push({
+								...message,
+								attachments: files.map((file, i) => ({
+									name: mediaName(i, file.content_type),
+									mime: file.content_type,
+									bytes: 0
+								}))
+							});
+						}
+						next = page.next_page_uri === null ? null : new URL(page.next_page_uri, API).href;
+					}
+					return { messages, complete: false };
+				}),
 				webhook: Effect.fn('TwilioWhatsApp.webhook')(function* (request: Request) {
 					if (cred === null) return new Response(null, { status: 404 });
 					const value = cred;
@@ -215,13 +283,26 @@ export function twilioWhatsapp(): ProviderDef {
 					}
 					const message = twilioInbound(params, now);
 					if (message === null) return TWIML();
+					// the webhook carries no time of its own; the message resource does, and the arrival stands in for it
+					const sent = yield* withFetch(
+						ctx,
+						twilio(
+							value,
+							Fetched,
+							`${API}/Accounts/${value.accountSid}/Messages/${message['id']}.json`
+						)
+					).pipe(
+						Effect.map((row) => Date.parse(row.date_sent ?? '')),
+						Effect.orElseSucceed(() => Number.NaN)
+					);
 					const bins: Uint8Array[] = [],
 						attachments: Json[] = [];
 					for (let i = 0; i < Number(params['NumMedia'] ?? 0); i++) {
 						const url = params[`MediaUrl${i}`],
-							mime = params[`MediaContentType${i}`] ?? 'application/octet-stream';
+							mime = params[`MediaContentType${i}`] ?? 'application/octet-stream',
+							name = mediaName(i, mime);
 						if (url === undefined) continue;
-						yield* withFetch(
+						const bytes = yield* withFetch(
 							ctx,
 							Effect.gen(function* () {
 								const response = yield* HttpClient.execute(
@@ -235,28 +316,44 @@ export function twilioWhatsapp(): ProviderDef {
 										() => new ProviderUnavailable({ message: 'Twilio media request failed' })
 									)
 								);
-								const bytes = new Uint8Array(
+								const body = new Uint8Array(
 									yield* response.arrayBuffer.pipe(
 										Effect.mapError(
 											() => new ProviderUnavailable({ message: 'Twilio media read failed' })
 										)
 									)
 								);
-								if (response.status >= 400 || bytes.byteLength > MEDIA_MAX) return;
-								attachments.push({
-									name: `whatsapp-${i}.${mime.split('/')[1] ?? 'bin'}`,
-									mime,
-									bytes: bytes.byteLength,
-									bin: bins.length
-								});
-								bins.push(bytes);
+								return response.status >= 400
+									? yield* Effect.fail(
+											new ProviderUnavailable({
+												message: `Twilio media answered ${response.status}`
+											})
+										)
+									: body;
 							})
-						).pipe(Effect.tapCause(Effect.logWarning), Effect.ignore);
+						).pipe(
+							Effect.tapCause(Effect.logWarning),
+							Effect.orElseSucceed(() => null)
+						);
+						// a file not held stays named: Twilio will not deliver this webhook again
+						if (bytes === null) attachments.push({ name, mime, bytes: 0 });
+						else if (bytes.byteLength > MEDIA_MAX)
+							attachments.push({ name, mime, bytes: bytes.byteLength });
+						else {
+							attachments.push({ name, mime, bytes: bytes.byteLength, bin: bins.length });
+							bins.push(bytes);
+						}
 					}
 					yield* hostCall('store Twilio inbound', () =>
 						ctx.emit({
 							kind: 'messages',
-							messages: [{ ...message, attachments }],
+							messages: [
+								{
+									...message,
+									...(Number.isNaN(sent) ? {} : { sentAt: new Date(sent).toISOString() }),
+									attachments
+								}
+							],
 							...(bins.length === 0 ? {} : { bins })
 						})
 					);
@@ -266,6 +363,9 @@ export function twilioWhatsapp(): ProviderDef {
 		})
 	};
 }
+
+const mediaName = (index: number, mime: string) =>
+	`whatsapp-${index}.${mime.split(';')[0]?.split('/')[1] ?? 'bin'}`;
 
 /** A status callback → the report: Twilio's `ErrorCode` (e.g. 63016, outside the 24-hour window) and message as code and reason. */
 function twilioReport(
@@ -301,7 +401,17 @@ export const twilioSignature = (
 		)
 		.digest('base64');
 
-/** One incoming-message webhook's form → the wire message, or `null` without a sender or a message id. */
+/** A shared location has no body: `Label`, `Address`, `Latitude` and `Longitude` are the message. */
+const placeOf = (p: { readonly [k: string]: string }) =>
+	[
+		p['Label'],
+		p['Address'],
+		p['Latitude'] === undefined ? undefined : `${p['Latitude']}, ${p['Longitude']}`
+	]
+		.filter((line) => line !== undefined && line !== '')
+		.join('\n');
+
+/** One incoming-message form → the wire message, or `null` without a sender or a message id. */
 function twilioInbound(p: { readonly [k: string]: string }, now: number): Obj | null {
 	const from = str(p['From']),
 		id = str(p['MessageSid']);
@@ -311,7 +421,7 @@ function twilioInbound(p: { readonly [k: string]: string }, now: number): Obj | 
 		thread: from,
 		sentAt: new Date(now).toISOString(),
 		from: { handle: from, name: str(p['ProfileName']) },
-		text: p['Body'] ?? '',
+		text: p['Body'] || placeOf(p),
 		group: false,
 		invocation: 'direct',
 		replyTo: str(p['OriginalRepliedMessageSid'])

@@ -629,6 +629,8 @@ export const RunsLive = Layer.effect(
 				OR (run IS NULL AND issued_at < $1::timestamptz - interval '24 hours'))
 				AND NOT EXISTS (SELECT 1 FROM bolt_audit_receipt a WHERE a.outcome_key=bolt_idem.key AND a.acknowledged_at IS NULL AND a.expired_at IS NULL)`,
 				bolt_rate: `window_start < $1::timestamptz - interval '1 day'`,
+				// a consumed delivery only dedupes a redelivery, and providers stop retrying within days
+				sys_inbox: `consumed_at < $1::timestamptz - interval '30 days'`,
 				sys_notification: `(read_at < $1::timestamptz - interval '90 days') OR at < $1::timestamptz - interval '365 days'`, // L-BOLT-354
 				bolt_host_nonce: `at < $1::timestamptz - CASE WHEN key LIKE 'nonce:%' THEN interval '10 minutes' ELSE interval '30 days' END`,
 				// an anonymous user whose session lapsed (30 days unused) or was retired by a sign-in, unless a record references it

@@ -27,6 +27,7 @@ import type {
 	LinkStatus,
 	OutboundAttachment
 } from '@norbital-ai/bolt/engine';
+import { createHash } from 'node:crypto';
 import type { GroupMetadata } from '@whiskeysockets/baileys';
 import { FirstSyncs, ProviderRuntime, type ProviderDef } from '../abi.ts';
 import { LinkClosed, PairingInvalid, ProviderUnavailable } from '../errors.ts';
@@ -52,7 +53,8 @@ export type WaSocket = {
 		content:
 			| { text: string }
 			| { image: Buffer; mimetype: string }
-			| { document: Buffer; mimetype: string; fileName: string }
+			| { document: Buffer; mimetype: string; fileName: string },
+		options: { messageId: string }
 	): Promise<{ key?: { id?: string | null }; message?: unknown } | undefined>;
 	sendPresenceUpdate?(type: 'available' | 'composing' | 'paused', jid?: string): Promise<void>;
 	/** Read receipts (blue ticks) for received messages. */
@@ -327,7 +329,14 @@ const Deleted = Schema.Union([
 		before: Schema.optional(Schema.Finite)
 	})
 ]);
-const Outbound = Schema.Struct({ to: Schema.NonEmptyString, text: Schema.String });
+const Outbound = Schema.Struct({
+	id: Schema.NonEmptyString,
+	to: Schema.NonEmptyString,
+	text: Schema.String
+});
+/** A message part's WhatsApp id, in Baileys' own shape (`generateMessageIDV2`): a retry names the same one. */
+const messageIdOf = (id: string, part: number) =>
+	`3EB0${createHash('sha256').update(`${id}:${part}`).digest('hex').toUpperCase().slice(0, 18)}`;
 export const InboundMessage = Schema.Struct({
 	id: Schema.String,
 	thread: Schema.String,
@@ -1186,20 +1195,27 @@ const link = Effect.fn('WhatsApp.open')(function* (ctx: DriverOpen, options: Bai
 							yield* Cache.set(sent, id, result.message);
 						return id;
 					});
+				// No `idempotentSends`: a stable id keeps receipts on one message, but nothing in Baileys or any published
+				// source shows WhatsApp dropping a repeat of it, so a send that timed out stays `uncertain`.
 				const jid = jidOf(outbound.to),
 					id = yield* remember(
 						yield* hostCall('send WhatsApp message', () =>
-							socket.sendMessage(jid, { text: outbound.text })
+							socket.sendMessage(
+								jid,
+								{ text: outbound.text },
+								{ messageId: messageIdOf(outbound.id, 0) }
+							)
 						)
 					);
-				for (const file of files)
+				for (const [index, file] of files.entries())
 					yield* remember(
 						yield* hostCall('send WhatsApp attachment', () =>
 							socket.sendMessage(
 								jid,
 								file.mime.startsWith('image/')
 									? { image: Buffer.from(file.bytes), mimetype: file.mime }
-									: { document: Buffer.from(file.bytes), mimetype: file.mime, fileName: file.name }
+									: { document: Buffer.from(file.bytes), mimetype: file.mime, fileName: file.name },
+								{ messageId: messageIdOf(outbound.id, index + 1) }
 							)
 						)
 					);

@@ -143,7 +143,7 @@ describe('openAiChat', () => {
 			expect(pending.pollUnsafe()).toBeUndefined();
 			yield* TestClock.adjust(1);
 			expect(yield* Fiber.join(pending)).toMatchObject({
-				kind: 'timeout',
+				kind: 'upstream',
 				message: 'ai.headers did not answer within 60000 ms'
 			});
 			yield* Deferred.await(aborted);
@@ -460,7 +460,7 @@ describe('openAiChat', () => {
 					{ type: 'image_url', image_url: { url: 'data:image/png;base64,AQ==' } },
 					{
 						type: 'text',
-						text: 'attachment-2 (application/pdf): read it with ingest, then read_file windows'
+						text: 'attachment-2 (application/pdf): read_file reads it'
 					}
 				]);
 				expect(
@@ -529,7 +529,7 @@ describe('openAiChat', () => {
 			})
 	);
 	it.effect(
-		'sends text as text parts, never as file parts providers refuse; any other type is named for ingest, not sent, and the call goes on',
+		'sends text as text parts, never as file parts providers refuse; any other type is named for read_file, not sent, and the call goes on',
 		() =>
 			Effect.gen(function* () {
 				const { f, seen } = capture(() =>
@@ -560,7 +560,7 @@ describe('openAiChat', () => {
 				expect(parts[1]?.text).toBe('attachment-1 (text/plain):\nhello');
 				expect(parts[2]?.text).toBe('attachment-2 (application/json):\n{"a":1}');
 				expect(parts[3]?.text).toBe(
-					'attachment-3 (application/vnd.openxmlformats-officedocument.spreadsheetml.sheet): read it with ingest, then read_file windows'
+					'attachment-3 (application/vnd.openxmlformats-officedocument.spreadsheetml.sheet): read_file reads it'
 				);
 				yield* collect(infer, {
 					...request,
@@ -576,13 +576,13 @@ describe('openAiChat', () => {
 					{ type: 'text', text: 'read' },
 					{
 						type: 'text',
-						text: 'attachment-1 (application/vnd.openxmlformats-officedocument.wordprocessingml.document): read it with ingest, then read_file windows'
+						text: 'attachment-1 (application/vnd.openxmlformats-officedocument.wordprocessingml.document): read_file reads it'
 					}
 				]);
 				expect(seen).toHaveLength(2);
 			})
 	);
-	it('a PDF, an office document or a zip is never a file part: it is read through ingest', () => {
+	it('a PDF, an office document or a zip is never a file part: read_file reads it', () => {
 		for (const mime of [
 			'application/pdf',
 			'application/vnd.openxmlformats-officedocument.presentationml.presentation',
@@ -590,7 +590,7 @@ describe('openAiChat', () => {
 		])
 			expect(filePart({ mime, bytes: new Uint8Array([1]) }, 'a')).toEqual({
 				type: 'text',
-				text: `a (${mime}): read it with ingest, then read_file windows`
+				text: `a (${mime}): read_file reads it`
 			});
 	});
 	it.effect(

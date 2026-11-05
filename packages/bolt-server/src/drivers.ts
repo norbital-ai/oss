@@ -27,6 +27,7 @@ import {
 	withFetch,
 	type OAuthApp
 } from '@norbital-ai/providers';
+import { simulatedProviders } from '@norbital-ai/providers/simulator';
 import { ProviderRuntime, type ProviderDef } from '@norbital-ai/providers/abi';
 import {
 	PairingInvalid,
@@ -38,6 +39,8 @@ import { sqlServerDatabase } from './database.ts';
 export type DriversOptions = {
 	readonly fetch?: typeof fetch;
 	readonly database?: ReturnType<typeof sqlServerDatabase>;
+	/** A channel simulator's URL: its providers are offered beside the real ones. */
+	readonly simulator?: string | undefined;
 };
 /** An injected fetch (a test's) as the engine's HTTP port; without one, requests take the public-network guard. */
 const fetchHttp = (fetcher: typeof fetch): HttpPort => ({
@@ -58,6 +61,7 @@ const fetchHttp = (fetcher: typeof fetch): HttpPort => ({
 export function drivers(options: DriversOptions = {}): readonly ProviderDef[] {
 	return [
 		...defaultProviders(),
+		...(options.simulator === undefined ? [] : simulatedProviders(options.simulator)),
 		httpProvider(options),
 		sqlServerProvider(options.database ?? sqlServerDatabase())
 	];

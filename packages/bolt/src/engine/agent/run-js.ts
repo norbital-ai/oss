@@ -37,14 +37,28 @@ export const RUN_JS = {
 	outBytes: 64 * MiB,
 	inBytes: 64 * MiB,
 	/** A bundle, a cold bundler included. */
-	bundleMs: 60_000
+	bundleMs: 60_000,
+	/** What `tool(name, input)` reaches, and how many calls one run makes. */
+	tools: [
+		'read',
+		'act',
+		'browser',
+		'web_search',
+		'describe_workspace',
+		'read_file',
+		'workspace_read'
+	],
+	toolCalls: 200
 } as const;
 
 // The script is the body of one async function, and everything before it sits on its first line, so the module's
 // lines are the script's (a column on line 1 is offset by the head's length).
 const HTTP =
 	"const http = (request) => globalThis[Symbol.for('norbital.bolt.call')]('http', [request]).catch((e) => { throw Object.assign(new Error(e.message), { kind: e.kind }); }); ";
-const headOf = (http: boolean) => `${http ? HTTP : ''}export default { run: async (input) => { `;
+const TOOL =
+	"const tool = (name, input) => globalThis[Symbol.for('norbital.bolt.call')]('tool', [name, input]).catch((e) => { throw Object.assign(new Error(e.message), { kind: e.kind }); }); ";
+const headOf = (http: boolean, tool: boolean) =>
+	`${http ? HTTP : ''}${tool ? TOOL : ''}export default { run: async (input) => { `;
 
 /** `line:column` in the script, from a `guest.mjs` position; `undefined` inside the head (the `http` wrapper). */
 const at = (head: number, line: number, column: number): string | undefined =>
@@ -126,9 +140,28 @@ const fetchOne = (http: Http['Service'], req: HttpRequest) =>
 			)
 		)
 	);
-/** Inline code's crossing: `http`, for a run granted it. */
-const inlineAnswer = (http: Http['Service'] | undefined, member: string, args: string) =>
+/** The catalogue's tools, for a script. */
+export type Tool = (
+	name: string,
+	input: unknown
+) => Effect.Effect<{ readonly result: Json } | { readonly confirm: true }>;
+/** Inline code's crossings: `tool`, and `http` for a run granted it. */
+const ToolCall = Schema.fromJsonString(Schema.Tuple([Schema.String, Schema.Json]));
+const inlineAnswer = (
+	http: Http['Service'] | undefined,
+	tool: Tool | undefined,
+	member: string,
+	args: string
+) =>
 	Effect.gen(function* () {
+		if (member === 'tool' && tool !== undefined) {
+			const decoded = Schema.decodeUnknownOption(ToolCall)(args);
+			if (Option.isNone(decoded)) return refuse('tool takes (name, input)');
+			const answer = yield* tool(decoded.value[0], decoded.value[1]);
+			return 'result' in answer
+				? answered({ ok: true, value: answer.result })
+				: refuse("this call needs the person's confirmation: make it as its own tool call");
+		}
 		if (member !== 'http' || http === undefined)
 			return refuse(
 				member === 'http' ? 'this run has no http' : `a script can only call http, not '${member}'`
@@ -219,7 +252,7 @@ const execute = (
 			if (calls.length === 0)
 				return {
 					ok: false,
-					error: 'the script awaits something that never settles (only http answers)'
+					error: 'the script awaits something that never settles (only tool and http answer)'
 				} as const;
 			const answers = yield* Effect.forEach(
 				calls,
@@ -348,6 +381,7 @@ export type RunJs = {
 	readonly guest: GuestIsolates['Service'];
 	/** Only for a run granted HTTP: the script then has `http`. */
 	readonly http: Http['Service'] | undefined;
+	readonly tool?: Tool | undefined;
 	/** The call id: the guest invocation's. */
 	readonly invocation: string;
 	readonly keep: Keep;
@@ -397,14 +431,14 @@ const keepAll = Effect.fn('Agents.runJsKeep')(function* (
  */
 export const runJs = Effect.fn('Agents.runJs')(function* (run: RunJs) {
 	const { said, printed } = printer();
-	const head = headOf(run.http !== undefined);
+	const head = headOf(run.http !== undefined, run.tool !== undefined);
 	const outcome = yield* execute(
 		run.guest,
 		`${head}${run.code}\n} };`,
 		run.input,
 		run.invocation,
 		said,
-		(member, args) => inlineAnswer(run.http, member, args),
+		(member, args) => inlineAnswer(run.http, run.tool, member, args),
 		{
 			thrown: (name, message, stack) =>
 				located(`${name}: ${message}`, positionIn(head.length, stack)),

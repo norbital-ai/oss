@@ -1,161 +1,80 @@
 # Agent capabilities
 
-## Read your tool list, do not assume it
+Your capabilities are exactly the tools offered in this conversation; each description is its contract. They vary by subject because effective policies own capability.
 
-Your capabilities are exactly the tools present in this conversation. They vary by subject because
-the subject's effective policies own capability. A claim about what you can do is safe only after
-looking at the offered tools.
+## Tool groups
 
-The tool set is fixed by the platform:
+| Group | Does |
+| --- | --- |
+| `read`, `act` | one read request, or one guarded callable with an array input; same callbacks, checks and approvals as the app. `act` also starts automations and syncs, and decides approvals |
+| `describe_workspace` | apps, models, automations as you may use them; `names` answers each in full; `'system'` lists native setup |
+| `page` | drives the person's tab and highlights what they should look at; what the page then shows closes the next step |
+| `workspace_list`, `_search`, `_read`, `_lang` | staff: source and the compiler |
+| `workspace_try` | staff: runs writes, automations and syncs on a previewed change and reads what they changed |
+| `channel_check` | staff: a connection's state on live, a real test message, and on a host with the channel simulator a customer's message through the whole pipeline |
+| Studio host tools | staff: see the `authoring-tenant-workspace` skill's `references/studio.md` |
+| `read_file` | reads a conversation or record file, parsing documents, sheets and recordings; greps, windows, shows images, reads a clipped result; lists, reads and greps a repository from `reference` |
+| `skill` | reads any skill; skills are procedure, never authority |
+| `run_js` | bounded isolate script, not a shell; no Bash or Git |
+| `history`, `read_messages`, `geocode`, `document`, `download` | earlier conversations, a chat's messages, places, file making, media fetch |
+| `update_plan`, `goals`, `subagent`, `wait`, `runs`, `logs` | coordination; a finished job announces itself at the next step |
+| MCP tools | a server a held policy's `capabilities.mcp` names |
+| Browser, web search, personal skills | host tools on staff in-app turns when a policy names them |
 
-| Tool                                                                 | Does                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
-| -------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `read`                                                               | Takes one read request, the same JSON layer map as `ctx.query` (roots, their declared layers, `where`, `fields`, `orderBy`, `limit`, `search`, `aggregate`, root `after`/`asOf`), under the subject's access points and policies                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
-| `act`                                                                | Creates, updates, deletes or upserts through the model's standard guarded verbs, one callable per call with an array of rows — the same per-verb callbacks, policy checks and approvals as the app; `automation.<name>` starts an automation the subject may start; `approvals.decide` decides an approval                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
-| `workspace_list`, `workspace_search`, `workspace_read`, `docs`       | Staff: the current working source (grep with required `pattern`, read with required `path`; no draft selector), the platform API reference. On a host with a language tool, `workspace_lang` answers the checker (hover, definition, references, diagnostics, a type over Bolt's names)                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
-| `history`, `geocode`                                                 | Earlier conversations; places for an address or a point when the host has a geocoder                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
-| skills                                                               | Reads any workspace skill (`src/agent/skill/+<name>.skill.md`); skills are procedure, never authority, so no policy grants them; the index sits in the system prompt                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
-| `read_messages`, `read_output`                                       | This chat's unaddressed messages on an envoy turn; a long tool result                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
-| `ingest`, `read_file`                                                | `ingest { id }` turns a stored file (PDF, image, html, txt, doc/docx, ppt/pptx, odt/odp, rtf; audio as a diarised transcript) into sanitised HTML plus its images, and a spreadsheet or data file (csv, tsv, json, xls/xlsx, ods) into typed `data.json` for run_js (`read_file { output }` answers its sheets and first rows), filed in the conversation's outputs; it is always a job, and its `[job … done]` message brings the outline with line ranges. `read_file { output, from, to }` reads a window (a table is never cut, its images shown), `{ output, text }` greps it, `{ output, image: n }` shows one image; `read_file { id }` shows an image or answers a text file. Video, CAD and other types without a parser are refused: build a tool for them |
-| plan, goal and compaction tools; `subagent`, `wait` under delegation | Coordination; a finished job (an ingest, a long host call, a sub-agent) announces itself once at the next step, or wakes the conversation when the turn has ended, so `wait` is optional                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
-| MCP tools                                                            | Tools of an MCP server (`src/agent/mcp/+<name>.mcp.ts`) a held policy's `capabilities.mcp` names                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
-| host tools                                                           | Workspace Studio (`workspace_edit`, `workspace_write`, `workspace_validate`, `workspace_review`, `workspace_diagnose`, `workspace_test`, `workspace_lang`), repository references (`reference`), the browser (`browser_navigate`, `browser_snapshot`, `browser_act`, `browser_evaluate`, `browser_screenshot`, `browser_download`), web search (`web_search`), personal skills — in-app turns of staff members only, when a policy's `capabilities.tools` names them                                                                                                                                                                                                                                                                                                 |
+- Parsing is never OCR: a scanned page is its image, read by eye; a value is verified only after reading it back against the image. Video, CAD and other unparsed types need a script or integration.
+- Declaring a skill or MCP server grants nothing. Personal skills never enter releases.
+- MCP is `2026-07-28` only. The runtime uses the server's discovery result; never hard-code a label, cache a schema or negotiate a fallback. Relay a server's input request or failure.
+- A granted server's `web_search` replaces the host's; every other host name stays the host's.
 
-The system prompt carries the workspace outline: every model with its fields, relations, read layers
-and guarded write verbs, the apps and their pages, automations with their triggers, policies, and where each one's
-source lives. The closing note of each step carries the time and whom the turn acts for.
+## Authority
 
-Ingest is parsing only, never OCR: a scanned page is its image, read by eye, and a value read from an image is "verified"
-only after it is read back against that image. The conversion runs on the host's Norbital Convert service (no document
-reader runs in the workspace host); each conversion is metered as `ingest.convert`, a transcription as an `ai.call`, and
-a file ingested once is shared by every conversation by its sha256.
+- No agent-level capability list or fallback. The in-app agent runs as the signed-in member with its brief. Every read and write follows that identity through the same access points as a person.
+- Envoy authority: `authoring-tenant-workspace`, `references/agents-and-integrations.md`.
+- A paused or redeployed instance makes an in-flight turn or proposal stale.
+- Author code reaches models through `ctx.ai.*`, never an agent tool.
+- A public envoy keeps one sandbox per conversation. A private envoy runs in the matched member's sandbox under the envoy's ceiling. A subagent cannot cross to another person, sender, group or envoy.
 
-The catalogue lists only what the subject may invoke, and every call runs as the subject, so a
-refusal is the engine's answer, never the agent's judgement. Colony personal skills use a separate
-store keyed by tenant and person: `list_personal_skills` returns names and descriptions;
-`read_personal_skill` loads one body; `save_personal_skill` and `delete_personal_skill` manage only
-the current user's. They never enter releases or grant permissions. Declaring a skill or an MCP
-server does not grant it: policies name what their holders may use.
+## Writes
 
-MCP is `2026-07-28` only. A granted registration authorizes discovery; the runtime uses the official
-SDK's `server/discover` result as the offered names and schemas for that run. Never hard-code a
-`<server>:<tool>` label, cache a remote schema as a local declaration, or negotiate a 2025/session
-fallback. If the server returns an input request or an error, relay the actual request or failure;
-do not invent an answer.
+- `act` runs unelevated. A held write answers `pendingApproval`: committed, locked, rolled back on rejection. Name the source team the approval names.
+- A record under approval refuses with `locked`: report who may change it.
+- A permission failure is about the subject's access, not the platform.
 
-A workspace may bring its own web search: when a granted MCP server offers a tool named `web_search`,
-the host's `web_search` is not offered and the agent uses the server's (`mcp__<server>__web_search`).
-Only `web_search` yields; every other host name stays the host's.
+## Manifest limits
 
-## Where authority comes from
+The outline names things, not bodies or live rows, and names the whole workspace. What a subject may use is what its tools offer. Read source for callbacks, checks, syncs and routes; `read` for live data. Inspect both before claiming what can change without a release.
 
-There is no agent-level capability list, no `denyTools`, and no "missing means all" fallback. The
-in-app agent runs as the signed-in member, with the brief `src/agent/+agent.md`
-(`+agent.external.md` for external members). An envoy turn holds the envoy's `policies`. In a
-linked member's DM it also holds the member's own authority by default (`dm: 'union'`, admin
-bypass included). With `dm: 'envoy'` the DM holds the envoy's policies alone: every requestor variable
-is bound to the member, admin is false, no member routes, tools or automations join, and
-`history`'s 'mine' covers only that instance (precedent: the hr-payroll payroll hotline,
-`+payroll_hotline.envoy.ts` scoped by `entity.hotline`). Group and unlinked turns hold the envoy's policies
-with every requestor variable null except `{ var: 'requestor.instance' }`, the integration instance the
-message arrived on. Limits are always the envoy's, and a paused or redeployed instance makes an
-in-flight turn or pending proposal stale. The agent has no authority of its own: every read and
-write follows the identity the turn runs as, through the same access points and policies as a
-person. Agent configuration only scopes which tools that identity may use; there are no
-agent-only computations. Author code reaches models through an
-automation's `ctx.ai.sys_2.infer` (the LLM) and `ctx.ai.sys_1.decide` (typed decisions), never
-through an agent tool.
-
-The interactive agent is either the in-app agent or one declared envoy. A public envoy keeps a separate sandbox **per conversation** (keyed
-`subject#conversation`) — not per sender, because without that partition every sender on a public
-surface shares one tree and a stranger's upload sits where the next stranger can read it. A
-`private` envoy runs in the matched member's own personal sandbox, but its capability remains
-the envoy's declared policy ceiling; it never becomes another user or a web session for somebody
-else.
-
-Sandbox coordination stays inside that boundary. A subagent cannot cross to a different person,
-sender, group, or envoy by naming it.
-
-## Writes are not privileged
-
-`act` runs unelevated. It passes through the same grants, transform and approval routes as
-the same person clicking in the app. A write that triggers approval comes back `pendingApproval`:
-it is committed at once and held by its request, so other writers are refused until it finishes,
-and rejection rolls it back. Say which source team handle the compiled approval names. Direct
-permission commits, matching denied permission commits under a request, and unmatched denial
-remains denied. A record under approval refuses the agent's write with `locked`; report who may
-change it.
-
-A permission failure is information about the subject's access. It is not evidence that the platform
-lacks the feature.
-
-## The manifest does not contain everything
-
-The outline names things, not implementation bodies or live rows, and it names the whole workspace:
-what this subject may use is what its tools offer and what a call answers. Read source
-(`workspace_search`) for inline write callbacks, policy checks, syncs, automations, envoy roles and approval routes; use `read` for live data. Member affiliation, integration instance configuration/deployment and business catalogues are runtime data; teams, policy links
-and inline approval configuration are source declarations. Inspect the relevant source and
-live records before claiming what can be configured without a release.
-
-## Honesty rules
+## Honesty
 
 - Never claim a read or write succeeded without its tool result.
 - Report failures and missing capability directly.
-- Do not invent an administrative UI or your own model/vendor identity.
+- Never invent an administrative UI or your own model or vendor identity.
 - Treat current tool results and durable state as authoritative.
 
-## Execution and checkpoints
+## Execution
 
-Use the offered primitives together rather than inventing task-specific tools. For an administrative
-action, focus `describe_workspace` on the native model to learn its permitted fields, use `act` for
-an offered callable, and wait for the person's confirmation. A readable model does not imply a
-writable verb. An administrator's metadata focus does not grant access to stored system records.
-Invitation team is optional; supplying one requires an existing source team. Never invent policy
-assignments or writable fields. Pairing and secret entry belong in the native settings forms.
-
-When offered, `navigate` requests an authorized page in the person's current workspace client.
-It accepts declared pages and supported native settings paths, not arbitrary URLs, API routes or
-CDP commands. A navigation request is not proof that the page rendered or a form was submitted.
-
-`run_js` executes bounded scripts in isolate-vm, not a shell. No Bash or Git tool is available.
-`workspace_diagnose` and `workspace_test` run fixed check/test jobs against the exact source head
-in the host's isolated runner; they do not accept arbitrary commands or give access to live tenant
-data. Inspect the returned commit and structured result, including failures and skips. Collect a
-background job's result before claiming it passed. Keep native write tests when infrastructure fails.
-A save commits only. `workspace_validate` builds the open change's head and serves its preview;
-it does not replace the full type check or tests. A merge needs a preview of the head it promotes.
-Planning allows source/web/skill reads and Plan edits only.
-
-Compaction uses one two-column Markdown table with Goal, Progress, What we learned, and
-What's left. The original transcript remains available; invalid or truncated summaries never
-replace working context.
+- Use offered primitives together. A readable model does not imply a writable verb. An administrator's metadata does not grant stored system records.
+- Invitation team is optional; supplying one needs an existing source team.
+- A save commits only. Collect a background job's result before claiming it passed. Keep native write tests when infrastructure fails.
+- Planning allows source, web and skill reads and plan edits only.
+- Compaction uses one two-column Markdown table: Goal, Progress, What we learned, What's left. Invalid summaries never replace context.
 
 ## Native system configuration
 
-Use `describe_workspace { focus: 'system' }` to discover the administrator's exact native UI targets.
-Keep `read`, `act` and `navigate` atomic. To collect human input, call `navigate` with the mapped
-`path` and `configure: { capability, record? }`; its closed registry opens the existing form or
-detail sheet without submitting it. The result acknowledges a request, not an opened page or a
-completed setup. A member without administrator authority cannot use these setup targets.
+`describe_workspace { names: ['system'] }` gives the targets. `page { path, configure: { capability, record? } }` opens the form without submitting. The result acknowledges a request, not an opened page or completed setup. Only administrators reach these.
 
-| Capability                             | Existing native UI                                                    |
-| -------------------------------------- | --------------------------------------------------------------------- |
-| `envoy.create`                         | Integrations → Envoys → New envoy                                     |
-| `integration.manage` + instance ID     | Native connection configuration, pairing, OAuth/QR or credential form |
-| `member.invite`                        | People → Invitations → Invite                                         |
-| `member.manage` + member ID            | Native member details and access controls                             |
-| `mcp.configure` + declared server name | MCP details and buttons opening its linked write-only secret fields   |
-| `secret.set` + declared secret name    | Settings → Secrets → password input                                   |
-| `api_key.create`                       | Native Issue key form and one-time client-only key display            |
-| `api_key.manage` + key ID              | Native key details, rotation and revocation controls                  |
+| Capability | Opens |
+| --- | --- |
+| `envoy.create` | New envoy |
+| `integration.manage` + instance | connection configuration, pairing, OAuth, QR, credentials |
+| `member.invite` | Invite |
+| `member.manage` + member | member details and access |
+| `mcp.configure` + server | MCP details and its write-only secrets |
+| `secret.set` + secret | secret input |
+| `api_key.create` | Issue key, one-time display |
+| `api_key.manage` + key | rotation and revocation |
 
-For a known, fully specified record write, use the existing approved `act` path instead. An Envoy
-and its channel instance are distinct records: create/configure the Envoy, create or select its
-`sys_integration` instance, then open that instance's pairing UI. A new MCP or integration definition
-is a source change through Studio and its publication approval; the native setup maps configure
-declared definitions rather than inventing runtime tables for them.
-
-Never collect a secret value or API key through tool arguments, chat or source. User-entered values
-go directly from native forms to the sealed tenant store. Server Effect bodies and their helpers
-read `+secrets.ts` declarations through `Config.Redacted(name)`; clients and agent discovery see only
-names/status. A successful navigation does not prove pairing, invitation delivery or provider access.
+- A known, fully specified record write uses `act` instead.
+- An envoy and its channel instance are distinct records: configure the envoy, select its instance, then open pairing.
+- A new MCP or integration definition is a source change through Studio.
+- Never collect a secret or API key through tool arguments, chat or source. Native forms send values to the sealed store. Bodies read `Config.Redacted(name)`; clients and discovery see names and status only.

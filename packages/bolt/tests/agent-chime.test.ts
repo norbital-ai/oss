@@ -60,7 +60,7 @@ it('a turn ends finished, asking the person, or failed', () => {
 		state: null,
 		tag: null,
 		turn: 't1',
-		tool: { name: 'page_act', failed: false, page: { click: 'New' } }
+		tool: { name: 'page', failed: false, page: { click: 'New' } }
 	};
 	expect(endingSound([asked, click, reply('r', 'Asked your page to click New.')])).toBe('input');
 	expect(

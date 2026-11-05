@@ -19,7 +19,9 @@ const manifest = {
 			label: 'name',
 			key: ['source', 'code'],
 			fields: { code: { kind: 'text' }, name: { kind: 'text' } }
-		}
+		},
+		chats: { description: 'A chat line', label: 'text', fields: { text: { kind: 'text' } } },
+		entries: { description: 'An entry', label: 'text', fields: { text: { kind: 'text' } } }
 	},
 	relationships: {
 		'products.source': { to: 'sys_integration', where: { integration: { eq: 'erp' } } }
@@ -29,6 +31,14 @@ const manifest = {
 		products: {
 			read: { products: { fields: 'all' } },
 			syncs: { erp: { with: 'erp', read: true, every: '30min' } }
+		},
+		chats: {
+			read: { chats: { fields: 'all' } },
+			syncs: { desk: { with: 'desk', read: true } }
+		},
+		entries: {
+			read: { entries: { fields: 'all' } },
+			syncs: { cal: { with: 'cal', read: true } }
 		}
 	},
 	integrations: {
@@ -36,7 +46,9 @@ const manifest = {
 			description: 'An ERP database',
 			driver: 'sqlserver',
 			credential: { connection: { kind: 'text' } }
-		}
+		},
+		desk: { description: 'The desk', driver: 'whatsapp' },
+		cal: { description: 'Calendars', driver: 'calendar' }
 	},
 	policies: {
 		ops: { description: 'Ops', grants: { quotes: { read: true, create: true } } }
@@ -76,8 +88,12 @@ const guestSource = `export default {
 			return n;
 		} }
 	},
-	model: { products: { bodies: { syncs: { erp: { read: function* ({cursor}, ctx) {
-		return (yield* ctx.request({ op: 'values', values: {cursor} })).rows[0].page; } } } } } }
+	model: {
+		products: { bodies: { syncs: { erp: { read: function* ({cursor}, ctx) {
+			return (yield* ctx.request({ op: 'values', values: {cursor} })).rows[0].page; } } } } },
+		chats: { bodies: { syncs: { desk: { read: function* () { return { rows: [] }; } } } } },
+		entries: { bodies: { syncs: { cal: { read: function* () { return { rows: [] }; } } } } }
+	}
 };`;
 const SLOT = '2026-09-25T10:15:00.000Z',
 	NEXT = '2026-09-25T10:30:00.000Z';
@@ -89,7 +105,13 @@ const Fixture = Layer.unwrap(
 			manifest,
 			guest,
 			now: '2026-09-25T10:15:02.000Z',
-			seed: { sys_integration: [{ id: 'erp1', integration: 'erp', name: 'ERP one' }] }
+			seed: {
+				sys_integration: [
+					{ id: 'erp1', integration: 'erp', name: 'ERP one' },
+					{ id: 'desk1', integration: 'desk', name: 'Desk one' },
+					{ id: 'cal1', integration: 'cal', name: 'Cal one' }
+				]
+			}
 		})
 	)
 );
@@ -116,7 +138,9 @@ layer(Fixture, { excludeTestServices: true })('crons on the host clock', (it) =>
 				{ id: 'nothing', cron: '*/5 * * * *', zone: 'UTC' },
 				{ id: 'watch', cron: '* * * * *', zone: 'UTC' },
 				{ id: 'peek', cron: '0 0 * * *', zone: 'Asia/Singapore' },
-				{ id: 'products.sync.erp', cron: '*/30 * * * *', zone: 'UTC' }
+				{ id: 'products.sync.erp', cron: '*/30 * * * *', zone: 'UTC' },
+				{ id: 'chats.sync.desk', cron: '*/15 * * * *', zone: 'UTC' },
+				{ id: 'entries.sync.cal', cron: '*/15 * * * *', zone: 'UTC' }
 			]);
 		})
 	);
@@ -381,7 +405,17 @@ layer(Fixture, { excludeTestServices: true })('crons on the host clock', (it) =>
 // A database billed by the second stays asleep until a slot needs its data.
 const Sleeping = Layer.unwrap(
 	Effect.map(program(guestSource), (guest) =>
-		TestWorkspace.layer({ manifest, guest, now: '2026-09-25T10:15:02.000Z' })
+		TestWorkspace.layer({
+			manifest,
+			guest,
+			now: '2026-09-25T10:15:02.000Z',
+			seed: {
+				sys_integration: [
+					{ id: 'desk1', integration: 'desk', name: 'Desk one' },
+					{ id: 'cal1', integration: 'cal', name: 'Cal one' }
+				]
+			}
+		})
 	)
 );
 layer(Sleeping, { excludeTestServices: true })('a sleeping database', (it) => {
@@ -416,5 +450,69 @@ layer(Sleeping, { excludeTestServices: true })('a sleeping database', (it) => {
 			expect(yield* fire('watch', '2026-09-25T10:22:00.000Z')).toEqual(first);
 			expect(t.count.reads).toBeGreaterThan(0);
 		})
+	);
+
+	it.effect(
+		'a healthy sync over a driver that pushes rests until tomorrow, on no trip; a quiet read commits nothing; a failing one keeps its own rest',
+		() =>
+			Effect.gen(function* () {
+				const { t, fire, sql } = yield* setup;
+				let pages = 0;
+				t.fakes.links.page = () =>
+					Effect.sync(() => {
+						pages++;
+						return { items: [], cursor: 'token', more: false };
+					});
+				const SYNC = 'entries.sync.cal';
+				const slotAt = () => t.clock.now();
+				const asleep = Effect.gen(function* () {
+					t.clock.advance('6min');
+					yield* t.settled();
+					t.count.reset();
+				});
+				const version = () =>
+					sql(`SELECT version FROM sys_sync WHERE instance = 'cal1'`).pipe(
+						Effect.map((rows) => rows[0]?.['version'])
+					);
+				yield* fire(SYNC, slotAt());
+				expect(pages).toBe(1);
+				const midnight = new Date((Math.floor(Date.parse(slotAt()) / 86_400_000) + 1) * 86_400_000);
+				const until = midnight.toISOString();
+				yield* asleep;
+				expect(yield* fire(SYNC, slotAt())).toEqual({ ran: false, until });
+				expect(pages).toBe(1);
+				expect(t.count).toMatchObject({ reads: 0, writes: 0 });
+				// tomorrow's first slot reads; nothing arrived, so its page commits nothing, and the rest holds on no trip
+				const stored = yield* version();
+				t.clock.set(new Date(Date.parse(until) + 60_000).toISOString());
+				yield* t.settled();
+				t.count.reset();
+				yield* fire(SYNC, slotAt());
+				expect(pages).toBe(2);
+				expect(yield* version()).toEqual(stored);
+				yield* asleep;
+				expect(yield* fire(SYNC, slotAt())).toEqual({
+					ran: false,
+					until: new Date(Date.parse(until) + 86_400_000).toISOString()
+				});
+				expect(pages).toBe(2);
+				expect(t.count).toMatchObject({ reads: 0, writes: 0 });
+				// a conversation's sync rests the same way
+				yield* fire('chats.sync.desk', slotAt());
+				yield* asleep;
+				expect(yield* fire('chats.sync.desk', slotAt())).toMatchObject({ ran: false });
+				expect(t.count).toMatchObject({ reads: 0, writes: 0 });
+				// a hint's read that fails is a sync in trouble: its slots come back after its own rest, not tomorrow
+				t.fakes.links.page = () =>
+					Effect.suspend(() => {
+						pages++;
+						return Effect.fail(new FacilityFailure({ kind: 'upstream', message: 'no calendar' }));
+					});
+				yield* t.syncs.read(SYNC).pipe(Effect.flip);
+				expect(pages).toBe(3);
+				yield* asleep;
+				yield* fire(SYNC, slotAt());
+				expect(pages).toBe(4);
+			})
 	);
 });

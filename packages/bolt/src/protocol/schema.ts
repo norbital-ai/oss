@@ -16,7 +16,7 @@ import {
 export const STUDIO_PHASES = ['diagnose', 'copy', 'preview', 'merge'] as const;
 /**
  * What a host tool is to the shell's Studio surfaces, declared so Bolt never keys behaviour on a host's tool names:
- * - `preview`: its result's `preview` is a preview it built; the agent may show that origin (`preview_show`).
+ * - `preview`: its result's `preview` is a preview it built; the agent may show that origin (`page { preview }`).
  * - `view`: a look at a rendered page; the images it attaches are shown to the person too, and its result's `url` is a
  *   preview the panel may show.
  * - `logs`: its result is `{ records: StudioLogLine[] }`, listed in full on the step.
@@ -31,6 +31,7 @@ export const PageAction = Schema.Struct({
 	click: Schema.optionalKey(Schema.String),
 	scroll: Schema.optionalKey(Schema.Finite),
 	go: Schema.optionalKey(Schema.Literals(['back', 'forward'])),
+	highlight: Schema.optionalKey(Schema.String),
 	type: Schema.optionalKey(
 		Schema.Struct({
 			label: Schema.String,
@@ -44,7 +45,9 @@ export type PageAction = typeof PageAction.Type;
 export const PageResult = Schema.Struct({
 	ok: Schema.Boolean,
 	note: Schema.optionalKey(Schema.String),
-	url: Schema.optionalKey(Schema.String)
+	url: Schema.optionalKey(Schema.String),
+	/** What the page shows once it settled: its headings and controls as they read. */
+	screen: Schema.optionalKey(Schema.String)
 });
 export type PageResult = typeof PageResult.Type;
 
@@ -450,7 +453,7 @@ export const AgentRow = Schema.Struct({
 			running: Schema.optionalKey(Schema.Literal(true)),
 			args: Schema.optionalKey(Schema.String),
 			result: Schema.optionalKey(Schema.String),
-			/** The preview URL the result names in full (a `preview` role's, `preview_show`'s), never clipped. */
+			/** The preview URL the result names in full (a `preview` role's, `page { preview }`'s), never clipped. */
 			preview: Schema.optionalKey(Schema.String),
 			/** The held request the result names (a `publish` or `rollback` role's): the person approves it on the card. */
 			approval: Schema.optionalKey(Schema.String),

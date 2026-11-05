@@ -256,8 +256,14 @@ export function openAiChat(config: OpenAiChatConfig, options: HttpOptions = {}):
 				).pipe(Effect.mapError(Port.failure('ai')));
 				const res = yield* HttpClient.execute(req).pipe(
 					Effect.mapError(Port.failure('ai')),
-					// a provider answers its headers with its first token: as late as an uncached long prompt takes
-					Port.call('ai.headers', 60_000)
+					// a provider answers its headers with its first token: as late as an uncached long prompt takes. Nothing has
+					// streamed yet, so a stall is an upstream failure the caller may resend
+					Port.call('ai.headers', 60_000),
+					Effect.mapError((error) =>
+						error instanceof FacilityFailure && error.kind === 'timeout'
+							? new FacilityFailure({ kind: 'upstream', message: error.message })
+							: error
+					)
 				);
 				if (res.status < 200 || res.status >= 300) {
 					const detail = yield* res.text.pipe(

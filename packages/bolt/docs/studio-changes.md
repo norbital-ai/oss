@@ -55,7 +55,7 @@ change can be fixed and merged again.
 On the **Versions** tab (`/studio/versions`) pick a deployment (a checkpoint) and press **Roll back**. Only a deployment whose checkpoint is
 still restorable can be picked: a reset replaces live's database, so deployments from before it stay listed, marked
 "Before the last reset — can't roll back to this", and never reach the confirmation; a version without a checkpoint
-says "This version has no checkpoint to roll back to". Norbius lists the same checkpoints (`workspace_builds`, with
+says "This version has no checkpoint to roll back to". Norbius lists the same checkpoints (`workspace_review`, with
 times in the workspace's own timezone) and refuses the same ones. The confirmation shows the checkpoint's
 time and description, and says either that all data is kept or, when the schema changed since, that data written after
 that time will be lost. The same progress strip follows. Everyone stays signed in, including people who signed in

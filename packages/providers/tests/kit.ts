@@ -1,6 +1,8 @@
 // A host for one link, as bolt's `integrationLinks` would be: a fake fetch that records every call and answers from a
 // route table, the instance's credentials (each write recorded and applied), emitted events, reported statuses and pairings.
 import { randomUUID } from 'node:crypto';
+import { createServer } from 'node:http';
+import type { AddressInfo } from 'node:net';
 import { Effect, FiberSet, Semaphore } from 'effect';
 import { loopbackTcpPort } from '@norbital-ai/bolt/node';
 import { FirstSyncs, ProviderRuntime, type ProviderDef, type LinkDef } from '../src/abi.ts';
@@ -166,6 +168,30 @@ export const host = Effect.fn('ProviderTest.host')(function* (
 		}
 	} satisfies Host;
 });
+/** A host's webhook route on loopback: what reaches `url` goes to `route.to`. */
+export const hookServer = Effect.acquireRelease(
+	Effect.promise(async () => {
+		const route: { to?: (request: Request) => Promise<Response> } = {};
+		const server = createServer(async (req, res) => {
+			const chunks: Buffer[] = [];
+			for await (const chunk of req as AsyncIterable<Buffer>) chunks.push(chunk);
+			const answer = await route.to?.(
+				new Request('http://hook.test/', {
+					method: 'POST',
+					headers: Object.entries(req.headers).flatMap(([name, value]) =>
+						typeof value === 'string' ? [[name, value] as [string, string]] : []
+					),
+					body: Buffer.concat(chunks)
+				})
+			);
+			res.writeHead(answer?.status ?? 500).end();
+		});
+		await new Promise<void>((listening) => server.listen(0, '127.0.0.1', listening));
+		const { port } = server.address() as AddressInfo;
+		return { server, route, url: `http://127.0.0.1:${port}/` };
+	}),
+	({ server }) => Effect.promise(() => new Promise((closed) => server.close(closed)))
+);
 export const json = (v: unknown, status = 200) => Response.json(v, { status });
 export const signal = () => AbortSignal.timeout(5_000);
 /** Turns the event loop until `ok` holds, reading no clock; a mechanism that never gets there fails by the test's timeout. */

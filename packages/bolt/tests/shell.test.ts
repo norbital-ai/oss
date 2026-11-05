@@ -1433,10 +1433,10 @@ describe('reading files over the files port', () => {
 				mime: 'image/png',
 				bytes: new TextEncoder().encode('bytes of k2')
 			});
-			// a document, a workbook or any other binary is ingested, never read here
+			// a document, a workbook or any other binary is parsed by read_file, never read here
 			for (const id of ['f3', 'f4', 'f5'])
-				expect((yield* Effect.flip(a.read({ id }))).message).toMatch(
-					new RegExp(`is read through ingest: call ingest \\{ id: '${id}' \\}`)
+				expect((yield* Effect.flip(a.read({ id }))).message).toContain(
+					`read_file { id: '${id}' } parses it`
 				);
 			const missing = yield* Effect.flip(a.read({ id: 'nope' }));
 			expect(missing.message).toMatch(/not stored/);

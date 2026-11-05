@@ -44,7 +44,9 @@ export const Cursor = Schema.Struct({
 	validity: Schema.String,
 	uid: Schema.Number,
 	backfill: Schema.optionalKey(Schema.Number),
-	after: Schema.optionalKey(Schema.String)
+	after: Schema.optionalKey(Schema.String),
+	/** When this view of the folder began: a pairing or a new UIDVALIDITY. Older ids may not match it. */
+	began: Schema.optionalKey(Schema.String)
 });
 export type Cursor = typeof Cursor.Type;
 export const Wire = Schema.Struct({

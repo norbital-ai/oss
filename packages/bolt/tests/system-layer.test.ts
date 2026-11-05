@@ -711,6 +711,7 @@ describe('the built-in layer is compiled as a workspace is', () => {
 				expect(
 					Object.entries(SYSTEM.integrations).map(([name, d]) => `${name}:${d.driver}`)
 				).toEqual([
+					'chat:chat',
 					'discord:discord',
 					'email:email',
 					'slack:slack',

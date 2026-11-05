@@ -1,7 +1,7 @@
 import { TestClock } from 'effect/testing';
 import { Effect } from 'effect';
 // Slack: setup validation with auth.test, the signing-secret refusal (and the replay window), url_verification, the
-// event decode, and chat.postMessage.
+// event decode, edits, deletes and files, reconcile, and chat.postMessage.
 import { createHmac } from 'node:crypto';
 import { describe, expect, it } from '@effect/vitest';
 import { slack } from '../src/slack/index.ts';
@@ -184,6 +184,333 @@ describe('Slack', () => {
 					},
 					{ id: 'D9:1790000000.000400', thread: 'D9', group: false, invocation: 'direct' }
 				]);
+			})
+	);
+	it.effect(
+		'an edit carries its version, a delete tombstones; a change that is no edit is nothing',
+		() =>
+			Effect.gen(function* () {
+				yield* TestClock.setTime(NOW);
+				const { h } = yield* paired();
+				const changed = (message: object) =>
+					signed(
+						event({
+							subtype: 'message_changed',
+							hidden: true,
+							ts: '1790000900.000900',
+							user: undefined,
+							text: undefined,
+							message
+						})
+					);
+				const original = { type: 'message', user: 'U7', ts: '1790000000.000100' };
+				yield* h.link.webhook!(
+					changed({
+						...original,
+						text: 'fixed',
+						thread_ts: '1789999999.000050',
+						edited: { user: 'U7', ts: '1790000060.000000' }
+					})
+				);
+				yield* h.link.webhook!(
+					changed({ ...original, text: 'hi', attachments: [{ title: 'unfurl' }] })
+				);
+				yield* h.link.webhook!(
+					changed({ ...original, bot_id: 'B1', edited: { user: 'U7', ts: '1790000061.000000' } })
+				);
+				yield* h.link.webhook!(
+					signed(
+						event({
+							channel: 'D9',
+							channel_type: undefined,
+							subtype: 'message_changed',
+							user: undefined,
+							message: { ...original, text: 'dm', edited: { user: 'U7', ts: '1790000062.000000' } }
+						})
+					)
+				);
+				yield* h.link.webhook!(
+					signed(
+						event({
+							subtype: 'message_deleted',
+							hidden: true,
+							ts: '1790000901.000100',
+							deleted_ts: '1790000000.000300',
+							user: undefined,
+							text: undefined
+						})
+					)
+				);
+				// a thread parent deleted under its replies is no `message_deleted`: it turns into a tombstone
+				yield* h.link.webhook!(
+					changed({
+						type: 'message',
+						subtype: 'tombstone',
+						hidden: true,
+						user: 'USLACKBOT',
+						ts: '1790000000.000400',
+						text: 'This message was deleted.'
+					})
+				);
+				expect(messagesOf(h.events)).toEqual([
+					expect.objectContaining({
+						id: 'C1:1790000000.000100',
+						thread: 'C1:1789999999.000050',
+						text: 'fixed',
+						sentAt: '2026-09-21T14:13:20.000Z',
+						version: '2026-09-21T14:14:20.000Z'
+					}),
+					expect.objectContaining({
+						id: 'D9:1790000000.000100',
+						group: false,
+						invocation: 'direct'
+					}),
+					{ id: 'C1:1790000000.000300', deleted: true },
+					{ id: 'C1:1790000000.000400', deleted: true }
+				]);
+			})
+	);
+	it.effect("carries a file's bytes, read with the bot token and from Slack alone", () =>
+		Effect.gen(function* () {
+			yield* TestClock.setTime(NOW);
+			const slackFile = 'https://files.slack.com/files-pri/T1-F1/report.pdf',
+				signIn = 'https://files.slack.com/files-pri/T1-F2/page.pdf',
+				gone = 'https://files.slack.com/files-pri/T1-F3/gone.pdf',
+				big = 'https://files.slack.com/files-pri/T1-F4/big.bin',
+				remote = 'https://attacker.example/files.slack.com/report.pdf';
+			const f = fakeFetch([
+				(c) =>
+					c.url.endsWith('/auth.test')
+						? json({ ok: true, user_id: 'UBOT', user: 'deskbot', team: 'Acme', team_id: 'T1' })
+						: undefined,
+				(c) => (c.url === slackFile ? new Response('%PDF r') : undefined),
+				(c) => (c.url === signIn ? new Response('<html>sign in</html>') : undefined),
+				(c) => (c.url === gone ? new Response('gone!!', { status: 404 }) : undefined)
+			]);
+			const h = yield* host(slack(), f);
+			yield* h.link.pair!({ botToken: 'xoxb-good', signingSecret: SECRET });
+			const pdf = { mimetype: 'application/pdf', size: 6, mode: 'hosted' };
+			yield* h.link.webhook!(
+				signed(
+					event({
+						subtype: 'file_share',
+						text: 'the report',
+						files: [
+							{ id: 'F1', name: 'report.pdf', url_private: slackFile, ...pdf },
+							{ id: 'F2', name: 'page.pdf', url_private: signIn, ...pdf },
+							{ id: 'F3', name: 'gone.pdf', url_private: gone, ...pdf },
+							{ id: 'F4', name: 'big.bin', url_private: big, ...pdf, size: 21 * 1024 * 1024 },
+							{ id: 'F5', name: 'remote.pdf', url_private: remote, ...pdf, mode: 'external' },
+							{ id: 'F6', file_access: 'check_file_info' }
+						]
+					})
+				)
+			);
+			const [stored] = h.events;
+			if (stored?.kind !== 'messages') throw new Error('The message was not stored.');
+			expect(stored.bins?.map((bytes) => new TextDecoder().decode(bytes))).toEqual(['%PDF r']);
+			expect(stored.messages).toEqual([
+				expect.objectContaining({
+					text: 'the report',
+					attachments: [
+						{ name: 'report.pdf', mime: 'application/pdf', bytes: 6, bin: 0 },
+						{ name: 'page.pdf', mime: 'application/pdf', bytes: 6 },
+						{ name: 'gone.pdf', mime: 'application/pdf', bytes: 6 },
+						{ name: 'big.bin', mime: 'application/pdf', bytes: 21 * 1024 * 1024 },
+						{ name: 'remote.pdf', mime: 'application/pdf', bytes: 6 },
+						{ name: 'file-F6', mime: 'application/octet-stream', bytes: 0 }
+					]
+				})
+			]);
+			expect(f.calls.find((c) => c.url === slackFile)?.headers['authorization']).toBe(
+				'Bearer xoxb-good'
+			);
+			expect(f.calls.some((c) => c.url === remote || c.url === big)).toBe(false);
+		})
+	);
+	it.effect('reconciles a channel from one read, oldest first, and walks threads that moved', () =>
+		Effect.gen(function* () {
+			yield* TestClock.setTime(NOW);
+			const since = '2026-09-14T00:00:00.000Z',
+				oldest = String(Date.parse(since) / 1000),
+				user = { type: 'message', user: 'U7' };
+			const f = fakeFetch([
+				(c) =>
+					c.url.endsWith('/auth.test')
+						? json({ ok: true, user_id: 'UBOT', user: 'deskbot', team: 'Acme', team_id: 'T1' })
+						: undefined,
+				(c) =>
+					c.url.endsWith('/conversations.history')
+						? json({
+								ok: true,
+								has_more: false,
+								messages: [
+									{ ...user, ts: '1790000300.000000', text: 'bot', bot_id: 'B1' },
+									{
+										...user,
+										subtype: 'tombstone',
+										ts: '1790000200.000000',
+										text: 'This message was deleted.'
+									},
+									{
+										...user,
+										ts: '1790000100.000000',
+										text: 'a file',
+										edited: { user: 'U7', ts: '1790000150.000000' },
+										files: [
+											{
+												id: 'F1',
+												name: 'r.pdf',
+												mimetype: 'application/pdf',
+												size: 6,
+												url_private: 'https://files.slack.com/files-pri/T1-F1/r.pdf'
+											}
+										]
+									},
+									{
+										...user,
+										ts: '1790000000.000000',
+										text: 'parent',
+										thread_ts: '1790000000.000000',
+										reply_count: 1,
+										latest_reply: '1790000010.000000'
+									},
+									{
+										...user,
+										ts: '1789000000.000000',
+										text: 'quiet parent',
+										thread_ts: '1789000000.000000',
+										reply_count: 1,
+										latest_reply: '1789000010.000000'
+									}
+								]
+							})
+						: undefined,
+				(c) =>
+					c.url.endsWith('/conversations.replies')
+						? json({
+								ok: true,
+								has_more: false,
+								messages: [
+									{
+										...user,
+										ts: '1790000000.000000',
+										text: 'parent',
+										thread_ts: '1790000000.000000'
+									},
+									{
+										...user,
+										ts: '1790000010.000000',
+										text: 'a first reply',
+										thread_ts: '1790000000.000000'
+									}
+								]
+							})
+						: undefined
+			]);
+			const h = yield* host(slack(), f);
+			yield* h.link.pair!({ botToken: 'xoxb-good', signingSecret: SECRET });
+			const page = yield* h.link.reconcile!('C1', since);
+			expect(page.complete).toBe(true);
+			expect(page.bins).toBeUndefined();
+			expect(page.messages).toEqual([
+				expect.objectContaining({ id: 'C1:1789000000.000000', thread: 'C1' }),
+				expect.objectContaining({ id: 'C1:1790000000.000000', thread: 'C1' }),
+				expect.objectContaining({
+					id: 'C1:1790000100.000000',
+					group: true,
+					version: new Date(1790000150_000).toISOString(),
+					attachments: [{ name: 'r.pdf', mime: 'application/pdf', bytes: 6 }]
+				}),
+				{ id: 'C1:1790000200.000000', deleted: true },
+				expect.objectContaining({
+					id: 'C1:1790000010.000000',
+					thread: 'C1:1790000000.000000'
+				})
+			]);
+			const [history, replies, ...rest] = f.calls.slice(-2 - 0);
+			expect(rest).toEqual([]);
+			expect(Object.fromEntries(new URLSearchParams(history!.body))).toEqual({
+				channel: 'C1',
+				oldest,
+				inclusive: 'true',
+				limit: '999'
+			});
+			expect(Object.fromEntries(new URLSearchParams(replies!.body))).toMatchObject({
+				channel: 'C1',
+				ts: '1790000000.000000'
+			});
+			expect(f.calls.some((c) => c.url.includes('files.slack.com'))).toBe(false);
+		})
+	);
+	it.effect(
+		'reconciles a thread without its parent, a DM as direct; a read that stopped is partial',
+		() =>
+			Effect.gen(function* () {
+				yield* TestClock.setTime(NOW);
+				const since = '2026-09-14T00:00:00.000Z',
+					parent = '1790000000.000000',
+					reply = { type: 'message', user: 'U7', thread_ts: parent, parent_user_id: 'UBOT' };
+				const answering = (route: (method: string) => unknown) =>
+					fakeFetch([
+						(c) =>
+							c.url.endsWith('/auth.test')
+								? json({ ok: true, user_id: 'UBOT', user: 'deskbot', team: 'Acme', team_id: 'T1' })
+								: json(route(c.url.slice(c.url.lastIndexOf('/') + 1)))
+					]);
+				const open = (f: ReturnType<typeof fakeFetch>) =>
+					Effect.gen(function* () {
+						const h = yield* host(slack(), f);
+						yield* h.link.pair!({ botToken: 'xoxb-good', signingSecret: SECRET });
+						return h;
+					});
+				const messages = [
+					{ ...reply, ts: parent, text: 'parent' },
+					{ ...reply, ts: '1790000010.000000', text: 'ok' }
+				];
+				const thread = answering(() => ({ ok: true, has_more: false, messages }));
+				const whole = yield* (yield* open(thread)).link.reconcile!(`C1:${parent}`, since);
+				expect(whole).toMatchObject({
+					complete: true,
+					messages: [
+						{
+							id: 'C1:1790000010.000000',
+							thread: `C1:${parent}`,
+							invocation: 'reply',
+							replyTo: `C1:${parent}`
+						}
+					]
+				});
+				expect(whole.messages).toHaveLength(1);
+				expect(Object.fromEntries(new URLSearchParams(thread.calls.at(-1)!.body))).toMatchObject({
+					channel: 'C1',
+					ts: parent
+				});
+				const dm = yield* (yield* open(
+					answering(() => ({ ok: true, messages: [{ type: 'message', user: 'U7', ts: parent }] }))
+				)).link.reconcile!('D9', since);
+				expect(dm.messages).toEqual([
+					expect.objectContaining({ group: false, invocation: 'direct' })
+				]);
+				for (const more of [
+					{ has_more: true },
+					{ has_more: false, response_metadata: { next_cursor: 'bmV4dA==' } }
+				]) {
+					const partial = yield* (yield* open(answering(() => ({ ok: true, messages, ...more }))))
+						.link.reconcile!(`C1:${parent}`, since);
+					expect(partial.complete).toBe(false);
+					expect(partial.messages).toHaveLength(1);
+				}
+				// a channel the bot left skips that thread: the engine would end its pass on a refusal
+				const left = answering(() => ({ ok: false, error: 'not_in_channel' }));
+				expect(yield* (yield* open(left)).link.reconcile!('C1', since)).toEqual({
+					messages: [],
+					complete: false
+				});
+				const busy = answering(() => ({ ok: false, error: 'internal_error' }));
+				expect(yield* Effect.flip((yield* open(busy)).link.reconcile!('C1', since))).toMatchObject({
+					_tag: 'ProviderUnavailable'
+				});
 			})
 	);
 	it.effect('uploads each attachment with files upload v2 and shares it into the same thread', () =>

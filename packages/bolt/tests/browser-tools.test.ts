@@ -47,17 +47,9 @@ describe('built-in browser tools', () => {
 		expect(browserProfile(run, 'r1')).toBe(`${BROWSER_RUN_PROFILE}r1`);
 		expect(browserProfile({ kind: 'visitor', app: 'a', visitor: 'v' }, 'c1')).toBeUndefined();
 	});
-	it.effect('offers navigation, reading and acting, but no page-script escape hatch', () =>
+	it.effect('offers one browser tool for a whole visit', () =>
 		Effect.gen(function* () {
-			expect(browserTools(yield* Browser).map((tool) => tool.name)).toEqual([
-				'browser_navigate',
-				'browser_snapshot',
-				'browser_act',
-				'browser_evaluate',
-				'browser_screenshot',
-				'browser_close',
-				'browser_download'
-			]);
+			expect(browserTools(yield* Browser).map((tool) => tool.name)).toEqual(['browser']);
 		}).pipe(Effect.provide(Browser.fromAbi(off)))
 	);
 	it.effect('opens a workspace page in the same browser and attaches its screenshot', () =>
@@ -78,11 +70,9 @@ describe('built-in browser tools', () => {
 					screenshot: () => Effect.succeed(new Uint8Array([1])),
 					download: () => Effect.die('unused download')
 				}),
-				navigate = browserTools(yield* Browser.pipe(Effect.provide(browser))).find(
-					(tool) => tool.name === 'browser_navigate'
-				);
+				[visit] = browserTools(yield* Browser.pipe(Effect.provide(browser)));
 			const answer = yield* call(
-				navigate,
+				visit,
 				{ workspace: { environment: 'live', path: '/app/x' } },
 				member,
 				attached
@@ -125,7 +115,7 @@ describe('built-in browser tools', () => {
 			expect(closed).toBe(1);
 		})
 	);
-	it.effect('closes its tab through browser_close', () =>
+	it.effect('closes its tab through browser { close }', () =>
 		Effect.gen(function* () {
 			let closed = 0;
 			const browser = Layer.succeed(Browser, {
@@ -141,10 +131,8 @@ describe('built-in browser tools', () => {
 					}),
 				download: () => Effect.die('unused download')
 			});
-			const close = browserTools(yield* Browser.pipe(Effect.provide(browser))).find(
-				(tool) => tool.name === 'browser_close'
-			);
-			expect(yield* call(close, {}, member)).toEqual({ closed: true });
+			const [visit] = browserTools(yield* Browser.pipe(Effect.provide(browser)));
+			expect(yield* call(visit, { close: true }, member)).toEqual({ closed: true });
 			expect(closed).toBe(1);
 		})
 	);
@@ -200,15 +188,13 @@ describe('built-in browser tools', () => {
 						bytes: 3
 					})
 			});
-			const download = browserTools(yield* Browser.pipe(Effect.provide(browser))).find(
-				(tool) => tool.name === 'browser_download'
-			);
+			const [visit] = browserTools(yield* Browser.pipe(Effect.provide(browser)));
 			const kept: Downloaded[] = [];
 			const answer = yield* Effect.promise((signal) =>
-				download === undefined
+				visit === undefined
 					? Promise.reject(new Error('no such tool'))
-					: download.call(
-							{ url: 'https://law.example/seal.png' },
+					: visit.call(
+							{ download: 'https://law.example/seal.png' },
 							{
 								actor: run,
 								conversation: 'c1',
@@ -222,7 +208,7 @@ describe('built-in browser tools', () => {
 			);
 			expect(answer).toEqual({ saved: 'seal.png', mime: 'image/png', bytes: 3 });
 			expect(kept.map((file) => file.name)).toEqual(['seal.png']);
-			expect(yield* call(download, { url: 'https://law.example/seal.png' }, run)).toEqual({
+			expect(yield* call(visit, { download: 'https://law.example/seal.png' }, run)).toEqual({
 				error: 'files are kept only in a conversation with a person'
 			});
 		})

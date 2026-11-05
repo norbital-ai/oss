@@ -95,7 +95,7 @@ A conversation holds its files; a message row carries none. `sys_conversation.in
 upload (posted in the agent panel, which uploads to `/__bolt/files/sys_conversation.inputs`, or
 received from an integration), each entry naming its `message`; a message's `files` are read back
 from those inputs (`filesOf`, `src/engine/conversations/store.ts`). `sys_conversation.outputs` holds
-files tools made: `browser_download` (a file fetched in the browser session, at most 20 MiB, through
+files tools made: `browser { download }` (a file fetched in the browser session, at most 20 MiB, through
 the `Browser` port's `download`), `download` (a public media URL the host fetches and stores through
 the `Files` port's `download`, kept only if its first bytes are media, at most 100 MiB; no bytes
 enter the engine), screenshots, and the files a `run_js` script returns (classified by their bytes:

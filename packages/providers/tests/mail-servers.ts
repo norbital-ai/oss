@@ -16,25 +16,32 @@ const closer = (server: Server, sockets: Set<Socket>) => async () => {
 export async function fakeImap(o: {
 	accept: (user: string, secret: { pass?: string; token?: string }) => boolean;
 	validity?: number;
+	/** Advertise QRESYNC: for a client that ENABLEs it, an expunge is a `VANISHED` naming its UID. */
+	qresync?: boolean;
 }) {
-	const messages: { uid: number; raw: string; receivedAt: Date | null }[] = [];
+	const messages: { uid: number; raw: string; receivedAt: Date | null; structure: string }[] = [];
 	const idlers = new Set<(n: number) => void>();
+	const expungers = new Set<(uid: number, seq: number) => void>();
+	const capabilities = `IMAP4rev1 IDLE UIDPLUS SASL-IR AUTH=PLAIN AUTH=XOAUTH2${o.qresync === true ? ' ENABLE CONDSTORE QRESYNC' : ''}`;
 	const sockets = new Set<Socket>();
 	const logins: string[] = [];
 	const fetches: number[] = [];
+	const commands: string[] = [];
 	const searches: string[] = [];
-	let next = 1;
+	let next = 1,
+		refusing = false;
 	const server = createServer((socket) => {
 		sockets.add(socket);
 		socket.on('close', () => sockets.delete(socket));
 		socket.on('error', () => undefined);
 		let buffer = '',
 			idling: { tag: string } | null = null,
-			sasl: { tag: string; mech: string } | null = null;
+			sasl: { tag: string; mech: string } | null = null,
+			vanishing = false;
 		const say = (s: string) => {
 			if (!socket.destroyed) socket.write(`${s}\r\n`);
 		};
-		say('* OK [CAPABILITY IMAP4rev1 IDLE UIDPLUS SASL-IR AUTH=PLAIN AUTH=XOAUTH2] fake ready');
+		say(`* OK [CAPABILITY ${capabilities}] fake ready`);
 		const uidsOf = (set: string): number[] => {
 			const max = messages.at(-1)?.uid ?? 0;
 			return messages
@@ -64,8 +71,12 @@ export async function fakeImap(o: {
 			const args = rest.join(' ');
 			switch (verb.toUpperCase()) {
 				case 'CAPABILITY':
-					say('* CAPABILITY IMAP4rev1 IDLE UIDPLUS SASL-IR AUTH=PLAIN AUTH=XOAUTH2');
+					say(`* CAPABILITY ${capabilities}`);
 					return say(`${tag} OK done`);
+				case 'ENABLE':
+					vanishing = o.qresync === true && /QRESYNC/i.test(args);
+					if (vanishing) say('* ENABLED CONDSTORE QRESYNC');
+					return say(`${tag} OK enabled`);
 				case 'LOGIN': {
 					const [user = '', pass = ''] = [...args.matchAll(/"((?:[^"\\]|\\.)*)"|(\S+)/g)].map((m) =>
 						(m[1] ?? m[2] ?? '').replace(/\\(.)/g, '$1')
@@ -103,6 +114,10 @@ export async function fakeImap(o: {
 					const notify = (n: number) => say(`* ${n} EXISTS`);
 					idlers.add(notify);
 					socket.on('close', () => idlers.delete(notify));
+					const expunged = (uid: number, seq: number) =>
+						say(vanishing ? `* VANISHED ${uid}` : `* ${seq} EXPUNGE`);
+					expungers.add(expunged);
+					socket.on('close', () => expungers.delete(expunged));
 					say(`* ${messages.length} EXISTS`);
 					say('* FLAGS (\\Seen \\Answered)');
 					say(`* OK [UIDVALIDITY ${o.validity ?? 7}] ok`);
@@ -114,34 +129,48 @@ export async function fakeImap(o: {
 				case 'UID': {
 					const [sub = '', ...more] = args.split(' ');
 					if (sub.toUpperCase() === 'FETCH') {
-						const found = uidsOf(more[0] ?? '');
+						const found = uidsOf(more[0] ?? ''),
+							items = more.slice(1).join(' ');
 						fetches.push(found.length);
+						commands.push(items);
+						const cap = /BODY\.PEEK\[\]<0\.(\d+)>/i.exec(items)?.[1];
 						for (const uid of found) {
 							const m = messages.find((x) => x.uid === uid)!,
 								seq = messages.indexOf(m) + 1;
 							const received = m.receivedAt
 								?.toUTCString()
 								.replace(/^\w+, (\d+) (\w+) (\d+) ([\d:]+) GMT$/, '$1-$2-$3 $4 +0000');
+							const [section, data] = /BODY\.PEEK\[HEADER\]/i.test(items)
+								? ['BODY[HEADER]', m.raw.slice(0, m.raw.indexOf('\r\n\r\n') + 4)]
+								: cap === undefined
+									? ['BODY[]', m.raw]
+									: ['BODY[]<0>', m.raw.slice(0, Number(cap))];
 							say(
-								`* ${seq} FETCH (UID ${uid}${received === undefined ? '' : ` INTERNALDATE "${received}"`} BODY[] {${Buffer.byteLength(m.raw)}}\r\n${m.raw})`
+								`* ${seq} FETCH (UID ${uid}${received === undefined ? '' : ` INTERNALDATE "${received}"`}${/BODYSTRUCTURE/i.test(items) ? ` BODYSTRUCTURE ${m.structure}` : ''} ${section} {${Buffer.byteLength(data)}}\r\n${data})`
 							);
 						}
 						return say(`${tag} OK fetched`);
 					}
 					if (sub.toUpperCase() === 'SEARCH') {
 						searches.push(args);
+						if (refusing) return say(`${tag} NO search refused`);
 						const id = /HEADER Message-ID "?([^"\s]+)"?/i.exec(args)?.[1];
-						const range = /UID ([\d:*]+)/i.exec(more.join(' '))?.[1];
+						const range = /UID ([\d:*]+)/i.exec(more.join(' '))?.[1],
+							since = /SINCE (\S+)/i.exec(args)?.[1];
 						const hits =
 							range !== undefined
 								? uidsOf(range)
-								: messages
-										.filter(
-											(m) =>
-												id !== undefined &&
-												m.raw.toLowerCase().includes(`message-id: ${id.toLowerCase()}`)
-										)
-										.map((m) => m.uid);
+								: since !== undefined
+									? messages
+											.filter((m) => (m.receivedAt ?? new Date(0)) >= new Date(since))
+											.map((m) => m.uid)
+									: messages
+											.filter(
+												(m) =>
+													id !== undefined &&
+													m.raw.toLowerCase().includes(`message-id: ${id.toLowerCase()}`)
+											)
+											.map((m) => m.uid);
 						say(`* SEARCH${hits.map((h) => ` ${h}`).join('')}`);
 						return say(`${tag} OK searched`);
 					}
@@ -175,11 +204,29 @@ export async function fakeImap(o: {
 		port,
 		logins,
 		fetches,
+		commands,
 		searches,
-		/** A message lands in the folder; IDLE clients hear EXISTS. */
-		deliver(raw: string, receivedAt: Date | null = new Date()) {
-			messages.push({ uid: next++, raw: raw.replace(/\r?\n/g, '\r\n'), receivedAt });
+		/** A message lands in the folder; IDLE clients hear EXISTS. `structure`: its BODYSTRUCTURE, plain text by default. */
+		deliver(raw: string, receivedAt: Date | null = new Date(), structure?: string) {
+			const body = raw.replace(/\r?\n/g, '\r\n');
+			messages.push({
+				uid: next++,
+				raw: body,
+				receivedAt,
+				structure:
+					structure ?? `("TEXT" "PLAIN" ("CHARSET" "UTF-8") NIL NIL "7BIT" ${body.length} 1)`
+			});
 			for (const n of idlers) n(messages.length);
+		},
+		/** Every SEARCH from now on answers NO. */
+		refuseSearches() {
+			refusing = true;
+		},
+		/** A message leaves the folder: selected clients hear EXPUNGE, or VANISHED under QRESYNC. */
+		expunge(uid: number) {
+			const seq = messages.findIndex((m) => m.uid === uid) + 1;
+			messages.splice(seq - 1, 1);
+			for (const expunged of expungers) expunged(uid, seq);
 		},
 		close: closer(server, sockets)
 	};

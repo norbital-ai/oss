@@ -250,7 +250,10 @@
 			? Object.keys(catalog[source]?.fields ?? {}).map((f) =>
 					pathLabel(catalog, source, f, humanize)
 				)
-			: lexicalFields.map((s) => pathLabel(catalog, model, s, humanize))
+			// `$label` is the record's generated label, which its own fields already name
+			: lexicalFields
+					.filter((s) => !s.startsWith('$'))
+					.map((s) => pathLabel(catalog, model, s, humanize))
 	);
 	let index = $state<string | null>(null);
 	let text = $state(untrack(() => q));

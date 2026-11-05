@@ -6,6 +6,7 @@ import { describe, expect, it } from '@effect/vitest';
 import { afterAll } from 'vitest';
 import { Context, Effect, Exit, Layer, Option, Result, Schema, Scope, Stream } from 'effect';
 import { Ai } from '../src/engine/ports.ts';
+import { MODEL_FILES } from '../src/engine/agent/ai.ts';
 import { Port } from '../src/engine/port.ts';
 import { decodeProjectedManifest } from '../src/engine/manifest.ts';
 import { ActReply, WireError } from '../src/protocol/schema.ts';
@@ -290,7 +291,7 @@ describe('in-app attachments', () => {
 			)
 	);
 
-	it.live("only the member's own uploads attach, at most 8, of the envoy media types", () =>
+	it.live("only the member's own uploads attach, within the model's file count, of the envoy media types", () =>
 		Effect.scoped(
 			Effect.gen(function* () {
 				const { act, put, who, conversation } = yield* plain;
@@ -313,10 +314,13 @@ describe('in-app attachments', () => {
 						act('ann', 'sys_message.post', {
 							conversation: c,
 							text: 'x',
-							attachments: Array(9).fill(own)
+							attachments: Array(MODEL_FILES.count + 1).fill(own)
 						})
 					)
-				).toMatchObject({ _tag: 'ActRefused', message: 'Attach at most 8 files.' });
+				).toMatchObject({
+					_tag: 'ActRefused',
+					message: `Attach at most ${MODEL_FILES.count} files.`
+				});
 			})
 		)
 	);
@@ -362,7 +366,7 @@ describe('read_file', () => {
 					expect([...read.files![0]!.bytes]).toEqual([...PNG]);
 					const refused = yield* ask('bob');
 					expect(refused.files ?? []).toHaveLength(0);
-					expect(JSON.stringify(refused.messages)).toContain('No file you can read has this id.');
+					expect(JSON.stringify(refused.messages)).toContain('No file you can read has this id; a truncated result is read with call, not id.');
 				})
 			)
 	);

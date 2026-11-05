@@ -63,7 +63,7 @@ export const webSearch = (config: { endpoint: string; credential: string }): Hos
 			body: JSON.stringify({
 				query: searched,
 				count,
-				...(context.question === undefined ? {} : { ori_question: context.question.slice(0, 500) })
+				...(context.question === undefined ? {} : { ori_question: context.question.slice(0, 128) })
 			}),
 			signal: AbortSignal.any([signal, AbortSignal.timeout(CALL_MS)])
 		}).catch((cause: unknown) => ({ cause }));

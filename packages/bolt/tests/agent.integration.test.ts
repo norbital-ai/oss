@@ -352,7 +352,7 @@ const TENDER: Ingested = {
 };
 const build = (
 	ai: ReturnType<typeof cassette>,
-	host: Pick<AgentHostConfig, 'hostTools' | 'onTurnStart' | 'events'> = {}
+	host: Pick<AgentHostConfig, 'hostTools' | 'hostInlineMs' | 'onTurnStart' | 'events'> = {}
 ) =>
 	Effect.gen(function* () {
 		const hq = yield* mcpFixture;
@@ -759,8 +759,8 @@ describe('in-app turns', () => {
 						yield* agent.drain(d);
 						const names = toolNames(ai.requests[2]);
 						// a skill is procedure, not authority: every actor may load every workspace skill
-						const skill = ai.requests[2]?.tools?.find((tool) => tool.name === 'skill');
-						expect(JSON.stringify(skill)).toContain('pricing');
+						expect(names).toContain('skill');
+						expect(ai.requests[2]?.system).toContain('- pricing: ');
 						expect(names.some((n) => n.startsWith('mcp__'))).toBe(false);
 						expect(names).not.toContain('act');
 						expect({ mcp: mcpServers(manifest, yield* authority(ann)) }).toMatchObject({
@@ -1047,7 +1047,7 @@ describe('durable turns (rule 48)', () => {
 					const { t, ai, user } = fixture;
 					const root = yield* user('root', { admin: true });
 					const engine = yield* Scope.make();
-					const reading = use('read', { quotes: {} });
+					const reading = use('read', { reads: [{ of: 'quotes' }] });
 					const slow: Step = (request) =>
 						Stream.unwrap(
 							Deferred.succeed(started, undefined).pipe(
@@ -1101,7 +1101,7 @@ describe('durable turns (rule 48)', () => {
 			Effect.scoped(
 				Effect.gen(function* () {
 					const fixture = yield* setup([
-						use('read', { quotes: {} }),
+						use('read', { reads: [{ of: 'quotes' }] }),
 						say('interim'),
 						say('Two quotes.')
 					]);
@@ -1149,8 +1149,18 @@ describe('a replayed ingest takes its fewest calls', () => {
 				Effect.gen(function* () {
 					const fixture = yield* setup([
 						use('read', {
-							sys_user: { where: { name: { like: '%Poa%' } }, fields: ['id', 'name', 'team'] },
-							quotes: { where: { title: { like: 'Dyson%' } }, fields: ['id', 'title', 'region'] }
+							reads: [
+								{
+									of: 'sys_user',
+									where: { name: { like: '%Poa%' } },
+									fields: ['id', 'name', 'team']
+								},
+								{
+									of: 'quotes',
+									where: { title: { like: 'Dyson%' } },
+									fields: ['id', 'title', 'region']
+								}
+							]
 						}),
 						use('act', { callable: 'quotes.create', input: [{ title: 'Dyson P8-321-NH' }] }),
 						say('Opened the Dyson enquiry; Poa is the sales person on the form.')
@@ -1168,10 +1178,7 @@ describe('a replayed ingest takes its fewest calls', () => {
 						yield* agent.drain(c);
 						expect(ai.requests).toHaveLength(3);
 						const prompt = ai.requests[0]!.system ?? '';
-						expect(prompt).toContain('# Models you read');
-						expect(prompt).toContain('- quotes (A quote)');
-						expect(prompt).toContain('- sys_user');
-						expect(prompt).toContain('ask: never copy a person from another record');
+						expect(prompt).toContain('# Models you read\nsys_user, quotes');
 						expect(toolResults(ai.requests[1]!)[0]).toMatchObject({
 							sys_user: { rows: [{ id: poa, name: 'Poa', team: 'rep' }] },
 							quotes: { rows: [] }
@@ -1219,7 +1226,7 @@ describe('an agent-started automation run is a job', () => {
 			expect(answer).toMatchObject({
 				job: expect.any(String),
 				run: expect.any(String),
-				note: expect.stringContaining('[job … done]')
+				note: expect.stringContaining('Its end arrives at your next step')
 			});
 			const { job, run } = Schema.decodeUnknownSync(
 				Schema.Struct({ job: Schema.String, run: Schema.String })
@@ -1281,7 +1288,9 @@ describe('an agent-started automation run is a job', () => {
 				const held: Step = (request) =>
 					Stream.unwrap(
 						Effect.promise(() => gate).pipe(
-							Effect.as(use('read', { quotes: { where: { title: { eq: 'Lamp' } } } })(request))
+							Effect.as(
+								use('read', { reads: [{ of: 'quotes', where: { title: { eq: 'Lamp' } } }] })(request)
+							)
 						)
 					);
 				const fixture = yield* setup([
@@ -1393,17 +1402,18 @@ describe('an agent-started automation run is a job', () => {
 		)
 	);
 });
-// Plan 12's replay of the tender ingest: the file is ingested as a job, the turn ends, the job's end wakes the
-// conversation with its steering message once, and the agent reads a window, files the line and reads it back.
+// Plan 12's replay of the tender ingest: read_file parses past its inline wall as a job, the turn ends, the job's end wakes
+// the conversation with its steering message once, and the agent reads a window, files the line and reads it back.
 describe('a replayed ingest: job, steering message, windows, act, read-back', () => {
 	it.live(
 		'the finished job wakes the conversation once; the model reads windows, never a raw PDF',
 		() =>
 			Effect.scoped(
 				Effect.gen(function* () {
-					const fixture = yield* setup([]);
+					const ai = cassette();
+					const fixture = yield* build(ai, { hostInlineMs: 1 });
 					return yield* Effect.gen(function* () {
-						const { ai, agent, user, t } = fixture;
+						const { agent, user, t } = fixture;
 						const root = yield* user('root', { admin: true });
 						const files = yield* Files;
 						const bytes = new TextEncoder().encode(`%PDF-1.7 tender ${randomUUID()}`);
@@ -1415,13 +1425,13 @@ describe('a replayed ingest: job, steering message, windows, act, read-back', ()
 						});
 						let open = () => {};
 						ingestGate = new Promise<void>((resolve) => (open = resolve));
-						sharedAi.arm([
-							use('ingest', { id: file.id }),
-							say('Ingesting the tender; I file its lines when it is read.'),
+						ai.arm([
+							use('read_file', { id: file.id }),
+							say('Reading the tender; I file its lines when it is read.'),
 							// the wake-up turn, opened by the job's message
-							use('read_file', { output: 'o1', from: 5, to: 6 }),
+							use('read_file', { id: 'o1', from: 5, to: 6 }),
 							use('act', { callable: 'quotes.create', input: [{ title: 'Lot 7 at 12.50' }] }),
-							use('read', { quotes: { where: { title: { eq: 'Lot 7 at 12.50' } } } }),
+							use('read', { reads: [{ of: 'quotes', where: { title: { eq: 'Lot 7 at 12.50' } } }] }),
 							say('Filed Lot 7 at 12.50 and read it back against the table.')
 						]);
 						const c = yield* agent.start({ owner: root });
@@ -1431,11 +1441,17 @@ describe('a replayed ingest: job, steering message, windows, act, read-back', ()
 							text: 'File the pricing lines of this tender.',
 							files: [file]
 						});
-						const { reply } = yield* agent.drain(c);
-						expect(reply?.text).toBe('Ingesting the tender; I file its lines when it is read.');
-						expect(toolResults(ai.requests[1]!)[0]).toMatchObject({
-							job: expect.any(String),
-							output: 'o1'
+						const turn = yield* Effect.forkChild(agent.drain(c));
+						// the parse holds at its gate: the kit's clock passes the inline wall
+						for (let n = 0; ai.requests.length < 2 && n < 20_000; n++) {
+							t.clock.advance('1s');
+							yield* Effect.promise(() => new Promise((resolve) => setTimeout(resolve, 0)));
+						}
+						const { reply } = yield* Fiber.join(turn);
+						expect(reply?.text).toBe('Reading the tender; I file its lines when it is read.');
+						expect(toolResults(ai.requests[1]!)[0]).toEqual({
+							reading: 'tender.pdf',
+							note: 'it arrives at your next step'
 						});
 						open();
 						// the job's end queues its message and kicks the conversation: a turn runs on it
@@ -1461,7 +1477,7 @@ describe('a replayed ingest: job, steering message, windows, act, read-back', ()
 							{
 								role: 'user',
 								content: expect.stringMatching(
-									/^\[note\]\n\[job \w+ done\] ingest of tender\.pdf → output o1 "tender\.pdf \(ingested\)"\n {2}9 lines · 1 images · 1 tables\n {2}Map: L1–9 Cover \(Pricing L3–9\)\n {2}Read it with read_file \{ output: o1, from: … \}$/
+									/^\[note\]\n\[job \w+ done\] ingest of tender\.pdf: read_file \{ id: o1 \} "tender\.pdf \(ingested\)"\n {2}9 lines · 1 images · 1 tables\n {2}Map: L1–9 Cover \(Pricing L3–9\)$/
 								)
 							}
 						]);
@@ -1495,7 +1511,7 @@ describe('a tool answer that stops short says where the rest is', () => {
 				const titles = ['Paged one', 'Paged two', 'Paged three'];
 				const fixture = yield* setup([
 					use('act', { callable: 'quotes.create', input: titles.map((title) => ({ title })) }),
-					use('read', { quotes: { where: { title: { like: 'Paged %' } }, limit: 2 } }),
+					use('read', { reads: [{ of: 'quotes', where: { title: { like: 'Paged %' } }, limit: 2 }] }),
 					say('Three.')
 				]);
 				return yield* Effect.gen(function* () {
@@ -1512,7 +1528,7 @@ describe('a tool answer that stops short says where the rest is', () => {
 			})
 		)
 	);
-	it.live("a result past the bound: the step's note names read_output with its call id", () =>
+	it.live("a result past the bound: the step's note names read_file with its call id", () =>
 		Effect.scoped(
 			Effect.gen(function* () {
 				const fixture = yield* setup([
@@ -1520,7 +1536,7 @@ describe('a tool answer that stops short says where the rest is', () => {
 						callable: 'quotes.create',
 						input: [{ title: `Long ${'x'.repeat(BOUNDS.cellBytes + 1_000)}` }]
 					}),
-					use('read', { quotes: { where: { title: { like: 'Long %' } } } }, 'long-read'),
+					use('read', { reads: [{ of: 'quotes', where: { title: { like: 'Long %' } } }] }, 'long-read'),
 					say('One.')
 				]);
 				return yield* Effect.gen(function* () {
@@ -1530,13 +1546,13 @@ describe('a tool answer that stops short says where the rest is', () => {
 					yield* agent.post({ conversation: c, as: { member: root }, text: 'Long quotes?' });
 					yield* agent.drain(c);
 					expect(notes(ai.requests[2])).toContain("read (call 'long-read')");
-					expect(notes(ai.requests[2])).toContain('call read_output with that call id');
+					expect(notes(ai.requests[2])).toContain('read_file { call, offset } reads the rest');
 				}).pipe(Effect.provide(fixture.context));
 			})
 		)
 	);
 	it.live(
-		'read_output with an unknown call falls back to the latest clipped result, with a note',
+		'read_file with an unknown call falls back to the latest clipped result, with a note',
 		() =>
 			Effect.scoped(
 				Effect.gen(function* () {
@@ -1545,8 +1561,8 @@ describe('a tool answer that stops short says where the rest is', () => {
 							callable: 'quotes.create',
 							input: [{ title: `Long ${'x'.repeat(BOUNDS.cellBytes + 1_000)}` }]
 						}),
-						use('read', { quotes: { where: { title: { like: 'Long %' } } } }, 'long-read'),
-						use('read_output', { call: 'not-a-call', offset: 0 }, 'read-more'),
+						use('read', { reads: [{ of: 'quotes', where: { title: { like: 'Long %' } } }] }, 'long-read'),
+						use('read_file', { call: 'not-a-call', offset: 0 }, 'read-more'),
 						say('One.')
 					]);
 					return yield* Effect.gen(function* () {
@@ -1565,12 +1581,12 @@ describe('a tool answer that stops short says where the rest is', () => {
 	it.live('a call that failed repeatedly runs again after another call worked', () =>
 		Effect.scoped(
 			Effect.gen(function* () {
-				const bad = { nope: { limit: 1 } };
+				const bad = { reads: [{ of: 'nope', limit: 1 }] };
 				const fixture = yield* setup([
 					use('read', bad, 'bad-1'),
 					use('read', bad, 'bad-2'),
 					use('read', bad, 'bad-3'),
-					use('read', { quotes: { limit: 1 } }, 'good'),
+					use('read', { reads: [{ of: 'quotes', limit: 1 }] }, 'good'),
 					use('read', bad, 'bad-4'),
 					say('One.')
 				]);
@@ -1592,9 +1608,9 @@ describe('a tool answer that stops short says where the rest is', () => {
 			`runs (call 'r1'): more follows; the rest: call runs again with the same arguments and cursor: "[\\"t\\",\\"id\\"]"`
 		]);
 		expect(rest('logs', 'l1', { entries: [], next: 'e9' })[0]).toContain('cursor: "e9"');
-		expect(rest('read_output', 'o1', { text: '…', next: 1200 })[0]).toContain('offset: 1200');
+		expect(rest('read_file', 'o1', { text: '…', next: 1200 })[0]).toContain('offset: 1200');
 		expect(rest('workspace_read', 'w1', { lines: [], next: 41 })[0]).toContain('from: 41');
-		expect(rest('browser_snapshot', 'b1', { text: '…', next: 300 })[0]).toContain('from: 300');
+		expect(rest('browser', 'b1', { text: '…', next: 300 })[0]).toContain('from: 300');
 		expect(
 			rest('read_file', 'f1', {
 				text: '…',

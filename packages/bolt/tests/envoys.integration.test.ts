@@ -16,6 +16,8 @@ import type { Json } from '../src/decl/values.ts';
 import type { AiResponse, AiRequest } from '../src/engine/contracts.ts';
 import type { EngineManifest } from '../src/engine/manifest.ts';
 import { NOTICES } from '../src/engine/envoys/index.ts';
+import { simulatedProviders, startSimulator } from '../../providers/src/simulator/index.ts';
+import { hookServer, host } from '../../providers/tests/kit.ts';
 import {
 	layer,
 	TestWorkspace,
@@ -505,5 +507,63 @@ layer(
 				as: { envoy: { name: envoy, member: ADA, dm: true } }
 			});
 		})
+	);
+	it.effect(
+		'a customer on a simulated Telegram goes through the real provider, the envoy answers, and the reply leaves the same way',
+		() =>
+			Effect.gen(function* () {
+				const { t, paused, sent, rows } = yield* setup;
+				const running = yield* Effect.acquireRelease(
+						Effect.promise(() => startSimulator()),
+						(simulator) => Effect.promise(simulator.close)
+					),
+					telegram = present(
+						simulatedProviders(running.url).find((one) => one.id === 'simulated-telegram')
+					),
+					hook = yield* hookServer,
+					services = yield* Effect.context<WorkspaceServices | TestWorkspace>();
+				const h = yield* host(telegram, fetch, undefined, {
+					webhookUrl: hook.url,
+					emit: (event) =>
+						Effect.runPromiseWith(services)(
+							t.receive(
+								'sales_tg',
+								Schema.decodeUnknownSync(Schema.Struct({ messages: Schema.Array(Schema.Json) }))(
+									event
+								).messages
+							)
+						)
+				});
+				hook.route.to = (request) => Effect.runPromiseWith(services)(h.link.webhook!(request));
+				yield* h.link.pair!({ token: '424242:simulated' });
+				const before = sent('sales_tg').length,
+					answer = yield* Effect.promise(() =>
+						fetch(`${running.url}/inbound`, {
+							method: 'POST',
+							headers: { 'content-type': 'application/json' },
+							body: JSON.stringify({
+								channel: 'telegram',
+								account: '424242',
+								from: '555',
+								name: 'Ana',
+								text: 'through the pipeline'
+							})
+						})
+					);
+				expect(answer.status).toBe(200);
+				yield* paused();
+				expect(present((yield* rows('through the pipeline'))[0])['as']).toEqual({
+					envoy: { name: 'sales_desk', instance: 'sales_tg', sender: '555', member: null, dm: true }
+				});
+				// the kit's links stand where the host's do; what the envoy queued now takes the provider's real send
+				const reply = present(sent('sales_tg')[before]);
+				yield* h.link.send!(reply.message, []);
+				expect(running.messages().at(-1)).toMatchObject({
+					channel: 'telegram',
+					direction: 'out',
+					peer: '555',
+					text: expect.stringContaining('through the pipeline')
+				});
+			})
 	);
 });

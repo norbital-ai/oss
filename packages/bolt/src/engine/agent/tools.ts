@@ -1,14 +1,13 @@
-// The fixed tool set (rule 58): `read` (a layer map over the models and layers the actor may read: records, aggregates,
-// search indexes), `act` (guarded writes, approval decisions, automation and sync starts), the plan, goal and compaction
-// tools, skills, `history`, `runs` (members), `logs` (administrators), `geocode`, `read_messages` on envoy turns,
-// `read_output` and `workspace_search` for staff, `document` when it binds a converter,
-// `download` for staff in the app when files are stored, `run_js` (HTTP when a policy names `http`), `subagent` and `wait`
-// under delegation, MCP tools a held policy's capabilities name (a sub-agent has no plan or sub-agents, and asks its
-// delegating agent with `ask_parent`), and host tools (Workspace Studio, browser, personal skills) only on in-app turns of
-// staff members. Built-in tools are
-// `Tool.make` definitions, MCP and host tools `Tool.dynamic` ones over their raw JSON
-// Schema, all in one per-turn `Toolkit` (P7). The agent has no authority of its own (decision 10): the catalogue lists
-// only what the actor may invoke and every call runs as the actor, so a refusal is the engine's answer, never the agent's.
+// The fixed tool set (rule 58): `read` (a layer map over what the actor may read), `act` (guarded writes, approval decisions,
+// automation and sync starts), `describe_workspace`, `page` (the person's open tab), `read_file` (files, ingests and clipped
+// results), `run_js`, the plan and checklist tools, skills, `history`, `runs`, `logs`, `geocode`, `read_messages` on envoy
+// turns, the workspace source tools for staff, `document`, `download`, `subagent` and `wait` under delegation, MCP tools a held
+// policy names, and host tools (Studio, browser, personal skills) on in-app staff turns. Built-in tools are `Tool.make`
+// definitions, MCP and host tools `Tool.dynamic` ones over their raw JSON Schema, all in one per-turn `Toolkit` (P7).
+// A tool's text is static across workspaces and turns so providers cache the shared prefix: it says what the tool does, in a
+// line or two, and names no model, path or sample; what an actor holds is `describe_workspace`'s, and a wrong name's error
+// lists the right ones. The agent has no authority of its own (decision 10): every call runs as the actor, so a refusal is
+// the engine's answer, never the agent's.
 import { Validator } from '@cfworker/json-schema';
 import {
 	Clock,
@@ -29,7 +28,7 @@ import {
 import { Tool, Toolkit } from 'effect/ai';
 import * as EffectArray from 'effect/Array';
 import { Images, type Geo, type LogsShape } from '../ports.ts';
-import { imageCrop } from '../files/image.ts';
+import { imageCrop, imageJpeg } from '../files/image.ts';
 import { Port, type PortFailure } from '../port.ts';
 import type { EngineError } from '../errors.ts';
 import { RUN_VIEW_COLUMNS, RunViewRow, runView } from '../runs/index.ts';
@@ -92,6 +91,7 @@ import { layered, layers, SKILL_FILE, type EngineManifest, type SkillSpec } from
 import type { InputKind } from '../../decl/fields.ts';
 import { row as systemRow } from '../system/rows.ts';
 import { SYSTEM } from '../../system/index.ts';
+import { isObj } from './draft.ts';
 import type { McpSessions, McpTool } from './mcp.ts';
 import {
 	ambient,
@@ -132,6 +132,8 @@ export type HostTool = {
 	readOnly?: boolean;
 	source?: true;
 	studio?: StudioRole;
+	/** A call's wall when it is past the usual host call's. */
+	wallMs?: number;
 	call(input: Json, ctx: HostToolContext, signal: AbortSignal): Promise<Json>;
 };
 /** A skill the agent may read and whose scripts it may run: its tree's listing, and each file's bytes by its path. */
@@ -340,7 +342,6 @@ export type ToolContext = {
 	inlineMs?: number | undefined;
 	setPlan(body: string): Effect.Effect<void, EngineError>;
 	setGoals(goals: Goal[]): Effect.Effect<void, EngineError>;
-	compact(reason: string): boolean;
 	/** A sub-agent's question for its delegating agent: its turn ends on it, and the delegating agent's `message` resumes it. */
 	ask(question: string): void;
 	/** An instance's history: `unread` = ambient rows not yet read, oldest first, marked read by `key`; else newest first before `before`. */
@@ -385,6 +386,18 @@ export type Catalogue = {
 	/** A refused input (closed: an unknown key is a wrong call) or a failure is the model's answer, never the turn's. */
 	readonly run: (name: string, input: unknown, callId: string) => Effect.Effect<ToolAnswer>;
 };
+/**
+ * A tool whose text and schema are the same for every conversation: one definition per cell, so what a step offers
+ * allocates nothing per session and its JSON Schema is derived once (`toolSchema`).
+ */
+const definitions = new Map<string, AnyTool>();
+const shared = <T extends AnyTool>(name: string, make: () => T): T => {
+	const held = definitions.get(name);
+	if (held !== undefined) return held as T;
+	const tool = make();
+	definitions.set(name, tool);
+	return tool;
+};
 /** JSON tool parameters spell every value kind so model routers retain arrays and records. */
 const ToolJson: Schema.Codec<Json> = Schema.suspend(() =>
 	Schema.Union([
@@ -400,21 +413,28 @@ const ToolJson: Schema.Codec<Json> = Schema.suspend(() =>
 export const CLOSED: SchemaAST.ParseOptions = { onExcessProperty: 'error' };
 /** One write `{ callable, input }`: a generated verb's input is its array of rows. */
 export const WriteInput = Schema.Struct({
-	callable: Schema.String.annotate({
-		description: 'model.verb, approvals.decide, automation.<name> or model.sync.<sync>'
-	}),
-	input: Schema.optionalKey(ToolJson.annotate({ description: 'the input the callable accepts' })),
+	callable: Schema.String,
+	input: Schema.optionalKey(ToolJson),
 	inputFile: Schema.optionalKey(
-		Schema.String.annotate({
-			description: 'instead of input: the id of a JSON file of yours; its contents are the input'
-		})
+		Schema.String.annotate({ description: 'a JSON file id, instead of input' })
 	)
 });
 const ok = (result: Json): ToolAnswer => ({ result });
 /**
  * A document's text as one answer, whole up to the result bound (never clipped cell-wise like a row's field): past it,
- * the start and a pointer, the whole kept for `read_output`.
+ * the start and a pointer, the whole kept for `read_file { call }`.
  */
+/** A page as a model reads it: whole it arrives too small for digits, so its four overlapping quarters come with it. */
+const TILES = [
+	{ left: 0, top: 0, right: 0.55, bottom: 0.55 },
+	{ left: 0.45, top: 0, right: 1, bottom: 0.55 },
+	{ left: 0, top: 0.45, right: 0.55, bottom: 1 },
+	{ left: 0.45, top: 0.45, right: 1, bottom: 1 }
+] as const;
+/** At most this many pages in a read come with their quarters. */
+const TILED_PAGES = 3;
+/** `read_file` zooms into one document in a turn: past this a model is re-reading strokes, not finding anything. */
+const ZOOMS = 3;
 /** A scan is read by eye: the guard against values made up or slipped between columns. */
 const SCAN_NOTE =
 	'read each value in an image from the image itself, column by column. Ask the person about any value you cannot read for certain.';
@@ -437,8 +457,8 @@ const clipJson =
 	(v, bytes) =>
 		size(v) <= bytes
 			? v
-			: `${JSON.stringify(v).slice(0, bytes)}... [clipped, ${size(v)} bytes; read_output with call id ${call} reads it whole]`;
-/** A view with its values clipped (bounded as any answer), the whole view kept for `read_output` under call `call`. */
+			: `${JSON.stringify(v).slice(0, bytes)}... [clipped, ${size(v)} bytes; read_file { call: '${call}' } reads it whole]`;
+/** A view with its values clipped (bounded as any answer), the whole view kept for `read_file { call }`. */
 const clippedView = (view: (clip: Clip) => Json, call: string): ToolAnswer => ({
 	result: bound(view(clipJson(call))),
 	full: view((v) => v),
@@ -514,10 +534,7 @@ const syncsOf = (m: Engine['manifest']) =>
 			)
 		)
 	);
-type Spec = {
-	confirm?: true;
-	description?: string;
-};
+type Spec = { confirm?: true };
 /** `---\ndescription: …\n---` then `##` sections. */
 function skillOf(text: string): {
 	description: string;
@@ -594,18 +611,9 @@ function callablesFor(m: EngineManifest, a: Authority, identity = false): Map<st
 		}
 	}
 	if (identity && a.admin && a.actor.kind === 'member' && !a.actor.external)
-		acts.set('sys_invitation.create', {
-			confirm: true,
-			description:
-				'Invite workspace members: an array of { email?, phone?, team?, external?, party?: { model, id } }; each needs email or phone. team is optional: if supplied it must name an existing source team; omitted assigns no team or policies. Sends native invitation links after person approval. Never accepts policy assignments.'
-		});
+		acts.set('sys_invitation.create', { confirm: true });
 	// a decision on a pending approval: the approvals engine admits only the step's approvers; the person confirms in the app
-	if (mayDecide(m, a))
-		acts.set(APPROVE, {
-			confirm: true,
-			description:
-				'decide a pending approval: { requestId, decision: approve | reject | requestChanges, reason? } (a reason for reject and requestChanges)'
-		});
+	if (mayDecide(m, a)) acts.set(APPROVE, { confirm: true });
 	return acts;
 }
 /**
@@ -732,7 +740,7 @@ export const runJob = Effect.fn('AgentTool.runJob')(function* (
 	return {
 		job,
 		...answer,
-		note: 'The run works in the background: its end arrives as a [job … done] message at your next step (or wakes this conversation). Carry on, or end your reply; wait { jobs: [job] } only when you need the result now.'
+		note: 'Its end arrives at your next step, or wakes this conversation.'
 	};
 });
 /** Runs one `act` write under the call's key and answers its outcome. */
@@ -1130,7 +1138,7 @@ function searchOf(m: EngineManifest, model: string, readable: readonly string[])
 			: {
 					text: {
 						fields: text,
-						use: '{ "search": "<words>" } on a root ranks text matches: rows matching all words first, but partial matches may follow. It is not exact identity or a category filter. Use where on the actual field for exact values; where: { "$search": "<words>" } requires every word in the search document.'
+						use: 'search: "<words>" ranks, not proof; where: { "$search": "<words>" } requires each'
 					}
 				}),
 		...Object.fromEntries(
@@ -1141,17 +1149,14 @@ function searchOf(m: EngineManifest, model: string, readable: readonly string[])
 					input: Object.fromEntries(
 						Object.entries(index.input).map(([f, k]) => [f, formatOf(m, k)])
 					),
-					use: `{ "search": { "${name}": <input> } }: rows nearest first, each with $distance`
+					use: `search: { "${name}": <input> }`
 				}
 			])
 		),
 		...(spec?.semantic === undefined
 			? {}
 			: {
-					semantic: {
-						fields: spec.semantic.fields,
-						use: '{ "search": { "semantic": "<text>" } }: rows nearest in meaning first'
-					}
+					semantic: { fields: spec.semantic.fields, use: 'search: { "semantic": "<text>" }' }
 				})
 	};
 }
@@ -1244,22 +1249,10 @@ function shapeOf(m: EngineManifest, a: Authority, path: string, output = 'defaul
 				})
 	};
 }
-/**
- * Every root the actor reads, by name with its description's first line: the prompt's map. Fields are `read`'s describe
- * and `describe_workspace`'s. `undefined` when nothing is readable.
- */
+/** Every root the actor reads, by name: the prompt's map. `undefined` when nothing is readable. */
 export function workspaceSchema(m: EngineManifest, a: Authority): string | undefined {
 	const roots = readPaths(m, a).filter((path) => !path.includes('.'));
-	if (roots.length === 0) return undefined;
-	return (
-		'# Models you read (describe_workspace maps them with your writes, links and states; read { "<model>": { "describe": true } } answers their fields)\n' +
-		roots
-			.map((root) => {
-				const about = (layered(m).models[root]?.description ?? '').split('\n')[0]!.trim();
-				return `- ${root}${about === '' ? '' : ` (${about})`}`;
-			})
-			.join('\n')
-	);
+	return roots.length === 0 ? undefined : `# Models you read\n${roots.join(', ')}`;
 }
 /** An automation with its input, so the first start is the right one (an omitted input runs it over everything). */
 const automationSignature = (m: EngineManifest, name: string) => {
@@ -1299,7 +1292,7 @@ const automationSignature = (m: EngineManifest, name: string) => {
 		.map(([k, v]) => `${k}${v.optional ? '?' : ''}: ${kind(v)}`)
 		.join(', ')})`;
 };
-/** `describe_workspace`'s whole map is at most this many bytes; past it, items are named for a focused call. */
+/** `describe_workspace`'s whole map is at most this many bytes; past it, items are named for a call with `names`. */
 export const OVERVIEW_BYTES = 12_000;
 /** The base message catalogue's `'key': 'text'` pairs, read from its source. */
 // ponytail: a regex over the source, not a TS parse; a key or text with a quote inside is skipped
@@ -1312,13 +1305,14 @@ export const messageCatalogue = (source: string | null): ReadonlyMap<string, str
 /**
  * The workspace as a map, scoped to the caller: its basics, the apps they open (group ▸ app ▸ pages), the models they
  * read or write (description, outputs, writes, links, states, effects, syncs, search, notices) and the automations they
- * start (signature, description, trigger, agent use). `focus` answers one section, or with `name` one item, in full.
+ * start (signature, description, trigger, agent use). `names` answers each named item in full: a model or layer with its
+ * fields and your writes, an app, or an automation.
  */
 export function describeWorkspace(
 	m: EngineManifest,
 	a: Authority,
 	messages: ReadonlyMap<string, string>,
-	ask: { readonly focus?: 'app' | 'model' | 'automation'; readonly name?: string } = {}
+	names: readonly string[] = []
 ): string {
 	const all = layered(m),
 		t = (key: string) => messages.get(key) ?? key,
@@ -1339,7 +1333,7 @@ export function describeWorkspace(
 			`${group === undefined ? '' : `${group}${label === undefined ? '' : ` "${t(label)}"`} ▸ `}${name} "${t(spec.title)}": ${t(spec.description)}`,
 			...Object.entries(spec.pages).map(
 				([page, p]) =>
-					`  ├ ${page} "${t(p.title)}"${p.section === undefined ? '' : ` section "${t(p.section)}"`}${p.portal === true ? ' portal' : ''}`
+					`  ├ /app/${name}/${page} "${t(p.title)}"${p.section === undefined ? '' : ` section "${t(p.section)}"`}${p.portal === true ? ' portal' : ''}`
 			)
 		].join('\n');
 	};
@@ -1385,36 +1379,37 @@ export function describeWorkspace(
 		return `${automationSignature(m, name)} "${spec.description}"${on.length === 0 ? '' : ` · ${on.join(', ')}`}${spec.agent === undefined ? '' : ` · agent ${spec.agent}`}`;
 	};
 	const sections = {
-		app: { title: '# Apps (group ▸ app ▸ pages, nav order)', names: apps, render: app },
-		model: {
-			title:
-				'# Models (the API, not the source: read { "<model>": { "describe": true } } for fields, workspace_search or src/data/model/<model>/+model.ts for anything finer)',
-			names: models,
-			render: model
-		},
+		app: { title: '# Apps (group ▸ app ▸ pages)', names: apps, render: app },
+		model: { title: '# Models', names: models, render: model },
 		automation: {
-			title: '# Automations (start as automation.<name> with act)',
+			title: '# Automations (start as automation.<name>)',
 			names: automations,
 			render: automation
 		}
 	};
-	if (ask.focus !== undefined) {
-		const section = sections[ask.focus];
-		if (ask.name === undefined)
-			return [section.title, ...section.names.map(section.render)].join('\n');
-		if (!section.names.includes(ask.name))
-			return `No ${ask.focus} named ${ask.name} that you can reach.`;
-		const summary = section.render(ask.name);
-		// Native settings can be writable without exposing their stored rows to the agent.
-		return ask.focus === 'model' && a.admin
-			? `${summary}\n${JSON.stringify(shapeOf(m, a, ask.name))}`
-			: summary;
+	if (names.length > 0) {
+		const paths = readPaths(m, a);
+		return names
+			.map((name) => {
+				// the fields of what the caller reads, or may write as an administrator; native settings keep their rows private
+				const shape =
+					paths.includes(name) || (a.admin && all.models[name] !== undefined)
+						? `\n${JSON.stringify(shapeOf(m, a, name, readOutputs(m, a, name.split('.')[0]!)[0]))}`
+						: '';
+				const section = Object.values(sections).find((one) => one.names.includes(name));
+				return section !== undefined
+					? `${section.render(name)}${shape}`
+					: shape !== ''
+						? `${name}${shape}`
+						: `Nothing named ${name} that you can reach.`;
+			})
+			.join('\n\n');
 	}
 	const out = [
 		`# Workspace tz ${m.workspace.tz} · locale ${m.workspace.locale}${m.workspace.currency === undefined ? '' : ` · currency ${m.workspace.currency}`}`
 	];
 	let used = size(out[0]!);
-	for (const [focus, section] of Object.entries(sections)) {
+	for (const section of Object.values(sections)) {
 		if (section.names.length === 0) continue;
 		out.push('', section.title);
 		const rest: string[] = [];
@@ -1427,7 +1422,7 @@ export function describeWorkspace(
 		}
 		if (rest.length === 0) continue;
 		// the names past the cap, as many as still fit
-		let also = `Also (describe_workspace { "focus": "${focus}", "name": … }):`,
+		let also = `Also (describe_workspace { names }):`,
 			named = 0;
 		for (const name of rest) {
 			if (used + size(also) + size(name) + 200 > OVERVIEW_BYTES) break;
@@ -1440,45 +1435,37 @@ export function describeWorkspace(
 	}
 	return out.join('\n');
 }
-/**
- * This turn's `read` input: the one read request a page's `bolt.query` and `/__bolt/q` send (`LayerRequestSchema`, the
- * same options, defaults and limits), one optional property per root and layer the caller may read, plus `describe`.
- * A bare enum of property names is lost in some providers' schema conversion, so the paths are properties.
- */
-const readInput = (paths: readonly string[]) => {
-	// one option shape, declared once in the tool's JSON Schema ($defs) and named by every key: a workspace reads
-	// hundreds of paths, and the options repeated per path were most of every step's input
+/** An order as models write it: `-field`, `{ field, direction }` or a list of them, as the read takes it. */
+const ordered = (order: Json): Json =>
+	EffectArray.isArray<Json>(order)
+		? order.map(ordered)
+		: typeof order === 'string' && order.startsWith('-')
+			? { [order.slice(1)]: 'desc' }
+			: isObj(order) && typeof order['field'] === 'string'
+				? { [order['field']]: order['direction'] ?? order['order'] ?? 'asc' }
+				: order;
+/** `read`'s input: the one read request a page's `bolt.query` and `/__bolt/q` send, one key per root and layer. */
+const ReadOptions = (() => {
 	// the contract's free JSON options as the same any-JSON, spelled out: an untyped parameter reaches a routed model
 	// wrapped as { item: … }
 	const { orderBy: _orderBy, aggregate, ...fields } = LayerRequestSchema.fields;
-	const options = Schema.Struct({
+	return Schema.Struct({
 		...fields,
 		orderBy: Schema.optionalKey(ToolJson),
 		aggregate: Schema.optionalKey(
 			Schema.Struct({ ...aggregate.schema.fields, by: Schema.optionalKey(ToolJson) })
-		),
-		describe: Schema.optionalKey(
-			Schema.Literal(true).annotate({
-				description:
-					"this key's fields and their kinds, its layers and your writes, instead of rows"
-			})
 		)
-	}).annotate({ identifier: 'Options' });
-	return Schema.Struct(
-		Object.fromEntries(paths.map((path) => [path, Schema.optionalKey(options)]))
-	).check(
-		Schema.makeFilter((request: object) => {
-			const keys = Object.keys(request);
-			return keys.length > 0
-				? undefined
-				: 'name at least one root: ' + paths.filter((p) => !p.includes('.')).join(', ');
-		})
-	);
-};
+	});
+})();
+const ReadInput = Schema.Struct({
+	reads: Schema.Array(Schema.Struct({ of: Schema.String, ...ReadOptions.fields })).check(
+		Schema.isMinLength(1)
+	)
+});
 /**
  * `read` (rule 58, P3): one read request, a layer map over the models and declared layers the actor may read, answered in
  * one engine read as the actor and bounded by rule 62 (a lone root's page keeps whole rows); `undefined` when nothing is
- * readable. What the bound cut stays readable with `read_output`.
+ * readable. What the bound cut stays readable with `read_file { call }`.
  */
 export function readTool(x: ReadToolContext) {
 	const e = x.engine,
@@ -1545,7 +1532,7 @@ export function readTool(x: ReadToolContext) {
 		return yield* Effect.gen(function* () {
 			const full = yield* answer(request),
 				shown = bounded(pageOf(full));
-			// rows the bound cut lie before the page's cursor: what it left out is read_output's, not the next page's
+			// rows the bound cut lie before the page's cursor: what it left out is read_file's, not the next page's
 			return {
 				result: wrap(shown.kept === null ? shown.value : uncursored(shown.value)),
 				full,
@@ -1555,15 +1542,12 @@ export function readTool(x: ReadToolContext) {
 			Effect.catch((failure) => {
 				if (!(failure instanceof BoltError) || failure.code !== 'invalid')
 					return Effect.fail(failure);
-				// one next step, not the whole contract again: the model's source holds its fields and types
 				return Effect.succeed({
 					result: {
 						error: failure.message,
-						hint:
-							(failure.message.includes("unknown operator 'contains'")
-								? 'Text takes like: "%value%"; contains is only for a period or a JSON field. '
-								: 'Change what the error names. ') +
-							"The model's source (src/data/model/<model>/+model.ts) holds its fields and types. If the data cannot answer the question, say so."
+						hint: failure.message.includes("unknown operator 'contains'")
+							? 'Text takes like: "%value%"; contains is only for a period or a JSON field.'
+							: 'describe_workspace { names } gives its fields. If the data cannot answer, say so.'
 					}
 				});
 			})
@@ -1571,87 +1555,88 @@ export function readTool(x: ReadToolContext) {
 	});
 	return {
 		tool: Tool.make('read', {
-			description: `Read records. The input is an object: each key names what to read, its value is an object of that key's options (never a JSON string). Several keys go in one call and are answered by one read.
-
-Keys
-- "<model>" (a root): a page of that model's rows.
-- "<root>.<relation>" (a layer): for each root row, its related rows, nested inside that row (one related row as an object in place of its link, many as a list). Send it together with its root key.
-
-Outputs
-A model declares named read outputs: "default" and any others its schema lists. An output is a fixed set of fields and layers. A root reads one output (its output option, "default" when absent), and its layer keys are that output's layers. You may read the outputs your schema lists for you, and the rows your access admits in each.
-
-Options (all optional)
-- output (a root): the output to read.
-- describe: true, alone in a key (or with output): instead of rows, the key's fields and their kinds (a link names its model, an enum its values), its layers, how it is searched, the outputs you read and your writes: { columns } per layer, the only columns you may set, on a create the required ones you must set, and checks: the policies whose check judges each batch of that write (it may allow it, refuse it or hold it for approval). It is already narrowed to your own policies (what you may read, write and start).
-- fields: ["<field>", …]: only these fields of each row (id is always returned). Without it a row has every field the output declares.
-- where: exact conditions on field values: { "<field>": { "<operator>": value } }; several fields must all hold; combine with { "and": [...] }, { "or": [...] }, { "not": {...} }. On a root it chooses which rows return; on a layer it narrows that layer's rows inside each root row, using the layer's own fields, never its link to the root.
-  Operators by field kind:
-  text: eq, ne, in, nin, isNull, like ("%word%"; % matches any characters)
-  number, decimal, date (YYYY-MM-DD), instant: eq, ne, lt, lte, gt, gte, in, nin, isNull; an instant also olderThan ("7d")
-  enum, state, bool, link (a row id): eq, ne, in, nin, isNull
-  point: near ([point, metres]), within ({ bbox } or { polygon }); period: contains, overlaps, within; json: contains, isEmpty
-  A value may be a variable (in a value's place, never a key): { "var": "<CEL>" } over requestor (id: the person you act for, a link to sys_user; email; phone; teams and teamTree, with in; party) and the clock (today, a date; now, an instant), with days(n), weeks(n), months(n), years(n), hours(n), minutes(n) and startOfWeek / startOfMonth / startOfQuarter / startOfYear(today). Its type must match the field. E.g. { "job_assignments": { "where": { "assignee_user_id": { "eq": { "var": "requestor.id" } }, "due_on": { "gte": { "var": "today - days(7)" }, "lte": { "var": "today" } } } } }
-  Related rows filter too, through a relation the output declares as a layer (a "<model>.<relation>" key here; any other relation is refused):
-  a one-relation: { "<relation>": { "is": { <where on its fields> } } }, or its link's operators
-  a many-relation: { "<relation>": { "some" | "none" | "every": { <where on its fields> } } }, { "<relation>": { "count": { "gte": 2 } } }, { "<relation>": { "sum" | "avg" | "min" | "max": { "of": "<field>", "gt": 100 } } }
-- search: on a root, text ranks matching rows over the model's declared searchable text and linked search documents. Rows matching every word rank first; partial matches may follow, so a returned row is not proof of exact identity. where: { "$search": "<words>" } requires every word (case- and accent-insensitive prefixes, including fuzzy matches). A text-search result's total counts that search's matches, not the whole catalogue or category. On a nested layer, text search requires every word. A root may instead use { "<index>": input } (a declared search index) or { "semantic": text } (when declared): nearest rows first, each with $distance. Use only the declared inputs; a model with no search is narrowed with where alone.
-- orderBy: "<field>", { "<field>": "asc" | "desc" }, or a list of these; then id.
-- limit: how many rows, at most ${READ_LIMIT} (the default) for a root and for a many-layer per root row.
-- after (a root): the next cursor a page answered: the page after it.
-- asOf (a root): an ISO instant: the rows as they stood then.
-- aggregate: { "count": true, "sum" | "avg" | "min" | "max": ["<field>"], "by": "<field>" | { "day" | "week" | "month" | "quarter" | "year": "<date field>" } | a list of these }: totals over the matched rows instead of rows; with by, one answer per group, each carrying its key and its row count.
-
-A root's page answers rows, next (the cursor for after, null on the last page) and total (how many rows the read matches in all, beyond this page).
-
-Long values are clipped; read_output reads the rest.
-
-Examples
-- Rows by a filter: { "<model>": { "where": { "<date field>": { "eq": "2026-01-31" } }, "limit": 20 } }
-- Rows in another output: { "<model>": { "output": "<output>", "limit": 20 } }
-- Rows with related rows: { "<model>": { "where": { "<text field>": { "like": "%word%" } } }, "<model>.<relation>": { "limit": 20 } }
-- Rows by their related rows: { "<model>": { "where": { "<relation>": { "some": { "<field>": { "eq": "x" } } } } } }
-- A count per value: { "<model>": { "aggregate": { "count": true, "by": "<field>" } } }`,
-			parameters: readInput(paths),
+			description: `Read records in one request: reads is a list, each with of, the "<model>" to page or a "<model>.<relation>" nested in each of its rows (sent with its root), and fields, where, orderBy (field or { field: "desc" }), limit (max ${READ_LIMIT}), after, search, aggregate, output, asOf. A model may be read twice; the second answers as "<model>#2".
+where: { field: { eq|ne|lt|lte|gt|gte|in|nin|isNull|like: value } }, and/or/not; on a relation { is|some|none|every: where } or { count|sum|avg|min|max: … }; a value may be { var: CEL over requestor, today, now }.
+search: words, { <index>: input } or { semantic: text }. aggregate: { count, sum|avg|min|max: [field], by: field | { day|week|month|quarter|year: field } }.
+Answers rows, next and total. Long values are clipped.`,
+			parameters: ReadInput,
 			success: ToolAnswer
 		}),
-		run: (request: {
-			readonly [path: string]: (LayerRequestJson & { readonly describe?: true }) | undefined;
-		}): Effect.Effect<ToolAnswer> => {
-			const asked = Object.entries(request).flatMap(([path, layer]) =>
-				layer === undefined ? [] : [[path, layer] as const]
-			);
-			// a key with describe alone (or with its output) answers its declared shape; describe beside read options is
-			// dropped and the key read as asked (a model adds it to reads it means)
-			const described = ([, { describe, output: _output, ...layer }]: (typeof asked)[number]) =>
-				describe === true && Object.keys(layer).length === 0;
-			const shapes = Object.fromEntries(
-				asked.flatMap((entry) =>
-					described(entry)
-						? [[entry[0], shapeOf(e.manifest, a, entry[0], entry[1].output)] as const]
-						: []
-				)
-			);
+		run: ({ reads }: typeof ReadInput.Type): Effect.Effect<ToolAnswer> => {
+			const roots = paths.filter((p) => !p.includes('.')),
+				unknown = reads.find(({ of }) => !paths.includes(of))?.of;
+			if (unknown !== undefined)
+				return Effect.succeed(
+					err(
+						`You read no '${unknown}'. ${unknown.includes('.') ? 'describe_workspace { names } lists its layers.' : `Models: ${roots.join(', ')}`}`
+					)
+				);
+			// a field a key does not have costs that field, never the read: the rest answers and a note names it
+			const skipped: string[] = [];
 			// a root that names no output reads the first the actor may read, as the actor's views do
-			const rest = asked.flatMap((entry) => {
-				const [path, { describe: _describe, ...layer }] = entry;
-				const output =
-					path.includes('.') || layer.output !== undefined
-						? undefined
-						: readOutputs(e.manifest, a, path)[0];
-				return described(entry)
-					? []
-					: [[path, output === undefined ? layer : { ...layer, output }] as const];
-			});
-			if (rest.length === 0) return Effect.succeed(ok(shapes));
-			return guard(run(Object.fromEntries(rest))).pipe(
-				Effect.map((answer) => {
-					if (Object.keys(shapes).length === 0 || !('result' in answer)) return answer;
-					const got: Json = answer.result;
-					return Predicate.isObject(got) && !EffectArray.isArray<Json>(got)
-						? { ...answer, result: { ...shapes, ...got } }
-						: answer;
+			const request = (some: typeof reads) =>
+				Object.fromEntries(
+					some.map(({ of, ...layer }) => {
+						const root = of.split('.')[0]!,
+							output =
+								of.includes('.') || layer.output !== undefined
+									? undefined
+									: readOutputs(e.manifest, a, of)[0],
+							has = new Set(
+								exposed(
+									e.manifest,
+									root,
+									of,
+									layers(e.manifest)[root]?.[of] ?? root,
+									layer.output ?? output ?? 'default'
+								)
+							),
+							fields = layer.fields?.filter((field) => has.has(field) || field === 'id');
+						for (const field of layer.fields ?? [])
+							if (!has.has(field) && field !== 'id') skipped.push(`${of}.${field}`);
+						return [
+							of,
+							{
+								...layer,
+								...(layer.orderBy === undefined ? {} : { orderBy: ordered(layer.orderBy) }),
+								...(fields === undefined || fields.length === 0 ? {} : { fields }),
+								...(output === undefined ? {} : { output })
+							}
+						];
+					})
+				);
+			const noted = (answer: ToolAnswer): ToolAnswer => {
+				const got = 'result' in answer ? answer.result : null;
+				return skipped.length === 0 || !isObj(got)
+					? answer
+					: {
+							...answer,
+							result: { ...got, note: `No such field, left out: ${skipped.join(', ')}` }
+						};
+			};
+			// a model read twice (its rows and a total, two groupings) is one more read beside the first, under <model>#2
+			const again = reads.filter(({ of }, n) => reads.findIndex((r) => r.of === of) !== n);
+			if (again.length === 0) return guard(run(request(reads))).pipe(Effect.map(noted));
+			const first = reads.filter((one) => !again.includes(one));
+			return guard(
+				Effect.gen(function* () {
+					const answers = yield* Effect.all(
+						[run(request(first)), ...again.map((one) => run(request([one])))],
+						{ concurrency: 'unbounded' }
+					);
+					const failed = answers.find(
+						(answer) =>
+							'result' in answer && Predicate.isObject(answer.result) && 'error' in answer.result
+					);
+					if (failed !== undefined) return failed;
+					const merged: { [key: string]: Json } = {};
+					for (const [n, answer] of answers.entries())
+						if ('result' in answer && Predicate.isObject(answer.result))
+							for (const [key, value] of Object.entries(answer.result))
+								merged[n === 0 ? key : `${key}#${n + 1}`] = value;
+					return { result: merged, bounded: true } as const;
 				})
-			);
+			).pipe(Effect.map(noted));
 		}
 	};
 }
@@ -1706,34 +1691,39 @@ export const catalogue = Effect.fn('AgentTool.catalogue')(function* (x: ToolCont
 			read.tool,
 			Toolkit.make(read.tool).toHandlers({ read: (request) => read.run(request) })
 		);
-	const describeTool = Tool.make('describe_workspace', {
-		description:
-			"A map of the workspace as you may use it: apps, models, automations and system configuration. focus (with name) answers an item in full. An administrator's named model focus includes field kinds and permitted write columns/required fields, including native system models; it does not read stored records. focus system lists the exact capability-to-native-UI mappings for navigate.configure, declared secret names and MCP names; no secret values.",
-		parameters: Schema.Struct({
-			focus: Schema.optionalKey(Schema.Literals(['app', 'model', 'automation', 'system'])),
-			name: Schema.optionalKey(
-				Schema.String.annotate({ description: 'an app, model or automation name' })
-			)
-		}),
-		success: ToolAnswer
-	});
+	const describeTool = shared('describe_workspace', () =>
+		Tool.make('describe_workspace', {
+			description:
+				"The workspace as you may use it: apps and their pages, models, automations. names answers each in full: a model's fields, links, layers, search and your writes with their columns; an app; an automation's input; 'system' for native setup pages, secrets and MCP servers.",
+			parameters: Schema.Struct({ names: Schema.optionalKey(Schema.Array(Schema.String)) }),
+			success: ToolAnswer
+		})
+	);
 	yield* add(
 		describeTool,
 		Toolkit.make(describeTool).toHandlers({
 			describe_workspace: (i) =>
 				guard(
 					Effect.gen(function* () {
-						const focus = i.focus;
-						if (focus === 'system') {
+						const names = i.names ?? [];
+						if (names.includes('system')) {
 							if (!x.inApp || x.child || !a.admin || a.actor.kind !== 'member' || a.actor.external)
 								return ok({ capabilities: [] });
+							const [connected] = yield* x.engine.db.read([
+								{
+									text: 'SELECT id, name, integration, envoy FROM sys_integration ORDER BY name',
+									params: []
+								}
+							]);
 							return ok({
-								capabilities: Object.entries(SYSTEM_UI)
-									.filter(([name]) => i.name === undefined || name === i.name)
-									.map(([capability, ui]) => ({ capability, ...ui })),
+								capabilities: Object.entries(SYSTEM_UI).map(([capability, ui]) => ({
+									capability,
+									...ui
+								})),
+								connections: connected?.rows ?? [],
 								secretNames: Object.keys(e.manifest.workspace.secrets ?? {}),
 								mcp: Object.keys(e.manifest.mcp),
-								note: 'Use navigate with path and configure to open this exact native UI. Opening never submits. New integration/MCP definitions are source declarations; create their source through Studio, then configure declared instances here. Secret values and issued API keys stay in the native client.'
+								note: 'An envoy and a connection of a declared integration are records, with no source change: act sys_envoy.create, then sys_integration.create { integration, name, envoy: <its id> } with no owner. page { path, configure } opens a native form for what stays the person\'s (pairing, secrets); it never submits. A new integration or MCP server is declared in source first.'
 							});
 						}
 						const source =
@@ -1742,87 +1732,97 @@ export const catalogue = Effect.fn('AgentTool.catalogue')(function* (x: ToolCont
 								: yield* Port.attempt('workspace', () =>
 										x.workspace!.read('src/i18n/+messages.ts')
 									).pipe(Effect.orElseSucceed(() => null));
-						return ok(
-							describeWorkspace(e.manifest, a, messageCatalogue(source), {
-								...(focus === undefined ? {} : { focus }),
-								...(i.name === undefined ? {} : { name: i.name })
-							})
-						);
+						return ok(describeWorkspace(e.manifest, a, messageCatalogue(source), names));
 					})
 				)
 		})
 	);
 	const signature = (name: string) => automationSignature(e.manifest, name);
 	if (agent && x.inApp && !x.child && a.actor.kind === 'member' && !a.actor.external) {
-		const navigate = Tool.make('navigate', {
-			description:
-				'Request navigation in the person’s active Norbital workspace client. Choose an exact authorized page path. Administrators may add configure { capability, record? } from describe_workspace focus system to open that native form, pairing card or detail sheet. It never submits, enters a secret or returns an issued key. Its answer confirms the request, not that the page opened or a setup completed. No other workspace or website.',
-			parameters: Schema.Struct({
-				path: Schema.Literals(navigationPaths(nav(e.manifest, a), a.admin)),
-				configure: Schema.optionalKey(SystemUiRequest)
-			}),
-			success: ToolAnswer
-		});
-		yield* add(
-			navigate,
-			Toolkit.make(navigate).toHandlers({
-				navigate: ({ path, configure }) => {
-					if (
-						configure?.capability === 'secret.set' &&
-						e.manifest.workspace.secrets?.[configure.record] === undefined
-					)
-						return Effect.succeed(ok({ error: 'That secret is not declared in this workspace.' }));
-					if (
-						configure?.capability === 'mcp.configure' &&
-						e.manifest.mcp[configure.record] === undefined
-					)
-						return Effect.succeed(
-							ok({ error: 'That MCP server is not declared in this workspace.' })
-						);
-					const target =
-						configure === undefined ? path : a.admin ? systemUiPath(path, configure) : null;
-					return Effect.succeed(
-						target === null
-							? ok({ error: 'This configuration does not belong to that page or your authority.' })
-							: ok({ navigation: target, requested: true })
-					);
-				}
+		const allowed = navigationPaths(nav(e.manifest, a), a.admin);
+		const pageTool = shared('page', () =>
+			Tool.make('page', {
+				description:
+					'Drive the tab the person is looking at: open path (with configure, a native setup form), click by visible text, type { label, text, submit? } into a field, scroll, go back or forward, highlight: ring something on the page by its visible text, or preview: a preview URL shown beside the chat. A button, an external link or a typed value waits for their confirmation; approvals, passwords and files are theirs alone. It answers a request; what their page then shows closes your next step.',
+				parameters: Schema.Struct({
+					path: Schema.optionalKey(Schema.String),
+					configure: Schema.optionalKey(
+						Schema.Struct({ capability: Schema.String, record: Schema.optionalKey(Schema.String) })
+					),
+					click: Schema.optionalKey(Schema.NonEmptyString),
+					type: Schema.optionalKey(
+						Schema.Struct({
+							label: Schema.NonEmptyString,
+							text: Schema.String,
+							submit: Schema.optionalKey(Schema.Boolean)
+						})
+					),
+					scroll: Schema.optionalKey(Schema.Finite),
+					go: Schema.optionalKey(Schema.Literals(['back', 'forward'])),
+					highlight: Schema.optionalKey(Schema.NonEmptyString),
+					preview: Schema.optionalKey(Schema.String)
+				}),
+				success: ToolAnswer
 			})
 		);
-		const pageAct = Tool.make('page_act', {
-			description:
-				'Move the person’s active workspace tab: click a link, card or button by its visible text (click), scroll by CSS pixels (scroll), go back/forward (go), or fill a visible text field (type { label, text, submit? }). It never reads or scripts the page; a button, an external link or a field fill waits for the person’s in-app confirmation and only a same-origin workspace link navigates. It never fills a password or file field, and it never presses an approval decision (approve, reject or request changes): the person decides those. The answer is a request, not proof that it happened.',
-			parameters: Schema.Struct({
-				click: Schema.optionalKey(Schema.NonEmptyString),
-				scroll: Schema.optionalKey(Schema.Finite),
-				go: Schema.optionalKey(Schema.Literals(['back', 'forward'])),
-				type: Schema.optionalKey(
-					Schema.Struct({
-						label: Schema.NonEmptyString,
-						text: Schema.String,
-						submit: Schema.optionalKey(Schema.Boolean)
-					})
-				)
-			}),
-			success: ToolAnswer
-		});
 		yield* add(
-			pageAct,
-			Toolkit.make(pageAct).toHandlers({
-				page_act: ({ click, scroll, go, type }) =>
-					click === undefined && scroll === undefined && go === undefined && type === undefined
-						? Effect.succeed(ok({ error: 'give click, scroll, go or type' }))
-						: Effect.succeed(
-								ok({
-									page: {
-										...(click === undefined ? {} : { click }),
-										...(scroll === undefined ? {} : { scroll }),
-										...(go === undefined ? {} : { go }),
-										...(type === undefined ? {} : { type })
-									},
-									requested: true
-								})
-							)
+			pageTool,
+			Toolkit.make(pageTool).toHandlers({
+				page: ({ path, configure: asked, click, type, scroll, go, highlight, preview }) => {
+					if (preview !== undefined)
+						return Effect.succeed(
+							/^https?:\/\//.test(preview) && URL.canParse(preview)
+								? ok({ preview })
+								: err('preview is a preview URL (https://…)')
+						);
+					if (path !== undefined) {
+						if (!allowed.includes(path))
+							return Effect.succeed(err(`No page ${path}. Pages: ${allowed.join(', ')}`));
+						const setup = Schema.decodeUnknownOption(SystemUiRequest)(asked);
+						if (asked !== undefined && Option.isNone(setup))
+							return Effect.succeed(
+								err("configure is a capability from describe_workspace { names: ['system'] }")
+							);
+						const configure = Option.getOrUndefined(setup);
+						if (
+							configure?.capability === 'secret.set' &&
+							e.manifest.workspace.secrets?.[configure.record] === undefined
+						)
+							return Effect.succeed(err('That secret is not declared in this workspace.'));
+						if (
+							configure?.capability === 'mcp.configure' &&
+							e.manifest.mcp[configure.record] === undefined
+						)
+							return Effect.succeed(err('That MCP server is not declared in this workspace.'));
+						const target =
+							configure === undefined ? path : a.admin ? systemUiPath(path, configure) : null;
+						return Effect.succeed(
+							target === null
+								? err('This configuration does not belong to that page or your authority.')
+								: ok({ navigation: target, requested: true })
+						);
+					}
+					if (
+						click === undefined &&
+						scroll === undefined &&
+						go === undefined &&
+						type === undefined &&
+						highlight === undefined
+					)
+						return Effect.succeed(err('give path, click, type, scroll, go, highlight or preview'));
+					return Effect.succeed(
+						ok({
+							page: {
+								...(click === undefined ? {} : { click }),
+								...(scroll === undefined ? {} : { scroll }),
+								...(go === undefined ? {} : { go }),
+								...(type === undefined ? {} : { type }),
+								...(highlight === undefined ? {} : { highlight })
+							},
+							requested: true
+						})
+					);
+				}
 			})
 		);
 	}
@@ -1885,41 +1885,16 @@ export const catalogue = Effect.fn('AgentTool.catalogue')(function* (x: ToolCont
 		syncs.includes(c) ||
 		(c.startsWith(`${AUTOMATION}.`) && automations.includes(c.slice(AUTOMATION.length + 1)));
 	if (agent && (acts.size > 0 || automations.length > 0 || files.size > 0 || syncs.length > 0)) {
-		const actTool = Tool.make('act', {
-			description:
-				`Write records, decide an approval, or start an automation or a sync. The input is { "callable": "<name>", "input": <its input> }; one call per write.
-
-Model writes: the callable is "<model>.<verb>" and its input is always an array of rows, committed together as one batch.
-- create: [{ "<column>": value, "<relation>": [<row> or "<existing id>"] }]
-- update: [{ "target": "<id>", "set": { "<column>": value, "<relation>": { "create": [<row>], "update": [{ "target": "<id>", "set": {...} }], "delete": ["<id>"], "link": ["<id>"], "unlink": ["<id>"] } } }]
-- delete: [{ "target": "<id>" }]
-- upsert: [{ "id"?: "<id>", "<column>": value }]: with an id it updates that row, without one it creates.
-Related rows go inside their root row in the same call, never in a separate write. A link column takes the linked row's id; a file column takes the file reference { "id", "name", "mime" } a message or tool gave. The model's +model.ts names each write's columns and their kinds.
-` +
-				`Callables: ${[...acts.keys()].join(', ')}. ` +
-				(acts.has('sys_invitation.create')
-					? `${acts.get('sys_invitation.create')?.description} `
-					: '') +
-				(automations.length > 0
-					? `Automations start as automation.<name> with their declared input: ${automations.map(signature).join('; ')}. A start (a sync's too) is a job: act answers at once with { job, run }, and when the run ends a [job … done] or [job … failed] message with its outcome arrives at your next step, or wakes this conversation after your reply. `
-					: '') +
-				(syncs.length > 0
-					? `A remote sync reads its source now as <model>.sync.<sync> with {}: ${syncs.join(', ')}. `
-					: '') +
-				(files.size > 0
-					? `A file sync runs as <model>.sync.<sync> with { mode: 'import', file } (a stored file id) or { mode: 'export', to } (a format; the run's output is its file): ${[...files].map(([n, modes]) => `${n}(mode: ${modes})`).join('; ')}. `
-					: '') +
-				(e.files !== undefined
-					? "An input too large to write out that is already a JSON file of yours: give that file's id as inputFile instead of input. "
-					: '') +
-				(acts.has(APPROVE)
-					? `${APPROVE} decides a pending approval request you are an approver of. `
-					: '') +
-				'Your policies decide these callables and check each batch when it commits: a denial names its reason; a write routed to approval waits for its approvers and is not done yet. ' +
-				'A committed write answers the stored rows, and as `runs` any automation runs it started (they run in the background).',
-			parameters: WriteInput,
-			success: ToolAnswer
-		});
+		const actTool = shared('act', () =>
+			Tool.make('act', {
+				description: `Write records, decide an approval, or start an automation or sync: { callable, input }.
+"<model>.create": [{ column: value, relation: [row | id] }]. "<model>.update": [{ target, set: { column, relation: { create, update, delete, link, unlink } } }]. "<model>.delete": [{ target }]. "<model>.upsert": [{ id?, column: value }]. Rows commit as one batch, related rows inside their root. A link takes an id, a file field a file reference.
+"automation.<name>" takes its input, "<model>.sync.<sync>" {} or { mode, file | to }: each starts a job whose end arrives at your next step. "approvals.decide": { requestId, decision, reason? }. "sys_invitation.create": [{ email | phone, team? }].
+A committed write answers the stored rows; a held one waits for approval.`,
+				parameters: WriteInput,
+				success: ToolAnswer
+			})
+		);
 		yield* add(
 			actTool,
 			Toolkit.make(actTool).toHandlers({
@@ -1932,7 +1907,9 @@ Related rows go inside their root row in the same call, never in a separate writ
 								i = { ...i, input: read.input };
 							}
 							if (!acts.has(i.callable) && !mayStart(i.callable))
-								return err(`You may not run '${i.callable}'.`);
+								return err(
+									`You may not run '${i.callable}'. Yours: ${[...acts.keys(), ...automations.map((n) => `${AUTOMATION}.${n}`), ...files.keys(), ...syncs].slice(0, 60).join(', ')}`
+								);
 							if (Array.isArray(i.input) && i.input.length === 0)
 								return err(`'${i.callable}' was given no rows: there is nothing to write.`);
 							if (
@@ -1957,25 +1934,18 @@ Related rows go inside their root row in the same call, never in a separate writ
 		);
 	}
 	if (x.mode === 'plan' && !x.child) {
-		const updatePlanTool = Tool.make('update_plan', {
-			description:
-				'Write the draft plan: give body to replace it whole, or patch { old, new } to change one exact passage. expectedRevision is the revision you last saw.',
-			parameters: Schema.Struct({
-				body: Schema.optionalKey(Schema.String.annotate({ description: 'the whole plan' })),
-				patch: Schema.optionalKey(
-					Schema.Struct({
-						old: Schema.String.annotate({ description: 'an exact passage, once in the plan' }),
-						new: Schema.String.annotate({ description: 'its replacement' })
-					})
-				),
-				expectedRevision: Schema.optionalKey(
-					Schema.Number.check(Schema.isInt()).annotate({
-						description: 'the plan revision you edit'
-					})
-				)
-			}),
-			success: ToolAnswer
-		});
+		const updatePlanTool = shared('update_plan', () =>
+			Tool.make('update_plan', {
+				description:
+					'Write the draft plan: body replaces it, patch { old, new } changes one exact passage.',
+				parameters: Schema.Struct({
+					body: Schema.optionalKey(Schema.String),
+					patch: Schema.optionalKey(Schema.Struct({ old: Schema.String, new: Schema.String })),
+					expectedRevision: Schema.optionalKey(Schema.Number.check(Schema.isInt()))
+				}),
+				success: ToolAnswer
+			})
+		);
 		yield* add(
 			updatePlanTool,
 			Toolkit.make(updatePlanTool).toHandlers({
@@ -2008,20 +1978,22 @@ Related rows go inside their root row in the same call, never in a separate writ
 		);
 	}
 	{
-		const goalsTool = Tool.make('goals', {
-			description:
-				"Set this conversation's checklist: the whole ordered list, each { id, text, status: pending | doing | done }. Ids are unique and at most one is doing. A done goal is history: omitting it from the list keeps it, and its text and status never change.",
-			parameters: Schema.Struct({
-				items: Schema.Array(
-					Schema.Struct({
-						id: Schema.String.annotate({ description: 'stable id' }),
-						text: Schema.String,
-						status: Schema.Literals(['pending', 'doing', 'done'])
-					})
-				)
-			}),
-			success: ToolAnswer
-		});
+		const goalsTool = shared('goals', () =>
+			Tool.make('goals', {
+				description:
+					"Set this conversation's checklist, the whole list; at most one doing, done items stay.",
+				parameters: Schema.Struct({
+					items: Schema.Array(
+						Schema.Struct({
+							id: Schema.String,
+							text: Schema.String,
+							status: Schema.Literals(['pending', 'doing', 'done'])
+						})
+					)
+				}),
+				success: ToolAnswer
+			})
+		);
 		yield* add(
 			goalsTool,
 			Toolkit.make(goalsTool).toHandlers({
@@ -2051,49 +2023,21 @@ Related rows go inside their root row in the same call, never in a separate writ
 			})
 		);
 	}
-	if (agent) {
-		const compactTool = Tool.make('compact', {
-			description:
-				'Checkpoint the conversation before your next step: a summary replaces the history (at most 3 per turn).',
-			parameters: Schema.Struct({
-				reason: Schema.String.annotate({ description: 'why now' })
-			}),
-			success: ToolAnswer
-		});
-		yield* add(
-			compactTool,
-			Toolkit.make(compactTool).toHandlers({
-				compact: (i) =>
-					guard(
-						Effect.gen(function* () {
-							return x.compact(i.reason)
-								? ok({ scheduled: true })
-								: err('No more checkpoints this turn.');
-						})
-					)
-			})
-		);
-	}
 	// every skill is readable by every actor: a skill is procedure, never authority
 	const skills = Object.entries(x.skills);
 	if (skills.length > 0) {
-		const skillTool = Tool.make('skill', {
-			// the system prompt lists each skill with its description: the tool names them only
-			description:
-				"Read one of your skills (the system prompt lists them) whole, one ## section, or one of its files (a path from the file list). Its scripts run as written with run_js { file: '<skill>/<path>' }.",
-			parameters: Schema.Struct({
-				name: Schema.Literals(skills.map(([n]) => n)),
-				section: Schema.optionalKey(
-					Schema.String.annotate({ description: 'a ## section of SKILL.md' })
-				),
-				file: Schema.optionalKey(
-					Schema.String.annotate({
-						description: "a path from the skill's file list, e.g. references/…"
-					})
-				)
-			}),
-			success: ToolAnswer
-		});
+		const skillTool = shared('skill', () =>
+			Tool.make('skill', {
+				description:
+					"Read one of your skills whole, one ## section, or one of its files. Its scripts run with run_js { file: '<skill>/<path>' }.",
+				parameters: Schema.Struct({
+					name: Schema.String,
+					section: Schema.optionalKey(Schema.String),
+					file: Schema.optionalKey(Schema.String)
+				}),
+				success: ToolAnswer
+			})
+		);
 		yield* add(
 			skillTool,
 			Toolkit.make(skillTool).toHandlers({
@@ -2101,7 +2045,8 @@ Related rows go inside their root row in the same call, never in a separate writ
 					guard(
 						Effect.gen(function* () {
 							const t = skills.find(([n]) => n === i.name)?.[1];
-							if (t === undefined) return err(`No skill '${i.name}' is available.`);
+							if (t === undefined)
+								return err(`No skill '${i.name}'. Skills: ${skills.map(([n]) => n).join(', ')}`);
 							if (i.file !== undefined && i.section !== undefined)
 								return err('Read a section or a file, not both.');
 							const key = `${i.name}#${i.section ?? ''}#${i.file ?? ''}`;
@@ -2169,18 +2114,18 @@ Related rows go inside their root row in the same call, never in a separate writ
 		);
 	}
 	{
-		const historyTool = Tool.make('history', {
-			description:
-				'Search earlier messages: in this conversation, or in all of the conversations of the person this turn serves (scope mine). Answers at most 50 hits naming their conversation.',
-			parameters: Schema.Struct({
-				query: Schema.String.annotate({ description: 'words to find' }),
-				scope: Schema.optionalKey(Schema.Literals(['this', 'mine'])),
-				limit: Schema.optionalKey(
-					Schema.Number.check(Schema.isInt()).annotate({ description: 'at most 50' })
-				)
-			}),
-			success: ToolAnswer
-		});
+		const historyTool = shared('history', () =>
+			Tool.make('history', {
+				description:
+					"Search earlier messages in this conversation, or scope mine for all of this person's.",
+				parameters: Schema.Struct({
+					query: Schema.String,
+					scope: Schema.optionalKey(Schema.Literals(['this', 'mine'])),
+					limit: Schema.optionalKey(Schema.Number.check(Schema.isInt()))
+				}),
+				success: ToolAnswer
+			})
+		);
 		yield* add(
 			historyTool,
 			Toolkit.make(historyTool).toHandlers({
@@ -2199,83 +2144,56 @@ Related rows go inside their root row in the same call, never in a separate writ
 			})
 		);
 	}
-	{
-		const readOutputTool = Tool.make('read_output', {
-			description:
-				'Read more of a tool result that was clipped: the call id its clip note names (none for the latest clipped result) and the character offset to read from.',
-			parameters: Schema.Struct({
-				call: Schema.optionalKey(
-					Schema.String.annotate({
-						description: 'the tool call id; omit for the latest clipped result'
-					})
-				),
-				offset: Schema.optionalKey(
-					Schema.Number.check(Schema.isInt()).annotate({
-						description: 'character offset, default 0'
-					})
-				)
-			}),
-			success: ToolAnswer
-		});
-		yield* add(
-			readOutputTool,
-			Toolkit.make(readOutputTool).toHandlers({
-				read_output: (i) =>
-					guard(
-						Effect.gen(function* () {
-							const named = yield* x.output(i.call ?? null),
-								latest =
-									named === undefined && i.call !== undefined ? yield* x.output(null) : undefined,
-								full = named ?? latest;
-							if (full === undefined) return err('No result was clipped in this conversation.');
-							const text = outputText(full),
-								from = Math.max(0, i.offset ?? 0),
-								parts: string[] = [];
-							// pieces measured as the model receives them (escaping grows code), so the answer stays within the result bound unclipped
-							let at = from;
-							for (let used = 0; at < text.length;) {
-								const part = text.slice(at, at + 1000);
-								if ((used += size(part)) > 14000 && parts.length > 0) break;
-								parts.push(part);
-								at += part.length;
-							}
-							return {
-								result: {
-									offset: from,
-									total: text.length,
-									parts,
-									...(latest === undefined
-										? {}
-										: {
-												note: `No saved output for call '${i.call ?? ''}'; this is the latest clipped result.`
-											}),
-									...(at < text.length ? { next: at } : {})
-								},
-								bounded: true
-							};
+	/** More of a clipped result: the call its clip note names (none for the latest) from a character offset. */
+	const readOutput = Effect.fn('AgentTool.readOutput')(function* (call: string, offset: number) {
+		const named = yield* x.output(call === '' ? null : call),
+			latest = named === undefined && call !== '' ? yield* x.output(null) : undefined,
+			full = named ?? latest;
+		if (full === undefined) return err('No result was clipped in this conversation.');
+		const text = outputText(full),
+			from = Math.max(0, offset),
+			parts: string[] = [];
+		// pieces measured as the model receives them (escaping grows code), so the answer stays within the result bound unclipped
+		let at = from;
+		for (let used = 0; at < text.length;) {
+			const part = text.slice(at, at + 1000);
+			if ((used += size(part)) > 14000 && parts.length > 0) break;
+			parts.push(part);
+			at += part.length;
+		}
+		return {
+			result: {
+				offset: from,
+				total: text.length,
+				parts,
+				...(latest === undefined
+					? {}
+					: { note: `No saved output for call '${call}'; this is the latest clipped result.` }),
+				...(at < text.length ? { next: at } : {})
+			},
+			bounded: true as const
+		};
+	});
+	if (x.conv.integration !== null) {
+		const readMessagesTool = shared('read_messages', () =>
+			Tool.make('read_messages', {
+				description:
+					"Read this chat's messages not addressed to you that you have not read yet, oldest first (they are then marked read). " +
+					'Give before: seq (or all: true) to read back through the whole history, newest first, from that message; each file lists the id read_file opens.',
+				parameters: Schema.Struct({
+					all: Schema.optionalKey(Schema.Boolean),
+					limit: Schema.optionalKey(
+						Schema.Number.check(Schema.isInt()).annotate({ description: 'at most 50' })
+					),
+					before: Schema.optionalKey(
+						Schema.Number.check(Schema.isInt()).annotate({
+							description: 'read the history before this seq, newest first'
 						})
 					)
+				}),
+				success: ToolAnswer
 			})
 		);
-	}
-	if (x.conv.integration !== null) {
-		const readMessagesTool = Tool.make('read_messages', {
-			description:
-				"Read this chat's messages not addressed to you that you have not read yet, oldest first (they are then marked read). " +
-				'Give before: seq (or all: true) to read back through the whole history, newest first, from that message; each file lists the id read_file opens.',
-			parameters: Schema.Struct({
-				all: Schema.optionalKey(Schema.Boolean),
-				limit: Schema.optionalKey(
-					Schema.Number.check(Schema.isInt()).annotate({ description: 'at most 50' })
-				),
-				before: Schema.optionalKey(
-					Schema.Number.check(Schema.isInt()).annotate({
-						description: 'read the history before this seq, newest first'
-					})
-				)
-			}),
-			success: ToolAnswer
-		});
 		yield* add(
 			readMessagesTool,
 			Toolkit.make(readMessagesTool).toHandlers({
@@ -2306,7 +2224,23 @@ Related rows go inside their root row in the same call, never in a separate writ
 			})
 		);
 	}
-	/** A stored file as an image (shown from the next step) or its text; every other file is read through `ingest`. */
+	/** A page's four quarters, shown beside it. */
+	const tiled = Effect.fn('AgentTool.tiled')(function* (bytes: Uint8Array, id: string) {
+		const images = x.engine.images;
+		if (images === undefined) return;
+		const tiles = yield* Effect.forEach(
+			TILES,
+			(tile) =>
+				imageCrop(bytes, tile).pipe(
+					Effect.flatMap((crop) => imageJpeg(crop, 2048)),
+					Effect.provideService(Images, images)
+				),
+			{ concurrency: TILES.length }
+		);
+		for (const [n, tile] of tiles.entries())
+			attach(x.files, { mime: 'image/jpeg', bytes: tile, id: `${id}#tile:${n}` });
+	});
+	/** A stored file as an image (shown from the next step) or its text; every other file is parsed first. */
 	const readStored = Effect.fn('AgentTool.work15')(function* (
 		port: NonNullable<typeof x.attachments>,
 		file: Json
@@ -2333,6 +2267,7 @@ Related rows go inside their root row in the same call, never in a separate writ
 				bytes: got.bytes,
 				...(fileId === undefined ? {} : { id: fileId })
 			});
+			if (dropped !== 'shown') yield* tiled(got.bytes, fileId ?? got.mime);
 			if (dropped === 'shown')
 				return ok({
 					attached: 'this file is already shown to you, after the call that first read it'
@@ -2341,7 +2276,9 @@ Related rows go inside their root row in the same call, never in a separate writ
 				attached:
 					'the file is shown to you from your next step until this turn ends: no need to read it again',
 				...(dropped > 0
-					? { dropped: `${dropped} older file(s) dropped to stay within 8 files / 20 MiB` }
+					? {
+							dropped: `${dropped} older file(s) dropped to stay within ${MODEL_FILES.count} files`
+						}
 					: {})
 			});
 		}
@@ -2417,7 +2354,13 @@ Related rows go inside their root row in the same call, never in a separate writ
 	/** `read_file` over an ingest: a window of its lines with the images they reference, the lines holding a text, or one image. */
 	const readIngest = Effect.fn('AgentTool.readIngest')(function* (
 		entry: typeof IngestEntry.Type,
-		i: { from?: number; to?: number; text?: string; image?: number; crop?: ImageCrop }
+		i: {
+			from?: number | undefined;
+			to?: number | undefined;
+			text?: string | undefined;
+			image?: number | undefined;
+			crops?: readonly (readonly [number, number, number, number])[] | undefined;
+		}
 	) {
 		const o = entry.ingest.output,
 			files = e.files;
@@ -2448,38 +2391,49 @@ Related rows go inside their root row in the same call, never in a separate writ
 		const show = Effect.fn('AgentTool.showImages')(function* (names: readonly string[]) {
 			for (const name of names) {
 				const f = images.get(name);
-				if (f !== undefined)
-					attach(x.files, {
-						mime: f.mime,
-						bytes: yield* files.get(f.key, f.size),
-						id: `${entry.id}#${name}`
-					});
+				if (f === undefined) continue;
+				const bytes = yield* files.get(f.key, f.size);
+				attach(x.files, { mime: f.mime, bytes, id: `${entry.id}#${name}` });
+				if (names.length <= TILED_PAGES) yield* tiled(bytes, `${entry.id}#${name}`);
 			}
 		});
-		if (i.crop !== undefined && i.image === undefined)
-			return err('A crop needs a 1-based image number as well as the ingest output.');
-		if (i.image !== undefined) {
-			const name = [...images.keys()][i.image - 1];
+		const crops = i.crops ?? [],
+			imageNumber = i.image ?? (crops.length > 0 && images.size === 1 ? 1 : undefined),
+			zoomed = `zoom:${o}`;
+		if (crops.length > 0) {
+			const taken = [...x.read.keys()].filter((key) => key.startsWith(zoomed)).length;
+			if (taken >= ZOOMS)
+				return err(
+					`${o} has had its ${ZOOMS} zooms this turn: more shows nothing new. Report what stays unclear as your best reading, marked uncertain.`
+				);
+			x.read.set(`${zoomed}:${taken}`, `zooms of ${o}`);
+		}
+		if (crops.length > 0 && imageNumber === undefined)
+			return err(`${o} has ${images.size} images: give image, the 1-based one to crop.`);
+		if (imageNumber !== undefined) {
+			const name = [...images.keys()][imageNumber - 1];
 			if (name === undefined) return err(`${o} has ${images.size} images; image is 1-based.`);
-			if (i.crop === undefined) yield* show([name]);
+			if (crops.length === 0) yield* show([name]);
 			else {
 				const image = images.get(name);
 				if (image === undefined) return err('The image is no longer stored.');
 				if (x.engine.images === undefined) return err('The host provides no image cropping.');
-				const bytes = yield* imageCrop(yield* files.get(image.key, image.size), i.crop).pipe(
-					Effect.provideService(Images, x.engine.images)
-				);
-				attach(x.files, {
-					mime: 'image/png',
-					bytes,
-					id: `${entry.id}#${name}#crop:${i.crop.left},${i.crop.top},${i.crop.right},${i.crop.bottom}`
-				});
+				const source = yield* files.get(image.key, image.size);
+				for (const [left, top, right, bottom] of crops) {
+					const crop: ImageCrop = { left, top, right, bottom, minEdge: 1024 };
+					attach(x.files, {
+						mime: 'image/png',
+						bytes: yield* imageCrop(source, crop).pipe(
+							Effect.provideService(Images, x.engine.images)
+						),
+						id: `${entry.id}#${name}#crop:${left},${top},${right},${bottom}`
+					});
+				}
 			}
 			return ok({
-				output: o,
 				image: name,
-				...(i.crop === undefined ? {} : { crop: i.crop, mime: 'image/png' }),
-				attached: 'shown to you from your next step until this turn ends',
+				...(crops.length === 0 ? {} : { crops: crops.length }),
+				attached: 'shown from your next step until this turn ends',
 				note: SCAN_NOTE
 			});
 		}
@@ -2488,7 +2442,7 @@ Related rows go inside their root row in the same call, never in a separate writ
 		if (html.mime === 'application/json') {
 			const run = `run_js { files: [{ id: '${html.id}' }] }`;
 			if (i.text !== undefined && i.text !== '')
-				return err(`${o} is data, not lines: there is no text search; find it with ${run}.`);
+				return err(`${o} is data, not lines: find it with ${run}.`);
 			const json = Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Json))(text);
 			if (Option.isNone(json))
 				return err(`The ingest ${o} is no longer readable: ingest the file again.`);
@@ -2496,7 +2450,7 @@ Related rows go inside their root row in the same call, never in a separate writ
 				output: o,
 				file: entry.name,
 				data: dataSummary(json.value),
-				note: `compute from data.json, never retype: ${run}${images.size === 0 ? '' : `; its images: read_file { output: ${o}, image: n }`}`
+				note: `compute from data.json, never retype: ${run}${images.size === 0 ? '' : `; its images: read_file { id: ${o}, image: n }`}`
 			});
 		}
 		if (i.text !== undefined && i.text !== '') {
@@ -2508,7 +2462,7 @@ Related rows go inside their root row in the same call, never in a separate writ
 					note:
 						found.total === 0
 							? `No line of ${o} holds '${i.text}'.`
-							: `read a hit whole with read_file { output: ${o}, from, to }${found.total > found.hits.length ? `; ${found.total - found.hits.length} more hits: narrow the text` : ''}`
+							: `read a hit with read_file { id: ${o}, from, to }${found.total > found.hits.length ? `; ${found.total - found.hits.length} more hits: narrow the text` : ''}`
 				},
 				bounded: true as const
 			};
@@ -2526,318 +2480,286 @@ Related rows go inside their root row in the same call, never in a separate writ
 		const count = (v: number) => v.toLocaleString('en-US');
 		return {
 			result: {
-				output: o,
+				id: o,
 				file: entry.name,
 				lines: w.lines,
 				...(shown.length === 0
 					? {}
-					: { images: shown, note: `each <img> named in images is shown to you: ${SCAN_NOTE}` }),
+					: {
+							images: shown,
+							note: `each <img> named in images is shown to you: ${SCAN_NOTE}${shown.length > TILED_PAGES ? ` These are whole pages, too small for fine print: read_file { id: ${o}, image: n } adds a page's quarters.` : ''}`
+						}),
 				...(refs.length > shown.length
 					? {
-							more: `${refs.length - shown.length} more images in these lines: read_file { output: ${o}, image: n }`
+							more: `${refs.length - shown.length} more images: read_file { id: ${o}, image: n }`
 						}
 					: {}),
-				at: `lines ${count(w.from)}–${count(w.to)} of ${count(w.total)} · ${w.next === undefined ? 'the end' : `read_file { output: ${o}, from: ${w.next} }`}`
+				at: `lines ${count(w.from)}–${count(w.to)} of ${count(w.total)}${w.next === undefined ? '' : ` · read_file { id: ${o}, from: ${w.next} }`}`
 			},
 			bounded: true as const
 		};
 	});
-	// a file already filed on a record (a scan on a job, a photo on a report): read only when the person reads that record
-	if (x.attachments !== undefined) {
-		const readFileTool = Tool.make('read_file', {
-			description:
-				"Read a stored file or an ingest. { id }: a record's file field, any of this conversation's inputs (every [file: … id:…] line, filtered messages' files included) or outputs, or a message attachment: an image is shown to you from your next step until this turn ends, text answers directly; any other file (PDF, office, audio, …) is read through ingest first. " +
-				"{ output } (or the ingested file's id): its sanitised HTML lines, numbered, from to to (default from line 1, about 64 KB; a table or section is never cut), with the images those lines reference shown to you (at most 8); { output, text } the lines holding a text; { output, image: n } its n-th image. Add crop: { left, top, right, bottom } to focus that image: coordinates run from 0 to 1 in the oriented image; the lossless crop does not change its source. Each answer ends with where to read on. A data ingest (a spreadsheet, CSV, JSON) has no lines: { output } answers its sheets, columns, row counts and first rows; its rows are its data.json.",
-			parameters: Schema.Struct({
-				id: Schema.optionalKey(Schema.String.annotate({ description: 'the file id' })),
-				output: Schema.optionalKey(
-					Schema.String.annotate({ description: 'an ingest output (o1, …)' })
-				),
-				from: Schema.optionalKey(
-					Schema.Number.check(Schema.isInt()).annotate({ description: 'first line, default 1' })
-				),
-				to: Schema.optionalKey(
-					Schema.Number.check(Schema.isInt()).annotate({ description: 'last line' })
-				),
-				text: Schema.optionalKey(Schema.String.annotate({ description: 'text a line holds' })),
-				image: Schema.optionalKey(
-					Schema.Number.check(Schema.isInt()).annotate({ description: '1-based image number' })
-				),
-				crop: Schema.optionalKey(
-					Schema.Struct({
-						left: Schema.Number,
-						top: Schema.Number,
-						right: Schema.Number,
-						bottom: Schema.Number
-					}).annotate({
-						description:
-							'A focused rectangle in image n; coordinates from 0 to 1, left < right and top < bottom.'
-					})
-				)
-			}),
-			success: ToolAnswer
-		});
-		yield* add(
-			readFileTool,
-			Toolkit.make(readFileTool).toHandlers({
-				read_file: (i) =>
-					guard(
-						Effect.gen(function* () {
-							if (i.id === undefined && i.output === undefined)
-								return err('Give id (a stored file) or output (an ingest).');
-							const all = yield* ingests();
-							const entry =
-								i.output !== undefined
-									? all.findLast((o) => o.ingest.output === i.output)
-									: all.findLast((o) => o.ingest.source === i.id || o.id === i.id);
-							if (entry !== undefined) return yield* readIngest(entry, i);
-							if (i.output !== undefined) return err(`No ingest ${i.output} in this conversation.`);
-							const id = i.id ?? '';
-							if (
-								i.from !== undefined ||
-								i.to !== undefined ||
-								i.text !== undefined ||
-								i.image !== undefined ||
-								i.crop !== undefined
-							)
-								return err(
-									`Lines, text and images read an ingest: call ingest { id: '${id}' } first.`
-								);
-							// a file attached to this conversation's messages is this conversation's to read, by its own type
-							const [attached] = yield* x.engine.db.read([
-								{
-									text: `SELECT i - 'message' AS file FROM sys_conversation c, jsonb_array_elements(c.inputs) i WHERE c.id = $1 AND i->>'id' = $2 LIMIT 1`,
-									params: [x.conv.id, id]
-								}
-							]);
-							const input = attached?.rows[0]?.['file'];
-							if (input !== undefined) return yield* readStored(x.attachments!, input);
-							if (!(yield* canRead(id))) return err('No file you can read has this id.');
-							return yield* readStored(x.attachments!, { id });
-						})
-					)
-			})
-		);
-	}
-	const fileStore = e.files;
-	if (fileStore !== undefined) {
-		const ingestTool = Tool.make('ingest', {
-			description:
-				"Ingest a stored file ({ id }: any file read_file takes) into sanitised HTML lines and its images, filed in this conversation's outputs: a PDF, image, html, txt, doc, docx, ppt, pptx, odt, odp, rtf, or audio/video (mp3, m4a, wav, ogg, mp4, webm; a video is heard from its audio track) as a transcript with speakers and times; a spreadsheet or data file (csv, json, xls, xlsx, ods) as typed data (data.json, for run_js). " +
-				'It answers at once with { job, output } and works in the background: when it finishes, a [job … done] message with the outline and its line ranges arrives at your next step (or wakes this conversation); read_file { output, from } reads it. A file ingested before answers at once. A type with no parser (CAD, an unknown container) is an immediate error.',
-			parameters: Schema.Struct({ id: Schema.String.annotate({ description: 'the file id' }) }),
-			success: ToolAnswer
-		});
-		yield* add(
-			ingestTool,
-			Toolkit.make(ingestTool).toHandlers({
-				ingest: (i) =>
-					guard(
-						Effect.gen(function* () {
-							if (!(yield* canRead(i.id))) return err('No file you can read has this id.');
-							const [file] = yield* x.engine.db.rows(SourceFile, {
-								text: 'SELECT id, name, mime, size, key, sha256 FROM sys_file WHERE id = $1',
-								params: [i.id]
-							});
-							if (file === undefined) return err('No file you can read has this id.');
-							const how = route(file.mime, file.name);
-							if (how === 'unsupported') return err(unparsed(file.name, file.mime));
-							const port = x.ingest;
-							if ((how === 'convert' || how === 'audio') && port === undefined)
-								return err('This host cannot ingest files.');
-							const prior = (yield* ingests()).findLast(
-								(o) => o.ingest.source === file.id && o.ingest.status !== 'failed'
-							);
-							if (prior !== undefined)
-								return ok({
-									output: prior.ingest.output,
-									...(prior.ingest.job === undefined ? {} : { job: prior.ingest.job }),
-									note:
-										prior.ingest.status === 'ready'
-											? `${file.name} is ingested: read_file { output: ${prior.ingest.output} }`
-											: `still ingesting ${file.name}`
-								});
-							const [added] = (yield* x.engine.db.write({
-								text: `UPDATE sys_conversation SET outputs = outputs || jsonb_build_array($2::jsonb || jsonb_build_object('ingest',
-									$3::jsonb || jsonb_build_object('output', 'o' || (1 + (SELECT count(*) FROM jsonb_array_elements(outputs) e WHERE e ? 'ingest')))))
-									WHERE id = $1 RETURNING outputs->-1->'ingest'->>'output' AS output`,
-								params: [
-									x.conv.id,
-									JSON.stringify({
-										name: `${file.name} (${how === 'audio' ? 'transcript' : 'ingested'})`,
-										mime: 'text/html'
-									}),
-									JSON.stringify({ source: file.id, sha256: file.sha256, status: 'ingesting' })
-								]
-							})).rows;
-							const output = typeof added?.['output'] === 'string' ? added['output'] : undefined;
-							if (output === undefined) return err('This conversation is gone.');
-							const member = x.authority.actor.kind === 'member' ? x.authority.actor.id : null,
-								base = file.name.replace(/\.[^./]*$/, '').replaceAll('/', '_') || 'file';
-							const record = (event: string, attributes: { readonly [key: string]: Json }) =>
-								Effect.flatMap(Clock.currentTimeMillis, (now) =>
-									x.logs.write({
-										at: new Date(now).toISOString(),
-										severity: 'info',
-										event,
-										invocation: x.turn,
-										run: null,
-										conversation: x.conv.id,
-										turn: x.turn,
-										attributes
+	/** Starts parsing a stored file; its entry joins this conversation's outputs. Answers the job and the output. */
+	const ingestFile = Effect.fn('AgentTool.ingestFile')(function* (
+		fileStore: NonNullable<Engine['files']>,
+		file: typeof SourceFile.Type,
+		how: Exclude<ReturnType<typeof route>, 'unsupported'>
+	) {
+		const port = x.ingest;
+		const [added] = (yield* x.engine.db.write({
+			text: `UPDATE sys_conversation SET outputs = outputs || jsonb_build_array($2::jsonb || jsonb_build_object('ingest',
+				$3::jsonb || jsonb_build_object('output', 'o' || (1 + (SELECT count(*) FROM jsonb_array_elements(outputs) e WHERE e ? 'ingest')))))
+				WHERE id = $1 RETURNING outputs->-1->'ingest'->>'output' AS output`,
+			params: [
+				x.conv.id,
+				JSON.stringify({
+					name: `${file.name} (${how === 'audio' ? 'transcript' : 'ingested'})`,
+					mime: 'text/html'
+				}),
+				JSON.stringify({ source: file.id, sha256: file.sha256, status: 'ingesting' })
+			]
+		})).rows;
+		const output = typeof added?.['output'] === 'string' ? added['output'] : undefined;
+		if (output === undefined)
+			return yield* Effect.fail(
+				BoltError.make('invalidInput', 'admission', 'This conversation is gone.')
+			);
+		const member = x.authority.actor.kind === 'member' ? x.authority.actor.id : null,
+			base = file.name.replace(/\.[^./]*$/, '').replaceAll('/', '_') || 'file';
+		const record = (event: string, attributes: { readonly [key: string]: Json }) =>
+			Effect.flatMap(Clock.currentTimeMillis, (now) =>
+				x.logs.write({
+					at: new Date(now).toISOString(),
+					severity: 'info',
+					event,
+					invocation: x.turn,
+					run: null,
+					conversation: x.conv.id,
+					turn: x.turn,
+					attributes
+				})
+			);
+		const work = Effect.gen(function* () {
+			const hit = yield* cached(x.engine.db, fileStore, file.sha256);
+			let stored: Stash;
+			// plan 12 billing: a conversion's compute is `ingest.convert`; a cache hit records the hit and no compute
+			if (hit !== undefined) {
+				stored = hit;
+				yield* record('ingest.convert', {
+					sha256: file.sha256,
+					mime: file.mime,
+					kind: hit.kind,
+					cached: true,
+					bytes: file.size
+				});
+			} else {
+				const bytes = yield* fileStore.get(file.key, INGEST_BYTES);
+				const got: Ingested | { readonly unsupported: string } =
+					how === 'image'
+						? imageIngest({ name: file.name, mime: file.mime, bytes })
+						: how === 'text'
+							? textIngest(bytes)
+							: port !== undefined
+								? yield* port({
+										sha256: file.sha256,
+										name: file.name,
+										mime: file.mime,
+										bytes
 									})
-								);
-							const work = Effect.gen(function* () {
-								const hit = yield* cached(x.engine.db, fileStore, file.sha256);
-								let stored: Stash;
-								// plan 12 billing: a conversion's compute is `ingest.convert`; a cache hit records the hit and no compute
-								if (hit !== undefined) {
-									stored = hit;
-									yield* record('ingest.convert', {
-										sha256: file.sha256,
-										mime: file.mime,
-										kind: hit.kind,
-										cached: true,
-										bytes: file.size
-									});
-								} else {
-									const bytes = yield* fileStore.get(file.key, INGEST_BYTES);
-									const got: Ingested | { readonly unsupported: string } =
-										how === 'image'
-											? imageIngest({ name: file.name, mime: file.mime, bytes })
-											: how === 'text'
-												? textIngest(bytes)
-												: port !== undefined
-													? yield* port({
-															sha256: file.sha256,
-															name: file.name,
-															mime: file.mime,
-															bytes
-														})
-													: { unsupported: 'This host cannot ingest files.' };
-									if ('unsupported' in got)
-										return yield* Effect.fail(
-											BoltError.make('invalidInput', 'decode', unparsed(file.name, file.mime))
-										);
-									// the model calls Convert made (a transcription), attributed here; the host bills each call id
-									const usage = got.meta.usage;
-									if (usage !== undefined)
-										yield* record('ai.call', {
-											calls: usage.calls,
-											model: usage.model,
-											input: usage.input,
-											output: usage.output,
-											cost: usage.cost,
-											facility: 'convert.ingest',
-											settlement: usage.calls.length === 0 ? 'attention' : 'pending'
-										});
-									stored = yield* stash(
-										x.engine.db,
-										fileStore,
-										{ sha256: file.sha256, base, member, now: x.bindings.now },
-										got
-									);
-									yield* record('ingest.convert', {
-										sha256: file.sha256,
-										mime: file.mime,
-										kind: got.kind,
-										cached: false,
-										...got.meta.stats
-									});
-								}
-								const main = new TextDecoder().decode(
-									stored.kind === 'data' || how === 'audio'
-										? yield* fileStore.get(stored.main.key, stored.main.size)
-										: new Uint8Array()
-								);
-								const title = `${file.name} (${stored.kind === 'data' ? 'data' : how === 'audio' ? 'transcript' : 'ingested'})`;
-								yield* patchEntry(
-									output,
-									{
-										id: stored.main.id,
-										name: title,
-										mime: stored.main.mime,
-										size: stored.main.size,
-										files: entryFiles(stored.files)
-									},
-									{
-										status: 'ready',
-										...(stored.kind === 'document' ? { lines: stored.index.lines } : {})
-									}
-								);
-								const run = (f: StoredFile | undefined) =>
-									f === undefined
-										? ''
-										: `${f.name.split('/').pop()} ${f.id} — run_js { files: [{ id }] }`;
-								if (stored.kind === 'data') {
-									const json = Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Json))(main);
-									return {
-										title,
-										lines: [
-											`  ${Option.isNone(json) ? 'unreadable data' : dataLine(json.value)}`,
-											`  Compute from it with run_js, never retype: ${run(stored.main)}`,
-											`  Read its summary with read_file { output: ${output} }`
-										]
-									};
-								}
-								const json = run(stored.files.find((f) => f.name.endsWith('/transcript.json')));
-								return {
-									title,
-									lines: [
-										`  ${summary(stored.index, how === 'audio' ? transcriptOf(main) : undefined)}`,
-										`  Map: ${outlineMap(stored.index)}`,
-										`  Read it with read_file { output: ${output}, from: … }`,
-										...(json === ''
-											? []
-											: [`  Typed JSON for run_js (compute from it, never retype): ${json}`])
-									]
-								};
-							}).pipe(
-								Effect.tapError((error) =>
-									patchEntry(output, {}, { status: 'failed', error: error.message }).pipe(
-										Effect.ignore
-									)
-								)
-							);
-							const job = yield* x.jobs.add(`ingest of ${file.name}`, work, {
-								detach: true,
-								done: (id, result) => {
-									const said = Predicate.isObject(result) && !Array.isArray(result) ? result : {};
-									const title = typeof said['title'] === 'string' ? said['title'] : file.name;
-									const lines = Array.isArray(said['lines'])
-										? said['lines'].filter((l) => typeof l === 'string')
-										: [];
-									return [
-										`[job ${id} done] ingest of ${file.name} → output ${output} "${title}"`,
-										...lines
-									].join('\n');
-								}
-							});
-							yield* patchEntry(output, {}, { job });
-							return ok({
-								job,
-								output,
-								note: `ingesting ${file.name}: when it finishes a [job ${job} done] message arrives at your next step; carry on or end your reply meanwhile`
-							});
-						})
-					)
-			})
+								: { unsupported: 'This host cannot ingest files.' };
+				if ('unsupported' in got)
+					return yield* Effect.fail(
+						BoltError.make('invalidInput', 'decode', unparsed(file.name, file.mime))
+					);
+				// the model calls Convert made (a transcription), attributed here; the host bills each call id
+				const usage = got.meta.usage;
+				if (usage !== undefined)
+					yield* record('ai.call', {
+						calls: usage.calls,
+						model: usage.model,
+						input: usage.input,
+						output: usage.output,
+						cost: usage.cost,
+						facility: 'convert.ingest',
+						settlement: usage.calls.length === 0 ? 'attention' : 'pending'
+					});
+				stored = yield* stash(
+					x.engine.db,
+					fileStore,
+					{ sha256: file.sha256, base, member, now: x.bindings.now },
+					got
+				);
+				yield* record('ingest.convert', {
+					sha256: file.sha256,
+					mime: file.mime,
+					kind: got.kind,
+					cached: false,
+					...got.meta.stats
+				});
+			}
+			const main = new TextDecoder().decode(
+				stored.kind === 'data' || how === 'audio'
+					? yield* fileStore.get(stored.main.key, stored.main.size)
+					: new Uint8Array()
+			);
+			const title = `${file.name} (${stored.kind === 'data' ? 'data' : how === 'audio' ? 'transcript' : 'ingested'})`;
+			yield* patchEntry(
+				output,
+				{
+					id: stored.main.id,
+					name: title,
+					mime: stored.main.mime,
+					size: stored.main.size,
+					files: entryFiles(stored.files)
+				},
+				{
+					status: 'ready',
+					...(stored.kind === 'document' ? { lines: stored.index.lines } : {})
+				}
+			);
+			const run = (f: StoredFile | undefined) =>
+				f === undefined ? '' : `${f.name.split('/').pop()} ${f.id} — run_js { files: [{ id }] }`;
+			if (stored.kind === 'data') {
+				const json = Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Json))(main);
+				return {
+					title,
+					lines: [
+						`  ${Option.isNone(json) ? 'unreadable data' : dataLine(json.value)}`,
+						`  Compute from it with run_js, never retype: ${run(stored.main)}`
+					]
+				};
+			}
+			const json = run(stored.files.find((f) => f.name.endsWith('/transcript.json')));
+			return {
+				title,
+				lines: [
+					`  ${summary(stored.index, how === 'audio' ? transcriptOf(main) : undefined)}`,
+					`  Map: ${outlineMap(stored.index)}`,
+					...(json === ''
+						? []
+						: [`  Typed JSON for run_js (compute from it, never retype): ${json}`])
+				]
+			};
+		}).pipe(
+			Effect.tapError((error) =>
+				patchEntry(output, {}, { status: 'failed', error: error.message }).pipe(Effect.ignore)
+			)
 		);
-	}
-	if (x.geocoder !== undefined) {
-		const geocodeTool = Tool.make('geocode', {
+		const job = yield* x.jobs.add(`reading ${file.name}`, work, {
+			detach: true,
+			done: (id, result) => {
+				const said = Predicate.isObject(result) && !Array.isArray(result) ? result : {};
+				const title = typeof said['title'] === 'string' ? said['title'] : file.name;
+				const lines = Array.isArray(said['lines'])
+					? said['lines'].filter((l) => typeof l === 'string')
+					: [];
+				return [
+					`[job ${id} done] ingest of ${file.name}: read_file { id: ${output} } "${title}"`,
+					...lines
+				].join('\n');
+			}
+		});
+		yield* patchEntry(output, {}, { job });
+		return { job, output };
+	});
+	const readFileTool = shared('read_file', () =>
+		Tool.make('read_file', {
 			description:
-				'Places for an address or place name ({ query }), or the place at a point ({ reverse: { lat, lng } }): at most 8, each with the point a geolocation field takes.',
+				"Read a file by id: a conversation file, a record's file or a tool's output. A document, scan, sheet or recording is parsed first. A reference is listed, '<reference>/<path>' read, and text greps it. Answers text; a document as numbered lines, its page images shown to you (from, to page; text greps); a sheet as columns and first rows. image: n shows one image; with crops, up to 8 regions of it at once. call reads more of a clipped result.",
 			parameters: Schema.Struct({
-				query: Schema.optionalKey(Schema.String.annotate({ description: 'an address or place' })),
-				reverse: Schema.optionalKey(
-					Schema.Struct({ lat: Schema.Number, lng: Schema.Number }).annotate({
-						description: 'a { lat, lng } point'
-					})
-				)
+				id: Schema.optionalKey(Schema.String),
+				from: Schema.optionalKey(Schema.Number.check(Schema.isInt())),
+				to: Schema.optionalKey(Schema.Number.check(Schema.isInt())),
+				text: Schema.optionalKey(Schema.String),
+				image: Schema.optionalKey(Schema.Number.check(Schema.isInt())),
+				crops: Schema.optionalKey(
+					Schema.Array(Schema.Tuple([Schema.Number, Schema.Number, Schema.Number, Schema.Number]))
+						.check(Schema.isMaxLength(8))
+						.annotate({ description: '[left, top, right, bottom], fractions 0 to 1' })
+				),
+				call: Schema.optionalKey(Schema.String),
+				offset: Schema.optionalKey(Schema.Number.check(Schema.isInt()))
 			}),
 			success: ToolAnswer
-		});
+		})
+	);
+	yield* add(
+		readFileTool,
+		Toolkit.make(readFileTool).toHandlers({
+			read_file: (i) =>
+				guard(
+					Effect.gen(function* () {
+						if (i.id === undefined) return yield* readOutput(i.call ?? '', i.offset ?? 0);
+						if (i.id.includes('@')) return yield* readReference(x, i.id, i);
+						const id = i.id,
+							found = (yield* ingests()).findLast(
+								(o) => o.ingest.output === id || o.ingest.source === id || o.id === id
+							);
+						// a failed parse is retried by its file's id and explained by its output's
+						if (
+							found !== undefined &&
+							(found.ingest.status !== 'failed' || found.ingest.output === id)
+						)
+							return yield* readIngest(found, i);
+						const attachments = x.attachments;
+						if (attachments === undefined) return err('This host reads no files.');
+						// a file attached to this conversation's messages is this conversation's to read, by its own type
+						const [attached] = yield* x.engine.db.read([
+							{
+								text: `SELECT i - 'message' AS file FROM sys_conversation c, jsonb_array_elements(c.inputs) i WHERE c.id = $1 AND i->>'id' = $2 LIMIT 1`,
+								params: [x.conv.id, id]
+							}
+						]);
+						const input = attached?.rows[0]?.['file'];
+						if (input === undefined && !(yield* canRead(id)))
+							return err('No file you can read has this id; a truncated result is read with call, not id.');
+						const [file] = yield* x.engine.db.rows(SourceFile, {
+							text: 'SELECT id, name, mime, size, key, sha256 FROM sys_file WHERE id = $1',
+							params: [id]
+						});
+						if (file === undefined) return yield* readStored(attachments, input ?? { id });
+						const how = route(file.mime, file.name);
+						if (how === 'unsupported') return err(unparsed(file.name, file.mime));
+						const detail =
+							i.from !== undefined ||
+							i.to !== undefined ||
+							i.text !== undefined ||
+							i.image !== undefined ||
+							i.crops !== undefined;
+						if (how !== 'convert' && how !== 'audio' && !detail)
+							return yield* readStored(attachments, input ?? { id });
+						if (e.files === undefined) return err('This host cannot parse files.');
+						if ((how === 'convert' || how === 'audio') && x.ingest === undefined)
+							return err('This host cannot parse files.');
+						const started = yield* ingestFile(e.files, file, how);
+						const settled = yield* x.jobs.wait([started.job], x.inlineMs ?? JOBS.inlineMs);
+						if (settled === null)
+							return ok({ reading: file.name, note: 'it arrives at your next step' });
+						const failed = jobFailed(settled.result);
+						if (failed !== undefined) return err(failed);
+						const ready = (yield* ingests()).findLast((o) => o.ingest.output === started.output);
+						if (ready === undefined) return err('This conversation is gone.');
+						const answer = yield* readIngest(ready, i),
+							said = Predicate.isObject(settled.result) ? settled.result['lines'] : undefined;
+						return 'result' in answer && Predicate.isObject(answer.result) && Array.isArray(said)
+							? { ...answer, result: { ...answer.result, about: said as Json } }
+							: answer;
+					})
+				)
+		})
+	);
+	if (x.geocoder !== undefined) {
+		const geocodeTool = shared('geocode', () =>
+			Tool.make('geocode', {
+				description:
+					'Places for an address or name (query), or at a point (reverse), each with the point a geolocation field takes.',
+				parameters: Schema.Struct({
+					query: Schema.optionalKey(Schema.String),
+					reverse: Schema.optionalKey(Schema.Struct({ lat: Schema.Number, lng: Schema.Number }))
+				}),
+				success: ToolAnswer
+			})
+		);
 		yield* add(
 			geocodeTool,
 			Toolkit.make(geocodeTool).toHandlers({
@@ -2878,59 +2800,69 @@ Related rows go inside their root row in the same call, never in a separate writ
 	// An author's current Studio tree; without authoring, the workspace's released source.
 	const source = visible(x.draft ?? x.workspace);
 	if (source !== undefined && !(a.actor.kind === 'member' && a.actor.external)) {
-		const readSource = Tool.make('workspace_read', {
-			description:
-				'Read a file in your current working source as numbered lines. path is required; from/to page large files. No draft flag is needed.',
-			parameters: Schema.Struct({
-				path: Schema.NonEmptyString.annotate({ description: 'workspace-relative file path' }),
-				from: Schema.optionalKey(Schema.Int.annotate({ description: 'first line, default 1' })),
-				to: Schema.optionalKey(Schema.Int.annotate({ description: 'last line' }))
-			}),
-			success: ToolAnswer
-		});
+		const readSource = shared('workspace_read', () =>
+			Tool.make('workspace_read', {
+				description:
+					'Read source files as numbered lines: path, or paths for several; from and to page one.',
+				parameters: Schema.Struct({
+					path: Schema.optionalKey(Schema.NonEmptyString),
+					paths: Schema.optionalKey(Schema.Array(Schema.NonEmptyString)),
+					from: Schema.optionalKey(Schema.Int),
+					to: Schema.optionalKey(Schema.Int)
+				}),
+				success: ToolAnswer
+			})
+		);
 		yield* add(
 			readSource,
 			Toolkit.make(readSource).toHandlers({
 				workspace_read: (i) =>
 					guard(
 						Effect.gen(function* () {
-							// the same normalisation workspace_search uses: `./src/a.ts` is `src/a.ts`
-							const path = i.path.replace(/^(?:\.\/|\/)+/, '').replace(/^\.$/, ''),
-								files = yield* Port.attempt('workspace.files', () => source.files()),
-								missing = () =>
-									path.startsWith('node_modules/')
-										? `No file '${i.path}': installed packages are outside the workspace. Read declarations with workspace_lang hover or definition, or the package docs.`
-										: `No file '${i.path}'. Use workspace_list to find its path.`;
-							if (!files.includes(path)) return err(missing());
-							const text = yield* Port.attempt('workspace.read', () => source.read(path));
-							if (text === null) return err(missing());
-							return ok({
-								path,
-								...page(text, i.from ?? 1, i.to ?? Number.MAX_SAFE_INTEGER)
+							const files = yield* Port.attempt('workspace.files', () => source.files());
+							const one = Effect.fn('AgentTool.readSource')(function* (asked: string) {
+								// the same normalisation workspace_search uses: `./src/a.ts` is `src/a.ts`
+								const path = asked.replace(/^(?:\.\/|\/)+/, '').replace(/^\.$/, ''),
+									missing = {
+										path: asked,
+										error: path.startsWith('node_modules/')
+											? 'Installed packages are outside the workspace: workspace_lang reads their types.'
+											: 'No such file: workspace_list shows the source.'
+									};
+								if (!files.includes(path)) return missing;
+								const text = yield* Port.attempt('workspace.read', () => source.read(path));
+								return text === null
+									? missing
+									: { path, ...page(text, i.from ?? 1, i.to ?? Number.MAX_SAFE_INTEGER) };
 							});
+							if (i.paths !== undefined && i.paths.length > 0) {
+								// one budget across the files: a page each, whole while they fit
+								return ok({ files: yield* Effect.forEach(i.paths.slice(0, 20), one) });
+							}
+							if (i.path === undefined) return err('give path or paths');
+							const answer = yield* one(i.path);
+							return 'error' in answer ? err(`${answer.path}: ${answer.error}`) : ok(answer);
 						})
 					)
 			}),
 			{ pure: true }
 		);
-		const searchSource = Tool.make('workspace_search', {
-			description:
-				'Grep your current working source. pattern is required: a regular expression, or exact text with literal:true. path optionally narrows to a file or folder. Returns matching paths, line numbers and previews, capped by limit (default/max 100). Case-sensitive by default. No draft flag is needed.',
-			parameters: Schema.Struct({
-				pattern: Schema.NonEmptyString.annotate({
-					description: 'regular expression, or literal text when literal:true'
+		const searchSource = shared('workspace_search', () =>
+			Tool.make('workspace_search', {
+				description:
+					'Grep the source: pattern (a regular expression, or text with literal), within a path. At most 100 hits.',
+				parameters: Schema.Struct({
+					pattern: Schema.NonEmptyString,
+					path: Schema.optionalKey(Schema.String),
+					literal: Schema.optionalKey(Schema.Boolean),
+					caseSensitive: Schema.optionalKey(Schema.Boolean),
+					limit: Schema.optionalKey(
+						Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 100 }))
+					)
 				}),
-				path: Schema.optionalKey(
-					Schema.String.annotate({
-						description: 'workspace-relative file or directory; default the workspace root'
-					})
-				),
-				literal: Schema.optionalKey(Schema.Boolean),
-				caseSensitive: Schema.optionalKey(Schema.Boolean),
-				limit: Schema.optionalKey(Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 100 })))
-			}),
-			success: ToolAnswer
-		});
+				success: ToolAnswer
+			})
+		);
 		yield* add(
 			searchSource,
 			Toolkit.make(searchSource).toHandlers({
@@ -2978,11 +2910,12 @@ Related rows go inside their root row in the same call, never in a separate writ
 			}),
 			{ pure: true }
 		);
-		const listSource = Tool.make('workspace_list', {
-			description:
-				'The whole folder structure of your current working source, every folder and file, as an ASCII tree from the workspace root, with short notes.',
-			success: ToolAnswer
-		});
+		const listSource = shared('workspace_list', () =>
+			Tool.make('workspace_list', {
+				description: 'The whole source tree, with what each folder and role is for.',
+				success: ToolAnswer
+			})
+		);
 		yield* add(
 			listSource,
 			Toolkit.make(listSource).toHandlers({
@@ -2998,35 +2931,22 @@ Related rows go inside their root row in the same call, never in a separate writ
 	}
 	if (agent && x.delegation) {
 		{
-			const subagentTool = Tool.make('subagent', {
-				description:
-					`Delegate to sub-agents working with your authority, in the background: spawn { task, done?, format?, agent? } (agents: ${x.agents.join(', ')}) answers its conversation at once and it works on its own, at most 4 at once. done is what must be true; format is what it must return. ` +
-					'Its report (its answer, a question for you, a failure) arrives as a message in this conversation, and you are prompted again when it arrives; wait pauses this turn for one. ' +
-					'list shows your sub-agents and their status; read { conversation } shows one in detail: its checklist, last messages, the tool calls it made and what it changed or produced. ' +
-					'message { conversation, text } answers or steers it (it carries on), stop { conversation } ends it.',
-				parameters: Schema.Struct({
-					action: Schema.Literals(['spawn', 'list', 'read', 'message', 'stop']),
-					task: Schema.optionalKey(
-						Schema.String.annotate({
-							description: 'spawn: the task, with everything the sub-agent needs'
-						})
-					),
-					done: Schema.optionalKey(
-						Schema.String.annotate({ description: 'spawn: what must be true when it is done' })
-					),
-					format: Schema.optionalKey(
-						Schema.String.annotate({ description: 'spawn: what the report must contain' })
-					),
-					agent: Schema.optionalKey(Schema.String.annotate({ description: 'spawn: which agent' })),
-					conversation: Schema.optionalKey(
-						Schema.String.annotate({ description: 'a sub-agent conversation' })
-					),
-					text: Schema.optionalKey(
-						Schema.String.annotate({ description: 'message: what to tell it' })
-					)
-				}),
-				success: ToolAnswer
-			});
+			const subagentTool = shared('subagent', () =>
+				Tool.make('subagent', {
+					description:
+						'Delegate to background sub-agents with your authority, at most 4: spawn { task, done?, format?, agent? }, list, read { conversation }, message { conversation, text }, stop { conversation }. A report arrives as a message and wakes you.',
+					parameters: Schema.Struct({
+						action: Schema.Literals(['spawn', 'list', 'read', 'message', 'stop']),
+						task: Schema.optionalKey(Schema.String),
+						done: Schema.optionalKey(Schema.String),
+						format: Schema.optionalKey(Schema.String),
+						agent: Schema.optionalKey(Schema.String),
+						conversation: Schema.optionalKey(Schema.String),
+						text: Schema.optionalKey(Schema.String)
+					}),
+					success: ToolAnswer
+				})
+			);
 			yield* add(
 				subagentTool,
 				Toolkit.make(subagentTool).toHandlers({
@@ -3038,7 +2958,7 @@ Related rows go inside their root row in the same call, never in a separate writ
 									case 'spawn': {
 										const which = i.agent ?? null;
 										if (which !== null && !x.agents.includes(which))
-											return err(`No agent '${which}'.`);
+											return err(`No agent '${which}'. Agents: ${x.agents.join(', ')}`);
 										return ok(yield* x.subagent.spawn(i.task ?? '', which, i.done, i.format));
 									}
 									case 'list':
@@ -3063,14 +2983,11 @@ Related rows go inside their root row in the same call, never in a separate writ
 	if (agent && convert !== undefined && store !== undefined && convert.targets.length > 0) {
 		const documentTool = Tool.make('document', {
 			description:
-				`Make a document for the person with the document converter: to (${convert.targets.join(', ')}), name (the file name, with its extension) and markdown, the whole document's content (tables and inline HTML allowed); a pdf also takes page (A4, A3, Letter) and landscape. ` +
-				'For a deck (pptx), each slide starts at a level-2 heading. The file is offered to the person under your reply, and its reference is what a file field takes.',
+				'Make a file from markdown (tables and inline HTML allowed), offered to the person; a file field takes its reference. In a pptx each ## starts a slide.',
 			parameters: Schema.Struct({
 				to: Schema.Literals(convert.targets),
-				name: Schema.String.annotate({ description: 'the file name, e.g. "Q3 report.pdf"' }),
-				markdown: Schema.String.annotate({
-					description: 'the whole content of the document, written out in Markdown'
-				}),
+				name: Schema.String,
+				markdown: Schema.String,
 				page: Schema.optionalKey(Schema.Literals(['A4', 'A3', 'Letter'])),
 				landscape: Schema.optionalKey(Schema.Boolean)
 			}),
@@ -3104,16 +3021,16 @@ Related rows go inside their root row in the same call, never in a separate writ
 		x.inApp &&
 		staff &&
 		store !== undefined &&
-		!x.hostTools.some((t) => t.name === 'browser_download')
+		!x.hostTools.some((t) => t.name === 'browser')
 	) {
-		const downloadTool = Tool.make('download', {
-			description:
-				"Save a file at a public http(s) URL as the person's file (an image, audio, video, a PDF, an HTML page, or a CAD model or drawing: STEP, IGES, STL, DWG, DXF, glTF): the host fetches it and keeps it only if its bytes are one of those, at most 100 MiB. Source code and archives are not downloaded.",
-			parameters: Schema.Struct({
-				url: Schema.String.annotate({ description: "the media file's public http(s) URL" })
-			}),
-			success: ToolAnswer
-		});
+		const downloadTool = shared('download', () =>
+			Tool.make('download', {
+				description:
+					"Save a public http(s) file as the person's: media, a PDF, HTML or CAD, at most 100 MiB.",
+				parameters: Schema.Struct({ url: Schema.String }),
+				success: ToolAnswer
+			})
+		);
 		yield* add(
 			downloadTool,
 			Toolkit.make(downloadTool).toHandlers({
@@ -3138,49 +3055,33 @@ Related rows go inside their root row in the same call, never in a separate writ
 		bundler = e.bundler,
 		http =
 			x.inApp && staff && (a.admin || a.capabilities.tools.includes('http')) ? e.http : undefined;
+	/** The catalogue's own tools a script calls, as the actor; its `run` exists once the catalogue is built. */
+	let self: Catalogue['run'] | undefined;
+	const inner = (call: string) => {
+		let used = 0;
+		return (name: string, input: unknown): Effect.Effect<ToolAnswer> =>
+			self === undefined || !SCRIPTED.has(name) || !entries.some((t) => t.name === name)
+				? Effect.succeed(err(`A script cannot call '${name}': ${RUN_JS.tools.join(', ')} only.`))
+				: ++used > RUN_JS.toolCalls
+					? Effect.succeed(err(`A run makes at most ${RUN_JS.toolCalls} tool calls.`))
+					: self(name, input, `${call}:${used}`);
+	};
 	if (agent && guest !== undefined) {
-		const runJsTool = Tool.make('run_js', {
-			description:
-				'Runs JavaScript in a guest isolate of its own per call, metered and billed to the workspace: inline code, or a script file. A run lasts until it answers or reaches its walls (below); nothing keeps running after it. ' +
-				'code is the body of an async function of input (return the answer; await works): ' +
-				'plain JavaScript, no require, process, fetch or timers; console lines come back with the answer. ' +
-				'The conversation files you name in files arrive as input.files, each name → its content (text as text, other bytes as base64). ' +
-				'With http: true (when your policies grant it), await http({ method?, url, headers?, body? }) answers { status, headers, text }: public https only, no redirects, at most 4 MiB. ' +
-				'Return { files: [{ name, text } | { name, base64 }] } to give the person files (text, CSV, JSON, Markdown, media, PDF, office documents, archives; never programs): each is kept as their file and its reference replaces it. ' +
-				(bundler === undefined
-					? ''
-					: "Or file: a skill's script, run as written ('<skill>/<path>'; args are its process.argv): require and import resolve inside the skill's folder (read-only at /app, the working directory) and its own node_modules; " +
-						"fs reads /app and the conversation files you name in files (read-only at /in/<name>) and writes /out, whose files become the person's; path, buffer, process, util are there, every other Node built-in fails by name; with http: true it has fetch. It answers { exitCode, files }. " +
-						"One call holds the whole run, e.g. { file: 'sales/scripts/report.js', args: ['/in/q3.csv', '/out/summary.json'], files: [{ id: '<file id>' }] }: file is required for every run of a script. " +
-						"A repository reference's file runs the same way ('<reference>/<path>', as reference named it), as pure computation: never with fetch. ") +
-				'Walls: 3 s of CPU, 256 MiB, 60 s, a 4 MiB answer, 64 MiB written, 1 MiB printed.',
-			parameters: Schema.Struct({
-				code: Schema.optionalKey(
-					Schema.String.annotate({
-						description: 'the body of an async function of input; return the answer'
-					})
-				),
-				input: Schema.optionalKey(ToolJson),
-				file: Schema.optionalKey(
-					Schema.String.annotate({
-						description: "a skill's script '<skill>/<path>', or a reference's '<reference>/<path>'"
-					})
-				),
-				args: Schema.optionalKey(
-					Schema.Array(Schema.String).annotate({ description: "the file's process.argv after it" })
-				),
-				files: Schema.optionalKey(
-					Schema.Array(Schema.Struct({ id: Schema.String })).annotate({
-						description:
-							'conversation files by the id each file line lists: input.files for code, /in/<name> for a file'
-					})
-				),
-				http: Schema.optionalKey(
-					Schema.Boolean.annotate({ description: 'give the code http(request), the file fetch' })
-				)
-			}),
-			success: ToolAnswer
-		});
+		const runJsTool = shared('run_js', () =>
+			Tool.make('run_js', {
+				description:
+					"Run JavaScript in a fresh billed isolate, for computing, looping and bulk work; only what it returns or prints comes back. code is an async function body of input: no require, process, fetch or timers. await tool(name, input) calls read, act, browser, web_search, describe_workspace, read_file or workspace_read, at most 200 calls, each as you. files: [{ id }] arrive as input.files, an object of name to content: text as a string, else { base64 }. http: true gives await http({ method?, url, headers?, body? }), answering { status, headers, text }, over public https. Return { files: [{ name, text | base64 }] } to give the person files. file runs '<skill>/<path>' or '<reference>/<path>' with args, /in and /out instead. Walls: 3 s CPU, 256 MiB, 60 s, 4 MiB answer.",
+				parameters: Schema.Struct({
+					code: Schema.optionalKey(Schema.String),
+					input: Schema.optionalKey(ToolJson),
+					file: Schema.optionalKey(Schema.String),
+					args: Schema.optionalKey(Schema.Array(Schema.String)),
+					files: Schema.optionalKey(Schema.Array(Schema.Struct({ id: Schema.String }))),
+					http: Schema.optionalKey(Schema.Boolean)
+				}),
+				success: ToolAnswer
+			})
+		);
 		yield* add(
 			runJsTool,
 			Toolkit.make(runJsTool).toHandlers({
@@ -3216,6 +3117,7 @@ Related rows go inside their root row in the same call, never in a separate writ
 													},
 										guest,
 										http: granted,
+										tool: inner(callId),
 										invocation: callId,
 										keep
 									})
@@ -3275,16 +3177,14 @@ Related rows go inside their root row in the same call, never in a separate writ
 		);
 	}
 	if (x.child) {
-		const askParentTool = Tool.make('ask_parent', {
-			description:
-				'Ask the agent that delegated this task a question. Your turn ends on it; its answer arrives as your next message.',
-			parameters: Schema.Struct({
-				question: Schema.String.annotate({
-					description: 'one clear question, with what you need to know'
-				})
-			}),
-			success: ToolAnswer
-		});
+		const askParentTool = shared('ask_parent', () =>
+			Tool.make('ask_parent', {
+				description:
+					'Ask the agent that delegated this task. Your turn ends; its answer is your next message.',
+				parameters: Schema.Struct({ question: Schema.String }),
+				success: ToolAnswer
+			})
+		);
 		yield* add(
 			askParentTool,
 			Toolkit.make(askParentTool).toHandlers({
@@ -3303,17 +3203,17 @@ Related rows go inside their root row in the same call, never in a separate writ
 		);
 	}
 	{
-		const waitTool = Tool.make('wait', {
-			description:
-				"Wait for background work to finish now: a sub-agent's report, jobs (ingests, long host calls, automation runs you started: the job or run id act answered) or other automation runs by id: the first of the given ones (every job when none) to settle, or nothing at the bound (at most 120 s). A finished job also announces itself at your next step; a job collected here is not announced again. A settled run's file (an export, a template) is offered to the person under your reply.",
-			parameters: Schema.Struct({
-				jobs: Schema.optionalKey(Schema.Array(Schema.String)),
-				seconds: Schema.optionalKey(
-					Schema.Number.check(Schema.isInt()).annotate({ description: 'at most 120, default 120' })
-				)
-			}),
-			success: ToolAnswer
-		});
+		const waitTool = shared('wait', () =>
+			Tool.make('wait', {
+				description:
+					'Wait up to 120 s for the first of the given jobs or runs to end (any of this turn when none). A finished job also announces itself at your next step.',
+				parameters: Schema.Struct({
+					jobs: Schema.optionalKey(Schema.Array(Schema.String)),
+					seconds: Schema.optionalKey(Schema.Number.check(Schema.isInt()))
+				}),
+				success: ToolAnswer
+			})
+		);
 		yield* add(
 			waitTool,
 			Toolkit.make(waitTool).toHandlers({
@@ -3405,34 +3305,25 @@ Related rows go inside their root row in the same call, never in a separate writ
 			finished: Schema.NullOr(Schema.String)
 		});
 		{
-			const runsTool = Tool.make('runs', {
-				description:
-					'Automation runs, newest first: filter by automation (an exact name, or a prefix ending in *), status, cause and a due-time window; page with the cursor a page answers as next. ' +
-					'Give id for one run in detail: its input, result, error, every attempt and its log lines. You see the runs of automations you hold and the runs you caused: a run you started answers its result; one you merely triggered, its status.',
-				parameters: Schema.Struct({
-					id: Schema.optionalKey(Schema.String.annotate({ description: 'one run, in detail' })),
-					automation: Schema.optionalKey(
-						Schema.String.annotate({
-							description: 'an exact automation name, or a prefix ending in *'
-						})
-					),
-					status: Schema.optionalKey(
-						Schema.Literals(['queued', 'running', 'succeeded', 'failed', 'cancelled', 'skipped'])
-					),
-					cause: Schema.optionalKey(Schema.String),
-					since: Schema.optionalKey(
-						Schema.String.annotate({ description: 'an instant: runs due at or after it' })
-					),
-					until: Schema.optionalKey(
-						Schema.String.annotate({ description: 'an instant: runs due before it' })
-					),
-					limit: Schema.optionalKey(
-						Schema.Number.check(Schema.isInt()).annotate({ description: 'default 20, at most 100' })
-					),
-					cursor: Schema.optionalKey(Schema.String)
-				}),
-				success: ToolAnswer
-			});
+			const runsTool = shared('runs', () =>
+				Tool.make('runs', {
+					description:
+						'Automation runs, newest first, filtered by automation (a name or prefix*), status, cause, since, until; id answers one with its input, result, error, attempts and log.',
+					parameters: Schema.Struct({
+						id: Schema.optionalKey(Schema.String),
+						automation: Schema.optionalKey(Schema.String),
+						status: Schema.optionalKey(
+							Schema.Literals(['queued', 'running', 'succeeded', 'failed', 'cancelled', 'skipped'])
+						),
+						cause: Schema.optionalKey(Schema.String),
+						since: Schema.optionalKey(Schema.String),
+						until: Schema.optionalKey(Schema.String),
+						limit: Schema.optionalKey(Schema.Number.check(Schema.isInt())),
+						cursor: Schema.optionalKey(Schema.String)
+					}),
+					success: ToolAnswer
+				})
+			);
 			yield* add(
 				runsTool,
 				Toolkit.make(runsTool).toHandlers({
@@ -3568,29 +3459,24 @@ Related rows go inside their root row in the same call, never in a separate writ
 		}
 	}
 	if (a.admin && a.actor.kind === 'member') {
-		const logsTool = Tool.make('logs', {
-			description:
-				"The workspace's runtime log (an administrator's), newest first: engine events and tenant code's console lines (event 'console'). " +
-				'Filter by minimum level, text (in the event or its attributes), run id, automation, conversation and an at window; page with the cursor a page answers as next.',
-			parameters: Schema.Struct({
-				level: Schema.optionalKey(
-					Schema.Literals(['info', 'warn', 'error']).annotate({
-						description: 'this level or worse'
-					})
-				),
-				text: Schema.optionalKey(Schema.String),
-				run: Schema.optionalKey(Schema.String),
-				automation: Schema.optionalKey(Schema.String),
-				conversation: Schema.optionalKey(Schema.String),
-				since: Schema.optionalKey(Schema.String.annotate({ description: 'an instant, inclusive' })),
-				until: Schema.optionalKey(Schema.String.annotate({ description: 'an instant, exclusive' })),
-				limit: Schema.optionalKey(
-					Schema.Number.check(Schema.isInt()).annotate({ description: 'default 50, at most 200' })
-				),
-				cursor: Schema.optionalKey(Schema.String)
-			}),
-			success: ToolAnswer
-		});
+		const logsTool = shared('logs', () =>
+			Tool.make('logs', {
+				description:
+					"Live's runtime log, newest first: engine events and console lines, filtered by level (or worse), text, run, automation, conversation, since, until.",
+				parameters: Schema.Struct({
+					level: Schema.optionalKey(Schema.Literals(['info', 'warn', 'error'])),
+					text: Schema.optionalKey(Schema.String),
+					run: Schema.optionalKey(Schema.String),
+					automation: Schema.optionalKey(Schema.String),
+					conversation: Schema.optionalKey(Schema.String),
+					since: Schema.optionalKey(Schema.String),
+					until: Schema.optionalKey(Schema.String),
+					limit: Schema.optionalKey(Schema.Number.check(Schema.isInt())),
+					cursor: Schema.optionalKey(Schema.String)
+				}),
+				success: ToolAnswer
+			})
+		);
 		yield* add(
 			logsTool,
 			Toolkit.make(logsTool).toHandlers({
@@ -3637,8 +3523,12 @@ Related rows go inside their root row in the same call, never in a separate writ
 	) =>
 		Effect.gen(function* () {
 			if (!Predicate.isObject(input)) return;
-			const valid = validatorOf(input);
-			const made = Tool.dynamic(name, { description, parameters: input, success: ToolAnswer });
+			const known = dynamics.get(input) ?? {
+				valid: validatorOf(input),
+				made: Tool.dynamic(name, { description, parameters: input, success: ToolAnswer })
+			};
+			dynamics.set(input, known);
+			const { valid, made } = known;
 			yield* add(
 				made,
 				Toolkit.make(made).toHandlers({
@@ -3696,57 +3586,65 @@ Related rows go inside their root row in the same call, never in a separate writ
 							};
 							const shown: { name: string; mime: string; bytes: Uint8Array }[] = [],
 								kept: Downloaded[] = [];
+							// a screenshot the person sees too (stored now), or a download (stored by the host): their file, offered on
+							// the step. Inside the job, so a tool past the inline wall still records what it kept
+							const offered = (result: Json) =>
+								Effect.gen(function* () {
+									if (
+										!Predicate.isObject(result) ||
+										(kept.length === 0 && (shown.length === 0 || e.files === undefined))
+									)
+										return result;
+									const files: Json[] = [];
+									if (e.files !== undefined)
+										for (const f of shown) files.push(yield* storeFile(x, e.files, f));
+									for (const f of kept) files.push(yield* recordFile(x, f));
+									return { ...result, files };
+								});
 							const job = yield* x.jobs.add(
 								host.name,
 								Port.attempt(host.name, (signal) => host.call(input, context, signal)).pipe(
-									Port.call(host.name, JOBS.hostMs)
+									Port.call(host.name, host.wallMs ?? JOBS.hostMs),
+									Effect.flatMap(offered)
 								),
 								host.studio === undefined ? {} : { studio: host.studio }
 							);
 							const inline = yield* x.jobs.wait([job], x.inlineMs ?? JOBS.inlineMs);
-							if (inline === null) return ok({ job, note: 'still running; collect it with wait' });
-							const result = inline.result;
-							// a screenshot the person sees too (stored now), or a download (stored by the host): their file, offered on the step
-							if (
-								!Predicate.isObject(result) ||
-								(kept.length === 0 && (shown.length === 0 || e.files === undefined))
-							)
-								return ok(result);
-							const files: Json[] = [];
-							if (e.files !== undefined)
-								for (const f of shown) files.push(yield* storeFile(x, e.files, f));
-							for (const f of kept) files.push(yield* recordFile(x, f));
-							return ok({ ...result, files });
+							return ok(inline?.result ?? { job, note: 'still running; collect it with wait' });
 						}),
 					host.studio === undefined ? {} : { studio: host.studio }
 				);
-	// the panel's previewer shows the latest `preview` a result names: this is how the agent picks one explicitly
-	const builds = entries.find((t) => t.studio === 'preview')?.name;
-	if (builds !== undefined) {
-		const previewShowTool = Tool.make('preview_show', {
-			description: `Show a preview in the person's previewer beside the chat: url is a preview URL a ${builds} result gave. It only shows the page; it does not open or check it.`,
-			parameters: Schema.Struct({
-				url: Schema.String.annotate({ description: 'the preview URL' })
-			}),
-			success: ToolAnswer
-		});
-		yield* add(
-			previewShowTool,
-			Toolkit.make(previewShowTool).toHandlers({
-				preview_show: (i) =>
-					guard(
-						Effect.succeed(
-							/^https?:\/\//.test(i.url) && URL.canParse(i.url)
-								? ok({ preview: i.url })
-								: err('url is a preview URL (https://…)')
-						)
-					)
-			})
-		);
-	}
 	const toolkit = yield* Toolkit.make(...entries.map((entry) => entry.tool)).pipe(
 		Effect.provideContext(Context.mergeAll(...entries.map((entry) => entry.handlers)))
 	);
+	// the input is decoded against the tool's own schema here, closed: the toolkit skips decoding a schema it does not
+	// recognise as one, and an unchecked input would reach the handler with keys the schema never offered
+	const run: Catalogue['run'] = (name, input, callId) =>
+		Schema.decodeUnknownEffect(
+			entries.find((entry) => entry.name === name)?.tool.parametersSchema ?? Schema.Unknown,
+			// every issue at once, so a wrong call learns all it must change in one answer
+			{ ...CLOSED, errors: 'all' }
+		)(input).pipe(
+			Effect.mapError(
+				(error) => new Error(`Invalid parameters for tool '${name}': ${error.message}`)
+			),
+			Effect.flatMap((decoded) => toolkit.handle(name, decoded, callId, CLOSED)),
+			Effect.flatMap(Stream.runLast),
+			Effect.map((last) =>
+				Option.getOrElse(
+					Option.filter(
+						Option.map(last, (handled) => handled.result),
+						Schema.is(ToolAnswer)
+					),
+					() => err(`${name} answered nothing.`)
+				)
+			),
+			// an unknown tool or a refused input (`Invalid parameters for tool …`): the model's answer
+			Effect.catch((error) =>
+				Effect.succeed(err(error.message.replace(/^Toolkit\.\w+\.handle: /, '')))
+			)
+		);
+	self = run;
 	return {
 		tools: entries.map(({ name, studio, pure }) => ({
 			name,
@@ -3754,49 +3652,9 @@ Related rows go inside their root row in the same call, never in a separate writ
 			...(pure === undefined ? {} : { pure })
 		})),
 		toolkit,
-		// the input is decoded against the tool's own schema here, closed: the toolkit skips decoding a schema it does not
-		// recognise as one, and an unchecked input would reach the handler with keys the schema never offered
-		run: (name: string, input: unknown, callId: string) =>
-			Schema.decodeUnknownEffect(
-				entries.find((entry) => entry.name === name)?.tool.parametersSchema ?? Schema.Unknown,
-				// every issue at once, so a wrong call learns all it must change in one answer
-				{ ...CLOSED, errors: 'all' }
-			)(input).pipe(
-				Effect.mapError(
-					(error) =>
-						new Error(
-							`Invalid parameters for tool '${name}': ${error.message}${name === 'read' ? misplaced(input) : ''}`
-						)
-				),
-				Effect.flatMap((decoded) => toolkit.handle(name, decoded, callId, CLOSED)),
-				Effect.flatMap(Stream.runLast),
-				Effect.map((last) =>
-					Option.getOrElse(
-						Option.filter(
-							Option.map(last, (handled) => handled.result),
-							Schema.is(ToolAnswer)
-						),
-						() => err(`${name} answered nothing.`)
-					)
-				),
-				// an unknown tool or a refused input (`Invalid parameters for tool …`): the model's answer
-				Effect.catch((error) =>
-					Effect.succeed(err(error.message.replace(/^Toolkit\.\w+\.handle: /, '')))
-				)
-			)
+		run
 	} satisfies Catalogue;
 });
-/** A read whose options sit beside its keys instead of inside them: the shape it meant. */
-const OPTIONS = new Set(['fields', 'where', 'orderBy', 'limit', 'search', 'aggregate']);
-const misplaced = (input: unknown): string => {
-	if (!Predicate.isObject(input)) return '';
-	const keys = Object.keys(input),
-		loose = keys.filter((key) => OPTIONS.has(key)),
-		root = keys.find((key) => !OPTIONS.has(key));
-	return loose.length === 0
-		? ''
-		: `\nOptions go inside the key they narrow, as an object: { "${root ?? '<model>'}": { "${loose[0]}": … } }.`;
-};
 /** A file a tool made, stored as the member's (`sys_conversation.outputs`): the reference a file field takes and the panel offers. */
 const storeFile = Effect.fn('Agents.storeFile')(function* (
 	x: ToolContext,
@@ -3845,8 +3703,13 @@ const conversationFiles = Effect.fn('Agents.runFileInputs')(function* (
 		files = x.engine.files;
 	if (member === null || files === undefined) return 'This run can be handed no files.';
 	const rows = yield* x.engine.db.rows(InputFile, {
-		text: `SELECT id, name, key, size FROM sys_file WHERE id IN (SELECT jsonb_array_elements_text($1::jsonb)) AND field IN ('sys_conversation.inputs', 'sys_conversation.outputs') AND created_by = $2`,
-		params: [JSON.stringify(refs.map((ref) => ref.id)), member]
+		// the member's own, or an ingest filed in this conversation's outputs (a cached ingest may be another member's)
+		text: `SELECT id, name, key, size FROM sys_file f WHERE id IN (SELECT jsonb_array_elements_text($1::jsonb))
+			AND field IN ('sys_conversation.inputs', 'sys_conversation.outputs') AND (created_by = $2 OR EXISTS (
+				SELECT 1 FROM sys_conversation c, LATERAL jsonb_array_elements(c.outputs) o
+				WHERE c.id = $3 AND (o->>'id' = f.id OR o->'files' @> jsonb_build_array(jsonb_build_object('id', f.id)))
+			))`,
+		params: [JSON.stringify(refs.map((ref) => ref.id)), member, x.conv.id]
 	});
 	const byId = new Map(rows.map((file) => [file.id, file]));
 	const named: (readonly [string, Uint8Array])[] = [];
@@ -3872,15 +3735,8 @@ const fileContent = (bytes: Uint8Array): Json => {
 };
 const ReferenceFile = systemRow('sys_file', ['key', 'size']);
 const ReferenceJson = Schema.fromJsonString(ReferenceIndex);
-/**
- * A repository reference's tree for a file run: the person's own latest reference by that name, its index decoded
- * once, at most `REFERENCE.treeBytes`, every file by its content address. A string is why not.
- */
-const referenceTree = Effect.fn('Agents.referenceTree')(function* (
-	x: ToolContext,
-	name: string,
-	entry: string
-) {
+/** The person's own latest reference by that name, its index decoded. A string is why not. */
+const referenceIndex = Effect.fn('Agents.referenceIndex')(function* (x: ToolContext, name: string) {
 	const member = x.authority.actor.kind === 'member' ? x.authority.actor.id : null,
 		files = x.engine.files;
 	if (member === null || files === undefined) return 'This run reads no repository references.';
@@ -3893,8 +3749,56 @@ const referenceTree = Effect.fn('Agents.referenceTree')(function* (
 	const index = Schema.decodeUnknownOption(ReferenceJson)(
 		new TextDecoder().decode(yield* files.get(row.key, row.size))
 	);
-	if (Option.isNone(index)) return `The reference ${name} cannot be read.`;
-	const { digest, files: listed } = index.value;
+	return Option.isNone(index) ? `The reference ${name} cannot be read.` : index.value;
+});
+/** `read_file` on a reference: `<name>` or a folder lists its files, with `text` greps them, `<name>/<path>` reads one. */
+const readReference = Effect.fn('Agents.readReference')(function* (
+	x: ToolContext,
+	id: string,
+	i: { readonly from?: number; readonly to?: number; readonly text?: string }
+) {
+	const slash = id.indexOf('/'),
+		name = slash < 0 ? id : id.slice(0, slash),
+		path = slash < 0 ? '' : id.slice(slash + 1),
+		index = yield* referenceIndex(x, name),
+		files = x.engine.files;
+	if (typeof index === 'string') return err(index);
+	if (files === undefined) return err('This host stores no files.');
+	const read = (file: (typeof index.files)[number]) =>
+		Effect.map(files.get(file.key, file.bytes), (bytes) => new TextDecoder().decode(bytes));
+	const file = index.files.find((one) => one.path === path);
+	if (file !== undefined) {
+		const text = yield* read(file);
+		return ok({ path, ...page(text, i.from ?? 1, i.to ?? Number.MAX_SAFE_INTEGER) });
+	}
+	const folder = path === '' ? '' : `${path.replace(/\/$/, '')}/`,
+		under = index.files.filter((one) => one.path.startsWith(folder));
+	if (under.length === 0) return err(`${name} has no file '${path}'.`);
+	if (i.text === undefined || i.text === '')
+		return textAnswer(under.map((one) => `${one.path}  ${one.bytes}`).join('\n'));
+	const wanted = i.text.toLowerCase(),
+		hits: string[] = [];
+	const found = yield* Effect.forEach(under, (one) => read(one), { concurrency: 8 });
+	for (const [n, text] of found.entries())
+		for (const [line, value] of text.split('\n').entries())
+			if (hits.length < 200 && value.toLowerCase().includes(wanted))
+				hits.push(`${under[n]?.path}:${line + 1}: ${value.trim().slice(0, 200)}`);
+	return textAnswer(hits.length === 0 ? `Nothing in ${name} holds '${i.text}'.` : hits.join('\n'));
+});
+/**
+ * A repository reference's tree for a file run: the person's own latest reference by that name, its index decoded
+ * once, at most `REFERENCE.treeBytes`, every file by its content address. A string is why not.
+ */
+const referenceTree = Effect.fn('Agents.referenceTree')(function* (
+	x: ToolContext,
+	name: string,
+	entry: string
+) {
+	const index = yield* referenceIndex(x, name),
+		files = x.engine.files;
+	if (typeof index === 'string') return index;
+	if (files === undefined) return 'This run reads no repository references.';
+	const { digest, files: listed } = index;
 	if (!listed.some((file) => file.path === entry))
 		return `The reference ${name} has no text file '${entry}'.`;
 	if (listed.reduce((sum, file) => sum + file.bytes, 0) > REFERENCE.treeBytes)
@@ -3935,5 +3839,15 @@ const recordFile = Effect.fn('Agents.recordFile')(function* (x: ToolContext, fil
 	});
 	return ref;
 });
+/** A dynamic tool and its validator, by the JSON Schema object they come from: a turn's later steps offer the same ones. */
+const dynamics = new WeakMap<
+	object,
+	{
+		readonly valid: (value: unknown) => Json | string;
+		readonly made: AnyTool;
+	}
+>();
+/** What a script's `tool()` reaches. */
+const SCRIPTED: ReadonlySet<string> = new Set(RUN_JS.tools);
 /** The host tool a workspace may replace with its own same-named MCP tool; every other host name stays the host's. */
 const WORKSPACE_OVERRIDES: ReadonlySet<string> = new Set(['web_search']);

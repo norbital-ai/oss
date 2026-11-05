@@ -15,7 +15,9 @@ import { program } from '../../bolt-cli/src/test/guest.ts';
 import { actReply, qReply, routeFixture } from './support/route-fixture.ts';
 import type { Json } from '../src/decl/values.ts';
 import type { Authority, ActOutcome as Outcome } from '../src/engine/contracts.ts';
+import { FacilityFailure, Unavailable } from '../src/decl/errors.ts';
 import { SendRefused } from '../src/engine/conversations/status.ts';
+import { LINK_DOWN } from '../src/engine/integrations/abi.ts';
 import { TestWorkspace } from '../../bolt-cli/src/test/index.ts';
 import { filesOf } from '../src/engine/conversations/store.ts';
 
@@ -93,7 +95,11 @@ const manifest = Result.getOrThrow(
 			desk_wa: { integration: 'whatsapp' },
 			slack_a: { integration: 'slack' },
 			slack_b: { integration: 'slack' },
-			supplier_inbox: { integration: 'mail_import' }
+			supplier_inbox: { integration: 'mail_import' },
+			repair_wa: { integration: 'whatsapp' },
+			envoy_wa: { integration: 'whatsapp' },
+			recent_wa: { integration: 'whatsapp' },
+			dedupes_wa: { integration: 'whatsapp' }
 		},
 		policies: {
 			staff: {
@@ -165,6 +171,14 @@ const record: Drivers['Service']['send'] = (instance, message, attachments) =>
 	});
 let send = record;
 const blobs = new Map<string, Uint8Array>();
+const stored: Files['Service']['get'] = (key) =>
+	Effect.suspend(() => {
+		const bytes = blobs.get(key);
+		return bytes === undefined
+			? Port.unavailable('files', `no blob ${key}`)
+			: Effect.succeed(bytes);
+	});
+let readFile = stored;
 const files: Files['Service'] = {
 	put: (bytes, meta) =>
 		Effect.sync(() => {
@@ -177,13 +191,7 @@ const files: Files['Service'] = {
 				mime: meta.mime
 			};
 		}),
-	get: (key) =>
-		Effect.suspend(() => {
-			const bytes = blobs.get(key);
-			return bytes === undefined
-				? Port.unavailable('files', `no blob ${key}`)
-				: Effect.succeed(bytes);
-		}),
+	get: (key, max) => readFile(key, max),
 	url: (key) => Effect.succeed(`memory://${key}`),
 	remove: (key) =>
 		Effect.sync(() => {
@@ -242,6 +250,8 @@ const fixture = () =>
 			...nativeConversations,
 			send: (...args) => nativeConversations.send(...args).pipe(Effect.provide(context)),
 			receive: (...args) => nativeConversations.receive(...args).pipe(Effect.provide(context)),
+			recent: (...args) => nativeConversations.recent(...args).pipe(Effect.provide(context)),
+			repair: (...args) => nativeConversations.repair(...args).pipe(Effect.provide(context)),
 			handlers: Object.fromEntries(
 				Object.entries(nativeConversations.handlers).map(([name, handler]) => [
 					name,
@@ -768,6 +778,354 @@ describe('inbound (§4.3)', () => {
 					expect(put).not.toHaveBeenCalled();
 					expect(f.blobs.size).toBe(0);
 					expect(yield* f.rows(`SELECT id FROM sys_file WHERE ${f.fresh('sys_file')}`)).toEqual([]);
+				})
+			)
+	);
+});
+
+describe('what a send does not know (§5.9)', () => {
+	const timedOut = () =>
+		Effect.fail(new FacilityFailure({ kind: 'timeout', message: 'no answer in time' }));
+	const statuses = (f: Effect.Success<ReturnType<typeof fixture>>) =>
+		f.outbox().pipe(Effect.map((rows) => rows.map((r) => [r['status'], r['attempts']])));
+	const dedupes = (f: Effect.Success<ReturnType<typeof fixture>>) =>
+		f.t.db.write({
+			text: `UPDATE sys_integration SET status = coalesce(status, '{}'::jsonb) || '{"idempotentSends":true}'::jsonb WHERE id = 'dedupes_wa'`,
+			params: []
+		});
+
+	it.live('a send that timed out is not sent again: it stays uncertain', () =>
+		Effect.scoped(
+			Effect.gen(function* () {
+				const f = yield* fixture();
+				let tries = 0;
+				f.setSend(() =>
+					Effect.suspend(() => {
+						tries++;
+						return timedOut();
+					})
+				);
+				yield* f.conversations.send('desk_wa', { to: 'U1@s.whatsapp.net', text: 'once' }, {});
+				f.t.clock.advance('1h');
+				yield* f.deliver();
+				expect(tries).toBe(1);
+				expect(yield* statuses(f)).toEqual([['uncertain', 1]]);
+			})
+		)
+	);
+
+	it.live('a provider that dedupes on the id is asked again after a timeout', () =>
+		Effect.scoped(
+			Effect.gen(function* () {
+				const f = yield* fixture();
+				yield* dedupes(f);
+				f.setSend(timedOut);
+				yield* f.conversations.send('dedupes_wa', { to: 'U2@s.whatsapp.net', text: 'once' }, {});
+				expect(yield* statuses(f)).toEqual([['queued', 1]]);
+				f.setSend(f.record);
+				f.t.clock.advance('1h');
+				yield* f.deliver();
+				expect(yield* statuses(f)).toEqual([['sent', 2]]);
+			})
+		)
+	);
+
+	it.live('a timeout before the send reached the provider is retried: nothing can have gone', () =>
+		Effect.scoped(
+			Effect.gen(function* () {
+				const f = yield* fixture();
+				const blob = yield* files.put(new Uint8Array([1]), { name: 'a.txt', mime: 'text/plain' });
+				yield* f.t.db.write({
+					text: `INSERT INTO sys_file (id, name, mime, size, key, sha256, field, created_at) VALUES ('slow-file', 'a.txt', 'text/plain', 1, $1, $2, 'sys_conversation.inputs', $3::timestamptz)`,
+					params: [blob.key, blob.sha256, f.t.clock.now()]
+				});
+				readFile = timedOut;
+				yield* f.conversations.send(
+					'desk_wa',
+					{ to: 'U3@s.whatsapp.net', text: 'see file', attachments: [{ id: 'slow-file' }] },
+					{}
+				);
+				expect(yield* statuses(f)).toEqual([['queued', 1]]);
+				readFile = stored;
+				f.t.clock.advance('1h');
+				yield* f.deliver();
+				expect(yield* statuses(f)).toEqual([['sent', 2]]);
+			})
+		).pipe(
+			Effect.ensuring(
+				Effect.sync(() => {
+					readFile = stored;
+				})
+			)
+		)
+	);
+
+	const strand = (f: Effect.Success<ReturnType<typeof fixture>>, instance: string, to: string) =>
+		Effect.gen(function* () {
+			f.setSend(timedOut);
+			yield* f.conversations.send(instance, { to, text: 'cut off' }, {});
+			yield* f.t.db.write({
+				text: `UPDATE sys_message m SET status = 'sending', claimed_at = $1::timestamptz WHERE direction = 'outbound' AND ${f.fresh('sys_message', 'm')}`,
+				params: [f.t.clock.now()]
+			});
+			f.setSend(f.record);
+		});
+
+	it.live(
+		'a send left without an answer wakes at its lease, behind which a later message waits, and stays uncertain',
+		() =>
+			Effect.scoped(
+				Effect.gen(function* () {
+					const f = yield* fixture(),
+						t = f.t;
+					yield* strand(f, 'desk_wa', 'U4@s.whatsapp.net');
+					yield* f.conversations.send('desk_wa', { to: 'U4@s.whatsapp.net', text: 'next' }, {});
+					const lease = new Date(Date.parse(t.clock.now()) + 600_000).toISOString();
+					expect(
+						yield* f.rows(
+							`SELECT 1 AS woken FROM sys_run r WHERE r.automation = 'integrations.deliver' AND r.state = 'queued' AND r.key = 'integrations.deliver@${lease}'`
+						)
+					).toEqual([{ woken: 1 }]);
+					t.clock.advance('11min');
+					yield* f.deliver();
+					expect(f.sent('desk_wa')).toHaveLength(1);
+					expect((yield* statuses(f)).map(([status]) => status)).toEqual(['uncertain', 'sent']);
+				})
+			)
+	);
+
+	it.live('a provider that dedupes on the id sends a stranded row again at its lease', () =>
+		Effect.scoped(
+			Effect.gen(function* () {
+				const f = yield* fixture();
+				yield* dedupes(f);
+				yield* strand(f, 'dedupes_wa', 'U5@s.whatsapp.net');
+				f.t.clock.advance('11min');
+				yield* f.deliver();
+				expect((yield* statuses(f)).map(([status]) => status)).toEqual(['sent']);
+			})
+		)
+	);
+
+	it.live(
+		'a link that is down spends no attempt, however long it stays down, and its connect delivers',
+		() =>
+			Effect.scoped(
+				Effect.gen(function* () {
+					const f = yield* fixture(),
+						t = f.t;
+					f.setSend(() =>
+						Effect.fail(new Unavailable({ facility: LINK_DOWN, reason: 'not connected' }))
+					);
+					yield* f.conversations.send('desk_wa', { to: 'U6@s.whatsapp.net', text: 'wait' }, {});
+					expect(yield* statuses(f)).toEqual([['queued', 0]]);
+					t.clock.advance('1h');
+					yield* t.runDue();
+					t.clock.advance('2d');
+					yield* t.runDue();
+					expect(yield* statuses(f)).toEqual([['queued', 0]]);
+					f.setSend(f.record);
+					yield* f.outbound.resume('desk_wa').pipe(Effect.provide(f.context));
+					yield* t.runDue();
+					expect(f.sent('desk_wa')).toHaveLength(1);
+					expect(yield* statuses(f)).toEqual([['sent', 1]]);
+				})
+			)
+	);
+
+	it.live('a resume with nothing waiting queues no delivery', () =>
+		Effect.scoped(
+			Effect.gen(function* () {
+				const f = yield* fixture();
+				yield* f.outbound.resume('slack_b').pipe(Effect.provide(f.context));
+				expect(yield* f.runs()).toEqual([]);
+			})
+		)
+	);
+});
+
+describe('repair (a webhook is a hint)', () => {
+	const HOUR = 3_600_000,
+		DAY = 24 * HOUR;
+	type F = Effect.Success<ReturnType<typeof fixture>>;
+	const ago = (f: F, ms: number) => new Date(Date.parse(f.t.clock.now()) - ms).toISOString();
+	const seen = (thread: string, id: string, sentAt: string, over: { [k: string]: Json } = {}) => ({
+		id,
+		thread,
+		sentAt,
+		from: { handle: thread, name: 'Ben' },
+		text: 'as stored',
+		attachments: [],
+		...over
+	});
+	const stored = (f: F, thread: string) =>
+		f.rows(
+			`SELECT m.provider_id, m.text, m.origin, m.deleted_at IS NOT NULL AS deleted FROM sys_message m JOIN sys_conversation c ON c.id = m.conversation
+			WHERE c.thread = '${thread}' AND m.direction = 'inbound' AND ${f.fresh('sys_message', 'm')} ORDER BY m.provider_id`
+		);
+	const admissions = (f: F) =>
+		f.rows(
+			`SELECT r.input->>'message' AS message FROM sys_run r WHERE r.automation = 'envoys.admit' AND ${f.fresh('sys_run', 'r')}`
+		);
+
+	it.live(
+		'brings what a delivery lost and an edit; the same view again writes nothing and starts nothing',
+		() =>
+			Effect.scoped(
+				Effect.gen(function* () {
+					const f = yield* fixture(),
+						t = f.t,
+						thread = 'R1@s.whatsapp.net',
+						since = ago(f, 7 * DAY);
+					const sentAt = ago(f, 3 * HOUR);
+					yield* t.receive('repair_wa', seen(thread, 'R1-a', sentAt));
+					const page = {
+						complete: false,
+						messages: [
+							seen(thread, 'R1-a', sentAt, { text: 'edited', version: ago(f, 2 * HOUR) }),
+							seen(thread, 'R1-b', ago(f, 2 * HOUR), { text: 'lost' })
+						]
+					};
+					yield* f.conversations.repair('repair_wa', thread, since, page);
+					expect(yield* stored(f, thread)).toEqual([
+						{ provider_id: 'R1-a', text: 'edited', origin: 'live', deleted: false },
+						{ provider_id: 'R1-b', text: 'lost', origin: 'sync', deleted: false }
+					]);
+					const runs = (yield* f.runs()).length;
+					t.count.reset();
+					yield* f.conversations.repair('repair_wa', thread, since, page);
+					expect(t.count.writes).toBe(0);
+					expect((yield* f.runs()).length).toBe(runs);
+				})
+			)
+	);
+
+	it.live(
+		'a complete view tombstones what it lacks; a partial one, a settling message and rows outside the window stay',
+		() =>
+			Effect.scoped(
+				Effect.gen(function* () {
+					const f = yield* fixture(),
+						t = f.t,
+						thread = 'R2@s.whatsapp.net';
+					yield* f.conversations.send('repair_wa', { to: thread, text: 'ours' }, {});
+					t.clock.advance('10min');
+					const since = ago(f, 2 * DAY);
+					yield* t.receive('repair_wa', [
+						seen(thread, 'R2-kept', ago(f, HOUR)),
+						seen(thread, 'R2-gone', ago(f, HOUR)),
+						seen(thread, 'R2-narrowed', ago(f, DAY + HOUR)),
+						seen(thread, 'R2-older', ago(f, 3 * DAY)),
+						seen(thread, 'R2-settling', ago(f, 60_000))
+					]);
+					const messages = [seen(thread, 'R2-kept', ago(f, HOUR))];
+					yield* f.conversations.repair('repair_wa', thread, since, { complete: false, messages });
+					const deleted = () =>
+						stored(f, thread).pipe(
+							Effect.map((rows) => rows.filter((r) => r['deleted']).map((r) => r['provider_id']))
+						);
+					expect(yield* deleted()).toEqual([]);
+					yield* f.conversations.repair('repair_wa', thread, since, {
+						complete: true,
+						messages,
+						since: ago(f, DAY)
+					});
+					expect(yield* deleted()).toEqual(['R2-gone']);
+					expect(
+						yield* f.rows(
+							`SELECT m.status, m.deleted_at FROM sys_message m WHERE m.direction = 'outbound' AND ${f.fresh('sys_message', 'm')}`
+						)
+					).toEqual([{ status: 'sent', deleted_at: null }]);
+					// a page that echoes what bolt sent adds no inbound row
+					const [ours] = f.sent('repair_wa');
+					yield* f.conversations.repair('repair_wa', thread, since, {
+						complete: false,
+						messages: [seen(thread, ours?.providerId ?? '', ago(f, 11 * 60_000))]
+					});
+					expect(yield* stored(f, thread)).toHaveLength(5);
+					t.count.reset();
+					yield* f.conversations.repair('repair_wa', thread, since, {
+						complete: true,
+						messages,
+						since: ago(f, DAY)
+					});
+					expect(t.count.writes).toBe(0);
+				})
+			)
+	);
+
+	it.live(
+		'an envoy answers a repaired message only while its sender may still wait: an old one, an edit and a delete start nothing',
+		() =>
+			Effect.scoped(
+				Effect.gen(function* () {
+					const f = yield* fixture(),
+						t = f.t,
+						thread = 'R3@s.whatsapp.net',
+						since = ago(f, 7 * DAY);
+					yield* t.db.write({
+						text: `UPDATE sys_integration SET envoy = 'desk' WHERE id = 'envoy_wa'`,
+						params: []
+					});
+					yield* t.receive('envoy_wa', seen(thread, 'R3-known', ago(f, 3 * HOUR)));
+					yield* t.receive('envoy_wa', seen(thread, 'R3-dropped', ago(f, 3 * HOUR)));
+					const before = (yield* admissions(f)).length;
+					yield* f.conversations.repair('envoy_wa', thread, since, {
+						complete: true,
+						messages: [
+							seen(thread, 'R3-known', ago(f, 3 * HOUR), {
+								text: 'edited',
+								version: ago(f, HOUR)
+							}),
+							seen(thread, 'R3-old', ago(f, 2 * HOUR), { text: 'long past' }),
+							seen(thread, 'R3-fresh', ago(f, HOUR / 2), { text: 'still waiting' })
+						]
+					});
+					expect((yield* stored(f, thread)).map((r) => [r['provider_id'], r['origin']])).toEqual([
+						['R3-dropped', 'live'],
+						['R3-fresh', 'live'],
+						['R3-known', 'live'],
+						['R3-old', 'sync']
+					]);
+					const after = yield* admissions(f);
+					expect(after).toHaveLength(before + 1);
+					expect(after.at(-1)?.['message']).toBe(
+						(yield* f.rows(
+							`SELECT m.id FROM sys_message m WHERE m.provider_id = 'R3-fresh' AND m.integration = 'envoy_wa'`
+						))[0]?.['id']
+					);
+				})
+			)
+	);
+
+	it.live(
+		"recent names one instance's active threads, newest first, within the window and the cap",
+		() =>
+			Effect.scoped(
+				Effect.gen(function* () {
+					const f = yield* fixture(),
+						t = f.t;
+					const quiet = 'T-quiet@s.whatsapp.net',
+						first = 'T-first@s.whatsapp.net',
+						second = 'T-second@s.whatsapp.net';
+					yield* t.receive('recent_wa', seen(quiet, 'T-a', t.clock.now()));
+					t.clock.advance('8d');
+					yield* t.receive('recent_wa', seen(first, 'T-b', t.clock.now()));
+					t.clock.advance('1min');
+					yield* t.receive('recent_wa', seen(second, 'T-c', t.clock.now()));
+					yield* t.receive('slack_b', seen('C9', 'T-d', t.clock.now()));
+					expect(yield* f.conversations.recent('recent_wa')).toEqual({
+						since: ago(f, 7 * DAY),
+						threads: [second, first]
+					});
+					yield* t.db.write({
+						text: `WITH c AS (INSERT INTO sys_conversation (id, integration, thread, kind)
+						SELECT 'cap-' || g, 'recent_wa', 'cap-' || g, 'dm' FROM generate_series(1, 205) g RETURNING id)
+					INSERT INTO sys_message (id, conversation, integration, direction, created_at)
+						SELECT 'm-' || id, id, 'recent_wa', 'inbound', $1::timestamptz FROM c`,
+						params: [t.clock.now()]
+					});
+					expect((yield* f.conversations.recent('recent_wa')).threads).toHaveLength(200);
 				})
 			)
 	);

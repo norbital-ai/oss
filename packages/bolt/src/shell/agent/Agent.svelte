@@ -359,8 +359,10 @@
 				rows = loaded?.rows ?? [];
 			const kind = attentionOf(ready, rows);
 			if (kind !== null) chime?.play(kind);
-			for (const path of navigationsOf(ready, rows)) {
-				if (id !== null) clientNavigation?.open(path, id);
+			for (const item of navigationsOf(ready, rows)) {
+				if (id === null) continue;
+				clientNavigation?.open(item.path, id);
+				clientPageAction?.arrived(item.id);
 			}
 			for (const item of pageActionsOf(id, rows)) {
 				if (id !== null && !thread) clientPageAction?.run(item.action, id, item.id);
@@ -1434,7 +1436,7 @@
 	let previewing = $state(false),
 		seenPreview = $state<string | null>(null);
 	const recordedPreview = $derived(previewsOf(rows).at(-1) ?? null);
-	const hasTestStep = $derived(rows.some((row) => row.tool?.name === 'workspace_test'));
+	const hasTestStep = $derived(rows.some((row) => row.tool?.name === 'workspace_validate' && row.tool.args?.includes('"preview"') !== true));
 	let previewStudio = $state<StudioView | null>(null);
 	const shownPreview = $derived(
 		recordedPreview === null

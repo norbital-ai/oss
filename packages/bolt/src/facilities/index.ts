@@ -78,7 +78,7 @@ export type Embed = EmbeddingsPort;
 export type Speech = Required<SpeechPort>;
 
 // ── 5. ports: how Bolt reaches the outside ──
-/** Inbound: the public URL under which the host routes `/hooks/<instance>` and OAuth callbacks into Bolt. */
+/** Inbound: the public URL under which the host routes `/hooks/integration/<instance>` and OAuth callbacks into Bolt. */
 export interface Webhooks {
 	readonly publicUrl: string;
 }

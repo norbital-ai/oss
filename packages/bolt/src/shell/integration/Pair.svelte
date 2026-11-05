@@ -39,6 +39,16 @@
 	const c = $derived(status);
 	const retry = $derived(c?.state === 'error' || error !== null);
 	const providers = $derived(c?.providers ?? []);
+	/** Past this many a list is searched, not scanned. */
+	const MANY = 8;
+	let search = $state('');
+	const listed = $derived(
+		providers.filter((p) =>
+			say(p.name ?? p.label)
+				.toLowerCase()
+				.includes(search.trim().toLowerCase())
+		)
+	);
 	/** The operator's pick; `''` is "choose again". Otherwise the host's active provider, or the only one there is. */
 	let picked = $state<string | null>(null);
 	const choice = $derived(
@@ -204,18 +214,32 @@
 		<Stack gap="sm" data-provider-choice>
 			<p class="text-sm font-medium">{t('Choose how this integration connects')}</p>
 			<Stack gap="xs">
-				{#each providers as p (p.id)}
+				{#if providers.length > MANY}
+					<Input
+						type="search"
+						placeholder={t('Search platforms')}
+						aria-label={t('Search platforms')}
+						bind:value={search}
+						data-provider-search
+					/>
+				{/if}
+				{#each listed as p (p.id)}
 					<Button
 						variant="outline"
-						class="justify-start"
+						class="h-auto justify-between gap-3 text-left"
 						data-provider={p.id}
 						disabled={p.available === false}
 						title={p.available === false ? t('Not available on this host') : undefined}
 						onclick={() => {
 							picked = p.id;
 							values = {};
-						}}>{say(p.label)}</Button
+						}}
 					>
+						<span class="min-w-0 truncate">{say(p.name ?? p.label)}</span>
+						{#if p.name !== undefined}
+							<span class="shrink-0 text-meta" data-provider-maintainer>{say(p.label)}</span>
+						{/if}
+					</Button>
 				{/each}
 			</Stack>
 		</Stack>
@@ -232,7 +256,12 @@
 		{/if}
 		{#if providers.length > 1}
 			<Cluster gap="sm" justify="between" align="center">
-				<p class="text-sm font-medium">{say(choice.label)}</p>
+				<p class="text-sm font-medium">
+					{say(choice.name ?? choice.label)}
+					{#if choice.name !== undefined}
+						<span class="text-meta font-normal">{say(choice.label)}</span>
+					{/if}
+				</p>
 				<Button variant="ghost" disabled={busy || c?.stored === true} onclick={() => (picked = '')}
 					>{t('Choose another provider')}</Button
 				>

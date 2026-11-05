@@ -67,6 +67,8 @@ export const DRIVERS = {
 	slack: { conversation: { kind: 'chat', handle: null } },
 	discord: { conversation: { kind: 'chat', handle: null } },
 	wechat: { conversation: { kind: 'chat', handle: null } },
+	/** Any other chat platform: the host's providers name them, and a connection picks one. */
+	chat: { conversation: { kind: 'chat', handle: null } },
 	calendar: { items: 'calendar', oauth: true, personal: true, call: 'http' }
 } as const;
 /** A driver kind: what a definition's `driver` names. */

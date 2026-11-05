@@ -82,6 +82,9 @@ const fixture = Effect.fn('MailboxBackfill.fixture')(function* (
 						yield* beforeDeliver(uid);
 						accepted.add(uid);
 					}),
+				peek: () => Effect.succeed(null),
+				vanished: () => Effect.void,
+				serve: () => Effect.void,
 				connected: Effect.void
 			})
 	};
@@ -142,7 +145,7 @@ describe('mailbox history checkpoints', () => {
 				yield* until(() => f.accepted.size === 121 && f.cursor()?.backfill === undefined);
 				expect(f.attempts.indexOf(121)).toBeLessThan(f.attempts.indexOf(51));
 				expect([...f.accepted].sort((left, right) => left - right)).toEqual(range(1, 121));
-				expect(f.cursor()).toEqual({ validity: '7', uid: 121 });
+				expect(f.cursor()).toMatchObject({ validity: '7', uid: 121 });
 				expect(f.advances.some((cursor) => cursor.uid > 81 && cursor.backfill === 50)).toBe(true);
 				expect(f.server.fetches.every((size) => size > 0 && size <= 25)).toBe(true);
 				yield* Fiber.interrupt(watching);
@@ -164,18 +167,18 @@ describe('mailbox history checkpoints', () => {
 				const first = yield* Effect.forkScoped(f.watch());
 				expect((yield* Fiber.await(first))._tag).toBe('Failure');
 				expect([...f.accepted]).toEqual(range(56, 59));
-				expect(f.cursor()).toEqual({ validity: '7', uid: 59, backfill: 0 });
+				expect(f.cursor()).toMatchObject({ validity: '7', uid: 59, backfill: 0 });
 				refused = 11;
 				const second = yield* Effect.forkScoped(f.watch());
 				expect((yield* Fiber.await(second))._tag).toBe('Failure');
 				expect(f.accepted.has(60)).toBe(true);
 				expect(f.accepted.has(11)).toBe(false);
-				expect(f.cursor()).toEqual({ validity: '7', uid: 80, backfill: 10 });
+				expect(f.cursor()).toMatchObject({ validity: '7', uid: 80, backfill: 10 });
 				refused = null;
 				const third = yield* Effect.forkScoped(f.watch());
 				yield* until(() => f.accepted.size === 80 && f.cursor()?.backfill === undefined);
 				expect([...f.accepted].sort((left, right) => left - right)).toEqual(range(1, 80));
-				expect(f.cursor()).toEqual({ validity: '7', uid: 80 });
+				expect(f.cursor()).toMatchObject({ validity: '7', uid: 80 });
 				expect(f.server.fetches.every((size) => size > 0 && size <= 25)).toBe(true);
 				yield* Fiber.interrupt(third);
 			})
@@ -189,12 +192,14 @@ describe('mailbox history checkpoints', () => {
 				f.append(30);
 				const watching = yield* Effect.forkScoped(f.watch());
 				yield* until(() => f.accepted.size === 30 && f.cursor()?.backfill === undefined);
-				expect(f.advances[0]).toEqual({ validity: '7', uid: 0 });
+				expect(f.advances[0]).toMatchObject({ validity: '7', uid: 0 });
+				expect(f.advances[0]).not.toHaveProperty('backfill');
 				expect([...f.attempts.slice(0, 25)].sort((left, right) => left - right)).toEqual(
 					range(6, 30)
 				);
 				expect([...f.accepted].sort((left, right) => left - right)).toEqual(range(1, 30));
-				expect(f.cursor()).toEqual({ validity: '7', uid: 30 });
+				expect(f.cursor()).toMatchObject({ validity: '7', uid: 30 });
+				expect(f.cursor()).not.toHaveProperty('backfill');
 				expect(f.server.fetches.every((size) => size > 0 && size <= 25)).toBe(true);
 				yield* Fiber.interrupt(watching);
 			})

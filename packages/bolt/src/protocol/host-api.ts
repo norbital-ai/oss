@@ -267,7 +267,7 @@ export type ShellPorts = Pick<
 >;
 /**
  * The agent's host parts (§5.9); the release's source (`workspace_search`) and attachments are this release's own. `ingest`
- * (Norbital Convert's `documentIngester`) serves the agent's `ingest` and `ctx.convert.ingest`; absent, neither ingests.
+ * (Norbital Convert's `documentIngester`) serves the agent's `read_file` and `ctx.convert.ingest`; absent, neither ingests.
  */
 export type AgentPorts = Pick<
 	AgentConfig,

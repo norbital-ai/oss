@@ -134,7 +134,7 @@ function scriptedAi() {
 					if (last.role === 'tool')
 						return { content: 'Done.', toolCalls: [], finish: 'stop', usage };
 					const said = text(last.content);
-					if (/^(?:\[[^\]\n]*\] )?slips$/m.test(said)) return call('read', { payslips: {} });
+					if (/^(?:\[[^\]\n]*\] )?slips$/m.test(said)) return call('read', { reads: [{ of: 'payslips' }] });
 					const pay = /^(?:\[[^\]\n]*\] )?pay (\S+)$/m.exec(said);
 					if (pay !== null)
 						return call('act', {

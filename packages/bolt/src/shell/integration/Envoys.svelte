@@ -244,6 +244,10 @@
 				of="sys_envoy"
 				mode="create"
 				submit={t('Create envoy')}
+				validate={({ policies }) =>
+					Array.isArray(policies) && policies.length > 0
+						? []
+						: [{ field: 'policies', message: t('An envoy with no policy answers nobody.') }]}
 				onOutcome={(outcome) => {
 					if (outcome.kind !== 'committed') return;
 					const record = outcome.records.find((r) => r.model === 'sys_envoy');

@@ -4,6 +4,7 @@ import {
 	Effect,
 	Exit,
 	FiberSet,
+	Latch,
 	Layer,
 	Option,
 	Predicate,
@@ -33,19 +34,30 @@ import type {
 	Pairing,
 	ProviderChoice
 } from '../../protocol/instance-status.ts';
-import type { Authority, TcpPort } from '../contracts.ts';
+import { LIMITS, type Authority, type TcpPort } from '../contracts.ts';
 import { TenantDb } from '../db/tenant-db.ts';
 import { SendRefused } from '../conversations/status.ts';
 import { Fenced, type EngineError } from '../errors.ts';
 import { BoltError } from '../../protocol/errors.ts';
+import { Unavailable } from '../../decl/errors.ts';
 import { Drivers } from '../ports.ts';
 import { Port, type PortFailure } from '../port.ts';
-import { Conversations, Guest, Links, Live, Manifest, Reads, Wake, Writes } from '../services.ts';
+import {
+	Conversations,
+	Guest,
+	Links,
+	Live,
+	Manifest,
+	Outbound,
+	Reads,
+	Wake,
+	Writes
+} from '../services.ts';
 import { mayUpdate } from '../write/act.ts';
 import { canonical } from '@norbital-ai/store';
 import type { Credentials, InstanceRow } from './credentials.ts';
 import { oauthClientOf, type OAuthClient, type OAuthVendor, type Provider } from './driver.ts';
-import { linkCalls, linkFailure, type LinkCalls } from './abi.ts';
+import { LINK_DOWN, linkCalls, linkFailure, type LinkCalls } from './abi.ts';
 import { conversational, definitionOf, writeStatus } from './instances.ts';
 import { SYSTEM } from '../../system/index.ts';
 import { Syncs, syncsOf } from '../sync/index.ts';
@@ -56,7 +68,7 @@ export const OAUTH_CALLBACK = '/hooks/oauth/callback';
 export const webhookUrl = (publicUrl: string, instance: string): string =>
 	under(publicUrl, `${HOOKS}${encodeURIComponent(instance)}`);
 export type LinkAdmission =
-	TenantDb | Manifest | Conversations | Syncs | Live | Wake | Reads | Writes | Guest;
+	TenantDb | Manifest | Conversations | Outbound | Syncs | Live | Wake | Reads | Writes | Guest;
 export type LinksHost = {
 	readonly providers: readonly Provider[];
 	/** A link's own work on the workspace (an ingest, a status), outside the compute envelope. */
@@ -114,6 +126,9 @@ const REPLACED =
 	'Another host opened this account, so this link stopped. Pair it again here to take it back.';
 const EXPIRED = 'This sign-in is unknown or has expired; start it again.';
 const TEST_TEXT = 'Norbital test message: this integration is connected.';
+const DAY = 86_400_000;
+/** The least time between two reconciles of a link, however often it reconnects. */
+const RECONCILE_GAP_MS = 3_600_000;
 const isRequest = (driver: DriverName) => 'request' in DRIVERS[driver];
 const unavailable = (reason: string) => BoltError.make('unavailable', 'facility', reason);
 const gone = (instance: string) =>
@@ -153,6 +168,15 @@ type Held = {
 	replaced: boolean;
 	/** Shared with the opened copy: set when a new import start retires this link, so its late imports are refused. */
 	boundary: { changed: boolean };
+	/** Shared with the opened copy, in memory, so a link's reconnects and quiet days ask the database nothing. */
+	flow: {
+		/** Open from each connect until a reconcile takes it. */
+		readonly connects: Latch.Latch;
+		/** Sends may be waiting for this link: it just opened, or one found it down. */
+		parked: boolean;
+		/** The last reconcile found no recent thread and no message moved since: the next has nothing to ask. */
+		idle: boolean;
+	};
 	stop?: Effect.Effect<void, PortFailure> | undefined;
 };
 type HeldState = Omit<Held, 'calls'>;
@@ -179,6 +203,8 @@ export const integrationLinks = (
 			);
 		const f = h.fetch ?? fetch;
 		const callbacks = yield* FiberSet.make<unknown, LinkError>();
+		// one instant of the day per manager: a workspace's links reconcile in one wake, and workspaces spread out
+		const reconcileAt = Math.floor(Math.random() * DAY);
 		const events = yield* Effect.acquireRelease(
 			PubSub.unbounded<InstanceStatus>(),
 			PubSub.shutdown
@@ -187,7 +213,8 @@ export const integrationLinks = (
 		const leases = new Map<string, Scope.Closeable>();
 		const locks = new Map<string, Semaphore.Semaphore>();
 		const selected = new Map<string, { provider: Provider; opened: Opened }>();
-		let stopped = false;
+		let stopped = false,
+			watchers = 0;
 		const logged = <A, E>(effect: Effect.Effect<A, E>) =>
 			effect.pipe(Effect.tapCause(Effect.logWarning), Effect.ignore);
 		const serial = <A, E>(
@@ -265,8 +292,11 @@ export const integrationLinks = (
 					return value === undefined ? yield* Effect.fail(gone(instance.integration)) : value;
 				})
 			);
-		const view = (instance: string, x: Row): InstanceStatus => {
-			const held = live.get(instance);
+		const view = (
+			instance: string,
+			x: Row,
+			held: HeldState | undefined = live.get(instance)
+		): InstanceStatus => {
 			const providers = offered(x.definition, x.personal);
 			const stored = Schema.decodeUnknownOption(LinkStatusSchema)(x.status);
 			const base: LinkStatus & { since?: string; pairing?: Pairing | null } =
@@ -304,10 +334,26 @@ export const integrationLinks = (
 		const state = (instance: string) =>
 			row(instance).pipe(Effect.map((x) => (x === undefined ? undefined : view(instance, x))));
 		const publish = (instance: string) =>
-			state(instance).pipe(
-				Effect.flatMap((value) =>
-					value === undefined ? Effect.void : PubSub.publish(events, value).pipe(Effect.asVoid)
-				)
+			Effect.suspend(() =>
+				watchers === 0
+					? Effect.void
+					: state(instance).pipe(
+							Effect.flatMap((value) =>
+								value === undefined
+									? Effect.void
+									: PubSub.publish(events, value).pipe(Effect.asVoid)
+							)
+						)
+			);
+		/** A link's own movement, for whoever watches: all of it is what the link holds, so a reconnect reads no database. */
+		const moved = (held: HeldState) =>
+			Effect.suspend(() =>
+				watchers === 0
+					? Effect.void
+					: PubSub.publish(
+							events,
+							view(held.instance, { ...held, active: true, status: null, stored: false }, held)
+						).pipe(Effect.asVoid)
 			);
 		const status = (instance: string, patch: { readonly [key: string]: Json }) =>
 			h.enter(writeStatus(instance, patch));
@@ -319,7 +365,7 @@ export const integrationLinks = (
 				held.pairing = null;
 				held.since = new Date(yield* Clock.currentTimeMillis).toISOString();
 				yield* held.stop ?? Effect.void;
-				yield* publish(held.instance);
+				yield* moved(held);
 			});
 		const persist = (held: HeldState, changes: ReadonlyMap<string, Json | null>) =>
 			Effect.gen(function* () {
@@ -351,6 +397,20 @@ export const integrationLinks = (
 					if (value === null) held.values.delete(key);
 					else held.values.set(key, value);
 			}).pipe(Effect.uninterruptible);
+		/** What waits for this connected link is due now; it asks the database only when something may be waiting. */
+		const resumeSends = (held: HeldState) =>
+			Effect.suspend(() =>
+				held.flow.parked && held.status.state === 'connected' && live.get(held.instance) === held
+					? h.enter(Effect.flatMap(Outbound, (outbound) => outbound.resume(held.instance))).pipe(
+							Effect.tap(() =>
+								Effect.sync(() => {
+									held.flow.parked = false;
+								})
+							),
+							logged
+						)
+					: Effect.void
+			);
 		const report = (held: HeldState, patch: LinkStatus) =>
 			Effect.gen(function* () {
 				if (held.replaced) return;
@@ -359,23 +419,80 @@ export const integrationLinks = (
 						BoltError.make('badAnswer', 'facility', 'the link reported an invalid status')
 					)
 				);
+				const connected = decoded.state === 'connected' && held.status.state !== 'connected';
 				if (decoded.state !== held.status.state)
 					held.since = new Date(yield* Clock.currentTimeMillis).toISOString();
 				held.status = decoded;
 				if (decoded.state !== 'pairing') held.pairing = null;
-				yield* publish(held.instance);
+				yield* moved(held);
+				if (connected) {
+					yield* held.flow.connects.open;
+					yield* resumeSends(held);
+				}
 				if (!DURABLE.has(decoded.state)) return;
 				const durable = {
 					state: decoded.state,
 					account: decoded.account ?? null,
 					error: decoded.error ?? null,
 					code: decoded.code ?? null,
-					lastDisconnect: decoded.lastDisconnect ?? null
+					lastDisconnect: decoded.lastDisconnect ?? null,
+					// on the row, because delivery runs in the workspace and the provider is known only here
+					idempotentSends: held.provider.idempotentSends ?? null
 				};
 				const key = canonical(durable);
 				if (key !== held.written) {
 					yield* status(held.instance, durable);
 					held.written = key;
+				}
+			});
+		/**
+		 * One pass over `held`'s recent threads, one at a time: the fiber ends with the link's scope, and a link that left
+		 * `connected` ends the pass. A thread the platform refuses is that thread's trouble; any other failure is the
+		 * platform's, so the pass stops and the next one tries again.
+		 */
+		const reconcilePass = (held: Held) =>
+			Effect.gen(function* () {
+				const up = () =>
+					!held.replaced && !held.boundary.changed && held.status.state === 'connected';
+				if (held.flow.idle || !up()) return;
+				// before the read: a message that lands during it clears this
+				held.flow.idle = true;
+				const { since, threads } = yield* h.enter(
+					Effect.flatMap(Conversations, (conversations) => conversations.recent(held.instance))
+				);
+				if (threads.length > 0) held.flow.idle = false;
+				for (const thread of threads) {
+					if (!up()) return;
+					yield* held.calls.reconcile(thread, since).pipe(
+						Port.call('link.reconcile', LIMITS.callMs.http),
+						Effect.flatMap((page) =>
+							h.enter(
+								Effect.flatMap(Conversations, (conversations) =>
+									conversations.repair(held.instance, thread, since, page, held.importStart)
+								)
+							)
+						),
+						Effect.catchTag('FacilityFailure', (failure) =>
+							failure.kind === 'invalid' || failure.kind === 'unsupported'
+								? Effect.logWarning(failure)
+								: Effect.fail(failure)
+						)
+					);
+				}
+			});
+		/** On each connect, and once a day while connected: a webhook is a hint, and a link repairs what it missed. */
+		const reconciling = (held: Held) =>
+			Effect.gen(function* () {
+				yield* held.flow.connects.await;
+				for (;;) {
+					yield* held.flow.connects.close;
+					yield* logged(reconcilePass(held));
+					yield* Effect.sleep(RECONCILE_GAP_MS);
+					const now = yield* Clock.currentTimeMillis;
+					yield* Effect.raceFirst(
+						held.flow.connects.await,
+						Effect.sleep((((reconcileAt - now) % DAY) + DAY) % DAY)
+					);
 				}
 			});
 		const checkedStart = (provider: Provider, value: Json | null) =>
@@ -550,6 +667,7 @@ export const integrationLinks = (
 					written: null,
 					replaced: false,
 					boundary: { changed: false },
+					flow: { connects: yield* Latch.make(), parked: true, idle: false },
 					stop: abort
 				};
 				const value = yield* Port.attempt('link', () =>
@@ -617,9 +735,10 @@ export const integrationLinks = (
 													? Effect.flatMap(Syncs, (syncs) =>
 															syncs.invalidate(instance, event.sync, event.partition)
 														)
-													: Effect.flatMap(Conversations, (conversations) =>
-															conversations.receive(instance, event, importStart)
-														)
+													: Effect.flatMap(Conversations, (conversations) => {
+															held.flow.idle = false;
+															return conversations.receive(instance, event, importStart);
+														})
 											)
 										).then(() => {}),
 						status: (patch) =>
@@ -627,7 +746,7 @@ export const integrationLinks = (
 						pairing: (pairing) => {
 							if (!held.replaced) {
 								held.pairing = pairing;
-								launch(logged(publish(instance)));
+								launch(logged(moved(held)));
 							}
 						}
 					})
@@ -670,6 +789,7 @@ export const integrationLinks = (
 						}).pipe(Effect.repeat({ until: (again) => !again })),
 						scope
 					);
+				if (value.reconcile !== undefined) yield* Effect.forkIn(reconciling(opened), scope);
 				return opened;
 			});
 		const map = yield* RcMap.make({
@@ -705,7 +825,8 @@ export const integrationLinks = (
 				);
 				leases.set(instance, lease);
 				live.set(instance, opened);
-				yield* publish(instance);
+				yield* moved(opened);
+				yield* resumeSends(opened);
 			});
 		const linked = (instance: string) =>
 			Effect.suspend((): Effect.Effect<Held, BoltError | Fenced> => {
@@ -728,10 +849,30 @@ export const integrationLinks = (
 					return yield* use(yield* acquire(instance, provider, { ...loaded, definition: def }));
 				})
 			);
+		/**
+		 * The link a send goes through. A paired link that is not connected is down (`LINK_DOWN`): the row waits and its
+		 * connect resumes it. An instance with no credentials has nothing to come back, so it fails as `linked` does.
+		 */
+		const sending = (instance: string) =>
+			Effect.gen(function* () {
+				const held = live.get(instance);
+				if (held?.replaced !== true) {
+					if (held?.status.state === 'connected') {
+						held.flow.idle = false;
+						return held;
+					}
+					if (held !== undefined) held.flow.parked = true;
+					if (held !== undefined || (yield* row(instance))?.stored === true)
+						return yield* Effect.fail(
+							new Unavailable({ facility: LINK_DOWN, reason: `'${instance}' is not connected` })
+						);
+				}
+				return yield* linked(instance);
+			});
 		const port: Drivers['Service'] = {
 			available: true,
 			send: (instance, message, attachments) =>
-				linked(instance).pipe(
+				sending(instance).pipe(
 					Effect.mapError(linkFailure(instance)),
 					Effect.flatMap((held) => held.calls.send(message, attachments))
 				),
@@ -885,6 +1026,15 @@ export const integrationLinks = (
 				Stream.unwrap(
 					Effect.gen(function* () {
 						const subscription = yield* PubSub.subscribe(events);
+						yield* Effect.acquireRelease(
+							Effect.sync(() => {
+								watchers++;
+							}),
+							() =>
+								Effect.sync(() => {
+									watchers--;
+								})
+						);
 						const ids =
 							instance === undefined
 								? yield* h

@@ -17,12 +17,12 @@ const TEXT = /^(text\/|application\/(json|csv|xml|[\w.-]+\+(json|xml))$)/;
 const dataUrl = (f: { mime: string; bytes: Uint8Array }) =>
 	`data:${f.mime};base64,${toBase64(f.bytes)}`;
 
-/** One file a tool opened as a chat part: an image as an image, text as text; anything else is read through `ingest`. */
+/** One file a tool opened as a chat part: an image as an image, text as text; anything else is parsed by `read_file`. */
 export function filePart(f: { mime: string; bytes: Uint8Array }, name: string): Json {
 	if (f.mime.startsWith('image/')) return { type: 'image_url', image_url: { url: dataUrl(f) } };
 	if (TEXT.test(f.mime))
 		return { type: 'text', text: `${name} (${f.mime}):\n${new TextDecoder().decode(f.bytes)}` };
-	return { type: 'text', text: `${name} (${f.mime}): read it with ingest, then read_file windows` };
+	return { type: 'text', text: `${name} (${f.mime}): read_file reads it` };
 }
 /** What a file with no parser answers (plan 12 rule 7): the agent builds one, never guesses. */
 export const unparsed = (name: string, mime: string) =>

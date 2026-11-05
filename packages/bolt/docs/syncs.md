@@ -55,8 +55,15 @@ they do not carry chronology ([HTTP semantics](https://www.rfc-editor.org/rfc/rf
 With ETags, fetch the current remote state on a webhook hint. A provider delivering row data directly
 must supply a monotonic sequence or timestamp to reject out-of-order changes. Snapshot completion reconciles missing rows. Partitions keep separate
 cursors; expired history starts a new snapshot. Returned `health` reports lag or retention risk.
+A page with no rows, no deliveries and an unchanged cursor commits nothing, so a quiet source leaves the
+database asleep.
 
-A verified webhook is stored before acknowledgement and wakes that connection's reads, debounced.
+`every` is how often a slot reads, except over a conversation or `items` driver: hints bring that news, so
+a healthy sync reads once a day as a backstop and rests until the next UTC midnight, and a failing one keeps
+its own shorter rest.
+
+A verified webhook is stored before acknowledgement and wakes that connection's reads, debounced, when the
+definition has a read sync. With none, nothing is stored and the delivery is still answered 200.
 `read` also receives stored `deliveries` for providers whose webhook is the data. A lost webhook
 is caught by the next periodic read; duplicate deliveries are acknowledged once.
 

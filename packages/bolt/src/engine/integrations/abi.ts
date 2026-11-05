@@ -33,6 +33,17 @@ const DriverPageSchema = Schema.Struct({
 		})
 	)
 });
+/** A provider's view of one thread (`ReconcilePage`). */
+const ReconcilePageSchema = Schema.Struct({
+	messages: Schema.Array(Schema.Json),
+	complete: Schema.Boolean,
+	since: Schema.optionalKey(
+		Schema.String.check(
+			Schema.makeFilter((at) => (Number.isFinite(Date.parse(at)) ? undefined : 'an instant'))
+		)
+	),
+	bins: Schema.optionalKey(Schema.Array(Schema.Uint8Array))
+});
 const Resources = Schema.Array(Schema.Struct({ id: Schema.String, label: Schema.String }));
 
 /** One instance's link as the engine calls it. */
@@ -52,11 +63,17 @@ export type LinkCalls = {
 		partition: string,
 		cursor: Json | null
 	) => Effect.Effect<typeof DriverPageSchema.Type, PortFailure>;
+	readonly reconcile: (
+		thread: string,
+		since: string
+	) => Effect.Effect<typeof ReconcilePageSchema.Type, PortFailure>;
 	readonly discover: Effect.Effect<typeof Resources.Type, PortFailure>;
 	readonly renew: Effect.Effect<string | null, PortFailure>;
 	readonly webhook: (request: Request) => Effect.Effect<Response, PortFailure>;
 };
 
+/** The `Unavailable.facility` of a send to a paired link that is not connected: the row waits, spending no attempt. */
+export const LINK_DOWN = 'link.down';
 const absent = (member: string) =>
 	Port.unavailable(`link.${member}`, `this link's provider has no ${member}`);
 const decodeLinkFailure = Schema.decodeUnknownOption(
@@ -105,6 +122,7 @@ export function linkCalls(link: Link, run: UrlRunner, instance: string): LinkCal
 		typing = link.typing?.bind(link),
 		request = link.request?.bind(link),
 		read = link.read?.bind(link),
+		reconcile = link.reconcile?.bind(link),
 		discover = link.discover?.bind(link),
 		renew = link.renew?.bind(link),
 		webhook = link.webhook?.bind(link);
@@ -184,6 +202,15 @@ export function linkCalls(link: Link, run: UrlRunner, instance: string): LinkCal
 						Port.fromPromise(
 							(signal) => read(feed, partition, cursor, signal),
 							DriverPageSchema,
+							'link'
+						),
+		reconcile:
+			reconcile === undefined
+				? () => absent('reconcile')
+				: (thread, since) =>
+						Port.fromPromise(
+							(signal) => reconcile(thread, since, signal),
+							ReconcilePageSchema,
 							'link'
 						),
 		discover:

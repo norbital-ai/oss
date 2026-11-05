@@ -9,12 +9,14 @@ const sql = (text: string, ...params: import('../../decl/values.ts').Json[]) => 
 // Replies are matched to the outbound row they answer — a redelivered one again, since a match that failed after its row
 // was stored is what the provider redelivers it for; every send is a queued row `integrations.deliver` delivers. A cleared
 // or deleted chat tombstones its rows up to the clear in one statement, under the same admitted-transcript rule.
+// A webhook is a hint, not the state: `recent` names the threads a link reconciles and `repair` passes what differs
+// from the platform's view of one through this same path.
 import { Clock, Crypto, Effect, Layer, Option, Predicate, Schema } from 'effect';
 import * as EffectArray from 'effect/Array';
 import { teams } from '../manifest.ts';
 import { enqueue, nextDue } from '../runs/queue.ts';
 import type { Json } from '../../decl/values.ts';
-import type { Bindings, DriverEvent, RowData } from '../contracts.ts';
+import type { Bindings, DriverEvent, ReconcilePage, RowData } from '../contracts.ts';
 import { Drivers, Files, Logs, type LogsShape } from '../ports.ts';
 import { Port } from '../port.ts';
 import { TenantDb } from '../db/tenant-db.ts';
@@ -80,6 +82,27 @@ const KEEP = (col: string) =>
 /** A revoke, a delete for me or a cleared chat stamps `deleted_at` on every row; it erases content only where no agent saw it. */
 const TOMBSTONE = `text = CASE WHEN sys_message.role IS NULL THEN '' ELSE sys_message.text END, preview = CASE WHEN sys_message.role IS NULL THEN '' ELSE sys_message.preview END,
 	email = CASE WHEN sys_message.role IS NULL THEN NULL ELSE sys_message.email END`;
+/** What a reconcile walks: threads with activity this recently, this many at most. */
+const RECENT_MS = 7 * 86_400_000,
+	RECENT_THREADS = 200;
+/** The stored rows of a thread a repair compares at most, newest first; an older one stays as it is. */
+const REPAIR_ROWS = 1000;
+/** A message this young may simply not be in the page yet, so it is never called deleted. Above a link call's wall. */
+const SETTLE_MS = 5 * 60_000;
+/**
+ * The rule for a repaired message and an envoy: it is history, which no envoy answers, unless it is new and younger
+ * than this. A sender that recent may still be waiting, so it is admitted as its delivery would have been; anything
+ * older has moved on, and a reply would answer something long past. An edit or a delete never admits.
+ */
+const REPLY_WINDOW_MS = 3_600_000;
+const StoredMessage = Schema.Struct({
+	provider_id: Schema.String,
+	version: Schema.NullOr(Schema.String),
+	origin: Schema.NullOr(Schema.String),
+	deleted: Schema.Boolean,
+	settled: Schema.Boolean
+});
+const decodeInbound = Schema.decodeUnknownOption(InboundMessage);
 export function conversations(cfg: ConversationsConfig) {
 	const { manifest: m, db } = cfg.engine;
 	const uuid = cfg.crypto
@@ -581,6 +604,86 @@ export function conversations(cfg: ConversationsConfig) {
 				yield* replied(inst.id, got);
 		}
 	});
+	const recent = Effect.fn('Conversations.recent')(function* (instance: string) {
+		const since = new Date(Date.parse(yield* clock) - RECENT_MS).toISOString();
+		// one probe of (conversation, seq) per conversation of the instance: its newest row says when it was last active
+		const rows = yield* db.rows(Schema.Struct({ thread: Schema.String }), {
+			text: `SELECT c.thread FROM sys_conversation c CROSS JOIN LATERAL
+			(SELECT m.created_at FROM sys_message m WHERE m.conversation = c.id ORDER BY m.seq DESC LIMIT 1) newest
+			WHERE c.integration = $1 AND c.thread IS NOT NULL AND newest.created_at >= $2::timestamptz
+			ORDER BY newest.created_at DESC LIMIT ${RECENT_THREADS}`,
+			params: [instance, since]
+		});
+		return { since, threads: rows.map((row) => row.thread) };
+	});
+	const repair = Effect.fn('Conversations.repair')(function* (
+		instance: string,
+		thread: string,
+		since: string,
+		page: ReconcilePage,
+		expectedImportStart?: ImportStart | null
+	) {
+		const inst = yield* instanceOf(instance),
+			now = yield* clock,
+			at = Date.parse(now);
+		const stored = yield* db.rows(StoredMessage, {
+			text: `SELECT provider_id, version, origin, deleted_at IS NOT NULL AS deleted,
+			sent_at >= $4::timestamptz AND sent_at < $5::timestamptz AS settled FROM sys_message
+			WHERE conversation = $1 AND integration = $2 AND provider_id IS NOT NULL AND sent_at >= $3::timestamptz
+			ORDER BY seq DESC LIMIT ${REPAIR_ROWS}`,
+			params: [
+				conversationId(instance, thread),
+				instance,
+				since,
+				page.since !== undefined && Date.parse(page.since) > Date.parse(since) ? page.since : since,
+				new Date(at - SETTLE_MS).toISOString()
+			]
+		});
+		const rows = new Map(stored.map((row) => [row.provider_id, row])),
+			seen = new Set<string>(),
+			live: Json[] = [],
+			history: Json[] = [];
+		for (const message of page.messages) {
+			const decoded = decodeInbound(message);
+			const inbound =
+				Option.isNone(decoded) || !Predicate.isObject(message)
+					? null
+					: normalizeInbound(inst.kind, decoded.value, message, true, now);
+			// the path it belongs to records a malformed message
+			if (inbound === null) {
+				history.push(message);
+				continue;
+			}
+			seen.add(inbound.id);
+			const row = rows.get(inbound.id);
+			// a page may echo what bolt sent (no `origin`): that row is the message already
+			if (
+				row === undefined
+					? inbound.deleted
+					: row.origin === null ||
+						row.deleted ||
+						(!inbound.deleted && row.version !== null && row.version >= inbound.version)
+			)
+				continue;
+			(row === undefined && Date.parse(inbound.sentAt) >= at - REPLY_WINDOW_MS
+				? live
+				: history
+			).push(message);
+		}
+		if (page.complete)
+			for (const row of stored)
+				if (row.origin !== null && row.settled && !row.deleted && !seen.has(row.provider_id))
+					history.push({ id: row.provider_id, deleted: true });
+		const bins = page.bins === undefined ? {} : { bins: page.bins };
+		if (live.length > 0)
+			yield* receive(instance, { kind: 'messages', messages: live, ...bins }, expectedImportStart);
+		if (history.length > 0)
+			yield* receive(
+				instance,
+				{ kind: 'messages', messages: history, history: true, ...bins },
+				expectedImportStart
+			);
+	});
 	const send = Effect.fn('Agents.send')(function* (
 		to: string,
 		message: Json,
@@ -691,6 +794,8 @@ export function conversations(cfg: ConversationsConfig) {
 	});
 	return {
 		receive,
+		recent,
+		repair,
 		send,
 		/** The notices' platform run (rule 48): `runs.platform`. */
 		handlers: { [NOTIFY]: notify }

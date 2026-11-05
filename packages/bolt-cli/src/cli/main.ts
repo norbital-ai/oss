@@ -30,6 +30,9 @@ const print = (errors: readonly CheckDiagnostic[]) =>
 			`${error.code} ${error.message}${error.help === undefined ? '' : `\n${error.help}`}`
 		)
 	).pipe(Effect.andThen(Console.error(`${errors.length} errors`)));
+/** An author's failure: its diagnostics, or with none its message, never a bare count. */
+const failed = (error: AuthorErrors) =>
+	error.errors.length === 0 ? Console.error(error.message) : print(error.errors);
 const dir = Argument.String('dir').pipe(Argument.withDefault('.'));
 const log: Log = (line) => console.log(line);
 const json = Flag.Boolean('json').pipe(
@@ -43,7 +46,7 @@ const noTypes = Flag.Boolean('no-types').pipe(
 /** A job reads a failed run's errors from the last stderr line, `{"errors":[…]}`. */
 const reported = (json: boolean) => (error: AuthorErrors) =>
 	json
-		? print(error.errors).pipe(
+		? failed(error).pipe(
 				Effect.andThen(Console.error(JSON.stringify({ errors: error.errors }))),
 				Effect.andThen(Effect.fail(error))
 			)
@@ -92,7 +95,7 @@ const watching = (dir: string) =>
 			const serve = yield* tethered(root, log);
 			const first = yield* buildWorkspace(root, options).pipe(
 				Effect.map((first): Built | undefined => first),
-				Effect.catchTag('AuthorErrors', (error) => print(error.errors).pipe(Effect.as(undefined)))
+				Effect.catchTag('AuthorErrors', (error) => failed(error).pipe(Effect.as(undefined)))
 			);
 			if (first !== undefined) yield* serve(first);
 			yield* watchWorkspace(root, options, serve, first).pipe(
@@ -261,7 +264,7 @@ export const main = (argv: readonly string[]) =>
 		argv[0] === 'test' ? testArgv(argv.slice(1)) : argv
 	).pipe(
 		Effect.as(0),
-		Effect.catchTag('AuthorErrors', (error) => print(error.errors).pipe(Effect.as(1))),
+		Effect.catchTag('AuthorErrors', (error) => failed(error).pipe(Effect.as(1))),
 		Effect.catch((error) => Console.error(error).pipe(Effect.as(2)))
 	);
 if (

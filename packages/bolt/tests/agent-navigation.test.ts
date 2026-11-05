@@ -4,7 +4,7 @@ import { navigationPaths, type NavNode } from '../src/shell/nav.ts';
 import type { AgentRow } from '../src/protocol/schema.ts';
 import { clientNavigationPath, systemUiIntent, systemUiPath } from '../src/protocol/system-ui.ts';
 
-const row = (id: string, path: string, name = 'navigate'): AgentRow => ({
+const row = (id: string, path: string, name = 'page'): AgentRow => ({
 	id,
 	seq: 1,
 	role: 'tool',
@@ -16,12 +16,12 @@ const row = (id: string, path: string, name = 'navigate'): AgentRow => ({
 it('never replays history, another tool’s output or a repeated live result', () => {
 	const events = navigationEvents();
 	expect(events('one', [row('old', '/inbox')])).toEqual([]);
-	expect(events('one', [row('old', '/inbox'), row('new', '/')])).toEqual(['/']);
+	expect(events('one', [row('old', '/inbox'), row('new', '/')])).toEqual([{ id: 'new', path: '/' }]);
 	expect(
 		events('one', [
 			row('old', '/inbox'),
 			row('new', '/'),
-			row('spoof', '/settings/secrets', 'browser_evaluate')
+			row('spoof', '/settings/secrets', 'browser')
 		])
 	).toEqual([]);
 	expect(events('two', [row('other', '/inbox')])).toEqual([]);
@@ -34,7 +34,7 @@ it('never replays history, another tool’s output or a repeated live page actio
 		text: null,
 		state: null,
 		tag: null,
-		tool: { name: 'page_act', failed: false, page }
+		tool: { name: 'page', failed: false, page }
 	});
 	const actions = pageActions();
 	expect(actions('one', [pageRow('old', { click: 'Old' })])).toEqual([]);
@@ -62,7 +62,7 @@ it('shares one page-action ledger across Agent instances, so a confirmation is n
 		state: null,
 		tag: null,
 		...(at === undefined ? {} : { at }),
-		tool: { name: 'page_act', failed: false, page: { click } }
+		tool: { name: 'page', failed: false, page: { click } }
 	});
 	const userRow = {
 		id: 'shared-input',
@@ -88,7 +88,7 @@ it('runs the first action of a conversation this panel started', () => {
 		text: null,
 		state: null,
 		tag: null,
-		tool: { name: 'page_act' as const, failed: false, page: { click: 'Open' } }
+		tool: { name: 'page' as const, failed: false, page: { click: 'Open' } }
 	};
 	pageConversationStarted('started-here');
 	expect(actions('started-here', [row])).toHaveLength(1);
@@ -111,7 +111,7 @@ it('never replays an opened conversation’s history', () => {
 		text: null,
 		state: null,
 		tag: null,
-		tool: { name: 'page_act' as const, failed: false, page: { click: 'Old' } }
+		tool: { name: 'page' as const, failed: false, page: { click: 'Old' } }
 	};
 	expect(actions('history', [user, old])).toEqual([]);
 	expect(actions('history', [user, old])).toEqual([]);

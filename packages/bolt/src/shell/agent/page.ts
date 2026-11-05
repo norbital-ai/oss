@@ -67,6 +67,50 @@ export function pageClickable(text: string): HTMLElement | null {
 	);
 }
 
+/** What the page shows, for Norbius: headings and controls as they read, never a field's value. */
+export function pageScreen(): string {
+	const seen = pageRoots()
+		.flatMap((root) => [
+			...root.querySelectorAll<HTMLElement>(
+				'h1, h2, h3, [role="heading"], th, a[href], button, [role="button"], [role="tab"]'
+			)
+		])
+		.filter((el) => el.getClientRects().length > 0)
+		.map(pageLabel)
+		.filter((label) => label !== '');
+	return [...new Set(seen)].join(' · ').slice(0, 1200);
+}
+
+/** The first visible thing reading `text`: a control, else a heading, column or label. */
+export function pageMark(text: string): HTMLElement | null {
+	const needle = normalized(text);
+	return (
+		pageClickable(text) ??
+		pageRoots()
+			.flatMap((root) => [
+				...root.querySelectorAll<HTMLElement>('h1, h2, h3, [role="heading"], th, label')
+			])
+			.find((el) => el.getClientRects().length > 0 && normalized(pageLabel(el)).includes(needle)) ??
+		null
+	);
+}
+
+/** Whether something else, such as Norbius's panel, sits over the middle of `el`. */
+export function pageCovered(el: HTMLElement): boolean {
+	const box = el.getBoundingClientRect(),
+		top = document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2);
+	return top === null || !(el.contains(top) || top.contains(el));
+}
+
+/** Brings something to the person's eye: scrolled to, then ringed for a few seconds. */
+export function ringOn(el: HTMLElement): void {
+	el.scrollIntoView({ block: 'center', behavior: 'smooth' });
+	el.animate(
+		{ outline: ['3px solid var(--primary)', '3px solid transparent'], outlineOffset: ['3px', '3px'] },
+		{ duration: 6000, easing: 'steps(6, jump-none)' }
+	);
+}
+
 /** A visible, writable text field in the page content, matched by its accessible label; never a secret or file field. */
 export function pageField(label: string): HTMLElement | null {
 	const needle = normalized(label);

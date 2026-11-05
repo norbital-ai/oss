@@ -1,120 +1,63 @@
 ---
 name: bolt-primer
-description: How a Bolt workspace works, what the platform already renders, and which native mechanism owns each job, so a change reuses it instead of rebuilding it.
+description: Build a Bolt workspace with no other skill - source roles, contract queries, authoring order, pitfalls.
 ---
 
-## Start with the compiler
+This page and `workspace_lang` are enough for a normal build. Read a reference only for a diagnostic this page does not resolve. Ask for several types in one `workspace_lang` call.
 
-`workspace_lang` is the source of truth for the installed version: `diagnostics` (one file, or the whole program
-without `path`), `hover`, `type`, `completions` on an import, `definition`, `references` and `signature`. A type
-expression names a type with `import('@norbital-ai/bolt').X` and a value with `typeof import('@norbital-ai/bolt').x`;
-completions enumerate exports you cannot name yet; hover and type show the compiler's JSDoc, examples and deprecation
-guidance. Bolt's contracts are written in those comments, and its source is not in the workspace, so read them through
-the tools: `workspace_api` answers a type's comment and every member's type and comment at once, `X['field']` narrows to
-one, and `Parameters<typeof import('@norbital-ai/bolt').automation>[1]` reads what a function takes. After every edit
-run `diagnostics`; `workspace_validate` is the build and preview; `workspace_test` runs the
-test kit; `workspace_diagnose` is the full check. There is no separate docs tool.
+## Roles
 
-Before writing, read the authoring skill's reference for the thing you are about to author; its routing table names
-each. A clean build is not a test, and a compatible type is not proof of runtime authority.
+A `+` file is a compiler role, default-exporting its declaration; its path is its name (`^[a-z][a-z0-9_]*$`, folders singular). Other files are plain modules. Under `src/`:
 
-## The workspace
+- `+workspace.ts` `workspace(spec)`: zone, locale, currency, apps, AI, connections
+- `+secrets.ts` `secrets(spec)`: secret names
+- `data/model/<name>/+model.ts` `model(name, spec)`: fields, reads, writes, state, search, syncs. Folders nest; the leaf names it. `+representation.svelte` beside it: record view
+- `data/custom_field/<name>/+definition.ts` `customField(name, spec)`, `+renderer.svelte`: value type
+- `access_control/policy/+<name>.policy.ts` `policy(spec)`: what holders may do
+- `access_control/team/+team.ts` `team(spec)`: team handles to policies
+- `automation/+<name>.automation.ts` `automation(name, spec)`: job with its own policies
+- `integration/<name>/+integration.ts` `integration(name, spec)`, `+integration.svelte`: connection, setup
+- `app/<app>/+app.ts` `app(name, spec)`: label and `pages`; `+group.ts` `group(name, spec)`
+- `app/<app>/+<page>.page.svelte`: page, `import { bolt } from '$bolt'`; `+<page>.page.server.ts` `pageServer(spec)`: loader
+- `kiosk/<k>/+kiosk.ts` `kiosk(name, spec)`: standalone surface, its own pages
+- `agent/+agent.md`, `agent/skill/<s>/+skill.md`: brief, skill
+- `agent/envoy/+<id>.envoy.ts` `envoy(spec)`; `agent/mcp/+<n>.mcp.ts` `mcp(spec)`
+- `i18n/+messages.ts` `messages(spec)`, `+<locale>.messages.ts`
 
-Everything is source under src/; a `+` file is a compiler role and its path is its name. Names match `^[a-z][a-z0-9_]*$`.
-`+workspace.ts` (zone, locale, connections); `data/model/<name>/+model.ts` with an optional `+representation.svelte` (a
-child model nests as `data/model/<owner>/<child>/+model.ts`; the leaf folder names the model); `data/custom_field/<name>/`
-(`+definition.ts`, optional `+renderer.svelte`); `access_control/policy/+<name>.policy.ts` and `team/+team.ts`;
-`integration/<name>/+integration.ts` (+ optional `.svelte`); `agent/+agent.md`, `envoy/+<id>.envoy.ts`,
-`skill/<name>/+skill.md`; `automation/+<name>.automation.ts`; `app/<app>/+app.ts` with `+<page>.page.svelte`
-(`import { bolt } from '$bolt'`); `kiosk/<k>/+kiosk.ts`; `i18n/+messages.ts` and `+<locale>.messages.ts`. Anything
-without `+` is an ordinary module (`src/lib`). `.norbital/` is generated. The preview build writes the next migration
-into the change: never hand-write one.
+Beside `src/`: `seed/+seeder.ts` `seeder(spec)`; rows `seed/public/**/<model>.json`, `seed/test/**/<model>.json`; `tests/*.test.ts`; `assets/`.
 
-## The model is the contract
+## Contracts
 
-A model is the entity and its exposed contract, not a screen. Declare what it stores (`fields`, `ref` fields with
-`inverse`, keys, checks, computed fields, `search`) and what callers may do (`read` outputs and layers, `create`,
-`update`, `delete`, state/enum `transitions`, write callbacks, `notify`, `effect`, `syncs`). A `read` is the `default`
-output; `outputs` are narrower named audiences. A policy decides which outputs and rows a caller reads and which
-columns and state moves they write; a model declaration alone never grants access.
+`bolt-contract` is the API authority: `skill { name: 'bolt-contract', file: 'model.md' }`, one generated card per role (model, access, automation, sync, page, test). Read a role's card once, before writing that role.
 
-Prefer fewer, richer entities. Use a built-in field kind first; a `customField` for a reusable stored structure with
-its own validation/renderer; typed `json` with a `shape` for a value that belongs to its parent; a separate model only
-when the thing needs independent identity, lifecycle, permissions, history or relational queries. Store configuration
-in authorized runtime records, not in source constants. Never put a credential, token or secret value in a model field.
+`workspace_lang` answers only what a card leaves out:
 
-## Access, approvals and state
+- A type: `{ op:'type', type:["import('@norbital-ai/ui').TableProps"] }`, several at once. `import('pkg').X` works only for exported types; a value is `typeof import('pkg').x`. Packages: bolt, ui, std, bolt-cli.
+- A function's spec: `Parameters<typeof import('pkg').fn>[1]`; `[1]` for `(name, spec)`, `[0]` for `(spec)`. Narrow with `X['field']`.
+- `completions`, `hover`, `signature` need path, line, column; `buffers` holds an unsaved probe.
+- Live names: `describe_workspace`, `workspace_list`.
 
-A `policy` grants per model: read outputs and row filters, write columns, state moves, capabilities (apps, host tools,
-MCP), automations it may start and limits. Teams hold policies; the policy graph scopes data without inheriting
-authority. Direct permission executes; without it, a policy's `check` may return `ctx.approve(flow)` and the write is
-held as a native approval request. The flow's named steps and approvers are snapshotted; decisions are `approve`,
-`reject` and `requestChanges`; rejection restores the checkpoint, and the requester's next Save resubmits requested
-changes. Use the record sheet's native approval panel; never add a second approval control or re-check grants in a page.
-State locks, enum transitions, `check`, `noOverlap` and required fields are enforced by the engine and shown by the
-native form. A `requestor` variable is the acting member; an automation's `requestor` is not the person who started it.
+## Protocol
 
-## Automations
+1. Author in order: model, access, automation or sync, page, tests. Add a page only for a task the model's table and record sheet do not cover.
+2. Write everything in one `workspace_write` with many changes.
+3. `workspace_validate` runs build, pages, types and tests together; `only` runs one part. Fix what it names. Tests `empty` proves nothing: every automation and refused state carries a test.
+4. `workspace_try` runs each automation once on the preview and reads what it changed. A preview binds no integration links: a sync's decoding is proved in a test. After the merge, create its connection on live with `sys_integration.create { integration, name }`, start it, and read the rows.
+5. `workspace_merge` with the head commit, a summary and a ledger line per capability: what implements it, or `skip: reason`.
 
-An `automation` is a job the reserved system identity runs with its declared `policies` (required), typed `input` and
-`output`, an optional `on` (cron or webhook), retries and concurrency. `ctx.run.trigger` records `system` and its cause
-(cron, webhook, effect, schedule) or the `person`, plus the agent conversation when Norbius started it; check it
-explicitly when business rules depend on the starter. A person who may start a job does not lend it their authority.
-Every startable automation appears in the native Command Center Automations with its typed form; a page form is
-optional. Use an automation for external I/O, a scheduled or webhook job, and a business operation that needs its own
-authority and run history. A model `effect` is the work that follows a committed write, runs as the writer and holds no
-policy of its own. `ctx.schedule` queues a follow-up; `bolt.start` starts one from a page.
+## Rules
 
-## Infer and decide
+- A model exposes guarded verbs only. A business operation is an automation.
+- A policy can only grant a verb the model declares; it filters rows, never shape.
+- An automation runs with its declared `policies`, never its starter's; `requestor.*` there matches nothing.
+- Effectful bodies are `function*` and `yield*` their `ctx` Effects.
+- Decimals in policy and model code use `dec` values from the decimal module, never plain numbers.
+- Model key options (`key`, `unique` fields, `noOverlap` key) take arrays.
+- `seed/test/assets.json` and `seed/public/assets.json` are the reserved asset list: never name seed rows that, even for a model called assets.
+- Migrations are generated by the build: never hand-write one. Never edit `.norbital/`.
+- Credentials never enter source, seeds or model fields.
+- Never rebuild search, filters, paging, import/export, approvals, history or label maps: the views render them.
 
-`ctx.ai.sys_1.decide` answers typed choice/score questions from text and images; `ctx.ai.sys_2.infer` returns a typed
-structure (or calls declared host tools); `ctx.ai.embed` fills a vector field. These are proposals: a write still runs
-through the model's grants, checks and approvals, and a person confirms anything that changes money or access. Hosts do
-not run an LLM themselves; an integration names the hosted provider and its sealed credential. Use scripted provider
-output in tests, never a live model.
-
-## Sync engine
-
-A model's `syncs` declares exchange. A file sync uses `with: 'file'`, `parser` (built-in or typed `parse`), optional
-`context`, and inline `read`/`write` bodies; the native toolbar then owns Import, Download template and Export. A
-remote sync names an integration `with`, an optional `every`, and typed `read`/`write`; it runs as a job, and only
-returned source fields change. Workbook importers, CSV feeds and repeated exports belong here, not in a page script or
-an ad-hoc automation. `ctx.sync` starts a named sync.
-
-## The UI is already there
-
-`Table` of a model renders the toolbar (title, description, search, filter/sort, column menu, CSV export, ⚡ actions,
-New), selection, paging, empty states, approvals and the record sheet. `CustomView` draws any other body over rows with
-the same toolbar; `Board`, `Map`, `Pivot`, `Matrix`, `EventCalendar` and `Chart` take the same toolbar. `AppShell`
-renders the page hero and the page scope in `actions`; pages come from `+app.ts`. `RecordShell` renders a model's
-representation (or generated fields) with the state pill, lock banner, approval panel, history and runs. A
-`+representation.svelte` receives `{ view }` or reads `useRecordView()`; it edits the record's own facts and uses
-`ChildGrid` for related rows. `Form` renders authorized fields, defaults, required checks, state moves and approval
-routing. Every built-in kind renders and edits itself in cells, forms and history: text formats, money, numbers, dates,
-periods, enum/state words, files, points, links and typed JSON. Never hand-build search, filters, paging, import/export,
-history, approvals or a label map. Use a chart only when it answers a question a table cannot; read `ui-standard.md`.
-
-## Implicit mechanisms: never rebuild
-
-The shell owns the approval inbox, notifications (`notify`), history/restore, audit, runs, the finder (models with
-`search.text`), Settings (people, organisation, audit, automation runs, integrations, secrets) and Studio. A declared
-file sync adds Import/Export/Template. A model's `notify` receives every write and approval event. A page opens a
-record through `RecordShell`; it never imports a role module or writes its own sheet. Permissions, locks, transitions
-and required fields are enforced, not advisory.
-
-## A rebuild or a new capability? Do the pass
-
-For a repository rebuild read the `authoring-tenant-workspace` skill's `references/repository-rebuild.md`.
-Before authoring, list every source capability and choose its Bolt mechanism: model/relationship; read output/layer;
-guarded write/check/approval; page and task flow; representation/record sheet; automation; file or remote sync;
-custom field vs built-in kind vs typed JSON vs child model; chart/summary; team/policy; test. A skipped category is a
-recorded decision with a reason, never a silent omission. A rebuild with no automations, syncs, charts or
-representations should say why for each.
-
-## References
-
-The `authoring-tenant-workspace` skill's routing table is the index. Read only the reference the task needs: model boundaries,
-models-and-modeling, data-access, apps-and-server-roles, built-ins, app-structure, ui-standard,
-controller-surfaces, layout-and-scrolling, padding-and-spacing, typography, generated-and-build,
-hosts-and-facilities, internationalization, template-repository, studio, repository-rebuild. Policy and approval
-behaviour is in `norbital-platform`; tests are in `authoring-test-suites`.
+Detail: the `authoring-tenant-workspace` skill indexes every reference.
+- A test sets no `timeout` option and never waits on the wall clock: the test lint refuses the run even when every case passes.
+- Porting a system: `reference` its repository first, then read its schema, routes, jobs and permissions with `read_file` (a script over `tool('read_file', …)` reads many at once). Inventory every capability, map each to a Bolt mechanism, build from that, never from memory of the product. Import and export carry over as a file sync per model that had them.

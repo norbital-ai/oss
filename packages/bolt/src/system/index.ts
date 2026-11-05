@@ -22,6 +22,7 @@ import m_sys_session from './data/model/sys_session/+model.ts';
 import m_sys_sync from './data/model/sys_sync/+model.ts';
 import m_sys_sync_row from './data/model/sys_sync_row/+model.ts';
 import m_sys_user from './data/model/sys_user/+model.ts';
+import i_chat from './integration/chat/+integration.ts';
 import i_discord from './integration/discord/+integration.ts';
 import i_email from './integration/email/+integration.ts';
 import i_slack from './integration/slack/+integration.ts';
@@ -1548,6 +1549,12 @@ export type SystemNames = {
 		};
 	};
 	integrations: {
+		chat: {
+			spec: {
+				description: 'Any other chat platform: Teams, Messenger, LINE and more. A connection picks one.';
+				driver: 'chat';
+			};
+		};
 		discord: {
 			spec: {
 				description: 'Discord: a bot in a server, its channels and direct messages.';
@@ -1622,6 +1629,7 @@ export const SYSTEM: {
 		)
 	),
 	integrations: {
+		chat: i_chat.spec,
 		discord: i_discord.spec,
 		email: i_email.spec,
 		slack: i_slack.spec,

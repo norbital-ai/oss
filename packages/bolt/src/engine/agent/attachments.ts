@@ -56,7 +56,7 @@ export const attachmentsFor = Effect.fn('Agents.attachments')(function* (
 
 /**
  * The host-independent attachment reader: an image as model-compatible bytes, a text file as its text. Every other file
- * is read through `ingest` (plan 12), never here.
+ * is parsed by `read_file` (plan 12), never here.
  */
 export function fileAttachments(
 	db: TenantDbShape,
@@ -77,7 +77,7 @@ export function fileAttachments(
 				name = ref.name ?? '';
 			if (!mime.startsWith('image/') && !TEXT.test(mime))
 				return yield* refused(
-					`${name || 'this file'} (${mime}) is read through ingest: call ingest { id: '${ref.id}' }, then read_file { output } windows it`
+					`${name || 'this file'} (${mime}): read_file { id: '${ref.id}' } parses it`
 				);
 			const bytes = yield* files.get(stored.value.key, MODEL_FILES.bytes);
 			// MIME owns visual reads: a model's format guess must not hide the original evidence.
@@ -95,7 +95,7 @@ export function fileAttachments(
 				text: text.slice(0, TEXT_CHARS),
 				...(text.length > TEXT_CHARS
 					? {
-							truncated: `only the first ${TEXT_CHARS} of ${text.length} characters are shown; the rest: ingest { id: '${ref.id}' } and read_file windows`
+							truncated: `only the first ${TEXT_CHARS} of ${text.length} characters are shown; read_file { id: '${ref.id}', from } reads on`
 						}
 					: {})
 			};

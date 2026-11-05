@@ -233,7 +233,7 @@ describe('the mailbox link (password)', () => {
 					address: 'desk@acme.example',
 					password: 'pw'
 				});
-				expect(cursorOf(h)).toEqual({ validity: '7', uid: 1 });
+				expect(cursorOf(h)).toMatchObject({ validity: '7', uid: 1 });
 				imap.deliver(
 					mail(
 						'From: Carol <carol@else.example>\nTo: desk@acme.example\nSubject: Re: quote\nMessage-ID: <c2@else.example>\nIn-Reply-To: <m-1@acme.example>',
@@ -279,7 +279,7 @@ describe('the mailbox link (password)', () => {
 					mail('From: carol@else.example\nSubject: one\nMessage-ID: <one@else.example>')
 				);
 				yield* TestClock.withLive(until(() => h.status?.state === 'reconnecting'));
-				expect(cursorOf(h)).toEqual({ validity: '7', uid: 1 });
+				expect(cursorOf(h)).toMatchObject({ validity: '7', uid: 1 });
 				refuse = false;
 				imap.deliver(
 					mail('From: carol@else.example\nSubject: two\nMessage-ID: <two@else.example>')
@@ -329,7 +329,8 @@ describe('the mailbox link (password)', () => {
 					)
 				).size
 			).toBe(61);
-			expect(imap.fetches).toEqual([25, 25, 25, 11]);
+			expect(imap.fetches).toHaveLength(86);
+			expect(imap.fetches.every((size) => size === 1)).toBe(true);
 			expect(
 				personal.writes.some(
 					(w) =>

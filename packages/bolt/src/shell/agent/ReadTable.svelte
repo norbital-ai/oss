@@ -14,9 +14,15 @@
 		if (!object(value)) return [];
 		return Object.entries(value).flatMap(([name, held]) => {
 			if (Array.isArray(held))
-				return [{ name, rows: held as readonly Row[], total: held.length, next: null }];
+				return [
+					{ name, rows: held as readonly Row[], total: held.length, next: null as string | null }
+				];
 			if (!object(held) || !Array.isArray(held.rows)) return [];
-			const rows = held.rows.filter(object) as readonly Row[];
+			// a grouped row's key is its columns
+			const rows: readonly Row[] = (held.rows.filter(object) as readonly Row[]).map(
+				({ key, ...row }) =>
+					object(key) ? { ...key, ...row } : key === undefined ? row : { key, ...row }
+			);
 			return [
 				{
 					name,

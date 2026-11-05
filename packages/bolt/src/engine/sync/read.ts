@@ -9,7 +9,8 @@
 // new cycle of the id map: it begins at a read from no cursor (a first read, `retained: false`, a changed declaration)
 // or a page marked `snapshot: 'begin'`; after the page marked `'end'` the records of older cycles are deleted, 1000 at a
 // time, resumably. One failing instance never holds the others back; its health lands on `sys_integration.status.health`
-// only when it changes.
+// only when it changes. A sync over a driver that pushes (a conversation's messages, a calendar's items) hears its news
+// from hints, so while healthy its slots rest until tomorrow; a page that found nothing and moved nothing commits nothing.
 import { Clock, Effect, Predicate, Schema, Struct } from 'effect';
 import { dec } from '@norbital-ai/std/decimal';
 import { canonical, databaseValue, q, sha256Hex } from '@norbital-ai/store';
@@ -26,6 +27,7 @@ import { Chain, GATED } from '../write/sql.ts';
 import { filesOf, stableId } from '../conversations/store.ts';
 import {
 	conversationOf,
+	definitionOf,
 	instancesOf,
 	integrationBody,
 	type Instance
@@ -59,6 +61,8 @@ const restEnd = (failures: number, now: number) => {
 };
 const restOf = (health: Health | null | undefined) =>
 	health?.retryAt === undefined ? 0 : Date.parse(health.retryAt);
+/** The UTC midnight after `at`: a whole multiple, so a workspace's resting syncs wake its database together. */
+const dayAfter = (at: number) => (Math.floor(at / DAY) + 1) * DAY;
 const SyncRowSchema = Schema.Record(Schema.String, Schema.Json).check(
 	Schema.makeFilter((row) =>
 		(row['$id'] === undefined || typeof row['$id'] === 'string') &&
@@ -98,8 +102,11 @@ const StoredState = Schema.Struct({
 	...StateSchema.fields,
 	sync: Schema.String,
 	instance: Schema.String,
-	partition: Schema.String
+	partition: Schema.String,
+	last_read_at: Schema.NullOr(Schema.String)
 });
+type StoredRow = typeof StoredState.Type;
+const STORED_STATE = `sync, instance, partition, cursor, cycle, phase, health, digest, version, last_read_at::text AS last_read_at`;
 /** One id map entry a page writes: the remote row, its record and the remote version last seen. */
 type Mark = {
 	readonly rid: string;
@@ -585,6 +592,18 @@ export function makeRead(e: SyncEngine) {
 				continue;
 			}
 			const { page, consumed } = yield* read(x, partition, state.cursor);
+			// nothing arrived and nothing moved: no write, so a quiet source leaves the database asleep
+			if (
+				stored?.digest === digest &&
+				page.rows.length === 0 &&
+				consumed.length === 0 &&
+				!page.more &&
+				page.snapshot === undefined &&
+				page.retained === undefined &&
+				canonical(page.cursor) === canonical(state.cursor) &&
+				canonical(page.health ?? READY) === canonical(state.health)
+			)
+				return { state, pages };
 			if (page.retained === false) {
 				if (state.cursor === null)
 					return yield* Effect.fail(
@@ -640,6 +659,27 @@ export function makeRead(e: SyncEngine) {
 	};
 	/** What this generation last learned: each resting sync's end, so a slot in its rest asks no database. */
 	const known = new Map<string, number>();
+	/** When this generation last read each partition: a quiet read commits nothing, so `last_read_at` stands still. */
+	const lastRead = new Map<string, { readonly instance: string; readonly at: number }>();
+	const readKey = (s: RemoteSync, instance: string, partition: string) =>
+		JSON.stringify([s.name, instance, partition]);
+	/** A driver that pushes tells a sync when there is news; its slots are a daily backstop against a lost hint. */
+	const pushes = (s: RemoteSync) => {
+		const definition = definitionOf(m, s.definition);
+		if (definition === undefined) return false;
+		const driver = DRIVERS[definition.driver];
+		return 'conversation' in driver || 'items' in driver;
+	};
+	/** When a slot may read this partition: after a failing read's rest, and a healthy pushed sync from tomorrow. */
+	const readableAt = (s: RemoteSync, instance: string, partition: string, row?: StoredRow) => {
+		if (row === undefined || row.health?.state === 'attention' || !pushes(s))
+			return restOf(row?.health);
+		const read = Math.max(
+			row.last_read_at === null ? 0 : Date.parse(row.last_read_at),
+			lastRead.get(readKey(s, instance, partition))?.at ?? 0
+		);
+		return read === 0 ? 0 : dayAfter(read);
+	};
 	/**
 	 * When a sync with nothing to read next has something: the first of its connections' rests ending, or tomorrow with
 	 * no connection at all. `undefined` while one can read. Asks the database only when it is awake or the rest is over.
@@ -654,7 +694,7 @@ export function makeRead(e: SyncEngine) {
 					(i) => i.active && i.integration === s.definition
 				);
 				const rows = yield* db.rows(StoredState, {
-					text: `SELECT sync, instance, partition, cursor, cycle, phase, health, digest, version FROM sys_sync WHERE sync = $1`,
+					text: `SELECT ${STORED_STATE} FROM sys_sync WHERE sync = $1`,
 					params: [s.name]
 				});
 				return { instances, rows };
@@ -662,8 +702,11 @@ export function makeRead(e: SyncEngine) {
 		);
 		const ends = stored.instances.flatMap((inst) =>
 			partitionsOf(s, inst).map((partition) =>
-				restOf(
-					stored.rows.find((row) => row.instance === inst.id && row.partition === partition)?.health
+				readableAt(
+					s,
+					inst.id,
+					partition,
+					stored.rows.find((row) => row.instance === inst.id && row.partition === partition)
 				)
 			)
 		);
@@ -679,7 +722,7 @@ export function makeRead(e: SyncEngine) {
 	) {
 		// live environments only: a host binds links there and nowhere else, so a preview or a fork reads nothing, records
 		// no health and wakes no automation on its instances
-		if (!e.links.available) return { pages: 0 };
+		if (!e.links.available) return { pages: 0, unlinked: true };
 		const runId = start.id,
 			// only a slot rests: its own retries, and a person's start, read
 			slot = start.cause === 'cron' && start.attempts === 1;
@@ -690,9 +733,9 @@ export function makeRead(e: SyncEngine) {
 			db,
 			only === undefined ? { integration: s.definition } : { ids: [only] }
 		)).filter((i) => i.active && i.integration === s.definition);
-		if (instances.length === 0) return { pages: 0 };
+		if (instances.length === 0) return { pages: 0, unconnected: true };
 		const stored = yield* db.rows(StoredState, {
-			text: `SELECT sync, instance, partition, cursor, cycle, phase, health, digest, version FROM sys_sync
+			text: `SELECT ${STORED_STATE} FROM sys_sync
 			WHERE instance IN (SELECT jsonb_array_elements_text($1::jsonb))`,
 			params: [JSON.stringify(instances.map((i) => i.id))]
 		});
@@ -706,7 +749,7 @@ export function makeRead(e: SyncEngine) {
 			const states = new Map(
 				rows
 					.filter((row) => row.sync === s.name)
-					.map((row): [string, State] => [row.partition, row])
+					.map((row): [string, StoredRow] => [row.partition, row])
 			);
 			const work = session(
 				s,
@@ -733,10 +776,18 @@ export function makeRead(e: SyncEngine) {
 				for (partition of typeof args['partition'] === 'string'
 					? partitions.filter((p) => p === args['partition'])
 					: partitions) {
-					if (slot && restOf(states.get(partition)?.health) > (yield* Clock.currentTimeMillis))
+					if (
+						slot &&
+						readableAt(s, inst.id, partition, states.get(partition)) >
+							(yield* Clock.currentTimeMillis)
+					)
 						continue;
 					const done = yield* partitionRun(work, partition, states.get(partition), digest);
 					pages += done.pages;
+					lastRead.set(readKey(s, inst.id, partition), {
+						instance: inst.id,
+						at: yield* Clock.currentTimeMillis
+					});
 					healths.set(`${s.name}\u0000${partition}`, done.state.health);
 				}
 			}).pipe(
@@ -774,15 +825,25 @@ export function makeRead(e: SyncEngine) {
 				Effect.catch((error) => Effect.sync(() => failures.push(error)))
 			);
 		}
-		if (failures.length > 0)
+		if (failures.length > 0) {
+			known.delete(s.name);
 			return yield* Effect.fail(
 				failures[0] ?? BoltError.make('internal', 'commit', 'the sync failed')
 			);
+		}
+		// a quiet read leaves no row to learn this from, and the next slot must not wake a database to find out
+		if (slot && pushes(s)) known.set(s.name, dayAfter(yield* Clock.currentTimeMillis));
 		return { pages };
 	});
 	return {
 		run,
 		rests,
+		/** This generation's last read of `instance`, newer than `last_read_at` when it found nothing. */
+		lastReadOf: (instance: string) =>
+			Math.max(
+				0,
+				...[...lastRead.values()].filter((x) => x.instance === instance).map((x) => x.at)
+			),
 		/** A pushing driver's `invalidate`: one read of that instance and partition, unless one is queued already. */
 		invalidate: Effect.fn('Syncs.invalidate')(function* (
 			instance: string,

@@ -1,61 +1,25 @@
 ---
 name: data-modelling
-description: Modelling a workspace's data in Bolt - models, field kinds, links, read and write layers, state, invariants, search, custom types and migrations.
+description: Route data modelling decisions - models, fields, layers, state, invariants, search, migrations.
 ---
 
-## Decide the models
+## Protocol
 
-A model is a table people work on: model('<name>', { description, icon, record_label, fields, … }). Prefer fewer models: a
-value its parent owns, with no identity, lifecycle, permissions, history or relational query of its own, is an inline
-typed value (json with a shape, or a custom field type). Business variation that people configure (rates, catalogues,
-rules) is records; source defines the language and the rules that run them.
+1. Decide the models. Prefer fewer. A value its parent owns, with no identity, lifecycle, permissions, history or relational query of its own, is inline. Configured variation is records; source defines the language.
+2. Read the field contract: `import('@norbital-ai/bolt').ModelLiteral`, `FieldKind`.
+3. Declare invariants on the model before writing callback code: `check`, `locked`, `noOverlap`, state edges, unique, indexes, computed.
+4. Declare reads as outputs, writes as columns per layer, with a transform for derived values and a check for business rules. A batch commits whole.
+5. Business operations are automations; authority is policies.
+6. Declare `record_label` once when a readable identifier exists.
+7. Declare `search.text`: it turns on the toolbar search and the finder.
+8. Review the generated migration's destructive steps.
 
-## Fields
+## Routing (`authoring-tenant-workspace` skill)
 
-text (format email | phone | url | markdown | zone; many), int, number, decimal, money (every amount; its currency),
-bool, date, instant, time, duration, period (an effective range), enum (values; transitions), state (initial and
-states, each { to, edit }: the record's lifecycle; it moves only along its edges and edit says what stays editable),
-seq (a patterned number per scope), file (many), point, json with shape (object, list, record, union), and custom
-field types (data/custom_field/<name>/+definition.ts, a shape and validation, optional renderer). Each takes optional,
-default, unique, label, help, hidden; `was` keeps data through a rename. Declare a model's human-readable identifier
-once, optionally, as `record_label: "record.code + ' · ' + record.name"`: pure CEL over own stored/computed fields or nested inline
-values. Use conditionals for optional values and `string(value)` for numbers; no cross-record lookups or clocks.
-The engine materializes and indexes it automatically, recalculates it on writes, and rebuilds it on expression changes.
-`search.text` adds other terms. RecordShell, table/list titles, default board headings, pickers, references and search
-results reuse it; explicit authored titles/cells may override display. Approvals resolve and search the same current value through their model + record id reference;
-never duplicate a target label on approval_request. Outputs must expose its dependencies. Legacy model `label` fields/lists remain compatible;
-field `label` captions stay ordinary text. Omitting `record_label` is valid: consumers use the record UUID, including approval targets, and record search needs explicit `search.text`. Do not create a duplicate title/calculated field. When record_label is omitted, use the UUID directly as the display fallback; this does not create a text index.
-A link is a ref field { kind: 'ref', to, inverse, optional?, onDelete?: restrict | cascade | setNull, owned? }: the
-other model reads the inverse as a many-relation. An owned child is created and deleted through its parent.
-
-## Reads, writes and authority
-
-read is the default output, the layer map callers read: { <model>: { fields }, '<model>.<relation>': { fields } };
-outputs: { <name>: <layer map> } declares named outputs beside it, and every read names one (output). create, update,
-delete and upsert take columns per layer (nested children through their relation), a transform to normalise or derive
-values and a check for business rules; a batch commits whole. Models have no named actions: a business operation is
-an automation with typed inputs run by the system identity with its declared policies; its run records its trigger
-(the system, or the person who started it), and "own records" is an explicit check of that trigger in the body. Policies grant outputs (rows by where, never fields), write columns and a check
-that allows, denies or routes the batch to an approval flow; automations grants are manual starts by a person or the
-agent. An effect runs as the writer, with no policy.
-
-## Invariants belong to the model
-
-check ({ name: { where, message } }), locked (rows read-only by a predicate), noOverlap (a key and a period), state
-edges, unique fields and table indexes are enforced by the database for every writer; computed fields are stored
-expressions over a row's own fields. Use them before callback code, and never repeat them in a page.
-
-## Search
-
-search.text lists own text, enum and patterned seq fields, and links: a link finds the row by the linked record's own
-search text (an entry by its person's number or name). Declaring it turns on the toolbar search and the finder.
-search.semantic embeds text or file fields for meaning search; search.indexes holds custom vector indexes.
-
-## Seeds and migrations
-
-Seed packs carry public base data (private bank rows load only through `bolt seed`); never seed authority, credentials or envoys. The manifest is
-the schema: the preview build generates the next migration, replays it and commits it to the change; review its
-destructive steps (a merge lists them). For a complex data pattern, edit that unapplied migration's SQL (a data UPDATE
-that skips rows already transformed); the next build replays it and refuses any result that differs from the schema.
-Never edit a migration live has applied. `-- check: <name>` then one select whose rows are violations proves the
-data after the steps; any row rolls the file back. When the person asks to tidy a long history, preview with squash.
+| Need | Reference |
+| --- | --- |
+| Model or inline value, runtime configuration | `references/model-boundaries.md` |
+| Field kinds, links, layers, locks, callbacks, search, syncs | `references/models-and-modeling.md` |
+| Dates, periods | `references/dates-and-time.md` |
+| Reads, batches, transactions | `references/data-access.md` |
+| Seeds, migrations | `references/generated-and-build.md` |

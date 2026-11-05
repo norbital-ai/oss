@@ -51,4 +51,38 @@ describe('rule 25a: engine loops', () => {
 				})
 			)
 	);
+	it.live(
+		'the daily pass prunes a consumed inbox delivery past its month, and nothing unread',
+		() =>
+			Effect.scoped(
+				Effect.gen(function* () {
+					const t = Context.get(
+						yield* Layer.build(
+							TestWorkspace.layer({
+								manifest: { ...manifest, connections: { desk: { integration: 'whatsapp' } } },
+								now: NOW
+							})
+						),
+						TestWorkspace
+					);
+					const delivery = (name: string, consumed: string | null) =>
+						t.db.write({
+							text: `INSERT INTO sys_inbox (id, sync, instance, delivery, received_at, consumed_at) VALUES (gen_random_uuid(), 's', 'desk', $1, '2026-01-01T00:00:00.000Z', $2::timestamptz)`,
+							params: [name, consumed]
+						});
+					yield* delivery('old', '2026-02-01T00:00:00.000Z');
+					yield* delivery('recent', '2026-09-20T00:00:00.000Z');
+					yield* delivery('unread', null);
+					yield* t.db.write({
+						text: `INSERT INTO sys_run (id, automation, input, due_at, cause, depth) VALUES ('p', 'bolt.prune', '{}', '${NOW}', 'continue', 0)`,
+						params: []
+					});
+					yield* t.runDue();
+					expect(yield* sql(t, 'SELECT delivery FROM sys_inbox ORDER BY delivery')).toEqual([
+						{ delivery: 'recent' },
+						{ delivery: 'unread' }
+					]);
+				})
+			)
+	);
 });

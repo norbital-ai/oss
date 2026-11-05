@@ -9,7 +9,7 @@
 //
 // Verify makes an edited file safe: replay every file on a scratch database, build the schema itself on another, and
 // compare what the two hold (`introspect`); and the snapshot must be the schema the code declares.
-import { Effect, Result, Schema } from 'effect';
+import { Effect, Predicate, Result, Schema } from 'effect';
 import * as Base64 from 'effect/encoding/Base64';
 import { deflateSync, inflateSync } from 'fflate';
 import { StoreError } from './errors.ts';
@@ -890,11 +890,24 @@ export const migrationStatus = /*#__PURE__*/ (() =>
 		};
 	}))();
 
+/** The first path where two canonical schemas differ. */
+const firstDifference = (held: unknown, declared: unknown, at: string): string => {
+	if (!Predicate.isObject(held) || !Predicate.isObject(declared)) return at;
+	for (const key of new Set([...Object.keys(held), ...Object.keys(declared)]))
+		if (JSON.stringify(held[key]) !== JSON.stringify(declared[key]))
+			return firstDifference(held[key], declared[key], at === '' ? key : `${at}.${key}`);
+	return at;
+};
 /** Whether the snapshot is the schema the code declares: else a migration is missing. */
-export const current = (snapshot: SchemaSpec, schema: SchemaSpec): Fx<void> =>
-	canonical(snapshot) === canonical(schema)
-		? Effect.void
-		: refuse('schemaMoved', 'the schema changed since the last migration; generate the next one');
+export const current = (snapshot: SchemaSpec, schema: SchemaSpec): Fx<void> => {
+	const [held, declared] = [canonical(snapshot), canonical(schema)];
+	if (held === declared) return Effect.void;
+	const at = firstDifference(JSON.parse(held), JSON.parse(declared), '');
+	return refuse(
+		'schemaMoved',
+		`the schema changed since the last migration at ${at}; generate the next one, or remove it if the build cannot store it`
+	);
+};
 
 // ── verify ──
 /** What a database holds of a schema: its tables' columns, constraints and indexes, as comparable lines. */

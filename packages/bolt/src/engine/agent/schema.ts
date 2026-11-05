@@ -57,7 +57,7 @@ export type ConversationRow = typeof Conversation.Type;
 /** What a row is beyond its role; absent on ordinary messages. */
 export type Meta =
 	| { tag: 'cut'; continuation?: string }
-	/** `origin` (L-BOLT-546): `/compact` (manual), the agent's `compact` tool (requested) or the window (automatic). */
+	/** `origin` (L-BOLT-546): `/compact` (manual) or the window (automatic). */
 	| {
 			tag: 'compact';
 			cutoff: number;
@@ -68,7 +68,7 @@ export type Meta =
 	| { tag: 'confirm'; call: ToolCall }
 	| { tag: 'reply'; receipts: readonly Receipt[]; asked?: true; usage?: Usage }
 	| { tag: 'failed'; code: string; detail?: string; usage?: Usage }
-	/** A tool row whose result was clipped keeps the whole output for `read_output` (rule 62). */
+	/** A tool row whose result was clipped keeps the whole output for `read_file { call }` (rule 62). */
 	| { tag: 'output'; full: Json }
 	| { tag: 'note' }
 	/** A workspace event the host published (a merge landed, maintenance scheduled), heard at a turn step; `at` is its time. */
@@ -334,7 +334,26 @@ export const conversationRow = (r: RowData): { [k: string]: Json } => ({
 	// a DM's member, by name, when the sender is one: the selector reads "Dion (+65 9238 8112)"
 	peer: r['peer'] ?? null
 });
-/** A tool step's input or result as the panel shows it: at most 600 characters (the whole stays on the row for `read_output`). */
+/** The tools the panel shows as data of their own (`ToolBody`): their step carries more than a line of it. */
+const SHOWN: ReadonlySet<string> = new Set([
+	'read',
+	'act',
+	'browser',
+	'web_search',
+	'run_js',
+	'read_file',
+	'describe_workspace',
+	'skill',
+	'workspace_read',
+	'workspace_search',
+	'workspace_list',
+	'workspace_lang',
+	'workspace_validate',
+	'workspace_try',
+	'runs',
+	'logs'
+]);
+/** A tool step's input or result as the panel shows it: at most 600 characters (the whole stays on the row for `read_file { call }`). */
 export const clip = (v: Json | undefined, max = 600): string => {
 	const s = typeof v === 'string' ? v : JSON.stringify(v ?? null);
 	return s.length <= max ? s : `${s.slice(0, max - 1)}…`;
@@ -372,7 +391,7 @@ function changesOf(
 	step: { readonly name: string } | null,
 	result: Json | undefined
 ): ReadonlyArray<{ path: string; diff: string; change?: string }> | undefined {
-	if (step === null || (step.name !== 'workspace_write' && step.name !== 'workspace_edit'))
+	if (step === null || step.name !== 'workspace_write')
 		return undefined;
 	if (!Predicate.isObject(result) || !Array.isArray(result['changes'])) return undefined;
 	const files = result['changes'].flatMap((change) =>
@@ -478,7 +497,7 @@ export function transcriptRow(r: MessageRow, staff: boolean, thread: boolean): A
 		role = step?.studio ?? collected?.studio,
 		studio = isStudio(role) ? role : undefined,
 		about =
-			step !== null && (studio !== undefined || step.name === 'preview_show')
+			step !== null && (studio !== undefined || outcome.preview !== undefined)
 				? aboutOf(Predicate.isObject(payload) ? payload : {})
 				: undefined,
 		// a live change the host holds for the person (`approval.decide`): its id, never clipped
@@ -526,22 +545,15 @@ export function transcriptRow(r: MessageRow, staff: boolean, thread: boolean): A
 						...(step.result === undefined
 							? {}
 							: {
-									result: clip(
-										step.result,
-										studio === 'logs' || step.name === 'read' || step.name === 'workspace_list'
-											? 20000
-											: 600
-									)
+									result: clip(step.result, studio === 'logs' || SHOWN.has(step.name) ? 20000 : 600)
 								}),
 						...(completed.preview === undefined ? {} : { preview: completed.preview }),
 						...(approval === undefined ? {} : { approval }),
-						...(step.name === 'navigate' && outcome.navigation !== undefined
+						...(step.name === 'page' && outcome.navigation !== undefined
 							? { navigation: outcome.navigation }
 							: {}),
-						...(step.name === 'page_act' && outcome.page !== undefined
-							? { page: outcome.page }
-							: {}),
-						...(step.name === 'page_act' && outcome.pageResult !== undefined
+						...(step.name === 'page' && outcome.page !== undefined ? { page: outcome.page } : {}),
+						...(step.name === 'page' && outcome.pageResult !== undefined
 							? { pageResult: outcome.pageResult }
 							: {}),
 						...(about === undefined ? {} : { about }),

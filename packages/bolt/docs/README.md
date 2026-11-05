@@ -73,6 +73,10 @@ Each word names one thing:
 | Policy      | What holders may do: the outputs they read and the rows of each, writes, state moves, capabilities, limits, manual starts. | `src/access_control/policy/`; held by teams, kiosks, envoys and automations.       |
 | Automation  | A job the system identity runs with its declared `policies`; the run records its trigger (system or a person).             | `src/automation/+<name>.automation.ts`.                                            |
 | Effect      | The work after a committed write. It runs as the writer and holds no policy.                                               | A model's `effect`.                                                                |
+| Integration | What connects a workspace to an outside system: a source definition and its connections, each one account.                 | [Integrations, syncs and channels](./integrations.md) |
+| Sync        | Rows exchanged between a model and a connection.                                                                           | A model's `syncs`; [syncs](./syncs.md) |
+| Channel     | A connection whose driver carries conversations.                                                                           | [Integrations, syncs and channels](./integrations.md) |
+| Envoy       | The agent answering outside senders on a channel.                                                                          | `sys_envoy`; bound by `sys_integration.envoy` |
 
 ## Package entries
 

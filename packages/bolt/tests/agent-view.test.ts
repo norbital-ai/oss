@@ -261,7 +261,7 @@ describe('Studio outcomes outside the folded steps', () => {
 	// a host's Studio tools by the roles they declare
 	const ROLE = {
 		workspace_validate: 'preview',
-		browser_navigate: 'view',
+		browser: 'view',
 		workspace_logs: 'logs',
 		workspace_publish: 'publish',
 		workspace_rollback: 'rollback'
@@ -289,7 +289,7 @@ describe('Studio outcomes outside the folded steps', () => {
 		expect(
 			failedVerbs([
 				row(1, { role: 'tool', tool: tool('read', '{}') }),
-				failed('browser_download', '{"url":"https://a.test/x"}', '{"error":"404"}')
+				failed('browser', '{"download":"https://a.test/x"}', '{"error":"404"}')
 			])
 		).toEqual(['Downloaded']);
 	});
@@ -299,12 +299,12 @@ describe('Studio outcomes outside the folded steps', () => {
 		const about = { environment: 'Preview', commit: 'abc1234def', message: 'Rename title' };
 		expect(
 			previewsOf([
-				step(1, 'preview_show', { preview: 'https://a.test/early' }),
+				step(1, 'page', { preview: 'https://a.test/early' }),
 				step(2, 'workspace_validate', { preview: 'https://a.test/', about }),
 				step(3, 'workspace_validate', { preview: 'https://b.test/', failed: true }),
-				step(4, 'preview_show', { preview: 'https://evil.test/' }),
-				step(5, 'preview_show', { preview: 'https://a.test/page' }),
-				step(6, 'browser_navigate', { about: { ...about, url: 'https://c.test/' } })
+				step(4, 'page', { preview: 'https://evil.test/' }),
+				step(5, 'page', { preview: 'https://a.test/page' }),
+				step(6, 'browser', { about: { ...about, url: 'https://c.test/' } })
 			]).map((p) => p.url)
 		).toEqual(['https://a.test/', 'https://a.test/page', 'https://c.test/']);
 		// a bundle is its release when the step names one, else the step: the same bundle never reloads the frame

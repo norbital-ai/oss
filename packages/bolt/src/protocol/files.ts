@@ -22,6 +22,15 @@ import {
 import { HEADERS, PATHS, statusOf } from './wire.ts';
 import { ImagePreviews } from './image-previews.ts';
 
+/** What a browser only displays: every other type could script this origin, which all workspaces share. */
+const INLINE = /^(?:image\/(?:png|jpeg|gif|webp|avif|heic|heif)|audio\/|video\/|application\/pdf$)/;
+/** A stored file's name and how it opens; the rest of what it says about itself (a sender's MIME type) is not trusted. */
+export const fileHeaders = (mime: string, name: string) => ({
+	'content-disposition': `${INLINE.test(mime) ? 'inline' : 'attachment'}; filename*=UTF-8''${encodeURIComponent(name)}`,
+	'x-content-type-options': 'nosniff',
+	...(INLINE.test(mime) ? {} : { 'content-security-policy': "sandbox; default-src 'none'" })
+});
+
 const FileRow = Schema.Struct({
 	key: Schema.String,
 	mime: Schema.String,
@@ -148,9 +157,8 @@ export const filesRoutes = (request: HttpServerRequest.HttpServerRequest) =>
 			: row.value.name;
 		const headers = {
 			'content-type': image.mime,
-			'content-disposition': `inline; filename*=UTF-8''${encodeURIComponent(name)}`,
+			...fileHeaders(image.mime, name),
 			'cache-control': 'private, max-age=3600',
-			'x-content-type-options': 'nosniff',
 			'content-length': String(image.bytes.byteLength)
 		};
 		return Option.some(

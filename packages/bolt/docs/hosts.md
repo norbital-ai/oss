@@ -48,7 +48,7 @@ and `bolt dev` run bolt-cli's `nodeGuests`, Colony its isolated-vm runner).
 
 | Member | Interface | Supply | What it is |
 | --- | --- | --- | --- |
-| `webhooks` | `Webhooks` | or `off` | Inbound: the public URL under which the host routes `/hooks/<instance>` and OAuth callbacks into Bolt. |
+| `webhooks` | `Webhooks` | or `off` | Inbound: the public URL under which the host routes `/hooks/integration/<instance>` and OAuth callbacks into Bolt. |
 | `websockets` | `Websockets` | or `off` | A client WebSocket (Discord, WhatsApp, CDP): the platform's standard `WebSocket`. |
 | `outbound` | `Outbound` | or `off` | Outbound under the host's egress policy: HTTP for APIs and OAuth, TCP/TLS for IMAP and SMTP. |
 

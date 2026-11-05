@@ -164,7 +164,7 @@ const IngestAnswered = Schema.Union([
 ]);
 /**
  * The document converter behind `ctx.convert.document`; `targets` is what this host serves (none when unavailable).
- * `ingest` (the agent's `ingest`, `ctx.convert.ingest`) is absent when the host has no ingest port.
+ * `ingest` (the agent's `read_file`, `ctx.convert.ingest`) is absent when the host has no ingest port.
  */
 export class Convert extends Context.Service<
 	Convert,

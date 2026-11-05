@@ -14,6 +14,7 @@
 		Button,
 		Combobox,
 		Icon,
+		Input,
 		Popover,
 		Spinner,
 		Tooltip,
@@ -126,6 +127,9 @@
 		closed: { dot: 'bg-destructive', label: 'Connection closed' }
 	};
 
+	const matches = (name: string) =>
+		name.toLowerCase().includes(workspaceQuery.trim().toLowerCase());
+
 	const follow = (event: MouseEvent, href: string) => {
 		event.preventDefault();
 		onNavigate(href);
@@ -155,7 +159,8 @@
 
 	let menuOpen = $state(false),
 		moreOpen = $state(false),
-		switcherOpen = $state(false);
+		switcherOpen = $state(false),
+		workspaceQuery = $state('');
 	let teams = $state<Promise<readonly { id: string; name: string }[]> | null>(null);
 	let signingOut = $state(false);
 	function signOut(): void {
@@ -358,7 +363,8 @@
 {/snippet}
 
 {#snippet switcher()}
-	{#if pinned}
+	<!-- one workspace has nowhere to switch to -->
+	{#if pinned || model.workspace.others.length === 0}
 		<div
 			data-testid="workspace-identity"
 			class={cn(
@@ -377,7 +383,12 @@
 				>{/if}
 		</div>
 	{:else}
-		<Popover.Root bind:open={switcherOpen}>
+		<Popover.Root
+			bind:open={switcherOpen}
+			onOpenChange={(open) => {
+				if (!open) workspaceQuery = '';
+			}}
+		>
 			<Popover.Trigger>
 				{#snippet child({ props })}
 					<button
@@ -408,29 +419,48 @@
 				sideOffset={6}
 				class="w-64 p-1"
 			>
-				<Inline gap="sm" class="rounded-sm bg-accent/60 px-2 py-1.5">
-					{@render avatar(
-						initials(model.workspace.name),
-						model.workspace.name,
-						model.workspace.logo,
-						'size-6'
-					)}
-					<span class="min-w-0 flex-1 truncate text-xs font-medium">{model.workspace.name}</span>
-					<Icon name="lucide:check" class="size-3.5 shrink-0" />
-				</Inline>
-				<!-- a full load: the link leaves this workspace through the host's handoff -->
-				{#each model.workspace.others as w (w.handle)}
-					<a
-						href={w.href}
-						use:workspaceNavigation={t('Opening workspace…')}
-						data-sveltekit-reload
-						data-testid="workspace-option"
-						class="mt-1 flex h-8 items-center gap-2 rounded-sm px-2 text-xs hover:bg-accent"
-					>
-						{@render avatar(initials(w.name), w.handle, null, 'size-6')}
-						<span class="min-w-0 flex-1 truncate">{w.name}</span>
-					</a>
-				{/each}
+				<Input
+					type="search"
+					bind:value={workspaceQuery}
+					placeholder={t('Search workspaces')}
+					aria-label={t('Search workspaces')}
+					data-testid="workspace-search"
+					class="mb-1 h-8 text-xs"
+					onkeydown={(event) => {
+						if (event.key !== 'Enter') return;
+						event.preventDefault();
+						event.currentTarget.parentElement
+							?.querySelector<HTMLAnchorElement>('[data-testid="workspace-option"]')
+							?.click();
+					}}
+				/>
+				<div class="max-h-80 overflow-y-auto">
+					{#if matches(model.workspace.name)}
+						<Inline gap="sm" class="rounded-sm bg-accent/60 px-2 py-1.5">
+							{@render avatar(
+								initials(model.workspace.name),
+								model.workspace.name,
+								model.workspace.logo,
+								'size-6'
+							)}
+							<span class="min-w-0 flex-1 truncate text-xs font-medium">{model.workspace.name}</span>
+							<Icon name="lucide:check" class="size-3.5 shrink-0" />
+						</Inline>
+					{/if}
+					<!-- a full load: the link leaves this workspace through the host's handoff -->
+					{#each model.workspace.others.filter((w) => matches(w.name)) as w (w.handle)}
+						<a
+							href={w.href}
+							use:workspaceNavigation={t('Opening workspace…')}
+							data-sveltekit-reload
+							data-testid="workspace-option"
+							class="mt-1 flex h-8 items-center gap-2 rounded-sm px-2 text-xs hover:bg-accent"
+						>
+							{@render avatar(initials(w.name), w.handle, null, 'size-6')}
+							<span class="min-w-0 flex-1 truncate">{w.name}</span>
+						</a>
+					{/each}
+				</div>
 			</Popover.Content>
 		</Popover.Root>
 	{/if}

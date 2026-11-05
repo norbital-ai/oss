@@ -31,7 +31,7 @@ import {
 	Tokens,
 	type OAuthApp
 } from '../oauth.ts';
-import { readMail } from './reports.ts';
+import { readMail, type Named, type Read } from './reports.ts';
 import {
 	Cursor,
 	Mailbox,
@@ -42,7 +42,7 @@ import {
 	type Method,
 	type Server
 } from './model.ts';
-import { imap, mailboxWatch } from './mailbox-watch.ts';
+import { imap, mailboxWatch, type Reconcile } from './mailbox-watch.ts';
 import { smtp, submit } from './submit.ts';
 
 export type MailboxOptions = {
@@ -440,6 +440,7 @@ const open = Effect.fn('Mailbox.open')(function* (
 	let problem: string | null = null,
 		live: InstanceState = 'connecting',
 		detail: string | null = null;
+	let reconciling: Reconcile | null = null;
 	const supervisor = yield* FiberHandle.make<void>();
 	const completion = yield* callbackCompletion;
 	/** The OAuth client a mailbox signs in with: Microsoft's is the operator's app, Google's the host's (or the definition's). */
@@ -562,25 +563,37 @@ const open = Effect.fn('Mailbox.open')(function* (
 			)
 		);
 	const after = ctx.importStart?.kind === 'since' ? ctx.importStart.at : undefined;
+	// INTERNALDATE is the source checkpoint; Date headers and ingestion time cannot admit old history.
+	const beforeImport = (receivedAt: string | undefined) =>
+		after !== undefined && (receivedAt === undefined || Date.parse(receivedAt) < Date.parse(after));
+	/** A mail as the engine stores it, or `null` for this mailbox's own copy of what it sent. */
+	const wireOf = (
+		mailbox: Mailbox,
+		read: Extract<Read, { kind: 'mail' }>,
+		at: string | undefined
+	) => {
+		if (read.from === mailbox.address && !personal) return null;
+		const message = { ...read.message, ...(at === undefined ? {} : { sourceAt: at }) };
+		return personal
+			? { ...message, direction: read.from === mailbox.address ? 'outbound' : 'inbound' }
+			: message;
+	};
 	const deliver = (
 		mailbox: Mailbox,
 		source: Uint8Array,
 		local: string,
-		receivedAt: string | undefined
+		receivedAt: string | undefined,
+		recovered: { readonly history: boolean; readonly files: readonly Named[] | undefined }
 	) =>
 		Effect.gen(function* () {
-			// INTERNALDATE is the source checkpoint; Date headers and ingestion time cannot admit old history.
-			if (
-				after !== undefined &&
-				(receivedAt === undefined || Date.parse(receivedAt) < Date.parse(after))
-			)
-				return;
+			if (beforeImport(receivedAt)) return;
 			const read = yield* readMail(
 				source,
 				domainOf(mailbox),
 				midOf(mailbox, local),
 				!personal,
-				receivedAt
+				receivedAt,
+				recovered.files
 			);
 			if (read.kind === 'report') {
 				const at = new Date(yield* Clock.currentTimeMillis).toISOString();
@@ -590,21 +603,38 @@ const open = Effect.fn('Mailbox.open')(function* (
 					);
 				return;
 			}
-			if (read.from === mailbox.address && !personal) return;
-			const message = personal
-				? {
-						...read.message,
-						...(receivedAt === undefined ? {} : { sourceAt: receivedAt }),
-						direction: read.from === mailbox.address ? 'outbound' : 'inbound'
-					}
-				: { ...read.message, ...(receivedAt === undefined ? {} : { sourceAt: receivedAt }) };
+			const message = wireOf(mailbox, read, receivedAt);
+			if (message === null) return;
 			yield* hostCall('store mailbox message', () =>
 				ctx.emit({
 					kind: 'messages',
 					messages: [message],
+					...(recovered.history ? { history: true as const } : {}),
 					...(read.bins.length === 0 ? {} : { bins: read.bins })
 				})
 			);
+			return { id: read.id, thread: read.thread };
+		});
+	const peek = (
+		mailbox: Mailbox,
+		source: Uint8Array,
+		local: string,
+		receivedAt: string | undefined,
+		files: readonly Named[]
+	) =>
+		Effect.gen(function* () {
+			if (beforeImport(receivedAt)) return null;
+			const read = yield* readMail(
+				source,
+				domainOf(mailbox),
+				midOf(mailbox, local),
+				!personal,
+				receivedAt,
+				files
+			);
+			if (read.kind === 'report') return null;
+			const message = wireOf(mailbox, read, receivedAt);
+			return message === null ? null : { id: read.id, thread: read.thread, message };
 		});
 	const start = () =>
 		Effect.gen(function* () {
@@ -620,7 +650,18 @@ const open = Effect.fn('Mailbox.open')(function* (
 					login: () => login(mailbox),
 					cursor: () => cursor,
 					advance,
-					deliver: (source, fallback, receivedAt) => deliver(mailbox, source, fallback, receivedAt),
+					deliver: (source, fallback, receivedAt, recovered) =>
+						deliver(mailbox, source, fallback, receivedAt, recovered),
+					peek: (source, fallback, receivedAt, files) =>
+						peek(mailbox, source, fallback, receivedAt, files),
+					vanished: (id) =>
+						hostCall('store mailbox delete', () =>
+							ctx.emit({ kind: 'messages', messages: [{ id, deleted: true }] })
+						),
+					serve: (next) =>
+						Effect.sync(() => {
+							reconciling = next;
+						}),
 					connected: Effect.suspend(() => {
 						live = 'connected';
 						detail = null;
@@ -801,6 +842,10 @@ const open = Effect.fn('Mailbox.open')(function* (
 				)
 			),
 		close: FiberHandle.clear(supervisor),
+		reconcile: (thread: string, since: string) =>
+			reconciling === null
+				? Effect.fail(new ProviderUnavailable({ message: 'the mailbox is not connected' }))
+				: reconciling(thread, since),
 		send: (message: Json, files: readonly OutboundAttachment[] = []) =>
 			Effect.gen(function* () {
 				if (personal)

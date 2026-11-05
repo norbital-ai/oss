@@ -8,9 +8,17 @@ import type { AiRequest, AiResponse } from '../src/engine/contracts.ts';
 import { Port, type PortFailure } from '../src/engine/port.ts';
 import type { Ai, AiEvent } from '../src/engine/ports.ts';
 import type { FacilityCall } from '../src/engine/services.ts';
-import { applyEdit, inferFacility, modelCall, STALL_MS } from '../src/engine/agent/ai.ts';
+import { applyEdit, inferFacility, MODEL_FILES, modelCall, STALL_MS } from '../src/engine/agent/ai.ts';
 import { jsonDiff } from '../src/engine/agent/draft.ts';
-import { bound, BOUNDS, messages, projection, system } from '../src/engine/agent/context.ts';
+import {
+	bound,
+	BOUNDS,
+	messages,
+	pageNote,
+	pageWaiting,
+	projection,
+	system
+} from '../src/engine/agent/context.ts';
 import { listed, type MessageRow } from '../src/engine/agent/schema.ts';
 import { preview } from '../src/engine/conversations/store.ts';
 import { respondSystem1 } from '../../bolt-cli/src/test/effect.ts';
@@ -42,6 +50,26 @@ const row = (
 	...over
 });
 type Step = Ai['Service']['infer'];
+describe('a page step', () => {
+	const step = (result: Json): MessageRow => ({
+		...row(2),
+		role: 'tool',
+		content: { id: 'c1', name: 'page', result }
+	});
+	it('waits for its tab, then closes the context with what the tab shows', () => {
+		const asked = { requested: true, navigation: '/app/ops' };
+		expect(pageWaiting([row(1), step(asked)])).toBe(true);
+		const shown = step({ ...asked, pageResult: { ok: true, screen: 'Orders · New' } });
+		expect(pageWaiting([row(1), shown])).toBe(false);
+		expect(pageNote([row(1), shown])).toBe('Your last page step ran. Their page shows: Orders · New');
+		expect(pageNote([row(1), step({ page: { click: 'x' }, requested: true })])).toBeUndefined();
+	});
+	it('stays the message it was sent, whatever the tab answers', () => {
+		const sent = { requested: true, navigation: '/app/ops' };
+		const later = step({ ...sent, pageClaim: true, pageResult: { ok: true, screen: 'Orders' } });
+		expect(messages([later], [later])).toEqual(messages([step(sent)], [step(sent)]));
+	});
+});
 const response = (answer: AiResponse): Stream.Stream<AiEvent, PortFailure> =>
 	Stream.succeed({ _tag: 'Response', response: answer });
 const port = (answers: readonly Step[]) => {
@@ -172,17 +200,15 @@ describe('the context projection (rule 60)', () => {
 			{ role: 'user', content: '[note]\nok' }
 		]);
 	});
-	it('the system prompt is the kernel, brief, skills list, envoy and task only: no date, actor or conversation state (rule 62)', () => {
+	it('the system prompt is the kernel, skills list, brief, envoy and task only: no date, actor or conversation state (rule 62)', () => {
 		const s = system({
 			envoy: 'Norbius',
 			brief: 'Brief.',
 			task: 'Task.',
 			skills: { pricing: { text: '---\ndescription: How we price\n---\nbody' } }
 		});
-		// what every conversation shares first (brief, skills), then the envoy's channel guidance and its task
-		expect(s).toContain(
-			"# Brief (the workspace's +agent.md, already loaded)\nBrief.\n\n# Your skills (the skill tool reads one)\n- pricing: How we price\n\nYou are Norbius"
-		);
+		// what every conversation shares first (skills, brief), then the envoy's channel guidance and its task
+		expect(s).toContain('# Skills\n- pricing: How we price\n\n# Brief\nBrief.\n\nYou are Norbius');
 		expect(s.endsWith('\n\nTask.')).toBe(true);
 		expect(s).not.toMatch(/20\d\d|clock|timezone/i);
 		// the channel guidance names the envoy, so a message that says the name is readable as addressed to it
@@ -191,10 +217,14 @@ describe('the context projection (rule 60)', () => {
 		expect(s).toContain("Never describe the workspace's own automated checks");
 		// a turn without the source tools (a public envoy's) is never told to call them; one with them gets the layout
 		expect(system({ skills: {} })).not.toMatch(/workspace_list|workspace_search|workspace_lang/);
-		const layout = system({ skills: {}, tools: [{ name: 'workspace_search' }] });
-		expect(layout).toContain('# Workspace source');
-		expect(layout).toContain('src/data/model/<name>/+model.ts');
-		expect(layout).toContain('Source tools work on your current working tree');
+		const layout = system({
+			brief: 'Brief.',
+			skills: { pricing: { text: '---\ndescription: How we price\n---\nbody' } },
+			tools: [{ name: 'workspace_search' }]
+		});
+		expect(layout).toContain('\n\n# Source\n');
+		expect(layout).toContain('workspace_list shows it');
+		expect(layout.indexOf('# Source')).toBeLessThan(layout.indexOf('# Skills'));
 	});
 });
 
@@ -273,7 +303,7 @@ describe('the AI port under the 20 s idle wall (rule 63)', () => {
 				_tag: 'Unavailable',
 				reason: expect.stringContaining('vision')
 			});
-			const files = Array.from({ length: 9 }, () => ({
+			const files = Array.from({ length: MODEL_FILES.count + 1 }, () => ({
 				mime: 'image/png',
 				bytes: new Uint8Array(1)
 			}));
@@ -1114,14 +1144,21 @@ describe('the AI port under the 20 s idle wall (rule 63)', () => {
 					tool('edit', { ops: [{ path: '/rows', append: 'b' }] }, 'e2'),
 					tool('submit', {}, 's2')
 				]);
-				const files = Array.from({ length: 10 }, (_, i) => ({ id: `f${i}` }));
+				const files = Array.from({ length: MODEL_FILES.count + 2 }, (_, i) => ({ id: `f${i}` }));
 				expect(
 					yield* inferFacility(p, { load })(at({ prompt: 'q', files, output: { jsonSchema } }))
 				).toEqual({ ok: true, value: { rows: ['a', 'b'] } });
-				expect(requests.map((r) => r.files?.length)).toEqual([8, 8, 2, 2]);
+				expect(requests.map((r) => r.files?.length)).toEqual([
+					MODEL_FILES.count,
+					MODEL_FILES.count,
+					2,
+					2
+				]);
 				expect(loads).toEqual(files.map((f) => f.id));
 				// the second batch starts from the first one's draft, which minItems alone would have refused
-				expect(requests[2]!.messages[0]!.content).toContain('files 9–10');
+				expect(requests[2]!.messages[0]!.content).toContain(
+					`files ${MODEL_FILES.count + 1}–${MODEL_FILES.count + 2}`
+				);
 				expect(requests[2]!.messages[0]!.content).toContain('{"rows":["a"]}');
 			})
 	);

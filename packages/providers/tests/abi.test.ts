@@ -3,7 +3,7 @@
 import { describe, expect, it } from '@effect/vitest';
 import { Deferred, Effect, Exit, Fiber, FiberSet, Schema } from 'effect';
 import type { DriverOpen, Json } from '@norbital-ai/bolt/engine';
-import { toDrivers, type ProviderDef, type Run } from '../src/abi.ts';
+import { toDrivers, type LinkDef, type ProviderDef, type Run } from '../src/abi.ts';
 import { PairingInvalid, ProviderRefused, ProviderUnavailable } from '../src/errors.ts';
 import { loopbackTcpPort } from '@norbital-ai/bolt/node';
 import { fakeFetch, HOOK, REDIRECT } from './kit.ts';
@@ -33,6 +33,35 @@ const context = (): DriverOpen => ({
 });
 
 describe('toDrivers', () => {
+	it.effect('a reconcile crosses with its arguments, and a provider without one has none', () =>
+		Effect.gen(function* () {
+			const run: Run = yield* FiberSet.makeRuntimePromise();
+			const provider = (reconcile: LinkDef['reconcile']): ProviderDef => ({
+				_tag: 'ProviderDef',
+				id: 'fake',
+				label: { en: 'Fake', zh: 'Fake' },
+				setup: { kind: 'none', steps: [] },
+				driver: 'chat',
+				open: () => Effect.succeed({ reconcile })
+			});
+			const [history, none] = yield* toDrivers(
+				[
+					provider((thread, since) =>
+						Effect.succeed({ messages: [{ id: `${thread}@${since}` }], complete: false })
+					),
+					provider(undefined)
+				],
+				run
+			);
+			if (history === undefined || none === undefined) throw new Error('Providers not adapted.');
+			const link = yield* abi(() => history.open(context()));
+			expect(
+				yield* abi(async () => link.reconcile?.('t1', 's1', new AbortController().signal))
+			).toEqual({ messages: [{ id: 't1@s1' }], complete: false });
+			expect((yield* abi(() => none.open(context()))).reconcile).toBeUndefined();
+		})
+	);
+
 	it.effect(
 		'runs a link on the host runner, and an aborted signal interrupts its call (interrupt on abort)',
 		() =>

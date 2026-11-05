@@ -44,6 +44,7 @@ expectTypeOf<IntegrationName>().toEqualTypeOf<
 	| 'kingdee'
 	| 'support_mail'
 	| 'calendar'
+	| 'chat'
 	| 'whatsapp'
 	| 'email'
 	| 'telegram'

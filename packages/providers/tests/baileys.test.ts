@@ -1285,23 +1285,28 @@ describe('sending', () => {
 					h = yield* open(f, { creds: CREDS });
 				const s = f.opened[0]!;
 				expect(
-					yield* Effect.flip(h.link.send!({ to: '659@s.whatsapp.net', text: 'x' }, undefined))
+					yield* Effect.flip(
+						h.link.send!({ id: 'm-0', to: '659@s.whatsapp.net', text: 'x' }, undefined)
+					)
 				).toMatchObject({ message: expect.stringMatching(/not open/) });
 				s.ready();
 				yield* until(() => h.status?.state === 'connected');
-				expect(yield* h.link.send!({ to: '659@s.whatsapp.net', text: 'hello' }, undefined)).toEqual(
-					{ providerId: 'OUT1' }
-				);
-				expect(yield* sdk(() => s.config.getMessage({ id: 'OUT1' }))).toEqual({
+				const hello = { id: 'm-1', to: '659@s.whatsapp.net', text: 'hello' };
+				const { providerId } = yield* h.link.send!(hello, undefined);
+				expect(providerId).toMatch(/^3EB0[0-9A-F]{18}$/);
+				expect(yield* sdk(() => s.config.getMessage({ id: providerId }))).toEqual({
 					conversation: 'sent 1'
 				});
+				// a retry names the same message, and nothing here proves it arrives once
+				expect(yield* h.link.send!(hello, undefined)).toEqual({ providerId });
+				expect(f.provider.idempotentSends).toBeUndefined();
 				// the account's own number (the test message) is a JID
-				yield* h.link.send!({ to: '6580000000', text: 'test' }, undefined);
+				yield* h.link.send!({ id: 'm-2', to: '6580000000', text: 'test' }, undefined);
 				expect(s.sent.at(-1)).toEqual({
 					jid: '6580000000@s.whatsapp.net',
 					content: { text: 'test' }
 				});
-				yield* h.link.send!({ to: '659@s.whatsapp.net', text: 'files' }, [
+				yield* h.link.send!({ id: 'm-3', to: '659@s.whatsapp.net', text: 'files' }, [
 					file('report.pdf', 'application/pdf', '%PDF r'),
 					file('chart.png', 'image/png', 'png')
 				]);
@@ -1323,8 +1328,8 @@ describe('sending', () => {
 				// the sent messages outlive a reconnect
 				s.drop(428);
 				yield* f.socket(1);
-				expect(yield* sdk(() => f.opened[1]!.config.getMessage({ id: 'OUT1' }))).toEqual({
-					conversation: 'sent 1'
+				expect(yield* sdk(() => f.opened[1]!.config.getMessage({ id: providerId }))).toEqual({
+					conversation: 'sent 2'
 				});
 				yield* h.link.close ?? Effect.void;
 			})

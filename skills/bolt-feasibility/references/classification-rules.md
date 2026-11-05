@@ -1,87 +1,36 @@
 # Classification rules
 
-The decision tree behind SOP 2. Ask the questions in order; the first "yes" decides the verdict.
-When in doubt between two tiers, choose the lower one and say why — overpromising is the expensive
-error, and a mediated verdict can always be upgraded later by precedent.
+Ask in order; the first yes decides. Between two tiers choose the lower and say why: overpromising is the expensive error.
 
-## Decision tree
+| # | Question | Yes |
+| --- | --- | --- |
+| 1 | Data plus a workflow: records, states, transitions, permissions? | native: models, callbacks, state locks, policies, approvals, apps |
+| 2 | Computation with rules: money, eligibility, accruals, rates, scheduling, statutory calculations, derived reports? | native: std formula and decimal, callbacks, reads with helpers, aggregates, roll-ups |
+| 3 | Runs on a schedule or after an event? | native: automations, durable and idempotent |
+| 4 | Custom endpoint, dashboard, public or external site, button beyond standard surfaces? | native: read requests, guarded writes, automations, apps, `pageServer` loaders, the agent |
+| 5 | AI judgement: classification, extraction, summarisation, image reading, drafting, tool-using research ending in structured data? | native: `ctx.ai.sys_2.infer`, `ctx.ai.sys_1.decide`, `ctx.web.read`, host browser tools |
+| 6 | People outside the company over chat, without accounts? | native: a public envoy on a conversation connection |
+| 7 | Math, graphics or processing in the browser: 3D, CAD, physics, image or office documents? | native: JS and WASM dependencies in the bundle, not integrations |
+| 8 | Touches an external system of record: ERP, accounting, HRIS, other SaaS? | mediated: model sync, webhook or request; the external system owns its data |
+| 9 | Moves money, proves identity, or produces legally significant output? | mediated or certified: integrate a provider; the workspace implements workflow and handoff |
+| 10 | Anything else: OS access, hardware, native apps, game-scale real-time, raw server execution, external databases? | not-appropriate: [limits-and-boundaries.md](limits-and-boundaries.md) |
 
-```
-Q1  Is the sub-function data plus a workflow
-    (records, states, transitions, permissions)?
-        yes → NATIVE (models, write callbacks, state locks, policies, approvals, apps)
-        no  → Q2
+## Probes
 
-Q2  Is it computation with rules (money, eligibility, accruals,
-    rates, scheduling, statutory calculations, derived reporting)?
-        yes → NATIVE (std/formula, std/decimal, write callbacks, reads + src/lib helpers, aggregate)
-        no  → Q3
-
-Q3  Does it run on a schedule or after an event?
-        yes → NATIVE (automations — durable, idempotent)
-        no  → Q4
-
-Q4  Is it a custom endpoint, dashboard, public/external site,
-    or button beyond the standard surfaces?
-        yes → NATIVE (read requests, guarded writes and automations, apps, pageServer
-                     loaders and requested-page hydration, the agent)
-        no  → Q5
-
-Q5  Is it AI judgement (classification, extraction, summarisation,
-    image reading, drafting), including tool-using research that
-    ends in structured data?
-        yes → NATIVE (automations: ctx.ai.sys_2.infer, ctx.ai.sys_1.decide,
-                     ctx.web.read for research across pages)
-        no  → Q6
-
-Q6  Is it people outside the company interacting (customers,
-    contractors, suppliers over chat without accounts)?
-        yes → NATIVE (a public envoy on a conversation connection)
-        no  → Q7
-
-Q7  Is it math, graphics, or processing in the browser
-    (3D/CAD review, physics simulation, volumetric visualisation,
-    image/office-document processing)?
-        yes → NATIVE (arbitrary JS/WASM in the bundle, e.g. three.js,
-                     matter.js, pdf.js, exceljs — a dependency, not an integration)
-        no  → Q8
-
-Q8  Does it touch an external system of record (ERP, accounting,
-    HRIS, other SaaS)?
-        yes → MEDIATED (model sync / webhook / request; the external
-                       system stays the owner of its data)
-        no  → Q9
-
-Q9  Does it move money, prove identity, or produce legally or
-    regulatorily significant output?
-        yes → MEDIATED or CERTIFIED (integrate a provider; the workspace
-                implements the workflow and handoff, never the certification)
-        no  → NOT-APPROPRIATE — see limits-and-boundaries.md
-```
-
-## Probe questions to settle each verdict
-
-| Verdict                | Confirm by asking                                                                                                    | If it fails, you are really looking at                                |
-| ---------------------- | -------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------- |
-| native (data/workflow) | Can every state change be expressed as a `state` edge, a grant or a write-callback refusal?                          | an external system of record (Q8) or certified output (Q9)            |
-| native (computation)   | Is the computation deterministic and auditable?                                                                      | AI judgement (Q5) or a certified channel (Q9)                         |
-| native (automation)    | Is the trigger a schedule or a write/event inside the workspace?                                                     | external telemetry → mediated (Q8)                                    |
-| native (AI)            | Does an automation's `ctx.ai.sys_2.infer` (or `sys_1.decide`) cover it? Can a structured output describe the result? | yes → native; otherwise the model call must go through an integration |
-| native (envoys)        | Does the person need an account to act?                                                                              | account-required internal users → ordinary policies, still native     |
-| mediated               | Is there a provider whose business this is?                                                                          | a system Bolt has no surface for → not-appropriate                    |
-| not-appropriate        | Is the need OS/hardware/scale outside a web workspace?                                                               | —                                                                     |
+| Verdict | Confirm | If it fails |
+| --- | --- | --- |
+| native data | every state change is a `state` edge, grant or callback refusal | Q8 or Q9 |
+| native computation | deterministic and auditable | Q5 or Q9 |
+| native automation | trigger is a schedule or workspace event | external telemetry: mediated |
+| native AI | an automation's infer or decide covers it with a structured output | the call goes through an integration |
+| native envoy | does the person need an account? | account-required users are ordinary policies, still native |
+| mediated | there is a provider whose business this is | no Bolt surface: not-appropriate |
+| not-appropriate | the need is OS, hardware or scale outside a web workspace | |
 
 ## Rules of thumb
 
-- **Naming a third party is not the same as being impossible.** If the customer can name the
-  company that already does the thing (payment provider, KYC vendor, bank, regulator portal),
-  the verdict is mediated or certified, not not-appropriate.
-- **A native claim should carry precedent or a primitive.** "Native" without naming either a
-  template that does it or the exact primitive that supports it is an ungrounded claim.
-- **Scale and volume change feasibility, not verdict.** A million-row stock movement table is
-  still native; a live multiplayer game is not appropriate. If volume is a risk, list it as an
-  open question, not a verdict change.
-- **"Certified" is a qualification, not a verdict.** Payroll calculation is native; certified
-  payroll is certified. Report both rows.
-- **When a request spans jurisdictions** (tax, leave, statutory contributions), each
-  jurisdiction is its own computation row and its own certification row.
+- A nameable third party means mediated or certified, not impossible.
+- A native claim carries a primitive or precedent.
+- Scale changes feasibility, not verdict: list it as an open question.
+- Certified qualifies; report the native row and the certified row.
+- Each jurisdiction is its own computation and certification row.

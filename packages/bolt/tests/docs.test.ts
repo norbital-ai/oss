@@ -144,3 +144,20 @@ it('ships every maintained mechanism guide with source and complete text', () =>
 	expect(docs.guide('models')?.source).toBe('packages/bolt/docs/models.md');
 	expect(docs.guide('not-a-guide')).toBeNull();
 });
+
+it('bolt-contract holds a generated card per role, naming what a role is written with', () => {
+	const contract = docs.skill('bolt-contract');
+	expect(contract?.files.map((file) => file.path)).toEqual([
+		'SKILL.md',
+		'model.md',
+		'access.md',
+		'automation.md',
+		'sync.md',
+		'page.md',
+		'test.md'
+	]);
+	const card = (path: string) => contract?.files.find((file) => file.path === path)?.text ?? '';
+	expect(card('model.md')).toContain("kind: 'money'");
+	expect(card('automation.md')).toContain('- policies: NonEmpty<string>');
+	expect(card('page.md').length).toBeLessThan(25_000);
+});

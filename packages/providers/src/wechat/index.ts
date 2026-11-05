@@ -1,9 +1,9 @@
-import { Cache, Effect, Exit, Option, Random, Schema } from 'effect';
+import { Cache, Effect, Exit, Option, Schema } from 'effect';
 import { createDecipheriv, createHash } from 'node:crypto';
 import { HttpClient, HttpClientRequest, HttpClientResponse } from 'effect/http';
 import type { DriverOpen, Json, OutboundAttachment } from '@norbital-ai/bolt/engine';
 import type { ProviderDef } from '../abi.ts';
-import { answerFailure, ProviderUnavailable } from '../errors.ts';
+import { answerFailure, ProviderUnavailable, type ProviderFailure } from '../errors.ts';
 import {
 	blobOf,
 	field,
@@ -30,8 +30,23 @@ const Answer = Schema.Struct({
 	errmsg: Schema.optionalKey(Schema.String),
 	media_id: Schema.optionalKey(Schema.String)
 });
-const Message = Schema.Struct({ to: Schema.NonEmptyString, text: Schema.String });
+const Message = Schema.Struct({
+	id: Schema.NonEmptyString,
+	to: Schema.NonEmptyString,
+	text: Schema.String
+});
+/** `media/get` answers bytes, or JSON: a video's `video_url`, or a refusal. */
+const decodeMedia = Schema.decodeUnknownOption(
+	Schema.fromJsonString(
+		Schema.Struct({
+			video_url: Schema.optionalKey(Schema.String),
+			errcode: Schema.optionalKey(Schema.Number),
+			errmsg: Schema.optionalKey(Schema.String)
+		})
+	)
+);
 type Cred = typeof Credential.Type;
+type Download = { readonly type: string; readonly body: Uint8Array };
 
 export function wechat(): ProviderDef {
 	return {
@@ -152,6 +167,41 @@ export function wechat(): ProviderDef {
 					if (fresh) yield* Cache.invalidate(tokens, value);
 					return (yield* Cache.get(tokens, value)).token;
 				});
+			const download = (request: HttpClientRequest.HttpClientRequest) =>
+				withFetch(
+					ctx,
+					Effect.gen(function* () {
+						const response = yield* HttpClient.execute(request);
+						if (response.status >= 400)
+							return yield* Effect.fail(new ProviderUnavailable({ message: 'refused' }));
+						return {
+							type: response.headers['content-type'] ?? '',
+							body: new Uint8Array(yield* response.arrayBuffer)
+						};
+					})
+				).pipe(
+					Effect.mapError(() => new ProviderUnavailable({ message: 'WeChat media request failed' }))
+				);
+			const media = Effect.fn('WeChat.media')(function* (
+				value: Cred,
+				id: string,
+				fresh = false
+			): Effect.fn.Return<Download, ProviderFailure> {
+				const got = yield* download(
+					HttpClientRequest.get(`${API}/cgi-bin/media/get`, {
+						urlParams: { access_token: yield* accessToken(value, fresh), media_id: id }
+					})
+				);
+				if (!/json|text\/plain/.test(got.type)) return got;
+				const answer = Option.getOrUndefined(decodeMedia(new TextDecoder().decode(got.body)));
+				if (answer?.video_url !== undefined)
+					return yield* download(HttpClientRequest.get(answer.video_url));
+				if (!fresh && (answer?.errcode === 40001 || answer?.errcode === 42001))
+					return yield* media(value, id, true);
+				return yield* Effect.fail(
+					new ProviderUnavailable({ message: `WeChat media/get: ${answer?.errcode ?? got.type}` })
+				);
+			});
 			const custom = Effect.fn('WeChat.custom')(function* (path: string, body: Json) {
 				if (cred === null)
 					return yield* Effect.fail(
@@ -248,7 +298,8 @@ export function wechat(): ProviderDef {
 							image: { media_id: answer.media_id }
 						});
 					}
-					return { providerId: `wx-${yield* Random.nextInt}` };
+					// the API answers no id, and a retry of this message must name the same one
+					return { providerId: `wx-${m.id}` };
 				}),
 				typing: (to: string, on: boolean) =>
 					custom('typing', { touser: to, command: on ? 'Typing' : 'CancelTyping' }),
@@ -277,11 +328,40 @@ export function wechat(): ProviderDef {
 						Effect.orElseSucceed(() => Option.none())
 					);
 					if (Option.isNone(plain)) return new Response(null, { status: 401 });
-					const message = wechatMessage(plain.value);
-					if (message !== null)
-						yield* hostCall('store WeChat message', () =>
-							ctx.emit({ kind: 'messages', messages: [message] })
-						);
+					const parsed = wechatMessage(plain.value);
+					if (parsed === null) return new Response('success');
+					const file = parsed.media;
+					// the platform gives up after five seconds and delivers again: a file not held by then stays named
+					const got =
+						file === null
+							? null
+							: yield* media(value, file.id).pipe(
+									Effect.timeoutOption('3 seconds'),
+									Effect.map(Option.getOrNull),
+									Effect.tapCause(Effect.logWarning),
+									Effect.orElseSucceed(() => null)
+								);
+					const message =
+						file === null || got === null
+							? parsed.message
+							: {
+									...parsed.message,
+									attachments: [
+										{
+											name: file.name,
+											mime: got.type.split(';')[0] || file.mime,
+											bytes: got.body.byteLength,
+											bin: 0
+										}
+									]
+								};
+					yield* hostCall('store WeChat message', () =>
+						ctx.emit({
+							kind: 'messages',
+							messages: [message],
+							...(got === null ? {} : { bins: [got.body] })
+						})
+					);
 					return new Response('success');
 				})
 			};
@@ -315,22 +395,50 @@ export const xmlField = (xml: string, tag: string): string | null => {
 	return m === null ? null : (m[1] ?? m[2] ?? null);
 };
 
-/** One decrypted message → the wire message; `null` for events (follow, menu clicks) and kinds a conversation does not read. */
-export function wechatMessage(xml: string): Obj | null {
+/** The file a message names by `MediaId`, which the link downloads before it emits the event. */
+export type WechatMedia = { id: string; name: string; mime: string };
+const lines = (...parts: readonly (string | null)[]) =>
+	parts.filter((part) => part !== null && part !== '').join('\n');
+
+/**
+ * One decrypted message → the wire message and its file; `null` for events (follow, menu clicks), which are no message.
+ * The platform redelivers for three retries: `MsgId` keys them, `FromUserName` and `CreateTime` where a push has none.
+ */
+export function wechatMessage(xml: string): { message: Obj; media: WechatMedia | null } | null {
 	const type = xmlField(xml, 'MsgType'),
 		from = xmlField(xml, 'FromUserName'),
-		id = xmlField(xml, 'MsgId'),
-		at = Number(xmlField(xml, 'CreateTime'));
-	if (type !== 'text' || from === null || id === null || !Number.isFinite(at)) return null;
+		at = Number(xmlField(xml, 'CreateTime')),
+		mediaId = xmlField(xml, 'MediaId');
+	if (type === null || type === 'event' || from === null || !Number.isFinite(at)) return null;
+	const id = xmlField(xml, 'MsgId') ?? `${from}:${at}`,
+		format = xmlField(xml, 'Format')?.toLowerCase() ?? 'amr',
+		[mime, extension] =
+			type === 'image'
+				? ['image/jpeg', 'jpg']
+				: type === 'voice'
+					? [`audio/${format}`, format]
+					: ['video/mp4', 'mp4'];
+	const media = mediaId === null ? null : { id: mediaId, name: `wechat-${id}.${extension}`, mime };
 	return {
-		id,
-		thread: from,
-		sentAt: new Date(at * 1000).toISOString(),
-		from: { handle: from, name: null },
-		text: xmlField(xml, 'Content') ?? '',
-		group: false,
-		invocation: 'direct',
-		replyTo: null,
-		attachments: []
+		media,
+		message: {
+			id,
+			thread: from,
+			sentAt: new Date(at * 1000).toISOString(),
+			from: { handle: from, name: null },
+			text:
+				type === 'location'
+					? lines(
+							xmlField(xml, 'Label'),
+							`${xmlField(xml, 'Location_X')}, ${xmlField(xml, 'Location_Y')}`
+						)
+					: type === 'link'
+						? lines(xmlField(xml, 'Title'), xmlField(xml, 'Description'), xmlField(xml, 'Url'))
+						: (xmlField(xml, 'Content') ?? ''),
+			group: false,
+			invocation: 'direct',
+			replyTo: null,
+			attachments: media === null ? [] : [{ name: media.name, mime, bytes: 0 }]
+		}
 	};
 }

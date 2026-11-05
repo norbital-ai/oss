@@ -137,6 +137,149 @@ describe('WhatsApp via Twilio', () => {
 				]);
 			})
 	);
+	it.effect(
+		'a file it could not fetch stays named on the message; a working one is fetched as the account',
+		() =>
+			Effect.gen(function* () {
+				const f = fakeFetch([
+					(c) => (c.url.endsWith('/gone') ? new Response('nope', { status: 500 }) : undefined),
+					(c) => (c.url.endsWith('/ok') ? new Response(new Uint8Array([7])) : undefined)
+				]);
+				const h = yield* host(twilioWhatsapp(), f, STORED, { webhookUrl: URL_ });
+				yield* h.link.webhook!(
+					form({
+						MessageSid: 'SM9',
+						From: 'whatsapp:+6591111111',
+						Body: '',
+						NumMedia: '2',
+						MediaUrl0: 'https://media.example/gone',
+						MediaContentType0: 'audio/ogg; codecs=opus',
+						MediaUrl1: 'https://media.example/ok',
+						MediaContentType1: 'image/png'
+					})
+				);
+				expect(h.events).toMatchObject([
+					{
+						messages: [
+							{
+								attachments: [
+									{ name: 'whatsapp-0.ogg', mime: 'audio/ogg; codecs=opus', bytes: 0 },
+									{ name: 'whatsapp-1.png', mime: 'image/png', bytes: 1, bin: 0 }
+								]
+							}
+						],
+						bins: [new Uint8Array([7])]
+					}
+				]);
+				expect(f.calls.find((c) => c.url.endsWith('/ok'))!.headers['authorization']).toBe(
+					`Basic ${Buffer.from(`${SID}:${TOKEN}`).toString('base64')}`
+				);
+			})
+	);
+	it.effect("sentAt is the platform's date_sent, the arrival only when it cannot be read", () =>
+		Effect.gen(function* () {
+			const f = fakeFetch([
+				(c) =>
+					c.url.endsWith('/Messages/SM9.json')
+						? json({ date_sent: 'Fri, 24 May 2019 17:44:50 +0000' })
+						: undefined
+			]);
+			const h = yield* host(twilioWhatsapp(), f, STORED, { webhookUrl: URL_ });
+			const hello = { From: 'whatsapp:+6591111111', Body: 'hi' };
+			yield* h.link.webhook!(form({ ...hello, MessageSid: 'SM9' }));
+			yield* h.link.webhook!(form({ ...hello, MessageSid: 'SM8' }));
+			expect(h.events).toMatchObject([
+				{ messages: [{ sentAt: '2019-05-24T17:44:50.000Z' }] },
+				{ messages: [{ sentAt: new Date(0).toISOString() }] }
+			]);
+		})
+	);
+	it.effect('a shared location carries its place as the text', () =>
+		Effect.gen(function* () {
+			const h = yield* host(twilioWhatsapp(), api(), STORED, { webhookUrl: URL_ });
+			yield* h.link.webhook!(
+				form({
+					MessageSid: 'SM9',
+					From: 'whatsapp:+6591111111',
+					Body: '',
+					NumMedia: '0',
+					Latitude: '1.29',
+					Longitude: '103.85',
+					Label: 'Office'
+				})
+			);
+			expect(h.events).toMatchObject([{ messages: [{ text: 'Office\n1.29, 103.85' }] }]);
+		})
+	);
+	it.effect(
+		'reconcile reads the thread back by DateSent across pages, naming files without bytes',
+		() =>
+			Effect.gen(function* () {
+				const row = (sid: string, date: string | null, extra: object = {}) => ({
+					sid,
+					body: sid,
+					num_media: '0',
+					date_sent: date,
+					date_created: 'Tue, 03 Nov 2026 09:00:00 +0000',
+					direction: 'inbound',
+					...extra
+				});
+				const f = fakeFetch([
+					(c) =>
+						c.url.includes('PageToken=PA1')
+							? json({
+									messages: [
+									row('SM2', 'Mon, 02 Nov 2026 09:00:00 +0000'),
+									row('SM1', 'Sun, 01 Nov 2026 00:00:00 +0000')
+								],
+									next_page_uri: null
+								})
+							: undefined,
+					(c) =>
+						c.url.endsWith('/Messages/SM3/Media.json')
+							? json({ media_list: [{ content_type: 'image/jpeg' }] })
+							: undefined,
+					(c) =>
+						c.url.includes('/Messages.json?')
+							? json({
+									messages: [
+										row('SM3', 'Mon, 02 Nov 2026 10:00:00 +0000', { num_media: '1' }),
+										row('SM4', null)
+									],
+									next_page_uri: `/2010-04-01/Accounts/${SID}/Messages.json?Page=1&PageToken=PA1`
+								})
+							: undefined
+				]);
+				const h = yield* host(twilioWhatsapp(), f, STORED, { webhookUrl: URL_ });
+				const page = yield* h.link.reconcile!('whatsapp:+6591111111', '2026-11-01T12:00:00.000Z');
+				const first = new URL(f.calls[0]!.url);
+				expect(Object.fromEntries(first.searchParams)).toEqual({
+					From: 'whatsapp:+6591111111',
+					To: 'whatsapp:+6580000000',
+					'DateSent>': '2026-11-01',
+					PageSize: '100'
+				});
+				// SM1 is on the day asked for, before the instant: the list filters by date only
+				expect(page).toMatchObject({
+					complete: false,
+					messages: [
+						{
+							id: 'SM3',
+							thread: 'whatsapp:+6591111111',
+							sentAt: '2026-11-02T10:00:00.000Z',
+							from: { handle: 'whatsapp:+6591111111', name: null },
+							text: 'SM3',
+							group: false,
+							attachments: [{ name: 'whatsapp-0.jpeg', mime: 'image/jpeg', bytes: 0 }]
+						},
+						{ id: 'SM4', sentAt: '2026-11-03T09:00:00.000Z', attachments: [] },
+						{ id: 'SM2', sentAt: '2026-11-02T09:00:00.000Z' }
+					]
+				});
+				expect(page.messages).toHaveLength(3);
+				expect(page).not.toHaveProperty('bins');
+			})
+	);
 	it.effect("sends from the account's own sender with this webhook as the status callback", () =>
 		Effect.gen(function* () {
 			const f = api(),

@@ -248,7 +248,9 @@ is<Eq<DeadlinesShape['announce'], (notLaterThan: string) => Effect.Effect<void>>
 // ── links, syncs, outbound ──
 is<Eq<keyof LinksShape, 'open' | 'close' | 'changed' | 'typing' | 'status' | 'send' | 'request'>>();
 is<Eq<Answer<LinksShape['typing']>, Effect.Effect<void, FacilityFailure | Unavailable>>>();
-is<Eq<keyof OutboundShape, 'deliver' | 'delivered' | 'replied' | 'activate' | 'handlers'>>();
+is<
+	Eq<keyof OutboundShape, 'deliver' | 'resume' | 'delivered' | 'replied' | 'activate' | 'handlers'>
+>();
 is<
 	Eq<
 		Args<OutboundShape['delivered']>,

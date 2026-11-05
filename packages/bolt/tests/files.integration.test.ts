@@ -153,6 +153,9 @@ it.live('message attachments download for the conversation, not for every member
 			expect(get).toHaveBeenCalledTimes(1);
 			const original = yield* call('ann', 'GET', heic.id);
 			expect(original.headers.get('content-type')).toBe('image/heic');
+			// media only displays: it opens inline
+			expect(original.headers.get('content-disposition')).toMatch(/^inline;/);
+			expect(original.headers.get('content-security-policy')).toBeNull();
 			expect(
 				new Uint8Array(
 					yield* Effect.tryPromise({
@@ -384,6 +387,9 @@ it.live(
 					expect((yield* download(as, returned.id)).status).toBe(200);
 				const response = yield* download('starter', returned.id);
 				expect(response.headers.get('content-disposition')).toContain('handover.bin');
+				// what a browser could run downloads, sandboxed: it never scripts the shared origin
+				expect(response.headers.get('content-disposition')).toMatch(/^attachment;/);
+				expect(response.headers.get('content-security-policy')).toBe("sandbox; default-src 'none'");
 				expect(
 					new Uint8Array(
 						yield* Effect.tryPromise({

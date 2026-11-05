@@ -21,6 +21,7 @@ import type {
 	CronFired,
 	CrossAnswer,
 	DriverEvent,
+	ReconcilePage,
 	Invocation,
 	Outcome,
 	QueuedRun,
@@ -416,6 +417,18 @@ export type ConversationsShape = {
 		event: Exclude<DriverEvent, { kind: 'invalidate' }>,
 		expectedImportStart?: ImportStart | null
 	) => Effect.Effect<void, EngineError>;
+	/** The threads a reconcile walks (`Link.reconcile`), newest first, and the instant it asks each one from. */
+	readonly recent: (
+		instance: string
+	) => Effect.Effect<{ readonly since: string; readonly threads: readonly string[] }, EngineError>;
+	/** Makes one thread's stored rows match the platform's view; a view that differs in nothing writes nothing. */
+	readonly repair: (
+		instance: string,
+		thread: string,
+		since: string,
+		page: ReconcilePage,
+		expectedImportStart?: ImportStart | null
+	) => Effect.Effect<void, EngineError>;
 	/** `ctx.send(to, message)`: answers the queued message's id. */
 	readonly send: (
 		to: string,
@@ -586,6 +599,8 @@ export class Links extends Context.Service<Links, LinksShape>()('bolt/Links') {}
 export type OutboundShape = {
 	/** One delivery pass over the queued outbound rows. */
 	readonly deliver: Effect.Effect<{ readonly sent: number; readonly failed: number }, EngineError>;
+	/** The instance's link connected: what waits for it is due now. */
+	readonly resume: (instance: string) => Effect.Effect<void, EngineError>;
 	readonly delivered: (
 		instance: string,
 		providerId: string,

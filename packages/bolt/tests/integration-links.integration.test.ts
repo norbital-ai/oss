@@ -5,6 +5,7 @@
 // the instance verbs (`/__bolt/integrations/<instance>/…`) authorized as "may update this row".
 import * as NodeCrypto from '@effect/platform-node/NodeCrypto';
 import {
+	Clock,
 	Context,
 	Deferred,
 	Effect,
@@ -17,6 +18,7 @@ import {
 	Redacted,
 	Result,
 	Schema,
+	Scope,
 	Stream
 } from 'effect';
 import { HttpServerRequest, HttpServerResponse } from 'effect/http';
@@ -30,12 +32,16 @@ import type { DriverName, IntegrationSpec } from '../src/decl/runtime/integratio
 import type { Json } from '../src/decl/values.ts';
 import type { Authority, ActOutcome as Outcome } from '../src/engine/contracts.ts';
 import type { EngineManifest } from '../src/engine/manifest.ts';
+import { Unavailable } from '../src/decl/errors.ts';
 import { DbError, Fenced } from '../src/engine/errors.ts';
+import { LINK_DOWN } from '../src/engine/integrations/abi.ts';
+import { Conversations } from '../src/engine/services.ts';
 import { BoltError } from '../src/protocol/errors.ts';
 import { credentials, type Credentials } from '../src/engine/integrations/credentials.ts';
 import {
 	oauthClientOf,
 	type DriverOpen,
+	type Link,
 	type Provider
 } from '../src/engine/integrations/driver.ts';
 import {
@@ -58,7 +64,7 @@ import {
 	type TestOptions,
 	type WorkspaceServices
 } from '../../bolt-cli/src/test/index.ts';
-import { until as untilTurned } from './support/turns.ts';
+import { turn, until as untilTurned } from './support/turns.ts';
 
 const present = <A>(value: A | null | undefined): A => {
 	if (value === null || value === undefined) throw new Error('Missing fixture value');
@@ -119,6 +125,12 @@ const manifest = {
 		a8: { integration: 'whatsapp' },
 		a10: { integration: 'whatsapp' },
 		a24: { integration: 'whatsapp' },
+		r1: { integration: 'whatsapp' },
+		r2: { integration: 'whatsapp' },
+		r3: { integration: 'whatsapp' },
+		s1: { integration: 'whatsapp' },
+		s2: { integration: 'whatsapp' },
+		s3: { integration: 'whatsapp' },
 		mail: { integration: 'email' },
 		tg: { integration: 'telegram' },
 		erp9: { integration: 'erp' },
@@ -206,6 +218,12 @@ const fake = (
 	},
 	...over
 });
+
+/** `fake` with a history: its link answers `reconcile`. */
+const withHistory = (id: string, reconcile: NonNullable<Link['reconcile']>): Provider => {
+	const base = fake(id);
+	return { ...base, open: async (ctx) => ({ ...(await base.open(ctx)), reconcile }) };
+};
 
 const key = randomBytes(32);
 /** `self` changes only the accounts they own: one check over the batch, the stored owner against the actor. */
@@ -424,6 +442,325 @@ layer(Layer.effect(Fixture, open(manifest, calDrivers)), LIVE)('integration link
 						]);
 						expect(present(m).rows).toEqual([{ integration: 'b4', provider_id: 'W1' }]);
 						expect((yield* links.webhook('a4', post(chat('W2')))).status).toBe(404);
+						yield* links.close;
+					})
+				)
+		);
+	});
+
+	describe('reconcile', () => {
+		const message = (id: string, thread: string, at: string) => ({
+			id,
+			thread,
+			sentAt: at,
+			from: { handle: thread, name: 'Ben' },
+			text: 'missed',
+			attachments: []
+		});
+		it.effect('reconciles recent threads one at a time when a link connects', () =>
+			Effect.scoped(
+				Effect.gen(function* () {
+					const { t, host } = yield* Fixture;
+					const first = yield* host([fake('h1')]);
+					yield* first.pair('r1', { key: 'k' });
+					for (const [id, thread] of [
+						['M1', 'one@s.whatsapp.net'],
+						['M2', 'two@s.whatsapp.net']
+					] as const)
+						yield* t.receive('r1', message(id, thread, t.clock.now()));
+					yield* first.close;
+					let active = 0,
+						most = 0;
+					const asked: string[] = [];
+					const links = yield* host([
+						withHistory('h1', async (thread, since) => {
+							most = Math.max(most, ++active);
+							await new Promise((resolve) => setTimeout(resolve, 0));
+							asked.push(thread);
+							expect(since < t.clock.now()).toBe(true);
+							active--;
+							return {
+								complete: false,
+								messages: [message(`${thread}-missed`, thread, t.clock.now())]
+							};
+						})
+					]);
+					yield* links.resume;
+					yield* until(() => asked.length === 2);
+					expect(most).toBe(1);
+					expect(asked.toSorted()).toEqual(['one@s.whatsapp.net', 'two@s.whatsapp.net']);
+					yield* until(() => active === 0);
+					yield* untilTurned(
+						t.db
+							.rows(Schema.Struct({ n: Schema.Number }), {
+								text: `SELECT count(*)::int AS n FROM sys_message WHERE integration = 'r1' AND provider_id LIKE '%-missed'`,
+								params: []
+							})
+							.pipe(Effect.map((rows) => rows[0]?.n === 2))
+					);
+					yield* links.close;
+				})
+			)
+		);
+		it.effect('stops when the link closes, and aborts the call in flight', () =>
+			Effect.scoped(
+				Effect.gen(function* () {
+					const { t, host } = yield* Fixture;
+					const first = yield* host([fake('h2')]);
+					yield* first.pair('r2', { key: 'k' });
+					for (const n of [1, 2, 3])
+						yield* t.receive('r2', message(`S${n}`, `t${n}@s.whatsapp.net`, t.clock.now()));
+					yield* first.close;
+					const asked: string[] = [];
+					let aborted = false;
+					const links = yield* host([
+						withHistory('h2', (thread, _since, signal) => {
+							asked.push(thread);
+							return new Promise((_, reject) => {
+								signal.addEventListener('abort', () => {
+									aborted = true;
+									reject(new Error('aborted'));
+								});
+							});
+						})
+					]);
+					yield* links.resume;
+					yield* until(() => asked.length === 1);
+					yield* links.close;
+					yield* until(() => aborted);
+					expect(asked).toHaveLength(1);
+				})
+			)
+		);
+		it.effect(
+			'one thread the platform refuses does not end the pass; a platform failure does',
+			() =>
+				Effect.scoped(
+					Effect.gen(function* () {
+						const { t, host } = yield* Fixture;
+						const first = yield* host([fake('h3')]);
+						yield* first.pair('r3', { key: 'k' });
+						for (const n of [1, 2, 3])
+							yield* t.receive('r3', message(`F${n}`, `f${n}@s.whatsapp.net`, t.clock.now()));
+						yield* first.close;
+						const run = (fail: () => unknown) =>
+							Effect.gen(function* () {
+								const asked: string[] = [];
+								const links = yield* host([
+									withHistory('h3', async (thread) => {
+										asked.push(thread);
+										throw fail();
+									})
+								]);
+								yield* links.resume;
+								yield* until(() => asked.length > 0);
+								yield* Effect.sleep('30 millis');
+								yield* links.close;
+								return asked.length;
+							});
+						expect(
+							yield* run(() => ({ kind: 'invalid', message: 'the bot left that channel' }))
+						).toBe(3);
+						expect(yield* run(() => ({ kind: 'rateLimited', message: 'slow down' }))).toBe(1);
+					})
+				)
+		);
+		/** The case's workspace, with the manager on its clock: `t.clock` is the day that passes. */
+		const onItsClock = <A, E>(
+			body: (workspace: Effect.Success<ReturnType<typeof open>>) => Effect.Effect<A, E, Scope.Scope>
+		) =>
+			Effect.scoped(
+				Effect.gen(function* () {
+					const workspace = yield* open();
+					return yield* body(workspace).pipe(
+						Effect.provideService(Clock.Clock, Context.get(workspace.context, Clock.Clock))
+					);
+				})
+			);
+		/** `t.settled` waits for a woken fiber to sleep again, and the reconcile fiber waits on a connect instead. */
+		const settle = (t: Kit, by: string) =>
+			Effect.gen(function* () {
+				t.clock.advance(by);
+				for (let n = 0; n < 20; n++) yield* turn;
+			});
+		it.effect('reconnects are floored, and a link stays reconciled once a day', () =>
+			onItsClock(({ t, host }) =>
+				Effect.gen(function* () {
+					let ctx: DriverOpen | undefined;
+					const asked: string[] = [];
+					const base = withHistory('h4', async (thread) => {
+						asked.push(thread);
+						return { complete: false, messages: [] };
+					});
+					const links = yield* host([
+						{
+							...base,
+							open: async (c) => {
+								ctx = c;
+								return base.open(c);
+							}
+						}
+					]);
+					yield* t.receive('a1', message('D1', 'day@s.whatsapp.net', t.clock.now()));
+					yield* links.pair('a1', { key: 'k' });
+					yield* until(() => asked.length === 1);
+					const provider = present(ctx);
+					yield* driverCall(() => provider.status({ state: 'reconnecting' }));
+					yield* driverCall(() => provider.status({ state: 'connected', account: 'k' }));
+					yield* settle(t, '1min');
+					expect(asked).toHaveLength(1);
+					yield* settle(t, '61min');
+					yield* until(() => asked.length === 2);
+					yield* settle(t, '2h');
+					yield* settle(t, '1d');
+					yield* until(() => asked.length === 3);
+					yield* links.close;
+				})
+			)
+		);
+		it.effect('an idle channel asks the database nothing once it found nothing recent', () =>
+			onItsClock(({ t, context, host }) =>
+				Effect.gen(function* () {
+					const asked: string[] = [];
+					let recents = 0;
+					const conversations = Context.get(context, Conversations);
+					const links = yield* host(
+						[
+							withHistory('h5', async (thread) => {
+								asked.push(thread);
+								return { complete: false, messages: [] };
+							})
+						],
+						{
+							enter: (effect) =>
+								effect.pipe(
+									Effect.provideService(Conversations, {
+										...conversations,
+										recent: (instance) =>
+											conversations.recent(instance).pipe(
+												Effect.ensuring(
+													Effect.sync(() => {
+														recents++;
+													})
+												)
+											)
+									}),
+									Effect.provide(context)
+								)
+						}
+					);
+					yield* links.pair('a1', { key: 'k' });
+					yield* until(() => recents === 1);
+					yield* settle(t, '2h');
+					yield* settle(t, '1d');
+					yield* settle(t, '2h');
+					yield* settle(t, '1d');
+					expect(recents).toBe(1);
+					expect(asked).toEqual([]);
+					yield* links.close;
+				})
+			)
+		);
+	});
+
+	describe('a send and the link it goes through', () => {
+		it.effect(
+			'a paired link that is not connected is down: it calls no provider, and its connect delivers what waited',
+			() =>
+				Effect.scoped(
+					Effect.gen(function* () {
+						const { t, context, host } = yield* Fixture;
+						let ctx: DriverOpen | undefined,
+							sends = 0;
+						const base = fake('s1');
+						const links = yield* host([
+							{
+								...base,
+								open: async (c) => {
+									ctx = c;
+									const link = await base.open(c);
+									return {
+										...link,
+										send: async () => {
+											sends++;
+											return { providerId: `sent:${sends}` };
+										}
+									};
+								}
+							}
+						]);
+						calLinks = links;
+						yield* links.pair('s1', { key: 'k' });
+						const provider = present(ctx);
+						yield* driverCall(() => provider.status({ state: 'reconnecting' }));
+						expect(yield* links.port.send('s1', { text: 'x' }, []).pipe(Effect.flip)).toMatchObject(
+							{ _tag: 'Unavailable', facility: LINK_DOWN }
+						);
+						expect(sends).toBe(0);
+						yield* Context.get(context, Conversations)
+							.send('s1', { to: 'down@s.whatsapp.net', text: 'wait' }, {})
+							.pipe(Effect.provide(context));
+						expect(sends).toBe(0);
+						yield* driverCall(() => provider.status({ state: 'connected', account: 'k' }));
+						yield* t.runDue();
+						yield* until(() => sends === 1);
+						yield* links.close;
+					})
+				).pipe(
+					Effect.ensuring(
+						Effect.sync(() => {
+							calLinks = undefined;
+						})
+					)
+				)
+		);
+		it.effect('an instance with no credentials has nothing to wait for: it is not down', () =>
+			Effect.scoped(
+				Effect.gen(function* () {
+					const { host } = yield* Fixture;
+					const links = yield* host([fake('s2')]);
+					const failure = yield* links.port.send('s2', { text: 'x' }, []).pipe(Effect.flip);
+					expect(failure instanceof Unavailable && failure.facility === LINK_DOWN).toBe(false);
+					yield* links.close;
+				})
+			)
+		);
+		it.effect(
+			"a link's own movements read no database; a provider's idempotence lands on the row",
+			() =>
+				Effect.scoped(
+					Effect.gen(function* () {
+						const { t, host, row } = yield* Fixture;
+						let ctx: DriverOpen | undefined;
+						const base = fake('s3', [], 'whatsapp', { idempotentSends: true });
+						const links = yield* host([
+							{
+								...base,
+								open: async (c) => {
+									ctx = c;
+									return base.open(c);
+								}
+							}
+						]);
+						yield* links.pair('s3', { key: 'k' });
+						expect((yield* row('s3'))['status']).toMatchObject({ idempotentSends: true });
+						const provider = present(ctx);
+						t.count.reset();
+						yield* driverCall(() => provider.status({ state: 'reconnecting' }));
+						yield* driverCall(() => provider.status({ state: 'connected', account: 'k' }));
+						provider.pairing(null);
+						expect(t.count).toMatchObject({ reads: 0, writes: 0 });
+						// a watcher hears it from what the link holds, too
+						const heard = yield* Queue.unbounded<InstanceStatus>();
+						yield* links.watch('s3').pipe(
+							Stream.runForEach((status) => Queue.offer(heard, status)),
+							Effect.forkScoped
+						);
+						expect((yield* Queue.take(heard)).state).toBe('connected');
+						t.count.reset();
+						yield* driverCall(() => provider.status({ state: 'reconnecting' }));
+						expect((yield* Queue.take(heard)).state).toBe('reconnecting');
+						expect(t.count.reads).toBe(0);
 						yield* links.close;
 					})
 				)

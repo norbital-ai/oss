@@ -120,11 +120,179 @@ describe('WeChat', () => {
 				expect(wechatDecrypt(encrypt('abc'), KEY, APP)).toBe('abc');
 			})
 	);
+	const xml = (type: string, body: string, id: string | null = '3001') =>
+		`<xml><ToUserName><![CDATA[gh_1]]></ToUserName><FromUserName><![CDATA[openid-1]]></FromUserName><CreateTime>1790000000</CreateTime><MsgType><![CDATA[${type}]]></MsgType>${body}${id === null ? '' : `<MsgId>${id}</MsgId>`}</xml>`;
+	const media = (answer: Response) =>
+		fakeFetch([
+			(c) =>
+				c.url.includes('/cgi-bin/token')
+					? json({ access_token: 'AT', expires_in: 7200 })
+					: undefined,
+			(c) => (c.url.includes('/media/get') ? answer.clone() : undefined),
+			(c) =>
+				c.url.startsWith('https://cdn.example/')
+					? new Response(new Uint8Array([4, 5]), { headers: { 'content-type': 'video/mp4' } })
+					: undefined
+		]);
+	it.effect('an image lands with its bytes, fetched by MediaId under the access token', () =>
+		Effect.gen(function* () {
+			const f = media(
+				new Response(new Uint8Array([1, 2, 3]), { headers: { 'content-type': 'image/png' } })
+			);
+			const h = yield* host(wechat(), f, { credential: CRED });
+			yield* h.link.webhook!(
+				post(
+					encrypt(
+						xml(
+							'image',
+							'<PicUrl><![CDATA[https://pic.example/1]]></PicUrl><MediaId><![CDATA[M1]]></MediaId>'
+						)
+					)
+				)
+			);
+			expect(new URL(f.calls.at(-1)!.url).searchParams.get('media_id')).toBe('M1');
+			expect(h.events).toMatchObject([
+				{
+					messages: [
+						{
+							id: '3001',
+							text: '',
+							attachments: [{ name: 'wechat-3001.jpg', mime: 'image/png', bytes: 3, bin: 0 }]
+						}
+					],
+					bins: [new Uint8Array([1, 2, 3])]
+				}
+			]);
+		})
+	);
+	it.effect('a video is the download its video_url names; a retried push keeps its id', () =>
+		Effect.gen(function* () {
+			const h = yield* host(wechat(), media(json({ video_url: 'https://cdn.example/v.mp4' })), {
+				credential: CRED
+			});
+			const video = encrypt(
+				xml('video', '<MediaId><![CDATA[M2]]></MediaId><ThumbMediaId><![CDATA[T2]]></ThumbMediaId>')
+			);
+			yield* h.link.webhook!(post(video));
+			yield* h.link.webhook!(post(video));
+			expect(h.events).toMatchObject([
+				{
+					messages: [{ id: '3001', attachments: [{ mime: 'video/mp4', bytes: 2, bin: 0 }] }],
+					bins: [new Uint8Array([4, 5])]
+				},
+				{ messages: [{ id: '3001' }] }
+			]);
+		})
+	);
+	it.effect('a file the platform refuses stays named on the message', () =>
+		Effect.gen(function* () {
+			const h = yield* host(wechat(), media(json({ errcode: 40007, errmsg: 'invalid media_id' })), {
+				credential: CRED
+			});
+			yield* h.link.webhook!(
+				post(
+					encrypt(
+						xml('voice', '<MediaId><![CDATA[M3]]></MediaId><Format><![CDATA[Speex]]></Format>')
+					)
+				)
+			);
+			expect(h.events).toMatchObject([
+				{
+					messages: [
+						{ attachments: [{ name: 'wechat-3001.speex', mime: 'audio/speex', bytes: 0 }] }
+					]
+				}
+			]);
+			expect(h.events[0]).not.toHaveProperty('bins');
+			const down = yield* host(wechat(), media(new Response('<html>', { status: 502, headers: { 'content-type': 'text/html' } })), {
+				credential: CRED
+			});
+			yield* down.link.webhook!(post(encrypt(xml('image', '<MediaId><![CDATA[M5]]></MediaId>'))));
+			expect(down.events[0]).not.toHaveProperty('bins');
+		})
+	);
+	it.effect('a stale token is fetched again once for a file', () =>
+		Effect.gen(function* () {
+			let refused = false;
+			const f = fakeFetch([
+				(c) =>
+					c.url.includes('/cgi-bin/token')
+						? json({ access_token: `AT${++tokens}`, expires_in: 7200 })
+						: undefined,
+				(c) => {
+					if (!c.url.includes('/media/get')) return undefined;
+					if (refused) return new Response(new Uint8Array([8]));
+					refused = true;
+					return json({ errcode: 40001, errmsg: 'invalid credential' });
+				}
+			]);
+			const h = yield* host(wechat(), f, { credential: CRED });
+			yield* h.link.webhook!(post(encrypt(xml('image', '<MediaId><![CDATA[M4]]></MediaId>'))));
+			expect(h.events).toMatchObject([{ bins: [new Uint8Array([8])] }]);
+		})
+	);
+	it.effect('a location and a link are their text; an event is still no message', () =>
+		Effect.gen(function* () {
+			const h = yield* host(wechat(), api(), { credential: CRED });
+			yield* h.link.webhook!(
+				post(
+					encrypt(
+						xml(
+							'location',
+							'<Location_X>1.29</Location_X><Location_Y>103.85</Location_Y><Scale>20</Scale><Label><![CDATA[Office]]></Label>'
+						)
+					)
+				)
+			);
+			yield* h.link.webhook!(
+				post(
+					encrypt(
+						xml(
+							'link',
+							'<Title><![CDATA[Quote]]></Title><Description><![CDATA[v2]]></Description><Url><![CDATA[https://a.example]]></Url>',
+							'3002'
+						)
+					)
+				)
+			);
+			yield* h.link.webhook!(
+				post(encrypt(xml('event', '<Event><![CDATA[subscribe]]></Event>', null)))
+			);
+			expect(h.events).toMatchObject([
+				{ messages: [{ id: '3001', text: 'Office\n1.29, 103.85' }] },
+				{ messages: [{ id: '3002', text: 'Quote\nv2\nhttps://a.example' }] }
+			]);
+			expect(h.events).toHaveLength(2);
+		})
+	);
+	it.effect(
+		'a push without a MsgId keys on its sender and time, so its retry is the same message',
+		() =>
+			Effect.gen(function* () {
+				const h = yield* host(wechat(), api(), { credential: CRED });
+				const push = encrypt(xml('text', '<Content><![CDATA[hi]]></Content>', null));
+				yield* h.link.webhook!(post(push));
+				yield* h.link.webhook!(post(push));
+				expect(h.events).toMatchObject([
+					{ messages: [{ id: 'openid-1:1790000000' }] },
+					{ messages: [{ id: 'openid-1:1790000000' }] }
+				]);
+			})
+	);
+	it.effect('a retried send names the same provider id', () =>
+		Effect.gen(function* () {
+			const h = yield* host(wechat(), api(), { credential: CRED });
+			const hello = { id: 'm-9', to: 'openid-1', text: 'hi' };
+			const first = yield* h.link.send!(hello, undefined);
+			expect(first).toEqual({ providerId: 'wx-m-9' });
+			expect(yield* h.link.send!(hello, undefined)).toEqual(first);
+		})
+	);
 	it.effect('sends through the customer-service API; an expired token is fetched again once', () =>
 		Effect.gen(function* () {
 			const f = api([42001]),
 				h = yield* host(wechat(), f, { credential: CRED });
-			yield* h.link.send!({ to: 'openid-1', text: 'hi' }, undefined);
+			yield* h.link.send!({ id: 'm-1', to: 'openid-1', text: 'hi' }, undefined);
 			const sends = f.calls.filter((c) => c.url.includes('/message/custom/send'));
 			expect(sends).toHaveLength(2);
 			expect(sends[1]!.url).not.toBe(sends[0]!.url);
@@ -136,7 +304,7 @@ describe('WeChat', () => {
 			expect(
 				(yield* Effect.flip(
 					(yield* host(wechat(), api([45015]), { credential: CRED })).link.send!(
-						{ to: 'o', text: 'x' },
+						{ id: 'm-2', to: 'o', text: 'x' },
 						undefined
 					)
 				)).message
@@ -147,7 +315,7 @@ describe('WeChat', () => {
 		Effect.gen(function* () {
 			const f = api(),
 				h = yield* host(wechat(), f, { credential: CRED });
-			yield* h.link.send!({ to: 'openid-1', text: 'hi' }, [
+			yield* h.link.send!({ id: 'm-3', to: 'openid-1', text: 'hi' }, [
 				file('report.pdf', 'application/pdf', '%PDF r'),
 				file('chart.png', 'image/png', 'png')
 			]);

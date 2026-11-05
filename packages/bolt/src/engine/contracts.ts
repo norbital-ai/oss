@@ -478,7 +478,7 @@ export type Ingested =
 			readonly meta: IngestMeta;
 	  };
 /**
- * File ingestion (plan 12) behind the agent's `ingest` and `ctx.convert.ingest`: one file to `Ingested`, or
+ * File ingestion (plan 12) behind the agent's `read_file` and `ctx.convert.ingest`: one file to `Ingested`, or
  * `unsupported` (the format has no parser: CAD). A video container is heard from its audio track.
  * `documentIngester` implements it over Norbital Convert's `/v1/ingest`; a converter without a transcription model rejects audio as `unavailable`.
  */
@@ -598,10 +598,10 @@ export interface WebReadPort {
 	/** `raw`: also the markup and its links, for a page that is markup (§5.8; P19: a provider may omit what it lacks). */ // hook:runtime
 	read(url: string, signal: AbortSignal, options?: { raw?: boolean }): Promise<WebPage>;
 }
-/** Where `navigate` goes: a page, or back, forward or a reload of the one open. */
+/** Where the agent's browser goes: a page, or back, forward or a reload of the one open. */
 export type BrowserTarget =
 	{ readonly url: string } | { readonly go: 'back' | 'forward' | 'reload' };
-/** One `browser_act` step, on a control's `ref` from the page text. */
+/** One `browser` step, on a control's `ref` from the page text. */
 export type BrowserStep =
 	| { readonly click: string }
 	| { readonly type: { readonly ref: string; readonly text: string; readonly submit?: boolean } }
@@ -642,7 +642,7 @@ export interface BrowserPort {
 		viewport?: BrowserViewport
 	): Promise<Json>;
 	/**
-	 * Open a page of the workspace as the person, signed in by the host's hand-off: the internal twin of `navigate`.
+	 * Open a page of the workspace as the person, signed in by the host's hand-off: the internal half of `browser`.
 	 * A host that cannot sign its browser in omits it, and the agent is not offered workspace pages.
 	 */
 	openWorkspace?(
@@ -776,6 +776,19 @@ export type DriverPage = {
 	snapshot?: 'begin' | 'end';
 	retained?: false;
 	health?: { state: 'ready' | 'attention'; code?: string; message?: string };
+};
+/**
+ * The platform's current view of one thread since an instant (`Link.reconcile`). `messages` is what a `messages` event
+ * would carry, with `bins` for its bytes: what others wrote, and a personal account's own messages marked `outbound`.
+ * `complete` says it holds every message of the window, so what it lacks was deleted; a partial page repairs what it
+ * shows and deletes nothing. `since` narrows the window: the instant the platform's history really reaches back to,
+ * when that is later than the instant asked for.
+ */
+export type ReconcilePage = {
+	messages: readonly Json[];
+	complete: boolean;
+	since?: string;
+	bins?: readonly Uint8Array[];
 };
 /**
  * The host's live side of integration instances (§4.5), by instance id: a conversation driver `send`s (and shows `typing`),
@@ -988,7 +1001,14 @@ export type ImageFacts = {
 export type ImagePreviewSize = 64 | 512 | 1024;
 export type ImagePreviewMime = 'image/jpeg' | 'image/png' | 'image/heic' | 'image/heif';
 /** A rectangle in the oriented image, with coordinates from zero to one. */
-export type ImageCrop = { left: number; top: number; right: number; bottom: number };
+export type ImageCrop = {
+	left: number;
+	top: number;
+	right: number;
+	bottom: number;
+	/** Enlarge a small region until its longer edge reaches this many pixels, at most 4×. */
+	minEdge?: number;
+};
 /** A preview at most `maxEdge` on its long side, EXIF-oriented; `derived: false` is the original (an APNG, a HEIC sequence). */
 export type ImagePreview = {
 	readonly bytes: Uint8Array;

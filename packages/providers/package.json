@@ -18,6 +18,10 @@
 			"types": "./build/errors.d.ts",
 			"default": "./build/errors.js"
 		},
+		"./simulator": {
+			"types": "./build/simulator/index.d.ts",
+			"default": "./build/simulator/index.js"
+		},
 		"./openrouter": {
 			"types": "./build/openrouter/index.d.ts",
 			"default": "./build/openrouter/index.js"
@@ -45,7 +49,25 @@
 	},
 	"devDependencies": {
 		"@effect/platform-node": "catalog:",
+		"@getdial/sdk": "0.19.1",
+		"@googleapis/chat": "44.7.0",
+		"@larksuiteoapi/node-sdk": "1.76.0",
+		"@line/bot-sdk": "11.0.0",
+		"@linear/sdk": "76.0.0",
+		"@linqapp/sdk": "0.47.1",
+		"@liveblocks/node": "3.24.5",
+		"@microsoft/teams.api": "2.1.1",
+		"@microsoft/teams.apps": "2.1.1",
+		"@octokit/rest": "22.0.1",
+		"@spectrum-ts/core": "10.0.0",
+		"@spectrum-ts/imessage": "10.0.0",
 		"@types/node": "^26.6.5",
+		"@xdevplatform/chat-xdk": "0.4.3",
+		"@xdevplatform/xdk": "0.6.6",
+		"google-auth-library": "10.5.0",
+		"juicebox-sdk": "0.3.7",
+		"resend": "6.37.0",
+		"sendblue": "3.21.2",
 		"typescript": "catalog:"
 	},
 	"repository": {
@@ -56,5 +78,77 @@
 	"publishConfig": {
 		"access": "public",
 		"provenance": true
+	},
+	"peerDependencies": {
+		"@getdial/sdk": "0.19.1",
+		"@googleapis/chat": "44.7.0",
+		"@larksuiteoapi/node-sdk": "1.76.0",
+		"@line/bot-sdk": "11.0.0",
+		"@linear/sdk": "76.0.0",
+		"@linqapp/sdk": "0.47.1",
+		"@liveblocks/node": "3.24.5",
+		"@microsoft/teams.apps": "2.1.1",
+		"@octokit/rest": "22.0.1",
+		"@spectrum-ts/core": "10.0.0",
+		"@spectrum-ts/imessage": "10.0.0",
+		"@xdevplatform/chat-xdk": "0.4.3",
+		"@xdevplatform/xdk": "0.6.6",
+		"google-auth-library": "10.5.0",
+		"juicebox-sdk": "0.3.7",
+		"resend": "6.37.0",
+		"sendblue": "3.21.2"
+	},
+	"peerDependenciesMeta": {
+		"@getdial/sdk": {
+			"optional": true
+		},
+		"@googleapis/chat": {
+			"optional": true
+		},
+		"@larksuiteoapi/node-sdk": {
+			"optional": true
+		},
+		"@line/bot-sdk": {
+			"optional": true
+		},
+		"@linear/sdk": {
+			"optional": true
+		},
+		"@linqapp/sdk": {
+			"optional": true
+		},
+		"@liveblocks/node": {
+			"optional": true
+		},
+		"@microsoft/teams.apps": {
+			"optional": true
+		},
+		"@octokit/rest": {
+			"optional": true
+		},
+		"@spectrum-ts/core": {
+			"optional": true
+		},
+		"@spectrum-ts/imessage": {
+			"optional": true
+		},
+		"@xdevplatform/chat-xdk": {
+			"optional": true
+		},
+		"@xdevplatform/xdk": {
+			"optional": true
+		},
+		"google-auth-library": {
+			"optional": true
+		},
+		"juicebox-sdk": {
+			"optional": true
+		},
+		"resend": {
+			"optional": true
+		},
+		"sendblue": {
+			"optional": true
+		}
 	}
 }

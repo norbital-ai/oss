@@ -6,7 +6,13 @@
 // a provider's setup is data (`SetupDescription`), its state one of a few words, its facts an `about` object.
 import type { DriverName, IntegrationSpec } from '../../decl/runtime/integration.ts';
 import type { Json } from '../../decl/values.ts';
-import type { DriverEvent, DriverPage, OutboundAttachment, TcpPort } from '../contracts.ts';
+import type {
+	DriverEvent,
+	DriverPage,
+	OutboundAttachment,
+	ReconcilePage,
+	TcpPort
+} from '../contracts.ts';
 import type {
 	ImportStart,
 	LinkStatus,
@@ -114,6 +120,11 @@ export type Link = { close(): Promise<void> } & Partial<{
 		cursor: Json | null,
 		signal: AbortSignal
 	): Promise<DriverPage>;
+	/**
+	 * The platform's current view of `thread` since the instant `since`. Absent where the platform keeps no history. The
+	 * links manager calls it for recent threads when the link connects and once a day after, one thread at a time.
+	 */
+	reconcile(thread: string, since: string, signal: AbortSignal): Promise<ReconcilePage>;
 	/** The resources a configuration may name (calendars), for the operator to pick. */
 	discover(): Promise<readonly { id: string; label: string }[]>;
 	/** Renews what the provider expires (a calendar watch); the next instant to renew at, or `null`. */
@@ -134,6 +145,11 @@ export type Provider = ProviderChoice & {
 	oauth?: OAuthVendor;
 	/** The provider can send a test message once connected (`POST …/test`). */
 	test?: TestSend;
+	/**
+	 * `send` is idempotent by `message.id`: a repeat reaches the customer once, so a send that timed out is sent again.
+	 * Otherwise such a message stays `uncertain`, since the first send may have arrived.
+	 */
+	idempotentSends?: boolean;
 	/** Provider-owned registration text for a personal or a workspace instance of `definition`; credentials and pairing keep the same runtime. */
 	describe?(options: {
 		readonly personal: boolean;

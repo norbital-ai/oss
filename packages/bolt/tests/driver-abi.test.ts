@@ -36,6 +36,32 @@ describe('the driver ABI, engine side', () => {
 		})
 	);
 
+	it.effect('a reconcile page is decoded: a `since` that is no instant is refused', () =>
+		Effect.gen(function* () {
+			const run = yield* FiberSet.makeRuntimePromise<never>();
+			let since = '2026-10-01T00:00:00.000Z';
+			const link: Link = {
+				close: async () => {},
+				reconcile: async (thread) => ({ messages: [{ id: thread }], complete: true, since })
+			};
+			const calls = linkCalls(link, run, 'test');
+			expect(yield* calls.reconcile('t1', '2026-09-01T00:00:00.000Z')).toEqual({
+				messages: [{ id: 't1' }],
+				complete: true,
+				since
+			});
+			since = 'next page';
+			expect(yield* Effect.flip(calls.reconcile('t1', since))).toMatchObject({
+				_tag: 'FacilityFailure',
+				kind: 'upstream'
+			});
+			const absent: Link = { close: async () => {} };
+			expect(
+				yield* Effect.flip(linkCalls(absent, run, 'test').reconcile('t1', since))
+			).toBeInstanceOf(Unavailable);
+		})
+	);
+
 	it.effect(
 		'decodes answers, classifies a send refusal by name, and fails an absent member as Unavailable',
 		() =>

@@ -12,6 +12,7 @@ export {
 	ImportStartCapability
 } from './schema.ts';
 export { ActReply, QReply, WireError } from './schema.ts';
+export { uuidv7 } from './wire.ts';
 export {
 	LayerRequestSchema,
 	READ_LIMIT,

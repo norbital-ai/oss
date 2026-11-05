@@ -27,7 +27,7 @@ not paste preview links: it tells you to press View preview. A preview runs on a
 was built (a copy-on-write fork); anything you enter in it stays in the preview.
 
 Norbius picks what the previewer shows: each new preview it builds replaces the last, and it can switch back to an
-earlier preview it built in this conversation (`preview_show`). It never shows any other page there.
+earlier preview it built in this conversation (`page { preview }`). It never shows any other page there.
 
 Norbius can look at the preview itself: a screenshot it took appears in the chat as an image card with the same caption
 and **View preview**; the preview's runtime log appears as a folded list, errors in red. Times are the workspace's.

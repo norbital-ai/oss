@@ -42,7 +42,8 @@ export const ImageCrop = Schema.Struct({
 	left: Schema.Number,
 	top: Schema.Number,
 	right: Schema.Number,
-	bottom: Schema.Number
+	bottom: Schema.Number,
+	minEdge: Schema.optionalKey(Schema.Number)
 });
 const ImagePreviewSchema = Schema.Struct({
 	bytes: bytesSchema,

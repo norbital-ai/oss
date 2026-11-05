@@ -74,7 +74,14 @@
 	/** The one-click way in, in the definition's order (Google before Microsoft); unavailable here, the card says so. */
 	const shown = $derived(providers.find(pairsAtOnce) ?? providers[0]);
 	const primary = $derived(shown?.available === false ? undefined : shown);
-	const name = $derived(shown?.name === undefined ? driverLabel(driver) : say(shown.name));
+	const nameOf = (provider: ProviderChoice | undefined) =>
+		provider?.name === undefined ? driverLabel(driver) : say(provider.name);
+	/** Several providers and none that starts at once: no one of them speaks for the card until a person picks. */
+	const undecided = $derived(offered.length > 1 && !providers.some(pairsAtOnce));
+	const pickedIn = (status: InstanceStatus | null) =>
+		status?.providers?.find((provider) => provider.id === status.provider);
+	const headingOf = (status: InstanceStatus | null) =>
+		pickedIn(status) ?? (undecided ? undefined : shown);
 	let made = $state<string | null>(null);
 	/** The instance this card disconnected and removed: gone now, before the owner's list catches up. */
 	let dropped = $state<string | null>(null);
@@ -150,7 +157,7 @@
 		if (target === null || busy) return;
 		const ask = connected
 			? confirmAction({
-					title: t('Disconnect {name}?').replace('{name}', name),
+					title: t('Disconnect {name}?').replace('{name}', nameOf(headingOf(source?.status ?? null))),
 					body: t('This logs the account out and deletes its stored credentials.'),
 					confirmLabel: t('Disconnect'),
 					cancelLabel: t('Cancel'),
@@ -190,8 +197,8 @@
 	{@const working = busy || source?.busy === true}
 	{@const failure =
 		error ?? source?.error ?? (status?.state === 'error' ? (status.error ?? null) : null)}
-	{@const active =
-		status?.providers?.find((provider) => provider.id === status.provider) ?? primary}
+	{@const active = pickedIn(status) ?? primary}
+	{@const heading = headingOf(status)}
 	{@const draft =
 		primary === undefined
 			? undefined
@@ -204,12 +211,14 @@
 		<div class="flex items-center justify-between gap-3">
 			<div class="flex min-w-0 items-center gap-3">
 				<span class="grid size-9 shrink-0 place-items-center rounded-md border bg-background">
-					<Icon name={shown?.icon ?? 'lucide:plug'} class="size-5" />
+					<Icon name={heading?.icon ?? 'lucide:plug'} class="size-5" />
 				</span>
 				<Stack gap="none" class="min-w-0">
-					<p class="truncate text-sm font-medium">{name}</p>
+					<p class="truncate text-sm font-medium">
+						{nameOf(heading)}
+					</p>
 					<p class="truncate text-meta">
-						{shown?.description === undefined ? description : say(shown.description)}
+						{heading?.description === undefined ? description : say(heading.description)}
 					</p>
 					<p
 						class="text-meta"
@@ -305,7 +314,7 @@
 				{locale}
 			/>
 		{/if}
-		{#if !connected && !waiting && !open && offered.some((p) => p !== primary)}
+		{#if !connected && !waiting && !open && !undecided && offered.some((p) => p !== primary)}
 			<button
 				type="button"
 				class="self-start text-meta underline-offset-2 hover:underline"

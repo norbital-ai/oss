@@ -83,7 +83,17 @@
 	import SoundSettings from './settings/Sounds.svelte';
 	import { CLIENT_NAVIGATION, type ClientNavigation } from './agent/navigation.ts';
 	import { CLIENT_PAGE_ACTION, type ClientPageAction } from './agent/navigation.ts';
-	import { fillField, pageClickable, pageField, pageFieldLabel, pageLabel } from './agent/page.ts';
+	import {
+		fillField,
+		pageClickable,
+		pageField,
+		pageFieldLabel,
+		pageCovered,
+		pageLabel,
+		pageMark,
+		pageScreen,
+		ringOn
+	} from './agent/page.ts';
 	import Inbox from './inbox/Inbox.svelte';
 	import Settings from './settings/Settings.svelte';
 	import { clientNavigationPath, systemUiIntent } from '../protocol/system-ui.ts';
@@ -124,7 +134,7 @@
 				api.agent
 					.post(
 						conversation,
-						`I took control of the Studio preview${typeof data.id === 'string' ? ` !${data.id}` : ''}. You no longer control it; call browser_navigate with the preview to take it back when I ask.`,
+						`I took control of the Studio preview${typeof data.id === 'string' ? ` !${data.id}` : ''}. You no longer control it; open the preview with browser to take it back when I ask.`,
 						true
 					)
 					.pipe(
@@ -755,11 +765,17 @@
 	const claimedBy = (output: unknown): boolean =>
 		typeof output === 'object' && output !== null && 'claimed' in output && output.claimed === true;
 
+	/** The page settles first: what it then shows reaches Norbius with the answer. */
+	const answerPage = (step: string, result: PageResult) =>
+		setTimeout(() => {
+			void run(api.agent.pageResult(step, { ...result, screen: pageScreen() })).catch(() => {});
+		}, 700);
 	setContext<ClientPageAction>(CLIENT_PAGE_ACTION, {
+		arrived(step) {
+			if (document.visibilityState === 'visible') answerPage(step, { ok: true });
+		},
 		run(action, _conversation, step) {
-			const ack = (result: PageResult) => {
-				void run(api.agent.pageResult(step, result)).catch(() => {});
-			};
+			const ack = (result: PageResult) => answerPage(step, result);
 			// a hidden or ineligible tab stays silent: a second tab must never overwrite the acting tab's result
 			if (
 				boot === null ||
@@ -770,6 +786,19 @@
 			)
 				return;
 			const act = () => {
+				if (action.highlight !== undefined) {
+					const target = pageMark(action.highlight);
+					if (target === null) {
+						ack({ ok: false, note: `Nothing visible reads “${action.highlight}”.` });
+						return;
+					}
+					target.scrollIntoView({ block: 'center' });
+					// the panel must not sit over what it points at
+					if (pageCovered(target)) agent.close();
+					ringOn(target);
+					ack({ ok: true, note: `Highlighted “${action.highlight}”.` });
+					return;
+				}
 				if (action.scroll !== undefined) {
 					let scroller: HTMLElement | null = document.querySelector<HTMLElement>('main');
 					while (scroller !== null && scroller.scrollHeight <= scroller.clientHeight + 1)

@@ -46,7 +46,9 @@ import { compileAuthority } from '../src/engine/access/authority.ts';
 import { TenantDb, type RawDb } from '../src/engine/db/tenant-db.ts';
 import { layered, type EngineManifest } from '../src/engine/manifest.ts';
 import { Port } from '../src/engine/port.ts';
-import { Bundler, Files, GuestIsolates, Http, Images, Logs } from '../src/engine/ports.ts';
+import { Browser, Bundler, Files, GuestIsolates, Http, Images, Logs } from '../src/engine/ports.ts';
+import { browserTools } from '../src/engine/agent/browser.ts';
+import { off } from '../src/facilities/index.ts';
 import { filesOf, skillOf } from './support/run-file-trees.ts';
 import { REFERENCE } from '../src/engine/agent/run-js.ts';
 import { BOUNDS } from '../src/engine/agent/context.ts';
@@ -54,6 +56,7 @@ import { treeDigest } from '../src/engine/artifact/read.ts';
 import { Approvals, Callables, Live, Reads, Writes } from '../src/engine/services.ts';
 import { TestWorkspace } from '../../bolt-cli/src/test/effect.ts';
 import { toolSchema } from '../src/engine/agent/ai.ts';
+import { fileAttachments } from '../src/engine/agent/attachments.ts';
 import type { Ingested } from '../src/engine/contracts.ts';
 import { FacilityFailure } from '../src/decl/errors.ts';
 import type { ToolAnswer } from '../src/engine/agent/ai.ts';
@@ -204,7 +207,6 @@ const ctx = (
 			jobs: yield* jobs(),
 			setPlan: () => Effect.void,
 			setGoals: () => Effect.void,
-			compact: () => false,
 			ask: () => {},
 			messages: () => Effect.succeed([]),
 			output: () => Effect.succeed(undefined),
@@ -246,8 +248,27 @@ const requiredTool = (x: ToolContext, name: string) =>
 	Effect.flatMap(tool(x, name), (t) =>
 		t === undefined ? Effect.die(new Error(`missing tool ${name}`)) : Effect.succeed(t)
 	);
+/** A read's keys as its list: tests name what they read as a map, `read` takes `reads`. */
+const called = (name: string, input: Json): Json =>
+	name === 'read' && Predicate.isObject(input) && !('reads' in input)
+		? {
+				reads: Object.entries(input).map(([of, layer]) => ({
+					of,
+					...(Predicate.isObject(layer) ? layer : {})
+				}))
+			}
+		: input;
 const result = (x: ToolContext, name: string, input: Json) =>
-	Effect.flatMap(catalogue(x), (c) => c.run(name, input, 'call'));
+	Effect.flatMap(catalogue(x), (c) => c.run(name, called(name, input), 'call'));
+/** `describe_workspace { names: [name] }`'s shape: the JSON line closing its answer. */
+const shape = (x: ToolContext, name: string) =>
+	Effect.map(result(x, 'describe_workspace', { names: [name] }), (answer) =>
+		Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Json))(
+			Schema.decodeUnknownSync(Schema.Struct({ result: Schema.String }))(answer)
+				.result.split('\n')
+				.at(-1) ?? ''
+		)
+	);
 const first = <A>(items: readonly A[]): A => {
 	const item = items[0];
 	if (item === undefined) throw new Error('fixture produced no item');
@@ -567,22 +588,27 @@ describe('fewer calls for the common paths', () => {
 					yield* result(x, 'read', { tasks: { where: { id: { eq: id } }, limit: 5 } })
 				).toMatchObject({ result: answer });
 				expect(reads).toHaveLength(1);
-				// the schema names the caller's roots and paths as its properties: an unreadable root is no valid key
+				// an unreadable root is the handler's refusal, naming what the caller reads
 				expect(yield* result(x, 'read', { tasks: {}, secrets: {} })).toEqual({
-					result: { error: expect.stringContaining('secrets') }
+					result: { error: expect.stringMatching(/^You read no 'secrets'\. Models: .*tasks/) }
 				});
-				// options beside the key instead of inside it: the answer names the shape it meant
-				expect(yield* result(x, 'read', { tasks: {}, fields: ['title'], limit: 5 })).toEqual({
-					result: {
-						error: expect.stringContaining(
-							'Options go inside the key they narrow, as an object: { "tasks": { "fields": … } }.'
-						)
-					}
+				// options beside the list instead of inside a read: a wrong call
+				expect(
+					yield* result(x, 'read', { reads: [{ of: 'tasks' }], fields: ['title'], limit: 5 })
+				).toEqual({
+					result: { error: expect.stringContaining("Invalid parameters for tool 'read'") }
 				});
+				// the schema is static: no caller's model is a property of it
 				const read = yield* requiredTool(x, 'read');
-				expect(JSON.stringify(toolSchema(read))).toContain('"tasks"');
-				expect(JSON.stringify(toolSchema(read))).not.toContain('"secrets"');
+				expect(JSON.stringify(toolSchema(read))).not.toContain('"tasks"');
 				expect(reads).toHaveLength(1);
+				// the same model twice: the second answer under <model>#2
+				expect(
+					yield* result(x, 'read', {
+						reads: [{ of: 'tasks' }, { of: 'tasks', aggregate: { count: true } }]
+					})
+				).toMatchObject({ result: { tasks: answer.tasks, 'tasks#2': answer.tasks } });
+				expect(reads).toHaveLength(3);
 			})
 	);
 	it.effect(
@@ -635,7 +661,7 @@ describe('fewer calls for the common paths', () => {
 			})
 	);
 	it.effect(
-		"describe answers a key's declared shape in the same call, and reads nothing for it",
+		"describe_workspace answers a name's declared shape, and reads nothing for it",
 		() =>
 			Effect.gen(function* () {
 				const reads: Parameters<AgentEngine['read']>[0][number][] = [];
@@ -649,48 +675,46 @@ describe('fewer calls for the common paths', () => {
 							})
 					}
 				);
-				const answer = yield* result(x, 'read', { tasks: { describe: true } });
-				expect(answer).toMatchObject({
-					result: { tasks: { model: 'tasks', fields: { title: expect.any(String) } } }
+				expect(yield* shape(x, 'tasks')).toMatchObject({
+					model: 'tasks',
+					fields: { title: expect.any(String) }
 				});
 				expect(reads).toHaveLength(0);
-				// describe beside read options is the read the model meant: rows, not the shape
-				expect(
-					yield* result(x, 'read', {
-						tasks: { describe: true, aggregate: { count: true, by: 'title' } }
-					})
-				).toMatchObject({ result: { tasks: { rows: [] } } });
-				expect(reads).toHaveLength(1);
+				// read takes no describe: a wrong call, and nothing is read
+				expect(yield* result(x, 'read', { tasks: { describe: true } })).toEqual({
+					result: { error: expect.stringContaining("Invalid parameters for tool 'read'") }
+				});
+				expect(reads).toHaveLength(0);
 			})
+	);
+	const outputs: EngineManifest = {
+		...manifest,
+		models: {
+			tasks: {
+				...manifest.models.tasks!,
+				fields: { title: { kind: 'text' }, cost: { kind: 'int' } }
+			}
+		},
+		exposures: {
+			tasks: {
+				read: { tasks: { fields: 'all' } },
+				outputs: { brief: { tasks: { fields: ['title'] } } }
+			}
+		},
+		policies: {
+			viewer: { description: '', grants: { tasks: { outputs: { brief: true } } } }
+		}
+	};
+	const viewer = compileAuthority(
+		outputs,
+		{ actor: member().actor, admin: false, policies: ['viewer'] },
+		'v'
 	);
 	it.effect(
 		'read names one output per root; the schema and describe answer per output the caller holds',
 		() =>
 			Effect.gen(function* () {
 				const reads: Parameters<AgentEngine['read']>[0][number][] = [];
-				const outputs: EngineManifest = {
-					...manifest,
-					models: {
-						tasks: {
-							...manifest.models.tasks!,
-							fields: { title: { kind: 'text' }, cost: { kind: 'int' } }
-						}
-					},
-					exposures: {
-						tasks: {
-							read: { tasks: { fields: 'all' } },
-							outputs: { brief: { tasks: { fields: ['title'] } } }
-						}
-					},
-					policies: {
-						viewer: { description: '', grants: { tasks: { outputs: { brief: true } } } }
-					}
-				};
-				const viewer = compileAuthority(
-					outputs,
-					{ actor: member().actor, admin: false, policies: ['viewer'] },
-					'v'
-				);
 				const x = yield* ctx(
 					{ authority: viewer },
 					{
@@ -702,21 +726,11 @@ describe('fewer calls for the common paths', () => {
 							})
 					}
 				);
-				// the schema names the model and its description only; fields are describe's
+				// the prompt names the models only; fields are describe's
 				const schema = workspaceSchema(outputs, viewer) ?? '';
-				expect(schema).toContain('- tasks (A task)');
+				expect(schema).toContain('# Models you read\n');
+				expect(schema).toContain('tasks');
 				expect(schema).not.toContain('cost');
-				// describe of a named output: its fields alone
-				expect(yield* result(x, 'read', { tasks: { describe: true, output: 'brief' } })).toEqual({
-					result: {
-						tasks: {
-							model: 'tasks',
-							output: 'brief',
-							fields: { title: 'text' },
-							search: { text: { fields: ['title'], use: expect.any(String) } }
-						}
-					}
-				});
 				// the read names its output; the engine reads it
 				yield* result(x, 'read', { tasks: { output: 'brief' } });
 				expect(JSON.stringify(reads)).toContain('"output":"brief"');
@@ -731,12 +745,18 @@ describe('fewer calls for the common paths', () => {
 					'a'
 				);
 				const y = yield* ctx({ authority: admin }, { manifest: outputs });
-				expect(yield* result(y, 'read', { tasks: { describe: true } })).toMatchObject({
-					result: {
-						tasks: { outputs: ['default', 'brief'], fields: { title: 'text', cost: 'int' } }
-					}
+				expect(yield* shape(y, 'tasks')).toMatchObject({
+					outputs: ['default', 'brief'],
+					fields: { title: 'text', cost: 'int' }
 				});
 			})
+	);
+	it.effect("describe of a narrower holder shows the output it holds, never another's fields", () =>
+		Effect.gen(function* () {
+			const x = yield* ctx({ authority: viewer }, { manifest: outputs });
+			expect(yield* shape(x, 'tasks')).toMatchObject({ fields: { title: 'text' } });
+			expect(JSON.stringify(yield* shape(x, 'tasks'))).not.toContain('cost');
+		})
 	);
 	it.effect("describe lists only the columns the caller's policies let it write", () =>
 		Effect.gen(function* () {
@@ -767,8 +787,8 @@ describe('fewer calls for the common paths', () => {
 				'k'
 			);
 			const x = yield* ctx({ authority: clerk }, { manifest: narrow });
-			expect(yield* result(x, 'read', { tasks: { describe: true } })).toMatchObject({
-				result: { tasks: { writes: { 'tasks.create': { columns: { tasks: ['title'] } } } } }
+			expect(yield* shape(x, 'tasks')).toMatchObject({
+				writes: { 'tasks.create': { columns: { tasks: ['title'] } } }
 			});
 		})
 	);
@@ -793,8 +813,8 @@ describe('fewer calls for the common paths', () => {
 					'k'
 				);
 				const x = yield* ctx({ authority: clerk }, { manifest: checked });
-				expect(yield* result(x, 'read', { tasks: { describe: true } })).toMatchObject({
-					result: { tasks: { writes: { 'tasks.create': { checks: ['clerk'] } } } }
+				expect(yield* shape(x, 'tasks')).toMatchObject({
+					writes: { 'tasks.create': { checks: ['clerk'] } }
 				});
 				const admin = compileAuthority(
 					checked,
@@ -802,23 +822,15 @@ describe('fewer calls for the common paths', () => {
 					'k'
 				);
 				const y = yield* ctx({ authority: admin }, { manifest: checked });
-				expect(
-					yield* result(y, 'read', { tasks: { describe: true } }).pipe(
-						Effect.map((answer) => JSON.stringify(answer))
-					)
-				).not.toContain('"checks"');
+				expect(JSON.stringify(yield* shape(y, 'tasks'))).not.toContain('"checks"');
 			})
 	);
 	it.effect("describe names the columns each write takes and a create's required ones", () =>
 		Effect.gen(function* () {
 			const x = yield* ctx({});
-			expect(yield* result(x, 'read', { tasks: { describe: true } })).toMatchObject({
-				result: {
-					tasks: {
-						writes: {
-							'tasks.create': { columns: { tasks: expect.any(Array) }, required: ['title'] }
-						}
-					}
+			expect(yield* shape(x, 'tasks')).toMatchObject({
+				writes: {
+					'tasks.create': { columns: { tasks: expect.any(Array) }, required: ['title'] }
 				}
 			});
 		})
@@ -858,23 +870,17 @@ describe('fewer calls for the common paths', () => {
 					}
 				};
 				const x = yield* ctx({}, { manifest: searched });
-				expect(yield* result(x, 'read', { tasks: { describe: true } })).toMatchObject({
-					result: {
-						tasks: {
-							// `note` is outside the output read, so a search never matches it
-							search: {
-								text: { fields: ['title'] },
-								colour: { input: { light: 'enum D65 | A', lab: { l: 'number 0..100' } } }
-							}
-						}
+				expect(yield* shape(x, 'tasks')).toMatchObject({
+					// `note` is outside the output read, so a search never matches it
+					search: {
+						text: { fields: ['title'] },
+						colour: { input: { light: 'enum D65 | A', lab: { l: 'number 0..100' } } }
 					}
 				});
 				// a model without an index says so: it is narrowed with where alone
 				const { search: _search, ...unsearched } = manifest.models.tasks!;
 				const y = yield* ctx({}, { manifest: { ...manifest, models: { tasks: unsearched } } });
-				expect(yield* result(y, 'read', { tasks: { describe: true } })).toMatchObject({
-					result: { tasks: { search: null } }
-				});
+				expect(yield* shape(y, 'tasks')).toMatchObject({ search: null });
 			})
 	);
 	it.effect(
@@ -1191,14 +1197,14 @@ describe('working-source tools', () => {
 					})
 				).toMatchObject({ result: { lines: ['2: bolt.read(tasks)'] } });
 				expect(yield* result(x, 'workspace_read', { path: '../elsewhere' })).toMatchObject({
-					result: { error: expect.stringContaining('No file') }
+					result: { error: expect.stringContaining('No such file') }
 				});
 				expect(
 					yield* result(x, 'workspace_read', {
 						path: 'node_modules/@norbital-ai/bolt/build/decl/runtime/agent.d.ts'
 					})
 				).toMatchObject({
-					result: { error: expect.stringContaining('installed packages are outside the workspace') }
+					result: { error: expect.stringContaining('Installed packages are outside the workspace') }
 				});
 				expect(
 					yield* tool(
@@ -1229,7 +1235,7 @@ describe('reading the source is every staff member’s; changing it is an admini
 	const hostTools = [
 		host('workspace_lang', { readOnly: true, source: true }),
 		host('workspace_write', { studio: 'preview' }),
-		host('workspace_build', { readOnly: true, studio: 'logs' }),
+		host('workspace_review', { readOnly: true, studio: 'logs' }),
 		host('web_search', { readOnly: true })
 	];
 	it.effect(
@@ -1269,7 +1275,7 @@ describe('reading the source is every staff member’s; changing it is an admini
 				expect(offered).toEqual(
 					expect.arrayContaining(['workspace_search', 'workspace_list', 'workspace_lang'])
 				);
-				for (const mutating of ['workspace_write', 'workspace_build', 'web_search'])
+				for (const mutating of ['workspace_write', 'workspace_review', 'web_search'])
 					expect(offered).not.toContain(mutating);
 				expect(yield* result(x, 'workspace_lang', {})).toMatchObject({
 					result: { ok: 'workspace_lang' }
@@ -1281,7 +1287,7 @@ describe('reading the source is every staff member’s; changing it is an admini
 				expect(listed).not.toContain('payroll/');
 				expect(
 					yield* result(x, 'workspace_read', { path: 'src/data/model/payroll/+model.ts' })
-				).toMatchObject({ result: { error: expect.stringContaining('No file') } });
+				).toMatchObject({ result: { error: expect.stringContaining('No such file') } });
 				expect(
 					yield* result(x, 'workspace_search', { pattern: 'model(', literal: true })
 				).toMatchObject({
@@ -1290,7 +1296,7 @@ describe('reading the source is every staff member’s; changing it is an admini
 				// an administrator holds every host tool and reads all of the source
 				const admin = yield* ctx({ workspace, hostTools, authority: member({ admin: true }) });
 				expect(yield* names(admin)).toEqual(
-					expect.arrayContaining(['workspace_lang', 'workspace_write', 'workspace_build'])
+					expect.arrayContaining(['workspace_lang', 'workspace_write', 'workspace_review'])
 				);
 				expect(
 					yield* result(admin, 'workspace_search', { pattern: 'model(', literal: true })
@@ -1319,11 +1325,12 @@ describe('reading the source is every staff member’s; changing it is an admini
 				const holder = member({ admin: true }).actor;
 				const admin = compileAuthority(manifest, { actor: holder, policies: [], admin: true }, 'a');
 				const x = yield* ctx({ authority: admin });
-				const read = yield* requiredTool(x, 'read');
-				expect(JSON.stringify(toolSchema(read))).toContain('"sys_user"');
+				expect(workspaceSchema(manifest, admin)).toContain('sys_user');
 				// other built-in models stay a grant's
-				expect(JSON.stringify(toolSchema(read))).not.toContain('"sys_conversation"');
-				expect(workspaceSchema(manifest, admin)).toContain('- sys_user');
+				expect(workspaceSchema(manifest, admin)).not.toContain('sys_conversation');
+				expect(yield* result(x, 'read', { sys_conversation: {} })).toEqual({
+					result: { error: expect.stringContaining("You read no 'sys_conversation'") }
+				});
 			})
 	);
 });
@@ -1402,8 +1409,8 @@ describe('describe_workspace', () => {
 		const map = describeWorkspace(lab, matcher, messages);
 		expect(map).toContain('# Workspace tz Asia/Singapore · locale en-SG · currency SGD');
 		expect(map).toContain('lab "Lab" ▸ lab/trials "Trials": Colour matching');
-		expect(map).toContain('  ├ list "All trials"');
-		expect(map).toContain('  ├ kiosk "page.kiosk" portal');
+		expect(map).toContain('  ├ /app/lab/trials/list "All trials"');
+		expect(map).toContain('  ├ /app/lab/trials/kiosk "page.kiosk" portal');
 		expect(map).toContain('trial "a colour-matching attempt"');
 		expect(map).toContain('  writes create');
 		expect(map).toContain('  links lines (many trial_line)');
@@ -1430,7 +1437,7 @@ describe('describe_workspace', () => {
 			{ actor: member({ admin: true }).actor, admin: true, policies: [] },
 			'a'
 		);
-		const text = describeWorkspace(all, admin, messages, { focus: 'model', name: 'sys_envoy' });
+		const text = describeWorkspace(all, admin, messages, ['sys_envoy']);
 		const shape = Schema.decodeUnknownSync(
 			Schema.fromJsonString(
 				Schema.Struct({
@@ -1447,12 +1454,12 @@ describe('describe_workspace', () => {
 		expect(shape.writes['sys_envoy.create'].columns['sys_envoy']).toEqual(
 			expect.arrayContaining(['name', 'policies', 'audience'])
 		);
-		expect(workspaceSchema(all, admin)).not.toContain('- sys_envoy');
-		expect(describeWorkspace(all, matcher, messages, { focus: 'model', name: 'sys_envoy' })).toBe(
-			'No model named sys_envoy that you can reach.'
+		expect(workspaceSchema(all, admin)).not.toContain('sys_envoy');
+		expect(describeWorkspace(all, matcher, messages, ['sys_envoy'])).toBe(
+			'Nothing named sys_envoy that you can reach.'
 		);
 	});
-	it('stays within the cap, naming the rest for a focused call', () => {
+	it('stays within the cap, naming the rest for a call with names', () => {
 		const many = Object.fromEntries(
 			Array.from({ length: 400 }, (_, n) => [
 				`model_${n}`,
@@ -1480,31 +1487,43 @@ describe('describe_workspace', () => {
 		);
 		const map = describeWorkspace(big, admin, messages);
 		expect(new TextEncoder().encode(map).byteLength).toBeLessThanOrEqual(OVERVIEW_BYTES);
-		expect(map).toMatch(
-			/Also \(describe_workspace \{ "focus": "model", "name": … \}\): .*model_\d+.* more/
-		);
+		expect(map).toMatch(/Also \(describe_workspace \{ names \}\): .*model_\d+.* more/);
 	});
-	it.effect('focus answers one item exactly, through the tool', () =>
+	it.effect('names answer each item in full, through the tool', () =>
 		Effect.gen(function* () {
 			const x = yield* ctx({ authority: matcher, inApp: false }, { manifest: lab });
-			expect(yield* result(x, 'describe_workspace', { focus: 'model', name: 'trial' })).toEqual({
-				result: [
-					'trial "a colour-matching attempt"',
-					'  reads default',
-					'  writes create',
-					'  links lines (many trial_line)',
-					'  state status: draft | approved',
-					'  effects created',
-					'  syncs import_csv (file)',
-					'  notices on its write and approval events'
-				].join('\n')
+			expect(yield* result(x, 'describe_workspace', { names: ['trial'] })).toEqual({
+				result: expect.stringContaining(
+					[
+						'trial "a colour-matching attempt"',
+						'  reads default',
+						'  writes create',
+						'  links lines (many trial_line)',
+						'  state status: draft | approved',
+						'  effects created',
+						'  syncs import_csv (file)',
+						'  notices on its write and approval events'
+					].join('\n')
+				)
 			});
-			expect(yield* result(x, 'describe_workspace', { focus: 'model', name: 'secret' })).toEqual({
-				result: 'No model named secret that you can reach.'
+			expect(yield* shape(x, 'trial')).toMatchObject({
+				model: 'trial',
+				layers: { 'trial.lines': 'trial_line' },
+				writes: { 'trial.create': { columns: { trial: ['code'] } } }
 			});
-			expect(yield* result(x, 'describe_workspace', { focus: 'automation' })).toEqual({
-				result:
-					'# Automations (start as automation.<name> with act)\nclose_month(month: date) "closes the month" · cron 0 2 1 * * · agent confirm'
+			expect(yield* shape(x, 'trial.lines')).toMatchObject({ model: 'trial_line' });
+			expect(yield* result(x, 'describe_workspace', { names: ['secret'] })).toEqual({
+				result: 'Nothing named secret that you can reach.'
+			});
+			expect(yield* result(x, 'describe_workspace', { names: ['close_month'] })).toEqual({
+				result: 'close_month(month: date) "closes the month" · cron 0 2 1 * * · agent confirm'
+			});
+			expect(yield* result(x, 'describe_workspace', { names: ['lab/trials'] })).toEqual({
+				result: expect.stringContaining('lab/trials "app.trials.title"')
+			});
+			// several names, each answered
+			expect(yield* result(x, 'describe_workspace', { names: ['close_month', 'purge'] })).toEqual({
+				result: expect.stringContaining('Nothing named purge that you can reach.')
 			});
 		})
 	);
@@ -1514,7 +1533,7 @@ it.effect(
 	() =>
 		Effect.gen(function* () {
 			const x = yield* ctx();
-			expect(yield* result(x, 'describe_workspace', { focus: 'system' })).toMatchObject({
+			expect(yield* result(x, 'describe_workspace', { names: ['system'] })).toMatchObject({
 				result: {
 					capabilities: expect.arrayContaining([
 						{
@@ -1527,7 +1546,7 @@ it.effect(
 				}
 			});
 			expect(
-				yield* result(x, 'navigate', {
+				yield* result(x, 'page', {
 					path: '/settings/integrations',
 					configure: { capability: 'api_key.create' }
 				})
@@ -1535,17 +1554,17 @@ it.effect(
 				result: { navigation: '/settings/integrations?setup=api_key.create', requested: true }
 			});
 			expect(
-				yield* result(x, 'navigate', {
+				yield* result(x, 'page', {
 					path: '/settings/secrets',
 					configure: { capability: 'secret.set', record: 'UNKNOWN' }
 				})
 			).toMatchObject({ result: { error: expect.any(String) } });
 			const ordinary = yield* ctx({ authority: member() });
-			expect(yield* result(ordinary, 'describe_workspace', { focus: 'system' })).toEqual({
+			expect(yield* result(ordinary, 'describe_workspace', { names: ['system'] })).toEqual({
 				result: { capabilities: [] }
 			});
 			expect(
-				yield* result(ordinary, 'navigate', {
+				yield* result(ordinary, 'page', {
 					path: '/',
 					configure: { capability: 'api_key.create' }
 				})
@@ -1553,7 +1572,7 @@ it.effect(
 		})
 );
 
-describe('ingest: a job per file, filed in the outputs, read in windows', () => {
+describe('read_file parses a file: filed in the outputs, read in windows', () => {
 	const HTML = [
 		'<h1>Cover</h1>',
 		'<p>Tender for site works</p>',
@@ -1610,12 +1629,6 @@ describe('ingest: a job per file, filed in the outputs, read in windows', () => 
 			]),
 			([r]) => r?.rows[0]?.['outputs']
 		);
-	const job = (answer: ToolAnswer): string => {
-		const r = 'result' in answer ? answer.result : null;
-		if (!Predicate.isObject(r) || Array.isArray(r) || typeof r['job'] !== 'string')
-			throw new Error(`no job in ${JSON.stringify(r)}`);
-		return r['job'];
-	};
 	it.effect(
 		'a data ingest stores data.json and its images, no HTML; read_file answers its summary',
 		() =>
@@ -1651,8 +1664,7 @@ describe('ingest: a job per file, filed in the outputs, read in windows', () => 
 							})
 					}
 				);
-				const j = job(yield* result(x, 'ingest', { id }));
-				expect(yield* x.jobs.settled(10_000)).toBe(true);
+				const answer = yield* result(x, 'read_file', { id });
 				const listed = yield* outputs(x);
 				const entry = Array.isArray(listed) ? listed[0] : undefined;
 				const data =
@@ -1669,49 +1681,66 @@ describe('ingest: a job per file, filed in the outputs, read in windows', () => 
 						expect.objectContaining({ name: 'images/image-1.png', mime: 'image/png' }),
 						expect.objectContaining({ name: 'data.json', mime: 'application/json' })
 					],
-					ingest: expect.objectContaining({ output: 'o1', source: id, status: 'ready', job: j })
-				});
-				expect(x.jobs.take()).toEqual([
-					[
-						`[job ${j} done] ingest of rates.xlsx → output o1 "rates.xlsx (data)"`,
-						'  Rates (2 rows)',
-						`  Compute from it with run_js, never retype: data.json ${dataId} — run_js { files: [{ id }] }`,
-						'  Read its summary with read_file { output: o1 }'
-					].join('\n')
-				]);
-				expect(yield* result(x, 'read_file', { output: 'o1' })).toEqual({
-					result: {
+					ingest: expect.objectContaining({
 						output: 'o1',
-						file: 'rates.xlsx (data)',
-						data: [
-							{
-								name: 'Rates',
-								columns: ['Item', 'Rate'],
-								rows: 2,
-								first: json.sheets[0]!.rows,
-								images: [{ name: 'image-1.png', row: 0, col: 1 }]
-							}
-						],
-						note: `compute from data.json, never retype: run_js { files: [{ id: '${dataId}' }] }; its images: read_file { output: o1, image: n }`
-					}
+						source: id,
+						status: 'ready',
+						job: expect.any(String)
+					})
 				});
-				expect(yield* result(x, 'read_file', { output: 'o1', text: 'Labour' })).toEqual({
+				const parsed = {
+					output: 'o1',
+					file: 'rates.xlsx (data)',
+					data: [
+						{
+							name: 'Rates',
+							columns: ['Item', 'Rate'],
+							rows: 2,
+							first: json.sheets[0]!.rows,
+							images: [{ name: 'image-1.png', row: 0, col: 1 }]
+						}
+					],
+					note: `compute from data.json, never retype: run_js { files: [{ id: '${dataId}' }] }; its images: read_file { id: o1, image: n }`
+				};
+				expect(answer).toEqual({
 					result: {
-						error: expect.stringContaining('o1 is data, not lines: there is no text search')
+						...parsed,
+						about: [
+							'  Rates (2 rows)',
+							`  Compute from it with run_js, never retype: data.json ${dataId} — run_js { files: [{ id }] }`
+						]
 					}
 				});
-				expect(yield* result(x, 'read_file', { output: 'o1', image: 1 })).toMatchObject({
+				// read_file collected the job: no steering line follows
+				expect(x.jobs.take()).toEqual([]);
+				expect(yield* result(x, 'read_file', { id: 'o1' })).toEqual({ result: parsed });
+				expect(yield* result(x, 'read_file', { id: 'o1', text: 'Labour' })).toEqual({
+					result: { error: expect.stringContaining('o1 is data, not lines: find it with run_js') }
+				});
+				expect(yield* result(x, 'read_file', { id: 'o1', image: 1 })).toMatchObject({
 					result: { image: 'image-1.png' }
 				});
-				expect(x.files.map((f) => f.mime)).toEqual(['image/png']);
-				const crop = { left: 0, top: 0, right: 0.5, bottom: 1 };
-				expect(yield* result(x, 'read_file', { output: 'o1', image: 1, crop })).toMatchObject({
-					result: { image: 'image-1.png', crop, mime: 'image/png' }
+				// a page image comes with its four overlapping quarters
+				expect(x.files.map((f) => f.mime)).toEqual([
+					'image/png',
+					'image/jpeg',
+					'image/jpeg',
+					'image/jpeg',
+					'image/jpeg'
+				]);
+				const crops = [[0, 0, 0.5, 1]];
+				expect(yield* result(x, 'read_file', { id: 'o1', image: 1, crops })).toMatchObject({
+					result: { image: 'image-1.png', crops: 1 }
 				});
-				expect(x.files).toHaveLength(2);
-				expect(x.files[1]?.id).toContain('#crop:');
-				expect(yield* result(x, 'read_file', { output: 'o1', crop })).toMatchObject({
-					result: { error: expect.stringContaining('image number') }
+				expect(x.files).toHaveLength(6);
+				expect(x.files[5]?.id).toContain('#crop:');
+				// a lone image needs no number; a document takes three zoom calls a turn
+				expect(yield* result(x, 'read_file', { id: 'o1', crops })).toMatchObject({
+					result: { image: 'image-1.png', crops: 1 }
+				});
+				yield* result(x, 'read_file', { id: 'o1', crops });
+				expect(yield* result(x, 'read_file', { id: 'o1', crops })).toEqual({
+					result: { error: expect.stringContaining('o1 has had its 3 zooms this turn') }
 				});
 				expect(
 					kitLogs
@@ -1723,8 +1752,34 @@ describe('ingest: a job per file, filed in the outputs, read in windows', () => 
 				]);
 			})
 	);
+	it.effect('crops name their image when an ingest holds several', () =>
+		Effect.gen(function* () {
+			const { x, id } = yield* holding(
+				`c-${randomUUID()}`,
+				{
+					name: 'plans.pdf',
+					mime: 'application/pdf',
+					bytes: new TextEncoder().encode(`%PDF plans ${randomUUID()}`)
+				},
+				{
+					ingest: () =>
+						Effect.succeed({
+							...tender,
+							images: [
+								{ name: 'image-1.png', mime: 'image/png', bytes: PNG },
+								{ name: 'image-2.png', mime: 'image/png', bytes: PNG }
+							]
+						})
+				}
+			);
+			yield* result(x, 'read_file', { id, from: 1, to: 1 });
+			expect(yield* result(x, 'read_file', { id: 'o1', crops: [[0, 0, 1, 1]] })).toEqual({
+				result: { error: 'o1 has 2 images: give image, the 1-based one to crop.' }
+			});
+		})
+	);
 	it.effect(
-		'answers at once with a job; its end steers the next step once; the entry is grouped; windows read it',
+		'parses a document inside the inline wall and answers its window; the entry is grouped; windows read it',
 		() =>
 			Effect.gen(function* () {
 				const bytes = new TextEncoder().encode(`%PDF tender ${randomUUID()}`);
@@ -1734,20 +1789,22 @@ describe('ingest: a job per file, filed in the outputs, read in windows', () => 
 					{ name: 'tender.pdf', mime: 'application/pdf', bytes },
 					{ ingest: () => Effect.sync(() => (calls++, tender)) }
 				);
-				const answer = yield* result(x, 'ingest', { id });
-				const j = job(answer);
-				expect(answer).toEqual({
-					result: { job: j, output: 'o1', note: expect.stringContaining('ingesting tender.pdf') }
+				// a window inside the table reads the table whole, and none of its images
+				expect(yield* result(x, 'read_file', { id, from: 5, to: 5 })).toEqual({
+					result: {
+						id: 'o1',
+						file: 'tender.pdf (ingested)',
+						lines: [
+							'4: <table>',
+							'5: <tr><td>Lot</td><td>Rate</td></tr>',
+							'6: <tr><td>7</td><td>12.50</td></tr>',
+							'7: </table>'
+						],
+						at: 'lines 4–7 of 9 · read_file { id: o1, from: 8 }',
+						about: ['  9 lines · 1 images · 1 tables', '  Map: L1–9 Cover (Pricing L3–9)']
+					},
+					bounded: true
 				});
-				expect(yield* x.jobs.settled(10_000)).toBe(true);
-				expect(x.jobs.take()).toEqual([
-					[
-						`[job ${j} done] ingest of tender.pdf → output o1 "tender.pdf (ingested)"`,
-						'  9 lines · 1 images · 1 tables',
-						'  Map: L1–9 Cover (Pricing L3–9)',
-						'  Read it with read_file { output: o1, from: … }'
-					].join('\n')
-				]);
 				expect(x.jobs.take()).toEqual([]);
 				expect(calls).toBe(1);
 				// one grouped entry: the HTML is its file; the index and images ride under it
@@ -1766,7 +1823,7 @@ describe('ingest: a job per file, filed in the outputs, read in windows', () => 
 							output: 'o1',
 							source: id,
 							status: 'ready',
-							job: j,
+							job: expect.any(String),
 							lines: 9
 						})
 					}
@@ -1788,50 +1845,68 @@ describe('ingest: a job per file, filed in the outputs, read in windows', () => 
 						})
 					})
 				]);
-				// a window inside the table reads the table whole, and none of its images
-				expect(yield* result(x, 'read_file', { output: 'o1', from: 5, to: 5 })).toEqual({
-					result: {
-						output: 'o1',
-						file: 'tender.pdf (ingested)',
-						lines: [
-							'4: <table>',
-							'5: <tr><td>Lot</td><td>Rate</td></tr>',
-							'6: <tr><td>7</td><td>12.50</td></tr>',
-							'7: </table>'
-						],
-						at: 'lines 4–7 of 9 · read_file { output: o1, from: 8 }'
-					},
-					bounded: true
-				});
 				expect(x.files).toEqual([]);
-				expect(yield* result(x, 'read_file', { output: 'o1', from: 4, to: 7 })).toMatchObject({
+				expect(yield* result(x, 'read_file', { id: 'o1', from: 4, to: 7 })).toMatchObject({
 					result: { note: expect.stringContaining('already above') }
 				});
 				expect(yield* result(x, 'read_file', { id, from: 8 })).toMatchObject({
 					result: {
 						lines: ['8: <p><img src="image-1.png" alt="site plan"></p>', '9: <p>End</p>'],
 						images: ['image-1.png'],
-						at: 'lines 8–9 of 9 · the end'
+						at: 'lines 8–9 of 9'
 					}
 				});
-				expect(x.files.map((f) => f.mime)).toEqual(['image/png']);
-				expect(yield* result(x, 'read_file', { output: 'o1', text: '12.50' })).toMatchObject({
+				expect(x.files.map((f) => f.mime)).toEqual([
+					'image/png',
+					'image/jpeg',
+					'image/jpeg',
+					'image/jpeg',
+					'image/jpeg'
+				]);
+				expect(yield* result(x, 'read_file', { id: 'o1', text: '12.50' })).toMatchObject({
 					result: {
 						total: 1,
 						hits: [{ from: 4, to: 7, text: '<tr><td>7</td><td>12.50</td></tr>' }]
 					}
 				});
-				expect(yield* result(x, 'read_file', { output: 'o1', image: 1 })).toMatchObject({
+				expect(yield* result(x, 'read_file', { id: 'o1', image: 1 })).toMatchObject({
 					result: { image: 'image-1.png' }
 				});
 				// the same file again is the same output
-				expect(yield* result(x, 'ingest', { id })).toMatchObject({
-					result: { output: 'o1', note: expect.stringContaining('is ingested') }
-				});
+				expect(yield* result(x, 'read_file', { id })).toMatchObject({ result: { id: 'o1' } });
+				expect(calls).toBe(1);
 			})
 	);
+	it.live('past the inline wall the parse is a job, and its end steers the next step once', () =>
+		Effect.gen(function* () {
+			const gate = yield* Deferred.make<void>();
+			const { x, id } = yield* holding(
+				`c-${randomUUID()}`,
+				{
+					name: 'tender.pdf',
+					mime: 'application/pdf',
+					bytes: new TextEncoder().encode(`%PDF tender ${randomUUID()}`)
+				},
+				{ inlineMs: 1, ingest: () => Effect.as(Deferred.await(gate), tender) }
+			);
+			expect(yield* result(x, 'read_file', { id })).toEqual({
+				result: { reading: 'tender.pdf', note: 'it arrives at your next step' }
+			});
+			const j = first(x.jobs.pending()).job;
+			yield* Deferred.succeed(gate, undefined);
+			expect(yield* x.jobs.settled(10_000)).toBe(true);
+			expect(x.jobs.take()).toEqual([
+				[
+					`[job ${j} done] ingest of tender.pdf: read_file { id: o1 } "tender.pdf (ingested)"`,
+					'  9 lines · 1 images · 1 tables',
+					'  Map: L1–9 Cover (Pricing L3–9)'
+				].join('\n')
+			]);
+			expect(x.jobs.take()).toEqual([]);
+		})
+	);
 	it.effect(
-		'a cache hit in another conversation converts nothing and still finishes as a job',
+		'a cache hit in another conversation converts nothing and still files its own output',
 		() =>
 			Effect.gen(function* () {
 				const bytes = new TextEncoder().encode(`%PDF shared ${randomUUID()}`);
@@ -1842,16 +1917,13 @@ describe('ingest: a job per file, filed in the outputs, read in windows', () => 
 					{ name: 'a.pdf', mime: 'application/pdf', bytes },
 					port
 				);
-				yield* result(first.x, 'ingest', { id: first.id });
-				yield* first.x.jobs.settled(10_000);
+				yield* result(first.x, 'read_file', { id: first.id });
 				const other = yield* holding(
 					`c-${randomUUID()}`,
 					{ name: 'b.pdf', mime: 'application/pdf', bytes },
 					port
 				);
-				const j = job(yield* result(other.x, 'ingest', { id: other.id }));
-				yield* other.x.jobs.settled(10_000);
-				expect(other.x.jobs.take()[0]).toContain(`[job ${j} done] ingest of b.pdf → output o1`);
+				const answer = yield* result(other.x, 'read_file', { id: other.id, from: 1, to: 2 });
 				expect(calls).toBe(1);
 				expect(
 					kitLogs
@@ -1859,20 +1931,19 @@ describe('ingest: a job per file, filed in the outputs, read in windows', () => 
 						?.filter((r) => r.event === 'ingest.convert' && r.conversation === other.x.conv.id)
 						.map((r) => r.attributes)
 				).toEqual([expect.objectContaining({ cached: true })]);
-				expect(yield* result(other.x, 'read_file', { output: 'o1', from: 1, to: 2 })).toMatchObject(
-					{
-						result: { lines: ['1: <h1>Cover</h1>', '2: <p>Tender for site works</p>'] }
-					}
-				);
+				expect(answer).toMatchObject({
+					result: { id: 'o1', lines: ['1: <h1>Cover</h1>', '2: <p>Tender for site works</p>'] }
+				});
 			})
 	);
-	it.effect('a failed job says so once; reading it while it runs says it is still ingesting', () =>
+	it.live('a failed job says so once; reading it while it runs says it is still ingesting', () =>
 		Effect.gen(function* () {
 			const gate = yield* Deferred.make<void>();
 			const { x, id } = yield* holding(
 				`c-${randomUUID()}`,
 				{ name: 'bad.pdf', mime: 'application/pdf', bytes: new TextEncoder().encode(randomUUID()) },
 				{
+					inlineMs: 1,
 					ingest: () =>
 						Deferred.await(gate).pipe(
 							Effect.andThen(
@@ -1883,16 +1954,34 @@ describe('ingest: a job per file, filed in the outputs, read in windows', () => 
 						)
 				}
 			);
-			const j = job(yield* result(x, 'ingest', { id }));
-			expect(yield* result(x, 'read_file', { output: 'o1' })).toEqual({
+			expect(yield* result(x, 'read_file', { id })).toEqual({
+				result: { reading: 'bad.pdf', note: 'it arrives at your next step' }
+			});
+			const j = first(x.jobs.pending()).job;
+			expect(yield* result(x, 'read_file', { id: 'o1' })).toEqual({
 				result: { note: `still ingesting: ${j}` }
 			});
 			yield* Deferred.succeed(gate, undefined);
 			yield* x.jobs.settled(10_000);
 			expect(x.jobs.take()).toEqual([
-				`[job ${j} failed] ingest of bad.pdf: the PDF is encrypted; tell the person`
+				`[job ${j} failed] reading bad.pdf: the PDF is encrypted; tell the person`
 			]);
-			expect(yield* result(x, 'read_file', { output: 'o1' })).toMatchObject({
+		})
+	);
+	it.effect('a failed parse answers why, inline and when its output is read again', () =>
+		Effect.gen(function* () {
+			const { x, id } = yield* holding(
+				`c-${randomUUID()}`,
+				{ name: 'bad.pdf', mime: 'application/pdf', bytes: new TextEncoder().encode(randomUUID()) },
+				{
+					ingest: () =>
+						Effect.fail(new FacilityFailure({ kind: 'upstream', message: 'the PDF is encrypted' }))
+				}
+			);
+			expect(yield* result(x, 'read_file', { id })).toMatchObject({
+				result: { error: expect.stringContaining('the PDF is encrypted') }
+			});
+			expect(yield* result(x, 'read_file', { id: 'o1' })).toMatchObject({
 				result: { error: expect.stringContaining('the PDF is encrypted') }
 			});
 		})
@@ -1931,16 +2020,17 @@ describe('ingest: a job per file, filed in the outputs, read in windows', () => 
 							})
 					}
 				);
-				const j = job(yield* result(x, 'ingest', { id }));
-				yield* x.jobs.settled(10_000);
-				const [line] = x.jobs.take();
-				expect(line?.split('\n')).toEqual([
-					`[job ${j} done] ingest of site-meeting.m4a → output o1 "site-meeting.m4a (transcript)"`,
-					'  00:01:05 · 2 speakers · 2 lines',
-					'  Map: L1–1 S1 00:00:01 · L2–2 S2 00:00:04',
-					'  Read it with read_file { output: o1, from: … }',
-					expect.stringMatching(/^ {2}Typed JSON for run_js .*: transcript\.json \S+ — run_js/)
-				]);
+				expect(yield* result(x, 'read_file', { id })).toMatchObject({
+					result: {
+						file: 'site-meeting.m4a (transcript)',
+						lines: html.split('\n').map((l, i) => `${i + 1}: ${l}`),
+						about: [
+							'  00:01:05 · 2 speakers · 2 lines',
+							'  Map: L1–1 S1 00:00:01 · L2–2 S2 00:00:04',
+							expect.stringMatching(/^ {2}Typed JSON for run_js .*: transcript\.json \S+ — run_js/)
+						]
+					}
+				});
 				const listed = yield* outputs(x);
 				const entry = Array.isArray(listed) ? listed[0] : undefined;
 				const stored =
@@ -1967,9 +2057,6 @@ describe('ingest: a job per file, filed in the outputs, read in windows', () => 
 						]
 					}
 				);
-				expect(yield* result(x, 'read_file', { output: 'o1' })).toMatchObject({
-					result: { lines: html.split('\n').map((l, i) => `${i + 1}: ${l}`) }
-				});
 				expect(
 					kitLogs.get(x)?.find((r) => r.event === 'ai.call' && r.conversation === x.conv.id)
 				).toMatchObject({
@@ -1991,7 +2078,7 @@ describe('ingest: a job per file, filed in the outputs, read in windows', () => 
 				mime: 'video/mp4',
 				bytes: new Uint8Array([1])
 			});
-			expect(yield* result(video.x, 'ingest', { id: video.id })).toEqual({
+			expect(yield* result(video.x, 'read_file', { id: video.id, from: 1 })).toEqual({
 				result: {
 					error: expect.stringContaining('no parser: build a tool for it with your workspace tools')
 				}
@@ -2001,13 +2088,27 @@ describe('ingest: a job per file, filed in the outputs, read in windows', () => 
 				mime: 'application/pdf',
 				bytes: new Uint8Array([2])
 			});
-			expect(yield* result(pdf.x, 'ingest', { id: pdf.id })).toEqual({
-				result: { error: 'This host cannot ingest files.' }
+			expect(yield* result(pdf.x, 'read_file', { id: pdf.id })).toEqual({
+				result: { error: 'This host cannot parse files.' }
 			});
-			// a document is never read whole: read_file names ingest
 			expect(yield* result(pdf.x, 'read_file', { id: pdf.id, from: 1 })).toEqual({
+				result: { error: 'This host cannot parse files.' }
+			});
+		})
+	);
+	it.effect('a file with no parser says so when read whole, never that read_file parses it', () =>
+		Effect.gen(function* () {
+			const video = yield* holding(`c-${randomUUID()}`, {
+				name: 'site.mp4',
+				mime: 'video/mp4',
+				bytes: new Uint8Array([1])
+			});
+			const { db, files, images } = video.x.engine;
+			if (files === undefined || images === undefined) throw new Error('the kit stores files');
+			video.x.attachments = fileAttachments(db, files, images);
+			expect(yield* result(video.x, 'read_file', { id: video.id })).toEqual({
 				result: {
-					error: `Lines, text and images read an ingest: call ingest { id: '${pdf.id}' } first.`
+					error: expect.stringContaining('no parser: build a tool for it with your workspace tools')
 				}
 			});
 		})
@@ -2048,7 +2149,9 @@ describe('act starts automations', () => {
 			};
 			const authority = { ...member({ admin: true }), automations: ['tidy'] };
 			const x = yield* ctx({ authority, inApp: false }, { manifest: m, calls, db });
-			expect((yield* requiredTool(x, 'act')).description).toContain('tidy(day?: date)');
+			// act's text is static: the caller's automations are describe_workspace's and a wrong name's error
+			expect((yield* requiredTool(x, 'act')).description).not.toContain('tidy');
+			expect(describeWorkspace(m, authority, new Map())).toContain('tidy(day?: date)');
 			expect(
 				yield* result(x, 'act', { callable: 'automation.tidy', input: { day: '2026-09-01' } })
 			).toMatchObject({ result: { outcome: { output: { kind: 'queued' } } } });
@@ -2057,20 +2160,22 @@ describe('act starts automations', () => {
 				runs: [{ input: { day: '2026-09-01' } }]
 			});
 			expect(yield* result(x, 'act', { callable: 'automation.purge' })).toEqual({
-				result: { error: "You may not run 'automation.purge'." }
+				result: {
+					error: "You may not run 'automation.purge'. Yours: automation.tidy, tasks.sync.sheet"
+				}
 			});
-			expect((yield* requiredTool(x, 'act')).description).toContain(
-				'A file sync runs as <model>.sync.<sync>'
-			);
-			expect((yield* requiredTool(x, 'act')).description).toContain(
-				'tasks.sync.sheet(mode: import | export)'
-			);
+			expect((yield* requiredTool(x, 'act')).description).toContain('"<model>.sync.<sync>"');
 			expect(
 				yield* result(x, 'act', {
 					callable: 'automation.tasks.sync.sheet',
 					input: { mode: 'import' }
 				})
-			).toEqual({ result: { error: "You may not run 'automation.tasks.sync.sheet'." } });
+			).toEqual({
+				result: {
+					error:
+						"You may not run 'automation.tasks.sync.sheet'. Yours: automation.tidy, tasks.sync.sheet"
+				}
+			});
 			yield* result(x, 'act', {
 				callable: 'tasks.sync.sheet',
 				input: { mode: 'import', file: 'f1' }
@@ -2147,10 +2252,7 @@ describe('act starts automations', () => {
 					db
 				}
 			);
-			expect((yield* requiredTool(synced, 'act')).description).toContain(
-				'A remote sync reads its source now as <model>.sync.<sync> with {}: tasks.sync.erp'
-			);
-			expect((yield* requiredTool(synced, 'act')).description).not.toContain('tasks.sync.erp()');
+			expect((yield* requiredTool(synced, 'act')).description).not.toContain('tasks.sync.erp');
 			yield* result(synced, 'act', { callable: 'tasks.sync.erp', input: {} });
 			expect(started.at(-1)).toMatchObject({
 				automation: 'tasks.sync.erp',
@@ -2159,7 +2261,12 @@ describe('act starts automations', () => {
 			started.pop();
 			expect(
 				yield* result(synced, 'act', { callable: 'automation.tasks.sync.erp', input: {} })
-			).toEqual({ result: { error: "You may not run 'automation.tasks.sync.erp'." } });
+			).toEqual({
+				result: {
+					error:
+						"You may not run 'automation.tasks.sync.erp'. Yours: automation.tidy, tasks.sync.erp"
+				}
+			});
 			active = 'run-1';
 			expect(
 				yield* result(x, 'act', { callable: 'automation.tidy', input: { day: '2026-09-01' } })
@@ -2358,6 +2465,12 @@ describe('download', () => {
 				)
 			).not.toContain('download');
 		})
+	);
+	it.effect("a turn with a browser downloads through it, with its sign-ins", () =>
+		Effect.gen(function* () {
+			const hostTools = browserTools(yield* Browser);
+			expect(yield* names(yield* ctx({ hostTools }))).not.toContain('download');
+		}).pipe(Effect.provide(Browser.fromAbi(off)))
 	);
 });
 describe('run_js', () => {
@@ -2571,6 +2684,7 @@ describe('run_js over a repository reference', () => {
 				call: (_input, context) =>
 					Effect.runPromise(
 						Effect.gen(function* () {
+							yield* Effect.sleep('20 millis');
 							const files = store;
 							if (files === undefined) return yield* Effect.die(new Error('no files'));
 							const listed = yield* Effect.forEach(tree, ([path, bytes]) =>
@@ -2604,10 +2718,24 @@ describe('run_js over a repository reference', () => {
 						return { errors: [] };
 					})
 			};
-			const x = yield* ctx({ hostTools: [reference] }, { bundler: service, http });
+			const x = yield* ctx({ hostTools: [reference], inlineMs: 1 }, { bundler: service, http });
 			store = x.engine.files;
-			expect(yield* result(x, 'reference', {})).toMatchObject({
-				result: { reference: NAME, files: [{ name: NAME, mime: REFERENCE.mime }] }
+			yield* result(x, 'reference', {});
+			// past the inline wall the file is still recorded, and `wait` hands it over
+			expect(yield* result(x, 'wait', { jobs: [first(x.jobs.pending()).job] })).toMatchObject({
+				result: {
+					settled: { result: { reference: NAME, files: [{ name: NAME, mime: REFERENCE.mime }] } }
+				}
+			});
+			const listing = (input: Json) => result(x, 'read_file', input);
+			expect(yield* listing({ id: `${NAME}/src/lib` })).toMatchObject({
+				result: expect.stringContaining('src/lib/add.js')
+			});
+			expect(yield* listing({ id: `${NAME}/src/lib/`, text: 'a + b' })).toMatchObject({
+				result: 'src/lib/add.js:1: module.exports.add = (a, b) => a + b;'
+			});
+			expect(yield* listing({ id: `${NAME}/tests` })).toEqual({
+				result: { error: `${NAME} has no file 'tests'.` }
 			});
 			const run = (input: Json) => result(x, 'run_js', input);
 			yield* run({ file: `${NAME}/src/main.js` });
@@ -2771,7 +2899,7 @@ describe('runs and logs', () => {
 			})
 	);
 	it.effect(
-		"a run's clipped values name read_output's call id, and the whole run stays for it",
+		"a run's clipped values name read_file's call id, and the whole run stays for it",
 		() =>
 			Effect.gen(function* () {
 				const x = yield* ctx();
@@ -2789,7 +2917,7 @@ describe('runs and logs', () => {
 					})
 				)(yield* result(x, 'runs', { id: 'rb' }));
 				expect(answer.result.input).toMatch(
-					/\.\.\. \[clipped, \d+ bytes; read_output with call id call reads it whole\]$/
+					/\.\.\. \[clipped, \d+ bytes; read_file \{ call: 'call' \} reads it whole\]$/
 				);
 				expect(answer.full.input.text).toBe(big.text);
 			})
@@ -2891,11 +3019,11 @@ describe('host web search', () => {
 			return { ok: name };
 		}
 	});
-	const hostTools = [host('web_search'), host('browser_navigate')];
+	const hostTools = [host('web_search'), host('browser')];
 	it.effect('a workspace MCP tool named web_search hides only the host web_search', () =>
 		Effect.gen(function* () {
 			const plain = yield* names(yield* ctx({ hostTools }));
-			expect(plain).toEqual(expect.arrayContaining(['web_search', 'browser_navigate']));
+			expect(plain).toEqual(expect.arrayContaining(['web_search', 'browser']));
 			// every tool is offered directly: there is no tool for discovering or loading tools
 			expect(plain).not.toContain('tools');
 			const own = yield* names(
@@ -2903,16 +3031,11 @@ describe('host web search', () => {
 					hostTools,
 					mcpTools: [
 						{ server: 'kagi', name: 'web_search', description: 'Kagi', input: { type: 'object' } },
-						{
-							server: 'kagi',
-							name: 'browser_navigate',
-							description: 'x',
-							input: { type: 'object' }
-						}
+						{ server: 'kagi', name: 'browser', description: 'x', input: { type: 'object' } }
 					]
 				})
 			);
-			expect(own).toEqual(expect.arrayContaining(['mcp__kagi__web_search', 'browser_navigate']));
+			expect(own).toEqual(expect.arrayContaining(['mcp__kagi__web_search', 'browser']));
 			expect(own).not.toContain('web_search');
 		})
 	);
@@ -2922,6 +3045,31 @@ describe('host web search', () => {
 			yield* result(yield* ctx({ hostTools, question: 'who won?' }), 'web_search', {});
 			expect(seen.map((c) => c.question)).toEqual(['who won?']);
 		})
+	);
+});
+
+describe('the catalogue', () => {
+	it.effect(
+		'for an administrator with no MCP stays under 16,000 characters and names no model of the workspace',
+		() =>
+			Effect.gen(function* () {
+				const x = yield* ctx(
+					{
+						workspace: { files: async () => [], read: async () => null },
+						delegation: true,
+						skills: { authoring: skillOf({ 'SKILL.md': '---\ndescription: x\n---\n' }) },
+						geocoder: { search: () => Effect.succeed([]), reverse: () => Effect.succeed(null) },
+						hostTools: browserTools(yield* Browser)
+					},
+					{ convert: { targets: ['pdf'], convert: () => Effect.succeed(new Uint8Array()) } }
+				);
+				const texts = Object.values((yield* catalogue(x)).toolkit.tools).map(
+					(t) => `${t.description ?? ''}${JSON.stringify(toolSchema(t))}`
+				);
+				expect(texts.join('').length).toBeLessThan(16_000);
+				for (const model of Object.keys(manifest.models))
+					for (const text of texts) expect(text).not.toContain(model);
+			}).pipe(Effect.provide(Browser.fromAbi(off)))
 	);
 });
 

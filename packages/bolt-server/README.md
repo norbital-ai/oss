@@ -47,7 +47,7 @@ migration checks; runtime flags do not override them.
 - Integration instances read no host env: an administrator (or whoever may update the instance's row) picks its
   provider and enters its credentials at `/__bolt/integrations/<instance>/pair`, sealed per instance with
   the host's `keys`; each instance's webhook is `/hooks/integration/<instance>` (paths under it, such as a mailbox's
-  open pixel, reach the same link; a custom chat's signed deliveries are checked there with its credential). Every
+  open pixel, reach the same link). Every
   OAuth sign-in returns to the one `/hooks/oauth/callback`, routed to its instance by `state`: register that URI with
   an OAuth app once. Links reopen at start from the instance rows that are active and store a provider, and again when
   an instance's configuration changes.

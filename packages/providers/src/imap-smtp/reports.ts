@@ -4,19 +4,31 @@
 // auto-replies are ordinary mail here: bolt tells them apart (RFC 3834).
 import PostalMime from 'postal-mime';
 import { Clock, Effect } from 'effect';
-import { ProviderUnavailable } from '../errors.ts';
 import type { DeliveryReport } from '@norbital-ai/bolt/engine';
 import type { Obj } from '../util.ts';
 
+/** A file a message's structure names, its bytes not read. */
+export type Named = { name: string; mime: string; bytes: number };
 export type Report = Pick<DeliveryReport, 'kind' | 'code' | 'reason' | 'permanent' | 'presumed'>;
 export type Read =
-	| { kind: 'mail'; message: Obj; bins: Uint8Array[]; from: string }
+	| { kind: 'mail'; message: Obj; bins: Uint8Array[]; from: string; id: string; thread: string }
 	/** `ids`: the Message-IDs (ours, on `domain`) the report may be about, most certain first. */
 	| { kind: 'report'; ids: string[]; report: Report };
 
 type Parsed = Awaited<ReturnType<typeof PostalMime.parse>>;
 const decode = (c: ArrayBuffer | Uint8Array | string) =>
 	typeof c === 'string' ? c : new TextDecoder().decode(c);
+/** The engine's thread of a mail (`normalizeInbound`): the first reference, else what it replies to, else itself. */
+const threadOf = (headers: { readonly [k: string]: string }, id: string) =>
+	headers['references']?.split(/\s+/).find((value) => value !== '') || headers['in-reply-to'] || id;
+/** The Date header, never after the arrival: a window search reads arrivals, so a stored instant stays inside its window. */
+const sentAtOf = (date: string | undefined, receivedAt: string | undefined, now: number) => {
+	const known = [Date.parse(date ?? ''), Date.parse(receivedAt ?? '')].filter(Number.isFinite);
+	return new Date(known.length === 0 ? now : Math.min(...known)).toISOString();
+};
+/** A mail with no readable sender still needs one to be stored. */
+const NOBODY = 'unknown@invalid';
+const UNREADABLE = 'This email could not be read. Its raw source is attached.';
 const MSGID = /<[^<>\s@]+@[^<>\s]+>/g;
 const DAEMON = /^(mailer-daemon|postmaster|mail-daemon|mailerdaemon)@/i;
 const NDR =
@@ -100,20 +112,66 @@ const flat = (list: Parsed['to']) =>
 
 /**
  * Reads one raw message. `domain` is the mailbox address's domain: every Message-ID this mailbox sends is `<id@domain>`,
- * so a report names ours only by one of those (an envelope id `id` is ours as `<id@domain>`).
+ * so a report names ours only by one of those (an envelope id `id` is ours as `<id@domain>`). `files` replaces its
+ * attachments where the bytes were not read whole. A mail the parser refuses is stored from its headers, its raw source
+ * the file, so one bad message never holds the cursor.
  */
 export const readMail = Effect.fn('Mailbox.readMail')(function* (
 	source: Uint8Array | string,
 	domain: string,
 	fallbackId: string,
 	deliveryReports: boolean = true,
-	receivedAt?: string
-): Effect.fn.Return<Read, ProviderUnavailable> {
-	const e = yield* Effect.tryPromise({
-		try: () =>
-			PostalMime.parse(source, { forceRfc822Attachments: true, attachmentEncoding: 'arraybuffer' }),
-		catch: () => new ProviderUnavailable({ message: 'The email could not be parsed' })
-	});
+	receivedAt?: string,
+	files?: readonly Named[]
+): Effect.fn.Return<Read> {
+	const now = yield* Clock.currentTimeMillis;
+	const e =
+		source.length === 0
+			? null
+			: yield* Effect.tryPromise(() =>
+					PostalMime.parse(source, {
+						forceRfc822Attachments: true,
+						attachmentEncoding: 'arraybuffer'
+					})
+				).pipe(Effect.orElseSucceed(() => null));
+	if (e === null) {
+		const bytes = typeof source === 'string' ? new TextEncoder().encode(source) : source,
+			text = decode(bytes),
+			end = text.search(/\r?\n\r?\n/),
+			head = fields(end < 0 ? text : text.slice(0, end));
+		const id = head.get('message-id') || fallbackId,
+			address = /[^\s<>"]+@[^\s<>"]+/.exec(head.get('from') ?? '')?.[0]?.toLowerCase() ?? NOBODY,
+			headers = Object.fromEntries(
+				['in-reply-to', 'references'].flatMap((name) => {
+					const value = head.get(name);
+					return value === undefined ? [] : [[name, value]];
+				})
+			);
+		yield* Effect.logWarning(`The email ${id} could not be parsed: storing its raw source`);
+		return {
+			kind: 'mail',
+			from: address,
+			id,
+			thread: threadOf(headers, id),
+			bins: files === undefined ? [bytes] : [],
+			message: {
+				id,
+				thread: null,
+				sentAt: sentAtOf(head.get('date'), receivedAt, now),
+				from: { address, name: null },
+				replyTo: null,
+				to: [],
+				cc: [],
+				subject: head.get('subject')?.slice(0, 998) ?? '',
+				text: UNREADABLE,
+				html: null,
+				headers,
+				attachments: files ?? [
+					{ name: 'message.eml', mime: 'message/rfc822', bytes: bytes.byteLength, bin: 0 }
+				]
+			}
+		};
+	}
 	const headers: { [k: string]: string } = {};
 	for (const h of e.headers) headers[h.key] ??= h.value;
 	const from = flat(e.from === undefined ? [] : [e.from])[0] ?? { address: '', name: null };
@@ -161,33 +219,33 @@ export const readMail = Effect.fn('Mailbox.readMail')(function* (
 		return { kind: 'report', ids, report };
 	}
 	const bins: Uint8Array[] = [];
-	const attachments = e.attachments.map((a) => {
-		const bytes =
-			typeof a.content === 'string'
-				? new TextEncoder().encode(a.content)
-				: new Uint8Array(a.content);
-		bins.push(bytes);
-		return {
-			name: a.filename ?? `attachment-${bins.length}`,
-			mime: a.mimeType,
-			bytes: bytes.byteLength,
-			bin: bins.length - 1
-		};
-	});
-	const date = Date.parse(e.date ?? ''),
-		received = Date.parse(receivedAt ?? ''),
-		now = yield* Clock.currentTimeMillis;
+	const attachments =
+		files ??
+		e.attachments.map((a) => {
+			const bytes =
+				typeof a.content === 'string'
+					? new TextEncoder().encode(a.content)
+					: new Uint8Array(a.content);
+			bins.push(bytes);
+			return {
+				name: a.filename ?? `attachment-${bins.length}`,
+				mime: a.mimeType,
+				bytes: bytes.byteLength,
+				bin: bins.length - 1
+			};
+		});
+	const id = e.messageId ?? fallbackId;
 	return {
 		kind: 'mail',
 		from: from.address,
+		id,
+		thread: threadOf(headers, id),
 		bins,
 		message: {
-			id: e.messageId ?? fallbackId,
+			id,
 			thread: null,
-			sentAt: new Date(
-				Number.isNaN(date) ? (Number.isNaN(received) ? now : received) : date
-			).toISOString(),
-			from,
+			sentAt: sentAtOf(e.date, receivedAt, now),
+			from: from.address === '' ? { ...from, address: NOBODY } : from,
 			replyTo: flat(e.replyTo)[0] ?? null,
 			to: flat(e.to),
 			cc: flat(e.cc),

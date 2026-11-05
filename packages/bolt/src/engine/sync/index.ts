@@ -250,8 +250,9 @@ export const SyncsLive = Layer.effect(
 		);
 		return {
 			health: Effect.fn('Syncs.health')(function* (instance: string) {
-				const now = iso(yield* Clock.currentTimeMillis);
-				return yield* db.value(SyncHealth, {
+				const ms = yield* Clock.currentTimeMillis,
+					now = iso(ms);
+				const health = yield* db.value(SyncHealth, {
 					text: `SELECT jsonb_build_object(
 						'pending', (SELECT count(*)::int FROM sys_outbox WHERE instance = $1 AND status IN ('queued','sending')),
 						'dead', (SELECT count(*)::int FROM sys_outbox WHERE instance = $1 AND status = 'dead'),
@@ -271,6 +272,11 @@ export const SyncsLive = Layer.effect(
 						)
 					]
 				});
+				// a read that found nothing commits nothing, so this generation's memory may be the newer
+				const read = reading.lastReadOf(instance);
+				return read > Date.parse(health.last_read_at ?? '1970-01-01')
+					? { ...health, last_read_at: iso(read), lag_seconds: (ms - read) / 1000 }
+					: health;
 			}),
 			replay: Effect.fn('Syncs.replay')(function* (instance: string, ids?: readonly string[]) {
 				const now = iso(yield* Clock.currentTimeMillis),

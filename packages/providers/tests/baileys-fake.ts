@@ -110,10 +110,10 @@ export const fake = (log: string[] = [], options: BaileysOptions = {}) => {
 					}
 				},
 				user: { id: ME },
-				sendMessage: async (jid, content) => {
+				sendMessage: async (jid, content, options) => {
 					s.sent.push({ jid, content });
 					return {
-						key: { id: `OUT${s.sent.length}` },
+						key: { id: options.messageId },
 						message: { conversation: `sent ${s.sent.length}` }
 					};
 				},

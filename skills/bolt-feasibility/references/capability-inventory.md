@@ -1,91 +1,68 @@
 # Capability inventory
 
-Everything below is native to a Bolt workspace unless stated otherwise. "Precedent" means an
-existing template demonstrates it; a capability without precedent is still native when it is the
-same primitive under a different name.
+Everything here is native unless stated. A facility a host left `off` fails `Unavailable`.
 
-Effectful authored bodies are generators over native `ctx` Effects. A facility the host
-turned `off` fails with `Unavailable`; recover that tag only when absence is valid for the workflow.
-Pages derive `bolt.query(...)` and read its reactive `current`, `loading` and `error` getters.
-The same Query yields as an Effect or awaits once outside reactivity; `$bolt` exports
-`run`/`fork`/`attach` for mounted execution. `bolt.clock` materializes workspace-zone time inputs.
+## Data
 
-## Data and modelling
+| Capability | Lives in |
+| --- | --- |
+| Typed fields: text formats, numbers, money, dates, periods, enums, state, sequences, roll-ups, json, files, points, vectors | `+model.ts` |
+| Keys, unique, index, check, non-overlapping periods, computed expressions | `+model.ts` |
+| One-to-many, many-to-many via a model, polymorphic arcs, ownership, delete rules | `ref` fields |
+| Structured domain values | custom fields |
+| Runtime formulas, extraction variants, business catalogues | configuration models validated by write contracts |
+| Parent-owned calculation parts, document snapshots | shaped JSON or custom datatypes |
+| Effective-dated facts, versioned lineages | `period` + `noOverlap` + callbacks, std versioned |
+| System columns, history, audit | runtime |
+| Reviewed SQL migrations generated from the manifest | root `migrations/` |
+| Text, semantic and custom-index search, filters, cursor paging, aggregates | `search`, `bolt.query` |
 
-| Capability                                                                                                                                                                                 | Where it lives                                                                         | Precedent                                                                               |
-| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------- |
-| Typed models: text (email, phone, url, zone), int, decimal, money, currency, bool, date, instant, time, duration, periods, enums, state, sequences, roll-ups, json, files, points, vectors | `src/data/model/**/<name>/+model.ts` (the leaf folder names the model)                 | all templates                                                                           |
-| Constraints: keys, unique, index, check, non-overlapping periods, computed expressions                                                                                                     | `+model.ts`                                                                            | hr-payroll effective periods                                                            |
-| Relationships (one-to-many, many-to-many via a model, polymorphic arcs), ownership, delete rules                                                                                           | the same model's inline `ref` fields (`to`, `inverse`, `owned`, `onDelete`)            | all templates                                                                           |
-| Structured domain values (bank account, work pattern, statutory regime, eligibility rules)                                                                                                 | `src/data/custom_field/<name>/` (`+definition.ts` + `+renderer.svelte`)                | hr-payroll                                                                              |
-| Runtime-configured formulas, extraction variants and business catalogues                                                                                                                   | ordinary configuration models, validated through their write contracts                 | hr-payroll statutory rules, system-technic job_types, trade-operations commission_rules |
-| Parent-owned calculation parts and source/document snapshots                                                                                                                               | shaped JSON or custom datatypes, with parent revision/history                          | hr-payroll payslip parts                                                                |
-| Effective-dated facts and versioned lineages                                                                                                                                               | `period` fields + `noOverlap` + per-verb write callbacks; `@norbital-ai/std/versioned` | hr-payroll                                                                              |
-| System columns on every row: id, revision, created/updated at and by                                                                                                                       | runtime                                                                                | `norbital-platform` skill                                                               |
-| History and audit (always on; evidence, not a rollback)                                                                                                                                    | runtime                                                                                | `norbital-platform` skill                                                               |
-| Reviewed SQL migration history generated from the manifest                                                                                                                                 | root `migrations/` SQL, snapshot and lock, replayed by each host                       | all templates                                                                           |
-| Text, semantic and custom-index search, filters, ordering, cursor paging, aggregates                                                                                                       | model `search.text` / `semantic` / `indexes`, `bolt.query` / `aggregate`               | norbital-hq activities, color-matching                                                  |
+## Workflow
 
-## Workflow and logic
+| Capability | Lives in |
+| --- | --- |
+| Per-verb callbacks and refusals | `+model.ts` |
+| Lifecycles with per-state edit locks | `state` field |
+| Computed reads, named business operations | a read plus helper; an automation |
+| File import and export with context, findings and documents | `syncs.<name>` with `with: 'file'` |
+| Scheduled, event and webhook work; durable, rerun from the start | automations |
+| Source teams, policies, inline approvals, decision audit | `access_control/` |
+| Formula evaluation; exact decimal and money; calendars and business days | std modules |
+| Documents (Markdown or HTML to declared targets) and spreadsheets | `ctx.convert.document`, std sheet; conversion is an optional host capability |
 
-| Capability                                                                                                  | Where it lives                                                                                                                                                                      | Precedent                                                                                           |
-| ----------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
-| Exposure and per-verb write callbacks: `create.transform`, `update.transform`, `delete.check`, `ctx.refuse` | `src/data/model/**/<name>/+model.ts`                                                                                                                                                | all templates                                                                                       |
-| Lifecycles with per-state edit locks                                                                        | `state` field in `+model.ts`                                                                                                                                                        | trade-operations orders                                                                             |
-| Computed reads and named, typed business operations                                                         | one read request (a root and its declared layers) + a pure `src/lib` helper / named `automation(...).run`                                                                           | trade-operations commission statements, hr kiosk punch                                              |
-| File import/export with typed context, findings and document output                                         | inline model `syncs.<name>` with `with: 'file'`, parser, schema, read/write                                                                                                         | hr-payroll roster imports                                                                           |
-| Scheduled, event-triggered and webhook work; durable, rerun from the start, retried                         | `src/automation/+<name>.automation.ts`                                                                                                                                              | norbital-hq calendar activities, hr payroll                                                         |
-| Source teams linked to policies, inline approval configuration, audit of decisions                          | `src/access_control/team/` + `src/access_control/policy/+<name>.policy.ts`                                                                                                          | native source authority, denied writes committed under approval requests and shared review controls |
-| Formula evaluation with registered functions (payroll rules, eligibility)                                   | `@norbital-ai/std/formula`                                                                                                                                                          | hr-payroll                                                                                          |
-| Exact decimal and money arithmetic, calendars and business days                                             | `@norbital-ai/std/decimal`, `std/date`, `std/calendar`                                                                                                                              | trade-operations pricing, hr-payroll                                                                |
-| Documents and spreadsheets                                                                                  | `ctx.convert.document` (Markdown/HTML → pdf, docx, pptx, odt, epub, html; targets declared in `workspace({ convert: { to } })`, optional host capability), `@norbital-ai/std/sheet` | on-demand-services warning letter, hr exports                                                       |
+## People, communication, AI
 
-## People, communication, and AI
+| Capability | Lives in |
+| --- | --- |
+| Envoys on conversation channels under declared policies; sender matching only where the driver carries a handle | envoy roles, `sys_integration.envoy` |
+| In-app agent briefs | `+agent.md`, `+agent.external.md` |
+| Workspace skills; personal skills per tenant and person | `agent/skill/<name>/+skill.md`; Colony personal-skill tools |
+| Remote MCP servers, granted by policy | `agent/mcp/` |
+| Typed decisions; LLM inference with structured output, images and files; embeddings | `ctx.ai.*` |
+| Speech to text, text to speech | `ctx.convert.ingest`, `ctx.ai.speak`; optional |
+| Mail, chat and in-app notifications; record-driven outbound with delivery events | connections, sync `write` and `read`, `notify` |
+| Workspace secrets | `+secrets.ts` |
+| File storage, upload, image facts | `file` fields, `ctx.files` |
+| Portal users and signed-out public forms | `audience` on `+app.ts` |
+| Public and external sites with caller-scoped SSR | `pageServer` loader and shared codec |
+| Device kiosks and embeddable customer sites with phone verification and self sign-up | `portal: true`, kiosks, `signup` |
 
-| Capability                                                                                                                                                                           | Where it lives                                                                                                                                                          | Precedent                                                                                                   |
-| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
-| Envoys: chat agents on WhatsApp, Telegram, email, Slack, Discord or WeChat, under declared policies (sender matching only where the driver carries a handle: phone, email, telegram) | source envoy roles (`src/agent/envoy/`) deployed on conversation instances (`sys_integration.envoy`)                                                                    | field-operations WhatsApp envoy, hr-payroll payroll hotline (`dm: 'envoy'`, per entity by `entity.hotline`) |
-| In-app agent briefs (staff, external members)                                                                                                                                        | `src/agent/+agent.md`, `+agent.external.md`                                                                                                                             | all templates                                                                                               |
-| Workspace skills (indexed in the system prompt)                                                                                                                                      | `src/agent/skill/+<name>.skill.md`                                                                                                                                      | norbital-hq                                                                                                 |
-| Personal skills, isolated per tenant and person                                                                                                                                      | Colony personal-skill tools                                                                                                                                             | —                                                                                                           |
-| Remote MCP servers, granted by policy                                                                                                                                                | `src/agent/mcp/+<name>.mcp.ts`                                                                                                                                          | —                                                                                                           |
-| Typed decisions (choice, yes/no probability, score)                                                                                                                                  | `ctx.ai.sys_1.decide` in automations                                                                                                                                    | message triage, AI filtering                                                                                |
-| LLM inference with structured output, images and files                                                                                                                               | `ctx.ai.sys_2.infer` in automations                                                                                                                                     | field-operations photo review                                                                               |
-| Embeddings of text and images                                                                                                                                                        | `ctx.ai.embed`, `search.semantic`                                                                                                                                       | field-operations photos                                                                                     |
-| Speech to text, text to speech                                                                                                                                                       | `ctx.convert.ingest` (audio as a diarized transcript: speakers, timed segments; Norbital Convert) , `ctx.ai.speak` (audio stored as a file); optional host capabilities | none yet                                                                                                    |
-| Mail, WhatsApp, Telegram and in-app notifications; record-driven outbound with delivery events                                                                                       | conversation drivers and `+workspace.ts` connections; model sync `write` sends and `read` receives delivery reports; `notify` notices use `to` and optional `via`       | serial-pcn customer notices, hr inbox                                                                       |
-| Workspace secrets                                                                                                                                                                    | `secrets` in `src/+secrets.ts`                                                                                                                                          | field-operations                                                                                            |
-| File storage, upload, reads, image facts                                                                                                                                             | `file` fields, `ctx.files`                                                                                                                                              | field-operations photo evidence                                                                             |
-| Portal users (customers, vendors) and signed-out public forms                                                                                                                        | `audience: 'external'` / `{ public }` on `+app.ts`                                                                                                                      | —                                                                                                           |
-| Public/external sites with caller-scoped SSR data and requested-page hydration                                                                                                       | Non-members `+app.ts` audience, `+<page>.page.server.ts` `pageServer` loader, shared `<page>.page.data.ts` codec                                                        | source contract: `oss/packages/bolt/docs/client-bundling.md`                                                |
-| Standalone pages: device kiosks and customer sites embeddable in another website, with on-page phone verification and self sign-up                                                   | `portal: true` page; `signup` in `+workspace.ts`; ui `PhoneVerify`                                                                                                      | hr-payroll attendance kiosk, on-demand-services booking portal                                              |
+## External world (mediated)
 
-## External world (mediated surfaces)
-
-| Capability                                                                            | Where it lives                                                                                                                                                  | Precedent                                                                             |
-| ------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------- |
-| Source mirrors, local annotations and outbound commands                               | inline model syncs with `read`/`write`, `$id`/`$version`, optional `every`/partitions, and engine-managed cursors/outbox/idempotency                            | trade-operations Kingdee (SQL Server), serial-pcn supplier mail, norbital-hq calendar |
-| Outbound HTTP with credentials (bearer, basic, header, OAuth2)                        | an `http` definition (`credential` + `http.auth`, or the definition's `oauth` with its `authorize`/`token` endpoints) + a connection + automation `ctx.request` | on-demand-services `google_routes`                                                    |
-| Verified HTTP webhooks trigger model sync reads                                       | an `http` integration's `webhook: { verify: { scheme, secret } }`; model sync `read` receives `deliveries`                                                      | —                                                                                     |
-| Signed inbound webhooks (bearer, HMAC, Svix, Stripe, Slack, Meta)                     | automation `webhook` trigger                                                                                                                                    | —                                                                                     |
-| Web page reads                                                                        | `ctx.web.read`                                                                                                                                                  | hr statutory research                                                                 |
-| Browser SDKs and WASM inside the page bundle (3D, image processing, office documents) | page dependencies                                                                                                                                               | hr-payroll `exceljs`, kiosk face capture                                              |
+| Capability | Lives in |
+| --- | --- |
+| Source mirrors, local annotations, outbound commands | model syncs with engine-managed cursors, outbox, idempotency |
+| Outbound HTTP with bearer, basic, header or OAuth2 credentials | `http` definition, connection, `ctx.request` |
+| Verified webhooks triggering sync reads | integration `webhook.verify`; sync `read` gets `deliveries` |
+| Signed inbound webhooks | automation `webhook` trigger |
+| Web page reads | `ctx.web.read` |
+| Browser SDKs and WASM | page dependencies |
 
 ## UI
 
-| Capability                                                                               | Where it lives                                          |
-| ---------------------------------------------------------------------------------------- | ------------------------------------------------------- |
-| Apps, groups, pages; tables, boards, forms, matrices, charts, pivots, maps; record views | `src/app/`, `+representation.svelte`, `@norbital-ai/ui` |
-| Pickers, date / period / money / point / file inputs, markdown, formula and code editors | `@norbital-ai/ui`                                       |
-| Camera capture with liveness and on-device face descriptors                              | `@norbital-ai/ui/capture`                               |
-| Message catalogs per locale, typed keys                                                  | `src/i18n/`                                             |
-| Layout primitives with a single scroll owner per axis                                    | `@norbital-ai/ui/layout`                                |
+Apps, groups, pages; tables, boards, forms, matrices, charts, pivots, maps; record views; pickers, typed inputs, markdown, formula and code editors; camera capture with liveness and on-device face descriptors; typed message catalogs; layout primitives with one scroll owner per axis.
 
 ## Not a capability
 
-These look like capabilities but are not tenant-facing; do not offer them:
-
-- **The platform's own billing and metering** (`@norbital-ai/std` billing) prices _the platform_
-  for Norbital; it is not a payment facility for tenants.
-- **Sandbox host tools** (`sandbox_*`) reach the tenant's source tree during authoring; they are
-  not runtime features users interact with.
+- The platform's billing and metering prices the platform; it is no tenant payment facility.
+- Sandbox host tools reach source during authoring; they are not runtime features.

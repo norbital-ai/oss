@@ -36,6 +36,50 @@ const PACKAGES = ['bolt', 'ui', 'std'];
 const REFERENCE = (ns: string) =>
 	['bolt', 'bolt/page', 'bolt-cli/test', 'ui', 'ui/layout', 'ui/capture'].includes(ns) ||
 	ns.startsWith('std/');
+/** What an author reads for each role: these symbols' shapes, generated into `bolt-contract` so a card cannot drift. */
+const CONTRACT: { readonly [role: string]: { readonly [namespace: string]: readonly string[] } } = {
+	model: {
+		bolt: ['model', 'FieldCommon', 'StoredArm', 'RefField', 'TableSpec', 'ReadLayers', 'LayerColumns']
+	},
+	access: {
+		bolt: [
+			'team',
+			'policy',
+			'Grant',
+			'ReadGrant',
+			'WriteGrant',
+			'CreateCheck',
+			'UpdateCheck',
+			'PolicyCtx',
+			'Expr',
+			'Flow'
+		]
+	},
+	automation: {
+		bolt: ['automation', 'Trigger', 'AutomationCtx', 'ReadRequestBase', 'OutputKind', 'Act', 'Verdict'],
+		'bolt/errors': ['Refusal']
+	},
+	sync: { bolt: ['integration', 'RemoteSync', 'FileSync', 'SyncCtx', 'RemoteReadInput'] },
+	page: {
+		bolt: ['app', 'Page', 'group', 'pageServer', 'PageReadContext'],
+		'bolt/page': ['PageBolt'],
+		ui: [
+			'Table',
+			'Col',
+			'Toolbar',
+			'RowAction',
+			'Form',
+			'Field',
+			'Section',
+			'RecordShell',
+			'Board',
+			'Chart'
+		]
+	},
+	test: { 'bolt-cli/test': ['TestWorkspace', 'Kit', 'Caller', 'TestOptions', 'layer'] }
+};
+const CONTRACT_SKILL = 'bolt-contract';
+const CARDED = new Set(Object.values(CONTRACT).flatMap((named) => Object.values(named).flat()));
 const root = join(dirname(fileURLToPath(import.meta.url)), '..', '..'); // oss/packages
 const out = join(root, 'bolt', 'build', 'docs');
 const SKILLS = join(root, '..', 'skills'); // oss/skills: the authoring skills
@@ -272,9 +316,9 @@ export const generateDocs = Effect.try({
 				: undefined;
 		}
 
-		function declarationText(d: ts.Declaration): string {
+		function declarationText(d: ts.Declaration, name: string): string {
 			const text = d.getText().replace(/^\s*(export\s+)?(declare\s+)?/, '');
-			return clip(text, 1500);
+			return clip(text, CARDED.has(name) ? 4000 : 1500);
 		}
 
 		/** Whether any hop of the re-export chain is `export type`. */
@@ -331,7 +375,7 @@ export const generateDocs = Effect.try({
 				}
 			} else if (f & ts.SymbolFlags.Class) {
 				kind = 'class';
-				signature = declarationText(d);
+				signature = declarationText(d, name);
 				const key = checker.getTypeOfSymbolAtLocation(sym, d);
 				const service =
 					key.getProperty('~effect/Context/Service') === undefined
@@ -347,11 +391,11 @@ export const generateDocs = Effect.try({
 				);
 			} else if (f & ts.SymbolFlags.Interface) {
 				kind = 'interface';
-				signature = declarationText(d);
+				signature = declarationText(d, name);
 				members = membersOf(checker.getDeclaredTypeOfSymbol(sym), d);
 			} else if (f & ts.SymbolFlags.TypeAlias) {
 				kind = 'type';
-				signature = declarationText(d);
+				signature = declarationText(d, name);
 				const t = checker.getDeclaredTypeOfSymbol(sym);
 				if (isObjectLike(t) && !(ts.isTypeAliasDeclaration(d) && ts.isMappedTypeNode(d.type))) {
 					const m = membersOf(t, d);
@@ -359,7 +403,7 @@ export const generateDocs = Effect.try({
 				}
 			} else if (f & ts.SymbolFlags.Enum) {
 				kind = 'enum';
-				signature = declarationText(d);
+				signature = declarationText(d, name);
 			} else {
 				kind = 'namespace';
 				signature = `namespace ${name}`;
@@ -397,6 +441,7 @@ export const generateDocs = Effect.try({
 		mkdirSync(out, { recursive: true });
 		const index: DocIndex = { namespaces: [], missing: [], skills: [], guides: [] };
 		const corpusSymbols: DocSymbol[] = [];
+		const contractSymbols = new Map<string, DocSymbol>();
 		for (const name of readdirSync(SKILLS)
 			.filter((n) => existsSync(join(SKILLS, n, 'SKILL.md')))
 			.sort(byCode)) {
@@ -442,6 +487,7 @@ export const generateDocs = Effect.try({
 				.filter((s): s is DocSymbol => s !== null)
 				.sort((a, b) => byCode(a.name, b.name));
 			corpusSymbols.push(...symbols);
+			for (const s of symbols) contractSymbols.set(`${e.namespace}#${s.name}`, s);
 			const ns: DocNamespace = {
 				namespace: e.namespace,
 				module: e.module,
@@ -465,6 +511,59 @@ export const generateDocs = Effect.try({
 				);
 		}
 
+		const sentence = (text: string) =>
+			clip(/^.*?(?<!e\.g|i\.e)\.(?=\s|$)/s.exec(text)?.[0] ?? text, 200);
+		const line = (m: DocMember) =>
+			`- ${m.name}${m.optional === true ? '?' : ''}: ${clip(m.type, 240)}${m.summary === undefined ? '' : ` — ${sentence(m.summary)}`}`;
+		const card = (s: DocSymbol) => {
+			const shape = [
+				...(s.params ?? []).flatMap((p) => p.fields ?? []),
+				...(s.props ?? []),
+				...(s.members ?? [])
+			];
+			return [
+				`## ${s.name}`,
+				sentence(s.summary),
+				...(s.kind === 'function' ? [clip(s.signature, 300)] : []),
+				...(shape.length > 0
+					? shape.map(line)
+					: s.kind === 'function'
+						? []
+						: [s.signature.replace(/\s+/g, ' ')])
+			]
+				.filter((part) => part !== '')
+				.join('\n');
+		};
+		const roles = Object.entries(CONTRACT).map(([role, named]) => ({
+			path: `${role}.md`,
+			text: `# ${role}\n\n${Object.entries(named)
+				.flatMap(([namespace, names]) =>
+					names.map((name) => {
+						const found = contractSymbols.get(`${namespace}#${name}`);
+						if (found === undefined) throw new Error(`[docs] no ${namespace}#${name} for a card`);
+						return card(found);
+					})
+				)
+				.join('\n\n')}\n`
+		}));
+		const description = "Bolt's authoring contract: one card per role, generated from its types.";
+		const contract: DocSkill = {
+			name: CONTRACT_SKILL,
+			description,
+			files: [
+				{
+					path: 'SKILL.md',
+					text: `---\ndescription: ${description}\n---\n\n# Bolt contract\n\nOne card per role, read with \`file\`: ${roles.map((r) => r.path).join(', ')}.\n`
+				},
+				...roles
+			]
+		};
+		writeFileSync(join(out, skillFile(CONTRACT_SKILL)), `${JSON.stringify(contract, null, '\t')}\n`);
+		index.skills.push({
+			name: CONTRACT_SKILL,
+			description,
+			files: contract.files.map((file) => file.path)
+		});
 		// every call a docs page names (`` `ctx.allow()` ``, `` `model(name, spec)` ``) names something the corpus declares:
 		// a symbol, a member, a parameter or an identifier of their types
 		const declared = new Set<string>(),

@@ -107,6 +107,7 @@ export const providerOf = (c: InstanceStatus | null): ProviderChoice | undefined
 const BRANDS: { readonly [driver: string]: string } = {
 	whatsapp: 'WhatsApp',
 	wechat: 'WeChat',
+	chat: 'Chat',
 	telegram: 'Telegram',
 	slack: 'Slack',
 	discord: 'Discord',

@@ -6,6 +6,8 @@ export type ClientNavigation = { open(path: string, conversation: string): void 
 export const CLIENT_PAGE_ACTION = Symbol('norbius-client-page-action');
 export type ClientPageAction = {
 	run(action: PageAction, conversation: string, step: string): void;
+	/** A page step's navigation landed: the tab answers it with what it shows. */
+	arrived(step: string): void;
 };
 
 /** One ledger for the tab: several Agent components — and duplicate module copies — must not repeat an action. */
@@ -44,7 +46,7 @@ export function pageActions() {
 			ledger.primed = false;
 		}
 		const actions = rows.flatMap((row) =>
-			row.tool?.name === 'page_act' && row.tool.page !== undefined
+			row.tool?.name === 'page' && row.tool.page !== undefined
 				? [
 						{
 							key: `${row.id}:${JSON.stringify(row.tool.page)}`,
@@ -69,16 +71,19 @@ export function pageActions() {
 export function navigationEvents() {
 	let current: string | null = null;
 	let seen = new Set<string>();
-	return (conversation: string | null, rows: readonly AgentRow[]): string[] => {
+	return (
+		conversation: string | null,
+		rows: readonly AgentRow[]
+	): { id: string; path: string }[] => {
 		const navigations = rows.flatMap((row) =>
-			row.tool?.name === 'navigate' && row.tool.navigation !== undefined
-				? [{ key: `${row.id}:${row.tool.navigation}`, path: row.tool.navigation }]
+			row.tool?.name === 'page' && row.tool.navigation !== undefined
+				? [{ id: row.id, key: `${row.id}:${row.tool.navigation}`, path: row.tool.navigation }]
 				: []
 		);
 		const fresh = conversation === current ? navigations.filter((item) => !seen.has(item.key)) : [];
 		current = conversation;
 		for (const item of navigations) seen.add(item.key);
 		if (conversation === null) seen = new Set();
-		return fresh.map((item) => item.path);
+		return fresh.map(({ id, path }) => ({ id, path }));
 	};
 }

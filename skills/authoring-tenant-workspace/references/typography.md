@@ -1,114 +1,52 @@
 # Typography
 
-Which class a piece of text gets. Derived from [interface-ideology.md](interface-ideology.md) axioms
-4 (one owner per responsibility) and 5 (tokens, never values).
+Reach for the role first: a role class is the whole answer. Sizes answer how big; roles answer what text is for.
 
-There are two vocabularies and they answer different questions. Sizes answer _how big_. Roles answer
-_what this text is for_. Reach for the role first: if the text has a job the scale alone cannot
-describe — a group heading, a field name, a caption — the role class is the whole answer and you
-write nothing else.
+## Roles
 
-## The roles
+| Class | Use |
+| --- | --- |
+| `text-overline` | heading over a group: list section, filter group, column band |
+| `text-label` | name of a control |
+| `text-meta` | timestamps, counts, statuses, helper text |
+| `text-caption` | a note attached to something else |
+| `text-body` | long-form reading text |
+| `text-eyebrow` | line above a marketing heading |
+| `text-lede` | intro paragraph under a heading |
 
-Every one of these is complete: size, weight, leading, tracking, case and colour. Composing one with
-a `font-*`, `leading-*`, `tracking-*`, `uppercase` or colour utility means either the role is wrong
-or a new role is missing.
+## Sizes
 
-| Class           | Renders as                               | Use                                                                                 |
-| --------------- | ---------------------------------------- | ----------------------------------------------------------------------------------- |
-| `text-overline` | 11px / 590 / +0.08em / uppercase / muted | Heading over a group of things — a section of a list, a filter group, a column band |
-| `text-label`    | 14px / 510 / leading 1                   | The name of a control: field, switch, filter                                        |
-| `text-meta`     | 12px / 400 / muted                       | Secondary metadata: timestamps, counts, statuses, helper text                       |
-| `text-caption`  | 14px / 400 / muted                       | A note attached to something else                                                   |
-| `text-body`     | 16px / 400 / 1.60                        | Long-form reading text                                                              |
-| `text-eyebrow`  | 14px / 510 / muted                       | The line above a marketing heading                                                  |
-| `text-lede`     | 18px / 400 / 1.60 / muted                | Intro paragraph under a heading                                                     |
+| Token | Use |
+| --- | --- |
+| `text-display` | marketing hero, once per page |
+| `text-title` | page titles, prose `h1` |
+| `text-section` | section headings, `h2`, empty-state titles |
+| `text-subhead` | sub-sections, `h3` |
+| `text-heading` | pane, dialog and card titles, `h4` |
+| `text-base` | default reading text |
+| `text-sm` | default product UI text |
+| `text-xs` | secondary metadata with no role |
+| `text-micro` | dense labels in studio and agent surfaces |
+| `text-tiny` | compact indicators |
 
-## The sizes
+Each token sets its own weight, leading and tracking.
 
-Headings and dense text that carry no role beyond their size. Each token already sets its own
-weight, leading and tracking, so the utility is the full recipe here too.
+## Rules
 
-| Token          | Size               | Weight | Tracking | Use                                              |
-| -------------- | ------------------ | ------ | -------- | ------------------------------------------------ |
-| `text-display` | clamp(30px → 48px) | 510    | -0.022em | Marketing hero only, once per page               |
-| `text-title`   | clamp(28px → 36px) | 510    | -0.022em | Page titles, prose `h1`                          |
-| `text-section` | clamp(22px → 30px) | 510    | -0.022em | Section headings, prose `h2`, empty-state titles |
-| `text-subhead` | 20px               | 400    | -0.012em | Sub-sections, prose `h3`                         |
-| `text-heading` | 18px               | 510    | -0.012em | Pane, dialog and card titles, prose `h4`         |
-| `text-base`    | 16px               | 400    | normal   | Default reading text                             |
-| `text-sm`      | 14px               | 400    | normal   | Default product UI text                          |
-| `text-xs`      | 12px               | 400    | normal   | Secondary metadata with no role                  |
-| `text-micro`   | 11px               | —      | normal   | Dense labels in studio and agent surfaces        |
-| `text-tiny`    | 10px               | —      | normal   | Compact indicators                               |
-
-Three weights exist: 400 reading, 510 UI, 590 headings. `font-bold` never appears — hierarchy comes
-from size, colour and tracking. Nothing renders below 10px. There are no arbitrary sizes:
-`text-[13px]` in an app file is always wrong.
-
-## The failure mode
-
-One defect accounts for nearly all of them: **reassembling a role from its parts.**
-
-```svelte
-<!-- WRONG: this is a text-overline, spelled out -->
-<p class="text-micro font-semibold tracking-[0.08em] text-muted-foreground uppercase">Contacts</p>
-<p class="text-tiny font-medium tracking-wide text-muted-foreground uppercase">Contacts</p>
-<p class="text-xs font-medium tracking-wider text-muted-foreground uppercase">Contacts</p>
-
-<!-- RIGHT -->
-<p class="text-overline">Contacts</p>
-```
-
-Each of those three lines is plausible written on its own. They only reveal themselves as a defect
-when two land on the same screen at different sizes and weights — which is precisely the moment it
-is expensive to fix. That is why the rule is mechanical rather than a judgement: if the text matches
-a row in the roles table, it gets that one class.
-
-The same defect applies to the size tokens, which bundle weight and leading of their own:
-
-```svelte
-<!-- WRONG: text-lg + font-semibold is text-heading with the leading left loose -->
-<h2 class="text-lg font-semibold text-foreground">Members</h2>
-
-<!-- RIGHT -->
-<h2 class="text-heading">Members</h2>
-```
-
-The second failure mode follows from the first: **re-stating what a primitive already applies.**
-`Label`, `Card.Title`, `Dialog.Title`, `Sheet.Title` and the sidebar group headings all carry their
-role already. Passing `class="text-sm font-medium"` to a `Label` does not make it more correct, it
-makes it a fourth definition of the same thing.
-
-What is **not** a defect: a size and a colour together. `text-sm text-muted-foreground` is the
-prescribed way to de-emphasise text and needs no role. Ask whether the combination encodes a job —
-a group heading, a control name, a caption — or merely a size and a shade. Only the first earns a
-name; the second is already as small as it goes.
+- Never compose a role or token with `font-*`, `leading-*`, `tracking-*`, `uppercase` or colour. If text matches a role row, it gets that one class.
+- Never restate what a primitive applies: `Label`, `Card.Title`, `Dialog.Title`, `Sheet.Title` carry their role.
+- `font-bold` never appears. Weights are 400 reading, 510 UI, 590 headings. Nothing renders below 10px. No arbitrary sizes such as `text-[13px]`.
+- A size plus a colour is fine: `text-sm text-muted-foreground` is the way to de-emphasise.
 
 ## Colour
 
-Colour does the muting; size does not. To de-emphasise text, shift colour and keep the size:
-
-```svelte
-<span class="text-sm text-muted-foreground">Updated 3 minutes ago</span>
-```
-
-Never write an arbitrary opacity for text (`text-foreground/70`, `text-white/60`). If a role needs a
-softened colour, the role class owns that value — that is the point of `text-body`, which carries
-the one softened reading colour in the system so no page has to pick an opacity.
-
-Use `text-brand-text` for accent text on a tinted surface and `bg-brand-muted` for that surface;
-`text-brand` is the raw accent for artwork and focus. Never write `text-brand-700` or `bg-brand-100`
-in a component: those are light-only scale steps and disappear in the midnight theme.
+- Colour mutes; size does not. Never write a text opacity (`text-foreground/70`).
+- `text-brand-text` for accent text on a tinted surface, `bg-brand-muted` for that surface, `text-brand` for artwork and focus. Never `text-brand-700` or `bg-brand-100`: they vanish in the dark theme.
 
 ## Monospace
 
-Geist Mono is for code, data values, JSON, logs, ids and technical metadata, at 11–13px. Never for
-prose, never for marketing copy, and never to make an interface look technical.
+Geist Mono is for code, data values, JSON, logs, ids and technical metadata at 11 to 13px. Never prose or marketing.
 
-## Adding a role
+## New roles
 
-If a piece of text has a job that no row above describes, the answer is a new role class in
-`packages/ui/src/base.css`, not a new combination in a component. A role is worth adding when the
-same combination has been written at two call sites for the same reason — before that, it is a size
-plus a colour and belongs inline.
+A new role is a class in the UI package's base CSS, added when one combination recurs at two call sites for one reason.
