@@ -1,8 +1,8 @@
 <!--
 @component
 	The app hero above a page: the running app's banner, icon, title and actions (`AppShell` publishes them).
-	`compact` is the phone's one top bar: the same identity in a slim strip with the shell's own controls
-	(`leading`, `trailing`) and the page's scope controls in a lane beneath it.
+	`compact` is the phone's one top bar: one line holding the shell's own controls (`leading`, `trailing`), the title
+	with its description behind an info button, and the page's scope controls in a scrolling lane.
 -->
 <script lang="ts" module>
 	import type { Snippet } from 'svelte';
@@ -26,7 +26,7 @@
 		 * the part the shell cannot know.
 		 */
 		actions?: Snippet | undefined;
-		/** The phone's top bar: one slim row, the banner behind it, the actions in a scrolling lane below. */
+		/** The phone's top bar: one line, the banner behind it, the description behind an info button, the actions in a scrolling lane. */
 		compact?: boolean;
 		/** The accessible name of the compact actions lane. */
 		actionsLabel?: string;
@@ -41,6 +41,7 @@
 <script lang="ts">
 	import Icon from '../primitives/icon/icon-wrapper.svelte';
 	import Image from '../primitives/image/image.svelte';
+	import * as Popover from '../primitives/popover/index.js';
 	import { cn } from '../primitives/utils.js';
 	import { INSET_X_CLASS } from './layout.shared.js';
 	import Cluster from './cluster.svelte';
@@ -91,19 +92,44 @@
 			ratio="square"
 			class={cn(
 				compact ? 'size-8 rounded-lg' : 'size-11 rounded-xl',
+				// a phone's one line gives the icon's room to the lane
+				compact && actions !== undefined && 'max-sm:hidden',
 				scrim ? 'bg-background text-foreground ring-1 ring-border' : 'bg-muted text-foreground'
 			)}
 		>
 			<Icon name={icon} class={compact ? 'size-4' : 'size-5'} />
 		</Frame>
 	{/if}
-	{#if title || description}
+	{#if compact}
+		{#if title}
+			<h1
+				class={cn('min-w-0 truncate text-sm font-medium', scrim ? 'text-white' : 'text-foreground')}
+			>
+				{title}
+			</h1>
+		{/if}
+		{#if description}
+			<Popover.Root>
+				<Popover.Trigger
+					aria-label={description}
+					class={cn(
+						'flex size-8 shrink-0 items-center justify-center rounded-md outline-none focus-visible:ring-2 focus-visible:ring-ring/50',
+						scrim ? 'text-white/80' : 'text-muted-foreground'
+					)}
+				>
+					<Icon name="lucide:info" class="size-4" />
+				</Popover.Trigger>
+				<Popover.Content align="start" maxWidth={288} class="p-3 text-sm"
+					>{description}</Popover.Content
+				>
+			</Popover.Root>
+		{/if}
+	{:else if title || description}
 		<Stack gap="none" size="fill" class="min-w-0">
 			{#if title}
 				<h1
 					class={cn(
-						'truncate',
-						compact ? 'text-sm font-medium' : 'text-base font-semibold tracking-tight',
+						'truncate text-base font-semibold tracking-tight',
 						scrim ? 'text-white' : 'text-foreground'
 					)}
 				>
@@ -113,8 +139,7 @@
 			{#if description}
 				<p
 					class={cn(
-						'text-xs leading-snug',
-						compact ? 'truncate' : 'line-clamp-2 sm:line-clamp-1',
+						'line-clamp-2 text-xs leading-snug sm:line-clamp-1',
 						scrim ? 'text-white/80' : 'text-muted-foreground'
 					)}
 				>
@@ -127,9 +152,9 @@
 
 {#if compact}
 	<!--
-		One bar: safe-area insets on its own edges, the banner and scrim behind the whole strip (status bar
-		included), 44px controls either side of the identity, then the page's scope controls. Pickers shed
-		their authored widths in the lane so each reads as a chip; their popovers and sheets are unchanged.
+		One line: safe-area insets on its own edges, the banner and scrim behind the whole strip (status bar
+		included), 44px controls at either end, the title, then the page's scope controls in a lane capped so
+		the title keeps its room. The lane scrolls what does not fit; popovers and sheets are unchanged.
 	-->
 	<header
 		class={cn(
@@ -149,16 +174,13 @@
 				class="bg-linear-to-b from-black/25 via-black/45 to-black/75"
 			/>
 		{/if}
-		<Stack gap="none" class="relative">
-			<Inline
-				gap="sm"
-				justify="between"
-				class={cn('min-h-11 py-0.5', leading === undefined && 'pl-2')}
-			>
-				{#if leading}<Inline gap="none" class={cn(onScrim)}>{@render leading()}</Inline>{/if}
-				{@render identity()}
-				{#if trailing}<Inline gap="none" class={cn(onScrim)}>{@render trailing()}</Inline>{/if}
-			</Inline>
+		<Inline
+			gap="sm"
+			justify="between"
+			class={cn('relative min-h-11 py-0.5', leading === undefined && 'pl-2')}
+		>
+			{#if leading}<Inline gap="none" class={cn(onScrim)}>{@render leading()}</Inline>{/if}
+			<Inline gap="xs" size="fill" class="min-w-24">{@render identity()}</Inline>
 			{#if actions}
 				<Scroll
 					axis="x"
@@ -166,7 +188,7 @@
 					gap="xs"
 					name={actionsLabel}
 					class={cn(
-						'px-2 pb-2 *:shrink-0 [&_button]:h-10 [&_button]:px-3 [&_button]:text-sm [&_[role=combobox]]:w-auto [&_[role=combobox]]:max-w-44',
+						'max-w-3/5 flex-initial *:shrink-0 [&_button]:h-10 [&_button]:px-3 [&_button]:text-sm [&_[role=combobox]]:w-auto',
 						onScrim
 					)}
 					data-app-actions
@@ -174,7 +196,8 @@
 					{@render actions()}
 				</Scroll>
 			{/if}
-		</Stack>
+			{#if trailing}<Inline gap="none" class={cn(onScrim)}>{@render trailing()}</Inline>{/if}
+		</Inline>
 	</header>
 {:else}
 	<!--

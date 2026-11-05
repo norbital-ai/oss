@@ -47,6 +47,8 @@ The kit's select: a field-like trigger and a searchable option list in a popover
 		header?: Snippet;
 		/** Rendered below the scrollable option list. */
 		footer?: Snippet;
+		/** Rendered inside the trigger, before its chevron: a status the chosen value carries. */
+		badge?: Snippet;
 		/** A caller's empty state; loading and failed states keep the standard messages. */
 		empty?: Snippet;
 		/** Handle scope shortcuts before list navigation; preventing default resets the active option. */
@@ -100,6 +102,7 @@ The kit's select: a field-like trigger and a searchable option list in a popover
 		'aria-label': ariaLabel,
 		header,
 		footer,
+		badge,
 		empty
 	} = $derived(props);
 	// svelte-ignore state_referenced_locally -- the id is fixed at mount
@@ -264,6 +267,7 @@ The kit's select: a field-like trigger and a searchable option list in a popover
 						class="shrink-0 whitespace-nowrap text-xs tabular-nums text-muted-foreground"
 						>{current.suffix}</span
 					>{/if}
+				{@render badge?.()}
 			</span>
 			<Icon icon="lucide:chevrons-up-down" class={CONTROL_ICON} />
 		</Popover.Trigger>

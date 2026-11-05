@@ -30,6 +30,8 @@ Never re-implement a slot: a hand-made "Run now" button, a search box, a `<selec
 description paragraph, or a custom action bar is a second spelling of something the view already
 renders, and it drifts. **The toolbar owns every page-level action**: no button sits in the app
 header, above a view or beside it. The header's `actions` slot holds the page scope pickers only.
+A status the chosen scope carries goes inside its picker (`Combobox` `badge`), not beside it. On a phone the hero is
+one line: the title, its description behind an info button, `actions` in a scrolling lane.
 
 ### The toolbar's actions menu
 
