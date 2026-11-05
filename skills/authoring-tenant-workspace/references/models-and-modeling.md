@@ -83,6 +83,12 @@ named output. Authority is per access point: a layer is read or written under th
 policy alone, never the related model's. Each new layer of an output is visible to every reader of
 that output unless the root's policy filters its rows.
 
+A described filter reaches a related record, and finds it by name, only through a declared layer of
+the caller's output. A ref with no layer filters by its id and `me` alone. Declare
+`'<model>.<ref>': { fields: ['name'] }` for each ref people filter by, in every output that exposes
+it, and only where every holder of that output already reads the target: a layer shows its fields to
+all of them. Where one does not, grant it the target or leave the ref without a layer.
+
 ## Locks and state moves
 
 Declare immutability on the model, not in callbacks:
