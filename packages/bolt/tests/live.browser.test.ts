@@ -57,22 +57,35 @@ it.live('a page hands the live stream its own visibility and connectivity', () =
 );
 
 it.live('two shared sources on one page hold one EventSource and both hear its frames', () =>
-	Effect.gen(function* () {
-		expect(shareable()).toBe(true);
-		let opened = 0;
-		const open = () => {
-			opened++;
-			return new EventSource(PATHS.live);
-		};
-		const [first, second] = yield* Effect.all(
-			[
-				liveStream(() => sharedSource(PATHS.live, open)).pipe(Stream.take(2), Stream.runCollect),
-				liveStream(() => sharedSource(PATHS.live, open)).pipe(Stream.take(2), Stream.runCollect)
-			],
-			{ concurrency: 'unbounded' }
-		).pipe(Effect.timeout('5 seconds'));
-		expect(opened).toBe(1);
-		expect(first).toEqual(second);
-		expect(first[0]).toEqual({ t: 'hello', conn: 'browser', v: 0 });
-	})
+	Effect.scoped(
+		Effect.gen(function* () {
+			expect(shareable()).toBe(true);
+			let opened = 0;
+			const open = () => {
+				opened++;
+				return new EventSource(PATHS.live);
+			};
+			// held open to the end: a leader that closes hands its lock to a source still listening, which opens its own
+			const hear = Effect.acquireRelease(
+				Effect.sync(() => sharedSource(PATHS.live, open)),
+				(source) => Effect.sync(() => source.close())
+			).pipe(
+				Effect.flatMap((source) =>
+					Effect.callback<readonly string[]>((resume) => {
+						const frames: string[] = [];
+						source.onmessage = (event) => {
+							frames.push(event.data);
+							if (frames.length === 2) resume(Effect.succeed(frames));
+						};
+					})
+				)
+			);
+			const [first, second] = yield* Effect.all([hear, hear], { concurrency: 'unbounded' }).pipe(
+				Effect.timeout('5 seconds')
+			);
+			expect(opened).toBe(1);
+			expect(first).toEqual(second);
+			expect(JSON.parse(first[0]!)).toEqual({ t: 'hello', conn: 'browser', v: 0 });
+		})
+	)
 );
