@@ -136,11 +136,25 @@ A send is safe to retry only where a platform dedupes on our key: `idempotent` d
 1. Create a connection of the system `chat` definition. WhatsApp's providers stay under `whatsapp`.
 2. Pair it, picking the platform as the provider. The form asks for that platform's settings, shows the webhook URL to register, and proves the settings with a call the platform answers.
 
-Senders match no member on these platforms, so they admit only public envoys, except WhatsApp's providers. Sends carry text and, where listed, no attachments yet. Reactions and button presses are ignored.
+Senders match no member on these platforms, so they admit only public envoys, except WhatsApp's providers. [Who counts as a member](#who-counts-as-a-member) covers the others. Sends carry text and, where listed, no attachments yet. Reactions and button presses are ignored.
 
 Some platforms hand over a value only inside a delivery, such as Notion's verification token. The connection page shows it, and a person pastes it back.
 
 What an adapter may keep in memory is bounded by `recent` in `chat/adapter.ts`, and a restart forgets it. QQ and Weixin use it for the message a reply must name: after a restart a QQ reply goes out as the bot's own message, and Weixin may refuse a send until the person writes again.
+
+### Who counts as a member
+
+An envoy treats a sender as a member only when the platform proves who they are. That decides a private envoy's admission and whether a direct message carries the member's authority.
+
+| Channel | Linked by | Proof |
+| --- | --- | --- |
+| WhatsApp, Telegram | Phone, Telegram id | The platform's own account |
+| Email (IMAP) | Address | The receiving server's top `Authentication-Results`, with DMARC passing for the `From` domain, or a DKIM signature aligned with it |
+| Everything else | Nothing | Senders are never linked |
+
+`From` is free text, and SPF proves only the envelope, so neither links anyone. A sender can add `Authentication-Results` headers but only below the receiving server's, so only the top one counts, and only when it names the server this mailbox trusts. Google's and Microsoft's are known. Any other server needs its name in the connection's Authentication server setting, and without it that mailbox links nobody.
+
+Mail that fails is not dropped: it is an unknown sender. A public envoy answers it with its own policies alone, and a private one sends its fixed notice. Mail between two people on one Microsoft 365 tenant may carry no DMARC verdict, so it counts as unknown too.
 
 ### Adding a platform
 

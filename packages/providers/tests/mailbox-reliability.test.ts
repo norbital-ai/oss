@@ -46,13 +46,14 @@ const fixture = Effect.fn('MailboxReliability.fixture')(function* (qresync = fal
 	);
 	const open = Effect.fn('MailboxReliability.open')(function* (
 		state: { readonly validity: string; readonly uid: number; readonly began?: string },
-		personal = false
+		personal = false,
+		settings: { readonly authServer?: string } = {}
 	) {
 		const provider = mailbox({ plain: true }).find((p) => p.id === 'imap')!;
 		const h = yield* host(
 			provider,
 			fakeFetch([]),
-			{ credential: box(server.port), state },
+			{ credential: { ...box(server.port), ...settings }, state },
 			{ personal }
 		);
 		yield* Effect.addFinalizer(() => h.link.close ?? Effect.void);
@@ -60,6 +61,26 @@ const fixture = Effect.fn('MailboxReliability.fixture')(function* (qresync = fal
 		return h;
 	});
 	return { server, open };
+});
+
+describe('a mailbox that names its mail server', () => {
+	it.live('marks only the mail that server vouched for', () =>
+		Effect.scoped(
+			Effect.gen(function* () {
+				const f = yield* fixture();
+				const verdict = 'Authentication-Results: mx.test; dmarc=pass header.from=example.test\n';
+				f.server.deliver(message('proved', verdict), ago(60_000));
+				f.server.deliver(message('claimed'), ago(60_000));
+				const h = yield* f.open({ validity: '6', uid: 999 }, false, { authServer: 'mx.test' });
+				yield* until(() => cursor(h)?.uid === 2);
+				expect(messagesOf(h.events)).toMatchObject([
+					{ id: '<proved@example.test>', authenticated: true },
+					{ id: '<claimed@example.test>' }
+				]);
+				expect(messagesOf(h.events)[1]).not.toHaveProperty('authenticated');
+			})
+		)
+	);
 });
 
 describe('a new UIDVALIDITY', () => {

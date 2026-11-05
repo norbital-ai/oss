@@ -16,6 +16,7 @@ Exact shapes: `EnvoySpec`, `McpSpec`, `IntegrationSpec` from `@norbital-ai/bolt`
 - Deployment is `sys_integration.envoy` on a workspace instance (owner null), at most one envoy per instance; `active: false` pauses it. A connection's `envoy` is the default the release writes when creating the slot; a runtime change survives releases. `bolt check` refuses `envoy` on a connection with no conversation.
 - Never seed envoys.
 - `private` admits a sender whose handle matches a member (phone, email, telegram); others get one fixed notice per 15 minutes. Drivers with no member handle admit nobody. `public` admits anyone. Email is always addressed; group chat follows `groupMessages`.
+- An email sender links only when the receiving server vouches for the `From` domain (DMARC, or aligned DKIM); otherwise it is unknown. Say so before promising a private email envoy on a mail server outside Google and Microsoft: it needs the connection's Authentication server.
 - A group turn or unlinked DM holds the envoy's `policies` alone, every requestor variable null except `{ var: 'requestor.instance' }`.
 - A linked member's DM: `dm: 'union'` adds the member's own authority, admin included; `dm: 'envoy'` holds the envoy's policies with operands bound to the member, admin false, no member routes, tools or automations.
 - Limits are always the envoy's. Envoys never decide approvals.

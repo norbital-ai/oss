@@ -100,6 +100,8 @@ export type InboundMail = {
 	readonly html: string | null;
 	readonly headers: { readonly [name: string]: string };
 	readonly attachments: readonly Attachment[];
+	/** The receiving mail server vouched for `from`'s domain. Without it, `from` is a claim and links no member. */
+	readonly authenticated?: boolean;
 };
 /** An inbound chat message. `thread` is the chat; `replyTo` the message it answers. */
 export type InboundChat = {

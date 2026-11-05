@@ -83,6 +83,12 @@ const appOf = (m: Mailbox, personal = false): OAuthApp =>
 			};
 
 // ── setup, as data the shell renders ──
+/** Who writes `Authentication-Results` for a known IMAP host: Google names itself, Microsoft names nobody. */
+const RECEIVERS: ReadonlyMap<string, string | null> = new Map([
+	[KNOWN.google.imap.host, 'mx.google.com'],
+	[KNOWN.microsoft.imap.host, null]
+]);
+const receiverOf = (mailbox: Mailbox) => mailbox.authServer ?? RECEIVERS.get(mailbox.imap.host);
 const t = (en: string, zh: string): ProviderText => ({ en, zh });
 const F = {
 	address: {
@@ -152,6 +158,15 @@ const PASSWORD: ProviderSetup = {
 	],
 	fields: [
 		F.address,
+		{
+			name: 'authServer',
+			label: t('Authentication server', '身份验证服务器'),
+			optional: true,
+			hint: t(
+				'The name your mail server writes at the start of Authentication-Results, e.g. mx.example.com. Without it, this mailbox trusts no sender to be a member.',
+				'您的邮件服务器写在 Authentication-Results 开头的名称，例如 mx.example.com。未填写时，此邮箱不会将任何发件人视为成员。'
+			)
+		},
 		{
 			name: 'username',
 			label: t('Username', '用户名'),
@@ -342,7 +357,8 @@ const mailboxOf = Effect.fn('Mailbox.input')(function* (
 		folder: get('folder') ?? 'INBOX',
 		tracking: !personal && get('tracking') === 'on',
 		quietHours: quiet,
-		pixelKey
+		pixelKey,
+		...(get('authServer') === null ? {} : { authServer: get('authServer')!.toLowerCase() })
 	};
 	if (method === 'password')
 		return {
@@ -593,7 +609,8 @@ const open = Effect.fn('Mailbox.open')(function* (
 				midOf(mailbox, local),
 				!personal,
 				receivedAt,
-				recovered.files
+				recovered.files,
+				receiverOf(mailbox)
 			);
 			if (read.kind === 'report') {
 				const at = new Date(yield* Clock.currentTimeMillis).toISOString();
@@ -630,7 +647,8 @@ const open = Effect.fn('Mailbox.open')(function* (
 				midOf(mailbox, local),
 				!personal,
 				receivedAt,
-				files
+				files,
+				receiverOf(mailbox)
 			);
 			if (read.kind === 'report') return null;
 			const message = wireOf(mailbox, read, receivedAt);

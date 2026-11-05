@@ -316,7 +316,7 @@ layer(
 				});
 
 				// email: the registered address matches case-blind; every email is addressed and answered in its thread
-				const mailFrom = (id: string, from: string, text: string) =>
+				const mailFrom = (id: string, from: string, text: string, authenticated = true) =>
 					t.receive('ops_mail', {
 						id,
 						thread: null,
@@ -329,8 +329,14 @@ layer(
 						text,
 						html: null,
 						headers: {},
-						attachments: []
+						attachments: [],
+						authenticated
 					});
+				yield* mailFrom('<d1@x>', 'dana@ws.example', 'a forged From', false);
+				expect((yield* rows('a forged From'))[0]).toMatchObject({
+					refused: 'unregistered',
+					role: null
+				});
 				yield* mailFrom('<d2@x>', 'DANA@ws.example', 'from work');
 				expect((yield* rows('from work'))[0]).toMatchObject({
 					as: { envoy: { member: DANA, dm: true } },

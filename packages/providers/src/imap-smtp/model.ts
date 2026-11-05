@@ -26,6 +26,8 @@ const fields = {
 	quietHours: Schema.Number,
 	imap: Server,
 	smtp: Schema.optionalKey(Server),
+	/** The server name in this mailbox's `Authentication-Results`, where its host is none Norbital knows. */
+	authServer: Schema.optionalKey(Schema.NonEmptyString),
 	pixelKey: Schema.NonEmptyString
 };
 const OAuth = Schema.Struct({

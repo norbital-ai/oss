@@ -111,10 +111,73 @@ const flat = (list: Parsed['to']) =>
 		.map((a) => ({ address: a.address.toLowerCase(), name: a.name === '' ? null : a.name }));
 
 /**
+ * A header's `;` clauses, lower-cased, read as RFC 8601 writes them. A comment nests and a quoted string holds one
+ * value, and either can carry text the sender chose, such as an envelope address: none of it may read as a verdict.
+ */
+const clausesOf = (value: string) => {
+	const clauses = [''];
+	const keep = (character: string) => {
+		clauses[clauses.length - 1] += character.toLowerCase();
+	};
+	let depth = 0,
+		quoted = false;
+	for (let at = 0; at < value.length; at += 1) {
+		const character = value.charAt(at);
+		if (character === '\\') at += 1;
+		else if (quoted) {
+			quoted = character !== '"';
+			if (!/\s/.test(character)) keep(character);
+		} else if (character === '(') depth += 1;
+		else if (depth > 0) depth -= character === ')' ? 1 : 0;
+		else if (character === ';') clauses.push('');
+		else {
+			quoted = character === '"';
+			keep(character);
+		}
+	}
+	return clauses.map((clause) => clause.trim());
+};
+
+/**
+ * Whether the mail server that received this message vouches for its `From` domain, the only proof of a sender a
+ * mailbox has: `From` is free text. Its verdict is the top `Authentication-Results`, since a sender can only add ones
+ * below it. `receiver` names that server (`null` for Microsoft's, which names nobody), and with none known nothing is
+ * trusted. It takes a DMARC pass for this domain, or a DKIM pass aligned with it, for a domain that publishes no DMARC.
+ * SPF proves the envelope only, never `From`.
+ */
+export const authenticated = (
+	headers: readonly { readonly key: string; readonly value: string }[],
+	address: string,
+	receiver: string | null | undefined
+) => {
+	const domain = address.split('@').at(-1)?.toLowerCase() ?? '';
+	const top = headers.find(({ key }) => key === 'authentication-results')?.value;
+	if (
+		receiver === undefined ||
+		top === undefined ||
+		domain === '' ||
+		headers.filter(({ key }) => key === 'from').length !== 1
+	)
+		return false;
+	const [first = '', ...rest] = clausesOf(top);
+	const verdicts =
+		receiver === null ? [first, ...rest] : first.split(/\s+/)[0] === receiver ? rest : [];
+	return verdicts.some((clause) => {
+		const [verdict, ...properties] = clause.split(/\s+/);
+		const property = (name: string) =>
+			properties.find((one) => one.startsWith(`${name}=`))?.slice(name.length + 1);
+		if (verdict === 'dmarc=pass') return property('header.from') === domain;
+		if (verdict !== 'dkim=pass') return false;
+		const signer = property('header.d') ?? property('header.i')?.split('@').at(-1);
+		return signer === domain || signer?.endsWith(`.${domain}`) === true;
+	});
+};
+
+/**
  * Reads one raw message. `domain` is the mailbox address's domain: every Message-ID this mailbox sends is `<id@domain>`,
  * so a report names ours only by one of those (an envelope id `id` is ours as `<id@domain>`). `files` replaces its
  * attachments where the bytes were not read whole. A mail the parser refuses is stored from its headers, its raw source
- * the file, so one bad message never holds the cursor.
+ * the file, so one bad message never holds the cursor. `receiver` is the mail server `authenticated` trusts.
  */
 export const readMail = Effect.fn('Mailbox.readMail')(function* (
 	source: Uint8Array | string,
@@ -122,7 +185,8 @@ export const readMail = Effect.fn('Mailbox.readMail')(function* (
 	fallbackId: string,
 	deliveryReports: boolean = true,
 	receivedAt?: string,
-	files?: readonly Named[]
+	files?: readonly Named[],
+	receiver?: string | null
 ): Effect.fn.Return<Read> {
 	const now = yield* Clock.currentTimeMillis;
 	const e =
@@ -253,7 +317,8 @@ export const readMail = Effect.fn('Mailbox.readMail')(function* (
 			text: e.text ?? '',
 			html: e.html ?? null,
 			headers,
-			attachments
+			attachments,
+			...(authenticated(e.headers, from.address, receiver) ? { authenticated: true } : {})
 		}
 	};
 });

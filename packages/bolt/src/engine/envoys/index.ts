@@ -72,6 +72,8 @@ type Arrived = {
 	thread: string;
 	group: boolean;
 	email: boolean;
+	/** The sender's handle can be believed: a platform's own account, or mail its receiving server vouched for. */
+	proven: boolean;
 	/** The conversation's status as the row arrived: `running` makes the message steering. */
 	status: string;
 	handle: HandleKind | null;
@@ -147,7 +149,7 @@ export const envoys = Effect.fn('Envoys.make')(function* (cfg: EnvoysConfig) {
 		spec: EnvoySpec,
 		a: Arrived
 	) {
-		const found = yield* memberByHandle(db, a.handle, a.sender);
+		const found = a.proven ? yield* memberByHandle(db, a.handle, a.sender) : null;
 		const member = found !== null && (yield* authorities.member(db, found)) !== null ? found : null;
 		if (member === null && spec.audience !== 'public') return null;
 		return { envoy: { name: envoy, instance: a.instance, sender: a.sender, member, dm: !a.group } };
@@ -160,7 +162,7 @@ export const envoys = Effect.fn('Envoys.make')(function* (cfg: EnvoysConfig) {
 				: [];
 		const [res] = yield* db.read([
 			sql(
-				`SELECT m.integration, m.conversation, m.sender, m.sender_name, coalesce(m.text, '') AS text, m.invocation, m.email->>'subject' AS subject,
+				`SELECT m.integration, m.conversation, m.sender, m.sender_name, coalesce(m.text, '') AS text, m.invocation, m.email->>'subject' AS subject, m.email->>'authenticated' AS authenticated,
 				m.addressed IS NULL AND m.role IS NULL AND m.deleted_at IS NULL AS fresh, c.thread, c.kind, c.status, i.integration AS definition, i.envoy, i.active AND i.owner IS NULL AS serving
 			FROM sys_message m JOIN sys_conversation c ON c.id = m.conversation JOIN sys_integration i ON i.id = m.integration WHERE m.id = $1`,
 				id
@@ -202,6 +204,7 @@ export const envoys = Effect.fn('Envoys.make')(function* (cfg: EnvoysConfig) {
 				thread: String(r['thread']),
 				group: r['kind'] === 'group',
 				email: conv.kind === 'email',
+				proven: conv.kind !== 'email' || r['authenticated'] === 'true',
 				status: String(r['status'] ?? 'idle'),
 				handle: conv.handle,
 				label: def.driver,
