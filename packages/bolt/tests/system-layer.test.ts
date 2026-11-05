@@ -640,6 +640,7 @@ const EXPECTED: { [table: string]: Shape } = {
 			telegram: 'text',
 			revision: 'int not null default 1',
 			created_at: 'timestamptz not null default now()',
+			last_seen: 'timestamptz',
 			party_id: "text generated always as (((party ->> 'id'))::text) stored",
 			phone_key: "text generated always as ((regexp_replace(phone, '\\D', '', 'g'))::text) stored",
 			bolt_record_label: 'text generated always as (bolt_record_label_sys_user_HASH(name)) stored',
@@ -653,6 +654,7 @@ const EXPECTED: { [table: string]: Shape } = {
 			"((party is null or store_json_valid(party, '{kind:json,optional:true}'::jsonb) is true))",
 			"(email ~ '^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$')",
 			'(isfinite(created_at))',
+			'(isfinite(last_seen))',
 			"(kind in ('staff', 'external', 'anonymous'))"
 		]
 	}

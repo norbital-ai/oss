@@ -362,6 +362,8 @@ it.effect(
 	'sort: related keys — one hop through one-relations into read models; keys nest, and round-trip through the URL',
 	() =>
 		Effect.sync(() => {
+			const unaudited = sortable({ ...catalog.jobs, audit: false }, true, catalog);
+			assert.ok(!unaudited.includes('updated_at'), 'a model with no audit columns has none to sort by');
 			const s = sortable(catalog.jobs, true, catalog);
 			assert.ok(s.includes('account.name') && s.includes('assignee.name'), s.join());
 			assert.ok(!s.includes('account.owner'), 'a target FK is no sort key'); // it would order by an id

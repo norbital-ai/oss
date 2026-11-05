@@ -15,6 +15,7 @@ import { Authorities } from '../src/engine/identity/actor.ts';
 import { parseAddress } from '../src/engine/identity/address.ts';
 import { acceptInvitation, invite, setSignup } from '../src/engine/identity/members.ts';
 import {
+	authenticate,
 	founderBootstrap,
 	loadKeys,
 	loggedPhone,
@@ -139,6 +140,39 @@ layer(PhoneFixtureLive)((it) => {
 						message: expect.stringContaining('country code')
 					});
 				})
+		);
+	});
+
+	describe('last seen', () => {
+		it.effect('follows a member’s own visits to the hour, and never someone acting as them', () =>
+			Effect.gen(function* () {
+				const { db, h, one, lastCode } = yield* PhoneFixture;
+				yield* sendCode(h, '+6596661111', ip);
+				const s = yield* verifyCode(h, '+6596661111', lastCode(), ip);
+				const seen = Effect.fnUntraced(function* () {
+					const [row] = yield* one('SELECT last_seen FROM sys_user WHERE id = $1', s.user);
+					return row?.['last_seen'] ?? null;
+				});
+				expect(yield* seen()).toBeNull();
+				yield* authenticate(h, s.token);
+				const first = yield* seen();
+				expect(first).not.toBeNull();
+				// past the session memo, inside the hour: nothing to write
+				yield* TestClock.adjust('30 minutes');
+				yield* authenticate(h, s.token);
+				expect(yield* seen()).toEqual(first);
+				yield* TestClock.adjust('31 minutes');
+				yield* authenticate(h, s.token);
+				const second = yield* seen();
+				expect(second).not.toEqual(first);
+				yield* db.write({
+					text: `UPDATE sys_session SET impersonated_by = "user" WHERE "user" = $1`,
+					params: [s.user]
+				});
+				yield* TestClock.adjust('2 hours');
+				yield* authenticate(h, s.token);
+				expect(yield* seen()).toEqual(second);
+			})
 		);
 	});
 

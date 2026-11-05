@@ -208,6 +208,7 @@ const exposure = {
 	labelPaths: Schema.optionalKey(strings),
 	search: Schema.optionalKey(strings),
 	semantic: trueKey,
+	audit: Schema.optionalKey(Schema.Literal(false)),
 	indexes: Schema.optionalKey(
 		Schema.Record(Schema.String, Schema.Struct({ input: fields(), description: Schema.String }))
 	),

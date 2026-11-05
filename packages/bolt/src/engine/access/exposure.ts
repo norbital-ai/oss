@@ -9,6 +9,7 @@ import { FieldsSchema } from '../../protocol/public-page.ts';
 import { SYSTEM } from '../../system/index.ts';
 import { viewOutput } from './authority.ts';
 import { labelPaths, recordLabelSpec, recordLabelExpression } from '@norbital-ai/std/label';
+import { catalogOf } from './pred.ts';
 
 const labelMetadata = (
 	model: {
@@ -201,6 +202,7 @@ export function exposure(
 	m: EngineManifest,
 	a: Authority
 ): { readonly [model: string]: ModelExposure } {
+	const catalogued = catalogOf(m);
 	const instanceModel = SYSTEM.models['sys_integration'],
 		instanceExposure = SYSTEM.exposures['sys_integration'];
 	if (instanceModel === undefined || instanceExposure === undefined)
@@ -309,6 +311,7 @@ export function exposure(
 			...labelMetadata(model, readable),
 			...(output === undefined || output === 'default' ? {} : { output }),
 			...(model.search?.semantic === undefined ? {} : { semantic: true as const }),
+			...(catalogued.models.get(c)?.audit === true ? {} : { audit: false as const }),
 			fields: fieldsOf(fields),
 			...(reads && Object.keys(model.search?.indexes ?? {}).length > 0
 				? {

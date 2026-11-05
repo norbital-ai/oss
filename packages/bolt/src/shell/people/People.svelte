@@ -201,10 +201,6 @@
 {#snippet at({ value }: { row: object; value: unknown })}<time class="tabular-nums"
 		>{when(typeof value === 'string' ? value : null)}</time
 	>{/snippet}
-{#snippet lastSeen({ row }: { row: { readonly id: string }; value: Value | undefined })}<time
-		class="tabular-nums"
-		>{when(members.find((member) => member.id === row.id)?.last_seen ?? null)}</time
-	>{/snippet}
 {#snippet memberCell({
 	row
 }: {
@@ -243,7 +239,7 @@
 				{ field: 'kind', label: t('Kind') },
 				{ field: 'admin', label: t('Admin') },
 				{ field: 'active', label: t('Active') },
-				{ field: 'created_at', label: t('Last seen'), cell: lastSeen },
+				{ field: 'last_seen', label: t('Last seen'), cell: at },
 				{ field: 'id', label: t('Actions'), hide: 'narrow', cell: memberCell }
 			]}
 		/>

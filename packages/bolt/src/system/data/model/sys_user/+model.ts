@@ -24,7 +24,9 @@ export default model('sys_user', {
 		phone: { kind: 'text', optional: true },
 		telegram: { kind: 'text', optional: true },
 		revision: { kind: 'int', default: 1 },
-		created_at: { kind: 'instant', default: { var: 'now' } }
+		created_at: { kind: 'instant', default: { var: 'now' } },
+		/** Their last visit of their own, to the hour; an impersonator or an agent is not them. */
+		last_seen: { kind: 'instant', optional: true }
 	},
 	computed: {
 		party_id: { kind: 'text', expr: { jsonText: [{ field: 'party' }, 'id'] } },

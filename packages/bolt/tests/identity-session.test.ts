@@ -52,6 +52,7 @@ const row = {
 	agent: null,
 	via: 'code',
 	refreshed_at: '2026-09-26T00:00:00Z',
+					last_seen: '2026-09-26T00:00:00Z',
 	expires_at: '2026-10-03T00:00:00Z'
 };
 

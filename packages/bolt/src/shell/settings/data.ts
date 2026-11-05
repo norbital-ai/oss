@@ -143,7 +143,7 @@ export const settings = Effect.fn('shell.settings')(function* (
 	const [users, invitations, keys, audit, deliveries, signup, instances, envoys] = yield* h.db.read(
 		[
 			// administrators first, then staff, then external members; by name, else address (L-BOLT-516). Anonymous visitors are no members.
-			q(`SELECT u.id, u.email, u.phone, u.telegram, u.name, u.kind, u.active, u.admin, u.team, (SELECT max(s.refreshed_at)::text FROM sys_session s WHERE s."user" = u.id) AS last_seen
+			q(`SELECT u.id, u.email, u.phone, u.telegram, u.name, u.kind, u.active, u.admin, u.team, u.last_seen::text AS last_seen
 			FROM sys_user u WHERE u.kind <> 'anonymous' ORDER BY u.admin DESC, u.kind = 'external', lower(coalesce(nullif(u.name, ''), u.email, u.phone, '')), u.id`),
 			q(
 				`SELECT id, email, phone, team, external, CASE WHEN accepted_at IS NOT NULL THEN 'accepted' WHEN revoked_at IS NOT NULL THEN 'revoked'

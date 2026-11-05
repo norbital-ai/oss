@@ -244,7 +244,7 @@ export type ViewBolt = {
 					kind: 'text' | 'number' | 'bool';
 					optional?: boolean;
 				}[]
-		  ) => Effect.Effect<{ where: Json; orderBy?: Json }, Error>)
+		  ) => Effect.Effect<{ where?: Json; orderBy?: Json }, Error>)
 		| undefined;
 	/** Rule 16b `filter.options`: the same condition catalogue a description is offered, so the builder renders exactly what it may author. */
 	options?(

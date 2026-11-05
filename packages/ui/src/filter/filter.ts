@@ -1199,7 +1199,9 @@ export function sortable(x: ModelExposure | undefined, system = true, cat?: Cata
 				});
 	return [
 		...own,
-		...(system ? ['created_at', 'updated_at'].filter((f) => !own.includes(f)) : []),
+		...(system && x.audit !== false
+			? ['created_at', 'updated_at'].filter((f) => !own.includes(f))
+			: []),
 		...related
 	];
 }

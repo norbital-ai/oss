@@ -842,7 +842,7 @@ export const createBolt = (config: BoltConfig) =>
 									outcome.kind === 'committed'
 										? decode(
 												Schema.Struct({
-													where: Schema.Json,
+													where: Schema.optionalKey(Schema.Json),
 													orderBy: Schema.optionalKey(Schema.Json)
 												}),
 												outcome.output

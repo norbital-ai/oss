@@ -248,7 +248,7 @@ export function viewState(
 				const model = o.model();
 				return bolt.describe(model, text.trim(), localFilterFields(model, o.catalog()[model])).pipe(
 					Effect.map((result) => {
-						const parts = clauses(result.where).map((clause) =>
+						const parts = clauses(result.where ?? {}).map((clause) =>
 							fromWhere(o.catalog(), o.model(), clause)
 						);
 						const keys =

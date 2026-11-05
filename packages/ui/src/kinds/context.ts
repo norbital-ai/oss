@@ -32,6 +32,8 @@ export type ModelExposure = {
 	semantic?: true;
 	/** The model's own search indexes (`search.indexes`), by their typed `input`: the toolbar offers each as `/<index>`. */
 	indexes?: { readonly [index: string]: { input: Fields; description: string } };
+	/** `false`: it has no audit columns, so `created_at` and `updated_at` exist only if declared in `fields`. */
+	audit?: false;
 	/** Model fields the caller may read (hidden ones included; `hidden` renders nothing). */
 	fields: Fields;
 	/** One-relations as FK columns: `holder` → `employees`. A polymorphic ref lists every target. */

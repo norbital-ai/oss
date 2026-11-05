@@ -38,6 +38,12 @@ it.effect('describe exists only with AI and returns the committed where/orderBy'
 			callable: 'filter.describe',
 			input: { model: 'jobs', text: 'open jobs, newest first' }
 		});
+		// a sort alone is an answer: there is no condition to return
+		reply = {
+			outcome: { kind: 'committed', output: { orderBy: { title: 'asc' } }, records: [] },
+			v: 0
+		};
+		expect(yield* bolt.describe('jobs', 'sort by title')).toEqual({ orderBy: { title: 'asc' } });
 		reply = {
 			outcome: {
 				kind: 'refused',

@@ -905,7 +905,7 @@ const lookup = Effect.fn('Bolt.lookup')(function* (
 	const now = yield* h.now;
 	const [rows] = yield* h.db.read([
 		{
-			text: `SELECT s.id, s."user", s.impersonated_by, s.agent, s.via, s.refreshed_at, s.expires_at FROM sys_session s JOIN sys_user u ON u.id = s."user"
+			text: `SELECT s.id, s."user", s.impersonated_by, s.agent, s.via, s.refreshed_at, s.expires_at, u.last_seen FROM sys_session s JOIN sys_user u ON u.id = s."user"
 		WHERE s.token_hash = $1 AND s.expires_at > $2::timestamptz AND u.active`,
 			params: [hash, now.toISOString()]
 		}
@@ -919,12 +919,23 @@ const lookup = Effect.fn('Bolt.lookup')(function* (
 				agent: Schema.NullOr(Schema.String),
 				via: Schema.String,
 				refreshed_at: Schema.String,
-				expires_at: Schema.String
+				expires_at: Schema.String,
+				last_seen: Schema.NullOr(Schema.String)
 			})
 		),
 		rows!.rows[0]
 	);
 	if (r === undefined) return null;
+	if (
+		r.via !== ANONYMOUS &&
+		r.impersonated_by === null &&
+		r.agent === null &&
+		(r.last_seen === null || now.getTime() - Date.parse(r.last_seen) >= HOUR)
+	)
+		yield* h.db.write({
+			text: `UPDATE sys_user SET last_seen = $2::timestamptz WHERE id = $1`,
+			params: [r.user, now.toISOString()]
+		});
 	let expiresAt = Date.parse(String(r.expires_at));
 	if (now.getTime() - Date.parse(r.refreshed_at) >= DAY) {
 		expiresAt = now.getTime() + (r.via === ANONYMOUS ? ANONYMOUS_MS : SESSION_MS);

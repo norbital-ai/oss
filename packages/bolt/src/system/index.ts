@@ -1314,6 +1314,10 @@ export type SystemNames = {
 						var: 'now';
 					};
 				};
+				last_seen: {
+					kind: 'instant';
+					optional: true;
+				};
 			};
 			search: {
 				text: readonly ['name', 'email'];
