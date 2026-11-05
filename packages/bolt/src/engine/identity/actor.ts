@@ -8,7 +8,7 @@ import { teams, type EngineManifest } from '../manifest.ts';
 import type { TenantDbShape as TenantDb } from '../db/tenant-db.ts';
 import { BoltError } from '../../protocol/errors.ts';
 import { Clock, Effect, Schema } from 'effect';
-import { identityHistory, IMAGES, partyRow, signupOf, IdentityStatement } from './session.ts';
+import { identityHistory, IMAGES, jsonb, partyRow, signupOf, IdentityStatement } from './session.ts';
 import { envoySpec } from '../envoys/spec.ts';
 const UserSchema = Schema.Struct({
 	id: Schema.String,
@@ -18,7 +18,14 @@ const UserSchema = Schema.Struct({
 	active: Schema.Boolean,
 	admin: Schema.Boolean,
 	team: Schema.NullOr(Schema.String),
-	party: Schema.NullOr(Schema.Struct({ model: Schema.String, id: Schema.String })),
+	party: Schema.NullOr(
+		Schema.Struct({
+			model: Schema.String,
+			id: Schema.String,
+			/** It is theirs by holding their address, where a person's invitation did not name it. */
+			matched: Schema.optionalKey(Schema.Boolean)
+		})
+	),
 	signup: Schema.Boolean,
 	revision: Schema.Number
 });
@@ -61,20 +68,28 @@ export class Authorities {
 		}
 		return a;
 	}
-	/** A member who may yet be bound to a record, which any write to that record can do: never remembered unbound. */
-	private bindable(u: UserRow) {
-		return u.kind === 'external' && u.party === null && signupOf(this.m)?.party !== undefined;
+	/**
+	 * A member whose record is decided by who holds their address, which any write to a record can change: never
+	 * remembered. A party a person's invitation named stays what it is.
+	 */
+	private matched(u: UserRow) {
+		return (
+			u.kind === 'external' &&
+			signupOf(this.m)?.party !== undefined &&
+			(u.party === null || u.signup || u.party.matched === true)
+		);
 	}
 	/**
-	 * A member who signed up before the record that is them existed is bound to it as soon as exactly one record holds their
-	 * number (or email) — the booking that files a newcomer's customer record shows them that booking at once.
+	 * A matched member's record, as it stands now. They are bound as soon as exactly one record holds their number (or
+	 * email), so the booking that files a newcomer's customer record shows them that booking at once, and unbound once
+	 * theirs no longer does, so a number the desk corrected or a phone company reassigned opens nothing.
 	 */
 	private bind(db: TenantDb, u: UserRow) {
 		return Effect.gen(
 			function* (this: Authorities) {
 				const signup = signupOf(this.m);
-				if (!this.bindable(u) || signup?.party === undefined) return u;
-				// ponytail: one read per request while a member stays unbound; bounded by how long they have no record
+				if (!this.matched(u) || signup?.party === undefined) return u;
+				// ponytail: one read per request for a matched member; a write-side unbind would save it, on every write path
 				const address =
 					u.phone !== null && signup.party.match.phone !== undefined
 						? { kind: 'phone' as const, value: u.phone }
@@ -83,19 +98,25 @@ export class Authorities {
 							: null;
 				if (address === null) return u;
 				const [rows] = yield* db.read([partyRow(signup, address)]);
-				if (rows!.rows.length !== 1) return u;
-				const party = { model: signup.party.model, id: String(rows!.rows[0]!['id']) };
+				const holders = rows!.rows.map((row) => String(row['id']));
+				if (u.party !== null && holders.includes(u.party.id)) return u;
+				const [only, other] = holders;
+				const party =
+					only === undefined || other !== undefined
+						? null
+						: { model: signup.party.model, id: only, matched: true };
+				if (party === null && u.party === null) return u;
 				const s = new IdentityStatement();
 				const out = yield* db.write({
 					params: s.params,
-					text: `WITH bound AS (UPDATE sys_user SET party = ${s.p(party)}::jsonb, revision = revision + 1
-	WHERE id = ${s.p(u.id)} AND party IS NULL ${IMAGES}),
+					text: `WITH bound AS (UPDATE sys_user SET party = ${s.p(jsonb(party))}::jsonb, revision = revision + 1
+	WHERE id = ${s.p(u.id)} AND party IS NOT DISTINCT FROM ${s.p(jsonb(u.party))}::jsonb ${IMAGES}),
 ${identityHistory(s, 'sys_user', 'bound', new Date(yield* Clock.currentTimeMillis), `member:${u.id}`)}
 SELECT (SELECT (n->>'revision')::int FROM bound) AS revision`
 				});
 				const revision = out.rows[0]?.['revision'];
-				// a concurrent request bound them first: its revision is not this one's, so the next request re-reads it
-				return typeof revision === 'number' ? { ...u, party, revision } : u;
+				// a concurrent request got there first with this answer: its revision, never the old record's
+				return { ...u, party, revision: typeof revision === 'number' ? revision : u.revision + 1 };
 			}.bind(this)
 		);
 	}
@@ -122,7 +143,7 @@ SELECT (SELECT (n->>'revision')::int FROM bound) AS revision`
 				// an anonymous user is a visitor's identity (a cookie, never a session): it is no member
 				if (found === undefined || !found.active || found.kind === 'anonymous') return null;
 				const u = yield* this.bind(db, found);
-				if (this.remember && !this.bindable(u)) {
+				if (this.remember && !this.matched(u)) {
 					this.rows.set(userId, { row: u, stamp, at: now });
 					if (this.rows.size > this.max) this.rows.delete(this.rows.keys().next().value!);
 				}
@@ -151,7 +172,7 @@ SELECT (SELECT (n->>'revision')::int FROM bound) AS revision`
 					teamPath: team === null ? [] : path(graph, team),
 					// an administrator has the workspace's full authority; a rule 39 preview clears it
 					admin: !preview && u.admin && u.kind === 'staff',
-					party: u.party
+					party: u.party === null ? null : { model: u.party.model, id: u.party.id }
 				};
 				const policies = [
 					...new Set([

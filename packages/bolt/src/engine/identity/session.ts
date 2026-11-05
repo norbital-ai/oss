@@ -653,7 +653,7 @@ SELECT 1`
 	// exactly one record is the person; two holding the same address name nobody
 	const party =
 		parties!.rows.length === 1
-			? { model: h.signup!.party!.model, id: String(parties!.rows[0]!.id) }
+			? { model: h.signup!.party!.model, id: String(parties!.rows[0]!.id), matched: true }
 			: null;
 	if (user !== undefined && !user.active)
 		return yield* Effect.fail(refuse('notMember', 'This member is deactivated.'));

@@ -163,7 +163,7 @@ layer(PhoneFixtureLive)((it) => {
 							phone: '+6581234567',
 							email: null,
 							kind: 'external',
-							party: { model: 'customers', id: 'c-ada' },
+							party: { model: 'customers', id: 'c-ada', matched: true },
 							admin: false
 						}
 					]);
@@ -204,7 +204,7 @@ layer(PhoneFixtureLive)((it) => {
 					yield* sendCode(h, '+6591112222', ip);
 					expect(yield* verifyCode(h, '+6591112222', lastCode(), ip)).toMatchObject({ user: bob });
 					expect(yield* one('SELECT party FROM sys_user WHERE id = $1', bob)).toEqual([
-						{ party: { model: 'customers', id: 'c-bob' } }
+						{ party: { model: 'customers', id: 'c-bob', matched: true } }
 					]);
 					yield* sendCode(h, '+6590000000', ip);
 					const twin = yield* verifyCode(h, '+6590000000', lastCode(), ip);
@@ -232,9 +232,73 @@ layer(PhoneFixtureLive)((it) => {
 						party: { model: 'customers', id: 'c-cy' }
 					});
 					expect(yield* one('SELECT party FROM sys_user WHERE id = $1', cid)).toEqual([
-						{ party: { model: 'customers', id: 'c-cy' } }
+						{ party: { model: 'customers', id: 'c-cy', matched: true } }
 					]);
 				})
+		);
+
+		it.effect(
+			'a link lasts only while the record holds the number: the old number opens nothing, at once, and the new one takes it',
+			() =>
+				Effect.gen(function* () {
+					const { db, h, one, lastCode } = yield* PhoneFixture;
+					const signUp = Effect.fnUntraced(function* (phone: string) {
+						yield* sendCode(h, phone, ip);
+						return (yield* verifyCode(h, phone, lastCode(), ip)).user;
+					});
+					yield* db.write({
+						text: `INSERT INTO customers VALUES ('c-dee', '+6597771111')`,
+						params: []
+					});
+					const old = yield* signUp('+6597771111');
+					const remembering = new Authorities(m, 'r3', { remember: true });
+					expect((yield* remembering.member(db, old))?.actor).toMatchObject({
+						party: { model: 'customers', id: 'c-dee' }
+					});
+					// the desk corrects the number, as it can on any record, and no sign-in follows
+					yield* db.write({
+						text: `UPDATE customers SET phone = '+6597772222' WHERE id = 'c-dee'`,
+						params: []
+					});
+					expect((yield* remembering.member(db, old))?.actor).toMatchObject({ party: null });
+					expect(yield* one('SELECT party FROM sys_user WHERE id = $1', old)).toEqual([
+						{ party: null }
+					]);
+					const moved = yield* signUp('+6597772222');
+					expect((yield* remembering.member(db, moved))?.actor).toMatchObject({
+						party: { model: 'customers', id: 'c-dee' }
+					});
+					// the old number's holder keeps their account, and a record of their own binds as any other does
+					yield* db.write({
+						text: `INSERT INTO customers VALUES ('c-old', '+65 9777 1111')`,
+						params: []
+					});
+					expect((yield* remembering.member(db, old))?.actor).toMatchObject({
+						party: { model: 'customers', id: 'c-old' }
+					});
+					// a deleted record ends a link the same way
+					yield* db.write({ text: `DELETE FROM customers WHERE id = 'c-old'`, params: [] });
+					expect((yield* remembering.member(db, old))?.actor).toMatchObject({ party: null });
+				})
+		);
+
+		it.effect('a second record with the number leaves the link where it is', () =>
+			Effect.gen(function* () {
+				const { db, h, lastCode } = yield* PhoneFixture;
+				yield* db.write({
+					text: `INSERT INTO customers VALUES ('c-eve', '+6594445555')`,
+					params: []
+				});
+				yield* sendCode(h, '+6594445555', ip);
+				const eve = (yield* verifyCode(h, '+6594445555', lastCode(), ip)).user;
+				yield* db.write({
+					text: `INSERT INTO customers VALUES ('c-eve2', '+65 9444 5555')`,
+					params: []
+				});
+				expect((yield* new Authorities(m, 'r4').member(db, eve))?.actor).toMatchObject({
+					party: { model: 'customers', id: 'c-eve' }
+				});
+			})
 		);
 
 		it.effect(
@@ -359,6 +423,24 @@ layer(PhoneFixtureLive)((it) => {
 					});
 					expect(yield* acceptInvitation(h, { user: ada }, id)).toBeNull();
 				})
+		);
+		it.effect('a party an invitation named stays, whatever number the record holds', () =>
+			Effect.gen(function* () {
+				const { db, h, as, memberId, lastCode } = yield* PhoneFixture;
+				const admin = yield* as(
+					yield* memberId(`SELECT id FROM sys_user WHERE lower(email) = 'boss@acme.example'`)
+				);
+				yield* invite(h, m, admin, {
+					phone: '+6595556666',
+					external: true,
+					party: { model: 'customers', id: 'c-twin1' }
+				});
+				yield* sendCode(h, '+6595556666', ip);
+				const guest = (yield* verifyCode(h, '+6595556666', lastCode(), ip)).user;
+				expect((yield* new Authorities(m, 'r6').member(db, guest))?.actor).toMatchObject({
+					party: { model: 'customers', id: 'c-twin1' }
+				});
+			})
 		);
 	});
 

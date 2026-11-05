@@ -207,6 +207,12 @@ moves to the account unless the row's state locks that field, and the anonymous 
 Text copies of the id and `created_by` keep the anonymous id. The daily `bolt.prune` deletes anonymous
 users with no live session (30 days unused, or retired by a link) that no record references.
 
+A member who joined through `signup` is linked to the `signup.party` record that holds the number or email
+they proved, and the link lasts only while it does. Their authority rechecks it on every request: when a
+record's number changes or the record goes, the old holder sees nothing from their next request and the new
+holder takes it. So the record's address is authority: a mistyped number hands that record to whoever holds
+it. A party a person named on an invitation is never rechecked.
+
 ## Teams
 
 Teams exist only in source: `src/access_control/team/+team.ts` maps each handle to a policy list
