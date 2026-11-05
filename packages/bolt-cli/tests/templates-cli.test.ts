@@ -8,7 +8,8 @@ import {
 	discoverTemplates,
 	resolveLockfile,
 	testTemplates,
-	unsatisfiedFirstPartyPeers
+	unsatisfiedFirstPartyPeers,
+	withoutThirdParty
 } from '../src/cli/templates.ts';
 
 const metadata = {
@@ -165,6 +166,20 @@ describe('bolt templates', () => {
 		}).pipe(Effect.provide(NodeServices.layer))
 	);
 });
+it.effect('holds a lockfile to its first-party entries and specifiers, not floated third-party versions', () =>
+	Effect.gen(function* () {
+		const lock = (ui: string, helpers: string) =>
+			bunLock({
+				'@norbital-ai/ui': ['@norbital-ai/ui@0.0.1', '', {}, ui],
+				'@swc/helpers': [`@swc/helpers@${helpers}`, '', {}, `sha512-${helpers}`]
+			});
+		const held = yield* withoutThirdParty(lock('sha512-a', '0.5.23'));
+		expect(yield* withoutThirdParty(lock('sha512-a', '0.5.24'))).toBe(held);
+		expect(yield* withoutThirdParty(lock('sha512-b', '0.5.23'))).not.toBe(held);
+		expect(yield* withoutThirdParty(lock('sha512-a', '0.5.23').replace('fixture', 'other'))).not.toBe(held);
+	})
+);
+
 it.effect('names an exact peer the locked install resolves to another version', () =>
 	Effect.gen(function* () {
 		const lock = (effect: string) =>

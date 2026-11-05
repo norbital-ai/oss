@@ -196,22 +196,27 @@ const identity = (entry: ReadonlyArray<unknown>) => {
 	const at = id.lastIndexOf('@');
 	return { name: id.slice(0, at), version: id.slice(at + 1) };
 };
-/** A bun lockfile without its `@norbital-ai/*` package entries; the workspace keeps its specifiers. */
-export const withoutFirstParty = Effect.fnUntraced(function* (lockfile: string) {
-	const { raw, lock } = yield* parseBunLock(lockfile);
-	return JSON.stringify(
-		{
-			...raw,
-			packages: Object.fromEntries(
-				Object.entries(lock.packages ?? {}).filter(
-					([, entry]) => !identity(entry).name.startsWith('@norbital-ai/')
+const withPackages = (keep: (name: string) => boolean) =>
+	Effect.fnUntraced(function* (lockfile: string) {
+		const { raw, lock } = yield* parseBunLock(lockfile);
+		return JSON.stringify(
+			{
+				...raw,
+				packages: Object.fromEntries(
+					Object.entries(lock.packages ?? {}).filter(([, entry]) => keep(identity(entry).name))
 				)
-			)
-		},
-		null,
-		2
-	);
-});
+			},
+			null,
+			2
+		);
+	});
+/** A bun lockfile without its `@norbital-ai/*` package entries; the workspace keeps its specifiers. */
+export const withoutFirstParty = withPackages((name) => !name.startsWith('@norbital-ai/'));
+/**
+ * What a lockfile check compares: re-resolving first-party entries floats the third-party packages beneath them
+ * with the registry, so those move only on a deliberate lock. The install's frozen lockfile covers their presence.
+ */
+export const withoutThirdParty = withPackages((name) => name.startsWith('@norbital-ai/'));
 /** bun's node_modules lookup from the package at `key`: its own nest, each parent's, then the root. */
 const resolveFrom = (packages: Readonly<Record<string, unknown>>, key: string, name: string) => {
 	const parts = key.split('/'),
@@ -563,10 +568,14 @@ export const lockTemplates = Effect.fn('bolt.templatesLock')(function* (options:
 					const committed = (yield* fs.exists(committedPath))
 						? yield* fs.readFileString(committedPath)
 						: undefined;
-					if (options.check && committed !== resolved)
-						drifted.push(
-							`${template.slug}: ${committed === undefined ? 'missing bun.lock' : 'bun.lock does not match resolved dependencies'}`
-						);
+					if (options.check && committed === undefined)
+						drifted.push(`${template.slug}: missing bun.lock`);
+					else if (
+						options.check &&
+						committed !== undefined &&
+						(yield* withoutThirdParty(committed)) !== (yield* withoutThirdParty(resolved))
+					)
+						drifted.push(`${template.slug}: bun.lock does not match resolved dependencies`);
 					else if (!options.check && committed !== resolved)
 						yield* fs.writeFileString(committedPath, resolved);
 				}),
