@@ -41,6 +41,7 @@ Every field is required unless `optional: true`. Exact shape: `import('@norbital
 - Nothing is deleted by omission: an update names child changes per layer as `{ create, update, delete, link, unlink }`.
 - `read` is the `default` output; `outputs` are named others, never `default`. A narrower audience reads a narrower output. Each new layer of an output is visible to every reader of it unless the root's policy filters its rows.
 - A layer is read or written under the root model's policy alone.
+- A described filter reaches a related record, and finds it by name, only through a declared layer of the caller's output. A ref with no layer filters by its id and `me` alone. Declare `'<model>.<ref>': { fields: ['name'] }` for each ref people filter by, in every output that exposes it, and only where every holder of that output already reads the target: a layer shows its fields to all of them. Where one does not, grant it the target or leave the ref without a layer.
 
 ## Locks and moves
 
