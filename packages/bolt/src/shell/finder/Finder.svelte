@@ -378,7 +378,9 @@
 					</ul>
 				</li>{:else}{@render resultRows()}{/if}
 		</ul>
-		<div class="flex items-center gap-4 border-t pt-3 text-xs text-muted-foreground">
+		<div
+			class="flex items-center gap-4 border-t pt-3 text-xs text-muted-foreground pointer-coarse:hidden"
+		>
 			<span><kbd>↑ ↓</kbd> {t('Navigate')}</span><span
 				><kbd>Enter</kbd>
 				{t(

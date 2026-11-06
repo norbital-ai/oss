@@ -730,6 +730,7 @@
 		const up = () => {
 			removeEventListener('pointermove', move);
 			removeEventListener('pointerup', up);
+			removeEventListener('pointercancel', up);
 			document.body.style.cursor = '';
 			keep();
 		};
@@ -737,6 +738,7 @@
 		document.body.style.cursor = 'col-resize';
 		addEventListener('pointermove', move);
 		addEventListener('pointerup', up);
+		addEventListener('pointercancel', up);
 	}
 	/** A native scroll bar mirroring the port on one axis. The port's own bars are hidden, so the vertical one starts
 	 * under the sticky header in every engine (a scrollbar-track margin is Chrome's alone). */
@@ -892,7 +894,7 @@
 				ref={undefined}
 				name={col.field}
 				dense
-				link={!title}
+				link={false}
 			/></Overflow
 		>{:else}<Value
 			value={valueAt(displayed, col.field)}
@@ -901,7 +903,7 @@
 			ref={refOf(displayed, col.field)}
 			name={col.field}
 			dense
-			link={!title}
+			link={false}
 		/>{/if}
 {/snippet}
 
@@ -981,7 +983,7 @@
 {/snippet}
 
 <!-- the grid's sticky actions cell: two or more actions fold into one menu, so the cell stays narrow and never covers the
-     columns it floats over; the phone's card keeps them inline -->
+     columns it floats over; the phone's card folds them the same way, so they never squeeze the row -->
 {#snippet rowMenu(row: ReadRow)}
 	{#if actions.length + (kind === 'local' && onChange && remove ? 1 : 0) > 1}
 		<Popover.Root>
@@ -1417,7 +1419,7 @@
 														'absolute top-1/2 right-0 -translate-y-1/2 bg-card transition-opacity',
 														revealed === key
 															? 'pointer-events-auto opacity-100'
-															: 'pointer-events-none opacity-0 group-hover/row:pointer-events-auto group-hover/row:opacity-100 group-focus-within/row:pointer-events-auto group-focus-within/row:opacity-100'
+															: 'pointer-events-none opacity-0 group-hover/row:pointer-events-auto group-hover/row:opacity-100 group-focus-within/row:pointer-events-auto group-focus-within/row:opacity-100 [@media(hover:none)]:pointer-events-auto [@media(hover:none)]:opacity-100'
 													]}
 													data-row-trailing
 													data-revealed={revealed === key || undefined}
@@ -1469,9 +1471,12 @@
 							{@const i = narrow.start + j}
 							{@const key = rowKey(i)}
 							{@const [lead, ...rest] = ordered.map(colOf).filter((c) => c.hide !== 'narrow')}
+							<!-- the card's title and three fields: a field repeating the title, or past the third, is the record's to show
+							     (a row with no record to open shows them all) -->
+							{@const fields = rest.filter((c) => row[c.field] !== recordText(exposed, row))}
 							<li
 								class={[
-									'relative flex min-w-0 items-start gap-2 px-3 py-2.5 transition-colors',
+									'relative flex min-w-0 items-start gap-2 px-3 py-1.5 transition-colors',
 									recordRow(row) && selected.has(row.id) ? 'bg-accent/40' : 'hover:bg-muted/40',
 									rowClass?.(row)
 								]}
@@ -1481,22 +1486,25 @@
 							>
 								<ApprovalAccent {row} />
 								{#if selectable && recordRow(row)}
-									<input
-										class="mt-1"
-										type="checkbox"
-										aria-label={msg(text, 'table.select', 'Select')}
-										checked={selected.has(row.id)}
-										onchange={(e) =>
-											e.currentTarget.checked ? selected.add(row.id) : selected.delete(row.id)}
-									/>
+									<!-- its 44px reaches out around the box, over the row's edge -->
+									<label class="-m-2.5 shrink-0 p-2.5">
+										<input
+											class="mt-1 block"
+											type="checkbox"
+											aria-label={msg(text, 'table.select', 'Select')}
+											checked={selected.has(row.id)}
+											onchange={(e) =>
+												e.currentTarget.checked ? selected.add(row.id) : selected.delete(row.id)}
+										/>
+									</label>
 								{/if}
-								<!-- a phone has no hover: the card itself opens the record; not a <button>, so a relation's link inside
-									     receives its own tap (it opens the related record) -->
+								<!-- a phone has no hover: the card itself opens the record, and everything on it opens that record; not a
+									     <button>, so a row's own controls inside keep their tap -->
 								<!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_static_element_interactions -->
 								<div
 									role={opens ? 'button' : undefined}
 									tabindex={opens ? 0 : undefined}
-									class="flex min-w-0 flex-1 cursor-pointer flex-col gap-0.5 text-left"
+									class="flex min-w-0 flex-1 cursor-pointer flex-col text-left [&_[data-cell-expand]]:hidden"
 									data-row-card
 									onclick={(e) => rowPress(e, row)}
 									onkeydown={(e) => {
@@ -1515,35 +1523,18 @@
 													data-record-label>{recordText(exposed, row)}</span
 												>{:else}{@render cell(row, lead, opens)}{/if}</span
 										>{/if}
-									{#if rest.length > 0}
-										<div class="text-muted-foreground flex flex-wrap gap-x-3 gap-y-0.5 text-xs">
-											{#each rest.slice(0, 4) as c (c.field)}
+									{#if fields.length > 0}
+										<div
+											class="text-muted-foreground flex flex-wrap gap-x-3 text-xs leading-5 [&_[data-enum-list]]:flex-nowrap [&_[data-enum-value]]:h-auto [&_[data-enum-value]]:border-0 [&_[data-enum-value]]:bg-transparent [&_[data-enum-value]]:p-0 [&_[data-enum-value]]:font-normal"
+										>
+											{#each opens ? fields.slice(0, 3) : fields as c (c.field)}
 												<span
 													class="inline-flex max-w-full min-w-0 items-baseline gap-1 whitespace-nowrap"
-													><span class="shrink-0">{colLabel(c)}</span>{@render columnInfo(c)}<span
-														class="text-foreground/80 min-w-0 truncate [&_[data-enum-list]]:flex-nowrap"
-														>{@render cell(row, c)}</span
+													><span class="shrink-0">{colLabel(c)}</span><span
+														class="text-foreground/80 min-w-0 truncate">{@render cell(row, c)}</span
 													></span
 												>
 											{/each}
-											{#if rest.length > 4}<details class="basis-full" data-row-extra-fields>
-													<summary class="cursor-pointer py-1"
-														>{msg(text, 'table.moreFields', '+{n} fields', {
-															n: rest.length - 4
-														})}</summary
-													>
-													<div class="flex flex-col gap-1 py-1">
-														{#each rest.slice(4) as c (c.field)}
-															<span class="inline-flex max-w-full min-w-0 items-baseline gap-1"
-																><span class="shrink-0">{colLabel(c)}</span>{@render columnInfo(
-																	c
-																)}<span class="text-foreground/80 min-w-0 break-words"
-																	>{@render cell(row, c)}</span
-																></span
-															>
-														{/each}
-													</div>
-												</details>{/if}
 										</div>
 									{/if}
 								</div>
@@ -1561,9 +1552,7 @@
 										{@render rowTrailing(row)}
 									</div>
 								{/if}
-								{#if actions.length > 0}<div class="flex shrink-0 flex-wrap justify-end">
-										{@render rowActions(row)}
-									</div>{/if}
+								{#if actions.length > 0}<div class="shrink-0">{@render rowMenu(row)}</div>{/if}
 							</li>
 						{/each}
 						{#if narrow.after > 0}<li aria-hidden="true" style="height:{narrow.after}px"></li>{/if}

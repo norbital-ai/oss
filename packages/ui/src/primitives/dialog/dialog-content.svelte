@@ -5,6 +5,7 @@
 	import { cn } from '../utils.js';
 	import { Dialog as DialogPrimitive, Portal, type WithoutChildrenOrChild } from 'bits-ui';
 	import type { Snippet } from 'svelte';
+	import { watchKeyboard } from '../sheet/keyboard.js';
 	import Overlay from './dialog-overlay.svelte';
 
 	const t = uiText();
@@ -21,6 +22,7 @@
 	} = $props();
 	// An overlay is a new page edge: it does not inherit the page's inset owner.
 	resetInset(true);
+	watchKeyboard();
 </script>
 
 <Portal>

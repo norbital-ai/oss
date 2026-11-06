@@ -32,7 +32,8 @@ A dense, filterable log: one fixed-height line per event (a JSON payload preview
 	import { observeOnce } from '../effect/index.js';
 	import { tick } from 'svelte';
 	import { watch } from 'runed';
-	import { cn } from '../primitives/utils.js';
+	import Overflow from '../cell/Overflow.svelte';
+	import { cn, narrowViewport } from '../primitives/utils.js';
 	import ToolbarSearch from '../model/toolbar/ToolbarSearch.svelte';
 	import ToolbarFilter from '../model/toolbar/ToolbarFilter.svelte';
 	import { offsets, windowOf } from '../primitives/virtual/virtual.js';
@@ -172,28 +173,31 @@ A dense, filterable log: one fixed-height line per event (a JSON payload preview
 		{onscroll}
 		role="log"
 		aria-live="off"
-		class="min-h-0 flex-1 overflow-auto font-mono text-xs leading-5"
+		class="@container min-h-0 flex-1 overflow-auto font-mono text-xs leading-5"
 	>
 		<div class="relative" style:height="{total}px">
 			<div class="absolute inset-x-0 top-0" style:transform="translateY({offs[win.start]}px)">
 				{#each shown.slice(win.start, win.end) as row (row.id)}
+					<!-- a row is 22px: a 44px floor on its expand button would cover the rows beside it -->
 					<div
-						class="hover:bg-muted/50 grid h-[22px] grid-cols-[auto_3.5rem_minmax(0,1fr)] items-start gap-x-3 px-3 py-px"
+						class="hover:bg-muted/50 grid h-[22px] grid-cols-[auto_3.5rem_minmax(0,1fr)] items-start gap-x-3 px-3 py-px [--hit-target:0px] @max-md:grid-cols-[3.5rem_minmax(0,1fr)]"
 						data-log-level={row.level}
 					>
 						<time
-							class="text-muted-foreground whitespace-nowrap tabular-nums"
+							class="text-muted-foreground whitespace-nowrap tabular-nums @max-md:hidden"
 							datetime={new Date(row.at).toISOString()}>{time.format(new Date(row.at))}</time
 						>
 						<span class={cn('rounded px-1 text-center text-tiny uppercase', BADGE[row.level])}
 							>{row.level}</span
 						>
-						<code class="truncate whitespace-pre"
-							>{#if row.source}<span class="text-muted-foreground"
-									>{row.source}
-								</span>{/if}{#each logPreview(row.message) as token, i (i)}<span
-									class={token.cls || undefined}>{token.text}</span
-								>{/each}</code
+						<code class="min-w-0 [&_span]:whitespace-pre!"
+							><Overflow text={row.message} expand={narrowViewport.current ? 'always' : 'never'}
+								>{#if row.source}<span class="text-muted-foreground"
+										>{row.source}
+									</span>{/if}{#each logPreview(row.message) as token, i (i)}<span
+										class={token.cls || undefined}>{token.text}</span
+									>{/each}</Overflow
+							></code
 						>
 					</div>
 				{/each}

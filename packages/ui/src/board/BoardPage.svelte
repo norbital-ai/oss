@@ -3,9 +3,12 @@
 	import type { Json, QueryAnswer } from '../client/contract.js';
 	import { watch as watchSource } from 'runed';
 	import { untrack } from 'svelte';
+	import { MediaQuery } from 'svelte/reactivity';
 	import { useKinds } from '../kinds/context.js';
 	import { virtualList } from '../primitives/virtual/virtual.svelte.js';
+	import { Button } from '../primitives/button/index.js';
 	import Checkbox from '../primitives/checkbox/checkbox.svelte';
+	import * as Popover from '../primitives/popover/index.js';
 	import { openRecord } from '../record/navigation.js';
 	import { useBolt } from '../client/context.js';
 	import type { BoardProps } from './Board.svelte';
@@ -37,7 +40,8 @@
 		onRows,
 		onChange,
 		grid = false,
-		onOpen
+		onOpen,
+		moves
 	}: Pick<BoardProps<C>, 'of' | 'card'> & {
 		lane: string;
 		where: Json | undefined;
@@ -56,8 +60,12 @@
 		grid?: boolean;
 		/** Opening a card; default the record sheet. */
 		onOpen?: (id: string) => void;
+		/** The other lanes a card may move to, where a finger cannot drag it. */
+		moves?: readonly { label: string; move: (id: string) => void }[];
 	} = $props();
 	const bolt = useBolt();
+	/** A finger scrolls the lane: a card moves from its menu, not by a drag. */
+	const touch = new MediaQuery('pointer: coarse');
 	const open = (id: string) => (onOpen ? onOpen(id) : openRecord(of, id));
 	const approvalTip = (row: unknown) => {
 		const held = approvalOf(row);
@@ -178,7 +186,7 @@
 				<div
 					role="listitem"
 					tabindex="0"
-					draggable={grid ? undefined : 'true'}
+					draggable={grid || touch.current ? undefined : 'true'}
 					{@attach lane.measure(row.id)}
 					class={[
 						'group bg-popover text-popover-foreground hover:border-input data-[dragging]:opacity-40 relative flex w-full cursor-pointer flex-col gap-1 overflow-clip rounded-sm border text-left text-sm transition-colors focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none dark:bg-card dark:text-card-foreground',
@@ -226,7 +234,24 @@
 					}}
 				>
 					<ApprovalAccent {row} />
-					{#if !grid}
+					{#if touch.current && moves !== undefined && moves.length > 0}
+						<Popover.Root>
+							<Popover.Trigger
+								class="text-muted-foreground absolute top-0.5 right-0.5 grid size-8 place-items-center rounded-sm [--hit-target:2rem]"
+								aria-label={msg(bolt, 'board.moveTo', 'Move to')}
+								data-card-move={row.id}><Glyph name="more" class="size-4" /></Popover.Trigger
+							>
+							<Popover.Content
+								align="end"
+								class="flex w-auto min-w-40 flex-col gap-0.5 p-1.5 [&>button]:justify-start"
+							>
+								{#each moves as target (target.label)}
+									<Button variant="ghost" onclick={() => target.move(row.id)}>{target.label}</Button
+									>
+								{/each}
+							</Popover.Content>
+						</Popover.Root>
+					{:else if !grid && !touch.current}
 						<!-- the drag handle : the whole card drags; the grip says so where a pointer hovers -->
 						<span
 							class="border-border bg-background/95 text-muted-foreground pointer-events-none absolute top-1.5 right-1.5 grid size-6 cursor-grab place-items-center rounded-sm border opacity-0 shadow-xs transition-opacity group-hover:opacity-100 group-focus-within:opacity-100 motion-reduce:transition-none"
@@ -256,7 +281,7 @@
 										ref={refOf(displayed, f)}
 										name={f}
 										dense
-										link={i !== 0}
+										link={false}
 									/>{/if}</span
 							>{/each}
 					{/if}

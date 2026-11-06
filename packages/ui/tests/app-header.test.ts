@@ -6,7 +6,7 @@ import Combobox from '../src/primitives/combobox/combobox.svelte';
 
 const text = (value: string) => createRawSnippet(() => ({ render: () => `<span>${value}</span>` }));
 
-it('a compact header keeps one line: title, description behind its info button, actions beside them', () => {
+it('a compact header keeps one line: title, description behind its info button, actions behind one button', () => {
 	const target = document.body.appendChild(document.createElement('div'));
 	const view = mount(AppHeader, {
 		target,
@@ -21,8 +21,15 @@ it('a compact header keeps one line: title, description behind its info button, 
 	flushSync();
 	expect(target.querySelector('p')).toBeNull();
 	expect(target.querySelector('[aria-label="Manage legal versions."]')).not.toBeNull();
-	const line = target.querySelector('h1')?.closest('[data-compact] > *:last-child');
-	expect(line?.querySelector('[data-app-actions]')?.textContent).toBe('Void version');
+	const line = target.querySelector('h1')?.closest('[data-compact] > *');
+	expect(line?.querySelector('[data-app-actions-trigger]')).not.toBeNull();
+	expect(line?.querySelector('[data-app-actions]')).toBeNull();
+	// shut, the actions stay mounted (a scope picker owns page state), out of sight
+	const shelved = target.querySelector<HTMLElement>('[data-app-actions]');
+	expect(shelved?.textContent).toBe('Void version');
+	expect(shelved?.parentElement?.hidden).toBe(true);
+	// whatever row an app lays its actions out in, they stack in the popover
+	expect(shelved?.className).toContain('*:flex-col');
 	unmount(view);
 	target.remove();
 });

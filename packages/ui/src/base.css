@@ -1025,7 +1025,9 @@
 
 /* Side sheets and centred dialogs become reachable, thumb-friendly bottom sheets on narrow
    viewports. The explicit contract wins over feature-local desktop width and height classes;
-   the tw-animate enter/exit vars turn the dialog's zoom into a slide from the bottom edge. */
+   the tw-animate enter/exit vars turn the dialog's zoom into a slide from the bottom edge. It rests
+   on the on-screen keyboard and scrolls its own content; a dialog drawing its own edges (`p-0`) sets
+   `--dialog-pad: 0px`, with the unit `calc()` needs. */
 @media (max-width: 47.999rem) {
 	[data-mobile-bottom-sheet='true'] {
 		--tw-enter-translate-x: 0 !important;
@@ -1036,23 +1038,17 @@
 		--tw-exit-scale: 1 !important;
 		/* Tailwind's translate-x/y-[-50%] centring lives on `translate`; the keyframes on `transform`. */
 		translate: none !important;
-		inset: auto 0 0 !important;
+		inset: auto 0 var(--keyboard-inset, 0px) !important;
 		width: 100% !important;
 		max-width: 100% !important;
 		height: var(--sheet-height, min(90dvh, 48rem)) !important;
-		max-height: calc(100dvh - env(safe-area-inset-top) - env(safe-area-inset-bottom)) !important;
+		max-height: calc(
+			100dvh - env(safe-area-inset-top) - env(safe-area-inset-bottom) - var(--keyboard-inset, 0px)
+		) !important;
+		overflow-y: auto;
+		overscroll-behavior: contain;
 		border-radius: 0.75rem 0.75rem 0 0 !important;
-		padding-bottom: env(safe-area-inset-bottom) !important;
-	}
-
-	.sheet-content[data-fullscreen='true'] {
-		inset: 0 !important;
-		width: 100% !important;
-		max-width: 100% !important;
-		height: 100% !important;
-		max-height: 100% !important;
-		border-radius: 0 !important;
-		padding-bottom: env(safe-area-inset-bottom) !important;
+		padding-bottom: calc(var(--dialog-pad, 1.5rem) + env(safe-area-inset-bottom)) !important;
 	}
 }
 
@@ -1073,18 +1069,22 @@
 html {
 	touch-action: pan-x pan-y;
 }
-button,
-a,
-label,
-input,
-select,
-textarea,
-[role='button'],
-[role='menuitem'],
-[role='option'],
-[role='tab'] {
-	touch-action: manipulation;
-	-webkit-tap-highlight-color: transparent;
+/* In the base layer, so a drag handle's `touch-none` wins: unlayered, a <button> handle stayed pannable and the
+   browser took the swipe (a `pointercancel`) from the drag. */
+@layer base {
+	button,
+	a,
+	label,
+	input,
+	select,
+	textarea,
+	[role='button'],
+	[role='menuitem'],
+	[role='option'],
+	[role='tab'] {
+		touch-action: manipulation;
+		-webkit-tap-highlight-color: transparent;
+	}
 }
 /* Chrome (sidebar, headers, rails) is not prose: a long-press must not start a text selection. */
 [data-sidebar],
@@ -1122,7 +1122,8 @@ textarea,
 	[role='button'],
 	[role='menuitem'],
 	[role='option'],
-	[role='tab'] {
+	[role='tab'],
+	summary {
 		min-block-size: var(--hit-target);
 		min-inline-size: var(--hit-target);
 	}
@@ -1145,6 +1146,9 @@ textarea,
 @media (hover: none) {
 	[class~='group-hover:opacity-100'],
 	[class~='group-hover/cell:opacity-100'],
+	[class~='group-hover/code:opacity-100'],
+	[class~='group-hover/nav:opacity-100'],
+	[class~='group-hover/copy:opacity-100'],
 	[class~='hover:opacity-100'] {
 		opacity: 1;
 	}

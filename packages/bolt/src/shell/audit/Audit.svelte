@@ -1,9 +1,11 @@
 <!-- The command center's audit trail: a bounded, server-filtered view of the environment's separate host audit store, read
-once (Refresh, or the opt-in Auto-refresh). -->
+once (Refresh, or the opt-in Auto-refresh). A phone's toolbar is search and Filters, whose Dialog holds every filter; Refresh
+sits under the table there. -->
 <script lang="ts">
 	import {
 		Button,
 		Combobox,
+		Dialog,
 		Icon,
 		Input,
 		Popover,
@@ -13,11 +15,12 @@ once (Refresh, or the opt-in Auto-refresh). -->
 		useKinds,
 		type Kind
 	} from '@norbital-ai/ui';
-	import { Cluster } from '@norbital-ai/ui/layout';
+	import { Cluster, Scroll } from '@norbital-ai/ui/layout';
 	import { fork, observeOnce } from '@norbital-ai/ui/effect';
 	import { Effect, Result, Schema } from 'effect';
 	import { Debounced } from 'runed';
 	import { onDestroy, untrack } from 'svelte';
+	import { MediaQuery } from 'svelte/reactivity';
 	import {
 		AUDIT_ACTOR_KINDS,
 		AUDIT_CATEGORIES,
@@ -43,6 +46,7 @@ once (Refresh, or the opt-in Auto-refresh). -->
 	} = $props();
 
 	const kinds = useKinds();
+	const narrow = new MediaQuery('max-width: 47.999rem');
 	const WINDOWS = ['day', 'week', 'month', 'all', 'custom'] as const;
 	const SIZES = [25, 50, 100, 200] as const;
 	const initial = untrack(() =>
@@ -167,6 +171,8 @@ once (Refresh, or the opt-in Auto-refresh). -->
 	const error = $derived(customError ?? page.error?.message ?? null);
 	const activeFilters = $derived(
 		[
+			// a phone's Filters holds these too; anywhere else they show in the toolbar
+			...(narrow.current ? [category, status] : []),
 			actorKind,
 			actorId.trim(),
 			action.trim(),
@@ -396,6 +402,123 @@ once (Refresh, or the opt-in Auto-refresh). -->
 			</p>{/if}
 	</div>
 {/snippet}
+{#snippet scope()}
+	<Combobox
+		class="w-36"
+		searchable={false}
+		aria-label={t('Date range')}
+		options={[
+			{ value: 'day', label: t('Last 24 hours') },
+			{ value: 'week', label: t('Last 7 days') },
+			{ value: 'month', label: t('Last 30 days') },
+			{ value: 'all', label: t('All time') },
+			{ value: 'custom', label: t('Custom dates') }
+		]}
+		value={window}
+		onChange={(value) => {
+			window = WINDOWS.find((v) => v === value) ?? 'week';
+		}}
+	/>
+	<Combobox
+		class="w-36"
+		searchable={false}
+		clearable
+		placeholder={t('All categories')}
+		aria-label={t('Category')}
+		options={AUDIT_CATEGORIES.map((value) => ({ value, label: t(value) }))}
+		value={category ?? null}
+		onChange={(value) => {
+			category = value ?? undefined;
+		}}
+	/>
+	<Combobox
+		class="w-36"
+		searchable={false}
+		clearable
+		placeholder={t('All statuses')}
+		aria-label={t('Status')}
+		options={AUDIT_STATUSES.map((value) => ({ value, label: statusName(value) }))}
+		value={status ?? null}
+		onChange={(value) => {
+			status = value ?? undefined;
+		}}
+	/>
+{/snippet}
+{#snippet ordering()}
+	<Combobox
+		variant="ghost"
+		class="w-32"
+		searchable={false}
+		aria-label={t('Time order')}
+		options={[
+			{ value: 'newest', label: t('Newest first') },
+			{ value: 'oldest', label: t('Oldest first') }
+		]}
+		value={order}
+		onChange={(value) => {
+			order = value === 'oldest' ? 'oldest' : 'newest';
+		}}
+	/>
+{/snippet}
+{#snippet reload()}
+	<AutoRefresh {t} onRefresh={refresh} />
+	<Button
+		size="icon"
+		variant="ghost"
+		aria-label={t('Refresh audit events')}
+		hint={t('Refresh audit events')}
+		disabled={page.loading || customError !== null}
+		onclick={refresh}
+		data-audit-refresh
+	>
+		<Icon name="lucide:refresh-cw" class="size-4" />
+	</Button>
+{/snippet}
+{#snippet filterFields()}
+	<div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
+		<label class="flex flex-col gap-1 text-xs"
+			>{t('Actor type')}
+			<Combobox
+				searchable={false}
+				clearable
+				placeholder={t('All actors')}
+				options={AUDIT_ACTOR_KINDS.map((value) => ({ value, label: actorName(value) }))}
+				value={actorKind ?? null}
+				onChange={(value) => {
+					actorKind = value ?? undefined;
+				}}
+			/>
+		</label>
+		<label class="flex flex-col gap-1 text-xs"
+			>{t('Actor ID')}<Input bind:value={actorId} /></label
+		>
+		<label class="flex flex-col gap-1 text-xs sm:col-span-2"
+			>{t('Action')}<Input bind:value={action} placeholder="orders.update" /></label
+		>
+		<label class="flex flex-col gap-1 text-xs"
+			>{t('Model')}<Input bind:value={model} /></label
+		>
+		<label class="flex flex-col gap-1 text-xs"
+			>{t('Record ID')}<Input bind:value={record} /></label
+		>
+		<label class="flex flex-col gap-1 text-xs"
+			>{t('Invocation ID')}<Input bind:value={invocation} /></label
+		>
+		<label class="flex flex-col gap-1 text-xs"
+			>{t('Run ID')}<Input bind:value={run} /></label
+		>
+	</div>
+	<Button variant="ghost" class="self-start" onclick={clear}
+		>{t('Clear filters and search')}</Button
+	>
+{/snippet}
+{#snippet filtersButton({ props }: { props: Record<string, unknown> })}
+	<Button {...props} variant="outline" data-audit-filters>
+		<Icon name="lucide:list-filter" class="size-4" />{t('Filters')}{activeFilters > 0
+			? ` (${activeFilters})`
+			: ''}
+	</Button>
+{/snippet}
 {#snippet pager()}
 	<div class="flex w-full flex-wrap items-center justify-between gap-2" data-audit-pager>
 		<span class="px-1 tabular-nums" aria-live="polite">
@@ -443,6 +566,8 @@ once (Refresh, or the opt-in Auto-refresh). -->
 				<Icon name="lucide:chevron-right" class="size-4" />
 			</Button>
 		</div>
+		<!-- a phone's Refresh: here, Auto-refresh outlives the Filters dialog -->
+		{#if narrow.current}<Cluster gap="xs">{@render reload()}</Cluster>{/if}
 	</div>
 {/snippet}
 
@@ -457,127 +582,36 @@ once (Refresh, or the opt-in Auto-refresh). -->
 		<div class="flex flex-col gap-2" data-audit-toolbar>
 			<Cluster>
 				<ToolbarSearch bind:value={text} label={t('Search audit events and payloads')} />
-				<Combobox
-					class="w-36"
-					searchable={false}
-					aria-label={t('Date range')}
-					options={[
-						{ value: 'day', label: t('Last 24 hours') },
-						{ value: 'week', label: t('Last 7 days') },
-						{ value: 'month', label: t('Last 30 days') },
-						{ value: 'all', label: t('All time') },
-						{ value: 'custom', label: t('Custom dates') }
-					]}
-					value={window}
-					onChange={(value) => {
-						window = WINDOWS.find((v) => v === value) ?? 'week';
-					}}
-				/>
-				<Combobox
-					class="w-36"
-					searchable={false}
-					clearable
-					placeholder={t('All categories')}
-					aria-label={t('Category')}
-					options={AUDIT_CATEGORIES.map((value) => ({ value, label: t(value) }))}
-					value={category ?? null}
-					onChange={(value) => {
-						category = value ?? undefined;
-					}}
-				/>
-				<Combobox
-					class="w-36"
-					searchable={false}
-					clearable
-					placeholder={t('All statuses')}
-					aria-label={t('Status')}
-					options={AUDIT_STATUSES.map((value) => ({ value, label: statusName(value) }))}
-					value={status ?? null}
-					onChange={(value) => {
-						status = value ?? undefined;
-					}}
-				/>
-				<Popover.Root bind:open={filtersOpen}>
-					<Popover.Trigger>
-						{#snippet child({ props })}
-							<Button {...props} variant="outline" data-audit-filters>
-								<Icon name="lucide:list-filter" class="size-4" />{t('Filters')}{activeFilters > 0
-									? ` (${activeFilters})`
-									: ''}
-							</Button>
-						{/snippet}
-					</Popover.Trigger>
-					<Popover.Content
-						align="end"
-						class="max-h-[80dvh] w-[min(25rem,calc(100vw-1rem))] overflow-y-auto p-4"
-					>
-						<div class="flex flex-col gap-3">
-							<p class="text-sm font-medium">{t('Filter audit events')}</p>
-							<div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
-								<label class="flex flex-col gap-1 text-xs"
-									>{t('Actor type')}
-									<Combobox
-										searchable={false}
-										clearable
-										placeholder={t('All actors')}
-										options={AUDIT_ACTOR_KINDS.map((value) => ({ value, label: actorName(value) }))}
-										value={actorKind ?? null}
-										onChange={(value) => {
-											actorKind = value ?? undefined;
-										}}
-									/>
-								</label>
-								<label class="flex flex-col gap-1 text-xs"
-									>{t('Actor ID')}<Input bind:value={actorId} /></label
-								>
-								<label class="flex flex-col gap-1 text-xs sm:col-span-2"
-									>{t('Action')}<Input bind:value={action} placeholder="orders.update" /></label
-								>
-								<label class="flex flex-col gap-1 text-xs"
-									>{t('Model')}<Input bind:value={model} /></label
-								>
-								<label class="flex flex-col gap-1 text-xs"
-									>{t('Record ID')}<Input bind:value={record} /></label
-								>
-								<label class="flex flex-col gap-1 text-xs"
-									>{t('Invocation ID')}<Input bind:value={invocation} /></label
-								>
-								<label class="flex flex-col gap-1 text-xs"
-									>{t('Run ID')}<Input bind:value={run} /></label
-								>
+				{#if narrow.current}
+					<Dialog.Root bind:open={filtersOpen}>
+						<Dialog.Trigger child={filtersButton} />
+						<Dialog.Content>
+							<Dialog.Header>
+								<Dialog.Title>{t('Filter audit events')}</Dialog.Title>
+							</Dialog.Header>
+							<Scroll name={t('Filter audit events')} max="tall" layout="stack" gap="md">
+								<Cluster>{@render scope()}{@render ordering()}</Cluster>
+								{@render filterFields()}
+							</Scroll>
+						</Dialog.Content>
+					</Dialog.Root>
+				{:else}
+					{@render scope()}
+					<Popover.Root bind:open={filtersOpen}>
+						<Popover.Trigger child={filtersButton} />
+						<Popover.Content
+							align="end"
+							class="max-h-[80dvh] w-[min(25rem,calc(100vw-1rem))] overflow-y-auto p-4"
+						>
+							<div class="flex flex-col gap-3">
+								<p class="text-sm font-medium">{t('Filter audit events')}</p>
+								{@render filterFields()}
 							</div>
-							<Button variant="ghost" class="self-start" onclick={clear}
-								>{t('Clear filters and search')}</Button
-							>
-						</div>
-					</Popover.Content>
-				</Popover.Root>
-				<Combobox
-					variant="ghost"
-					class="w-32"
-					searchable={false}
-					aria-label={t('Time order')}
-					options={[
-						{ value: 'newest', label: t('Newest first') },
-						{ value: 'oldest', label: t('Oldest first') }
-					]}
-					value={order}
-					onChange={(value) => {
-						order = value === 'oldest' ? 'oldest' : 'newest';
-					}}
-				/>
-				<AutoRefresh {t} onRefresh={refresh} />
-				<Button
-					size="icon"
-					variant="ghost"
-					aria-label={t('Refresh audit events')}
-					hint={t('Refresh audit events')}
-					disabled={page.loading || customError !== null}
-					onclick={refresh}
-					data-audit-refresh
-				>
-					<Icon name="lucide:refresh-cw" class="size-4" />
-				</Button>
+						</Popover.Content>
+					</Popover.Root>
+					{@render ordering()}
+					{@render reload()}
+				{/if}
 			</Cluster>
 			{#if window === 'custom'}
 				<div class="flex flex-wrap items-end gap-2">

@@ -1,6 +1,6 @@
 <!--
 @component
-Events on a day, week or month grid: timed boxes, all-day bars, month pills; dragging creates, moves and resizes, and the caller writes the change.
+Events on a day, week or month grid: timed boxes, all-day bars, month pills; dragging creates, moves and resizes, and the caller writes the change. In a narrow container the month is a grid of days with a dot per event over the chosen day's events in full, and the week is a strip of days over the chosen day. Under touch a finger scrolls: a tap opens an event or creates in a slot.
 -->
 <script lang="ts" module>
 	import type { Snippet } from 'svelte';
@@ -10,7 +10,8 @@ Events on a day, week or month grid: timed boxes, all-day bars, month pills; dra
 	 * Events on a day, week or month grid. Timed events are boxes placed by the clock (overlaps share the column in
 	 * lanes); all-day and multi-day events are bars above the grid; a month cell shows three pills and "+N more".
 	 * Unless `readonly`, dragging an empty slot creates, dragging a box moves it (across days in the week) and its
-	 * lower edge resizes it; the calendar only reports: the caller writes and hands back new `events`.
+	 * lower edge resizes it; the calendar only reports: the caller writes and hands back new `events`. Narrow, it
+	 * reflows by its own width; under touch a tap on a slot creates and a tap on a box opens it.
 	 */
 	export type EventCalendarProps = {
 		events: readonly CalendarEvent[];
@@ -41,6 +42,7 @@ Events on a day, week or month grid: timed boxes, all-day bars, month pills; dra
 
 <script lang="ts">
 	import Icon from '@iconify/svelte';
+	import { MediaQuery } from 'svelte/reactivity';
 	import { Button } from '../primitives/button/index.js';
 	import TabStrip from '../primitives/tabs/tab-strip.svelte';
 	import { useKinds } from '../kinds/context.js';
@@ -88,10 +90,16 @@ Events on a day, week or month grid: timed boxes, all-day bars, month pills; dra
 		return () => clearInterval(timer);
 	});
 
-	const first = $derived(viewStart(shown, at));
-	const days = $derived(
-		shown === 'day' ? [first] : Array.from({ length: 7 }, (_, i) => addDays(first, i))
-	);
+	// the calendar reflows by its own width, not the screen's: a narrow pane is a phone to it
+	let width = $state(Number.POSITIVE_INFINITY);
+	const compact = $derived(width < 640);
+	/** A finger scrolls the time grid: a drag there can neither create nor move. */
+	const touch = new MediaQuery('pointer: coarse');
+	const week = $derived(Array.from({ length: 7 }, (_, i) => addDays(viewStart('week', at), i)));
+	/** The narrow week: a strip of the week's days over one day's grid. */
+	const strip = $derived(compact && shown === 'week');
+	const first = $derived(viewStart(strip ? 'day' : shown, at));
+	const days = $derived(shown === 'day' || strip ? [first] : week);
 	const n = $derived(days.length);
 	const height = $derived((endHour - startHour) * hourHeight);
 	let scroller = $state<HTMLElement | null>(null);
@@ -113,7 +121,7 @@ Events on a day, week or month grid: timed boxes, all-day bars, month pills; dra
 				day: 'numeric',
 				year
 			});
-		return `${first.toLocaleDateString(locale, { month: 'short', day: 'numeric' })} – ${addDays(first, 6).toLocaleDateString(locale, { month: 'short', day: 'numeric', year })}`;
+		return `${week[0]!.toLocaleDateString(locale, { month: 'short', day: 'numeric' })} – ${week[6]!.toLocaleDateString(locale, { month: 'short', day: 'numeric', year })}`;
 	});
 	const go = (d: Date) => {
 		at = d;
@@ -173,7 +181,7 @@ Events on a day, week or month grid: timed boxes, all-day bars, month pills; dra
 		d.setHours(0, startHour * 60 + Math.round((snap(y) / hourHeight) * 60), 0, 0);
 		return d;
 	};
-	const point = (e: PointerEvent) => {
+	const point = (e: MouseEvent) => {
 		const r = grid!.getBoundingClientRect();
 		return {
 			col: Math.min(n - 1, Math.max(0, Math.floor((e.clientX - r.left) / (r.width / n)))),
@@ -208,7 +216,7 @@ Events on a day, week or month grid: timed boxes, all-day bars, month pills; dra
 				...drag,
 				y: q.y,
 				moved,
-				col: drag.mode === 'move' && !locked && shown === 'week' ? q.col : drag.col
+				col: drag.mode === 'move' && !locked && n > 1 ? q.col : drag.col
 			};
 		};
 		const up = (u: PointerEvent) => {
@@ -233,6 +241,12 @@ Events on a day, week or month grid: timed boxes, all-day bars, month pills; dra
 		addEventListener('pointermove', move);
 		addEventListener('pointerup', up);
 		addEventListener('pointercancel', up);
+	}
+	/** Under touch a tap on an empty slot creates an hour there. */
+	function tapSlot(e: MouseEvent & { currentTarget: EventTarget & HTMLElement }) {
+		if (!touch.current || readonly || e.target !== e.currentTarget) return;
+		const { col, y } = point(e);
+		onEventCreate?.({ start: toDate(col, y), end: toDate(col, y + hourHeight) });
 	}
 	/** The drop preview: where the box would land. */
 	function rect(d: Drag): { top: number; h: number } | null {
@@ -275,6 +289,7 @@ Events on a day, week or month grid: timed boxes, all-day bars, month pills; dra
 <div
 	class={cn('flex h-full min-h-0 flex-col overflow-hidden rounded-lg border bg-card', className)}
 	data-event-calendar={shown}
+	bind:clientWidth={width}
 >
 	<header
 		class={cn(
@@ -317,7 +332,61 @@ Events on a day, week or month grid: timed boxes, all-day bars, month pills; dra
 		{/if}
 	</header>
 
-	{#if shown === 'month'}
+	{#if shown === 'month' && compact}
+		<div class="min-h-0 flex-1 overflow-auto overscroll-contain" data-calendar-compact>
+			<div class="grid grid-cols-7 px-2 pt-1 text-center">
+				{#each weekdays as w (w)}<span class="py-1 text-overline text-muted-foreground">{w}</span
+					>{/each}
+				{#each cells as d (d.getTime())}
+					{@const list = onDay(events, d)}
+					<button
+						type="button"
+						class={cn(
+							'flex h-11 flex-col items-center justify-center gap-0.5 rounded-md text-xs font-semibold [--hit-target:0px]',
+							d.getMonth() !== at.getMonth() && 'text-muted-foreground',
+							sameDay(d, at) && 'bg-accent'
+						)}
+						aria-pressed={sameDay(d, at)}
+						data-day={d.getDate()}
+						onclick={() => go(d)}
+					>
+						<span
+							class={cn(
+								'grid size-6 place-items-center rounded-full',
+								sameDay(d, now) && 'bg-brand text-brand-foreground'
+							)}>{d.getDate()}</span
+						>
+						<span class="flex h-1 gap-0.5" aria-hidden="true">
+							{#each list.slice(0, 3) as e (e.id)}<span
+									class="size-1 rounded-full"
+									style:background={e.color ?? 'var(--color-brand)'}
+								></span>{/each}
+						</span>
+					</button>
+				{/each}
+			</div>
+			<ul class="mt-1 divide-y border-t" data-calendar-agenda>
+				{#each onDay(events, at) as e (e.id)}
+					<li>
+						<button
+							type="button"
+							class="flex w-full min-w-0 items-stretch gap-2 px-4 py-2 text-left"
+							data-event={e.id}
+							onclick={() => onEventClick?.(e)}
+						>
+							<span
+								class="w-0.75 shrink-0 rounded-full"
+								style:background={e.color ?? 'var(--color-brand)'}
+							></span>
+							<span class="min-w-0 flex-1">{@render body(e, isTimed(e) ? 'box' : 'bar')}</span>
+						</button>
+					</li>
+				{:else}
+					<li class="px-4 py-3 text-xs text-muted-foreground">{t('noResults')}</li>
+				{/each}
+			</ul>
+		</div>
+	{:else if shown === 'month'}
 		<div class="mx-4 grid grid-cols-7 border-b text-center">
 			{#each weekdays as w (w)}<span class="py-1.5 text-overline text-muted-foreground">{w}</span
 				>{/each}
@@ -373,34 +442,63 @@ Events on a day, week or month grid: timed boxes, all-day bars, month pills; dra
 			{/each}
 		</div>
 	{:else}
-		<div bind:this={scroller} class="mx-4 mb-4 min-h-0 flex-1 overflow-auto" data-calendar-scroll>
+		{#if strip}
+			<div class="grid shrink-0 grid-cols-7 border-b px-2 py-1" data-calendar-strip>
+				{#each week as d (d.getTime())}
+					<button
+						type="button"
+						class={cn(
+							'flex flex-col items-center gap-0.5 rounded-md py-1 [--hit-target:0px]',
+							sameDay(d, at) && 'bg-accent'
+						)}
+						aria-pressed={sameDay(d, at)}
+						onclick={() => go(d)}
+					>
+						<span class="text-tiny text-muted-foreground"
+							>{d.toLocaleDateString(locale, { weekday: 'short' })}</span
+						>
+						<span
+							class={cn(
+								'grid size-6 place-items-center rounded-full text-xs font-semibold',
+								sameDay(d, now) && 'bg-brand text-brand-foreground'
+							)}>{d.getDate()}</span
+						>
+					</button>
+				{/each}
+			</div>
+		{/if}
+		<div
+			bind:this={scroller}
+			class={cn('min-h-0 flex-1 overflow-auto overscroll-contain', !compact && 'mx-4 mb-4')}
+			data-calendar-scroll
+		>
 			<div class="relative" style:min-width="calc(3.5rem + {n * colWidth}px)">
 				<!-- the day headings and the all-day band stay pinned above the scrolling grid -->
 				<div class="sticky top-0 z-20 border-b bg-card">
-					<div class="flex">
-						<div class="w-14 shrink-0"></div>
-						{#each days as d (d.getTime())}
-							<div
-								class={cn(
-									'flex flex-1 flex-col items-center py-1.5',
-									isWeekend(d) && 'bg-muted dark:bg-muted/25'
-								)}
-							>
-								<span
+					{#if !strip}<div class="flex">
+							<div class="w-14 shrink-0"></div>
+							{#each days as d (d.getTime())}
+								<div
 									class={cn(
-										'text-xs font-medium',
-										sameDay(d, now) ? 'text-brand-text' : 'text-muted-foreground'
-									)}>{d.toLocaleDateString(locale, { weekday: 'short' })}</span
+										'flex flex-1 flex-col items-center py-1.5',
+										isWeekend(d) && 'bg-muted dark:bg-muted/25'
+									)}
 								>
-								<span
-									class={cn(
-										'grid size-6.5 place-items-center rounded-full text-sm font-semibold',
-										sameDay(d, now) && 'bg-brand text-brand-foreground'
-									)}>{d.getDate()}</span
-								>
-							</div>
-						{/each}
-					</div>
+									<span
+										class={cn(
+											'text-xs font-medium',
+											sameDay(d, now) ? 'text-brand-text' : 'text-muted-foreground'
+										)}>{d.toLocaleDateString(locale, { weekday: 'short' })}</span
+									>
+									<span
+										class={cn(
+											'grid size-6.5 place-items-center rounded-full text-sm font-semibold',
+											sameDay(d, now) && 'bg-brand text-brand-foreground'
+										)}>{d.getDate()}</span
+									>
+								</div>
+							{/each}
+						</div>{/if}
 					{#if barRows > 0}
 						<div class="relative ml-14 border-t" style:height="{barRows * 22 + 4}px">
 							{#each bars.filter((b) => b.row < barRows) as b (b.e.id)}
@@ -440,15 +538,16 @@ Events on a day, week or month grid: timed boxes, all-day bars, month pills; dra
 							>
 						{/each}
 					</div>
-					<!-- svelte-ignore a11y_no_static_element_interactions -->
+					<!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
 					<div
 						bind:this={grid}
 						class={cn(
 							'relative flex-1 bg-popover select-none dark:bg-background',
-							!readonly && 'touch-none cursor-crosshair'
+							!readonly && !touch.current && 'touch-none cursor-crosshair'
 						)}
 						style:height="{height}px"
-						onpointerdown={(e) => !readonly && begin(e, 'create')}
+						onpointerdown={(e) => !readonly && !touch.current && begin(e, 'create')}
+						onclick={tapSlot}
 					>
 						{#each days as d, col (d.getTime())}
 							<div
@@ -480,9 +579,9 @@ Events on a day, week or month grid: timed boxes, all-day bars, month pills; dra
 									tabindex="0"
 									title={editable ? undefined : e.lockedReason}
 									data-event={e.id}
-									onpointerdown={(p) => editable && begin(p, 'move', e)}
+									onpointerdown={(p) => editable && !touch.current && begin(p, 'move', e)}
 									onclick={() => {
-										if (!editable) onEventClick?.(e);
+										if (!editable || touch.current) onEventClick?.(e);
 									}}
 									onkeydown={(k) => {
 										if (k.key === 'Enter' || k.key === ' ') {
@@ -493,7 +592,7 @@ Events on a day, week or month grid: timed boxes, all-day bars, month pills; dra
 								>
 									<div class="h-0.75" style:background={e.color ?? 'var(--color-brand)'}></div>
 									<div class="min-w-0 px-1.5 py-1">{@render body(e, 'box')}</div>
-									{#if editable}
+									{#if editable && !touch.current}
 										<!-- svelte-ignore a11y_no_static_element_interactions -->
 										<div
 											class="absolute inset-x-0 bottom-0 h-2.5 cursor-s-resize hover:bg-brand/10"

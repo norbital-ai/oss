@@ -24,7 +24,8 @@
 		onRows,
 		onChange,
 		grid = false,
-		onOpen
+		onOpen,
+		moves
 	}: Pick<BoardProps<C>, 'of' | 'card'> & {
 		lane: string;
 		where: Json | undefined;
@@ -39,6 +40,8 @@
 		/** The expanded lane's grid of cards. */
 		grid?: boolean;
 		onOpen?: (id: string) => void;
+		/** The other lanes a card may move to, where a finger cannot drag it. */
+		moves?: readonly { label: string; move: (id: string) => void }[];
 	} = $props();
 	const bolt = useBolt();
 	let pages = $state<(string | null)[]>([null]);
@@ -89,6 +92,7 @@
 		{onChange}
 		{grid}
 		{onOpen}
+		{moves}
 		index={i}
 		{after}
 		onNext={(n) => (nexts[i] = n)}

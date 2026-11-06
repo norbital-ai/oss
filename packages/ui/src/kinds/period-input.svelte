@@ -208,7 +208,7 @@ Edits a date period (inclusive) or an instant period (closed-open), both ends pi
 		{:else}
 			<div
 				bind:this={fieldAnchor}
-				class={cn(SEGMENTS, 'pr-1')}
+				class={cn(SEGMENTS, 'pr-1 max-md:h-auto max-md:flex-wrap')}
 				aria-invalid={invalid ? 'true' : undefined}
 				data-period-input={of}
 				data-precision={precision}

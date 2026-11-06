@@ -249,7 +249,7 @@ it.live('a read request source shows its root and reads exactly the request it w
 	})
 );
 
-it.live('phone cards reveal extra report values without opening the row', () =>
+it.live('a phone card is its title and three fields; the row opens the rest', () =>
 	Effect.gen(function* () {
 		const opened: Value[] = [];
 		const { target } = yield* browser(() =>
@@ -269,17 +269,26 @@ it.live('phone cards reveal extra report values without opening the row', () =>
 				(row) => opened.push(row)
 			)
 		);
-		const extra = element<HTMLDetailsElement>(target, '[data-table-list] [data-row-extra-fields]');
-		assert.ok(extra);
-		assert.equal(extra.open, false);
-		element<HTMLElement>(extra, 'summary').click();
-		yield* browser(() => settle());
-		assert.equal(extra.open, true);
-		assert.ok(textOf(extra).includes('6.80'));
-		assert.ok(textOf(extra).includes('0.72'));
-		assert.deepEqual(opened, []);
-		element<HTMLElement>(extra, 'summary').click();
-		yield* browser(() => settle());
-		assert.equal(extra.open, false);
+		const card = element<HTMLElement>(target, '[data-table-list] [data-row-card]');
+		assert.ok(textOf(card).includes('Customer'));
+		assert.equal(textOf(card).includes('Resin A'), false);
+		assert.equal(card.querySelector('summary, a, button'), null);
+		card.click();
+		assert.equal(opened.length, 1);
+		const { target: open } = yield* browser(() =>
+			show(
+				[
+					{
+						name: 'Sales',
+						reference: 'INV-1',
+						date: '2026-10-11',
+						partner: 'Customer',
+						sku: 'Resin A'
+					}
+				],
+				['name', 'reference', 'date', 'partner', 'sku']
+			)
+		);
+		assert.ok(textOf(element<HTMLElement>(open, '[data-row-card]')).includes('Resin A'));
 	})
 );

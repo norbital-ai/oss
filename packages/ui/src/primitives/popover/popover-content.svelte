@@ -94,7 +94,7 @@
 		style={combinedStyle}
 		class={cn(
 			// never taller than the room on its side: a long popover scrolls rather than covering its own trigger
-			'z-50 max-h-(--bits-popover-content-available-height) overflow-y-auto origin-(--bits-popover-content-transform-origin) rounded-md border bg-popover text-popover-foreground shadow-deep outline-hidden data-[side=bottom]:slide-in-from-top-2 data-[side=left]:slide-in-from-right-2 data-[side=right]:slide-in-from-left-2 data-[side=top]:slide-in-from-bottom-2 data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95 data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95',
+			'z-50 max-h-(--bits-popover-content-available-height) overflow-y-auto overscroll-contain origin-(--bits-popover-content-transform-origin) rounded-md border bg-popover text-popover-foreground shadow-deep outline-hidden data-[side=bottom]:slide-in-from-top-2 data-[side=left]:slide-in-from-right-2 data-[side=right]:slide-in-from-left-2 data-[side=top]:slide-in-from-bottom-2 data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95 data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95',
 			// Apply padding and className based on whether we have constraints
 			needsWidthConstraints ? '' : 'p-4',
 			needsWidthConstraints ? '' : className

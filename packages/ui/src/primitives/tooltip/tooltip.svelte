@@ -1,10 +1,12 @@
 <!--
 @component
-A tooltip on hover or focus of its trigger, with a text or snippet body.
+A tooltip on hover or focus of its trigger, with a text or snippet body; where nothing hovers, a tap opens it as a popover.
 -->
 <script lang="ts">
 	import { Tooltip as TooltipPrimitive } from 'bits-ui';
 	import type { ComponentProps, Snippet } from 'svelte';
+	import * as Popover from '../popover/index.js';
+	import { cn, noHover } from '../utils.js';
 	import Content from './tooltip-content.svelte';
 
 	type ContentProps = ComponentProps<typeof Content>;
@@ -56,10 +58,60 @@ A tooltip on hover or focus of its trigger, with a text or snippet body.
 	} & Omit<TooltipPrimitive.RootProps, 'children' | 'ignoreNonKeyboardFocus'> = $props();
 
 	const hasBody = $derived(Boolean(text) || Boolean(content));
+	let tapped = $state(false);
+	const open = $derived(rootProps.open ?? tapped);
 </script>
+
+{#snippet body()}
+	{#if content}
+		{@render content()}
+	{:else}
+		<p>{text}</p>
+	{/if}
+{/snippet}
 
 {#if disabled || !hasBody}
 	{@render trigger({ props: {} })}
+{:else if noHover.current}
+	<Popover.Root
+		bind:open={() => open, (next) => (tapped = next)}
+		onOpenChange={rootProps.onOpenChange}
+	>
+		<Popover.Trigger>
+			{#snippet child({ props })}
+				<!-- no box of its own, until a disabled trigger lets the tap through to it. Enter and Space stay the trigger's:
+				     they click it, and the click opens this too. -->
+				<!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
+				<span
+					class="contents has-[>:disabled,>[aria-disabled=true]]:inline-flex [&>:disabled]:pointer-events-none"
+					onclick={(e) => {
+						if (e.target === e.currentTarget) tapped = !open;
+					}}
+				>
+					{@render trigger({ props: { ...props, onkeydown: undefined } })}
+				</span>
+			{/snippet}
+		</Popover.Trigger>
+		<!-- a hint: focus stays where it is, or a tap on a field's hint would blur the field -->
+		<Popover.Content
+			{side}
+			{sideOffset}
+			{align}
+			{avoidCollisions}
+			{collisionPadding}
+			trapFocus={false}
+			onOpenAutoFocus={(e: Event) => e.preventDefault()}
+			class={cn(
+				'px-3 py-1.5 text-xs text-balance',
+				// repository-health:allow UI25 -- pass-through of the caller's `contentClass` prop; its tokens are literal at the call site
+				contentClass,
+				// after the caller's: a desktop cap such as `max-w-96` is wider than a phone
+				'max-w-[min(20rem,calc(100vw-1rem))]'
+			)}
+		>
+			{@render body()}
+		</Popover.Content>
+	</Popover.Root>
 {:else}
 	<TooltipPrimitive.Provider {delayDuration} {ignoreNonKeyboardFocus}>
 		<TooltipPrimitive.Root {...rootProps} {ignoreNonKeyboardFocus}>
@@ -77,11 +129,7 @@ A tooltip on hover or focus of its trigger, with a text or snippet body.
 				{arrowClasses}
 				class={/* repository-health:allow UI25 -- pass-through of the caller's `contentClass` prop; its tokens are literal at the call site */ contentClass}
 			>
-				{#if content}
-					{@render content()}
-				{:else}
-					<p>{text}</p>
-				{/if}
+				{@render body()}
 			</Content>
 		</TooltipPrimitive.Root>
 	</TooltipPrimitive.Provider>

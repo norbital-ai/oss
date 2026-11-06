@@ -664,8 +664,6 @@ export const SHELL_ZH: { readonly [key: string]: string } = {
 	'Requests you make and requests awaiting your decision appear here.':
 		'您发起的请求和等待您决定的请求会显示在此处。',
 	Notices: '通知',
-	'Notices arrive on this device.': '通知将发送到此设备。',
-	'Notifications are blocked here.': '此处已阻止通知。',
 	Sounds: '声音',
 	'Norbius is waiting for you': 'Norbius 在等你回复',
 	'Norbius finished': 'Norbius 已完成',
@@ -683,7 +681,6 @@ export const SHELL_ZH: { readonly [key: string]: string } = {
 		'音频被阻止或已暂停。请在浏览器的网站设置中允许声音，然后点击“测试声音”。',
 	'Browser audio is ready. If you hear nothing, check the tab’s mute setting and your device volume.':
 		'浏览器音频已就绪。如果听不到声音，请检查标签页的静音设置和设备音量。',
-	'Notify me on this device': '在此设备上通知我',
 	Open: '打开',
 	'Open navigation': '打开导航',
 	Operations: '运营',
@@ -1397,6 +1394,7 @@ const VIEW_ZH = {
 	'ui.board.laneEmpty': '暂无内容',
 	'ui.board.laneClear': '此列已清空',
 	'ui.board.expand': '展开{lane}',
+	'ui.board.moveTo': '移动到',
 	'ui.view.removeRow': '移除',
 	'ui.view.addCondition': '添加条件',
 	'ui.view.yes': '是',
@@ -1449,7 +1447,6 @@ const VIEW_ZH = {
 	'ui.table.resize': '调整列宽',
 	'ui.table.select': '选择',
 	'ui.table.openRow': '打开',
-	'ui.table.moreFields': '另有 {n} 个字段',
 	'ui.chart.data': '此图表',
 	'ui.chart.empty': '暂无数据',
 	'ui.view.filterSort': '筛选与排序',

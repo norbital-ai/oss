@@ -28,13 +28,10 @@
 </script>
 
 <div class="flex min-h-0 flex-1 flex-col">
-	<AppHeader
-		src={banner ?? null}
-		icon={icon ?? null}
-		{title}
-		description={description ?? null}
-		compact={narrow.current}
-	/>
+	<!-- a phone's top bar already names the page -->
+	{#if !narrow.current}
+		<AppHeader src={banner ?? null} icon={icon ?? null} {title} description={description ?? null} />
+	{/if}
 	<Scroll {name} layout="stack" gap="md" size="fill" inset class="py-4">
 		{#if error !== null}<p
 				role="alert"

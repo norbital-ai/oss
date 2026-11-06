@@ -4,7 +4,7 @@
 import { expect, it } from '@effect/vitest';
 import { Effect, Layer, ManagedRuntime, Schema } from 'effect';
 import { mountEdge } from '@norbital-ai/ui/effect';
-import { page, userEvent } from 'vitest/browser';
+import { cdp, page, userEvent } from 'vitest/browser';
 import { mount, unmount } from 'svelte';
 import Agent from '../src/shell/agent/Agent.svelte';
 import { createBolt } from '../src/page/bolt.ts';
@@ -176,6 +176,48 @@ it('a message sent during a turn goes straight to the queue, never held back', a
 		await expect.poll(() => list('queue')).toBeNull();
 		await expect.element(page.getByText('steer this')).toBeVisible();
 	});
+});
+
+it('under a coarse pointer Return is a new line, Send sends, and a queued message moves up by button', async () => {
+	const touch = (enabled: boolean) => cdp().send('Emulation.setTouchEmulationEnabled', { enabled });
+	await touch(true);
+	try {
+		await withPanel(
+			{
+				status: 'running',
+				rows: [
+					{ id: 'q1', seq: 1, role: 'user', text: 'first', state: 'queued', tag: null },
+					{ id: 'q2', seq: 2, role: 'user', text: 'second', state: 'queued', tag: null }
+				]
+			},
+			async (host) => {
+				await expect.poll(() => list('queue')?.textContent).toContain('second');
+				const up = page.getByRole('button', { name: 'Move up' });
+				await expect.element(up.first()).toBeDisabled();
+				await up.last().click();
+				await expect
+					.poll(() => host.acts.at(-1))
+					.toMatchObject({
+						callable: 'sys_message.reorder',
+						input: { messages: ['q2', 'q1'] }
+					});
+				const acts = host.acts.length;
+				await message().fill('steer');
+				await userEvent.keyboard('{Enter}');
+				await expect.element(message()).toHaveValue('steer\n');
+				expect(host.acts).toHaveLength(acts);
+				await page.getByRole('button', { name: 'Send at the next step' }).click();
+				await expect
+					.poll(() => host.acts.at(-1))
+					.toMatchObject({
+						callable: 'sys_message.post',
+						input: { text: 'steer' }
+					});
+			}
+		);
+	} finally {
+		await touch(false);
+	}
 });
 
 it('the queue offers no separate steer: every message already steers', async () => {

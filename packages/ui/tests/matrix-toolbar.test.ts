@@ -9,6 +9,7 @@ import './dom.ts';
 const { flushSync, mount, tick, unmount } = await import('svelte');
 const { default: Harness } = await import('./view-harness.svelte');
 const { default: Matrix } = await import('../src/matrix/Matrix.svelte');
+const { coarsePointer } = await import('../src/primitives/utils.ts');
 const catalog = {
 	loans: { label: ['name'], fields: { name: { kind: 'text' } } },
 	repayments: { label: ['amount'], fields: { amount: { kind: 'int' } } }
@@ -118,6 +119,48 @@ it.live('Matrix renders one native toolbar with its title and clickable trailing
 			action.click();
 			assert.equal(clicked, 1);
 			assert.match(textOf(required(target.querySelector('tbody'))), /Principal loan.*100/s);
+		} finally {
+			yield* browser(() => unmount(app));
+			target.remove();
+		}
+	})
+);
+
+it.live('Matrix picks a cell on a plain tap under a coarse pointer', () =>
+	Effect.gen(function* () {
+		vi.spyOn(coarsePointer, 'current', 'get').mockReturnValue(true);
+		const { bolt } = yield* browser(() =>
+			viewFixture({
+				read: (model) => ({
+					rows:
+						model === 'loans'
+							? [{ id: 'loan-1', name: 'Principal loan' }]
+							: [{ id: 'repayment-1', loan: 'loan-1', day: '2026-10-20', amount: 100 }],
+					next: null
+				})
+			})
+		);
+		const target = document.body.appendChild(document.createElement('div'));
+		const run = vi.fn();
+		const app = mount(Harness, {
+			target,
+			props: {
+				bolt,
+				catalog,
+				part: 'matrix',
+				view: Matrix,
+				props: { ...props, selection: [{ label: 'Approve', run }] }
+			}
+		});
+		try {
+			yield* browser(() => settle(target));
+			const action = required(target.querySelector<HTMLButtonElement>('section > div button'));
+			assert.equal(action.disabled, true);
+			required(target.querySelector<HTMLElement>('tbody td')).click();
+			flushSync();
+			assert.equal(action.disabled, false);
+			action.click();
+			assert.deepEqual(run.mock.calls[0]?.[0], [{ row: 'loan-1', col: '2026-10-20' }]);
 		} finally {
 			yield* browser(() => unmount(app));
 			target.remove();

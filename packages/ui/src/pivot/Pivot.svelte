@@ -63,7 +63,7 @@
 		{:else}
 			<div class="overflow-x-auto" data-view="pivot">
 				<table
-					class="text-sm [&_td]:px-2 [&_td]:py-1 [&_td]:text-right [&_th]:px-2 [&_th]:py-1 [&_th]:text-left [&_tr]:border-b"
+					class="text-sm [&_td]:px-2 [&_td]:py-1 [&_td]:text-right [&_th]:px-2 [&_th]:py-1 [&_th]:text-left [&_tr]:border-b [&_tr>th:first-child]:bg-background [&_tr>th:first-child]:sticky [&_tr>th:first-child]:left-0"
 				>
 					<thead
 						><tr

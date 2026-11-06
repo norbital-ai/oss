@@ -3,7 +3,7 @@
 A dense cell's value on one line of fixed height; when it is wider or taller than the cell, an expand button opens a
 bounded, scrollable popover holding it whole: `full` when given, else `text` as plain text, else the value again.
 `expand="row"` shows that button only while its table row (`group/row`) is hovered or holds focus; `"never"` drops it
-(a row's title cell, whose row opens the record).
+(a row's title cell, whose row opens the record). A phone's row card has none: the whole card opens the record.
 -->
 <script lang="ts">
 	import type { Snippet } from 'svelte';
@@ -54,6 +54,7 @@ bounded, scrollable popover holding it whole: `full` when given, else `text` as 
 						'opacity-0 group-hover/row:opacity-100 group-focus-within/row:opacity-100 focus-visible:opacity-100 data-[state=open]:opacity-100 [@media(hover:none)]:opacity-100'
 				)}
 				aria-label={t('expand')}
+				data-cell-expand
 				onclick={(event: MouseEvent) => event.stopPropagation()}
 			>
 				<Glyph name="expand" class="size-3" />

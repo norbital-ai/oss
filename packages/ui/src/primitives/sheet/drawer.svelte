@@ -44,7 +44,7 @@ the route changes. It has no header: the navigation, flush to its edges in the s
 	{onOpenChange}
 	side="left"
 	class={cn(
-		'bg-sidebar [&:not([data-fullscreen])]:h-[var(--sheet-h,auto)] pt-4 pb-0 md:w-72 md:pt-0 [&>header]:hidden [&>[data-sheet-body]]:p-0',
+		'bg-sidebar [&:not([data-fullscreen])]:h-[var(--sheet-h,auto)] pt-5 pb-0 data-fullscreen:pt-[calc(1.25rem+env(safe-area-inset-top))] md:w-72 md:pt-0 [&>header]:hidden [&>[data-sheet-body]]:p-0',
 		className
 	)}
 	{...rest}

@@ -101,6 +101,7 @@
 		class="h-32 w-full touch-pan-y"
 		role="img"
 		aria-label={`${title} over time`}
+		onpointerdown={move}
 		onpointermove={move}
 		onpointerleave={() => (hover = null)}
 	>

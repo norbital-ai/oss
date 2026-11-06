@@ -5,14 +5,16 @@
 	the app around it. The page always lays out at the chosen size in its own CSS pixels — a desktop is a desktop even in
 	a narrow pane — and is scaled down to fit, as a browser's device mode does (width × height · zoom, in the corner). Its
 	right and bottom edges drag to any size. A new build (`version`) reloads it; the sandbox keeps it from navigating the
-	page around it; the last size is remembered on this device. Studio's preview pane and the agent panel both use it.
+	page around it; the last size is remembered on this device, but a phone always opens at Phone, without the device
+	buttons, and under a coarse pointer the header wraps. Studio's preview pane and the agent panel both use it.
 -->
 <script lang="ts">
 	import { Button, Icon, Popover, Spinner, TabStrip } from '@norbital-ai/ui';
-	import { Inline, Stack } from '@norbital-ai/ui/layout';
+	import { Cluster, Inline, Stack } from '@norbital-ai/ui/layout';
 	import { Option, Schema } from 'effect';
 	import { watch } from 'runed';
 	import type { Snippet } from 'svelte';
+	import { MediaQuery } from 'svelte/reactivity';
 	import { elapsedText } from '../studio/model.ts';
 	import type { StudioTestRun } from '../studio/test-results.ts';
 	import TestResults from './TestResults.svelte';
@@ -91,7 +93,12 @@
 		}
 	}
 
-	let size = $state<Size>(remembered());
+	const narrow = new MediaQuery('max-width: 47.999rem');
+	const touch = new MediaQuery('pointer: coarse');
+	// a 44px thumb floor overruns one line; a mouse keeps the line and truncates the label
+	const Row = $derived(touch.current ? Cluster : Inline);
+	// a phone has no device buttons to leave a remembered desktop size with
+	let size = $state<Size>(narrow.current ? PRESETS[0].size : remembered());
 	let frame = $state<HTMLDivElement | null>(null);
 	let dragging = $state(false);
 	let reloads = $state(0);
@@ -210,7 +217,10 @@
 			}
 		]}
 	/>
-	<Inline gap="xs" class="h-9 border-b border-border/60 px-4 text-micro text-muted-foreground">
+	<Row
+		gap="xs"
+		class="min-h-9 border-b border-border/60 px-4 text-micro text-muted-foreground pointer-coarse:min-h-11"
+	>
 		<strong class="min-w-0 truncate text-xs font-medium text-foreground"
 			>{label ?? t('Preview')}</strong
 		>
@@ -221,27 +231,29 @@
 				>
 			{/if}
 			<span class="flex-1"></span>
-			<span
-				class="inline-flex shrink-0 rounded-md bg-muted/60 p-0.5"
-				role="group"
-				aria-label={t('Device')}
-			>
-				{#each PRESETS as preset (preset.name)}
-					{@const on = size.width === preset.size.width && size.height === preset.size.height}
-					<button
-						type="button"
-						class="grid size-6 place-items-center rounded {on
-							? 'bg-background text-foreground shadow-xs'
-							: 'hover:text-foreground'}"
-						aria-pressed={on}
-						aria-label={t(preset.name)}
-						title={t(preset.name)}
-						onclick={() => choose({ ...preset.size })}
-					>
-						<Icon name={preset.icon} class="size-3.5" />
-					</button>
-				{/each}
-			</span>
+			{#if !narrow.current}
+				<span
+					class="inline-flex shrink-0 rounded-md bg-muted/60 p-0.5"
+					role="group"
+					aria-label={t('Device')}
+				>
+					{#each PRESETS as preset (preset.name)}
+						{@const on = size.width === preset.size.width && size.height === preset.size.height}
+						<button
+							type="button"
+							class="grid size-6 place-items-center rounded {on
+								? 'bg-background text-foreground shadow-xs'
+								: 'hover:text-foreground'}"
+							aria-pressed={on}
+							aria-label={t(preset.name)}
+							title={t(preset.name)}
+							onclick={() => choose({ ...preset.size })}
+						>
+							<Icon name={preset.icon} class="size-3.5" />
+						</button>
+					{/each}
+				</span>
+			{/if}
 			{#if details !== undefined}
 				<Popover.Root>
 					<Popover.Trigger
@@ -292,7 +304,7 @@
 				<Icon name="lucide:x" class="size-3.5" />
 			</Button>
 		{/if}
-	</Inline>
+	</Row>
 	{#if pane === 'tests'}<TestResults run={tests} {t} />{/if}
 	<div
 		class={pane === 'preview' ? 'flex min-h-0 flex-1 flex-col' : 'hidden'}

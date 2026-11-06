@@ -58,7 +58,7 @@ There is no `grow`, `shrink` or `h-full`. A view never takes `min-h-[…]`. Noth
 ## Responsive
 
 - Layout responds to its container, never the viewport: `Grid minimum` auto-fits, `Cluster` wraps, `Split` and `Columns` measure themselves. `sm:`/`md:` for layout means a wrong primitive.
-- `Grid minimum`: `compact` 12rem for small widgets, `card` 18rem, `panel` 26rem for form fields. `tracks` for known uneven columns.
+- `Grid minimum`: `compact` 12rem for small widgets, `card` 18rem, `panel` 26rem for form fields. Direct `Field` children go down to half a narrow container, two to a row, and two `Columns` of fields stay two to a row. `tracks` for known uneven columns.
 - `Split collapse`: `stack` or `switch` below 40rem.
 - Data renderers shrink; do not pick `compact` for them.
 

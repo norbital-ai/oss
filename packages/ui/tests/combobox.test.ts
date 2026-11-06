@@ -1,7 +1,8 @@
 import './dom.ts';
 import { flushSync, mount, tick, unmount } from 'svelte';
-import { expect, it } from 'vitest';
+import { expect, it, vi } from 'vitest';
 import Combobox from '../src/primitives/combobox/combobox.svelte';
+import { coarsePointer } from '../src/primitives/utils.ts';
 import Multiple from './combobox-harness.svelte';
 
 const options = [
@@ -140,4 +141,21 @@ it('readonly has no trigger and disabled cannot open, single or multiple', async
 			expect(changed).toBe(0);
 			await unmount(view);
 		}
+});
+
+it('a coarse pointer opens the list without focusing search, and a tap still can', async () => {
+	vi.spyOn(coarsePointer, 'current', 'get').mockReturnValue(true);
+	const target = document.body.appendChild(document.createElement('div'));
+	const view = mount(Multiple, { target, props: { onChange: () => {} } });
+	flushSync();
+	target.querySelector<HTMLButtonElement>('[role=combobox]')?.click();
+	await settle();
+	await new Promise(requestAnimationFrame);
+	const input = document.querySelector<HTMLInputElement>('input');
+	if (input === null) throw new Error('no search input');
+	expect(document.activeElement).toBe(document.querySelector('[role=listbox]'));
+	input.focus();
+	await settle();
+	expect(document.activeElement).toBe(input);
+	await unmount(view);
 });

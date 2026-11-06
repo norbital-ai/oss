@@ -7,7 +7,7 @@ Checks every template page passes. Rule homes: [app-structure.md](app-structure.
 3. One concern per tab; tab title equals view title; one tab size.
 4. The toolbar is fixed; no button above, beside or in a view header.
 5. Record sheet: title `record_label` or UUID, overline the singular model label, subtitle fields; one primary action, the rest in overflow.
-6. A row click opens the record; row operations are row `actions`, never loose buttons in cells.
+6. A row click opens that row's record and nothing else: no link, relation link or inspect popover in a cell. A row that stands for another record (a report line, a snapshot item) opens it with `onOpen`. Row operations are row `actions`, never loose buttons in cells.
 7. Every label comes from the catalog, never a humanized key.
 8. Kinds carry meaning: `date`, `money`, `currency`, markdown; no hand-written formatting.
 9. The kit formats: date medium; instant medium with short time; money `CODE 1,234.00`; decimals trimmed; empty `—`.
@@ -15,7 +15,7 @@ Checks every template page passes. Rule homes: [app-structure.md](app-structure.
 11. Empty and loading are the kit's `EmptyState` and the view's skeleton.
 12. Submit reads "Save" or the action's verb; required and help come from the model.
 13. Layout only through primitives and typography roles; one view per scroll.
-14. A regional `locale` and `tz`; base and `zh` catalogs cover every visible string; check phone width.
+14. A regional `locale` and `tz`; base and `zh` catalogs cover every visible string; check phone width with a finger: every widget reflows, and the kit's own do (table rows, forms two fields to a row, calendar days over an agenda). A hand-built widget states its own small-screen layout.
 15. Disclosure supports the task: primary inputs visible, consistent field order across create, edit and read.
 16. Every chart answers a stated decision.
 17. Reuse the record controller, capability reasons, approvals and structured renderers; related edits are explicit operations preserving unloaded children.

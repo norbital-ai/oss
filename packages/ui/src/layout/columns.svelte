@@ -1,6 +1,7 @@
 <!--
 @component
-A fixed number of equal columns (1–7) that collapse to one per row below a width of the element itself.
+A fixed number of equal columns (1–7) that collapse to one per row below a width of the element itself. Two columns of
+form fields stay two to a row down to 20rem: a field that needs the row spans it (`Field`).
 -->
 <script lang="ts" module>
 	import type { Snippet } from 'svelte';
@@ -79,6 +80,11 @@ A fixed number of equal columns (1–7) that collapse to one per row below a wid
 	@container (max-width: 29.999rem) {
 		.columns[data-collapse='compact'] > :global(*) {
 			grid-column: 1 / -1;
+		}
+	}
+	@container (min-width: 20rem) {
+		.columns[data-columns='2'] > :global([data-field]:not([data-field-large])) {
+			grid-column: auto;
 		}
 	}
 </style>

@@ -270,11 +270,15 @@ its content or 16rem, whichever is less). Nothing scrolls sideways.
 								class="border-border bg-muted/40 text-muted-foreground grid size-5 shrink-0 place-items-center rounded-sm border"
 								data-section-icon
 							>
-								<Icon {icon} class="size-3 group-hover/section:hidden" aria-hidden="true" />
+								<Icon
+									{icon}
+									class="size-3 group-hover/section:hidden [@media(hover:none)]:hidden"
+									aria-hidden="true"
+								/>
 								<Icon
 									icon="lucide:chevron-right"
 									class={cn(
-										'hidden size-3.5 transition-transform group-hover/section:block',
+										'hidden size-3.5 transition-transform group-hover/section:block [@media(hover:none)]:block',
 										shown && 'rotate-90'
 									)}
 									aria-hidden="true"
@@ -329,8 +333,8 @@ its content or 16rem, whichever is less). Nothing scrolls sideways.
 	<!-- hidden, never unmounted: a collapsed field still belongs to the form's draft and its save -->
 	<!-- the body scrolls inside the section's share; a vertical inset keeps focus rings clear of its top and bottom
 	     (controls ring inside their own box sideways); under the toggle's box it starts where the title does (the
-	     icon's size-5 or the chevron's size-4, and gap-1.5). Nothing overhangs sideways: a negative side margin would
-	     give the column a sideways scroll. -->
+	     icon's size-5 or the chevron's size-4, and gap-1.5); a phone keeps that width for the fields. Nothing overhangs
+	     sideways: a negative side margin would give the column a sideways scroll. -->
 	<div
 		bind:this={body}
 		id={`${id}-body`}
@@ -338,13 +342,13 @@ its content or 16rem, whichever is less). Nothing scrolls sideways.
 		class={cn(
 			'-my-1 min-h-0 min-w-0 overflow-x-clip py-1',
 			fill && 'overflow-y-auto',
-			canCollapse && (icon ? 'pl-[1.625rem]' : 'pl-[1.375rem]')
+			canCollapse && (icon ? 'pl-[1.625rem] max-md:pl-0' : 'pl-[1.375rem] max-md:pl-0')
 		)}
 		use:contentMotion
 	>
 		<div
 			class={cn(
-				'grid min-w-0 [overflow-wrap:anywhere]',
+				'grid min-w-0 [overflow-wrap:anywhere] max-md:has-[>[data-field]]:[grid-template-columns:repeat(auto-fit,minmax(min(100%,9rem),1fr))]',
 				editing ? 'gap-4' : 'gap-3',
 				// the space under the heading moves with the body, so closing ends without a jump
 				titled && (editing ? 'pt-4' : 'pt-3')

@@ -34,6 +34,10 @@ export const haptic = (kind: HapticKind = 'tap'): void => {
 
 /** The one width question a component may ask; the same 48rem `base.css` restates. */
 export const narrowViewport = new MediaQuery('max-width: 47.999rem');
+/** A finger is the main pointer; the same query `base.css` restates. */
+export const coarsePointer = new MediaQuery('pointer: coarse');
+/** The main input cannot hover; the same query `base.css` restates. */
+export const noHover = new MediaQuery('hover: none');
 
 /** The kit's own chrome strings. English by default; the shell sets the workspace locale's text once (`setUiText`). */
 const UI_TEXT = {

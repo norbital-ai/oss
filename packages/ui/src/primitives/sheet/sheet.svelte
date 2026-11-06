@@ -1,9 +1,9 @@
 <!--
 @component
 A panel sliding in from an edge over the page, with a heading, header actions and a close button. On a phone every sheet
-is the same bottom drawer: rounded on top, its grabber dragged to resize it or tapped to expand it up to the shell's top
-bar (`--shell-header-height`). On a wide screen a right sheet drags wider or narrower by its left edge and goes full
-screen from its header.
+is the same bottom drawer: rounded on top, its grabber or header dragged to resize it, the grabber tapped to take the
+whole screen, and the page behind held still. On a wide screen a right sheet drags wider or narrower by its left edge
+and goes full screen from its header.
 -->
 <script lang="ts" module>
 	import type { Snippet } from 'svelte';
@@ -42,6 +42,7 @@ screen from its header.
 	import { resetInset } from '../../layout/inset.svelte.js';
 	import { TAB_LEVEL } from '../tabs/level.js';
 	import { cn, uiText } from '../utils.js';
+	import { watchKeyboard } from './keyboard.js';
 	import {
 		escapes,
 		openSheets,
@@ -92,6 +93,7 @@ screen from its header.
 		(isOpen) => {
 			if (!isOpen) return void leave();
 			shown = true;
+			watchKeyboard();
 			pushSheet(me);
 			depth = openSheets.length - 1;
 			return () => popSheet(me);
@@ -187,35 +189,39 @@ screen from its header.
 		addEventListener('pointermove', move);
 		addEventListener('pointerup', up);
 	}
-	// the phone drawer's grabber: a drag sets its height, up to the shell's top bar (below a quarter of the screen closes
-	// it); a tap (its click, unless it dragged) expands it
+	// the phone drawer's grabber and header: a drag sets its height, up to the whole screen (held near the top it takes
+	// the screen, below a quarter of it the drawer closes); a tap on the grabber (its click, unless it dragged) expands it
 	let dragged = false;
 	function lift(e: PointerEvent) {
-		if (e.button !== 0 || panel === null) return;
+		if (e.button !== 0 || panel === null || wide.current) return;
+		if (e.target instanceof Element && e.target.closest('header button, header a')) return;
 		const y0 = e.clientY,
 			h0 = panel.offsetHeight;
-		const max =
-			innerHeight -
-			(parseFloat(getComputedStyle(panel).getPropertyValue('--shell-header-height')) || 0);
 		dragged = false;
 		const move = (m: PointerEvent) => {
 			if (!dragged && Math.abs(m.clientY - y0) < 4) return;
 			dragged = true;
 			full = false;
-			height = Math.round(Math.min(Math.max(h0 + y0 - m.clientY, 120), max));
+			height = Math.round(Math.min(Math.max(h0 + y0 - m.clientY, 120), innerHeight));
 		};
 		const up = () => {
 			removeEventListener('pointermove', move);
 			removeEventListener('pointerup', up);
+			removeEventListener('pointercancel', up);
 			document.body.style.userSelect = '';
-			if (dragged && height !== null && height < innerHeight / 4) {
+			if (!dragged || height === null) return;
+			if (height < innerHeight / 4) {
 				height = null;
 				close();
+			} else if (height > innerHeight - 64) {
+				height = null;
+				full = true;
 			}
 		};
 		document.body.style.userSelect = 'none';
 		addEventListener('pointermove', move);
 		addEventListener('pointerup', up);
+		addEventListener('pointercancel', up);
 	}
 	function nudge(e: KeyboardEvent) {
 		if (panel === null || (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight')) return;
@@ -237,7 +243,8 @@ screen from its header.
 
 {#if shown}
 	<!-- non-modal on a wide screen: no backdrop, no focus trap, no scroll lock; the page behind stays clickable and typeable.
-	     A phone's drawer has no ×: a tap outside it (this scrim) or a swipe down on its grabber dismisses it -->
+	     A phone's drawer has no ×: a tap outside it (this scrim) or a swipe down on its grabber dismisses it, and the page
+	     behind holds still -->
 	<!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
 	{#if top || !open}
 		<div
@@ -245,7 +252,7 @@ screen from its header.
 			data-sheet-scrim
 			data-sheet-top={top || undefined}
 			style="z-index:{40 + depth}"
-			class="fixed inset-0 animate-in bg-black/40 fade-in-0 animation-duration-200 motion-reduce:animate-none md:hidden"
+			class="fixed inset-0 animate-in touch-none bg-black/40 fade-in-0 animation-duration-200 motion-reduce:animate-none md:hidden"
 			onclick={close}
 		></div>
 	{/if}
@@ -264,10 +271,10 @@ screen from its header.
 			!full && height !== null ? `--sheet-h:${height}px` : ''
 		].join(';') || undefined}
 		class={cn(
-			// a phone: one bottom drawer for every side, its top corners a squircle, never above the shell's top bar
-			'bg-popover text-popover-foreground fixed inset-x-0 bottom-0 z-40 flex max-h-[calc(100dvh-var(--shell-header-height,env(safe-area-inset-top)))] min-w-0 animate-in flex-col rounded-t-xl border-t pb-[env(safe-area-inset-bottom)] shadow-deep fade-in-0 slide-in-from-bottom-4 animation-duration-200 ease-out motion-reduce:animate-none [corner-shape:squircle]',
+			// a phone: one bottom drawer for every side, its top corners a squircle; expanded, the whole screen
+			'bg-popover text-popover-foreground fixed inset-x-0 bottom-[var(--keyboard-inset,0px)] z-40 flex max-h-[calc(100dvh-var(--keyboard-inset,0px))] min-w-0 animate-in flex-col rounded-t-xl border-t pb-[env(safe-area-inset-bottom)] shadow-deep fade-in-0 slide-in-from-bottom-4 animation-duration-200 ease-out motion-reduce:animate-none [corner-shape:squircle]',
 			full
-				? 'h-[calc(100dvh-var(--shell-header-height,env(safe-area-inset-top)))] rounded-none'
+				? 'h-[calc(100dvh-var(--keyboard-inset,0px))] rounded-none border-t-0 pt-[env(safe-area-inset-top)] md:pt-0'
 				: 'h-[var(--sheet-h,min(90dvh,48rem))]',
 			'md:max-h-full md:rounded-none md:border-t-0 md:pb-0 md:inset-y-0 md:h-full md:slide-in-from-bottom-0',
 			right
@@ -279,13 +286,16 @@ screen from its header.
 			className
 		)}
 	>
-		<!-- a phone's drawer: its grabber, inside the top edge (straddling the border, it read as a tab stuck on a box), is
-		     dragged to resize it and tapped to expand it; expanded, the drawer is square and flush with the top bar -->
+		<!-- a phone's drawer: its grabber, the full width of its top edge so a thumb finds it, is dragged to resize it and
+		     tapped to expand it; expanded, the drawer is square and takes the whole screen -->
 		<button
 			type="button"
 			data-sheet-grabber
 			aria-label={t('resize')}
-			class="group/grab absolute inset-x-0 top-0 z-10 mx-auto flex h-4 w-16 cursor-row-resize touch-none items-center justify-center [--hit-target:0px] outline-none md:hidden"
+			class={cn(
+				'group/grab absolute inset-x-0 z-10 flex h-5 cursor-row-resize touch-none items-center justify-center [--hit-target:0px] outline-none md:hidden',
+				full ? 'top-[env(safe-area-inset-top)]' : 'top-0'
+			)}
 			onpointerdown={lift}
 			onclick={() => {
 				if (!dragged) {
@@ -316,7 +326,11 @@ screen from its header.
 				></span>
 			</div>
 		{/if}
-		<header class="flex shrink-0 flex-col border-b px-4 py-3">
+		<!-- svelte-ignore a11y_no_static_element_interactions -->
+		<header
+			class="flex shrink-0 touch-none flex-col border-b px-4 pt-5 pb-2 md:touch-auto md:py-3"
+			onpointerdown={lift}
+		>
 			{#if eyebrow && !header}<span
 					class="text-micro text-muted-foreground truncate leading-4"
 					data-sheet-eyebrow>{eyebrow}</span
@@ -380,6 +394,18 @@ screen from its header.
 				</button>
 			</div>
 		</header>
-		<div class="min-h-0 flex-1 overflow-auto p-4" data-sheet-body>{@render children()}</div>
+		<div class="min-h-0 flex-1 overflow-auto overscroll-contain p-4" data-sheet-body>
+			{@render children()}
+		</div>
 	</div>
 {/if}
+
+<style>
+	/* a phone's drawer holds the page still: a swipe its content cannot scroll never reaches the document behind */
+	@media (max-width: 47.999rem) {
+		:global(html:has([data-sheet-scrim])) {
+			overflow: hidden;
+			overscroll-behavior: none;
+		}
+	}
+</style>

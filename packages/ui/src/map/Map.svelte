@@ -167,7 +167,8 @@
 					module
 						.map(node, {
 							worldCopyJump: true,
-							dragging: interactive,
+							// no one-finger pan on touch, so the page still scrolls past the map
+							dragging: interactive && !module.Browser.mobile,
 							scrollWheelZoom: interactive,
 							zoomControl: interactive
 						})

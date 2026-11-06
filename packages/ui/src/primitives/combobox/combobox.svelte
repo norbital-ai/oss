@@ -70,7 +70,7 @@ The kit's select: a field-like trigger and a searchable option list in a popover
 	import { CONTROL_ICON, CONTROL_SIZE, SELECT_TRIGGER } from '../../kinds/classes.js';
 	import CopyText from '../copy-text/copy-text.svelte';
 	import * as Popover from '../popover/index.js';
-	import { claimFieldControl, cn, uiText, useControls } from '../utils.js';
+	import { claimFieldControl, cn, coarsePointer, uiText, useControls } from '../utils.js';
 	import { virtualList } from '../virtual/virtual.svelte.js';
 
 	const GHOST = `${CONTROL_SIZE} flex items-center justify-between rounded-md bg-transparent text-left font-normal outline-none hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-50 aria-invalid:text-destructive`;
@@ -183,7 +183,8 @@ The kit's select: a field-like trigger and a searchable option list in a popover
 			)
 		);
 		await tick();
-		(search ?? list)?.focus();
+		// a focused search raises the on-screen keyboard over the short list: touch taps the box to type
+		(coarsePointer.current ? list : (search ?? list))?.focus();
 		reveal(active);
 	}
 	function choose(row: ComboboxOption<V> | null) {
@@ -277,6 +278,9 @@ The kit's select: a field-like trigger and a searchable option list in a popover
 			minWidth={variant === 'ghost' ? 256 : 192}
 			class="gap-1 p-1"
 			onkeydown={keydown}
+			onOpenAutoFocus={(e: Event) => {
+				if (coarsePointer.current) e.preventDefault();
+			}}
 		>
 			{#if withSearch}
 				<input
@@ -294,7 +298,7 @@ The kit's select: a field-like trigger and a searchable option list in a popover
 			{@render header?.()}
 			<ul
 				bind:this={list}
-				class="max-h-64 overflow-auto outline-none"
+				class="max-h-64 overflow-auto overscroll-contain outline-none"
 				role="listbox"
 				aria-multiselectable={props.multiple ? true : undefined}
 				tabindex="-1"

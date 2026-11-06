@@ -108,6 +108,19 @@ it.live(
 		})
 );
 
+it.live('a row shows a structured value as text: a tap opens the row, not an inspector', () =>
+	browser(async () => {
+		const { target } = await show({
+			cell: true,
+			link: false,
+			kind: { kind: 'object', fields: { name: { kind: 'text' } } },
+			initial: { name: 'Annual leave' }
+		});
+		assert.ok(target.textContent?.includes('Annual leave'));
+		assert.equal(target.querySelector('button'), null);
+	})
+);
+
 it.live('a model custom datatype keeps its authored renderer ahead of the fallback', () =>
 	browser(async () => {
 		const { target } = await show({

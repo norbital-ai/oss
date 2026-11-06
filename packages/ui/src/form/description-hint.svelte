@@ -14,7 +14,8 @@ A field's description as an info button beside its label: a tap or click opens t
 	<Popover.Trigger
 		type="button"
 		class={cn(
-			'text-muted-foreground hover:bg-accent hover:text-foreground focus-visible:ring-ring/40 grid size-5 shrink-0 place-items-center rounded-sm outline-none focus-visible:ring-2 max-sm:size-8',
+			// the hit area reaches past the box, so a labelled row keeps the label's height
+			'text-muted-foreground hover:bg-accent hover:text-foreground focus-visible:ring-ring/40 relative grid size-5 shrink-0 place-items-center rounded-sm outline-none [--hit-target:0px] before:absolute before:-inset-2.5 focus-visible:ring-2',
 			className
 		)}
 		aria-label={text}

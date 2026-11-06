@@ -2,7 +2,7 @@
 @component
 	The app hero above a page: the running app's banner, icon, title and actions (`AppShell` publishes them).
 	`compact` is the phone's one top bar: one line holding the shell's own controls (`leading`, `trailing`), the title
-	with its description behind an info button, and the page's scope controls in a scrolling lane.
+	with its description behind an info button, and the page's scope controls behind one button.
 -->
 <script lang="ts" module>
 	import type { Snippet } from 'svelte';
@@ -26,9 +26,9 @@
 		 * the part the shell cannot know.
 		 */
 		actions?: Snippet | undefined;
-		/** The phone's top bar: one line, the banner behind it, the description behind an info button, the actions in a scrolling lane. */
+		/** The phone's top bar: one line, the banner behind it, the description behind an info button, the actions in a popover. */
 		compact?: boolean;
-		/** The accessible name of the compact actions lane. */
+		/** The accessible name of the compact actions button. */
 		actionsLabel?: string;
 		/** Shell controls before the identity (the navigation button). Compact only. */
 		leading?: Snippet;
@@ -48,7 +48,6 @@
 	import Frame from './frame.svelte';
 	import Imposter from './imposter.svelte';
 	import Inline from './inline.svelte';
-	import Scroll from './scroll.svelte';
 	import Stack from './stack.svelte';
 
 	let {
@@ -69,6 +68,10 @@
 	// dark tokens for controls on the scrim. `text-foreground` too: a control that sets no colour (a picker's
 	// value, an input's text) inherits the page's computed dark text, not the scope's token
 	const onScrim = $derived(scrim && 'dark text-foreground');
+	// the page's actions stay mounted while the popover is shut (a scope picker owns page state): it borrows them, one
+	// to a row whatever row an app laid them out in
+	let shelf = $state<HTMLElement | null>(null);
+	let tools = $state<HTMLElement | null>(null);
 </script>
 
 {#snippet banner()}
@@ -153,8 +156,8 @@
 {#if compact}
 	<!--
 		One line: safe-area insets on its own edges, the banner and scrim behind the whole strip (status bar
-		included), 44px controls at either end, the title, then the page's scope controls in a lane capped so
-		the title keeps its room. The lane scrolls what does not fit; popovers and sheets are unchanged.
+		included), 44px controls at either end, the title, then the page's scope controls behind one button,
+		so the title keeps its room.
 	-->
 	<header
 		class={cn(
@@ -182,22 +185,42 @@
 			{#if leading}<Inline gap="none" class={cn(onScrim)}>{@render leading()}</Inline>{/if}
 			<Inline gap="xs" size="fill" class="min-w-24">{@render identity()}</Inline>
 			{#if actions}
-				<Scroll
-					axis="x"
-					layout="inline"
-					gap="xs"
-					name={actionsLabel}
-					class={cn(
-						'max-w-3/5 flex-initial *:shrink-0 [&_button]:h-10 [&_button]:px-3 [&_button]:text-sm [&_[role=combobox]]:w-auto',
-						onScrim
-					)}
-					data-app-actions
-				>
-					{@render actions()}
-				</Scroll>
+				<Popover.Root>
+					<Popover.Trigger
+						aria-label={actionsLabel}
+						class={cn(
+							'flex size-11 shrink-0 items-center justify-center rounded-md outline-none focus-visible:ring-2 focus-visible:ring-ring/50',
+							scrim ? 'text-white' : 'text-foreground'
+						)}
+						data-app-actions-trigger
+					>
+						<Icon name="lucide:sliders-horizontal" class="size-4" />
+					</Popover.Trigger>
+					<Popover.Content align="end" class="w-[min(20rem,calc(100vw-1rem))] p-2">
+						<div
+							{@attach (node) => {
+								if (tools === null || shelf === null) return;
+								const [lane, home] = [tools, shelf];
+								node.append(lane);
+								return () => home.append(lane);
+							}}
+						></div>
+					</Popover.Content>
+				</Popover.Root>
 			{/if}
 			{#if trailing}<Inline gap="none" class={cn(onScrim)}>{@render trailing()}</Inline>{/if}
 		</Inline>
+		{#if actions}
+			<div bind:this={shelf} hidden>
+				<div
+					bind:this={tools}
+					class="grid gap-2 *:w-full *:flex-col *:items-stretch *:*:w-full *:*:min-w-0"
+					data-app-actions
+				>
+					{@render actions()}
+				</div>
+			</div>
+		{/if}
 	</header>
 {:else}
 	<!--

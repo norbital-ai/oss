@@ -45,8 +45,9 @@ numbers (`count`, `sum.amount`).
 	const numericPadding = { top: 12, right: 16, bottom: 64, left: 64 };
 	// Band/point x scales show every category by default; thin them to one label per 80px like layerchart's continuous axes.
 	const xAxis = { tickSpacing: 80 };
+	let plotWidth = $state(Infinity);
 	const ys = $derived(typeof y === 'string' ? [y] : [...y]);
-	const state = $derived(sourceState(of));
+	const read = $derived(sourceState(of));
 	const COLORS = [
 		'var(--chart-1, #2563eb)',
 		'var(--chart-2, #60a5fa)',
@@ -66,7 +67,7 @@ numbers (`count`, `sum.amount`).
 
 <figure class="flex min-w-0 flex-col gap-2" data-view="chart">
 	{#if title}<figcaption class="text-sm font-semibold">{title}</figcaption>{/if}
-	<ReadGate {state} what={title ?? msg(bolt, 'chart.data', 'this chart')}>
+	<ReadGate state={read} what={title ?? msg(bolt, 'chart.data', 'this chart')}>
 		{#snippet children(value)}
 			{@const data = series(value, x, ys)}
 			{#if data.length === 0}
@@ -87,7 +88,7 @@ numbers (`count`, `sum.amount`).
 					/>
 				</div>
 			{:else}
-				<div class="h-72 min-w-0 overflow-x-auto">
+				<div class="h-72 min-w-0 overflow-x-auto" bind:clientWidth={plotWidth}>
 					{#if kind === 'scatter'}<ScatterChart
 							{data}
 							{x}
@@ -108,6 +109,7 @@ numbers (`count`, `sum.amount`).
 										right: 12,
 										left: Math.min(
 											320,
+											plotWidth * 0.4,
 											Math.max(80, ...data.map((row) => String(row[x] ?? '').length * 7 + 16))
 										)
 									}

@@ -9,7 +9,7 @@
 	import { attach, fork } from '@norbital-ai/ui/effect';
 	import type { Snippet } from 'svelte';
 	import { Badge, Button, Icon } from '@norbital-ai/ui';
-	import { Center, Inline, Stack } from '@norbital-ai/ui/layout';
+	import { Center, Inline, Scroll, Stack } from '@norbital-ai/ui/layout';
 	import type { DeviceRequirement } from '../decl/runtime/app.ts';
 	import type { DeviceAccess, DeviceAccessState } from './device-access.ts';
 
@@ -101,54 +101,56 @@
 {#if checked && missing.length === 0}
 	{@render children()}
 {:else if checked}
-	<Center class="min-h-full p-6" data-device-wall>
-		<Stack gap="lg" class="w-full max-w-md rounded-2xl border bg-card p-6">
-			<Stack gap="xs">
-				<h2 class="text-subhead">{t('Allow access to continue')}</h2>
-				<p class="text-sm text-muted-foreground">
-					{t('This app needs the following on this device. It opens as soon as each is allowed.')}
-				</p>
+	<Scroll name={t('Allow access to continue')} size="fill">
+		<Center class="min-h-full p-6" data-device-wall>
+			<Stack gap="lg" class="w-full max-w-md rounded-2xl border bg-card p-6">
+				<Stack gap="xs">
+					<h2 class="text-subhead">{t('Allow access to continue')}</h2>
+					<p class="text-sm text-muted-foreground">
+						{t('This app needs the following on this device. It opens as soon as each is allowed.')}
+					</p>
+				</Stack>
+				<Stack as="ul" gap="md">
+					{#each requires as r (r)}
+						{@const s = states[r]}
+						<li data-requirement={r} data-state={s?.state}>
+							<Inline gap="sm" align="start">
+								<span class="grid size-9 shrink-0 place-items-center rounded-lg bg-muted"
+									><Icon name={COPY[r].icon} class="size-4" /></span
+								>
+								<Stack gap="xs" size="fill">
+									<Inline gap="xs" justify="between">
+										<p class="text-sm font-medium">{t(COPY[r].label)}</p>
+										{#if s?.state === 'granted'}<Badge variant="success">{t('Allowed')}</Badge>
+										{:else if s?.state === 'unsupported'}<Badge variant="outline"
+												>{t('Not available here')}</Badge
+											>
+										{:else}<Badge variant="warning">{t('Needed')}</Badge>{/if}
+									</Inline>
+									<p class="text-xs text-muted-foreground">{t(COPY[r].why)}</p>
+									{#if s?.state === 'prompt' || (s?.state === 'denied' && s.settings)}
+										<Button class="self-start" disabled={busy !== null} onclick={() => allow(r)}>
+											{t(s.state === 'denied' ? 'Open settings' : 'Allow')}
+										</Button>
+									{:else if s?.state === 'denied'}
+										<p class="text-xs">
+											{t(
+												'Blocked in this browser. Allow it in the site settings (the icon beside the address), then return here.'
+											)}
+										</p>
+									{:else if s?.state === 'unsupported'}
+										<p class="text-xs">
+											{t(
+												'This browser cannot provide it. Open this app on a phone or in another browser.'
+											)}
+										</p>
+									{/if}
+								</Stack>
+							</Inline>
+						</li>
+					{/each}
+				</Stack>
 			</Stack>
-			<Stack as="ul" gap="md">
-				{#each requires as r (r)}
-					{@const s = states[r]}
-					<li data-requirement={r} data-state={s?.state}>
-						<Inline gap="sm" align="start">
-							<span class="grid size-9 shrink-0 place-items-center rounded-lg bg-muted"
-								><Icon name={COPY[r].icon} class="size-4" /></span
-							>
-							<Stack gap="xs" size="fill">
-								<Inline gap="xs" justify="between">
-									<p class="text-sm font-medium">{t(COPY[r].label)}</p>
-									{#if s?.state === 'granted'}<Badge variant="success">{t('Allowed')}</Badge>
-									{:else if s?.state === 'unsupported'}<Badge variant="outline"
-											>{t('Not available here')}</Badge
-										>
-									{:else}<Badge variant="warning">{t('Needed')}</Badge>{/if}
-								</Inline>
-								<p class="text-xs text-muted-foreground">{t(COPY[r].why)}</p>
-								{#if s?.state === 'prompt' || (s?.state === 'denied' && s.settings)}
-									<Button class="self-start" disabled={busy !== null} onclick={() => allow(r)}>
-										{t(s.state === 'denied' ? 'Open settings' : 'Allow')}
-									</Button>
-								{:else if s?.state === 'denied'}
-									<p class="text-xs">
-										{t(
-											'Blocked in this browser. Allow it in the site settings (the icon beside the address), then return here.'
-										)}
-									</p>
-								{:else if s?.state === 'unsupported'}
-									<p class="text-xs">
-										{t(
-											'This browser cannot provide it. Open this app on a phone or in another browser.'
-										)}
-									</p>
-								{/if}
-							</Stack>
-						</Inline>
-					</li>
-				{/each}
-			</Stack>
-		</Stack>
-	</Center>
+		</Center>
+	</Scroll>
 {/if}

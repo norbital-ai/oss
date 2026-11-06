@@ -21,6 +21,7 @@
 		rawJson = false,
 		view = false,
 		cell = false,
+		link = true,
 		create = false,
 		changed
 	}: {
@@ -28,6 +29,7 @@
 		kind?: Kind;
 		view?: boolean;
 		cell?: boolean;
+		link?: boolean;
 		initial: Value;
 		host?: Parameters<typeof provideKinds>[0];
 		errors?: ReadonlyMap<string, string>;
@@ -48,7 +50,7 @@
 	}
 </script>
 
-{#if cell}<CellValue {kind} {value} name="input" dense />
+{#if cell}<CellValue {kind} {value} name="input" dense {link} />
 {:else if kind !== undefined && view}<Show readonly {kind} {value} name="input" />
 {:else if kind !== undefined}<Editor
 		{kind}

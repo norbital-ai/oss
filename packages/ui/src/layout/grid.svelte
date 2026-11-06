@@ -52,9 +52,12 @@ An auto-fitting grid of cards at a minimum cell width (`compact`, `card`, `panel
 		stretch: 'items-stretch'
 	} as const;
 	const minimumClasses: Record<GridMinimum, string> = {
-		compact: '[grid-template-columns:repeat(auto-fit,minmax(min(100%,12rem),1fr))]',
-		card: '[grid-template-columns:repeat(auto-fit,minmax(min(100%,18rem),1fr))]',
-		panel: '[grid-template-columns:repeat(auto-fit,minmax(min(100%,26rem),1fr))]'
+		// a form's fields go down to half a narrow container, two to a row: a field that needs the row spans it (`Field`)
+		compact:
+			'[grid-template-columns:repeat(auto-fit,minmax(min(100%,12rem),1fr))] has-[>[data-field]]:[grid-template-columns:repeat(auto-fit,minmax(min(100%,clamp(9rem,calc(50%_-_0.5rem),12rem)),1fr))]',
+		card: '[grid-template-columns:repeat(auto-fit,minmax(min(100%,18rem),1fr))] has-[>[data-field]]:[grid-template-columns:repeat(auto-fit,minmax(min(100%,clamp(9rem,calc(50%_-_0.5rem),18rem)),1fr))]',
+		panel:
+			'[grid-template-columns:repeat(auto-fit,minmax(min(100%,26rem),1fr))] has-[>[data-field]]:[grid-template-columns:repeat(auto-fit,minmax(min(100%,clamp(9rem,calc(50%_-_0.5rem),26rem)),1fr))]'
 	};
 	const { style: styleProp, ...attributes } = $derived(
 		restProps as { style?: string } & Record<string, unknown>

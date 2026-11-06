@@ -378,11 +378,7 @@
 		host.replaceChildren(copy);
 	};
 
-	function drop(event: DragEvent, lane: import('@norbital-ai/std/kind').Value) {
-		event.preventDefault();
-		dragEnd();
-		const id = event.dataTransfer?.getData('text/x-bolt-id');
-		if (!id) return;
+	const move = (id: string, lane: import('@norbital-ai/std/kind').Value) =>
 		fork(
 			actOutcome(bolt.act(`${of}.update`, [{ target: id, set: { [by]: lane } }])).pipe(
 				Effect.tap((outcome) =>
@@ -392,6 +388,11 @@
 				)
 			)
 		);
+	function drop(event: DragEvent, lane: import('@norbital-ai/std/kind').Value) {
+		event.preventDefault();
+		dragEnd();
+		const id = event.dataTransfer?.getData('text/x-bolt-id');
+		if (id) move(id, lane);
 	}
 	// a lane's dot: a state or enum value's tone (the badge's colour); a relation's lanes have none
 	const DOT = {
@@ -589,6 +590,12 @@
 										{pageSize}
 										where={laneWhere(lane)}
 										onChange={() => invalidateCounts()}
+										moves={list
+											.filter((other) => other !== lane)
+											.map((other) => ({
+												label: other.label,
+												move: (id) => move(id, other.value)
+											}))}
 									/>
 								</div>
 							</div>
@@ -607,7 +614,7 @@
 	>
 		<Dialog.Content
 			bind:ref={laneDialog}
-			class="flex h-[min(90dvh,56rem)] max-w-[min(72rem,calc(100vw-2rem))] flex-col gap-0 overflow-hidden bg-background p-0 outline-none"
+			class="flex h-[min(90dvh,56rem)] max-w-[min(72rem,calc(100vw-2rem))] flex-col gap-0 overflow-hidden bg-background p-0 outline-none [--dialog-pad:0px]"
 			onOpenAutoFocus={(e) => {
 				e.preventDefault();
 				laneDialog?.focus({ preventScroll: true });

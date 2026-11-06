@@ -3,8 +3,8 @@
 	a confirmation card for a held call, and the running turn's text as it streams. Posting answers at once; the turn
 	runs after it, and everything it writes (the reply growing flush by flush, each tool call running then finished) is
 	rows of the conversation's live transcript, patched in over the page's one live stream; the conversation list, each
-	one's status, plan and goals are a live read too. Nothing polls and there is no second stream. Enter sends, Shift+Enter is a
-	new line, Cmd/Ctrl+Enter sends now; the timer beside send schedules the message for a time or for when the agent finishes,
+	one's status, plan and goals are a live read too. Nothing polls and there is no second stream. Enter sends (under a coarse
+	pointer it is a new line and the Send button sends), Shift+Enter is a new line, Cmd/Ctrl+Enter sends now; the timer beside send schedules the message for a time or for when the agent finishes,
 	and what is scheduled lists above the composer (edit, remove). With triage (rule 60a, P41) each triaged row carries its state: "reading…"
 	while pending (with respond-now), "responding" once admitted and its turn runs; every message that came in is
 	shown, and consecutive ones not for the agent fold into one quiet block, collapsed to its count and last message; on a
@@ -298,6 +298,7 @@
 	let previewToggle = $state<HTMLButtonElement | null>(null);
 	let previewEl = $state<HTMLElement | null>(null);
 	let chatEl = $state<HTMLDivElement | null>(null);
+	const touch = new MediaQuery('pointer: coarse');
 	let panelRemWidth = $state(0);
 	let navigating = $state(false);
 	const reducedMotion = new MediaQuery('(prefers-reduced-motion: reduce)');
@@ -752,6 +753,8 @@
 		) {
 			event.preventDefault();
 			if (!planLocked) mode = mode === 'plan' ? null : 'plan';
+		// a soft keyboard has no Shift+Enter: its Return is the new line, and Send sends
+		if (touch.current && !commandKey(event)) return;
 			return;
 		}
 		if (event.key !== 'Enter' || event.shiftKey || event.isComposing) return;
@@ -1706,7 +1709,9 @@
 		class="flex min-w-0 items-center gap-2 border-t border-border px-2 py-1 text-tiny text-muted-foreground"
 		data-agent-views
 	>
-		<span class="shrink-0 whitespace-nowrap" title={t('Switch views')}>{shortcutLabel('→')}</span>
+		<span class="shrink-0 whitespace-nowrap pointer-coarse:hidden" title={t('Switch views')}
+			>{shortcutLabel('→')}</span
+		>
 		<div
 			class="flex min-w-0 max-w-[40%] items-center overflow-x-auto"
 			role="group"
@@ -1780,7 +1785,7 @@
 					/></span
 				>{/if}
 		</span>
-		<span class="shrink-0 text-sm font-semibold">{t('Norbius')}</span>
+		<span class="shrink-0 text-sm font-semibold max-md:hidden">{t('Norbius')}</span>
 		<Combobox
 			variant="ghost"
 			searchable
@@ -2259,7 +2264,7 @@
 						<ol
 							bind:this={port}
 							onscroll={scrolled}
-							class="min-h-0 w-full flex-1 space-y-5 overflow-auto px-[max(1rem,calc((100%-46rem)/2),env(safe-area-inset-left))] py-4 text-sm leading-6"
+							class="min-h-0 w-full flex-1 space-y-5 overflow-auto overscroll-contain px-[max(1rem,calc((100%-46rem)/2),env(safe-area-inset-left))] py-4 text-sm leading-6"
 							aria-live="polite"
 							aria-label={t('Conversation transcript')}
 						>
@@ -2785,10 +2790,7 @@
 				{/if}
 				<!-- Composer: no box — one top border across the panel separates it from the transcript; below it notices and
 		the queue, a borderless text area and its icon row (attach, context meter, model, a round send) -->
-				<div
-					class="shrink-0 border-t border-border bg-card pb-[max(0.75rem,env(safe-area-inset-bottom))]"
-					data-agent-composer
-				>
+				<div class="shrink-0 border-t border-border bg-card pb-3" data-agent-composer>
 					<div
 						class="mx-auto flex w-full max-w-3xl flex-col gap-2 pt-2 pr-[max(1rem,env(safe-area-inset-right))] pl-[max(1rem,env(safe-area-inset-left))]"
 					>
@@ -2825,10 +2827,23 @@
 											}}
 											ondragend={() => (dragFrom = null)}
 										>
-											<Icon
-												name="lucide:grip-vertical"
-												class="size-3.5 shrink-0 text-muted-foreground/60"
-											/>
+											{#if !touch.current}
+												<Icon
+													name="lucide:grip-vertical"
+													class="size-3.5 shrink-0 text-muted-foreground/60"
+												/>
+											{:else if !local}
+												<!-- a finger cannot drive HTML5 drag: one step up at a time -->
+												<Button
+													size="icon"
+													variant="ghost"
+													class="size-6 shrink-0"
+													aria-label={t('Move up')}
+													disabled={i === 0}
+													onclick={() => moveTo(i, i - 1)}
+													><Icon name="lucide:arrow-up" class="size-3.5" /></Button
+												>
+											{/if}
 											<span class="min-w-0 flex-1 truncate" title={q.text ?? ''}
 												>{q.text || t('Attached message')}</span
 											>

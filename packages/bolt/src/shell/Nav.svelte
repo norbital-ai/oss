@@ -23,8 +23,6 @@
 	} from '@norbital-ai/ui';
 	import { FEATURE_COLORS, NorbiusStrip } from '@norbital-ai/ui/brand';
 	import { Frame, Imposter, Inline, Stack } from '@norbital-ai/ui/layout';
-	import { webPush, webPushable } from './web-device.ts';
-	import type { ShellApi } from './api-types.ts';
 	import type { SyncStatus } from '../page/bolt.ts';
 	import { NORBIUS, type NavItem, type NavModel, type Translate } from './model.ts';
 	import Awaiting from './agent/Awaiting.svelte';
@@ -58,12 +56,8 @@
 		onNavigate,
 		onSignOut,
 		bell,
-		notice,
-		api,
-		push = null
+		notice
 	}: {
-		api: ShellApi;
-		push?: string | null;
 		model: NavModel;
 		/** A shell bound to this workspace (an app): its identity shows without a way to another workspace. */
 		pinned?: boolean;
@@ -94,14 +88,6 @@
 		/** The host's notice (a billing reminder): a footer line here, so it never takes the page's height. */
 		notice?: ShellNotice | undefined;
 	} = $props();
-
-	// web push (§5.7): offered when the host has a VAPID key and the browser can take a subscription
-	const canPush = webPushable();
-	let pushed = $state<'off' | 'on' | 'denied'>('off');
-	const enablePush = Effect.fn('Nav.enablePush')(function* (key: string) {
-		yield* api.push(yield* webPush(key));
-		pushed = 'on';
-	});
 
 	const base = $derived(LOCALES.find((l) => locale.startsWith(l)) ?? 'en');
 	const nextLocale = $derived(LOCALES[(LOCALES.indexOf(base) + 1) % LOCALES.length]!);
@@ -417,7 +403,8 @@
 				align="start"
 				side={expanded ? 'bottom' : 'right'}
 				sideOffset={6}
-				class="w-64 p-1"
+				sameWidth={mobile}
+				class={mobile ? 'p-1' : 'w-64 p-1'}
 			>
 				<Input
 					type="search"
@@ -454,7 +441,10 @@
 							use:workspaceNavigation={t('Opening workspace…')}
 							data-sveltekit-reload
 							data-testid="workspace-option"
-							class="mt-1 flex h-8 items-center gap-2 rounded-sm px-2 text-xs hover:bg-accent"
+							class={cn(
+								'mt-1 flex items-center gap-2 rounded-sm px-2 text-xs hover:bg-accent',
+								mobile ? 'h-11' : 'h-8'
+							)}
 						>
 							{@render avatar(initials(w.name), w.handle, null, 'size-6')}
 							<span class="min-w-0 flex-1 truncate">{w.name}</span>
@@ -747,27 +737,6 @@
 						>{t(chimes ? 'On' : 'Off')}</span
 					>
 				</Button>
-			{/if}
-			{#if push !== null && canPush}
-				{#if pushed === 'off'}
-					<Button
-						type="button"
-						variant="ghost"
-						class="h-9 w-full justify-start px-2 text-xs font-normal"
-						onclick={() =>
-							fork(enablePush(push), () => {
-								pushed = 'denied';
-							})}
-					>
-						<Icon name="lucide:bell" class="size-3.5" /><span>{t('Notify me on this device')}</span>
-					</Button>
-				{:else}
-					<p class="px-2 py-1.5 text-tiny text-muted-foreground" role="status">
-						{pushed === 'on'
-							? t('Notices arrive on this device.')
-							: t('Notifications are blocked here.')}
-					</p>
-				{/if}
 			{/if}
 			{#if teams !== null || previewing}
 				<div class="-mx-1 my-1 h-px bg-border"></div>

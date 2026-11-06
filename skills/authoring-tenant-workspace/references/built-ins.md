@@ -22,7 +22,7 @@ Read before writing a page. When a page seems to need one of these, configure th
 | New | a `create` grant |
 | Row open | the record sheet (`?record=<model>/<id>`) unless `onOpen` |
 | Selection, select all, cursor paging, footer, empty states, approval accents | always |
-| Cell rendering | by kind; a link shows the linked label; `cell` only for computed display |
+| Cell rendering | by kind; a link shows the linked label as text, the row opens the record; `cell` only for computed display |
 
 ## Record sheet and forms
 

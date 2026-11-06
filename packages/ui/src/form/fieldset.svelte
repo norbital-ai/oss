@@ -27,7 +27,10 @@ context (a `Field` may still override it). Unset inherits the enclosing `Form` o
 
 <!-- readonly wins: a readonly group has no inputs left to disable, only copy buttons -->
 <fieldset
-	class={cn('m-0 grid min-w-0 gap-4 border-0 p-0', className)}
+	class={cn(
+		'm-0 grid min-w-0 gap-4 border-0 p-0 max-md:has-[>[data-field]]:[grid-template-columns:repeat(auto-fit,minmax(min(100%,9rem),1fr))]',
+		className
+	)}
 	disabled={controls.disabled && !controls.readonly}
 >
 	{#if legend}<legend class="mb-2 p-0 text-sm font-medium">{legend}</legend>{/if}

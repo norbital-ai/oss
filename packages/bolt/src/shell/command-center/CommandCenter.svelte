@@ -245,13 +245,15 @@
 {/snippet}
 
 <Stack gap="none" size="fill" class="bg-background">
-	<AppHeader
-		src={banner}
-		icon="lucide:radar"
-		title={t('Command center')}
-		description={t('Bundles, telemetry, logs, audit, runs and people across the workspace.')}
-		compact={narrow.current}
-	/>
+	<!-- a phone's top bar already names the page -->
+	{#if !narrow.current}
+		<AppHeader
+			src={banner}
+			icon="lucide:radar"
+			title={t('Command center')}
+			description={t('Bundles, telemetry, logs, audit, runs and people across the workspace.')}
+		/>
+	{/if}
 	<Tabs
 		value={active}
 		level={1}

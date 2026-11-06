@@ -9,7 +9,7 @@ A page whose subject is a model is that view: no heading card, paragraph or butt
 | Thing | Home |
 | --- | --- |
 | App identity | `AppShell` props; the hero renders them once |
-| Page scope (company, site, period) | `AppShell` `actions` snippet: one set of pickers every view reads. A status the chosen scope carries goes inside its picker (`Combobox` `badge`), not beside it. On a phone the hero is one line: the title, its description behind an info button, `actions` in a scrolling lane |
+| Page scope (company, site, period) | `AppShell` `actions` snippet: one set of pickers every view reads. A status the chosen scope carries goes inside its picker (`Combobox` `badge`), not beside it. On a phone the hero is one line: the title, its description behind an info button, `actions` behind one button in a popover |
 | View-local presentation control | `toolbar.controls`, never scope |
 | Page-level operation | `toolbar.actions`, the ⚡ menu |
 | One-row operation | the view's row `actions`: an automation or guarded verb |
@@ -23,7 +23,7 @@ A page whose subject is a model is that view: no heading card, paragraph or butt
 - No button sits in the header, above or beside a view. A hand-made run button, search box, `<select>` or action bar is a second spelling of a slot.
 - The header's `actions` holds scope pickers only. Placing a picker does not authorize data.
 - A status the chosen scope carries goes inside its picker (`Combobox` `badge`), not beside it.
-- On a phone the hero is one line: title, description behind an info button, `actions` in a scrolling lane.
+- On a phone the hero is one line: title, description behind an info button, `actions` behind one button that opens them in a popover. They stay mounted while it is shut.
 
 ## The ⚡ menu
 

@@ -93,6 +93,7 @@
 						target="_blank"
 						rel="noreferrer"
 						download={f.name}
+						data-button
 						class="grid size-8 shrink-0 place-items-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
 						aria-label={`${t('Download')} ${f.name}`}
 						title={t('Download')}><Icon name="lucide:download" class="size-3.5" /></a
@@ -117,6 +118,7 @@
 					target="_blank"
 					rel="noreferrer"
 					download={f.name}
+					data-button
 					class="absolute right-1 bottom-1 grid size-6 place-items-center rounded-md bg-background/90 text-muted-foreground shadow-xs hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
 					aria-label={`${t('Download')} ${f.name}`}
 					title={t('Download')}><Icon name="lucide:download" class="size-3.5" /></a

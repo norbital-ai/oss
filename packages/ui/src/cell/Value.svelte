@@ -25,8 +25,8 @@
 	/** `ref`: a relation's target and label (`unref`), shown as a link opening that record (`?record=`); a many-relation
 	 * shows its first label and a "+N" chip listing the rest. The glyph tells one link from many.
 	 * `dense` (a table cell, a card): a structured value previews its fields and opens the same structured renderer.
-	 * `name` reaches a custom field's renderer. `link={false}` (a row's title, which opens the row itself) shows a relation as
-	 * text, so a tap on the title never lands on the related record instead. */
+	 * `name` reaches a custom field's renderer. `link={false}` (a row of a list, which opens the row's own record) shows a
+	 * relation as text, so a tap on a row never lands on the related record instead. */
 	let {
 		value,
 		kind,
@@ -167,7 +167,10 @@
 		>
 			<Glyph name="links" class="text-muted-foreground size-3 shrink-0" />
 			{@render link(ref.of, first.id, first.text)}
-			{#if rest.length > 0}
+			{#if rest.length > 0 && !linked}<span
+					class="bg-muted text-muted-foreground shrink-0 rounded-full px-1.5 text-xs leading-5 tabular-nums"
+					>+{rest.length}{ref.more ? '+' : ''}</span
+				>{:else if rest.length > 0}
 				<Popover.Root>
 					<Popover.Trigger
 						class="bg-muted text-muted-foreground hover:text-foreground shrink-0 rounded-full px-1.5 text-xs leading-5 tabular-nums max-sm:min-h-6"
@@ -225,6 +228,8 @@
 {:else if kind?.kind === 'text' && kind.format === 'markdown' && dense && typeof value === 'string'}
 	<!-- one line of a stored document: its text, the prose is the record's -->
 	{value}
+{:else if inspectable && !linked}
+	<span class="text-muted-foreground block max-w-full truncate">{preview(value, inspectKind)}</span>
 {:else if inspectable}
 	<Popover.Root>
 		<Popover.Trigger

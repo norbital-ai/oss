@@ -666,8 +666,6 @@
 	let waitingOutUpdate = $state(false);
 	// the sidebar on wide screens; on narrow ones ui's Drawer, which closes once its user navigates (owner rule)
 	const expanded = new PersistedState('workspace-shell.sidebar-expanded', true);
-	// the phone's top bar: a drawer expands up to its lower edge (`--shell-header-height`)
-	let headerHeight = $state(0);
 	let navOpen = $state(false);
 	/** What waits on the viewer, as the inbox last counted it (boot's count until then). */
 	let waiting = $state<number | null>(null);
@@ -699,7 +697,9 @@
 	const mobileTitle = $derived(
 		pageIdentity?.title ??
 			app?.label ??
-			model?.sections.flatMap((s) => s.items).find((i) => i.active)?.label ??
+			[...(model?.sections.flatMap((s) => s.items) ?? []), ...(model?.utilities ?? [])].find(
+				(i) => i.active
+			)?.label ??
 			boot?.workspace.name ??
 			''
 	);
@@ -1095,9 +1095,7 @@
 		? expanded.current
 			? '16rem'
 			: '3rem'
-		: '0px'}; --shell-header-height: {narrow.current && headerHeight > 0
-		? `${headerHeight}px`
-		: 'env(safe-area-inset-top)'}"
+		: '0px'}"
 >
 	{#if failure !== null}
 		<Access
@@ -1152,7 +1150,7 @@
 		<Center><p>{t('Loading…')}</p></Center>
 	{:else if boot.visitor !== null}
 		<!-- a visitor page: only its own app, no switcher, inbox, agent, settings or runs -->
-		<Cover as="main" class="min-h-dvh">
+		<Cover as="main" class="min-h-dvh pb-[env(safe-area-inset-bottom)]">
 			{@render content()}
 			{#if boot.visitor.siteKey !== undefined}
 				{#if challenge !== null}<Turnstile siteKey={boot.visitor.siteKey} queue={challenge} />{/if}
@@ -1160,13 +1158,15 @@
 		</Cover>
 	{:else if portal}
 		<Toaster />
-		<div class="relative h-dvh min-h-0 overflow-clip">{@render content()}</div>
+		<div
+			class="relative h-dvh min-h-0 overflow-clip pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)]"
+		>
+			{@render content()}
+		</div>
 	{:else}
 		{#snippet navigation(open: boolean)}
 			<Nav
-				{api}
 				pinned={device.pinned === true}
-				push={boot?.push ?? null}
 				model={model!}
 				expanded={open}
 				mobile={narrow.current}
@@ -1241,7 +1241,7 @@
 			<main class="flex min-h-0 min-w-0 flex-1 flex-col overflow-clip bg-background">
 				{#if narrow.current}
 					<!-- the phone's one top bar: navigation, the open app's identity over its banner, the bell, Norbius, then the page's scope -->
-					<div class="shrink-0" bind:offsetHeight={headerHeight}>
+					<div class="shrink-0">
 						<AppHeader
 							compact
 							src={hero?.src ?? null}

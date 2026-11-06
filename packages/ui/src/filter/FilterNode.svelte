@@ -874,6 +874,15 @@
 		width: 1.5rem;
 		height: 1.75rem;
 	}
+	/* their 44px floors must not overlap: Remove sits on top, and a tap on Compare would delete the rule */
+	@media (pointer: coarse) {
+		.condition-controls {
+			padding-right: 5.5rem;
+		}
+		.condition-controls > .rule-more {
+			right: 2.75rem;
+		}
+	}
 	@media (hover: hover) and (pointer: fine) {
 		.rule-more,
 		.filter-remove,

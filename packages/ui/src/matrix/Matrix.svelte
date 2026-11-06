@@ -49,6 +49,7 @@ A grid of `rows` records by `cols` values (dates or a relation) whose cells hold
 	import { fork } from '../effect/index.js';
 	import { SvelteMap } from 'svelte/reactivity';
 	import { Button } from '../primitives/button/index.js';
+	import { coarsePointer } from '../primitives/utils.js';
 	import { virtualList } from '../primitives/virtual/virtual.svelte.js';
 	import { openRecord } from '../record/navigation.js';
 	import { useBolt } from '../client/context.js';
@@ -185,7 +186,8 @@ A grid of `rows` records by `cols` values (dates or a relation) whose cells hold
 	let creating = $state<{ readonly [field: string]: Json } | null>(null);
 	let notice = $state<string | null>(null);
 	function click(e: MouseEvent, rid: string, c: Json, filled: boolean) {
-		if (selection.length > 0 && (e.shiftKey || e.metaKey || e.ctrlKey)) {
+		// a finger has no modifier keys: its plain tap picks
+		if (selection.length > 0 && (e.shiftKey || e.metaKey || e.ctrlKey || coarsePointer.current)) {
 			const k = cellKey(rid, c);
 			if (picked.has(k)) picked.delete(k);
 			else picked.set(k, { row: rid, col: c });
@@ -252,11 +254,13 @@ A grid of `rows` records by `cols` values (dates or a relation) whose cells hold
 							)}
 				</div>
 			{/if}
-			<div class="min-h-0 flex-1 overflow-auto rounded-md border">
+			<!-- at 30rem, 40cqw is the column's 12rem: a narrower port gives the columns the rest of its width -->
+			<div class="@container min-h-0 flex-1 overflow-auto rounded-md border">
 				<table class="border-separate border-spacing-0 text-sm" style="table-layout:fixed">
 					<thead>
 						<tr>
-							<th class="bg-background sticky top-0 left-0 z-20 w-48 border-b p-1 text-left"
+							<th
+								class="bg-background sticky top-0 left-0 z-20 w-[min(12rem,40cqw)] border-b p-1 text-left @max-[30rem]:max-w-[40cqw]"
 								>{label(bolt, rows)}</th
 							>
 							{#each columns as c (JSON.stringify(c.value))}
@@ -279,7 +283,8 @@ A grid of `rows` records by `cols` values (dates or a relation) whose cells hold
 						{#each grid.slice(pageRows) as r (r['id'])}
 							{@const rid = r.id}
 							<tr {@attach grid.measure(rid)}>
-								<th class="bg-background sticky left-0 z-10 border-b p-1 text-left font-normal"
+								<th
+									class="bg-background sticky left-0 z-10 border-b p-1 text-left font-normal @max-[30rem]:max-w-[40cqw] @max-[30rem]:[overflow-wrap:anywhere]"
 									><Value value={valueAt(r, rowLabel)} /></th
 								>
 								{#each columns as c (JSON.stringify(c.value))}

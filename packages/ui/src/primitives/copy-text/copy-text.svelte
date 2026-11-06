@@ -64,7 +64,7 @@ A readonly value as selectable text, with a copy button on hover or focus (alway
 			onclick={copy}
 			aria-label={t('copy')}
 			title={t('copy')}
-			class="inline-flex size-5 shrink-0 cursor-pointer items-center justify-center rounded-sm text-muted-foreground opacity-0 transition-opacity group-hover/copy:opacity-100 hover:bg-accent hover:text-foreground focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none [@media(hover:none)]:opacity-100"
+			class="relative inline-flex size-5 shrink-0 cursor-pointer items-center justify-center rounded-sm text-muted-foreground opacity-0 transition-opacity [--hit-target:0px] group-hover/copy:opacity-100 before:absolute before:-inset-2.5 hover:bg-accent hover:text-foreground focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none [@media(hover:none)]:opacity-100"
 		>
 			<Icon icon={copied ? 'lucide:check' : 'lucide:copy'} class="size-3.5" />
 		</button>

@@ -1313,7 +1313,7 @@ const pointer = (path: string, key: string | number) =>
 	/* Pair columns follow the pane's width; editors keep their full-width rows. */
 	.structured-fields-compact {
 		display: grid;
-		grid-template-columns: repeat(auto-fit, minmax(min(100%, 16rem), 1fr));
+		grid-template-columns: repeat(auto-fit, minmax(min(100%, clamp(9rem, 50% - 8px, 16rem)), 1fr));
 		gap: 8px 16px;
 		padding-block: 4px;
 	}
