@@ -123,8 +123,8 @@ inspection supply details. Mutations use the same guarded catalogue as pages. Pl
 confirmation, delegation, skills and MCP do not confer extra data authority.
 
 File ingest is a job using one converter path. Documents become sanitized HTML and images;
-structured data becomes typed JSON and images. Scans remain images; the parser does not silently
-use another model's OCR. Audio transcription is performed by the converter when its audio model
+structured data becomes typed JSON and images. A host may read a scanned page with a vision model and
+add its transcript beside the page's image (`data-read`). Audio transcription is performed by the converter when its audio model
 is configured. Jobs outlive a turn and completion can wake the conversation. Numbered windows,
 table boundaries and cached outputs constrain rereads. See [Documents](./documents.md).
 

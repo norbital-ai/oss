@@ -1,7 +1,7 @@
 /// <reference types="node" />
 // The artifact's `client/**`: an internal SPA whose main-thread module graph initializes before admission, and a
 // shared Vite/Svelte multi-entry graph for server-rendered public routes. Each public entry reaches its requested
-// page, shared wrapper and codec; the internal shell, agent, Studio and session registry remain in the private SPA.
+// page, shared wrapper and codec; the internal shell, agent and session registry remain in the private SPA.
 // The SPA imports the shell, Bolt's page entries, ui, svelte and effect from the platform layer (`platform.ts`, under
 // `client/assets/platform/`), the same bytes in every artifact on this Bolt, and bundles only the workspace's code.
 // There is no template Vite config (§3.2: `vite.config.ts` is deleted with no successor). Runtime assets live in the

@@ -23,6 +23,7 @@ import {
 	type Applied,
 	type MigrationFile,
 	type MigrationLock,
+	type SchemaObject,
 	type SchemaSpec
 } from '@norbital-ai/store';
 import type { TenantDbShape } from '../db/tenant-db.ts';
@@ -30,7 +31,9 @@ import type { Rows, Sql } from '../contracts.ts';
 import type { EngineManifest } from '../manifest.ts';
 import type { DbError } from '../errors.ts';
 import { BoltError, fromStore } from '../../protocol/errors.ts';
-import { engineOwned, engineOwns } from './engine.ts';
+import { auditTriggers } from './audit.ts';
+import { engineOwned, engineOwns, sourceObjects } from './engine.ts';
+import { historySchemaObjects } from './history.ts';
 import { engineBeside, fingerprint, schemaSlice } from './plan.ts';
 import { impactText, type MigrationImpact } from '../../protocol/migration-impact.ts';
 
@@ -46,6 +49,18 @@ export const migrationSchema = (manifest: EngineManifest): SchemaSpec => {
 	const { tables, tz, currency } = schemaSlice(manifest);
 	return { tables, tz, currency };
 };
+
+/** What a generated migration keeps beside a schema's tables: these exact native triggers are source definitions, including every historical prefix's own arguments. */
+export const migrationObjects = (schema: SchemaSpec): readonly SchemaObject[] =>
+	Object.values(schema.tables).some(
+		(table) => table.nativeRules !== undefined && table.audit === true
+	)
+		? [
+				...sourceObjects(),
+				...historySchemaObjects(schema.tables, schema.currency),
+				...auditTriggers(schema.tables)
+			]
+		: [];
 
 /** Exact engine registry exclusions; an unexpected user object is never hidden by a name prefix. */
 export const migrationLines = (

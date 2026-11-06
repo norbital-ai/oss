@@ -128,10 +128,14 @@ const HOST_TOOLS = [
 	'http',
 	'reference',
 	'web_search',
+	'workspace_commit',
 	'workspace_diagnose',
+	'workspace_edit',
 	'workspace_lang',
+	'workspace_move',
+	'workspace_preview',
 	'workspace_review',
-	'workspace_validate',
+	'workspace_test',
 	'workspace_write'
 ] as const;
 

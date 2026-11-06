@@ -34,16 +34,10 @@ import { BoltRoutes } from '../src/protocol/http.ts';
 import { activeApp, media, navigationModel } from '../src/shell/model.ts';
 import { fileAttachments } from '../src/engine/agent/attachments.ts';
 import {
-	dirtyFolders,
-	foldPhase,
 	languageOf,
-	reach,
 	routedEnvironment,
-	settleDrafts,
-	stepLabel,
 	StudioOp,
 	studioView,
-	mergeDraft,
 	suggestMessage,
 	type StudioState
 } from '../src/shell/studio/model.ts';
@@ -1172,36 +1166,28 @@ describe('Studio port boundary', () => {
 	});
 	it('decodes current change operations and refuses incomplete input', () => {
 		expect([
-			decodeOp({ op: 'change.open', title: 'Leave rules' }),
 			decodeOp({ op: 'change.open', id: '3' }),
 			decodeOp({ op: 'preview' }),
 			decodeOp({ op: 'preview', id: '3' }),
-			decodeOp({ op: 'change.close', id: '3' })
+			decodeOp({ op: 'change.rebase' }),
+			decodeOp({ op: 'change.revert', commit: 'c0ffee' })
 		]).toEqual([
-			{ op: 'change.open', title: 'Leave rules' },
 			{ op: 'change.open', id: '3' },
 			{ op: 'preview' },
 			{ op: 'preview', id: '3' },
-			{ op: 'change.close', id: '3' }
+			{ op: 'change.rebase' },
+			{ op: 'change.revert', commit: 'c0ffee' }
 		]);
-		expect(decodeOp({ op: 'change.open', title: 'x'.repeat(300) })).toEqual({
-			op: 'change.open',
-			title: 'x'.repeat(200)
-		});
 		expect([
 			decodeOp({ op: 'change.open' }),
-			decodeOp({ op: 'change.open', title: '' }),
-			decodeOp({ op: 'change.close' }),
+			decodeOp({ op: 'change.open', title: 'Leave rules' }),
+			decodeOp({ op: 'change.close', id: '3' }),
+			decodeOp({ op: 'change.revert' }),
 			decodeOp({ op: 'preview', id: '' }),
 			decodeOp({ op: 'preview', id: 3 })
-		]).toEqual([null, null, null, null, null]);
+		]).toEqual([null, null, null, null, null, null]);
 	});
-	it('marks every ancestor folder of a draft, and edits a path in its language (L-BOLT-528)', () => {
-		expect([...dirtyFolders(['src/app/x/+app.ts', 'README.md'])]).toEqual([
-			'src/',
-			'src/app/',
-			'src/app/x/'
-		]);
+	it('edits a path in its language (L-BOLT-528)', () => {
 		expect(['a.ts', 'b.svelte', 'c.json', 'd.md'].map(languageOf)).toEqual([
 			'javascript',
 			'javascript',
@@ -1326,37 +1312,6 @@ describe('Studio port boundary', () => {
 			})
 		).toMatchObject({ sections: null });
 	});
-	it('keeps an edit made while its save was in flight, and drops what the save landed (L-BOLT-529)', () => {
-		const saved = { 'src/a.ts': 'two', 'src/b.ts': 'two', 'src/c.ts': null };
-		const drafts = { 'src/a.ts': 'three', 'src/b.ts': 'two', 'src/c.ts': null, 'src/d.ts': 'new' };
-		expect(settleDrafts(drafts, saved)).toEqual({ 'src/a.ts': 'three', 'src/d.ts': 'new' });
-	});
-	it('folds pushed phases diagnose → preview → merge; a phase starting again clears the later ones (L-BOLT-530)', () => {
-		let p = foldPhase({}, 'diagnose', 'running');
-		p = foldPhase(
-			foldPhase(foldPhase(p, 'diagnose', 'done'), 'preview', 'running'),
-			'preview',
-			'done'
-		);
-		expect(p).toEqual({ diagnose: 'done', preview: 'done' });
-		expect(foldPhase(foldPhase(p, 'merge', 'failed'), 'diagnose', 'running')).toEqual({
-			diagnose: 'running'
-		});
-		expect(foldPhase(p, 'preview', 'running')).toEqual({ diagnose: 'done', preview: 'running' });
-	});
-	it('moves the progress strip only forward within a run: an earlier phase never takes it back', () => {
-		const steps = (['diagnose', 'merge', 'diagnose', 'preview'] as const).reduce<number[]>(
-			(seen, phase) => [...seen, reach(seen.at(-1) ?? -1, phase)],
-			[]
-		);
-		expect(steps.map(stepLabel)).toEqual([
-			'Building…',
-			'Switching over…',
-			'Switching over…',
-			'Switching over…'
-		]);
-		expect(stepLabel(-1)).toBe('Getting ready…');
-	});
 	it('suggests a save description from the drafts; a save carries it as its message', () => {
 		const files = {
 			'src/i18n/+messages.ts': { bytes: 0 },
@@ -1367,15 +1322,6 @@ describe('Studio port boundary', () => {
 			'Remove payroll model, Add notes'
 		);
 		expect(suggestMessage({ a: '1', b: '2', c: '3' }, {})).toBe('Add a and 2 more files');
-		// a merge request's draft: what its commits say, the host's own left out
-		expect(mergeDraft({ title: 'Leave', commits: ['Add accrual'] })).toBe('Add accrual');
-		expect(
-			mergeDraft({
-				title: 'Leave',
-				commits: ['Add accrual', 'Merge live into Leave', 'Fix rounding']
-			})
-		).toBe('Leave: Add accrual; Fix rounding');
-		expect(mergeDraft({ title: 'Leave', commits: ['generate the next migration'] })).toBe('Leave');
 		expect(
 			decodeOp({ op: 'save', expected: 'c', files: {}, message: 'Fix the label' })
 		).toMatchObject({ message: 'Fix the label' });

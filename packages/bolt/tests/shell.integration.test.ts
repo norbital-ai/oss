@@ -157,6 +157,7 @@ const inspectionScopes: StudioInspectInput[] = [];
 const branded: { name: string; logo: string | null }[] = [];
 const studio: StudioPort = {
 	state: async () => studioState,
+	bundle: async () => '/__host/studio.js',
 	run: async (_auth, op) => {
 		if (op.op === 'save' && op.expected !== studioState.commit)
 			throw BoltError.make('conflict', 'decode', 'The workbench moved; reload it.');
@@ -403,6 +404,7 @@ layer(workspace)('shell routes', (it) => {
 						admin: true,
 						name: 'Boss',
 						surfaces: { inbox: true, runs: true, settings: true, agent: true, studio: true },
+						studioBundle: '/__host/studio.js',
 						visitor: null
 					});
 					expect(b.nav.map((n) => n.name)).toEqual(['sales', 'careers']);

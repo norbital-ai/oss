@@ -26,8 +26,8 @@ that needs sign-in (an `external` or `all` app, a kiosk whose auth is not `none`
 `303` to `/sign-in?next=<path>`, which signs in or signs up and returns.
 
 Each route has an independent browser entry and CSS built from its own transitive dependencies.
-It does not warm the internal workspace or import unrelated pages, app sessions, Norbius or
-Studio. Shared components and ordinary helpers that the page actually imports remain part of
+It does not warm the internal workspace or import unrelated pages, app sessions or Norbius.
+Shared components and ordinary helpers that the page actually imports remain part of
 its graph. The public wrapper supplies UI, translation, file and caller context without the
 internal navigation shell.
 

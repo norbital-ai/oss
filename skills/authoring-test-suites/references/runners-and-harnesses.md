@@ -34,7 +34,7 @@ Add no browser launcher or `.svelte` mounts to templates. Never give a suite its
 
 - Named instances are `connections`; seed unnamed ones as `sys_integration` rows or create them.
 - Inbound conversation: `t.receive('<slot>', message)` ingests and waits for queued work.
-- Remote reads: `t.syncs.read('<model>.sync.<sync>', { instance })`; set `t.fakes.links.answer` or `.page`. Assert rows, cursor and a repeated read.
+- Remote reads: `t.syncs.read('<model>.sync.<sync>', { instance })`; set `t.fakes.links.answer` or `.page`. `answer(instance, op)` answers `{ status, body }`, `body` the decoded value `ctx.request` yields; `op` is the request as made. Assert rows, cursor and a repeated read.
 - Queued writes: `t.syncs.deliver()` drains the outbox; sends appear in `t.fakes.links.sent`. Read the row's `$sync['<sync>']` status.
 - File syncs: `t.as(member).start('<model>.sync.<sync>', input)` after `upload('<model>.$import.<sync>', file)`; `t.runDue()` executes. Decode the `sys_run` output; resolve that run's exact file through `sys_file` and `t.fakes.files.blobs`.
 - Read a run through `t.db.rows`; `Sql` is a plain `{ text, params }` value.

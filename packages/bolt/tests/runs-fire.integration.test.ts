@@ -45,6 +45,8 @@ const manifest = {
 		erp: {
 			description: 'An ERP database',
 			driver: 'sqlserver',
+			// a fake remote is never paced: a test's clock would not wake the wait, and the test would hang
+			rate: '1/h',
 			credential: { connection: { kind: 'text' } }
 		},
 		desk: { description: 'The desk', driver: 'whatsapp' },

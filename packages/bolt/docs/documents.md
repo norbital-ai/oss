@@ -37,7 +37,7 @@ The agent reads every document through one path (plan 12): `read_file { id }` se
 port, which answers one of two kinds. A `document` (pdf, office, html, text, images, audio) is sanitised HTML (one block
 element per line; tables keep `colspan`, `rowspan` and nesting; `<section data-page|data-slide>` per page or slide) plus
 its images. `data` (xlsx, xls, ods, csv, tsv, json) is its typed cells, `{ sheets: [{ name, columns, rows, merges?,
-images? }] }` (a `.json` file: its own parsed value), plus its images. Parsing only, never OCR: a scan is its page images, shown to the model whole with four overlapping quarters when a read
+images? }] }` (a `.json` file: its own parsed value), plus its images. Parsing only, never OCR, though a host may write a scanned page's transcript under its image (a `data-read` section). A scan with none is its page images, shown to the model whole with four overlapping quarters when a read
 opens at most three pages, because a whole page reaches a vision model too small for digits.
 Images and plain text are ingested in the engine as themselves; audio (and a video's audio track) goes to the same port, whose diarised transcript is
 one `<section data-speaker data-start data-end><time>…</time> …</section>` per segment. A format with no parser (CAD)

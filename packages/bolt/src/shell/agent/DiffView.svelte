@@ -1,6 +1,6 @@
 <!--
 	A source edit as a unified diff: a path header per file, then its context, removed and added lines.
-	The model's tool result carries the compact diff; the panel only colours it.
+	The step's call carries the compact diff, never the model's answer; the panel only colours it.
 -->
 <script lang="ts">
 	import type { Json } from '../../decl/values.ts';

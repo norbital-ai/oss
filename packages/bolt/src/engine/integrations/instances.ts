@@ -363,14 +363,15 @@ export const instanceRequest = (
 					};
 		// every request waits its turn under the definition's `rate`, and after a provider's `Retry-After`
 		const pace = paceOf(cfg.db, to),
+			rate = cfg.links.unpaced === true ? undefined : instance.definition.rate,
 			now = yield* Clock.currentTimeMillis;
 		let start = Math.max(now, pace.next, pace.blocked);
-		pace.next = start + spacing(instance.definition.rate);
+		pace.next = start + spacing(rate);
 		for (;;) {
 			const current = yield* Clock.currentTimeMillis;
 			if (pace.blocked > start) {
 				start = Math.max(pace.blocked, pace.next);
-				pace.next = start + spacing(instance.definition.rate);
+				pace.next = start + spacing(rate);
 			}
 			if (start <= current) break;
 			yield* Effect.sleep(start - current);
@@ -426,7 +427,11 @@ export const instanceRequest = (
 			);
 		const res = yield* Schema.decodeUnknownEffect(HttpResponse)(got.success).pipe(
 			Effect.mapError(() =>
-				BoltError.make('upstream', 'facility', 'The request answered an invalid response.')
+				BoltError.make(
+					'upstream',
+					'facility',
+					'The request answered an invalid response: a driver answers { status, body }.'
+				)
 			)
 		);
 		if ((res.status === 429 || res.status === 503) && res.retryAfter !== undefined)

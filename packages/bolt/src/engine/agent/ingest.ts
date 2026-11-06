@@ -1,5 +1,5 @@
 // Plan 12: every file the agent reads is one canonical form, sanitised HTML (one block element per line) and its images,
-// made by the host's ingest port (Norbital Convert): parsing only, never OCR, no reader here; audio is Convert's diarised
+// made by the host's ingest port (Norbital Convert, and the host's transcript of a scanned page): no reader here; audio is Convert's diarised
 // transcript, and a spreadsheet, CSV or JSON is `data` (typed cells, no HTML). An image is its own `<img>` and plain text
 // its own lines. This module routes a file, renders those two, derives a document's index and an audio transcript from
 // its HTML, keeps the shared cache (`ingest/<sha256>/…` in the file store) and windows a stored ingest by line.

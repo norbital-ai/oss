@@ -460,7 +460,7 @@ export type IngestImage = {
 	readonly bytes: Uint8Array;
 };
 /**
- * Plan 12, Norbital Convert's ingest: parsing only, never OCR. A `document` (pdf, office, html, text, images, audio) is
+ * Plan 12, Norbital Convert's ingest: parsing only, never OCR; a host may add a scanned page's transcript under its image in a `data-read` section. A `document` (pdf, office, html, text, images, audio) is
  * sanitised HTML, one block element per line (audio: one `<section data-speaker data-start data-end>` per segment); `data`
  * (a spreadsheet, CSV or JSON) is its cells as `{ sheets }`, or a JSON file's own value. `images` are referenced by name.
  */
@@ -503,8 +503,8 @@ export type AiRequest = {
 	messages: readonly AiMessage[];
 	tools?: readonly { name: string; description: string; input: Json }[];
 	output?: Json;
-	/** The call's reasoning effort: the agent's steps run at `medium`, a utility call may ask `low`. */
-	effort?: 'low' | 'medium';
+	/** The call's reasoning effort: an agent step gathers at `none` and decides at `medium`, a utility call may ask `low`. */
+	effort?: 'none' | 'low' | 'medium';
 	/** Images and documents for the model to see; `call` is the tool call that opened one, which it follows. */
 	files?: readonly { mime: string; bytes: Uint8Array; call?: string }[];
 	continuation?: string;

@@ -177,7 +177,7 @@
 		<Inline
 			gap="sm"
 			justify="between"
-			class={cn('relative min-h-11 py-0.5', leading === undefined && 'pl-2')}
+			class={cn('relative min-h-11 py-0.5', leading === undefined && 'pl-4 sm:pl-6')}
 		>
 			{#if leading}<Inline gap="none" class={cn(onScrim)}>{@render leading()}</Inline>{/if}
 			<Inline gap="xs" size="fill" class="min-w-24">{@render identity()}</Inline>

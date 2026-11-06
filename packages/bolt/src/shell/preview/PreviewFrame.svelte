@@ -15,7 +15,7 @@
 	import type { Snippet } from 'svelte';
 	import { elapsedText } from '../studio/model.ts';
 	import type { StudioTestRun } from '../studio/test-results.ts';
-	import TestResults from '../studio/TestResults.svelte';
+	import TestResults from './TestResults.svelte';
 
 	let {
 		src,
@@ -193,6 +193,7 @@
 
 <Stack gap="none" size="fill">
 	<TabStrip
+		class="px-4"
 		label={t('Preview panels')}
 		value={pane}
 		onValueChange={(value) => (pane = value)}
@@ -209,8 +210,8 @@
 			}
 		]}
 	/>
-	<Inline gap="xs" class="h-9 border-b border-border/60 px-2 text-micro text-muted-foreground">
-		<strong class="min-w-0 truncate px-1 text-xs font-medium text-foreground"
+	<Inline gap="xs" class="h-9 border-b border-border/60 px-4 text-micro text-muted-foreground">
+		<strong class="min-w-0 truncate text-xs font-medium text-foreground"
 			>{label ?? t('Preview')}</strong
 		>
 		{#if pane === 'preview'}

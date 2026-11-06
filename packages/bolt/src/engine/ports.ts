@@ -263,14 +263,11 @@ export class WebRead extends Context.Service<
 }
 /** A browser tab as a scoped resource: close it when the scope ends, never leave it to an idle timer alone. */
 export type BrowserSession = {
-	readonly navigate: (
-		to: BrowserTarget,
-		find?: string
-	) => Effect.Effect<Json, PortFailure>;
-	readonly snapshot: (options: { readonly find?: string; readonly from?: number }) => Effect.Effect<
-		Json,
-		PortFailure
-	>;
+	readonly navigate: (to: BrowserTarget, find?: string) => Effect.Effect<Json, PortFailure>;
+	readonly snapshot: (options: {
+		readonly find?: string;
+		readonly from?: number;
+	}) => Effect.Effect<Json, PortFailure>;
 	readonly act: (steps: readonly BrowserStep[]) => Effect.Effect<Json, PortFailure>;
 	readonly evaluate: (expression: string) => Effect.Effect<Json, PortFailure>;
 	readonly screenshot: () => Effect.Effect<Uint8Array, PortFailure>;
@@ -294,9 +291,7 @@ export class Browser extends Context.Service<
 		/** Close this tab now; the profile's sealed sign-ins stay for its next open. Absent when the host cannot close. */
 		readonly close?: (profile: string) => Effect.Effect<void, PortFailure>;
 		/** A tab whose finalizer closes it: the one way a run or a caller keeps browser hygiene. */
-		readonly scoped: (
-			profile: string
-		) => Effect.Effect<BrowserSession, PortFailure, Scope.Scope>;
+		readonly scoped: (profile: string) => Effect.Effect<BrowserSession, PortFailure, Scope.Scope>;
 		readonly snapshot: (
 			profile: string,
 			options: { readonly find?: string; readonly from?: number }
@@ -377,9 +372,7 @@ export class Browser extends Context.Service<
 					() =>
 						close === undefined
 							? Effect.void
-							: Port.attempt('browser', (signal) => close(profile, signal)).pipe(
-									Effect.ignore
-								)
+							: Port.attempt('browser', (signal) => close(profile, signal)).pipe(Effect.ignore)
 				)
 		});
 	}
@@ -552,6 +545,8 @@ export class Drivers extends Context.Service<
 			to: string,
 			on: boolean
 		) => Effect.Effect<void, PortFailure>;
+		/** A fake remote: it has no provider for a definition's `rate` to protect, and a test's clock would never wake the wait. */
+		readonly unpaced?: true;
 		readonly request: (instance: string, op: Json) => Effect.Effect<Json, PortFailure | Fenced>;
 		readonly read: (
 			instance: string,

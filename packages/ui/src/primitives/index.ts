@@ -5,6 +5,8 @@ export * as Accordion from './accordion/index.js';
 export * as Alert from './alert/index.js';
 /** A modal dialog: `Dialog.Root`, its `Trigger`, and `Content` with a header, title, description and footer. */
 export * as Dialog from './dialog/index.js';
+/** Where the portals beneath it land: a mount with its own stylesheet keeps its floating content under it. */
+export { BitsConfig } from 'bits-ui';
 /** An in-app confirmation (never `window.confirm`, which WebViews suppress): an Effect answering whether it was confirmed. */
 export { confirmAction, type ConfirmOptions } from './dialog/confirm.js';
 /** Floating content anchored to a trigger: `Popover.Root`, `Popover.Trigger`, `Popover.Content`. */

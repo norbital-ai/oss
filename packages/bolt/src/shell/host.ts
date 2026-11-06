@@ -774,6 +774,9 @@ const makeShell = Effect.gen(function* () {
 		const [runtimeEnvoys] = yield* h.db.read([
 			{ text: 'SELECT id, name FROM sys_envoy WHERE active ORDER BY name, id', params: [] }
 		]);
+		const bundlePort = c.studio?.bundle?.bind(c.studio);
+		const studioBundle =
+			s.studio && bundlePort !== undefined ? yield* hostCall(() => bundlePort()) : null;
 		const b: ShellBoot = {
 			...bootFor(m, ws, auth, c.studio !== undefined),
 			name: Option.getOrNull(user)?.name ?? null,
@@ -784,6 +787,7 @@ const makeShell = Effect.gen(function* () {
 			...(c.ai === false ? { aiUnconfigured: true as const } : {}),
 			...(notice === null ? {} : { notice }),
 			...(c.client === undefined ? {} : { client: c.client }),
+			...(studioBundle === null ? {} : { studioBundle }),
 			...(workspaces.length === 0 ? {} : { workspaces }),
 			envoys: Object.fromEntries([
 				...Object.entries(m.envoys).map(([key, envoy]) => [key, envoy.name] as const),

@@ -111,9 +111,10 @@ export { assignTeam, membershipRun } from './identity/members.ts'; // Source-tea
 export { MEMBERSHIP } from './identity/session.ts';
 /** Host control-plane identity reads use the system table contract without loading a tenant artifact or guest. */
 export { directory as memberDirectory } from './identity/maintenance.ts';
-export { applyPlan, plan, readApplied } from './schema/plan.ts'; // hook:hosting — Appendix D values (rule 69 activation)
+export { applyPlan, managedTables, plan, readApplied } from './schema/plan.ts'; // hook:hosting — Appendix D values (rule 69 activation)
 export {
 	applyMigrations,
+	migrationObjects,
 	migrationSchema,
 	readMigrations,
 	statusMigrations,
@@ -229,13 +230,8 @@ export {
 } from './filter-describe/index.ts';
 export { EnvoysLive, EnvoyConfig } from './envoys/index.ts';
 export { TurnsLive, TurnHandlers } from './agent/turns.ts';
-export {
-	TriageLive,
-	TriageService,
-	TRIAGE_DEBOUNCE,
-	TRIAGE_DEBOUNCE_MAX,
-	TRIAGE_MAX_WAITS
-} from './agent/triage.ts'; // hook:triage
+export { SmartThrottle, SmartThrottleLive, HOLD_MAX_MS, TAKEOVER_MS } from './agent/throttle.ts'; // hook:triage
+export { MessageQueue, SCHEDULED_RUN } from './agent/queue.ts';
 export {
 	isAutoReply,
 	isReported,

@@ -318,19 +318,23 @@ export function shellApi(
 				text: string,
 				now?: boolean,
 				attachments: readonly import('../decl/runtime/integration.ts').Attachment[] = [],
-				mode?: 'plan' | 'compact'
+				mode?: 'plan' | 'compact',
+				schedule?: string
 			) =>
 				act('sys_message.post', {
 					conversation,
 					text,
 					...(now === true ? { now } : {}),
 					...(attachments.length === 0 ? {} : { attachments: [...attachments] }),
-					...(mode === undefined ? {} : { mode })
+					...(mode === undefined ? {} : { mode }),
+					...(schedule === undefined ? {} : { schedule })
 				}),
 			pageResult: (message: string, result: PageResult) =>
 				act('sys_message.pageResult', { message, result }),
 			claimPageAction: (message: string) =>
 				act('sys_message.claimPageAction', { message }),
+			readAhead: (attachment: import('../decl/runtime/integration.ts').Attachment) =>
+				act('sys_message.readAhead', { attachment }),
 			/** hook:attachments — one panel attachment to `/__bolt/files/sys_conversation.inputs`: its `FileRef`, or the refusal. */
 			upload: (file: File) =>
 				transport
@@ -456,6 +460,8 @@ export function visitorFetch(
 /** `conversation`: the one to open (`null` a new one; absent: the one this tab last had), as `?agent=` names it. */
 export type AgentRequest = {
 	prompt?: string;
+	/** Sends `prompt` as soon as the panel has it, once for each value: a button asking on the person's behalf. */
+	send?: string;
 	about?: { model: string; id: string };
 	conversation?: string | null;
 };

@@ -17,7 +17,7 @@ A test fails for a named production defect. Choose the smallest level that can o
 3. Discover the kit: `keyof typeof import('@norbital-ai/bolt-cli/test')`, then its types through `workspace_lang`. Do not read `node_modules` or copy a remembered harness.
 4. Use small synthetic fixtures from the template's `seed/test/` or inline rows.
 5. Include one valid operation and one relevant refusal; assert persisted state, and that a refusal left data unchanged.
-6. Run through `workspace_validate { only: 'tests' }` or `bolt test`. Trust the exit code and the tested commit.
+6. Run through `workspace_test` or `bolt test`. Trust the exit code and the tested source.
 7. Fix a failure's cause; never raise a timeout or weaken an assertion to reach green.
 
 ## Routing

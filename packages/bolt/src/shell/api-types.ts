@@ -224,6 +224,7 @@ export const ShellBootAnswer: Schema.Decoder<ShellBoot> = Schema.Struct({
 		])
 	),
 	client: Schema.optionalKey(Schema.String),
+	studioBundle: Schema.optionalKey(Schema.String),
 	notice: Schema.optionalKey(
 		Schema.Struct({
 			text: Schema.String,
@@ -389,6 +390,9 @@ const StudioEntryAnswer = Schema.Array(
 );
 export const StudioViewAnswer: Schema.Decoder<StudioView> = Schema.Struct({
 	commit: Schema.String,
+	working: Optional,
+	tree: Optional,
+	diagnosis: Schema.optionalKey(Schema.Literals(['passed', 'failed'])),
 	tests: Schema.optionalKey(StudioTestRun),
 	message: Optional,
 	zone: Optional,
@@ -434,6 +438,7 @@ export const StudioViewAnswer: Schema.Decoder<StudioView> = Schema.Struct({
 	base: Optional,
 	behind: Schema.optionalKey(Schema.Number),
 	conflicts: Schema.optionalKey(Strings),
+	conflictNotes: Schema.optionalKey(Strings),
 	changeSets: Schema.optionalKey(
 		Schema.Array(
 			Schema.Struct({
@@ -446,6 +451,17 @@ export const StudioViewAnswer: Schema.Decoder<StudioView> = Schema.Struct({
 				base: Schema.String,
 				head: Schema.String,
 				commits: Schema.Array(Schema.String),
+				files: Schema.optionalKey(
+					Schema.Array(
+						Schema.Struct({
+							path: Schema.String,
+							change: Schema.Literals(['added', 'modified', 'deleted'])
+						})
+					)
+				),
+				history: Schema.optionalKey(
+					Schema.Array(Schema.Struct({ commit: Schema.String, message: Schema.String }))
+				),
 				behind: Schema.Number,
 				preview: Schema.NullOr(StudioPreviewAnswer),
 				merge: Schema.optionalKey(
@@ -688,7 +704,9 @@ export type ShellApi = {
 			text: string,
 			now?: boolean,
 			attachments?: readonly Attachment[],
-			mode?: 'plan' | 'compact'
+			mode?: 'plan' | 'compact',
+			/** Hold it: an ISO instant, or `finish` for when the running turn finishes. */
+			schedule?: string
 		): AgentAct;
 		/** The active tab writes back whether it performed a page action. */
 		pageResult(message: string, result: PageResult): AgentAct;
@@ -696,6 +714,7 @@ export type ShellApi = {
 		claimPageAction(message: string): AgentAct;
 		/** One panel attachment stored to `/__bolt/files/sys_conversation.inputs`. */
 		upload(file: File): Call<Required<Attachment>>;
+		readAhead(attachment: Attachment): Call<ActOutcome>;
 		respondNow(conversation: string): AgentAct;
 		confirm(message: string, approve: boolean): AgentAct;
 		setAgent(conversation: string, agent: string): AgentAct;

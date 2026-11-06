@@ -38,7 +38,7 @@ A provider emits two kinds of event, and the split happens in one place, `links.
 2. The provider verifies it and parses the platform's own shape into a `ChatMessage`.
 3. `ctx.emit` passes it to `Conversations.receive`, which stores it. Only after that does the provider acknowledge, so a refused store is redelivered.
 4. The engine routes it by `invocation`: `direct`, `mention`, `reply` or `ambient`.
-5. The envoy admits the sender, holds a burst until they go quiet, and runs a turn as itself with the sender's authority joined in.
+5. The envoy admits the sender, the smart throttle may hold a partial message for at most 3 s, once, or filter one in a group, and the envoy runs a turn as itself with the sender's authority joined in.
 6. The reply queues as an outbound row and leaves through `Drivers.send`, which reaches the provider's `send`.
 
 ## The sync pipeline

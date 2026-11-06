@@ -1,23 +1,39 @@
-import { openAiChat, type OpenAiChat, type OpenAiChatConfig } from '@norbital-ai/bolt/engine';
-import { Array as EffectArray } from 'effect';
+import {
+	openAiChat,
+	type AiRequest,
+	type OpenAiChat,
+	type OpenAiChatConfig
+} from '@norbital-ai/bolt/engine';
+import { Array as EffectArray, Hash } from 'effect';
 
 type DeepSeekRouting = {
 	readonly provider?: {
-		readonly sort: 'price';
+		readonly only: readonly string[];
+		readonly sort: 'latency';
 		readonly require_parameters: true;
-		readonly ignore: readonly string[];
 	};
 };
 
 /**
- * OpenRouter selects a compatible DeepSeek provider by price, subject to the account's privacy policy. A provider whose
- * prompt cache serves a stale context (the model cannot see the tool results it was just sent), or whose tool-call parser
- * drops string arguments (Morph answers `run_js { code, http: true }` as `{ "http": true }`), is never chosen.
+ * OpenRouter sorts once and the conversation stays, subject to the account's privacy policy. `only` holds the DeepSeek
+ * providers whose prompt cache read 99 to 100% across a conversation (others read 25 to 80%, or serve a stale context, or drop
+ * tool arguments), `sort` takes the fastest on the first step, and `session_id` keeps every later step there, where its
+ * prefix and cached price are, moving only if that provider fails.
  */
 export const deepSeekRouting = (endpoint: string, model: string): DeepSeekRouting =>
 	model.startsWith('deepseek/') && new URL(endpoint).hostname === 'openrouter.ai'
-		? { provider: { sort: 'price', require_parameters: true, ignore: ['open-inference', 'morph'] } }
+		? {
+				provider: {
+					only: ['together', 'relace/fast', 'deepinfra/fp8', 'baseten'],
+					sort: 'latency',
+					require_parameters: true
+				}
+			}
 		: {};
+
+/** What never changes in a conversation names it: a compaction starts a new prefix, nothing cached to lose, and sorts again. */
+export const sessionOf = (request: Pick<AiRequest, 'system' | 'messages'>) =>
+	String(Hash.string(`${request.system ?? ''}${JSON.stringify(request.messages[0])}`));
 
 /** Provider routing uses the resolved model, including a catalog id chosen instead of a configured class. */
 export const openRouterChat =
@@ -40,7 +56,7 @@ export const openRouterChat =
 					...config.body,
 					...(routing.provider === undefined
 						? {}
-						: { provider: { ...routing.provider, ...preferences } })
+						: { provider: { ...routing.provider, ...preferences }, session_id: sessionOf(request) })
 				}
 			},
 			options

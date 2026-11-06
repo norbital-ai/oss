@@ -39,7 +39,8 @@ import {
 	Http,
 	Images,
 	Logs,
-	Mcp
+	Mcp,
+	RunUnits
 } from '../ports.ts';
 import { TenantDb, type TenantDbShape } from '../db/tenant-db.ts';
 import type { WorkspaceNote } from '../notifications/notify.ts';
@@ -68,8 +69,10 @@ import { Unavailable, type FacilityFailure } from '../../decl/errors.ts';
 import { type EngineError } from '../errors.ts';
 import { BoltError } from '../../protocol/errors.ts';
 import type { PageResult } from '../../protocol/schema.ts';
-import { TurnHandlers } from './turns.ts';
-import { attachmentsFor, fileAttachments } from './attachments.ts';
+import { enqueueTurn, TURN_LEASE_MS, TURN_RUN, TurnHandlers } from './turns.ts';
+import { MessageQueue, messageQueue, SCHEDULED_RUN } from './queue.ts';
+import { attachmentsFor, fileAttachments, triageAttachments } from './attachments.ts';
+import { route } from './ingest.ts';
 import { Chain } from '../write/sql.ts';
 import { enqueue, nextDue } from '../runs/queue.ts';
 import { envoySpec } from '../envoys/spec.ts';
@@ -195,6 +198,7 @@ export type AgentConfig = {
 	resolve?: (as: As) => Effect.Effect<Authority | null, EngineError>;
 	mcp?: McpHost;
 	attachments?: AttachmentPort;
+	media: { files: Files['Service']; images: Images['Service']; convert: Convert['Service'] };
 	geocoder?: Geo['Service'];
 	/** The published source used when there is no authoring tree; a host reads it from the artifact (`workspaceFiles`). */
 	workspace?: WorkspacePort;
@@ -235,6 +239,8 @@ export type AgentConfig = {
  */
 class Unusable extends Schema.TaggedError<Unusable>()('Unusable', { message: Schema.String }) {}
 const AI_GAUGE_USD = 5;
+/** Tools whose answers a next step decides on: past these the step reasons. */
+const DECIDES: ReadonlySet<string> = new Set(['read', 'act', 'run_js']);
 export const AGENT_LIMITS = {
 	/** Checkpoints in a row with no model step between them: compaction that frees nothing stops here. */
 	compactions: 3,
@@ -249,13 +255,12 @@ export const AGENT_LIMITS = {
 	discoveryNudge: 5,
 	discoveryPause: 12,
 	failingSteps: 4,
-	leaseMs: 180000,
+	leaseMs: TURN_LEASE_MS,
 	heartbeatMs: 60000,
 	/** The newest workspace events one step hears; older unheard ones are dropped. */
 	eventsHeard: 10
 } as const;
 /** The platform run that takes over a turn whose lease lapsed (rule 48). */
-export const TURN_RUN = 'agent.turn';
 const MIB = 1_048_576;
 /** This host process's RAM at a step boundary, for the `ai.call` observation; absent off Node. */
 const memoryOf = (): {
@@ -373,6 +378,7 @@ export function rest(name: string, call: string, result: Json): string[] {
 }
 /** Steps whose every tool call failed, and an empty reply, are told this before the turn ends visibly. */
 export const NUDGE = {
+	red: 'Your last checks all failed. Stop editing and rerunning: read the failure, look up the contract you are guessing at, or tell the person plainly what blocks you.',
 	failing:
 		'Your last tool calls all failed. Do not repeat them: answer the person now with what you have, or tell them plainly what blocks you.',
 	empty:
@@ -399,6 +405,7 @@ export const FIXED = {
 		'Sorry, I could not finish that: something went wrong on my side. Please send it again in a moment.',
 	unavailable: 'The assistant is not available to you here.',
 	stale: 'I could not act for this message: its sender no longer has access.',
+	red: 'I stopped here: the checks kept failing after several attempts, so the change is not finished. Tell me what to try next.',
 	stuck:
 		'I stopped here: the data this needs kept failing to load, so I have no answer. Try rephrasing, or ask me what data is available.',
 	empty: 'I could not put an answer together for this request. Please try again or rephrase it.',
@@ -653,31 +660,14 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 		);
 		return id;
 	});
-	const post = Effect.fn('Agents.post')(function* (o: Parameters<AgentsShape['post']>[0]) {
-		// a follow-up in a stopped conversation runs; the stopped turn's cancelled inputs stay cancelled (L-BOLT-408)
-		// an untitled conversation is named by its first message (the panel's list)
-		yield* convChanged(
-			q(
-				`UPDATE sys_conversation AS c SET status = CASE WHEN status = 'stopped' THEN 'idle' ELSE status END, title = coalesce(title, left($2, 80))
-			WHERE id = $1 AND (status = 'stopped' OR title IS NULL) RETURNING to_jsonb(c) AS r`,
-				o.conversation,
-				o.text
-			)
-		);
-		const row = yield* insert({
-			conversation: o.conversation,
-			role: 'user',
-			content: { text: o.text, ...(o.tz === undefined ? {} : { tz: o.tz }) },
-			text: o.text,
-			state: 'queued',
-			mode: o.mode ?? 'agent',
-			as: o.as,
-			author: o.author ?? null,
-			supersedes: o.supersedes ?? null,
-			...(o.files === undefined ? {} : { files: o.files })
-		});
-		return row;
+	const queue = yield* messageQueue({
+		db,
+		publish: e.live.publish,
+		now: config.bindings.pipe(Effect.map((b) => b.now)),
+		announce: (at) => config.announce?.(at) ?? Effect.void,
+		start: (id) => FiberSet.run(detached, kick(id)).pipe(Effect.asVoid)
 	});
+	const { post } = queue;
 	/** Rule 60: an unaddressed group message: history `read_messages` reads, never a turn. */
 	const ambient = (o: {
 		conversation: string;
@@ -693,13 +683,6 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 			author: o.author,
 			addressed: false,
 			...(o.files === undefined ? {} : { files: o.files })
-		});
-	/** The conversation's one queued `agent.turn` run, due at `$2` (a takeover if the turn's process dies). */
-	const enqueueTurn = (chain: Chain, conversation: string, due: string, when = 'true') =>
-		enqueue(chain, {
-			select: `SELECT '${TURN_RUN}'::text AS automation,
-        jsonb_build_object('conversation', ${chain.p(conversation)}::text) AS input, ${chain.p(due)}::timestamptz AS due_at, 'schedule'::text AS cause, 0 AS depth
-        WHERE ${when} AND NOT EXISTS (SELECT 1 FROM sys_run WHERE automation = '${TURN_RUN}' AND state = 'queued' AND input->>'conversation' = ${chain.p(conversation)})`
 		});
 	const UNTURN = `DELETE FROM sys_run WHERE automation = '${TURN_RUN}' AND state = 'queued' AND input->>'conversation' = $1`;
 	const claim = Effect.fn('Agents.claim')(function* (id: string) {
@@ -752,6 +735,7 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 		}).pipe(Effect.timeout(2000), Effect.tapCause(Effect.logWarning), Effect.ignore);
 	/** Idle only when nothing is queued; otherwise the turn goes on (a message landed as it finished). */
 	const settle = Effect.fn('Agents.work9')(function* (id: string) {
+		if (yield* queue.finished(id)) return false;
 		return (
 			(yield* convChanged(
 				q(
@@ -929,7 +913,14 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 			read: ToolContext['read'] = new Map(),
 			files: ToolContext['files'] = [],
 			// a job that finishes after the turn closed (an ingest), or one the turn left untaken, is queued here and wakes it
-			work = yield* jobs({ detached, late: (lines) => steer(id, as, lines) }),
+			work = yield* jobs({
+				detached,
+				late: (lines) => steer(id, as, lines),
+				ended: (label, failed) => {
+					if (label === 'workspace_test' || label === 'workspace_diagnose')
+						red = failed ? red + 1 : 0;
+				}
+			}),
 			failures = new Map<string, number>();
 		// a pure tool's call just made, as its key, when it succeeded: the same call again straight after answers nothing new
 		let previous = '';
@@ -1049,6 +1040,9 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 		let modelOf = '';
 		let steps = 0,
 			failing = 0,
+			// type checks and test runs in a row that came back red, whatever was edited between them
+			red = 0,
+			toldRed = false,
 			lastError = '',
 			emptied = false,
 			cutTools = 0,
@@ -1304,6 +1298,8 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 				stepping.leave(id);
 				if (stepping.parked) yield* Effect.never;
 				stepping.enter(id);
+				// the CPU budget is a step's, not a turn's: a long turn is many small steps
+				yield* (yield* RunUnits).next();
 				// an administrator's runtime settings narrow the model and cap the month's spend (settings.ts)
 				const settings = yield* agentSettings(db);
 				const stored = yield* conversation(id);
@@ -1529,7 +1525,7 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 						}
 						const [result] = yield* db.read([
 							q(
-								`SELECT ${MSG} FROM sys_message m WHERE conversation = $1 AND deleted_at IS NULL AND refused IS NULL AND coalesce(role, 'user') IN ('user', 'assistant') AND ($2::bigint IS NULL OR seq < $2) ORDER BY seq DESC LIMIT $3`,
+								`SELECT ${MSG} FROM sys_message m WHERE conversation = $1 AND deleted_at IS NULL AND refused IS NULL AND coalesce(role, 'user') IN ('user', 'assistant') AND coalesce(state, '') <> 'scheduled' AND ($2::bigint IS NULL OR seq < $2) ORDER BY seq DESC LIMIT $3`,
 								id,
 								o.before ?? null,
 								o.limit
@@ -1575,6 +1571,7 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 						]);
 						return { hits: r?.rows ?? [] };
 					}),
+					heard: queue.heard(id),
 					subagent: {
 						// a sub-agent runs detached: this turn goes on (or ends), and its report arrives as a message here
 						spawn: Effect.fn('Agents.work24')(function* (task, agent, done, format) {
@@ -1741,8 +1738,13 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 				const request: Omit<AiRequest, 'tools'> = {
 					model: conv.model,
 					purpose: 'chat',
-					// reasoning tokens are most of a step's time and cost: medium keeps the judgement, not the essays
-					effort: 'medium',
+					// reasoning is most of a step's time and cost, and DeepSeek spends the same at every level short of none: a
+					// step that only gathers goes without, and one that has seen the records decides, so it thinks
+					effort: rows.some(
+						(r) => r.role === 'tool' && r.turn === turn && DECIDES.has(r.content.name)
+					)
+						? 'medium'
+						: 'none',
 					system: system({
 						envoy: envoy === undefined ? undefined : envoyName(envoy.name),
 						brief,
@@ -2144,16 +2146,26 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 					});
 				}
 				failing = calls.length > 0 && failed === calls.length ? failing + 1 : 0;
-				if (failing === AGENT_LIMITS.failingSteps)
+				const redNudge = red === AGENT_LIMITS.failingSteps && !toldRed;
+				if (red < AGENT_LIMITS.failingSteps) toldRed = false;
+				if (failing === AGENT_LIMITS.failingSteps || redNudge) {
+					if (redNudge) toldRed = true;
+					const text = redNudge ? NUDGE.red : NUDGE.failing;
 					yield* write({
 						conversation: id,
 						role: 'system',
-						content: { text: NUDGE.failing },
-						text: NUDGE.failing,
+						content: { text },
+						text,
 						meta: { tag: 'note' }
 					});
-				else if (failing > AGENT_LIMITS.failingSteps + 1) {
-					yield* fail(conv, FIXED.stuck, 'toolFailures', lastError);
+				} else if (failing > AGENT_LIMITS.failingSteps + 1 || red > AGENT_LIMITS.failingSteps + 1) {
+					const stuck = failing > AGENT_LIMITS.failingSteps + 1;
+					yield* fail(
+						conv,
+						stuck ? FIXED.stuck : FIXED.red,
+						stuck ? 'toolFailures' : 'redChecks',
+						lastError
+					);
 					yield* cancelQueued(id);
 					break;
 				}
@@ -2208,7 +2220,10 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 		'Agents.drainManaged'
 	)(function* (id: string, options: Parameters<typeof drainTurn>[1] = {}) {
 		const existing = yield* FiberMap.get(running, id);
-		if (Option.isSome(existing)) return { ran: false, reply: null };
+		if (Option.isSome(existing)) {
+			yield* queue.ring(id);
+			return { ran: false, reply: null };
+		}
 		const fiber = yield* FiberMap.run(
 			running,
 			id,
@@ -2230,8 +2245,12 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 	const kick = (id: string): Effect.Effect<void> =>
 		Effect.gen(function* () {
 			const existing = yield* FiberMap.get(running, id);
-			if (Option.isSome(existing)) yield* Fiber.await(existing.value);
-			yield* drain(id);
+			if (Option.isSome(existing)) {
+				yield* queue.ring(id);
+				yield* Fiber.await(existing.value);
+			}
+			// the turn took it: a drain now would only flash the conversation as running
+			if (yield* queue.waiting(id)) yield* drain(id);
 		}).pipe(Effect.tapCause(Effect.logWarning), Effect.ignore);
 	/**
 	 * An approved call the workspace restarted under (a publish or rollback's switch-over) settles its card as the old
@@ -2303,21 +2322,45 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 			))?.parent === parent
 		);
 	});
-	const owns = (by: Authority, as: As | null) =>
-		by.admin ||
-		(by.actor.kind === 'member' && as !== null && 'member' in as && as.member === by.actor.id);
 	const attachments = (member: string, refs: readonly Json[]) => attachmentsFor(db, member, refs);
+	/** Parses an attached document while its person writes their words: `read_file` then finds it done. */
+	const readAhead = Effect.fn('Agents.readAhead')(function* (member: string, ref: Json) {
+		const [file] = yield* attachments(member, [ref]);
+		if (file === undefined || route(file.mime, file.name) !== 'convert') return;
+		yield* triageAttachments(
+			db,
+			{ ...config.media, logs },
+			[{ id: file.id, files: [file] }],
+			{ now: (yield* config.bindings).now, conversation: '' }
+		);
+	});
 	const api = {
 		start,
 		post,
+		kick,
+		queue,
 		ambient,
 		notify: (o: { conversation: string; text: string; as?: As | null | undefined }) =>
 			steer(o.conversation, o.as ?? null, [o.text]),
+		gaveUp: (conversations: readonly string[]) =>
+			Effect.forEach(
+				conversations,
+				(conversation) =>
+					insert({
+						conversation,
+						role: 'assistant',
+						content: { text: FIXED.broke, toolCalls: [] },
+						text: FIXED.broke,
+						meta: { tag: 'failed', code: 'gaveUp' }
+					}),
+				{ discard: true }
+			),
 		park: stepping.park,
 		drain,
 		conversation,
 		transcript,
 		attachments,
+		readAhead,
 		stop: Effect.fn('Agents.stop')(function* (id: string) {
 			yield* setConv(id, `status = 'stopped', lease_until = NULL`);
 			yield* cancelQueued(id);
@@ -2375,94 +2418,9 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 				);
 			yield* setConv(id, 'model = $2', model);
 		}),
-		revise: Effect.fn('Agents.revise')(function* (messageId: string, text: string, by?: Authority) {
-			const [r] = yield* rowsOf(
-				(yield* db.read([q(`SELECT ${MSG} FROM sys_message m WHERE id = $1`, messageId)]))[0]!.rows
-			);
-			if (r === undefined || r.role !== 'user')
-				return yield* Effect.fail(
-					new AgentRefusal({ message: 'only a posted message can be revised' })
-				);
-			if (by !== undefined && !owns(by, r.as))
-				return yield* Effect.fail(
-					new AgentRefusal({ message: 'only its author revises a message' })
-				);
-			const [newer] = (yield* db.read([
-				q(`SELECT 1 FROM sys_message WHERE supersedes = $1 LIMIT 1`, messageId)
-			]))[0]!.rows;
-			if (newer !== undefined)
-				return yield* Effect.fail(
-					new AgentRefusal({ message: 'only the newest revision can be revised' })
-				);
-			if (r.state === 'queued') {
-				yield* changed(
-					q(
-						`UPDATE sys_message m SET text = $2, preview = $3, content = content || jsonb_build_object('text', $2::text) WHERE id = $1 `,
-						messageId,
-						text,
-						preview(text)
-					)
-				);
-				return r.id;
-			}
-			return (yield* post({
-				conversation: r.conversation,
-				as: r.as!,
-				text,
-				author: r.author,
-				mode: r.mode ?? 'agent',
-				supersedes: r.id
-			})).id;
-		}),
-		dequeue: Effect.fn('Agents.dequeue')(function* (messageId: string, by?: Authority) {
-			const [r] = yield* rowsOf(
-				(yield* db.read([q(`SELECT ${MSG} FROM sys_message m WHERE id = $1`, messageId)]))[0]!.rows
-			);
-			if (by !== undefined && (r === undefined || !owns(by, r.as)))
-				return yield* Effect.fail(
-					new AgentRefusal({ message: 'only its author removes a queued message' })
-				);
-			yield* changed(
-				q(
-					`UPDATE sys_message m SET state = 'cancelled' WHERE id = $1 AND state = 'queued' `,
-					messageId
-				)
-			);
-		}),
-		reorder: Effect.fn('Agents.reorder')(function* (
-			conversation: string,
-			ids: readonly string[],
-			by?: Authority
-		) {
-			const queued = yield* rowsOf(
-				(yield* db.read([
-					q(
-						`SELECT ${MSG} FROM sys_message m WHERE conversation = $1 AND state = 'queued' AND id IN (SELECT jsonb_array_elements_text($2::jsonb))`,
-						conversation,
-						j(ids)
-					)
-				]))[0]!.rows
-			);
-			if (queued.length !== new Set(ids).size || queued.length !== ids.length)
-				return yield* Effect.fail(
-					new AgentRefusal({
-						message: 'only queued messages of this conversation can be reordered'
-					})
-				);
-			if (by !== undefined && queued.some((r) => !owns(by, r.as)))
-				return yield* Effect.fail(
-					new AgentRefusal({ message: 'only its author reorders a queued message' })
-				);
-			// the rows swap their own seq values, so nothing else in the transcript moves
-			yield* changed(
-				q(
-					`WITH want AS (SELECT id, ord FROM jsonb_array_elements_text($1::jsonb) WITH ORDINALITY AS t(id, ord)),
-				slot AS (SELECT seq, row_number() OVER (ORDER BY seq) AS n FROM sys_message WHERE id IN (SELECT id FROM want))
-				UPDATE sys_message m SET seq = slot.seq FROM want JOIN slot ON slot.n = want.ord WHERE m.id = want.id AND m.state = 'queued' `,
-					j(ids)
-				)
-			);
-		}),
+		revise: queue.revise,
+		dequeue: queue.remove,
+		reorder: queue.reorder,
 		turnRun: Effect.fn('Agents.turnRun')(function* (
 			input: Json,
 			run: (
@@ -2740,7 +2698,7 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 });
 export type Agents = Effect.Success<ReturnType<typeof agents>>;
 /** What the host adds to every agent (its tools, skills, draft source). */
-export type AgentHostConfig = Omit<AgentConfig, 'engine' | 'ai' | 'bindings' | 'announce'>;
+export type AgentHostConfig = Omit<AgentConfig, 'engine' | 'ai' | 'bindings' | 'announce' | 'media'>;
 export const AgentHost = Context.Reference<AgentHostConfig>('bolt/AgentHost', {
 	defaultValue: () => ({})
 });
@@ -2814,6 +2772,7 @@ export const AgentsLive = Layer.effectContext(
 			bindings,
 			announce: wake.at,
 			attachments: host.attachments ?? fileAttachments(db, files, images),
+			media: { files, images, convert },
 			geocoder: host.geocoder ?? geo
 		});
 		yield* turnHandlers.register('Agent', api.drain);
@@ -2821,7 +2780,8 @@ export const AgentsLive = Layer.effectContext(
 			[TURN_RUN]: (input: Json) =>
 				api.turnRun(input, (conversation, envoy) =>
 					turnHandlers.drain(conversation, envoy ? 'Envoy' : 'Agent')
-				)
+				),
+			[SCHEDULED_RUN]: api.queue.due
 		};
 		yield* runHandlers.register(handlers);
 		const service: AgentsShape = {
@@ -2832,6 +2792,9 @@ export const AgentsLive = Layer.effectContext(
 				api.revise(id, text, by).pipe(Effect.map(Option.fromNullishOr)),
 			models: api.models()
 		};
-		return Context.make(AgentsTag, service).pipe(Context.add(AgentDrains, { drain: api.drain }));
+		return Context.make(AgentsTag, service).pipe(
+			Context.add(AgentDrains, { drain: api.drain }),
+			Context.add(MessageQueue, api.queue)
+		);
 	})
 );

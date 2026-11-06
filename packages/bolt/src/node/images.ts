@@ -67,8 +67,8 @@ const image = <A>(
 				);
 			const worker = yield* Effect.acquireRelease(
 				Effect.try({
-					try: () =>
-						new Worker(
+					try: () => {
+						const started = new Worker(
 							new URL(
 								'./image-worker' + (import.meta.url.endsWith('.ts') ? '.ts' : '.js'),
 								import.meta.url
@@ -77,7 +77,11 @@ const image = <A>(
 								workerData: { bytes, ...options },
 								resourceLimits: { maxOldGenerationSizeMb: 256, stackSizeMb: 4 }
 							}
-						),
+						);
+						// an interrupted call stops listening before the worker ends: its failure must not reach the process
+						started.on('error', () => {});
+						return started;
+					},
 					catch: failed
 				}),
 				(worker) =>

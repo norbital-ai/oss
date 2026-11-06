@@ -5,7 +5,7 @@ The source defines behaviour to preserve, not framework or infrastructure to car
 ## Private GitHub repository
 
 1. First write `src/+secrets.ts` declaring `GITHUB_MCP_URL` and `GITHUB_MCP_TOKEN`, and `src/agent/mcp/+github.mcp.ts` with `description`, and `url` and `auth.bearer` naming those secrets.
-2. Validate, merge, and have the person approve.
+2. Commit, diagnose, test, preview and merge; the person approves the merge.
 3. `page { path, configure: { capability: 'mcp.configure', record: 'github' } }`, with `path` from `describe_workspace { names: ['system'] }`, opens the native sheet. The person sets the URL to `https://api.githubcopilot.com/mcp/` and a read token. Never ask for a value in chat.
 4. The next turn offers the server's tools. If no token is possible, ask for a source archive.
 
@@ -39,12 +39,12 @@ Before authoring, pick a mechanism for every source capability: model and relati
 - A financial workflow needs evidence from its guarded writes and automation inputs. A read filter does not establish write ownership. A state-looking enum does not establish a lock.
 - Verify conversion on the values a chart really queries, including missing FX and loading and error states.
 - Keep native write tests when their harness fails: report the command, revision and error.
-- `workspace_validate` runs the tests; check their result and commit. A written test is not an execution.
+- `workspace_test` runs the tests; read the result it sends back. A written test is not an execution.
 - Inspect the preview at normal and narrow widths: navigation, long forms, scroll reachability, empty, loading and error states. Invent no operational data.
 - A blocked browser check is reported, never marked passed.
 
 ## Before merge
 
 - Compare the ledger to the source again; report gaps; separate build, test and visual evidence.
-- After approval, verify the published version and routes.
+- After approval, verify the live Version and routes.
 - Never claim parity from a green build or a test count.

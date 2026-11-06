@@ -159,7 +159,7 @@ Noul criteria and question instructions may be omitted. Structured entries prese
 nested JSON values. Stored FileRefs must be resolved before calling System 1. Inline PNG/JPEG
 evidence uses `{ type: 'image_url', image_url: { url: 'data:image/jpeg;base64,...' } }`
 in state; remote URLs are rejected. The adapter sends actual image parts/assets, never base64 as text.
-Envoy/Norbius triage prepares bounded images, voice transcripts, and extracted document/text content
+The smart throttle prepares bounded images, voice transcripts, and extracted document/text content
 before its one decision call, reusing the ingestion cache. Unreadable or truncated attachments cannot
 be discarded as noise. Native audio is not a Jev input. Decision images are omitted from retained logs.
 

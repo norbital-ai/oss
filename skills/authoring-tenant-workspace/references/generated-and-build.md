@@ -45,7 +45,7 @@ Contract: Bolt `seeding.md`.
 - Edit an unapplied file's SQL for complex data patterns. The next build refuses any schema differing from the declaration. Write data steps so a second run changes nothing.
 - `-- check: <name>` plus one `select` whose rows are violations runs in the file's transaction; any row fails the apply.
 - Each file runs within 5 s lock wait, 15 s statement, 20 s call: a backfill finishes in one bounded statement.
-- `bolt build --squash=<name>` replaces the schema prefix with a verified baseline; applied databases keep originals in `migrations/archive/`; data steps stay as a suffix. In Studio, validate with `squash`.
+- `bolt build --squash=<name>` replaces the schema prefix with a verified baseline; applied databases keep originals in `migrations/archive/`; data steps stay as a suffix. In Studio, `workspace_preview` takes `squash`.
 
 ## Forbidden
 

@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { Icon, Spinner } from '@norbital-ai/ui';
-	import type { StudioTestRun } from './test-results.ts';
+	import type { StudioTestRun } from '../studio/test-results.ts';
 	let {
 		run,
 		t = (key: string) => key
@@ -32,7 +32,7 @@
 	);
 </script>
 
-<div class="min-h-0 flex-1 overflow-y-auto p-4 text-xs" data-test-results={run?.state ?? 'not-run'}>
+<div class="min-h-0 flex-1 overflow-y-auto p-3 text-xs" data-test-results={run?.state ?? 'not-run'}>
 	<div
 		role="status"
 		aria-label={t(label)}
@@ -47,12 +47,9 @@
 	</div>
 	{#if run === undefined}
 		<p class="mt-2 text-muted-foreground">
-			{t('Ask Norbius to run the workspace tests after saving your changes.')}
+			{t('Run the tests from the toolbar.')}
 		</p>
 	{:else}
-		<p class="mt-2 text-muted-foreground">
-			{t('Tested source')} <code title={run.commit}>{run.commit.slice(0, 12)}</code>
-		</p>
 		{#if run.summary !== undefined}
 			<dl class="my-4 flex flex-wrap gap-x-5 gap-y-2 tabular-nums">
 				{#each [['Passed', run.summary.passed], ['Failed', run.summary.failed], ['Skipped', run.summary.skipped], ['Files', run.summary.files]] as [name, count]}
@@ -70,7 +67,7 @@
 		{#if run.error !== undefined}<pre
 				class="my-3 whitespace-pre-wrap break-words rounded-md border border-destructive/30 bg-destructive/5 p-3 text-destructive">{run.error}</pre>{/if}
 		{#if run.state === 'empty'}<p class="mt-3 text-muted-foreground">
-				{t('Add meaningful tests before treating this source as verified.')}
+				{t('Add tests before relying on this.')}
 			</p>{/if}
 		{#each files as file}
 			<details open={file.state === 'failed'} class="mt-2 rounded-md border border-border">

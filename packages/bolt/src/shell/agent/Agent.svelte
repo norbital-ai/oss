@@ -4,15 +4,16 @@
 	runs after it, and everything it writes (the reply growing flush by flush, each tool call running then finished) is
 	rows of the conversation's live transcript, patched in over the page's one live stream; the conversation list, each
 	one's status, plan and goals are a live read too. Nothing polls and there is no second stream. Enter sends, Shift+Enter is a
-	new line, Cmd/Ctrl+Enter sends now. With triage (rule 60a, P41) each triaged row carries its state: "waiting for
-	more…" while pending (with respond-now), "responding" once admitted and its turn runs; every message that came in is
+	new line, Cmd/Ctrl+Enter sends now; the timer beside send schedules the message for a time or for when the agent finishes,
+	and what is scheduled lists above the composer (edit, remove). With triage (rule 60a, P41) each triaged row carries its state: "reading…"
+	while pending (with respond-now), "responding" once admitted and its turn runs; every message that came in is
 	shown, and consecutive ones not for the agent fold into one quiet block, collapsed to its count and last message; on a
 	channel thread each reply names the messages it answers ("Replying to"). Files are attached with the paperclip, by paste
 	or by drop (at most 8 files, 20 MiB); each uploads to `/__bolt/files/sys_conversation.inputs` when the message is sent.
 	The selector's footer switches conversation views (newest first): the member's own (Web UI) and one per envoy
 	whose channel conversations they may read (automations' inference transcripts are the command center's); dots switch views, and Cmd/Ctrl+Right Arrow advances while search is focused;
 	search filters every view at once (each count follows its matches). Only Web UI conversations are writable; delegated sub-agents live in the session rail (their tasks, live steps and answers),
-	several working at once, one level deep; messages sent while a turn runs wait in the queue (edit, move up, remove); the context meter reads the
+	several working at once, one level deep; a message sent while a turn runs steers it, waiting in the queue until the step ends (edit, reorder, remove); the context meter reads the
 	last reply's usage; the transcript follows its tail unless the reader scrolled up ("Latest" returns); a running turn
 	stops (asked first) and a stopped one resumes; a draft plan is a collapsed card above the prompt (execute, delete), an
 	executed plan a strip above the transcript (revise, delete), the goals a checklist under the latest message, and a
@@ -31,7 +32,18 @@
 -->
 <script lang="ts">
 	import { attach as attachEffect, observe as liveEdge, fork } from '@norbital-ai/ui/effect';
-	import { Effect, FiberSet, Option, Predicate, Result, Schedule, Schema, Stream } from 'effect';
+	import {
+		Deferred,
+		Effect,
+		Exit,
+		FiberSet,
+		Option,
+		Predicate,
+		Result,
+		Schedule,
+		Schema,
+		Stream
+	} from 'effect';
 	import { getContext, tick, type Snippet } from 'svelte';
 	import { MediaQuery, SvelteMap, SvelteSet } from 'svelte/reactivity';
 	import { cubicOut } from 'svelte/easing';
@@ -46,7 +58,9 @@
 		formatHandle,
 		Icon,
 		Image,
+		Input,
 		MarkdownEditor,
+		Popover,
 		Progress,
 		ReadonlyMarkdown,
 		Spinner,
@@ -60,13 +74,13 @@
 	import type { AiModel } from '../../engine/contracts.ts';
 	import type { AgentConversation, AgentRow } from '../../protocol/wire.ts';
 	import type { AgentRequest, ShellBolt } from '../runtime.ts';
+	import type { ShellError } from '../api-types.ts';
 	import type { ShellApi } from '../api-types.ts';
 	import type { StudioView } from '../studio/model.ts';
 	import type { LogRow } from '../../engine/contracts.ts';
 	import AgentChild from './AgentChild.svelte';
 	import Steps from './Steps.svelte';
 	import StudioApproval from './StudioApproval.svelte';
-	import StudioResult from './StudioResult.svelte';
 	import MadeFiles from './MadeFiles.svelte';
 	import PreviewFrame from '../preview/PreviewFrame.svelte';
 	import { attention } from './chime.ts';
@@ -172,6 +186,10 @@
 	/** Local outbox rows the person cancelled before their post answered: dequeue the stored row when it does. */
 	const cancelled = new Set<string>();
 	const rows = $derived([...older, ...live, ...outbox]);
+	/** The latest change of live Norbius asked for: the composer is where it is decided. */
+	const approval = $derived(
+		thread ? undefined : rows.findLast((row) => row.tool?.approval !== undefined)
+	);
 	const before = $derived(
 		from === null ? null : edge === null ? from : edge.more ? edge.first : null
 	);
@@ -228,6 +246,22 @@
 			return void (error = t('Attach at most 8 files totaling 20 MiB.'));
 		error = null;
 		attached = all;
+		for (const file of typed) uploadAhead(file);
+	}
+	/** Each file goes up on attach and is read at once: a person takes seconds to write their words. */
+	const uploads = new WeakMap<File, Deferred.Deferred<Attachment, ShellError>>();
+	function uploadAhead(file: File): void {
+		const done = Deferred.makeUnsafe<Attachment, ShellError>();
+		uploads.set(file, done);
+		dispatch(
+			Effect.exit(api.agent.upload(file)).pipe(
+				Effect.tap((exit) => Deferred.done(done, exit)),
+				Effect.flatMap((exit) =>
+					Exit.isSuccess(exit) ? Effect.exit(api.agent.readAhead(exit.value)) : Effect.void
+				),
+				Effect.asVoid
+			)
+		);
 	}
 	function paste(event: ClipboardEvent): void {
 		const files = [...(event.clipboardData?.files ?? [])];
@@ -352,23 +386,20 @@
 	const navigationsOf = navigationEvents();
 	const pageActionsOf = pageActions();
 	// the open conversation's rows once its transcript has answered: what it held on opening is history, never an event
-	watch(
-		[() => conversation, () => $transcript],
-		([id, loaded]) => {
-			const ready = loaded === undefined ? null : id,
-				rows = loaded?.rows ?? [];
-			const kind = attentionOf(ready, rows);
-			if (kind !== null) chime?.play(kind);
-			for (const item of navigationsOf(ready, rows)) {
-				if (id === null) continue;
-				clientNavigation?.open(item.path, id);
-				clientPageAction?.arrived(item.id);
-			}
-			for (const item of pageActionsOf(id, rows)) {
-				if (id !== null && !thread) clientPageAction?.run(item.action, id, item.id);
-			}
+	watch([() => conversation, () => $transcript], ([id, loaded]) => {
+		const ready = loaded === undefined ? null : id,
+			rows = loaded?.rows ?? [];
+		const kind = attentionOf(ready, rows);
+		if (kind !== null) chime?.play(kind);
+		for (const item of navigationsOf(ready, rows)) {
+			if (id === null) continue;
+			clientNavigation?.open(item.path, id);
+			clientPageAction?.arrived(item.id);
 		}
-	);
+		for (const item of pageActionsOf(id, rows)) {
+			if (id !== null && !thread) clientPageAction?.run(item.action, id, item.id);
+		}
+	});
 	/** An instance or envoy name in words: `field_ops` → `Field ops`. */
 	const human = (s: string) => s.replaceAll('_', ' ').replace(/^./, (c) => c.toUpperCase());
 	/** The selector tab a conversation sits in: the member's own (Web UI) or its envoy's. */
@@ -504,8 +535,22 @@
 		{ lazy: true }
 	);
 
-	function send(event: SubmitEvent | KeyboardEvent, now = false): void {
-		event.preventDefault();
+	let asked: string | undefined;
+	watch(
+		() => request.send,
+		(id) => {
+			if (id === undefined || id === asked) return;
+			asked = id;
+			draft = request.prompt ?? '';
+			send();
+		}
+	);
+	function send(
+		event?: SubmitEvent | KeyboardEvent | MouseEvent,
+		now = false,
+		schedule?: string
+	): void {
+		event?.preventDefault();
 		const text = draft.trim() || (mode === 'compact' ? '/compact' : '');
 		if (text === '' && attached.length === 0) return;
 		error = null;
@@ -542,7 +587,8 @@
 			seq: Number.MAX_SAFE_INTEGER,
 			role: 'user',
 			text: about + text,
-			state: status === 'running' ? 'queued' : null,
+			state: schedule !== undefined ? 'scheduled' : status === 'running' ? 'queued' : null,
+			...(schedule === undefined || schedule === 'finish' ? {} : { due: schedule }),
 			tag: null,
 			files: files.map((f) => ({ name: f.name, mime: f.type }))
 		});
@@ -592,12 +638,19 @@
 				}
 				const refs: Attachment[] = [];
 				for (const file of files) {
-					const uploaded = yield* Effect.result(api.agent.upload(file));
-					if (uploaded._tag === 'Failure')
+					const ahead = uploads.get(file);
+					const uploaded = yield* Effect.result(
+						ahead === undefined ? api.agent.upload(file) : Deferred.await(ahead)
+					);
+					if (uploaded._tag === 'Failure') {
+						uploads.delete(file);
 						return yield* Effect.sync(() => failed(`${file.name}: ${uploaded.failure.message}`));
+					}
 					refs.push(uploaded.success);
 				}
-				const answer = yield* Effect.result(api.agent.post(id, about + text, now, refs, sentMode));
+				const answer = yield* Effect.result(
+					api.agent.post(id, about + text, now, refs, sentMode, schedule)
+				);
 				yield* Effect.sync(() => {
 					sendFailed = answer._tag === 'Failure' || answer.success.kind === 'refused';
 					if (answer._tag === 'Failure') return failed(answer.failure.message);
@@ -627,6 +680,21 @@
 			})
 		);
 	}
+	/** The schedule popover, and the time picked in it (`datetime-local`: the person's clock). */
+	let scheduling = $state(false),
+		sendAt = $state('');
+	/** `at` as a `datetime-local` value. */
+	const localMinute = (at: number) =>
+		new Date(at - new Date(at).getTimezoneOffset() * 60_000).toISOString().slice(0, 16);
+	const sendsAt = (at: string) =>
+		new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' }).format(
+			new Date(at)
+		);
+	function schedule(event: MouseEvent, target: string): void {
+		scheduling = false;
+		sendAt = '';
+		send(event, false, target);
+	}
 	/** Confirmations whose answer is still being carried out: a publish can take minutes while the workspace rebuilds. */
 	const answering = new SvelteSet<string>();
 	const confirmFailed = new SvelteMap<string, string>();
@@ -654,7 +722,7 @@
 	const lastReply = $derived(rows.findLastIndex((r) => r.role === 'assistant'));
 	/** A triaged row's state (rule 60a), derived from the engine's markers and the turn's status; no label once it settles. */
 	function triageLabel(row: AgentRow, i: number): string | null {
-		if (row.state === 'pending') return t('waiting for more…');
+		if (row.state === 'pending') return t('reading…');
 		return status === 'running' && row.state === 'consumed' && i > lastReply
 			? t('responding')
 			: null;
@@ -961,10 +1029,11 @@
 			.replace(/^#+\s*/, '')
 			.trim();
 
-	// the queue: messages posted while a turn runs wait here until its next step takes them
+	// the queue: messages posted while a turn runs wait here until the step ends and the next takes them
 	const queued = $derived(
 		rows.filter((r) => r.role === 'user' && r.state === 'queued' && r.report === undefined)
 	);
+	const scheduled = $derived(rows.filter((r) => r.role === 'user' && r.state === 'scheduled'));
 	let revising = $state<AgentRow | null>(null);
 	/** The queue row being dragged, by index (null: no drag). */
 	let dragFrom = $state<number | null>(null);
@@ -1156,6 +1225,7 @@
 			r.report === undefined &&
 			r.text !== '/compact' &&
 			(r.state !== 'queued' || thread) &&
+			r.state !== 'scheduled' &&
 			(!!r.text || (r.files?.length ?? 0) > 0)) ||
 		((r.state === 'confirm' || r.state === 'approved') && r.call !== undefined) ||
 		(r.role === 'assistant' && !!r.text) ||
@@ -1436,7 +1506,13 @@
 	let previewing = $state(false),
 		seenPreview = $state<string | null>(null);
 	const recordedPreview = $derived(previewsOf(rows).at(-1) ?? null);
-	const hasTestStep = $derived(rows.some((row) => row.tool?.name === 'workspace_validate' && row.tool.args?.includes('"preview"') !== true));
+	const hasTestStep = $derived(
+		rows.some(
+			(row) =>
+				row.tool?.name === 'workspace_test' ||
+				(row.tool?.name === 'workspace_diagnose' && row.tool.args?.includes('"preview"') !== true)
+		)
+	);
 	let previewStudio = $state<StudioView | null>(null);
 	const shownPreview = $derived(
 		recordedPreview === null
@@ -1586,7 +1662,8 @@
 				{/each}
 				<tr class="border-t border-border/60" data-decision-row="wait">
 					<td class="py-1 pr-2 text-muted-foreground">{t('Wait')}</td><td
-						class="py-1 pr-2 tabular-nums">{answerOf(d.answers?.['wait'])}</td
+						class="py-1 pr-2 tabular-nums"
+						>{answerOf(d.answers?.['hold'] ?? d.answers?.['wait'])}</td
 					><td class="py-1">{d.action ?? '—'}</td>
 				</tr>
 			</tbody>
@@ -2236,6 +2313,8 @@
 										status === 'running' && (at === items.length - 1 || item.steps.some(active))}
 									{@const secs = worked(item.steps)}
 									{@const failures = failedVerbs(item.steps)}
+									<!-- what it did: its reasoning opens with the steps but is no step of its own -->
+									{@const calls = item.steps.filter((step) => step.tool !== undefined).length}
 									{@const key = itemKey(at)}
 									{@const open = folded.get(key) ?? working}
 									<li
@@ -2259,9 +2338,7 @@
 												{#if working}<span class="agent-shimmer">{t(doingOf(item.steps))}</span
 													>{:else}<span>{t('Worked for')} {secs === null ? '' : `${secs}s`}</span
 													>{/if}
-												<span
-													>· {`${item.steps.length} ${t(item.steps.length === 1 ? 'step' : 'steps')}`}</span
-												>
+												<span>· {`${calls} ${t(calls === 1 ? 'step' : 'steps')}`}</span>
 												{#if failures.length > 0}{@const named = `${failures.length} ${t(failures.length === 1 ? 'step failed' : 'steps failed')}: ${failures.map(t).join(', ')}`}<span
 														role="img"
 														aria-label={named}
@@ -2280,7 +2357,6 @@
 											<Steps steps={item.steps} {t} opened={expanded} />
 										</details>
 										{#each item.steps as st (st.id)}
-											<StudioResult step={st} {t} zone={kinds.zone} />
 											{#if !thread && st.tool?.navigation !== undefined && clientNavigation !== undefined && conversation !== null}
 												{@const path = st.tool.navigation}
 												{@const id = conversation}
@@ -2308,10 +2384,6 @@
 														/>
 													</button>
 												</div>
-											{/if}
-											{#if !thread && st.tool?.approval !== undefined}
-												<!-- a live change the host holds for the person: approved here, it runs as them -->
-												<StudioApproval {api} step={st} {t} />
 											{/if}
 										{/each}
 										{#if item.steps.some((st) => (st.files?.length ?? 0) > 0)}
@@ -2628,6 +2700,12 @@
 							)}
 				</p>
 			{:else}
+				{#if approval !== undefined}
+					<!-- a live change the host holds for the person: approved here, it runs as them -->
+					<div class="mx-auto w-full max-w-3xl shrink-0 px-4 pb-3">
+						{#key approval.id}<StudioApproval {api} step={approval} {t} />{/key}
+					</div>
+				{/if}
 				{#if drafting && current?.plan}
 					{@const p = current.plan}
 					<!-- Draft plan: a collapsed card above the prompt, reviewed by expanding it, executed or deleted from its header -->
@@ -2726,7 +2804,7 @@
 							</p>
 						{/if}
 						{#if queued.length > 0}
-							<!-- the queue: messages waiting for the next step, steerable, reorderable and removable -->
+							<!-- the queue: messages waiting for the step to end, reorderable and removable -->
 							<div class="grid w-full gap-1 text-xs" data-agent-queue>
 								<span class="text-muted-foreground">{t('Queued')} · {queued.length}</span>
 								<ol class="max-h-40 divide-y overflow-auto rounded-lg border border-border/70">
@@ -2765,15 +2843,6 @@
 													><Icon name="lucide:x" class="size-3.5" /></Button
 												>
 											{:else}
-												{#if i > 0}<Button
-														variant="ghost"
-														class="h-6 shrink-0 px-1.5 text-xs"
-														title={t('Send at the next step')}
-														onclick={() => moveTo(i, 0)}
-														><Icon name="lucide:corner-up-right" class="size-3.5" />{t(
-															'Steer'
-														)}</Button
-													>{/if}
 												<Button
 													variant="ghost"
 													class="h-6 shrink-0 px-1.5 text-xs"
@@ -2793,6 +2862,45 @@
 								</ol>
 							</div>
 						{/if}
+						{#if scheduled.length > 0}
+							<!-- what is held for a time or for the agent finishing: editable and removable until it goes -->
+							<div class="grid w-full gap-1 text-xs" data-agent-scheduled>
+								<span class="text-muted-foreground">{t('Scheduled')} · {scheduled.length}</span>
+								<ol class="max-h-40 divide-y overflow-auto rounded-lg border border-border/70">
+									{#each scheduled as s (s.id)}
+										{@const local = s.id.startsWith('local:')}
+										<li
+											class="flex items-center gap-1 px-1.5 py-1 {local ? 'opacity-70' : ''}"
+											data-scheduled={s.id}
+										>
+											<Icon
+												name="lucide:timer"
+												class="size-3.5 shrink-0 text-muted-foreground/60"
+											/>
+											<span class="min-w-0 flex-1 truncate" title={s.text ?? ''}
+												>{s.text || t('Attached message')}</span
+											>
+											<span class="shrink-0 text-muted-foreground"
+												>{s.due === undefined ? t('When Norbius finishes') : sendsAt(s.due)}</span
+											>
+											{#if !local}<Button
+													variant="ghost"
+													class="h-6 shrink-0 px-1.5 text-xs"
+													onclick={() => revise(s)}>{t('Edit')}</Button
+												>{/if}
+											<Button
+												size="icon"
+												variant="ghost"
+												class="size-6 shrink-0"
+												aria-label={t('Remove')}
+												onclick={() => (local ? cancelLocal(s) : dequeue(s))}
+												><Icon name="lucide:x" class="size-3.5" /></Button
+											>
+										</li>
+									{/each}
+								</ol>
+							</div>
+						{/if}
 						{#if revising !== null}
 							<Inline
 								gap="sm"
@@ -2801,7 +2909,7 @@
 							>
 								<Icon name="lucide:message-square-pen" class="size-3.5 shrink-0 text-primary" />
 								<span class="min-w-0 flex-1 text-xs text-muted-foreground"
-									>{revising.state === 'queued'
+									>{revising.state === 'queued' || revising.state === 'scheduled'
 										? t('Editing a queued message.')
 										: t('Revising a message: sending supersedes it.')}</span
 								>
@@ -2930,6 +3038,43 @@
 										onChange={pickModel}
 									/>
 								{/if}
+								{#if !empty && revising === null}
+									<Popover.Root bind:open={scheduling}>
+										<Popover.Trigger
+											type="button"
+											class="grid size-8 shrink-0 place-items-center rounded-md text-muted-foreground outline-none hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring max-sm:size-11"
+											aria-label={t('Schedule message')}
+											title={t('Schedule message')}
+											data-agent-schedule
+										>
+											<Icon name="lucide:timer" class="size-4" />
+										</Popover.Trigger>
+										<Popover.Content side="top" align="end" class="grid w-64 gap-2 p-2">
+											{#if status === 'running'}
+												<Button
+													type="button"
+													variant="outline"
+													class="w-full"
+													onclick={(e) => schedule(e, 'finish')}
+													data-schedule-finish>{t('When Norbius finishes')}</Button
+												>
+											{/if}
+											<Input
+												type="datetime-local"
+												min={localMinute(Date.now())}
+												bind:value={sendAt}
+												aria-label={t('Send at')}
+											/>
+											<Button
+												type="button"
+												class="w-full"
+												disabled={sendAt === '' || Date.parse(sendAt) <= Date.now()}
+												onclick={(e) => schedule(e, new Date(sendAt).toISOString())}
+												data-schedule-at>{t('Schedule')}</Button
+											>
+										</Popover.Content>
+									</Popover.Root>
+								{/if}
 								{#if status === 'running' && empty}<Button
 										type="button"
 										size="icon"
@@ -2953,12 +3098,12 @@
 										type="submit"
 										size="icon"
 										class="shrink-0 rounded-full"
-										aria-label={status === 'running' ? t('Queue message') : t('Send')}
-										title={status === 'running' ? t('Queue message') : t('Send')}
+										aria-label={status === 'running' ? t('Send at the next step') : t('Send')}
+										title={status === 'running' ? t('Send at the next step') : t('Send')}
 										disabled={empty && mode !== 'compact'}
 									>
 										<Icon
-											name={status === 'running' ? 'lucide:list-plus' : 'lucide:arrow-up'}
+											name={status === 'running' ? 'lucide:corner-up-right' : 'lucide:arrow-up'}
 											class="size-4"
 										/>
 									</Button>{/if}

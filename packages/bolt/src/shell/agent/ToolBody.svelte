@@ -164,7 +164,7 @@
 			)}
 		{/if}
 	</div>
-{:else if tool.name === 'workspace_validate'}
+{:else if tool.name === 'workspace_diagnose' || tool.name === 'workspace_preview'}
 	{@const types = out['types']}
 	{@const tests = object(out['tests']) ? out['tests'] : null}
 	{@const typeCount = object(types) && typeof types['total'] === 'number' ? types['total'] : null}

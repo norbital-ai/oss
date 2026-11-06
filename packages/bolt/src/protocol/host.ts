@@ -2,7 +2,7 @@ import { Context, Effect, Fiber, FiberSet, Layer, Option, Record, Ref } from 'ef
 import type * as HttpServerRequest from 'effect/http/HttpServerRequest';
 import * as HttpServerResponse from 'effect/http/HttpServerResponse';
 import { TenantDb } from '../engine/db/tenant-db.ts';
-import { Activation, Outbound, Runs } from '../engine/services.ts';
+import { Activation, Outbound, Agents, Runs } from '../engine/services.ts';
 import { NOT_IN_PREVIEW, ShellConfig, ShellHandler } from '../shell/host.ts';
 import { BoltError } from './errors.ts';
 import { AgentCallTable, AgentTurns, boltRoutes, RateLimits } from './http.ts';
@@ -50,10 +50,12 @@ export const BoltHostLive = Layer.effect(
 		yield* Effect.addFinalizer(() => Ref.set(open, false));
 		const outbound = yield* Outbound,
 			runs = yield* Runs,
+			agents = yield* Agents,
 			{ overran } = yield* Activation;
 		// a cold start makes no trip to the database: this waits for the first thing that needs it
 		(yield* TenantDb).owe(
 			Effect.andThen(outbound.activate, runs.boot(overran)).pipe(
+				Effect.flatMap(agents.gaveUp),
 				Effect.catch((error) => (error._tag === 'DbError' ? Effect.fail(error) : Effect.die(error)))
 			)
 		);

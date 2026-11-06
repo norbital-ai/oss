@@ -54,18 +54,31 @@ export function impactText(
 		case 'rename':
 			return fill(t('Renames {object}'), values);
 		case 'additive':
-			return fill(t('Adds {object}'), values);
+			return step.rows === 0
+				? fill(t('Adds {object}'), values)
+				: fill(t('Writes {rows} ({id})'), values);
 		default:
 			return fill(t('Writes {rows} ({id})'), values);
 	}
 }
-/** What a person reads before merging: every step that touches data (additions are left out), then the downtime. */
+/** A destructive step's plain name, from its generated id (`drop:column:contracts.bank`). */
+export const stepName = (id: string) => id.slice(id.lastIndexOf(':') + 1);
+/**
+ * What a person reads before merging: every step that touches data (additions that write nothing are left out), the
+ * downtime, then what a rollback costs: the schema differs from before, so it returns live's data to this merge.
+ */
 export const impactLines = (
 	impact: MigrationImpact,
 	t: (key: string) => string = (key) => key
 ): readonly string[] => [
-	...impact.steps.filter((step) => step.hazard !== 'additive').map((step) => impactText(step, t)),
+	...impact.steps
+		.filter(
+			// a data step sitting in an additive one wrote rows; the engine's own history bookkeeping is no one's data
+			(step) => step.hazard !== 'additive' || (step.rows > 0 && !step.id.includes(':history:'))
+		)
+		.map((step) => impactText(step, t)),
 	fill(t('Expected downtime about {s} s (measured on the preview)'), {
 		s: Math.max(1, Math.round(impact.durationMs / 1000))
-	})
+	}),
+	t('Rolling back later would lose anything written after this merge')
 ];

@@ -15,7 +15,6 @@ import {
 	modelDividers,
 	orbState,
 	captionOf,
-	logsOf,
 	previewsOf,
 	reportView,
 	resultLine,
@@ -55,7 +54,7 @@ it.effect(
 		Effect.gen(function* () {
 			const completed = {
 				job: 'j1',
-				label: 'workspace_validate',
+				label: 'workspace_preview',
 				studio: 'preview',
 				result: { preview: 'https://preview.test/', commit: 'c1' }
 			};
@@ -87,6 +86,99 @@ it.effect(
 			expect(projected[1]?.tool?.studio).toBeUndefined();
 		})
 );
+
+describe('source edits on the panel', () => {
+	const edited = (name: string, args: Json, result: Json) =>
+		Effect.gen(function* () {
+			const rows = yield* rowsOf([
+				{
+					r: {
+						id: 'edit',
+						conversation: 'c',
+						seq: 1,
+						role: 'tool',
+						content: { id: 'call', name, args: JSON.stringify(args), result },
+						text: null,
+						state: null,
+						mode: null,
+						as: null,
+						author: null,
+						meta: null,
+						supersedes: null,
+						turn: 't'
+					}
+				}
+			]);
+			const [one] = rows;
+			return one === undefined ? null : transcriptRow(one, true, false);
+		});
+	it.effect("an edit's diff comes off its call, so its answer stays a path and diagnostics", () =>
+		Effect.gen(function* () {
+			const edit = yield* edited(
+				'workspace_edit',
+				{ path: 'src/a.ts', oldString: 'one\ntwo', newString: 'three' },
+				{ path: 'src/a.ts', diagnostics: [] }
+			);
+			expect(edit?.tool?.changes).toEqual([{ path: 'src/a.ts', diff: '-one\n-two\n+three' }]);
+			const write = yield* edited(
+				'workspace_write',
+				{ path: 'src/b.ts', content: 'a\nb' },
+				{ path: 'src/b.ts' }
+			);
+			expect(write?.tool?.changes).toEqual([{ path: 'src/b.ts', diff: '+a\n+b' }]);
+		})
+	);
+	it.effect('a row from before the split keeps its shape and its diffs', () =>
+		Effect.gen(function* () {
+			const args = {
+					changes: [
+						{ path: 'src/a.ts', find: 'x', replace: 'y' },
+						{ path: 'b.txt', text: 'z' }
+					]
+				},
+				old = yield* edited('workspace_write', args, {
+					changes: [{ path: 'src/a.ts', diff: '-x\n+y', change: 'modified' }]
+				});
+			expect(old?.tool?.changes).toEqual([
+				{ path: 'src/a.ts', diff: '-x\n+y', change: 'modified' }
+			]);
+			expect(stepView('workspace_write', args)).toMatchObject({
+				verb: 'Edited the source',
+				target: 'src/a.ts, b.txt'
+			});
+		})
+	);
+	it("names each source tool in the person's words", () => {
+		expect(stepView('workspace_write', { path: 'a.ts', content: 'x' })).toMatchObject({
+			verb: 'Edited the source',
+			target: 'a.ts',
+			code: { text: 'x' }
+		});
+		expect(
+			stepView('workspace_edit', { path: 'a.ts', oldString: 'x', newString: 'y' })
+		).toMatchObject({
+			verb: 'Edited the source',
+			target: 'a.ts'
+		});
+		expect(stepView('workspace_move', { path: 'a.ts', to: 'b.ts' })).toMatchObject({
+			verb: 'Moved source',
+			target: 'a.ts → b.ts'
+		});
+		expect(stepView('workspace_move', { path: 'a.ts' })).toMatchObject({
+			verb: 'Deleted source',
+			target: 'a.ts'
+		});
+		expect(stepView('workspace_commit', { message: 'Add notes' })).toMatchObject({
+			verb: 'Committed',
+			target: 'Add notes'
+		});
+		expect(stepView('workspace_install', { name: 'zod', version: '3.0.0' })).toMatchObject({
+			verb: 'Installed a package',
+			target: 'zod@3.0.0'
+		});
+		expect(stepView('workspace_preview', {}).verb).toBe('Built the preview');
+	});
+});
 
 describe('the context view (L-BOLT-546)', () => {
 	it('puts summarized rows outside, but not the rows the checkpoint kept, input still waiting or anything after it', () => {
@@ -260,7 +352,7 @@ describe('background work in the session rail', () => {
 describe('Studio outcomes outside the folded steps', () => {
 	// a host's Studio tools by the roles they declare
 	const ROLE = {
-		workspace_validate: 'preview',
+		workspace_preview: 'preview',
 		browser: 'view',
 		workspace_logs: 'logs',
 		workspace_publish: 'publish',
@@ -300,8 +392,8 @@ describe('Studio outcomes outside the folded steps', () => {
 		expect(
 			previewsOf([
 				step(1, 'page', { preview: 'https://a.test/early' }),
-				step(2, 'workspace_validate', { preview: 'https://a.test/', about }),
-				step(3, 'workspace_validate', { preview: 'https://b.test/', failed: true }),
+				step(2, 'workspace_preview', { preview: 'https://a.test/', about }),
+				step(3, 'workspace_preview', { preview: 'https://b.test/', failed: true }),
 				step(4, 'page', { preview: 'https://evil.test/' }),
 				step(5, 'page', { preview: 'https://a.test/page' }),
 				step(6, 'browser', { about: { ...about, url: 'https://c.test/' } })
@@ -310,8 +402,8 @@ describe('Studio outcomes outside the folded steps', () => {
 		// a bundle is its release when the step names one, else the step: the same bundle never reloads the frame
 		expect(
 			previewsOf([
-				step(1, 'workspace_validate', { preview: 'https://a.test/', about: { release: 'r1' } }),
-				step(2, 'workspace_validate', { preview: 'https://a.test/' })
+				step(1, 'workspace_preview', { preview: 'https://a.test/', about: { release: 'r1' } }),
+				step(2, 'workspace_preview', { preview: 'https://a.test/' })
 			]).map((p) => p.key)
 		).toEqual(['r1', expect.any(String)]);
 		expect(
@@ -324,7 +416,7 @@ describe('Studio outcomes outside the folded steps', () => {
 				},
 				'Asia/Singapore'
 			)
-		).toBe('Draft · Rename title · 390×844 · 23:05');
+		).toBe('Preview · Rename title · 390×844 · 23:05');
 	});
 	it('resolves a merged change to its published workspace without redirecting an unrelated preview', () => {
 		const preview = { url: 'https://preview.test/', key: 'p1', about: { commit: 'c1' } };
@@ -360,19 +452,6 @@ describe('Studio outcomes outside the folded steps', () => {
 		expect(currentPreview({ ...preview, about: { commit: 'unrelated' } }, state).url).toBe(
 			preview.url
 		);
-	});
-	it('lists a runtime log result by level, and nothing for any other tool', () => {
-		const result = JSON.stringify({
-			records: [
-				{ at: '2026-10-21T15:05:01Z', level: 'error', message: 'boom' },
-				{ at: '2026-10-21T15:05:02Z', level: 'info', message: 'ok' }
-			]
-		});
-		expect(logsOf(tool('workspace_logs', result))).toEqual([
-			{ at: '2026-10-21T15:05:01Z', level: 'error', message: 'boom' },
-			{ at: '2026-10-21T15:05:02Z', level: 'info', message: 'ok' }
-		]);
-		expect(logsOf(tool('read', result))).toBeNull();
 	});
 	it.effect('a step whose answer is a held request names it in full, for the card to decide', () =>
 		Effect.gen(function* () {

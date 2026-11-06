@@ -39,7 +39,7 @@ check stays in a squash's retained suffix.
 Run `bolt build --squash=release_name` to create a verified schema baseline for a complete prefix. Use lowercase
 letters, digits and underscores in the name. Its receipt binds the exact original filenames,
 checksums and replayed schema; the original SQL stays under `migrations/archive/` and the alternative baseline under
-`migrations/squashes/`. Commit both directories and the updated lock. Studio's `preview` op takes `squash: <name>` and commits the same result to the change. Squashing
+`migrations/squashes/`. Commit both directories and the updated lock. Studio's `preview` op takes `squash: <name>` and lands the same result in the working tree. Squashing
 needs no environment to be current: archived originals finish any partially applied database. A fresh database runs the longest verified
 baseline. A database partway through the original files finishes those files; a database on an earlier baseline
 runs the original suffix after that baseline. The ledger records only the SQL each database actually executed, so a
@@ -104,17 +104,17 @@ entries or the generated API reference, then use TypeScript completions on an im
 exported values or types. Inspect the chosen symbol's hover documentation and call signature; follow its definition
 when a nested option needs detail. This also works through re-exports and for UI component prop contracts.
 
-In Studio, `workspace_lang` reads the workspace's locked dependencies and saved source (or supplied editor buffers).
-Its completions are paged; follow `next` or narrow by `prefix`. A temporary buffer containing a namespace import
-can explore an API without saving a probe into the workspace. A `type` query accepts TypeScript import types, for
+In Studio, `workspace_lang` reads the workspace's locked dependencies and your working tree.
+Its completions are paged; follow `next` or narrow by `prefix`. An edit commits nothing, so a probe file holding
+a namespace import can explore an API, and `workspace_move` deletes it. A `type` query accepts TypeScript import types, for
 example `typeof import('@norbital-ai/bolt').model` or `import('@norbital-ai/bolt/page').PageBolt['act']`.
 Invalid probes return compiler diagnostics; a type that is too large asks for a narrower query rather than pretending
 a clipped answer is complete. Hover an actual member or query its value to read that member's documentation.
 
-Workspace-specific model, page and automation names come from the latest generated registry. Run the normal check
-after adding or renaming declarations before relying on those names. A resolved type proves the expression is valid
+Workspace-specific model, page and automation names come from the latest generated registry. Run `bolt check` (in
+Studio, a diagnosis) after adding or renaming declarations before relying on those names. A resolved type proves the expression is valid
 in that program; it does not prove runtime permission, validation, provider availability or business behavior. Use
-the full workspace check and tests for those separate obligations.
+`bolt check` and `bolt test` (in Studio, a diagnosis and a test) for those separate obligations.
 
 Public API documentation belongs on the owning exported declaration, so the LSP and generated reference read the
 same source. Explain the operation, authority and lifecycle, required options and defaults, result and failure behavior,
@@ -287,7 +287,7 @@ Three restores, never the same thing:
 | ---------------------- | ------------------------------------------------------------------------------------------ | ------------------------------------------------ |
 | Point-in-time recovery | The whole workspace database, to a moment. Every record, later writes included, goes back. | The host's database backups; an operator action. |
 | Per-record restore     | One live record's own fields, to a past revision, as a new latest revision. History stays. | "Restore this version" in a record's History.    |
-| Source rollback        | The workspace code, to a deployment commit. Data is untouched.                             | Studio's deployment history.                     |
+| Live rollback          | Live's source and data together, to a Version. A differing schema discards newer data.     | Roll back live in Studio's timeline.             |
 
 Per-record restore is two own callables, `history.preview` and `history.restore`, each taking
 `{ model, record, revision }` (`bolt.restore.preview` / `bolt.restore.run` in pages). The

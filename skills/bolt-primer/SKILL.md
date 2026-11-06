@@ -34,16 +34,17 @@ Beside `src/`: `seed/+seeder.ts` `seeder(spec)`; rows `seed/public/**/<model>.js
 
 - A type: `{ op:'type', type:["import('@norbital-ai/ui').TableProps"] }`, several at once. `import('pkg').X` works only for exported types; a value is `typeof import('pkg').x`. Packages: bolt, ui, std, bolt-cli.
 - A function's spec: `Parameters<typeof import('pkg').fn>[1]`; `[1]` for `(name, spec)`, `[0]` for `(spec)`. Narrow with `X['field']`.
-- `completions`, `hover`, `signature` need path, line, column; `buffers` holds an unsaved probe.
+- `completions`, `hover`, `signature` need path, line, column, in your working tree: an edit commits nothing, so a probe is a file.
 - Live names: `describe_workspace`, `workspace_list`.
 
 ## Protocol
 
 1. Author in order: model, access, automation or sync, page, tests. Add a page only for a task the model's table and record sheet do not cover.
-2. Write everything in one `workspace_write` with many changes.
-3. `workspace_validate` runs build, pages, types and tests together; `only` runs one part. Fix what it names. Tests `empty` proves nothing: every automation and refused state carries a test.
-4. `workspace_try` runs each automation once on the preview and reads what it changed. A preview binds no integration links: a sync's decoding is proved in a test. After the merge, create its connection on live with `sys_integration.create { integration, name }`, start it, and read the rows.
-5. `workspace_merge` with the head commit, a summary and a ledger line per capability: what implements it, or `skip: reason`.
+2. Edit with `workspace_write`, `workspace_edit` and `workspace_move`, one file a call. Edits stay in your working tree. After a schema change `workspace_generate` writes the generated migrations into the working tree; a diagnosis fails until they exist.
+3. `workspace_commit` with a message, in any state; new commits join your line on top of live. If live moved, `workspace_rebase` replays them on top of it, migrations too: a merge never does, and reverting to redo work never helps.
+4. `workspace_diagnose` runs the diagnosis on the working tree. `workspace_test` runs the tests in the background: keep working, and the result reaches you as a system message at your next step, or collect it with `wait`. Both run by hand. Fix what they name. Tests `empty` proves nothing: every automation and refused state carries a test.
+5. `workspace_preview` builds the last commit, serves it and opens every page. `workspace_try` runs each automation once on the preview and reads what it changed. A preview binds no integration links: a sync's decoding is proved in a test. After the merge, create its connection on live with `sys_integration.create { integration, name }`, start it, and read the rows.
+6. `workspace_merge` with the last commit, a summary and a ledger line per capability: what implements it, or `skip: reason`. It needs no uncommitted edits, commits on top of live, a passed diagnosis and passed tests on that commit, and its preview; it runs neither.
 
 ## Rules
 

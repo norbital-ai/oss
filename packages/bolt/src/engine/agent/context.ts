@@ -128,7 +128,7 @@ const KERNEL = `You work inside a Norbital workspace: models are tables declared
 /** What a Studio author's turn adds: the flow, from the tools' roles. */
 const source = (named: (role: StudioRole) => string | undefined) =>
 	`# Source
-Before your first write read the bolt-primer skill once; it holds the contract, and nothing outside this workspace does. Source is under src/; workspace_list shows it with each role. workspace_lang answers any API: never guess an import or a shape. ${named('preview') ?? 'Validate'} builds a change and checks it, ${named('merge') ?? 'merge'} asks the person to take it live. A preview URL opens only signed in: browser { workspace: { environment, path } }. Quote a Version by its label.`;
+Before your first source edit read the bolt-primer skill once; it holds the contract, and nothing outside this workspace does. Source is under src/; workspace_list shows it with each role. workspace_lang answers any API: never guess an import or a shape. Edits stay uncommitted in your working tree: workspace_diagnose checks its types, workspace_generate writes what a schema change needs, workspace_test runs its tests in the background and the result reaches you as a system message, and workspace_commit records it. ${named('preview') ?? 'Preview'} builds and serves the last commit, ${named('merge') ?? 'merge'} asks the person to take it live. A preview URL opens only signed in: browser { workspace: { environment, path } }. Quote a Version by its label. Data a merge depends on is a migration in your commits, never a write on live.`;
 
 /** Envoy turns: a chat is read by people, not engineers. */
 /**
@@ -177,6 +177,7 @@ export function projection(
 				? sender !== undefined && r.sender === sender && (r.deleted_at ?? null) === null
 				: r.role !== null) &&
 			r.state !== 'queued' &&
+			r.state !== 'scheduled' &&
 			r.state !== 'pending' &&
 			r.state !== 'cancelled'
 	); // hook:triage (pending)

@@ -62,7 +62,8 @@ import { Nudges, RunHandlersLive, RunsLive, WakeLive } from './runs/index.ts';
 import { ConversationsLive } from './conversations/index.ts';
 import { EnvoysLive } from './envoys/index.ts';
 import { TurnHandlers, TurnsLive } from './agent/turns.ts';
-import { TriageLive, TriageService } from './agent/triage.ts';
+import { MessageQueue } from './agent/queue.ts';
+import { SmartThrottle, SmartThrottleLive } from './agent/throttle.ts';
 import { AgentDrains, AgentsLive } from './agent/index.ts';
 import { LinksLive } from './integrations/links.ts';
 import { Syncs, SyncsLive } from './sync/index.ts';
@@ -98,7 +99,8 @@ export type EngineServices =
 	| Nudges
 	| RunEnds
 	| TurnHandlers
-	| TriageService
+	| SmartThrottle
+	| MessageQueue
 	| AgentDrains;
 export type EngineHost =
 	| Crypto.Crypto
@@ -196,8 +198,8 @@ export function EngineLive(
 		Layer.provideMerge(approvals)
 	);
 	const conversations = ConversationsLive.pipe(Layer.provideMerge(facilities));
-	const triage = TriageLive.pipe(Layer.provideMerge(conversations));
-	const agents = AgentsLive.pipe(Layer.provideMerge(triage));
+	const throttle = SmartThrottleLive.pipe(Layer.provideMerge(conversations));
+	const agents = AgentsLive.pipe(Layer.provideMerge(throttle));
 	const envoys = EnvoysLive.pipe(Layer.provideMerge(agents));
 	return RunsLive.pipe(
 		Layer.provideMerge(envoys),

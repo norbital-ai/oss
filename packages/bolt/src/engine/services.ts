@@ -364,7 +364,7 @@ export type RunsShape = {
 	 * A generation's recovery (rule 52a), run as it activates: the runs the previous one left `running` rerun (up to 3
 	 * leases), or fail `cpuBudget` with `overran` when it stopped past a unit's CPU budget; then `settle`.
 	 */
-	readonly boot: (overran?: string) => Effect.Effect<void, EngineError>;
+	readonly boot: (overran?: string) => Effect.Effect<readonly string[], EngineError>;
 	/** One wake: claim every due run, run them, settle with the next due time. */
 	readonly tick: Effect.Effect<void, EngineError>;
 	/** A planned close: no run starts from now on; answers once the running automations ended. */
@@ -491,6 +491,10 @@ export type AgentsShape = {
 		readonly supersedes?: string | undefined;
 		readonly tz?: string | undefined;
 	}) => Effect.Effect<MessageRow, EngineError>;
+	/** Runs the conversation once its running turn (if any) ends, so input that landed as it finished is not left queued. */
+	readonly kick: (id: string) => Effect.Effect<void>;
+	/** Each conversation whose turn no run will finish says so: `Runs.boot` released them. */
+	readonly gaveUp: (conversations: readonly string[]) => Effect.Effect<void, EngineError>;
 	/** Append a system note (an approved or rejected request) and wake the conversation's turn. */
 	readonly notify: (o: {
 		readonly conversation: string;
@@ -509,6 +513,8 @@ export type AgentsShape = {
 		member: string,
 		refs: readonly Json[]
 	) => Effect.Effect<readonly Json[], EngineError>;
+	/** Parses the member's uploaded document ahead of its message. */
+	readonly readAhead: (member: string, ref: Json) => Effect.Effect<void, EngineError>;
 	/** Stop interrupts the turn's fiber (the in-flight model call included). */
 	readonly stop: (id: string) => Effect.Effect<void, EngineError>;
 	/** A stopped conversation recalls its stopped objective, then drains. */

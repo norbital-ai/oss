@@ -74,7 +74,9 @@ export type Meta =
 	/** A workspace event the host published (a merge landed, maintenance scheduled), heard at a turn step; `at` is its time. */
 	| { tag: 'event'; at: string }
 	/** A sub-agent's report to its parent (its answer, its question, a failure or a stop), queued as the parent's input. */
-	| { tag: 'report'; conversation: string; asked?: true };
+	| { tag: 'report'; conversation: string; asked?: true }
+	/** A message held until `at`, or with no `at` until the running turn finishes. */
+	| { tag: 'scheduled'; at?: string };
 /** Every model call of a turn summed (turn steps, compaction, verifier, awaited children): the cost disclosure's data. */
 export type Usage = {
 	-readonly [K in keyof typeof UsageSchema.Type]: (typeof UsageSchema.Type)[K];
@@ -146,7 +148,8 @@ const MetaSchema = Schema.Union([
 	}),
 	Schema.Struct({ tag: Schema.Literal('output'), full: Schema.Json }),
 	Schema.Struct({ tag: Schema.Literal('note') }),
-	Schema.Struct({ tag: Schema.Literal('event'), at: Schema.String })
+	Schema.Struct({ tag: Schema.Literal('event'), at: Schema.String }),
+	Schema.Struct({ tag: Schema.Literal('scheduled'), at: Schema.optionalKey(Schema.String) })
 ]);
 /** Unnamed keys a content or file object carries stay as written. */
 const Rest = [Schema.Record(Schema.String, Schema.Json)] as const;
@@ -205,6 +208,7 @@ const MessageFields = {
 		Schema.Literals([
 			'pending',
 			'queued',
+			'scheduled',
 			'consumed',
 			'cancelled',
 			'confirm',
@@ -348,7 +352,9 @@ const SHOWN: ReadonlySet<string> = new Set([
 	'workspace_search',
 	'workspace_list',
 	'workspace_lang',
-	'workspace_validate',
+	'workspace_diagnose',
+	'workspace_test',
+	'workspace_preview',
 	'workspace_try',
 	'runs',
 	'logs'
@@ -386,13 +392,42 @@ function aboutOf(result: { readonly [k: string]: unknown }): Record<string, stri
 	return Object.keys(out).length === 0 ? undefined : out;
 }
 
-/** A source edit's files and compact diffs, kept out of the 600-character result clip the panel's Changes tab needs. */
+const SourceEdit = Schema.fromJsonString(
+	Schema.Struct({
+		path: Schema.String,
+		content: Schema.optionalKey(Schema.String),
+		oldString: Schema.optionalKey(Schema.String),
+		newString: Schema.optionalKey(Schema.String)
+	})
+);
+const marked = (mark: string, text: string) =>
+	text
+		.split('\n')
+		.map((line) => `${mark}${line}`)
+		.join('\n');
+/**
+ * A source edit's files and compact diffs for the panel's Changes tab. An edit reads them off its call, whose answer
+ * stays `{ path, diagnostics }` so a diff never enters the model's context; a row from before the split carries them.
+ */
 function changesOf(
-	step: { readonly name: string } | null,
+	step: { readonly name: string; readonly args?: string } | null,
 	result: Json | undefined
 ): ReadonlyArray<{ path: string; diff: string; change?: string }> | undefined {
-	if (step === null || step.name !== 'workspace_write')
-		return undefined;
+	if (step === null) return undefined;
+	const edit =
+		step.name === 'workspace_edit' || step.name === 'workspace_write'
+			? Option.getOrUndefined(Schema.decodeUnknownOption(SourceEdit)(step.args))
+			: undefined;
+	if (edit?.content !== undefined)
+		return [{ path: edit.path, diff: marked('+', edit.content).slice(0, 8000) }];
+	if (edit?.oldString !== undefined && edit.newString !== undefined)
+		return [
+			{
+				path: edit.path,
+				diff: `${marked('-', edit.oldString)}\n${marked('+', edit.newString)}`.slice(0, 8000)
+			}
+		];
+	if (step.name !== 'workspace_write') return undefined;
 	if (!Predicate.isObject(result) || !Array.isArray(result['changes'])) return undefined;
 	const files = result['changes'].flatMap((change) =>
 		Predicate.isObject(change) &&
@@ -511,6 +546,7 @@ export function transcriptRow(r: MessageRow, staff: boolean, thread: boolean): A
 		text: r.text,
 		state: r.state,
 		tag: meta?.tag ?? (ambient(r) || aside ? 'ambient' : null),
+		...(meta?.tag === 'scheduled' && meta.at !== undefined ? { due: meta.at } : {}),
 		...(r.turn === null ? {} : { turn: r.turn }),
 		author: authorOf(r),
 		...(r.created_at === undefined ? {} : { at: r.created_at }),

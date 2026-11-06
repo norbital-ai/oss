@@ -25,7 +25,6 @@ import {
 	type MigrationLock,
 	type MigrationFile,
 	type PhysicalDefinitions,
-	type SchemaObject,
 	type SchemaSpec,
 	type SquashReceipt
 } from '@norbital-ai/store';
@@ -34,27 +33,13 @@ import {
 	migrationLines,
 	readMigrationSources,
 	managedTables,
-	sourceObjects,
-	auditTriggers,
 	historySchemaObjects,
 	HISTORY_SCHEMA_TABLES,
 	fromStore,
 	PgliteDb,
 	Pristine
 } from '@norbital-ai/bolt/tooling';
-import { migrationSchema, BoltError } from '@norbital-ai/bolt/engine';
-
-/** These exact native triggers are source definitions, including every historical prefix's own arguments. */
-const auditSource = (schema: SchemaSpec): readonly SchemaObject[] =>
-	Object.values(schema.tables).some(
-		(table) => table.nativeRules !== undefined && table.audit === true
-	)
-		? [
-				...sourceObjects(),
-				...historySchemaObjects(schema.tables, schema.currency),
-				...auditTriggers(schema.tables)
-			]
-		: [];
+import { migrationObjects, migrationSchema, BoltError } from '@norbital-ai/bolt/engine';
 
 /** `function <name> <definition>` lines by name: what a body comparison reads off an introspection. */
 const functionLines = (lines: readonly string[]): ReadonlyMap<string, string> =>
@@ -169,13 +154,13 @@ export const prepareMigrations = Effect.fn('Bolt.prepareMigrations')(function* (
 			: yield* readSnapshot(snapshotText).pipe(Effect.mapError(fromStore));
 	const next = migrationSchema(manifest);
 	const declared = yield* build(next).pipe(Effect.mapError(fromStore));
-	const native = auditSource(next);
-	const heldLines =
+	const native = migrationObjects(next);
+	const held =
 		physicalText === undefined
 			? undefined
-			: (yield* readPhysicalDefinitions(physicalText).pipe(Effect.mapError(fromStore)))[
-					files.at(-1)?.name ?? ''
-				];
+			: yield* readPhysicalDefinitions(physicalText).pipe(Effect.mapError(fromStore));
+	// a rebased history's own files have no proof yet: its last proved prefix is what it holds
+	const heldLines = held?.[files.findLast((file) => held[file.name] !== undefined)?.name ?? ''];
 	if (mode === 'generate' && (previous === null || canonical(previous) !== canonical(next))) {
 		if (previous === null && files.length > 0)
 			return yield* BoltError.make(
@@ -193,7 +178,7 @@ export const prepareMigrations = Effect.fn('Bolt.prepareMigrations')(function* (
 				number: files.length + 1,
 				name: files.length === 0 ? 'initial' : 'schema'
 			},
-			auditSource
+			migrationObjects
 		).pipe(Effect.mapError(fromStore));
 		yield* fs.makeDirectory(directory, { recursive: true });
 		const prologue: string[] = [];
@@ -448,7 +433,7 @@ export const prepareMigrations = Effect.fn('Bolt.prepareMigrations')(function* (
 					.toLowerCase();
 				// A procedural/data suffix stays byte-for-byte. Replay the DDL prefix to preserve its historical definitions.
 				const proposed: MigrationFile = complete
-					? (yield* generateSquash(prefix, next, { name: options.squash }, auditSource).pipe(
+					? (yield* generateSquash(prefix, next, { name: options.squash }, migrationObjects).pipe(
 							Effect.mapError(fromStore)
 						)).file
 					: {

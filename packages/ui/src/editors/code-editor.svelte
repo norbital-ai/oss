@@ -3,11 +3,8 @@
 A CodeMirror code editor for JavaScript (also CEL and TypeScript expressions), JSON or plain text.
 -->
 <script lang="ts" module>
-	import { syntaxHighlighting } from '@codemirror/language';
-	import { EditorView } from '@codemirror/view';
-	import { codeHighlighter } from './highlight.js';
-	/** Code in CodeMirror: `javascript` (also CEL and TypeScript expressions), `json`, or `plaintext`. */
-	export type CodeEditorLanguage = 'javascript' | 'json' | 'plaintext';
+	import type { CodeEditorLanguage } from './code-setup.js';
+	export type { CodeEditorLanguage };
 	/**
 	 * The props of `CodeEditor`: the text and `onChange`, the language, read-only and invalid states, and the minimum height.
 	 */
@@ -26,59 +23,15 @@ A CodeMirror code editor for JavaScript (also CEL and TypeScript expressions), J
 		'aria-label'?: string;
 		'aria-labelledby'?: string;
 	};
-	// StyleMod retains mounted rules for the document's lifetime; share immutable styles across editor instances.
-	const theme = EditorView.theme({
-		'&': {
-			height: '100%',
-			minHeight: 'inherit',
-			fontSize: '0.75rem',
-			color: 'var(--foreground)',
-			backgroundColor: 'transparent'
-		},
-		'&.cm-focused': { outline: 'none' },
-		'.cm-scroller': { fontFamily: 'var(--font-mono)', lineHeight: '1.5', minHeight: 'inherit' },
-		'.cm-content': { caretColor: 'var(--foreground)', paddingRight: '10px' },
-		'.cm-scroller .cm-cursor, .cm-scroller .cm-dropCursor': {
-			borderLeftColor: 'var(--foreground)'
-		},
-		'.cm-gutters': {
-			backgroundColor: 'transparent',
-			color: 'var(--muted-foreground)',
-			border: 'none'
-		},
-		'.cm-activeLine, .cm-activeLineGutter': { backgroundColor: 'transparent' },
-		'&.cm-focused .cm-activeLine': {
-			backgroundColor: 'color-mix(in oklab, var(--brand) 10%, transparent)'
-		},
-		'&.cm-focused > .cm-scroller > .cm-selectionLayer .cm-selectionBackground, .cm-selectionBackground':
-			{
-				backgroundColor: 'var(--accent)'
-			},
-		'.cm-content ::selection, .cm-content::selection': {
-			backgroundColor: 'var(--accent)',
-			color: 'var(--accent-foreground)'
-		},
-		'.cm-tooltip': {
-			backgroundColor: 'var(--popover)',
-			color: 'var(--popover-foreground)',
-			border: '1px solid var(--border)',
-			borderRadius: '4px'
-		},
-		'.cm-tooltip-autocomplete ul li[aria-selected]': {
-			backgroundColor: 'var(--accent)',
-			color: 'var(--accent-foreground)'
-		}
-	});
-	const highlight = syntaxHighlighting(codeHighlighter);
 </script>
 
 <script lang="ts">
 	import { untrack } from 'svelte';
-	import { javascript } from '@codemirror/lang-javascript';
-	import { json } from '@codemirror/lang-json';
 	import { Annotation, Compartment, EditorState, type Extension } from '@codemirror/state';
+	import { EditorView } from '@codemirror/view';
 	import { basicSetup } from 'codemirror';
 	import { cn } from '../primitives/utils.js';
+	import { codeHighlight, codeLanguage, codeTheme } from './code-setup.js';
 
 	let {
 		value,
@@ -94,13 +47,11 @@ A CodeMirror code editor for JavaScript (also CEL and TypeScript expressions), J
 		'aria-labelledby': ariaLabelledby
 	}: CodeEditorProps = $props();
 
-	const lang = (l: CodeEditorLanguage): Extension =>
-		l === 'javascript' ? javascript() : l === 'json' ? json() : [];
 	/** Marks a transaction that mirrors `value` in, so it is not echoed back through `onChange`. */
 	const External = Annotation.define<boolean>();
 	const config = new Compartment();
 	const settings = (): Extension => [
-		lang(language),
+		codeLanguage(language),
 		wrap ? EditorView.lineWrapping : [],
 		EditorState.readOnly.of(readonly),
 		EditorView.editable.of(!readonly),
@@ -122,8 +73,8 @@ A CodeMirror code editor for JavaScript (also CEL and TypeScript expressions), J
 					doc: value,
 					extensions: [
 						basicSetup,
-						theme,
-						highlight,
+						codeTheme,
+						codeHighlight,
 						config.of(settings()),
 						EditorView.updateListener.of((u) => {
 							if (u.docChanged && !u.transactions.some((tr) => tr.annotation(External)))

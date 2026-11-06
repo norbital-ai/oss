@@ -59,6 +59,7 @@ import {
 	Reads,
 	RunHandlers,
 	Runs,
+	SmartThrottle,
 	type ActsRequest,
 	type OutboundFile,
 	type ShapeOf,
@@ -292,7 +293,9 @@ export type CassetteOptions = {
 /**
  * The default integration driver fake, a test's remote system: inspect sent messages and typing notices; `answer` is the
  * remote a sync's `read` and `write` reach through `ctx.request` (a request driver's call: list pages, write acks,
- * refusals), and `page` a pushing driver's page of items for a sync (`read`'s `items`, a calendar's events).
+ * refusals): it answers as the driver does, `{ status, body }` with `body` the value `ctx.request` yields (already decoded
+ * JSON, not bytes), and `op` is the request as made (`path` is relative to the definition's base URL). `page` is a pushing
+ * driver's page of items for a sync (`read`'s `items`, a calendar's events).
  */
 export type FakeLinks = {
 	readonly sent: { instance: string; message: Json; attachments?: readonly OutboundFile[] }[];
@@ -1518,6 +1521,7 @@ export class TestWorkspace extends Context.Service<TestWorkspace, Kit>()(
 									Effect.sync(() => {
 										f.links.typed.push({ instance, to, on });
 									}),
+								unpaced: true,
 								request: (instance, op) => f.links.answer(instance, op),
 								read: (instance, sync, partition, cursor) =>
 									f.links.page(instance, sync, partition, cursor),
@@ -1527,10 +1531,12 @@ export class TestWorkspace extends Context.Service<TestWorkspace, Kit>()(
 				const ports = Layer.mergeAll(
 					facilityLayers(facilities),
 					// the kit's own runner: guest code runs in this process's `node:vm` contexts
-					GuestIsolates.fromAbi(nodeGuests({
-						...(options.guestCpuMs == null ? {} : { cpuMs: options.guestCpuMs }),
-						...(options.guestMeter == null ? {} : { meter: options.guestMeter })
-					})),
+					GuestIsolates.fromAbi(
+						nodeGuests({
+							...(options.guestCpuMs == null ? {} : { cpuMs: options.guestCpuMs }),
+							...(options.guestMeter == null ? {} : { meter: options.guestMeter })
+						})
+					),
 					links,
 					Images.fromAbi(native.images),
 					Docs.fromAbi(native.docs),
@@ -1618,6 +1624,7 @@ export class TestWorkspace extends Context.Service<TestWorkspace, Kit>()(
 				const runs = Context.get(engineContext, Runs),
 					runHandlers = Context.get(engineContext, RunHandlers),
 					envoys = Context.get(engineContext, Envoys),
+					throttle = Context.get(engineContext, SmartThrottle),
 					integration = Context.get(engineContext, Conversations);
 
 				const shellBase = Layer.mergeAll(
@@ -2127,6 +2134,7 @@ export class TestWorkspace extends Context.Service<TestWorkspace, Kit>()(
 							for (let pass = 1; ; pass++) {
 								yield* runs.tick;
 								yield* quiet;
+								yield* throttle.settled;
 								const [due] = yield* Effect.andThen(
 									flush,
 									inner.read([
@@ -2158,9 +2166,10 @@ export class TestWorkspace extends Context.Service<TestWorkspace, Kit>()(
 							yield* runs.boot();
 						}).pipe(Effect.provide(hostContext)),
 					settled: () =>
-						Effect.andThen(quiet, Effect.andThen(envoys.settled, host.settled)).pipe(
-							Effect.provide(hostContext)
-						),
+						Effect.andThen(
+							quiet,
+							Effect.andThen(throttle.settled, Effect.andThen(envoys.settled, host.settled))
+						).pipe(Effect.provide(hostContext)),
 					receive: (instance, messages, opts = {}) =>
 						Effect.gen(function* () {
 							yield* integration.receive(instance, {
@@ -2170,6 +2179,7 @@ export class TestWorkspace extends Context.Service<TestWorkspace, Kit>()(
 							});
 							yield* runs.tick;
 							yield* envoys.settled;
+							yield* throttle.decided;
 						}).pipe(Effect.provide(hostContext)),
 					handle,
 					session: (id) =>

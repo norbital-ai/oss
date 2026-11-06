@@ -301,6 +301,43 @@ describe('P38: every run ends, drains interrupt, loops prove progress', () => {
 							finished: true
 						}
 					]);
+					// a turn runs beside whatever overran: it goes on over the next generation
+					const conversation = '00000000-0000-4000-8000-000000000001';
+					yield* t.db.write({
+						text: `INSERT INTO sys_conversation (id, status, lease_until) VALUES ($1, 'running', now())`,
+						params: [conversation]
+					});
+					yield* t.db.write({
+						text: `UPDATE sys_run SET state = 'running', automation = 'agent.turn', finished_at = NULL, error = NULL, input = jsonb_build_object('conversation', $1::text)`,
+						params: [conversation]
+					});
+					yield* runs.boot('The run used its CPU budget.').pipe(Effect.provide(context));
+					expect(yield* sql(t, `SELECT state FROM sys_run`)).toEqual([{ state: 'queued' }]);
+					expect(yield* sql(t, `SELECT status FROM sys_conversation`)).toEqual([
+						{ status: 'running' }
+					]);
+					// a turn that keeps dying gives up, and its conversation takes input again
+					yield* t.db.write({
+						text: `UPDATE sys_run SET state = 'running', leases = 3`,
+						params: []
+					});
+					expect(yield* runs.boot().pipe(Effect.provide(context))).toEqual([conversation]);
+					expect(yield* sql(t, `SELECT state FROM sys_run`)).toEqual([{ state: 'failed' }]);
+					expect(yield* sql(t, `SELECT status FROM sys_conversation`)).toEqual([
+						{ status: 'idle' }
+					]);
+					// one that lost its run some other way is released too, once its lease lapses
+					yield* t.db.write({
+						text: `UPDATE sys_conversation SET status = 'running', lease_until = now() + interval '1 hour'`,
+						params: []
+					});
+					yield* t.db.write({ text: `DELETE FROM sys_run`, params: [] });
+					expect(yield* runs.boot().pipe(Effect.provide(context))).toEqual([]);
+					yield* t.db.write({
+						text: `UPDATE sys_conversation SET lease_until = '1960-01-01'`,
+						params: []
+					});
+					expect(yield* runs.boot().pipe(Effect.provide(context))).toEqual([conversation]);
 				})
 			)
 	);

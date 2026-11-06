@@ -2,7 +2,7 @@
 // and the model-change dividers (L-BOLT-547). Each is a function of the rows alone, so a reload shows the same thing.
 import { Array as Arr, Option, Predicate, Schema } from 'effect';
 import type { AgentConversation, AgentRow } from '../../protocol/wire.ts';
-import type { StudioLogLine, StudioView } from '../studio/model.ts';
+import type { StudioView } from '../studio/model.ts';
 
 /** One mark per state: waiting on a person is not failing, and a finished or stopped turn is not idle. */
 export type Orb = 'ready' | 'working' | 'waiting' | 'failed' | 'done' | 'stopped';
@@ -48,7 +48,8 @@ export function contextView(
 		plan !== null && plan !== undefined && plan.status !== 'draft' ? plan.checkpoint : undefined;
 	const outside = new Set<string>();
 	for (const r of rows) {
-		if (r.state === 'queued' || r.state === 'pending' || r.id === latest?.id) continue;
+		if (r.state === 'queued' || r.state === 'scheduled' || r.state === 'pending') continue;
+		if (r.id === latest?.id) continue;
 		const summarized =
 			latest?.compact !== undefined &&
 			r.seq <= latest.compact.cutoff &&
@@ -310,6 +311,14 @@ const VIEWS: { readonly [tool: string]: (a: Args) => StepView } = {
 		code: { text: str(a['markdown']), language: 'plaintext' }
 	}),
 	workspace_write: (a) => {
+		if (typeof a['content'] === 'string')
+			return {
+				icon: 'lucide:file-pen-line',
+				verb: 'Edited the source',
+				target: str(a['path']),
+				code: { text: a['content'], language: languageOf(str(a['path'])) }
+			};
+		// a row from before the split: one call, many changes
 		const changes: Args[] = Arr.isArray(a['changes']) ? a['changes'].map(obj) : [];
 		const first = changes[0] ?? {};
 		// a whole file is its text; a find/replace edit shows what it replaced and with what
@@ -330,14 +339,59 @@ const VIEWS: { readonly [tool: string]: (a: Args) => StepView } = {
 			...(text === '' ? {} : { code: { text, language: languageOf(str(first['path'])) } })
 		};
 	},
+	workspace_edit: (a) => ({
+		icon: 'lucide:file-pen-line',
+		verb: 'Edited the source',
+		target: str(a['path']),
+		code: {
+			text: `// before\n${str(a['oldString'])}\n// after\n${str(a['newString'])}`,
+			language: languageOf(str(a['path']))
+		}
+	}),
+	workspace_move: (a) =>
+		a['to'] === undefined
+			? { icon: 'lucide:file-x', verb: 'Deleted source', target: str(a['path']) }
+			: {
+					icon: 'lucide:file-symlink',
+					verb: 'Moved source',
+					target: `${str(a['path'])} → ${str(a['to'])}`
+				},
+	workspace_commit: (a) => ({
+		icon: 'lucide:git-commit-horizontal',
+		verb: 'Committed',
+		target: str(a['message'])
+	}),
+	workspace_rebase: () => ({
+		icon: 'lucide:git-pull-request-arrow',
+		verb: 'Rebased on live',
+		target: ''
+	}),
+	workspace_revert: () => ({ icon: 'lucide:undo-2', verb: 'Reverted commits', target: '' }),
+	workspace_install: (a) => ({
+		icon: 'lucide:package-plus',
+		verb: 'Installed a package',
+		target: `${str(a['name'])}@${str(a['version'])}`
+	}),
+	workspace_preview: () => ({
+		icon: 'lucide:eye',
+		verb: 'Built the preview',
+		target: ''
+	}),
+	workspace_diagnose: () => ({
+		icon: 'lucide:shield-check',
+		verb: 'Ran the diagnosis',
+		target: ''
+	}),
+	// an older row keeps its words
 	workspace_validate: (a) => ({
 		icon: 'lucide:shield-check',
-		verb:
-			a['only'] === 'types'
-				? 'Checked the types'
-				: a['only'] === 'tests'
-					? 'Ran the tests'
-					: 'Checked the change',
+		verb: a['only'] === 'tests' ? 'Ran the tests' : 'Ran the diagnosis',
+		target: ''
+	}),
+	workspace_test: () => ({ icon: 'lucide:flask-conical', verb: 'Started the tests', target: '' }),
+	workspace_generate: () => ({
+		icon: 'lucide:wand-sparkles',
+		verb: 'Generated the migration',
 		target: ''
 	}),
 	workspace_try: () => ({ icon: 'lucide:play', verb: 'Tried it on the preview', target: '' }),
@@ -512,7 +566,16 @@ export const failedVerbs = (steps: readonly AgentRow[]): string[] =>
 /** What a running Studio step is doing, in the person's words: the group's line while it runs. */
 const DOING: { readonly [tool: string]: string } = {
 	workspace_write: 'Editing the source…',
-	workspace_validate: 'Checking the change…',
+	workspace_edit: 'Editing the source…',
+	workspace_move: 'Editing the source…',
+	workspace_commit: 'Committing…',
+	workspace_merge_message: 'Setting the merge message…',
+	workspace_rebase: 'Rebasing on live…',
+	workspace_revert: 'Reverting commits…',
+	workspace_preview: 'Building the preview…',
+	workspace_diagnose: 'Running the diagnosis…',
+	workspace_test: 'Starting the tests…',
+	workspace_generate: 'Generating the migration…',
 	workspace_try: 'Trying it on the preview…',
 	workspace_review: 'Reviewing the changes…'
 };
@@ -537,7 +600,7 @@ export function captionOf(
 					...(zone === undefined ? {} : { timeZone: zone })
 				});
 	return [
-		about['environment']?.toLowerCase() === 'live' ? 'Live' : 'Draft',
+		about['environment']?.toLowerCase() === 'live' ? 'Live' : 'Preview',
 		about['message'] ?? commit?.slice(0, 7),
 		about['viewport'],
 		time
@@ -599,21 +662,4 @@ export function currentPreview(
 			...(release === undefined ? {} : { commit: release.commit, message: release.message })
 		}
 	};
-}
-
-/** The records of a `logs` role's result (`{ records: StudioLogLine[] }`); `null` for any other step. */
-const LogResult = Schema.fromJsonString(
-	Schema.Struct({
-		records: Schema.Array(
-			Schema.Struct({
-				at: Schema.String,
-				level: Schema.Literals(['info', 'warn', 'error']),
-				message: Schema.String
-			})
-		)
-	})
-);
-export function logsOf(tool: AgentRow['tool']): readonly StudioLogLine[] | null {
-	if (tool?.studio !== 'logs' || tool.failed || tool.result === undefined) return null;
-	return Option.getOrNull(Schema.decodeUnknownOption(LogResult)(tool.result))?.records ?? null;
 }

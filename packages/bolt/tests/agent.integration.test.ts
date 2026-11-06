@@ -29,7 +29,7 @@ import type { MessageRow } from '../src/engine/agent/schema.ts';
 import { Authorities } from '../src/engine/identity/actor.ts';
 import type { EngineManifest } from '../src/engine/manifest.ts';
 import { Port, type PortFailure } from '../src/engine/port.ts';
-import { Ai, Convert, Files, Mcp, type AiEvent } from '../src/engine/ports.ts';
+import { Ai, Convert, Files, Mcp, RunUnits, type AiEvent } from '../src/engine/ports.ts';
 import { off } from '../src/facilities/off.ts';
 import { openAiChat } from '../src/engine/agent/openai-chat.ts';
 import { mcpPort } from '../src/node/mcp.ts';
@@ -569,6 +569,112 @@ describe('in-app turns', () => {
 					expect(transcriptRow(settled, true, false)?.tool?.approval).toBeUndefined();
 				})
 			)
+	);
+	it.live('a background tool answers at once and its result arrives as a system message', () =>
+		Effect.scoped(
+			Effect.gen(function* () {
+				const ai = cassette();
+				ai.arm([use('workspace_test', {}), say('Tests are running.'), say('They failed: fixing.')]);
+				const finish = yield* Deferred.make<void>();
+				const { agent, user } = yield* build(ai, {
+					hostTools: [
+						{
+							name: 'workspace_test',
+							description: 'Fixture tests',
+							input: { type: 'object', properties: {}, additionalProperties: false },
+							readOnly: true,
+							background: true,
+							call: async () => {
+								await Effect.runPromise(Deferred.await(finish));
+								return { tests: { failed: 1 }, error: '1 failing: adds up' };
+							}
+						}
+					]
+				});
+				const ann = yield* user('background', { admin: true });
+				const c = yield* agent.start({ owner: ann });
+				yield* agent.post({ conversation: c, as: { member: ann }, text: 'Run them' });
+				const turn = yield* Effect.forkChild(agent.drain(c));
+				while (!(yield* agent.transcript(c)).some((r) => r.role === 'tool' && r.state === null))
+					yield* Effect.sleep('5 millis');
+				const step = (yield* agent.transcript(c)).find((r) => r.role === 'tool');
+				expect(JSON.stringify(step?.content)).toContain('Running in the background');
+				yield* Deferred.succeed(finish, undefined);
+				yield* Fiber.join(turn);
+				const alert = (yield* agent.transcript(c)).find((r) =>
+					r.text?.includes('finished] workspace_test')
+				);
+				expect(alert).toMatchObject({ role: 'system' });
+				// the result itself, not a pointer to it; and red tests are the agent's to fix
+				expect(alert?.text).toContain('1 failing: adds up');
+				expect(alert?.text).not.toContain('tell the person');
+			})
+		)
+	);
+	it.live('each step has a CPU budget of its own, so a long turn is not one long run', () =>
+		Effect.scoped(
+			Effect.gen(function* () {
+				const ai = cassette();
+				ai.arm([use('read', { path: 'a' }), use('read', { path: 'b' }), say('Done.')]);
+				const { agent, user } = yield* build(ai, {
+					hostTools: [
+						{
+							name: 'read',
+							description: 'Fixture read',
+							input: { type: 'object' as const, additionalProperties: true },
+							readOnly: true,
+							call: async () => ({ text: 'x' })
+						}
+					]
+				});
+				const ann = yield* user('steps', { admin: true });
+				const c = yield* agent.start({ owner: ann });
+				yield* agent.post({ conversation: c, as: { member: ann }, text: 'Read two files' });
+				let units = 0;
+				yield* agent
+					.drain(c)
+					.pipe(Effect.provideService(RunUnits, { next: () => Effect.sync(() => void units++) }));
+				expect(units).toBeGreaterThanOrEqual(3);
+			})
+		)
+	);
+	it.live('edit and test rounds that stay red are told to stop, then stopped', () =>
+		Effect.scoped(
+			Effect.gen(function* () {
+				const ai = cassette();
+				ai.arm(
+					Array.from({ length: 8 }, (_, n) => [
+						use('workspace_write', { path: 'tests/a.test.ts', content: `round ${n}` }),
+						use('workspace_diagnose', { only: 'tests' })
+					]).flat()
+				);
+				let validations = 0;
+				const fixture = (name: string, call: () => Promise<Json>) => ({
+					name,
+					description: `Fixture ${name}`,
+					input: { type: 'object' as const, additionalProperties: true },
+					readOnly: true,
+					call
+				});
+				const { agent, user } = yield* build(ai, {
+					hostTools: [
+						fixture('workspace_write', async () => ({ saved: ['tests/a.test.ts'] })),
+						fixture('workspace_diagnose', async () => ({
+							error: 'A test failed.',
+							rounds: ++validations
+						}))
+					]
+				});
+				const ann = yield* user('red-rounds', { admin: true });
+				const c = yield* agent.start({ owner: ann });
+				yield* agent.post({ conversation: c, as: { member: ann }, text: 'Add the test' });
+				yield* agent.drain(c);
+				const rows = yield* agent.transcript(c);
+				expect(validations).toBe(6);
+				expect(rows.filter((r) => r.text?.startsWith('Your last checks'))).toHaveLength(1);
+				expect(rows.at(-1)?.text).toContain('the checks kept failing');
+			})
+		)
 	);
 	it.live(
 		'an in-app conversation hears each workspace event once at its next step, and the inbox once per member',
@@ -1289,7 +1395,9 @@ describe('an agent-started automation run is a job', () => {
 					Stream.unwrap(
 						Effect.promise(() => gate).pipe(
 							Effect.as(
-								use('read', { reads: [{ of: 'quotes', where: { title: { eq: 'Lamp' } } }] })(request)
+								use('read', { reads: [{ of: 'quotes', where: { title: { eq: 'Lamp' } } }] })(
+									request
+								)
 							)
 						)
 					);
@@ -1431,7 +1539,9 @@ describe('a replayed ingest: job, steering message, windows, act, read-back', ()
 							// the wake-up turn, opened by the job's message
 							use('read_file', { id: 'o1', from: 5, to: 6 }),
 							use('act', { callable: 'quotes.create', input: [{ title: 'Lot 7 at 12.50' }] }),
-							use('read', { reads: [{ of: 'quotes', where: { title: { eq: 'Lot 7 at 12.50' } } }] }),
+							use('read', {
+								reads: [{ of: 'quotes', where: { title: { eq: 'Lot 7 at 12.50' } } }]
+							}),
 							say('Filed Lot 7 at 12.50 and read it back against the table.')
 						]);
 						const c = yield* agent.start({ owner: root });
@@ -1511,7 +1621,9 @@ describe('a tool answer that stops short says where the rest is', () => {
 				const titles = ['Paged one', 'Paged two', 'Paged three'];
 				const fixture = yield* setup([
 					use('act', { callable: 'quotes.create', input: titles.map((title) => ({ title })) }),
-					use('read', { reads: [{ of: 'quotes', where: { title: { like: 'Paged %' } }, limit: 2 }] }),
+					use('read', {
+						reads: [{ of: 'quotes', where: { title: { like: 'Paged %' } }, limit: 2 }]
+					}),
 					say('Three.')
 				]);
 				return yield* Effect.gen(function* () {
@@ -1536,7 +1648,11 @@ describe('a tool answer that stops short says where the rest is', () => {
 						callable: 'quotes.create',
 						input: [{ title: `Long ${'x'.repeat(BOUNDS.cellBytes + 1_000)}` }]
 					}),
-					use('read', { reads: [{ of: 'quotes', where: { title: { like: 'Long %' } } }] }, 'long-read'),
+					use(
+						'read',
+						{ reads: [{ of: 'quotes', where: { title: { like: 'Long %' } } }] },
+						'long-read'
+					),
 					say('One.')
 				]);
 				return yield* Effect.gen(function* () {
@@ -1561,7 +1677,11 @@ describe('a tool answer that stops short says where the rest is', () => {
 							callable: 'quotes.create',
 							input: [{ title: `Long ${'x'.repeat(BOUNDS.cellBytes + 1_000)}` }]
 						}),
-						use('read', { reads: [{ of: 'quotes', where: { title: { like: 'Long %' } } }] }, 'long-read'),
+						use(
+							'read',
+							{ reads: [{ of: 'quotes', where: { title: { like: 'Long %' } } }] },
+							'long-read'
+						),
 						use('read_file', { call: 'not-a-call', offset: 0 }, 'read-more'),
 						say('One.')
 					]);

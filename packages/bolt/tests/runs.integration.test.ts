@@ -605,6 +605,20 @@ describe('run browser scope', () => {
 			expect(yield* agents.claimPageAction('claim-step')).toBe(false);
 		})
 	);
+	it.effect('a turn no run will finish says so in its conversation', () =>
+		Effect.gen(function* () {
+			const w = yield* world(base);
+			const agents = Context.get(w.context, Agents),
+				conversation = yield* agents.start({ owner: randomUUID() });
+			yield* agents.gaveUp([conversation]);
+			expect(
+				yield* w.sql(
+					`SELECT role, meta->>'code' AS code FROM sys_message WHERE conversation = $1`,
+					[conversation]
+				)
+			).toEqual([{ role: 'assistant', code: 'gaveUp' }]);
+		})
+	);
 	it.effect('stores the active tab’s answer on the page_act step', () =>
 		Effect.gen(function* () {
 			const w = yield* world(base);

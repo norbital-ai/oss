@@ -393,6 +393,7 @@ export const AgentRow = Schema.Struct({
 		Schema.Literals([
 			'pending',
 			'queued',
+			'scheduled',
 			'consumed',
 			'cancelled',
 			'confirm',
@@ -403,6 +404,8 @@ export const AgentRow = Schema.Struct({
 	),
 	/** When it was written. */
 	at: Schema.optionalKey(Schema.String),
+	/** A `scheduled` message's send time; none: when the running turn finishes. */
+	due: Schema.optionalKey(Schema.String),
 	/** The turn that took this input or wrote this reply: a reply names the inputs it answers by it. */
 	turn: Schema.optionalKey(Schema.String),
 	tag: Schema.NullOr(Schema.String),
@@ -542,6 +545,7 @@ const Conversation = { conversation: Schema.String };
 const Message = { message: Schema.String };
 const ConversationIn = Schema.Struct(Conversation),
 	MessageIn = Schema.Struct(Message);
+const Notify = Schema.Struct({ ...Conversation, text: Schema.String });
 const StartRun = Schema.Struct({ input: Schema.optionalKey(Schema.Json), id: Schema.String });
 /** One run (`id`, `input`) or many (`runs`, a bulk start in one request: one run per record). */
 const Start = Schema.Union([
@@ -583,6 +587,8 @@ const PostFields = Schema.Struct({
 	mode: tolerant(Schema.Literals(['agent', 'plan', 'compact'])),
 	/** Skip triage (rule 60a). */
 	now: tolerant(Schema.Boolean),
+	/** Hold it: an ISO instant, or `finish` for when the running turn finishes. */
+	schedule: Schema.optionalKey(Schema.String),
 	/** The person's clock (rule 57). */
 	tz: tolerant(Schema.String)
 });
@@ -630,6 +636,7 @@ export const OwnCall = Schema.Union([
 		)
 	),
 	own('sys_message.post', Post),
+	own('sys_conversation.notify', Notify),
 	own('sys_conversation.respondNow', ConversationIn),
 	own('sys_conversation.stop', ConversationIn),
 	own('sys_conversation.resume', ConversationIn),
@@ -675,6 +682,10 @@ const CHECKS: { readonly [C in RefusableCall]: readonly [Check, ...Check[]] } = 
 	],
 	'sys_message.post': [
 		[Post, 'sys_message.post takes { conversation, text, attachments?, mode? }']
+	],
+	'sys_conversation.notify': [
+		conversationFirst,
+		[Notify, 'sys_conversation.notify takes { conversation, text }']
 	],
 	'sys_conversation.respondNow': [
 		[ConversationIn, 'sys_conversation.respondNow takes { conversation }']

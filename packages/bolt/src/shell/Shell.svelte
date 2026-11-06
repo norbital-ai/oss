@@ -99,7 +99,7 @@
 	import { clientNavigationPath, systemUiIntent } from '../protocol/system-ui.ts';
 	import type { PageResult } from '../protocol/schema.ts';
 	import CommandCenter from './command-center/CommandCenter.svelte';
-	import Studio from './studio/Studio.svelte';
+	import StudioSlot from './studio/StudioSlot.svelte';
 	import RecordSheet from './RecordSheet.svelte';
 	import Turnstile from './auth/Turnstile.svelte';
 	import Nav from './Nav.svelte';
@@ -153,7 +153,8 @@
 	const locale = chosenLocale(config.manifest.workspace.locale);
 	const framework = frameworkText(locale);
 	const t = (key: string) => config.messages?.[key] ?? framework[key] ?? key;
-	setUiText(uiTextFor(locale));
+	const uiText = uiTextFor(locale);
+	setUiText(uiText);
 	// the appearance: the document applied the stored choice before paint; a change of choice or of the system's follows
 	let theme = $state<Theme>('system');
 	fork(
@@ -1050,19 +1051,26 @@
 			onConversation={boot.surfaces.agent ? (conversation) => agent.open({ conversation }) : null}
 		/>
 	{:else if current.kind === 'studio' && boot?.surfaces.studio}
-		<Studio
-			initialFile={url.searchParams.get('file')}
-			onFile={(path) => {
-				const next = new URL(url);
-				next.pathname = '/studio';
-				next.searchParams.set('file', path);
-				navigate(next.href);
+		<StudioSlot
+			bundle={boot.studioBundle}
+			props={{
+				t,
+				locale,
+				uiText,
+				file: url.searchParams.get('file'),
+				onFile: (path) => {
+					const next = new URL(url);
+					next.pathname = '/studio';
+					next.searchParams.set('file', path);
+					navigate(next.href);
+				},
+				admin: boot.admin,
+				tab: current.tab ?? 'workbench',
+				onTab: (x) => navigate(x === 'workbench' ? '/studio' : `/studio/${x}`),
+				onAsk: boot.surfaces.agent
+					? (prompt) => agent.open({ prompt, send: crypto.randomUUID() })
+					: null
 			}}
-			{api}
-			{t}
-			admin={boot.admin}
-			tab={current.tab ?? 'workbench'}
-			onTab={(x) => navigate(x === 'workbench' ? '/studio' : `/studio/${x}`)}
 		/>
 	{:else}
 		<Center><p>{t('Not found or no access')}</p></Center>

@@ -39,7 +39,7 @@ import { prepareNoticeFiles } from '../notifications/notify.ts';
 import { inboxPiece } from '../sync/hint.ts';
 import { canonical } from '@norbital-ai/store';
 import { Chain } from '../write/sql.ts';
-import { heldLonger } from '../agent/triage.ts';
+import { heldLonger } from '../agent/throttle.ts';
 import { InboundMessage, normalizeInbound, type Inbound } from './inbound.ts';
 import { ImportStart } from '../../protocol/schema.ts';
 import { permitsImport } from '../integrations/import-start.ts';

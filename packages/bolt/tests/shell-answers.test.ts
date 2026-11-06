@@ -276,6 +276,8 @@ const preview = {
 } as const;
 const entries = [{ name: 'crm', path: 'src/app/crm/+app.ts', href: '/app/crm' }];
 const studio = {
+	working: 'draft',
+	tree: 'tree',
 	commit: 'c1',
 	message: 'Edit',
 	zone: 'UTC',
@@ -315,6 +317,7 @@ const studio = {
 			base: 'c0',
 			head: 'c1',
 			commits: [],
+			history: [{ commit: 'c1', message: 'Add it' }],
 			behind: 0,
 			preview,
 			merge: {

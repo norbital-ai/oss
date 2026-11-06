@@ -9,7 +9,8 @@ import { BoltError } from '../../protocol/errors.ts';
 import { publicEnvoys } from '../manifest.ts';
 import { Agents, Manifest, Reads, Turns, type AgentCallables } from '../services.ts';
 import { Conversation, isStaff, sharedConversations } from './schema.ts';
-import { TriageService } from './triage.ts';
+import { MessageQueue } from './queue.ts';
+import { SmartThrottle } from './throttle.ts';
 import { lowerRead } from '../query/engine.ts';
 
 export class AgentBackground extends Context.Service<
@@ -51,6 +52,7 @@ const Post = Schema.Struct({
 	attachments: Schema.optionalKey(Schema.Array(Schema.Json)),
 	mode: Schema.optionalKey(Schema.Literals(['agent', 'plan', 'compact'])),
 	now: Schema.optionalKey(Schema.Boolean),
+	schedule: Schema.optionalKey(Schema.String),
 	tz: Schema.optionalKey(Schema.String)
 });
 const committed = (value: Json): Json => value;
@@ -62,7 +64,8 @@ export const agentCallables = Effect.gen(function* () {
 		manifest = yield* Manifest,
 		turns = yield* Turns,
 		reads = yield* Reads,
-		triage = yield* TriageService;
+		queue = yield* MessageQueue,
+		throttle = yield* SmartThrottle;
 	const started = yield* AgentBackground;
 	const context = yield* Effect.context<TenantDb | Manifest>();
 	const readable = (authority: Authority, id: string) =>
@@ -125,6 +128,18 @@ export const agentCallables = Effect.gen(function* () {
 				return committed({ id: yield* agents.start({ owner: who, ...input }) });
 			})
 		),
+		'sys_message.readAhead': entry(
+			Schema.Struct({ attachment: Schema.Json }),
+			Effect.fn('Agents.readAheadCallable')(function* (input, authority) {
+				const who = member(authority);
+				if (who === null)
+					return yield* Effect.fail(
+						BoltError.make('forbidden', 'admission', 'The assistant is not available to you here.')
+					);
+				yield* agents.readAhead(who, input.attachment);
+				return committed(null);
+			})
+		),
 		'sys_message.post': entry(
 			Post,
 			Effect.fn('Agents.postCallable')(function* (input, authority) {
@@ -150,8 +165,30 @@ export const agentCallables = Effect.gen(function* () {
 					files,
 					...(input.tz === undefined ? {} : { tz: input.tz })
 				};
-				if (input.mode !== 'compact' && input.now !== true && triage.inApp()) {
-					const row = yield* triage.post({
+				if (input.schedule !== undefined) {
+					const at = input.schedule === 'finish' ? null : input.schedule;
+					if (at !== null && !(Date.parse(at) > (yield* Clock.currentTimeMillis)))
+						return yield* Effect.fail(
+							BoltError.make('invalid', 'decode', 'Pick a time in the future.')
+						);
+					// with no turn running there is nothing to finish: it goes now
+					if (at !== null || conv.status === 'running') {
+						const row = yield* queue.schedule({
+							...post,
+							at,
+							...(input.mode === undefined ? {} : { mode: input.mode })
+						});
+						return committed({ id: row.id });
+					}
+				}
+				// rule 60: a message that arrives while the turn runs steers: queued at once, claimed at its next step, never held
+				if (
+					input.mode !== 'compact' &&
+					input.now !== true &&
+					conv.status !== 'running' &&
+					throttle.inApp()
+				) {
+					const row = yield* throttle.post({
 						...post,
 						mode: input.mode === 'plan' ? 'plan' : 'agent'
 					});
@@ -162,12 +199,21 @@ export const agentCallables = Effect.gen(function* () {
 					...post,
 					...(input.mode === undefined ? {} : { mode: input.mode })
 				});
-				yield* background(agents.drain(input.conversation));
+				yield* background(agents.kick(input.conversation));
 				return committed({ id: row.id });
 			})
 		),
+		// the host's report back to a conversation it left waiting: a system note, never words from the person
+		'sys_conversation.notify': entry(
+			Schema.Struct({ conversation: Schema.String, text: Schema.String }),
+			Effect.fn('Agents.notifyCallable')(function* (input, authority) {
+				yield* own(authority, input.conversation);
+				yield* agents.notify(input);
+				return committed({ id: input.conversation });
+			})
+		),
 		'sys_conversation.respondNow': control((id) =>
-			turns.release(id).pipe(Effect.andThen(background(agents.drain(id))))
+			turns.release(id).pipe(Effect.andThen(background(agents.kick(id))))
 		),
 		'sys_conversation.stop': control(agents.stop),
 		'sys_conversation.resume': control((id) =>

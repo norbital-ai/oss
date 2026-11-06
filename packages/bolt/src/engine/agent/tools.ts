@@ -134,6 +134,8 @@ export type HostTool = {
 	studio?: StudioRole;
 	/** A call's wall when it is past the usual host call's. */
 	wallMs?: number;
+	/** It answers at once with its job; its result reaches the agent as a system message at its next step. */
+	background?: true;
 	call(input: Json, ctx: HostToolContext, signal: AbortSignal): Promise<Json>;
 };
 /** A skill the agent may read and whose scripts it may run: its tree's listing, and each file's bytes by its path. */
@@ -173,6 +175,8 @@ export const jobs = Effect.fn('AgentTool.jobs')(function* (
 	options: {
 		readonly detached?: FiberSet.FiberSet<unknown, never>;
 		readonly late?: (lines: readonly string[]) => Effect.Effect<void>;
+		/** A job ended, by its label, and whether it failed. */
+		readonly ended?: (label: string, failed: boolean) => void;
 	} = {}
 ) {
 	const fibers = yield* FiberMap.make<string, Json>();
@@ -206,6 +210,8 @@ export const jobs = Effect.fn('AgentTool.jobs')(function* (
 			o: {
 				readonly detach?: boolean;
 				readonly done?: (job: string, result: Json) => string;
+				/** The whole line to the agent whichever way the job ended (a failure is the result, not something to report). */
+				readonly alert?: (job: string, result: Json) => string;
 				/** Another id `wait` and `has` know the job by (a run's id). */
 				readonly alias?: string;
 				readonly studio?: StudioRole;
@@ -222,11 +228,13 @@ export const jobs = Effect.fn('AgentTool.jobs')(function* (
 					Effect.suspend(() => {
 						item.done = true;
 						const failed = jobFailed(value);
+						options.ended?.(label, failed !== undefined);
 						const line =
-							failed !== undefined
+							o.alert?.(id, value) ??
+							(failed !== undefined
 								? `[job ${id} failed] ${label}: ${failed}; tell the person`
 								: (o.done?.(id, value) ??
-									`[job ${id} done] ${label}: ${JSON.stringify(bounded(value).value)}`);
+									`[job ${id} done] ${label}: ${JSON.stringify(bounded(value).value)}`));
 						if (!closed) {
 							lines.set(id, line);
 							return Effect.void;
@@ -354,6 +362,8 @@ export type ToolContext = {
 	/** The whole output of a clipped call; `null` names the latest clipped call. */
 	output(callId: string | null): Effect.Effect<Json | undefined, EngineError>;
 	history(query: string, scope: 'this' | 'mine', limit: number): Effect.Effect<Json, EngineError>;
+	/** Ends once input waits for this conversation: a `wait` gives way to it, so the step ends and the next takes it. */
+	heard: Effect.Effect<void, EngineError>;
 	subagent: {
 		spawn(
 			task: string,
@@ -438,6 +448,18 @@ const ZOOMS = 3;
 /** A scan is read by eye: the guard against values made up or slipped between columns. */
 const SCAN_NOTE =
 	'read each value in an image from the image itself, column by column. Ask the person about any value you cannot read for certain.';
+/** A transcribed page's zoom answers one code: nothing else on the page is read again. */
+const CROP_NOTE =
+	'this answers only the code you zoomed for: every other value stays as the transcript has it.';
+/** A script's own call: what it reads reaches its code, not the conversation, so "already above" would be false. */
+const Scripted = Context.Reference<boolean>('bolt/Scripted', { defaultValue: () => false });
+/** A transcribed scan is read from its lines: the agent's own eye on a page is what misreads a 5 as a 3. */
+/** What `bolt build` proves its history with: large, and nothing in them is the author's to read. */
+const GENERATED = /^migrations\/(?:snapshot|migrations\.lock|physical)\.json$/;
+const GENERATED_NOTE =
+	'The build writes this. Never read or edit it: the schema is in each +model.ts and every step in migrations/*.sql.';
+const READ_NOTE = (o: string) =>
+	`these lines are a dedicated reader's transcript of the scanned page, sharper than your own eye: ~~text~~ is crossed out, [x] is ticked, ? is unreadable. A wide table is followed by one line per column, led by the label it prints: take a column from its line. Take every value as it stands and go straight on: looking at the page adds nothing. One exception: a code or name that should match a record and matches none: read_file { id: ${o}, image: 1, crops: [[left, top, right, bottom]] }, fractions of the page, once, on that value alone.`;
 const documentAnswer = (answer: { readonly [key: string]: Json }, key: string): ToolAnswer => {
 	const value = answer[key],
 		text = typeof value === 'string' ? value : '',
@@ -1174,12 +1196,13 @@ function shapeOf(m: EngineManifest, a: Authority, path: string, output = 'defaul
 		if (link !== undefined) return `link to ${[link.to].flat().join(' | ')}`;
 		const d = all.models[model]?.fields[f];
 		if (d === undefined) return 'system';
-		const many = 'many' in d && d.many === true ? ' (list)' : '';
+		const many =
+			('many' in d && d.many === true) || ('multiple' in d && d.multiple === true) ? ' (list)' : '';
 		return d.kind === 'enum'
 			? `enum ${d.values.join(' | ')}${many}`
 			: d.kind === 'state'
 				? `state ${Object.keys(d.states).join(' | ')}`
-				: `${d.kind}${many}`;
+				: `${d.kind === 'file' ? 'file reference, as a message lists it' : d.kind}${many}`;
 	};
 	const fields = exposed(m, root, path, model, output);
 	const below = Object.keys(outputLayers(m, root, output)).filter(
@@ -1576,7 +1599,13 @@ Answers rows, next and total. Long values are clipped.`,
 			// a root that names no output reads the first the actor may read, as the actor's views do
 			const request = (some: typeof reads) =>
 				Object.fromEntries(
-					some.map(({ of, ...layer }) => {
+					some.map(({ of, ...asked }) => {
+						const { aggregate, ...rows } = asked;
+						// rows answer their total: a read that shapes its rows wants them, whatever aggregate it filled in
+						const wantsRows =
+							aggregate?.by === undefined &&
+							[asked.search, asked.fields, asked.limit, asked.orderBy].some((set) => set !== undefined);
+						const layer = wantsRows || asked.fields !== undefined ? rows : asked;
 						const root = of.split('.')[0]!,
 							output =
 								of.includes('.') || layer.output !== undefined
@@ -1723,7 +1752,7 @@ export const catalogue = Effect.fn('AgentTool.catalogue')(function* (x: ToolCont
 								connections: connected?.rows ?? [],
 								secretNames: Object.keys(e.manifest.workspace.secrets ?? {}),
 								mcp: Object.keys(e.manifest.mcp),
-								note: 'An envoy and a connection of a declared integration are records, with no source change: act sys_envoy.create, then sys_integration.create { integration, name, envoy: <its id> } with no owner. page { path, configure } opens a native form for what stays the person\'s (pairing, secrets); it never submits. A new integration or MCP server is declared in source first.'
+								note: "An envoy and a connection of a declared integration are records, with no source change: act sys_envoy.create, then sys_integration.create { integration, name, envoy: <its id> } with no owner. page { path, configure } opens a native form for what stays the person's (pairing, secrets); it never submits. A new integration or MCP server is declared in source first."
 							});
 						}
 						const source =
@@ -2251,7 +2280,7 @@ A committed write answers the stored rows; a held one waits for approval.`,
 				Predicate.isObject(file) && typeof file['name'] === 'string'
 					? file['name']
 					: (fileId ?? 'the file');
-		const seen = fileId === undefined ? undefined : `file:${fileId}`;
+		const seen = (yield* Scripted) || fileId === undefined ? undefined : `file:${fileId}`;
 		if (seen !== undefined && x.read.has(seen))
 			return ok({ note: `You read ${fileName} earlier in this turn; its answer is above.` });
 		const got = yield* port.read(file).pipe(Port.call('files', 30000));
@@ -2410,6 +2439,7 @@ A committed write answers the stored rows; a held one waits for approval.`,
 		}
 		if (crops.length > 0 && imageNumber === undefined)
 			return err(`${o} has ${images.size} images: give image, the 1-based one to crop.`);
+		const text = new TextDecoder().decode(yield* files.get(html.key, html.size));
 		if (imageNumber !== undefined) {
 			const name = [...images.keys()][imageNumber - 1];
 			if (name === undefined) return err(`${o} has ${images.size} images; image is 1-based.`);
@@ -2434,10 +2464,9 @@ A committed write answers the stored rows; a held one waits for approval.`,
 				image: name,
 				...(crops.length === 0 ? {} : { crops: crops.length }),
 				attached: 'shown from your next step until this turn ends',
-				note: SCAN_NOTE
+				note: text.includes(' data-read>') ? CROP_NOTE : SCAN_NOTE
 			});
 		}
-		const text = new TextDecoder().decode(yield* files.get(html.key, html.size));
 		// a data ingest has no lines: its summary, and run_js computes over its data.json
 		if (html.mime === 'application/json') {
 			const run = `run_js { files: [{ id: '${html.id}' }] }`;
@@ -2469,14 +2498,16 @@ A committed write answers the stored rows; a held one waits for approval.`,
 		}
 		const w = window(text, i.from, i.to),
 			seen = `ingest:${o}:${w.from}-${w.to}`;
-		if (x.read.has(seen))
+		const scripted = yield* Scripted;
+		if (!scripted && x.read.has(seen))
 			return ok({
 				note: `lines ${w.from}–${w.to} of ${o} are already above: read on from ${w.to + 1}`
 			});
-		x.read.set(seen, `${o} lines ${w.from}–${w.to}`);
+		if (!scripted) x.read.set(seen, `${o} lines ${w.from}–${w.to}`);
 		const refs = imagesIn(w.lines, [...images.keys()]),
-			shown = refs.slice(0, WINDOW_IMAGES);
-		yield* show(shown);
+			shown = refs.slice(0, WINDOW_IMAGES),
+			transcribed = w.lines.some((line) => line.includes(' data-read>'));
+		if (!transcribed) yield* show(shown);
 		const count = (v: number) => v.toLocaleString('en-US');
 		return {
 			result: {
@@ -2487,7 +2518,9 @@ A committed write answers the stored rows; a held one waits for approval.`,
 					? {}
 					: {
 							images: shown,
-							note: `each <img> named in images is shown to you: ${SCAN_NOTE}${shown.length > TILED_PAGES ? ` These are whole pages, too small for fine print: read_file { id: ${o}, image: n } adds a page's quarters.` : ''}`
+							note: transcribed
+								? READ_NOTE(o)
+								: `each <img> named in images is shown to you: ${SCAN_NOTE}${shown.length > TILED_PAGES ? ` These are whole pages, too small for fine print: read_file { id: ${o}, image: n } adds a page's quarters.` : ''}`
 						}),
 				...(refs.length > shown.length
 					? {
@@ -2712,7 +2745,9 @@ A committed write answers the stored rows; a held one waits for approval.`,
 						]);
 						const input = attached?.rows[0]?.['file'];
 						if (input === undefined && !(yield* canRead(id)))
-							return err('No file you can read has this id; a truncated result is read with call, not id.');
+							return err(
+								'No file you can read has this id; a truncated result is read with call, not id.'
+							);
 						const [file] = yield* x.engine.db.rows(SourceFile, {
 							text: 'SELECT id, name, mime, size, key, sha256 FROM sys_file WHERE id = $1',
 							params: [id]
@@ -2831,9 +2866,10 @@ A committed write answers the stored rows; a held one waits for approval.`,
 									};
 								if (!files.includes(path)) return missing;
 								const text = yield* Port.attempt('workspace.read', () => source.read(path));
-								return text === null
-									? missing
-									: { path, ...page(text, i.from ?? 1, i.to ?? Number.MAX_SAFE_INTEGER) };
+								if (text === null) return missing;
+								if (GENERATED.test(path) && !text.includes('<<<<<<<'))
+									return { path, generated: GENERATED_NOTE };
+								return { path, ...page(text, i.from ?? 1, i.to ?? Number.MAX_SAFE_INTEGER) };
 							});
 							if (i.paths !== undefined && i.paths.length > 0) {
 								// one budget across the files: a page each, whole while they fit
@@ -3064,7 +3100,7 @@ A committed write answers the stored rows; a held one waits for approval.`,
 				? Effect.succeed(err(`A script cannot call '${name}': ${RUN_JS.tools.join(', ')} only.`))
 				: ++used > RUN_JS.toolCalls
 					? Effect.succeed(err(`A run makes at most ${RUN_JS.toolCalls} tool calls.`))
-					: self(name, input, `${call}:${used}`);
+					: self(name, input, `${call}:${used}`).pipe(Effect.provideService(Scripted, true));
 	};
 	if (agent && guest !== undefined) {
 		const runJsTool = shared('run_js', () =>
@@ -3219,80 +3255,94 @@ A committed write answers the stored rows; a held one waits for approval.`,
 			Toolkit.make(waitTool).toHandlers({
 				wait: (i) =>
 					guard(
-						Effect.gen(function* () {
-							const ids = i.jobs ?? [];
-							const ms = Math.min(Math.max(1, i.seconds ?? 120), 120) * 1000;
-							// automation runs are sys_run rows, not this turn's jobs: follow them until one ends (a probe waited on a
-							// statutory research run for ten minutes and never heard it finish)
-							if (ids.length > 0 && ids.every((id) => !x.jobs.has(id))) {
-								let running: Json = [];
-								const poll = Effect.gen(function* () {
-									const rows = yield* x.engine.db.rows(RunViewRow, {
-										text: `SELECT ${RUN_VIEW_COLUMNS} FROM sys_run WHERE id = ANY(ARRAY(SELECT jsonb_array_elements_text($1::jsonb)))`,
-										params: [JSON.stringify(ids)]
-									});
-									const views = rows.map((row) => runView(a, row)).filter((view) => view !== null);
-									if (views.length === 0) return err(`No job or automation run ${ids.join(', ')}.`);
-									running = encodeWire(views);
-									const ended = views.find(
-										(view) => view.status !== 'queued' && view.status !== 'running'
-									);
-									return ended === undefined ? null : ok({ settled: encodeWire(ended) });
-								});
-								// a run's end arrives as an event, so waiting makes no trips to the database; the slower check
-								// covers a run that ended in another generation
-								const { runEnds } = x.engine;
-								const result = yield* Effect.scoped(
-									Effect.gen(function* () {
-										const heard = runEnds === undefined ? null : yield* PubSub.subscribe(runEnds);
-										for (;;) {
-											const answer = yield* poll;
-											if (answer !== null) return answer;
-											yield* heard === null
-												? Effect.sleep('3 seconds')
-												: PubSub.take(heard).pipe(
-														Effect.repeat({
-															until: (ended) => ended.some((id) => ids.includes(id))
-														}),
-														Effect.timeoutOption('30 seconds')
-													);
-										}
+						Effect.raceFirst(
+							x.heard.pipe(
+								Effect.map(() =>
+									ok({
+										settled: null,
+										pending: encodeWire(x.jobs.pending()),
+										note: 'New input arrived: it is your next message. What you waited for keeps running.'
 									})
-								).pipe(Effect.timeoutOption(ms));
-								return Option.isSome(result) && result.value !== null
-									? result.value
-									: ok({ settled: null, running });
-							}
-							// with no ids and nothing of this turn running there is nothing to wait for: say so, never answer as if time passed
-							// (a probe's agent read `{ settled: null }` as thirty seconds and polled a background run in a loop)
-							// sub-agents run detached: with nothing of this turn running, wait for one's report instead
-							if (
-								ids.length === 0 &&
-								x.jobs.pending().length === 0 &&
-								(yield* x.subagent.running()) > 0
-							)
-								return ok(
-									(yield* x.subagent.report(ms))
-										? {
-												report: 'arrived',
-												note: 'A sub-agent report arrived: it is your next message.'
+								)
+							),
+							Effect.gen(function* () {
+								const ids = i.jobs ?? [];
+								const ms = Math.min(Math.max(1, i.seconds ?? 120), 120) * 1000;
+								// automation runs are sys_run rows, not this turn's jobs: follow them until one ends (a probe waited on a
+								// statutory research run for ten minutes and never heard it finish)
+								if (ids.length > 0 && ids.every((id) => !x.jobs.has(id))) {
+									let running: Json = [];
+									const poll = Effect.gen(function* () {
+										const rows = yield* x.engine.db.rows(RunViewRow, {
+											text: `SELECT ${RUN_VIEW_COLUMNS} FROM sys_run WHERE id = ANY(ARRAY(SELECT jsonb_array_elements_text($1::jsonb)))`,
+											params: [JSON.stringify(ids)]
+										});
+										const views = rows
+											.map((row) => runView(a, row))
+											.filter((view) => view !== null);
+										if (views.length === 0)
+											return err(`No job or automation run ${ids.join(', ')}.`);
+										running = encodeWire(views);
+										const ended = views.find(
+											(view) => view.status !== 'queued' && view.status !== 'running'
+										);
+										return ended === undefined ? null : ok({ settled: encodeWire(ended) });
+									});
+									// a run's end arrives as an event, so waiting makes no trips to the database; the slower check
+									// covers a run that ended in another generation
+									const { runEnds } = x.engine;
+									const result = yield* Effect.scoped(
+										Effect.gen(function* () {
+											const heard = runEnds === undefined ? null : yield* PubSub.subscribe(runEnds);
+											for (;;) {
+												const answer = yield* poll;
+												if (answer !== null) return answer;
+												yield* heard === null
+													? Effect.sleep('3 seconds')
+													: PubSub.take(heard).pipe(
+															Effect.repeat({
+																until: (ended) => ended.some((id) => ids.includes(id))
+															}),
+															Effect.timeoutOption('30 seconds')
+														);
 											}
-										: { report: null, running: yield* x.subagent.running() }
+										})
+									).pipe(Effect.timeoutOption(ms));
+									return Option.isSome(result) && result.value !== null
+										? result.value
+										: ok({ settled: null, running });
+								}
+								// with no ids and nothing of this turn running there is nothing to wait for: say so, never answer as if time passed
+								// (a probe's agent read `{ settled: null }` as thirty seconds and polled a background run in a loop)
+								// sub-agents run detached: with nothing of this turn running, wait for one's report instead
+								if (
+									ids.length === 0 &&
+									x.jobs.pending().length === 0 &&
+									(yield* x.subagent.running()) > 0
+								)
+									return ok(
+										(yield* x.subagent.report(ms))
+											? {
+													report: 'arrived',
+													note: 'A sub-agent report arrived: it is your next message.'
+												}
+											: { report: null, running: yield* x.subagent.running() }
+									);
+								if (ids.length === 0 && x.jobs.pending().length === 0)
+									return ok({
+										settled: null,
+										pending: [],
+										waited: 0,
+										note: 'Nothing of this turn is running. To wait for an automation, pass its run id (a write answers the runs it started).'
+									});
+								const got = yield* x.jobs.wait(ids, ms);
+								return ok(
+									got === null
+										? { settled: null, pending: encodeWire(x.jobs.pending()) }
+										: { settled: got, pending: encodeWire(x.jobs.pending()) }
 								);
-							if (ids.length === 0 && x.jobs.pending().length === 0)
-								return ok({
-									settled: null,
-									pending: [],
-									waited: 0,
-									note: 'Nothing of this turn is running. To wait for an automation, pass its run id (a write answers the runs it started).'
-								});
-							const got = yield* x.jobs.wait(ids, ms);
-							return ok(
-								got === null
-									? { settled: null, pending: encodeWire(x.jobs.pending()) }
-									: { settled: got, pending: encodeWire(x.jobs.pending()) }
-							);
-						})
+							})
+						)
 					)
 			})
 		);
@@ -3607,8 +3657,21 @@ A committed write answers the stored rows; a held one waits for approval.`,
 									Port.call(host.name, host.wallMs ?? JOBS.hostMs),
 									Effect.flatMap(offered)
 								),
-								host.studio === undefined ? {} : { studio: host.studio }
+								{
+									...(host.studio === undefined ? {} : { studio: host.studio }),
+									...(host.background === true
+										? {
+												alert: (id: string, result: Json) =>
+													`[job ${id} finished] ${host.name}: ${JSON.stringify(bounded(result).value)}`
+											}
+										: {})
+								}
 							);
+							if (host.background === true)
+								return ok({
+									job,
+									note: 'Running in the background; keep working. Its result arrives by itself as a system message at your next step, or collect it with wait.'
+								});
 							const inline = yield* x.jobs.wait([job], x.inlineMs ?? JOBS.inlineMs);
 							return ok(inline?.result ?? { job, note: 'still running; collect it with wait' });
 						}),

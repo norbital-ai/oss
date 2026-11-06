@@ -78,6 +78,90 @@ const CONTRACT: { readonly [role: string]: { readonly [namespace: string]: reado
 	},
 	test: { 'bolt-cli/test': ['TestWorkspace', 'Kit', 'Caller', 'TestOptions', 'layer'] }
 };
+/** What the symbols alone leave out: a role's first file, so no conversation goes looking for it. */
+const CONTRACT_HEAD: { readonly [role: string]: string } = {
+	model: `\`src/data/model/<name>/+model.ts\`. A model takes only the writes it declares:
+
+\`\`\`ts
+import { model } from '@norbital-ai/bolt';
+
+export default model('<name>', {
+	description: '<what one record is>',
+	icon: 'lucide:<icon>',
+	label: '<field>',
+	fields: {
+		<field>: { kind: 'text' },
+		<other>: { kind: 'ref', to: '<model>', inverse: '<field on it>', onDelete: 'restrict' }
+	},
+	read: 'all',
+	create: { columns: { <name>: ['<field>', '<other>'] } },
+	update: { columns: { <name>: ['<field>', '<other>'] } }
+});
+\`\`\`
+
+A required field added to a model with rows needs a data step in its generated migration, filling them.`,
+	access: `A policy is one file; a grant names only verbs its model declares. Every team is in the one team file:
+
+\`\`\`ts
+// src/access_control/policy/+<policy>.policy.ts
+import { policy } from '@norbital-ai/bolt';
+
+export default policy({
+	description: '<what holders may do>',
+	grants: { <model>: { read: true, create: true, update: true } }
+});
+
+// src/access_control/team/+team.ts
+import { team } from '@norbital-ai/bolt';
+
+export default team({ <team>: { name: '<Team name>', policies: ['<policy>'] } });
+\`\`\``,
+	page: `An app is its folder: \`+app.ts\` and one \`+<page>.page.svelte\` per page. A list of records needs nothing else:
+
+\`\`\`ts
+// src/app/<app>/+app.ts
+import { app } from '@norbital-ai/bolt';
+
+export default app('<app>', {
+	title: '<Title>',
+	description: '<what it is for>',
+	icon: 'lucide:<icon>',
+	pages: { <page>: { title: '<Title>', icon: 'lucide:<icon>' } }
+});
+\`\`\`
+
+\`\`\`svelte
+<!-- src/app/<app>/+<page>.page.svelte -->
+<script lang="ts">
+	import { Table } from '@norbital-ai/ui';
+</script>
+
+<Table of="<model>" />
+\`\`\``,
+	test: `Tests are \`tests/<name>.test.ts\`. Everything comes from the kit, and \`workspace_test\` runs them:
+
+\`\`\`ts
+import { Effect, Exit } from 'effect';
+import { TestWorkspace, expect, it } from '@norbital-ai/bolt-cli/test';
+
+it.layer(TestWorkspace.layer({ root: new URL('..', import.meta.url).pathname }))('<model>', (it) => {
+	it.effect('<what it proves>', () =>
+		Effect.gen(function* () {
+			const t = yield* TestWorkspace;
+			const caller = t.as(t.member(['<policy>'])); // or t.as(t.admin)
+			yield* caller.act('<model>.create', [{ <field>: <value> }]);
+			const refused = yield* Effect.exit(caller.act('<model>.create', [{ <field>: <bad value> }]));
+			expect(Exit.isFailure(refused)).toBe(true);
+			const { rows } = (yield* caller.query({ <model>: { fields: ['<field>'] } })).<model>;
+			expect(rows).toHaveLength(1);
+			yield* caller.act('<model>.update', [{ target: rows[0]!.id, set: { <field>: <value> } }]);
+		})
+	);
+});
+\`\`\`
+
+A file shares one workspace: rows stay between its tests, so assert on your own rows.`
+};
 const CONTRACT_SKILL = 'bolt-contract';
 const CARDED = new Set(Object.values(CONTRACT).flatMap((named) => Object.values(named).flat()));
 const root = join(dirname(fileURLToPath(import.meta.url)), '..', '..'); // oss/packages
@@ -536,7 +620,7 @@ export const generateDocs = Effect.try({
 		};
 		const roles = Object.entries(CONTRACT).map(([role, named]) => ({
 			path: `${role}.md`,
-			text: `# ${role}\n\n${Object.entries(named)
+			text: `# ${role}\n\n${CONTRACT_HEAD[role] === undefined ? '' : `${CONTRACT_HEAD[role]}\n\n`}${Object.entries(named)
 				.flatMap(([namespace, names]) =>
 					names.map((name) => {
 						const found = contractSymbols.get(`${namespace}#${name}`);

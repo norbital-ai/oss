@@ -226,7 +226,7 @@ const plain = Effect.runSync(Effect.cached(setup.pipe(Scope.provide(fileScope)))
 
 describe('in-app attachments', () => {
 	it.live(
-		'an invalid image retains its reference, is marked unread in triage, and remains readable by read_file',
+		'an invalid image retains its reference and remains readable by read_file',
 		() =>
 			Effect.scoped(
 				Effect.gen(function* () {
@@ -239,7 +239,8 @@ describe('in-app attachments', () => {
 						output: { name: 'pump.png', mime: 'image/png', bytes: PNG.length }
 					});
 					const file = fileOf(ref),
-						asked = requests.length;
+						asked = requests.length,
+						decided = states.length;
 					const digest = createHash('sha256').update(PNG).digest('hex');
 					const reference = Schema.decodeUnknownSync(Schema.Struct({ id: Schema.String }))(file);
 					expect(
@@ -249,19 +250,8 @@ describe('in-app attachments', () => {
 							attachments: [{ ...reference, sha256: 'MOCKED untrusted digest' }]
 						})
 					).toMatchObject({ kind: 'committed' });
-					const state = yield* Schema.decodeUnknownEffect(
-						Schema.Struct({
-							pending: Schema.Array(
-								Schema.Struct({ attachments: Schema.optionalKey(Schema.Array(Schema.Json)) })
-							)
-						})
-					)(states.at(-1));
-					expect(state.pending[0]?.attachments?.[0]).toEqual({
-						name: 'pump.png',
-						mime: 'image/png',
-						size: PNG.length,
-						unread: true
-					});
+					// the panel sends a file and its words as one message: nothing asks whether more is coming
+					expect(states).toHaveLength(decided);
 					const [row] = (yield* t.db.read([
 						{
 							text: `SELECT ${filesOf('m')} AS files FROM sys_message m WHERE conversation = $1 AND role = 'user'`,
@@ -291,6 +281,23 @@ describe('in-app attachments', () => {
 			)
 	);
 
+	it.live('reading ahead takes only the member\'s own upload, and leaves a non-document alone', () =>
+		Effect.scoped(
+			Effect.gen(function* () {
+				const { act, put, who } = yield* plain;
+				const ann = yield* who('ann');
+				const image = Schema.decodeUnknownSync(Schema.Struct({ id: Schema.String }))(
+					fileOf(yield* put(ann, 'pump.png', 'image/png', PNG))
+				);
+				expect(yield* act('ann', 'sys_message.readAhead', { attachment: image })).toMatchObject({
+					kind: 'committed'
+				});
+				expect(
+					yield* Effect.flip(act('bob', 'sys_message.readAhead', { attachment: image }))
+				).toMatchObject({ message: expect.stringContaining('not a file you uploaded') });
+			})
+		)
+	);
 	it.live("only the member's own uploads attach, within the model's file count, of the envoy media types", () =>
 		Effect.scoped(
 			Effect.gen(function* () {

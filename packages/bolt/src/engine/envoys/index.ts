@@ -18,8 +18,9 @@ import type { EnvoySpec } from '../../decl/runtime/agent.ts';
 import type { HandleKind } from '../../decl/runtime/integration.ts';
 import type { Json } from '../../decl/values.ts';
 import { chargesFor, RateWindows } from '../access/rate.ts';
-import { AGENT_LIMITS, TURN_RUN, AgentDrains, type As } from '../agent/index.ts';
-import { TriageService, type Triage } from '../agent/triage.ts';
+import { AGENT_LIMITS, AgentDrains, type As } from '../agent/index.ts';
+import { TURN_RUN } from '../agent/turns.ts';
+import { SmartThrottle, type Throttle } from '../agent/throttle.ts';
 import type { ConversationsShape } from '../services.ts';
 import { ADMIT, preview, msg as messagePiece } from '../conversations/store.ts';
 import { BoltError } from '../../protocol/errors.ts';
@@ -55,7 +56,7 @@ export type EnvoysConfig = {
 	/** The name a notice uses for this workspace. */
 	workspace?: string;
 	/** Rule 60a: System 1 triage, when the host binds its port. */
-	triage?: Pick<Triage, 'envoy' | 'hold' | 'release'>;
+	triage?: Pick<Throttle, 'envoy' | 'hold' | 'release'>;
 };
 /** Rule 59: fixed, recorded replies; internal text never reaches a sender. */
 export const NOTICES = {
@@ -411,7 +412,7 @@ export const EnvoysLive = Layer.effect(
 			conversations = yield* ConversationsTag,
 			outbound = yield* Outbound,
 			agents = yield* AgentDrains,
-			triage = yield* TriageService,
+			triage = yield* SmartThrottle,
 			registry = yield* TurnHandlers,
 			handlers = yield* RunHandlers,
 			wake = yield* Wake;

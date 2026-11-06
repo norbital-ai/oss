@@ -150,6 +150,8 @@ export type ShellBoot = {
 	notice?: ShellNotice;
 	/** The release's client hash: a live link that comes back under another reloads the page. */
 	client?: string;
+	/** Where this host serves Studio's bundle (`StudioPort.bundle`), under the workspace; absent: it serves none. */
+	studioBundle?: string;
 	/** The member's other workspaces (`ShellHost.workspaces`): the switcher's options. */
 	workspaces?: readonly WorkspaceLink[];
 	nav: NavNode[];

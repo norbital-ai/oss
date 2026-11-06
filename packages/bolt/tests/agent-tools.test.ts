@@ -211,6 +211,7 @@ const ctx = (
 			messages: () => Effect.succeed([]),
 			output: () => Effect.succeed(undefined),
 			history: () => Effect.succeed([]),
+			heard: Effect.never,
 			subagent: {
 				spawn: () => Effect.succeed(null),
 				list: () => Effect.succeed(null),
@@ -280,7 +281,7 @@ describe('job waits', () => {
 			Effect.gen(function* () {
 				const list = yield* jobs();
 				const id = yield* list.add(
-					'workspace_validate',
+					'workspace_preview',
 					Effect.succeed({ preview: 'https://preview.test/' }),
 					{ studio: 'preview' }
 				);
@@ -609,6 +610,9 @@ describe('fewer calls for the common paths', () => {
 					})
 				).toMatchObject({ result: { tasks: answer.tasks, 'tasks#2': answer.tasks } });
 				expect(reads).toHaveLength(3);
+				// a read that shapes its rows wants them: a count filled in beside them is dropped
+				yield* result(x, 'read', { reads: [{ of: 'tasks', limit: 5, aggregate: { count: true } }] });
+				expect(JSON.stringify(reads.at(-1))).not.toContain('aggregate');
 			})
 	);
 	it.effect(
@@ -660,32 +664,30 @@ describe('fewer calls for the common paths', () => {
 				expect(reads).toHaveLength(1);
 			})
 	);
-	it.effect(
-		"describe_workspace answers a name's declared shape, and reads nothing for it",
-		() =>
-			Effect.gen(function* () {
-				const reads: Parameters<AgentEngine['read']>[0][number][] = [];
-				const x = yield* ctx(
-					{},
-					{
-						read: (irs) =>
-							Effect.sync(() => {
-								reads.push(...irs);
-								return [{ tasks: { rows: [] } }];
-							})
-					}
-				);
-				expect(yield* shape(x, 'tasks')).toMatchObject({
-					model: 'tasks',
-					fields: { title: expect.any(String) }
-				});
-				expect(reads).toHaveLength(0);
-				// read takes no describe: a wrong call, and nothing is read
-				expect(yield* result(x, 'read', { tasks: { describe: true } })).toEqual({
-					result: { error: expect.stringContaining("Invalid parameters for tool 'read'") }
-				});
-				expect(reads).toHaveLength(0);
-			})
+	it.effect("describe_workspace answers a name's declared shape, and reads nothing for it", () =>
+		Effect.gen(function* () {
+			const reads: Parameters<AgentEngine['read']>[0][number][] = [];
+			const x = yield* ctx(
+				{},
+				{
+					read: (irs) =>
+						Effect.sync(() => {
+							reads.push(...irs);
+							return [{ tasks: { rows: [] } }];
+						})
+				}
+			);
+			expect(yield* shape(x, 'tasks')).toMatchObject({
+				model: 'tasks',
+				fields: { title: expect.any(String) }
+			});
+			expect(reads).toHaveLength(0);
+			// read takes no describe: a wrong call, and nothing is read
+			expect(yield* result(x, 'read', { tasks: { describe: true } })).toEqual({
+				result: { error: expect.stringContaining("Invalid parameters for tool 'read'") }
+			});
+			expect(reads).toHaveLength(0);
+		})
 	);
 	const outputs: EngineManifest = {
 		...manifest,
@@ -1165,10 +1167,13 @@ describe('working-source tools', () => {
 			Effect.gen(function* () {
 				let revision = 'first';
 				const draft: WorkspacePort = {
-					files: async () => ['src/current.ts'],
-					read: async (path) => (path === 'src/current.ts' ? revision : null)
+					files: async () => ['src/current.ts', 'migrations/physical.json'],
+					read: async (path) => (path === 'src/current.ts' ? revision : '{}')
 				};
 				const x = yield* ctx({ workspace, draft, authority: member() });
+				expect(yield* result(x, 'workspace_read', { path: 'migrations/physical.json' })).toMatchObject({
+					result: { path: 'migrations/physical.json', generated: expect.any(String) }
+				});
 				expect(yield* result(x, 'workspace_list', {})).toMatchObject({
 					result: expect.stringContaining('current.ts')
 				});
@@ -1234,7 +1239,8 @@ describe('reading the source is every staff member’s; changing it is an admini
 	});
 	const hostTools = [
 		host('workspace_lang', { readOnly: true, source: true }),
-		host('workspace_write', { studio: 'preview' }),
+		host('workspace_write'),
+		host('workspace_preview', { studio: 'preview' }),
 		host('workspace_review', { readOnly: true, studio: 'logs' }),
 		host('web_search', { readOnly: true })
 	];
@@ -1275,7 +1281,7 @@ describe('reading the source is every staff member’s; changing it is an admini
 				expect(offered).toEqual(
 					expect.arrayContaining(['workspace_search', 'workspace_list', 'workspace_lang'])
 				);
-				for (const mutating of ['workspace_write', 'workspace_review', 'web_search'])
+				for (const mutating of ['workspace_write', 'workspace_preview', 'workspace_review', 'web_search'])
 					expect(offered).not.toContain(mutating);
 				expect(yield* result(x, 'workspace_lang', {})).toMatchObject({
 					result: { ok: 'workspace_lang' }
@@ -1751,6 +1757,52 @@ describe('read_file parses a file: filed in the outputs, read in windows', () =>
 					expect.objectContaining({ kind: 'data', cached: false, bytes: 50, cpuMs: 2, wallMs: 3 })
 				]);
 			})
+	);
+	const scan = () =>
+		holding(
+			`c-${randomUUID()}`,
+			{
+				name: 'form.pdf',
+				mime: 'application/pdf',
+				bytes: new TextEncoder().encode(`%PDF form ${randomUUID()}`)
+			},
+			{
+				ingest: () =>
+					Effect.succeed({
+						...tender,
+						html: '<section data-page="1" data-read>\n<img src="image-1.png" alt="">\n<p>Plates: 15</p>\n</section>',
+						images: [{ name: 'image-1.png', mime: 'image/png', bytes: PNG }]
+					})
+			}
+		);
+	it.effect('a transcribed scan answers its lines and shows no page until one is asked for', () =>
+		Effect.gen(function* () {
+			const { x, id } = yield* scan();
+			expect(yield* result(x, 'read_file', { id })).toMatchObject({
+				result: {
+					lines: expect.arrayContaining(['3: <p>Plates: 15</p>']),
+					note: expect.stringContaining("a dedicated reader's transcript")
+				}
+			});
+			expect(x.files).toEqual([]);
+			expect(yield* result(x, 'read_file', { id: 'o1', crops: [[0, 0, 1, 1]] })).toMatchObject({
+				result: { crops: 1 }
+			});
+			expect(x.files).toHaveLength(1);
+		})
+	);
+	it.live('a script always gets the lines, and what it read stays unread for the conversation', () =>
+		Effect.gen(function* () {
+			const { x, id } = yield* scan();
+			const count = {
+				code: `const r = await tool('read_file', { id: '${id}', from: 1, to: 4 }); return r.lines?.length ?? r.note;`
+			};
+			expect(yield* result(x, 'run_js', count)).toEqual({ result: { answer: 4 } });
+			expect(yield* result(x, 'read_file', { id: 'o1', from: 1, to: 4 })).toMatchObject({
+				result: { lines: expect.arrayContaining(['3: <p>Plates: 15</p>']) }
+			});
+			expect(yield* result(x, 'run_js', count)).toEqual({ result: { answer: 4 } });
+		})
 	);
 	it.effect('crops name their image when an ingest holds several', () =>
 		Effect.gen(function* () {
@@ -2350,6 +2402,19 @@ describe('wait', () => {
 				});
 			})
 	);
+	it.effect('gives way to new input: the jobs keep running and the step ends', () =>
+		Effect.gen(function* () {
+			const x = yield* ctx({ heard: Effect.void });
+			const job = yield* x.jobs.add('slow', Effect.never);
+			expect(yield* result(x, 'wait', { jobs: [job], seconds: 120 })).toMatchObject({
+				result: {
+					settled: null,
+					pending: [{ job, done: false }],
+					note: expect.stringContaining('New input arrived')
+				}
+			});
+		})
+	);
 	it.effect('says there is nothing to wait for instead of answering as if the time passed', () =>
 		Effect.gen(function* () {
 			const x = yield* ctx(),
@@ -2466,7 +2531,7 @@ describe('download', () => {
 			).not.toContain('download');
 		})
 	);
-	it.effect("a turn with a browser downloads through it, with its sign-ins", () =>
+	it.effect('a turn with a browser downloads through it, with its sign-ins', () =>
 		Effect.gen(function* () {
 			const hostTools = browserTools(yield* Browser);
 			expect(yield* names(yield* ctx({ hostTools }))).not.toContain('download');
@@ -2898,29 +2963,27 @@ describe('runs and logs', () => {
 				});
 			})
 	);
-	it.effect(
-		"a run's clipped values name read_file's call id, and the whole run stays for it",
-		() =>
-			Effect.gen(function* () {
-				const x = yield* ctx();
-				const big = { text: 'x'.repeat(6_000) };
-				yield* x.engine.db.write({
-					text: `INSERT INTO sys_run (id, automation, input, due_at, cause, depth, state, attempts, results, error, actor, finished_at)
+	it.effect("a run's clipped values name read_file's call id, and the whole run stays for it", () =>
+		Effect.gen(function* () {
+			const x = yield* ctx();
+			const big = { text: 'x'.repeat(6_000) };
+			yield* x.engine.db.write({
+				text: `INSERT INTO sys_run (id, automation, input, due_at, cause, depth, state, attempts, results, error, actor, finished_at)
 				VALUES ('rb', 'billing.invoice', $1::jsonb, '2026-09-25T01:00:00Z', 'start', 0, 'succeeded', 1, '[]', NULL, NULL, NULL)`,
-					params: [JSON.stringify(big)]
-				});
-				const answer = Schema.decodeUnknownSync(
-					Schema.Struct({
-						result: Schema.Struct({ input: Schema.String }),
-						full: Schema.Struct({ input: Schema.Struct({ text: Schema.String }) }),
-						bounded: Schema.Literal(true)
-					})
-				)(yield* result(x, 'runs', { id: 'rb' }));
-				expect(answer.result.input).toMatch(
-					/\.\.\. \[clipped, \d+ bytes; read_file \{ call: 'call' \} reads it whole\]$/
-				);
-				expect(answer.full.input.text).toBe(big.text);
-			})
+				params: [JSON.stringify(big)]
+			});
+			const answer = Schema.decodeUnknownSync(
+				Schema.Struct({
+					result: Schema.Struct({ input: Schema.String }),
+					full: Schema.Struct({ input: Schema.Struct({ text: Schema.String }) }),
+					bounded: Schema.Literal(true)
+				})
+			)(yield* result(x, 'runs', { id: 'rb' }));
+			expect(answer.result.input).toMatch(
+				/\.\.\. \[clipped, \d+ bytes; read_file \{ call: 'call' \} reads it whole\]$/
+			);
+			expect(answer.full.input.text).toBe(big.text);
+		})
 	);
 	it.effect(
 		'reads the runtime log by level, text, run and time, newest first, for administrators only',

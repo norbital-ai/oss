@@ -10,3 +10,4 @@ export { default as MarkdownEditor, type MarkdownEditorProps } from './markdown-
 export { default as ReadonlyMarkdown } from './readonly-markdown.svelte';
 export { markdownHtml } from './markdown.js';
 export { highlightedLine } from './highlight.js';
+export { codeHighlight, codeLanguage, codeTheme } from './code-setup.js';

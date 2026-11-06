@@ -73,12 +73,14 @@ export function post(
 	return row;
 }
 export function claim(c: Chain, conversation: string, turn: string): string {
+	const waiting = `conversation = ${c.p(conversation)} AND state = 'queued' AND delivered_turn IS NULL AND addressed IS DISTINCT FROM false`;
+	// a message joins the transcript where it is heard, the tail, oldest first: what the model already read never moves
 	return msg(
 		c,
-		`UPDATE sys_message m SET state = 'consumed', turn = ${c.p(turn)}, delivered_turn = ${c.p(turn)}
-	WHERE conversation = ${c.p(conversation)} AND state = 'queued' AND delivered_turn IS NULL AND addressed IS DISTINCT FROM false
-	AND "as" IS NOT DISTINCT FROM (SELECT "as" FROM sys_message WHERE conversation = ${c.p(conversation)} AND state = 'queued'
-		AND delivered_turn IS NULL AND addressed IS DISTINCT FROM false ORDER BY seq LIMIT 1)`
+		`UPDATE sys_message m SET state = 'consumed', turn = ${c.p(turn)}, delivered_turn = ${c.p(turn)}, seq = heard.seq
+	FROM (SELECT id, nextval(pg_get_serial_sequence('sys_message', 'seq')) AS seq FROM (SELECT id FROM sys_message WHERE ${waiting}
+		AND "as" IS NOT DISTINCT FROM (SELECT "as" FROM sys_message WHERE ${waiting} ORDER BY seq LIMIT 1) ORDER BY seq) inputs) heard
+	WHERE m.id = heard.id`
 	);
 }
 export function stream(
@@ -109,7 +111,8 @@ export function settle(
 export function cancel(c: Chain, conversation: string, message: string | null): string {
 	return msg(
 		c,
-		`UPDATE sys_message m SET state = 'cancelled' WHERE conversation = ${c.p(conversation)} AND state = 'queued'
+		`UPDATE sys_message m SET state = 'cancelled' WHERE conversation = ${c.p(conversation)}
+	AND (state IN ('queued', 'pending') OR (state = 'scheduled' AND meta->>'at' IS NULL))
 	${message === null ? '' : `AND id = ${c.p(message)}`}`
 	);
 }

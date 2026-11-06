@@ -71,6 +71,12 @@ describe('next compiler: discover', () => {
 						folders.map((folder) => folder.split('/').at(-1)).sort()
 					);
 					const index = namesIndex(files, loaded.manifest);
+					// a duplicate here is a type error in every workspace's generated names
+					const tools = [...index.matchAll(/"((?:workspace|browser)_\w+)": true/g)].map(
+						(m) => m[1]
+					);
+					expect(tools.length).toBeGreaterThan(0);
+					expect(new Set(tools).size).toBe(tools.length);
 					expect(index).toContain('"leave_catalog_entry": {');
 					expect(index).not.toContain('"jurisdiction_settings/leave_catalog');
 					write('src/automation/+payroll_run.automation.ts', 'export default {};');
