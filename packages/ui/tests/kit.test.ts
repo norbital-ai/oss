@@ -119,47 +119,6 @@ it.live('sheet: blocked session storage does not prevent opening or resizing', (
 	})
 );
 
-it.live(
-	'sheet: closing over an unsaved draft asks first, in-app; a clean sheet closes at once',
-	() =>
-		browser(async () => {
-			// a WebView answers `window.confirm` false at once: the sheet must never depend on it
-			const native = vi.fn(() => false);
-			vi.stubGlobal('confirm', native);
-			const asking = confirmDialog;
-			const answer = async (accept: boolean) => {
-				await vi.waitFor(() => assert.ok(asking()));
-				asking()!.answer(accept);
-				flushSync();
-			};
-			try {
-				let dirty = true;
-				const v = show({ part: 'guarded', sheetOpen: true, dirty: () => dirty });
-				window.dispatchEvent(key('Escape'));
-				flushSync();
-				await vi.waitFor(() => assert.ok(asking()));
-				assert.equal(asking()!.title, 'Discard your unsaved changes?');
-				await answer(false);
-				assert.ok(document.querySelector('[role=dialog]'), 'kept: the person said no');
-				element<HTMLButtonElement>(document, '[data-sheet-close]').click();
-				flushSync();
-				await answer(true);
-				assert.ok(await closed(document), 'closed once the person agreed');
-				await v.done();
-				dirty = false;
-				const clean = show({ part: 'guarded', sheetOpen: true, dirty: () => dirty });
-				window.dispatchEvent(key('Escape'));
-				flushSync();
-				assert.equal(asking(), undefined, 'nothing unsaved: no question');
-				assert.ok(await closed(document), 'the sheet closed');
-				await clean.done();
-				assert.equal(native.mock.calls.length, 0);
-			} finally {
-				vi.unstubAllGlobals();
-			}
-		})
-);
-
 it.live('sheet: Esc closes only the topmost, never a handled or composing key', () =>
 	browser(async () => {
 		const a = {},

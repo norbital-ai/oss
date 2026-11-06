@@ -2,7 +2,7 @@
 // Pure, so the Svelte state around it stays a thin shell and every rule here has a test.
 import type { AutomationExposure, ModelExposure } from '../kinds/context.js';
 import type { ChildInput } from '../kinds/context.js';
-import { initial, problems, type Fields, type Value, type Kind } from '../kinds/kind.js';
+import { initial, problems, valueObject, type Fields, type Value, type Kind } from '../kinds/kind.js';
 import { encodeWire } from '@norbital-ai/std/wire';
 import type { Where } from '@norbital-ai/std/kind';
 import { Equal } from 'effect';
@@ -52,6 +52,21 @@ export type FormSpec = {
 
 /** The form one `of` describes, from the model's exposure; `null` when the caller has no such verb. An update the
  * caller cannot make but can read is the read-only form of the readable fields. */
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+/**
+ * Where a draft waits in this browser: its page, its author and its record. A create keeps one draft per record its
+ * prefill names, so a project's unfinished new trial never surfaces under another project.
+ */
+export function draftKey(actor: unknown, spec: FormSpec, prefill: Row): string | undefined {
+	if (typeof location === 'undefined') return undefined;
+	const member = valueObject(actor) && typeof actor['id'] === 'string' ? actor['id'] : 'anonymous';
+	const id = spec.target.of === 'model' ? spec.target.id : undefined;
+	const parents = Object.entries(prefill)
+		.flatMap(([f, v]) => (typeof v === 'string' && UUID.test(v) ? [`${f}=${v}`] : []))
+		.sort();
+	return `norbital.form:${location.pathname}:${member}:${spec.callable}:${id ?? ['new', ...parents].join(':')}`;
+}
+
 export function formSpec(
 	of: string | { automation: string },
 	exposure: ModelExposure | undefined,

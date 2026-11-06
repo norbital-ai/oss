@@ -79,16 +79,14 @@ const type = async (root: ParentNode, value: string) => {
 	await settle();
 };
 
-it.live('Discard on leaving clears the stored create draft; Cancel keeps it', () =>
+it.live('closing a sheet never asks: the create draft stays, and reopening resumes it', () =>
 	Effect.gen(function* () {
 		const v = yield* browser(() => show('sheet'));
 		yield* browser(() => type(v.target, 'Paint'));
 		const stored = localStorage.length;
 		assert.ok(stored > 0);
-		const leave = async (confirmed: boolean) => {
-			element<HTMLButtonElement>(v.target, '[data-sheet-close]').click();
-			await vi.waitFor(() => assert.ok(confirmDialog()));
-			required(confirmDialog()).answer(confirmed);
+		element<HTMLButtonElement>(v.target, '[data-sheet-close]').click();
+		yield* browser(async () => {
 			await settle();
 			await Promise.allSettled(
 				Array.from(v.target.querySelectorAll('*'), (node) => node.getAnimations())
@@ -96,17 +94,14 @@ it.live('Discard on leaving clears the stored create draft; Cancel keeps it', ()
 					.map((animation) => animation.finished)
 			);
 			await settle();
-		};
-		yield* browser(() => leave(false));
-		assert.equal(v.form().get('title'), 'Paint');
-		assert.equal(localStorage.length, stored);
-		yield* browser(() => leave(true));
+		});
+		assert.equal(confirmDialog(), undefined);
 		assert.equal(v.target.querySelector('[role=dialog]'), null);
 		button(v.target, 'Reopen').click();
 		yield* browser(() => settle());
-		assert.equal(v.form().get('title'), null);
-		assert.equal(v.form().restored, false);
-		assert.equal(localStorage.length, stored - 1);
+		assert.equal(v.form().get('title'), 'Paint');
+		assert.equal(v.form().restored, true);
+		assert.equal(localStorage.length, stored);
 		assert.deepEqual(v.acts, []);
 	})
 );

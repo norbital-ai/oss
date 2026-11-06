@@ -257,6 +257,7 @@ it.live('the record heading uses its id when no label is declared', () =>
 	})
 );
 afterEach(async () => {
+	localStorage.clear();
 	for (const close of mounted.splice(0).reverse()) await close();
 });
 async function show(
@@ -698,32 +699,34 @@ it.live(
 		})
 );
 
-it.live('closing the sheet while saving asks before removing the pending draft', () =>
+it.live('an edit survives closing its record: it reopens as a draft, and Cancel discards it', () =>
 	Effect.gen(function* () {
-		const work = yield* Deferred.make<WireOutcome>();
-		const v = yield* browser(() => show(LIVE, catalog, () => Deferred.await(work)));
-		required(edit(v.target)).click();
+		const first = yield* browser(() => show(LIVE, catalog));
+		required(edit(first.target)).click();
 		yield* browser(() => settle());
-		const input = element<HTMLInputElement>(v.target, '[data-field=title] input');
-		input.value = 'Pending title';
+		const input = element<HTMLInputElement>(first.target, '[data-field=title] input');
+		input.value = 'A changed title';
 		input.dispatchEvent(new Event('input', { bubbles: true }));
-		element<HTMLElement>(v.target, 'form').dispatchEvent(
-			new Event('submit', { bubbles: true, cancelable: true })
-		);
 		yield* browser(() => settle());
-		assert.equal(element<HTMLElement>(v.target, 'form').getAttribute('aria-busy'), 'true');
-		try {
-			element<HTMLElement>(v.target, '[data-sheet-close]').click();
-			yield* browser(() => declineDiscard());
-			assert.ok(element<HTMLElement>(v.target, 'form[aria-busy=true]'));
-		} finally {
-			yield* Deferred.succeed(work, {
-				kind: 'committed',
-				output: null,
-				records: [{ model: 'jobs', id: 'j1', revision: 4 }]
-			});
-			yield* browser(() => settle());
-		}
+		yield* browser(() => required(mounted.pop())());
+		const again = yield* browser(() => show(LIVE, catalog));
+		yield* browser(() => settle());
+		assert.equal(
+			element<HTMLInputElement>(again.target, '[data-field=title] input').value,
+			'A changed title'
+		);
+		assert.deepEqual(again.calls.acts, []);
+		required(
+			[...again.target.querySelectorAll<HTMLButtonElement>('button')].find(
+				(b) => textOf(b).trim() === 'Cancel'
+			)
+		).click();
+		yield* browser(async () => {
+			await vi.waitFor(() => assert.ok(document.querySelector('[data-confirm-dialog][data-state=open]')));
+			element<HTMLButtonElement>(document, '[data-confirm-accept]').click();
+			await settle();
+		});
+		assert.equal(localStorage.length, 0);
 	})
 );
 

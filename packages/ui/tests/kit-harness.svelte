@@ -7,7 +7,6 @@
 	import Drawer from '../src/primitives/sheet/drawer.svelte';
 	import Sheet from '../src/primitives/sheet/sheet.svelte';
 	import LogView from '../src/logs/LogView.svelte';
-	import GuardProbe from './guard-probe.svelte';
 	import type { LogLine } from '../src/logs/logs.js';
 	import type { LogViewProps } from '../src/logs/LogView.svelte';
 	onDestroy(mountEdge(ManagedRuntime.make(Layer.empty)));
@@ -19,11 +18,9 @@
 		path = '/a',
 		rows = [],
 		loadOlder,
-		hasOlder = false,
-		dirty = () => false
+		hasOlder = false
 	}: {
-		part: 'sheet' | 'drawer' | 'logs' | 'guarded';
-		dirty?: () => boolean;
+		part: 'sheet' | 'drawer' | 'logs';
 		sheetOpen?: boolean;
 		drawerOpen?: boolean;
 		path?: string;
@@ -43,9 +40,7 @@
 	<Sheet bind:open={sheetOpen} title="Record">{@render inSheet()}</Sheet>
 {/snippet}
 
-{#if part === 'guarded'}
-	<Sheet bind:open={sheetOpen} title="Draft"><GuardProbe {dirty} /></Sheet>
-{:else if part === 'sheet'}
+{#if part === 'sheet'}
 	<Tabs tabs={[{ name: 'p', title: 'P', body: page }]} />
 {:else if part === 'drawer'}
 	<Drawer bind:open={drawerOpen} {path} title="Nav">

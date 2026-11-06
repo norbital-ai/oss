@@ -31,7 +31,6 @@ A related-record grid with explicit child operations, original revisions and par
 	import type { ChildOperation } from '../form/child-operations.js';
 	import { Button } from '../primitives/button/index.js';
 	import { confirmAction } from '../primitives/dialog/confirm.js';
-	import { SHEET_GUARD, type SheetGuard } from '../primitives/sheet/dismiss.js';
 	import Picker from '../kinds/picker.svelte';
 	import { useBolt } from '../client/context.js';
 	import { type Outcome } from '../client/contract.js';
@@ -201,12 +200,6 @@ A related-record grid with explicit child operations, original revisions and par
 				(entry) =>
 					entry.created || entry.removed !== undefined || entry.form.dirty || entry.form.pending
 			)
-	);
-	onDestroy(
-		getContext<SheetGuard | undefined>(SHEET_GUARD)?.(
-			() => save === 'independent' && dirty,
-			reset
-		) ?? (() => {})
 	);
 	function make(row: Row, created: boolean, key = row.id): Draft | null {
 		const target = created ? 'create' : 'update';

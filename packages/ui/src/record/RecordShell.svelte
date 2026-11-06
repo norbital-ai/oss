@@ -87,7 +87,6 @@
 	// read-only in the body. Without a body it renders the model's `+representation.svelte` or the generated view.
 	import Icon from '@iconify/svelte';
 	import { getContext, onDestroy, setContext, untrack } from 'svelte';
-	import { SHEET_GUARD, type SheetGuard } from '../primitives/sheet/dismiss.js';
 	import Badge from '../primitives/badge/badge.svelte';
 	import Tooltip from '../primitives/tooltip/tooltip.svelte';
 	import { Button } from '../primitives/button/index.js';
@@ -120,7 +119,7 @@
 		provideRecordController,
 		useRecordController
 	} from '../form/form-state.svelte.js';
-	import { formSpec, locked } from '../form/draft.js';
+	import { draftKey, formSpec, locked } from '../form/draft.js';
 	import { mapped, queryState } from '../read/state.js';
 	import { checkpoints, historicalFields, skipText, type Checkpoint } from './history.js';
 	import { label, lowerLead, msg, singular } from '../text/messages.js';
@@ -493,12 +492,6 @@
 
 	let capabilityRequest = 0;
 	let permissionError = $state<string | null>(null);
-	onDestroy(
-		getContext<SheetGuard | undefined>(SHEET_GUARD)?.(
-			() => localController !== null && (localController.dirty || localController.pending),
-			() => localController?.reset()
-		) ?? (() => {})
-	);
 	provideRecordController({
 		get current() {
 			return controller;
@@ -517,14 +510,15 @@
 			current.spec.target.model !== of ||
 			current.spec.target.id !== id
 		) {
+			const prefill = Object.fromEntries(
+				Object.entries((values ?? {}) as Partial<InsertOf<C>>).filter(
+					([, value]) => value !== undefined
+				)
+			);
 			localController = new FormState(
 				spec,
 				live,
-				Object.fromEntries(
-					Object.entries((values ?? {}) as Partial<InsertOf<C>>).filter(
-						([, value]) => value !== undefined
-					)
-				),
+				prefill,
 				(callable, input, options) => bolt.act(callable, input, options),
 				{
 					pendingApproval: formText('pendingApproval'),
@@ -532,11 +526,16 @@
 					unknown: formText('unknown'),
 					running: formText('running')
 				},
-				(field) => locked(exposure?.fields ?? {}, live)(field)
+				(field) => locked(exposure?.fields ?? {}, live)(field),
+				undefined,
+				draftKey(bolt.actor, spec, prefill)
 			);
 			localController.onOutcome(done);
-			if (mode !== 'create' && (mode !== 'edit' || spec.readonly || modelLocked))
-				localController.mode = 'view';
+			if (mode !== 'create' && (mode !== 'edit' || spec.readonly || modelLocked)) {
+				// a draft left on this record reopens in edit, unless the record has locked since: then it can never be saved
+				if (!localController.restored) localController.mode = 'view';
+				else if (modelLocked) localController.view();
+			}
 		} else {
 			current.spec = spec;
 			if (live !== null) current.refresh(live);
@@ -575,7 +574,7 @@
 		);
 	});
 	function beforeUnload(event: BeforeUnloadEvent) {
-		if (localController !== null && (localController.dirty || localController.pending)) {
+		if (localController?.pending) {
 			event.preventDefault();
 			event.returnValue = true;
 		}

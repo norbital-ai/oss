@@ -2,15 +2,14 @@
 	// The mounted draft: built once its row is known, and handed to every `Field` below by context.
 	import { Effect } from 'effect';
 	import { fork, observeOnce } from '../effect/index.js';
-	import { getContext, onDestroy, untrack, type Snippet } from 'svelte';
+	import { onDestroy, untrack, type Snippet } from 'svelte';
 	import { watch } from 'runed';
-	import { SHEET_GUARD, type SheetGuard } from '../primitives/sheet/dismiss.js';
 	import Alert from '../primitives/alert/alert.svelte';
 	import Button from '../primitives/button/button.svelte';
 	import Spinner from '../primitives/spinner/spinner.svelte';
 	import { provideControls, uiText } from '../primitives/utils.js';
-	import { valueObject, type Fields } from '../kinds/kind.js';
-	import { locked, type FormSpec, type Outcome, type Row } from './draft.js';
+	import type { Fields } from '../kinds/kind.js';
+	import { draftKey, locked, type FormSpec, type Outcome, type Row } from './draft.js';
 	import Field from './field.svelte';
 	import Grid from '../layout/grid.svelte';
 	import RunStatus from '../runs/RunStatus.svelte';
@@ -78,16 +77,8 @@
 	const readonly = $derived(controls.readonly);
 	const t = uiText();
 	const bolt = useBolt();
-	const actor = bolt.actor;
-	const member =
-		valueObject(actor) && typeof actor['id'] === 'string' ? actor['id'] : 'anonymous';
 	// svelte-ignore state_referenced_locally -- the key belongs to this mounted form
-	const storageKey =
-		typeof location === 'undefined'
-			? undefined
-			: `norbital.form:${location.pathname}:${member}:${spec.callable}:${
-					spec.target.of === 'model' ? (spec.target.id ?? 'new') : 'new'
-				}`;
+	const storageKey = draftKey(bolt.actor, spec, values);
 	// svelte-ignore state_referenced_locally -- a draft is built once per mount; a new row is a new form
 	const form =
 		matching && shared != null
@@ -158,13 +149,6 @@
 			return asked == null ? Effect.succeed(true) : confirmAction(asked);
 		})
 	);
-	// the sheet this form sits in asks before closing over its unsaved draft
-	onDestroy(
-		getContext<SheetGuard | undefined>(SHEET_GUARD)?.(
-			() => !controls.readonly && (form.dirty || form.pending),
-			() => form.reset()
-		) ?? (() => {})
-	);
 	const update = $derived(spec.target.of === 'model' && spec.target.mode === 'update');
 	// Matching record forms share the header's Save; independent forms and creates own their submit.
 	const ownSubmit = $derived(!matching || !update);
@@ -187,7 +171,7 @@
 		fork(form.submit());
 	}
 	function beforeUnload(event: BeforeUnloadEvent) {
-		if (!readonly && (form.dirty || form.pending)) {
+		if (!readonly && form.pending) {
 			event.preventDefault();
 			event.returnValue = true;
 		}

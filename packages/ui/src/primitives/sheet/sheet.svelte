@@ -37,9 +37,6 @@ screen from its header.
 
 <script lang="ts">
 	import { setContext } from 'svelte';
-	import { Effect } from 'effect';
-	import { fork } from '../../effect/index.js';
-	import { confirmAction } from '../dialog/confirm.js';
 	import { MediaQuery } from 'svelte/reactivity';
 	import { watch } from 'runed';
 	import { resetInset } from '../../layout/inset.svelte.js';
@@ -51,8 +48,6 @@ screen from its header.
 		popSheet,
 		pushSheet,
 		sheetRevision,
-		SHEET_GUARD,
-		type SheetGuard
 	} from './dismiss.js';
 
 	let {
@@ -87,45 +82,10 @@ screen from its header.
 	setContext(TAB_LEVEL, undefined);
 	setContext('ui.views.record', undefined);
 
-	// the forms inside: closing over an unsaved draft asks first (Esc, ×, and a phone's scrim alike)
-	const drafts = new Set<{ dirty: () => boolean; discard: () => void }>();
-	setContext<SheetGuard>(SHEET_GUARD, (dirty, discard) => {
-		const draft = { dirty, discard };
-		drafts.add(draft);
-		return () => void drafts.delete(draft);
-	});
-	const shut = () => {
+	// closing never asks: a form keeps its draft in this browser, and reopening the record resumes it
+	const close = () => {
 		asked = true;
 		open = false;
-	};
-	// the Esc that dismisses the question must not ask it again
-	let asking = false;
-	const close = () => {
-		if (asking) return;
-		if (![...drafts].some((draft) => draft.dirty())) return shut();
-		asking = true;
-		fork(
-			confirmAction({
-				title: t('discardDraft'),
-				confirmLabel: t('discard'),
-				cancelLabel: t('cancel'),
-				destructive: true
-			}).pipe(
-				Effect.tap((confirmed) =>
-					Effect.sync(() => {
-						if (confirmed) {
-							for (const draft of drafts) if (draft.dirty()) draft.discard();
-							shut();
-						}
-					})
-				),
-				Effect.ensuring(
-					Effect.sync(() => {
-						asking = false;
-					})
-				)
-			)
-		);
 	};
 	watch(
 		() => open,
