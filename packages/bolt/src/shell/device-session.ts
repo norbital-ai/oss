@@ -55,9 +55,10 @@ export const openExternal = (device: DeviceApi, href: string): Effect.Effect<voi
 
 /**
  * A signed-in staff member's Device for the page scope: taps navigate; each new unread notice of the live
- * `inbox` is raised while the page is hidden (a visible page shows its own toast); the device's push endpoint is stored
- * (a shell's `push`, else web push once the browser already granted notifications); the shell's notice
- * service starts. `signOut` stops the service and forgets the endpoint, before the session ends.
+ * `inbox` is raised while the page is hidden (a visible page shows its own toast, a stored web endpoint its service
+ * worker's); the device's push endpoint is stored, unasked (a shell's `push`, else web push unless the browser blocks
+ * notifications); the shell's notice service starts. `signOut` stops the service and forgets the endpoint, before the
+ * session ends.
  */
 export const deviceSession = Effect.fn('shell.deviceSession')(function* (
 	device: DeviceApi,
@@ -74,13 +75,16 @@ export const deviceSession = Effect.fn('shell.deviceSession')(function* (
 		Effect.sync(() => notifications.onOpen(options.navigate)),
 		(off) => Effect.sync(off)
 	);
+	const push = device.push,
+		vapid = options.vapid;
+	let endpoint: string | null = null;
 	let seen: ReadonlySet<string> | null = null;
 	yield* options.inbox.pipe(
 		Stream.runForEach((value) => {
 			const rows = inboxNotices(value),
 				fresh = freshNotices(seen, rows);
 			seen = new Set(rows.map((row) => row.id));
-			return document.visibilityState === 'visible'
+			return document.visibilityState === 'visible' || (push === undefined && endpoint !== null)
 				? Effect.void
 				: Effect.forEach(
 						fresh,
@@ -91,18 +95,15 @@ export const deviceSession = Effect.fn('shell.deviceSession')(function* (
 		quietly,
 		Effect.forkScoped
 	);
-	const push = device.push,
-		vapid = options.vapid;
 	const register: Effect.Effect<PushRegistration, unknown> | null =
 		push !== undefined
 			? attempt('push.register', () => push.register()).pipe(Effect.flatMap(registration))
 			: vapid !== null &&
 				  webPushable() &&
 				  typeof Notification !== 'undefined' &&
-				  Notification.permission === 'granted'
+				  Notification.permission !== 'denied'
 				? webPush(vapid)
 				: null;
-	let endpoint: string | null = null;
 	if (register !== null)
 		yield* register.pipe(
 			Effect.tap(options.store),

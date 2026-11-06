@@ -112,6 +112,83 @@ describe('the device environment', () => {
 		})
 	);
 
+	it.live('subscribes a browser unasked: permission on the first click, none when blocked', () =>
+		Effect.gen(function* () {
+			let click: (() => void) | undefined;
+			const notice = { permission: 'default', requestPermission: vi.fn(async () => 'granted') };
+			const raised = vi.fn();
+			vi.stubGlobal(
+				'Notification',
+				class {
+					static get permission() {
+						return notice.permission;
+					}
+					static requestPermission = notice.requestPermission;
+					constructor() {
+						raised();
+					}
+				}
+			);
+			vi.stubGlobal('PushManager', class {});
+			vi.stubGlobal('atob', (value: string) => Buffer.from(value, 'base64').toString('latin1'));
+			vi.stubGlobal('location', { href: 'https://acme.example/inbox' });
+			vi.stubGlobal('document', {
+				visibilityState: 'hidden',
+				querySelector: () => null,
+				addEventListener: (_: string, listener: () => void) => {
+					click = listener;
+				},
+				removeEventListener: () => undefined
+			});
+			const endpoint = 'https://push.example/1',
+				keys = { p256dh: 'p', auth: 'a' };
+			const subscribe = vi.fn(async () => ({ toJSON: () => ({ endpoint, keys }) }));
+			vi.stubGlobal('navigator', {
+				serviceWorker: { register: async () => ({ pushManager: { subscribe } }) }
+			});
+			const stored: PushBody[] = [];
+			const answers = yield* Queue.unbounded<unknown>();
+			const session = (scope: Scope.Closeable) =>
+				deviceSession(
+					{},
+					{
+						inbox: Stream.fromQueue(answers),
+						vapid: 'AQAB',
+						navigate: () => undefined,
+						store: (body) => Effect.sync(() => void stored.push(body))
+					}
+				).pipe(Effect.provideService(Scope.Scope, scope));
+
+			const scope = yield* Scope.make();
+			const environment = yield* session(scope);
+			yield* Effect.yieldNow;
+			expect(notice.requestPermission).not.toHaveBeenCalled();
+			expect(subscribe).not.toHaveBeenCalled();
+			notice.permission = 'granted';
+			click?.();
+			expect(notice.requestPermission).toHaveBeenCalledOnce();
+			yield* Effect.promise(() => vi.waitFor(() => expect(stored).toHaveLength(1)));
+			expect(stored).toEqual([{ endpoint, keys }]);
+			// the service worker raises it; the page would raise a second
+			yield* Queue.offer(answers, { rows: [row('a')] });
+			yield* Queue.offer(answers, { rows: [row('b'), row('a')] });
+			yield* Effect.sleep(10);
+			expect(raised).not.toHaveBeenCalled();
+			yield* environment.signOut;
+			expect(stored[1]).toEqual({ endpoint, remove: true });
+			yield* Scope.close(scope, Exit.void);
+
+			notice.permission = 'denied';
+			click = undefined;
+			const blocked = yield* Scope.make();
+			yield* session(blocked);
+			yield* Effect.yieldNow;
+			expect(click).toBeUndefined();
+			expect(subscribe).toHaveBeenCalledOnce();
+			yield* Scope.close(blocked, Exit.void);
+		})
+	);
+
 	it.effect('opens a link out of the workspace through the shell, else in the browser', () =>
 		Effect.gen(function* () {
 			const page = { href: 'https://acme.example/' };

@@ -50,8 +50,21 @@ export const registration = (value: unknown) =>
 				: Effect.succeed(body)
 		)
 	);
-/** This browser's web push subscription under the host's VAPID key (it asks for notification permission). */
+/** The browser's notification permission: browsers prompt only on a gesture, so an unanswered one asks on the first click. */
+const permission = Effect.callback<NotificationPermission, DeviceFailure>((resume) => {
+	if (Notification.permission !== 'default') return resume(Effect.succeed(Notification.permission));
+	const ask = () => {
+		const answer = Notification.requestPermission();
+		resume(attempt('notifications.request', () => answer));
+	};
+	document.addEventListener('click', ask, { once: true, capture: true });
+	return Effect.sync(() => document.removeEventListener('click', ask, { capture: true }));
+});
+/** This browser's web push subscription under the host's VAPID key, once it has notification permission. */
 export const webPush = Effect.fn('shell.webPush')(function* (key: string) {
+	const answer = yield* permission;
+	if (answer !== 'granted')
+		return yield* Effect.fail(new DeviceFailure({ operation: 'push.permission', cause: answer }));
 	const worker = yield* attempt('serviceWorker.register', () =>
 		navigator.serviceWorker.register(based(SW), { scope: based('/') })
 	);

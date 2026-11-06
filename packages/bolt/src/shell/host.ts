@@ -117,10 +117,10 @@ import { encodeWire } from '@norbital-ai/std/wire';
 
 const SESSION_S = 7 * 86_400,
 	VISITOR_S = 30 * 86_400;
-/** The service worker's source: it shows a pushed notice and opens its link. */
+/** The service worker's source: it shows a pushed notice (a visible page toasts its own) and opens its link. */
 const WORKER = `self.addEventListener('push', (e) => {
 	const n = e.data ? e.data.json() : {};
-	e.waitUntil(self.registration.showNotification(n.title || '', { body: n.body || undefined, data: { url: new URL((n.path || '/inbox').replace(/^[/]/, ''), self.registration.scope).href } }));
+	e.waitUntil(self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((windows) => windows.some((w) => w.visibilityState === 'visible') ? undefined : self.registration.showNotification(n.title || '', { body: n.body || undefined, data: { url: new URL((n.path || '/inbox').replace(/^[/]/, ''), self.registration.scope).href } })));
 });
 self.addEventListener('notificationclick', (e) => {
 	e.notification.close();

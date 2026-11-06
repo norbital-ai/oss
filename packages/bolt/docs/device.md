@@ -39,10 +39,11 @@ WebView's session cookie while the app is in the background.
 For a signed-in staff member, the shell (platform-free, scoped to the page's client):
 
 - holds the live inbox open and, while the page is hidden, raises each new unread notice with `notifications.show`
-  (a visible page shows a toast instead);
+  (a visible page shows a toast instead; a stored web endpoint's service worker raises it);
 - follows a tapped notice's path (`onOpen`);
-- stores this device's push endpoint: `push.register()`, or, without one, web push once the browser has already
-  granted notifications (the account menu's "Notify me on this device" asks);
+- stores this device's push endpoint: `push.register()`, or, without one, web push. Every device receives; there is no
+  setting. A browser that has not answered is asked on the member's first click, because browsers show the prompt only
+  on a gesture; a browser that blocks notifications stores no endpoint;
 - starts the shell's notice service (`notices.start`);
 - at sign-out, before the session ends, stops the service and forgets the endpoint.
 
