@@ -12,24 +12,47 @@ import type { Json } from '../../decl/values.ts';
 import {
 	Approvals,
 	Activation,
+	Guest,
 	Live,
 	Manifest,
 	type ApprovalFilter,
+	type GuestShape,
+	type PlannedCommit,
 	type Readable
 } from '../services.ts';
 import { TenantDb, type TenantDbShape } from '../db/tenant-db.ts';
 import { teams, type EngineManifest } from '../manifest.ts';
-import type { Authority, Bindings, EngineActor, Lock, Outcome, QueuedRun } from '../contracts.ts';
+import {
+	LIMITS,
+	type Authority,
+	type Bindings,
+	type EngineActor,
+	type Invocation,
+	type Lock,
+	type Outcome,
+	type QueuedRun
+} from '../contracts.ts';
 import type { EngineError } from '../errors.ts';
 import { catalogOf } from '../access/pred.ts';
 import { canonical, q } from '@norbital-ai/store';
 import { BoltError } from '../../protocol/errors.ts';
 import {
+	act,
+	answerOf,
 	constraintsOf,
+	guestFailure,
+	hasCallback,
+	transformBridge,
+	wireRows,
 	type ApprovalHook,
+	type CarriedWrite,
 	type HeldRecord,
-	type StepsSnapshot
+	type StepsSnapshot,
+	type WriteEngine
 } from '../write/act.ts';
+import { coalescing } from '../query/engine.ts';
+import { readHistory } from '../query/history.ts';
+import { HistorySnapshotSchema } from '../../protocol/record-contracts.ts';
 import {
 	actorId,
 	actorRef,
@@ -147,10 +170,9 @@ type Stored = Request & {
 	at: string;
 };
 type Refusal = Extract<Outcome, { kind: 'refused' }>;
+type Conflict = Extract<Outcome, { kind: 'conflict' }>;
 export type Decision =
-	| { kind: 'decided'; requestId: string; status: ApprovalState }
-	| Refusal
-	| Extract<Outcome, { kind: 'conflict' }>;
+	{ kind: 'decided'; requestId: string; status: ApprovalState } | Refusal | Conflict;
 type Who = { ref: string; name: string | null };
 /** The approval view (§3.8, spec §7): the request, its named steps, every interaction, the held records and the viewer's decisions. */
 export type ApprovalView = {
@@ -200,6 +222,12 @@ type ApprovalsOptions = {
 	bindings(at?: string): Effect.Effect<Bindings>;
 	/** Publishes a decision's captured rows, and wakes the queue (the act path's own `committed`). */
 	committed?(answer: CommitAnswer): Effect.Effect<void>;
+	/** The approving decision's `onApproved` (`approvedWrites`): planned commits to join its statement, or why it cannot stand. */
+	approved?(
+		request: Stored,
+		authority: Authority,
+		bindings: Bindings
+	): Effect.Effect<readonly PlannedCommit[] | Refusal | Conflict, EngineError>;
 	/** Re-reads the request's views and the `$approval` of the records it holds. */
 	changed?(
 		requestId: string,
@@ -550,6 +578,15 @@ function makeApprovals(m: EngineManifest, db: TenantDbShape, options: ApprovalsO
 				'invalidInput',
 				'An approval checkpoint cannot be restored. The request and its records remain held.'
 			);
+		// what the approved write carries `onApproved` commits in this statement, or the decision does not stand
+		const approved =
+			stands && options.approved !== undefined ? yield* options.approved(a, auth, b) : [];
+		if ('kind' in approved) return approved;
+		const carried = approved.map((planned) => planned.commit);
+		const fingerprints = [
+			...(readGuards?.fingerprints ?? []),
+			...carried.flatMap((commit) => commit.fingerprints ?? [])
+		];
 		const entry: LogEntry = {
 			move,
 			by,
@@ -572,15 +609,18 @@ function makeApprovals(m: EngineManifest, db: TenantDbShape, options: ApprovalsO
 			today: b.today,
 			actor: auth.actor,
 			writer: writerOf(auth),
-			writes: plan.writes,
-			owned: [],
+			writes: [...plan.writes, ...carried.flatMap((commit) => commit.writes)],
+			owned: carried.flatMap((commit) => commit.owned),
 			rate: [],
-			runs: runs.map((run) => ({ ...run, id: mint() })),
-			notices: [],
+			runs: [
+				...runs.map((run) => ({ ...run, id: mint() })),
+				...carried.flatMap((commit) => commit.runs)
+			],
+			notices: carried.flatMap((commit) => commit.notices),
 			output: null,
 			restored: plan.restored,
 			approvalDecision: { request: a.id },
-			...(readGuards === undefined ? {} : { fingerprints: readGuards.fingerprints }),
+			...(fingerprints.length === 0 ? {} : { fingerprints }),
 			before: (c) => {
 				for (const observation of plan.observations) {
 					const selected = `SELECT revision FROM ${q(table(observation.model))} WHERE id::text = ${c.p(observation.id)}`;
@@ -629,12 +669,16 @@ function makeApprovals(m: EngineManifest, db: TenantDbShape, options: ApprovalsO
 				...(readGuards?.tables ?? []),
 				...plan.observations.map((observation) => observation.model),
 				...affectedTables(m, cat, plan.writes),
+				...approved.flatMap((planned) => [
+					...(planned.lock?.tables ?? []),
+					...affectedTables(m, cat, planned.commit.writes)
+				]),
 				'bolt_approvals',
 				'approval_request'
 			])
 		].sort();
 		const decisionLock: Lock | undefined =
-			readGuards === undefined && plan.observations.length === 0
+			readGuards === undefined && plan.observations.length === 0 && approved.length === 0
 				? undefined
 				: { tables: lockedTables, mode: 'SHARE ROW EXCLUSIVE' };
 		const result = yield* Effect.result(
@@ -779,6 +823,171 @@ const bindingOf = (m: EngineManifest, at?: string) =>
 		const now = at ?? new Date(yield* Clock.currentTimeMillis).toISOString();
 		return bindingsAt(now, m.workspace.tz);
 	});
+/**
+ * The approving decision's `onApproved`, in bulk: every held row of the request's model asked again as it now stands
+ * (`ctx.approving`), one invocation per verb, and what they answer planned as acts (their own callbacks, carried by that
+ * model) all at once over one coalesced reader, for the decision's one statement. A refusal or a conflict leaves the
+ * request pending.
+ */
+const approvedWrites = Effect.fn('Approvals.approvedWrites')(function* (
+	m: EngineManifest,
+	db: TenantDbShape,
+	guest: GuestShape,
+	a: Stored,
+	auth: Authority,
+	b: Bindings
+): Effect.fn.Return<readonly PlannedCommit[] | Refusal | Conflict, EngineError> {
+	const cat = catalogOf(m);
+	const held = [
+		...Map.groupBy(
+			a.records.filter((record) => record.model === a.model),
+			(record) => record.op
+		)
+	].filter(([verb]) => hasCallback(m, a.model, verb));
+	const ask = Effect.fn('Approvals.askAgain')(function* (
+		verb: 'create' | 'update' | 'delete',
+		ids: readonly string[]
+	): Effect.fn.Return<readonly CarriedWrite[] | Refusal, EngineError> {
+		// a held delete's row is gone: its image before the request
+		const rows: readonly (Json | null)[] =
+			verb === 'delete'
+				? yield* Effect.forEach(
+						ids,
+						(id) =>
+							readHistory(
+								db,
+								m,
+								{
+									kind: 'history',
+									model: a.model,
+									id,
+									at: { _tag: 'Before', before: a.id },
+									view: true
+								},
+								{ as: 'workspace' },
+								b
+							).pipe(
+								Effect.flatMap((image) =>
+									image === null
+										? Effect.succeed(null)
+										: Schema.decodeUnknownEffect(HistorySnapshotSchema)(image).pipe(
+												Effect.map((snapshot): Json => snapshot.compatible),
+												Effect.mapError((error) =>
+													BoltError.make('schema', 'decode', error.message)
+												)
+											)
+								)
+							),
+						{ concurrency: 'unbounded' }
+					)
+				: yield* wireRows(db, cat, a.model, ids, b);
+		const input = rows.flatMap((row) =>
+			row === null ? [] : [verb === 'update' ? { before: row, set: {} } : row]
+		);
+		if (input.length === 0) return [];
+		const seed = `approval:${a.id}:${a.log.length}:${verb}`;
+		const invocation: Invocation = {
+			id: seed,
+			kind: verb,
+			target: a.model,
+			input,
+			ctx: {
+				actor: auth.actor,
+				policies: auth.policies,
+				admin: auth.admin,
+				now: b.now,
+				today: b.today,
+				tz: b.tz,
+				seed,
+				approving: true
+			},
+			budget: { crossings: LIMITS.crossings.write, readBytes: LIMITS.readBytes }
+		};
+		const g = yield* guest.invoke(invocation, transformBridge(m, db, invocation));
+		if (g.kind === 'refused')
+			return {
+				kind: 'refused',
+				code: 'refused',
+				message: g.message,
+				rule: `${a.model}.${verb}`,
+				...(g.field === undefined ? {} : { field: g.field })
+			};
+		if (g.kind === 'failed') {
+			const failure = yield* guestFailure(g.error);
+			return failure.kind === 'refused'
+				? failure
+				: refused('internal', 'The approved write could not be asked again.');
+		}
+		const answer = answerOf(verb, g.output, input.length);
+		if (typeof answer === 'string') return yield* BoltError.make('transformShape', 'guest', answer);
+		return answer.onApproved;
+	});
+	const asked = yield* Effect.forEach(
+		held,
+		([verb, records]) =>
+			ask(
+				verb,
+				records.map((record) => record.id)
+			),
+		{ concurrency: 'unbounded' }
+	);
+	const carried: CarriedWrite[] = [];
+	for (const answer of asked) {
+		if ('kind' in answer) return answer;
+		carried.push(...answer);
+	}
+	// each model's creates and updates are one act, carried by the request's model and admitted by its approval
+	const groups = [...Map.groupBy(carried, (write) => `${write.model}:${write.op}`).values()];
+	if (groups.length === 0) return [];
+	const shared = yield* coalescing(db, groups.length);
+	const engine: WriteEngine = { manifest: m, db: shared, guest };
+	const planned: (PlannedCommit | undefined)[] = groups.map(() => undefined);
+	const outcomes = yield* Effect.forEach(
+		groups,
+		(group, index) => {
+			const first = group[0]!;
+			return act(engine, {
+				model: first.model,
+				verb: first.op,
+				input: group.map((write) =>
+					write.op === 'create'
+						? write.row
+						: { target: write.target ?? null, set: write.set ?? null }
+				),
+				observed: Object.fromEntries(
+					group.flatMap((write) =>
+						write.op === 'update' && write.observed !== null && typeof write.target === 'string'
+							? [[write.target, write.observed]]
+							: []
+					)
+				),
+				mode: {
+					_tag: 'Record',
+					carriedBy: a.model,
+					pending: new Map(),
+					sink: (commit) => {
+						planned[index] = commit;
+					}
+				},
+				authority: { ...auth, admin: true },
+				key: `approval:${a.id}:${a.log.length}:${first.model}:${first.op}`,
+				invocationId: `approval:${a.id}:${a.log.length}:${first.model}:${first.op}`,
+				issuedAt: b.now,
+				bindings: b
+			}).pipe(Effect.ensuring(shared.done));
+		},
+		{ concurrency: 'unbounded' }
+	);
+	for (const [index, { outcome }] of outcomes.entries()) {
+		if (outcome.kind === 'refused' || outcome.kind === 'conflict') return outcome;
+		if (outcome.kind !== 'committed')
+			return refused(
+				'internal',
+				`The approved write's ${groups[index]?.[0]?.model ?? ''} rows could not be planned.`
+			);
+	}
+	return planned.flatMap((commit) => (commit === undefined ? [] : [commit]));
+});
 /** Source routing is a direct planner dependency; it never acquires Approvals or Writes. */
 export const approvalHook = (manifest: EngineManifest, db: TenantDbShape): ApprovalHook =>
 	makeApprovals(manifest, db, { bindings: (at) => bindingOf(manifest, at) }).hook;
@@ -790,10 +999,13 @@ export const ApprovalsLive = Layer.effect(
 			activation = yield* Activation,
 			db = yield* TenantDb,
 			live = yield* Live,
+			guest = yield* Guest,
 			context = yield* Effect.context<Effect.Services<ReturnType<typeof committed>>>();
 		const area = makeApprovals(manifest, db, {
 			sourceEpoch: activation.release,
 			bindings: (at) => bindingOf(manifest, at),
+			approved: (request, authority, bindings) =>
+				approvedWrites(manifest, db, guest, request, authority, bindings),
 			committed: (answer) => committed(answer).pipe(Effect.provideContext(context), Effect.asVoid),
 			changed: (requestId, records) =>
 				Effect.sync(() => {

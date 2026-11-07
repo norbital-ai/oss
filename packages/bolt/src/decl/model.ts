@@ -6,7 +6,17 @@
 // `splitModel` turns a literal into the engine's three manifest parts: storage, relationships, exposure; `layerModels`
 // resolves each declared layer path (`'orders.lines.product'`) to the model behind it.
 import { attached, type Body } from './body.ts';
-import type { BodyReturn, CreateRow, NotifyCtx, NotifyEvent, UpdateSet, WriteCtx } from './ctx.ts';
+import type {
+	BodyReturn,
+	Carried,
+	CreatedRow,
+	CreateRow,
+	NotifyCtx,
+	NotifyEvent,
+	TransformAnswer,
+	UpdateSet,
+	WriteCtx
+} from './ctx.ts';
 import type {
 	Checked,
 	Exact,
@@ -561,7 +571,7 @@ export type RefField = {
 	/** The many-relation on the target that lists this model's rows (`customer.orders`). */
 	inverse?: string;
 	optional?: true;
-	/** Composition: the child is written through its parent's `with` and deleted with it; its key never changes (rule 41). */
+	/** Composition: the child is written through its parent's write layers and deleted with it; its key never changes (rule 41). */
 	owned?: true;
 	/** What deleting the target does: refuse (`restrict`, default), delete this row (`cascade`), or clear the ref (`setNull`). */
 	onDelete?: 'restrict' | 'cascade' | 'setNull';
@@ -768,36 +778,38 @@ interface BodiesFor<K> {
 		/**
 		 * Runs for every row created in this model, by every path, before it is written: a page or Form, the agent, and
 		 * `ctx.act` in an automation; a sync's `read` and a file import; an upsert's creates; and a child created
-		 * through its parent's `with`, after the parent's own callback, in the same statement. One call per batch (up to
-		 * 1,000 rows), never per row: returns the rows to insert with derived values filled, or refuses. Seed packs (restored
-		 * data) and derived roll-ups do not run it.
+		 * through its parent's write layers, after the parent's own callback, in the same statement. One call per batch (up
+		 * to 1,000 rows), never per row: each row carries the `id` it will have; returns the rows to insert with derived
+		 * values filled, or refuses. It may instead return `{ rows, with, onApproved }`, carrying rows of other models in the
+		 * same commit (`Carried`). Seed packs (restored data) and derived roll-ups do not run it.
 		 */
 		transform?: (
-			rows: readonly CreateRow<K>[],
+			rows: readonly CreatedRow<K>[],
 			ctx: WriteCtx<K>
-		) => BodyReturn<readonly CreateRow<K>[]>;
+		) => BodyReturn<TransformAnswer<CreateRow<K>>>;
 	};
 	update?: {
 		/**
 		 * Runs for every row updated in this model, by every path, before it is written: a page or Form, the agent, and
 		 * `ctx.act` in an automation; a sync's `read` and a file import; an upsert's updates; a bulk edit; an
 		 * approval resubmit (the requester's save) and a per-record restore; a link or unlink of a child (an update of that
-		 * child); and a child updated through its parent's `with`, after the parent's own callback. Receives `{ before, set }`
+		 * child); and a child updated through its parent's write layers, after the parent's own callback. Receives `{ before, set }`
 		 * per row (the stored row and the change) and returns the sets to write, in order, or refuses. Seed packs and
 		 * derived roll-ups do not run it; nor does an upsert that keeps a matched row (`onConflict: 'keep'`).
 		 */
 		transform?: (
 			changes: readonly { readonly before: StoredRow<K>; readonly set: UpdateSet<K> }[],
 			ctx: WriteCtx<K>
-		) => BodyReturn<readonly UpdateSet<K>[]>;
+		) => BodyReturn<TransformAnswer<UpdateSet<K>>>;
 	};
 	delete?: {
 		/**
 		 * Runs before every row of this model is deleted, by every path: a page, the agent, and `ctx.act` in an automation;
-		 * a sync's `read` and a file import's prune; and a child deleted through its parent's `with`. Receives
-		 * the stored rows and may only refuse. Seed packs and derived roll-ups do not run it.
+		 * a sync's `read` and a file import's prune; and a child deleted through its parent's write layers. Receives
+		 * the stored rows and may refuse, or return `{ with, onApproved }` rows of other models that commit with the delete.
+		 * Seed packs and derived roll-ups do not run it.
 		 */
-		check?: (rows: readonly StoredRow<K>[], ctx: WriteCtx<K>) => BodyReturn<void>;
+		check?: (rows: readonly StoredRow<K>[], ctx: WriteCtx<K>) => BodyReturn<void | Carried>;
 	};
 	/**
 	 * Runs after the commit for every write and approval event of this model (the event says which) and returns the notices

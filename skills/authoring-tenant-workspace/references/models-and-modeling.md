@@ -52,7 +52,10 @@ Every field is required unless `optional: true`. Exact shape: `import('@norbital
 
 ## Write callbacks
 
-- A create transform gets all rows; an update transform gets `{ before, set }` per row and returns sets; a delete check gets stored rows and only refuses.
+- A create transform gets all rows, each with the `id` it will have; an update transform gets `{ before, set }` per row and returns sets; a delete check gets stored rows and only refuses.
+- To write other models in the same transaction, return `{ rows, with, onApproved }` (a delete check `{ with, onApproved }`), each `{ [model]: { create?, update?: [{ target, set, observed? }] } }`. Carried rows run their own callbacks (`ctx.carriedBy`); a stale `observed` is a conflict.
+- `with` rows are part of the write: held, locked and rolled back with it. `onApproved` rows (ledger and balance postings) commit once it is approved, in the approving decision's statement, all or nothing.
+- Under an approval the decision calls the callback again with `ctx.approving` on the stored rows; return only `onApproved`, and never count those rows twice.
 - They run on every business write path: pages, agent, automations, syncs, imports, upserts, bulk edits, resubmits, restore, nested owned children. Children run after the parent. Seed restores and roll-ups bypass them.
 - Keep semantic validators in browser-safe `src/lib` modules returning `{ field, message }`; forms and the server share them. Client validation never writes.
 - Prefetch the batch through `ctx.db.query` as the workspace, at most two reads, never per row. The engine prefetches `before`, delete rows and upsert matches.

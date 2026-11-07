@@ -241,9 +241,24 @@ validation that cannot be expressed by these native rules. A raw SQL connection 
 and does not acquire application policy checks merely by reaching the same table.
 
 Every generated write's input is an array of rows (`[{ … }]`, `[{ target, set }]`, `[{ target }]`);
-there is no single-row form. `create.transform(rows, ctx)` returns the rows to insert. `update.transform(changes, ctx)` receives
+there is no single-row form. `create.transform(rows, ctx)` returns the rows to insert; each row it receives carries the `id` it will have. `update.transform(changes, ctx)` receives
 `{ before, set }` for each change and returns its sets. `delete.check(rows, ctx)` may refuse and
 returns no replacement rows. Shared logic is an ordinary helper called by both verbs.
+
+A transform may instead return `{ rows, with, onApproved }`, and a delete check `{ with, onApproved }`,
+each `{ [model]: { create?: [row], update?: [{ target, set, observed? }] } }`: rows of other models the
+write carries into its own transaction. They run their own model's callbacks (`ctx.carriedBy` names the
+carrying model), the root write's grant admits them, and an `observed` revision older than the stored
+one is a conflict.
+
+- `with` is part of the write: held with it under an approval, locked like owned children, rolled back
+  on rejection.
+- `onApproved` follows the write once it is approved: at once when no approval holds it. When one does,
+  the approving decision asks the request model's callback again (`ctx.approving`) for every held row
+  at once, one call per verb, on the records as they now stand (an update's `{ before: row, set: {} }`),
+  plans what they carry together and commits it in the decision's one statement. A refusal or conflict
+  there leaves the request pending; a rejection writes none. A change to a held record waits the same
+  way. Ledger and balance postings belong here.
 
 These callbacks run for Forms, pages, agent writes, automations, remote syncs, imports,
 upserts, bulk edits, approval resubmits, per-record restore and nested owned children. They do not

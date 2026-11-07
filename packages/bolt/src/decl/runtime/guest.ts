@@ -277,6 +277,8 @@ const lift = (call: Call, raw: unknown): unknown => {
 				...actor,
 				policies,
 				admin: raw['admin'] === true,
+				carriedBy: typeof raw['carriedBy'] === 'string' ? raw['carriedBy'] : null,
+				approving: raw['approving'] === true,
 				refuse,
 				db: { ...workspace, after: cross('db.after') }
 			};

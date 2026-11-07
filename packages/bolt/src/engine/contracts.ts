@@ -337,6 +337,10 @@ export type Invocation = {
 		run?: { id: string; trigger: RunTrigger };
 		admin?: boolean;
 		policies?: readonly string[];
+		/** A write callback's rows carried by this model's write (`with` or `onApproved`). */
+		carriedBy?: string;
+		/** The approving decision asks a held write's callback again, for its `onApproved`. */
+		approving?: true;
 		/** A sync body's or integration test's instance and configuration; `key` a sync write's `Idempotency-Key`. */
 		instance?: string;
 		key?: string;

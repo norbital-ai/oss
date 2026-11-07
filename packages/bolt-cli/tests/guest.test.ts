@@ -473,6 +473,8 @@ describe('next guest runner', () => {
 					keys: [
 						'actor',
 						'admin',
+						'approving',
+						'carriedBy',
 						'db',
 						'invocationId',
 						'now',

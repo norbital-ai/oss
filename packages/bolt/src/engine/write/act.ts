@@ -878,7 +878,8 @@ function admit(
 	for (const [verb, list] of needs) {
 		if (verb === 'delete') {
 			const arms = auth.models[root]?.delete ?? [];
-			if (arms.length === 0) return forbidden(list[0], `You may not delete ${root}: ${held(auth)}.`);
+			if (arms.length === 0)
+				return forbidden(list[0], `You may not delete ${root}: ${held(auth)}.`);
 			out.delete = arms;
 			continue;
 		}
@@ -1447,12 +1448,19 @@ const plan = Effect.fn('Bolt.plan')(function* (
 						};
 					input.push(
 						verb === 'create'
-							? payload(item)
+							? { ...payload(item), id: item.change.id }
 							: verb === 'update'
 								? { before: stored!, set: payload(item) }
 								: stored!
 					);
 				}
+				const from = chunk[0]?.change.path ?? [];
+				const carriedBy =
+					from.includes(CARRIED) || from.includes(APPROVED)
+						? r.model
+						: r.mode._tag === 'Record'
+							? r.mode.carriedBy
+							: undefined;
 				const invocation: Invocation = {
 					id: seed,
 					kind: verb,
@@ -1465,7 +1473,8 @@ const plan = Effect.fn('Bolt.plan')(function* (
 						now: b.now,
 						today: b.today,
 						tz: b.tz,
-						seed
+						seed,
+						...(carriedBy === undefined ? {} : { carriedBy })
 					},
 					budget: { crossings: LIMITS.crossings.write, readBytes: LIMITS.readBytes }
 				};
@@ -1491,27 +1500,41 @@ const plan = Effect.fn('Bolt.plan')(function* (
 					};
 				}
 				if (g.kind === 'failed') return { guest: true, outcome: yield* guestFailure(g.error) };
-				if (verb === 'delete') {
-					if (g.output !== null)
-						return yield* BoltError.make(
-							'transformShape',
-							'guest',
-							'A delete check returns no payload.'
-						);
-					continue;
-				}
-				if (!Array.isArray(g.output) || g.output.length !== chunk.length)
+				const answer = answerOf(verb, g.output, chunk.length);
+				if (typeof answer === 'string')
+					return yield* BoltError.make('transformShape', 'guest', answer);
+				// `onApproved` waits for the approving decision when the write is held (approvals.ts `approvedWrites`)
+				const carries = [
+					...answer.with.map((write) => [CARRIED, write] as const),
+					...(flow === undefined
+						? answer.onApproved.map((write) => [APPROVED, write] as const)
+						: [])
+				];
+				if (carries.length > 0 && level === LIMITS.writeDepth)
 					return yield* BoltError.make(
 						'transformShape',
 						'guest',
-						'a write callback returns one payload per input'
+						`a write nested ${LIMITS.writeDepth} deep carries no further writes`
 					);
 				const again = new Flattener(m, cat, minter(seed, b.now), identities);
 				for (const [index, item] of chunk.entries()) {
 					const c = item.change;
-					if (c.op === 'create') again.create(model, 'any', g.output[index], c.path, item.parent);
+					if (c.op === 'create')
+						again.create(model, 'any', withoutId(answer.rows[index]), c.path, item.parent);
 					else if (c.op === 'update')
-						again.update(model, 'any', c.id, g.output[index], c.revision, c.path, item.parent);
+						again.update(model, 'any', c.id, answer.rows[index], c.revision, c.path, item.parent);
+				}
+				// rows of other models this write carries sit one level down: their own callbacks run next, in this commit
+				for (const [segment, write] of carries) {
+					if (m.models[write.model] === undefined)
+						return yield* BoltError.make(
+							'transformPayload',
+							'guest',
+							`${write.model}: no such model`
+						);
+					const at = [...from, segment, write.model, write.op, write.index];
+					if (write.op === 'create') again.create(write.model, 'any', write.row, at);
+					else again.update(write.model, 'any', write.target, write.set, write.observed, at);
 				}
 				if (again.problems.length)
 					return yield* BoltError.make(
@@ -1532,7 +1555,9 @@ const plan = Effect.fn('Bolt.plan')(function* (
 						...(owner?.attach === undefined ? {} : { attach: owner.attach })
 					};
 				});
-				const replacedPaths = new Set(chunk.map((item) => canonical(item.change.path)));
+				const replacedPaths = new Set(
+					verb === 'delete' ? [] : chunk.map((item) => canonical(item.change.path))
+				);
 				items = [
 					...items.filter(
 						(item) =>
@@ -1606,7 +1631,7 @@ const plan = Effect.fn('Bolt.plan')(function* (
 					c.path
 				)
 			);
-		const root = imp !== undefined && it.parent === undefined;
+		const root = imp !== undefined && it.parent === undefined && c.model === r.model;
 		if (c.op === 'upsert')
 			return yield* BoltError.make(
 				'internal',
@@ -1652,6 +1677,8 @@ const plan = Effect.fn('Bolt.plan')(function* (
 				});
 				continue;
 			}
+			if (c.revision !== null && c.revision !== Number(row['revision']))
+				return stop({ kind: 'conflict', records: [{ model: c.model, id: c.id, fields: [] }] });
 			const set = changed(row, c.set);
 			// an update that changes nothing is no write: restating a locked row (an unchanged re-import) is no refusal
 			const locked = Object.keys(set).length === 0 ? null : modelRules(env, m, c.model, row, set);
@@ -1729,6 +1756,13 @@ const plan = Effect.fn('Bolt.plan')(function* (
 		]),
 		auth.actor
 	);
+	// a change to a held record joins its request: what it carries `onApproved` waits for the approving decision too
+	if (held.length > 0)
+		writes.splice(
+			0,
+			writes.length,
+			...writes.filter(({ item }) => !item.change.path.includes(APPROVED))
+		);
 	if (r.readGuards !== undefined && held.length > 0)
 		return stop(
 			refused(
@@ -2039,7 +2073,7 @@ function syncOwnership(m: EngineManifest, r: ActRequest, items: readonly Item[])
 	}
 	return null;
 }
-const hasCallback = (m: EngineManifest, model: string, verb: Write['op']): boolean =>
+export const hasCallback = (m: EngineManifest, model: string, verb: Write['op']): boolean =>
 	verb === 'delete'
 		? m.exposures[model]?.delete?.check === true
 		: m.exposures[model]?.[verb]?.transform === true;
@@ -2673,7 +2707,7 @@ export const pureVectors = Effect.fn('Bolt.pureVectors')(function* (
 	return { vectors };
 });
 
-function guestFailure(error: BoltError): Effect.Effect<Outcome, BoltError> {
+export function guestFailure(error: BoltError): Effect.Effect<Outcome, BoltError> {
 	switch (error.code) {
 		case 'guestError':
 		case 'internal':
@@ -2867,3 +2901,79 @@ export const WritesLive = Layer.effect(
 		};
 	})
 );
+
+/** The path segments under which a write's carried rows sit, one level below the rows that carry them. */
+const CARRIED = '$with',
+	APPROVED = '$onApproved';
+/** A create transform reads its row's id; the id it answers is the act's own, never a value. */
+const withoutId = (row: Json | undefined) => {
+	if (!record(row)) return row;
+	const { id: _id, ...rest } = row;
+	return rest;
+};
+/** A JSON object, narrowed so its values stay JSON. */
+const record = (value: Json | undefined): value is { readonly [key: string]: Json } =>
+	typeof value === 'object' && value !== null && !Array.isArray(value);
+export type CarriedWrite =
+	| { readonly model: string; readonly op: 'create'; readonly index: number; readonly row: Json }
+	| {
+			readonly model: string;
+			readonly op: 'update';
+			readonly index: number;
+			readonly target: Json | undefined;
+			readonly set: Json | undefined;
+			readonly observed: number | null;
+	  };
+/**
+ * A write callback's answer: its own rows in order (none for a delete check), and the rows of other models the write
+ * carries, `{ rows, with, onApproved }`, each `{ [model]: { create?: [row], update?: [{ target, set, observed? }] } }`.
+ * `with` is part of the write: held with it and rolled back with it. `onApproved` is written once it is approved: at once
+ * when no approval holds it, else by the decision that approves it.
+ */
+export const answerOf = (
+	verb: 'create' | 'update' | 'delete',
+	output: Json,
+	count: number
+):
+	| {
+			readonly rows: readonly Json[];
+			readonly with: readonly CarriedWrite[];
+			readonly onApproved: readonly CarriedWrite[];
+	  }
+	| string => {
+	const whole = record(output) ? output : undefined;
+	const rows = whole === undefined ? output : (whole['rows'] ?? null);
+	if (verb === 'delete' ? rows !== null : !Array.isArray(rows) || rows.length !== count)
+		return verb === 'delete'
+			? 'a delete check returns no rows, only with and onApproved'
+			: 'a write callback returns one payload per input';
+	const groups = { with: [] as CarriedWrite[], onApproved: [] as CarriedWrite[] };
+	for (const key of ['with', 'onApproved'] as const) {
+		const declared = whole?.[key];
+		if (declared === undefined) continue;
+		if (!record(declared)) return `${key} maps a model to its creates and updates`;
+		for (const [model, spec] of Object.entries(declared)) {
+			if (!record(spec)) return `${key}.${model} holds create and update lists`;
+			const { create = [], update = [], ...rest } = spec;
+			if (Object.keys(rest).length > 0 || !Array.isArray(create) || !Array.isArray(update))
+				return `${key}.${model} holds create and update lists`;
+			create.forEach((row, index) => groups[key].push({ model, op: 'create', index, row }));
+			for (const [index, change] of update.entries()) {
+				if (!record(change))
+					return `${key}.${model}.update[${index}] is { target, set, observed? }`;
+				const observed = change['observed'];
+				if (observed !== undefined && typeof observed !== 'number')
+					return `${key}.${model}.update[${index}].observed is a revision number`;
+				groups[key].push({
+					model,
+					op: 'update',
+					index,
+					target: change['target'],
+					set: change['set'],
+					observed: observed ?? null
+				});
+			}
+		}
+	}
+	return { rows: Array.isArray(rows) ? rows : [], ...groups };
+};

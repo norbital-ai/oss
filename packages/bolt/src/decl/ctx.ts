@@ -10,11 +10,11 @@ import type { Checked, DateLiteral, Exact, InputOf, Simplify } from './fields.ts
 import type {
 	AttachModel,
 	AttachName,
+	AuthoredModelName,
 	AutomationName,
-	ModelName,
-	ExposureSpecOf,
-	ColumnValue,
 	Columns,
+	ColumnValue,
+	ExposureSpecOf,
 	HasSemantic,
 	HeavyField,
 	IndexInput,
@@ -24,17 +24,18 @@ import type {
 	LayerField,
 	LayerFilled,
 	ManyRels,
+	ModelName,
 	NamesPart,
 	OmittableOnInsert,
 	OneRels,
+	OutputName,
 	OwnedFk,
 	OwnedInverse,
-	OutputName,
 	PathModel,
 	Prefixes,
+	ReadableName,
 	ReadField,
 	ReadPath,
-	ReadableName,
 	RootOf,
 	Row,
 	RowState,
@@ -771,9 +772,14 @@ type Unlisted<M, Cols, Fixed = never> = {
 };
 /**
  * One row `create.transform` receives and returns: its create tree (the root columns the writer sent, required ones
- * required, and the declared child layers), any other writable field it derives. Derived and system columns are `never`.
+ * required, and the declared child layers), any other writable field it derives. Derived and system columns are `never`;
+ * the `id` is the act's own (the transform reads it, `CreatedRow`).
  */
-export type CreateRow<M> = CreateTree<M> & Unlisted<M, LayerColumn<M, 'create', M>> & Underived<M>;
+export type CreateRow<M> = CreateTree<M> &
+	Unlisted<M, LayerColumn<M, 'create', M>> &
+	Underived<M, WritableField<M> | 'id'>;
+/** A row `create.transform` receives: its `CreateRow` and the id it will have. */
+export type CreatedRow<M> = CreateRow<M> & { readonly id: Id<M & string> };
 /**
  * One `set` `update.transform` receives and returns: its update tree (the root columns the writer changed and the child
  * layers' changes) and any other writable field it derives, all optional (never an owned child's parent key, rule 41).
@@ -781,6 +787,29 @@ export type CreateRow<M> = CreateTree<M> & Unlisted<M, LayerColumn<M, 'create', 
 export type UpdateSet<M> = UpdateTree<M> &
 	Unlisted<M, LayerColumn<M, 'update', M>, OwnedFk<M>> &
 	Underived<M>;
+/**
+ * Rows of other models a write callback carries into its own commit: creates, and updates naming the revision they read
+ * (a newer one is a conflict). They run their own model's callbacks (`ctx.carriedBy` names the carrier), the root write's
+ * grant admits them, and they commit with it or not at all.
+ */
+export type CarriedWrites = {
+	readonly [N in AuthoredModelName]?: {
+		readonly create?: readonly CreateRow<N>[];
+		readonly update?: readonly {
+			readonly target: Id<N>;
+			readonly set: UpdateSet<N>;
+			readonly observed?: number;
+		}[];
+	};
+};
+/**
+ * What a write carries: `with`, part of the write (held with it, rolled back with it, like owned children); and
+ * `onApproved`, what follows once it is approved: at once when no approval holds it, else in the approving decision's
+ * one commit (the decision asks the callback again, `ctx.approving`), never when it is rejected.
+ */
+export type Carried = { readonly with?: CarriedWrites; readonly onApproved?: CarriedWrites };
+/** What `create.transform` and `update.transform` return: their rows in order, or the rows with what they carry. */
+export type TransformAnswer<R> = readonly R[] | ({ readonly rows: readonly R[] } & Carried);
 /** The workspace reads of a write callback, and the act's own rows (`after`). */
 interface WriteReads extends WorkspaceQuery {
 	/** Stored rows matching `where` overlaid with this act's rows: what the model will hold once the act commits. */
@@ -810,6 +839,14 @@ export interface WriteCtx<in out M> extends Clock {
 	readonly invocationId: string;
 	readonly policies: readonly string[];
 	readonly admin: boolean;
+	/** The model whose write carries these rows (its `with` or `onApproved`), or `null` for rows written directly. */
+	readonly carriedBy: string | null;
+	/**
+	 * `true` when the decision that approves a held write asks again: the rows are the records as they now stand (an
+	 * update's `{ before: row, set: {} }`, a delete's row as it was), and only the answer's `onApproved` is written, in the
+	 * decision's commit. A refusal refuses the approval.
+	 */
+	readonly approving: boolean;
 	/**
 	 * Refuses the whole write (rule 32), `return yield* ctx.refuse(…)`: `field` names the field, `row` the index of the
 	 * offending row in the batch the callback received.

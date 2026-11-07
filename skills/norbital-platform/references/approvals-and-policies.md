@@ -28,7 +28,7 @@ Access control is source. Exact shapes: `Parameters<typeof import('@norbital-ai/
 2. Each admitting policy's `check` judges the batch: create trees, `{ before, set }` per update, stored rows of a delete. It reads at most twice through `ctx.db.query` and does no writes or I/O.
 3. Any `ctx.allow()` executes. Else the first `ctx.approve(...)` in team policy order commits provisionally under a request. Else the first `ctx.deny(message, { row, path, field })` refuses.
 
-A provisional commit is an ordinary write: validation, ownership, locks, revisions and atomicity apply.
+A provisional commit is an ordinary write: validation, ownership, locks, revisions and atomicity apply. Its `with` rows are held with it; its `onApproved` rows commit in the approving decision, or the decision is refused and the request stays pending.
 
 ## Limits
 

@@ -1,7 +1,7 @@
 // Fresh nested declarations keep their metadata and their generated callback contexts together.
 import { expectTypeOf } from '@effect/vitest';
 import { automation, model } from '../../src/index.ts';
-import type { CreateRow, Id, Vector, WriteCtx } from '../../src/index.ts';
+import type { CreatedRow, Id, Vector, WriteCtx } from '../../src/index.ts';
 import type { AutomationCtx } from '../../src/index.ts';
 import type { AutomationSpecOf } from '../../src/decl/runtime/names.ts';
 import type { StoredRow } from '../../src/decl/names.ts';
@@ -13,7 +13,7 @@ model('orders', {
 	create: {
 		columns: { orders: ['customer', 'note', 'due'], 'orders.lines': ['item', 'qty', 'price'] },
 		transform: function* (rows, ctx) {
-			expectTypeOf(rows).toEqualTypeOf<readonly CreateRow<'orders'>[]>();
+			expectTypeOf(rows).toEqualTypeOf<readonly CreatedRow<'orders'>[]>();
 			expectTypeOf(ctx).toEqualTypeOf<WriteCtx<'orders'>>();
 			return rows;
 		}

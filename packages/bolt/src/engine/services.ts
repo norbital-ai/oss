@@ -138,6 +138,8 @@ export type ActMode =
 			readonly _tag: 'Record';
 			readonly sink: (planned: PlannedCommit) => void;
 			readonly pending: ReadonlyMap<string, RowData>;
+			/** The model whose approved write carries these rows (its `onApproved`, planned by the approving decision). */
+			readonly carriedBy?: string;
 	  };
 export type ActRequest = {
 	readonly model: string;

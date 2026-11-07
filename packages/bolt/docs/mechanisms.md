@@ -46,7 +46,8 @@ invariants have native database enforcement. Raw SQL is privileged and does not 
 policy checks. A model lock is an application rule, not a SQL permission.
 
 Create transforms return rows; update transforms receive before/set pairs; delete checks may
-refuse. They plan and validate, not perform external I/O. Seed restore and derived roll-ups are
+refuse. Either may carry other models' rows into the same commit (`with`, or `onApproved` once the
+write is approved). They plan and validate, not perform external I/O. Seed restore and derived roll-ups are
 explicit bypasses. A callback handles up to 1,000 rows per invocation and batches dependent reads;
 all chunks of an import remain in its one transaction. See [Models](./models.md).
 
