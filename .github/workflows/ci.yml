@@ -49,4 +49,6 @@ jobs:
       # Public and private templates have their own repositories and CI; this repository gates the
       # publishable package graph plus the one oss suite (`pnpm test`).
       - name: Check publishable packages
-        run: pnpm check:packages:ci
+        run: |
+          ( while true; do echo "MEM $(date +%T) $(free -m | awk '/Mem:/{print "used="$3" avail="$7}') $(free -m | awk '/Swap:/{print "swap="$3"/"$2}')"; ps -eo rss=,args= --sort=-rss | head -6 | awk '{printf "MEM   %6d MB ", $1/1024; $1=""; print substr($0,1,150)}'; sleep 5; done ) &
+          pnpm check:packages:ci
