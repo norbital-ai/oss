@@ -137,7 +137,7 @@ Automations list and run detail show each run's trigger.
 
 A model's `effect` (`created`, `updated`, `deleted`) is the work that follows a committed write: a
 durable run `<model>.effect.<verb>` per committed batch, queued by the write's own statement,
-retried 3 times on a transient failure and never rate limited. It receives the rows (`updated`:
+retried for over an hour on a transient failure and never rate limited. It receives the rows (`updated`:
 `[{ before, after }]` for changes to a stored field) as the root fields of the writer's output of the
 model (`default` when it holds it, else the first named output it holds) and runs as the writer —
 the member, envoy, visitor or automation run (that run's policies) — holding no policy of its own,

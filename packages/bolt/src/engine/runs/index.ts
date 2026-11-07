@@ -406,8 +406,8 @@ function factsOf(call: FacilityCall): CallFacts {
 const stepOf = Schema.decodeUnknownOption(StepContent),
 	saidOf = Schema.decodeUnknownOption(SaidContent);
 const MAX_IDS = 10000,
-	/** A model effect's runs: no authored retry, so a transient failure is retried this often, with backoff. */
-	EFFECT_RETRY: RetrySpec = { attempts: 3, backoff: '10s' },
+	/** A model effect's runs: no authored retry, so a transient failure is retried this often, with backoff: over an hour. */
+	EFFECT_RETRY: RetrySpec = { attempts: 10, backoff: '10s' },
 	DAY = 86400000,
 	/** Workspace automations that may run side by side; one automation's own runs stay one at a time. */
 	LANES = 12,
