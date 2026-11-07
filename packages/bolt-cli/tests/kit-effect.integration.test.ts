@@ -142,6 +142,34 @@ it.live(
 		}).pipe(Effect.scoped)
 );
 
+it.live('a clock set back finds the crons it passed ahead of it again', () =>
+	Effect.gen(function* () {
+		const nightly = {
+			...manifest,
+			automations: {
+				nightly: {
+					description: 'Runs at two',
+					input: {},
+					policies: ['reader'],
+					on: { cron: '0 2 * * *' }
+				}
+			}
+		} satisfies EngineManifest;
+		// a run that fails is one the kit reports; a quiet one leaves no row to count
+		const guest = yield* program(
+			`export default { automation: { nightly: { body: function* () { throw new Error('ran'); } } } }`
+		);
+		const t = Context.get(
+			yield* Layer.build(TestWorkspace.layer({ manifest: nightly, guest })),
+			TestWorkspace
+		);
+		t.clock.set('2026-11-02T02:00:00.000Z');
+		expect((yield* t.runDue()).failed).toHaveLength(1);
+		// a file's tests share one workspace: an earlier test's date is no reason for this one to run nothing
+		t.clock.set('2026-10-01T02:00:00.000Z');
+		expect((yield* t.runDue()).failed).toHaveLength(1);
+	}).pipe(Effect.scoped)
+);
 it.live('fixture callbacks require explicit existing write verbs', () =>
 	Effect.gen(function* () {
 		for (const name of ['customers', 'customers.delete', 'missing.create']) {

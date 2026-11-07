@@ -118,6 +118,11 @@ const rememberLines = (key: string, lines: readonly string[]) => {
 	prefixLines.set(key, lines);
 };
 
+// Not in INTROSPECT: a live database's provider keeps schemas of its own, so only a replay can tell these apart.
+const SchemaName = Schema.Struct({ name: Schema.String });
+const OTHER_SCHEMAS = `select nspname as name from pg_namespace
+	where nspname not like 'pg\\_%' and nspname not in ('information_schema', current_schema())`;
+
 /** Generation leaves editable SQL on a failed proof, but never replaces a verified lock with an unproved history. */
 export const prepareMigrations = Effect.fn('Bolt.prepareMigrations')(function* (
 	root: string,
@@ -249,7 +254,7 @@ export const prepareMigrations = Effect.fn('Bolt.prepareMigrations')(function* (
 	}
 	const key = sha256Hex(
 		canonical({
-			proofVersion: 7,
+			proofVersion: 8,
 			snapshot,
 			files,
 			squashes,
@@ -262,8 +267,13 @@ export const prepareMigrations = Effect.fn('Bolt.prepareMigrations')(function* (
 	);
 	const cache = path.join(root, '.norbital', 'cache', 'migrations.sha256');
 	// the same inputs as the last verified proof (either mode): its replay would answer the same physical definitions
+	// and only over a lock that already holds this history: a build that wrote its proof elsewhere left this one stale
+	const proved =
+		oldLock !== undefined &&
+		Result.isSuccess(yield* Effect.result(pending(files, oldLock, [], snapshot, squashes)));
 	if (
 		options.squash === undefined &&
+		proved &&
 		(yield* fs.exists(cache)) &&
 		(yield* fs.readFileString(cache)) === key
 	)
@@ -317,6 +327,13 @@ export const prepareMigrations = Effect.fn('Bolt.prepareMigrations')(function* (
 						migrationLines(yield* db.rows(IntrospectRow, inspect), true, true)
 					);
 				}
+				const schemas = yield* db.rows(SchemaName, { text: OTHER_SCHEMAS, params: [] });
+				if (schemas.length > 0)
+					return yield* BoltError.make(
+						'migrationInvalid',
+						'admission',
+						`a migration may not create a schema: ${schemas.map((row) => row.name).join(', ')}`
+					);
 				const last = keys.at(-1) ?? '';
 				prefixImages.delete(last);
 				if (prefixImages.size >= 4) prefixImages.delete(prefixImages.keys().next().value ?? '');

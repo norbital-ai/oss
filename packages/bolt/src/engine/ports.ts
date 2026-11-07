@@ -20,6 +20,7 @@ import {
 } from 'effect';
 import { Unavailable } from '../decl/errors.ts';
 import type {
+	ConvertSource,
 	ConvertTarget,
 	GeoHit,
 	IngestOptions,
@@ -171,16 +172,21 @@ export class Convert extends Context.Service<
 	{
 		readonly targets: readonly ConvertTarget[];
 		readonly convert: (
-			source: { readonly markdown: string } | { readonly html: string },
+			source: ConvertSource,
 			to: ConvertTarget,
 			options: ConvertOptions
+		) => Effect.Effect<Uint8Array, PortFailure>;
+		readonly previewPdf?: (
+			source: ConvertSource,
+			options: Pick<ConvertOptions, 'page' | 'landscape'>
 		) => Effect.Effect<Uint8Array, PortFailure>;
 		readonly ingest?: (
 			file: {
 				readonly sha256: string;
 				readonly name: string;
 				readonly mime: string;
-				readonly bytes: Uint8Array;
+				readonly bytes?: Uint8Array;
+				readonly key?: string;
 			},
 			options: Omit<IngestOptions, 'for'>
 		) => Effect.Effect<Ingested | { readonly unsupported: string }, PortFailure>;
@@ -193,7 +199,16 @@ export class Convert extends Context.Service<
 				: {
 						targets: port.targets,
 						convert: (source, to, options) =>
-							Port.attempt('convert', (signal) => port.convert(source, to, options, signal))
+							Port.attempt('convert', (signal) => port.convert(source, to, options, signal)),
+						...(port.previewPdf === undefined
+							? {}
+							: {
+									previewPdf: (
+										source: ConvertSource,
+										options: Pick<ConvertOptions, 'page' | 'landscape'>
+									) =>
+										Port.attempt('convert', (signal) => port.previewPdf!(source, options, signal))
+								})
 					}),
 			...(ingester === undefined
 				? {}

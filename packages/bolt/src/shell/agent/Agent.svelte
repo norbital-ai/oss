@@ -9,7 +9,7 @@
 	while pending (with respond-now), "responding" once admitted and its turn runs; every message that came in is
 	shown, and consecutive ones not for the agent fold into one quiet block, collapsed to its count and last message; on a
 	channel thread each reply names the messages it answers ("Replying to"). Files are attached with the paperclip, by paste
-	or by drop (at most 8 files, 20 MiB); each uploads to `/__bolt/files/sys_conversation.inputs` when the message is sent.
+	or by drop (at most 8 files); each uploads to `/__bolt/files/sys_conversation.inputs` when the message is sent.
 	The selector's footer switches conversation views (newest first): the member's own (Web UI) and one per envoy
 	whose channel conversations they may read (automations' inference transcripts are the command center's); dots switch views, and Cmd/Ctrl+Right Arrow advances while search is focused;
 	search filters every view at once (each count follows its matches). Only Web UI conversations are writable; delegated sub-agents live in the session rail (their tasks, live steps and answers),
@@ -242,23 +242,19 @@
 			return void (error = t(
 				'Attach a nonempty image, document, spreadsheet, slides, recording or text file.'
 			));
-		if (all.length > 8 || all.reduce((n, f) => n + f.size, 0) > 20 * 1024 * 1024)
-			return void (error = t('Attach at most 8 files totaling 20 MiB.'));
+		if (all.length > 8) return void (error = t('Attach at most 8 files.'));
 		error = null;
 		attached = all;
 		for (const file of typed) uploadAhead(file);
 	}
-	/** Each file goes up on attach and is read at once: a person takes seconds to write their words. */
+	/** Each file goes up on attach: a person takes seconds to write their words. */
 	const uploads = new WeakMap<File, Deferred.Deferred<Attachment, ShellError>>();
 	function uploadAhead(file: File): void {
 		const done = Deferred.makeUnsafe<Attachment, ShellError>();
 		uploads.set(file, done);
 		dispatch(
 			Effect.exit(api.agent.upload(file)).pipe(
-				Effect.tap((exit) => Deferred.done(done, exit)),
-				Effect.flatMap((exit) =>
-					Exit.isSuccess(exit) ? Effect.exit(api.agent.readAhead(exit.value)) : Effect.void
-				),
+				Effect.flatMap((exit) => Deferred.done(done, exit)),
 				Effect.asVoid
 			)
 		);
@@ -298,10 +294,10 @@
 	let previewToggle = $state<HTMLButtonElement | null>(null);
 	let previewEl = $state<HTMLElement | null>(null);
 	let chatEl = $state<HTMLDivElement | null>(null);
-	const touch = new MediaQuery('pointer: coarse');
 	let panelRemWidth = $state(0);
 	let navigating = $state(false);
 	const reducedMotion = new MediaQuery('(prefers-reduced-motion: reduce)');
+	const touch = new MediaQuery('pointer: coarse');
 	function sessionMotion(node: HTMLElement, options: { x: number; duration: number }) {
 		return fly(node, {
 			...options,
@@ -753,11 +749,11 @@
 		) {
 			event.preventDefault();
 			if (!planLocked) mode = mode === 'plan' ? null : 'plan';
-		// a soft keyboard has no Shift+Enter: its Return is the new line, and Send sends
-		if (touch.current && !commandKey(event)) return;
 			return;
 		}
 		if (event.key !== 'Enter' || event.shiftKey || event.isComposing) return;
+		// a soft keyboard has no Shift+Enter: its Return is the new line, and Send sends
+		if (touch.current && !commandKey(event)) return;
 		send(event, commandKey(event));
 	}
 	function fresh(): void {

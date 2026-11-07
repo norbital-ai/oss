@@ -299,10 +299,15 @@ export const integrationLinks = (
 		): InstanceStatus => {
 			const providers = offered(x.definition, x.personal);
 			const stored = Schema.decodeUnknownOption(LinkStatusSchema)(x.status);
+			const verified =
+				x.definition.driver !== 'sqlserver' ||
+				(Predicate.isObject(x.status) && x.status['databaseVerified'] === true);
 			const base: LinkStatus & { since?: string; pairing?: Pairing | null } =
 				held !== undefined
 					? { ...held.status, since: held.since, pairing: held.pairing }
-					: Option.isSome(stored) && DURABLE.has(stored.value.state)
+					: Option.isSome(stored) &&
+						  DURABLE.has(stored.value.state) &&
+						  (stored.value.state !== 'connected' || verified)
 						? stored.value
 						: { state: 'unpaired' };
 			const about = base.about;
@@ -357,6 +362,29 @@ export const integrationLinks = (
 			);
 		const status = (instance: string, patch: { readonly [key: string]: Json }) =>
 			h.enter(writeStatus(instance, patch));
+		const testSync = (instance: string) =>
+			h.admit(Effect.flatMap(Syncs, (syncs) => syncs.test(instance)));
+		const databaseTestMessage =
+			'The SQL Server connection test failed. Check the endpoint, credentials and schema, then try again.';
+		const verifyDatabase = (instance: string, check: Effect.Effect<void, LinkError>) =>
+			check.pipe(
+				Effect.andThen(testSync(instance)),
+				Effect.tap(() =>
+					status(instance, { state: 'connected', databaseVerified: true, error: null, code: null })
+				),
+				Effect.catch((cause) =>
+					status(instance, {
+						state: 'error',
+						databaseVerified: false,
+						code: 'databaseTestFailed',
+						error: databaseTestMessage
+					}).pipe(
+						Effect.andThen(
+							Effect.fail(BoltError.make('invalidInput', 'facility', databaseTestMessage, cause))
+						)
+					)
+				)
+			);
 		const replace = (held: HeldState) =>
 			Effect.gen(function* () {
 				if (held.replaced) return;
@@ -1107,6 +1135,7 @@ export const integrationLinks = (
 							const { provider: _, importStart: _start, ...rest } = body;
 							const current = live.get(instance);
 							if (
+								x.definition.driver !== 'sqlserver' &&
 								current !== undefined &&
 								current.provider.id === provider.id &&
 								!current.replaced
@@ -1144,11 +1173,21 @@ export const integrationLinks = (
 								)
 							);
 							const next = yield* linked(instance);
+							const database = x.definition.driver === 'sqlserver';
+							if (database)
+								yield* status(instance, {
+									state: 'unpaired',
+									databaseVerified: false,
+									error: null,
+									code: null
+								});
 							yield* next.calls.pair(rest).pipe(
 								Effect.andThen(persist(next, new Map([[PROVIDER, provider.id]]))),
+								Effect.andThen(database ? verifyDatabase(instance, next.calls.test(null)) : Effect.void),
 								Effect.onError(() =>
 									shut(instance).pipe(
-										Effect.andThen(logged(persist(next, wipe(next.values.keys()))))
+										Effect.andThen(logged(persist(next, wipe(next.values.keys())))),
+										Effect.andThen(logged(publish(instance)))
 									)
 								)
 							);
@@ -1171,6 +1210,7 @@ export const integrationLinks = (
 						yield* h.credentials.write(instance, loaded.epoch, wipe(loaded.values.keys()));
 						yield* status(instance, {
 							state: 'unpaired',
+							databaseVerified: false,
 							account: null,
 							error: null,
 							code: null,
@@ -1185,6 +1225,8 @@ export const integrationLinks = (
 					Effect.gen(function* () {
 						const x = yield* row(instance);
 						if (x === undefined) return yield* Effect.fail(gone(instance));
+						if (x.definition.driver === 'sqlserver')
+							return yield* verifyDatabase(instance, transient(instance, (held) => held.calls.test(input)));
 						if (conversational(x.definition) && !isRequest(x.definition.driver)) {
 							if (x.personal)
 								return yield* Effect.fail(
@@ -1249,7 +1291,7 @@ export const integrationLinks = (
 						} else if (isRequest(x.definition.driver))
 							yield* transient(instance, (held) => held.calls.test(input));
 						else yield* linked(instance).pipe(Effect.flatMap((held) => held.calls.test(input)));
-						yield* h.admit(Effect.flatMap(Syncs, (syncs) => syncs.test(instance)));
+						yield* testSync(instance);
 					})
 				).pipe(Port.call('link.test', 60_000)),
 			discover: (instance) =>

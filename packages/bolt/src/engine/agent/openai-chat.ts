@@ -12,7 +12,6 @@ import type { Json } from '../../decl/values.ts';
 import { LIMITS, type AiRequest, type AiResponse } from '../contracts.ts';
 import { filePart } from './ingest.ts';
 import { SaidContent, StepContent } from './schema.ts';
-import { STATE_NOTE } from './context.ts';
 
 export type OpenAiChatConfig = {
 	/** The API base, e.g. `https://openrouter.ai/api/v1`. */
@@ -53,19 +52,13 @@ const stepOf = Schema.decodeUnknownOption(StepContent),
 	saidOf = Schema.decodeUnknownOption(SaidContent);
 /**
  * Engine messages (`{ text, toolCalls }` assistant rows, `{ id, name, result }` tool rows) as chat messages. A file a call
- * opened follows that call's results as a user message, in the same place on every later step of the turn (providers
- * cache the prefix); one whose call is no longer in the history rides the last user message.
+ * opened follows that call's results as a user message, on the one request after it: at the end, where no later prefix
+ * holds it. One whose call is no longer in the history rides the last user message.
  */
 function messagesOf(r: AiRequest): Wire[] {
 	const out: Wire[] = r.system === undefined ? [] : [{ role: 'system', content: r.system }];
-	// this turn's steps keep their reasoning on every later call (a message never changes once sent, so the provider's
-	// cached prefix holds: dropping a step's reasoning on the next call re-bills everything after it); an earlier turn's
-	// is dropped (it teaches a model to think inside its replies, and the turn boundary is where the prefix moves anyway)
-	const turn = r.messages.findLastIndex(
-			(m) =>
-				m.role === 'user' && !(typeof m.content === 'string' && m.content.startsWith(STATE_NOTE))
-		),
-		latest = r.messages.findLastIndex((m) => m.role === 'assistant');
+	// every step keeps its reasoning on every later call: a message never changes once sent, so the provider's cached
+	// prefix holds. Dropping it at a new turn re-billed the whole conversation at each message a person sent.
 	const files = (r.files ?? []).map((f, n) => ({
 		call: f.call,
 		part: filePart(f, `attachment-${n + 1}`)
@@ -86,7 +79,7 @@ function messagesOf(r: AiRequest): Wire[] {
 		if (parts.length > 0) out.push({ role: 'user', content: parts });
 		ran = [];
 	};
-	for (const [n, m] of r.messages.entries()) {
+	for (const m of r.messages) {
 		if (m.role !== 'tool') opened();
 		if (m.role === 'tool') {
 			const step = Option.getOrUndefined(stepOf(m.content)),
@@ -112,7 +105,7 @@ function messagesOf(r: AiRequest): Wire[] {
 			out.push({
 				role: 'assistant',
 				content: textOf(m.content),
-				...(n < turn || reply?.reasoning === undefined || reply.reasoning === ''
+				...(reply?.reasoning === undefined || reply.reasoning === ''
 					? {}
 					: { reasoning: reply.reasoning }),
 				...(calls.length === 0
@@ -154,6 +147,8 @@ const Part = Schema.Struct({
 });
 const Chunk = Schema.Struct({
 	id: Schema.optional(Schema.String),
+	/** OpenRouter's name for who answered: a conversation's cache lives there. */
+	provider: Schema.optional(Schema.String),
 	error: Schema.optional(
 		Schema.Struct({ message: Schema.optional(Schema.String), code: Schema.optional(Schema.Number) })
 	),
@@ -210,6 +205,7 @@ export function openAiChat(config: OpenAiChatConfig, options: HttpOptions = {}):
 				// the provider's own last choice: `length` means the reply was cut, not that the model stopped
 				let finishReason: string | null = null;
 				let usage: NonNullable<Schema.Schema.Type<typeof Chunk>['usage']> = {};
+				let provider = '';
 				const calls: Call[] = [];
 				const model = config.models[request.model] ?? request.model;
 				const body = yield* Effect.try({
@@ -309,6 +305,7 @@ export function openAiChat(config: OpenAiChatConfig, options: HttpOptions = {}):
 								...(chunk.error.code === undefined ? {} : { status: chunk.error.code })
 							})
 						);
+					if (chunk.provider !== undefined) provider = chunk.provider;
 					if (chunk.id !== undefined) {
 						if (id !== '' && id !== chunk.id)
 							return yield* Effect.fail(
@@ -405,6 +402,7 @@ export function openAiChat(config: OpenAiChatConfig, options: HttpOptions = {}):
 						output: usage.completion_tokens ?? 0,
 						...(usage.cost === undefined ? {} : { cost: usage.cost }),
 						...(id === '' ? {} : { call: id }),
+						...(provider === '' ? {} : { provider }),
 						...(usage.prompt_tokens_details?.cached_tokens == null
 							? {}
 							: { cached: usage.prompt_tokens_details.cached_tokens }),

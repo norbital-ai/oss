@@ -147,7 +147,7 @@ const setup = Effect.gen(function* () {
 					);
 					// a posted attachment is read by its id; else the record's file
 					const id =
-						/\[attachment: [^\]]*\] file reference \{\\"id\\":\\"([^\\]+)\\"/.exec(
+						/\[attachment: [^\]]*\] read_file id ([0-9a-f]{8}); file reference/.exec(
 							JSON.stringify(r.messages)
 						)?.[1] ?? recordFile;
 					const response: AiResponse =
@@ -281,23 +281,6 @@ describe('in-app attachments', () => {
 			)
 	);
 
-	it.live('reading ahead takes only the member\'s own upload, and leaves a non-document alone', () =>
-		Effect.scoped(
-			Effect.gen(function* () {
-				const { act, put, who } = yield* plain;
-				const ann = yield* who('ann');
-				const image = Schema.decodeUnknownSync(Schema.Struct({ id: Schema.String }))(
-					fileOf(yield* put(ann, 'pump.png', 'image/png', PNG))
-				);
-				expect(yield* act('ann', 'sys_message.readAhead', { attachment: image })).toMatchObject({
-					kind: 'committed'
-				});
-				expect(
-					yield* Effect.flip(act('bob', 'sys_message.readAhead', { attachment: image }))
-				).toMatchObject({ message: expect.stringContaining('not a file you uploaded') });
-			})
-		)
-	);
 	it.live("only the member's own uploads attach, within the model's file count, of the envoy media types", () =>
 		Effect.scoped(
 			Effect.gen(function* () {
@@ -305,7 +288,7 @@ describe('in-app attachments', () => {
 				const ann = yield* who('ann'),
 					bob = yield* who('bob'),
 					c = yield* conversation();
-				expect(yield* put(ann, 'a.zip', 'application/zip', PNG)).toMatchObject({
+				expect(yield* put(ann, 'a.mp4', 'video/mp4', PNG)).toMatchObject({
 					kind: 'refused',
 					code: 'invalidInput'
 				});

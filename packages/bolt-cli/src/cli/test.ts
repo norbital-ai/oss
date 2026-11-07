@@ -157,7 +157,8 @@ export const testWorkspace = Effect.fn('bolt.test')(function* (
 			runner.startVitest(
 				'test',
 				filter,
-				{ ...options, root },
+				// a failure is read from its message alone: Chai's default clips each value to 40 characters
+				{ chaiConfig: { truncateThreshold: 1000 }, ...options, root },
 				{
 					plugins: plugins(svelte)
 				}

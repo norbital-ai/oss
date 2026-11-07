@@ -1,6 +1,6 @@
-// `documentIngester`: the agent's ingest port over Norbital Convert's `/v1/ingest`, against a fake service speaking its
-// wire (SSE job events, then the result: a document or data; a resumed stream; audio's usage; a 415 for a format with no
-// parser; a 503 when it has no transcription model).
+// `documentIngester`: the agent's ingest port over Norbital Convert's job routes, against a fake service speaking its
+// wire (the file posted raw, a job, its result: a document or data; a job still running; audio's usage; a 415 for a
+// format with no parser; a 503 when it has no transcription model).
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { afterAll, beforeAll } from 'vitest';
 import { describe, expect, it } from '@effect/vitest';
@@ -38,55 +38,35 @@ const sheet = {
 	images: [{ name: 'image-1.png', mime: 'image/png', bytes: 'iVA=' }],
 	meta: { stats: { pages: null, bytes: 7, cpuMs: 1, wallMs: 2 } }
 };
-const seen: { path: string; auth: string | undefined; body: unknown }[] = [];
-const sse = (res: ServerResponse, events: readonly [string, unknown][], end = true) => {
-	res.writeHead(200, { 'content-type': 'text/event-stream' });
-	for (const [event, data] of events)
-		res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
-	if (end) res.end();
+const seen: { path: string; auth: string | undefined; body: Buffer }[] = [];
+const answers: { readonly [job: string]: unknown } = { j1: result, j2: audio, j3: sheet, j9: result };
+const jobs: { readonly [file: string]: string } = {
+	'rates.xlsx': 'j3',
+	'meeting.m4a': 'j2',
+	'cut.pdf': 'j9'
+};
+const json = (res: ServerResponse, status: number, body: unknown) => {
+	res.writeHead(status, { 'content-type': 'application/json' });
+	res.end(JSON.stringify(body));
 };
 const server = createServer((req: IncomingMessage, res: ServerResponse) => {
-	let raw = '';
-	req.on('data', (chunk: Buffer) => (raw += chunk.toString()));
+	const chunks: Buffer[] = [];
+	req.on('data', (chunk: Buffer) => chunks.push(chunk));
 	req.on('end', () => {
-		const body: unknown = raw === '' ? null : JSON.parse(raw);
-		seen.push({ path: req.url ?? '', auth: req.headers.authorization, body });
-		const name =
-			typeof body === 'object' && body !== null && 'name' in body ? String(body.name) : '';
-		if (req.url === '/v1/ingest' && name === 'plan.dwg') {
-			res.writeHead(415, { 'content-type': 'application/json' });
-			res.end(JSON.stringify({ error: 'unsupported', message: 'no parser for CAD drawings' }));
-		} else if (req.url === '/v1/ingest' && name === 'mute.m4a') {
-			res.writeHead(503, { 'content-type': 'application/json' });
-			res.end(
-				JSON.stringify({
-					error: 'unavailable',
-					message: 'this converter has no transcription model'
-				})
-			);
-		} else if (req.url === '/v1/ingest' && name === 'rates.xlsx')
-			sse(res, [
-				['job', { id: 'j3', state: 'succeeded', error: null }],
-				['result', sheet]
-			]);
-		else if (req.url === '/v1/ingest' && name === 'meeting.m4a')
-			sse(res, [
-				['job', { id: 'j2', state: 'succeeded', error: null }],
-				['result', audio]
-			]);
-		else if (req.url === '/v1/ingest' && name === 'cut.pdf')
-			// the stream ends after the job's first event: the client resumes it by the job id
-			sse(res, [['job', { id: 'j9', state: 'running', error: null }]]);
-		else if (req.url === '/v1/jobs/j9/events?result')
-			sse(res, [
-				['job', { id: 'j9', state: 'succeeded', error: null }],
-				['result', result]
-			]);
-		else
-			sse(res, [
-				['job', { id: 'j1', state: 'succeeded', error: null }],
-				['result', result]
-			]);
+		const at = new URL(req.url ?? '/', 'http://localhost');
+		seen.push({ path: req.url ?? '', auth: req.headers.authorization, body: Buffer.concat(chunks) });
+		const name = at.searchParams.get('name');
+		if (at.pathname.startsWith('/v1/kept/'))
+			json(res, at.pathname.endsWith('/abc') ? 404 : 200, {});
+		else if (at.pathname === '/v1/ingest/raw' && name === 'plan.dwg')
+			json(res, 415, { error: 'unsupported', message: 'no parser for CAD drawings' });
+		else if (at.pathname === '/v1/ingest/raw' && name === 'mute.m4a')
+			json(res, 503, { error: 'unavailable', message: 'this converter has no transcription model' });
+		else if (at.pathname === '/v1/ingest/raw') {
+			const id = jobs[name ?? ''] ?? 'j1';
+			json(res, 202, { id, state: id === 'j9' ? 'running' : 'succeeded', error: null });
+		} else if (at.pathname.endsWith('/result')) json(res, 200, answers[at.pathname.split('/')[3] ?? '']);
+		else json(res, 200, { id: at.pathname.split('/')[3], state: 'succeeded', error: null });
 	});
 });
 let url = '';
@@ -105,7 +85,7 @@ describe('documentIngester', () => {
 		mime: 'application/pdf',
 		bytes: new Uint8Array([1, 2, 3])
 	});
-	it('posts the file as base64 and decodes the result, images to bytes', async () => {
+	it('posts the file as its body and decodes the result, images to bytes', async () => {
 		const got = await documentIngester({ url, key: 'k' }).ingest(
 			file('tender.pdf'),
 			{},
@@ -115,13 +95,37 @@ describe('documentIngester', () => {
 			...result,
 			images: [{ name: 'image-1.png', mime: 'image/png', bytes: new Uint8Array([0x89, 0x50]) }]
 		});
-		expect(seen.at(-1)).toEqual({
-			path: '/v1/ingest',
-			auth: 'Bearer k',
-			body: { name: 'tender.pdf', mime: 'application/pdf', bytes: 'AQID', options: {} }
-		});
+		const posted = seen.find((one) => one.path.startsWith('/v1/ingest/raw'));
+		expect(posted?.auth).toBe('Bearer k');
+		expect([...(posted?.body ?? [])]).toEqual([1, 2, 3]);
+		expect(posted?.path).toContain('name=tender.pdf');
 	});
-	it('resumes a stream that ended before its result, by the job id', async () => {
+	it('streams a stored file to the converter', async () => {
+		seen.length = 0;
+		await documentIngester({ url, key: 'k' }).ingest(
+			{ ...file('tender.pdf'), bytes: new Blob([new Uint8Array([4, 5])]).stream() },
+			{},
+			new AbortController().signal
+		);
+		expect([...(seen[0]?.body ?? [])]).toEqual([4, 5]);
+	});
+	it('sends a file read from disk until Convert keeps it, then only its hash', async () => {
+		const page = { page: 3 };
+		seen.length = 0;
+		await documentIngester({ url, key: 'k' }).ingest(file('tender.pdf'), page, new AbortController().signal);
+		expect(seen[0]?.path).toBe('/v1/kept/abc');
+		expect([...(seen[1]?.body ?? [])]).toEqual([1, 2, 3]);
+		expect(seen[1]?.path).toContain('sha256=abc');
+		seen.length = 0;
+		await documentIngester({ url, key: 'k' }).ingest(
+			{ ...file('tender.pdf'), sha256: 'def', bytes: new Blob([new Uint8Array([4, 5])]).stream() },
+			page,
+			new AbortController().signal
+		);
+		expect(seen[1]?.body.byteLength).toBe(0);
+		expect(seen[1]?.path).toContain('sha256=def');
+	});
+	it('polls a job still running, then fetches its result', async () => {
 		seen.length = 0;
 		const got = await documentIngester({ url, key: 'k' }).ingest(
 			file('cut.pdf'),
@@ -129,7 +133,11 @@ describe('documentIngester', () => {
 			new AbortController().signal
 		);
 		expect('kind' in got && got.kind === 'document' && got.html).toBe(result.html);
-		expect(seen.map((s) => s.path)).toEqual(['/v1/ingest', '/v1/jobs/j9/events?result']);
+		expect(seen.map((one) => one.path.split('?')[0])).toEqual([
+			'/v1/ingest/raw',
+			'/v1/jobs/j9',
+			'/v1/jobs/j9/result'
+		]);
 	});
 	it('answers a 415 as unsupported', async () => {
 		expect(
@@ -153,15 +161,19 @@ describe('documentIngester', () => {
 		});
 	});
 	it('passes the options and decodes an audio ingest with its usage', async () => {
+		seen.length = 0;
 		const got = await documentIngester({ url, key: 'k' }).ingest(
 			file('meeting.m4a'),
 			{ diarize: true, language: 'en', speakers: 2, prompt: 'Concrete pour' },
 			new AbortController().signal
 		);
 		expect(got).toEqual(audio);
-		expect(seen.at(-1)?.body).toMatchObject({
-			name: 'meeting.m4a',
-			options: { diarize: true, language: 'en', speakers: 2, prompt: 'Concrete pour' }
+		const posted = new URL(seen.find((one) => one.path.startsWith('/v1/ingest/raw'))?.path ?? '', url);
+		expect(JSON.parse(posted.searchParams.get('options') ?? '')).toEqual({
+			diarize: true,
+			language: 'en',
+			speakers: 2,
+			prompt: 'Concrete pour'
 		});
 	});
 	it('rejects a 503 as the unavailable facility error', async () => {

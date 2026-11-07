@@ -65,6 +65,8 @@ export const HEADERS = {
 	retry: 'Idempotency-Retry',
 	contract: 'Bolt-Contract',
 	challenge: 'Bolt-Challenge',
+	/** Set by the host alone: an upload it already stored, whose bytes never reach the cell (its `Stored` JSON). */
+	stored: 'Bolt-Stored',
 	/** A kiosk page's requests name their kiosk; the host runs them as its assigned policies (never the caller's). */
 	kiosk: 'Bolt-Kiosk'
 } as const;

@@ -333,8 +333,6 @@ export function shellApi(
 				act('sys_message.pageResult', { message, result }),
 			claimPageAction: (message: string) =>
 				act('sys_message.claimPageAction', { message }),
-			readAhead: (attachment: import('../decl/runtime/integration.ts').Attachment) =>
-				act('sys_message.readAhead', { attachment }),
 			/** hook:attachments — one panel attachment to `/__bolt/files/sys_conversation.inputs`: its `FileRef`, or the refusal. */
 			upload: (file: File) =>
 				transport
@@ -702,6 +700,7 @@ export const bolt: Omit<ShellBolt, 'describe'> & { readonly describe: ShellBolt[
 	start: (...args) => currentBolt().start(...args),
 	clock: (...args) => currentBolt().clock(...args),
 	convert: (...args) => currentBolt().convert(...args),
+	previewPdf: (...args) => currentBolt().previewPdf(...args),
 	observe: (...args) => currentBolt().observe(...args),
 	upload: (...args) => currentBolt().upload(...args),
 	fileUrl: (...args) => currentBolt().fileUrl(...args),

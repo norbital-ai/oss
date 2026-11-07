@@ -4,7 +4,7 @@ import * as HttpServerResponse from 'effect/http/HttpServerResponse';
 import { LIMITS } from '../engine/contracts.ts';
 import { BoltError } from './errors.ts';
 import { chargesFor, resetAfter } from '../engine/access/rate.ts';
-import { upload } from '../engine/callables/upload.ts';
+import { StoredUpload, upload } from '../engine/callables/upload.ts';
 import { readableFile } from '../engine/decisions/index.ts';
 import { TenantDb } from '../engine/db/tenant-db.ts';
 import { Files } from '../engine/ports.ts';
@@ -83,13 +83,22 @@ export const filesRoutes = (request: HttpServerRequest.HttpServerRequest) =>
 							try: () => decodeURIComponent(disposition),
 							catch: () => invalid('The filename does not decode.')
 						});
+			const said = header(request, HEADERS.stored);
+			const stored =
+				said === undefined
+					? undefined
+					: yield* Schema.decodeUnknownEffect(StoredUpload)(said).pipe(
+							Effect.mapError(() => invalid('The stored upload does not decode.'))
+						);
 			const outcome = yield* upload({
 				id: header(request, HEADERS.key) ?? '',
 				model,
 				field,
 				name,
 				mime: header(request, 'content-type') ?? 'application/octet-stream',
-				bytes: new Uint8Array(yield* request.arrayBuffer),
+				...(stored === undefined
+					? { bytes: new Uint8Array(yield* request.arrayBuffer) }
+					: { bytes: new Uint8Array(), stored }),
 				authority: auth,
 				now: b.now,
 				rate: charges.map((charge) => ({

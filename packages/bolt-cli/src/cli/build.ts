@@ -268,6 +268,28 @@ export const buildWorkspace = (
 	options?: BuildOptions
 ): Effect.Effect<Built, BuildFailure, FileSystem.FileSystem | Path.Path> =>
 	holdingBuild(dir, buildOnce(dir, options));
+/**
+ * `bolt build --migrations`: the compile alone, which writes the next migration and proves the history. No page is
+ * bundled; `bundle/migrations` holds the result where a build's would be.
+ */
+export const generateMigrations = (
+	dir: string
+): Effect.Effect<void, BuildFailure, FileSystem.FileSystem | Path.Path> =>
+	holdingBuild(
+		dir,
+		Effect.gen(function* () {
+			const fs = yield* FileSystem.FileSystem,
+				path = yield* Path.Path,
+				root = yield* fs.realPath(dir),
+				bundle = path.join(root, '.norbital', 'bundle');
+			const { errors, manifest } = yield* compile(root, { migrations: 'generate' });
+			if (errors.length > 0 || manifest === undefined)
+				return yield* Effect.fail(authorErrors(errors));
+			yield* fs.remove(bundle, { recursive: true, force: true });
+			yield* fs.makeDirectory(bundle, { recursive: true });
+			yield* cloneTree(path.join(root, 'migrations'), path.join(bundle, 'migrations'));
+		})
+	);
 /** The seed packs under `seedOut`: an unchanged base pack is reused. */
 const seedWorkspace = Effect.fn('bolt.seedWorkspace')(function* (
 	root: string,

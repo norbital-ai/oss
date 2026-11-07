@@ -356,7 +356,8 @@ export type ConvertTarget = keyof ConvertTargets;
  * read for its structure (headings, tables, images, emphasis); its CSS does not carry into the output, and a PDF is typeset
  * by Typst.
  */
-export type ConvertSource = { readonly markdown: string } | { readonly html: string };
+export type ConvertSource =
+	{ readonly markdown: string } | { readonly html: string } | { readonly layoutHtml: string };
 /**
  * One declared target, its file name and its options, discriminated by `to`: `reference` only where the format takes
  * one, `page` only for PDF. What a page's `bolt.convert(source, request)` takes: the file it answers is the viewer's own
@@ -365,6 +366,7 @@ export type ConvertSource = { readonly markdown: string } | { readonly html: str
 export type ConvertRequest = {
 	[T in DeclaredConvertTarget]: { to: T; name: string } & ConvertTargets[T];
 }[DeclaredConvertTarget];
+export type PreviewPdfOptions = Pick<ConvertTargets['pdf'], 'page' | 'landscape'>;
 /** `ctx.convert.document`'s options: a `ConvertRequest` and the owner `for` the stored output belongs to. */
 export type ConvertOptions = ConvertRequest & { for: FileOwner };
 /**
@@ -387,6 +389,10 @@ export type Convert = {
  */
 export type IngestOptions = {
 	for?: FileOwner;
+	/** False reads a PDF's text alone: a long document's pages and search, its images left in the file. */
+	pictures?: boolean;
+	/** That one page of a PDF as a picture: what a text read of a scan or a drawing leaves in the file. */
+	page?: number;
 	diarize?: boolean;
 	language?: string;
 	speakers?: number;
@@ -408,6 +414,8 @@ export type IngestIndex = {
 	}[];
 	readonly tables: number;
 	readonly images: readonly string[];
+	/** The PDF pages read for their text that hold none, as ranges. */
+	readonly noText?: string;
 };
 /** One stretch of speech: its speaker (`S1`, `S2`, … across the whole file), start and end in seconds, and the words. */
 export type TranscriptSegment = {

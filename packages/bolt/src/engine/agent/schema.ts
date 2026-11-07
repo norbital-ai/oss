@@ -71,6 +71,8 @@ export type Meta =
 	/** A tool row whose result was clipped keeps the whole output for `read_file { call }` (rule 62). */
 	| { tag: 'output'; full: Json }
 	| { tag: 'note' }
+	/** The workspace's tools as this conversation was last told them. */
+	| { tag: 'tools' }
 	/** A workspace event the host published (a merge landed, maintenance scheduled), heard at a turn step; `at` is its time. */
 	| { tag: 'event'; at: string }
 	/** A sub-agent's report to its parent (its answer, its question, a failure or a stop), queued as the parent's input. */
@@ -148,6 +150,7 @@ const MetaSchema = Schema.Union([
 	}),
 	Schema.Struct({ tag: Schema.Literal('output'), full: Schema.Json }),
 	Schema.Struct({ tag: Schema.Literal('note') }),
+	Schema.Struct({ tag: Schema.Literal('tools') }),
 	Schema.Struct({ tag: Schema.Literal('event'), at: Schema.String }),
 	Schema.Struct({ tag: Schema.Literal('scheduled'), at: Schema.optionalKey(Schema.String) })
 ]);
@@ -484,6 +487,16 @@ const outcomeOf = Schema.decodeUnknownOption(Outcome);
 const NO_OUTCOME: typeof Outcome.Type = {};
 
 /** Staff read a failed turn's reason (rule 59) and every instance's thread (§5.9). */
+/**
+ * A value as PostgreSQL holds it, before anything sees it: text and jsonb have no NUL, and a tool's text can carry one (a
+ * binary file read as text), which would otherwise end the turn. Only a real escape is replaced, never an escaped `\\u0000`.
+ */
+export const storable = <J extends Json>(value: J): J => {
+	const text = JSON.stringify(value);
+	return text.includes('\\u0000')
+		? (JSON.parse(text.replace(/(?<!\\)((?:\\\\)*)\\u0000/g, '$1\\ufffd')) as J)
+		: value;
+};
 export const isStaff = (a: Authority) =>
 	a.admin || (a.actor.kind === 'member' && !a.actor.external);
 /**

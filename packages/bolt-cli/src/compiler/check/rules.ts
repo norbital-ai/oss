@@ -190,11 +190,8 @@ function modelRules({ m, bodies, at }: RuleContext): void {
 				!(Number.isInteger(k.max) && Number(k.max) > 0)
 			)
 				range('text max is a positive integer');
-			if (
-				k.kind === 'file' &&
-				!(sizeBytes(String(k.max)) > 0 && sizeBytes(String(k.max)) <= LIMITS.storedFileBytes)
-			)
-				range('file max is at most 20MiB'); // hook:runtime
+			if (k.kind === 'file' && !(sizeBytes(String(k.max)) > 0))
+				range('file max is a positive size'); // hook:runtime
 			// a precision the kind cannot hold (a JS manifest or a cast: tsc refuses it in a declaration)
 			const units = PRECISION[k.kind === 'period' ? String(k.of) : k.kind] ?? [];
 			if ('precision' in k && k.precision !== undefined && !units.includes(String(k.precision)))
@@ -548,6 +545,13 @@ const validRate = (rate: string): boolean => {
 	return Result.isSuccess(parsed) && parsed.success;
 };
 
+function toolRules({ m, at }: RuleContext): void {
+	for (const [name, tool] of Object.entries(m.agent.tools ?? {})) {
+		const input = Schema.decodeUnknownResult(FieldsSchema)(tool.input ?? {});
+		if (Result.isFailure(input)) at('tool/input', 'tool', name, `input: ${input.failure.message}`);
+	}
+}
+
 function automationRules({ m, bodies, at }: RuleContext): void {
 	for (const [name, a] of Object.entries(m.automations)) {
 		const input = Schema.decodeUnknownResult(FieldsSchema)(a.input ?? {});
@@ -859,6 +863,7 @@ const RULES = [
 	modelRules,
 	layerRules,
 	automationRules,
+	toolRules,
 	policyRules,
 	visitorRules,
 	kioskRules,

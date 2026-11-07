@@ -130,6 +130,7 @@ export const scopeKind = (scope: SearchScope) =>
 		relationship: 'Relationship',
 		field: 'Field type',
 		skill: 'Skill',
+		tool: 'Tool',
 		secret: 'Secret',
 		kiosk: 'Kiosk',
 		group: 'App group',

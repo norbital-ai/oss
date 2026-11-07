@@ -39,7 +39,12 @@ import type {
 	Unavailable
 } from '../decl/errors.ts';
 import type { ModelName, FileField, FileSyncName, Is, ReadableName } from '../decl/names.ts';
-import type { ConvertRequest, ConvertSource, StartInput } from '../decl/runtime/facilities.ts';
+import type {
+	ConvertRequest,
+	ConvertSource,
+	PreviewPdfOptions,
+	StartInput
+} from '../decl/runtime/facilities.ts';
 import type { FileRef, Id, Instant, PlainDate, RequestId } from '../decl/values.ts';
 import type { ApprovalView } from '../engine/approvals/approvals.ts';
 import type { RecordCapabilities, RecordParentContext } from '../protocol/record-contracts.ts';
@@ -182,6 +187,11 @@ export interface PageBolt {
 		source: ConvertSource,
 		request: ConvertRequest
 	): PageCall<FileRef, ActRefused | TransportFailed | Unavailable>;
+	/** Renders a PDF for this page and returns its bytes without storing a file or a conversion job. */
+	previewPdf(
+		source: ConvertSource,
+		options?: PreviewPdfOptions
+	): PageCall<Uint8Array, ActRefused | TransportFailed | Unavailable>;
 	/** The URL a page shows or downloads a stored file from. */
 	fileUrl(ref: Pick<FileRef, 'id'>, options?: FileUrlOptions): string;
 	/** Approval requests: decide the current step, read one request's view, or list the requests the viewer may see. */

@@ -1,7 +1,12 @@
 // Browser transport: one HttpClient path, decoding and reviving at the HTTP boundary.
 import { Duration, Effect, Schema, SubscriptionRef } from 'effect';
-import { FetchHttpClient, HttpClient, HttpClientRequest } from 'effect/http';
-import { ProtocolFailed, TransportFailed } from '../decl/errors.ts';
+import {
+	FetchHttpClient,
+	HttpClient,
+	HttpClientRequest,
+	type HttpClientResponse
+} from 'effect/http';
+import { TransportFailed } from '../decl/errors.ts';
 import type { Json } from '../decl/values.ts';
 
 /** A release cutover holds the host's admission closed for seconds; requests wait it out up to this budget. */
@@ -16,24 +21,37 @@ export function browserTransport(options: {
 	httpClient?: HttpClient.HttpClient;
 }) {
 	const send: typeof fetch = options.fetch ?? ((input, init) => fetch(input, init));
-	const once = (request: HttpClientRequest.HttpClientRequest) =>
+	const json = (response: HttpClientResponse.HttpClientResponse) =>
 		Effect.gen(function* () {
-			const response = yield* HttpClient.execute(request);
-			const retryAfter = Number(response.headers['retry-after']);
-			if (response.status === 204) return { status: response.status, body: null, retryAfter };
+			if (response.status === 204) return null;
 			const text = yield* response.text;
-			const body = yield* Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.Json))(text).pipe(
+			return yield* Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.Json))(text).pipe(
 				Effect.mapError(() => new TransportFailed({ status: response.status })),
 				Effect.catch((error) =>
 					response.status >= 400 ? Effect.succeed(null) : Effect.fail(error)
 				)
 			);
-			return { status: response.status, body, retryAfter };
+		});
+	const pdf = (response: HttpClientResponse.HttpClientResponse) =>
+		Effect.gen(function* () {
+			if (response.status === 200 && response.headers['content-type'] === 'application/pdf')
+				return new Uint8Array(yield* response.arrayBuffer);
+			return yield* json(response);
+		});
+	const once = <A, E>(
+		request: HttpClientRequest.HttpClientRequest,
+		read: (response: HttpClientResponse.HttpClientResponse) => Effect.Effect<A, E>
+	) =>
+		Effect.gen(function* () {
+			const response = yield* HttpClient.execute(request);
+			return {
+				status: response.status,
+				body: yield* read(response),
+				retryAfter: Number(response.headers['retry-after'])
+			};
 		}).pipe(
 			Effect.mapError((error) =>
-				error instanceof ProtocolFailed || error instanceof TransportFailed
-					? error
-					: new TransportFailed({ status: 0 })
+				error instanceof TransportFailed ? error : new TransportFailed({ status: 0 })
 			),
 			options.httpClient === undefined
 				? Effect.provide(FetchHttpClient.layer)
@@ -41,39 +59,40 @@ export function browserTransport(options: {
 			Effect.provideService(FetchHttpClient.Fetch, send),
 			Effect.provideService(FetchHttpClient.RequestInit, { credentials: 'same-origin' })
 		);
-	type Reply = Effect.Success<ReturnType<typeof once>>;
+	type Reply<A> = { status: number; body: A; retryAfter: number };
 	type Failure = Effect.Error<ReturnType<typeof once>>;
 	// Busy is the host's admission refusal: the request never ran, so the same request (and idempotency key) is resent.
-	const waitAfter = (reply: Reply) =>
+	const waitAfter = (reply: Reply<unknown>) =>
 		reply.status === 503 && reply.retryAfter > 0 && Schema.is(BusyRefusal)(reply.body)
 			? reply.retryAfter * 1000
 			: null;
-	const retried = (
+	const execute = <A, E>(
 		request: HttpClientRequest.HttpClientRequest,
-		reply: Reply,
-		left: number
-	): Effect.Effect<Reply, Failure> => {
-		const wait = waitAfter(reply);
-		return wait === null || wait > left
-			? Effect.succeed(reply)
-			: Effect.sleep(Duration.millis(wait)).pipe(
-					Effect.andThen(once(request)),
-					Effect.flatMap((next) => retried(request, next, left - wait))
-				);
-	};
-	const execute = (request: HttpClientRequest.HttpClientRequest) =>
-		once(request).pipe(
+		read: (response: HttpClientResponse.HttpClientResponse) => Effect.Effect<A, E>
+	) => {
+		const send = once(request, read);
+		const retried = (reply: Reply<A>, left: number): Effect.Effect<Reply<A>, Failure> => {
+			const wait = waitAfter(reply);
+			return wait === null || wait > left
+				? Effect.succeed(reply)
+				: Effect.sleep(Duration.millis(wait)).pipe(
+						Effect.andThen(send),
+						Effect.flatMap((next) => retried(next, left - wait))
+					);
+		};
+		return send.pipe(
 			Effect.flatMap((reply) =>
 				waitAfter(reply) === null
 					? Effect.succeed(reply)
 					: Effect.acquireUseRelease(
 							SubscriptionRef.update(updating, (n) => n + 1),
-							() => retried(request, reply, BUSY_BUDGET_MILLIS),
+							() => retried(reply, BUSY_BUDGET_MILLIS),
 							() => SubscriptionRef.update(updating, (n) => n - 1)
 						)
 			),
 			Effect.map(({ status, body }) => ({ status, body }))
 		);
+	};
 	const request = (
 		method: 'GET' | 'POST' | 'PUT' | 'DELETE',
 		path: string,
@@ -81,8 +100,16 @@ export function browserTransport(options: {
 		headers: Readonly<Record<string, string>> = {}
 	) => {
 		const req = HttpClientRequest.make(method)(`${options.base ?? ''}${path}`, { headers });
-		return execute(body === undefined ? req : HttpClientRequest.bodyJsonUnsafe(req, body));
+		return execute(body === undefined ? req : HttpClientRequest.bodyJsonUnsafe(req, body), json);
 	};
+	const requestPdf = (path: string, body: Json, headers: Readonly<Record<string, string>>) =>
+		execute(
+			HttpClientRequest.bodyJsonUnsafe(
+				HttpClientRequest.post(`${options.base ?? ''}${path}`, { headers }),
+				body
+			),
+			pdf
+		);
 	const upload = (path: string, file: Blob, headers: Readonly<Record<string, string>>) =>
 		Effect.tryPromise({
 			try: () => file.arrayBuffer(),
@@ -95,9 +122,10 @@ export function browserTransport(options: {
 							new Uint8Array(bytes),
 							file.type || 'application/octet-stream'
 						)
-					)
+					),
+					json
 				)
 			)
 		);
-	return { request, upload };
+	return { request, requestPdf, upload };
 }

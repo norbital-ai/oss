@@ -18,6 +18,7 @@ import type { DeliveryReport } from './conversations/status.ts';
 import type { BoltError } from '../protocol/errors.ts';
 import type { FacilityFailure, Unavailable } from '../decl/errors.ts';
 import type {
+	ConvertSource,
 	ConvertTarget,
 	GeoHit,
 	RunCause,
@@ -418,9 +419,15 @@ export const CONVERT_TARGETS: readonly ConvertTarget[] = [
 export interface ConvertPort {
 	readonly targets: readonly ConvertTarget[];
 	convert(
-		source: { markdown: string } | { html: string },
+		source: ConvertSource,
 		to: ConvertTarget,
 		options: { reference?: Uint8Array; page?: 'A4' | 'A3' | 'Letter'; landscape?: boolean },
+		signal: AbortSignal
+	): Promise<Uint8Array>;
+	/** Renders in memory without retaining source or result in a job or file store. */
+	previewPdf?(
+		source: ConvertSource,
+		options: { page?: 'A4' | 'A3' | 'Letter'; landscape?: boolean },
 		signal: AbortSignal
 	): Promise<Uint8Array>;
 }
@@ -484,7 +491,16 @@ export type Ingested =
  */
 export interface IngestPort {
 	ingest(
-		file: { sha256: string; name: string; mime: string; bytes: Uint8Array },
+		file: {
+			sha256: string;
+			name: string;
+			mime: string;
+			/** Bytes the caller holds, or else `key`: a stored file the host reads, so nothing large crosses into a cell. */
+			bytes?: Uint8Array | ReadableStream<Uint8Array>;
+			key?: string;
+			/** Whose it is: a burst of one tenant's files waits behind that tenant's own. */
+			lane?: string;
+		},
 		options: Omit<IngestOptions, 'for'>,
 		signal: AbortSignal
 	): Promise<Ingested | { readonly unsupported: string }>;
@@ -526,6 +542,7 @@ export type AiResponse = {
 		output: number;
 		/** hook:agent — USD, for the cost disclosure */ cost?: number;
 		/** L-BOLT-432: the provider's call id (the metering key) */ call?: string;
+		/** who answered, where a router says */ provider?: string;
 		/** input tokens the provider read from its prompt cache */ cached?: number;
 		/** output tokens spent reasoning */ reasoning?: number;
 		/** the request's characters: system prompt, messages and tool definitions (where the input tokens went) */

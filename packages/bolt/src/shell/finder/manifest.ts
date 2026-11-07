@@ -16,6 +16,7 @@ export const ManifestItemSchema = Schema.Struct({
 		'relationship',
 		'field',
 		'skill',
+		'tool',
 		'secret',
 		'kiosk',
 		'group',
@@ -70,6 +71,7 @@ export function manifestItems(
 	add('relationship', m.relationships, (name) => `src/data/model/${name.split('.')[0]}/+model.ts`);
 	add('field', m.customFields, (name) => `src/data/custom_field/${name}/+definition.ts`);
 	add('skill', m.agent.skills, (name) => `src/agent/skill/${name}/+skill.md`);
+	add('tool', m.agent.tools ?? {}, (name) => `src/agent/tool/${name}/+tool.ts`);
 	add('secret', m.workspace.secrets, () => 'src/+secrets.ts');
 	add('group', m.groups, (name) => `src/app/${name}/+group.ts`);
 	items.push({

@@ -60,6 +60,7 @@ const CONTRACT: { readonly [role: string]: { readonly [namespace: string]: reado
 		'bolt/errors': ['Refusal']
 	},
 	sync: { bolt: ['integration', 'RemoteSync', 'FileSync', 'SyncCtx', 'RemoteReadInput'] },
+	tool: { bolt: ['tool', 'ToolRun', 'ToolFiles'] },
 	page: {
 		bolt: ['app', 'Page', 'group', 'pageServer', 'PageReadContext'],
 		'bolt/page': ['PageBolt'],
@@ -80,6 +81,26 @@ const CONTRACT: { readonly [role: string]: { readonly [namespace: string]: reado
 };
 /** What the symbols alone leave out: a role's first file, so no conversation goes looking for it. */
 const CONTRACT_HEAD: { readonly [role: string]: string } = {
+	automation: `An automation is a job its declared \`policies\` run. They must read every model it reads or links to, \`sys_user\` included:
+
+\`\`\`ts
+// src/automation/+<name>.automation.ts
+import { automation } from '@norbital-ai/bolt';
+
+export default automation('<name>', {
+	description: '<what it does>',
+	on: { cron: '0 2 * * *' }, // or a webhook; a row write runs its model's effect, never an automation
+	policies: ['<policy>'],
+	run: function* (input, ctx) {
+		const { rows } = (yield* ctx.query({ <model>: { fields: ['<field>'] } })).<model>;
+		yield* ctx.act('<model>.create', [{ <field>: <value> }]);
+	}
+});
+\`\`\`
+
+Time is \`ctx.today\`, a \`PlainDate\`, and \`ctx.now\`, an ISO instant string: \`@norbital-ai/std/date\` has \`addDays\` and \`addMonths\` for a date, and \`Date.parse\` gives an instant's milliseconds. A model's \`effect\` has the same two.
+
+In a test, \`t.clock.set('<instant>')\` then \`const { failed } = yield* t.runDue()\` fires what is due at that instant. Assert \`expect(failed).toEqual([])\` first: a run that failed says why there, and nothing else will.`,
 	model: `\`src/data/model/<name>/+model.ts\`. A model takes only the writes it declares:
 
 \`\`\`ts
@@ -116,6 +137,30 @@ import { team } from '@norbital-ai/bolt';
 
 export default team({ <team>: { name: '<Team name>', policies: ['<policy>'] } });
 \`\`\``,
+	tool: `A tool is its folder: \`+tool.ts\`, data the compiler reads, and \`run.ts\`, its body, on Node in a VM of its own:
+
+\`\`\`ts
+// src/agent/tool/<name>/+tool.ts
+import { tool } from '@norbital-ai/bolt';
+
+export default tool({
+	description: '<what it does>',
+	input: { <field>: { kind: 'text', optional: true } }
+});
+
+// src/agent/tool/<name>/run.ts
+import type { ToolRun } from '@norbital-ai/bolt';
+import type spec from './+tool.ts';
+
+const run: ToolRun<typeof spec> = async (input, files) => {
+	const bytes = await files.read(files.names[0]!);
+	await files.write('<name>.csv', '<text>');
+	return { <what you read back> };
+};
+export default run;
+\`\`\`
+
+\`workspace_install\` brings a package; \`await import\` it inside \`run\`. \`run_tool { name, input, files: [{ id }] }\` runs your working tree's. A merge tells every staff conversation of it, with its input, below what it holds. A test imports \`run.ts\` and passes its own \`files\`.`,
 	page: `An app is its folder: \`+app.ts\` and one \`+<page>.page.svelte\` per page. A list of records needs nothing else:
 
 \`\`\`ts

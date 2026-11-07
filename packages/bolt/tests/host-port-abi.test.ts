@@ -70,7 +70,7 @@ describe('fromAbi', () => {
 			const convert = Convert.fromAbi({
 				targets: ['pdf'],
 				convert: async (source, to) =>
-					new TextEncoder().encode(`${to}:${'markdown' in source ? source.markdown : source.html}`)
+					new TextEncoder().encode(`${to}:${'html' in source ? source.html : 'markdown' in source ? source.markdown : ''}`)
 			});
 			expect(yield* using(Convert, convert, (c) => Effect.succeed(c.targets))).toEqual(['pdf']);
 			expect(

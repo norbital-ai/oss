@@ -2,7 +2,7 @@ import { Clock, Effect, Layer, Option, Schema } from 'effect';
 import { csvRows } from '@norbital-ai/std/csv';
 import { FacilityFailure } from '../decl/errors.ts';
 import type { Json } from '../decl/values.ts';
-import type { ConvertSource } from '../decl/runtime/facilities.ts';
+import type { ConvertSource, PreviewPdfOptions } from '../decl/runtime/facilities.ts';
 import {
 	LIMITS,
 	CONVERT_MIME,
@@ -215,7 +215,8 @@ const DocumentRequest = Schema.Struct({
 });
 const Source = Schema.Union([
 	Schema.Struct({ markdown: Schema.String }),
-	Schema.Struct({ html: Schema.String })
+	Schema.Struct({ html: Schema.String }),
+	Schema.Struct({ layoutHtml: Schema.String })
 ]);
 /** A conversion: a declared target, its file name and options, the owner `for` and, for a member's own file, `by`. */
 export type DocumentRequest = typeof DocumentRequest.Type & { readonly by?: string | undefined };
@@ -228,6 +229,8 @@ const convertWith =
 				return yield* Effect.fail(
 					invalid(`'${request.to}' is not declared in workspace.convert.to`)
 				);
+			if ('layoutHtml' in source && request.to !== 'pdf')
+				return yield* Effect.fail(invalid('Layout HTML can only be converted to PDF'));
 			if (request.to !== 'pdf' && (request.page !== undefined || request.landscape !== undefined))
 				return yield* Effect.fail(invalid("page and landscape are a pdf's options"));
 			if (request.reference !== undefined && !['docx', 'pptx', 'odt'].includes(request.to))
@@ -267,6 +270,25 @@ export const convertDocument = Effect.fn('convertDocument')(function* (
 	return yield* convertWith(ports)(source, request).pipe(
 		Port.call('convert.document', LIMITS.callMs.database)
 	);
+});
+
+export const previewPdf = Effect.fn('previewPdf')(function* (
+	source: ConvertSource,
+	options: PreviewPdfOptions
+) {
+	if (!(yield* Manifest).workspace.convert?.to.includes('pdf'))
+		return yield* Effect.fail(invalid("'pdf' is not declared in workspace.convert.to"));
+	const convert = yield* Convert;
+	if (!convert.targets.includes('pdf') || convert.previewPdf === undefined)
+		return yield* Port.unavailable('convert', 'the host provides no transient PDF renderer');
+	const bytes = yield* convert
+		.previewPdf(source, options)
+		.pipe(Port.call('convert.previewPdf', LIMITS.callMs.database));
+	if (bytes.byteLength > LIMITS.crossingBytes)
+		return yield* Effect.fail(
+			new FacilityFailure({ kind: 'tooLarge', message: 'The PDF is too large.' })
+		);
+	return bytes;
 });
 
 export const loggedTransport = (

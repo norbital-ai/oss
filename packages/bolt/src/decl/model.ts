@@ -918,7 +918,7 @@ export type ModelLiteral = {
 	};
 	/** The notices each write and approval event sends. */
 	notify?: unknown;
-	/** The work each committed create, update and delete runs afterwards, as the writer. */
+	/** The work after each committed write, as the writer: `function* (rows, ctx)`, its parameters typed by the model, `updated` taking `{ before, after }` changes; `t.runDue()` runs it in a test. */
 	effect?: { created?: unknown; updated?: unknown; deleted?: unknown };
 	/** How rows are exchanged with a file or another system: `read` brings rows in, `write` sends changes out. */
 	syncs?: {

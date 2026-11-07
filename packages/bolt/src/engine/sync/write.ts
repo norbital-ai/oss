@@ -113,6 +113,15 @@ const lease = (c: Chain, r: Outbox) =>
 
 export function makeDeliver(e: SyncEngine) {
 	const { db, manifest: m } = e;
+	const databases = JSON.stringify(
+		e.links.unpaced
+			? []
+			: Object.entries(m.integrations)
+					.filter(([, definition]) => definition.driver === 'sqlserver')
+					.map(([name]) => name)
+	);
+	const ready = (parameter: '$1' | '$2') =>
+		`(i.integration NOT IN (SELECT jsonb_array_elements_text(${parameter}::jsonb)) OR (i.status ->> 'state' = 'connected' AND i.status -> 'databaseVerified' = 'true'::jsonb))`;
 	const changed = (r: Outbox) => e.live.syncChanged(r.model, [r.record]);
 	const schedule = Effect.fn('Syncs.scheduleWrite')(function* (at: string) {
 		const c = new Chain();
@@ -362,7 +371,7 @@ export function makeDeliver(e: SyncEngine) {
 				const rows = yield* db.returning(Outbox, {
 					text: `WITH candidate AS (
 				SELECT o.id FROM sys_outbox o JOIN sys_integration i ON i.id = o.instance AND i.active
-				WHERE ((o.status = 'queued' AND o.next_attempt_at <= $1::timestamptz) OR (o.status = 'sending' AND o.claimed_at < $1::timestamptz - interval '5 minutes'))
+				WHERE ${ready('$2')} AND ((o.status = 'queued' AND o.next_attempt_at <= $1::timestamptz) OR (o.status = 'sending' AND o.claimed_at < $1::timestamptz - interval '5 minutes'))
 				AND NOT EXISTS (SELECT 1 FROM sys_outbox p WHERE p.sync = o.sync AND p.instance = o.instance AND p.record = o.record
 				 AND p.seq < o.seq AND p.status IN ('queued', 'sending', 'dead'))
 				ORDER BY o.seq LIMIT 1 FOR UPDATE OF o SKIP LOCKED), claimed AS (
@@ -371,7 +380,7 @@ export function makeDeliver(e: SyncEngine) {
 				SELECT o.id::text, o.sync, o.instance::text, o.model, o.record, o.op, o.record_revision, o.changed, o.image,
 				o.writer::text, o.key, o.attempts, o.claimed_at::text, r.remote_id, r.remote_version, r.acked_revision
 				FROM claimed o LEFT JOIN sys_sync_row r ON r.sync = o.sync AND r.instance = o.instance AND r.record = o.record`,
-					params: [now]
+					params: [now, databases]
 				});
 				const r = rows[0];
 				if (r === undefined) break;
@@ -384,9 +393,9 @@ export function makeDeliver(e: SyncEngine) {
 			}
 			const [next] = yield* db.rows(Schema.Struct({ at: Schema.NullOr(Schema.String) }), {
 				text: `SELECT min(CASE WHEN o.status = 'sending' THEN o.claimed_at + interval '5 minutes' ELSE o.next_attempt_at END)::text AS at
-			FROM sys_outbox o JOIN sys_integration i ON i.id = o.instance AND i.active WHERE o.status IN ('queued', 'sending')
+			FROM sys_outbox o JOIN sys_integration i ON i.id = o.instance AND i.active WHERE ${ready('$1')} AND o.status IN ('queued', 'sending')
 			AND NOT EXISTS (SELECT 1 FROM sys_outbox p WHERE p.sync = o.sync AND p.instance = o.instance AND p.record = o.record AND p.seq < o.seq AND p.status IN ('queued', 'sending', 'dead'))`,
-				params: []
+				params: [databases]
 			});
 			if (next?.at !== null && next?.at !== undefined) yield* schedule(next.at);
 			return { delivered };

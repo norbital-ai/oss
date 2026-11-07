@@ -142,10 +142,16 @@ export function refresh(
 	return { changed, created, deleted };
 }
 
+const ABSENT_PATHS = 200_000;
 /** Only virtual source, admitted package graphs and the compiler's standard library are readable. */
 export function filesystem(roots: ReadonlyMap<string, Held>) {
 	const packages = new Set<string>();
 	const canonical = new Map<string, string>();
+	/**
+	 * Paths the package store does not hold. Module resolution asks after the same ones on every edit, and each answer
+	 * blocks the host's serving thread.
+	 */
+	const absent = new Set<string>();
 	const native = import.meta.resolve('@typescript/native/package.json');
 	const compiler = [
 		dirname(fileURLToPath(native)),
@@ -162,11 +168,12 @@ export function filesystem(roots: ReadonlyMap<string, Held>) {
 		path = resolve(path);
 		const cached = canonical.get(path);
 		if (cached !== undefined) return cached;
+		if (absent.has(path)) return undefined;
 		for (const held of roots.values())
 			if (held.modules !== undefined) packages.add(resolve(held.modules));
 		if (![...compiler, ...packages].some((root) => inside(path, root))) return;
 		try {
-			const real = realpathSync(path);
+			const real = realpathSync.native(path);
 			if (compiler.some((root) => inside(real, root))) {
 				canonical.set(path, real);
 				return real;
@@ -177,6 +184,8 @@ export function filesystem(roots: ReadonlyMap<string, Held>) {
 			canonical.set(path, real);
 			return real;
 		} catch {
+			if (absent.size >= ABSENT_PATHS) absent.clear();
+			absent.add(path);
 			return undefined;
 		}
 	};

@@ -529,6 +529,9 @@ describe('Store over a schema value', () => {
 				expect(
 					yield* failure(read(db.catalog, 'order', { where: { nope: { eq: 1 } }, all: true }))
 				).toContain("where.nope: unknown field 'nope' on 'order'");
+				expect(yield* failure(read(db.catalog, 'order', { where: { $or: { eq: 1 } }, all: true }))).toContain(
+					"where.$or: '$or' is written 'or', no $"
+				);
 				expect(
 					yield* failure(
 						read(db.catalog, 'order', { where: { customer: { some: {} } }, all: true })

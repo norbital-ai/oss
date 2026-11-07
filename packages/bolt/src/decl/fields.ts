@@ -33,10 +33,8 @@ import type {
  * independent identity, lifecycle, permissions, history or relational queries. Every kind renders and edits itself in
  * cells, forms and history, so a page never maps labels or builds an editor by hand.
  */
-/** A `file` field's cap: at most 20 MiB (the stored-file cap; `bolt check` bounds the KiB form). */
-type FileSize =
-	| `${bigint}KiB`
-	| `${1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14 | 15 | 16 | 17 | 18 | 19 | 20}MiB`;
+/** A `file` field's cap. */
+type FileSize = `${bigint}KiB` | `${bigint}MiB` | `${bigint}GiB`;
 /** `markdown`: the text is Markdown, rendered as prose; the others are checked on write (rule 68). */
 /**
  * How a text field is shown and edited: `cel` is a CEL expression, a wrapped code editor; `team` holds a team handle

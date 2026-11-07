@@ -224,15 +224,15 @@ describe("sys_2.infer tools: ['read']", () => {
 								id: 'r1',
 								name: 'read',
 								input: {
-									reads: [
-										{ of: 'purchase_orders', output: 'matching', where: { supplier: { eq: 'Acme' } } }
-									]
+									request: {
+										purchase_orders: { output: 'matching', where: { supplier: { eq: 'Acme' } } }
+									}
 								}
 							}
 						]),
 						use([
-							{ id: 'r2', name: 'read', input: { reads: [{ of: 'ledgers' }] } },
-							{ id: 'r3', name: 'read', input: { reads: [{ of: 'purchase_orders' }] } }
+							{ id: 'r2', name: 'read', input: { request: { ledgers: {} } } },
+							{ id: 'r3', name: 'read', input: { request: { purchase_orders: {} } } }
 						]),
 						use([
 							{
@@ -280,7 +280,7 @@ describe("sys_2.infer tools: ['read']", () => {
 								Schema.Struct({ properties: Schema.Record(Schema.String, Schema.Json) })
 							)(offered[0]!.input).properties
 						)
-					).toEqual(['reads']);
+					).toEqual(['request']);
 					// one bounded page of the matcher's `matching` output: the Acme order only, no margin
 					const [page] = toolResults(ai.requests[1]!);
 					const rows = Schema.decodeUnknownSync(
@@ -297,17 +297,9 @@ describe("sys_2.infer tools: ['read']", () => {
 					expect(ledgers).toEqual({
 						error: "You read no 'ledgers'. Models: invoices, purchase_orders"
 					});
-					// purchase orders' `default` output is not granted: a read naming none reads an output the run holds,
-					// never the default's fields
-					const held = Schema.decodeUnknownSync(
-						Schema.Struct({
-							purchase_orders: Schema.Struct({
-								rows: Schema.Array(Schema.Record(Schema.String, Schema.Json))
-							})
-						})
-					)(defaults).purchase_orders.rows;
-					expect(held.length).toBeGreaterThan(0);
-					expect(held.every((row) => !('margin' in row))).toBe(true);
+					// purchase orders' `default` output is not granted: a read naming none is refused, as in ctx.query
+					expect(defaults).toHaveProperty('error');
+					expect(JSON.stringify(defaults)).not.toContain('margin');
 					// steps: 2 spent on the two reads; the final turn offers only the draft tools
 					expect(ai.requests[2]!.tools!.map((tool) => tool.name)).toEqual([
 						'edit',

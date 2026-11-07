@@ -622,7 +622,11 @@ const pipeline = Effect.fn('Bolt.pipeline')(function* (
 			const target = pre.get(k(ref.to, ref.id));
 			if (target === undefined || !readable(ref.to, target))
 				return none(
-					refused('notFound', `No readable ${ref.to} has this id.`, [...c.path, ref.field])
+					refused(
+						'notFound',
+						`No readable ${ref.to} has this id: whoever writes this link must be able to read it.`,
+						[...c.path, ref.field]
+					)
 				);
 		}
 		const state = stateField(m, c.model);

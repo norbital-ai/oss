@@ -105,7 +105,8 @@ import {
 	system,
 	modelTranscript,
 	pageNote,
-	pageWaiting
+	pageWaiting,
+	toolsUntold
 } from './context.ts';
 import { mcpServers, mcpSessions, type McpHost } from './mcp.ts';
 import { agentSettings, allowedModel, overLimit } from './settings.ts';
@@ -116,6 +117,7 @@ import {
 	conversationCommit,
 	messageCommit,
 	rowsOf,
+	storable,
 	transcriptRow,
 	Message,
 	Conversation,
@@ -133,9 +135,11 @@ import {
 import {
 	catalogue,
 	JOBS,
+	TEXT_FIRST_BYTES,
 	jobs,
 	perform,
 	runJob,
+	toolsListing,
 	turnFacts,
 	workspaceSchema,
 	WriteInput,
@@ -198,7 +202,7 @@ export type AgentConfig = {
 	resolve?: (as: As) => Effect.Effect<Authority | null, EngineError>;
 	mcp?: McpHost;
 	attachments?: AttachmentPort;
-	media: { files: Files['Service']; images: Images['Service']; convert: Convert['Service'] };
+	media: { files: Files['Service']; images: Images['Service'] };
 	geocoder?: Geo['Service'];
 	/** The published source used when there is no authoring tree; a host reads it from the artifact (`workspaceFiles`). */
 	workspace?: WorkspacePort;
@@ -239,8 +243,6 @@ export type AgentConfig = {
  */
 class Unusable extends Schema.TaggedError<Unusable>()('Unusable', { message: Schema.String }) {}
 const AI_GAUGE_USD = 5;
-/** Tools whose answers a next step decides on: past these the step reasons. */
-const DECIDES: ReadonlySet<string> = new Set(['read', 'act', 'run_js']);
 export const AGENT_LIMITS = {
 	/** Checkpoints in a row with no model step between them: compaction that frees nothing stops here. */
 	compactions: 3,
@@ -614,10 +616,12 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 		const chain = new Chain();
 		const source = postMessage(chain, {
 			...row,
+			content: storable(row.content),
+			...(row.text === undefined || row.text === null ? {} : { text: storable(row.text) }),
 			state: row.state ?? null,
 			mode: row.mode ?? null,
 			as: row.as ?? null,
-			meta: row.meta === undefined || row.meta === null ? null : encodeWire(row.meta),
+			meta: row.meta === undefined || row.meta === null ? null : storable(encodeWire(row.meta)),
 			files: row.files === undefined ? [] : [...row.files]
 		});
 		const [message] = yield* messageStatement(chain, source);
@@ -925,13 +929,15 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 		// a pure tool's call just made, as its key, when it succeeded: the same call again straight after answers nothing new
 		let previous = '';
 		const usage: Usage = { input: 0, output: 0, calls: 0 };
-		const add = (u: Partial<Usage>, calls: number) => {
+		const add = (u: Partial<Usage> & { provider?: string }, calls: number) => {
 			usage.input += u.input ?? 0;
 			usage.output += u.output ?? 0;
 			usage.calls += calls;
 			if (typeof u.cost === 'number') usage.cost = (usage.cost ?? 0) + u.cost;
 			if (typeof u.cached === 'number') usage.cached = (usage.cached ?? 0) + u.cached;
 			if (typeof u.reasoning === 'number') usage.reasoning = (usage.reasoning ?? 0) + u.reasoning;
+			if (u.provider !== undefined)
+				usage.providers = [...new Set([...(usage.providers ?? []), u.provider])];
 		};
 		/**
 		 * L-BOLT-432: each provider call is one immutable `ai.call` observation: its call id (the metering key), model, tokens
@@ -954,6 +960,7 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 					category: 'chat',
 					request,
 					call: call ?? null,
+					...(r.usage.provider === undefined ? {} : { provider: r.usage.provider }),
 					model: modelOf,
 					input: r.usage.input,
 					output: r.usage.output,
@@ -1108,9 +1115,9 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 		) {
 			const chain = new Chain(),
 				source = settleMessage(chain, row.id, {
-					content,
-					text,
-					meta: meta === null ? null : encodeWire(meta),
+					content: storable(content),
+					text: text === null ? null : storable(text),
+					meta: meta === null ? null : storable(encodeWire(meta)),
 					state: extra.state ?? null,
 					...(extra.as === undefined ? {} : { as: extra.as })
 				});
@@ -1470,8 +1477,18 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 					...(ingester === undefined
 						? {}
 						: {
-								ingest: (file: { sha256: string; name: string; mime: string; bytes: Uint8Array }) =>
-									ingester(file, {}).pipe(Port.call('ingest', JOBS.hostMs))
+								ingest: (
+									file: { sha256: string; name: string; mime: string; key: string; size: number },
+									page?: number
+								) =>
+									ingester(
+										{ sha256: file.sha256, name: file.name, mime: file.mime, key: file.key },
+										page !== undefined
+											? { page }
+											: file.size > TEXT_FIRST_BYTES
+												? { pictures: false }
+												: {}
+									).pipe(Port.call('ingest', JOBS.ingestMs))
 							}),
 					// every inward agent reads the source (models, policies) for exact shapes; a public envoy's or external member's turn does not
 					workspace: external ? undefined : config.workspace,
@@ -1714,6 +1731,23 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 					tools = toolset.tools;
 				// the served sender's own unaddressed messages are in the context; other people's chatter is a line where it stood
 				const served = as !== null && 'envoy' in as ? as.envoy.sender : undefined;
+				// appended before this step's request, so it reaches the model now and nothing above it moves
+				const untold = hostSide
+					? toolsUntold(rows, conv, toolsListing(m.agent.tools ?? {}), toolsListing({}), served)
+					: undefined;
+				const told =
+					untold === undefined
+						? rows
+						: [
+								...rows,
+								yield* write({
+									conversation: id,
+									role: 'system',
+									content: { text: untold },
+									text: untold,
+									meta: { tag: 'tools' }
+								})
+							];
 				const note = state(
 					conv,
 					mode === 'plan' ? 'plan' : 'agent',
@@ -1729,7 +1763,7 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 						.join('\n')
 				);
 				// the note closes the context, before a reply cut at the wall that this step continues (rule 63)
-				const history = modelTranscript(rows, conv, served);
+				const history = modelTranscript(told, conv, served);
 				if (note !== undefined)
 					history.splice(history.at(-1)?.role === 'assistant' ? -1 : history.length, 0, {
 						role: 'user',
@@ -1738,13 +1772,6 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 				const request: Omit<AiRequest, 'tools'> = {
 					model: conv.model,
 					purpose: 'chat',
-					// reasoning is most of a step's time and cost, and DeepSeek spends the same at every level short of none: a
-					// step that only gathers goes without, and one that has seen the records decides, so it thinks
-					effort: rows.some(
-						(r) => r.role === 'tool' && r.turn === turn && DECIDES.has(r.content.name)
-					)
-						? 'medium'
-						: 'none',
 					system: system({
 						envoy: envoy === undefined ? undefined : envoyName(envoy.name),
 						brief,
@@ -1768,6 +1795,8 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 							}),
 					...(cut?.continuation === undefined ? {} : { continuation: cut.continuation })
 				};
+				// shown on this request alone: what a request carries at its end, no later prefix holds
+				files.length = 0;
 				steps++;
 				// the chat shows the assistant is on it while the model writes: a pending reply is silence the sender would read as being ignored
 				if (heard) {
@@ -2007,7 +2036,7 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 											} as Json
 										}
 									: yield* toolset.run(call.name, call.input, call.id);
-					// what the call opened stays in view for the rest of the turn, right after the call's result
+					// what the call opened goes right after the call's result, on the next request
 					for (const file of files) file.call ??= call.id;
 					previous =
 						tool?.pure !== true || ('result' in answer && failedResult(answer.result)) ? '' : key;
@@ -2323,17 +2352,6 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 		);
 	});
 	const attachments = (member: string, refs: readonly Json[]) => attachmentsFor(db, member, refs);
-	/** Parses an attached document while its person writes their words: `read_file` then finds it done. */
-	const readAhead = Effect.fn('Agents.readAhead')(function* (member: string, ref: Json) {
-		const [file] = yield* attachments(member, [ref]);
-		if (file === undefined || route(file.mime, file.name) !== 'convert') return;
-		yield* triageAttachments(
-			db,
-			{ ...config.media, logs },
-			[{ id: file.id, files: [file] }],
-			{ now: (yield* config.bindings).now, conversation: '' }
-		);
-	});
 	const api = {
 		start,
 		post,
@@ -2360,7 +2378,6 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 		conversation,
 		transcript,
 		attachments,
-		readAhead,
 		stop: Effect.fn('Agents.stop')(function* (id: string) {
 			yield* setConv(id, `status = 'stopped', lease_until = NULL`);
 			yield* cancelQueued(id);
@@ -2772,7 +2789,7 @@ export const AgentsLive = Layer.effectContext(
 			bindings,
 			announce: wake.at,
 			attachments: host.attachments ?? fileAttachments(db, files, images),
-			media: { files, images, convert },
+			media: { files, images },
 			geocoder: host.geocoder ?? geo
 		});
 		yield* turnHandlers.register('Agent', api.drain);

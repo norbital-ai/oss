@@ -16,6 +16,10 @@ import { Chain, KEY_REUSE, rate } from '../write/sql.ts';
 import { ATTACHMENT_MIME } from '../agent/ai.ts'; // hook:attachments
 import { acceptOf, parserFor, parsersOf } from '../files/parse.ts';
 
+/** The `Bolt-Stored` header: an upload's blob as the host stored it. */
+export const StoredUpload = /*#__PURE__*/ Schema.fromJsonString(
+	Schema.Struct({ key: Schema.String, bytes: Schema.Number, sha256: Schema.String })
+);
 type Upload = {
 	id: string;
 	model: string;
@@ -23,6 +27,8 @@ type Upload = {
 	name: string;
 	mime: string;
 	bytes: Uint8Array;
+	/** The host stored the body already, and `bytes` is empty: what it stored. */
+	stored?: typeof StoredUpload.Type;
 	authority: Authority;
 	now: string;
 	rate?: readonly RateCharge[];
@@ -35,12 +41,14 @@ const refuse = (code: Refused['code'], message: string): Refused => ({
 	message,
 	field: 'file'
 });
-const SIZE = { KiB: 1024, MiB: 1024 * 1024 } as const;
+const SIZE = { KiB: 1024, MiB: 1024 ** 2, GiB: 1024 ** 3 } as const;
 /** `'5MiB'` → bytes. */
 export const sizeBytes = (s: string): number => {
-	const m = /^(\d+)(KiB|MiB)$/.exec(s);
-	return m === null ? NaN : Number(m[1]) * (m[2] === 'KiB' ? SIZE.KiB : SIZE.MiB);
+	const m = /^(\d+)(KiB|MiB|GiB)$/.exec(s);
+	return m === null ? NaN : Number(m[1]) * SIZE[m[2] === 'KiB' ? 'KiB' : m[2] === 'MiB' ? 'MiB' : 'GiB'];
 };
+/** A file no field declares a cap for: what the object store holds. */
+const UNBOUNDED = '1024GiB';
 // `*/*` is any type, an empty or unknown one included (a browser sends '' for an extension it cannot name)
 const accepts = (patterns: readonly string[], mime: string) =>
 	patterns.some(
@@ -77,8 +85,9 @@ export const upload = Effect.fn('Callables.upload')(function* (u: Upload) {
 	const parsers = sync?.with === 'file' ? parsersOf(sync) : null;
 	const kind =
 		panel || parsers !== null
-			? { kind: 'file' as const, accept: [], max: '20MiB' }
+			? { kind: 'file' as const, accept: [], max: UNBOUNDED }
 			: manifest.models[u.model]?.fields[u.field];
+	const size = u.stored?.bytes ?? u.bytes.byteLength;
 	const allowed = panel
 		? u.authority.actor.kind === 'member'
 		: parsers !== null
@@ -93,7 +102,7 @@ export const upload = Effect.fn('Callables.upload')(function* (u: Upload) {
 		return refuse('invalidInput', 'An upload id is a client-minted uuid.');
 	if (
 		panel
-			? !ATTACHMENT_MIME.test(u.mime) || u.bytes.byteLength === 0
+			? !ATTACHMENT_MIME.test(u.mime) || size === 0
 			: parsers !== null
 				? parserFor(parsers, u.name, u.mime) === undefined
 				: !accepts(kind.accept, u.mime)
@@ -104,17 +113,20 @@ export const upload = Effect.fn('Callables.upload')(function* (u: Upload) {
 				? 'Attach a nonempty image, document, spreadsheet, slides, recording or text file.'
 				: `${u.field} accepts ${parsers !== null ? acceptOf(parsers) : kind.accept.join(', ')}.`
 		);
-	if (u.bytes.byteLength > Math.min(sizeBytes(kind.max), LIMITS.storedFileBytes))
+	// bytes the host stored never entered this cell, so only the field's own cap applies to them
+	if (size > (u.stored === undefined ? Math.min(sizeBytes(kind.max), LIMITS.storedFileBytes) : sizeBytes(kind.max)))
 		return refuse('invalidInput', `${u.field} holds at most ${kind.max}.`);
-	const sha256 = toHex(sha256Of(u.bytes));
-	const blob = yield* files
-		.put(u.bytes, { name: u.name, mime: u.mime })
-		.pipe(Effect.mapError((error) => BoltError.make('upload', 'facility', error.message, error)));
+	const blob =
+		u.stored ??
+		(yield* files
+			.put(u.bytes, { name: u.name, mime: u.mime })
+			.pipe(Effect.mapError((error) => BoltError.make('upload', 'facility', error.message, error))));
+	const sha256 = u.stored?.sha256 ?? toHex(sha256Of(u.bytes));
 	const c = new Chain();
 	c.cte(
 		'idem',
 		`INSERT INTO sys_file (id, name, mime, size, key, sha256, field, created_at, created_by)
-	VALUES (${c.p(u.id)}, ${c.p(u.name)}, ${c.p(u.mime)}, ${c.p(u.bytes.byteLength)}, ${c.p(blob.key)}, ${c.p(sha256)}, ${c.p(`${u.model}.${u.field}`)},
+	VALUES (${c.p(u.id)}, ${c.p(u.name)}, ${c.p(u.mime)}, ${c.p(size)}, ${c.p(blob.key)}, ${c.p(sha256)}, ${c.p(`${u.model}.${u.field}`)},
 		${c.p(u.now)}::timestamptz, ${c.p(u.authority.actor.kind === 'member' ? u.authority.actor.id : null)})
 	ON CONFLICT (id) DO NOTHING RETURNING id, name, mime, size, sha256`
 	);

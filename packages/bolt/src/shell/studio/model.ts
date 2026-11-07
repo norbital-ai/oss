@@ -4,6 +4,7 @@
 import { Schema, SchemaTransformation } from 'effect';
 import { STUDIO_PHASES, STUDIO_ROLES } from '../../protocol/schema.ts';
 import type { Authority } from '../../engine/contracts.ts';
+import type { Json } from '../../decl/values.ts';
 import type { MigrationImpact } from '../../protocol/migration-impact.ts';
 import type { EngineManifest } from '../../engine/manifest.ts';
 import type { CheckDiagnostic } from '../../protocol/diagnostic.ts';
@@ -105,7 +106,8 @@ export type StudioChangeSet = {
 	behind: number;
 	preview: StudioPreview | null;
 	merge?: {
-		state: 'scheduled' | 'running' | 'failed';
+		/** `queued` waits its turn: `at` is when it asked, and order among the queued is by `at`. */
+		state: 'scheduled' | 'queued' | 'running' | 'failed';
 		at: string;
 		head: string;
 		error?: string;
@@ -130,6 +132,16 @@ export type PreviewControl = {
 	conversation?: string;
 	at?: string;
 };
+/**
+ * The last run of this exact source's migrations on the author's own database: what each step did, or what refused,
+ * and each check as it read before and after. Live is never one of these: only a merge migrates live.
+ */
+export type StudioMigration = {
+	state: 'passed' | 'failed';
+	error?: string;
+	impact?: MigrationImpact;
+	checks?: readonly { sql: string; before: Json; after: Json }[];
+};
 export type StudioState = {
 	commit: string;
 	/** The commit holding the viewer's uncommitted edits; `files`, `changes` and `conflicts` read it. Absent: none. */
@@ -140,6 +152,7 @@ export type StudioState = {
 	tree?: string;
 	/** The latest test job for this exact tree; absent when it has not been tested. */
 	tests?: StudioTestRun;
+	migration?: StudioMigration;
 	/** The head commit's description (its message's first line). */
 	message?: string;
 	/** The live workspace's IANA timezone. */
@@ -236,6 +249,7 @@ export const StudioOp = Schema.Union([
 	Schema.Struct({ op: Schema.Literal('test') }),
 	/** The next migration for the working tree's schema, written into that working tree. */
 	Schema.Struct({ op: Schema.Literal('generate') }),
+	Schema.Struct({ op: Schema.Literal('migrate'), checks: Schema.optionalKey(Schema.Array(nonempty)) }),
 	Schema.Struct({
 		op: Schema.Literal('preview'),
 		/** The explicit change; absent uses the viewer's selected change. */
@@ -314,12 +328,35 @@ export type StudioFrame =
 	| { kind: 'source'; commit: string }
 	| { kind: 'change'; id: string }
 	| { kind: 'phase'; phase: StudioPhase; state: PhaseState };
+/** A commit as `StudioPort.log` answers it: its id, who made it, when, and its message's first line. */
+export type StudioCommit = { commit: string; author: string; at: string; message: string };
+/** A changed file between two points: its kind and its lines added and removed (`null`: not text). */
+export type StudioDiffFile = {
+	path: string;
+	change: 'added' | 'modified' | 'deleted';
+	added: number | null;
+	removed: number | null;
+};
 /** Called for an administrator; the host decides what each may do, a refusal is a thrown `BoltError`. */
 export type StudioPort = {
 	state(auth: Authority): Promise<StudioState>;
 	run(auth: Authority, op: StudioOp): Promise<StudioState>;
 	/** One file at a commit (`StudioState.commit`, or a change's base); `null`: no such file there. */
 	file(auth: Authority, commit: string, path: string): Promise<StudioFile | null>;
+	/** Commits newest first: live's lineage and the commit live runs, or the viewer's line beyond live. */
+	log?(
+		auth: Authority,
+		of: 'live' | 'yours',
+		limit: number
+	): Promise<{ live: string; commits: readonly StudioCommit[] }>;
+	/**
+	 * What changed from `from` to `to`, each a commit id or `live`, `head` or `working`; `path`, a file or folder, narrows
+	 * it and adds its patch.
+	 */
+	diff?(
+		auth: Authority,
+		input: { from: string; to: string; path?: string }
+	): Promise<{ from: string; to: string; files: readonly StudioDiffFile[]; patch?: string }>;
 	/** One build's stored log and diagnostics by its commit (a unique prefix); `null`: no such build is retained. */
 	build?(auth: Authority, commit: string): Promise<StudioBuildRecord | null>;
 	/** This workspace's frames as they happen, never another's; answers the unsubscribe. Absent → no live stream. */

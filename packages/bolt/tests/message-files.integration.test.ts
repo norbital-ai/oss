@@ -99,7 +99,7 @@ it.live(
 			if (message === undefined) throw new Error('model context message missing');
 			const content = String(message.content);
 			expect(content).toContain(
-				`[attachment: form.pdf · application/pdf · ${pdf.byteLength} bytes] file reference ${JSON.stringify({ id, name: 'form.pdf', mime: 'application/pdf' })}`
+				`[attachment: form.pdf · application/pdf · ${pdf.byteLength} bytes] read_file id ${id.slice(0, 8)}; file reference ${JSON.stringify({ id, name: 'form.pdf', mime: 'application/pdf' })}`
 			);
 			expect(content).toContain(`[attachment: site.mp4 · video/mp4 · 9 bytes] not received`);
 		})

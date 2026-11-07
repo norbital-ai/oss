@@ -1,6 +1,7 @@
 // The tenant database as a service (W2.E1) over node-postgres fakes: one connection per call under the database wall,
 // destroyed (never returned) when the call is interrupted or rollback fails; a SQL batch rolls back on failure and,
 // interrupted, leaves the rollback to the server; typed reads refuse a malformed row naming its table.
+import { EventEmitter } from 'node:events';
 import { describe, expect, expectTypeOf, it } from '@effect/vitest';
 import { Effect, Exit, Fiber, Option, Schema } from 'effect';
 import { TestClock } from 'effect/testing';
@@ -86,6 +87,17 @@ describe('PostgresDb', () => {
 				message: 'duplicate key'
 			});
 			expect(f.released).toEqual([false]);
+		})
+	);
+
+	it.live('a connection dropped under a checkout fails its call, never the process', () =>
+		Effect.gen(function* () {
+			const events = new EventEmitter();
+			const f = fake(() => Promise.resolve(EMPTY));
+			const client = yield* Effect.promise(() => f.pool.connect());
+			client.on = (event, listener) => events.on(event, listener);
+			yield* PostgresDb.make(f.pool).read([statement]);
+			expect(() => events.emit('error', new Error('Connection terminated'))).not.toThrow();
 		})
 	);
 

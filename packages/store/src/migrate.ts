@@ -99,6 +99,7 @@ export function migrationGuard(
 }
 
 export const checksumOf = (file: MigrationFile): string => sha256Hex(file.sql);
+const STEP_CLASSES = ['additive', 'rename', 'backfill', 'validating', 'destructive', 'data'];
 const NAME = /^(\d{4})_([a-z0-9_]+)\.sql$/;
 const number = (name: string): number => Number(NAME.exec(name)?.[1] ?? Number.NaN);
 const decodeSnapshot = /*#__PURE__*/ (() =>
@@ -393,14 +394,10 @@ export const checkFile = /*#__PURE__*/ (() =>
 			);
 		const blocks = blocksOf(file);
 		for (const block of blocks)
-			if (
-				!['additive', 'rename', 'backfill', 'validating', 'destructive', 'data'].includes(
-					block.klass
-				)
-			)
+			if (!STEP_CLASSES.includes(block.klass))
 				return yield* refuse(
 					'migrationInvalid',
-					`${file.name}: unknown step class '${block.klass}'`
+					`${file.name}: unknown step class '${block.klass}': it is one of ${STEP_CLASSES.join(', ')}`
 				);
 		for (const check of checksOf(file.sql))
 			if (!['select', 'with'].includes(sqlTokens(check.query)[0]?.text ?? ''))
@@ -940,7 +937,7 @@ export const verify = /*#__PURE__*/ (() =>
 			return yield* refuse(
 				'migrationInvalid',
 				[
-					'the migrations do not arrive at the schema:',
+					'the migrations do not arrive at the schema the models declare; an edit may move data, never the schema:',
 					...missing.map((l) => `  missing ${l}`),
 					...extra.map((l) => `  extra   ${l}`)
 				].join('\n')

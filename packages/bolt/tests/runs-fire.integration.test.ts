@@ -2,7 +2,7 @@
 // A fired run writes its `sys_run` row only with its first effect, so a run that only reads leaves nothing behind.
 import { randomUUID } from 'node:crypto';
 import { expect, layer } from '@effect/vitest';
-import { Effect, Layer } from 'effect';
+import { Cause, Effect, Exit, Layer } from 'effect';
 import { FacilityFailure } from '../src/decl/errors.ts';
 import type { Json } from '../src/decl/values.ts';
 import type { EngineManifest } from '../src/engine/manifest.ts';
@@ -400,6 +400,17 @@ layer(Fixture, { excludeTestServices: true })('crons on the host clock', (it) =>
 			yield* t.runDue();
 			const [after] = yield* sql(ticks);
 			expect(Number(after?.['n'])).toBe(Number(before?.['n']) + 1);
+		})
+	);
+
+	it.effect("the kit's clock set back to a slot that wrote says so, rather than run nothing", () =>
+		Effect.gen(function* () {
+			const { t } = yield* setup;
+			t.clock.set('2026-09-25T10:45:00.000Z');
+			const exit = yield* Effect.exit(t.runDue());
+			expect(Cause.pretty(Exit.isFailure(exit) ? exit.cause : Cause.empty)).toContain(
+				'tidy at 2026-09-25T10:45:00.000Z already ran'
+			);
 		})
 	);
 });

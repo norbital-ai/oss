@@ -9,17 +9,17 @@ export const PLATFORM_SKILLS: { readonly [name: string]: SkillSpec } = {
 	records: skill(`---
 description: Protocol for reading and writing a workspace's records.
 ---
-1. Know: describe_workspace { names } gives every model the task touches, in one call, unless the conversation shows them.
-2. Read: one request with every root; narrow by where, never by paging. Pick rows by their relations with is/some/none/every/count. Count, total and group with aggregate. A value may be a { var } over requestor, today, now.
+1. Know: describe_workspace { names } gives every model the task touches, in one call, before any read of them, unless the conversation shows them.
+2. Read: one request with every root; narrow by where, never by paging. Pick rows by their relations with is/some/none/every/count. Every read answers total, its match count, beside its rows; aggregate is for sums, averages and groups, and answers measures instead of rows. A value may be a { var } over requestor, today, now.
 3. Resolve: each referenced record by one exact read. Missing and stated in the source: create it nested if the write allows, else ask. A word search is ranking, not proof of identity or a category count.
 4. Write: one act, the whole change as a batch, related rows inside their root. A computed or large batch is a JSON file run_js returned, given as inputFile.
-5. Report from the answer: a committed write returns its stored rows; a held write awaits its approvers, say so; a refused one names why, say that. An empty read earns one different read, then a question.
+5. Report from the answer, with no read after it: a committed write returns its stored rows; a held write awaits its approvers, say so; a refused one names why, say that. An empty read earns one different read, then a question.
 `),
 	ingest: skill(`---
 description: Protocol for taking in documents, scans, photos, handwriting, sheets or messages, whether or not they touch records.
 ---
 1. Decide what was asked. Reading, summarising or checking material writes nothing. Filing or acting on it follows steps 5 to 7. Matching against records happens only when the task, or the workspace's own paperwork skill, calls for it; a read-only task may cross-reference to raise confidence and says so.
-2. Read everything once: every file, page and sheet. read_file { id } answers lines and shows page images; a scan's lines are its transcript.
+2. Read everything once: every file, page and sheet. read_file { id } answers lines and shows page images; a scan's lines are its transcript. A format read_file has no parser for gets a tool of your own, never a decoder written by hand in run_js.
 3. Read images by eye, value by value. Crossings-out, corrections and margin notes are data: report what stands and what was struck. Prove every table: qty × price = amount, amounts = subtotal, subtotal + tax = total; a sum that fails means a misread digit, so zoom that row. Anything unclear: one read_file with crops listing every such region together. Still unclear: name the field and give your best reading marked uncertain, never a confident guess.
 4. Comparing documents: line by line, every field, and report each difference with both values and its amount.
 5. Map: every target column to a source value, kinds and required columns from describe_workspace. Trace each value to where it was read; check numbers, units and dates against the original.
@@ -38,7 +38,7 @@ description: Protocol for web research, scraping and downloading.
 	analysis: skill(`---
 description: Protocol for analysing data and producing charts and reports.
 ---
-1. A count, total, average or group is one read with aggregate. Read rows only for what aggregate cannot give.
+1. A count is a read's total. A sum, average or group is one read with aggregate. Read rows only for what those cannot give.
 2. Anything further is run_js over the read's rows; verify its totals against an aggregate.
 3. A chart is an SVG file run_js returns. A report is document, with numbers as tables and charts inline.
 4. State what the numbers show in a sentence or two.

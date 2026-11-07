@@ -318,7 +318,9 @@ export const host = Effect.fn('server.host')(function* (
 					ingest: documentIngester({ url: converter.endpoint, key: converter.credential }).ingest,
 					convert: {
 						targets: documents.targets,
-						convert: (source, to, o, signal) => run(documents.convert(source, to, o), { signal })
+						convert: (source, to, o, signal) => run(documents.convert(source, to, o), { signal }),
+						previewPdf: (source, options, signal) =>
+							run(documents.previewPdf(source, options), { signal })
 					}
 				}),
 		...(geo === undefined
@@ -335,9 +337,7 @@ export const host = Effect.fn('server.host')(function* (
 		...(search?.endpoint === undefined || search.credential === undefined
 			? {}
 			: {
-					hostTools: [
-						webSearch({ endpoint: search.endpoint, credential: search.credential })
-					]
+					hostTools: [webSearch({ endpoint: search.endpoint, credential: search.credential })]
 				}),
 		shell: {
 			...(config.environment === null ? {} : { environment: config.environment }),

@@ -20,6 +20,8 @@ import {
 	system
 } from '../src/engine/agent/context.ts';
 import { listed, type MessageRow } from '../src/engine/agent/schema.ts';
+import { toolsUntold } from '../src/engine/agent/context.ts';
+import { toolsListing } from '../src/engine/agent/tools.ts';
 import { preview } from '../src/engine/conversations/store.ts';
 import { respondSystem1 } from '../../bolt-cli/src/test/effect.ts';
 import { clockProbe } from './support/clock-probe.ts';
@@ -50,6 +52,44 @@ const row = (
 	...over
 });
 type Step = Ai['Service']['infer'];
+describe('the tools a conversation is told of', () => {
+	const none = toolsListing({}),
+		one = toolsListing({ plans: { description: 'Reads a plan.', input: { sheet: { kind: 'text' } } } }),
+		two = toolsListing({
+			plans: { description: 'Reads a plan.' },
+			pcn: { description: 'Reads a notice.' }
+		});
+	const told = (seq: number, text: string) =>
+		row(seq, { role: 'system', text, content: { text }, meta: { tag: 'tools' } });
+	const conv = { plan: null };
+	it('lists them with their input, and a workspace with none says nothing', () => {
+		expect(one).toContain('- plans(sheet: text): Reads a plan.');
+		expect(toolsUntold([row(1)], conv, none, none)).toBeUndefined();
+	});
+	it('appends on the first step, and once', () => {
+		expect(toolsUntold([row(1)], conv, one, none)).toBe(one);
+		expect(toolsUntold([row(1), told(2, one)], conv, one, none)).toBeUndefined();
+	});
+	it('appends again after a merge changed them, and when the last one goes', () => {
+		expect(toolsUntold([row(1), told(2, one)], conv, two, none)).toBe(two);
+		expect(toolsUntold([row(1), told(2, one)], conv, none, none)).toBe(none);
+	});
+	it('appends again after a compaction dropped the listing, as on a first step', () => {
+		const compacted = [
+			row(1),
+			told(2, one),
+			row(3, {
+				role: 'system',
+				text: 'summary',
+				content: { text: 'summary' },
+				meta: { tag: 'compact', cutoff: 2, keep: [] }
+			})
+		];
+		expect(toolsUntold(compacted, conv, one, none)).toBe(one);
+		expect(toolsUntold([...compacted, told(4, one)], conv, one, none)).toBeUndefined();
+	});
+});
+
 describe('a page step', () => {
 	const step = (result: Json): MessageRow => ({
 		...row(2),

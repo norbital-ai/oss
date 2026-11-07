@@ -16,6 +16,7 @@ import {
 	AuthorErrors,
 	authorErrors,
 	buildWorkspace,
+	generateMigrations,
 	ToolFailure,
 	watchWorkspace,
 	type Built,
@@ -124,15 +125,23 @@ const buildCommand = Command.make(
 			Flag.withDescription(
 				'a directory `bolt platform` wrote: its layer is read, and its files are left for the host to add to the bundle'
 			)
+		),
+		migrations: Flag.Boolean('migrations').pipe(
+			Flag.withDefault(false),
+			Flag.withDescription('compile only: write the next migration and prove the history')
 		)
 	},
-	({ dir, json, squash, platform }) =>
+	({ dir, json, squash, platform, migrations }) =>
 		Effect.gen(function* () {
-			yield* buildWorkspace(resolve(dir), {
-				...(Option.isNone(squash) ? {} : { squash: squash.value }),
-				...(Option.isNone(platform) ? {} : { platform: platform.value }),
-				log
-			}).pipe(Effect.catchTag('AuthorErrors', reported(json)));
+			yield* (
+				migrations
+					? generateMigrations(resolve(dir))
+					: buildWorkspace(resolve(dir), {
+							...(Option.isNone(squash) ? {} : { squash: squash.value }),
+							...(Option.isNone(platform) ? {} : { platform: platform.value }),
+							log
+						})
+			).pipe(Effect.catchTag('AuthorErrors', reported(json)));
 		})
 );
 /** Settles once `env link` writes `.norbital/overlay.stamp`: the installed first-party packages changed. */
@@ -265,7 +274,10 @@ export const main = (argv: readonly string[]) =>
 	).pipe(
 		Effect.as(0),
 		Effect.catchTag('AuthorErrors', (error) => failed(error).pipe(Effect.as(1))),
-		Effect.catch((error) => Console.error(error).pipe(Effect.as(2)))
+		// its words: a host reads this line as the failure's reason
+		Effect.catch((error) =>
+			Console.error('message' in error ? error.message : error).pipe(Effect.as(2))
+		)
 	);
 if (
 	process.argv[1] !== undefined &&

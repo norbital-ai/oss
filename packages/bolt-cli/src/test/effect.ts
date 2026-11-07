@@ -275,6 +275,13 @@ export interface Caller {
 		): Effect.Effect<void, ActFailure>;
 	};
 }
+const FailedRun = Schema.Struct({
+	id: Schema.String,
+	automation: Schema.String,
+	error: Schema.NullOr(Schema.String)
+});
+/** A run that failed, as `runDue` answers it. */
+export type FailedRun = typeof FailedRun.Type;
 /** `runDue` passes before it dies: a chain longer than this is a run requeueing itself at the same instant. */
 const DRAIN_PASSES = 32;
 /** Invalid test configuration, fixture input or compiler setup; these failures cannot be mistaken for a business refusal. */
@@ -436,10 +443,14 @@ export type Kit = {
 	as(who: Holder | Authority): Caller;
 	visitor(app: string, options?: { readonly ip?: string }): Caller;
 	signIn(address: string): Effect.Effect<Authority, KitFailure>;
-	/** Fires crons due at the clock and drains every run due at it, chained runs included; dies if work stays due. */
-	runDue(): Effect.Effect<void, EngineError>;
+	/**
+	 * Fires crons due at the clock and drains every run due at it, chained runs included; dies if work stays due. Answers
+	 * the runs that failed in this call, each with its own error.
+	 */
+	runDue(): Effect.Effect<{ readonly failed: readonly FailedRun[] }, EngineError>;
 	/** The host dies as `runId` ends, before its end is recorded; the next boot requeues it to rerun from the start. */
 	crash(runId: string): Effect.Effect<void, KitFailure>;
+	/** Waits for background work to go quiet. It runs nothing queued: `runDue` runs model effects and started automations. */
 	settled(): Effect.Effect<void>;
 	receive(
 		instance: string,
@@ -1288,6 +1299,7 @@ export class TestWorkspace extends Context.Service<TestWorkspace, Kit>()(
 				let now = options.now ?? '2026-09-25T10:00:00.000Z';
 				// the host's cron clock, stepped by `runDue`: a slot at or before this instant has had its turn
 				let cronsThrough = Date.parse(now);
+				const ranSlots = new Set<string>();
 				const liveClock = Context.get(Context.empty(), Clock.Clock);
 				// engine sleeps (debounce, wake and refresh timers) wait on this virtual time: `set`/`advance` wakes them, never the wall clock
 				const sleepers = new Set<{ readonly at: number; readonly wake: () => void }>();
@@ -1295,6 +1307,10 @@ export class TestWorkspace extends Context.Service<TestWorkspace, Kit>()(
 				// a step made due (a debounce timer, a heartbeat) finishes before the host's own due work looks at the rows
 				const woken = new Set<Fiber.Fiber<unknown, unknown>>(),
 					observed = new WeakSet<Fiber.Fiber<unknown, unknown>>();
+				const failedRuns = inner.rows(FailedRun, {
+					text: `SELECT id::text AS id, automation, error->>'message' AS error FROM sys_run WHERE state = 'failed'`,
+					params: []
+				});
 				const quiet = Effect.promise(async () => {
 					while (woken.size > 0) await new Promise<void>((resolve) => setImmediate(resolve));
 				});
@@ -2080,6 +2096,8 @@ export class TestWorkspace extends Context.Service<TestWorkspace, Kit>()(
 						now: () => now,
 						set: (value) => {
 							now = new Date(value).toISOString();
+							// back in time the crons have those slots still ahead of them: a file's tests share one workspace
+							cronsThrough = Math.min(cronsThrough, Date.parse(now) - 1);
 							wakeDue();
 						},
 						advance: (value) => {
@@ -2119,6 +2137,7 @@ export class TestWorkspace extends Context.Service<TestWorkspace, Kit>()(
 					runDue: () =>
 						Effect.gen(function* () {
 							yield* quiet;
+							const failedBefore = new Set((yield* failedRuns).map((run) => run.id));
 							const at = Date.parse(now);
 							for (const entry of yield* runs.crons) {
 								const cron = yield* Effect.orDie(
@@ -2127,7 +2146,16 @@ export class TestWorkspace extends Context.Service<TestWorkspace, Kit>()(
 								// the latest slot since the last step, once; slots skipped meanwhile are not replayed. `prev` is
 								// strict at whole seconds (as the host's clock): one second past finds a slot at `at` itself
 								const slot = Cron.prev(cron, at + 1000);
-								if (slot.getTime() > cronsThrough) yield* runs.fire(entry.id, slot.toISOString());
+								if (slot.getTime() <= cronsThrough) continue;
+								const key = `${entry.id} at ${slot.toISOString()}`;
+								// a slot runs once, as on a host: a repeat would run and write nothing, without a word
+								if (ranSlots.has(key))
+									return yield* Effect.die(
+										new KitInvalid({
+											message: `runDue: ${key} already ran in this file, whose tests share one workspace: start this test's clock past it`
+										})
+									);
+								if ((yield* runs.fire(entry.id, slot.toISOString())).ran) ranSlots.add(key);
 							}
 							cronsThrough = at;
 							// chained work a run makes due at this instant runs in the same call: drain until nothing is due
@@ -2144,7 +2172,10 @@ export class TestWorkspace extends Context.Service<TestWorkspace, Kit>()(
 										}
 									])
 								);
-								if ((due?.rows.length ?? 0) === 0) return;
+								if ((due?.rows.length ?? 0) === 0)
+									return {
+										failed: (yield* failedRuns).filter((run) => !failedBefore.has(run.id))
+									};
 								if (pass === DRAIN_PASSES)
 									return yield* Effect.die(
 										new KitInvalid({

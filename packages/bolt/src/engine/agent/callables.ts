@@ -128,18 +128,6 @@ export const agentCallables = Effect.gen(function* () {
 				return committed({ id: yield* agents.start({ owner: who, ...input }) });
 			})
 		),
-		'sys_message.readAhead': entry(
-			Schema.Struct({ attachment: Schema.Json }),
-			Effect.fn('Agents.readAheadCallable')(function* (input, authority) {
-				const who = member(authority);
-				if (who === null)
-					return yield* Effect.fail(
-						BoltError.make('forbidden', 'admission', 'The assistant is not available to you here.')
-					);
-				yield* agents.readAhead(who, input.attachment);
-				return committed(null);
-			})
-		),
 		'sys_message.post': entry(
 			Post,
 			Effect.fn('Agents.postCallable')(function* (input, authority) {

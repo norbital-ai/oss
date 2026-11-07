@@ -11,7 +11,7 @@ A `+` file is a compiler role, default-exporting its declaration; its path is it
 
 - `+workspace.ts` `workspace(spec)`: zone, locale, currency, apps, AI, connections
 - `+secrets.ts` `secrets(spec)`: secret names
-- `data/model/<name>/+model.ts` `model(name, spec)`: fields, reads, writes, state, search, syncs. Folders nest; the leaf names it. `+representation.svelte` beside it: record view
+- `data/model/<name>/+model.ts` `model(name, spec)`: fields, reads, writes, state, search, syncs, `effect` (work after a committed write). Folders nest; the leaf names it. `+representation.svelte` beside it: record view
 - `data/custom_field/<name>/+definition.ts` `customField(name, spec)`, `+renderer.svelte`: value type
 - `access_control/policy/+<name>.policy.ts` `policy(spec)`: what holders may do
 - `access_control/team/+team.ts` `team(spec)`: team handles to policies
@@ -22,29 +22,30 @@ A `+` file is a compiler role, default-exporting its declaration; its path is it
 - `kiosk/<k>/+kiosk.ts` `kiosk(name, spec)`: standalone surface, its own pages
 - `agent/+agent.md`, `agent/skill/<s>/+skill.md`: brief, skill
 - `agent/envoy/+<id>.envoy.ts` `envoy(spec)`; `agent/mcp/+<n>.mcp.ts` `mcp(spec)`
+- `agent/tool/<t>/+tool.ts` `tool(spec)` with `run.ts`: a tool `run_tool` runs
 - `i18n/+messages.ts` `messages(spec)`, `+<locale>.messages.ts`
 
 Beside `src/`: `seed/+seeder.ts` `seeder(spec)`; rows `seed/public/**/<model>.json`, `seed/test/**/<model>.json`; `tests/*.test.ts`; `assets/`.
 
 ## Contracts
 
-`bolt-contract` is the API authority: `skill { name: 'bolt-contract', file: 'model.md' }`, one generated card per role (model, access, automation, sync, page, test). Read a role's card once, before writing that role.
+`bolt-contract` is the API authority: `skill { name: 'bolt-contract', file: 'model.md' }`, one generated card per role (model, access, automation, tool, sync, page, test). Read a role's card once, before writing that role.
 
 `workspace_lang` answers only what a card leaves out:
 
 - A type: `{ op:'type', type:["import('@norbital-ai/ui').TableProps"] }`, several at once. `import('pkg').X` works only for exported types; a value is `typeof import('pkg').x`. Packages: bolt, ui, std, bolt-cli.
 - A function's spec: `Parameters<typeof import('pkg').fn>[1]`; `[1]` for `(name, spec)`, `[0]` for `(spec)`. Narrow with `X['field']`.
-- `completions`, `hover`, `signature` need path, line, column, in your working tree: an edit commits nothing, so a probe is a file.
+- `type` answers any shape with no file. `completions`, `hover`, `signature` need path, line, column of a file you are writing: a file written only to ask is a wasted edit.
 - Live names: `describe_workspace`, `workspace_list`.
 
 ## Protocol
 
 1. Author in order: model, access, automation or sync, page, tests. Add a page only for a task the model's table and record sheet do not cover.
-2. Edit with `workspace_write`, `workspace_edit` and `workspace_move`, one file a call. Edits stay in your working tree. After a schema change `workspace_generate` writes the generated migrations into the working tree; a diagnosis fails until they exist.
-3. `workspace_commit` with a message, in any state; new commits join your line on top of live. If live moved, `workspace_rebase` replays them on top of it, migrations too: a merge never does, and reverting to redo work never helps.
-4. `workspace_diagnose` runs the diagnosis on the working tree. `workspace_test` runs the tests in the background: keep working, and the result reaches you as a system message at your next step, or collect it with `wait`. Both run by hand. Fix what they name. Tests `empty` proves nothing: every automation and refused state carries a test.
+2. Edit with `workspace_write`, `workspace_edit` and `workspace_move`, one file a call. Edits stay in your working tree. After a schema change `workspace_generate` writes the generated migrations into the working tree; a diagnosis fails until they exist. `workspace_migrate` runs them on your own workspace's database, with SQL reads before and after, so you see what they do to real rows. Only a merge migrates live.
+3. `workspace_commit` with a message, in any state; new commits join your line on top of live. If live moved, `workspace_rebase` replays them on top of it, migrations too, so you test against it now; otherwise the merge queue replays them. Reverting to redo work never helps.
+4. `workspace_diagnose` runs the diagnosis on the working tree. `workspace_test` runs the tests; a long run goes on in the background and reports by itself. Both run by hand. Fix what they name. Tests `empty` proves nothing: every automation and refused state carries a test.
 5. `workspace_preview` builds the last commit, serves it and opens every page. `workspace_try` runs each automation once on the preview and reads what it changed. A preview binds no integration links: a sync's decoding is proved in a test. After the merge, create its connection on live with `sys_integration.create { integration, name }`, start it, and read the rows.
-6. `workspace_merge` with the last commit, a summary and a ledger line per capability: what implements it, or `skip: reason`. It needs no uncommitted edits, commits on top of live, a passed diagnosis and passed tests on that commit, and its preview; it runs neither.
+6. `workspace_merge` with the last commit, a summary and a ledger saying for each capability what implements it, or `skip: reason`. It needs no uncommitted edits and a preview of that commit, and is refused over a known failed diagnosis or failed tests. Merges land one at a time: the queue replays your commits on live as it stands, runs any diagnosis or tests that head lacks, and checks again if the replay changed anything, so you never rebase first.
 
 ## Rules
 
@@ -55,7 +56,7 @@ Beside `src/`: `seed/+seeder.ts` `seeder(spec)`; rows `seed/public/**/<model>.js
 - Decimals in policy and model code use `dec` values from the decimal module, never plain numbers.
 - Model key options (`key`, `unique` fields, `noOverlap` key) take arrays.
 - `seed/test/assets.json` and `seed/public/assets.json` are the reserved asset list: never name seed rows that, even for a model called assets.
-- Migrations are generated by the build: never hand-write one. Never edit `.norbital/`.
+- Migrations are generated. Edit one only to move data: the schema must arrive at what the models declare. Never edit `.norbital/`.
 - Credentials never enter source, seeds or model fields.
 - Never rebuild search, filters, paging, import/export, approvals, history or label maps: the views render them.
 

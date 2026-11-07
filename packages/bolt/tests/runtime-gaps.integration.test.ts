@@ -196,7 +196,7 @@ layer(workspace, { excludeTestServices: true })('runtime gaps', (it) => {
 			'a running run stops at its next crossing and stays stopped; a stop recorded elsewhere is seen at its next progress',
 			() =>
 				Effect.gen(function* () {
-					let stop: ReturnType<Kit['runDue']> = Effect.void;
+					let stop: ReturnType<Kit['runDue']> = Effect.succeed({ failed: [] });
 					const web: WebRead['Service']['read'] = () =>
 						stop.pipe(
 							Effect.mapError(Port.failure('web')),
@@ -204,7 +204,7 @@ layer(workspace, { excludeTestServices: true })('runtime gaps', (it) => {
 						);
 					const { t, runs, start } = yield* setup(web);
 					const id = randomUUID();
-					stop = runs.stop(t.as(t.admin).authority, id).pipe(Effect.asVoid);
+					stop = runs.stop(t.as(t.admin).authority, id).pipe(Effect.as({ failed: [] }));
 					yield* start('long', { title: 'never' }, id);
 					yield* t.runDue();
 					expect(
@@ -216,7 +216,7 @@ layer(workspace, { excludeTestServices: true })('runtime gaps', (it) => {
 					const other = randomUUID();
 					stop = t.db
 						.write({ text: `UPDATE sys_run SET state = 'stopped' WHERE id = $1`, params: [other] })
-						.pipe(Effect.asVoid);
+						.pipe(Effect.as({ failed: [] }));
 					yield* start('long', { title: 'progress' }, other);
 					yield* t.runDue();
 					expect(yield* sql(t, `SELECT state FROM sys_run WHERE id = $1`, [other])).toEqual([

@@ -48,6 +48,20 @@ const last = (r: PgResult | PgResult[]): PgResult =>
 	Array.isArray(r) ? (r[r.length - 1] ?? NONE) : r;
 const rowsOf = (r: PgResult): Rows => ({ rows: r.rows, affected: r.rowCount ?? r.rows.length });
 
+const listened = new WeakSet<PgClient>();
+/**
+ * pg-pool listens to a client only while it idles: a connection dropped under a checkout would be an uncaught 'error',
+ * stopping the host and every workspace on it. The call in flight already fails with it. A session hears its own.
+ */
+const checkout = async (pool: PgPool) => {
+	const client = await pool.connect();
+	if (!listened.has(client)) {
+		listened.add(client);
+		client.on?.('error', () => undefined);
+	}
+	return client;
+};
+
 /** The adapter's calls over `pool`; its statement names live as long as it does. */
 function raw(pool: PgPool): RawDb {
 	const names = new Map<string, string>();
@@ -68,7 +82,7 @@ function raw(pool: PgPool): RawDb {
 	/** Interruptible pool acquisition disposes a connection even if the pool answers after cancellation. */
 	const acquire = Effect.tryPromise({
 		try: async (signal) => {
-			const client = await pool.connect();
+			const client = await checkout(pool);
 			if (signal.aborted) {
 				client.release(true);
 				throw cancelled();

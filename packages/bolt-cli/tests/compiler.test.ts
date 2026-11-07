@@ -227,6 +227,34 @@ describe('next compiler: discover', () => {
 				}
 			}).pipe(Effect.provide(NodeServices.layer))
 	);
+	it.live('a tool is its +tool.ts and the run.ts beside it', () =>
+		Effect.gen(function* () {
+			const root = yield* scratchPath(`compiler-tool-${randomUUID()}`);
+			const write = (path: string, text: string) => {
+				mkdirSync(dirname(join(root, path)), { recursive: true });
+				writeFileSync(join(root, path), text);
+			};
+			try {
+				write('src/+workspace.ts', "export default { tz: 'UTC', locale: 'en' };");
+				write(
+					'src/agent/tool/plans/+tool.ts',
+					"export default { description: 'Reads a plan.', input: { sheet: { kind: 'text', optional: true } } };"
+				);
+				expect((yield* discover(root)).errors.map((error) => error.code)).toEqual([
+					'discover/tool-entry'
+				]);
+				write('src/agent/tool/plans/run.ts', 'export default () => null;');
+				const { files, errors } = yield* discover(root);
+				expect(errors).toEqual([]);
+				const loaded = yield* load(root, files);
+				expect(engineManifest(loaded.manifest).agent.tools).toEqual({
+					plans: { description: 'Reads a plan.', input: { sheet: { kind: 'text', optional: true } } }
+				});
+			} finally {
+				rmSync(root, { recursive: true, force: true });
+			}
+		}).pipe(Effect.provide(NodeServices.layer))
+	);
 	it.live('names every role from its path', () =>
 		Effect.gen(function* () {
 			const { files, errors } = yield* discover(fixture('good'));

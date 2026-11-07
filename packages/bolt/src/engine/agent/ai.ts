@@ -58,9 +58,8 @@ import { compile, context, evaluate } from '@norbital-ai/std/formula';
 
 /** Rule 72: a platform budget checked before the provider's own limit. */
 export const MODEL_FILES = { count: 24, bytes: 20 * 1024 * 1024 } as const;
-/** What a message may carry (envoy and panel alike): images, text, recordings and the documents `read_file` reads; 8 files / 20 MiB a message. */
-export const ATTACHMENT_MIME =
-	/^(image\/[\w.+-]+|text\/[\w.+-]+|audio\/[\w.+-]+|application\/(pdf|json|rtf|msword|vnd\.ms-(?:excel|powerpoint)|(?:[\w.-]+\+)?xml|vnd\.openxmlformats-officedocument\.(?:wordprocessingml\.document|spreadsheetml\.sheet|presentationml\.presentation)|vnd\.oasis\.opendocument\.(?:text|spreadsheet|presentation)))$/;
+/** What a message may carry (envoy and panel alike): images, text, recordings and any document, parsed or read by a tool; 8 files / 20 MiB a message. */
+export const ATTACHMENT_MIME = /^(image|text|audio|application)\/[\w.+-]+$/;
 class ModelIdle extends FacilityFailure {
 	declare readonly cutTool?: true;
 	constructor(message: string, cutTool?: true) {
@@ -329,6 +328,7 @@ const Finish = Schema.Struct({
 	continuation: Schema.optionalKey(Schema.String),
 	cost: Schema.optionalKey(Schema.Number),
 	call: Schema.optionalKey(Schema.String),
+	provider: Schema.optionalKey(Schema.String),
 	cached: Schema.optionalKey(Schema.Number),
 	reasoning: Schema.optionalKey(Schema.Number),
 	prompt: Schema.optionalKey(
@@ -356,6 +356,7 @@ const replyParts = (r: AiResponse): Response.PartEncoded[] => [
 				...(r.continuation === undefined ? {} : { continuation: r.continuation }),
 				...(r.usage.cost === undefined ? {} : { cost: r.usage.cost }),
 				...(r.usage.call === undefined ? {} : { call: r.usage.call }),
+				...(r.usage.provider === undefined ? {} : { provider: r.usage.provider }),
 				...(r.usage.cached === undefined ? {} : { cached: r.usage.cached }),
 				...(r.usage.reasoning === undefined ? {} : { reasoning: r.usage.reasoning }),
 				...(r.usage.prompt === undefined ? {} : { prompt: r.usage.prompt })
@@ -397,6 +398,7 @@ const portReply = (
 			output: response.usage.outputTokens.total ?? 0,
 			...(finish.cost === undefined ? {} : { cost: finish.cost }),
 			...(finish.call === undefined ? {} : { call: finish.call }),
+			...(finish.provider === undefined ? {} : { provider: finish.provider }),
 			...(finish.cached === undefined ? {} : { cached: finish.cached }),
 			...(finish.reasoning === undefined ? {} : { reasoning: finish.reasoning }),
 			...(finish.prompt === undefined ? {} : { prompt: finish.prompt })

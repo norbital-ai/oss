@@ -226,7 +226,8 @@ const WriteResult = Schema.Union([
 	Schema.Struct({
 		document: Schema.Union([
 			Schema.Struct({ markdown: Schema.String }),
-			Schema.Struct({ html: Schema.String })
+			Schema.Struct({ html: Schema.String }),
+			Schema.Struct({ layoutHtml: Schema.String })
 		]),
 		name: Schema.String
 	}),

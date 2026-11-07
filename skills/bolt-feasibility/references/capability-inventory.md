@@ -37,6 +37,7 @@ Everything here is native unless stated. A facility a host left `off` fails `Una
 | Envoys on conversation channels under declared policies; sender matching only where the driver carries a handle | envoy roles, `sys_integration.envoy` |
 | In-app agent briefs | `+agent.md`, `+agent.external.md` |
 | Workspace skills; personal skills per tenant and person | `agent/skill/<name>/+skill.md`; Colony personal-skill tools |
+| Agent tools with packages, in a VM with no network or processes | `agent/tool/<name>/+tool.ts`, `run.ts`; `run_tool` |
 | Remote MCP servers, granted by policy | `agent/mcp/` |
 | Typed decisions; LLM inference with structured output, images and files; embeddings | `ctx.ai.*` |
 | Speech to text, text to speech | `ctx.convert.ingest`, `ctx.ai.speak`; optional |

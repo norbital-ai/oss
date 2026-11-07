@@ -466,7 +466,7 @@ export const StudioViewAnswer: Schema.Decoder<StudioView> = Schema.Struct({
 				preview: Schema.NullOr(StudioPreviewAnswer),
 				merge: Schema.optionalKey(
 					Schema.Struct({
-						state: Schema.Literals(['scheduled', 'running', 'failed']),
+						state: Schema.Literals(['scheduled', 'queued', 'running', 'failed']),
 						at: Schema.String,
 						head: Schema.String,
 						error: Optional,
@@ -714,7 +714,6 @@ export type ShellApi = {
 		claimPageAction(message: string): AgentAct;
 		/** One panel attachment stored to `/__bolt/files/sys_conversation.inputs`. */
 		upload(file: File): Call<Required<Attachment>>;
-		readAhead(attachment: Attachment): Call<ActOutcome>;
 		respondNow(conversation: string): AgentAct;
 		confirm(message: string, approve: boolean): AgentAct;
 		setAgent(conversation: string, agent: string): AgentAct;

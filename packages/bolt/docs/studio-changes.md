@@ -30,7 +30,7 @@ The navigator is a side panel that pushes the page, and on a phone it pushes dow
   the start of your work, live or any of your commits. Diagnosis and Tests are independent checks, in any order.
 - **Live**: the versions live ran, shared by everyone. Pick one to see what it changed. Only here does anything roll back.
 
-The toolbar holds one button, whatever is left to do: commit, rebase when behind, **Ask Norbius to fix this** on a conflict,
+The toolbar holds one button, whatever is left to do: commit, **Ask Norbius to fix this** on a conflict,
 run a check, and finally **Merge**, which builds first if it has to, proves any migration and asks for its message.
 
 **Revert** on one of your commits drops it and every commit after it. It changes source only: the preview's database
@@ -38,8 +38,10 @@ branch keeps its data. Reverted commits cannot be brought back. Only **Roll back
 
 ## 3. Rebase
 
-History is linear. Other people's merges move live, and each author rebases: while you are behind live the next step is
-**Rebase**, which replays your commits on top of live. The head changes, so the diagnosis and the tests run again.
+History is linear. Other people's merges move live, and you never have to catch up by hand: **Merge** joins the merge
+queue, which everyone sees in Studio. Merges land one at a time. On its turn a merge replays its commits on live as it
+stands; if that changed anything the diagnosis and the tests run again, once, and it lands. Only a real conflict or a
+failed check comes back to its author. **Rebase** does the same replay by hand, when you want to see the result first.
 
 `migrations/` almost never conflicts, because a rebase resolves it instead of merging it:
 
@@ -83,9 +85,10 @@ inside a preview — open Studio from the live workspace."
 
 ## 6. Merge
 
-Merging needs no uncommitted edits, commits on top of live, a passed diagnosis and passed tests on the last commit, and
-a preview of that commit. A merge reads those results and runs neither, and it never replays: while behind live it
-refuses until you rebase.
+Merging needs no uncommitted edits and a preview of the last commit, and is refused over a known failed diagnosis or
+failed tests. Merges land one at a time in a queue everyone can see: each is replayed on live as it stands, runs any
+diagnosis or tests its head lacks, and is checked again if the replay changed anything. You never rebase first: only a
+real conflict or a failed check comes back.
 
 A migration runs on live at merge, and only a rollback undoes it, while a preview's fork can be older than live. So
 **Merge** (an administrator's) first runs your migrations on a fresh, throwaway copy of live's data as it is then. One that

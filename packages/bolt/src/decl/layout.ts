@@ -71,6 +71,7 @@ export const ROLES = [
 		file: '+skill.md',
 		note: 'agent skill'
 	},
+	{ role: 'tool', dir: 'agent/tool/*', file: '+tool.ts', note: 'agent tool; its body is run.ts' },
 	{ role: 'mcp', dir: 'agent/mcp', file: '+*.mcp.ts', note: 'MCP server' },
 	{
 		role: 'automation',

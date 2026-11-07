@@ -52,6 +52,7 @@ it('the declaration functions are documented, and spec parameters list their fie
 		'secrets',
 		'seeder',
 		'team',
+		'tool',
 		'workspace'
 	]);
 	const model = docs.symbol('bolt', 'model')!;
@@ -153,6 +154,7 @@ it('bolt-contract holds a generated card per role, naming what a role is written
 		'access.md',
 		'automation.md',
 		'sync.md',
+		'tool.md',
 		'page.md',
 		'test.md'
 	]);

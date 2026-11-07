@@ -59,7 +59,11 @@ import { browserCatalog, type BrowserCatalog } from '../protocol/catalog.ts';
 import { decodeView, type Catalog } from '@norbital-ai/store';
 import { storeSync } from '../protocol/errors.ts';
 import type { Query } from './page-bolt.ts';
-import type { ConvertRequest, ConvertSource } from '../decl/runtime/facilities.ts';
+import type {
+	ConvertRequest,
+	ConvertSource,
+	PreviewPdfOptions
+} from '../decl/runtime/facilities.ts';
 import { browserTransport } from '../protocol/client.ts';
 import { FileRefSchema, storedFileUrl } from './file-ref.ts';
 import { encodeWire, reviveWire, type Wired } from '@norbital-ai/std/wire';
@@ -910,6 +914,32 @@ export const createBolt = (config: BoltConfig) =>
 					),
 			fileUrl: (ref: { readonly id: string }, options: FileUrlOptions = {}) =>
 				storedFileUrl(base, ref.id, options),
+			previewPdf: (source: ConvertSource, options: PreviewPdfOptions = {}) =>
+				Effect.gen(function* () {
+					const issuedAt = config.now?.() ?? new Date(yield* Clock.currentTimeMillis).toISOString();
+					const response = yield* transport.requestPdf(
+						PATHS.act,
+						{ callable: 'convert.previewPdf', input: encodeWire({ source, options }), issuedAt },
+						{
+							[HEADERS.key]: uuid(),
+							...(config.contract === undefined ? {} : { [HEADERS.contract]: config.contract })
+						}
+					);
+					if (response.body instanceof Uint8Array) return response.body;
+					const refusal = errorOf(response.body);
+					if (Option.isSome(refusal) && refusal.value.error.code === 'unavailable')
+						return yield* new Unavailable({
+							facility: 'convert.previewPdf',
+							reason: refusal.value.error.message
+						});
+					const outcome = Schema.decodeUnknownOption(ActReply)(response.body);
+					if (Option.isSome(outcome) && outcome.value.outcome.kind === 'refused')
+						return yield* new ActRefused(outcome.value.outcome);
+					const code = refusalOfStatus(response.status);
+					if (code !== null && Option.isSome(refusal))
+						return yield* new ActRefused({ code, message: refusal.value.error.message });
+					return yield* new TransportFailed({ status: response.status });
+				}),
 			convert: (
 				source: ConvertSource,
 				request: ConvertRequest

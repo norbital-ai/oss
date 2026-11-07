@@ -60,7 +60,7 @@ import {
 import type { AgentEngine as Engine } from './index.ts';
 import { lowerRead } from '../query/engine.ts';
 import { materializeEach } from '../runs/time.ts';
-import { BOUNDS, bound, bounded, filesOf, localTime, outputText, page, size } from './context.ts';
+import { BOUNDS, bound, bounded, filesOf, localTime, outputText, page, size, shortId } from './context.ts';
 import { MODEL_FILES, ToolAnswer, toolSchema, type AnyTool, type InferTool } from './ai.ts';
 import {
 	cached,
@@ -118,6 +118,8 @@ export type HostToolContext = {
 	attach(file: { mime: string; bytes: Uint8Array }): void;
 	/** A file the host stored (a download), recorded as the person's and offered on the step; the model sees only its reference. */
 	keep?(file: Downloaded): void;
+	/** The conversation files the call named in `files`, by name, for a `files` tool. */
+	files?: readonly (readonly [name: string, bytes: Uint8Array])[];
 };
 
 /**
@@ -134,8 +136,9 @@ export type HostTool = {
 	studio?: StudioRole;
 	/** A call's wall when it is past the usual host call's. */
 	wallMs?: number;
-	/** It answers at once with its job; its result reaches the agent as a system message at its next step. */
-	background?: true;
+	/** The call's `files: [{ id }]` are read for it, as `run_js`'s are. */
+	files?: true;
+
 	call(input: Json, ctx: HostToolContext, signal: AbortSignal): Promise<Json>;
 };
 /** A skill the agent may read and whose scripts it may run: its tree's listing, and each file's bytes by its path. */
@@ -158,8 +161,10 @@ export type WorkspacePort = {
 	files(): Promise<readonly string[]>;
 	read(path: string): Promise<string | null>;
 };
+/** A file past this is read for its text alone: a long tender's scans would not fit one answer. */
+export const TEXT_FIRST_BYTES = 16 * 1024 * 1024;
 /** Long work: a host call past 30 s (at most 10 minutes), an ingest. */
-export const JOBS = { inlineMs: 30000, hostMs: 60000, waitMs: 120000 } as const;
+export const JOBS = { inlineMs: 30000, hostMs: 60000, waitMs: 120000, ingestMs: 600000 } as const;
 type Jobs = Effect.Success<ReturnType<typeof jobs>>;
 const jobFailed = (result: Json): string | undefined =>
 	Predicate.isObject(result) && !Array.isArray(result) && typeof result['error'] === 'string'
@@ -332,14 +337,12 @@ export type ToolContext = {
 	read: Map<string, string>;
 	/** The host's ingest port (plan 12, Norbital Convert): a file as HTML and its images. Absent: no document ingests. */
 	ingest?:
-		| ((file: {
-				sha256: string;
-				name: string;
-				mime: string;
-				bytes: Uint8Array;
-		  }) => Effect.Effect<Ingested | { readonly unsupported: string }, PortFailure>)
+		| ((
+				file: { sha256: string; name: string; mime: string; key: string; size: number },
+				page?: number
+		  ) => Effect.Effect<Ingested | { readonly unsupported: string }, PortFailure>)
 		| undefined;
-	/** What this turn opened for the model to see (rule 62's budget), each after the call that opened it. */
+	/** What the last step's calls opened, for the next request alone (rule 62's budget), each after the call that opened it. */
 	files: {
 		mime: string;
 		bytes: Uint8Array;
@@ -409,7 +412,7 @@ const shared = <T extends AnyTool>(name: string, make: () => T): T => {
 	return tool;
 };
 /** JSON tool parameters spell every value kind so model routers retain arrays and records. */
-const ToolJson: Schema.Codec<Json> = Schema.suspend(() =>
+export const ToolJson: Schema.Codec<Json> = Schema.suspend(() =>
 	Schema.Union([
 		Schema.Null,
 		Schema.Boolean,
@@ -445,21 +448,21 @@ const TILES = [
 const TILED_PAGES = 3;
 /** `read_file` zooms into one document in a turn: past this a model is re-reading strokes, not finding anything. */
 const ZOOMS = 3;
+/** A write of at most this many rows answers them whole; a larger batch answers the columns it wrote. */
+const WHOLE_ROWS = 5;
+/** The reads this generation is running: an engine holds them, so a restart leaves none and tells what it cut short. */
+const READING = new Set<string>();
 /** A scan is read by eye: the guard against values made up or slipped between columns. */
 const SCAN_NOTE =
 	'read each value in an image from the image itself, column by column. Ask the person about any value you cannot read for certain.';
-/** A transcribed page's zoom answers one code: nothing else on the page is read again. */
-const CROP_NOTE =
-	'this answers only the code you zoomed for: every other value stays as the transcript has it.';
 /** A script's own call: what it reads reaches its code, not the conversation, so "already above" would be false. */
 const Scripted = Context.Reference<boolean>('bolt/Scripted', { defaultValue: () => false });
-/** A transcribed scan is read from its lines: the agent's own eye on a page is what misreads a 5 as a 3. */
 /** What `bolt build` proves its history with: large, and nothing in them is the author's to read. */
 const GENERATED = /^migrations\/(?:snapshot|migrations\.lock|physical)\.json$/;
+/** A search hit's line: enough to place it; workspace_read shows the rest. */
+const HIT_CHARS = 240;
 const GENERATED_NOTE =
 	'The build writes this. Never read or edit it: the schema is in each +model.ts and every step in migrations/*.sql.';
-const READ_NOTE = (o: string) =>
-	`these lines are a dedicated reader's transcript of the scanned page, sharper than your own eye: ~~text~~ is crossed out, [x] is ticked, ? is unreadable. A wide table is followed by one line per column, led by the label it prints: take a column from its line. Take every value as it stands and go straight on: looking at the page adds nothing. One exception: a code or name that should match a record and matches none: read_file { id: ${o}, image: 1, crops: [[left, top, right, bottom]] }, fractions of the page, once, on that value alone.`;
 const documentAnswer = (answer: { readonly [key: string]: Json }, key: string): ToolAnswer => {
 	const value = answer[key],
 		text = typeof value === 'string' ? value : '',
@@ -762,7 +765,7 @@ export const runJob = Effect.fn('AgentTool.runJob')(function* (
 	return {
 		job,
 		...answer,
-		note: 'Its end arrives at your next step, or wakes this conversation.'
+		note: 'Its end arrives by itself, or wakes this conversation.'
 	};
 });
 /** Runs one `act` write under the call's key and answers its outcome. */
@@ -936,8 +939,8 @@ export const perform = Effect.fn('AgentTool.perform')(function* (
 											{
 												where: { id: { in: (rows ?? []).slice(0, 20).map((row) => row.id) } },
 												...(output === 'default' ? {} : { output }),
-												// the read-back is what was written, not the whole record
-												...(c === model && wrote.own.length > 0
+												// a batch's read-back is what was written; a small write's is the whole row, generated values with it
+												...(c === model && wrote.own.length > 0 && rowsIn.length > WHOLE_ROWS
 													? {
 															fields: [
 																...new Set([...wrote.own, ...references(c).map((r) => r.field)])
@@ -1043,32 +1046,23 @@ export const perform = Effect.fn('AgentTool.perform')(function* (
 				})
 	};
 });
-const attach = (
-	files: {
-		mime: string;
-		bytes: Uint8Array;
-		id?: string;
-	}[],
-	file: {
-		mime: string;
-		bytes: Uint8Array;
-		id?: string;
-	}
-): number | 'shown' => {
-	if (file.bytes.byteLength > MODEL_FILES.bytes) return 1;
-	// the same stored file read again this turn is already in view: a second copy would only push others out
+type OpenedFile = { mime: string; bytes: Uint8Array; id?: string };
+/**
+ * A file into the next request, at its end: what a request carries there no later request's prefix holds, so a sent
+ * message never changes, however many files a conversation opens, and no step sends a file twice.
+ */
+const attach = (files: OpenedFile[], file: OpenedFile): 'shown' | 'none' => {
 	if (file.id !== undefined && files.some((f) => f.id === file.id)) return 'shown';
+	const bytes = files.reduce((sum, f) => sum + f.bytes.byteLength, 0) + file.bytes.byteLength;
+	if (files.length >= MODEL_FILES.count || bytes > MODEL_FILES.bytes) return 'none';
 	files.push(file);
-	let dropped = 0;
-	while (
-		files.length > MODEL_FILES.count ||
-		files.reduce((bytes, item) => bytes + item.bytes.byteLength, 0) > MODEL_FILES.bytes
-	) {
-		files.shift();
-		dropped++;
-	}
-	return dropped;
+	return 'shown';
 };
+/** What the model is told of a file it opened. */
+const ATTACHED = {
+	shown: 'shown on your next step only: take what you need from it there',
+	none: 'not shown, too many images at once: read it again on your next step'
+} as const;
 const guard = (
 	work: Effect.Effect<ToolAnswer, EngineError | PortFailure>
 ): Effect.Effect<ToolAnswer> =>
@@ -1077,9 +1071,10 @@ const guard = (
 const validatorOf = (json: { readonly [k: string]: Json }) => {
 	const validator = new Validator(json, '2020-12', false);
 	return (value: unknown): Json | string => {
-		const checked = validator.validate(value);
-		if (!checked.valid)
-			return `Invalid input: ${checked.errors.map((error) => `${error.instanceLocation}: ${error.error}`).join('; ')}`;
+		// a schema it cannot follow (an MCP server's dangling `$ref`) checks nothing: the tool still judges its own input
+		const checked = Result.try(() => validator.validate(value));
+		if (Result.isSuccess(checked) && !checked.success.valid)
+			return `Invalid input: ${checked.success.errors.map((error) => `${error.instanceLocation}: ${error.error}`).join('; ')}`;
 		return Option.getOrElse(
 			Schema.decodeUnknownOption(Schema.Json)(value),
 			() => 'Invalid input: not JSON'
@@ -1099,24 +1094,6 @@ const uncursored = (v: Json): Json =>
 		: 'rows' in v
 			? Object.fromEntries(Object.entries(v).filter(([k]) => k !== 'next'))
 			: Object.fromEntries(Object.entries(v).map(([k, x]) => [k, uncursored(x)]));
-/** A layer named without its parent key: the two calls that read it, in this workspace's own keys. */
-function orphaned(m: EngineManifest, path: string): string {
-	const dot = path.lastIndexOf('.'),
-		parent = path.slice(0, dot),
-		relation = path.slice(dot + 1),
-		root = path.split('.')[0]!;
-	const parentModel = layers(m)[root]?.[parent] ?? root,
-		model = layers(m)[root]?.[path];
-	// a many-layer is its model's rows whose link names the parent row
-	const link = Object.entries(layered(m).relationships).find(
-		([key, r]) => key.startsWith(`${model}.`) && r.to === parentModel && r.inverse === relation
-	)?.[0];
-	const own =
-		model === undefined || link === undefined
-			? ''
-			: `, or read ${model} as its own root: { "${model}": { "where": { "${link.slice(model.length + 1)}": { "eq": "<the ${parentModel} id>" } } } }`;
-	return `"${path}" nests in each "${parent}" row, so name both in one call: { "${parent}": { "where": … }, "${path}": { … } }${own}`;
-}
 /** An input field as describe shows it: its kind, an enum's values, a range, an object's or custom value's fields. */
 const formatOf = (m: EngineManifest, k: InputKind): Json => {
 	const optional = k.optional === true ? ' (optional)' : '';
@@ -1278,21 +1255,24 @@ export function workspaceSchema(m: EngineManifest, a: Authority): string | undef
 	return roots.length === 0 ? undefined : `# Models you read\n${roots.join(', ')}`;
 }
 /** An automation with its input, so the first start is the right one (an omitted input runs it over everything). */
-const automationSignature = (m: EngineManifest, name: string) => {
-	const input =
-		(
-			m.automations[name] as
-				| {
-						input?: {
-							[k: string]: {
-								kind: string;
-								of?: unknown;
-								optional?: boolean;
-							};
-						};
-				  }
-				| undefined
-		)?.input ?? {};
+type SignedInput =
+	| { readonly [k: string]: { kind: string; of?: unknown; optional?: boolean } }
+	| undefined;
+const automationSignature = (m: EngineManifest, name: string) =>
+	signature(name, (m.automations[name] as { input?: SignedInput } | undefined)?.input);
+/**
+ * The workspace's tools as a person's turn reads them, below what it already holds: `run_tool` stays one fixed entry, so
+ * a merge that declares a tool moves no byte of the cached tools, system prompt or transcript.
+ */
+export const toolsListing = (tools: NonNullable<EngineManifest['agent']['tools']>) => {
+	const lines = Object.entries(tools).map(
+		([name, spec]) => `- ${signature(name, spec.input as SignedInput)}: ${spec.description}`
+	);
+	return lines.length === 0
+		? 'The workspace declares no tools now.'
+		: `The workspace's tools, each called with run_tool { name, input, files }:\n${lines.join('\n')}`;
+};
+const signature = (name: string, input: SignedInput = {}) => {
 	const kind = (v: { kind: string; of?: unknown }) =>
 		v.of === undefined
 			? v.kind
@@ -1459,14 +1439,6 @@ export function describeWorkspace(
 	return out.join('\n');
 }
 /** An order as models write it: `-field`, `{ field, direction }` or a list of them, as the read takes it. */
-const ordered = (order: Json): Json =>
-	EffectArray.isArray<Json>(order)
-		? order.map(ordered)
-		: typeof order === 'string' && order.startsWith('-')
-			? { [order.slice(1)]: 'desc' }
-			: isObj(order) && typeof order['field'] === 'string'
-				? { [order['field']]: order['direction'] ?? order['order'] ?? 'asc' }
-				: order;
 /** `read`'s input: the one read request a page's `bolt.query` and `/__bolt/q` send, one key per root and layer. */
 const ReadOptions = (() => {
 	// the contract's free JSON options as the same any-JSON, spelled out: an untyped parameter reaches a routed model
@@ -1480,11 +1452,8 @@ const ReadOptions = (() => {
 		)
 	});
 })();
-const ReadInput = Schema.Struct({
-	reads: Schema.Array(Schema.Struct({ of: Schema.String, ...ReadOptions.fields })).check(
-		Schema.isMinLength(1)
-	)
-});
+// the free map sits under a key: at a tool's root a routed model wraps it in one of its own
+const ReadInput = Schema.Struct({ request: Schema.Record(Schema.String, ReadOptions) });
 /**
  * `read` (rule 58, P3): one read request, a layer map over the models and declared layers the actor may read, answered in
  * one engine read as the actor and bounded by rule 62 (a lone root's page keeps whole rows); `undefined` when nothing is
@@ -1523,28 +1492,7 @@ export function readTool(x: ReadToolContext) {
 			Effect.flatMap((ir) => e.read([ir], { as: 'caller', authority: a }, x.bindings)),
 			Effect.map(([got]) => got ?? null)
 		);
-	/** The model behind a layer, when this caller reads it as a root of its own. */
-	const rootOf = (path: string): string | undefined => {
-		const model = layers(e.manifest)[path.split('.')[0]!]?.[path];
-		return model !== undefined && paths.includes(model) ? model : undefined;
-	};
-	const run = Effect.fn('AgentTool.read')(function* (given: ReadRequestJson) {
-		// a layer named without its parent reads the rows of the model behind it, as that model's own root (its where may
-		// then name the link); one that is not a root of this caller has no reading on its own
-		const stranded = Object.keys(given).find(
-			(path) =>
-				path.includes('.') &&
-				!(path.slice(0, path.lastIndexOf('.')) in given) &&
-				(rootOf(path) === undefined || rootOf(path)! in given)
-		);
-		if (stranded !== undefined)
-			return { result: { error: orphaned(e.manifest, stranded) }, bounded: true } as const;
-		const request: { [path: string]: ReadRequestJson[string] } = Object.fromEntries(
-			Object.entries(given).map(([asked, layer]) => {
-				const parent = asked.slice(0, asked.lastIndexOf('.'));
-				return [asked.includes('.') && !(parent in given) ? rootOf(asked)! : asked, layer];
-			})
-		);
+	const run = Effect.fn('AgentTool.read')(function* (request: ReadRequestJson) {
 		const named = Object.keys(request).filter((path) => !path.includes('.'));
 		const single = named.length === 1 ? named[0] : undefined;
 		const pageOf = (v: Json): Json =>
@@ -1562,110 +1510,60 @@ export function readTool(x: ReadToolContext) {
 				bounded: true
 			} as const;
 		}).pipe(
-			Effect.catch((failure) => {
-				if (!(failure instanceof BoltError) || failure.code !== 'invalid')
-					return Effect.fail(failure);
-				return Effect.succeed({
-					result: {
-						error: failure.message,
-						hint: failure.message.includes("unknown operator 'contains'")
+			Effect.catch((failure) =>
+				Effect.gen(function* () {
+					if (!(failure instanceof BoltError) || failure.code !== 'invalid')
+						return yield* Effect.fail(failure);
+					// a read stops at its first refusal: each root alone names its own, so one correction fixes them all
+					const roots = [...new Set(Object.keys(request).map((path) => path.split('.')[0] ?? path))];
+					const refusals =
+						roots.length < 2
+							? [failure.message]
+							: yield* Effect.forEach(roots, (root) =>
+									answer(
+										Object.fromEntries(
+											Object.entries(request).filter(
+												([path]) => path === root || path.startsWith(`${root}.`)
+											)
+										)
+									).pipe(
+										Effect.match({
+											onSuccess: () => [],
+											onFailure: (cause) => (cause instanceof BoltError ? [cause.message] : [])
+										})
+									)
+								).pipe(Effect.map((each) => each.flat()));
+					const error = refusals.join('\n');
+					return {
+						result: {
+							error,
+							hint: error.includes("unknown operator 'contains'")
 							? 'Text takes like: "%value%"; contains is only for a period or a JSON field.'
 							: 'describe_workspace { names } gives its fields. If the data cannot answer, say so.'
-					}
-				});
-			})
+						}
+					};
+				})
+			)
 		);
 	});
 	return {
 		tool: Tool.make('read', {
-			description: `Read records in one request: reads is a list, each with of, the "<model>" to page or a "<model>.<relation>" nested in each of its rows (sent with its root), and fields, where, orderBy (field or { field: "desc" }), limit (max ${READ_LIMIT}), after, search, aggregate, output, asOf. A model may be read twice; the second answers as "<model>#2".
-where: { field: { eq|ne|lt|lte|gt|gte|in|nin|isNull|like: value } }, and/or/not; on a relation { is|some|none|every: where } or { count|sum|avg|min|max: … }; a value may be { var: CEL over requestor, today, now }.
+			description: `Read records. request is one read request, the JSON bolt.query and ctx.query take: { "<model>": { output, where, fields, orderBy, limit, after, search, aggregate, asOf }, "<model>.<relation>": { where, fields, orderBy, limit, search, aggregate } }, each key once. orderBy: "<field>", { <field>: "desc" } or a list of them. limit: at most ${READ_LIMIT}.
+where: { <field>: { eq|ne|lt|lte|gt|gte|in|nin|isNull|like: value } }, and/or/not; on a relation { is|some|none|every: where } or { count|sum|avg|min|max: … }; a value may be { var: CEL over requestor, today, now }.
 search: words, { <index>: input } or { semantic: text }. aggregate: { count, sum|avg|min|max: [field], by: field | { day|week|month|quarter|year: field } }.
-Answers rows, next and total. Long values are clipped.`,
+Answers each model's { rows, next, total }, total counting every match, so a count needs no aggregate; with aggregate, its measures instead of rows. Long values are clipped.`,
 			parameters: ReadInput,
 			success: ToolAnswer
 		}),
-		run: ({ reads }: typeof ReadInput.Type): Effect.Effect<ToolAnswer> => {
-			const roots = paths.filter((p) => !p.includes('.')),
-				unknown = reads.find(({ of }) => !paths.includes(of))?.of;
-			if (unknown !== undefined)
-				return Effect.succeed(
-					err(
-						`You read no '${unknown}'. ${unknown.includes('.') ? 'describe_workspace { names } lists its layers.' : `Models: ${roots.join(', ')}`}`
-					)
-				);
-			// a field a key does not have costs that field, never the read: the rest answers and a note names it
-			const skipped: string[] = [];
-			// a root that names no output reads the first the actor may read, as the actor's views do
-			const request = (some: typeof reads) =>
-				Object.fromEntries(
-					some.map(({ of, ...asked }) => {
-						const { aggregate, ...rows } = asked;
-						// rows answer their total: a read that shapes its rows wants them, whatever aggregate it filled in
-						const wantsRows =
-							aggregate?.by === undefined &&
-							[asked.search, asked.fields, asked.limit, asked.orderBy].some((set) => set !== undefined);
-						const layer = wantsRows || asked.fields !== undefined ? rows : asked;
-						const root = of.split('.')[0]!,
-							output =
-								of.includes('.') || layer.output !== undefined
-									? undefined
-									: readOutputs(e.manifest, a, of)[0],
-							has = new Set(
-								exposed(
-									e.manifest,
-									root,
-									of,
-									layers(e.manifest)[root]?.[of] ?? root,
-									layer.output ?? output ?? 'default'
-								)
-							),
-							fields = layer.fields?.filter((field) => has.has(field) || field === 'id');
-						for (const field of layer.fields ?? [])
-							if (!has.has(field) && field !== 'id') skipped.push(`${of}.${field}`);
-						return [
-							of,
-							{
-								...layer,
-								...(layer.orderBy === undefined ? {} : { orderBy: ordered(layer.orderBy) }),
-								...(fields === undefined || fields.length === 0 ? {} : { fields }),
-								...(output === undefined ? {} : { output })
-							}
-						];
-					})
-				);
-			const noted = (answer: ToolAnswer): ToolAnswer => {
-				const got = 'result' in answer ? answer.result : null;
-				return skipped.length === 0 || !isObj(got)
-					? answer
-					: {
-							...answer,
-							result: { ...got, note: `No such field, left out: ${skipped.join(', ')}` }
-						};
-			};
-			// a model read twice (its rows and a total, two groupings) is one more read beside the first, under <model>#2
-			const again = reads.filter(({ of }, n) => reads.findIndex((r) => r.of === of) !== n);
-			if (again.length === 0) return guard(run(request(reads))).pipe(Effect.map(noted));
-			const first = reads.filter((one) => !again.includes(one));
-			return guard(
-				Effect.gen(function* () {
-					const answers = yield* Effect.all(
-						[run(request(first)), ...again.map((one) => run(request([one])))],
-						{ concurrency: 'unbounded' }
+		run: ({ request }: typeof ReadInput.Type): Effect.Effect<ToolAnswer> => {
+			const unknown = Object.keys(request).find((path) => !paths.includes(path));
+			return unknown === undefined
+				? guard(run(request))
+				: Effect.succeed(
+						err(
+							`You read no '${unknown}'. ${unknown.includes('.') ? 'describe_workspace { names } lists its layers.' : `Models: ${paths.filter((p) => !p.includes('.')).join(', ')}`}`
+						)
 					);
-					const failed = answers.find(
-						(answer) =>
-							'result' in answer && Predicate.isObject(answer.result) && 'error' in answer.result
-					);
-					if (failed !== undefined) return failed;
-					const merged: { [key: string]: Json } = {};
-					for (const [n, answer] of answers.entries())
-						if ('result' in answer && Predicate.isObject(answer.result))
-							for (const [key, value] of Object.entries(answer.result))
-								merged[n === 0 ? key : `${key}#${n + 1}`] = value;
-					return { result: merged, bounded: true } as const;
-				})
-			).pipe(Effect.map(noted));
 		}
 	};
 }
@@ -2086,8 +1984,8 @@ A committed write answers the stored rows; a held one waits for approval.`,
 								`skill ${i.name}${i.section === undefined ? '' : ` (${i.section})`}${i.file === undefined ? '' : ` file ${i.file}`}`
 							);
 							const s = skillOf(t.text);
-							if (i.file !== undefined) {
-								if (!t.files.includes(i.file) || i.file === SKILL_FILE)
+							if (i.file !== undefined && i.file !== SKILL_FILE) {
+								if (!t.files.includes(i.file))
 									return err(
 										`No file '${i.file}' in ${i.name}. Files: ${t.files
 											.filter((f) => f !== SKILL_FILE)
@@ -2291,25 +2189,13 @@ A committed write answers the stored rows; a held one waits for approval.`,
 			'mime' in got &&
 			typeof got.mime === 'string'
 		) {
-			const dropped = attach(x.files, {
+			const seen = attach(x.files, {
 				mime: got.mime,
 				bytes: got.bytes,
 				...(fileId === undefined ? {} : { id: fileId })
 			});
-			if (dropped !== 'shown') yield* tiled(got.bytes, fileId ?? got.mime);
-			if (dropped === 'shown')
-				return ok({
-					attached: 'this file is already shown to you, after the call that first read it'
-				});
-			return ok({
-				attached:
-					'the file is shown to you from your next step until this turn ends: no need to read it again',
-				...(dropped > 0
-					? {
-							dropped: `${dropped} older file(s) dropped to stay within ${MODEL_FILES.count} files`
-						}
-					: {})
-			});
+			if (seen === 'shown') yield* tiled(got.bytes, fileId ?? got.mime);
+			return ok({ attached: ATTACHED[seen] });
 		}
 		const answer = yield* Schema.decodeUnknownEffect(Schema.Json)(got).pipe(
 			Effect.mapError((error) => BoltError.make('invalidInput', 'decode', error.message, error))
@@ -2361,6 +2247,7 @@ A committed write answers the stored rows; a held one waits for approval.`,
 		);
 	});
 	/** This conversation's ingests (plan 12): one output entry per source file, oldest first. */
+	const readingKey = (output: string) => `${x.conv.id}/${output}`;
 	const ingests = Effect.fn('AgentTool.ingests')(function* () {
 		const [r] = yield* x.engine.db.read([
 			{ text: 'SELECT outputs FROM sys_conversation WHERE id = $1', params: [x.conv.id] }
@@ -2388,13 +2275,16 @@ A committed write answers the stored rows; a held one waits for approval.`,
 			to?: number | undefined;
 			text?: string | undefined;
 			image?: number | undefined;
+			page?: number | undefined;
 			crops?: readonly (readonly [number, number, number, number])[] | undefined;
 		}
 	) {
 		const o = entry.ingest.output,
 			files = e.files;
 		if (entry.ingest.status === 'ingesting')
-			return ok({ note: `still ingesting: ${entry.ingest.job ?? o}` });
+			return ok({
+				note: `Still being read: wait { jobs: ['${entry.ingest.job ?? o}'] } returns when it ends. Reading it again changes nothing.`
+			});
 		if (entry.ingest.status === 'failed' || entry.id === undefined || files === undefined)
 			return err(
 				`The ingest of ${entry.name} failed: ${entry.ingest.error ?? 'its files are not stored'}. Tell the person.`
@@ -2422,10 +2312,24 @@ A committed write answers the stored rows; a held one waits for approval.`,
 				const f = images.get(name);
 				if (f === undefined) continue;
 				const bytes = yield* files.get(f.key, f.size);
-				attach(x.files, { mime: f.mime, bytes, id: `${entry.id}#${name}` });
-				if (names.length <= TILED_PAGES) yield* tiled(bytes, `${entry.id}#${name}`);
+				const seen = attach(x.files, { mime: f.mime, bytes, id: `${entry.id}#${name}` });
+				if (names.length <= TILED_PAGES && seen === 'shown') yield* tiled(bytes, `${entry.id}#${name}`);
 			}
 		});
+		if (i.page !== undefined) {
+			const [source] = yield* x.engine.db.rows(SourceFile, {
+				text: 'SELECT id, name, mime, size, key, sha256 FROM sys_file WHERE id = $1',
+				params: [entry.ingest.source]
+			});
+			if (source === undefined || x.ingest === undefined) return err('The file is no longer stored.');
+			const got = yield* x.ingest(source, i.page);
+			const picture = 'unsupported' in got ? undefined : got.images[0];
+			if (picture === undefined) return err(`${entry.name} has no page ${i.page} to show.`);
+			const id = `${entry.id}#page-${i.page}`;
+			const seen = attach(x.files, { mime: picture.mime, bytes: picture.bytes, id });
+			if (seen === 'shown') yield* tiled(picture.bytes, id);
+			return ok({ page: i.page, attached: ATTACHED[seen], note: SCAN_NOTE });
+		}
 		const crops = i.crops ?? [],
 			imageNumber = i.image ?? (crops.length > 0 && images.size === 1 ? 1 : undefined),
 			zoomed = `zoom:${o}`;
@@ -2462,9 +2366,15 @@ A committed write answers the stored rows; a held one waits for approval.`,
 			}
 			return ok({
 				image: name,
-				...(crops.length === 0 ? {} : { crops: crops.length }),
-				attached: 'shown from your next step until this turn ends',
-				note: text.includes(' data-read>') ? CROP_NOTE : SCAN_NOTE
+				...(crops.length === 0
+					? {}
+					: {
+							crops: crops.length,
+							zoomsLeft:
+								ZOOMS - [...x.read.keys()].filter((key) => key.startsWith(zoomed)).length
+						}),
+				attached: ATTACHED.shown,
+				note: SCAN_NOTE
 			});
 		}
 		// a data ingest has no lines: its summary, and run_js computes over its data.json
@@ -2505,9 +2415,8 @@ A committed write answers the stored rows; a held one waits for approval.`,
 			});
 		if (!scripted) x.read.set(seen, `${o} lines ${w.from}–${w.to}`);
 		const refs = imagesIn(w.lines, [...images.keys()]),
-			shown = refs.slice(0, WINDOW_IMAGES),
-			transcribed = w.lines.some((line) => line.includes(' data-read>'));
-		if (!transcribed) yield* show(shown);
+			shown = refs.slice(0, WINDOW_IMAGES);
+		yield* show(shown);
 		const count = (v: number) => v.toLocaleString('en-US');
 		return {
 			result: {
@@ -2518,9 +2427,7 @@ A committed write answers the stored rows; a held one waits for approval.`,
 					? {}
 					: {
 							images: shown,
-							note: transcribed
-								? READ_NOTE(o)
-								: `each <img> named in images is shown to you: ${SCAN_NOTE}${shown.length > TILED_PAGES ? ` These are whole pages, too small for fine print: read_file { id: ${o}, image: n } adds a page's quarters.` : ''}`
+							note: `each <img> named in images is shown to you: ${SCAN_NOTE}${shown.length > TILED_PAGES ? ` These are whole pages, too small for fine print: read_file { id: ${o}, image: n } adds a page's quarters.` : ''}`
 						}),
 				...(refs.length > shown.length
 					? {
@@ -2586,18 +2493,22 @@ A committed write answers the stored rows; a held one waits for approval.`,
 					bytes: file.size
 				});
 			} else {
-				const bytes = yield* fileStore.get(file.key, INGEST_BYTES);
 				const got: Ingested | { readonly unsupported: string } =
 					how === 'image'
-						? imageIngest({ name: file.name, mime: file.mime, bytes })
+						? imageIngest({
+								name: file.name,
+								mime: file.mime,
+								bytes: yield* fileStore.get(file.key, INGEST_BYTES)
+							})
 						: how === 'text'
-							? textIngest(bytes)
+							? textIngest(yield* fileStore.get(file.key, INGEST_BYTES))
 							: port !== undefined
 								? yield* port({
 										sha256: file.sha256,
 										name: file.name,
 										mime: file.mime,
-										bytes
+										key: file.key,
+										size: file.size
 									})
 								: { unsupported: 'This host cannot ingest files.' };
 				if ('unsupported' in got)
@@ -2678,33 +2589,44 @@ A committed write answers the stored rows; a held one waits for approval.`,
 				patchEntry(output, {}, { status: 'failed', error: error.message }).pipe(Effect.ignore)
 			)
 		);
-		const job = yield* x.jobs.add(`reading ${file.name}`, work, {
-			detach: true,
-			done: (id, result) => {
-				const said = Predicate.isObject(result) && !Array.isArray(result) ? result : {};
-				const title = typeof said['title'] === 'string' ? said['title'] : file.name;
-				const lines = Array.isArray(said['lines'])
-					? said['lines'].filter((l) => typeof l === 'string')
-					: [];
-				return [
-					`[job ${id} done] ingest of ${file.name}: read_file { id: ${output} } "${title}"`,
-					...lines
-				].join('\n');
+		READING.add(readingKey(output));
+		const job = yield* x.jobs.add(
+			`reading ${file.name}`,
+			Effect.ensuring(
+				work,
+				Effect.sync(() => READING.delete(readingKey(output)))
+			),
+			{
+				detach: true,
+				done: (id, result) => {
+					const said = Predicate.isObject(result) && !Array.isArray(result) ? result : {};
+					const title = typeof said['title'] === 'string' ? said['title'] : file.name;
+					const lines = Array.isArray(said['lines'])
+						? said['lines'].filter((l) => typeof l === 'string')
+						: [];
+					return [
+						`[job ${id} done] ingest of ${file.name}: read_file { id: ${output} } "${title}"`,
+						...lines
+					].join('\n');
+				}
 			}
-		});
+		);
 		yield* patchEntry(output, {}, { job });
 		return { job, output };
 	});
 	const readFileTool = shared('read_file', () =>
 		Tool.make('read_file', {
 			description:
-				"Read a file by id: a conversation file, a record's file or a tool's output. A document, scan, sheet or recording is parsed first. A reference is listed, '<reference>/<path>' read, and text greps it. Answers text; a document as numbered lines, its page images shown to you (from, to page; text greps); a sheet as columns and first rows. image: n shows one image; with crops, up to 8 regions of it at once. call reads more of a clipped result.",
+				"Read a file by id: a conversation file, a record's file or a tool's output. A document, scan, sheet or recording is parsed first. A reference is listed, '<reference>/<path>' read, and text greps it. Answers text; a document as numbered lines, its page images shown to you (from, to page; text greps, a|b for either, each hit with its page); a sheet as columns and first rows. image: n shows one image; with crops, up to 8 regions of it at once. call reads more of a clipped result.",
 			parameters: Schema.Struct({
 				id: Schema.optionalKey(Schema.String),
 				from: Schema.optionalKey(Schema.Number.check(Schema.isInt())),
 				to: Schema.optionalKey(Schema.Number.check(Schema.isInt())),
 				text: Schema.optionalKey(Schema.String),
 				image: Schema.optionalKey(Schema.Number.check(Schema.isInt())),
+				page: Schema.optionalKey(Schema.Number.check(Schema.isInt())).annotate({
+					description: 'a PDF page, shown as a picture: for a page with no text, or a drawing'
+				}),
 				crops: Schema.optionalKey(
 					Schema.Array(Schema.Tuple([Schema.Number, Schema.Number, Schema.Number, Schema.Number]))
 						.check(Schema.isMaxLength(8))
@@ -2722,12 +2644,23 @@ A committed write answers the stored rows; a held one waits for approval.`,
 			read_file: (i) =>
 				guard(
 					Effect.gen(function* () {
+						if (i.id === undefined && i.call === undefined)
+							return err('read_file needs the id of a file, or call for a clipped result.');
 						if (i.id === undefined) return yield* readOutput(i.call ?? '', i.offset ?? 0);
 						if (i.id.includes('@')) return yield* readReference(x, i.id, i);
-						const id = i.id,
-							found = (yield* ingests()).findLast(
-								(o) => o.ingest.output === id || o.ingest.source === id || o.id === id
+						const id = yield* wholeId(x, i.id);
+						let found = (yield* ingests()).findLast(
+							(o) => o.ingest.output === id || o.ingest.source === id || o.id === id
+						);
+						// a job dies with its generation: a read it left unfinished starts over, never waits for good
+						if (found?.ingest.status === 'ingesting' && !READING.has(readingKey(found.ingest.output))) {
+							yield* patchEntry(
+								found.ingest.output,
+								{},
+								{ status: 'failed', error: 'a restart cut it short' }
 							);
+							found = undefined;
+						}
 						// a failed parse is retried by its file's id and explained by its output's
 						if (
 							found !== undefined &&
@@ -2744,10 +2677,21 @@ A committed write answers the stored rows; a held one waits for approval.`,
 							}
 						]);
 						const input = attached?.rows[0]?.['file'];
-						if (input === undefined && !(yield* canRead(id)))
+						if (input === undefined && !(yield* canRead(id))) {
+							// a wrong id's answer names the right ones, so the next call needs no look around
+							const [held] = yield* x.engine.db.read([
+								{
+									text: `SELECT i->>'id' AS id, i->>'name' AS name FROM sys_conversation c, jsonb_array_elements(c.inputs) i WHERE c.id = $1`,
+									params: [x.conv.id]
+								}
+							]);
+							const files = (held?.rows ?? [])
+								.slice(-20)
+								.map((row) => `${String(row['name'])} ${shortId(String(row['id']))}`);
 							return err(
-								'No file you can read has this id; a truncated result is read with call, not id.'
+								`No file you can read has this id; a truncated result is read with call, not id.${files.length === 0 ? '' : ` This conversation's files: ${files.join(', ')}`}`
 							);
+						}
 						const [file] = yield* x.engine.db.rows(SourceFile, {
 							text: 'SELECT id, name, mime, size, key, sha256 FROM sys_file WHERE id = $1',
 							params: [id]
@@ -2760,6 +2704,7 @@ A committed write answers the stored rows; a held one waits for approval.`,
 							i.to !== undefined ||
 							i.text !== undefined ||
 							i.image !== undefined ||
+							i.page !== undefined ||
 							i.crops !== undefined;
 						if (how !== 'convert' && how !== 'audio' && !detail)
 							return yield* readStored(attachments, input ?? { id });
@@ -2769,7 +2714,11 @@ A committed write answers the stored rows; a held one waits for approval.`,
 						const started = yield* ingestFile(e.files, file, how);
 						const settled = yield* x.jobs.wait([started.job], x.inlineMs ?? JOBS.inlineMs);
 						if (settled === null)
-							return ok({ reading: file.name, note: 'it arrives at your next step' });
+							return ok({
+								reading: file.name,
+								job: started.job,
+								note: `Still being read. wait { jobs: ['${started.job}'] } returns when it ends.`
+							});
 						const failed = jobFailed(settled.result);
 						if (failed !== undefined) return err(failed);
 						const ready = (yield* ingests()).findLast((o) => o.ingest.output === started.output);
@@ -2886,7 +2835,7 @@ A committed write answers the stored rows; a held one waits for approval.`,
 		const searchSource = shared('workspace_search', () =>
 			Tool.make('workspace_search', {
 				description:
-					'Grep the source: pattern (a regular expression, or text with literal), within a path. At most 100 hits.',
+					'Grep the source: pattern (a regular expression, or text with literal), within a path. At most 100 hits. Installed packages are read through workspace_lang.',
 				parameters: Schema.Struct({
 					pattern: Schema.NonEmptyString,
 					path: Schema.optionalKey(Schema.String),
@@ -2922,8 +2871,13 @@ A committed write answers the stored rows; a held one waits for approval.`,
 								.replace(/^\.\//, '')
 								.replace(/^\.$/, '')
 								.replace(/\/$/, '');
+							if (within === 'node_modules' || within.startsWith('node_modules/'))
+								return err('Packages are not searched: workspace_lang answers any API.');
 							const files = (yield* Port.attempt('workspace.files', () => source.files())).filter(
-								(file) => within === '' || file === within || file.startsWith(`${within}/`)
+								(file) =>
+									(within === '' || file === within || file.startsWith(`${within}/`)) &&
+									!GENERATED.test(file) &&
+									file !== 'bun.lock'
 							);
 							const limit = i.limit ?? 100,
 								hits: Json[] = [];
@@ -2936,7 +2890,7 @@ A committed write answers the stored rows; a held one waits for approval.`,
 											: regex.test(value)
 									) {
 										if (hits.length === limit) return ok({ hits, truncated: true });
-										hits.push({ path, line: line + 1, text: value.slice(0, 2000) });
+										hits.push({ path, line: line + 1, text: value.slice(0, HIT_CHARS) });
 									}
 								}
 							}
@@ -3617,6 +3571,8 @@ A committed write answers the stored rows; a held one waits for approval.`,
 					host.input,
 					(input, id) =>
 						Effect.gen(function* () {
+							const files = host.files === true ? yield* conversationFiles(x, namedFiles(input)) : [];
+							if (typeof files === 'string') return err(files);
 							const context: HostToolContext = {
 								actor: a.actor,
 								conversation: x.conv.id,
@@ -3632,7 +3588,8 @@ A committed write answers the stored rows; a held one waits for approval.`,
 											...file
 										});
 								},
-								keep: (file) => kept.push(file)
+								keep: (file) => kept.push(file),
+								files
 							};
 							const shown: { name: string; mime: string; bytes: Uint8Array }[] = [],
 								kept: Downloaded[] = [];
@@ -3659,21 +3616,17 @@ A committed write answers the stored rows; a held one waits for approval.`,
 								),
 								{
 									...(host.studio === undefined ? {} : { studio: host.studio }),
-									...(host.background === true
-										? {
-												alert: (id: string, result: Json) =>
-													`[job ${id} finished] ${host.name}: ${JSON.stringify(bounded(result).value)}`
-											}
-										: {})
+									alert: (id: string, result: Json) =>
+										`[job ${id} finished] ${host.name}: ${JSON.stringify(bounded(result).value)}`
 								}
 							);
-							if (host.background === true)
-								return ok({
-									job,
-									note: 'Running in the background; keep working. Its result arrives by itself as a system message at your next step, or collect it with wait.'
-								});
 							const inline = yield* x.jobs.wait([job], x.inlineMs ?? JOBS.inlineMs);
-							return ok(inline?.result ?? { job, note: 'still running; collect it with wait' });
+							return ok(
+								inline?.result ?? {
+									job,
+									note: 'Still running; keep working. Its result arrives by itself, or wait returns it.'
+								}
+							);
 						}),
 					host.studio === undefined ? {} : { studio: host.studio }
 				);
@@ -3753,17 +3706,39 @@ const IngestEntry = Schema.Struct({
 		error: Schema.optionalKey(Schema.String)
 	})
 });
+const SHORT_ID = /^[0-9a-f]{8}$/;
+/** A file's short id in full, when one file of this conversation has it; anything else stays as given. */
+const wholeId = Effect.fn('Agents.wholeId')(function* (x: ToolContext, id: string) {
+	if (!SHORT_ID.test(id)) return id;
+	const [read] = yield* x.engine.db.read([
+		{
+			text: `SELECT i->>'id' AS id FROM sys_conversation c, jsonb_array_elements(c.inputs) i
+				WHERE c.id = $1 AND i->>'id' LIKE $2`,
+			params: [x.conv.id, `${id}%`]
+		}
+	]);
+	const [only, other] = read?.rows ?? [];
+	return only !== undefined && other === undefined ? String(only['id']) : id;
+});
 /**
  * The conversation files a file run names, as `/in/<name>`: the member's own uploads and outputs here, at most
  * `RUN_JS.inBytes` in all, one name each. A string is why not.
  */
+const FileRefs = Schema.Struct({ files: Schema.Array(Schema.Struct({ id: Schema.String })) });
+/** The `files: [{ id }]` of a call, which the tool's own schema has checked. */
+const namedFiles = (input: Json) =>
+	Option.match(Schema.decodeUnknownOption(FileRefs)(input), {
+		onNone: () => [],
+		onSome: ({ files }) => files
+	});
 const conversationFiles = Effect.fn('Agents.runFileInputs')(function* (
 	x: ToolContext,
 	refs: readonly { readonly id: string }[]
 ) {
 	if (refs.length === 0) return [];
 	const member = x.authority.actor.kind === 'member' ? x.authority.actor.id : null,
-		files = x.engine.files;
+		files = x.engine.files,
+		ids = yield* Effect.forEach(refs, (ref) => wholeId(x, ref.id));
 	if (member === null || files === undefined) return 'This run can be handed no files.';
 	const rows = yield* x.engine.db.rows(InputFile, {
 		// the member's own, or an ingest filed in this conversation's outputs (a cached ingest may be another member's)
@@ -3772,14 +3747,14 @@ const conversationFiles = Effect.fn('Agents.runFileInputs')(function* (
 				SELECT 1 FROM sys_conversation c, LATERAL jsonb_array_elements(c.outputs) o
 				WHERE c.id = $3 AND (o->>'id' = f.id OR o->'files' @> jsonb_build_array(jsonb_build_object('id', f.id)))
 			))`,
-		params: [JSON.stringify(refs.map((ref) => ref.id)), member, x.conv.id]
+		params: [JSON.stringify(ids), member, x.conv.id]
 	});
 	const byId = new Map(rows.map((file) => [file.id, file]));
 	const named: (readonly [string, Uint8Array])[] = [];
 	let bytes = 0;
-	for (const ref of refs) {
-		const file = byId.get(ref.id);
-		if (file === undefined) return `File ${ref.id} is not one of your files in this conversation.`;
+	for (const id of ids) {
+		const file = byId.get(id);
+		if (file === undefined) return `File ${id} is not one of your files in this conversation.`;
 		const name = file.name.replaceAll('/', '_');
 		if (named.some(([taken]) => taken === name)) return `Two files are named ${name}.`;
 		bytes += file.size;

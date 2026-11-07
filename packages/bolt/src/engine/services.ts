@@ -513,8 +513,6 @@ export type AgentsShape = {
 		member: string,
 		refs: readonly Json[]
 	) => Effect.Effect<readonly Json[], EngineError>;
-	/** Parses the member's uploaded document ahead of its message. */
-	readonly readAhead: (member: string, ref: Json) => Effect.Effect<void, EngineError>;
 	/** Stop interrupts the turn's fiber (the in-flight model call included). */
 	readonly stop: (id: string) => Effect.Effect<void, EngineError>;
 	/** A stopped conversation recalls its stopped objective, then drains. */

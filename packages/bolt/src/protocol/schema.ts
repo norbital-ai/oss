@@ -377,6 +377,8 @@ export const Usage = Schema.Struct({
 	/** input tokens the provider read from its prompt cache, and output tokens spent reasoning, summed */
 	cached: Schema.optionalKey(Schema.Number),
 	reasoning: Schema.optionalKey(Schema.Number),
+	/** Who answered, in order of first use: more than one means a conversation left its cache. */
+	providers: Schema.optionalKey(Schema.Array(Schema.String)),
 	context: Schema.optionalKey(Schema.Number),
 	window: Schema.optionalKey(Schema.Number),
 	model: Schema.optionalKey(Schema.String)
@@ -557,16 +559,25 @@ export const Decide = Schema.Struct({
 	decision: Schema.Literals(['approve', 'reject', 'requestChanges']),
 	reason: tolerant(Schema.String)
 });
+const ConvertSource = Schema.Union([
+	Schema.Struct({ html: Schema.String }),
+	Schema.Struct({ layoutHtml: Schema.String }),
+	Schema.Struct({ markdown: Schema.String })
+]);
+const PdfOptions = {
+	page: Schema.optionalKey(Schema.Literals(['A4', 'A3', 'Letter'])),
+	landscape: Schema.optionalKey(Schema.Boolean)
+};
+export const PreviewPdf = Schema.Struct({
+	source: ConvertSource,
+	options: Schema.Struct(PdfOptions)
+});
 const ConvertDocument = Schema.Struct({
-	source: Schema.Union([
-		Schema.Struct({ html: Schema.String }),
-		Schema.Struct({ markdown: Schema.String })
-	]),
+	source: ConvertSource,
 	request: Schema.Struct({
 		to: Schema.Literals(CONVERT_TARGETS),
 		name: Schema.String,
-		page: Schema.optionalKey(Schema.Literals(['A4', 'A3', 'Letter'])),
-		landscape: Schema.optionalKey(Schema.Boolean),
+		...PdfOptions,
 		reference: Schema.optionalKey(Schema.Struct({ id: Schema.String }))
 	})
 });

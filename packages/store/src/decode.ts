@@ -630,6 +630,7 @@ export const where: (
 			} else of.push(...(yield* refOps(cat, info, key, null, ops, depth, at, hops)));
 		} else {
 			const f = info.fields.get(key);
+			if (key.startsWith('$')) return yield* invalid(`${at}: '${key}' is written '${key.slice(1)}', no $`);
 			if (f === undefined || key.includes('.'))
 				return yield* invalid(
 					`${at}: unknown field '${key}' on '${m}'${/\p{Cf}/u.test(key) ? ' (the name holds invisible characters)' : ''}; its fields: ${[...info.fields.keys()].join(', ')}`

@@ -38,7 +38,7 @@ import {
 import { type EngineError } from '../errors.ts';
 import { BoltError } from '../../protocol/errors.ts';
 import { decodeInput } from '../callables/decode.ts';
-import { nextDue } from '../runs/queue.ts';
+import { enqueue, nextDue } from '../runs/queue.ts';
 import type { Item } from '../write/flatten.ts';
 import { Chain } from '../write/sql.ts';
 import {
@@ -224,6 +224,14 @@ export const writeStatus = (instance: string, patch: { readonly [key: string]: J
 			'status',
 			`UPDATE sys_integration i SET status = ${merged} || ${since}, revision = i.revision + 1 WHERE i.id = ${c.p(instance)} AND ${merged} IS DISTINCT FROM coalesce(i.status, '{}'::jsonb) RETURNING 'sys_integration'::text AS c, i.id::text AS id, i.revision AS revision, 'update'::text AS op, 'direct'::text AS cause, to_jsonb(old) AS o, to_jsonb(new) AS n`
 		);
+		if (patch.state === 'connected')
+			enqueue(
+				c,
+				[{ automation: 'sync.deliver', input: {}, dueAt: at, cause: 'schedule', depth: 0 }],
+				{
+					when: `EXISTS (SELECT 1 FROM status x JOIN sys_outbox o ON o.instance = x.id WHERE o.status IN ('queued', 'sending'))`
+				}
+			);
 		const rows = yield* db.returning(
 			Schema.Struct({
 				captured: Schema.Array(

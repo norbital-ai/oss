@@ -18,7 +18,7 @@ import {
 } from '../decl/model.ts';
 import type { RelationshipSpec } from '../decl/names.ts';
 import type { Role } from '../decl/layout.ts';
-import type { EnvoySpec, mcp } from '../decl/runtime/agent.ts';
+import type { EnvoySpec, mcp, ToolSpec } from '../decl/runtime/agent.ts';
 import type { AppSpec, GroupSpec } from '../decl/runtime/app.ts';
 import type { AutomationSpec } from '../decl/runtime/automation.ts';
 import type { IntegrationSpec } from '../decl/runtime/integration.ts';
@@ -191,7 +191,9 @@ export const SKILL_FILE = 'SKILL.md';
 const Agent = Schema.Struct({
 	internal: Schema.optionalKey(Schema.String),
 	external: Schema.optionalKey(Schema.String),
-	skills: Schema.Record(Schema.String, SkillSchema)
+	skills: Schema.Record(Schema.String, SkillSchema),
+	/** The tools by name (`src/agent/tool/<n>/+tool.ts`). */
+	tools: Schema.optionalKey(parts<ToolSpec>('agent tool'))
 });
 
 const manifestFields = {
@@ -331,7 +333,8 @@ export function projectManifest(m: LoadedManifest): unknown {
 		customFields: marked(m.custom_field, 'validate', 'check'),
 		agent: {
 			...defined({ internal: m.agent[''], external: m.agent_external[''] }),
-			skills: specs(m.skill)
+			skills: specs(m.skill),
+			...(Object.keys(m.tool).length === 0 ? {} : { tools: specs(m.tool) })
 		}
 	};
 }

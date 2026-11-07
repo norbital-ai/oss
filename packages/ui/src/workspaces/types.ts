@@ -28,7 +28,7 @@ export type WorkspaceChange = Readonly<{
 	updatedAt: string;
 	behind?: number;
 	merge?: Readonly<{
-		state: 'scheduled' | 'running' | 'failed';
+		state: 'scheduled' | 'queued' | 'running' | 'failed';
 		at: string;
 		head: string;
 		error?: string;

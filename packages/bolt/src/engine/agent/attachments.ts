@@ -2,13 +2,13 @@ import { Effect, Option, Schema } from 'effect';
 import type { Json } from '../../decl/values.ts';
 import type { TenantDbShape } from '../db/tenant-db.ts';
 import { BoltError } from '../../protocol/errors.ts';
-import { Images, type Files, type Convert, type Logs } from '../ports.ts';
+import { Images, type Files, type Logs } from '../ports.ts';
 import { imageJpeg } from '../files/image.ts';
 import { row } from '../system/rows.ts';
 import { MODEL_FILES } from './ai.ts';
 import type { AttachmentPort } from './tools.ts';
 import type { FileRef as MessageFile } from './schema.ts';
-import { cached, plain, route, stash, transcriptOf } from './ingest.ts';
+import { route } from './ingest.ts';
 import { toBase64 } from '../crypto.ts';
 
 const Ref = Schema.Struct({ id: Schema.String, name: Schema.optionalKey(Schema.String) });
@@ -38,8 +38,6 @@ export const attachmentsFor = Effect.fn('Agents.attachments')(function* (
 		params: [JSON.stringify(ids), member]
 	});
 	const byId = new Map(rows.map((file) => [file.id, file]));
-	if (rows.reduce((bytes, file) => bytes + file.size, 0) > MODEL_FILES.bytes)
-		return yield* refused('Attach at most 20 MiB in one message.');
 	return yield* Effect.forEach(ids, (id) => {
 		const file = byId.get(id);
 		return file === undefined
@@ -103,13 +101,15 @@ export function fileAttachments(
 	};
 }
 
-/** Read only files already attached to this pending conversation; never follow URLs supplied in a caption. */
+/**
+ * What triage sees of a message's files: each one's metadata, and the images among them. Nothing is parsed here. Read
+ * only files already attached to this pending conversation; never follow URLs supplied in a caption.
+ */
 export const triageAttachments = Effect.fn('Agents.triageAttachments')(function* (
 	db: TenantDbShape,
 	ports: {
 		files: Files['Service'];
 		images: Images['Service'];
-		convert: Convert['Service'];
 		logs: Logs['Service'];
 	},
 	messages: readonly { id: string; files: readonly MessageFile[] }[],
@@ -128,15 +128,13 @@ export const triageAttachments = Effect.fn('Agents.triageAttachments')(function*
 				});
 	const byId = new Map(stored.map((f) => [f.id, f]));
 	let bytes = 0,
-		images = 0,
-		textChars = 0;
+		images = 0;
 	return new Map(
 		yield* Effect.forEach(messages, (message) =>
 			Effect.gen(function* () {
 				const attachments: Json[] = [],
 					parts: Json[] = [];
 				let unread = false;
-				// Original photos and extracted document pages share the same visual and byte budgets.
 				const addImage = Effect.fn('Agents.triageImage')(function* (image: {
 					key: string;
 					size: number;
@@ -175,115 +173,11 @@ export const triageAttachments = Effect.fn('Agents.triageAttachments')(function*
 							})
 							.pipe(Effect.as({ unread: true } as const));
 					const content = yield* Effect.gen(function* () {
-						if (ref.text !== undefined && ref.text.trim() !== '')
-							return { text: ref.text.slice(0, 12000), truncated: ref.text.length > 12000 };
-						if (
-							file === undefined ||
-							file.size > 8 * 1024 * 1024 ||
-							(bytes += file.size) > 20 * 1024 * 1024
-						)
+						if (file === undefined || route(file.mime, file.name) !== 'image') return {};
+						if (file.size > 8 * 1024 * 1024 || (bytes += file.size) > 20 * 1024 * 1024)
 							return { unread: true };
-						const how = route(file.mime, file.name);
-						if (how === 'unsupported') return { unread: true };
-						if (how === 'image') {
-							const image = yield* addImage(file);
-							return image === undefined ? { unread: true } : { image };
-						}
-						if (how === 'text') {
-							const text = new TextDecoder().decode(
-								yield* ports.files.get(file.key, 8 * 1024 * 1024)
-							);
-							return { text: text.slice(0, 12000), truncated: text.length > 12000 };
-						}
-						let parsed = yield* cached(db, ports.files, file.sha256);
-						if (parsed === undefined) {
-							if (ports.convert.ingest === undefined) return { unread: true };
-							const got = yield* ports.convert.ingest(
-								{ ...file, bytes: yield* ports.files.get(file.key, 8 * 1024 * 1024) },
-								{}
-							);
-							if ('unsupported' in got) return { unread: true };
-							const usage = got.meta.usage;
-							if (usage !== undefined)
-								yield* ports.logs.write({
-									at: context.now,
-									severity: 'info',
-									event: 'ai.call',
-									invocation: message.id,
-									conversation: context.conversation,
-									run: null,
-									turn: null,
-									attributes: {
-										calls: usage.calls,
-										model: usage.model,
-										input: usage.input,
-										output: usage.output,
-										cost: usage.cost,
-										facility: 'convert.ingest',
-										category: how === 'audio' ? 'transcription' : 'attachment',
-										settlement: usage.calls.length === 0 ? 'attention' : 'pending'
-									}
-								});
-							yield* ports.logs.write({
-								at: context.now,
-								severity: 'info',
-								event: 'ingest.convert',
-								invocation: message.id,
-								conversation: context.conversation,
-								run: null,
-								turn: null,
-								attributes: {
-									sha256: file.sha256,
-									mime: file.mime,
-									kind: got.kind,
-									cached: false,
-									...got.meta.stats
-								}
-							});
-							parsed = yield* stash(
-								db,
-								ports.files,
-								{
-									sha256: file.sha256,
-									base: file.name.replace(/\.[^./]*$/, '').replaceAll('/', '_') || 'file',
-									member: null,
-									now: context.now
-								},
-								got
-							);
-						}
-						const main = new TextDecoder().decode(
-							yield* ports.files.get(parsed.main.key, 8 * 1024 * 1024)
-						);
-						const transcript =
-							how === 'audio' && parsed.kind === 'document' ? transcriptOf(main) : undefined;
-						const text =
-							transcript !== undefined
-								? transcript.segments.map((s) => `${s.speaker}: ${s.text}`).join('\n')
-								: parsed.kind === 'document'
-									? plain(main)
-									: main;
-						const documentImages: string[] = [];
-						let incomplete = false;
-						for (const image of parsed.files.filter((part) => part.mime.startsWith('image/'))) {
-							if ((bytes += image.size) > 20 * 1024 * 1024) {
-								incomplete = true;
-								break;
-							}
-							const label = yield* addImage(image);
-							if (label === undefined) {
-								incomplete = true;
-								break;
-							}
-							documentImages.push(label);
-						}
-						return {
-							text: text.slice(0, 12000),
-							truncated: text.length > 12000,
-							unread: incomplete || (text.trim() === '' && documentImages.length === 0),
-							...(documentImages.length === 0 ? {} : { images: documentImages }),
-							...(how === 'audio' ? { transcript: true } : {})
-						};
+						const image = yield* addImage(file);
+						return image === undefined ? { unread: true } : { image };
 					}).pipe(
 						Effect.timeoutOption('10 seconds'),
 						Effect.tap((result) =>
@@ -294,16 +188,8 @@ export const triageAttachments = Effect.fn('Agents.triageAttachments')(function*
 						Effect.map((result) => Option.getOrElse(result, () => ({ unread: true }) as const)),
 						Effect.catch((error) => failedRead(error.message.slice(0, 300)))
 					);
-					const retained =
-						'text' in content &&
-						typeof content.text === 'string' &&
-						(textChars += content.text.length) > 48000
-							? { unread: true }
-							: content;
-					unread ||=
-						('unread' in retained && retained.unread === true) ||
-						('truncated' in retained && retained.truncated === true);
-					attachments.push({ ...metadata, ...retained });
+					unread ||= 'unread' in content;
+					attachments.push({ ...metadata, ...content });
 				}
 				return [message.id, { attachments, parts, unread }] as const;
 			})

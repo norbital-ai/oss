@@ -359,6 +359,22 @@ describe('next query engine (PGlite)', () => {
 				}
 				// the policy scopes the count exactly as it scopes the rows
 				expect((yield* page(caller)).total).toBeLessThan((yield* page(workspace)).total);
+				// a bucketed count, as a board's lanes read it, adds up to the same scope
+				for (const reader of [caller, workspace]) {
+					const [lanes] = yield* run(
+						reader,
+						lowerRead(manifest, 'aggregate', [
+							'orders',
+							{ count: true, by: ['status'], all: true, where: { status: { ne: 'held' } } }
+						])
+					);
+					const buckets = Schema.decodeUnknownSync(
+						Schema.Struct({ rows: Schema.Array(Schema.Struct({ count: Schema.Number })) })
+					)(lanes).rows;
+					expect(buckets.reduce((sum, bucket) => sum + bucket.count, 0)).toBe(
+						(yield* page(reader)).total
+					);
+				}
 			})
 	);
 	it.live(

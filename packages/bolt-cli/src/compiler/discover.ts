@@ -128,6 +128,10 @@ export const discover = Effect.fn('bolt.discover')(function* (
 		files.push({ role: r.role, name, path });
 	}
 
+	for (const file of files.filter((file) => file.role === 'tool'))
+		if (!paths.includes(file.path.replace('+tool.ts', 'run.ts')))
+			fail('tool-entry', file.path, "a tool's body is run.ts beside its +tool.ts");
+
 	// A source declaration has one owner.
 	const declarations = new Map<string, Discovered>();
 	for (const file of files.filter((file) => file.role === 'model' || file.role === 'policy')) {

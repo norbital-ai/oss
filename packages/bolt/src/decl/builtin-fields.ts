@@ -12,7 +12,7 @@ const money = customField('money', {
 });
 const file = customField('file', {
 	description: 'A stored file: its id, name, MIME type and size.',
-	shape: { kind: 'file', accept: ['*/*'], max: '20MiB' },
+	shape: { kind: 'file', accept: ['*/*'], max: '1024GiB' },
 	label: 'File'
 });
 const point = customField('point', {
@@ -34,7 +34,7 @@ export type BuiltinFields = {
 	money: { spec: { shape: { readonly kind: 'money' } } };
 	file: {
 		spec: {
-			shape: { readonly kind: 'file'; readonly accept: readonly ['*/*']; readonly max: '20MiB' };
+			shape: { readonly kind: 'file'; readonly accept: readonly ['*/*']; readonly max: '1024GiB' };
 		};
 	};
 	point: { spec: { shape: { readonly kind: 'point' } } };

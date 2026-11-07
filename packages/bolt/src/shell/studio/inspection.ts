@@ -65,7 +65,7 @@ const change = Schema.Struct({
 	behind: Schema.optionalKey(count),
 	merge: Schema.optionalKey(
 		Schema.Struct({
-			state: Schema.Literals(['scheduled', 'running', 'failed']),
+			state: Schema.Literals(['scheduled', 'queued', 'running', 'failed']),
 			at: Schema.String,
 			head: Schema.String,
 			error: optionalText,

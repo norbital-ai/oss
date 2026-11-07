@@ -149,7 +149,7 @@ describe('decodeReadRequest and planReadRequest', () => {
 			);
 			expect(plan).toEqual(
 				Result.fail(
-					"'accounts': search cannot be combined with aggregate; use a where filter for the aggregate or read the search results"
+					"'accounts': search cannot be combined with aggregate; a read's total already counts its matches"
 				)
 			);
 		}

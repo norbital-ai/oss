@@ -53,6 +53,7 @@ export const bolt: Omit<PublicClient, 'describe'> & {
 	start: (...args) => client().start(...args),
 	clock: (...args) => client().clock(...args),
 	convert: (...args) => client().convert(...args),
+	previewPdf: (...args) => client().previewPdf(...args),
 	observe: (...args) => client().observe(...args),
 	upload: (...args) => client().upload(...args),
 	fileUrl: (...args) => client().fileUrl(...args),

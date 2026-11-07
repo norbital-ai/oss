@@ -183,6 +183,7 @@ describe('projectManifest', () => {
 		agent_external: {},
 		envoy: {},
 		skill: {},
+		tool: {},
 		mcp: {},
 		automation: {},
 		app: {},

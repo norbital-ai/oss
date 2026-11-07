@@ -26,7 +26,7 @@ export function filePart(f: { mime: string; bytes: Uint8Array }, name: string): 
 }
 /** What a file with no parser answers (plan 12 rule 7): the agent builds one, never guesses. */
 export const unparsed = (name: string, mime: string) =>
-	`${name} (${mime || 'unknown type'}): no parser: build a tool for it with your workspace tools (run_js with files: [{ id }] reads its bytes); never guess what it contains.`;
+	`${name} (${mime || 'unknown type'}): no parser. A tool you declare in src/agent/tool runs any package on it in a VM; run_js with files: [{ id }] reads its bytes. Never guess what it contains.`;
 
 const OOXML = 'application/vnd.openxmlformats-officedocument.';
 const CONVERTS: ReadonlySet<string> = new Set([
@@ -122,11 +122,28 @@ export const plain = (html: string) =>
 			(_, e: string) => ({ amp: '&', lt: '<', gt: '>', quot: '"' })[e] ?? ''
 		);
 const SECTION = /^<section data-(page|slide|speaker)="([^"]*)"/;
+/** Convert's line for a PDF page read for its text that has none: a scan, or a drawing. */
+const NO_TEXT = '<p>No text on this page.</p>';
+/** Page numbers as ranges, up to what an index line holds: 1–3, 9, … */
+const pageRanges = (pages: readonly number[]) => {
+	const ranges: string[] = [];
+	let length = 0;
+	for (let i = 0; i < pages.length; ) {
+		let last = i;
+		while (pages[last + 1] === pages[last]! + 1) last++;
+		const range = last === i ? `${pages[i]}` : `${pages[i]}–${pages[last]}`;
+		if ((length += range.length + 2) > 300) return [...ranges, '…'].join(', ');
+		ranges.push(range);
+		i = last + 1;
+	}
+	return ranges.join(', ');
+};
 /** A document's index from its HTML: lines, page and slide counts, outline with line ranges, tables and image names. */
 export function indexOf(html: string): IngestIndex {
 	const lines = html.split('\n'),
 		spans = blocks(lines),
-		outline: { title: string; level: number; from: number; to: number }[] = [];
+		outline: { title: string; level: number; from: number; to: number }[] = [],
+		textless: number[] = [];
 	let pages = 0,
 		slides = 0,
 		tables = 0,
@@ -143,7 +160,10 @@ export function indexOf(html: string): IngestIndex {
 		if (s === null) return;
 		const [, kind, value] = s,
 			to = spans[i]?.[1] ?? i + 1;
-		if (kind === 'page') pages++;
+		if (kind === 'page') {
+			pages++;
+			if (lines[i + 1]?.trim() === NO_TEXT) textless.push(Number(value));
+		}
 		if (kind === 'slide') slides++;
 		// a speaker's consecutive segments are one entry
 		const last = outline.at(-1);
@@ -174,7 +194,8 @@ export function indexOf(html: string): IngestIndex {
 		slides,
 		outline,
 		tables,
-		images: [...new Set([...html.matchAll(/<img\b[^>]*\bsrc="([^"]+)"/g)].map((m) => m[1]!))]
+		images: [...new Set([...html.matchAll(/<img\b[^>]*\bsrc="([^"]+)"/g)].map((m) => m[1]!))],
+		...(textless.length === 0 ? {} : { noText: pageRanges(textless) })
 	};
 }
 /** An audio ingest's transcript from its speaker sections (none: not a recording); its length is the last segment's end. */
@@ -266,45 +287,62 @@ export const cached = Effect.fn('Agents.ingestCached')(function* (
  * Stores an ingest under `ingest/<sha256>/`. A document: its HTML, images, a recording's `transcript.json` (for run_js),
  * then its `index.json` (which makes it complete). Data: its images, then `data.json` (the JSON as Convert answered it).
  */
+/** Blobs stored at once by one document. */
+const PUTS = 16;
 export const stash = Effect.fn('Agents.ingestStash')(function* (
 	db: TenantDbShape,
 	files: Files['Service'],
 	o: { sha256: string; base: string; member: string | null; now: string },
 	ingested: Ingested
 ) {
-	const put = Effect.fn('Agents.ingestPut')(function* (
-		path: string,
-		mime: string,
-		bytes: Uint8Array
+	/** Each file's bytes go up at once, and its rows land in one statement: a long document has thousands. */
+	const putAll = Effect.fn('Agents.ingestPutAll')(function* (
+		parts: readonly { readonly path: string; readonly mime: string; readonly bytes: Uint8Array }[]
 	) {
-		const blob = yield* files.put(bytes, { name: path.split('/').pop() ?? path, mime });
-		const file = {
-			id: globalThis.crypto.randomUUID(),
-			name: `${prefix(o.sha256)}${path}`,
-			mime,
-			size: bytes.length,
-			key: blob.key
-		};
-		yield* db.write({
-			text: `INSERT INTO sys_file (id, name, mime, size, key, sha256, field, created_at, created_by)
-			VALUES ($1, $2, $3, $4, $5, $6, 'sys_conversation.outputs', $7::timestamptz, $8)`,
-			params: [file.id, file.name, mime, file.size, blob.key, blob.sha256, o.now, o.member]
-		});
-		return file;
+		const stored = yield* Effect.forEach(
+			parts,
+			({ path, mime, bytes }) =>
+				Effect.map(files.put(bytes, { name: path.split('/').pop() ?? path, mime }), (blob) => ({
+					file: {
+						id: globalThis.crypto.randomUUID(),
+						name: `${prefix(o.sha256)}${path}`,
+						mime,
+						size: bytes.length,
+						key: blob.key
+					},
+					sha256: blob.sha256
+				})),
+			{ concurrency: PUTS }
+		);
+		if (stored.length > 0)
+			yield* db.write({
+				text: `INSERT INTO sys_file (id, name, mime, size, key, sha256, field, created_at, created_by)
+				SELECT f.id::uuid, f.name, f.mime, f.size, f.key, f.sha256, 'sys_conversation.outputs', $2::timestamptz, $3
+				FROM jsonb_to_recordset($1::jsonb) AS f(id text, name text, mime text, size bigint, key text, sha256 text)`,
+				params: [
+					JSON.stringify(stored.map(({ file, sha256 }) => ({ ...file, sha256 }))),
+					o.now,
+					o.member
+				]
+			});
+		return stored.map(({ file }) => file);
+	});
+	const put = (path: string, mime: string, bytes: Uint8Array) =>
+		Effect.map(putAll([{ path, mime, bytes }]), ([file]) => file!);
+	const picture = (image: Ingested['images'][number]) => ({
+		path: `images/${image.name}`,
+		mime: image.mime,
+		bytes: image.bytes
 	});
 	const json = (name: string, value: unknown) =>
 		put(name, 'application/json', new TextEncoder().encode(JSON.stringify(value)));
 	if (ingested.kind === 'data') {
-		const images = yield* Effect.forEach(ingested.images, (image) =>
-			put(`images/${image.name}`, image.mime, image.bytes)
-		);
+		const images = yield* putAll(ingested.images.map(picture));
 		const data = yield* json('data.json', ingested.json);
 		return { kind: 'data', main: data, files: [...images, data] } satisfies Stash;
 	}
 	const html = yield* put(`${o.base}.html`, 'text/html', new TextEncoder().encode(ingested.html));
-	const images = yield* Effect.forEach(ingested.images, (image) =>
-		put(`images/${image.name}`, image.mime, image.bytes)
-	);
+	const images = yield* putAll(ingested.images.map(picture));
 	const heard = transcriptOf(ingested.html);
 	const transcript = heard === undefined ? [] : [yield* json('transcript.json', heard)];
 	const index = indexOf(ingested.html);
@@ -394,13 +432,23 @@ export function window(html: string, from = 1, to = Number.MAX_SAFE_INTEGER, byt
 export function grep(html: string, text: string, limit: number) {
 	const all = html.split('\n'),
 		spans = blocks(all),
-		want = text.toLowerCase(),
-		hits: { from: number; to: number; text: string }[] = [];
-	let total = 0;
+		// a|b finds either: plain words, so no pattern can run away on a long document
+		wants = text.toLowerCase().split('|').filter((want) => want !== ''),
+		hits: { page?: number; from: number; to: number; text: string }[] = [];
+	let total = 0,
+		page: number | undefined;
 	all.forEach((line, i) => {
-		if (!line.toLowerCase().includes(want) || ++total > limit) return;
+		const section = SECTION.exec(line);
+		if (section?.[1] === 'page') page = Number(section[2]);
+		const lower = line.toLowerCase();
+		if (!wants.some((want) => lower.includes(want)) || ++total > limit) return;
 		const span = spans[i] ?? [i + 1, i + 1];
-		hits.push({ from: span[0], to: span[1], text: line.trim().slice(0, 300) });
+		hits.push({
+			...(page === undefined ? {} : { page }),
+			from: span[0],
+			to: span[1],
+			text: line.trim().slice(0, 300)
+		});
 	});
 	return { total, hits };
 }
@@ -429,7 +477,8 @@ export function summary(index: IngestIndex, transcript: Transcript | undefined):
 					: undefined,
 		`${n(index.lines)} lines`,
 		index.images.length === 0 ? undefined : `${n(index.images.length)} images`,
-		index.tables === 0 ? undefined : `${n(index.tables)} tables`
+		index.tables === 0 ? undefined : `${n(index.tables)} tables`,
+		index.noText === undefined ? undefined : `no text on pages ${index.noText}`
 	]
 		.filter((p) => p !== undefined)
 		.join(' · ');

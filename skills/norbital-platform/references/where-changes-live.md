@@ -17,6 +17,7 @@ A setting's name does not say which side it belongs on: inspect the declaration 
 | Named instances and their default envoy | `src/+workspace.ts` `connections` |
 | Agent briefs | `src/agent/+agent.md`, `+agent.external.md` |
 | Workspace skills | `src/agent/skill/<name>/+skill.md` |
+| Agent tools | `src/agent/tool/<name>/+tool.ts`, `run.ts` |
 | MCP servers | `src/agent/mcp/+<name>.mcp.ts` |
 | Zone, locale, currency, app order, AI classes | `src/+workspace.ts` |
 | Secret names | `src/+secrets.ts` |

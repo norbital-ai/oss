@@ -246,6 +246,9 @@ describe('documentConverter (Norbital Convert)', () => {
 				yield* port
 					.convert({ html: '<p>x</p>' }, 'docx', { reference: new Uint8Array([1, 2, 3]) })
 					.pipe(Effect.timeout('10 seconds'));
+				yield* port
+					.convert({ layoutHtml: '<style>@page{margin:0}</style><p>x</p>' }, 'pdf', {})
+					.pipe(Effect.timeout('10 seconds'));
 				expect(seen).toEqual([
 					{
 						from: 'markdown',
@@ -255,7 +258,13 @@ describe('documentConverter (Norbital Convert)', () => {
 						landscape: true,
 						reference: null
 					},
-					{ from: 'html', to: 'docx', source: '<p>x</p>', reference: [1, 2, 3] }
+					{ from: 'html', to: 'docx', source: '<p>x</p>', reference: [1, 2, 3] },
+					{
+						from: 'layout-html',
+						to: 'pdf',
+						source: '<style>@page{margin:0}</style><p>x</p>',
+						reference: null
+					}
 				]);
 			})
 		)

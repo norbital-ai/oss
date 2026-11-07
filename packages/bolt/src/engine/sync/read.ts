@@ -684,14 +684,22 @@ export function makeRead(e: SyncEngine) {
 	 * When a sync with nothing to read next has something: the first of its connections' rests ending, or tomorrow with
 	 * no connection at all. `undefined` while one can read. Asks the database only when it is awake or the rest is over.
 	 */
+	const eligible = (i: Instance, s: RemoteSync) =>
+		i.active &&
+		i.integration === s.definition &&
+		(i.definition.driver !== 'sqlserver' ||
+			e.links.unpaced ||
+			(Predicate.isObject(i.status) &&
+				i.status['state'] === 'connected' &&
+				i.status['databaseVerified'] === true));
 	const rests = Effect.fn('Syncs.rests')(function* (s: RemoteSync, now: number) {
 		if (!e.links.available) return undefined;
 		const held = known.get(s.name);
 		if (held !== undefined && held > now && !(yield* db.awake)) return held;
 		const stored = yield* db.quietly(
 			Effect.gen(function* () {
-				const instances = (yield* instancesOf(m, db, { integration: s.definition })).filter(
-					(i) => i.active && i.integration === s.definition
+				const instances = (yield* instancesOf(m, db, { integration: s.definition })).filter((i) =>
+					eligible(i, s)
 				);
 				const rows = yield* db.rows(StoredState, {
 					text: `SELECT ${STORED_STATE} FROM sys_sync WHERE sync = $1`,
@@ -732,7 +740,7 @@ export function makeRead(e: SyncEngine) {
 			m,
 			db,
 			only === undefined ? { integration: s.definition } : { ids: [only] }
-		)).filter((i) => i.active && i.integration === s.definition);
+		)).filter((i) => eligible(i, s));
 		if (instances.length === 0) return { pages: 0, unconnected: true };
 		const stored = yield* db.rows(StoredState, {
 			text: `SELECT ${STORED_STATE} FROM sys_sync

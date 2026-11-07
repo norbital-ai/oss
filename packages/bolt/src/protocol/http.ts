@@ -42,7 +42,7 @@ import { AgentBackground, agentCallables, conversationFor } from '../engine/agen
 import { isStaff, transcriptRow } from '../engine/agent/schema.ts';
 import { mcpServers } from '../engine/agent/mcp.ts';
 import { agentSettings, allowedModel, spent } from '../engine/agent/settings.ts';
-import { convertDocument } from '../engine/facilities.ts';
+import { convertDocument, previewPdf } from '../engine/facilities.ts';
 import { lowerRead } from '../engine/query/engine.ts';
 import { readsAny, viewOutput } from '../engine/access/authority.ts';
 import { fingerprint, schemaSlice } from '../engine/schema/plan.ts';
@@ -70,6 +70,7 @@ import {
 	LiveBody,
 	NoticeRow,
 	OwnCall,
+	PreviewPdf,
 	PushBody,
 	QBody,
 	type Frame,
@@ -317,7 +318,11 @@ export const requestActRate = Effect.fn('protocol.requestActRate')(function* (
 			const body = yield* requestBody(request, ActBody);
 			const named = chargesFor(
 				authority,
-				[body.callable === 'convert.document' ? 'convert' : body.callable],
+				[
+					body.callable === 'convert.document' || body.callable === 'convert.previewPdf'
+						? 'convert'
+						: body.callable
+				],
 				who
 			).filter(
 				(charge) =>
@@ -786,6 +791,38 @@ export const BoltRoutes = {
 					},
 					{ status: 409 }
 				);
+			if (body.callable === 'convert.previewPdf') {
+				if (authority.actor.kind !== 'member')
+					return yield* Effect.fail(
+						BoltError.make('forbidden', 'admission', 'Only members may convert documents.')
+					);
+				const admitted = yield* requestActRate(request, authority);
+				if (!admitted.verdict.ok)
+					return HttpServerResponse.jsonUnsafe(
+						{
+							outcome: { kind: 'refused', code: 'rateLimited', message: RATE_LIMITED },
+							v: yield* live.v
+						},
+						{ status: 429, headers: { 'retry-after': String(admitted.verdict.retryAfter) } }
+					);
+				const { source, options } = yield* Schema.decodeUnknownEffect(PreviewPdf)(body.input).pipe(
+					Effect.mapError((error) => invalid(String(error)))
+				);
+				const bytes = yield* previewPdf(source, options).pipe(
+					Effect.mapError((error) =>
+						BoltError.make(
+							error._tag === 'Unavailable' ? 'unavailable' : 'invalid',
+							'facility',
+							error.message,
+							error
+						)
+					)
+				);
+				return HttpServerResponse.uint8Array(bytes, {
+					contentType: 'application/pdf',
+					headers: { 'cache-control': 'private, no-store', 'x-content-type-options': 'nosniff' }
+				});
+			}
 			const reply = yield* dispatchAct(
 				{ ...body, key, retry: header(request, HEADERS.retry) === '1' },
 				authority,

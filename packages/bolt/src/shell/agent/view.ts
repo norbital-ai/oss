@@ -190,11 +190,13 @@ export const callableWords = (callable: string) => {
 			? `Run the ${scope.replace(/_/g, ' ')} pipeline`
 			: `${words(act || scope)} ${act ? scope.replace(/_/g, ' ') : ''}`.trim();
 };
-/** A read's keys with their options: `reads`, or a transcript from before it, its keys themselves. */
+/** A read's keys with their options: `request`, or a transcript from before it, `reads` or its keys themselves. */
 export const readsOf = (a: Args): readonly (readonly [string, unknown])[] =>
-	Arr.isArray(a['reads'])
-		? a['reads'].map((one: unknown) => [str(obj(one)['of']), one] as const)
-		: Object.entries(a);
+	a['request'] !== undefined
+		? Object.entries(obj(a['request']))
+		: Arr.isArray(a['reads'])
+			? a['reads'].map((one: unknown) => [str(obj(one)['of']), one] as const)
+			: Object.entries(a);
 /** A draft path in words: `/snapshot/rule_set/EPF_MONTHLY` → `rule_set/EPF_MONTHLY`. */
 const draftPath = (path: string) => path.replace(/^\/snapshot\//, '').replace(/^\//, '');
 const VIEWS: { readonly [tool: string]: (a: Args) => StepView } = {
@@ -444,6 +446,7 @@ const VIEWS: { readonly [tool: string]: (a: Args) => StepView } = {
 					target: '',
 					code: { text: str(a['code']), language: 'javascript' }
 				},
+	run_tool: (a) => ({ icon: 'lucide:wrench', verb: 'Ran a tool', target: str(a['name']) }),
 	web_search: (a) => ({ icon: 'lucide:search', verb: 'Searched the web', target: str(a['query']) }),
 	personal_skill_save: (a) => ({
 		icon: 'lucide:bookmark-plus',

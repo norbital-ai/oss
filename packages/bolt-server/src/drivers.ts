@@ -260,54 +260,53 @@ export function sqlServerProvider(database: ReturnType<typeof sqlServerDatabase>
 			setup: { kind: 'form', steps: [], fields: credentialFields(definition) }
 		}),
 		open: Effect.fn('SQLServer.open')(function* (ctx: DriverOpen) {
+			const request = (operation: Json) =>
+				Effect.gen(function* () {
+					const stored = yield* hostCall('read SQL Server credential', () =>
+						ctx.credentials.load()
+					);
+					const credential = yield* Schema.decodeUnknownEffect(Credential)(
+						stored.get('credential')
+					).pipe(
+						Effect.mapError(
+							() =>
+								new ProviderUnavailable({
+									message: 'the instance is not paired: its connection string is missing'
+								})
+						)
+					);
+					const [connection, ...rest] = Object.values(credential);
+					if (connection === undefined || rest.length !== 0)
+						return yield* Effect.fail(
+							new ProviderUnavailable({
+								message: 'the instance is not paired: its connection string is missing'
+							})
+						);
+					const request = yield* Schema.decodeUnknownEffect(DatabaseRequest)(operation).pipe(
+						Effect.mapError(
+							() => new ProviderRefused({ message: 'Invalid database request.', permanent: true })
+						)
+					);
+					const result = yield* database
+						.query(connection, request)
+						.pipe(Effect.mapError(unavailable));
+					return yield* Schema.decodeUnknownEffect(DatabaseResult)(result).pipe(
+						Effect.mapError(
+							() => new ProviderUnavailable({ message: 'Invalid database result.' })
+						)
+					);
+				});
 			return {
 				close: Effect.void,
-				// The engine runs the workspace's integration test body after this provider phase.
-				test: () => Effect.void,
+				test: () => request({ op: 'values', values: { connected: 1 }, maxRows: 1 }).pipe(Effect.asVoid),
 				pair: (input: Json) =>
 					Effect.gen(function* () {
 						const value = yield* credentials(ctx.definition, input);
 						yield* hostCall('write SQL Server credential', () =>
 							ctx.credentials.write(new Map([['credential', value]]))
 						);
-						yield* hostCall('report SQL Server status', () => ctx.status({ state: 'connected' }));
 					}),
-				request: (operation: Json) =>
-					Effect.gen(function* () {
-						const stored = yield* hostCall('read SQL Server credential', () =>
-							ctx.credentials.load()
-						);
-						const credential = yield* Schema.decodeUnknownEffect(Credential)(
-							stored.get('credential')
-						).pipe(
-							Effect.mapError(
-								() =>
-									new ProviderUnavailable({
-										message: 'the instance is not paired: its connection string is missing'
-									})
-							)
-						);
-						const [connection, ...rest] = Object.values(credential);
-						if (connection === undefined || rest.length !== 0)
-							return yield* Effect.fail(
-								new ProviderUnavailable({
-									message: 'the instance is not paired: its connection string is missing'
-								})
-							);
-						const request = yield* Schema.decodeUnknownEffect(DatabaseRequest)(operation).pipe(
-							Effect.mapError(
-								() => new ProviderRefused({ message: 'Invalid database request.', permanent: true })
-							)
-						);
-						const result = yield* database
-							.query(connection, request)
-							.pipe(Effect.mapError(unavailable));
-						return yield* Schema.decodeUnknownEffect(DatabaseResult)(result).pipe(
-							Effect.mapError(
-								() => new ProviderUnavailable({ message: 'Invalid database result.' })
-							)
-						);
-					})
+				request
 			};
 		})
 	};

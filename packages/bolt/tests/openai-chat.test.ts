@@ -593,8 +593,43 @@ describe('openAiChat', () => {
 				text: `a (${mime}): read_file reads it`
 			});
 	});
+	it.effect('a request opens with the one before it, byte for byte: reasoning, images and later turns included', () =>
+		Effect.gen(function* () {
+			const call = (id: string) => ({ id, name: 'read', input: {} }),
+				image = { mime: 'image/png', bytes: new Uint8Array([0x89, 0x50, 0x4e, 0x47]) };
+			const first_ = [
+				{ role: 'user' as const, content: 'q' },
+				{ role: 'assistant' as const, content: { text: '', toolCalls: [call('c1')], reasoning: 'First.' } },
+				{ role: 'tool' as const, content: { id: 'c1', name: 'read', result: 1 } }
+			];
+			const second = [
+				...first_,
+				{ role: 'assistant' as const, content: { text: 'Done.', toolCalls: [], reasoning: 'Second.' } },
+				{ role: 'user' as const, content: 'a new turn' },
+				{ role: 'assistant' as const, content: { text: '', toolCalls: [call('c2')], reasoning: 'Third.' } },
+				{ role: 'tool' as const, content: { id: 'c2', name: 'read', result: 2 } }
+			];
+			const sent = (messages: typeof second, files: readonly (typeof image & { call: string })[]) =>
+				Effect.gen(function* () {
+					const { f, seen } = capture(() =>
+						stream(['data: {"id":"gen-9","choices":[{"delta":{"content":"ok"}}]}\n\ndata: [DONE]\n\n'])
+					);
+					yield* collect(openAiChat(config, { fetch: f }), { ...request, messages, files });
+					return first(seen).sent.messages.map((m) => JSON.stringify(m));
+				});
+			const kept = { ...image, call: 'c1' },
+				before = yield* sent(first_, [kept]),
+				// a file past the turn's room rides this one request, after the last result, and is gone on the next
+				once = yield* sent(second, [kept, { ...image, call: 'c2' }]),
+				after = yield* sent(second, [kept]);
+			expect(once.slice(0, before.length)).toEqual(before);
+			expect(after.slice(0, before.length)).toEqual(before);
+			expect(once.slice(0, after.length)).toEqual(after);
+			expect(once.length).toBe(after.length + 1);
+		})
+	);
 	it.effect(
-		"reasoning streams and comes back verbatim; an earlier turn's reasoning is not sent back; a switched call id is refused (L-BOLT-412, L-BOLT-432)",
+		"reasoning streams and comes back verbatim, an earlier turn's too; a switched call id is refused (L-BOLT-412, L-BOLT-432)",
 		() =>
 			Effect.gen(function* () {
 				const { f, seen } = capture(() =>
@@ -617,7 +652,7 @@ describe('openAiChat', () => {
 					reasoning: 'None.',
 					usage: { call: 'gen-2' }
 				});
-				expect(first(seen).sent.messages[1]).toEqual({ role: 'assistant', content: 'a' });
+				expect(first(seen).sent.messages[1]).toEqual({ role: 'assistant', content: 'a', reasoning: 'Earlier.' });
 				// within a turn every step keeps its reasoning: a sent message never changes, so the cached prefix holds
 				const steps = capture(() =>
 					stream([

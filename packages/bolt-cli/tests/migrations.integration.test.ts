@@ -367,9 +367,18 @@ select id from entry where given is null or given = '' or family is null or fami
 				if (file === undefined) return yield* Effect.die('second migration missing');
 				// Scratch replay has no entries; this collision occurs only against the live database's existing row.
 				const edited = `${file.sql}\nupdate entry set name = 'Changed';\ninsert into entry (id, name) select id, 'Duplicate' from entry;\n`;
+				const lock = join(source, 'migrations.lock.json'),
+					physical = join(source, 'physical.json'),
+					stale = [yield* fs.readFileString(lock), yield* fs.readFileString(physical)] as const;
 				yield* fs.writeFileString(join(source, file.name), edited);
 				yield* prepareMigrations(directory, extended, 'generate');
 				expect(yield* fs.readFileString(join(source, file.name))).toBe(edited);
+				// a build whose proof went elsewhere leaves the same inputs here: the lock still gets its proof
+				const proved = yield* fs.readFileString(lock);
+				yield* fs.writeFileString(lock, stale[0]);
+				yield* fs.writeFileString(physical, stale[1]);
+				yield* prepareMigrations(directory, extended, 'generate');
+				expect(yield* fs.readFileString(lock)).toBe(proved);
 				expect(
 					yield* Effect.flip(applyMigrations(db, extended, yield* readMigrations(source)))
 				).toMatchObject({ _tag: 'DbError', sqlstate: '23505' });
@@ -379,5 +388,55 @@ select id from entry where given is null or given = '' or family is null or fami
 				expect(yield* receipts(db)).toEqual([{ n: 1 }]);
 			})
 		).pipe(Effect.provide(NodeServices.layer))
+	);
+
+	// data is the edit's to change; the schema is the model's, so a hand edit may not leave the two apart
+	const DRIFT = [
+		`alter table entry add column extra text`,
+		`alter table entry alter column note set not null`,
+		`alter table entry alter column name set default 'x'`,
+		`alter table entry alter column note type text collate "C"`,
+		`alter table entry add constraint positive check (length(name) > 0)`,
+		`create index extra on entry (name)`,
+		`create table extra (id int)`,
+		`create view extra as select 1 as one`,
+		`create sequence extra`,
+		`create function extra() returns int language sql as 'select 1'`,
+		`create aggregate extra(int) (sfunc = int4pl, stype = int)`,
+		`create type extra as enum ('a')`,
+		`create domain extra as text`,
+		`create schema extra`,
+		`create rule extra as on insert to entry do instead nothing`,
+		`create policy extra on entry using (true)`,
+		`alter table entry disable trigger all`,
+		`alter table entry set (fillfactor = 50)`
+	];
+	it.effect(
+		'proves a data edit and refuses every edit that leaves the declared schema',
+		() =>
+			Effect.scoped(
+				Effect.gen(function* () {
+					const fs = yield* FileSystem.FileSystem;
+					const directory = yield* root;
+					const source = join(directory, 'migrations');
+					yield* prepareMigrations(directory, initial, 'generate');
+					yield* prepareMigrations(directory, extended, 'generate');
+					const file = (yield* readMigrations(source)).files[1];
+					if (file === undefined) return yield* Effect.die('second migration missing');
+					const passed: string[] = [];
+					for (const statement of DRIFT) {
+						yield* fs.writeFileString(join(source, file.name), `${file.sql}\n${statement};\n`);
+						const proof = yield* Effect.result(prepareMigrations(directory, extended, 'generate'));
+						if (proof._tag === 'Success') passed.push(statement);
+					}
+					expect(passed).toEqual([]);
+					yield* fs.writeFileString(
+						join(source, file.name),
+						`${file.sql}\nupdate entry set note = name where note is null;\n`
+					);
+					yield* prepareMigrations(directory, extended, 'generate');
+				})
+			).pipe(Effect.provide(NodeServices.layer)),
+		60_000
 	);
 });

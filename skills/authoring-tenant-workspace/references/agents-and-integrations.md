@@ -8,7 +8,16 @@ Exact shapes: `EnvoySpec`, `McpSpec`, `IntegrationSpec` from `@norbital-ai/bolt`
 - A workspace skill is `src/agent/skill/<name>/`: `+skill.md` (`description:` frontmatter, `##` sections), scripts and vendored pure-JavaScript packages, at most 10 MiB, no links.
 - A script runs as written through `run_js { file }`: its tree is read-only at `/app`, files at `/in/<name>`, `/out` reaches the person. Only `fs`, `path`, `buffer`, `process`, `util` built-ins exist; `fetch` needs the `http` grant.
 - Policies grant MCP servers and host tools through `capabilities`; every skill is open to every actor.
-- A brief or skill handling documents says which part to read, never the whole file. A format with no parser is the workspace's to parse with a script or integration. Record imports stay on syncs.
+- A brief or skill handling documents says which part to read, never the whole file. A format with no parser is the workspace's to parse with a tool or integration. Record imports stay on syncs.
+
+## Tools
+
+- A tool is `src/agent/tool/<name>/`: `+tool.ts`, `tool({ description, input })`, data the compiler reads, and `run.ts`, whose default export is a `ToolRun`, `(input, files) => answer`. Helpers stay in the folder.
+- `run_tool { name, input, files }` runs it on Node in a VM of its own: your working tree's for you, live's for everyone else. A merge tells every staff conversation of it, with its input, below what it holds. It reaches no records and needs no policy: pass what it needs and write what it finds with `act`.
+- `workspace_install` brings a package. The network, a process, a worker, a native addon and any write but `files.write` are refused, so choose pure JavaScript or WebAssembly.
+- `files.names` lists what the call handed it and `files.read(name)` gives its bytes. `files.write(name, content)` gives the person a file. Only the return value reaches you.
+- Node strips the types: an import inside the folder names its file with `.ts`, and `enum` and parameter properties are refused.
+- Run it on a real file with `run_tool` before you merge. A test imports `run.ts` and passes its own `files`.
 
 ## Envoys
 

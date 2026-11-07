@@ -127,6 +127,7 @@ const HOST_TOOLS = [
 	'browser_snapshot',
 	'http',
 	'reference',
+	'run_tool',
 	'web_search',
 	'workspace_commit',
 	'workspace_diagnose',

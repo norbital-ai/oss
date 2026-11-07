@@ -21,6 +21,8 @@ Add no browser launcher or `.svelte` mounts to templates. Never give a suite its
 ## The kit
 
 - `TestWorkspace.layer({ root })` compiles real source and supplies the engine, fake facilities, clock and a `node:vm` guest runner; it owns database cleanup.
+- One file's tests share one workspace, in order: rows stay from test to test, so filter to the rows a test made. A cron slot that wrote runs once per file: start each test's clock past the last one's.
+- A model `effect`, an automation start and a schedule queue a run: `t.runDue()` runs it and answers the failed ones; `t.settled()` only waits.
 - `t.storedRead` supplies the native whole-row reader; `t.bodyActs(holder)` the native `many` writer. Keep declared types; never cast a fake `ctx`.
 - Native engine tests use PGlite and maintained migration fixtures. Dispose resources.
 

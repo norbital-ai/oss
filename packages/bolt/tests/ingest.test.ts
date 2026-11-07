@@ -49,7 +49,7 @@ describe('route', () => {
 		expect(route('', 'meeting.m4a')).toBe('audio');
 		expect(route('application/octet-stream', 'plan.dwg')).toBe('unsupported');
 		expect(unparsed('plan.dwg', 'application/acad')).toContain(
-			'no parser: build a tool for it with your workspace tools'
+			'no parser. A tool you declare in src/agent/tool'
 		);
 	});
 });
@@ -91,6 +91,23 @@ describe('windows', () => {
 		const lone = window(html, 3, 7, 60);
 		expect(lone.from).toBe(3);
 		expect(lone.to).toBeLessThan(7);
+	});
+	it('names a PDF hit by its page, and the pages with no text as ranges', () => {
+		const scan = (n: number) => [`<section data-page="${n}">`, '<p>No text on this page.</p>', '</section>'];
+		const pdf = [
+			...scan(1),
+			...scan(2),
+			'<section data-page="3">',
+			'<pre>',
+			'Bond 5%',
+			'</pre>',
+			'</section>',
+			...scan(4)
+		].join('\n');
+		expect(indexOf(pdf).noText).toBe('1–2, 4');
+		expect(summary(indexOf(pdf), undefined)).toContain('no text on pages 1–2, 4');
+		expect(grep(pdf, 'bond', 30).hits[0]?.page).toBe(3);
+		expect(grep(pdf, 'bond|no text', 30).total).toBe(4);
 	});
 	it('greps lines in the line shape, naming a hit inside a table by the whole table', () => {
 		expect(grep(html, '12.50', 30)).toEqual({

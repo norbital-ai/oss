@@ -171,14 +171,16 @@ export class Build {
 export type Level = { scoped: boolean; exposed: boolean };
 export const RAW: Level = { scoped: false, exposed: false };
 
+/** What a layer exposes, named in a refusal so a caller (often a model) can correct the read in one step. */
+const readableFields = (c: ExposureInfo, lv: Level) =>
+	[...c.model.fields.keys()].filter((k) => !lv.exposed || exposedField(c, k));
 const fieldOf = (b: Build, c: ExposureInfo, name: string, lv: Level): Fx<FieldInfo> => {
 	const f = c.model.fields.get(name);
 	if (f !== undefined && !(lv.exposed && !exposedField(c, name))) {
 		b.touch(c.model.name, name);
 		return Effect.succeed(f);
 	}
-	// name what the layer does expose, so a caller (often a model) can correct the read in one step
-	const readable = [...c.model.fields.keys()].filter((k) => !lv.exposed || exposedField(c, k));
+	const readable = readableFields(c, lv);
 	return invalid(
 		`'${c.path}' has no readable field '${name}'${/\p{Cf}/u.test(name) ? ' (the name holds invisible characters)' : ''}; it exposes: ${readable.join(', ')}`
 	);
@@ -695,6 +697,14 @@ export const items: (
 	const fields =
 		s.fields ??
 		(b.scope !== undefined ? defaultFields(c, one || s.whole === true) : storedFields(c.model));
+	const readable = readableFields(c, lv),
+		unread = (s.fields ?? []).filter(
+			(f) => !key.includes(f) && !readable.includes(f) && s.relations[f] === undefined
+		);
+	if (unread.length > 1)
+		return yield* invalid(
+			`'${c.path}' has no readable fields ${unread.map((f) => `'${f}'`).join(', ')}; it exposes: ${readable.join(', ')}`
+		);
 	const out = [
 		...key.map((k) => `${a}.${q(k)} AS ${q(k)}`),
 		...(yield* Effect.forEach(

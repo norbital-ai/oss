@@ -23,7 +23,7 @@ import { mcpServers, mcpSessions } from '../src/engine/agent/mcp.ts';
 import type { AiRequest, AiResponse, Ingested } from '../src/engine/contracts.ts';
 import { callKey, FIXED, rest, type AgentHostConfig } from '../src/engine/agent/index.ts';
 import { transcriptRow } from '../src/engine/agent/schema.ts';
-import { BOUNDS, COMPACT_FORMAT } from '../src/engine/agent/context.ts';
+import { BOUNDS, COMPACT_FORMAT, STATE_NOTE } from '../src/engine/agent/context.ts';
 import { requestEvidence } from '../src/engine/agent/request.ts';
 import type { MessageRow } from '../src/engine/agent/schema.ts';
 import { Authorities } from '../src/engine/identity/actor.ts';
@@ -352,7 +352,8 @@ const TENDER: Ingested = {
 };
 const build = (
 	ai: ReturnType<typeof cassette>,
-	host: Pick<AgentHostConfig, 'hostTools' | 'hostInlineMs' | 'onTurnStart' | 'events'> = {}
+	host: Pick<AgentHostConfig, 'hostTools' | 'hostInlineMs' | 'onTurnStart' | 'events'> = {},
+	tools: EngineManifest['agent']['tools'] = {}
 ) =>
 	Effect.gen(function* () {
 		const hq = yield* mcpFixture;
@@ -363,7 +364,7 @@ const build = (
 		};
 		const context = yield* Layer.build(
 			TestWorkspace.layer({
-				manifest,
+				manifest: { ...manifest, agent: { ...manifest.agent, tools } },
 				guest: yield* guest,
 				ports: Layer.merge(
 					ai.layer,
@@ -583,7 +584,6 @@ describe('in-app turns', () => {
 							description: 'Fixture tests',
 							input: { type: 'object', properties: {}, additionalProperties: false },
 							readOnly: true,
-							background: true,
 							call: async () => {
 								await Effect.runPromise(Deferred.await(finish));
 								return { tests: { failed: 1 }, error: '1 failing: adds up' };
@@ -598,7 +598,7 @@ describe('in-app turns', () => {
 				while (!(yield* agent.transcript(c)).some((r) => r.role === 'tool' && r.state === null))
 					yield* Effect.sleep('5 millis');
 				const step = (yield* agent.transcript(c)).find((r) => r.role === 'tool');
-				expect(JSON.stringify(step?.content)).toContain('Running in the background');
+				expect(JSON.stringify(step?.content)).toContain('Still running');
 				yield* Deferred.succeed(finish, undefined);
 				yield* Fiber.join(turn);
 				const alert = (yield* agent.transcript(c)).find((r) =>
@@ -608,6 +608,29 @@ describe('in-app turns', () => {
 				// the result itself, not a pointer to it; and red tests are the agent's to fix
 				expect(alert?.text).toContain('1 failing: adds up');
 				expect(alert?.text).not.toContain('tell the person');
+			})
+		)
+	);
+	it.live('a refused read names everything wrong with it at once', () =>
+		Effect.scoped(
+			Effect.gen(function* () {
+				const ai = cassette();
+				ai.arm([
+					use('read', { request: { quotes: { fields: ['title', 'nope', 'nada'] } } }),
+					use('read', {
+						request: { quotes: { search: 'a', aggregate: { count: true } }, sys_user: { fields: ['nope'] } }
+					}),
+					say('Done.')
+				]);
+				const { agent, user } = yield* build(ai);
+				const ann = yield* user('refused', { admin: true });
+				const c = yield* agent.start({ owner: ann });
+				yield* agent.post({ conversation: c, as: { member: ann }, text: 'Read them' });
+				yield* agent.drain(c);
+				const [fields, roots] = [toolResults(ai.requests[1]!)[0], toolResults(ai.requests[2]!)[1]];
+				expect(JSON.stringify(fields)).toContain("no readable fields 'nope', 'nada'");
+				expect(JSON.stringify(roots)).toContain('search cannot be combined with aggregate');
+				expect(JSON.stringify(roots)).toContain("no readable field 'nope'");
 			})
 		)
 	);
@@ -909,6 +932,38 @@ describe('in-app turns', () => {
 			)
 	);
 
+	it.live('every step opens with the step before it, whole: the provider\'s cached prefix holds', () =>
+		Effect.scoped(
+			Effect.gen(function* () {
+				const fixture = yield* setup([
+					use('history', { query: 'x' }, 'd1', 10),
+					use('history', { query: 'y' }, 'd2', 20),
+					use('history', { query: 'z' }, 'd3', 30),
+					say('Done.')
+				]);
+				return yield* Effect.gen(function* () {
+					const { ai, agent, user } = fixture;
+					const root = yield* user('root', { admin: true });
+					const c = yield* agent.start({ owner: root });
+					yield* agent.post({ conversation: c, as: { member: root }, text: 'go' });
+					yield* agent.drain(c);
+					expect(ai.requests).toHaveLength(4);
+					// the state note closes each step's context; all before it never changes once sent
+					const sent = ai.requests.map((request) =>
+						request.messages
+							.filter((m) => !(typeof m.content === 'string' && m.content.startsWith(STATE_NOTE)))
+							.map((m) => JSON.stringify(m))
+					);
+					sent.slice(1).forEach((later, i) => {
+						const before = sent[i]!;
+						expect(later.length).toBeGreaterThan(before.length);
+						expect(later.slice(0, before.length)).toEqual(before);
+					});
+				}).pipe(Effect.provide(fixture.context));
+			})
+		)
+	);
+
 	it.live('a large model window is used as the model provides it, without a smaller host cap', () =>
 		Effect.scoped(
 			Effect.gen(function* () {
@@ -1153,7 +1208,7 @@ describe('durable turns (rule 48)', () => {
 					const { t, ai, user } = fixture;
 					const root = yield* user('root', { admin: true });
 					const engine = yield* Scope.make();
-					const reading = use('read', { reads: [{ of: 'quotes' }] });
+					const reading = use('read', { request: { quotes: {} } });
 					const slow: Step = (request) =>
 						Stream.unwrap(
 							Deferred.succeed(started, undefined).pipe(
@@ -1207,7 +1262,7 @@ describe('durable turns (rule 48)', () => {
 			Effect.scoped(
 				Effect.gen(function* () {
 					const fixture = yield* setup([
-						use('read', { reads: [{ of: 'quotes' }] }),
+						use('read', { request: { quotes: {} } }),
 						say('interim'),
 						say('Two quotes.')
 					]);
@@ -1255,18 +1310,10 @@ describe('a replayed ingest takes its fewest calls', () => {
 				Effect.gen(function* () {
 					const fixture = yield* setup([
 						use('read', {
-							reads: [
-								{
-									of: 'sys_user',
-									where: { name: { like: '%Poa%' } },
-									fields: ['id', 'name', 'team']
-								},
-								{
-									of: 'quotes',
-									where: { title: { like: 'Dyson%' } },
-									fields: ['id', 'title', 'region']
-								}
-							]
+							request: {
+								sys_user: { where: { name: { like: '%Poa%' } }, fields: ['id', 'name', 'team'] },
+								quotes: { where: { title: { like: 'Dyson%' } }, fields: ['id', 'title', 'region'] }
+							}
 						}),
 						use('act', { callable: 'quotes.create', input: [{ title: 'Dyson P8-321-NH' }] }),
 						say('Opened the Dyson enquiry; Poa is the sales person on the form.')
@@ -1332,7 +1379,7 @@ describe('an agent-started automation run is a job', () => {
 			expect(answer).toMatchObject({
 				job: expect.any(String),
 				run: expect.any(String),
-				note: expect.stringContaining('Its end arrives at your next step')
+				note: expect.stringContaining('Its end arrives by itself')
 			});
 			const { job, run } = Schema.decodeUnknownSync(
 				Schema.Struct({ job: Schema.String, run: Schema.String })
@@ -1395,7 +1442,7 @@ describe('an agent-started automation run is a job', () => {
 					Stream.unwrap(
 						Effect.promise(() => gate).pipe(
 							Effect.as(
-								use('read', { reads: [{ of: 'quotes', where: { title: { eq: 'Lamp' } } }] })(
+								use('read', { request: { quotes: { where: { title: { eq: 'Lamp' } } } } })(
 									request
 								)
 							)
@@ -1540,7 +1587,7 @@ describe('a replayed ingest: job, steering message, windows, act, read-back', ()
 							use('read_file', { id: 'o1', from: 5, to: 6 }),
 							use('act', { callable: 'quotes.create', input: [{ title: 'Lot 7 at 12.50' }] }),
 							use('read', {
-								reads: [{ of: 'quotes', where: { title: { eq: 'Lot 7 at 12.50' } } }]
+								request: { quotes: { where: { title: { eq: 'Lot 7 at 12.50' } } } }
 							}),
 							say('Filed Lot 7 at 12.50 and read it back against the table.')
 						]);
@@ -1561,7 +1608,8 @@ describe('a replayed ingest: job, steering message, windows, act, read-back', ()
 						expect(reply?.text).toBe('Reading the tender; I file its lines when it is read.');
 						expect(toolResults(ai.requests[1]!)[0]).toEqual({
 							reading: 'tender.pdf',
-							note: 'it arrives at your next step'
+							job: expect.any(String),
+							note: expect.stringContaining('wait { jobs:')
 						});
 						open();
 						// the job's end queues its message and kicks the conversation: a turn runs on it
@@ -1612,6 +1660,54 @@ describe('a replayed ingest: job, steering message, windows, act, read-back', ()
 			)
 	);
 });
+describe('the tools a workspace declares', () => {
+	it.live('are appended below the transcript, and the turn goes on to answer', () =>
+		Effect.scoped(
+			Effect.gen(function* () {
+				const ai = cassette();
+				ai.arm([say('Done.')]);
+				const { agent, user, context } = yield* build(
+					ai,
+					{},
+					{ plans: { description: 'Reads a plan.' } }
+				);
+				return yield* Effect.gen(function* () {
+					const root = yield* user('root', { admin: true });
+					const c = yield* agent.start({ owner: root });
+					yield* agent.post({ conversation: c, as: { member: root }, text: 'A plan?' });
+					yield* agent.drain(c);
+					const [request] = ai.requests;
+					expect(request?.messages.at(-1)?.role).toBe('user');
+					expect(JSON.stringify(request?.messages)).toContain('plans(): Reads a plan.');
+					expect(JSON.stringify(request?.system)).not.toContain('Reads a plan.');
+					expect(ai.requests).toHaveLength(1);
+				}).pipe(Effect.provide(context));
+			})
+		)
+	);
+});
+
+describe('a tool answer with binary text', () => {
+	it.live('stays in the transcript: PostgreSQL holds no NUL, and the turn goes on', () =>
+		Effect.scoped(
+			Effect.gen(function* () {
+				const fixture = yield* setup([
+					use('run_js', { code: "return 'AC1021\\0\\0';" }),
+					say('Read.')
+				]);
+				return yield* Effect.gen(function* () {
+					const { agent, user } = fixture;
+					const root = yield* user('root', { admin: true });
+					const c = yield* agent.start({ owner: root });
+					yield* agent.post({ conversation: c, as: { member: root }, text: 'Its header?' });
+					yield* agent.drain(c);
+					expect(JSON.stringify(fixture.ai.requests[1]?.messages)).toContain('AC1021\ufffd');
+				}).pipe(Effect.provide(fixture.context));
+			})
+		)
+	);
+});
+
 describe('a tool answer that stops short says where the rest is', () => {
 	const notes = (request: AiRequest | undefined) =>
 		JSON.stringify((request?.messages ?? []).filter((message) => message.role === 'user'));
@@ -1622,7 +1718,7 @@ describe('a tool answer that stops short says where the rest is', () => {
 				const fixture = yield* setup([
 					use('act', { callable: 'quotes.create', input: titles.map((title) => ({ title })) }),
 					use('read', {
-						reads: [{ of: 'quotes', where: { title: { like: 'Paged %' } }, limit: 2 }]
+						request: { quotes: { where: { title: { like: 'Paged %' } }, limit: 2 } }
 					}),
 					say('Three.')
 				]);
@@ -1650,7 +1746,7 @@ describe('a tool answer that stops short says where the rest is', () => {
 					}),
 					use(
 						'read',
-						{ reads: [{ of: 'quotes', where: { title: { like: 'Long %' } } }] },
+						{ request: { quotes: { where: { title: { like: 'Long %' } } } } },
 						'long-read'
 					),
 					say('One.')
@@ -1679,7 +1775,7 @@ describe('a tool answer that stops short says where the rest is', () => {
 						}),
 						use(
 							'read',
-							{ reads: [{ of: 'quotes', where: { title: { like: 'Long %' } } }] },
+							{ request: { quotes: { where: { title: { like: 'Long %' } } } } },
 							'long-read'
 						),
 						use('read_file', { call: 'not-a-call', offset: 0 }, 'read-more'),
@@ -1701,12 +1797,12 @@ describe('a tool answer that stops short says where the rest is', () => {
 	it.live('a call that failed repeatedly runs again after another call worked', () =>
 		Effect.scoped(
 			Effect.gen(function* () {
-				const bad = { reads: [{ of: 'nope', limit: 1 }] };
+				const bad = { request: { nope: { limit: 1 } } };
 				const fixture = yield* setup([
 					use('read', bad, 'bad-1'),
 					use('read', bad, 'bad-2'),
 					use('read', bad, 'bad-3'),
-					use('read', { reads: [{ of: 'quotes', limit: 1 }] }, 'good'),
+					use('read', { request: { quotes: { limit: 1 } } }, 'good'),
 					use('read', bad, 'bad-4'),
 					say('One.')
 				]);
