@@ -341,6 +341,8 @@ const canonical = (v: Json): Json =>
  */
 export const callKey = (name: string, input: Json): string =>
 	`${name}\u0000${JSON.stringify(canonical(input))}`;
+/** A call as the transcript records it: its name and clipped arguments, for matching what a resumed step repeats. */
+const stepKey = (name: string, args: string | undefined): string => `${name}\u0000${args ?? ''}`;
 /** A paged tool's continuation: the argument that takes the `next` its answer gave. */
 const RESUME: { readonly [tool: string]: string } = {
 	read: 'after',
@@ -387,6 +389,8 @@ export const NUDGE = {
 		'Your last reply was empty. Answer the person now in plain text, or tell them plainly what blocks you.',
 	resumed: (request: string) =>
 		`Your turn was interrupted and has resumed. The person's request is still open: "${request.length > 2000 ? `${request.slice(0, 2000)}…` : request}". Carry on from the work above and end with your answer to it, not a summary of your own work.`,
+	replayed:
+		'Not run: this call was made before the turn resumed and may have taken effect. Read its outcome above instead of repeating it; change the arguments to do something new.',
 	cutTool:
 		'Your last reply was cut off at 60 seconds while you were still writing a tool call. Make smaller calls: write or edit a large file in several parts.',
 	more: (lines: readonly string[]) =>
@@ -1279,10 +1283,14 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 		});
 		yield* Effect.gen(function* () {
 			let inputs: string[] = [];
+			// calls a dead generation left running: their side effect may have landed, so the resumed step does not repeat them
+			const replayed = new Set<string>();
 			// rule 48: a turn taken over mid-work (its generation closed, its process died) goes on from its transcript and
 			// answers; its input was already consumed, so only a turn that had replied or was waiting on a card settles
 			if (admitted === 'takeover') {
-				yield* unfinished(id);
+				for (const row of yield* unfinished(id))
+					if (row.role === 'tool')
+						replayed.add(stepKey(row.content.name, row.content.args));
 				const rows = yield* transcript(id),
 					last = rows.at(-1);
 				force ||=
@@ -2010,8 +2018,11 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 					// just made (beside it or the step before), whose answer the model already has
 					const discoveryCall = call.name === 'workspace_lang';
 					const repeated = key === previous;
+					// a call the dead generation made (its result never recorded) is not made again
+					const replay = replayed.delete(stepKey(call.name, args));
 					const skip =
 						tool === undefined ||
+						replay ||
 						repeated ||
 						(discoveryCall && discoveryPaused) ||
 						(failures.get(key) ?? 0) >= AGENT_LIMITS.sameFailure;
@@ -2027,8 +2038,9 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 								: skip
 									? {
 											result: {
-												error:
-													discoveryCall && discoveryPaused
+												error: replay
+													? NUDGE.replayed
+													: discoveryCall && discoveryPaused
 														? NUDGE.discoveryPaused
 														: repeated
 															? 'Not run: you just made this exact call; its answer is above. Change the arguments to get something new.'

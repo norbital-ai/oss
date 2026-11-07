@@ -138,3 +138,16 @@ it('the same field and operator transitions recheck saved expressions against th
 		fromWhere(catalog, 'items', { amount: { eq: { var: 'ctx.amount +' } } }, 'items', '', variables)
 	).toBeNull();
 });
+
+it('a saved like takes a whole variable pattern and returns it unchanged', () => {
+	const rule: FilterVariables = { presets: [], validate: () => undefined };
+	const where = { name: { like: { var: "'SG:' + ctx.id + ':%'" } } };
+	const rows = fromWhere(catalog, 'items', where, 'items', '', rule);
+	expect(rows).not.toBeNull();
+	expect(rowsWhere(catalog, 'items', rows ?? [], undefined, rule)).toEqual(where);
+	// without a variable scope the pattern is not shown as a variable
+	expect(fromWhere(catalog, 'items', where)).toBeNull();
+	// a literal stays words in order
+	const words = fromWhere(catalog, 'items', { name: { like: '%a%b%' } });
+	expect(rowsWhere(catalog, 'items', words ?? [])).toEqual({ name: { like: '%a%b%' } });
+});

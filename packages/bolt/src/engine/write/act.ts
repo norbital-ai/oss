@@ -1045,7 +1045,8 @@ export const storedTrees = (
 	cat: Catalog,
 	model: string,
 	ids: readonly (string | null)[],
-	b: Bindings
+	b: Bindings,
+	paths = Object.keys(m.exposures[model]?.update?.columns ?? {})
 ) =>
 	wireRows(
 		db,
@@ -1053,7 +1054,7 @@ export const storedTrees = (
 		model,
 		ids,
 		b,
-		treeSelect(cat, Object.keys(m.exposures[model]?.update?.columns ?? {}), model, model)
+		treeSelect(cat, paths, model, model)
 	);
 /** Rule 13: the caller's read scope admits the row, as the act's own native read found it (an administrator reads all). */
 function readableBy(

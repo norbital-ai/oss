@@ -30,6 +30,8 @@ const PGLITE = createRequire(import.meta.url).resolve('@electric-sql/pglite');
 const KEPT_IMAGES = 256;
 /** Pooled databases a worker keeps idle; the oldest beyond this closes. */
 const IDLE = 4;
+/** A worker's RSS past which a released database is closed instead of pooled: a WASM Postgres never gives its heap back. */
+const POOL_BUDGET = 768 * 1024 * 1024;
 
 const TABLES = `select format('%I.%I', n.nspname, c.relname) as name,
 	coalesce((select string_agg(format('%I', a.attname), ', ' order by a.attnum) from pg_attribute a
@@ -214,7 +216,11 @@ const capture = async (pg: PGlite, { tables, counts, sequences }: Shape) => {
 	};
 	return { restore, fingerprint: await fingerprintOf(pg) };
 };
-const close = (entry: Pooled) => Scope.close(entry.scope, Exit.void);
+/** Closing frees a WASM heap only when it is collected: the kit runs with `--expose-gc` and asks once per close. */
+const close = (entry: Pooled) =>
+	Scope.close(entry.scope, Exit.void).pipe(
+		Effect.tap(() => Effect.sync(() => (globalThis as { gc?: () => void }).gc?.()))
+	);
 type Prepare<E> = (pg: PGlite) => Effect.Effect<void, E>;
 const load = <E>(
 	key: string,
@@ -264,6 +270,9 @@ const acquire = <E>(
 	});
 const release = (entry: Pooled) =>
 	Effect.suspend(() => {
+		// A WASM Postgres never gives its heap back: past this worker's budget the entry is closed and the next
+		// acquisition loads its checkpoint again, so one long worker cannot grow without bound.
+		if (process.memoryUsage().rss > POOL_BUDGET) return close(entry);
 		idle.push(entry);
 		return Effect.forEach(idle.splice(0, Math.max(0, idle.length - IDLE)), close, {
 			discard: true

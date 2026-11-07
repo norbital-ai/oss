@@ -474,6 +474,7 @@ export type FilterVariables = {
 	validate(text: string, position: Resolved, op: Op): string | undefined;
 };
 const VARIABLE_OPS: readonly Op[] = [
+	'like',
 	'eq',
 	'ne',
 	'lt',
@@ -670,7 +671,10 @@ function leafOps(
 		case 'notEmpty':
 			return { isEmpty: false };
 		case 'like':
-			return { like: likePattern(String(a !== null && 'lit' in a ? a.lit : '')) };
+			// a variable is the whole pattern (`'SG:' + entry.id + ':%'`); a literal is words in order
+			return a !== null && a._tag === 'var'
+				? { like: operand(a, clock, instant) }
+				: { like: likePattern(String(a !== null && 'lit' in a ? a.lit : '')) };
 		case 'search':
 		case 'similar':
 			return a !== null && 'lit' in a && typeof a.lit === 'string' ? a.lit : null;
@@ -1002,6 +1006,9 @@ function fieldNodes(
 		if (k === 'isNull' || k === 'isEmpty') {
 			if (typeof v !== 'boolean') return null;
 			op = k === 'isNull' ? (v ? 'isNull' : 'notNull') : v ? 'isEmpty' : 'notEmpty';
+		} else if (k === 'like' && varOf(v) !== null) {
+			arg = argOf(r, op, v, variables);
+			if (arg === null) return null;
 		} else if (k === 'like') {
 			const text = typeof v === 'string' ? unlike(v) : null;
 			if (text === null) return null;
@@ -1391,6 +1398,15 @@ export function matches(
 		case 'notNull':
 			return v !== null;
 		case 'like': {
+			// a resolved variable is a whole pattern: `%` any run, `_` one character
+			if (n.arg !== null && 'var' in n.arg)
+				return new RegExp(
+					`^${String(a)
+						.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+						.replaceAll('%', '.*')
+						.replaceAll('_', '.')}$`,
+					'is'
+				).test(String(v ?? ''));
 			// the words in order, as the engine's `%w1%w2%`
 			const s = String(v ?? '').toLowerCase();
 			let at = 0;

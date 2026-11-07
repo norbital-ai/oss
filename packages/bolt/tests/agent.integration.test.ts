@@ -1295,7 +1295,52 @@ describe('durable turns (rule 48)', () => {
 						});
 					}).pipe(Effect.provide(fixture.context));
 				})
-			)
+		)
+	);
+	it.live('a resumed step does not repeat a call the dead generation left running', () =>
+		Effect.scoped(
+			Effect.gen(function* () {
+				const input = { request: { quotes: {} } };
+				const fixture = yield* setup([]);
+				return yield* Effect.gen(function* () {
+					const { t, ai, agent, user } = fixture;
+					const root = yield* user('root', { admin: true });
+					const c = yield* agent.start({ owner: root });
+					// the dead generation consumed the request and ran the call, then died before its result was recorded
+					yield* t.db.write({
+						text: `INSERT INTO sys_message (id, conversation, role, content, text, seq, state, mode, "as")
+							VALUES
+								('dead-question', $1, 'user', '{"text":"How many quotes?"}'::jsonb, 'How many quotes?', 1, 'consumed', 'agent', $3::jsonb),
+								('dead-call', $1, 'tool', jsonb_build_object('id', 'dead-call', 'name', 'read', 'args', $2::text), '', 2, 'running', NULL, NULL)`,
+						params: [c, JSON.stringify(input), JSON.stringify({ member: root })]
+					});
+					yield* t.db.write({
+						text: `UPDATE sys_conversation SET status = 'running', lease_until = $2::timestamptz - interval '1 second' WHERE id = $1`,
+						params: [c, t.clock.now()]
+					});
+					yield* t.db.write({
+						text: `INSERT INTO sys_run (id, automation, input, due_at, cause, depth)
+							VALUES (gen_random_uuid()::text, 'agent.turn', jsonb_build_object('conversation', $1::text), $2::timestamptz, 'schedule', 0)`,
+						params: [c, t.clock.now()]
+					});
+					// the resumed step repeats the same call, then answers
+					const call = randomUUID();
+					fixture.ai.arm([use('read', input, call), say('Two quotes.')]);
+					yield* t.runDue();
+					const rows = yield* agent.transcript(c);
+					const tool = rows.filter((row) => row.role === 'tool');
+					// the call is on the transcript twice: the one that may have landed, and the one not run again
+					expect(tool).toHaveLength(2);
+					expect(tool[1]?.content).toMatchObject({
+						id: call,
+						name: 'read',
+						result: { error: expect.stringContaining('may have taken effect') }
+					});
+					// two steps: the resumed one (its call skipped) and the answer
+					expect(ai.requests).toHaveLength(2);
+				}).pipe(Effect.provide(fixture.context));
+			})
+		)
 	);
 });
 

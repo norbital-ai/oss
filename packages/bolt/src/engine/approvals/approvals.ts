@@ -42,6 +42,7 @@ import {
 	constraintsOf,
 	guestFailure,
 	hasCallback,
+	storedTrees,
 	transformBridge,
 	wireRows,
 	type ApprovalHook,
@@ -880,7 +881,17 @@ const approvedWrites = Effect.fn('Approvals.approvedWrites')(function* (
 							),
 						{ concurrency: 'unbounded' }
 					)
-				: yield* wireRows(db, cat, a.model, ids, b);
+				: verb === 'create'
+					? yield* storedTrees(
+							db,
+							m,
+							cat,
+							a.model,
+							ids,
+							b,
+							Object.keys(m.exposures[a.model]?.create?.columns ?? {})
+						)
+					: yield* wireRows(db, cat, a.model, ids, b);
 		const input = rows.flatMap((row) =>
 			row === null ? [] : [verb === 'update' ? { before: row, set: {} } : row]
 		);

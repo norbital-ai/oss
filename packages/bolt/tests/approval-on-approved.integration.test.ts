@@ -22,6 +22,7 @@ const manifest: EngineManifest = {
 			label: 'name',
 			fields: { name: { kind: 'text' }, note: { kind: 'text', optional: true } }
 		},
+		steps: { description: 'A step', label: 'label', fields: { label: { kind: 'text' } } },
 		holds: { description: 'Holds', label: 'name', fields: { name: { kind: 'text' } } },
 		postings: {
 			description: 'Postings',
@@ -29,11 +30,11 @@ const manifest: EngineManifest = {
 			fields: { source: { kind: 'text' }, carrier: { kind: 'text', optional: true } }
 		}
 	},
-	relationships: {},
+	relationships: { 'steps.leaf': { to: 'leaves', inverse: 'steps', owned: true } },
 	exposures: {
 		leaves: {
 			read: { leaves: { fields: 'all' } },
-			create: { columns: { leaves: ['name'] }, transform: true },
+			create: { columns: { leaves: ['name'], 'leaves.steps': ['label'] }, transform: true },
 			update: { columns: { leaves: ['note'] }, transform: true }
 		},
 		holds: { read: { holds: { fields: 'all' } }, create: { columns: { holds: ['name'] } } },
@@ -58,6 +59,7 @@ const source = `export default { model: {
 	leaves: { bodies: {
 		create: function* (rows, ctx) {
 			if (ctx.approving && rows.some((row) => row.name === 'refused on approval')) return yield* ctx.refuse('Not on approval.');
+			if (rows.some((row) => row.name === 'stepped') && rows.some((row) => (row.steps ?? []).length !== 2)) return yield* ctx.refuse('Steps went missing.');
 			return {
 				rows,
 				with: { holds: { create: rows.map((row) => ({ name: 'hold ' + row.name })) } },
@@ -220,6 +222,19 @@ layer(workspace, { excludeTestServices: true })('onApproved', (it) => {
 					{ source: 'edited', carrier: 'leaves' }
 				]);
 			})
+	);
+
+	it.effect('asks a held create again with its owned children, as they now stand', () =>
+		Effect.gen(function* () {
+			const f = yield* fixture;
+			const request = held(
+				yield* f.act('create', [
+					{ name: 'stepped', steps: [{ label: 'one' }, { label: 'two' }] }
+				])
+			);
+			expect(yield* f.decide(request, 'approve')).toMatchObject({ status: 'Approved' });
+			expect(yield* f.postings('stepped')).toEqual([{ source: 'stepped', carrier: 'leaves' }]);
+		})
 	);
 
 	it.effect('commits with the write when no approval holds it', () =>

@@ -1378,6 +1378,11 @@ const pointer = (path: string, key: string | number) =>
 	.structured-nested.structured-flat {
 		border: 0;
 	}
+	/* A section's content steps in under its heading, a level at a time, so the hierarchy reads at a glance. */
+	.structured-nested:not(.structured-flat) > .structured-section-body {
+		margin-inline-start: 12px;
+		border-inline-start: 1px solid var(--color-border);
+	}
 	.structured-data :global(input:not([type='checkbox'])),
 	.structured-data :global(textarea),
 	.structured-data :global([role='combobox']),

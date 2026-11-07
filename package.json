@@ -1,6 +1,6 @@
 {
 	"name": "@norbital-ai/oss",
-	"version": "0.0.16",
+	"version": "0.0.17",
 	"private": true,
 	"type": "module",
 	"packageManager": "pnpm@11.22.0",
@@ -17,7 +17,7 @@
 		"packages:build": "pnpm --filter @norbital-ai/ui... build",
 		"packages:resolve": "node scripts/resolve-published-packages.ts",
 		"publication:check": "node scripts/validate-package-publication.ts",
-		"test": "NODE_OPTIONS=--no-experimental-webstorage vitest run",
+		"test": "NODE_OPTIONS=\"--no-experimental-webstorage --expose-gc\" vitest run",
 		"types:compat": "turbo run types:compat --filter=@norbital-ai/bolt"
 	},
 	"devDependencies": {
