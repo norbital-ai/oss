@@ -117,19 +117,12 @@ export default defineConfig({
 					name: 'browser',
 					include: ['tests/**/*.browser.{test,spec}.ts'],
 					exclude: ['build/**', '.norbital/**'],
+					setupFiles: ['tests/support/desktop.ts'],
 					sequence: { groupOrder: 1 },
 					isolate: false,
 					browser: {
 						enabled: true,
-						// a desktop, whatever the host reports: a fine pointer that hovers. A Linux runner's headless Chromium
-						// reports `hover: none`, and the kit then opens hints by tap rather than hover or focus.
-						provider: playwright({
-							launchOptions: {
-								args: [
-									'--blink-settings=primaryHoverType=2,availableHoverTypes=2,primaryPointerType=4,availablePointerTypes=4'
-								]
-							}
-						}),
+						provider: playwright(),
 						instances: [{ browser: 'chromium' }],
 						headless: process.env['PLAYWRIGHT_HEADED'] !== '1'
 					}
