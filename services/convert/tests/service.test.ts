@@ -1,12 +1,15 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
 import { afterAll, test } from '@effect/vitest';
 import { Effect, Result, Schema } from 'effect';
 import { ConversionFailed, pandoc, processFailure, type Converter } from '../src/convert.ts';
 import { openQueue } from '../src/queue.ts';
+import { spawned } from '../src/job.ts';
 import { service, type Options } from '../src/server.ts';
 
 const dir = mkdtempSync(join(tmpdir(), 'convert-test-'));
@@ -98,6 +101,75 @@ test('submits, watches to the end and fetches the converted bytes', async () => 
 	);
 	await s.watch(styled.id);
 	assert.equal(await (await s.call(`/v1/jobs/${styled.id}/result`)).text(), 'docx:<p>x</p>:::3');
+});
+
+test('layout HTML is accepted only for PDF and stays distinct in the queue', async () => {
+	const source = '<style>@page{margin:0}</style><p>x</p>';
+	const s = await start({
+		convert: (request) => Effect.succeed(new TextEncoder().encode(request.from))
+	});
+	assert.equal((await s.submit({ from: 'layout-html', to: 'docx', source })).status, 400);
+	const response = await s.submit({ from: 'layout-html', to: 'pdf', source });
+	assert.equal(response.status, 202);
+	const { id } = job(await response.json());
+	assert.equal((await s.watch(id)).at(-1)?.state, 'succeeded');
+	assert.equal(await (await s.call(`/v1/jobs/${id}/result`)).text(), 'layout-html');
+});
+
+test('returns preview bytes without inserting a job or spooling the document', async () => {
+	const storage = mkdtempSync(join(dir, 'preview-'));
+	const database = join(storage, 'preview.db');
+	const s = await start({ database, convert: echo });
+	const source = { from: 'layout-html', to: 'pdf', source: '<p>Private preview</p>', page: 'A4' };
+	const post = (body: object, key?: string) =>
+		s.call('/v1/convert/preview', { method: 'POST', body: JSON.stringify(body), ...(key ? { key } : {}) });
+	assert.equal((await post(source, 'wrong')).status, 401);
+	assert.equal((await post({ ...source, to: 'html' })).status, 400);
+	const out = await post(source);
+	assert.equal(out.status, 200);
+	assert.equal(out.headers.get('content-type'), 'application/pdf');
+	assert.equal(out.headers.get('cache-control'), 'private, no-store');
+	assert.equal(out.headers.get('location'), null);
+	assert.equal(await out.text(), 'pdf:<p>Private preview</p>:A4::0');
+	const read = new DatabaseSync(database, { readOnly: true });
+	try {
+		assert.equal(read.prepare('SELECT COUNT(*) AS jobs FROM job').get()?.jobs, 0);
+		assert.deepEqual(readdirSync(join(storage, 'spool')), []);
+	} finally {
+		read.close();
+	}
+});
+
+test('an abandoned preview frees its bounded render slot', async () => {
+	const started = Promise.withResolvers<void>();
+	const released = Promise.withResolvers<void>();
+	const s = await start({
+		concurrency: 1,
+		convert: (request, reference) =>
+			request.source === 'hold'
+				? Effect.sync(started.resolve).pipe(
+						Effect.andThen(Effect.never),
+						Effect.ensuring(Effect.sync(released.resolve))
+					)
+				: echo(request, reference)
+	});
+	const post = (source: string, signal?: AbortSignal) =>
+		s.call('/v1/convert/preview', {
+			method: 'POST',
+			body: JSON.stringify({ from: 'markdown', to: 'pdf', source }),
+			...(signal === undefined ? {} : { signal })
+		});
+	const abort = new AbortController();
+	const abandoned = assert.rejects(post('hold', abort.signal), { name: 'AbortError' });
+	try {
+		await started.promise;
+		assert.equal((await post('busy')).status, 429);
+	} finally {
+		abort.abort();
+	}
+	await abandoned;
+	await released.promise;
+	assert.equal((await post('next')).status, 200);
 });
 
 test('a watcher on the replica that runs the job hears it settle at once, not on the next poll', async () => {
@@ -249,7 +321,7 @@ test('a job whose replica died is queued again, then failed after three attempts
 	}
 	assert.equal(q.get('o', job.id)?.state, 'failed');
 	assert.match(q.get('o', job.id)!.error!, /stopped 3 times/);
-	q.finish(job.id, 'w3', { result: new Uint8Array([1]), mime: 'application/pdf' });
+	q.finish(job.id, 'w3', { mime: 'application/pdf' });
 	assert.equal(q.get('o', job.id)?.state, 'failed');
 	q.close();
 });
@@ -421,3 +493,52 @@ test.skipIf(!hasPandoc || !hasPdfText)(
 		assert.ok(rightEdges.length > 0 && rightEdges.every((x) => x <= pageWidth - 80));
 	}
 );
+
+test('a PDF read from disk stays by its hash: a page of it needs no second upload, and a wrong hash is refused', async () => {
+	const body = new TextEncoder().encode('%PDF stand-in'),
+		sha256 = createHash('sha256').update(body).digest('hex'),
+		read: string[] = [];
+	const { call, watch } = await start({
+		convert: echo,
+		ingest: (job) =>
+			Effect.sync(() => {
+				read.push(readFileSync(job.path, 'utf8'));
+				writeFileSync(job.out, '{}');
+			})
+	});
+	const page = (options: object, hash: string, sent: BodyInit) =>
+		call(`/v1/ingest/raw?name=a.pdf&mime=application/pdf&options=${encodeURIComponent(JSON.stringify(options))}&sha256=${hash}`, {
+			method: 'POST',
+			body: sent
+		});
+	assert.equal((await call(`/v1/kept/${sha256}`)).status, 404);
+	assert.equal((await page({ page: 1 }, 'b'.repeat(64), body)).status, 400);
+	await watch(job(await (await page({ pictures: false }, sha256, body)).json()).id);
+	assert.equal((await call(`/v1/kept/${sha256}`)).status, 200);
+	assert.equal((await call(`/v1/kept/${sha256}`, { key: 'k2' })).status, 404);
+	await watch(job(await (await page({ page: 1 }, sha256, '')).json()).id);
+	assert.deepEqual(read, ['%PDF stand-in', '%PDF stand-in']);
+});
+
+test('a burst from one tenant queues behind itself, and its interactive work goes first', () => {
+	const q = openQueue(join(dir, `db-${n++}.db`));
+	const job = (lane: string, priority = 1) => q.submit('o', 'ingest', '{}', null, lane, priority).id;
+	const bulk = [job('a'), job('a'), job('a')],
+		other = job('b'),
+		page = job('a', 0);
+	const claim = () => q.claim('w', 60_000)?.id;
+	assert.equal(claim(), page, 'a page looked at, ahead of its tenant\'s bulk');
+	assert.equal(claim(), other, 'another tenant, ahead of the tenant already running');
+	assert.deepEqual([claim(), claim(), claim()], bulk, 'the rest in order');
+	assert.equal(claim(), undefined);
+	q.close();
+});
+
+test('a read past its wall is killed alone: its job fails, and the server answers on', async () => {
+	const fifo = join(dir, `hung-${n++}`);
+	execFileSync('mkfifo', [fifo]);
+	const hung = await Effect.runPromise(
+		Effect.flip(spawned(1500)({ name: 'a.txt', mime: 'text/plain', path: fifo, out: join(dir, `out-${n++}`) }))
+	);
+	assert.match(hung.message, /longer than 2 s/);
+});

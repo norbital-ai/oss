@@ -2,18 +2,19 @@
 // turned as shown, every word of the text layer exactly once, and spreadsheets' typed cells (openpyxl, recalculated and
 // saved by LibreOffice).
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { inflateSync } from 'node:zlib';
 import { test } from '@effect/vitest';
 import { Effect, Schema } from 'effect';
-import { getDocument } from 'pdfjs-dist/legacy/build/pdf.mjs';
 import { ingester } from '../src/ingest.ts';
-import { order, stream, type Word } from '../src/pdf.ts';
-import { encode, orient } from '../src/png.ts';
+import { order, stream } from '../src/readers/pdf.ts';
+import type { Word } from '../src/readers/trace.ts';
 import { parseCsv, serialDate, typed } from '../src/sheets.ts';
 
 const fixture = (name: string) => readFileSync(new URL(`./fixtures/${name}`, import.meta.url));
-const ingest = ingester({ lanes: 2 });
+const ingest = ingester();
 const pdf = async (name: string, bytes: Uint8Array = fixture(name)) => {
 	const out = await Effect.runPromise(ingest({ name, mime: 'application/pdf', bytes }));
 	if (out.kind !== 'document') throw new Error(`${name} is no document`);
@@ -51,19 +52,14 @@ const counted = (text: string) => {
 };
 const unescape = (html: string) => html.replace(/<[^>]+>/g, ' ').replace(/&(amp|lt|gt|quot);/g, (_, e: string) => ({ amp: '&', lt: '<', gt: '>', quot: '"' })[e]!);
 /** Every word of the PDF's text layer is in the HTML exactly as often: none dropped, none doubled. */
-async function sameWords(name: string, html: string) {
-	const task = getDocument({ data: new Uint8Array(fixture(name)), verbosity: 0 });
-	const doc = await task.promise;
-	let layer = '';
-	for (let n = 1; n <= doc.numPages; n++)
-		for (const i of (await (await doc.getPage(n)).getTextContent()).items) if ('str' in i) layer += ` ${i.str}`;
-	await task.destroy();
+function sameWords(name: string, html: string) {
+	const layer = execFileSync('pdftotext', ['-q', fileURLToPath(new URL(`./fixtures/${name}`, import.meta.url)), '-']).toString('utf8');
 	assert.deepEqual(counted(unescape(html)), counted(layer), name);
 }
 const FIXTURES = ['ruled', 'unruled', 'merged', 'nested', 'spanning', 'invoice', 'straddle', 'rotated-table', 'rotated-image', 'rotated-scan', 'scan'];
 
 test('every word of every PDF fixture comes out exactly once', async () => {
-	for (const f of FIXTURES) await sameWords(`${f}.pdf`, (await pdf(`${f}.pdf`)).html);
+	for (const f of FIXTURES) sameWords(`${f}.pdf`, (await pdf(`${f}.pdf`)).html);
 });
 
 test('ruled and unruled PDF tables come out cell-exact, in place', async () => {
@@ -171,7 +167,7 @@ test('reading order: two prose columns read one after the other; label and value
 });
 
 // ---------- pictures as their page shows them ----------
-/** Our encoder's PNG (8-bit, every row filter 0) as pixels. */
+/** An 8-bit PNG as pixels, its row filters undone. */
 const decode = (bytes: Uint8Array) => {
 	const b = Buffer.from(bytes);
 	const [width, height, type] = [b.readUInt32BE(16), b.readUInt32BE(20), b[25]!];
@@ -179,8 +175,21 @@ const decode = (bytes: Uint8Array) => {
 	const idat: Buffer[] = [];
 	for (let at = 8; at < b.length; at += 12 + b.readUInt32BE(at)) if (b.toString('latin1', at + 4, at + 8) === 'IDAT') idat.push(b.subarray(at + 8, at + 8 + b.readUInt32BE(at)));
 	const raw = inflateSync(Buffer.concat(idat));
-	const data = new Uint8Array(width * height * channels);
-	for (let y = 0; y < height; y++) data.set(raw.subarray(y * (width * channels + 1) + 1, (y + 1) * (width * channels + 1)), y * width * channels);
+	const data = new Uint8Array(width * height * channels),
+		stride = width * channels;
+	for (let y = 0; y < height; y++) {
+		const filter = raw[y * (stride + 1)]!,
+			row = raw.subarray(y * (stride + 1) + 1, (y + 1) * (stride + 1));
+		for (let i = 0; i < stride; i++) {
+			const left = i < channels ? 0 : data[y * stride + i - channels]!,
+				up = y === 0 ? 0 : data[(y - 1) * stride + i]!,
+				corner = y === 0 || i < channels ? 0 : data[(y - 1) * stride + i - channels]!,
+				guess = left + up - corner,
+				[l, u, c] = [Math.abs(guess - left), Math.abs(guess - up), Math.abs(guess - corner)];
+			const predicted = [0, left, up, (left + up) >> 1, l <= u && l <= c ? left : u <= c ? up : corner][filter]!;
+			data[y * stride + i] = row[i]! + predicted;
+		}
+	}
 	return { width, height, channels, data };
 };
 /** Where the red block (the stored picture's top-left corner) sits in the returned picture. */
@@ -199,7 +208,9 @@ test('a picture painted under a quarter-turn matrix comes back as the page shows
 
 test('a scan on a page with /Rotate comes back upright, and a table on such a page reads upright too', async () => {
 	const scan = await pdf('rotated-scan.pdf');
-	assert.deepEqual(red(scan.images[0]!.bytes), { width: 1654, height: 2340, corner: 'BL' });
+	const turned = red(scan.images[0]!.bytes);
+	assert.equal(turned.corner, 'BL');
+	assert.ok(Math.abs(turned.width - 1654) <= 2 && Math.abs(turned.height - 2340) <= 2, `${turned.width}×${turned.height}`);
 	const [one] = tablesOf((await pdf('rotated-table.pdf')).html);
 	assert.deepEqual(one?.slice(0, 7), ['<table>', '<tbody>', '<tr>', '<td>Code</td>', '<td>Description</td>', '<td>Rate</td>', '</tr>']);
 	assert.equal(one?.filter((l) => l === '<tr>').length, 7);
@@ -211,19 +222,6 @@ test.skipIf(!existsSync(TRIALS))('the real trials.pdf scan is one upright pictur
 	assert.deepEqual(out.html.split('\n'), ['<section data-page="1">', '<img src="image-1.png" alt="">', '</section>']);
 	const { width, height } = red(out.images[0]!.bytes);
 	assert.ok(width < height, `${width}×${height}`);
-});
-
-test('orient: a half turn, a mirror, a quarter turn the other way; a slant stays as stored', () => {
-	// 2×1 grey: [10, 20]
-	const p = { width: 2, height: 1, channels: 1, data: new Uint8Array([10, 20]) };
-	assert.deepEqual([...orient(p, [-1, 0], [0, -1]).pixels.data], [20, 10]);
-	assert.deepEqual([...orient(p, [-1, 0], [0, 1]).pixels.data], [20, 10]);
-	const q = orient(p, [0, -1], [1, 0]);
-	assert.deepEqual([q.pixels.width, q.pixels.height, ...q.pixels.data], [1, 2, 20, 10]);
-	assert.equal(orient(p, [1, 1], [-1, 1]).skewed, true);
-	assert.deepEqual(decode(encode(q.pixels)), q.pixels);
-	// Grey stored as colour is written as one channel.
-	assert.deepEqual(decode(encode({ width: 1, height: 1, channels: 3, data: new Uint8Array([7, 7, 7]) })).channels, 1);
 });
 
 // ---------- datasets: typed JSON ----------
@@ -242,8 +240,7 @@ test('xlsx and ods: typed values, ISO dates, formulas cached values, a header ro
 	] as const) {
 		const out = await data(name, mime, fixture(name));
 		const [rates, merged] = Schema.decodeUnknownSync(Sheets)(out.json).sheets;
-		// LibreOffice saved openpyxl's booleans into the ods as =TRUE() numbers with a boolean format: 1 and 0 there.
-		const [yes, no] = name === 'data.ods' ? [1, 0] : [true, false];
+		const [yes, no] = [true, false];
 		assert.deepEqual(rates, {
 			name: 'Rates',
 			columns: ['Code', 'Rate', 'Active', 'Since', 'Double'],

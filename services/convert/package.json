@@ -10,10 +10,10 @@
 		"node": ">=26.0.0"
 	},
 	"dependencies": {
-		"@kreuzberg/node": "4.10.2",
+		"calamine-node": "0.2.0",
 		"effect": "4.0.6",
 		"parse5": "8.0.0",
-		"pdfjs-dist": "6.4.299"
+		"playwright-core": "1.61.1"
 	},
 	"devDependencies": {
 		"@effect/vitest": "4.0.6",

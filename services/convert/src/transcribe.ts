@@ -10,7 +10,9 @@ import { Effect, Schedule, Schema } from 'effect';
 
 export type Segment = { speaker: string; start: number; end: number; text: string };
 export type Speaker = { label: string; description: string };
-export type TranscribeOptions = { diarize?: boolean; language?: string; speakers?: number; prompt?: string };
+/** `pictures` false reads a PDF's text alone; `page` answers that one page of a PDF as a picture. */
+export type TranscribeOptions = {
+	pictures?: boolean; page?: number; diarize?: boolean; language?: string; speakers?: number; prompt?: string };
 export type Transcript = { language: string | null; durationMs: number; speakers: Speaker[]; segments: Segment[] };
 export type Usage = { calls: string[]; model: string; input: number; output: number; cost: number };
 export class TranscribeFailed extends Schema.TaggedError<TranscribeFailed>()('TranscribeFailed', {

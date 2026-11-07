@@ -8,18 +8,18 @@ importers:
 
   .:
     dependencies:
-      '@kreuzberg/node':
-        specifier: 4.10.2
-        version: 4.10.2
+      calamine-node:
+        specifier: 0.2.0
+        version: 0.2.0
       effect:
         specifier: 4.0.6
         version: 4.0.6
       parse5:
         specifier: 8.0.0
         version: 8.0.0
-      pdfjs-dist:
-        specifier: 6.4.299
-        version: 6.4.299
+      playwright-core:
+        specifier: 1.61.1
+        version: 1.61.1
     devDependencies:
       '@effect/vitest':
         specifier: 4.0.6
@@ -39,9 +39,6 @@ packages:
       effect: ^4.0.6
       vitest: '>=5.0.0 <6.0.0'
 
-  '@emnapi/runtime@1.11.2':
-    resolution: {integrity: sha512-kyOl3X0DuTiT1h2ft8r2fYO8JYtU9a9Xis/zBSiGArNaagCOWx90N1k2wxp18czFDH+OgcWGb5ZP/XMt3dcyPA==}
-
   '@jridgewell/resolve-uri@3.1.2':
     resolution: {integrity: sha512-bRISgCIjP20/tbWSPWMEi54QVPRZExkuD9lJL+UIxUKtwVJA8wW1Trb1jMs1RFXo1CBTNZ/5hpC9QvmKWdopKw==}
     engines: {node: '>=6.0.0'}
@@ -51,112 +48,6 @@ packages:
 
   '@jridgewell/trace-mapping@0.3.31':
     resolution: {integrity: sha512-zzNR+SdQSDJzc8joaeP8QQoCQr8NuYx2dIIytl1QeBEZHJ9uW6hebsrYgbz8hJwUQao3TWCMtmfV8Nu1twOLAw==}
-
-  '@kreuzberg/node-darwin-arm64@4.10.2':
-    resolution: {integrity: sha512-XXOoXVYvPAvp8rGQPRpIdKZr4kqPgLG8qp+LdTmjun82AMz11KqAb0HHHuA5kDQ6OiVnM78rvDRYHN36FsprMQ==}
-    engines: {bun: '>= 1.3', node: '>= 22'}
-    cpu: [arm64]
-    os: [darwin]
-
-  '@kreuzberg/node-linux-arm64-gnu@4.10.2':
-    resolution: {integrity: sha512-vGbBOPo0yy2b1qhffeyGhi+gZVfmHTcq3Rqz0sHnA/kz9JB1T//4gB9QjCHA/6fPdXV6hjHvFLk6lftLzpoi7A==}
-    engines: {bun: '>= 1.3', node: '>= 22'}
-    cpu: [arm64]
-    os: [linux]
-    libc: [glibc]
-
-  '@kreuzberg/node-linux-x64-gnu@4.10.2':
-    resolution: {integrity: sha512-qA9kfoYTP3sShMnoJTKAv0k/Acj174cIeXPvBkF/QZL+2k7Zqy+iAUaACflJJb2hlsvyO7qPo/K5La+GrUSYRA==}
-    engines: {bun: '>= 1.3', node: '>= 22'}
-    cpu: [x64]
-    os: [linux]
-    libc: [glibc]
-
-  '@kreuzberg/node-win32-x64-msvc@4.10.2':
-    resolution: {integrity: sha512-CQywJ5hZwihdJ0gpSY/k+njtSdmD3tAg+vU+1uHhrmmRArKlxwuqeqMqfKwMbrDwPvMgWkf3QjAFe27CZ3xL5w==}
-    engines: {bun: '>= 1.3', node: '>= 22'}
-    cpu: [x64]
-    os: [win32]
-
-  '@kreuzberg/node@4.10.2':
-    resolution: {integrity: sha512-cOp4SpS4/dZ2MX4jJT8vvcb4KF6eM68JJPPs2ykUnH3+ypvdkJlZC92GOylczw0TNa3yiXB7EGBMrbicHCLbHw==}
-    engines: {bun: '>= 1.3', node: '>= 22'}
-    hasBin: true
-
-  '@napi-rs/canvas-android-arm64@1.0.13':
-    resolution: {integrity: sha512-trn7AaDzQ+yeeA0ezhkC7cB1ZDPtp4UYk0EvB5F8qtYL9jEVWtVrU30WOpI52DszoTxaTsCgf5PP4ZVaOlOIHQ==}
-    engines: {node: '>= 10'}
-    cpu: [arm64]
-    os: [android]
-
-  '@napi-rs/canvas-darwin-arm64@1.0.13':
-    resolution: {integrity: sha512-6Y2djEetL8copxfNK6hg7oig/xqTwOchv19hBOm+zBNdKc/02Z3kjZN5wrLzv/l5O04/bAQS6I/AlQpwBlXgPg==}
-    engines: {node: '>= 10'}
-    cpu: [arm64]
-    os: [darwin]
-
-  '@napi-rs/canvas-darwin-x64@1.0.13':
-    resolution: {integrity: sha512-OZoPwwu4TMMg8GTCFBrg8UFExwQTU/55i3uTC/izDat6PHE+ro9dimyQoOboFf91+NY7Pnn70ScR8f8I8+eZXw==}
-    engines: {node: '>= 10'}
-    cpu: [x64]
-    os: [darwin]
-
-  '@napi-rs/canvas-linux-arm-gnueabihf@1.0.13':
-    resolution: {integrity: sha512-dZSYaKROuswU2eUWG5aBKndNVe68elo1YX93xtRax7q658tj8rYE+HwduovWJgs6qwv1r1/CLR60nDeBbyjvyg==}
-    engines: {node: '>= 10'}
-    cpu: [arm]
-    os: [linux]
-
-  '@napi-rs/canvas-linux-arm64-gnu@1.0.13':
-    resolution: {integrity: sha512-W6FzYE8ADHI93In1vi80KBL6btDtAMuj50Ch5ptkWS8xuntyzbR4h5JDUmXoakxZn2yMInksudTEqVSWoFqFGg==}
-    engines: {node: '>= 10'}
-    cpu: [arm64]
-    os: [linux]
-    libc: [glibc]
-
-  '@napi-rs/canvas-linux-arm64-musl@1.0.13':
-    resolution: {integrity: sha512-+6fQ+rR49hkAa4voh2stLIwQ+4t+gmoseM8Bc53/DlMXb73IKymDPWK9A/NtWeqTW4ijWppYuyuxS2hPI8tzNA==}
-    engines: {node: '>= 10'}
-    cpu: [arm64]
-    os: [linux]
-    libc: [musl]
-
-  '@napi-rs/canvas-linux-riscv64-gnu@1.0.13':
-    resolution: {integrity: sha512-17XEMO3t9RW/TtHtSFf2AkaSWuCWdzbPeidz7zrOFawHxoLSJCnpTI1hN5aUvrZNnkNNmt/vZVJCh0ryUaik3A==}
-    engines: {node: '>= 10'}
-    cpu: [riscv64]
-    os: [linux]
-    libc: [glibc]
-
-  '@napi-rs/canvas-linux-x64-gnu@1.0.13':
-    resolution: {integrity: sha512-lc48IwknVHBsNzXn9Xs5OkUsRX38Ml3Z1aOybQ51mMEzZckm8+4A0qROlyYHEoBPzr1kL3IU8ZUAqDb7wtdX8w==}
-    engines: {node: '>= 10'}
-    cpu: [x64]
-    os: [linux]
-    libc: [glibc]
-
-  '@napi-rs/canvas-linux-x64-musl@1.0.13':
-    resolution: {integrity: sha512-bGY1r26S2bs8UNFJcPWcCSNdCFbKep5PATsvtgtC9A5u6SRgr2/jJE/RlhHL5m9ZpixNDhVkLY/5h16Kx5V9YA==}
-    engines: {node: '>= 10'}
-    cpu: [x64]
-    os: [linux]
-    libc: [musl]
-
-  '@napi-rs/canvas-win32-arm64-msvc@1.0.13':
-    resolution: {integrity: sha512-2vRPBZoaIvJrUkDhZTE2Hn0YrnpJRCWVM3EJACoBKjuWI6WgPxGtUoRMsxRviCsyks8bKTSFdyw14CellnG2qA==}
-    engines: {node: '>= 10'}
-    cpu: [arm64]
-    os: [win32]
-
-  '@napi-rs/canvas-win32-x64-msvc@1.0.13':
-    resolution: {integrity: sha512-DUlW3lZPz63kYsf8mxgyyZuevhlH0T3/BGP9l+NazhB0F1+gL6D4hqZdnhZpw24DlWmTpATDcyYSZlJOi+DdfQ==}
-    engines: {node: '>= 10'}
-    cpu: [x64]
-    os: [win32]
-
-  '@napi-rs/canvas@1.0.13':
-    resolution: {integrity: sha512-b87ugZpQ5ViwqVBkjervxpwa0GmJPsKHLBNoZN6GpjWeHzTbDUGryriq+2DYW2XbB+xCqSIINQysC0/I87nPbw==}
-    engines: {node: '>= 10'}
 
   '@oxc-project/types@0.153.0':
     resolution: {integrity: sha512-jSNrRIyvPVLL5E1z/tS5zLAprosGz/FuI1PWwEOz59j3E4TTTzSpqKb/RDGqJhhW0QHYISGXxq582wGx6T11Tw==}
@@ -287,6 +178,62 @@ packages:
     resolution: {integrity: sha512-Izi8RQcffqCeNVgFigKli1ssklIbpHnCYc6AknXGYoB6grJqyeby7jv12JUQgmTAnIDnbck1uxksT4dzN3PWBA==}
     engines: {node: '>=12'}
 
+  calamine-node-darwin-arm64@0.2.0:
+    resolution: {integrity: sha512-fiLzC/hOj9kMg+3/gPqpVkFyTxAK+UIXNntPMCTv+McOPImVg9lPWITw/5bJEolZBAbVLRCoRAzIvzJZNNnpQA==}
+    engines: {node: '>=22.13'}
+    cpu: [arm64]
+    os: [darwin]
+
+  calamine-node-darwin-x64@0.2.0:
+    resolution: {integrity: sha512-+a7LizYopsnh6ICZIMW027ivku3enFOKM53WPrweB6gggMX1en5S0Z1OB1ptCTewXEkriVh+k179CAWM//KD1w==}
+    engines: {node: '>=22.13'}
+    cpu: [x64]
+    os: [darwin]
+
+  calamine-node-linux-arm64-gnu@0.2.0:
+    resolution: {integrity: sha512-wJuIosGERChZ5xL3b9OmM7AXZdVKfypR5f1gyYbCLz8oGeTziOCJg5Cy0MCDzNaT26709lkOtnn8NxWw1YKQ7g==}
+    engines: {node: '>=22.13'}
+    cpu: [arm64]
+    os: [linux]
+    libc: [glibc]
+
+  calamine-node-linux-arm64-musl@0.2.0:
+    resolution: {integrity: sha512-hF5rCd1w0zSj8SePcCSE+Xt2FgJYbM1zk2ibA9hDxd8OLAB39UnZkCwk7RSRuBewPcN8xdtNHmWoR64MthTh0g==}
+    engines: {node: '>=22.13'}
+    cpu: [arm64]
+    os: [linux]
+    libc: [musl]
+
+  calamine-node-linux-x64-gnu@0.2.0:
+    resolution: {integrity: sha512-Yly/NiwgzFa4k6omfoBEVJXiwGAdqHeXewVWmGb9hrCGNPa+aRPJapI91NCISReoIYN7nLm29ShWaefa/4xHwg==}
+    engines: {node: '>=22.13'}
+    cpu: [x64]
+    os: [linux]
+    libc: [glibc]
+
+  calamine-node-linux-x64-musl@0.2.0:
+    resolution: {integrity: sha512-VcmamfWLbuQCxVrPn9/JSqxqt6Q5vglEU7QHzjBHpsaRP2Oi8yqzhUPhF1+Qn0sq3xa9Dl225iump4lvkEGVyg==}
+    engines: {node: '>=22.13'}
+    cpu: [x64]
+    os: [linux]
+    libc: [musl]
+
+  calamine-node-win32-arm64-msvc@0.2.0:
+    resolution: {integrity: sha512-X9sEyJrAgCdtTWLeLRll9I1+PHb/WVBA54KraYsxUrjidp4vGvHs1M5LZQpCyAD6CPvb3wSA3O1qL/bo+Xzh9Q==}
+    engines: {node: '>=22.13'}
+    cpu: [arm64]
+    os: [win32]
+
+  calamine-node-win32-x64-msvc@0.2.0:
+    resolution: {integrity: sha512-zqhlkSlTwzWWBWUC/Xiv0P5A6Hud9LFcE87Qf8MryzMviBxlVLeCCFPwKJz+nbEvvOOTnui9DoApP1xq4Mhtqg==}
+    engines: {node: '>=22.13'}
+    cpu: [x64]
+    os: [win32]
+
+  calamine-node@0.2.0:
+    resolution: {integrity: sha512-l5di8YeuPdfvhKwNFbysKuC/FAKW0IEP/+mA767EkuKA9B4CZRXJo5bTmnSghIh4EkfWTbajILLDaRkKZcfb7g==}
+    engines: {node: '>=22.13'}
+
   chai@6.3.0:
     resolution: {integrity: sha512-XWAtwJ6OHO+tj0EKCs0Y2UamnyOxseZWltU4x2U2wh8g4AigdjwvtUjvLP2tqkA/avxHEtzxNaqGq/YGNwckKg==}
     engines: {node: '>=18'}
@@ -325,10 +272,6 @@ packages:
     resolution: {integrity: sha512-5xoDfX+fL7faATnagmWPpbFtwh/R77WmMMqqHGS65C3vvB0YHrgF+B1YmZ3441tMj5n63k0212XNoJwzlhffQw==}
     engines: {node: ^8.16.0 || ^10.6.0 || >=11.0.0}
     os: [darwin]
-
-  isexe@4.0.0:
-    resolution: {integrity: sha512-FFUtZMpoZ8RqHS3XeXEmHWLA4thH+ZxCv2lOiPIn1Xc7CxrqhWzNSDzD+/chS/zbYezmiwWLdQC09JdQKmthOw==}
-    engines: {node: '>=20'}
 
   lightningcss-android-arm64@1.33.0:
     resolution: {integrity: sha512-gEpRTalKdosp4Bb8qWtc2iOgE5SeIHlpS1up9bFq2wAyYhl1UdTObYiHe98zEM9SQvSoqQZ1IQD0JNpg3Ml5pg==}
@@ -419,16 +362,17 @@ packages:
   parse5@8.0.0:
     resolution: {integrity: sha512-9m4m5GSgXjL4AjumKzq1Fgfp3Z8rsvjRNbnkVwfu2ImRqE5D0LnY2QfDen18FSY9C573YU5XxSapdHZTZ2WolA==}
 
-  pdfjs-dist@6.4.299:
-    resolution: {integrity: sha512-AVl138zALtfaAPvADulE0PZThbYzCBS79nL4pOSL/6Sm/4AH5A21BD9VHt97OlCuzJuCpmeZtAtkinisF4Vb1g==}
-    engines: {node: '>=22.13.0 || >=24'}
-
   picocolors@1.1.1:
     resolution: {integrity: sha512-xceH2snhtb5M9liqDsmEw56le376mTZkEX/jEb/RxNFyegNul7eNslCXP9FDj/Lcu0X8KEyMceP2ntpaHrDEVA==}
 
   picomatch@4.0.7:
     resolution: {integrity: sha512-qcJu88Q2IWqJsDD529JKMdwGm/dvInW4HvQnRwiH9JtihJvzGOscDtHE3x1pBKeUOTysQ8kVmLnJ2kJu7yhcGA==}
     engines: {node: '>=12'}
+
+  playwright-core@1.61.1:
+    resolution: {integrity: sha512-h7Qlt6m4REp25qvIdvbDtVmD4LqVXfpRxhORv9L0jzETM05p4fuPJ3dKyuSXQxDSbXnmS79HAgi9589lGSpLkg==}
+    engines: {node: '>=18'}
+    hasBin: true
 
   postcss@8.5.30:
     resolution: {integrity: sha512-zkd+e9S1AQHhmaBKye9zlFHWjOwVgqXl1q3ECYy8561K7qxR2cREf/STLskulBFd78k6AOFeA+ff1TtEzk9bAA==}
@@ -457,9 +401,6 @@ packages:
   tinyglobby@0.2.17:
     resolution: {integrity: sha512-wXR/dYpcqKmfWpEdZjiKJOwCNFndD0DMnrW/cYjVGttEkBfVgcLFHoNrlj47mjOVic9yyNu65alsgF4NQyTa2g==}
     engines: {node: '>=12.0.0'}
-
-  tslib@2.8.1:
-    resolution: {integrity: sha512-oJFu94HQb+KVduSUQL7wnpmqnfmLsOA/nAh6b6EH0wCEoK0/mPeXU6c3wKDV83MkOuHPRHtSXKKU99IBazS/2w==}
 
   vite@8.2.2:
     resolution: {integrity: sha512-cFKLV/PRgAUlIRm5WjMjJ86jrftzpqcgH+Us+DS8mI3CDNiH30Whrz8uHL3+MOLPAgqbMBAqWdAHAphOAM+z/Q==}
@@ -545,11 +486,6 @@ packages:
       jsdom:
         optional: true
 
-  which@7.0.0:
-    resolution: {integrity: sha512-RancgH2dmbLdHl6LRhEqvklWMgl/Hdnun0Y90KhBOLkMefg8Qa7/Zel8Sm+8HEcP6DEjzsWzpkuBQEZok58isA==}
-    engines: {node: ^22.22.2 || ^24.15.0 || >=26.0.0}
-    hasBin: true
-
   why-is-node-running@3.2.1:
     resolution: {integrity: sha512-Tb2FUhB4vUsGQlfSquQLYkApkuPAFQXGFzxWKHHumVz2dK+X1RUm/HnID4+TfIGYJ1kTcwOaCk/buYCEJr6YjQ==}
     engines: {node: '>=20.11'}
@@ -562,10 +498,6 @@ snapshots:
       effect: 4.0.6
       vitest: 5.0.5(vite@8.2.2)
 
-  '@emnapi/runtime@1.11.2':
-    dependencies:
-      tslib: 2.8.1
-
   '@jridgewell/resolve-uri@3.1.2': {}
 
   '@jridgewell/sourcemap-codec@1.6.0': {}
@@ -574,76 +506,6 @@ snapshots:
     dependencies:
       '@jridgewell/resolve-uri': 3.1.2
       '@jridgewell/sourcemap-codec': 1.6.0
-
-  '@kreuzberg/node-darwin-arm64@4.10.2':
-    optional: true
-
-  '@kreuzberg/node-linux-arm64-gnu@4.10.2':
-    optional: true
-
-  '@kreuzberg/node-linux-x64-gnu@4.10.2':
-    optional: true
-
-  '@kreuzberg/node-win32-x64-msvc@4.10.2':
-    optional: true
-
-  '@kreuzberg/node@4.10.2':
-    dependencies:
-      '@emnapi/runtime': 1.11.2
-      which: 7.0.0
-    optionalDependencies:
-      '@kreuzberg/node-darwin-arm64': 4.10.2
-      '@kreuzberg/node-linux-arm64-gnu': 4.10.2
-      '@kreuzberg/node-linux-x64-gnu': 4.10.2
-      '@kreuzberg/node-win32-x64-msvc': 4.10.2
-
-  '@napi-rs/canvas-android-arm64@1.0.13':
-    optional: true
-
-  '@napi-rs/canvas-darwin-arm64@1.0.13':
-    optional: true
-
-  '@napi-rs/canvas-darwin-x64@1.0.13':
-    optional: true
-
-  '@napi-rs/canvas-linux-arm-gnueabihf@1.0.13':
-    optional: true
-
-  '@napi-rs/canvas-linux-arm64-gnu@1.0.13':
-    optional: true
-
-  '@napi-rs/canvas-linux-arm64-musl@1.0.13':
-    optional: true
-
-  '@napi-rs/canvas-linux-riscv64-gnu@1.0.13':
-    optional: true
-
-  '@napi-rs/canvas-linux-x64-gnu@1.0.13':
-    optional: true
-
-  '@napi-rs/canvas-linux-x64-musl@1.0.13':
-    optional: true
-
-  '@napi-rs/canvas-win32-arm64-msvc@1.0.13':
-    optional: true
-
-  '@napi-rs/canvas-win32-x64-msvc@1.0.13':
-    optional: true
-
-  '@napi-rs/canvas@1.0.13':
-    optionalDependencies:
-      '@napi-rs/canvas-android-arm64': 1.0.13
-      '@napi-rs/canvas-darwin-arm64': 1.0.13
-      '@napi-rs/canvas-darwin-x64': 1.0.13
-      '@napi-rs/canvas-linux-arm-gnueabihf': 1.0.13
-      '@napi-rs/canvas-linux-arm64-gnu': 1.0.13
-      '@napi-rs/canvas-linux-arm64-musl': 1.0.13
-      '@napi-rs/canvas-linux-riscv64-gnu': 1.0.13
-      '@napi-rs/canvas-linux-x64-gnu': 1.0.13
-      '@napi-rs/canvas-linux-x64-musl': 1.0.13
-      '@napi-rs/canvas-win32-arm64-msvc': 1.0.13
-      '@napi-rs/canvas-win32-x64-msvc': 1.0.13
-    optional: true
 
   '@oxc-project/types@0.153.0': {}
 
@@ -716,6 +578,41 @@ snapshots:
 
   assertion-error@2.0.1: {}
 
+  calamine-node-darwin-arm64@0.2.0:
+    optional: true
+
+  calamine-node-darwin-x64@0.2.0:
+    optional: true
+
+  calamine-node-linux-arm64-gnu@0.2.0:
+    optional: true
+
+  calamine-node-linux-arm64-musl@0.2.0:
+    optional: true
+
+  calamine-node-linux-x64-gnu@0.2.0:
+    optional: true
+
+  calamine-node-linux-x64-musl@0.2.0:
+    optional: true
+
+  calamine-node-win32-arm64-msvc@0.2.0:
+    optional: true
+
+  calamine-node-win32-x64-msvc@0.2.0:
+    optional: true
+
+  calamine-node@0.2.0:
+    optionalDependencies:
+      calamine-node-darwin-arm64: 0.2.0
+      calamine-node-darwin-x64: 0.2.0
+      calamine-node-linux-arm64-gnu: 0.2.0
+      calamine-node-linux-arm64-musl: 0.2.0
+      calamine-node-linux-x64-gnu: 0.2.0
+      calamine-node-linux-x64-musl: 0.2.0
+      calamine-node-win32-arm64-msvc: 0.2.0
+      calamine-node-win32-x64-msvc: 0.2.0
+
   chai@6.3.0: {}
 
   detect-libc@2.1.2: {}
@@ -738,8 +635,6 @@ snapshots:
 
   fsevents@2.3.3:
     optional: true
-
-  isexe@4.0.0: {}
 
   lightningcss-android-arm64@1.33.0:
     optional: true
@@ -802,13 +697,11 @@ snapshots:
     dependencies:
       entities: 6.0.1
 
-  pdfjs-dist@6.4.299:
-    optionalDependencies:
-      '@napi-rs/canvas': 1.0.13
-
   picocolors@1.1.1: {}
 
   picomatch@4.0.7: {}
+
+  playwright-core@1.61.1: {}
 
   postcss@8.5.30:
     dependencies:
@@ -850,8 +743,6 @@ snapshots:
       fdir: 6.5.0(picomatch@4.0.7)
       picomatch: 4.0.7
 
-  tslib@2.8.1: {}
-
   vite@8.2.2:
     dependencies:
       lightningcss: 1.33.0
@@ -880,9 +771,5 @@ snapshots:
       why-is-node-running: 3.2.1
     transitivePeerDependencies:
       - msw
-
-  which@7.0.0:
-    dependencies:
-      isexe: 4.0.0
 
   why-is-node-running@3.2.1: {}

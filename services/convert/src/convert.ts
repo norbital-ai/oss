@@ -27,7 +27,7 @@ const FILTER = fileURLToPath(new URL('./convert.lua', import.meta.url));
 const A4 = fileURLToPath(new URL('./a4.docx', import.meta.url));
 
 export type Request = {
-	from: 'markdown' | 'html';
+	from: 'markdown' | 'html' | 'layout-html';
 	to: Target;
 	source: string;
 	page?: keyof typeof PAPER;
@@ -61,6 +61,8 @@ export type Converter = (
 
 export const pandoc = ({ timeoutMs, heap }: { timeoutMs: number; heap: string }): Converter =>
 	Effect.fn('Convert.pandoc')(function* (request: Request, reference: Uint8Array | null) {
+		if (request.from === 'layout-html')
+			return yield* new ConversionFailed({ message: 'Layout HTML requires a configured browser renderer.' });
 		return yield* Effect.acquireUseRelease(
 			Effect.tryPromise({ try: () => mkdtemp(join(tmpdir(), 'convert-')), catch: failed }),
 			(dir) =>

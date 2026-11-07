@@ -9,6 +9,7 @@ import { afterAll, test } from '@effect/vitest';
 import { Effect } from 'effect';
 import { type Converter } from '../src/convert.ts';
 import { ingester } from '../src/ingest.ts';
+import { readTo } from '../src/job.ts';
 import { service } from '../src/server.ts';
 import { merge, placed, transcriber, windows, type Segment } from '../src/transcribe.ts';
 
@@ -77,7 +78,7 @@ test('a recording is heard chunk by chunk over the fake model, merged, sorted, i
 		});
 	};
 	const transcribe = transcriber({ baseUrl: 'http://model.test/v1', apiKey: 'k', model: 'm', chunkSeconds: 20, overlapSeconds: 5, fetch: fake });
-	const ingest = ingester({ lanes: 1, transcribe });
+	const ingest = ingester({ transcribe });
 	const out = await Effect.runPromise(ingest({ name: 'site.m4a', mime: 'audio/mp4', bytes: media('tone.m4a', 30) }));
 	if (out.kind !== 'document') throw new Error('a transcript is a document');
 	assert.equal(calls.length, 2);
@@ -99,14 +100,13 @@ afterAll(() => Promise.all(running.map((s) => s.stop())));
 const never: Converter = () => Effect.die('not a conversion');
 async function start(transcribes: boolean) {
 	const ingest = ingester({
-		lanes: 1,
 		transcribe: () =>
 			Effect.succeed({
 				transcript: { language: 'en', durationMs: 2000, speakers: [], segments: [seg('S1', 0, 2, 'hello')] },
 				usage: { calls: [], model: 'm', input: 0, output: 0, cost: 0 }
 			})
 	});
-	const svc = service({ keys: ['k1'], database: join(dir, `db-${running.length}.db`), pollMs: 20, convert: never, ingest, transcribes });
+	const svc = service({ keys: ['k1'], database: join(dir, `db-${running.length}.db`), pollMs: 20, convert: never, ingest: readTo(ingest), transcribes });
 	running.push(svc);
 	await new Promise<void>((r) => svc.server.listen(0, r));
 	const address = svc.server.address();

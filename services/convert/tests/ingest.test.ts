@@ -2,17 +2,20 @@
 // Fixtures are small files written by python-docx, openpyxl, python-pptx and reportlab, and LibreOffice for the
 // odt, ods, odp, doc and xls copies of the same tables.
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { afterAll, test } from '@effect/vitest';
 import { Effect, Schema } from 'effect';
-import { __resetBindingForTests, __setBindingForTests } from '@kreuzberg/node';
-import { ingester, route } from '../src/ingest.ts';
+import { ingester } from '../src/ingest.ts';
+import { readTo } from '../src/job.ts';
+import { route } from '../src/route.ts';
 import { service } from '../src/server.ts';
 import { type Converter } from '../src/convert.ts';
 
-const ingest = ingester({ lanes: 2 });
+const ingest = ingester();
 const fixture = (name: string) => readFileSync(new URL(`./fixtures/${name}`, import.meta.url));
 /** A document's result (a dataset fails the test). */
 const run = async (name: string, mime: string, bytes: Uint8Array) => {
@@ -202,34 +205,6 @@ test('a scanned page is only its image: no text, no OCR', async () => {
 	assert.equal(ruled.meta.stats.pages, 1);
 });
 
-test('a PDF never reaches Kreuzberg; no Kreuzberg call ever sets an OCR option or the layout model', async () => {
-	const seen: unknown[] = [];
-	__setBindingForTests({
-		extractBytes: (_bytes: Uint8Array, _mime: string, config: unknown) => {
-			seen.push(config);
-			return Promise.reject(new Error('spy'));
-		}
-	});
-	try {
-		await run('ruled.pdf', 'application/pdf', fixture('ruled.pdf'));
-		for (const [name, mime] of [
-			['a.doc', 'application/msword'],
-			['a.xls', 'application/vnd.ms-excel'],
-			['a.ppt', 'application/vnd.ms-powerpoint'],
-			['a.rtf', 'application/rtf']
-		] as const)
-			await Effect.runPromise(Effect.flip(ingest({ name, mime, bytes: text('x') })));
-	} finally {
-		__resetBindingForTests();
-	}
-	assert.equal(seen.length, 4);
-	for (const config of seen) {
-		assert.ok(typeof config === 'object' && config !== null);
-		assert.ok(!('ocr' in config) && !('forceOcrPages' in config) && !('layout' in config), JSON.stringify(config));
-		assert.ok('forceOcr' in config && config.forceOcr === false);
-	}
-});
-
 test('legacy doc and xls read natively', async () => {
 	const doc = await run('tables.doc', 'application/msword', fixture('tables.doc'));
 	allowed(doc.html);
@@ -245,7 +220,7 @@ const running: { stop: () => Promise<void> }[] = [];
 afterAll(() => Promise.all(running.map((s) => s.stop())));
 const never: Converter = () => Effect.die('not a conversion');
 async function start() {
-	const svc = service({ keys: ['k1'], database: join(dir, `db-${running.length}.db`), pollMs: 20, convert: never, ingest, maxIngestBytes: 4096 });
+	const svc = service({ keys: ['k1'], database: join(dir, `db-${running.length}.db`), pollMs: 20, convert: never, ingest: readTo(ingest), maxIngestBytes: 4096 });
 	running.push(svc);
 	await new Promise<void>((r) => svc.server.listen(0, r));
 	const address = svc.server.address();
@@ -293,4 +268,52 @@ test('POST /v1/jobs takes an ingest too: 202, then the result as JSON', async ()
 	assert.equal(out.headers.get('content-type'), 'application/json');
 	const result = Schema.decodeUnknownSync(Result)(await out.json());
 	assert.deepEqual(result.kind === 'data' && result.json, { sheets: [{ name: 'a', columns: ['A', 'B'], rows: [['a', 'b']] }] });
+});
+
+const poppler = spawnSync('pdftotext', ['-v']).status === 0;
+const typst = spawnSync('typst', ['--version']).status === 0;
+test.skipIf(!poppler || !typst)('a long PDF read across page ranges keeps its pages in order', async () => {
+	const dir = mkdtempSync(join(tmpdir(), 'long-pdf-')),
+		source = join(dir, 'long.typ'),
+		path = join(dir, 'long.pdf');
+	writeFileSync(source, '#for n in range(1, 131) [Sheet #n #pagebreak(weak: true)]');
+	assert.equal(spawnSync('typst', ['compile', source, path]).status, 0);
+	const text = await Effect.runPromise(
+		ingester()({
+			name: 'long.pdf',
+			mime: 'application/pdf',
+			bytes: new Uint8Array(),
+			path,
+			options: { pictures: false }
+		})
+	);
+	assert.ok(text.kind === 'document');
+	const pages = [...text.html.matchAll(/<section data-page="(\d+)">\n\S*Sheet (\d+)/g)];
+	assert.equal(pages.length, 130);
+	assert.ok(pages.every(([, page, sheet]) => page === sheet));
+});
+test.skipIf(!poppler || !typst)('a PDF keeps its accents, curly quotes and Greek', async () => {
+	const dir = mkdtempSync(join(tmpdir(), 'accents-pdf-')),
+		source = join(dir, 'accents.typ'),
+		path = join(dir, 'accents.pdf');
+	writeFileSync(source, 'Façade ‘quoted’ φ 5% — naïve 中文');
+	assert.equal(spawnSync('typst', ['compile', source, path]).status, 0);
+	const text = await Effect.runPromise(
+		ingester()({ name: 'accents.pdf', mime: 'application/pdf', bytes: new Uint8Array(), path })
+	);
+	assert.ok(text.kind === 'document' && text.html.includes('Façade ‘quoted’ φ 5% — naïve 中文'), text.kind === 'document' ? text.html : '');
+});
+test.skipIf(!poppler)('a PDF read from the disk: its text a page at a time, one page as a picture', async () => {
+	const path = fileURLToPath(new URL('./fixtures/ruled.pdf', import.meta.url)),
+		scan = fileURLToPath(new URL('./fixtures/scan.pdf', import.meta.url));
+	const read = ingester();
+	const request = { name: 'a.pdf', mime: 'application/pdf', bytes: new Uint8Array() };
+	const text = await Effect.runPromise(read({ ...request, path, options: { pictures: false } }));
+	assert.ok(text.kind === 'document' && /<section data-page="1">\n<h1>Schedule<\/h1>/.test(text.html) && /<table>/.test(text.html));
+	const blank = await Effect.runPromise(read({ ...request, path: scan, options: { pictures: false } }));
+	assert.ok(blank.kind === 'document' && blank.html.includes('No text on this page.'));
+	const page = await Effect.runPromise(read({ ...request, path: scan, options: { page: 1 } }));
+	assert.equal(page.images.length, 1);
+	assert.equal(page.images[0]?.mime, 'image/jpeg');
+	assert.ok(page.images[0]?.bytes.startsWith('/9j/'));
 });

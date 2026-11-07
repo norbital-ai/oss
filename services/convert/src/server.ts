@@ -2,6 +2,7 @@
 //
 //   POST /v1/convert            { from, to, source, page?, landscape?, reference? } → Server-Sent Events: the job on
 //                               every change, then `event: result` { mime, to, bytes (base64) } once it succeeds
+//   POST /v1/convert/preview    transient PDF response with no job, result record, or shared-volume write
 //   POST /v1/jobs               the same body → 202 job, for callers that watch or fetch later
 //   GET  /v1/jobs/:id           the job
 //   GET  /v1/jobs/:id/events    the job's events, closed once it settles; `?result` streams the result too (a
@@ -11,14 +12,34 @@
 //                               parse ({ kind: 'document', html, images } or { kind: 'data', json, images })
 //                               with the job's own meta: { usage?, stats }; also
 //                               POST /v1/jobs { op: 'ingest', … } → 202 job
+//   POST /v1/ingest/raw         ?name&mime&options&sha256&lane, the file as the body → 202 job; with sha256 a PDF stays an
+//                               hour past its last read and a kept one's body is not needed; `lane` (a tenant) is
+//                               what claims stay fair across
+//   GET  /v1/kept/:sha256       200 while that file is kept, 404 when it must be sent
 //   GET  /healthz               unauthenticated liveness and queue depth
 //
 // Every replica serves every route and pulls from the shared queue, so any load balancer in front spreads the HTTP and
-// the queue spreads the work. A key sees only the jobs it submitted.
-import { createHash, timingSafeEqual } from 'node:crypto';
+// the queue spreads the work. A key sees only the jobs it submitted. A burst waits in the queue on the disk: this server
+// holds no file and no answer, and each ingest runs in a process of its own (job.ts). It refuses only when the volume is
+// nearly full.
+import { createHash, randomUUID, timingSafeEqual } from 'node:crypto';
+import {
+	createReadStream,
+	createWriteStream,
+	existsSync,
+	mkdirSync,
+	readdirSync,
+	renameSync,
+	rmSync,
+	statfsSync,
+	statSync,
+	utimesSync
+} from 'node:fs';
+import { readFile, writeFile } from 'node:fs/promises';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { availableParallelism, hostname } from 'node:os';
-import { join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
+import { pipeline } from 'node:stream/promises';
 import {
 	Cause,
 	Clock,
@@ -41,15 +62,17 @@ import {
 	type Request,
 	type Target
 } from './convert.ts';
-import { ingester, route, type Ingester } from './ingest.ts';
-import { transcriber } from './transcribe.ts';
+import type { Reads } from './job.ts';
+import { spawned } from './job.ts';
+import { layoutPdf } from './layout-pdf.ts';
 import { openQueue, type Job } from './queue.ts';
+import { route } from './route.ts';
 
 export type Options = {
 	keys: readonly string[];
 	database: string;
 	convert: Converter;
-	ingest?: Ingester;
+	ingest?: Reads;
 	/** The ingester transcribes audio; without it audio answers 503. */
 	transcribes?: boolean;
 	concurrency?: number;
@@ -58,10 +81,17 @@ export type Options = {
 	maxIngestBytes?: number;
 	retainMs?: number;
 	pollMs?: number;
+	/** Free space on the volume below which new files are refused. */
+	reserveBytes?: number;
 };
 
 /** A replica renews its leases every LEASE_MS / 3, so a dead one's jobs run elsewhere within LEASE_MS. */
 const LEASE_MS = 15_000;
+/** Lease rounds between sweeps of the spool: a burst's many files are not walked every few seconds. */
+const SWEEP_EVERY = 60;
+/** A watcher's check; a job this replica runs wakes it sooner. */
+const WATCH_MS = 1000;
+const PREVIEW_BYTES = 8 * 1024 * 1024;
 const digest = (s: string) => createHash('sha256').update(s).digest();
 const settled = (j: Job) => j.state === 'succeeded' || j.state === 'failed';
 const TargetSchema = Schema.declare(
@@ -73,31 +103,35 @@ const PaperSchema = Schema.declare(
 );
 const StoredRequest = Schema.fromJsonString(
 	Schema.Struct({
-		from: Schema.Literals(['markdown', 'html']),
+		from: Schema.Literals(['markdown', 'html', 'layout-html']),
 		to: TargetSchema,
 		source: Schema.NonEmptyString,
 		page: Schema.optionalKey(PaperSchema),
 		landscape: Schema.optionalKey(Schema.Boolean)
 	}).check(
-		Schema.makeFilter((request) =>
-			request.to === 'pdf' || (request.page === undefined && request.landscape === undefined)
-				? undefined
-				: 'page and landscape are PDF options'
-		)
+		Schema.makeFilter((request) => {
+			if (request.to === 'pdf') return;
+			if (request.from === 'layout-html') return 'Layout HTML requires PDF';
+			if (request.page !== undefined || request.landscape !== undefined)
+				return 'page and landscape are PDF options';
+		})
 	)
 );
 const AudioOptions = Schema.Struct({
 	diarize: Schema.optionalKey(Schema.Boolean),
 	language: Schema.optionalKey(Schema.String),
 	speakers: Schema.optionalKey(Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 50 }))),
-	prompt: Schema.optionalKey(Schema.String.check(Schema.isMaxLength(4000)))
+	prompt: Schema.optionalKey(Schema.String.check(Schema.isMaxLength(4000))),
+	pictures: Schema.optionalKey(Schema.Boolean),
+	page: Schema.optionalKey(Schema.Int.check(Schema.isGreaterThan(0)))
 });
 const StoredIngest = Schema.fromJsonString(
 	Schema.Struct({
 		op: Schema.Literal('ingest'),
 		name: Schema.String,
 		mime: Schema.String,
-		options: Schema.optionalKey(AudioOptions)
+		options: Schema.optionalKey(AudioOptions),
+		spool: Schema.String
 	})
 );
 const IngestBody = Schema.Struct({
@@ -128,15 +162,36 @@ const Work = Context.Service<{
 export function service(o: Options) {
 	const {
 		concurrency = availableParallelism(),
-		maxQueued = 1000,
+		maxQueued = 100_000,
 		maxBytes = 20 * 1024 * 1024,
-		maxIngestBytes = 200 * 1024 * 1024,
+		maxIngestBytes = 2 * 1024 * 1024 * 1024,
 		retainMs = 3_600_000,
-		pollMs = 500
+		pollMs = 500,
+		reserveBytes = 1024 ** 3
 	} = o;
 	if (o.keys.length === 0) throw new Error('CONVERT_API_KEYS names no key.');
 	const keys = o.keys.map(digest);
 	const queue = openQueue(o.database);
+	/** Beside the queue on the volume every replica mounts: a raw file waits here for its job, at any size. */
+	const spool = join(dirname(o.database), 'spool');
+	/** Every answer, a file by its job's id: a queue row holds what a job is, never its bytes. */
+	const results = join(dirname(o.database), 'results');
+	mkdirSync(spool, { recursive: true });
+	mkdirSync(results, { recursive: true });
+	const roomy = () => {
+		const { bavail, bsize } = statfsSync(spool);
+		return bavail * bsize >= reserveBytes;
+	};
+	const keptPath = (who: string, sha256: string) => join(spool, `kept-${who}-${sha256}`);
+	const unspool = (claimed: { readonly request: string }) => {
+		const ingest = Schema.decodeUnknownResult(StoredIngest)(claimed.request);
+		if (
+			Result.isSuccess(ingest) &&
+			ingest.success.spool !== undefined &&
+			!basename(ingest.success.spool).startsWith('kept-')
+		)
+			rmSync(ingest.success.spool, { force: true });
+	};
 	const runtime = ManagedRuntime.make(
 		Layer.effect(
 			Work,
@@ -174,26 +229,34 @@ export function service(o: Options) {
 			active++;
 			changed();
 			const conversion = Effect.gen(function* () {
-				const ingest = Schema.decodeUnknownResult(StoredIngest)(claimed.request);
+				const out = join(results, claimed.id),
+					ingest = Schema.decodeUnknownResult(StoredIngest)(claimed.request);
 				if (Result.isSuccess(ingest)) {
 					if (!o.ingest) return yield* Effect.fail(new Error('This replica does not ingest.'));
-					const out = yield* o.ingest({ ...ingest.success, bytes: claimed.reference ?? new Uint8Array() });
-					return { result: new TextEncoder().encode(JSON.stringify(out)), mime: 'application/json' };
+					const { spool: path, op: _, ...asked } = ingest.success;
+					yield* o.ingest({ ...asked, path, out });
+					return { mime: 'application/json' };
 				}
 				const request = yield* Schema.decodeUnknownEffect(StoredRequest)(claimed.request);
 				const result = yield* o.convert(request, claimed.reference);
-				return { result, mime: TARGETS[request.to] };
+				yield* Effect.tryPromise(() => writeFile(out, result));
+				return { mime: TARGETS[request.to] };
 			});
 			run.conversion(
 				conversion.pipe(
 					Effect.matchCauseEffect({
-						onSuccess: (outcome) => Effect.sync(() => queue.finish(claimed.id, worker, outcome)),
+						onSuccess: (outcome) =>
+							Effect.sync(() => {
+								queue.finish(claimed.id, worker, outcome);
+								unspool(claimed);
+							}),
 						onFailure: (cause) =>
 							Effect.sync(() => {
 								const error = Cause.squash(cause);
 								queue.finish(claimed.id, worker, {
 									error: error instanceof Error ? error.message : String(error)
 								});
+								unspool(claimed);
 							})
 					}),
 					Effect.ensuring(
@@ -207,6 +270,7 @@ export function service(o: Options) {
 			);
 		}
 	}
+	let sweeps = 0;
 	const claiming = run.maintenance(
 		Effect.sync(pump).pipe(
 			Effect.repeat(Schedule.spaced(pollMs)),
@@ -220,7 +284,13 @@ export function service(o: Options) {
 			yield* Effect.sync(() => {
 				queue.renew(worker, LEASE_MS);
 				queue.recover();
-				queue.purge(now - retainMs);
+				for (const id of queue.purge(now - retainMs)) rmSync(join(results, id), { force: true });
+				// a replica that died mid-job left its file, and the job's retention has passed
+				if (++sweeps % SWEEP_EVERY === 0)
+					for (const name of readdirSync(spool)) {
+						const file = join(spool, name);
+						if (statSync(file).mtimeMs < now - retainMs) rmSync(file, { force: true });
+					}
 			});
 		}).pipe(Effect.repeat(Schedule.spaced(LEASE_MS / 3)), Effect.asVoid, Effect.delay(LEASE_MS / 3))
 	);
@@ -243,7 +313,7 @@ export function service(o: Options) {
 			.writeHead(status, { 'content-type': 'application/json', ...headers })
 			.end(JSON.stringify(body));
 
-	const body = (req: IncomingMessage, limit: number) =>
+	const bytesOf = (req: IncomingMessage, limit: number) =>
 		Effect.callback<Buffer, HttpFailed>((resume) => {
 			const chunks: Buffer[] = [];
 			let size = 0;
@@ -288,7 +358,9 @@ export function service(o: Options) {
 				cleanup();
 				req.destroy();
 			});
-		}).pipe(
+		});
+	const body = (req: IncomingMessage, limit: number) =>
+		bytesOf(req, limit).pipe(
 			Effect.flatMap((bytes) =>
 				Effect.try({
 					try: (): unknown => JSON.parse(bytes.toString('utf8')),
@@ -301,11 +373,13 @@ export function service(o: Options) {
 		const object = Schema.decodeUnknownResult(Schema.Record(Schema.String, Schema.Unknown))(b);
 		if (Result.isFailure(object)) return 'The body is a JSON object.';
 		const { from, to, source, page, landscape, reference } = object.success;
-		if (from !== 'markdown' && from !== 'html') return "from is 'markdown' or 'html'.";
+		if (from !== 'markdown' && from !== 'html' && from !== 'layout-html')
+			return "from is 'markdown', 'html' or 'layout-html'.";
 		if (!Schema.is(TargetSchema)(to)) return `to is one of ${Object.keys(TARGETS).join(', ')}.`;
 		if (typeof source !== 'string' || source === '')
 			return 'source is the non-empty document text.';
 		const target = to;
+		if (from === 'layout-html' && target !== 'pdf') return 'Layout HTML requires PDF.';
 		if (page !== undefined && (target !== 'pdf' || !Schema.is(PaperSchema)(page)))
 			return `page is a pdf's, one of ${Object.keys(PAPER).join(', ')}.`;
 		if (landscape !== undefined && (target !== 'pdf' || typeof landscape !== 'boolean'))
@@ -350,14 +424,18 @@ export function service(o: Options) {
 			if (text !== last) res.write(`event: job\ndata: ${(last = text)}\n\n`);
 			if (!settled(job)) return;
 			const out = withResult ? queue.result(who, id) : undefined;
-			if (out)
+			if (!out) return close();
+			watchers.delete(check);
+			clearInterval(tick);
+			void readFile(join(results, id)).then((bytes) => {
 				res.write(
-					`event: result\ndata: ${out.target === 'ingest' ? Buffer.from(out.result).toString('utf8') : JSON.stringify({ mime: out.mime, to: out.target, bytes: Buffer.from(out.result).toString('base64') })}\n\n`
+					`event: result\ndata: ${out.target === 'ingest' ? bytes.toString('utf8') : JSON.stringify({ mime: out.mime, to: out.target, bytes: bytes.toString('base64') })}\n\n`
 				);
-			close();
+				close();
+			}, close);
 		};
 		watchers.add(check);
-		const tick = setInterval(check, 250),
+		const tick = setInterval(check, WATCH_MS),
 			ping = setInterval(() => res.write(': ping\n\n'), 15_000);
 		res.on('close', close);
 		check();
@@ -381,13 +459,106 @@ export function service(o: Options) {
 						{ error: 'An API key is required: Authorization: Bearer <key>.' },
 						{ 'www-authenticate': 'Bearer' }
 					);
+				if (req.method === 'POST' && url.pathname === '/v1/convert/preview') {
+					if (stopping) return send(res, 503, { error: 'This replica is shutting down.' });
+					const parsed = parse(yield* body(req, maxBytes));
+					if (typeof parsed === 'string') return send(res, 400, { error: parsed });
+					if (parsed.request.to !== 'pdf') return send(res, 400, { error: 'Preview requires PDF.' });
+					if (res.destroyed) return;
+					if (stopping) return send(res, 503, { error: 'This replica is shutting down.' });
+					if (active >= concurrency || queue.depth() > 0)
+						return send(res, 429, { error: 'The converter is busy.' }, { 'retry-after': '5' });
+					active++;
+					const disconnected = Effect.callback<void>((resume) => {
+						const close = () => resume(Effect.void);
+						res.once('close', close);
+						return Effect.sync(() => { res.off('close', close); });
+					});
+					yield* o.convert(parsed.request, parsed.reference).pipe(
+						Effect.tap((bytes) => Effect.sync(() => {
+							if (bytes.byteLength > PREVIEW_BYTES)
+								return send(res, 413, { error: 'The PDF is too large.' });
+							res.writeHead(200, {
+								'content-type': 'application/pdf',
+								'content-length': String(bytes.byteLength),
+								'cache-control': 'private, no-store'
+							}).end(bytes);
+						})),
+						Effect.raceFirst(disconnected),
+						Effect.ensuring(Effect.sync(() => { active--; pump(); }))
+					);
+					return;
+				}
+				const keptFile = /^\/v1\/kept\/([0-9a-f]{64})$/.exec(url.pathname);
+				if (req.method === 'GET' && keptFile) {
+					const kept = keptPath(who, keptFile[1]!);
+					if (!existsSync(kept)) return send(res, 404, { error: 'not kept' });
+					const now = new Date();
+					utimesSync(kept, now, now);
+					return send(res, 200, { kept: true });
+				}
+				// a file as the body, for a job: base64 in JSON cannot hold one past a few hundred MiB
+				if (req.method === 'POST' && url.pathname === '/v1/ingest/raw') {
+					if (stopping) return send(res, 503, { error: 'This replica is shutting down.' });
+					if (queue.depth() >= maxQueued || !roomy())
+						return send(res, 429, { error: 'The queue is full.' }, { 'retry-after': '30' });
+					const name = url.searchParams.get('name') ?? '',
+						mime = url.searchParams.get('mime') ?? '',
+						options = url.searchParams.get('options'),
+						asked = options === null ? {} : Schema.decodeUnknownSync(AudioOptions)(JSON.parse(options)),
+						where = route(name, mime);
+					if (!where.ok) return send(res, 415, { error: 'unsupported', message: where.message });
+					if (where.kind === 'audio' && !o.transcribes)
+						return send(res, 503, { error: 'unavailable', message: 'this converter has no transcription model' });
+					const sha256 = url.searchParams.get('sha256'),
+						keep = sha256 !== null && /^[0-9a-f]{64}$/.test(sha256) && where.reader === 'pdf';
+					const kept = keep ? keptPath(who, sha256) : undefined;
+					let path = kept ?? '';
+					if (kept === undefined || !existsSync(kept)) {
+						path = join(spool, randomUUID());
+						const hash = createHash('sha256');
+						yield* Effect.tryPromise({
+							try: () =>
+								pipeline(
+									req,
+									async function* (source: AsyncIterable<Buffer>) {
+										for await (const chunk of source) {
+											hash.update(chunk);
+											yield chunk;
+										}
+									},
+									createWriteStream(path)
+								),
+							catch: httpFailed
+						});
+						if (kept !== undefined) {
+							if (hash.digest('hex') !== sha256) {
+								rmSync(path, { force: true });
+								return send(res, 400, { error: 'The body does not match sha256.' });
+							}
+							renameSync(path, kept);
+							path = kept;
+						}
+					} else req.resume();
+					const job = queue.submit(
+						who,
+						'ingest',
+						JSON.stringify({ op: 'ingest', name, mime, spool: path, options: asked }),
+						null,
+						url.searchParams.get('lane') ?? '',
+						// a page looked at waits behind no bulk read of its tenant's
+						asked.page === undefined ? 1 : 0
+					);
+					pump();
+					return send(res, 202, job, { location: `/v1/jobs/${job.id}` });
+				}
 				if (
 					req.method === 'POST' &&
 					(url.pathname === '/v1/jobs' || url.pathname === '/v1/convert' || url.pathname === '/v1/ingest')
 				) {
 					if (stopping) return send(res, 503, { error: 'This replica is shutting down.' });
-					if (queue.depth() >= maxQueued)
-						return send(res, 429, { error: 'The queue is full.' }, { 'retry-after': '5' });
+					if (queue.depth() >= maxQueued || !roomy())
+						return send(res, 429, { error: 'The queue is full.' }, { 'retry-after': '30' });
 					const raw = yield* body(req, url.pathname === '/v1/convert' ? maxBytes : maxIngestBytes);
 					if (url.pathname === '/v1/ingest' || isIngest(raw)) {
 						const r = Schema.decodeUnknownResult(IngestBody)(raw);
@@ -399,7 +570,9 @@ export function service(o: Options) {
 						const bytes = Buffer.from(base64, 'base64');
 						if (where.kind === 'audio' && !o.transcribes)
 							return send(res, 503, { error: 'unavailable', message: 'this converter has no transcription model' });
-						const job = queue.submit(who, 'ingest', JSON.stringify({ op: 'ingest', ...stored }), bytes);
+						const path = join(spool, randomUUID());
+						yield* Effect.tryPromise({ try: () => writeFile(path, bytes), catch: httpFailed });
+						const job = queue.submit(who, 'ingest', JSON.stringify({ op: 'ingest', ...stored, spool: path }), null);
 						pump();
 						if (url.pathname === '/v1/ingest') return watch(req, res, who, job.id, true);
 						return send(res, 202, job, { location: `/v1/jobs/${job.id}` });
@@ -429,13 +602,13 @@ export function service(o: Options) {
 				if (part === undefined) return send(res, 200, job);
 				const out = queue.result(who, id);
 				if (!out) return send(res, 409, { error: `The job is ${job.state}.`, job });
-				res
-					.writeHead(200, {
-						'content-type': out.mime,
-						'content-length': String(out.result.byteLength),
-						'content-disposition': `attachment; filename="${id}.${out.target === 'ingest' ? 'json' : out.target}"`
-					})
-					.end(out.result);
+				const file = join(results, id);
+				res.writeHead(200, {
+					'content-type': out.mime,
+					'content-length': String(statSync(file).size),
+					'content-disposition': `attachment; filename="${id}.${out.target === 'ingest' ? 'json' : out.target}"`
+				});
+				yield* Effect.tryPromise({ try: () => pipeline(createReadStream(file), res), catch: httpFailed });
 			}).pipe(
 				Effect.catchCause((cause) =>
 					Effect.sync(() => {
@@ -493,23 +666,18 @@ if (import.meta.main) {
 	const env = process.env;
 	const int = (name: string) => (env[name] ? Number(env[name]) : undefined);
 	const timeoutMs = (int('CONVERT_TIMEOUT_S') ?? 60) * 1000;
-	const ai = { key: env['CONVERT_AI_API_KEY'], model: env['CONVERT_TRANSCRIBE_MODEL'] };
-	const transcribe =
-		ai.key && ai.model
-			? transcriber({ baseUrl: env['CONVERT_AI_BASE_URL'] ?? 'https://openrouter.ai/api/v1', apiKey: ai.key, model: ai.model })
-			: undefined;
+	const document = pandoc({ timeoutMs, heap: env['CONVERT_PANDOC_HEAP'] ?? '512m' });
+	const executable = env['CONVERT_CHROMIUM_EXECUTABLE'];
+	const print = executable ? layoutPdf({ executable, timeoutMs }) : null;
 	const svc = service({
 		keys: (env['CONVERT_API_KEYS'] ?? '')
 			.split(',')
 			.map((k) => k.trim())
 			.filter(Boolean),
 		database: join(env['CONVERT_DATA'] ?? '/var/lib/convert', 'jobs.db'),
-		convert: pandoc({ timeoutMs, heap: env['CONVERT_PANDOC_HEAP'] ?? '512m' }),
-		ingest: ingester({
-			lanes: int('CONVERT_KREUZBERG_LANES') ?? 2,
-			...(transcribe ? { transcribe } : {})
-		}),
-		transcribes: transcribe !== undefined,
+		convert: (request, reference) => request.from === 'layout-html' && print ? print(request, reference) : document(request, reference),
+		ingest: spawned((int('CONVERT_INGEST_TIMEOUT_S') ?? 1800) * 1000),
+		transcribes: Boolean(env['CONVERT_AI_API_KEY'] && env['CONVERT_TRANSCRIBE_MODEL']),
 		...(int('CONVERT_CONCURRENCY') === undefined
 			? {}
 			: { concurrency: int('CONVERT_CONCURRENCY')! }),

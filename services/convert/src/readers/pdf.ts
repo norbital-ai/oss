@@ -1,60 +1,25 @@
-// A PDF from its own structure, read once by pdf.js: never pixels, never a model, never OCR. Per page, as shown (its
-// /Rotate and every matrix applied):
-//   text      positioned runs → lines → headings (size, weight), list items (marker, hanging indent), paragraphs
+// A PDF from its own structure: MuPDF's trace of each page (trace.ts), never pixels, never a model, never OCR. As shown:
+//   text      glyphs → words → lines → headings (size, weight), list items (marker, hanging indent), paragraphs
 //   ruled     the rules make a grid; an inner rule missing between two cells merges them (colspan, rowspan); a grid
 //             inside another's cell nests in it; a grid ending a page continues on the next when that page opens with
 //             a grid of the same columns
 //   unruled   ≥ 3 consecutive lines whose gaps line up into ≥ 2 columns of short cells; anything less stays paragraphs
-//   pictures  in reading order, turned as the page shows them (a scanned page is its picture, upright)
+//   pictures  in reading order, from Poppler: a JPEG as stored, anything else a PNG, a turned one rendered as shown
 // Every word lands once: in one table cell or in one line of text.
-import { getDocument, OPS } from 'pdfjs-dist/legacy/build/pdf.mjs';
-import { Effect, Option } from 'effect';
-import { escape, inline, type Block, type Cell, type Images } from './blocks.ts';
-import { encode, orient, type Pixels } from './png.ts';
+import { readdir, readFile } from 'node:fs/promises';
+import { availableParallelism } from 'node:os';
+import { join } from 'node:path';
+import { Effect } from 'effect';
+import { escape, inline, type Block, type Cell, type Images } from '../blocks.ts';
+import { scratch, tool } from './tools.ts';
+import { tracePages, type H, type Paint, type Traced, type V, type Word } from './trace.ts';
 
 /** PDF user space, y up. */
 export type Box = { x0: number; y0: number; x1: number; y1: number };
-export type Word = {
-	text: string;
-	x0: number;
-	x1: number;
-	y: number;
-	size: number;
-	split: boolean;
-	rotated: boolean;
-	bold: boolean;
-	italic: boolean;
-};
 
 const TOL = 2;
 
 // ---------- text ----------
-type Item = { str: string; transform: number[]; width: number; bold?: boolean; italic?: boolean };
-export function wordsOf(items: readonly Item[], start: M = [1, 0, 0, 1, 0, 0]): Word[] {
-	const out: Word[] = [];
-	for (const { str, transform, width, bold = false, italic = false } of items) {
-		const t = matrix(transform);
-		if (!str.trim() || !t) continue;
-		const [a, b, c, d, e, f] = mul(t, start);
-		const size = Math.hypot(c, d) || Math.hypot(a, b) || 1;
-		// Rotated text has no column: its words sit at the run's origin.
-		const rotated = Math.abs(b) > 0.01 || Math.abs(c) > 0.01;
-		const unit = rotated ? 0 : width / str.length;
-		for (const m of str.matchAll(/\S+/g))
-			out.push({
-				text: m[0],
-				x0: e + m.index * unit,
-				x1: e + (m.index + m[0].length) * unit,
-				y: f,
-				size,
-				split: / {2,}$/.test(str.slice(0, m.index)),
-				rotated,
-				bold,
-				italic
-			});
-	}
-	return out;
-}
 /** Words in lines, top to bottom, each left to right. */
 export function linesOf(words: readonly Word[]): Word[][] {
 	const lines: Word[][] = [];
@@ -93,102 +58,6 @@ const centre = (w: Word) => ({ x: (w.x0 + w.x1) / 2, y: w.y + 0.3 * w.size });
 const inside = (b: Box, x: number, y: number) => x >= b.x0 - TOL && x <= b.x1 + TOL && y >= b.y0 - TOL && y <= b.y1 + TOL;
 
 // ---------- rules and pictures ----------
-type H = { y: number; x0: number; x1: number };
-type V = { x: number; y0: number; y1: number };
-export type M = [number, number, number, number, number, number];
-const matrix = (x: unknown): M | undefined => {
-	const n = Array.isArray(x) || x instanceof Float32Array ? Array.from(x, Number) : [];
-	return n.length === 6 && n.every(Number.isFinite) ? [n[0]!, n[1]!, n[2]!, n[3]!, n[4]!, n[5]!] : undefined;
-};
-const mul = (m: M, c: M): M => [
-	m[0] * c[0] + m[1] * c[2],
-	m[0] * c[1] + m[1] * c[3],
-	m[2] * c[0] + m[3] * c[2],
-	m[2] * c[1] + m[3] * c[3],
-	m[4] * c[0] + m[5] * c[2] + c[4],
-	m[4] * c[1] + m[5] * c[3] + c[5]
-];
-const STROKE = new Set([OPS.stroke, OPS.closeStroke, OPS.fillStroke, OPS.eoFillStroke, OPS.closeFillStroke, OPS.closeEOFillStroke]);
-const FILL = new Set([OPS.fill, OPS.eoFill]);
-
-/**
- * Where a picture is painted: its pixel size, the matrix taking its unit square onto the shown page (y up), and its
- * pixels (an object id, or the inline image itself).
- */
-export type Paint = { width: number; height: number; m: M; source: string | object };
-/**
- * The page's straight horizontal and vertical strokes and its thin filled bars, and the pictures it paints, in the
- * shown page's space (`start` takes the page's own space there: its /Rotate).
- */
-export function rulesOf(fnArray: readonly number[], argsArray: readonly unknown[], start: M = [1, 0, 0, 1, 0, 0]): { h: H[]; v: V[]; paints: Paint[] } {
-	const h: H[] = [];
-	const v: V[] = [];
-	const paints: Paint[] = [];
-	const line = (ax: number, ay: number, bx: number, by: number) => {
-		if (Math.abs(ay - by) <= 0.5 && Math.abs(ax - bx) > 1) h.push({ y: (ay + by) / 2, x0: Math.min(ax, bx), x1: Math.max(ax, bx) });
-		else if (Math.abs(ax - bx) <= 0.5 && Math.abs(ay - by) > 1) v.push({ x: (ax + bx) / 2, y0: Math.min(ay, by), y1: Math.max(ay, by) });
-	};
-	let m: M = start;
-	const stack: M[] = [];
-	for (let i = 0; i < fnArray.length; i++) {
-		const fn = fnArray[i];
-		const args: unknown = argsArray[i];
-		const list: readonly unknown[] = Array.isArray(args) ? args : [];
-		if (fn === OPS.save) stack.push(m);
-		else if (fn === OPS.restore) m = stack.pop() ?? m;
-		else if (fn === OPS.transform) m = mul(matrix(list) ?? [1, 0, 0, 1, 0, 0], m);
-		else if (fn === OPS.paintFormXObjectBegin) {
-			stack.push(m);
-			m = mul(matrix(list[0]) ?? [1, 0, 0, 1, 0, 0], m);
-		} else if (fn === OPS.paintFormXObjectEnd) m = stack.pop() ?? m;
-		else if (fn === OPS.paintImageXObject || fn === OPS.paintInlineImageXObject) {
-			const first: unknown = list[0];
-			const [source, width, height]: unknown[] =
-				fn === OPS.paintImageXObject
-					? [first, list[1], list[2]]
-					: typeof first === 'object' && first !== null && 'width' in first && 'height' in first
-						? [first, first.width, first.height]
-						: [];
-			if ((typeof source === 'string' || (typeof source === 'object' && source !== null)) && typeof width === 'number' && typeof height === 'number')
-				paints.push({ width, height, m, source });
-		} else if (fn === OPS.constructPath) {
-			const paint = list[0];
-			const inner: unknown = list[1];
-			const data: unknown = Array.isArray(inner) ? inner[0] : undefined;
-			if (typeof paint !== 'number' || !(data instanceof Float32Array) || !(STROKE.has(paint) || FILL.has(paint))) continue;
-			const at = (x: number, y: number): [number, number] => [m[0] * x + m[2] * y + m[4], m[1] * x + m[3] * y + m[5]];
-			const subpaths: [number, number][][] = [];
-			let start: [number, number] = [0, 0];
-			for (let k = 0; k < data.length; ) {
-				const op = data[k++];
-				if (op === 0 || op === 1) {
-					const p = at(data[k]!, data[k + 1]!);
-					k += 2;
-					if (op === 0) subpaths.push([(start = p)]);
-					else subpaths.at(-1)?.push(p);
-				} else if (op === 2 || op === 3) {
-					const n = op === 2 ? 6 : 4;
-					subpaths.push([at(data[k + n - 2]!, data[k + n - 1]!)]);
-					k += n;
-				} else if (op === 4) subpaths.at(-1)?.push(start);
-				else break;
-			}
-			for (const s of subpaths) {
-				if (STROKE.has(paint)) for (let j = 1; j < s.length; j++) line(s[j - 1]![0], s[j - 1]![1], s[j]![0], s[j]![1]);
-				else {
-					// A thin filled bar is a rule; a wider fill is shading.
-					const xs = s.map((p) => p[0]);
-					const ys = s.map((p) => p[1]);
-					const [x0, x1, y0, y1] = [Math.min(...xs), Math.max(...xs), Math.min(...ys), Math.max(...ys)];
-					if (y1 - y0 <= 2.5 && x1 - x0 > y1 - y0) line(x0, (y0 + y1) / 2, x1, (y0 + y1) / 2);
-					else if (x1 - x0 <= 2.5 && y1 - y0 > x1 - x0) line((x0 + x1) / 2, y0, (x0 + x1) / 2, y1);
-				}
-			}
-		}
-	}
-	return { h, v, paints };
-}
-
 /** Values within TOL of the previous one share the first one's value. */
 const snap = (values: number[]) => {
 	const sorted = [...new Set(values)].sort((a, b) => a - b);
@@ -483,53 +352,6 @@ function continued(pages: readonly Page[]): Placed[][] {
 	});
 }
 
-/**
- * A page as shown: its box (from 0, 0) and the matrix taking the page's own space there, so a page with /Rotate reads
- * the way it is seen.
- */
-const shown = (page: { getViewport: (o: { scale: number }) => { transform: number[]; width: number; height: number } }) => {
-	const vp = page.getViewport({ scale: 1 });
-	const [a = 1, b = 0, c = 0, d = 1, e = 0, f = 0] = vp.transform;
-	return { view: { x0: 0, y0: 0, x1: vp.width, y1: vp.height }, upright: [a, -b, c, -d, e, vp.height - f] satisfies M };
-};
-const open = (bytes: Uint8Array) =>
-	Effect.acquireRelease(
-		Effect.sync(() => getDocument({ data: new Uint8Array(bytes), verbosity: 0, disableFontFace: true, useSystemFonts: false, stopAtErrors: false, fontExtraProperties: true })),
-		(t) => Effect.promise(() => t.destroy())
-	).pipe(Effect.flatMap((t) => Effect.tryPromise(() => t.promise)));
-
-/** A painted picture's pixels as pdf.js decoded them (rows top first, as stored), and its object ref. */
-const pixelsOf = (data: unknown): (Pixels & { ref: unknown }) | undefined => {
-	if (typeof data !== 'object' || data === null || !('width' in data && 'height' in data && 'kind' in data && 'data' in data)) return undefined;
-	const { width, height, kind, data: raw } = data;
-	const ref = 'ref' in data ? data.ref : undefined;
-	if (typeof width !== 'number' || typeof height !== 'number' || !(raw instanceof Uint8Array || raw instanceof Uint8ClampedArray)) return undefined;
-	if (kind === 2 || kind === 3) return { width, height, channels: kind === 2 ? 3 : 4, data: new Uint8Array(raw.buffer, raw.byteOffset, raw.byteLength), ref };
-	if (kind !== 1) return undefined;
-	// One bit a pixel, rows padded to a byte: set is white.
-	const gray = new Uint8Array(width * height);
-	const stride = (width + 7) >> 3;
-	for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) gray[y * width + x] = (raw[y * stride + (x >> 3)]! >> (7 - (x & 7))) & 1 ? 255 : 0;
-	return { width, height, channels: 1, data: gray, ref };
-};
-/**
- * The file's baseline JPEG image streams by pdf.js object ref (`12R`), so an upright JPEG is returned as stored rather
- * than re-encoded. None in an encrypted file (its streams are ciphertext), nor one with a mask, a decode array or CMYK.
- */
-function jpegs(bytes: Uint8Array): Map<string, Uint8Array> {
-	const s = Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength).toString('latin1');
-	const out = new Map<string, Uint8Array>();
-	if (/\/Encrypt\b/.test(s)) return out;
-	for (const m of s.matchAll(/>>\s*stream\r?\n/g)) {
-		const head = /(\d+)\s+(\d+)\s+obj\s*<<([\s\S]*)$/.exec(s.slice(Math.max(0, s.lastIndexOf(' obj', m.index) - 24), m.index));
-		const dict = head?.[3] ?? '';
-		if (!head || !/\/Filter\s*(\/DCTDecode|\[\s*\/DCTDecode\s*\])/.test(dict) || /\/(SMask|Mask|Decode|DeviceCMYK)\b/.test(dict)) continue;
-		const start = m.index + m[0].length;
-		const end = s.indexOf('endstream', start);
-		if (end > start && bytes[start] === 0xff && bytes[start + 1] === 0xd8) out.set(`${head[1]}R${head[2] === '0' ? '' : head[2]}`, bytes.subarray(start, end));
-	}
-	return out;
-}
 /** A run of a line's words, a table or a picture, where it stands on the page. */
 type Piece = Box & ({ words: Word[] } | { block: Block | null });
 const prose = (side: readonly Piece[]) => {
@@ -563,63 +385,134 @@ export function order(pieces: readonly Piece[]): Piece[][] {
 }
 /** Pictures smaller than this (pixels a side) are rules, bullets and spacers. */
 const MIN_PICTURE = 16;
+/** Processes one file is traced across, and the fewest pages worth a process of their own. */
+const READERS = Math.min(availableParallelism(), 8);
+const RANGE_PAGES = 64;
+/** A page's size in points, its 72 dpi. */
+const POINTS = 72;
 
-/** The PDF as one section per page: its text, tables and pictures in reading order. */
-export const readPdf = Effect.fn('Convert.pdf')(function* (bytes: Uint8Array, images: Images) {
-	const doc = yield* open(bytes);
-	let stored: Map<string, Uint8Array> | undefined;
-	const pages: Page[] = [];
-	for (let n = 1; n <= doc.numPages; n++) {
-		const page = yield* Effect.tryPromise(() => doc.getPage(n));
-		const { view, upright } = shown(page);
-		const ops = yield* Effect.tryPromise(() => page.getOperatorList());
-		const text = yield* Effect.tryPromise(() => page.getTextContent());
-		const fonts = new Map<string, { bold: boolean; italic: boolean }>();
-		const style = (id: string) => {
-			if (!fonts.has(id)) {
-				const font: unknown = page.commonObjs.has(id) ? page.commonObjs.get(id) : undefined;
-				const get = (k: string): unknown => (typeof font === 'object' && font !== null && k in font ? Reflect.get(font, k) : undefined);
-				const name = String(get('name') ?? '');
-				fonts.set(id, {
-					bold: get('bold') === true || get('black') === true || /bold|black|heavy|semibold|demi/i.test(name),
-					italic: get('italic') === true || /italic|oblique/i.test(name)
-				});
-			}
-			return fonts.get(id)!;
-		};
-		const words = wordsOf(
-			text.items.flatMap((i) => ('str' in i ? [{ str: i.str, transform: i.transform.map(Number), width: i.width, ...style(i.fontName) }] : [])),
-			upright
+/** Page ranges a file is read across, each by its own process. */
+const rangesOf = (pages: number) => {
+	const ranges = Math.max(1, Math.min(READERS, Math.ceil(pages / RANGE_PAGES))),
+		size = Math.ceil(pages / ranges);
+	return Array.from({ length: ranges }, (_, i) => [i * size + 1, Math.min(pages, (i + 1) * size)] as const);
+};
+const pageCount = (path: string) =>
+	Effect.map(tool('pdfinfo', [path]), (info) => Number(/^Pages:\s+(\d+)/m.exec(info.toString('utf8'))?.[1] ?? 0));
+type Stored = { page: number; width: number; height: number; object: string; file: string };
+/** The pictures of pages `first` to `last` as Poppler wrote them out, in painting order. */
+const stored = (path: string, first: number, last: number) =>
+	Effect.gen(function* () {
+		const dir = yield* scratch,
+			range = ['-f', `${first}`, '-l', `${last}`];
+		yield* tool('pdfimages', ['-png', '-j', ...range, path, join(dir, 'p')]);
+		const files = new Map(
+			(yield* Effect.tryPromise(() => readdir(dir))).map((name) => [Number(/-(\d+)\./.exec(name)?.[1]), name])
 		);
-		const rules = rulesOf(ops.fnArray, ops.argsArray, upright);
-		const ruled = lattice(rules, words);
-		const used = new Set(ruled.flatMap((t) => t.words));
-		const tables = [...ruled, ...stream(words.filter((w) => !used.has(w)), rules.v)];
-		const pictures: Picture[] = [];
-		for (const p of rules.paints) {
-			if (p.width < MIN_PICTURE || p.height < MIN_PICTURE) continue;
-			const { m, source } = p;
-			const data: unknown =
-				typeof source === 'string'
-					? yield* Effect.callback<unknown>((resume) => {
-							(source.startsWith('g_') ? page.commonObjs : page.objs).get(source, (d: unknown) => resume(Effect.succeed(d)));
-						}).pipe(Effect.timeoutOption(5000), Effect.map(Option.getOrUndefined))
-					: source;
-			const pixels = pixelsOf(data);
-			if (!pixels) continue;
-			const upright = Math.abs(m[1]) < 1e-6 && Math.abs(m[2]) < 1e-6 && m[0] > 0 && m[3] > 0;
-			const jpeg = upright && typeof pixels.ref === 'string' ? (stored ??= jpegs(bytes)).get(pixels.ref) : undefined;
-			// Columns run along the paint's x vector, rows against its y vector; the shown page's y runs down.
-			const src = jpeg
-				? images.add(jpeg, 'image/jpeg')
-				: images.add(encode(upright ? pixels : orient(pixels, [m[0], -m[1]], [-m[2], m[3]]).pixels), 'image/png');
-			const xs = [m[4], m[0] + m[4], m[2] + m[4], m[0] + m[2] + m[4]];
-			const ys = [m[5], m[1] + m[5], m[3] + m[5], m[1] + m[3] + m[5]];
-			pictures.push({ box: { x0: Math.min(...xs), x1: Math.max(...xs), y0: Math.min(...ys), y1: Math.max(...ys) }, block: { t: 'img', src, alt: '' } });
-		}
-		page.cleanup();
-		pages.push({ n, view, words, tables, pictures });
+		const list = (yield* tool('pdfimages', ['-list', ...range, path])).toString('utf8').split('\n').slice(2);
+		return list.flatMap((row): Stored[] => {
+			const [page, num, type, width, height, , , , , , object] = row.trim().split(/\s+/),
+				file = files.get(Number(num));
+			return type === 'image' && file !== undefined
+				? [{ page: Number(page), width: Number(width), height: Number(height), object: object ?? '0', file: join(dir, file) }]
+				: [];
+		});
+	});
+const box = ({ m }: Paint): Box => {
+	const [a = 0, b = 0, c = 0, d = 0, e = 0, f = 0] = m,
+		xs = [e, a + e, c + e, a + c + e],
+		ys = [f, b + f, d + f, b + d + f];
+	return { x0: Math.min(...xs), x1: Math.max(...xs), y0: Math.min(...ys), y1: Math.max(...ys) };
+};
+/** A picture turned on its page, as the page shows it, at its own resolution. */
+const rendered = (path: string, page: Pictured, paint: Paint, at: Box) => {
+	const longest = Math.max(paint.width, paint.height) / Math.max(at.x1 - at.x0, at.y1 - at.y0),
+		dpi = Math.max(36, Math.round(longest * POINTS)),
+		scale = dpi / POINTS;
+	return tool('pdftoppm', [
+		'-f', `${page.n}`,
+		'-l', `${page.n}`,
+		'-r', `${dpi}`,
+		'-png',
+		'-singlefile',
+		'-x', `${Math.round(at.x0 * scale)}`,
+		'-y', `${Math.round((page.height - at.y1) * scale)}`,
+		'-W', `${Math.round((at.x1 - at.x0) * scale)}`,
+		'-H', `${Math.round((at.y1 - at.y0) * scale)}`,
+		path
+	]);
+};
+/** What a page's pictures need of it, once its words are gone. */
+type Pictured = Pick<Traced, 'n' | 'height' | 'paints'>;
+type Planned = { page: Pictured; paint: Paint; at: Box; file: Stored; upright: boolean };
+/**
+ * The pictures to return, in page order. A paint Poppler does not list is no picture of the page's: it is a tile of a
+ * pattern fill.
+ */
+const planned = (pages: readonly Pictured[], files: readonly Stored[]) => {
+	const byPage = new Map<number, Stored[]>();
+	for (const file of files) byPage.set(file.page, [...(byPage.get(file.page) ?? []), file]);
+	return pages.flatMap((page) => {
+		const left = byPage.get(page.n) ?? [];
+		return page.paints.flatMap((paint): Planned[] => {
+			const found = left.findIndex((f) => f.width === paint.width && f.height === paint.height);
+			if (found === -1) return [];
+			const [file] = left.splice(found, 1),
+				[a = 0, b = 0, c = 0, d = 0] = paint.m;
+			return file === undefined || paint.width < MIN_PICTURE || paint.height < MIN_PICTURE
+				? []
+				: [{ page, paint, at: box(paint), file, upright: Math.abs(b) < 1e-6 && Math.abs(c) < 1e-6 && a > 0 && d < 0 }];
+		});
+	});
+};
+
+export const readPdf = Effect.fn('Convert.pdf')(function* (path: string, images: Images, pictures: boolean) {
+	const count = yield* pageCount(path),
+		pictured: Pictured[] = [],
+		found: Page[] = [];
+	yield* Effect.forEach(
+		rangesOf(count),
+		([first, last]) =>
+			tracePages(path, first, last, (page) => {
+				// a page's words become its tables as it ends; its glyphs are gone by then
+				const ruled = lattice(page, page.words),
+					used = new Set(ruled.flatMap((t) => t.words));
+				found[page.n - 1] = {
+					n: page.n,
+					view: { x0: 0, y0: 0, x1: page.width, y1: page.height },
+					words: page.words,
+					tables: [...ruled, ...stream(page.words.filter((w) => !used.has(w)), page.v)],
+					pictures: []
+				};
+				if (pictures && page.paints.length > 0)
+					pictured.push({ n: page.n, height: page.height, paints: page.paints });
+			}),
+		{ concurrency: 'unbounded' }
+	);
+	if (pictured.length > 0) {
+		const files = yield* Effect.forEach(rangesOf(count), ([first, last]) => stored(path, first, last), {
+				concurrency: 'unbounded'
+			}),
+			plans = planned(pictured.sort((a, b) => a.n - b.n), files.flat());
+		const bytes = yield* Effect.forEach(
+			plans,
+			(plan) =>
+				plan.upright
+					? Effect.tryPromise(() => readFile(plan.file.file))
+					: rendered(path, plan.page, plan.paint, plan.at),
+			{ concurrency: READERS }
+		);
+		// a logo on every page is one picture: one object of the file, its bytes returned once
+		const added = new Map<string, string>();
+		plans.forEach((plan, i) => {
+			const key = `${plan.file.object}|${plan.upright}`,
+				mime = plan.upright && plan.file.file.endsWith('.jpg') ? 'image/jpeg' : 'image/png',
+				src = (plan.file.object !== '0' && added.get(key)) || images.add(bytes[i] ?? new Uint8Array(), mime);
+			added.set(key, src);
+			(found[plan.page.n - 1] as Page).pictures.push({ box: plan.at, block: { t: 'img', src, alt: '' } });
+		});
 	}
+	const pages = found.filter((p) => p !== undefined);
 	const placed = continued(pages);
 	const free = pages.map((p) => {
 		const inTable = new Set(p.tables.flatMap((t) => t.words));
@@ -664,6 +557,11 @@ export const readPdf = Effect.fn('Convert.pdf')(function* (bytes: Uint8Array, im
 				}
 		}
 		flush();
-		return { t: 'section', kind: 'page', n: p.n, blocks };
+		return {
+			t: 'section',
+			kind: 'page',
+			n: p.n,
+			blocks: p.words.length + p.pictures.length === 0 ? [{ t: 'p', html: 'No text on this page.' }] : blocks
+		};
 	});
 }, Effect.scoped);
