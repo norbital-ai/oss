@@ -121,7 +121,15 @@ export default defineConfig({
 					isolate: false,
 					browser: {
 						enabled: true,
-						provider: playwright(),
+						// a desktop, whatever the host reports: a fine pointer that hovers. A Linux runner's headless Chromium
+						// reports `hover: none`, and the kit then opens hints by tap rather than hover or focus.
+						provider: playwright({
+							launchOptions: {
+								args: [
+									'--blink-settings=primaryHoverType=2,availableHoverTypes=2,primaryPointerType=4,availablePointerTypes=4'
+								]
+							}
+						}),
 						instances: [{ browser: 'chromium' }],
 						headless: process.env['PLAYWRIGHT_HEADED'] !== '1'
 					}
