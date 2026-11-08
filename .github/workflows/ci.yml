@@ -94,6 +94,10 @@ jobs:
       - name: Install Playwright Chromium
         run: pnpm exec playwright install --with-deps chromium
 
+      # A fresh test runner has no package build outputs; bolt's source imports sibling packages.
+      - name: Build packages
+        run: pnpm exec turbo run build --concurrency=1
+
       - name: Test shard ${{ matrix.shard }}
         timeout-minutes: 4
         run: pnpm test --maxWorkers=2 --shard=${{ matrix.shard }}/4
