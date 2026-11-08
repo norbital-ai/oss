@@ -1,7 +1,7 @@
 // The draft of one mounted `Form`, shared with its `Field`s by context. A field reads and writes the draft; unmounting
 // a field (a lazy tab, a collapsed section) never drops its value, because the value lives here (§5.10).
 import { Effect, Fiber, FiberSet } from 'effect';
-import { getContext, setContext } from 'svelte';
+import { flushSync, getContext, setContext } from 'svelte';
 import { encodeWire, reviveWire } from '@norbital-ai/std/wire';
 import { valueObject, type Value } from '../kinds/kind.js';
 import type { IdOf } from '../model/types.js';
@@ -28,6 +28,53 @@ export function idsOf<C extends string>(ids: readonly string[]): readonly IdOf<C
 }
 
 export type Act = ViewBolt['act'];
+type ViewTransitionDocument = Document & {
+	startViewTransition?: (callback: () => void) => unknown;
+};
+let inLayoutUpdate = false;
+let layoutChanges: (() => void)[] = [];
+let layoutFrame: number | undefined;
+/** One layout change (edit/read-only) with the browser's own crossfade; reduced motion and older browsers change at once. */
+function transitionLayout(change: () => void): void {
+	// Nested forms follow the outer form in the same update; a second transition would cancel this one.
+	if (inLayoutUpdate) {
+		change();
+		return;
+	}
+	const start =
+		typeof document === 'undefined'
+			? undefined
+			: (document as ViewTransitionDocument).startViewTransition;
+	if (
+		start === undefined ||
+		(typeof window !== 'undefined' &&
+			window.matchMedia('(prefers-reduced-motion: reduce)').matches)
+	) {
+		change();
+		return;
+	}
+	layoutChanges.push(change);
+	if (layoutFrame !== undefined) return;
+	// One form action can update several mounted forms (the record and its child grids): one transition for all of them.
+	layoutFrame = requestAnimationFrame(() => {
+		layoutFrame = undefined;
+		const changes = layoutChanges;
+		layoutChanges = [];
+		const run = () => {
+			inLayoutUpdate = true;
+			try {
+				for (const update of changes) update();
+			} finally {
+				inLayoutUpdate = false;
+			}
+		};
+		try {
+			start.call(document, () => flushSync(run));
+		} catch {
+			run();
+		}
+	});
+}
 
 /** One invariant a registered rule finds broken: `field` is any key the rule chooses (`repayments.3.amount`). */
 export type SemanticIssue = { readonly field: string; readonly message: string };
@@ -242,13 +289,16 @@ export class FormState {
 			}
 	}
 	edit(): void {
-		if (!this.spec.readonly && this.mode === 'view') this.mode = 'edit';
+		if (!this.spec.readonly && this.mode === 'view')
+			transitionLayout(() => (this.mode = 'edit'));
 	}
 	view(): void {
-		this.reset();
-		this.mode = 'view';
-		if (this.spec.target.of === 'model' && this.spec.target.mode === 'update')
-			this.refresh(this.#around);
+		transitionLayout(() => {
+			this.reset();
+			this.mode = 'view';
+			if (this.spec.target.of === 'model' && this.spec.target.mode === 'update')
+				this.refresh(this.#around);
+		});
 	}
 	/** Whether this one field differs from what the form opened with (the row, else the defaults). */
 	fieldDirty(name: string): boolean {

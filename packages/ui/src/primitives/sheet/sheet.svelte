@@ -394,7 +394,13 @@ and goes full screen from its header.
 				</button>
 			</div>
 		</header>
-		<div class="min-h-0 flex-1 overflow-auto overscroll-contain p-4" data-sheet-body>
+		<div
+			class={cn(
+				'min-h-0 flex-1 overscroll-contain p-4',
+				claimed ? 'overflow-hidden' : 'overflow-auto'
+			)}
+			data-sheet-body
+		>
 			{@render children()}
 		</div>
 	</div>

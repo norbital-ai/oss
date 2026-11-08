@@ -263,7 +263,7 @@ describe('the context projection (rule 60)', () => {
 			tools: [{ name: 'workspace_search' }]
 		});
 		expect(layout).toContain('\n\n# Source\n');
-		expect(layout).toContain('workspace_list shows it');
+		expect(layout).toContain('workspace_list_dir shows it');
 		expect(layout.indexOf('# Source')).toBeLessThan(layout.indexOf('# Skills'));
 	});
 });

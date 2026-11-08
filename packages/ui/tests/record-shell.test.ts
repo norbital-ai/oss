@@ -292,16 +292,23 @@ async function show(
 	return {
 		target,
 		calls,
-		slider: () => document.querySelector<HTMLElement>('[data-record-timeline] [role=slider]'),
+		history: () =>
+			document.querySelector<HTMLElement>('[data-record-timeline] [data-record-history-events]'),
 		openHistory: async () => {
 			element<HTMLElement>(target, 'header [data-timeline-trigger]').click();
 			await settle();
 		}
 	};
 }
-const key = async (el: Element | null, k: string) => {
-	assert.ok(el);
-	el.dispatchEvent(new KeyboardEvent('keydown', { key: k, bubbles: true }));
+const pickHistory = async (revision: number) => {
+	element<HTMLElement>(
+		document,
+		`[data-record-timeline] [data-history-pick="${revision}"]`
+	).click();
+	await settle();
+};
+const backToCurrent = async () => {
+	element<HTMLElement>(document, '[data-record-timeline] [data-record-history-current]').click();
 	await settle();
 };
 const edit = (t: ParentNode) =>
@@ -326,11 +333,18 @@ it.live('history renders old field labels and values with an uncompatible indica
 							compatible: { title: 'Old paint' },
 							uncompatible: ['retired']
 						}
-					: HISTORY
+					: HISTORY.map((entry) =>
+							entry.revision === 2 ? { ...entry, uncompatible: ['retired'], valid: false } : entry
+						)
 			)
 		);
 		yield* browser(() => v.openHistory());
-		yield* browser(() => key(v.slider(), 'ArrowLeft'));
+		assert.match(
+			textOf(element<HTMLElement>(document, '[data-history-revision="2"]')),
+			/Not valid/
+		);
+		assert.match(textOf(element<HTMLElement>(document, '[data-history-revision="1"]')), /Valid/);
+		yield* browser(() => pickHistory(2));
 		const old = element<HTMLElement>(v.target, '[data-history-field=old_title]');
 		assert.match(textOf(old), /Original title/);
 		assert.match(textOf(old), /Old paint/);
@@ -345,7 +359,7 @@ it.live('history renders old field labels and values with an uncompatible indica
 );
 
 it.live(
-	'history loads lazily; a past revision shows read-only, then End returns to the live, editable record',
+	'history loads lazily; a past revision shows read-only, then the current entry returns to the live, editable record',
 	() =>
 		Effect.gen(function* () {
 			const v = yield* browser(() => show(LIVE));
@@ -354,11 +368,17 @@ it.live(
 				'Edit is in the footer'
 			);
 			assert.equal(edit(element<HTMLElement>(v.target, '[data-record-head]')), undefined);
-			assert.equal(v.slider(), null, 'the ruler is hidden until opened');
+			assert.equal(v.history(), null, 'the timeline is hidden until opened');
 			assert.equal(v.calls.history, 0, 'history loads lazily');
 			yield* browser(() => v.openHistory());
-			assert.equal(required(v.slider()).getAttribute('aria-valuemax'), '3');
-			yield* browser(() => key(v.slider(), 'ArrowLeft'));
+			assert.ok(
+				element<HTMLElement>(document, '[data-record-timeline] [data-record-history-events]')
+			);
+			assert.match(
+				textOf(element<HTMLElement>(document, '[data-history-revision="3"]')),
+				/\(in 8 months\)/
+			);
+			yield* browser(() => pickHistory(2));
 			assert.ok(v.calls.historyViews.includes(2), 'read exact revision 2 with its original schema');
 			assert.ok(element<HTMLElement>(v.target, '[data-record-past]'));
 			assert.doesNotMatch(
@@ -369,8 +389,7 @@ it.live(
 			assert.ok(element<HTMLElement>(v.target, 'fieldset[disabled]'));
 			assert.match(textOf(element<HTMLElement>(v.target, '[data-field=title]')), /Paint v2/);
 			assert.equal(edit(v.target), undefined, 'no Edit on a past revision');
-			assert.equal(required(v.slider()).getAttribute('aria-valuenow'), '2');
-			yield* browser(() => key(v.slider(), 'End'));
+			yield* browser(backToCurrent);
 			assert.equal(v.target.querySelector('[data-record-past]'), null);
 			assert.equal(v.target.querySelector('fieldset[disabled]'), null);
 			assert.match(textOf(element<HTMLElement>(v.target, '[data-field=title]')), /Paint v3/);
@@ -413,7 +432,7 @@ it.live(
 				})
 			);
 			yield* browser(() => v.openHistory());
-			yield* browser(() => key(v.slider(), 'ArrowLeft'));
+			yield* browser(() => pickHistory(2));
 			assert.ok(
 				!acts.some((a) => a.callable === 'history.preview'),
 				'scrubbing alone reads no preview'
@@ -439,7 +458,7 @@ it.live(
 			);
 			assert.equal(v.target.querySelector('[data-record-past]'), null, 'back to the live record');
 			// a revision whose preview writes nothing says so, and offers no confirm
-			yield* browser(() => key(v.slider(), 'Home'));
+			yield* browser(() => pickHistory(1));
 			element<HTMLButtonElement>(v.target, '[data-record-past] [data-record-restore]').click();
 			yield* browser(settle);
 			const empty = element<HTMLElement>(document, '[data-restore-preview]');
@@ -618,6 +637,15 @@ it.live('native history merges scoped related records and keeps its scrubber', (
 							restoredFrom: null,
 							approval: null,
 							changed: { title: 'Customer call' }
+						},
+						// a related save that changed no visible field is not a timeline event
+						{
+							revision: 3,
+							at: '2026-09-05T00:00:00.000Z',
+							actor: { kind: 'member', id: 'u1' },
+							restoredFrom: null,
+							approval: null,
+							changed: {}
 						}
 					];
 		const target = document.body.appendChild(document.createElement('div'));
@@ -654,10 +682,14 @@ it.live('native history merges scoped related records and keeps its scrubber', (
 		const events = element<HTMLElement>(document, '[data-record-history-events]');
 		assert.match(textOf(events), /Customer call/);
 		assert.match(textOf(events), /Ada/);
-		const firstEvent = required(events.firstElementChild);
-		assert.ok(firstEvent instanceof HTMLElement);
-		assert.equal(firstEvent.dataset.historyModel, 'activities');
-		assert.ok(element<HTMLElement>(document, '[data-record-timeline] [role=slider]'));
+		const relatedEvents = events.querySelectorAll<HTMLElement>(
+			'[data-history-model="activities"]'
+		);
+		assert.equal(relatedEvents.length, 1, 'a related no-op save stays out of the timeline');
+		const [firstEvent, secondEvent] = events.querySelectorAll<HTMLElement>('[data-history-model]');
+		assert.equal(required(firstEvent).dataset.historyModel, 'jobs');
+		assert.equal(required(secondEvent).dataset.historyModel, 'activities');
+		assert.ok(element<HTMLElement>(document, '[data-record-timeline] [data-history-pick]'));
 	})
 );
 
@@ -822,16 +854,12 @@ it.live(
 			input.dispatchEvent(new Event('input', { bubbles: true }));
 			element<HTMLElement>(target, '[data-timeline-trigger]').click();
 			yield* browser(() => settle());
-			yield* browser(() =>
-				key(element<HTMLElement>(document, '[data-record-timeline] [role=slider]'), 'ArrowLeft')
-			);
+			yield* browser(() => pickHistory(2));
 			assert.match(textOf(element<HTMLElement>(target, '[data-field=title]')), /Paint v2/);
 			current = { ...LIVE, revision: 4, title: 'Concurrent title' };
 			for (const reader of readers) reader();
 			yield* browser(() => settle());
-			yield* browser(() =>
-				key(element<HTMLElement>(document, '[data-record-timeline] [role=slider]'), 'End')
-			);
+			yield* browser(backToCurrent);
 			assert.equal(
 				element<HTMLInputElement>(target, '[data-field=title] input').value,
 				'Unsaved draft'

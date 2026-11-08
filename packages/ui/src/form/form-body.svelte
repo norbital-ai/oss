@@ -78,7 +78,7 @@
 	const t = uiText();
 	const bolt = useBolt();
 	// svelte-ignore state_referenced_locally -- the key belongs to this mounted form
-	const storageKey = draftKey(bolt.actor, spec, values);
+	const storageKey = scope?.historical === true ? undefined : draftKey(bolt.actor, spec, values);
 	// svelte-ignore state_referenced_locally -- a draft is built once per mount; a new row is a new form
 	const form =
 		matching && shared != null

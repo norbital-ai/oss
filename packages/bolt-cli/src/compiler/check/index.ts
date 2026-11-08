@@ -501,7 +501,7 @@ const SERIALIZE = `(() => { const d = globalThis.__ns.default, bodies = { transf
 	const generator = (body) => {
 		if (typeof body !== 'function') return;
 		const original = body[Symbol.for('norbital.bolt.generator')] ?? body;
-		if (Object.prototype.toString.call(original) !== '[object GeneratorFunction]') throw new Error('a ctx-bearing body must be a generator function');
+		if (Object.prototype.toString.call(original) !== '[object GeneratorFunction]') throw new Error('a ctx-bearing body must be a generator function, function* (…): ' + String(original).slice(0, 120));
 	};
 	const mark = (o) => { for (const [k, v] of Object.entries(o ?? {})) if (typeof v === 'function') o[k] = true; else if (v !== null && typeof v === 'object') mark(v); };
 	const hasBody = (o) => typeof o === 'function' || o !== null && typeof o === 'object' && Object.values(o).some(hasBody);
@@ -630,11 +630,7 @@ const evaluateTwice = Effect.fn('bolt.evaluateTwice')(function* (
 		const message = e instanceof Error ? e.message : String(e);
 		errors.push(
 			/ctx-bearing body must be a generator function/.test(message)
-				? {
-						code: 'guest/body-generator',
-						path: 'src',
-						message: 'a ctx-bearing body must be a generator function'
-					}
+				? { code: 'guest/body-generator', path: 'src', message }
 				: /timed out/.test(message)
 					? {
 							code: 'guest/eval-cpu',

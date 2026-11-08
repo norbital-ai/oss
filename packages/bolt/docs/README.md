@@ -272,8 +272,11 @@ the compatible projection into the current schema, and `uncompatible` field name
 history uses that exact revision and displays its original labels and kinds. Removed fields, invalid
 values and unsupported conversions have an **uncompatible** indicator; compatible scalar conversions
 and declared renames restore automatically. Reference retargeting and changed custom field identities
-require manual resolution. Current outputs, history scope and field visibility still apply. Removed
-fields are visible only to administrators reading the default all-fields output.
+require manual resolution. Current outputs, the record's current read scope and field visibility still apply. A
+reader who loses access to the row loses its history. A
+revision with no incompatible field is valid and projects into the record's own representation; an
+invalid one shows only its captured data. `bolt.history(c, id)` marks each revision `valid` for its
+timeline. Removed fields are visible only to administrators reading the default all-fields output.
 
 History captured before this feature has no saved historical definitions. Its earliest known schema
 is attached as a baseline and the UI identifies that limitation; earlier deleted definitions cannot
@@ -358,7 +361,9 @@ output and `outputs: { <name>: … }` the named ones, each `true` or
 `{ '<model>': { where? }, '<model>.<rel>': { where? }, … }` over that output's layers: the root's
 `where` scopes the roots (it may hop relations), a deeper layer's `where` filters that layer's rows
 (or nulls a ref) and never removes the root. A read of an output needs a held grant of it; its rows
-are the union of the granting policies' `where`s. `history` is `true` or a `where`. Every member
+are the union of the granting policies' `where`s. A read grant also admits the history of every
+record it shows, under that same `where`; an explicit `history` grant adds nothing. A reader who
+loses access to the row loses its history too. Every member
 reads `sys_user`'s `directory` output (id, name): staff read staff, externals themselves and their
 party; a read of `sys_user` without a `default` grant names `output: 'directory'`. `sys_file` declares
 `default` (name, type, size, digest, field, uploader) and `meta` (id, name, mime) for a holder that only

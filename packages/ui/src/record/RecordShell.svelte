@@ -237,7 +237,7 @@
 	const live = $derived(loaded.kind === 'ready' ? loaded.value : null);
 	// ── the scrubber (owner only): the revision the body shows, read as of that revision (L-BOLT-181); null is live ──
 	let viewing = $state<number | null>(null);
-	let past = $state<Row | null>(null);
+	let past = $state<StoredRecord | null>(null);
 	let historical = $state<HistorySnapshot | null>(null);
 	let historyError = $state<string | null>(null);
 	let asked = 0;
@@ -267,7 +267,12 @@
 						if (value === null) back();
 						else {
 							historical = value;
-							past = { ...value.compatible, id: value.record, revision: value.revision };
+							// an invalid revision's captured data is shown, never projected into the representation
+							past =
+								value.uncompatible.length === 0
+									? // the server's compatibility projection is this record under today's schema
+										(value.compatible as StoredRecord)
+									: null;
 						}
 					})
 				)
@@ -337,17 +342,18 @@
 		return bolt.history(of, id).pipe(Effect.map(checkpoints));
 	});
 	const shownPast = $derived(owner ? past : (scrub?.past ?? null));
-	// Old schemas render separately; a partial compatibility projection is never a current typed record.
+	// a valid past revision projects into the representation; an invalid one renders only its captured data
 	const row = $derived(live);
+	const shown = $derived(past ?? row);
 	const view = $derived.by<RecordView<C> | null>(() =>
 		mode === 'create'
 			? { model: of, mode: 'create', values: (values ?? {}) as Partial<InsertOf<C>> }
-			: row === null
+			: shown === null
 				? null
 				: {
 						model: of,
 						mode: shownPast !== null ? 'view' : controller?.mode === 'edit' ? 'edit' : 'view',
-						record: row,
+						record: shown,
 						...(shownPast !== null || controller?.capabilities == null
 							? {}
 							: { capabilities: controller.capabilities })
@@ -497,7 +503,7 @@
 			return controller;
 		},
 		get historical() {
-			return shownPast !== null;
+			return shownPast !== null || viewing !== null;
 		}
 	});
 	changes([() => of, () => id, () => live, () => exposure, () => modelLocked], () => {
@@ -748,8 +754,9 @@
 
 {#snippet foot()}
 	<!-- the record's footer: its note, then Edit (or the lock, or Cancel + Save while editing) flush bottom-right -->
-	{@const current = shownPast === null && exposure?.update !== undefined && controller !== null}
-	{@const lockedHere = current && controller?.mode === 'view' && (lock !== undefined || modelLocked || underApproval)}
+	{@const current = viewing === null && exposure?.update !== undefined && controller !== null}
+	{@const lockedHere =
+		current && controller?.mode === 'view' && (lock !== undefined || modelLocked || underApproval)}
 	{@const canEdit = current && controller?.mode === 'view' && !lockedHere && controller.canSubmit}
 	{@const inEdit = current && controller?.mode === 'edit'}
 	{#if footer !== undefined || footerActions !== undefined || lockedHere || canEdit || inEdit}
@@ -847,7 +854,7 @@
 			mode="update"
 			{id}
 			{validate}
-			record={row}
+			record={shown}
 			{...fields.length > 0 ? { fields } : {}}
 			{sections}
 			class="shrink-0"
@@ -859,7 +866,7 @@
 					mode="update"
 					{id}
 					{validate}
-					record={row}
+					record={shown}
 					{...fields.length > 0 ? { fields } : {}}
 					{sections}
 					readonly
@@ -944,27 +951,26 @@
 	{/if}
 {/snippet}
 
-{#snippet pastPill(p: Row)}
+{#snippet pastPill(revision: number)}
 	<!-- a past revision is read-only; back to current is the live, editable record -->
 	<div
 		class="border-brand/25 bg-brand/10 text-brand-text flex w-fit max-w-full items-center gap-2 rounded-full border py-0.5 pr-1 pl-2.5 text-xs"
 		role="status"
-		data-record-past={viewing}
+		data-record-past={revision}
 	>
 		<Glyph name="history" class="size-3.5 shrink-0" />
 		<span class="truncate"
 			>{msg(bolt, 'record.viewingRevision', 'Viewing revision {n} · {when}', {
-				n: String(p['revision'] ?? viewing ?? ''),
-				when: format(
-					{ kind: 'instant' },
-					String(historical?.at ?? p['updated_at'] ?? p['created_at'] ?? ''),
-					{
-						locale: bolt.locale,
-						zone: kinds.zone
-					}
-				)
+				n: String(revision),
+				when: format({ kind: 'instant' }, String(historical?.at ?? ''), {
+					locale: bolt.locale,
+					zone: kinds.zone
+				})
 			})}</span
 		>
+		{#if historical !== null && historical.uncompatible.length > 0}<Badge variant="warning"
+				>{msg(bolt, 'record.historyInvalid', 'Not valid')}</Badge
+			>{/if}
 		<button
 			type="button"
 			class="hover:bg-brand/15 focus-visible:ring-ring/40 shrink-0 rounded-full px-2 py-0.5 font-medium focus-visible:ring-2 focus-visible:outline-none"
@@ -985,6 +991,13 @@
 {/snippet}
 
 {#snippet historicalRecord(snapshot: HistorySnapshot)}
+	{#if snapshot.uncompatible.length > 0}<Alert data-history-invalid
+			>{msg(
+				bolt,
+				'record.historyInvalidRaw',
+				'This revision no longer matches the current schema. Its captured data is shown; it cannot be applied to the record view.'
+			)}</Alert
+		>{/if}
 	{#if snapshot.legacy}<Alert
 			>{msg(
 				bolt,
@@ -1217,12 +1230,14 @@
 			</div>
 		</header>
 	{/if}
-	{#if past !== null}<div class="mb-3">{@render pastPill(past)}</div>{/if}
+	{#if viewing !== null}<div class="mb-3">{@render pastPill(viewing)}</div>{/if}
 	{#if historyError !== null}<Alert variant="destructive" role="alert">{historyError}</Alert>{/if}
 	{#if onApproval}{@render approval()}{/if}
-	<!-- a past revision is read-only: every control beneath is disabled (a representation remounts per revision, so its forms start from it) -->
-	<fieldset disabled={past !== null} class={onApproval ? 'hidden' : 'contents'}>
-		{#if historical !== null}{@render historicalRecord(historical)}{:else}{@render content()}{/if}
+	<!-- viewing any revision is read-only; a valid one projects into the record, an invalid one shows only captured data -->
+	<fieldset disabled={viewing !== null} class={onApproval ? 'hidden' : 'contents'}>
+		{#if historical !== null && historical.uncompatible.length > 0}{@render historicalRecord(
+				historical
+			)}{:else}{@render content()}{/if}
 	</fieldset>
 {:else if onApproval}{@render approval()}
 {:else}{@render content()}{/if}

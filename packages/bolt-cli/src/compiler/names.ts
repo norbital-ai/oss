@@ -134,6 +134,7 @@ const HOST_TOOLS = [
 	'workspace_edit',
 	'workspace_lang',
 	'workspace_move',
+	'workspace_patch',
 	'workspace_preview',
 	'workspace_review',
 	'workspace_test',

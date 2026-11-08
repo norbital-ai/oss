@@ -452,7 +452,7 @@ describe('engine/query: history (rule 17)', () => {
 	});
 
 	it.effect(
-		'reads revisions in order, cut by `at`, showing the output the read names, and none without a history grant or that output; folded as of a revision',
+		'reads revisions in order, cut by `at`, showing the output the read names, with a read grant admitting them; folded as of a revision',
 		() =>
 			Effect.gen(function* () {
 				const id = yield* order('desk');
@@ -477,19 +477,34 @@ describe('engine/query: history (rule 17)', () => {
 				const asBrief = yield* foldedBrief(id, 2, brief);
 				expect(asBrief).toMatchObject({ id, revision: 2, title: 'desk' });
 				expect(asBrief).not.toHaveProperty('note');
-				expect(yield* folded(id, 2, authority({ orders: grants('orders') }))).toBeNull();
+				expect(yield* folded(id, 2, authority({ orders: grants('orders') }))).toMatchObject({
+					id,
+					revision: 2,
+					note: 'a'
+				});
 				const briefRevisions = yield* history(id, brief, undefined, 'brief');
 				expect(briefRevisions).toHaveLength(3);
 				expect(briefRevisions.every((r) => !('note' in r.changed))).toBe(true);
-				// the default output is not granted to it: no revisions
-				expect(yield* history(id, brief)).toEqual([]);
-				expect(yield* history(id, authority({ orders: grants('orders') }))).toEqual([]);
+				// no output named: the only granted output is used
+				const briefDefault = yield* history(id, brief);
+				expect(briefDefault).toHaveLength(3);
+				expect(briefDefault.every((r) => !('note' in r.changed))).toBe(true);
+				expect(yield* history(id, authority({ orders: grants('orders') }))).toHaveLength(3);
 				// a grant that depends on the caller resolves its `{ actor }` operand against the reader, not the workspace
 				const own = authority({
 					orders: grants('orders', {
-						history: [
-							arm({ t: 'cmp', field: 'note', op: 'eq', arg: { _tag: 'Var', text: 'requestor.id' } })
-						]
+						read: {
+							default: {
+								orders: [
+									arm({
+										t: 'cmp',
+										field: 'note',
+										op: 'eq',
+										arg: { _tag: 'Var', text: 'requestor.id' }
+									})
+								]
+							}
+						}
 					})
 				});
 				expect(yield* history(id, own)).toEqual([]);

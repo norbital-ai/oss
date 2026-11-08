@@ -1,11 +1,13 @@
 import { defineConfig } from 'vitest/config';
 
 // oss's one suite: every package is a project of this one Vitest, so one worker pool and one transform cache serve them
-// all. Threads, no per-file isolation, and a minute's hang guard (a test waiting that long is stuck, never slow).
+// all. Forks, no per-file isolation, and a minute's hang guard (a test waiting that long is stuck, never slow): a fork
+// returns its native memory to the OS when its project ends, while a thread's worker keeps it in the main process (the
+// providers chat files grew one thread to 4.9 GB; the same files in a fork peak at 0.4 GB).
 
 export default defineConfig({
 	test: {
-		pool: 'threads',
+		pool: 'forks',
 		isolate: false,
 		testTimeout: 60_000,
 		hookTimeout: 60_000,

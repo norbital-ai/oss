@@ -9,7 +9,8 @@ import { DbError } from '../src/engine/errors.ts';
 import { BoltError } from '../src/protocol/errors.ts';
 import { Manifest, Reads, type ReadsShape } from '../src/engine/services.ts';
 import { BoltRoutes, RateLimits } from '../src/protocol/http.ts';
-import type { ReadIR } from '../src/protocol/reads.ts';
+import { decodeRead, type ReadIR } from '../src/protocol/reads.ts';
+import { catalogOf } from '../src/engine/access/pred.ts';
 import { decodeReadRequest, planReadRequest } from '../src/protocol/read-request.ts';
 import { QReply, type QBody } from '../src/protocol/schema.ts';
 import { manifest, rep } from './query.fixture.ts';
@@ -163,6 +164,25 @@ describe('decodeReadRequest and planReadRequest', () => {
 				)
 			)
 		).toBe(true);
+	});
+	it('takes an empty history options object as options, not as an at value', () => {
+		const cat = catalogOf(manifest);
+		expect(
+			Result.getOrThrow(
+				decodeRead(cat, 'history', ['accounts', 'account-a', {}])
+			)
+		).toEqual({ kind: 'history', model: 'accounts', id: 'account-a' });
+		expect(
+			Result.getOrThrow(
+				decodeRead(cat, 'history', ['accounts', 'account-a', { at: { revision: 2 } }])
+			)
+		).toMatchObject({ at: { _tag: 'Revision', revision: 2 } });
+		// an older page may still pass the at value itself
+		expect(
+			Result.getOrThrow(
+				decodeRead(cat, 'history', ['accounts', 'account-a', { revision: 2 }])
+			)
+		).toMatchObject({ at: { _tag: 'Revision', revision: 2 } });
 	});
 	it('refuses a function value: a read request is JSON only', () => {
 		expect(Result.isFailure(decodeReadRequest({ accounts: { where: { name: () => 'x' } } }))).toBe(

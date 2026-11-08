@@ -581,12 +581,10 @@ it.effect('closing the audio scope stops a pending clip exactly once', () =>
 );
 
 it.live(
-	'the record scrubber: history as checkpoints, and a ruler that compresses but keeps the playhead',
+	'the record timeline reads history as checkpoints and marks revisions that no longer fit the schema',
 	() =>
 		Effect.gen(function* () {
-			const { checkpoints, tickAt, tickOf, drawnTicks } = yield* browser(
-				() => import('../src/record/history.ts')
-			);
+			const { checkpoints } = yield* browser(() => import('../src/record/history.ts'));
 			const history: readonly HistoryEntry[] = [
 				{
 					revision: 2,
@@ -594,7 +592,9 @@ it.live(
 					actor: { kind: 'system', id: 'run1' },
 					restoredFrom: 1,
 					approval: { request: 'r1', state: 'Rejected' },
-					changed: { status: 'done', updated_at: 'x', revision: 2 }
+					changed: { status: 'done', updated_at: 'x', revision: 2 },
+					uncompatible: ['price'],
+					valid: false
 				},
 				{
 					revision: 1,
@@ -613,7 +613,8 @@ it.live(
 					actor: { kind: 'member', id: 'u1' },
 					fields: ['title'],
 					restoredFrom: null,
-					approval: null
+					approval: null,
+					valid: true
 				},
 				{
 					revision: 2,
@@ -621,21 +622,19 @@ it.live(
 					actor: { kind: 'system', id: 'run1' },
 					fields: ['status'],
 					restoredFrom: 1,
-					approval: { request: 'r1', state: 'Rejected' }
+					approval: { request: 'r1', state: 'Rejected' },
+					valid: false
 				},
-				{ revision: 3, at: null, actor: null, fields: [], restoredFrom: null, approval: null }
+				{
+					revision: 3,
+					at: null,
+					actor: null,
+					fields: [],
+					restoredFrom: null,
+					approval: null,
+					valid: true
+				}
 			]);
 			assert.deepEqual(checkpoints([]), []);
-			assert.equal(tickAt(1, 5), 0);
-			assert.equal(tickAt(5, 5), 100);
-			assert.equal(tickAt(1, 1), 100);
-			assert.equal(tickOf(0, 5), 1);
-			assert.equal(tickOf(1, 5), 5);
-			assert.equal(tickOf(0.5, 5), 3);
-			assert.equal(tickOf(-2, 5), 1);
-			assert.deepEqual(drawnTicks(4, 120), [1, 2, 3, 4]);
-			const many = drawnTicks(1000, 100, 437);
-			assert.ok(many.length <= 102);
-			assert.ok(many.includes(1) && many.includes(1000) && many.includes(437));
 		})
 );

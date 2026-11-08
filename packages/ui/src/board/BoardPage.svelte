@@ -259,7 +259,7 @@
 						>
 					{/if}
 					{#if selectable}
-						<label class="absolute top-0.5 left-0.5 grid size-10 place-items-center max-sm:size-11">
+						<label class="absolute top-0 left-0 grid size-10 place-items-center max-sm:size-11">
 							<Checkbox
 								aria-label={msg(bolt, 'table.select', 'Select')}
 								checked={selected?.has(row.id) ?? false}

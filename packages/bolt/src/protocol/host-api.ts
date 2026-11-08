@@ -271,7 +271,7 @@ export type ShellPorts = Pick<
  */
 export type AgentPorts = Pick<
 	AgentConfig,
-	'draft' | 'hostTools' | 'skills' | 'onTurnStart' | 'events'
+	'draft' | 'search' | 'hostTools' | 'skills' | 'onTurnStart' | 'events'
 > & {
 	readonly ingest?: IngestPort['ingest'];
 };

@@ -158,8 +158,8 @@ Table and Board select records by default when the catalogue permits edits, dele
 or an author item needs the selection. `toolbar.select: false`, `toolbar.actions: false` and
 `toolbar: false` disable selection; `toolbar.delete: false` hides the generated delete action.
 A table selects its page through the grid's header checkbox, or through "Select this page" on a narrow view. A board's
-checkbox selects every loaded card across its lanes and pages, including cards outside the scroll window. Each card
-also has its own checkbox; its other content still opens the record and supports dragging. Once the loaded records are
+lane header checkbox selects every loaded card in that lane, including cards outside the scroll window. Each card
+also has its own checkbox; its other content still opens the record and supports dragging. Once every loaded card is
 selected, "Select all N matching" adds every matching ID with one id-only read. A searching board offers "Select all"
 without a count. Authored board lanes also constrain that read, so it cannot select records outside the displayed lanes.
 Selection survives paging and clears when its model, scope, filter, sort or search changes, or a successful action

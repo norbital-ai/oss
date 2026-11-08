@@ -146,6 +146,8 @@ import {
 	CLOSED,
 	type AttachmentPort,
 	type HostTool,
+	type SearchAnswer,
+	type SearchRequest,
 	type ToolContext,
 	type WorkspacePort
 } from './tools.ts';
@@ -208,6 +210,8 @@ export type AgentConfig = {
 	workspace?: WorkspacePort;
 	/** The person's current working source (the default for source tools); none where they author nothing. */
 	draft?: (a: Authority) => Promise<WorkspacePort | undefined>;
+	/** ripgrep over this author's working tree (`workspace_search`). */
+	search?: (a: Authority, request: SearchRequest) => Promise<SearchAnswer | undefined>;
 	/** Reject pending host tool approvals from the previous turn; return only IDs actually rejected. */
 	onTurnStart?: (conversation: string) => Promise<readonly string[]>;
 	/**
@@ -349,7 +353,6 @@ const RESUME: { readonly [tool: string]: string } = {
 	runs: 'cursor',
 	logs: 'cursor',
 	read_file: 'offset',
-	workspace_read: 'from',
 	browser: 'from'
 };
 /**
@@ -1500,6 +1503,9 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 							}),
 					// every inward agent reads the source (models, policies) for exact shapes; a public envoy's or external member's turn does not
 					workspace: external ? undefined : config.workspace,
+					...(hostSide && config.search !== undefined
+						? { search: (request: SearchRequest) => config.search!(authority, request) }
+						: {}),
 					draft:
 						hostSide && config.draft !== undefined
 							? yield* Port.attempt('agent.draft', () => config.draft!(authority))
@@ -2727,7 +2733,10 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 });
 export type Agents = Effect.Success<ReturnType<typeof agents>>;
 /** What the host adds to every agent (its tools, skills, draft source). */
-export type AgentHostConfig = Omit<AgentConfig, 'engine' | 'ai' | 'bindings' | 'announce' | 'media'>;
+export type AgentHostConfig = Omit<
+	AgentConfig,
+	'engine' | 'ai' | 'bindings' | 'announce' | 'media'
+>;
 export const AgentHost = Context.Reference<AgentHostConfig>('bolt/AgentHost', {
 	defaultValue: () => ({})
 });

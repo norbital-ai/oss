@@ -1870,7 +1870,6 @@ describe('a tool answer that stops short says where the rest is', () => {
 		]);
 		expect(rest('logs', 'l1', { entries: [], next: 'e9' })[0]).toContain('cursor: "e9"');
 		expect(rest('read_file', 'o1', { text: '…', next: 1200 })[0]).toContain('offset: 1200');
-		expect(rest('workspace_read', 'w1', { lines: [], next: 41 })[0]).toContain('from: 41');
 		expect(rest('browser', 'b1', { text: '…', next: 300 })[0]).toContain('from: 300');
 		expect(
 			rest('read_file', 'f1', {

@@ -14,7 +14,7 @@ Access control is source. Exact shapes: `Parameters<typeof import('@norbital-ai/
 - A policy can grant only what the model declares: its outputs, paths and verbs. `bolt check` refuses the rest.
 - `read` grants the `default` output; `outputs: { <name>: … }` the named ones; each is `true` or `{ where }` per path. A root `where` scopes roots and may hop relations; a deeper `where` filters that layer, or nulls a ref, never the root. An unnamed layer is unfiltered.
 - A policy never changes an output's fields. A narrower audience gets a narrower output.
-- `history` admits a scope. `create` and `update` are `true` or `{ columns?, check? }`; `delete` is `true` or `{ check? }`. `moves` grants state transitions.
+- A `read` of a record admits its history under that same `where`; a reader who loses access to the row loses its history too. `history` is accepted for compatibility and adds nothing. `create` and `update` are `true` or `{ columns?, check? }`; `delete` is `true` or `{ check? }`. `moves` grants state transitions.
 - `automations` grants manual starts by a person or the agent; code needs none.
 - `capabilities` expose apps, kiosks, tools and MCP. Declaring a server does not grant it.
 - Authority is per access point. `read`, `create`, `update`, `delete` of a model are guarded by that model's policies alone, every layer included. A child's transform still validates; it is not authority.

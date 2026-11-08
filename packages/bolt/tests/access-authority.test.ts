@@ -157,7 +157,7 @@ describe('engine/access: Authority (rules 33–37)', () => {
 		const clerk = auth(['clerk']);
 		expect(grantedArms(clerk, 'orders')).toBeUndefined();
 		expect(readScope(clerk, 'orders')).toBeUndefined();
-		expect(readScope(clerk, 'orders', 'read', 'summary')).toEqual({
+		expect(readScope(clerk, 'orders', 'summary')).toEqual({
 			t: 'cmp',
 			field: 'region',
 			op: 'eq',
@@ -183,6 +183,55 @@ describe('engine/access: Authority (rules 33–37)', () => {
 		]);
 		// a relationship's foreign key is a field of the output that reads it
 		expect(exposed(m, 'lines', 'lines', 'lines')).toEqual(['qty', 'order']);
+	});
+
+	it("history uses the reader's current read scope; an explicit history grant cannot widen it", () => {
+		const north = {
+			t: 'cmp' as const,
+			field: 'region',
+			op: 'eq' as const,
+			arg: { _tag: 'Lit' as const, value: 'north' }
+		};
+		const rep = auth(['rep']);
+		expect(readScope(rep, 'orders')).toEqual(north);
+		const clerk = auth(['clerk']);
+		expect(readScope(clerk, 'orders')).toBeUndefined();
+		expect(readScope(clerk, 'orders', 'summary')).toEqual({
+			t: 'cmp',
+			field: 'region',
+			op: 'eq',
+			arg: { _tag: 'Lit', value: 'south' }
+		});
+		expect(readScope(auth(['auditor']), 'orders')).toEqual({ t: 'const', value: true });
+		expect(readScope(auth(['kiosk']), 'orders')).toBeUndefined();
+		const wider: EngineManifest = {
+			...m,
+			policies: {
+				...m.policies,
+				over: {
+					description: '',
+					grants: {
+						orders: {
+							read: { orders: { where: { region: { eq: 'north' } } } },
+							history: true
+						}
+					}
+				},
+				lurker: { description: '', grants: { orders: { history: true } } }
+			}
+		};
+		const over = compileAuthority(
+			wider,
+			{ actor: member(), admin: false, policies: ['over'] },
+			'k'
+		);
+		expect(readScope(over, 'orders')).toEqual(north);
+		const lurker = compileAuthority(
+			wider,
+			{ actor: member(), admin: false, policies: ['lurker'] },
+			'k'
+		);
+		expect(readScope(lurker, 'orders')).toBeUndefined();
 	});
 
 	it("write arms hold their columns and the check flag; a bare check admits every declared column; an administrator holds every write arm but identity's", () => {

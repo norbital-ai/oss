@@ -47,7 +47,11 @@
 
 <div
 	{...rest}
-	class={cn('grid min-w-0 content-start', readonly ? 'gap-1' : 'gap-2', className)}
+	class={cn(
+		'grid min-w-0 content-start',
+		dense ? 'gap-0 py-2' : readonly ? 'gap-1' : 'gap-2',
+		className
+	)}
 	data-readonly={readonly || undefined}
 	data-invalid={error ? true : undefined}
 	data-field-dirty={dirty || undefined}

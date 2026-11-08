@@ -22,7 +22,7 @@ export default defineConfig({
 		environment: 'happy-dom',
 		// happy-dom 21 no longer loads iframe pages by default; the file previews embed one
 		environmentOptions: { happyDOM: { settings: { enableIframePageLoading: true } } },
-		pool: 'threads',
+		pool: 'forks',
 		isolate: false,
 		restoreMocks: true,
 		unstubGlobals: true,

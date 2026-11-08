@@ -407,7 +407,9 @@ export const runBody = <O>(body: () => Effect.fn.Return<O, BodyError>): Promise<
 /** A generator body as the prelude calls it: its ctx argument (at `at`) lifted, its run one `runBody`. */
 const wrap = (body: Body, at: number): Body => {
 	if (Object.prototype.toString.call(body) !== '[object GeneratorFunction]')
-		throw new Error('a ctx-bearing body must be a generator function');
+		throw new Error(
+			`a ctx-bearing body must be a generator function, function* (…): ${String(body).slice(0, 120)}`
+		);
 	const gen = body as (...args: readonly unknown[]) => Effect.fn.Return<unknown, BodyError>; // checked above
 	const wrapped = (...args: readonly unknown[]) => {
 		const call = (globalThis as { readonly [CALL]?: Call })[CALL] ?? outside;

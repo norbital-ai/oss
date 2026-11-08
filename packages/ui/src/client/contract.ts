@@ -30,6 +30,8 @@ export type HistoryEntry = {
 	readonly schemaVersion?: string | null;
 	readonly legacy?: boolean;
 	readonly uncompatible?: readonly string[];
+	/** Whether the whole revision still projects into today's representation. */
+	readonly valid?: boolean;
 };
 /** One revision rendered with its own definition, and the values safe to project into today's schema. */
 export type HistorySnapshot = {

@@ -1365,6 +1365,10 @@ const VIEW_ZH = {
 	'ui.record.restoreSkip.definitionChanged': '此字段自该版本后已更改',
 	'ui.record.restoreSkip.uncompatible': '不兼容',
 	'ui.record.historyUncompatible': '不兼容',
+	'ui.record.historyValid': '有效',
+	'ui.record.historyInvalid': '已失效',
+	'ui.record.historyInvalidRaw':
+		'此版本已不符合当前架构。此处显示捕获的原始数据，无法应用到记录视图。',
 	'ui.record.historicalRecord': '历史记录',
 	'ui.record.historyFailed': '无法加载此历史版本。',
 	'ui.record.historyLegacySchema': '此版本早于架构版本记录功能。字段定义采用最早保存的架构。',
@@ -1394,6 +1398,7 @@ const VIEW_ZH = {
 	'ui.board.laneEmpty': '暂无内容',
 	'ui.board.laneClear': '此列已清空',
 	'ui.board.expand': '展开{lane}',
+	'ui.board.selectLane': '选择{lane}中的全部记录',
 	'ui.board.moveTo': '移动到',
 	'ui.view.removeRow': '移除',
 	'ui.view.addCondition': '添加条件',

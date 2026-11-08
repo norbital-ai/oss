@@ -268,7 +268,7 @@ export {
 export { BROWSER_RUN_PROFILE, browserProfile } from './agent/browser.ts'; // hook:wiring — the profile a host discards after a run
 export { fileAttachments } from './agent/attachments.ts'; // hook:wiring — `read_attachment` over the files port
 export { outputType, REFERENCE, ReferenceIndex, RUN_JS } from './agent/run-js.ts'; // hook:wiring — a host's `reference` tool writes the index `run_js { file }` reads; a declared tool keeps its files as `run_js` does
-export { ToolJson } from './agent/tools.ts'; // hook:wiring — `run_tool`'s input
+export { ToolJson, type SearchAnswer, type SearchRequest } from './agent/tools.ts'; // hook:wiring — `run_tool`'s input, a host's ripgrep
 // ── exports: protocol ──
 export { BoltHost, BoltHostLive, ORDER, type Handler } from '../protocol/host.ts';
 export { PublicPages, publicPages, renderMode } from '../protocol/pages.ts';

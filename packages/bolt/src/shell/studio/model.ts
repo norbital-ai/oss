@@ -240,6 +240,8 @@ export const StudioOp = Schema.Union([
 		newString: Schema.String,
 		replaceAll: Schema.optionalKey(Schema.Boolean)
 	}),
+	/** One patch over the working tree, in OpenCode's patch language: its paths are checked as it applies. */
+	Schema.Struct({ op: Schema.Literal('draft'), patchText: nonempty }),
 	Schema.Struct({ op: Schema.Literal('draft'), path: safePath, to: safePath }),
 	Schema.Struct({ op: Schema.Literal('draft'), path: safePath, remove: Schema.Literal(true) }),
 	Schema.Struct({ op: Schema.Literal('commit'), message: truncated(200) }),

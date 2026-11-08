@@ -283,7 +283,11 @@ const VIEWS: { readonly [tool: string]: (a: Args) => StepView } = {
 			str(a['text']) ||
 			(typeof a['rule'] === 'string' ? a['rule'] : '')
 	}),
-	workspace_list: () => ({ icon: 'lucide:folder-tree', verb: 'Listed the source', target: '' }),
+	workspace_list_dir: (a) => ({
+		icon: 'lucide:folder-tree',
+		verb: 'Listed the source',
+		target: str(a['path'])
+	}),
 	workspace_read: (a) => ({
 		icon: 'lucide:file-code',
 		verb: 'Read source',
@@ -341,6 +345,13 @@ const VIEWS: { readonly [tool: string]: (a: Args) => StepView } = {
 			...(text === '' ? {} : { code: { text, language: languageOf(str(first['path'])) } })
 		};
 	},
+	workspace_patch: (a) => ({
+		icon: 'lucide:file-pen-line',
+		verb: 'Edited the source',
+		target: [...str(a['patchText']).matchAll(/^\*\*\* (?:Add|Update|Delete) File: (.+)$/gm)]
+			.map((file) => file[1])
+			.join(', ')
+	}),
 	workspace_edit: (a) => ({
 		icon: 'lucide:file-pen-line',
 		verb: 'Edited the source',
@@ -570,6 +581,7 @@ export const failedVerbs = (steps: readonly AgentRow[]): string[] =>
 const DOING: { readonly [tool: string]: string } = {
 	workspace_write: 'Editing the source…',
 	workspace_edit: 'Editing the source…',
+	workspace_patch: 'Editing the source…',
 	workspace_move: 'Editing the source…',
 	workspace_commit: 'Committing…',
 	workspace_merge_message: 'Setting the merge message…',

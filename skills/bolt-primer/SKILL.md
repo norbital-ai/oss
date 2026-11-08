@@ -31,17 +31,19 @@ Beside `src/`: `seed/+seeder.ts` `seeder(spec)`; rows `seed/public/**/<model>.js
 
 `bolt-contract` is the API authority: `skill { name: 'bolt-contract', file: 'model.md' }`, one generated card per role (model, access, automation, tool, sync, page, test). Read a role's card once, before writing that role.
 
+A body that takes `ctx` is a generator, `function* (…)`, never an arrow: a write `check`, a transform, an effect, a `run`. It goes through `yield*`.
+
 `workspace_lang` answers only what a card leaves out:
 
 - A type: `{ op:'type', type:["import('@norbital-ai/ui').TableProps"] }`, several at once. `import('pkg').X` works only for exported types; a value is `typeof import('pkg').x`. Packages: bolt, ui, std, bolt-cli.
 - A function's spec: `Parameters<typeof import('pkg').fn>[1]`; `[1]` for `(name, spec)`, `[0]` for `(spec)`. Narrow with `X['field']`.
 - `type` answers any shape with no file. `completions`, `hover`, `signature` need path, line, column of a file you are writing: a file written only to ask is a wasted edit.
-- Live names: `describe_workspace`, `workspace_list`.
+- Live names: `describe_workspace`, `workspace_list_dir`.
 
 ## Protocol
 
 1. Author in order: model, access, automation or sync, page, tests. Add a page only for a task the model's table and record sheet do not cover.
-2. Edit with `workspace_write`, `workspace_edit` and `workspace_move`, one file a call. Edits stay in your working tree. After a schema change `workspace_generate` writes the generated migrations into the working tree; a diagnosis fails until they exist. `workspace_migrate` runs them on your own workspace's database, with SQL reads before and after, so you see what they do to real rows. Only a merge migrates live.
+2. Edit with `workspace_write`, `workspace_edit` and `workspace_move`, one file a call, or `workspace_patch`, any number of files in one call. Edits stay in your working tree and check nothing: finish the source, then diagnose. After a schema change `workspace_generate` writes the generated migrations into the working tree; a diagnosis fails until they exist. `workspace_migrate` runs them on your own workspace's database, with SQL reads before and after, so you see what they do to real rows. Only a merge migrates live.
 3. `workspace_commit` with a message, in any state; new commits join your line on top of live. If live moved, `workspace_rebase` replays them on top of it, migrations too, so you test against it now; otherwise the merge queue replays them. Reverting to redo work never helps.
 4. `workspace_diagnose` runs the diagnosis on the working tree. `workspace_test` runs the tests; a long run goes on in the background and reports by itself. Both run by hand. Fix what they name. Tests `empty` proves nothing: every automation and refused state carries a test.
 5. `workspace_preview` builds the last commit, serves it and opens every page. `workspace_try` runs each automation once on the preview and reads what it changed. A preview binds no integration links: a sync's decoding is proved in a test. After the merge, create its connection on live with `sys_integration.create { integration, name }`, start it, and read the rows.

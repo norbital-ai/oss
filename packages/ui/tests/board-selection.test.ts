@@ -168,13 +168,15 @@ async function show({
 				lane.querySelector('[data-board-card], [data-lane-empty]'),
 				`lane ${lane.dataset['lane']} has loaded its first page`
 			);
-		const selectPage = target.querySelector<HTMLButtonElement>('[data-select-page]');
-		if (selectPage !== null) assert.equal(selectPage.disabled, false);
+		const selectLane = target.querySelector<HTMLButtonElement>('[data-select-lane]');
+		if (selectLane !== null) assert.equal(selectLane.disabled, false);
 	});
 	return { target, app, reads, acts };
 }
 const select = (target: ParentNode, id: string) =>
 	element<HTMLButtonElement>(target, `[data-select-row="${id}"]`);
+const selectLane = (target: ParentNode, lane: string) =>
+	element<HTMLButtonElement>(target, `[data-select-lane='${JSON.stringify(lane)}']`);
 const card = (target: ParentNode, id: string) =>
 	element<HTMLElement>(target, `[data-board-card="${id}"]`);
 const menuRow = (key: string) =>
@@ -315,7 +317,11 @@ it.live('select loaded and all matching preserve author and viewer scope across 
 				]
 			})
 		);
-		element<HTMLButtonElement>(target, '[data-select-page]').click();
+		selectLane(target, 'todo').click();
+		yield* browser(settle);
+		assert.equal(select(target, 'a').getAttribute('aria-checked'), 'true');
+		assert.equal(select(target, 'c').getAttribute('aria-checked'), 'false');
+		selectLane(target, 'done').click();
 		yield* browser(settle);
 		assert.equal(textOf(element(target, '[data-selected-count]')), '2 selected');
 		assert.equal(select(target, 'a').getAttribute('aria-checked'), 'true');
@@ -347,7 +353,7 @@ it.live('all matching stays within the authored lanes instead of selecting hidde
 			show({ toolbar: { select: true }, lanes: ['todo'] })
 		);
 		assert.equal(target.querySelector('[data-board-card=c]'), null);
-		element<HTMLButtonElement>(target, '[data-select-page]').click();
+		selectLane(target, 'todo').click();
 		yield* browser(settle);
 		element<HTMLButtonElement>(target, '[data-select-matching]').click();
 		yield* browser(settle);
@@ -378,7 +384,8 @@ it.live('a late select-all answer cannot undo a scope change', () =>
 				}
 			})
 		);
-		element<HTMLButtonElement>(target, '[data-select-page]').click();
+		selectLane(target, 'todo').click();
+		selectLane(target, 'done').click();
 		yield* browser(settle);
 		element<HTMLButtonElement>(target, '[data-select-matching]').click();
 		yield* browser(() => requested.promise);

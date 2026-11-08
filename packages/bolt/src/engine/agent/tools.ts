@@ -60,7 +60,17 @@ import {
 import type { AgentEngine as Engine } from './index.ts';
 import { lowerRead } from '../query/engine.ts';
 import { materializeEach } from '../runs/time.ts';
-import { BOUNDS, bound, bounded, filesOf, localTime, outputText, page, size, shortId } from './context.ts';
+import {
+	BOUNDS,
+	bound,
+	bounded,
+	filesOf,
+	localTime,
+	outputText,
+	page,
+	size,
+	shortId
+} from './context.ts';
 import { MODEL_FILES, ToolAnswer, toolSchema, type AnyTool, type InferTool } from './ai.ts';
 import {
 	cached,
@@ -156,6 +166,28 @@ export type AttachmentPort = {
 		EngineError | PortFailure
 	>;
 };
+/** A `workspace_search` as the host's ripgrep answers it, its hits in path order. */
+export type SearchRequest = {
+	readonly pattern: string;
+	readonly path?: string;
+	readonly include?: string;
+	/** Only the files holding a match, one hit each. */
+	readonly files?: boolean;
+	readonly literal?: boolean;
+	readonly caseSensitive?: boolean;
+	readonly limit?: number;
+};
+export type SearchAnswer =
+	| {
+			readonly hits: readonly {
+				readonly path: string;
+				readonly line: number;
+				readonly text: string;
+			}[];
+			readonly truncated: boolean;
+	  }
+	| { readonly error: string };
+export type SourceSearch = (request: SearchRequest) => Promise<SearchAnswer | undefined>;
 /** The released workspace as built (`artifact/workspace/`): its source files. Every host binds it. */
 export type WorkspacePort = {
 	files(): Promise<readonly string[]>;
@@ -329,6 +361,8 @@ export type ToolContext = {
 	workspace?: WorkspacePort | undefined;
 	/** The author's current working source; absent when this person authors nothing here. */
 	draft?: WorkspacePort | undefined;
+	/** The host's search over the caller's working tree; nothing back, the engine scans it itself. */
+	search?: SourceSearch | undefined;
 	geocoder?: Geo['Service'] | undefined;
 	skills: { readonly [name: string]: Skill };
 	agents: readonly string[];
@@ -495,6 +529,80 @@ const textAnswer = (text: string): ToolAnswer => {
 	return size(text) <= room
 		? { result: text, bounded: true }
 		: { result: text.slice(0, room), full: text, bounded: true };
+};
+/** OpenCode's `read`, `grep` and `glob` over the workspace's source: the same pages, in the same words. */
+const READ_LINES = 2000;
+/** A path as OpenCode resolves one, from the workspace root: `./a`, `/a` and `b/../a` are all `a`. */
+const sourcePath = (path: string) => {
+	const parts: string[] = [];
+	for (const part of path.split('/'))
+		if (part === '..') parts.pop();
+		else if (part !== '' && part !== '.') parts.push(part);
+	return parts.join('/');
+};
+const truncatedNote = (shown: number) =>
+	`(Results are truncated: showing first ${shown} results. Consider using a more specific path or pattern.)`;
+const filePage = (path: string, text: string, offset: number, limit: number) => {
+	const { total, from, to, lines } = page(text, offset, offset + limit - 1);
+	return offset > total
+		? { error: `Offset ${offset} is out of range for ${path} (${total} lines)` }
+		: {
+				text: [
+					`Read file ${path}, lines ${from}-${to}`,
+					...lines,
+					...(to < total ? [`[Output truncated. Continue reading with offset: ${to + 1}]`] : [])
+				].join('\n')
+			};
+};
+const grepAnswer = (
+	hits: readonly { readonly path: string; readonly line: number; readonly text: string }[],
+	truncated: boolean,
+	files = false
+) => {
+	if (files)
+		return [
+			...(hits.length === 0
+				? ['No files found']
+				: [`Found ${hits.length} files`, ...hits.map((hit) => hit.path)]),
+			...(truncated ? ['', truncatedNote(hits.length)] : [])
+		].join('\n');
+	const lines = [hits.length === 0 ? 'No matches found' : `Found ${hits.length} matches`];
+	let current = '';
+	for (const hit of hits) {
+		if (current !== hit.path) {
+			if (current !== '') lines.push('');
+			current = hit.path;
+			lines.push(`${hit.path}:`);
+		}
+		lines.push(`  Line ${hit.line}: ${hit.text}`);
+	}
+	return [...lines, ...(truncated ? ['', truncatedNote(hits.length)] : [])].join('\n');
+};
+/** A glob as ripgrep's `--glob` reads it: `**`, `*`, `?` and `{a,b}`; with no `/` it matches at any depth. */
+export const globRegExp = (glob: string) => {
+	const rooted = glob.includes('/') ? glob.replace(/^\.?\//, '') : `**/${glob}`;
+	let regex = '',
+		braces = 0;
+	for (let at = 0; at < rooted.length; at++) {
+		const char = rooted[at] ?? '';
+		if (char === '*' && rooted[at + 1] === '*') {
+			at++;
+			if (rooted[at + 1] === '/') {
+				at++;
+				regex += '(?:.*/)?';
+			} else regex += '.*';
+		} else if (char === '*') regex += '[^/]*';
+		else if (char === '?') regex += '[^/]';
+		else if (char === '{') {
+			braces++;
+			regex += '(?:';
+		} else if (char === '}' && braces > 0) {
+			braces--;
+			regex += ')';
+		} else if (char === ',' && braces > 0) regex += '|';
+		else regex += char.replace(/[.+^$()|\\[\]{}]/g, '\\$&');
+	}
+	return new RegExp(`^${regex}$`);
 };
 /** The source as an ASCII tree from the workspace root: a folder's note on the folder, a role's on its first file. */
 const sourceTree = (files: readonly string[]): string => {
@@ -1256,8 +1364,7 @@ export function workspaceSchema(m: EngineManifest, a: Authority): string | undef
 }
 /** An automation with its input, so the first start is the right one (an omitted input runs it over everything). */
 type SignedInput =
-	| { readonly [k: string]: { kind: string; of?: unknown; optional?: boolean } }
-	| undefined;
+	{ readonly [k: string]: { kind: string; of?: unknown; optional?: boolean } } | undefined;
 const automationSignature = (m: EngineManifest, name: string) =>
 	signature(name, (m.automations[name] as { input?: SignedInput } | undefined)?.input);
 /**
@@ -1515,7 +1622,9 @@ export function readTool(x: ReadToolContext) {
 					if (!(failure instanceof BoltError) || failure.code !== 'invalid')
 						return yield* Effect.fail(failure);
 					// a read stops at its first refusal: each root alone names its own, so one correction fixes them all
-					const roots = [...new Set(Object.keys(request).map((path) => path.split('.')[0] ?? path))];
+					const roots = [
+						...new Set(Object.keys(request).map((path) => path.split('.')[0] ?? path))
+					];
 					const refusals =
 						roots.length < 2
 							? [failure.message]
@@ -1538,8 +1647,8 @@ export function readTool(x: ReadToolContext) {
 						result: {
 							error,
 							hint: error.includes("unknown operator 'contains'")
-							? 'Text takes like: "%value%"; contains is only for a period or a JSON field.'
-							: 'describe_workspace { names } gives its fields. If the data cannot answer, say so.'
+								? 'Text takes like: "%value%"; contains is only for a period or a JSON field.'
+								: 'describe_workspace { names } gives its fields. If the data cannot answer, say so.'
 						}
 					};
 				})
@@ -2313,7 +2422,8 @@ A committed write answers the stored rows; a held one waits for approval.`,
 				if (f === undefined) continue;
 				const bytes = yield* files.get(f.key, f.size);
 				const seen = attach(x.files, { mime: f.mime, bytes, id: `${entry.id}#${name}` });
-				if (names.length <= TILED_PAGES && seen === 'shown') yield* tiled(bytes, `${entry.id}#${name}`);
+				if (names.length <= TILED_PAGES && seen === 'shown')
+					yield* tiled(bytes, `${entry.id}#${name}`);
 			}
 		});
 		if (i.page !== undefined) {
@@ -2321,7 +2431,8 @@ A committed write answers the stored rows; a held one waits for approval.`,
 				text: 'SELECT id, name, mime, size, key, sha256 FROM sys_file WHERE id = $1',
 				params: [entry.ingest.source]
 			});
-			if (source === undefined || x.ingest === undefined) return err('The file is no longer stored.');
+			if (source === undefined || x.ingest === undefined)
+				return err('The file is no longer stored.');
 			const got = yield* x.ingest(source, i.page);
 			const picture = 'unsupported' in got ? undefined : got.images[0];
 			if (picture === undefined) return err(`${entry.name} has no page ${i.page} to show.`);
@@ -2370,8 +2481,7 @@ A committed write answers the stored rows; a held one waits for approval.`,
 					? {}
 					: {
 							crops: crops.length,
-							zoomsLeft:
-								ZOOMS - [...x.read.keys()].filter((key) => key.startsWith(zoomed)).length
+							zoomsLeft: ZOOMS - [...x.read.keys()].filter((key) => key.startsWith(zoomed)).length
 						}),
 				attached: ATTACHED.shown,
 				note: SCAN_NOTE
@@ -2653,7 +2763,10 @@ A committed write answers the stored rows; a held one waits for approval.`,
 							(o) => o.ingest.output === id || o.ingest.source === id || o.id === id
 						);
 						// a job dies with its generation: a read it left unfinished starts over, never waits for good
-						if (found?.ingest.status === 'ingesting' && !READING.has(readingKey(found.ingest.output))) {
+						if (
+							found?.ingest.status === 'ingesting' &&
+							!READING.has(readingKey(found.ingest.output))
+						) {
 							yield* patchEntry(
 								found.ingest.output,
 								{},
@@ -2787,12 +2900,12 @@ A committed write answers the stored rows; a held one waits for approval.`,
 		const readSource = shared('workspace_read', () =>
 			Tool.make('workspace_read', {
 				description:
-					'Read source files as numbered lines: path, or paths for several; from and to page one.',
+					'Read source files: path, or paths for several. Each line is prefixed by its number as <line>: <content>. offset is the line to start from (1-based), limit how many, at most 2000.',
 				parameters: Schema.Struct({
 					path: Schema.optionalKey(Schema.NonEmptyString),
 					paths: Schema.optionalKey(Schema.Array(Schema.NonEmptyString)),
-					from: Schema.optionalKey(Schema.Int),
-					to: Schema.optionalKey(Schema.Int)
+					offset: Schema.optionalKey(Schema.Int),
+					limit: Schema.optionalKey(Schema.Int)
 				}),
 				success: ToolAnswer
 			})
@@ -2804,29 +2917,37 @@ A committed write answers the stored rows; a held one waits for approval.`,
 					guard(
 						Effect.gen(function* () {
 							const files = yield* Port.attempt('workspace.files', () => source.files());
+							const offset = Math.max(1, i.offset ?? 1),
+								limit = Math.min(Math.max(1, i.limit ?? READ_LINES), READ_LINES);
 							const one = Effect.fn('AgentTool.readSource')(function* (asked: string) {
 								// the same normalisation workspace_search uses: `./src/a.ts` is `src/a.ts`
-								const path = asked.replace(/^(?:\.\/|\/)+/, '').replace(/^\.$/, ''),
-									missing = {
-										path: asked,
-										error: path.startsWith('node_modules/')
-											? 'Installed packages are outside the workspace: workspace_lang reads their types.'
-											: 'No such file: workspace_list shows the source.'
+								const path = sourcePath(asked);
+								if (path.startsWith('node_modules/') || path === 'node_modules')
+									return {
+										error: `${asked}: installed packages are outside the workspace: workspace_lang reads their types.`
 									};
-								if (!files.includes(path)) return missing;
+								if (!files.includes(path))
+									return {
+										error: files.some((file) => file.startsWith(`${path}/`))
+											? `${asked} is a directory: workspace_list_dir lists it.`
+											: `${asked}: no such file: workspace_list_dir shows the source.`
+									};
 								const text = yield* Port.attempt('workspace.read', () => source.read(path));
-								if (text === null) return missing;
+								if (text === null)
+									return { error: `${asked}: no such file: workspace_list_dir shows the source.` };
 								if (GENERATED.test(path) && !text.includes('<<<<<<<'))
-									return { path, generated: GENERATED_NOTE };
-								return { path, ...page(text, i.from ?? 1, i.to ?? Number.MAX_SAFE_INTEGER) };
+									return { text: `Read file ${path}: ${GENERATED_NOTE}` };
+								return filePage(path, text, offset, limit);
 							});
-							if (i.paths !== undefined && i.paths.length > 0) {
-								// one budget across the files: a page each, whole while they fit
-								return ok({ files: yield* Effect.forEach(i.paths.slice(0, 20), one) });
-							}
+							if (i.paths !== undefined && i.paths.length > 0)
+								return textAnswer(
+									(yield* Effect.forEach(i.paths.slice(0, 20), one))
+										.map((answer) => ('error' in answer ? answer.error : answer.text))
+										.join('\n\n')
+								);
 							if (i.path === undefined) return err('give path or paths');
 							const answer = yield* one(i.path);
-							return 'error' in answer ? err(`${answer.path}: ${answer.error}`) : ok(answer);
+							return 'error' in answer ? err(answer.error) : textAnswer(answer.text);
 						})
 					)
 			}),
@@ -2835,10 +2956,12 @@ A committed write answers the stored rows; a held one waits for approval.`,
 		const searchSource = shared('workspace_search', () =>
 			Tool.make('workspace_search', {
 				description:
-					'Grep the source: pattern (a regular expression, or text with literal), within a path. At most 100 hits. Installed packages are read through workspace_lang.',
+					'Search the source with ripgrep: pattern is a regular expression, or exact text with literal. Answers matching lines, or with files only the files holding them. path is a file or directory, include a glob filtering files (*.ts, *.{ts,svelte}). Case-sensitive by default. At most 100 results unless limit says fewer. Installed packages are read through workspace_lang.',
 				parameters: Schema.Struct({
 					pattern: Schema.NonEmptyString,
 					path: Schema.optionalKey(Schema.String),
+					include: Schema.optionalKey(Schema.NonEmptyString),
+					files: Schema.optionalKey(Schema.Boolean),
 					literal: Schema.optionalKey(Schema.Boolean),
 					caseSensitive: Schema.optionalKey(Schema.Boolean),
 					limit: Schema.optionalKey(
@@ -2854,6 +2977,26 @@ A committed write answers the stored rows; a held one waits for approval.`,
 				workspace_search: (i) =>
 					guard(
 						Effect.gen(function* () {
+							const within = sourcePath(i.path ?? '');
+							if (within === 'node_modules' || within.startsWith('node_modules/'))
+								return err(
+									`${i.path}: installed packages are outside the workspace: workspace_lang reads their types.`
+								);
+							// ripgrep over an administrator's checkout; a member reads only what `visible` lets through
+							const found =
+								a.admin && x.search !== undefined
+									? yield* Port.attempt('workspace.search', () => x.search!(i))
+									: undefined;
+							if (found !== undefined)
+								return 'error' in found
+									? err(found.error)
+									: textAnswer(
+											grepAnswer(
+												found.hits.filter((hit) => !GENERATED.test(hit.path)),
+												found.truncated,
+												i.files === true
+											)
+										);
 							const regex =
 								i.literal === true
 									? null
@@ -2867,20 +3010,16 @@ A committed write answers the stored rows; a held one waits for approval.`,
 												)
 										});
 							const wanted = i.caseSensitive === false ? i.pattern.toLowerCase() : i.pattern;
-							const within = (i.path ?? '')
-								.replace(/^\.\//, '')
-								.replace(/^\.$/, '')
-								.replace(/\/$/, '');
-							if (within === 'node_modules' || within.startsWith('node_modules/'))
-								return err('Packages are not searched: workspace_lang answers any API.');
+							const included = i.include === undefined ? undefined : globRegExp(i.include);
 							const files = (yield* Port.attempt('workspace.files', () => source.files())).filter(
 								(file) =>
 									(within === '' || file === within || file.startsWith(`${within}/`)) &&
+									(included === undefined || included.test(file)) &&
 									!GENERATED.test(file) &&
 									file !== 'bun.lock'
 							);
 							const limit = i.limit ?? 100,
-								hits: Json[] = [];
+								hits: { path: string; line: number; text: string }[] = [];
 							for (const path of files) {
 								const text = (yield* Port.attempt('workspace.read', () => source.read(path))) ?? '';
 								for (const [line, value] of text.split('\n').entries()) {
@@ -2889,30 +3028,42 @@ A committed write answers the stored rows; a held one waits for approval.`,
 											? (i.caseSensitive === false ? value.toLowerCase() : value).includes(wanted)
 											: regex.test(value)
 									) {
-										if (hits.length === limit) return ok({ hits, truncated: true });
+										if (hits.length === limit)
+											return textAnswer(grepAnswer(hits, true, i.files === true));
 										hits.push({ path, line: line + 1, text: value.slice(0, HIT_CHARS) });
+										if (i.files === true) break;
 									}
 								}
 							}
-							return ok({ hits, truncated: false });
+							return textAnswer(grepAnswer(hits, false, i.files === true));
 						})
 					)
 			}),
 			{ pure: true }
 		);
-		const listSource = shared('workspace_list', () =>
-			Tool.make('workspace_list', {
-				description: 'The whole source tree, with what each folder and role is for.',
+		const listSource = shared('workspace_list_dir', () =>
+			Tool.make('workspace_list_dir', {
+				description:
+					'The source tree under path, the whole workspace by default, with what each folder and role is for.',
+				parameters: Schema.Struct({ path: Schema.optionalKey(Schema.String) }),
 				success: ToolAnswer
 			})
 		);
 		yield* add(
 			listSource,
 			Toolkit.make(listSource).toHandlers({
-				workspace_list: () =>
+				workspace_list_dir: (i) =>
 					guard(
 						Port.attempt('workspace.files', () => source.files()).pipe(
-							Effect.map((files) => textAnswer(sourceTree(files)))
+							Effect.map((files) => {
+								const under = sourcePath(i.path ?? '');
+								const shown = files.filter((file) => under === '' || file.startsWith(`${under}/`));
+								return shown.length === 0
+									? err(
+											`${i.path}: no such directory: workspace_list_dir with no path shows the source.`
+										)
+									: textAnswer(sourceTree(shown));
+							})
 						)
 					)
 			}),
@@ -3571,7 +3722,8 @@ A committed write answers the stored rows; a held one waits for approval.`,
 					host.input,
 					(input, id) =>
 						Effect.gen(function* () {
-							const files = host.files === true ? yield* conversationFiles(x, namedFiles(input)) : [];
+							const files =
+								host.files === true ? yield* conversationFiles(x, namedFiles(input)) : [];
 							if (typeof files === 'string') return err(files);
 							const context: HostToolContext = {
 								actor: a.actor,

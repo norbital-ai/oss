@@ -16,6 +16,7 @@ its content or 16rem, whichever is less). Nothing scrolls sideways.
 -->
 <script lang="ts" module>
 	import { getContext, type Snippet } from 'svelte';
+	import type { FormState } from './form-state.svelte.js';
 
 	/** The props of `Section`. */
 	export type SectionProps = {
@@ -37,8 +38,8 @@ its content or 16rem, whichever is less). Nothing scrolls sideways.
 		summary?: string | Snippet;
 		/** A mark on the title row — a state badge, never a control. */
 		trailing?: Snippet;
-		/** Controls that act on the section, at the end of the title row. */
-		actions?: Snippet;
+		/** Controls that act on the section, at the end of the title row, with the enclosing form's draft. */
+		actions?: Snippet<[FormState | undefined]>;
 		/** `content` (default): its whole content; `fill`: shares the column's height left and scrolls inside itself. */
 		size?: 'content' | 'fill';
 		/** A `fill` section's floor (a CSS length; default its content or 16rem, whichever is less). */
@@ -255,7 +256,7 @@ its content or 16rem, whichever is less). Nothing scrolls sideways.
 	data-open={shown}
 >
 	{#if titled}
-		<div class="flex min-w-0 shrink-0 items-center gap-1.5" bind:clientHeight={headingHeight}>
+		<div class="flex min-w-0 shrink-0 flex-wrap items-center gap-1.5" bind:clientHeight={headingHeight}>
 			<h3 class="min-w-0 flex-1 text-sm font-semibold">
 				{#if canCollapse}
 					<button
@@ -301,7 +302,19 @@ its content or 16rem, whichever is less). Nothing scrolls sideways.
 							>
 						{/if}
 					</button>
-				{:else}{title}{/if}
+				{:else}
+					<span class="flex min-w-0 items-center gap-1.5">
+						{#if icon}
+							<span
+								class="border-border bg-muted/40 text-muted-foreground grid size-5 shrink-0 place-items-center rounded-sm border"
+								data-section-icon
+							>
+								<Icon {icon} class="size-3" aria-hidden="true" />
+							</span>
+						{/if}
+						<span class="truncate">{title}</span>
+					</span>
+				{/if}
 			</h3>
 			{#if hint}
 				<Tooltip
@@ -327,7 +340,7 @@ its content or 16rem, whichever is less). Nothing scrolls sideways.
 				</Tooltip>
 			{/if}
 			{@render trailing?.()}
-			{#if actions}<span class="flex shrink-0 items-center gap-2">{@render actions()}</span>{/if}
+			{#if actions}<span class="flex max-w-full shrink-0 flex-wrap items-center gap-2">{@render actions(form)}</span>{/if}
 		</div>
 	{/if}
 	<!-- hidden, never unmounted: a collapsed field still belongs to the form's draft and its save -->
@@ -342,13 +355,14 @@ its content or 16rem, whichever is less). Nothing scrolls sideways.
 		class={cn(
 			'-my-1 min-h-0 min-w-0 overflow-x-clip py-1',
 			fill && 'overflow-y-auto',
-			canCollapse && (icon ? 'pl-[1.625rem] max-md:pl-0' : 'pl-[1.375rem] max-md:pl-0')
+			// every titled section starts its body under the label, never under the title's icon or chevron
+			titled && (icon ? 'pl-[1.625rem]' : canCollapse ? 'pl-[1.375rem]' : '')
 		)}
 		use:contentMotion
 	>
 		<div
 			class={cn(
-				'grid min-w-0 [overflow-wrap:anywhere] max-md:has-[>[data-field]]:[grid-template-columns:repeat(auto-fit,minmax(min(100%,9rem),1fr))]',
+				'grid min-w-0 [overflow-wrap:anywhere] max-md:has-[>[data-field]]:[grid-template-columns:repeat(auto-fit,minmax(min(100%,9rem),1fr))] max-md:has-[>[data-field]]:[&>*:not([data-field])]:col-span-full',
 				editing ? 'gap-4' : 'gap-3',
 				// the space under the heading moves with the body, so closing ends without a jump
 				titled && (editing ? 'pt-4' : 'pt-3')

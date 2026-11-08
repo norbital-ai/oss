@@ -6,7 +6,7 @@ import Steps from '../src/shell/agent/Steps.svelte';
 import type { AgentRow } from '../src/protocol/schema.ts';
 import './support/shell.css';
 
-it('a workspace_list step shows the tree itself, with no tabs', async () => {
+it('a workspace_list_dir step shows the tree itself, with no tabs', async () => {
 	const tree = '/  <- cwd\n└── src/\n    └── +workspace.ts';
 	const step: AgentRow = {
 		id: 'listed',
@@ -15,7 +15,7 @@ it('a workspace_list step shows the tree itself, with no tabs', async () => {
 		text: '',
 		state: null,
 		tag: null,
-		tool: { name: 'workspace_list', failed: false, args: '{}', result: tree }
+		tool: { name: 'workspace_list_dir', failed: false, args: '{}', result: tree }
 	};
 	const host = document.body.appendChild(document.createElement('div'));
 	const view = mount(Steps, {

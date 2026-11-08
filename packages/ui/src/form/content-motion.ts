@@ -12,58 +12,6 @@ export function contentMotion(node: HTMLElement) {
 		);
 	};
 	let observed = node.firstElementChild;
-	const FIELDS = 'dd,td,li,[data-field]';
-	// A field is known from when it is first seen: one filled while its section is closed, or still rendering just after
-	// it opens, is structure, not a change. Only a field seen for a moment flashes.
-	const SETTLE_MS = 600;
-	const seen = (field: HTMLElement) =>
-		typeof field.checkVisibility === 'function' ? field.checkVisibility() : true;
-	const known = new Map<HTMLElement, number>(
-		[...node.querySelectorAll<HTMLElement>(FIELDS)].filter(seen).map((field) => [field, 0])
-	);
-	const changes = new MutationObserver((records) => {
-		const next = node.firstElementChild;
-		if (resize && next !== observed) {
-			if (observed) resize.unobserve(observed);
-			observed = next;
-			if (observed) resize.observe(observed);
-		}
-		// The record shell handles field changes across section mounts; nested sections only animate height.
-		if (node.matches('[data-section] [id]') && node.closest('[data-view=record]')) return;
-		// A field that arrives with a mounted tab, a virtualised row or a newly opened section is structure, not a value
-		// change: only known fields whose contents mutate flash. New fields join the known set for later updates.
-		const inserted = new Set<HTMLElement>();
-		for (const record of records)
-			for (const added of record.addedNodes) {
-				if (!(added instanceof HTMLElement)) continue;
-				if (added.matches(FIELDS)) inserted.add(added);
-				for (const field of added.querySelectorAll<HTMLElement>(FIELDS)) inserted.add(field);
-			}
-		const now = performance.now();
-		for (const field of inserted) if (seen(field)) known.set(field, now);
-		const fields = new Set<HTMLElement>();
-		for (const record of records) {
-			const element =
-				record.target instanceof HTMLElement ? record.target : record.target.parentElement;
-			const field = element?.closest<HTMLElement>(FIELDS);
-			if (!field || inserted.has(field) || !node.contains(field)) continue;
-			const since = known.get(field);
-			if (since === undefined) {
-				if (seen(field)) known.set(field, now);
-			} else if (now - since > SETTLE_MS) fields.add(field);
-		}
-		for (const field of fields)
-			play(
-				field,
-				[
-					{ backgroundColor: 'var(--accent)' },
-					{ backgroundColor: 'var(--accent)', offset: 0.35 },
-					{ backgroundColor: 'transparent' }
-				],
-				700
-			);
-	});
-	changes.observe(node, { childList: true, characterData: true, subtree: true });
 	// Height moves only in answer to the viewer (a disclosure toggled, a row added): content that arrives or grows on its
 	// own (the first load, a late editor, a new revision) takes its height at once, never rolling out.
 	let asked = -Infinity;
@@ -80,13 +28,14 @@ export function contentMotion(node: HTMLElement) {
 			parseFloat(style.borderBottomWidth)
 		);
 	};
-	let height = node.firstElementChild?.getBoundingClientRect().height ?? 0;
+	let height = observed?.getBoundingClientRect().height ?? 0;
 	const resize =
 		typeof ResizeObserver === 'undefined' || node.matches('[data-view=record]')
 			? null
 			: new ResizeObserver(([entry]) => {
 					if (!entry) return;
-					const next = entry.borderBoxSize[0]?.blockSize ?? entry.target.getBoundingClientRect().height;
+					const next =
+						entry.borderBoxSize[0]?.blockSize ?? entry.target.getBoundingClientRect().height;
 					// a section's own open or close animates the body; this one would fight it
 					if (
 						performance.now() - asked < 400 &&
@@ -104,13 +53,22 @@ export function contentMotion(node: HTMLElement) {
 					height = next;
 				});
 	if (observed) resize?.observe(observed);
+	const structure = new MutationObserver(() => {
+		const next = node.firstElementChild;
+		if (next === observed) return;
+		if (observed) resize?.unobserve(observed);
+		observed = next;
+		height = next?.getBoundingClientRect().height ?? 0;
+		if (observed) resize?.observe(observed);
+	});
+	structure.observe(node, { childList: true });
 	const cancel = () => {
 		if (reduced.matches) for (const animation of active) animation.cancel();
 	};
 	reduced.addEventListener('change', cancel);
 	return {
 		destroy() {
-			changes.disconnect();
+			structure.disconnect();
 			node.removeEventListener('click', ask, true);
 			node.removeEventListener('toggle', ask, true);
 			resize?.disconnect();

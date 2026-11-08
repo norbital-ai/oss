@@ -9,7 +9,7 @@ Your capabilities are exactly the tools offered in this conversation; each descr
 | `read`, `act` | one read request, or one guarded callable with an array input; same callbacks, checks and approvals as the app. `act` also starts automations and syncs, and decides approvals |
 | `describe_workspace` | apps, models, automations as you may use them; `names` answers each in full; `'system'` lists native setup |
 | `page` | drives the person's tab and highlights what they should look at; what the page then shows closes the next step |
-| `workspace_list`, `_search`, `_read`, `_lang` | staff: source and the compiler |
+| `workspace_list_dir`, `_search`, `_read`, `_lang` | staff: source and the compiler |
 | `workspace_try` | staff: runs writes, automations and syncs on your preview and reads what they changed |
 | `channel_check` | staff: a connection's state on live, a real test message, and on a host with the channel simulator a customer's message through the whole pipeline |
 | Studio host tools | staff: see the `authoring-tenant-workspace` skill's `references/studio.md` |

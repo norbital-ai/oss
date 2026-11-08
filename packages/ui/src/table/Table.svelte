@@ -80,6 +80,8 @@
 		columns?: readonly Col<R, K>[];
 		/** The author's fixed scope: ANDed under every viewer filter, shown read-only in the view popover, never clearable. */
 		where?: S extends string ? WhereOf<S> : Where;
+		/** A fixed scope ANDed under every reader filter like `where`, but not shown in the view popover. */
+		hiddenWhere?: S extends string ? WhereOf<S> : Where;
 		/** Seed rows of the view popover the viewer may edit or clear; a cleared choice is kept in the URL. */
 		initialFilter?: S extends string ? WhereOf<S> : Where;
 		/** The initial sort; a viewer's sort replaces it and clearing restores it. */
@@ -171,6 +173,7 @@
 		of,
 		columns: authoredColumns = [],
 		where,
+		hiddenWhere,
 		initialFilter,
 		orderBy,
 		pageSize = 25,
@@ -403,7 +406,7 @@
 	);
 
 	// ── the page (rule 7: cursor-only, live) ──
-	const scope = $derived(and(where, vs.where));
+	const scope = $derived(and(and(where, hiddenWhere), vs.where));
 	const order = $derived(vs.order.length > 0 ? orderOf(vs.order) : orderBy);
 	/** The page's search: the declared index's `search`, else a `where` over the label fields. */
 	const searched = $derived(
@@ -1080,6 +1083,7 @@
 			{catalog}
 			{source}
 			author={where}
+			hiddenAuthor={hiddenWhere}
 			sortable={sorts}
 			bind:q={qText}
 			searchable={canSearch}

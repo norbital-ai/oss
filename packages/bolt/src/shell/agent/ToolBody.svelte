@@ -80,7 +80,8 @@
 					{#if !key.includes('.') && readsOf(input).length > 1}
 						<span class="font-mono text-micro text-muted-foreground">{key}</span>
 					{/if}
-					{#each chips as chip (chip)}<Badge variant="outline" class="font-mono">{chip}</Badge>{/each}
+					{#each chips as chip (chip)}<Badge variant="outline" class="font-mono">{chip}</Badge
+						>{/each}
 				</div>
 			{/if}
 		{/each}
@@ -225,17 +226,8 @@
 			(typeof data === 'string' ? data : raw),
 		text(input['path']).match(/\.(m?[jt]sx?|svelte)$/) === null ? 'plaintext' : 'javascript'
 	)}
-{:else if tool.name === 'workspace_list'}
+{:else if tool.name === 'workspace_list_dir' || tool.name === 'workspace_search'}
 	<pre class="max-h-96 overflow-auto font-mono text-micro" data-step-pane="tree">{tool.result}</pre>
-{:else if tool.name === 'workspace_search'}
-	<ul class="grid max-h-56 gap-0.5 overflow-auto font-mono text-micro" data-tool-view="search">
-		{#each list(out['hits']) as hit, index (index)}
-			<li class="truncate">
-				<span class="text-muted-foreground">{text(hit['path'])}:{String(hit['line'])}</span>
-				{text(hit['text'])}
-			</li>
-		{/each}
-	</ul>
 {:else if tool.name === 'logs' || tool.name === 'workspace_logs' || tool.name === 'runs'}
 	{@const lines = list(out['lines'] ?? out['records'] ?? out['runs'])}
 	<ul class="grid max-h-56 gap-0.5 overflow-auto font-mono text-micro" data-tool-view="logs">

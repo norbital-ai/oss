@@ -179,6 +179,7 @@
 		catalog,
 		source = model,
 		author,
+		hiddenAuthor,
 		sortable = [],
 		q = $bindable(''),
 		searchable = false,
@@ -196,6 +197,8 @@
 		/** The view popover's model (a local array's `$local`). */
 		source?: string;
 		author?: Json;
+		/** A fixed scope included in the view's rows but never shown in the view popover. */
+		hiddenAuthor?: Json;
 		sortable?: readonly string[];
 		q?: string;
 		searchable?: boolean;
@@ -822,7 +825,7 @@
 	const scoped = (): { readonly [k: string]: Json } =>
 		cfg?.context === undefined ? {} : { context: cfg.context };
 	/** What the page shows: the author's scope and the viewer's filter. */
-	const shown = () => and(author, view?.where);
+	const shown = () => and(and(author, hiddenAuthor), view?.where);
 	function startImport(sync: string, file: string) {
 		const h = bolt.start(`${model}.sync.${sync}`, { mode: 'import', file, ...scoped() });
 		if (bolt.runs === undefined) return track(h); // no run reads here: RunStatus says so

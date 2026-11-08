@@ -28,22 +28,40 @@ A readonly value as selectable text, with a copy button on hover or focus (alway
 		disposed = true;
 		clearTimeout(reset);
 	});
+	/** A hidden field works where the async clipboard is unavailable or denied (an embedded page). */
+	function legacyCopy(): boolean {
+		const area = document.createElement('textarea');
+		area.value = text;
+		area.setAttribute('readonly', '');
+		area.style.position = 'fixed';
+		area.style.inset = '0 auto auto -9999px';
+		document.body.appendChild(area);
+		area.select();
+		try {
+			return document.execCommand('copy');
+		} catch {
+			return false;
+		} finally {
+			area.remove();
+		}
+	}
 	async function copy() {
+		let ok = false;
 		try {
 			await navigator.clipboard.writeText(text);
-			if (disposed) return;
-			clearTimeout(reset);
-			copied = true;
+			ok = true;
+		} catch {
+			ok = legacyCopy();
+		}
+		if (disposed) return;
+		clearTimeout(reset);
+		copied = ok;
+		reset = undefined;
+		if (ok)
 			reset = setTimeout(() => {
 				copied = false;
 				reset = undefined;
 			}, 1500);
-		} catch {
-			if (disposed) return;
-			clearTimeout(reset);
-			reset = undefined;
-			copied = false;
-		}
 	}
 </script>
 

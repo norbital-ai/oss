@@ -126,10 +126,22 @@
 	const recordId = (id: RowOf<C>['id']): id is SelectedId =>
 		typeof id === 'string' && id.trim() !== '';
 	const selected = new SvelteSet<SelectedId>();
-	const loaded = new SvelteMap<symbol, readonly SelectedId[]>();
-	const loadedIds = $derived([...new Set([...loaded.values()].flat())]);
+	const loaded = new SvelteMap<symbol, { lane: string; ids: readonly SelectedId[] }>();
+	const loadedIds = $derived([...new Set([...loaded.values()].flatMap((entry) => entry.ids))]);
 	const loadedAll = $derived(loadedIds.length > 0 && loadedIds.every((id) => selected.has(id)));
-	const loadedSome = $derived(loadedIds.some((id) => selected.has(id)));
+	const laneIds = (lane: string) => [
+		...new Set(
+			[...loaded.values()].filter((entry) => entry.lane === lane).flatMap((entry) => entry.ids)
+		)
+	];
+	const laneSelection = (lane: string) => {
+		const ids = laneIds(lane);
+		return {
+			empty: ids.length === 0,
+			all: ids.length > 0 && ids.every((id) => selected.has(id)),
+			some: ids.some((id) => selected.has(id))
+		};
+	};
 	let selecting = $state(false);
 	let selectionNotice = $state('');
 	let selectionRevision = 0;
@@ -147,14 +159,14 @@
 		selectionNotice = '';
 		on ? selected.add(id) : selected.delete(id);
 	};
-	const toggleLoaded = (on: boolean) => {
-		for (const id of loadedIds) toggle(id, on);
+	const toggleLane = (lane: string, on: boolean) => {
+		for (const id of laneIds(lane)) toggle(id, on);
 	};
 	const selectCard = (id: RowOf<C>['id'], on: boolean) => {
 		if (recordId(id)) toggle(id, on);
 	};
-	const registerRows = (page: symbol, ids: readonly RowOf<C>['id'][]) => {
-		loaded.set(page, ids.filter(recordId));
+	const registerRows = (lane: string, page: symbol, ids: readonly RowOf<C>['id'][]) => {
+		loaded.set(page, { lane, ids: ids.filter(recordId) });
 		return () => loaded.delete(page);
 	};
 	const selectionScope = $derived(JSON.stringify({ of, by, where: scope, order, search, lanes }));
@@ -437,47 +449,31 @@
 		onSettled={clearSelection}
 		{exporter}
 	/>
-	{#if selectable}
+	{#if selectable && selected.size > 0}
 		<div
 			class="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 rounded-sm px-1 text-xs text-muted-foreground dark:bg-muted/40 dark:px-3 dark:py-1.5 dark:text-foreground"
 			data-selection
 		>
-			<label class="inline-flex min-h-7 items-center gap-2 dark:min-h-8">
-				<Checkbox
-					checked={loadedAll}
-					indeterminate={loadedSome && !loadedAll}
-					disabled={loadedIds.length === 0}
-					aria-label={msg(bolt, 'table.selectPage', 'Select this page')}
-					onCheckedChange={toggleLoaded}
-					data-select-page
-				/>
-				{msg(bolt, 'table.selectPage', 'Select this page')}
-			</label>
-			{#if selected.size > 0}
-				<span class="font-medium text-foreground" aria-live="polite" data-selected-count
-					>{msg(bolt, 'table.selected', '{n} selected', { n: selected.size })}</span
-				>
-				{#if loadedAll && (matching === null || matching > selected.size)}
-					<Button
-						variant="link"
-						class="h-auto px-0 text-xs"
-						disabled={selecting}
-						aria-busy={selecting}
-						onclick={selectMatching}
-						data-select-matching
-					>
-						{matching === null
-							? msg(bolt, 'table.selectAll', 'Select all')
-							: msg(bolt, 'table.selectMatching', 'Select all {n} matching', { n: matching })}
-					</Button>
-				{/if}
+			<span class="font-medium text-foreground" aria-live="polite" data-selected-count
+				>{msg(bolt, 'table.selected', '{n} selected', { n: selected.size })}</span
+			>
+			{#if loadedAll && (matching === null || matching > selected.size)}
 				<Button
 					variant="link"
 					class="h-auto px-0 text-xs"
-					onclick={clearSelection}
-					data-select-clear>{msg(bolt, 'table.clearSelection', 'Clear selection')}</Button
+					disabled={selecting}
+					aria-busy={selecting}
+					onclick={selectMatching}
+					data-select-matching
 				>
+					{matching === null
+						? msg(bolt, 'table.selectAll', 'Select all')
+						: msg(bolt, 'table.selectMatching', 'Select all {n} matching', { n: matching })}
+				</Button>
 			{/if}
+			<Button variant="link" class="h-auto px-0 text-xs" onclick={clearSelection} data-select-clear
+				>{msg(bolt, 'table.clearSelection', 'Clear selection')}</Button
+			>
 		</div>
 		{#if selectionNotice}<p role="alert" class="text-destructive text-xs" data-select-error>
 				{selectionNotice}
@@ -521,11 +517,12 @@
 						{#each list as lane (JSON.stringify(lane.value))}
 							{@const dot = dotOf(lane.value)}
 							{@const laneKey = JSON.stringify(lane.value)}
+							{@const picked = laneSelection(laneKey)}
 							{@const target = dragged !== null && over === laneKey && dragged.from !== laneKey}
 							<div
 								role="list"
 								class={[
-									'flex min-h-0 flex-col gap-2 rounded-sm border p-3 ring-inset transition-colors motion-reduce:transition-none dark:border-transparent',
+									'group/lane flex min-h-0 flex-col gap-2 rounded-sm border p-3 ring-inset transition-colors motion-reduce:transition-none dark:border-transparent',
 									target ? 'bg-primary/10 ring-primary/50 ring-2' : 'bg-muted/70 dark:bg-muted/40',
 									columns === undefined ? 'w-72 shrink-0 snap-start' : 'min-w-0'
 								]}
@@ -546,17 +543,29 @@
 								>
 									<span class="flex min-w-0 items-center gap-1.5"
 										>{#if dot}<span class={['size-2 shrink-0 rounded-full', dot]} aria-hidden="true"
-											></span>{/if}<span class="truncate">{lane.label}</span></span
-									>
-									<span class="flex shrink-0 items-center gap-1">
-										{#if search === ''}<span
-												class="text-muted-foreground text-xs tabular-nums"
+											></span>{/if}<span class="truncate">{lane.label}</span>{#if search === ''}<span
+												class="text-muted-foreground shrink-0 text-xs tabular-nums"
 												data-lane-count>{lane.count}</span
-											>{/if}
+											>{/if}</span
+									>
+									<span class="flex shrink-0 items-center gap-2">
+										{#if selectable}
+											<Checkbox
+												class="-my-1.5"
+												checked={picked.all}
+												indeterminate={picked.some && !picked.all}
+												disabled={picked.empty}
+												aria-label={msg(bolt, 'board.selectLane', 'Select all in {lane}', {
+													lane: lane.label
+												})}
+												onCheckedChange={(on) => toggleLane(laneKey, on)}
+												data-select-lane={laneKey}
+											/>
+										{/if}
 										<Button
 											size="icon"
 											variant="ghost"
-											class="-my-1.5 -mr-1.5"
+											class="-my-1.5 -mr-1.5 opacity-0 transition-opacity group-hover/lane:opacity-100 group-focus-within/lane:opacity-100 focus-visible:opacity-100 motion-reduce:transition-none [@media(hover:none)]:opacity-100"
 											hint={msg(bolt, 'board.expand', 'Expand {lane}', { lane: lane.label })}
 											aria-label={msg(bolt, 'board.expand', 'Expand {lane}', { lane: lane.label })}
 											onclick={(e) => {
@@ -583,7 +592,7 @@
 										{selectable}
 										{selected}
 										onSelect={selectCard}
-										onRows={registerRows}
+										onRows={(page, ids) => registerRows(laneKey, page, ids)}
 										lane={lane.label}
 										orderBy={order}
 										search={search || undefined}

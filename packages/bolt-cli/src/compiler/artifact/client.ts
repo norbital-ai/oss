@@ -339,7 +339,7 @@ const spaEntry = Effect.fn('bolt.spaEntry')(function* (
 		// first) hold generated or copied code, never a class source (.gitignore or not)
 		`@import ${key(createRequire(import.meta.url).resolve('@norbital-ai/ui/base.css'))};\n@source ${key(SHELL)};\n@source ${key(root)};\n@source not ${key(join(root, '.norbital'))};\n@source not ${key(out)};\n`
 	);
-	// hook:server-cli — the messages: the base (`+messages.ts`) under the reader's first matching `+<locale>.messages.ts`
+	// hook:server-cli — the messages: the base (`+messages.ts`) under the workspace's matching `+<locale>.messages.ts`
 	const reps = files
 		.filter((f) => f.role === 'representation')
 		.map((f) => `${key(f.name)}: () => import(${key(join(root, f.path))})`);
@@ -368,7 +368,8 @@ ${locales.map((l, i) => `import L${i} from ${key(join(root, l.path))};`).join('\
 ${sessions.map((s, i) => `import S${i} from ${key(join(root, s.path))};`).join('\n')}
 ${renderers.map((r, i) => `import F${i} from ${key(join(root, r.path))};`).join('\n')}
 const locales = { ${locales.map((l, i) => `${key(l.name.toLowerCase())}: L${i}`).join(', ')} };
-const tag = navigator.languages.map((l) => l.toLowerCase()).flatMap((l) => [l, l.split('-')[0]]).find((l) => l in locales);
+const workspaceLocale = ${key(shell.workspace.locale)}.toLowerCase();
+const tag = [workspaceLocale, workspaceLocale.split('-')[0]].find((l) => l in locales);
 globalThis.__BOLT_BUILD__ = ${key(versions)};
 const ready = initializeShellAssets(import.meta.url);
 ready.then(() => mountShell(document.getElementById('bolt'), { ready, workspaceName: ${key(title)}, publicRoutes: ${key(publicFiles.map((file) => `${file.role === 'page' ? 'app' : 'kiosk'}/${file.name}`))}, manifest: ${key(shell)}, pages: { ${pages.join(', ')} },

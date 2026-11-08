@@ -7,7 +7,17 @@ import { acknowledgeAudit, drainAuditErases } from '../src/engine/audit-retentio
 import { HistorySnapshotSchema } from '../src/protocol/record-contracts.ts';
 import { restorePreview, restoreRecord } from '../src/engine/write/restore.ts';
 import { act } from '../src/engine/write/act.ts';
-import { admin, arm, grants, authority, NOW, TODAY, manifest as base } from './write-fixture.ts';
+import { compileAuthority } from '../src/engine/access/authority.ts';
+import {
+	admin,
+	arm,
+	grants,
+	authority,
+	member,
+	NOW,
+	TODAY,
+	manifest as base
+} from './write-fixture.ts';
 import type { EngineManifest } from '../src/engine/manifest.ts';
 
 const ID = '11111111-1111-4111-8111-111111111111';
@@ -428,6 +438,12 @@ describe('versioned record history', () => {
 				});
 				const narrow: EngineManifest = {
 					...after,
+					policies: {
+						reader: {
+							description: '',
+							grants: { articles: { outputs: { summary: { articles: {} } } } }
+						}
+					},
 					exposures: {
 						articles: {
 							...after.exposures.articles,
@@ -437,12 +453,12 @@ describe('versioned record history', () => {
 					}
 				};
 				yield* applyPlan(db, yield* plan(initial.slice, narrow), { accept: true });
-				const caller = authority({
-					articles: grants('articles', {
-						read: { summary: { articles: [arm()] } },
-						history: [arm()]
-					})
-				});
+				// the read grant alone admits history: no `history` grant is declared
+				const caller = compileAuthority(
+					narrow,
+					{ actor: member, admin: false, policies: ['reader'] },
+					'history-reader'
+				);
 				const snapshot = yield* Schema.decodeUnknownEffect(HistorySnapshotSchema)(
 					yield* readHistory(
 						db,
@@ -621,6 +637,26 @@ describe('versioned record history', () => {
 				expect(snapshot.compatible).not.toHaveProperty('removed');
 				expect(snapshot.compatible).not.toHaveProperty('quantity');
 				expect(snapshot.values.removed).toBe('Old meaning');
+				const listed = yield* Schema.decodeUnknownEffect(
+					Schema.Array(
+						Schema.Struct({
+							valid: Schema.Boolean,
+							uncompatible: Schema.Array(Schema.String)
+						})
+					)
+				)(
+					yield* readHistory(
+						db,
+						readded,
+						{ kind: 'history', model: 'articles', id: ID },
+						{ as: 'caller', authority: admin },
+						bindings
+					)
+				);
+				expect(listed.at(-1)).toMatchObject({
+					valid: false,
+					uncompatible: expect.arrayContaining(['quantity', 'removed'])
+				});
 			})
 		).pipe(Effect.provide(Pristine.layer))
 	);

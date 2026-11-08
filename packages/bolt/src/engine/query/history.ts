@@ -9,8 +9,8 @@ import type { ReadIR } from '../../protocol/reads.ts';
 import type { EngineManifest } from '../manifest.ts';
 import type { TenantDbShape as TenantDb } from '../db/tenant-db.ts';
 import { catalogOf } from '../access/pred.ts';
-import { grantedArms, readScope } from '../access/authority.ts';
-import { catalogFor, exposureOf, exposedField, q } from '@norbital-ai/store';
+import { grantedArms, readScope, viewOutput } from '../access/authority.ts';
+import { catalogFor, exposureOf, exposedField, q, DEFAULT_OUTPUT } from '@norbital-ai/store';
 import { grantSql, canonical } from '@norbital-ai/store';
 import { resolverOf } from './reader.ts';
 import { fromStore } from '../../protocol/errors.ts';
@@ -52,7 +52,11 @@ export const readHistory = Effect.fn('Bolt.readHistory')(function* (
 	bindings: Bindings
 ) {
 	const cat = catalogOf(m),
-		output = read.output ?? 'default',
+		output =
+			read.output ??
+			(reader.as === 'caller' && !reader.authority.admin
+				? (viewOutput(m, reader.authority, read.model) ?? DEFAULT_OUTPUT)
+				: DEFAULT_OUTPUT),
 		c = yield* catalogFor(cat, read.model, output).pipe(
 			Effect.flatMap((view) => exposureOf(view, read.model)),
 			Effect.mapError(fromStore)
@@ -100,9 +104,9 @@ export const readHistory = Effect.fn('Bolt.readHistory')(function* (
 	];
 	const auth = reader.as === 'caller' && !reader.authority.admin ? reader.authority : null;
 	const self: Pred = { t: 'cmp', field: 'id', op: 'eq', arg: { _tag: 'Lit', value: id } };
-	// the revisions show the output the read names: the caller must hold it, and its history scope bounds the rows
 	const granted = auth === null ? undefined : grantedArms(auth, read.model, output);
-	const scope = auth === null ? undefined : readScope(auth, read.model, 'history');
+	// the record's read scope is its history scope: a record the caller may read, it may also see change
+	const scope = auth === null ? undefined : readScope(auth, read.model, output);
 	if (auth !== null) {
 		// grant predicates, so compiled raw; a requestor variable in them resolves against the caller
 		statements.push(
@@ -188,7 +192,7 @@ export const readHistory = Effect.fn('Bolt.readHistory')(function* (
 				)
 				.map(([, value]) => [value.field, value.value])
 		);
-		const uncompatible = [...changes].flatMap(([identity, value]) => {
+		const uncompatible = [...state].flatMap(([identity, value]) => {
 			if (!visibleField(identity, value) || SYSTEM_HISTORY_FIELDS.has(value.field)) return [];
 			const field =
 				currentFields.get(identity) ?? (identity.startsWith('legacy:') ? value.field : undefined);
@@ -216,6 +220,8 @@ export const readHistory = Effect.fn('Bolt.readHistory')(function* (
 			schemaVersion: version?.id ?? null,
 			legacy: meta['legacy'] === true || version === undefined,
 			uncompatible,
+			/** Whether the whole revision still projects into today's representation. */
+			valid: uncompatible.length === 0,
 			actor:
 				actor === null || colon < 0
 					? null

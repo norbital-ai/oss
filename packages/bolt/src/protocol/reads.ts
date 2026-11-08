@@ -427,7 +427,10 @@ export function decodeRead(
 					readonly at?: Json | undefined;
 					readonly output?: Json | undefined;
 					readonly view?: Json | undefined;
-				} = Predicate.isObject(b) && ('at' in b || 'output' in b || 'view' in b) ? b : { at: b };
+				} =
+					Predicate.isObject(b) && !('instant' in b || 'revision' in b || 'before' in b)
+						? b
+						: { at: b };
 				return {
 					kind: 'history',
 					model,

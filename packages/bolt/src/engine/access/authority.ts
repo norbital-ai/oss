@@ -363,14 +363,14 @@ export function viewOutput(m: EngineManifest, auth: Authority, model: string): s
 	return outputsOf(m, model).find((o) => grantedArms(auth, model, o) !== undefined);
 }
 
-/** The read scope of a caller (rule 13): the union of its arms of one output; `undefined` = that output is not granted. */
+/** The read scope of a caller (rule 13): the union of its arms of one output; `undefined` = that output is not granted.
+ * A record the caller may read is a record whose history it may read, so history uses this same scope. */
 export function readScope(
 	auth: Authority,
 	model: string,
-	kind: 'read' | 'history' = 'read',
 	output: string = DEFAULT_OUTPUT
 ): Pred | undefined {
-	const arms = kind === 'read' ? grantedArms(auth, model, output) : auth.models[model]?.history;
+	const arms = grantedArms(auth, model, output);
 	return arms === undefined || arms.length === 0 ? undefined : or(arms.map((x) => x.where));
 }
 

@@ -29,6 +29,8 @@ export type Checkpoint = {
 	restoredFrom: number | null;
 	/** The approval request this revision belongs to and that request's state now (`Pending`, `Rejected`, …). */
 	approval: { request: string; state: string | null } | null;
+	/** Whether the revision still projects into today's representation (its schema and values still fit). */
+	valid: boolean;
 };
 /** `bolt.history`'s answer as checkpoints, oldest first; bookkeeping fields are not changes. Revision 1 is the create. */
 export function checkpoints(history: readonly HistoryEntry[]): Checkpoint[] {
@@ -39,28 +41,13 @@ export function checkpoints(history: readonly HistoryEntry[]): Checkpoint[] {
 			actor: entry.actor,
 			restoredFrom: entry.restoredFrom,
 			approval: entry.approval,
+			valid: entry.valid ?? (entry.uncompatible?.length ?? 0) === 0,
 			fields: Object.entries(entry.changed)
 				.filter(([field]) => !BOOKKEEPING.has(field))
 				.map(([field]) => field)
 		}))
 		.sort((a, b) => a.revision - b.revision);
 }
-/** A revision's place on a `1..latest` ruler, in percent; one revision sits at the end. */
-export const tickAt = (revision: number, latest: number) =>
-	latest <= 1 ? 100 : ((revision - 1) / (latest - 1)) * 100;
-/** The revision nearest a fraction (0–1) of the ruler. */
-export const tickOf = (fraction: number, latest: number) =>
-	Math.min(latest, Math.max(1, Math.round(fraction * (latest - 1)) + 1));
-/** The revisions drawn as ticks: all of them up to `max`, else every n-th, the first, the last and `keep` (the playhead). */
-export function drawnTicks(latest: number, max: number, keep: number | null = null): number[] {
-	const step = Math.max(1, Math.ceil(latest / max));
-	const out = new Set<number>();
-	for (let r = 1; r <= latest; r += step) out.add(r);
-	out.add(latest);
-	if (keep !== null && keep >= 1 && keep <= latest) out.add(keep);
-	return [...out].sort((a, b) => a - b);
-}
-
 /** Why a restore (a record's, or a rejected approval's rollback) left a field as it is, in words. */
 export function skipText(bolt: Pick<ViewBolt, 't'>, reason: string): string {
 	switch (reason) {

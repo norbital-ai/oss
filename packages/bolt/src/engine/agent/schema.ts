@@ -353,7 +353,7 @@ const SHOWN: ReadonlySet<string> = new Set([
 	'skill',
 	'workspace_read',
 	'workspace_search',
-	'workspace_list',
+	'workspace_list_dir',
 	'workspace_lang',
 	'workspace_diagnose',
 	'workspace_test',
