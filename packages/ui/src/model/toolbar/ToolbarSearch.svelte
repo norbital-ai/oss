@@ -80,6 +80,12 @@ A toolbar search trigger and popover with a bound text value or a custom indexed
 					aria-label={label}
 					onkeydown={(event) => {
 						if (event.key === 'Enter') open = false;
+						if (event.key === 'Escape') {
+							// the search is the topmost layer: its Escape must not close the dialog or sheet beneath it
+							event.preventDefault();
+							event.stopPropagation();
+							open = false;
+						}
 					}}
 					data-search
 				/>

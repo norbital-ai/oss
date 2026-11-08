@@ -20,6 +20,7 @@ permissions:
 jobs:
   check:
     runs-on: ubuntu-latest
+    timeout-minutes: 12
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -47,6 +48,22 @@ jobs:
         run: pnpm exec playwright install --with-deps chromium
 
       # Public and private templates have their own repositories and CI; this repository gates the
-      # publishable package graph plus the one oss suite (`pnpm test`).
-      - name: Check publishable packages
-        run: pnpm check:packages:ci
+      # publishable package graph plus the one oss suite (`pnpm test`). Each phase is its own step so a
+      # stalled phase names itself in the run summary instead of disappearing inside one long step.
+      - name: Build packages
+        run: pnpm exec turbo run build --concurrency=1
+
+      - name: Lint
+        run: pnpm exec turbo run lint --concurrency=1
+
+      - name: Types compatibility
+        run: pnpm types:compat
+
+      # The full suite is 3,080 tests. Four workers keep it under the two-minute budget on the
+      # four-vCPU runner; the step budget makes a hung worker a failure, not a half-hour wait.
+      - name: Test
+        timeout-minutes: 6
+        run: pnpm test --maxWorkers=4
+
+      - name: Check packed archives
+        run: pnpm publication:check
