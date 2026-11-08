@@ -67,6 +67,10 @@ it('expanding a lane leaves hints closed and keeps its search keyboard-accessibl
 			.element(page.getByRole('searchbox', { name: 'Search', exact: true }))
 			.toBeVisible();
 		await userEvent.keyboard('{Escape}');
+		// Escape dismisses the search popover, never the dialog beneath it: assert the state before a
+		// click so a bubbling Escape fails here, not as a 15-second Playwright actionability timeout.
+		await expect.poll(() => document.querySelector('[data-search-panel]')).toBeNull();
+		await expect.element(page.getByRole('dialog')).toBeVisible();
 		await page.getByRole('dialog').getByRole('button', { name: 'Close', exact: true }).click();
 		await expect.poll(() => document.activeElement === opener).toBe(true);
 	} finally {
