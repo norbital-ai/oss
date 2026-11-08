@@ -63,9 +63,11 @@ it('expanding a lane leaves hints closed and keeps its search keyboard-accessibl
 		await expect.poll(() => document.activeElement?.hasAttribute('data-search-toggle')).toBe(true);
 		await expect.element(page.getByText('Search', { exact: true })).toBeVisible();
 		await userEvent.keyboard('{Enter}');
-		await expect
-			.element(page.getByRole('searchbox', { name: 'Search', exact: true }))
-			.toBeVisible();
+		const search = page.getByRole('searchbox', { name: 'Search', exact: true });
+		await expect.element(search).toBeVisible();
+		// the popover moves focus into its input asynchronously; Escape must wait for that focus,
+		// otherwise it is dispatched to the dialog underneath and closes the wrong layer
+		await expect.element(search).toHaveFocus();
 		await userEvent.keyboard('{Escape}');
 		// Escape dismisses the search popover, never the dialog beneath it: assert the state before a
 		// click so a bubbling Escape fails here, not as a 15-second Playwright actionability timeout.
