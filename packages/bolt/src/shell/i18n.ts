@@ -846,8 +846,10 @@ export const SHELL_ZH: { readonly [key: string]: string } = {
 	'Newcomers may sign up': '允许新用户自行注册',
 	'Change workspace': '切换工作区',
 	Branding: '品牌',
-	'The name and logo every member sees.': '所有成员看到的名称和标志。',
-	'Workspace name': '工作区名称',
+	'Workspace handle': '工作区句柄',
+	'The workspace handle is its identity in every address and record.':
+		'工作区句柄是它在每个地址和记录中的身份。',
+	'The logo every member sees.': '所有成员看到的标志。',
 	Logo: '标志',
 	'Remove logo': '移除标志',
 	'The logo must be a PNG, SVG, WebP or JPEG image of at most 256 KiB.':
