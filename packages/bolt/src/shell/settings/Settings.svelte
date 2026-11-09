@@ -240,9 +240,9 @@
 		form = { keyName: '', keyTeam: '' };
 	}
 
-	// L-COL-199: the workspace's name and logo, when the host lets an administrator edit them; a saved change reloads the shell's branding
+	// L-COL-199: the workspace's logo, when the host lets an administrator edit it; a saved change reloads the shell's branding
 	// svelte-ignore state_referenced_locally
-	let brand = $state({ name: workspace.name, logo: workspace.logo ?? (null as string | null) });
+	let brand = $state({ logo: workspace.logo ?? (null as string | null) });
 	/** The host's ceiling on an inline logo (a `data:` URL's length). */
 	const LOGO_MAX = 256 * 1024;
 	function pickLogo(file: File | undefined): void {
@@ -261,7 +261,7 @@
 	}
 	const saveBrand = Effect.fn('Settings.saveBrand')(function* () {
 		mutationError = null;
-		const r = yield* Effect.result(api.organization(brand.name.trim(), brand.logo));
+		const r = yield* Effect.result(api.organization(brand.logo));
 		if (r._tag === 'Success') location.reload();
 		else mutationError = r.failure.message;
 	});
@@ -354,15 +354,19 @@
 	{:else if tab === 'organization'}
 		{#snippet workspaceInfo()}
 			<dl class="grid grid-cols-[max-content_minmax(0,1fr)] gap-x-6 gap-y-2 text-sm">
-				<dt class="text-muted-foreground">{t('Workspace')}</dt>
-				<dd>{workspace.name}</dd>
+				<dt class="text-muted-foreground">{t('Workspace handle')}</dt>
+				<dd>{workspace.handle}</dd>
 				<dt class="text-muted-foreground">{t('Locale')}</dt>
 				<dd>{workspace.locale}</dd>
 				<dt class="text-muted-foreground">{t('Time zone')}</dt>
 				<dd>{workspace.tz}</dd>
 			</dl>
 		{/snippet}
-		{@render card(t('Workspace'), t('Set by the workspace source.'), workspaceInfo)}
+		{@render card(
+			t('Workspace'),
+			t('The workspace handle is its identity in every address and record.'),
+			workspaceInfo
+		)}
 		{#if workspace.organization}
 			{#snippet branding()}
 				<form
@@ -372,10 +376,6 @@
 						fork(saveBrand());
 					}}
 				>
-					<label class="flex flex-col gap-1 text-sm"
-						><span class="text-muted-foreground">{t('Workspace name')}</span>
-						<Input class="h-8" required maxlength={80} bind:value={brand.name} /></label
-					>
 					<div class="flex flex-wrap items-center gap-3 text-sm">
 						<span class="text-muted-foreground">{t('Logo')}</span>
 						{#if brand.logo !== null}<img
@@ -395,11 +395,11 @@
 							>{/if}
 					</div>
 					<Cluster gap="sm"
-						><Button type="submit" disabled={brand.name.trim() === ''}>{t('Save')}</Button></Cluster
+						><Button type="submit">{t('Save')}</Button></Cluster
 					>
 				</form>
 			{/snippet}
-			{@render card(t('Branding'), t('The name and logo every member sees.'), branding)}
+			{@render card(t('Branding'), t('The logo every member sees.'), branding)}
 		{/if}
 		{#if assistant !== null}
 			{@const a = assistant}

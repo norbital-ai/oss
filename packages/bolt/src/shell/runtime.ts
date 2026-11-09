@@ -227,9 +227,9 @@ export function shellApi(
 		/** An integration instance's host verbs (`/__bolt/integrations/<instance>/…`); the host authorizes "may update this row". */
 		integration: instances,
 		integrationOffers: () => integrationOffers({ base: based(`${BOLT}/integrations/`), fetch: f }),
-		/** L-COL-199: the workspace's name and logo (`null`, an `https:` URL or a `data:image/…` URL), an administrator's. */
-		organization: (name: string, logo: string | null) =>
-			done('POST', `${SHELL}/organization`, { name, logo }),
+		/** L-COL-199: the workspace's logo (`null`, an `https:` URL or a `data:image/…` URL), an administrator's. */
+		organization: (logo: string | null) =>
+			done('POST', `${SHELL}/organization`, { logo }),
 		/** An instance's raw messages, both directions, newest first (an administrator's; the instance's Messages tab). */
 		instanceMessages: (instance: string, before?: string) =>
 			call(

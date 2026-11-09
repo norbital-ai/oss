@@ -672,8 +672,8 @@ export type ShellApi = {
 	integration(instance: string): ReturnType<typeof integrationClient>;
 	/** Every definition with the providers this host offers for it: the envoys' channels. */
 	integrationOffers(): ReturnType<typeof integrationOffers>;
-	/** L-COL-199: the workspace's name and logo (`null`, an `https:` URL or a `data:image/…` URL), an administrator's. */
-	organization(name: string, logo: string | null): Call<void>;
+	/** L-COL-199: the workspace's logo (`null`, an `https:` URL or a `data:image/…` URL), an administrator's. */
+	organization(logo: string | null): Call<void>;
 	/** An instance's raw messages, both directions, newest first (an administrator's). */
 	instanceMessages(instance: string, before?: string): Call<readonly InstanceMessage[]>;
 	/** Sync health and dead-letter replay require update permission on this instance. */

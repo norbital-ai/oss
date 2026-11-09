@@ -193,7 +193,7 @@ export type ShellHostConfig = {
 	readonly client?: string;
 	readonly notice?: (auth: Authority) => Promise<ShellNotice | null>;
 	readonly organization?: {
-		write(auth: Authority, branding: { name: string; logo: string | null }): Promise<void>;
+		write(auth: Authority, branding: { logo: string | null }): Promise<void>;
 	};
 	readonly apex?: string;
 	/** Set when this shell serves a preview environment: the live workspace's address (the preview banner's link). */
@@ -240,9 +240,8 @@ const SyncReplay = Schema.Struct({
 	ids: Schema.optionalKey(Schema.Array(Schema.NonEmptyString))
 });
 const RunId = Schema.Struct({ id: Schema.String });
-/** L-COL-199: the workspace's name and logo (`null`, an `https:` URL or a `data:image/…` URL). */
+/** L-COL-199: the workspace's logo (`null`, an `https:` URL or a `data:image/…` URL). */
 const Branding = Schema.Struct({
-	name: Schema.String,
 	logo: Schema.optionalKey(Schema.NullOr(Schema.String))
 });
 const getHeader = (request: HttpServerRequest.HttpServerRequest, name: string) =>
@@ -1173,7 +1172,7 @@ const makeShell = Effect.gen(function* () {
 					).pipe(Effect.provideService(Audit, audit))
 				});
 			case 'POST /organization': {
-				// L-COL-199: the workspace's name and logo, an administrator's (never a previewed member's)
+				// L-COL-199: the workspace's logo, an administrator's (never a previewed member's)
 				if (c.organization === undefined)
 					return refused(
 						'unavailable',
@@ -1183,12 +1182,8 @@ const makeShell = Effect.gen(function* () {
 				if (!auth.admin)
 					return refused('forbidden', 'Only an administrator edits the organization.', 403);
 				const b = yield* requestBody(request, Branding);
-				if (b.name.trim() === '')
-					return yield* Effect.fail(
-						BoltError.make('invalid', 'decode', 'the body is { name, logo: string | null }')
-					);
 				const organization = c.organization,
-					branding = { name: b.name.trim(), logo: b.logo ?? null };
+					branding = { logo: b.logo ?? null };
 				yield* hostCall(() => organization.write(auth, branding));
 				return json({ value: null });
 			}

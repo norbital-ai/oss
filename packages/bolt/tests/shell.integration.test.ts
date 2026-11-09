@@ -154,7 +154,7 @@ const studioState: StudioState = {
 const studioOps: StudioOp[] = [];
 const inspectionScopes: StudioInspectInput[] = [];
 // the host's branding port (L-COL-199): what an administrator wrote
-const branded: { name: string; logo: string | null }[] = [];
+const branded: { logo: string | null }[] = [];
 const studio: StudioPort = {
 	state: async () => studioState,
 	bundle: async () => '/__host/studio.js',
@@ -597,28 +597,17 @@ layer(workspace)('shell routes', (it) => {
 				Effect.gen(function* () {
 					const logo = 'data:image/png;base64,iVBORw0KGgo=';
 					expect(
-						(yield* call(admin, 'POST', '/__bolt/shell/organization', { name: ' Acme Ltd ', logo }))
-							.status
+						(yield* call(admin, 'POST', '/__bolt/shell/organization', { logo })).status
 					).toBe(200);
 					expect(
-						(yield* call(admin, 'POST', '/__bolt/shell/organization', { name: 'Acme', logo: null }))
-							.status
+						(yield* call(admin, 'POST', '/__bolt/shell/organization', { logo: null })).status
 					).toBe(200);
-					expect(branded).toEqual([
-						{ name: 'Acme Ltd', logo },
-						{ name: 'Acme', logo: null }
-					]);
+					expect(branded).toEqual([{ logo }, { logo: null }]);
 					expect(
-						(yield* call(admin, 'POST', '/__bolt/shell/organization', { name: '', logo: null }))
-							.status
+						(yield* call(admin, 'POST', '/__bolt/shell/organization', { logo: 7 })).status
 					).toBe(400);
 					expect(
-						(yield* call(admin, 'POST', '/__bolt/shell/organization', { name: 'Acme', logo: 7 }))
-							.status
-					).toBe(400);
-					expect(
-						(yield* call(rep, 'POST', '/__bolt/shell/organization', { name: 'Rep Co', logo: null }))
-							.status
+						(yield* call(rep, 'POST', '/__bolt/shell/organization', { logo: null })).status
 					).toBe(403);
 					expect(branded).toHaveLength(2);
 				})
