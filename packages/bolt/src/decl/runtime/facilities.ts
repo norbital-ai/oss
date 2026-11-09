@@ -393,6 +393,8 @@ export type IngestOptions = {
 	pictures?: boolean;
 	/** That one page of a PDF as a picture: what a text read of a scan or a drawing leaves in the file. */
 	page?: number;
+	/** A locked PDF's or Office file's password (xlsx, xls, docx, doc, pptx, ppt): it opens this read and is never stored. */
+	password?: string;
 	diarize?: boolean;
 	language?: string;
 	speakers?: number;

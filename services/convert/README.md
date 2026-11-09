@@ -125,6 +125,13 @@ video's picture is ignored. `options` is `{ diarize?, language?, speakers?, prom
 `<section data-speaker="S1" data-start="12.3" data-end="15"><time>00:00:12</time> text</section>` per segment (seconds,
 one decimal); the model's usage, summed over the chunks as the provider reports it, is `meta.usage`.
 
+**Locked files.** `options.password` (on `/v1/ingest/raw` the `x-ingest-password` header, base64 of its UTF-8, never the
+URL) opens a password-protected PDF or Office file: MuPDF's `mutool clean -D` writes an open copy of a PDF, and
+officecrypto-tool decrypts ECMA-376 agile or standard encryption (xlsx, docx, pptx) and the binary formats' RC4 (xls, doc,
+ppt); the copy is then read as any other file. Without a password a locked file fails `<name> is password-protected: read
+it again with its password`; a wrong one fails `the password does not open <name>`. The password lives in the job's row
+until the job is pruned and on the read's process arguments; no answer or log quotes it.
+
 **No OCR.** No engine here reads pixels for words, and no OCR language data or model of any kind is in the image: its build
 fails if one arrives with a package.
 

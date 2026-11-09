@@ -520,6 +520,25 @@ test('a PDF read from disk stays by its hash: a page of it needs no second uploa
 	assert.deepEqual(read, ['%PDF stand-in', '%PDF stand-in']);
 });
 
+test('a password rides its header to the job, never the URL', async () => {
+	const seen: (string | undefined)[] = [];
+	const { call, watch } = await start({
+		convert: echo,
+		ingest: (job) =>
+			Effect.sync(() => {
+				seen.push(job.options?.password);
+				writeFileSync(job.out, '{}');
+			})
+	});
+	const posted = await call('/v1/ingest/raw?name=a.xlsx&mime=application/vnd.ms-excel', {
+		method: 'POST',
+		body: 'x',
+		headers: { 'x-ingest-password': Buffer.from('pâss wörd 中').toString('base64') }
+	});
+	await watch(job(await posted.json()).id);
+	assert.deepEqual(seen, ['pâss wörd 中']);
+});
+
 test('a burst from one tenant queues behind itself, and its interactive work goes first', () => {
 	const q = openQueue(join(dir, `db-${n++}.db`));
 	const job = (lane: string, priority = 1) => q.submit('o', 'ingest', '{}', null, lane, priority).id;

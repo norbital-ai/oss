@@ -36,6 +36,7 @@ import { actorRef } from '../write/commit.ts';
 import { readLog, runLog } from '../guest/telemetry.ts';
 import { readableFile } from '../decisions/index.ts';
 import { toBase64 } from '../crypto.ts';
+import { sha256Hex } from '@norbital-ai/store';
 import { FOLDER_NOTES, roleAt } from '../../decl/layout.ts';
 import type { Json } from '../../decl/values.ts';
 import { encodeWire } from '@norbital-ai/std/wire';
@@ -373,7 +374,7 @@ export type ToolContext = {
 	ingest?:
 		| ((
 				file: { sha256: string; name: string; mime: string; key: string; size: number },
-				page?: number
+				read?: { readonly page?: number; readonly password?: string }
 		  ) => Effect.Effect<Ingested | { readonly unsupported: string }, PortFailure>)
 		| undefined;
 	/** What the last step's calls opened, for the next request alone (rule 62's budget), each after the call that opened it. */
@@ -2386,6 +2387,7 @@ A committed write answers the stored rows; a held one waits for approval.`,
 			image?: number | undefined;
 			page?: number | undefined;
 			crops?: readonly (readonly [number, number, number, number])[] | undefined;
+			password?: string | undefined;
 		}
 	) {
 		const o = entry.ingest.output,
@@ -2433,7 +2435,10 @@ A committed write answers the stored rows; a held one waits for approval.`,
 			});
 			if (source === undefined || x.ingest === undefined)
 				return err('The file is no longer stored.');
-			const got = yield* x.ingest(source, i.page);
+			const got = yield* x.ingest(source, {
+				page: i.page,
+				...(i.password === undefined ? {} : { password: i.password })
+			});
 			const picture = 'unsupported' in got ? undefined : got.images[0];
 			if (picture === undefined) return err(`${entry.name} has no page ${i.page} to show.`);
 			const id = `${entry.id}#page-${i.page}`;
@@ -2553,9 +2558,13 @@ A committed write answers the stored rows; a held one waits for approval.`,
 	const ingestFile = Effect.fn('AgentTool.ingestFile')(function* (
 		fileStore: NonNullable<Engine['files']>,
 		file: typeof SourceFile.Type,
-		how: Exclude<ReturnType<typeof route>, 'unsupported'>
+		how: Exclude<ReturnType<typeof route>, 'unsupported'>,
+		password?: string
 	) {
 		const port = x.ingest;
+		// a locked file's parse is kept under its password too: only a reader who holds that password reuses it
+		const cacheKey =
+			password === undefined ? file.sha256 : sha256Hex(`${file.sha256}\0${password}`);
 		const [added] = (yield* x.engine.db.write({
 			text: `UPDATE sys_conversation SET outputs = outputs || jsonb_build_array($2::jsonb || jsonb_build_object('ingest',
 				$3::jsonb || jsonb_build_object('output', 'o' || (1 + (SELECT count(*) FROM jsonb_array_elements(outputs) e WHERE e ? 'ingest')))))
@@ -2590,7 +2599,7 @@ A committed write answers the stored rows; a held one waits for approval.`,
 				})
 			);
 		const work = Effect.gen(function* () {
-			const hit = yield* cached(x.engine.db, fileStore, file.sha256);
+			const hit = yield* cached(x.engine.db, fileStore, cacheKey);
 			let stored: Stash;
 			// plan 12 billing: a conversion's compute is `ingest.convert`; a cache hit records the hit and no compute
 			if (hit !== undefined) {
@@ -2613,13 +2622,16 @@ A committed write answers the stored rows; a held one waits for approval.`,
 						: how === 'text'
 							? textIngest(yield* fileStore.get(file.key, INGEST_BYTES))
 							: port !== undefined
-								? yield* port({
-										sha256: file.sha256,
-										name: file.name,
-										mime: file.mime,
-										key: file.key,
-										size: file.size
-									})
+								? yield* port(
+										{
+											sha256: file.sha256,
+											name: file.name,
+											mime: file.mime,
+											key: file.key,
+											size: file.size
+										},
+										password === undefined ? {} : { password }
+									)
 								: { unsupported: 'This host cannot ingest files.' };
 				if ('unsupported' in got)
 					return yield* Effect.fail(
@@ -2640,7 +2652,7 @@ A committed write answers the stored rows; a held one waits for approval.`,
 				stored = yield* stash(
 					x.engine.db,
 					fileStore,
-					{ sha256: file.sha256, base, member, now: x.bindings.now },
+					{ sha256: cacheKey, base, member, now: x.bindings.now },
 					got
 				);
 				yield* record('ingest.convert', {
@@ -2727,7 +2739,7 @@ A committed write answers the stored rows; a held one waits for approval.`,
 	const readFileTool = shared('read_file', () =>
 		Tool.make('read_file', {
 			description:
-				"Read a file by id: a conversation file, a record's file or a tool's output. A document, scan, sheet or recording is parsed first. A reference is listed, '<reference>/<path>' read, and text greps it. Answers text; a document as numbered lines, its page images shown to you (from, to page; text greps, a|b for either, each hit with its page); a sheet as columns and first rows. image: n shows one image; with crops, up to 8 regions of it at once. call reads more of a clipped result.",
+				"Read a file by id: a conversation file, a record's file or a tool's output. A document, scan, sheet or recording is parsed first. A reference is listed, '<reference>/<path>' read, and text greps it. Answers text; a document as numbered lines, its page images shown to you (from, to page; text greps, a|b for either, each hit with its page); a sheet as columns and first rows. image: n shows one image; with crops, up to 8 regions of it at once. call reads more of a clipped result. password opens a locked PDF or Office file.",
 			parameters: Schema.Struct({
 				id: Schema.optionalKey(Schema.String),
 				from: Schema.optionalKey(Schema.Number.check(Schema.isInt())),
@@ -2743,7 +2755,10 @@ A committed write answers the stored rows; a held one waits for approval.`,
 						.annotate({ description: '[left, top, right, bottom], fractions 0 to 1' })
 				),
 				call: Schema.optionalKey(Schema.String),
-				offset: Schema.optionalKey(Schema.Number.check(Schema.isInt()))
+				offset: Schema.optionalKey(Schema.Number.check(Schema.isInt())),
+				password: Schema.optionalKey(Schema.String).annotate({
+					description: 'the password the person gave for this file'
+				})
 			}),
 			success: ToolAnswer
 		})
@@ -2824,7 +2839,7 @@ A committed write answers the stored rows; a held one waits for approval.`,
 						if (e.files === undefined) return err('This host cannot parse files.');
 						if ((how === 'convert' || how === 'audio') && x.ingest === undefined)
 							return err('This host cannot parse files.');
-						const started = yield* ingestFile(e.files, file, how);
+						const started = yield* ingestFile(e.files, file, how, i.password);
 						const settled = yield* x.jobs.wait([started.job], x.inlineMs ?? JOBS.inlineMs);
 						if (settled === null)
 							return ok({

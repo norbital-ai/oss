@@ -202,7 +202,7 @@ const ingestJob = (
 	config: DocumentConverterConfig,
 	file: { readonly name: string; readonly mime: string; readonly sha256?: string; readonly lane?: string },
 	bytes: Uint8Array | ReadableStream<Uint8Array>,
-	options: object
+	{ password, ...options }: object & { readonly password?: string }
 ) =>
 	Effect.gen(function* () {
 		const fetcher = config.fetch ?? fetch,
@@ -241,7 +241,14 @@ const ingestJob = (
 			fetcher(`${base}/v1/ingest/raw?${query}`, {
 				method: 'POST',
 				signal,
-				headers: { ...headers, 'content-type': 'application/octet-stream' },
+				headers: {
+					...headers,
+					'content-type': 'application/octet-stream',
+					// a header, never the URL a log keeps
+					...(password === undefined
+						? {}
+						: { 'x-ingest-password': toBase64(new TextEncoder().encode(password)) })
+				},
 				...(body instanceof Uint8Array
 					? { body: new Uint8Array(body) }
 					: // a streamed request body is half duplex (Node requires saying so)

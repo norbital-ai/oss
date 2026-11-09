@@ -17,7 +17,8 @@ const Job = Schema.fromJsonString(
 				speakers: Schema.optionalKey(Schema.Number),
 				prompt: Schema.optionalKey(Schema.String),
 				pictures: Schema.optionalKey(Schema.Boolean),
-				page: Schema.optionalKey(Schema.Number)
+				page: Schema.optionalKey(Schema.Number),
+				password: Schema.optionalKey(Schema.String)
 			})
 		)
 	})

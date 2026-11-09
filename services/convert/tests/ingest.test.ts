@@ -9,7 +9,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterAll, test } from '@effect/vitest';
 import { Effect, Schema } from 'effect';
-import { ingester } from '../src/ingest.ts';
+import { ingester, type Ingested } from '../src/ingest.ts';
 import { readTo } from '../src/job.ts';
 import { route } from '../src/route.ts';
 import { service } from '../src/server.ts';
@@ -214,6 +214,21 @@ test('legacy doc and xls read natively', async () => {
 	assert.match(JSON.stringify(xls), /"Shipped"/);
 });
 
+/** A locked fixture read as its open twin is, with its password; without it, or with a wrong one, a refusal naming it. */
+const opensLike = async (name: string, open: string, mime: string) => {
+	const read = (file: string, password?: string) =>
+		ingest({ name: file, mime, bytes: fixture(file), ...(password === undefined ? {} : { options: { password } }) });
+	const why = async (password?: string) => (await Effect.runPromise(Effect.flip(read(name, password)))).message;
+	assert.equal(await why(), `${name} is password-protected: read it again with its password`);
+	assert.equal(await why('wrong'), `the password does not open ${name}`);
+	const parse = (out: Ingested) => (out.kind === 'data' ? out.json : out.html);
+	assert.deepEqual(parse(await Effect.runPromise(read(name, 'convert'))), parse(await Effect.runPromise(read(open))), name);
+};
+test('a locked xlsx or docx opens with its password', async () => {
+	await opensLike('locked.xlsx', 'tables.xlsx', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+	await opensLike('locked.docx', 'tables.docx', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
+});
+
 // ---------- over HTTP ----------
 const dir = mkdtempSync(join(tmpdir(), 'convert-ingest-'));
 const running: { stop: () => Promise<void> }[] = [];
@@ -272,6 +287,7 @@ test('POST /v1/jobs takes an ingest too: 202, then the result as JSON', async ()
 
 const poppler = spawnSync('pdftotext', ['-v']).status === 0;
 const typst = spawnSync('typst', ['--version']).status === 0;
+const mutool = spawnSync('mutool', ['-v']).status !== null;
 test.skipIf(!poppler || !typst)('a long PDF read across page ranges keeps its pages in order', async () => {
 	const dir = mkdtempSync(join(tmpdir(), 'long-pdf-')),
 		source = join(dir, 'long.typ'),
@@ -303,6 +319,9 @@ test.skipIf(!poppler || !typst)('a PDF keeps its accents, curly quotes and Greek
 	);
 	assert.ok(text.kind === 'document' && text.html.includes('Façade ‘quoted’ φ 5% — naïve 中文'), text.kind === 'document' ? text.html : '');
 });
+test.skipIf(!poppler || !mutool)('a locked PDF opens with its password', () =>
+	opensLike('locked.pdf', 'invoice.pdf', 'application/pdf')
+);
 test.skipIf(!poppler)('a PDF read from the disk: its text a page at a time, one page as a picture', async () => {
 	const path = fileURLToPath(new URL('./fixtures/ruled.pdf', import.meta.url)),
 		scan = fileURLToPath(new URL('./fixtures/scan.pdf', import.meta.url));

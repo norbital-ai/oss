@@ -14,7 +14,8 @@
 //                               POST /v1/jobs { op: 'ingest', … } → 202 job
 //   POST /v1/ingest/raw         ?name&mime&options&sha256&lane, the file as the body → 202 job; with sha256 a PDF stays an
 //                               hour past its last read and a kept one's body is not needed; `lane` (a tenant) is
-//                               what claims stay fair across
+//                               what claims stay fair across; `x-ingest-password` (base64 of its UTF-8) opens a locked
+//                               PDF or Office file. The job row holds it until the job is pruned
 //   GET  /v1/kept/:sha256       200 while that file is kept, 404 when it must be sent
 //   GET  /healthz               unauthenticated liveness and queue depth
 //
@@ -123,7 +124,9 @@ const AudioOptions = Schema.Struct({
 	speakers: Schema.optionalKey(Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 50 }))),
 	prompt: Schema.optionalKey(Schema.String.check(Schema.isMaxLength(4000))),
 	pictures: Schema.optionalKey(Schema.Boolean),
-	page: Schema.optionalKey(Schema.Int.check(Schema.isGreaterThan(0)))
+	page: Schema.optionalKey(Schema.Int.check(Schema.isGreaterThan(0))),
+	/** A locked PDF's or Office file's password: on the raw route its header, never the URL a log keeps. */
+	password: Schema.optionalKey(Schema.String.check(Schema.isMaxLength(255)))
 });
 const StoredIngest = Schema.fromJsonString(
 	Schema.Struct({
@@ -505,7 +508,11 @@ export function service(o: Options) {
 					const name = url.searchParams.get('name') ?? '',
 						mime = url.searchParams.get('mime') ?? '',
 						options = url.searchParams.get('options'),
-						asked = options === null ? {} : Schema.decodeUnknownSync(AudioOptions)(JSON.parse(options)),
+						password = req.headers['x-ingest-password'],
+						asked = Schema.decodeUnknownSync(AudioOptions)({
+							...(options === null ? {} : JSON.parse(options)),
+							...(typeof password === 'string' ? { password: Buffer.from(password, 'base64').toString('utf8') } : {})
+						}),
 						where = route(name, mime);
 					if (!where.ok) return send(res, 415, { error: 'unsupported', message: where.message });
 					if (where.kind === 'audio' && !o.transcribes)

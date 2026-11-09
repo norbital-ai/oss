@@ -38,7 +38,12 @@ const sheet = {
 	images: [{ name: 'image-1.png', mime: 'image/png', bytes: 'iVA=' }],
 	meta: { stats: { pages: null, bytes: 7, cpuMs: 1, wallMs: 2 } }
 };
-const seen: { path: string; auth: string | undefined; body: Buffer }[] = [];
+const seen: {
+	path: string;
+	auth: string | undefined;
+	password: string | undefined;
+	body: Buffer;
+}[] = [];
 const answers: { readonly [job: string]: unknown } = { j1: result, j2: audio, j3: sheet, j9: result };
 const jobs: { readonly [file: string]: string } = {
 	'rates.xlsx': 'j3',
@@ -54,7 +59,12 @@ const server = createServer((req: IncomingMessage, res: ServerResponse) => {
 	req.on('data', (chunk: Buffer) => chunks.push(chunk));
 	req.on('end', () => {
 		const at = new URL(req.url ?? '/', 'http://localhost');
-		seen.push({ path: req.url ?? '', auth: req.headers.authorization, body: Buffer.concat(chunks) });
+		seen.push({
+			path: req.url ?? '',
+			auth: req.headers.authorization,
+			password: req.headers['x-ingest-password']?.toString(),
+			body: Buffer.concat(chunks)
+		});
 		const name = at.searchParams.get('name');
 		if (at.pathname.startsWith('/v1/kept/'))
 			json(res, at.pathname.endsWith('/abc') ? 404 : 200, {});
@@ -175,6 +185,19 @@ describe('documentIngester', () => {
 			speakers: 2,
 			prompt: 'Concrete pour'
 		});
+	});
+	it('sends a password as its header, never in the URL', async () => {
+		seen.length = 0;
+		await documentIngester({ url, key: 'k' }).ingest(
+			file('statement.pdf'),
+			{ password: 'pâss 1' },
+			new AbortController().signal
+		);
+		const posted = seen.find((one) => one.path.startsWith('/v1/ingest/raw'));
+		expect(Buffer.from(posted?.password ?? '', 'base64').toString('utf8')).toBe('pâss 1');
+		expect(decodeURIComponent(posted?.path ?? '')).not.toContain('pâss');
+		const options = new URL(posted?.path ?? '', url).searchParams.get('options');
+		expect(JSON.parse(options ?? '')).toEqual({});
 	});
 	it('rejects a 503 as the unavailable facility error', async () => {
 		await expect(

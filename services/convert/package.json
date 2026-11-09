@@ -12,6 +12,7 @@
 	"dependencies": {
 		"calamine-node": "0.2.0",
 		"effect": "4.0.6",
+		"officecrypto-tool": "0.0.19",
 		"parse5": "8.0.0",
 		"playwright-core": "1.61.1"
 	},

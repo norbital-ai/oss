@@ -46,8 +46,12 @@ ranges — headings, then page, slide and speaker sections —, table count, ima
 (speakers, segments, `durationMs` from the last end) from the HTML.
 
 - **Port.** `HostPorts.agent.ingest` (`IngestPort['ingest']`, HOST_API 16): `(file, options, signal)` answering
-  `Promise<Ingested | { unsupported }>` for `file: { sha256, name, mime, bytes }` and audio's
-  `options: { diarize?, language?, speakers?, prompt? }`, decoded once on the engine side (`Convert.ingest`).
+  `Promise<Ingested | { unsupported }>` for `file: { sha256, name, mime, bytes }` and
+  `options: { password?, diarize?, language?, speakers?, prompt? }`, decoded once on the engine side (`Convert.ingest`).
+  `password` opens a locked PDF or Office file (xlsx, xls, docx, doc, pptx, ppt) for that read: Convert decrypts a copy
+  (MuPDF for a PDF, officecrypto-tool for Office) and reads it as usual; it travels as the `x-ingest-password` header,
+  never the URL, and is stored nowhere. Without it a locked file fails `<name> is password-protected`, with a wrong one
+  `the password does not open <name>`. The agent's `read_file { id, password }` and `ctx.convert.ingest` both take it.
   `Ingested` is `{ kind: 'document', html, images, meta } | { kind: 'data', json, images, meta }`; `meta.stats` is the
   conversion's compute (`pages`, `bytes`, `cpuMs`, `wallMs`) and audio's `meta.usage` its model calls (`calls`, `model`,
   `input`, `output`, `cost`): the agent records it as an `ai.call` observation and the host bills each call id once.
@@ -67,7 +71,8 @@ ranges — headings, then page, slide and speaker sections —, table count, ima
   HTML as its file, `files` holding the HTML, `images/…`, a recording's `transcript.json` and the engine's `index.json`;
   a data ingest is `"rates.xlsx (data)"` with `data.json` as its file and no HTML; `ingest: { output, source, sha256,
 job, status }`). The stored files are named `ingest/<sha256>/…` and shared: the same bytes are converted once for
-  every conversation.
+  every conversation. A locked file's parse is named by `sha256(<sha256>\0<password>)` instead, so only a reader holding
+  that password reuses it.
 - **Reading.** `read_file { id, from?, to? }` (`id` is the file or its ingest output) answers numbered HTML lines (about
   64 KB, never cutting a table or section) with the images those lines reference shown to the model (at most 8) and where
   to read on; `{ id, text }` the lines holding a text (`{ from, to, text }`, a hit in a table naming the whole table);

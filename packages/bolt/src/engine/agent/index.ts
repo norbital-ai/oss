@@ -1490,15 +1490,18 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 						: {
 								ingest: (
 									file: { sha256: string; name: string; mime: string; key: string; size: number },
-									page?: number
+									read: { readonly page?: number; readonly password?: string } = {}
 								) =>
 									ingester(
 										{ sha256: file.sha256, name: file.name, mime: file.mime, key: file.key },
-										page !== undefined
-											? { page }
-											: file.size > TEXT_FIRST_BYTES
-												? { pictures: false }
-												: {}
+										{
+											...(read.page !== undefined
+												? { page: read.page }
+												: file.size > TEXT_FIRST_BYTES
+													? { pictures: false }
+													: {}),
+											...(read.password === undefined ? {} : { password: read.password })
+										}
 									).pipe(Port.call('ingest', JOBS.ingestMs))
 							}),
 					// every inward agent reads the source (models, policies) for exact shapes; a public envoy's or external member's turn does not

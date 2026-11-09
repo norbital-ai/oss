@@ -1970,6 +1970,34 @@ describe('read_file parses a file: filed in the outputs, read in windows', () =>
 				});
 			})
 	);
+	it.effect(
+		'a password read is kept under its password: a reader without it converts again, one with it reuses it',
+		() =>
+			Effect.gen(function* () {
+				const bytes = new TextEncoder().encode(`%PDF locked ${randomUUID()}`);
+				const asked: (string | undefined)[] = [];
+				const port = {
+					ingest: (_: unknown, read?: { readonly password?: string }) =>
+						Effect.sync(() => (asked.push(read?.password), tender))
+				};
+				const read = (password?: string) =>
+					Effect.gen(function* () {
+						const { x, id } = yield* holding(
+							`c-${randomUUID()}`,
+							{ name: 'locked.pdf', mime: 'application/pdf', bytes },
+							port
+						);
+						return yield* result(x, 'read_file', {
+							id,
+							...(password === undefined ? {} : { password })
+						});
+					});
+				expect(yield* read('pw')).toMatchObject({ result: { id: 'o1' } });
+				yield* read();
+				yield* read('pw');
+				expect(asked).toEqual(['pw', undefined]);
+			})
+	);
 	it.live('a failed job says so once; reading it while it runs says it is still ingesting', () =>
 		Effect.gen(function* () {
 			const gate = yield* Deferred.make<void>();

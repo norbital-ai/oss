@@ -8,13 +8,16 @@
 //   txt → <pre> · png jpeg gif webp → one <img> · audio → the transcription model, one <section> per segment
 //   csv tsv → typed sheets · json → itself, parsed
 //   video, CAD, anything else → 415 (no parser)
+import { readFile, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
 import { Effect, Schema } from 'effect';
+import officeCrypto from 'officecrypto-tool';
 import { escape, Images, write, type Block, type Image } from './blocks.ts';
 import { route, type Kind } from './route.ts';
 import { html } from './readers/html.ts';
 import { converted, office } from './readers/office.ts';
 import { readPdf } from './readers/pdf.ts';
-import { named, tool } from './readers/tools.ts';
+import { named, scratch, tool } from './readers/tools.ts';
 import { workbook } from './readers/workbook.ts';
 import { parseCsv, sheet, typed, type Sheets } from './sheets.ts';
 import type { TranscribeOptions, Transcriber, Usage } from './transcribe.ts';
@@ -24,8 +27,14 @@ export type Parsed = { kind: 'document'; html: string; images: Image[] } | { kin
 /** The job's own facts, beside the parse: what it cost, and the transcription model's usage. */
 export type Meta = { usage?: Usage; stats: { pages: number | null; bytes: number; cpuMs: number; wallMs: number } };
 export type Ingested = Parsed & { meta: Meta };
-/** `path` is the file on the volume, for the readers that take it from there. */
-export type IngestRequest = { name: string; mime: string; bytes: Uint8Array; path?: string; options?: TranscribeOptions };
+/** `path` is the file on the volume, for the readers that take it from there. `password` opens a locked PDF or Office file. */
+export type IngestRequest = {
+	name: string;
+	mime: string;
+	bytes: Uint8Array;
+	path?: string;
+	options?: TranscribeOptions & { password?: string };
+};
 export class IngestFailed extends Schema.TaggedError<IngestFailed>()('IngestFailed', {
 	message: Schema.String
 }) {}
@@ -41,6 +50,46 @@ export type IngestOptions = {
 	/** Audio's transcription model; absent, audio is refused before it is queued. */
 	transcribe?: Transcriber;
 };
+
+/** The Office formats officecrypto-tool opens: ECMA-376 agile and standard encryption, and the binary formats' RC4. */
+const OFFICE = /^(xlsx|xls|docx|doc|pptx|ppt)$/;
+const locked = (name: string) =>
+	new IngestFailed({ message: `${name} is password-protected: read it again with its password` });
+const refused = (name: string) => new IngestFailed({ message: `the password does not open ${name}` });
+/** A file officecrypto-tool cannot parse as a container (an older binary format) is not one it can open either. */
+const encrypted = (bytes: Buffer) => {
+	try {
+		return officeCrypto.isEncrypted(bytes);
+	} catch {
+		return false;
+	}
+};
+/**
+ * The file as the readers take it: a locked PDF or Office file opened with `password` into a copy of its own, anything
+ * else as it is. An error never quotes the command line, which holds the password.
+ */
+const unlocked = (path: string, ext: string, name: string, password: string | undefined) =>
+	Effect.gen(function* () {
+		if (ext === 'pdf') {
+			if (password === undefined) return path;
+			const open = join(yield* scratch, 'input.pdf');
+			// ponytail: mutool takes the password only on its command line, which only this container's user can see
+			yield* tool('mutool', ['clean', '-D', '-p', password, path, open]).pipe(
+				Effect.mapError((error) =>
+					/password/i.test(error.message) ? refused(name) : new IngestFailed({ message: `${name} could not be opened` })
+				)
+			);
+			return open;
+		}
+		if (!OFFICE.test(ext)) return path;
+		const bytes = yield* Effect.tryPromise({ try: () => readFile(path), catch: () => new IngestFailed({ message: `${name} could not be read` }) });
+		if (!encrypted(bytes)) return path;
+		if (password === undefined) return yield* locked(name);
+		const open = yield* Effect.tryPromise({ try: () => officeCrypto.decrypt(bytes, { password }), catch: () => refused(name) });
+		const copy = join(yield* scratch, `input.${ext}`);
+		yield* Effect.tryPromise({ try: () => writeFile(copy, open), catch: () => new IngestFailed({ message: `${name} could not be opened` }) });
+		return copy;
+	});
 
 const PAGE_DPI = 200;
 const pageImage = (path: string, n: number, images: Images) =>
@@ -63,7 +112,9 @@ export function ingester(o: IngestOptions = {}): Ingester {
 		const text = () => Buffer.from(request.bytes).toString('utf8');
 		const sync = <A>(f: () => A) => Effect.try({ try: f, catch: failed });
 		// the engines tell a format by its extension, and a spooled file has none
-		const file = named(request, `input.${r.ext}`);
+		const file = Effect.flatMap(named(request, `input.${r.ext}`), (path) =>
+			unlocked(path, r.ext, request.name, request.options?.password)
+		);
 		const standard = (to: string) => Effect.flatMap(file, (path) => converted(path, to));
 		let blocks: Block[] = [];
 		let json: unknown;
@@ -107,7 +158,10 @@ export function ingester(o: IngestOptions = {}): Ingester {
 					Effect.flatMap(file, (path) =>
 						page === undefined ? readPdf(path, images, pictures !== false) : pageImage(path, page, images)
 					)
-				).pipe(Effect.mapError(failed));
+				).pipe(
+					// Poppler names a missing user password; the command line it quotes holds no password
+					Effect.mapError((error) => (/Incorrect password/.test(error.message) ? locked(request.name) : failed(error)))
+				);
 				break;
 			}
 			case 'workbook':

@@ -40,6 +40,7 @@ export const spawned =
 	(wallMs: number): Reads =>
 	(job) =>
 		Effect.callback<void, Error>((resume, signal) => {
+			// ponytail: the job, a password included, rides on the worker's argv, which only this container's user sees
 			const child = spawn(process.execPath, [WORKER, JSON.stringify(job)], {
 				detached: true,
 				stdio: ['ignore', 'ignore', 'pipe']
