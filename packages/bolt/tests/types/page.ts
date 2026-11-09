@@ -4,6 +4,7 @@ import { Effect } from 'effect';
 import { Form, Table } from '@norbital-ai/ui';
 import { bolt } from '../../src/page/index.ts';
 import type {
+	ActOutput,
 	Committed,
 	Decimal,
 	Id,
@@ -118,6 +119,17 @@ bolt.act('orders.create', [{ customer, note: 'x' }]).pipe(
 			}
 	})
 );
+// an import is one act: its rows and how it meets the stored rows its key matches
+declare const notice: Id<'notices'>;
+bolt.act('notice_notes.import', { rows: [{ notice, note: 'x' }], onConflict: 'update', dryRun: true }).pipe(
+	Effect.map((o) => {
+		if (o.kind === 'committed') is<Eq<typeof o.output, ActOutput<'notice_notes.import'>>>();
+	})
+);
+// @ts-expect-error P11 an import is not a bare batch of rows
+bolt.act('notice_notes.import', [{ notice, note: 'x' }]);
+// @ts-expect-error P12 an import names how it meets a stored row
+bolt.act('notice_notes.import', { rows: [{ notice, note: 'x' }] });
 // @ts-expect-error P8 an automation's input
 bolt.start('orders_renote', { ids: [order], note: 5 });
 // @ts-expect-error P9 an unknown callable

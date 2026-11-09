@@ -97,6 +97,9 @@ kit), so the model's write callback sees the whole batch; a single-row object is
 callables are separate calls. Success is `committed` or `pendingApproval`; the latter is a provisional write held
 by its request. Handle `ActRefused`, `ActConflict` and `ActUnknown` through the typed failure channel.
 Carry the observed revision when I/O separates a read from a write.
+A keyed model's `import` is one act taking `{ rows, onConflict, onMissing?, prune?, dryRun? }`: it matches rows by
+the key, runs the ordinary per-verb callbacks in one transaction and reports each row's resolution; `dryRun: true`
+runs them and writes nothing, so a page can show a file's refusals before writing it.
 Model writes expose only `create`, `update`, `delete` and keyed `upsert`. Use `ctx.act.many(...)`
 for independent writes that must commit together, and the model's write layers (nested child rows)
 for dependent creates.

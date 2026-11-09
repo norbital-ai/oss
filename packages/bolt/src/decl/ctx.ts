@@ -484,8 +484,10 @@ export type Callable = {
 	[C in ModelName]: `${C}.${Verbs<C>}`;
 }[ModelName];
 /**
- * The input of a generated model write. Always a batch: create/import take insert trees, update takes
+ * The input of a generated model write. Always a batch: create takes insert trees, update takes
  * `{ target, set }` entries, delete takes `{ target }`, and upsert takes inserts or patches carrying an `id`.
+ * Import takes `{ rows, onConflict, onMissing?, prune?, dryRun? }`: one atomic act matching rows by the model's key;
+ * `dryRun` runs every callback and writes nothing.
  * Fields and child layers come from the model's write exposure, not its read output or complete storage schema.
  * Optional/defaulted insert fields may be omitted; update patches contain only the fields being changed.
  * An unknown verb resolves to `never`. Regenerate workspace names after changing declarations before inspecting this type.
@@ -501,13 +503,24 @@ export type ActInput<N> = N extends `${infer C}.${infer V}`
 		: V extends 'upsert'
 			? readonly (Insert<C> | ({ id: Id<C> } & Patch<C>))[]
 			: V extends 'import'
-				? readonly Insert<C>[]
+				? ImportInput<C>
 				: V extends 'update'
 					? readonly { target: Id<C>; set: Patch<C> }[]
 					: V extends 'delete'
 						? readonly { target: Id<C> }[]
 						: never
 	: never;
+/** An import's rows and how it meets the stored rows its key matches (rule 30). */
+export type ImportInput<C> = {
+	readonly rows: readonly Insert<C>[];
+	/** `refuse` refuses a row already on file. */
+	readonly onConflict: 'update' | 'keep' | 'refuse';
+	/** `skip` only updates rows already on file. */
+	readonly onMissing?: 'create' | 'skip';
+	/** Deletes the caller-readable rows inside this predicate whose key the import does not name. */
+	readonly prune?: Where<C>;
+	readonly dryRun?: true;
+};
 /** A generated upsert preserves input order; an import reports every row's resolution. */
 export type ImportReport<C> = {
 	readonly rows: readonly {
