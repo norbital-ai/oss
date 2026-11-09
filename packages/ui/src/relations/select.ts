@@ -50,6 +50,14 @@ export function listRequest(
 ): Request {
 	const declared = cat?.[of]?.layers ?? [];
 	const many = (f: string) => manyTarget(cat, of, f) !== undefined;
+	const nested = new Map<string, string[]>();
+	for (const path of named) {
+		const [head, ...rest] = path.split('.');
+		if (head === undefined || rest.length === 0) continue;
+		const fields = nested.get(head) ?? [];
+		fields.push(rest.join('.'));
+		nested.set(head, fields);
+	}
 	const layers: { [path: string]: Layer } = Object.fromEntries([
 		...refs.flatMap((fk) => {
 			const l = refLabel(cat, of, fk);
@@ -57,6 +65,11 @@ export function listRequest(
 				? [[`${of}.${fk}`, { fields: l }]]
 				: [];
 		}),
+		...[...nested].flatMap(([fk, fields]) =>
+			declared.includes(fk) && !many(fk)
+				? [[`${of}.${fk}`, { fields: [...new Set([...fields, ...refLabel(cat, of, fk)])] }]]
+				: []
+		),
 		...named
 			.filter((f) => many(f) && declared.includes(f))
 			.map((m) => [
@@ -64,7 +77,7 @@ export function listRequest(
 				{ fields: refLabel(cat, of, m), limit: all ? READ_LIMIT : MANY_SHOWN + 1 }
 			])
 	]);
-	const own = named.filter((f) => !many(f));
+	const own = named.filter((f) => !f.includes('.') && !many(f));
 	const x = cat?.[of];
 	// Hidden captures can be large even when stored as text; read one only when a column names it.
 	const fields =
@@ -87,9 +100,11 @@ export function listRequest(
 
 /** Read only the optional record label's own-field dependencies; missing labels read no extra fields. */
 export function labelRead(cat: Catalog, of: string, options: Layer & { output?: string } = {}) {
-	const fields = cat?.[of]?.label ?? [];
+	const fields = cat?.[of]?.labelPaths ?? cat?.[of]?.label ?? [];
 	const request = listRequest(cat, of, options, fields);
-	return requestJson({ ...request, [of]: { ...options, fields } });
+	// a nested path is a relation layer or a JSON member; the root reads its first segment
+	const roots = [...new Set(fields.map((path) => path.split('.')[0] ?? path))];
+	return requestJson({ ...request, [of]: { ...options, fields: roots } });
 }
 /** A relation cell's link: the target model and its label text; a many-relation also lists each record (`more`: past `MANY_SHOWN`). */
 export type Ref = {

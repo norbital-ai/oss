@@ -4,8 +4,9 @@
 	import FieldIndicator from './FieldIndicator.svelte';
 	import * as Popover from '../primitives/popover/index.js';
 	import { SvelteSet } from 'svelte/reactivity';
+	import { tick } from 'svelte';
 	import type { ModelExposure } from '../kinds/context.js';
-	import { cn } from '../primitives/utils.js';
+	import { cn, stepActive } from '../primitives/utils.js';
 	import { CONTROL } from '../kinds/classes.js';
 	import { useBolt } from '../client/context.js';
 	import {
@@ -45,7 +46,10 @@
 	} = $props();
 	const bolt = useBolt();
 	let open = $state(false),
-		query = $state('');
+		query = $state(''),
+		active = $state(0);
+	let search = $state<HTMLInputElement | null>(null),
+		list = $state<HTMLElement | null>(null);
 	const expanded = new SvelteSet<string>();
 	const offered = $derived(offeredPaths(offers, prefix));
 	/** The view's own model (not under a many-relation): its search index and embedding are the toolbar's search box. */
@@ -134,9 +138,37 @@
 		open = false;
 		query = '';
 	};
+	/** The active row's id, announced from the box it leaves focus in. */
+	const activeId = $derived(entries[active] === undefined ? undefined : `field-option-${active}`);
+	function keydown(event: KeyboardEvent) {
+		if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+			if (entries.length === 0) return;
+			event.preventDefault();
+			active = stepActive(entries.length, active, event.key === 'ArrowDown' ? 1 : -1);
+			void tick().then(() =>
+				list
+					?.querySelector<HTMLElement>(`[data-index="${active}"]`)
+					?.scrollIntoView({ block: 'nearest' })
+			);
+		} else if (event.key === 'Enter' && event.target === search) {
+			const entry = entries[active];
+			if (entry === undefined) return;
+			event.preventDefault();
+			pick(entry);
+		}
+	}
 </script>
 
-<Popover.Root bind:open>
+<Popover.Root
+	bind:open
+	onOpenChange={(next) => {
+		if (next)
+			active = Math.max(
+				0,
+				entries.findIndex((e) => e.path === value)
+			);
+	}}
+>
 	<Popover.Trigger>
 		{#snippet child({ props })}
 			<button
@@ -174,12 +206,20 @@
 		class="flex w-64 flex-col gap-1 p-1"
 		aria-label={msg(bolt, 'view.field', 'Field')}
 		data-field-list
+		onkeydown={keydown}
 	>
 		<input
+			bind:this={search}
 			class="border-input bg-background h-8 w-full rounded-sm border px-2 text-sm outline-none"
 			type="search"
+			role="combobox"
+			aria-autocomplete="list"
+			aria-controls="field-options"
+			aria-expanded="true"
+			aria-activedescendant={activeId}
 			placeholder={msg(bolt, 'view.searchFields', 'Search fields')}
 			bind:value={query}
+			oninput={() => (active = 0)}
 		/>
 		<p class="text-muted-foreground px-2 py-1 text-xs">
 			{msg(
@@ -188,21 +228,25 @@
 				'Icons show field types. Expand a linked record to see its fields.'
 			)}
 		</p>
-		<ul class="max-h-64 overflow-auto" role="listbox">
-			{#each entries as e (e.path)}
+		<ul bind:this={list} id="field-options" class="max-h-64 overflow-auto" role="listbox">
+			{#each entries as e, i (e.path)}
 				<li
+					id={`field-option-${i}`}
 					class="flex items-center"
 					role="option"
 					aria-selected={e.path === value}
+					data-index={i}
+					data-active={i === active ? 'true' : undefined}
 					style={e.depth > 0 ? `padding-left:${e.depth * 0.75}rem` : undefined}
 				>
 					<button
 						type="button"
 						class={cn(
 							'hover:bg-muted flex min-w-0 flex-1 items-center gap-2 rounded-sm px-2 py-1.5 text-left text-sm',
-							e.path === value && 'bg-muted'
+							(e.path === value || i === active) && 'bg-muted'
 						)}
 						data-path={e.path}
+						onmousemove={() => (active = i)}
 						onclick={() => pick(e)}
 					>
 						<FieldIndicator

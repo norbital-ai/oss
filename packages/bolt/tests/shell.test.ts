@@ -699,6 +699,39 @@ describe('nav tree', () => {
 		expect(hr).toMatchObject({ kind: 'group', href: '/app/hr/people/list' });
 	});
 
+	it('nests a group under another group', () => {
+		const nested: EngineManifest = {
+			...m,
+			apps: {
+				...m.apps,
+				'hr/settings/lineage': {
+					title: 'Lineage',
+					description: 'd',
+					icon: 'i',
+					pages: { lineage: { title: 'Lineage' } }
+				},
+				'hr/settings/change_log': {
+					title: 'Change log',
+					description: 'd',
+					icon: 'i',
+					pages: { change_log: { title: 'Change log' } }
+				}
+			},
+			groups: {
+				...m.groups,
+				'hr/settings': { label: 'Settings', icon: 'i', defaultChild: 'lineage' }
+			}
+		};
+		const [, hr] = nav(nested, member(['sales', 'hr']));
+		const settings =
+			hr?.kind === 'group' ? hr.children.find((child) => child.name === 'hr/settings') : undefined;
+		expect(settings).toMatchObject({ kind: 'group', href: '/app/hr/settings/lineage' });
+		expect(settings?.kind === 'group' ? settings.children.map((child) => child.name) : []).toEqual([
+			'hr/settings/lineage',
+			'hr/settings/change_log'
+		]);
+	});
+
 	it('an app folder and its page of the same name share one canonical path', () => {
 		const nested: EngineManifest = {
 			...m,

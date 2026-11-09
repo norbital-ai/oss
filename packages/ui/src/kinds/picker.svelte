@@ -36,7 +36,7 @@
 	import { Effect } from 'effect';
 	import { observeOnce as queryState } from '../effect/index.js';
 	import { idsOf } from '../form/form-state.svelte.js';
-	import { currencyOf, format, pickerRead } from './kind.js';
+	import { currencyOf, format, pickerRead, valueObject } from './kind.js';
 	import { byId } from '../read/request.js';
 	import { labelRead } from '../relations/select.js';
 	import { withOutputs } from '../client/context.js';
@@ -73,26 +73,65 @@
 					});
 		}) ?? t('none');
 
+	// a catalogue picked from a source row is versioned: only the version in force today is a choice
+	const versionInForce = (read: NonNullable<typeof host.query>, today: string) =>
+		read({
+			jurisdiction_settings: {
+				where: { status: { eq: 'SEALED' } },
+				fields: ['id', 'effective_range'],
+				limit: 1000
+			}
+		}).pipe(
+			Effect.map((answer) => {
+				const rows = answer.jurisdiction_settings?.rows ?? [];
+				const period = (row: (typeof rows)[number]) => {
+					const range = valueObject(row.effective_range) ? row.effective_range : {};
+					return {
+						from: typeof range['from'] === 'string' ? range['from'] : '',
+						to: typeof range['to'] === 'string' ? range['to'] : null
+					};
+				};
+				const covering = rows.find((row) => {
+					const { from, to } = period(row);
+					return from !== '' && from <= today && (to === null || today <= to);
+				});
+				const newest = [...rows].sort((left, right) =>
+					period(right).from.localeCompare(period(left).from)
+				)[0];
+				return String((covering ?? newest)?.id ?? '') || null;
+			})
+		);
 	let query = $state('');
 	const options = queryState<Hit[], ReadError>(() => {
 		const read = host.query;
 		if (read === undefined) return null;
 		const q = query;
-		return Effect.sleep(q === '' ? 0 : 250).pipe(
-			Effect.flatMap(() =>
-				read(
-					withOutputs(
-						target?.record_label !== undefined
-							? labelRead(
-									host.catalog,
-									of,
-									pickerRead(target, labels, { where, orderBy, limit }, q)
-								)
-							: { [of]: pickerRead(target, labels, { where, orderBy, limit }, q) },
-						host.catalog
-					)
+		const base: Json | undefined = where ?? undefined;
+		return Effect.gen(function* () {
+			const scoped =
+				of.endsWith('_catalog')
+					? yield* versionInForce(read, new Date().toISOString().slice(0, 10))
+					: null;
+			const filter: Json | undefined =
+				scoped === null
+					? base
+					: base === undefined
+						? { settings_id: { eq: scoped } }
+						: { and: [base, { settings_id: { eq: scoped } }] };
+			yield* Effect.sleep(q === '' ? 0 : 250);
+			return yield* read(
+				withOutputs(
+					target?.record_label !== undefined
+						? labelRead(
+								host.catalog,
+								of,
+								pickerRead(target, labels, { where: filter, orderBy, limit }, q)
+							)
+						: { [of]: pickerRead(target, labels, { where: filter, orderBy, limit }, q) },
+					host.catalog
 				)
-			),
+			);
+		}).pipe(
 			Effect.map((answer) =>
 				(answer[of]?.rows ?? []).map((row) => ({ id: row.id, text: textOf(row) }))
 			)

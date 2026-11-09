@@ -8,6 +8,26 @@ export function cn(...inputs: ClassValue[]) {
 	return twMerge(clsx(inputs));
 }
 
+/**
+ * The row ArrowDown/ArrowUp moves to: wraps, and steps over rows `enabled` refuses. With none selectable, or an empty
+ * list, the active row stays (0 for an empty list).
+ */
+export function stepActive(
+	length: number,
+	active: number,
+	delta: 1 | -1,
+	enabled?: (index: number) => boolean
+): number {
+	if (length === 0) return 0;
+	const start = Math.min(Math.max(active, 0), length - 1);
+	let next = start;
+	for (let i = 0; i < length; i++) {
+		next = (next + delta + length) % length;
+		if (enabled === undefined || enabled(next)) return next;
+	}
+	return start;
+}
+
 /** A byte count as short text in binary units (`512.0 B`, `12.0 KB`, `3.4 MB`); `0 B` for none. */
 export function formatFileSize(bytes: number): string {
 	if (bytes === 0) return '0 B';

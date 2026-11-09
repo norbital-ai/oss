@@ -218,8 +218,7 @@ function makeCallables(config: CallablesConfig): CallablesShape {
 					: null;
 			}
 			if (entry?.read !== true) return refused('forbidden', `'${name}' has no read.`);
-			if (!readsAny(auth, model))
-				return refused('forbidden', `You may not sync '${model}'.`);
+			if (!readsAny(auth, model)) return refused('forbidden', `You may not sync '${model}'.`);
 			const decoded = decodeInput(
 				{ instance: { kind: 'text', optional: true }, partition: { kind: 'text', optional: true } },
 				input
@@ -653,7 +652,7 @@ function makeCallables(config: CallablesConfig): CallablesShape {
 				e.db,
 				{
 					category: 'automation',
-					action: 'start',
+					action: `${request.automation}.start`,
 					actor: auditActor(request.authority.actor),
 					payload: encodeWire({ automation: request.automation, runs: request.runs })
 				},

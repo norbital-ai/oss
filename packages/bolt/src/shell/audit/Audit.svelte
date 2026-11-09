@@ -3,6 +3,7 @@ once (Refresh, or the opt-in Auto-refresh). A phone's toolbar is search and Filt
 sits under the table there. -->
 <script lang="ts">
 	import {
+		Badge,
 		Button,
 		Combobox,
 		Dialog,
@@ -214,6 +215,14 @@ sits under the table there. -->
 			return word(action).replace(/^./, (character) => character.toUpperCase());
 		return dot <= 0 ? t(verb) : t(`${verb} {what}`).replace('{what}', word(action.slice(0, dot)));
 	};
+	/** A row event's record model; an operation's own events (prepared, settled) name the model or automation their action
+	 * leads with (`orders.update`, `bolt.notify.finish`). */
+	const whatOf = (e: Pick<AuditSummary, 'subject' | 'action'>) =>
+		e.subject !== null
+			? word(e.subject.model)
+			: e.action.includes('.')
+				? word(e.action.slice(0, e.action.lastIndexOf('.')))
+				: '';
 	const rows = $derived(
 		(answer?.rows ?? []).map((row) => ({
 			id: row.id,
@@ -224,7 +233,7 @@ sits under the table there. -->
 			status: row.status,
 			actor: nameOf(row.actor),
 			actorKind: actorName(row.actor.kind),
-			what: row.subject === null ? '' : word(row.subject.model)
+			what: whatOf(row)
 		}))
 	);
 	type AuditRow = (typeof rows)[number];
@@ -366,9 +375,11 @@ sits under the table there. -->
 	<time datetime={row.at} title={when(row.at)} class="tabular-nums">{when(row.at)}</time>
 {/snippet}
 {#snippet event({ row }: { row: AuditRow })}
-	<span class="flex min-w-0 flex-col gap-0.5">
+	<span class="flex min-w-0 items-center gap-2">
 		<span class="truncate font-medium" title={row.action}>{row.event}</span>
-		<span class="text-meta">{t(row.category)}</span>
+		<Badge variant="outline" class="shrink-0" data-audit-category={row.category}
+			>{t(row.category)}</Badge
+		>
 	</span>
 {/snippet}
 {#snippet what({ row }: { row: AuditRow })}
@@ -383,9 +394,9 @@ sits under the table there. -->
 	>
 {/snippet}
 {#snippet actor({ row }: { row: AuditRow })}
-	<span class="flex min-w-0 flex-col gap-0.5">
+	<span class="flex min-w-0 items-baseline gap-1.5" title={`${row.actor} (${row.actorKind})`}>
 		<span class="truncate">{row.actor}</span>
-		{#if row.actor !== row.actorKind}<span class="text-meta">{row.actorKind}</span>{/if}
+		{#if row.actor !== row.actorKind}<span class="shrink-0 text-meta">{row.actorKind}</span>{/if}
 	</span>
 {/snippet}
 {#snippet empty()}
@@ -489,27 +500,18 @@ sits under the table there. -->
 				}}
 			/>
 		</label>
-		<label class="flex flex-col gap-1 text-xs"
-			>{t('Actor ID')}<Input bind:value={actorId} /></label
-		>
+		<label class="flex flex-col gap-1 text-xs">{t('Actor ID')}<Input bind:value={actorId} /></label>
 		<label class="flex flex-col gap-1 text-xs sm:col-span-2"
 			>{t('Action')}<Input bind:value={action} placeholder="orders.update" /></label
 		>
-		<label class="flex flex-col gap-1 text-xs"
-			>{t('Model')}<Input bind:value={model} /></label
-		>
-		<label class="flex flex-col gap-1 text-xs"
-			>{t('Record ID')}<Input bind:value={record} /></label
-		>
+		<label class="flex flex-col gap-1 text-xs">{t('Model')}<Input bind:value={model} /></label>
+		<label class="flex flex-col gap-1 text-xs">{t('Record ID')}<Input bind:value={record} /></label>
 		<label class="flex flex-col gap-1 text-xs"
 			>{t('Invocation ID')}<Input bind:value={invocation} /></label
 		>
-		<label class="flex flex-col gap-1 text-xs"
-			>{t('Run ID')}<Input bind:value={run} /></label
-		>
+		<label class="flex flex-col gap-1 text-xs">{t('Run ID')}<Input bind:value={run} /></label>
 	</div>
-	<Button variant="ghost" class="self-start" onclick={clear}
-		>{t('Clear filters and search')}</Button
+	<Button variant="ghost" class="self-start" onclick={clear}>{t('Clear filters and search')}</Button
 	>
 {/snippet}
 {#snippet filtersButton({ props }: { props: Record<string, unknown> })}
@@ -666,7 +668,7 @@ sits under the table there. -->
 			{ label: t('When'), value: when(selected.at) },
 			{ label: t('Outcome'), value: statusName(selected.status) },
 			{ label: t('Who'), value: `${nameOf(selected.actor)} (${actorName(selected.actor.kind)})` },
-			{ label: t('What'), value: selected.subject?.model },
+			{ label: t('What'), value: whatOf(selected) || undefined },
 			{ label: t('Category'), value: t(selected.category) },
 			{ label: t('Recorded'), value: when(selected.recordedAt) }
 		]}
@@ -674,10 +676,8 @@ sits under the table there. -->
 		<section class="flex min-w-0 flex-col gap-3" aria-label={t('Changes')}>
 			<h2 class="text-sm font-medium">{t('Changes')}</h2>
 			{#if opened.error}<p role="alert" class="text-sm text-destructive">{opened.error.message}</p>
-				<Button
-					variant="outline"
-					class="self-start"
-					onclick={() => fork(opened.refetch())}>{t('Retry')}</Button
+				<Button variant="outline" class="self-start" onclick={() => fork(opened.refetch())}
+					>{t('Retry')}</Button
 				>
 			{:else if detail === undefined}<p role="status" class="text-meta">{t('Loading changes…')}</p>
 			{:else if detail === null}<p role="status" class="text-meta">

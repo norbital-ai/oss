@@ -1634,10 +1634,8 @@ const recordLabelObjects = Effect.fnUntraced(function* (t: Table, tz: string) {
 	const dependencies: string[] = [];
 	for (const path of program.paths) {
 		const field = path.split('.')[0] ?? path;
-		if (path.includes('.') && t.spec.fields[field]?.kind === 'ref')
-			return yield* fail(
-				`${t.model}.record_label: indexed labels read the record's own fields, not related records ('${path}')`
-			);
+		// a label that follows a relation has no generated column: the page reads the target's label alongside the row
+		if (path.includes('.') && t.spec.fields[field]?.kind === 'ref') return undefined;
 		const computed = t.spec.computed?.[field];
 		if (computed !== undefined) dependencies.push(...(yield* exprDeps(computed.expr, t)));
 		else if (t.cols.has(field)) dependencies.push(...(t.fieldCols.get(field) ?? [field]));

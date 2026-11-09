@@ -49,6 +49,10 @@ The kit's select: a field-like trigger and a searchable option list in a popover
 		footer?: Snippet;
 		/** Rendered inside the trigger, before its chevron: a status the chosen value carries. */
 		badge?: Snippet;
+		/** The trigger's content, in place of the value and chevron (a workspace chip with its avatar). */
+		trigger?: Snippet<[ComboboxOption<V> | null]>;
+		/** A row's leading content, in place of `icon` (an avatar); its label, suffix and check still follow. */
+		lead?: Snippet<[ComboboxOption<V>]>;
 		/** A caller's empty state; loading and failed states keep the standard messages. */
 		empty?: Snippet;
 		/** Handle scope shortcuts before list navigation; preventing default resets the active option. */
@@ -70,7 +74,14 @@ The kit's select: a field-like trigger and a searchable option list in a popover
 	import { CONTROL_ICON, CONTROL_SIZE, SELECT_TRIGGER } from '../../kinds/classes.js';
 	import CopyText from '../copy-text/copy-text.svelte';
 	import * as Popover from '../popover/index.js';
-	import { claimFieldControl, cn, coarsePointer, uiText, useControls } from '../utils.js';
+	import {
+		claimFieldControl,
+		cn,
+		coarsePointer,
+		stepActive,
+		uiText,
+		useControls
+	} from '../utils.js';
 	import { virtualList } from '../virtual/virtual.svelte.js';
 
 	const GHOST = `${CONTROL_SIZE} flex items-center justify-between rounded-md bg-transparent text-left font-normal outline-none hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-50 aria-invalid:text-destructive`;
@@ -103,6 +114,8 @@ The kit's select: a field-like trigger and a searchable option list in a popover
 		header,
 		footer,
 		badge,
+		trigger,
+		lead,
 		empty
 	} = $derived(props);
 	// svelte-ignore state_referenced_locally -- the id is fixed at mount
@@ -216,10 +229,7 @@ The kit's select: a field-like trigger and a searchable option list in a popover
 			return;
 		if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
 			e.preventDefault();
-			active =
-				rows.length === 0
-					? 0
-					: (active + (e.key === 'ArrowDown' ? 1 : -1) + rows.length) % rows.length;
+			active = stepActive(rows.length, active, e.key === 'ArrowDown' ? 1 : -1);
 			void tick().then(() => reveal(active));
 		} else if (e.key === 'Enter' && rows[active] !== undefined) {
 			e.preventDefault();
@@ -249,28 +259,30 @@ The kit's select: a field-like trigger and a searchable option list in a popover
 			aria-invalid={invalid ? 'true' : undefined}
 			class={cn(variant === 'ghost' ? GHOST : SELECT_TRIGGER, className)}
 		>
-			<span
-				class={cn(
-					'flex min-w-0 flex-1 items-center gap-1.5',
-					(props.multiple ? selectedValues.length === 0 : current === undefined) &&
-						display === undefined &&
-						'text-muted-foreground'
-				)}
-			>
-				{#if current?.icon}<Icon icon={current.icon} class={CONTROL_ICON} />{/if}
-				<span class="min-w-0 flex-1 truncate"
-					>{(props.multiple ? multiLabel || undefined : current?.label) ??
-						display ??
-						placeholder ??
-						t('select')}</span
+			{#if trigger}{@render trigger(current ?? null)}{:else}
+				<span
+					class={cn(
+						'flex min-w-0 flex-1 items-center gap-1.5',
+						(props.multiple ? selectedValues.length === 0 : current === undefined) &&
+							display === undefined &&
+							'text-muted-foreground'
+					)}
 				>
-				{#if !props.multiple && current?.suffix}<span
-						class="shrink-0 whitespace-nowrap text-xs tabular-nums text-muted-foreground"
-						>{current.suffix}</span
-					>{/if}
-				{@render badge?.()}
-			</span>
-			<Icon icon="lucide:chevrons-up-down" class={CONTROL_ICON} />
+					{#if current?.icon}<Icon icon={current.icon} class={CONTROL_ICON} />{/if}
+					<span class="min-w-0 flex-1 truncate"
+						>{(props.multiple ? multiLabel || undefined : current?.label) ??
+							display ??
+							placeholder ??
+							t('select')}</span
+					>
+					{#if !props.multiple && current?.suffix}<span
+							class="shrink-0 whitespace-nowrap text-xs tabular-nums text-muted-foreground"
+							>{current.suffix}</span
+						>{/if}
+					{@render badge?.()}
+				</span>
+				<Icon icon="lucide:chevrons-up-down" class={CONTROL_ICON} />
+			{/if}
 		</Popover.Trigger>
 		<Popover.Content
 			align="start"
@@ -346,7 +358,7 @@ The kit's select: a field-like trigger and a searchable option list in a popover
 								{#if row === null}
 									<span class="flex-1 text-muted-foreground">{t('none')}</span>
 								{:else}
-									{#if row.icon}<Icon
+									{#if lead}{@render lead(row)}{:else if row.icon}<Icon
 											icon={row.icon}
 											class="size-4 shrink-0 text-muted-foreground"
 										/>{/if}

@@ -1,6 +1,6 @@
 {
 	"name": "@norbital-ai/bolt-cli",
-	"version": "0.0.17",
+	"version": "0.0.18",
 	"description": "Bolt's tooling: the compiler, the `bolt` command (check, build, test, dev, seed, templates) and the test kit.",
 	"type": "module",
 	"sideEffects": false,

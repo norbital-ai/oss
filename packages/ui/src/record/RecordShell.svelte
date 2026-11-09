@@ -604,9 +604,10 @@
 	// a relation in the heading or subtitle reads as its target's label (a table cell's rule): one read of the record with
 	// those targets' labels nested, never its id (blank until it arrives)
 	const labelled = $derived(
-		[...(exposure?.label ?? []), ...(typeof subtitle === 'object' ? subtitle : [])].filter(
-			(f) => refLabel(kinds.catalog, of, f).length > 0
-		)
+		[
+			...(exposure?.labelPaths ?? exposure?.label ?? []),
+			...(typeof subtitle === 'object' ? subtitle : [])
+		].filter((f) => refLabel(kinds.catalog, of, f.split('.')[0] ?? f).length > 0)
 	);
 	const related = $derived(
 		mode !== 'create' && id !== undefined && labelled.length > 0

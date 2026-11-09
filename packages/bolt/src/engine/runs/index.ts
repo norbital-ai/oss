@@ -1674,7 +1674,7 @@ export const RunsLive = Layer.effect(
 					db,
 					{
 						category: 'automation',
-						action: 'finish',
+						action: `${head.automation}.finish`,
 						actor: { kind: 'system', id: head.id, label: null },
 						run: head.id,
 						payload: encodeWire({

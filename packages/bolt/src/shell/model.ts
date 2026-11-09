@@ -32,8 +32,9 @@ export interface NavItem {
 	readonly featureColor?: FeatureColorKey;
 }
 export interface NavModel {
-	/** The switcher's workspace: its name and logo (the host's brand icon), else initials; `others` are its options. */
+	/** The switcher's workspace: its handle, name and logo (the host's brand icon), else initials; `others` are its options. */
 	readonly workspace: {
+		readonly handle: string | null;
 		readonly name: string;
 		readonly logo: string | null;
 		readonly others: readonly WorkspaceLink[];
@@ -205,6 +206,7 @@ export function navigationModel(boot: ShellBoot, path: string, t: Translate): Na
 	];
 	return {
 		workspace: {
+			handle: boot.workspace.handle ?? null,
 			name: boot.workspace.name,
 			logo: boot.workspace.logo ?? null,
 			others: boot.workspaces ?? []

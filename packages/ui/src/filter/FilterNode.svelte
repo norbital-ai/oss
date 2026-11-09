@@ -14,7 +14,7 @@
 	import Combobox from '../primitives/combobox/combobox.svelte';
 	import type { Value } from '../kinds/kind.js';
 	import Picker from '../kinds/picker.svelte';
-	import { cn } from '../primitives/utils.js';
+	import { cn, stepActive } from '../primitives/utils.js';
 	import { useBolt } from '../client/context.js';
 	import FieldPicker from './FieldPicker.svelte';
 	import {
@@ -99,6 +99,8 @@
 	const blank: Node = { t: 'cond', path: '', op: 'eq', arg: null };
 	/** What follows a typed `@` in a value position (`null`: no variable menu open). */
 	let variable = $state<string | null>(null);
+	/** The variable menu's active row. */
+	let variableActive = $state(0);
 	/** The variable expression being edited in its chip (`null`: not editing). */
 	let draft = $state<string | null>(null);
 	/** `@` opens the variable menu, unless it is part of a typed literal (`bob@example.com`). */
@@ -112,6 +114,7 @@
 			return;
 		e.preventDefault();
 		variable = '';
+		variableActive = 0;
 	};
 	const commit = (next: Node) => {
 		if (next === node) return;
@@ -535,23 +538,43 @@
 								class={cn(CONTROL, 'w-40')}
 								type="text"
 								role="combobox"
+								aria-autocomplete="list"
 								aria-expanded="true"
 								aria-controls="filter-variables"
+								aria-activedescendant={matching[variableActive] === undefined
+									? undefined
+									: `filter-variable-${variableActive}`}
 								aria-label={msg(bolt, 'view.variable', 'Variable')}
 								data-variable-input
 								value={`@${variable}`}
 								{@attach (el) => el.focus()}
-								oninput={(e) => (variable = e.currentTarget.value.replace(/^@/, ''))}
+								oninput={(e) => {
+									variable = e.currentTarget.value.replace(/^@/, '');
+									variableActive = 0;
+								}}
 								onkeydown={(e) => {
 									e.stopPropagation();
 									if (e.key === 'Escape') variable = null;
-									else if (
+									else if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+										if (matching.length === 0) return;
+										e.preventDefault();
+										variableActive = stepActive(
+											matching.length,
+											variableActive,
+											e.key === 'ArrowDown' ? 1 : -1
+										);
+									} else if (
 										e.key === 'Enter' &&
-										(matching[0] !== undefined ||
+										(matching[variableActive] !== undefined ||
 											varError(r, c.op, variable ?? '', variables) === undefined)
 									) {
 										e.preventDefault();
-										setArg(matching[0]?.arg ?? { _tag: 'var', var: variable ?? '' });
+										setArg(
+											matching[variableActive]?.arg ?? {
+												_tag: 'var',
+												var: variable ?? ''
+											}
+										);
 										variable = null;
 									}
 								}}
@@ -563,12 +586,22 @@
 								class="bg-popover absolute top-full left-0 z-50 mt-1 min-w-40 rounded-md border p-1 shadow-deep"
 								data-variables
 							>
-								{#each matching as v (v.name)}
-									<li role="option" aria-selected="false" data-variable-option={v.name}>
+								{#each matching as v, i (v.name)}
+									<li
+										id={`filter-variable-${i}`}
+										role="option"
+										aria-selected={i === variableActive}
+										data-variable-option={v.name}
+										data-active={i === variableActive ? 'true' : undefined}
+									>
 										<button
 											type="button"
-											class="hover:bg-muted w-full rounded-sm px-2 py-1 text-left text-sm"
+											class={cn(
+												'hover:bg-muted w-full rounded-sm px-2 py-1 text-left text-sm',
+												i === variableActive && 'bg-muted'
+											)}
 											onmousedown={(e) => e.preventDefault()}
+											onmousemove={() => (variableActive = i)}
 											onclick={() => {
 												setArg(v.arg);
 												variable = null;

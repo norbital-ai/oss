@@ -14,7 +14,7 @@ import type { ModelSpec } from '../decl/model.ts';
 import type { RelationshipSpec } from '../decl/names.ts';
 import type { EngineManifest } from '../engine/manifest.ts';
 import { SYSTEM } from '../system/index.ts';
-import { recordLabelExpression } from '@norbital-ai/std/label';
+import { labelPaths, recordLabelExpression } from '@norbital-ai/std/label';
 
 /**
  * A model as the store's table: a workspace model is audited (its `id`, `revision` and created/updated columns) with
@@ -87,7 +87,11 @@ export function catalog(m: EngineManifest): Catalog {
 	const tables = tablesOf(m.models, m.relationships);
 	// Approval references already carry model + record id. Resolve/search the target label live, without a snapshot field.
 	const requests = tables.approval_request;
-	const labelled = Object.keys(m.models).filter((name) => tables[name]?.recordLabel !== undefined);
+	// only a label over the row's own fields is a generated column; a relation label is read with its target
+	const labelled = Object.keys(m.models).filter((name) => {
+		const label = tables[name]?.recordLabel;
+		return label !== undefined && labelPaths(label).every((path) => !path.includes('.'));
+	});
 	return storeCatalogOf(
 		{
 			tables: {

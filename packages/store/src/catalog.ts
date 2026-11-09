@@ -360,7 +360,11 @@ export function catalogOf(
 					key: ReadonlyArray.isArray<CatalogTable['key']>(spec?.key) ? spec.key : ['id'],
 					search: [
 						...(spec?.search?.text ?? []),
-						...(spec?.recordLabel === undefined ? [] : [RECORD_LABEL_COLUMN])
+						// a relation label has no generated column: its target's label is read, not indexed here
+						...(spec?.recordLabel === undefined ||
+						labelPaths(spec.recordLabel).some((path) => path.includes('.'))
+							? []
+							: [RECORD_LABEL_COLUMN])
 					],
 					...(spec?.labelLink === undefined ? {} : { labelLink: spec.labelLink }),
 					...(spec?.recordLabel === undefined

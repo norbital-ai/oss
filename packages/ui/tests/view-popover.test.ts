@@ -1293,6 +1293,151 @@ it.live(
 );
 
 it.live(
+	'Table: the `/` index menu moves by arrows, skips a disabled index and runs the active one on Enter',
+	() =>
+		Effect.gen(function* () {
+			const s = yield* browser(() => scripted());
+			const cat: NonNullable<KindsHost['catalog']> = {
+				...catalog,
+				jobs: {
+					...catalog.jobs,
+					search: ['title'],
+					semantic: true,
+					indexes: {
+						near: { description: 'Jobs near these hours', input: { hours: { kind: 'number' } } },
+						pdq: { description: 'Raw', input: { vector: { kind: 'list', of: { kind: 'number' } } } }
+					}
+				}
+			};
+			const v = yield* browser(() =>
+				show(
+					{
+						part: 'table',
+						view: Table,
+						props: { of: 'jobs', columns: ['title', 'hours'] },
+						bolt: s.bolt,
+						catalog: cat
+					},
+					'/'
+				)
+			);
+			element<HTMLElement>(document, '[data-search-toggle]').click();
+			flushSync();
+			yield* browser(() => tick());
+			const search = element<HTMLInputElement>(document, '[data-search]');
+			search.value = '/';
+			search.dispatchEvent(new Event('input', { bubbles: true }));
+			flushSync();
+			const active = () =>
+				document.querySelector<HTMLElement>('[data-search-option][data-active=true]')?.dataset[
+					'searchOption'
+				];
+			assert.equal(active(), 'semantic');
+			const press = (key: string) => {
+				search.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true }));
+				flushSync();
+			};
+			press('ArrowDown');
+			assert.equal(active(), 'near');
+			press('ArrowDown');
+			assert.equal(active(), 'semantic', 'the disabled raw index is stepped over');
+			press('ArrowUp');
+			assert.equal(active(), 'near');
+			press('Enter');
+			yield* browser(() => settle());
+			assert.ok(
+				element<HTMLElement>(document, '[data-search-index=near]'),
+				'Enter runs the active index'
+			);
+			yield* browser(v.done);
+		})
+);
+
+it.live(
+	'view popover: the field list and the @ variable menu move by arrows and pick on Enter',
+	() =>
+		Effect.gen(function* () {
+			const s = yield* browser(() => scripted());
+			const v = yield* browser(() =>
+				show(
+					{
+						part: 'table',
+						view: Table,
+						props: { of: 'jobs', columns: ['title'] },
+						bolt: s.bolt,
+						catalog
+					},
+					'/'
+				)
+			);
+			element<HTMLElement>(document, '[data-view-trigger]').click();
+			yield* browser(settle);
+			element<HTMLDetailsElement>(document, '[data-view-details]').open = true;
+			element<HTMLElement>(document, '[data-filter-rows] > [data-add-filter]').click();
+			yield* browser(settle);
+			element<HTMLElement>(document, '[data-add-condition]').click();
+			yield* browser(settle);
+			const pickers = [...document.querySelectorAll<HTMLElement>('[data-field-picker]')];
+			required(pickers[pickers.length - 1]).click();
+			flushSync();
+			const list = element<HTMLElement>(document, '[data-field-list]');
+			const search = element<HTMLInputElement>(list, 'input[type=search]');
+			const activePath = () =>
+				element<HTMLButtonElement>(list, '[role=option][data-active=true] button').dataset['path'];
+			const press = (key: string) => {
+				search.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true }));
+				flushSync();
+			};
+			assert.equal(activePath(), 'title');
+			press('ArrowDown');
+			assert.equal(activePath(), 'hours');
+			press('ArrowUp');
+			assert.equal(activePath(), 'title');
+			const paths = [...list.querySelectorAll<HTMLElement>('[data-path]')].map(
+				(button) => button.dataset['path']
+			);
+			const at = paths.indexOf('assignee');
+			assert.ok(at > 0, paths.join());
+			for (let i = 0; i < at; i++) press('ArrowDown');
+			assert.equal(activePath(), 'assignee');
+			press('Enter');
+			yield* browser(settle);
+			assert.equal(document.querySelector('[data-field-list]'), null);
+			const row = element<HTMLElement>(document, '[data-cond=assignee]');
+			element<HTMLElement>(row, '[data-compare-with]').click();
+			yield* browser(settle);
+			element<HTMLButtonElement>(document, '[role=combobox][aria-label="Compare with"]').click();
+			yield* browser(settle);
+			element<HTMLButtonElement>(document, '[role=option][data-value=var] button').click();
+			yield* browser(settle);
+			const menu = element<HTMLInputElement>(document, '[data-variable-input]');
+			const variables = [...document.querySelectorAll<HTMLElement>('[data-variable-option]')];
+			assert.deepEqual(
+				variables.map((option) => option.dataset['variableOption']),
+				['requestor', 'requestor.party']
+			);
+			const activeVariable = () =>
+				document.querySelector<HTMLElement>('[data-variable-option][data-active=true]')?.dataset[
+					'variableOption'
+				];
+			menu.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }));
+			flushSync();
+			assert.equal(activeVariable(), 'requestor.party');
+			menu.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowUp', bubbles: true }));
+			flushSync();
+			assert.equal(activeVariable(), 'requestor');
+			menu.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+			flushSync();
+			assert.equal(document.querySelector('[data-variable-input]'), null);
+			assert.equal(
+				element<HTMLElement>(document, '[data-variable]').dataset['variable'],
+				'requestor'
+			);
+			yield* browser(v.done);
+		})
+);
+
+it.live(
 	'Table: a pending description deadline clears busy and keeps the prior filter; a described relation filter and sort are editable rows ANDed under the author where (rule 16a)',
 	() =>
 		Effect.gen(function* () {

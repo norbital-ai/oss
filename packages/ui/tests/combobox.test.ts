@@ -3,6 +3,7 @@ import { flushSync, mount, tick, unmount } from 'svelte';
 import { expect, it, vi } from 'vitest';
 import Combobox from '../src/primitives/combobox/combobox.svelte';
 import { coarsePointer } from '../src/primitives/utils.ts';
+import Chrome from './combobox-chrome.svelte';
 import Multiple from './combobox-harness.svelte';
 
 const options = [
@@ -57,6 +58,46 @@ it('multiple selection toggles by keyboard and pointer, stays open, filters and 
 	await settle();
 	expect(changes.at(-1)).toEqual([]);
 	expect(list()).not.toBeNull();
+	await unmount(view);
+});
+
+it('arrow keys move the active option and Enter chooses it', async () => {
+	const target = document.body.appendChild(document.createElement('div'));
+	const changes: (string | null)[] = [];
+	const view = mount(Combobox, {
+		target,
+		props: {
+			options,
+			searchable: true,
+			value: null,
+			onChange: (v: string | null) => changes.push(v)
+		}
+	});
+	flushSync();
+	target.querySelector<HTMLButtonElement>('[role=combobox]')?.click();
+	await settle();
+	const search = document.querySelector<HTMLInputElement>('input');
+	if (search === null) throw new Error('no search input');
+	search.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }));
+	await settle();
+	expect(option('b').className).toContain('bg-accent');
+	search.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+	await settle();
+	expect(changes).toEqual(['b']);
+	await unmount(view);
+});
+
+it('a trigger snippet replaces the trigger content and lead prefixes each row', async () => {
+	const target = document.body.appendChild(document.createElement('div'));
+	const view = mount(Chrome, { target, props: { onChange: () => {} } });
+	flushSync();
+	expect(target.querySelector('[role=combobox] [data-trigger]')?.textContent).toBe('Acme');
+	target.querySelector<HTMLButtonElement>('[role=combobox]')?.click();
+	await settle();
+	expect([...document.querySelectorAll('[data-lead]')].map((node) => node.textContent)).toEqual([
+		'Acme',
+		'Beta'
+	]);
 	await unmount(view);
 });
 

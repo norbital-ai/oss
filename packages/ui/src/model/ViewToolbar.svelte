@@ -146,7 +146,7 @@
 	import { getAllContexts, tick, untrack, onDestroy } from 'svelte';
 	import Editor from '../kinds/editor.svelte';
 	import { enumText, initial, likeWhere, problems } from '../kinds/kind.js';
-	import { uiText } from '../primitives/utils.js';
+	import { cn, uiText, stepActive } from '../primitives/utils.js';
 	import { offerContexts, openRecord } from '../record/navigation.js';
 	import { useBolt } from '../client/context.js';
 	import { type Outcome, type RunHandle } from '../client/contract.js';
@@ -261,6 +261,7 @@
 	let index = $state<string | null>(null);
 	let text = $state(untrack(() => q));
 	let values = $state<Values>({});
+	let searchActive = $state(0);
 	let box = $state<HTMLInputElement>();
 	const chosen = $derived(indexes.find((i) => i.name === index));
 	// a `/…` with no index chosen is the picker's, never a search term: the rows stay unfiltered
@@ -293,6 +294,10 @@
 	}
 	function typing(value: string) {
 		text = value;
+		searchActive = Math.max(
+			0,
+			menuOf.findIndex((i) => i.why === null)
+		);
 		const named = index === null ? /^\/(\S+)\s$/.exec(value)?.[1] : undefined;
 		const i = indexes.find((x) => x.name === named);
 		if (i !== undefined && i.why === null) return void pick(i);
@@ -302,10 +307,19 @@
 		if (e.key === 'Backspace' && index !== null && text === '') {
 			e.preventDefault();
 			clear();
+		} else if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+			if (menuOf.length === 0) return;
+			e.preventDefault();
+			searchActive = stepActive(
+				menuOf.length,
+				searchActive,
+				e.key === 'ArrowDown' ? 1 : -1,
+				(i) => menuOf[i]?.why === null
+			);
 		} else if (e.key === 'Enter' && menuOf.length > 0) {
 			e.preventDefault();
-			const first = menuOf.find((i) => i.why === null);
-			if (first !== undefined) void pick(first);
+			const target = menuOf[searchActive];
+			if (target !== undefined && target.why === null) void pick(target);
 		}
 	}
 	const canFilter = $derived(view !== undefined && cfg?.filter !== false);
@@ -1188,6 +1202,13 @@
 								bind:this={box}
 								class="h-8 min-w-0 flex-1 bg-transparent text-xs outline-none"
 								type="search"
+								role="combobox"
+								aria-autocomplete="list"
+								aria-controls="search-indexes"
+								aria-expanded={picking}
+								aria-activedescendant={picking && menuOf[searchActive] !== undefined
+									? `search-option-${menuOf[searchActive]!.name}`
+									: undefined}
 								placeholder={index === 'semantic'
 									? t('searchMeaning')
 									: lexical
@@ -1206,22 +1227,33 @@
 						{/if}
 					</div>
 					{#if picking}
-						<div class="grid min-w-0 gap-0.5" role="listbox" data-search-indexes>
+						<div
+							id="search-indexes"
+							class="grid min-w-0 gap-0.5"
+							role="listbox"
+							data-search-indexes
+						>
 							{#if menuOf.length === 0}<p
 									class="text-muted-foreground px-2 py-1.5 text-sm"
 									data-search-none
 								>
 									{indexes.length === 0 ? t('searchNone') : t('noResults')}
 								</p>{/if}
-							{#each menuOf as i (i.name)}
+							{#each menuOf as i, at (i.name)}
 								<button
+									id={`search-option-${i.name}`}
 									type="button"
 									role="option"
-									aria-selected="false"
-									class="hover:bg-accent min-w-0 rounded-sm px-2 py-1.5 text-left text-sm disabled:cursor-not-allowed disabled:opacity-60"
+									aria-selected={at === searchActive}
+									class={cn(
+										'hover:bg-accent min-w-0 rounded-sm px-2 py-1.5 text-left text-sm disabled:cursor-not-allowed disabled:opacity-60',
+										at === searchActive && 'bg-accent'
+									)}
 									disabled={i.why !== null}
 									title={i.why ?? i.hint}
+									onmousemove={() => (searchActive = at)}
 									onclick={() => pick(i)}
+									data-active={at === searchActive ? 'true' : undefined}
 									data-search-option={i.name}
 								>
 									<span class="block font-medium">/{i.name}</span><span

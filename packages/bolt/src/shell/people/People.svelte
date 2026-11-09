@@ -2,7 +2,7 @@
 <script lang="ts">
 	import { fork, observeOnce } from '@norbital-ai/ui/effect';
 	import { Effect, Option, Schema } from 'effect';
-	import type { Value } from '@norbital-ai/std/kind';
+	import { csvDelimiter, csvRows, csvText } from '@norbital-ai/std/csv';
 	import { Cluster } from '@norbital-ai/ui/layout';
 	import { watch } from 'runed';
 	import {
@@ -11,11 +11,11 @@
 		Combobox,
 		Dialog,
 		format,
+		Icon,
 		Input,
 		PhoneInput,
 		Table,
-		Tabs,
-		Textarea
+		Tabs
 	} from '@norbital-ai/ui';
 	import type { Json } from '../../decl/values.ts';
 	import { based } from '../nav.ts';
@@ -31,7 +31,7 @@
 		locale,
 		configuration = null
 	}: {
-		api: Pick<ShellApi, 'settings' | 'settingsOp' | 'preview' | 'explain'>;
+		api: Pick<ShellApi, 'settings' | 'settingsOp' | 'preview'>;
 		t: (key: string) => string;
 		locale: string;
 		configuration?: SystemUiIntent | null;
@@ -71,13 +71,6 @@
 		if (r._tag === 'Success') location.assign(based('/'));
 		else mutationError = r.failure.message;
 	});
-	// `access.explain` (L-BOLT-234): what a member holds, in a sheet
-	let explained = $state<{ who: string; value: Json } | null>(null);
-	const explain = Effect.fn('People.explain')(function* (who: string, user: string) {
-		const r = yield* Effect.result(api.explain({ user }));
-		if (r._tag === 'Success') explained = { who, value: r.success };
-		else mutationError = r.failure.message;
-	});
 
 	const when = (v: Json | undefined) =>
 		typeof v === 'string' && v !== '' ? format({ kind: 'instant' }, v, { locale }) : '—';
@@ -112,13 +105,6 @@
 	);
 	type Member = (typeof members)[number];
 	type Invitation = (typeof invitations)[number];
-	const memberActs = (u: Pick<Member, 'id' | 'active' | 'admin' | 'name' | 'email'>): Act[] =>
-		u.active && !u.admin
-			? [
-					{ label: t('Preview as'), run: () => fork(preview(u.id)), variant: 'outline' },
-					{ label: t('Explain'), run: () => fork(explain(u.name || u.email, u.id)) }
-				]
-			: [];
 	const invitationActs = (i: Invitation): Act[] => [
 		...(i.state === 'open' || i.state === 'expired'
 			? [{ label: t('Resend'), run: () => fork(op('resendInvitation', { id: i.id })) }]
@@ -130,15 +116,44 @@
 
 	// ── the open row (one sheet at a time) and the invite dialog ──
 	let open = $state<{ kind: 'member' | 'invitation'; id: string } | null>(null);
-	/** The open member's unsaved handles (rule 57: what a private envoy knows them by); a key left out is unchanged. */
-	let handles = $state<{ phone?: string | null; telegram?: string }>({});
-	const saveHandles = Effect.fn('People.saveHandles')(function* (id: string) {
-		if ((yield* op('setHandles', { id, ...handles })) !== undefined) handles = {};
+	/** The open member's draft while Edit is on; Save applies only what changed. */
+	type Draft = {
+		team: string | null;
+		admin: boolean;
+		active: boolean;
+		phone: string | null;
+		telegram: string;
+	};
+	let draft = $state<Draft | null>(null);
+	let saving = $state(false);
+	const saveMember = Effect.fn('People.saveMember')(function* (u: Member, d: Draft) {
+		const steps: { name: string; input: { [key: string]: Json | undefined } }[] = [
+			...(d.team !== u.team_id ? [{ name: 'assignTeam', input: { id: u.id, team: d.team } }] : []),
+			...(d.admin !== u.admin ? [{ name: 'setAdmin', input: { id: u.id, admin: d.admin } }] : []),
+			...(d.active !== u.active
+				? [{ name: d.active ? 'reactivate' : 'deactivate', input: { id: u.id } }]
+				: []),
+			// rule 57: what a private envoy knows them by; a key left out is unchanged
+			...((d.phone ?? '') !== u.phone || d.telegram !== u.telegram
+				? [
+						{
+							name: 'setHandles',
+							input: {
+								id: u.id,
+								...((d.phone ?? '') !== u.phone ? { phone: d.phone } : {}),
+								...(d.telegram !== u.telegram ? { telegram: d.telegram } : {})
+							}
+						}
+					]
+				: [])
+		];
+		for (const step of steps) if ((yield* op(step.name, step.input)) === undefined) return;
+		draft = null;
 	});
 	let tab = $state('members');
 	let inviting = $state(false);
+	let inviteTab = $state<'one' | 'bulk'>('one');
 	let submitting = $state(false);
-	let bulk = $state('');
 	let form = $state({ email: '', phone: null as string | null, team: '', external: false });
 	let configured = $state<string | null>(null);
 	watch([() => configuration, () => s], ([intent, settings]) => {
@@ -152,35 +167,101 @@
 			open = { kind: 'member', id: intent.request.record };
 		}
 	});
+
+	// ── bulk: a CSV of `email, phone, team, external`, one invitation per row ──
+	type Invite = { email?: string; phone?: string; team?: string; external: boolean };
+	const MAX = 1000;
+	const TEMPLATE = `data:text/csv;charset=utf-8,${encodeURIComponent('email,phone,team,external\nana@example.com,,,false\n,+60123456789,,false\n')}`;
+	let csv = $state<{ name: string; rows: Invite[]; errors: string[] } | null>(null);
+	let over = $state(false);
+	const line = (key: string, n: number, team = '') =>
+		t(key).replace('{n}', String(n)).replace('{team}', team);
+	function parse(name: string, text: string): void {
+		const [head = [], ...lines] = csvRows(text, csvDelimiter(text)).filter((r) =>
+			r.some((c) => c.trim() !== '')
+		);
+		const col = (h: string) => head.findIndex((c) => c.trim().toLowerCase() === h);
+		const [email, phone, team, external] = ['email', 'phone', 'team', 'external'].map(col);
+		if (email === -1 && phone === -1)
+			return void (csv = {
+				name,
+				rows: [],
+				errors: [t('The header must name an email or phone column.')]
+			});
+		const errors: string[] = [];
+		const rows = lines.flatMap((r, i): Invite[] => {
+			const at = (c: number | undefined) =>
+				c === undefined || c === -1 ? '' : (r[c] ?? '').trim();
+			const n = i + 2;
+			const [address, mobile, teamText] = [at(email), at(phone), at(team)];
+			const teamId =
+				teamText === ''
+					? undefined
+					: s?.teams.find(
+							(x) => x.id === teamText || x.name.toLowerCase() === teamText.toLowerCase()
+						)?.id;
+			if (address === '' && mobile === '')
+				errors.push(line('Line {n}: an email or a mobile number is required.', n));
+			else if (mobile !== '' && !mobile.startsWith('+'))
+				errors.push(line('Line {n}: a mobile number starts with + and its country code.', n));
+			else if (teamText !== '' && teamId === undefined)
+				errors.push(line('Line {n}: no team named {team}.', n, teamText));
+			else
+				return [
+					{
+						...(address === '' ? {} : { email: address }),
+						...(mobile === '' ? {} : { phone: mobile }),
+						...(teamId === undefined ? {} : { team: teamId }),
+						external: /^(true|yes|y|1)$/i.test(at(external))
+					}
+				];
+			return [];
+		});
+		if (rows.length > MAX) errors.push(t('At most 1000 rows.'));
+		csv = { name, rows, errors };
+	}
+	const load = Effect.fn('People.loadCsv')(function* (file: File) {
+		const bytes = yield* Effect.tryPromise({
+			try: () => file.arrayBuffer(),
+			catch: () => new Error(t('The file could not be read.'))
+		}).pipe(
+			Effect.catch((e) =>
+				Effect.sync(() => void (csv = { name: file.name, rows: [], errors: [e.message] }))
+			)
+		);
+		if (bytes !== undefined) parse(file.name, csvText(new Uint8Array(bytes)));
+	});
+
 	/** `inviteMany` answers the invitations whose delivery failed (`invite` refuses instead). */
 	const Invited = Schema.Struct({ failed: Schema.Array(Schema.String) });
+	function openInvite(on: 'one' | 'bulk'): void {
+		inviteTab = on;
+		inviting = true;
+	}
 	function closeDialog(): void {
 		inviting = false;
-		bulk = '';
+		csv = null;
 		form = { ...form, email: '', phone: null };
 	}
+	const ready = $derived(
+		inviteTab === 'bulk'
+			? csv !== null && csv.errors.length === 0 && csv.rows.length > 0
+			: form.email.trim() !== '' || form.phone !== null
+	);
 	function invite(): void {
-		if (submitting) return;
+		if (submitting || !ready) return;
 		submitting = true;
-		const addresses = bulk
-			.split(/[\n,;]+/)
-			.map((address) => address.trim())
-			.filter(Boolean)
-			.map((address) => ({
-				...(address.startsWith('+') ? { phone: address } : { email: address }),
-				...(form.team ? { team: form.team } : {}),
-				external: form.external
-			}));
 		fork(
 			Effect.gen(function* () {
-				const v = yield* addresses.length > 0
-					? op('inviteMany', { invitations: addresses })
-					: op('invite', {
-							email: form.email || undefined,
-							phone: form.phone ?? undefined,
-							team: form.team || undefined,
-							external: form.external
-						});
+				const v =
+					inviteTab === 'bulk'
+						? yield* op('inviteMany', { invitations: csv?.rows ?? [] })
+						: yield* op('invite', {
+								email: form.email.trim() || undefined,
+								phone: form.phone ?? undefined,
+								team: form.team || undefined,
+								external: form.external
+							});
 				if (v === undefined) return; // refused: the dialog stays with the page's error
 				closeDialog();
 				if (Option.exists(Schema.decodeUnknownOption(Invited)(v), (i) => i.failed.length > 0))
@@ -196,25 +277,18 @@
 			)
 		);
 	}
+	// the toolbar's Actions: the same CSV import as the dialog's Bulk import tab
+	const importAction = $derived({
+		icon: 'lucide:upload',
+		name: t('Import invitations'),
+		description: t('Invite people from a CSV file.'),
+		run: () => openInvite('bulk')
+	});
 </script>
 
 {#snippet at({ value }: { row: object; value: unknown })}<time class="tabular-nums"
 		>{when(typeof value === 'string' ? value : null)}</time
 	>{/snippet}
-{#snippet memberCell({
-	row
-}: {
-	row: { readonly id: string; readonly [field: string]: Value };
-	value: Value | undefined;
-})}<Acts
-		acts={memberActs({
-			id: String(row.id),
-			name: String(row.name ?? ''),
-			email: String(row.email ?? ''),
-			active: row.active === true,
-			admin: row.admin === true
-		})}
-	/>{/snippet}
 {#snippet invitationCell({ row }: { row: Invitation; value: unknown })}<Acts
 		acts={invitationActs(row)}
 	/>{/snippet}
@@ -227,10 +301,15 @@
 			onOpen={(row) => {
 				if (typeof row.id === 'string') {
 					open = { kind: 'member', id: row.id };
-					handles = {};
+					draft = null;
 				}
 			}}
-			toolbar={{ title: t('Members'), new: () => (inviting = true), export: true }}
+			toolbar={{
+				title: t('Members'),
+				new: () => openInvite('one'),
+				export: true,
+				actions: [importAction]
+			}}
 			columns={[
 				{ field: 'name', label: t('Name') },
 				{ field: 'email', label: t('Email') },
@@ -239,8 +318,7 @@
 				{ field: 'kind', label: t('Kind') },
 				{ field: 'admin', label: t('Admin') },
 				{ field: 'active', label: t('Active') },
-				{ field: 'last_seen', label: t('Last seen'), cell: at },
-				{ field: 'id', label: t('Actions'), hide: 'narrow', cell: memberCell }
+				{ field: 'last_seen', label: t('Last seen'), cell: at }
 			]}
 		/>
 	{/key}
@@ -261,7 +339,12 @@
 		of={invitations}
 		key="invitations"
 		onOpen={(row) => (open = { kind: 'invitation', id: row.id })}
-		toolbar={{ title: t('Invitations'), new: () => (inviting = true), export: true }}
+		toolbar={{
+			title: t('Invitations'),
+			new: () => openInvite('one'),
+			export: true,
+			actions: [importAction]
+		}}
 		columns={[
 			{ field: 'email', label: t('Address') },
 			{ field: 'team', label: t('Team') },
@@ -301,72 +384,115 @@
 </div>
 
 {#if open !== null && s !== null}
-	{@const close = () => (open = null)}
+	{@const close = () => {
+		open = null;
+		draft = null;
+	}}
 	{#if open.kind === 'member'}
 		{@const u = members.find((x) => x.id === open?.id)}
 		{#if u !== undefined}
+			{#snippet memberFoot()}
+				{#if draft === null}
+					{#if u.active && !u.admin}<Button variant="outline" onclick={() => fork(preview(u.id))}
+							>{t('Preview as')}</Button
+						>{/if}
+					<Button
+						variant="outline"
+						class="min-w-[4.25rem] justify-center"
+						onclick={() =>
+							(draft = {
+								team: u.team_id,
+								admin: u.admin,
+								active: u.active,
+								phone: u.phone || null,
+								telegram: u.telegram
+							})}>{t('Edit')}</Button
+					>
+				{:else}
+					{@const d = draft}
+					<Button variant="ghost" disabled={saving} onclick={() => (draft = null)}
+						><Icon name="lucide:undo-2" class="size-3.5" />{t('Cancel')}</Button
+					>
+					<Button
+						disabled={saving}
+						onclick={() => {
+							saving = true;
+							fork(
+								saveMember(u, d).pipe(
+									Effect.ensuring(
+										Effect.sync(() => {
+											saving = false;
+										})
+									)
+								)
+							);
+						}}
+						data-member-save>{t('Save')}</Button
+					>
+				{/if}
+			{/snippet}
 			<DetailSheet
 				title={u.name || u.email}
-				acts={memberActs(u)}
 				onClose={close}
+				footer={memberFoot}
 				fields={[
 					{ label: t('Email'), value: u.email },
 					{ label: t('Mobile number'), value: u.phone },
 					{ label: t('Kind'), value: u.kind },
-					{ label: t('Last seen'), value: when(u.last_seen) }
+					{ label: t('Last seen'), value: when(u.last_seen) },
+					...(draft === null
+						? [
+								{ label: t('Team'), value: u.team },
+								{ label: t('Admin'), value: u.admin ? t('Yes') : t('No') },
+								{ label: t('Active'), value: u.active ? t('Yes') : t('No') },
+								{ label: t('Telegram'), value: u.telegram }
+							]
+						: [])
 				]}
 			>
-				<div class="flex flex-col gap-3 border-t pt-3 text-sm">
-					<label class="flex flex-col gap-1"
-						><span class="text-meta">{t('Team')}</span>
-						<Combobox
-							clearable
-							placeholder={t('No team')}
-							options={teams}
-							value={u.team_id}
-							onChange={(team) => fork(op('assignTeam', { id: u.id, team }))}
-							aria-label={t('Team')}
-						/></label
-					>
-					<label class="flex items-center gap-2"
-						><Checkbox
-							checked={u.admin}
-							disabled={u.external}
-							onCheckedChange={(admin) => fork(op('setAdmin', { id: u.id, admin }))}
-						/>
-						{t('Admin')}</label
-					>
-					<label class="flex items-center gap-2"
-						><Checkbox
-							checked={u.active}
-							onCheckedChange={(on) => fork(op(on ? 'reactivate' : 'deactivate', { id: u.id }))}
-						/>
-						{t('Active')}</label
-					>
-					<label class="flex flex-col gap-1"
-						><span class="text-meta">{t('Mobile number')}</span>
-						<PhoneInput
-							value={handles.phone !== undefined ? handles.phone : u.phone || null}
-							onChange={(v) => (handles.phone = typeof v === 'string' ? v : null)}
-						/></label
-					>
-					<label class="flex flex-col gap-1"
-						><span class="text-meta">{t('Telegram')}</span>
-						<Input
-							class="h-8"
-							placeholder="@handle"
-							aria-label={t('Telegram')}
-							value={handles.telegram ?? u.telegram}
-							oninput={(e) => (handles.telegram = e.currentTarget.value)}
-						/></label
-					>
-					<Cluster
-						><Button
-							disabled={Object.keys(handles).length === 0}
-							onclick={() => fork(saveHandles(u.id))}>{t('Save')}</Button
-						></Cluster
-					>
-				</div>
+				{#if draft !== null}
+					<div class="flex flex-col gap-3 border-t pt-3 text-sm" data-member-edit>
+						<label class="flex flex-col gap-1"
+							><span class="text-meta">{t('Team')}</span>
+							<Combobox
+								clearable
+								placeholder={t('No team')}
+								options={teams}
+								value={draft.team}
+								onChange={(team) => {
+									if (draft !== null) draft.team = team;
+								}}
+								aria-label={t('Team')}
+							/></label
+						>
+						<label class="flex items-center gap-2"
+							><Checkbox bind:checked={draft.admin} disabled={u.external} />
+							{t('Admin')}</label
+						>
+						<label class="flex items-center gap-2"
+							><Checkbox bind:checked={draft.active} />
+							{t('Active')}</label
+						>
+						<label class="flex flex-col gap-1"
+							><span class="text-meta">{t('Mobile number')}</span>
+							<PhoneInput
+								value={draft.phone}
+								onChange={(v) => {
+									if (draft !== null) draft.phone = typeof v === 'string' ? v : null;
+								}}
+							/></label
+						>
+						<label class="flex flex-col gap-1"
+							><span class="text-meta">{t('Telegram')}</span>
+							<Input
+								class="h-8"
+								placeholder="@handle"
+								aria-label={t('Telegram')}
+								bind:value={draft.telegram}
+							/></label
+						>
+					</div>
+				{/if}
 			</DetailSheet>
 		{/if}
 	{:else}
@@ -386,13 +512,86 @@
 		{/if}
 	{/if}
 {/if}
-{#if explained !== null}
-	<DetailSheet
-		title={t('What {who} holds').replace('{who}', explained.who)}
-		onClose={() => (explained = null)}
-		fields={[{ label: t('Grants'), value: explained.value }]}
-	/>
-{/if}
+
+{#snippet one()}
+	<div class="flex flex-col gap-3 pt-3">
+		<Input
+			class="h-8"
+			type="email"
+			placeholder={t('Email')}
+			aria-label={t('Email')}
+			bind:value={form.email}
+		/>
+		<PhoneInput
+			value={form.phone}
+			onChange={(v) => (form.phone = typeof v === 'string' ? v : null)}
+		/>
+		<p class="text-meta">{t('Enter an email or a mobile number.')}</p>
+		<Combobox
+			clearable
+			placeholder={t('No team')}
+			aria-label={t('Team')}
+			options={teams}
+			value={form.team || null}
+			onChange={(v) => (form.team = v ?? '')}
+		/>
+		<label class="flex items-center gap-2 text-sm"
+			><Checkbox bind:checked={form.external} /> {t('External')}</label
+		>
+	</div>
+{/snippet}
+{#snippet bulk()}
+	<div class="flex flex-col gap-3 pt-3">
+		<label
+			class={[
+				'flex cursor-pointer flex-col items-center justify-center gap-1 rounded-md border border-dashed px-4 py-8 text-center text-sm',
+				over ? 'border-brand bg-brand-muted' : 'bg-muted/20'
+			]}
+			ondragover={(e) => {
+				e.preventDefault();
+				over = true;
+			}}
+			ondragleave={() => (over = false)}
+			ondrop={(e) => {
+				e.preventDefault();
+				over = false;
+				const file = e.dataTransfer?.files[0];
+				if (file !== undefined) fork(load(file));
+			}}
+			data-invite-drop
+		>
+			<Icon name="lucide:upload" class="size-5 text-muted-foreground" />
+			<span>{csv?.name ?? t('Drop a CSV file here, or click to choose one.')}</span>
+			<input
+				type="file"
+				accept=".csv,text/csv"
+				class="sr-only"
+				onchange={(e) => {
+					const file = e.currentTarget.files?.[0];
+					if (file !== undefined) fork(load(file));
+					e.currentTarget.value = '';
+				}}
+			/>
+		</label>
+		<p class="text-meta">
+			{t(
+				'Columns: email, phone, team, external. Each row needs an email or a mobile number; up to 1000 rows.'
+			)}
+			<a class="underline" href={TEMPLATE} download="invitations.csv">{t('Download template')}</a>
+		</p>
+		{#if csv !== null}
+			{#if csv.errors.length > 0}
+				<ul class="max-h-32 overflow-auto text-xs text-destructive" role="alert" data-invite-errors>
+					{#each csv.errors as message (message)}<li>{message}</li>{/each}
+				</ul>
+			{:else}
+				<p class="text-sm" role="status">
+					{t('{n} people ready to invite').replace('{n}', String(csv.rows.length))}
+				</p>
+			{/if}
+		{/if}
+	</div>
+{/snippet}
 
 <Dialog.Root
 	open={inviting}
@@ -410,44 +609,20 @@
 					invite();
 				}}
 			>
-				<label class="flex flex-col gap-1"
-					>{t('Bulk invitations')}<Textarea
-						bind:value={bulk}
-						aria-label={t('Bulk invitations')}
-					/></label
-				>
-				<p class="text-meta">
-					{t(
-						'Enter one email or international mobile number per line, up to 1000 people. Leave blank to invite one person below.'
-					)}
-				</p>
-				<Input
-					class="h-8"
-					type="email"
-					placeholder={t('Email')}
-					aria-label={t('Email')}
-					required={form.phone === null && !bulk.trim()}
-					bind:value={form.email}
+				<Tabs
+					level={2}
+					orientation="horizontal"
+					value={inviteTab}
+					onValueChange={(v) => (inviteTab = v === 'bulk' ? 'bulk' : 'one')}
+					tabs={[
+						{ name: 'one', title: t('One person'), icon: 'lucide:user-plus', body: one },
+						{ name: 'bulk', title: t('Bulk import'), icon: 'lucide:upload', body: bulk }
+					]}
 				/>
-				<PhoneInput
-					value={form.phone}
-					onChange={(v) => (form.phone = typeof v === 'string' ? v : null)}
-				/>
-				<Combobox
-					clearable
-					placeholder={t('No team')}
-					aria-label={t('Team')}
-					options={teams}
-					value={form.team || null}
-					onChange={(v) => (form.team = v ?? '')}
-				/>
-				<label class="flex items-center gap-2 text-sm"
-					><Checkbox bind:checked={form.external} /> {t('External')}</label
-				>
 				{#if error !== null}<p role="alert" class="text-sm text-destructive">{error}</p>{/if}
 				<Dialog.Footer>
 					<Button variant="outline" onclick={closeDialog}>{t('Cancel')}</Button>
-					<Button type="submit" disabled={submitting}>{t('Invite')}</Button>
+					<Button type="submit" disabled={submitting || !ready}>{t('Invite')}</Button>
 				</Dialog.Footer>
 			</form>
 		{/if}

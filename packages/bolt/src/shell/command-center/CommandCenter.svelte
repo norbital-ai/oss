@@ -10,6 +10,8 @@
 -->
 <script lang="ts">
 	import {
+		Badge,
+		Icon,
 		Table,
 		Tabs,
 		WorkspaceOperations,
@@ -134,30 +136,37 @@
 		if (next.run !== undefined) runFilter = next.run;
 	}
 
-	// the automations' inference transcripts: the conversations a run recorded
+	// every AI transcript the viewer may read: their own in-app conversations, envoy threads and automation inference
 	const conversations = observe(() =>
 		active === 'inference'
 			? bolt.observe<{ rows: AgentConversation[] }>({ read: { m: 'conversations', a: [] } })
 			: null
 	);
+	const AI_ICONS = {
+		web: 'lucide:monitor',
+		envoy: 'lucide:send',
+		infer: 'lucide:workflow'
+	} as const;
+	const categoryOf = (c: AgentConversation): keyof typeof AI_ICONS =>
+		c.run != null ? 'infer' : c.envoy !== null ? 'envoy' : 'web';
 	const transcripts = $derived(
-		(conversations.current?.rows ?? [])
-			.filter((c) => c.run != null)
-			.map((c) => ({
-				id: c.id,
-				title: c.title ?? t('Conversation'),
-				run: c.run ?? '',
-				status: t(c.status === 'running' ? 'Running' : c.status === 'stopped' ? 'Stopped' : 'Idle'),
-				at: new Date(c.at).toLocaleString(bolt.locale)
-			}))
+		(conversations.current?.rows ?? []).map((c) => ({
+			id: c.id,
+			category: categoryOf(c),
+			title: c.title ?? t('Conversation'),
+			// an envoy thread: its envoy, instance and kind; an automation's: its run
+			source: c.run ?? [c.envoy, c.integration, c.kind].filter((part) => part !== null).join(' · '),
+			status: t(c.status === 'running' ? 'Running' : c.status === 'stopped' ? 'Stopped' : 'Idle'),
+			at: new Date(c.at).toLocaleString(bolt.locale)
+		}))
 	);
 	const TITLES: { readonly [k in CommandCenterTab]: string } = {
 		bundle: 'Bundle',
 		telemetry: 'Telemetry',
 		logs: 'Logs',
 		audit: 'Audit',
-		automations: 'Automations',
-		inference: 'Inference',
+		automations: 'Queue',
+		inference: 'AI',
 		people: 'People'
 	};
 	const ICONS: { readonly [k in CommandCenterTab]: string } = {
@@ -192,6 +201,14 @@
 		<p class="text-meta" role="status">{t('Loading…')}</p>
 	{/if}
 {/snippet}
+{#snippet aiCategory({ row }: { row: (typeof transcripts)[number]; value: unknown })}
+	<Badge
+		variant={row.category === 'web' ? 'brand' : 'outline'}
+		class="gap-1"
+		data-ai-category={row.category}
+		><Icon name={AI_ICONS[row.category]} class="size-3" />{row.category}</Badge
+	>
+{/snippet}
 {#snippet inference()}
 	{#if conversations.error !== undefined}<p role="alert" class="text-xs text-destructive">
 			{conversations.error.message}
@@ -202,14 +219,15 @@
 		onOpen={(row) => onConversation?.(row.id)}
 		toolbar={{ export: true }}
 		columns={[
+			{ field: 'category', label: t('Category'), cell: aiCategory },
 			{ field: 'title', label: t('Conversation') },
-			{ field: 'run', label: t('Run') },
+			{ field: 'source', label: t('Source') },
 			{ field: 'status', label: t('Status') },
 			{ field: 'at', label: t('Last active') }
 		]}
 	>
 		{#snippet empty()}
-			<EmptyState variant="inset" icon="history" title={t('No inference calls yet.')} />
+			<EmptyState variant="inset" icon="history" title={t('No AI transcripts yet.')} />
 		{/snippet}
 	</Table>
 {/snippet}

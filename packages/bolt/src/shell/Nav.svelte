@@ -14,12 +14,12 @@
 		Button,
 		Combobox,
 		Icon,
-		Input,
 		Popover,
 		Spinner,
 		Tooltip,
+		beginWorkspaceNavigation,
 		cn,
-		workspaceNavigation
+		type ComboboxOption
 	} from '@norbital-ai/ui';
 	import { FEATURE_COLORS, NorbiusStrip } from '@norbital-ai/ui/brand';
 	import { Frame, Imposter, Inline, Stack } from '@norbital-ai/ui/layout';
@@ -113,9 +113,6 @@
 		closed: { dot: 'bg-destructive', label: 'Connection closed' }
 	};
 
-	const matches = (name: string) =>
-		name.toLowerCase().includes(workspaceQuery.trim().toLowerCase());
-
 	const follow = (event: MouseEvent, href: string) => {
 		event.preventDefault();
 		onNavigate(href);
@@ -129,24 +126,40 @@
 			(words.length > 1 ? `${words[0]![0]}${words[1]![0]}` : name.slice(0, 2)).toUpperCase() || '?'
 		);
 	};
+	// the current workspace heads the list, so the switcher shows which one is open
+	const workspaceOptions: readonly ComboboxOption[] = $derived([
+		...(model.workspace.handle === null
+			? []
+			: [{ value: model.workspace.handle, label: model.workspace.name }]),
+		...model.workspace.others.map((w) => ({ value: w.handle, label: w.name }))
+	]);
+	// another workspace is a full load: it leaves this one through the host's handoff
+	const switchWorkspace = (handle: string | null) => {
+		const next = model.workspace.others.find((w) => w.handle === handle);
+		if (next === undefined) return;
+		beginWorkspaceNavigation(t('Opening workspace…'));
+		location.assign(next.href);
+	};
 
-	// a row with children is a disclosure, open while it holds the active page
+	// a row with children is a disclosure, open while it or a descendant holds the active page
+	const hasActive = (item: NavItem): boolean =>
+		item.active || (item.children?.some((child) => hasActive(child)) ?? false);
+	const activeGroups = (items: readonly NavItem[]): string[] =>
+		items.flatMap((item) =>
+			item.children === undefined
+				? []
+				: [...(hasActive(item) ? [item.key] : []), ...activeGroups(item.children)]
+		);
 	let open = $state<{ [key: string]: boolean }>({});
 	watch(
-		() =>
-			model.sections
-				.flatMap((s) => s.items)
-				.filter((i) => i.active && i.children)
-				.map((i) => i.key),
+		() => model.sections.flatMap((s) => activeGroups(s.items)),
 		(keys) => {
 			for (const k of keys) open[k] = true;
 		}
 	);
 
 	let menuOpen = $state(false),
-		moreOpen = $state(false),
-		switcherOpen = $state(false),
-		workspaceQuery = $state('');
+		moreOpen = $state(false);
 	let teams = $state<Promise<readonly { id: string; name: string }[]> | null>(null);
 	let signingOut = $state(false);
 	function signOut(): void {
@@ -165,7 +178,7 @@
 	const ROW =
 		'relative flex w-full min-w-0 items-center gap-2 overflow-hidden rounded-md text-left outline-hidden ring-sidebar-ring transition-[width,height,padding] focus-visible:ring-2 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground data-[active=true]:bg-sidebar-accent data-[active=true]:font-medium data-[active=true]:text-sidebar-accent-foreground';
 	const SUB =
-		'flex h-7 w-full min-w-0 items-center gap-2 overflow-hidden rounded-md py-0 pr-2 pl-1.5 text-xs text-sidebar-foreground outline-hidden ring-sidebar-ring focus-visible:ring-2 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground data-[active=true]:bg-sidebar-accent data-[active=true]:font-medium data-[active=true]:text-sidebar-accent-foreground';
+		'flex h-7 w-full min-w-0 items-center gap-2 overflow-hidden rounded-md py-0 pr-2 pl-1.5 text-left text-xs text-sidebar-foreground outline-hidden ring-sidebar-ring focus-visible:ring-2 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground data-[active=true]:bg-sidebar-accent data-[active=true]:font-medium data-[active=true]:text-sidebar-accent-foreground';
 	const LABEL = 'min-w-0 flex-1 truncate text-xs font-normal sm:text-micro';
 	const TOOL = 'size-8 rounded-md p-0 hover:bg-accent data-[state=open]:bg-accent';
 </script>
@@ -235,13 +248,13 @@
 				aria-current={!disclosure && item.active ? 'page' : undefined}
 				aria-expanded={disclosure ? open[item.key] === true : undefined}
 				aria-haspopup={item.href === NORBIUS ? 'dialog' : undefined}
-				data-active={item.active ? 'true' : undefined}
+				data-active={!disclosure && item.active ? 'true' : undefined}
 				data-testid={item.href === NORBIUS ? 'workspace-agent-trigger' : undefined}
 				class={cn(ROW, expanded ? 'h-7 p-2 pr-7' : 'size-8 justify-center p-1')}
 				onclick={(e: MouseEvent) =>
 					disclosure ? (open[item.key] = !open[item.key]) : follow(e, item.href)}
 			>
-				{#if item.active}<span
+				{#if item.active && !disclosure}<span
 						class="absolute top-1/4 left-0.5 h-1/2 w-0.5 rounded-lg bg-brand"
 						aria-hidden="true"
 					></span>{/if}
@@ -281,24 +294,54 @@
 
 {#snippet sub(item: NavItem)}
 	<li>
-		<a
-			href={based(item.href)}
-			aria-current={item.active ? 'page' : undefined}
-			data-active={item.active ? 'true' : undefined}
-			class={SUB}
-			onclick={(e) => {
-				moreOpen = false;
-				follow(e, item.href);
-			}}
-		>
-			<Frame as="span" ratio="square" class="size-6"
-				><Icon name={item.icon ?? 'lucide:file'} class="size-3.5" /></Frame
+		{#if item.children !== undefined}
+			<button
+				type="button"
+				aria-expanded={open[item.key] === true}
+				data-active={item.active ? 'true' : undefined}
+				class={SUB}
+				onclick={() => {
+					moreOpen = false;
+					open[item.key] = !open[item.key];
+				}}
 			>
-			<span class={LABEL}>{item.label}</span>
-			{#if item.badge}<Badge variant="outline" class="px-1.5 py-0 text-tiny leading-4 font-medium"
-					>{item.badge}</Badge
-				>{/if}
-		</a>
+				<Frame as="span" ratio="square" class="size-6"
+					><Icon name={item.icon ?? 'lucide:folder'} class="size-3.5" /></Frame
+				>
+				<span class={LABEL}>{item.label}</span>
+				<Icon
+					name="lucide:chevron-right"
+					class={cn(
+						'ml-auto size-3 transition-transform duration-150',
+						open[item.key] && 'rotate-90'
+					)}
+				/>
+			</button>
+			{#if open[item.key]}
+				<Stack as="ul" gap="xs" class="mr-0 ml-4 border-l border-sidebar-border py-0.5 pr-0 pl-2">
+					{#each item.children as child (child.key)}{@render sub(child)}{/each}
+				</Stack>
+			{/if}
+		{:else}
+			<a
+				href={based(item.href)}
+				aria-current={item.active ? 'page' : undefined}
+				data-active={item.active ? 'true' : undefined}
+				class={SUB}
+				onclick={(e) => {
+					moreOpen = false;
+					follow(e, item.href);
+				}}
+			>
+				<Frame as="span" ratio="square" class="size-6"
+					><Icon name={item.icon ?? 'lucide:file'} class="size-3.5" /></Frame
+				>
+				<span class={LABEL}>{item.label}</span>
+				{#if item.badge}<Badge variant="outline" class="px-1.5 py-0 text-tiny leading-4 font-medium"
+						>{item.badge}</Badge
+					>{/if}
+			</a>
+		{/if}
 	</li>
 {/snippet}
 
@@ -369,90 +412,36 @@
 				>{/if}
 		</div>
 	{:else}
-		<Popover.Root
-			bind:open={switcherOpen}
-			onOpenChange={(open) => {
-				if (!open) workspaceQuery = '';
-			}}
+		<Combobox
+			value={model.workspace.handle}
+			options={workspaceOptions}
+			searchable
+			aria-label={t('Switch workspace')}
+			class={expanded ? 'h-8 w-full px-2' : 'size-8 shrink-0 justify-center gap-0 p-0'}
+			onChange={switchWorkspace}
 		>
-			<Popover.Trigger>
-				{#snippet child({ props })}
-					<button
-						{...props}
-						type="button"
-						aria-label={t('Switch workspace')}
-						data-testid="workspace-switcher"
-						class={cn(
-							'flex min-w-0 items-center gap-2 rounded-md border border-input bg-background text-sm shadow-xs outline-hidden hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring',
-							expanded ? 'h-8 w-full px-2' : 'size-8 justify-center p-0'
-						)}
-					>
-						{@render avatar(
-							initials(model.workspace.name),
-							model.workspace.name,
-							model.workspace.logo,
-							'size-6'
-						)}
-						{#if expanded}<span class="min-w-0 flex-1 truncate text-left text-xs font-medium"
-								>{model.workspace.name}</span
-							>{/if}
-					</button>
-				{/snippet}
-			</Popover.Trigger>
-			<Popover.Content
-				align="start"
-				side={expanded ? 'bottom' : 'right'}
-				sideOffset={6}
-				sameWidth={mobile}
-				class={mobile ? 'p-1' : 'w-64 p-1'}
-			>
-				<Input
-					type="search"
-					bind:value={workspaceQuery}
-					placeholder={t('Search workspaces')}
-					aria-label={t('Search workspaces')}
-					data-testid="workspace-search"
-					class="mb-1 h-8 text-xs"
-					onkeydown={(event) => {
-						if (event.key !== 'Enter') return;
-						event.preventDefault();
-						event.currentTarget.parentElement
-							?.querySelector<HTMLAnchorElement>('[data-testid="workspace-option"]')
-							?.click();
-					}}
-				/>
-				<div class="max-h-80 overflow-y-auto">
-					{#if matches(model.workspace.name)}
-						<Inline gap="sm" class="rounded-sm bg-accent/60 px-2 py-1.5">
-							{@render avatar(
-								initials(model.workspace.name),
-								model.workspace.name,
-								model.workspace.logo,
-								'size-6'
-							)}
-							<span class="min-w-0 flex-1 truncate text-xs font-medium">{model.workspace.name}</span>
-							<Icon name="lucide:check" class="size-3.5 shrink-0" />
-						</Inline>
-					{/if}
-					<!-- a full load: the link leaves this workspace through the host's handoff -->
-					{#each model.workspace.others.filter((w) => matches(w.name)) as w (w.handle)}
-						<a
-							href={w.href}
-							use:workspaceNavigation={t('Opening workspace…')}
-							data-sveltekit-reload
-							data-testid="workspace-option"
-							class={cn(
-								'mt-1 flex items-center gap-2 rounded-sm px-2 text-xs hover:bg-accent',
-								mobile ? 'h-11' : 'h-8'
-							)}
-						>
-							{@render avatar(initials(w.name), w.handle, null, 'size-6')}
-							<span class="min-w-0 flex-1 truncate">{w.name}</span>
-						</a>
-					{/each}
-				</div>
-			</Popover.Content>
-		</Popover.Root>
+			{#snippet trigger(option)}
+				{@render avatar(
+					initials(option?.label ?? model.workspace.name),
+					(option?.value ?? null) === model.workspace.handle
+						? model.workspace.name
+						: (option?.value ?? model.workspace.name),
+					(option?.value ?? null) === model.workspace.handle ? model.workspace.logo : null,
+					'size-6'
+				)}
+				{#if expanded}<span class="min-w-0 flex-1 truncate text-left text-xs font-medium"
+						>{option?.label ?? model.workspace.name}</span
+					>{/if}
+			{/snippet}
+			{#snippet lead(option)}
+				{@render avatar(
+					initials(option.label),
+					option.value === model.workspace.handle ? model.workspace.name : option.value,
+					option.value === model.workspace.handle ? model.workspace.logo : null,
+					'size-6'
+				)}
+			{/snippet}
+		</Combobox>
 	{/if}
 {/snippet}
 

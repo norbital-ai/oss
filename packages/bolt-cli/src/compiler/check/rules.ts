@@ -290,13 +290,7 @@ function modelRules({ m, bodies, at }: RuleContext): void {
 			if ('error' in program) at('model/label', 'model', model, program.error);
 		}
 		for (const l of labelPaths(identifier)) {
-			if (l.includes('.') && m.relationships[`${model}.${l.split('.')[0]}`] !== undefined)
-				at(
-					'model/label',
-					'model',
-					model,
-					`record_label must read the record's own stored or computed fields; '${l}' crosses a relationship.`
-				);
+			// a label may follow one-relations; labelRead brings the target's label in the same read
 			let owner = model;
 			for (const [index, field] of l.split('.').entries()) {
 				const relation = m.relationships[`${owner}.${field}`];

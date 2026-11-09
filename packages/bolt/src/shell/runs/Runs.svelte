@@ -9,11 +9,13 @@
 	import { fork, observe } from '@norbital-ai/ui/effect';
 	import { Effect, Schedule, Stream } from 'effect';
 	import {
+		Badge,
 		Button,
 		Combobox,
 		Dialog,
 		EmptyState,
 		Form,
+		Icon,
 		Show,
 		Table,
 		useKinds
@@ -84,18 +86,43 @@
 								? (trigger.by?.automation ?? t('schedule'))
 								: trigger.cause
 					}`;
-	const runRow = (r: RunView) => ({
-		id: r.id,
-		automation: r.automation,
-		trigger: triggerOf(r.trigger),
-		cause: r.cause,
-		status: r.status,
-		due_at: r.due_at,
-		started: r.started,
-		progress: r.progress,
-		error_code: r.error?.code ?? null,
-		attempt_count: r.attempt_count
-	});
+	// the queue holds every run: an authored automation (a source handle never holds a dot), a model's effect or sync
+	// (`<model>.effect.<verb>`, `<model>.sync.<sync>`), else platform work named by its area (`bolt.notify`, `agent.turn`)
+	const named = (automation: string) => {
+		const scoped = /^([^.]+)\.(effect|sync)\.(.+)$/.exec(automation);
+		if (scoped !== null) return { namespace: scoped[2] ?? '', name: `${scoped[1]}.${scoped[3]}` };
+		const dot = automation.indexOf('.');
+		return dot === -1
+			? { namespace: 'automation', name: automation }
+			: { namespace: automation.slice(0, dot), name: automation.slice(dot + 1) };
+	};
+	const NAMESPACE_ICONS: Readonly<Record<string, string>> = {
+		automation: 'lucide:workflow',
+		effect: 'lucide:git-commit-horizontal',
+		sync: 'lucide:refresh-cw',
+		bolt: 'lucide:zap',
+		agent: 'lucide:sparkles',
+		envoys: 'lucide:send',
+		notifications: 'lucide:bell',
+		integrations: 'lucide:plug',
+		link: 'lucide:link'
+	};
+	const runRow = (r: RunView) => {
+		const { namespace, name } = named(r.automation);
+		return {
+			id: r.id,
+			namespace,
+			name,
+			trigger: triggerOf(r.trigger),
+			cause: r.cause,
+			status: r.status,
+			due_at: r.due_at,
+			started: r.started,
+			progress: r.progress,
+			error_code: r.error?.code ?? null,
+			attempt_count: r.attempt_count
+		};
+	};
 	type RunRow = ReturnType<typeof runRow>;
 	const rows = $derived(runs.current?.rows.map(runRow) ?? null);
 	const one = $derived($detail ?? null);
@@ -172,6 +199,17 @@
 		{#if row.error_code}<span class="truncate text-xs text-destructive">{row.error_code}</span>{/if}
 	</span>
 {/snippet}
+{#snippet namespace({ row }: { row: RunRow; value: unknown })}
+	<Badge
+		variant={row.namespace === 'automation' ? 'brand' : 'outline'}
+		class="gap-1"
+		data-namespace={row.namespace}
+		><Icon
+			name={NAMESPACE_ICONS[row.namespace] ?? 'lucide:box'}
+			class="size-3"
+		/>{row.namespace}</Badge
+	>
+{/snippet}
 {#snippet at({ value }: { row: RunRow; value: unknown })}<time class="tabular-nums"
 		>{when(typeof value === 'string' ? value : null)}</time
 	>{/snippet}
@@ -212,7 +250,8 @@
 			onOpen={(r) => onRun(r.id)}
 			toolbar={{ export: true, ...(startable.length > 0 ? { trailing: runNowControls } : {}) }}
 			columns={[
-				{ field: 'automation', label: t('Automation') },
+				{ field: 'namespace', label: t('Namespace'), cell: namespace },
+				{ field: 'name', label: t('Name') },
 				{ field: 'status', label: t('Status'), cell: status },
 				{ field: 'trigger', label: t('Triggered by') },
 				{ field: 'cause', label: t('Cause') },

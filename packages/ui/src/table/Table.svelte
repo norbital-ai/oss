@@ -228,7 +228,7 @@
 			...columns.map((c) => (typeof c === 'string' ? c : c.field)),
 			...(kinds.catalog?.[model]?.record_label === undefined
 				? []
-				: (kinds.catalog?.[model]?.label ?? []))
+				: (kinds.catalog?.[model]?.labelPaths ?? kinds.catalog?.[model]?.label ?? []))
 		])
 	]);
 	type Column = Col<RowIn<S>, ColumnsIn<S>>;

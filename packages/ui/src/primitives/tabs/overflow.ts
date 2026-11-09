@@ -14,6 +14,8 @@ export function observeTabOverflow(
 			(parseFloat(style.paddingLeft) || 0) -
 			(parseFloat(style.paddingRight) || 0);
 		const widths = items.map((e) => e.offsetWidth);
+		// not laid out yet (a hidden panel, a first paint): keep what is shown and wait for the observer
+		if (room <= 0 || widths.length === 0 || widths.every((width) => width === 0)) return;
 		if (
 			widths.reduce((sum, width) => sum + width, 0) + gap * Math.max(0, widths.length - 1) <=
 			room

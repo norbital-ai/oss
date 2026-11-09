@@ -141,7 +141,7 @@ A tab strip with the selected tab's body; `keepAlive` tabs stay mounted while hi
 				data-tabs-variant={vertical ? 'rail' : variant}
 				class={cn(
 					'relative flex min-w-0 flex-nowrap items-center',
-					leading ? 'ml-auto flex-none' : 'flex-1',
+					leading ? 'ml-auto min-w-0 flex-1' : 'flex-1',
 					vertical ? RAIL_LIST : TAB_LIST[variant],
 					vertical ? SCROLL_AXIS_CLASSES.x : 'overflow-x-clip'
 				)}
