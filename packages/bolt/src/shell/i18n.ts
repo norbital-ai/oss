@@ -1086,6 +1086,7 @@ export const SHELL_ZH: { readonly [key: string]: string } = {
 		'助手尚未设置。请管理员连接 AI 服务。',
 	'Attach media or files': '附加媒体或文件',
 	'Jump to latest': '跳到最新',
+	'Waiting for your answer': '等待您的回答',
 	'Just now': '刚刚',
 	'Summarize this conversation and keep its transcript available.':
 		'总结此对话，并保留其完整记录。',

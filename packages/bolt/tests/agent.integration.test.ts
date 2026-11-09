@@ -699,6 +699,30 @@ describe('in-app turns', () => {
 			})
 		)
 	);
+	it.live('asks the person and ends the turn instead of guessing', () =>
+		Effect.scoped(
+			Effect.gen(function* () {
+				const ai = cassette();
+				ai.arm([
+					use('ask', {
+						question: 'Which pages should this workspace have?',
+						options: ['Dashboard + Reports', 'Something else']
+					})
+				]);
+				const { agent, user } = yield* build(ai);
+				const ann = yield* user('asks', { admin: true });
+				const c = yield* agent.start({ owner: ann });
+				yield* agent.post({ conversation: c, as: { member: ann }, text: 'Build the portfolio' });
+				yield* agent.drain(c);
+				const rows = yield* agent.transcript(c);
+				const last = rows.filter((row) => row.role === 'assistant').at(-1);
+				expect(last?.meta).toMatchObject({ tag: 'reply', asked: true });
+				expect(last?.text).toContain('Which pages should this workspace have?');
+				expect(last?.text).toContain('1. Dashboard + Reports');
+				expect(rows.some((row) => row.role === 'tool' && JSON.stringify(row.content).includes('"name":"ask"'))).toBe(true);
+			})
+		)
+	);
 	it.live('red checks whose failures keep falling are never stopped', () =>
 		Effect.scoped(
 			Effect.gen(function* () {

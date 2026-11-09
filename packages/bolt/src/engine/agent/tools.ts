@@ -3358,6 +3358,43 @@ A committed write answers the stored rows; a held one waits for approval.`,
 			})
 		);
 	}
+	if (!x.child) {
+		const askTool = shared('ask', () =>
+			Tool.make('ask', {
+				description:
+					'Ask the person one focused question and end this turn. Use when the brief has two plausible shapes, a page or model tradeoff, or a live-versus-stored choice; include short options when the answer is a choice. Do not build on a guess.',
+				parameters: Schema.Struct({
+					question: Schema.String,
+					options: Schema.optionalKey(Schema.Array(Schema.String))
+				}),
+				success: ToolAnswer
+			})
+		);
+		yield* add(
+			askTool,
+			Toolkit.make(askTool).toHandlers({
+				ask: (i) =>
+					guard(
+						Effect.sync(() => {
+							const question = i.question.trim();
+							if (question === '') return err('Ask a question.');
+							const options = (i.options ?? [])
+								.map((option) => option.trim())
+								.filter((option) => option !== '');
+							x.ask(
+								options.length === 0
+									? question
+									: `${question}\n\n${options.map((option, index) => `${index + 1}. ${option}`).join('\n')}`
+							);
+							return ok({
+								asked: true,
+								note: 'Stop here: your question goes to the person.'
+							});
+						})
+					)
+			})
+		);
+	}
 	{
 		const waitTool = shared('wait', () =>
 			Tool.make('wait', {

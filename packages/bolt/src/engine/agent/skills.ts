@@ -42,5 +42,53 @@ description: Protocol for analysing data and producing charts and reports.
 2. Anything further is run_js over the read's rows; verify its totals against an aggregate.
 3. A chart is an SVG file run_js returns. A report is document, with numbers as tables and charts inline.
 4. State what the numbers show in a sentence or two.
+`),
+	requirements: skill(`---
+description: How to turn a brief into the smallest product that fits.
+---
+1. Restate the goal, the people it serves, the jobs they do, the non-goals and what acceptance means. If two readings of the brief would produce different pages, ask with the ask tool before building.
+2. Write a short design note: each requirement, the page or section that serves it, and why. Every page, model and automation in the change must trace to a line in that note; anything without one is deleted or merged.
+3. One page serves one job. Prefer a section, a form or a field over a new page; prefer an existing model over a new one. Add a surface only when the requirement needs it.
+4. On feedback, state what will be removed or merged first, then add only what the person asked for.
+5. A build is not done until the design note, the tests and workspace_preview agree with the brief.
+`),
+	'data-modelling': skill(`---
+description: When a fact earns a model, an inline field, or a live read.
+---
+1. A model earns its table only when the fact has its own identity, lifecycle, permissions, history or relational queries. Otherwise it is a field, a child of its owner, or a shape inside one record.
+2. One owner per fact. Do not duplicate a value across models; a read that needs it reaches the owner.
+3. External live facts — rates, prices, weather, feeds — are reads through the host's facilities. Persist a value only when the requirement asks for history or audit, and say which requirement does.
+4. A dated report is one record: its figures, sections and conclusions are inline children or shapes on that record, not one model per section.
+5. Model the domain, not the page. If a table exists only to arrange a screen, it is a UI concern, not a model.
+`),
+	'product-ux': skill(`---
+description: How a workspace page and form should be composed.
+---
+1. Read the page and layout references before the first page. Use the shell and layout primitives; a page root is not a raw flex/grid div.
+2. AppShell and Scroll own the page. A page with more than one section scrolls inside its shell; the page never relies on the browser body for scrolling.
+3. Use Section or Fieldset to reveal detail progressively. Group forms by meaning; do not present a long flat field list.
+4. Give record models a representation; use Table for lists and a record surface for one row. Do not render a model as ad-hoc markup.
+5. Artwork is part of the app identity: a banner or thumbnail is a real image, not an empty placeholder. Give every image a working source and alt text.
+6. Verify with workspace_preview: pages render, scroll, and show no broken images or console errors.
+`),
+	engineering: skill(`---
+description: General engineering practice for a workspace change.
+---
+1. Read the source, the contract and the relevant references before writing. Do not guess an API when a type or a reference answers it.
+2. Make the smallest complete change. No unasked feature, no abstraction without two real call sites, no dead model, page or field.
+3. Keep values in the form the platform already gives them; decode at the boundary once. Do not erase types or fabricate partial data.
+4. Tests are evidence for the risky paths. A write, a state move, a live read and a refusal each need a case.
+5. Verify in this order: types, tests, build, preview. Report what failed and what you fixed.
+6. When feedback says the result is wrong, remove or merge before adding. A larger diff is not progress.
+`),
+	'workspace-eval': skill(`---
+description: How to grade a workspace against its brief before merge.
+---
+1. Read the brief, the design note, the source, the preview report and the tests. The question is requirement fit, not taste.
+2. For every requirement, name the page, section, model or automation that serves it and the evidence that it works. A surface with no requirement is a finding.
+3. Ask what could be deleted or inlined. A model that only arranges a screen, a page that repeats another page, a section that could be a field: each is a finding with the requirement it fails to justify.
+4. Check live versus stored: an external value is a read unless a stated history or audit requirement needs a record.
+5. Check the UI evidence: every page scrolls, the shell and forms are used, representations exist for record views, artwork loads, no console errors.
+6. Score requirement fit, simplicity, data shape, UI and verification from 0 to 4. Verdict: pass only when every requirement is traced and every finding is fixed or explicitly accepted by the person.
 `)
 };

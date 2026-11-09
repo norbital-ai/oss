@@ -2650,6 +2650,14 @@
 											{#if row.detail}<p class="text-xs text-muted-foreground" data-detail>
 													{row.detail}
 												</p>{/if}
+											{#if row.asked}<p
+													class="mt-1 flex items-center gap-1 text-xs text-muted-foreground"
+													data-asked
+												>
+													<Icon name="lucide:message-circle-question" class="size-3.5" />{t(
+														'Waiting for your answer'
+													)}
+												</p>{/if}
 											{#each receiptsOf(row) as r, i (i)}
 												<p class="text-xs text-muted-foreground" data-receipt>
 													{r.outcome === 'pendingApproval' ? t('Awaiting approval') : t('Done')}: {r.callable}
