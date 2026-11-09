@@ -186,10 +186,6 @@
 	/** Local outbox rows the person cancelled before their post answered: dequeue the stored row when it does. */
 	const cancelled = new Set<string>();
 	const rows = $derived([...older, ...live, ...outbox]);
-	/** The latest change of live Norbius asked for: the composer is where it is decided. */
-	const approval = $derived(
-		thread ? undefined : rows.findLast((row) => row.tool?.approval !== undefined)
-	);
 	const before = $derived(
 		from === null ? null : edge === null ? from : edge.more ? edge.first : null
 	);
@@ -1387,9 +1383,19 @@
 				)
 	);
 	const stopRun = (id: string) => dispatch(api.stopRun(id).pipe(Effect.asVoid));
-	// Between steps show the whole run's elapsed time, not a claim about the current model wait.
+	// Between steps show the whole run's elapsed time, not a claim about the current model wait. A steps group that already
+	// says it is working is that line: do not repeat it below.
+	const workingGroup = $derived(
+		status === 'running' &&
+			items.some(
+				(item, index) =>
+					'steps' in item && (index === items.length - 1 || item.steps.some(active))
+			)
+	);
 	const quiet = $derived(
-		status === 'running' && !rows.some((r) => r.state === 'streaming' || r.state === 'running')
+		status === 'running' &&
+			!workingGroup &&
+			!rows.some((r) => r.state === 'streaming' || r.state === 'running')
 	);
 	/** The "Open page" row's link is the URL the person shares, not the logical path it shows. */
 	let copiedNavigation = $state<string | null>(null);
@@ -2390,6 +2396,12 @@
 											</summary>
 											<Steps steps={item.steps} {t} opened={expanded} />
 										</details>
+										{#each item.steps.filter((step) => step.tool?.approval !== undefined) as st (st.id)}
+											<!-- a live change the host holds for the person: at the call that asked for it -->
+											<div class="my-2">
+												{#key st.tool?.approval}<StudioApproval {api} step={st} {t} />{/key}
+											</div>
+										{/each}
 										{#each item.steps as st (st.id)}
 											{#if !thread && st.tool?.navigation !== undefined && clientNavigation !== undefined && conversation !== null}
 												{@const path = st.tool.navigation}
@@ -2775,12 +2787,6 @@
 							)}
 				</p>
 			{:else}
-				{#if approval !== undefined}
-					<!-- a live change the host holds for the person: approved here, it runs as them -->
-					<div class="mx-auto w-full max-w-3xl shrink-0 px-4 pb-3">
-						{#key approval.id}<StudioApproval {api} step={approval} {t} />{/key}
-					</div>
-				{/if}
 				{#if drafting && current?.plan}
 					{@const p = current.plan}
 					<!-- Draft plan: a collapsed card above the prompt, reviewed by expanding it, executed or deleted from its header -->
