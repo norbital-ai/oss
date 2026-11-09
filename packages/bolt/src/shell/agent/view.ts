@@ -565,16 +565,39 @@ export const stepArgs = (text: string | undefined): unknown =>
 	Object.fromEntries(
 		[...(text ?? '').matchAll(/"(\w+)":"((?:[^"\\]|\\.)*)"/g)].reverse().map((m) => [m[1], m[2]])
 	);
+const CHECKS: ReadonlySet<string> = new Set([
+	'workspace_diagnose',
+	'workspace_preview',
+	'workspace_validate'
+]);
+/**
+ * What a check that ran found: its type errors and whether its tests failed. A check's findings are its answer, never a
+ * failed step; null for any other step, and for a check that could not run (no `types` or `tests` in its answer).
+ */
+export function checkOf(
+	tool: AgentRow['tool']
+): { readonly typeErrors: number; readonly testsFailed: boolean } | null {
+	if (tool === undefined || !CHECKS.has(tool.name)) return null;
+	const answer = obj(parsed(tool.result));
+	if (answer['types'] === undefined && answer['tests'] === undefined) return null;
+	const total = obj(answer['types'])['total'];
+	return {
+		typeErrors: typeof total === 'number' ? total : 0,
+		testsFailed: obj(answer['tests'])['state'] === 'failed'
+	};
+}
 /** Why a failed step failed: its error, else its result as it came (a clipped one does not parse); '' for any other step. */
 export function failureOf(tool: AgentRow['tool']): string {
-	if (tool?.failed !== true) return '';
+	if (tool?.failed !== true || checkOf(tool) !== null) return '';
 	const error = obj(parsed(tool.result))['error'];
 	return typeof error === 'string' ? error : (tool.result ?? '');
 }
 /** What each failed step did, in words (`stepView`'s verb): the run's failure mark names them. */
 export const failedVerbs = (steps: readonly AgentRow[]): string[] =>
 	steps.flatMap((s) =>
-		s.tool?.failed === true ? [stepView(s.tool.name, stepArgs(s.tool.args)).verb] : []
+		s.tool?.failed === true && checkOf(s.tool) === null
+			? [stepView(s.tool.name, stepArgs(s.tool.args)).verb]
+			: []
 	);
 
 /** What a running Studio step is doing, in the person's words: the group's line while it runs. */

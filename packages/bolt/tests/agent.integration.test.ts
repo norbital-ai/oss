@@ -699,6 +699,45 @@ describe('in-app turns', () => {
 			})
 		)
 	);
+	it.live('red checks whose failures keep falling are never stopped', () =>
+		Effect.scoped(
+			Effect.gen(function* () {
+				const ai = cassette();
+				ai.arm(
+					Array.from({ length: 8 }, (_, n) => [
+						use('workspace_write', { path: 'src/a.ts', content: `round ${n}` }),
+						use('workspace_diagnose', {})
+					]).flat()
+				);
+				let validations = 0;
+				const fixture = (name: string, call: () => Promise<Json>) => ({
+					name,
+					description: `Fixture ${name}`,
+					input: { type: 'object' as const, additionalProperties: true },
+					readOnly: true,
+					call
+				});
+				const { agent, user } = yield* build(ai, {
+					hostTools: [
+						fixture('workspace_write', async () => ({ saved: ['src/a.ts'] })),
+						// 65, 60, 55 … still red each round, each a new low
+						fixture('workspace_diagnose', async () => ({
+							failing: 65 - 5 * validations++,
+							types: { total: 65 - 5 * (validations - 1), diagnostics: [] }
+						}))
+					]
+				});
+				const ann = yield* user('falling-rounds', { admin: true });
+				const c = yield* agent.start({ owner: ann });
+				yield* agent.post({ conversation: c, as: { member: ann }, text: 'Fix the types' });
+				yield* agent.drain(c);
+				const rows = yield* agent.transcript(c);
+				expect(validations).toBe(8);
+				expect(rows.filter((r) => r.text?.startsWith('Your last checks'))).toHaveLength(0);
+				expect(rows.some((r) => r.text?.includes('the checks kept failing'))).toBe(false);
+			})
+		)
+	);
 	it.live(
 		'an in-app conversation hears each workspace event once at its next step, and the inbox once per member',
 		() =>

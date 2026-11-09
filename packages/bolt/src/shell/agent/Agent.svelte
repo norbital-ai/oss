@@ -1417,6 +1417,39 @@
 			)
 		);
 	}
+	/** A sent message's text, copied from the actions under it. */
+	let copiedMessage = $state<string | null>(null);
+	function copyMessage(row: AgentRow): void {
+		const clipboard = navigator.clipboard;
+		if (clipboard === undefined) return;
+		dispatch(
+			Effect.tryPromise({
+				try: () => clipboard.writeText(row.text ?? ''),
+				catch: (cause) =>
+					new AgentPanelFailed({ message: t('The text could not be copied.'), cause })
+			}).pipe(
+				Effect.tap(() =>
+					Effect.sync(() => {
+						copiedMessage = row.id;
+					})
+				),
+				Effect.andThen(Effect.sleep('1500 millis')),
+				Effect.ensuring(
+					Effect.sync(() => {
+						if (copiedMessage === row.id) copiedMessage = null;
+					})
+				)
+			)
+		);
+	}
+	/** When a message was sent: "Just now" for a minute, then its time of day, or its date before today. */
+	function sentAt(at: string): string {
+		const sent = new Date(at);
+		if (Date.now() - sent.getTime() < 60_000) return t('Just now');
+		return sent.toDateString() === new Date().toDateString()
+			? sent.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
+			: sent.toLocaleDateString([], { month: 'short', day: 'numeric' });
+	}
 	/** Each code block of a reply gets a copy button (the Markdown renders plain `pre`; this re-adds it after each render). */
 	function copyable(el: HTMLElement): () => void {
 		const add = () => {
@@ -2462,32 +2495,65 @@
 									{@const { row, index } = item}
 									{#if row.role === 'user'}
 										{@const label = triageLabel(row, index)}
+										<!-- the bubble holds the message alone; its time and actions sit under it, as a chat reads -->
 										<li
 											{@attach turns.measure(itemKey(at))}
-											class="ml-auto w-fit max-w-[85%] rounded-xl bg-muted px-4 py-2.5 break-words whitespace-pre-wrap"
+											class="ml-auto flex w-fit max-w-[85%] flex-col items-end gap-1"
 											class:opacity-60={row.state === 'pending' || row.tag === 'ambient'}
 											data-role="user"
 											data-outside-context={outside(row) || undefined}
 											data-pending={row.state === 'pending' || undefined}
 										>
-											<!-- an automation's prompt is authored Markdown (its sources and index fenced): rendered, code blocks and all -->
-											{#if automation}<div
-													{@attach copyable}
-													class="agent-reply whitespace-normal"
-													data-text
+											<div
+												class="max-w-full rounded-xl bg-muted px-4 py-2.5 break-words whitespace-pre-wrap"
+											>
+												<!-- an automation's prompt is authored Markdown (its sources and index fenced): rendered, code blocks and all -->
+												{#if automation}<div
+														{@attach copyable}
+														class="agent-reply whitespace-normal"
+														data-text
+													>
+														<ReadonlyMarkdown
+															value={row.text ?? ''}
+															class="prose-pre:bg-background prose-pre:text-foreground"
+														/>
+													</div>{:else}<span data-text>{row.text}</span>{/if}{@render attachments(
+													row
+												)}
+											</div>
+											{#if !thread && row.state === 'consumed'}
+												<div
+													class="flex items-center gap-0.5 text-xs text-muted-foreground"
+													data-message-actions
 												>
-													<ReadonlyMarkdown
-														value={row.text ?? ''}
-														class="prose-pre:bg-background prose-pre:text-foreground"
-													/>
-												</div>{:else}<span data-text>{row.text}</span>{/if}{@render attachments(
-												row
-											)}
-											{#if !thread && row.state === 'consumed' && revisable(row)}<Button
-													variant="ghost"
-													class="mt-1 h-6 px-1 text-xs"
-													onclick={() => revise(row)}>{t('Revise')}</Button
-												>{/if}
+													{#if row.at !== undefined}<time
+															class="mr-1"
+															datetime={row.at}
+															title={new Date(row.at).toLocaleString()}>{sentAt(row.at)}</time
+														>{/if}
+													{#if (row.text ?? '') !== ''}<Button
+															variant="ghost"
+															size="icon"
+															class="size-6"
+															aria-label={t('Copy')}
+															title={copiedMessage === row.id ? t('Copied') : t('Copy')}
+															onclick={() => copyMessage(row)}
+															><Icon
+																name={copiedMessage === row.id ? 'lucide:check' : 'lucide:copy'}
+																class="size-3.5"
+															/></Button
+														>{/if}
+													{#if revisable(row)}<Button
+															variant="ghost"
+															size="icon"
+															class="size-6"
+															aria-label={t('Revise')}
+															title={t('Revise')}
+															onclick={() => revise(row)}
+															><Icon name="lucide:rotate-ccw" class="size-3.5" /></Button
+														>{/if}
+												</div>
+											{/if}
 											{#if label !== null}
 												<span
 													class="mt-1 flex items-center justify-between gap-2 text-xs text-muted-foreground"

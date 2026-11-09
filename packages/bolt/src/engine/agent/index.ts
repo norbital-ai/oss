@@ -383,6 +383,18 @@ export function rest(name: string, call: string, result: Json): string[] {
 		)
 	];
 }
+/**
+ * How many failures a check (`workspace_diagnose`, `workspace_test`) reported: its `failing` count, or the count its
+ * `error` names (`"7 failing"`, the older answer); 0 when it came back clean; undefined when it could not run at all.
+ */
+export const checkFailing = (answer: Json): number | undefined => {
+	if (!isObj(answer)) return undefined;
+	if (typeof answer['failing'] === 'number') return answer['failing'];
+	const error = answer['error'];
+	if (error === undefined || error === null) return 0;
+	const counted = typeof error === 'string' ? /^(\d+) failing/.exec(error) : null;
+	return counted === null ? undefined : Number(counted[1]);
+};
 /** Steps whose every tool call failed, and an empty reply, are told this before the turn ends visibly. */
 export const NUDGE = {
 	red: 'Your last checks all failed. Stop editing and rerunning: read the failure, look up the contract you are guessing at, or tell the person plainly what blocks you.',
@@ -927,9 +939,17 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 			work = yield* jobs({
 				detached,
 				late: (lines) => steer(id, as, lines),
-				ended: (label, failed) => {
-					if (label === 'workspace_test' || label === 'workspace_diagnose')
-						red = failed ? red + 1 : 0;
+				ended: (label, answer) => {
+					if (label !== 'workspace_test' && label !== 'workspace_diagnose') return;
+					// a red check counts against the turn only when it reaches no new low: one converging on a fix goes on
+					const failing = checkFailing(answer);
+					if (failing === 0) {
+						red = 0;
+						lowest = Number.POSITIVE_INFINITY;
+					} else if (failing !== undefined && failing < lowest) {
+						lowest = failing;
+						red = 0;
+					} else red += 1;
 				}
 			}),
 			failures = new Map<string, number>();
@@ -1054,8 +1074,9 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 		let modelOf = '';
 		let steps = 0,
 			failing = 0,
-			// type checks and test runs in a row that came back red, whatever was edited between them
+			// type checks and test runs in a row that came back red without reaching a new low of failures
 			red = 0,
+			lowest = Number.POSITIVE_INFINITY,
 			toldRed = false,
 			lastError = '',
 			emptied = false,

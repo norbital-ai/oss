@@ -6,6 +6,7 @@ import type { Json } from '../src/decl/values.ts';
 import type { AgentRow } from '../src/protocol/wire.ts';
 import {
 	background,
+	checkOf,
 	checkpointSections,
 	childStatus,
 	contextView,
@@ -24,6 +25,7 @@ import {
 	stepView
 } from '../src/shell/agent/view.ts';
 import type { StudioChangeSet } from '../src/shell/studio/model.ts';
+import { checkFailing } from '../src/engine/agent/index.ts';
 
 const row = (seq: number, o: Partial<AgentRow> = {}): AgentRow => ({
 	id: `m${seq}`,
@@ -384,6 +386,25 @@ describe('Studio outcomes outside the folded steps', () => {
 				failed('browser', '{"download":"https://a.test/x"}', '{"error":"404"}')
 			])
 		).toEqual(['Downloaded']);
+	});
+	it('a check that ran reports what it found, not a failure; one that could not run is a failed step', () => {
+		const found = '{"failing":2,"types":{"total":2,"diagnostics":[]}}',
+			older = '{"error":"2 failing","types":{"total":2,"diagnostics":[]}}';
+		for (const result of [found, older]) {
+			const check = tool('workspace_diagnose', result, { failed: result === older });
+			expect(checkOf(check)).toEqual({ typeErrors: 2, testsFailed: false });
+			expect(failureOf(check)).toBe('');
+			expect(failedVerbs([row(1, { role: 'tool', tool: check })])).toEqual([]);
+		}
+		const broke = tool('workspace_diagnose', '{"error":"no graph in the package store"}', {
+			failed: true
+		});
+		expect(checkOf(broke)).toBeNull();
+		expect(failureOf(broke)).toBe('no graph in the package store');
+		expect(checkFailing({ failing: 7, types: {} })).toBe(7);
+		expect(checkFailing({ error: '65 failing, unchanged for 3 runs.' })).toBe(65);
+		expect(checkFailing({ types: { total: 0 } })).toBe(0);
+		expect(checkFailing({ error: 'The build did not start.' })).toBeUndefined();
 	});
 	it('the previewer shows built previews and the ones the agent chose among them, never another page', () => {
 		const step = (seq: number, name: string, o: Partial<NonNullable<AgentRow['tool']>>) =>

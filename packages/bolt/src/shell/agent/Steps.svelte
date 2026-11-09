@@ -8,7 +8,7 @@
 	import { CodeEditor, Icon } from '@norbital-ai/ui';
 	import type { AgentRow } from '../../protocol/wire.ts';
 	import ToolBody from './ToolBody.svelte';
-	import { failureOf, reportView, stepArgs, stepView, type StepView } from './view.ts';
+	import { checkOf, failureOf, reportView, stepArgs, stepView, type StepView } from './view.ts';
 
 	let {
 		steps,
@@ -37,8 +37,18 @@
 		{@const report = reportView(s)}
 		{@const v = report ?? viewOf(s)}
 		{@const tool = s.tool}
-		{@const failed = tool?.failed === true}
+		{@const check = checkOf(tool)}
+		{@const failed = tool?.failed === true && check === null}
 		{@const reason = failureOf(tool)}
+		{@const found =
+			check === null
+				? ''
+				: [
+						check.typeErrors > 0 ? `${check.typeErrors} ${t('type errors')}` : '',
+						check.testsFailed ? t('Tests failed') : ''
+					]
+						.filter((part) => part !== '')
+						.join(' · ')}
 		<li
 			class="animate-in fade-in-0 slide-in-from-bottom-1 animation-duration-150 ease-out motion-reduce:animate-none"
 			data-step
@@ -60,10 +70,16 @@
 						: 'text-muted-foreground hover:text-foreground'}"
 				>
 					<Icon
-						name={failed ? 'lucide:circle-alert' : active(s) ? 'lucide:loader-circle' : v.icon}
+						name={failed
+							? 'lucide:circle-alert'
+							: active(s)
+								? 'lucide:loader-circle'
+								: found !== ''
+									? 'lucide:shield-alert'
+									: v.icon}
 						class="shrink-0 {activity ? 'size-4.5' : 'size-3.5'} {active(s)
 							? 'animate-spin motion-reduce:animate-none'
-							: ''}"
+							: ''} {found !== '' ? 'text-warning-foreground dark:text-warning' : ''}"
 					/>
 					{#if failed}
 						<span class="min-w-0 truncate font-medium" title={reason}>{reason}</span>
@@ -72,8 +88,10 @@
 							class="shrink-0 {activity ? '' : 'font-medium'} {active(s) ? 'agent-shimmer' : ''}"
 							>{t(v.verb)}</span
 						>
-						{#if v.target !== ''}<span class="min-w-0 truncate opacity-80" title={v.target}
-								>{v.target}</span
+						{#if (found || v.target) !== ''}<span
+								class="min-w-0 truncate opacity-80"
+								title={found || v.target}
+								data-step-found={found !== '' || undefined}>{found || v.target}</span
 							>{/if}
 					{/if}
 					{#if tool?.ms !== undefined && tool.ms >= 100}<span

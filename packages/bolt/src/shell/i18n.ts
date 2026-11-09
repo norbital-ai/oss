@@ -933,6 +933,7 @@ export const SHELL_ZH: { readonly [key: string]: string } = {
 	'Types clean': '类型无错误',
 	'type errors': '个类型错误',
 	Tests: '测试',
+	'Tests failed': '测试失败',
 	'Used the browser': '使用了浏览器',
 	'Used your page': '操作了您的页面',
 	'Looked up the workspace': '查询了工作区',
@@ -1083,6 +1084,7 @@ export const SHELL_ZH: { readonly [key: string]: string } = {
 		'助手尚未设置。请管理员连接 AI 服务。',
 	'Attach media or files': '附加媒体或文件',
 	'Jump to latest': '跳到最新',
+	'Just now': '刚刚',
 	'Summarize this conversation and keep its transcript available.':
 		'总结此对话，并保留其完整记录。',
 	Cost: '费用',

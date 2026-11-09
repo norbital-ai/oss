@@ -213,8 +213,8 @@ export const jobs = Effect.fn('AgentTool.jobs')(function* (
 	options: {
 		readonly detached?: FiberSet.FiberSet<unknown, never>;
 		readonly late?: (lines: readonly string[]) => Effect.Effect<void>;
-		/** A job ended, by its label, and whether it failed. */
-		readonly ended?: (label: string, failed: boolean) => void;
+		/** A job ended, by its label, with its answer. */
+		readonly ended?: (label: string, answer: Json) => void;
 	} = {}
 ) {
 	const fibers = yield* FiberMap.make<string, Json>();
@@ -266,7 +266,7 @@ export const jobs = Effect.fn('AgentTool.jobs')(function* (
 					Effect.suspend(() => {
 						item.done = true;
 						const failed = jobFailed(value);
-						options.ended?.(label, failed !== undefined);
+						options.ended?.(label, value);
 						const line =
 							o.alert?.(id, value) ??
 							(failed !== undefined

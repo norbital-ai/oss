@@ -168,32 +168,34 @@
 {:else if tool.name === 'workspace_diagnose' || tool.name === 'workspace_preview'}
 	{@const types = out['types']}
 	{@const tests = object(out['tests']) ? out['tests'] : null}
-	{@const typeCount = object(types) && typeof types['total'] === 'number' ? types['total'] : null}
+	<!-- the step's line already says what the check found: the body shows only where, one compact line each -->
 	<div class="grid gap-1.5" data-tool-view="validate">
 		{#if text(out['preview']) !== ''}{@render address(text(out['preview']))}{/if}
-		<ul class="grid gap-0.5 text-micro">
-			{#if out['commit'] !== undefined}
-				<li class="flex items-center gap-1.5">
-					<Icon name={verdict(tool.failed !== true)} class="size-3.5 shrink-0" />{t('Preview')}
-				</li>
-			{/if}
-			{#if typeCount !== null}
-				<li class="flex items-center gap-1.5">
-					<Icon name={verdict(typeCount === 0)} class="size-3.5 shrink-0" />{typeCount === 0
-						? t('Types clean')
-						: `${typeCount} ${t('type errors')}`}
-				</li>
-			{/if}
-			{#if tests !== null}
-				<li class="flex items-center gap-1.5">
-					<Icon name={verdict(text(tests['state']) === 'passed')} class="size-3.5 shrink-0" />{t(
-						'Tests'
-					)}
-					{text(tests['state'])}
-				</li>
-			{/if}
-		</ul>
-		{#if issues(types).length > 0}{@render data_(issues(types), t('Output'))}{/if}
+		{#if tests !== null}
+			<p class="flex items-center gap-1.5 text-micro">
+				<Icon name={verdict(text(tests['state']) === 'passed')} class="size-3.5 shrink-0" />{t(
+					'Tests'
+				)}
+				{text(tests['state'])}
+			</p>
+		{/if}
+		{#if issues(types).length > 0}
+			<ul class="grid max-h-56 gap-1 overflow-auto text-micro" data-tool-view="diagnostics">
+				{#each issues(types) as issue, index (index)}
+					<li class="grid min-w-0 gap-0.5" title={text(issue['message'])}>
+						<span class="flex min-w-0 gap-1.5 font-mono text-muted-foreground"
+							><span class="min-w-0 truncate"
+								>{text(issue['path'])}{typeof issue['line'] === 'number'
+									? `:${issue['line']}`
+									: ''}</span
+							><span class="shrink-0">{text(issue['code'])}</span></span
+						>
+						<span class="line-clamp-2 break-words text-foreground/90">{text(issue['message'])}</span
+						>
+					</li>
+				{/each}
+			</ul>
+		{/if}
 	</div>
 {:else if tool.name === 'goals'}
 	<ul class="grid gap-0.5 text-micro" data-tool-view="goals">

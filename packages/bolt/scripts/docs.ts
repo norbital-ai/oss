@@ -98,6 +98,10 @@ export default automation('<name>', {
 });
 \`\`\`
 
+A model answers \`yield* ctx.ai.sys_2.infer({ system: '<role>', prompt: '<task>', output: { kind: 'object', fields: { <field>: { kind: 'text' } } } })\` with the \`output\`'s value (text when absent).
+
+\`yield* ctx.notify({ title: '<title>', to: [{ team: '<team>' }], via: ['<connection>'] })\` reaches each recipient in the app and through \`via\`. WhatsApp, Telegram, email and the other conversation integrations are built in, never a \`src/integration/\` of your own: \`via\` names a slot \`+workspace.ts\` declares, \`connections: { <connection>: { integration: 'whatsapp' } }\`.
+
 Time is \`ctx.today\`, a \`PlainDate\`, and \`ctx.now\`, an ISO instant string: \`@norbital-ai/std/date\` has \`addDays\` and \`addMonths\` for a date, and \`Date.parse\` gives an instant's milliseconds. A model's \`effect\` has the same two.
 
 In a test, \`t.clock.set('<instant>')\` then \`const { failed } = yield* t.runDue()\` fires what is due at that instant. Assert \`expect(failed).toEqual([])\` first: a run that failed says why there, and nothing else will.`,
@@ -115,6 +119,7 @@ export default model('<name>', {
 		<other>: { kind: 'ref', to: '<model>', inverse: '<field on it>', onDelete: 'restrict' }
 	},
 	read: 'all',
+	// a write layer is a path from the model's own name: '<name>', then '<name>.<relation>' for children; never 'default'
 	create: { columns: { <name>: ['<field>', '<other>'] } },
 	update: { columns: { <name>: ['<field>', '<other>'] } }
 });
