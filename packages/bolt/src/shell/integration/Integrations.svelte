@@ -1,11 +1,8 @@
-<!--
-	Settings → Integrations is the envoys' page: every source-declared envoy with its channels as one-click connectors.
-	Each connector owns its connection (pair, test, reconnect, disconnect); its Settings sheet holds the instance's
-	configuration and messages. Generic accounts belong to a workspace's own integration app, not this built-in page.
--->
+<!-- The administrator's workspace connections or envoy channels, with the same native instance sheet. -->
 <script lang="ts">
 	import { fork, observeOnce } from '@norbital-ai/ui/effect';
 	import { Effect } from 'effect';
+	import type { Snippet } from 'svelte';
 	import type { Fields, Value } from '@norbital-ai/std/kind';
 	import { watch } from 'runed';
 	import {
@@ -19,12 +16,13 @@
 		format,
 		formatHandle,
 		StateBadge,
+		Table,
 		Tabs,
 		valueObject,
 		type FieldEditor
 	} from '@norbital-ai/ui';
 	import IntegrationSetup from '../../page/IntegrationSetup.svelte';
-	import { driverLabel, type IntegrationSetupEntry } from './setup.ts';
+	import { driverLabel, workspaceConnection, type IntegrationSetupEntry } from './setup.ts';
 	import type { InstanceMessage } from '../api-types.ts';
 	import type { Settings } from '../settings/data.ts';
 	import type { ShellBolt } from '../runtime.ts';
@@ -41,6 +39,7 @@
 		locale,
 		integrationSetups,
 		reload,
+		connections = false,
 		configuration = null
 	}: {
 		api: ShellApi;
@@ -52,6 +51,7 @@
 		integrationSetups?: { readonly [integration: string]: IntegrationSetupEntry } | undefined;
 		/** Re-reads the settings after a write. */
 		reload: () => Effect.Effect<void>;
+		connections?: boolean;
 		configuration?: SystemUiIntent | null;
 	} = $props();
 
@@ -65,6 +65,14 @@
 			: '—';
 	const definition = (name: Value | undefined): Definition | undefined =>
 		settings.integrations.find((d) => d.name === name);
+	const rows = $derived(
+		settings.instances.filter(workspaceConnection).map((instance) => ({
+			id: instance.id,
+			name: instance.name,
+			driver: driverLabel(definition(instance.integration)?.driver ?? instance.integration),
+			state: !instance.active ? 'paused' : str(obj(instance.status)['state'])
+		}))
+	);
 	const memberName = (id: string | null) => {
 		const u = settings.members.find((x) => x['id'] === id);
 		return str(u?.['name']) || str(u?.['email']) || str(id);
@@ -81,7 +89,12 @@
 			return;
 		configured = intent.key;
 		const record = intent.request.record;
-		if (current.instances.some((instance) => instance.id === record)) open = record;
+		if (
+			current.instances.some(
+				(instance) => instance.id === record && workspaceConnection(instance) === connections
+			)
+		)
+			open = record;
 	});
 	const current = $derived(settings.instances.find((i) => i.id === open));
 	const client = $derived(open === null ? null : api.integration(open));
@@ -216,16 +229,44 @@
 	</div>
 {/snippet}
 
-<Envoys
-	{api}
-	{bolt}
-	{settings}
-	{t}
-	{locale}
-	{configuration}
-	onManage={(instance) => (open = instance)}
-	{reload}
-/>
+{#if connections}
+	{#snippet stateCell({ row }: { row: (typeof rows)[number] })}
+		<StateBadge
+			state={row.state}
+			label={t(
+				row.state === 'paused'
+					? 'Paused'
+					: row.state === 'connected'
+						? 'Connected'
+						: row.state === 'error'
+							? 'Needs attention'
+							: ['connecting', 'pairing', 'reconnecting'].includes(row.state)
+								? 'Connecting'
+								: 'Off'
+			)}
+		/>
+	{/snippet}
+	<Table
+		of={rows}
+		key="workspace-connections"
+		onOpen={(row) => (open = row.id)}
+		toolbar={{ title: false, new: false, export: false }}
+		columns={[
+			{ field: 'name', label: t('Name') },
+			{ field: 'driver', label: t('Driver') },
+			{ field: 'state', label: t('Status'), cell: stateCell }
+		]}
+	/>
+{:else}<Envoys
+		{api}
+		{bolt}
+		{settings}
+		{t}
+		{locale}
+		{configuration}
+		onManage={(instance) => (open = instance)}
+		{reload}
+	/>{/if}
 
 {#if current !== undefined}
 	{@const i = current}
@@ -236,11 +277,11 @@
 		onClose={() => (open = null)}
 		acts={i.named ? [] : [{ label: t('Delete'), variant: 'destructive', run: () => remove(i) }]}
 		fields={[
-			{ label: t('Integration'), value: i.integration },
-			{ label: t('Driver'), value: driverLabel(d?.driver ?? '') },
-			{ label: t('Workspace connection'), value: i.named ? i.id : undefined },
+			{ label: t('Integration'), value: i.integration === i.name ? undefined : i.integration },
+			{ label: t('Driver'), value: channel ? driverLabel(d?.driver ?? '') : undefined },
+			{ label: t('Workspace connection'), value: i.named && i.id !== i.name ? i.id : undefined },
 			{ label: t('Owner'), value: i.owner === null ? undefined : memberName(i.owner) },
-			...(d?.sends === true
+			...(d?.conversation === true && d.sends
 				? [
 						{ label: t('Sent'), value: i.delivery.sent },
 						{ label: t('Queued'), value: i.delivery.pending },
@@ -259,7 +300,7 @@
 		{#if error !== null}<p role="alert" class="text-sm text-destructive" data-instance-error>
 				{error}
 			</p>{/if}
-		<div class="border-t pt-3">
+		<div class={channel ? 'border-t pt-3' : undefined}>
 			{#snippet connectionTab()}
 				<!-- a durable move (connected, unpaired, error) re-reads the rows, so the table never shows the old state -->
 				{#if client !== null}<IntegrationSetup
@@ -478,52 +519,69 @@
 					{/if}
 				</div>
 			{/snippet}
-			<Tabs
-				orientation="horizontal"
-				value={channel ? 'settings' : 'connection'}
-				tabs={[
-					...(channel
-						? []
-						: [
-								{
-									name: 'connection',
-									title: t('Connection'),
-									icon: 'lucide:plug',
-									body: connectionTab,
-									keepAlive: true as const
-								}
-							]),
-					{
-						name: 'settings',
-						title: t('Configuration'),
-						icon: 'lucide:settings-2',
-						body: settingsTab,
-						keepAlive: true
-					},
-					...(d?.syncs === true
-						? [
-								{
-									name: 'sync',
-									title: t('Sync'),
-									icon: 'lucide:refresh-cw',
-									body: syncTab,
-									keepAlive: true as const
-								}
-							]
-						: []),
-					...(d?.conversation === true
-						? [
-								{
-									name: 'messages',
-									title: t('Messages'),
-									icon: 'lucide:messages-square',
-									body: messagesTab,
-									keepAlive: true as const
-								}
-							]
-						: [])
-				]}
-			/>
+			{#snippet instanceTabs(extra?: { title: string; body: Snippet })}
+				<Tabs
+					orientation="horizontal"
+					value={channel ? 'settings' : 'connection'}
+					tabs={[
+						...(channel
+							? []
+							: [
+									{
+										name: 'connection',
+										title: t('Connection'),
+										icon: 'lucide:plug',
+										body: connectionTab,
+										keepAlive: true as const
+									}
+								]),
+						{
+							name: 'settings',
+							title: t('Configuration'),
+							icon: 'lucide:settings-2',
+							body: settingsTab,
+							keepAlive: true
+						},
+						...(extra === undefined
+							? []
+							: [{ name: 'definition-settings', icon: 'lucide:sliders-horizontal', ...extra }]),
+						...(d?.syncs === true
+							? [
+									{
+										name: 'sync',
+										title: t('Sync'),
+										icon: 'lucide:refresh-cw',
+										body: syncTab,
+										keepAlive: true as const
+									}
+								]
+							: []),
+						...(d?.conversation === true
+							? [
+									{
+										name: 'messages',
+										title: t('Messages'),
+										icon: 'lucide:messages-square',
+										body: messagesTab,
+										keepAlive: true as const
+									}
+								]
+							: [])
+					]}
+				/>
+			{/snippet}
+			{#await integrationSetups?.[i.integration]?.load()}
+				<p role="status" class="text-sm text-muted-foreground">{t('Loading…')}</p>
+			{:then module}
+				{#if module?.configurationTab !== undefined}
+					{#snippet extraTab()}<module.default />{/snippet}
+					{@render instanceTabs({ title: t(module.configurationTab), body: extraTab })}
+				{:else}
+					{@render instanceTabs()}
+				{/if}
+			{:catch}
+				{@render instanceTabs()}
+			{/await}
 		</div>
 	</DetailSheet>
 {/if}

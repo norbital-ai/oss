@@ -77,6 +77,8 @@ The browser uses `bolt.integration(instance)`: status, pair, unpair, test and di
 
 An optional `+integration.svelte` supplies the definition's setup component through the lazy `integrationSetups` registry. Its props carry the instance's status and `pair`, `unpair` and `test` as Effects that never fail (a refusal arrives as `error`), run with `fork`. Otherwise `IntegrationSetup` renders the provider's setup metadata, pairing and connected view. Source declarations do not duplicate provider authentication protocols.
 
+A module that exports `configurationTab` as a translated title key adds its default component as a separate tab in the administrator's native connection sheet. The connection keeps the provider's standard pairing and test controls.
+
 ## Calendar driver
 
 A `calendar` definition pushes `CalendarEvent` items through a model sync, partitioned by a text-many configuration field so each calendar keeps its own cursor. Its link announces a changed calendar as an invalidation; the sync read then reads that partition from its cursor, and a read whose history is gone (`retained: false`) starts a fresh snapshot. The link renews expiring watches through `renew()` and receives the account's push notifications through its own `webhook`, acknowledging one only after the engine has queued the read. All-day events keep their dates; timed events keep their instants and source zones. How a provider registers and verifies its watches and keeps its sync position belongs to that provider, and a template's calendar screens to that template.

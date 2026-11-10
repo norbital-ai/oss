@@ -14,8 +14,22 @@ import {
 import { connectPublic } from '@norbital-ai/bolt/node';
 
 const QUERY_MS = 8_000;
-const failure = (message: string) => (cause: unknown) =>
-	cause instanceof BoltError ? cause : BoltError.make('upstream', 'facility', message, cause);
+const retryableSql = new Set([1205, 1222]); // Deadlock victim and lock timeout.
+const failure = (message: string) => (cause: unknown) => {
+	if (cause instanceof BoltError) return cause;
+	if (
+		cause instanceof mssql.RequestError &&
+		cause.code === 'EREQUEST' &&
+		typeof cause.number === 'number'
+	)
+		return BoltError.make(
+			retryableSql.has(cause.number) ? 'upstream' : 'invalid',
+			'facility',
+			message,
+			cause
+		);
+	return BoltError.make('upstream', 'facility', message, cause);
+};
 function scalar(value: unknown): Json {
 	if (value === null || typeof value === 'string' || typeof value === 'boolean') return value;
 	if (typeof value === 'number' && Number.isFinite(value)) return value;

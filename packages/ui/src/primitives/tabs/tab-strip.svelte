@@ -33,7 +33,7 @@ switch a view the caller renders. Its type follows the enclosing `Tabs` level, o
 	import Icon from '../icon/icon-wrapper.svelte';
 	import { cn } from '../utils.js';
 	import { TAB_LEVEL, tabLevel, tabVariant } from './level.js';
-	import { TAB_ICON, TAB_LIST, TAB_TRIGGER, TAB_TYPE } from './style.js';
+	import { TAB_ICON, TAB_LIST, TAB_TRACK, TAB_TRIGGER, TAB_TYPE } from './style.js';
 	import { observeTabOverflow } from './overflow.js';
 
 	let { items, value, onValueChange, label, level, class: className }: TabStripProps = $props();
@@ -55,6 +55,7 @@ switch a view the caller renders. Its type follows the enclosing `Tabs` level, o
 	const listClass = $derived(
 		cn(
 			'relative flex w-full min-w-0 flex-nowrap items-center overflow-x-clip',
+			TAB_TRACK,
 			TAB_LIST[variant],
 			className
 		)

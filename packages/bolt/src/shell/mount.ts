@@ -5,7 +5,7 @@ import { mount, unmount, type Component } from 'svelte';
 import type { CustomFieldEntry, RepresentationLoader } from '@norbital-ai/ui';
 import type { BoltConfig } from '../page/bolt.ts';
 import type { IntegrationSetupEntry } from '../page/integration.ts';
-import { awaitDevice, type DeviceApi } from '../page/device.ts';
+import { awaitDevice, resolveDevice, type DeviceApi } from '../page/device.ts';
 import type { ShellManifest } from './nav.ts';
 import type { AgentRequest, ShellBolt } from './runtime.ts';
 import Shell from './Shell.svelte';
@@ -14,12 +14,12 @@ import { mountEdge } from '@norbital-ai/ui/effect';
 import { ShellLive } from './runtime.ts';
 
 const InitialModules = Schema.Struct({
-	modules: Schema.Array(Schema.String),
-	css: Schema.Array(Schema.String)
+	css: Schema.Array(Schema.String),
+	nativeModules: Schema.Array(Schema.String)
 });
 export const INITIAL_MODULES_ID = 'bolt-initial-modules';
 
-/** Import the emitted main-thread graph and settle every stylesheet before the shell can remove its cover. */
+/** The browser waits for shell styles; the native app also warms the workspace's main-thread modules. */
 export const initializeShellAssets = (entry: string): Promise<void> =>
 	Effect.runPromise(
 		Effect.gen(function* () {
@@ -31,20 +31,24 @@ export const initializeShellAssets = (entry: string): Promise<void> =>
 			const resolve = (path: string) => {
 				const url = new URL(path, base);
 				if (url.origin !== base.origin || !url.pathname.startsWith(base.pathname))
-					throw new Error('Initial workspace module is outside this release.');
+					throw new Error('Initial workspace asset is outside this release.');
 				return url.href;
 			};
 			yield* Effect.all(
 				[
-					Effect.tryPromise<void>(awaitDevice),
-					Effect.forEach(
-						assets.modules,
-						(path) =>
-							Effect.tryPromise<void>(async () => {
-								await import(/* @vite-ignore */ resolve(path));
-							}),
-						{ concurrency: 'unbounded', discard: true }
-					),
+					Effect.gen(function* () {
+						yield* Effect.tryPromise(awaitDevice);
+						const { platform } = resolveDevice();
+						if (platform !== 'ios' && platform !== 'android') return;
+						yield* Effect.forEach(
+							assets.nativeModules,
+							(path) =>
+								Effect.tryPromise(async () => {
+									await import(/* @vite-ignore */ resolve(path));
+								}),
+							{ concurrency: 'unbounded', discard: true }
+						);
+					}),
 					Effect.forEach(
 						assets.css,
 						(path) =>
@@ -83,7 +87,7 @@ export type ShellMountConfig = {
 	manifest: ShellManifest;
 	/** The artifact's display name, available before the caller's boot response arrives. */
 	workspaceName?: string;
-	/** Native builds initialize all main-thread release modules before mounting the shell. */
+	/** Shell styles and, in the native app, device and module readiness before mounting. */
 	ready?: Promise<void>;
 	/** Server-rendered routes use a document navigation to admit and load the new public page. */
 	publicRoutes?: readonly string[];

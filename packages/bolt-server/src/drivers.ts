@@ -15,6 +15,7 @@ import {
 	type SetupField
 } from '@norbital-ai/bolt/engine';
 import { httpPort, publicFetch } from '@norbital-ai/bolt/node';
+import { FacilityFailure } from '@norbital-ai/bolt/errors';
 import {
 	attempt,
 	authorizeUrl,
@@ -287,18 +288,28 @@ export function sqlServerProvider(database: ReturnType<typeof sqlServerDatabase>
 							() => new ProviderRefused({ message: 'Invalid database request.', permanent: true })
 						)
 					);
-					const result = yield* database
-						.query(connection, request)
-						.pipe(Effect.mapError(unavailable));
-					return yield* Schema.decodeUnknownEffect(DatabaseResult)(result).pipe(
+					const result = yield* database.query(connection, request).pipe(
 						Effect.mapError(
-							() => new ProviderUnavailable({ message: 'Invalid database result.' })
+							(error) =>
+								new FacilityFailure({
+									kind:
+										error.code === 'timeout'
+											? 'timeout'
+											: error.code === 'upstream'
+												? 'upstream'
+												: 'invalid',
+									message: error.message
+								})
 						)
+					);
+					return yield* Schema.decodeUnknownEffect(DatabaseResult)(result).pipe(
+						Effect.mapError(() => new ProviderUnavailable({ message: 'Invalid database result.' }))
 					);
 				});
 			return {
 				close: Effect.void,
-				test: () => request({ op: 'values', values: { connected: 1 }, maxRows: 1 }).pipe(Effect.asVoid),
+				test: () =>
+					request({ op: 'values', values: { connected: 1 }, maxRows: 1 }).pipe(Effect.asVoid),
 				pair: (input: Json) =>
 					Effect.gen(function* () {
 						const value = yield* credentials(ctx.definition, input);

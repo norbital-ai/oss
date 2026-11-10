@@ -43,7 +43,7 @@
 	} = $props();
 
 	// the component is a module, so the same chunk is fetched once however often this is re-derived
-	const chunk = $derived(setup?.load().then((m) => m.default) ?? null);
+	const chunk = $derived(setup?.load() ?? null);
 	// a reconnect is a connected instance catching its breath: it keeps its summary, not a setup form
 	const connected = $derived(status?.state === 'connected' || status?.state === 'reconnecting');
 	const connecting = $derived(status?.state === 'connecting' || status?.state === 'reconnecting');
@@ -66,8 +66,23 @@
 {#if chunk !== null}
 	{#await chunk}
 		<p class="text-sm text-muted-foreground">{t('Loading…')}</p>
-	{:then Own}
-		<Own {instance} {status} {error} {pair} {importStart} {unpair} {test} {busy} {t} {locale} />
+	{:then module}
+		{#if module.configurationTab !== undefined}
+			{@render standard()}
+		{:else}
+			<module.default
+				{instance}
+				{status}
+				{error}
+				{pair}
+				{importStart}
+				{unpair}
+				{test}
+				{busy}
+				{t}
+				{locale}
+			/>
+		{/if}
 	{:catch cause}
 		<p role="alert" class="text-sm text-destructive">
 			{t('This integration’s setup could not be loaded:')}
@@ -75,6 +90,10 @@
 		</p>
 	{/await}
 {:else}
+	{@render standard()}
+{/if}
+
+{#snippet standard()}
 	<Stack gap="md">
 		{#if controls}<Inline gap="md" data-connection-progress={connecting ? '' : undefined}>
 				{#if connecting}
@@ -148,4 +167,4 @@
 			/>
 		{/if}
 	</Stack>
-{/if}
+{/snippet}

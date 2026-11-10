@@ -5,12 +5,17 @@ and ordinary helpers; it has no Vite config or SvelteKit route layer.
 
 ## Members-only workspace
 
-Members-only apps and kiosks use the internal SPA. Before the shell mounts, the opening cover
-waits for the emitted main-thread module graph, including dynamically imported pages,
-representations and integration setup modules, to initialize and for its CSS to load. Browser
-module caching then supplies subsequent SPA navigation. A failed initialization leaves an error
-under the cover rather than admitting an incomplete workspace. This gate does not start workers
-or grant access to any server operation.
+Members-only apps and kiosks use the internal SPA. The shared platform build groups the shell's
+static imports and the document preloads them to reduce network round trips. In a browser, the
+shell waits for its styles; pages, record views, Settings and Norbius load when opened and stay
+in the browser's module cache for subsequent visits. On iOS and Android, the native app also waits for its device
+bridge and initializes the emitted main-thread module graph before opening the workspace, so
+subsequent navigation does not wait for those modules. A failed shell initialization leaves an
+error under the cover. This gate does not start workers or grant access to any server operation.
+
+Standalone Bolt Server negotiates Brotli or gzip for static JavaScript and stylesheets.
+Workspace responses and live streams are outside this compression path. Colony instead
+serves precompressed variants of immutable client assets from its content store.
 
 The runtime still mounts app sessions only for signed-in callers admitted to that app. Importing
 a session module at startup does not mount it or grant its capabilities. Keep browser module

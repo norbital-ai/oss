@@ -44,10 +44,17 @@ export const sayOf =
 	(x: LocalText): string =>
 		typeof x === 'string' ? t(x) : localText(x, locale ?? 'en');
 
-/** A definition's setup component: one lazy module. */
-export type IntegrationSetupLoader = () => Promise<{ default: Component<IntegrationSetupProps> }>;
+/** A definition can supply its own setup or add an administrator-only settings tab. */
+export type IntegrationSetupLoader = () => Promise<
+	| { default: Component<IntegrationSetupProps>; configurationTab?: undefined }
+	| { default: Component; configurationTab: string }
+>;
 /** The compiled registry's entry for a definition's `+integration.svelte`. */
 export type IntegrationSetupEntry = { load: IntegrationSetupLoader };
+
+/** Workspace-owned accounts that are managed separately from an envoy's channel. */
+export const workspaceConnection = (instance: { owner: string | null; envoy: string | null }) =>
+	instance.owner === null && instance.envoy === null;
 
 /**
  * The OAuth sign-in window, opened by the click that starts a pairing (a popup opened later, once the provider has

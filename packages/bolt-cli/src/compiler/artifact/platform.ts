@@ -191,6 +191,7 @@ export const platformConfig = Effect.fn('bolt.platformConfig')(function* (
 		const sub = posix.relative(effect, id).replace(/\.js$/, '');
 		specifiers.set(sub === 'index' ? 'effect' : `effect/${sub}`, id);
 	}
+	const startup = new Set<string>();
 	const entries: Plugin = {
 		name: 'bolt:platform',
 		enforce: 'pre',
@@ -213,6 +214,20 @@ export const platformConfig = Effect.fn('bolt.platformConfig')(function* (
 				}
 			}
 			for (const id of [...ids].sort()) this.emitFile({ type: 'chunk', id });
+		},
+		buildEnd(error) {
+			if (error) return;
+			// Keep the shell's static dependency graph together, without pulling in feature chunks
+			// or other platform entries. Keep the entry facades for workspace imports.
+			const pending = [MOUNT];
+			while (pending.length > 0) {
+				const id = pending.pop();
+				if (id === undefined || startup.has(id)) continue;
+				const module = this.getModuleInfo(id);
+				if (module === null) continue;
+				startup.add(id);
+				pending.push(...module.importedIds);
+			}
 		}
 	};
 	// an asset URL's placeholder names a per-build random reference id: kept as a sourcemap name, the layer's maps
@@ -255,7 +270,14 @@ export const platformConfig = Effect.fn('bolt.platformConfig')(function* (
 			rolldownOptions: {
 				input: [...ENTRIES.map((path) => join(BOLT, `${path}${EXT}`)), ...modules],
 				preserveEntrySignatures: 'strict',
-				output: { sourcemapExcludeSources: true }
+				output: {
+					sourcemapExcludeSources: true,
+					// Keep transfers short on lossy links, preserving module initialization across chunks.
+					strictExecutionOrder: true,
+					codeSplitting: {
+						groups: [{ name: 'shell', test: (id) => startup.has(id), maxSize: 950_000 }]
+					}
+				}
 			}
 		}
 	};

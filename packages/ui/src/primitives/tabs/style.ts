@@ -7,16 +7,19 @@ import type { TabVariant } from './level.js';
 export const TAB_TRIGGER =
 	'[--hit-target:2rem] inline-flex h-7 shrink-0 items-center gap-1.5 px-3 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground disabled:opacity-50 data-[state=active]:text-foreground';
 export const TAB_ICON = 'size-3.5 shrink-0';
-// every strip is 2rem tall: a 0.125rem inset around the 1.75rem triggers (the underline's border takes one pixel of it)
+// The track tint follows the surface, including when a sheet uses the same token as the muted background.
+// Let the track extend past the content edge, so its first trigger aligns with the panel rather than the track.
+export const TAB_TRACK =
+	'-ms-0.5 rounded-[calc(var(--radius-md)+0.125rem)] bg-foreground/[0.08] px-0.5';
 export const TAB_LIST: Record<TabVariant, string> = {
-	segmented: 'gap-0.5 rounded-[calc(var(--radius-md)+0.125rem)] bg-muted p-0.5',
-	underline: 'gap-0.5 border-b px-0.5 pt-0.5 pb-px',
-	chips: 'gap-0.5 p-0.5'
+	segmented: 'gap-0.5 py-0.5',
+	underline: 'gap-0.5 border-b pt-0.5 pb-px',
+	chips: 'gap-0.5 py-0.5'
 };
 /** Each type's appearance: roundness, fill and border only. */
 export const TAB_TYPE: Record<TabVariant, string> = {
 	segmented:
-		'rounded-md data-[state=active]:bg-popover data-[state=active]:ring-1 data-[state=active]:ring-border dark:data-[state=active]:bg-background dark:data-[state=active]:shadow-sm dark:data-[state=active]:ring-0',
+		'rounded-md data-[state=active]:bg-popover data-[state=active]:inset-ring-1 data-[state=active]:inset-ring-border dark:data-[state=active]:bg-background dark:data-[state=active]:shadow-sm dark:data-[state=active]:inset-ring-0',
 	// the bar spans the whole trigger, as wide as a segmented tab's fill
 	underline:
 		"relative after:absolute after:inset-x-0 after:-bottom-0.5 after:h-px after:rounded-full after:content-[''] data-[state=active]:after:bg-foreground dark:after:h-0.5",

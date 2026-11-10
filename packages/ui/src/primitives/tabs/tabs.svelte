@@ -5,7 +5,7 @@ A tab strip with the selected tab's body; `keepAlive` tabs stay mounted while hi
 <script lang="ts" module>
 	import type { Snippet } from 'svelte';
 	import { TAB_LEVEL, tabLevel, tabVariant, type TabLevel } from './level.js';
-	import { TAB_ICON, TAB_LIST, TAB_TRIGGER, TAB_TYPE } from './style.js';
+	import { TAB_ICON, TAB_LIST, TAB_TRACK, TAB_TRIGGER, TAB_TYPE } from './style.js';
 
 	/** One tab (§3.6 `RecordTab`): a `keepAlive` tab stays mounted while hidden, so a form inside keeps its state. */
 	export type TabItem = {
@@ -42,7 +42,7 @@ A tab strip with the selected tab's body; `keepAlive` tabs stay mounted while hi
 
 	// the vertical rail: chips on a narrow container, a column of full-width rows on a wide one (`@2xl`)
 	const RAIL_LIST =
-		'gap-1.5 @2xl:flex-col @2xl:items-stretch @2xl:gap-0.5 @2xl:overflow-x-clip @2xl:overflow-y-auto';
+		'gap-1.5 py-0.5 @2xl:flex-col @2xl:items-stretch @2xl:gap-0.5 @2xl:overflow-x-clip @2xl:overflow-y-auto';
 	const RAIL_TRIGGER =
 		'rounded-full border data-[state=active]:border-foreground @2xl:justify-start @2xl:rounded-md @2xl:border-transparent @2xl:data-[state=active]:border-transparent @2xl:data-[state=active]:bg-muted';
 </script>
@@ -53,8 +53,10 @@ A tab strip with the selected tab's body; `keepAlive` tabs stay mounted while hi
 	import { getContext, setContext, untrack } from 'svelte';
 	import Icon from '../icon/icon-wrapper.svelte';
 	import { cn } from '../utils.js';
-	import { SCROLL_AXIS_CLASSES } from '../../layout/layout.shared.js';
+	import { insetReader } from '../../layout/inset.svelte.js';
+	import { INSET_X_CLASS, SCROLL_AXIS_CLASSES } from '../../layout/layout.shared.js';
 	import { observeTabOverflow } from './overflow.js';
+	import TabPanel from './tab-panel.svelte';
 
 	let {
 		tabs,
@@ -67,6 +69,7 @@ A tab strip with the selected tab's body; `keepAlive` tabs stay mounted while hi
 		orientation
 	}: TabsProps = $props();
 	const parent = getContext<{ level: TabLevel; shown: readonly string[] } | undefined>(TAB_LEVEL);
+	const hasInset = insetReader();
 	const placed = $derived(tabLevel(parent?.level, explicit));
 	const variant = $derived(tabVariant(placed.level));
 	const vertical = $derived(orientation === 'vertical');
@@ -121,7 +124,7 @@ A tab strip with the selected tab's body; `keepAlive` tabs stay mounted while hi
 		onValueChange={select}
 		class={cn(
 			// one column of the container's width: a strip measured against its own contents would shrink as tabs move to More
-			'grid h-full min-h-0 min-w-0 grid-cols-[minmax(0,1fr)] grid-rows-[auto_minmax(0,1fr)] gap-4',
+			'grid h-full min-h-0 min-w-0 grid-cols-[minmax(0,1fr)] grid-rows-[auto_minmax(0,1fr)] gap-3',
 			vertical &&
 				'@2xl:grid-cols-[minmax(9rem,13rem)_minmax(0,1fr)] @2xl:grid-rows-[minmax(0,1fr)] @2xl:gap-4',
 			className
@@ -132,7 +135,8 @@ A tab strip with the selected tab's body; `keepAlive` tabs stay mounted while hi
 			class={cn(
 				'flex w-full min-w-0 items-center gap-2',
 				leading && 'flex-wrap items-end',
-				vertical && '@2xl:flex-col @2xl:items-stretch'
+				vertical && '@2xl:flex-col @2xl:items-stretch',
+				!hasInset() && INSET_X_CLASS
 			)}
 		>
 			{#if leading}<div class="min-w-0 flex-1 basis-64">{@render leading()}</div>{/if}
@@ -142,6 +146,7 @@ A tab strip with the selected tab's body; `keepAlive` tabs stay mounted while hi
 				class={cn(
 					'relative flex min-w-0 flex-nowrap items-center',
 					leading ? 'ml-auto min-w-0 flex-1' : 'flex-1',
+					TAB_TRACK,
 					vertical ? RAIL_LIST : TAB_LIST[variant],
 					vertical ? SCROLL_AXIS_CLASSES.x : 'overflow-x-clip'
 				)}
@@ -201,16 +206,11 @@ A tab strip with the selected tab's body; `keepAlive` tabs stay mounted while hi
 			{@render trailing?.()}
 		</div>
 		{#each tabs as tab (tab.name)}
-			{#if tab.name === active || (tab.keepAlive && visited[tab.name])}
-				<!-- a kept-alive panel stays in the DOM, hidden, outside bits-ui's own unmounting -->
-				<div
-					role="tabpanel"
-					hidden={tab.name !== active}
-					class="min-h-0 min-w-0 overflow-x-clip overflow-y-auto"
-				>
+			<TabPanel value={tab.name} label={tab.title}>
+				{#if tab.name === active || (tab.keepAlive && visited[tab.name])}
 					{@render tab.body()}
-				</div>
-			{/if}
+				{/if}
+			</TabPanel>
 		{/each}
 	</Tabs.Root>
 </div>

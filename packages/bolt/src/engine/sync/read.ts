@@ -18,7 +18,7 @@ import { DRIVERS } from '../../decl/runtime/integration.ts';
 import type { Json } from '../../decl/values.ts';
 import { BoltError } from '../../protocol/errors.ts';
 import { LIMITS, type Authority, type DriverPage, type EngineActor } from '../contracts.ts';
-import type { EngineError } from '../errors.ts';
+import { isTransient, type EngineError } from '../errors.ts';
 import { Port } from '../port.ts';
 import { enqueue } from '../runs/queue.ts';
 import { iso } from '../runs/time.ts';
@@ -804,12 +804,17 @@ export function makeRead(e: SyncEngine) {
 						failures.push(error);
 						const prior = states.get(partition),
 							slots = Math.max(1, (prior?.health?.failures ?? 0) + (start.attempts === 1 ? 1 : 0));
+						const now = yield* Clock.currentTimeMillis;
 						const failed: Health = {
 							state: 'attention',
 							code: error instanceof BoltError ? error.code : 'processingFailure',
 							message: error instanceof Error ? error.message.slice(0, 500) : String(error),
 							failures: slots,
-							retryAt: iso(restEnd(slots, yield* Clock.currentTimeMillis))
+							retryAt: iso(
+								inst.definition.driver === 'sqlserver' && isTransient(error)
+									? now
+									: restEnd(slots, now)
+							)
 						};
 						healths.set(`${s.name}\u0000${partition}`, failed);
 						yield* db

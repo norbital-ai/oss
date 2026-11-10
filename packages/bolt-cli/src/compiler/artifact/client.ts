@@ -47,6 +47,7 @@ const ViteManifest = Schema.Record(
 	})
 );
 const key = JSON.stringify;
+const PLATFORM_CACHE_VERSION = 3;
 const escape = (text: string) =>
 	text.replace(/[<&"]/g, (c) => (c === '<' ? '&lt;' : c === '&' ? '&amp;' : '&quot;'));
 export class BuildError extends Schema.TaggedError<BuildError>()('BuildError', {
@@ -99,7 +100,7 @@ export const prepareLayer = Effect.fn('bolt.prepareLayer')(function* (dir: strin
 	const fs = yield* FileSystem.FileSystem;
 	const out = join(dir, '.out'),
 		cache = join(dir, '.cache');
-	yield* cachedPlatformLayer(dir, 'prepared', out, buildLayer(out, cache));
+	yield* cachedPlatformLayer(dir, `prepared-${PLATFORM_CACHE_VERSION}`, out, buildLayer(out, cache));
 	for (const scratch of [out, cache]) yield* fs.remove(scratch, { recursive: true, force: true });
 });
 
@@ -118,7 +119,8 @@ const document = (
 	title: string,
 	entry: string,
 	css: readonly string[],
-	modules: readonly string[],
+	preloads: readonly string[],
+	nativeModules: readonly string[],
 	accessStyles: string
 ) => `<!doctype html>
 <html lang="en">
@@ -143,7 +145,8 @@ ${accessStyles}
 #bolt-loading{position:fixed;inset:0;z-index:1;overflow:auto}
 </style>
 ${css.map((c) => `<link rel="stylesheet" href="/${c}">`).join('\n')}
-<script type="application/json" id="bolt-initial-modules">${key({ modules, css }).replaceAll('<', '\\u003c')}</script>
+${preloads.map((file) => `<link rel="modulepreload" href="/${file}">`).join('\n')}
+<script type="application/json" id="bolt-initial-modules">${key({ css, nativeModules }).replaceAll('<', '\\u003c')}</script>
 <script type="module" src="/${entry}"></script>
 </head>
 <body><div id="bolt"></div><div id="bolt-loading" role="status" aria-live="polite" aria-busy="true" class="access-frame"><main class="access-loading-content"><div class="access-loading-cluster"><img class="access-loading-mark" src="/assets/bolt-apple-icon.png" alt=""><h1 class="access-loading-name">${escape(title)}</h1><p class="access-loading-status">Opening workspace…</p><div class="access-loading-track" aria-hidden="true"></div></div></main></div></body>
@@ -275,7 +278,7 @@ export const clientDevServer = Effect.fn('bolt.clientDevServer')(function* (
 		createRequire(import.meta.url).resolve('@norbital-ai/ui/brand/access.css')
 	);
 	// the entry and Vite's client under `base`; the icons and manifest stay the host's (the release's own files)
-	const html = document(title, `${base.slice(1)}@id/${ENTRY}`, [], [], accessStyles).replace(
+	const html = document(title, `${base.slice(1)}@id/${ENTRY}`, [], [], [], accessStyles).replace(
 		'</head>',
 		`<script type="module" src="${base}@vite/client"></script>\n</head>`
 	);
@@ -497,8 +500,8 @@ export const buildClient = Effect.fn('bolt.buildClient')(function* (
 			for (const item of chunks.values())
 				graphSources(sourceRoot, item.moduleIds, publicPage ? sources.pages : sources.spa);
 		const graph = new Map<string, PlatformChunk>([...(layer?.chunks ?? []), ...chunks]);
-		/** Every chunk `entry` reaches through static and dynamic imports, itself and the layer's included. */
-		const reach = (entry: string) => {
+		/** The entry's own chunks and the shared platform imports it can reach. */
+		const reach = (entry: string, dynamic = true) => {
 			const reached = new Set<string>();
 			const visit = (name: string): void => {
 				if (reached.has(name)) return;
@@ -506,14 +509,16 @@ export const buildClient = Effect.fn('bolt.buildClient')(function* (
 				if (item === undefined) return;
 				reached.add(name);
 				// a chunk names the chunks it imports by file name, and the layer's modules by their relative import
-				for (const imported of [...item.imports, ...item.dynamicImports])
+				for (const imported of dynamic ? [...item.imports, ...item.dynamicImports] : item.imports)
 					visit(imported.startsWith('.') ? posix.join(posix.dirname(name), imported) : imported);
 			};
 			visit(entry);
 			return reached;
 		};
-		const initialized = reach(chunk.fileName);
-		initialized.delete(chunk.fileName);
+		const nativeModules = reach(chunk.fileName);
+		nativeModules.delete(chunk.fileName);
+		const preloads = reach(chunk.fileName, false);
+		preloads.delete(chunk.fileName);
 		const sourcesFor = (entry: string) => {
 			const reached = reach(entry);
 			return [
@@ -543,7 +548,8 @@ export const buildClient = Effect.fn('bolt.buildClient')(function* (
 		return {
 			entry: chunk.fileName,
 			css,
-			modules: [...initialized].sort(),
+			preloads: [...preloads],
+			nativeModules: [...nativeModules].sort(),
 			chunks,
 			sourcesFor,
 			manifest
@@ -598,7 +604,7 @@ export const buildClient = Effect.fn('bolt.buildClient')(function* (
 				? yield* layerBuild
 				: yield* cachedPlatformLayer(
 						join(root, '.norbital', 'cache', 'platform-layer'),
-						sha256Hex(JSON.stringify([1, import.meta.url, lock, overlay])),
+						sha256Hex(JSON.stringify([PLATFORM_CACHE_VERSION, import.meta.url, lock, overlay])),
 						out,
 						layerBuild
 					));
@@ -620,7 +626,8 @@ export const buildClient = Effect.fn('bolt.buildClient')(function* (
 			title,
 			internal.entry,
 			css,
-			internal.modules,
+			internal.preloads,
+			internal.nativeModules,
 			yield* fs.readFileString(require.resolve('@norbital-ai/ui/brand/access.css'))
 		)
 	);

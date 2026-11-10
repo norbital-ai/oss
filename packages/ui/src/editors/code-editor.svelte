@@ -29,7 +29,6 @@ A CodeMirror code editor for JavaScript (also CEL and TypeScript expressions), J
 	import { untrack } from 'svelte';
 	import { Annotation, Compartment, EditorState, type Extension } from '@codemirror/state';
 	import { EditorView } from '@codemirror/view';
-	import { basicSetup } from 'codemirror';
 	import { cn } from '../primitives/utils.js';
 	import { codeHighlight, codeLanguage, codeTheme } from './code-setup.js';
 
@@ -50,6 +49,7 @@ A CodeMirror code editor for JavaScript (also CEL and TypeScript expressions), J
 	/** Marks a transaction that mirrors `value` in, so it is not echoed back through `onChange`. */
 	const External = Annotation.define<boolean>();
 	const config = new Compartment();
+	const tools = new Compartment();
 	const settings = (): Extension => [
 		codeLanguage(language),
 		wrap ? EditorView.lineWrapping : [],
@@ -65,14 +65,14 @@ A CodeMirror code editor for JavaScript (also CEL and TypeScript expressions), J
 	let view: EditorView | undefined;
 
 	function mount(node: HTMLElement) {
-		// Attachment reads must not recreate the editing node on each controlled value echo.
+		// Keep the editor usable immediately, even if the optional search and completion code fails to load.
 		return untrack(() => {
-			view = new EditorView({
+			const editor = new EditorView({
 				parent: node,
 				state: EditorState.create({
 					doc: value,
 					extensions: [
-						basicSetup,
+						tools.of([]),
 						codeTheme,
 						codeHighlight,
 						config.of(settings()),
@@ -83,9 +83,16 @@ A CodeMirror code editor for JavaScript (also CEL and TypeScript expressions), J
 					]
 				})
 			});
+			view = editor;
+			void import('codemirror').then(
+				({ basicSetup }) => {
+					if (view === editor) editor.dispatch({ effects: tools.reconfigure(basicSetup) });
+				},
+				() => undefined
+			);
 			return () => {
-				view?.destroy();
-				view = undefined;
+				editor.destroy();
+				if (view === editor) view = undefined;
 			};
 		});
 	}

@@ -344,19 +344,14 @@ its content or 16rem, whichever is less). Nothing scrolls sideways.
 		</div>
 	{/if}
 	<!-- hidden, never unmounted: a collapsed field still belongs to the form's draft and its save -->
-	<!-- the body scrolls inside the section's share; a vertical inset keeps focus rings clear of its top and bottom
-	     (controls ring inside their own box sideways); under the toggle's box it starts where the title does (the
-	     icon's size-5 or the chevron's size-4, and gap-1.5); a phone keeps that width for the fields. Nothing overhangs
-	     sideways: a negative side margin would give the column a sideways scroll. -->
+	<!-- The section icon is heading chrome. Fields share the column edge with neighboring sections. -->
 	<div
 		bind:this={body}
 		id={`${id}-body`}
 		hidden={!shown && !closing}
 		class={cn(
 			'-my-1 min-h-0 min-w-0 overflow-x-clip py-1',
-			fill && 'overflow-y-auto',
-			// every titled section starts its body under the label, never under the title's icon or chevron
-			titled && (icon ? 'pl-[1.625rem]' : canCollapse ? 'pl-[1.375rem]' : '')
+			fill && 'overflow-y-auto'
 		)}
 		use:contentMotion
 	>

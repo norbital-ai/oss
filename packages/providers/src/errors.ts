@@ -3,6 +3,7 @@
 // `Error` named by its tag).
 import { Schema } from 'effect';
 import type { Fenced } from '@norbital-ai/bolt/engine';
+import type { FacilityFailure } from '@norbital-ai/bolt/errors';
 
 /**
  * The provider's API refused: `permanent` (a 4xx other than 429) fails a send at once, otherwise bolt retries it.
@@ -42,6 +43,7 @@ export type ProviderFailure =
 	| OAuthRefused
 	| PairingInvalid
 	| LinkClosed
+	| FacilityFailure
 	| Fenced;
 
 /** A provider API's failed answer: a 4xx other than 429 refuses for good; anything else is unavailable, retried. */

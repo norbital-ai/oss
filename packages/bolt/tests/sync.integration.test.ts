@@ -79,8 +79,8 @@ let afterProgress: Effect.Effect<void, never, TenantDb> | undefined;
 // One workspace for the file: each case names its own rows and starts with an empty CRM log.
 const fileScope = Effect.runSync(Scope.make());
 afterAll(() => Effect.runPromise(Scope.close(fileScope, Exit.void)));
-const setup = Effect.gen(function* () {
-	const db = Context.get(yield* Layer.build(TestDb.layer(manifest)), TenantDb);
+const setupFor = Effect.fnUntraced(function* (fixture: EngineManifest, guestSource: string) {
+	const db = Context.get(yield* Layer.build(TestDb.layer(fixture)), TenantDb);
 	const intercepted = TenantDb.typed({
 		...db,
 		write: (statement, lock) =>
@@ -96,8 +96,8 @@ const setup = Effect.gen(function* () {
 	});
 	const context = yield* Layer.build(
 		TestWorkspace.layer({
-			manifest,
-			guest: yield* program(source),
+			manifest: fixture,
+			guest: yield* program(guestSource),
 			db: Layer.succeed(TenantDb, intercepted),
 			now: '2026-10-24T08:00:00.000Z'
 		})
@@ -150,11 +150,15 @@ const setup = Effect.gen(function* () {
 			}
 			return { status: 200, body: ack };
 		});
-	const handler = (name: string, input: Json = {}) =>
+	const handler = (name: string, input: Json = {}, cause?: string) =>
 		Effect.gen(function* () {
 			const h = yield* registry.handler(name);
 			if (Option.isNone(h)) throw new Error(`Missing handler ${name}`);
-			return yield* h.value(input, { id: randomUUID(), starter: null });
+			return yield* h.value(input, {
+				id: randomUUID(),
+				starter: null,
+				...(cause === undefined ? {} : { cause, attempts: 1 })
+			});
 		}).pipe(Effect.provide(context));
 	const act = (verb: 'create' | 'update' | 'delete', input: Json) => {
 		const key = randomUUID(),
@@ -199,7 +203,12 @@ const setup = Effect.gen(function* () {
 			mode = value;
 		}
 	};
-}).pipe(Scope.provide(fileScope), Effect.cached, Effect.runSync);
+});
+const setup = setupFor(manifest, source).pipe(
+	Scope.provide(fileScope),
+	Effect.cached,
+	Effect.runSync
+);
 
 describe('durable model sync', () => {
 	it('compares versions exactly and caps retry delays', () => {
@@ -310,6 +319,82 @@ describe('durable model sync', () => {
 					expect(f.calls.at(-1)?.headers?.['idempotency-key']).toBe(key);
 					expect(f.accepted.size).toBe(1);
 					expect(yield* f.syncs.health('crm')).toMatchObject({ dead: 0, pending: 0 });
+				})
+			)
+	);
+	it.live(
+		'resumes SQL writes and reads after ten missed slots, keeps the write key, and holds a permanent SQL rejection',
+		() =>
+			Effect.scoped(
+				Effect.gen(function* () {
+					const f = yield* setupFor(
+						{
+							...manifest,
+							integrations: { crm: { description: 'CRM', driver: 'sqlserver' } }
+						},
+						`export default { model: { contacts: { bodies: { syncs: { crm: {
+				read: function* ({cursor}, ctx) {
+					const result = yield* ctx.request({op:'values',values:{cursor}});
+					return {rows:result.rows,cursor:'last-good'};
+				},
+				write: function* ({row}, ctx) {
+					const result = yield* ctx.request({op:'values',values:{name:row.name}});
+					return {$id:result.rows[0].id};
+				}
+			} } } } } };`
+					);
+					let problem: 'timeout' | 'invalid' | undefined;
+					const reads: Json[] = [];
+					f.t.fakes.links.answer = (_instance, input) =>
+						Effect.gen(function* () {
+							const { values } = yield* Schema.decodeUnknownEffect(
+								Schema.Struct({
+									values: Schema.Record(Schema.String, Schema.Json)
+								})
+							)(input).pipe(
+								Effect.mapError(
+									() => new FacilityFailure({ kind: 'invalid', message: 'Bad test request' })
+								)
+							);
+							if ('cursor' in values) reads.push(values['cursor'] ?? null);
+							if (problem)
+								return yield* new FacilityFailure({
+									kind: problem,
+									message: 'SQL unavailable or refused'
+								});
+							return { rows: 'cursor' in values ? [] : [{ id: 'source-contact' }] };
+						});
+					const read = () => f.handler('contacts.sync.crm', {}, 'cron');
+					yield* read();
+					yield* f.act('create', [{ name: 'Local commitment' }]);
+					const outbox = () =>
+						f.t.db.rows(
+							Schema.Struct({ key: Schema.String, status: Schema.String, attempts: Schema.Number }),
+							{
+								text: 'SELECT key, status, attempts FROM sys_outbox ORDER BY seq',
+								params: []
+							}
+						);
+					const key = (yield* outbox())[0]?.key;
+					problem = 'timeout';
+					for (let slot = 0; slot < 10; slot++) {
+						yield* f.handler('sync.deliver');
+						expect(Exit.isFailure(yield* Effect.exit(read()))).toBe(true);
+						f.t.clock.advance('2min');
+					}
+					expect(yield* outbox()).toEqual([{ key, status: 'queued', attempts: 10 }]);
+					expect(reads).toEqual([null, ...Array(10).fill('last-good')]);
+					problem = undefined;
+					yield* read();
+					yield* f.handler('sync.deliver');
+					expect(reads.at(-1)).toBe('last-good');
+					expect(yield* outbox()).toEqual([{ key, status: 'acked', attempts: 11 }]);
+
+					problem = 'invalid';
+					yield* f.act('create', [{ name: 'Needs review' }]);
+					yield* f.handler('sync.deliver');
+					expect((yield* outbox())[1]).toMatchObject({ status: 'dead', attempts: 1 });
+					expect((yield* f.rows()).map((row) => row.name)).toContain('Needs review');
 				})
 			)
 	);

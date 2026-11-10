@@ -230,8 +230,6 @@ layer(Fixture, { excludeTestServices: true })('crons on the host clock', (it) =>
 			})
 	);
 
-	const unavailable = () =>
-		Effect.fail(new FacilityFailure({ kind: 'upstream', message: 'ERP unavailable' }));
 	const noRows = { rows: [{ page: { rows: [], cursor: 1, more: false } }] };
 	const atMinutes = (minutes: number) =>
 		new Date(Date.parse(NEXT) + minutes * 60_000).toISOString();
@@ -241,53 +239,42 @@ layer(Fixture, { excludeTestServices: true })('crons on the host clock', (it) =>
 		sql(
 			`SELECT health ->> 'state' AS state, health ->> 'failures' AS failures, health ->> 'retryAt' AS retry FROM sys_sync WHERE instance = 'erp1'`
 		).pipe(Effect.orDie);
-	it.effect(
-		'a sync that keeps failing rests: a slot in its rest starts nothing, and the wait doubles',
-		() =>
-			Effect.gen(function* () {
-				const { t, fire, sql } = yield* setup;
-				let requests = 0;
-				t.fakes.links.answer = () =>
-					Effect.suspend(() => {
-						requests++;
-						return unavailable();
-					});
-				const failThrough = (slot: string) =>
-					Effect.gen(function* () {
-						expect(yield* fire('products.sync.erp', slot)).toEqual({ ran: true });
-						// a slot's retries still read: only the next slot rests
-						for (const wait of ['30s', '2min'] as const) {
-							t.clock.advance(wait);
-							yield* t.runDue();
-						}
-					});
-				yield* failThrough(atMinutes(100));
-				expect(requests).toBe(3);
-				expect(yield* restOf(sql)).toMatchObject([{ state: 'attention', failures: '1' }]);
-				const [integration] = yield* sql(
-					`SELECT revision, status FROM sys_integration WHERE id = 'erp1'`
-				);
-				t.clock.advance('2min');
-				yield* failThrough(atMinutes(110));
-				expect(requests).toBe(6);
-				const [rest] = yield* restOf(sql);
-				expect(rest).toMatchObject({ failures: '2' });
-				// the rest stays on the sync: the integration's health did not move, so nobody is notified again
-				expect(
-					yield* sql(`SELECT revision, status FROM sys_integration WHERE id = 'erp1'`)
-				).toEqual([integration]);
-				expect(JSON.stringify(integration)).not.toContain('retryAt');
-				const before = yield* sql(
-					`SELECT count(*)::int AS n FROM sys_run WHERE automation = 'products.sync.erp'`
-				);
-				expect(yield* fire('products.sync.erp', atMinutes(120))).toMatchObject({ ran: false });
-				expect(requests).toBe(6);
-				expect(
-					yield* sql(
-						`SELECT count(*)::int AS n FROM sys_run WHERE automation = 'products.sync.erp'`
-					)
-				).toEqual(before);
-			})
+	it.effect('a SQL sync with a rejected request rests and skips slots while the rest lasts', () =>
+		Effect.gen(function* () {
+			const { t, fire, sql } = yield* setup;
+			let requests = 0;
+			t.fakes.links.answer = () =>
+				Effect.suspend(() => {
+					requests++;
+					return Effect.fail(
+						new FacilityFailure({ kind: 'invalid', message: 'ERP request refused' })
+					);
+				});
+			expect(yield* fire('products.sync.erp', atMinutes(100))).toEqual({ ran: true });
+			expect(requests).toBe(1);
+			expect(yield* restOf(sql)).toMatchObject([{ state: 'attention', failures: '1' }]);
+			const [integration] = yield* sql(
+				`SELECT revision, status FROM sys_integration WHERE id = 'erp1'`
+			);
+			t.clock.advance('2min');
+			expect(yield* fire('products.sync.erp', atMinutes(110))).toEqual({ ran: true });
+			expect(requests).toBe(2);
+			const [rest] = yield* restOf(sql);
+			expect(rest).toMatchObject({ failures: '2' });
+			// the rest stays on the sync: the integration's health did not move, so nobody is notified again
+			expect(yield* sql(`SELECT revision, status FROM sys_integration WHERE id = 'erp1'`)).toEqual([
+				integration
+			]);
+			expect(JSON.stringify(integration)).not.toContain('retryAt');
+			const before = yield* sql(
+				`SELECT count(*)::int AS n FROM sys_run WHERE automation = 'products.sync.erp'`
+			);
+			expect(yield* fire('products.sync.erp', atMinutes(120))).toMatchObject({ ran: false });
+			expect(requests).toBe(2);
+			expect(
+				yield* sql(`SELECT count(*)::int AS n FROM sys_run WHERE automation = 'products.sync.erp'`)
+			).toEqual(before);
+		})
 	);
 	it.effect('a person starting a resting sync reads at once, and its success ends the rest', () =>
 		Effect.gen(function* () {

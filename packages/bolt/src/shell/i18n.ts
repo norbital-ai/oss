@@ -274,7 +274,9 @@ export const SHELL_ZH: { readonly [key: string]: string } = {
 	'Use a phone number instead': '改用手机号码',
 	'Opening the sign-in…': '正在打开登录…',
 	Envoys: '使者',
-	'Envoys, API keys and MCP servers for this workspace.': '此工作区的使者、API 密钥和 MCP 服务器。',
+	'Connections, envoys, API keys and MCP servers for this workspace.':
+		'此工作区的连接、使者、API 密钥和 MCP 服务器。',
+	Connections: '连接',
 	'Workspace identity, branding and assistant limits.': '工作区身份、品牌与助手限额。',
 	'Write-only values the workspace source reads by name.': '工作区源码按名称读取的只写值。',
 	'Each envoy answers on its channel. Create one, then pair its provider.':
@@ -1472,6 +1474,7 @@ const VIEW_ZH = {
 	'ui.table.openRow': '打开',
 	'ui.chart.data': '此图表',
 	'ui.chart.empty': '暂无数据',
+	'ui.chart.unavailable': '图表无法加载，请重新加载后再试。',
 	'ui.view.filterSort': '筛选与排序',
 	'ui.view.describe': '描述要显示的内容…',
 	'ui.view.apply': '应用筛选与排序',

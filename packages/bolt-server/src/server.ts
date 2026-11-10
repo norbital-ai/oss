@@ -2,7 +2,7 @@
 // and `serving` parts, served through `serveRelease` (`@norbital-ai/bolt/node`), the path `bolt dev --host` takes.
 // This process owns admission and the HTTP listener around it.
 import { ByteSize, Clock, Context, Effect, Fiber, Layer, Option } from 'effect';
-import { HttpServerRequest, HttpServerResponse, HttpIncomingMessage } from 'effect/http';
+import { HttpServerRequest, HttpServerResponse, HttpIncomingMessage, HttpMiddleware } from 'effect/http';
 import * as NodeHttpServer from '@effect/platform-node/NodeHttpServer';
 import { createServer } from 'node:http';
 import { readArtifact } from '@norbital-ai/bolt/artifact';
@@ -40,6 +40,13 @@ export class Server extends Context.Service<
 
 const json = (code: string, message: string, status: number) =>
 	HttpServerResponse.jsonUnsafe({ error: { code, message } }, { status });
+
+// Static client bytes only: workspace responses can contain secrets or stream live data.
+const compressAssets = HttpMiddleware.compression({
+	algorithms: ['br', 'gzip'],
+	levels: { br: 4 },
+	compressible: (type) => /^(?:text\/(?:javascript|css)|application\/javascript)(?:;|$)/.test(type)
+});
 
 /** The process scope owns the host file's resources, admission, the served release and the HTTP listener. */
 export const ServerLive = (options: ServeOptions) =>
@@ -132,7 +139,7 @@ export const ServerLive = (options: ServeOptions) =>
 				const page = yield* clientPage(artifact.dir, path, manifest);
 				return page === undefined
 					? HttpServerResponse.empty({ status: 404 })
-					: yield* HttpServerResponse.file(page.file, { headers: page.headers });
+					: yield* compressAssets(HttpServerResponse.file(page.file, { headers: page.headers }));
 			}).pipe(
 				Effect.catch((error) => {
 					const failure = wireError(error);

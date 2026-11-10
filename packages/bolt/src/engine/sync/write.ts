@@ -123,8 +123,7 @@ export function makeDeliver(e: SyncEngine) {
 	const ready = (parameter: '$1' | '$2') =>
 		`(i.integration NOT IN (SELECT jsonb_array_elements_text(${parameter}::jsonb)) OR (i.status ->> 'state' = 'connected' AND i.status -> 'databaseVerified' = 'true'::jsonb))`;
 	const changed = (r: Outbox) => e.live.syncChanged(r.model, [r.record]);
-	const schedule = Effect.fn('Syncs.scheduleWrite')(function* (at: string) {
-		const c = new Chain();
+	const enqueueDelivery = (c: Chain, at: string, when?: string) =>
 		enqueue(
 			c,
 			[
@@ -137,8 +136,11 @@ export function makeDeliver(e: SyncEngine) {
 					depth: 0
 				}
 			],
-			{ conflict: 'keep' }
+			{ conflict: 'keep', ...(when === undefined ? {} : { when }) }
 		);
+	const schedule = Effect.fn('Syncs.scheduleWrite')(function* (at: string) {
+		const c = new Chain();
+		enqueueDelivery(c, at);
 		yield* db.write(c.sql('NULL AS outcome'));
 		yield* e.announce(at);
 	});
@@ -314,20 +316,23 @@ export function makeDeliver(e: SyncEngine) {
 		);
 		if (result._tag === 'Failure') {
 			const error = result.failure;
+			const sql = inst.definition.driver === 'sqlserver';
+			// A rejected database write needs review. Preserve the local commitment and its frozen payload.
+			if (sql && !isTransient(error)) return yield* settle(r, 'dead', error.message);
 			if (!isTransient(error)) return yield* refuse(r, error.message);
-			if (r.attempts >= ATTEMPTS) return yield* settle(r, 'dead', error.message);
+			if (!sql && r.attempts >= ATTEMPTS) return yield* settle(r, 'dead', error.message);
 			const now = yield* Clock.currentTimeMillis;
-			const at = iso(
-					Math.max(now + retryDelay(r.attempts, Math.random()), retryAfterOf(db, r.instance))
-				),
+			const delay = retryDelay(sql ? 1 : r.attempts, Math.random());
+			const at = iso(Math.max(now + delay, retryAfterOf(db, r.instance))),
 				c = new Chain();
-			c.cte(
+			const retried = c.cte(
 				'retry',
 				`UPDATE sys_outbox SET status = 'queued', next_attempt_at = ${c.p(at)}::timestamptz,
 				error = ${c.p({ message: error.message })}::jsonb WHERE ${lease(c, r)} RETURNING id`
 			);
+			enqueueDelivery(c, at, `EXISTS (SELECT 1 FROM ${retried})`);
 			yield* db.write(c.sql('NULL AS outcome'));
-			yield* schedule(at);
+			yield* e.announce(at);
 			changed(r);
 			return;
 		}

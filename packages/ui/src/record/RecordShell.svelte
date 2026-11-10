@@ -691,7 +691,7 @@
 			name: 'ui',
 			title: msg(bolt, 'record.tab.record', 'Record'),
 			icon: 'lucide:file-text',
-			body,
+			body: mainTab,
 			keepAlive: true
 		},
 		...tabs.filter((t) => !around?.shown.includes(t.name) && !around?.shown.includes(t.title)),
@@ -888,6 +888,13 @@
 	>
 		{#if children && view}{#key shownPast}{@render children(view)}{/key}
 		{:else}{@render generated()}{/if}
+	</div>
+{/snippet}
+
+{#snippet mainTab()}
+	<div class="flex h-full min-h-0 min-w-0 flex-col gap-3">
+		{@render body()}
+		{@render foot()}
 	</div>
 {/snippet}
 
@@ -1213,7 +1220,7 @@
 					value={lastTab.get(`${of}/${id}`)}
 					onValueChange={(v) => lastTab.set(`${of}/${id}`, v)}
 				/>{/if}
-			{#if mode !== 'create' && !nested}{@render foot()}{/if}
+			{#if mode !== 'create' && !nested && tabItems.length === 1}{@render foot()}{/if}
 		</article>
 	{/if}
 {/snippet}

@@ -74,7 +74,6 @@
 	import Access from './auth/Access.svelte';
 	import SignIn from './auth/SignIn.svelte';
 	import Invite from './auth/Invite.svelte';
-	import AgentPanel from './agent/Agent.svelte';
 	import Attention from './agent/Attention.svelte';
 	import Awaiting from './agent/Awaiting.svelte';
 	import Waiting from './inbox/Waiting.svelte';
@@ -95,10 +94,8 @@
 		ringOn
 	} from './agent/page.ts';
 	import Inbox from './inbox/Inbox.svelte';
-	import Settings from './settings/Settings.svelte';
 	import { clientNavigationPath, systemUiIntent } from '../protocol/system-ui.ts';
 	import type { PageResult } from '../protocol/schema.ts';
-	import CommandCenter from './command-center/CommandCenter.svelte';
 	import StudioSlot from './studio/StudioSlot.svelte';
 	import RecordSheet from './RecordSheet.svelte';
 	import Turnstile from './auth/Turnstile.svelte';
@@ -609,11 +606,9 @@
 		);
 	};
 	watch(
-		() => [pageKey, strip] as const,
-		([key, pages]) => {
+		() => pageKey,
+		(key) => {
 			if (key !== null) loadPage(key);
-			// the open app's other pages load beside it, so its first tab switch is instant too
-			for (const p of pages ?? []) loadPage(p.key);
 		}
 	);
 	let held: { key: string; Page: Component } | undefined;
@@ -944,6 +939,14 @@
 
 <svelte:window onpopstate={() => (url = here())} onkeydown={shortcut} />
 
+{#snippet openingFeature()}
+	<Center><p role="status">{t('Loading…')}</p></Center>
+{/snippet}
+
+{#snippet failedFeature()}
+	<Center><p role="alert">{t('The page could not be rendered.')}</p></Center>
+{/snippet}
+
 {#snippet content()}
 	{#if current.kind === 'home' && model !== null}
 		<Home
@@ -1018,38 +1021,50 @@
 	{:else if current.kind === 'inbox' && boot?.surfaces.inbox && bolt}
 		<Inbox {bolt} {t} onCount={(n) => (waiting = n)} />
 	{:else if current.kind === 'settings' && boot?.surfaces.settings && bolt}
-		<Settings
-			{configuration}
-			{api}
-			{bolt}
-			{t}
-			tab={current.tab}
-			workspace={boot.workspace}
-			integrationSetups={config.integrationSetups}
-		/>
+		{#await import('./settings/Settings.svelte')}
+			{@render openingFeature()}
+		{:then { default: Settings }}
+			<Settings
+				{configuration}
+				{api}
+				{bolt}
+				{t}
+				tab={current.tab}
+				workspace={boot.workspace}
+				integrationSetups={config.integrationSetups}
+			/>
+		{:catch}
+			{@render failedFeature()}
+		{/await}
 	{:else if current.kind === 'commandCenter' && commandTabs.length > 0 && boot !== null && bolt}
-		<CommandCenter
-			automation={url.searchParams.get('automation')}
-			onAutomationClose={() => {
-				if (url.searchParams.has('automation')) {
-					const next = new URL(url);
-					next.searchParams.delete('automation');
-					navigate(next.href, true);
-				}
-			}}
-			{configuration}
-			{api}
-			{bolt}
-			{t}
-			tabs={commandTabs}
-			tab={current.tab}
-			onTab={(x) => navigate(`/command-center/${x}`)}
-			admin={boot.admin}
-			startable={boot.startable ?? []}
-			run={url.searchParams.get('run')}
-			onRun={openRun}
-			onConversation={boot.surfaces.agent ? (conversation) => agent.open({ conversation }) : null}
-		/>
+		{#await import('./command-center/CommandCenter.svelte')}
+			{@render openingFeature()}
+		{:then { default: CommandCenter }}
+			<CommandCenter
+				automation={url.searchParams.get('automation')}
+				onAutomationClose={() => {
+					if (url.searchParams.has('automation')) {
+						const next = new URL(url);
+						next.searchParams.delete('automation');
+						navigate(next.href, true);
+					}
+				}}
+				{configuration}
+				{api}
+				{bolt}
+				{t}
+				tabs={commandTabs}
+				tab={current.tab}
+				onTab={(x) => navigate(`/command-center/${x}`)}
+				admin={boot.admin}
+				startable={boot.startable ?? []}
+				run={url.searchParams.get('run')}
+				onRun={openRun}
+				onConversation={boot.surfaces.agent ? (conversation) => agent.open({ conversation }) : null}
+			/>
+		{:catch}
+			{@render failedFeature()}
+		{/await}
 	{:else if current.kind === 'studio' && boot?.surfaces.studio}
 		<StudioSlot
 			bundle={boot.studioBundle}
@@ -1359,20 +1374,26 @@
 					{@const Agent = config.agent}
 					<Agent {bolt} request={agentRequest} onClose={() => agent.close()} />
 				{:else if agentRequest !== null}
-					<AgentPanel
-						{api}
-						{bolt}
-						{t}
-						nav={boot.nav}
-						entries={boot.search ?? []}
-						request={agentRequest}
-						unconfigured={boot.aiUnconfigured === true}
-						admin={boot.admin}
-						envoys={boot.envoys ?? {}}
-						onClose={() => agent.close()}
-						onConversation={agentConversation}
-						storageKey={agentMemory}
-					/>
+					{#await import('./agent/Agent.svelte')}
+						{@render openingFeature()}
+					{:then { default: AgentPanel }}
+						<AgentPanel
+							{api}
+							{bolt}
+							{t}
+							nav={boot.nav}
+							entries={boot.search ?? []}
+							request={agentRequest}
+							unconfigured={boot.aiUnconfigured === true}
+							admin={boot.admin}
+							envoys={boot.envoys ?? {}}
+							onClose={() => agent.close()}
+							onConversation={agentConversation}
+							storageKey={agentMemory}
+						/>
+					{:catch}
+						{@render failedFeature()}
+					{/await}
 				{/if}
 			</Sheet>
 		{/if}

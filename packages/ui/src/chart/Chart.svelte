@@ -23,7 +23,6 @@ numbers (`count`, `sum.amount`).
 
 <script lang="ts">
 	import { curveStepAfter } from 'd3-shape';
-	import { AreaChart, BarChart, LineChart, PieChart, ScatterChart } from 'layerchart';
 	import { useBolt } from '../client/context.js';
 	import { humanize, msg } from '../text/messages.js';
 	import { series } from './series.js';
@@ -48,6 +47,7 @@ numbers (`count`, `sum.amount`).
 	let plotWidth = $state(Infinity);
 	const ys = $derived(typeof y === 'string' ? [y] : [...y]);
 	const read = $derived(sourceState(of));
+	const loadPlots = () => import('./plots.js');
 	const COLORS = [
 		'var(--chart-1, #2563eb)',
 		'var(--chart-2, #60a5fa)',
@@ -77,69 +77,79 @@ numbers (`count`, `sum.amount`).
 				>
 					{msg(bolt, 'chart.empty', 'No data')}
 				</p>
-			{:else if kind === 'donut'}
-				<div class="h-56">
-					<PieChart
-						data={data.map((d) => ({ key: String(d[x]), value: Number(d[ys[0]!] ?? 0) }))}
-						key="key"
-						value="value"
-						label="key"
-						innerRadius={0.68}
-					/>
-				</div>
 			{:else}
-				<div class="h-72 min-w-0 overflow-x-auto" bind:clientWidth={plotWidth}>
-					{#if kind === 'scatter'}<ScatterChart
-							{data}
-							{x}
-							padding={numericPadding}
-							series={lines}
-							props={{ xAxis }}
-							legend
-						/>
-					{:else if kind === 'bar'}<BarChart
-							{data}
-							x={orientation === 'horizontal' ? undefined : x}
-							y={orientation === 'horizontal' ? x : undefined}
-							{orientation}
-							padding={orientation === 'horizontal'
-								? {
-										bottom: 64,
-										top: 12,
-										right: 12,
-										left: Math.min(
-											320,
-											plotWidth * 0.4,
-											Math.max(80, ...data.map((row) => String(row[x] ?? '').length * 7 + 16))
-										)
-									}
-								: numericPadding}
-							series={lines}
-							seriesLayout={stack ? 'stack' : 'group'}
-							props={{ xAxis }}
-							legend
-						/>
-					{:else if kind === 'line'}<LineChart
-							{data}
-							{x}
-							padding={numericPadding}
-							series={lines}
-							props={{
-								xAxis,
-								spline: { curve: interpolation === 'step' ? curveStepAfter : undefined }
-							}}
-							legend
-						/>
-					{:else}<AreaChart
-							{data}
-							{x}
-							padding={numericPadding}
-							series={lines}
-							seriesLayout={stack ? 'stack' : 'overlap'}
-							props={{ xAxis }}
-							legend
-						/>{/if}
-				</div>
+				{#await loadPlots()}
+					<div class={kind === 'donut' ? 'h-56' : 'h-72'} aria-busy="true"></div>
+				{:then { AreaChart, BarChart, LineChart, PieChart, ScatterChart }}
+					{#if kind === 'donut'}
+						<div class="h-56">
+							<PieChart
+								data={data.map((d) => ({ key: String(d[x]), value: Number(d[ys[0]!] ?? 0) }))}
+								key="key"
+								value="value"
+								label="key"
+								innerRadius={0.68}
+							/>
+						</div>
+					{:else}
+						<div class="h-72 min-w-0 overflow-x-auto" bind:clientWidth={plotWidth}>
+							{#if kind === 'scatter'}<ScatterChart
+									{data}
+									{x}
+									padding={numericPadding}
+									series={lines}
+									props={{ xAxis }}
+									legend
+								/>
+							{:else if kind === 'bar'}<BarChart
+									{data}
+									x={orientation === 'horizontal' ? undefined : x}
+									y={orientation === 'horizontal' ? x : undefined}
+									{orientation}
+									padding={orientation === 'horizontal'
+										? {
+												bottom: 64,
+												top: 12,
+												right: 12,
+												left: Math.min(
+													320,
+													plotWidth * 0.4,
+													Math.max(80, ...data.map((row) => String(row[x] ?? '').length * 7 + 16))
+												)
+											}
+										: numericPadding}
+									series={lines}
+									seriesLayout={stack ? 'stack' : 'group'}
+									props={{ xAxis }}
+									legend
+								/>
+							{:else if kind === 'line'}<LineChart
+									{data}
+									{x}
+									padding={numericPadding}
+									series={lines}
+									props={{
+										xAxis,
+										spline: { curve: interpolation === 'step' ? curveStepAfter : undefined }
+									}}
+									legend
+								/>
+							{:else}<AreaChart
+									{data}
+									{x}
+									padding={numericPadding}
+									series={lines}
+									seriesLayout={stack ? 'stack' : 'overlap'}
+									props={{ xAxis }}
+									legend
+								/>{/if}
+						</div>
+					{/if}
+				{:catch}
+					<p class="text-muted-foreground rounded-md border border-dashed p-4 text-sm" role="alert">
+						{msg(bolt, 'chart.unavailable', 'The chart could not load. Reload to try again.')}
+					</p>
+				{/await}
 			{/if}
 		{/snippet}
 	</ReadGate>

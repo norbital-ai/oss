@@ -24,7 +24,7 @@
 	import type { Act } from '../Acts.svelte';
 	import Acts from '../Acts.svelte';
 	import { chosenLocale } from '../i18n.ts';
-	import type { IntegrationSetupEntry } from '../integration/setup.ts';
+	import { workspaceConnection, type IntegrationSetupEntry } from '../integration/setup.ts';
 	import { SYSTEM_UI, type SystemUiIntent } from '../../protocol/system-ui.ts';
 	import DetailSheet from '../DetailSheet.svelte';
 	import Integrations from '../integration/Integrations.svelte';
@@ -64,7 +64,7 @@
 	};
 	const DESCRIPTIONS: { readonly [k in SettingsTab]: string } = {
 		organization: 'Workspace identity, branding and assistant limits.',
-		integrations: 'Envoys, API keys and MCP servers for this workspace.',
+		integrations: 'Connections, envoys, API keys and MCP servers for this workspace.',
 		secrets: 'Write-only values the workspace source reads by name.'
 	};
 	const BANNERS: { readonly [k in SettingsTab]: string } = {
@@ -100,6 +100,7 @@
 		).pipe(Stream.switchMap(() => Stream.fromEffect(owner.settings())));
 	});
 	const s = $derived(settings.current ?? null);
+	const hasConnections = $derived(s?.instances.some(workspaceConnection) ?? false);
 	let mutationError = $state<string | null>(null);
 	const error = $derived(mutationError ?? settings.error?.message ?? null);
 	// Invalidation switches only the inner read, keeping the open integration sheet mounted while it refreshes.
@@ -266,13 +267,19 @@
 		else mutationError = r.failure.message;
 	});
 	let secretValue = $state('');
-	let integrationTab = $state('envoys');
+	let integrationTab = $state<string | undefined>(undefined);
 	let configured = $state<string | null>(null);
 	watch([() => configuration, () => s], ([intent, settings]) => {
 		if (intent === null || settings === null || configured === intent.key) return;
 		configured = intent.key;
 		const request = intent.request;
-		integrationTab = SYSTEM_UI[request.capability].tab;
+		integrationTab =
+			request.capability === 'integration.manage' &&
+			settings.instances.some(
+				(instance) => instance.id === request.record && workspaceConnection(instance)
+			)
+				? 'connections'
+				: SYSTEM_UI[request.capability].tab;
 		if (request.capability === 'api_key.create') {
 			form = { keyName: '', keyTeam: '' };
 			issued = null;
@@ -394,9 +401,7 @@
 								>{t('Remove logo')}</Button
 							>{/if}
 					</div>
-					<Cluster gap="sm"
-						><Button type="submit">{t('Save')}</Button></Cluster
-					>
+					<Cluster gap="sm"><Button type="submit">{t('Save')}</Button></Cluster>
 				</form>
 			{/snippet}
 			{@render card(t('Branding'), t('The logo every member sees.'), branding)}
@@ -537,6 +542,19 @@
 			)}
 		{/if}
 	{:else if tab === 'integrations'}
+		{#snippet connectionsTab()}
+			<Integrations
+				connections
+				{configuration}
+				{api}
+				{bolt}
+				{t}
+				settings={s}
+				locale={chosenLocale(workspace.locale)}
+				{integrationSetups}
+				reload={load}
+			/>
+		{/snippet}
 		{#snippet envoysTab()}
 			<Integrations
 				{configuration}
@@ -606,9 +624,20 @@
 			</Table>
 		{/snippet}
 		<Tabs
-			bind:value={integrationTab}
+			value={integrationTab ?? (hasConnections ? 'connections' : 'envoys')}
+			onValueChange={(value) => (integrationTab = value)}
 			orientation="horizontal"
 			tabs={[
+				...(hasConnections
+					? [
+							{
+								name: 'connections',
+								title: t('Connections'),
+								icon: 'lucide:plug',
+								body: connectionsTab
+							}
+						]
+					: []),
 				{ name: 'envoys', title: t('Envoys'), icon: 'lucide:bot', body: envoysTab },
 				{ name: 'keys', title: t('API keys'), icon: 'lucide:key-round', body: keysTab },
 				{ name: 'mcp', title: t('MCP servers'), icon: 'lucide:server', body: mcpTab }

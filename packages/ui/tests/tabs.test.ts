@@ -26,6 +26,11 @@ it('arrow and End keys move the selected tab', async () => {
 	expect(selected()).toBe('Measurements');
 	await press('End');
 	expect(selected()).toBe('History');
+	const active = target.querySelector('[role=tab][aria-selected=true]');
+	const panel = target.querySelector('[role=tabpanel]:not([hidden])');
+	expect(active?.getAttribute('aria-controls')).toBe(panel?.id);
+	expect(panel?.getAttribute('aria-labelledby')).toBe(active?.id);
+	expect(panel?.textContent?.trim()).toBe('Tab content');
 	await unmount(view);
 });
 
