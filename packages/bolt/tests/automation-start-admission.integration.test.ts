@@ -26,7 +26,9 @@ const manifest: EngineManifest = {
 		starter: {
 			description: 'Start with a readable document',
 			capabilities: { automations: ['inspect'] },
-			grants: { documents: { read: { documents: { where: { visible: { eq: true } } } } } }
+			grants: {
+				documents: { outputs: { default: { scopes: { documents: { visible: { eq: true } } } } } }
+			}
 		}
 	},
 	teams: {},

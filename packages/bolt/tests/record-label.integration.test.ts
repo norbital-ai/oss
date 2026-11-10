@@ -31,7 +31,11 @@ const manifest: EngineManifest = {
 	relationships: {},
 	exposures: {
 		entries: {
-			outputs: { default: { entries: { fields: 'all' } }, public: { entries: { fields: ['first_name'] } }, directory: { entries: { fields: ['code', 'display_name'] } } },
+			outputs: {
+				default: { entries: { fields: 'all' } },
+				public: { entries: { fields: ['first_name'] } },
+				directory: { entries: { fields: ['code', 'display_name'] } }
+			},
 			create: { columns: { entries: ['first_name', 'last_name'] } },
 			update: { columns: { entries: ['first_name', 'last_name'] } }
 		}
@@ -39,17 +43,23 @@ const manifest: EngineManifest = {
 	policies: {
 		public: {
 			description: 'Names only',
-			grants: { entries: { outputs: { public: true } }, approval_request: { read: true } }
+			grants: {
+				entries: { outputs: { public: true } },
+				approval_request: { outputs: { default: true } }
+			}
 		},
 		directory: {
 			description: 'Named output only',
-			grants: { entries: { outputs: { directory: true } }, approval_request: { read: true } }
+			grants: {
+				entries: { outputs: { directory: true } },
+				approval_request: { outputs: { default: true } }
+			}
 		},
 		blocked: {
 			description: 'The label fields are visible but the target row is not',
 			grants: {
-				entries: { outputs: { directory: { entries: { where: { code: { eq: 'P-NONE' } } } } } },
-				approval_request: { read: true }
+				entries: { outputs: { directory: { scopes: { entries: { code: { eq: 'P-NONE' } } } } } },
+				approval_request: { outputs: { default: true } }
 			}
 		}
 	},

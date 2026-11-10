@@ -240,7 +240,6 @@ describe('exposure (the boot catalog ui reads)', () => {
 	/** One policy `p`'s access points on a model: none unless named (decision 3: reads and write columns per path). */
 	const access = (over: Partial<ModelAuthority> = {}): ModelAuthority => ({
 		read: {},
-		history: [],
 		create: [],
 		update: [],
 		delete: [],
@@ -262,7 +261,9 @@ describe('exposure (the boot catalog ui reads)', () => {
 			relationships: { 'jobs.site': { to: 'sites', optional: true } },
 			exposures: {
 				jobs: {
-					outputs: { default: { jobs: { fields: ['title', 'pay', 'site'] }, 'jobs.site': { fields: 'all' } } },
+					outputs: {
+						default: { jobs: { fields: ['title', 'pay', 'site'] }, 'jobs.site': { fields: 'all' } }
+					},
 					update: { columns: { jobs: ['title'] } }
 				}
 			},
@@ -394,7 +395,11 @@ describe('exposure (the boot catalog ui reads)', () => {
 				'jobs.site': { to: 'sites', optional: true, where: { title: { eq: 'Yard' } } }
 			},
 			exposures: {
-				jobs: { outputs: { default: { jobs: { fields: ['title', 'site'] }, 'jobs.site': { fields: 'all' } } } }
+				jobs: {
+					outputs: {
+						default: { jobs: { fields: ['title', 'site'] }, 'jobs.site': { fields: 'all' } }
+					}
+				}
 			}
 		};
 		expect(exposure(narrowed, { ...member([]), admin: true })['jobs']?.relations).toEqual({
@@ -407,7 +412,9 @@ describe('exposure (the boot catalog ui reads)', () => {
 			relationships: { 'jobs.site': { to: 'sites', optional: true, owned: true } },
 			exposures: {
 				jobs: {
-					outputs: { default: { jobs: { fields: ['title', 'pay', 'site'] }, 'jobs.site': { fields: 'all' } } },
+					outputs: {
+						default: { jobs: { fields: ['title', 'pay', 'site'] }, 'jobs.site': { fields: 'all' } }
+					},
 					update: { columns: { jobs: ['title', 'site'] } },
 					syncs: { jobs: { with: 'operations', read: true } }
 				}
@@ -452,6 +459,7 @@ describe('exposure (the boot catalog ui reads)', () => {
 		};
 		expect(exposure(em, auth)).toEqual({
 			jobs: {
+				audit: false,
 				label: ['title'],
 				labelPaths: ['title'],
 				record_label: 'record.title',
@@ -481,6 +489,7 @@ describe('exposure (the boot catalog ui reads)', () => {
 			models: { jobs: access({ read: { brief: { jobs: [{ policy: 'p', where: TRUE }] } } }) }
 		};
 		expect(exposure(source, auth)['jobs']).toEqual({
+			audit: false,
 			label: ['title'],
 			labelPaths: ['title'],
 			record_label: 'record.title',
@@ -520,7 +529,9 @@ describe('exposure (the boot catalog ui reads)', () => {
 						}
 					}
 				},
-				exposures: { jobs: { ...em.exposures['jobs'], outputs: { default: { jobs: { fields: 'all' } } } } }
+				exposures: {
+					jobs: { ...em.exposures['jobs'], outputs: { default: { jobs: { fields: 'all' } } } }
+				}
 			})
 		);
 		expect(exposure(withComputed, { ...member([]), admin: true })['jobs']).toMatchObject({
@@ -1016,7 +1027,6 @@ describe('visitor fetch (§5.10, GAPS r5 11)', () => {
 					read: {
 						kiosk: { openings: [{ policy: 'visitor', where: { t: 'const', value: true } }] }
 					},
-					history: [],
 					create: [],
 					update: [],
 					delete: [],

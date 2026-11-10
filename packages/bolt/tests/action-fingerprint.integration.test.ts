@@ -39,8 +39,8 @@ const manifest: EngineManifest = {
 			description: 'Synthetic operator',
 			capabilities: { automations: ['place', 'queryplace'] },
 			grants: {
-				quota: { read: true },
-				orders: { read: true, create: true }
+				quota: { outputs: { default: true } },
+				orders: { outputs: { default: true }, create: true }
 			}
 		}
 	},
@@ -122,7 +122,7 @@ const fixture = () =>
 					return result;
 				}),
 			write: db.write,
-			transaction: db.transaction,
+			transaction: db.transaction
 		});
 		const context = yield* Layer.build(
 			TestWorkspace.layer({

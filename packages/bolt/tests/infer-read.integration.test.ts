@@ -54,16 +54,22 @@ const manifest = {
 			effect: { created: true }
 		},
 		purchase_orders: {
-			outputs: { default: { purchase_orders: { fields: 'all' } }, matching: { purchase_orders: { fields: ['number', 'supplier', 'amount'] } } },
+			outputs: {
+				default: { purchase_orders: { fields: 'all' } },
+				matching: { purchase_orders: { fields: ['number', 'supplier', 'amount'] } }
+			},
 			create: { columns: { purchase_orders: ['number', 'supplier', 'amount', 'margin'] } }
 		},
-		ledgers: { outputs: { default: { ledgers: { fields: 'all' } } }, create: { columns: { ledgers: ['title'] } } }
+		ledgers: {
+			outputs: { default: { ledgers: { fields: 'all' } } },
+			create: { columns: { ledgers: ['title'] } }
+		}
 	},
 	policies: {
 		matcher: {
 			description: 'Matches invoices',
 			grants: {
-				invoices: { read: true, update: true },
+				invoices: { outputs: { default: true }, update: true },
 				purchase_orders: { outputs: { matching: true } }
 			}
 		},
@@ -71,9 +77,9 @@ const manifest = {
 		clerk: {
 			description: 'Enters documents',
 			grants: {
-				invoices: { read: true, create: true, update: true },
-				purchase_orders: { read: true, create: true },
-				ledgers: { read: true, create: true }
+				invoices: { outputs: { default: true }, create: true, update: true },
+				purchase_orders: { outputs: { default: true }, create: true },
+				ledgers: { outputs: { default: true }, create: true }
 			},
 			capabilities: { automations: ['relay'] }
 		}

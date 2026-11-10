@@ -104,7 +104,10 @@ const manifest: EngineManifest = {
 	needs: [],
 	workspace: { tz: 'UTC', locale: 'en', agent: { triage: false } },
 	exposures: {
-		tasks: { outputs: { default: { tasks: { fields: 'all' } } }, create: { columns: { tasks: ['title'] } } }
+		tasks: {
+			outputs: { default: { tasks: { fields: 'all' } } },
+			create: { columns: { tasks: ['title'] } }
+		}
 	},
 	models: {
 		tasks: {
@@ -767,7 +770,9 @@ describe('fewer calls for the common paths', () => {
 				policies: {
 					clerk: {
 						description: '',
-						grants: { tasks: { read: true, create: { columns: { tasks: ['title'] } } } }
+						grants: {
+							tasks: { outputs: { default: true }, create: { columns: { tasks: ['title'] } } }
+						}
 					}
 				}
 			};
@@ -792,7 +797,10 @@ describe('fewer calls for the common paths', () => {
 						clerk: {
 							description: '',
 							grants: {
-								tasks: { read: true, create: { columns: { tasks: ['title'] }, verdict: true } }
+								tasks: {
+									outputs: { default: true },
+									create: { columns: { tasks: ['title'] }, verdict: true }
+								}
 							}
 						}
 					}
@@ -1295,7 +1303,7 @@ describe('reading the source is every staff member’s; changing it is an admini
 	const reader = compileAuthority(
 		{
 			...manifest,
-			policies: { staff: { description: '', grants: { tasks: { read: true } } } }
+			policies: { staff: { description: '', grants: { tasks: { outputs: { default: true } } } } }
 		},
 		{ actor: member().actor, policies: ['staff'], admin: false },
 		'reader'
@@ -1405,8 +1413,8 @@ describe('describe_workspace', () => {
 		policies: {
 			matcher: {
 				description: '',
-				grants: { trial: { read: true, create: true } },
-				capabilities: { apps: ['lab/trials'] , automations: ['close_month'] }
+				grants: { trial: { outputs: { default: true }, create: true } },
+				capabilities: { apps: ['lab/trials'], automations: ['close_month'] }
 			}
 		},
 		automations: {
@@ -1508,7 +1516,10 @@ describe('describe_workspace', () => {
 			exposures: {
 				...lab.exposures,
 				...Object.fromEntries(
-					Object.keys(many).map((n) => [n, { outputs: { default: { [n]: { fields: 'all' as const } } } }])
+					Object.keys(many).map((n) => [
+						n,
+						{ outputs: { default: { [n]: { fields: 'all' as const } } } }
+					])
 				)
 			}
 		};

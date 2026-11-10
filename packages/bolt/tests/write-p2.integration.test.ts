@@ -55,7 +55,7 @@ const fixture = Effect.gen(function* () {
 				// Native commits use complete batches; dry runs execute the same SQL and roll back.
 				if (batch.rollback !== true) count.writes++;
 				return inner.transaction(batch);
-			}),
+			})
 	});
 	count.reads = 0;
 	count.writes = 0;
@@ -365,7 +365,10 @@ describe('engine/query: history (rule 17)', () => {
 		...manifest,
 		exposures: {
 			...manifest.exposures,
-			orders: { ...orders, outputs: { ...orders.outputs, brief: { orders: { fields: ['title', 'status'] } } } }
+			orders: {
+				...orders,
+				outputs: { ...orders.outputs, brief: { orders: { fields: ['title', 'status'] } } }
+			}
 		}
 	};
 	const history = Effect.fnUntraced(function* (
@@ -470,7 +473,7 @@ describe('engine/query: history (rule 17)', () => {
 				expect(yield* history(id, admin, { revision: 2 })).toHaveLength(2);
 				// a reader holding only the `brief` output: its revisions show brief's fields, never `note`
 				const brief = authority({
-					orders: grants('orders', { history: [arm()], read: { brief: { orders: [arm()] } } })
+					orders: grants('orders', { read: { brief: { orders: [{ ...arm(), history: true }] } } })
 				});
 				expect(yield* folded(id, 2)).toMatchObject({ id, revision: 2, title: 'desk', note: 'a' });
 				const asBrief = yield* foldedBrief(id, 2, brief);
@@ -508,9 +511,7 @@ describe('engine/query: history (rule 17)', () => {
 				});
 				expect(yield* history(id, own)).toEqual([]);
 				ok((yield* run({ verb: 'delete', input: [{ target: id }] })).outcome);
-				expect(
-					yield* history(id, authority({ orders: grants('orders', { history: [arm()] }) }))
-				).toHaveLength(4); // read: true sees a deleted row's
+				expect(yield* history(id, authority({ orders: grants('orders') }))).toHaveLength(4); // read: true sees a deleted row's
 			}).pipe(Effect.provide(P2FixtureLive))
 	);
 });
@@ -651,7 +652,7 @@ describe('engine/write: per-record restore (rule 17)', () => {
 					.outcome
 			);
 			const titleOnly = authority({
-				orders: grants('orders', { history: [arm()], update: [writeArm({ orders: ['title'] })] })
+				orders: grants('orders', { update: [writeArm({ orders: ['title'] })] })
 			});
 			const p = yield* preview(at(id, 1), titleOnly);
 			expect(fields(p)).toEqual(['title']);

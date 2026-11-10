@@ -140,7 +140,7 @@ const manifest = {
 		self: {
 			description: 'Manages their own accounts',
 			grants: {
-				sys_integration: { read: true, update: { verdict: true } }
+				sys_integration: { outputs: { default: true }, update: { verdict: true } }
 			}
 		}
 	},

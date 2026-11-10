@@ -74,17 +74,23 @@ const manifest = {
 		}
 	},
 	policies: {
-		desk: { description: 'What the envoys may do', grants: { jobs: { read: true } } },
-		contractor: { description: 'Contractors', grants: { jobs: { read: true } } },
+		desk: {
+			description: 'What the envoys may do',
+			grants: { jobs: { outputs: { default: true } } }
+		},
+		contractor: { description: 'Contractors', grants: { jobs: { outputs: { default: true } } } },
 		staff: {
 			description: 'Staff',
-			grants: { sent_emails: { read: true, create: true }, tickets: { read: true, create: true } }
+			grants: {
+				sent_emails: { outputs: { default: true }, create: true },
+				tickets: { outputs: { default: true }, create: true }
+			}
 		},
 		sales: {
 			description: 'Sales',
-			grants: { orders: { read: true, create: { verdict: true } } }
+			grants: { orders: { outputs: { default: true }, create: { verdict: true } } }
 		},
-		finance: { description: 'Finance', grants: { orders: { read: true } } }
+		finance: { description: 'Finance', grants: { orders: { outputs: { default: true } } } }
 	},
 	teams: {
 		't-con': { name: 'Contractors', policies: ['contractor'] },

@@ -37,7 +37,10 @@ const manifest: EngineManifest = {
 			create: { columns: { leaves: ['name'], 'leaves.steps': ['label'] }, transform: true },
 			update: { columns: { leaves: ['note'] }, transform: true }
 		},
-		holds: { outputs: { default: { holds: { fields: 'all' } } }, create: { columns: { holds: ['name'] } } },
+		holds: {
+			outputs: { default: { holds: { fields: 'all' } } },
+			create: { columns: { holds: ['name'] } }
+		},
 		postings: {
 			outputs: { default: { postings: { fields: 'all' } } },
 			create: { columns: { postings: ['source', 'carrier'] }, transform: true }
@@ -46,11 +49,14 @@ const manifest: EngineManifest = {
 	policies: {
 		requester: {
 			description: 'Requests',
-			grants: { leaves: { read: true, create: { verdict: true } } }
+			grants: { leaves: { outputs: { default: true }, create: { verdict: true } } }
 		},
 		reviewer: {
 			description: 'Reviews',
-			grants: { leaves: { read: true, update: {} }, approval_request: { read: true } }
+			grants: {
+				leaves: { outputs: { default: true }, update: {} },
+				approval_request: { outputs: { default: true } }
+			}
 		}
 	},
 	teams: { requesters: ['requester'], managers: ['reviewer'] }

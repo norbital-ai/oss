@@ -109,7 +109,7 @@ const sliceManifest = {
 	...callbacks,
 	policies: {
 		...callbacks.policies,
-		ops: { description: 'Ops', grants: { customers: { read: true, create: true } } }
+		ops: { description: 'Ops', grants: { customers: { outputs: { default: true }, create: true } } }
 	},
 	automations: {
 		stamp: { description: 'Files a customer', on: [{ cron: '*/15 * * * *' }], policies: ['ops'] },
@@ -214,7 +214,7 @@ const facilitiesOf = (database: Facilities['storage']['database'], sent: string[
 		storage: { database, files },
 		logs: { runtime: { write: () => {}, query: async () => [] }, audit: memoryAudit().port },
 		transactional: { mail, sms: off, phone: off, push: off, challenge: off, fixedCodes: false },
-		intelligence: { system1: off, system2: off, embed: off,  },
+		intelligence: { system1: off, system2: off, embed: off },
 		ports: { webhooks: off, websockets: off, outbound: off },
 		sandbox: off,
 		keys: keysPort(randomBytes(32))
@@ -494,7 +494,9 @@ describe('HOST_API conformance (D10a)', () => {
 				await side.park(0);
 				const parked = side.calls.length;
 				await side.wake();
-				expect(side.calls.slice(parked).filter((c) => c.startsWith(`settle ${SCOPE}`))).toHaveLength(1);
+				expect(
+					side.calls.slice(parked).filter((c) => c.startsWith(`settle ${SCOPE}`))
+				).toHaveLength(1);
 
 				// close: the generation's guest bodies are interrupted (an order's transform runs one)
 				await side.close();

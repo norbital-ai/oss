@@ -34,9 +34,12 @@ const manifest = Result.getOrThrow(
 		},
 		relationships: {},
 		exposures: {
-			quotes: { outputs: { default: { quotes: { fields: 'all' } } }, create: { columns: { quotes: ['title'] } } }
+			quotes: {
+				outputs: { default: { quotes: { fields: 'all' } } },
+				create: { columns: { quotes: ['title'] } }
+			}
 		},
-		policies: { rep: { description: 'Rep', grants: { quotes: { read: true } } } },
+		policies: { rep: { description: 'Rep', grants: { quotes: { outputs: { default: true } } } } },
 
 		connections: { field: { integration: 'whatsapp' } },
 		agent: { internal: 'Staff brief.', external: 'Customer brief.', skills: {} },

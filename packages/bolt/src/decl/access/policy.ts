@@ -128,19 +128,23 @@ export class Verdict {
 // is not refused.
 // A grant's `where` is the policy's authority over the model's rows, not a caller's read: it may name any field and cross
 // any relation, and the related model's own policies never apply to it.
-type Scope<C extends ModelName> = ModelWhere<C> & object;
-/**
- * A grant of one read output: `true` (every row of every layer), or a row filter per layer path of that output. A
- * layer's `where` filters it (the root's: which roots; a deeper one's: that layer's rows, or nulls a ref, never the
- * root). A layer the map does not name is unfiltered. The output's fields are the model's; a grant never changes them.
- */
+type ChildPath<Parent extends string, Path> = Path extends `${Parent}.${infer Relation}`
+	? Relation extends `${string}.${string}`
+		? never
+		: Path
+	: never;
+type Scope<C extends ModelName, O, P extends string> = {
+	where?: ModelWhere<PathModel<C, P>> & object;
+} & {
+	[
+		Child in ChildPath<P, ReadPath<C, O>> as Child extends `${P}.${infer Relation}`
+			? Relation
+			: never
+	]?: Scope<C, O, Child>;
+};
+/** A grant of an output: every row, or a scope on its root and any of its relations. History uses the root scope. */
 export type ReadGrant<C extends ModelName, O = 'default'> =
-	| true
-	| ({
-			[P in ReadPath<C, O>]?: { where?: ModelWhere<PathModel<C, P>> & object } & object;
-	  } & object);
-/** A `history` grant (rule 17): `true`, a scope, or `{ where }`; its revisions show the output the read names. */
-type HistoryGrant<C extends ModelName> = true | Scope<C> | ({ where?: Scope<C> } & object);
+	true | (Scope<C, O, C> & { history?: true });
 /**
  * A create or update grant: `true` (every declared column, allowed), or the `columns` per write layer it admits (every
  * declared one when omitted, checked before the `check` runs, without guest code) and the `check` that judges the whole
@@ -159,21 +163,18 @@ export type WriteGrant<C extends ModelName, O extends 'create' | 'update'> =
 export type DeleteGrant<C extends ModelName> = true | ({ verdict?: DeleteCheck<C> } & object);
 type Declares<C, V> = ExposureSpecOf<C> extends { [P in V & string]: unknown } ? true : false;
 /**
- * A model grant: its access points `read` (the `default` output) and `outputs` (named ones), `create`, `update`,
- * `delete` (each only when the model declares it) and `history`. State `moves` are part of `update`.
+ * A model grant names the `outputs` its holders may read and the model verbs they may call.
+ * State `moves` are part of `update`.
  */
 export type Grant<C extends ModelName> = {
-	read?: ReadGrant<C>;
-	outputs?: { [O in Exclude<OutputName<C>, 'default'>]?: ReadGrant<C, O> };
-	history?: HistoryGrant<C>;
+	outputs?: { [O in OutputName<C>]?: ReadGrant<C, O> };
 	create?: Declares<C, 'create'> extends true ? WriteGrant<C, 'create'> : never;
 	update?: Declares<C, 'update'> extends true ? WriteGrant<C, 'update'> : never;
 	delete?: Declares<C, 'delete'> extends true ? DeleteGrant<C> : never;
 };
 /** Rule 38c: identity models are read-only to every policy: their `default` output or a named one (`directory`), rows by scope. */
 export type IdentityGrant<C extends ModelName> = {
-	read?: true | Scope<C>;
-	outputs?: { [O in Exclude<OutputName<C>, 'default'>]?: true | Scope<C> };
+	outputs?: { [O in OutputName<C>]?: ReadGrant<C, O> };
 };
 type Identity = 'sys_user' | 'sys_invitation';
 // Ledgers and API keys take no grant. Invitations are readable for provisioning automations.
@@ -222,7 +223,7 @@ interface PolicyFor<C extends Grantable> {
 type PolicyBase = {
 	/** What holding the policy is for, for people and the agent. */
 	description: string;
-	/** Per model: `read`/`outputs` (row filters of the outputs holders read), `history`, `create`/`update` (`columns` per layer and a `check`), `delete` (`check`), state `moves`. */
+	/** Per model, the granted outputs and their scopes and history, and the admitted model verbs. */
 	grants: { readonly [model: string]: object } & VerdictSlots;
 	/** The apps, manual starts, host tools and MCP servers holders may use; every agent skill is open to all. */
 	capabilities?: { readonly [k: string]: readonly string[] };
@@ -232,8 +233,8 @@ type PolicyBase = {
 
 /**
  * `src/access_control/policy/+<name>.policy.ts`: what holders may do: per-model `grants` (the read outputs they read —
- * `read` for `default`, `outputs` for named ones — and a row filter per layer of each; `create`, `update` and `delete`
- * with their `columns` per layer and a `check` returning `allow`, `deny` or `approve`; `history`; state `moves`), the
+ * the default and named `outputs` and a row filter per layer of each, and `create`, `update` and `delete`
+ * with their `columns` per layer and a `verdict` returning `allow` or `approve`, or refusing), the
  * automations and syncs they may start by hand, capabilities (apps, host tools, MCP servers) and rate `limits`.
  * A model's policy alone guards its access points and every layer under them. Teams and automations hold policies.
  * `approve(flow)` is the whole approval mechanism: the write is held as a native approval request, the named step
@@ -245,10 +246,10 @@ type PolicyBase = {
  * 	description: 'Contractors raise variations on their own jobs.',
  * 	grants: {
  * 		variation_requests: {
- * 			read: { variation_requests: { where: { raised_by: { eq: { var: 'requestor.id' } } } } },
+ * 			outputs: { default: { where: { raised_by: { eq: { var: 'requestor.id' } } } } },
  * 			create: {
  * 				columns: { variation_requests: ['job_assignment_id', 'title', 'amount'] },
- * 				check: function* (rows, ctx) {
+ * 				verdict: function* (rows, ctx) {
  * 					const { job_assignments } = yield* ctx.query({
  * 						job_assignments: { where: { id: { in: rows.map((r) => r.job_assignment_id) } }, fields: ['assignee_user_id'] }
  * 					});

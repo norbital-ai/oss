@@ -32,7 +32,7 @@ const manifest = Result.getOrThrow(
 				description: 'Rep',
 				capabilities: { automations: ['put'] },
 				grants: {
-					rates: { read: true, create: true, update: true }
+					rates: { outputs: { default: true }, create: true, update: true }
 				}
 			}
 		},

@@ -1,5 +1,7 @@
 # Colony follow-ups
 
+- Update host code that inspects policy grants for the output-scoped read and history metadata. Ship the new compiled bundle and shell together.
+
 - Update the host and cell loader together for Host API 17. The database port has no interactive session lease, and `CELL_ABI_VERSION`, `Kernel` and `CellEnd` are exported from `@norbital-ai/bolt/host-api`.
 - Remove the speech capability from host facilities and retire its provider configuration. Keep Convert for transcription.
 - Before activating the release, migrate declared envoy defaults into `sys_envoy` and update references to the resulting UUIDs. Preserve policies, task, delegation, audience, group handling, DM mode and triage scope.

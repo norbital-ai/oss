@@ -72,7 +72,10 @@ const base: EngineManifest = {
 	relationships: {},
 	exposures: {
 		quotes: {
-			outputs: { default: { quotes: { fields: 'all' } }, titles: { quotes: { fields: ['title'] } } },
+			outputs: {
+				default: { quotes: { fields: 'all' } },
+				titles: { quotes: { fields: ['title'] } }
+			},
 			create: { columns: { quotes: ['title', 'status'] } },
 			update: { columns: { quotes: ['title', 'status'] } },
 			delete: {},
@@ -90,7 +93,7 @@ const base: EngineManifest = {
 	policies: {
 		ops: {
 			description: 'Ops',
-			grants: { quotes: { read: true, create: true, update: true, delete: true } },
+			grants: { quotes: { outputs: { default: true }, create: true, update: true, delete: true } },
 			capabilities: { automations: ['classify'] }
 		},
 		// a writer that reads the `titles` output only: its effects see the rows it wrote as that output
@@ -112,15 +115,21 @@ const base: EngineManifest = {
 		},
 		writer: {
 			description: 'Write quotes; starts nothing',
-			grants: { quotes: { read: true, create: true } }
+			grants: { quotes: { outputs: { default: true }, create: true } }
 		},
-		starter: { description: 'Starts a retitle', grants: {}, capabilities: { automations: ['retitle'] } },
+		starter: {
+			description: 'Starts a retitle',
+			grants: {},
+			capabilities: { automations: ['retitle'] }
+		},
 		// the requestor's own quotes: in a run the requestor is the system identity, which owns none
 		own: {
 			description: "Retitle the requestor's quotes",
 			grants: {
 				quotes: {
-					read: { quotes: { where: { created_by: { eq: { var: 'requestor.id' } } } } },
+					outputs: {
+						default: { scopes: { quotes: { created_by: { eq: { var: 'requestor.id' } } } } }
+					},
 					update: true
 				}
 			}

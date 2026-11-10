@@ -39,7 +39,7 @@ const manifest = {
 		// the writer's effect schedules the follow-up from code: no start grant needed
 		ops: {
 			description: 'Ops',
-			grants: { quotes: { read: true, create: true, update: true } }
+			grants: { quotes: { outputs: { default: true }, create: true, update: true } }
 		}
 	},
 	automations: {
@@ -152,7 +152,7 @@ describe('a started automation whose body fails', () => {
 								policies: {
 									ops: {
 										description: 'Ops',
-										grants: { quotes: { read: true, create: true, update: true } },
+										grants: { quotes: { outputs: { default: true }, create: true, update: true } },
 										capabilities: { automations: ['quotes_boom'] }
 									}
 								},

@@ -62,19 +62,23 @@ const manifest = {
 				"What the payroll hotline answers: the sender's own payslips of the entity whose hotline this is",
 			grants: {
 				payslips: {
-					outputs: { default: {
-						payslips: {
-							where: {
-								employee: { eq: { var: 'requestor.id' } },
-								entity: { is: { hotline: { eq: { var: 'requestor.instance' } } } }
-							},
-							fields: ['period', 'net', 'status']
+					outputs: {
+						default: {
+							scopes: {
+								payslips: {
+									employee: { eq: { var: 'requestor.id' } },
+									entity: { is: { hotline: { eq: { var: 'requestor.instance' } } } }
+								}
+							}
 						}
-					} }
+					}
 				}
 			}
 		},
-		payroll: { description: 'Payroll staff', grants: { payslips: { read: true, update: true } } }
+		payroll: {
+			description: 'Payroll staff',
+			grants: { payslips: { outputs: { default: true }, update: true } }
+		}
 	},
 	teams: { payroll: { name: 'Payroll', policies: ['payroll'] } },
 	automations: {},

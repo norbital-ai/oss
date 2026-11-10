@@ -18,7 +18,12 @@ const manifest = Result.getOrThrow(
 				create: { columns: { customers: ['name'] } }
 			}
 		},
-		policies: { reader: { description: 'Reads customers', grants: { customers: { read: true } } } },
+		policies: {
+			reader: {
+				description: 'Reads customers',
+				grants: { customers: { outputs: { default: true } } }
+			}
+		},
 		automations: {},
 		integrations: {},
 		teams: {},

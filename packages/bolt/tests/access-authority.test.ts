@@ -4,6 +4,7 @@ import {
 	compileAuthority,
 	exposed,
 	grantedArms,
+	historyArms,
 	readScope,
 	viewOutput,
 	type Holder
@@ -72,7 +73,7 @@ const m: EngineManifest = {
 		clerk: {
 			description: '',
 			grants: {
-				orders: { outputs: { summary: { orders: { where: { region: { eq: 'south' } } } } } }
+				orders: { outputs: { summary: { scopes: { orders: { region: { eq: 'south' } } } } } }
 			}
 		},
 		rep: {
@@ -80,9 +81,10 @@ const m: EngineManifest = {
 			limits: { act: '10/min' },
 			grants: {
 				orders: {
-					read: {
-						orders: { where: { region: { eq: 'north' } } },
-						'orders.lines': { where: { qty: { gt: 0 } } }
+					outputs: {
+						default: {
+							scopes: { orders: { region: { eq: 'north' } }, 'orders.lines': { qty: { gt: 0 } } }
+						}
 					},
 					update: {
 						columns: { orders: ['note', 'status'] },
@@ -92,8 +94,11 @@ const m: EngineManifest = {
 				}
 			}
 		},
-		auditor: { description: '', grants: { orders: { read: true } } },
-		root_only: { description: '', grants: { orders: { read: { orders: {} } } } },
+		auditor: { description: '', grants: { orders: { outputs: { default: true } } } },
+		root_only: {
+			description: '',
+			grants: { orders: { outputs: { default: { scopes: { orders: {} } } } } }
+		},
 		kiosk: {
 			description: '',
 			grants: {
@@ -215,12 +220,13 @@ describe('engine/access: Authority (rules 33–37)', () => {
 					description: '',
 					grants: {
 						orders: {
-							read: { orders: { where: { region: { eq: 'north' } } } },
-							history: true
+							outputs: {
+								default: { history: true, scopes: { orders: { region: { eq: 'north' } } } }
+							}
 						}
 					}
 				},
-				lurker: { description: '', grants: { orders: { history: true } } }
+				lurker: { description: '', grants: { orders: {} } }
 			}
 		};
 		const over = compileAuthority(
@@ -229,6 +235,18 @@ describe('engine/access: Authority (rules 33–37)', () => {
 			'k'
 		);
 		expect(readScope(over, 'orders')).toEqual(north);
+		expect(historyArms(over, 'orders', 'default')).toEqual([
+			{ policy: 'over', where: north, history: true }
+		]);
+		const combined = compileAuthority(
+			wider,
+			{ actor: member(), admin: false, policies: ['over', 'auditor'] },
+			'combined'
+		);
+		expect(readScope(combined, 'orders')).toEqual({ t: 'const', value: true });
+		expect(historyArms(combined, 'orders', 'default')).toEqual([
+			{ policy: 'over', where: north, history: true }
+		]);
 		const lurker = compileAuthority(
 			wider,
 			{ actor: member(), admin: false, policies: ['lurker'] },
@@ -315,7 +333,7 @@ describe('engine/access: Authority (rules 33–37)', () => {
 				...m.policies,
 				open: {
 					description: '',
-					grants: { orders: { read: true, update: { verdict: true } } }
+					grants: { orders: { outputs: { default: true }, update: { verdict: true } } }
 				}
 			}
 		};

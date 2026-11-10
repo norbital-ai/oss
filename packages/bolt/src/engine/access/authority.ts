@@ -2,16 +2,12 @@
 // columns they admit per write path and whether a `check` judges them, and an administrator (or a platform run) bypasses
 // authored policy. A grant names outputs and filters their rows; it never changes an output's fields. Plus what a write
 // and a read consult of it: `moves` (rule 34) and the read scope (rule 13); the write judge itself is `write/act.ts`'s.
-import { Schema } from 'effect';
 import type { WritableColumns, VisitorMayRead, OperandValue } from '../services.ts';
 import type { Arm, Authority, DeleteArm, EngineActor, LimitRule, WriteArm } from '../contracts.ts';
 import {
 	layered,
 	layers,
-	LayerGrant,
-	ScopeData,
 	type EngineManifest,
-	type GrantArm,
 	type GrantData,
 	type LimitData,
 	type ReadGrantData
@@ -44,7 +40,6 @@ export const DIRECTORY_OUTPUT = 'directory';
 
 type Mutable = {
 	read: { [output: string]: { [path: string]: Arm[] } };
-	history: Arm[];
 	create: WriteArm[];
 	update: WriteArm[];
 	delete: DeleteArm[];
@@ -52,44 +47,12 @@ type Mutable = {
 };
 const emptyModel = (): Mutable => ({
 	read: {},
-	history: [],
 	create: [],
 	update: [],
 	delete: [],
 	moves: {}
 });
 
-const isScope = Schema.is(ScopeData),
-	isLayer = Schema.is(LayerGrant);
-/** A `history` grant object is `{ where }` unless the model has a field of that name. */
-export function scopeObject(
-	m: EngineManifest,
-	model: string,
-	g: GrantArm | undefined
-): ScopeData | undefined {
-	if (typeof g !== 'object' || !isScope(g)) return undefined;
-	const keys = Object.keys(g);
-	const own = m.models[model]?.fields ?? {};
-	return keys.length > 0 && keys.every((k) => k === 'where' && own[k] === undefined)
-		? g
-		: undefined;
-}
-/** A `history` (or identity output) grant as one arm: `true`, a scope object or a bare `Where`. */
-function scopeArm(
-	m: EngineManifest,
-	c: string,
-	policy: string,
-	g: GrantArm | undefined
-): Arm | undefined {
-	if (g === undefined) return undefined;
-	if (g === true) return { policy, where: TRUE };
-	const s = scopeObject(m, c, g);
-	if (s === undefined) return { policy, where: toPred(m, c, g) };
-	return {
-		policy,
-		where: s.where === undefined || s.where === true ? TRUE : toPred(m, c, s.where)
-	};
-}
 /** The outputs `c` declares: `default` and each named one, in declaration order. */
 export const outputsOf = (m: EngineManifest, c: string): readonly string[] =>
 	Object.keys(layered(m).exposures[c]?.outputs ?? {});
@@ -105,8 +68,7 @@ const pathsOf = (
 	return declared.length === 0 ? [[c, c]] : declared;
 };
 /**
- * One policy's read arms of output `output` of `c`, one per declared path (decision 3): the grant's layer `where` at a
- * path it names, `{ where: true }` at one it does not. An identity model's grant is a bare `Where`, at the root.
+ * One policy's read arms of an output. The root scope also applies to history when this policy grants it.
  */
 function readArms(
 	m: EngineManifest,
@@ -115,18 +77,14 @@ function readArms(
 	policy: string,
 	read: ReadGrantData
 ): { readonly [path: string]: Arm } {
-	const open: Arm = { policy, where: TRUE };
 	const out: { [path: string]: Arm } = {};
 	for (const [path, model] of pathsOf(m, c, output)) {
-		if (read === true) out[path] = open;
-		else if (isIdentity(c)) out[path] = path === c ? (scopeArm(m, c, policy, read) ?? open) : open;
-		else {
-			const layer = read[path];
-			out[path] =
-				!isLayer(layer) || layer.where === undefined
-					? open
-					: { policy, where: toPred(m, model, layer.where) };
-		}
+		const scope = read === true ? undefined : read.scopes?.[path];
+		out[path] = {
+			policy,
+			where: scope === undefined ? TRUE : toPred(m, model, scope),
+			...(path === c && read !== true && read.history === true ? { history: true } : {})
+		};
 	}
 	return out;
 }
@@ -244,8 +202,7 @@ export function compileAuthority(m: EngineManifest, holder: Holder, key: string)
 			const a = col(c),
 				open: Arm = { policy: '$admin', where: TRUE };
 			for (const output of outputsOf(m, c))
-				addRead(c, output, Object.fromEntries(pathsOf(m, c, output).map(([path]) => [path, open])));
-			a.history.push(open);
+				addRead(c, output, readArms(m, c, output, open.policy, { history: true }));
 			if (!isIdentity(c)) {
 				for (const op of WRITES)
 					a[op].push({ policy: '$admin', columns: all[c]?.[op]?.columns ?? {}, check: false });
@@ -258,12 +215,8 @@ export function compileAuthority(m: EngineManifest, holder: Holder, key: string)
 		for (const p of policies)
 			for (const [c, g] of Object.entries(m.policies[p]!.grants)) {
 				const a = col(c);
-				if (g.read !== undefined)
-					addRead(c, DEFAULT_OUTPUT, readArms(m, c, DEFAULT_OUTPUT, p, g.read));
 				for (const [output, read] of Object.entries(g.outputs ?? {}))
 					addRead(c, output, readArms(m, c, output, p, read));
-				const history = scopeArm(m, c, p, g.history);
-				if (history) a.history.push(history);
 				for (const op of WRITES) {
 					const w = writeArm(m, c, op, p, g[op]);
 					if (w) a[op].push(w);
@@ -365,8 +318,7 @@ export function viewOutput(m: EngineManifest, auth: Authority, model: string): s
 	return outputsOf(m, model).find((o) => grantedArms(auth, model, o) !== undefined);
 }
 
-/** The read scope of a caller (rule 13): the union of its arms of one output; `undefined` = that output is not granted.
- * A record the caller may read is a record whose history it may read, so history uses this same scope. */
+/** The read scope of a caller is the union of its arms of one output. */
 export function readScope(
 	auth: Authority,
 	model: string,
@@ -375,6 +327,10 @@ export function readScope(
 	const arms = grantedArms(auth, model, output);
 	return arms === undefined || arms.length === 0 ? undefined : or(arms.map((x) => x.where));
 }
+
+/** The root arms whose output grant includes history. */
+export const historyArms = (authority: Authority, model: string, output: string) =>
+	grantedArms(authority, model, output)?.filter((arm) => arm.history === true) ?? [];
 
 export const writableColumns: WritableColumns = (authority, model, verb) => {
 	if (authority.admin) return 'all';

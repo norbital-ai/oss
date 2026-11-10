@@ -38,7 +38,11 @@ const manifest = Result.getOrThrow(
 		customFields: {},
 		agent: { skills: {} },
 		policies: {
-			ops: { description: 'Ops', grants: { calls: { read: true } }, capabilities: { automations: ['listen'] } }
+			ops: {
+				description: 'Ops',
+				grants: { calls: { outputs: { default: true } } },
+				capabilities: { automations: ['listen'] }
+			}
 		},
 		automations: {
 			listen: {
@@ -108,10 +112,7 @@ const prepared = Effect.gen(function* () {
 	});
 	return (fixture = { route, file });
 });
-const run = (
-	input: (file: Json) => Json,
-	port: { ingest?: Ingest } = {}
-) =>
+const run = (input: (file: Json) => Json, port: { ingest?: Ingest } = {}) =>
 	Effect.gen(function* () {
 		ingest = port.ingest ?? noIngest;
 		const t = yield* TestWorkspace,

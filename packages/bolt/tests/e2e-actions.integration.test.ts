@@ -27,14 +27,17 @@ const manifest = {
 				columns: { orders: ['title'], 'orders.notes': ['text'] }
 			}
 		},
-		notes: { outputs: { default: { notes: { fields: 'all' } } }, create: { columns: { notes: ['text', 'order'] } } }
+		notes: {
+			outputs: { default: { notes: { fields: 'all' } } },
+			create: { columns: { notes: ['text', 'order'] } }
+		}
 	},
 	policies: {
 		rep: {
 			description: 'Rep',
 			grants: {
-				orders: { read: true, create: true },
-				notes: { read: true, create: true }
+				orders: { outputs: { default: true }, create: true },
+				notes: { outputs: { default: true }, create: true }
 			},
 			capabilities: { automations: ['orders_place'] }
 		}
@@ -174,8 +177,11 @@ describe('a read request (`bolt.query({ … })`)', () => {
 			rep: {
 				description: 'Rep',
 				grants: {
-					orders: { read: { orders: { where: { status: { eq: 'open' } } } }, create: true },
-					notes: { read: true, create: true }
+					orders: {
+						outputs: { default: { scopes: { orders: { status: { eq: 'open' } } } } },
+						create: true
+					},
+					notes: { outputs: { default: true }, create: true }
 				}
 			}
 		},

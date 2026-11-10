@@ -231,7 +231,7 @@ export type RunTriggerView =
 	| Exclude<RunTrigger, { kind: 'person' }>
 	| { kind: 'person'; ref: string; name: string | null; agent?: true };
 /** One read arm of one layer of one output: its policy's row filter; arms of every held policy union (rule 35). */
-export type Arm = { policy: string; where: Pred };
+export type Arm = { policy: string; where: Pred; history?: true };
 /**
  * A create or update arm: the columns it admits per write path (checked before any guest code) and whether its policy
  * declares a `check` (`policy.<p>.grants.<model>.<op>.check`, invocation kind `policy`); without one the arm allows. The
@@ -257,7 +257,6 @@ export type ModelAuthority = {
 	 * absent here is not granted.
 	 */
 	read: { readonly [output: string]: { readonly [path: string]: readonly Arm[] } };
-	history: readonly Arm[];
 	create: readonly WriteArm[];
 	update: readonly WriteArm[];
 	delete: readonly DeleteArm[];

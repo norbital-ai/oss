@@ -44,12 +44,15 @@ const manifest = Result.getOrThrow(
 		},
 		relationships: {},
 		exposures: {
-			docs: { outputs: { default: { docs: { fields: 'all' } } }, create: { columns: { docs: ['title'] } } }
+			docs: {
+				outputs: { default: { docs: { fields: 'all' } } },
+				create: { columns: { docs: ['title'] } }
+			}
 		},
 		policies: {
 			p: {
 				description: 'P',
-				grants: { docs: { read: true, create: true } },
+				grants: { docs: { outputs: { default: true }, create: true } },
 				capabilities: { automations: ['hang', 'pair', 'relay'] }
 			}
 		},

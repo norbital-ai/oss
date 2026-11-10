@@ -10,7 +10,6 @@ import type { EngineManifest, GrantData } from '@norbital-ai/bolt/engine';
 import {
 	FieldsSchema,
 	layerModels,
-	scopeObject,
 	parseCron,
 	parseRate,
 	DRIVERS,
@@ -41,13 +40,7 @@ const PRECISION: Readonly<Record<string, readonly string[]>> = {
 	time: ['hour', 'minute']
 };
 
-/** The read grants a model grant holds, by output: `read` is `default`'s, `outputs` the named ones'. */
-const grantedOutputs = (
-	g: GrantData
-): readonly (readonly [string, NonNullable<GrantData['read']>])[] => [
-	...(g.read === undefined ? [] : [['default', g.read] as const]),
-	...Object.entries(g.outputs ?? {})
-];
+const grantedOutputs = (g: GrantData) => Object.entries(g.outputs ?? {});
 /** The layer map output `output` of `c` declares (`undefined`: no such output). */
 const outputLayers = (m: EngineManifest, c: string, output: string) => {
 	const spec = m.exposures[c] ?? SYSTEM.exposures[c];
@@ -63,9 +56,12 @@ const outputFields = (
 	return fields === undefined || fields === 'all' ? undefined : fields;
 };
 /** A read grant whose root `where` scopes to the requestor's own rows: `{ <sys_user ref>: { eq: { var: 'requestor.id' } } }`. */
-const ownRows = (m: EngineManifest, c: string, read: NonNullable<GrantData['read']>): boolean => {
-	const root = Predicate.isObject(read) ? read[c] : undefined;
-	const where = Predicate.isObject(root) ? root.where : undefined;
+const ownRows = (
+	m: EngineManifest,
+	c: string,
+	read: NonNullable<GrantData['outputs']>[string]
+): boolean => {
+	const where = read === true ? undefined : read.scopes?.[c];
 	return (
 		Predicate.isObject(where) &&
 		Object.entries(where).some(
@@ -460,19 +456,17 @@ function layerRules({ m, at }: RuleContext): void {
 			const declared = m.exposures[c] ?? SYSTEM.exposures[c];
 			if (declared === undefined) continue;
 			const bad = (message: string) => at('access/layer', 'policy', p, `${c}: ${message}`);
-			const identity = c === 'sys_user' || c === 'sys_invitation';
 			for (const [output, read] of grantedOutputs(g)) {
 				const layers = outputLayers(m, c, output);
 				if (layers === undefined) {
 					bad(`grants output '${output}', which ${c} does not declare`);
 					continue;
 				}
-				// an identity grant is a bare root scope; any other names the output's paths
-				if (identity || !Predicate.isObject(read)) continue;
-				for (const path of Object.keys(read))
+				if (read === true) continue;
+				for (const path of Object.keys(read.scopes ?? {}))
 					if (layers[path] === undefined)
 						bad(
-							`${output === 'default' ? 'read' : `outputs.${output}`} names '${path}', which that output does not declare as a read layer`
+							`outputs.${output} names '${path}', which that output does not declare as a read layer`
 						);
 			}
 			for (const verb of ['create', 'update', 'delete'] as const) {
@@ -823,7 +817,7 @@ function visitorShape(
 				continue;
 			}
 			for (const k of Object.keys(g))
-				if (k !== 'read' && k !== 'outputs' && k !== 'create')
+				if (k !== 'outputs' && k !== 'create')
 					bad(`${c}: a ${options.title} may only read or create, never ${k}`);
 			for (const [output, read] of grantedOutputs(g)) {
 				const fields = outputFields(m, c, output);

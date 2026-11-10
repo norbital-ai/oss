@@ -52,13 +52,13 @@ const manifest: EngineManifest = {
 		requester: {
 			description: 'Requests changes',
 			grants: {
-				roots: { read: true, history: true, delete: { verdict: true } },
-				watchers: { read: true, history: true, update: { verdict: true } }
+				roots: { outputs: { default: { history: true } }, delete: { verdict: true } },
+				watchers: { outputs: { default: { history: true } }, update: { verdict: true } }
 			}
 		},
 		reviewer: {
 			description: 'Reviews changes',
-			grants: { roots: { read: true }, watchers: { read: true } }
+			grants: { roots: { outputs: { default: true } }, watchers: { outputs: { default: true } } }
 		}
 	},
 	teams: { requesters: ['requester'], reviewers: ['reviewer'] }

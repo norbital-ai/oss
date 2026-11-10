@@ -26,14 +26,17 @@ const manifest = Result.getOrThrow(
 				create: { columns: { quotes: ['title'] } },
 				effect: { created: true }
 			},
-			logs: { outputs: { default: { logs: { fields: 'all' } } }, create: { columns: { logs: ['line'] } } }
+			logs: {
+				outputs: { default: { logs: { fields: 'all' } } },
+				create: { columns: { logs: ['line'] } }
+			}
 		},
 		policies: {
 			rep: {
 				description: 'Rep',
 				grants: {
-					quotes: { read: true, create: true },
-					logs: { read: true, create: true }
+					quotes: { outputs: { default: true }, create: true },
+					logs: { outputs: { default: true }, create: true }
 				},
 				capabilities: { automations: ['quotes_mark'] }
 			}

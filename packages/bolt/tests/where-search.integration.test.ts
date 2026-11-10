@@ -43,7 +43,10 @@ const manifest = Result.getOrThrow(
 				create: { columns: { sites: ['name', 'address'] } }
 			},
 			jobs: {
-				outputs: { default: { jobs: { fields: 'all' }, 'jobs.site': { fields: 'all' } }, dispatch: { jobs: { fields: ['title', 'site'] }, 'jobs.site': { fields: 'all' } } },
+				outputs: {
+					default: { jobs: { fields: 'all' }, 'jobs.site': { fields: 'all' } },
+					dispatch: { jobs: { fields: ['title', 'site'] }, 'jobs.site': { fields: 'all' } }
+				},
 				create: { columns: { jobs: ['title', 'notes', 'site'] } }
 			}
 		},
@@ -51,7 +54,7 @@ const manifest = Result.getOrThrow(
 		policies: {
 			dispatch: {
 				description: 'Dispatch',
-				grants: { sites: { read: true }, jobs: { outputs: { dispatch: true } } }
+				grants: { sites: { outputs: { default: true } }, jobs: { outputs: { dispatch: true } } }
 			}
 		},
 		integrations: {},

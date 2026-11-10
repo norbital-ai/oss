@@ -29,7 +29,10 @@ const manifest = Result.getOrThrow(
 		},
 		relationships: {},
 		exposures: {
-			docs: { outputs: { default: { docs: { fields: 'all' } } }, create: { columns: { docs: ['title', 'file'] } } }
+			docs: {
+				outputs: { default: { docs: { fields: 'all' } } },
+				create: { columns: { docs: ['title', 'file'] } }
+			}
 		},
 		integrations: {},
 		teams: {},
@@ -39,7 +42,11 @@ const manifest = Result.getOrThrow(
 		customFields: {},
 		agent: { skills: {} },
 		policies: {
-			ops: { description: 'Ops', grants: { docs: { read: true } }, capabilities: { automations: ['make'] } }
+			ops: {
+				description: 'Ops',
+				grants: { docs: { outputs: { default: true } } },
+				capabilities: { automations: ['make'] }
+			}
 		},
 		automations: {
 			make: {

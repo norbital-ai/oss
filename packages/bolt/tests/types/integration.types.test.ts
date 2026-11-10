@@ -256,8 +256,10 @@ const onText: Where<'orders'> = { note: { eq: { var: 'requestor.instance' } } };
 void onText;
 policy({
 	description: 'x',
-	// @ts-expect-error a customer reference is not an integration reference
-	grants: { orders: { read: { customer: { eq: { var: 'requestor.instance' } } } } }
+	grants: {
+		// @ts-expect-error a customer reference is not an integration reference
+		orders: { outputs: { default: { where: { customer: { eq: { var: 'requestor.instance' } } } } } }
+	}
 });
 // @ts-expect-error only declared sync reads are startable
 policy({ description: 'x', grants: {}, capabilities: { automations: ['products.sync.stock'] } });

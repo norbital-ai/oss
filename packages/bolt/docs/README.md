@@ -350,46 +350,50 @@ copies. Unresolved recovery fences remain during an audit-store outage.
 
 ## Approvals
 
-A policy grants per model, as layer maps typed from the model's own declaration. The model fixes
-each output's shape; a policy grants outputs and filters their rows. `read` grants the `default`
-output and `outputs: { <name>: … }` the named ones, each `true` or
-`{ '<model>': { where? }, '<model>.<rel>': { where? }, … }` over that output's layers: the root's
-`where` scopes the roots (it may hop relations), a deeper layer's `where` filters that layer's rows
-(or nulls a ref) and never removes the root. A read of an output needs a held grant of it; its rows
-are the union of the granting policies' `where`s. A read grant also admits the history of every
-record it shows, under that same `where`; an explicit `history` grant adds nothing. A reader who
-loses access to the row loses its history too. Every member
+A policy grants each model's default and named `outputs`. The model fixes each output's shape.
+Use `true` for every row or `{ where, relation: { where } }` for nested scopes. The root
+`where` scopes roots and may follow relations. A child scope filters its related rows or nulls a
+ref. The granting policies' scopes union for that output.
+
+Set `history: true` on an output grant to allow its revisions under that grant's root scope.
+Another policy's broader current-row scope adds current rows while the history grant keeps its
+scope. Every member
 reads `sys_user`'s `directory` output (id, name): staff read staff, externals themselves and their
 party; a read of `sys_user` without a `default` grant names `output: 'directory'`. `sys_file` declares
 `default` (name, type, size, digest, field, uploader) and `meta` (id, name, mime) for a holder that only
 lists files. A `create` or `update`
-grant is `true` or `{ columns?: { '<model>': [...], '<model>.<rel>': [...] }, check? }`; `delete` is
-`true` or `{ check? }`. `columns` is checked before any guest code; `check` judges the whole batch,
-nested layers included, and returns a verdict: `ctx.allow()`, `ctx.deny(message, { row?, path?, field? })`
-or `ctx.approve((flow) => …)`. Among the holder's policies any `allow` executes; otherwise the first
-`approve` in the team's policy order holds the batch for its flow; otherwise the first `deny` refuses it
+grant is `true` or `{ columns?: { '<model>': [...], '<model>.<rel>': [...] }, verdict? }`.
+An update grant also lists allowed state edges in `moves`. A delete grant is `true` or
+`{ verdict? }`. Columns are checked before the verdict judges the batch, including nested rows.
+Return `ctx.allow()`, `ctx.approve({ steps, superseded_by })` or
+`yield* ctx.refuse(message, { row?, path?, field? })`. Among the holder's policies any allow
+executes. Otherwise the first approval in team-policy order holds the batch for review, or the
+first refusal supplies the failure
 (`code: 'refused'`, `rule: '<policy>.<model>.<op>'`, with its `row`, `path` and `field`). A grant
 guards its root's whole tree: a layer is never judged by its own model's policy.
 
 ```ts
 create: {
   columns: { variations: ['job', 'title', 'amount'] },
-  check: function* (rows, ctx) {
+  verdict: function* (rows, ctx) {
     const big = rows.some((r) => Number(r.amount) >= 5000);
-    return ctx.approve((flow) => flow
-      .step('Controller review', { teams: ['controllers'] })
-      .if(big, (f) => f.step('Commercial sign-off', { teams: ['commercial'] }))
-      .supersededBy(['controllers']));
+    return ctx.approve({
+      steps: [
+        { name: 'Controller review', teams: ['controllers'] },
+        ...(big ? [{ name: 'Commercial sign-off', teams: ['commercial'] }] : [])
+      ],
+      superseded_by: ['controllers']
+    });
   }
 }
 ```
 
-A check reads with `ctx.query(readRequest)` as the workspace, at most 10 crossings per call, and does
+A verdict reads with `ctx.query(readRequest)` as the workspace, at most 10 crossings per call, and does
 no I/O or writes. Its arguments are the create trees, `{ before, set }` per update (`before` the
 stored tree of the layers the update declares) or the stored rows a delete removes.
 
-`step(name, { teams?, users? })` appends one step; any listed approver may decide it.
-`if`, `else`, `allow()` and `deny(message)` express conditional routing. The flow is snapshotted when the request opens and evaluated again on resubmit; changed
+`steps` lists named team-review steps. Use ordinary conditions to select steps and immediate
+verdicts. The flow is snapshotted when the request opens and evaluated again on resubmit. Changed
 steps restart at the first step. A new release does not rewrite an open request's saved flow.
 
 A routed write commits provisionally with history and a checkpoint of every held record.

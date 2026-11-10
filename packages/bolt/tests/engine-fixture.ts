@@ -88,16 +88,20 @@ export const manifest = {
 		rep: {
 			description: 'Sales rep',
 			grants: {
-				customers: { read: true },
+				customers: { outputs: { default: true } },
 				orders: {
-					read: { orders: { where: { created_by: { eq: { var: 'requestor.id' } } } } },
+					outputs: {
+						default: { scopes: { orders: { created_by: { eq: { var: 'requestor.id' } } } } }
+					},
 					create: { verdict: true },
 					update: { verdict: true, moves: { status: ['draft->submitted'] } },
 					delete: { verdict: true }
 				},
 				lines: {
-					read: {
-						lines: { where: { order: { is: { created_by: { eq: { var: 'requestor.id' } } } } } }
+					outputs: {
+						default: {
+							scopes: { lines: { order: { is: { created_by: { eq: { var: 'requestor.id' } } } } } }
+						}
 					},
 					update: { verdict: true }
 				}
@@ -106,7 +110,7 @@ export const manifest = {
 		auditor: {
 			description: 'Reads every order',
 			grants: {
-				customers: { read: true },
+				customers: { outputs: { default: true } },
 				orders: { outputs: { audit: true } }
 			}
 		}

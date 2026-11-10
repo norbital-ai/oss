@@ -68,26 +68,40 @@ const after: EngineManifest = {
 };
 
 describe('versioned record history', () => {
-	it.live('a restored database checkpoint contains the old schema and only the earlier writes', () =>
-		Effect.scoped(
-			Effect.gen(function* () {
-				const pg = yield* PgliteDb.open();
-				const db = PgliteDb.make(pg);
-				const initial = yield* plan(null, before);
-				yield* applyPlan(db, initial);
-				yield* db.write({ text: "INSERT INTO documents(id,title) VALUES ($1,'Earlier')", params: [ID] });
-				const checkpoint = yield* PgliteDb.dump(pg);
-				yield* applyPlan(db, yield* plan(initial.slice, after), { accept: true });
-				yield* db.write({ text: "INSERT INTO articles(id,heading) VALUES (gen_random_uuid(),'Later')", params: [] });
-				const restored = PgliteDb.make(yield* PgliteDb.open(checkpoint));
-				expect(yield* restored.rows(Schema.Struct({ id: Schema.String, title: Schema.String }), {
-					text: 'SELECT id::text,title FROM documents', params: []
-				})).toEqual([{ id: ID, title: 'Earlier' }]);
-				expect(yield* restored.value(Schema.NullOr(Schema.String), {
-					text: "SELECT to_regclass('articles')::text", params: []
-				})).toBeNull();
-			})
-		).pipe(Effect.provide(Pristine.layer))
+	it.live(
+		'a restored database checkpoint contains the old schema and only the earlier writes',
+		() =>
+			Effect.scoped(
+				Effect.gen(function* () {
+					const pg = yield* PgliteDb.open();
+					const db = PgliteDb.make(pg);
+					const initial = yield* plan(null, before);
+					yield* applyPlan(db, initial);
+					yield* db.write({
+						text: "INSERT INTO documents(id,title) VALUES ($1,'Earlier')",
+						params: [ID]
+					});
+					const checkpoint = yield* PgliteDb.dump(pg);
+					yield* applyPlan(db, yield* plan(initial.slice, after), { accept: true });
+					yield* db.write({
+						text: "INSERT INTO articles(id,heading) VALUES (gen_random_uuid(),'Later')",
+						params: []
+					});
+					const restored = PgliteDb.make(yield* PgliteDb.open(checkpoint));
+					expect(
+						yield* restored.rows(Schema.Struct({ id: Schema.String, title: Schema.String }), {
+							text: 'SELECT id::text,title FROM documents',
+							params: []
+						})
+					).toEqual([{ id: ID, title: 'Earlier' }]);
+					expect(
+						yield* restored.value(Schema.NullOr(Schema.String), {
+							text: "SELECT to_regclass('articles')::text",
+							params: []
+						})
+					).toBeNull();
+				})
+			).pipe(Effect.provide(Pristine.layer))
 	);
 
 	it.live(
@@ -463,18 +477,21 @@ describe('versioned record history', () => {
 					policies: {
 						reader: {
 							description: '',
-							grants: { articles: { outputs: { summary: { articles: {} } } } }
+							grants: { articles: { outputs: { summary: { history: true } } } }
 						}
 					},
 					exposures: {
 						articles: {
 							...after.exposures.articles,
-							outputs: { default: { articles: { fields: ['heading'] } }, summary: { articles: { fields: ['heading'] } } }
+							outputs: {
+								default: { articles: { fields: ['heading'] } },
+								summary: { articles: { fields: ['heading'] } }
+							}
 						}
 					}
 				};
 				yield* applyPlan(db, yield* plan(initial.slice, narrow), { accept: true });
-				// the read grant alone admits history: no `history` grant is declared
+				// History is granted through the narrow output.
 				const caller = compileAuthority(
 					narrow,
 					{ actor: member, admin: false, policies: ['reader'] },
@@ -515,10 +532,12 @@ describe('versioned record history', () => {
 				if (table === undefined) throw new Error('The native schema did not define documents.');
 				const definition = JSON.stringify(table);
 				const register = () =>
-					db.returning(Schema.Struct({ version: Schema.String }), {
-						text: 'select bolt_history_register($1,$2::jsonb) as version',
-						params: ['documents', definition]
-					}).pipe(Effect.map((rows) => rows[0]?.version));
+					db
+						.returning(Schema.Struct({ version: Schema.String }), {
+							text: 'select bolt_history_register($1,$2::jsonb) as version',
+							params: ['documents', definition]
+						})
+						.pipe(Effect.map((rows) => rows[0]?.version));
 				const first = yield* register();
 				expect(first).toBeTypeOf('string');
 				expect(yield* register()).toBe(first);

@@ -60,14 +60,17 @@ const manifest: EngineManifest = {
 	},
 	exposures: {
 		orders: {
-			outputs: { default: {
-				orders: { fields: 'all' },
-				'orders.party': { fields: ['name', 'code', 'credit_limit'] },
-				'orders.lines': { fields: 'all' }
-			}, brief: {
+			outputs: {
+				default: {
+					orders: { fields: 'all' },
+					'orders.party': { fields: ['name', 'code', 'credit_limit'] },
+					'orders.lines': { fields: 'all' }
+				},
+				brief: {
 					orders: { fields: ['number', 'region', 'party'] },
 					'orders.party': { fields: ['name', 'code'] }
-				} },
+				}
+			},
 			create: {
 				columns: {
 					orders: ['number', 'region', 'status', 'party'],
@@ -86,9 +89,10 @@ const manifest: EngineManifest = {
 			description: 'Northern sales, through the order tree',
 			grants: {
 				orders: {
-					read: {
-						orders: { where: { region: { eq: 'north' } } },
-						'orders.lines': { where: { cost: { gt: 0 } } }
+					outputs: {
+						default: {
+							scopes: { orders: { region: { eq: 'north' } }, 'orders.lines': { cost: { gt: 0 } } }
+						}
 					},
 					create: {
 						columns: {
@@ -102,10 +106,12 @@ const manifest: EngineManifest = {
 				}
 			}
 		},
-		reviewer: { description: 'Finance', grants: { orders: { read: true } } },
+		reviewer: { description: 'Finance', grants: { orders: { outputs: { default: true } } } },
 		partner: {
 			description: 'Northern orders, briefly',
-			grants: { orders: { outputs: { brief: { orders: { where: { region: { eq: 'north' } } } } } } }
+			grants: {
+				orders: { outputs: { brief: { scopes: { orders: { region: { eq: 'north' } } } } } }
+			}
 		}
 	},
 	teams: { finance: ['reviewer'], sales: ['rep'] },

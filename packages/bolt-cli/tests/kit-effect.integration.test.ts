@@ -46,7 +46,12 @@ const manifest = {
 			create: { columns: { customers: ['name'] } }
 		}
 	},
-	policies: { reader: { description: 'Reads customers', grants: { customers: { read: true } } } },
+	policies: {
+		reader: {
+			description: 'Reads customers',
+			grants: { customers: { outputs: { default: true } } }
+		}
+	},
 	automations: {},
 	// connections are part of the schema checkpoint: every case declares both, so every workspace loads one checkpoint
 	integrations: {

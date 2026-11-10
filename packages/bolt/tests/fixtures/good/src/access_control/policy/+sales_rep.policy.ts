@@ -1,4 +1,4 @@
 export default {
 	description: 'Read sales orders.',
-	grants: { orders: { read: true } }
+	grants: { orders: { outputs: { default: true } } }
 } as const;

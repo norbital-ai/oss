@@ -29,23 +29,12 @@ import { NEEDS, needsOf } from '../facilities/needs.ts';
 
 // ── parts without a decl type of their own: the literal as the manifest holds it ──
 /** A `history` (or identity read) scope: `true` or a `Where`. */
-const ScopeWhere = Schema.Union([Schema.Literal(true), Schema.JsonObject]);
-/** `{ where }` of a `history` grant; a `Where` naming a model field `where` is told apart by `scopeObject`. */
-export const ScopeData = Schema.Struct({ where: Schema.optionalKey(ScopeWhere) });
-export type ScopeData = typeof ScopeData.Type;
-/** A `history` grant (or an identity model's `read`): `true`, a scope object or a bare `Where`. */
-const GrantArm = Schema.Union([Schema.Literal(true), ScopeData, Schema.JsonObject]);
-export type GrantArm = typeof GrantArm.Type;
-/** One read layer of a grant: its row filter. */
-export const LayerGrant = Schema.Struct({ where: Schema.optionalKey(Schema.JsonObject) });
-/**
- * A grant of one read output: `true`, a layer map by read path, or (on an identity model, `sys_user`/`sys_invitation`)
- * a bare `Where`.
- */
 const ReadGrantData = Schema.Union([
 	Schema.Literal(true),
-	Schema.Record(Schema.String, LayerGrant),
-	Schema.JsonObject
+	Schema.Struct({
+		scopes: Schema.optionalKey(Schema.Record(Schema.String, Schema.JsonObject)),
+		history: Schema.optionalKey(Schema.Literal(true))
+	})
 ]);
 export type ReadGrantData = typeof ReadGrantData.Type;
 /**
@@ -74,11 +63,9 @@ const DeleteGrantData = Schema.Union([
 	Schema.Struct({ verdict: Schema.optionalKey(Schema.Literal(true)) })
 ]);
 export type DeleteGrantData = typeof DeleteGrantData.Type;
-/** A policy's grant on one model, workspace-agnostic (the decl side is `Grant<C>`): `read` grants `default`, `outputs` named ones. */
+/** A policy's grant on one model, with each output's scopes keyed by the compiled read paths. */
 const GrantData = Schema.Struct({
-	read: Schema.optionalKey(ReadGrantData),
 	outputs: Schema.optionalKey(Schema.Record(Schema.String, ReadGrantData)),
-	history: Schema.optionalKey(GrantArm),
 	create: Schema.optionalKey(WriteGrantData),
 	update: Schema.optionalKey(UpdateGrantData),
 	delete: Schema.optionalKey(DeleteGrantData)
@@ -130,13 +117,19 @@ const ReadLayers = Schema.Record(
 const Columns = Schema.Record(Schema.String, Schema.Array(Schema.String));
 const Marker = Schema.optionalKey(Schema.Literal(true));
 const ExposureData = Schema.Struct({
-	outputs: Schema.StructWithRest(Schema.Struct({ default: ReadLayers }), [Schema.Record(Schema.String, ReadLayers)]),
-	create: Schema.optionalKey(Schema.Struct({
-		columns: Columns,
-		filled: Schema.optionalKey(Columns),
-		transform: Marker,
-		attaches: Schema.optionalKey(Schema.Record(Schema.String, Schema.Struct({ model: Schema.String, field: Schema.String })))
-	})),
+	outputs: Schema.StructWithRest(Schema.Struct({ default: ReadLayers }), [
+		Schema.Record(Schema.String, ReadLayers)
+	]),
+	create: Schema.optionalKey(
+		Schema.Struct({
+			columns: Columns,
+			filled: Schema.optionalKey(Columns),
+			transform: Marker,
+			attaches: Schema.optionalKey(
+				Schema.Record(Schema.String, Schema.Struct({ model: Schema.String, field: Schema.String }))
+			)
+		})
+	),
 	update: Schema.optionalKey(Schema.Struct({ columns: Columns, transform: Marker })),
 	delete: Schema.optionalKey(Schema.Struct({ check: Marker })),
 	notify: Marker,
@@ -306,7 +299,28 @@ const marked = (role: Record<string, unknown>, body: string, as?: string) =>
 			return [name, as === undefined || fn === undefined ? data : { ...data, [as]: true }];
 		})
 	);
-/** Mark each write grant's guest verdict callback as present. */
+/** Lower an output's nested scopes to the same paths as the model output. */
+function outputGrant(model: string, output: unknown): unknown {
+	if (!Predicate.isObject(output)) return output;
+	const scopes: Record<string, unknown> = {};
+	const visit = (path: string, value: Readonly<Record<string, unknown>>) => {
+		const { where, history, ...children } = value;
+		if (history !== undefined && path !== model)
+			throw new Error(`'${path}': history belongs on the root output grant`);
+		if (where !== undefined || path !== model) scopes[path] = where === undefined ? {} : where;
+		for (const [relation, child] of Object.entries(children)) {
+			if (relation.includes('.') || !Predicate.isObject(child))
+				throw new Error(`'${path}.${relation}': expected a nested output grant`);
+			visit(`${path}.${relation}`, child);
+		}
+	};
+	visit(model, output);
+	return defined({
+		scopes: Object.keys(scopes).length === 0 ? undefined : scopes,
+		history: output['history']
+	});
+}
+/** Lower the read scopes and mark each write grant's guest verdict callback as present. */
 const policyData = (p: unknown): unknown =>
 	Predicate.isObject(p) && 'grants' in p && Predicate.isObject(p.grants)
 		? {
@@ -318,9 +332,18 @@ const policyData = (p: unknown): unknown =>
 							? Object.fromEntries(
 									Object.entries(object(grant)).map(([op, arm]) => [
 										op,
-										Predicate.isObject(arm) && 'verdict' in arm && typeof arm.verdict === 'function'
-											? { ...arm, verdict: true }
-											: arm
+										op === 'outputs' && Predicate.isObject(arm)
+											? Object.fromEntries(
+													Object.entries(arm).map(([name, output]) => [
+														name,
+														outputGrant(model, output)
+													])
+												)
+											: Predicate.isObject(arm) &&
+												  'verdict' in arm &&
+												  typeof arm.verdict === 'function'
+												? { ...arm, verdict: true }
+												: arm
 									])
 								)
 							: grant

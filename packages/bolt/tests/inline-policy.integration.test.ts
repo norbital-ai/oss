@@ -33,13 +33,17 @@ const manifest: EngineManifest = {
 		north: {
 			description: 'Only northern documents',
 			grants: {
-				documents: { read: { documents: { where: { profile: { region: { eq: 'north' } } } } } }
+				documents: {
+					outputs: { default: { scopes: { documents: { profile: { region: { eq: 'north' } } } } } }
+				}
 			}
 		},
 		south: {
 			description: 'Only southern documents',
 			grants: {
-				documents: { read: { documents: { where: { profile: { region: { eq: 'south' } } } } } }
+				documents: {
+					outputs: { default: { scopes: { documents: { profile: { region: { eq: 'south' } } } } } }
+				}
 			}
 		}
 	},

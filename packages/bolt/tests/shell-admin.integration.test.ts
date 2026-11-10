@@ -22,7 +22,7 @@ const manifest = Result.getOrThrow(
 			rep: {
 				description: 'Rep',
 				capabilities: { apps: ['sales'] },
-				grants: { openings: { read: true } }
+				grants: { openings: { outputs: { default: true } } }
 			}
 		},
 		apps: {

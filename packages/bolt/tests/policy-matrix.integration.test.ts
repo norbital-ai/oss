@@ -240,7 +240,6 @@ const u = (n: string) => {
 const b: Bindings = { now: '2026-09-25T10:00:00.000Z', today: '2026-09-25', tz: 'UTC' };
 const all = (model: string): ModelAuthority => ({
 	read: { default: { [model]: [{ policy: 'p', where: { t: 'const', value: true } }] } },
-	history: [],
 	create: [],
 	update: [],
 	delete: [],

@@ -66,13 +66,20 @@ const manifest: EngineManifest = {
 		requester: {
 			description: 'Requests',
 			grants: {
-				sys_user: { read: true },
-				expenses: { read: true, create: { verdict: true }, update: { verdict: true } }
+				sys_user: { outputs: { default: true } },
+				expenses: {
+					outputs: { default: true },
+					create: { verdict: true },
+					update: { verdict: true }
+				}
 			}
 		},
 		reviewer: {
 			description: 'Reviews',
-			grants: { expenses: { read: true }, approval_request: { read: true } }
+			grants: {
+				expenses: { outputs: { default: true } },
+				approval_request: { outputs: { default: true } }
+			}
 		}
 	},
 	teams: { requesters: ['requester'], managers: ['reviewer'], finance: ['reviewer'] }

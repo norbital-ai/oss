@@ -39,19 +39,25 @@ export const layered = policy({
 	description: 'Sell to our customers, through the order tree',
 	grants: {
 		orders: {
-			read: {
-				orders: { where: { owner: { eq: { var: 'requestor.id' } } } },
-				'orders.customer': { where: { tier: { eq: 'gold' } } },
-				'orders.lines': { where: { item: { ne: '' } } }
+			outputs: {
+				default: {
+					history: true,
+					where: { owner: { eq: { var: 'requestor.id' } } },
+					customer: { where: { tier: { eq: 'gold' } } },
+					lines: { where: { item: { ne: '' } } }
+				},
+				logistics: { where: { status: { ne: 'draft' } } }
 			},
-			outputs: { logistics: { orders: { where: { status: { ne: 'draft' } } } } },
-			history: true,
 			create: {
 				columns: { orders: ['customer', 'note'], 'orders.lines': ['item', 'qty'] },
 				verdict: function* (rows, ctx) {
 					const bad = rows.findIndex((o) => (o.lines ?? []).some((l) => l.item === ''));
 					if (bad >= 0)
-						return yield* ctx.refuse('Every line names its item.', { row: bad, path: 'orders.lines', field: 'item' });
+						return yield* ctx.refuse('Every line names its item.', {
+							row: bad,
+							path: 'orders.lines',
+							field: 'item'
+						});
 					const { customers } = yield* ctx.query({
 						customers: { where: { id: { in: rows.map((r) => r.customer) } }, fields: ['tier'] }
 					});
@@ -65,16 +71,20 @@ export const layered = policy({
 				verdict: function* (changes, ctx) {
 					const me = ctx.actor.kind === 'member' ? ctx.actor.id : null;
 					const mine = changes.every((c) => c.before.owner === me && c.before.lines.length < 100);
-					return mine ? ctx.allow() : yield* ctx.refuse('Only your own orders change.', { field: 'status' });
+					return mine
+						? ctx.allow()
+						: yield* ctx.refuse('Only your own orders change.', { field: 'status' });
 				}
 			},
 			delete: {
 				verdict: function* (rows, ctx) {
-					return rows.length < 10 ? ctx.allow() : yield* ctx.refuse('Delete fewer at once.', { row: 0 });
+					return rows.length < 10
+						? ctx.allow()
+						: yield* ctx.refuse('Delete fewer at once.', { row: 0 });
 				}
 			}
 		},
-		notices: { read: true },
+		notices: { outputs: { default: true } },
 		customers: { update: true }
 	}
 });
@@ -83,12 +93,12 @@ export const layered = policy({
 policy({
 	description: 'x',
 	// @ts-expect-error a read layer the model does not declare (`owner` is a relation, never a layer)
-	grants: { orders: { read: { 'orders.owner': {} } } }
+	grants: { orders: { outputs: { default: { owner: {} } } } }
 });
 policy({
 	description: 'x',
 	// @ts-expect-error a layer filter on a field of another layer (`note` is the root's)
-	grants: { orders: { read: { 'orders.customer': { where: { note: { isNull: true } } } } } }
+	grants: { orders: { outputs: { default: { customer: { where: { note: { isNull: true } } } } } } }
 });
 policy({
 	description: 'x',
@@ -108,7 +118,7 @@ policy({
 policy({
 	description: 'x',
 	// @ts-expect-error `read` on a model without `read`
-	grants: { sys_session: { read: true } }
+	grants: { sys_session: { outputs: { default: true } } }
 });
 policy({
 	description: 'x',
@@ -117,33 +127,81 @@ policy({
 });
 policy({
 	description: 'x',
-	// @ts-expect-error an unknown ctx member
-	grants: { orders: { delete: { verdict: function* (_rows, ctx) { return ctx.refuse('no'); } } } }
+	grants: {
+		orders: {
+			delete: {
+				// @ts-expect-error an unknown ctx member
+				verdict: function* (_rows, ctx) {
+					return ctx.refuse('no');
+				}
+			}
+		}
+	}
 });
 policy({
 	description: 'x',
-	// @ts-expect-error a plain-object verdict
-	grants: { orders: { delete: { verdict: function* () { return { kind: 'allow' }; } } } }
+	grants: {
+		orders: {
+			delete: {
+				// @ts-expect-error a plain-object verdict
+				verdict: function* () {
+					return { kind: 'allow' };
+				}
+			}
+		}
+	}
 });
 policy({
 	description: 'x',
-	// @ts-expect-error `deny`'s path is a write path of this verb
-	grants: { orders: { create: { verdict: function* (_rows, ctx) { return yield* ctx.refuse('no', { path: 'orders.customer' }); } } } }
+	grants: {
+		orders: {
+			create: {
+				verdict: function* (_rows, ctx) {
+					// @ts-expect-error `deny`'s path is a write path of this verb
+					return yield* ctx.refuse('no', { path: 'orders.customer' });
+				}
+			}
+		}
+	}
 });
 policy({
 	description: 'x',
-	// @ts-expect-error `deny`'s field is a column of its path
-	grants: { orders: { create: { verdict: function* (_rows, ctx) { return yield* ctx.refuse('no', { path: 'orders.lines', field: 'note' }); } } } }
+	grants: {
+		orders: {
+			create: {
+				verdict: function* (_rows, ctx) {
+					// @ts-expect-error `deny`'s field is a column of its path
+					return yield* ctx.refuse('no', { path: 'orders.lines', field: 'note' });
+				}
+			}
+		}
+	}
 });
 policy({
 	description: 'x',
-	// @ts-expect-error a mistyped `check` argument
-	grants: { orders: { create: { verdict: function* (_rows: readonly { readonly nope: 1 }[], ctx) { return ctx.allow(); } } } }
+	grants: {
+		orders: {
+			create: {
+				// @ts-expect-error a mistyped `check` argument
+				verdict: function* (_rows: readonly { readonly nope: 1 }[], ctx) {
+					return ctx.allow();
+				}
+			}
+		}
+	}
 });
 policy({
 	description: 'x',
-	// @ts-expect-error a relation the create does not declare is not in its rows
-	grants: { orders: { create: { verdict: function* (rows, ctx) { return rows[0]?.notes === undefined ? ctx.allow() : ctx.allow(); } } } }
+	grants: {
+		orders: {
+			create: {
+				verdict: function* (rows, ctx) {
+					// @ts-expect-error a relation the create does not declare is not in its rows
+					return rows[0]?.notes === undefined ? ctx.allow() : ctx.allow();
+				}
+			}
+		}
+	}
 });
 policy({
 	description: 'x',

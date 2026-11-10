@@ -18,23 +18,26 @@ const manifest = Result.getOrThrow(
 		},
 		relationships: {},
 		exposures: {
-			notes: { outputs: { default: { notes: { fields: 'all' } } }, create: { columns: { notes: ['title'] } } }
+			notes: {
+				outputs: { default: { notes: { fields: 'all' } } },
+				create: { columns: { notes: ['title'] } }
+			}
 		},
 		integrations: {},
 		policies: {
 			writer: {
 				description: 'Writes notes, two a minute',
-				grants: { notes: { read: true, create: true } },
+				grants: { notes: { outputs: { default: true }, create: true } },
 				limits: { act: '2/min', read: '2/min' }
 			},
 			chatter: {
 				description: 'Two agent posts a minute',
-				grants: { notes: { read: true } },
+				grants: { notes: { outputs: { default: true } } },
 				limits: { agent: [{ rate: '2/min', per: 'actor' }] }
 			},
 			reader: {
 				description: 'Public reads, two a minute per IP',
-				grants: { notes: { read: true } },
+				grants: { notes: { outputs: { default: true } } },
 				limits: { read: { rate: '2/min', per: 'ip' } }
 			}
 		},
@@ -307,13 +310,19 @@ const runs = Result.getOrThrow(
 				create: { columns: { notes: ['title'] } },
 				effect: { created: true }
 			},
-			logs: { outputs: { default: { logs: { fields: 'all' } } }, create: { columns: { logs: ['title'] } } }
+			logs: {
+				outputs: { default: { logs: { fields: 'all' } } },
+				create: { columns: { logs: ['title'] } }
+			}
 		},
 		integrations: {},
 		policies: {
 			worker: {
 				description: 'Writes notes and logs, starts the manual automation',
-				grants: { notes: { read: true, create: true }, logs: { read: true, create: true } },
+				grants: {
+					notes: { outputs: { default: true }, create: true },
+					logs: { outputs: { default: true }, create: true }
+				},
 				capabilities: { automations: ['manual'] },
 				limits: { act: '1000/min' }
 			}

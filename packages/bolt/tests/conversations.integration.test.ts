@@ -104,7 +104,9 @@ const manifest = Result.getOrThrow(
 		policies: {
 			staff: {
 				description: 'Staff',
-				grants: { sent_emails: { read: true, create: true, update: { moves: 'all' } } }
+				grants: {
+					sent_emails: { outputs: { default: true }, create: true, update: { moves: 'all' } }
+				}
 			}
 		},
 		teams: {

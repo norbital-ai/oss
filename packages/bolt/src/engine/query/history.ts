@@ -9,7 +9,8 @@ import type { ReadIR } from '../../protocol/reads.ts';
 import type { EngineManifest } from '../manifest.ts';
 import type { TenantDbShape as TenantDb } from '../db/tenant-db.ts';
 import { catalogOf } from '../access/pred.ts';
-import { grantedArms, readScope, viewOutput } from '../access/authority.ts';
+import { historyArms, viewOutput } from '../access/authority.ts';
+import { or } from '../access/pred.ts';
 import { catalogFor, exposureOf, exposedField, q, DEFAULT_OUTPUT } from '@norbital-ai/store';
 import { grantSql, canonical } from '@norbital-ai/store';
 import { resolverOf } from './reader.ts';
@@ -104,17 +105,16 @@ export const readHistory = Effect.fn('Bolt.readHistory')(function* (
 	];
 	const auth = reader.as === 'caller' && !reader.authority.admin ? reader.authority : null;
 	const self: Pred = { t: 'cmp', field: 'id', op: 'eq', arg: { _tag: 'Lit', value: id } };
-	const granted = auth === null ? undefined : grantedArms(auth, read.model, output);
-	// the record's read scope is its history scope: a record the caller may read, it may also see change
-	const scope = auth === null ? undefined : readScope(auth, read.model, output);
+	const granted = auth === null ? [] : historyArms(auth, read.model, output);
 	if (auth !== null) {
+		if (granted.length === 0) return read.full === true || read.view === true ? null : [];
 		// grant predicates, so compiled raw; a requestor variable in them resolves against the caller
 		statements.push(
 			{ text: `SELECT 1 FROM ${q(c.model.name)} WHERE id = $1::uuid`, params: [id] },
 			yield* grantSql(
 				cat,
 				read.model,
-				{ t: 'and', of: [scope ?? { t: 'const', value: false }, self] },
+				{ t: 'and', of: [or(granted.map((arm) => arm.where)), self] },
 				{ resolve: resolverOf(bindings, auth), tz: bindings.tz }
 			).pipe(Effect.mapError(fromStore))
 		);
@@ -130,9 +130,7 @@ export const readHistory = Effect.fn('Bolt.readHistory')(function* (
 	if (auth !== null) {
 		const exists = res[1]!.rows.length > 0;
 		// a live row needs the history scope; a deleted one, an unconditional grant of the output (rule 17)
-		const visible =
-			granted !== undefined &&
-			(exists ? res[2]!.rows.length > 0 : granted.some((a) => isTrue(a.where)));
+		const visible = exists ? res[2]!.rows.length > 0 : granted.some((a) => isTrue(a.where));
 		if (!visible) return read.full === true || read.view === true ? null : [];
 	}
 	const versions = yield* Schema.decodeUnknownEffect(Schema.Array(HistorySchema))(

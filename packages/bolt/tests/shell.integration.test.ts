@@ -40,7 +40,10 @@ const manifest = Result.getOrThrow(
 		exposures: {
 			// what a visitor or kiosk reads of a role: its title
 			openings: {
-				outputs: { default: { openings: { fields: 'all' } }, public: { openings: { fields: ['title'] } } }
+				outputs: {
+					default: { openings: { fields: 'all' } },
+					public: { openings: { fields: ['title'] } }
+				}
 			},
 			applications: {
 				outputs: { default: { applications: { fields: 'all' } } },
@@ -52,14 +55,14 @@ const manifest = Result.getOrThrow(
 			applicant: {
 				description: 'Apply',
 				grants: {
-					openings: { outputs: { public: { openings: { where: { status: { eq: 'open' } } } } } },
+					openings: { outputs: { public: { scopes: { openings: { status: { eq: 'open' } } } } } },
 					applications: { create: { verdict: true } }
 				}
 			},
 			lobby: {
 				description: 'Lobby kiosk',
 				grants: {
-					openings: { outputs: { public: { openings: { where: { status: { eq: 'open' } } } } } },
+					openings: { outputs: { public: { scopes: { openings: { status: { eq: 'open' } } } } } },
 					applications: {
 						create: { columns: { applications: ['opening', 'name'] }, verdict: true }
 					}
@@ -68,12 +71,12 @@ const manifest = Result.getOrThrow(
 			rep: {
 				description: 'Rep',
 				capabilities: { apps: ['sales', 'desk'] },
-				grants: { openings: { read: true } }
+				grants: { openings: { outputs: { default: true } } }
 			},
 			proposer: {
 				description: 'Propose an application',
 				grants: {
-					openings: { read: true },
+					openings: { outputs: { default: true } },
 					applications: { create: { verdict: true } }
 				}
 			}

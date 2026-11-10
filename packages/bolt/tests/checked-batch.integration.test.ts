@@ -28,29 +28,35 @@ const manifest: EngineManifest = {
 			create: { columns: { customers: ['name', 'note'] } },
 			update: { columns: { customers: ['name', 'note'] } }
 		},
-		orders: { outputs: { default: { orders: { fields: 'all' } } }, create: { columns: { orders: ['title'] } } }
+		orders: {
+			outputs: { default: { orders: { fields: 'all' } } },
+			create: { columns: { orders: ['title'] } }
+		}
 	},
 	policies: {
 		writer: {
 			description: 'Writes both models',
 			capabilities: { automations: ['followup'] },
 			grants: {
-				customers: { read: true, create: true, update: true },
-				orders: { read: true, create: true }
+				customers: { outputs: { default: true }, create: true, update: true },
+				orders: { outputs: { default: true }, create: true }
 			}
 		},
 		restricted: {
 			description: 'Writes customers only',
 			grants: {
-				customers: { read: true, create: true, update: true },
-				orders: { read: true }
+				customers: { outputs: { default: true }, create: true, update: true },
+				orders: { outputs: { default: true } }
 			}
 		},
 		requester: {
 			description: 'Requests customer creation',
-			grants: { customers: { read: true, create: { verdict: true } } }
+			grants: { customers: { outputs: { default: true }, create: { verdict: true } } }
 		},
-		reviewer: { description: 'Reviews requests', grants: { customers: { read: true } } }
+		reviewer: {
+			description: 'Reviews requests',
+			grants: { customers: { outputs: { default: true } } }
+		}
 	},
 	teams: { Requesters: ['requester'], Reviewers: ['reviewer'] },
 	automations: {

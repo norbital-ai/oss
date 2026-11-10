@@ -5,7 +5,7 @@ export { LAYOUT_HELP, NAME, ROLES, fileRe, matchDir, type Role } from '../decl/l
 export { layerModels, nullableOfExpr, splitModel } from '../decl/model.ts';
 export { type Is } from '../decl/names.ts';
 export { DRIVERS } from '../decl/runtime/integration.ts';
-export { scopeObject, type Holder } from '../engine/access/authority.ts';
+export type { Holder } from '../engine/access/authority.ts';
 export { parseRate } from '../engine/access/rate.ts';
 export { withBrowser } from '../engine/agent/browser.ts';
 export { isBatchCallable } from '../engine/callables/index.ts';

@@ -125,9 +125,7 @@ describe('the session cookie', () => {
 									description: 'Visible photos',
 									grants: {
 										photos: {
-											outputs: { default: {
-												photos: { where: { visible: { eq: true } }, fields: ['title', 'image'] }
-											} }
+											outputs: { default: { scopes: { photos: { visible: { eq: true } } } } }
 										}
 									}
 								}

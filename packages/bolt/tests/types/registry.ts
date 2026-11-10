@@ -61,9 +61,11 @@ declare module '../../src/index.ts' {
 				spec: {
 					description: 'Nightly order digest';
 					policies: readonly ['sales_rep'];
-					on: readonly [{
-						cron: '0 2 * * *';
-					}];
+					on: readonly [
+						{
+							cron: '0 2 * * *';
+						}
+					];
 					output: {
 						kind: 'int';
 					};
@@ -109,13 +111,15 @@ declare module '../../src/index.ts' {
 				spec: {
 					description: 'Payment provider callback';
 					policies: readonly ['sales_rep'];
-					on: readonly [{
-						webhook: '/payments';
-						verify: {
-							scheme: 'stripe';
-							secret: 'HOOK_SECRET';
-						};
-					}];
+					on: readonly [
+						{
+							webhook: '/payments';
+							verify: {
+								scheme: 'stripe';
+								secret: 'HOOK_SECRET';
+							};
+						}
+					];
 					input: {
 						order: {
 							kind: 'text';
@@ -146,9 +150,12 @@ declare module '../../src/index.ts' {
 		};
 		exposures: {
 			customers: {
-				outputs: { default: {
-					customers: { fields: 'all' };
-				}; directory: { customers: { fields: readonly ['name', 'tier'] } } };
+				outputs: {
+					default: {
+						customers: { fields: 'all' };
+					};
+					directory: { customers: { fields: readonly ['name', 'tier'] } };
+				};
 				create: {
 					columns: { customers: readonly ['name', 'email', 'tier'] };
 					filled: { customers: readonly ['name'] };
@@ -168,14 +175,17 @@ declare module '../../src/index.ts' {
 				};
 			};
 			orders: {
-				outputs: { default: {
-					orders: { fields: 'all' };
-					'orders.customer': { fields: readonly ['name', 'tier'] };
-					'orders.lines': { fields: 'all' };
-				}; logistics: {
+				outputs: {
+					default: {
+						orders: { fields: 'all' };
+						'orders.customer': { fields: readonly ['name', 'tier'] };
+						'orders.lines': { fields: 'all' };
+					};
+					logistics: {
 						orders: { fields: readonly ['number', 'status', 'customer'] };
 						'orders.lines': { fields: readonly ['item', 'qty'] };
-					} };
+					};
+				};
 				create: {
 					columns: {
 						orders: readonly ['customer', 'note', 'due'];
@@ -231,14 +241,18 @@ declare module '../../src/index.ts' {
 				};
 			};
 			order_lines: {
-				outputs: { default: {
-					order_lines: { fields: 'all' };
-				} };
+				outputs: {
+					default: {
+						order_lines: { fields: 'all' };
+					};
+				};
 			};
 			notices: {
-				outputs: { default: {
-					notices: { fields: 'all' };
-				} };
+				outputs: {
+					default: {
+						notices: { fields: 'all' };
+					};
+				};
 				syncs: {
 					mail: {
 						with: 'support_mail';
@@ -247,9 +261,11 @@ declare module '../../src/index.ts' {
 				};
 			};
 			notice_notes: {
-				outputs: { default: {
-					notice_notes: { fields: 'all' };
-				} };
+				outputs: {
+					default: {
+						notice_notes: { fields: 'all' };
+					};
+				};
 				create: {
 					columns: { notice_notes: readonly ['notice', 'note'] };
 				};
@@ -280,19 +296,24 @@ declare module '../../src/index.ts' {
 				};
 			};
 			sites: {
-				outputs: { default: {
-					sites: {
-						fields: readonly ['name', 'location', 'customer', 'open', 'rating', 'checklist'];
+				outputs: {
+					default: {
+						sites: {
+							fields: readonly ['name', 'location', 'customer', 'open', 'rating', 'checklist'];
+						};
 					};
-				}; summary: { sites: { fields: readonly ['name', 'open'] } } };
+					summary: { sites: { fields: readonly ['name', 'open'] } };
+				};
 				update: {
 					columns: { sites: readonly ['name', 'location'] };
 				};
 			};
 			products: {
-				outputs: { default: {
-					products: { fields: 'all' };
-				} };
+				outputs: {
+					default: {
+						products: { fields: 'all' };
+					};
+				};
 				update: {
 					columns: { products: readonly ['commission_factor'] };
 				};
@@ -304,9 +325,11 @@ declare module '../../src/index.ts' {
 				};
 			};
 			entries: {
-				outputs: { default: {
-					entries: { fields: 'all' };
-				} };
+				outputs: {
+					default: {
+						entries: { fields: 'all' };
+					};
+				};
 				update: {
 					columns: { entries: readonly ['filed'] };
 				};
@@ -879,8 +902,9 @@ declare module '../../src/index.ts' {
 				description: 'Sell to our customers';
 				grants: {
 					orders: {
-						read: { orders: { where: { owner: { eq: { var: 'requestor.id' } } } } };
-						history: true;
+						outputs: {
+							default: { history: true; where: { owner: { eq: { var: 'requestor.id' } } } };
+						};
 						create: {
 							columns: {
 								orders: readonly ['customer', 'note'];
@@ -888,31 +912,31 @@ declare module '../../src/index.ts' {
 							};
 							verdict: true;
 						};
-						update: { columns: { orders: readonly ['status', 'note'] }; verdict: true; moves: { status: readonly ['draft->submitted', 'submitted->draft'] } };
+						update: {
+							columns: { orders: readonly ['status', 'note'] };
+							verdict: true;
+							moves: { status: readonly ['draft->submitted', 'submitted->draft'] };
+						};
 						delete: { verdict: true };
 					};
 					customers: {
 						outputs: {
 							directory: {
-								customers: {
-									where: { orders: { some: { owner: { eq: { var: 'requestor.id' } } } } };
-								};
+								where: { orders: { some: { owner: { eq: { var: 'requestor.id' } } } } };
 							};
 						};
 						update: true;
 					};
-					notices: {
-						read: true;
-					};
+					notices: { outputs: { default: true } };
 					sites: {
 						outputs: {
 							summary: {
-								sites: { where: { customer: { in: { var: 'requestor.scopes.sales_rep' } } } };
+								where: { customer: { in: { var: 'requestor.scopes.sales_rep' } } };
 							};
 						};
 					};
 					sys_user: {
-						outputs: { directory: { team: { in: { var: 'requestor.teamTree' } } } };
+						outputs: { directory: { where: { team: { in: { var: 'requestor.teamTree' } } } } };
 					};
 				};
 				automations: readonly ['nightly', 'products.sync.ledger', 'orders_submit', 'orders_renote'];

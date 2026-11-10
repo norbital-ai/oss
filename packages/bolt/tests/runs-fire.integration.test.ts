@@ -27,7 +27,10 @@ const manifest = {
 		'products.source': { to: 'sys_integration', where: { integration: { eq: 'erp' } } }
 	},
 	exposures: {
-		quotes: { outputs: { default: { quotes: { fields: 'all' } } }, create: { columns: { quotes: ['title'] } } },
+		quotes: {
+			outputs: { default: { quotes: { fields: 'all' } } },
+			create: { columns: { quotes: ['title'] } }
+		},
 		products: {
 			outputs: { default: { products: { fields: 'all' } } },
 			syncs: { erp: { with: 'erp', read: true, every: '30min' } }
@@ -53,11 +56,15 @@ const manifest = {
 		cal: { description: 'Calendars', driver: 'calendar' }
 	},
 	policies: {
-		ops: { description: 'Ops', grants: { quotes: { read: true, create: true } } }
+		ops: { description: 'Ops', grants: { quotes: { outputs: { default: true }, create: true } } }
 	},
 	automations: {
 		tidy: { description: 'Files a quote', on: [{ cron: '*/15 * * * *' }], policies: ['ops'] },
-		nothing: { description: 'Has nothing to read', on: [{ cron: '*/5 * * * *' }], policies: ['ops'] },
+		nothing: {
+			description: 'Has nothing to read',
+			on: [{ cron: '*/5 * * * *' }],
+			policies: ['ops']
+		},
 		watch: {
 			description: 'A safety net over the quotes',
 			on: [{ cron: '* * * * *', rest: '1d' }],

@@ -49,11 +49,14 @@ export const manifest = Result.getOrThrow(
 		},
 		integrations: {},
 		policies: {
-			viewer: { description: 'Reads the catalogue', grants: { products: { read: true } } },
+			viewer: {
+				description: 'Reads the catalogue',
+				grants: { products: { outputs: { default: true } } }
+			},
 			integration: { description: 'Holds no catalogue grant', grants: {} },
 			sales: {
 				description: 'Sales',
-				grants: { products: { read: true, create: true, update: true } }
+				grants: { products: { outputs: { default: true }, create: true, update: true } }
 			}
 		},
 		teams: {},

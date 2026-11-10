@@ -39,7 +39,11 @@ const manifest: EngineManifest = {
 		sales: {
 			description: 'Own documents',
 			grants: {
-				documents: { read: { documents: { where: { owner: { eq: { var: 'requestor.id' } } } } } }
+				documents: {
+					outputs: {
+						default: { scopes: { documents: { owner: { eq: { var: 'requestor.id' } } } } }
+					}
+				}
 			}
 		}
 	},

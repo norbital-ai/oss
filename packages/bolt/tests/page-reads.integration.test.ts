@@ -45,7 +45,10 @@ const manifest = Result.getOrThrow(
 		relationships: {},
 		exposures: {
 			orders: {
-				outputs: { default: { orders: { fields: 'all' } } },
+				outputs: {
+					default: { orders: { fields: 'all' } },
+					summary: { orders: { fields: ['title'] } }
+				},
 				create: { columns: { orders: ['title', 'doc', 'color'] } },
 				update: { columns: { orders: ['title'] } }
 			}
@@ -55,8 +58,26 @@ const manifest = Result.getOrThrow(
 			rep: {
 				description: 'Rep',
 				grants: {
-					orders: { read: true, create: true, update: true, history: true }
+					orders: { outputs: { default: { history: true } }, create: true, update: true }
 				}
+			},
+			reader: {
+				description: 'Current rows',
+				grants: { orders: { outputs: { default: true } } }
+			},
+			historian: {
+				description: 'History of alpha orders',
+				grants: {
+					orders: {
+						outputs: {
+							default: { history: true, scopes: { orders: { title: { like: 'alpha%' } } } }
+						}
+					}
+				}
+			},
+			named_historian: {
+				description: 'History through the summary output',
+				grants: { orders: { outputs: { summary: { history: true } } } }
 			}
 		},
 		teams: {},
@@ -247,6 +268,29 @@ layer(seeded, { excludeTestServices: true })('/q page reads', (it) => {
 					)(answers(r.body)[0])).map((x) => x.revision)
 				).toEqual([1, 2]);
 			}
+		})
+	);
+
+	it.effect('history stays inside the output grant even beside a broader current-row grant', () =>
+		Effect.gen(function* () {
+			const { t, q, id } = yield* setup();
+			const reader = t.as(t.member(['reader'])).authority;
+			const combined = t.as(t.member(['reader', 'historian'])).authority;
+			const named = t.as(t.member(['reader', 'named_historian'])).authority;
+			const revisionRows = Schema.Array(Schema.Struct({ revision: Schema.Number }));
+			const history = (index: number, authority: Authority) =>
+				q([{ m: 'history', a: ['orders', id(index)] }], authority).pipe(
+					Effect.map((reply) => Schema.decodeUnknownSync(revisionRows)(answers(reply.body)[0]))
+				);
+			expect(yield* history(0, reader)).toEqual([]);
+			expect((yield* history(0, combined)).map((row) => row.revision)).toEqual([1, 2]);
+			expect(yield* history(2, combined)).toEqual([]);
+			expect(yield* history(0, named)).toEqual([]);
+			const summary = yield* q(
+				[{ m: 'history', a: ['orders', id(0), { output: 'summary' }] }],
+				named
+			);
+			expect(Schema.decodeUnknownSync(revisionRows)(answers(summary.body)[0])).toHaveLength(2);
 		})
 	);
 

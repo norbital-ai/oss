@@ -26,7 +26,7 @@ is<Eq<WriteField<'orders', 'update'>, 'status' | 'note' | 'due' | 'placed_at'>>(
 is<Eq<WriteField<'orders', 'create', 'orders.lines'>, 'item' | 'qty' | 'price'>>();
 // no declared queries: no `'<model>.<query>'` limit keys
 is<Eq<Extract<LimitKey, `orders.${string}`>, never>>();
-is<Eq<'read' extends keyof Grant<'notices'> ? 1 : 0, 1>>();
+is<Eq<'outputs' extends keyof Grant<'notices'> ? 1 : 0, 1>>();
 is<Eq<TeamName, 'finance' | 'sales'>>();
 
 // ── valid: today's template behaviour as literals ──
@@ -35,8 +35,7 @@ export const salesRep = policy({
 	description: 'Sell to our customers',
 	grants: {
 		orders: {
-			read: { orders: { where: ownOrders } },
-			history: true,
+			outputs: { default: { history: true, where: ownOrders } },
 			create: {
 				columns: { orders: ['customer', 'note'], 'orders.lines': ['item', 'qty'] },
 				// one read over the batch replaces the old relation-hop `where`; steps in order, `if` adds one only when it
@@ -75,7 +74,8 @@ export const salesRep = policy({
 			},
 			delete: {
 				verdict: function* (rows, ctx) {
-					if (rows.some((r) => r.status !== 'draft')) return yield* ctx.refuse('Only drafts are deleted.', { row: 0 });
+					if (rows.some((r) => r.status !== 'draft'))
+						return yield* ctx.refuse('Only drafts are deleted.', { row: 0 });
 					return ctx.actor.kind === 'member' && ctx.actor.teams.includes('finance')
 						? ctx.allow()
 						: ctx.approve({ steps: [{ name: 'Finance', teams: ['finance'] }] });
@@ -84,14 +84,21 @@ export const salesRep = policy({
 		},
 		// a narrow named output: the shape is the model's, the grant only filters rows
 		customers: {
-			outputs: { directory: { customers: { where: { orders: { some: ownOrders } } } } },
+			outputs: { directory: { where: { orders: { some: ownOrders } } } },
 			update: true
 		},
-		notices: { read: true },
-		sites: { outputs: { summary: { sites: { where: { customer: { in: { var: 'requestor.scopes.sales_rep' } } } } } } },
-		sys_user: { outputs: { directory: { team: { in: { var: 'requestor.teamTree' } } } } }
+		notices: { outputs: { default: true } },
+		sites: {
+			outputs: { summary: { where: { customer: { in: { var: 'requestor.scopes.sales_rep' } } } } }
+		},
+		sys_user: { outputs: { directory: { where: { team: { in: { var: 'requestor.teamTree' } } } } } }
 	},
-	capabilities: { apps: ['sales'], tools: ['browser'], mcp: ['erp'] , automations: ['nightly', 'products.sync.ledger', 'orders_submit', 'orders_renote'] },
+	capabilities: {
+		apps: ['sales'],
+		tools: ['browser'],
+		mcp: ['erp'],
+		automations: ['nightly', 'products.sync.ledger', 'orders_submit', 'orders_renote']
+	},
 	limits: {
 		act: '600/min',
 		agent: { rate: '100/h', per: 'actor' },
@@ -111,7 +118,7 @@ export const salesRep = policy({
 export const applicant = policy({
 	description: 'Anyone may apply',
 	grants: {
-		customers: { outputs: { directory: { customers: { where: { tier: { eq: 'gold' } } } } } },
+		customers: { outputs: { directory: { where: { tier: { eq: 'gold' } } } } },
 		orders: { create: { columns: { orders: ['customer'] } } }
 	},
 	limits: { register: { rate: '10/h', per: 'ip' } }
@@ -139,10 +146,10 @@ export const updateCheck: UpdateCheck<'orders'> = salesRep.grants.orders.update.
 // ── grants ──
 // @ts-expect-error A1 an unknown model
 // prettier-ignore
-policy({ description: 'x', grants: { oders: { read: true } } });
+policy({ description: 'x', grants: { oders: { outputs: { default: true } } } });
 // @ts-expect-error A1 teams are source declarations, never a grantable model
 // prettier-ignore
-policy({ description: 'x', grants: { sys_team: { read: true } } });
+policy({ description: 'x', grants: { sys_team: { outputs: { default: true } } } });
 // @ts-expect-error A2 a read grant never names fields: the output's shape is the model's
 // prettier-ignore
 policy({ description: 'x', grants: { sites: { outputs: { default: { sites: { fields: ['name'] } } } } } });
@@ -152,32 +159,35 @@ policy({ description: 'x', grants: { sites: { outputs: { summary: { sites: { fie
 // @ts-expect-error A2c an output the model does not declare
 // prettier-ignore
 policy({ description: 'x', grants: { sites: { outputs: { full: true } } } });
-// @ts-expect-error A2d `default` is granted by `read`, never named under `outputs`
+// The default output uses the same grant form as named outputs.
 // prettier-ignore
 policy({ description: 'x', grants: { sites: { outputs: { default: true } } } });
 // @ts-expect-error A2e a grant path outside its output (logistics has no orders.customer layer)
 // prettier-ignore
-policy({ description: 'x', grants: { orders: { outputs: { logistics: { 'orders.customer': { where: { tier: { eq: 'gold' } } } } } } } });
-// @ts-expect-error A2f a history grant names no fields
+policy({ description: 'x', grants: { orders: { outputs: { logistics: { customer: { where: { tier: { eq: 'gold' } } } } } } } });
+// @ts-expect-error A2f a history-enabled output grants its model-defined shape
 // prettier-ignore
-policy({ description: 'x', grants: { orders: { history: { where: { note: { isNull: true } }, fields: ['note'] } } } });
+policy({ description: 'x', grants: { orders: { outputs: { default: { history: true, where: { note: { isNull: true } }, fields: ['note'] } } } } });
 // @ts-expect-error A2g an identity grant names no fields beside its read
 // prettier-ignore
-policy({ description: 'x', grants: { sys_user: { read: true, fields: ['name'] } } });
+policy({ description: 'x', grants: { sys_user: { outputs: { default: true }, fields: ['name'] } } });
 // a named output's layer filter names that output's paths
-policy({ description: 'x', grants: { orders: { outputs: { logistics: { 'orders.lines': { where: { qty: { gt: 0 } } } } } } } });
+policy({
+	description: 'x',
+	grants: { orders: { outputs: { logistics: { lines: { where: { qty: { gt: 0 } } } } } } }
+});
 // @ts-expect-error A3 a layer scope naming an unknown field
 // prettier-ignore
-policy({ description: 'x', grants: { orders: { read: { orders: { where: { nope: { eq: 1 } } } } } } });
-// @ts-expect-error A3b a bare `Where` read shorthand is an identity grant's only
+policy({ description: 'x', grants: { orders: { outputs: { default: { where: { nope: { eq: 1 } } } } } } });
+// @ts-expect-error A3b a bare `Where` is wrapped in the output's `where`
 // prettier-ignore
-policy({ description: 'x', grants: { orders: { read: { owner: { eq: { var: 'requestor.id' } } } } } });
+policy({ description: 'x', grants: { orders: { outputs: { default: { owner: { eq: { var: 'requestor.id' } } } } } } });
 // @ts-expect-error A4 a create column outside the declared create columns
 // prettier-ignore
 policy({ description: 'x', grants: { orders: { create: { columns: { orders: ['status'] } } } } });
 // @ts-expect-error A5 the `'read'` write shorthand is gone
 // prettier-ignore
-policy({ description: 'x', grants: { orders: { read: true, update: 'read' } } });
+policy({ description: 'x', grants: { orders: { outputs: { default: true }, update: 'read' } } });
 // @ts-expect-error A6 `previous` is gone: the update check judges `before`
 // prettier-ignore
 policy({ description: 'x', grants: { orders: { update: { previous: { status: { eq: 'draft' } } } } } });
@@ -207,16 +217,16 @@ policy({ description: 'x', grants: {}, capabilities: { automations: ['orders_shi
 policy({ description: 'x', grants: { orders: { erase: true } } });
 // @ts-expect-error A14 a create grant on a model that declares no create
 // prettier-ignore
-policy({ description: 'x', grants: { products: { read: true, create: true } } });
+policy({ description: 'x', grants: { products: { outputs: { default: true }, create: true } } });
 // @ts-expect-error A15 a sync-owned model without a declared create takes no create grant
 // prettier-ignore
-policy({ description: 'x', grants: { notices: { read: true, create: true } } });
+policy({ description: 'x', grants: { notices: { outputs: { default: true }, create: true } } });
 // @ts-expect-error A16 identity-field-write: sys_user grants read only
 // prettier-ignore
-policy({ description: 'x', grants: { sys_user: { read: true, update: true } } });
+policy({ description: 'x', grants: { sys_user: { outputs: { default: true }, update: true } } });
 // @ts-expect-error A17 `'read'` is not a delete scope
 // prettier-ignore
-policy({ description: 'x', grants: { orders: { read: true, delete: 'read' } } });
+policy({ description: 'x', grants: { orders: { outputs: { default: true }, delete: 'read' } } });
 // @ts-expect-error A18 an unknown grant key
 // prettier-ignore
 policy({ description: 'x', grants: { orders: { mutate: true } } });
@@ -241,8 +251,14 @@ policy({
 	description: 'x',
 	grants: {
 		orders: {
-			// @ts-expect-error AP1 a check on a read grant
-			read: { check: function* (_: unknown, ctx: { allow(): unknown }) { return ctx.allow(); } }
+			outputs: {
+				// @ts-expect-error AP1 a verdict on an output grant
+				default: {
+					verdict: function* (_: unknown, ctx: { allow(): unknown }) {
+						return ctx.allow();
+					}
+				}
+			}
 		}
 	}
 });

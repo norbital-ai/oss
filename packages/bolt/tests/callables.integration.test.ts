@@ -93,32 +93,34 @@ const manifest = Result.getOrThrow(
 				description: 'Rep',
 				capabilities: { automations: ['followup', 'place', 'revise'] },
 				grants: {
-					customers: { read: true },
+					customers: { outputs: { default: true } },
 					orders: {
-						read: { orders: { where: { created_by: { eq: { var: 'requestor.id' } } } } },
+						outputs: {
+							default: { scopes: { orders: { created_by: { eq: { var: 'requestor.id' } } } } }
+						},
 						create: true,
 						update: { moves: { status: ['draft->submitted'] } }
 					},
-					notes: { read: true, create: true }
+					notes: { outputs: { default: true }, create: true }
 				}
 			},
 			// the runs' own: a run is the system identity, so the rep's own-orders scope would match nothing there
 			ordering: {
 				description: 'Place and revise orders',
 				grants: {
-					customers: { read: true },
+					customers: { outputs: { default: true } },
 					orders: {
-						read: true,
+						outputs: { default: true },
 						create: true,
 						update: { moves: { status: ['draft->submitted'] } }
 					},
-					notes: { read: true, create: true }
+					notes: { outputs: { default: true }, create: true }
 				}
 			},
 			applicant: {
 				description: 'Apply',
 				grants: {
-					openings: { outputs: { listing: { openings: { where: { status: { eq: 'open' } } } } } },
+					openings: { outputs: { listing: { scopes: { openings: { status: { eq: 'open' } } } } } },
 					// a closed opening is no ref this visitor reads, so no write `where` is needed
 					applications: { create: true }
 				},

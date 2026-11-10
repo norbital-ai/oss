@@ -361,22 +361,22 @@ void mine;
 policy({
 	description: 'Customers read themselves',
 	grants: {
-		customers: { read: { customers: { where: { email: { eq: { var: 'requestor.email' } } } } } }
+		customers: { outputs: { default: { where: { email: { eq: { var: 'requestor.email' } } } } } }
 	}
 });
 // @ts-expect-error E1 on text that is not an email
 // prettier-ignore
-policy({ description: 'x', grants: { customers: { read: { customers: { where: { name: { eq: { var: 'requestor.email' } } } } } } } });
+policy({ description: 'x', grants: { customers: { outputs: { default: { where: { name: { eq: { var: 'requestor.email' } } } } } } } });
 policy({
 	description: 'x',
 	grants: {
 		// @ts-expect-error E2 on a number
-		order_lines: { read: { order_lines: { where: { qty: { eq: { var: 'requestor.email' } } } } } }
+		order_lines: { outputs: { default: { where: { qty: { eq: { var: 'requestor.email' } } } } } }
 	}
 });
 // @ts-expect-error E3 an unknown actor operand
 // prettier-ignore
-policy({ description: 'x', grants: { customers: { read: { customers: { where: { email: { eq: { actor: 'mail' } } } } } } } });
+policy({ description: 'x', grants: { customers: { outputs: { default: { where: { email: { eq: { actor: 'mail' } } } } } } } });
 model('probe', {
 	description: 'x',
 	label: 'e',
@@ -391,14 +391,14 @@ void guest;
 policy({
 	description: 'Guests read their own rows',
 	grants: {
-		customers: { read: { customers: { where: { name: { eq: { var: 'requestor.visitor' } } } } } }
+		customers: { outputs: { default: { where: { name: { eq: { var: 'requestor.visitor' } } } } } }
 	}
 });
 policy({
 	description: 'x',
 	grants: {
 		// @ts-expect-error V1 on a number
-		order_lines: { read: { order_lines: { where: { qty: { eq: { var: 'requestor.visitor' } } } } } }
+		order_lines: { outputs: { default: { where: { qty: { eq: { var: 'requestor.visitor' } } } } } }
 	}
 });
 
@@ -406,7 +406,7 @@ policy({
 const run: Id<'sys_run'> | undefined = undefined;
 void run;
 // @ts-expect-error L1 run-grant: no grant names sys_run
-policy({ description: 'x', grants: { sys_run: { read: true } } });
+policy({ description: 'x', grants: { sys_run: { outputs: { default: true } } } });
 automation({
 	...rt.orders_renote.spec,
 	run: function* (_, ctx) {
@@ -424,8 +424,11 @@ automation({
 });
 // @ts-expect-error L4 nor trigger on it
 automation({ ...rt.nightly.spec, on: [{ created: 'sys_run' }] });
-policy({ description: 'x', grants: { sys_invitation: { read: true } } });
-// @ts-expect-error Invitations remain read-only.
-policy({ description: 'x', grants: { sys_invitation: { read: true, create: true } } });
+policy({ description: 'x', grants: { sys_invitation: { outputs: { default: true } } } });
+policy({
+	description: 'x',
+	// @ts-expect-error Invitations remain read-only.
+	grants: { sys_invitation: { outputs: { default: true }, create: true } }
+});
 // @ts-expect-error API keys take no grant.
-policy({ description: 'x', grants: { sys_api_key: { read: true } } });
+policy({ description: 'x', grants: { sys_api_key: { outputs: { default: true } } } });

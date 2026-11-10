@@ -62,7 +62,10 @@ const manifest: EngineManifest = {
 	relationships: {},
 	exposures: {
 		quotes: {
-			outputs: { default: { quotes: { fields: 'all' } }, titles: { quotes: { fields: ['title'] } } },
+			outputs: {
+				default: { quotes: { fields: 'all' } },
+				titles: { quotes: { fields: ['title'] } }
+			},
 			create: { columns: { quotes: ['title', 'region'] } },
 			update: { columns: { quotes: ['title', 'region'] } },
 			delete: {}
@@ -75,10 +78,10 @@ const manifest: EngineManifest = {
 		},
 		rep: {
 			description: 'Rep',
-			grants: { quotes: { read: true, create: true, update: true } },
-			capabilities: { mcp: ['hq'] , automations: ['quotes_mark'] }
+			grants: { quotes: { outputs: { default: true }, create: true, update: true } },
+			capabilities: { mcp: ['hq'], automations: ['quotes_mark'] }
 		},
-		reader: { description: 'Reads quotes', grants: { quotes: { read: true } } }
+		reader: { description: 'Reads quotes', grants: { quotes: { outputs: { default: true } } } }
 	},
 
 	mcp: {

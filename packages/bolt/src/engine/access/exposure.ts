@@ -7,7 +7,7 @@ import { relations as manifestRelations } from '../manifest.ts';
 import { nullableOfExpr, type LayerColumns } from '../../decl/model.ts';
 import { FieldsSchema } from '../../protocol/public-page.ts';
 import { SYSTEM } from '../../system/index.ts';
-import { viewOutput } from './authority.ts';
+import { historyArms, viewOutput } from './authority.ts';
 import { labelPaths, recordLabelSpec, recordLabelExpression } from '@norbital-ai/std/label';
 import { catalogOf } from './pred.ts';
 
@@ -314,7 +314,10 @@ export function exposure(
 			...labelMetadata(model, readable),
 			...(output === undefined || output === 'default' ? {} : { output }),
 			...(model.search?.semantic === undefined ? {} : { semantic: true as const }),
-			...(catalogued.models.get(c)?.audit === true ? {} : { audit: false as const }),
+			...(catalogued.models.get(c)?.audit === true &&
+			(a.admin || (output !== undefined && historyArms(a, c, output).length > 0))
+				? {}
+				: { audit: false as const }),
 			fields: fieldsOf(fields),
 			...(reads && Object.keys(model.search?.indexes ?? {}).length > 0
 				? {

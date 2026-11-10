@@ -48,11 +48,13 @@ export const manifest: EngineManifest = {
 	},
 	exposures: {
 		orders: {
-			outputs: { default: {
-				orders: { fields: 'all' },
-				'orders.lines': { fields: 'all' },
-				'orders.tags': { fields: 'all' }
-			} },
+			outputs: {
+				default: {
+					orders: { fields: 'all' },
+					'orders.lines': { fields: 'all' },
+					'orders.tags': { fields: 'all' }
+				}
+			},
 			create: { columns: { orders: ['title', 'note', 'status'], 'orders.lines': lineCols } },
 			update: {
 				columns: {
@@ -69,7 +71,10 @@ export const manifest: EngineManifest = {
 			update: { columns: { lines: lineCols } },
 			delete: {}
 		},
-		tags: { outputs: { default: { tags: { fields: 'all' } } }, create: { columns: { tags: ['name'] } } }
+		tags: {
+			outputs: { default: { tags: { fields: 'all' } } },
+			create: { columns: { tags: ['name'] } }
+		}
 	},
 	integrations: {},
 	policies: {},
@@ -112,8 +117,7 @@ export const deleteArm = (check = false, policy = 'p'): DeleteArm => ({ policy, 
 export const grants = (model: string, over: Partial<ModelAuthority> = {}): ModelAuthority => {
 	const spec = manifest.exposures[model];
 	return {
-		read: { default: { [model]: [arm()] } },
-		history: [],
+		read: { default: { [model]: [{ ...arm(), history: true }] } },
 		create: spec?.create === undefined ? [] : [writeArm(spec.create.columns)],
 		update: spec?.update === undefined ? [] : [writeArm(spec.update.columns)],
 		delete: spec?.delete === undefined ? [] : [deleteArm()],

@@ -68,24 +68,26 @@ const manifest = {
 		// layers jobs' output declares, read under jobs' own arms. `dispatch` omits `notes` and the assignee's `rate`;
 		// `bare` declares no layer and no `assignee`.
 		jobs: {
-			outputs: { default: {
-				'jobs.assignee': { fields: 'all' },
-				'jobs.assignee.manager': { fields: 'all' },
-				'jobs.lines': { fields: 'all' },
-				jobs: {
-					fields: [
-						'title',
-						'hours',
-						'notes',
-						'scheduled_on',
-						'spot',
-						'window',
-						'status',
-						'tags',
-						'assignee'
-					]
-				}
-			}, dispatch: {
+			outputs: {
+				default: {
+					'jobs.assignee': { fields: 'all' },
+					'jobs.assignee.manager': { fields: 'all' },
+					'jobs.lines': { fields: 'all' },
+					jobs: {
+						fields: [
+							'title',
+							'hours',
+							'notes',
+							'scheduled_on',
+							'spot',
+							'window',
+							'status',
+							'tags',
+							'assignee'
+						]
+					}
+				},
+				dispatch: {
 					jobs: {
 						fields: [
 							'title',
@@ -101,7 +103,9 @@ const manifest = {
 					'jobs.assignee': { fields: ['name', 'manager'] },
 					'jobs.assignee.manager': { fields: 'all' },
 					'jobs.lines': { fields: 'all' }
-				}, bare: { jobs: { fields: ['title', 'hours'] } } }
+				},
+				bare: { jobs: { fields: ['title', 'hours'] } }
+			}
 		}
 	},
 	integrations: {},
@@ -125,7 +129,6 @@ const TRUE: Pred = { t: 'const', value: true };
 const arm: Arm = { policy: 'dispatch', where: TRUE };
 const grant = (model: string, output = 'default'): ModelAuthority => ({
 	read: { [output]: { [model]: [arm] } },
-	history: [],
 	create: [],
 	update: [],
 	delete: [],
@@ -554,7 +557,10 @@ describe('filter.describe offers System 1 the exposure and maps its choices onto
 					...manifest,
 					exposures: {
 						...manifest.exposures,
-						jobs: { ...manifest.exposures.jobs, outputs: { ...manifest.exposures.jobs.outputs, dispatch: narrow } }
+						jobs: {
+							...manifest.exposures.jobs,
+							outputs: { ...manifest.exposures.jobs.outputs, dispatch: narrow }
+						}
 					}
 				}).describe({
 					model: 'jobs',
@@ -884,16 +890,18 @@ describe('described choices preserve scalar kinds', () => {
 				exposures: {
 					...manifest.exposures,
 					jobs: {
-						outputs: { default: {
-							jobs: {
-								fields: [
-									...manifest.exposures.jobs.outputs.default.jobs.fields,
-									'urgent',
-									'priority',
-									'visits'
-								]
+						outputs: {
+							default: {
+								jobs: {
+									fields: [
+										...manifest.exposures.jobs.outputs.default.jobs.fields,
+										'urgent',
+										'priority',
+										'visits'
+									]
+								}
 							}
-						} }
+						}
 					}
 				}
 			} satisfies EngineManifest;

@@ -286,7 +286,11 @@ describe('bolt check', () => {
 			},
 			exposures: {
 				items: {
-					outputs: { default: { items: { fields: 'all' } }, public: { items: { fields: ['name'] } }, unlabelled: { items: { fields: ['cost'] } } },
+					outputs: {
+						default: { items: { fields: 'all' } },
+						public: { items: { fields: ['name'] } },
+						unlabelled: { items: { fields: ['cost'] } }
+					},
 					create: { columns: { items: ['name', 'cost'] } },
 					delete: {}
 				}
@@ -295,7 +299,7 @@ describe('bolt check', () => {
 				anyone: { description: 'a', grants: { items: { outputs: { public: true } } } },
 				wide: {
 					description: 'w',
-					grants: { items: { read: true, outputs: { unlabelled: true } } }
+					grants: { items: { outputs: { default: true, unlabelled: true } } }
 				},
 				desk: {
 					description: 'd',
@@ -331,7 +335,13 @@ describe('bolt check', () => {
 	});
 	it.live('parses cron strings at build (rule 52)', () =>
 		Effect.gen(function* () {
-			for (const ok of ['0 2 * * *', '*/15 * * * *', '0 9-17 * * 1-5', '5,35 0 1 1,6 0', ' @daily '])
+			for (const ok of [
+				'0 2 * * *',
+				'*/15 * * * *',
+				'0 9-17 * * 1-5',
+				'5,35 0 1 1,6 0',
+				' @daily '
+			])
 				expect(Result.isSuccess(parseCron(ok))).toBe(true);
 			for (const bad of [
 				'61 * * * *',

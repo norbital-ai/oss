@@ -53,7 +53,7 @@ const m = Result.getOrThrow(
 				description: '',
 				grants: {
 					orders: {
-						read: { orders: { where: { region: { eq: 'north' } } } },
+						outputs: { default: { scopes: { orders: { region: { eq: 'north' } } } } },
 						update: { columns: { orders: ['note'] } }
 					}
 				}
@@ -62,25 +62,28 @@ const m = Result.getOrThrow(
 				description: '',
 				grants: {
 					orders: {
-						read: { orders: { where: { region: { eq: 'north' } } } },
+						outputs: { default: { scopes: { orders: { region: { eq: 'north' } } } } },
 						update: { columns: { orders: ['note'] }, verdict: true }
 					}
 				}
 			},
 			mover: {
 				description: '',
-				grants: { orders: { read: true, update: { verdict: true } } }
+				grants: { orders: { outputs: { default: true }, update: { verdict: true } } }
 			},
 			kiosk: {
 				description: '',
 				grants: {
-					employees: { read: true, update: { columns: { employees: ['face'] }, verdict: true } }
+					employees: {
+						outputs: { default: true },
+						update: { columns: { employees: ['face'] }, verdict: true }
+					}
 				}
 			},
 			stamp: {
 				description: '',
 				grants: {
-					employees: { read: true, update: { verdict: true } }
+					employees: { outputs: { default: true }, update: { verdict: true } }
 				}
 			}
 		},

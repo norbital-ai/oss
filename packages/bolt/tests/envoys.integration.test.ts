@@ -53,10 +53,13 @@ const manifest = {
 	policies: {
 		desk: {
 			description: 'What the envoys may do',
-			grants: { jobs: { read: true, create: true } },
+			grants: { jobs: { outputs: { default: true }, create: true } },
 			limits: { 'envoys.receive': [{ rate: '2/min', per: 'sender' }] }
 		},
-		contractor: { description: 'Contractors', grants: { jobs: { read: true, update: true } } },
+		contractor: {
+			description: 'Contractors',
+			grants: { jobs: { outputs: { default: true }, update: true } }
+		},
 		desk_turns: {
 			description: 'The public desk turn budget',
 			grants: {},

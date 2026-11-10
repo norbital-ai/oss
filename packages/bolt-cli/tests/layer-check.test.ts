@@ -55,11 +55,14 @@ const present = <A>(value: A | undefined): A => {
 	return value;
 };
 const orders: EngineManifest['exposures'][string] = {
-	outputs: { default: {
-		orders: { fields: ['number', 'total', 'party'] },
-		'orders.party': { fields: ['name', 'credit_limit'] },
-		'orders.lines': { fields: 'all' }
-	}, logistics: { orders: { fields: ['number'] }, 'orders.lines': { fields: ['product'] } } },
+	outputs: {
+		default: {
+			orders: { fields: ['number', 'total', 'party'] },
+			'orders.party': { fields: ['name', 'credit_limit'] },
+			'orders.lines': { fields: 'all' }
+		},
+		logistics: { orders: { fields: ['number'] }, 'orders.lines': { fields: ['product'] } }
+	},
 	create: { columns: { orders: ['number', 'party'], 'orders.lines': ['product', 'amount'] } },
 	update: { columns: { orders: ['number'], 'orders.lines': ['amount'] } }
 };
@@ -74,11 +77,15 @@ describe('layer maps at compile time (bolt check)', () => {
 						description: 'Rep',
 						grants: {
 							orders: {
-								read: {
-									orders: { where: { number: { ne: '' } } },
-									'orders.lines': { where: { amount: { gt: 0 } } }
+								outputs: {
+									default: {
+										scopes: {
+											orders: { number: { ne: '' } },
+											'orders.lines': { amount: { gt: 0 } }
+										}
+									},
+									logistics: { scopes: { 'orders.lines': { product: { ne: '' } } } }
 								},
-								outputs: { logistics: { 'orders.lines': { where: { product: { ne: '' } } } } },
 								create: {
 									columns: { orders: ['number'], 'orders.lines': ['product'] },
 									verdict: true
@@ -101,16 +108,24 @@ describe('layer maps at compile time (bolt check)', () => {
 		expect(
 			findings({
 				exposures: {
-					nodes: { outputs: { default: Object.fromEntries(deep.map((path) => [path, { fields: 'all' }])) } }
+					nodes: {
+						outputs: { default: Object.fromEntries(deep.map((path) => [path, { fields: 'all' }])) }
+					}
 				}
 			})
-		).toEqual([`model/layer nodes: outputs.default: '${sixth}' is deeper than ${LAYER_MAX_DEPTH} levels`]);
+		).toEqual([
+			`model/layer nodes: outputs.default: '${sixth}' is deeper than ${LAYER_MAX_DEPTH} levels`
+		]);
 		// the fifth level is the deepest a map may declare
 		expect(
 			findings({
 				exposures: {
 					nodes: {
-						outputs: { default: Object.fromEntries(deep.slice(0, -1).map((path) => [path, { fields: 'all' }])) }
+						outputs: {
+							default: Object.fromEntries(
+								deep.slice(0, -1).map((path) => [path, { fields: 'all' }])
+							)
+						}
 					}
 				}
 			})
@@ -118,7 +133,11 @@ describe('layer maps at compile time (bolt check)', () => {
 		expect(
 			findings({
 				exposures: {
-					nodes: { outputs: { default: { nodes: { fields: 'all' }, 'nodes.parent.parent': { fields: 'all' } } } }
+					nodes: {
+						outputs: {
+							default: { nodes: { fields: 'all' }, 'nodes.parent.parent': { fields: 'all' } }
+						}
+					}
 				}
 			})
 		).toEqual([
@@ -130,12 +149,14 @@ describe('layer maps at compile time (bolt check)', () => {
 		const found = findings({
 			exposures: {
 				orders: {
-					outputs: { default: {
-						orders: { fields: ['number', 'nope'] },
-						'orders.customer': { fields: 'all' },
-						'orders.notes': { fields: 'all' },
-						'orders.notes.about': { fields: 'all' }
-					} },
+					outputs: {
+						default: {
+							orders: { fields: ['number', 'nope'] },
+							'orders.customer': { fields: 'all' },
+							'orders.notes': { fields: 'all' },
+							'orders.notes.about': { fields: 'all' }
+						}
+					},
 					create: {
 						columns: {
 							orders: ['number', 'total'],
@@ -162,12 +183,16 @@ describe('layer maps at compile time (bolt check)', () => {
 		expect(
 			findings({
 				exposures: {
-					orders: { ...orders, outputs: { default: { orders: { fields: ['number'] } }, narrow: { orders: { fields: ['nope'] } } } }
+					orders: {
+						...orders,
+						outputs: {
+							default: { orders: { fields: ['number'] } },
+							narrow: { orders: { fields: ['nope'] } }
+						}
+					}
 				}
 			})
-		).toEqual([
-			"model/layer orders: outputs.narrow: 'nope' is no field of orders (orders)"
-		]);
+		).toEqual(["model/layer orders: outputs.narrow: 'nope' is no field of orders (orders)"]);
 	});
 
 	it('refuses a policy output, path or column the model does not declare, and a verb the model lacks', () => {
@@ -181,8 +206,11 @@ describe('layer maps at compile time (bolt check)', () => {
 						description: 'Rep',
 						grants: {
 							orders: {
-								read: { orders: {}, 'orders.party.orders': {} },
-								outputs: { logistics: { 'orders.party': {} }, wholesale: true },
+								outputs: {
+									default: { scopes: { orders: {}, 'orders.party.orders': {} } },
+									logistics: { scopes: { 'orders.party': {} } },
+									wholesale: true
+								},
 								create: { columns: { orders: ['number', 'total'], 'orders.notes': ['body'] } },
 								update: true
 							}
@@ -191,7 +219,7 @@ describe('layer maps at compile time (bolt check)', () => {
 				}
 			})
 		).toEqual([
-			"access/layer rep: orders: read names 'orders.party.orders', which that output does not declare as a read layer",
+			"access/layer rep: orders: outputs.default names 'orders.party.orders', which that output does not declare as a read layer",
 			"access/layer rep: orders: outputs.logistics names 'orders.party', which that output does not declare as a read layer",
 			"access/layer rep: orders: grants output 'wholesale', which orders does not declare",
 			"access/layer rep: orders: create orders admits 'total', which orders's create does not declare there",

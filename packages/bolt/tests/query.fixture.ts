@@ -66,21 +66,27 @@ export const manifest: EngineManifest = {
 	},
 	exposures: {
 		accounts: {
-			outputs: { default: {
-				accounts: { fields: 'all' },
-				'accounts.orders': { fields: 'all' },
-				'accounts.orders.lines': { fields: 'all' }
-			}, brief: { accounts: { fields: ['name', 'region'] } } }
+			outputs: {
+				default: {
+					accounts: { fields: 'all' },
+					'accounts.orders': { fields: 'all' },
+					'accounts.orders.lines': { fields: 'all' }
+				},
+				brief: { accounts: { fields: ['name', 'region'] } }
+			}
 		},
 		orders: {
-			outputs: { default: {
-				orders: { fields: 'all' },
-				'orders.account': { fields: 'all' },
-				'orders.lines': { fields: 'all' }
-			}, brief: {
+			outputs: {
+				default: {
+					orders: { fields: 'all' },
+					'orders.account': { fields: 'all' },
+					'orders.lines': { fields: 'all' }
+				},
+				brief: {
 					orders: { fields: ['status', 'qty', 'placed', 'account'] },
 					'orders.account': { fields: ['name', 'region'] }
-				} }
+				}
+			}
 		},
 		lines: { outputs: { default: { lines: { fields: 'all' }, 'lines.order': { fields: 'all' } } } },
 		notes: { outputs: { default: { notes: { fields: ['body', 'about'] } } } }
@@ -142,7 +148,6 @@ const arm = (
 			Object.entries(read).map(([path, where]) => [path, [{ policy, where }]])
 		)
 	},
-	history: [],
 	create: [],
 	update: [],
 	delete: [],

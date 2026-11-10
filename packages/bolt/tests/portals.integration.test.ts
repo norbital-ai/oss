@@ -32,7 +32,10 @@ const source = {
 	},
 	exposures: {
 		services: {
-			outputs: { default: { services: { fields: 'all' } }, listing: { services: { fields: ['name'] } } },
+			outputs: {
+				default: { services: { fields: 'all' } },
+				listing: { services: { fields: ['name'] } }
+			},
 			create: { columns: { services: ['name', 'cost'] } }
 		},
 		enquiries: {
@@ -40,7 +43,10 @@ const source = {
 			create: { columns: { enquiries: ['name'] } }
 		},
 		bookings: {
-			outputs: { default: { bookings: { fields: 'all' } }, own: { bookings: { fields: ['note', 'customer'] } } },
+			outputs: {
+				default: { bookings: { fields: 'all' } },
+				own: { bookings: { fields: ['note', 'customer'] } }
+			},
 			create: { columns: { bookings: ['note', 'customer'] } }
 		},
 		orders: {
@@ -62,7 +68,7 @@ const source = {
 			grants: {
 				services: { outputs: { listing: true } },
 				bookings: {
-					outputs: { own: { bookings: { where: { customer: { eq: { var: 'requestor.id' } } } } } },
+					outputs: { own: { scopes: { bookings: { customer: { eq: { var: 'requestor.id' } } } } } },
 					create: { columns: { bookings: ['note', 'customer'] } }
 				}
 			}
@@ -71,7 +77,7 @@ const source = {
 			description: 'The shop: an anonymous visitor reads and adds its own orders',
 			grants: {
 				orders: {
-					outputs: { own: { orders: { where: { owner: { eq: { var: 'requestor.id' } } } } } },
+					outputs: { own: { scopes: { orders: { owner: { eq: { var: 'requestor.id' } } } } } },
 					create: { columns: { orders: ['note'] } }
 				}
 			},
@@ -81,7 +87,7 @@ const source = {
 			description: 'The stall: its own orders, at most two anonymous users per IP an hour',
 			grants: {
 				orders: {
-					outputs: { own: { orders: { where: { owner: { eq: { var: 'requestor.id' } } } } } }
+					outputs: { own: { scopes: { orders: { owner: { eq: { var: 'requestor.id' } } } } } }
 				}
 			},
 			limits: { register: { rate: '2/h', per: 'ip' } }
@@ -90,7 +96,7 @@ const source = {
 		staff: {
 			description: 'Staff',
 			capabilities: { apps: ['desk'] },
-			grants: { services: { read: true }, bookings: { read: true } }
+			grants: { services: { outputs: { default: true } }, bookings: { outputs: { default: true } } }
 		}
 	},
 	apps: {

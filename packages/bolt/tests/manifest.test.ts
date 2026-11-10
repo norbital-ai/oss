@@ -127,29 +127,35 @@ describe('decodeManifest', () => {
 						description: '',
 						grants: {
 							orders: {
-								read: {
-									orders: { where: { region: { eq: 'north' } }, fields: ['region'] },
-									'orders.lines': { where: { qty: { gt: 0 } } }
+								outputs: {
+									default: {
+										scopes: {
+											orders: { region: { eq: 'north' } },
+											'orders.lines': { qty: { gt: 0 } }
+										}
+									}
 								},
 								create: { columns: { orders: ['region'], 'orders.lines': ['qty'] } },
 								update: { verdict: true, moves: { status: ['draft->sent'] } },
 								delete: { verdict: true }
 							},
-							lines: { read: true }
+							lines: { outputs: { default: true } }
 						}
 					}
 				}
 			})
 		);
 		const grant = m.policies.rep?.grants.orders;
-		expect(grant?.read).toEqual({
-			orders: { where: { region: { eq: 'north' } }, fields: ['region'] },
-			'orders.lines': { where: { qty: { gt: 0 } } }
+		expect(grant?.outputs?.default).toEqual({
+			scopes: {
+				orders: { region: { eq: 'north' } },
+				'orders.lines': { qty: { gt: 0 } }
+			}
 		});
 		expect(grant?.create).toEqual({ columns: { orders: ['region'], 'orders.lines': ['qty'] } });
 		expect(grant?.update).toEqual({ verdict: true, moves: { status: ['draft->sent'] } });
 		expect(grant?.delete).toEqual({ verdict: true });
-		expect(m.policies.rep?.grants.lines?.read).toBe(true);
+		expect(m.policies.rep?.grants.lines?.outputs?.default).toBe(true);
 	});
 
 	it.live(
@@ -264,7 +270,7 @@ describe('projectManifest', () => {
 									orders: {
 										update: { columns: { orders: ['number'] }, verdict: function* () {} },
 										delete: { verdict: function* () {} },
-										read: true
+										outputs: { default: true }
 									}
 								}
 							}

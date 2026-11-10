@@ -34,11 +34,11 @@ const manifest: EngineManifest = {
 	policies: {
 		requester: {
 			description: 'Requests changes',
-			grants: { documents: { read: true, update: { verdict: true } } }
+			grants: { documents: { outputs: { default: true }, update: { verdict: true } } }
 		},
 		reviewer: {
 			description: 'Reviews and edits changes',
-			grants: { documents: { read: true, update: true } }
+			grants: { documents: { outputs: { default: true }, update: true } }
 		}
 	},
 	teams: { requesters: ['requester'], reviewers: ['reviewer'] }

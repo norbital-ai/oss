@@ -44,7 +44,7 @@ const manifest = Result.getOrThrow(
 		policies: {
 			reader: {
 				description: 'Reads due notes',
-				grants: { notes: { read: { notes: { where: { due: { lte: TODAY } } } } } }
+				grants: { notes: { outputs: { default: { scopes: { notes: { due: { lte: TODAY } } } } } } }
 			}
 		},
 		teams: { Readers: { name: 'Readers', policies: ['reader'] } },

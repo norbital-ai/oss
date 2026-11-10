@@ -20,7 +20,10 @@ const manifest = {
 	},
 	relationships: {},
 	exposures: {
-		docs: { outputs: { default: { docs: { fields: 'all' } } }, create: { columns: { docs: ['title', 'file'] } } }
+		docs: {
+			outputs: { default: { docs: { fields: 'all' } } },
+			create: { columns: { docs: ['title', 'file'] } }
+		}
 	},
 	integrations: {},
 	teams: {},
@@ -32,7 +35,7 @@ const manifest = {
 	policies: {
 		ops: {
 			description: 'Ops',
-			grants: { docs: { read: true } },
+			grants: { docs: { outputs: { default: true } } },
 			capabilities: { automations: ['read'] }
 		}
 	},
