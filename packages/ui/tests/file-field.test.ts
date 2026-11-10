@@ -2,8 +2,7 @@ import { required, textOf } from './view-fixture.ts';
 import { element } from './elements.ts';
 import { browser } from './view-fixture.ts';
 import { Effect, Schema } from 'effect';
-// The built-in `file` field: one input-height trigger when empty, chips when filled, a "+" while there is room, and a
-// popover per chip with a preview, the stored file's metadata, Download, and Remove only when edited.
+// The built-in file field groups stored files in one preview control. Editing also offers upload and removal.
 import './dom.ts';
 import assert from 'node:assert/strict';
 import type { FileRef, Value, Kind } from '@norbital-ai/std/kind';
@@ -127,9 +126,7 @@ async function field({
 	});
 	return { target, changes };
 }
-const chips = (t: ParentNode) => [
-	...t.querySelectorAll<HTMLButtonElement>('button[data-file-chip]')
-];
+const collection = (t: ParentNode) => element<HTMLButtonElement>(t, '[data-file-collection]');
 const adder = (t: ParentNode) => t.querySelector<HTMLElement>('[data-file-add]');
 const drop = async (t: ParentNode, files: readonly File[]) => {
 	const e = new Event('drop', { bubbles: true, cancelable: true });
@@ -139,14 +136,11 @@ const drop = async (t: ParentNode, files: readonly File[]) => {
 };
 
 it.live(
-	'multiple files read as chips with a "+" to add more; drag over the field highlights it',
+	'multiple files share one control with a "+" to add more, and can be removed from preview',
 	() =>
 		Effect.gen(function* () {
-			const { target } = yield* browser(() => field({ value: [ref(0), ref(1), ref(2)] }));
-			assert.deepEqual(
-				chips(target).map((c) => textOf(c).trim()),
-				['doc-0.pdf', 'doc-1.pdf', 'doc-2.pdf']
-			);
+			const { target, changes } = yield* browser(() => field({ value: [ref(0), ref(1), ref(2)] }));
+			assert.equal(textOf(collection(target)).trim(), '3 files');
 			const add = required(adder(target));
 			assert.equal(
 				textOf(element<HTMLElement>(add, '.sr-only')),
@@ -160,6 +154,17 @@ it.live(
 			zone.dispatchEvent(new Event('dragleave', { bubbles: true }));
 			flushSync();
 			assert.equal(zone.dataset.over, undefined);
+			collection(target).click();
+			yield* browser(() => settle());
+			element<HTMLButtonElement>(document, '[data-file-option]').click();
+			yield* browser(() => settle());
+			const preview = element(document, '[data-file-preview]');
+			const remove = [...preview.querySelectorAll<HTMLButtonElement>('button')].find(
+				(button) => textOf(button).trim() === 'Remove'
+			);
+			required(remove).click();
+			yield* browser(() => settle());
+			assert.deepEqual(changes.at(-1), [ref(1), ref(2)]);
 		})
 );
 
@@ -170,7 +175,7 @@ it.live(
 			const full = yield* browser(() =>
 				field({ value: Array.from({ length: 20 }, (_, i) => ref(i)) })
 			);
-			assert.equal(chips(full.target).length, 20);
+			assert.equal(textOf(collection(full.target)).trim(), '20 files');
 			assert.equal(adder(full.target), null);
 			const one = yield* browser(() => field({ kind: PHOTO, value: ref(0, 'image/png') }));
 			assert.equal(adder(one.target), null);
@@ -199,15 +204,30 @@ it.live(
 		})
 );
 
-it.live('read-only shows the same chips and popover, without Remove or "+"', () =>
+it.live('read-only keeps every file reachable from one compact preview control', () =>
 	Effect.gen(function* () {
-		const { target } = yield* browser(() => field({ mode: 'show', value: [ref(0), ref(1)] }));
-		assert.equal(chips(target).length, 2);
+		const { target } = yield* browser(() =>
+			field({ mode: 'show', value: Array.from({ length: 8 }, (_, i) => ref(i)) })
+		);
+		const trigger = element<HTMLButtonElement>(target, '[data-file-collection]');
+		assert.equal(textOf(trigger).trim(), '8 files');
 		assert.equal(adder(target), null);
-		required(chips(target)[0]).click();
+		assert.equal(document.querySelector('[data-file-option]'), null);
+		trigger.click();
+		yield* browser(() => settle());
+		const choices = () => [...document.querySelectorAll<HTMLButtonElement>('[data-file-option]')];
+		assert.equal(choices().length, 6);
+		element<HTMLButtonElement>(document, 'button[aria-label="Next"]').click();
+		yield* browser(() => settle());
+		assert.deepEqual(
+			choices().map((button) => textOf(button).trim()),
+			['doc-6.pdf', 'doc-7.pdf']
+		);
+		const last = required(choices().at(-1));
+		last.click();
 		yield* browser(() => settle());
 		const pop = element<HTMLElement>(document, '[data-file-preview]');
-		assert.ok(pop);
+		assert.match(textOf(pop), /doc-7\.pdf/);
 		assert.ok(element<HTMLAnchorElement>(pop, 'a[download]'));
 		assert.equal(
 			[...pop.querySelectorAll<HTMLButtonElement>('button')].some(
@@ -215,12 +235,19 @@ it.live('read-only shows the same chips and popover, without Remove or "+"', () 
 			),
 			false
 		);
-		assert.equal(required(chips(target)[0]).getAttribute('aria-expanded'), 'true');
+		const back = [...document.querySelectorAll<HTMLButtonElement>('button')].find(
+			(button) => textOf(button).trim() === 'Back'
+		);
+		assert.equal(document.activeElement, back);
+		required(back).click();
+		yield* browser(() => settle());
+		assert.equal(document.activeElement, choices().at(-1));
+		assert.equal(trigger.getAttribute('aria-expanded'), 'true');
 		required(document.activeElement).dispatchEvent(
 			new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })
 		);
 		yield* browser(() => settle());
-		assert.equal(document.querySelector('[data-file-preview]'), null, 'Esc closes the popover');
+		assert.equal(document.querySelector('[data-file-option]'), null, 'Esc closes the popover');
 		const empty = yield* browser(() => field({ mode: 'show', value: null }));
 		assert.equal(textOf(empty.target).trim(), '—');
 	})

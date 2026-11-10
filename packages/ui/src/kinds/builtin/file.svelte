@@ -1,14 +1,13 @@
 <!--
 @component
-The built-in `file` custom field's renderer: one input-height trigger and chips when edited; the same chips (each opening
-a preview with Download) when shown; the first chip and how many more in a dense line.
+The built-in `file` custom field's renderer: an upload input when edited and a compact preview control when shown.
 -->
 <script lang="ts">
 	import { Array as Arr } from 'effect';
 	import { uiText } from '../../primitives/utils.js';
 	import type { KindView } from '../context.js';
 	import FileInput from '../file-input.svelte';
-	import FileList from '../file-list.svelte';
+	import FileCollection from '../file-collection.svelte';
 	import { isFile, type KindOf } from '../kind.js';
 
 	let { view }: { view: KindView } = $props();
@@ -33,6 +32,6 @@ a preview with Download) when shown; the first chip and how many more in a dense
 	<span class="text-muted-foreground">{t('none')}</span>
 {:else}
 	<span id={view.id} class="inline-flex max-w-full min-w-0 align-middle"
-		><FileList {refs} dense={view.dense} /></span
+		><FileCollection {refs} /></span
 	>
 {/if}

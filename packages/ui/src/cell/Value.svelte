@@ -3,6 +3,7 @@
 	// One stored value, read-only: by its kind through the kit's `Show` when the catalog knows the field, else by shape
 	// (files open through `/files`, where the viewer's read grant decides; a mask shows locked).
 	import Show from '../kinds/show.svelte';
+	import FileCollection from '../kinds/file-collection.svelte';
 	import StructuredData from '../kinds/structured-data.svelte';
 	import { dataEntries } from '../kinds/structured-data.js';
 	import { isJsonSchemaDocument } from '../kinds/json-schema.js';
@@ -262,14 +263,7 @@
 		{...name === undefined ? {} : { name }}
 	/>
 {:else if files.length > 0}
-	{#each files as f (f.id)}
-		{#if bolt === undefined}<span>{f.name}</span>{:else}<a
-				class="text-primary mr-2 underline-offset-4 hover:underline"
-				href={bolt.fileUrl(f)}
-				target="_blank"
-				rel="noopener">{f.name}</a
-			>{/if}
-	{/each}
+	<FileCollection refs={files} />
 {:else if dataEntries(value) !== undefined || Array.isArray(value)}
 	<StructuredData {value} mode="view" {name} {row} />
 {:else}

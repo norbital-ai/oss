@@ -17,8 +17,7 @@ when the host reads), Download, and Remove when `onRemove` is given.
 	import Image from '../primitives/image/image.svelte';
 	import { formatFileSize, uiText } from '../primitives/utils.js';
 	import { useKinds } from './context.js';
-	import { fileIcon } from './file-list.svelte';
-	import type { FileRef, Value } from './kind.js';
+	import { fileIcon, type FileRef, type Value } from './kind.js';
 
 	let { file, onRemove }: { file: FileRef; onRemove?(): void } = $props();
 	const host = useKinds();
@@ -140,12 +139,8 @@ when the host reads), Download, and Remove when `onRemove` is given.
 	{#if url !== undefined || onRemove}
 		<div class="flex items-center gap-2">
 			{#if url !== undefined}
-				<Button
-					variant="outline"
-					href={url}
-					download={file.name}
-					target="_blank"
-					rel="noopener"><Icon icon="lucide:download" class="size-3.5" />{t('download')}</Button
+				<Button variant="outline" href={url} download={file.name} target="_blank" rel="noopener"
+					><Icon icon="lucide:download" class="size-3.5" />{t('download')}</Button
 				>
 			{/if}
 			{#if onRemove}

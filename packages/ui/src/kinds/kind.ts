@@ -21,6 +21,22 @@ export function fieldName(kind: Kind): string | undefined {
 		? 'phone'
 		: undefined;
 }
+/** A file's icon by its MIME type. */
+export const fileIcon = (mime: string) =>
+	mime.startsWith('image/')
+		? 'lucide:image'
+		: mime === 'application/pdf'
+			? 'lucide:file-text'
+			: mime.includes('spreadsheet') || mime.includes('excel') || mime === 'text/csv'
+				? 'lucide:file-spreadsheet'
+				: mime.startsWith('audio/')
+					? 'lucide:file-audio'
+					: mime.startsWith('video/')
+						? 'lucide:file-video'
+						: mime.startsWith('text/')
+							? 'lucide:file-text'
+							: 'lucide:file';
+
 export const isFile: (v: unknown) => v is FileRef = Schema.is(
 	Schema.Struct({ id: Schema.String, name: Schema.String, mime: Schema.String })
 );
