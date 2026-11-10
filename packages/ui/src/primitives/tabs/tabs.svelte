@@ -54,7 +54,7 @@ A tab strip with the selected tab's body; `keepAlive` tabs stay mounted while hi
 	import * as Popover from '../popover/index.js';
 	import { getContext, setContext, untrack } from 'svelte';
 	import Icon from '../icon/icon-wrapper.svelte';
-	import { cn } from '../utils.js';
+	import { cn, uiText } from '../utils.js';
 	import { insetReader } from '../../layout/inset.svelte.js';
 	import { INSET_X_CLASS, SCROLL_AXIS_CLASSES } from '../../layout/layout.shared.js';
 	import { observeTabOverflow } from './overflow.js';
@@ -72,6 +72,7 @@ A tab strip with the selected tab's body; `keepAlive` tabs stay mounted while hi
 		side = 'start'
 	}: TabsProps = $props();
 	const parent = getContext<{ level: TabLevel; shown: readonly string[] } | undefined>(TAB_LEVEL);
+	const t = uiText();
 	const hasInset = insetReader();
 	const placed = $derived(tabLevel(parent?.level, explicit));
 	const variant = $derived(tabVariant(placed.level));
@@ -176,7 +177,7 @@ A tab strip with the selected tab's body; `keepAlive` tabs stay mounted while hi
 									data-tabs-more
 									data-state={activeInMore ? 'active' : 'inactive'}
 								>
-									<Icon name="lucide:ellipsis" class={TAB_ICON} /><span>More</span>
+									<Icon name="lucide:ellipsis" class={TAB_ICON} /><span>{t('moreTabs')}</span>
 								</button>
 							{/snippet}
 						</Popover.Trigger>
@@ -206,7 +207,7 @@ A tab strip with the selected tab's body; `keepAlive` tabs stay mounted while hi
 						{#each tabs as tab (tab.name)}<span class={triggerClass}>{@render label(tab)}</span
 							>{/each}
 						<span class={triggerClass}
-							><Icon name="lucide:ellipsis" class={TAB_ICON} /><span>More</span></span
+							><Icon name="lucide:ellipsis" class={TAB_ICON} /><span>{t('moreTabs')}</span></span
 						>
 					</div>
 				{/if}

@@ -7,3 +7,9 @@ it('keeps sub-cent AI charges visible while distinguishing zero and missing usag
 	expect(formatMetricValue('micro-SGD', 0)).toBe('$0.00');
 	expect(formatMetricValue('micro-SGD', null)).toBe('Unavailable');
 });
+
+it('formats metric values in the viewer locale', () => {
+	expect(formatMetricValue('seconds', 1.5, 'de-DE')).toBe('1,5 s');
+	expect(formatMetricValue('bytes', 1536, 'de-DE')).toBe('1,5 KiB');
+	expect(formatMetricValue('seconds', 1.5, 'en-SG')).toBe('1.5 s');
+});

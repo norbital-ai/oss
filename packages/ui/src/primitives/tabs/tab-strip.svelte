@@ -31,13 +31,14 @@ switch a view the caller renders. Its type follows the enclosing `Tabs` level, o
 	import { getContext } from 'svelte';
 	import * as Popover from '../popover/index.js';
 	import Icon from '../icon/icon-wrapper.svelte';
-	import { cn } from '../utils.js';
+	import { cn, uiText } from '../utils.js';
 	import { TAB_LEVEL, tabLevel, tabVariant } from './level.js';
 	import { TAB_ICON, TAB_LIST, TAB_TRACK, TAB_TRIGGER, TAB_TYPE } from './style.js';
 	import { observeTabOverflow } from './overflow.js';
 
 	let { items, value, onValueChange, label, level, class: className }: TabStripProps = $props();
 	const parent = getContext<{ level: TabLevel } | undefined>(TAB_LEVEL);
+	const t = uiText();
 	const variant = $derived(tabVariant(level ?? tabLevel(parent?.level, undefined).level));
 	const links = $derived(items.some((item) => item.href !== undefined));
 	const trigger = $derived(cn(TAB_TRIGGER, TAB_TYPE[variant]));
@@ -107,7 +108,7 @@ switch a view the caller renders. Its type follows the enclosing `Tabs` level, o
 						data-tabs-more
 						data-state={activeInMore ? 'active' : 'inactive'}
 					>
-						<Icon name="lucide:ellipsis" class={TAB_ICON} /><span>More</span>
+						<Icon name="lucide:ellipsis" class={TAB_ICON} /><span>{t('moreTabs')}</span>
 					</button>
 				{/snippet}
 			</Popover.Trigger>
@@ -141,6 +142,8 @@ switch a view the caller renders. Its type follows the enclosing `Tabs` level, o
 		class="pointer-events-none invisible absolute top-0 left-0 flex w-max"
 	>
 		{#each items as item (item.name)}<span class={trigger}>{@render content(item)}</span>{/each}
-		<span class={trigger}><Icon name="lucide:ellipsis" class={TAB_ICON} /><span>More</span></span>
+		<span class={trigger}
+			><Icon name="lucide:ellipsis" class={TAB_ICON} /><span>{t('moreTabs')}</span></span
+		>
 	</div>
 </svelte:element>

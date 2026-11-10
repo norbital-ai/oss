@@ -56,18 +56,18 @@ leaf values retain the workspace's native kinds, custom renderers and inherited 
 		return unit?.trim() && !label.trim().endsWith(`(${unit})`) ? `${label} (${unit})` : label;
 	};
 	const enumLike = (value: unknown): value is string =>
-	typeof value === 'string' && /^[A-Z][A-Z0-9_]*$/.test(value);
-const enumList = (value: unknown): readonly string[] | null =>
-	Array.isArray(value) && value.length > 0 && value.every(enumLike) ? value : null;
-/** A JSON leaf fits a compact column unless it is a nested object or a list of objects. */
-const compactJson = (kind: Kind, value: Value | undefined): boolean => {
-	if (kind.kind !== 'json') return !wideKind(kind);
-	if (Array.isArray(value))
-		return !value.some((item) => item !== null && typeof item === 'object');
-	return value === null || value === undefined || typeof value !== 'object';
-};
+		typeof value === 'string' && /^[A-Z][A-Z0-9_]*$/.test(value);
+	const enumList = (value: unknown): readonly string[] | null =>
+		Array.isArray(value) && value.length > 0 && value.every(enumLike) ? value : null;
+	/** A JSON leaf fits a compact column unless it is a nested object or a list of objects. */
+	const compactJson = (kind: Kind, value: Value | undefined): boolean => {
+		if (kind.kind !== 'json') return !wideKind(kind);
+		if (Array.isArray(value))
+			return !value.some((item) => item !== null && typeof item === 'object');
+		return value === null || value === undefined || typeof value !== 'object';
+	};
 
-const pointer = (path: string, key: string | number) =>
+	const pointer = (path: string, key: string | number) =>
 		`${path}/${String(key).replace(/~/g, '~0').replace(/\//g, '~1')}`;
 	const shape = (kind: Kind | undefined, value: Value | undefined): Kind | undefined => {
 		if (kind?.kind === 'json') return kind.shape ? shape(kind.shape, value) : undefined;
@@ -904,7 +904,10 @@ const pointer = (path: string, key: string | number) =>
 			{:else}
 				<div
 					class="structured-field"
-					class:structured-field-wide={!compactJson(field.kind ?? jsonSchemaKind(field.schema), object[field.key])}
+					class:structured-field-wide={!compactJson(
+						field.kind ?? jsonSchemaKind(field.schema),
+						object[field.key]
+					)}
 					data-schema-field={childName(field.key)}
 				>
 					<FieldControl
@@ -990,13 +993,13 @@ const pointer = (path: string, key: string | number) =>
 			data-open={extraErrors.length > 0}
 		>
 			<summary class="cursor-pointer px-3 py-2 text-sm text-muted-foreground"
-				>{extraErrors.length ? 'Additional properties' : 'Add property'}</summary
+				>{t(extraErrors.length ? 'additionalProperties' : 'addProperty')}</summary
 			>
 			<div class="flex items-center gap-2 px-3 pb-2">
 				<input
 					class="border-input bg-background min-w-0 flex-1 rounded-sm border px-2 py-1 text-sm"
-					aria-label="Property name"
-					placeholder="Property name"
+					aria-label={t('propertyName')}
+					placeholder={t('propertyName')}
 					bind:value={extraKey}
 					disabled={controls.disabled}
 				/><Button
@@ -1072,8 +1075,10 @@ const pointer = (path: string, key: string | number) =>
 		>
 	{:else if enumList(held) !== null}
 		<span class="inline-flex flex-wrap gap-1" data-enum-list
-			>{#each enumList(held)! as item (item)}<Badge variant="outline" class="font-medium" data-enum-value={item}
-					>{item}</Badge
+			>{#each enumList(held)! as item (item)}<Badge
+					variant="outline"
+					class="font-medium"
+					data-enum-value={item}>{item}</Badge
 				>{/each}</span
 		>
 	{:else if enumLike(held)}

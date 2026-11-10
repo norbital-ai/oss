@@ -1,9 +1,8 @@
 <script lang="ts">
 	import { untrack, type Snippet } from 'svelte';
-	import { provideBolt, provideKinds, setUiText } from '@norbital-ai/ui';
+	import { provideBolt, provideKinds, setUiText, uiTextFor } from '@norbital-ai/ui';
 	import type { PublicClient } from './client.ts';
 	import type { PublicBoot } from '../../protocol/public-page.ts';
-	import { uiTextFor } from '../i18n.ts';
 
 	let { boot, ctx, children }: { boot: PublicBoot; ctx: PublicClient; children: Snippet } =
 		$props();

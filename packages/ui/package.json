@@ -49,6 +49,10 @@
 			"svelte": "./build/effect/index.js",
 			"default": "./build/effect/index.js"
 		},
+		"./i18n": {
+			"types": "./build/i18n.d.ts",
+			"default": "./build/i18n.js"
+		},
 		"./read": {
 			"types": "./build/read/index.d.ts",
 			"default": "./build/read/index.js"

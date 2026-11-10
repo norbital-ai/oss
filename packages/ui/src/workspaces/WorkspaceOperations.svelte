@@ -34,6 +34,7 @@
 	import ToolbarFilter from '../model/toolbar/ToolbarFilter.svelte';
 	import LogView from '../logs/LogView.svelte';
 	import UsageChart, { formatMetricValue } from '../chart/UsageChart.svelte';
+	import { useKinds } from '../kinds/context.js';
 	import { filterMembers, newestReleases, releaseWindow } from './filters.js';
 	let {
 		data,
@@ -113,11 +114,12 @@
 				...(row.run === null ? {} : { source: `run ${row.run}` })
 			}));
 	});
+	const host = useKinds();
 	const when = (value: string | null) =>
-		value === null ? t('Not recorded') : new Date(value).toLocaleString();
+		value === null ? t('Not recorded') : new Date(value).toLocaleString(host.locale);
 	const online = (value: string | null) =>
 		value !== null && Date.parse(value) > Date.parse(data.asOf) - 300000;
-	const bytes = (value: number | null) => formatMetricValue('bytes', value);
+	const bytes = (value: number | null) => formatMetricValue('bytes', value, host.locale);
 	const TABS = {
 		bundle: { title: 'Bundle', icon: 'lucide:package' },
 		telemetry: { title: 'Telemetry', icon: 'lucide:activity' },

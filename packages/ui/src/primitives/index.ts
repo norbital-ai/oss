@@ -47,6 +47,7 @@ export {
 	cn,
 	formatFileSize,
 	setUiText,
+	uiTextFor,
 	uiText,
 	useControls,
 	type Controls,

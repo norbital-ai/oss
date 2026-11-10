@@ -38,7 +38,8 @@
 		provideBolt,
 		provideKinds,
 		provideRepresentations,
-		setUiText
+		setUiText,
+		uiTextFor
 	} from '@norbital-ai/ui';
 	import { NorbiusStrip } from '@norbital-ai/ui/brand';
 	import type { ShellMountConfig } from './mount.ts';
@@ -55,7 +56,7 @@
 		withRecords,
 		type ShellBoot
 	} from './nav.ts';
-	import { chosenLocale, frameworkText, setLocale, uiTextFor } from './i18n.ts';
+	import { chosenLocale, frameworkText, setLocale } from './i18n.ts';
 	import type { SyncStatus } from '../page/bolt.ts';
 	import type { FinderAnswer } from './finder/model.ts';
 	import { activeApp, media, navigationModel, NORBIUS } from './model.ts';
